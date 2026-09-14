@@ -3,7 +3,6 @@ import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
 import { describeCron } from "@/hooks/use-console-data.utils";
 import { useApiAction } from "@/hooks/use-api-action";
-import { buildDemoPolicy } from "@/hooks/use-console-data.demo";
 import type {
   AlertRecord,
   NewPolicyInput,
@@ -61,6 +60,8 @@ export function usePolicyOperations({
       }
       return;
     }
+    // Demo builders must not enter the production startup chunk (same as mock.ts).
+    const { buildDemoPolicy } = await import("@/hooks/use-console-data.demo");
     setPolicies((prev) => [buildDemoPolicy(input, policies), ...prev]);
   }, [exec, policies, refreshTasks, setPolicies]);
 

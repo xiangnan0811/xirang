@@ -17,44 +17,55 @@ import (
 )
 
 // =============================================================================
-// ResticConfig — append_only 解析测试
+// ResticConfig — repository_version 解析测试
 // =============================================================================
 
-func TestParseResticConfigAppendOnlyDefaults(t *testing.T) {
+func TestParseResticConfigRepositoryVersionDefaults(t *testing.T) {
 	cfg, err := parseResticConfig("")
 	if err != nil {
 		t.Fatalf("parseResticConfig 失败: %v", err)
 	}
-	if cfg.AppendOnly {
-		t.Fatalf("期望 AppendOnly 默认 = false，实际 = true")
+	if cfg.RepositoryVersion != nil {
+		t.Fatalf("期望 repository_version 默认为空，实际 = %v", *cfg.RepositoryVersion)
 	}
 }
 
-func TestParseResticConfigAppendOnlyTrue(t *testing.T) {
-	cfg, err := parseResticConfig(`{"append_only":true}`)
-	if err != nil {
-		t.Fatalf("parseResticConfig 失败: %v", err)
-	}
-	if !cfg.AppendOnly {
-		t.Fatalf("期望 AppendOnly = true，实际 = false")
+func TestParseResticConfigRepositoryVersionValues(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(fmt.Sprintf("version-%d", version), func(t *testing.T) {
+			cfg, err := parseResticConfig(fmt.Sprintf(`{"repository_version":%d}`, version))
+			if err != nil {
+				t.Fatalf("parseResticConfig 失败: %v", err)
+			}
+			if cfg.RepositoryVersion == nil || *cfg.RepositoryVersion != version {
+				t.Fatalf("repository_version=%v, want %d", cfg.RepositoryVersion, version)
+			}
+		})
 	}
 }
 
-func TestParseResticConfigAppendOnlyFalse(t *testing.T) {
-	cfg, err := parseResticConfig(`{"append_only":false}`)
-	if err != nil {
-		t.Fatalf("parseResticConfig 失败: %v", err)
+func TestParseResticConfigRejectsLegacyAppendOnly(t *testing.T) {
+	for _, raw := range []string{`{"append_only":true}`, `{"append_only":false}`, `{"append_only":null}`} {
+		if _, err := parseResticConfig(raw); err == nil {
+			t.Fatalf("parseResticConfig(%s) unexpectedly accepted legacy append_only", raw)
+		}
 	}
-	if cfg.AppendOnly {
-		t.Fatalf("期望 AppendOnly = false，实际 = true")
+}
+
+func TestParseResticConfigRejectsUnsupportedRepositoryVersion(t *testing.T) {
+	for _, version := range []int{-1, 0, 3} {
+		if _, err := parseResticConfig(fmt.Sprintf(`{"repository_version":%d}`, version)); err == nil {
+			t.Fatalf("repository_version=%d unexpectedly accepted", version)
+		}
 	}
 }
 
 func TestParseResticConfigRoundtrip(t *testing.T) {
+	repositoryVersion := 2
 	original := ResticConfig{
 		RepositoryPassword: "FAKE_PASSWORD_FOR_TEST_ONLY",
 		ExcludePatterns:    []string{"*.log", "/tmp"},
-		AppendOnly:         true,
+		RepositoryVersion:  &repositoryVersion,
 	}
 	b, err := json.Marshal(original)
 	if err != nil {
@@ -70,47 +81,49 @@ func TestParseResticConfigRoundtrip(t *testing.T) {
 	if len(parsed.ExcludePatterns) != 2 {
 		t.Fatalf("排除规则数量不匹配")
 	}
-	if !parsed.AppendOnly {
-		t.Fatalf("期望 AppendOnly = true，实际 = false")
+	if parsed.RepositoryVersion == nil || *parsed.RepositoryVersion != repositoryVersion {
+		t.Fatalf("repository_version=%v, want %d", parsed.RepositoryVersion, repositoryVersion)
 	}
 }
 
 // =============================================================================
-// init 命令构建测试（间接验证 cmdPrefix + initFlag）
+// init 命令构建测试
 // =============================================================================
 
-func TestInitCommandWithoutAppendOnly(t *testing.T) {
+func TestInitCommandWithoutRepositoryVersion(t *testing.T) {
 	exec := &ResticExecutor{}
-	cfg := ResticConfig{AppendOnly: false}
+	cfg := ResticConfig{}
 	node := model.Node{Host: "127.0.0.1", Port: 22, Username: "FAKE_USER_FOR_TEST_ONLY", AuthType: "key"}
 
 	pwFilePath := BuildResticPasswordFilePath()
 	cmdPrefix := exec.buildCommandPrefix(node, pwFilePath)
 	initFlags := ""
-	if cfg.AppendOnly {
-		initFlags = " --repository-version 2"
+	if cfg.RepositoryVersion != nil {
+		initFlags = fmt.Sprintf(" --repository-version %d", *cfg.RepositoryVersion)
 	}
 	initCmd := fmt.Sprintf("%s init%s -r %s 2>&1", cmdPrefix, initFlags, ShellEscape("/backup/repo"))
 
 	if strings.Contains(initCmd, "--repository-version") {
-		t.Fatalf("期望 AppendOnly=false 时不含 --repository-version，实际: %s", initCmd)
+		t.Fatalf("默认 init 不应含 --repository-version，实际: %s", initCmd)
 	}
 	if !strings.Contains(initCmd, "init") {
 		t.Fatalf("期望命令包含 init 子命令，实际: %s", initCmd)
 	}
 }
 
-func TestInitCommandWithAppendOnly(t *testing.T) {
+func TestInitCommandWithRepositoryVersion(t *testing.T) {
 	exec := &ResticExecutor{}
+	version := 2
+	cfg := ResticConfig{RepositoryVersion: &version}
 	node := model.Node{Host: "127.0.0.1", Port: 22, Username: "FAKE_USER_FOR_TEST_ONLY", AuthType: "key"}
 
 	pwFilePath := BuildResticPasswordFilePath()
 	cmdPrefix := exec.buildCommandPrefix(node, pwFilePath)
-	initFlags := " --repository-version 2"
+	initFlags := fmt.Sprintf(" --repository-version %d", *cfg.RepositoryVersion)
 	initCmd := fmt.Sprintf("%s init%s -r %s 2>&1", cmdPrefix, initFlags, ShellEscape("/backup/repo"))
 
 	if !strings.Contains(initCmd, "--repository-version 2") {
-		t.Fatalf("期望 AppendOnly=true 时含 --repository-version 2，实际: %s", initCmd)
+		t.Fatalf("期望含 --repository-version 2，实际: %s", initCmd)
 	}
 	if !strings.Contains(initCmd, "init") {
 		t.Fatalf("期望命令包含 init 子命令，实际: %s", initCmd)
@@ -162,7 +175,7 @@ func TestShellEscapeDoesNotMutateSimplePath(t *testing.T) {
 // buildCommandPrefix 中的环境变量不影响 init flag
 // =============================================================================
 
-func TestBuildCommandPrefixWithAppendOnly(t *testing.T) {
+func TestBuildCommandPrefixDoesNotChooseRepositoryFormat(t *testing.T) {
 	exec := &ResticExecutor{binary: "restic"}
 	node := model.Node{
 		Host:     "10.0.0.1",
@@ -180,7 +193,7 @@ func TestBuildCommandPrefixWithAppendOnly(t *testing.T) {
 	if !strings.Contains(prefix, "restic") {
 		t.Fatalf("期望命令前缀包含 restic 二进制名称，实际: %s", prefix)
 	}
-	// AppendOnly 不应影响 buildCommandPrefix
+	// RepositoryVersion is applied only by the init command builder.
 	if strings.Contains(prefix, "--repository-version") {
 		t.Fatalf("buildCommandPrefix 不应包含 --repository-version，实际: %s", prefix)
 	}
@@ -218,10 +231,13 @@ func TestBuildCommandPrefixWithSudoPreservesEnvWrapping(t *testing.T) {
 		t.Fatalf("sudo 前缀不等价，期望 %q，实际 %q", expected, prefix)
 	}
 }
-func runShellCommand(t *testing.T, command string) error {
+func runShellCommand(t *testing.T, command string, stdin ...[]byte) error {
 	t.Helper()
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Env = append(os.Environ(), "PATH="+os.Getenv("PATH"))
+	if len(stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(stdin[0])
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("shell command failed: %v\n%s", err, output)
@@ -232,9 +248,9 @@ func runShellCommand(t *testing.T, command string) error {
 func TestBuildResticPasswordFileLifecycleUsesPrivateExclusivePaths(t *testing.T) {
 	passwordFilePath := BuildResticPasswordFilePath()
 	password := "FAKE_PASSWORD_WITH_QUOTE_'_FOR_TEST_ONLY"
-	createCommand := "umask 022\n" + BuildCreateResticPasswordFileCmd(passwordFilePath, NewResticRepositoryAccess(password))
+	createCommand := "umask 022\n" + BuildCreateResticPasswordFileCmd(passwordFilePath)
 
-	if err := runShellCommand(t, createCommand); err != nil {
+	if err := runShellCommand(t, createCommand, []byte(password)); err != nil {
 		t.Fatalf("create command failed: %v", err)
 	}
 	t.Cleanup(func() {
@@ -285,13 +301,45 @@ func TestBuildResticPasswordFileLifecycleUsesPrivateExclusivePaths(t *testing.T)
 		t.Fatalf("private directory still exists after cleanup: %v", err)
 	}
 }
+func TestBuildResticPasswordFilePreservesExactStdinBytes(t *testing.T) {
+	tests := []struct {
+		name     string
+		password []byte
+	}{
+		{name: "empty", password: []byte{}},
+		{name: "newline-and-shell-bytes", password: []byte("line-one\nline-two'\"$HOME")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			passwordFilePath := filepath.Join(t.TempDir(), "private", "password")
+			command := BuildCreateResticPasswordFileCmd(passwordFilePath)
+			if len(test.password) > 0 && strings.Contains(command, string(test.password)) {
+				t.Fatalf("password appeared in creator command")
+			}
+			if err := runShellCommand(t, command, test.password); err != nil {
+				t.Fatalf("create command failed: %v", err)
+			}
+			got, err := os.ReadFile(passwordFilePath)
+			if err != nil {
+				t.Fatalf("read password file: %v", err)
+			}
+			if !bytes.Equal(got, test.password) {
+				t.Fatalf("password bytes=%q, want %q", got, test.password)
+			}
+			if err := runShellCommand(t, BuildCleanupResticPasswordFileCmd(passwordFilePath)); err != nil {
+				t.Fatalf("cleanup command failed: %v", err)
+			}
+		})
+	}
+}
 
 func TestBuildResticPasswordCreateCleansPrivateDirectoryOnCancellation(t *testing.T) {
 	passwordFilePath := BuildResticPasswordFilePath()
 	privateDir := filepath.Dir(passwordFilePath)
 	barrier := filepath.Join(t.TempDir(), "after-mkdir")
 	release := filepath.Join(t.TempDir(), "release")
-	command := BuildCreateResticPasswordFileCmd(passwordFilePath, NewResticRepositoryAccess("FAKE_CANCEL_PASSWORD_FOR_TEST_ONLY"))
+	password := []byte("FAKE_CANCEL_PASSWORD_FOR_TEST_ONLY")
+	command := BuildCreateResticPasswordFileCmd(passwordFilePath)
 	markerCreate := fmt.Sprintf(
 		"touch %s\nwhile [ ! -f %s ]; do sleep 0.01; done\nmarker_tmp=$(mktemp",
 		ShellEscape(barrier), ShellEscape(release),
@@ -299,6 +347,7 @@ func TestBuildResticPasswordCreateCleansPrivateDirectoryOnCancellation(t *testin
 	command = strings.Replace(command, "marker_tmp=$(mktemp", markerCreate, 1)
 	process := exec.Command("/bin/sh", "-c", command)
 	process.Env = append(os.Environ(), "PATH="+os.Getenv("PATH"))
+	process.Stdin = bytes.NewReader(password)
 	if err := process.Start(); err != nil {
 		t.Fatalf("start create command: %v", err)
 	}
@@ -348,10 +397,10 @@ exec /usr/bin/ln "$@"
 	if err := os.WriteFile(lnWrapper, []byte(wrapper), 0o755); err != nil {
 		t.Fatalf("write ln wrapper: %v", err)
 	}
-	command := exec.Command("/bin/sh", "-c", BuildCreateResticPasswordFileCmd(
-		passwordFilePath, NewResticRepositoryAccess("FAKE_PUBLISH_FAILURE_PASSWORD_FOR_TEST_ONLY"),
-	))
+	password := []byte("FAKE_PUBLISH_FAILURE_PASSWORD_FOR_TEST_ONLY")
+	command := exec.Command("/bin/sh", "-c", BuildCreateResticPasswordFileCmd(passwordFilePath))
 	command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "R7_LN_COUNTER="+counterPath)
+	command.Stdin = bytes.NewReader(password)
 	output, err := command.CombinedOutput()
 	if err == nil {
 		t.Fatalf("exclusive publish failure unexpectedly succeeded: %q", output)
@@ -485,8 +534,8 @@ func TestBuildResticPasswordFileRejectsPreexistingRegularAndSymlinkPaths(t *test
 			privateDir := filepath.Join(root, "private")
 			passwordPath := filepath.Join(privateDir, "password")
 			sentinel := test.setup(t, privateDir, passwordPath)
-			createCommand := BuildCreateResticPasswordFileCmd(passwordPath, NewResticRepositoryAccess("FAKE_COLLISION_PASSWORD_FOR_TEST_ONLY"))
-			if err := runShellCommand(t, createCommand); err == nil {
+			createCommand := BuildCreateResticPasswordFileCmd(passwordPath)
+			if err := runShellCommand(t, createCommand, []byte("FAKE_COLLISION_PASSWORD_FOR_TEST_ONLY")); err == nil {
 				t.Fatal("create command unexpectedly succeeded over an existing path")
 			}
 			test.assertKeep(t, passwordPath, sentinel)
@@ -500,8 +549,8 @@ func TestBuildResticPasswordFileRejectsPreexistingRegularAndSymlinkPaths(t *test
 
 func TestBuildResticPasswordCleanupLeavesReplacementSymlink(t *testing.T) {
 	passwordFilePath := BuildResticPasswordFilePath()
-	createCommand := BuildCreateResticPasswordFileCmd(passwordFilePath, NewResticRepositoryAccess("FAKE_PASSWORD_FOR_TEST_ONLY"))
-	if err := runShellCommand(t, createCommand); err != nil {
+	createCommand := BuildCreateResticPasswordFileCmd(passwordFilePath)
+	if err := runShellCommand(t, createCommand, []byte("FAKE_PASSWORD_FOR_TEST_ONLY")); err != nil {
 		t.Fatalf("create command failed: %v", err)
 	}
 	privateDir := filepath.Dir(passwordFilePath)

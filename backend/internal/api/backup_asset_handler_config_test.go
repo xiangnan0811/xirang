@@ -68,10 +68,11 @@ func TestRequestedTrueFeatureLiveFalseClosesCatalogSearchOverlayContentHTTP(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.SystemSetting{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.SystemSetting{}, &model.TokenRevocation{}); err != nil {
 		t.Fatal(err)
 	}
 	jwtManager := auth.NewJWTManager("FAKE_FEATURE_LIVE_HTTP_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	user := model.User{
 		Username: "feature-live-http-admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
 		Role: "admin", TOTPEnabled: true,
@@ -158,10 +159,11 @@ func newFeatureLiveHTTPRouter(t *testing.T, name string, readiness ga.ReadinessS
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.SystemSetting{}, &model.RecoveryPoint{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.SystemSetting{}, &model.RecoveryPoint{}, &model.TokenRevocation{}); err != nil {
 		t.Fatal(err)
 	}
 	jwtManager := auth.NewJWTManager("FAKE_FEATURE_LIVE_HTTP_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	user := model.User{
 		Username: "feature-live-http-" + name, PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
 		Role: "admin", TOTPEnabled: true,

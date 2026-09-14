@@ -88,7 +88,7 @@ func newVirtualRsyncRestoreFixture(t *testing.T, node model.Node, rsyncBinary, v
 		Node:         node,
 	}
 	ctx := context.Background()
-	raw, err := executor.CaptureRsyncManifest(ctx, backupTask)
+	raw, err := executor.CaptureRsyncManifest(ctx, backupTask, executor.RsyncCaptureSourceRole)
 	if err != nil {
 		t.Fatalf("capture virtual node source manifest: %v", err)
 	}

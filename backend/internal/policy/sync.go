@@ -10,6 +10,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"xirang/backend/internal/rsyncconfinement"
 )
 
 // NodeTargetPath retains the legacy backup-dir layout for read-only historical
@@ -96,19 +97,57 @@ func taskCronScheduleUpdatesForMode(
 	return updates
 }
 
-// taskCronScheduleUpdatesTx reads retry provenance only after the caller has
-// locked the Task row on this same transaction. A provenance decode failure is
-// returned so no schedule field is changed under an ambiguous mode.
-func taskCronScheduleUpdatesTx(tx *gorm.DB, task model.Task, cronSpec string) (map[string]interface{}, error) {
+// taskRetryCronCursorModeTx reads retry provenance only after the caller has
+// locked the Task row on this same transaction.
+func taskRetryCronCursorModeTx(tx *gorm.DB, task model.Task) (model.TaskRunCronCursorMode, error) {
 	mode := model.TaskRunCronCursorModeLegacy
 	if strings.EqualFold(strings.TrimSpace(task.Status), taskRetryingStatus) {
 		var err error
 		mode, err = model.LatestTaskRetryEffectCronCursorModeTx(tx, task.ID)
 		if err != nil {
-			return nil, fmt.Errorf("读取任务重试调度归属失败(task_id=%d): %w", task.ID, err)
+			return mode, fmt.Errorf("读取任务重试调度归属失败(task_id=%d): %w", task.ID, err)
 		}
 	}
+	return mode, nil
+}
+
+// taskCronScheduleUpdatesTx reads retry provenance only after the caller has
+// locked the Task row on this same transaction. A provenance decode failure is
+// returned so no schedule field is changed under an ambiguous mode.
+func taskCronScheduleUpdatesTx(tx *gorm.DB, task model.Task, cronSpec string) (map[string]interface{}, error) {
+	mode, err := taskRetryCronCursorModeTx(tx, task)
+	if err != nil {
+		return nil, err
+	}
 	return taskCronScheduleUpdatesForMode(task, cronSpec, mode), nil
+}
+
+// overrideTaskScheduleUpdatesTx preserves an explicit task cron while policy
+// state changes. Policy disable clears the active cursor; resume re-anchors a
+// regular cursor from the task's own cron. Legacy retry deadlines remain the
+// historical reservation until their terminal effect resolves.
+func overrideTaskScheduleUpdatesTx(tx *gorm.DB, task model.Task, resuming bool) (map[string]interface{}, error) {
+	mode, err := taskRetryCronCursorModeTx(tx, task)
+	if err != nil {
+		return nil, err
+	}
+	updates := map[string]interface{}{"next_run_at": nil}
+	if !resuming || !task.Enabled || strings.TrimSpace(task.CronSpec) == "" {
+		if strings.EqualFold(strings.TrimSpace(task.Status), taskRetryingStatus) &&
+			mode != model.TaskRunCronCursorModeRegularV1 {
+			// A legacy retry deadline is not the regular cron cursor and must
+			// remain reserved while the policy is disabled.
+			delete(updates, "next_run_at")
+		}
+		return updates, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(task.Status), taskRetryingStatus) &&
+		mode != model.TaskRunCronCursorModeRegularV1 {
+		delete(updates, "next_run_at")
+		return updates, nil
+	}
+	updates["next_run_at"] = cronutil.Next(task.CronSpec)
+	return updates, nil
 }
 func lockPolicyTasks(db *gorm.DB, policyID uint, nodeIDs []uint) ([]model.Task, error) {
 	if db == nil {
@@ -127,10 +166,22 @@ func lockPolicyTasks(db *gorm.DB, policyID uint, nodeIDs []uint) ([]model.Task, 
 }
 
 func updateLockedPolicyTaskSchedules(db *gorm.DB, tasks []model.Task, cronSpec string) error {
+	resuming := strings.TrimSpace(cronSpec) != ""
 	for i := range tasks {
-		updates, err := taskCronScheduleUpdatesTx(db, tasks[i], cronSpec)
+		var (
+			updates map[string]interface{}
+			err     error
+		)
+		if tasks[i].CronOverride {
+			updates, err = overrideTaskScheduleUpdatesTx(db, tasks[i], resuming)
+		} else {
+			updates, err = taskCronScheduleUpdatesTx(db, tasks[i], cronSpec)
+		}
 		if err != nil {
 			return err
+		}
+		if len(updates) == 0 {
+			continue
 		}
 		if err := db.Model(&model.Task{}).Where("id = ?", tasks[i].ID).Updates(updates).Error; err != nil {
 			return fmt.Errorf("更新任务调度失败(task_id=%d): %w", tasks[i].ID, err)
@@ -155,6 +206,14 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 	if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Select("id").First(&lockedPolicy, policy.ID).Error; err != nil {
 		return fmt.Errorf("锁定策略失败: %w", err)
+	}
+
+	confinementPolicy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return fmt.Errorf("加载 Rsync 隔离策略失败: %w", err)
+	}
+	if err := confinementPolicy.ValidateSource(policy.SourcePath, "policy source"); err != nil {
+		return fmt.Errorf("策略源路径不符合 Rsync 隔离策略: %w", err)
 	}
 
 	// 加载关联节点信息（用于拼接任务名称）
@@ -194,6 +253,11 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 	// Validate every persisted local target and each proposed new target before
 	// any row is changed. This fails closed on legacy shared paths, aliases, and
 	// ancestor/descendant targets discoverable in the task inventory.
+	for _, task := range existingTasks {
+		if err := confinementPolicy.ValidateTarget(task.RsyncTarget, "policy task target"); err != nil {
+			return fmt.Errorf("已有策略任务目标不符合 Rsync 隔离策略: %w", err)
+		}
+	}
 	proposed := make([]TargetOwner, 0, len(nodeIDs))
 	for _, nid := range nodeIDs {
 		if _, ok := nodeMap[nid]; !ok {
@@ -205,6 +269,9 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 		target := PolicyNodeTargetPath(policy.TargetPath, policy.ID, nid)
 		if target == "" {
 			return fmt.Errorf("策略 %d 的备份根目录不安全，无法生成隔离目标", policy.ID)
+		}
+		if err := confinementPolicy.ValidateTarget(target, "policy task target"); err != nil {
+			return fmt.Errorf("新策略任务目标不符合 Rsync 隔离策略: %w", err)
 		}
 		proposed = append(proposed, TargetOwner{PolicyID: policy.ID, NodeID: nid, Target: target})
 	}
@@ -224,11 +291,18 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 			continue
 		}
 		if task, exists := taskByNode[nid]; exists {
-			// 更新现有任务，但保留其历史物理目标。任务行已在本事务
-			// 中加锁，再读取重试归属后才决定 cursor 所有权。
-			updates, err := taskCronScheduleUpdatesTx(db, *task, cronSpec)
-			if err != nil {
-				return err
+			// Update existing task metadata, but only inherited schedules may
+			// be changed by policy edits. An explicit Task cron (including an
+			// explicit empty value) is durable task-owned state.
+			updates := map[string]interface{}{}
+			if !task.CronOverride {
+				scheduleUpdates, err := taskCronScheduleUpdatesTx(db, *task, cronSpec)
+				if err != nil {
+					return err
+				}
+				for key, value := range scheduleUpdates {
+					updates[key] = value
+				}
 			}
 			updates["rsync_source"] = policy.SourcePath
 			updates["name"] = fmt.Sprintf("%s-%s", policy.Name, node.Name)
@@ -261,9 +335,23 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 	// 将不再关联的节点对应的任务暂停调度（保留策略归属，以便重新加入时复用）。
 	for nid, task := range taskByNode {
 		if _, inNew := newNodeSet[nid]; !inNew {
-			updates, err := taskCronScheduleUpdatesTx(db, *task, "")
+			var (
+				updates map[string]interface{}
+				err     error
+			)
+			if task.CronOverride {
+				// Node removal is a policy pause boundary. Preserve an
+				// explicit cron value for future re-association, but clear
+				// its active cursor while the node is detached.
+				updates, err = overrideTaskScheduleUpdatesTx(db, *task, false)
+			} else {
+				updates, err = taskCronScheduleUpdatesTx(db, *task, "")
+			}
 			if err != nil {
 				return err
+			}
+			if len(updates) == 0 {
+				continue
 			}
 			if err := db.Model(task).Updates(updates).Error; err != nil {
 				return fmt.Errorf("暂停任务失败(task_id=%d): %w", task.ID, err)
@@ -274,16 +362,15 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 	return nil
 }
 
-// PauseTasksForPolicy removes cron schedules for all tasks associated with a policy.
+// PauseTasksForPolicy removes inherited cron schedules for all tasks and
+// clears active cursors for explicit overrides while preserving their cron
+// text for a later resume.
 func PauseTasksForPolicy(db *gorm.DB, runner TaskRunner, policyID uint) error {
 	_ = runner
 	tasks, err := lockPolicyTasks(db, policyID, nil)
 	if err != nil {
 		return err
 	}
-	// Persisting an empty cron spec clears a marked task's regular cursor, but
-	// preserves a legacy task's retry deadline. Both decisions are made after
-	// locking each task in this transaction.
 	return updateLockedPolicyTaskSchedules(db, tasks, "")
 }
 
@@ -316,9 +403,19 @@ func OrphanTasksForPolicy(db *gorm.DB, runner TaskRunner, policyID uint) error {
 		return err
 	}
 	for i := range tasks {
-		updates, err := taskCronScheduleUpdatesTx(db, tasks[i], "")
-		if err != nil {
-			return err
+		updates := map[string]interface{}{}
+		if tasks[i].CronOverride {
+			// Preserve the explicit cron text as task-owned state, but do
+			// not leave an active cursor when policy ownership is removed.
+			updates["next_run_at"] = nil
+		} else {
+			scheduleUpdates, err := taskCronScheduleUpdatesTx(db, tasks[i], "")
+			if err != nil {
+				return err
+			}
+			for key, value := range scheduleUpdates {
+				updates[key] = value
+			}
 		}
 		updates["source"] = "orphaned"
 		updates["policy_id"] = nil
@@ -335,9 +432,23 @@ func SyncPolicySchedules(db *gorm.DB, runner TaskRunner, policyID uint) error {
 	if runner == nil {
 		return nil
 	}
+	var policyState struct {
+		Enabled bool `gorm:"column:enabled"`
+	}
+	policyResult := db.Model(&model.Policy{}).
+		Select("enabled").Where("id = ?", policyID).Limit(1).Find(&policyState)
+	if policyResult.Error != nil {
+		return fmt.Errorf("查询策略调度状态失败: %w", policyResult.Error)
+	}
 	var tasks []model.Task
 	if err := db.Where("policy_id = ? AND source = ?", policyID, "policy").Find(&tasks).Error; err != nil {
 		return fmt.Errorf("查询策略任务调度失败: %w", err)
+	}
+	if policyResult.RowsAffected != 1 || !policyState.Enabled {
+		for _, task := range tasks {
+			runner.RemoveSchedule(task.ID)
+		}
+		return nil
 	}
 	for _, task := range tasks {
 		if err := runner.SyncSchedule(task); err != nil {

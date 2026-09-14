@@ -70,7 +70,7 @@ func TestCaptureRsyncManifestPreservesEscapedNamesAndLinks(t *testing.T) {
 		RsyncTarget:  target,
 		RsyncBinary:  rsyncBinary,
 	}
-	raw, err := CaptureRsyncManifest(context.Background(), task)
+	raw, err := CaptureRsyncManifest(context.Background(), task, RsyncCaptureSourceRole)
 	if err != nil {
 		t.Fatalf("capture manifest: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestCaptureRsyncManifestRemotePreservesEscapedNamesAndLinks(t *testing.T) {
 		RsyncBinary:  rsyncBinary,
 		Node:         node,
 	}
-	raw, err := CaptureRsyncManifest(context.Background(), task)
+	raw, err := CaptureRsyncManifest(context.Background(), task, RsyncCaptureSourceRole)
 	if err != nil {
 		t.Fatalf("capture remote manifest: %v", err)
 	}

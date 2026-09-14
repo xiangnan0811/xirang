@@ -472,7 +472,9 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000087_backup_completion_facts`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000088_task_cron_override`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+
+000088 持久化任务调度覆盖来源：显式设置 Cron（包括清空为手动）后，策略修改不会覆盖该任务的调度。历史策略任务的 Cron 与策略生效计划不同时回填为覆盖，相同时保留继承。升级前备份数据库、加密密钥和备份数据，停止并排空旧 Core/执行器，禁止混跑写入；存在显式覆盖记录时，降级保护拒绝抹除这些事实。
 
 本次审计整改增加 000078（单次两步登录、绑定会话、离线恢复审计）、000079（普通 TaskRun 执行租约、原子收尾和可恢复效果）与 000081（批次幂等及派发回执）。升级前停止并排空旧服务/执行进程，备份数据库及加密密钥；不得混跑旧的非租约执行器。历史未完成 TOTP 初始化在升级时失效，已启用的 TOTP 不受影响。历史重复 `(task_id, upstream_task_run_id)` 在标记 dirty 前拒绝升级，必须先离线核对真实执行历史，不得猜测去重。
 

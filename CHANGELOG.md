@@ -27,6 +27,21 @@
 
 ## [Unreleased]
 
+### Fixes
+
+* Validate task Cron before writes and isolate historical invalid schedules during startup. Preserve omitted edit fields, support explicit manual scheduling and safe executor-setting clears, and reject stale revisions without overwriting concurrent edits.
+* Enforce durable single-session logout on ordinary APIs across Core instances; session-verification outages fail closed.
+* Replace misleading Restic Append-Only controls with repository-format selection and explicitly unverified deletion protection; migrate historical settings at startup and config import without exposing secrets.
+* Stream remote Restic password-file contents through owned SSH stdin instead of command arguments, preserving exact bytes and independent cleanup.
+* Bound Docker volume discovery by request cancellation, a total deadline and output/volume budgets; report incomplete inspection as partial rather than complete empty results.
+* Confine configured Rsync source/target roots during local and SSH execution using pinned operands, a closed helper protocol and Linux Landlock. Missing helper/kernel capability fails closed; deploy the matching one-shot helper on remote nodes before enabling allowlists.
+* Preserve explicit task-level Cron overrides across policy edits and disable/resume, return the post-scheduler task revision, and enforce durable revocation before realtime log/terminal handshakes.
+
+### Upgrade notes
+
+* Paired SQLite/PostgreSQL migration `000088_task_cron_override` persists task schedule provenance. Stop all old Core/executor processes and back up the database and encryption keys before upgrading; do not mix writers. Historical policy-owned task Cron values differing from the policy effective schedule become overrides; matching values remain inherited. Protected downgrade is refused when explicit override evidence would be lost.
+* Configured Rsync confinement requires Linux Landlock ABI 3 or newer (including truncate protection), matching local/remote helper protocol, and supported private user/mount namespaces for pinned root/file aliases; default container policies may deny these capabilities and execution then fails closed. Managed hardlink publication first transfers a source-topology-preserving staging tree without `--link-dest`, then reuses compatible parent inode groups through bounded descriptor-relative linking without modifying the parent. Budget space for the complete staging tree and retain the existing hardlink/atomic-rename filesystem requirements.
+
 ## [0.55.10](https://github.com/xiangnan0811/xirang/compare/v0.55.9...v0.55.10) (2026-09-12)
 
 ### 🐛 Bug Fixes

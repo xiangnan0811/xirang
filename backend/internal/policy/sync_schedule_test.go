@@ -307,6 +307,153 @@ func runPolicyScheduleModes(t *testing.T, db *gorm.DB) {
 		t.Fatalf("policy schedule changed retry effect deadlines: %+v", effects)
 	}
 }
+func TestPolicyTaskCronOverrideLifecycleSQLite(t *testing.T) {
+	runPolicyTaskCronOverrideLifecycle(t, openPolicyScheduleSQLiteDB(t))
+}
+
+func TestPolicyTaskCronOverrideLifecyclePostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runPolicyTaskCronOverrideLifecycle(t, openPolicySchedulePostgresDB(t, dsn))
+}
+
+func runPolicyTaskCronOverrideLifecycle(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	t.Setenv("RSYNC_ALLOWED_SOURCE_PREFIXES", "/data")
+	t.Setenv("RSYNC_ALLOWED_TARGET_PREFIXES", "/backup")
+	if err := db.AutoMigrate(
+		&model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{},
+		&model.TaskRun{}, &model.TaskRunEffect{},
+	); err != nil {
+		t.Fatalf("migrate policy cron override tables: %v", err)
+	}
+	nodes := []model.Node{
+		{Name: "policy-override-manual-node", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key", BackupDir: "policy-override-manual-node"},
+		{Name: "policy-override-custom-node", Host: "127.0.0.1", Port: 23, Username: "root", AuthType: "key", BackupDir: "policy-override-custom-node"},
+		{Name: "policy-override-inherited-node", Host: "127.0.0.1", Port: 24, Username: "root", AuthType: "key", BackupDir: "policy-override-inherited-node"},
+	}
+	for i := range nodes {
+		if err := db.Create(&nodes[i]).Error; err != nil {
+			t.Fatalf("create policy cron override node %d: %v", i, err)
+		}
+	}
+	policy := model.Policy{
+		Name: "policy-cron-override", SourcePath: "/data/source",
+		TargetPath: "/backup/policy-cron-override", CronSpec: "@every 1h", Enabled: true,
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("create policy cron override policy: %v", err)
+	}
+	for i := range nodes {
+		if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: nodes[i].ID}).Error; err != nil {
+			t.Fatalf("create policy cron override association %d: %v", i, err)
+		}
+	}
+	policyID := policy.ID
+	tasks := []model.Task{
+		{
+			Name: "manual-override", NodeID: nodes[0].ID, PolicyID: &policyID,
+			RsyncSource: "/data/source", RsyncTarget: PolicyNodeTargetPath(policy.TargetPath, policy.ID, nodes[0].ID),
+			ExecutorType: "rsync", CronSpec: "", CronOverride: true,
+			Status: model.TaskRunStatusPending, Enabled: true, Source: "policy",
+		},
+		{
+			Name: "custom-override", NodeID: nodes[1].ID, PolicyID: &policyID,
+			RsyncSource: "/data/source", RsyncTarget: PolicyNodeTargetPath(policy.TargetPath, policy.ID, nodes[1].ID),
+			ExecutorType: "rsync", CronSpec: "@every 30m", CronOverride: true,
+			Status: model.TaskRunStatusPending, Enabled: true, Source: "policy",
+		},
+	}
+	for i := range tasks {
+		if err := db.Create(&tasks[i]).Error; err != nil {
+			t.Fatalf("create policy cron override task %d: %v", i, err)
+		}
+	}
+
+	nodeIDs := []uint{nodes[0].ID, nodes[1].ID, nodes[2].ID}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return SyncPolicyTasks(tx, nil, policy, nodeIDs)
+	}); err != nil {
+		t.Fatalf("initial policy task sync: %v", err)
+	}
+	var inherited model.Task
+	if err := db.Where("node_id = ? AND policy_id = ?", nodes[2].ID, policy.ID).First(&inherited).Error; err != nil {
+		t.Fatalf("load generated inherited task: %v", err)
+	}
+	if inherited.CronOverride || inherited.CronSpec != "@every 1h" || inherited.NextRunAt == nil {
+		t.Fatalf("generated inherited task state=%+v", inherited)
+	}
+
+	policy.CronSpec = "@every 2h"
+	policy.Name = "policy-cron-override-renamed"
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return SyncPolicyTasks(tx, nil, policy, nodeIDs)
+	}); err != nil {
+		t.Fatalf("metadata and cron policy sync: %v", err)
+	}
+	var manual, custom model.Task
+	if err := db.First(&manual, tasks[0].ID).Error; err != nil {
+		t.Fatalf("reload manual override after sync: %v", err)
+	}
+	if err := db.First(&custom, tasks[1].ID).Error; err != nil {
+		t.Fatalf("reload custom override after sync: %v", err)
+	}
+	if manual.CronSpec != "" || !manual.CronOverride || manual.NextRunAt != nil ||
+		custom.CronSpec != "@every 30m" || !custom.CronOverride {
+		t.Fatalf("policy edit changed task-owned schedules: manual=%+v custom=%+v", manual, custom)
+	}
+	if err := db.First(&inherited, inherited.ID).Error; err != nil {
+		t.Fatalf("reload inherited task after policy cron edit: %v", err)
+	}
+	if inherited.CronOverride || inherited.CronSpec != "@every 2h" || inherited.NextRunAt == nil {
+		t.Fatalf("policy edit failed to update inherited task: %+v", inherited)
+	}
+	inheritedID := inherited.ID
+
+	if err := db.Model(&model.Policy{}).Where("id = ?", policy.ID).Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable policy row: %v", err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return PauseTasksForPolicy(tx, nil, policy.ID)
+	}); err != nil {
+		t.Fatalf("pause policy task schedules: %v", err)
+	}
+	for i, task := range []*model.Task{&manual, &custom, &inherited} {
+		*task = model.Task{}
+		if err := db.First(task, []uint{tasks[0].ID, tasks[1].ID, inheritedID}[i]).Error; err != nil {
+			t.Fatalf("reload paused task %d: %v", i, err)
+		}
+	}
+	if manual.CronSpec != "" || manual.NextRunAt != nil || !manual.CronOverride ||
+		custom.CronSpec != "@every 30m" || custom.NextRunAt != nil || !custom.CronOverride ||
+		inherited.CronSpec != "" || inherited.NextRunAt != nil || inherited.CronOverride {
+		t.Fatalf("policy pause state lost provenance/cursors: manual=%+v custom=%+v inherited=%+v",
+			manual, custom, inherited)
+	}
+
+	if err := db.Model(&model.Policy{}).Where("id = ?", policy.ID).Update("enabled", true).Error; err != nil {
+		t.Fatalf("enable policy row: %v", err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return ResumeTasksForPolicy(tx, nil, policy.ID, "@every 3h")
+	}); err != nil {
+		t.Fatalf("resume policy task schedules: %v", err)
+	}
+	for i, task := range []*model.Task{&manual, &custom, &inherited} {
+		*task = model.Task{}
+		if err := db.First(task, []uint{tasks[0].ID, tasks[1].ID, inheritedID}[i]).Error; err != nil {
+			t.Fatalf("reload resumed task %d: %v", i, err)
+		}
+	}
+	if manual.CronSpec != "" || manual.NextRunAt != nil || !manual.CronOverride ||
+		custom.CronSpec != "@every 30m" || custom.NextRunAt == nil || !custom.CronOverride ||
+		inherited.CronSpec != "@every 3h" || inherited.NextRunAt == nil || inherited.CronOverride {
+		t.Fatalf("policy resume state lost provenance/cursors: manual=%+v custom=%+v inherited=%+v",
+			manual, custom, inherited)
+	}
+}
 
 func openPolicyScheduleSQLiteDB(t *testing.T) *gorm.DB {
 	t.Helper()

@@ -21,6 +21,7 @@ import (
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/rsyncconfinement"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
 )
@@ -238,9 +239,28 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 	if strings.TrimSpace(task.RsyncSource) == "" || strings.TrimSpace(task.RsyncTarget) == "" {
 		return -1, markNoProcessStart(fmt.Errorf("同步任务缺少源路径或目标路径"))
 	}
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return -1, markNoProcessStart(err)
+	}
 
-	// 备份模式：标准 rsync 执行（本地 -> 远程，或远程 -> 本地）。
-	if !util.IsRemotePathSpec(task.RsyncTarget) {
+	sourceRemote := util.IsRemotePathSpec(task.RsyncSource)
+	if strings.TrimSpace(task.Node.Host) != "" {
+		sourceRemote = true
+	}
+	targetRemote := util.IsRemotePathSpec(task.RsyncTarget)
+	if !sourceRemote {
+		if err := policy.ValidateSource(task.RsyncSource, "rsync_source"); err != nil {
+			return -1, markNoProcessStart(err)
+		}
+	}
+	if !targetRemote {
+		if err := policy.ValidateTarget(task.RsyncTarget, "rsync_target"); err != nil {
+			return -1, markNoProcessStart(err)
+		}
+	}
+
+	if !targetRemote {
 		if err := EnsureLocalTargetReady(task.RsyncTarget); err != nil {
 			return -1, markNoProcessStart(err)
 		}
@@ -252,34 +272,132 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		return -1, markNoProcessStart(err)
 	}
 	args = appendRsyncExcludeArgs(args, excludes)
-
 	source := task.RsyncSource
 	cleanup := func() {}
+	runtimeReadPaths := []string(nil)
 	if strings.TrimSpace(task.Node.Host) != "" {
 		sshParts, sshCleanup, err := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeTaskBackup)
 		if err != nil {
 			return -1, markNoProcessStart(err)
 		}
 		cleanup = sshCleanup
+		runtimeReadPaths = rsyncSSHRuntimeReadPaths(sshParts)
 		args = append(args, "-e", strings.Join(sshParts, " "))
-		if NeedsSudo(task.Node) {
-			args = append(args, "--rsync-path", "sudo rsync")
-		}
 		source = fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), task.RsyncSource)
 	}
 	defer cleanup()
+
+	remotePathConfigured := false
+	if sourceRemote && len(policy.SourceRoots) > 0 {
+		remotePath, ok := rsyncRemotePath(source, task.RsyncSource, strings.TrimSpace(task.Node.Host) != "")
+		if !ok {
+			return -1, markNoProcessStart(fmt.Errorf("rsync 远程源路径格式不受支持"))
+		}
+		remoteCommand, remoteErr := rsyncconfinement.BuildRemoteRsyncPath(
+			"read", "", "rsync", policy.SourceRoots, remotePath, NeedsSudo(task.Node),
+		)
+		if remoteErr != nil {
+			return -1, markNoProcessStart(remoteErr)
+		}
+		args = append(args, "--rsync-path", remoteCommand)
+		remotePathConfigured = true
+	} else if targetRemote && len(policy.TargetRoots) > 0 {
+		remotePath, ok := rsyncRemotePath(task.RsyncTarget, task.RsyncTarget, true)
+		if !ok {
+			return -1, markNoProcessStart(fmt.Errorf("rsync 远程目标路径格式不受支持"))
+		}
+		remoteCommand, remoteErr := rsyncconfinement.BuildRemoteRsyncPath(
+			"write", "", "rsync", policy.TargetRoots, remotePath, NeedsSudo(task.Node),
+		)
+		if remoteErr != nil {
+			return -1, markNoProcessStart(remoteErr)
+		}
+		args = append(args, "--rsync-path", remoteCommand)
+		remotePathConfigured = true
+	}
+	if NeedsSudo(task.Node) && !remotePathConfigured {
+		args = append(args, "--rsync-path", "sudo rsync")
+	}
 
 	if bwLimit := resolveBwLimit(task); bwLimit > 0 {
 		args = append(args, "--bwlimit", fmt.Sprintf("%dk", bwLimit*1000/8))
 	}
 
-	// 使用 `--` 终止参数解析，防止路径内容被解释为 rsync 选项。
+	localSource := ""
+	if !sourceRemote {
+		localSource = task.RsyncSource
+	}
+	localTarget := ""
+	if !targetRemote {
+		localTarget = task.RsyncTarget
+	}
 	args = append(args, "--", source, task.RsyncTarget)
-	return e.runRsyncCommand(ctx, args, logf, progressf)
+	return e.runRsyncCommandWithOptions(ctx, args, rsyncCommandOptions{
+		localSource:      localSource,
+		localTarget:      localTarget,
+		runtimeReadPaths: runtimeReadPaths,
+	}, logf, progressf)
+}
+func rsyncRemotePath(spec, fallback string, nodeOwned bool) (string, bool) {
+	value := strings.TrimSpace(spec)
+	if nodeOwned {
+		value = strings.TrimSpace(fallback)
+		if value == "" || strings.HasPrefix(value, "rsync://") {
+			return "", false
+		}
+		path := filepath.Clean(value)
+		if !filepath.IsAbs(path) {
+			return "", false
+		}
+		return path, true
+	}
+	if value == "" || strings.HasPrefix(value, "rsync://") {
+		return "", false
+	}
+	colon := strings.IndexByte(value, ':')
+	if strings.HasPrefix(value, "[") {
+		if close := strings.Index(value, "]:"); close >= 0 {
+			colon = close + 1
+		}
+	}
+	if colon <= 0 || colon+1 >= len(value) {
+		return "", false
+	}
+	path := filepath.Clean(value[colon+1:])
+	if !filepath.IsAbs(path) {
+		return "", false
+	}
+	return path, true
 }
 
-func (e *RsyncExecutor) runRsyncCommand(ctx context.Context, args []string, logf LogFunc, progressf ProgressFunc) (int, error) {
-	cmd := exec.CommandContext(ctx, e.RsyncBinary(), args...)
+type rsyncCommandOptions struct {
+	localSource        string
+	localTarget        string
+	trustedLocalSource bool
+	trustedLocalTarget bool
+	runtimeReadPaths   []string
+}
+
+func (e *RsyncExecutor) runRsyncCommandWithOptions(
+	ctx context.Context,
+	args []string,
+	options rsyncCommandOptions,
+	logf LogFunc,
+	progressf ProgressFunc,
+) (int, error) {
+	cmd, cleanup, err := rsyncconfinement.NewCommand(ctx, rsyncconfinement.CommandRequest{
+		Binary:             e.RsyncBinary(),
+		Args:               args,
+		LocalSource:        options.localSource,
+		LocalTarget:        options.localTarget,
+		RuntimeReadPaths:   append([]string(nil), options.runtimeReadPaths...),
+		TrustedLocalSource: options.trustedLocalSource,
+		TrustedLocalTarget: options.trustedLocalTarget,
+	})
+	if err != nil {
+		return -1, &NoProcessStartError{Err: err}
+	}
+	defer cleanup()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return -1, &NoProcessStartError{Err: err}
@@ -292,6 +410,7 @@ func (e *RsyncExecutor) runRsyncCommand(ctx context.Context, args []string, logf
 	if err := cmd.Start(); err != nil {
 		return -1, &NoProcessStartError{Err: err}
 	}
+	cleanup()
 
 	var wg sync.WaitGroup
 	stream := func(scanner *bufio.Scanner, level string) {
@@ -301,7 +420,9 @@ func (e *RsyncExecutor) runRsyncCommand(ctx context.Context, args []string, logf
 			if strings.TrimSpace(message) == "" {
 				continue
 			}
-			logf(level, sanitizeExecutorRuntimeEvidence(message))
+			if logf != nil {
+				logf(level, sanitizeExecutorRuntimeEvidence(message))
+			}
 			if level == "info" && progressf != nil {
 				if sample, ok := parseProgressSample(message); ok {
 					progressf(sample)
@@ -377,16 +498,16 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 	if strings.TrimSpace(task.Node.Host) == "" {
 		return -1, fmt.Errorf("节点地址不能为空")
 	}
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return -1, markNoProcessStart(err)
+	}
 
 	stagedSource, stageCleanup, err := stageRsyncRestoreSource(ctx, source, manifest)
 	if err != nil {
 		return -1, err
 	}
 	defer stageCleanup()
-
-	if err := ensureRsyncRestoreTargetReady(ctx, task.Node, target, manifest.Layout); err != nil {
-		return -1, err
-	}
 
 	sshParts, cleanup, err := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeTaskRestore)
 	if err != nil {
@@ -395,7 +516,18 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 	defer cleanup()
 	args := []string{"-avz", "--checksum", "--info=progress2"}
 	args = append(args, "-e", strings.Join(sshParts, " "))
-	if NeedsSudo(task.Node) {
+	remotePathConfigured := false
+	if len(policy.TargetRoots) > 0 {
+		remoteCommand, remoteErr := rsyncconfinement.BuildRemoteRsyncPath(
+			"write", "", "rsync", policy.TargetRoots, target, NeedsSudo(task.Node),
+		)
+		if remoteErr != nil {
+			return -1, markNoProcessStart(remoteErr)
+		}
+		args = append(args, "--rsync-path", remoteCommand)
+		remotePathConfigured = true
+	}
+	if NeedsSudo(task.Node) && !remotePathConfigured {
 		args = append(args, "--rsync-path", "sudo rsync")
 	}
 	if bwLimit := resolveBwLimit(task); bwLimit > 0 {
@@ -403,35 +535,14 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 	}
 	destination := fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), target)
 	args = append(args, "--", stagedSource, destination)
-	logf("info", "从 Core 向远程节点执行恢复命令")
-	return e.runRsyncCommand(ctx, args, logf, progressf)
-}
-func ensureRsyncRestoreTargetReady(ctx context.Context, node model.Node, target, layout string) error {
-	if layout != model.TaskRunCaptureLayoutSingleFile || strings.HasSuffix(target, string(filepath.Separator)) {
-		return EnsureRemoteTargetReadyForPurpose(ctx, node, target, sshutil.PurposeTaskRestore)
+	if logf != nil {
+		logf("info", "从 Core 向远程节点执行恢复命令")
 	}
-	quoted := ShellEscape(target)
-	command := fmt.Sprintf(
-		"if [ -d %s ] && [ ! -L %s ]; then printf directory; elif [ -e %s ] || [ -L %s ]; then printf file; else printf absent; fi",
-		quoted, quoted, quoted, quoted,
-	)
-	if NeedsSudo(node) {
-		command = WrapWithSudoShell(command)
-	}
-	client, err := DialSSHForNodePurpose(ctx, node, sshutil.PurposeTaskRestore)
-	if err != nil {
-		return fmt.Errorf("SSH 连接失败: %w", err)
-	}
-	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
-	output, err := RunSSHCommandOutput(ctx, client, command)
-	if err != nil {
-		return fmt.Errorf("检查恢复目标失败: %w", err)
-	}
-	readyTarget := filepath.Dir(target)
-	if strings.TrimSpace(output) == "directory" {
-		readyTarget = target
-	}
-	return EnsureRemoteTargetReadyForPurpose(ctx, node, readyTarget, sshutil.PurposeTaskRestore)
+	return e.runRsyncCommandWithOptions(ctx, args, rsyncCommandOptions{
+		localSource:        stagedSource,
+		trustedLocalSource: true,
+		runtimeReadPaths:   rsyncSSHRuntimeReadPaths(sshParts),
+	}, logf, progressf)
 }
 
 const maxRsyncExcludeRuleBytes = 4096
@@ -512,7 +623,17 @@ func buildRsyncSSHArgs(ctx context.Context, node model.Node, purpose string) ([]
 	}
 	writeRsyncCredentialAuditForPurpose(ctx, node, credential, purpose, credentialaudit.OutcomeSuccess, "key_prepare", nil)
 
-	sshParts := []string{"ssh", "-p", fmt.Sprintf("%d", port)}
+	confinementPolicy, policyErr := rsyncconfinement.LoadPolicyFromEnv()
+	if policyErr != nil {
+		return nil, func() {}, policyErr
+	}
+	sshParts := []string{"ssh"}
+	if confinementPolicy.Configured() {
+		// Do not consult the account's implicit ~/.ssh/config while the
+		// confined process is granted only bounded runtime-read exceptions.
+		sshParts = append(sshParts, "-F", "/dev/null")
+	}
+	sshParts = append(sshParts, "-p", fmt.Sprintf("%d", port))
 	strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
 	if err != nil {
 		return nil, func() {}, err
@@ -534,6 +655,9 @@ func buildRsyncSSHArgs(ctx context.Context, node model.Node, purpose string) ([]
 		)
 	} else {
 		sshParts = append(sshParts, "-o", "StrictHostKeyChecking=no")
+		if confinementPolicy.Configured() {
+			sshParts = append(sshParts, "-o", "UserKnownHostsFile=/dev/null")
+		}
 	}
 
 	cleanup := func() {}
@@ -562,6 +686,40 @@ func buildRsyncSSHArgs(ctx context.Context, node model.Node, purpose string) ([]
 		cleanup = func() { _ = os.Remove(keyFile.Name()) }
 	}
 	return sshParts, cleanup, nil
+}
+
+func rsyncSSHRuntimeReadPaths(parts []string) []string {
+	paths := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	appendPath := func(raw string) {
+		path := filepath.Clean(strings.TrimSpace(raw))
+		if path == "" || path == "." || path == "/dev/null" || !filepath.IsAbs(path) {
+			return
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	appendFile := func(raw string) {
+		appendPath(raw)
+	}
+	for index := 0; index < len(parts); index++ {
+		switch parts[index] {
+		case "-i":
+			if index+1 < len(parts) {
+				appendFile(parts[index+1])
+				index++
+			}
+		case "-o":
+			if index+1 < len(parts) {
+				option := parts[index+1]
+				if value, ok := strings.CutPrefix(option, "UserKnownHostsFile="); ok {
+					appendFile(value)
+				}
+				index++
+			}
+		}
+	}
+	return paths
 }
 
 // ShellEscape 对 shell 参数进行转义，防止命令注入（导出供其他包使用）。
@@ -656,6 +814,19 @@ func EnsureLocalTargetReady(target string) error {
 	dir := strings.TrimSpace(target)
 	if dir == "" {
 		return fmt.Errorf("目标路径不能为空")
+	}
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return err
+	}
+	if len(policy.TargetRoots) > 0 {
+		if err := policy.ValidateTarget(dir, "rsync_target"); err != nil {
+			return err
+		}
+		// The confined child owns destination creation. Creating or probing
+		// here would bypass the target filesystem boundary and reintroduce a
+		// check-then-use race.
+		return nil
 	}
 
 	cleanPath := filepath.Clean(dir)
@@ -788,6 +959,20 @@ func EnsureRemoteTargetReadyForPurpose(ctx context.Context, node model.Node, tar
 	if strings.TrimSpace(node.Host) == "" {
 		return fmt.Errorf("节点地址不能为空")
 	}
+	targetPath = strings.TrimSpace(targetPath)
+	if targetPath == "" {
+		return fmt.Errorf("目标路径不能为空")
+	}
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return err
+	}
+	restricted := len(policy.TargetRoots) > 0
+	if restricted {
+		if err := policy.ValidateTarget(targetPath, "rsync_target"); err != nil {
+			return err
+		}
+	}
 
 	client, err := DialSSHForNodePurpose(ctx, node, purpose)
 	if err != nil {
@@ -795,13 +980,23 @@ func EnsureRemoteTargetReadyForPurpose(ctx context.Context, node model.Node, tar
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	// 检查目标路径是否存在，不存在则创建
-	quoted := ShellEscape(targetPath)
 	sudoPrefix := ""
 	if NeedsSudo(node) {
 		sudoPrefix = "sudo "
 	}
-	checkCmd := fmt.Sprintf("%stest -d %s || %smkdir -p %s", sudoPrefix, quoted, sudoPrefix, quoted)
+	spacePath := targetPath
+	var checkCmd string
+	if restricted {
+		// Do not create the destination here. The remote confined helper pins
+		// and creates it under the configured target root, closing the
+		// check-then-use race this readiness probe used to introduce.
+		root := policy.TargetRoots[0]
+		checkCmd = fmt.Sprintf("%stest -d %s", sudoPrefix, ShellEscape(root))
+		spacePath = root
+	} else {
+		quoted := ShellEscape(targetPath)
+		checkCmd = fmt.Sprintf("%stest -d %s || %smkdir -p %s", sudoPrefix, quoted, sudoPrefix, quoted)
+	}
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("创建 SSH 会话失败: %w", err)
@@ -812,13 +1007,12 @@ func EnsureRemoteTargetReadyForPurpose(ctx context.Context, node model.Node, tar
 	}
 	_ = session.Close()
 
-	// 检查磁盘空间（获取可用空间 GB）
 	minFreeGB, err := readIntEnvWithDefault("RSYNC_MIN_FREE_GB", 0)
 	if err != nil {
 		return err
 	}
 	if minFreeGB > 0 {
-		spaceCmd := fmt.Sprintf("df -BG %s | tail -1 | awk '{print $4}' | sed 's/G//'", quoted)
+		spaceCmd := fmt.Sprintf("df -BG %s | tail -1 | awk '{print $4}' | sed 's/G//'", ShellEscape(spacePath))
 		session2, err := client.NewSession()
 		if err != nil {
 			return fmt.Errorf("创建 SSH 会话失败: %w", err)

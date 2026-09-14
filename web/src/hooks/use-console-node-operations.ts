@@ -5,12 +5,6 @@ import { toast } from "@/components/ui/toast-sonner";
 import { formatTime } from "@/lib/api/core";
 import { parseTags } from "@/hooks/use-console-data.utils";
 import { useApiAction } from "@/hooks/use-api-action";
-import {
-  buildDemoBackupTask,
-  buildDemoNode,
-  buildDemoSSHKey,
-  simulateDemoConnection
-} from "@/hooks/use-console-data.demo";
 import type {
   AlertRecord,
   NewNodeInput,
@@ -20,6 +14,11 @@ import type {
   SSHKeyRecord,
   TaskRecord
 } from "@/types/domain";
+
+// Demo builders must not enter the production startup chunk (same as mock.ts).
+function loadDemoBuilders() {
+  return import("@/hooks/use-console-data.demo");
+}
 
 type UseNodeOperationsParams = {
   token: string | null;
@@ -66,6 +65,7 @@ export function useNodeOperations({
       }
       return "";
     }
+    const { buildDemoSSHKey } = await loadDemoBuilders();
     const item = buildDemoSSHKey(input);
     markInventoryMutated();
     setSSHKeys((prev) => [item, ...prev]);
@@ -81,6 +81,7 @@ export function useNodeOperations({
       }
       return;
     }
+    const { buildDemoSSHKey } = await loadDemoBuilders();
     markInventoryMutated();
     setSSHKeys((prev) =>
       prev.map((item) =>
@@ -168,6 +169,7 @@ export function useNodeOperations({
       }
       return -1;
     }
+    const { buildDemoNode } = await loadDemoBuilders();
     const nextNode = buildDemoNode(input, nodes, keyId);
     markInventoryMutated();
     setNodes((prev) => [nextNode, ...prev]);
@@ -304,6 +306,7 @@ export function useNodeOperations({
 
     // Demo 模式模拟
     await new Promise((resolve) => setTimeout(resolve, 650));
+    const { simulateDemoConnection } = await loadDemoBuilders();
     const sim = simulateDemoConnection(nodeID);
     markInventoryMutated();
     setNodes((prev) => prev.map((node) => (node.id === nodeID ? sim.nodeUpdate(node) : node)));
@@ -338,6 +341,7 @@ export function useNodeOperations({
     }
 
     markTasksMutated();
+    const { buildDemoBackupTask } = await loadDemoBuilders();
     setTasks((prev) => [buildDemoBackupTask(node, tasks, policies), ...prev]);
     setNodes((prev) =>
       prev.map((item) =>

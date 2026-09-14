@@ -28,10 +28,11 @@ import (
 )
 
 type rawTerminalSSHServer struct {
-	addr             string
-	shellReady       <-chan struct{}
-	inputSeen        <-chan struct{}
-	connectionClosed <-chan struct{}
+	addr              string
+	connectionStarted <-chan struct{}
+	shellReady        <-chan struct{}
+	inputSeen         <-chan struct{}
+	connectionClosed  <-chan struct{}
 }
 
 func startRawTerminalSSHServerWithOptions(t *testing.T, password string, writeOutput bool) rawTerminalSSHServer {
@@ -59,9 +60,11 @@ func startRawTerminalSSHServerWithOptions(t *testing.T, password string, writeOu
 	}
 	serverConfig.AddHostKey(hostSigner)
 	shellReady := make(chan struct{})
+	connectionStarted := make(chan struct{})
 	inputSeen := make(chan struct{}, 16)
 	connectionClosed := make(chan struct{})
 	var shellReadyOnce sync.Once
+	var connectionStartedOnce sync.Once
 	var connectionClosedOnce sync.Once
 
 	go func() {
@@ -76,6 +79,7 @@ func startRawTerminalSSHServerWithOptions(t *testing.T, password string, writeOu
 					_ = rawConn.Close()
 					return
 				}
+				connectionStartedOnce.Do(func() { close(connectionStarted) })
 				go gossh.DiscardRequests(requests)
 				go func() {
 					for newChannel := range channels {
@@ -138,10 +142,11 @@ func startRawTerminalSSHServerWithOptions(t *testing.T, password string, writeOu
 		_ = listener.Close()
 	})
 	return rawTerminalSSHServer{
-		addr:             listener.Addr().String(),
-		shellReady:       shellReady,
-		inputSeen:        inputSeen,
-		connectionClosed: connectionClosed,
+		addr:              listener.Addr().String(),
+		connectionStarted: connectionStarted,
+		shellReady:        shellReady,
+		inputSeen:         inputSeen,
+		connectionClosed:  connectionClosed,
 	}
 }
 
@@ -189,17 +194,18 @@ func waitForActiveTerminalSession(t *testing.T, handler *TerminalHandler) {
 }
 
 type rawTerminalFixture struct {
-	handler          *TerminalHandler
-	server           *httptest.Server
-	token            string
-	proof            string
-	nodeID           uint
-	userID           uint
-	jwtManager       *auth.JWTManager
-	shellReady       <-chan struct{}
-	inputSeen        <-chan struct{}
-	connectionClosed <-chan struct{}
-	handlerDone      <-chan struct{}
+	handler           *TerminalHandler
+	server            *httptest.Server
+	token             string
+	proof             string
+	nodeID            uint
+	userID            uint
+	jwtManager        *auth.JWTManager
+	connectionStarted <-chan struct{}
+	shellReady        <-chan struct{}
+	inputSeen         <-chan struct{}
+	connectionClosed  <-chan struct{}
+	handlerDone       <-chan struct{}
 }
 
 func setupRawTerminalFixture(t *testing.T) rawTerminalFixture {
@@ -239,6 +245,7 @@ func setupRawTerminalFixtureWithTTL(t *testing.T, writeOutput bool, ttl time.Dur
 		t.Fatalf("创建 terminal 测试用户失败: %v", err)
 	}
 	jwtManager := auth.NewJWTManager("terminal-test-secret", ttl)
+	jwtManager.SetDB(db)
 	token, err := jwtManager.GenerateToken(user)
 	if err != nil {
 		t.Fatalf("生成 terminal 测试 token 失败: %v", err)
@@ -293,17 +300,18 @@ func setupRawTerminalFixtureWithTTL(t *testing.T, writeOutput bool, ttl time.Dur
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 	return rawTerminalFixture{
-		handler:          handler,
-		server:           server,
-		token:            token,
-		proof:            proof,
-		nodeID:           node.ID,
-		userID:           user.ID,
-		jwtManager:       jwtManager,
-		shellReady:       sshServer.shellReady,
-		inputSeen:        sshServer.inputSeen,
-		connectionClosed: sshServer.connectionClosed,
-		handlerDone:      handlerDone,
+		handler:           handler,
+		server:            server,
+		token:             token,
+		proof:             proof,
+		nodeID:            node.ID,
+		userID:            user.ID,
+		jwtManager:        jwtManager,
+		connectionStarted: sshServer.connectionStarted,
+		shellReady:        sshServer.shellReady,
+		inputSeen:         sshServer.inputSeen,
+		connectionClosed:  sshServer.connectionClosed,
+		handlerDone:       handlerDone,
 	}
 
 }
@@ -791,5 +799,76 @@ func TestTerminalSessionRevocationDoesNotAffectOtherUser(t *testing.T) {
 	if err := fixture.jwtManager.RevokeSession(secondClaims.ID, user2.ID, secondClaims.ExpiresAt.Time); err != nil {
 		t.Fatalf("清理第二个 terminal token 失败: %v", err)
 	}
+	waitForTerminalSessionsWithin(t, fixture.handler, 0, 2*time.Second)
+}
+
+func TestTerminalHandshakeDurableRevocationIsSharedAcrossManagers(t *testing.T) {
+	fixture := setupRawTerminalFixture(t)
+	db := fixture.handler.db
+	managerA := fixture.jwtManager
+	managerB := auth.NewJWTManager("terminal-test-secret", time.Hour)
+	managerB.SetDB(db)
+	fixture.handler.jwtManager = managerB
+
+	otherUser := model.User{}
+	if err := db.First(&otherUser, fixture.userID).Error; err != nil {
+		t.Fatalf("读取 terminal 测试用户失败: %v", err)
+	}
+	otherToken, err := managerB.GenerateToken(otherUser)
+	if err != nil {
+		t.Fatalf("生成独立 terminal token 失败: %v", err)
+	}
+	otherProof, _, err := managerB.GenerateStepUpToken(otherUser, auth.StepUpActionTerminalOpen)
+	if err != nil {
+		t.Fatalf("生成独立 terminal step-up proof 失败: %v", err)
+	}
+
+	revokedClaims, err := managerA.ParseToken(fixture.token)
+	if err != nil {
+		t.Fatalf("解析待撤销 terminal token 失败: %v", err)
+	}
+	if err := managerA.RevokeSession(revokedClaims.ID, fixture.userID, revokedClaims.ExpiresAt.Time); err != nil {
+		t.Fatalf("在 manager A 撤销 terminal token 失败: %v", err)
+	}
+
+	revokedConn := dialRawTerminal(t, fixture)
+	if err := revokedConn.WriteJSON(terminalAuthMessage{
+		Type:        "auth",
+		Token:       fixture.token,
+		StepUpProof: fixture.proof,
+	}); err != nil {
+		t.Fatalf("发送撤销 terminal auth 失败: %v", err)
+	}
+	_ = revokedConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := revokedConn.ReadMessage(); err == nil {
+		t.Fatal("撤销的 terminal token 应在 SSH 建立前关闭 websocket")
+	}
+	select {
+	case <-fixture.connectionStarted:
+		t.Fatal("撤销的 terminal handshake 不应启动 SSH")
+	case <-time.After(250 * time.Millisecond):
+	}
+	waitForTerminalSessions(t, fixture.handler, 0)
+
+	otherConn := dialRawTerminal(t, fixture)
+	if err := otherConn.WriteJSON(terminalAuthMessage{
+		Type:        "auth",
+		Token:       otherToken,
+		StepUpProof: otherProof,
+	}); err != nil {
+		t.Fatalf("发送独立 terminal auth 失败: %v", err)
+	}
+	select {
+	case <-fixture.connectionStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("独立 terminal token 应启动 SSH")
+	}
+	select {
+	case <-fixture.shellReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("独立 terminal token 未建立 shell")
+	}
+	waitForTerminalSessions(t, fixture.handler, 1)
+	_ = otherConn.Close()
 	waitForTerminalSessionsWithin(t, fixture.handler, 0, 2*time.Second)
 }

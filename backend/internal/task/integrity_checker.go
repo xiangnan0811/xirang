@@ -78,8 +78,7 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 			log.Warn().Uint("task_id", task.ID).Err(cleanupErr).Msg("restic 完整性检查: 密码临时文件清理失败（校验业务结果保持原状态）")
 		}
 	}()
-	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+	if err := executor.CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("restic 完整性检查: 创建密码临时文件失败")
 		return
 	}

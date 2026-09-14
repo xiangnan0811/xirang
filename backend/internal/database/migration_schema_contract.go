@@ -19,6 +19,7 @@ const (
 	alertDeliverySuccessSchemaVersion               int64 = 85
 	taskCronOccurrenceResourceIdentitySchemaVersion int64 = 86
 	backupCompletionFactsSchemaVersion              int64 = 87
+	taskCronOverrideSchemaVersion                   int64 = 88
 )
 
 const lifecycleEffectClaimAuditSlotAdmissionTrigger = "trg_recovery_point_lifecycle_effect_claim_audit_slot_downgrade_admission"
@@ -35,10 +36,11 @@ const taskCronOccurrenceIdentityImmutableTrigger = "trg_task_cron_occurrences_id
 const taskCronOccurrenceResourceIdentityAdmissionTrigger = "trg_task_cron_occurrences_resource_identity_downgrade_admission"
 const alertDeliverySuccessAdmissionTrigger = "trg_alert_delivery_success_downgrade_admission"
 const backupRepositoryProviderKindImmutableTrigger = "trg_backup_repositories_provider_kind_immutable"
+const backupCompletionDowngradeAdmissionTrigger = "trg_backup_completions_downgrade_admission"
 const backupCompletionImmutableUpdateTrigger = "trg_backup_completions_immutable_update"
 const backupCompletionImmutableDeleteTrigger = "trg_backup_completions_immutable_delete"
 const backupCompletionImmutableTrigger = "trg_backup_completions_immutable"
-const backupCompletionDowngradeAdmissionTrigger = "trg_backup_completions_downgrade_admission"
+const taskCronOverrideDowngradeAdmissionTrigger = "trg_task_cron_override_downgrade_admission"
 
 type lifecycleEffectClaimAuditSlotTriggerContract struct {
 	table                                 string
@@ -814,6 +816,12 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 		return nil
 	}
 	if err := validateBackupCompletionFactsSchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < taskCronOverrideSchemaVersion {
+		return nil
+	}
+	if err := validateTaskCronOverrideSchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
 
@@ -3264,4 +3272,74 @@ func migrationConstraintDefinition(db *sql.DB, table, constraint string) (string
 		WHERE conrelid = pg_catalog.to_regclass($1)
 		  AND conname = $2`, table, constraint).Scan(&definition)
 	return definition, err
+}
+func validateTaskCronOverrideSchema(db *sql.DB, dbType string) error {
+	const table = "tasks"
+	cronOverride, err := migrationColumnContractOf(db, dbType, table, "cron_override")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_cron_override_column")
+		}
+		return errors.New("catalog_query_failed")
+	}
+
+	wantType := "integer"
+	wantDefault := "0"
+	if dbType == "postgres" {
+		wantType = "boolean"
+		wantDefault = "false"
+	}
+	if cronOverride.dataType != wantType ||
+		!cronOverride.notNull ||
+		normalizeMigrationSQLToken(cronOverride.defaultSQL) != normalizeMigrationSQLToken(wantDefault) {
+		return errors.New("invalid_task_cron_override_column")
+	}
+
+	definition, err := migrationTriggerDefinition(db, dbType, "schema_migrations", taskCronOverrideDowngradeAdmissionTrigger)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_cron_override_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if dbType == "sqlite" {
+		if !containsMigrationFragments(normalizeMigrationDefinition(definition), []string{
+			"before insert on schema_migrations",
+			"new.version < 88",
+			"exists (select 1 from tasks where cron_override <> 0)",
+			"select raise(abort",
+			"000088 downgrade blocked: task cron override provenance exists",
+		}) {
+			return errors.New("invalid_task_cron_override_admission_trigger")
+		}
+		return nil
+	}
+
+	enabled, err := migrationTriggerEnabled(db, dbType, "schema_migrations", taskCronOverrideDowngradeAdmissionTrigger)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !enabled || !containsMigrationFragments(normalizeMigrationDefinition(definition), []string{
+		"before insert on", "schema_migrations",
+		"execute function task_cron_override_downgrade_admission()",
+	}) {
+		return errors.New("invalid_task_cron_override_admission_trigger")
+	}
+	functionDefinition, err := migrationTriggerFunctionDefinition(db, "schema_migrations", taskCronOverrideDowngradeAdmissionTrigger)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("invalid_task_cron_override_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !containsMigrationFragments(normalizeMigrationDefinition(functionDefinition), []string{
+		"returns trigger",
+		"if new.version < 88",
+		"exists (select 1 from tasks where cron_override)",
+		"raise exception '000088 downgrade blocked: task cron override provenance exists'",
+		"return new",
+	}) {
+		return errors.New("invalid_task_cron_override_admission_trigger")
+	}
+	return nil
 }

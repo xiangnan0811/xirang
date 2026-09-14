@@ -24,7 +24,7 @@ import (
 type ResticConfig struct {
 	RepositoryPassword string   `json:"repository_password,omitempty"`
 	ExcludePatterns    []string `json:"exclude_patterns,omitempty"`
-	AppendOnly         bool     `json:"append_only,omitempty"`
+	RepositoryVersion  *int     `json:"repository_version,omitempty"`
 }
 
 // ResticExecutor 通过 SSH 在远程节点上执行 restic 备份/恢复操作。
@@ -154,8 +154,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 			}
 		}
 	}()
-	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+	if err := CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		return -1, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
 	// The cleanup defer remains active for the full Restic operation.
@@ -178,8 +177,8 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 		strings.Contains(checkOut, "no such file or directory") {
 		logf("info", "初始化 restic 仓库")
 		initFlags := ""
-		if cfg.AppendOnly {
-			initFlags = " --repository-version 2"
+		if cfg.RepositoryVersion != nil {
+			initFlags = fmt.Sprintf(" --repository-version %d", *cfg.RepositoryVersion)
 		}
 		initCmd := fmt.Sprintf("%s init%s -r %s 2>&1", cmdPrefix, initFlags, repoArg)
 		initOut, initErr := RunSSHCommandOutput(ctx, client, initCmd)
@@ -187,23 +186,6 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 			return -1, fmt.Errorf("初始化 restic 仓库失败: %s", sanitizeExecutorRuntimeEvidence(initOut))
 		}
 		logf("info", "restic 仓库初始化成功")
-	}
-
-	// 若配置了 append_only，检查仓库版本是否符合要求
-	if cfg.AppendOnly {
-		catCmd := fmt.Sprintf("%s cat config -r %s 2>&1", cmdPrefix, repoArg)
-		catOut, catErr := RunSSHCommandOutput(ctx, client, catCmd)
-		if catErr == nil {
-			var repoConfig struct {
-				Version uint `json:"version"`
-			}
-			if err := json.Unmarshal([]byte(catOut), &repoConfig); err == nil && repoConfig.Version < 2 {
-				logf("warn", fmt.Sprintf(
-					"append_only=true 但仓库版本为 %d（需要版本 2），备份继续但不受 append-only 保护。请重建仓库以启用不可变保护。",
-					repoConfig.Version,
-				))
-			}
-		}
 	}
 
 	// 构造 backup 命令
@@ -257,8 +239,7 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 			}
 		}
 	}()
-	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+	if err := CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		return -1, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
 
@@ -433,8 +414,7 @@ func (e *ResticExecutor) listSnapshots(ctx context.Context, task model.Task, lin
 			}
 		}
 	}()
-	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+	if err := CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		return nil, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
 
@@ -480,8 +460,7 @@ func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapsho
 			}
 		}
 	}()
-	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+	if err := CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		return nil, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
 
@@ -539,8 +518,7 @@ func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snap
 			}
 		}
 	}()
-	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+	if err := CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		return fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
 
@@ -586,7 +564,7 @@ func (e *ResticExecutor) RunSnapshotDiff(ctx context.Context, task model.Task, l
 			}
 		}
 	}()
-	if _, err := RunSSHCommandOutput(ctx, client, BuildCreateResticPasswordFileCmd(pwFilePath, access)); err != nil {
+	if err := CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		return "", fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
 	command := fmt.Sprintf("%s diff %s %s -r %s 2>&1", e.buildCommandPrefix(task.Node, pwFilePath), ShellEscape(leftSnapshotID), ShellEscape(rightSnapshotID), ShellEscape(repo))
@@ -601,9 +579,27 @@ func parseResticConfig(raw string) (ResticConfig, error) {
 	if strings.TrimSpace(raw) == "" {
 		return ResticConfig{}, nil
 	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	var fields map[string]json.RawMessage
+	if err := decoder.Decode(&fields); err != nil {
+		return ResticConfig{}, err
+	}
+	if _, legacy := fields["append_only"]; legacy {
+		return ResticConfig{}, fmt.Errorf("restic config requires repository_version migration")
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return ResticConfig{}, fmt.Errorf("restic config has trailing data")
+		}
+		return ResticConfig{}, err
+	}
 	var cfg ResticConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return ResticConfig{}, err
+	}
+	if cfg.RepositoryVersion != nil && *cfg.RepositoryVersion != 1 && *cfg.RepositoryVersion != 2 {
+		return ResticConfig{}, fmt.Errorf("unsupported restic repository version")
 	}
 	return cfg, nil
 }

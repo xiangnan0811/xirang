@@ -363,7 +363,7 @@ describe("useConsoleData", () => {
     expect(result.current.tasks[0]?.status).toBe("running");
   });
 
-  it("demo 模式下 updateTask 会重算策略与节点派生字段", async () => {
+  it("demo 模式下 updateTask 只应用提交字段且不从策略回填", async () => {
     vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
 
     const { result } = renderHook(() => useConsoleData(null));
@@ -379,9 +379,13 @@ describe("useConsoleData", () => {
     const task = result.current.tasks[0]!;
     const targetNode = result.current.nodes[1]!;
     const targetPolicy = result.current.policies[0]!;
+    const originalSource = task.rsyncSource;
+    const originalTarget = task.rsyncTarget;
+    const originalCron = task.cronSpec;
 
     await act(async () => {
       await result.current.updateTask(task.id, {
+        expectedRevision: task.revision ?? "1",
         name: "重新命名后的任务",
         nodeId: targetNode.id,
         policyId: targetPolicy.id,
@@ -397,10 +401,12 @@ describe("useConsoleData", () => {
       nodeName: targetNode.name,
       policyId: targetPolicy.id,
       policyName: targetPolicy.name,
-      rsyncSource: targetPolicy.sourcePath,
-      rsyncTarget: targetPolicy.targetPath,
-      cronSpec: targetPolicy.cron,
     });
+    expect(updatedTask?.rsyncSource).toBe(originalSource);
+    expect(updatedTask?.rsyncTarget).toBe(originalTarget);
+    expect(updatedTask?.cronSpec).toBe(originalCron);
+    expect(updatedTask?.rsyncSource).not.toBe(targetPolicy.sourcePath);
+    expect(updatedTask?.cronSpec).not.toBe(targetPolicy.cron);
 
     vi.unstubAllEnvs();
   });
@@ -418,6 +424,7 @@ describe("useConsoleData", () => {
     await act(async () => {
       await expect(
         result.current.updateTask(101, {
+          expectedRevision: "1",
           name: "task-101",
           nodeId: 1,
           executorType: "rsync",

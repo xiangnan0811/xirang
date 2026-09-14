@@ -1,10 +1,10 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
-
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/model"
 
@@ -18,6 +18,8 @@ const (
 	CtxRole           = "role"
 	CtxToken          = "token"
 	CtxSessionBinding = "sessionBinding"
+
+	sessionRevocationValidationTimeout = 250 * time.Millisecond
 )
 
 type SessionBinding struct {
@@ -53,12 +55,26 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		// 校验 token_version：密码修改、角色变更、2FA 禁用后旧 token 自动失效
+		// 校验会话绑定字段后，再查询持久化撤销状态。
 		if claims.ID == "" || claims.ExpiresAt == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "token 会话绑定无效"})
 			c.Abort()
 			return
 		}
+		checkCtx, cancel := context.WithTimeout(c.Request.Context(), sessionRevocationValidationTimeout)
+		revoked, revokeErr := jwtManager.IsSessionRevokedContext(checkCtx, claims.ID)
+		cancel()
+		if revokeErr != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "认证服务不可用"})
+			c.Abort()
+			return
+		}
+		if revoked {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "token 已注销"})
+			c.Abort()
+			return
+		}
+		// 校验 token_version：密码修改、角色变更、2FA 禁用后旧 token 自动失效
 		if db != nil {
 			var user model.User
 			if err := db.Select("token_version", "role").First(&user, claims.UserID).Error; err != nil {

@@ -72,8 +72,10 @@
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
 | `RSYNC_BINARY` | string | `rsync` | 否 | rsync 可执行文件路径 |
-| `RSYNC_ALLOWED_SOURCE_PREFIXES` | string | 空（不限制） | 否 | rsync 源路径白名单（逗号分隔） |
-| `RSYNC_ALLOWED_TARGET_PREFIXES` | string | 空（不限制） | 否 | rsync 目标路径白名单（逗号分隔） |
+| `RSYNC_ALLOWED_SOURCE_PREFIXES` | string | 空（不限制） | 否 | 源文件系统允许根（逗号分隔的绝对路径）；配置后启用执行隔离，不是字符串前缀匹配 |
+| `RSYNC_ALLOWED_TARGET_PREFIXES` | string | 空（不限制） | 否 | 目标文件系统允许根；只允许根本身或其真实后代，缺少隔离能力时拒绝执行 |
+| `RSYNC_CONFINEMENT_HELPER` | string | `xirang-rsync-confined` | 否 | 本地一次性 Rsync 隔离 helper；须与 Core 同版本，要求 Linux Landlock ABI ≥ 3（包括截断保护） |
+| `RSYNC_CONFINEMENT_REMOTE_HELPER` | string | `xirang-rsync-confined` | 否 | SSH 远端同版本 helper 的可执行路径；配置白名单时必须部署，不能回退到未隔离 Rsync |
 | `RSYNC_MIN_FREE_GB` | int | `0` | 否 | 本地目标目录最小剩余空间（GB），`0` 不检查 |
 | `RCLONE_BINARY` | string | `rclone` | 否 | rclone 可执行文件路径 |
 | `RESTIC_BINARY` | string | `restic` | 否 | restic 可执行文件路径 |

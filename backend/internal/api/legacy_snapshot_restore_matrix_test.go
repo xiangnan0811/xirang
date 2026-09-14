@@ -93,10 +93,12 @@ func newLegacyRestoreRouter(t *testing.T, live bool) legacyRestoreRouterFixture 
 	if err := db.AutoMigrate(
 		&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.AuditLog{},
 		&model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.SystemSetting{},
+		&model.TokenRevocation{},
 	); err != nil {
 		t.Fatal(err)
 	}
 	jwtManager := auth.NewJWTManager("FAKE_LEGACY_RESTORE_MATRIX_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	admin := model.User{
 		Username: fmt.Sprintf("legacy-restore-admin-%t-%d", live, time.Now().UnixNano()), PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
 		Role: "admin", TOTPEnabled: true,

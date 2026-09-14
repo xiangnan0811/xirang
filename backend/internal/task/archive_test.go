@@ -486,10 +486,10 @@ func TestTaskUpdateRejectsDependencyOnArchivedTask(t *testing.T) {
 		gormrepo.NewPolicyRepository(fixture.db),
 		nil,
 	)
-	_, err := api.UpdateTask(context.Background(), child.ID, CreateTaskInput{
+	_, err := api.UpdateTask(context.Background(), child.ID, taskUpdateInputForTest(child, CreateTaskInput{
 		Name: child.Name, NodeID: fixture.node.ID, ExecutorType: "command",
 		Command: "true", DependsOnTaskID: &fixture.task.ID,
-	})
+	}))
 	if err == nil {
 		t.Fatal("UpdateTask accepted a dependency on an archived task")
 	}
@@ -785,10 +785,10 @@ func TestTaskArchiveDoesNotResurrectWhenUpdateRaces(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := api.UpdateTask(context.Background(), fixture.task.ID, CreateTaskInput{
+		_, err := api.UpdateTask(context.Background(), fixture.task.ID, taskUpdateInputForTest(fixture.task, CreateTaskInput{
 			Name: "resurrected-after-archive", NodeID: fixture.node.ID, ExecutorType: "restic",
 			RsyncSource: "/data/src", RsyncTarget: "/backup/dst", CronSpec: "*/10 * * * *",
-		})
+		}))
 		errCh <- err
 	}()
 	<-started
@@ -884,10 +884,10 @@ func TestTaskUpdateDoesNotRescheduleAfterArchiveWins(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := api.UpdateTask(context.Background(), fixture.task.ID, CreateTaskInput{
+		_, err := api.UpdateTask(context.Background(), fixture.task.ID, taskUpdateInputForTest(fixture.task, CreateTaskInput{
 			Name: "updated-after-archive", NodeID: fixture.node.ID, ExecutorType: "restic",
 			RsyncSource: "/data/src", RsyncTarget: "/backup/dst", CronSpec: "*/10 * * * *",
-		})
+		}))
 		errCh <- err
 	}()
 	<-started
@@ -980,10 +980,10 @@ func TestTaskApiServiceUpdateRejectsArchivedTask(t *testing.T) {
 		gormrepo.NewPolicyRepository(fixture.db),
 		nil,
 	)
-	_, err := api.UpdateTask(context.Background(), fixture.task.ID, CreateTaskInput{
+	_, err := api.UpdateTask(context.Background(), fixture.task.ID, taskUpdateInputForTest(fixture.task, CreateTaskInput{
 		Name: "mutated-archived-task", NodeID: fixture.node.ID, ExecutorType: "restic",
 		RsyncSource: "/data/src", RsyncTarget: "/backup/dst", CronSpec: "*/10 * * * *",
-	})
+	}))
 	if !errors.Is(err, ErrTaskArchived) {
 		t.Fatalf("UpdateTask archived error=%v, want ErrTaskArchived", err)
 	}
@@ -1106,7 +1106,9 @@ func newTaskArchiveFixtureWithPublicationMode(t *testing.T, publicationMode back
 	t.Cleanup(secure.ResetForTesting)
 
 	dsn := filepath.Join(t.TempDir(), "task-archive.db") + "?_loc=UTC&_foreign_keys=on&_busy_timeout=5000"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
+	})
 	if err != nil {
 		t.Fatalf("open archive fixture db: %v", err)
 	}
@@ -1294,12 +1296,20 @@ func (r *archiveRaceTaskRepository) Update(ctx context.Context, task *model.Task
 	return r.inner.Update(ctx, task)
 }
 
+func (r *archiveRaceTaskRepository) UpdateWithRevision(ctx context.Context, task *model.Task, expected time.Time) error {
+	return r.inner.UpdateWithRevision(ctx, task, expected)
+}
+
 func (r *archiveRaceTaskRepository) Delete(ctx context.Context, id uint) error {
 	return r.inner.Delete(ctx, id)
 }
 
 func (r *archiveRaceTaskRepository) ExistsByID(ctx context.Context, id uint) (bool, error) {
 	return r.inner.ExistsByID(ctx, id)
+}
+
+func (r *archiveRaceTaskRepository) LockTaskUpdateReferences(ctx context.Context, taskID, nodeID uint, policyID *uint) error {
+	return r.inner.LockTaskUpdateReferences(ctx, taskID, nodeID, policyID)
 }
 
 func (r *archiveRaceTaskRepository) ExistsLiveByID(ctx context.Context, id uint) (bool, error) {

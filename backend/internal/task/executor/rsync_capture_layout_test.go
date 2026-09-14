@@ -22,7 +22,7 @@ func TestRsyncCaptureManifestDirectoryRootAndSingleFileLayouts(t *testing.T) {
 			t.Fatal(err)
 		}
 		task := model.Task{ExecutorType: "rsync", RsyncSource: source, RsyncTarget: target}
-		raw, err := CaptureRsyncManifest(context.Background(), task)
+		raw, err := CaptureRsyncManifest(context.Background(), task, RsyncCaptureSourceRole)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -45,7 +45,7 @@ func TestRsyncCaptureManifestDirectoryRootAndSingleFileLayouts(t *testing.T) {
 			t.Fatal(err)
 		}
 		task := model.Task{ExecutorType: "rsync", RsyncSource: source, RsyncTarget: target}
-		raw, err := CaptureRsyncManifest(context.Background(), task)
+		raw, err := CaptureRsyncManifest(context.Background(), task, RsyncCaptureSourceRole)
 		if err != nil {
 			t.Fatal(err)
 		}

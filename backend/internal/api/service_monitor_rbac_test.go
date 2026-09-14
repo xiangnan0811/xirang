@@ -59,11 +59,12 @@ func setupServiceMonitorRBACFixture(t *testing.T) serviceMonitorRBACTestFixture 
 	// callers register prober cleanup; t.Cleanup runs in LIFO order.
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.User{}, &model.ServiceMonitor{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.ServiceMonitor{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 
 	jwtManager := auth.NewJWTManager("FAKE_SERVICE_MONITOR_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 3)
 	for _, role := range []string{"admin", "operator", "viewer"} {
 		user := model.User{

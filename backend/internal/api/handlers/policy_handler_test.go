@@ -5,6 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gin-gonic/gin"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,12 +16,8 @@ import (
 	"time"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
+	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/secure"
-
-	"github.com/gin-gonic/gin"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 )
 
 func openPolicyHandlerTestDB(t *testing.T) *gorm.DB {
@@ -312,6 +312,101 @@ func TestPolicyUpdateWarningUsesEnvelope(t *testing.T) {
 	// 警告信息必须保留，建议放进 envelope.message，便于前端用 toast 提示。
 	if !strings.Contains(envelope.Message, "/legacy/backup") {
 		t.Fatalf("期望 envelope.message 包含旧路径 '/legacy/backup'，实际: %q", envelope.Message)
+	}
+}
+func TestPolicyUpdatePersistsTaskScheduleTransitionsWithoutRunner(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+	t.Setenv("RSYNC_ALLOWED_SOURCE_PREFIXES", "/data")
+	t.Setenv("RSYNC_ALLOWED_TARGET_PREFIXES", "/backup")
+
+	nodes := []model.Node{
+		{Name: "handler-cron-manual-node", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key", BackupDir: "handler-cron-manual-node"},
+		{Name: "handler-cron-inherited-node", Host: "127.0.0.1", Port: 23, Username: "root", AuthType: "key", BackupDir: "handler-cron-inherited-node"},
+	}
+	for i := range nodes {
+		if err := db.Create(&nodes[i]).Error; err != nil {
+			t.Fatalf("create node %d: %v", i, err)
+		}
+	}
+	policyEntity := model.Policy{
+		Name: "handler-cron-policy", SourcePath: "/data/source",
+		TargetPath: config.BackupRoot, CronSpec: "0 * * * *", Enabled: true,
+	}
+	if err := db.Create(&policyEntity).Error; err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	for i := range nodes {
+		if err := db.Create(&model.PolicyNode{PolicyID: policyEntity.ID, NodeID: nodes[i].ID}).Error; err != nil {
+			t.Fatalf("create policy node %d: %v", i, err)
+		}
+	}
+	policyID := policyEntity.ID
+	manual := model.Task{
+		Name: "handler-cron-manual", NodeID: nodes[0].ID, PolicyID: &policyID,
+		RsyncSource: "/data/source", RsyncTarget: policyPkg.PolicyNodeTargetPath(policyEntity.TargetPath, policyID, nodes[0].ID),
+		ExecutorType: "rsync", CronSpec: "", CronOverride: true,
+		Status: model.TaskRunStatusPending, Enabled: true, Source: "policy",
+	}
+	next := time.Now().UTC().Add(time.Hour)
+	inherited := model.Task{
+		Name: "handler-cron-inherited", NodeID: nodes[1].ID, PolicyID: &policyID,
+		RsyncSource: "/data/source", RsyncTarget: policyPkg.PolicyNodeTargetPath(policyEntity.TargetPath, policyID, nodes[1].ID),
+		ExecutorType: "rsync", CronSpec: "0 * * * *", NextRunAt: &next,
+		Status: model.TaskRunStatusPending, Enabled: true, Source: "policy",
+	}
+	if err := db.Create(&manual).Error; err != nil {
+		t.Fatalf("create manual task: %v", err)
+	}
+	if err := db.Create(&inherited).Error; err != nil {
+		t.Fatalf("create inherited task: %v", err)
+	}
+
+	handler := NewPolicyHandler(db, nil)
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	router.PUT("/policies/:id", handler.Update)
+	update := func(enabled bool) {
+		raw, err := json.Marshal(map[string]any{
+			"name": policyEntity.Name, "source_path": policyEntity.SourcePath,
+			"cron_spec": policyEntity.CronSpec, "enabled": enabled,
+			"node_ids": []uint{nodes[0].ID, nodes[1].ID},
+		})
+		if err != nil {
+			t.Fatalf("encode policy update: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/policies/%d", policyEntity.ID), bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("policy update enabled=%v status=%d body=%s", enabled, resp.Code, resp.Body.String())
+		}
+	}
+
+	update(false)
+	var pausedManual, pausedInherited model.Task
+	if err := db.First(&pausedManual, manual.ID).Error; err != nil {
+		t.Fatalf("reload paused manual task: %v", err)
+	}
+	if err := db.First(&pausedInherited, inherited.ID).Error; err != nil {
+		t.Fatalf("reload paused inherited task: %v", err)
+	}
+	if pausedManual.CronSpec != "" || pausedManual.NextRunAt != nil || !pausedManual.CronOverride ||
+		pausedInherited.CronSpec != "" || pausedInherited.NextRunAt != nil || pausedInherited.CronOverride {
+		t.Fatalf("runner-less disable lost durable schedule state: manual=%+v inherited=%+v", pausedManual, pausedInherited)
+	}
+
+	update(true)
+	var resumedManual, resumedInherited model.Task
+	if err := db.First(&resumedManual, manual.ID).Error; err != nil {
+		t.Fatalf("reload resumed manual task: %v", err)
+	}
+	if err := db.First(&resumedInherited, inherited.ID).Error; err != nil {
+		t.Fatalf("reload resumed inherited task: %v", err)
+	}
+	if resumedManual.CronSpec != "" || resumedManual.NextRunAt != nil || !resumedManual.CronOverride ||
+		resumedInherited.CronSpec != "0 * * * *" || resumedInherited.NextRunAt == nil || resumedInherited.CronOverride {
+		t.Fatalf("runner-less enable lost durable schedule state: manual=%+v inherited=%+v", resumedManual, resumedInherited)
 	}
 }
 

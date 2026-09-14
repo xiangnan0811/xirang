@@ -114,7 +114,7 @@ func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.En
 func TestCredentialAccessGrantListFiltersPaginationSortsAndSanitizes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "grant-list-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	router := newCredentialGrantTestRouter(db, manager)
@@ -244,7 +244,7 @@ func TestCredentialAccessGrantListFiltersPaginationSortsAndSanitizes(t *testing.
 func TestCredentialAccessGrantRequestCreatesActiveSelfGrantWithSafeAudit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "grant-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTerminalOpen)
@@ -318,7 +318,7 @@ func TestCredentialAccessGrantRequestCreatesActiveSelfGrantWithSafeAudit(t *test
 func TestConfigImportCredentialGrantRequestCreatesSystemScopedGrantWithSafeAudit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "grant-config-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigImport)
@@ -388,7 +388,7 @@ func TestConfigImportCredentialGrantRequestCreatesSystemScopedGrantWithSafeAudit
 func TestConfigExportCredentialGrantRequestCreatesSystemScopedGrantWithValidationAndSafeAudit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "grant-config-export-admin", "admin")
 	operator := seedStepUpUser(t, db, "grant-config-export-operator", "operator")
 	adminToken := generatePrimaryToken(t, manager, admin)
@@ -474,7 +474,7 @@ func TestConfigExportCredentialGrantRequestCreatesSystemScopedGrantWithValidatio
 func TestSnapshotRestoreCredentialGrantRequestCreatesTaskScopedGrantWithValidationAndSafeAudit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "grant-snapshot-admin", "admin")
 	operator := seedStepUpUser(t, db, "grant-snapshot-operator", "operator")
 	adminToken := generatePrimaryToken(t, manager, admin)
@@ -574,7 +574,7 @@ func TestSnapshotRestoreCredentialGrantRequestCreatesTaskScopedGrantWithValidati
 func TestTaskRestoreCredentialGrantRequestCreatesTaskScopedGrantWithValidationAndSafeAudit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "grant-task-restore-admin", "admin")
 	operator := seedStepUpUser(t, db, "grant-task-restore-operator", "operator")
 	adminToken := generatePrimaryToken(t, manager, admin)
@@ -683,7 +683,7 @@ func TestTaskRestoreCredentialGrantRequestCreatesTaskScopedGrantWithValidationAn
 func TestCredentialAccessGrantRequestRequiresAdminAndStepUpAndValidReason(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "grant-admin-validation", "admin")
 	operator := seedStepUpUser(t, db, "grant-operator-validation", "operator")
 	adminToken := generatePrimaryToken(t, manager, admin)
@@ -901,7 +901,7 @@ func TestFindActiveSnapshotRestoreCredentialGrantMatchesTaskScopeAndRejectsWrong
 func TestOperatorCanRequestOwnedManualTriggerGrant(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	operator := seedStepUpUser(t, db, "grant-manual-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
 	proof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskManualTrigger)
@@ -936,7 +936,7 @@ func TestOperatorCanRequestOwnedManualTriggerGrant(t *testing.T) {
 func TestOperatorCannotRequestUnownedManualTriggerGrant(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	operator := seedStepUpUser(t, db, "grant-manual-unowned-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
 	proof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskManualTrigger)
@@ -959,7 +959,7 @@ func TestOperatorCannotRequestUnownedManualTriggerGrant(t *testing.T) {
 func TestBatchGrantRequestsCreateRowsPerResource(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	operator := seedStepUpUser(t, db, "grant-batch-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
 	taskProof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskBatchTrigger)
@@ -1035,7 +1035,7 @@ func TestFindActiveGrantAllowsOperatorOnlyForOwnedResourceOperations(t *testing.
 func TestManualTriggerRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	operator := seedStepUpUser(t, db, "manual-route-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
 	proof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskManualTrigger)
@@ -1066,7 +1066,7 @@ func TestManualTriggerRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 func TestBatchGrantEnforcementIsAllOrNothing(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	operator := seedStepUpUser(t, db, "batch-enforce-operator", "operator")
 	token := generatePrimaryToken(t, manager, operator)
 	proof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionTaskBatchTrigger)
@@ -1183,7 +1183,7 @@ func TestFindActiveCredentialGrantExpiresAndReportsInactiveStatus(t *testing.T) 
 func TestSnapshotRestoreRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "snapshot-route-before-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSnapshotRestore)
@@ -1223,7 +1223,7 @@ func TestSnapshotRestoreRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 func TestTaskRestoreRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "task-restore-route-before-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTaskRestoreTrigger)
@@ -1263,7 +1263,7 @@ func TestTaskRestoreRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 func TestSnapshotRestoreRouteUsesActiveTaskGrantAndAuditIsSafe(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "snapshot-route-valid-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSnapshotRestore)
@@ -1320,7 +1320,7 @@ func TestSnapshotRestoreRouteUsesActiveTaskGrantAndAuditIsSafe(t *testing.T) {
 func TestTaskRestoreRouteUsesActiveTaskGrantAndAuditIsSafe(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "task-restore-route-valid-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTaskRestoreTrigger)
@@ -1460,7 +1460,7 @@ func TestTaskRestoreRouteRejectsInactiveWrongTupleAndOtherOperationGrants(t *tes
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			db := openStepUpHandlerTestDB(t)
-			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+			manager := newStepUpTestJWTManager(db)
 			admin := seedStepUpUser(t, db, "task-restore-deny-admin", "admin")
 			token := generatePrimaryToken(t, manager, admin)
 			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTaskRestoreTrigger)
@@ -1579,7 +1579,7 @@ func TestSnapshotRestoreRouteRejectsInactiveWrongTupleAndOtherOperationGrants(t 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			db := openStepUpHandlerTestDB(t)
-			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+			manager := newStepUpTestJWTManager(db)
 			admin := seedStepUpUser(t, db, "snapshot-deny-admin", "admin")
 			token := generatePrimaryToken(t, manager, admin)
 			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSnapshotRestore)
@@ -1607,7 +1607,7 @@ func TestSnapshotRestoreRouteRejectsInactiveWrongTupleAndOtherOperationGrants(t 
 func TestSnapshotBrowseRoutesDoNotRequireSnapshotRestoreGrant(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "snapshot-browse-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	taskEntity := seedCredentialGrantTask(t, db, "rsync")
@@ -1633,7 +1633,7 @@ func TestSnapshotBrowseRoutesDoNotRequireSnapshotRestoreGrant(t *testing.T) {
 func TestConfigImportRouteRequiresStepUpAndCredentialGrantBeforeMutation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "config-import-route-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigImport)
@@ -1660,7 +1660,7 @@ func TestConfigImportRouteRequiresStepUpAndCredentialGrantBeforeMutation(t *test
 func TestConfigImportRouteUsesActiveSystemGrantAndAuditsSafely(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "config-import-valid-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigImport)
@@ -1708,7 +1708,7 @@ func TestConfigImportRouteUsesActiveSystemGrantAndAuditsSafely(t *testing.T) {
 func TestConfigExportRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "config-export-before-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)
@@ -1745,7 +1745,7 @@ func TestConfigExportRouteRequiresGrantBeforeHandlerExecution(t *testing.T) {
 func TestConfigExportRouteUsesActiveSystemGrantAndKeepsSafeExportUnchanged(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
 	admin := seedStepUpUser(t, db, "config-export-valid-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)
@@ -1897,7 +1897,7 @@ func TestConfigExportRouteRejectsInactiveWrongTupleAndOtherOperationGrants(t *te
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			db := openStepUpHandlerTestDB(t)
-			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+			manager := newStepUpTestJWTManager(db)
 			admin := seedStepUpUser(t, db, "config-export-deny-admin", "admin")
 			token := generatePrimaryToken(t, manager, admin)
 			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)
@@ -1990,7 +1990,7 @@ func TestConfigImportRouteRejectsInactiveAndWrongCredentialGrantTuples(t *testin
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			db := openStepUpHandlerTestDB(t)
-			manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+			manager := newStepUpTestJWTManager(db)
 			admin := seedStepUpUser(t, db, "config-import-deny-admin", "admin")
 			token := generatePrimaryToken(t, manager, admin)
 			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigImport)

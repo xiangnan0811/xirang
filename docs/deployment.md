@@ -29,6 +29,16 @@ HTTP :10761  ───> │ Nginx                          │
 
 容器内入口端口固定为 `10761`。项目不在容器内处理 HTTPS；如需公网 HTTPS，请在外部使用 Caddy、Nginx Proxy Manager、Nginx 或云厂商负载均衡终止 TLS，再反代到 `http://127.0.0.1:10761`。
 
+### Rsync 路径隔离部署
+
+配置任一 `RSYNC_ALLOWED_SOURCE_PREFIXES` / `RSYNC_ALLOWED_TARGET_PREFIXES` 后，Rsync 使用一次性 `xirang-rsync-confined` helper 固定文件描述符并应用 Linux Landlock 文件系统权限；本地与 SSH 远端都必须具备所需隔离能力（Landlock ABI 至少 3，包含文件截断保护）。缺 helper、内核不支持或策略不可安全应用时拒绝执行，不回退到普通 Rsync。两项均留空保留原有不限制模式。允许列表是文件系统根边界，包含根本身及真实后代，不包含名称相似的兄弟目录或越界符号链接。
+
+All-in-One 镜像内置 `/usr/local/bin/xirang-rsync-confined`。SSH 备份节点须由管理员部署与 Core 同版本、匹配节点架构的 helper；可从同版本源码在 `backend` 目录执行 `go build -o xirang-rsync-confined ./cmd/rsync-confined`，再安装为节点 SSH 用户可执行且不可篡改的程序。`RSYNC_CONFINEMENT_HELPER` 选择本地程序，`RSYNC_CONFINEMENT_REMOTE_HELPER` 选择远端程序；默认均从执行环境查找 `xirang-rsync-confined`。不得用删除白名单作为缺少 helper 的自动补救。
+
+保留源目录根名或固定普通文件操作数的隔离路径还需要可用的非特权 user/mount namespace、`mount_setattr`，以及 util-linux 的 `unshare` 和 `mount`（位于 `/usr/bin` 或 `/bin`）。helper 在私有挂载命名空间内建立固定描述符的绑定挂载，源只读，接收目标可写；这些能力须在实际执行用户及容器安全策略下可用。默认 Docker 安全策略可能以 `EPERM` 拒绝创建命名空间；本次在默认 Alpine 容器中已观察到该限制，因此镜像包含 helper 不等于该环境支持所有隔离传输。遇到限制会拒绝执行。不要自动启用 privileged、授予 SYS_ADMIN、关闭 seccomp 或删除白名单；先由管理员评估合适的运行环境，并用一次性数据验收。
+
+部署后先使用一次性目录验证正常传输、内部链接、越界链接拒绝及缺失 helper 拒绝，再恢复备份调度。配置隔离时 SSH 不读取用户自定义配置文件，只使用 Core 生成的连接参数与精确凭据文件；需要的连接配置应在节点配置中显式提供。
+
 ## Docker Compose 部署（推荐）
 
 ### 1. 获取部署文件

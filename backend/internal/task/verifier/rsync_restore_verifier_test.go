@@ -410,7 +410,7 @@ func newRsyncRestoreFixture(t *testing.T, node model.Node, rsyncBinary, name, ki
 		Policy:       policy,
 	}
 	ctx := context.Background()
-	raw, err := executor.CaptureRsyncManifest(ctx, backupTask)
+	raw, err := executor.CaptureRsyncManifest(ctx, backupTask, executor.RsyncCaptureSourceRole)
 	if err != nil {
 		t.Fatalf("capture source manifest: %v", err)
 	}

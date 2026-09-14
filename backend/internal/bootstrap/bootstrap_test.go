@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -18,7 +19,9 @@ import (
 func openBootstrapTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{NowFunc: func() time.Time {
+		return time.Now().UTC()
+	}})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}

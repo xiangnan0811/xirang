@@ -499,7 +499,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 					return err
 				}
 			}
-			if h.runner != nil && !p.IsTemplate {
+			if !p.IsTemplate {
 				if err := policy.SyncPolicyTasks(tx, h.runner, p, req.NodeIDs); err != nil {
 					return err
 				}
@@ -877,20 +877,20 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 				}
 			}
 			// 模板策略不生成任务
-			if h.runner != nil && !p.IsTemplate {
+			if !p.IsTemplate {
 				if err := policy.SyncPolicyTasks(tx, h.runner, p, req.NodeIDs); err != nil {
 					return err
 				}
 			}
 		}
 		// 策略从启用变为禁用时，暂停所有关联任务的调度
-		if previousEnabled && !p.Enabled && h.runner != nil {
+		if previousEnabled && !p.Enabled {
 			if err := policy.PauseTasksForPolicy(tx, h.runner, p.ID); err != nil {
 				return err
 			}
 		}
 		// 策略从禁用变为启用时，恢复所有关联任务的调度
-		if !previousEnabled && p.Enabled && h.runner != nil {
+		if !previousEnabled && p.Enabled {
 			if err := policy.ResumeTasksForPolicy(tx, h.runner, p.ID, p.CronSpec); err != nil {
 				return err
 			}
@@ -1341,16 +1341,14 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 			if err := tx.Save(&p).Error; err != nil {
 				return err
 			}
-			if h.runner != nil {
-				if previousEnabled && !req.Enabled {
-					if err := policy.PauseTasksForPolicy(tx, h.runner, pid); err != nil {
-						return err
-					}
+			if previousEnabled && !req.Enabled {
+				if err := policy.PauseTasksForPolicy(tx, h.runner, pid); err != nil {
+					return err
 				}
-				if !previousEnabled && req.Enabled {
-					if err := policy.ResumeTasksForPolicy(tx, h.runner, pid, p.CronSpec); err != nil {
-						return err
-					}
+			}
+			if !previousEnabled && req.Enabled {
+				if err := policy.ResumeTasksForPolicy(tx, h.runner, pid, p.CronSpec); err != nil {
+					return err
 				}
 			}
 		}

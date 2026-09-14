@@ -521,10 +521,14 @@ func TestTaskResponsesRedactExecutorConfig(t *testing.T) {
 		RsyncSource:    "/data/src",
 		RsyncTarget:    "/backup/repo",
 		ExecutorConfig: secretConfig,
+		CronOverride:   true,
 		Status:         "pending",
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("创建任务失败: %v", err)
+	}
+	if err := db.First(&taskEntity, taskEntity.ID).Error; err != nil {
+		t.Fatalf("重新加载任务版本失败: %v", err)
 	}
 
 	handler := NewTaskHandler(db, nil)
@@ -543,7 +547,7 @@ func TestTaskResponsesRedactExecutorConfig(t *testing.T) {
 		{method: http.MethodGet, path: "/tasks"},
 		{method: http.MethodGet, path: fmt.Sprintf("/tasks/%d", taskEntity.ID)},
 		{method: http.MethodPost, path: "/tasks", body: fmt.Sprintf(`{"name":"task-create-redact","node_id":%d,"executor_type":"restic","rsync_source":"/data/src","rsync_target":"/backup/repo","executor_config":%q}`, node.ID, secretConfig)},
-		{method: http.MethodPut, path: fmt.Sprintf("/tasks/%d", taskEntity.ID), body: fmt.Sprintf(`{"name":"task-update-redact","node_id":%d,"executor_type":"restic","rsync_source":"/data/src","rsync_target":"/backup/repo","executor_config":%q}`, node.ID, secretConfig)},
+		{method: http.MethodPut, path: fmt.Sprintf("/tasks/%d", taskEntity.ID), body: fmt.Sprintf(`{"expected_revision":%q,"name":"task-update-redact","node_id":%d,"executor_type":"restic","rsync_source":"/data/src","rsync_target":"/backup/repo","executor_secrets":{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}}`, taskPkg.TaskRevision(taskEntity), node.ID)},
 	}
 	for _, tc := range requests {
 		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
@@ -556,8 +560,9 @@ func TestTaskResponsesRedactExecutorConfig(t *testing.T) {
 			t.Fatalf("%s %s 期望成功，实际: %d body=%s", tc.method, tc.path, resp.Code, resp.Body.String())
 		}
 		body := resp.Body.String()
-		if strings.Contains(body, "executor_config") || strings.Contains(body, "FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY") {
-			t.Fatalf("%s %s 响应不应暴露 executor_config 或密码，实际: %s", tc.method, tc.path, body)
+		if strings.Contains(body, "executor_config") || strings.Contains(body, "cron_override") ||
+			strings.Contains(body, "FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY") {
+			t.Fatalf("%s %s response leaked internal config/provenance or password: %s", tc.method, tc.path, body)
 		}
 	}
 }
@@ -778,7 +783,9 @@ func openTaskHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", handlerTestDBName(t))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{NowFunc: func() time.Time {
+		return time.Now().UTC()
+	}})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
@@ -786,16 +793,20 @@ func openTaskHandlerTestDB(t *testing.T) *gorm.DB {
 }
 
 func TestValidateTaskRequestRejectsInvalidCron(t *testing.T) {
-	req := taskPkg.CreateTaskInput{
-		Name:         "task-a",
-		NodeID:       1,
-		ExecutorType: "rsync",
-		RsyncSource:  "/data/src",
-		RsyncTarget:  "/backup/dst",
-		CronSpec:     "invalid cron",
-	}
-	if err := taskPkg.ValidateTaskInput(req); err == nil {
-		t.Fatalf("期望非法 cron 返回错误")
+	for _, spec := range []string{"invalid cron", "@every not-a-duration", "* * * * * *"} {
+		t.Run(spec, func(t *testing.T) {
+			req := taskPkg.CreateTaskInput{
+				Name:         "task-a",
+				NodeID:       1,
+				ExecutorType: "rsync",
+				RsyncSource:  "/data/src",
+				RsyncTarget:  "/backup/dst",
+				CronSpec:     spec,
+			}
+			if err := taskPkg.ValidateTaskInput(req); err == nil {
+				t.Fatalf("期望非法 cron 返回错误: %q", spec)
+			}
+		})
 	}
 }
 
@@ -1099,6 +1110,9 @@ func TestTaskUpdateSyncFailureKeepsCommittedTaskAndReportsUnavailable(t *testing
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("创建任务失败: %v", err)
 	}
+	if err := db.First(&taskEntity, taskEntity.ID).Error; err != nil {
+		t.Fatalf("重新加载任务版本失败: %v", err)
+	}
 
 	runner := &mockTaskRunner{
 		syncErrs: []error{errors.New("sync failed")},
@@ -1107,7 +1121,7 @@ func TestTaskUpdateSyncFailureKeepsCommittedTaskAndReportsUnavailable(t *testing
 	r := withAdminRole(gin.New())
 	r.PUT("/tasks/:id", handler.Update)
 
-	body := fmt.Sprintf(`{"name":"task-new","node_id":%d,"rsync_source":"/data/new","rsync_target":"/backup/new","cron_spec":"*/10 * * * *"}`, node.ID)
+	body := fmt.Sprintf(`{"expected_revision":%q,"name":"task-new","node_id":%d,"rsync_source":"/data/new","rsync_target":"/backup/new","cron_spec":"*/10 * * * *"}`, taskPkg.TaskRevision(taskEntity), node.ID)
 	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/tasks/%d", taskEntity.ID), strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -1137,7 +1151,7 @@ func TestTaskUpdateSyncFailureKeepsCommittedTaskAndReportsUnavailable(t *testing
 	}
 }
 
-func TestTaskUpdateDoesNotInheritCommand(t *testing.T) {
+func TestTaskUpdatePreservesOmittedCommand(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
@@ -1161,13 +1175,16 @@ func TestTaskUpdateDoesNotInheritCommand(t *testing.T) {
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("创建任务失败: %v", err)
 	}
+	if err := db.First(&taskEntity, taskEntity.ID).Error; err != nil {
+		t.Fatalf("重新加载任务版本失败: %v", err)
+	}
 
 	runner := &mockTaskRunner{}
 	handler := NewTaskHandler(db, runner)
 	r := withAdminRole(gin.New())
 	r.PUT("/tasks/:id", handler.Update)
 
-	body := fmt.Sprintf(`{"name":"task-new","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/10 * * * *"}`, node.ID)
+	body := fmt.Sprintf(`{"expected_revision":%q,"name":"task-new","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/10 * * * *"}`, taskPkg.TaskRevision(taskEntity), node.ID)
 	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/tasks/%d", taskEntity.ID), strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -1194,8 +1211,8 @@ func TestTaskUpdateDoesNotInheritCommand(t *testing.T) {
 	if err := db.First(&updated, taskEntity.ID).Error; err != nil {
 		t.Fatalf("查询更新后任务失败: %v", err)
 	}
-	if updated.Name != "task-new" || updated.Command != "" {
-		t.Fatalf("期望更新后 name=%q 且 command 被清空，实际: %+v", "task-new", updated)
+	if updated.Name != "task-new" || updated.Command != "echo legacy-command" {
+		t.Fatalf("omitted command must retain its durable value, actual: %+v", updated)
 	}
 }
 
@@ -1231,7 +1248,7 @@ func TestTaskUpdateRejectsUnknownPolicyReference(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPut,
 		fmt.Sprintf("/tasks/%d", taskEntity.ID),
-		strings.NewReader(fmt.Sprintf(`{"name":"task-old","node_id":%d,"policy_id":999,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/5 * * * *"}`, node.ID)),
+		strings.NewReader(fmt.Sprintf(`{"expected_revision":%q,"name":"task-old","node_id":%d,"policy_id":999,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/5 * * * *"}`, taskPkg.TaskRevision(taskEntity), node.ID)),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -1298,7 +1315,7 @@ func TestTaskUpdateRejectsMovingTaskToUnownedNodeForOperator(t *testing.T) {
 	})
 	r.PUT("/tasks/:id", middleware.OwnershipTaskCheck(db), handler.Update)
 
-	body := fmt.Sprintf(`{"name":"task-owned","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/10 * * * *"}`, unownedNode.ID)
+	body := fmt.Sprintf(`{"expected_revision":%q,"name":"task-owned","node_id":%d,"rsync_source":"/data/src","rsync_target":"/backup/dst","cron_spec":"*/10 * * * *"}`, taskPkg.TaskRevision(taskEntity), unownedNode.ID)
 	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/tasks/%d", taskEntity.ID), strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -1770,7 +1787,7 @@ func TestTaskUpdateRejectsArchivedTask(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := withAdminRole(gin.New())
 	router.PUT("/tasks/:id", NewTaskHandler(db, nil).Update)
-	body := fmt.Sprintf(`{"name":"mutated-archived-task","node_id":%d,"rsync_source":"/tmp/src","rsync_target":"/tmp/dst","cron_spec":"*/10 * * * *"}`, node.ID)
+	body := fmt.Sprintf(`{"expected_revision":%q,"name":"mutated-archived-task","node_id":%d,"rsync_source":"/tmp/src","rsync_target":"/tmp/dst","cron_spec":"*/10 * * * *"}`, taskPkg.TaskRevision(taskEntity), node.ID)
 	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/tasks/%d", taskEntity.ID), strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()

@@ -856,7 +856,7 @@ func (m *Manager) runTaskWithContext(
 	captureAttempted := isLegacyMutableRsyncTask(taskEntity)
 	captureError := ""
 	if captureAttempted {
-		captureManifest, err = executor.CaptureRsyncManifest(execCtx, taskEntity)
+		captureManifest, err = executor.CaptureRsyncManifest(execCtx, taskEntity, executor.RsyncCaptureSourceRole)
 		if err != nil {
 			captureError = sanitizeTaskLastError("Rsync 捕获证据生成失败: " + err.Error())
 			captureManifest = ""

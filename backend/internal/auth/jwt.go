@@ -262,10 +262,14 @@ func (m *JWTManager) IsSessionRevoked(jti string) (bool, error) {
 	return m.IsSessionRevokedContext(context.Background(), jti)
 }
 
-// IsSessionRevokedContext is the context-aware form used by long-lived
-// connections. A bounded context lets callers fail closed instead of leaving
-// a terminal validation goroutine blocked on a stalled database.
+// IsSessionRevokedContext is the context-aware form used by ordinary
+// authentication and long-lived connections. A bounded context lets callers
+// fail closed instead of leaving a terminal validation goroutine blocked on a
+// stalled database.
 func (m *JWTManager) IsSessionRevokedContext(ctx context.Context, jti string) (bool, error) {
+	if m == nil {
+		return true, fmt.Errorf("session revocation manager unavailable")
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -285,7 +289,7 @@ func (m *JWTManager) IsSessionRevokedContext(ctx context.Context, jti string) (b
 		return true, nil
 	}
 	if m.db == nil {
-		return false, nil
+		return true, fmt.Errorf("session revocation store unavailable")
 	}
 	var row model.TokenRevocation
 	result := m.db.WithContext(ctx).Select("token_hash", "expires_at").

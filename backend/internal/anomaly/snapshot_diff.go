@@ -399,8 +399,7 @@ func AnalyzeSnapshotDiff(ctx context.Context, db *gorm.DB, task model.Task, task
 			}
 		}
 	}()
-	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+	if err := executor.CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		return nil, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
 	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)

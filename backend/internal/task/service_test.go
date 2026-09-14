@@ -16,6 +16,125 @@ import (
 	"gorm.io/gorm"
 )
 
+func taskUpdateInputForTest(current model.Task, desired CreateTaskInput) UpdateTaskInput {
+	name := desired.Name
+	nodeID := desired.NodeID
+	command := desired.Command
+	source := desired.RsyncSource
+	target := desired.RsyncTarget
+	executorType := desired.ExecutorType
+	cronSpec := desired.CronSpec
+	return UpdateTaskInput{
+		ExpectedRevision:   TaskRevision(current),
+		Name:               &name,
+		NodeID:             &nodeID,
+		PolicyID:           desired.PolicyID,
+		PolicyIDSet:        true,
+		DependsOnTaskID:    desired.DependsOnTaskID,
+		DependsOnTaskIDSet: true,
+		Command:            &command,
+		RsyncSource:        &source,
+		RsyncTarget:        &target,
+		ExecutorType:       &executorType,
+		CronSpec:           &cronSpec,
+	}
+}
+
+func TestTaskUpdatePresenceRevisionAndCronClear(t *testing.T) {
+	db := openManagerTestDB(t)
+	t.Setenv("RSYNC_ALLOWED_SOURCE_PREFIXES", "/data")
+	t.Setenv("RSYNC_ALLOWED_TARGET_PREFIXES", "/backup")
+
+	node := model.Node{
+		Name: "task-presence-node", Host: "127.0.0.1", Port: 22,
+		Username: "root", AuthType: "key", BackupDir: "task-presence-node",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	taskEntity := model.Task{
+		Name: "task-presence-old", NodeID: node.ID, ExecutorType: "restic",
+		RsyncSource: "/data/src", RsyncTarget: "/backup/repo",
+		ExecutorConfig: `{"repository_password":"FAKE_TASK_PRESENCE_PASSWORD_FOR_TEST_ONLY","exclude_patterns":["cache"],"repository_version":2}`,
+		CronSpec:       "@every 1h", Status: string(StatusPending), Enabled: true,
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	repo := gormrepo.NewTaskRepository(db)
+	api := NewTaskApiService(repo, gormrepo.NewNodeRepository(db), gormrepo.NewPolicyRepository(db), nil)
+
+	current, err := repo.FindByID(context.Background(), taskEntity.ID)
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	renamed := "task-presence-new"
+	updated, err := api.UpdateTask(context.Background(), taskEntity.ID, UpdateTaskInput{
+		ExpectedRevision: TaskRevision(*current),
+		Name:             &renamed,
+	})
+	if err != nil {
+		t.Fatalf("presence-only update: %v", err)
+	}
+	settings, err := ProjectExecutorSettings(updated.ExecutorType, updated.ExecutorConfig)
+	if err != nil {
+		t.Fatalf("project settings after presence-only update: %v", err)
+	}
+	resticSettings, ok := settings.(ResticExecutorSettingsResponse)
+	if !ok || len(resticSettings.ExcludePatterns) != 1 ||
+		resticSettings.ExcludePatterns[0] != "cache" || resticSettings.RepositoryVersion == nil ||
+		*resticSettings.RepositoryVersion != 2 {
+		t.Fatalf("presence-only update changed safe settings: %#v", settings)
+	}
+
+	current, err = repo.FindByID(context.Background(), taskEntity.ID)
+	if err != nil {
+		t.Fatalf("reload task after rename: %v", err)
+	}
+	emptyPatterns := ExecutorSettingsPatch{ExcludePatternsSet: true, ExcludePatterns: []string{}}
+	updated, err = api.UpdateTask(context.Background(), taskEntity.ID, UpdateTaskInput{
+		ExpectedRevision: TaskRevision(*current),
+		ExecutorSettings: &emptyPatterns,
+	})
+	if err != nil {
+		t.Fatalf("explicit empty exclude update: %v", err)
+	}
+	settings, err = ProjectExecutorSettings(updated.ExecutorType, updated.ExecutorConfig)
+	if err != nil {
+		t.Fatalf("project settings after empty exclude update: %v", err)
+	}
+	resticSettings, ok = settings.(ResticExecutorSettingsResponse)
+	if !ok || len(resticSettings.ExcludePatterns) != 0 {
+		t.Fatalf("explicit empty exclude did not clear settings: %#v", settings)
+	}
+
+	current, err = repo.FindByID(context.Background(), taskEntity.ID)
+	if err != nil {
+		t.Fatalf("reload task before cron clear: %v", err)
+	}
+	emptyCron := ""
+	updated, err = api.UpdateTask(context.Background(), taskEntity.ID, UpdateTaskInput{
+		ExpectedRevision: TaskRevision(*current),
+		CronSpec:         &emptyCron,
+	})
+	if err != nil {
+		t.Fatalf("explicit empty cron update: %v", err)
+	}
+	if updated.CronSpec != "" || updated.NextRunAt != nil || !updated.CronOverride {
+		t.Fatalf("explicit empty cron did not clear cursor or mark override: cron=%q next=%v override=%v",
+			updated.CronSpec, updated.NextRunAt, updated.CronOverride)
+	}
+
+	staleName := "stale-write"
+	_, err = api.UpdateTask(context.Background(), taskEntity.ID, UpdateTaskInput{
+		ExpectedRevision: TaskRevision(*current),
+		Name:             &staleName,
+	})
+	if !errors.Is(err, ErrTaskRevisionConflict) {
+		t.Fatalf("stale update error=%v, want ErrTaskRevisionConflict", err)
+	}
+}
+
 type taskUpdateScheduleFailureRunner struct {
 	entered  chan<- struct{}
 	release  <-chan struct{}
@@ -37,6 +156,75 @@ func (r *taskUpdateScheduleFailureRunner) SyncSchedule(task model.Task) error {
 
 func (r *taskUpdateScheduleFailureRunner) RemoveSchedule(taskID uint) {
 	r.removed = append(r.removed, taskID)
+}
+
+type taskUpdateScheduleCursorRunner struct {
+	db *gorm.DB
+}
+
+func (r *taskUpdateScheduleCursorRunner) TriggerManual(uint) (uint, error) {
+	return 0, nil
+}
+
+func (r *taskUpdateScheduleCursorRunner) SyncSchedule(task model.Task) error {
+	next := time.Now().UTC().Add(time.Hour)
+	return r.db.Model(&model.Task{}).Where("id = ?", task.ID).Update("next_run_at", next).Error
+}
+
+func (r *taskUpdateScheduleCursorRunner) RemoveSchedule(uint) {}
+
+func TestTaskUpdateReturnsPostScheduleRevision(t *testing.T) {
+	db := openManagerTestDB(t)
+	node := model.Node{
+		Name: "task-update-revision-node", Host: "127.0.0.1", Port: 22,
+		Username: "root", AuthType: "key", BackupDir: "task-update-revision-node",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	taskEntity := model.Task{
+		Name: "task-update-revision-old", NodeID: node.ID, ExecutorType: "command",
+		Command: "true", CronSpec: "@every 1h", Status: string(StatusPending), Enabled: true,
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	repo := gormrepo.NewTaskRepository(db)
+	api := NewTaskApiService(
+		repo,
+		gormrepo.NewNodeRepository(db),
+		gormrepo.NewPolicyRepository(db),
+		&taskUpdateScheduleCursorRunner{db: db},
+	)
+	current, err := repo.FindByID(context.Background(), taskEntity.ID)
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	renamed := "task-update-revision-new"
+	updated, err := api.UpdateTask(context.Background(), taskEntity.ID, UpdateTaskInput{
+		ExpectedRevision: TaskRevision(*current),
+		Name:             &renamed,
+	})
+	if err != nil {
+		t.Fatalf("update task: %v", err)
+	}
+	var persisted model.Task
+	if err := db.First(&persisted, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload persisted task: %v", err)
+	}
+	if updated.UpdatedAt.UnixNano() != persisted.UpdatedAt.UnixNano() ||
+		updated.NextRunAt == nil || persisted.NextRunAt == nil ||
+		!updated.NextRunAt.Equal(*persisted.NextRunAt) {
+		t.Fatalf("update response is not post-sync state: response=%+v persisted=%+v", updated, persisted)
+	}
+
+	nextName := "task-update-revision-final"
+	if _, err := api.UpdateTask(context.Background(), taskEntity.ID, UpdateTaskInput{
+		ExpectedRevision: TaskRevision(updated),
+		Name:             &nextName,
+	}); err != nil {
+		t.Fatalf("post-sync revision rejected next update: %v", err)
+	}
 }
 
 type taskUpdateConcurrentMutation struct {
@@ -104,10 +292,14 @@ func exerciseTaskUpdateScheduleFailurePreservesConcurrentState(t *testing.T, db 
 					gormrepo.NewPolicyRepository(db),
 					nil,
 				)
-				_, err := peer.UpdateTask(context.Background(), taskID, CreateTaskInput{
+				current, err := gormrepo.NewTaskRepository(db).FindByID(context.Background(), taskID)
+				if err != nil {
+					return err
+				}
+				_, err = peer.UpdateTask(context.Background(), taskID, taskUpdateInputForTest(*current, CreateTaskInput{
 					Name: "task-edit-b", NodeID: node.ID, ExecutorType: "rsync",
 					RsyncSource: "/data/b", RsyncTarget: "/backup/b", CronSpec: "*/15 * * * *",
-				})
+				}))
 				return err
 			},
 			check: func(task model.Task) error {
@@ -168,6 +360,9 @@ func exerciseTaskUpdateScheduleFailurePreservesConcurrentState(t *testing.T, db 
 			if err := db.Create(&taskEntity).Error; err != nil {
 				t.Fatalf("create task: %v", err)
 			}
+			if err := db.First(&taskEntity, taskEntity.ID).Error; err != nil {
+				t.Fatalf("reload task revision: %v", err)
+			}
 			t.Cleanup(func() {
 				_ = db.Unscoped().Delete(&model.Task{}, taskEntity.ID).Error
 			})
@@ -187,14 +382,20 @@ func exerciseTaskUpdateScheduleFailurePreservesConcurrentState(t *testing.T, db 
 
 			errCh := make(chan error, 1)
 			go func() {
-				_, err := api.UpdateTask(context.Background(), taskEntity.ID, CreateTaskInput{
+				_, err := api.UpdateTask(context.Background(), taskEntity.ID, taskUpdateInputForTest(taskEntity, CreateTaskInput{
 					Name: "task-edit-a", NodeID: node.ID, ExecutorType: "rsync",
 					RsyncSource: "/data/a", RsyncTarget: "/backup/a", CronSpec: "*/10 * * * *",
-				})
+				}))
 				errCh <- err
 			}()
 
-			<-entered
+			select {
+			case <-entered:
+			case err := <-errCh:
+				t.Fatalf("UpdateTask returned before schedule sync: %v", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("UpdateTask did not reach schedule sync")
+			}
 			if err := mutation.mutate(db, taskEntity.ID); err != nil {
 				close(release)
 				t.Fatalf("concurrent %s mutation: %v", mutation.name, err)
@@ -247,10 +448,10 @@ func TestTaskUpdateCronChangeResetsStaleNextRunAt(t *testing.T) {
 		nil,
 	)
 	before := time.Now().UTC()
-	if _, err := api.UpdateTask(context.Background(), taskEntity.ID, CreateTaskInput{
+	if _, err := api.UpdateTask(context.Background(), taskEntity.ID, taskUpdateInputForTest(taskEntity, CreateTaskInput{
 		Name: "task-cron-new", NodeID: node.ID, ExecutorType: "rsync",
 		RsyncSource: "/data/new", RsyncTarget: "/backup/new", CronSpec: "0 0 1 1 *",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("update task cron: %v", err)
 	}
 
@@ -298,16 +499,19 @@ func runTaskUpdateCronChangeWhilePausedKeepsCursorEmpty(t *testing.T, db *gorm.D
 		Updates(map[string]interface{}{"enabled": false, "next_run_at": nil}).Error; err != nil {
 		t.Fatalf("pause task fixture: %v", err)
 	}
+	if err := db.First(&taskEntity, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload paused task revision: %v", err)
+	}
 	api := NewTaskApiService(
 		gormrepo.NewTaskRepository(db),
 		gormrepo.NewNodeRepository(db),
 		gormrepo.NewPolicyRepository(db),
 		nil,
 	)
-	if _, err := api.UpdateTask(context.Background(), taskEntity.ID, CreateTaskInput{
+	if _, err := api.UpdateTask(context.Background(), taskEntity.ID, taskUpdateInputForTest(taskEntity, CreateTaskInput{
 		Name: "task-paused-cron-new", NodeID: node.ID, ExecutorType: "rsync",
 		RsyncSource: "/data/new", RsyncTarget: "/backup/new", CronSpec: "@every 1h",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("update paused task cron: %v", err)
 	}
 	var paused model.Task
@@ -380,6 +584,9 @@ func runTaskUpdateRetryCronCursorMode(t *testing.T, db *gorm.DB, mode model.Task
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("create retrying task: %v", err)
 	}
+	if err := db.First(&taskEntity, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload retrying task revision: %v", err)
+	}
 	predecessor := model.TaskRun{
 		TaskID: taskEntity.ID, NodeIDSnapshot: node.ID, TriggerType: "cron",
 		Status: model.TaskRunStatusFailed,
@@ -405,10 +612,10 @@ func runTaskUpdateRetryCronCursorMode(t *testing.T, db *gorm.DB, mode model.Task
 		gormrepo.NewPolicyRepository(db),
 		nil,
 	)
-	if _, err := api.UpdateTask(context.Background(), taskEntity.ID, CreateTaskInput{
+	if _, err := api.UpdateTask(context.Background(), taskEntity.ID, taskUpdateInputForTest(taskEntity, CreateTaskInput{
 		Name: "task-retry-cursor-edited", NodeID: node.ID, ExecutorType: "rsync",
 		RsyncSource: "/data/source", RsyncTarget: "/backup/target", CronSpec: "0 0 1 1 *",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("update retrying task cron: %v", err)
 	}
 	var persisted model.Task
@@ -467,6 +674,9 @@ func runTaskUpdateCorruptRetryCronProvenance(t *testing.T, db *gorm.DB) {
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("create retrying task: %v", err)
 	}
+	if err := db.First(&taskEntity, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload corrupt retry task revision: %v", err)
+	}
 	predecessor := model.TaskRun{TaskID: taskEntity.ID, NodeIDSnapshot: node.ID, TriggerType: "cron", Status: model.TaskRunStatusFailed}
 	if err := db.Create(&predecessor).Error; err != nil {
 		t.Fatalf("create retry predecessor: %v", err)
@@ -484,10 +694,10 @@ func runTaskUpdateCorruptRetryCronProvenance(t *testing.T, db *gorm.DB) {
 		gormrepo.NewPolicyRepository(db),
 		nil,
 	)
-	if _, err := api.UpdateTask(context.Background(), taskEntity.ID, CreateTaskInput{
+	if _, err := api.UpdateTask(context.Background(), taskEntity.ID, taskUpdateInputForTest(taskEntity, CreateTaskInput{
 		Name: "task-corrupt-cursor-edited", NodeID: node.ID, ExecutorType: "rsync",
 		RsyncSource: "/data/source", RsyncTarget: "/backup/target", CronSpec: "0 0 1 1 *",
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("corrupt retry provenance update unexpectedly succeeded")
 	}
 	var persisted model.Task
