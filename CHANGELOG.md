@@ -7,6 +7,23 @@
 
 * resolve backup safety and task lifecycle review findings ([bb55ccb](https://github.com/xiangnan0811/xirang/commit/bb55ccbc48f197f4f0c70205bea327d4220eac17))
 
+* Validate task Cron before writes and isolate historical invalid schedules during startup. Preserve omitted edit fields, explicit manual scheduling and safe executor-setting clears; reject stale revisions without overwriting concurrent edits.
+* Enforce durable single-session logout across Core instances on ordinary APIs and realtime log/terminal handshakes; verification outages fail closed.
+* Replace misleading Restic Append-Only controls with repository-format selection; migrate historical settings at startup and config import without exposing secrets. Stream remote password-file contents through owned SSH stdin, preserving exact bytes and independent cleanup.
+* Bound Docker volume discovery by cancellation, a total deadline and output/volume budgets; incomplete inspection is partial, not complete empty results.
+* Confine configured Rsync roots locally and over SSH using pinned operands, a closed helper protocol and Linux Landlock. Preserve source hardlink topology while reusing compatible parent inode groups without modifying the parent.
+* Preserve explicit task Cron overrides across policy edits and disable/resume, and return the post-scheduler task revision.
+
+### Upgrade notes
+
+* Pause admission, drain and stop all old Core/executor processes before upgrading. Back up the database, encryption keys and backup data; do not mix old and new writers. Preserve unresolved historical writer holds and backup evidence.
+* Paired SQLite/PostgreSQL migration `000088_task_cron_override` persists schedule provenance. Historical policy-owned task Cron values differing from the policy effective schedule become overrides; matching values remain inherited. Guarded downgrade refuses loss of explicit override evidence; preserve a consistent pre-upgrade backup and prefer forward repair.
+* Task PUT clients must send `expected_revision` using the current `revision` returned by GET/create/update. Missing revisions are rejected with 400 and stale revisions with 409. Omitted fields remain unchanged; an explicit empty Cron selects manual scheduling.
+* Configured Rsync confinement requires Linux Landlock ABI 3 or newer (including truncate protection), a matching local/remote one-shot helper, and supported private user/mount namespaces for pinned root/file aliases. Default container policies may deny these capabilities; execution then fails closed. Do not bypass confinement by removing allowlists or automatically granting privileged container access. When both allowlists are unset, execution remains unrestricted.
+* Managed hardlink publication transfers a complete source-topology-preserving staging tree without `--link-dest` before bounded descriptor-relative parent inode reuse. Budget temporary space and transfer capacity for the complete tree, and retain the existing hardlink/atomic-rename filesystem requirements. This does not add post-commit topology-only tamper attestation.
+* Restic repository versions 1/2 select repository format, not deletion protection. Historical Append-Only=true becomes version 2; false becomes unspecified. Repository/backend deletion protection remains independently configured and unverified.
+
+
 ## [0.55.12](https://github.com/xiangnan0811/xirang/compare/v0.55.11...v0.55.12) (2026-09-13)
 
 
@@ -31,23 +48,6 @@
 * Paired SQLite/PostgreSQL migrations `000086_task_cron_occurrences_resource_identity` and `000087_backup_completion_facts` add durable scheduling/resource evidence and backup facts. Back up the database, encryption keys and backup data; pause admission, drain and stop all old Core/executor processes before upgrading. Do not mix old and new writers.
 * Historical freshness is rebuilt only from provable committed backup evidence. Ambiguous timestamps and recovery points remain explicitly unverified and can therefore stop appearing as recent successful backups. This does not delete backup data or authorize restoration.
 * Once new durable evidence is used, guarded schema downgrade is refused. Never erase evidence, force migration versions or use downgrade to clear an unresolved writer; preserve a consistent pre-upgrade database/code backup and prefer forward repair.
-
-## [Unreleased]
-
-### Fixes
-
-* Validate task Cron before writes and isolate historical invalid schedules during startup. Preserve omitted edit fields, support explicit manual scheduling and safe executor-setting clears, and reject stale revisions without overwriting concurrent edits.
-* Enforce durable single-session logout on ordinary APIs across Core instances; session-verification outages fail closed.
-* Replace misleading Restic Append-Only controls with repository-format selection and explicitly unverified deletion protection; migrate historical settings at startup and config import without exposing secrets.
-* Stream remote Restic password-file contents through owned SSH stdin instead of command arguments, preserving exact bytes and independent cleanup.
-* Bound Docker volume discovery by request cancellation, a total deadline and output/volume budgets; report incomplete inspection as partial rather than complete empty results.
-* Confine configured Rsync source/target roots during local and SSH execution using pinned operands, a closed helper protocol and Linux Landlock. Missing helper/kernel capability fails closed; deploy the matching one-shot helper on remote nodes before enabling allowlists.
-* Preserve explicit task-level Cron overrides across policy edits and disable/resume, return the post-scheduler task revision, and enforce durable revocation before realtime log/terminal handshakes.
-
-### Upgrade notes
-
-* Paired SQLite/PostgreSQL migration `000088_task_cron_override` persists task schedule provenance. Stop all old Core/executor processes and back up the database and encryption keys before upgrading; do not mix writers. Historical policy-owned task Cron values differing from the policy effective schedule become overrides; matching values remain inherited. Protected downgrade is refused when explicit override evidence would be lost.
-* Configured Rsync confinement requires Linux Landlock ABI 3 or newer (including truncate protection), matching local/remote helper protocol, and supported private user/mount namespaces for pinned root/file aliases; default container policies may deny these capabilities and execution then fails closed. Managed hardlink publication first transfers a source-topology-preserving staging tree without `--link-dest`, then reuses compatible parent inode groups through bounded descriptor-relative linking without modifying the parent. Budget space for the complete staging tree and retain the existing hardlink/atomic-rename filesystem requirements.
 
 ## [0.55.10](https://github.com/xiangnan0811/xirang/compare/v0.55.9...v0.55.10) (2026-09-12)
 
