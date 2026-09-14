@@ -107,6 +107,12 @@
 
 操作步骤见 [备份与恢复手册](../admin/backup-recovery.md)。
 
+### 任务覆盖与文件系统约束的升级检查
+
+包含 `000088_task_cron_override` 的发布，须提示历史 schedule provenance 回填规则与受保护降级限制；Task PUT 客户端必须用当前 `revision` 提交 `expected_revision`，并处理 400/409，而不是盲目重试覆盖。
+
+配置 Rsync allowlist 时，核对 Linux Landlock ABI 3、匹配的本地/远端 helper 及私有 user/mount namespace 能力。默认容器策略可能拒绝 namespace；此时执行应失败关闭，不得自动移除 allowlist 或授予 privileged 权限。受管 hardlink 备份须预留完整 staging 树空间与传输容量。Restic repository version 只是格式选择，不提供删除保护保证。
+
 ## PR 后监控要求
 
 - PR 创建后，负责人必须监控 GitHub required checks，包括 `PR Title`、`Backend Test & Build`、`Frontend Test & Build`、`Doc Freshness Check`，以及当前 branch protection 要求的其他 jobs。
