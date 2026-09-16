@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.14](https://github.com/xiangnan0811/xirang/compare/v0.55.13...v0.55.14) (2026-09-16)
+
+
+### 🐛 Bug Fixes
+
+* **nodelogs:** cancel stalled collectors and join workers ([#533](https://github.com/xiangnan0811/xirang/issues/533)) ([e34809d](https://github.com/xiangnan0811/xirang/commit/e34809d49f84d3cc26492b06d8395b80afc69e88))
+
 ## [0.55.13](https://github.com/xiangnan0811/xirang/compare/v0.55.12...v0.55.13) (2026-09-14)
 
 
