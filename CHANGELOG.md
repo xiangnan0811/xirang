@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.55.14](https://github.com/xiangnan0811/xirang/compare/v0.55.13...v0.55.14) (2026-09-16)
+
+
+### 🐛 Bug Fixes
+
+* **nodelogs:** cancel stalled collectors and join workers ([#533](https://github.com/xiangnan0811/xirang/issues/533)) ([e34809d](https://github.com/xiangnan0811/xirang/commit/e34809d49f84d3cc26492b06d8395b80afc69e88))
+
+### Upgrade notes
+
+- SSH collection now cancels and joins blocked execution, rejects incomplete or
+  oversized output without advancing cursors, and allows only one queued or
+  running collection per node. Existing log sanitization remains in place.
+- No database migration is added; the paired schema version remains
+  `000088_task_cron_override`. Preserve database backups and log/cursor rows, and
+  stop the old Core before starting the replacement so old stuck collectors do
+  not remain active. Rolling back the image reintroduces the collector defect;
+  disable affected collection sources first and do not delete cursors to recover.
+- The upgrade does not enable disabled collectors. Verify the deployed version
+  and configuration, then authorize one low-risk node and observe at least two
+  collection cycles before staged restoration. Image publication alone does not
+  establish production recovery.
+
 ## [0.55.13](https://github.com/xiangnan0811/xirang/compare/v0.55.12...v0.55.13) (2026-09-14)
 
 
