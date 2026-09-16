@@ -115,6 +115,13 @@
 
 ## PR 后监控要求
 
+Alpine 软件源可能不再提供 Dockerfile 锁定的旧包版本。遇到 `apk` 精确版本安装
+失败时，应在锁定的基础镜像中复现，并分别核对目标 Alpine 分支的 amd64/arm64
+软件源，再更新必要的版本锁定。`apk` 错误中列出的镜像已安装版本不一定是软件源
+当前可安装版本。保留构建、完整 Compose smoke 和漏洞扫描门禁；不要仅凭另一个
+架构成功就判定通过。维护性锁定更新随 `chore` 合并时仍须检查 Release Please
+结果，不手动提升版本或重发现有镜像。
+
 - PR 创建后，负责人必须监控 GitHub required checks，包括 `PR Title`、`Backend Test & Build`、`Frontend Test & Build`、`Doc Freshness Check`，以及当前 branch protection 要求的其他 jobs。
 - CI 失败时，负责人应修复失败原因、推送到同一工作分支并重新监控；只有确认是真实外部阻塞时，才可把阻塞原因和下一步记录到 PR 或任务交付说明。
 - 合并只能发生在 required checks 全部通过之后；不要在 checks 失败、pending 或缺失时合并。

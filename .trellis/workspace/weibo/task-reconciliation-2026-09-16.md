@@ -2,7 +2,7 @@
 
 ## Authority and scope
 
-User requested processing every unarchived task according to actual delivery, supersession and remaining value. This session changes task records only, using a dedicated branch from synchronized main `1ec1b2b8621fb2ae86b5888247ab49c69c629764`. No new task, product implementation, production access, deployment or data deletion is part of this pass. Existing task histories are preserved by archival, not deletion.
+User requested processing every unarchived task according to actual delivery, supersession and remaining value. The initial pass changed task records only, using a dedicated branch from synchronized main `1ec1b2b8621fb2ae86b5888247ab49c69c629764`. The subsequent explicitly authorized PR CI repair also refreshes one unavailable Alpine tzdata pin, as recorded below. No new task, application implementation, production access, deployment or data deletion is part of this pass. Existing task histories are preserved by archival, not deletion.
 
 ## Verified delivery evidence
 
@@ -79,3 +79,27 @@ User requested processing every unarchived task according to actual delivery, su
   findings. The reviewer independently checked task structure, original-file
   preservation and scope transfers; remote delivery was verified by the main
   session, not rechecked by that reviewer.
+
+## Authorized PR #532 CI repair
+
+The user requested resolving CI and merging this maintenance PR without a new
+version release. Both failed jobs in run `35045702506` share one root cause:
+Docker Build and amd64 Worker Build & Scan fail while building the Core image
+because `tzdata=2026c-r0` is no longer available. The Worker build and native
+smoke themselves passed; the amd64 full profile smoke and scan had not run.
+
+The pinned Nginx image has `2026a-r0` installed, which explains the candidate in
+APK's error output; that is not the latest repository package. On 2026-09-16,
+the official Alpine v3.23 main APKINDEX reports `2026d-r0` for both `x86_64` and
+`aarch64`. An isolated container of the exact base image reproduced the old
+pin failure. Refresh only the exact tzdata pin to `2026d-r0`, preserving all
+other package/base pins, CI jobs, smoke and vulnerability gates.
+
+The corrected pin installed successfully in a disposable container of that exact
+Nginx base (exit 0); the `Asia/Shanghai` epoch assertion returned
+`1970-01-01T08:00:00+0800`. `git diff --check` and documentation freshness pass.
+
+The final squash commit remains `chore(trellis)`, with no release manifest,
+version or changelog changes. Release Please is expected to run after merge but
+not propose or publish a new version for this maintenance-only commit. Verify
+that expectation against actual post-merge automation before reporting closure.

@@ -64,7 +64,7 @@ RUN apk add --no-cache \
       openssh-client=10.2_p1-r0 \
       sqlite=3.53.4-r0 \
       bash=5.3.3-r1 \
-      tzdata=2026c-r0 \
+      tzdata=2026d-r0 \
       postgresql18-client=18.6-r0
 
 COPY --from=supercronic-builder /out/supercronic /usr/local/bin/supercronic
