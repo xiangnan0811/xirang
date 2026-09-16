@@ -163,6 +163,9 @@ jobs:
       - name: Run PostgreSQL Catalog behavior parity
         run: go test ./internal/backupasset/catalog -run '^TestCatalogBehaviorPostgres$' -count=1
 
+      - name: Run PostgreSQL index lease recovery
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL index lease recovery' ./internal/backupasset '^TestIndexLeaseReclamationPostgres$'
+
       - name: Run PostgreSQL Search behavior parity
         run: go test ./internal/backupasset/search -run '^TestSearchBehaviorPostgres$' -count=1
 

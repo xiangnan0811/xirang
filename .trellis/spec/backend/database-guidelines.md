@@ -655,6 +655,64 @@ if _, err := profile.ResolveAppProfileAccess(db, credentialID); err != nil {
 
 ---
 
+## Scenario: Expired Catalog/Search Owner Slots
+
+### 1. Scope / Trigger
+
+Catalog or Search restarts after losing its heartbeat lease while the longer
+absolute deadline is still in the future. Applies to `backupasset.LeaseService`
+and the real Catalog/Search indexers, not a general lease-policy migration.
+
+### 2. Signatures
+
+`LeaseService.AcquireTx(ctx, tx, AcquireLeaseRequest)` operates on
+`recovery_point_leases`; index holders are `catalog_build` and `search_index`.
+The active owner slot is scoped by recovery point, holder type and owner ID.
+
+### 3. Contracts
+
+- After lifecycle admission and deadline validation, an index acquisition may
+  expire only its exact active owner slot when `lease_expires_at <= now` or
+  `absolute_deadline <= now`. Expiry and fresh acquisition share one transaction.
+- New lease identity, attempt and fence must not reuse the abandoned attempt.
+  Preserve the partial unique active-owner index and exclusive live ownership.
+- Old fences cannot renew, mutate or release a replacement attempt. Failed
+  acquisition or caller rollback must not leave a partly reclaimed slot.
+- Preserve explicit publication deadline validation, all non-index holder
+  takeover rules, and the global absolute-deadline sweeper. Do not shorten the
+  configured absolute deadline to disguise missing heartbeat recovery.
+- Abandoned-generation reconciliation must query/lock actual matching lease
+  rows for existence checks. PostgreSQL rejects `COUNT(*) ... FOR UPDATE`;
+  SQLite-only tests cannot establish this restart-path compatibility.
+
+### 4. Validation / Error Matrix
+
+| State | Required outcome |
+| --- | --- |
+| Exact index slot, heartbeat expired, absolute deadline future | Fresh acquisition succeeds; old slot expired |
+| Exact slot with both deadlines live | `ErrLeaseHeld`; original owner unchanged |
+| Different point, holder or owner | Existing slot untouched |
+| Admission/deadline rejection or transaction rollback | No committed reclamation |
+| Non-index holder | Existing acquire/takeover semantics preserved |
+
+### 5. Good / Base / Bad Cases
+
+Good: restarted indexer publishes a new valid generation after heartbeat expiry.
+Base: no old slot uses ordinary acquisition. Bad: globally expire every holder
+at heartbeat expiry or wait seven days for an abandoned indexing owner slot.
+
+### 6. Tests Required
+
+Cover both index holders, exact expiry boundaries, live refusal, owner isolation,
+stale fences, transaction rollback and concurrency on SQLite/PostgreSQL. Exercise
+real Catalog/Search restarted builds and generation activation, not only SQL.
+
+### 7. Wrong vs Correct
+
+Wrong: repair production lease rows by hand or bypass fence checks on rebuild.
+Correct: reclaim the exact expired index slot through normal transactional
+acquisition and verify the old attempt remains unable to publish.
+
 ## Scenario: Backup Asset Search Projection And User Overlays
 
 ### 1. Scope / Trigger

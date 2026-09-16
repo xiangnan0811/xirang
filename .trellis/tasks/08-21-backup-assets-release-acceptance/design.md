@@ -1,5 +1,7 @@
 # Design — v0.50.4 真实备份数据验收
 
+> Current v0.55.15 continuation: [lease-recovery design and evidence](research/v05515-lease-recovery.md) supersedes historical execution and node-log sequencing below. Reuse this task; keep production acceptance open.
+
 ## Selected approach
 
 采用现有 Task 派生的仓库接入 API，而不是生产 SQL 或新造测试数据：
