@@ -15,8 +15,8 @@
   "branch": "codex/node-logs-recent-resume",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": "664555e6",
-  "pr_url": "https://github.com/xiangnan0811/xirang/pull/533",
+  "commit": "d3101cf1cbc1c861641b525ef517340b4c2cd4b0",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/535",
   "subtasks": [],
   "children": [],
   "parent": null,
@@ -59,7 +59,11 @@
       "implementation_authorized": true,
       "window_seconds": 3600,
       "batch_entries": 200,
-      "status": "implementing",
+      "status": "merged_release_pending",
+      "pr_url": "https://github.com/xiangnan0811/xirang/pull/535",
+      "release_pr_url": "https://github.com/xiangnan0811/xirang/pull/536",
+      "expected_release": "v0.55.15",
+      "ci_run": "35071234286",
       "production_mutation": false
     }
   }
