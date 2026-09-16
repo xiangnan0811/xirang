@@ -113,6 +113,12 @@
 
 配置 Rsync allowlist 时，核对 Linux Landlock ABI 3、匹配的本地/远端 helper 及私有 user/mount namespace 能力。默认容器策略可能拒绝 namespace；此时执行应失败关闭，不得自动移除 allowlist 或授予 privileged 权限。受管 hardlink 备份须预留完整 staging 树空间与传输容量。Restic repository version 只是格式选择，不提供删除保护保证。
 
+### v0.55.14 节点日志修复交付
+
+本版不新增数据库迁移，配对迁移仍为 `000088_task_cron_override`。升级前保全数据库备份及日志/游标，停止旧 Core 后再启动新镜像，避免旧采集进程继续占用连接。回退镜像会重新引入采集卡死缺陷，应先关闭受影响的采集源；不要通过删除游标或日志恢复。
+
+发布不会自动开启已禁用的节点日志。生产恢复须单独核对版本、镜像 digest 和现有配置，经授权先恢复一个低风险节点，观察至少两个采集周期，再分批恢复。GitHub Release 和 Docker Hub 发布成功只代表镜像交付，不代表生产已完成验收。
+
 ## PR 后监控要求
 
 Alpine 软件源可能不再提供 Dockerfile 锁定的旧包版本。遇到 `apk` 精确版本安装

@@ -68,7 +68,7 @@ on the historical migration P0 or backup production acceptance.
 
 ## Phase 7 — delivery and production handoff
 
-- [ ] Commit/PR only after gates; monitor required CI to green.
+- [x] Commit/PR only after gates; monitor required CI to green (PR #533, all 11 passed).
 - [ ] Merge and monitor release/image automation; record immutable image digest.
 - [ ] Separately verify current production settings and preserve disabled sources during an authorized upgrade.
 - [ ] Hand the exact single-node then batch re-enable commands/checks to the user.
