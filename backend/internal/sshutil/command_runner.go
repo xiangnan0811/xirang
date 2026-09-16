@@ -111,10 +111,11 @@ type CommandSession interface {
 type CommandSessionFactory func(context.Context) (CommandSession, error)
 
 type CommandRunner struct {
-	factory          CommandSessionFactory
-	semaphore        chan struct{}
-	terminationGrace time.Duration
-	transportClose   func()
+	factory            CommandSessionFactory
+	semaphore          chan struct{}
+	terminationGrace   time.Duration
+	transportClose     func()
+	joinOwnedTransport bool
 }
 
 func NewCommandRunner(factory CommandSessionFactory, maxConcurrency int) *CommandRunner {
@@ -138,6 +139,17 @@ func NewSSHCommandRunnerWithTransportClose(client *ssh.Client, maxConcurrency in
 			_ = client.Close()
 		}
 	})
+}
+
+// NewSSHCommandRunnerWithJoinedTransportClose owns a dedicated SSH client.
+// Cancellation closes its transport immediately and joins all command owners.
+// Unlike compatibility streams, it never returns with unfinished cleanup.
+// This contract applies to OpenExecution/OpenRawExecution only; Run/Open retain
+// their historical behavior. The caller must not share this client elsewhere.
+func NewSSHCommandRunnerWithJoinedTransportClose(client *ssh.Client, maxConcurrency int) *CommandRunner {
+	runner := NewSSHCommandRunnerWithTransportClose(client, maxConcurrency)
+	runner.joinOwnedTransport = true
+	return runner
 }
 
 func newSSHCommandRunner(client *ssh.Client, maxConcurrency int, transportClose func()) *CommandRunner {
@@ -475,14 +487,21 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 			transportOnce.Do(runner.transportClose)
 		}
 		transportWatchDone = make(chan struct{})
+		watchExited := make(chan struct{})
 		go func() {
+			defer close(watchExited)
 			select {
 			case <-runContext.Done():
 				transportClose()
 			case <-transportWatchDone:
 			}
 		}()
-		defer close(transportWatchDone)
+		defer func() {
+			close(transportWatchDone)
+			if runner.joinOwnedTransport {
+				<-watchExited
+			}
+		}()
 	}
 	session, err := runner.factory(runContext)
 	if err != nil {
@@ -499,7 +518,11 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 		cancel()
 		if transportClose != nil {
 			transportClose()
-			go func() { _ = session.Close() }()
+			if runner.joinOwnedTransport {
+				_ = session.Close()
+			} else {
+				go func() { _ = session.Close() }()
+			}
 		} else {
 			_ = session.Close()
 		}
@@ -530,25 +553,27 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 	}
 
 	stream := &commandExecution{
-		session:          session,
-		stdout:           stdout,
-		stderr:           stderr,
-		stdin:            stdin,
-		secretStdin:      specification.SecretStdin,
-		parentContext:    ctx,
-		runContext:       runContext,
-		cancel:           cancel,
-		remaining:        specification.MaxStdoutBytes,
-		maxRecordBytes:   specification.MaxRecordBytes,
-		maxStderrBytes:   specification.MaxStderrBytes,
-		release:          release,
-		terminationGrace: runner.terminationGrace,
-		transportClose:   transportClose,
-		stdinDone:        make(chan struct{}),
-		stderrDone:       make(chan struct{}),
-		waitDone:         make(chan struct{}),
-		allDone:          make(chan struct{}),
-		finished:         make(chan struct{}),
+		session:            session,
+		stdout:             stdout,
+		stderr:             stderr,
+		stdin:              stdin,
+		secretStdin:        specification.SecretStdin,
+		parentContext:      ctx,
+		runContext:         runContext,
+		cancel:             cancel,
+		remaining:          specification.MaxStdoutBytes,
+		maxRecordBytes:     specification.MaxRecordBytes,
+		maxStderrBytes:     specification.MaxStderrBytes,
+		release:            release,
+		terminationGrace:   runner.terminationGrace,
+		transportClose:     transportClose,
+		joinOwnedTransport: runner.joinOwnedTransport,
+		watchDone:          make(chan struct{}),
+		stdinDone:          make(chan struct{}),
+		stderrDone:         make(chan struct{}),
+		waitDone:           make(chan struct{}),
+		allDone:            make(chan struct{}),
+		finished:           make(chan struct{}),
 	}
 	if closer, ok := stdout.(io.Closer); ok {
 		stream.stdoutCloser = closer
@@ -573,11 +598,13 @@ type commandExecution struct {
 	cancel        context.CancelFunc
 	release       func()
 
-	remaining        int64
-	maxRecordBytes   int
-	maxStderrBytes   int64
-	terminationGrace time.Duration
-	transportClose   func()
+	remaining          int64
+	maxRecordBytes     int
+	maxStderrBytes     int64
+	terminationGrace   time.Duration
+	transportClose     func()
+	joinOwnedTransport bool
+	watchDone          chan struct{}
 
 	stdinDone  chan struct{}
 	stderrDone chan struct{}
@@ -634,6 +661,7 @@ func (stream *commandExecution) start() {
 		close(stream.allDone)
 	}()
 	go func() {
+		defer close(stream.watchDone)
 		select {
 		case <-stream.runContext.Done():
 			stream.terminate()
@@ -731,8 +759,14 @@ func (stream *commandExecution) finalize(cancelRequested bool) {
 			stream.waitForNaturalCompletion()
 		}
 		stream.closeStreams()
+		if stream.joinOwnedTransport {
+			stream.closeTransport()
+		}
 		stream.closeConnection()
 		close(stream.finished)
+		if stream.joinOwnedTransport {
+			<-stream.watchDone
+		}
 		stream.cancel()
 		stream.releaseOnce.Do(stream.release)
 		stream.mu.Lock()
@@ -752,6 +786,10 @@ func (stream *commandExecution) waitForNaturalCompletion() {
 }
 
 func (stream *commandExecution) waitAfterTermination() {
+	if stream.joinOwnedTransport {
+		<-stream.allDone
+		return
+	}
 	timer := time.NewTimer(CommandExecutionJoinTimeout)
 	defer timer.Stop()
 	select {
@@ -768,6 +806,11 @@ func (stream *commandExecution) waitAfterTermination() {
 func (stream *commandExecution) terminate() {
 	stream.terminateOnce.Do(func() {
 		stream.cancel()
+		if stream.joinOwnedTransport {
+			stream.closeTransport()
+			stream.closeConnection()
+			return
+		}
 		if stream.transportClose != nil {
 			go func() {
 				if err := stream.session.Signal(ssh.SIGTERM); err != nil {
@@ -810,6 +853,10 @@ func (stream *commandExecution) terminate() {
 }
 
 func (stream *commandExecution) requestTermination() {
+	if stream.joinOwnedTransport {
+		stream.terminate()
+		return
+	}
 	go stream.terminate()
 }
 
@@ -893,7 +940,7 @@ func (stream *commandExecution) closeStreams() {
 
 func (stream *commandExecution) closeConnection() {
 	stream.connectionCloseOnce.Do(func() {
-		if stream.transportClose != nil {
+		if stream.transportClose != nil && !stream.joinOwnedTransport {
 			go func() {
 				if err := stream.session.Close(); err != nil && !errors.Is(err, io.EOF) {
 					stream.mu.Lock()

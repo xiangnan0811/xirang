@@ -14,6 +14,24 @@ Xirang 通过 SSH 探测节点状态，并采样 CPU、内存、磁盘、负载�
 | `NODE_PROBE_FAIL_THRESHOLD` | `3` | 连续失败多少次后标记节点离线。 |
 | `NODE_PROBE_CONCURRENCY` | `10` | 并发探测数量，生产可按规模提高。 |
 
+## 节点日志采集
+
+节点启用 journalctl 或配置日志文件路径后，后台定期通过 SSH 采集。同一节点最多有一个排队或执行中的采集任务；慢节点不会在每轮调度时重复占用队列。
+
+采集超时或输出超过上限时，本轮输出全部丢弃，不写入日志，也不推进游标。超限后仍从原游标重试，因此持续超限需要检查采集范围和日志量，不能把截断输出当作采集成功。关闭服务时，采集器取消自己的任务并等待工作线程退出。
+
+排查时可关注以下指标（均在下文的受保护 `/metrics` 端点）：
+
+| 指标 | 含义 |
+|---|---|
+| `xirang_node_logs_jobs_deduplicated_total` | 节点已排队或执行中而跳过的重复任务数。 |
+| `xirang_node_logs_queue_rejected_total{reason="full"\|"shutdown"}` | 因队列满或正在关闭而拒绝的任务数。 |
+| `xirang_node_logs_in_flight` | 当前执行中的采集任务数。 |
+| `xirang_node_logs_fetch_errors_total{reason="timeout"\|"canceled"\|"output_limit"\|"ssh_error"}` | 采集失败原因；既有写入失败另记为 `insert`。 |
+| `xirang_node_logs_shutdown_timeouts_total` | 调用方等待期限内未完成关闭的次数，不代表工作线程已经退出。 |
+
+升级不会自动开启已关闭的采集。恢复采集时，先确认运行版本和现有配置，再启用一个低风险节点，观察至少两个采集周期的游标、写入和队列指标后分批恢复。出现异常时关闭对应采集源，保留已有日志和游标用于排查。
+
 ## HTTP/TCP Uptime 监控
 
 服务监控从 Xirang 服务端主动探测 HTTP/TCP 端点，不依赖远程节点 SSH。

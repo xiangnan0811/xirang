@@ -16,6 +16,15 @@ func openRetentionTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("unwrap: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
 	if err := db.AutoMigrate(&model.Node{}, &model.NodeLog{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

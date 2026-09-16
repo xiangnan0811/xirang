@@ -2,3 +2,4 @@
 {"file": ".trellis/tasks/08-23-node-logs-collector-stall/research/spec-contracts.md", "reason": "Verify cancellation, join, single-flight, cursor safety, deterministic tests, race, lint, and build from focused spec routes"}
 {"file": ".trellis/tasks/08-23-node-logs-collector-stall/research/root-cause.md", "reason": "Verify the fix closes every confirmed cause without misattributing it to v0.50.2"}
 {"file": ".trellis/tasks/08-23-node-logs-collector-stall/reconciliation.md", "reason": "Current disposition, remaining scope and superseded historical instructions"}
+{"file": ".trellis/spec/backend/node-log-collection.md", "reason": "Collection lifecycle and verification contract"}

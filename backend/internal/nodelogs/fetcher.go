@@ -36,8 +36,13 @@ func (f *Fetcher) Fetch(ctx context.Context, node model.Node, cursors map[Cursor
 	fetchDuration.WithLabelValues(nodeIDLabel(node.ID)).Observe(time.Since(start).Seconds())
 	if err != nil {
 		reason := "ssh_error"
-		if errors.Is(err, context.DeadlineExceeded) {
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
 			reason = "timeout"
+		case errors.Is(err, context.Canceled):
+			reason = "canceled"
+		case errors.Is(err, ErrOutputLimit):
+			reason = "output_limit"
 		}
 		fetchErrors.WithLabelValues(nodeIDLabel(node.ID), reason).Inc()
 		return nil, nil, err
