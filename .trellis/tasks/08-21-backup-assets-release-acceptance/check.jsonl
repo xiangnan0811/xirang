@@ -6,3 +6,4 @@
 {"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/wave1-docs-exclusion.md", "reason": "Wave 1 docs_exclusion verified quotes; not walkthrough evidence"}
 {"file": "docs/admin/backup-recovery.md", "reason": "Native AWS still out of support matrix; do not treat as GA"}
 {"file": "docs/admin/backup-assets-load.md", "reason": "Second public-doc Native exclusion sentence"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/reconciliation.md", "reason": "Current disposition, remaining scope and superseded historical instructions"}

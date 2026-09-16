@@ -1,3 +1,5 @@
+> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
+
 # Implement — 节点日志采集超时与队列卡死修复
 
 Do not run `task.py start` until the user approves this planning set in a later message.
