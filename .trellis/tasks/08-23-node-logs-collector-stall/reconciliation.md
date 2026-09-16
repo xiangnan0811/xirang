@@ -44,9 +44,10 @@ The old design remains useful but its instruction to build an independent SSH
 lifecycle must first be reconciled with the shared runner now present. There is
 no technical dependency on backup preview acceptance for code planning/testing;
 the historical operational sequencing must not hide the unresolved defect.
-This task remains planning: the current user request authorized assessment and
-task cleanup, not implementation of every retained backlog item or production
-collector changes.
+On 2026-09-16 the user subsequently approved “推进 节点日志 P1”. Implementation
+is now authorized on `codex/node-logs-collector-stall`, based on merged main
+`bb27865ab3f334bbbc8b104ae6590a3fa6fe886c`. This approval covers the product
+repair and PR delivery; production collector changes remain separately gated.
 
 ## Previous metadata note (historical)
 

@@ -3,7 +3,7 @@
   "name": "node-logs-collector-stall",
   "title": "节点日志采集超时与队列卡死修复",
   "description": "修复 SSH 会话超时未覆盖读/等待、worker 永久卡死、同节点重复入队和队列持续溢出。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": "backend",
   "scope": "node-logs",
   "package": "backend",
@@ -12,7 +12,7 @@
   "assignee": "weibo",
   "createdAt": "2026-08-23",
   "completedAt": null,
-  "branch": null,
+  "branch": "codex/node-logs-collector-stall",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -46,6 +46,7 @@
       "implementation_authorized_this_session": false,
       "technical_dependency_on_backup_acceptance": false,
       "production_reenable_requires_separate_acceptance": true
-    }
+    },
+    "implementation_authorized_this_session": "true"
   }
 }

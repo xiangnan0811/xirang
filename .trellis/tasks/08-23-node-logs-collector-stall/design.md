@@ -24,6 +24,12 @@ context；而 `LimitReader` 到上限会停止读取但不关闭远端，远端�
 
 ### 1. Testable session boundary
 
+2026-09-16 execution refresh: first reuse `sshutil.NewSSHCommandRunnerWithTransportClose`
+and `OpenRawExecution` for transport ownership, cancellation and output bounds.
+The private test seam below must adapt to that existing runner where possible;
+do not duplicate its lifecycle state machine. Preserve complete-output/nonzero-exit
+compatibility and verify close-and-join through deterministic regression tests.
+
 把 sshRunner 的连接/会话创建收窄成可注入私有接口，生产适配器仍使用
 `*ssh.Client` / `*ssh.Session`。测试 fake 能分别控制：
 
@@ -160,8 +166,10 @@ goroutine completion channel。
 
 ## Production rollout
 
-1. Merge/release with collection still disabled on production.
-2. Upgrade Core only after the separate migration P0 release gate is satisfied.
+1. Merge/release without changing production collection configuration; the historical disabled
+   state is not evidence of today's configuration.
+2. Separately verify the intended image, current deployment/configuration, backup and rollback
+   readiness before an authorized Core upgrade. Historical migration P0 sequencing is superseded.
 3. User enables one low-risk node.
 4. Observe at least two tick/fetch cycles: cursor advances, in-flight returns to zero, no queue
    rejection, no timeout/limit unless expected.
