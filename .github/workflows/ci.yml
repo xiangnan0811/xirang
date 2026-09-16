@@ -65,7 +65,7 @@ jobs:
         run: go test -coverprofile=coverage.out ./...
 
       - name: Race concurrency-sensitive backend packages
-        run: go test -race ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/task/executor ./internal/task/verifier ./internal/ws ./internal/auth ./internal/bootstrap ./internal/uptime ./internal/policy ./internal/automation ./internal/alerting ./internal/escalation -count=1
+        run: go test -race ./internal/nodelogs ./internal/sshutil ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/task/executor ./internal/task/verifier ./internal/ws ./internal/auth ./internal/bootstrap ./internal/uptime ./internal/policy ./internal/automation ./internal/alerting ./internal/escalation -count=1
 
       - name: Backup-asset coverage floor
         run: bash ../scripts/check-backupasset-coverage.sh

@@ -15,6 +15,8 @@ User authorized the existing P1 task after reconciliation. Baseline is main
   cancellation, joined/idempotent shutdown and context-aware worker DB operations.
 - Added bounded scheduler metrics, aggregate queue warnings and distinct fetch
   failure reasons. Failed fetches preserve both journal/file cursors and zero rows.
+- Added nodelogs and sshutil to the existing CI race package list so ownership
+  regressions remain covered on future pull requests.
 - Updated operator docs and the executable backend collection contract. Fixed
   existing test DB cleanup so repeated package runs are isolated.
 
