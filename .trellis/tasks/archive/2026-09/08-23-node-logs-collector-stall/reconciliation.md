@@ -1,3 +1,5 @@
+> **Accepted and closed (2026-09-16):** [Production acceptance](research/production-acceptance-2026-09-16.md) supersedes earlier pending delivery/rollout status. The user accepted the required single-node scope; other collectors are not currently required.
+
 # Task reconciliation — 2026-09-16
 
 ## Current follow-up disposition
