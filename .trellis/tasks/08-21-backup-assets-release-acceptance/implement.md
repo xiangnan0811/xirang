@@ -1,4 +1,4 @@
-> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
+> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md) and [v0.55.15 bounded lease-recovery plan](research/v05515-lease-recovery.md). Older status, delivery gates and deferred-work ownership below are historical where those records supersede them.
 
 # v0.50.4 Real-Data Production Acceptance Implementation Plan
 

@@ -39,6 +39,33 @@ func TestSearchBehaviorPostgres(t *testing.T) {
 		t.Skip("TEST_POSTGRES_DSN is not configured")
 	}
 	runSearchBehaviorContract(t, openSearchBehaviorPostgres(t, dsn))
+	t.Run("expired index lease restart", func(t *testing.T) {
+		fixture := openSearchBehaviorPostgres(t, dsn)
+		if err := database.RunMigrations(fixture.db, fixture.engine); err != nil {
+			t.Fatal(err)
+		}
+		node := model.Node{Name: "index-restart-fixture", Host: "127.0.0.1", Port: 22, Username: "fixture"}
+		if err := fixture.db.Create(&node).Error; err != nil {
+			t.Fatal(err)
+		}
+		task := model.Task{ID: 11, NodeID: node.ID, Name: "index-restart-fixture", ExecutorType: "rsync"}
+		if err := fixture.db.Create(&task).Error; err != nil {
+			t.Fatal(err)
+		}
+		ring := backupasset.NewKeyring(fixture.db, func() time.Time { return fixture.now })
+		if _, err := ring.Ensure(context.Background(), backupasset.KeyDomainSearchToken); err != nil {
+			t.Fatal(err)
+		}
+		lease, err := backupasset.NewLeaseService(fixture.db, func() time.Time { return fixture.now }, backupasset.LeaseConfig{Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour})
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexer, err := NewIndexer(IndexerDependencies{DB: fixture.db, Lease: lease, Keys: ring, Now: func() time.Time { return fixture.now }, Config: standardIndexerConfig()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSearchRestartRecoversExpiredIndexLease(t, indexer, &indexerTestHarness{db: fixture.db, ring: ring, lease: lease, now: fixture.now})
+	})
 }
 
 func TestSearchSourceLifecycleMigratedSchemaSQLite(t *testing.T) {

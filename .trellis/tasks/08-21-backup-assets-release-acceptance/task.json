@@ -12,7 +12,7 @@
   "assignee": "weibo",
   "createdAt": "2026-08-21",
   "completedAt": null,
-  "branch": null,
+  "branch": "fix/backup-index-expired-lease",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -35,7 +35,7 @@
     ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-console-runbook.md",
     ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-real-data-acceptance.md"
   ],
-  "notes": "2026-09-16 reconciliation: Retain as the single owner of outstanding real-data production acceptance from ten delivered repair tasks. Current NAS version, enabled state and collectors were not inspected. Rebaseline before any live steps. See reconciliation.md; older PRD/implement snapshots are historical where superseded.",
+  "notes": "2026-09-16 continuation: NAS v0.55.15 healthy; FeatureLive and acknowledged inventory confirmed. Real-data Catalog/Search acceptance blocked by expired-heartbeat active index leases whose seven-day absolute deadlines remain in the future. Bounded repair on fix/backup-index-expired-lease; see research/v05515-lease-recovery.md. Parent stays open; preserve separately accepted node-log settings. Ten delivered child repairs are not reopened.",
   "meta": {
     "historical_before_2026_09_16": {
       "parent_archive": "forbidden",
@@ -70,6 +70,6 @@
       "next_action": "Retain as the single owner of outstanding real-data production acceptance from ten delivered repair tasks. Current NAS version, enabled state and collectors were not inspected. Rebaseline before any live steps."
     },
     "parent_archive": "forbidden_until_current_acceptance_closes",
-    "production_state": "not_verified_this_session"
+    "production_state": "v0.55.15_index_heartbeat_lease_expired_owner_slot_blocker"
   }
 }

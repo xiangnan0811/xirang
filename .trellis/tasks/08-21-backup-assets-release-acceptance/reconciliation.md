@@ -1,5 +1,9 @@
 # Task reconciliation — 2026-09-16
 
+## Current continuation: v0.55.15
+
+See [current production evidence and bounded lease-recovery plan](research/v05515-lease-recovery.md). Fresh evidence confirms enabled/acknowledged/FeatureLive and active repositories, but Catalog/Search recovery is blocked by expired-heartbeat active index leases with future absolute deadlines. Acceptance remains open. Reuse this task for the narrowly scoped repair; do not recreate archived children. Node-log P1 has separately passed and existing collectors must be preserved.
+
 This disposition supersedes stale current-state, delivery and execution instructions in this task; old evidence remains historical. User authorized evidence-based archival and consolidation on 2026-09-16.
 
 Retain as the single owner of outstanding real-data production acceptance from ten delivered repair tasks. Current NAS version, enabled state and collectors were not inspected. Rebaseline before any live steps.

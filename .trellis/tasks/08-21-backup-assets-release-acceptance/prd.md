@@ -1,4 +1,4 @@
-> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
+> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md) and [v0.55.15 acceptance / lease-recovery requirements](research/v05515-lease-recovery.md). Older status, delivery gates and deferred-work ownership below are historical where those records supersede them.
 
 # 备份资产 v0.50.4 真实数据发布验收
 
