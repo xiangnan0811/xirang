@@ -66,8 +66,14 @@ User requested processing every unarchived task according to actual delivery, su
   JSON file at `archive/2026-05/05-13-trivy-platform-digest-scan/task.json`.
   Its bytes match HEAD and it is outside this unarchived-task reconciliation;
   it was excluded from the focused 17-task validation and left unchanged.
-- No product source changed, so product suites were not rerun locally for this
-  task-only change. The PR still goes through the repository's required CI.
+- No product source changed. The pre-push hook nevertheless invoked the full
+  product gate: default Go 1.27.1 with a Go-1.26-built lint binary panicked.
+  Retrying with `GOTOOLCHAIN=go1.26.6` passed lint (0 issues), then full parallel
+  backend tests hit `/tmp` linker disk-quota/no-space failures; the local full
+  gate did not pass. Task validators and documentation checks remain successful.
+  The task-only branch is pushed with the documented pre-push bypass so required
+  remote CI can run in its normal environment; no code/test gate is weakened in
+  the repository, and merge still requires successful remote checks.
 - Independent bounded task review found one stale live acceptance description;
   it was corrected and rechecked. Final review reports no remaining material
   findings. The reviewer independently checked task structure, original-file
