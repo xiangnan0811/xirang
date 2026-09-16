@@ -3,7 +3,7 @@
   "name": "node-logs-collector-stall",
   "title": "节点日志采集超时与队列卡死修复",
   "description": "修复 SSH 会话超时未覆盖读/等待、worker 永久卡死、同节点重复入队和队列持续溢出。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "backend",
   "scope": "node-logs",
   "package": "backend",
@@ -11,7 +11,7 @@
   "creator": "weibo",
   "assignee": "weibo",
   "createdAt": "2026-08-23",
-  "completedAt": null,
+  "completedAt": "2026-09-16",
   "branch": "codex/node-logs-recent-resume",
   "base_branch": "main",
   "worktree_path": null,
@@ -21,7 +21,7 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "v0.55.14 delivered lifecycle/scheduling repair; NAS ingestion still fails against a stale journal cursor. User approved bounded recent recovery and shell framing repair. See design.md follow-up and research/recent-resume-2026-09-16.md. Production acceptance remains open.",
+  "notes": "Accepted by user on 2026-09-16 after v0.55.15 NAS observations. Required single-node collection is healthy; other nodes do not currently require collection. See research/production-acceptance-2026-09-16.md. Archived as completed.",
   "meta": {
     "historical_before_2026_09_16": {
       "incident_relation": "independent_pre_existing_not_v0_50_2_regression",
@@ -49,22 +49,30 @@
     },
     "implementation_authorized_this_session": "true",
     "product_implementation": {
-      "status": "released_followup_required",
-      "release": "v0.55.14",
-      "commit": "e34809d49f84d3cc26492b06d8395b80afc69e88",
+      "status": "released_and_accepted",
+      "release": "v0.55.15",
+      "commit": "4a0c0aed105200fae74eeff5cd4c30cf1c3153b7",
       "pr_url": "https://github.com/xiangnan0811/xirang/pull/533",
-      "production_verified": false
+      "production_verified": true
     },
     "recent_resume": {
       "implementation_authorized": true,
       "window_seconds": 3600,
       "batch_entries": 200,
-      "status": "merged_release_pending",
+      "status": "released_and_accepted",
       "pr_url": "https://github.com/xiangnan0811/xirang/pull/535",
       "release_pr_url": "https://github.com/xiangnan0811/xirang/pull/536",
       "expected_release": "v0.55.15",
       "ci_run": "35071234286",
       "production_mutation": false
+    },
+    "production_acceptance": {
+      "status": "passed",
+      "date": "2026-09-16",
+      "scope": "one_required_journal_node",
+      "other_nodes": "not_required_by_user",
+      "evidence": "research/production-acceptance-2026-09-16.md",
+      "production_fault_injection": false
     }
   }
 }
