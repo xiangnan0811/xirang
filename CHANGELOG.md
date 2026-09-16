@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.16](https://github.com/xiangnan0811/xirang/compare/v0.55.15...v0.55.16) (2026-09-16)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** recover expired catalog and search lease slots ([#538](https://github.com/xiangnan0811/xirang/issues/538)) ([952494f](https://github.com/xiangnan0811/xirang/commit/952494f68db36a21fb80b7e2e3d8d822db4adbe2))
+
 ## [0.55.15](https://github.com/xiangnan0811/xirang/compare/v0.55.14...v0.55.15) (2026-09-16)
 
 ### Node-log recovery
