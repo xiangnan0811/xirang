@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.55.15](https://github.com/xiangnan0811/xirang/compare/v0.55.14...v0.55.15) (2026-09-16)
 
 ### Node-log recovery
 
@@ -11,15 +11,15 @@
 - Fix generated shell delimiters and reject command errors, malformed or incomplete
   responses before inserting logs or advancing cursors. Cursor checks and collection
   share one deadline and cumulative output limit.
+
+### Upgrade notes
+
 - No database migration is added; paired schema remains `000088_task_cron_override`.
   Back up the database and encryption keys, preserve logs/cursors and remote journal,
   and stop old Core before replacement. No manual cursor deletion is required.
   Disable affected collectors before image rollback, which restores the old
   unbounded catch-up and script defects. Verify one node for at least two cycles
   after upgrade before restoring others; image delivery is not NAS acceptance.
-
-## [0.55.15](https://github.com/xiangnan0811/xirang/compare/v0.55.14...v0.55.15) (2026-09-16)
-
 
 ### 🐛 Bug Fixes
 

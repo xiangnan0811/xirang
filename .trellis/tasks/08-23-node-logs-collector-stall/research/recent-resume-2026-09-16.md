@@ -71,8 +71,14 @@ offset tests. Full package tests passed three more repetitions, the added cases
 passed three race repetitions, and package lint/vet passed. Related sshutil,
 credentialaudit and lifecycle race tests also passed.
 
-Remote CI/release gates remain pending. Production acceptance remains open until
-the new image is installed and two or more cycles are observed.
+PR #535 head `5d4fd51a377b3a92aef5804a7f62d624aec74a43` passed all 11 checks in
+CI `35071234286`; squash merge is `d3101cf1cbc1c861641b525ef517340b4c2cd4b0`.
+Post-merge Release Please `35074127905` succeeded and created release PR #536
+for v0.55.15. Release PR/main CI and image publication remain pending at this
+checkpoint. Production acceptance remains open until the new image is installed
+and two or more cycles are observed. README is unchanged; description sync is
+not expected. Final immutable image and pipeline evidence will be added to the
+release and PR delivery notes without inferring NAS acceptance.
 
 ## Single-node acceptance after image delivery
 
