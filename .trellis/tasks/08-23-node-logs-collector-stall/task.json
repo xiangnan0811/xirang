@@ -12,7 +12,7 @@
   "assignee": "weibo",
   "createdAt": "2026-08-23",
   "completedAt": null,
-  "branch": "codex/node-logs-collector-stall",
+  "branch": "codex/node-logs-recent-resume",
   "base_branch": "main",
   "worktree_path": null,
   "commit": "664555e6",
@@ -21,7 +21,7 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "2026-09-16 reconciliation: Retain P1: current nodelogs still lacks post-dial cancellation, hard output-limit detection, per-node deduplication and worker join. Reuse shared SSH execution where compatible. Product repair can be planned independently; production re-enable remains separately gated. See reconciliation.md; older PRD/implement snapshots are historical where superseded.",
+  "notes": "v0.55.14 delivered lifecycle/scheduling repair; NAS ingestion still fails against a stale journal cursor. User approved bounded recent recovery and shell framing repair. See design.md follow-up and research/recent-resume-2026-09-16.md. Production acceptance remains open.",
   "meta": {
     "historical_before_2026_09_16": {
       "incident_relation": "independent_pre_existing_not_v0_50_2_regression",
@@ -48,6 +48,19 @@
       "production_reenable_requires_separate_acceptance": true
     },
     "implementation_authorized_this_session": "true",
-    "product_implementation": "{\"status\":\"implemented_local_verified\",\"commit\":\"664555e6\",\"pr_url\":\"https://github.com/xiangnan0811/xirang/pull/533\",\"production_verified\":false}"
+    "product_implementation": {
+      "status": "released_followup_required",
+      "release": "v0.55.14",
+      "commit": "e34809d49f84d3cc26492b06d8395b80afc69e88",
+      "pr_url": "https://github.com/xiangnan0811/xirang/pull/533",
+      "production_verified": false
+    },
+    "recent_resume": {
+      "implementation_authorized": true,
+      "window_seconds": 3600,
+      "batch_entries": 200,
+      "status": "implementing",
+      "production_mutation": false
+    }
   }
 }

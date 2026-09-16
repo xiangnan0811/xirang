@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Node-log recovery
+
+- Journal collection starts from the latest 200 entries within the last hour when
+  no usable recent cursor exists. Short interruptions resume in chronological
+  batches of at most 200 within that window; older history is deliberately skipped
+  with recovery observability, not silently reported as complete.
+- Fix generated shell delimiters and reject command errors, malformed or incomplete
+  responses before inserting logs or advancing cursors. Cursor checks and collection
+  share one deadline and cumulative output limit.
+- No database migration is added; paired schema remains `000088_task_cron_override`.
+  Back up the database and encryption keys, preserve logs/cursors and remote journal,
+  and stop old Core before replacement. No manual cursor deletion is required.
+  Disable affected collectors before image rollback, which restores the old
+  unbounded catch-up and script defects. Verify one node for at least two cycles
+  after upgrade before restoring others; image delivery is not NAS acceptance.
+
 ## [0.55.14](https://github.com/xiangnan0811/xirang/compare/v0.55.13...v0.55.14) (2026-09-16)
 
 

@@ -18,6 +18,27 @@ Applies to `internal/nodelogs` and its owned SSH execution in `internal/sshutil`
 - Fetch failure preserves every cursor and inserts zero rows. Successful ingestion
   keeps the existing sanitize, insert, then cursor-save sequence.
 
+## Journal recovery and script framing
+
+- Journal recovery is bounded to the last hour and at most 200 entries per batch.
+  Missing/unknown/stale cursor age starts with the recent tail; a valid recent
+  cursor resumes oldest-first. Persisted poll time alone does not prove that the
+  cursor's journal event is inside the window. Do not replay months of history.
+- Reuse the cursor table's existing timestamp; no schema change or production
+  cursor deletion is needed. An empty successful reset must not restore the old
+  token. A failed fetch must leave all existing stored cursors and logs unchanged.
+- Deliberate discontinuity needs safe observability after successful persistence;
+  never claim an exact skipped-entry count or continuous history without evidence.
+- Print protocol delimiters with quoted `printf`, never as bare shell source.
+  Require complete successful framing before parsing. A journal command failure
+  must not look like a successful empty journal simply because stderr is hidden or
+  the shared runner retains stdout on a nonzero exit.
+- Verify command compatibility with older systemd. Do not assume that time-window
+  and cursor options compose, or that line-limit direction is independent of seek
+  mode. Test generated shell execution, not just expected command substrings.
+- Retention controls stored-log deletion, not backfill. Empty file whitelist is a
+  valid journal-only configuration. Keep remote journal and existing stored logs.
+
 ## Scheduling and shutdown
 
 - Claim a node before enqueue; one queued or executing job per node. Roll back the
@@ -38,6 +59,12 @@ completion. Cover exact limit versus limit+1, nonzero exit versus missing status
 all claim-release paths, queue recovery, concurrent/idempotent shutdown, and
 unchanged cursors/zero inserts on failure. Repeat nodelogs tests and run under race;
 run related sshutil, credential-audit and lifecycle tests plus full backend gates.
+
+Recovery coverage must include initial/stale/recent and vacuumed cursors, empty
+reset followed by new entries, successive batches exceeding 200 entries, rolling
+window expiry despite recent poll time, mixed journal/file sources, shell quoting,
+command errors and incomplete framing. Execute the generated POSIX shell against
+deterministic command fixtures and temporary files.
 
 Code/CI delivery does not establish production recovery. Verify the deployed
 image and current configuration separately, then observe an authorized low-risk

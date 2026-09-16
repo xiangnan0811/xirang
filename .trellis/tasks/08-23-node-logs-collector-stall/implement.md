@@ -2,6 +2,18 @@
 
 # Implement — 节点日志采集超时与队列卡死修复
 
+## Approved follow-up — bounded journal recovery
+
+- [x] RED: execute generated shell for stale/initial/recent cursors, batches over 200,
+  empty recent history, mixed journal/file sources, shell quoting and command failure.
+- [x] Carry persisted cursor timestamp and implement one-hour/200-entry recovery policy.
+- [x] Print safe delimiters and reject incomplete/error framing; retain failure cursors.
+- [x] Record successful policy resets without sensitive fields or false continuity claims.
+- [x] Verify empty reset then new entries, successive oldest-first batches, and failure
+  paths through worker persistence. No schema or production mutation.
+- [x] Independent check, repeated/race tests, backend gates, specification and runbook.
+- [ ] PR CI, merge, release CI/image publication, then separate NAS acceptance.
+
 The user approved implementation on 2026-09-16. Reuse this existing task on
 `codex/node-logs-collector-stall` from current main. There is no code dependency
 on the historical migration P0 or backup production acceptance.
@@ -69,9 +81,11 @@ on the historical migration P0 or backup production acceptance.
 ## Phase 7 — delivery and production handoff
 
 - [x] Commit/PR only after gates; monitor required CI to green (PR #533, all 11 passed).
-- [ ] Merge and monitor release/image automation; record immutable image digest.
+- [x] Merge and monitor release/image automation; v0.55.14 evidence/digest is in
+  `research/recent-resume-2026-09-16.md`.
 - [ ] Separately verify current production settings and preserve disabled sources during an authorized upgrade.
-- [ ] Hand the exact single-node then batch re-enable commands/checks to the user.
+- [x] Hand the single-node re-enable checks to the user; NAS observations identified
+  the bounded-recovery follow-up above. Batch enablement remains deferred.
 - [ ] Mark product implementation complete only after code/release gates; mark production recovery
   complete only after the user supplies observation evidence.
 

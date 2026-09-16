@@ -1,5 +1,53 @@
 # Design — 节点日志采集超时与队列卡死修复
 
+## Approved production follow-up — 2026-09-16
+
+This section supersedes unlimited journal catch-up. v0.55.14 delivered cancellation,
+deduplication and shutdown, but NAS acceptance found repeated output-limit failures
+with a cursor last updated in May. A recent 200-entry sample was only 78,639 bytes.
+Generated scripts also contain bare delimiter tokens, which are shell syntax errors.
+The user approved bounded recent recovery instead of replaying months of history.
+
+- First collection or a cursor whose persisted `updated_at` is missing or older than
+  one hour starts at the latest 200 journal entries within the last hour.
+- A recent cursor resumes in chronological batches of at most 200 entries, constrained
+  to the same rolling one-hour window. Never use tail-most batching for incremental
+  reads, which would silently skip entries inside the permitted window.
+- Carry the existing cursor row timestamp through the repository; no schema change.
+  A successful empty rebaseline must discard the old token without reviving it on
+  the next poll. Failed fetches/insert/save must not claim successful recovery.
+- Emit safe, bounded observability for history deliberately skipped; distinguish
+  policy resets from normal continuation. Do not expose cursor tokens/log text/hosts.
+- Print framing with quoted `printf`; execute real generated scripts in POSIX-shell
+  regression fixtures. Require complete successful framing before accepting data;
+  journal command errors must not masquerade as empty successful fetches.
+- Preserve the existing 15-second deadline and 10 MiB hard limit. No partial success
+  on timeout/overflow. Do not alter retention, whitelist or remote journal contents.
+- Verify compatibility of batching flags against older systemd versions. A new-only
+  flag is not an acceptable implicit prerequisite for existing managed nodes.
+- No automatic historical backfill, production DB edits, source enablement, or UI
+  expansion. Existing stored logs remain. Production acceptance follows a new image.
+
+Implementation and tests belong to the original P1 task on
+`codex/node-logs-recent-resume`; prior release evidence remains historical evidence.
+
+### Portable command plan
+
+Older systemd rejects `--since` combined with `--after-cursor`. A recent nonempty
+cursor therefore gets a metadata-only probe (exact token and event timestamp),
+followed by a collection call. Both calls share one 15-second context and a single
+cumulative 10 MiB byte budget. Initial/stale cursors need only the collection call.
+Bootstrap uses reverse output with a time window and line limit, then reverses the
+validated rows into chronological order. Incremental collection uses cursor seek
+and a positive line limit; official old/current implementations seek the cursor
+before applying the limit, yielding the next oldest batch.
+
+An empty successful bootstrap saves an empty token and a current timestamp. Until
+an actual token exists, subsequent polls use the recent-tail policy, including its
+200-entry limit; this is not a promise to retain every event during bootstrap.
+No private cursor envelope is added. Only after cursor persistence succeeds does
+the worker report a recovery boundary reset, with a closed reason and no raw token.
+
 ## Boundaries
 
 改动集中在 `backend/internal/nodelogs`，必要时复用/小幅扩展 `sshutil` 的连接关闭
