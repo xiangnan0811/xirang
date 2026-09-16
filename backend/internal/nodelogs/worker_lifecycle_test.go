@@ -3,6 +3,7 @@ package nodelogs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func TestWorkerReleasesClaimOnEveryExit(t *testing.T) {
 			if err := db.AutoMigrate(&LogEntry{}); err != nil {
 				t.Fatal(err)
 			}
-			runner := &fakeRunner{out: `{"__REALTIME_TIMESTAMP":"1700000000000000","__CURSOR":"FAKE_CURSOR_FOR_TEST_ONLY","MESSAGE":"FAKE_MESSAGE_FOR_TEST_ONLY"}` + "\n" + JournalDelim + "\n"}
+			runner := &fakeRunner{out: fmt.Sprintf(`{"__REALTIME_TIMESTAMP":"%d","__CURSOR":"FAKE_CURSOR_FOR_TEST_ONLY","MESSAGE":"FAKE_MESSAGE_FOR_TEST_ONLY"}`, time.Now().UnixMicro()) + "\n" + JournalDelim + "\n" + FetchEnd + "\n"}
 			if stage == "fetch" {
 				runner.err = context.DeadlineExceeded
 			}
@@ -88,7 +89,7 @@ func (r *recoveringCollector) Run(ctx context.Context, node model.Node, _ string
 			return "", ctx.Err()
 		}
 	}
-	return JournalDelim + "\n", nil
+	return "\n" + JournalDelim + "\n" + FetchEnd + "\n", nil
 }
 
 func TestWorkerPoolRecoversAfterAllCollectorsTimeout(t *testing.T) {

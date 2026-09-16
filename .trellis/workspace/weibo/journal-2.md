@@ -191,3 +191,36 @@ Implemented owned SSH cancellation and strict output bounds, per-node queue clai
 ### Next Steps
 
 - Monitor PR 533 CI and post-merge automation; production image deployment and collector re-enable remain separately unverified.
+
+
+## Session 58: 节点日志近期恢复与脚本修复
+
+**Date**: 2026-09-16
+**Task**: 节点日志近期恢复与脚本修复
+**Branch**: `codex/node-logs-recent-resume`
+
+### Summary
+
+User-approved one-hour/200-entry recovery replaces historical replay; shell framing and persistence evidence repaired. Local gates and independent review passed; PR/release and NAS acceptance remain pending.
+
+### Main Changes
+
+- Carry cursor timestamps; verify actual journal position; share deadline and cumulative bytes across probe/collection; preserve stored history.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d95de83f` | (see git log) |
+
+### Testing
+
+- [OK] nodelogs count50 and race10; independent exact-budget/file-offset cases; full backend test/build/vet/lint with known filesystem fixture reruns; related SSH/audit/lifecycle race.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Monitor PR CI, merge and patch release/image publication. Keep task open for NAS single-node acceptance; no production SQL reset.

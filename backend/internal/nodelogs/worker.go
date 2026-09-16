@@ -80,6 +80,16 @@ func (w *Worker) process(ctx context.Context, job CollectJob) {
 			logger.Module("nodelogs").Warn().
 				Uint("node_id", job.Node.ID).Err(err).
 				Msg("save cursors failed")
+			return
 		}
+	}
+	for _, c := range newCursors {
+		if c.recoveryReason == "" {
+			continue
+		}
+		journalRecoveries.WithLabelValues(c.recoveryReason).Inc()
+		logger.Module("nodelogs").Warn().Uint("node_id", job.Node.ID).
+			Str("reason", c.recoveryReason).Int("window_seconds", int(JournalRecoveryWindow.Seconds())).
+			Int("batch_limit", JournalBatchSize).Msg("journal recovery boundary reset; historical continuity not guaranteed")
 	}
 }

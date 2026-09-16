@@ -1,5 +1,22 @@
 # Task reconciliation — 2026-09-16
 
+## Current follow-up disposition
+
+The assessment below predates PR #533 and release v0.55.14. Cancellation, hard
+output limits, single-flight scheduling and worker join are now delivered. Release
+PR #534, exact-main CI and multi-architecture image publication passed. NAS users
+reported upgrading, but journal ingestion failed with repeated `output_limit`.
+Read-only evidence found a cursor last updated in May; a recent 200-entry journal
+sample was only 78,639 bytes. The cursor's origin is not established.
+
+The user approved a bounded recent recovery policy. Continue this same P1 task on
+`codex/node-logs-recent-resume`; the first sections of `prd.md`, `design.md` and
+`implement.md` define the follow-up. Also fix confirmed bare shell delimiter syntax
+and add actual generated-script execution tests. No production mutation or successful
+production recovery is claimed. See `research/recent-resume-2026-09-16.md`.
+
+## Historical reconciliation before implementation
+
 This disposition supersedes stale current-state, delivery and execution instructions in this task; old evidence remains historical. User authorized evidence-based archival and consolidation on 2026-09-16.
 
 Retain P1: current nodelogs still lacks post-dial cancellation, hard output-limit detection, per-node deduplication and worker join. Reuse shared SSH execution where compatible. Product repair can be planned independently; production re-enable remains separately gated.

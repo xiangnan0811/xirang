@@ -8,6 +8,10 @@ import (
 )
 
 var (
+	journalRecoveries = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "xirang_node_logs_journal_recoveries_total",
+		Help: "Persisted journal recovery boundary resets; not a count of skipped entries",
+	}, []string{"reason"})
 	logsIngested = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "xirang_node_logs_ingested_total",
 		Help: "Log entries inserted",

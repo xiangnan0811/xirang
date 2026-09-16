@@ -2,6 +2,14 @@
 
 # 节点日志采集超时与队列卡死修复
 
+## Approved follow-up after v0.55.14 NAS validation
+
+The user approved recent recovery rather than replaying months of journal history.
+The authoritative follow-up contract is the first section of `design.md`: a rolling
+one-hour window, batches of at most 200 entries, recent bootstrap for stale cursors,
+truthful gap reporting, and executable shell framing. v0.55.14 resource-lifecycle
+delivery is complete; successful production ingestion is not yet established.
+
 ## Goal
 
 修复节点日志采集在 SSH 已连接后的读/等待阶段不响应超时，导致 worker 永久占用、
