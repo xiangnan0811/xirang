@@ -15,8 +15,8 @@
   "branch": "codex/node-logs-collector-stall",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "commit": "664555e6",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/533",
   "subtasks": [],
   "children": [],
   "parent": null,
@@ -47,6 +47,7 @@
       "technical_dependency_on_backup_acceptance": false,
       "production_reenable_requires_separate_acceptance": true
     },
-    "implementation_authorized_this_session": "true"
+    "implementation_authorized_this_session": "true",
+    "product_implementation": "{\"status\":\"implemented_local_verified\",\"commit\":\"664555e6\",\"pr_url\":\"https://github.com/xiangnan0811/xirang/pull/533\",\"production_verified\":false}"
   }
 }

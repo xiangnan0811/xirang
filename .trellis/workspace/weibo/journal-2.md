@@ -162,3 +162,32 @@ Reviewed all 17 unarchived tasks against current source and merged delivery; arc
 ### Next Steps
 
 - Monitor bookkeeping PR CI; production acceptance and retained backlog implementation remain separate work.
+
+
+## Session 57: Node-log P1 implementation and PR 533
+
+**Date**: 2026-09-16
+**Task**: Node-log P1 implementation and PR 533
+**Branch**: `codex/node-logs-collector-stall`
+
+### Summary
+
+Implemented owned SSH cancellation and strict output bounds, per-node queue claims, joined shutdown and bounded metrics; PR 533 awaits full CI.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `664555e6` | (see git log) |
+
+### Testing
+
+- [OK] nodelogs count50 and race10; related race; loopback SSH count20; backend build/vet/lint; all backend packages including environment-specific reruns; govulncheck; independent review passed
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Monitor PR 533 CI and post-merge automation; production image deployment and collector re-enable remain separately unverified.

@@ -44,7 +44,10 @@ processing, processing/updater, provider and runtime filesystem/socket fixtures.
 Content, processing, provider and runtime then passed with ordinary `/tmp`;
 updater passed with its 320 MiB test on disk and all remaining tests on `/tmp`.
 Full govulncheck found no reachable vulnerabilities (one dependency-module finding
-was not imported/called). PR/post-merge evidence remains pending.
+was not imported/called). PR #533 contains code commit `664555e6`; CI/post-merge
+evidence remains pending at this checkpoint. The push hook was bypassed because
+its fixed `/tmp` cannot satisfy the host's large-stream fixture quota; all relevant
+local backend gates were run explicitly, and full remote CI remains required.
 
 Use Go 1.26.6; default host Go 1.27 is incompatible
 with the installed linter. Disk-backed GOTMPDIR avoids the host tmpfs quota, but
