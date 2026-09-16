@@ -1,3 +1,5 @@
+> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
+
 # Backup Data Explorer Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task-by-task. In the current Codex inline workflow, implementation and checks must use `superpowers:executing-plans`; do not dispatch implement/check sub-agents. Steps use checkbox (`- [ ]`) syntax for tracking.

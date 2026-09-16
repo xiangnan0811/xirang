@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 55
-- **Last Active**: 2026-09-08
+- **Total Sessions**: 56
+- **Last Active**: 2026-09-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~131 | Active |
+| `journal-2.md` | ~164 | Active |
 | `journal-1.md` | ~1993 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 56 | 2026-09-16 | Reconcile delivered Trellis tasks and remaining acceptance | `886fd0c2` | `chore/trellis-task-reconciliation` |
 | 55 | 2026-09-08 | Rsync SQLite preview source consistency | `628b9e7b` | `fix/rsync-preview-source-consistency` |
 | 54 | 2026-09-07 | Deterministic export ciphertext tamper regression | `60e872f1` | `test/ciphertext-tamper-ci-stability` |
 | 53 | 2026-09-07 | Drill lifecycle recovery completion assertion | `50c511e8` | `test/drill-lifecycle-ci-stability` |

@@ -129,3 +129,36 @@ Prepared mutable Rsync sources before initial preview and Retry without Connect;
 ### Status
 
 [OK] **Completed**
+
+
+## Session 56: Reconcile delivered Trellis tasks and remaining acceptance
+
+**Date**: 2026-09-16
+**Task**: Reconcile delivered Trellis tasks and remaining acceptance
+**Branch**: `chore/trellis-task-reconciliation`
+
+### Summary
+
+Reviewed all 17 unarchived tasks against current source and merged delivery; archived 13 with history preserved and retained 4 with explicit next scope. Consolidated live backup acceptance without claiming production success; retained node-log P1 and independent P3 backlog.
+
+### Main Changes
+
+- Normalized task hierarchy and moved context references; preserved all 109 archive source files.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `886fd0c2` | (see git log) |
+
+### Testing
+
+- [OK] All 17 task validators, focused hierarchy/preservation checks, documentation freshness and diff checks passed; independent bounded review has no remaining material findings.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Monitor bookkeeping PR CI; production acceptance and retained backlog implementation remain separate work.

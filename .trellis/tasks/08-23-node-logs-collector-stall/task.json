@@ -21,16 +21,31 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Planning complete pending user approval. Pre-existing defect: SSH context stops at dial/handshake, ReadAll/Wait can block forever, scheduler duplicates the same nodes, and Shutdown does not join workers. Plan adds whole-operation close-and-join, strict output limit, per-node single-flight, owned cancellation, aggregate telemetry, and controlled production re-enable. Production collectors remain disabled until a fixed release is verified.",
+  "notes": "2026-09-16 reconciliation: Retain P1: current nodelogs still lacks post-dial cancellation, hard output-limit detection, per-node deduplication and worker join. Reuse shared SSH execution where compatible. Product repair can be planned independently; production re-enable remains separately gated. See reconciliation.md; older PRD/implement snapshots are historical where superseded.",
   "meta": {
-    "incident_relation": "independent_pre_existing_not_v0_50_2_regression",
-    "mitigation": "all_production_collectors_temporarily_disabled",
-    "root_cause": "post_dial_ssh_read_wait_ignore_context_plus_no_node_dedup",
-    "timeout_policy": "close_and_join_before_return",
-    "output_limit_policy": "fail_without_parse_insert_or_cursor_advance",
-    "scheduler_policy": "one_queued_or_inflight_job_per_node",
-    "production_reenable": "user_action_after_release_single_node_then_batches",
-    "production_mutation": "not_authorized",
-    "implementation_authorized": false
+    "historical_before_2026_09_16": {
+      "incident_relation": "independent_pre_existing_not_v0_50_2_regression",
+      "mitigation": "all_production_collectors_temporarily_disabled",
+      "root_cause": "post_dial_ssh_read_wait_ignore_context_plus_no_node_dedup",
+      "timeout_policy": "close_and_join_before_return",
+      "output_limit_policy": "fail_without_parse_insert_or_cursor_advance",
+      "scheduler_policy": "one_queued_or_inflight_job_per_node",
+      "production_reenable": "user_action_after_release_single_node_then_batches",
+      "production_mutation": "not_authorized",
+      "implementation_authorized": false
+    },
+    "reconciliation": {
+      "date": "2026-09-16",
+      "baseline": "1ec1b2b8621fb2ae86b5888247ab49c69c629764",
+      "disposition": "retained",
+      "evidence": ".trellis/workspace/weibo/task-reconciliation-2026-09-16.md",
+      "previous_status": "planning",
+      "previous_completed_at": null,
+      "production_verified_this_session": false,
+      "next_action": "Retain P1: current nodelogs still lacks post-dial cancellation, hard output-limit detection, per-node deduplication and worker join. Reuse shared SSH execution where compatible. Product repair can be planned independently; production re-enable remains separately gated.",
+      "implementation_authorized_this_session": false,
+      "technical_dependency_on_backup_acceptance": false,
+      "production_reenable_requires_separate_acceptance": true
+    }
   }
 }

@@ -1,3 +1,5 @@
+> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
+
 # v0.50.4 Real-Data Production Acceptance Implementation Plan
 
 > **For agentic workers:** If product code becomes necessary, REQUIRED SUB-SKILL: use the Trellis phase context with `trellis-implement`, then an independent `trellis-check`. Steps use checkbox syntax for tracking.

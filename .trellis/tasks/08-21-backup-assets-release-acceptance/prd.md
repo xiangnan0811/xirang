@@ -1,3 +1,5 @@
+> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
+
 # 备份资产 v0.50.4 真实数据发布验收
 
 ## Goal

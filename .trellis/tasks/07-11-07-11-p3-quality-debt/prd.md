@@ -1,3 +1,5 @@
+> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
+
 # PRD: P3 质量债
 
 ## 范围与状态矩阵
