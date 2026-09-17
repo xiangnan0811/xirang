@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { GitBranch, Loader2, RotateCcw, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -64,7 +64,14 @@ function defaultRequestedMode(mode?: RsyncPublicationMode): RsyncVersionedPublic
     : "versioned_hardlink";
 }
 
-export function TaskRsyncVersioningDialog({
+export function TaskRsyncVersioningDialog(props: TaskRsyncVersioningDialogProps) {
+  const summary = props.task?.rsyncPublication;
+  return <TaskRsyncVersioningDialogContent key={JSON.stringify([
+    props.open, props.task?.id, props.token, summary?.mode, summary?.taskRevision,
+  ])} {...props} />;
+}
+
+function TaskRsyncVersioningDialogContent({
   open,
   onOpenChange,
   task,
@@ -72,7 +79,7 @@ export function TaskRsyncVersioningDialog({
   onUpdated,
 }: TaskRsyncVersioningDialogProps) {
   const { t } = useTranslation();
-  const [requestedMode, setRequestedMode] = useState<RsyncVersionedPublicationMode>("versioned_hardlink");
+  const [requestedMode, setRequestedMode] = useState<RsyncVersionedPublicationMode>(defaultRequestedMode(task?.rsyncPublication?.mode));
   const [preflight, setPreflight] = useState<RsyncVersioningPreflightResult | null>(null);
   const [migrationChoice, setMigrationChoice] = useState<RsyncVersioningMigrationChoice | null>(null);
   const [summaryOverride, setSummaryOverride] = useState<RsyncPublicationSummary | null>(null);
@@ -81,23 +88,8 @@ export function TaskRsyncVersioningDialog({
   const [activating, setActivating] = useState(false);
   const [preparingRollback, setPreparingRollback] = useState(false);
 
-  const initialTaskRevision = task?.rsyncPublication?.taskRevision ?? "";
   const summary = summaryOverride ?? task?.rsyncPublication;
   const taskRevision = summary?.taskRevision ?? "";
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    setRequestedMode(defaultRequestedMode(task?.rsyncPublication?.mode));
-    setPreflight(null);
-    setMigrationChoice(null);
-    setSummaryOverride(null);
-    setNotice(null);
-    setPreflighting(false);
-    setActivating(false);
-    setPreparingRollback(false);
-  }, [open, task?.id, task?.rsyncPublication?.mode, initialTaskRevision]);
 
   const canStartMigration = Boolean(
     task &&

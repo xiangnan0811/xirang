@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowRight, Database } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -110,15 +110,15 @@ export function RepositoryManagementPanel({
   const [scanCursorByRepository, setScanCursorByRepository] = useState<Record<string, string | null>>({});
   const [rebuildCursorByRepository, setRebuildCursorByRepository] = useState<Record<string, string | null>>({});
   const candidatesRef = useRef(candidatesByRepository);
-  candidatesRef.current = candidatesByRepository;
+  useLayoutEffect(() => { candidatesRef.current = candidatesByRepository; }, [candidatesByRepository]);
   const scanCursorRef = useRef(scanCursorByRepository);
-  scanCursorRef.current = scanCursorByRepository;
+  useLayoutEffect(() => { scanCursorRef.current = scanCursorByRepository; }, [scanCursorByRepository]);
   const rebuildCursorRef = useRef(rebuildCursorByRepository);
-  rebuildCursorRef.current = rebuildCursorByRepository;
+  useLayoutEffect(() => { rebuildCursorRef.current = rebuildCursorByRepository; }, [rebuildCursorByRepository]);
   const [acceptAsDraft, setAcceptAsDraft] = useState<Record<string, ImportCandidateKind | "">>({});
   const [rebuildSummary, setRebuildSummary] = useState<{ accepted: number; partial: number; failed: number } | null>(null);
   const rebuildSummaryRef = useRef(rebuildSummary);
-  rebuildSummaryRef.current = rebuildSummary;
+  useLayoutEffect(() => { rebuildSummaryRef.current = rebuildSummary; }, [rebuildSummary]);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   const closeDialog = () => {

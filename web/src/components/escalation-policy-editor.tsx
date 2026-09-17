@@ -95,17 +95,21 @@ type Props = {
   onSaved: (policy: EscalationPolicy) => void;
 };
 
-export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: Props) {
+export function EscalationPolicyEditor(props: Props) {
+  return <EscalationPolicySession key={`${props.open}:${props.policy?.id}`} {...props} />;
+}
+
+function EscalationPolicySession({ open, onOpenChange, policy, onSaved }: Props) {
   const { t } = useTranslation();
   const { token } = useAuth();
 
   const isEdit = Boolean(policy);
 
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [minSeverity, setMinSeverity] = useState<"info" | "warning" | "critical">("warning");
-  const [enabled, setEnabled] = useState(true);
-  const [levels, setLevels] = useState<EscalationLevel[]>([defaultLevel()]);
+  const [name, setName] = useState(policy?.name ?? "");
+  const [description, setDescription] = useState(policy?.description ?? "");
+  const [minSeverity, setMinSeverity] = useState<"info" | "warning" | "critical">(policy?.minSeverity ?? "warning");
+  const [enabled, setEnabled] = useState(policy?.enabled ?? true);
+  const [levels, setLevels] = useState<EscalationLevel[]>(() => policy?.levels.length ? policy.levels : [defaultLevel()]);
   const [integrations, setIntegrations] = useState<IntegrationChannel[]>([]);
   const [saving, setSaving] = useState(false);
   const [nameConflict, setNameConflict] = useState(false);
@@ -118,29 +122,13 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
   useEffect(() => {
     if (!open) return;
 
-    if (policy) {
-      setName(policy.name);
-      setDescription(policy.description ?? "");
-      setMinSeverity(policy.minSeverity);
-      setEnabled(policy.enabled);
-      setLevels(policy.levels.length > 0 ? policy.levels : [defaultLevel()]);
-    } else {
-      setName("");
-      setDescription("");
-      setMinSeverity("warning");
-      setEnabled(true);
-      setLevels([defaultLevel()]);
-    }
-    setNameConflict(false);
-    setSaving(false);
-
     // Fetch integrations
     if (token) {
       intApi.getIntegrations(token).then(setIntegrations).catch(() => {
         /* ignore — gracefully degraded */
       });
     }
-  }, [open, policy, token]);
+  }, [open, token]);
 
   const updateLevel = (index: number, next: EscalationLevel) => {
     setLevels((prev) => prev.map((lv, i) => (i === index ? next : lv)));

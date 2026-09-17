@@ -26,30 +26,32 @@ function validatePaths(paths: string[], t: (k: string) => string): string | null
 }
 
 export default function LogConfigTab({ nodeId, token }: NodeDetailTabProps) {
+  return <LogConfigForm key={JSON.stringify([nodeId, token])} nodeId={nodeId} token={token} />;
+}
+
+function LogConfigForm({ nodeId, token }: NodeDetailTabProps) {
   const { t } = useTranslation();
   const [logPaths, setLogPaths] = useState("");
   const [journalctlEnabled, setJournalctlEnabled] = useState(false);
   const [retentionDays, setRetentionDays] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => Boolean(token && nodeId > 0));
   const [saving, setSaving] = useState(false);
   const [retentionError, setRetentionError] = useState<string | null>(null);
   const [pathsError, setPathsError] = useState<string | null>(null);
 
-  const fetchConfig = useCallback(async (signal: AbortSignal) => {
+  const fetchConfig = useCallback((signal: AbortSignal) => {
     if (!token || nodeId <= 0) return;
-    setLoading(true);
-    try {
-      const cfg = await apiClient.getNodeLogConfig(token, nodeId, { signal });
+    return apiClient.getNodeLogConfig(token, nodeId, { signal }).then((cfg) => {
       if (!signal.aborted) {
         setLogPaths((cfg.logPaths ?? []).join("\n"));
         setJournalctlEnabled(cfg.logJournalctlEnabled);
         setRetentionDays(cfg.logRetentionDays);
       }
-    } catch {
+    }).catch(() => {
       // ignore aborts and network errors on load
-    } finally {
+    }).finally(() => {
       if (!signal.aborted) setLoading(false);
-    }
+    });
   }, [nodeId, token]);
 
   useEffect(() => {

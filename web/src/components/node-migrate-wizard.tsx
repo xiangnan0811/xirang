@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { CheckCircle2, XCircle, AlertTriangle, SkipForward, Loader2, ArrowRightLeft } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogCloseButton } from "@/components/ui/dialog";
@@ -45,7 +45,11 @@ const dataStatusIcons: Record<string, React.ReactNode> = {
   error: <XCircle className="size-3.5 text-destructive" />,
 };
 
-export function NodeMigrateWizard({ open, onOpenChange, sourceNode, nodes, token, onSuccess }: NodeMigrateWizardProps) {
+export function NodeMigrateWizard(props: NodeMigrateWizardProps) {
+  return <NodeMigrateSession key={`${props.open}:${props.sourceNode?.id}`} {...props} />;
+}
+
+function NodeMigrateSession({ open, onOpenChange, sourceNode, nodes, token, onSuccess }: NodeMigrateWizardProps) {
   const { t } = useTranslation();
 
   const [step, setStep] = useState<Step>(1);
@@ -59,22 +63,6 @@ export function NodeMigrateWizard({ open, onOpenChange, sourceNode, nodes, token
   const [migrating, setMigrating] = useState(false);
   const [migrateResult, setMigrateResult] = useState<MigrateNodeResult | null>(null);
   const [migrateError, setMigrateError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open) {
-      setStep(1);
-      setTargetNodeId(null);
-      setPreflight(null);
-      setPreflightLoading(false);
-      setPreflightError(null);
-      setArchiveSource(false);
-      setPausePolicies(false);
-      setMigrateData(false);
-      setMigrating(false);
-      setMigrateResult(null);
-      setMigrateError(null);
-    }
-  }, [open, sourceNode?.id]);
 
   const availableTargets = nodes.filter((n) => n.id !== sourceNode?.id && !n.archived);
 

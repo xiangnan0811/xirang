@@ -141,9 +141,17 @@ describe("DashboardDetailPage", () => {
       expect(screen.getByText("生产看板")).toBeInTheDocument();
     });
 
-    // 初始调用（1h 范围）
+    // The dashboard heading commits before the grid's child effects necessarily
+    // run. Wait for both panels' requests, not just their parent's loaded state.
+    await waitFor(() => {
+      for (const panel of [panel1, panel2]) {
+        expect(mockQueryPanel.mock.calls.some(([token, query]) =>
+          token === "test-token" && query.metric === panel.metric &&
+          Date.parse(query.end) - Date.parse(query.start) === 60 * 60 * 1000
+        )).toBe(true);
+      }
+    });
     const initialCallCount = mockQueryPanel.mock.calls.length;
-    expect(initialCallCount).toBeGreaterThan(0);
 
     // 切换到 24h
     const timeRangeSelect = screen.getByRole("combobox", {
@@ -152,7 +160,13 @@ describe("DashboardDetailPage", () => {
     await user.selectOptions(timeRangeSelect, "24h");
 
     await waitFor(() => {
-      expect(mockQueryPanel.mock.calls.length).toBeGreaterThan(initialCallCount);
+      const refreshedCalls = mockQueryPanel.mock.calls.slice(initialCallCount);
+      for (const panel of [panel1, panel2]) {
+        expect(refreshedCalls.some(([token, query]) =>
+          token === "test-token" && query.metric === panel.metric &&
+          Date.parse(query.end) - Date.parse(query.start) === 24 * 60 * 60 * 1000
+        )).toBe(true);
+      }
     });
   });
 

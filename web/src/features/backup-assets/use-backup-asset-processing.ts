@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef } from "react";
 
 import { ApiError } from "@/lib/api/core";
 import type {
@@ -127,7 +127,7 @@ export function useBackupAssetProcessing({
   const loadApiRef = useRef(loadApi);
   const recoveryPointId = ref.recoveryPointId;
   const entryId = ref.entryId;
-  loadApiRef.current = loadApi;
+  useLayoutEffect(() => { loadApiRef.current = loadApi; }, [loadApi]);
 
   const loadClient = useCallback(() => loadApiRef.current(), []);
 
@@ -225,11 +225,11 @@ export function useBackupAssetProcessing({
     dispatch({ type: "failed", revision: scope.revision, error });
   }, [isCurrent, stopPoll]);
 
-  const schedulePoll = useCallback((
+  const schedulePoll = useCallback(function schedulePoll(
     scope: AssetScope,
     session: PollSession,
     delaySeconds = session.product.pollAfterSeconds
-  ) => {
+  ) {
     clearPoll();
     if (pollRef.current !== session || session.scope !== scope || !isCurrent(scope)) return;
     if (session.product.state !== "queued" || session.product.jobId === null) {

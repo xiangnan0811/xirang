@@ -490,6 +490,35 @@ describe("useBackupFileSources", () => {
     expect(onRoutePatch).not.toHaveBeenCalledWith(expect.objectContaining({ nodeId: undefined }), expect.anything());
   });
 
+  it.each([false, true])("coalesces duplicate manual requests while automatic pagination is %s", async (automatic) => {
+    type NodePage = { status: "available"; value: { items: BackupFileSourceNode[]; nextCursor: null } };
+    let resolvePage!: (page: NodePage) => void;
+    const pendingPage = new Promise<NodePage>((resolve) => { resolvePage = resolve; });
+    mocks.nodes.mockImplementation((_token: string, options: { cursor?: string }) => options.cursor
+      ? pendingPage
+      : Promise.resolve({ status: "available", value: { items: [node], nextCursor: pageCursor } }));
+    mocks.sets.mockResolvedValue({ status: "available", value: { items: [], nextCursor: null } });
+    const route = { ...defaultBackupAssetsRouteState("data"), nodeId: automatic ? secondNode.nodeId : undefined };
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.hasMoreNodes).toBe(true));
+    if (automatic) await waitFor(() => expect(mocks.nodes).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      void result.current.loadMoreNodes();
+      void result.current.loadMoreNodes();
+    });
+    expect(result.current.loadingMoreNodes).toBe(true);
+    expect(mocks.nodes).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      resolvePage({ status: "available", value: { items: [secondNode], nextCursor: null } });
+      await pendingPage;
+    });
+    await waitFor(() => expect(result.current.loadingMoreNodes).toBe(false));
+    expect(result.current.nodes).toEqual([node, secondNode]);
+    expect(result.current.hasMoreNodes).toBe(false);
+    expect(mocks.nodes).toHaveBeenCalledTimes(2);
+  });
+
   it("aborts an in-flight cursor request when the hook unmounts", async () => {
     let pageSignal: AbortSignal | undefined;
     mocks.nodes.mockImplementation((_token: string, options: { cursor?: string; signal?: AbortSignal }) => {

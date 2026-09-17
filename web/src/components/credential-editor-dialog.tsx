@@ -22,7 +22,11 @@ type CredentialEditorDialogProps = {
   onSaved: () => void;
 };
 
-export function CredentialEditorDialog({
+export function CredentialEditorDialog(props: CredentialEditorDialogProps) {
+  return <CredentialEditorSession key={`${props.open}:${props.editingCredential?.id}`} {...props} />;
+}
+
+function CredentialEditorSession({
   open,
   onOpenChange,
   editingCredential,
@@ -32,48 +36,27 @@ export function CredentialEditorDialog({
   const { token } = useAuth();
 
   const [profiles, setProfiles] = useState<ProfileSchema[]>([]);
-  const [loadingProfiles, setLoadingProfiles] = useState(false);
-  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [loadingProfiles, setLoadingProfiles] = useState(open && Boolean(token));
+  const [selectedProfileId, setSelectedProfileId] = useState(editingCredential?.type ?? "");
   const [saving, setSaving] = useState(false);
 
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [name, setName] = useState(editingCredential?.name ?? "");
+  const [description, setDescription] = useState(editingCredential?.description ?? "");
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.entries(editingCredential?.config ?? {}).map(([key, value]) => [key, value ?? ""])),
+  );
 
   const isEditing = Boolean(editingCredential);
 
   // Fetch profiles when dialog opens
   useEffect(() => {
     if (!open || !token) return;
-    setLoadingProfiles(true);
     createCredentialsApi()
       .listProfiles(token)
       .then((data) => setProfiles(data))
       .catch((err) => toast.error(getErrorMessage(err)))
       .finally(() => setLoadingProfiles(false));
   }, [open, token]);
-
-  // Reset form when dialog opens or editing credential changes
-  useEffect(() => {
-    if (!open) return;
-    if (editingCredential) {
-      setName(editingCredential.name);
-      setDescription(editingCredential.description ?? "");
-      setSelectedProfileId(editingCredential.type);
-      const values: Record<string, string> = {};
-      if (editingCredential.config) {
-        for (const [k, v] of Object.entries(editingCredential.config)) {
-          values[k] = v ?? "";
-        }
-      }
-      setFieldValues(values);
-    } else {
-      setName("");
-      setDescription("");
-      setSelectedProfileId("");
-      setFieldValues({});
-    }
-  }, [open, editingCredential]);
 
   const selectedProfile = useMemo(
     () => profiles.find((p) => p.credentialType === selectedProfileId) ?? null,

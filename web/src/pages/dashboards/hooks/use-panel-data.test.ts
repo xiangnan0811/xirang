@@ -113,4 +113,35 @@ describe("usePanelData", () => {
 
     expect(capturedSignal?.aborted).toBe(true);
   });
+  it("clears old token data immediately and ignores a superseded response", async () => {
+    let resolveOld: (value: PanelQueryResult) => void = () => {};
+    mockQueryPanel.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    mockQueryPanel.mockResolvedValueOnce(mockResult);
+    const { result, rerender } = renderHook(({ token }) => usePanelData(mockPanel, START, END, token, 0), {
+      initialProps: { token: "old" },
+    });
+    rerender({ token: "new" });
+    expect(result.current.loading).toBe(true);
+    expect(result.current.data).toBeNull();
+    await waitFor(() => expect(result.current.data).toEqual(mockResult));
+    await act(async () => { resolveOld({ series: [], stepSeconds: 999 }); });
+    expect(result.current.data).toEqual(mockResult);
+  });
+
+  it("refetches changed filters and resets an error on retry", async () => {
+    mockQueryPanel.mockRejectedValueOnce(new Error("failed"));
+    mockQueryPanel.mockResolvedValue(mockResult);
+    const { result, rerender } = renderHook(({ nodeId }) => usePanelData({ ...mockPanel, filters: { nodeIds: [nodeId] } }, START, END, "token", 0), {
+      initialProps: { nodeId: 1 },
+    });
+    await waitFor(() => expect(result.current.error).toBe("failed"));
+    act(() => result.current.retry());
+    expect(result.current.loading).toBe(true);
+    expect(result.current.error).toBeNull();
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    rerender({ nodeId: 2 });
+    await waitFor(() => expect(mockQueryPanel).toHaveBeenCalledTimes(3));
+    expect(mockQueryPanel).toHaveBeenLastCalledWith("token", expect.objectContaining({ filters: { nodeIds: [2] } }), expect.anything());
+  });
+
 });

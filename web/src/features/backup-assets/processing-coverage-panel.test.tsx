@@ -1,6 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { readFileSync } from "node:fs";
-import path from "node:path";
+import { useLayoutEffect } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -244,16 +243,24 @@ describe("ProcessingCoveragePanel", () => {
     expect(nextSave).toBeEnabled();
   });
 
-  it("binds ready resource rendering to the current Admin token before effects run", () => {
-    const source = readFileSync(
-      path.resolve(process.cwd(), "src/features/backup-assets/processing-coverage-panel.tsx"),
-      "utf8"
-    );
-    const tokenGuard = source.indexOf("scopeRef.current.token !== token");
-    const readyResourceRead = source.indexOf("const { control, coverage, updater, candidates }");
-
-    expect(tokenGuard).toBeGreaterThan(-1);
-    expect(tokenGuard).toBeLessThan(readyResourceRead);
+  it("binds ready resource rendering to the current Admin token before effects run", async () => {
+    const observations: boolean[] = [];
+    const nextClient = deferred<BackupProcessingAdminClient>();
+    const loadApi = (token: string) => token === "token-a" ? Promise.resolve(api) : nextClient.promise;
+    function ObservedPanel({ token }: { token: string }) {
+      useLayoutEffect(() => {
+        if (token === "token-b") {
+          observations.push(screen.queryByLabelText(/Jobs per hour|每小时任务数/) !== null);
+        }
+      }, [token]);
+      const props = { token, role: "admin" as const, loadApi: () => loadApi(token) };
+      return <ProcessingCoveragePanel {...props} />;
+    }
+    const { rerender } = render(<ObservedPanel token="token-a" />);
+    await screen.findByLabelText(/Jobs per hour|每小时任务数/);
+    rerender(<ObservedPanel token="token-b" />);
+    expect(observations).toEqual([false]);
+    expect(screen.queryByLabelText(/Jobs per hour|每小时任务数/)).not.toBeInTheDocument();
   });
 
   it("does not load Admin data for a non-Admin role", () => {

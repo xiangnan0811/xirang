@@ -12,39 +12,34 @@ export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
   const [error, setError] = useState(false);
   // nodeId that `node` was loaded for — ignore mismatched stale state.
   const [loadedForId, setLoadedForId] = useState<number | null>(null);
-
-  const fetchNode = useCallback(async (signal: AbortSignal) => {
-    if (!token || nodeId <= 0) {
-      setLoading(false);
-      setNode(null);
-      setLoadedForId(null);
-      return;
-    }
-    setLoading(true);
+  const [scope, setScope] = useState({ nodeId, token });
+  if (scope.nodeId !== nodeId || scope.token !== token) {
+    setScope({ nodeId, token });
+    setNode(null);
+    setLoadedForId(null);
     setError(false);
-    try {
-      const nodes = await apiClient.getNodes(token, { signal });
+    setLoading(Boolean(token && nodeId > 0));
+  }
+
+  const fetchNode = useCallback((signal: AbortSignal) => {
+    if (!token || nodeId <= 0) return;
+    return apiClient.getNodes(token, { signal }).then((rows) => {
       if (!signal.aborted) {
-        setNode(nodes.find((n) => n.id === nodeId) ?? null);
+        setNode(rows.find((n) => n.id === nodeId) ?? null);
         setLoadedForId(nodeId);
       }
-    } catch {
+    }).catch(() => {
       if (!signal.aborted) {
         setNode(null);
         setLoadedForId(nodeId);
         setError(true);
       }
-    } finally {
+    }).finally(() => {
       if (!signal.aborted) setLoading(false);
-    }
+    });
   }, [nodeId, token]);
 
   useEffect(() => {
-    // Drop previous identity immediately (also remounted via key={nodeId} on parent).
-    setNode(null);
-    setLoadedForId(null);
-    setError(false);
-    setLoading(Boolean(token && nodeId > 0));
     const controller = new AbortController();
     void fetchNode(controller.signal);
     return () => controller.abort();

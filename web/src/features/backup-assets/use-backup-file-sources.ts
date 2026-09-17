@@ -78,6 +78,21 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
     sets: false,
     versions: false,
   });
+  const paginationSelection = { token, nodeId: route.nodeId, backupSetId: route.backupSetId, recoveryPointId: route.recoveryPointId };
+  const [previousPaginationSelection, setPreviousPaginationSelection] = useState(paginationSelection);
+  if (
+    previousPaginationSelection.token !== token ||
+    previousPaginationSelection.nodeId !== route.nodeId ||
+    previousPaginationSelection.backupSetId !== route.backupSetId ||
+    previousPaginationSelection.recoveryPointId !== route.recoveryPointId
+  ) {
+    setPreviousPaginationSelection(paginationSelection);
+    setAutoPaginationPaused((current) => ({
+      nodes: previousPaginationSelection.token === token && previousPaginationSelection.nodeId === route.nodeId && current.nodes,
+      sets: previousPaginationSelection.token === token && previousPaginationSelection.nodeId === route.nodeId && previousPaginationSelection.backupSetId === route.backupSetId && current.sets,
+      versions: previousPaginationSelection.token === token && previousPaginationSelection.backupSetId === route.backupSetId && previousPaginationSelection.recoveryPointId === route.recoveryPointId && current.versions,
+    }));
+  }
   const refreshGeneration = (refreshVersion ?? shared?.refreshVersion ?? 0) + listGeneration;
   const legacyResolutionRequired = token !== null && token !== "" && route.recoveryPointId !== undefined &&
     (route.nodeId === undefined || route.backupSetId === undefined);
@@ -243,7 +258,7 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
     pageControllers.current.versions?.abort();
   }, []);
 
-  const loadMore = useCallback(async <T,>(
+  const loadMore = useCallback(<T,>(
     kind: ResourceKind,
     resource: SourceResource<T>,
     identity: (item: T) => string,
@@ -259,11 +274,7 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
     const requestedCursor = resource.nextCursor;
     const abort = new AbortController();
     pageControllers.current[kind] = abort;
-    commit((current) => current.key === resource.key && current.nextCursor === requestedCursor
-      ? { ...current, status: "loading_more", pageError: null }
-      : current);
-    try {
-      const page = await requestPage(requestedCursor, abort.signal);
+    return requestPage(requestedCursor, abort.signal).then((page) => {
       if (abort.signal.aborted) return;
       const next = resourceFrom(page, resource.key);
       commit((current) => {
@@ -274,7 +285,7 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
           ? { ...current, status: "blocked", nextCursor: null, pageError: null }
           : { ...next, items };
       });
-    } catch (error: unknown) {
+    }).catch((error: unknown) => {
       if (!abort.signal.aborted && !isAbort(error)) {
         const mapped = mapBackupAssetsError(error, "cursor");
         if (mapped.code === "stale_cursor") {
@@ -292,9 +303,9 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
             }
           : current);
       }
-    } finally {
+    }).finally(() => {
       if (pageControllers.current[kind] === abort) pageControllers.current[kind] = null;
-    }
+    });
   }, []);
 
   const resumeAutoPagination = useCallback((kind: ResourceKind) => {
@@ -302,8 +313,7 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
       current[kind] ? { ...current, [kind]: false } : current
     ));
   }, []);
-  const loadMoreNodes = useCallback(() => {
-    resumeAutoPagination("nodes");
+  const requestMoreNodes = useCallback(() => {
     return token
       ? loadMore(
           "nodes",
@@ -313,9 +323,8 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
           setNodes,
         )
       : Promise.resolve();
-  }, [activeNodes, loadMore, resumeAutoPagination, token]);
-  const loadMoreSets = useCallback(() => {
-    resumeAutoPagination("sets");
+  }, [activeNodes, loadMore, token]);
+  const requestMoreSets = useCallback(() => {
     return token && selectedNodeId !== undefined
       ? loadMore(
           "sets",
@@ -325,9 +334,8 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
           setSets,
         )
       : Promise.resolve();
-  }, [activeSets, loadMore, resumeAutoPagination, selectedNodeId, token]);
-  const loadMoreVersions = useCallback(() => {
-    resumeAutoPagination("versions");
+  }, [activeSets, loadMore, selectedNodeId, token]);
+  const requestMoreVersions = useCallback(() => {
     return token && selectedSet
       ? loadMore(
           "versions",
@@ -337,17 +345,41 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
           setVersions,
         )
       : Promise.resolve();
-  }, [activeVersions, loadMore, resumeAutoPagination, selectedSet, token]);
+  }, [activeVersions, loadMore, selectedSet, token]);
 
-  useEffect(() => {
-    setAutoPaginationPaused((current) => current.nodes ? { ...current, nodes: false } : current);
-  }, [route.nodeId, token]);
-  useEffect(() => {
-    setAutoPaginationPaused((current) => current.sets ? { ...current, sets: false } : current);
-  }, [route.backupSetId, route.nodeId, token]);
-  useEffect(() => {
-    setAutoPaginationPaused((current) => current.versions ? { ...current, versions: false } : current);
-  }, [route.backupSetId, route.recoveryPointId, token]);
+  const loadMoreNodes = useCallback(() => {
+    resumeAutoPagination("nodes");
+    if (activeNodes.status === "ready" && activeNodes.nextCursor && activeNodes.pageError !== "permission_denied") {
+      setNodes({ ...activeNodes, status: "loading_more", pageError: null });
+    }
+    return requestMoreNodes();
+  }, [activeNodes, requestMoreNodes, resumeAutoPagination]);
+  const loadMoreSets = useCallback(() => {
+    resumeAutoPagination("sets");
+    if (activeSets.status === "ready" && activeSets.nextCursor && activeSets.pageError !== "permission_denied") {
+      setSets({ ...activeSets, status: "loading_more", pageError: null });
+    }
+    return requestMoreSets();
+  }, [activeSets, requestMoreSets, resumeAutoPagination]);
+  const loadMoreVersions = useCallback(() => {
+    resumeAutoPagination("versions");
+    if (activeVersions.status === "ready" && activeVersions.nextCursor && activeVersions.pageError !== "permission_denied") {
+      setVersions({ ...activeVersions, status: "loading_more", pageError: null });
+    }
+    return requestMoreVersions();
+  }, [activeVersions, requestMoreVersions, resumeAutoPagination]);
+
+  // Resolving an exact selection needs every preceding cursor page. Its loading
+  // state follows the unresolved selection, rather than an effect-driven update.
+  const resolvingNode = !autoPaginationPaused.nodes && activeNodes.pageError === null &&
+    route.nodeId !== undefined && activeNodes.status === "ready" &&
+    !activeNodes.items.some((item) => item.nodeId === route.nodeId) && activeNodes.nextCursor !== null;
+  const resolvingSet = !autoPaginationPaused.sets && activeSets.pageError === null &&
+    route.backupSetId !== undefined && activeSets.status === "ready" &&
+    !activeSets.items.some((item) => item.backupSetId === route.backupSetId) && activeSets.nextCursor !== null;
+  const resolvingVersion = !autoPaginationPaused.versions && activeVersions.pageError === null &&
+    route.recoveryPointId !== undefined && selectedSet !== null && activeVersions.status === "ready" &&
+    !activeVersions.items.some((item) => item.recoveryPointId === route.recoveryPointId) && activeVersions.nextCursor !== null;
 
   useEffect(() => {
     if (
@@ -358,9 +390,9 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
       !activeNodes.items.some((item) => item.nodeId === route.nodeId) &&
       activeNodes.nextCursor !== null
     ) {
-      void loadMoreNodes();
+      void requestMoreNodes();
     }
-  }, [activeNodes, autoPaginationPaused.nodes, loadMoreNodes, route.nodeId]);
+  }, [activeNodes, autoPaginationPaused.nodes, requestMoreNodes, route.nodeId]);
 
   useEffect(() => {
     if (
@@ -371,9 +403,9 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
       !activeSets.items.some((item) => item.backupSetId === route.backupSetId) &&
       activeSets.nextCursor !== null
     ) {
-      void loadMoreSets();
+      void requestMoreSets();
     }
-  }, [activeSets, autoPaginationPaused.sets, loadMoreSets, route.backupSetId]);
+  }, [activeSets, autoPaginationPaused.sets, requestMoreSets, route.backupSetId]);
 
   useEffect(() => {
     if (
@@ -385,9 +417,9 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
       !activeVersions.items.some((item) => item.recoveryPointId === route.recoveryPointId) &&
       activeVersions.nextCursor !== null
     ) {
-      void loadMoreVersions();
+      void requestMoreVersions();
     }
-  }, [activeVersions, autoPaginationPaused.versions, loadMoreVersions, route.recoveryPointId, selectedSet]);
+  }, [activeVersions, autoPaginationPaused.versions, requestMoreVersions, route.recoveryPointId, selectedSet]);
 
   const projection = useMemo(() => projectBackupFileSourceSelection({
     nodes: activeNodes.items,
@@ -416,7 +448,7 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
     if (repair) onRoutePatch(repair, { replace: true });
   }, [activeNodes, activeSets, activeVersions, onRoutePatch, route, selectedSet]);
 
-  const loading = activeLegacyResolution.status === "loading" || activeNodes.status === "loading" || activeSets.status === "loading" || activeVersions.status === "loading" ||
+  const loading = resolvingNode || resolvingSet || resolvingVersion || activeLegacyResolution.status === "loading" || activeNodes.status === "loading" || activeSets.status === "loading" || activeVersions.status === "loading" ||
     (activeNodes.status === "loading_more" && route.nodeId !== undefined && !activeNodes.items.some((item) => item.nodeId === route.nodeId)) ||
     (activeSets.status === "loading_more" && route.backupSetId !== undefined && !activeSets.items.some((item) => item.backupSetId === route.backupSetId)) ||
     (activeVersions.status === "loading_more" && route.recoveryPointId !== undefined && !activeVersions.items.some((item) => item.recoveryPointId === route.recoveryPointId));
@@ -431,9 +463,9 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
     hasMoreNodes: activeNodes.nextCursor !== null && activeNodes.pageError !== "permission_denied",
     hasMoreSets: activeSets.nextCursor !== null && activeSets.pageError !== "permission_denied",
     hasMoreVersions: activeVersions.nextCursor !== null && activeVersions.pageError !== "permission_denied",
-    loadingMoreNodes: activeNodes.status === "loading_more",
-    loadingMoreSets: activeSets.status === "loading_more",
-    loadingMoreVersions: activeVersions.status === "loading_more",
+    loadingMoreNodes: resolvingNode || activeNodes.status === "loading_more",
+    loadingMoreSets: resolvingSet || activeSets.status === "loading_more",
+    loadingMoreVersions: resolvingVersion || activeVersions.status === "loading_more",
     paginationError:
       activeNodes.pageError === "retryable" ||
       activeSets.pageError === "retryable" ||

@@ -110,12 +110,10 @@ export function useNodesPageState() {
 
   const nodeIdSet = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
 
-  useEffect(() => {
-    setSelectedNodeIds((prev) => {
-      const filtered = prev.filter((id) => nodeIdSet.has(id));
-      return filtered.length === prev.length ? prev : filtered;
-    });
-  }, [nodeIdSet, setSelectedNodeIds]);
+  const validSelectedNodeIds = selectedNodeIds.filter((id) => nodeIdSet.has(id));
+  if (validSelectedNodeIds.length !== selectedNodeIds.length) {
+    setSelectedNodeIds(validSelectedNodeIds);
+  }
 
   useEffect(() => {
     if (queryKeyword) {

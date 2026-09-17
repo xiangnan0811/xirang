@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, File, Folder, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,11 @@ interface SnapshotBrowserProps {
   initialPath?: string;
 }
 
-export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath }: SnapshotBrowserProps) {
+export function SnapshotBrowser(props: SnapshotBrowserProps) {
+  return <SnapshotBrowserContent key={JSON.stringify([props.taskId, props.token, props.initialSnapshotId, props.initialPath])} {...props} />;
+}
+
+function SnapshotBrowserContent({ taskId, token, initialSnapshotId, initialPath }: SnapshotBrowserProps) {
   const { t } = useTranslation();
   const [snapshots, setSnapshots] = useState<ResticSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,17 +54,34 @@ export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath 
   const [grantReason, setGrantReason] = useState("");
   const [grantError, setGrantError] = useState<string | null>(null);
   const autoNavigated = useRef(false);
+  const filesRequest = useRef<AbortController | null>(null);
   const { ensureStepUpProof } = useAuth();
+
+  const browseSnapshot = useCallback((snapshot: ResticSnapshot, path = "/") => {
+    filesRequest.current?.abort();
+    const controller = new AbortController();
+    filesRequest.current = controller;
+    setSelectedSnapshot(snapshot);
+    setCurrentPath(path);
+    setFilesLoading(true);
+    setSelectedPaths(new Set());
+    apiClient
+      .listSnapshotFiles(token, taskId, snapshot.id, path)
+      .then((result) => { if (!controller.signal.aborted) setFiles(result); })
+      .catch((err) => { if (!controller.signal.aborted) toast.error(getErrorMessage(err, t('snapshots.fileLoadFailed'))); })
+      .finally(() => { if (!controller.signal.aborted) setFilesLoading(false); });
+  }, [token, taskId, t]);
+
+  useEffect(() => () => filesRequest.current?.abort(), []);
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setError(null);
     apiClient
       .listSnapshots(token, taskId)
       .then((data) => {
         if (!controller.signal.aborted) {
           setSnapshots(data);
+          setError(null);
           // 自动导航到初始快照（仅首次）
           if (initialSnapshotId && !autoNavigated.current) {
             autoNavigated.current = true;
@@ -82,20 +103,7 @@ export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath 
         }
       });
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
-  }, [token, taskId]);
-
-  const browseSnapshot = (snapshot: ResticSnapshot, path = "/") => {
-    setSelectedSnapshot(snapshot);
-    setCurrentPath(path);
-    setFilesLoading(true);
-    setSelectedPaths(new Set());
-    apiClient
-      .listSnapshotFiles(token, taskId, snapshot.id, path)
-      .then(setFiles)
-      .catch((err) => toast.error(getErrorMessage(err, t('snapshots.fileLoadFailed'))))
-      .finally(() => setFilesLoading(false));
-  };
+  }, [token, taskId, initialSnapshotId, initialPath, browseSnapshot, t]);
 
   const navigateTo = (path: string) => {
     if (!selectedSnapshot) return;

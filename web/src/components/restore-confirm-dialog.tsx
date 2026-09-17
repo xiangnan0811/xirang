@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FormDialog } from "@/components/ui/form-dialog";
@@ -27,7 +27,11 @@ type RestoreConfirmDialogProps = {
   onSuccess?: (runId: number) => void;
 };
 
-export function RestoreConfirmDialog({
+export function RestoreConfirmDialog(props: RestoreConfirmDialogProps) {
+  return <RestoreConfirmDialogContent key={JSON.stringify([props.open, props.taskId, props.rsyncSource, props.token])} {...props} />;
+}
+
+function RestoreConfirmDialogContent({
   open,
   onOpenChange,
   taskId,
@@ -43,15 +47,6 @@ export function RestoreConfirmDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const { ensureStepUpProof } = useAuth();
-
-  useEffect(() => {
-    setGrantReason("");
-    setError("");
-    setSaving(false);
-    if (open) {
-      setTargetPath(rsyncSource ?? "");
-    }
-  }, [open, rsyncSource, taskId]);
 
   const handleSubmit = useCallback(async () => {
     const reason = grantReason.trim();

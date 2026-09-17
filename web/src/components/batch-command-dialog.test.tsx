@@ -78,6 +78,19 @@ const nodes: NodeRecord[] = [
 ];
 
 describe("BatchCommandDialog", () => {
+  it("starts a fresh command and selection when reopened with new defaults", async () => {
+    const user = userEvent.setup();
+    const props = { nodes, token: "test-token", onOpenChange: vi.fn() };
+    const view = render(<BatchCommandDialog open defaultNodeIds={[1]} {...props} />);
+    await user.type(screen.getByLabelText("命令"), "echo test-session");
+    view.rerender(<BatchCommandDialog open={false} defaultNodeIds={[1]} {...props} />);
+    view.rerender(<BatchCommandDialog open defaultNodeIds={[2]} {...props} />);
+    expect(screen.getByLabelText("命令")).toHaveValue("");
+    const selected = screen.getAllByRole("checkbox").filter((element) => (element as HTMLInputElement).checked);
+    expect(selected).toHaveLength(1);
+    expect(selected[0].closest("label")).toHaveTextContent("node-b");
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();

@@ -25,7 +25,11 @@ interface TOTPSetupDialogProps {
   onSuccess?: () => void;
 }
 
-export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSetupDialogProps) {
+export function TOTPSetupDialog(props: TOTPSetupDialogProps) {
+  return <TOTPSetupSession key={String(props.open)} {...props} />;
+}
+
+function TOTPSetupSession({ open, onOpenChange, token, onSuccess }: TOTPSetupDialogProps) {
   const { t } = useTranslation();
   const [step, setStep] = useState<Step>("setup");
   const [secret, setSecret] = useState("");
@@ -38,14 +42,12 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const verifyCodeInputRef = useRef<HTMLInputElement | null>(null);
+  const busy = loading || (open && step === "setup" && !secret && !error);
 
   // 对话框打开时获取 TOTP 密钥（useEffect 保证受控模式下也能触发）
   useEffect(() => {
     if (!open || step !== "setup" || secret) return;
     let cancelled = false;
-    setLoading(true);
-    setEnrollmentId("");
-    setEnrollmentExpiresAt("");
 
     apiClient
       .totpSetup(token)
@@ -160,7 +162,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
         <DialogBody className="space-y-4">
           {step === "setup" && (
             <>
-              {loading ? (
+              {busy ? (
                 <p className="text-center text-sm text-muted-foreground">{t("totp.generatingKey")}</p>
               ) : error ? (
                 <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -240,7 +242,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
           {step === "setup" && (
             <Button
               type="button"
-              disabled={loading || !secret || !enrollmentId}
+              disabled={busy || !secret || !enrollmentId}
               onClick={() => { setStep("verify"); setError(null); }}
             >
               {t("common.next")}

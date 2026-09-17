@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { createElement, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Bell, Building2, Mail, MessageSquare, Save, Send, Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -229,14 +229,13 @@ export function IntegrationEditorDialog({
     }
   };
 
-  const TypeIcon = integrationIcon(draft.type);
   const typeLabel = t(`integration.typeLabels.${draft.type}`);
 
   return (
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      icon={<TypeIcon className="size-5 text-primary" />}
+      icon={createElement(integrationIcon(draft.type), { className: "size-5 text-primary" })}
       title={t('integration.titleEdit')}
       description={t('integration.descEdit')}
       saving={saving}

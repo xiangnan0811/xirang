@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Power, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -71,7 +71,11 @@ function loadDefaultAdminApi(): Promise<BackupProcessingAdminClient> {
   return defaultAdminApiPromise;
 }
 
-export function ProcessingCoveragePanel({
+export function ProcessingCoveragePanel(props: ProcessingCoveragePanelProps) {
+  return <ProcessingCoverageSession key={JSON.stringify([props.token, props.role])} {...props} />;
+}
+
+function ProcessingCoverageSession({
   token,
   role,
   loadApi = loadDefaultAdminApi,
@@ -84,7 +88,7 @@ export function ProcessingCoveragePanel({
   const generationRef = useRef(0);
   const scopeRef = useRef<PanelScope | null>(null);
   const loadApiRef = useRef(loadApi);
-  loadApiRef.current = loadApi;
+  useLayoutEffect(() => { loadApiRef.current = loadApi; }, [loadApi]);
 
   const isCurrentScope = useCallback((scope: PanelScope) =>
     scopeRef.current === scope
@@ -97,14 +101,10 @@ export function ProcessingCoveragePanel({
     previousScope?.controller.abort();
     const generation = generationRef.current + 1;
     generationRef.current = generation;
-    setPending(null);
-    setDraft(null);
-    setMutationError(false);
     if (!token || role !== "admin") return undefined;
     const controller = new AbortController();
     const scope: PanelScope = { generation, token, controller, client: null };
     scopeRef.current = scope;
-    setResource({ status: "loading", data: null });
     void (async () => {
       try {
         const client = await loadApiRef.current();
@@ -130,7 +130,7 @@ export function ProcessingCoveragePanel({
   }, [isCurrentScope, role, token]);
 
   if (!token || role !== "admin") return null;
-  if (scopeRef.current === null || scopeRef.current.token !== token || resource.status === "loading") {
+  if (resource.status === "loading") {
     return <LoadingState title={t("backupAssets.adminProcessing.loading")} rows={7} />;
   }
   if (resource.status === "error") {

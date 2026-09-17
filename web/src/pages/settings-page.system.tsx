@@ -38,12 +38,17 @@ function sortSecurityRiskItems(items: SecurityRiskItem[]): SecurityRiskItem[] {
 }
 
 export function SystemTab() {
+  const { token } = useAuth();
+  return <SystemTabContent key={token ?? ""} />;
+}
+
+function SystemTabContent() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const [definitions, setDefinitions] = useState<SettingDef[]>([]);
   const [values, setValues] = useState<Record<string, ResolvedSetting>>({});
   const [editValues, setEditValues] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(token));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -52,15 +57,14 @@ export function SystemTab() {
   const [securityRisk, setSecurityRisk] = useState<SecurityRiskSummary | null>(null);
   const [securityRiskError, setSecurityRiskError] = useState<string | null>(null);
 
-  const loadSettings = useCallback(async () => {
+  const loadSettings = useCallback((signal?: AbortSignal) => {
     if (!token) return;
-    try {
-      const [settingsResult, logSettingsResult, riskResult] = await Promise.allSettled([
-        apiClient.getSettings(token),
-        apiClient.getLogsSettings(token),
-        apiClient.getSecurityRiskSummary(token),
-      ]);
-
+    return Promise.allSettled([
+      apiClient.getSettings(token),
+      apiClient.getLogsSettings(token),
+      apiClient.getSecurityRiskSummary(token),
+    ]).then(([settingsResult, logSettingsResult, riskResult]) => {
+      if (signal?.aborted) return;
       if (settingsResult.status === "fulfilled") {
         const res = settingsResult.value;
         setDefinitions(res.definitions);
@@ -81,12 +85,15 @@ export function SystemTab() {
         setSecurityRisk(null);
         setSecurityRiskError(getErrorMessage(riskResult.reason));
       }
-    } catch {
-      // ignore
-    } finally {
       setLoading(false);
-    }
+    });
   }, [token]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadSettings(controller.signal);
+    return () => controller.abort();
+  }, [loadSettings]);
 
   const handleSaveLogRetention = async () => {
     if (!token) return;
@@ -102,7 +109,6 @@ export function SystemTab() {
     }
   };
 
-  useEffect(() => { loadSettings(); }, [loadSettings]);
 
   const handleSave = async () => {
     if (!token) return;

@@ -65,6 +65,7 @@ export function usePageFilters<C extends FilterConfig>(
     for (const [name, field] of Object.entries(config)) {
       init[name] = readStorage(field.key, field.default);
     }
+    if (globalSearch) init.keyword = globalSearch;
     return init;
   });
 
@@ -96,7 +97,6 @@ export function usePageFilters<C extends FilterConfig>(
   // 避免跨页面携带不可见的搜索条件导致结果为空
   useEffect(() => {
     if (globalSearch) {
-      setState((prev) => prev["keyword"] === globalSearch ? prev : { ...prev, keyword: globalSearch });
       setGlobalSearch?.("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在挂载时执行一次

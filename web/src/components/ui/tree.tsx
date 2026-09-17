@@ -6,6 +6,7 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -31,7 +32,7 @@ type TreeItemProps = {
   loadingIds?: Set<string>;
   childrenMap?: Map<string, TreeItemData[]>;
   focusedId?: string;
-  buttonRefs?: Map<string, HTMLButtonElement>;
+  buttonRefs?: RefObject<Map<string, HTMLButtonElement>>;
   onItemFocus?: (id: string) => void;
   onItemKeyDown?: (event: KeyboardEvent<HTMLButtonElement>, item: TreeItemData) => void;
 };
@@ -99,9 +100,9 @@ function TreeItem({
     >
       <button
         ref={(node) => {
-          if (!buttonRefs) return;
-          if (node) buttonRefs.set(item.id, node);
-          else buttonRefs.delete(item.id);
+          if (!buttonRefs?.current) return;
+          if (node) buttonRefs.current.set(item.id, node);
+          else buttonRefs.current.delete(item.id);
         }}
         type="button"
         tabIndex={focusedId === undefined || focusedId === item.id ? 0 : -1}
@@ -322,7 +323,7 @@ function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoad
           loadingIds={loadingIds}
           childrenMap={childrenMap}
           focusedId={focusedId}
-          buttonRefs={buttonRefs.current}
+          buttonRefs={buttonRefs}
           onItemFocus={setFocusedId}
           onItemKeyDown={handleItemKeyDown}
         />

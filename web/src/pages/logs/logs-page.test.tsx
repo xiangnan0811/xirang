@@ -209,6 +209,24 @@ describe("LogsPage", () => {
     ]);
   });
 
+  it("retains progress across log windows and resets it for a new task run", () => {
+    const view = render(<LogsPage />);
+    const entry = (logId: number, taskRunId: number, pct: number): LogEvent => ({
+      id: `log-${logId}`, logId, taskRunId, taskId: 1001,
+      timestamp: "2026-02-24 10:10:00", level: "info",
+      message: `1,000 ${pct}% 1MB/s`,
+    });
+    liveLogsRef.current.logs = [entry(1, 1, 70)];
+    view.rerender(<LogsPage />);
+    expect(screen.getByRole("progressbar", { name: "日志任务进度" })).toHaveAttribute("aria-valuenow", "70");
+    liveLogsRef.current.logs = [entry(2, 1, 30)];
+    view.rerender(<LogsPage />);
+    expect(screen.getByRole("progressbar", { name: "日志任务进度" })).toHaveAttribute("aria-valuenow", "70");
+    liveLogsRef.current.logs = [entry(3, 2, 10)];
+    view.rerender(<LogsPage />);
+    expect(screen.getByRole("progressbar", { name: "日志任务进度" })).toHaveAttribute("aria-valuenow", "10");
+  });
+
   it("renders the workbench header and URL-backed task tab panel", () => {
     render(<LogsPage />);
 

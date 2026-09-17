@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { KeyRound } from "lucide-react";
 import {
@@ -36,7 +36,11 @@ export interface SSHKeyRotationWizardProps {
   onComplete: () => void;
 }
 
-export function SSHKeyRotationWizard({
+export function SSHKeyRotationWizard(props: SSHKeyRotationWizardProps) {
+  return <SSHKeyRotationSession key={`${props.open}:${props.preselectedKey?.id}`} {...props} />;
+}
+
+function SSHKeyRotationSession({
   open,
   onOpenChange,
   sshKeys,
@@ -48,9 +52,9 @@ export function SSHKeyRotationWizard({
   const { t } = useTranslation();
 
   // wizard state
-  const [step, setStep] = useState<Step>(1);
-  const [selectedKey, setSelectedKey] = useState<SSHKeyRecord | null>(null);
-  const [newKeyName, setNewKeyName] = useState("");
+  const [step, setStep] = useState<Step>(preselectedKey ? 2 : 1);
+  const [selectedKey, setSelectedKey] = useState<SSHKeyRecord | null>(preselectedKey ?? null);
+  const [newKeyName, setNewKeyName] = useState(preselectedKey?.name ?? "");
   const [newKeyType, setNewKeyType] = useState<SSHKeyType>("auto");
   const [newPrivateKey, setNewPrivateKey] = useState("");
   const [loading, setLoading] = useState(false);
@@ -63,28 +67,6 @@ export function SSHKeyRotationWizard({
   const rotatableKeys = sshKeys.filter(
     (key) => (keyUsageMap.get(key.id)?.length ?? 0) > 0,
   );
-
-  // reset on open
-  useEffect(() => {
-    if (!open) return;
-    setNewKeyName("");
-    setNewKeyType("auto");
-    setNewPrivateKey("");
-    setLoading(false);
-    setResults([]);
-    setNewFingerprint("");
-    setRotationError(null);
-    setRotationAcknowledgement("");
-
-    if (preselectedKey) {
-      setSelectedKey(preselectedKey);
-      setNewKeyName(preselectedKey.name);
-      setStep(2);
-    } else {
-      setSelectedKey(null);
-      setStep(1);
-    }
-  }, [open, preselectedKey]);
 
   const affectedNodes = selectedKey
     ? keyUsageMap.get(selectedKey.id) ?? []

@@ -27,6 +27,11 @@ const METRIC_TYPES = [
 ] as const;
 
 export function SLOPanel() {
+  const { token } = useAuth();
+  return <SLOPanelSession key={token ?? ""} />;
+}
+
+function SLOPanelSession() {
   const { t } = useTranslation();
   const { token, role } = useAuth();
   const { confirm, dialog } = useConfirm();
@@ -42,12 +47,16 @@ export function SLOPanel() {
   const [loading, setLoading] = useState(() => Boolean(token));
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = async () => {
+  const [reload, setReload] = useState(0);
+  const refresh = () => { setLoading(Boolean(token)); setError(null); setReload((value) => value + 1); };
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
     if (!token) return;
-    setLoading(true);
-    setError(null);
     try {
       const [list, sum] = await Promise.all([apiClient.listSLOs(token), apiClient.getSLOSummary(token)]);
+      if (!active) return;
       setRows(list);
       setSummary(sum);
       const comps: Record<number, SLOComplianceResult> = {};
@@ -61,21 +70,21 @@ export function SLOPanel() {
           }
         })
       );
+      if (!active) return;
       setCompliance(comps);
       setComplianceErrors(compErrs);
     } catch (err) {
+      if (!active) return;
       setError(getErrorMessage(err));
       setCompliance({});
       setComplianceErrors({});
     } finally {
-      setLoading(false);
+      if (active) setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+    };
+    void load();
+    return () => { active = false; };
+  }, [token, reload, t]);
 
   const handleDelete = async (row: SLODefinition) => {
     if (!token) return;
@@ -244,7 +253,17 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge tone={tone as "success" | "warning" | "destructive" | "neutral"}>{label}</Badge>;
 }
 
-function SLODialog({
+function SLODialog(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  existing?: SLODefinition | null;
+  onSubmitted: () => void;
+}) {
+  const { token } = useAuth();
+  return props.open ? <SLODialogSession key={`${token}:${props.existing?.id ?? "new"}`} {...props} /> : null;
+}
+
+function SLODialogSession({
   open,
   onOpenChange,
   existing,
@@ -257,13 +276,13 @@ function SLODialog({
 }) {
   const { t } = useTranslation();
   const { token } = useAuth();
-  const [name, setName] = useState("");
-  const [metricType, setMetricType] = useState<"availability" | "success_rate">("availability");
-  const [tags, setTags] = useState<string[]>([]);
-  const [threshold, setThreshold] = useState("99");
-  const [windowDays, setWindowDays] = useState(28);
-  const [enabled, setEnabled] = useState(true);
-  const [escalationPolicyId, setEscalationPolicyId] = useState<number | null>(null);
+  const [name, setName] = useState(existing?.name ?? "");
+  const [metricType, setMetricType] = useState<"availability" | "success_rate">(existing?.metricType ?? "availability");
+  const [tags, setTags] = useState<string[]>(existing ? parseSLOTags(existing) : []);
+  const [threshold, setThreshold] = useState(existing ? (existing.threshold * 100).toString() : "99");
+  const [windowDays] = useState(existing?.windowDays ?? 28);
+  const [enabled, setEnabled] = useState(existing?.enabled ?? true);
+  const [escalationPolicyId, setEscalationPolicyId] = useState<number | null>(existing?.escalationPolicyId ?? null);
   const [escalationPolicies, setEscalationPolicies] = useState<EscalationPolicy[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -273,26 +292,6 @@ function SLODialog({
       .then((list) => setEscalationPolicies(list.filter((p) => p.enabled)))
       .catch(() => {});
   }, [open, token]);
-
-  useEffect(() => {
-    if (existing) {
-      setName(existing.name);
-      setMetricType(existing.metricType);
-      setTags(parseSLOTags(existing));
-      setThreshold((existing.threshold * 100).toString());
-      setWindowDays(existing.windowDays);
-      setEnabled(existing.enabled);
-      setEscalationPolicyId(existing.escalationPolicyId ?? null);
-    } else {
-      setName("");
-      setMetricType("availability");
-      setTags([]);
-      setThreshold("99");
-      setWindowDays(28);
-      setEnabled(true);
-      setEscalationPolicyId(null);
-    }
-  }, [existing, open]);
 
   const handleSubmit = async () => {
     if (!token) return;

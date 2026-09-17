@@ -91,7 +91,11 @@ function MultiSelectCheckboxes({ label, items, selected, onChange }: MultiSelect
 
 // ─── 主对话框 ────────────────────────────────────────────────────
 
-export function PanelEditorDialog({
+export function PanelEditorDialog(props: PanelEditorDialogProps) {
+  return props.open ? <PanelEditorSession key={`${props.token}:${props.dashboardID}:${props.panel?.id ?? "new"}`} {...props} /> : null;
+}
+
+function PanelEditorSession({
   open,
   onOpenChange,
   dashboardID,
@@ -105,18 +109,17 @@ export function PanelEditorDialog({
   const isEdit = panel !== undefined;
 
   // ── 表单状态 ────────────────────────────────────────────────────
-  const [title, setTitle] = useState("");
-  const [chartType, setChartType] = useState<ChartType>("line");
-  const [metricKey, setMetricKey] = useState("");
-  const [aggregation, setAggregation] = useState<Aggregation>("avg");
-  const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
-  const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
+  const [title, setTitle] = useState(panel?.title ?? "");
+  const [chartType, setChartType] = useState<ChartType>(panel?.chartType ?? "line");
+  const [metricKey, setMetricKey] = useState(panel?.metric ?? "");
+  const [aggregation, setAggregation] = useState<Aggregation>(panel?.aggregation ?? "avg");
+  const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>(panel?.filters?.nodeIds ?? []);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>(panel?.filters?.taskIds ?? []);
 
   // ── 元数据 ──────────────────────────────────────────────────────
   const [metrics, setMetrics] = useState<MetricDescriptor[]>([]);
   const [nodes, setNodes] = useState<{ id: number; label: string }[]>([]);
   const [tasks, setTasks] = useState<{ id: number; label: string }[]>([]);
-  const [metricsLoaded, setMetricsLoaded] = useState(false);
 
   // ── 预览状态 ────────────────────────────────────────────────────
   const [previewData, setPreviewData] = useState<PanelQueryResult | null>(null);
@@ -137,10 +140,6 @@ export function PanelEditorDialog({
   // pushes the mount past the initial paint where the dialog is settled.
   const [chartReady, setChartReady] = useState(false);
   useEffect(() => {
-    if (!open) {
-      setChartReady(false);
-      return;
-    }
     let firstFrame: number | null = requestAnimationFrame(() => {
       firstFrame = null;
       secondFrame = requestAnimationFrame(() => {
@@ -155,58 +154,32 @@ export function PanelEditorDialog({
     };
   }, [open]);
 
-  // ── 初始化：打开时加载元数据 + 回填编辑值 ─────────────────────
-  // Depend on `panel?.id` too — without it, reopening the dialog for a
-  // different panel while it was already open (e.g. quick switch from "new"
-  // → "edit") kept stale form state.
+  // Each open editor session owns its metadata and draft.
   useEffect(() => {
     if (!open) return;
 
-    // 重置
-    if (isEdit && panel) {
-      setTitle(panel.title);
-      setChartType(panel.chartType);
-      setMetricKey(panel.metric);
-      setAggregation(panel.aggregation);
-      setSelectedNodeIds(panel.filters?.nodeIds ?? []);
-      setSelectedTaskIds(panel.filters?.taskIds ?? []);
-    } else {
-      setTitle("");
-      setChartType("line");
-      setMetricKey("");
-      setAggregation("avg");
-      setSelectedNodeIds([]);
-      setSelectedTaskIds([]);
-    }
-    setPreviewData(null);
-    setPreviewError(null);
+    let active = true;
+    apiClient.listMetrics(token)
+      .then((list) => {
+        if (!active) return;
+        setMetrics(list);
 
-    // 加载指标列表（只加载一次）
-    if (!metricsLoaded) {
-      apiClient.listMetrics(token)
-        .then((list) => {
-          setMetrics(list);
-          setMetricsLoaded(true);
-          // 创建模式：默认选第一个指标
-          if (!isEdit && list.length > 0) {
-            setMetricKey(list[0].key);
-            setAggregation(list[0].defaultAggregation as Aggregation);
-          }
-        })
-        .catch((err) => {
-          // Failing to load metrics leaves the editor unusable; surface it
-          // rather than showing an empty dropdown with no explanation.
-          toast.error(t("dashboards.editor.metricsLoadFailed", {
-            defaultValue: "指标列表加载失败：{{msg}}",
-            msg: getErrorMessage(err),
-          }));
-        });
-    }
+      })
+      .catch((err) => {
+        if (!active) return;
+        // Failing to load metrics leaves the editor unusable; surface it
+        // rather than showing an empty dropdown with no explanation.
+        toast.error(t("dashboards.editor.metricsLoadFailed", {
+          defaultValue: "指标列表加载失败：{{msg}}",
+          msg: getErrorMessage(err),
+        }));
+      });
 
     // 加载节点和任务列表
     createNodesApi().getNodes(token)
-      .then((list) => setNodes(list.map((n) => ({ id: n.id, label: n.name ?? String(n.id) }))))
+      .then((list) => { if (active) setNodes(list.map((n) => ({ id: n.id, label: n.name ?? String(n.id) }))); })
       .catch((err) => {
+        if (!active) return;
         toast.error(t("dashboards.editor.nodesLoadFailed", {
           defaultValue: "节点列表加载失败：{{msg}}",
           msg: getErrorMessage(err),
@@ -214,14 +187,21 @@ export function PanelEditorDialog({
       });
 
     createTasksApi().getTasks(token)
-      .then((list) => setTasks(list.map((t) => ({ id: t.id, label: t.name ?? String(t.id) }))))
+      .then((list) => { if (active) setTasks(list.map((t) => ({ id: t.id, label: t.name ?? String(t.id) }))); })
       .catch((err) => {
+        if (!active) return;
         toast.error(t("dashboards.editor.tasksLoadFailed", {
           defaultValue: "任务列表加载失败：{{msg}}",
           msg: getErrorMessage(err),
         }));
       });
-  }, [open, panel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { active = false; };
+  }, [open, isEdit, token, t]);
+
+  if (!isEdit && !metricKey && metrics.length > 0) {
+    setMetricKey(metrics[0].key);
+    setAggregation(metrics[0].defaultAggregation as Aggregation);
+  }
 
   // ── 指标变化时更新聚合默认值 ─────────────────────────────────
   const currentMetric = metrics.find((m) => m.key === metricKey);
@@ -233,6 +213,10 @@ export function PanelEditorDialog({
       setAggregation(m.defaultAggregation as Aggregation);
     }
   }
+
+  const supportedAggs: Aggregation[] = (currentMetric?.supportedAggregations ?? []) as Aggregation[];
+  const safeAggregation: Aggregation =
+    !currentMetric || supportedAggs.includes(aggregation) ? aggregation : ((supportedAggs[0] ?? "avg") as Aggregation);
 
   // ── 防抖预览 ─────────────────────────────────────────────────
   useEffect(() => {
@@ -256,22 +240,23 @@ export function PanelEditorDialog({
             nodeIds: selectedNodeIds.length > 0 ? selectedNodeIds : undefined,
             taskIds: selectedTaskIds.length > 0 ? selectedTaskIds : undefined,
           },
-          aggregation,
+          aggregation: safeAggregation,
           start,
           end,
         },
         { signal: ctrl.signal },
       )
         .then((result) => {
+          if (ctrl.signal.aborted) return;
           setPreviewData(result);
           setPreviewError(null);
         })
         .catch((err) => {
-          if ((err as Error).name === "AbortError") return;
+          if (ctrl.signal.aborted || (err as Error).name === "AbortError") return;
           setPreviewError(getErrorMessage(err));
           setPreviewData(null);
         })
-        .finally(() => setPreviewLoading(false));
+        .finally(() => { if (!ctrl.signal.aborted) setPreviewLoading(false); });
     }, 500);
 
     return () => {
@@ -281,7 +266,7 @@ export function PanelEditorDialog({
         previewAbortRef.current = null;
       }
     };
-  }, [open, metricKey, aggregation, selectedNodeIds, selectedTaskIds, start, end, token]);
+  }, [open, metricKey, aggregation, safeAggregation, selectedNodeIds, selectedTaskIds, start, end, token]);
 
   // ── 验证 ─────────────────────────────────────────────────────
   const titleError =
@@ -292,25 +277,6 @@ export function PanelEditorDialog({
       : null;
   const metricError = !metricKey ? t("dashboards.editor.validation.metricRequired") : null;
   const isValid = !titleError && !metricError;
-
-  // ── 确保聚合在当前指标允许范围内 ────────────────────────────
-  // Keep UI and persisted state in sync: if the user switches to a metric
-  // that doesn't support the current aggregation, fold the fallback back
-  // into state so reads of `aggregation` elsewhere agree with what renders.
-  //
-  // IMPORTANT: only sync when we actually know what the metric supports
-  // (currentMetric != undefined). During initial mount the metrics list
-  // is still loading; running the sync then would clobber the value that
-  // the init effect just restored from the panel prop.
-  const supportedAggs: Aggregation[] = (currentMetric?.supportedAggregations ?? []) as Aggregation[];
-  const safeAggregation: Aggregation =
-    supportedAggs.includes(aggregation) ? aggregation : ((supportedAggs[0] ?? "avg") as Aggregation);
-  useEffect(() => {
-    if (!currentMetric) return;
-    if (safeAggregation !== aggregation) {
-      setAggregation(safeAggregation);
-    }
-  }, [currentMetric, safeAggregation, aggregation]);
 
   // ── 保存 ─────────────────────────────────────────────────────
   async function handleSave() {

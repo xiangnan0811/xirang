@@ -80,6 +80,16 @@ describe("SilencesPanel", () => {
     expect(screen.getByRole("dialog")).toHaveAccessibleDescription("silences.dialogDesc")
   })
 
+  it("starts with a fresh draft when the dialog is reopened", async () => {
+    render(<SilencesPanel />)
+    await userEvent.click(screen.getByRole("button", { name: /silences.new/ }))
+    await userEvent.type(screen.getByLabelText(/silences.name/), "discarded draft")
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+    await userEvent.click(screen.getByRole("button", { name: /silences.new/ }))
+    expect(screen.getByLabelText(/silences.name/)).toHaveValue("")
+  })
+
   it("rejects invalid time window", async () => {
     const { apiClient } = await import("@/lib/api/client")
     const createSilenceMock = vi.mocked(apiClient.createSilence)

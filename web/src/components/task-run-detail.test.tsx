@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { TaskRunDetail } from "./task-run-detail";
 import { apiClient } from "@/lib/api/client";
 import type { TaskRunRecord } from "@/types/domain";
@@ -93,5 +93,18 @@ describe("TaskRunDetail", () => {
     expect(screen.getByText("#40")).toBeInTheDocument();
     expect(screen.getByText("task_run:40")).toBeInTheDocument();
     expect(screen.getByText("post verify token=***")).toBeInTheDocument();
+  });
+
+  it("ignores detail completion for a previous run after changing the selection", async () => {
+    let resolveOld!: (run: TaskRunRecord) => void;
+    getTaskRunMock.mockReturnValueOnce(new Promise<TaskRunRecord>((resolve) => { resolveOld = resolve; }));
+    const nextRun = { ...baseRun, id: 43, lastError: "current run failure" };
+    getTaskRunMock.mockResolvedValueOnce(nextRun);
+    const { rerender } = render(<TaskRunDetail run={baseRun} token="token-task" onBack={vi.fn()} />);
+    rerender(<TaskRunDetail run={nextRun} token="token-task" onBack={vi.fn()} />);
+    expect(await screen.findByText("current run failure")).toBeInTheDocument();
+    await act(async () => { resolveOld({ ...baseRun, lastError: "stale run failure" }); });
+    expect(screen.queryByText("stale run failure")).not.toBeInTheDocument();
+    expect(screen.getByText("current run failure")).toBeInTheDocument();
   });
 });

@@ -48,6 +48,11 @@ type LogTab = "task" | "node" | "alert";
 const LOG_TABS: LogTab[] = ["task", "node", "alert"];
 
 export function LogsPage() {
+  const { token } = useAuth();
+  return <LogsPageSession key={token ?? ""} />;
+}
+
+function LogsPageSession() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const { nodes, refreshNodes } = useNodesContext();
@@ -115,13 +120,11 @@ export function LogsPage() {
   );
   const [historyLogs, setHistoryLogs] = useState<LogEvent[]>([]);
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(Number.isFinite(Number(selectedTask)) && Number(selectedTask) > 0);
   const [historyPaging, setHistoryPaging] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
   const [wsProgress, setWsProgress] = useState<Record<number, number>>({});
-  const prevRunningIdsRef = useRef<Set<number>>(new Set());
-  const lastProcessedWsLogIdRef = useRef(0);
-  const wsRunIdByTaskRef = useRef<Record<number, number>>({});
+  const [progressInput, setProgressInput] = useState<{ logs: string; tasks: string; watermark: number; runs: Record<number, number>; running: Set<number> }>({ logs: "", tasks: "", watermark: 0, runs: {}, running: new Set() });
 
   const focusedTaskID =
     selectedTask !== "all" ? Number(selectedTask) : undefined;
@@ -161,18 +164,25 @@ export function LogsPage() {
     }
   }, [searchParams, setKeyword, setSelectedNode, setSelectedTask, tasks]);
 
+  const historyScope = `${token}:${selectedTask}`;
+  const [previousHistoryScope, setPreviousHistoryScope] = useState(historyScope);
+  if (previousHistoryScope !== historyScope) {
+    setPreviousHistoryScope(historyScope);
+    setHistoryLogs([]);
+    setHistoryCursor(null);
+    setHistoryLoading(Boolean(focusedTaskNumber));
+    setHistoryPaging(false);
+  }
+
   // Fetch initial history when a specific task is selected
   useEffect(() => {
     const taskID = Number(selectedTask);
     if (selectedTask === "all" || !Number.isFinite(taskID) || taskID <= 0) {
       historyRequestIdRef.current += 1;
-      setHistoryLogs([]);
-      setHistoryCursor(null);
       return;
     }
 
     const requestId = ++historyRequestIdRef.current;
-    setHistoryLoading(true);
     void fetchTaskLogs(taskID, { limit: 200 })
       .then((rows) => {
         if (requestId !== historyRequestIdRef.current) {
@@ -191,7 +201,8 @@ export function LogsPage() {
           setHistoryLoading(false);
         }
       });
-  }, [fetchTaskLogs, selectedTask, setHistoryCursor, setHistoryLoading, setHistoryLogs]);
+    return () => { historyRequestIdRef.current += 1; };
+  }, [fetchTaskLogs, selectedTask, token]);
 
   const mergedLogs = useMemo(() => {
     const taskNodeMap = new Map(tasks.map((task) => [task.id, task.nodeName]));
@@ -328,103 +339,39 @@ export function LogsPage() {
     })();
   }, [focusedTask?.status, focusedTaskNumber, logs, refreshFocusedTaskStatus]);
 
-  // Parse rsync progress from incoming WS logs (watermark + runId isolation)
-  useEffect(() => {
-    if (logs.length === 0) {
-      lastProcessedWsLogIdRef.current = 0;
-      return;
-    }
-
-    const prevMaxLogId = lastProcessedWsLogIdRef.current;
-    const updates: Record<number, number> = {};
-    const runIdResets: number[] = [];
-
-    // logs 按 logId 降序排列；倒序遍历以按 logId 升序处理，
-    // 保证终态日志先于新 run 进度日志被处理，避免同批次回滚
-    for (let i = logs.length - 1; i >= 0; i--) {
-      const log = logs[i];
-      if (!log.logId || log.logId <= prevMaxLogId) continue;
-      if (!log.taskId) continue;
-
-      // 检测 taskRunId 变化 → 新 run 开始，清除旧进度
-      if (log.taskRunId && wsRunIdByTaskRef.current[log.taskId] !== log.taskRunId) {
-        wsRunIdByTaskRef.current[log.taskId] = log.taskRunId;
-        runIdResets.push(log.taskId);
-        delete updates[log.taskId];
-      }
-
-      // 终态日志 → 清除该任务的进度缓存
-      if (log.status && isTerminalTaskStatus(log.status)) {
-        runIdResets.push(log.taskId);
-        delete updates[log.taskId];
-        continue;
-      }
-
-      if (!log.message) continue;
-      const m = RSYNC_PROGRESS_RE.exec(log.message);
-      if (m) {
-        const pct = parseInt(m[1], 10);
-        if (pct > 0 && pct <= 100) {
-          updates[log.taskId] = Math.max(updates[log.taskId] ?? 0, pct);
+  const progressLogsKey = JSON.stringify(logs.map((log) => [log.logId, log.taskId, log.taskRunId, log.status, log.message]));
+  const progressTasksKey = JSON.stringify(tasks.map((task) => [task.id, task.status]));
+  // Reduce each new websocket batch once; retain progress across bounded log windows.
+  if (progressInput.logs !== progressLogsKey || progressInput.tasks !== progressTasksKey) {
+    const next = { ...wsProgress };
+    const runs = { ...progressInput.runs };
+    let watermark = logs.length ? progressInput.watermark : 0;
+    if (progressInput.logs !== progressLogsKey) {
+      for (let i = logs.length - 1; i >= 0; i--) {
+        const log = logs[i];
+        if (!log.logId || log.logId <= progressInput.watermark || !log.taskId) continue;
+        if (log.taskRunId && runs[log.taskId] !== log.taskRunId) {
+          runs[log.taskId] = log.taskRunId;
+          delete next[log.taskId];
         }
-      }
-    }
-
-    // 更新水位线
-    const maxLogId = logs.reduce((max, l) => Math.max(max, l.logId ?? 0), prevMaxLogId);
-    lastProcessedWsLogIdRef.current = maxLogId;
-
-    if (Object.keys(updates).length > 0 || runIdResets.length > 0) {
-      setWsProgress((prev) => {
-        let changed = false;
-        const next = { ...prev };
-        for (const tid of runIdResets) {
-          if (next[tid] !== undefined) {
-            delete next[tid];
-            changed = true;
-          }
+        if (log.status && isTerminalTaskStatus(log.status)) {
+          delete next[log.taskId];
+          continue;
         }
-        for (const [tidStr, pct] of Object.entries(updates)) {
-          const tid = Number(tidStr);
-          if (pct > (next[tid] ?? 0)) {
-            next[tid] = pct;
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
-    }
-  }, [logs]);
-
-  // Track running task set changes: clear progress on new run start or terminal state
-  useEffect(() => {
-    const currentRunningIds = new Set(
-      tasks
-        .filter((t) => t.status === "running" || t.status === "retrying")
-        .map((t) => t.id),
-    );
-    const toClear: number[] = [];
-    for (const id of currentRunningIds) {
-      if (!prevRunningIdsRef.current.has(id)) {
-        toClear.push(id);
+        const match = RSYNC_PROGRESS_RE.exec(log.message ?? "");
+        const pct = match ? Number(match[1]) : 0;
+        if (pct > 0 && pct <= 100) next[log.taskId] = Math.max(next[log.taskId] ?? 0, pct);
       }
+      watermark = logs.reduce((max, log) => Math.max(max, log.logId ?? 0), watermark);
     }
-    for (const id of prevRunningIdsRef.current) {
-      if (!currentRunningIds.has(id)) {
-        toClear.push(id);
-      }
+    const running = new Set(tasks.filter((task) => task.status === "running" || task.status === "retrying").map((task) => task.id));
+    if (progressInput.tasks !== progressTasksKey) {
+      for (const id of running) if (!progressInput.running.has(id)) delete next[id];
+      for (const id of progressInput.running) if (!running.has(id)) delete next[id];
     }
-    prevRunningIdsRef.current = currentRunningIds;
-    if (toClear.length > 0) {
-      setWsProgress((prev) => {
-        const next = { ...prev };
-        for (const id of toClear) {
-          delete next[id];
-        }
-        return next;
-      });
-    }
-  }, [tasks]);
+    setProgressInput({ logs: progressLogsKey, tasks: progressTasksKey, watermark, runs, running });
+    setWsProgress(next);
+  }
 
   const runningTasks = tasks.filter(
     (task) => task.status === "running" || task.status === "retrying",
@@ -509,12 +456,14 @@ export function LogsPage() {
     if (!focusedTaskNumber || !historyCursor) {
       return;
     }
+    const requestId = historyRequestIdRef.current;
     setHistoryPaging(true);
     try {
       const rows = await fetchTaskLogs(focusedTaskNumber, {
         beforeId: historyCursor,
         limit: 120,
       });
+      if (requestId !== historyRequestIdRef.current) return;
       if (rows.length > 0) {
         setHistoryLogs((prev) => [...prev, ...rows]);
         setHistoryCursor(minLogId(rows));
@@ -522,7 +471,7 @@ export function LogsPage() {
         setHistoryCursor(null);
       }
     } finally {
-      setHistoryPaging(false);
+      if (requestId === historyRequestIdRef.current) setHistoryPaging(false);
     }
   };
 

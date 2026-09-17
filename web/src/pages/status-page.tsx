@@ -32,26 +32,25 @@ export function StatusPage() {
   useDocumentTitle(t("serviceMonitor.statusPageTitle"));
   const [items, setItems] = useState<StatusPageItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [hasError, setHasError] = useState(false);
+  const error = hasError ? t("serviceMonitor.statusPageLoadFailed") : null;
 
-  const fetchStatus = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const data = await createServiceMonitorsApi().getStatusPage(signal);
+  const fetchStatus = useCallback((signal?: AbortSignal) => {
+    return createServiceMonitorsApi().getStatusPage(signal).then((data) => {
       if (signal?.aborted) return;
       setItems(data);
-      setError(null);
-    } catch (err) {
+      setHasError(false);
+    }).catch((err: unknown) => {
       if (isAbortError(err) || signal?.aborted) return;
-      setError(t("serviceMonitor.statusPageLoadFailed"));
-    } finally {
+      setHasError(true);
+    }).finally(() => {
       if (!signal?.aborted) {
         setLoading(false);
       }
-    }
-  }, [t]);
+    });
+  }, []);
 
   useEffect(() => {
-    setLoading(true);
     const controller = new AbortController();
     void fetchStatus(controller.signal);
     return () => {

@@ -69,12 +69,17 @@ function recordToKV(rec: Record<string, string> | undefined): KV[] {
 }
 
 export function AutomationRulesPage() {
+  const { token } = useAuth();
+  return <AutomationRulesPageContent key={token ?? ""} />;
+}
+
+function AutomationRulesPageContent() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const { confirm, dialog } = useConfirm();
 
   const [rules, setRules] = useState<AutomationRule[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(token));
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<AutomationRule | null>(null);
@@ -91,26 +96,30 @@ export function AutomationRulesPage() {
 
   const isEditing = Boolean(editingRule);
 
-  const fetchRules = useCallback(async () => {
+  const [requestVersion, setRequestVersion] = useState(0);
+  const fetchRules = useCallback(() => {
     if (!token) return;
     setLoading(true);
-    try {
-      const data = await createAutomationRulesApi().list(token);
-      setRules(data);
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    } finally {
-      setLoading(false);
-    }
+    setRequestVersion((version) => version + 1);
   }, [token]);
 
   useEffect(() => {
-    fetchRules();
-  }, [fetchRules]);
+    if (!token) return;
+    const controller = new AbortController();
+    createAutomationRulesApi().list(token)
+      .then((data) => {
+        if (!controller.signal.aborted) setRules(data);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) toast.error(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [token, requestVersion]);
 
-  // Reset form when dialog opens/closes or editing rule changes
-  useEffect(() => {
-    if (!editorOpen) return;
+  const resetForm = (editingRule: AutomationRule | null) => {
     if (editingRule) {
       setName(editingRule.name);
       setDescription(editingRule.description ?? "");
@@ -128,7 +137,7 @@ export function AutomationRulesPage() {
       setConfigs([]);
       setEnabled(true);
     }
-  }, [editorOpen, editingRule]);
+  };
 
   const availableFilterKeys = useMemo(
     () => FILTER_KEYS_BY_EVENT[eventType] ?? [],
@@ -141,11 +150,13 @@ export function AutomationRulesPage() {
   );
 
   const openCreateDialog = () => {
+    resetForm(null);
     setEditingRule(null);
     setEditorOpen(true);
   };
 
   const openEditDialog = (rule: AutomationRule) => {
+    resetForm(rule);
     setEditingRule(rule);
     setEditorOpen(true);
   };

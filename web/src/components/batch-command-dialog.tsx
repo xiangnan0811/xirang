@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -38,7 +38,11 @@ function detectDangerousCommandKeys(command: string): string[] {
     .map(({ key }) => key);
 }
 
-export function BatchCommandDialog({
+export function BatchCommandDialog(props: BatchCommandDialogProps) {
+  return <BatchCommandSession key={String(props.open)} {...props} />;
+}
+
+function BatchCommandSession({
   open,
   onOpenChange,
   nodes,
@@ -47,7 +51,7 @@ export function BatchCommandDialog({
   onSuccess,
 }: BatchCommandDialogProps) {
   const { t } = useTranslation();
-  const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>(() => defaultNodeIds ?? []);
   const [command, setCommand] = useState("");
   const [name, setName] = useState("");
   const [retain, setRetain] = useState(false);
@@ -61,21 +65,6 @@ export function BatchCommandDialog({
     { persist: false, reuseCached: false },
   );
   const batchErrorId = "batch-command-error";
-
-  useEffect(() => {
-    if (open) {
-      submissionRef.current = null;
-      setSelectedNodeIds(defaultNodeIds?.length ? defaultNodeIds : []);
-      setCommand("");
-      setName("");
-      setRetain(false);
-      setSaving(false);
-      setError("");
-      setReviewing(false);
-      setAcknowledgement("");
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
 
   const selectedNodes = useMemo(
     () => selectedNodeIds.map((id) => nodes.find((node) => node.id === id)).filter((node): node is NodeRecord => Boolean(node)),

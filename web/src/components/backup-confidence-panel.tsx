@@ -40,18 +40,22 @@ function itemTitle(item: BackupConfidenceItem): string {
 }
 
 export function BackupConfidencePanel() {
+  const { token } = useAuth();
+  const { i18n } = useTranslation();
+  return <BackupConfidencePanelContent key={`${token ?? ""}:${i18n.language}`} />;
+}
+
+function BackupConfidencePanelContent() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const [data, setData] = useState<BackupConfidenceData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(token) || import.meta.env.VITE_ENABLE_DEMO_MODE === "true");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) {
       if (import.meta.env.VITE_ENABLE_DEMO_MODE === "true") {
         let cancelled = false;
-        setLoading(true);
-        setError(null);
         import("@/data/mock")
           .then((mocks) => {
             if (!cancelled) {
@@ -72,14 +76,9 @@ export function BackupConfidencePanel() {
           cancelled = true;
         };
       }
-      setData(null);
-      setLoading(false);
-      setError(null);
       return;
     }
     const controller = new AbortController();
-    setLoading(true);
-    setError(null);
     apiClient
       .getBackupConfidence(token, { signal: controller.signal })
       .then((result) => {

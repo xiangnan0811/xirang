@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { runAxe } from "@/test/a11y-helpers";
@@ -81,7 +81,43 @@ describe("TaskRcloneVersioningDialog", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  it("expires an idle preflight without another user interaction", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const now = new Date("2026-09-17T00:00:00Z");
+    vi.setSystemTime(now);
+    apiClientMock.createRcloneVersioningPreflight.mockResolvedValue({
+      preflightId: "expiry-test",
+      expiresAt: new Date(now.getTime() + 1000).toISOString(),
+      summary: portableSummary({ state: "ready", reasonCode: "ready" }),
+    });
+    render(<TaskRcloneVersioningDialog open onOpenChange={vi.fn()} task={{ ...task, rclonePublication: portableSummary() }} token="token" onUpdated={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "运行预检" })); });
+    expect(screen.getByRole("button", { name: "启用版本化" })).toBeEnabled();
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(screen.getByRole("button", { name: "启用版本化" })).toBeDisabled();
+    expect(apiClientMock.activateRcloneVersioning).not.toHaveBeenCalled();
+  });
+
+  it("rechecks preflight expiry at submission before the display clock ticks", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const now = new Date("2026-09-17T00:00:00Z");
+    vi.setSystemTime(now);
+    apiClientMock.createRcloneVersioningPreflight.mockResolvedValue({
+      preflightId: "expiry-test",
+      expiresAt: new Date(now.getTime() + 500).toISOString(),
+      summary: portableSummary({ state: "ready", reasonCode: "ready" }),
+    });
+    render(<TaskRcloneVersioningDialog open onOpenChange={vi.fn()} task={{ ...task, rclonePublication: portableSummary() }} token="token" onUpdated={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "运行预检" })); });
+    expect(screen.getByRole("button", { name: "启用版本化" })).toBeEnabled();
+    vi.setSystemTime(now.getTime() + 600);
+    fireEvent.click(screen.getByRole("button", { name: "启用版本化" }));
+    expect(apiClientMock.activateRcloneVersioning).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "启用版本化" })).toBeDisabled();
   });
 
   it("completes portable binding, preflight, and first-new activation with exact revisions", async () => {

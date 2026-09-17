@@ -11,29 +11,33 @@ import { formatTime } from "@/lib/api/core";
 import { toast } from "sonner";
 
 export function SelfBackupPanel() {
+  const { token, role } = useAuth();
+  const { i18n } = useTranslation();
+  return <SelfBackupPanelContent key={`${token ?? ""}:${role}:${i18n.language}`} />;
+}
+
+function SelfBackupPanelContent() {
   const { t } = useTranslation();
   const { token, role } = useAuth();
   const [backing, setBacking] = useState(false);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
-  const [loadingList, setLoadingList] = useState(false);
+  const [loadingList, setLoadingList] = useState(Boolean(token) && role === "admin");
 
-  const fetchBackups = useCallback(async (signal?: AbortSignal) => {
+  const fetchBackups = useCallback((signal?: AbortSignal) => {
     if (!token) return;
-    setLoadingList(true);
-    try {
-      const list = await apiClient.listBackups(token, { signal });
+    return apiClient.listBackups(token, { signal }).then((list) => {
       if (!signal?.aborted) {
         setBackups(list);
       }
-    } catch (err) {
+    }).catch((err) => {
       if (signal?.aborted) return;
       // 静默处理列表加载失败，生产环境不记录原始错误对象
       safeLog("warn", t('selfBackup.listLoadFailed'), getErrorMessage(err));
-    } finally {
+    }).finally(() => {
       if (!signal?.aborted) {
         setLoadingList(false);
       }
-    }
+    });
   }, [token, t]);
 
   useEffect(() => {
@@ -50,6 +54,7 @@ export function SelfBackupPanel() {
     try {
       const result = await apiClient.backupDB(token);
       toast.success(t('selfBackup.backupSuccess', { filename: result.filename, size: formatBytes(result.size) }));
+      setLoadingList(true);
       void fetchBackups();
     } catch (err) {
       toast.error(getErrorMessage(err, t('selfBackup.backupFailed')));

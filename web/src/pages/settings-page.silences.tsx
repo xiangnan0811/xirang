@@ -96,19 +96,12 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
   const [nodes, setNodes] = useState<NodeRecord[]>([])
 
   useEffect(() => {
-    if (open) {
-      setName("")
-      setMatchNodeId("")
-      setMatchCategory("")
-      setTags([])
-      setStartsAt(nowPlusHours(0))
-      setEndsAt(nowPlusHours(1))
-      setNote("")
-
-      // Fetch nodes for dropdown
-      apiClient.getNodes(token).then(setNodes).catch(() => { /* silently ignore */ })
-    }
-  }, [open, token])
+    let cancelled = false;
+    apiClient.getNodes(token).then((data) => {
+      if (!cancelled) setNodes(data);
+    }).catch(() => { /* silently ignore */ });
+    return () => { cancelled = true; };
+  }, [token]);
 
   const applyPreset = (hours: number) => {
     setStartsAt(nowPlusHours(0))
@@ -283,25 +276,40 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
 // ---------- SilencesPanel ----------
 
 export function SilencesPanel() {
+  const { token } = useAuth();
+  return <SilencesPanelContent key={token ?? ""} />;
+}
+
+function SilencesPanelContent() {
   const { t } = useTranslation()
   const { token } = useAuth()
   const [silences, setSilences] = useState<Silence[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(Boolean(token))
   const [createOpen, setCreateOpen] = useState(false)
   const [revoking, setRevoking] = useState<number | null>(null)
 
+  const [requestVersion, setRequestVersion] = useState(0);
   const refresh = useCallback(() => {
-    if (!token) return
-    setLoading(true)
-    apiClient.listSilences(token)
-      .then(setSilences)
-      .catch((err) => toast.error(getErrorMessage(err)))
-      .finally(() => setLoading(false))
-  }, [token])
+    if (!token) return;
+    setLoading(true);
+    setRequestVersion((version) => version + 1);
+  }, [token]);
 
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    if (!token) return;
+    const controller = new AbortController();
+    apiClient.listSilences(token)
+      .then((data) => {
+        if (!controller.signal.aborted) setSilences(data);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) toast.error(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [token, requestVersion]);
 
   const handleRevoke = async (id: number) => {
     if (!token) return
@@ -374,7 +382,7 @@ export function SilencesPanel() {
         )}
       </CardContent>
 
-      {token && (
+      {token && createOpen && (
         <CreateSilenceDialog
           open={createOpen}
           onOpenChange={setCreateOpen}

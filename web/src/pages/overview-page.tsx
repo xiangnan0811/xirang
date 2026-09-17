@@ -227,13 +227,26 @@ export function OverviewPage() {
     () => nodes.filter((node) => node.status !== "online").length,
     [nodes]
   );
+  const incidentScope = `${token}:${refreshVersion}:${incidentReloadKey}`;
+  const trafficScope = `${token}:${refreshVersion}:${trafficWindow}`;
+  const [previousIncident, setPreviousIncident] = useState({ scope: incidentScope, fetch: fetchHealthIncidentTimeline });
+  const [previousTraffic, setPreviousTraffic] = useState({ scope: trafficScope, fetch: fetchOverviewTraffic });
+  if (previousIncident.scope !== incidentScope || previousIncident.fetch !== fetchHealthIncidentTimeline) {
+    setPreviousIncident({ scope: incidentScope, fetch: fetchHealthIncidentTimeline });
+    setIncidentLoading(true);
+    setIncidentError(null);
+    setIncidentGroups([]);
+  }
+  if (previousTraffic.scope !== trafficScope || previousTraffic.fetch !== fetchOverviewTraffic) {
+    setPreviousTraffic({ scope: trafficScope, fetch: fetchOverviewTraffic });
+    setTrafficLoading(true);
+    setTrafficError(null);
+    setTrafficData(null);
+  }
   useEffect(() => {
     const controller = new AbortController();
     const requestId = incidentRequestRef.current + 1;
     incidentRequestRef.current = requestId;
-    setIncidentLoading(true);
-    setIncidentError(null);
-
     void fetchHealthIncidentTimeline({ windowHours: 72, signal: controller.signal })
       .then((result) => {
         if (!controller.signal.aborted && incidentRequestRef.current === requestId) {
@@ -259,15 +272,12 @@ export function OverviewPage() {
       controller.abort();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
-  }, [fetchHealthIncidentTimeline, refreshVersion, incidentReloadKey]);
+  }, [fetchHealthIncidentTimeline, refreshVersion, incidentReloadKey, token]);
 
   useEffect(() => {
     const controller = new AbortController();
     const requestId = trafficRequestRef.current + 1;
     trafficRequestRef.current = requestId;
-    setTrafficLoading(true);
-    setTrafficError(null);
-
     void fetchOverviewTraffic(trafficWindow, { signal: controller.signal })
       .then((result) => {
         if (!controller.signal.aborted && trafficRequestRef.current === requestId) {
@@ -293,7 +303,7 @@ export function OverviewPage() {
       controller.abort();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
-  }, [fetchOverviewTraffic, refreshVersion, trafficWindow]);
+  }, [fetchOverviewTraffic, refreshVersion, trafficWindow, token]);
 
   const recentTasks = useMemo(
     () => [...tasks]

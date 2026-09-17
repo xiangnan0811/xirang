@@ -1,16 +1,18 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { CredentialsPage } from "./credentials-page";
 import type { AppCredential } from "@/lib/api/credentials";
 
 const {
+  authState,
   confirmMock,
   deleteMock,
   listMock,
 } = vi.hoisted(() => ({
+  authState: { token: "test-token" as string | null, role: "admin" },
   confirmMock: vi.fn(),
   deleteMock: vi.fn(),
   listMock: vi.fn(),
@@ -32,7 +34,7 @@ vi.mock("react-i18next", () => ({
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ token: "test-token", role: "admin" }),
+  useAuth: () => authState,
 }));
 
 vi.mock("@/hooks/use-confirm", () => ({
@@ -100,8 +102,26 @@ const credentials: AppCredential[] = [
 describe("CredentialsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.token = "test-token";
     confirmMock.mockResolvedValue(true);
     deleteMock.mockResolvedValue(undefined);
+  });
+
+  it("ignores an old token response and clears inventory on logout", async () => {
+    let resolveOld!: (rows: AppCredential[]) => void;
+    listMock.mockReturnValueOnce(new Promise<AppCredential[]>((resolve) => { resolveOld = resolve; }));
+    const { rerender } = render(<CredentialsPage />);
+    listMock.mockResolvedValueOnce([{ ...credentials[1], name: "New account credential" }]);
+    authState.token = "new-token";
+    rerender(<CredentialsPage />);
+    expect(await screen.findByText("New account credential")).toBeInTheDocument();
+    await act(async () => { resolveOld(credentials); });
+    expect(screen.queryByText("Prod MySQL")).not.toBeInTheDocument();
+    authState.token = null;
+    rerender(<CredentialsPage />);
+    expect(screen.queryByText("New account credential")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "common.loading" })).not.toBeInTheDocument();
+    expect(listMock).toHaveBeenCalledTimes(2);
   });
 
   it("renders the loading workbench state before credentials resolve", () => {

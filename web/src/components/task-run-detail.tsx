@@ -60,42 +60,47 @@ type Props = {
   onBack: () => void;
 };
 
-export function TaskRunDetail({ run, token, onBack }: Props) {
+export function TaskRunDetail(props: Props) {
+  const { i18n } = useTranslation();
+  return <TaskRunDetailContent key={JSON.stringify([props.run.id, props.token, i18n.language])} {...props} />;
+}
+
+function TaskRunDetailContent({ run, token, onBack }: Props) {
   const { t } = useTranslation();
   const [detailRun, setDetailRun] = useState<TaskRunRecord>(run);
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [logsLoading, setLogsLoading] = useState(true);
   const [logsError, setLogsError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const [previousRun, setPreviousRun] = useState(run);
+  if (previousRun !== run) {
+    setPreviousRun(run);
     setDetailRun(run);
-  }, [run]);
+  }
 
-  const fetchDetail = useCallback(async () => {
-    try {
-      const result = await apiClient.getTaskRun(token, run.id);
-      setDetailRun(result);
-    } catch {
+  const fetchDetail = useCallback((signal?: AbortSignal) => {
+    return apiClient.getTaskRun(token, run.id).then((result) => {
+      if (!signal?.aborted) setDetailRun(result);
+    }).catch(() => {
       // 执行历史列表可作为降级数据；详情接口失败时仍展示基础记录与日志。
-    }
+    });
   }, [token, run.id]);
 
-  const fetchLogs = useCallback(async () => {
-    setLogsLoading(true);
-    setLogsError(null);
-    try {
-      const result = await apiClient.getTaskRunLogs(token, run.id, { limit: 500 });
-      setLogs(result);
-    } catch (err) {
-      setLogsError(err instanceof Error ? err.message : t('tasks.fetchLogsFailed'));
-    } finally {
-      setLogsLoading(false);
-    }
+  const fetchLogs = useCallback((signal?: AbortSignal) => {
+    return apiClient.getTaskRunLogs(token, run.id, { limit: 500 }).then((result) => {
+      if (!signal?.aborted) setLogs(result);
+    }).catch((err) => {
+      if (!signal?.aborted) setLogsError(err instanceof Error ? err.message : t('tasks.fetchLogsFailed'));
+    }).finally(() => {
+      if (!signal?.aborted) setLogsLoading(false);
+    });
   }, [token, run.id, t]);
 
   useEffect(() => {
-    void fetchDetail();
-    void fetchLogs();
+    const controller = new AbortController();
+    void fetchDetail(controller.signal);
+    void fetchLogs(controller.signal);
+    return () => controller.abort();
   }, [fetchDetail, fetchLogs]);
 
   const statusMeta = getTaskStatusMeta(detailRun.status);
@@ -256,7 +261,11 @@ export function TaskRunDetail({ run, token, onBack }: Props) {
         ) : logsError ? (
           <div className="py-4 text-center text-sm text-muted-foreground">
             <p>{logsError}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void fetchLogs()}>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => {
+              setLogsLoading(true);
+              setLogsError(null);
+              void fetchLogs();
+            }}>
               {t('common.retry')}
             </Button>
           </div>
