@@ -1,17 +1,22 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -27,10 +32,77 @@ func openBackupHealthTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func openBackupHealthPostgresTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN required")
+	}
+	t.Setenv("APP_ENV", "development")
+	base, err := gorm.Open(postgres.Open(withServiceMonitorPostgresTimezone(dsn)), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open PostgreSQL backup health base: %v", err)
+	}
+	schema := fmt.Sprintf("xirang_backup_health_%d", time.Now().UnixNano())
+	if err := base.Exec("CREATE SCHEMA " + schema).Error; err != nil {
+		t.Fatalf("create PostgreSQL backup health schema: %v", err)
+	}
+	db, err := gorm.Open(postgres.Open(withServiceMonitorPostgresSchema(dsn, schema)), &gorm.Config{})
+	if err != nil {
+		_ = base.Exec("DROP SCHEMA " + schema + " CASCADE").Error
+		if sqlDB, dbErr := base.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		t.Fatalf("open PostgreSQL backup health schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		_ = base.Exec("DROP SCHEMA " + schema + " CASCADE").Error
+		if sqlDB, dbErr := base.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}
+
 func migrateBackupHealthTables(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.BackupCompletion{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+}
+func addBackupHealthFact(t *testing.T, db *gorm.DB, nodeID uint, completedAt time.Time) {
+	t.Helper()
+	taskID := nodeID*1000 + 1
+	taskRunID := nodeID*1000 + 2
+	fact := model.BackupCompletion{
+		TaskID: &taskID, TaskRunID: &taskRunID, NodeID: nodeID,
+		ExecutorType: "rsync", FactKind: model.BackupCompletionKindLegacyTransferCompleted,
+		EvidenceStatus: model.BackupCompletionEvidenceVerified, CompletedAt: completedAt,
+		CreatedAt: completedAt, UpdatedAt: completedAt,
+	}
+	if err := db.Create(&fact).Error; err != nil {
+		t.Fatalf("创建备份完成事实失败: %v", err)
+	}
+}
+func addBackupHealthRunFact(t *testing.T, db *gorm.DB, run model.TaskRun) {
+	t.Helper()
+	completedAt := run.CreatedAt
+	if run.FinishedAt != nil {
+		completedAt = *run.FinishedAt
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return backuphealth.RecordLegacyTransferTx(context.Background(), tx, backuphealth.LegacyTransferInput{
+			TaskID:       run.TaskID,
+			TaskRunID:    run.ID,
+			NodeID:       run.NodeIDSnapshot,
+			ExecutorType: run.ExecutorTypeSnapshot,
+			CompletedAt:  completedAt,
+		})
+	}); err != nil {
+		t.Fatalf("创建执行备份完成事实失败: %v", err)
 	}
 }
 
@@ -118,6 +190,199 @@ func TestBackupHealth_StaleNodes_NeverBackedUp(t *testing.T) {
 		t.Fatalf("从未备份的节点 last_backup_at 应为 nil")
 	}
 }
+func TestBackupHealth_CommandSuccessDoesNotCountAsBackup(t *testing.T) {
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+
+	now := time.Now().UTC()
+	old := now.Add(-72 * time.Hour)
+	node := model.Node{
+		Name: "command-health-node", Host: "10.0.0.9", Port: 22, Username: "root",
+		AuthType: "password", Status: "online", BackupDir: "command-health-node",
+		LastBackupAt: &old,
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	task := model.Task{Name: "maintenance-command", NodeID: node.ID, ExecutorType: "command", Status: "success"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create command task: %v", err)
+	}
+	finished := now
+	if err := db.Create(&model.TaskRun{
+		TaskID: task.ID, NodeIDSnapshot: node.ID, ExecutorTypeSnapshot: "command",
+		TriggerType: "manual", Status: "success", FinishedAt: &finished, CreatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("create command run: %v", err)
+	}
+
+	resp, result := callBackupHealth(t, db)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if result.Data.StaleNodeCount != 1 || len(result.Data.StaleNodes) != 1 {
+		t.Fatalf("ordinary command must not make node fresh: stale=%+v", result.Data.StaleNodes)
+	}
+	if result.Data.StaleNodes[0].LastBackupAt != nil {
+		t.Fatalf("stale response must not trust denormalized historical timestamp: %v", result.Data.StaleNodes[0].LastBackupAt)
+	}
+	for _, point := range result.Data.Trend {
+		if point.Total != 0 || point.Success != 0 {
+			t.Fatalf("ordinary command must not enter backup trend: %+v", point)
+		}
+	}
+}
+
+func TestBackupHealth_ClassifiedSuccessWithoutFactDoesNotCountAsBackup(t *testing.T) {
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+
+	now := time.Now().UTC()
+	old := now.Add(-72 * time.Hour)
+	node := model.Node{
+		Name: "unproven-health-node", Host: "10.0.0.10", Port: 22, Username: "root",
+		AuthType: "password", Status: "online", BackupDir: "unproven-health-node",
+		LastBackupAt: &old,
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	task := model.Task{Name: "unproven-rsync", NodeID: node.ID, ExecutorType: "rsync", Status: "success"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create rsync task: %v", err)
+	}
+	started := now.Add(-time.Minute)
+	finished := now
+	if err := db.Create(&model.TaskRun{
+		TaskID: task.ID, NodeIDSnapshot: node.ID, ExecutorTypeSnapshot: "rsync",
+		TriggerType: "manual", Status: "success", StartedAt: &started, FinishedAt: &finished,
+		CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("create rsync run: %v", err)
+	}
+
+	resp, result := callBackupHealth(t, db)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if result.Data.StaleNodeCount != 1 || result.Data.StaleNodes[0].LastBackupAt != nil {
+		t.Fatalf("unproven classified run must not make node fresh: stale=%+v", result.Data.StaleNodes)
+	}
+	var total, success int
+	for _, point := range result.Data.Trend {
+		total += point.Total
+		success += point.Success
+	}
+	if total != 1 || success != 0 {
+		t.Fatalf("unproven classified run must remain an unsuccessful backup attempt: total=%d success=%d", total, success)
+	}
+}
+
+func TestBackupHealth_TrendSeparatesFactAndUnprovenSameDayRuns(t *testing.T) {
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	node := model.Node{
+		Name: "mixed-trend-node", Host: "10.0.0.11", Port: 22, Username: "root",
+		AuthType: "password", Status: "online", BackupDir: "mixed-trend-node",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	task := model.Task{Name: "mixed-trend-task", NodeID: node.ID, ExecutorType: "rsync", Status: "success"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	finished := now
+	factRun := model.TaskRun{
+		TaskID: task.ID, NodeIDSnapshot: node.ID, ExecutorTypeSnapshot: "rsync",
+		TriggerType: "manual", Status: "success", StartedAt: &now, FinishedAt: &finished,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&factRun).Error; err != nil {
+		t.Fatalf("create fact-backed run: %v", err)
+	}
+	addBackupHealthRunFact(t, db, factRun)
+	unprovenRun := model.TaskRun{
+		TaskID: task.ID, NodeIDSnapshot: node.ID, ExecutorTypeSnapshot: "rsync",
+		TriggerType: "manual", Status: "success", StartedAt: &now, FinishedAt: &finished,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&unprovenRun).Error; err != nil {
+		t.Fatalf("create unproven run: %v", err)
+	}
+
+	resp, result := callBackupHealth(t, db)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var todayTotal, todaySuccess int
+	today := now.Format("2006-01-02")
+	for _, point := range result.Data.Trend {
+		if point.Date == today {
+			todayTotal = point.Total
+			todaySuccess = point.Success
+			break
+		}
+	}
+	if todayTotal != 2 || todaySuccess != 1 {
+		t.Fatalf("same-day fact and unproven attempts must remain separate: total=%d success=%d trend=%+v", todayTotal, todaySuccess, result.Data.Trend)
+	}
+}
+
+func TestBackupHealth_TrendSeparatesFactAndUnprovenSameDayRunsPostgres(t *testing.T) {
+	db := openBackupHealthPostgresTestDB(t)
+	migrateBackupHealthTables(t, db)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	node := model.Node{
+		Name: "mixed-trend-postgres-node", Host: "10.0.0.12", Port: 22, Username: "root",
+		AuthType: "password", Status: "online", BackupDir: "mixed-trend-postgres-node",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create PostgreSQL node: %v", err)
+	}
+	task := model.Task{Name: "mixed-trend-postgres-task", NodeID: node.ID, ExecutorType: "rsync", Status: "success"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create PostgreSQL task: %v", err)
+	}
+	finished := now
+	factRun := model.TaskRun{
+		TaskID: task.ID, NodeIDSnapshot: node.ID, ExecutorTypeSnapshot: "rsync",
+		TriggerType: "manual", Status: "success", StartedAt: &now, FinishedAt: &finished,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&factRun).Error; err != nil {
+		t.Fatalf("create PostgreSQL fact-backed run: %v", err)
+	}
+	addBackupHealthRunFact(t, db, factRun)
+	unprovenRun := model.TaskRun{
+		TaskID: task.ID, NodeIDSnapshot: node.ID, ExecutorTypeSnapshot: "rsync",
+		TriggerType: "manual", Status: "success", StartedAt: &now, FinishedAt: &finished,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&unprovenRun).Error; err != nil {
+		t.Fatalf("create PostgreSQL unproven run: %v", err)
+	}
+
+	resp, result := callBackupHealth(t, db)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected PostgreSQL 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var todayTotal, todaySuccess int
+	today := now.Format("2006-01-02")
+	for _, point := range result.Data.Trend {
+		if point.Date == today {
+			todayTotal = point.Total
+			todaySuccess = point.Success
+			break
+		}
+	}
+	if todayTotal != 2 || todaySuccess != 1 {
+		t.Fatalf("PostgreSQL same-day fact and unproven attempts must remain separate: total=%d success=%d trend=%+v", todayTotal, todaySuccess, result.Data.Trend)
+	}
+}
 
 func TestBackupHealth_OperatorOnlySeesOwnedStaleNodes(t *testing.T) {
 	db := openBackupHealthTestDB(t)
@@ -168,6 +433,8 @@ func TestBackupHealth_StaleNodes_OlderThan48h(t *testing.T) {
 			t.Fatalf("创建节点失败: %v", err)
 		}
 	}
+	addBackupHealthFact(t, db, nodes[0].ID, staleTime)
+	addBackupHealthFact(t, db, nodes[1].ID, freshTime)
 
 	resp, result := callBackupHealth(t, db)
 	if resp.Code != http.StatusOK {
@@ -199,6 +466,8 @@ func TestBackupHealth_StaleNodes_MixedNullAndOld(t *testing.T) {
 			t.Fatalf("创建节点失败: %v", err)
 		}
 	}
+	addBackupHealthFact(t, db, nodes[1].ID, staleTime)
+	addBackupHealthFact(t, db, nodes[2].ID, freshTime)
 
 	_, result := callBackupHealth(t, db)
 	if result.Data.StaleNodeCount != 2 {
@@ -210,6 +479,74 @@ func TestBackupHealth_StaleNodes_MixedNullAndOld(t *testing.T) {
 	}
 	if !names["node-null"] || !names["node-old"] {
 		t.Fatalf("期望过期节点包含 node-null 和 node-old，实际: %v", names)
+	}
+}
+func TestBackupHealth_StaleNodes_IgnoreUnverifiedCompletionFacts(t *testing.T) {
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+
+	now := time.Now().UTC()
+	verifiedAt := now.Add(-72 * time.Hour)
+	unverifiedAt := now.Add(-time.Hour)
+	nodes := []model.Node{
+		{
+			Name: "unverified-only-health-node", Host: "10.0.0.13", Port: 22, Username: "root",
+			AuthType: "password", Status: "online", BackupDir: "unverified-only-health-node",
+			LastBackupAt: &unverifiedAt,
+		},
+		{
+			Name: "mixed-health-node", Host: "10.0.0.14", Port: 22, Username: "root",
+			AuthType: "password", Status: "online", BackupDir: "mixed-health-node",
+			LastBackupAt: &unverifiedAt,
+		},
+	}
+	for i := range nodes {
+		if err := db.Create(&nodes[i]).Error; err != nil {
+			t.Fatalf("create node: %v", err)
+		}
+	}
+	addBackupHealthFact(t, db, nodes[1].ID, verifiedAt)
+	for _, fact := range []model.BackupCompletion{
+		{
+			NodeID:         nodes[0].ID,
+			FactKind:       model.BackupCompletionKindLegacyUnverified,
+			EvidenceStatus: model.BackupCompletionEvidenceUnverified,
+			CompletedAt:    unverifiedAt,
+			EvidenceRef:    "legacy-only-health-fact",
+			CreatedAt:      unverifiedAt,
+			UpdatedAt:      unverifiedAt,
+		},
+		{
+			NodeID:         nodes[1].ID,
+			FactKind:       model.BackupCompletionKindLegacyUnverified,
+			EvidenceStatus: model.BackupCompletionEvidenceUnverified,
+			CompletedAt:    unverifiedAt,
+			EvidenceRef:    "legacy-newer-health-fact",
+			CreatedAt:      unverifiedAt,
+			UpdatedAt:      unverifiedAt,
+		},
+	} {
+		if err := db.Create(&fact).Error; err != nil {
+			t.Fatalf("create unverified fact: %v", err)
+		}
+	}
+
+	resp, result := callBackupHealth(t, db)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if result.Data.StaleNodeCount != len(nodes) || len(result.Data.StaleNodes) != len(nodes) {
+		t.Fatalf("unverified facts must not make nodes fresh: stale=%+v", result.Data.StaleNodes)
+	}
+	seen := make(map[string]*time.Time, len(result.Data.StaleNodes))
+	for _, stale := range result.Data.StaleNodes {
+		seen[stale.Name] = stale.LastBackupAt
+	}
+	if lastBackupAt := seen[nodes[0].Name]; lastBackupAt != nil {
+		t.Fatalf("unverified-only node reported a freshness timestamp: %v", lastBackupAt)
+	}
+	if lastBackupAt := seen[nodes[1].Name]; lastBackupAt == nil || !lastBackupAt.Equal(verifiedAt) {
+		t.Fatalf("newer unverified fact replaced older verified freshness: %v, want %s", lastBackupAt, verifiedAt)
 	}
 }
 
@@ -232,7 +569,7 @@ func TestBackupHealth_DegradedPolicy_AllThreeRunsFailed(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 3; i++ {
 		run := model.TaskRun{
-			TaskID:    task.ID,
+			TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync",
 			Status:    "failed",
 			CreatedAt: now.Add(-time.Duration(i) * time.Hour),
 		}
@@ -268,12 +605,15 @@ func TestBackupHealth_DegradedPolicy_NotDegradedIfOneSuccess(t *testing.T) {
 	statuses := []string{"failed", "success", "failed"}
 	for i, status := range statuses {
 		run := model.TaskRun{
-			TaskID:    task.ID,
+			TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync",
 			Status:    status,
 			CreatedAt: now.Add(-time.Duration(i) * time.Hour),
 		}
 		if err := db.Create(&run).Error; err != nil {
 			t.Fatalf("创建 task_run 失败: %v", err)
+		}
+		if status == "success" {
+			addBackupHealthRunFact(t, db, run)
 		}
 	}
 
@@ -301,7 +641,7 @@ func TestBackupHealth_DegradedPolicy_NotDegradedIfFewerThan3Runs(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 2; i++ {
 		run := model.TaskRun{
-			TaskID:    task.ID,
+			TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync",
 			Status:    "failed",
 			CreatedAt: now.Add(-time.Duration(i) * time.Hour),
 		}
@@ -336,7 +676,7 @@ func TestBackupHealth_DegradedPolicy_DisabledPolicyIgnored(t *testing.T) {
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		run := model.TaskRun{TaskID: task.ID, Status: "failed", CreatedAt: now.Add(-time.Duration(i) * time.Hour)}
+		run := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync", Status: "failed", CreatedAt: now.Add(-time.Duration(i) * time.Hour)}
 		if err := db.Create(&run).Error; err != nil {
 			t.Fatalf("创建 task_run 失败: %v", err)
 		}
@@ -372,22 +712,26 @@ func TestBackupHealth_Trend_SevenDayAggregation(t *testing.T) {
 
 	// 今天：2 成功 + 1 失败
 	runs := []model.TaskRun{
-		{TaskID: task.ID, Status: "success", CreatedAt: now.Add(-1 * time.Hour)},
-		{TaskID: task.ID, Status: "success", CreatedAt: now.Add(-2 * time.Hour)},
-		{TaskID: task.ID, Status: "failed", CreatedAt: now.Add(-3 * time.Hour)},
+		{TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync", Status: "success", CreatedAt: now.Add(-1 * time.Hour)},
+		{TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync", Status: "success", CreatedAt: now.Add(-2 * time.Hour)},
+		{TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync", Status: "failed", CreatedAt: now.Add(-3 * time.Hour)},
 	}
-	// 昨天：1 成功
 	runs = append(runs, model.TaskRun{
-		TaskID: task.ID, Status: "success", CreatedAt: now.AddDate(0, 0, -1).Add(-1 * time.Hour),
+		TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync",
+		Status: "success", CreatedAt: now.AddDate(0, 0, -1).Add(-1 * time.Hour),
 	})
 	// 8 天前的记录不应出现在趋势中
 	runs = append(runs, model.TaskRun{
-		TaskID: task.ID, Status: "failed", CreatedAt: now.AddDate(0, 0, -8),
+		TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync",
+		Status: "failed", CreatedAt: now.AddDate(0, 0, -8),
 	})
 
 	for i := range runs {
 		if err := db.Create(&runs[i]).Error; err != nil {
 			t.Fatalf("创建 task_run 失败: %v", err)
+		}
+		if runs[i].Status == "success" && runs[i].CreatedAt.Before(now.AddDate(0, 0, -7)) == false {
+			addBackupHealthRunFact(t, db, runs[i])
 		}
 	}
 
@@ -469,6 +813,8 @@ func TestBackupHealth_Summary_AllStatistics(t *testing.T) {
 			t.Fatalf("创建节点失败: %v", err)
 		}
 	}
+	addBackupHealthFact(t, db, nodes[0].ID, freshTime)
+	addBackupHealthFact(t, db, nodes[2].ID, staleTime)
 
 	// 2 个启用的策略 + 1 个禁用的策略
 	policies := []model.Policy{
@@ -558,6 +904,9 @@ func TestBackupHealth_FullScenario(t *testing.T) {
 			t.Fatalf("创建节点失败: %v", err)
 		}
 	}
+	addBackupHealthFact(t, db, nodes[0].ID, freshTime)
+	addBackupHealthFact(t, db, nodes[1].ID, freshTime)
+	addBackupHealthFact(t, db, nodes[3].ID, staleTime)
 
 	// 策略：1 个降级（最近 3 次全失败）+ 1 个健康
 	policyDegraded := model.Policy{Name: "backup-db", SourcePath: "/data", TargetPath: "/backup", CronSpec: "0 2 * * *", Enabled: true}
@@ -580,7 +929,7 @@ func TestBackupHealth_FullScenario(t *testing.T) {
 
 	// 降级策略的 3 次失败
 	for i := 0; i < 3; i++ {
-		run := model.TaskRun{TaskID: taskBad.ID, Status: "failed", CreatedAt: now.Add(-time.Duration(i+1) * time.Hour)}
+		run := model.TaskRun{TaskID: taskBad.ID, NodeIDSnapshot: taskBad.NodeID, ExecutorTypeSnapshot: "rsync", Status: "failed", CreatedAt: now.Add(-time.Duration(i+1) * time.Hour)}
 		if err := db.Create(&run).Error; err != nil {
 			t.Fatalf("创建 task_run 失败: %v", err)
 		}
@@ -588,9 +937,12 @@ func TestBackupHealth_FullScenario(t *testing.T) {
 	// 健康策略的 3 次运行（2 成功 + 1 失败）
 	healthyStatuses := []string{"success", "success", "failed"}
 	for i, status := range healthyStatuses {
-		run := model.TaskRun{TaskID: taskGood.ID, Status: status, CreatedAt: now.Add(-time.Duration(i+1) * time.Hour)}
+		run := model.TaskRun{TaskID: taskGood.ID, NodeIDSnapshot: taskGood.NodeID, ExecutorTypeSnapshot: "rsync", Status: status, CreatedAt: now.Add(-time.Duration(i+1) * time.Hour)}
 		if err := db.Create(&run).Error; err != nil {
 			t.Fatalf("创建 task_run 失败: %v", err)
+		}
+		if status == "success" {
+			addBackupHealthRunFact(t, db, run)
 		}
 	}
 

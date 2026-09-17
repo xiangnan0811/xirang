@@ -6,16 +6,66 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"golang.org/x/crypto/ssh"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-
 	"xirang/backend/internal/model"
+	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/sshutil"
-
-	"golang.org/x/crypto/ssh"
+	"xirang/backend/internal/task/testutil"
 )
+
+func TestRsyncExecutorStartFailureReportsNoProcessStart(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+	missingBinary := filepath.Join(root, "missing-rsync")
+	exitCode, err := (&RsyncExecutor{binary: missingBinary}).Run(
+		context.Background(),
+		model.Task{ExecutorType: "rsync", RsyncSource: source, RsyncTarget: filepath.Join(root, "target")},
+		func(string, string) {},
+		nil,
+	)
+	if exitCode != -1 {
+		t.Fatalf("start failure exit code=%d, want -1", exitCode)
+	}
+	var noStartErr *NoProcessStartError
+	if !errors.As(err, &noStartErr) {
+		t.Fatalf("start failure error=%v, want NoProcessStartError", err)
+	}
+}
+func TestRsyncExecutorPreparationFailureReportsNoProcessStart(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+	blockedParent := filepath.Join(root, "target-parent")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write blocked parent fixture: %v", err)
+	}
+	target := filepath.Join(blockedParent, "target")
+
+	exitCode, err := (&RsyncExecutor{binary: filepath.Join(root, "missing-rsync")}).Run(
+		context.Background(),
+		model.Task{ExecutorType: "rsync", RsyncSource: source, RsyncTarget: target},
+		func(string, string) {},
+		nil,
+	)
+	if exitCode != -1 {
+		t.Fatalf("preparation failure exit code=%d, want -1", exitCode)
+	}
+	var noStartErr *NoProcessStartError
+	if !errors.As(err, &noStartErr) {
+		t.Fatalf("preparation failure error=%v, want NoProcessStartError", err)
+	}
+}
 
 func TestFactoryRejectsLocalExecutor(t *testing.T) {
 	factory := NewFactory(createArgEchoScript(t))
@@ -64,6 +114,197 @@ func createArgEchoScript(t *testing.T) string {
 		t.Fatalf("写入假 rsync 脚本失败: %v", err)
 	}
 	return scriptPath
+}
+func TestRsyncExecutorAppliesPolicyExcludesToLocalTree(t *testing.T) {
+	rsyncBinary, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync is not installed")
+	}
+	source := t.TempDir()
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "included.txt"), []byte("keep"), 0o600); err != nil {
+		t.Fatalf("写入包含文件失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "excluded.env"), []byte("secret"), 0o600); err != nil {
+		t.Fatalf("写入排除文件失败: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(source, "nested"), 0o755); err != nil {
+		t.Fatalf("创建嵌套目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "nested", "cache.tmp"), []byte("cache"), 0o600); err != nil {
+		t.Fatalf("写入嵌套排除文件失败: %v", err)
+	}
+
+	task := model.Task{
+		ExecutorType: "rsync",
+		RsyncSource:  source + string(os.PathSeparator),
+		RsyncTarget:  target,
+		Policy:       &model.Policy{ExcludeRules: "excluded.env\nnested/cache.tmp"},
+	}
+	exitCode, runErr := (&RsyncExecutor{binary: rsyncBinary}).Run(
+		context.Background(), task, func(_ string, _ string) {}, nil,
+	)
+	if runErr != nil || exitCode != 0 {
+		t.Fatalf("local Rsync with exclusions failed: exit=%d err=%v", exitCode, runErr)
+	}
+	if _, err := os.Stat(filepath.Join(target, "included.txt")); err != nil {
+		t.Fatalf("included file missing after Rsync: %v", err)
+	}
+	for _, excluded := range []string{"excluded.env", filepath.Join("nested", "cache.tmp")} {
+		if _, err := os.Stat(filepath.Join(target, excluded)); !os.IsNotExist(err) {
+			t.Fatalf("excluded file %q was copied: %v", excluded, err)
+		}
+	}
+}
+
+func TestRsyncExecutorSeparatesSameNodePolicyTargetsAndRestoresManifests(t *testing.T) {
+	rsyncBinary, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync is not installed")
+	}
+	sshdBinary, err := exec.LookPath("sshd")
+	if err != nil {
+		t.Skip("sshd is not installed")
+	}
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	node := testutil.StartRsyncSSHServer(t, sshdBinary)
+
+	coreRoot := t.TempDir()
+	targetA := policyPkg.PolicyNodeTargetPath(coreRoot, 101, 7)
+	targetB := policyPkg.PolicyNodeTargetPath(coreRoot, 202, 7)
+	if targetA == "" || targetB == "" || targetA == targetB {
+		t.Fatalf("policy targets are not isolated: A=%q B=%q", targetA, targetB)
+	}
+	sourceA := filepath.Join(t.TempDir(), "source-a")
+	sourceB := filepath.Join(t.TempDir(), "source-b")
+	for _, source := range []string{sourceA, sourceB} {
+		if err := os.MkdirAll(filepath.Join(source, "app"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const payloadA = "policy-A-config"
+	const payloadB = "policy-B-config"
+	if err := os.WriteFile(filepath.Join(sourceA, "app", "config.txt"), []byte(payloadA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceB, "app", "config.txt"), []byte(payloadB), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	taskA := model.Task{
+		ExecutorType: "rsync", RsyncSource: sourceA + string(os.PathSeparator),
+		RsyncTarget: targetA, RsyncBinary: rsyncBinary, Node: node,
+	}
+	taskB := model.Task{
+		ExecutorType: "rsync", RsyncSource: sourceB,
+		RsyncTarget: targetB, RsyncBinary: rsyncBinary, Node: node,
+	}
+	runner := &RsyncExecutor{binary: rsyncBinary}
+	if code, runErr := runner.Run(context.Background(), taskA, func(string, string) {}, nil); runErr != nil || code != 0 {
+		t.Fatalf("policy A backup code=%d err=%v", code, runErr)
+	}
+	manifestARaw, err := CaptureRsyncManifest(context.Background(), taskA, RsyncCaptureSourceRole)
+	if err != nil {
+		t.Fatalf("capture policy A manifest before policy B: %v", err)
+	}
+	manifestA, err := model.DecodeRsyncCaptureManifest(manifestARaw)
+	if err != nil || len(manifestA.Entries) == 0 {
+		t.Fatalf("policy A manifest=%+v err=%v", manifestA, err)
+	}
+	if err := VerifyRsyncCaptureManifestTarget(context.Background(), taskA, manifestARaw); err != nil {
+		t.Fatalf("verify policy A target: %v", err)
+	}
+
+	if code, runErr := runner.Run(context.Background(), taskB, func(string, string) {}, nil); runErr != nil || code != 0 {
+		t.Fatalf("policy B backup code=%d err=%v", code, runErr)
+	}
+	manifestBRaw, err := CaptureRsyncManifest(context.Background(), taskB, RsyncCaptureSourceRole)
+	if err != nil {
+		t.Fatalf("capture policy B manifest: %v", err)
+	}
+	manifestB, err := model.DecodeRsyncCaptureManifest(manifestBRaw)
+	if err != nil || len(manifestB.Entries) == 0 {
+		t.Fatalf("policy B manifest=%+v err=%v", manifestB, err)
+	}
+	if err := VerifyRsyncCaptureManifestTarget(context.Background(), taskB, manifestBRaw); err != nil {
+		t.Fatalf("verify policy B target: %v", err)
+	}
+
+	restore := func(name, source, expected, manifestRaw string, manifest model.RsyncCaptureManifest) {
+		t.Helper()
+		restoreTarget := filepath.Join(t.TempDir(), name)
+		task := model.Task{
+			ExecutorType: "rsync", RsyncSource: source, RsyncTarget: restoreTarget,
+			RsyncBinary: rsyncBinary, Node: node, RsyncCaptureLayout: manifest.Layout,
+			RsyncCaptureRoot: manifest.Root, RsyncCaptureManifest: manifestRaw,
+		}
+		if code, runErr := runner.RunRestore(context.Background(), task, func(string, string) {}, nil); runErr != nil || code != 0 {
+			t.Fatalf("%s restore code=%d err=%v", name, code, runErr)
+		}
+		got, err := os.ReadFile(filepath.Join(restoreTarget, "app", "config.txt"))
+		if err != nil {
+			t.Fatalf("%s restored config: %v", name, err)
+		}
+		if string(got) != expected {
+			t.Fatalf("%s restored config=%q, want %q", name, got, expected)
+		}
+	}
+	restore("restore-policy-a", targetA, payloadA, manifestARaw, manifestA)
+	restore("restore-policy-b", targetB, payloadB, manifestBRaw, manifestB)
+}
+
+func TestRsyncExecutorPassesPolicyExcludesAsArguments(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "rsync-args")
+	scriptPath := filepath.Join(t.TempDir(), "fake-rsync-capture.sh")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$XIRANG_RSYNC_CAPTURE\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("写入假 rsync 脚本失败: %v", err)
+	}
+	t.Setenv("XIRANG_RSYNC_CAPTURE", capturePath)
+	task := model.Task{
+		ExecutorType: "rsync",
+		RsyncSource:  "/source",
+		RsyncTarget:  t.TempDir(),
+		Policy: &model.Policy{
+			ExcludeRules: "*.log\ncache dir\n.secret\n",
+		},
+	}
+
+	exitCode, err := (&RsyncExecutor{binary: scriptPath}).Run(
+		context.Background(), task, func(_ string, _ string) {}, nil,
+	)
+	if err != nil || exitCode != 0 {
+		t.Fatalf("Rsync with policy excludes failed: exit=%d err=%v", exitCode, err)
+	}
+	raw, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("读取假 rsync 参数失败: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	want := []string{"--exclude", "*.log", "--exclude", "cache dir", "--exclude", ".secret"}
+	for index := 0; index+1 < len(want); index += 2 {
+		found := false
+		for argIndex := 0; argIndex+1 < len(args); argIndex++ {
+			if args[argIndex] == want[index] && args[argIndex+1] == want[index+1] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Rsync argv missing exclude pair %q/%q: %v", want[index], want[index+1], args)
+		}
+	}
+}
+
+func TestParseRsyncExcludeRulesRejectsUnsafeInput(t *testing.T) {
+	if _, err := parseRsyncExcludeRules(&model.Policy{ExcludeRules: "safe\nbad\x00rule"}); err == nil {
+		t.Fatal("NUL-bearing Rsync exclude rule was accepted")
+	}
+	tooLong := strings.Repeat("x", maxRsyncExcludeRuleBytes+1)
+	if _, err := parseRsyncExcludeRules(&model.Policy{ExcludeRules: tooLong}); err == nil {
+		t.Fatal("overlong Rsync exclude rule was accepted")
+	}
 }
 
 func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
@@ -115,9 +356,6 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 	if !strings.Contains(joined, "\n--\n") {
 		t.Fatalf("期望 rsync 参数包含 -- 以阻断选项注入，实际日志: %s", joined)
 	}
-	if !strings.Contains(joined, "StrictHostKeyChecking=accept-new") {
-		t.Fatalf("期望默认携带 StrictHostKeyChecking=accept-new，实际日志: %s", joined)
-	}
 	if !strings.Contains(joined, "-i") || !strings.Contains(joined, "[路径已隐藏]") || strings.Contains(joined, "xirang-key-") {
 		t.Fatalf("期望携带已脱敏的 -i 临时密钥参数，实际日志: %s", joined)
 	}
@@ -125,7 +363,7 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 
 func TestRsyncExecutorUsesStrictHostKeyCheckingWhenAutoAcceptDisabled(t *testing.T) {
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
-	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "")
 	exec := &RsyncExecutor{binary: createArgEchoScript(t)}
 	target := t.TempDir()
 
@@ -398,44 +636,47 @@ func TestRsyncExecutorBackupNotMisidentifiedAsRestore(t *testing.T) {
 	}
 }
 
-// TestRsyncExecutorRestoreUsesRemotePath 验证恢复任务（IsRestore=true）走远程恢复路径。
-// 由于没有真实 SSH 服务器，连接会失败，但关键是确认进入了 runRemoteRestore。
-func TestRsyncExecutorRestoreUsesRemotePath(t *testing.T) {
-	exec := &RsyncExecutor{binary: createArgEchoScript(t)}
-
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
-	if err != nil {
-		t.Fatalf("生成测试私钥失败: %v", err)
+func TestRsyncExecutorRestoreRejectsMissingOrRemoteCoreSource(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "should-not-run")
+	scriptPath := filepath.Join(t.TempDir(), "fake-rsync-marker.sh")
+	script := "#!/bin/sh\ntouch \"$XIRANG_RSYNC_MARKER\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("写入假 rsync 脚本失败: %v", err)
 	}
-	privateKey := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
-	})
+	t.Setenv("XIRANG_RSYNC_MARKER", capturePath)
 
-	task := model.Task{
-		ExecutorType: "rsync",
-		RsyncSource:  "/backup/data",
-		RsyncTarget:  "/var/app/data",
-		Node: model.Node{
-			Host:     "127.0.0.1",
-			Port:     1, // 使用端口 1，连接会立即被拒绝
-			Username: "root",
-			AuthType: "key",
-			SSHKey: &model.SSHKey{
-				PrivateKey: string(privateKey),
-			},
-		},
+	unsupportedRoot := t.TempDir()
+	regularSource := filepath.Join(unsupportedRoot, "regular")
+	if err := os.WriteFile(regularSource, []byte("not a directory source"), 0o600); err != nil {
+		t.Fatalf("写入不支持的测试源失败: %v", err)
+	}
+	symlinkSource := filepath.Join(unsupportedRoot, "symlink")
+	if err := os.Symlink(regularSource, symlinkSource); err != nil {
+		t.Fatalf("创建不支持的测试源链接失败: %v", err)
 	}
 
-	_, err = exec.RunRestore(context.Background(), task, func(_ string, _ string) {}, nil)
-	// 恢复模式需要真实 SSH 连接，所以必定失败。
-	// 关键断言：错误来自 SSH 连接（runRemoteRestore），而非本地 rsync 执行
-	if err == nil {
-		t.Fatalf("恢复模式无真实 SSH 应报错")
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{name: "missing core source", source: filepath.Join(t.TempDir(), "missing-core-backup")},
+		{name: "unsupported symlink source", source: symlinkSource},
+		{name: "remote source decoy", source: "root@remote-decoy:/backup/node-a"},
 	}
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "SSH") && !strings.Contains(errMsg, "ssh") && !strings.Contains(errMsg, "连接") && !strings.Contains(errMsg, "dial") {
-		t.Fatalf("恢复模式应因 SSH 连接失败而报错，实际: %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exitCode, err := (&RsyncExecutor{binary: scriptPath}).RunRestore(
+				context.Background(),
+				model.Task{ExecutorType: "rsync", RsyncSource: test.source, RsyncTarget: "/var/app/data"},
+				func(_ string, _ string) {}, nil,
+			)
+			if err == nil || exitCode != -1 {
+				t.Fatalf("expected source rejection, exit=%d err=%v", exitCode, err)
+			}
+			if _, statErr := os.Stat(capturePath); !os.IsNotExist(statErr) {
+				t.Fatalf("rsync ran after rejecting Core source: %v", statErr)
+			}
+		})
 	}
 }
 

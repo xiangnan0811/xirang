@@ -997,7 +997,7 @@ func (h *SettingsHandler) sshHostKeyTrustPostureRiskItem() securityRiskItem {
 	} else if !strictHostCheck {
 		examples = append(examples, "SSH 主机密钥校验已关闭")
 	} else {
-		autoAccept, autoAcceptErr := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
+		autoAccept, autoAcceptErr := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
 		if autoAcceptErr != nil {
 			examples = append(examples, "SSH 自动接受未知主机密钥配置值无效")
 		} else if autoAccept {
@@ -1097,8 +1097,10 @@ func (h *SettingsHandler) backupRestorePostureRiskItem(c *gin.Context) (security
 		if len(ctx.Tasks) > 0 && !backupRestorePostureHasExecutableTask(ctx.Tasks) {
 			addBackupRestorePostureFinding(aggregated, "no_task")
 		}
-		// 仅补齐已有执行但从未成功的场景，避免与 no_successful_backup 重复计数。
-		if ctx.LatestBackupRun != nil && ctx.LatestSuccessfulBackupRun == nil {
+		// A successful TaskRun is only an attempt. Durable completion facts own
+		// the success signal, so a pending/warning or command run cannot hide
+		// the missing-backup finding.
+		if ctx.LatestBackupRun != nil && ctx.LatestCompletion == nil {
 			addBackupRestorePostureFinding(aggregated, "no_successful_backup")
 		}
 		confidence := buildBackupConfidenceItem(now, ctx)

@@ -28,6 +28,7 @@ func setupDispatcherTestDB(t *testing.T) *gorm.DB {
 		&model.Policy{},
 		&model.Task{},
 		&model.TaskRun{},
+		&model.TaskRunEffect{},
 	); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
@@ -380,8 +381,8 @@ func TestDispatch_TriggerTaskWithoutRuntimeTriggererLogsError(t *testing.T) {
 	})
 
 	evt := Event{Type: EventNodeOffline, Context: map[string]interface{}{"node_id": uint(3)}}
-	if err := d.Dispatch(context.Background(), evt); err != nil {
-		t.Fatalf("dispatch: %v", err)
+	if err := d.Dispatch(context.Background(), evt); err == nil {
+		t.Fatal("dispatch should report the missing runtime triggerer")
 	}
 
 	var logs []model.AutomationRuleLog
@@ -389,8 +390,8 @@ func TestDispatch_TriggerTaskWithoutRuntimeTriggererLogsError(t *testing.T) {
 	if len(logs) != 1 {
 		t.Fatalf("expected 1 execution log, got %d", len(logs))
 	}
-	if logs[0].Result != ResultError || !strings.Contains(logs[0].Error, "任务执行器未初始化") {
-		t.Fatalf("expected missing triggerer error log, got result=%s error=%s", logs[0].Result, logs[0].Error)
+	if logs[0].Result != ResultError {
+		t.Fatalf("expected missing triggerer error log, got result=%s", logs[0].Result)
 	}
 }
 
@@ -475,17 +476,17 @@ func TestDispatch_PausePolicyNonexistentPolicy(t *testing.T) {
 	})
 
 	evt := Event{Type: EventBackupFailed, Context: map[string]interface{}{}}
-	if err := d.Dispatch(context.Background(), evt); err != nil {
-		t.Fatalf("dispatch: %v", err)
+	if err := d.Dispatch(context.Background(), evt); err == nil {
+		t.Fatal("dispatch should report the nonexistent policy")
 	}
 
 	var logs []model.AutomationRuleLog
 	db.Find(&logs)
 	if len(logs) != 1 {
-		t.Fatalf("expected 1 log, got %d", len(logs))
+		t.Fatalf("expected 1 execution log, got %d", len(logs))
 	}
 	if logs[0].Result != ResultError {
-		t.Errorf("expected error for nonexistent policy, got %s", logs[0].Result)
+		t.Fatalf("expected error for nonexistent policy, got %s", logs[0].Result)
 	}
 }
 

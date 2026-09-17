@@ -409,7 +409,7 @@ func (adapter *RsyncAdapter) validateOperation(ctx context.Context, snapshot Rea
 func (adapter *RsyncAdapter) verifyRoot(ctx context.Context, runtimeAccess RsyncRuntimeAccess, expected string) error {
 	entry, err := runtimeAccess.Tree.Lstat(ctx, runtimeAccess.Root, fileaccess.RootLocator(), fileaccess.ProviderPolicy)
 	if err != nil {
-		return mapTreeError(ctx, err)
+		return mapRootError(ctx, err)
 	}
 	if entry.Type != fileaccess.EntryDirectory || entry.SourceRevision != expected {
 		return newCapabilityError(backupasset.CapabilityMutableSourceChanged)
@@ -500,6 +500,21 @@ func mapTreeError(ctx context.Context, err error) error {
 		return newCapabilityError(backupasset.CapabilityProviderUnavailable)
 	default:
 		return newCapabilityError(backupasset.CapabilityRepositoryOffline)
+	}
+}
+func mapRootError(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	switch {
+	case errors.Is(err, fileaccess.ErrSourceChanged):
+		return newCapabilityError(backupasset.CapabilityMutableSourceChanged)
+	case errors.Is(err, fileaccess.ErrResourceLimit):
+		return newCapabilityError(backupasset.CapabilityProviderResourceLimit)
+	case errors.Is(err, fileaccess.ErrStrictUnavailable):
+		return newCapabilityError(backupasset.CapabilityProviderUnavailable)
+	default:
+		return newCapabilityError(backupasset.CapabilityProviderUnavailable)
 	}
 }
 

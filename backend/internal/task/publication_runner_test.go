@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/executor"
 )
 
@@ -26,7 +28,7 @@ func TestProviderRunnerEvidenceUsesExactTaskRunAttempt(t *testing.T) {
 	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: coordinator}
 	taskEntity := model.Task{ID: 7, ExecutorType: "restic", RsyncSource: "/source"}
 
-	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil, nil)
 	if result.Err != nil || result.ExitCode != 0 || !result.Managed || result.SuppressRetry {
 		t.Fatalf("provider result=%+v", result)
 	}
@@ -51,7 +53,7 @@ func TestTaskRunSuccessAndPublicationFailureRemainIndependentFacts(t *testing.T)
 		publicationCoordinator: &publicationCoordinatorFake{execution: session},
 	}
 
-	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
 	if result.ExitCode != 0 || result.Err != nil || !result.Managed || result.WarningCode != backupasset.FailurePublicationSessionAbandoned {
 		t.Fatalf("successful provider transfer was changed by publication failure: %+v", result)
 	}
@@ -79,7 +81,7 @@ func TestProviderRunnerRoutesManagedRsyncThroughBoundPublicationInput(t *testing
 	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
 	taskEntity := model.Task{ID: 7, ExecutorType: "rsync", RsyncSource: "/source", RsyncTarget: "/legacy-target"}
 
-	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil, nil)
 	if result.Err != nil || result.ExitCode != 0 || !result.Managed || result.WarningCode != "" {
 		t.Fatalf("managed Rsync provider result=%+v", result)
 	}
@@ -106,7 +108,7 @@ func TestProviderRunnerRoutesManagedRcloneThroughBoundPublicationInput(t *testin
 	}
 	taskEntity := model.Task{ID: 7, ExecutorType: "rclone", RsyncSource: "/source"}
 
-	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil, nil)
 	if result.Err != nil || result.ExitCode != 0 || !result.Managed || result.WarningCode != "" {
 		t.Fatalf("managed Rclone provider result=%+v", result)
 	}
@@ -114,6 +116,57 @@ func TestProviderRunnerRoutesManagedRcloneThroughBoundPublicationInput(t *testin
 		evidence.request.Attempt.Rclone == nil || evidence.request.Attempt.Rclone.RecoveryPointID != attempt.Rclone.RecoveryPointID ||
 		session.commit == nil || *session.commit != commit {
 		t.Fatalf("managed Rclone request=%+v session=%+v", evidence.request, session)
+	}
+}
+
+func TestProviderRunnerPrepareFailureDoesNotArmGeneration(t *testing.T) {
+	prepareErr := errors.New("FAKE_PUBLICATION_PREPARE_FAILURE_FOR_TEST_ONLY")
+	armCalls := 0
+	manager := &Manager{
+		executorFactory:        executorFactoryFake{executor: &evidenceExecutorFake{}},
+		publicationCoordinator: &publicationCoordinatorFake{err: prepareErr},
+	}
+	result := manager.executeProvider(
+		context.Background(),
+		model.Task{ID: 7, ExecutorType: "rclone", RsyncSource: "/source", RsyncTarget: "remote:bucket"},
+		9,
+		"manual",
+		"",
+		func() error {
+			armCalls++
+			return nil
+		},
+		nil,
+		nil,
+	)
+	if !errors.Is(result.Err, prepareErr) || !result.ExecutorNotInvoked || armCalls != 0 {
+		t.Fatalf("publication prepare failure result=%+v armCalls=%d", result, armCalls)
+	}
+}
+
+func TestProviderRunnerPreChildCancellationReturnsTypedNoStart(t *testing.T) {
+	executorFake := &preChildExecutorFake{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	armCalls := 0
+	manager := &Manager{executorFactory: executorFactoryFake{executor: executorFake}}
+	result := manager.executeProvider(
+		ctx,
+		model.Task{ID: 7, ExecutorType: "rclone", RsyncSource: "/source", RsyncTarget: "remote:bucket"},
+		9,
+		"manual",
+		"",
+		func() error {
+			armCalls++
+			return nil
+		},
+		nil,
+		nil,
+	)
+	var noStartErr *executor.NoProcessStartError
+	if !errors.As(result.Err, &noStartErr) || !result.ExecutorNotInvoked ||
+		armCalls != 0 || executorFake.calls.Load() != 0 {
+		t.Fatalf("pre-child cancellation result=%+v armCalls=%d executorCalls=%d", result, armCalls, executorFake.calls.Load())
 	}
 }
 
@@ -129,6 +182,111 @@ func TestManagedProviderResultBypassesLegacyVerifier(t *testing.T) {
 		t.Fatal("missing policy enabled verifier")
 	}
 }
+func TestProviderRunnerCreatesFreshCleanupBudgetAfterProviderReturns(t *testing.T) {
+	attempt := publicationResticAttempt(7, 9)
+	session := &publicationExecutionFake{mode: publication.ModeEvidence, attempt: attempt, requireLiveFinalizationContext: true}
+	evidence := &evidenceExecutorFake{result: executor.PublicationExecutionResult{
+		ExitCode: 0, Completion: backupasset.CompletionKnownExitZero, EvidenceCode: backupasset.FailureEvidenceMissingSummary,
+	}}
+	providerReturnedAt := make(chan time.Time, 1)
+	evidence.run = func(_ context.Context, _ executor.PublicationExecutionRequest) (executor.PublicationExecutionResult, error) {
+		time.Sleep(sshutil.CommandExecutionJoinTimeout + 50*time.Millisecond)
+		providerReturnedAt <- time.Now()
+		return evidence.result, nil
+	}
+	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
+
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
+	if result.Err != nil || result.WarningCode != backupasset.FailureEvidenceMissingSummary {
+		t.Fatalf("provider result=%+v", result)
+	}
+	returnedAt := <-providerReturnedAt
+	deadline, ok := session.deferContext.Deadline()
+	if !ok {
+		t.Fatal("publication cleanup context has no deadline")
+	}
+	if deadline.Before(returnedAt.Add(sshutil.CommandExecutionJoinTimeout - 25*time.Millisecond)) {
+		t.Fatalf("cleanup budget started before provider returned: returned=%s deadline=%s", returnedAt, deadline)
+	}
+}
+
+func TestProviderRunnerDefersMissingEvidenceWithoutClaimingCommit(t *testing.T) {
+	attempt := publicationResticAttempt(7, 9)
+	session := &publicationExecutionFake{mode: publication.ModeEvidence, attempt: attempt}
+	evidence := &evidenceExecutorFake{result: executor.PublicationExecutionResult{
+		ExitCode: 0, Completion: backupasset.CompletionKnownExitZero, EvidenceCode: backupasset.FailureEvidenceMissingSummary,
+	}}
+	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
+
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
+	if result.Err != nil || result.ExitCode != 0 || !result.Managed || result.WarningCode != backupasset.FailureEvidenceMissingSummary {
+		t.Fatalf("provider result=%+v", result)
+	}
+	if session.deferCall == nil || session.deferCall.Completion != backupasset.CompletionKnownExitZero || session.deferCall.Code != backupasset.FailureEvidenceMissingSummary {
+		t.Fatalf("publication deferral=%+v", session.deferCall)
+	}
+	if session.commit != nil || session.abandonCalls != 0 {
+		t.Fatalf("missing evidence finalized incorrectly: commit=%+v abandons=%d", session.commit, session.abandonCalls)
+	}
+}
+
+func TestProviderRunnerUnknownCancellationDefersWithoutRetry(t *testing.T) {
+	attempt := publicationResticAttempt(7, 9)
+	session := &publicationExecutionFake{mode: publication.ModeEvidence, attempt: attempt}
+	evidence := &evidenceExecutorFake{result: executor.PublicationExecutionResult{
+		ExitCode: provider.UnknownProviderExitCode, Completion: backupasset.CompletionOutcomeUnknown,
+	}, err: context.Canceled}
+	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
+
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
+	if !errors.Is(result.Err, context.Canceled) || !result.SuppressRetry || result.WarningCode != backupasset.FailureProviderCanceled {
+		t.Fatalf("unknown cancellation result=%+v", result)
+	}
+	if session.deferCall == nil || session.deferCall.Completion != backupasset.CompletionOutcomeUnknown || session.deferCall.Code != backupasset.FailureProviderCanceled {
+		t.Fatalf("unknown cancellation deferral=%+v", session.deferCall)
+	}
+	if session.commit != nil || session.abandonCalls != 0 {
+		t.Fatalf("unknown cancellation retried or abandoned: commit=%+v abandons=%d", session.commit, session.abandonCalls)
+	}
+}
+
+func TestProviderRunnerDeferFailureAbandonsWithoutClaimingSuccess(t *testing.T) {
+	attempt := publicationResticAttempt(7, 9)
+	deferErr := errors.New("FAKE_PUBLICATION_DEFER_DB_FAILURE_FOR_TEST_ONLY")
+	session := &publicationExecutionFake{mode: publication.ModeEvidence, attempt: attempt, deferErr: deferErr}
+	evidence := &evidenceExecutorFake{result: executor.PublicationExecutionResult{
+		ExitCode: 0, Completion: backupasset.CompletionKnownExitZero, EvidenceCode: backupasset.FailureEvidenceMissingSummary,
+	}}
+
+	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
+
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
+	if !errors.Is(result.Err, deferErr) || result.ExitCode != 0 || !result.Managed || result.WarningCode != backupasset.FailurePublicationSessionAbandoned {
+		t.Fatalf("defer failure result=%+v", result)
+	}
+	if session.abandonCalls != 1 || session.deferCall == nil {
+		t.Fatalf("defer failure cleanup abandons=%d deferral=%+v", session.abandonCalls, session.deferCall)
+	}
+}
+
+func TestProviderRunnerFailFailureAbandonsWithoutClaimingSuccess(t *testing.T) {
+	attempt := publicationResticAttempt(7, 9)
+	providerErr := errors.New("FAKE_PROVIDER_NONZERO_FOR_TEST_ONLY")
+	failErr := errors.New("FAKE_PUBLICATION_FAIL_DB_FAILURE_FOR_TEST_ONLY")
+	session := &publicationExecutionFake{mode: publication.ModeEvidence, attempt: attempt, failErr: failErr}
+	evidence := &evidenceExecutorFake{result: executor.PublicationExecutionResult{
+		ExitCode: 23, Completion: backupasset.CompletionKnownNonzero,
+	}, err: providerErr}
+	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
+
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
+	if !errors.Is(result.Err, providerErr) || !errors.Is(result.Err, failErr) || result.ExitCode != 23 || !result.Managed {
+		t.Fatalf("fail failure result=%+v", result)
+	}
+	if session.failCode != backupasset.FailureProviderNonzeroExit || session.abandonCalls != 1 {
+		t.Fatalf("fail failure cleanup code=%q abandons=%d", session.failCode, session.abandonCalls)
+	}
+}
 
 type executorFactoryFake struct{ executor executor.Executor }
 
@@ -138,15 +296,28 @@ type evidenceExecutorFake struct {
 	request executor.PublicationExecutionRequest
 	result  executor.PublicationExecutionResult
 	err     error
+	run     func(context.Context, executor.PublicationExecutionRequest) (executor.PublicationExecutionResult, error)
 }
 
 func (fake *evidenceExecutorFake) Run(context.Context, model.Task, executor.LogFunc, executor.ProgressFunc) (int, error) {
 	return -1, nil
 }
 
-func (fake *evidenceExecutorFake) RunWithPublication(_ context.Context, request executor.PublicationExecutionRequest, _ executor.LogFunc, _ executor.ProgressFunc) (executor.PublicationExecutionResult, error) {
+func (fake *evidenceExecutorFake) RunWithPublication(ctx context.Context, request executor.PublicationExecutionRequest, _ executor.LogFunc, _ executor.ProgressFunc) (executor.PublicationExecutionResult, error) {
 	fake.request = request
+	if fake.run != nil {
+		return fake.run(ctx, request)
+	}
 	return fake.result, fake.err
+}
+
+type preChildExecutorFake struct {
+	calls atomic.Int32
+}
+
+func (fake *preChildExecutorFake) Run(context.Context, model.Task, executor.LogFunc, executor.ProgressFunc) (int, error) {
+	fake.calls.Add(1)
+	return -1, &executor.NoProcessStartError{Err: context.Canceled}
 }
 
 type publicationCoordinatorFake struct {
@@ -161,16 +332,25 @@ func (fake *publicationCoordinatorFake) Prepare(_ context.Context, run publicati
 }
 
 type publicationExecutionFake struct {
-	mode         publication.ExecutionMode
-	attempt      provider.TaggedPublicationAttempt
-	commit       *provider.ProviderCommit
-	deferCall    *publication.Deferral
-	failCode     backupasset.PublicationFailureCode
-	rejectCode   backupasset.PublicationFailureCode
-	recordErr    error
-	abandonCalls int
-	rsyncInput   *provider.RsyncTreePublicationInput
-	rcloneInput  *provider.RclonePublicationInput
+	mode                           publication.ExecutionMode
+	attempt                        provider.TaggedPublicationAttempt
+	commit                         *provider.ProviderCommit
+	deferCall                      *publication.Deferral
+	deferContext                   context.Context
+	requireLiveFinalizationContext bool
+	deferErr                       error
+	failCode                       backupasset.PublicationFailureCode
+	failContext                    context.Context
+	failErr                        error
+	rejectCode                     backupasset.PublicationFailureCode
+	rejectContext                  context.Context
+	rejectErr                      error
+	recordErr                      error
+	abandonErr                     error
+	abandonCause                   error
+	abandonCalls                   int
+	rsyncInput                     *provider.RsyncTreePublicationInput
+	rcloneInput                    *provider.RclonePublicationInput
 }
 
 func (fake *publicationExecutionFake) Mode() publication.ExecutionMode { return fake.mode }
@@ -180,11 +360,12 @@ func (fake *publicationExecutionFake) Attempt() *provider.TaggedPublicationAttem
 }
 func (*publicationExecutionFake) Context() context.Context { return context.Background() }
 func (*publicationExecutionFake) Cancel(error) error       { return nil }
-func (fake *publicationExecutionFake) Abandon(error) error {
+func (fake *publicationExecutionFake) Abandon(cause error) error {
 	fake.abandonCalls++
-	return nil
+	fake.abandonCause = cause
+	return fake.abandonErr
 }
-func (*publicationExecutionFake) CompleteCompatibility(context.Context) error {
+func (fake *publicationExecutionFake) CompleteCompatibility(context.Context) error {
 	return nil
 }
 func (fake *publicationExecutionFake) RsyncTreePublicationInput() (provider.RsyncTreePublicationInput, error) {
@@ -202,7 +383,7 @@ func (fake *publicationExecutionFake) RclonePublicationInput() (provider.RcloneP
 	copy := *fake.rcloneInput
 	return copy, nil
 }
-func (fake *publicationExecutionFake) RecordProviderCommit(_ context.Context, commit provider.ProviderCommit) (publication.Outcome, error) {
+func (fake *publicationExecutionFake) RecordProviderCommit(ctx context.Context, commit provider.ProviderCommit) (publication.Outcome, error) {
 	copy := commit
 	fake.commit = &copy
 	if fake.recordErr != nil {
@@ -216,20 +397,29 @@ func (fake *publicationExecutionFake) RecordProviderCommit(_ context.Context, co
 	} else if fake.attempt.Rclone != nil {
 		pointID = fake.attempt.Rclone.RecoveryPointID
 	}
+	_ = ctx
 	return publication.Outcome{RecoveryPointID: pointID, State: backupasset.RecoveryPointVerifying, ProviderCommitRecorded: true}, nil
 }
-func (fake *publicationExecutionFake) Defer(_ context.Context, deferral publication.Deferral) error {
+func (fake *publicationExecutionFake) Defer(ctx context.Context, deferral publication.Deferral) error {
 	copy := deferral
 	fake.deferCall = &copy
-	return nil
+	fake.deferContext = ctx
+	if fake.requireLiveFinalizationContext {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return fake.deferErr
 }
-func (fake *publicationExecutionFake) Reject(_ context.Context, code backupasset.PublicationFailureCode) error {
+func (fake *publicationExecutionFake) Reject(ctx context.Context, code backupasset.PublicationFailureCode) error {
 	fake.rejectCode = code
-	return nil
+	fake.rejectContext = ctx
+	return fake.rejectErr
 }
-func (fake *publicationExecutionFake) Fail(_ context.Context, code backupasset.PublicationFailureCode) error {
+func (fake *publicationExecutionFake) Fail(ctx context.Context, code backupasset.PublicationFailureCode) error {
 	fake.failCode = code
-	return nil
+	fake.failContext = ctx
+	return fake.failErr
 }
 
 var _ publication.Coordinator = (*publicationCoordinatorFake)(nil)

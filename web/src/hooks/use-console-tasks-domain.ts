@@ -17,7 +17,6 @@ export type UseTasksDomainParams = {
   nodes: NodeRecord[];
   policies: PolicyRecord[];
   tasks: TaskRecord[];
-  alerts: AlertRecord[];
   setTasks: Dispatch<SetStateAction<TaskRecord[]>>;
   setAlerts: Dispatch<SetStateAction<AlertRecord[]>>;
   setWarning: Dispatch<SetStateAction<string | null>>;
@@ -34,7 +33,6 @@ export function useTasksDomain({
   nodes,
   policies,
   tasks,
-  alerts,
   setTasks,
   setAlerts,
   setWarning,
@@ -116,7 +114,6 @@ export function useTasksDomain({
     nodes,
     policies,
     tasks,
-    alerts,
     setTasks,
     setAlerts,
     setWarning,

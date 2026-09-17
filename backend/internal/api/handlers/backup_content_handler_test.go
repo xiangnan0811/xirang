@@ -494,7 +494,7 @@ func TestBackupContentIssuePrivateNetworkHTTPEnforcesExactCrossPurposeStepUpMatr
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.TokenRevocation{}); err != nil {
 		t.Fatal(err)
 	}
 	user := model.User{
@@ -505,6 +505,7 @@ func TestBackupContentIssuePrivateNetworkHTTPEnforcesExactCrossPurposeStepUpMatr
 		t.Fatal(err)
 	}
 	jwt := auth.NewJWTManager("FAKE_CONTENT_PROOF_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwt.SetDB(db)
 	secretProof, _, err := jwt.GenerateStepUpToken(user, auth.StepUpActionAssetSecretReveal, strings.Repeat("f", 32))
 	if err != nil {
 		t.Fatal(err)

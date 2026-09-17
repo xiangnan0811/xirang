@@ -16,6 +16,7 @@ type RsyncPointDeletionAccess struct {
 	Attempt            RsyncTreeAttemptV1
 	CommitMarkerDigest string
 	SourceFingerprint  string
+	Command            *RemoteCommandAccess `json:"-"`
 }
 
 var rsyncUnlinkTestHook func(name string)

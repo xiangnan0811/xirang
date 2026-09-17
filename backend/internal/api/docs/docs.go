@@ -1209,14 +1209,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/alerts/{id}/retry": {
+        "/alerts/{id}/retry-delivery": {
             "post": {
                 "security": [
                     {
                         "Bearer": []
                     }
                 ],
-                "description": "向指定通知通道重新发送告警",
+                "description": "向指定通知通道重新发送告警；优先重试该告警和通道最新的既有投递意图（包括升级事件投递），仅无历史投递意图时创建 direct 投递",
                 "consumes": [
                     "application/json"
                 ],
@@ -1291,14 +1291,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/alerts/{id}/retry-all": {
+        "/alerts/{id}/retry-failed-deliveries": {
             "post": {
                 "security": [
                     {
                         "Bearer": []
                     }
                 ],
-                "description": "对指定告警的所有失败投递记录进行批量重发",
+                "description": "按每个逻辑投递意图批量重试；不同升级事件投递保持独立，同一通道的空键历史重复通过 canonical direct 投递合并",
                 "produces": [
                     "application/json"
                 ],
@@ -2717,57 +2717,6 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "OK"
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/auth/2fa/disable": {
-            "post": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "验证密码和 TOTP 码后禁用两步验证",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "auth"
-                ],
-                "summary": "禁用 2FA",
-                "parameters": [
-                    {
-                        "description": "禁用 2FA 请求",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.totpDisableRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
                     },
                     "401": {
                         "description": "Unauthorized",
@@ -5256,12 +5205,19 @@ const docTemplate = `{
                 "summary": "创建批量命令",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "请求者范围的幂等键；同一请求重试必须复用",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
                         "description": "批量命令请求",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/internal_api_handlers.batchCommandRequest"
                         }
                     }
                 ],
@@ -5286,6 +5242,12 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -10956,6 +10918,107 @@ const docTemplate = `{
                 }
             }
         },
+        "/recovery-points/{id}/entries/{entryId}/preview-source": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "校验已授权条目的当前内容源；可变 Rsync 源过期时只刷新已有来源的目录，不创建或重连仓库。返回当前 Catalog 状态；building 状态应通过 catalog-status 等待，目录就绪后重新获取精确条目再申请票据。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "准备备份文件预览内容源",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "闭合版本请求，不接受 locator 或仓库配置",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupPreviewSourcePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.StatusDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/recovery-points/{id}/entries/{entryId}/processing": {
             "get": {
                 "security": [
@@ -11866,7 +11929,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回所有服务监控列表",
+                "description": "返回所有服务监控列表（请求头仅返回名称和配置状态）",
                 "produces": [
                     "application/json"
                 ],
@@ -11888,7 +11951,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                                "$ref": "#/definitions/internal_api_handlers.serviceMonitorResponse"
                                             }
                                         }
                                     }
@@ -11944,7 +12007,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                            "$ref": "#/definitions/internal_api_handlers.serviceMonitorResponse"
                                         }
                                     }
                                 }
@@ -11973,7 +12036,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回单个服务监控",
+                "description": "返回单个服务监控（请求头仅返回名称和配置状态）",
                 "produces": [
                     "application/json"
                 ],
@@ -12002,7 +12065,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                            "$ref": "#/definitions/internal_api_handlers.serviceMonitorResponse"
                                         }
                                     }
                                 }
@@ -12029,7 +12092,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "完整更新服务监控配置",
+                "description": "完整更新服务监控配置；省略 http_headers 仅在目标、类型和 HTTP 方法均未变化时保留现有请求头，修改监控用途时必须明确替换或清除；409 响应的 data.reason.code 为 service_monitor_target_change_requires_headers 或 service_monitor_concurrent_update",
                 "consumes": [
                     "application/json"
                 ],
@@ -12070,7 +12133,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                            "$ref": "#/definitions/internal_api_handlers.serviceMonitorResponse"
                                         }
                                     }
                                 }
@@ -12094,47 +12157,9 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
-                    }
-                }
-            },
-            "delete": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "删除指定服务监控",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "service-monitors"
-                ],
-                "summary": "删除服务监控",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "服务监控 ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
                     },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -13766,7 +13791,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/xirang_backend_internal_model.Task"
+                                                "$ref": "#/definitions/internal_api_handlers.taskResponse"
                                             }
                                         }
                                     }
@@ -13822,7 +13847,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Task"
+                                            "$ref": "#/definitions/internal_api_handlers.taskResponse"
                                         }
                                     }
                                 }
@@ -13937,7 +13962,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Task"
+                                            "$ref": "#/definitions/internal_api_handlers.taskResponse"
                                         }
                                     }
                                 }
@@ -13989,7 +14014,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.taskRequest"
+                            "$ref": "#/definitions/internal_api_handlers.TaskUpdateRequestSchema"
                         }
                     }
                 ],
@@ -14005,7 +14030,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Task"
+                                            "$ref": "#/definitions/internal_api_handlers.taskResponse"
                                         }
                                     }
                                 }
@@ -14024,8 +14049,26 @@ const docTemplate = `{
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -14832,6 +14875,88 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/reconcile-legacy-rclone": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "管理员确认远端已停止后，将暂停任务的指定 writing/unknown 代次标记为 dirty；不恢复调度、不执行备份、不放行旧代次恢复。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "协调旧版 Rclone 未知写入",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "明确的远端停止确认与原因",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.ReconcileLegacyRcloneWriteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
                         }
                     }
                 }
@@ -16437,6 +16562,26 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.ReconcileLegacyRcloneWriteRequest": {
+            "type": "object",
+            "required": [
+                "reason",
+                "remote_stopped",
+                "task_run_id"
+            ],
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "maxLength": 1024
+                },
+                "remote_stopped": {
+                    "type": "boolean"
+                },
+                "task_run_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_api_handlers.Response": {
             "type": "object",
             "properties": {
@@ -16445,6 +16590,85 @@ const docTemplate = `{
                 },
                 "data": {},
                 "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.TaskUpdateExecutorSecretsSchema": {
+            "type": "object",
+            "properties": {
+                "repository_password": {
+                    "type": "string",
+                    "format": "password"
+                }
+            }
+        },
+        "internal_api_handlers.TaskUpdateExecutorSettingsSchema": {
+            "type": "object",
+            "properties": {
+                "bandwidth_limit": {
+                    "type": "string"
+                },
+                "exclude_patterns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "repository_version": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "transfers": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.TaskUpdateRequestSchema": {
+            "type": "object",
+            "required": [
+                "expected_revision"
+            ],
+            "properties": {
+                "command": {
+                    "type": "string"
+                },
+                "cron_spec": {
+                    "type": "string"
+                },
+                "depends_on_task_id": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "executor_secrets": {
+                    "$ref": "#/definitions/internal_api_handlers.TaskUpdateExecutorSecretsSchema"
+                },
+                "executor_settings": {
+                    "$ref": "#/definitions/internal_api_handlers.TaskUpdateExecutorSettingsSchema"
+                },
+                "executor_type": {
+                    "type": "string"
+                },
+                "expected_revision": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "example": "1789344404185193005"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "policy_id": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "rsync_source": {
+                    "type": "string"
+                },
+                "rsync_target": {
                     "type": "string"
                 }
             }
@@ -16799,6 +17023,17 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupPreviewSourcePayload": {
+            "type": "object",
+            "properties": {
                 "schema_version": {
                     "type": "integer",
                     "maximum": 1,
@@ -17713,6 +17948,31 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.batchCommandRequest": {
+            "type": "object",
+            "required": [
+                "command",
+                "node_ids"
+            ],
+            "properties": {
+                "command": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "node_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "retain": {
+                    "type": "boolean"
+                }
+            }
+        },
         "internal_api_handlers.bulkResolveAlertsRequest": {
             "type": "object",
             "properties": {
@@ -18393,6 +18653,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "http_headers": {
+                    "description": "HTTPHeaders is a JSON object encoded as a JSON string. Omit it on\nupdates to preserve existing credentials only when the monitor use\n(type, target, and HTTP method) is unchanged; use \"{}\" to clear them.",
                     "type": "string"
                 },
                 "http_method": {
@@ -18412,6 +18673,65 @@ const docTemplate = `{
                 },
                 "type": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.serviceMonitorResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "http_expected_status": {
+                    "type": "integer"
+                },
+                "http_header_names": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "http_headers_configured": {
+                    "type": "boolean"
+                },
+                "http_method": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "interval_seconds": {
+                    "type": "integer"
+                },
+                "last_checked_at": {
+                    "type": "string"
+                },
+                "last_status": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                },
+                "timeout_seconds": {
+                    "type": "integer"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "uptime_pct": {
+                    "type": "number"
                 }
             }
         },
@@ -18534,6 +18854,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskPolicyResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
                     "type": "string"
                 }
             }
@@ -18693,6 +19024,103 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.taskResponse": {
+            "type": "object",
+            "properties": {
+                "archived_at": {
+                    "type": "string"
+                },
+                "batch_id": {
+                    "type": "string"
+                },
+                "command": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "cron_spec": {
+                    "type": "string"
+                },
+                "depends_on_task_id": {
+                    "type": "integer"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "escalation_policy_id": {
+                    "type": "integer"
+                },
+                "executor_secrets_configured": {},
+                "executor_settings": {},
+                "executor_type": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_run_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "next_run_at": {
+                    "type": "string"
+                },
+                "node": {
+                    "$ref": "#/definitions/xirang_backend_internal_model.Node"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "policy": {
+                    "$ref": "#/definitions/internal_api_handlers.taskPolicyResponse"
+                },
+                "policy_id": {
+                    "type": "integer"
+                },
+                "progress": {
+                    "type": "integer"
+                },
+                "rclone_publication": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RclonePublicationSummary"
+                },
+                "retry_count": {
+                    "type": "integer"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "rsync_publication": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningSummary"
+                },
+                "rsync_source": {
+                    "type": "string"
+                },
+                "rsync_target": {
+                    "type": "string"
+                },
+                "skip_next": {
+                    "type": "boolean"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "verify_status": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.taskRsyncVersioningActivationRequest": {
             "type": "object",
             "properties": {
@@ -18759,10 +19187,14 @@ const docTemplate = `{
         "internal_api_handlers.totpVerifyRequest": {
             "type": "object",
             "required": [
-                "code"
+                "code",
+                "enrollment_id"
             ],
             "properties": {
                 "code": {
+                    "type": "string"
+                },
+                "enrollment_id": {
                     "type": "string"
                 }
             }
@@ -23475,6 +23907,16 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "delivery_decided_at": {
+                    "type": "string"
+                },
+                "delivery_decision": {
+                    "description": "DeliveryDecision is intentionally independent of Alert.Status. A resolved\nalert may still have an in-flight delivery intent, while a silenced or\nescalated alert must not be rediscovered as a direct delivery on replay.",
+                    "type": "string"
+                },
+                "delivery_reason": {
+                    "type": "string"
+                },
                 "error_code": {
                     "type": "string"
                 },
@@ -23540,6 +23982,10 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "decision": {
+                    "description": "Decision is normally \"deliver\". It is kept on the row so a future\nnon-delivery intent can be represented without making an absent row\nambiguous. Legacy rows with an empty value are treated as deliverable.",
+                    "type": "string"
+                },
                 "id": {
                     "type": "integer"
                 },
@@ -23549,11 +23995,17 @@ const docTemplate = `{
                 "last_error": {
                     "type": "string"
                 },
+                "lease_expires_at": {
+                    "type": "string"
+                },
                 "next_retry_at": {
                     "type": "string"
                 },
                 "status": {
-                    "description": "pending|sent|retrying|failed",
+                    "description": "pending|sending|sent|retrying|failed",
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }
@@ -24015,150 +24467,6 @@ const docTemplate = `{
                 },
                 "username": {
                     "description": "PrivateKey 永远不通过 JSON 序列化暴露——所有 handler 都通过 sshKeyResponseItem\n+ toSSHKeyResponse() 脱敏，此处 json:\"-\" 是深度防御，防未来误写 c.JSON(model.SSHKey{...})",
-                    "type": "string"
-                }
-            }
-        },
-        "xirang_backend_internal_model.ServiceMonitor": {
-            "type": "object",
-            "properties": {
-                "created_at": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "http_expected_status": {
-                    "type": "integer"
-                },
-                "http_headers": {
-                    "description": "JSON",
-                    "type": "string"
-                },
-                "http_method": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "interval_seconds": {
-                    "type": "integer"
-                },
-                "last_checked_at": {
-                    "type": "string"
-                },
-                "last_status": {
-                    "description": "\"up\"|\"down\"|\"unknown\"",
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "target": {
-                    "description": "URL or host:port",
-                    "type": "string"
-                },
-                "timeout_seconds": {
-                    "type": "integer"
-                },
-                "type": {
-                    "description": "\"http\" | \"tcp\"",
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "uptime_pct": {
-                    "description": "trailing 24h",
-                    "type": "number"
-                }
-            }
-        },
-        "xirang_backend_internal_model.Task": {
-            "type": "object",
-            "properties": {
-                "archived_at": {
-                    "type": "string"
-                },
-                "batch_id": {
-                    "type": "string"
-                },
-                "command": {
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "cron_spec": {
-                    "type": "string"
-                },
-                "depends_on_task_id": {
-                    "type": "integer"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "escalation_policy_id": {
-                    "type": "integer"
-                },
-                "executor_type": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "last_error": {
-                    "type": "string"
-                },
-                "last_run_at": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "next_run_at": {
-                    "type": "string"
-                },
-                "node": {
-                    "$ref": "#/definitions/xirang_backend_internal_model.Node"
-                },
-                "node_id": {
-                    "type": "integer"
-                },
-                "policy": {
-                    "$ref": "#/definitions/xirang_backend_internal_model.Policy"
-                },
-                "policy_id": {
-                    "type": "integer"
-                },
-                "progress": {
-                    "type": "integer"
-                },
-                "retry_count": {
-                    "type": "integer"
-                },
-                "rsync_source": {
-                    "type": "string"
-                },
-                "rsync_target": {
-                    "type": "string"
-                },
-                "skip_next": {
-                    "type": "boolean"
-                },
-                "source": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "verify_status": {
                     "type": "string"
                 }
             }

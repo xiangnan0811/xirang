@@ -59,11 +59,21 @@ export function ServiceMonitorsPage() {
   const [httpMethod, setHttpMethod] = useState<HttpMethod>("GET");
   const [httpExpectedStatus, setHttpExpectedStatus] = useState("200");
   const [httpHeaders, setHttpHeaders] = useState<HeaderKV[]>([]);
+  const [headersDirty, setHeadersDirty] = useState(false);
 
   const [enabled, setEnabled] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const isEditing = Boolean(editingMonitor);
+  const monitorUseChanged = Boolean(
+    editingMonitor &&
+      (editingMonitor.type !== type ||
+        editingMonitor.target !== target.trim() ||
+        (editingMonitor.type === "http" && type === "http" && editingMonitor.httpMethod !== httpMethod)),
+  );
+  const headersRetargetNeedsDecision = Boolean(
+    editingMonitor?.httpHeadersConfigured && monitorUseChanged && !headersDirty,
+  );
 
   const fetchMonitors = useCallback(async () => {
     if (!token) return;
@@ -81,8 +91,7 @@ export function ServiceMonitorsPage() {
   useEffect(() => {
     fetchMonitors();
   }, [fetchMonitors]);
-
-  // Reset form when dialog opens/closes or editing monitor changes
+  // Reset form when dialog opens/closes or editing monitor changes.
   useEffect(() => {
     if (!editorOpen) return;
     if (editingMonitor) {
@@ -94,7 +103,10 @@ export function ServiceMonitorsPage() {
       setTimeoutSeconds(String(editingMonitor.timeoutSeconds));
       setHttpMethod(editingMonitor.httpMethod || "GET");
       setHttpExpectedStatus(String(editingMonitor.httpExpectedStatus));
-      setHttpHeaders(editingMonitor.httpHeaderList ?? []);
+      // Values are intentionally unavailable after loading. Keep replacement
+      // inputs empty until the user explicitly edits the hidden header set.
+      setHttpHeaders([]);
+      setHeadersDirty(false);
       setEnabled(editingMonitor.enabled);
     } else {
       setName("");
@@ -106,6 +118,7 @@ export function ServiceMonitorsPage() {
       setHttpMethod("GET");
       setHttpExpectedStatus("200");
       setHttpHeaders([]);
+      setHeadersDirty(false);
       setEnabled(true);
     }
     setFieldErrors({});
@@ -148,7 +161,6 @@ export function ServiceMonitorsPage() {
         timeoutSeconds: monitor.timeoutSeconds,
         httpMethod: monitor.httpMethod,
         httpExpectedStatus: monitor.httpExpectedStatus,
-        httpHeaderList: monitor.httpHeaderList,
         enabled: !monitor.enabled,
       };
       await createServiceMonitorsApi().update(token, monitor.id, input);
@@ -176,6 +188,9 @@ export function ServiceMonitorsPage() {
     if (type === "http" && !/^https?:\/\/.+/i.test(target.trim())) {
       nextErrors.target = t("serviceMonitor.validation.httpTargetFormat");
     }
+    if (headersRetargetNeedsDecision && !nextErrors.target) {
+      nextErrors.target = t("serviceMonitor.validation.headersRetargetRequiresAction");
+    }
     if (Object.keys(nextErrors).length > 0) {
       setFieldErrors(nextErrors);
       return;
@@ -196,6 +211,8 @@ export function ServiceMonitorsPage() {
     if (type === "http") {
       input.httpMethod = httpMethod;
       input.httpExpectedStatus = expectedStatusValue;
+    }
+    if (!isEditing || headersDirty) {
       input.httpHeaderList = httpHeaders;
     }
 
@@ -217,16 +234,27 @@ export function ServiceMonitorsPage() {
     }
   };
 
-  const addHeader = () => setHttpHeaders((prev) => [...prev, { key: "", value: "" }]);
+  const addHeader = () => {
+    setHeadersDirty(true);
+    setHttpHeaders((prev) => [...prev, { key: "", value: "" }]);
+  };
   const updateHeader = (idx: number, field: "key" | "value", val: string) => {
+    setHeadersDirty(true);
     setHttpHeaders((prev) => {
       const next = [...prev];
       next[idx] = { ...next[idx], [field]: val };
       return next;
     });
   };
-  const removeHeader = (idx: number) =>
+  const removeHeader = (idx: number) => {
+    setHeadersDirty(true);
     setHttpHeaders((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const clearHeaders = () => {
+    setHeadersDirty(true);
+    setHttpHeaders([]);
+  };
 
   const lastStatusLabel = (status: string) => {
     if (status === "up") return t("serviceMonitor.statusUp");
@@ -500,6 +528,25 @@ export function ServiceMonitorsPage() {
               {fieldErrors.target}
             </p>
           ) : null}
+          {headersRetargetNeedsDecision ? (
+            <div
+              role="alert"
+              className="mt-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-xs text-foreground"
+            >
+              <p>{t("serviceMonitor.httpHeadersRetargetWarning")}</p>
+              {type !== "http" ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  className="mt-1 h-auto px-2 py-0.5 text-xs"
+                  onClick={clearHeaders}
+                >
+                  {t("serviceMonitor.httpHeadersClear")}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {/* Interval + Timeout */}
@@ -586,63 +633,90 @@ export function ServiceMonitorsPage() {
 
             {/* HTTP Headers */}
             <div>
-              <div className="mb-1 flex items-center justify-between">
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-1.5">
                 <label className="text-sm font-medium">
                   {t("serviceMonitor.fieldHttpHeaders")}
                 </label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  className="h-auto px-2 py-0.5 text-xs"
-                  onClick={addHeader}
-                >
-                  + {t("serviceMonitor.addHeader")}
-                </Button>
+                <div className="flex flex-wrap items-center gap-1">
+                  {editingMonitor?.httpHeadersConfigured ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      className="h-auto px-2 py-0.5 text-xs"
+                      onClick={clearHeaders}
+                    >
+                      {t("serviceMonitor.httpHeadersClear")}
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    className="h-auto px-2 py-0.5 text-xs"
+                    onClick={addHeader}
+                  >
+                    + {t("serviceMonitor.addHeader")}
+                  </Button>
+                </div>
               </div>
               <p className="mb-2 text-xs text-muted-foreground">
                 {t("serviceMonitor.httpHeadersHint")}
               </p>
-              <div className="space-y-2">
-                {httpHeaders.map((kv, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <label className="sr-only" htmlFor={`sm-header-key-${idx}`}>
-                      {t("serviceMonitor.headerKeyAriaLabel", { index: idx + 1 })}
-                    </label>
-                    <Input
-                      id={`sm-header-key-${idx}`}
-                      name={`service-monitor-header-key-${idx}`}
-                      className="flex-1"
-                      placeholder={t("serviceMonitor.headerKeyPlaceholder")}
-                      autoComplete="off"
-                      value={kv.key}
-                      onChange={(event) => updateHeader(idx, "key", event.target.value)}
-                    />
-                    <label className="sr-only" htmlFor={`sm-header-value-${idx}`}>
-                      {t("serviceMonitor.headerValueAriaLabel", { index: idx + 1 })}
-                    </label>
-                    <Input
-                      id={`sm-header-value-${idx}`}
-                      name={`service-monitor-header-value-${idx}`}
-                      className="flex-1"
-                      placeholder={t("serviceMonitor.headerValuePlaceholder")}
-                      autoComplete="off"
-                      value={kv.value}
-                      onChange={(event) => updateHeader(idx, "value", event.target.value)}
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      type="button"
-                      className="size-8 shrink-0"
-                      aria-label={t("serviceMonitor.removeHeader")}
-                      onClick={() => removeHeader(idx)}
-                    >
-                      <Trash2 className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
+              {editingMonitor?.httpHeadersConfigured ? (
+                <p className="mb-2 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
+                  {t("serviceMonitor.httpHeadersConfigured", {
+                    names: editingMonitor.httpHeaderNames.join(", "),
+                  })}
+                </p>
+              ) : null}
+              {headersDirty || !isEditing ? (
+                <div className="space-y-2">
+                  {httpHeaders.map((kv, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <label className="sr-only" htmlFor={`sm-header-key-${idx}`}>
+                        {t("serviceMonitor.headerKeyAriaLabel", { index: idx + 1 })}
+                      </label>
+                      <Input
+                        id={`sm-header-key-${idx}`}
+                        name={`service-monitor-header-key-${idx}`}
+                        className="min-w-0 flex-1"
+                        placeholder={t("serviceMonitor.headerKeyPlaceholder")}
+                        autoComplete="off"
+                        value={kv.key}
+                        onChange={(event) => updateHeader(idx, "key", event.target.value)}
+                      />
+                      <label className="sr-only" htmlFor={`sm-header-value-${idx}`}>
+                        {t("serviceMonitor.headerValueAriaLabel", { index: idx + 1 })}
+                      </label>
+                      <Input
+                        id={`sm-header-value-${idx}`}
+                        name={`service-monitor-header-value-${idx}`}
+                        className="min-w-0 flex-1"
+                        placeholder={t("serviceMonitor.headerValuePlaceholder")}
+                        autoComplete="off"
+                        value={kv.value}
+                        onChange={(event) => updateHeader(idx, "value", event.target.value)}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        type="button"
+                        className="size-8 shrink-0"
+                        aria-label={t("serviceMonitor.removeHeader")}
+                        onClick={() => removeHeader(idx)}
+                      >
+                        <Trash2 className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {editingMonitor?.httpHeadersConfigured && !headersDirty ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {t("serviceMonitor.httpHeadersReplaceHint")}
+                </p>
+              ) : null}
             </div>
           </>
         )}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
@@ -25,7 +27,7 @@ func openBackupConfidenceTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.BackupCompletion{}, &model.RestoreDrillEvidence{}, &model.Alert{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 	return db
@@ -124,23 +126,40 @@ func seedConfidencePolicy(t *testing.T, db *gorm.DB, name string, opts ...func(*
 	}
 	return policy, node, task
 }
-
 func addRun(t *testing.T, db *gorm.DB, taskID uint, status string, trigger string, finishedAt time.Time, verifyStatus string) model.TaskRun {
 	t.Helper()
 	startedAt := finishedAt.Add(-5 * time.Minute)
 	run := model.TaskRun{
-		TaskID:       taskID,
-		TriggerType:  trigger,
-		Status:       status,
-		StartedAt:    &startedAt,
-		FinishedAt:   &finishedAt,
-		DurationMs:   int64(5 * time.Minute / time.Millisecond),
-		VerifyStatus: verifyStatus,
-		Progress:     100,
-		CreatedAt:    finishedAt,
+		TaskID:               taskID,
+		ExecutorTypeSnapshot: "rsync",
+		TriggerType:          trigger,
+		Status:               status,
+		StartedAt:            &startedAt,
+		FinishedAt:           &finishedAt,
+		DurationMs:           int64(5 * time.Minute / time.Millisecond),
+		VerifyStatus:         verifyStatus,
+		Progress:             100,
+		CreatedAt:            finishedAt,
 	}
 	if err := db.Create(&run).Error; err != nil {
 		t.Fatalf("创建执行记录失败: %v", err)
+	}
+	if status == "success" && trigger != "restore" && trigger != "drill" {
+		var task model.Task
+		if err := db.Select("id", "node_id", "executor_type").First(&task, taskID).Error; err != nil {
+			t.Fatalf("读取执行任务失败: %v", err)
+		}
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			return backuphealth.RecordLegacyTransferTx(context.Background(), tx, backuphealth.LegacyTransferInput{
+				TaskID:       task.ID,
+				TaskRunID:    run.ID,
+				NodeID:       task.NodeID,
+				ExecutorType: run.ExecutorTypeSnapshot,
+				CompletedAt:  finishedAt,
+			})
+		}); err != nil {
+			t.Fatalf("创建备份完成事实失败: %v", err)
+		}
 	}
 	return run
 }
@@ -242,6 +261,30 @@ func TestBackupConfidenceHealthyWithBackupAndEligibleDrill(t *testing.T) {
 		if strings.Contains(encoded, sensitive) {
 			t.Fatalf("confidence 响应不应暴露敏感/连接字段 %q: %s", sensitive, encoded)
 		}
+	}
+}
+func TestBackupConfidenceTaskRunSuccessWithoutFactIsNotBackupSuccess(t *testing.T) {
+	db := openBackupConfidenceTestDB(t)
+	_, _, task := seedConfidencePolicy(t, db, "policy-success-without-fact")
+	now := time.Now().UTC()
+	started := now.Add(-5 * time.Minute)
+	finished := now
+	if err := db.Create(&model.TaskRun{
+		TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync",
+		TriggerType: "cron", Status: "success", VerifyStatus: "passed",
+		StartedAt: &started, FinishedAt: &finished, CreatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("create task run: %v", err)
+	}
+
+	_, result := callBackupConfidence(t, db)
+	item := result.Data.Items[0]
+	codes := reasonCodes(item)
+	if !codes["no_successful_backup"] {
+		t.Fatalf("TaskRun success without a durable fact must remain missing backup evidence: %+v", item.Reasons)
+	}
+	if item.Status != "at_risk" {
+		t.Fatalf("missing durable backup fact must keep confidence at risk, got %q", item.Status)
 	}
 }
 

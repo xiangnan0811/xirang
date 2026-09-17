@@ -437,6 +437,18 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		KeepMonthly:        keepMonthly,
 		KeepYearly:         keepYearly,
 	}
+	// Materialize model defaults before the shared struct-create boundary so
+	// omitted request fields retain their historical defaults while explicit
+	// false/0 values can be restored after GORM's default callback.
+	if p.HookTimeoutSeconds == 0 {
+		p.HookTimeoutSeconds = 300
+	}
+	if p.MaxRetries == 0 {
+		p.MaxRetries = 2
+	}
+	if p.RetryBaseSeconds == 0 {
+		p.RetryBaseSeconds = 30
+	}
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
 			respondBadRequest(c, "hook 超时时间必须在 0-3600 秒之间")
@@ -467,12 +479,13 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&p).Error; err != nil {
+		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
 			return err
 		}
-		// 保存策略-节点关联
+		if err := model.CreatePolicyWithExplicitValues(tx, &p, model.PolicyCreateExplicitColumns()...); err != nil {
+			return err
+		}
 		if len(req.NodeIDs) > 0 {
-			// 验证所有节点 ID 存在
 			var existCount int64
 			if err := tx.Model(&model.Node{}).Where("id IN ?", req.NodeIDs).Count(&existCount).Error; err != nil {
 				return err
@@ -486,8 +499,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 					return err
 				}
 			}
-			// 模板策略不生成任务
-			if h.runner != nil && !p.IsTemplate {
+			if !p.IsTemplate {
 				if err := policy.SyncPolicyTasks(tx, h.runner, p, req.NodeIDs); err != nil {
 					return err
 				}
@@ -498,6 +510,12 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	if err != nil {
 		respondBadRequest(c, err.Error())
 		return
+	}
+	if h.runner != nil && !p.IsTemplate {
+		if err := policy.SyncPolicySchedules(h.db, h.runner, p.ID); err != nil {
+			respondInternalError(c, err)
+			return
+		}
 	}
 
 	// 重新加载以获取关联节点
@@ -831,6 +849,9 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
+			return err
+		}
 		if err := tx.Save(&p).Error; err != nil {
 			return err
 		}
@@ -856,20 +877,20 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 				}
 			}
 			// 模板策略不生成任务
-			if h.runner != nil && !p.IsTemplate {
+			if !p.IsTemplate {
 				if err := policy.SyncPolicyTasks(tx, h.runner, p, req.NodeIDs); err != nil {
 					return err
 				}
 			}
 		}
 		// 策略从启用变为禁用时，暂停所有关联任务的调度
-		if previousEnabled && !p.Enabled && h.runner != nil {
+		if previousEnabled && !p.Enabled {
 			if err := policy.PauseTasksForPolicy(tx, h.runner, p.ID); err != nil {
 				return err
 			}
 		}
 		// 策略从禁用变为启用时，恢复所有关联任务的调度
-		if !previousEnabled && p.Enabled && h.runner != nil {
+		if !previousEnabled && p.Enabled {
 			if err := policy.ResumeTasksForPolicy(tx, h.runner, p.ID, p.CronSpec); err != nil {
 				return err
 			}
@@ -879,6 +900,12 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	if err != nil {
 		respondBadRequest(c, err.Error())
 		return
+	}
+	if h.runner != nil && !p.IsTemplate {
+		if err := policy.SyncPolicySchedules(h.db, h.runner, p.ID); err != nil {
+			respondInternalError(c, err)
+			return
+		}
 	}
 
 	h.db.Preload("Nodes").First(&p, p.ID)
@@ -913,10 +940,14 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	var p model.Policy
-	if err := h.db.First(&p, id).Error; err != nil {
-		respondNotFound(c, "策略不存在")
-		return
+	var orphanedTaskIDs []uint
+	if h.runner != nil {
+		if err := h.db.Model(&model.Task{}).
+			Where("policy_id = ? AND source = ?", id, "policy").
+			Pluck("id", &orphanedTaskIDs).Error; err != nil {
+			respondInternalError(c, err)
+			return
+		}
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
@@ -939,6 +970,12 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 	if err != nil {
 		respondInternalError(c, err)
 		return
+	}
+	if h.runner != nil {
+		if err := policy.RemovePolicySchedules(h.db, h.runner, orphanedTaskIDs); err != nil {
+			respondInternalError(c, err)
+			return
+		}
 	}
 	respondMessage(c, "deleted")
 }
@@ -1304,16 +1341,14 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 			if err := tx.Save(&p).Error; err != nil {
 				return err
 			}
-			if h.runner != nil {
-				if previousEnabled && !req.Enabled {
-					if err := policy.PauseTasksForPolicy(tx, h.runner, pid); err != nil {
-						return err
-					}
+			if previousEnabled && !req.Enabled {
+				if err := policy.PauseTasksForPolicy(tx, h.runner, pid); err != nil {
+					return err
 				}
-				if !previousEnabled && req.Enabled {
-					if err := policy.ResumeTasksForPolicy(tx, h.runner, pid, p.CronSpec); err != nil {
-						return err
-					}
+			}
+			if !previousEnabled && req.Enabled {
+				if err := policy.ResumeTasksForPolicy(tx, h.runner, pid, p.CronSpec); err != nil {
+					return err
 				}
 			}
 		}
@@ -1322,6 +1357,14 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 	if err != nil {
 		respondBadRequest(c, err.Error())
 		return
+	}
+	if h.runner != nil {
+		for _, pid := range req.PolicyIDs {
+			if err := policy.SyncPolicySchedules(h.db, h.runner, pid); err != nil {
+				respondInternalError(c, err)
+				return
+			}
+		}
 	}
 	respondOK(c, gin.H{"count": len(req.PolicyIDs)})
 }

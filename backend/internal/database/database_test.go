@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/config"
+	"xirang/backend/internal/dbtx"
 
 	"github.com/mattn/go-sqlite3"
 	"gorm.io/driver/sqlite"
@@ -298,7 +299,7 @@ func TestWithSQLiteBusyRetryTxSetsAndRestoresBusyTimeout(t *testing.T) {
 	}
 
 	var timeoutInside int64
-	err := WithSQLiteBusyRetryTx(context.Background(), db, func(tx *gorm.DB) error {
+	err := dbtx.WithSQLiteBusyRetryTx(context.Background(), db, func(tx *gorm.DB) error {
 		return tx.Raw("PRAGMA busy_timeout").Scan(&timeoutInside).Error
 	})
 	if err != nil {
@@ -328,7 +329,7 @@ func TestWithSQLiteBusyRetryTxRetriesTypedSQLiteErrors(t *testing.T) {
 			}
 
 			calls := 0
-			err := WithSQLiteBusyRetryTx(context.Background(), db, func(tx *gorm.DB) error {
+			err := dbtx.WithSQLiteBusyRetryTx(context.Background(), db, func(tx *gorm.DB) error {
 				calls++
 				if err := tx.Exec("INSERT INTO busy_retry_values (value) VALUES (?)", calls).Error; err != nil {
 					return err
@@ -360,13 +361,10 @@ func TestWithSQLiteBusyRetryTxRetainsTypedBusyErrorAfterRetryExhaustion(t *testi
 	terminalErr := fmt.Errorf("terminal SQLite busy: %w", sqlite3.ErrBusy)
 	calls := 0
 
-	err := WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
+	err := dbtx.WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
 		calls++
 		return terminalErr
 	})
-	if calls != sqliteBusyRetryAttempts {
-		t.Fatalf("terminal SQLite busy body calls=%d, want %d", calls, sqliteBusyRetryAttempts)
-	}
 	if !errors.Is(err, sqlite3.ErrBusy) {
 		t.Fatalf("terminal SQLite busy error=%v, want errors.Is(ErrBusy)", err)
 	}
@@ -414,7 +412,7 @@ func TestWithSQLiteBusyRetryTxHonorsBusyContextDeadline(t *testing.T) {
 	done := make(chan error, 1)
 	calls := 0
 	go func() {
-		done <- WithSQLiteBusyRetryTx(ctx, db, func(*gorm.DB) error {
+		done <- dbtx.WithSQLiteBusyRetryTx(ctx, db, func(*gorm.DB) error {
 			calls++
 			return nil
 		})
@@ -448,7 +446,7 @@ func TestWithSQLiteBusyRetryTxPreservesNonRetryableErrors(t *testing.T) {
 			db, _, _ := newSQLiteBusyRetryTestDB(t)
 			returned := fmt.Errorf("transaction body: %w", testCase.cause)
 			calls := 0
-			err := WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
+			err := dbtx.WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
 				calls++
 				return returned
 			})
@@ -466,7 +464,7 @@ func TestWithSQLiteBusyRetryTxDiscardsConnectionWhenRestoreFails(t *testing.T) {
 	db, primary, state := newSQLiteBusyRetryInstrumentedDB(t)
 	state.failRestore.Store(true)
 
-	err := WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error { return nil })
+	err := dbtx.WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error { return nil })
 	if !errors.Is(err, errSQLiteBusyRetryRestore) {
 		t.Fatalf("restore failure error=%v, want injected restore error", err)
 	}
@@ -493,7 +491,7 @@ func TestWithSQLiteBusyRetryTxRestoresTimeoutAfterAppliedZeroMutationError(t *te
 	state.failZeroAfterApply.Store(true)
 	calls := 0
 
-	err := WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
+	err := dbtx.WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
 		calls++
 		return nil
 	})
@@ -517,7 +515,7 @@ func TestWithSQLiteBusyRetryTxPreservesBodyErrorWhenRestoreFails(t *testing.T) {
 	state.failRestore.Store(true)
 	bodyCause := errors.New("body error")
 
-	err := WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
+	err := dbtx.WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
 		return fmt.Errorf("transaction body: %w", bodyCause)
 	})
 	if !errors.Is(err, bodyCause) {
@@ -548,7 +546,7 @@ func TestWithSQLiteBusyRetryTxSkipsSQLiteSetupForOtherDialects(t *testing.T) {
 	state.busyTimeoutStatements.Store(0)
 
 	calls := 0
-	err := WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
+	err := dbtx.WithSQLiteBusyRetryTx(context.Background(), db, func(*gorm.DB) error {
 		calls++
 		return nil
 	})

@@ -76,6 +76,7 @@ const {
   getStorageUsageMock,
   getRecoveryPointMock,
   getBackupAssetMock,
+  preparePreviewSourceMock,
   issueTicketMock,
   listBackupAssetsMock,
   listBackupRepositoriesMock,
@@ -99,6 +100,7 @@ const {
   getStorageUsageMock: vi.fn(),
   getRecoveryPointMock: vi.fn(),
   getBackupAssetMock: vi.fn(),
+  preparePreviewSourceMock: vi.fn(),
   issueTicketMock: vi.fn(),
   listBackupAssetsMock: vi.fn(),
   listBackupRepositoriesMock: vi.fn(),
@@ -166,6 +168,7 @@ vi.mock("@/lib/api/client", () => ({
     getStorageUsage: getStorageUsageMock,
     getRecoveryPoint: getRecoveryPointMock,
     getBackupAsset: getBackupAssetMock,
+    preparePreviewSource: preparePreviewSourceMock,
     issueTicket: issueTicketMock,
     listBackupAssets: listBackupAssetsMock,
     listBackupRepositories: listBackupRepositoriesMock,
@@ -224,6 +227,24 @@ describe("BackupsPage", () => {
     getStorageUsageMock.mockReset();
     getRecoveryPointMock.mockReset();
     getBackupAssetMock.mockReset();
+    preparePreviewSourceMock.mockReset();
+    preparePreviewSourceMock.mockResolvedValue({
+      status: "available",
+      value: recoveryPoint.catalog.status === "available"
+        ? {
+            ...recoveryPoint.catalog.value,
+            generation: {
+              id: "3".repeat(32),
+              sequence: 1,
+              state: "complete",
+              startedAt: "2026-07-19T00:00:00Z",
+              finishedAt: "2026-07-19T00:00:01Z",
+              errorCode: "",
+              correlationId: "",
+            },
+          }
+        : recoveryPoint.catalog,
+    });
     issueTicketMock.mockReset();
     listBackupAssetsMock.mockReset();
     listBackupRepositoriesMock.mockReset();

@@ -2,6 +2,7 @@ package nodelogs
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func TestWorker_ProcessInsertsLogsAndAdvancesCursor(t *testing.T) {
 	}
 
 	// One journal line bracketed by the JournalDelim the fetcher parses.
-	out := `{"__REALTIME_TIMESTAMP":"1700000000000000","__CURSOR":"c1","PRIORITY":"6","_SYSTEMD_UNIT":"sshd","MESSAGE":"hello"}` + "\n" + JournalDelim + "\n"
+	out := fmt.Sprintf(`{"__REALTIME_TIMESTAMP":"%d","__CURSOR":"c1","PRIORITY":"6","_SYSTEMD_UNIT":"sshd","MESSAGE":"hello"}`, time.Now().UnixMicro()) + "\n" + JournalDelim + "\n" + FetchEnd + "\n"
 
 	w := &Worker{
 		db:      db,

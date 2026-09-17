@@ -1,0 +1,78 @@
+{
+  "id": "node-logs-collector-stall",
+  "name": "node-logs-collector-stall",
+  "title": "节点日志采集超时与队列卡死修复",
+  "description": "修复 SSH 会话超时未覆盖读/等待、worker 永久卡死、同节点重复入队和队列持续溢出。",
+  "status": "completed",
+  "dev_type": "backend",
+  "scope": "node-logs",
+  "package": "backend",
+  "priority": "P1",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-23",
+  "completedAt": "2026-09-16",
+  "branch": "codex/node-logs-recent-resume",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "d3101cf1cbc1c861641b525ef517340b4c2cd4b0",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/535",
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Accepted by user on 2026-09-16 after v0.55.15 NAS observations. Required single-node collection is healthy; other nodes do not currently require collection. See research/production-acceptance-2026-09-16.md. Archived as completed.",
+  "meta": {
+    "historical_before_2026_09_16": {
+      "incident_relation": "independent_pre_existing_not_v0_50_2_regression",
+      "mitigation": "all_production_collectors_temporarily_disabled",
+      "root_cause": "post_dial_ssh_read_wait_ignore_context_plus_no_node_dedup",
+      "timeout_policy": "close_and_join_before_return",
+      "output_limit_policy": "fail_without_parse_insert_or_cursor_advance",
+      "scheduler_policy": "one_queued_or_inflight_job_per_node",
+      "production_reenable": "user_action_after_release_single_node_then_batches",
+      "production_mutation": "not_authorized",
+      "implementation_authorized": false
+    },
+    "reconciliation": {
+      "date": "2026-09-16",
+      "baseline": "1ec1b2b8621fb2ae86b5888247ab49c69c629764",
+      "disposition": "retained",
+      "evidence": ".trellis/workspace/weibo/task-reconciliation-2026-09-16.md",
+      "previous_status": "planning",
+      "previous_completed_at": null,
+      "production_verified_this_session": false,
+      "next_action": "Retain P1: current nodelogs still lacks post-dial cancellation, hard output-limit detection, per-node deduplication and worker join. Reuse shared SSH execution where compatible. Product repair can be planned independently; production re-enable remains separately gated.",
+      "implementation_authorized_this_session": false,
+      "technical_dependency_on_backup_acceptance": false,
+      "production_reenable_requires_separate_acceptance": true
+    },
+    "implementation_authorized_this_session": "true",
+    "product_implementation": {
+      "status": "released_and_accepted",
+      "release": "v0.55.15",
+      "commit": "4a0c0aed105200fae74eeff5cd4c30cf1c3153b7",
+      "pr_url": "https://github.com/xiangnan0811/xirang/pull/533",
+      "production_verified": true
+    },
+    "recent_resume": {
+      "implementation_authorized": true,
+      "window_seconds": 3600,
+      "batch_entries": 200,
+      "status": "released_and_accepted",
+      "pr_url": "https://github.com/xiangnan0811/xirang/pull/535",
+      "release_pr_url": "https://github.com/xiangnan0811/xirang/pull/536",
+      "expected_release": "v0.55.15",
+      "ci_run": "35071234286",
+      "production_mutation": false
+    },
+    "production_acceptance": {
+      "status": "passed",
+      "date": "2026-09-16",
+      "scope": "one_required_journal_node",
+      "other_nodes": "not_required_by_user",
+      "evidence": "research/production-acceptance-2026-09-16.md",
+      "production_fault_injection": false
+    }
+  }
+}

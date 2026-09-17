@@ -273,7 +273,7 @@ type retentionRuntimeInput struct {
 func composeRetentionRuntime(input retentionRuntimeInput) (*retention.Worker, *retention.PolicyService, *retention.HoldService, *retention.PurgeService, *retention.ManagedTaskRetentionFacade, error) {
 	if input.DB == nil || input.Foundation == nil || input.Lease == nil || input.Registry == nil ||
 		input.Repository == nil || input.CatalogIndexer == nil || input.SearchIndexer == nil ||
-		input.Overlay == nil || input.ContentBroker == nil || input.AuditWriter == nil || input.Metrics == nil {
+		input.Overlay == nil || input.ContentBroker == nil || input.Metrics == nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("%w: retention runtime composition is unavailable", backupasset.ErrInvalidState)
 	}
 	if input.Now == nil {
@@ -337,6 +337,7 @@ func composeRetentionRuntime(input retentionRuntimeInput) (*retention.Worker, *r
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
+	deleter.SetNow(input.Now)
 	coordinator, err := retention.NewCoordinator(retention.CoordinatorDependencies{
 		DB: input.DB, Leases: input.Lease, Holds: holds, Now: input.Now,
 		LeaseOwnerID: retention.RetentionWorkerLeaseOwnerID, Admissions: lifecycle, Cleanup: lifecycle,

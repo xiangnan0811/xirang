@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
@@ -36,12 +38,27 @@ func migrateHealthIncidentTimelineTables(t *testing.T, db *gorm.DB) {
 		&model.Policy{},
 		&model.Task{},
 		&model.TaskRun{},
+		&model.BackupCompletion{},
 		&model.Alert{},
 		&model.AlertDelivery{},
 		&model.NodeMetricSample{},
 		&model.AnomalyEvent{},
 	); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+}
+func recordTimelineCompletion(t *testing.T, db *gorm.DB, task model.Task, run model.TaskRun, completedAt time.Time) {
+	t.Helper()
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return backuphealth.RecordLegacyTransferTx(context.Background(), tx, backuphealth.LegacyTransferInput{
+			TaskID:       task.ID,
+			TaskRunID:    run.ID,
+			NodeID:       run.NodeIDSnapshot,
+			ExecutorType: run.ExecutorTypeSnapshot,
+			CompletedAt:  completedAt,
+		})
+	}); err != nil {
+		t.Fatalf("创建备份完成事实失败: %v", err)
 	}
 }
 
@@ -109,9 +126,32 @@ func TestHealthIncidentTimelineAggregatesSortsSeverityAndTaskResource(t *testing
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatalf("创建任务失败: %v", err)
 	}
-
 	failureTime := now.Add(-2 * time.Hour)
-	run := model.TaskRun{TaskID: task.ID, Status: "failed", LastError: "rsync exited with code 23", CreatedAt: failureTime, UpdatedAt: failureTime, FinishedAt: &failureTime}
+	freshStarted := recentBackup.Add(-5 * time.Minute)
+	freshRunA := model.TaskRun{
+		TaskID: task.ID, NodeIDSnapshot: nodeA.ID, ExecutorTypeSnapshot: "rsync",
+		TriggerType: "cron", Status: "success", StartedAt: &freshStarted,
+		FinishedAt: &recentBackup, CreatedAt: recentBackup, UpdatedAt: recentBackup,
+	}
+	if err := db.Create(&freshRunA).Error; err != nil {
+		t.Fatalf("创建节点 A 成功 task_run 失败: %v", err)
+	}
+	recordTimelineCompletion(t, db, task, freshRunA, recentBackup)
+	taskB := model.Task{Name: "backup-node-b", NodeID: nodeB.ID, ExecutorType: "rsync", Status: "success"}
+	if err := db.Create(&taskB).Error; err != nil {
+		t.Fatalf("创建任务 B 失败: %v", err)
+	}
+	freshRunB := model.TaskRun{
+		TaskID: taskB.ID, NodeIDSnapshot: nodeB.ID, ExecutorTypeSnapshot: "rsync",
+		TriggerType: "cron", Status: "success", StartedAt: &freshStarted,
+		FinishedAt: &recentBackup, CreatedAt: recentBackup, UpdatedAt: recentBackup,
+	}
+	if err := db.Create(&freshRunB).Error; err != nil {
+		t.Fatalf("创建节点 B 成功 task_run 失败: %v", err)
+	}
+	recordTimelineCompletion(t, db, taskB, freshRunB, recentBackup)
+
+	run := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: nodeA.ID, ExecutorTypeSnapshot: "rsync", Status: "failed", LastError: "rsync exited with code 23", CreatedAt: failureTime, UpdatedAt: failureTime, FinishedAt: &failureTime}
 	if err := db.Create(&run).Error; err != nil {
 		t.Fatalf("创建失败 task_run 失败: %v", err)
 	}

@@ -1,5 +1,5 @@
 import { createContext } from "react";
-import type { LogEvent, NewTaskInput, TaskRecord } from "@/types/domain";
+import type { LogEvent, NewTaskInput, TaskRecord, UpdateTaskInput } from "@/types/domain";
 
 export interface TasksContextValue {
   tasks: TaskRecord[];
@@ -8,7 +8,7 @@ export interface TasksContextValue {
   tasksLoaded: boolean;
   refreshTasks: (options?: { limit?: number; offset?: number }) => Promise<void>;
   createTask: (input: NewTaskInput) => Promise<number>;
-  updateTask: (taskId: number, input: NewTaskInput) => Promise<void>;
+  updateTask: (taskId: number, input: UpdateTaskInput) => Promise<void>;
   deleteTask: (taskId: number) => Promise<void>;
   triggerTask: (taskId: number) => Promise<void>;
   cancelTask: (taskId: number) => Promise<void>;

@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
@@ -75,7 +74,8 @@ func TestBatchCreateRejectsUnownedNodeForOperator(t *testing.T) {
 func TestBatchCreateMissingGrantDoesNotDecryptInlineCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	admin := seedStepUpUser(t, db, "batch-create-grant-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionBatchCommandCreate)
@@ -113,7 +113,11 @@ func TestBatchCreateMissingGrantDoesNotDecryptInlineCredentials(t *testing.T) {
 func TestBatchCreateRequiresAllNodeGrantsBeforeCreatingTasks(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	if err := db.AutoMigrate(&model.BatchCommand{}, &model.BatchCommandDispatch{}); err != nil {
+		t.Fatal(err)
+	}
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	admin := seedStepUpUser(t, db, "batch-create-all-grants-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionBatchCommandCreate)
@@ -144,7 +148,7 @@ func TestBatchCreateRequiresAllNodeGrantsBeforeCreatingTasks(t *testing.T) {
 	}
 
 	createTaskRestoreGrantFixture(t, db, admin, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, CredentialGrantStatusActive, nil, credentialaudit.PtrUint(nodeB.ID), nil, "admin")
-	grantedResp := performStepUpRequest(t, r, http.MethodPost, "/batch-commands", token, proof, body)
+	grantedResp := performIdempotentBatchRequest(r, token, proof, body, "all-node-grants-key")
 	if grantedResp.Code != http.StatusOK {
 		t.Fatalf("全部 batch command grant 存在时应创建批量任务，实际: %d，响应: %s", grantedResp.Code, grantedResp.Body.String())
 	}
@@ -180,7 +184,7 @@ func encryptBatchHandlerTestCiphertext(t *testing.T, plain string) string {
 
 func TestBatchGetRedactsExecutorConfig(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.BatchCommand{}, &model.BatchCommandDispatch{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
@@ -325,7 +329,7 @@ func TestBatchDeleteRejectsUnownedBatchForOperator(t *testing.T) {
 
 func TestBatchDeleteReturnsInternalErrorWhenCleanupFails(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.TaskRunEffect{}, &model.BatchCommand{}, &model.BatchCommandDispatch{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 

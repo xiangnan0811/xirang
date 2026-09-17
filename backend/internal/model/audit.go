@@ -19,6 +19,20 @@ type AuditLog struct {
 	CreatedAt  time.Time `gorm:"index" json:"created_at"`
 }
 
+// BreakGlassAudit records the bounded operator reason for an explicit
+// administrator recovery. It intentionally stores no confirmation material.
+type BreakGlassAudit struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	TargetUserID   uint      `gorm:"not null;index" json:"target_user_id"`
+	TargetUsername string    `gorm:"size:64;not null" json:"target_username"`
+	Reason         string    `gorm:"type:text;not null" json:"reason"`
+	CreatedAt      time.Time `gorm:"not null;index" json:"created_at"`
+}
+
+func (BreakGlassAudit) TableName() string {
+	return "break_glass_audits"
+}
+
 // CredentialAuditEvent stores domain-specific evidence that a credential was used
 // or attempted for a high-risk operation. It must never contain raw secrets,
 // terminal streams, command output, or executor config.

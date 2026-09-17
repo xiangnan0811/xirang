@@ -224,6 +224,14 @@ func TestJWTManagerSessionRevokedFailsClosedForInvalidJTI(t *testing.T) {
 	}
 }
 
+func TestJWTManagerSessionRevokedFailsClosedWithoutDurableStore(t *testing.T) {
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	revoked, err := manager.IsSessionRevoked(strings.Repeat("a", 32))
+	if err == nil || !revoked {
+		t.Fatalf("IsSessionRevoked without durable store = %v, %v; want revoked error", revoked, err)
+	}
+}
+
 func TestJWTManagerRevokeSessionByJTI(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
 	if err != nil {

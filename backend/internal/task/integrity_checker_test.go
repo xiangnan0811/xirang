@@ -13,6 +13,7 @@ import (
 func TestManagedRcloneIntegrityBlocksLegacyCheckBeforeSSH(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "rclone"
 	taskEntity.RsyncSource = "/srv/source"

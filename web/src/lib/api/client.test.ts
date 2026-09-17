@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "./client";
-import { ApiError, buildLoginRedirectPath, isStepUpRequiredError, normalizeRedirectTarget, request } from "./core";
+import { ApiError, buildLoginRedirectPath, bumpAuthSessionGeneration, fetchWithFallback, isStepUpRequiredError, normalizeRedirectTarget, request } from "./core";
 import { saveStepUpProof, STEP_UP_ACTIONS } from "@/lib/step-up-storage";
 
 function createMockResponse(status = 200, body = "") {
@@ -96,6 +96,30 @@ describe("request envelope handling", () => {
     expect((captured as ApiError).retryAfter).toBe(12);
   });
 
+  it.each([
+    [400, "无效的资源 ID"],
+    [403, "权限不足"],
+    [500, "内部服务错误"],
+    [503, "服务暂不可用"],
+  ])("preserves safe middleware envelope messages for HTTP %i", async (status, message) => {
+    const payload = { code: status, message, data: null };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payload), { status }));
+
+    await expect(request("/protected", { token: "test-token" })).rejects.toMatchObject({
+      name: "ApiError", status, message, detail: payload,
+    });
+  });
+
+  it("preserves the middleware 429 message and prefers the Retry-After header", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      code: 429, message: "请求过于频繁", data: { retry_after: 12 },
+    }), { status: 429, headers: { "Retry-After": "15" } }));
+
+    await expect(request("/limited")).rejects.toMatchObject({
+      status: 429, message: "请求过于频繁", retryAfter: 15,
+    });
+  });
+
   it("sets Idempotency-Key only when the typed request option is supplied", async () => {
     fetchMock.mockResolvedValue(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: null })));
 
@@ -181,6 +205,42 @@ describe("request envelope handling", () => {
       renderer: "metadata_hex",
       profile: "hex_v1",
     });
+  });
+
+  it("composes preview-source preparation and reuses CatalogStatus decoding", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          generation: null,
+          latest_build: null,
+          coverage: {
+            status: "building",
+            indexed_entries: 0,
+            expected_entries: null,
+            manifest_digest: "",
+            observed_at: "2026-07-19T00:00:00Z",
+          },
+          staleness: { status: "fresh", observed_at: "2026-07-19T00:00:00Z", reason: null },
+          content_availability: { available: false, reason: null },
+          permissions: { list: true, preview: true, download: false },
+        },
+      }))
+    );
+    const controller = new AbortController();
+    const ref = { recoveryPointId: "a".repeat(32), entryId: "b".repeat(64) };
+
+    const mapped = await apiClient.preparePreviewSource("token-assets", ref, controller.signal);
+
+    expect(mapped.status).toBe("available");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `/api/v1/recovery-points/${ref.recoveryPointId}/entries/${ref.entryId}/preview-source`
+    );
+    expect(init.method).toBe("POST");
+    expect(init.signal).toBe(controller.signal);
+    expect(JSON.parse(String(init.body))).toEqual({ schema_version: 1 });
   });
 });
 
@@ -305,13 +365,14 @@ describe("apiClient 任务请求约束", () => {
       )
     );
 
-    await apiClient.createBatchCommand("token-task", [1], "uptime", undefined, false, "proof-2");
+    await apiClient.createBatchCommand("token-task", [1], "uptime", undefined, false, "proof-2", "batch-idem-key-0001");
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/batch-commands");
     expect(init.headers).toMatchObject({
       Authorization: "Bearer token-task",
       "X-Xirang-Step-Up": "proof-2",
+      "Idempotency-Key": "batch-idem-key-0001",
     });
   });
 
@@ -441,12 +502,210 @@ describe("apiClient 会话跳转", () => {
       "task-proof-before-401",
       Date.now() + 60_000,
     );
-    fetchMock.mockResolvedValueOnce(createMockResponse(401, JSON.stringify({ code: 401, message: "expired" })));
+    fetchMock.mockResolvedValueOnce(createMockResponse(401, JSON.stringify({ code: 401, message: "expired", data: null })));
 
     await expect(request("/protected", { token: "expired-token" })).rejects.toMatchObject({ status: 401 });
 
     expect(sessionStorage.getItem("xirang-auth-token")).toBeNull();
     expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
     expect(location.href).toContain("/login?redirect=");
+  });
+
+  it("当前世代且无新 token 时，请求 token 的 401 仍会跳转登录", async () => {
+    const location = {
+      href: "http://localhost/app/backups/data",
+      hostname: "localhost",
+      pathname: "/app/backups/data",
+      search: "?exportJobId=job-1&layout=table",
+      hash: "",
+    };
+    vi.stubGlobal("window", { location, sessionStorage });
+    fetchMock.mockResolvedValueOnce(createMockResponse(401, JSON.stringify({ code: 401, message: "expired" })));
+
+    await expect(request("/protected", { token: "request-token" })).rejects.toMatchObject({ status: 401 });
+
+    expect(location.href).toContain("/login?redirect=");
+    expect(location.href).not.toContain("exportJobId");
+    expect(location.href).toContain("layout%3Dtable");
+  });
+  it("延迟到达的旧 401 不会清掉新会话或跳转", async () => {
+    const location = {
+      href: "http://localhost/app/overview",
+      hostname: "localhost",
+      pathname: "/app/overview",
+      search: "",
+      hash: "",
+    };
+    vi.stubGlobal("window", { location, sessionStorage });
+    sessionStorage.setItem("xirang-auth-token", "old-token");
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "old-proof", Date.now() + 60_000);
+
+    let resolveBody!: (value: string) => void;
+    const body = new Promise<string>((resolve) => {
+      resolveBody = resolve;
+    });
+    fetchMock.mockResolvedValueOnce({
+      status: 401,
+      ok: false,
+      headers: { get: vi.fn().mockReturnValue(null) },
+      text: vi.fn(() => body),
+    } as unknown as Response);
+
+    const pending = request("/protected", { token: "old-token" });
+    await Promise.resolve();
+
+    sessionStorage.setItem("xirang-auth-token", "new-token");
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "new-proof", Date.now() + 60_000);
+    bumpAuthSessionGeneration();
+
+    resolveBody(JSON.stringify({ code: 401, message: "expired" }));
+    await expect(pending).rejects.toMatchObject({ status: 401 });
+
+    expect(sessionStorage.getItem("xirang-auth-token")).toBe("new-token");
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toContain("new-proof");
+    expect(location.href).toBe("http://localhost/app/overview");
+  });
+
+  it("同一用户退出再登录后，旧 401 不能清掉新会话", async () => {
+    const location = {
+      href: "http://localhost/app/overview",
+      hostname: "localhost",
+      pathname: "/app/overview",
+      search: "",
+      hash: "",
+    };
+    vi.stubGlobal("window", { location, sessionStorage });
+    sessionStorage.setItem("xirang-auth-token", "same-user-token");
+    bumpAuthSessionGeneration();
+
+    let resolveBody!: (value: string) => void;
+    const body = new Promise<string>((resolve) => {
+      resolveBody = resolve;
+    });
+    fetchMock.mockResolvedValueOnce({
+      status: 401,
+      ok: false,
+      headers: { get: vi.fn().mockReturnValue(null) },
+      text: vi.fn(() => body),
+    } as unknown as Response);
+
+    const pending = request("/protected", { token: "same-user-token" });
+    await Promise.resolve();
+
+    sessionStorage.removeItem("xirang-auth-token");
+    bumpAuthSessionGeneration();
+    sessionStorage.setItem("xirang-auth-token", "same-user-token");
+    saveStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, "relogin-proof", Date.now() + 60_000);
+    bumpAuthSessionGeneration();
+
+    resolveBody(JSON.stringify({ code: 401, message: "expired" }));
+    await expect(pending).rejects.toMatchObject({ status: 401 });
+
+    expect(sessionStorage.getItem("xirang-auth-token")).toBe("same-user-token");
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toContain("relogin-proof");
+    expect(location.href).toBe("http://localhost/app/overview");
+  });
+});
+
+describe("dev direct API fallback", () => {
+  const fetchMock = vi.fn();
+  const directBase = "http://127.0.0.1:8080/api/v1";
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("未显式直连时 localhost 网络错误和 404 都不会 fallback", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(request("/health")).rejects.toThrow("Failed to fetch");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce(createMockResponse(404, "missing"));
+    await expect(request("/health")).rejects.toMatchObject({ status: 404 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/health");
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(fetchWithFallback("/audit-logs/export", { method: "GET" })).rejects.toThrow("Failed to fetch");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce(createMockResponse(404, "missing"));
+    const notFound = await fetchWithFallback("/audit-logs/export", { method: "GET" });
+    expect(notFound.status).toBe(404);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+
+  it("开发显式直连仅对未认证 GET 重试，且不复制 Authorization 或 step-up", async () => {
+    vi.stubEnv("VITE_DEV_API_DIRECT_URL", directBase);
+
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: { ok: true } })));
+    await expect(request("/health")).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(`${directBase}/health`);
+    expect(fetchMock.mock.calls[1]?.[1]).not.toMatchObject({
+      headers: expect.objectContaining({
+        Authorization: expect.anything(),
+      }),
+    });
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(request("/protected", { token: "secret-token", stepUpProof: "step-proof" })).rejects.toThrow("Failed to fetch");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/protected");
+
+    fetchMock.mockReset();
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(createMockResponse(200, "csv"));
+    const exported = await fetchWithFallback("/audit-logs/export", { method: "GET" });
+    expect(exported.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(`${directBase}/audit-logs/export`);
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(fetchWithFallback("/audit-logs/export", {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer secret-token",
+        "X-Xirang-Step-Up": "step-proof",
+      },
+    })).rejects.toThrow("Failed to fetch");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(request("/batch/create", { method: "POST", body: { name: "n" } })).rejects.toThrow("Failed to fetch");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(fetchWithFallback("/batch/create", { method: "POST" })).rejects.toThrow("Failed to fetch");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("开发显式直连对未认证 GET 的 404 会再试一次", async () => {
+    vi.stubEnv("VITE_DEV_API_DIRECT_URL", directBase);
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(404, "missing"))
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: { ok: true } })));
+    await expect(request("/health")).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(`${directBase}/health`);
   });
 });

@@ -9,6 +9,8 @@ export interface TOTPSetupResponse {
   secret: string;
   qrUrl: string;
   issuer: string;
+  enrollmentId: string;
+  expiresAt: string;
 }
 
 export interface TOTPVerifyResponse {
@@ -35,6 +37,8 @@ type RawTOTPSetupResponse = {
   secret?: unknown;
   qr_url?: unknown;
   issuer?: unknown;
+  enrollment_id?: unknown;
+  expires_at?: unknown;
 };
 
 type RawTOTPVerifyResponse = {
@@ -66,6 +70,8 @@ export function mapTOTPSetupResponse(raw: RawTOTPSetupResponse | null | undefine
     secret: String(raw?.secret ?? ""),
     qrUrl: String(raw?.qr_url ?? ""),
     issuer: String(raw?.issuer ?? ""),
+    enrollmentId: String(raw?.enrollment_id ?? "").trim(),
+    expiresAt: String(raw?.expires_at ?? "").trim(),
   };
 }
 
@@ -107,11 +113,15 @@ export function createTOTPApi() {
       return mapTOTPSetupResponse(raw);
     },
 
-    async totpVerify(token: string, code: string): Promise<TOTPVerifyResponse> {
+    async totpVerify(token: string, code: string, enrollmentId: string): Promise<TOTPVerifyResponse> {
+      const enrollment = enrollmentId.trim();
+      if (!enrollment) {
+        throw new Error("enrollment_id is required");
+      }
       const raw = await request<RawTOTPVerifyResponse>("/auth/2fa/verify", {
         method: "POST",
         token,
-        body: { code },
+        body: { code, enrollment_id: enrollment },
       });
       return mapTOTPVerifyResponse(raw);
     },

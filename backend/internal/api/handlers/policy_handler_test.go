@@ -5,19 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gin-gonic/gin"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
-
-	"github.com/gin-gonic/gin"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
+	policyPkg "xirang/backend/internal/policy"
+	"xirang/backend/internal/secure"
 )
 
 func openPolicyHandlerTestDB(t *testing.T) *gorm.DB {
@@ -312,6 +312,101 @@ func TestPolicyUpdateWarningUsesEnvelope(t *testing.T) {
 	// 警告信息必须保留，建议放进 envelope.message，便于前端用 toast 提示。
 	if !strings.Contains(envelope.Message, "/legacy/backup") {
 		t.Fatalf("期望 envelope.message 包含旧路径 '/legacy/backup'，实际: %q", envelope.Message)
+	}
+}
+func TestPolicyUpdatePersistsTaskScheduleTransitionsWithoutRunner(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+	t.Setenv("RSYNC_ALLOWED_SOURCE_PREFIXES", "/data")
+	t.Setenv("RSYNC_ALLOWED_TARGET_PREFIXES", "/backup")
+
+	nodes := []model.Node{
+		{Name: "handler-cron-manual-node", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key", BackupDir: "handler-cron-manual-node"},
+		{Name: "handler-cron-inherited-node", Host: "127.0.0.1", Port: 23, Username: "root", AuthType: "key", BackupDir: "handler-cron-inherited-node"},
+	}
+	for i := range nodes {
+		if err := db.Create(&nodes[i]).Error; err != nil {
+			t.Fatalf("create node %d: %v", i, err)
+		}
+	}
+	policyEntity := model.Policy{
+		Name: "handler-cron-policy", SourcePath: "/data/source",
+		TargetPath: config.BackupRoot, CronSpec: "0 * * * *", Enabled: true,
+	}
+	if err := db.Create(&policyEntity).Error; err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	for i := range nodes {
+		if err := db.Create(&model.PolicyNode{PolicyID: policyEntity.ID, NodeID: nodes[i].ID}).Error; err != nil {
+			t.Fatalf("create policy node %d: %v", i, err)
+		}
+	}
+	policyID := policyEntity.ID
+	manual := model.Task{
+		Name: "handler-cron-manual", NodeID: nodes[0].ID, PolicyID: &policyID,
+		RsyncSource: "/data/source", RsyncTarget: policyPkg.PolicyNodeTargetPath(policyEntity.TargetPath, policyID, nodes[0].ID),
+		ExecutorType: "rsync", CronSpec: "", CronOverride: true,
+		Status: model.TaskRunStatusPending, Enabled: true, Source: "policy",
+	}
+	next := time.Now().UTC().Add(time.Hour)
+	inherited := model.Task{
+		Name: "handler-cron-inherited", NodeID: nodes[1].ID, PolicyID: &policyID,
+		RsyncSource: "/data/source", RsyncTarget: policyPkg.PolicyNodeTargetPath(policyEntity.TargetPath, policyID, nodes[1].ID),
+		ExecutorType: "rsync", CronSpec: "0 * * * *", NextRunAt: &next,
+		Status: model.TaskRunStatusPending, Enabled: true, Source: "policy",
+	}
+	if err := db.Create(&manual).Error; err != nil {
+		t.Fatalf("create manual task: %v", err)
+	}
+	if err := db.Create(&inherited).Error; err != nil {
+		t.Fatalf("create inherited task: %v", err)
+	}
+
+	handler := NewPolicyHandler(db, nil)
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	router.PUT("/policies/:id", handler.Update)
+	update := func(enabled bool) {
+		raw, err := json.Marshal(map[string]any{
+			"name": policyEntity.Name, "source_path": policyEntity.SourcePath,
+			"cron_spec": policyEntity.CronSpec, "enabled": enabled,
+			"node_ids": []uint{nodes[0].ID, nodes[1].ID},
+		})
+		if err != nil {
+			t.Fatalf("encode policy update: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/policies/%d", policyEntity.ID), bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("policy update enabled=%v status=%d body=%s", enabled, resp.Code, resp.Body.String())
+		}
+	}
+
+	update(false)
+	var pausedManual, pausedInherited model.Task
+	if err := db.First(&pausedManual, manual.ID).Error; err != nil {
+		t.Fatalf("reload paused manual task: %v", err)
+	}
+	if err := db.First(&pausedInherited, inherited.ID).Error; err != nil {
+		t.Fatalf("reload paused inherited task: %v", err)
+	}
+	if pausedManual.CronSpec != "" || pausedManual.NextRunAt != nil || !pausedManual.CronOverride ||
+		pausedInherited.CronSpec != "" || pausedInherited.NextRunAt != nil || pausedInherited.CronOverride {
+		t.Fatalf("runner-less disable lost durable schedule state: manual=%+v inherited=%+v", pausedManual, pausedInherited)
+	}
+
+	update(true)
+	var resumedManual, resumedInherited model.Task
+	if err := db.First(&resumedManual, manual.ID).Error; err != nil {
+		t.Fatalf("reload resumed manual task: %v", err)
+	}
+	if err := db.First(&resumedInherited, inherited.ID).Error; err != nil {
+		t.Fatalf("reload resumed inherited task: %v", err)
+	}
+	if resumedManual.CronSpec != "" || resumedManual.NextRunAt != nil || !resumedManual.CronOverride ||
+		resumedInherited.CronSpec != "0 * * * *" || resumedInherited.NextRunAt == nil || resumedInherited.CronOverride {
+		t.Fatalf("runner-less enable lost durable schedule state: manual=%+v inherited=%+v", resumedManual, resumedInherited)
 	}
 }
 
@@ -1395,5 +1490,129 @@ func TestPolicyGetSandboxOnlyCannotAccessPolicy(t *testing.T) {
 	r.ServeHTTP(resp, req)
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("仅拥有沙箱应 403，实际 %d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestCloneFromTemplatePreservesFieldsAndEncryptsHooks(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			runCloneFromTemplatePreservesFieldsAndEncryptsHooks(t, engine)
+		})
+	}
+}
+
+func runCloneFromTemplatePreservesFieldsAndEncryptsHooks(t *testing.T, engine string) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_POLICY_CLONE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+
+	db := openR306DB(t, engine, &model.Policy{}, &model.Node{}, &model.PolicyNode{})
+	node := model.Node{Name: "clone-node", Host: "127.0.0.1", BackupDir: "/remote/clone"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	template := model.Policy{
+		Name:                "clone-template",
+		Description:         "template description",
+		SourcePath:          "/srv/source",
+		TargetPath:          "/srv/historical-target",
+		CronSpec:            "17 3 * * *",
+		ExcludeRules:        "*.tmp",
+		BwLimit:             42,
+		RetentionDays:       31,
+		RPOMinutes:          12,
+		RTOMinutes:          34,
+		RetentionMode:       "gfs",
+		KeepDaily:           3,
+		KeepWeekly:          2,
+		KeepMonthly:         1,
+		KeepYearly:          1,
+		MaxConcurrent:       4,
+		Enabled:             true,
+		VerifyEnabled:       false,
+		VerifySampleRate:    67,
+		IsTemplate:          true,
+		PreHook:             "echo clone-pre-secret",
+		PostHook:            "echo clone-post-secret",
+		HookTimeoutSeconds:  91,
+		MaxExecutionSeconds: 720,
+		MaxRetries:          4,
+		RetryBaseSeconds:    19,
+		BandwidthSchedule:   "00:00-06:00=10M",
+		DrillCron:           "0 4 * * 0",
+		DrillRestorePath:    "/tmp/template-drill",
+		DrillPreVerify:      "echo pre-verify-secret",
+		DrillVerify:         "echo verify-secret",
+		DrillPostVerify:     "echo post-verify-secret",
+		DrillAutoCleanup:    false,
+	}
+	if err := model.CreatePolicyWithExplicitValues(db, &template, model.PolicyCreateExplicitColumns()...); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: template.ID, NodeID: node.ID}).Error; err != nil {
+		t.Fatalf("link template node: %v", err)
+	}
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	router.POST("/policies/from-template/:id", NewPolicyHandler(db, nil).CloneFromTemplate)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/policies/from-template/%d", template.ID), nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("clone status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode clone response: %v", err)
+	}
+	var cloneID uint
+	if err := json.Unmarshal(envelope.Data["id"], &cloneID); err != nil || cloneID == 0 {
+		t.Fatalf("clone response id=%q err=%v", envelope.Data["id"], err)
+	}
+	var responsePreHook string
+	if err := json.Unmarshal(envelope.Data["pre_hook"], &responsePreHook); err != nil || responsePreHook != template.PreHook {
+		t.Fatalf("clone response pre_hook=%q template=%q err=%v", responsePreHook, template.PreHook, err)
+	}
+
+	var clone model.Policy
+	if err := db.First(&clone, cloneID).Error; err != nil {
+		t.Fatalf("load cloned policy: %v", err)
+	}
+	if clone.IsTemplate || clone.Enabled || clone.DrillEnabled || clone.TargetPath != config.BackupRoot ||
+		clone.Description != template.Description || clone.SourcePath != template.SourcePath ||
+		clone.RetentionMode != template.RetentionMode || clone.VerifyEnabled != template.VerifyEnabled ||
+		clone.MaxRetries != template.MaxRetries || clone.DrillAutoCleanup != template.DrillAutoCleanup ||
+		clone.DrillRestorePath != template.DrillRestorePath {
+		t.Fatalf("cloned policy did not preserve/cut over fields: %+v", clone)
+	}
+	if clone.PreHook != template.PreHook || clone.PostHook != template.PostHook ||
+		clone.DrillPreVerify != template.DrillPreVerify || clone.DrillVerify != template.DrillVerify ||
+		clone.DrillPostVerify != template.DrillPostVerify {
+		t.Fatalf("cloned encrypted fields mismatch: %+v", clone)
+	}
+	var raw struct {
+		PreHook  string `gorm:"column:pre_hook"`
+		PostHook string `gorm:"column:post_hook"`
+		Drill    string `gorm:"column:drill_verify"`
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Table("policies").
+		Select("pre_hook, post_hook, drill_verify").Where("id = ?", cloneID).Scan(&raw).Error; err != nil {
+		t.Fatalf("read raw cloned hooks: %v", err)
+	}
+	for _, stored := range []string{raw.PreHook, raw.PostHook, raw.Drill} {
+		if !strings.HasPrefix(stored, "enc:") || strings.Contains(stored, "clone-secret") || strings.Contains(stored, "verify-secret") {
+			t.Fatalf("hook not encrypted at rest: %q", stored)
+		}
+	}
+	var linkCount int64
+	if err := db.Model(&model.PolicyNode{}).Where("policy_id = ? AND node_id = ?", cloneID, node.ID).Count(&linkCount).Error; err != nil {
+		t.Fatalf("count cloned node link: %v", err)
+	}
+	if linkCount != 1 {
+		t.Fatalf("cloned policy node links=%d, want 1", linkCount)
 	}
 }

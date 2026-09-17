@@ -33,6 +33,7 @@ import (
 	"xirang/backend/internal/backupasset/search"
 	configpkg "xirang/backend/internal/config"
 	"xirang/backend/internal/database"
+	"xirang/backend/internal/dbtx"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
@@ -7358,7 +7359,7 @@ type managedExportSQLiteBusyDrainBudget struct {
 
 func (budget *managedExportSQLiteBusyDrainBudget) ReconcileExpiredAttemptReads(ctx context.Context, _ int) (int, error) {
 	budget.once.Do(func() { close(budget.entered) })
-	err := database.WithSQLiteBusyRetryTx(ctx, budget.db, func(*gorm.DB) error {
+	err := dbtx.WithSQLiteBusyRetryTx(ctx, budget.db, func(*gorm.DB) error {
 		budget.calls.Add(1)
 		return nil
 	})
@@ -9548,6 +9549,15 @@ func TestContentBrokerDeliveryBranchClaimsOnly000066AndDelegates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close Content broker test database: %v", err)
+		}
+	})
 	if err := db.AutoMigrate(&model.BackupAssetDeliveryGrant{}); err != nil {
 		t.Fatal(err)
 	}
@@ -9650,6 +9660,15 @@ func TestRuntimeArchiveMemberIndexResolverKeepsSucceededNonCurrentJobDeadline(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close archive resolver test database: %v", err)
+		}
+	})
 	if err := db.AutoMigrate(
 		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingAttempt{},
 		&model.BackupAssetDerivedArtifactSet{}, &model.BackupAssetDerivedBlob{},

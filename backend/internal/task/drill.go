@@ -136,12 +136,15 @@ func (m *Manager) TriggerDrill(policyID uint, allowedSourceNodeIDs []uint) (uint
 		return 0, ErrDrillAlreadyActive
 	}
 	scheduled := false
+	defer m.releasePendingRunAdmission(ownership)
 	defer func() {
 		if scheduled {
 			return
 		}
 		ownership.cancel()
-		m.chainRunner.Delete(task.ID)
+		if m.chainRunner != nil {
+			m.chainRunner.Delete(task.ID)
+		}
 		m.pendingRuns.CompareAndDelete(task.ID, ownership)
 	}()
 
@@ -169,15 +172,20 @@ func (m *Manager) TriggerDrill(policyID uint, allowedSourceNodeIDs []uint) (uint
 		logger.Module("task").Warn().Err(err).Uint("task_id", task.ID).Msg("创建恢复演练执行记录失败")
 		return 0, fmt.Errorf("创建演习执行记录失败")
 	}
-
-	// 5. 异步执行演习 with the manager-owned cancellable context.
+	if !m.handoffPendingRunAdmission(ownership) {
+		if run.ID != 0 {
+			if _, cancelErr := m.cancelDrillTaskRuns(task.ID, "演习已取消"); cancelErr != nil {
+				logger.Module("task").Warn().Uint("task_id", task.ID).Uint("task_run_id", run.ID).
+					Err(cancelErr).Msg("关闭期间放弃恢复演练执行记录失败")
+			}
+		}
+		return 0, fmt.Errorf("系统维护中，请稍候再试")
+	}
 	scheduled = true
-	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
 		m.executeDrillWithContext(runCtx, &policy, task, sandboxNode, run.ID, ownership, runCancel)
 	}()
-
 	return run.ID, nil
 }
 
@@ -223,6 +231,25 @@ func (m *Manager) pendingDrillEvidence(
 	}, nil
 }
 
+func latestSuccessfulRunIDTx(tx *gorm.DB, taskID, nodeID uint) (*uint, error) {
+	if tx == nil || !model.IsTaskRunNodeSnapshotAuthoritative(nodeID) {
+		return nil, nil
+	}
+	var run model.TaskRun
+	result := tx.Select("id").
+		Where("task_id = ? AND node_id_snapshot = ? AND status = ?", taskID, nodeID, model.TaskRunStatusSuccess).
+		Order("finished_at DESC, id DESC").
+		Limit(1).
+		Find(&run)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, nil
+	}
+	return &run.ID, nil
+}
+
 func (m *Manager) reserveDrillRun(
 	ctx context.Context,
 	task model.Task,
@@ -260,6 +287,20 @@ func (m *Manager) reserveDrillRun(
 			}
 			if locked.NodeID != task.NodeID {
 				return ErrNodeWriteStartLost
+			}
+			// pendingDrillEvidence is only a preflight read. Resolve the
+			// source again while holding the same task lock used by retention,
+			// ordinary reservation, and restore reservation. The evidence row
+			// is then inserted in this transaction, so cleanup cannot delete
+			// the selected source between validation and durable reference.
+			sourceRunID, sourceErr := latestSuccessfulRunIDTx(tx, locked.ID, locked.NodeID)
+			if sourceErr != nil {
+				return sourceErr
+			}
+			evidence.SourceTaskRunID = sourceRunID
+			evidence.SnapshotRef = ""
+			if sourceRunID != nil {
+				evidence.SnapshotRef = fmt.Sprintf("task_run:%d", *sourceRunID)
 			}
 			if m.nodeWriteAdmission == nil {
 				return ErrNodeWriteUnavailable

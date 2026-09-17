@@ -569,9 +569,7 @@ func TestNodeWriteCoordinatorActiveLeaseRejectsManagerTriggersWithoutResidualRun
 		t.Run(testCase.name, func(t *testing.T) {
 			db := openNodeWriteCoordinatorTestDB(t)
 			node, taskEntity := seedNodeWriteCoordinatorTask(t, db, strings.ReplaceAll(testCase.name, " ", "-"))
-			if err := db.Create(&model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "success"}).Error; err != nil {
-				t.Fatal(err)
-			}
+			createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 			if err := db.Create(nodeWriteTestLease(node.ID)).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -1572,7 +1570,7 @@ func openNodeWriteCoordinatorTestDB(t *testing.T) *gorm.DB {
 	sqlDB.SetMaxOpenConns(8)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(
-		&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{},
+		&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.TaskCronOccurrence{}, &model.TaskRunEffect{},
 		&model.RestoreDrillEvidence{}, &model.BackupAssetRecoveryNodeLease{},
 	); err != nil {
 		t.Fatal(err)
@@ -1601,6 +1599,42 @@ func seedNodeWriteCoordinatorTask(t *testing.T, db *gorm.DB, suffix string) (mod
 		t.Fatal(err)
 	}
 	return node, taskEntity
+}
+
+func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) {
+	t.Helper()
+	var taskEntity model.Task
+	if err := db.Preload("Node").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
+		t.Fatalf("load successful backup task: %v", err)
+	}
+	captureManifest, err := model.EncodeRsyncCaptureManifest(model.RsyncCaptureManifest{
+		Version: 2,
+		Layout:  model.TaskRunCaptureLayoutDirectoryContents,
+		Entries: []model.RsyncCaptureManifestEntry{
+			{Path: "", Kind: "directory"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode successful backup capture manifest: %v", err)
+	}
+	captureRoot, err := model.EncodeRsyncCaptureRootSidecar("")
+	if err != nil {
+		t.Fatalf("encode successful backup capture root: %v", err)
+	}
+	run := model.TaskRun{
+		TaskID:                  taskID,
+		NodeIDSnapshot:          taskEntity.NodeID,
+		TriggerType:             "manual",
+		Status:                  model.TaskRunStatusSuccess,
+		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(taskEntity),
+		BackupCaptureLayout:     model.TaskRunCaptureLayoutDirectoryContents,
+		BackupCaptureRoot:       captureRoot,
+		BackupCaptureManifest:   captureManifest,
+		BackupGenerationState:   model.TaskRunGenerationStateVerified,
+	}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("create successful backup run: %v", err)
+	}
 }
 
 func reserveNodeWriteTask(ctx context.Context, db *gorm.DB, coordinator *NodeWriteCoordinator, taskEntity model.Task) error {

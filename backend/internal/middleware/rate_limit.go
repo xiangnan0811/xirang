@@ -17,12 +17,6 @@ type rateWindow struct {
 	reset time.Time
 }
 
-type apiResponse struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data"`
-}
-
 func respondRateLimited(c *gin.Context, message string, retryAfterSeconds int) {
 	if retryAfterSeconds <= 0 {
 		retryAfterSeconds = 1

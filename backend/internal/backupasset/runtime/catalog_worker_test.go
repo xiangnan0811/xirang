@@ -113,24 +113,65 @@ func TestCatalogWorkerStartupIsAsyncPeriodicAndDynamicallyDisabled(t *testing.T)
 func TestCatalogWorkerWakeInterruptsLongPeriodicWaitAndCoalesces(t *testing.T) {
 	backend := newCatalogWorkerBackendFake(nil)
 	ticks := make(chan time.Time)
+	afterEntered := make(chan struct{})
+	afterRelease := make(chan struct{})
+	var afterOnce sync.Once
+	var releaseAfterOnce sync.Once
+	after := func(time.Duration) <-chan time.Time {
+		first := false
+		afterOnce.Do(func() {
+			first = true
+			close(afterEntered)
+		})
+		if first {
+			<-afterRelease
+		}
+		return ticks
+	}
+	releaseAfter := func() {
+		releaseAfterOnce.Do(func() { close(afterRelease) })
+	}
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
 		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
-		After: func(time.Duration) <-chan time.Time { return ticks },
+		After: after,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go worker.Run(ctx)
+	runDone := make(chan struct{})
+	go func() {
+		worker.Run(ctx)
+		close(runDone)
+	}()
+	defer func() {
+		releaseAfter()
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(time.Second):
+			t.Error("Catalog worker did not stop during cleanup")
+		}
+	}()
 	backend.waitForListCalls(t, 1)
+	select {
+	case <-afterEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Catalog worker did not reach the periodic timer barrier")
+	}
 
+	// Hold Run before its select can consume the first wake. This makes the
+	// duplicate assertion exercise the capacity-one pending-wake contract.
 	if !worker.TryWake() {
 		t.Fatal("first Catalog wake was not accepted")
 	}
 	if worker.TryWake() {
 		t.Fatal("duplicate Catalog wake was not coalesced")
 	}
+	releaseAfter()
+
+	// No periodic tick is delivered; the queued wake must still interrupt the
+	// long wait and produce exactly one follow-up scan.
 	backend.waitForListCalls(t, 2)
 	if got := backend.listCallCount(); got != 2 {
 		t.Fatalf("wake-triggered Catalog scans=%d, want initial plus one wake", got)

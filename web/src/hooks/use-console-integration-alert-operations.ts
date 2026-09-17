@@ -4,7 +4,6 @@ import { apiClient } from "@/lib/api/client";
 import { formatTime } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
-import { buildDemoIntegration } from "@/hooks/use-console-data.demo";
 import type {
   AlertBulkRetryResult,
   AlertDeliveryRecord,
@@ -49,6 +48,8 @@ export function useIntegrationAlertOperations({
       }
       return;
     }
+    // Demo builders must not enter the production startup chunk (same as mock.ts).
+    const { buildDemoIntegration } = await import("@/hooks/use-console-data.demo");
     setIntegrations((prev) => [buildDemoIntegration(input), ...prev]);
   }, [exec, setIntegrations]);
 

@@ -424,15 +424,30 @@ func (service *Service) rsyncLifecycleDeleteAccessTx(
 	if source == "" || source != point.SourceFingerprint {
 		return provider.AccessBinding{}, lifecycleDeleteIdentityConflict("Rsync point source identity changed")
 	}
+	salt, err := hexDecodeSalt(binding.IdentitySalt)
+	if err != nil {
+		return provider.AccessBinding{}, lifecycleDeleteIdentityConflict("Rsync lifecycle binding salt changed")
+	}
 	return provider.AccessBinding{
 		Provider:     backupasset.ProviderRsync,
 		RepositoryID: repository.ID,
+		TaskID:       task.ID,
+		NodeID:       task.NodeID,
+		IdentitySalt: salt,
+		EndpointFacts: []string{
+			fmt.Sprintf("task:%d", task.ID),
+			fmt.Sprintf("node:%d", task.NodeID),
+			"transport:local",
+			"layout:" + binding.LayoutRevision,
+			"managed_root_identity:" + binding.ManagedRootIdentityDigest,
+		},
 		AdapterData: provider.RsyncPointDeletionAccess{
 			ManagedRoot:        filepath.Clean(binding.ManagedRootLocator),
 			MarkerKey:          markerKey,
 			Attempt:            attempt,
 			CommitMarkerDigest: decoded.CommitMarkerDigest,
 			SourceFingerprint:  source,
+			Command:            &provider.RemoteCommandAccess{Node: task.Node},
 		},
 	}, nil
 }
@@ -769,10 +784,25 @@ func (service *Service) rclonePrefixLifecycleDeleteAccessTx(
 	if err != nil {
 		return provider.AccessBinding{}, lifecycleDeletionUnavailable()
 	}
+	salt, err := hexDecodeSalt(binding.IdentitySalt)
+	if err != nil {
+		return provider.AccessBinding{}, lifecycleDeleteIdentityConflict("Rclone portable binding salt changed")
+	}
+	legacy, err := decodeBindingDocument(binding.LegacyBindingV1)
+	if err != nil || legacy.Provider != backupasset.ProviderRclone || legacy.TaskID != evidence.runtime.task.ID ||
+		legacy.NodeID != evidence.runtime.task.NodeID || legacy.IdentitySalt != binding.IdentitySalt {
+		return provider.AccessBinding{}, lifecycleDeleteIdentityConflict("Rclone portable endpoint binding changed")
+	}
 	return provider.AccessBinding{
-		Provider: backupasset.ProviderRclone, RepositoryID: repository.ID,
-		TaskID: evidence.runtime.task.ID, NodeID: evidence.runtime.task.NodeID,
-		Secret: []byte(binding.Portable.BoundConfig),
+		Provider:      backupasset.ProviderRclone,
+		RepositoryID:  repository.ID,
+		TaskID:        evidence.runtime.task.ID,
+		NodeID:        evidence.runtime.task.NodeID,
+		IdentitySalt:  salt,
+		EndpointFacts: append([]string(nil), legacy.EndpointFacts...),
+		Locator:       locator.PortableAttemptRoot,
+		Config:        []byte(binding.Portable.BoundConfig),
+		Secret:        []byte(binding.Portable.BoundConfig),
 		AdapterData: provider.RclonePrefixDeletionAccess{
 			Prefix: prefix, MarkerDigest: point.SourceFingerprint,
 			ExpectedBackend: binding.Portable.Backend, ExpectedRootIdentity: evidence.attempt.ManagedRootIdentityDigest,
@@ -918,11 +948,26 @@ func (service *Service) rcloneNativeLifecycleDeleteAccessTx(
 			now:               materializationNow,
 		},
 	}
+	salt, err := hexDecodeSalt(evidence.runtime.binding.IdentitySalt)
+	if err != nil {
+		return provider.AccessBinding{}, lifecycleDeleteIdentityConflict("Rclone native binding salt changed")
+	}
+	legacy, err := decodeBindingDocument(evidence.runtime.binding.LegacyBindingV1)
+	if err != nil || legacy.Provider != backupasset.ProviderRclone ||
+		legacy.TaskID != evidence.runtime.task.ID || legacy.NodeID != evidence.runtime.task.NodeID ||
+		legacy.IdentitySalt != evidence.runtime.binding.IdentitySalt {
+		return provider.AccessBinding{}, lifecycleDeleteIdentityConflict("Rclone native endpoint binding changed")
+	}
 	return provider.AccessBinding{
-		Provider: backupasset.ProviderRclone, RepositoryID: repository.ID,
-		TaskID: evidence.runtime.task.ID, NodeID: evidence.runtime.task.NodeID,
+		Provider:      backupasset.ProviderRclone,
+		RepositoryID:  repository.ID,
+		TaskID:        evidence.runtime.task.ID,
+		NodeID:        evidence.runtime.task.NodeID,
+		IdentitySalt:  salt,
+		EndpointFacts: append([]string(nil), legacy.EndpointFacts...),
 		AdapterData: provider.RcloneNativeDeletionAccess{
 			Versions: owned, AuthorityDigest: authorityDigest, Client: lazy,
+			Command: &provider.RemoteCommandAccess{Node: evidence.runtime.task.Node},
 		},
 	}, nil
 }

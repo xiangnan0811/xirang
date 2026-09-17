@@ -2,21 +2,110 @@ package scheduler
 
 import (
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"xirang/backend/internal/cronutil"
 )
 
 type CronScheduler struct {
-	cron    *cron.Cron
-	entries map[uint]cron.EntryID
-	mu      sync.Mutex
+	cron      *cron.Cron
+	entries   map[uint]cron.EntryID
+	specs     map[uint]string
+	schedules map[uint]*occurrenceSchedule
+	mu        sync.Mutex
+}
+
+// occurrenceSchedule mirrors the schedule passed to robfig/cron while
+// retaining each canonical activation returned by Next. Cron's Job interface
+// has no timestamp argument; this small adapter carries that value to the
+// callback without deriving it from callback wall-clock time.
+type occurrenceSchedule struct {
+	cron.Schedule
+	mu       sync.Mutex
+	pending  []time.Time
+	firstAt  time.Time
+	cursor   time.Time
+	inactive atomic.Bool
+}
+
+func (s *occurrenceSchedule) Next(after time.Time) time.Time {
+	if s == nil || s.inactive.Load() || s.Schedule == nil {
+		return time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inactive.Load() {
+		return time.Time{}
+	}
+	var next time.Time
+	if !s.cursor.IsZero() {
+		// Continue from the last canonical activation, not from the wall clock
+		// supplied by robfig/cron. This preserves @every anchors and calendar
+		// sequences across scheduler ticks and reconciliation.
+		next = s.Schedule.Next(s.cursor)
+	} else if !s.firstAt.IsZero() {
+		// The durable Task.NextRunAt is the authoritative first activation
+		// after startup or a schedule edit. It may be overdue; returning it
+		// once lets the durable occurrence path account for that exact instant.
+		next = s.firstAt
+	} else {
+		next = s.Schedule.Next(after)
+	}
+	if next.IsZero() {
+		return next
+	}
+	s.cursor = next
+	s.pending = append(s.pending, next)
+	return next
+}
+
+func (s *occurrenceSchedule) deactivate() {
+	if s != nil {
+		s.inactive.Store(true)
+	}
+}
+
+func (s *occurrenceSchedule) take() (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.pending) == 0 {
+		return time.Time{}, false
+	}
+	next := s.pending[0]
+	copy(s.pending, s.pending[1:])
+	s.pending = s.pending[:len(s.pending)-1]
+	return next, true
+}
+
+type occurrenceJob struct {
+	schedule *occurrenceSchedule
+	callback func(time.Time)
+}
+
+func (j occurrenceJob) Run() {
+	if j.schedule == nil || j.schedule.inactive.Load() {
+		return
+	}
+	scheduledAt, ok := j.schedule.take()
+	if !ok || j.schedule.inactive.Load() {
+		// Never invent an occurrence timestamp. A job invocation without the
+		// schedule's Next result is not safe to persist as a cron run.
+		return
+	}
+	j.callback(scheduledAt)
 }
 
 func NewCronScheduler() *CronScheduler {
 	return &CronScheduler{
-		cron:    cron.New(),
-		entries: make(map[uint]cron.EntryID),
+		cron:      cron.New(),
+		entries:   make(map[uint]cron.EntryID),
+		specs:     make(map[uint]string),
+		schedules: make(map[uint]*occurrenceSchedule),
 	}
 }
 
@@ -29,33 +118,99 @@ func (s *CronScheduler) Stop() {
 	<-ctx.Done()
 }
 
-func (s *CronScheduler) RegisterTask(taskID uint, spec string, fn func()) error {
+// RegisterTask accepts the timestamp-aware callback used by the manager.
+func (s *CronScheduler) RegisterTask(taskID uint, spec string, fn func(time.Time)) error {
+	return s.RegisterTaskAt(taskID, spec, nil, fn)
+}
+
+// RegisterTaskAt registers a callback with an optional durable first
+// activation. A non-zero firstAt is emitted exactly once before subsequent
+// activations are calculated from the schedule cursor. Re-registering an
+// unchanged spec preserves the live entry and its cursor.
+func (s *CronScheduler) RegisterTaskAt(
+	taskID uint,
+	spec string,
+	firstAt *time.Time,
+	fn func(time.Time),
+) error {
+	spec = strings.TrimSpace(spec)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if fn == nil {
+		return fmt.Errorf("cron callback is nil")
+	}
+
 	if oldID, ok := s.entries[taskID]; ok {
+		if spec != "" && s.specs != nil && s.specs[taskID] == spec {
+			return nil
+		}
+		if oldSchedule := s.schedules[taskID]; oldSchedule != nil {
+			oldSchedule.deactivate()
+		}
 		s.cron.Remove(oldID)
 		delete(s.entries, taskID)
+		delete(s.specs, taskID)
+		delete(s.schedules, taskID)
 	}
 
 	if spec == "" {
 		return nil
 	}
 
-	entryID, err := s.cron.AddFunc(spec, fn)
+	schedule, err := cronutil.Parse(spec)
 	if err != nil {
 		return fmt.Errorf("注册 cron 任务失败: %w", err)
 	}
+	tracked := &occurrenceSchedule{Schedule: schedule}
+	if firstAt != nil && !firstAt.IsZero() {
+		tracked.firstAt = firstAt.UTC()
+	}
+	entryID := s.cron.Schedule(tracked, occurrenceJob{schedule: tracked, callback: fn})
+	if s.specs == nil {
+		s.specs = make(map[uint]string)
+	}
+	if s.schedules == nil {
+		s.schedules = make(map[uint]*occurrenceSchedule)
+	}
 	s.entries[taskID] = entryID
+	s.specs[taskID] = spec
+	s.schedules[taskID] = tracked
 	return nil
+
 }
 
 func (s *CronScheduler) RemoveTask(taskID uint) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if oldID, ok := s.entries[taskID]; ok {
+		if oldSchedule := s.schedules[taskID]; oldSchedule != nil {
+			oldSchedule.deactivate()
+		}
 		s.cron.Remove(oldID)
 		delete(s.entries, taskID)
+		delete(s.specs, taskID)
+		delete(s.schedules, taskID)
+	}
+}
+
+// RemoveTasksExcept removes scheduler entries that are not represented by the
+// current durable schedule set. It is used during startup and periodic
+// reconciliation to heal entries left behind by disabled or deleted tasks.
+func (s *CronScheduler) RemoveTasksExcept(keep map[uint]struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for taskID, entryID := range s.entries {
+		if _, ok := keep[taskID]; ok {
+			continue
+		}
+		if oldSchedule := s.schedules[taskID]; oldSchedule != nil {
+			oldSchedule.deactivate()
+		}
+		s.cron.Remove(entryID)
+		delete(s.entries, taskID)
+		delete(s.specs, taskID)
+		delete(s.schedules, taskID)
 	}
 }
 

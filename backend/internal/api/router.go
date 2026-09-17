@@ -39,27 +39,28 @@ import (
 )
 
 type Dependencies struct {
-	AppContext            context.Context
-	DB                    *gorm.DB
-	AuthService           *auth.Service
-	JWTManager            *auth.JWTManager
-	TaskManager           *task.Manager
-	Hub                   *ws.Hub
-	AllowedOrigins        []string
-	LoginRateLimit        int
-	LoginRateWindow       time.Duration
-	SettingsService       *settings.Service
-	RetryWorker           *alerting.RetryWorker
-	AlertDispatcher       *alerting.Dispatcher
-	MetricsToken          string
-	MetricsRateLimit      int
-	MetricsRateWindow     time.Duration
-	BackupAssets          *backupruntime.Runtime
-	BackupContent         handlers.BackupContentService
-	BackupContentConfig   handlers.BackupContentHandlerConfigSource
-	LegacyResticSnapshots handlers.LegacyResticSnapshots
-	SnapshotDiffRunner    handlers.SnapshotDiffRunner
-	SnapshotIndexer       *snapshot.Indexer
+	AppContext             context.Context
+	DB                     *gorm.DB
+	AuthService            *auth.Service
+	JWTManager             *auth.JWTManager
+	TaskManager            *task.Manager
+	ServiceMonitorNotifier handlers.ServiceMonitorChangeNotifier
+	Hub                    *ws.Hub
+	AllowedOrigins         []string
+	LoginRateLimit         int
+	LoginRateWindow        time.Duration
+	SettingsService        *settings.Service
+	RetryWorker            *alerting.RetryWorker
+	AlertDispatcher        *alerting.Dispatcher
+	MetricsToken           string
+	MetricsRateLimit       int
+	MetricsRateWindow      time.Duration
+	BackupAssets           *backupruntime.Runtime
+	BackupContent          handlers.BackupContentService
+	BackupContentConfig    handlers.BackupContentHandlerConfigSource
+	LegacyResticSnapshots  handlers.LegacyResticSnapshots
+	SnapshotDiffRunner     handlers.SnapshotDiffRunner
+	SnapshotIndexer        *snapshot.Indexer
 	// TrustedProxies limits which reverse proxies may set X-Forwarded-For.
 	// Empty = trust none (ClientIP uses RemoteAddr only).
 	TrustedProxies []string
@@ -275,6 +276,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	backupContentHandler := handlers.NewBackupContentHandler(
 		backupContentService, dep.DB, dep.JWTManager, backupContentConfig,
 	).WithSchemePolicy(backupContentSchemePolicy)
+	if dep.BackupAssets != nil {
+		backupContentHandler.WithPreviewSourcePreparer(dep.BackupAssets)
+	}
 	var recoveryAuthorization handlers.RecoveryAuthorizationHandlerService
 	var recoveryTargetRoots handlers.RecoveryTargetRootHandlerService
 	var recoveryDowngrade handlers.RecoveryDowngradeHandlerService
@@ -478,6 +482,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/recovery-points/:id/entries", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntries)
 	secured.GET("/recovery-points/:id/entries/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEntry)
 	secured.GET("/recovery-points/:id/entries/:entryId/versions", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntryVersions)
+	secured.POST("/recovery-points/:id/entries/:entryId/preview-source", middleware.RBAC(backupasset.PermissionBackupAssetsList), middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(30, time.Minute), backupContentHandler.PreparePreviewSource)
 	secured.POST("/recovery-points/:id/entries/:entryId/delivery-tickets", middleware.RBAC(backupasset.PermissionBackupAssetsPreview), backupContentHandler.Issue)
 	recoveryRouteHandlers := []gin.HandlerFunc{
 		middleware.RBAC(backupasset.PermissionBackupAssetsRecover), middleware.RequireRole("admin"),
@@ -658,7 +663,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/alerts/:id/escalation-events", middleware.RBAC("alerts:read"), alertHandler.EscalationEvents)
 
-	serviceMonitorHandler := handlers.NewServiceMonitorHandler(dep.DB)
+	serviceMonitorHandler := handlers.NewServiceMonitorHandler(dep.DB, dep.ServiceMonitorNotifier)
 	secured.GET("/service-monitors", middleware.RBAC("service_monitors:read"), serviceMonitorHandler.List)
 	secured.GET("/service-monitors/:id", middleware.RBAC("service_monitors:read"), serviceMonitorHandler.Get)
 	secured.POST("/service-monitors", middleware.RBAC("service_monitors:write"), serviceMonitorHandler.Create)
@@ -745,6 +750,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/tasks/batch-trigger", middleware.RBAC("tasks:write"), taskHandler.BatchTrigger)
 	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), middleware.OwnershipTaskCheck(dep.DB), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run"), handlers.RequireTaskManualTriggerCredentialGrant(dep.DB), taskHandler.Trigger)
 	secured.POST("/tasks/:id/cancel", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Cancel)
+	secured.POST("/tasks/:id/reconcile-legacy-rclone", middleware.RBAC("tasks:write"), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.ReconcileLegacyRcloneWrite)
 	secured.POST("/tasks/:id/pause", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Pause)
 	secured.POST("/tasks/:id/resume", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Resume)
 	secured.POST("/tasks/:id/skip-next", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.SkipNext)

@@ -16,7 +16,7 @@ import {
 } from "@/context/auth-context.shared";
 import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
-import { ApiError } from "@/lib/api/core";
+import { ApiError, bumpAuthSessionGeneration, getAuthSessionGeneration } from "@/lib/api/core";
 import type { StepUpAction } from "@/lib/api/totp-api";
 import { clearStepUpProof as clearStoredStepUpProof, readStepUpProof, saveStepUpProof } from "@/lib/step-up-storage";
 
@@ -147,7 +147,6 @@ function readStoredAuthState(): StoredAuthState {
 export function AuthProvider({ children }: PropsWithChildren) {
   const [{ token, username, role, userId, totpEnabled }, setAuthState] = useState<StoredAuthState>(() => readStoredAuthState());
   const pendingStepUpRef = useRef<PendingStepUpRequest | null>(null);
-  const authGenerationRef = useRef(0);
   const [stepUpDialogOpen, setStepUpDialogOpen] = useState(false);
   const [stepUpCode, setStepUpCode] = useState("");
   const [stepUpError, setStepUpError] = useState<string | null>(null);
@@ -162,7 +161,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   ) => {
     const sessionStorageRef = getSessionStorage();
     const localStorageRef = getLocalStorage();
-    authGenerationRef.current += 1;
+    bumpAuthSessionGeneration();
     pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.loginRequired")));
     pendingStepUpRef.current = null;
     setStepUpDialogOpen(false);
@@ -206,7 +205,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const sessionStorageRef = getSessionStorage();
     const localStorageRef = getLocalStorage();
 
-    authGenerationRef.current += 1;
+    bumpAuthSessionGeneration();
     pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.loginRequired")));
     pendingStepUpRef.current = null;
     setStepUpDialogOpen(false);
@@ -231,7 +230,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const sessionStorageRef = getSessionStorage();
     safeSetItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY, String(enabled));
     if (!enabled) {
-      authGenerationRef.current += 1;
+      bumpAuthSessionGeneration();
       pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.totpRequired")));
       pendingStepUpRef.current = null;
       setStepUpDialogOpen(false);
@@ -286,7 +285,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       promise,
       persist,
       action,
-      authGeneration: authGenerationRef.current,
+      authGeneration: getAuthSessionGeneration(),
     };
     return promise;
   }, [token, totpEnabled]);
@@ -319,7 +318,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const response = await apiClient.requestStepUpProof(token, code, pendingRequest.action);
       if (
         pendingStepUpRef.current !== pendingRequest ||
-        pendingRequest.authGeneration !== authGenerationRef.current ||
+        pendingRequest.authGeneration !== getAuthSessionGeneration() ||
         safeGetItem(getSessionStorage(), AUTH_TOKEN_KEY) !== token
       ) {
         pendingRequest.reject(new Error(i18n.t("stepUp.loginRequired")));

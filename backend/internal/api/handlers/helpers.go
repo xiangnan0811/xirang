@@ -28,6 +28,16 @@ import (
 // user-facing condition; tripping it means a route is misconfigured.
 var errUnknownRole = errors.New("ownership filter: unknown or missing role")
 
+func parseID(c *gin.Context, field string) (uint, bool) {
+	raw := c.Param(field)
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		respondBadRequest(c, "ID 格式错误")
+		return 0, false
+	}
+	return uint(id), true
+}
+
 func writeCredentialAuditFromGin(c *gin.Context, db *gorm.DB, event credentialaudit.Event) {
 	if err := credentialaudit.Write(db, credentialaudit.FromGin(c, event)); err != nil {
 		logger.Module("credential_audit").Warn().Err(err).
@@ -299,16 +309,6 @@ func applyPagination(query *gorm.DB, p paginationParams) *gorm.DB {
 }
 
 var standardCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
-
-func parseID(c *gin.Context, field string) (uint, bool) {
-	raw := c.Param(field)
-	id, err := strconv.ParseUint(raw, 10, 64)
-	if err != nil {
-		respondBadRequest(c, "ID 格式错误")
-		return 0, false
-	}
-	return uint(id), true
-}
 
 func validateCronSpec(raw string) error {
 	trimmed := strings.TrimSpace(raw)

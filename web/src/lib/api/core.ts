@@ -2,7 +2,18 @@ import i18n from "@/i18n";
 import { clearStepUpProof } from "@/lib/step-up-storage";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
-const DEV_DIRECT_API_BASE_URL = import.meta.env.VITE_DEV_API_DIRECT_URL ?? "http://127.0.0.1:8080/api/v1";
+const AUTH_TOKEN_KEY = "xirang-auth-token";
+
+let authSessionGeneration = 0;
+
+export function getAuthSessionGeneration(): number {
+  return authSessionGeneration;
+}
+
+export function bumpAuthSessionGeneration(): number {
+  authSessionGeneration += 1;
+  return authSessionGeneration;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -41,12 +52,75 @@ type LocationLike = {
 
 const DEFAULT_REDIRECT_TARGET = "/app/overview";
 
-function shouldTryDirectFallback(baseUrl: string): boolean {
+function configuredDevDirectApiUrl(): string | null {
+  if (import.meta.env.DEV !== true) {
+    return null;
+  }
+  const configured = import.meta.env.VITE_DEV_API_DIRECT_URL;
+  if (typeof configured !== "string") {
+    return null;
+  }
+  const trimmed = configured.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function canUseDevDirectFallback(baseUrl: string): boolean {
   if (typeof window === "undefined") {
     return false;
   }
-  const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-  return isLocalhost && baseUrl.startsWith("/");
+  return configuredDevDirectApiUrl() !== null && baseUrl.startsWith("/");
+}
+
+function hasFetchAuthMaterial(headers: HeadersInit | undefined): boolean {
+  if (!headers) {
+    return false;
+  }
+  const normalized = headers instanceof Headers ? headers : new Headers(headers);
+  return Boolean(normalized.get("Authorization") || normalized.get("X-Xirang-Step-Up"));
+}
+
+function withoutFetchAuthHeaders(options: RequestInit): RequestInit {
+  if (!options.headers) {
+    return options;
+  }
+  const headers = new Headers(options.headers);
+  headers.delete("Authorization");
+  headers.delete("X-Xirang-Step-Up");
+  return { ...options, headers };
+}
+
+function readStoredAuthToken(): string | null {
+  try {
+    return sessionStorage.getItem(AUTH_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function isCurrentAuthSession(requestToken: string | undefined, requestGeneration: number): boolean {
+  if (getAuthSessionGeneration() !== requestGeneration) {
+    return false;
+  }
+  const storedToken = readStoredAuthToken();
+  if (storedToken !== null && storedToken !== (requestToken ?? null)) {
+    return false;
+  }
+  return true;
+}
+
+function invalidateCurrentAuthSession(): void {
+  bumpAuthSessionGeneration();
+  try {
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+    sessionStorage.removeItem("xirang-username");
+    sessionStorage.removeItem("xirang-role");
+    sessionStorage.removeItem("xirang-user-id");
+    sessionStorage.removeItem("xirang-totp-enabled");
+    clearStepUpProof();
+  } catch { /* ignore */ }
+  if (typeof window !== "undefined") {
+    window.location.href = buildLoginRedirectPath(window.location);
+  }
 }
 
 async function doFetch(baseUrl: string, path: string, options: RequestOptions): Promise<Response> {
@@ -151,20 +225,25 @@ function isSuccessEnvelopeCode(code: number, responseStatus: number): boolean {
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = options.method ?? "GET";
   const isWriteOperation = method !== "GET";
+  const requestToken = options.token;
+  const requestGeneration = getAuthSessionGeneration();
+  const directApiBaseUrl = !isWriteOperation && !options.token && !options.stepUpProof && canUseDevDirectFallback(API_BASE_URL)
+    ? configuredDevDirectApiUrl()
+    : null;
   let response: Response;
 
   try {
     response = await doFetch(API_BASE_URL, path, options);
   } catch (error) {
-    if (isWriteOperation || !shouldTryDirectFallback(API_BASE_URL)) {
+    if (!directApiBaseUrl) {
       throw error;
     }
-    response = await doFetch(DEV_DIRECT_API_BASE_URL, path, options);
+    response = await doFetch(directApiBaseUrl, path, { ...options, token: undefined, stepUpProof: undefined });
   }
 
-  if (response.status === 404 && !isWriteOperation && shouldTryDirectFallback(API_BASE_URL)) {
+  if (response.status === 404 && directApiBaseUrl) {
     try {
-      response = await doFetch(DEV_DIRECT_API_BASE_URL, path, options);
+      response = await doFetch(directApiBaseUrl, path, { ...options, token: undefined, stepUpProof: undefined });
     } catch {
       // 保留原始 404 响应，避免吞掉错误上下文。
     }
@@ -183,16 +262,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
   const AUTH_PUBLIC_PATHS = ["/auth/login", "/auth/captcha", "/auth/2fa/login"];
   if (response.status === 401 && !AUTH_PUBLIC_PATHS.includes(path)) {
-    try {
-      sessionStorage.removeItem("xirang-auth-token");
-      sessionStorage.removeItem("xirang-username");
-      sessionStorage.removeItem("xirang-role");
-      sessionStorage.removeItem("xirang-user-id");
-      sessionStorage.removeItem("xirang-totp-enabled");
-      clearStepUpProof();
-    } catch { /* ignore */ }
-    if (typeof window !== "undefined") {
-      window.location.href = buildLoginRedirectPath(window.location);
+    if (isCurrentAuthSession(requestToken, requestGeneration)) {
+      invalidateCurrentAuthSession();
     }
     throw new ApiError(401, "session expired", payload);
   }
@@ -244,19 +315,23 @@ export function isCredentialGrantRequiredError(error: unknown): error is ApiErro
 }
 
 export async function fetchWithFallback(url: string, options: RequestInit): Promise<Response> {
+  const method = (options.method ?? "GET").toUpperCase();
+  const directApiBaseUrl = method === "GET" && !hasFetchAuthMaterial(options.headers) && canUseDevDirectFallback(API_BASE_URL)
+    ? configuredDevDirectApiUrl()
+    : null;
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${url}`, options);
   } catch (error) {
-    if (!shouldTryDirectFallback(API_BASE_URL)) {
+    if (!directApiBaseUrl) {
       throw error;
     }
-    response = await fetch(`${DEV_DIRECT_API_BASE_URL}${url}`, options);
+    response = await fetch(`${directApiBaseUrl}${url}`, withoutFetchAuthHeaders(options));
   }
 
-  if (response.status === 404 && shouldTryDirectFallback(API_BASE_URL)) {
+  if (response.status === 404 && directApiBaseUrl) {
     try {
-      response = await fetch(`${DEV_DIRECT_API_BASE_URL}${url}`, options);
+      response = await fetch(`${directApiBaseUrl}${url}`, withoutFetchAuthHeaders(options));
     } catch {
       // 保留原始 404 响应
     }

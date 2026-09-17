@@ -282,6 +282,15 @@ func TestRuntimeOwnerFallbackProofsHonorCurrentSourceRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close retention fallback test database: %v", err)
+		}
+	})
 	if err := db.AutoMigrate(
 		&model.BackupAssetProcessingJob{},
 		&model.BackupAssetExportJob{},

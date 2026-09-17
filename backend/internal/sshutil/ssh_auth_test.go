@@ -93,21 +93,22 @@ func TestResolveSSHHostKeyCallbackAcceptsUnknownKeyOnceAndRejectsMismatch(t *tes
 	}
 }
 
-func TestResolveSSHHostKeyCallbackAcceptsUnknownKeyByDefault(t *testing.T) {
+func TestResolveSSHHostKeyCallbackRejectsUnknownKeyByDefault(t *testing.T) {
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
-	// 不设置 SSH_AUTO_ACCEPT_NEW_HOSTS，验证默认行为是接受
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "")
 	knownHostsPath := filepath.Join(t.TempDir(), "ssh", "known_hosts")
 	t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
-
 	callback, err := ResolveSSHHostKeyCallback()
 	if err != nil {
-		t.Fatalf("初始化 SSH host key callback 失败: %v", err)
+		t.Fatal(err)
 	}
-
-	hostname := "example.com:22"
 	remote := &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 22}
-	if err := callback(hostname, remote, newTestPublicKey(t)); err != nil {
-		t.Fatalf("默认应自动接受未知主机密钥，实际错误: %v", err)
+	if err := callback("example.com:22", remote, newTestPublicKey(t)); err == nil {
+		t.Fatal("unknown host keys must be rejected without explicit trust")
+	}
+	stored, err := os.ReadFile(knownHostsPath)
+	if err != nil || len(stored) != 0 {
+		t.Fatalf("rejected key must not be trusted: contents=%q err=%v", stored, err)
 	}
 }
 

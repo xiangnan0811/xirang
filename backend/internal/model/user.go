@@ -9,17 +9,36 @@ import (
 )
 
 type User struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	Username      string    `gorm:"size:64;uniqueIndex;not null" json:"username"`
-	PasswordHash  string    `gorm:"size:255;not null" json:"-"`
-	Role          string    `gorm:"size:32;not null;index" json:"role"`
-	TOTPSecret    string    `gorm:"size:255" json:"-"`
-	TOTPEnabled   bool      `json:"totp_enabled"`
-	RecoveryCodes string    `gorm:"type:text" json:"-"`
-	TokenVersion  uint      `gorm:"not null;default:0" json:"-"`
-	Onboarded     bool      `gorm:"not null;default:false" json:"onboarded"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                      uint       `gorm:"primaryKey" json:"id"`
+	Username                string     `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	PasswordHash            string     `gorm:"size:255;not null" json:"-"`
+	Role                    string     `gorm:"size:32;not null;index" json:"role"`
+	TOTPSecret              string     `gorm:"size:255" json:"-"`
+	TOTPEnabled             bool       `json:"totp_enabled"`
+	RecoveryCodes           string     `gorm:"type:text" json:"-"`
+	TokenVersion            uint       `gorm:"not null;default:0" json:"-"`
+	TOTPEnrollmentID        string     `gorm:"size:64;index" json:"-"`
+	TOTPEnrollmentExpiresAt *time.Time `gorm:"index" json:"-"`
+	Onboarded               bool       `gorm:"not null;default:false" json:"onboarded"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+}
+
+// PendingAuthToken records a short-lived 2FA login challenge. A JTI is durable
+// and unique so successful completion can be consumed atomically across
+// processes and database connections.
+type PendingAuthToken struct {
+	JTI          string     `gorm:"primaryKey;size:64" json:"-"`
+	UserID       uint       `gorm:"not null;index" json:"-"`
+	TokenVersion uint       `gorm:"not null" json:"-"`
+	TOTPBinding  string     `gorm:"size:64;not null" json:"-"`
+	ExpiresAt    time.Time  `gorm:"not null;index" json:"-"`
+	ConsumedAt   *time.Time `gorm:"index" json:"-"`
+	CreatedAt    time.Time  `gorm:"not null" json:"-"`
+}
+
+func (PendingAuthToken) TableName() string {
+	return "auth_pending_tokens"
 }
 
 // User TOTP 敏感字段加解密 hooks

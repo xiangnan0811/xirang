@@ -8,6 +8,10 @@ import (
 )
 
 var (
+	journalRecoveries = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "xirang_node_logs_journal_recoveries_total",
+		Help: "Persisted journal recovery boundary resets; not a count of skipped entries",
+	}, []string{"reason"})
 	logsIngested = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "xirang_node_logs_ingested_total",
 		Help: "Log entries inserted",
@@ -27,6 +31,23 @@ var (
 	queueDepth = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "xirang_node_logs_queue_depth",
 		Help: "Current scheduler->worker queue depth",
+	})
+
+	jobsDeduplicated = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "xirang_node_logs_jobs_deduplicated_total",
+		Help: "Collection jobs skipped because the node is already queued or running",
+	})
+	queueRejected = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "xirang_node_logs_queue_rejected_total",
+		Help: "Collection jobs rejected by the scheduler",
+	}, []string{"reason"})
+	inFlight = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "xirang_node_logs_in_flight",
+		Help: "Collection jobs currently running",
+	})
+	shutdownTimeouts = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "xirang_node_logs_shutdown_timeouts_total",
+		Help: "Scheduler shutdown calls whose deadline expired before workers joined",
 	})
 
 	retentionDeleted = promauto.NewCounterVec(prometheus.CounterOpts{

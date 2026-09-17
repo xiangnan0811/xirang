@@ -1,5 +1,283 @@
 # Changelog
 
+## [0.55.17](https://github.com/xiangnan0811/xirang/compare/v0.55.16...v0.55.17) (2026-09-17)
+
+
+### 🐛 Bug Fixes
+
+* normalize API errors and clean up RAF and overflow logs ([#541](https://github.com/xiangnan0811/xirang/issues/541)) ([62a43f3](https://github.com/xiangnan0811/xirang/commit/62a43f35cd525e229849e36552f0b7293ff115b5))
+
+## [0.55.16](https://github.com/xiangnan0811/xirang/compare/v0.55.15...v0.55.16) (2026-09-16)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** recover expired catalog and search lease slots ([#538](https://github.com/xiangnan0811/xirang/issues/538)) ([952494f](https://github.com/xiangnan0811/xirang/commit/952494f68db36a21fb80b7e2e3d8d822db4adbe2))
+
+## [0.55.15](https://github.com/xiangnan0811/xirang/compare/v0.55.14...v0.55.15) (2026-09-16)
+
+### Node-log recovery
+
+- Journal collection starts from the latest 200 entries within the last hour when
+  no usable recent cursor exists. Short interruptions resume in chronological
+  batches of at most 200 within that window; older history is deliberately skipped
+  with recovery observability, not silently reported as complete.
+- Fix generated shell delimiters and reject command errors, malformed or incomplete
+  responses before inserting logs or advancing cursors. Cursor checks and collection
+  share one deadline and cumulative output limit.
+
+### Upgrade notes
+
+- No database migration is added; paired schema remains `000088_task_cron_override`.
+  Back up the database and encryption keys, preserve logs/cursors and remote journal,
+  and stop old Core before replacement. No manual cursor deletion is required.
+  Disable affected collectors before image rollback, which restores the old
+  unbounded catch-up and script defects. Verify one node for at least two cycles
+  after upgrade before restoring others; image delivery is not NAS acceptance.
+
+### 🐛 Bug Fixes
+
+* **nodelogs:** bound journal recovery to recent history ([#535](https://github.com/xiangnan0811/xirang/issues/535)) ([d3101cf](https://github.com/xiangnan0811/xirang/commit/d3101cf1cbc1c861641b525ef517340b4c2cd4b0))
+
+## [0.55.14](https://github.com/xiangnan0811/xirang/compare/v0.55.13...v0.55.14) (2026-09-16)
+
+
+### 🐛 Bug Fixes
+
+* **nodelogs:** cancel stalled collectors and join workers ([#533](https://github.com/xiangnan0811/xirang/issues/533)) ([e34809d](https://github.com/xiangnan0811/xirang/commit/e34809d49f84d3cc26492b06d8395b80afc69e88))
+
+### Upgrade notes
+
+- SSH collection now cancels and joins blocked execution, rejects incomplete or
+  oversized output without advancing cursors, and allows only one queued or
+  running collection per node. Existing log sanitization remains in place.
+- No database migration is added; the paired schema version remains
+  `000088_task_cron_override`. Preserve database backups and log/cursor rows, and
+  stop the old Core before starting the replacement so old stuck collectors do
+  not remain active. Rolling back the image reintroduces the collector defect;
+  disable affected collection sources first and do not delete cursors to recover.
+- The upgrade does not enable disabled collectors. Verify the deployed version
+  and configuration, then authorize one low-risk node and observe at least two
+  collection cycles before staged restoration. Image publication alone does not
+  establish production recovery.
+
+## [0.55.13](https://github.com/xiangnan0811/xirang/compare/v0.55.12...v0.55.13) (2026-09-14)
+
+
+### 🐛 Bug Fixes
+
+* resolve backup safety and task lifecycle review findings ([bb55ccb](https://github.com/xiangnan0811/xirang/commit/bb55ccbc48f197f4f0c70205bea327d4220eac17))
+
+* Validate task Cron before writes and isolate historical invalid schedules during startup. Preserve omitted edit fields, explicit manual scheduling and safe executor-setting clears; reject stale revisions without overwriting concurrent edits.
+* Enforce durable single-session logout across Core instances on ordinary APIs and realtime log/terminal handshakes; verification outages fail closed.
+* Replace misleading Restic Append-Only controls with repository-format selection; migrate historical settings at startup and config import without exposing secrets. Stream remote password-file contents through owned SSH stdin, preserving exact bytes and independent cleanup.
+* Bound Docker volume discovery by cancellation, a total deadline and output/volume budgets; incomplete inspection is partial, not complete empty results.
+* Confine configured Rsync roots locally and over SSH using pinned operands, a closed helper protocol and Linux Landlock. Preserve source hardlink topology while reusing compatible parent inode groups without modifying the parent.
+* Preserve explicit task Cron overrides across policy edits and disable/resume, and return the post-scheduler task revision.
+
+### Upgrade notes
+
+* Pause admission, drain and stop all old Core/executor processes before upgrading. Back up the database, encryption keys and backup data; do not mix old and new writers. Preserve unresolved historical writer holds and backup evidence.
+* Paired SQLite/PostgreSQL migration `000088_task_cron_override` persists schedule provenance. Historical policy-owned task Cron values differing from the policy effective schedule become overrides; matching values remain inherited. Guarded downgrade refuses loss of explicit override evidence; preserve a consistent pre-upgrade backup and prefer forward repair.
+* Task PUT clients must send `expected_revision` using the current `revision` returned by GET/create/update. Missing revisions are rejected with 400 and stale revisions with 409. Omitted fields remain unchanged; an explicit empty Cron selects manual scheduling.
+* Configured Rsync confinement requires Linux Landlock ABI 3 or newer (including truncate protection), a matching local/remote one-shot helper, and supported private user/mount namespaces for pinned root/file aliases. Default container policies may deny these capabilities; execution then fails closed. Do not bypass confinement by removing allowlists or automatically granting privileged container access. When both allowlists are unset, execution remains unrestricted.
+* Managed hardlink publication transfers a complete source-topology-preserving staging tree without `--link-dest` before bounded descriptor-relative parent inode reuse. Budget temporary space and transfer capacity for the complete tree, and retain the existing hardlink/atomic-rename filesystem requirements. This does not add post-commit topology-only tamper attestation.
+* Restic repository versions 1/2 select repository format, not deletion protection. Historical Append-Only=true becomes version 2; false becomes unspecified. Repository/backend deletion protection remains independently configured and unverified.
+
+
+## [0.55.12](https://github.com/xiangnan0811/xirang/compare/v0.55.11...v0.55.12) (2026-09-13)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** repair cron retry lifecycle and secure Restic cleanup ([640e308](https://github.com/xiangnan0811/xirang/commit/640e308da5a0764a4dd84a939591b86ec1265748))
+
+## [0.55.11](https://github.com/xiangnan0811/xirang/compare/v0.55.10...v0.55.11) (2026-09-12)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** persist scheduled work and verified backup evidence ([0de7c8b](https://github.com/xiangnan0811/xirang/commit/0de7c8b9f96bec74e192257a5102873859b31c3f))
+* Persist due cron occurrences separately from execution reservations, preserving queued work across quota contention and Core restarts without increasing execution concurrency.
+* Fence legacy mutable Rclone writers by immutable shared-resource evidence across tasks and Core instances; preserve conservative holds for unclassified historical writers.
+* Bind saved service-monitor headers to their destination, monitor type and HTTP method. Retargeting requires explicit clearing or replacement; concurrent edits fail closed. Task responses expose only nested policy ID and name.
+* Use durable, classified backup-completion facts for freshness and health reporting. Ordinary command success, imported baselines and unverified historical timestamps do not establish a new backup. Managed completion requires a committed recovery point and provable lineage.
+* Correct retained compatibility Restic snapshot listing and validate exact identity, bounded complete output and successful process exit before publishing an index. Retired HTTP snapshot routes remain retired.
+
+### Upgrade notes
+
+* Paired SQLite/PostgreSQL migrations `000086_task_cron_occurrences_resource_identity` and `000087_backup_completion_facts` add durable scheduling/resource evidence and backup facts. Back up the database, encryption keys and backup data; pause admission, drain and stop all old Core/executor processes before upgrading. Do not mix old and new writers.
+* Historical freshness is rebuilt only from provable committed backup evidence. Ambiguous timestamps and recovery points remain explicitly unverified and can therefore stop appearing as recent successful backups. This does not delete backup data or authorize restoration.
+* Once new durable evidence is used, guarded schema downgrade is refused. Never erase evidence, force migration versions or use downgrade to clear an unresolved writer; preserve a consistent pre-upgrade database/code backup and prefer forward repair.
+
+## [0.55.10](https://github.com/xiangnan0811/xirang/compare/v0.55.9...v0.55.10) (2026-09-12)
+
+### 🐛 Bug Fixes
+
+* **backup:** enforce target ownership and durable execution evidence ([521f7b4](https://github.com/xiangnan0811/xirang/commit/521f7b4f167eabcdcfd6b0d307f7e3d1cafb3bf2))
+* Isolate new policy/node Rsync targets and reject conflicting physical ownership. Preserve historical targets; require quiescent, verified copying before node migration cutover. Import compensation captures locked before-images and revalidates ownership/current row images before rollback, refusing to overwrite concurrent changes.
+* Bind legacy Rclone recovery to its current mutable generation. Preserve dirty and unresolved write evidence; unknown completion or Core crashes cannot authorize older data or blind re-execution. Preserve explicit no-start proof before provider invocation, including maintenance/pre-hook/profile failures, and arm writes only after publication preparation.
+* Add administrator-only, audited reconciliation of an explicitly confirmed stopped legacy Rclone write. Reconciliation leaves the task paused and the generation dirty; it never verifies a backup, resumes scheduling, or permits fallback to an older success.
+* Serialize SQLite target ownership without requiring a tasks table in policy-only databases; preserve the transaction writer lock even when the selected table is empty.
+* Recheck task pause state under the database lock at ordinary reservation and execution entry, so stale preflight requests and queued runs cannot restart writes without an explicit resume.
+* Correct executable/password-file ordering for legacy Restic retention, integrity checks, and snapshot indexing. Bound legacy Rclone SSH cancellation without declaring an unknown remote process stopped.
+* Enforce policy concurrency across nodes and Core instances at database-backed reservation and execution entry.
+* Preserve explicit disabled/zero policy values through ordinary creation, template cloning, and configuration import without bypassing encryption hooks.
+
+### Upgrade notes
+
+* **Drain old Core and preserve backups:** Back up the database, encryption keys, backup data, TaskRun evidence, and an independent copy of every remaining legacy backup tree. Pause admission, drain and stop every old Core, scheduler, and executor before upgrading; do not mix old and new writers or let an old Core consume new evidence.
+* **Unchanged migration `000085_alert_delivery_success`:** This repair introduces no new database migration; the paired migration version remains unchanged. The unchanged schema version does not make executor downgrade safe. Before rollback, preserve a consistent database/code backup and backup copies, and do not force migration versions or erase durable delivery/unknown-identity evidence.
+* **Unknown hold and admin reconcile:** A legacy Rclone `writing`/`unknown` record remains an operator hold. Lease expiry or closing the local connection does not prove that the remote writer stopped. An authenticated administrator must pause the task, preserve salvage data, confirm the exact remote writer stopped, and reconcile the selected run; reconciliation marks it `dirty` and records audit evidence only—it does not retry, resume scheduling, verify a backup, or authorize an older generation. After all holds are individually reconciled, explicitly resume and complete a new ordinary backup; never delete evidence or change executor configuration to bypass the hold.
+* **Target ownership and downgrade constraints:** Existing stored targets are not silently rewritten. Conflicting/shared/alias/ancestor/descendant ownership, concurrent claims, enabled tasks, and active durable runs fail closed; node migration requires quiescent tasks, independent sources, fresh destinations, verified copying, and locked revalidation. A migration with the same version is not a safe executor rollback, and downgrade must not be used to clear unknown write holds.
+* Legacy Rsync/Rclone destructive age-based retention remains disabled; managed recovery points and Restic retention are unchanged. Rebuild Core and any optional Worker from the same release source to keep exact toolchain fingerprints aligned.
+
+## [0.55.9](https://github.com/xiangnan0811/xirang/compare/v0.55.8...v0.55.9) (2026-09-11)
+
+
+### Release scope
+
+This patch carries forward the v0.55.8 external-review fixes. The v0.55.8 GitHub tag remains unchanged, but its container publication was stopped after source CI exposed a SQLite test-fixture lock conflict. This release includes that fixture correction and must pass its own exact-source CI and image gates.
+
+### Bug Fixes
+
+* Align escalation SQLite test fixtures with production WAL/immediate transaction locking, isolate database lifetimes, and wait for durable delivery completion ([#521](https://github.com/xiangnan0811/xirang/pull/521)). This does not change production behavior or add a migration.
+
+* Restore legacy Rsync data only from a verified private staging copy before any target mutation; preserve directory-self, directory-content, and single-file destinations, archive metadata, and byte-exact names and symlink targets.
+* Preserve current recovery-generation evidence, including dirty generations, restore-source references, and active drill sources under transactional cleanup/reservation locks. An active temporary successor no longer retires the previous final generation.
+* Write byte-safe v2 capture manifests and matching root sidecars while continuing to read existing v1 evidence.
+* Require bounded business-success acknowledgements from Feishu, DingTalk, and WeCom; keep generic webhook HTTP 2xx semantics. Canonicalize legacy delivery identities before every claim without merging distinct escalation events or replaying ambiguous history.
+* Record actual notification success only for the matching live attempt, use successful completion time for cooldown, and prevent unknown historical rows from starving retry work.
+* Add paired SQLite/PostgreSQL migration 000085, schema/downgrade guards, and direct CI coverage for the affected concurrency and persistence contracts.
+
+### Upgrade notes
+
+* Back up the database, encryption keys, and backup data; pause admission, drain work, and stop every old Core before applying migration `000085_alert_delivery_success`. Do not mix old and new schedulers, executors, or other writers.
+* New captures use v2 manifests and encoded root sidecars. Existing v1 captures remain readable, but old Core must not consume new v2 evidence. Preserve the last remaining legacy backup before starting a new backup; missing or invalid capture evidence requires a new successful ordinary backup before restore.
+* Core needs temporary disk capacity for a private copy of the selected restore content. Insufficient space or validation failures must be resolved before recovery can proceed; staging is not a substitute for preserving the original backup.
+* Successful-delivery timestamps and unknown-identity evidence block migration 000085 downgrade once written. Do not erase evidence, fabricate historical success timestamps, or force migration versions. Prefer forward repair; any rollback must use a consistent pre-upgrade database/code backup and preserve backup data and delivery state together.
+* Historical NULL delivery timestamps do not fabricate cooldowns. Unknown historical delivery decisions remain quarantined; external notification delivery still cannot promise exactly-once behavior if a process exits after sending but before committing its receipt.
+* Legacy Rsync/Rclone destructive age-based retention remains disabled; managed recovery points and Restic retention are unchanged. Update Core and optional Worker from the same release source to keep exact toolchain fingerprints aligned.
+* See [upgrade and rollback guidance](docs/deployment.md#升级与回滚) for the complete operational procedure.
+
+
+
+## [0.55.8](https://github.com/xiangnan0811/xirang/compare/v0.55.7...v0.55.8) (2026-09-11)
+
+
+### Bug Fixes
+
+* Restore legacy Rsync data only from a verified private staging copy before any target mutation; preserve directory-self, directory-content, and single-file destinations, archive metadata, and byte-exact names and symlink targets.
+* Preserve current recovery-generation evidence, including dirty generations, restore-source references, and active drill sources under transactional cleanup/reservation locks. An active temporary successor no longer retires the previous final generation.
+* Write byte-safe v2 capture manifests and matching root sidecars while continuing to read existing v1 evidence.
+* Require bounded business-success acknowledgements from Feishu, DingTalk, and WeCom; keep generic webhook HTTP 2xx semantics. Canonicalize legacy delivery identities before every claim without merging distinct escalation events or replaying ambiguous history.
+* Record actual notification success only for the matching live attempt, use successful completion time for cooldown, and prevent unknown historical rows from starving retry work.
+* Add paired SQLite/PostgreSQL migration 000085, schema/downgrade guards, and direct CI coverage for the affected concurrency and persistence contracts.
+
+* Address v0.55.7 external review findings ([#519](https://github.com/xiangnan0811/xirang/pull/519)) ([23b9c4b](https://github.com/xiangnan0811/xirang/commit/23b9c4bced586a8de97f029af384fd1a396e486f)).
+
+### Upgrade notes
+
+* Back up the database, encryption keys, and backup data; pause admission, drain work, and stop every old Core before applying migration `000085_alert_delivery_success`. Do not mix old and new schedulers, executors, or other writers.
+* New captures use v2 manifests and encoded root sidecars. Existing v1 captures remain readable, but old Core must not consume new v2 evidence. Preserve the last remaining legacy backup before starting a new backup; missing or invalid capture evidence requires a new successful ordinary backup before restore.
+* Core needs temporary disk capacity for a private copy of the selected restore content. Insufficient space or validation failures must be resolved before recovery can proceed; staging is not a substitute for preserving the original backup.
+* Successful-delivery timestamps and unknown-identity evidence block migration 000085 downgrade once written. Do not erase evidence, fabricate historical success timestamps, or force migration versions. Prefer forward repair; any rollback must use a consistent pre-upgrade database/code backup and preserve backup data and delivery state together.
+* Historical NULL delivery timestamps do not fabricate cooldowns. Unknown historical delivery decisions remain quarantined; external notification delivery still cannot promise exactly-once behavior if a process exits after sending but before committing its receipt.
+* Legacy Rsync/Rclone destructive age-based retention remains disabled; managed recovery points and Restic retention are unchanged. Update Core and optional Worker from the same release source to keep exact toolchain fingerprints aligned.
+* See [upgrade and rollback guidance](docs/deployment.md#升级与回滚) for the complete operational procedure.
+
+
+
+## [0.55.7](https://github.com/xiangnan0811/xirang/compare/v0.55.6...v0.55.7) (2026-09-11)
+
+### Bug Fixes
+
+* Preserve legacy Rsync capture layout and source-selected evidence across backup, verification, restore admission, and Core-to-node recovery; reject uncertain mutable generations instead of reusing historical success as current authority.
+* Persist initial alert delivery intents before sending; share leased, attempt-fenced claims across automatic and manual retry, retain explicit suppression decisions, and synchronize proxy-cache lifecycle access.
+* Preserve explicitly disabled policies/monitors, disabled verification, and zero task retries through creation and scheduling without bypassing secret-encryption hooks.
+* Show pending, sending, retrying, and unknown notification states truthfully; use numeric delivery IDs for retry requests and label automation notification actions as log-only.
+* Add paired SQLite/PostgreSQL capture and delivery migrations, used-evidence downgrade protection, startup schema validation, and direct alerting concurrency coverage in CI.
+
+* Address v0.55.6 external review findings ([#517](https://github.com/xiangnan0811/xirang/issues/517)) ([9c20e4f](https://github.com/xiangnan0811/xirang/commit/9c20e4f4eacea386c36eea69aeace976b4805f44)).
+
+### Upgrade notes
+
+* Back up the database and encryption key, then pause admission, drain work, and stop every old Core before applying migrations `000083` and `000084`. Do not mix old writers with the new schema.
+* Preserve the last remaining legacy Rsync backup before attempting a new backup. Historical success without capture evidence does not authorize restore; uncertain mutable generations return `new-backup-required`.
+* Durable notification intents recover after restart, but a send whose receipt was not committed can be delivered again. Unknown historical decisions are not blindly replayed; unknown does not mean sent.
+* Used capture, generation, and delivery evidence blocks schema downgrade. Do not erase evidence or force migration versions; rollback must preserve database, backup data, and delivery state together.
+* Legacy Rsync/Rclone age-based destructive retention remains disabled; managed recovery points and Restic retention are unchanged. Update Core and optional Worker from the same release to keep toolchain fingerprints aligned.
+* See [upgrade and rollback guidance](docs/deployment.md#升级与回滚) for the complete operational procedure.
+
+## [0.55.6](https://github.com/xiangnan0811/xirang/compare/v0.55.5...v0.55.6) (2026-09-10)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** synchronize worker and task lifecycle fixtures ([#515](https://github.com/xiangnan0811/xirang/issues/515)) ([feabd12](https://github.com/xiangnan0811/xirang/commit/feabd129ea166e92bc387f1be2ca9cf8783e687d))
+
+## [0.55.5](https://github.com/xiangnan0811/xirang/compare/v0.55.4...v0.55.5) (2026-09-10)
+
+
+### 🐛 Bug Fixes
+
+* harden backup recovery and task execution lifecycle ([#513](https://github.com/xiangnan0811/xirang/issues/513)) ([19def68](https://github.com/xiangnan0811/xirang/commit/19def68de0d5f6a0c60f05c4475355e9b91d12ac))
+* Protect legacy Rsync/Rclone current backup trees from age-based retention deletion; restore Rsync data from Core to the node, honor policy exclusions, and require matching successful-backup provenance before legacy restore.
+* Persist cron occurrence identity, recover safely pending runs across restarts, consume skip-next at execution entry, preserve causal task-alert ordering, and retain retryable or explicit skipped downstream outcomes across Core instances.
+* Bound SSH terminal shutdown and enforce active-session revocation, authority changes, and JWT expiry; preserve raw password semantics when disabling TOTP.
+* Start managed publication cleanup deadlines after provider execution and release admission even when finalization persistence fails.
+* Refresh the exact Worker xz package and matching Core/Worker toolchain inventory to 5.8.4-r0.
+
+### Upgrade Notes
+
+* Back up the database and encryption keys, then stop and drain the old Core before applying SQLite/PostgreSQL migration 000082. Do not mix old schedulers or executors with the upgraded Core.
+* Age-based deletion no longer applies to legacy Rsync/Rclone current mirrors. Managed recovery points and Restic retention are unchanged.
+* Complete a new successful ordinary backup before legacy Rsync restore after upgrading or changing source, node, exclusions, hooks, or other bound inputs; otherwise restore returns `new-backup-required`. Existing backup files are not deleted by this requirement.
+* Downgrade protection refuses to erase persisted cron identity or backup provenance once those fields are used.
+* Optional Worker deployments must rebuild/update Core and Worker from the same release source to keep their exact toolchain fingerprints aligned.
+
+## [0.55.4](https://github.com/xiangnan0811/xirang/compare/v0.55.3...v0.55.4) (2026-09-09)
+
+
+### 🐛 Bug Fixes
+
+* remediate audit findings ([#509](https://github.com/xiangnan0811/xirang/issues/509)) ([64770db](https://github.com/xiangnan0811/xirang/commit/64770db7f851426ec894d5df03dcafed1ae70e5f))
+
+## [0.55.3](https://github.com/xiangnan0811/xirang/compare/v0.55.2...v0.55.3) (2026-09-08)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** prepare mutable Rsync sources before preview ([#507](https://github.com/xiangnan0811/xirang/issues/507)) ([0a4fd4b](https://github.com/xiangnan0811/xirang/commit/0a4fd4b0d974dc212fe036cfad373def5b9101e4))
+
+## [0.55.2](https://github.com/xiangnan0811/xirang/compare/v0.55.1...v0.55.2) (2026-09-07)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** refresh Rsync catalogs after backup completion ([#502](https://github.com/xiangnan0811/xirang/issues/502)) ([33d677d](https://github.com/xiangnan0811/xirang/commit/33d677dd7ebd52e31ba46a43f0643151a630f10d))
+
+## [0.55.1](https://github.com/xiangnan0811/xirang/compare/v0.55.0...v0.55.1) (2026-09-07)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** pin patched libuuid runtime package ([#500](https://github.com/xiangnan0811/xirang/issues/500)) ([0b7d61c](https://github.com/xiangnan0811/xirang/commit/0b7d61cb435933694c7b563a36c8ffbc9c8c47b8))
+
+## [0.55.0](https://github.com/xiangnan0811/xirang/compare/v0.54.0...v0.55.0) (2026-09-06)
+
+
+### ✨ Features
+
+* **backup:** fence lifecycle deletion effects ([#497](https://github.com/xiangnan0811/xirang/issues/497)) ([ba543af](https://github.com/xiangnan0811/xirang/commit/ba543afda8403655672db40f1fbbe8d62efa33a9))
+
+## [0.54.0](https://github.com/xiangnan0811/xirang/compare/v0.53.2...v0.54.0) (2026-09-03)
+
+
+### ✨ Features
+
+* **backup-assets:** persist rclone native versions and split backup routes ([#492](https://github.com/xiangnan0811/xirang/issues/492)) ([ff35c6c](https://github.com/xiangnan0811/xirang/commit/ff35c6cf89ffb01b06acbf0535563d634a98fe29))
+
 ## [0.53.2](https://github.com/xiangnan0811/xirang/compare/v0.53.1...v0.53.2) (2026-08-31)
 
 

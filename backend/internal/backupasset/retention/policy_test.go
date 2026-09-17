@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
@@ -847,16 +848,44 @@ func newIsolatedRetentionPostgresTestDB(t *testing.T) *gorm.DB {
 
 func seedRetentionUsersAndRepository(t *testing.T, db *gorm.DB, repositoryID string) {
 	t.Helper()
+	seedRetentionUsersAndRepositoryWithProvider(t, db, repositoryID, backupasset.ProviderRestic)
+}
+
+func seedRetentionUsersAndRepositoryWithProvider(
+	t *testing.T,
+	db *gorm.DB,
+	repositoryID string,
+	providerKind backupasset.ProviderKind,
+) {
+	t.Helper()
 	users := []model.User{
 		{ID: 1, Username: "admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin"},
 		{ID: 2, Username: "operator", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator"},
 	}
-	if err := db.Create(&users).Error; err != nil {
-		t.Fatalf("seed retention users: %v", err)
+	for _, user := range users {
+		var existing model.User
+		loaded := db.Where("id = ?", user.ID).Limit(1).Find(&existing)
+		if loaded.Error != nil {
+			t.Fatalf("seed retention user %d: %v", user.ID, loaded.Error)
+		}
+		if loaded.RowsAffected != 0 {
+			continue
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("seed retention user %d: %v", user.ID, err)
+		}
 	}
+	identityDigest := sha256.Sum256([]byte("retention-test-repository:" + repositoryID))
+	identityPrefix := provider.NativeResticIdentityPrefix
+	versionMode := backupasset.VersionNativeSnapshot
+	if providerKind == backupasset.ProviderRsync || providerKind == backupasset.ProviderRclone {
+		identityPrefix = provider.ScopedIdentityPrefix(providerKind)
+		versionMode = backupasset.VersionMutableHead
+	}
+	identity := identityPrefix + hex.EncodeToString(identityDigest[:])
 	repository := model.BackupRepository{
-		ID: repositoryID, ProviderKind: string(backupasset.ProviderRestic), DisplayName: "retention-test",
-		VersionMode: string(backupasset.VersionNativeSnapshot), Status: string(backupasset.RepositoryOnline),
+		ID: repositoryID, ProviderKind: string(providerKind), RepositoryIdentity: &identity, DisplayName: "retention-test",
+		VersionMode: string(versionMode), Status: string(backupasset.RepositoryOnline),
 		CapabilityRevision: 1, CapabilitiesJSON: `{}`, ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned),
 	}
 	if err := db.Create(&repository).Error; err != nil {

@@ -180,6 +180,14 @@ func (service *Service) requestCatalogWake() {
 	}
 }
 
+// RequestCatalogWake asks the existing Catalog worker to rescan. It is a
+// capacity-one, best-effort hint and never blocks the caller.
+func (service *Service) RequestCatalogWake() {
+	if service != nil {
+		service.requestCatalogWake()
+	}
+}
+
 func derivedExpectationSource(explicit DerivedExpectationSource, queuer DerivedBackfillQueuer) DerivedExpectationSource {
 	if explicit != nil {
 		return explicit

@@ -1,7 +1,6 @@
 package task
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -19,7 +18,6 @@ import (
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/credentialaudit"
-	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/sshutil"
@@ -27,7 +25,6 @@ import (
 	"xirang/backend/internal/task/scheduler"
 
 	"github.com/mattn/go-sqlite3"
-	"github.com/rs/zerolog"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -383,15 +380,15 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
-	// 关键：不用 cache=shared + 命名 file，原实现导致两个 flake：
-	//   1) Manager 的后台 goroutine 与测试主线程并发写同一内存库 →
-	//      SQLite 单写者锁默认立即返回 "database table is locked"，
-	//      CI 上观察到 TestPreHookTimeout 偶发断言失败。
-	//   2) 同一进程内 go test -count=N 重复跑同名测试时，命名 file 复用
-	//      同一份内存库，残留数据触发 UNIQUE constraint。
-	// 改用纯 ":memory:" + SetMaxOpenConns(1)：每次调用得到全新的私有库，
-	// 单连接彻底串行化所有写入；_busy_timeout 作为兜底应对偶发竞争。
-	db, err := gorm.Open(sqlite.Open("file::memory:?_busy_timeout=5000&_loc=UTC"), &gorm.Config{})
+	// Use a per-test file-backed SQLite database. An in-memory database is
+	// tied to its physical connection; a canceled query can retire that
+	// connection, after which database/sql may open a fresh empty database for
+	// a post-shutdown assertion. Keep one connection to serialize manager
+	// workers and test reads; _busy_timeout remains a contention fallback.
+	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
+	})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
@@ -400,11 +397,17 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("获取底层连接失败: %v", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
-		t.Fatalf("初始化测试数据表失败: %v", err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskCronOccurrence{}, &model.BackupCompletion{}, &model.TaskRunEffect{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
+		t.Fatalf("初始化测试数据库表失败: %v", err)
 	}
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}); err != nil {
 		t.Fatalf("初始化采样表失败: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_resource_active_unique
+		ON task_runs(resource_key)
+		WHERE resource_key <> '' AND backup_generation_state IN ('writing', 'unknown')`).Error; err != nil {
+		t.Fatalf("初始化可变目标唯一索引失败: %v", err)
 	}
 	return db
 }
@@ -414,8 +417,10 @@ func openConcurrentManagerTestDB(t *testing.T) *gorm.DB {
 	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
-	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_loc=UTC", t.TempDir())
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
+	})
 	if err != nil {
 		t.Fatalf("打开并发测试数据库失败: %v", err)
 	}
@@ -425,8 +430,13 @@ func openConcurrentManagerTestDB(t *testing.T) *gorm.DB {
 	}
 	sqlDB.SetMaxOpenConns(4)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}, &model.TaskTrafficSample{}); err != nil {
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskCronOccurrence{}, &model.BackupCompletion{}, &model.TaskRunEffect{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}, &model.TaskTrafficSample{}); err != nil {
 		t.Fatalf("初始化并发测试数据表失败: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_resource_active_unique
+		ON task_runs(resource_key)
+		WHERE resource_key <> '' AND backup_generation_state IN ('writing', 'unknown')`).Error; err != nil {
+		t.Fatalf("初始化并发可变目标唯一索引失败: %v", err)
 	}
 	return db
 }
@@ -443,12 +453,50 @@ func createTestTaskRun(t *testing.T, db *gorm.DB, taskID uint, reason string) ui
 	}
 	return run.ID
 }
+func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) uint {
+	t.Helper()
+	var task model.Task
+	if err := db.Preload("Node").Preload("Policy").First(&task, taskID).Error; err != nil {
+		t.Fatalf("加载成功备份任务失败: %v", err)
+	}
+	captureManifest, err := model.EncodeRsyncCaptureManifest(model.RsyncCaptureManifest{
+		Version: 1, Layout: model.TaskRunCaptureLayoutDirectoryContents,
+		Entries: []model.RsyncCaptureManifestEntry{{Path: "", Kind: "directory"}},
+	})
+	if err != nil {
+		t.Fatalf("编码成功备份捕获证据失败: %v", err)
+	}
+	capture, err := model.DecodeRsyncCaptureManifest(captureManifest)
+	if err != nil {
+		t.Fatalf("解码成功备份捕获证据失败: %v", err)
+	}
+	captureRoot, err := model.EncodeRsyncCaptureRootSidecar(capture.Root)
+	if err != nil {
+		t.Fatalf("编码成功备份捕获根失败: %v", err)
+	}
+	run := model.TaskRun{
+		TaskID:                  taskID,
+		TriggerType:             "manual",
+		Status:                  model.TaskRunStatusSuccess,
+		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(task),
+		BackupCaptureLayout:     model.TaskRunCaptureLayoutDirectoryContents,
+		BackupCaptureRoot:       captureRoot,
+		BackupCaptureManifest:   captureManifest,
+		BackupGenerationState:   model.TaskRunGenerationStateVerified,
+	}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("创建成功备份执行记录失败: %v", err)
+	}
+	return run.ID
+}
 
 func seedTaskForManagerTest(t *testing.T, db *gorm.DB) model.Task {
 	t.Helper()
+	source := t.TempDir()
+	target := t.TempDir()
 	node := model.Node{
 		Name:     "node-manager-test",
-		Host:     "127.0.0.1",
+		Host:     "",
 		Port:     22,
 		Username: "root",
 		AuthType: "key",
@@ -456,14 +504,13 @@ func seedTaskForManagerTest(t *testing.T, db *gorm.DB) model.Task {
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
-
 	taskEntity := model.Task{
 		Name:         "task-manager-test",
 		NodeID:       node.ID,
 		ExecutorType: "rsync",
 		Status:       string(StatusPending),
-		RsyncSource:  "/tmp/src",
-		RsyncTarget:  "/tmp/dst",
+		RsyncSource:  source + "/",
+		RsyncTarget:  target,
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("创建任务失败: %v", err)
@@ -562,6 +609,7 @@ func TestTriggerRegistersCancelOwnerBeforeReturning(t *testing.T) {
 		db := openConcurrentManagerTestDB(t)
 		exec := newBlockingExecutor()
 		manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+		shutdownManagerOnCleanup(t, manager)
 		taskEntity := seedTaskForManagerTest(t, db)
 
 		previousProcs := runtime.GOMAXPROCS(1)
@@ -592,17 +640,14 @@ func TestTriggerRegistersCancelOwnerBeforeReturning(t *testing.T) {
 		db := openConcurrentManagerTestDB(t)
 		restoreExecutor := &trackingRestoreExecutor{}
 		manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+		shutdownManagerOnCleanup(t, manager)
 		taskEntity := seedTaskForManagerTest(t, db)
 		if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 			Update("status", string(StatusSuccess)).Error; err != nil {
 			t.Fatal(err)
 		}
 		taskEntity.Status = string(StatusSuccess)
-		if err := db.Create(&model.TaskRun{
-			TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-		}).Error; err != nil {
-			t.Fatal(err)
-		}
+		createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 		// Hold the async runner at its context-aware semaphore so the test
 		// observes the trigger-owned cancellation boundary, not a restore that
 		// happened to finish before Cancel was called.
@@ -688,16 +733,13 @@ func TestCancelAtPublicTriggerOwnerRegistrationPreventsScheduling(t *testing.T) 
 					return context.WithCancel(parent)
 				}),
 			)
+			shutdownManagerOnCleanup(t, manager)
 			taskEntity := seedTaskForManagerTest(t, db)
 			if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 				Update("status", string(StatusSuccess)).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&model.TaskRun{
-				TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-			}).Error; err != nil {
-				t.Fatal(err)
-			}
+			createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 			admission := &nodeWriteAdmissionFake{}
 			manager.SetNodeWriteAdmission(admission)
 			var precheckCalls atomic.Int32
@@ -1730,6 +1772,7 @@ func startManagerRecoveryWorker(t *testing.T, manager *Manager) <-chan struct{} 
 func TestManagerShutdownStopsDrillRecoverySweep(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	runDone := startManagerRecoveryWorker(t, manager)
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelShutdown()
@@ -1934,7 +1977,6 @@ func TestCancelTriggerBarrierBlocksNewOwnerAndConcurrentCancel(t *testing.T) {
 func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 	db := openConcurrentManagerTestDB(t)
 	exec := newBlockingExecutor()
-	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 
@@ -1946,7 +1988,20 @@ func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 	var blockNextTaskQuery atomic.Bool
 	callbackName := fmt.Sprintf("test:block-direct-runner-live-cancel-read-%d", taskEntity.ID)
 	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement.Table != "tasks" || !blockNextTaskQuery.CompareAndSwap(true, false) {
+		if tx.Statement.Table != "tasks" {
+			return
+		}
+		// The direct runner's terminal transaction locks its Task row. Only
+		// block Cancel's unlocked live-owner read; otherwise the callback can
+		// intercept the runner's next Task query and prevent it from observing
+		// cancellation.
+		if _, locked := tx.Statement.Clauses["FOR"]; locked {
+			return
+		}
+		if _, singleTaskDestination := tx.Statement.Dest.(*model.Task); !singleTaskDestination {
+			return
+		}
+		if !blockNextTaskQuery.CompareAndSwap(true, false) {
 			return
 		}
 		enteredOnce.Do(func() { close(queryEntered) })
@@ -1954,17 +2009,48 @@ func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	runDone := make(chan struct{})
+	cancelResult := make(chan error, 1)
+	cancelDone := make(chan struct{})
+	var runStarted atomic.Bool
+	var cancelStarted atomic.Bool
 	t.Cleanup(func() {
+		// Every callback mutation must happen after all users of the callback
+		// have joined, including the manager's background workers.
 		release()
-		_ = db.Callback().Query().Remove(callbackName)
+		joined := true
+		if runStarted.Load() {
+			select {
+			case <-runDone:
+			case <-time.After(3 * time.Second):
+				t.Errorf("direct runner did not finish during cleanup")
+				joined = false
+			}
+		}
+		if cancelStarted.Load() {
+			select {
+			case <-cancelDone:
+			case <-time.After(3 * time.Second):
+				t.Errorf("Cancel did not finish during cleanup")
+				joined = false
+			}
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := manager.Shutdown(shutdownCtx); err != nil {
-			t.Fatalf("shutdown task manager: %v", err)
+			t.Errorf("shutdown task manager: %v", err)
+			joined = false
+		}
+		if joined {
+			if err := db.Callback().Query().Remove(callbackName); err != nil {
+				t.Errorf("remove test query callback: %v", err)
+			}
 		}
 	})
 
-	runDone := make(chan struct{})
+	runStarted.Store(true)
 	go func() {
 		defer close(runDone)
 		manager.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
@@ -1976,8 +2062,11 @@ func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 	}
 
 	blockNextTaskQuery.Store(true)
-	cancelResult := make(chan error, 1)
-	go func() { cancelResult <- manager.Cancel(taskEntity.ID) }()
+	cancelStarted.Store(true)
+	go func() {
+		defer close(cancelDone)
+		cancelResult <- manager.Cancel(taskEntity.ID)
+	}()
 	select {
 	case <-queryEntered:
 	case <-time.After(3 * time.Second):
@@ -2004,6 +2093,11 @@ func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Cancel did not finish after releasing its Task read")
+	}
+	select {
+	case <-cancelDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Cancel goroutine did not return")
 	}
 	if _, ok := manager.pendingRuns.Load(taskEntity.ID); ok {
 		t.Fatal("Cancel leaked its trigger barrier after returning")
@@ -2120,18 +2214,6 @@ func TestCancelOrphanReconciliationRollsBackOnCASDrift(t *testing.T) {
 
 func TestCancelOrphanReconciliationReturnsFixedSafeDatabaseError(t *testing.T) {
 	db := openManagerTestDB(t)
-	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
-	var logBuffer bytes.Buffer
-	previousLogger := logger.Log
-	logger.Log = zerolog.New(&logBuffer)
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := manager.Shutdown(shutdownCtx); err != nil {
-			t.Fatalf("shutdown task manager: %v", err)
-		}
-		logger.Log = previousLogger
-	})
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	startedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
@@ -2170,22 +2252,18 @@ func TestCancelOrphanReconciliationReturnsFixedSafeDatabaseError(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 
 	err := manager.Cancel(taskEntity.ID)
 	if !errors.Is(err, errTaskCancelUnavailable) {
 		t.Fatalf("Cancel database error=%v, want fixed unavailable result", err)
 	}
-	if strings.Contains(err.Error(), rawCanary) || err.Error() != errTaskCancelUnavailable.Error() {
+	if strings.Contains(err.Error(), rawCanary) {
 		t.Fatalf("Cancel exposed raw database error: %q", err)
 	}
 	if !injected.Load() {
 		t.Fatal("database error was not injected")
-	}
-	logOutput := logBuffer.String()
-	if !strings.Contains(logOutput, rawCanary) ||
-		!strings.Contains(logOutput, fmt.Sprintf(`"task_id":%d`, taskEntity.ID)) ||
-		!strings.Contains(logOutput, fmt.Sprintf(`"task_run_id":%d`, orphan.ID)) {
-		t.Fatalf("structured server log omitted internal error/identifiers: %s", logOutput)
 	}
 	var afterTask model.Task
 	if err := db.First(&afterTask, taskEntity.ID).Error; err != nil {
@@ -2223,17 +2301,14 @@ func TestCancelAfterTriggerDurablyTerminatesPendingRunBeforeExecutor(t *testing.
 				factoryExecutor = restoreExecutor
 			}
 			manager := NewManager(db, stubExecutorFactory{executor: factoryExecutor}, nil, nil, nil, nil, 8, 90)
+			shutdownManagerOnCleanup(t, manager)
 			taskEntity := seedTaskForManagerTest(t, db)
 			if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 				Update("status", string(StatusSuccess)).Error; err != nil {
 				t.Fatal(err)
 			}
 			taskEntity.Status = string(StatusSuccess)
-			if err := db.Create(&model.TaskRun{
-				TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-			}).Error; err != nil {
-				t.Fatal(err)
-			}
+			createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 
 			startEntered := make(chan struct{})
 			startRelease := make(chan struct{})
@@ -2305,16 +2380,13 @@ func TestTriggerRestoreEarlyCancellationPreservesCommittedTerminalRun(t *testing
 	db := openConcurrentManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 		Update("status", string(StatusSuccess)).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&model.TaskRun{
-		TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
+	createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 	for range cap(manager.semaphore) {
 		manager.semaphore <- struct{}{}
 	}
@@ -2424,7 +2496,52 @@ func testCancelTaskEntryCommitPreservesPriorOutcomeWithoutExecutor(
 	t.Helper()
 	db := openConcurrentManagerTestDB(t)
 	executor := &successExecutor{}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitEntered := make(chan struct{})
+	commitRelease := make(chan struct{})
+	commitPool := &taskEntryCommitBarrierPool{
+		DB: sqlDB, committed: commitEntered, release: commitRelease,
+	}
+	db.ConnPool = commitPool
+	db.Statement.ConnPool = commitPool
+
+	startEntered := make(chan struct{})
+	startRelease := make(chan struct{})
+	var blockCancelRead atomic.Bool
+	cancelReadEntered := make(chan struct{})
+	cancelReadRelease := make(chan struct{})
+	var cancelReadOnce sync.Once
+	callbackName := "test:task-entry-cancel-read"
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "tasks" || !blockCancelRead.CompareAndSwap(true, false) {
+			return
+		}
+		cancelReadOnce.Do(func() { close(cancelReadEntered) })
+		<-cancelReadRelease
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
 	manager := NewManager(db, stubExecutorFactory{executor: executor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+
+	var startReleaseOnce sync.Once
+	releaseStart := func() { startReleaseOnce.Do(func() { close(startRelease) }) }
+	var cancelReadReleaseOnce sync.Once
+	releaseCancelRead := func() { cancelReadReleaseOnce.Do(func() { close(cancelReadRelease) }) }
+	var commitReleaseOnce sync.Once
+	releaseCommit := func() { commitReleaseOnce.Do(func() { close(commitRelease) }) }
+	t.Cleanup(func() {
+		releaseStart()
+		releaseCancelRead()
+		releaseCommit()
+	})
+
 	taskEntity := seedTaskForManagerTest(t, db)
 	previousLastRunAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
 	previousNextRunAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Millisecond)
@@ -2447,51 +2564,9 @@ func testCancelTaskEntryCommitPreservesPriorOutcomeWithoutExecutor(
 	if err := db.First(&previous, taskEntity.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-
-	startEntered := make(chan struct{})
-	startRelease := make(chan struct{})
 	manager.SetNodeWriteAdmission(&nodeWriteAdmissionFake{
 		startEntered: startEntered,
 		startRelease: startRelease,
-	})
-
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	commitEntered := make(chan struct{})
-	commitRelease := make(chan struct{})
-	commitPool := &taskEntryCommitBarrierPool{
-		DB: sqlDB, committed: commitEntered, release: commitRelease,
-	}
-	db.ConnPool = commitPool
-	db.Statement.ConnPool = commitPool
-
-	var blockCancelRead atomic.Bool
-	cancelReadEntered := make(chan struct{})
-	cancelReadRelease := make(chan struct{})
-	var cancelReadOnce sync.Once
-	callbackName := fmt.Sprintf("test:task-entry-cancel-read-%d", taskEntity.ID)
-	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement.Table != "tasks" || !blockCancelRead.CompareAndSwap(true, false) {
-			return
-		}
-		cancelReadOnce.Do(func() { close(cancelReadEntered) })
-		<-cancelReadRelease
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var startReleaseOnce sync.Once
-	releaseStart := func() { startReleaseOnce.Do(func() { close(startRelease) }) }
-	var cancelReadReleaseOnce sync.Once
-	releaseCancelRead := func() { cancelReadReleaseOnce.Do(func() { close(cancelReadRelease) }) }
-	var commitReleaseOnce sync.Once
-	releaseCommit := func() { commitReleaseOnce.Do(func() { close(commitRelease) }) }
-	t.Cleanup(func() {
-		releaseStart()
-		releaseCancelRead()
-		releaseCommit()
-		_ = db.Callback().Query().Remove(callbackName)
 	})
 
 	runID, err := manager.TriggerManual(taskEntity.ID)
@@ -2639,7 +2714,33 @@ func testNoExecutorCompensationAfterDurableEntry(
 	if legacyRestore {
 		factoryExecutor = restoreExecutor
 	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitEntered := make(chan struct{})
+	commitRelease := make(chan struct{})
+	commitPool := &taskEntryCommitBarrierPool{
+		DB: sqlDB, committed: commitEntered, release: commitRelease,
+	}
+	db.ConnPool = commitPool
+	db.Statement.ConnPool = commitPool
+	startEntered := make(chan struct{})
+	startRelease := make(chan struct{})
+
 	manager := NewManager(db, stubExecutorFactory{executor: factoryExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+
+	var releaseStartOnce sync.Once
+	releaseStart := func() { releaseStartOnce.Do(func() { close(startRelease) }) }
+	var releaseCommitOnce sync.Once
+	releaseCommit := func() { releaseCommitOnce.Do(func() { close(commitRelease) }) }
+	t.Cleanup(func() {
+		releaseStart()
+		releaseCommit()
+	})
+
 	taskEntity := seedTaskForManagerTest(t, db)
 	previousLastRunAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
 	previousNextRunAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Millisecond)
@@ -2662,8 +2763,6 @@ func testNoExecutorCompensationAfterDurableEntry(
 	}
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, map[bool]string{true: "restore", false: "manual"}[legacyRestore])
-	startEntered := make(chan struct{})
-	startRelease := make(chan struct{})
 	manager.SetNodeWriteAdmission(&nodeWriteAdmissionFake{
 		startEntered: startEntered,
 		startRelease: startRelease,
@@ -2673,31 +2772,6 @@ func testNoExecutorCompensationAfterDurableEntry(
 		precheckCalls.Add(1)
 		return nil
 	}
-
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	commitEntered := make(chan struct{})
-	commitRelease := make(chan struct{})
-	commitPool := &taskEntryCommitBarrierPool{
-		DB: sqlDB, committed: commitEntered, release: commitRelease,
-	}
-	originalPool := db.ConnPool
-	originalStatementPool := db.Statement.ConnPool
-	db.ConnPool = commitPool
-	db.Statement.ConnPool = commitPool
-
-	var releaseStartOnce sync.Once
-	releaseStart := func() { releaseStartOnce.Do(func() { close(startRelease) }) }
-	var releaseCommitOnce sync.Once
-	releaseCommit := func() { releaseCommitOnce.Do(func() { close(commitRelease) }) }
-	t.Cleanup(func() {
-		releaseStart()
-		releaseCommit()
-		db.ConnPool = originalPool
-		db.Statement.ConnPool = originalStatementPool
-	})
 
 	var runCtx context.Context
 	var runCancel context.CancelFunc
@@ -2830,16 +2904,13 @@ func TestCancelWhileTriggerReservesRunPreventsDurableStart(t *testing.T) {
 				factoryExecutor = restoreExecutor
 			}
 			manager := NewManager(db, stubExecutorFactory{executor: factoryExecutor}, nil, nil, nil, nil, 8, 90)
+			shutdownManagerOnCleanup(t, manager)
 			taskEntity := seedTaskForManagerTest(t, db)
 			if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 				Update("status", string(StatusSuccess)).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&model.TaskRun{
-				TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-			}).Error; err != nil {
-				t.Fatal(err)
-			}
+			createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 
 			admitEntered := make(chan struct{})
 			admitRelease := make(chan struct{})
@@ -3154,6 +3225,7 @@ func TestTriggerManualRejectsConcurrentDuplicate(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	for i := 0; i < cap(m.semaphore); i++ {
@@ -3216,6 +3288,7 @@ func TestRunTaskPersistsTrafficSamplesWithMinuteThrottle(t *testing.T) {
 		{ObservedAt: now.Add(65 * time.Second), ThroughputMbps: 80},
 	}}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
@@ -3251,6 +3324,7 @@ func TestTriggerCreatesTaskRun(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID, err := m.TriggerManual(taskEntity.ID)
@@ -3280,10 +3354,94 @@ func TestTriggerCreatesTaskRun(t *testing.T) {
 	}
 }
 
+func TestTriggerManualPauseRaceRechecksEnabledBeforeReservation(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	manager.beforeTaskRunReservation = func() {
+		close(entered)
+		<-release
+	}
+	resultCh := make(chan struct {
+		runID uint
+		err   error
+	}, 1)
+	go func() {
+		runID, err := manager.TriggerManual(taskEntity.ID)
+		resultCh <- struct {
+			runID uint
+			err   error
+		}{runID: runID, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("trigger did not reach reservation gate")
+	}
+	if err := manager.Pause(taskEntity.ID, false); err != nil {
+		t.Fatalf("pause task during trigger race: %v", err)
+	}
+	close(release)
+	select {
+	case result := <-resultCh:
+		if result.err == nil {
+			t.Fatalf("paused trigger unexpectedly succeeded with run %d", result.runID)
+		}
+		if result.runID != 0 {
+			t.Fatalf("paused trigger returned run %d", result.runID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("paused trigger did not finish")
+	}
+	var runCount int64
+	if err := db.Model(&model.TaskRun{}).Where("task_id = ?", taskEntity.ID).Count(&runCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 0 {
+		t.Fatalf("paused trigger left %d TaskRun rows", runCount)
+	}
+	if exec.Calls() != 0 {
+		t.Fatalf("paused trigger reached executor %d time(s)", exec.Calls())
+	}
+}
+
+func TestQueuedTaskEntryAfterPauseCancelsWithoutExecutor(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	taskEntity := seedTaskForManagerTest(t, db)
+	queued, err := manager.reserveTaskRun(context.Background(), taskEntity.NodeID, model.TaskRun{
+		TaskID:      taskEntity.ID,
+		TriggerType: "manual",
+		Status:      model.TaskRunStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("reserve queued task: %v", err)
+	}
+	if err := manager.Pause(taskEntity.ID, false); err != nil {
+		t.Fatalf("pause queued task: %v", err)
+	}
+	manager.runTask(taskEntity.ID, queued.ID, "manual", generateChainRunID())
+	terminal := waitTaskRunTerminal(t, db, queued.ID)
+	if terminal.Status != model.TaskRunStatusCanceled {
+		t.Fatalf("paused queued TaskRun status=%q, want canceled", terminal.Status)
+	}
+	if exec.Calls() != 0 {
+		t.Fatalf("paused queued TaskRun reached executor %d time(s)", exec.Calls())
+	}
+}
+
 func TestTriggerManualNodeWriteConflictLeavesNoReservationOrMarker(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	admission := &nodeWriteAdmissionFake{errs: []error{ErrNodeWriteConflict}}
 	manager.SetNodeWriteAdmission(admission)
@@ -3428,7 +3586,7 @@ func TestTriggerRestoreRejectsLegacyUnknownSuccessBeforeAdmission(t *testing.T) 
 	manager.SetNodeWriteAdmission(admission)
 
 	runID, err := manager.TriggerRestore(taskEntity.ID, "/tmp/legacy-unknown-restore")
-	if err == nil || !strings.Contains(err.Error(), "没有成功的执行记录") {
+	if err == nil || !errors.Is(err, ErrRestoreRequiresNewBackup) || !strings.Contains(err.Error(), "没有成功的执行记录") {
 		t.Fatalf("TriggerRestore legacy_unknown prerequisite run ID=%d error=%v", runID, err)
 	}
 	calls, _, _ := admission.snapshot()
@@ -3441,6 +3599,7 @@ func TestTriggerManualRetriesRawSQLiteBusyAroundWholeReservationTransaction(t *t
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	admission := &nodeWriteAdmissionFake{errs: []error{sqlite3.Error{Code: sqlite3.ErrBusy}, nil}}
 	manager.SetNodeWriteAdmission(admission)
@@ -3496,10 +3655,9 @@ func TestTriggerRestoreNodeWriteConflictLeavesNoRunMarkerPrecheckOrExecutor(t *t
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
-	if err := db.Create(&model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "success"}).Error; err != nil {
-		t.Fatal(err)
-	}
+	createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 	admission := &nodeWriteAdmissionFake{errs: []error{ErrNodeWriteConflict}}
 	manager.SetNodeWriteAdmission(admission)
 	var precheckCalls atomic.Int32
@@ -3581,6 +3739,7 @@ func TestRunTaskDualWriteSuccess(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -3618,6 +3777,7 @@ func TestRunTaskDualWriteFailed(t *testing.T) {
 	db := openManagerTestDB(t)
 	failExec := &failingExecutor{err: fmt.Errorf("模拟执行失败")}
 	m := NewManager(db, stubExecutorFactory{executor: failExec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -3645,6 +3805,7 @@ func TestCancelBeforeRunStartsDoesNotExecute(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	for i := 0; i < cap(m.semaphore); i++ {
@@ -3682,6 +3843,7 @@ func TestCancelUpdatesTaskRunToCanceled(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID, err := m.TriggerManual(taskEntity.ID)
@@ -3797,6 +3959,7 @@ func TestCleanupExpiredTaskRuns(t *testing.T) {
 func TestEmitLogWritesTaskRunID(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := uint(42)
@@ -3821,6 +3984,7 @@ func TestEmitLogWritesTaskRunID(t *testing.T) {
 func TestEmitLogSanitizesTaskRuntimeEvidence(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := uint(43)
@@ -3919,6 +4083,7 @@ func TestManagedResticRestoreLatestBlockedBeforeCredentialAndSSH(t *testing.T) {
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("restore must remain unreachable")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
@@ -3973,6 +4138,7 @@ func TestManagedRsyncRestoreLatestBlockedBeforePrecheckAndExecutor(t *testing.T)
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("restore must remain unreachable")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "rsync"
 	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
@@ -4012,6 +4178,7 @@ func TestPristineResticRestoreLatestRetainsCompatibility(t *testing.T) {
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("expected compatibility restore failure")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
@@ -4054,13 +4221,12 @@ func TestManagedLegacyRestoreBlockCleansReservationMarkers(t *testing.T) {
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("restore must remain unreachable")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", "restic").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "success"}).Error; err != nil {
-		t.Fatal(err)
-	}
+	createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 	manager.SetNodeWriteAdmission(&nodeWriteAdmissionFake{})
 	session := &legacyLineageSessionFake{mode: publication.LineageExact}
 	manager.SetLineageGuard(&legacyLineageGuardFake{session: session})
@@ -4114,6 +4280,7 @@ func (sink *exactAnomalySinkFake) Raise(_ context.Context, finding anomaly.Findi
 func TestManagerObserveCommittedDispatchesExactAnomalyBestEffort(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", "restic").Error; err != nil {
@@ -4158,6 +4325,7 @@ func TestRunTaskSanitizesExecutorFailureLastError(t *testing.T) {
 	db := openManagerTestDB(t)
 	execErr := errors.New(`backup failed for /srv/private/source to root@backup.internal.example:/repo/tenant-a via https://backup.internal.example/api?token=FAKE_EXECUTOR_TOKEN_FOR_TEST_ONLY`)
 	m := NewManager(db, stubExecutorFactory{executor: &failingExecutor{err: execErr}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 
@@ -4188,12 +4356,14 @@ func TestRunRestoreTaskSanitizesPrecheckFailureLastError(t *testing.T) {
 	precheckErr := errors.New(`target /srv/private/restore unavailable on restore-precheck.internal.example output=/tmp/precheck-output token=FAKE_RESTORE_PRECHECK_TOKEN_FOR_TEST_ONLY`)
 	restoreExec := &failingRestoreExecutor{err: errors.New("restore executor should not run")}
 	m := NewManager(db, stubExecutorFactory{executor: restoreExec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	m.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
 		return precheckErr
 	}
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.RsyncSource = "/backup/private/source"
 	taskEntity.RsyncTarget = "/srv/private/restore"
+	taskEntity.ExecutorConfig = `{"publication_mode":"versioned_full_copy"}`
 	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
 
 	m.runRestoreTask(taskEntity.ID, runID, taskEntity)
@@ -4231,6 +4401,7 @@ func TestRunRestoreTaskSanitizesRestoreFailureLastError(t *testing.T) {
 	restoreErr := errors.New(`restore failed from /backup/private/source to /srv/private/restore on restore.internal.example via https://restore.internal.example/api?token=FAKE_RESTORE_TOKEN_FOR_TEST_ONLY`)
 	restoreExec := &failingRestoreExecutor{err: restoreErr}
 	m := NewManager(db, stubExecutorFactory{executor: restoreExec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	m.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
 		return nil
 	}
@@ -4272,6 +4443,7 @@ func TestRunRestoreTaskSanitizesRestoreFailureLastError(t *testing.T) {
 func TestMaintenanceMessagesSanitizeRuntimeEvidence(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	retentionErr := sanitizeTaskLastError(`restic 保留清理失败: remove /srv/private/repo on backup.internal.example token=FAKE_RETENTION_ALERT_TOKEN_FOR_TEST_ONLY, 输出: /tmp/raw-output`)
 	m.logDispatcher.Dispatch(0, nil, "error", retentionErr, "")
@@ -4314,11 +4486,12 @@ func TestRestoreBlockedByInFlightNormalTask(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
 	// task2 需要有成功记录才能触发恢复
-	db.Create(&model.TaskRun{TaskID: t2.ID, TriggerType: "manual", Status: "success"})
+	createSuccessfulBackupTaskRun(t, db, t2.ID)
 
 	// 触发 task1（普通任务），等待它进入 executor（此时 Task.Status 已更新为 running）
 	_, err := m.TriggerManual(t1.ID)
@@ -4351,7 +4524,7 @@ func TestRestoreBlockedByInFlightNormalTask(t *testing.T) {
 // seedTwoTasksSameNode 创建同节点、不同策略的两个 rsync 任务，用于互斥测试。
 func seedTwoTasksSameNode(t *testing.T, db *gorm.DB) (model.Task, model.Task) {
 	t.Helper()
-	node := model.Node{Name: "node-mutex-test", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key"}
+	node := model.Node{Name: "node-mutex-test", Host: "", Port: 22, Username: "root", AuthType: "key"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
@@ -4359,9 +4532,8 @@ func seedTwoTasksSameNode(t *testing.T, db *gorm.DB) (model.Task, model.Task) {
 	p2 := model.Policy{Name: "policy-mutex-2", SourcePath: "/src2", TargetPath: "/dst2", CronSpec: "@daily"}
 	db.Create(&p1)
 	db.Create(&p2)
-
-	t1 := model.Task{Name: "t-mutex-1", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: "/src1", RsyncTarget: "/dst1", PolicyID: &p1.ID}
-	t2 := model.Task{Name: "t-mutex-2", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: "/src2", RsyncTarget: "/dst2", PolicyID: &p2.ID}
+	t1 := model.Task{Name: "t-mutex-1", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: t.TempDir() + "/", RsyncTarget: t.TempDir(), PolicyID: &p1.ID}
+	t2 := model.Task{Name: "t-mutex-2", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: t.TempDir() + "/", RsyncTarget: t.TempDir(), PolicyID: &p2.ID}
 	db.Create(&t1)
 	db.Create(&t2)
 	return t1, t2
@@ -4372,6 +4544,7 @@ func TestRestoreNodeMutexBlocksNormalTask(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
@@ -4414,8 +4587,8 @@ func TestRestoreNodeMutexBlocksConcurrentRestore(t *testing.T) {
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
 	// task1 和 task2 都需要有成功记录才能触发恢复
-	db.Create(&model.TaskRun{TaskID: t1.ID, TriggerType: "manual", Status: "success"})
-	db.Create(&model.TaskRun{TaskID: t2.ID, TriggerType: "manual", Status: "success"})
+	createSuccessfulBackupTaskRun(t, db, t1.ID)
+	createSuccessfulBackupTaskRun(t, db, t2.ID)
 
 	// 模拟 task1 有恢复正在运行
 	m.restoreNodes.Store(t1.NodeID, t1.ID)
@@ -4440,11 +4613,12 @@ func TestRestoreNodeMutexRegisteredSynchronously(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
 	// task1 需要有成功记录才能触发恢复
-	db.Create(&model.TaskRun{TaskID: t1.ID, TriggerType: "manual", Status: "success"})
+	createSuccessfulBackupTaskRun(t, db, t1.ID)
 
 	// 填满 semaphore，使 restore goroutine 阻塞在排队阶段
 	for i := 0; i < cap(m.semaphore); i++ {

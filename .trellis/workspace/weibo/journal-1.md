@@ -1913,3 +1913,81 @@ Persisted rclone native owned/reference evidence, made preparing a non-reserving
 ### Next Steps
 
 - Keep 09-02-backup-lifecycle-effect-audit-idempotency on a new branch after this PR lands
+
+
+## Session 50: Deliver backup lifecycle effect fencing and audit idempotency
+
+**Date**: 2026-09-06
+**Task**: Deliver backup lifecycle effect fencing and audit idempotency
+**Branch**: `feat/backup-lifecycle-effect-audit-idempotency`
+
+### Summary
+
+Completed repository delivery for durable provider-delete claims, proof-first recovery, settled-audit slots, migration 000077, CI parity hardening, dependency and image pin refreshes, and the CI-only recovery concurrency fixture repair.
+
+### Main Changes
+
+- Added durable lifecycle effect claims, exact provider identity fencing, proof-first convergence, and retention-proof audit slots.
+- Added paired migration 000077 and exact SQLite/PostgreSQL acceptance coverage.
+- Hardened local CI parity, refreshed vulnerable humanfs lockfile dependencies and Alpine curl pin, and fixed the race-only recovery test fixture.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `56cc0b2b` | (see git log) |
+| `cf93511d` | (see git log) |
+| `d49858e1` | (see git log) |
+| `e3bf4071` | (see git log) |
+| `89b0057c` | (see git log) |
+| `e1080fed` | (see git log) |
+| `5379219` | (see git log) |
+
+### Testing
+
+- [OK] Go 1.26.6 make check, local CI parity, focused/full race suites, PostgreSQL 18 required slices, frontend checks, Docker smoke, and migration self-tests passed.
+- [OK] GitHub Actions run 34038232448 passed all 11 required jobs on e1080fed.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Merge PR #497 after the final bookkeeping-head CI passes; real provider/NAS E2E remains separate live acceptance.
+
+
+## Session 51: Rsync preview source freshness and completion lifecycle
+
+**Date**: 2026-09-07
+**Task**: Rsync preview source freshness and completion lifecycle
+**Branch**: `fix/backup-preview-first-open`
+
+### Summary
+
+Fixed stale mutable Rsync catalog observations and task-completion invalidation. Completion now refreshes the exact source after post-hook, supersedes obsolete catalog attempts, and wakes the existing worker before users select the current entry. Verified first Broker.Issue/Serve, same-node task isolation, cancellation, and overlapping builds. Three-model discovery and repair verification completed.
+
+### Main Changes
+
+- Refresh and invalidate exact legacy Rsync catalog sources after successful backup completion; retain bounded background recovery.
+- Preserve task/repository authority, cancellation, ordinary failure backoff, and in-flight builder lease ownership.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4ee0c053` | (see git log) |
+
+### Testing
+
+- [OK] Go 1.26.6: full backend tests, build, and golangci-lint passed (0 issues).
+- [OK] First-preview worker-overlap regression passed with production SQLite WAL configuration under race detector for 30 repetitions.
+- [OK] GPT-5.6-Sol, Grok-4.6, and Gemini 3.8 Flash review findings resolved.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Continue development from synchronized main; publication evidence is recorded on the associated GitHub PR.

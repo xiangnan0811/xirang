@@ -72,6 +72,11 @@ func NewService(db *gorm.DB, jwt *JWTManager, settingsSvc *settings.Service, cfg
 	if nowFunc == nil {
 		nowFunc = time.Now
 	}
+	if jwt != nil && db != nil {
+		// Pending 2FA JTIs are durably registered by the shared manager. This
+		// also keeps direct manager-generated challenges on the same path.
+		jwt.SetDB(db)
+	}
 	return &Service{
 		db:            db,
 		jwt:           jwt,
@@ -82,8 +87,8 @@ func NewService(db *gorm.DB, jwt *JWTManager, settingsSvc *settings.Service, cfg
 
 // LoginResult 封装登录结果，区分完整登录和需要 2FA 的中间状态。
 type LoginResult struct {
-	Token      string
-	User       *model.User
+	Token       string
+	User        *model.User
 	Requires2FA bool
 	LoginToken  string // 仅在 Requires2FA=true 时有效
 }
@@ -173,82 +178,162 @@ func (s *Service) CreateUser(username, password, role string) (*model.User, erro
 }
 
 func (s *Service) UpdateUser(userID uint, role *string, password *string) (*model.User, error) {
-	var user model.User
-	if err := s.db.First(&user, userID).Error; err != nil {
-		return nil, err
+	if s == nil || s.db == nil {
+		return nil, errors.New("身份数据库未初始化")
 	}
 
-	updates := map[string]any{}
+	var normalizedRole string
 	if role != nil {
-		normalizedRole, err := normalizeRole(*role)
+		var err error
+		normalizedRole, err = normalizeRole(*role)
 		if err != nil {
 			return nil, err
 		}
-		updates["role"] = normalizedRole
 	}
+	passwordHash := ""
 	if password != nil && strings.TrimSpace(*password) != "" {
 		if err := ValidatePasswordStrength(*password); err != nil {
 			return nil, err
 		}
-		hash, err := HashPassword(*password)
+		var err error
+		passwordHash, err = HashPassword(*password)
 		if err != nil {
 			return nil, fmt.Errorf("操作失败，请稍候重试")
 		}
-		updates["password_hash"] = hash
 	}
-	if len(updates) == 0 {
+	if role == nil && passwordHash == "" {
+		var user model.User
+		if err := s.db.First(&user, userID).Error; err != nil {
+			return nil, err
+		}
 		return &user, nil
 	}
 
-	// 密码或角色变更时递增 token_version，使旧 token 自动失效
-	if updates["password_hash"] != nil || updates["role"] != nil {
+	var updated model.User
+	err := withIdentityTransaction(context.Background(), s.db, func(tx *gorm.DB) error {
+		if err := SerializeIdentityMutationLock(tx); err != nil {
+			return err
+		}
+		row, err := loadStoredIdentityUser(tx, userID, true)
+		if err != nil {
+			return err
+		}
+		if role != nil && row.Role == "admin" && normalizedRole != "admin" {
+			count, err := countAdmins(tx)
+			if err != nil {
+				return err
+			}
+			if count <= 1 {
+				return ErrLastAdmin
+			}
+		}
+		updates := map[string]any{}
+		securityChanged := false
+		if role != nil && normalizedRole != row.Role {
+			updates["role"] = normalizedRole
+			securityChanged = true
+		}
+		if passwordHash != "" {
+			updates["password_hash"] = passwordHash
+			securityChanged = true
+		}
+		if !securityChanged {
+			return tx.First(&updated, userID).Error
+		}
 		updates["token_version"] = gorm.Expr("token_version + 1")
-	}
-
-	if err := s.db.Model(&user).Updates(updates).Error; err != nil {
+		result := tx.Table("users").Where(
+			"id = ? AND token_version = ? AND role = ?",
+			userID, row.TokenVersion, row.Role,
+		).Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrSecurityConflict
+		}
+		if err := deletePendingTokens(tx, userID); err != nil {
+			return err
+		}
+		return tx.First(&updated, userID).Error
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err := s.db.First(&user, userID).Error; err != nil {
-		return nil, err
-	}
-	return &user, nil
+	return &updated, nil
 }
 
 func (s *Service) DeleteUser(userID uint, actorID uint) error {
 	if userID == actorID {
 		return fmt.Errorf("不允许删除当前登录用户")
 	}
-	result := s.db.Delete(&model.User{}, userID)
-	if result.Error != nil {
-		return result.Error
+	if s == nil || s.db == nil {
+		return errors.New("身份数据库未初始化")
 	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("用户不存在")
-	}
-	return nil
+	return withIdentityTransaction(context.Background(), s.db, func(tx *gorm.DB) error {
+		if err := SerializeIdentityMutationLock(tx); err != nil {
+			return err
+		}
+		row, err := loadStoredIdentityUser(tx, userID, true)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("用户不存在")
+			}
+			return err
+		}
+		if row.Role == "admin" {
+			count, err := countAdmins(tx)
+			if err != nil {
+				return err
+			}
+			if count <= 1 {
+				return ErrLastAdmin
+			}
+		}
+		result := tx.Where("id = ?", userID).Delete(&model.User{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("用户不存在")
+		}
+		return nil
+	})
 }
 
 func (s *Service) ChangePassword(userID uint, currentPassword string, newPassword string) error {
-	var user model.User
-	if err := s.db.First(&user, userID).Error; err != nil {
-		return err
-	}
-
-	if err := CheckPassword(user.PasswordHash, currentPassword); err != nil {
-		return fmt.Errorf("当前密码错误")
+	if s == nil || s.db == nil {
+		return errors.New("身份数据库未初始化")
 	}
 	if err := ValidatePasswordStrength(newPassword); err != nil {
 		return err
 	}
-
 	hash, err := HashPassword(newPassword)
 	if err != nil {
 		return fmt.Errorf("操作失败，请稍候重试")
 	}
-	return s.db.Model(&user).Updates(map[string]any{
-		"password_hash": hash,
-		"token_version": gorm.Expr("token_version + 1"),
-	}).Error
+	return withIdentityTransaction(context.Background(), s.db, func(tx *gorm.DB) error {
+		row, err := loadStoredIdentityUser(tx, userID, true)
+		if err != nil {
+			return err
+		}
+		if err := CheckPassword(row.PasswordHash, currentPassword); err != nil {
+			return fmt.Errorf("当前密码错误")
+		}
+		result := tx.Table("users").Where(
+			"id = ? AND token_version = ? AND password_hash = ?",
+			userID, row.TokenVersion, row.PasswordHash,
+		).Updates(map[string]any{
+			"password_hash": hash,
+			"token_version": gorm.Expr("token_version + 1"),
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrSecurityConflict
+		}
+		return deletePendingTokens(tx, userID)
+	})
 }
 
 func normalizeRole(role string) (string, error) {

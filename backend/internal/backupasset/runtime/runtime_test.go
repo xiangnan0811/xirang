@@ -1401,7 +1401,7 @@ func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) 
 		&model.Node{}, &model.Task{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{},
 		&model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointLease{},
 		&model.BackupAssetManagedHistoryLatch{}, &model.BackupAssetInstallation{},
-		&model.BackupAssetInventoryRun{}, &model.BackupAssetRepositoryConflict{},
+		&model.BackupAssetInventoryRun{}, &model.BackupAssetRepositoryConflict{}, &model.BackupCompletion{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -3135,7 +3135,8 @@ func TestRuntimeSearchShutdownStopsAdmissionAndJoinsSearchBeforePublication(t *t
 		beforeCanceled: func() { searchActiveAtPublicationCancel <- searchBackend.active() },
 	}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
-		Foundation: fixture.controller.foundation, Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+		Foundation: fixture.controller.foundation, Reconciler: reconciler,
+		Completion: &workerCompletionRecorderFake{}, Metrics: publication.NoopMetrics{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -3441,8 +3442,28 @@ func (*runtimeRetentionAdmissionOK) RevokeRecoveryPoint(context.Context, retenti
 
 type runtimeRetentionWORMDeletion struct{}
 
-func (runtimeRetentionWORMDeletion) DeleteRecoveryPoint(context.Context, retention.LifecyclePointRequest) (retention.PointDeletionResult, error) {
-	return retention.PointDeletionResult{}, retention.ErrPointDeletionWORM
+func (runtimeRetentionWORMDeletion) Prepare(
+	context.Context,
+	*gorm.DB,
+	retention.ProviderDeletePrepareProfile,
+	retention.LifecyclePointRequest,
+	retention.LifecycleDeleteRows,
+) (retention.PreparedPointDeletion, error) {
+	return retention.PreparedPointDeletion{}, nil
+}
+
+func (runtimeRetentionWORMDeletion) Execute(context.Context, retention.PreparedPointDeletion) (retention.PointDeletionExecution, error) {
+	return retention.PointDeletionExecution{ProviderCalled: true}, retention.ErrPointDeletionWORM
+}
+
+func (runtimeRetentionWORMDeletion) Verify(
+	context.Context,
+	*gorm.DB,
+	retention.LifecyclePointRequest,
+	retention.PreparedPointDeletion,
+	retention.LifecycleDeleteRows,
+) error {
+	return nil
 }
 
 type runtimeRetentionNoopAudit struct{}
@@ -3468,6 +3489,7 @@ func newRuntimeRetentionCleanupHoldWorker(t *testing.T) (*retention.Worker, *run
 		&model.TaskRepositoryLink{}, &model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
 		&model.RecoveryPointLease{}, &model.RecoveryPointLifecycleAttempt{},
 		&model.RecoveryPointLifecycleTombstone{},
+		&model.RecoveryPointLifecycleEffectClaim{}, &model.RecoveryPointLifecycleAuditSlot{},
 	); err != nil {
 		t.Fatal(err)
 	}

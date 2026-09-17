@@ -1,0 +1,9 @@
+{"file":".trellis/tasks/09-02-backup-lifecycle-effect-audit-idempotency/prd.md","reason":"Requirements and acceptance criteria for durable provider-delete claims and settled-audit slots."}
+{"file":".trellis/tasks/09-02-backup-lifecycle-effect-audit-idempotency/design.md","reason":"Authoritative state machines, schema, lock order, crash protocol, and slot-vs-outbox decisions."}
+{"file":".trellis/tasks/09-02-backup-lifecycle-effect-audit-idempotency/implement.md","reason":"Ordered implementation phases, validation commands, and rollback points."}
+{"file":".trellis/tasks/09-02-backup-lifecycle-effect-audit-idempotency/research/current-necessity-review.md","reason":"Re-verified current-code gaps and post-000076 constraints the implementation must not regress."}
+{"file":".trellis/tasks/09-02-backup-lifecycle-effect-audit-idempotency/research/session-handoff.md","reason":"Original deferred boundary; use only as historical context, not as current function names."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Paired SQLite/PostgreSQL migrations, used-down guards, and latest version lockstep."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Fail-closed conflict, uncertain effect, and retryable in-flight observation semantics."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"PostgreSQL barriers, race tests, and full backend verification gates."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse publication-claim, tombstone receipt, and WriteTx; do not invent a generic outbox."}

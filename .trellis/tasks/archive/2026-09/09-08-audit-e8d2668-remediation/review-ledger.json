@@ -1,0 +1,123 @@
+{
+  "base": "e8d2668266b1a5586b5ff7b50937deab31dd0331",
+  "discovery_head": "5ee2e240ea982b7bd1091be0fe5449c63857d01d",
+  "discovery_complete": true,
+  "models_verified": [
+    {
+      "lane": "integration-reviewer",
+      "model": "openai-codex/gpt-5.6-sol",
+      "fallback": false
+    },
+    {
+      "lane": "grok-reviewer",
+      "model": "xai-oauth/grok-4.6",
+      "fallback": false
+    },
+    {
+      "lane": "gemini-reviewer",
+      "model": "google-antigravity/gemini-3.8-flash",
+      "fallback": false
+    }
+  ],
+  "repair_cycle": 4,
+  "maximum_repair_cycles": 4,
+  "current_request_repair_cycle": 2,
+  "maximum_current_request_repair_cycles": 2,
+  "discovery_repeats_used": 0,
+  "findings": [
+    {
+      "id": "AR-001",
+      "sources": [
+        "INT-DISC-001"
+      ],
+      "severity": "P1",
+      "status": "resolved_verified",
+      "root": "Retryable attempt is treated as final task failure; warning emits failure event; effect error payload is stale."
+    },
+    {
+      "id": "AR-002",
+      "sources": [
+        "INT-DISC-002"
+      ],
+      "severity": "P1",
+      "status": "resolved_verified",
+      "root": "Retry delivery and chain context are memory-only and disappear on crash or a one-shot trigger error.",
+      "affected": ["backend/internal/task/runner.go", "backend/internal/task/manager.go"]
+    },
+    {
+      "id": "AR-003",
+      "sources": [
+        "INT-DISC-003"
+      ],
+      "severity": "P1",
+      "status": "resolved_verified",
+      "root": "Ownership loss is not fenced across all executor and queued-run cancellation paths.",
+      "affected": ["backend/internal/task/terminal.go", "backend/internal/task/runner.go", "backend/internal/task/manager.go"],
+      "verification": "Original GPT-5.6-Sol verified a677f78a: task/run/owner cancellation CAS, lease clearing, checked result/error propagation, queued retry aggregate settlement and foreign-live orphan fencing. SQLite/PostgreSQL owner and authorized-cancellation regressions passed; unchanged in final c4f78d72 verification."
+    },
+    {
+      "id": "AR-004",
+      "sources": [
+        "INT-DISC-004"
+      ],
+      "severity": "P1",
+      "status": "resolved_verified",
+      "root": "Automation action/log failures are acknowledged as durable effect success; per-rule receipts are absent.",
+      "affected": ["backend/internal/automation/dispatcher.go", "backend/internal/task/terminal.go"]
+    },
+    {
+      "id": "AR-005",
+      "sources": [
+        "INT-DISC-005",
+        "GROK-D1"
+      ],
+      "severity": "P2",
+      "status": "resolved_verified",
+      "root": "Production omits policy-controller composition, retaining disabled in-memory schedules.",
+      "affected": ["backend/cmd/server/main.go", "backend/internal/automation/dispatcher.go"],
+      "adjudication": "Deduplicated same root. Executor-entry guard blocks payload, so live scheduler inconsistency is P2, not an unguarded P1 execution."
+    },
+    {
+      "id": "AR-006",
+      "sources": [
+        "GROK-D2"
+      ],
+      "severity": "P2",
+      "status": "resolved_verified",
+      "root": "Monitor List lacks return after error response, concatenating error and success JSON."
+    },
+    {
+      "id": "AR-007",
+      "sources": [
+        "GROK-D3"
+      ],
+      "severity": "P2",
+      "status": "resolved_verified",
+      "root": "Legacy rsync remote operand still lacks IPv6 brackets."
+    },
+    {
+      "id": "AR-008",
+      "sources": ["NRF-001"],
+      "severity": "P1",
+      "status": "resolved_verified",
+      "root": "Full retry recovery batch is falsely counted as unprocessed backlog, aborting startup before effect drain.",
+      "affected": ["backend/internal/task/terminal.go", "backend/internal/task/manager.go"],
+      "verification": "Original GPT-5.6-Sol verified c4f78d72: genuine missing/latest-ordinary retry candidates, nonfatal bounded effect drain, keyset pending recovery, expired-owner cancellation CAS. AR008-R1/R2 resolved; SQLite/PostgreSQL real LoadSchedules regressions cover cap boundaries, multiple handled pages, later drill/restore, and expired disabled/archived/missing reservations. No admissible new findings."
+    }
+  ],
+  "notes": [
+    "All first discovery passes completed before repairs. Gemini no-findings does not override valid minority findings.",
+    "Model identities and fallback=false verified from actual session model_change metadata.",
+    "Source-order/wiring assertion recommendation rejected: use behavioral scheduler/control proof.",
+    "XR10/XR12 actual Chromium QA passed while discovery ran; dev-server same-origin observation is not production fallback proof.",
+    "Repair cycle one covered AR-001, AR-006 and AR-007 only. All three regressions failed before repair and passed afterward under -race.",
+    "No TriggerKey/ExecutionKey, receipt model or additional migration was introduced. Expanded repair jobs were aborted before source changes.",
+    "Historical cycle two stopped NOT READY with AR-003 and repair-introduced AR-008; final continuation resolved both.",
+    "Verification on 5a2f3d6a: original GPT-5.6-Sol reviewer resolved AR-001; original Grok-4.6 reviewer resolved AR-006/007. No repair-introduced findings. Gemini remained parked; no additional discovery wave or reviewer was created.",
+    "Cycle two frozen repair head 187cb2775715c49209ee451998b436f6990c3919: original GPT-5.6-Sol verified AR-002/004/005 but retained AR-003 and found NRF-001, adjudicated AR-008. Original Grok-4.6 verified AR-005 with no new findings. Actual intended model metadata verified, no fallback. Gemini remained parked.",
+    "Both remaining blockers were reproduced by Main with throwaway SQLite smoke tests; these files were removed. The original two-cycle gate stopped NOT READY.",
+    "The user explicitly requested continued repair after the prior two-cycle stop. Current continuation is bounded to two repair-and-verification batches for AR-003 and AR-008 from 3d820c147ff308122a6a2f16f551ccc6ff0fd0b0; cumulative repair_cycle retains prior history. No new discovery wave, unrelated scope, schema or migration.",
+    "First continuation verification on a677f78a resolved AR-003 and retained AR-008 with AR008-R1 (later drill/restore hides ordinary retry predecessor) and AR008-R2 (expired foreign-owned disabled pending reservation cannot be recovered). Both were repaired in the second continuation batch.",
+    "Final original GPT-5.6-Sol verification on c4f78d7226ddbf7c4aec98b6492666e6d555082e resolved AR-008 and both child findings. All eight ledger findings are resolved_verified. No new reviewer/discovery wave; actual intended model metadata remains no-fallback. Local implementation/test/review readiness is READY; remote PR CI, merge and publish were not executed."
+  ]
+}

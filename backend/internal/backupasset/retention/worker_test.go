@@ -3,6 +3,7 @@ package retention
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,167 @@ func TestRetentionWorkerStartupPassRunsBoundedReconciliation(t *testing.T) {
 	}
 	if fixture.audit.calls != 1 || fixture.audit.lastLimit != 1 {
 		t.Fatalf("startup audit purge calls=%d limit=%d, want 1/1", fixture.audit.calls, fixture.audit.lastLimit)
+	}
+}
+
+func TestRetentionWorkerDefersLateHoldSettledAuditRetryBeforeDue(t *testing.T) {
+	ctx := context.Background()
+	fixture := newRetentionWorkerFixture(t, retentionWorkerFixtureOptions{
+		enabled: true, interval: 30 * time.Second, batchSize: 1, eligiblePoints: 1,
+	})
+	fixture.deleter.err = nil
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("a", 64),
+	}
+	holdID := testOpaqueID(fixture.base + 4)
+	fixture.deleter.afterEffect = func() {
+		if err := fixture.db.Create(&model.RecoveryPointHold{
+			ID: holdID, RecoveryPointID: fixture.pointIDs[0],
+			HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
+			EncryptedReason: "late hold settled-audit retry", CreatedBy: 1,
+			CreatedAt: fixture.clock, UpdatedAt: fixture.clock,
+		}).Error; err != nil {
+			t.Errorf("create late hold: %v", err)
+			return
+		}
+		var point model.RecoveryPoint
+		if err := fixture.db.First(&point, "id = ?", fixture.pointIDs[0]).Error; err != nil {
+			t.Errorf("load late-hold point: %v", err)
+			return
+		}
+		if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).
+			Updates(map[string]any{
+				"hold_state": backupasset.HoldActive, "point_revision": point.PointRevision + 1,
+				"updated_at": fixture.clock,
+			}).Error; err != nil {
+			t.Errorf("project late hold: %v", err)
+		}
+	}
+	auditErr := errors.New("late-hold settled audit failure")
+	sink := &acceptanceAuditSink{failLeft: 1, failErr: auditErr}
+	fixture.worker.coordinator.audit = sink
+	if err := fixture.worker.StartupPass(ctx); err != nil {
+		t.Fatalf("initial worker pass: %v", err)
+	}
+	var failedAttempt model.RecoveryPointLifecycleAttempt
+	if err := fixture.db.First(&failedAttempt).Error; err != nil {
+		t.Fatalf("load late-hold failed attempt: %v", err)
+	}
+	if failedAttempt.Phase != string(backupasset.LifecyclePhaseBlocked) ||
+		failedAttempt.BlockedReason != string(backupasset.LifecycleBlockedActiveHold) ||
+		failedAttempt.RetryAt == nil || !failedAttempt.RetryAt.After(fixture.clock) {
+		t.Fatalf("late-hold failed attempt=%+v, want blocked active_hold with future retry", failedAttempt)
+	}
+	if sink.Writes() != 0 || sink.calls != 0 || fixture.deleter.calls != 1 {
+		t.Fatalf("late-hold proof sink_calls=%d sink_writes=%d provider_calls=%d, want 0/0/1",
+			sink.calls, sink.Writes(), fixture.deleter.calls)
+	}
+	fixture.clock = failedAttempt.RetryAt.UTC()
+	if err := fixture.worker.settleClaimed(ctx, 1); err == nil || !errors.Is(err, auditErr) {
+		t.Fatalf("late-hold terminal audit failure error=%v, want sentinel", err)
+	}
+	if err := fixture.db.First(&failedAttempt, "id = ?", failedAttempt.ID).Error; err != nil {
+		t.Fatalf("reload late-hold failed attempt after audit error: %v", err)
+	}
+	if failedAttempt.Phase != string(backupasset.LifecyclePhaseBlocked) ||
+		failedAttempt.BlockedReason != string(backupasset.LifecycleBlockedActiveHold) ||
+		failedAttempt.RetryAt == nil || !failedAttempt.RetryAt.After(fixture.clock) {
+		t.Fatalf("late-hold retry attempt=%+v, want blocked active_hold with future retry", failedAttempt)
+	}
+	if sink.Writes() != 0 || sink.calls != 1 || fixture.deleter.calls != 1 {
+		t.Fatalf("late-hold terminal audit failure sink_calls=%d sink_writes=%d provider_calls=%d, want 1/0/1",
+			sink.calls, sink.Writes(), fixture.deleter.calls)
+	}
+
+	if _, err := fixture.holds.Release(ctx, ReleaseHoldRequest{
+		Actor:           backupasset.AuditActor{UserID: 1, Username: "admin", Role: "admin"},
+		RecoveryPointID: fixture.pointIDs[0], HoldID: holdID,
+		Reason: "release late hold for settled-audit retry",
+	}); err != nil {
+		t.Fatalf("release late hold: %v", err)
+	}
+	loadDurable := func() (
+		model.RecoveryPointLifecycleAttempt,
+		model.RecoveryPoint,
+		model.RecoveryPointLease,
+		model.RecoveryPointLifecycleEffectClaim,
+		model.RecoveryPointLifecycleTombstone,
+		error,
+	) {
+		var attempt model.RecoveryPointLifecycleAttempt
+		if err := fixture.db.First(&attempt, "id = ?", failedAttempt.ID).Error; err != nil {
+			return attempt, model.RecoveryPoint{}, model.RecoveryPointLease{},
+				model.RecoveryPointLifecycleEffectClaim{}, model.RecoveryPointLifecycleTombstone{}, err
+		}
+		var point model.RecoveryPoint
+		if err := fixture.db.First(&point, "id = ?", fixture.pointIDs[0]).Error; err != nil {
+			return attempt, point, model.RecoveryPointLease{},
+				model.RecoveryPointLifecycleEffectClaim{}, model.RecoveryPointLifecycleTombstone{}, err
+		}
+		if attempt.LeaseID == nil {
+			return attempt, point, model.RecoveryPointLease{},
+				model.RecoveryPointLifecycleEffectClaim{}, model.RecoveryPointLifecycleTombstone{},
+				errors.New("late-hold attempt has no lease")
+		}
+		var lease model.RecoveryPointLease
+		if err := fixture.db.First(&lease, "id = ?", *attempt.LeaseID).Error; err != nil {
+			return attempt, point, lease,
+				model.RecoveryPointLifecycleEffectClaim{}, model.RecoveryPointLifecycleTombstone{}, err
+		}
+		var claim model.RecoveryPointLifecycleEffectClaim
+		if err := fixture.db.Where("attempt_id = ?", attempt.ID).First(&claim).Error; err != nil {
+			return attempt, point, lease, claim,
+				model.RecoveryPointLifecycleTombstone{}, err
+		}
+		var tombstone model.RecoveryPointLifecycleTombstone
+		if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?",
+			point.ID, backupasset.LifecycleRetentionExpire).First(&tombstone).Error; err != nil {
+			return attempt, point, lease, claim, tombstone, err
+		}
+		return attempt, point, lease, claim, tombstone, nil
+	}
+	beforeAttempt, beforePoint, beforeLease, beforeClaim, beforeTombstone, err := loadDurable()
+	if err != nil {
+		t.Fatalf("snapshot late-hold durable state: %v", err)
+	}
+	beforeCalls, beforeWrites, beforeProviderCalls := sink.calls, sink.Writes(), fixture.deleter.calls
+	if err := fixture.worker.settleClaimed(ctx, 1); err != nil {
+		t.Fatalf("worker pass before settled-audit retry due: %v", err)
+	}
+	afterAttempt, afterPoint, afterLease, afterClaim, afterTombstone, err := loadDurable()
+	if err != nil {
+		t.Fatalf("reload late-hold durable state before due: %v", err)
+	}
+	if !reflect.DeepEqual(beforeAttempt, afterAttempt) ||
+		!reflect.DeepEqual(beforePoint, afterPoint) ||
+		!reflect.DeepEqual(beforeLease, afterLease) ||
+		!reflect.DeepEqual(beforeClaim, afterClaim) ||
+		!reflect.DeepEqual(beforeTombstone, afterTombstone) {
+		t.Fatal("worker pass before settled-audit retry due mutated durable lifecycle state")
+	}
+	if sink.calls != beforeCalls || sink.Writes() != beforeWrites || fixture.deleter.calls != beforeProviderCalls {
+		t.Fatalf("worker pass before due sink_calls=%d/%d sink_writes=%d/%d provider_calls=%d/%d, want unchanged",
+			sink.calls, beforeCalls, sink.Writes(), beforeWrites, fixture.deleter.calls, beforeProviderCalls)
+	}
+
+	fixture.clock = beforeAttempt.RetryAt.UTC()
+	if err := fixture.worker.settleClaimed(ctx, 1); err != nil {
+		t.Fatalf("worker pass at settled-audit retry due: %v", err)
+	}
+	var completed model.RecoveryPointLifecycleAttempt
+	if err := fixture.db.First(&completed, "id = ?", failedAttempt.ID).Error; err != nil {
+		t.Fatalf("load completed late-hold attempt: %v", err)
+	}
+	var slots int64
+	if err := fixture.db.Model(&model.RecoveryPointLifecycleAuditSlot{}).
+		Where("attempt_id = ?", failedAttempt.ID).Count(&slots).Error; err != nil {
+		t.Fatalf("count completed late-hold audit slots: %v", err)
+	}
+	if completed.Phase != string(backupasset.LifecyclePhaseComplete) ||
+		sink.calls != beforeCalls+1 || sink.Writes() != beforeWrites+1 ||
+		slots != 1 || fixture.deleter.calls != beforeProviderCalls {
+		t.Fatalf("late-hold due completion phase=%q sink_calls=%d/%d sink_writes=%d/%d slots=%d provider_calls=%d/%d, want complete/one audit slot/no provider replay",
+			completed.Phase, sink.calls, beforeCalls, sink.Writes(), beforeWrites, slots, fixture.deleter.calls, beforeProviderCalls)
 	}
 }
 
@@ -77,16 +239,34 @@ func TestRetentionWorkerPeriodicBatchesHonorDynamicConfig(t *testing.T) {
 	}
 }
 
-func TestRetentionWorkerClaimHeartbeatAndFenceLoss(t *testing.T) {
+func TestRetentionWorkerProviderClaimHeartbeatIsObserveOnly(t *testing.T) {
 	fixture := newRetentionWorkerFixture(t, retentionWorkerFixtureOptions{
 		enabled: true, interval: 30 * time.Second, batchSize: 10, eligiblePoints: 1,
 	})
-	if err := fixture.worker.StartupPass(context.Background()); err != nil {
-		t.Fatal(err)
+	fixture.deleter.err = nil
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("a", 64),
+	}
+	fixture.deleter.entered = make(chan struct{})
+	fixture.deleter.release = make(chan struct{})
+	passDone := make(chan error, 1)
+	go func() {
+		passDone <- fixture.worker.StartupPass(context.Background())
+	}()
+	select {
+	case <-fixture.deleter.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not enter provider execution")
 	}
 	var attempt model.RecoveryPointLifecycleAttempt
 	if err := fixture.db.First(&attempt).Error; err != nil {
-		t.Fatalf("load claimed attempt: %v", err)
+		t.Fatalf("load in-flight provider attempt: %v", err)
+	}
+	if attempt.Phase != string(backupasset.LifecyclePhaseProviderDelete) {
+		t.Fatalf("in-flight provider attempt phase=%q, want provider_delete", attempt.Phase)
+	}
+	if attempt.LeaseID == nil {
+		t.Fatal("in-flight provider attempt has no lifecycle lease")
 	}
 	var lease model.RecoveryPointLease
 	if err := fixture.db.First(&lease, "id = ?", *attempt.LeaseID).Error; err != nil {
@@ -98,31 +278,19 @@ func TestRetentionWorkerClaimHeartbeatAndFenceLoss(t *testing.T) {
 			lease.HolderType, lease.OwnerID, lease.Status)
 	}
 	firstHeartbeat := lease.LastHeartbeatAt.UTC()
-
-	fixture.clock = fixture.clock.Add(2 * time.Minute)
-	if err := fixture.worker.StartupPass(context.Background()); err != nil {
-		t.Fatal(err)
+	if _, err := fixture.worker.coordinator.Heartbeat(context.Background(), attempt.ID); err != nil {
+		t.Fatalf("provider claim heartbeat: %v", err)
 	}
 	if err := fixture.db.First(&lease, "id = ?", lease.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if !lease.LastHeartbeatAt.UTC().After(firstHeartbeat) {
-		t.Fatalf("lease heartbeat %s did not advance past %s", lease.LastHeartbeatAt.UTC(), firstHeartbeat)
+	if !lease.LastHeartbeatAt.UTC().Equal(firstHeartbeat) {
+		t.Fatalf("provider claim heartbeat changed lease from %s to %s, want observe-only",
+			firstHeartbeat, lease.LastHeartbeatAt.UTC())
 	}
-
-	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", lease.ID).
-		Updates(map[string]any{"status": backupasset.LeaseReleased, "fence_token": "stolen-fence"}).Error; err != nil {
-		t.Fatalf("corrupt lease fence: %v", err)
-	}
-	if err := fixture.worker.StartupPass(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := fixture.db.First(&attempt, "id = ?", attempt.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if attempt.Phase != string(backupasset.LifecyclePhaseBlocked) ||
-		attempt.BlockedReason != string(backupasset.LifecycleBlockedFenceLost) {
-		t.Fatalf("fence-loss attempt phase=%s reason=%s, want blocked/fence_lost", attempt.Phase, attempt.BlockedReason)
+	close(fixture.deleter.release)
+	if err := <-passDone; err != nil {
+		t.Fatalf("worker startup pass after provider completion: %v", err)
 	}
 }
 
@@ -216,6 +384,7 @@ func TestRetentionWorkerPolicySelectionDrivesCoordinator(t *testing.T) {
 func TestRetentionWorkerRetriesBlockedAttempts(t *testing.T) {
 	fixture := newRetentionWorkerFixture(t, retentionWorkerFixtureOptions{
 		enabled: true, interval: 30 * time.Second, batchSize: 10, eligiblePoints: 1,
+		prepareErr: ErrPointDeletionWORM,
 	})
 	if err := fixture.worker.StartupPass(context.Background()); err != nil {
 		t.Fatal(err)
@@ -224,37 +393,89 @@ func TestRetentionWorkerRetriesBlockedAttempts(t *testing.T) {
 	if err := fixture.db.First(&attempt).Error; err != nil {
 		t.Fatal(err)
 	}
-	retryAt := fixture.clock.Add(-time.Minute)
-	if err := fixture.db.Model(&model.RecoveryPointLifecycleAttempt{}).Where("id = ?", attempt.ID).
-		Updates(map[string]any{
-			"phase": backupasset.LifecyclePhaseBlocked, "blocked_reason": backupasset.LifecycleBlockedDeletionUnavailable,
-			"retry_at": retryAt, "transition_revision": gorm.Expr("transition_revision + 1"),
-		}).Error; err != nil {
-		t.Fatalf("seed blocked attempt: %v", err)
+	if attempt.Phase != string(backupasset.LifecyclePhaseBlocked) ||
+		attempt.BlockedReason != string(backupasset.LifecycleBlockedProviderWORM) {
+		t.Fatalf("first settle attempt=%+v, want blocked/provider_worm", attempt)
 	}
-	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointIDs[0]).
-		Update("state", backupasset.RecoveryPointPurgeBlocked).Error; err != nil {
-		t.Fatal(err)
+	fixture.deleter.prepareErr = nil
+	fixture.deleter.err = nil
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionAlreadyAbsent, ReceiptDigest: strings.Repeat("5", 64),
 	}
+	fixture.clock = attempt.RetryAt.UTC().Add(time.Second)
 	if err := fixture.worker.StartupPass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := fixture.db.First(&attempt, "id = ?", attempt.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if attempt.Phase == string(backupasset.LifecyclePhaseBlocked) &&
-		attempt.BlockedReason == string(backupasset.LifecycleBlockedDeletionUnavailable) &&
-		attempt.RetryAt != nil && attempt.RetryAt.Equal(retryAt) {
-		t.Fatal("blocked retry left the due deletion_unavailable attempt untouched")
+	if attempt.Phase != string(backupasset.LifecyclePhaseComplete) {
+		t.Fatalf("due blocked retry phase=%s, want complete", attempt.Phase)
 	}
-	if fixture.metrics.count(MetricRetried) < 1 && fixture.metrics.count(MetricBlocked) < 1 {
-		t.Fatal("blocked retry recorded neither retried nor blocked aggregate metrics")
+	if fixture.metrics.count(MetricRetried) < 1 {
+		t.Fatal("blocked retry did not record a retried aggregate metric")
 	}
 }
 
+func TestRetentionWorkerHonorsUncertainProviderRetryAt(t *testing.T) {
+	fixture := newRetentionWorkerFixture(t, retentionWorkerFixtureOptions{
+		enabled: true, interval: 30 * time.Second, batchSize: 1, eligiblePoints: 1,
+	})
+	fixture.deleter.err = errors.New("provider execution uncertain")
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("d", 64),
+	}
+	if err := fixture.worker.StartupPass(context.Background()); err != nil {
+		t.Fatalf("initial worker pass: %v", err)
+	}
+	var attempt model.RecoveryPointLifecycleAttempt
+	if err := fixture.db.First(&attempt).Error; err != nil {
+		t.Fatalf("load initial provider attempt: %v", err)
+	}
+	if attempt.Phase != string(backupasset.LifecyclePhaseProviderDelete) ||
+		attempt.RetryAt == nil {
+		t.Fatalf("initial worker pass attempt=%+v, want provider_delete with retry", attempt)
+	}
+	initialRevision := attempt.TransitionRevision
+	initialRetryAt := attempt.RetryAt.UTC()
+	initialPrepareCalls := fixture.deleter.prepareCalls
+	initialProviderCalls := fixture.deleter.calls
+	fixture.clock = initialRetryAt.Add(-time.Nanosecond)
+	if err := fixture.worker.StartupPass(context.Background()); err != nil {
+		t.Fatalf("not-due worker pass: %v", err)
+	}
+	if err := fixture.db.First(&attempt, "id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load not-due provider attempt: %v", err)
+	}
+	if attempt.Phase != string(backupasset.LifecyclePhaseProviderDelete) ||
+		attempt.TransitionRevision != initialRevision || attempt.RetryAt == nil ||
+		!attempt.RetryAt.UTC().Equal(initialRetryAt) ||
+		fixture.deleter.prepareCalls != initialPrepareCalls ||
+		fixture.deleter.calls != initialProviderCalls {
+		t.Fatalf("not-due worker attempt=%+v prepare/calls=%d/%d, want unchanged rev=%d retry=%s prepare/calls=%d/%d",
+			attempt, fixture.deleter.prepareCalls, fixture.deleter.calls,
+			initialRevision, initialRetryAt, initialPrepareCalls, initialProviderCalls)
+	}
+	fixture.clock = initialRetryAt
+	fixture.deleter.err = nil
+	if err := fixture.worker.StartupPass(context.Background()); err != nil {
+		t.Fatalf("due worker pass: %v", err)
+	}
+	if err := fixture.db.First(&attempt, "id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load due provider attempt: %v", err)
+	}
+	if attempt.Phase != string(backupasset.LifecyclePhaseComplete) ||
+		fixture.deleter.calls != initialProviderCalls+1 ||
+		fixture.deleter.prepareCalls != initialPrepareCalls+2 {
+		t.Fatalf("due worker attempt=%+v prepare/calls=%d/%d, want complete and one retry from %d/%d",
+			attempt, fixture.deleter.prepareCalls, fixture.deleter.calls,
+			initialPrepareCalls, initialProviderCalls)
+	}
+}
 func TestRetentionWorkerBlockedMetricIsEdgeTriggeredOnNotDueRevisit(t *testing.T) {
 	fixture := newRetentionWorkerFixture(t, retentionWorkerFixtureOptions{
 		enabled: true, interval: 30 * time.Second, batchSize: 10, eligiblePoints: 1,
+		prepareErr: ErrPointDeletionWORM,
 	})
 	if err := fixture.worker.StartupPass(context.Background()); err != nil {
 		t.Fatal(err)
@@ -348,6 +569,7 @@ type retentionWorkerFixtureOptions struct {
 	keepLatest     int
 	skipPolicy     bool
 	db             *gorm.DB
+	prepareErr     error
 }
 
 type retentionWorkerFixture struct {
@@ -361,6 +583,7 @@ type retentionWorkerFixture struct {
 	worker        *Worker
 	holds         *HoldService
 	cleanup       *retentionWorkerCleanupFake
+	deleter       *lifecycleDeletionFake
 	importRebuild *retentionImportRebuildFake
 	audit         *retentionAuditFake
 	metrics       *retentionMetricsFake
@@ -431,11 +654,11 @@ func newRetentionWorkerFixture(t *testing.T, options retentionWorkerFixtureOptio
 		t.Fatal(err)
 	}
 	fixture.holds = mustNewLifecycleHoldService(t, fixture.db, now)
+	fixture.deleter = &lifecycleDeletionFake{prepareErr: options.prepareErr, err: ErrPointDeletionWORM}
 	coordinator, err := NewCoordinator(CoordinatorDependencies{
 		DB: fixture.db, Leases: leases, Holds: fixture.holds, Now: now,
 		LeaseOwnerID: "retention-worker", Admissions: &lifecycleAdmissionFake{},
-		Cleanup: fixture.cleanup, Deleter: &lifecycleDeletionFake{err: ErrPointDeletionWORM},
-		RetryDelay: time.Minute,
+		Cleanup: fixture.cleanup, Deleter: fixture.deleter,
 	})
 	if err != nil {
 		t.Fatal(err)

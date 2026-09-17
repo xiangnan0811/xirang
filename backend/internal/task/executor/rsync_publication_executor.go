@@ -22,6 +22,13 @@ type RsyncPublicationExecutor struct {
 	strategy provider.PublicationStrategy
 }
 
+func (executor *RsyncPublicationExecutor) RsyncBinary() string {
+	if executor == nil || executor.legacy == nil {
+		return "rsync"
+	}
+	return executor.legacy.RsyncBinary()
+}
+
 func (executor *RsyncPublicationExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
 	if executor == nil || executor.legacy == nil {
 		return -1, fmt.Errorf("%w: legacy Rsync executor unavailable", backupasset.ErrInvalidState)
@@ -160,7 +167,7 @@ func managedRsyncRemoteSource(ctx context.Context, node model.Node, source strin
 		cleanup()
 		return provider.RsyncTreeRemoteSource{}, func() {}, fmt.Errorf("resolve managed Rsync known-hosts path: %w", err)
 	}
-	autoAccept, err := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
+	autoAccept, err := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
 	if err != nil {
 		cleanup()
 		return provider.RsyncTreeRemoteSource{}, func() {}, err

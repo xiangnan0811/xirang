@@ -1,5 +1,4 @@
 import type {
-  HeaderKV,
   HttpMethod,
   NewServiceMonitorInput,
   ServiceMonitorView,
@@ -18,7 +17,8 @@ type RawServiceMonitor = {
   timeout_seconds: number;
   http_method: string;
   http_expected_status: number;
-  http_headers: string;
+  http_header_names?: string[];
+  http_headers_configured?: boolean;
   enabled: boolean;
   last_status: string;
   uptime_pct: number;
@@ -57,22 +57,6 @@ function normalizeHttpMethod(value: string | undefined): HttpMethod {
     ? ((value as string).toUpperCase() as HttpMethod)
     : "GET";
 }
-
-function safeParseHeaders(raw: string | undefined): HeaderKV[] {
-  if (!raw || raw === "{}") return [];
-  try {
-    const obj = JSON.parse(raw);
-    if (obj && typeof obj === "object") {
-      return Object.entries(obj as Record<string, unknown>).map(
-        ([k, v]) => ({ key: k, value: String(v) })
-      );
-    }
-  } catch {
-    // 坏 JSON：退化为空，避免整条监控解析失败
-  }
-  return [];
-}
-
 function mapServiceMonitor(raw: RawServiceMonitor): ServiceMonitorView {
   return {
     id: raw.id,
@@ -84,7 +68,10 @@ function mapServiceMonitor(raw: RawServiceMonitor): ServiceMonitorView {
     timeoutSeconds: Number(raw.timeout_seconds) || 0,
     httpMethod: normalizeHttpMethod(raw.http_method),
     httpExpectedStatus: Number(raw.http_expected_status) || 0,
-    httpHeaderList: safeParseHeaders(raw.http_headers),
+    httpHeaderNames: Array.isArray(raw.http_header_names)
+      ? raw.http_header_names.filter((value): value is string => typeof value === "string")
+      : [],
+    httpHeadersConfigured: Boolean(raw.http_headers_configured),
     enabled: Boolean(raw.enabled),
     lastStatus: (["up", "down", "unknown"].includes(raw.last_status) ? raw.last_status : "unknown") as ServiceMonitorView["lastStatus"],
     uptimePct: Number(raw.uptime_pct) || 0,
@@ -114,9 +101,11 @@ function toRawInput(input: NewServiceMonitorInput): RawNewServiceMonitorInput {
     timeout_seconds: input.timeoutSeconds,
     http_method: input.httpMethod,
     http_expected_status: input.httpExpectedStatus,
-    http_headers: input.httpHeaderList ? headersToJSON(input.httpHeaderList) : "{}",
     enabled: input.enabled,
   };
+  if (input.httpHeaderList !== undefined) {
+    raw.http_headers = headersToJSON(input.httpHeaderList);
+  }
   return raw;
 }
 

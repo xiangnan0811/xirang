@@ -24,7 +24,9 @@ COPY backend/ ./
 RUN set -eux; \
     target_os="${TARGETOS:-$(go env GOOS)}"; \
     target_arch="${TARGETARCH:-$(go env GOARCH)}"; \
-    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server
+    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server; \
+    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-recover-admin ./cmd/recover-admin; \
+    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-rsync-confined ./cmd/rsync-confined
 
 # 自行使用与后端一致的 Go 工具链编译 supercronic，避免官方预编译二进制带入过期 stdlib 的 HIGH CVE，
 # 并支持 linux/amd64 与 linux/arm64 交叉编译。
@@ -49,17 +51,20 @@ FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e591939
 # PostgreSQL client utilities provide pg_dump/pg_restore for DB_TYPE=postgres.
 RUN apk add --no-cache \
       c-ares=1.34.8-r0 \
-      curl=8.20.0-r0 \
+      curl=8.22.0-r0 \
       libcrypto3=3.5.8-r0 \
       libexpat=2.8.4-r0 \
       libssl3=3.5.8-r0 \
+      libuuid=2.41.6-r1 \
+      mount=2.41.6-r1 \
+      util-linux-misc=2.41.6-r1 \
       libxml2=2.13.9-r1 \
       nghttp2-libs=1.69.0-r0 \
       rsync=3.5.0-r0 \
       openssh-client=10.2_p1-r0 \
       sqlite=3.53.4-r0 \
       bash=5.3.3-r1 \
-      tzdata=2026c-r0 \
+      tzdata=2026d-r0 \
       postgresql18-client=18.6-r0
 
 COPY --from=supercronic-builder /out/supercronic /usr/local/bin/supercronic
@@ -76,12 +81,14 @@ RUN sed -i -e 's|/var/run/nginx.pid|/tmp/nginx.pid|g' -e 's| /run/nginx.pid| /tm
 
 COPY --from=web-builder /app/web/dist /usr/share/nginx/html
 COPY --from=backend-builder /out/xirang /usr/local/bin/xirang
+COPY --from=backend-builder /out/xirang-recover-admin /usr/local/bin/xirang-recover-admin
+COPY --from=backend-builder /out/xirang-rsync-confined /usr/local/bin/xirang-rsync-confined
 COPY deploy/nginx/templates/default.conf.template /etc/nginx/templates/default.conf.template
 COPY deploy/allinone/entrypoint.sh /entrypoint.sh
 COPY scripts/backup-db.sh /usr/local/bin/backup-db.sh
 COPY deploy/allinone/xirang-backup.cron /etc/supercronic/xirang-backup
 
-RUN chmod +x /usr/local/bin/backup-db.sh /entrypoint.sh && \
+RUN chmod +x /usr/local/bin/backup-db.sh /entrypoint.sh /usr/local/bin/xirang-rsync-confined && \
     mkdir -p /data /backup/db /logs /var/cache/xirang/asset-content /etc/supercronic && \
     chown -R xirang:xirang /data /backup /logs /var/cache/xirang /usr/share/nginx/html /etc/supercronic /etc/nginx/templates
 

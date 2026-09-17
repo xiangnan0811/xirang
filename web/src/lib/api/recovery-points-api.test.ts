@@ -359,4 +359,28 @@ describe("recovery points API boundary", () => {
     ]);
     expect(JSON.stringify(requestMock.mock.calls)).not.toMatch(/path|locator|native_id/i);
   });
+
+  it("posts preview-source for the exact entry and reuses CatalogStatus decoding", async () => {
+    const signal = new AbortController().signal;
+    const entryId = "e".repeat(64);
+    const raw = rawCatalogStatus();
+    requestMock.mockResolvedValueOnce(raw);
+
+    const mapped = await createRecoveryPointsApi().preparePreviewSource(
+      "token",
+      { recoveryPointId, entryId },
+      signal,
+    );
+
+    expect(mapped).toEqual(mapCatalogStatus(raw));
+    expect(requestMock).toHaveBeenCalledWith(
+      `/recovery-points/${recoveryPointId}/entries/${entryId}/preview-source`,
+      {
+        method: "POST",
+        token: "token",
+        signal,
+        body: { schema_version: 1 },
+      },
+    );
+  });
 });

@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { InlineAlert } from "@/components/ui/inline-alert";
-import { Switch } from "@/components/ui/switch";
+import { Select } from "@/components/ui/select";
 import type { NodeRecord } from "@/types/domain";
 import type { TaskDraft } from "@/components/task-create-dialog";
 
@@ -160,12 +160,20 @@ export function TaskAdvanced({ draft, setDraft, nodes, isEditing, managedRclone 
             <Input
               id="task-editor-restic-password"
               type="password"
-              placeholder={t("taskCreate.resticPassword")}
+              autoComplete="new-password"
+              placeholder={draft.resticPasswordConfigured
+                ? t("taskCreate.resticPasswordKeepPlaceholder")
+                : t("taskCreate.resticPassword")}
               value={draft.resticPassword}
               onChange={(event) =>
                 setDraft((prev) => ({ ...prev, resticPassword: event.target.value }))
               }
             />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {isEditing && draft.resticPasswordConfigured
+                ? t("taskCreate.resticPasswordConfigured")
+                : t("taskCreate.resticPasswordUnset")}
+            </p>
           </div>
           <div>
             <label htmlFor="task-editor-restic-excludes" className="mb-1 block text-sm font-medium">
@@ -181,19 +189,31 @@ export function TaskAdvanced({ draft, setDraft, nodes, isEditing, managedRclone 
               }
             />
           </div>
-          <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
-            <div className="space-y-0.5">
-              <span className="text-sm font-medium">{t("taskCreate.appendOnly")}</span>
-              <p className="text-xs text-muted-foreground">{t("taskCreate.appendOnlyDesc")}</p>
-            </div>
-            <Switch
-              id="task-editor-restic-append-only"
-              checked={draft.resticAppendOnly}
-              onCheckedChange={(checked) =>
-                setDraft((prev) => ({ ...prev, resticAppendOnly: checked }))
-              }
-            />
+          <div>
+            <label htmlFor="task-editor-restic-repository-version" className="mb-1 block text-sm font-medium">
+              {t("taskCreate.repositoryFormat")}
+            </label>
+            <Select
+              id="task-editor-restic-repository-version"
+              containerClassName="w-full"
+              value={draft.resticRepositoryVersion}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value !== "" && value !== "1" && value !== "2") {
+                  return;
+                }
+                setDraft((prev) => ({ ...prev, resticRepositoryVersion: value }));
+              }}
+            >
+              <option value="">{t("taskCreate.repositoryFormatDefault")}</option>
+              <option value="1">{t("taskCreate.repositoryFormatV1")}</option>
+              <option value="2">{t("taskCreate.repositoryFormatV2")}</option>
+            </Select>
+            <p className="mt-1 text-xs text-muted-foreground">{t("taskCreate.repositoryFormatHint")}</p>
           </div>
+          <InlineAlert tone="warning" title={t("taskCreate.deletionProtectionUnverifiedTitle")}>
+            {t("taskCreate.deletionProtectionUnverified")}
+          </InlineAlert>
         </>
       )}
     </>

@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -20,34 +18,41 @@ import (
 )
 
 type CoordinatorDependencies struct {
-	DB           *gorm.DB
-	Leases       *backupasset.LeaseService
-	Holds        *HoldService
-	Now          func() time.Time
-	NewID        func() (string, error)
-	LeaseOwnerID string
-	Admissions   LifecycleAdmission
-	Cleanup      LifecycleCleanup
-	Deleter      PointDeletion
-	RetryDelay   time.Duration
-	Audit        AssetAuditSink
+	DB               *gorm.DB
+	Leases           *backupasset.LeaseService
+	Holds            *HoldService
+	Now              func() time.Time
+	NewID            func() (string, error)
+	LeaseOwnerID     string
+	Admissions       LifecycleAdmission
+	Cleanup          LifecycleCleanup
+	Deleter          providerDeletePort
+	EffectExecutorID string
+	EffectClaimTTL   time.Duration
+	EffectClaimAfter func(time.Duration) <-chan time.Time
+	RetryDelay       time.Duration
+	Audit            AssetAuditSink
 }
 
 type AssetAuditSink interface {
 	Write(context.Context, backupasset.AuditEventInput) error
+	WriteTx(context.Context, *gorm.DB, backupasset.AuditEventInput) error
 }
 
 type Coordinator struct {
-	db           *gorm.DB
-	leases       *backupasset.LeaseService
-	now          func() time.Time
-	newID        func() (string, error)
-	leaseOwnerID string
-	admissions   LifecycleAdmission
-	cleanup      LifecycleCleanup
-	deleter      PointDeletion
-	retryDelay   time.Duration
-	audit        AssetAuditSink
+	db               *gorm.DB
+	leases           *backupasset.LeaseService
+	now              func() time.Time
+	newID            func() (string, error)
+	leaseOwnerID     string
+	admissions       LifecycleAdmission
+	cleanup          LifecycleCleanup
+	deleter          providerDeletePort
+	effectExecutorID string
+	effectClaimTTL   time.Duration
+	effectClaimAfter func(time.Duration) <-chan time.Time
+	retryDelay       time.Duration
+	audit            AssetAuditSink
 }
 
 type LifecyclePointRequest struct {
@@ -86,10 +91,6 @@ type PointDeletionResult struct {
 	ReceiptDigest string
 }
 
-type PointDeletion interface {
-	DeleteRecoveryPoint(context.Context, LifecyclePointRequest) (PointDeletionResult, error)
-}
-
 var (
 	ErrPointDeletionWORM             = errors.New("point deletion blocked by WORM")
 	ErrPointDeletionIdentityConflict = errors.New("point deletion identity conflict")
@@ -103,15 +104,14 @@ type PointDeletionAccessResolver interface {
 	ResolveDeletePoint(context.Context, *gorm.DB, LifecyclePointRequest, model.RecoveryPoint, model.BackupRepository) (provider.DeletePointRequest, error)
 }
 
-// RegistryPointDeletion is the production PointDeletion adapter. It resolves
-// the RecoveryPoint, provider kind, private locator, and access snapshot, then
-// calls the separately registered provider.PointDeleter outside any database
-// transaction. Only deleted or already_absent plus a receipt digest are
-// accepted after a second transaction revalidates deletion authority.
+// RegistryPointDeletion is the production split provider-delete adapter. It
+// resolves and validates a request inside the coordinator's transactions; its
+// Execute method is the only path that invokes a provider.
 type RegistryPointDeletion struct {
 	db       *gorm.DB
 	registry *provider.Registry
 	resolve  PointDeletionAccessResolver
+	now      func() time.Time
 }
 
 func NewRegistryPointDeletion(db *gorm.DB, registry *provider.Registry, resolve PointDeletionAccessResolver) (*RegistryPointDeletion, error) {
@@ -121,149 +121,19 @@ func NewRegistryPointDeletion(db *gorm.DB, registry *provider.Registry, resolve 
 	return &RegistryPointDeletion{db: db, registry: registry, resolve: resolve}, nil
 }
 
-func (adapter *RegistryPointDeletion) DeleteRecoveryPoint(ctx context.Context, request LifecyclePointRequest) (PointDeletionResult, error) {
-	if adapter == nil || adapter.db == nil || adapter.registry == nil || adapter.resolve == nil {
-		return PointDeletionResult{}, fmt.Errorf("%w: registry point deletion adapter unavailable", backupasset.ErrInvalidState)
-	}
-	if backupasset.ValidateOpaqueID(request.RecoveryPointID) != nil ||
-		backupasset.ValidateOpaqueID(request.AttemptID) != nil ||
-		backupasset.ValidateLifecycleOperation(request.Operation) != nil {
-		return PointDeletionResult{}, fmt.Errorf("%w: invalid lifecycle deletion request", backupasset.ErrInvalidState)
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	var frozenRequest provider.DeletePointRequest
-	var frozenProviderLocator string
-	var deleter provider.PointDeleter
-	err := adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		rows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, false)
-		if err != nil {
-			return err
-		}
-		if err := validateLifecycleDeleteRows(request, rows.attempt, rows.point, rows.lease, rows.repository); err != nil {
-			return err
-		}
-		if err := fenceLifecycleDeleteRepositoryTx(ctx, tx, rows.repository); err != nil {
-			return err
-		}
-		held, err := lifecycleDeleteHasActiveHoldTx(ctx, tx, rows.point)
-		if err != nil {
-			return err
-		}
-		if held {
-			return lifecycleDeleteIdentityConflict("lifecycle deletion is blocked by an active hold")
-		}
-
-		frozenRequest, err = adapter.resolve.ResolveDeletePoint(ctx, tx, request, rows.point, rows.repository)
-		if err != nil {
-			return err
-		}
-		frozenProviderLocator = lifecycleDeletePointLocator(rows.point)
-
-		resolvedRows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, true)
-		if err != nil {
-			return err
-		}
-		if !reflect.DeepEqual(rows.attempt, resolvedRows.attempt) ||
-			!reflect.DeepEqual(rows.point, resolvedRows.point) ||
-			!reflect.DeepEqual(rows.lease, resolvedRows.lease) ||
-			!reflect.DeepEqual(rows.repository, resolvedRows.repository) {
-			return lifecycleDeleteIdentityConflict("lifecycle deletion authority changed during resolution")
-		}
-		if err := validateLifecycleDeleteRows(request, resolvedRows.attempt, resolvedRows.point, resolvedRows.lease, resolvedRows.repository); err != nil {
-			return err
-		}
-		if err := validateLifecycleDeleteRequest(
-			request, frozenRequest, resolvedRows.attempt, resolvedRows.point, resolvedRows.repository,
-		); err != nil {
-			return err
-		}
-		held, err = lifecycleDeleteHasActiveHoldTx(ctx, tx, resolvedRows.point)
-		if err != nil {
-			return err
-		}
-		if held {
-			return lifecycleDeleteIdentityConflict("lifecycle deletion is blocked by an active hold")
-		}
-
-		deleter, err = adapter.registry.PointDeleter(backupasset.ProviderKind(resolvedRows.repository.ProviderKind))
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return PointDeletionResult{}, mapProviderDeletionError(err)
-	}
-
-	providerResult, err := deleter.DeletePoint(ctx, frozenRequest)
-	if err != nil {
-		return PointDeletionResult{}, mapProviderDeletionError(err)
-	}
-	result, err := validateRegistryProviderDeletionResult(providerResult)
-	if err != nil {
-		return PointDeletionResult{}, err
-	}
-
-	err = adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		rows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, true)
-		if err != nil {
-			return err
-		}
-		if lifecycleDeletePointLocator(rows.point) != frozenProviderLocator {
-			return lifecycleDeleteIdentityConflict("lifecycle provider locator changed after deletion")
-		}
-		if err := validateLifecycleDeleteRows(request, rows.attempt, rows.point, rows.lease, rows.repository); err != nil {
-			return err
-		}
-		if err := fenceLifecycleDeleteRepositoryTx(ctx, tx, rows.repository); err != nil {
-			return err
-		}
-		if _, err := lifecycleDeleteHasActiveHoldTx(ctx, tx, rows.point); err != nil {
-			return err
-		}
-		// The provider effect has already settled. Preserve its validated
-		// receipt; persistProviderDeleteReceipt rechecks the hold while writing
-		// terminal truth and blocks lifecycle progression when it remains active.
-		currentRequest, err := adapter.resolve.ResolveDeletePoint(ctx, tx, request, rows.point, rows.repository)
-		if err != nil {
-			return err
-		}
-		if err := validateLifecycleDeleteRequest(
-			request, currentRequest, rows.attempt, rows.point, rows.repository,
-		); err != nil {
-			return err
-		}
-		if !sameLifecycleDeleteRequestAuthority(frozenRequest, currentRequest) {
-			return lifecycleDeleteIdentityConflict("lifecycle deletion access authority changed after deletion")
-		}
-		return nil
-	})
-	if err != nil {
-		return PointDeletionResult{}, mapProviderDeletionError(err)
-	}
-	return result, nil
-}
-
-func sameLifecycleDeleteRequestAuthority(left, right provider.DeletePointRequest) bool {
-	normalize := func(request provider.DeletePointRequest) provider.DeletePointRequest {
-		access, ok := request.Snapshot.Access.AdapterData.(provider.RcloneNativeDeletionAccess)
-		if ok {
-			access.Client = nil
-			request.Snapshot.Access.AdapterData = access
-		}
-		return request
-	}
-	return reflect.DeepEqual(normalize(left), normalize(right))
-}
-
 type lifecycleDeleteRows struct {
 	attempt    model.RecoveryPointLifecycleAttempt
 	point      model.RecoveryPoint
 	lease      model.RecoveryPointLease
 	repository model.BackupRepository
+}
+
+func (lifecycleDeleteRows) String() string {
+	return "[lifecycle provider-delete rows]"
+}
+
+func (lifecycleDeleteRows) GoString() string {
+	return "[lifecycle provider-delete rows]"
 }
 
 func lockLifecycleDeleteRowsTx(
@@ -359,13 +229,6 @@ func validateRegistryProviderDeletionResult(
 	}
 }
 
-func lifecycleDeletePointLocator(point model.RecoveryPoint) string {
-	if strings.TrimSpace(point.EncryptedProviderLocator) != "" {
-		return point.EncryptedProviderLocator
-	}
-	return strings.TrimSpace(point.EncryptedRollbackLocator)
-}
-
 func lifecycleDeleteIdentityConflict(reason string) error {
 	return fmt.Errorf("%w: %s", provider.ErrDeletePointIdentityConflict, reason)
 }
@@ -420,21 +283,6 @@ func validateLifecycleDeleteRows(
 	return nil
 }
 
-func fenceLifecycleDeleteRepositoryTx(ctx context.Context, tx *gorm.DB, repository model.BackupRepository) error {
-	result := tx.WithContext(ctx).Exec(
-		"UPDATE backup_repositories SET updated_at = updated_at WHERE id = ? AND capability_revision = ?",
-		repository.ID,
-		repository.CapabilityRevision,
-	)
-	if result.Error != nil {
-		return fmt.Errorf("fence lifecycle deletion repository: %w", result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return lifecycleDeleteIdentityConflict("lifecycle repository changed before deletion")
-	}
-	return nil
-}
-
 func lifecycleDeleteHasActiveHoldTx(ctx context.Context, tx *gorm.DB, point model.RecoveryPoint) (bool, error) {
 	var activeHolds int64
 	if err := tx.WithContext(ctx).Model(&model.RecoveryPointHold{}).
@@ -443,38 +291,6 @@ func lifecycleDeleteHasActiveHoldTx(ctx context.Context, tx *gorm.DB, point mode
 		return false, fmt.Errorf("load active holds for lifecycle deletion: %w", err)
 	}
 	return point.HoldState == string(backupasset.HoldActive) || activeHolds != 0, nil
-}
-
-func validateLifecycleDeleteRequest(
-	request LifecyclePointRequest,
-	deleteRequest provider.DeletePointRequest,
-	attempt model.RecoveryPointLifecycleAttempt,
-	point model.RecoveryPoint,
-	repository model.BackupRepository,
-) error {
-	repositoryIdentity := ""
-	if repository.RepositoryIdentity != nil {
-		repositoryIdentity = strings.TrimSpace(*repository.RepositoryIdentity)
-	}
-	kind := backupasset.ProviderKind(repository.ProviderKind)
-	if deleteRequest.OperationID != request.AttemptID || deleteRequest.OperationID != attempt.ID ||
-		deleteRequest.Snapshot.RepositoryID != repository.ID ||
-		deleteRequest.Snapshot.CapabilityRevision != point.CapabilityRevision ||
-		deleteRequest.Snapshot.SourceRevision == "" ||
-		deleteRequest.Snapshot.SourceRevision != point.SourceFingerprint ||
-		deleteRequest.ExpectedSourceRevision != point.SourceFingerprint ||
-		deleteRequest.Snapshot.SourceRevision != deleteRequest.ExpectedSourceRevision ||
-		deleteRequest.Snapshot.RepositoryIdentity != repositoryIdentity ||
-		deleteRequest.Snapshot.Access.Provider != kind ||
-		deleteRequest.Snapshot.Access.RepositoryID != repository.ID ||
-		strings.TrimSpace(deleteRequest.Point.Native) == "" ||
-		deleteRequest.Point.Native != strings.TrimSpace(deleteRequest.Point.Native) {
-		return lifecycleDeleteIdentityConflict("provider delete request identity changed")
-	}
-	if err := deleteRequest.Validate(); err != nil {
-		return fmt.Errorf("%w: invalid provider delete request shape", backupasset.ErrInvalidState)
-	}
-	return nil
 }
 
 func mapProviderDeletionError(err error) error {
@@ -490,8 +306,6 @@ func mapProviderDeletionError(err error) error {
 		return err
 	}
 }
-
-var _ PointDeletion = (*RegistryPointDeletion)(nil)
 
 type ClaimRequest struct {
 	RecoveryPointID string
@@ -559,12 +373,38 @@ func NewCoordinator(dependencies CoordinatorDependencies) (*Coordinator, error) 
 	if ownerID == "" || ownerID != dependencies.LeaseOwnerID || len(ownerID) > 64 || strings.ContainsAny(ownerID, "\r\n\x00") {
 		return nil, fmt.Errorf("%w: lifecycle coordinator lease owner is invalid", backupasset.ErrInvalidState)
 	}
+	executorID := strings.TrimSpace(dependencies.EffectExecutorID)
+	if executorID == "" {
+		var err error
+		executorID, err = backupasset.NewOpaqueID()
+		if err != nil {
+			return nil, fmt.Errorf("%w: generate lifecycle effect executor ID", backupasset.ErrInvalidState)
+		}
+	}
+	if !isLowerHexString(executorID, 32) || executorID != strings.ToLower(executorID) {
+		return nil, fmt.Errorf("%w: lifecycle effect executor ID is invalid", backupasset.ErrInvalidState)
+	}
+	effectTTL := dependencies.EffectClaimTTL
+	if effectTTL == 0 {
+		effectTTL = 2 * time.Minute
+	}
+	if effectTTL < time.Second || effectTTL > time.Hour {
+		return nil, fmt.Errorf("%w: lifecycle effect claim TTL is invalid", backupasset.ErrInvalidState)
+	}
+	effectAfter := dependencies.EffectClaimAfter
+	if effectAfter == nil {
+		effectAfter = time.After
+	}
 	coordinator := &Coordinator{
 		db: dependencies.DB, leases: dependencies.Leases, now: dependencies.Now,
 		newID: dependencies.NewID, leaseOwnerID: ownerID,
 		admissions: dependencies.Admissions, cleanup: dependencies.Cleanup,
-		deleter: dependencies.Deleter, retryDelay: dependencies.RetryDelay,
-		audit: dependencies.Audit,
+		deleter: dependencies.Deleter, effectExecutorID: executorID,
+		effectClaimTTL: effectTTL, effectClaimAfter: effectAfter,
+		retryDelay: dependencies.RetryDelay, audit: dependencies.Audit,
+	}
+	if setter, ok := dependencies.Deleter.(interface{ SetNow(func() time.Time) }); ok {
+		setter.SetNow(dependencies.Now)
 	}
 	dependencies.Leases.SetLifecycleLeaseAdmission(coordinator)
 	dependencies.Holds.SetLifecycleHoldAdmission(coordinator)
@@ -613,8 +453,18 @@ func (coordinator *Coordinator) Heartbeat(ctx context.Context, attemptID string)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	attempt, err := coordinator.loadAttempt(ctx, attemptID)
+	if err != nil {
+		return LifecycleAttempt{}, fmt.Errorf("load lifecycle heartbeat attempt: %w", err)
+	}
+	if providerDeleteLifecycleOperation(attempt.Operation) {
+		// Provider-delete claims own both the effect lease and its heartbeat.
+		// Heartbeat must be observational so a worker cannot renew or mutate a
+		// proof/claim while another worker is executing the provider call.
+		return coordinator.heartbeatProviderDelete(ctx, attemptID)
+	}
 	var heartbeated LifecycleAttempt
-	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		attempt, point, err := coordinator.lockAttemptAndPointTx(ctx, tx, attemptID)
 		if err != nil {
 			return err
@@ -727,6 +577,11 @@ func (coordinator *Coordinator) Advance(ctx context.Context, attemptID string) (
 	case backupasset.LifecyclePhaseBlocked:
 		return coordinator.retryBlocked(ctx, attemptID)
 	case backupasset.LifecyclePhaseComplete:
+		if providerDeleteLifecycleOperation(attempt.Operation) {
+			// Even a completed attempt must revalidate provider proof before
+			// accepting stale/malformed claim state.
+			return coordinator.progressProviderProof(ctx, attemptID)
+		}
 		return attempt, nil
 	default:
 		return LifecycleAttempt{}, fmt.Errorf("%w: lifecycle phase is not implemented by this coordinator slice", backupasset.ErrInvalidState)
@@ -960,8 +815,11 @@ func (coordinator *Coordinator) blockAuthorized(
 		return LifecycleAttempt{}, err
 	}
 	if phase == backupasset.LifecyclePhaseProviderDelete {
-		if auditErr := coordinator.writeSettledDeletionAudit(ctx, blocked, settledDeletionStatus(reason)); auditErr != nil {
-			if _, scheduleErr := coordinator.scheduleBlockedAuditRetry(ctx, blocked.ID); scheduleErr != nil {
+		if auditErr := coordinator.writeSettledDeletionAudit(ctx, blocked); auditErr != nil {
+			if errors.Is(auditErr, errSettledAuditPending) {
+				return blocked, nil
+			}
+			if _, scheduleErr := coordinator.scheduleSettledAuditRetry(ctx, blocked.ID); scheduleErr != nil {
 				return blocked, errors.Join(auditErr, scheduleErr)
 			}
 			return blocked, auditErr
@@ -1146,157 +1004,154 @@ func (coordinator *Coordinator) persistMutableTombstoneAndTransition(
 
 func (coordinator *Coordinator) deleteAndTransition(ctx context.Context, attempt LifecycleAttempt) (LifecycleAttempt, error) {
 	if coordinator.deleter == nil {
-		return coordinator.block(ctx, attempt.ID, backupasset.LifecycleBlockedProviderDeleteUnproven)
+		return coordinator.blockProviderDelete(ctx, attempt.ID, backupasset.LifecycleBlockedProviderDeleteUnproven)
 	}
-	receipt, found, err := coordinator.lookupProviderDeleteReceipt(ctx, attempt)
+	preparation, err := coordinator.prepareProviderDelete(ctx, attempt.ID)
 	if err != nil {
-		return LifecycleAttempt{}, err
-	}
-	if found {
-		return coordinator.confirmSettledProviderDelete(ctx, attempt, receipt)
-	}
-	current, authority, blocked, err := coordinator.prepareExternalEffect(ctx, attempt.ID, backupasset.LifecyclePhaseProviderDelete)
-	if err != nil || blocked {
-		return current, err
-	}
-	effectCtx, cancel, err := coordinator.effectContext(ctx, authority)
-	if err != nil {
-		return coordinator.blockUncertainEffect(ctx, attempt.ID, backupasset.LifecyclePhaseProviderDelete, authority)
-	}
-	result, err := coordinator.deleter.DeleteRecoveryPoint(effectCtx, LifecyclePointRequest{
-		RecoveryPointID: current.RecoveryPointID, AttemptID: current.ID,
-		Operation: current.Operation, authority: authority,
-	})
-	effectErr := effectCtx.Err()
-	cancel()
-	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(err, ErrEffectClaimInFlight) {
+			// A live claim is a pure observation. In particular, do not write
+			// retry_at or convert a loser into a blocked attempt.
+			return preparation.attempt, err
+		}
+		if preparation.acquisitionMayHaveCommitted {
+			// The transaction may have committed the claim even though its
+			// caller observed an ambiguous error. Reconcile under the
+			// repository-first lock set before considering cancellation or
+			// any generic block. The reconciliation context is deliberately
+			// detached: a canceled parent must not hide durable acquisition
+			// truth.
+			reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			reconciled, reconcileErr := coordinator.resolveProviderDeletePreparationFailure(
+				reconcileCtx, attempt.ID, providerDeletionBlockedReason(err), err,
+			)
+			reconcileCancel()
+			if ctx != nil && ctx.Err() != nil &&
+				(reconcileErr == nil || reconciled.ID != "") {
+				// Preserve the caller's cancellation only after the
+				// repository-first observation has completed. The claim/proof
+				// state above remains authoritative even when the caller no
+				// longer wants to wait for this tick.
+				return reconciled, ctx.Err()
+			}
+			return reconciled, reconcileErr
+		}
+		if ctx != nil && ctx.Err() != nil {
 			return LifecycleAttempt{}, ctx.Err()
 		}
-		if errors.Is(effectErr, context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-			return coordinator.blockUncertainEffect(ctx, attempt.ID, backupasset.LifecyclePhaseProviderDelete, authority)
+		if errors.Is(err, errProviderDeletePreparationAuthority) {
+			// A blocking Prepare may outlive the locked lease horizon. Abort
+			// Tx1 so no fence/attempt/claim mutation survives that race.
+			return preparation.attempt, err
 		}
-		return coordinator.blockAuthorized(ctx, attempt.ID, backupasset.LifecyclePhaseProviderDelete, authority, providerDeletionBlockedReason(err))
+		if preparation.claimFound {
+			// A claimed-row validation or takeover failure is corruption or a
+			// stale owner observation. Never rewrite it into a generic block.
+			return preparation.attempt, err
+		}
+		// A pre-claim failure is reconciled while holding the same
+		// repository-first locks used by acquisition. This closes the window
+		// in which a concurrent winner could insert a claim before a legacy
+		// block transaction.
+		return coordinator.resolveProviderDeletePreparationFailure(
+			ctx, attempt.ID, providerDeletionBlockedReason(err), err,
+		)
 	}
-	if errors.Is(effectErr, context.DeadlineExceeded) {
-		return coordinator.blockUncertainEffect(ctx, attempt.ID, backupasset.LifecyclePhaseProviderDelete, authority)
+	if preparation.retryScheduled {
+		// An uncertain observer failure has a durable effect retry but no
+		// observational audit status. The next tick owns resumption.
+		return preparation.attempt, nil
 	}
-	if !validPointDeletionResult(result) {
-		return coordinator.blockAuthorized(ctx, attempt.ID, backupasset.LifecyclePhaseProviderDelete, authority, backupasset.LifecycleBlockedProviderDeleteUnproven)
+	if preparation.proofTombstone && preparation.proof != nil {
+		return coordinator.confirmSettledProviderDelete(ctx, preparation.attempt, *preparation.proof)
 	}
-	persisted, err := coordinator.persistProviderDeleteReceipt(ctx, attempt.ID, authority, result)
-	if err != nil {
-		return LifecycleAttempt{}, err
+	if preparation.blocked {
+		return coordinator.auditProviderDeleteBlock(ctx, preparation.attempt)
 	}
-	if persisted.Phase != backupasset.LifecyclePhaseProviderDelete {
-		return persisted, nil
-	}
-	return coordinator.confirmSettledProviderDelete(ctx, persisted, result)
+	return coordinator.runPreparedProviderDelete(ctx, preparation)
 }
-
-func (coordinator *Coordinator) lookupProviderDeleteReceipt(
-	ctx context.Context,
-	attempt LifecycleAttempt,
-) (PointDeletionResult, bool, error) {
-	var point model.RecoveryPoint
-	loaded := coordinator.db.WithContext(ctx).Where("id = ?", attempt.RecoveryPointID).Limit(1).Find(&point)
-	if loaded.Error != nil {
-		return PointDeletionResult{}, false, fmt.Errorf("load provider delete receipt point: %w", loaded.Error)
-	}
-	if loaded.RowsAffected != 1 {
-		return PointDeletionResult{}, false, fmt.Errorf("%w: lifecycle recovery point", backupasset.ErrNotFound)
-	}
-	var event model.RecoveryPointLifecycleTombstone
-	found := coordinator.db.WithContext(ctx).
-		Where("recovery_point_id = ? AND terminal_operation = ?", attempt.RecoveryPointID, attempt.Operation).
-		Limit(1).Find(&event)
-	if found.Error != nil {
-		return PointDeletionResult{}, false, fmt.Errorf("load provider delete receipt: %w", found.Error)
-	}
-	if found.RowsAffected == 0 {
-		return PointDeletionResult{}, false, nil
-	}
-	row := model.RecoveryPointLifecycleAttempt{
-		RecoveryPointID: attempt.RecoveryPointID,
-		Operation:       string(attempt.Operation),
-	}
-	if err := validateLifecycleTerminalEvent(point, row, event); err != nil {
-		return PointDeletionResult{}, true, err
-	}
-	if event.DeletionReceiptDigest == nil {
-		return PointDeletionResult{}, true, fmt.Errorf("%w: lifecycle tombstone is unproven", backupasset.ErrInvalidState)
-	}
-	return PointDeletionResult{
-		Outcome: PointDeletionOutcome(event.ResultCode), ReceiptDigest: *event.DeletionReceiptDigest,
-	}, true, nil
-}
-
-func (coordinator *Coordinator) persistProviderDeleteReceipt(
+func (coordinator *Coordinator) blockProviderDelete(
 	ctx context.Context,
 	attemptID string,
-	authority lifecycleEffectAuthority,
-	result PointDeletionResult,
+	reason backupasset.LifecycleBlockedReason,
 ) (LifecycleAttempt, error) {
-	var persisted LifecycleAttempt
-	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		attemptRow, point, lockErr := coordinator.lockAttemptAndPointTx(ctx, tx, attemptID)
-		if lockErr != nil {
-			return lockErr
-		}
-		if backupasset.LifecyclePhase(attemptRow.Phase) != backupasset.LifecyclePhaseProviderDelete {
-			return fmt.Errorf("%w: lifecycle phase changed", backupasset.ErrConflict)
-		}
-		held, holdErr := coordinator.validateEffectAuthorityTx(ctx, tx, &attemptRow, &point, authority)
-		if holdErr != nil {
-			return holdErr
-		}
-		now := coordinator.now().UTC()
-		existing, found, existingErr := coordinator.lockLifecycleTerminalEventTx(ctx, tx, point, attemptRow)
-		if existingErr != nil {
-			return existingErr
-		}
-		if !found {
-			tombstone := model.RecoveryPointLifecycleTombstone{
-				RecoveryPointID: point.ID, RepositoryID: point.RepositoryID,
-				OriginalSemantics: point.Semantics, TerminalOperation: attemptRow.Operation,
-				TerminalState: string(backupasset.RecoveryPointExpired), ManagedHistory: true,
-				DeletionReceiptDigest: &result.ReceiptDigest, PurgedAt: &now,
-				ResultCode: string(result.Outcome), CreatedAt: now,
-			}
-			if createErr := tx.WithContext(ctx).Create(&tombstone).Error; createErr != nil {
-				return fmt.Errorf("persist lifecycle deletion tombstone: %w", createErr)
-			}
-		} else if existing.ResultCode != string(result.Outcome) ||
-			existing.DeletionReceiptDigest == nil || *existing.DeletionReceiptDigest != result.ReceiptDigest {
-			return fmt.Errorf("%w: lifecycle tombstone is unproven", backupasset.ErrInvalidState)
-		}
-		retryAt := now.Add(coordinator.retryDelay)
-		update := tx.WithContext(ctx).Model(&model.RecoveryPointLifecycleAttempt{}).
-			Where("id = ? AND phase = ? AND transition_revision = ?", attemptRow.ID, backupasset.LifecyclePhaseProviderDelete, attemptRow.TransitionRevision).
-			Updates(map[string]any{
-				"retry_at": retryAt, "heartbeat_at": now, "updated_at": now,
-			})
-		if update.Error != nil {
-			return fmt.Errorf("schedule provider delete audit retry: %w", update.Error)
-		}
-		if update.RowsAffected != 1 {
-			return fmt.Errorf("%w: lifecycle attempt changed", backupasset.ErrConflict)
-		}
-		attemptRow.RetryAt = &retryAt
-		attemptRow.HeartbeatAt = &now
-		attemptRow.UpdatedAt = now
-		persisted = lifecycleAttemptFromModel(attemptRow)
-		if held {
-			var blockErr error
-			persisted, blockErr = coordinator.blockAttemptTx(ctx, tx, &attemptRow, &point, backupasset.LifecycleBlockedActiveHold)
-			return blockErr
-		}
-		return nil
-	})
-	if err != nil {
-		return LifecycleAttempt{}, err
+	return coordinator.resolveProviderDeletePreparationFailure(ctx, attemptID, reason, nil)
+}
+
+func (coordinator *Coordinator) auditProviderDeleteBlock(
+	ctx context.Context,
+	blocked LifecycleAttempt,
+) (LifecycleAttempt, error) {
+	if coordinator.audit == nil {
+		return blocked, nil
 	}
-	return persisted, nil
+	if auditErr := coordinator.writeSettledDeletionAudit(ctx, blocked); auditErr != nil {
+		if errors.Is(auditErr, errSettledAuditPending) {
+			return blocked, nil
+		}
+		scheduled, scheduleErr := coordinator.scheduleSettledAuditRetry(ctx, blocked.ID)
+		if scheduleErr != nil {
+			return blocked, errors.Join(auditErr, scheduleErr)
+		}
+		return scheduled, auditErr
+	}
+	return blocked, nil
+}
+
+func (coordinator *Coordinator) runPreparedProviderDelete(
+	ctx context.Context,
+	preparation providerDeletePreparation,
+) (LifecycleAttempt, error) {
+	execution, executeErr := coordinator.executeProviderDelete(ctx, preparation)
+	if executeErr != nil {
+		// Once Tx1 committed, every failure is uncertainty, including
+		// cancellation and errors returned before a provider implementation
+		// reports an outcome. Never release or delete the claim.
+		persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = coordinator.markEffectClaimUncertain(persistCtx, preparation.binding, true)
+		cancel()
+		uncertain := preparation.attempt
+		if current, loadErr := coordinator.loadAttempt(context.Background(), preparation.attempt.ID); loadErr == nil {
+			uncertain = current
+		}
+		if ctx != nil && ctx.Err() != nil {
+			return uncertain, ctx.Err()
+		}
+		return uncertain, executeErr
+	}
+	if !execution.ProviderCalled {
+		persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = coordinator.markEffectClaimUncertain(persistCtx, preparation.binding, true)
+		cancel()
+		uncertain := preparation.attempt
+		if current, loadErr := coordinator.loadAttempt(context.Background(), preparation.attempt.ID); loadErr == nil {
+			uncertain = current
+		}
+		return uncertain, fmt.Errorf("%s: %w: provider execution did not report invocation", providerDeleteStageProvider, backupasset.ErrInvalidState)
+	}
+	persisted, persistErr := coordinator.persistProviderDeleteReceiptWithClaim(ctx, preparation, execution)
+	if persistErr != nil {
+		persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = coordinator.markEffectClaimUncertain(persistCtx, preparation.binding, true)
+		cancel()
+		uncertain := preparation.attempt
+		if current, loadErr := coordinator.loadAttempt(context.Background(), preparation.attempt.ID); loadErr == nil {
+			uncertain = current
+		}
+		return uncertain, persistErr
+	}
+	if persisted.Phase == backupasset.LifecyclePhaseBlocked {
+		if auditErr := coordinator.writeSettledDeletionAudit(ctx, persisted); auditErr != nil {
+			if errors.Is(auditErr, errSettledAuditPending) {
+				return persisted, nil
+			}
+			if _, scheduleErr := coordinator.scheduleSettledAuditRetry(ctx, persisted.ID); scheduleErr != nil {
+				return persisted, errors.Join(auditErr, scheduleErr)
+			}
+			return persisted, auditErr
+		}
+		return persisted, nil
+	}
+	return coordinator.confirmSettledProviderDelete(ctx, persisted, execution.Result)
 }
 
 func (coordinator *Coordinator) confirmSettledProviderDelete(
@@ -1304,98 +1159,27 @@ func (coordinator *Coordinator) confirmSettledProviderDelete(
 	attempt LifecycleAttempt,
 	result PointDeletionResult,
 ) (LifecycleAttempt, error) {
-	status := "deleted"
-	if result.Outcome == PointDeletionAlreadyAbsent {
-		status = "already_absent"
+	// Durable provider proof must advance before audit retry/backoff
+	// classification. The audit slot is a separate idempotency fact and may
+	// be retried after the lifecycle has reached tombstoning.
+	progressed, progressErr := coordinator.progressProviderProof(ctx, attempt.ID)
+	if progressErr != nil {
+		return attempt, progressErr
 	}
-	if auditErr := coordinator.writeSettledDeletionAudit(ctx, attempt, status); auditErr != nil {
-		scheduled, scheduleErr := coordinator.scheduleProviderDeleteAuditRetry(ctx, attempt.ID)
+	if coordinator.audit == nil {
+		return progressed, nil
+	}
+	if auditErr := coordinator.writeSettledDeletionAudit(ctx, progressed); auditErr != nil {
+		if errors.Is(auditErr, errSettledAuditPending) {
+			return progressed, nil
+		}
+		scheduled, scheduleErr := coordinator.scheduleSettledAuditRetry(ctx, progressed.ID)
 		if scheduleErr != nil {
-			return attempt, errors.Join(auditErr, scheduleErr)
+			return progressed, errors.Join(auditErr, scheduleErr)
 		}
 		return scheduled, auditErr
 	}
-	return coordinator.transition(
-		ctx, attempt.ID, backupasset.LifecyclePhaseProviderDelete, backupasset.LifecyclePhaseTombstoning,
-	)
-}
-
-func (coordinator *Coordinator) scheduleProviderDeleteAuditRetry(
-	ctx context.Context,
-	attemptID string,
-) (LifecycleAttempt, error) {
-	now := coordinator.now().UTC()
-	retryAt := now.Add(coordinator.retryDelay)
-	var scheduled LifecycleAttempt
-	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		attempt, _, lockErr := coordinator.lockAttemptAndPointTx(ctx, tx, attemptID)
-		if lockErr != nil {
-			return lockErr
-		}
-		if backupasset.LifecyclePhase(attempt.Phase) != backupasset.LifecyclePhaseProviderDelete {
-			scheduled = lifecycleAttemptFromModel(attempt)
-			return nil
-		}
-		update := tx.WithContext(ctx).Model(&model.RecoveryPointLifecycleAttempt{}).
-			Where("id = ? AND phase = ?", attempt.ID, backupasset.LifecyclePhaseProviderDelete).
-			Updates(map[string]any{
-				"retry_at": retryAt, "heartbeat_at": now, "updated_at": now,
-			})
-		if update.Error != nil {
-			return fmt.Errorf("schedule provider delete audit retry: %w", update.Error)
-		}
-		if update.RowsAffected != 1 {
-			return fmt.Errorf("%w: lifecycle attempt changed", backupasset.ErrConflict)
-		}
-		attempt.RetryAt = &retryAt
-		attempt.HeartbeatAt = &now
-		attempt.UpdatedAt = now
-		scheduled = lifecycleAttemptFromModel(attempt)
-		return nil
-	})
-	if err != nil {
-		return LifecycleAttempt{}, err
-	}
-	return scheduled, nil
-}
-
-func (coordinator *Coordinator) scheduleBlockedAuditRetry(
-	ctx context.Context,
-	attemptID string,
-) (LifecycleAttempt, error) {
-	now := coordinator.now().UTC()
-	retryAt := now.Add(coordinator.retryDelay)
-	var scheduled LifecycleAttempt
-	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		attempt, _, lockErr := coordinator.lockAttemptAndPointTx(ctx, tx, attemptID)
-		if lockErr != nil {
-			return lockErr
-		}
-		if backupasset.LifecyclePhase(attempt.Phase) != backupasset.LifecyclePhaseBlocked {
-			scheduled = lifecycleAttemptFromModel(attempt)
-			return nil
-		}
-		update := tx.WithContext(ctx).Model(&model.RecoveryPointLifecycleAttempt{}).
-			Where("id = ? AND phase = ?", attempt.ID, backupasset.LifecyclePhaseBlocked).
-			Updates(map[string]any{
-				"retry_at": retryAt, "heartbeat_at": now, "updated_at": now,
-			})
-		if update.Error != nil {
-			return fmt.Errorf("schedule blocked audit retry: %w", update.Error)
-		}
-		if update.RowsAffected != 1 {
-			return fmt.Errorf("%w: lifecycle attempt changed", backupasset.ErrConflict)
-		}
-		attempt.RetryAt = &retryAt
-		attempt.HeartbeatAt = &now
-		attempt.UpdatedAt = now
-		scheduled = lifecycleAttemptFromModel(attempt)
-		return nil
-	})
-	if err != nil {
-		return LifecycleAttempt{}, err
-	}
-	return scheduled, nil
+	return progressed, nil
 }
 
 func lifecycleFenceLostReason(phase backupasset.LifecyclePhase) backupasset.LifecycleBlockedReason {
@@ -1417,8 +1201,18 @@ func providerDeletionBlocked(reason backupasset.LifecycleBlockedReason) bool {
 }
 
 func (coordinator *Coordinator) tombstoneAndComplete(ctx context.Context, attemptID string) (LifecycleAttempt, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	current, err := coordinator.loadAttempt(ctx, attemptID)
+	if err != nil {
+		return LifecycleAttempt{}, err
+	}
+	if providerDeleteLifecycleOperation(current.Operation) {
+		return coordinator.tombstoneAndCompleteProviderProof(ctx, attemptID)
+	}
 	var completed LifecycleAttempt
-	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		attempt, point, err := coordinator.lockAttemptAndPointTx(ctx, tx, attemptID)
 		if err != nil {
 			return err
@@ -1500,106 +1294,6 @@ func (coordinator *Coordinator) tombstoneAndComplete(ctx context.Context, attemp
 	return completed, nil
 }
 
-func (coordinator *Coordinator) writeSettledDeletionAudit(ctx context.Context, attempt LifecycleAttempt, status string) error {
-	if coordinator == nil || coordinator.audit == nil {
-		return nil
-	}
-	if backupasset.ValidateOpaqueID(attempt.RecoveryPointID) != nil {
-		return fmt.Errorf("%w: settled deletion audit identifiers", backupasset.ErrInvalidState)
-	}
-	var point model.RecoveryPoint
-	if err := coordinator.db.WithContext(ctx).Select("id", "repository_id").
-		Where("id = ?", attempt.RecoveryPointID).Limit(1).Find(&point).Error; err != nil {
-		return fmt.Errorf("load settled deletion audit point: %w", err)
-	}
-	if backupasset.ValidateOpaqueID(point.RepositoryID) != nil {
-		return fmt.Errorf("%w: settled deletion audit identifiers", backupasset.ErrInvalidState)
-	}
-	outcome := backupasset.AuditOutcomeSuccess
-	if status == "blocked" || status == "identity_conflict" {
-		outcome = backupasset.AuditOutcomeBlocked
-	}
-	return coordinator.audit.Write(ctx, backupasset.AuditEventInput{
-		Action:          backupasset.AuditActionRepositoryPurge,
-		Outcome:         outcome,
-		RepositoryID:    point.RepositoryID,
-		RecoveryPointID: attempt.RecoveryPointID,
-		ItemCount:       1,
-		Fields: map[backupasset.AuditField]any{
-			backupasset.AuditFieldStage:     "settled",
-			backupasset.AuditFieldStatus:    status,
-			backupasset.AuditFieldItemCount: int64(1),
-			backupasset.AuditFieldSource:    attempt.ID,
-		},
-	})
-}
-
-type settledDeletionLookup interface {
-	HasSettledDeletion(recoveryPointID, attemptID, status string) bool
-}
-
-func (coordinator *Coordinator) flushSettledBlockedAudit(ctx context.Context, attempt LifecycleAttempt) error {
-	reason := backupasset.LifecycleBlockedReason(attempt.BlockedReason)
-	now := coordinator.now().UTC()
-	if attempt.RetryAt != nil && now.Before(attempt.RetryAt.UTC()) {
-		return nil
-	}
-	if !providerDeletionBlocked(reason) && reason != backupasset.LifecycleBlockedActiveHold {
-		return nil
-	}
-	status := settledDeletionStatus(reason)
-	if reason == backupasset.LifecycleBlockedActiveHold &&
-		providerDeleteLifecycleOperation(attempt.Operation) {
-		result, found, err := coordinator.lookupProviderDeleteReceipt(ctx, attempt)
-		if err != nil {
-			return err
-		}
-		if found {
-			switch result.Outcome {
-			case PointDeletionDeleted:
-				status = "deleted"
-			case PointDeletionAlreadyAbsent:
-				status = "already_absent"
-			default:
-				return fmt.Errorf("%w: lifecycle tombstone is unproven", backupasset.ErrInvalidState)
-			}
-		}
-	}
-	if coordinator.hasSettledDeletionAudit(ctx, attempt, status) {
-		return nil
-	}
-	return coordinator.writeSettledDeletionAudit(ctx, attempt, status)
-}
-
-func (coordinator *Coordinator) hasSettledDeletionAudit(ctx context.Context, attempt LifecycleAttempt, status string) bool {
-	if lookup, ok := coordinator.audit.(settledDeletionLookup); ok {
-		return lookup.HasSettledDeletion(attempt.RecoveryPointID, attempt.ID, status)
-	}
-	if coordinator.db == nil || !coordinator.db.Migrator().HasTable(&model.BackupAssetAuditEvent{}) {
-		return false
-	}
-	var events []model.BackupAssetAuditEvent
-	if err := coordinator.db.WithContext(ctx).
-		Where("recovery_point_id = ? AND action = ?", attempt.RecoveryPointID, backupasset.AuditActionRepositoryPurge).
-		Order("id DESC").Limit(20).Find(&events).Error; err != nil {
-		return false
-	}
-	for _, event := range events {
-		var fields map[string]any
-		if json.Unmarshal([]byte(event.FieldsJSON), &fields) != nil {
-			continue
-		}
-		if fields[string(backupasset.AuditFieldStage)] != "settled" || fields[string(backupasset.AuditFieldStatus)] != status {
-			continue
-		}
-		if source, _ := fields[string(backupasset.AuditFieldSource)].(string); source != "" && source != attempt.ID {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
 func providerDeleteLifecycleOperation(operation backupasset.LifecycleOperation) bool {
 	switch operation {
 	case backupasset.LifecycleRetentionExpire, backupasset.LifecycleExplicitPurge:
@@ -1675,67 +1369,254 @@ func (coordinator *Coordinator) block(
 }
 
 func (coordinator *Coordinator) retryBlocked(ctx context.Context, attemptID string) (LifecycleAttempt, error) {
-	var current model.RecoveryPointLifecycleAttempt
-	if err := coordinator.db.WithContext(ctx).First(&current, "id = ?", attemptID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return LifecycleAttempt{}, fmt.Errorf("%w: lifecycle attempt", backupasset.ErrNotFound)
+	current, err := coordinator.loadAttempt(ctx, attemptID)
+	if err != nil {
+		return LifecycleAttempt{}, err
+	}
+	if current.Phase != backupasset.LifecyclePhaseBlocked {
+		return current, fmt.Errorf("%w: lifecycle phase changed", backupasset.ErrConflict)
+	}
+	if providerDeleteLifecycleOperation(current.Operation) {
+		return coordinator.retryBlockedProviderDelete(ctx, current)
+	}
+	return coordinator.retryUnclaimedBlocked(ctx, current, true)
+}
+
+func (coordinator *Coordinator) retryBlockedProviderDelete(
+	ctx context.Context,
+	current LifecycleAttempt,
+) (LifecycleAttempt, error) {
+	var claimFound, tombstoneFound bool
+	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		rows, lockErr := lockProviderDeleteRowsByAttemptTx(ctx, tx, current.ID)
+		if lockErr != nil {
+			return lockErr
 		}
-		return LifecycleAttempt{}, fmt.Errorf("load blocked lifecycle attempt: %w", err)
+		_, proofFound, proofErr := coordinator.validateProviderDeleteRowsAuthority(
+			rows, rows.claimFound && !rows.tombstoneFound, true,
+		)
+		if proofErr != nil {
+			return proofErr
+		}
+		claimFound, tombstoneFound = rows.claimFound, proofFound
+		return nil
+	})
+	if err != nil {
+		return current, err
 	}
-	loaded := lifecycleAttemptFromModel(current)
-	if backupasset.LifecyclePhase(current.Phase) != backupasset.LifecyclePhaseBlocked {
-		return loaded, fmt.Errorf("%w: lifecycle phase changed", backupasset.ErrConflict)
-	}
-	if providerDeletionBlocked(backupasset.LifecycleBlockedReason(current.BlockedReason)) ||
-		backupasset.LifecycleBlockedReason(current.BlockedReason) == backupasset.LifecycleBlockedActiveHold {
-		if auditErr := coordinator.flushSettledBlockedAudit(ctx, loaded); auditErr != nil {
-			scheduled, scheduleErr := coordinator.scheduleBlockedAuditRetry(ctx, attemptID)
+	if tombstoneFound {
+		// Progress durable provider proof before considering an audit retry
+		// gate or any stale claim/lease state.
+		progressed, progressErr := coordinator.progressProviderProof(ctx, current.ID)
+		if progressErr != nil {
+			return current, progressErr
+		}
+		if coordinator.audit == nil {
+			return progressed, nil
+		}
+		if auditErr := coordinator.writeSettledDeletionAudit(ctx, progressed); auditErr != nil {
+			if errors.Is(auditErr, errSettledAuditPending) {
+				return progressed, nil
+			}
+			scheduled, scheduleErr := coordinator.scheduleSettledAuditRetry(ctx, progressed.ID)
 			if scheduleErr != nil {
-				return scheduled, errors.Join(auditErr, scheduleErr)
+				return progressed, errors.Join(auditErr, scheduleErr)
 			}
 			return scheduled, auditErr
 		}
+		return progressed, nil
 	}
+	if coordinator.audit != nil {
+		if err := coordinator.writeSettledDeletionAudit(ctx, current); err != nil {
+			if errors.Is(err, errSettledAuditPending) {
+				// The locked writer, rather than an unlocked RetryAt read,
+				// owns this decision. No lifecycle or provider mutation is
+				// allowed before the durable backoff expires.
+				return current, nil
+			}
+			scheduled, scheduleErr := coordinator.scheduleSettledAuditRetry(ctx, current.ID)
+			if scheduleErr != nil {
+				return current, errors.Join(err, scheduleErr)
+			}
+			return scheduled, err
+		}
+	}
+	if claimFound {
+		preparation, prepareErr := coordinator.prepareProviderDelete(ctx, current.ID)
+		if prepareErr != nil {
+			if errors.Is(prepareErr, ErrEffectClaimInFlight) {
+				return current, prepareErr
+			}
+			return current, prepareErr
+		}
+		if preparation.proofTombstone {
+			progressed, progressErr := coordinator.progressProviderProof(ctx, current.ID)
+			if progressErr != nil {
+				return current, progressErr
+			}
+			return progressed, nil
+		}
+		if preparation.retryScheduled {
+			return preparation.attempt, nil
+		}
+		if preparation.blocked {
+			return coordinator.auditProviderDeleteBlock(ctx, preparation.attempt)
+		}
+		return coordinator.runPreparedProviderDelete(ctx, preparation)
+	}
+	// A no-claim legacy row still obeys the durable lifecycle retry gate; the
+	// settled-audit writer is independently idempotent and due-gated.
+	return coordinator.retryUnclaimedBlocked(ctx, current, true)
+}
+func (coordinator *Coordinator) progressProviderProof(
+	ctx context.Context,
+	attemptID string,
+) (LifecycleAttempt, error) {
+	var progressed LifecycleAttempt
+	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		rows, err := lockProviderDeleteRowsByAttemptTx(ctx, tx, attemptID)
+		if err != nil {
+			return err
+		}
+		_, proofFound, err := coordinator.validateProviderDeleteRowsAuthority(
+			rows, rows.claimFound && !rows.tombstoneFound, true,
+		)
+		if err != nil {
+			return err
+		}
+		if !proofFound {
+			return fmt.Errorf("%w: lifecycle tombstone is unproven", backupasset.ErrInvalidState)
+		}
+		if err := coordinator.settleLifecycleLeaseAfterProofTx(ctx, tx, rows); err != nil {
+			return err
+		}
+		phase := backupasset.LifecyclePhase(rows.attempt.Phase)
+		switch phase {
+		case backupasset.LifecyclePhaseComplete:
+			progressed = lifecycleAttemptFromModel(rows.attempt)
+			return nil
+		case backupasset.LifecyclePhaseBlocked:
+			held, err := coordinator.activeHoldTx(ctx, tx, rows.point)
+			if err != nil {
+				return err
+			}
+			if held {
+				if backupasset.LifecycleBlockedReason(rows.attempt.BlockedReason) ==
+					backupasset.LifecycleBlockedActiveHold {
+					progressed = lifecycleAttemptFromModel(rows.attempt)
+					return nil
+				}
+				progressed, err = coordinator.blockAttemptTx(
+					ctx, tx, &rows.attempt, &rows.point,
+					backupasset.LifecycleBlockedActiveHold,
+				)
+				return err
+			}
+			progressed, err = coordinator.transitionAttemptTx(
+				ctx, tx, &rows.attempt,
+				backupasset.LifecyclePhaseBlocked,
+				backupasset.LifecyclePhaseTombstoning,
+			)
+			return err
+		case backupasset.LifecyclePhaseProviderDelete:
+			held, err := coordinator.activeHoldTx(ctx, tx, rows.point)
+			if err != nil {
+				return err
+			}
+			if held {
+				progressed, err = coordinator.blockAttemptTx(
+					ctx, tx, &rows.attempt, &rows.point,
+					backupasset.LifecycleBlockedActiveHold,
+				)
+				return err
+			}
+			progressed, err = coordinator.transitionAttemptTx(
+				ctx, tx, &rows.attempt,
+				backupasset.LifecyclePhaseProviderDelete,
+				backupasset.LifecyclePhaseTombstoning,
+			)
+			return err
+		case backupasset.LifecyclePhaseTombstoning:
+			progressed = lifecycleAttemptFromModel(rows.attempt)
+			return nil
+		default:
+			return fmt.Errorf("%w: lifecycle proof phase is invalid", backupasset.ErrInvalidState)
+		}
+	})
+	if err != nil {
+		return LifecycleAttempt{}, err
+	}
+	return progressed, nil
+}
+
+func (coordinator *Coordinator) retryUnclaimedBlocked(
+	ctx context.Context,
+	current LifecycleAttempt,
+	respectRetryAt bool,
+) (LifecycleAttempt, error) {
 	var retried LifecycleAttempt
 	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		attempt, point, err := coordinator.lockAttemptAndPointTx(ctx, tx, attemptID)
+		attempt, point, err := coordinator.lockAttemptAndPointTx(ctx, tx, current.ID)
 		if err != nil {
 			return err
 		}
 		if backupasset.LifecyclePhase(attempt.Phase) != backupasset.LifecyclePhaseBlocked {
 			return fmt.Errorf("%w: lifecycle phase changed", backupasset.ErrConflict)
 		}
+		if providerDeleteLifecycleOperation(backupasset.LifecycleOperation(attempt.Operation)) {
+			if err := coordinator.validateProviderDeleteAttemptLeaseIdentityTx(ctx, tx, &attempt, &point); err != nil {
+				return err
+			}
+		}
 		now := coordinator.now().UTC()
-		if attempt.RetryAt != nil && now.Before(attempt.RetryAt.UTC()) {
+		if respectRetryAt && attempt.RetryAt != nil && now.Before(attempt.RetryAt.UTC()) {
 			retried = lifecycleAttemptFromModel(attempt)
 			return nil
 		}
 		if err := coordinator.ensureLifecycleFenceTx(ctx, tx, &attempt); err != nil {
 			if errors.Is(err, errLifecycleAbsoluteDeadline) {
 				if err := coordinator.adoptExpiredLifecycleFenceTx(ctx, tx, &attempt); err != nil {
-					retried, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, backupasset.LifecycleBlockedFenceLost)
+					retried, err = coordinator.blockAttemptTx(
+						ctx, tx, &attempt, &point,
+						backupasset.LifecycleBlockedFenceLost,
+					)
 					return err
 				}
 			} else if errors.Is(err, errLifecycleFenceLost) {
-				retried, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, backupasset.LifecycleBlockedFenceLost)
+				retried, err = coordinator.blockAttemptTx(
+					ctx, tx, &attempt, &point,
+					backupasset.LifecycleBlockedFenceLost,
+				)
 				return err
 			} else {
 				return err
 			}
 		}
-		blocked, err := coordinator.activeHoldTx(ctx, tx, point)
+		held, err := coordinator.activeHoldTx(ctx, tx, point)
 		if err != nil {
 			return err
 		}
-		if blocked {
-			retried, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, backupasset.LifecycleBlockedActiveHold)
+		if held {
+			reason := backupasset.LifecycleBlockedReason(attempt.BlockedReason)
+			if backupasset.LifecyclePhase(attempt.Phase) ==
+				backupasset.LifecyclePhaseBlocked &&
+				reason == backupasset.LifecycleBlockedActiveHold {
+				retried = lifecycleAttemptFromModel(attempt)
+				return nil
+			}
+			retried, err = coordinator.blockAttemptTx(
+				ctx, tx, &attempt, &point,
+				backupasset.LifecycleBlockedActiveHold,
+			)
 			return err
 		}
 		resume := blockedResumePhase(backupasset.LifecycleBlockedReason(attempt.BlockedReason))
 		reason := backupasset.LifecycleBlockedReason(attempt.BlockedReason)
 		if reason == backupasset.LifecycleBlockedFenceLost ||
 			reason == backupasset.LifecycleBlockedActiveHold {
-			event, terminalEventExists, err := coordinator.lockLifecycleTerminalEventTx(ctx, tx, point, attempt)
+			event, terminalEventExists, err := coordinator.lockLifecycleTerminalEventTx(
+				ctx, tx, point, attempt,
+			)
 			if err != nil {
 				return err
 			}
@@ -1750,9 +1631,13 @@ func (coordinator *Coordinator) retryBlocked(ctx context.Context, attemptID stri
 			backupasset.LifecycleOperation(attempt.Operation) != backupasset.LifecycleMutableRetire &&
 			backupasset.RecoveryPointState(point.State) == backupasset.RecoveryPointPurgeBlocked {
 			result := tx.WithContext(ctx).Model(&model.RecoveryPoint{}).
-				Where("id = ? AND point_revision = ? AND state = ?", point.ID, point.PointRevision, backupasset.RecoveryPointPurgeBlocked).
+				Where("id = ? AND point_revision = ? AND state = ?",
+					point.ID, point.PointRevision,
+					backupasset.RecoveryPointPurgeBlocked).
 				Updates(map[string]any{
-					"state": backupasset.RecoveryPointExpiring, "point_revision": point.PointRevision + 1, "updated_at": now,
+					"state":          backupasset.RecoveryPointExpiring,
+					"point_revision": point.PointRevision + 1,
+					"updated_at":     now,
 				})
 			if result.Error != nil {
 				return fmt.Errorf("retry blocked lifecycle point: %w", result.Error)
@@ -1763,26 +1648,11 @@ func (coordinator *Coordinator) retryBlocked(ctx context.Context, attemptID stri
 			point.State = string(backupasset.RecoveryPointExpiring)
 			point.PointRevision++
 		}
-		result := tx.WithContext(ctx).Model(&model.RecoveryPointLifecycleAttempt{}).
-			Where("id = ? AND phase = ? AND transition_revision = ?", attempt.ID, backupasset.LifecyclePhaseBlocked, attempt.TransitionRevision).
-			Updates(map[string]any{
-				"phase": resume, "blocked_reason": "", "retry_at": nil,
-				"transition_revision": attempt.TransitionRevision + 1, "heartbeat_at": now, "updated_at": now,
-			})
-		if result.Error != nil {
-			return fmt.Errorf("retry blocked lifecycle attempt: %w", result.Error)
-		}
-		if result.RowsAffected != 1 {
-			return fmt.Errorf("%w: blocked lifecycle attempt changed", backupasset.ErrConflict)
-		}
-		attempt.Phase = string(resume)
-		attempt.BlockedReason = ""
-		attempt.RetryAt = nil
-		attempt.TransitionRevision++
-		attempt.HeartbeatAt = &now
-		attempt.UpdatedAt = now
-		retried = lifecycleAttemptFromModel(attempt)
-		return nil
+		retried, err = coordinator.transitionAttemptTx(
+			ctx, tx, &attempt,
+			backupasset.LifecyclePhaseBlocked, resume,
+		)
+		return err
 	})
 	if err != nil {
 		return LifecycleAttempt{}, err
@@ -1859,7 +1729,7 @@ func validateLifecycleTerminalEvent(
 		}
 	case backupasset.LifecycleRetentionExpire, backupasset.LifecycleExplicitPurge:
 		pointState := backupasset.RecoveryPointState(point.State)
-		if pointState != backupasset.RecoveryPointExpiring && pointState != backupasset.RecoveryPointPurgeBlocked ||
+		if pointState != backupasset.RecoveryPointExpiring && pointState != backupasset.RecoveryPointPurgeBlocked && pointState != backupasset.RecoveryPointExpired ||
 			event.TerminalState != string(backupasset.RecoveryPointExpired) || event.RetiredAt != nil ||
 			event.PurgedAt == nil || !event.PurgedAt.Equal(event.CreatedAt) || event.DeletionReceiptDigest == nil ||
 			!validPointDeletionResult(PointDeletionResult{
@@ -2330,13 +2200,22 @@ func (coordinator *Coordinator) lifecycleFenceTx(
 }
 
 func (coordinator *Coordinator) activeHoldTx(ctx context.Context, tx *gorm.DB, point model.RecoveryPoint) (bool, error) {
-	var activeHolds int64
-	if err := tx.WithContext(ctx).Model(&model.RecoveryPointHold{}).
-		Where("recovery_point_id = ? AND state = ?", point.ID, backupasset.HoldActive).
-		Count(&activeHolds).Error; err != nil {
-		return false, fmt.Errorf("load lifecycle active holds: %w", err)
+	var activeHold struct {
+		ID string
 	}
-	return point.HoldState == string(backupasset.HoldActive) || activeHolds != 0, nil
+	loaded := tx.WithContext(ctx).Table("recovery_point_holds").
+		Select("id").
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("recovery_point_id = ? AND state = ?", point.ID, backupasset.HoldActive).
+		Limit(1).
+		Find(&activeHold)
+	if loaded.Error != nil {
+		return false, fmt.Errorf("load lifecycle active holds: %w", loaded.Error)
+	}
+	// The point row is already locked by every provider-proof transaction and
+	// active hold rows are locked here as well. Hold insertion/release therefore
+	// cannot race the terminal point mutation.
+	return point.HoldState == string(backupasset.HoldActive) || loaded.RowsAffected != 0, nil
 }
 
 func (coordinator *Coordinator) drainOrdinaryLeasesTx(

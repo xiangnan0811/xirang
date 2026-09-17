@@ -2,15 +2,18 @@ package handlers
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
-	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -27,6 +30,38 @@ type DockerVolume struct {
 	Name       string `json:"name"`
 	Driver     string `json:"driver"`
 	Mountpoint string `json:"mountpoint"`
+}
+
+const (
+	dockerVolumeDiscoveryTimeout = 15 * time.Second
+	dockerVolumeCommandTimeout   = 10 * time.Second
+	dockerVolumeMaxCount         = 256
+	dockerVolumeMaxStdoutBytes   = 512 << 10
+	dockerVolumeMaxStderrBytes   = 32 << 10
+	dockerVolumeMaxRecordBytes   = 16 << 10
+	dockerVolumeMaxNameBytes     = 255
+)
+
+var errDockerVolumeDiscovery = errors.New("docker volume discovery failed")
+
+type dockerCommandRunner interface {
+	Run(context.Context, sshutil.CommandSpec) (sshutil.CommandResult, error)
+}
+
+type dockerCommandExecutionRunner interface {
+	OpenExecution(context.Context, sshutil.CommandSpec) (sshutil.CommandExecutionStream, error)
+}
+
+type dockerCommandResult struct {
+	sshutil.CommandResult
+	exitCode      int
+	exitCodeKnown bool
+}
+
+type dockerVolumesResponse struct {
+	Data    []DockerVolume `json:"data"`
+	Partial bool           `json:"partial"`
+	Warning string         `json:"warning,omitempty"`
 }
 
 // DockerHandler 处理 Docker 相关请求。
@@ -62,7 +97,10 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 		return
 	}
 
-	sshClient, credential, err := dialSSHForDocker(c.Request.Context(), node, h.db)
+	operationCtx, cancel := context.WithTimeout(c.Request.Context(), dockerVolumeDiscoveryTimeout)
+	defer cancel()
+
+	sshClient, credential, err := dialSSHForDocker(operationCtx, node, h.db)
 	if err != nil {
 		h.writeDockerVolumeAudit(c, node, credential, credentialAuditSSHOutcome("dial", err), "dial", err, 0, false)
 		respondBadGateway(c, "SSH 连接失败")
@@ -70,28 +108,21 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 	}
 	defer sshClient.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
-	volumes, warning, err := listDockerVolumes(sshClient)
+	runner := sshutil.NewSSHCommandRunnerWithTransportClose(sshClient, 1)
+	volumes, warning, partial, err := listDockerVolumes(operationCtx, runner)
 	if err != nil {
-		if !errors.Is(err, apperr.ErrNotFound) {
-			logger.Log.Error().Err(err).Msg("获取 Docker 卷失败")
-			h.writeDockerVolumeAudit(c, node, credential, credentialaudit.OutcomeFailure, "list", err, 0, false)
-			respondOK(c, gin.H{"data": []DockerVolume{}, "warning": "获取 Docker 卷失败"})
-			return
-		}
-		// Docker 未安装 — 使用 warning 继续
+		logger.Log.Error().Err(err).Msg("获取 Docker 卷失败")
+		h.writeDockerVolumeAudit(c, node, credential, credentialaudit.OutcomeFailure, "discover", err, len(volumes), true)
+		respondBadGateway(c, "获取 Docker 卷失败")
+		return
 	}
 
-	volumeOutcome := credentialaudit.OutcomeSuccess
-	if warning != "" {
-		volumeOutcome = credentialaudit.OutcomeFailure
+	outcome := credentialaudit.OutcomeSuccess
+	if partial {
+		outcome = credentialaudit.OutcomeFailure
 	}
-	h.writeDockerVolumeAudit(c, node, credential, volumeOutcome, "success", nil, len(volumes), warning != "")
-
-	resp := gin.H{"data": volumes}
-	if warning != "" {
-		resp["warning"] = warning
-	}
-	respondOK(c, resp)
+	h.writeDockerVolumeAudit(c, node, credential, outcome, "discover", nil, len(volumes), partial)
+	respondOK(c, dockerVolumesResponse{Data: volumes, Partial: partial, Warning: warning})
 }
 
 func (h *DockerHandler) writeDockerVolumeAudit(c *gin.Context, node model.Node, credential sshutil.ResolvedCredential, outcome, stage string, err error, count int, warning bool) {
@@ -134,7 +165,7 @@ func dialSSHForDocker(ctx context.Context, node model.Node, db *gorm.DB) (*ssh.C
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+	addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	client, err := sshutil.DialSSH(dialCtx, addr, node.Username, auth, hostKey)
 	return client, credential, err
 }
@@ -146,80 +177,214 @@ type dockerVolumeLsEntry struct {
 	Mountpoint string `json:"Mountpoint"`
 }
 
-// listDockerVolumes 通过 SSH 执行 docker 命令获取卷列表。
-func listDockerVolumes(client *ssh.Client) ([]DockerVolume, string, error) {
-	// 先执行 docker volume ls 获取卷列表
-	session, err := client.NewSession()
-	if err != nil {
-		return nil, "", fmt.Errorf("创建 SSH 会话失败: %w", err)
-	}
-	output, err := session.CombinedOutput("docker volume ls --format '{{json .}}'")
-	_ = session.Close()
+type dockerVolumeInspectEntry struct {
+	Driver     string `json:"Driver"`
+	Name       string `json:"Name"`
+	Mountpoint string `json:"Mountpoint"`
+}
 
+func runDockerCommand(ctx context.Context, runner dockerCommandRunner, spec sshutil.CommandSpec) (dockerCommandResult, error) {
+	if executionRunner, ok := runner.(dockerCommandExecutionRunner); ok {
+		stream, err := executionRunner.OpenExecution(ctx, spec)
+		if err != nil {
+			return dockerCommandResult{}, err
+		}
+		if stream == nil {
+			return dockerCommandResult{}, fmt.Errorf("docker command stream unavailable")
+		}
+		stdout, readErr := io.ReadAll(stream)
+		completion, joinErr := stream.Join()
+		result := dockerCommandResult{
+			CommandResult: sshutil.CommandResult{Stdout: stdout, Stderr: completion.Stderr},
+			exitCode:      completion.ExitCode,
+			exitCodeKnown: completion.ExitCodeKnown,
+		}
+		if readErr != nil {
+			return result, readErr
+		}
+		if joinErr != nil {
+			return result, joinErr
+		}
+		return result, nil
+	}
+	result, err := runner.Run(ctx, spec)
+	return dockerCommandResult{CommandResult: result}, err
+}
+
+// listDockerVolumes performs one bounded listing and one bounded batch inspect.
+// A successful listing with inspect or parse gaps is returned as partial rather
+// than being flattened into a complete empty response.
+func listDockerVolumes(ctx context.Context, runner dockerCommandRunner) ([]DockerVolume, string, bool, error) {
+	if runner == nil {
+		return nil, "", false, fmt.Errorf("%w: runner unavailable", errDockerVolumeDiscovery)
+	}
+	listResult, err := runDockerCommand(ctx, runner, sshutil.CommandSpec{
+		Binary:         "docker",
+		Args:           []string{"volume", "ls", "--format", "{{json .}}"},
+		Timeout:        dockerVolumeCommandTimeout,
+		MaxStdoutBytes: dockerVolumeMaxStdoutBytes,
+		MaxStderrBytes: dockerVolumeMaxStderrBytes,
+		MaxRecordBytes: dockerVolumeMaxRecordBytes,
+	})
 	if err != nil {
-		outStr := strings.TrimSpace(string(output))
-		// Docker 未安装或无权限
-		if strings.Contains(outStr, "command not found") || strings.Contains(outStr, "not found") {
-			return []DockerVolume{}, "Docker 未安装或不在 PATH 中", apperr.ErrNotFound
-		}
-		if strings.Contains(outStr, "permission denied") || strings.Contains(outStr, "Cannot connect") {
-			return []DockerVolume{}, "无权访问 Docker（当前用户可能不在 docker 组中）", nil
-		}
-		return []DockerVolume{}, "执行 docker volume ls 失败", nil
+		return nil, "", false, fmt.Errorf("%w: list command: %w", errDockerVolumeDiscovery, err)
+	}
+	if listResult.exitCodeKnown && listResult.exitCode != 0 {
+		return nil, "", false, fmt.Errorf("%w: list command exited with status %d", errDockerVolumeDiscovery, listResult.exitCode)
 	}
 
-	// 解析 JSON 行
-	var entries []dockerVolumeLsEntry
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	entries, parseWarning, limited := parseDockerVolumeList(listResult.Stdout)
+	if len(entries) == 0 {
+		if parseWarning || limited {
+			return []DockerVolume{}, dockerVolumePartialWarning(parseWarning, limited), true, nil
+		}
+		return []DockerVolume{}, "", false, nil
+	}
+
+	volumes := make([]DockerVolume, 0, len(entries))
+	inspectNames := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		volume := DockerVolume{Name: entry.Name, Driver: entry.Driver, Mountpoint: strings.TrimSpace(entry.Mountpoint)}
+		if volume.Mountpoint == "" {
+			inspectNames = append(inspectNames, entry.Name)
+		}
+		volumes = append(volumes, volume)
+	}
+	partial := parseWarning || limited
+	warning := dockerVolumePartialWarning(parseWarning, limited)
+	if len(inspectNames) == 0 {
+		return volumes, warning, partial, nil
+	}
+
+	args := make([]string, 0, len(inspectNames)+4)
+	args = append(args, "volume", "inspect", "--format", "{{json .}}")
+	args = append(args, inspectNames...)
+	inspectResult, inspectErr := runDockerCommand(ctx, runner, sshutil.CommandSpec{
+		Binary:         "docker",
+		Args:           args,
+		Timeout:        dockerVolumeCommandTimeout,
+		MaxStdoutBytes: dockerVolumeMaxStdoutBytes,
+		MaxStderrBytes: dockerVolumeMaxStderrBytes,
+		MaxRecordBytes: dockerVolumeMaxRecordBytes,
+	})
+	if inspectErr != nil {
+		return volumes, warning, partial, fmt.Errorf("%w: inspect command: %w", errDockerVolumeDiscovery, inspectErr)
+	}
+	if inspectResult.exitCodeKnown && inspectResult.exitCode != 0 {
+		return volumes, dockerVolumeInspectWarning(), true, nil
+	}
+
+	inspectEntries, inspectMalformed, inspectLimited := parseDockerVolumeInspect(inspectResult.Stdout)
+	mountpoints := make(map[string]string, len(inspectEntries))
+	for _, entry := range inspectEntries {
+		if entry.Name == "" || entry.Mountpoint == "" {
+			continue
+		}
+		mountpoints[entry.Name] = strings.TrimSpace(entry.Mountpoint)
+	}
+	for index := range volumes {
+		if volumes[index].Mountpoint != "" {
+			continue
+		}
+		if mountpoint := mountpoints[volumes[index].Name]; mountpoint != "" {
+			volumes[index].Mountpoint = mountpoint
+			continue
+		}
+		partial = true
+	}
+	if inspectMalformed || inspectLimited {
+		partial = true
+	}
+	if partial && warning == "" {
+		warning = dockerVolumeInspectWarning()
+	}
+	return volumes, warning, partial, nil
+}
+func parseDockerVolumeList(output []byte) ([]dockerVolumeLsEntry, bool, bool) {
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	scanner.Buffer(make([]byte, 4<<10), dockerVolumeMaxRecordBytes)
+	entries := make([]dockerVolumeLsEntry, 0, minInt(dockerVolumeMaxCount, 32))
+	seen := make(map[string]struct{})
+	malformed := false
+	limited := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
+		if len(entries) >= dockerVolumeMaxCount {
+			limited = true
+			break
+		}
 		var entry dockerVolumeLsEntry
-		if jsonErr := json.Unmarshal([]byte(line), &entry); jsonErr == nil {
-			entries = append(entries, entry)
+		if err := json.Unmarshal([]byte(line), &entry); err != nil ||
+			!validDockerVolumeName(entry.Name) {
+			malformed = true
+			continue
 		}
-	}
-
-	if len(entries) == 0 {
-		return []DockerVolume{}, "", nil
-	}
-
-	// 对每个卷获取 mountpoint（ls 的 json 格式可能不包含 Mountpoint）
-	volumes := make([]DockerVolume, 0, len(entries))
-	for _, entry := range entries {
-		mountpoint := entry.Mountpoint
-		if mountpoint == "" {
-			mountpoint = inspectVolumeMountpoint(client, entry.Name)
+		if _, exists := seen[entry.Name]; exists {
+			continue
 		}
-		volumes = append(volumes, DockerVolume{
-			Name:       entry.Name,
-			Driver:     entry.Driver,
-			Mountpoint: mountpoint,
-		})
+		seen[entry.Name] = struct{}{}
+		entries = append(entries, entry)
 	}
+	if scanner.Err() != nil {
+		malformed = true
+	}
+	return entries, malformed, limited
+}
 
-	return volumes, "", nil
+func parseDockerVolumeInspect(output []byte) ([]dockerVolumeInspectEntry, bool, bool) {
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	scanner.Buffer(make([]byte, 4<<10), dockerVolumeMaxRecordBytes)
+	entries := make([]dockerVolumeInspectEntry, 0, dockerVolumeMaxCount)
+	malformed := false
+	limited := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if len(entries) >= dockerVolumeMaxCount {
+			limited = true
+			break
+		}
+		var entry dockerVolumeInspectEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			malformed = true
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if scanner.Err() != nil {
+		malformed = true
+	}
+	return entries, malformed, limited
+}
+
+func validDockerVolumeName(name string) bool {
+	return len(name) <= dockerVolumeMaxNameBytes && safeDockerName.MatchString(name)
+}
+
+func dockerVolumePartialWarning(parseWarning, limited bool) string {
+	if limited {
+		return "Docker 卷数量超过显示上限，结果不完整"
+	}
+	if parseWarning {
+		return "部分 Docker 卷信息无法解析，结果不完整"
+	}
+	return ""
+}
+
+func dockerVolumeInspectWarning() string {
+	return "部分 Docker 卷挂载点无法读取，结果不完整"
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 var safeDockerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`)
-
-// inspectVolumeMountpoint 通过 docker volume inspect 获取卷的挂载点。
-func inspectVolumeMountpoint(client *ssh.Client, volumeName string) string {
-	if !safeDockerName.MatchString(volumeName) {
-		return ""
-	}
-	session, err := client.NewSession()
-	if err != nil {
-		return ""
-	}
-	defer session.Close() //nolint:errcheck // close error not actionable on deferred cleanup
-
-	// 使用 Go template 格式直接输出 Mountpoint
-	output, err := session.Output(fmt.Sprintf("docker volume inspect '%s' --format '{{.Mountpoint}}'", volumeName))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
-}

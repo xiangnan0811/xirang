@@ -5390,7 +5390,7 @@ func TestPlanCreateConcurrentSameIntent(t *testing.T) {
 }
 
 func TestPlanCreateConcurrentDifferentIntentElectsOneWinner(t *testing.T) {
-	fixture := newPlanServiceTestFixture(t, false)
+	fixture := newPlanServiceTestFixtureWithSQLiteConcurrency(t, false)
 	changed := cloneCreatePlanRequest(fixture.request)
 	changed.Plan.Binding.CapabilityRevision = "capability-revision-concurrent-2"
 	const callersPerIntent = 8
@@ -5404,10 +5404,17 @@ func TestPlanCreateConcurrentDifferentIntentElectsOneWinner(t *testing.T) {
 	}
 	outcomes := make(chan outcome, callersPerIntent*2)
 	var callersReady sync.WaitGroup
+	var callersDone sync.WaitGroup
 	callersReady.Add(callersPerIntent * 2)
+	callersDone.Add(callersPerIntent * 2)
+	t.Cleanup(func() {
+		cancel()
+		callersDone.Wait()
+	})
 	for intent, request := range []CreatePlanRequest{fixture.request, changed} {
 		for index := 0; index < callersPerIntent; index++ {
 			go func(intent int, request CreatePlanRequest) {
+				defer callersDone.Done()
 				callersReady.Done()
 				<-start
 				result, err := fixture.service.CreatePlan(timeout, cloneCreatePlanRequest(request))
@@ -5431,18 +5438,19 @@ func TestPlanCreateConcurrentDifferentIntentElectsOneWinner(t *testing.T) {
 					winnerIntent, winnerPlanID = outcome.intent, outcome.result.PlanID
 				}
 				if outcome.intent != winnerIntent || outcome.result.PlanID != winnerPlanID {
-					t.Fatalf("different-intent winner drift: intent=%d plan=%s winnerIntent=%d winnerPlan=%s", outcome.intent, outcome.result.PlanID, winnerIntent, winnerPlanID)
+					t.Errorf("different-intent winner drift: intent=%d plan=%s winnerIntent=%d winnerPlan=%s", outcome.intent, outcome.result.PlanID, winnerIntent, winnerPlanID)
 				}
 				winnerResults++
 			case errors.Is(outcome.err, ErrPlanIdempotencyConflict):
 				conflicts++
 			default:
-				t.Fatalf("different-intent CreatePlan() error = %v", outcome.err)
+				t.Errorf("different-intent CreatePlan() error = %v", outcome.err)
 			}
 		case <-timeout.Done():
 			t.Fatalf("wait for different-intent plan creators: %v", timeout.Err())
 		}
 	}
+	callersDone.Wait()
 	if winnerIntent == -1 || winnerResults != callersPerIntent || conflicts != callersPerIntent {
 		t.Fatalf("different-intent results: winnerIntent=%d winnerResults=%d conflicts=%d", winnerIntent, winnerResults, conflicts)
 	}
@@ -6193,13 +6201,31 @@ func newPlanServiceTestFixture(t *testing.T, exactMirror bool) planServiceTestFi
 	return newPlanServiceTestFixtureForSemantics(t, exactMirror, backupasset.PointNativeSnapshot)
 }
 
+func newPlanServiceTestFixtureWithSQLiteConcurrency(t *testing.T, exactMirror bool) planServiceTestFixture {
+	return newPlanServiceTestFixtureForSemanticsWithSQLiteOptions(
+		t,
+		exactMirror,
+		backupasset.PointNativeSnapshot,
+		"&_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_txlock=immediate",
+	)
+}
+
 func newPlanServiceTestFixtureForSemantics(
 	t *testing.T,
 	exactMirror bool,
 	semantics backupasset.PointVersionSemantics,
 ) planServiceTestFixture {
+	return newPlanServiceTestFixtureForSemanticsWithSQLiteOptions(t, exactMirror, semantics, "")
+}
+
+func newPlanServiceTestFixtureForSemanticsWithSQLiteOptions(
+	t *testing.T,
+	exactMirror bool,
+	semantics backupasset.PointVersionSemantics,
+	sqliteOptions string,
+) planServiceTestFixture {
 	t.Helper()
-	source := seedRecoverySourceFixture(t, semantics)
+	source := seedRecoverySourceFixtureWithSQLiteOptions(t, semantics, sqliteOptions)
 	if err := source.db.AutoMigrate(&model.BackupAssetRecoveryPlan{}, &model.BackupAssetRecoveryPlanItem{}); err != nil {
 		t.Fatal(err)
 	}
@@ -6279,6 +6305,14 @@ func newPlanServiceTestFixtureForSemantics(
 }
 
 func seedRecoverySourceFixture(t *testing.T, semantics backupasset.PointVersionSemantics) recoverySourceFixture {
+	return seedRecoverySourceFixtureWithSQLiteOptions(t, semantics, "")
+}
+
+func seedRecoverySourceFixtureWithSQLiteOptions(
+	t *testing.T,
+	semantics backupasset.PointVersionSemantics,
+	sqliteOptions string,
+) recoverySourceFixture {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RECOVERY_SOURCE_VALIDATOR_KEY_FOR_TEST_ONLY")
@@ -6286,8 +6320,8 @@ func seedRecoverySourceFixture(t *testing.T, semantics backupasset.PointVersionS
 	t.Cleanup(secure.ResetForTesting)
 
 	dsn := fmt.Sprintf(
-		"file:%s-%d?mode=memory&cache=shared&_loc=UTC&_foreign_keys=1",
-		strings.ReplaceAll(t.Name(), "/", "_"), recoverySourceValidatorDBSequence.Add(1),
+		"file:%s-%d?mode=memory&cache=shared&_loc=UTC&_foreign_keys=1%s",
+		strings.ReplaceAll(t.Name(), "/", "_"), recoverySourceValidatorDBSequence.Add(1), sqliteOptions,
 	)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {

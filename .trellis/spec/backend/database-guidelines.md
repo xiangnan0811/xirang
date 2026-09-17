@@ -44,7 +44,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 - Add paired migration files for both database engines:
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
-- Keep version numbers in lockstep across SQLite and PostgreSQL. The current latest migration is `000076_provider_native_version_reference_reason`.
+- Keep version numbers in lockstep across SQLite and PostgreSQL. The current latest migration is `000085_alert_delivery_success`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
   `IF NOT EXISTS` where the engine supports it, and write comments when a
@@ -121,12 +121,14 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `idx_task_runs_started_at` and `idx_task_runs_status_finished_at`. Preserve
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
-- Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062` through
-  `000076_provider_native_version_reference_reason`;
-  later versions must remain paired. After durable Search or publication facts,
-  or live content-delivery state exists, schema down must fail closed rather
-  than deleting history, Provider facts, grants, reservations, or leases.
+- Backup-asset schema changes are paired across SQLite and PostgreSQL. The historical baseline includes `000062` through `000076_provider_native_version_reference_reason`; the current migration is `000085_alert_delivery_success`, and later versions must remain paired. After durable Search or publication facts, or live content-delivery state exists, schema down must fail closed rather than deleting history, Provider facts, grants, reservations, or leases.
+- Paired `000083_task_run_recovery_capture` records legacy Rsync layout, source-selected manifest, generation state, and restore source-run binding. Historical empty evidence remains unknown. New evidence uses the v2 byte-safe Base64 manifest and encoded root sidecar; the decoder retains v1 manifest/raw-root reads. Decode according to manifest version before comparing or using root bytes; never write arbitrary filename bytes directly into PostgreSQL text. A previous success is not authority after an uncertain mutable write; managed immutable recovery points retain their separate contract.
+- Legacy mutable Rclone reuses the generation/source-binding columns from `000083`: arm `writing` after publication Prepare/preconditions immediately before mutating executor invocation, retain `unknown` after ambiguous completion, use `dirty` for a known non-success or explicitly reconciled stopped write, and record `verified` only for complete current-head success (not immutable content evidence). Authoritative no-start records `no_start`; same-owner running/pre-provider proof is separate from generic pending-only recovery inference. Never backfill old terminal history from status/error text. Restore ignores only no_start rows without jumping over ambiguous historical heads. Cleanup retains the meaningful head, source references, and unresolved holds. Ordinary admission rejects same-task unresolved evidence despite config edits. Explicit administrator reconciliation requires a paused task, exact run, positive remote-stop confirmation, no live/unbounded owner or active sibling; lock Task then TaskRun and write dirty/owner fencing plus credential audit in one transaction. Audit failure rolls back; no implicit resume/retry or verified state. Rsync capture manifests remain Rsync-only.
+- Policy quotas serialize under the policy row lock before task/node admission and count ordinary pending/running reservations across nodes. Recheck at execution entry; restore/drill keep separate admission. Never substitute a per-node mutex for policy-wide database authority.
+- Paired `000084_alert_delivery_intents` separates durable alert fan-out decisions, canonical per-channel intents, and attempt-fenced delivery leases. Persist intent before network I/O; never use a stale model Save to finalize a delivery or overwrite alert decision fields. Historical NULL decisions are not a resend queue. Both migrations reject used-evidence downgrade and are validated for schema drift at startup.
+- Paired `000085_alert_delivery_success` adds private nullable `AlertDelivery.SentAt` and a TaskRun source-reference index. Only a matching live attempt may record success time; cooldown orders by this time. Historical NULL success times stay unknown and do not establish cooldown. Used success evidence blocks downgrade. All sending paths canonicalize provable legacy direct intents before claiming; ambiguous historical escalation rows remain unknown, while distinct event keys stay independent.
+- TaskRun cleanup locks tasks and rechecks the cleanup predicate within the same transaction as dependent deletion. Retain the newest ordinary nonempty generation per task/node, including dirty, all restore source bindings, and active drill source references. An active newer generation cannot obsolete the prior final generation: no-start clearing may remove its temporary dirty state without any write. Drill reservation re-resolves its source under the task lock; history retention must not erase restore authority or resurrect superseded success.
+- Paired `000082_task_run_cron_provenance` preserves private immutable TaskRun cron occurrence and backup configuration fingerprint fields. Historical NULL/empty fields are unknown, never guessed provenance. The populated cron occurrence is unique per task; restore must match an ordinary successful backup fingerprint, node binding, and policy-owned execution inputs. Reservation and entry use the same locked policy snapshot. Only safely pending cron occurrences with stored identity may be relaunched after an expired lease; running/unknown outcomes must not be replayed. Drain old writers before upgrade. Once either new identity field is used, both downgrade admission and the down migration must refuse erasing it.
 - `task_runs.node_id_snapshot` has a closed product contract. Ordinary TaskRun
   writes must freeze a positive node ID matching the live Task at creation;
   `task_id` and the snapshot are immutable. Snapshot `0` is not authority: it is
@@ -169,6 +171,45 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   PostgreSQL replaces only the named blocked-reason check. Both direct down and
   `schema_migrations` admission reject used downs atomically and preserve clean
   version 76.
+- Paired `000077_lifecycle_effect_claim_audit_slot` adds the Coordinator-owned
+  provider-delete effect claim and immutable settled-audit slot tables. The
+  v76→v77 upgrade is quiesced: complete the old-worker drain (stop every old
+  retention worker before applying it), reconcile scoped
+  `retention_expire`/`explicit_purge` `provider_delete` attempts without a
+  valid receipt, and enforce a no mixed-version runtime. The migration rejects
+  such unresolved attempts atomically while ignoring ordinary non-candidates.
+- Migration backfill and runtime share one `settledDeletionCandidate`: scoped
+  operation plus either a valid terminal tombstone/receipt or phase `blocked`
+  with `active_hold`, `provider_worm`, `provider_unavailable`,
+  `provider_identity_conflict`, `provider_native_version_referenced`,
+  `provider_delete_unproven`, or `deletion_unavailable`. `selected`,
+  `revoking`, `draining`, `cleaning`, `lease_live`, `lease_drain_unproven`,
+  `owner_cleanup_unproven`, `fence_lost`, and `mutable_retire` are no-op
+  states. A retained event is exact only with
+  `action=repository_purge`, matching attempt→point→repository IDs,
+  `item_count=1` and integer `fields.item_count=1`,
+  `fields.stage=settled`, `fields.source=<attempt_id>`, a legal
+  `fields.status`, and outcome `blocked` for observational statuses or
+  `success` for terminal statuses; terminal status must agree with the
+  tombstone result. Exact duplicates are deduplicated, observational slots may
+  occur once each in either order, and at most one mutually exclusive terminal
+  slot may follow. Near misses or remaining ambiguity roll back the entire
+  cutover; reconcile source events and durable tombstone truth before retrying.
+- Claims are append-only (`in_flight`, `uncertain`, `proven`) and slots are
+  immutable permanent proof; retention detail purge must not be used as
+  idempotency evidence. `000077` admission and direct down-body guards reject
+  any non-empty claim or slot table. Once durable rows exist, preserve those
+  rows and all history and repair forward only; do not use a destructive down
+  migration.
+- Provider-delete recovery is proof-first: validate the locked
+  attempt/point/tombstone and any proven claim before consulting current lease
+  identity, fence or expiry. A rebound historical owner/holder cannot invalidate
+  committed deletion proof. Leave a rebound lease untouched; only settle an
+  exact still-owned lease. Missing candidate leases and corrupt proof still fail
+  closed, and paths without proof retain the full execution-authority checks.
+- Required lifecycle PostgreSQL CI coverage must be checked against the actual
+  acceptance test inventory and the runner selection. Comparing two copied
+  selector strings does not prove that every acceptance case executes.
 
 ## Scenario: Rclone Native Version Evidence And Deletion Reservation
 
@@ -613,6 +654,64 @@ if _, err := profile.ResolveAppProfileAccess(db, credentialID); err != nil {
 ```
 
 ---
+
+## Scenario: Expired Catalog/Search Owner Slots
+
+### 1. Scope / Trigger
+
+Catalog or Search restarts after losing its heartbeat lease while the longer
+absolute deadline is still in the future. Applies to `backupasset.LeaseService`
+and the real Catalog/Search indexers, not a general lease-policy migration.
+
+### 2. Signatures
+
+`LeaseService.AcquireTx(ctx, tx, AcquireLeaseRequest)` operates on
+`recovery_point_leases`; index holders are `catalog_build` and `search_index`.
+The active owner slot is scoped by recovery point, holder type and owner ID.
+
+### 3. Contracts
+
+- After lifecycle admission and deadline validation, an index acquisition may
+  expire only its exact active owner slot when `lease_expires_at <= now` or
+  `absolute_deadline <= now`. Expiry and fresh acquisition share one transaction.
+- New lease identity, attempt and fence must not reuse the abandoned attempt.
+  Preserve the partial unique active-owner index and exclusive live ownership.
+- Old fences cannot renew, mutate or release a replacement attempt. Failed
+  acquisition or caller rollback must not leave a partly reclaimed slot.
+- Preserve explicit publication deadline validation, all non-index holder
+  takeover rules, and the global absolute-deadline sweeper. Do not shorten the
+  configured absolute deadline to disguise missing heartbeat recovery.
+- Abandoned-generation reconciliation must query/lock actual matching lease
+  rows for existence checks. PostgreSQL rejects `COUNT(*) ... FOR UPDATE`;
+  SQLite-only tests cannot establish this restart-path compatibility.
+
+### 4. Validation / Error Matrix
+
+| State | Required outcome |
+| --- | --- |
+| Exact index slot, heartbeat expired, absolute deadline future | Fresh acquisition succeeds; old slot expired |
+| Exact slot with both deadlines live | `ErrLeaseHeld`; original owner unchanged |
+| Different point, holder or owner | Existing slot untouched |
+| Admission/deadline rejection or transaction rollback | No committed reclamation |
+| Non-index holder | Existing acquire/takeover semantics preserved |
+
+### 5. Good / Base / Bad Cases
+
+Good: restarted indexer publishes a new valid generation after heartbeat expiry.
+Base: no old slot uses ordinary acquisition. Bad: globally expire every holder
+at heartbeat expiry or wait seven days for an abandoned indexing owner slot.
+
+### 6. Tests Required
+
+Cover both index holders, exact expiry boundaries, live refusal, owner isolation,
+stale fences, transaction rollback and concurrency on SQLite/PostgreSQL. Exercise
+real Catalog/Search restarted builds and generation activation, not only SQL.
+
+### 7. Wrong vs Correct
+
+Wrong: repair production lease rows by hand or bypass fence checks on rebuild.
+Correct: reclaim the exact expired index slot through normal transactional
+acquisition and verify the old attempt remains unable to publish.
 
 ## Scenario: Backup Asset Search Projection And User Overlays
 

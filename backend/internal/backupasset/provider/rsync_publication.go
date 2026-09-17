@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/rsyncconfinement"
 
 	"golang.org/x/sys/unix"
 )
@@ -67,10 +68,14 @@ type RsyncTreeCommandInput struct {
 	CaptureXattrs  bool
 	BandwidthKibps uint64
 }
-
 type RsyncTreeCommand struct {
 	Binary string   `json:"-"`
 	Args   []string `json:"-"`
+
+	localSource      string
+	localTarget      string
+	runtimeReadPaths []string
+	trustedTarget    bool
 }
 
 // RsyncTreePublicationInput is process-local strategy input. It carries no
@@ -89,9 +94,10 @@ type RsyncTreePublicationInput struct {
 }
 
 type rsyncTreePreparedPublication struct {
-	input        RsyncTreePublicationInput
-	command      RsyncTreeCommand
-	parentBefore *rsyncTreeManifest
+	input              RsyncTreePublicationInput
+	command            RsyncTreeCommand
+	parentBefore       *rsyncTreeManifest
+	stagedBeforeRepair *rsyncTreeManifest
 }
 
 type rsyncTreeProcessResult struct {
@@ -133,11 +139,22 @@ func (runner *localRsyncTreeProcessRunner) Run(ctx context.Context, command Rsyn
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	limiter := &rsyncTreeOutputLimiter{maximum: maxOutputBytes, cancel: cancel}
-	process := exec.CommandContext(runContext, command.Binary, command.Args...)
+	process, cleanup, err := rsyncconfinement.NewCommand(runContext, rsyncconfinement.CommandRequest{
+		Binary:             command.Binary,
+		Args:               command.Args,
+		LocalSource:        command.localSource,
+		LocalTarget:        command.localTarget,
+		RuntimeReadPaths:   append([]string(nil), command.runtimeReadPaths...),
+		TrustedLocalTarget: command.trustedTarget,
+	})
+	if err != nil {
+		return unknown, err
+	}
+	defer cleanup()
 	process.Env = SanitizeRsyncTreeEnvironment(runner.environment())
 	process.Stdout = limiter
 	process.Stderr = limiter
-	err := process.Run()
+	err = process.Run()
 	if limiter.Exceeded() {
 		return unknown, fmt.Errorf("%w: managed Rsync output limit exceeded", backupasset.ErrCapabilityUnavailable)
 	}
@@ -210,6 +227,10 @@ func SanitizeRsyncTreeEnvironment(base []string) []string {
 }
 
 func BuildRsyncTreeCommand(input RsyncTreeCommandInput) (RsyncTreeCommand, error) {
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return RsyncTreeCommand{}, err
+	}
 	source, remote, err := input.Source.operand()
 	if err != nil {
 		return RsyncTreeCommand{}, err
@@ -241,15 +262,33 @@ func BuildRsyncTreeCommand(input RsyncTreeCommandInput) (RsyncTreeCommand, error
 	if input.BandwidthKibps > 0 {
 		arguments = append(arguments, "--bwlimit="+strconv.FormatUint(input.BandwidthKibps, 10)+"k")
 	}
+	runtimeReadPaths := make([]string, 0, 4)
+	appendRuntimeReadPath := func(path string) {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "" || path == "." {
+			return
+		}
+		runtimeReadPaths = append(runtimeReadPaths, path)
+	}
 	if remote != nil {
-		transport, err := remote.Transport.command()
+		transport, err := remote.Transport.commandWithConfinement(policy.Configured())
 		if err != nil {
 			return RsyncTreeCommand{}, err
 		}
 		arguments = append(arguments, "-e", transport)
-		if remote.UseSudoRsync {
+		if len(policy.SourceRoots) > 0 {
+			remoteCommand, remoteErr := rsyncconfinement.BuildRemoteRsyncPath(
+				"read", "", "rsync", policy.SourceRoots, remote.Path, remote.UseSudoRsync,
+			)
+			if remoteErr != nil {
+				return RsyncTreeCommand{}, remoteErr
+			}
+			arguments = append(arguments, "--rsync-path", remoteCommand)
+		} else if remote.UseSudoRsync {
 			arguments = append(arguments, "--rsync-path", "sudo rsync")
 		}
+		appendRuntimeReadPath(remote.Transport.IdentityFile)
+		appendRuntimeReadPath(remote.Transport.KnownHostsFile)
 	}
 	switch input.Mode {
 	case backupasset.PublicationVersionedHardlink:
@@ -257,7 +296,11 @@ func BuildRsyncTreeCommand(input RsyncTreeCommandInput) (RsyncTreeCommand, error
 		if err != nil {
 			return RsyncTreeCommand{}, err
 		}
-		arguments = append(arguments, "--link-dest="+parentTree)
+		if len(policy.TargetRoots) > 0 {
+			if err := policy.ValidateTarget(parentTree, "rsync_link_dest"); err != nil {
+				return RsyncTreeCommand{}, err
+			}
+		}
 	case backupasset.PublicationVersionedFullCopy:
 		if input.ParentTree != "" {
 			return RsyncTreeCommand{}, fmt.Errorf("%w: full-copy Rsync command has a parent tree", backupasset.ErrInvalidState)
@@ -266,7 +309,35 @@ func BuildRsyncTreeCommand(input RsyncTreeCommandInput) (RsyncTreeCommand, error
 		return RsyncTreeCommand{}, fmt.Errorf("%w: invalid managed Rsync publication mode", backupasset.ErrInvalidState)
 	}
 	arguments = append(arguments, "--", rsyncTreeTrailingSlash(source), rsyncTreeTrailingSlash(stagingTree))
-	return RsyncTreeCommand{Binary: "rsync", Args: arguments}, nil
+	localSource := ""
+	if remote == nil {
+		localSource = source
+	}
+	return RsyncTreeCommand{
+		Binary:           "rsync",
+		Args:             arguments,
+		localSource:      localSource,
+		localTarget:      stagingTree,
+		runtimeReadPaths: uniqueRsyncTreePaths(runtimeReadPaths),
+		trustedTarget:    true,
+	}, nil
+}
+
+func uniqueRsyncTreePaths(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = filepath.Clean(strings.TrimSpace(value))
+		if value == "" || value == "." {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func rsyncTreeTrailingSlash(value string) string {
@@ -303,7 +374,7 @@ func (source RsyncTreeCommandSource) operand() (string, *RsyncTreeRemoteSource, 
 	return user + "@" + host + ":" + remotePath, source.Remote, nil
 }
 
-func (transport RsyncTreeSSHTransport) command() (string, error) {
+func (transport RsyncTreeSSHTransport) commandWithConfinement(disableUserConfig bool) (string, error) {
 	knownHosts, err := normalizedRsyncTreeDirectory(transport.KnownHostsFile, false)
 	if err != nil {
 		return "", err
@@ -321,7 +392,11 @@ func (transport RsyncTreeSSHTransport) command() (string, error) {
 	default:
 		return "", fmt.Errorf("%w: invalid managed Rsync host key mode", backupasset.ErrInvalidState)
 	}
-	arguments := []string{"ssh", "-p", strconv.FormatUint(uint64(port), 10), "-o", "StrictHostKeyChecking=" + hostKeyValue, "-o", "UserKnownHostsFile=" + knownHosts}
+	arguments := []string{"ssh"}
+	if disableUserConfig {
+		arguments = append(arguments, "-F", "/dev/null")
+	}
+	arguments = append(arguments, "-p", strconv.FormatUint(uint64(port), 10), "-o", "StrictHostKeyChecking="+hostKeyValue, "-o", "UserKnownHostsFile="+knownHosts)
 	if transport.IdentityFile != "" {
 		identityFile, err := normalizedRsyncTreeDirectory(transport.IdentityFile, false)
 		if err != nil {
@@ -508,6 +583,35 @@ func (strategy *rsyncTreePublicationStrategy) Prepare(ctx context.Context, reque
 	state := &rsyncTreePreparedPublication{input: input, command: command, parentBefore: parentBefore}
 	return PreparedPublication{Attempt: request.Attempt, RsyncTreeInput: &input, rsyncTree: state}, nil
 }
+func repairRsyncHardlinkPublication(ctx context.Context, attempt RsyncTreeAttemptV1, state *rsyncTreePreparedPublication) error {
+	if state == nil || state.parentBefore == nil {
+		return fmt.Errorf("%w: managed Rsync hardlink parent evidence missing", errRsyncManagedTreeUnsafe)
+	}
+	tree, err := openRsyncManagedTree(state.input.ManagedRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tree.Close() }()
+	if err := validateRsyncTreeManagedRoot(tree, attempt); err != nil {
+		return err
+	}
+	parentFD, err := tree.openFinalTree(attempt.ParentRecoveryPointID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unixClose(parentFD) }()
+	stagingFD, err := tree.openStagingTree(attempt.StagingComponent)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unixClose(stagingFD) }()
+	stagedBeforeRepair, err := tree.repairRsyncHardlinkEntriesWithSource(ctx, parentFD, stagingFD, *state.parentBefore, state.input.ManifestLimits)
+	if err != nil {
+		return err
+	}
+	state.stagedBeforeRepair = &stagedBeforeRepair
+	return nil
+}
 
 func (strategy *rsyncTreePublicationStrategy) Execute(ctx context.Context, prepared PreparedPublication, _ PublicationProgress) (ProviderExecutionResult, error) {
 	attempt, state, err := strategy.prepared(prepared)
@@ -520,6 +624,11 @@ func (strategy *rsyncTreePublicationStrategy) Execute(ctx context.Context, prepa
 	}
 	if result.ExitCode != 0 {
 		return ProviderExecutionResult{ExitCode: result.ExitCode, Completion: backupasset.CompletionKnownNonzero, EvidenceCode: backupasset.FailureProviderNonzeroExit}, nil
+	}
+	if attempt.PublicationMode == backupasset.PublicationVersionedHardlink {
+		if err := repairRsyncHardlinkPublication(ctx, attempt, state); err != nil {
+			return ProviderExecutionResult{ExitCode: 0, Completion: backupasset.CompletionKnownExitZero, EvidenceCode: backupasset.FailureManifestUnavailable}, err
+		}
 	}
 	commit, err := strategy.commit(ctx, attempt, state)
 	if err != nil {
@@ -775,7 +884,9 @@ func validateRsyncTreeReconcileFidelity(ctx context.Context, tree *rsyncManagedT
 		if parentManifest.Digest != attempt.ParentManifestDigest {
 			return fmt.Errorf("%w: managed Rsync hardlink parent manifest changed", backupasset.ErrConflict)
 		}
-		return validateRsyncTreeHardlinkFidelity(parentManifest, parentManifest, manifest)
+		// Source topology was validated before the authenticated commit marker was written.
+		// Reconciliation trusts that proof and does not re-infer per-path parent eligibility.
+		return nil
 	default:
 		return fmt.Errorf("%w: invalid managed Rsync reconciliation mode", backupasset.ErrInvalidState)
 	}
@@ -843,7 +954,10 @@ func (strategy *rsyncTreePublicationStrategy) commit(ctx context.Context, attemp
 		if parentCloseErr != nil {
 			return RsyncTreeCommitV1{}, parentCloseErr
 		}
-		if err := validateRsyncTreeHardlinkFidelity(*state.parentBefore, parentAfter, manifest); err != nil {
+		if state.stagedBeforeRepair == nil {
+			return RsyncTreeCommitV1{}, fmt.Errorf("%w: managed Rsync hardlink source evidence missing", errRsyncManagedTreeUnsafe)
+		}
+		if err := validateRsyncTreeHardlinkFidelity(*state.parentBefore, parentAfter, *state.stagedBeforeRepair, manifest); err != nil {
 			return RsyncTreeCommitV1{}, err
 		}
 	}

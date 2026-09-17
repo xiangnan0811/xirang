@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"xirang/backend/internal/logger"
-	"xirang/backend/internal/model"
-
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"xirang/backend/internal/logger"
+	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 )
 
 const (
@@ -29,6 +30,7 @@ type Claims struct {
 	Purpose      string       `json:"purpose,omitempty"`
 	StepUpAction StepUpAction `json:"step_up_action,omitempty"`
 	SessionID    string       `json:"sid,omitempty"`
+	TOTPBinding  string       `json:"totp_binding,omitempty"`
 	TokenVersion uint         `json:"ver"`
 	jwt.RegisteredClaims
 }
@@ -74,27 +76,60 @@ func (m *JWTManager) loadRevokedFromDB() {
 }
 
 // Generate2FAPendingToken 生成用于 2FA 验证步骤的短期令牌（5 分钟有效）。
+// When a database is configured, the JTI is durably registered before the
+// token is returned. Completion must consume that row in the same transaction
+// as any recovery-code mutation.
 func (m *JWTManager) Generate2FAPendingToken(user model.User) (string, error) {
-	now := time.Now()
+	bindingSecret, err := secure.DecryptIfNeeded(user.TOTPSecret)
+	if err != nil {
+		return "", fmt.Errorf("解密 2FA 绑定密钥失败: %w", err)
+	}
+	now := time.Now().UTC()
 	tokenID, err := generateTokenID()
 	if err != nil {
 		return "", err
 	}
+	expiresAt := now.Add(5 * time.Minute)
 	claims := Claims{
 		UserID:       user.ID,
 		Username:     user.Username,
 		Role:         user.Role,
 		Purpose:      Purpose2FAPending,
+		TOTPBinding:  TOTPBindingDigest(bindingSecret),
 		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        tokenID,
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			Subject:   fmt.Sprintf("%d", user.ID),
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(m.secret)
+	signed, err := token.SignedString(m.secret)
+	if err != nil {
+		return "", err
+	}
+	if m.db != nil {
+		if err := m.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.PendingAuthToken{
+			JTI:          tokenID,
+			UserID:       user.ID,
+			TokenVersion: user.TokenVersion,
+			TOTPBinding:  claims.TOTPBinding,
+			ExpiresAt:    expiresAt,
+			CreatedAt:    now,
+		}).Error; err != nil {
+			return "", fmt.Errorf("持久化 2FA 登录令牌失败: %w", err)
+		}
+	}
+	return signed, nil
+}
+
+// TOTPBindingDigest returns a non-reversible binding for the active/pending
+// TOTP secret. It is embedded in pending claims and stored with the JTI so a
+// secret replacement cannot reuse an older challenge.
+func TOTPBindingDigest(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
 }
 
 func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction, sessionIDs ...string) (string, time.Time, error) {
@@ -224,6 +259,20 @@ func (m *JWTManager) revokeKey(key string, userID uint, expireAt time.Time) erro
 // IsSessionRevoked checks a non-bearer login-session JTI against both the
 // process cache and durable revocation rows. Invalid identifiers fail closed.
 func (m *JWTManager) IsSessionRevoked(jti string) (bool, error) {
+	return m.IsSessionRevokedContext(context.Background(), jti)
+}
+
+// IsSessionRevokedContext is the context-aware form used by ordinary
+// authentication and long-lived connections. A bounded context lets callers
+// fail closed instead of leaving a terminal validation goroutine blocked on a
+// stalled database.
+func (m *JWTManager) IsSessionRevokedContext(ctx context.Context, jti string) (bool, error) {
+	if m == nil {
+		return true, fmt.Errorf("session revocation manager unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !lowerHexID(jti) {
 		return true, fmt.Errorf("invalid session jti")
 	}
@@ -240,10 +289,11 @@ func (m *JWTManager) IsSessionRevoked(jti string) (bool, error) {
 		return true, nil
 	}
 	if m.db == nil {
-		return false, nil
+		return true, fmt.Errorf("session revocation store unavailable")
 	}
 	var row model.TokenRevocation
-	result := m.db.Select("token_hash", "expires_at").Where("token_hash = ? AND expires_at > ?", key, now).Limit(1).Find(&row)
+	result := m.db.WithContext(ctx).Select("token_hash", "expires_at").
+		Where("token_hash = ? AND expires_at > ?", key, now).Limit(1).Find(&row)
 	if result.Error != nil {
 		return true, fmt.Errorf("query session revocation: %w", result.Error)
 	}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -55,6 +55,7 @@ export function BatchCommandDialog({
   const [error, setError] = useState("");
   const [reviewing, setReviewing] = useState(false);
   const [acknowledgement, setAcknowledgement] = useState("");
+  const submissionRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const withStepUp = useStepUpAction(
     STEP_UP_ACTIONS.batchCommandCreate,
     { persist: false, reuseCached: false },
@@ -63,6 +64,7 @@ export function BatchCommandDialog({
 
   useEffect(() => {
     if (open) {
+      submissionRef.current = null;
       setSelectedNodeIds(defaultNodeIds?.length ? defaultNodeIds : []);
       setCommand("");
       setName("");
@@ -129,6 +131,11 @@ export function BatchCommandDialog({
     setError("");
     try {
       const nodeIds = [...selectedNodeIds];
+      const fingerprint = JSON.stringify([nodeIds, command.trim(), name.trim(), retain]);
+      if (submissionRef.current?.fingerprint !== fingerprint) {
+        submissionRef.current = { fingerprint, key: crypto.randomUUID() };
+      }
+      const idempotencyKey = submissionRef.current.key;
       const result = await withStepUp(async (proof) => {
         await apiClient.requestBatchCommandCredentialGrant(token, {
           nodeIds,
@@ -141,7 +148,8 @@ export function BatchCommandDialog({
           command.trim(),
           name.trim() || undefined,
           retain,
-          proof
+          proof,
+          idempotencyKey
         );
       });
       onOpenChange(false);

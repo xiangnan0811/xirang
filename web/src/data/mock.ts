@@ -423,6 +423,7 @@ export const mockTasks: TaskRecord[] = Array.from({ length: 18 }, (_, idx) => {
               : 0,
     startedAt: formatDate(storySuccess ? 24 : storyFailure ? 9 : 2 + idx * 3),
     updatedAt: formatDate(storySuccess ? 18 : storyFailure ? 5 : 1 + idx * 3),
+    revision: `${id}000000000000000`,
     errorCode: storyFailure ? "XR-AUTH-011" : status === "failed" ? `XR-EXEC-${900 + idx}` : undefined,
     lastError: storyFailure ? "SSH 认证失败，演示私钥已标记为过期" : undefined,
     verifyStatus: storySuccess ? "passed" : storyFailure ? "failed" : undefined,

@@ -100,6 +100,47 @@ func (RecoveryPointLifecycleTombstone) TableName() string {
 	return "recovery_point_lifecycle_tombstones"
 }
 
+// RecoveryPointLifecycleEffectClaim durably fences one provider-delete
+// execution. Lease fields are historical snapshots and intentionally do not
+// carry foreign-key associations: an uncertain claim may outlive that lease
+// while retaining the evidence needed to reject stale owners.
+type RecoveryPointLifecycleEffectClaim struct {
+	ID                   string    `gorm:"primaryKey;size:32" json:"id"`
+	AttemptID            string    `gorm:"size:32;not null;uniqueIndex" json:"attempt_id"`
+	ExecutorID           string    `gorm:"size:32;not null" json:"executor_id"`
+	ExecutionID          string    `gorm:"size:32;not null" json:"execution_id"`
+	TransitionRevision   int64     `gorm:"not null" json:"transition_revision"`
+	LeaseID              string    `gorm:"size:32;not null" json:"-"`
+	LeaseAttemptID       string    `gorm:"size:32;not null" json:"-"`
+	LeaseFenceTokenHash  string    `gorm:"size:64;not null" json:"-"`
+	TargetIdentityDigest string    `gorm:"size:64;not null" json:"-"`
+	State                string    `gorm:"size:32;not null" json:"state"`
+	DeadlineAt           time.Time `gorm:"not null" json:"deadline_at"`
+	HeartbeatAt          time.Time `gorm:"not null" json:"heartbeat_at"`
+	CreatedAt            time.Time `gorm:"not null" json:"created_at"`
+	UpdatedAt            time.Time `gorm:"not null" json:"updated_at"`
+}
+
+func (RecoveryPointLifecycleEffectClaim) TableName() string {
+	return "recovery_point_lifecycle_effect_claims"
+}
+
+// RecoveryPointLifecycleAuditSlot is immutable proof that one settled
+// lifecycle status has been emitted. There is deliberately no audit_event_id:
+// AuditWriter.WriteTx returns only an error and event details may be retained
+// separately from this durable idempotency fact.
+type RecoveryPointLifecycleAuditSlot struct {
+	ID        string    `gorm:"primaryKey;size:32" json:"id"`
+	AttemptID string    `gorm:"size:32;not null" json:"attempt_id"`
+	Status    string    `gorm:"size:32;not null" json:"status"`
+	EmittedAt time.Time `gorm:"not null" json:"emitted_at"`
+	CreatedAt time.Time `gorm:"not null" json:"created_at"`
+}
+
+func (RecoveryPointLifecycleAuditSlot) TableName() string {
+	return "recovery_point_lifecycle_audit_slots"
+}
+
 type BackupRepositoryImportCandidate struct {
 	ID                       string     `gorm:"primaryKey;size:32" json:"id"`
 	RepositoryID             string     `gorm:"size:32;not null" json:"repository_id"`

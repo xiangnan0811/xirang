@@ -44,6 +44,7 @@
 - `DOCKERHUB_TOKEN`
 - 官方 Docker Hub 仓库固定为 `linnea7171/xirang`，发布与描述同步 workflow 不读取命名空间变量。
 
+本项目不使用 Codecov，也不要求配置其账户、令牌或 OIDC 上传权限。CI 继续强制执行后端覆盖率及备份资产覆盖率阈值，前端必须生成非空 LCOV 报告；测试、竞态检查、安全扫描和正式发布的固定 SHA / 主干 CI 校验均保持阻断。外部覆盖率服务不再是发布前置条件。
 ### Deploy Environment 级
 
 - `DEPLOY_HOST`
@@ -58,18 +59,16 @@
 2. 创建 PR 后，负责人必须监控 required CI jobs；失败时在同一工作分支修复、推送并重新监控。required checks 失败、pending 或缺失时不得合并。
 3. PR 合并到 `main` 后，继续监控 `Release Please` workflow，确认它成功并按配置和提交语义创建或更新 Release PR。若 Release Please 只更新现有 Release PR 或未产生正式 release，需在交付记录中说明；不要把 post-merge 状态留空。
 4. `release-please.yml` 使用 `RELEASE_PLEASE_TOKEN` 创建或更新 Release PR，确保 release 分支会触发 CI。Release Please action 使用 `googleapis/release-please-action`，不要退回已归档的 `google-github-actions/release-please-action`。
-5. 审阅 Release PR，监控其 required checks，通过后合并。
+5. 审阅 Release PR：将本次已交付的 `Unreleased` 条目归入目标版本，并把数据库迁移、旧进程排空、备份保全及降级限制写入该版本说明，不能只保留自动生成的 PR 标题。监控其 required checks，通过后合并。
 6. GitHub 创建对应 `vX.Y.Z` Release。
 7. `publish-images.yml` 监听 `release.published`，向 Docker Hub 官方仓库 `docker.io/linnea7171/xirang` 发布：
    - `vX.Y.Z`
    - `X.Y.Z`
    - `latest`
 
-   发布步骤为 **按平台原生构建 digest → Trivy 扫描每个平台 digest →
-   合并并推送正式 multi-arch manifest/tag → attest**。扫描通过前不会创建
-   正式 `vX.Y.Z` / `X.Y.Z` / `latest` 标签；当扫描到 HIGH/CRITICAL 漏洞时，
-   workflow 会在 manifest/tag 发布前失败，不会污染 Docker Hub 的 `latest`
-   标签。Trivy 当前固定到 v0.36.0 的解引用 commit
+   发布步骤为 **一次解析并冻结 source SHA → 等待同仓库 main push 的同 SHA 完整 CI 成功 → 按平台原生构建 digest → Trivy 扫描每个平台 digest → 再次核验 CI → 提升正式 multi-arch manifest/tag → attest**。
+   不接受其他 SHA、fork、PR 或其他工作流的绿色结果。缺失/未完成 CI 最多等待 25 分钟；失败、取消或等待超时均拒绝发布，较新的失败运行不能被旧成功运行掩盖。所有架构只 checkout 冻结的 SHA；构建期间移动输入分支不会改变来源。验证脚本来自发布工作流自身的不可变提交，手动重建历史源码也不能替换验证规则。
+   正式标签仅指向扫描通过的 digest；发布摘要记录 source SHA、CI run、各架构 digest 和扫描结论。当扫描到 HIGH/CRITICAL 漏洞时，workflow 在 manifest/tag 发布前失败，不会更新 `latest`。Trivy 当前固定到 v0.36.0 的解引用 commit
    `ed142fd0673e97e23eac54620cfb913e5ce36c25`，该 ref 已在 2026-05-06
    通过 `git ls-remote` 核验。扫描平台 digest 时 workflow 会显式传入
    `TRIVY_PLATFORM`，避免 arm64 digest 被 Trivy 默认按 amd64 解析。
@@ -82,7 +81,58 @@
 8. 监控 `Publish Docker Images` 直到成功。若 Trivy 因基础镜像或系统包 HIGH/CRITICAL CVE 阻断发布，应升级运行时基础镜像或包来源并重新走 PR/release 流程；不要降低 severity、添加 ignore 或绕过扫描。只有在符合“手动重发镜像”条件时才使用 `workflow_dispatch`。
 9. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
 
+### 任务身份迁移的升级检查
+
+包含 `000082_task_run_cron_provenance` 的版本发布时，变更说明必须提示以下升级边界：
+
+- 升级前备份数据库及加密密钥，停止并排空旧 Core；不得混跑旧调度器或执行进程。
+- Legacy Rsync/Rclone 当前镜像不再执行破坏性的按年龄清理；受管恢复点及 Restic 保留机制不变。
+- Legacy Rsync 恢复必须匹配一次成功的普通备份及其来源、节点、策略执行输入。升级后或这些输入变化后，先完成新备份，否则恢复返回 `new-backup-required`；历史备份文件不会因此被删除。
+- 新迁移的定时触发身份或备份指纹一旦写入，降级会拒绝抹除这些事实；不要绕过降级保护。
+- 可选 Worker 的工具链指纹包含精确系统包版本。升级时从同一发布源码重建/更新 Core 与 Worker，保持指纹一致。
+
+完整运行语义见 [后端说明](../../backend/README_backend.md#legacy-backup-safety-and-task-lifecycle)。
+
+### Legacy 写入证据修复的升级检查
+
+发布包含目标归属、`no_start` 与人工 reconcile 修复的版本时，还需在版本说明中提示：
+
+- 本批修复不新增数据库迁移；仍须排空旧 Core，避免旧进程继续使用旧的写入判定规则。
+- 迁移版本相同不代表可安全回退执行器。降级前应保全数据库及备份副本，并核对旧版本对写入证据、恢复准入和目标归属的处理；不得用降级解除未知写入 hold。
+- 对遗留 Rclone 的 `writing` / `unknown` 记录，租约到期或本地连接关闭不等于远端已停止。管理员应先暂停任务并实际确认远端停止，再对指定执行记录调用 reconcile；协调只会标记 `dirty` 并记录审计，不会自动重试、恢复调度或恢复资格。
+- 恢复资格需要显式恢复调度后完成一次新备份；不要通过删除未知记录或修改执行器配置绕过历史写入约束。
+- 配置导入的补偿回滚遇到并发修改或旧目标已被占用时会拒绝覆盖。应暂停受影响任务、核对当前配置及目标归属，不要强行恢复旧目标。
+
+- 目标版本的 Release Notes 还须明确写出排空旧 Core、数据库与备份保全、配对迁移 `000085` 不变、`unknown` hold 处理和降级限制；不能只保留自动生成摘要。
+
+操作步骤见 [备份与恢复手册](../admin/backup-recovery.md)。
+
+### 任务覆盖与文件系统约束的升级检查
+
+包含 `000088_task_cron_override` 的发布，须提示历史 schedule provenance 回填规则与受保护降级限制；Task PUT 客户端必须用当前 `revision` 提交 `expected_revision`，并处理 400/409，而不是盲目重试覆盖。
+
+配置 Rsync allowlist 时，核对 Linux Landlock ABI 3、匹配的本地/远端 helper 及私有 user/mount namespace 能力。默认容器策略可能拒绝 namespace；此时执行应失败关闭，不得自动移除 allowlist 或授予 privileged 权限。受管 hardlink 备份须预留完整 staging 树空间与传输容量。Restic repository version 只是格式选择，不提供删除保护保证。
+
+### v0.55.14 节点日志修复交付
+
+本版不新增数据库迁移，配对迁移仍为 `000088_task_cron_override`。升级前保全数据库备份及日志/游标，停止旧 Core 后再启动新镜像，避免旧采集进程继续占用连接。回退镜像会重新引入采集卡死缺陷，应先关闭受影响的采集源；不要通过删除游标或日志恢复。
+
+发布不会自动开启已禁用的节点日志。生产恢复须单独核对版本、镜像 digest 和现有配置，经授权先恢复一个低风险节点，观察至少两个采集周期，再分批恢复。GitHub Release 和 Docker Hub 发布成功只代表镜像交付，不代表生产已完成验收。
+
+### v0.55.15 节点日志近期恢复策略的升级检查
+
+包含近期恢复修复的版本不新增数据库迁移；配对迁移仍为 `000088_task_cron_override`。首次采集、长期停用或过期游标从最近 1 小时内的最新 200 条开始，短暂中断按最多 200 条分批继续。超过窗口的历史不会自动补采，发布说明必须明确这项有意的恢复边界。
+
+升级前保全数据库、加密密钥及日志/游标，停止旧 Core 后再启动新镜像。无需删除游标，也不要清理远端 journal。保持受影响采集源关闭，升级后先恢复一个节点验证至少两个周期；回退到旧镜像前先关闭采集，避免重新触发无界追赶或脚本失败。镜像发布成功不等于 NAS 已完成验证。
+
 ## PR 后监控要求
+
+Alpine 软件源可能不再提供 Dockerfile 锁定的旧包版本。遇到 `apk` 精确版本安装
+失败时，应在锁定的基础镜像中复现，并分别核对目标 Alpine 分支的 amd64/arm64
+软件源，再更新必要的版本锁定。`apk` 错误中列出的镜像已安装版本不一定是软件源
+当前可安装版本。保留构建、完整 Compose smoke 和漏洞扫描门禁；不要仅凭另一个
+架构成功就判定通过。维护性锁定更新随 `chore` 合并时仍须检查 Release Please
+结果，不手动提升版本或重发现有镜像。
 
 - PR 创建后，负责人必须监控 GitHub required checks，包括 `PR Title`、`Backend Test & Build`、`Frontend Test & Build`、`Doc Freshness Check`，以及当前 branch protection 要求的其他 jobs。
 - CI 失败时，负责人应修复失败原因、推送到同一工作分支并重新监控；只有确认是真实外部阻塞时，才可把阻塞原因和下一步记录到 PR 或任务交付说明。

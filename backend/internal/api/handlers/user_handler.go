@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"strings"
 
 	"xirang/backend/internal/auth"
@@ -135,6 +136,10 @@ func (h *UserHandler) Update(c *gin.Context) {
 
 	user, err := h.authService.UpdateUser(id, req.Role, req.Password)
 	if err != nil {
+		if errors.Is(err, auth.ErrLastAdmin) {
+			respondConflict(c, err.Error())
+			return
+		}
 		respondBadRequest(c, err.Error())
 		return
 	}
@@ -167,6 +172,10 @@ func (h *UserHandler) Delete(c *gin.Context) {
 
 	actorID := c.GetUint(middleware.CtxUserID)
 	if err := h.authService.DeleteUser(id, actorID); err != nil {
+		if errors.Is(err, auth.ErrLastAdmin) {
+			respondConflict(c, err.Error())
+			return
+		}
 		respondBadRequest(c, err.Error())
 		return
 	}

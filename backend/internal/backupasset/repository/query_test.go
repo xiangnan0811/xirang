@@ -18,6 +18,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/catalog"
+	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/fileaccess"
@@ -269,6 +270,177 @@ func TestManagedRsyncCatalogBuildCompletesWithFingerprintNone(t *testing.T) {
 	if entry.Fingerprint != "" || entry.FingerprintStrength != string(catalog.FingerprintNone) {
 		t.Fatalf("persisted generic entry=%+v, want empty fingerprint with none strength", entry)
 	}
+}
+func TestMutableRsyncCatalogBuildRefreshesRootSourceBeforeOpeningSession(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local Rsync catalog access is Linux-only")
+	}
+	now := time.Date(2026, 7, 13, 9, 0, 0, 0, time.UTC)
+	clock := now
+	db := newRepositoryTestDB(t)
+	root := t.TempDir()
+	payload := []byte("services:\n  app:\n    image: xirang:test\n")
+	if err := os.WriteFile(filepath.Join(root, "docker-compose.yml"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyring := backupasset.NewKeyring(db, func() time.Time { return clock })
+	if _, err := keyring.Ensure(context.Background(), backupasset.KeyDomainCursorSigning); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keyring.Ensure(context.Background(), backupasset.KeyDomainEntryIdentity); err != nil {
+		t.Fatal(err)
+	}
+	cursors := provider.NewCursorCodec(keyring, func() time.Time { return clock }, time.Hour)
+	limits, err := provider.NewMetadataOperationLimits(time.Minute, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := provider.NewRsyncAdapter(cursors, limits, 100, func() time.Time { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	prober := &transientRsyncProber{adapter: adapter}
+	registry := provider.NewRegistry()
+	if err := registry.Register(backupasset.ProviderRsync, provider.Registration{
+		Prober: prober, PointLister: adapter, EntryStatter: adapter,
+		SequentialReader: adapter, RangeReader: adapter, CatalogReader: adapter,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: db, Foundation: enabledFoundation(), Registry: registry, Keyring: keyring,
+		Now: func() time.Time { return clock }, Admission: &publicationAdmission{
+			mode: publication.AdmissionManaged, generation: 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskEntity := seedTask(t, db, "rsync", root, "")
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil || connected.MutablePoint == nil {
+		t.Fatalf("connect local Rsync repository: result=%+v err=%v", connected, err)
+	}
+	var before model.RecoveryPoint
+	if err := db.First(&before, "id = ?", connected.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	lease, err := backupasset.NewLeaseService(db, func() time.Time { return clock }, backupasset.LeaseConfig{
+		Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexer, err := catalog.NewIndexer(catalog.IndexerDependencies{
+		DB: db, Factory: service, Lease: lease, IdentityKeys: keyring,
+		Now: func() time.Time { return clock },
+		Config: catalog.IndexerConfig{
+			BatchSize: 100, BuildTimeout: time.Minute, MaxEntries: 100, HeartbeatInterval: time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := indexer.Build(context.Background(), catalog.BuildRequest{
+		RepositoryID: connected.Repository.ID, RecoveryPointID: connected.MutablePoint.ID,
+	})
+	if err != nil {
+		t.Fatalf("initial local Rsync catalog build: %v", err)
+	}
+	if first.State != string(catalog.GenerationComplete) || !first.IsActive {
+		t.Fatalf("initial catalog generation=%+v, want active complete", first)
+	}
+	beforeRoot, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	afterRoot, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeRoot.Mode() == afterRoot.Mode() {
+		t.Fatalf("root metadata did not change: before=%v after=%v", beforeRoot.Mode(), afterRoot.Mode())
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "docker-compose.yml")); err != nil || string(got) != string(payload) {
+		t.Fatalf("root file changed after metadata mutation: got=%q err=%v", got, err)
+	}
+	prober.fail.Store(true)
+	failed, err := indexer.Build(context.Background(), catalog.BuildRequest{
+		RepositoryID: connected.Repository.ID, RecoveryPointID: connected.MutablePoint.ID,
+	})
+	if err == nil || failed.ID == "" {
+		t.Fatalf("transient refresh failure generation=%+v err=%v", failed, err)
+	}
+	var failedStored model.CatalogGeneration
+	if err := db.Where("recovery_point_id = ?", connected.MutablePoint.ID).
+		Order("generation DESC").First(&failedStored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if failedStored.State != string(catalog.GenerationFailed) || failedStored.FinishedAt == nil {
+		t.Fatalf("transient refresh generation=%+v", failedStored)
+	}
+	config := backupasset.CatalogConfig{
+		Enabled: true, BatchSize: 100, BuildTimeout: time.Minute, ReconcileInterval: time.Minute,
+		MaxConcurrency: 1, MaxEntries: 100,
+		Lease: backupasset.LeaseConfig{Duration: 5 * time.Minute, Heartbeat: time.Second, AbsoluteDeadline: time.Hour},
+	}
+	retryAt := failedStored.FinishedAt.UTC().Add(catalog.RetryDelay(config, 1, connected.MutablePoint.ID, failedStored.ID) + time.Second)
+	clock = retryAt
+	candidates, err := indexer.ListCandidates(context.Background(), 20, retryAt, config)
+	if err != nil || len(candidates) != 1 || candidates[0].RecoveryPointID != connected.MutablePoint.ID {
+		t.Fatalf("transient refresh retry candidate=%+v err=%v", candidates, err)
+	}
+	prober.fail.Store(false)
+	second, err := indexer.Build(context.Background(), catalog.BuildRequest{
+		RepositoryID: connected.Repository.ID, RecoveryPointID: connected.MutablePoint.ID,
+	})
+	if err != nil {
+		t.Fatalf("catalog build after transient refresh failure: %v", err)
+	}
+	if second.State != string(catalog.GenerationComplete) || !second.IsActive || second.ID == first.ID {
+		t.Fatalf("recovered catalog generation=%+v, first=%+v, want new active complete generation", second, first)
+	}
+	var after model.RecoveryPoint
+	if err := db.First(&after, "id = ?", connected.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.SourceFingerprint == before.SourceFingerprint || after.ObservedAt == nil {
+		t.Fatalf("mutable point source did not refresh: before=%q after=%q observed_at=%v", before.SourceFingerprint, after.SourceFingerprint, after.ObservedAt)
+	}
+	var entry model.CatalogEntry
+	if err := db.Where("generation_id = ?", second.ID).First(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.OpenContentSource(context.Background(), content.SourceRequest{
+		Ref:                 backupasset.AssetRef{RecoveryPointID: after.ID, EntryID: entry.EntryID},
+		CatalogGenerationID: second.ID, ExpectedSource: after.SourceFingerprint,
+		ExpectedEntry: entry.Fingerprint, Mode: content.SourceModeSequential, MaxBytes: entry.Size,
+	})
+	if err != nil {
+		t.Fatalf("open recovered local Rsync content source: %v", err)
+	}
+	read, err := io.ReadAll(session.Reader())
+	closeErr := session.Close()
+	if err != nil || closeErr != nil || string(read) != string(payload) {
+		t.Fatalf("read recovered local Rsync content source: bytes=%q read_err=%v close_err=%v", read, err, closeErr)
+	}
+}
+
+type transientRsyncProber struct {
+	adapter *provider.RsyncAdapter
+	fail    atomic.Bool
+}
+
+func (prober *transientRsyncProber) Probe(ctx context.Context, binding provider.AccessBinding, limits provider.OperationLimits) (provider.RepositoryObservation, error) {
+	if prober.fail.Load() {
+		return provider.RepositoryObservation{}, &provider.CapabilityError{
+			Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityProviderUnavailable},
+		}
+	}
+	return prober.adapter.Probe(ctx, binding, limits)
 }
 
 type managedRsyncCatalogFixture struct {

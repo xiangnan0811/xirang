@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Structured aggregate queue warnings, safe error fields, and low-cardinality metrics"}
+{"file": ".trellis/tasks/08-23-node-logs-collector-stall/research/spec-contracts.md", "reason": "Focused routing to the large quality/database specs without truncated injection"}
+{"file": ".trellis/tasks/08-23-node-logs-collector-stall/research/root-cause.md", "reason": "Sanitized authoritative evidence separating the pre-existing collector defect from the migration incident"}
+{"file": ".trellis/tasks/08-23-node-logs-collector-stall/reconciliation.md", "reason": "Current disposition, remaining scope and superseded historical instructions"}
+{"file": ".trellis/tasks/08-23-node-logs-collector-stall/research/recent-resume-2026-09-16.md", "reason": "NAS follow-up evidence and approved bounded recovery instead of historical replay"}

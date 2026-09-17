@@ -2,6 +2,9 @@ package repository
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,6 +78,18 @@ func TestResolveLifecycleDeletePointReconstructsRsyncDeletionAccess(t *testing.T
 		t.Fatalf("rsync deletion snapshot=%+v native=%q locator=%+v", access, request.Point.Native, locator)
 	}
 	assertLifecycleDeleteRequestOmitsSecrets(t, request, markerKey)
+	if len(request.Snapshot.Access.IdentitySalt) != provider.IdentitySaltBytes ||
+		request.Snapshot.Access.TaskID != fixture.task.ID || request.Snapshot.Access.NodeID != fixture.task.NodeID ||
+		access.Command == nil || access.Command.Node.ID != fixture.task.NodeID ||
+		len(request.Snapshot.Access.EndpointFacts) == 0 {
+		t.Fatalf("rsync lifecycle identity authority=%+v access=%+v", request.Snapshot.Access, access)
+	}
+	if _, err := provider.DeletionTargetIdentityDigest(provider.DeletionTargetIdentityInput{
+		RecoveryPointID: point.ID, AttemptID: request.OperationID, Operation: backupasset.LifecycleRetentionExpire,
+		RepositoryIdentity: lifecycleRepositoryIdentity(fixture.repository), Request: request,
+	}); err != nil {
+		t.Fatalf("rsync lifecycle target identity: %v", err)
+	}
 }
 
 func TestResolveLifecycleDeletePointUsesRollbackLocatorForRetiredMutableHead(t *testing.T) {
@@ -188,6 +203,12 @@ func TestResolveLifecycleDeletePointReconstructsRclonePrefixDeletionAccess(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(request.Snapshot.Access.IdentitySalt) != provider.IdentitySaltBytes ||
+		request.Snapshot.Access.TaskID != fixture.task.ID || request.Snapshot.Access.NodeID != fixture.task.NodeID ||
+		len(request.Snapshot.Access.EndpointFacts) == 0 || len(request.Snapshot.Access.Config) == 0 ||
+		request.Snapshot.Access.Locator != locator.PortableAttemptRoot {
+		t.Fatalf("rclone prefix lifecycle identity authority=%+v", request.Snapshot.Access)
+	}
 	if access.Prefix != wantPrefix || access.Command == nil || access.Command.Node.ID != fixture.task.NodeID ||
 		access.MarkerDigest != point.SourceFingerprint || request.Point.Native != locator.PortableAttemptRoot ||
 		string(access.MarkerKey) != string(markerKey) || !reflect.DeepEqual(access.Attempt, wantAttempt) ||
@@ -259,6 +280,18 @@ func TestManagedRcloneNativeLocatorPersistsBoundedVersionEvidenceReference(t *te
 	access, ok := request.Snapshot.Access.AdapterData.(provider.RcloneNativeDeletionAccess)
 	if !ok || len(access.Versions) != 2 {
 		t.Fatalf("bounded evidence AdapterData=%T versions=%d, want 2 owned versions", request.Snapshot.Access.AdapterData, len(access.Versions))
+	}
+	if len(request.Snapshot.Access.IdentitySalt) != provider.IdentitySaltBytes ||
+		request.Snapshot.Access.TaskID != fixture.task.ID || request.Snapshot.Access.NodeID != fixture.task.NodeID ||
+		len(request.Snapshot.Access.EndpointFacts) == 0 || access.Command == nil ||
+		access.Command.Node.ID != fixture.task.NodeID {
+		t.Fatalf("native lifecycle identity authority=%+v access=%+v", request.Snapshot.Access, access)
+	}
+	if _, err := provider.DeletionTargetIdentityDigest(provider.DeletionTargetIdentityInput{
+		RecoveryPointID: point.ID, AttemptID: request.OperationID, Operation: backupasset.LifecycleRetentionExpire,
+		RepositoryIdentity: lifecycleRepositoryIdentity(fixture.repository), Request: request,
+	}); err != nil {
+		t.Fatalf("native lifecycle target identity: %v", err)
 	}
 }
 
@@ -869,6 +902,16 @@ func TestResolveLifecycleDeletePointReconstructsResticProductionLineage(t *testi
 		request.Snapshot.Access.TaskID != fixture.task.ID ||
 		request.Snapshot.Access.NodeID != fixture.node.ID {
 		t.Fatalf("Restic deletion request=%+v", request)
+	}
+	if len(request.Snapshot.Access.IdentitySalt) != provider.IdentitySaltBytes ||
+		len(request.Snapshot.Access.EndpointFacts) == 0 {
+		t.Fatalf("Restic lifecycle identity authority=%+v", request.Snapshot.Access)
+	}
+	if _, err := provider.DeletionTargetIdentityDigest(provider.DeletionTargetIdentityInput{
+		RecoveryPointID: point.ID, AttemptID: request.OperationID, Operation: backupasset.LifecycleRetentionExpire,
+		RepositoryIdentity: lifecycleRepositoryIdentity(fixture.repository), Request: request,
+	}); err != nil {
+		t.Fatalf("Restic lifecycle target identity: %v", err)
 	}
 }
 func TestResolveLifecycleDeletePointSharedResticProducerUsesDurableBindingOwnerProof(t *testing.T) {
@@ -1720,6 +1763,52 @@ func newCommittedRcloneLifecycleDeleteFixture(t *testing.T, mode backupasset.Tas
 	return fixture, newLifecycleDeleteService(t, fixture.service, fixture.now), point
 }
 
+// newCommittedRcloneLifecycleDeleteIdentityFixture uses the normal persisted
+// fixture but supplies provider-valid marker-key child identities for the
+// resolved prefix request; the broader publication fixture intentionally uses
+// placeholder child identities because its tests do not execute deletion.
+func newCommittedRcloneLifecycleDeleteIdentityFixture(t *testing.T) (*rclonePublicationFixture, *Service, model.RecoveryPoint) {
+	t.Helper()
+	fixture := newRclonePublicationFixture(t, backupasset.PublicationVersionedPrefix)
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := execution.Attempt().RcloneAttempt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := execution.(interface {
+		RclonePublicationInput() (provider.RclonePublicationInput, error)
+	}).RclonePublicationInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := validRcloneRepositoryCommit(attempt, input.PortableRequest.CostEvidenceDigest, fixture.now.Add(time.Minute))
+	markerKey, err := fixture.service.rcloneMarkerKey(context.Background(), fixture.repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attemptRoot := managedRclonePortableAttemptRoot(fixture.binding, attempt)
+	commit.Portable.ControlIdentityDigest = lifecycleDeleteKeyedPrivateLocatorDigest(markerKey, strings.TrimSuffix(attemptRoot, "/")+"/control")
+	commit.Portable.DataIdentityDigest = lifecycleDeleteKeyedPrivateLocatorDigest(markerKey, strings.TrimSuffix(attemptRoot, "/")+"/data")
+	if _, err := execution.RecordProviderCommit(context.Background(), provider.NewRcloneProviderCommit(commit)); err != nil {
+		t.Fatal(err)
+	}
+	var point model.RecoveryPoint
+	if err := fixture.db.First(&point, "id = ?", attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	return fixture, newLifecycleDeleteService(t, fixture.service, fixture.now), point
+}
+
+func lifecycleDeleteKeyedPrivateLocatorDigest(key []byte, locator string) string {
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte("xirang-rclone-private-locator-v1\n"))
+	_, _ = mac.Write([]byte(locator))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func newLifecycleDeleteService(t *testing.T, publication *PublicationService, now time.Time) *Service {
 	t.Helper()
 	service, err := NewService(Dependencies{
@@ -1755,4 +1844,724 @@ func assertLifecycleDeleteRequestOmitsSecrets(t *testing.T, request provider.Del
 	if strings.Contains(body, `"adapter_data"`) || strings.Contains(body, `"secret"`) || strings.Contains(body, `"marker_key"`) {
 		t.Fatalf("lifecycle delete request JSON exposed private binding fields: %s", body)
 	}
+}
+func TestResolveLifecycleDeletePointResticAuthorityVectors(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *gorm.DB, uint, model.SSHKey, model.SSHKey)
+	}{
+		{
+			name: "host",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"host": "changed-restic-host.example.invalid"})
+			},
+		},
+		{
+			name: "port",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"port": 2201})
+			},
+		},
+		{
+			name: "username",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"username": "changed-restic-user"})
+			},
+		},
+		{
+			name: "auth_type",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"auth_type": "password"})
+			},
+		},
+		{
+			name: "password",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"password": "FAKE_CHANGED_RESTIC_NODE_PASSWORD_FOR_TEST_ONLY"})
+			},
+		},
+		{
+			name: "private_key",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"private_key": "FAKE_CHANGED_RESTIC_NODE_PRIVATE_KEY_FOR_TEST_ONLY"})
+			},
+		},
+		{
+			name: "ssh_key_lineage",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, alternate model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"ssh_key_id": alternate.ID})
+			},
+		},
+		{
+			name: "base_path",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"base_path": "/changed/restic/base"})
+			},
+		},
+		{
+			name: "backup_dir",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"backup_dir": "changed-restic-backup-dir"})
+			},
+		},
+		{
+			name: "sudo",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"use_sudo": false})
+			},
+		},
+		{
+			name: "tags",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"tags": "prod,changed-restic-tag"})
+			},
+		},
+		{
+			name: "ssh_key_username",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"username": "changed-key-user"})
+			},
+		},
+		{
+			name: "ssh_key_type",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"key_type": "rsa"})
+			},
+		},
+		{
+			name: "ssh_key_private_key",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"private_key": "FAKE_CHANGED_RESTIC_SSH_PRIVATE_KEY_FOR_TEST_ONLY"})
+			},
+		},
+		{
+			name: "ssh_key_fingerprint",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"fingerprint": "SHA256:changed-restic-key"})
+			},
+		},
+		{
+			name: "ssh_key_disabled",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"disabled": true})
+			},
+		},
+		{
+			name: "ssh_key_expiry",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"expires_at": time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)})
+			},
+		},
+		{
+			name: "ssh_key_allowed_purposes",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"allowed_purposes": "retention,probe"})
+			},
+		},
+		{
+			name: "ssh_key_allowed_node_ids",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"allowed_node_ids": "999999"})
+			},
+		},
+		{
+			name: "ssh_key_allowed_node_tags",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"allowed_node_tags": "prod,changed-key-tag"})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture, service, point := newResticLifecycleDeleteFixture(t)
+			key, alternate := configureLifecycleDeleteRemoteAuthority(t, fixture.db, fixture.node.ID, fixture.now)
+			baseRequest := resolveResticLifecycleDeleteIdentityRequest(t, fixture, service, point)
+			baseInput := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, baseRequest)
+			test.mutate(t, fixture.db, fixture.node.ID, key, alternate)
+			mutatedRequest := resolveResticLifecycleDeleteIdentityRequest(t, fixture, service, point)
+			mutatedInput := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, mutatedRequest)
+			assertLifecycleDeleteAuthorityMismatchBeforeProvider(t, baseInput, mutatedInput, mutatedRequest)
+		})
+	}
+}
+
+func TestResolveLifecycleDeletePointRclonePrefixAuthorityVectors(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *gorm.DB, uint, model.SSHKey, model.SSHKey)
+	}{
+		{
+			name: "host",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"host": "changed-rclone-host.example.invalid"})
+			},
+		},
+		{
+			name: "port",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"port": 2202})
+			},
+		},
+		{
+			name: "username",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"username": "changed-rclone-user"})
+			},
+		},
+		{
+			name: "auth_type",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"auth_type": "password"})
+			},
+		},
+		{
+			name: "password",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"password": "FAKE_CHANGED_RCLONE_NODE_PASSWORD_FOR_TEST_ONLY"})
+			},
+		},
+		{
+			name: "private_key",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"private_key": "FAKE_CHANGED_RCLONE_NODE_PRIVATE_KEY_FOR_TEST_ONLY"})
+			},
+		},
+		{
+			name: "ssh_key_lineage",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, alternate model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"ssh_key_id": alternate.ID})
+			},
+		},
+		{
+			name: "base_path",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"base_path": "/changed/rclone/base"})
+			},
+		},
+		{
+			name: "backup_dir",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"backup_dir": "changed-rclone-backup-dir"})
+			},
+		},
+		{
+			name: "sudo",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"use_sudo": false})
+			},
+		},
+		{
+			name: "tags",
+			mutate: func(t *testing.T, db *gorm.DB, nodeID uint, _ model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteNode(t, db, nodeID, map[string]any{"tags": "prod,changed-rclone-tag"})
+			},
+		},
+		{
+			name: "ssh_key_username",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"username": "changed-key-user"})
+			},
+		},
+		{
+			name: "ssh_key_type",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"key_type": "rsa"})
+			},
+		},
+		{
+			name: "ssh_key_private_key",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"private_key": "FAKE_CHANGED_RCLONE_SSH_PRIVATE_KEY_FOR_TEST_ONLY"})
+			},
+		},
+		{
+			name: "ssh_key_fingerprint",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"fingerprint": "SHA256:changed-rclone-key"})
+			},
+		},
+		{
+			name: "ssh_key_disabled",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"disabled": true})
+			},
+		},
+		{
+			name: "ssh_key_expiry",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"expires_at": time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)})
+			},
+		},
+		{
+			name: "ssh_key_allowed_purposes",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"allowed_purposes": "retention,probe"})
+			},
+		},
+		{
+			name: "ssh_key_allowed_node_ids",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"allowed_node_ids": "999999"})
+			},
+		},
+		{
+			name: "ssh_key_allowed_node_tags",
+			mutate: func(t *testing.T, db *gorm.DB, _ uint, key model.SSHKey, _ model.SSHKey) {
+				mutateLifecycleDeleteSSHKey(t, db, key.ID, map[string]any{"allowed_node_tags": "prod,changed-key-tag"})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture, service, point := newCommittedRcloneLifecycleDeleteIdentityFixture(t)
+			key, alternate := configureLifecycleDeleteRemoteAuthority(t, fixture.db, fixture.task.NodeID, fixture.now)
+			baseRequest := resolveRclonePrefixLifecycleDeleteIdentityRequest(t, fixture, service, point)
+			baseInput := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, baseRequest)
+			test.mutate(t, fixture.db, fixture.task.NodeID, key, alternate)
+			mutatedRequest := resolveRclonePrefixLifecycleDeleteIdentityRequest(t, fixture, service, point)
+			mutatedInput := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, mutatedRequest)
+			assertLifecycleDeleteAuthorityMismatchBeforeProvider(t, baseInput, mutatedInput, mutatedRequest)
+		})
+	}
+}
+
+func TestResolveLifecycleDeletePointResolvedAuthorityProjectionRedaction(t *testing.T) {
+	t.Run("restic", func(t *testing.T) {
+		fixture, service, point := newResticLifecycleDeleteFixture(t)
+		configureLifecycleDeleteRemoteAuthority(t, fixture.db, fixture.node.ID, fixture.now)
+		request := resolveResticLifecycleDeleteIdentityRequest(t, fixture, service, point)
+		assertResolvedLifecycleDeleteIdentityIsPersistenceSafe(t, lifecycleDeleteIdentityInputForRequest(point, fixture.repository, request))
+	})
+	t.Run("rclone-prefix", func(t *testing.T) {
+		fixture, service, point := newCommittedRcloneLifecycleDeleteIdentityFixture(t)
+		configureLifecycleDeleteRemoteAuthority(t, fixture.db, fixture.task.NodeID, fixture.now)
+		request := resolveRclonePrefixLifecycleDeleteIdentityRequest(t, fixture, service, point)
+		assertResolvedLifecycleDeleteIdentityIsPersistenceSafe(t, lifecycleDeleteIdentityInputForRequest(point, fixture.repository, request))
+	})
+}
+
+func TestResolveLifecycleDeletePointResolvedOpaqueRuntimeChangesRemainEqual(t *testing.T) {
+	t.Run("restic", func(t *testing.T) {
+		fixture, service, point := newResticLifecycleDeleteFixture(t)
+		configureLifecycleDeleteRemoteAuthority(t, fixture.db, fixture.node.ID, fixture.now)
+		request := resolveResticLifecycleDeleteIdentityRequest(t, fixture, service, point)
+		base := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, request)
+		mutatedRequest := lifecycleDeleteRequestWithOpaqueRuntimeChanges(request)
+		mutated := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, mutatedRequest)
+		if err := provider.CompareDeletionTargetAuthority(base, mutated); err != nil {
+			t.Fatalf("Restic opaque runtime/telemetry changes changed identity: %v", err)
+		}
+	})
+	t.Run("rclone-prefix", func(t *testing.T) {
+		fixture, service, point := newCommittedRcloneLifecycleDeleteIdentityFixture(t)
+		configureLifecycleDeleteRemoteAuthority(t, fixture.db, fixture.task.NodeID, fixture.now)
+		request := resolveRclonePrefixLifecycleDeleteIdentityRequest(t, fixture, service, point)
+		base := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, request)
+		mutatedRequest := lifecycleDeleteRequestWithOpaqueRuntimeChanges(request)
+		mutated := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, mutatedRequest)
+		if err := provider.CompareDeletionTargetAuthority(base, mutated); err != nil {
+			t.Fatalf("Rclone prefix opaque runtime/telemetry changes changed identity: %v", err)
+		}
+	})
+}
+
+func TestResolveLifecycleDeletePointResolvedProviderAuthorityVectors(t *testing.T) {
+	t.Run("restic", func(t *testing.T) {
+		fixture, service, point := newResticLifecycleDeleteFixture(t)
+		configureLifecycleDeleteRemoteAuthority(t, fixture.db, fixture.node.ID, fixture.now)
+		request := resolveResticLifecycleDeleteIdentityRequest(t, fixture, service, point)
+		base := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, request)
+		for _, test := range []struct {
+			name   string
+			mutate func(*provider.DeletePointRequest)
+		}{
+			{name: "point native", mutate: func(request *provider.DeletePointRequest) {
+				request.Point.Native = strings.Repeat("d", 64)
+			}},
+			{name: "access locator", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.Locator = "changed-restic-locator"
+			}},
+			{name: "access config", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.Config = []byte("changed-restic-config")
+			}},
+			{name: "access secret", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.Secret = []byte("changed-restic-secret")
+			}},
+			{name: "identity salt", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.IdentitySalt = []byte(strings.Repeat("C", provider.IdentitySaltBytes))
+			}},
+			{name: "endpoint fact", mutate: func(request *provider.DeletePointRequest) {
+				facts := append([]string(nil), request.Snapshot.Access.EndpointFacts...)
+				facts[0] = "changed-restic-endpoint-fact"
+				request.Snapshot.Access.EndpointFacts = facts
+			}},
+			{name: "access task id", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.TaskID++
+			}},
+			{name: "access node id", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.NodeID++
+			}},
+			{name: "native repository authority", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.ResticRuntimeAccess)
+				access.NativeRepositoryID = strings.Repeat("d", 64)
+				request.Snapshot.Access.AdapterData = access
+			}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				mutatedRequest := cloneLifecycleDeleteRequest(request)
+				test.mutate(&mutatedRequest)
+				mutated := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, mutatedRequest)
+				assertLifecycleDeleteAuthorityMismatchBeforeProvider(t, base, mutated, mutatedRequest)
+			})
+		}
+	})
+	t.Run("rclone-prefix", func(t *testing.T) {
+		fixture, service, point := newCommittedRcloneLifecycleDeleteIdentityFixture(t)
+		configureLifecycleDeleteRemoteAuthority(t, fixture.db, fixture.task.NodeID, fixture.now)
+		request := resolveRclonePrefixLifecycleDeleteIdentityRequest(t, fixture, service, point)
+		base := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, request)
+		for _, test := range []struct {
+			name   string
+			mutate func(*provider.DeletePointRequest)
+		}{
+			{name: "point native", mutate: func(request *provider.DeletePointRequest) {
+				request.Point.Native = "backup:managed/v1/points/changed"
+			}},
+			{name: "access locator", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.Locator = "changed-rclone-locator"
+			}},
+			{name: "access config", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.Config = []byte("changed-rclone-config")
+			}},
+			{name: "access secret", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.Secret = []byte("changed-rclone-secret")
+			}},
+			{name: "identity salt", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.IdentitySalt = []byte(strings.Repeat("D", provider.IdentitySaltBytes))
+			}},
+			{name: "endpoint fact", mutate: func(request *provider.DeletePointRequest) {
+				facts := append([]string(nil), request.Snapshot.Access.EndpointFacts...)
+				facts[0] = "changed-rclone-endpoint-fact"
+				request.Snapshot.Access.EndpointFacts = facts
+			}},
+			{name: "access task id", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.TaskID++
+			}},
+			{name: "access node id", mutate: func(request *provider.DeletePointRequest) {
+				request.Snapshot.Access.NodeID++
+			}},
+			{name: "prefix", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess)
+				prefix, err := provider.NewRclonePrivateLocator("backup:managed/v1/points/" + strings.Repeat("d", 32) + "." + strings.Repeat("e", 32))
+				if err != nil {
+					panic(err)
+				}
+				access.Prefix = prefix
+				request.Snapshot.Access.AdapterData = access
+			}},
+			{name: "marker digest", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess)
+				access.MarkerDigest = strings.Repeat("d", 64)
+				request.Snapshot.Access.AdapterData = access
+			}},
+			{name: "expected backend", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess)
+				access.ExpectedBackend = "changed-backend"
+				request.Snapshot.Access.AdapterData = access
+			}},
+			{name: "expected root identity", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess)
+				access.ExpectedRootIdentity = strings.Repeat("d", 64)
+				request.Snapshot.Access.AdapterData = access
+			}},
+			{name: "config digest", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess)
+				access.ConfigDigest = strings.Repeat("d", 64)
+				request.Snapshot.Access.AdapterData = access
+			}},
+			{name: "marker key", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess)
+				access.MarkerKey = []byte(strings.Repeat("x", len(access.MarkerKey)))
+				request.Snapshot.Access.AdapterData = access
+			}},
+			{name: "attempt root", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess)
+				access.ExpectedAttemptRoot = "changed-attempt-root"
+				request.Snapshot.Access.AdapterData = access
+			}},
+			{name: "attempt authority", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess)
+				attempt := access.Attempt
+				attempt.ConfigDigest = strings.Repeat("d", 64)
+				access.Attempt = attempt
+				request.Snapshot.Access.AdapterData = access
+			}},
+			{name: "commit authority", mutate: func(request *provider.DeletePointRequest) {
+				access := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess)
+				if access.Commit.Portable == nil {
+					t.Fatal("resolved Rclone prefix commit has no portable authority")
+				}
+				portable := *access.Commit.Portable
+				portable.CommitPayloadDigest = strings.Repeat("d", 64)
+				access.Commit.Portable = &portable
+				request.Snapshot.Access.AdapterData = access
+			}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				mutatedRequest := cloneLifecycleDeleteRequest(request)
+				test.mutate(&mutatedRequest)
+				mutated := lifecycleDeleteIdentityInputForRequest(point, fixture.repository, mutatedRequest)
+				assertLifecycleDeleteAuthorityMismatchBeforeProvider(t, base, mutated, mutatedRequest)
+			})
+		}
+	})
+}
+
+func configureLifecycleDeleteRemoteAuthority(t *testing.T, db *gorm.DB, nodeID uint, now time.Time) (model.SSHKey, model.SSHKey) {
+	t.Helper()
+	key := model.SSHKey{
+		Name: "lifecycle-delete-identity-key", Username: "resolved-key-user", KeyType: "ed25519",
+		PrivateKey: "FAKE_RESOLVED_SSH_PRIVATE_KEY_FOR_TEST_ONLY", Fingerprint: "SHA256:resolved-lifecycle-key",
+		AllowedPurposes: "retention", AllowedNodeIDs: fmt.Sprintf("%d", nodeID), AllowedNodeTags: "prod,archive",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatalf("create lifecycle identity SSH key: %v", err)
+	}
+	alternate := model.SSHKey{
+		Name: "lifecycle-delete-identity-key-alternate", Username: key.Username, KeyType: key.KeyType,
+		PrivateKey: key.PrivateKey, Fingerprint: key.Fingerprint, AllowedPurposes: key.AllowedPurposes,
+		AllowedNodeIDs: key.AllowedNodeIDs, AllowedNodeTags: key.AllowedNodeTags, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&alternate).Error; err != nil {
+		t.Fatalf("create alternate lifecycle identity SSH key: %v", err)
+	}
+	if err := db.Model(&model.Node{}).Where("id = ?", nodeID).Updates(map[string]any{
+		"host": "resolved-authority.example.invalid", "port": 2200, "username": "resolved-authority-user",
+		"auth_type": "key", "password": "FAKE_RESOLVED_NODE_PASSWORD_FOR_TEST_ONLY",
+		"private_key": "FAKE_RESOLVED_NODE_PRIVATE_KEY_FOR_TEST_ONLY", "ssh_key_id": key.ID,
+		"base_path": "/resolved/authority/base", "backup_dir": "resolved-authority-backup-dir",
+		"use_sudo": true, "tags": "prod,archive",
+	}).Error; err != nil {
+		t.Fatalf("configure lifecycle identity Node: %v", err)
+	}
+	return key, alternate
+}
+
+func mutateLifecycleDeleteNode(t *testing.T, db *gorm.DB, nodeID uint, values map[string]any) {
+	t.Helper()
+	if err := db.Model(&model.Node{}).Where("id = ?", nodeID).Updates(values).Error; err != nil {
+		t.Fatalf("mutate lifecycle identity Node: %v", err)
+	}
+}
+
+func mutateLifecycleDeleteSSHKey(t *testing.T, db *gorm.DB, keyID uint, values map[string]any) {
+	t.Helper()
+	if err := db.Model(&model.SSHKey{}).Where("id = ?", keyID).Updates(values).Error; err != nil {
+		t.Fatalf("mutate lifecycle identity SSH key: %v", err)
+	}
+}
+
+func resolveResticLifecycleDeleteIdentityRequest(t *testing.T, fixture *publicationFixture, service *Service, point model.RecoveryPoint) provider.DeletePointRequest {
+	t.Helper()
+	request, err := service.ResolveLifecycleDeletePoint(context.Background(), strings.Repeat("e", 32), point, fixture.repository)
+	if err != nil {
+		t.Fatalf("resolve Restic lifecycle delete identity request: %v", err)
+	}
+	if _, ok := request.Snapshot.Access.AdapterData.(provider.ResticRuntimeAccess); !ok {
+		t.Fatalf("resolved Restic lifecycle access=%T", request.Snapshot.Access.AdapterData)
+	}
+	return request
+}
+
+func resolveRclonePrefixLifecycleDeleteIdentityRequest(t *testing.T, fixture *rclonePublicationFixture, service *Service, point model.RecoveryPoint) provider.DeletePointRequest {
+	t.Helper()
+	request, err := service.ResolveLifecycleDeletePoint(context.Background(), strings.Repeat("e", 32), point, fixture.repository)
+	if err != nil {
+		t.Fatalf("resolve Rclone prefix lifecycle delete identity request: %v", err)
+	}
+	if _, ok := request.Snapshot.Access.AdapterData.(provider.RclonePrefixDeletionAccess); !ok {
+		t.Fatalf("resolved Rclone prefix lifecycle access=%T", request.Snapshot.Access.AdapterData)
+	}
+	return request
+}
+
+func lifecycleDeleteIdentityInputForRequest(point model.RecoveryPoint, repository model.BackupRepository, request provider.DeletePointRequest) provider.DeletionTargetIdentityInput {
+	return provider.DeletionTargetIdentityInput{
+		RecoveryPointID: point.ID, AttemptID: request.OperationID, Operation: backupasset.LifecycleRetentionExpire,
+		RepositoryIdentity: lifecycleRepositoryIdentity(repository), Request: request,
+	}
+}
+
+type lifecycleDeleteIdentityProviderSpy struct {
+	calls int
+	kind  backupasset.ProviderKind
+}
+
+func (spy *lifecycleDeleteIdentityProviderSpy) ProviderKind() backupasset.ProviderKind {
+	return spy.kind
+}
+
+func (spy *lifecycleDeleteIdentityProviderSpy) DeletePoint(context.Context, provider.DeletePointRequest) (provider.DeletePointResult, error) {
+	spy.calls++
+	return provider.DeletePointResult{Outcome: provider.DeletePointAlreadyAbsent, ReceiptDigest: strings.Repeat("a", 64)}, nil
+}
+
+func assertLifecycleDeleteAuthorityMismatchBeforeProvider(t *testing.T, base, mutated provider.DeletionTargetIdentityInput, request provider.DeletePointRequest) {
+	t.Helper()
+	spy := &lifecycleDeleteIdentityProviderSpy{kind: request.Snapshot.Access.Provider}
+	err := provider.CompareDeletionTargetAuthority(base, mutated)
+	if err == nil {
+		_, _ = provider.ExecuteDeletePoint(context.Background(), spy, request)
+	}
+	if spy.calls != 0 {
+		t.Fatalf("material lifecycle authority reached provider before rejection: calls=%d", spy.calls)
+	}
+	if !errors.Is(err, provider.ErrDeletePointIdentityConflict) {
+		t.Fatalf("material lifecycle authority returned unexpected error: %v", err)
+	}
+}
+
+func assertResolvedLifecycleDeleteIdentityIsPersistenceSafe(t *testing.T, input provider.DeletionTargetIdentityInput) {
+	t.Helper()
+	projection, err := provider.CanonicalDeletionTargetProjection(input)
+	if err != nil {
+		t.Fatalf("canonicalize resolved lifecycle delete identity: %v", err)
+	}
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatalf("marshal resolved lifecycle delete projection: %v", err)
+	}
+	digest, err := provider.DeletionTargetIdentityDigest(input)
+	if err != nil {
+		t.Fatalf("digest resolved lifecycle delete identity: %v", err)
+	}
+	if len(digest) != 64 || strings.ToLower(digest) != digest {
+		t.Fatalf("resolved lifecycle delete digest=%q, want lowercase SHA-256", digest)
+	}
+	access := input.Request.Snapshot.Access
+	forbidden := []string{
+		input.Request.Point.Native, input.Request.Snapshot.Access.Locator,
+		string(access.Secret), string(access.Config), string(access.IdentitySalt),
+		fmt.Sprintf("%x", access.IdentitySalt),
+	}
+	switch runtime := access.AdapterData.(type) {
+	case provider.ResticRuntimeAccess:
+		if runtime.Command != nil {
+			forbidden = append(forbidden, runtime.Command.Node.Password, runtime.Command.Node.PrivateKey)
+			if runtime.Command.Node.SSHKey != nil {
+				forbidden = append(forbidden, runtime.Command.Node.SSHKey.PrivateKey)
+			}
+		}
+	case provider.RclonePrefixDeletionAccess:
+		if runtime.Command != nil {
+			forbidden = append(forbidden, runtime.Command.Node.Password, runtime.Command.Node.PrivateKey)
+			if runtime.Command.Node.SSHKey != nil {
+				forbidden = append(forbidden, runtime.Command.Node.SSHKey.PrivateKey)
+			}
+		}
+	}
+	for _, value := range forbidden {
+		if value != "" && (strings.Contains(string(encoded), value) || strings.Contains(digest, value)) {
+			t.Fatalf("resolved lifecycle delete persistence output exposed private material %q: projection=%s digest=%s", value, encoded, digest)
+		}
+	}
+}
+
+func cloneLifecycleDeleteRequest(request provider.DeletePointRequest) provider.DeletePointRequest {
+	cloned := request
+	access := request.Snapshot.Access
+	access.IdentitySalt = append([]byte(nil), access.IdentitySalt...)
+	access.EndpointFacts = append([]string(nil), access.EndpointFacts...)
+	access.Secret = append([]byte(nil), access.Secret...)
+	access.Config = append([]byte(nil), access.Config...)
+	switch runtime := access.AdapterData.(type) {
+	case provider.ResticRuntimeAccess:
+		clonedRuntime := runtime
+		if runtime.Command != nil {
+			command := *runtime.Command
+			command.Node = cloneLifecycleDeleteNode(runtime.Command.Node)
+			clonedRuntime.Command = &command
+		}
+		access.AdapterData = clonedRuntime
+	case provider.RclonePrefixDeletionAccess:
+		clonedRuntime := runtime
+		clonedRuntime.MarkerKey = append([]byte(nil), runtime.MarkerKey...)
+		if runtime.Command != nil {
+			command := *runtime.Command
+			command.Node = cloneLifecycleDeleteNode(runtime.Command.Node)
+			clonedRuntime.Command = &command
+		}
+		access.AdapterData = clonedRuntime
+	}
+	cloned.Snapshot.Access = access
+	return cloned
+}
+
+func cloneLifecycleDeleteNode(node model.Node) model.Node {
+	if node.SSHKey != nil {
+		key := *node.SSHKey
+		node.SSHKey = &key
+	}
+	return node
+}
+
+func lifecycleDeleteRequestWithOpaqueRuntimeChanges(request provider.DeletePointRequest) provider.DeletePointRequest {
+	mutated := cloneLifecycleDeleteRequest(request)
+	access := mutated.Snapshot.Access
+	var command *provider.RemoteCommandAccess
+	switch runtime := access.AdapterData.(type) {
+	case provider.ResticRuntimeAccess:
+		command = runtime.Command
+	case provider.RclonePrefixDeletionAccess:
+		command = runtime.Command
+	default:
+		return mutated
+	}
+	if command == nil {
+		return mutated
+	}
+	commandCopy := *command
+	node := commandCopy.Node
+	node.Name = "opaque-renamed-node"
+	node.Status = "maintenance"
+	node.ConnectionLatency = 99
+	node.DiskUsedGB = 11
+	node.DiskTotalGB = 22
+	node.ConsecutiveFailures = 3
+	node.LastSeenAt = timePointer(time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC))
+	node.LastBackupAt = timePointer(time.Date(2026, 8, 18, 12, 1, 0, 0, time.UTC))
+	node.LastProbeAt = timePointer(time.Date(2026, 8, 18, 12, 2, 0, 0, time.UTC))
+	node.MaintenanceStart = timePointer(time.Date(2026, 8, 18, 12, 3, 0, 0, time.UTC))
+	node.MaintenanceEnd = timePointer(time.Date(2026, 8, 18, 12, 4, 0, 0, time.UTC))
+	node.ExpiryDate = timePointer(time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC))
+	node.Archived = true
+	node.LogPaths = `["/opaque/log"]`
+	node.LogJournalctlEnabled = false
+	node.LogRetentionDays = 2
+	node.UpdatedAt = time.Date(2026, 8, 18, 12, 5, 0, 0, time.UTC)
+	if node.SSHKey != nil {
+		key := *node.SSHKey
+		key.Name = "opaque-renamed-key"
+		key.LastUsedAt = timePointer(time.Date(2026, 8, 18, 12, 6, 0, 0, time.UTC))
+		key.UpdatedAt = time.Date(2026, 8, 18, 12, 7, 0, 0, time.UTC)
+		node.SSHKey = &key
+	}
+	commandCopy.Node = node
+	commandCopy.Audit.CorrelationID = "opaque-audit-correlation"
+	commandCopy.Audit.UserID = 9001
+	commandCopy.Audit.Username = "opaque-audit-user"
+	commandCopy.Audit.Role = "opaque-audit-role"
+	taskID := uint(9002)
+	commandCopy.Audit.TaskID = &taskID
+	switch runtime := access.AdapterData.(type) {
+	case provider.ResticRuntimeAccess:
+		runtime.Command = &commandCopy
+		access.AdapterData = runtime
+	case provider.RclonePrefixDeletionAccess:
+		runtime.Command = &commandCopy
+		access.AdapterData = runtime
+	}
+	mutated.Snapshot.Access = access
+	return mutated
 }

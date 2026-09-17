@@ -59,7 +59,7 @@ func setupAuthUserFixture(t *testing.T) authUserTestFixture {
 	gin.SetMode(gin.TestMode)
 
 	db := openAuthUserHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.PendingAuthToken{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -69,6 +69,7 @@ func setupAuthUserFixture(t *testing.T) authUserTestFixture {
 	operatorUser := seedAuthUser(t, db, "operator", "operator", operatorPassword)
 
 	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	service := auth.NewService(db, jwtManager, nil, auth.LoginSecurityConfig{
 		FailLockThreshold: 5,
 		FailLockDuration:  time.Minute,
@@ -297,7 +298,7 @@ func TestAuthHandlerTOTPLoginConsumesRecoveryCodeBeforeIssuingToken(t *testing.T
 
 func TestAuthHandlerTOTPLoginRejectsWhenRecoveryCodeCannotBeSaved(t *testing.T) {
 	db := openAuthUserHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.PendingAuthToken{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 	user := seedAuthUser(t, db, "admin", "admin", "FAKE_AdminPass2026!_FOR_TEST_ONLY")

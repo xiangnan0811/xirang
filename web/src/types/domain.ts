@@ -12,6 +12,34 @@ export type TaskStatus =
   | "skipped";
 
 export type TaskExecutorType = "rsync" | "command" | "restic" | "rclone";
+export type ResticRepositoryVersion = 1 | 2;
+
+export interface ResticExecutorSettings {
+  excludePatterns: string[];
+  repositoryVersion: ResticRepositoryVersion | null;
+}
+
+export interface RcloneExecutorSettings {
+  bandwidthLimit: string;
+  transfers: number;
+}
+
+export type TaskExecutorSettings = ResticExecutorSettings | RcloneExecutorSettings;
+
+export interface TaskExecutorSecretsConfigured {
+  repositoryPassword: boolean;
+}
+
+export interface UpdateTaskExecutorSettings {
+  excludePatterns?: string[];
+  repositoryVersion?: ResticRepositoryVersion | null;
+  bandwidthLimit?: string;
+  transfers?: number;
+}
+
+export interface UpdateTaskExecutorSecrets {
+  repositoryPassword?: string;
+}
 
 export type AlertSeverity = "critical" | "warning" | "info";
 export type AlertStatus = "open" | "acked" | "resolved";
@@ -493,7 +521,9 @@ export interface TaskRecord {
   rsyncSource?: string;
   rsyncTarget?: string;
   executorType?: TaskExecutorType;
-  executorConfig?: string;
+  revision?: string;
+  executorSettings?: TaskExecutorSettings;
+  executorSecretsConfigured?: TaskExecutorSecretsConfigured;
   cronSpec?: string;
   updatedAt?: string;
   speedMbps: number;
@@ -516,6 +546,21 @@ export interface NewTaskInput {
   executorType?: TaskExecutorType;
   executorConfig?: string;
   cronSpec?: string;
+}
+
+export interface UpdateTaskInput {
+  expectedRevision: string;
+  name?: string;
+  nodeId?: number;
+  policyId?: number | null;
+  dependsOnTaskId?: number | null;
+  command?: string;
+  rsyncSource?: string;
+  rsyncTarget?: string;
+  executorType?: TaskExecutorType;
+  cronSpec?: string;
+  executorSettings?: UpdateTaskExecutorSettings;
+  executorSecrets?: UpdateTaskExecutorSecrets;
 }
 
 export type TaskRunTriggerType = "manual" | "cron" | "retry" | "restore" | "chain" | "drill";
@@ -605,11 +650,19 @@ export interface AlertRecord {
   retryable: boolean;
 }
 
+export type AlertDeliveryStatus =
+  | "pending"
+  | "sending"
+  | "retrying"
+  | "sent"
+  | "failed"
+  | "unknown";
+
 export interface AlertDeliveryRecord {
   id: string;
   alertId: string;
   integrationId: string;
-  status: "sent" | "failed";
+  status: AlertDeliveryStatus;
   createdAt: string;
   attemptCount?: number;
   nextRetryAt?: string | null;
@@ -1261,8 +1314,10 @@ export interface ServiceMonitorView {
   timeoutSeconds: number;
   httpMethod: HttpMethod;
   httpExpectedStatus: number;
+  /** Header names are safe to display; values never cross the API boundary. */
+  httpHeaderNames: string[];
+  httpHeadersConfigured: boolean;
   enabled: boolean;
-  httpHeaderList: HeaderKV[]; // parsed form; raw JSON string lives only in API boundary
   lastStatus: "up" | "down" | "unknown";
   uptimePct: number;
   lastCheckedAt: string | null;
@@ -1279,6 +1334,7 @@ export interface NewServiceMonitorInput {
   timeoutSeconds?: number;
   httpMethod?: HttpMethod;
   httpExpectedStatus?: number;
+  /** Undefined preserves hidden headers only when monitor use is unchanged; [] explicitly clears them. */
   httpHeaderList?: HeaderKV[];
   enabled?: boolean;
 }

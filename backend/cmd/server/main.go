@@ -27,6 +27,7 @@ import (
 	processingupdater "xirang/backend/internal/backupasset/processing/updater"
 	"xirang/backend/internal/backupasset/provider"
 	backupruntime "xirang/backend/internal/backupasset/runtime"
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/dashboards"
@@ -89,6 +90,9 @@ func main() {
 	if err := bootstrap.AutoMigrate(db, cfg.DBType); err != nil {
 		log.Fatal().Err(err).Msg("执行数据库迁移失败")
 	}
+	if err := backuphealth.RegisterBackupCompletionCollector(db); err != nil {
+		log.Fatal().Err(err).Msg("注册备份完成指标失败")
+	}
 	if err := bootstrap.SeedUsers(db); err != nil {
 		log.Fatal().Err(err).Msg("初始化管理员账号失败")
 	}
@@ -109,6 +113,12 @@ func main() {
 	// scripts may remain readable at rest with no health signal.
 	if err := bootstrap.EncryptPlaintextPolicyDrillScripts(db); err != nil {
 		log.Fatal().Err(err).Msg("策略演练脚本明文加密失败，拒绝启动")
+	}
+	if err := bootstrap.EncryptServiceMonitorHeaders(db); err != nil {
+		log.Fatal().Err(err).Msg("服务监控请求头加密失败，拒绝启动")
+	}
+	if err := bootstrap.MigrateLegacyResticTaskConfigs(db); err != nil {
+		log.Fatal().Err(err).Msg("Restic 历史任务配置迁移失败，拒绝启动")
 	}
 
 	hub := ws.NewHub(db, cfg.AllowedOrigins, cfg.WSAllowEmptyOrigin)
@@ -206,6 +216,7 @@ func main() {
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, alertDispatcher, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
 	taskManager.SetPublicationCoordinator(assetRuntime.PublicationCoordinator())
 	taskManager.SetLineageGuard(assetRuntime.LineageGuard())
+	taskManager.SetBackupSourceCompletionObserver(assetRuntime.RepositoryService())
 	taskManager.SetNodeWriteAdmission(assetRuntime.NodeWriteCoordinator())
 	taskManager.SetLegacyBlockRecorder(assetRuntime.LegacyBlockRecorder())
 	taskManager.SetAnomalySink(anomalySink)
@@ -214,6 +225,7 @@ func main() {
 	})
 	taskManager.SetAutomationDispatcher(autoDispatcher)
 	autoDispatcher.SetTaskTriggerer(taskManager)
+	autoDispatcher.SetPolicyController(taskManager)
 	if err := assetRuntime.SetCommitObserver(taskManager); err != nil {
 		log.Fatal().Err(err).Msg("配置备份资产提交观察器失败")
 	}
@@ -326,24 +338,25 @@ func main() {
 	snapshotIndexer := snapshot.NewIndexer(db, assetRuntime.LineageGuard(), assetRuntime.FoundationService())
 
 	router := api.NewRouter(api.Dependencies{
-		AppContext:        hubCtx,
-		DB:                db,
-		AuthService:       authService,
-		JWTManager:        jwtManager,
-		TaskManager:       taskManager,
-		Hub:               hub,
-		SettingsService:   settingsSvc,
-		AllowedOrigins:    cfg.AllowedOrigins,
-		LoginRateLimit:    cfg.LoginRateLimit,
-		LoginRateWindow:   cfg.LoginRateWindow,
-		RetryWorker:       retryWorker,
-		AlertDispatcher:   alertDispatcher,
-		MetricsToken:      cfg.MetricsToken,
-		MetricsRateLimit:  cfg.MetricsRateLimit,
-		TrustedProxies:    cfg.TrustedProxies,
-		MetricsRateWindow: cfg.MetricsRateWindow,
-		BackupAssets:      assetRuntime,
-		BackupContent:     assetRuntime.ContentService(),
+		AppContext:             hubCtx,
+		DB:                     db,
+		AuthService:            authService,
+		JWTManager:             jwtManager,
+		TaskManager:            taskManager,
+		ServiceMonitorNotifier: uptimeProber,
+		Hub:                    hub,
+		SettingsService:        settingsSvc,
+		AllowedOrigins:         cfg.AllowedOrigins,
+		LoginRateLimit:         cfg.LoginRateLimit,
+		LoginRateWindow:        cfg.LoginRateWindow,
+		RetryWorker:            retryWorker,
+		AlertDispatcher:        alertDispatcher,
+		MetricsToken:           cfg.MetricsToken,
+		MetricsRateLimit:       cfg.MetricsRateLimit,
+		TrustedProxies:         cfg.TrustedProxies,
+		MetricsRateWindow:      cfg.MetricsRateWindow,
+		BackupAssets:           assetRuntime,
+		BackupContent:          assetRuntime.ContentService(),
 		BackupContentConfig: func(context.Context) (handlers.BackupContentHandlerConfig, error) {
 			contentConfig, contentConfigErr := assetRuntime.ContentConfig()
 			if contentConfigErr != nil {

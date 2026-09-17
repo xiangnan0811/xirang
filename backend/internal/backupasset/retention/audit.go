@@ -33,7 +33,7 @@ type AuditRetention struct {
 }
 
 func NewAuditRetention(dependencies AuditRetentionDependencies) (*AuditRetention, error) {
-	if dependencies.DB == nil || dependencies.Writer == nil || dependencies.Config == nil {
+	if dependencies.DB == nil || dependencies.Config == nil {
 		return nil, fmt.Errorf("%w: audit retention dependencies are unavailable", backupasset.ErrInvalidState)
 	}
 	if dependencies.Now == nil {
@@ -45,8 +45,13 @@ func NewAuditRetention(dependencies AuditRetentionDependencies) (*AuditRetention
 }
 
 func (service *AuditRetention) PurgeEligibleDetails(ctx context.Context, limit int) (int, error) {
-	if service == nil || service.db == nil || service.writer == nil || service.config == nil {
+	if service == nil || service.db == nil || service.config == nil {
 		return 0, fmt.Errorf("%w: audit retention is unavailable", backupasset.ErrInvalidState)
+	}
+	if service.writer == nil {
+		// A nil production audit sink is a supported no-op configuration. It
+		// must not prevent the rest of retention reconciliation from running.
+		return 0, nil
 	}
 	if limit < 1 || limit > maxAuditRetentionBatch {
 		return 0, fmt.Errorf("%w: invalid audit retention batch", backupasset.ErrInvalidState)

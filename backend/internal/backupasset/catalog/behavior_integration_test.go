@@ -38,6 +38,11 @@ func TestCatalogBehaviorPostgres(t *testing.T) {
 	}
 	primary, observer := openCatalogBehaviorPostgres(t, dsn)
 	runCatalogGenerationBehavior(t, primary, observer)
+	t.Run("expired index lease restart", func(t *testing.T) {
+		db, _ := openCatalogBehaviorPostgres(t, dsn)
+		fixture := seedCatalogIndexerFixture(t, db, time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC), true, 0)
+		assertCatalogRestartRecoversExpiredIndexLease(t, fixture)
+	})
 }
 
 func runCatalogGenerationBehavior(t *testing.T, primary, observer *gorm.DB) {

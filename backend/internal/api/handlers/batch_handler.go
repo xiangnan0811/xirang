@@ -2,19 +2,22 @@ package handlers
 
 import (
 	"crypto/rand"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const maxCommandLength = 4096
@@ -47,19 +50,16 @@ func (h *BatchHandler) WithJWTManager(jwtManager *auth.JWTManager) *BatchHandler
 // @Security     Bearer
 // @Accept       json
 // @Produce      json
-// @Param        body  body      object  true  "批量命令请求"
+// @Param        Idempotency-Key header string true "请求者范围的幂等键；同一请求重试必须复用"
+// @Param        body  body      batchCommandRequest  true  "批量命令请求"
 // @Success      200  {object}  handlers.Response
 // @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
+// @Failure      409  {object}  handlers.Response
 // @Failure      403  {object}  handlers.Response
 // @Router       /batch-commands [post]
 func (h *BatchHandler) Create(c *gin.Context) {
-	var req struct {
-		NodeIDs []uint `json:"node_ids" binding:"required,min=1"`
-		Command string `json:"command" binding:"required"`
-		Name    string `json:"name"`
-		Retain  *bool  `json:"retain"`
-	}
+	var req batchCommandRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, "请求参数错误")
 		return
@@ -81,16 +81,8 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		return
 	}
 
-	batchID := generateBatchID()
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = fmt.Sprintf("批量命令 %s", batchID)
-	}
-
-	type batchNode struct {
-		ID   uint
-		Name string
-	}
+	req.Command = command
+	req.Name = strings.TrimSpace(req.Name)
 	nodes := make([]batchNode, 0, len(req.NodeIDs))
 	allowedNodes, err := authorizeNodeOwnershipSet(c, h.db, req.NodeIDs)
 	if err != nil {
@@ -130,71 +122,43 @@ func (h *BatchHandler) Create(c *gin.Context) {
 		return
 	}
 
-	var taskIDs []uint
-	for _, node := range nodes {
-		t := model.Task{
-			Name:         fmt.Sprintf("%s [%s]", name, node.Name),
-			NodeID:       node.ID,
-			ExecutorType: "command",
-			Command:      command,
-			Source:       "batch",
-			Status:       "pending",
-			BatchID:      batchID,
-		}
-		if err := h.db.Create(&t).Error; err != nil {
-			respondInternalError(c, err)
-			return
-		}
-		taskIDs = append(taskIDs, t.ID)
+	key, validKey := exactIdempotencyKey(c.Request)
+	if !validKey {
+		respondBadRequest(c, "需要有效的 Idempotency-Key")
+		return
 	}
-
-	// 逐个触发任务执行
-	runIDs := make([]uint, 0, len(taskIDs))
-	successCount := 0
-	failureCount := 0
-	for _, tid := range taskIDs {
-		if h.manager == nil {
+	batch, dispatches, created, err := h.createBatchTasks(c.Request.Context(), middleware.CurrentUserID(c), key, req, nodes)
+	if errors.Is(err, errBatchIdempotencyConflict) || errors.Is(err, errBatchDeleted) {
+		respondConflict(c, "幂等键已用于不同请求或已删除的批次")
+		return
+	}
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	dispatchErr := h.dispatchBatch(c.Request.Context(), batch.ID, dispatches)
+	taskIDs := make([]uint, 0, len(dispatches))
+	runIDs := make([]uint, 0, len(dispatches))
+	successCount, failureCount := 0, 0
+	for _, dispatch := range dispatches {
+		taskIDs = append(taskIDs, dispatch.TaskID)
+		runIDs = append(runIDs, dispatch.RunID)
+		if dispatch.Status == "accepted" {
+			successCount++
+		} else {
 			failureCount++
-			runIDs = append(runIDs, 0)
-			continue
 		}
-		runID, err := h.manager.TriggerManual(tid)
-		if err != nil {
-			// 记录失败但不中断整体流程——任务已创建，仅触发失败
-			failureCount++
-			runIDs = append(runIDs, 0)
-			continue
-		}
-		successCount++
-		runIDs = append(runIDs, runID)
 	}
-
-	retain := false
-	if req.Retain != nil {
-		retain = *req.Retain
+	if created {
+		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+			Action: "batch_command.create", Purpose: sshutil.PurposeBatchCommand,
+			Outcome:  credentialAuditOutcome(successCount, failureCount, 0),
+			Metadata: map[string]any{"batch_id": batch.ID, "node_count": len(nodes), "task_count": len(taskIDs), "run_count": successCount, "success_count": successCount, "failure_count": failureCount, "retain": batch.Retain},
+		})
 	}
-
-	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-		Action:  "batch_command.create",
-		Purpose: sshutil.PurposeBatchCommand,
-		Outcome: credentialAuditOutcome(successCount, failureCount, 0),
-		Metadata: map[string]any{
-			"batch_id":      batchID,
-			"node_count":    len(nodes),
-			"task_count":    len(taskIDs),
-			"run_count":     len(runIDs),
-			"success_count": successCount,
-			"failure_count": failureCount,
-			"retain":        retain,
-		},
-	})
-
-	respondOK(c, gin.H{
-		"batch_id": batchID,
-		"task_ids": taskIDs,
-		"run_ids":  runIDs,
-		"retain":   retain,
-	})
+	// Creation has committed. Even if dispatch persistence is unavailable,
+	// return its identity rather than hiding durable tasks behind an overall 500.
+	respondOK(c, gin.H{"batch_id": batch.ID, "task_ids": taskIDs, "run_ids": runIDs, "retain": batch.Retain, "dispatches": dispatches, "dispatch_incomplete": dispatchErr != nil})
 }
 
 // Get godoc
@@ -257,7 +221,13 @@ func (h *BatchHandler) Get(c *gin.Context) {
 		tasks[i].Node = tasks[i].Node.Sanitized()
 	}
 
+	var dispatches []model.BatchCommandDispatch
+	if err := h.db.WithContext(c.Request.Context()).Where("batch_id = ?", batchID).Order("task_id").Find(&dispatches).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	respondOK(c, gin.H{
+		"dispatches":    dispatches,
 		"batch_id":      batchID,
 		"tasks":         tasks,
 		"total":         len(tasks),
@@ -322,7 +292,37 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 
 	// 事务删除关联记录及任务本身
 	var deleted int64
-	err = h.db.Transaction(func(tx *gorm.DB) error {
+	err = h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		var batch model.BatchCommand
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", batchID).Limit(1).Find(&batch).Error; err != nil {
+			return err
+		}
+		var lockedTaskIDs []uint
+		if err := tx.Model(&model.Task{}).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", taskIDs).Order("id").Pluck("id", &lockedTaskIDs).Error; err != nil {
+			return err
+		}
+		var active int64
+		if err := tx.Model(&model.BatchCommandDispatch{}).Where("batch_id = ? AND status = ?", batchID, "dispatching").Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return errBatchActive
+		}
+		if err := tx.Model(&model.TaskRun{}).Where("task_id IN ? AND status IN ?", taskIDs, model.TaskRunActiveStatuses()).Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return errBatchActive
+		}
+		if err := tx.Table("task_run_effects").Joins("JOIN task_runs ON task_runs.id = task_run_effects.task_run_id").Where("task_runs.task_id IN ? AND task_run_effects.status <> ?", taskIDs, "succeeded").Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return errBatchActive
+		}
+		if err := tx.Model(&model.BatchCommand{}).Where("id = ?", batchID).Update("deleted_at", time.Now().UTC()).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("task_id IN ?", taskIDs).Delete(&model.TaskLog{}).Error; err != nil {
 			return err
 		}
@@ -340,6 +340,10 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 		deleted = result.RowsAffected
 		return result.Error
 	})
+	if errors.Is(err, errBatchActive) {
+		respondConflict(c, "批次仍有活动任务、未确认派发或未完成收尾，暂不能删除")
+		return
+	}
 	if err != nil {
 		respondInternalError(c, err)
 		return
@@ -355,15 +359,8 @@ func (h *BatchHandler) Delete(c *gin.Context) {
 	respondOK(c, gin.H{"deleted": deleted})
 }
 
-// generateBatchID 生成 8 字符的随机批次 ID。
-func generateBatchID() string {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		// 极端情况下回退到固定前缀 + 时间戳
-		return fmt.Sprintf("b%d", b[0])
-	}
-	return hex.EncodeToString(b)
-}
+// generateBatchID uses a collision-resistant identity with no fixed fallback.
+func generateBatchID() string { return rand.Text() }
 
 // dangerousPatterns 预编译的危险命令正则表达式。
 // 注意：这是安全辅助拦截（safety net），不是安全边界——用户已有 SSH 权限。

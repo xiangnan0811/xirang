@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,17 +12,20 @@ import (
 	"time"
 
 	"xirang/backend/internal/anomaly"
-	"xirang/backend/internal/automation"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/cronutil"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/profile"
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/verifier"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -60,26 +64,64 @@ var (
 		Name: "xirang_tasks_active",
 		Help: "Number of currently running tasks",
 	})
-	backupLastSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "xirang_backup_last_success_timestamp",
-		Help: "Unix timestamp of last successful backup per task",
-	}, []string{"task_name"})
 )
 
-// trigger 是 triggerCore 的包装，负责在重试时恢复链路上下文。
-func (m *Manager) trigger(taskID uint, reason string) (uint, error) {
-	chainRunID := generateChainRunID()
-	if reason == "retry" {
-		if val, ok := m.retryChainContexts.LoadAndDelete(taskID); ok {
-			chainRunID = val.(chainContext).chainRunID
-		}
-	}
-	return m.triggerCore(taskID, reason, chainRunID, nil)
+func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, upstreamRunID *uint, scheduledAt *time.Time) (uint, error) {
+	return m.triggerCoreWithExpectedCronSpec(taskID, reason, chainRunID, upstreamRunID, scheduledAt, "")
 }
 
-func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, upstreamRunID *uint) (uint, error) {
+func (m *Manager) triggerCoreWithExpectedCronSpec(
+	taskID uint,
+	reason string,
+	chainRunID string,
+	upstreamRunID *uint,
+	scheduledAt *time.Time,
+	expectedCronSpec string,
+) (uint, error) {
+	var cronScheduledAt *time.Time
+	var cronOccurrenceID uint
+	cronOccurrenceClaimed := false
+	if reason == "cron" {
+		cronScheduledAt = normalizeCronOccurrence(scheduledAt)
+		if cronScheduledAt == nil {
+			return 0, fmt.Errorf("cron occurrence timestamp required")
+		}
+		occurrence, err := m.ensureCronOccurrenceWithExpectedSpec(
+			context.Background(), taskID, *cronScheduledAt, expectedCronSpec,
+		)
+		if err != nil {
+			// A callback from a replaced schedule must not manufacture an
+			// occurrence under the new schedule. The durable Task row is the
+			// generation authority.
+			if errors.Is(err, errCronScheduleChanged) {
+				return 0, nil
+			}
+			// A removed task cannot have a durable occurrence because the
+			// occurrence FK is authoritative. Scheduler callbacks for it are
+			// therefore harmless no-ops.
+			if strings.Contains(err.Error(), "任务不存在") {
+				return 0, nil
+			}
+			return 0, err
+		}
+		if occurrence.State != model.TaskCronOccurrenceStateQueued || occurrence.TaskRunID != nil {
+			return 0, nil
+		}
+		if err := m.advanceCronScheduleCursor(
+			context.Background(), taskID, *cronScheduledAt, expectedCronSpec,
+		); err != nil {
+			return 0, err
+		}
+		cronOccurrenceID = occurrence.ID
+	}
+
+	// Intent is durable before this shutdown gate. A shutdown leaves a queued
+	// occurrence for the next manager rather than dropping the scheduler tick.
 	if m.shuttingDown.Load() {
-		if reason == "retry" || reason == "cron" || reason == "chain" {
+		if reason == "chain" {
+			return 0, errTaskChainBusy
+		}
+		if reason == "retry" || reason == "cron" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("系统维护中，请稍候再试")
@@ -87,30 +129,60 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 
 	launchCtx, ownership, claimed := m.claimPendingRunOwnership(taskID)
 	if !claimed {
-		if reason == "retry" || reason == "cron" || reason == "chain" {
+		if reason == "cron" {
+			// Another local runner owns the pending slot. It did not claim the
+			// durable occurrence, so never clear that runner's lease.
+			return 0, nil
+		}
+		if reason == "chain" {
+			return 0, errTaskChainBusy
+		}
+		if reason == "retry" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
 	scheduled := false
 	registeredCancel := ownership.cancel
+	defer m.releasePendingRunAdmission(ownership)
 	defer func() {
 		if !scheduled {
 			if registeredCancel != nil {
 				registeredCancel()
-				m.chainRunner.Delete(taskID)
+				if m.chainRunner != nil {
+					m.chainRunner.Delete(taskID)
+				}
 			}
 			m.pendingRuns.CompareAndDelete(taskID, ownership)
+			if reason == "cron" && cronOccurrenceClaimed {
+				// The occurrence is retried after quota, node, resource, or
+				// local-busy refusal. Explicit disabled/skip paths settle it
+				// before this defer runs, making this update a no-op.
+				_ = m.releaseCronOccurrence(context.Background(), cronOccurrenceID)
+			}
 		}
 	}()
+	if reason == "cron" {
+		claimed, err := m.claimCronOccurrence(context.Background(), cronOccurrenceID)
+		cronOccurrenceClaimed = claimed
+		if err != nil {
+			return 0, err
+		}
+		if !claimed {
+			return 0, nil
+		}
+	}
 
 	var taskEntity model.Task
-	result := m.db.Where("id = ?", taskID).Limit(1).Find(&taskEntity)
+	result := m.db.Preload("Policy").Where("id = ?", taskID).Limit(1).Find(&taskEntity)
 	if result.Error != nil {
 		return 0, result.Error
 	}
 	if result.RowsAffected == 0 {
-		if reason == "retry" || reason == "cron" || reason == "chain" {
+		if reason == "chain" {
+			return 0, fmt.Errorf("链式任务不存在")
+		}
+		if reason == "retry" || reason == "cron" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("任务不存在")
@@ -123,34 +195,57 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		}
 	}
 
-	// 暂停检查
-	if !taskEntity.Enabled {
+	// Paused and archived tasks never enter an executor. Cron intent is made
+	// explicitly auditable instead of being silently discarded.
+	if taskEntity.ArchivedAt != nil || !taskEntity.Enabled ||
+		(taskEntity.Policy != nil && !taskEntity.Policy.Enabled) {
 		if reason == "cron" {
+			reasonText := "任务已暂停，定时执行已取消"
+			if taskEntity.ArchivedAt != nil {
+				reasonText = "任务已归档，定时执行已取消"
+			} else if taskEntity.Policy != nil && !taskEntity.Policy.Enabled {
+				reasonText = "策略已禁用，定时执行已取消"
+			}
+			_ = m.settleCronOccurrence(context.Background(), cronOccurrenceID,
+				model.TaskCronOccurrenceStateCanceled, reasonText)
 			return 0, nil
 		}
 		if reason == "chain" {
-			m.skipTask(taskEntity, chainRunID, upstreamRunID, "任务已暂停，链式执行跳过")
+			skipReason := "任务已暂停，链式执行跳过"
+			if taskEntity.ArchivedAt != nil {
+				skipReason = "任务已归档，链式执行跳过"
+			}
+			if err := m.skipTask(taskEntity, chainRunID, upstreamRunID, skipReason); err != nil {
+				return 0, err
+			}
 			return 0, nil
+		}
+		if taskEntity.ArchivedAt != nil {
+			return 0, fmt.Errorf("任务已归档，请先恢复后再触发")
 		}
 		return 0, fmt.Errorf("任务已暂停，请先恢复后再触发")
 	}
 
-	// 跳过下次检查（仅 cron 触发）
-	if reason == "cron" && taskEntity.SkipNext {
-		m.db.Model(&taskEntity).Updates(map[string]interface{}{
-			"skip_next":   false,
-			"next_run_at": nextCronRun(taskEntity.CronSpec),
-		})
-		m.logDispatcher.Dispatch(taskID, nil, "info", "本次定时执行已跳过（用户设置跳过下次）", taskEntity.Status)
-		return 0, nil
-	}
-
 	if ParseStatus(taskEntity.Status) == StatusRunning {
+		if reason == "cron" {
+			return 0, nil
+		}
+		if reason == "chain" {
+			return 0, errTaskChainBusy
+		}
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
+	}
+	if reason == "cron" && ParseStatus(taskEntity.Status) == StatusRetrying {
+		// Durable retry delivery owns next_run_at. A cron tick must not
+		// create a competing attempt while that reservation is pending.
+		return 0, nil
 	}
 	// 手动触发时，阻止有前置依赖的任务被直接执行，需从头节点触发
 	if reason == "manual" && taskEntity.DependsOnTaskID != nil && *taskEntity.DependsOnTaskID > 0 {
 		return 0, fmt.Errorf("该任务有前置依赖（任务 ID: %d），请从链头节点触发", *taskEntity.DependsOnTaskID)
+	}
+	if m.beforeTaskRunReservation != nil {
+		m.beforeTaskRunReservation()
 	}
 	// Cancellation ownership precedes durable reservation. A concurrent Cancel
 	// can therefore abort the caller-owned reservation transaction instead of
@@ -165,8 +260,8 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	}
 
 	// Keep the process-local restore marker check atomic with the durable
-	// admission plus TaskRun reservation. Cross-process exclusion is provided by
-	// the coordinator's shared node-row boundary inside reserveTaskRun.
+	// admission plus TaskRun reservation. Cross-process exclusion is provided
+	// by the coordinator's shared node-row boundary inside reserveTaskRun.
 	nLock := m.nodeLock(taskEntity.NodeID)
 	nLock.Lock()
 	conflicted, err := m.hasRunningConflict(taskEntity)
@@ -176,24 +271,50 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	}
 	if conflicted {
 		nLock.Unlock()
+		if reason == "cron" {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("同节点有任务正在运行，请稍候再试")
 	}
 	// 检查同节点是否有恢复任务正在运行（恢复是破坏性操作，需要节点级互斥）
 	if m.isNodeRestoring(taskEntity.NodeID) {
 		nLock.Unlock()
+		if reason == "cron" {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("同节点有恢复任务正在运行，请稍候再试")
 	}
 
 	requestedRun := model.TaskRun{
-		TaskID:            taskID,
-		TriggerType:       reason,
-		Status:            "pending",
-		ChainRunID:        chainRunID,
-		UpstreamTaskRunID: upstreamRunID,
+		TaskID:               taskID,
+		TriggerType:          reason,
+		Status:               model.TaskRunStatusPending,
+		ChainRunID:           chainRunID,
+		UpstreamTaskRunID:    upstreamRunID,
+		CronScheduledAt:      cronScheduledAt,
+		CronOccurrenceID:     cronOccurrenceID,
+		ExecutorTypeSnapshot: strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType)),
 	}
 	run, err := m.reserveTaskRun(runCtx, taskEntity.NodeID, requestedRun)
 	nLock.Unlock()
+	if errors.Is(err, errTaskChainRunHandled) {
+		if run.ID != 0 {
+			return run.ID, nil
+		}
+		return 0, fmt.Errorf("链式执行已有子任务但缺少执行记录")
+	}
+	if errors.Is(err, errCronOccurrenceHandled) || errors.Is(err, errCronOccurrenceClaimed) {
+		return 0, nil
+	}
+	if err == nil && run.Status == model.TaskRunStatusSkipped {
+		return run.ID, nil
+	}
 	if err != nil {
+		if reason == "cron" {
+			// The occurrence remains queued; the defer releases this core's
+			// lease so another core can retry immediately.
+			return 0, nil
+		}
 		if errors.Is(err, ErrNodeWriteConflict) {
 			return 0, fmt.Errorf("同节点有恢复任务正在运行，请稍候再试: %w", err)
 		}
@@ -202,15 +323,178 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		}
 		return 0, fmt.Errorf("创建执行记录失败: %w", err)
 	}
-
-	m.stopRetryTimer(taskID)
+	if !m.handoffPendingRunAdmission(ownership) {
+		if run.ID != 0 {
+			if cancelErr := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, run.ID, "任务已取消", ownership); cancelErr != nil &&
+				!errors.Is(cancelErr, errTaskRunCASLost) && !errors.Is(cancelErr, gorm.ErrRecordNotFound) {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", run.ID).
+					Err(cancelErr).Msg("关闭期间放弃任务执行记录失败")
+			}
+		}
+		if reason == "chain" {
+			return 0, errTaskChainBusy
+		}
+		if reason == "retry" || reason == "cron" {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("系统维护中，请稍候再试")
+	}
 	scheduled = true
-	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
 		m.runTaskWithContext(taskID, run.ID, reason, chainRunID, runCtx, ownership, ownership.cancel)
 	}()
 	return run.ID, nil
+}
+
+func (m *Manager) populateRsyncBinary(task *model.Task) {
+	if m == nil || task == nil || !strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rsync") ||
+		m.executorFactory == nil {
+		return
+	}
+	resolved := m.executorFactory.Resolve(task.ExecutorType)
+	provider, ok := resolved.(executor.RsyncBinaryProvider)
+	if !ok {
+		return
+	}
+	task.RsyncBinary = provider.RsyncBinary()
+}
+
+// armLegacyMutableGeneration persists the pre-provider write hold only after
+// revalidating the immutable TaskRun binding. Rclone's keyed hold is fenced by
+// the database partial unique index; historical unkeyed rows are serialized by
+// the authoritative node row and rechecked under that same transaction.
+func (m *Manager) armLegacyMutableGeneration(
+	ctx context.Context,
+	taskEntity *model.Task,
+	taskID, runID uint,
+	generationState string,
+) error {
+	if m == nil || m.db == nil || taskEntity == nil || taskID == 0 || runID == 0 {
+		return fmt.Errorf("mutable writer generation arm persistence unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var refreshed model.Task
+	preserveTaskBinding := false
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var run model.TaskRun
+		runResult := tx.Select(
+			"task_id", "status", "node_id_snapshot", "backup_config_fingerprint",
+			"resource_key", "executor_type_snapshot",
+		).Where("id = ? AND task_id = ? AND status = ?", runID, taskID, model.TaskRunStatusRunning).
+			Limit(1).Find(&run)
+		if runResult.Error != nil {
+			return runResult.Error
+		}
+		if runResult.RowsAffected != 1 {
+			return ErrNodeWriteStartLost
+		}
+		if !model.IsTaskRunNodeSnapshotAuthoritative(run.NodeIDSnapshot) ||
+			run.NodeIDSnapshot != taskEntity.NodeID {
+			return ErrNodeWriteStartLost
+		}
+		preserveTaskBinding = strings.TrimSpace(run.BackupConfigFingerprint) == ""
+
+		taskResult := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+			Preload("Node").Preload("Node.SSHKey").Preload("Policy").
+			Where("id = ?", taskID).Limit(1).Find(&refreshed)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 || refreshed.NodeID != run.NodeIDSnapshot {
+			return ErrNodeWriteStartLost
+		}
+		if run.BackupConfigFingerprint != "" &&
+			run.BackupConfigFingerprint != model.TaskRunBackupConfigFingerprint(refreshed) {
+			return errTaskRunBackupBindingMismatch
+		}
+
+		if strings.TrimSpace(run.ExecutorTypeSnapshot) != "" &&
+			!strings.EqualFold(strings.TrimSpace(run.ExecutorTypeSnapshot), strings.TrimSpace(refreshed.ExecutorType)) {
+			return errTaskRunBackupBindingMismatch
+		}
+		if isLegacyMutableRcloneTask(refreshed) {
+			// Every legacy Rclone arm participates in the node-row boundary:
+			// keyed-keyed races are fenced by the unique resource index, while
+			// keyed-vs-historical rows share this lock and recheck.
+			nodeLock := tx.Model(&model.Node{}).
+				Where("id = ?", refreshed.NodeID).
+				UpdateColumn("name", gorm.Expr("name"))
+			if nodeLock.Error != nil {
+				return nodeLock.Error
+			}
+			if nodeLock.RowsAffected != 1 {
+				return ErrNodeWriteStartLost
+			}
+			identity, keyed := model.TaskRunResourceIdentityForTask(refreshed)
+			if strings.TrimSpace(run.ResourceKey) != "" &&
+				(!keyed || run.ResourceKey != identity.Key) {
+				return errTaskRunBackupBindingMismatch
+			}
+			if strings.TrimSpace(run.ResourceKey) == "" {
+				if err := rejectUnresolvedMutableGenerationTx(tx, &refreshed); err != nil {
+					return err
+				}
+				if err := rejectSameNodeMutableGenerationTx(tx, &refreshed, runID); err != nil {
+					return err
+				}
+			} else if err := rejectHistoricalUnresolvedMutableGenerationTx(tx, &refreshed); err != nil {
+				return err
+			}
+		}
+
+		armResult := tx.Model(&model.TaskRun{}).
+			Where("id = ? AND task_id = ? AND status = ? AND backup_generation_state IN ?",
+				runID, taskID, model.TaskRunStatusRunning,
+				[]string{"", model.TaskRunGenerationStateDirty, model.TaskRunGenerationStateWriting}).
+			Update("backup_generation_state", generationState)
+		if armResult.Error != nil {
+			if isActiveMutableResourceConflict(armResult.Error) {
+				return fmt.Errorf("%w: shared mutable resource is already being written", ErrMutableGenerationUnresolved)
+			}
+			return armResult.Error
+		}
+		if armResult.RowsAffected != 1 {
+			return ErrNodeWriteStartLost
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !preserveTaskBinding {
+		rsyncBinary := taskEntity.RsyncBinary
+		*taskEntity = refreshed
+		taskEntity.RsyncBinary = rsyncBinary
+	}
+	return nil
+}
+
+func (m *Manager) clearLegacyMutableGenerationAfterNoStart(taskID, runID uint, markNoStart bool) error {
+	noStartState := ""
+	generationStates := []string{
+		"",
+		model.TaskRunGenerationStateDirty,
+		model.TaskRunGenerationStateWriting,
+		model.TaskRunGenerationStateUnknown,
+	}
+	if markNoStart {
+		noStartState = model.TaskRunGenerationStateNoStart
+		generationStates = append(generationStates, model.TaskRunGenerationStateNoStart)
+	}
+	result := m.db.Model(&model.TaskRun{}).
+		Where("id = ? AND task_id = ? AND status = ? AND backup_generation_state IN ?",
+			runID, taskID, model.TaskRunStatusRunning, generationStates).
+		Update("backup_generation_state", noStartState)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("mutable writer no-start generation state could not be cleared")
+	}
+	return nil
 }
 
 func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID string) {
@@ -235,19 +519,30 @@ func (m *Manager) runTaskWithContext(
 	defer m.chainRunner.Delete(taskID)
 	defer runCancel()
 
+	ownerClaimed, ownerErr := m.claimTaskRunOwner(context.Background(), taskID, runID)
+	if ownerErr != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(ownerErr).Msg("claim task run execution lease")
+		return
+	}
+	if !ownerClaimed {
+		// A malformed/foreign direct-run invocation may not satisfy the
+		// task_id predicate used by the owner claim. Close only the durable
+		// row if it is still unowned or its lease has expired; a live owner
+		// remains fenced and will recover or finish it itself.
+		if err := m.failTaskRunBeforeExecutor(context.Background(), runID, "执行记录与任务不匹配"); err != nil && !errors.Is(err, errTaskRunNotOwner) {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("reject unowned TaskRun before executor")
+		}
+		logger.Module("task").Info().Uint("task_id", taskID).Uint("task_run_id", runID).Msg("task run execution lease owned by another process")
+		return
+	}
+	heartbeatCancel := m.startTaskRunHeartbeat(runCtx, runID, runCancel)
+	defer heartbeatCancel()
+
 	runCompleted := false
 	defer func() {
-		if !runCompleted {
-			now := time.Now()
-			result := m.db.Model(&model.TaskRun{}).
-				Where("id = ? AND status IN ?", runID, []string{model.TaskRunStatusPending, model.TaskRunStatusRunning}).
-				Updates(map[string]interface{}{
-					"status":      "failed",
-					"finished_at": &now,
-					"last_error":  "任务启动前异常退出",
-				})
-			if result.Error != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(result.Error).Msg("标记启动前异常 TaskRun 失败")
+		if ownerClaimed && !runCompleted {
+			if err := m.recoverTaskRunOnReturn(runCtx, taskID, runID, "任务启动前异常退出"); err != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("标记启动前异常 TaskRun 失败")
 			}
 		}
 	}()
@@ -255,20 +550,22 @@ func (m *Manager) runTaskWithContext(
 	select {
 	case m.semaphore <- struct{}{}:
 	case <-runCtx.Done():
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消排队 TaskRun 失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		return
 	}
 	defer func() { <-m.semaphore }()
 
 	lock := m.taskLock(taskID)
 	if !acquireLockWithContext(runCtx, lock) {
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待任务锁的 TaskRun 失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		return
 	}
 	defer lock.Unlock()
@@ -291,40 +588,48 @@ func (m *Manager) runTaskWithContext(
 		return
 	}
 	if currentRun.TaskID != taskID || !model.IsTaskRunNodeSnapshotAuthoritative(currentRun.NodeIDSnapshot) || currentRun.NodeIDSnapshot != taskEntity.NodeID {
-		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", "执行记录节点快照不具备执行权限，跳过执行", taskEntity.Status)
+		message := "执行记录节点快照不具备执行权限"
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", message+"，跳过执行", taskEntity.Status)
+		if err := m.failTaskRunBeforeExecutor(context.Background(), runID, message); err != nil {
+			logger.Module("task").Warn().Uint("task_run_id", runID).Err(err).Msg("reject malformed TaskRun before executor")
+		} else {
+			runCompleted = true
+		}
 		return
 	}
 	if currentRun.Status == model.TaskRunStatusCanceled || runCtx.Err() != nil {
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("保留启动前取消状态失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "任务已在启动前取消，跳过执行", taskEntity.Status)
 		return
 	}
 
 	// 检查关联节点是否存在（Preload 时 Node 可能为 nil，如节点已被删除）
 	if taskEntity.Node.ID == 0 {
-		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", "关联节点不存在，跳过执行", taskEntity.Status)
-		now := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "failed",
-			"finished_at": &now,
-			"last_error":  "关联节点不存在",
-		})
+		message := "关联节点不存在"
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", message+"，跳过执行", taskEntity.Status)
+		finishedAt := time.Now().UTC()
+		if err := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusPending}, nil, nil,
+			StatusFailed, map[string]interface{}{"finished_at": &finishedAt, "last_error": message}); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("关联节点不存在终态保存失败")
+			return
+		}
 		runCompleted = true
 		return
 	}
-
 	// 检查节点是否已归档
 	if taskEntity.Node.Archived {
-		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "节点已归档，跳过执行", taskEntity.Status)
-		canceledAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "canceled",
-			"finished_at": &canceledAt,
-			"last_error":  "节点已归档",
-		})
+		message := "节点已归档"
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", message+"，跳过执行", taskEntity.Status)
+		finishedAt := time.Now().UTC()
+		if err := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusPending}, nil, nil,
+			StatusCanceled, map[string]interface{}{"finished_at": &finishedAt, "last_error": message}); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("节点归档终态保存失败")
+			return
+		}
 		runCompleted = true
 		return
 	}
@@ -333,14 +638,15 @@ func (m *Manager) runTaskWithContext(
 	checkTime := time.Now()
 	if taskEntity.Node.MaintenanceStart != nil && taskEntity.Node.MaintenanceEnd != nil &&
 		checkTime.After(*taskEntity.Node.MaintenanceStart) && checkTime.Before(*taskEntity.Node.MaintenanceEnd) {
-		canceledAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "canceled",
-			"finished_at": &canceledAt,
-			"last_error":  "节点处于维护窗口",
-		})
+		message := "节点处于维护窗口"
+		finishedAt := time.Now().UTC()
+		if err := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusPending}, nil, nil,
+			StatusCanceled, map[string]interface{}{"finished_at": &finishedAt, "last_error": message}); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("节点维护窗口终态保存失败")
+			return
+		}
 		runCompleted = true
-		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "节点处于维护窗口，跳过执行", "")
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", message+"，跳过执行", "")
 		return
 	}
 
@@ -352,10 +658,11 @@ func (m *Manager) runTaskWithContext(
 
 	strategyLock := m.strategyLock(taskEntity.NodeID, taskEntity.PolicyID)
 	if !acquireLockWithContext(runCtx, strategyLock) {
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待策略锁的 TaskRun 失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		return
 	}
 	defer strategyLock.Unlock()
@@ -364,10 +671,11 @@ func (m *Manager) runTaskWithContext(
 	// 与 TriggerRestore() 中的 hasNodeConflictForRestore+restoreNodes.Store 互斥。
 	nLock := m.nodeLock(taskEntity.NodeID)
 	if !acquireLockWithContext(runCtx, nLock) {
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待节点锁的 TaskRun 失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		return
 	}
 
@@ -392,22 +700,50 @@ func (m *Manager) runTaskWithContext(
 	m.sampleWriter.ResetThrottle(taskID)
 	execTimeout := computeExecTimeout(taskEntity)
 	execCtx, timeoutCancel := context.WithTimeout(runCtx, execTimeout)
+	defer timeoutCancel()
+	previousTaskOutcome := taskEntity
+	if ownership != nil {
+		ownership.setPreviousTaskOutcome(previousTaskOutcome)
+	}
 	execCtx = m.withTaskCredentialAuditContext(execCtx, taskEntity, runID, reason, map[string]any{
 		"operation":            "task_run",
 		"chain_run_id_present": strings.TrimSpace(chainRunID) != "",
 	})
-	defer timeoutCancel()
-	previousTaskOutcome := taskEntity
-	if err := m.enterTaskExecution(execCtx, runID, taskEntity.NodeID, now, &taskEntity); err != nil {
+	if err := m.enterTaskExecutionForReason(execCtx, runID, taskEntity.NodeID, now, &taskEntity, reason); err != nil {
 		nLock.Unlock()
-		if execCtx.Err() != nil || errors.Is(err, context.Canceled) {
-			if cancelErr := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); cancelErr != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保留执行入口取消状态失败")
-			}
+		if errors.Is(err, errCronTaskBlocked) {
 			runCompleted = true
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "定时任务在执行入口被暂停或跳过", taskEntity.Status)
+			return
+		}
+		if errors.Is(err, errTaskPaused) {
+			runCompleted = true
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "任务已暂停，排队执行已取消", taskEntity.Status)
+			return
+		}
+		if errors.Is(err, ErrPolicyConcurrencyLimit) {
+			if cancelErr := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "策略并发上限，拒绝本次执行", ownership); cancelErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保存策略并发拒绝状态失败")
+			} else {
+				runCompleted = true
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "策略并发上限，跳过本次执行", taskEntity.Status)
+			}
+			return
+		}
+		if execCtx.Err() != nil || errors.Is(err, context.Canceled) {
+			if cancelErr := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); cancelErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保留执行入口取消状态失败")
+			} else {
+				runCompleted = true
+			}
 			return
 		}
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("TaskRun 执行入口拒绝: %v", err), taskEntity.Status)
+		if rejectErr := m.failTaskRunBeforeExecutor(context.Background(), runID, "任务执行入口拒绝"); rejectErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(rejectErr).Msg("保存执行入口拒绝终态失败")
+		} else {
+			runCompleted = true
+		}
 		return
 	}
 	if execCtx.Err() != nil || runCtx.Err() != nil {
@@ -419,9 +755,10 @@ func (m *Manager) runTaskWithContext(
 			"任务已取消",
 		); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿未进入 executor 的 Task 执行失败")
+		} else {
+			runCompleted = true
 		}
 		nLock.Unlock()
-		runCompleted = true
 		return
 	}
 	nLock.Unlock()
@@ -442,20 +779,16 @@ func (m *Manager) runTaskWithContext(
 	if err := m.renderPolicyProfileHooks(&taskEntity); err != nil {
 		errorMsg := sanitizeTaskLastError(fmt.Sprintf("渲染应用感知 hook 失败: %v", err))
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
-		failedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "failed",
-			"finished_at": &failedAt,
-			"last_error":  errorMsg,
-		})
-		runCompleted = true
-		if err := m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
-			"next_run_at": nextCronRun(taskEntity.CronSpec),
-			"last_error":  errorMsg,
-		}); err != nil {
-			logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in app-profile hook render error path")
+		failedAt := time.Now().UTC()
+		if terminalErr := m.failTaskExecutionBeforeExecutor(runCtx, taskID, runID,
+			map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": errorMsg},
+			map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("app-profile hook render terminal persistence failed")
+			return
 		}
-		m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
+		taskEntity.Status = string(StatusFailed)
+		taskEntity.LastError = errorMsg
+		runCompleted = true
 		return
 	}
 
@@ -470,8 +803,9 @@ func (m *Manager) runTaskWithContext(
 				"任务已取消",
 			); err != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿 pre-hook 前取消失败")
+			} else {
+				runCompleted = true
 			}
-			runCompleted = true
 			return
 		}
 		hookTimeout := time.Duration(taskEntity.Policy.HookTimeoutSeconds) * time.Second
@@ -485,20 +819,16 @@ func (m *Manager) runTaskWithContext(
 		if hookErr != nil {
 			errorMsg := sanitizeTaskLastError(fmt.Sprintf("pre-hook 执行失败: %v", hookErr))
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
-			failedAt := time.Now()
-			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-				"status":      "failed",
-				"finished_at": &failedAt,
-				"last_error":  errorMsg,
-			})
-			runCompleted = true
-			if err := m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
-				"next_run_at": nextCronRun(taskEntity.CronSpec),
-				"last_error":  errorMsg,
-			}); err != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in pre-hook error path")
+			failedAt := time.Now().UTC()
+			if terminalErr := m.failTaskExecutionBeforeExecutor(runCtx, taskID, runID,
+				map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": errorMsg},
+				map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("pre-hook terminal persistence failed")
+				return
 			}
-			m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
+			taskEntity.Status = string(StatusFailed)
+			taskEntity.LastError = errorMsg
+			runCompleted = true
 			return
 		}
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "pre-hook 执行成功", taskEntity.Status)
@@ -513,12 +843,105 @@ func (m *Manager) runTaskWithContext(
 			"任务已取消",
 		); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿 executor 前取消失败")
+		} else {
+			runCompleted = true
+		}
+		return
+	}
+	var captureManifest string
+	var captureLayout string
+	var captureRoot string
+	m.populateRsyncBinary(&taskEntity)
+	mutableWriterAttempted := isLegacyMutableTask(taskEntity)
+	captureAttempted := isLegacyMutableRsyncTask(taskEntity)
+	captureError := ""
+	if captureAttempted {
+		captureManifest, err = executor.CaptureRsyncManifest(execCtx, taskEntity, executor.RsyncCaptureSourceRole)
+		if err != nil {
+			captureError = sanitizeTaskLastError("Rsync 捕获证据生成失败: " + err.Error())
+			captureManifest = ""
+		} else {
+			captureEvidence, decodeErr := model.DecodeRsyncCaptureManifest(captureManifest)
+			if decodeErr != nil {
+				captureError = "Rsync 捕获证据无效"
+				captureManifest = ""
+			} else {
+				captureLayout = captureEvidence.Layout
+				captureRoot, decodeErr = model.EncodeRsyncCaptureRootSidecar(captureEvidence.Root)
+				if decodeErr != nil {
+					captureError = "Rsync 捕获根证据无效"
+					captureManifest = ""
+				}
+			}
+		}
+		if execCtx.Err() != nil || runCtx.Err() != nil {
+			if cancelErr := m.cancelTaskExecutionBeforeExecutor(
+				runID,
+				taskID,
+				taskEntity.NodeID,
+				&previousTaskOutcome,
+				"任务已取消",
+			); cancelErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("捕获证据后取消失败")
+			} else {
+				runCompleted = true
+			}
+			return
+		}
+	}
+	if mutableWriterAttempted && !captureAttempted && (execCtx.Err() != nil || runCtx.Err() != nil) {
+		if cancelErr := m.cancelTaskExecutionBeforeExecutor(
+			runID,
+			taskID,
+			taskEntity.NodeID,
+			&previousTaskOutcome,
+			"任务已取消",
+		); cancelErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("Rclone 写入前取消失败")
+		} else {
+			runCompleted = true
+		}
+		return
+	}
+	armMutableGeneration := func() error {
+		if err := execCtx.Err(); err != nil {
+			return &executor.NoProcessStartError{Err: err}
+		}
+		if !mutableWriterAttempted {
+			return nil
+		}
+		generationState := model.TaskRunGenerationStateDirty
+		if isLegacyMutableRcloneTask(taskEntity) {
+			// Rclone has no source-side capture. "writing" is the durable
+			// pre-provider hold: a crash or unknown remote outcome must keep
+			// subsequent cron/manual writes out until an operator reconciles
+			// the mutable remote.
+			generationState = model.TaskRunGenerationStateWriting
+		}
+		if err := m.armLegacyMutableGeneration(execCtx, &taskEntity, taskID, runID, generationState); err != nil {
+			return err
+		}
+		if m.afterLegacyRsyncGenerationArm != nil {
+			m.afterLegacyRsyncGenerationArm()
+		}
+		return nil
+	}
+	runStartedAt := now
+	if ownership != nil && !ownership.beginProvider() {
+		if err := m.cancelTaskExecutionBeforeExecutor(
+			runID,
+			taskID,
+			taskEntity.NodeID,
+			&previousTaskOutcome,
+			"任务已取消",
+		); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消 provider 入口失败")
+			return
 		}
 		runCompleted = true
 		return
 	}
-	runStartedAt := now
-	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, func(level, message string) {
+	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, armMutableGeneration, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
 		m.sampleWriter.Write(taskID, taskEntity.NodeID, runStartedAt, sample)
@@ -528,50 +951,53 @@ func (m *Manager) runTaskWithContext(
 	})
 	exitCode, err := providerResult.ExitCode, providerResult.Err
 	suppressRetry := providerResult.SuppressRetry
+	var remoteUnknownErr *executor.RemoteExecutionUnknownError
+	remoteExecutionUnknown := errors.As(err, &remoteUnknownErr)
+	// ExecutorNotInvoked and NoProcessStartError are explicit pre-start
+	// evidence. They are the only outcomes allowed to clear the pre-provider
+	// generation hold, even when another result flag suppresses retries.
+	noProcessStart := providerResult.ExecutorNotInvoked || isNoProcessStartGenerationError(err)
 
+	if mutableWriterAttempted && noProcessStart {
+		if clearErr := m.clearLegacyMutableGenerationAfterNoStart(taskID, runID, isLegacyMutableRcloneTask(taskEntity)); clearErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(clearErr).Msg("mutable writer no-start generation latch clear failed")
+		}
+	}
 	wasTimeout := !suppressRetry && (errors.Is(err, context.DeadlineExceeded) || errors.Is(execCtx.Err(), context.DeadlineExceeded))
 	if wasTimeout {
 		errorMsg := fmt.Sprintf("任务执行超时（>%s），已强制中止", execTimeout)
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
-		failedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "failed",
-			"finished_at": &failedAt,
-			"last_error":  errorMsg,
-		})
-		runCompleted = true
-		if err := m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
-			"next_run_at": nextCronRun(taskEntity.CronSpec),
-			"last_error":  errorMsg,
-		}); err != nil {
-			logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in timeout error path")
+		failedAt := time.Now().UTC()
+		failedStatus := StatusFailed
+		if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &failedStatus,
+			map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": errorMsg},
+			StatusFailed, map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("timeout terminal persistence failed")
+			return
 		}
-		m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
+		taskEntity.Status = string(StatusFailed)
+		taskEntity.LastError = errorMsg
+		runCompleted = true
 		return
 	}
 
 	wasCanceled := !suppressRetry && (errors.Is(err, context.Canceled) || errors.Is(execCtx.Err(), context.Canceled) || m.isCanceled(taskID))
 	if wasCanceled {
-		if ParseStatus(taskEntity.Status) != StatusCanceled {
-			if statusErr := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
-				"next_run_at": nextCronRun(taskEntity.CronSpec),
-				"last_error":  "任务已取消",
-			}); statusErr != nil {
-				m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 canceled 失败: %v", statusErr), taskEntity.Status)
-				return
-			}
+		message := "任务已取消"
+		canceledStatus := StatusCanceled
+		finishedAt := time.Now().UTC()
+		if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &canceledStatus,
+			map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": message},
+			StatusCanceled, map[string]interface{}{"finished_at": &finishedAt, "last_error": message}); terminalErr != nil {
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 canceled 失败: %v", terminalErr), taskEntity.Status)
+			return
 		}
-		finishedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "canceled",
-			"finished_at": &finishedAt,
-			"last_error":  "任务已取消",
-		})
+		taskEntity.Status = string(StatusCanceled)
+		taskEntity.LastError = message
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "任务执行已取消，进程已中断", taskEntity.Status)
 		return
 	}
-
 	if err == nil && exitCode == 0 {
 		// Post-hook 执行
 		if taskEntity.Policy != nil && taskEntity.Policy.PostHook != "" {
@@ -589,11 +1015,78 @@ func (m *Manager) runTaskWithContext(
 				m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "post-hook 执行成功", taskEntity.Status)
 			}
 		}
+		if !providerResult.Managed && taskEntity.ExecutorType == "rsync" && m.backupSourceCompletionObserver != nil {
+			if observeErr := m.backupSourceCompletionObserver.ObserveBackupSourceCompletion(execCtx, taskID); observeErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(observeErr).Msg("观察 Rsync 备份源完成状态失败")
+			}
+		}
+		if execCtx.Err() != nil || runCtx.Err() != nil {
+			message := "任务已取消"
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "备份源完成观察期间任务已取消", taskEntity.Status)
+			canceledStatus := StatusCanceled
+			finishedAt := time.Now().UTC()
+			if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &canceledStatus,
+				map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": message},
+				StatusCanceled, map[string]interface{}{"finished_at": &finishedAt, "last_error": message}); terminalErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("source completion cancellation terminal persistence failed")
+				return
+			}
+			taskEntity.Status = string(StatusCanceled)
+			taskEntity.LastError = message
+			runCompleted = true
+			return
+		}
+
+		if captureAttempted && captureError != "" {
+			warningStatus := StatusWarning
+			finishedAt := time.Now().UTC()
+			duration := finishedAt.Sub(now).Milliseconds()
+			if terminalErr := m.terminalizeTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &warningStatus,
+				map[string]interface{}{
+					"retry_count": 0, "next_run_at": cronutil.Next(taskEntity.CronSpec),
+					"last_error": captureError, "verify_status": "warning",
+				},
+				StatusWarning, map[string]interface{}{
+					"finished_at": &finishedAt, "duration_ms": duration,
+					"verify_status": "warning", "last_error": captureError, "progress": 100,
+				}); terminalErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("Rsync capture warning persistence failed")
+				return
+			}
+			taskEntity.Status = string(StatusWarning)
+			taskEntity.LastError = captureError
+			runCompleted = true
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "备份捕获证据不可用，结果标记为 warning: "+captureError, taskEntity.Status)
+			return
+		}
 
 		verifyStatus := "none"
-
-		// 检查关联策略是否启用校验
-		if shouldRunLegacyVerification(providerResult, taskEntity.Policy) {
+		if captureManifest != "" {
+			if verifyErr := executor.VerifyRsyncCaptureManifestTarget(execCtx, taskEntity, captureManifest); verifyErr != nil {
+				verifyMessage := sanitizeTaskLastError("Rsync 捕获目标校验失败: " + verifyErr.Error())
+				warningStatus := StatusWarning
+				finishedAt := time.Now().UTC()
+				duration := finishedAt.Sub(now).Milliseconds()
+				if terminalErr := m.terminalizeTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &warningStatus,
+					map[string]interface{}{
+						"retry_count": 0, "next_run_at": cronutil.Next(taskEntity.CronSpec),
+						"last_error": verifyMessage, "verify_status": "warning",
+					},
+					StatusWarning, map[string]interface{}{
+						"finished_at": &finishedAt, "duration_ms": duration,
+						"verify_status": "warning", "last_error": verifyMessage, "progress": 100,
+					}); terminalErr != nil {
+					logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("Rsync capture target verification persistence failed")
+					return
+				}
+				taskEntity.Status = string(StatusWarning)
+				taskEntity.LastError = verifyMessage
+				runCompleted = true
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "备份捕获证据校验未通过: "+verifyMessage, taskEntity.Status)
+				return
+			}
+			verifyStatus = "passed"
+		} else if shouldRunLegacyVerification(providerResult, taskEntity.Policy) {
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始备份完整性校验", taskEntity.Status)
 			result := verifier.VerifyWithLineageGuard(execCtx, taskEntity, taskEntity.Policy.VerifySampleRate, m.db, func(level, msg string) {
 				m.logDispatcher.Dispatch(taskID, runIDPtr, level, msg, string(StatusRunning))
@@ -605,18 +1098,17 @@ func (m *Manager) runTaskWithContext(
 			// 校验期间可能被取消
 			if execCtx.Err() != nil {
 				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "校验期间任务已取消", taskEntity.Status)
-				if err := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
-					"next_run_at": nextCronRun(taskEntity.CronSpec),
-					"last_error":  "任务已取消",
-				}); err != nil {
-					logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in verify-cancel error path")
+				message := "任务已取消"
+				canceledStatus := StatusCanceled
+				finishedAt := time.Now().UTC()
+				if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &canceledStatus,
+					map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": message},
+					StatusCanceled, map[string]interface{}{"finished_at": &finishedAt, "last_error": message}); terminalErr != nil {
+					logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("verify cancellation terminal persistence failed")
+					return
 				}
-				finishedAt := time.Now()
-				m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-					"status":      "canceled",
-					"finished_at": &finishedAt,
-					"last_error":  "任务已取消",
-				})
+				taskEntity.Status = string(StatusCanceled)
+				taskEntity.LastError = message
 				runCompleted = true
 				return
 			}
@@ -625,70 +1117,71 @@ func (m *Manager) runTaskWithContext(
 
 			if result.Status == "warning" || result.Status == "failed" {
 				verifyMessage := sanitizeTaskLastError(result.Message)
-				if err := m.updateStatus(&taskEntity, StatusWarning, map[string]interface{}{
-					"retry_count":   0,
-					"next_run_at":   nextCronRun(taskEntity.CronSpec),
-					"last_error":    verifyMessage,
-					"verify_status": verifyStatus,
-				}); err != nil {
-					logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("updateStatus failed in verify-warning error path")
-				}
-				finishedAt := time.Now()
+				warningStatus := StatusWarning
+				finishedAt := time.Now().UTC()
 				duration := finishedAt.Sub(now).Milliseconds()
-				m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-					"status":        "warning",
-					"finished_at":   &finishedAt,
-					"duration_ms":   duration,
-					"verify_status": verifyStatus,
-					"last_error":    verifyMessage,
-					"progress":      100,
-				})
+				warningRunUpdates := map[string]interface{}{
+					"finished_at": &finishedAt, "duration_ms": duration,
+					"verify_status": result.Status, "last_error": verifyMessage, "progress": 100,
+				}
+				if isLegacyMutableRcloneTask(taskEntity) {
+					// The remote command completed, but verification did not:
+					// preserve a known-dirty hold rather than claiming success.
+					warningRunUpdates["backup_generation_state"] = model.TaskRunGenerationStateDirty
+				}
+				if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &warningStatus,
+					map[string]interface{}{
+						"retry_count": 0, "next_run_at": cronutil.Next(taskEntity.CronSpec),
+						"last_error": verifyMessage, "verify_status": result.Status,
+					},
+					StatusWarning, warningRunUpdates); terminalErr != nil {
+					logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("verify warning terminal persistence failed")
+					return
+				}
+				taskEntity.Status = string(StatusWarning)
+				taskEntity.LastError = verifyMessage
 				runCompleted = true
 				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "备份校验未通过: "+verifyMessage, taskEntity.Status)
-				m.alertDispatcher.RaiseVerificationFailure(taskEntity, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
-				m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 				return
 			}
-			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "备份完整性校验通过", taskEntity.Status)
 		}
 
-		if statusErr := m.updateStatus(&taskEntity, StatusSuccess, map[string]interface{}{
-			"retry_count":   0,
-			"next_run_at":   nextCronRun(taskEntity.CronSpec),
-			"last_error":    "",
-			"verify_status": verifyStatus,
-		}); statusErr != nil {
-			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 success 失败: %v", statusErr), taskEntity.Status)
-			return
-		}
-		// 计算本次执行的平均吞吐量
-		finishedAt := time.Now()
+		// 计算本次执行的平均吞吐量 before the short terminal transaction.
+		finishedAt := time.Now().UTC()
 		duration := finishedAt.Sub(now).Milliseconds()
 		var avgThroughput float64
 		m.db.Model(&model.TaskTrafficSample{}).
 			Where("task_id = ? AND sampled_at BETWEEN ? AND ?", taskID, runStartedAt, finishedAt).
 			Select("COALESCE(AVG(throughput_mbps), 0)").Scan(&avgThroughput)
 
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":          "success",
-			"finished_at":     &finishedAt,
-			"duration_ms":     duration,
-			"verify_status":   verifyStatus,
-			"throughput_mbps": avgThroughput,
-			"last_error":      "",
-			"progress":        100,
-		})
+		successStatus := StatusSuccess
+		successRunUpdates := map[string]interface{}{
+			"finished_at": &finishedAt, "duration_ms": duration,
+			"verify_status": verifyStatus, "throughput_mbps": avgThroughput,
+			"last_error": "", "progress": 100,
+		}
+		if captureManifest != "" {
+			successRunUpdates["backup_capture_layout"] = captureLayout
+			successRunUpdates["backup_capture_root"] = captureRoot
+			successRunUpdates["backup_capture_manifest"] = captureManifest
+			successRunUpdates["backup_generation_state"] = model.TaskRunGenerationStateVerified
+		}
+		if mutableWriterAttempted && !captureAttempted {
+			successRunUpdates["backup_generation_state"] = model.TaskRunGenerationStateVerified
+		}
+		if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &successStatus,
+			map[string]interface{}{
+				"retry_count": 0, "next_run_at": cronutil.Next(taskEntity.CronSpec),
+				"last_error": "", "verify_status": verifyStatus,
+			},
+			StatusSuccess, successRunUpdates, !providerResult.Managed); terminalErr != nil {
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 success 失败: %v", terminalErr), taskEntity.Status)
+			return
+		}
+		taskEntity.Status = string(StatusSuccess)
+		taskEntity.LastError = ""
 		runCompleted = true
-		// 更新关联节点的最后备份时间
-		if taskEntity.NodeID > 0 {
-			backupAt := time.Now()
-			m.db.Model(&model.Node{}).Where("id = ?", taskEntity.NodeID).Update("last_backup_at", &backupAt)
-		}
-		backupLastSuccess.WithLabelValues(taskEntity.Name).SetToCurrentTime()
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "任务执行成功", taskEntity.Status)
-		if resolveErr := m.alertDispatcher.ResolveTaskAlerts(taskID, "任务恢复成功"); resolveErr != nil {
-			logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
-		}
 
 		// 快照差异异常检测（异步，best-effort）
 		if !providerResult.Managed && m.anomalySink != nil && taskEntity.ExecutorType == "restic" && taskEntity.PolicyID != nil {
@@ -717,9 +1210,6 @@ func (m *Manager) runTaskWithContext(
 				}
 			}()
 		}
-
-		m.dispatchAutomation(automation.EventBackupSucceeded, taskEntity, runIDPtr)
-		m.triggerDownstreamIfAny(taskEntity, runID, chainRunID)
 		return
 	}
 
@@ -735,7 +1225,7 @@ func (m *Manager) runTaskWithContext(
 	var nextRun time.Time
 	var shouldRetry bool
 
-	if taskEntity.Policy != nil && taskEntity.Policy.MaxRetries > 0 {
+	if taskEntity.Policy != nil && taskEntity.Policy.MaxRetries >= 0 {
 		nextStatus, retryCount, nextRun, shouldRetry = m.stateMachine.NextAfterFailureConfigurable(
 			StatusRunning, taskEntity.RetryCount, time.Now(),
 			taskEntity.Policy.MaxRetries, taskEntity.Policy.RetryBaseSeconds,
@@ -747,67 +1237,53 @@ func (m *Manager) runTaskWithContext(
 		shouldRetry = false
 	}
 
-	// 当前 TaskRun 始终标记为 failed（即使 Task 进入 retrying）
-	failedAt := time.Now()
+	// 当前 TaskRun 始终标记为 failed（即使 Task 进入 retrying）。 The
+	// aggregate and run are committed together so a persistence fault cannot
+	// expose a half-updated terminal pair.
+	failedAt := time.Now().UTC()
 	failDuration := failedAt.Sub(now).Milliseconds()
-	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-		"status":      "failed",
-		"finished_at": &failedAt,
-		"duration_ms": failDuration,
-		"last_error":  errorMsg,
-	})
+	finalStatus := nextStatus
+	if !shouldRetry {
+		finalStatus = StatusFailed
+	}
+	runUpdates := map[string]interface{}{
+		"finished_at": &failedAt, "duration_ms": failDuration, "last_error": errorMsg,
+	}
+	if isLegacyMutableRcloneTask(taskEntity) && !noProcessStart {
+		if remoteExecutionUnknown {
+			runUpdates["backup_generation_state"] = model.TaskRunGenerationStateUnknown
+		} else {
+			// A known terminal failure proves only that this attempt failed;
+			// it does not prove the previous verified remote generation.
+			runUpdates["backup_generation_state"] = model.TaskRunGenerationStateDirty
+		}
+	}
+	if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &finalStatus,
+		map[string]interface{}{
+			"retry_count": retryCount,
+			"next_run_at": func() *time.Time {
+				if shouldRetry {
+					return &nextRun
+				}
+				return cronutil.Next(taskEntity.CronSpec)
+			}(),
+			"last_error": errorMsg,
+		},
+		StatusFailed, runUpdates); terminalErr != nil {
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("保存任务失败终态失败: %v", terminalErr), taskEntity.Status)
+		return
+	}
+	taskEntity.Status = string(finalStatus)
+	taskEntity.RetryCount = retryCount
+	taskEntity.LastError = errorMsg
 	runCompleted = true
 
 	if shouldRetry {
-		if statusErr := m.updateStatus(&taskEntity, nextStatus, map[string]interface{}{
-			"retry_count": retryCount,
-			"next_run_at": &nextRun,
-			"last_error":  errorMsg,
-		}); statusErr != nil {
-			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 retrying 失败: %v", statusErr), taskEntity.Status)
-			return
-		}
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", fmt.Sprintf("任务失败，计划重试 #%d，计划时间: %s", retryCount, nextRun.Local().Format(config.DisplayTimeFormatTZ)), taskEntity.Status)
-		// 保存链路上下文，重试时由 trigger() 恢复
-		m.retryChainContexts.Store(taskID, chainContext{chainRunID: chainRunID})
-		delay := time.Until(nextRun)
-		if delay < 0 {
-			delay = 0
-		}
-		timer := time.AfterFunc(delay, func() {
-			m.retryTimers.Delete(taskID)
-			// 二次确认：任务状态是否仍为 retrying（可能已被取消/暂停）
-			var current struct{ Status string }
-			if err := m.db.Model(&model.Task{}).Select("status").Where("id = ?", taskID).Take(&current).Error; err != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("重试定时器回调：加载任务状态失败")
-				return
-			}
-			if ParseStatus(current.Status) != StatusRetrying {
-				logger.Module("task").Info().Uint("task_id", taskID).Str("status", current.Status).Msg("重试定时器回调：任务状态已变更，跳过重试")
-				return
-			}
-			if _, err := m.trigger(taskID, "retry"); err != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("重试触发失败")
-			}
-		})
-		m.storeRetryTimer(taskID, timer)
 		return
 	}
 
-	if statusErr := m.updateStatus(&taskEntity, StatusFailed, map[string]interface{}{
-		"retry_count": retryCount,
-		"next_run_at": nextCronRun(taskEntity.CronSpec),
-		"last_error":  errorMsg,
-	}); statusErr != nil {
-		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 failed 失败: %v", statusErr), taskEntity.Status)
-		return
-	}
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("任务最终失败: %s", errorMsg), taskEntity.Status)
-	if raiseErr := m.alertDispatcher.RaiseTaskFailure(taskEntity, runIDPtr, errorMsg); raiseErr != nil {
-		logger.Module("task").Warn().Uint("task_id", taskEntity.ID).Err(raiseErr).Msg("RaiseTaskFailure 失败")
-	}
-	m.skipDownstreamIfAny(taskEntity, runID, chainRunID, errorMsg)
-	m.dispatchAutomation(automation.EventBackupFailed, taskEntity, runIDPtr)
 }
 
 // runRestoreTask 执行恢复任务。与 runTask 不同，恢复不影响原始 Task 的状态，
@@ -834,9 +1310,25 @@ func (m *Manager) runRestoreTaskWithContext(
 	}
 	defer m.locks.Delete(taskID) // 清理任务锁，防止 sync.Map 无限增长
 	defer m.restoreNodes.Delete(restoreTask.NodeID)
-
-	defer m.chainRunner.Delete(taskID)
-	defer cancel()
+	ownerClaimed, ownerErr := m.claimTaskRunOwner(context.Background(), taskID, runID)
+	if ownerErr != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(ownerErr).Msg("claim restore task run execution lease")
+		return
+	}
+	if !ownerClaimed {
+		if execCtx.Err() != nil {
+			if ownership != nil {
+				ownership.waitCancellationPersistence()
+			}
+			if err := m.cancelRestoreTaskRunBeforeExecutor(context.Background(), taskID, runID, "恢复任务已取消"); err != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("保留恢复启动前取消状态失败")
+			}
+		}
+		logger.Module("task").Info().Uint("task_id", taskID).Uint("task_run_id", runID).Msg("restore task run execution lease owned by another process")
+		return
+	}
+	heartbeatCancel := m.startTaskRunHeartbeat(execCtx, runID, cancel)
+	defer heartbeatCancel()
 
 	if isLegacyGuardedProvider(restoreTask.ExecutorType) && m.lineageGuard != nil {
 		session, err := m.lineageGuard.Begin(execCtx, taskID, publication.OperationLegacyRestoreLatest)
@@ -851,21 +1343,22 @@ func (m *Manager) runRestoreTaskWithContext(
 		defer func() { _ = session.Close() }()
 	}
 
+	if execCtx.Err() != nil {
+		if ownership != nil {
+			ownership.waitCancellationPersistence()
+		}
+		if err := m.cancelRestoreTaskRunBeforeExecutor(context.Background(), taskID, runID, "恢复任务已取消"); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("保留恢复启动前取消状态失败")
+		}
+		return
+	}
 	m.sampleWriter.ResetThrottle(taskID)
 
 	runCompleted := false
 	defer func() {
-		if !runCompleted {
-			now := time.Now()
-			result := m.db.Model(&model.TaskRun{}).
-				Where("id = ? AND status IN ?", runID, []string{"pending", "running"}).
-				Updates(map[string]interface{}{
-					"status":      "failed",
-					"finished_at": &now,
-					"last_error":  "恢复任务启动前异常退出",
-				})
-			if result.Error != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(result.Error).Msg("标记恢复启动前异常 TaskRun 失败")
+		if ownerClaimed && !runCompleted {
+			if err := m.recoverRestoreTaskRunOnReturn(context.Background(), taskID, runID, "恢复任务启动前异常退出"); err != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("标记恢复启动前异常 TaskRun 失败")
 			}
 		}
 	}()
@@ -874,26 +1367,27 @@ func (m *Manager) runRestoreTaskWithContext(
 	select {
 	case m.semaphore <- struct{}{}:
 	case <-execCtx.Done():
-		finishedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ? AND status = ?", runID, "pending").Updates(map[string]interface{}{
-			"status":      "canceled",
-			"finished_at": &finishedAt,
-			"last_error":  "恢复任务已取消",
-		})
+		if ownership != nil {
+			ownership.waitCancellationPersistence()
+		}
+		if err := m.cancelRestoreTaskRunBeforeExecutor(context.Background(), taskID, runID, "恢复任务已取消"); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消排队恢复 TaskRun 失败")
+			return
+		}
 		runCompleted = true
 		return
 	}
 	defer func() { <-m.semaphore }()
 
-	// context-aware lock：取消时立即返回
 	lock := m.taskLock(taskID)
 	if !acquireLockWithContext(execCtx, lock) {
-		finishedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ? AND status = ?", runID, "pending").Updates(map[string]interface{}{
-			"status":      "canceled",
-			"finished_at": &finishedAt,
-			"last_error":  "恢复任务已取消",
-		})
+		if ownership != nil {
+			ownership.waitCancellationPersistence()
+		}
+		if err := m.cancelRestoreTaskRunBeforeExecutor(context.Background(), taskID, runID, "恢复任务已取消"); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待恢复任务锁失败")
+			return
+		}
 		runCompleted = true
 		return
 	}
@@ -901,12 +1395,13 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	strategyLock := m.strategyLock(restoreTask.NodeID, restoreTask.PolicyID)
 	if !acquireLockWithContext(execCtx, strategyLock) {
-		finishedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ? AND status = ?", runID, "pending").Updates(map[string]interface{}{
-			"status":      "canceled",
-			"finished_at": &finishedAt,
-			"last_error":  "恢复任务已取消",
-		})
+		if ownership != nil {
+			ownership.waitCancellationPersistence()
+		}
+		if err := m.cancelRestoreTaskRunBeforeExecutor(context.Background(), taskID, runID, "恢复任务已取消"); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待恢复策略锁失败")
+			return
+		}
 		runCompleted = true
 		return
 	}
@@ -916,25 +1411,32 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	now := time.Now().UTC()
 	if err := m.enterTaskExecution(execCtx, runID, restoreTask.NodeID, now, nil); err != nil {
+		if errors.Is(err, errCronTaskBlocked) {
+			runCompleted = true
+			return
+		}
 		if execCtx.Err() != nil || errors.Is(err, context.Canceled) {
-			if cancelErr := m.cancelTaskRunBeforeExecutor(runID, "恢复任务已取消"); cancelErr != nil {
+			if cancelErr := m.terminalizeRestoreTaskRun(context.Background(), taskID, runID, model.TaskRunActiveStatuses(), StatusCanceled,
+				map[string]interface{}{"started_at": nil, "duration_ms": int64(0), "last_error": "恢复任务已取消"}); cancelErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保留恢复执行入口取消状态失败")
+				return
 			}
 			runCompleted = true
 			return
 		}
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("恢复 TaskRun 执行入口拒绝: %v", err), "")
+		if rejectErr := m.failTaskRunBeforeExecutor(context.Background(), runID, "恢复任务执行入口拒绝"); rejectErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(rejectErr).Msg("保存恢复执行入口拒绝终态失败")
+		} else {
+			runCompleted = true
+		}
 		return
 	}
 	if execCtx.Err() != nil {
-		if err := m.cancelTaskExecutionBeforeExecutor(
-			runID,
-			taskID,
-			restoreTask.NodeID,
-			nil,
-			"恢复任务已取消",
-		); err != nil {
+		if err := m.terminalizeRestoreTaskRun(context.Background(), taskID, runID, []string{model.TaskRunStatusRunning}, StatusCanceled,
+			map[string]interface{}{"started_at": nil, "duration_ms": int64(0), "last_error": "恢复任务已取消"}); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿恢复预检前取消失败")
+			return
 		}
 		runCompleted = true
 		return
@@ -942,64 +1444,63 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始恢复任务", "")
 
-	// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
-	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
-	if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
-		// 区分取消与真实失败
-		if execCtx.Err() != nil {
-			finishedAt := time.Now()
-			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-				"status":      "canceled",
-				"finished_at": &finishedAt,
-				"last_error":  "恢复任务已取消",
-			})
+	m.populateRsyncBinary(&restoreTask)
+	// Legacy Rsync performs source staging and its remote target readiness
+	// check inside RunRestore. Running the readiness check here would mutate a
+	// node before the captured Core source has been verified.
+	if !isLegacyMutableTask(restoreTask) {
+		precheckTarget := restoreTask.RsyncTarget
+
+		// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
+		if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, precheckTarget); err != nil {
+			// 区分取消与真实失败
+			if execCtx.Err() != nil {
+				finishedAt := time.Now().UTC()
+				if terminalErr := m.terminalizeRestoreTaskRun(context.Background(), taskID, runID, []string{model.TaskRunStatusRunning}, StatusCanceled,
+					map[string]interface{}{"finished_at": &finishedAt, "last_error": "恢复任务已取消"}); terminalErr != nil {
+					logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复前检查取消终态保存失败")
+					return
+				}
+				runCompleted = true
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "canceled")
+				return
+			}
+			errorMsg := sanitizeTaskLastError(fmt.Sprintf("恢复前检查失败（目标路径）: %s", err.Error()))
+			finishedAt := time.Now().UTC()
+			duration := finishedAt.Sub(now).Milliseconds()
+			if terminalErr := m.terminalizeRestoreTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, StatusFailed,
+				map[string]interface{}{"finished_at": &finishedAt, "duration_ms": duration, "last_error": errorMsg}); terminalErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复前检查失败终态保存失败")
+				return
+			}
 			runCompleted = true
-			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "canceled")
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, "failed")
+			m.alertDispatcher.RaiseTaskFailureForRestoreRun(restoreTask, runID, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 			return
 		}
-		errorMsg := sanitizeTaskLastError(fmt.Sprintf("恢复前检查失败（目标路径）: %s", err.Error()))
-		finishedAt := time.Now()
-		duration := finishedAt.Sub(now).Milliseconds()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "failed",
-			"finished_at": &finishedAt,
-			"duration_ms": duration,
-			"last_error":  errorMsg,
-		})
-		runCompleted = true
-		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, "failed")
-		m.alertDispatcher.RaiseTaskFailure(restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
-		return
 	}
-	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "恢复前检查通过", "")
-
-	// 通过 RestoreExecutor 接口在远程节点上执行恢复
 	exec := m.executorFactory.Resolve(restoreTask.ExecutorType)
 	restoreExec, ok := exec.(executor.RestoreExecutor)
 	if !ok {
 		errorMsg := "该执行器类型不支持恢复操作"
-		finishedAt := time.Now()
+		finishedAt := time.Now().UTC()
 		duration := finishedAt.Sub(now).Milliseconds()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "failed",
-			"finished_at": &finishedAt,
-			"duration_ms": duration,
-			"last_error":  errorMsg,
-		})
+		if terminalErr := m.terminalizeRestoreTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, StatusFailed,
+			map[string]interface{}{"finished_at": &finishedAt, "duration_ms": duration, "last_error": errorMsg}); terminalErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复执行器不支持终态保存失败")
+			return
+		}
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, "failed")
 		return
 	}
 
 	if execCtx.Err() != nil {
-		if err := m.cancelTaskExecutionBeforeExecutor(
-			runID,
-			taskID,
-			restoreTask.NodeID,
-			nil,
-			"恢复任务已取消",
-		); err != nil {
+		if err := m.terminalizeRestoreTaskRun(context.Background(), taskID, runID, []string{model.TaskRunStatusRunning}, StatusCanceled,
+			map[string]interface{}{"last_error": "恢复任务已取消"}); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿恢复 executor 前取消失败")
+			return
 		}
 		runCompleted = true
 		return
@@ -1016,12 +1517,12 @@ func (m *Manager) runRestoreTaskWithContext(
 	// 检查是否被取消
 	wasCanceled := errors.Is(err, context.Canceled) || errors.Is(execCtx.Err(), context.Canceled)
 	if wasCanceled {
-		finishedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "canceled",
-			"finished_at": &finishedAt,
-			"last_error":  "恢复任务已取消",
-		})
+		finishedAt := time.Now().UTC()
+		if terminalErr := m.terminalizeRestoreTaskRun(context.Background(), taskID, runID, []string{model.TaskRunStatusRunning}, StatusCanceled,
+			map[string]interface{}{"finished_at": &finishedAt, "last_error": "恢复任务已取消"}); terminalErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复任务取消终态保存失败")
+			return
+		}
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复任务已取消", "canceled")
 		return
@@ -1029,17 +1530,16 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	if err != nil {
 		errorMsg := sanitizeTaskLastError(err.Error())
-		finishedAt := time.Now()
+		finishedAt := time.Now().UTC()
 		duration := finishedAt.Sub(now).Milliseconds()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "failed",
-			"finished_at": &finishedAt,
-			"duration_ms": duration,
-			"last_error":  errorMsg,
-		})
+		if terminalErr := m.terminalizeRestoreTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, StatusFailed,
+			map[string]interface{}{"finished_at": &finishedAt, "duration_ms": duration, "last_error": errorMsg}); terminalErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复任务失败终态保存失败")
+			return
+		}
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "failed")
-		m.alertDispatcher.RaiseTaskFailure(restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
+		m.alertDispatcher.RaiseTaskFailureForRestoreRun(restoreTask, runID, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 		return
 	}
 
@@ -1057,12 +1557,12 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	// 校验期间可能被取消
 	if execCtx.Err() != nil {
-		finishedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":      "canceled",
-			"finished_at": &finishedAt,
-			"last_error":  "恢复任务已取消",
-		})
+		finishedAt := time.Now().UTC()
+		if terminalErr := m.terminalizeRestoreTaskRun(context.Background(), taskID, runID, []string{model.TaskRunStatusRunning}, StatusCanceled,
+			map[string]interface{}{"finished_at": &finishedAt, "last_error": "恢复任务已取消"}); terminalErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复校验取消终态保存失败")
+			return
+		}
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复校验期间任务已取消", "canceled")
 		return
@@ -1072,47 +1572,47 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	if result.Status == "warning" || result.Status == "failed" {
 		verifyMessage := sanitizeTaskLastError(result.Message)
-		finishedAt := time.Now()
+		finishedAt := time.Now().UTC()
 		duration := finishedAt.Sub(now).Milliseconds()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-			"status":        "warning",
-			"finished_at":   &finishedAt,
-			"duration_ms":   duration,
-			"verify_status": verifyStatus,
-			"last_error":    verifyMessage,
-			"progress":      100,
-		})
+		if terminalErr := m.terminalizeRestoreTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, StatusWarning,
+			map[string]interface{}{
+				"finished_at": &finishedAt, "duration_ms": duration,
+				"verify_status": verifyStatus, "last_error": verifyMessage, "progress": 100,
+			}); terminalErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复校验 warning 终态保存失败")
+			return
+		}
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复后校验未通过: "+verifyMessage, "warning")
-		m.alertDispatcher.RaiseVerificationFailure(restoreTask, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
+		m.alertDispatcher.RaiseVerificationFailureForRestoreRun(restoreTask, runID, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
 		return
 	}
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
 
-	finishedAt := time.Now()
+	finishedAt := time.Now().UTC()
 	duration := finishedAt.Sub(now).Milliseconds()
-	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-		"status":        "success",
-		"finished_at":   &finishedAt,
-		"duration_ms":   duration,
-		"verify_status": verifyStatus,
-		"last_error":    "",
-		"progress":      100,
-	})
+	if terminalErr := m.terminalizeRestoreTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, StatusSuccess,
+		map[string]interface{}{
+			"finished_at": &finishedAt, "duration_ms": duration,
+			"verify_status": verifyStatus, "last_error": "", "progress": 100,
+		}); terminalErr != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复成功终态保存失败")
+		return
+	}
 	runCompleted = true
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "恢复任务执行成功", "success")
-	if resolveErr := m.alertDispatcher.ResolveTaskAlerts(taskID, "恢复任务成功"); resolveErr != nil {
-		logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
+	if resolveErr := m.alertDispatcher.ResolveTaskAlertsForRestoreRun(taskID, runID, "恢复任务成功"); resolveErr != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(resolveErr).Msg("ResolveTaskAlertsForRun 失败")
 	}
 }
 
 func (m *Manager) failLegacyRestore(taskID uint, runID uint) {
-	finishedAt := time.Now()
-	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-		"status":      "failed",
-		"finished_at": &finishedAt,
-		"last_error":  string(backupasset.FailureLegacyOperationBlocked),
-	})
+	finishedAt := time.Now().UTC()
+	if err := m.terminalizeRestoreTaskRun(context.Background(), taskID, runID, []string{model.TaskRunStatusPending, model.TaskRunStatusRunning}, StatusFailed,
+		map[string]interface{}{"finished_at": &finishedAt, "last_error": string(backupasset.FailureLegacyOperationBlocked)}); err != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("保存旧路径阻止恢复终态失败")
+		return
+	}
 	m.logDispatcher.Dispatch(taskID, &runID, "warn", "受管备份恢复操作已被安全边界阻止", "failed")
 }
 
@@ -1210,60 +1710,86 @@ func (m *Manager) updateStatus(taskEntity *model.Task, to TaskStatus, updates ma
 	return nil
 }
 
-// triggerDownstreamIfAny 在上游任务成功（或 warning）后触发所有下游任务。
-func (m *Manager) triggerDownstreamIfAny(upstream model.Task, runID uint, chainRunID string) {
-	var downstreams []model.Task
-	if err := m.db.Where("depends_on_task_id = ?", upstream.ID).Find(&downstreams).Error; err != nil {
-		return
-	}
-	for _, downstream := range downstreams {
-		upstreamRunID := runID
-		if _, err := m.triggerCore(downstream.ID, "chain", chainRunID, &upstreamRunID); err != nil {
-			logger.Module("task").Warn().
-				Uint("downstream_task_id", downstream.ID).
-				Uint("upstream_task_id", upstream.ID).
-				Err(err).Msg("触发下游任务失败")
+// skipTask atomically creates a skipped TaskRun and updates the aggregate Task.
+// Child skips are themselves durable effects, so a crash after this commit can
+// be recovered without recursively losing the dependency boundary.
+func (m *Manager) skipTask(taskEntity model.Task, chainRunID string, upstreamRunID *uint, skipReason string) error {
+	now := time.Now().UTC()
+	var run model.TaskRun
+	var created bool
+	err := m.db.Transaction(func(tx *gorm.DB) error {
+		var locked model.Task
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", taskEntity.ID).Limit(1).Find(&locked)
+		if result.Error != nil {
+			return result.Error
 		}
-	}
-}
-
-// skipDownstreamIfAny 在上游任务永久失败后，将所有下游任务标记为 skipped 并递归传播。
-func (m *Manager) skipDownstreamIfAny(upstream model.Task, runID uint, chainRunID string, reason string) {
-	var downstreams []model.Task
-	if err := m.db.Where("depends_on_task_id = ?", upstream.ID).Find(&downstreams).Error; err != nil {
-		return
-	}
-	skipMsg := sanitizeTaskLastError(fmt.Sprintf("前置任务 [%s] 永久失败: %s", upstream.Name, reason))
-	for _, downstream := range downstreams {
-		upstreamRunID := runID
-		m.skipTask(downstream, chainRunID, &upstreamRunID, skipMsg)
-	}
-}
-
-// skipTask 创建 skipped 执行记录，更新任务状态，并递归跳过其下游任务。
-func (m *Manager) skipTask(taskEntity model.Task, chainRunID string, upstreamRunID *uint, skipReason string) {
-	now := time.Now()
-	run := model.TaskRun{
-		TaskID:            taskEntity.ID,
-		TriggerType:       "chain",
-		Status:            "skipped",
-		ChainRunID:        chainRunID,
-		UpstreamTaskRunID: upstreamRunID,
-		SkipReason:        skipReason,
-		StartedAt:         &now,
-		FinishedAt:        &now,
-	}
-	if err := m.db.Create(&run).Error; err != nil {
-		logger.Module("task").Warn().Uint("task_id", taskEntity.ID).Err(err).Msg("创建 skipped 执行记录失败")
-		return
-	}
-	_ = m.updateStatus(&taskEntity, StatusSkipped, map[string]interface{}{
-		"last_error": skipReason,
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		if upstreamRunID != nil {
+			existingResult := tx.Where("task_id = ? AND upstream_task_run_id = ?", locked.ID, *upstreamRunID).
+				Order("id ASC").Limit(1).Find(&run)
+			if existingResult.Error != nil {
+				return existingResult.Error
+			}
+			if existingResult.RowsAffected == 1 {
+				return nil
+			}
+		}
+		run = model.TaskRun{
+			TaskID: locked.ID, TriggerType: "chain", Status: model.TaskRunStatusSkipped,
+			ChainRunID: chainRunID, UpstreamTaskRunID: upstreamRunID, SkipReason: skipReason,
+			StartedAt: &now, FinishedAt: &now,
+		}
+		if err := tx.Create(&run).Error; err != nil {
+			return err
+		}
+		created = true
+		if ParseStatus(locked.Status) != StatusSkipped {
+			if err := m.stateMachine.ValidateTransition(ParseStatus(locked.Status), StatusSkipped); err == nil {
+				taskResult := tx.Model(&model.Task{}).Where("id = ? AND status = ?", locked.ID, locked.Status).
+					Updates(map[string]interface{}{"status": string(StatusSkipped), "last_error": skipReason})
+				if taskResult.Error != nil {
+					return taskResult.Error
+				}
+				if taskResult.RowsAffected != 1 {
+					return errTaskRunCASLost
+				}
+			}
+			// A task can already have a terminal outcome (or an active
+			// ordinary run) when a disabled/archive chain effect is consumed.
+			// Preserve that aggregate state; the child TaskRun is the durable
+			// skip fact and must not be rolled back merely because the
+			// aggregate cannot transition to skipped.
+		}
+		var downstreams []model.Task
+		if err := tx.Where("depends_on_task_id = ?", locked.ID).Order("id ASC").Find(&downstreams).Error; err != nil {
+			return err
+		}
+		effects := make([]taskRunTerminalEffect, 0, len(downstreams))
+		for _, downstream := range downstreams {
+			payload, _ := json.Marshal(downstreamTaskRunEffect{
+				TaskID: downstream.ID, UpstreamRunID: run.ID, ChainRunID: chainRunID,
+			})
+			effects = append(effects, taskRunTerminalEffect{
+				Key:  fmt.Sprintf("downstream:%d", downstream.ID),
+				Type: model.TaskRunEffectTypeDownstreamSkip, Payload: string(payload),
+			})
+		}
+		return persistTaskRunEffectsTx(tx, run.ID, effects)
 	})
-	runIDPtr := run.ID
-	m.logDispatcher.Dispatch(taskEntity.ID, &runIDPtr, "warn", skipReason, string(StatusSkipped))
-	// 递归跳过下游任务
-	m.skipDownstreamIfAny(taskEntity, run.ID, chainRunID, skipReason)
+	if err != nil {
+		return err
+	}
+	if !created {
+		if run.ID != 0 {
+			return m.drainTaskRunEffects(context.Background(), run.ID)
+		}
+		return nil
+	}
+	runID := run.ID
+	m.logDispatcher.Dispatch(taskEntity.ID, &runID, "warn", skipReason, string(StatusSkipped))
+	return m.drainTaskRunEffects(context.Background(), run.ID)
 }
 
 // isNodeRestoring 检查指定节点是否有恢复任务正在运行（内存级持续互斥）。
@@ -1318,17 +1844,125 @@ func acquireLockWithContext(ctx context.Context, mu *sync.Mutex) bool {
 	}
 }
 
-func (m *Manager) cancelTaskRunBeforeExecutor(runID uint, message string) error {
+func (m *Manager) cancelTaskRunBeforeExecutorWithOwnership(
+	taskID, runID uint,
+	message string,
+	ownership *pendingRunOwnership,
+) error {
+	if ownership != nil {
+		switch ownership.cancellationKind() {
+		case pendingRunCancellationShutdown:
+			return m.releaseTaskRunBeforeExecutor(taskID, runID)
+		case pendingRunCancellationUser:
+			// Cancel owns the durable terminal boundary. The runner must not
+			// race its compensation transaction against that user decision.
+			ownership.waitCancellationPersistence()
+		}
+	}
+	return m.cancelTaskRunBeforeExecutor(taskID, runID, message)
+}
+
+// releaseTaskRunBeforeExecutor gives a shutdown-canceled pending run back to
+// durable recovery. It deliberately does not write a terminal status, no-start
+// evidence, or Task state: the next manager must be able to claim this intent.
+func (m *Manager) releaseTaskRunBeforeExecutor(taskID, runID uint) error {
+	if m == nil || m.db == nil || taskID == 0 || runID == 0 {
+		return errors.New("task run release persistence unavailable")
+	}
+	return m.db.Transaction(func(tx *gorm.DB) error {
+		var run model.TaskRun
+		loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND task_id = ?", runID, taskID).Limit(1).Find(&run)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		if loaded.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		if model.IsTerminalTaskRunStatus(run.Status) {
+			return nil
+		}
+		if run.Status != model.TaskRunStatusPending {
+			return errTaskRunCASLost
+		}
+		if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
+			run.ExecutionOwnerID != m.executionOwnerID &&
+			(run.ExecutionLeaseUntil == nil || run.ExecutionLeaseUntil.After(time.Now().UTC())) {
+			return errTaskRunNotOwner
+		}
+		result := tx.Model(&model.TaskRun{}).
+			Where(`id = ? AND task_id = ? AND status = ? AND
+				(execution_owner_id = '' OR execution_owner_id = ? OR
+					execution_lease_until IS NULL OR execution_lease_until <= ?)`,
+				runID, taskID, model.TaskRunStatusPending, m.executionOwnerID, time.Now().UTC()).
+			Updates(map[string]interface{}{
+				"execution_owner_id":    "",
+				"execution_lease_until": nil,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errTaskRunCASLost
+		}
+		return nil
+	})
+}
+
+func (m *Manager) cancelTaskRunBeforeExecutor(taskID, runID uint, message string) error {
+	if m == nil || m.db == nil || taskID == 0 || runID == 0 {
+		return errors.New("task run cancellation persistence unavailable")
+	}
 	finishedAt := time.Now().UTC()
-	return m.db.Model(&model.TaskRun{}).
-		Where("id = ? AND status = ?", runID, "pending").
-		Updates(map[string]interface{}{
-			"status":      "canceled",
-			"started_at":  nil,
-			"finished_at": &finishedAt,
-			"duration_ms": int64(0),
-			"last_error":  message,
-		}).Error
+	return m.db.Transaction(func(tx *gorm.DB) error {
+		var run model.TaskRun
+		loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND task_id = ?", runID, taskID).Limit(1).Find(&run)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		if loaded.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		if run.Status == model.TaskRunStatusCanceled {
+			return nil
+		}
+		if run.Status != model.TaskRunStatusPending {
+			return errTaskRunCASLost
+		}
+		if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
+			run.ExecutionOwnerID != m.executionOwnerID {
+			return errTaskRunNotOwner
+		}
+		markNoStart, err := rcloneNoStartStateForRunTx(tx, &run)
+		if err != nil {
+			return err
+		}
+		runUpdates := map[string]interface{}{
+			"status":                model.TaskRunStatusCanceled,
+			"started_at":            nil,
+			"finished_at":           &finishedAt,
+			"duration_ms":           int64(0),
+			"last_error":            sanitizeTaskLastError(message),
+			"execution_owner_id":    "",
+			"execution_lease_until": nil,
+		}
+		if markNoStart && strings.TrimSpace(run.BackupGenerationState) == "" {
+			runUpdates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
+		}
+		result := tx.Model(&model.TaskRun{}).
+			Where(`id = ? AND task_id = ? AND status = ? AND
+				(execution_owner_id = '' OR execution_owner_id = ?)`,
+				runID, taskID, model.TaskRunStatusPending, m.executionOwnerID).
+			Updates(runUpdates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errTaskRunCASLost
+		}
+		return nil
+	})
 }
 
 func (m *Manager) isCanceled(taskID uint) bool {
