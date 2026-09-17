@@ -1,4 +1,4 @@
-> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md) and [v0.55.15 bounded lease-recovery plan](research/v05515-lease-recovery.md). Older status, delivery gates and deferred-work ownership below are historical where those records supersede them.
+> **Current disposition (2026-09-17):** see [reconciliation.md](reconciliation.md) and [v0.55.16 production acceptance](research/v05516-real-data-acceptance.md). The lease fix is released and positive UI paths pass by user report; current functional acceptance is ready for archival with explicit health-probe/log-audit limitations. Older status, backup prerequisites, delivery gates and node-log sequencing below are historical where those records supersede them.
 
 # v0.50.4 Real-Data Production Acceptance Implementation Plan
 

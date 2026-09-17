@@ -1,6 +1,6 @@
 # Design — v0.50.4 真实备份数据验收
 
-> Current v0.55.15 continuation: [lease-recovery design and evidence](research/v05515-lease-recovery.md) supersedes historical execution and node-log sequencing below. Reuse this task; keep production acceptance open.
+> Current v0.55.16 continuation: [production acceptance evidence](research/v05516-real-data-acceptance.md) supersedes historical execution, backup prerequisites and node-log sequencing below. Search/preview now pass by user report; reuse this task and current functional acceptance is ready for archival with explicit health-probe/log-audit limitations.
 
 ## Selected approach
 

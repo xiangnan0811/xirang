@@ -1,4 +1,27 @@
-# Task reconciliation — 2026-09-16
+# Task reconciliation — 2026-09-17
+
+## Final acceptance disposition
+
+The remaining acceptance child has current v0.55.16 production evidence in
+`../08-21-backup-assets-release-acceptance/research/v05516-real-data-acceptance.md`
+(both tasks move together into the same archive month). Task 13 search and
+preview pass by user report; previously indexing tasks now preview after
+completion. The user confirms Up/Retry/frame, retained-data access, and the
+specified fixed 45-minute secret-reveal reuse/logout cases. The NAS reports
+v0.55.16 running/healthy with zero restarts. The functional observation window
+has no remaining user-reported failure; a separate raw server-log audit is not
+claimed. The user explicitly declined an additional backup.
+
+All 19 other direct children were verified present in the archive with completed
+status on 2026-09-17. No original design work or delivered child is reopened.
+Archive the accepted child first, then this parent (20/20 completed children).
+This records the scoped production acceptance and its evidence limits; it does
+not newly certify optional native AWS or Worker/provider deployments. Preserve
+the separately accepted node-log collector configuration. The existing P3
+quality-debt task is next after this documentation PR and required CI merge.
+No product change or new release is expected from this archival.
+
+## Historical reconciliation — 2026-09-16
 
 This disposition supersedes stale current-state, delivery and execution instructions in this task; old evidence remains historical. User authorized evidence-based archival and consolidation on 2026-09-16.
 
