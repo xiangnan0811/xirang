@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.17](https://github.com/xiangnan0811/xirang/compare/v0.55.16...v0.55.17) (2026-09-17)
+
+
+### 🐛 Bug Fixes
+
+* normalize API errors and clean up RAF and overflow logs ([#541](https://github.com/xiangnan0811/xirang/issues/541)) ([62a43f3](https://github.com/xiangnan0811/xirang/commit/62a43f35cd525e229849e36552f0b7293ff115b5))
+
 ## [0.55.16](https://github.com/xiangnan0811/xirang/compare/v0.55.15...v0.55.16) (2026-09-16)
 
 
