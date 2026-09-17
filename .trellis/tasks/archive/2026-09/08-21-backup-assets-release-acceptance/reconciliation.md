@@ -1,6 +1,27 @@
-# Task reconciliation — 2026-09-16
+# Task reconciliation — 2026-09-17
 
-## Current continuation: v0.55.15
+## Current continuation: v0.55.16
+
+See [release and real-data production evidence](research/v05516-real-data-acceptance.md).
+The lease repair is merged and released with required CI and registry verification.
+The user upgraded the NAS and confirms Task 13 search/preview work; previously
+indexing tasks now preview after completion, with no current preview failure
+reported. Current NAS inspection confirms v0.55.16 running/healthy with zero
+restarts, started 2026-09-17T01:43:04.996732851Z. The user also confirms
+retained-data/Up/Retry/frame and 45-minute non-sliding reveal/logout behavior
+normal. The coordinating session accepts current functional observation plus
+container health as the consolidated bounded health/error check. No separate
+final `/healthz` probe or raw log audit was repeated; no zero-server-error claim
+is made. Historical exact checks remain unchecked. This task is ready for
+archival and parent review; P3 follows that review.
+
+The user explicitly declined an additional backup. Do not repeat that prerequisite
+or claim a backup exists. Node-log P1 has independently passed production
+acceptance; preserve existing collectors. No new task or production SQL repair is
+needed. This dated continuation supersedes the old current-state assertions and
+execution prerequisites below, without retroactively checking historical gates.
+
+## Historical continuation: v0.55.15 (2026-09-16)
 
 See [current production evidence and bounded lease-recovery plan](research/v05515-lease-recovery.md). Fresh evidence confirms enabled/acknowledged/FeatureLive and active repositories, but Catalog/Search recovery is blocked by expired-heartbeat active index leases with future absolute deadlines. Acceptance remains open. Reuse this task for the narrowly scoped repair; do not recreate archived children. Node-log P1 has separately passed and existing collectors must be preserved.
 
@@ -12,7 +33,11 @@ This task remains open; assessment does not authorize a production change or imp
 
 Full inventory and evidence: `.trellis/workspace/weibo/task-reconciliation-2026-09-16.md`. No product code, production configuration or Provider data was changed by this reconciliation. No new task was created.
 
-## Consolidated outstanding acceptance — NOT PASSED
+## Consolidated acceptance checklist at reconciliation (2026-09-16)
+
+The table remains the scope inventory. Its unchecked list is the historical
+baseline, not a demand to repeat delivered repairs or the declined backup. Consult
+the v0.55.16 record above for current passes, pending evidence and supersessions.
 
 This is the single acceptance owner for the archived repair slices. Existing
 implementation tests and GitHub checks remain delivery evidence. These live

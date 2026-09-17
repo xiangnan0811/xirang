@@ -1,5 +1,7 @@
 # v0.55.15 real-data acceptance and index lease recovery
 
+> Historical diagnosis and implementation record. [v0.55.16 production acceptance](v05516-real-data-acceptance.md) records the successful PR/release CI, user-performed upgrade, declined additional backup and current UI outcomes. Its disposition supersedes the pending CI and pre-deployment prerequisites below; consolidated acceptance remains open.
+
 ## Authority and scope
 
 The user requested continuation of the existing three tasks on 2026-09-16, with production acceptance first, independent work branches and implement/check/PR/CI for code changes. Reuse this acceptance task; do not create another child. This record supersedes historical v0.50.x execution instructions for the current repair only. The ten delivered children remain archived. Node-log P1 is separately accepted; preserve current collector settings.

@@ -246,3 +246,45 @@ User accepted v0.55.15 production scope: required journal node ingested 162 addi
 ### Status
 
 [OK] **Completed**
+
+
+## Session 60: v0.55.16 backup assets production acceptance and program archive
+
+**Date**: 2026-09-17
+**Task**: v0.55.16 backup assets production acceptance and program archive
+**Branch**: `docs/backup-assets-v05516-acceptance`
+
+### Summary
+
+Recorded user-confirmed Task 13 search/preview, completed-index recovery, UI/secret/retained-data checks and v0.55.16 NAS healthy/rest0. Archived existing acceptance and parent tasks; preserved historical evidence and explicit observation limits. Docs-only PR/CI required; P3 quality debt follows merge.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4504bbe5` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 61: Complete bounded P3 middleware RAF and logging fixes
+
+**Date**: 2026-09-17
+**Task**: Complete bounded P3 middleware RAF and logging fixes
+**Branch**: `fix/p3-quality-debt`
+
+### Summary
+
+Reused and archived the existing P3 task after implementing ordinary middleware envelopes, effect-owned RAF cleanup and per-Hub overflow log bounds. Backend focused race/lint/build and API tests pass; frontend full gate 1987 tests passes; independent check added protocol-safe log regressions. Existing repeated shared-SQLite fixture limitations recorded. Required PR/post-merge CI pending; no NAS deployment.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `29ce30b0` | (see git log) |
+
+### Status
+
+[OK] **Completed**

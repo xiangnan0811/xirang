@@ -1158,3 +1158,54 @@ if err := h.persistSettingsMutation(ctx, req); err != nil {
     return
 }
 ```
+
+## Scenario: Ordinary API Middleware Errors
+
+### 1. Scope / Trigger
+
+Auth, role and ownership JSON refusals before an ordinary API handler runs,
+plus the existing post-handler audit-context failure path. Preserve the distinct
+metrics, CORS, content, stream and WebSocket
+protocol responses; do not blanket-rewrite all middleware output.
+
+### 2. Signatures
+
+`middleware.respondAPIError(c *gin.Context, status int, message string)` uses the
+middleware-local `apiResponse` type. Avoid importing handlers into middleware.
+
+### 3. Contracts
+
+Ordinary failures return HTTP-matching `code`, the existing safe `message`, and
+explicit `data:null`. Auth, role and ownership refusals abort downstream handlers;
+audit context validation retains its existing timing after `c.Next()`. Rate limiting retains its
+positive `Retry-After` and matching `data.retry_after`; it shares the envelope
+type but has its own payload. Never expose raw authentication/DB errors.
+
+### 4. Validation / Error Matrix
+
+| Trigger | Status / payload |
+| --- | --- |
+| Missing/invalid session | 401 envelope; frontend preserves session invalidation |
+| Role/ownership refusal | 403 envelope |
+| Invalid ownership resource ID | 400 envelope |
+| Ownership DB/audit context failure | 500 envelope with safe message |
+| Auth dependency unavailable | 503 envelope |
+| Rate limit | 429, positive retry metadata unchanged |
+
+### 5. Good / Base / Bad Cases
+
+Good: a forbidden request surfaces its safe message in the typed frontend client.
+Base: authorized requests still reach their handler. Bad: emitting only `{error}`
+silently discards the message in the frontend envelope decoder.
+
+### 6. Required Tests
+
+Exercise real middleware refusals and abort behavior, status/envelope/null-data
+consistency, unchanged metrics/content/upgrade behavior, and client 400/403/500/
+503 messages plus 401 session cleanup and 429 header precedence. See middleware
+`response_test.go` and frontend API `client.test.ts`.
+
+### 7. Wrong vs Correct
+
+Wrong: ad hoc `c.JSON(status, gin.H{"error": message})`.
+Correct: `respondAPIError(c, status, message)` for an ordinary API refusal.

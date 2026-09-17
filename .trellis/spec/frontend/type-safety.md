@@ -93,7 +93,7 @@ normalization is done in API mappers using `Number(...)`, `String(...)`,
 - Error envelope: `{ code: number, message: string, data?: unknown }`.
 - Rate-limit retry field: `data.retry_after` from backend JSON and
   `Retry-After` from response headers.
-- Error type: `ApiError` with `status`, `message`, `payload`, and optional
+- Error type: `ApiError` with `status`, `message`, `detail`, and optional
   `retryAfter`.
 
 ### 3. Contracts

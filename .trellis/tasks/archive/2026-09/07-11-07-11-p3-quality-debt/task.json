@@ -3,7 +3,7 @@
   "name": "07-11-p3-quality-debt",
   "title": "P3: 质量债清理",
   "description": "Track lower-priority quality debt separately from the completed audit-remediation children.",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": "fullstack",
   "package": null,
@@ -11,11 +11,11 @@
   "creator": "weibo",
   "assignee": "weibo",
   "createdAt": "2026-07-11",
-  "completedAt": null,
-  "branch": null,
+  "completedAt": "2026-09-17",
+  "branch": "fix/p3-quality-debt",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "29ce30b0bc8dbe335ab0afced64aa8b1f70cd0c1",
   "pr_url": null,
   "subtasks": [],
   "children": [
@@ -29,7 +29,7 @@
     "web/src/pages/automation-rules-page.tsx",
     "deploy/nginx/templates/default.conf.template"
   ],
-  "notes": "2026-09-16 reconciliation: Retain independent P3 backlog: API middleware envelope, panel-editor RAF cleanup, and bounded runtime logging. Keep current WebSocket protocol; defer KDF salt migration pending a concrete threat/compatibility design. See reconciliation.md; older PRD/implement snapshots are historical where superseded.",
+  "notes": "2026-09-17 scoped implementation/check complete: middleware API envelopes, effect-owned panel RAF cancellation including ID0, and bounded structured Hub overflow/debug logs. Existing 429/client envelope behavior reused. Other legacy logging and WebSocket/KDF redesign explicitly dispositioned outside this bounded repair. See design.md and research/verification-2026-09-17.md. Archive with fixes; required PR/post-merge CI remains integration gate. No NAS operation or formal release claimed.",
   "meta": {
     "historical_before_2026_09_16": {},
     "reconciliation": {

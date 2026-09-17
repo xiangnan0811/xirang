@@ -34,30 +34,30 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少 Authorization 头"})
+			respondAPIError(c, http.StatusUnauthorized, "缺少 Authorization 头")
 			c.Abort()
 			return
 		}
 		parts := strings.SplitN(header, " ", 2)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization 格式错误"})
+			respondAPIError(c, http.StatusUnauthorized, "Authorization 格式错误")
 			c.Abort()
 			return
 		}
 		claims, err := jwtManager.ParseToken(parts[1])
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "token 无效或过期"})
+			respondAPIError(c, http.StatusUnauthorized, "token 无效或过期")
 			c.Abort()
 			return
 		}
 		if strings.TrimSpace(claims.Purpose) != "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "认证令牌用途不匹配"})
+			respondAPIError(c, http.StatusUnauthorized, "认证令牌用途不匹配")
 			c.Abort()
 			return
 		}
 		// 校验会话绑定字段后，再查询持久化撤销状态。
 		if claims.ID == "" || claims.ExpiresAt == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "token 会话绑定无效"})
+			respondAPIError(c, http.StatusUnauthorized, "token 会话绑定无效")
 			c.Abort()
 			return
 		}
@@ -65,12 +65,12 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 		revoked, revokeErr := jwtManager.IsSessionRevokedContext(checkCtx, claims.ID)
 		cancel()
 		if revokeErr != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "认证服务不可用"})
+			respondAPIError(c, http.StatusServiceUnavailable, "认证服务不可用")
 			c.Abort()
 			return
 		}
 		if revoked {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "token 已注销"})
+			respondAPIError(c, http.StatusUnauthorized, "token 已注销")
 			c.Abort()
 			return
 		}
@@ -78,17 +78,17 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 		if db != nil {
 			var user model.User
 			if err := db.Select("token_version", "role").First(&user, claims.UserID).Error; err != nil {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在或已删除"})
+				respondAPIError(c, http.StatusUnauthorized, "用户不存在或已删除")
 				c.Abort()
 				return
 			}
 			if user.TokenVersion != claims.TokenVersion {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "token 已失效，请重新登录"})
+				respondAPIError(c, http.StatusUnauthorized, "token 已失效，请重新登录")
 				c.Abort()
 				return
 			}
 			if user.Role != claims.Role {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户角色已变更，请重新登录"})
+				respondAPIError(c, http.StatusUnauthorized, "用户角色已变更，请重新登录")
 				c.Abort()
 				return
 			}
