@@ -231,3 +231,51 @@ _ = readAudit.RecordRead(cleanupCtx, summary)
 
 Use the same pattern for ticket failure cleanup; do not call
 `lease.Release(context.Background())` from a request path.
+
+## Scenario: Hub Queue Overflow Diagnostics
+
+### 1. Scope / Trigger
+
+`ws.Hub.Publish` encounters a full broadcast queue. Keep publishing non-blocking
+with respect to the queue; do not amplify overload with one warning per drop.
+
+### 2. Signatures
+
+`Publish(event LogEvent)` delegates to `publishAt(event, now time.Time)` for
+deterministic checks. Each Hub owns an atomic next-warning deadline;
+`dropWarningInterval` is 30 seconds.
+
+### 3. Contracts
+
+Count every dropped event atomically. The first overflow may warn; subsequent
+warnings are limited to one per interval per Hub by compare-and-swap. Emit module
+`ws`, warning level and cumulative `dropped_total`, never the event payload.
+Handshake read diagnostics use structured Debug and no raw client error text.
+No protocol, connection limit, counter reset or configuration change is implied.
+
+### 4. Validation / Error Matrix
+
+| Situation | Result |
+| --- | --- |
+| Queue has room | Enqueue, no drop or warning |
+| First overflow | Increment counter, one warning |
+| Concurrent overflow within interval | Count every drop, suppress extra warnings |
+| Overflow at/after deadline | At most one contender claims next warning |
+
+### 5. Good / Base / Bad Cases
+
+Good: an aggregate warning reveals overload without payload exposure. Base:
+normal delivery is unchanged. Bad: synchronously logging each dropped event
+creates more work precisely when consumers are overloaded.
+
+### 6. Required Tests
+
+Use controlled timestamps, saturated queues and concurrent publishers to verify
+exact counts and interval boundaries without sleeps. Verify module/level/fields,
+payload exclusion and debug filtering. See `ws/hub_logging_test.go`.
+
+### 7. Wrong vs Correct
+
+Wrong: standard `log.Printf` on every failed enqueue.
+Correct: increment the counter for every failure and conditionally emit a
+structured aggregate warning through the per-Hub atomic time gate.

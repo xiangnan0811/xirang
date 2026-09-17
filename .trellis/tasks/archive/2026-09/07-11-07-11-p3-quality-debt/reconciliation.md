@@ -1,4 +1,25 @@
-# Task reconciliation — 2026-09-16
+# Task reconciliation — 2026-09-17
+
+## Current authorized continuation
+
+Backup acceptance and its parent were archived in #540 after the user's real-data
+and UI confirmations. This existing task now owns the three bounded changes in
+[design.md](design.md) and [implement.md](implement.md): API middleware error
+envelopes, panel RAF lifetime, and Hub queue-overflow warning volume. Current
+inspection confirms all three remain relevant; no new task or protocol redesign
+is required. Implementation and independent verification are complete; see
+[verification](research/verification-2026-09-17.md). Earlier delivered work remains
+delivered. Archive this existing task with the scoped fixes and deliver through
+required PR/post-merge CI; local completion is not a NAS upgrade or release.
+
+The runtime logging disposition is module-scoped: repair the demonstrated
+per-dropped-event warning flood and touched Hub debug logging, while retaining
+ordinary terminal/reporting/SSH/migration diagnostics and intentional pre-init
+config logging. This is not a claim that every historical log.Printf was removed.
+The previously documented WebSocket/KDF exclusions remain design dispositions,
+not unfinished implementation within the current authorized repair scope.
+
+## Historical reconciliation — 2026-09-16
 
 This disposition supersedes stale current-state, delivery and execution instructions in this task; old evidence remains historical. User authorized evidence-based archival and consolidation on 2026-09-16.
 
