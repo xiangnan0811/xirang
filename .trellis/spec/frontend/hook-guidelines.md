@@ -74,3 +74,14 @@ managed by explicit context providers and hook-level fetch/update functions.
   Follow the safe access pattern in `auth-context.tsx`.
 - Do not omit cleanup for subscriptions, timers, abortable requests, or
   WebSocket listeners.
+
+### Animation frame ownership
+
+- An effect that schedules nested RAF callbacks must own both IDs locally or in
+  explicit refs and cancel pending callbacks on cleanup. Never attach mutable
+  fields to React state setters or use casts to hide that mutation.
+- Treat RAF IDs as opaque numbers: zero is valid. Use a nullable sentinel and
+  explicit null comparison rather than a truthiness check.
+- Preserve intentional multiple-frame layout waits. Panel editor tests must
+  cover cleanup before the first frame, between frames (including second ID 0),
+  close/reopen, unmount and normal two-frame chart readiness.

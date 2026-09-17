@@ -96,6 +96,30 @@ describe("request envelope handling", () => {
     expect((captured as ApiError).retryAfter).toBe(12);
   });
 
+  it.each([
+    [400, "无效的资源 ID"],
+    [403, "权限不足"],
+    [500, "内部服务错误"],
+    [503, "服务暂不可用"],
+  ])("preserves safe middleware envelope messages for HTTP %i", async (status, message) => {
+    const payload = { code: status, message, data: null };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payload), { status }));
+
+    await expect(request("/protected", { token: "test-token" })).rejects.toMatchObject({
+      name: "ApiError", status, message, detail: payload,
+    });
+  });
+
+  it("preserves the middleware 429 message and prefers the Retry-After header", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      code: 429, message: "请求过于频繁", data: { retry_after: 12 },
+    }), { status: 429, headers: { "Retry-After": "15" } }));
+
+    await expect(request("/limited")).rejects.toMatchObject({
+      status: 429, message: "请求过于频繁", retryAfter: 15,
+    });
+  });
+
   it("sets Idempotency-Key only when the typed request option is supplied", async () => {
     fetchMock.mockResolvedValue(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: null })));
 
@@ -478,7 +502,7 @@ describe("apiClient 会话跳转", () => {
       "task-proof-before-401",
       Date.now() + 60_000,
     );
-    fetchMock.mockResolvedValueOnce(createMockResponse(401, JSON.stringify({ code: 401, message: "expired" })));
+    fetchMock.mockResolvedValueOnce(createMockResponse(401, JSON.stringify({ code: 401, message: "expired", data: null })));
 
     await expect(request("/protected", { token: "expired-token" })).rejects.toMatchObject({ status: 401 });
 

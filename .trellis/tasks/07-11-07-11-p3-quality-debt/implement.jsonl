@@ -1,2 +1,7 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
-{"file": ".trellis/tasks/07-11-07-11-p3-quality-debt/reconciliation.md", "reason": "Current disposition, remaining scope and superseded historical instructions"}
+{"file":".trellis/tasks/07-11-07-11-p3-quality-debt/design.md","reason":"Current bounded scope and decisions"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"API envelope and protocol boundaries"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Structured logging and redaction"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Go checks"}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Effect cleanup"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend gate"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"No setter mutation or unknown casts"}

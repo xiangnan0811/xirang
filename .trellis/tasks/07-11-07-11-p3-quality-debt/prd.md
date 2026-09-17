@@ -1,4 +1,17 @@
-> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
+> **Current disposition (2026-09-17):** user-authorized continuation after backup acceptance and parent archival (#540). Follow [design.md](design.md) and [implement.md](implement.md); prior delivery/deferral notes below are historical.
+
+## Current requirements
+
+1. Align ordinary API middleware JSON errors with `{code,message,data}`; preserve status, safe messages, abort behavior and 429 Retry-After. Keep metrics authentication, content/streams, CORS and WebSocket protocols distinct.
+2. Give the panel editor effect ownership of both RAFs, preserving the two-frame layout wait and cancellation on close/reopen/unmount, including RAF ID zero.
+3. Bound WebSocket overflow diagnostics in time while retaining exact drop counts and non-blocking Publish. Use structured logging in touched hub paths; no blanket legacy logging rewrite.
+
+Acceptance: behavioral regressions, backend lint/build/relevant tests, frontend `npm run check`, independent Trellis check, spec updates, PR and post-merge CI. No new task, schema change, authentication protocol rewrite, KDF migration or NAS operation.
+
+Local implementation, independent checks and spec updates are complete; see
+[verification](research/verification-2026-09-17.md). PR/CI delivery remains the
+integration gate. Historical deferred rows below describe the earlier partial
+delivery and do not override this current scoped disposition.
 
 # PRD: P3 质量债
 
