@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CheckCircle2, Plug, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -25,7 +25,12 @@ interface SSHKeyTestConnectionDialogProps {
   token: string;
 }
 
-export function SSHKeyTestConnectionDialog({
+export function SSHKeyTestConnectionDialog(props: SSHKeyTestConnectionDialogProps) {
+  const nodeIds = props.associatedNodes.map((node) => node.id).join(",");
+  return <SSHKeyTestConnectionSession key={`${props.open}:${props.sshKey?.id}:${nodeIds}`} {...props} />;
+}
+
+function SSHKeyTestConnectionSession({
   open,
   onOpenChange,
   sshKey,
@@ -33,18 +38,9 @@ export function SSHKeyTestConnectionDialog({
   token,
 }: SSHKeyTestConnectionDialogProps) {
   const { t } = useTranslation();
-  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<number>>(new Set());
+  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<number>>(() => new Set(associatedNodes.map((node) => node.id)));
   const [results, setResults] = useState<TestConnectionResult[]>([]);
   const [loading, setLoading] = useState(false);
-
-  // 对话框打开时重置状态，默认选中所有关联节点
-  useEffect(() => {
-    if (open) {
-      setSelectedNodeIds(new Set(associatedNodes.map((n) => n.id)));
-      setResults([]);
-      setLoading(false);
-    }
-  }, [open, associatedNodes]);
 
   const allSelected = useMemo(
     () =>

@@ -28,14 +28,17 @@ interface PrivateNetworkContentTransportPanelProps {
   api?: BackupContentTransportApi;
 }
 
-export function PrivateNetworkContentTransportPanel({
+export function PrivateNetworkContentTransportPanel(props: PrivateNetworkContentTransportPanelProps) {
+  return <PrivateNetworkContentTransportSession key={props.token} {...props} />;
+}
+
+function PrivateNetworkContentTransportSession({
   token,
   api,
 }: PrivateNetworkContentTransportPanelProps) {
   const { t } = useTranslation();
-  const defaultApiRef = useRef<BackupContentTransportApi | null>(null);
-  if (defaultApiRef.current === null) defaultApiRef.current = createBackupContentTransportApi();
-  const transportApi = api ?? defaultApiRef.current;
+  const [defaultApi] = useState(createBackupContentTransportApi);
+  const transportApi = api ?? defaultApi;
   const [setting, setSetting] = useState<BackupContentTransportSetting | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
@@ -43,11 +46,15 @@ export function PrivateNetworkContentTransportPanel({
   const [error, setError] = useState(false);
   const savePendingRef = useRef(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const [previousApi, setPreviousApi] = useState(transportApi);
+  if (previousApi !== transportApi) {
+    setPreviousApi(transportApi);
+    setSetting(null);
+    setError(false);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
-    setSetting(null);
-    setError(false);
     void transportApi.get(token, controller.signal)
       .then((next) => {
         if (!controller.signal.aborted) setSetting(next);

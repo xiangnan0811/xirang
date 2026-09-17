@@ -43,7 +43,11 @@ function isBatchTaskActive(task: BatchStatus["tasks"][number]) {
   return activeBatchTaskStatuses.has(task.status) && !(task.status === "pending" && task.dispatchStatus === "failed");
 }
 
-export function BatchResultDialog({
+export function BatchResultDialog(props: BatchResultDialogProps) {
+  return <BatchResultSession key={`${props.open}:${props.batchId}`} {...props} />;
+}
+
+function BatchResultSession({
   open,
   onOpenChange,
   batchId,
@@ -66,10 +70,9 @@ export function BatchResultDialog({
     }
   }, []);
 
-  const fetchStatus = useCallback(async () => {
+  const fetchStatus = useCallback(() => {
     if (!batchId) return;
-    try {
-      const result = await apiClient.getBatchStatus(token, batchId);
+    return apiClient.getBatchStatus(token, batchId).then((result) => {
       setStatus(result);
       setError("");
 
@@ -77,19 +80,14 @@ export function BatchResultDialog({
       if (!hasActive) {
         stopPolling();
       }
-    } catch (err) {
+    }).catch((err: unknown) => {
       setError(err instanceof Error ? err.message : t("batch.fetchStatusFailed"));
-    }
+    });
   }, [batchId, token, stopPolling, t]);
 
   // 打开时开始轮询
   useEffect(() => {
     if (!open || !batchId) {
-      setStatus(null);
-      setError("");
-      setExpandedTaskId(null);
-      setTaskLogs({});
-      taskLogsRef.current = {};
       stopPolling();
       return;
     }

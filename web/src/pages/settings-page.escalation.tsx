@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Edit2, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -27,35 +27,37 @@ function severityBadgeTone(sev: string): "destructive" | "warning" | "neutral" {
 }
 
 export function SettingsPageEscalation() {
+  const { token } = useAuth();
+  return <SettingsPageEscalationContent key={token ?? ""} />;
+}
+
+function SettingsPageEscalationContent() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const { confirm, dialog } = useConfirm();
 
   const [policies, setPolicies] = useState<EscalationPolicy[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(token));
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<EscalationPolicy | undefined>(undefined);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [togglingId, setTogglingId] = useState<number | null>(null);
 
-  const refresh = useCallback(() => {
+  useEffect(() => {
     if (!token) return;
-    setLoading(true);
     const controller = new AbortController();
     apiClient.listEscalationPolicies(token, { signal: controller.signal })
-      .then(setPolicies)
-      .catch((err) => {
-        if (!controller.signal.aborted) toast.error(getErrorMessage(err));
+      .then((data) => {
+        if (!controller.signal.aborted) setPolicies(data);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) toast.error(getErrorMessage(error));
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
   }, [token]);
-
-  useEffect(() => {
-    return refresh();
-  }, [refresh]);
 
   const handleOpenNew = () => {
     setEditingPolicy(undefined);

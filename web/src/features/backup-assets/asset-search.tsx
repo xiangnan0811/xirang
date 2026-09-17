@@ -1,5 +1,5 @@
 import { Search, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -31,9 +31,11 @@ export function AssetSearch({
 }: AssetSearchProps) {
   const { t } = useTranslation();
   const [draftScope, setDraftScope] = useState(scope);
-  useEffect(() => {
+  const [previousScope, setPreviousScope] = useState(scope);
+  if (previousScope !== scope) {
+    setPreviousScope(scope);
     setDraftScope(scope);
-  }, [scope]);
+  }
   const editingLocked = disabled || locked;
   const canClear = draft.trim() !== "" || submittedQuery !== null || searchActive;
   return (

@@ -15,7 +15,11 @@ interface SnapshotDiffViewerProps {
   token: string;
 }
 
-export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
+export function SnapshotDiffViewer(props: SnapshotDiffViewerProps) {
+  return <SnapshotDiffViewerContent key={JSON.stringify([props.taskId, props.token])} {...props} />;
+}
+
+function SnapshotDiffViewerContent({ taskId, token }: SnapshotDiffViewerProps) {
   const { t } = useTranslation();
   const [snapshots, setSnapshots] = useState<ResticSnapshot[]>([]);
   const [snapshotsLoading, setSnapshotsLoading] = useState(true);
@@ -26,7 +30,6 @@ export function SnapshotDiffViewer({ taskId, token }: SnapshotDiffViewerProps) {
 
   useEffect(() => {
     const controller = new AbortController();
-    setSnapshotsLoading(true);
     apiClient
       .listSnapshots(token, taskId)
       .then((data) => { if (!controller.signal.aborted) setSnapshots(data); })

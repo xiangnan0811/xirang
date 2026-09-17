@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { FileBrowser } from "./file-browser";
@@ -25,6 +25,29 @@ const directoryResult: FileListResult = {
 };
 
 describe("FileBrowser", () => {
+  it("aborts the old root and ignores its late directory response", async () => {
+    let resolveOld!: (value: FileListResult) => void;
+    const oldRequest = new Promise<FileListResult>((resolve) => { resolveOld = resolve; });
+    let oldSignal: AbortSignal | undefined;
+    const fetchDir = vi.fn((path: string, signal?: AbortSignal) => {
+      if (path === "/old") {
+        oldSignal = signal;
+        return oldRequest;
+      }
+      return Promise.resolve(directoryResult);
+    });
+    const fetchContent = vi.fn();
+    const { rerender } = render(<FileBrowser rootPath="/old" fetchDir={fetchDir} fetchContent={fetchContent} />);
+    rerender(<FileBrowser rootPath="/safe" fetchDir={fetchDir} fetchContent={fetchContent} />);
+    expect(oldSignal?.aborted).toBe(true);
+    expect(await screen.findByText("file.txt")).toBeInTheDocument();
+    await act(async () => {
+      resolveOld({ path: "/old", entries: [{ ...directoryResult.entries[0], name: "stale.txt" }], truncated: false });
+    });
+    expect(screen.queryByText("stale.txt")).not.toBeInTheDocument();
+    expect(screen.getByText("file.txt")).toBeInTheDocument();
+  });
+
   it("keeps directory loading unchanged and passes preview AbortSignal to fetchContent", async () => {
     const user = userEvent.setup();
     const preview = createDeferred<FileContentResult>();

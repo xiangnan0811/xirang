@@ -48,7 +48,12 @@ function formatSize(bytes: number, isDir: boolean): string {
 
 const formatModTime = formatTime;
 
-export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className }: FileBrowserProps) {
+export function FileBrowser(props: FileBrowserProps) {
+  const { i18n } = useTranslation();
+  return <FileBrowserContent key={`${props.rootPath ?? "/"}:${i18n.language}`} {...props} />;
+}
+
+function FileBrowserContent({ fetchDir, fetchContent, rootPath = "/", className }: FileBrowserProps) {
   const { t } = useTranslation();
   const [currentPath, setCurrentPath] = useState<string>(rootPath);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -60,16 +65,15 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
   const abortRef = useRef<AbortController | null>(null);
   const fetchDirRef = useRef(fetchDir);
 
-  fetchDirRef.current = fetchDir;
+  useEffect(() => {
+    fetchDirRef.current = fetchDir;
+  }, [fetchDir]);
 
   const loadDir = useCallback(
     (path: string) => {
       abortRef.current?.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-
-      setLoading(true);
-      setError(null);
 
       fetchDirRef.current(path, ctrl.signal)
         .then((result) => {
@@ -85,8 +89,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
           setLoading(false);
         });
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
-    []
+    [t]
   );
 
   useEffect(() => {
@@ -95,6 +98,8 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
   }, [rootPath, loadDir]);
 
   const handleNavigate = (path: string) => {
+    setLoading(true);
+    setError(null);
     loadDir(path);
   };
 
@@ -149,7 +154,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
         <button
           type="button"
           className="ml-auto shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-          onClick={() => loadDir(currentPath)}
+          onClick={() => handleNavigate(currentPath)}
           aria-label={t('common.refresh')}
           disabled={loading}
         >

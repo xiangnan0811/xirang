@@ -142,6 +142,17 @@ and predictable repeated workflows matter more than decorative UI.
   intended dependency records changed; keep `package.json` byte-identical for
   a lockfile-only remediation.
 
+### jsdom selector compatibility
+
+The development-tooling update exposed a selector performance regression in
+`nwsapi` 2.2.26 and 2.2.27 under jsdom 26: matching `:modal` recursively delegates
+through jsdom's native matching adapter, making dropdown interactions time out.
+The `jsdom`-scoped npm override holds `nwsapi` at 2.2.25, the nearest verified
+working version. Before changing that override, verify both isolated selector
+matching and the existing node/notification dropdown confirmation tests under
+the CI Node version. Do not compensate by increasing test timeouts or changing
+application interactions. Keep the full dependency audit and frontend gate.
+
 ### 7. Wrong vs Correct
 
 Wrong:

@@ -25,6 +25,15 @@ export function usePanelData(
     setLocalNonce((n) => n + 1);
   }, []);
 
+  const queryKey = JSON.stringify([panel.id, panel.metric, panel.aggregation, panel.filters, start, end, token, refreshNonce, localNonce]);
+  const [previousQueryKey, setPreviousQueryKey] = useState(queryKey);
+  if (previousQueryKey !== queryKey) {
+    setPreviousQueryKey(queryKey);
+    setLoading(true);
+    setError(null);
+    setData(null);
+  }
+
   // 保存最新的 abort controller
   const controllerRef = useRef<AbortController | null>(null);
 
@@ -35,10 +44,6 @@ export function usePanelData(
     }
     const controller = new AbortController();
     controllerRef.current = controller;
-
-    setLoading(true);
-
-    setError(null);
 
     apiClient.queryPanel(
       token,
@@ -73,7 +78,7 @@ export function usePanelData(
     };
     // panel 字段作为基础依赖，用 panel.id + metric + aggregation 而非整个对象避免引用变化
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panel.id, panel.metric, panel.aggregation, start, end, token, refreshNonce, localNonce]);
+  }, [panel.id, panel.metric, panel.aggregation, start, end, token, refreshNonce, localNonce, queryKey]);
 
   return { data, loading, error, retry };
 }

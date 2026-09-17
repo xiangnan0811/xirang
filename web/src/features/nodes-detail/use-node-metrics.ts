@@ -30,21 +30,21 @@ export function useNodeMetrics({
   const abortRef = useRef<AbortController | null>(null);
 
   const fieldsKey = fields?.join(",");
+  const [scope, setScope] = useState({ nodeId, token, from, to, fieldsKey, granularity });
+  if (scope.nodeId !== nodeId || scope.token !== token || scope.from !== from ||
+      scope.to !== to || scope.fieldsKey !== fieldsKey || scope.granularity !== granularity) {
+    setScope({ nodeId, token, from, to, fieldsKey, granularity });
+    setData(null);
+    setError(null);
+    setIsLoading(Boolean(token && nodeId > 0));
+  }
 
-  const fetchOnce = useCallback(async () => {
-    if (!token || nodeId <= 0) {
-      setIsLoading(false);
-      setData(null);
-      setError(null);
-      return;
-    }
+  const fetchOnce = useCallback(() => {
+    if (!token || nodeId <= 0) return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const resp = await apiClient.getMetricSeries(
+    return apiClient.getMetricSeries(
         token,
         nodeId,
         {
@@ -54,33 +54,25 @@ export function useNodeMetrics({
           granularity,
         },
         { signal: controller.signal },
-      );
+      ).then((resp) => {
       if (!controller.signal.aborted) {
         setData(resp);
       }
-    } catch (e) {
+    }).catch((e: unknown) => {
       if (!controller.signal.aborted) {
         setData(null);
         setError(e);
       }
-    } finally {
+    }).finally(() => {
       if (!controller.signal.aborted) {
         setIsLoading(false);
       }
-    }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, nodeId, from, to, fieldsKey, granularity]);
 
-  // Clear stale series immediately when node/range identity changes, and keep
-  // isLoading true so consumers do not flash chartEmpty ("暂无数据").
+  // The render-time scope reset clears stale series before this request starts.
   useEffect(() => {
-    setData(null);
-    setError(null);
-    if (token && nodeId > 0) {
-      setIsLoading(true);
-    } else {
-      setIsLoading(false);
-    }
     void fetchOnce();
     return () => {
       abortRef.current?.abort();
@@ -89,6 +81,8 @@ export function useNodeMetrics({
 
   useVisibilityPolling(
     () => {
+      setIsLoading(true);
+      setError(null);
       void fetchOnce();
     },
     refetchMs && refetchMs > 0 ? refetchMs : 0,

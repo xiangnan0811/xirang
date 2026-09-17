@@ -19,59 +19,62 @@ export function useNodeStatus(nodeId: number, token: NodeDetailAuthToken): UseNo
   const [isLoading, setIsLoading] = useState(() => Boolean(token && nodeId > 0));
   const [error, setError] = useState<unknown>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [scope, setScope] = useState({ nodeId, token });
+  if (scope.nodeId !== nodeId || scope.token !== token) {
+    setScope({ nodeId, token });
+    setData(null);
+    setError(null);
+    setIsLoading(Boolean(token && nodeId > 0));
+  }
 
-  const fetchStatus = useCallback(async () => {
-    if (!token || nodeId <= 0) {
-      setIsLoading(false);
-      setData(null);
-      setError(null);
-      return;
-    }
+  const fetchStatus = useCallback(() => {
+    if (!token || nodeId <= 0) return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    setIsLoading(true);
     // Keep prior error until success so a background refresh does not flash
     // "ok" before the response; clear only on success path below.
-    try {
-      const result = await apiClient.getNodeStatus(token, nodeId, { signal: controller.signal });
+    return apiClient.getNodeStatus(token, nodeId, { signal: controller.signal }).then((result) => {
       if (!controller.signal.aborted) {
         setData(result);
         setError(null);
       }
-    } catch (err) {
+    }).catch((err: unknown) => {
       if (!controller.signal.aborted) {
         // Drop stale status so UI never paints a previous poll as current.
         setData(null);
         setError(err);
       }
-    } finally {
+    }).finally(() => {
       if (!controller.signal.aborted) {
         setIsLoading(false);
       }
-    }
+    });
   }, [token, nodeId]);
 
   // Immediate fetch whenever node/token changes so we never show the previous
   // node's status until the next 30s poll tick.
   useEffect(() => {
-    setData(null);
-    setError(null);
-    setIsLoading(Boolean(token && nodeId > 0));
     void fetchStatus();
     return () => {
       abortRef.current?.abort();
     };
   }, [fetchStatus, token, nodeId]);
 
+  const refetch = useCallback(() => {
+    if (!token || nodeId <= 0) return;
+    setIsLoading(true);
+    void fetchStatus();
+  }, [fetchStatus, nodeId, token]);
+
   // Interval + visibility recovery only (immediate handled above).
   useVisibilityPolling(
     () => {
-      void fetchStatus();
+      refetch();
     },
     30_000,
     { enabled: Boolean(token) && nodeId > 0, immediate: false },
   );
 
-  return { data, isLoading, error, refetch: fetchStatus };
+  return { data, isLoading, error, refetch };
 }

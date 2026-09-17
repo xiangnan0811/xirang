@@ -287,31 +287,34 @@ function ConfigCard({
 }
 
 function SLAContent() {
+  const { token } = useAuth();
+  return <SLAContentSession key={token ?? ""} />;
+}
+
+function SLAContentSession() {
   const { t } = useTranslation();
   const { token, role } = useAuth();
   const isAdmin = role === "admin";
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [configs, setConfigs] = useState<ReportConfig[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(token));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<ReportConfig | null>(null);
 
-  const loadConfigs = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    try {
-      const data = await reportsApi.listConfigs(token);
-      setConfigs(data);
-    } catch (err) {
-      toast.error(t("reports.loadFailed") + ": " + getErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [token, t]);
-
+  const [reload, setReload] = useState(0);
+  const loadConfigs = useCallback(() => {
+    setLoading(Boolean(token));
+    setReload((value) => value + 1);
+  }, [token]);
   useEffect(() => {
-    void loadConfigs();
-  }, [loadConfigs]);
+    if (!token) return;
+    let active = true;
+    void reportsApi.listConfigs(token)
+      .then((data) => { if (active) setConfigs(data); })
+      .catch((err) => { if (active) toast.error(t("reports.loadFailed") + ": " + getErrorMessage(err)); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [token, t, reload]);
 
   const handleDelete = async (id: number) => {
     if (!token) return;

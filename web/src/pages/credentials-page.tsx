@@ -20,33 +20,44 @@ import {
 import { getErrorMessage } from "@/lib/utils";
 
 export function CredentialsPage() {
+  const { token } = useAuth();
+  return <CredentialsPageContent key={token ?? ""} />;
+}
+
+function CredentialsPageContent() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const { confirm, dialog } = useConfirm();
 
   const [credentials, setCredentials] = useState<AppCredential[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(token));
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingCredential, setEditingCredential] =
     useState<AppCredential | null>(null);
 
-  const fetchCredentials = useCallback(async () => {
+  const [requestVersion, setRequestVersion] = useState(0);
+  const fetchCredentials = useCallback(() => {
     if (!token) return;
     setLoading(true);
-    try {
-      const data = await createCredentialsApi().list(token);
-      setCredentials(data);
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    } finally {
-      setLoading(false);
-    }
+    setRequestVersion((version) => version + 1);
   }, [token]);
 
   useEffect(() => {
-    fetchCredentials();
-  }, [fetchCredentials]);
+    if (!token) return;
+    const controller = new AbortController();
+    createCredentialsApi().list(token)
+      .then((data) => {
+        if (!controller.signal.aborted) setCredentials(data);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) toast.error(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [token, requestVersion]);
 
   const openCreateDialog = () => {
     setEditingCredential(null);

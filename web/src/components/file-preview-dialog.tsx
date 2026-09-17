@@ -30,11 +30,24 @@ export function FilePreviewDialog({
   const [content, setContent] = useState<string>("");
   const [size, setSize] = useState<number>(0);
   const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(open);
   const [error, setError] = useState<string | null>(null);
   const [loadedPath, setLoadedPath] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const requestSeqRef = useRef(0);
+  const [request, setRequest] = useState(() => ({ open, filePath, fetchContent }));
+
+  // The preview belongs to this exact request; never render a previous file while
+  // the next request is waiting for its effect to start.
+  if (request.open !== open || request.filePath !== filePath || request.fetchContent !== fetchContent) {
+    setRequest({ open, filePath, fetchContent });
+    setContent("");
+    setSize(0);
+    setTruncated(false);
+    setError(null);
+    setLoadedPath(null);
+    setLoading(open);
+  }
 
   const clearPreviewState = useCallback(() => {
     setContent("");
@@ -53,19 +66,15 @@ export function FilePreviewDialog({
   useEffect(() => {
     if (!open) {
       abortCurrentRequest();
-      clearPreviewState();
-      setLoading(false);
       return;
     }
 
     abortCurrentRequest();
-    clearPreviewState();
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     const requestSeq = requestSeqRef.current;
 
-    setLoading(true);
     fetchContent(ctrl.signal)
       .then((result) => {
         if (ctrl.signal.aborted || requestSeq !== requestSeqRef.current) return;
@@ -145,4 +154,3 @@ export function FilePreviewDialog({
     </Dialog>
   );
 }
-

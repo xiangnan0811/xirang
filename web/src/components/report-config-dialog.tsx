@@ -92,7 +92,11 @@ function numericId(ch: IntegrationChannel): number {
   return parseInt(ch.id.replace("int-", ""), 10);
 }
 
-export function ReportConfigDialog({
+export function ReportConfigDialog(props: Props) {
+  return <ReportConfigSession key={`${props.open}:${props.editingConfig?.id}`} {...props} />;
+}
+
+function ReportConfigSession({
   open,
   onOpenChange,
   onSaved,
@@ -108,16 +112,17 @@ export function ReportConfigDialog({
 
   // Integration channels state
   const [channels, setChannels] = useState<IntegrationChannel[]>([]);
-  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [channelsLoading, setChannelsLoading] = useState(open);
   const [channelsError, setChannelsError] = useState(false);
 
   useEffect(() => {
     if (open) {
-      setChannelsLoading(true);
-      setChannelsError(false);
       integrationsApi
         .getIntegrations(token)
-        .then((all) => setChannels(all.filter((ch) => ch.enabled)))
+        .then((all) => {
+          setChannels(all.filter((ch) => ch.enabled));
+          setChannelsError(false);
+        })
         .catch((err) => {
           setChannelsError(true);
           toast.error(t("reportConfig.channelsLoadError") + ": " + getErrorMessage(err));

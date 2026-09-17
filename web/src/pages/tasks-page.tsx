@@ -175,14 +175,11 @@ export function TasksPage() {
     });
   }, [pagedTasks]);
 
-  // 任务列表变化时清理已删除任务的选中状态
-  useEffect(() => {
-    const taskIds = new Set(tasks.map((t) => t.id));
-    setSelectedTaskIds((prev) => {
-      const next = prev.filter((id) => taskIds.has(id));
-      return next.length === prev.length ? prev : next;
-    });
-  }, [tasks]);
+  const taskIdSet = new Set(tasks.map((task) => task.id));
+  const validSelectedTaskIds = selectedTaskIds.filter((id) => taskIdSet.has(id));
+  if (validSelectedTaskIds.length !== selectedTaskIds.length) {
+    setSelectedTaskIds(validSelectedTaskIds);
+  }
 
   const handleToggleChain = useCallback((chainKey: string) => {
     setExpandedChains((prev) => {

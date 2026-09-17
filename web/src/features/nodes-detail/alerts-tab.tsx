@@ -14,6 +14,13 @@ export default function AlertsTab({ nodeId, token }: NodeDetailTabProps) {
   // First paint must show loading (not empty) when a fetch is expected.
   const [loading, setLoading] = useState(() => Boolean(token && nodeId > 0));
   const [error, setError] = useState(false);
+  const [scope, setScope] = useState({ nodeId, token });
+  if (scope.nodeId !== nodeId || scope.token !== token) {
+    setScope({ nodeId, token });
+    setAlerts([]);
+    setError(false);
+    setLoading(Boolean(token && nodeId > 0));
+  }
   const [filter, setFilter] = useState<Filter>("open");
 
   const filterLabels: Record<Filter, string> = {
@@ -22,34 +29,23 @@ export default function AlertsTab({ nodeId, token }: NodeDetailTabProps) {
     resolved: t("nodes.nodeDetail.alertsFilterResolved"),
   };
 
-  const fetchAlerts = useCallback(async (signal: AbortSignal) => {
-    if (!token || nodeId <= 0) {
-      setLoading(false);
-      setAlerts([]);
-      setError(false);
-      return;
-    }
-    setLoading(true);
-    setError(false);
-    try {
-      const rows = await apiClient.getAlerts(token, { signal });
+  const fetchAlerts = useCallback((signal: AbortSignal) => {
+    if (!token || nodeId <= 0) return;
+    return apiClient.getAlerts(token, { signal }).then((rows) => {
       if (!signal.aborted) {
         setAlerts(rows ?? []);
       }
-    } catch {
+    }).catch(() => {
       if (!signal.aborted) {
         setAlerts([]);
         setError(true);
       }
-    } finally {
+    }).finally(() => {
       if (!signal.aborted) setLoading(false);
-    }
+    });
   }, [nodeId, token]);
 
   useEffect(() => {
-    setAlerts([]);
-    setError(false);
-    setLoading(Boolean(token && nodeId > 0));
     const controller = new AbortController();
     void fetchAlerts(controller.signal);
     return () => controller.abort();

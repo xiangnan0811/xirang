@@ -128,7 +128,7 @@ export function RetentionPolicyPanel({
   const isAdmin = runtime?.role === "admin" && Boolean(runtime.token);
   const [policies, setPolicies] = useState<Array<CatalogProjection<BackupRetentionPolicy>>>([]);
   const [policyCursor, setPolicyCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [impact, setImpact] = useState<BackupRetentionPurgeImpact | null>(null);
   const [policyImpact, setPolicyImpact] = useState<BackupRetentionImpact | null>(null);
   const [calendarDrafts, setCalendarDrafts] = useState<Record<string, Array<{ unit: string; keep: string }>>>({});
@@ -197,13 +197,41 @@ export function RetentionPolicyPanel({
     return (await import("@/lib/api/client")).apiClient;
   }, [api]);
 
+  const [policyOwner, setPolicyOwner] = useState({ api, token: runtime?.token, isAdmin });
+  if (policyOwner.api !== api || policyOwner.token !== runtime?.token || policyOwner.isAdmin !== isAdmin) {
+    setPolicyOwner({ api, token: runtime?.token, isAdmin });
+    setLoading(true);
+    setPolicies([]);
+  }
+  const [previousPointId, setPreviousPointId] = useState(selectedRecoveryPointId);
+  if (previousPointId !== selectedRecoveryPointId) {
+    setPreviousPointId(selectedRecoveryPointId);
+    if (selectedRecoveryPointId) setHoldPointId(selectedRecoveryPointId);
+  }
+  const onlyHoldPointId = eligibleHoldPoints.length === 1 ? eligibleHoldPoints[0].id : null;
+  if (!holdPointId && onlyHoldPointId !== null) setHoldPointId(onlyHoldPointId);
+
+  const activeTaskLinkKey = activeTaskLinkIds.join(",");
+  const [previousTaskLinkKey, setPreviousTaskLinkKey] = useState<string | null>(null);
+  if (previousTaskLinkKey !== activeTaskLinkKey) {
+    setPreviousTaskLinkKey(activeTaskLinkKey);
+    setCreateTaskLinkId((current) => (
+      current && activeTaskLinkIds.includes(current) ? current : (activeTaskLinkIds[0] ?? "")
+    ));
+  }
+  const holdsOwner = JSON.stringify([isAdmin, runtime?.token, holdPointId]);
+  const [previousHoldsOwner, setPreviousHoldsOwner] = useState(holdsOwner);
+  if (previousHoldsOwner !== holdsOwner) {
+    setPreviousHoldsOwner(holdsOwner);
+    setHolds([]);
+  }
+
   useEffect(() => {
     if (!isAdmin || !runtime?.token) {
       return;
     }
     const token = runtime.token;
     const controller = new AbortController();
-    setLoading(true);
     void (async () => {
       try {
         const client = await resolveApi();
@@ -232,30 +260,7 @@ export function RetentionPolicyPanel({
   }, [api, isAdmin, resolveApi, runtime?.token]);
 
   useEffect(() => {
-    if (selectedRecoveryPointId) {
-      setHoldPointId(selectedRecoveryPointId);
-    }
-  }, [selectedRecoveryPointId]);
-
-  useEffect(() => {
-    if (holdPointId) {
-      return;
-    }
-    if (eligibleHoldPoints.length === 1) {
-      setHoldPointId(eligibleHoldPoints[0].id);
-    }
-  }, [holdPointId, eligibleHoldPoints]);
-
-  const activeTaskLinkKey = activeTaskLinkIds.join(",");
-
-  useEffect(() => {
-    const ids = activeTaskLinkKey === "" ? [] : activeTaskLinkKey.split(",");
-    setCreateTaskLinkId((current) => (current && ids.includes(current) ? current : (ids[0] ?? "")));
-  }, [activeTaskLinkKey]);
-
-  useEffect(() => {
     if (!isAdmin || !runtime?.token || !holdPointId) {
-      setHolds([]);
       return;
     }
     const token = runtime.token;

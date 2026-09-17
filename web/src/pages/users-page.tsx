@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { KeyRound, LogOut, Shield, UserPlus, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -20,6 +20,11 @@ type RoleType = UserRecord["role"];
 const roleKeys: RoleType[] = ["admin", "operator", "viewer"];
 
 export function UsersPage() {
+  const { token, role } = useAuth();
+  return <UsersPageContent key={`${token ?? ""}:${role}`} />;
+}
+
+function UsersPageContent() {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
@@ -35,7 +40,7 @@ export function UsersPage() {
   const isAdmin = role === "admin";
 
   const [users, setUsers] = useState<UserRecord[]>([]);
-  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(Boolean(token) && isAdmin);
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -58,31 +63,23 @@ export function UsersPage() {
     {},
   );
 
-  const loadUsers = useCallback(async () => {
-    if (!token || !isAdmin) {
-      setUsers([]);
-      return;
-    }
-    setLoadingUsers(true);
-    try {
-      const rows = await apiClient.getUsers(token);
-      setUsers(rows);
-      setRoleDrafts(
-        Object.fromEntries(rows.map((item) => [item.id, item.role])) as Record<
-          number,
-          RoleType
-        >,
-      );
-    } catch (error) {
-      toast.error(t("users.loadFailed", { error: getErrorMessage(error) }));
-    } finally {
-      setLoadingUsers(false);
-    }
-  }, [isAdmin, t, token]);
-
   useEffect(() => {
-    void loadUsers();
-  }, [loadUsers]);
+    if (!token || !isAdmin) return;
+    let cancelled = false;
+    apiClient.getUsers(token)
+      .then((rows) => {
+        if (cancelled) return;
+        setUsers(rows);
+        setRoleDrafts(Object.fromEntries(rows.map((item) => [item.id, item.role])));
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) toast.error(t("users.loadFailed", { error: getErrorMessage(error) }));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingUsers(false);
+      });
+    return () => { cancelled = true; };
+  }, [isAdmin, t, token]);
 
   const sortedUsers = useMemo(() => {
     return [...users].sort((a, b) => a.id - b.id);

@@ -38,12 +38,17 @@ function clampNumberInput(value: string, min: number, max: number, fallback: num
 }
 
 export function ServiceMonitorsPage() {
+  const { token } = useAuth();
+  return <ServiceMonitorsPageContent key={token ?? ""} />;
+}
+
+function ServiceMonitorsPageContent() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const { confirm, dialog } = useConfirm();
 
   const [monitors, setMonitors] = useState<ServiceMonitorView[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(token));
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingMonitor, setEditingMonitor] = useState<ServiceMonitorView | null>(null);
@@ -75,25 +80,29 @@ export function ServiceMonitorsPage() {
     editingMonitor?.httpHeadersConfigured && monitorUseChanged && !headersDirty,
   );
 
-  const fetchMonitors = useCallback(async () => {
+  const [requestVersion, setRequestVersion] = useState(0);
+  const fetchMonitors = useCallback(() => {
     if (!token) return;
     setLoading(true);
-    try {
-      const data = await createServiceMonitorsApi().list(token);
-      setMonitors(data);
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    } finally {
-      setLoading(false);
-    }
+    setRequestVersion((version) => version + 1);
   }, [token]);
 
   useEffect(() => {
-    fetchMonitors();
-  }, [fetchMonitors]);
-  // Reset form when dialog opens/closes or editing monitor changes.
-  useEffect(() => {
-    if (!editorOpen) return;
+    if (!token) return;
+    const controller = new AbortController();
+    createServiceMonitorsApi().list(token)
+      .then((data) => {
+        if (!controller.signal.aborted) setMonitors(data);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) toast.error(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [token, requestVersion]);
+  const resetForm = (editingMonitor: ServiceMonitorView | null) => {
     if (editingMonitor) {
       setName(editingMonitor.name);
       setDescription(editingMonitor.description ?? "");
@@ -122,14 +131,16 @@ export function ServiceMonitorsPage() {
       setEnabled(true);
     }
     setFieldErrors({});
-  }, [editorOpen, editingMonitor]);
+  };
 
   const openCreateDialog = () => {
+    resetForm(null);
     setEditingMonitor(null);
     setEditorOpen(true);
   };
 
   const openEditDialog = (monitor: ServiceMonitorView) => {
+    resetForm(monitor);
     setEditingMonitor(monitor);
     setEditorOpen(true);
   };

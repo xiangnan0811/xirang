@@ -56,7 +56,12 @@ type Props = {
   onSelectRun?: (run: TaskRunRecord) => void;
 };
 
-export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
+export function TaskRunHistory(props: Props) {
+  const { i18n } = useTranslation();
+  return <TaskRunHistoryContent key={JSON.stringify([props.taskId, props.token, i18n.language])} {...props} />;
+}
+
+function TaskRunHistoryContent({ taskId, token, onSelectRun }: Props) {
   const { t } = useTranslation();
   const [runs, setRuns] = useState<TaskRunRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -64,27 +69,33 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchRuns = useCallback(async (currentPage: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await apiClient.getTaskRuns(token, taskId, {
+  const fetchRuns = useCallback((currentPage: number, signal?: AbortSignal) => {
+    return apiClient.getTaskRuns(token, taskId, {
         pageSize: PAGE_SIZE,
         page: currentPage,
-      });
-      setRuns(result.items);
-      setTotal(result.total);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('taskRunHistory.loadFailed'));
-    } finally {
-      setLoading(false);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
-  }, [token, taskId]);
+      }).then((result) => {
+      if (!signal?.aborted) {
+        setRuns(result.items);
+        setTotal(result.total);
+      }
+    }).catch((err) => {
+      if (!signal?.aborted) setError(err instanceof Error ? err.message : t('taskRunHistory.loadFailed'));
+    }).finally(() => {
+      if (!signal?.aborted) setLoading(false);
+    });
+  }, [token, taskId, t]);
 
   useEffect(() => {
-    void fetchRuns(page);
+    const controller = new AbortController();
+    void fetchRuns(page, controller.signal);
+    return () => controller.abort();
   }, [fetchRuns, page]);
+
+  const changePage = (nextPage: number) => {
+    setLoading(true);
+    setError(null);
+    setPage(nextPage);
+  };
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const currentPage = page;
@@ -97,7 +108,11 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
     return (
       <div className="py-8 text-center text-sm text-muted-foreground">
         <p>{error}</p>
-        <Button variant="outline" size="sm" className="mt-2" onClick={() => void fetchRuns(page)}>
+        <Button variant="outline" size="sm" className="mt-2" onClick={() => {
+          setLoading(true);
+          setError(null);
+          void fetchRuns(page);
+        }}>
           {t('common.retry')}
         </Button>
       </div>
@@ -171,7 +186,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
               size="icon"
               className="size-7"
               disabled={page <= 1 || loading}
-              onClick={() => setPage(Math.max(1, page - 1))}
+              onClick={() => changePage(Math.max(1, page - 1))}
               aria-label={t('taskRunHistory.prevPage')}
             >
               <ChevronLeft className="size-3.5" aria-hidden="true" />
@@ -181,7 +196,7 @@ export function TaskRunHistory({ taskId, token, onSelectRun }: Props) {
               size="icon"
               className="size-7"
               disabled={page >= totalPages || loading}
-              onClick={() => setPage(page + 1)}
+              onClick={() => changePage(page + 1)}
               aria-label={t('taskRunHistory.nextPage')}
             >
               <ChevronRight className="size-3.5" aria-hidden="true" />

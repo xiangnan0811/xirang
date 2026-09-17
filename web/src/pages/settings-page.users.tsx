@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Shield, UserPlus, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,11 @@ type RoleType = UserRecord["role"];
 const roleKeys: RoleType[] = ["admin", "operator", "viewer"];
 
 export function UsersTab() {
+  const { token, role } = useAuth();
+  return <UsersTabContent key={`${token ?? ""}:${role}`} />;
+}
+
+function UsersTabContent() {
   const { t } = useTranslation();
 
   const roleOptions = roleKeys.map((key) => ({
@@ -31,7 +36,7 @@ export function UsersTab() {
   const { token, userId } = useAuth();
 
   const [users, setUsers] = useState<UserRecord[]>([]);
-  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(Boolean(token));
 
   const [newUsername, setNewUsername] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
@@ -43,28 +48,23 @@ export function UsersTab() {
   const [savingUserMap, setSavingUserMap] = useState<Record<number, boolean>>({});
   const [deletingUserMap, setDeletingUserMap] = useState<Record<number, boolean>>({});
 
-  const loadUsers = useCallback(async () => {
-    if (!token) {
-      setUsers([]);
-      return;
-    }
-    setLoadingUsers(true);
-    try {
-      const rows = await apiClient.getUsers(token);
-      setUsers(rows);
-      setRoleDrafts(
-        Object.fromEntries(rows.map((item) => [item.id, item.role])) as Record<number, RoleType>,
-      );
-    } catch (error) {
-      toast.error(t("users.loadFailed", { error: getErrorMessage(error) }));
-    } finally {
-      setLoadingUsers(false);
-    }
-  }, [t, token]);
-
   useEffect(() => {
-    void loadUsers();
-  }, [loadUsers]);
+    if (!token) return;
+    let cancelled = false;
+    apiClient.getUsers(token)
+      .then((rows) => {
+        if (cancelled) return;
+        setUsers(rows);
+        setRoleDrafts(Object.fromEntries(rows.map((item) => [item.id, item.role])));
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) toast.error(t("users.loadFailed", { error: getErrorMessage(error) }));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingUsers(false);
+      });
+    return () => { cancelled = true; };
+  }, [t, token]);
 
   const sortedUsers = useMemo(() => {
     return [...users].sort((a, b) => a.id - b.id);

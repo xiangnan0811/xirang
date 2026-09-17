@@ -37,7 +37,11 @@ type AlertCenterProps = {
   refreshVersion?: number;
 };
 
-export function AlertCenter({
+export function AlertCenter(props: AlertCenterProps) {
+  return <AlertCenterSession key={props.token} {...props} />;
+}
+
+function AlertCenterSession({
   token,
   integrations,
   globalSearch,
@@ -94,6 +98,7 @@ export function AlertCenter({
   const [groupInfoMap, setGroupInfoMap] = useState<Record<string, { count: number }>>({});
 
   // --- 深链接高亮 ---
+  const [highlightedAlert, setHighlightedAlert] = useState<AlertRecord | null>(null);
   const highlightClearTimerRef = useRef<number | null>(null);
   const highlightRef = useCallback((alertId: string, el: HTMLElement | null) => {
     if (el) {
@@ -107,63 +112,44 @@ export function AlertCenter({
       }, 600);
     }
   }, []);
-  const [highlightedAlert, setHighlightedAlert] = useState<AlertRecord | null>(null);
-
-  const abortRef = useRef<AbortController | null>(null);
 
   const integrationNameMap = useMemo(
     () => new Map(integrations.map((i) => [i.id, i.name])),
     [integrations],
   );
 
-  // --- 数据获取 ---
-  const fetchAlerts = useCallback(async (targetPage: number) => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setLoading(true);
-    try {
-      const result = await apiClient.getAlertsPaginated(token, {
-        page: targetPage,
-        pageSize,
-        sortBy,
-        sortOrder,
-        status: statusFilter !== "all" ? statusFilter : undefined,
-        severity: severityFilter !== "all" ? severityFilter : undefined,
-        keyword: deferredKeyword.trim() || undefined,
-        signal: controller.signal,
-      });
-      if (!controller.signal.aborted) {
-        setAlerts(result.items);
-        setTotal(result.total);
-        setSelectedAlertIds((current) => {
-          const unresolvedIds = new Set(result.items.filter((alert) => alert.status !== "resolved").map((alert) => alert.id));
-          return current.filter((alertId) => unresolvedIds.has(alertId));
-        });
-      }
-    } catch (err) {
-      if (!controller.signal.aborted && !(err instanceof DOMException && err.name === "AbortError")) {
-        toast.error(getErrorMessage(err));
-      }
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  }, [token, pageSize, sortBy, sortOrder, statusFilter, severityFilter, deferredKeyword]);
-
-  useEffect(() => {
-    setPage(1);
+  const [reload, setReload] = useState(0);
+  const filterScope = JSON.stringify([token, pageSize, sortBy, sortOrder, statusFilter, severityFilter, deferredKeyword]);
+  const [requestScope, setRequestScope] = useState({ filters: filterScope, page, refreshVersion, reload });
+  if (requestScope.filters !== filterScope || requestScope.page !== page || requestScope.refreshVersion !== refreshVersion || requestScope.reload !== reload) {
+    if (requestScope.filters !== filterScope) setPage(1);
+    setRequestScope({ filters: filterScope, page: requestScope.filters !== filterScope ? 1 : page, refreshVersion, reload });
     setHighlightedAlert(null);
-    void fetchAlerts(1);
-    return () => { abortRef.current?.abort(); };
-  }, [fetchAlerts]);
-
+    if (requestScope.filters !== filterScope || requestScope.page !== page) setSelectedAlertIds([]);
+    setAlerts([]);
+    setLoading(true);
+  }
   useEffect(() => {
-    if (refreshVersion != null && refreshVersion > 0) {
-      setHighlightedAlert(null);
-      void fetchAlerts(page);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchAlerts and page intentionally excluded to avoid loop
-  }, [refreshVersion]);
+    const controller = new AbortController();
+    void apiClient.getAlertsPaginated(token, {
+      page, pageSize, sortBy, sortOrder,
+      status: statusFilter !== "all" ? statusFilter : undefined,
+      severity: severityFilter !== "all" ? severityFilter : undefined,
+      keyword: deferredKeyword.trim() || undefined,
+      signal: controller.signal,
+    }).then((result) => {
+      if (controller.signal.aborted) return;
+      setAlerts(result.items);
+      setTotal(result.total);
+      setSelectedAlertIds((current) => {
+        const unresolvedIds = new Set(result.items.filter((alert) => alert.status !== "resolved").map((alert) => alert.id));
+        return current.filter((alertId) => unresolvedIds.has(alertId));
+      });
+    }).catch((err) => {
+      if (!controller.signal.aborted && !(err instanceof DOMException && err.name === "AbortError")) toast.error(getErrorMessage(err));
+    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => { controller.abort(); };
+  }, [token, page, pageSize, sortBy, sortOrder, statusFilter, severityFilter, deferredKeyword, refreshVersion, reload]);
 
   useEffect(() => {
     return () => {
@@ -176,7 +162,7 @@ export function AlertCenter({
   const handlePageChange = (p: number) => {
     setPage(p);
     setHighlightedAlert(null);
-    void fetchAlerts(p);
+
   };
 
   const handlePageSizeChange = (size: number) => {
@@ -197,17 +183,20 @@ export function AlertCenter({
   // --- 深链接：initialAlertId 处理 ---
   useEffect(() => {
     if (!initialAlertId || !token) return;
+    let active = true;
     resetFilters();
     void apiClient.getAlert(token, initialAlertId).then((target) => {
+      if (!active) return;
       setHighlightedAlert(target);
       setDeliveryOpenAlertId(target.id);
       void apiClient.getAlertDeliveries(token, target.id)
-        .then((rows) => setDeliveryMap((prev) => ({ ...prev, [target.id]: rows })))
+        .then((rows) => { if (active) setDeliveryMap((prev) => ({ ...prev, [target.id]: rows })); })
         .catch(() => {});
       onAlertHighlighted?.();
     }).catch(() => {
-      onAlertHighlighted?.();
+      if (active) onAlertHighlighted?.();
     });
+    return () => { active = false; };
   }, [initialAlertId, token, resetFilters, onAlertHighlighted]);
 
   // --- 投递记录操作 ---
@@ -240,7 +229,7 @@ export function AlertCenter({
     try {
       await apiClient.ackAlert(token, alert.id);
       toast.success(t("notifications.ackSuccess", { code: alert.errorCode }));
-      void fetchAlerts(page);
+      setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -252,7 +241,7 @@ export function AlertCenter({
       await apiClient.resolveAlert(token, alert.id);
       toast.success(t("notifications.resolveSuccess", { code: alert.errorCode }));
       setSelectedAlertIds((current) => current.filter((alertId) => alertId !== alert.id));
-      void fetchAlerts(page);
+      setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -287,7 +276,7 @@ export function AlertCenter({
       const result = await apiClient.resolveAlertsBulk(token, { alertIds: selectedAlertIds });
       toast.success(t("notifications.bulkResolveSuccess", { count: result.resolvedCount }));
       setSelectedAlertIds([]);
-      void fetchAlerts(page);
+      setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -311,7 +300,7 @@ export function AlertCenter({
         const row = displayAlerts.find((item) => item.id === alertId);
         return row ? row.nodeId !== alert.nodeId : true;
       }));
-      void fetchAlerts(page);
+      setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -334,7 +323,7 @@ export function AlertCenter({
         return apiClient.triggerTask(token, taskId, proof);
       });
       toast.success(t("notifications.retryTriggered", { id: taskId }));
-      void fetchAlerts(page);
+      setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -372,11 +361,9 @@ export function AlertCenter({
   };
 
   // --- 合并高亮告警和普通列表 ---
-  const displayAlerts = useMemo(() => {
-    if (!highlightedAlert) return alerts;
-    if (alerts.some((a) => a.id === highlightedAlert.id)) return alerts;
-    return [highlightedAlert, ...alerts];
-  }, [alerts, highlightedAlert]);
+  const displayAlerts = highlightedAlert && !alerts.some((alert) => alert.id === highlightedAlert.id)
+    ? [highlightedAlert, ...alerts]
+    : alerts;
 
   return (
     <DataSurface>

@@ -22,10 +22,9 @@ export function CommandPalette() {
   const { role } = useAuth();
   const visibleNavItems = React.useMemo(() => getVisibleNavItems(role), [role]);
 
-  // Reset query when closed
-  React.useEffect(() => {
-    if (!open) setQuery("");
-  }, [open]);
+  // Clear the previous search before rendering a closed session, including
+  // closes driven by the provider shortcut rather than Dialog.onOpenChange.
+  if (!open && query !== "") setQuery("");
 
   React.useEffect(() => {
     if (!open) return;

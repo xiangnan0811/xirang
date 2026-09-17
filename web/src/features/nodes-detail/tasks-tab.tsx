@@ -19,6 +19,13 @@ export default function TasksTab({ nodeId, token }: NodeDetailTabProps) {
   // First paint must show loading (not empty) when a fetch is expected.
   const [loading, setLoading] = useState(() => Boolean(token && nodeId > 0));
   const [error, setError] = useState(false);
+  const [scope, setScope] = useState({ nodeId, token });
+  if (scope.nodeId !== nodeId || scope.token !== token) {
+    setScope({ nodeId, token });
+    setTasks([]);
+    setError(false);
+    setLoading(Boolean(token && nodeId > 0));
+  }
   const [filter, setFilter] = useState<Filter>("all");
 
   const filterLabels: Record<Filter, string> = {
@@ -27,36 +34,23 @@ export default function TasksTab({ nodeId, token }: NodeDetailTabProps) {
     failed: t("nodes.nodeDetail.tasksFilterFailed"),
   };
 
-  const fetchTasks = useCallback(async (signal: AbortSignal) => {
-    if (!token || nodeId <= 0) {
-      setLoading(false);
-      setTasks([]);
-      setError(false);
-      return;
-    }
-    setLoading(true);
-    setError(false);
-    try {
-      const all = await apiClient.getTasks(token, { signal });
+  const fetchTasks = useCallback((signal: AbortSignal) => {
+    if (!token || nodeId <= 0) return;
+    return apiClient.getTasks(token, { signal }).then((rows) => {
       if (!signal.aborted) {
-        setTasks(all.filter((row) => row.nodeId === nodeId));
+        setTasks(rows.filter((row) => row.nodeId === nodeId));
       }
-    } catch {
+    }).catch(() => {
       if (!signal.aborted) {
         setTasks([]);
         setError(true);
       }
-    } finally {
+    }).finally(() => {
       if (!signal.aborted) setLoading(false);
-    }
+    });
   }, [nodeId, token]);
 
   useEffect(() => {
-    // Drop previous node's tasks immediately on node switch; keep loading so
-    // consumers do not flash tasksEmpty before the fetch settles.
-    setTasks([]);
-    setError(false);
-    setLoading(Boolean(token && nodeId > 0));
     const controller = new AbortController();
     void fetchTasks(controller.signal);
     return () => controller.abort();

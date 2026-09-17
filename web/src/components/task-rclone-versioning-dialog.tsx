@@ -68,7 +68,14 @@ function stateTone(state: RclonePublicationState): "success" | "warning" | "dest
   }
 }
 
-export function TaskRcloneVersioningDialog({
+export function TaskRcloneVersioningDialog(props: TaskRcloneVersioningDialogProps) {
+  const summary = props.task?.rclonePublication;
+  return <TaskRcloneVersioningDialogContent key={JSON.stringify([
+    props.open, props.task?.id, props.token, summary?.mode, summary?.taskRevision, summary?.bindingRevision,
+  ])} {...props} />;
+}
+
+function TaskRcloneVersioningDialogContent({
   open,
   onOpenChange,
   task,
@@ -76,7 +83,9 @@ export function TaskRcloneVersioningDialog({
   onUpdated,
 }: TaskRcloneVersioningDialogProps) {
   const { t } = useTranslation();
-  const [selectedMode, setSelectedMode] = useState<RcloneVersionedPublicationMode>("versioned_prefix");
+  const [selectedMode, setSelectedMode] = useState<RcloneVersionedPublicationMode>(
+    task?.rclonePublication?.mode === "native_object_versions" ? "native_object_versions" : "versioned_prefix",
+  );
   const [summaryOverride, setSummaryOverride] = useState<RclonePublicationSummary | null>(null);
   const [preflight, setPreflight] = useState<RcloneVersioningPreflightResult | null>(null);
   const [migrationChoice, setMigrationChoice] = useState<RcloneVersioningMigrationChoice>("first_new_point");
@@ -100,36 +109,16 @@ export function TaskRcloneVersioningDialog({
   const [kmsKeyArn, setKmsKeyArn] = useState("");
 
   const initialSummary = task?.rclonePublication;
-  const initialTaskRevision = initialSummary?.taskRevision ?? "";
-  const initialBindingRevision = initialSummary?.bindingRevision ?? "";
-  const initialMode = initialSummary?.mode;
   const summary = summaryOverride ?? initialSummary;
   const taskRevision = summary?.taskRevision ?? "";
   const bindingRevision = summary?.bindingRevision ?? "0";
 
+  const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    if (!open) return;
-    setSelectedMode(initialMode === "native_object_versions" ? "native_object_versions" : "versioned_prefix");
-    setSummaryOverride(null);
-    setPreflight(null);
-    setMigrationChoice("first_new_point");
-    setConfirmImportedBaseline(false);
-    setNotice(null);
-    setBusy(null);
-    setTargetRemote("");
-    setManagedRootLocator("");
-    setBoundConfig("");
-    setNativeSetup(null);
-    setRegion("");
-    setBucket("");
-    setManagedPrefix("");
-    setRoleArn("");
-    setBootstrapMode("workload_chain");
-    setAccessKeyId("");
-    setSecretAccessKey("");
-    setEncryptionProfile("sse_s3");
-    setKmsKeyArn("");
-  }, [open, task?.id, initialMode, initialTaskRevision, initialBindingRevision]);
+    if (!open || !preflight) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [open, preflight]);
 
   const noticeText = useMemo(() => {
     if (!notice) return null;
@@ -142,7 +131,7 @@ export function TaskRcloneVersioningDialog({
 
   const isBusy = busy !== null;
   const modeLocked = summary.mode !== "legacy_mutable" && summary.mode !== selectedMode;
-  const preflightExpired = preflight?.expiresAt ? Date.parse(preflight.expiresAt) <= Date.now() : true;
+  const preflightExpired = !preflight?.expiresAt || !(Date.parse(preflight.expiresAt) > now);
   const canRunPreflight = Boolean(
     token && taskRevision && summary.mode === selectedMode && bindingRevision !== "0" && !isBusy,
   );
@@ -266,6 +255,7 @@ export function TaskRcloneVersioningDialog({
         requestedMode: selectedMode,
       });
       setSummaryOverride(result.summary);
+      setNow(Date.now());
       setPreflight(result);
       if (result.summary.state !== "ready") setNotice(result.summary.reasonCode);
     } catch (error) {
@@ -277,6 +267,11 @@ export function TaskRcloneVersioningDialog({
 
   const activate = async () => {
     if (!canActivate || !token || !preflight) return;
+    // The click can precede the next clock tick; admission must check real time.
+    if (!(Date.parse(preflight.expiresAt) > Date.now())) {
+      setNow(Date.now());
+      return;
+    }
     setBusy("activate");
     setNotice(null);
     try {

@@ -15,11 +15,17 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
   const [connected, setConnected] = useState(false);
   const [connectionWarning, setConnectionWarning] = useState<string | null>(null);
   const [cursorLogId, setCursorLogId] = useState<number>(0);
+  const taskId = options?.taskId;
+  const [scope, setScope] = useState({ token, taskId });
+  if (scope.token !== token || scope.taskId !== taskId) {
+    setScope({ token, taskId });
+    setLogs([]);
+    setCursorLogId(0);
+    setConnected(false);
+    setConnectionWarning(null);
+  }
 
   const cursorRef = useRef<number>(0);
-  const tokenRef = useRef(token);
-  // eslint-disable-next-line react-hooks/refs -- stable token ref pattern avoids stale closure
-  tokenRef.current = token;
 
   const pendingRef = useRef<LogEvent[]>([]);
   const rafRef = useRef<number | null>(null);
@@ -58,14 +64,8 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
   }, [client]);
 
   useEffect(() => {
-    if (!token) {
-      setLogs([]);
-      cursorRef.current = 0;
-      setCursorLogId(0);
-      setConnected(false);
-      setConnectionWarning(i18n.t("logs.connectionWarning.notLoggedIn"));
-      return;
-    }
+    cursorRef.current = 0;
+    if (!token) return;
 
     const unsubscribeMessage = client.subscribe((event) => {
       pendingRef.current.push(event);
@@ -90,9 +90,9 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
     });
 
     client.connect(token, {
-      taskId: options?.taskId,
+      taskId,
       sinceId: cursorRef.current > 0 ? cursorRef.current : undefined,
-      tokenGetter: () => tokenRef.current,
+      tokenGetter: () => token,
     });
 
     return () => {
@@ -105,12 +105,12 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
       pendingRef.current = [];
       client.disconnect();
     };
-  }, [client, flushPending, options?.taskId, token]);
+  }, [client, flushPending, taskId, token]);
 
   return {
     logs,
     connected,
-    connectionWarning,
+    connectionWarning: token ? connectionWarning : i18n.t("logs.connectionWarning.notLoggedIn"),
     cursorLogId
   };
 }

@@ -25,10 +25,16 @@ import { getErrorMessage } from "@/lib/utils";
 import type { BackupHealthData } from "@/types/domain";
 
 export function BackupHealthPanel() {
+  const { token } = useAuth();
+  const { i18n } = useTranslation();
+  return <BackupHealthPanelContent key={`${token ?? ""}:${i18n.language}`} />;
+}
+
+function BackupHealthPanelContent() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const [data, setData] = useState<BackupHealthData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(token) || import.meta.env.VITE_ENABLE_DEMO_MODE === "true");
   const [error, setError] = useState<string | null>(null);
   const gradientId = useId();
 
@@ -36,8 +42,6 @@ export function BackupHealthPanel() {
     if (!token) {
       if (import.meta.env.VITE_ENABLE_DEMO_MODE === "true") {
         let cancelled = false;
-        setLoading(true);
-        setError(null);
         import("@/data/mock")
           .then((mocks) => {
             if (!cancelled) {
@@ -58,16 +62,10 @@ export function BackupHealthPanel() {
           cancelled = true;
         };
       }
-      setData(null);
-      setLoading(false);
-      setError(null);
       return;
     }
     const controller = new AbortController();
 
-    setLoading(true);
-
-    setError(null);
     apiClient
       .getBackupHealth(token, { signal: controller.signal })
       .then((result) => {

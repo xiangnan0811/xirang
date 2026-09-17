@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render as rtlRender, screen, waitFor, type RenderOptions } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor, act, type RenderOptions } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { NotificationsPage } from "./notifications-page";
+import { AlertCenter } from "./notifications/alert-center";
 
 // Router wrapper: AlertList's "查看关联指标" Link needs a router context (added in
 // P5a Task 24). Existing tests predate the link, so we inject MemoryRouter here.
@@ -352,6 +353,31 @@ describe("NotificationsPage", () => {
     mockGetAlerts.mockReset();
     setupDefaultMocks();
     createContext();
+  });
+
+  it("preserves unresolved alert selection across an external refresh", async () => {
+    const user = userEvent.setup();
+    const setGlobalSearch = vi.fn();
+    const center = (refreshVersion: number) => <MemoryRouter><AlertCenter token="test-token" integrations={[]} globalSearch="" setGlobalSearch={setGlobalSearch} refreshVersion={refreshVersion} /></MemoryRouter>;
+    const view = rtlRender(center(0));
+    const checkbox = (await screen.findAllByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" }))[0];
+    await user.click(checkbox);
+    view.rerender(center(1));
+    await waitFor(() => expect(mockGetAlertsPaginated).toHaveBeenCalledTimes(2));
+    expect((await screen.findAllByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" }))[0]).toBeChecked();
+  });
+
+  it("discards alert responses from the previous token session", async () => {
+    let resolveOld: (value: { items: typeof defaultAlerts; total: number }) => void = () => {};
+    mockGetAlertsPaginated.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    mockGetAlertsPaginated.mockResolvedValueOnce({ items: [defaultAlerts[1]], total: 1 });
+    const setGlobalSearch = vi.fn();
+    const center = (token: string) => <MemoryRouter><AlertCenter token={token} integrations={[]} globalSearch="" setGlobalSearch={setGlobalSearch} /></MemoryRouter>;
+    const view = rtlRender(center("old-token"));
+    view.rerender(center("new-token"));
+    expect((await screen.findAllByRole("checkbox", { name: "选择节点 node-2 的告警 E_WARN" }))[0]).toBeInTheDocument();
+    await act(async () => { resolveOld({ items: [defaultAlerts[0]], total: 1 }); });
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" })).not.toBeInTheDocument());
   });
 
   it("渲染通知工作台标题和告警数据面", async () => {

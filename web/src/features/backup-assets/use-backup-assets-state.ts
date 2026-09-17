@@ -2,6 +2,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useReducer,
   useRef,
   useState,
@@ -111,7 +112,7 @@ export function useBackupAssetsRequestCoordinator(
   const generationRef = useRef(selectionGeneration);
   const sequenceRef = useRef(0);
   const recordsRef = useRef(new Map<BackupAssetsRequestChannel, RequestRecord>());
-  generationRef.current = selectionGeneration;
+  useLayoutEffect(() => { generationRef.current = selectionGeneration; }, [selectionGeneration]);
 
   const abort = useCallback((channel: BackupAssetsRequestChannel) => {
     const record = recordsRef.current.get(channel);

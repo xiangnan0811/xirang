@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck } from "lucide-react";
@@ -64,9 +64,9 @@ export function LoginPage() {
     return t("login.lockedSeconds", { seconds });
   };
 
-  const fetchCaptcha = async () => {
-    try {
-      const data = await apiClient.getCaptcha();
+  const fetchCaptcha = useCallback((signal?: AbortSignal) => {
+    return apiClient.getCaptcha().then((data) => {
+      if (signal?.aborted) return;
       // Only show challenges the backend actually validates (enabled flags).
       if (data.enabled && data.id && data.question) {
         setCaptchaId(data.id);
@@ -86,20 +86,22 @@ export function LoginPage() {
         setSecondCaptchaQuestion(null);
         setSecondCaptchaAnswer("");
       }
-    } catch {
+    }).catch(() => {
+      if (signal?.aborted) return;
       // 验证码接口不可用，隐藏验证码区域
       setCaptchaId(null);
       setCaptchaQuestion(null);
       setCaptchaAnswer("");
       setSecondCaptchaId(null);
       setSecondCaptchaQuestion(null);
-      setSecondCaptchaAnswer("");
-    }
-  };
+      setSecondCaptchaAnswer("");    });
+  }, []);
 
   useEffect(() => {
-    void fetchCaptcha();
-  }, []);
+    const controller = new AbortController();
+    void fetchCaptcha(controller.signal);
+    return () => controller.abort();
+  }, [fetchCaptcha]);
 
   useEffect(() => {
     if (!requires2FA) return;
