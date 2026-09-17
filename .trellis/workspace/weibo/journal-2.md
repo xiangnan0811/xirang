@@ -267,3 +267,24 @@ Recorded user-confirmed Task 13 search/preview, completed-index recovery, UI/sec
 ### Status
 
 [OK] **Completed**
+
+
+## Session 61: Complete bounded P3 middleware RAF and logging fixes
+
+**Date**: 2026-09-17
+**Task**: Complete bounded P3 middleware RAF and logging fixes
+**Branch**: `fix/p3-quality-debt`
+
+### Summary
+
+Reused and archived the existing P3 task after implementing ordinary middleware envelopes, effect-owned RAF cleanup and per-Hub overflow log bounds. Backend focused race/lint/build and API tests pass; frontend full gate 1987 tests passes; independent check added protocol-safe log regressions. Existing repeated shared-SQLite fixture limitations recorded. Required PR/post-merge CI pending; no NAS deployment.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `29ce30b0` | (see git log) |
+
+### Status
+
+[OK] **Completed**
