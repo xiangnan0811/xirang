@@ -7,5 +7,6 @@
 {"file": "docs/admin/backup-assets-load.md", "reason": "Second public-doc Native exclusion sentence for Wave 1"}
 {"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/wave1-docs-exclusion.md", "reason": "Wave 1 verified exclusion quotes and file:line anchors"}
 {"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/reconciliation.md", "reason": "Current disposition, remaining scope and superseded historical instructions"}
-{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v05515-lease-recovery.md", "reason": "Current authorized repair and production evidence; supersedes historical execution instructions"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v05515-lease-recovery.md", "reason": "Historical lease-recovery diagnosis and implementation evidence"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v05516-real-data-acceptance.md", "reason": "Current release and positive production UI evidence, user decisions and remaining acceptance"}
 {"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Transactional index-lease expiry and database parity contracts"}

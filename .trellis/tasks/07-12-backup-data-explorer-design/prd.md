@@ -1,4 +1,4 @@
-> **Current disposition (2026-09-16):** see [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
+> **Current disposition (2026-09-17):** final production acceptance and archive disposition are recorded in [reconciliation.md](reconciliation.md). Older status, delivery gates and deferred-work ownership below are historical where that record supersedes them.
 
 # 备份数据资产浏览与预览功能设计
 

@@ -12,7 +12,7 @@
   "assignee": "weibo",
   "createdAt": "2026-08-21",
   "completedAt": null,
-  "branch": "fix/backup-index-expired-lease",
+  "branch": "docs/backup-assets-v05516-acceptance",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -33,9 +33,10 @@
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [
     ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-console-runbook.md",
-    ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-real-data-acceptance.md"
+    ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-real-data-acceptance.md",
+    ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v05516-real-data-acceptance.md"
   ],
-  "notes": "2026-09-16 continuation: NAS v0.55.15 healthy; FeatureLive and acknowledged inventory confirmed. Real-data Catalog/Search acceptance blocked by expired-heartbeat active index leases whose seven-day absolute deadlines remain in the future. Bounded repair on fix/backup-index-expired-lease; see research/v05515-lease-recovery.md. Parent stays open; preserve separately accepted node-log settings. Ten delivered child repairs are not reopened.",
+  "notes": "2026-09-17 continuation: v0.55.16 released with required CI and registry verification; user upgraded and declined additional backup. Task 13 search/preview pass by user report; previously indexing tasks now preview and no current preview failure is reported. current functional acceptance is ready for archival with explicit health-probe/log-audit limitations; see research/v05516-real-data-acceptance.md. Parent stays open; preserve accepted node-log settings. No new task or reopened child.",
   "meta": {
     "historical_before_2026_09_16": {
       "parent_archive": "forbidden",
@@ -70,6 +71,16 @@
       "next_action": "Retain as the single owner of outstanding real-data production acceptance from ten delivered repair tasks. Current NAS version, enabled state and collectors were not inspected. Rebaseline before any live steps."
     },
     "parent_archive": "forbidden_until_current_acceptance_closes",
-    "production_state": "v0.55.15_index_heartbeat_lease_expired_owner_slot_blocker"
+    "production_state": "v0.55.16_functional_acceptance_ready_for_archive",
+    "current_acceptance": {
+      "date": "2026-09-17",
+      "evidence": "research/v05516-real-data-acceptance.md",
+      "release_revision": "1862dde234490c48896254c3e1b3fcc37c573272",
+      "upgrade": "user_reported",
+      "additional_backup": "explicitly_declined_by_user",
+      "positive_ui_sample_task_id": 13,
+      "preview_failure": "none_currently_reported_after_index_completion",
+      "remaining": "current functional acceptance is ready for archival with explicit health-probe/log-audit limitations"
+    }
   }
 }

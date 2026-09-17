@@ -12,7 +12,7 @@
   "assignee": "weibo",
   "createdAt": "2026-07-12",
   "completedAt": null,
-  "branch": null,
+  "branch": "docs/backup-assets-v05516-acceptance",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -42,7 +42,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "2026-09-16 reconciliation: Retain the program until consolidated production acceptance closes. 19 of 20 direct children archived after this reconciliation; code delivery is not live acceptance. See reconciliation.md; older PRD/implement snapshots are historical where superseded.",
+  "notes": "2026-09-17 final acceptance: user confirms Task 13 search/preview, completed-index previews, retained-data and specified UI/security cases; NAS v0.55.16 running/healthy with zero restarts. Bounded functional observation has no reported remaining fault; no separate raw server-log audit claimed. Other 19 direct children verified archived/completed. Archive acceptance child then parent; preserve historical evidence and accepted node-log settings. P3 next after docs PR/CI merge; no new release expected. See reconciliation.md and child v05516-real-data-acceptance.md.",
   "meta": {
     "historical_before_2026_09_16": {
       "program_delivery": {
