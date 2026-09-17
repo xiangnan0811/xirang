@@ -177,11 +177,14 @@ func TestCooldownPreventsRedelivery(t *testing.T) {
 	}
 	db.Create(&channel)
 
-	// 模拟最近一次成功投递
+	// 模拟最近一次成功投递；只有 provider-success 时间才参与冷却。
+	sentAt := time.Now().UTC()
 	delivery := model.AlertDelivery{
 		AlertID:       1,
 		IntegrationID: channel.ID,
 		Status:        "sent",
+		SentAt:        &sentAt,
+		CreatedAt:     sentAt.Add(-time.Hour),
 	}
 	db.Create(&delivery)
 
@@ -195,6 +198,62 @@ func TestCooldownPreventsRedelivery(t *testing.T) {
 	later := now.Add(6 * time.Minute)
 	if inCooldown(db, channel.ID, channel.CooldownMinutes, later) {
 		t.Fatalf("冷却期过后不应拦截")
+	}
+}
+func TestCooldownUsesProviderSuccessTimeline(t *testing.T) {
+	db := openAlertingTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.AlertDelivery{}, &model.Integration{}); err != nil {
+		t.Fatalf("初始化告警表失败: %v", err)
+	}
+	channel := model.Integration{
+		Type:            "webhook",
+		Name:            "test-cooldown-timeline",
+		Endpoint:        "http://localhost:9999/webhook",
+		Enabled:         true,
+		FailThreshold:   1,
+		CooldownMinutes: 5,
+	}
+	if err := db.Create(&channel).Error; err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	now := time.Now()
+	olderCreatedAt := now.Add(-20 * time.Minute)
+	newerCreatedAt := now.Add(-10 * time.Minute)
+	older := model.AlertDelivery{
+		AlertID: 1, IntegrationID: channel.ID, Status: model.AlertDeliveryStatusFailed,
+		CreatedAt: olderCreatedAt, UpdatedAt: olderCreatedAt,
+	}
+	newerSuccessAt := now.Add(-8 * time.Minute)
+	newer := model.AlertDelivery{
+		AlertID: 2, IntegrationID: channel.ID, Status: model.AlertDeliveryStatusSent,
+		SentAt: &newerSuccessAt, CreatedAt: newerCreatedAt, UpdatedAt: newerCreatedAt,
+	}
+	historical := model.AlertDelivery{
+		AlertID: 3, IntegrationID: channel.ID, Status: model.AlertDeliveryStatusSent,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&older).Error; err != nil {
+		t.Fatalf("create older delivery: %v", err)
+	}
+	if err := db.Create(&newer).Error; err != nil {
+		t.Fatalf("create newer delivery: %v", err)
+	}
+	if err := db.Create(&historical).Error; err != nil {
+		t.Fatalf("create historical delivery: %v", err)
+	}
+	if inCooldown(db, channel.ID, channel.CooldownMinutes, now) {
+		t.Fatal("historical sent row and older success must not enter cooldown")
+	}
+
+	olderSuccessAt := now.Add(-time.Minute)
+	if err := db.Model(&model.AlertDelivery{}).Where("id = ?", older.ID).Updates(map[string]interface{}{
+		"status": model.AlertDeliveryStatusSent, "sent_at": olderSuccessAt,
+	}).Error; err != nil {
+		t.Fatalf("record failure-to-success transition: %v", err)
+	}
+	if !inCooldown(db, channel.ID, channel.CooldownMinutes, now) {
+		t.Fatal("a later provider success from an older intent must enter cooldown")
 	}
 }
 
@@ -332,10 +391,18 @@ func openAlertingTestDB(t *testing.T) *gorm.DB {
 	t.Setenv("APP_ENV", "development")
 	secure.ResetForTesting()
 	t.Setenv("DATA_ENCRYPTION_KEY", "dGVzdC1rZXktZGF0YS1lbmNyeXB0aW9uLWtleS0zMmIh")
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	dsn := fmt.Sprintf("file:%s/alerting.db?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("获取测试数据库连接失败: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.AlertEscalationEvent{}); err != nil {
+		t.Fatalf("初始化告警升级事件表失败: %v", err)
 	}
 	return db
 }
@@ -592,7 +659,7 @@ func TestRaiseAndDispatch_DisabledPolicy_UsesLegacyPath(t *testing.T) {
 	}
 }
 
-func TestRaiseAndDispatch_ResolverError_UsesLegacyPath(t *testing.T) {
+func TestRaiseAndDispatch_ResolverError_LeavesDecisionPending(t *testing.T) {
 	t.Setenv("ALERT_DEDUP_WINDOW", "0")
 	db := openDispatcherDBForEscalation(t)
 
@@ -603,7 +670,8 @@ func TestRaiseAndDispatch_ResolverError_UsesLegacyPath(t *testing.T) {
 	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL, FailThreshold: 1})
 	db.Create(&model.Node{ID: 13, Name: "node-err"})
 
-	// Resolver: returns an error → fail-open, use legacy dispatch.
+	// A resolver error is transient: preserve pending so the retry worker can
+	// reevaluate policy, rather than mis-recording it as a direct handoff.
 	SetDispatcher(NewDispatcher(db, nil, func(alert model.Alert) (*EscalationPolicySummary, error) {
 		return nil, fmt.Errorf("resolver temporarily unavailable")
 	}))
@@ -618,14 +686,21 @@ func TestRaiseAndDispatch_ResolverError_UsesLegacyPath(t *testing.T) {
 		Message:     "resolver error alert",
 		TriggeredAt: time.Now(),
 	}
-	if err := raiseAndDispatch(db, alert); err != nil {
-		t.Fatalf("raiseAndDispatch failed: %v", err)
+	if err := raiseAndDispatch(db, alert); err == nil {
+		t.Fatal("expected resolver error")
 	}
 
+	var persisted model.Alert
+	if err := db.First(&persisted, alert.ID).Error; err != nil {
+		t.Fatalf("load persisted alert: %v", err)
+	}
+	if persisted.DeliveryDecision != model.AlertDeliveryDecisionPending {
+		t.Fatalf("expected pending delivery decision, got %q", persisted.DeliveryDecision)
+	}
 	var count int64
 	db.Model(&model.AlertDelivery{}).Count(&count)
-	if count == 0 {
-		t.Fatalf("expected >0 deliveries (resolver error → fail-open, legacy path), got 0")
+	if count != 0 {
+		t.Fatalf("resolver error must not create delivery intents, got %d", count)
 	}
 }
 

@@ -361,11 +361,7 @@ func TestRecoveryBehaviorPostgres(t *testing.T) {
 					t.Fatal(err)
 				}
 				taskEntity.Status = "success"
-				if err := fixture.db.Create(&model.TaskRun{
-					TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-				}).Error; err != nil {
-					t.Fatal(err)
-				}
+				seedRecoveryBehaviorSuccessfulBackupRun(t, fixture.db, taskEntity.ID)
 
 				executor := &recoveryBehaviorTrackingExecutor{}
 				manager := task.NewManager(
@@ -1081,11 +1077,7 @@ func testRecoveryBehaviorStopAfterEntryCommit(
 		t.Fatal(err)
 	}
 	if legacyRestore {
-		if err := fixture.db.Create(&model.TaskRun{
-			TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-		}).Error; err != nil {
-			t.Fatal(err)
-		}
+		seedRecoveryBehaviorSuccessfulBackupRun(t, fixture.db, taskEntity.ID)
 	}
 	var previous model.Task
 	if err := fixture.db.First(&previous, taskEntity.ID).Error; err != nil {
@@ -1485,6 +1477,7 @@ func openRecoveryBehaviorPostgres(t *testing.T, dsn string) recoveryBehaviorFixt
 	}
 	if err := db.AutoMigrate(
 		&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{},
+		&model.TaskCronOccurrence{}, &model.TaskRunEffect{},
 		&model.TaskLog{}, &model.TaskTrafficSample{}, &model.RestoreDrillEvidence{},
 		&model.BackupAssetRecoveryNodeLease{},
 	); err != nil {
@@ -1534,13 +1527,48 @@ func seedRecoveryBehaviorNodeTask(t *testing.T, db *gorm.DB, suffix string) (mod
 		ExecutorType: "rsync",
 		Status:       "pending",
 		Enabled:      true,
-		RsyncSource:  "/tmp/source",
-		RsyncTarget:  "/tmp/target",
+		RsyncSource:  fmt.Sprintf("/tmp/recovery-behavior-source-%d", sequence),
+		RsyncTarget:  fmt.Sprintf("/tmp/recovery-behavior-target-%d", sequence),
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatal(err)
 	}
 	return node, taskEntity
+}
+
+func seedRecoveryBehaviorSuccessfulBackupRun(t *testing.T, db *gorm.DB, taskID uint) {
+	t.Helper()
+	var taskEntity model.Task
+	if err := db.Preload("Node").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
+		t.Fatalf("load successful backup task: %v", err)
+	}
+	fingerprint := model.TaskRunBackupConfigFingerprint(taskEntity)
+	if fingerprint == "" {
+		t.Fatalf("successful backup task %d has empty configuration fingerprint", taskID)
+	}
+	captureManifest, err := model.EncodeRsyncCaptureManifest(model.RsyncCaptureManifest{
+		Version: 2, Layout: model.TaskRunCaptureLayoutDirectoryContents,
+		Entries: []model.RsyncCaptureManifestEntry{{Path: "", Kind: "directory"}},
+	})
+	if err != nil {
+		t.Fatalf("encode successful backup capture: %v", err)
+	}
+	captureRoot, err := model.EncodeRsyncCaptureRootSidecar("")
+	if err != nil {
+		t.Fatalf("encode successful backup capture root: %v", err)
+	}
+	if err := db.Create(&model.TaskRun{
+		TaskID:                  taskID,
+		TriggerType:             "manual",
+		Status:                  model.TaskRunStatusSuccess,
+		BackupConfigFingerprint: fingerprint,
+		BackupCaptureLayout:     model.TaskRunCaptureLayoutDirectoryContents,
+		BackupCaptureRoot:       captureRoot,
+		BackupCaptureManifest:   captureManifest,
+		BackupGenerationState:   model.TaskRunGenerationStateVerified,
+	}).Error; err != nil {
+		t.Fatalf("create successful backup run: %v", err)
+	}
 }
 
 func reserveRecoveryBehaviorTask(

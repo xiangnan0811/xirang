@@ -3,13 +3,18 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
+	"xirang/backend/internal/model"
+	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type configImportRollbackJournal struct {
@@ -151,12 +156,29 @@ func (journal *configImportRollbackJournal) Restore(ctx context.Context) error {
 	}
 	snapshot := journal.snapshot
 	if err := journal.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if snapshot.hasTaskOwnershipRows() {
+			if err := policyPkg.LockTargetOwnershipSpace(tx); err != nil {
+				return fmt.Errorf("config import rollback target ownership lock: %w", err)
+			}
+			if err := snapshot.lockTaskRollbackPolicies(ctx, tx); err != nil {
+				return err
+			}
+			if err := snapshot.validateTaskRollbackOwnership(ctx, tx); err != nil {
+				return err
+			}
+		}
+		tables := []*configImportTableSnapshot{
+			&snapshot.settings, &snapshot.tasks, &snapshot.policies, &snapshot.nodes, &snapshot.sshKeys,
+		}
+		for _, table := range tables {
+			if err := table.verifyCurrent(ctx, tx); err != nil {
+				return err
+			}
+		}
 		if err := snapshot.graph.restore(ctx, tx); err != nil {
 			return err
 		}
-		for _, table := range []*configImportTableSnapshot{
-			&snapshot.settings, &snapshot.tasks, &snapshot.policies, &snapshot.nodes, &snapshot.sshKeys,
-		} {
+		for _, table := range tables {
 			if err := table.restore(ctx, tx); err != nil {
 				return err
 			}
@@ -168,6 +190,63 @@ func (journal *configImportRollbackJournal) Restore(ctx context.Context) error {
 	journal.restored = true
 	if journal.settingsSvc != nil {
 		journal.settingsSvc.InvalidateCachedValues(snapshot.settingKeys)
+	}
+	return nil
+}
+
+func (snapshot *configImportRollbackSnapshot) hasTaskOwnershipRows() bool {
+	if snapshot == nil {
+		return false
+	}
+	return len(snapshot.tasks.prior) > 0 || len(snapshot.tasks.current) > 0 || len(snapshot.tasks.created) > 0
+}
+
+func (snapshot *configImportRollbackSnapshot) lockTaskRollbackPolicies(ctx context.Context, tx *gorm.DB) error {
+	policyIDs := make(map[uint]struct{})
+	addPolicyIDs := func(rows map[string]map[string]any, identityKey string) error {
+		for _, row := range rows {
+			rawID, exists := row[identityKey]
+			if !exists || rawID == nil {
+				continue
+			}
+			policyID, ok := configImportRollbackUint(rawID)
+			if !ok {
+				return fmt.Errorf("config import rollback policy identity is unavailable")
+			}
+			policyIDs[policyID] = struct{}{}
+		}
+		return nil
+	}
+	if err := addPolicyIDs(snapshot.policies.current, "id"); err != nil {
+		return err
+	}
+	if err := addPolicyIDs(snapshot.policies.prior, "id"); err != nil {
+		return err
+	}
+	if err := addPolicyIDs(snapshot.tasks.current, "policy_id"); err != nil {
+		return err
+	}
+	if err := addPolicyIDs(snapshot.tasks.prior, "policy_id"); err != nil {
+		return err
+	}
+	if len(policyIDs) == 0 {
+		return nil
+	}
+	ids := make([]uint, 0, len(policyIDs))
+	for policyID := range policyIDs {
+		ids = append(ids, policyID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	var policies []model.Policy
+	if err := tx.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id IN ?", ids).
+		Order("id").
+		Find(&policies).Error; err != nil {
+		return fmt.Errorf("config import rollback policy lock failed: %w", err)
+	}
+	if len(policies) != len(ids) {
+		return fmt.Errorf("config import rollback policy rows changed during restore")
 	}
 	return nil
 }
@@ -223,14 +302,141 @@ func (snapshot *configImportTableSnapshot) load(ctx context.Context, tx *gorm.DB
 	return rows, nil
 }
 
-func (snapshot *configImportTableSnapshot) restore(ctx context.Context, tx *gorm.DB) error {
-	if snapshot.table == "" {
+func (snapshot *configImportTableSnapshot) verifyCurrent(ctx context.Context, tx *gorm.DB) error {
+	if snapshot == nil || snapshot.table == "" {
 		return nil
 	}
-	if len(snapshot.created) > 0 {
-		statement := "DELETE FROM " + snapshot.table + " WHERE " + snapshot.primaryKey + " IN ?"
-		if err := tx.WithContext(ctx).Exec(statement, snapshot.created).Error; err != nil {
+	rows, err := snapshot.load(ctx, tx)
+	if err != nil {
+		return err
+	}
+	actual := make(map[string]map[string]any, len(rows))
+	for _, row := range rows {
+		key := rawConfigImportKey(row[snapshot.primaryKey])
+		if key == "" {
+			return fmt.Errorf("config import rollback row identity is unavailable")
+		}
+		actual[key] = row
+	}
+	if len(actual) != len(snapshot.current) {
+		return fmt.Errorf("config import rollback detected concurrent changes in %s", snapshot.table)
+	}
+	for key, expected := range snapshot.current {
+		row, ok := actual[key]
+		if !ok || !configImportRowsEqual(expected, row) {
+			return fmt.Errorf("config import rollback detected concurrent changes in %s", snapshot.table)
+		}
+	}
+	return nil
+}
+
+func configImportRowsEqual(expected, actual map[string]any) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	for key, expectedValue := range expected {
+		actualValue, ok := actual[key]
+		if !ok || !configImportValuesEqual(expectedValue, actualValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func configImportValuesEqual(expected, actual any) bool {
+	switch expectedValue := expected.(type) {
+	case []byte:
+		actualValue, ok := actual.([]byte)
+		return ok && reflect.DeepEqual(expectedValue, actualValue)
+	case string:
+		if actualValue, ok := actual.([]byte); ok {
+			return expectedValue == string(actualValue)
+		}
+	}
+	if expectedTime, ok := expected.(time.Time); ok {
+		actualTime, ok := actual.(time.Time)
+		return ok && expectedTime.Equal(actualTime)
+	}
+	return reflect.DeepEqual(expected, actual)
+}
+
+func configImportCASPredicate(db *gorm.DB, primaryKey string, row map[string]any) (string, []any, error) {
+	primaryValue, ok := row[primaryKey]
+	if !ok {
+		return "", nil, fmt.Errorf("config import rollback row identity is unavailable")
+	}
+	keys := make([]string, 0, len(row))
+	for key := range row {
+		if key != primaryKey {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	predicate := primaryKey + " = ?"
+	args := []any{primaryValue}
+	for _, key := range keys {
+		if row[key] == nil {
+			predicate += " AND " + key + " IS NULL"
+			continue
+		}
+		if timestamp, isTimestamp := row[key].(time.Time); isTimestamp && db != nil && db.Name() == "sqlite" {
+			predicate += " AND (CAST(" + key + " AS TEXT) = ? OR CAST(" + key + " AS TEXT) = ? OR CAST(" + key + " AS TEXT) = ? OR CAST(" + key + " AS TEXT) = ?)"
+			args = append(args, configImportSQLiteTimestampValues(timestamp)...)
+			continue
+		}
+		predicate += " AND " + key + " = ?"
+		args = append(args, configImportCASValue(db, row[key]))
+	}
+	return predicate, args, nil
+
+}
+
+func configImportCASValue(db *gorm.DB, value any) any {
+	if timestamp, ok := value.(time.Time); ok {
+		if db != nil && db.Name() == "sqlite" {
+			return timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		return timestamp
+	}
+	return value
+}
+
+func configImportSQLiteTimestampValues(timestamp time.Time) []any {
+	utc := timestamp.UTC()
+	local := timestamp.Local()
+	const sqliteLayout = "2006-01-02 15:04:05.999999999-07:00"
+	return []any{
+		utc.Format(time.RFC3339Nano),
+		utc.Format(sqliteLayout),
+		local.Format(time.RFC3339Nano),
+		local.Format(sqliteLayout),
+	}
+
+}
+
+func (snapshot *configImportTableSnapshot) restore(ctx context.Context, tx *gorm.DB) error {
+	if snapshot == nil || snapshot.table == "" {
+		return nil
+	}
+	for _, value := range snapshot.created {
+		key := rawConfigImportKey(value)
+		row, exists := snapshot.current[key]
+		if !exists {
+			return fmt.Errorf("config import rollback created row %s in %s is unavailable", key, snapshot.table)
+		}
+		predicate, args, err := configImportCASPredicate(tx, snapshot.primaryKey, row)
+		if err != nil {
 			return err
+		}
+		result := tx.WithContext(ctx).Exec(
+			"DELETE FROM "+snapshot.table+" WHERE "+predicate,
+			args...,
+		)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("config import rollback created row %s in %s changed during restore", key, snapshot.table)
 		}
 	}
 	keys := make([]string, 0, len(snapshot.prior))
@@ -240,18 +446,167 @@ func (snapshot *configImportTableSnapshot) restore(ctx context.Context, tx *gorm
 	sort.Strings(keys)
 	for _, key := range keys {
 		row := snapshot.prior[key]
-		result := tx.WithContext(ctx).Table(snapshot.table).
-			Where(snapshot.primaryKey+" = ?", row[snapshot.primaryKey]).Updates(row)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			if err := tx.WithContext(ctx).Table(snapshot.table).Create(row).Error; err != nil {
+		if expectedCurrent, ok := snapshot.current[key]; ok {
+			predicate, args, err := configImportCASPredicate(tx, snapshot.primaryKey, expectedCurrent)
+			if err != nil {
 				return err
 			}
+			result := tx.WithContext(ctx).Table(snapshot.table).
+				Where(predicate, args...).Updates(row)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return fmt.Errorf("config import rollback prior row %s in %s changed during restore", key, snapshot.table)
+			}
+			continue
+		}
+		if err := tx.WithContext(ctx).Table(snapshot.table).Create(row).Error; err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func (snapshot *configImportRollbackSnapshot) validateTaskRollbackOwnership(ctx context.Context, tx *gorm.DB) error {
+	var tasks []model.Task
+	if err := tx.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("id", "node_id", "policy_id", "executor_type", "rsync_target").
+		Order("id").
+		Find(&tasks).Error; err != nil {
+		return fmt.Errorf("config import rollback task ownership query failed: %w", err)
+	}
+
+	projected := make(map[uint]policyPkg.TargetOwner, len(tasks))
+	for _, task := range tasks {
+		if !policyPkg.IsCoreLocalTarget(task.ExecutorType, task.RsyncTarget) {
+			continue
+		}
+		projected[task.ID] = policyPkg.TargetOwner{
+			NodeID: task.NodeID,
+			TaskID: task.ID,
+			Target: task.RsyncTarget,
+		}
+		if task.PolicyID != nil {
+			projected[task.ID] = policyPkg.TargetOwner{
+				PolicyID: *task.PolicyID,
+				NodeID:   task.NodeID,
+				TaskID:   task.ID,
+				Target:   task.RsyncTarget,
+			}
+		}
+	}
+
+	for _, row := range snapshot.tasks.current {
+		taskID, ok := configImportRollbackUint(row["id"])
+		if !ok {
+			return fmt.Errorf("config import rollback task identity is unavailable")
+		}
+		delete(projected, taskID)
+	}
+	for key, row := range snapshot.tasks.prior {
+		taskID, ok := configImportRollbackUint(row["id"])
+		if !ok || rawConfigImportKey(row["id"]) != key {
+			return fmt.Errorf("config import rollback task identity is unavailable")
+		}
+		delete(projected, taskID)
+		owner, local, err := configImportRollbackTaskOwner(row)
+		if err != nil {
+			return err
+		}
+		if local {
+			projected[taskID] = owner
+		}
+	}
+
+	ids := make([]uint, 0, len(projected))
+	for taskID := range projected {
+		ids = append(ids, taskID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	owners := make([]policyPkg.TargetOwner, 0, len(ids))
+	for _, taskID := range ids {
+		owners = append(owners, projected[taskID])
+	}
+	if err := policyPkg.ValidateTargetOwners(owners); err != nil {
+		return fmt.Errorf("config import rollback task ownership conflict: %w", err)
+	}
+	return nil
+}
+
+func configImportRollbackTaskOwner(row map[string]any) (policyPkg.TargetOwner, bool, error) {
+	taskID, ok := configImportRollbackUint(row["id"])
+	if !ok {
+		return policyPkg.TargetOwner{}, false, fmt.Errorf("config import rollback task identity is unavailable")
+	}
+	executorType := rawConfigImportString(row["executor_type"])
+	target := rawConfigImportString(row["rsync_target"])
+	if !policyPkg.IsCoreLocalTarget(executorType, target) {
+		return policyPkg.TargetOwner{}, false, nil
+	}
+	owner := policyPkg.TargetOwner{
+		TaskID: taskID,
+		NodeID: 0,
+		Target: target,
+	}
+	if nodeID, ok := configImportRollbackUint(row["node_id"]); ok {
+		owner.NodeID = nodeID
+	}
+	if policyID, ok := configImportRollbackUint(row["policy_id"]); ok {
+		owner.PolicyID = policyID
+	}
+	return owner, true, nil
+}
+
+func configImportRollbackUint(value any) (uint, bool) {
+	var parsed uint64
+	switch typed := value.(type) {
+	case uint:
+		if typed == 0 {
+			return 0, false
+		}
+		return typed, true
+	case uint8:
+		parsed = uint64(typed)
+	case uint16:
+		parsed = uint64(typed)
+	case uint32:
+		parsed = uint64(typed)
+	case uint64:
+		parsed = typed
+	case int:
+		if typed <= 0 {
+			return 0, false
+		}
+		parsed = uint64(typed)
+	case int8:
+		if typed <= 0 {
+			return 0, false
+		}
+		parsed = uint64(typed)
+	case int16:
+		if typed <= 0 {
+			return 0, false
+		}
+		parsed = uint64(typed)
+	case int32:
+		if typed <= 0 {
+			return 0, false
+		}
+		parsed = uint64(typed)
+	case int64:
+		if typed <= 0 {
+			return 0, false
+		}
+		parsed = uint64(typed)
+	default:
+		return normalizeUintValue(value)
+	}
+	if parsed == 0 || parsed > uint64(^uint(0)) {
+		return 0, false
+	}
+	return uint(parsed), true
 }
 
 func (snapshot *configImportTableSnapshot) createdRows() []map[string]any {
@@ -285,7 +640,6 @@ func (graph *configImportGraphRollback) restore(ctx context.Context, tx *gorm.DB
 	}{
 		{"backup_retention_policies", graph.createdPolicies},
 		{"task_repository_links", graph.createdLinks},
-		{"repository_access_bindings", graph.bindings.created},
 		{"backup_repositories", graph.createdRepositories},
 	} {
 		if len(deletion.ids) > 0 {

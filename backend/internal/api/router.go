@@ -750,6 +750,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/tasks/batch-trigger", middleware.RBAC("tasks:write"), taskHandler.BatchTrigger)
 	secured.POST("/tasks/:id/trigger", middleware.RBAC("tasks:trigger"), middleware.OwnershipTaskCheck(dep.DB), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run"), handlers.RequireTaskManualTriggerCredentialGrant(dep.DB), taskHandler.Trigger)
 	secured.POST("/tasks/:id/cancel", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Cancel)
+	secured.POST("/tasks/:id/reconcile-legacy-rclone", middleware.RBAC("tasks:write"), middleware.RequireRole("admin"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.ReconcileLegacyRcloneWrite)
 	secured.POST("/tasks/:id/pause", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Pause)
 	secured.POST("/tasks/:id/resume", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Resume)
 	secured.POST("/tasks/:id/skip-next", middleware.RBAC("tasks:write"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.SkipNext)

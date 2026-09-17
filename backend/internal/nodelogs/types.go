@@ -46,6 +46,9 @@ type Cursor struct {
 	CursorText string
 	FileOffset int64
 	FileInode  int64
+	UpdatedAt  time.Time
+	// recoveryReason is transient evidence, emitted only after persistence succeeds.
+	recoveryReason string
 }
 
 // DefaultRetentionDays is the fallback if system_settings.log_retention_days_default is unset.
@@ -69,8 +72,12 @@ const MaxFetchBytes = 10 * 1024 * 1024 // 10 MB
 // InsertBatchSize controls log rows per insert transaction.
 const InsertBatchSize = 500
 
+const JournalRecoveryWindow = time.Hour
+const JournalBatchSize = 200
+
 // SSH batch command delimiters.
 const (
 	JournalDelim = "<<<XIRANG_DELIM>>>"
 	FileEnd      = "<<<XIRANG_FILE_END>>>"
+	FetchEnd     = "<<<XIRANG_FETCH_OK>>>"
 )

@@ -20,7 +20,8 @@ import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { getErrorMessage } from "@/lib/utils";
-import type { NewTaskInput, TaskRecord, TaskRunRecord } from "@/types/domain";
+import { ApiError } from "@/lib/api/core";
+import type { NewTaskInput, TaskRecord, TaskRunRecord, UpdateTaskInput } from "@/types/domain";
 import { TasksGrid } from "@/pages/tasks-page.grid";
 import type { PendingActionType } from "@/pages/tasks-page.utils";
 import { TasksTable } from "@/pages/tasks-page.table";
@@ -265,17 +266,20 @@ export function TasksPage() {
     setRcloneVersioningTask(task);
   };
 
-  const handleUpdateTask = async (input: NewTaskInput) => {
+  const handleUpdateTask = async (input: UpdateTaskInput) => {
     if (!editingTask) return;
-    // Dialog validates name/node before calling this handler; early-return silently if bypassed
-    if (!input.name.trim() || !input.nodeId) return;
     try {
       await updateTask(editingTask.id, input);
       setEditDialogOpen(false);
       setEditingTask(null);
       toast.success(t("tasks.updateSuccess", { id: editingTask.id }));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(error instanceof ApiError && error.status === 409
+        ? t("taskCreate.conflictStaleRevision")
+        : getErrorMessage(error));
+      if (error instanceof ApiError && error.status === 409) {
+        throw error;
+      }
     }
   };
 

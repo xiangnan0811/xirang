@@ -29,6 +29,7 @@ func (r *CursorRepo) LoadForNode(nodeID uint) (map[CursorKey]Cursor, error) {
 			CursorText: row.CursorText,
 			FileOffset: row.FileOffset,
 			FileInode:  row.FileInode,
+			UpdatedAt:  row.UpdatedAt,
 		}
 	}
 	return out, nil

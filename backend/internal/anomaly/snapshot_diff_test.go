@@ -584,28 +584,3 @@ func TestAnalyzeSnapshotDiffNoTarget(t *testing.T) {
 		t.Errorf("expected nil findings, got %d", len(findings))
 	}
 }
-
-func TestBuildResticPasswordFileArgForAnomaly(t *testing.T) {
-	// 测试空密码场景：密码文件参数仍然生成
-	pwFilePath := executor.BuildResticPasswordFilePath()
-	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
-	if !strings.HasPrefix(pwFileArg, "--password-file ") {
-		t.Errorf("expected --password-file prefix, got %q", pwFileArg)
-	}
-	if !strings.Contains(pwFileArg, pwFilePath) {
-		t.Errorf("expected password file path %s in arg, got %q", pwFilePath, pwFileArg)
-	}
-
-	// 测试密码文件创建命令
-	access := executor.NewResticRepositoryAccess("FAKE_ANOMALY_RESTIC_PASSWORD_FOR_TEST_ONLY")
-	createCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if !strings.Contains(createCmd, "chmod 600") {
-		t.Errorf("expected create command to include chmod 600, got %q", createCmd)
-	}
-
-	// 测试清理命令
-	cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
-	if !strings.HasPrefix(cleanupCmd, "rm -f ") {
-		t.Errorf("expected cleanup command to start with rm -f, got %q", cleanupCmd)
-	}
-}

@@ -10,8 +10,9 @@ package model
 //	user.go        — User, SSHKey, LoginFailure
 //	node.go        — Node, NodeOwner, NodeMetricSample, NodeMetricSampleHourly, NodeMetricSampleDaily, NodeLog, NodeLogCursor
 //	task.go        — Task, TaskRun, TaskLog, TaskTrafficSample
+//	task_occurrence.go — TaskCronOccurrence
+//	task_resource.go — TaskRunResourceIdentity and resource identity helpers
 //	policy.go      — Policy, PolicyNode
-//	alert.go       — Alert, AlertDelivery, Silence, EscalationPolicy, EscalationLevel, AlertEscalationEvent
 //	integration.go — Integration, AppCredential
 //	report.go      — ReportConfig, Report
 //	audit.go       — AuditLog, CredentialAuditEvent, CredentialAccessGrant

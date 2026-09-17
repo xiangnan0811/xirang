@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,6 +73,7 @@ func TestFeishuSenderSendsCorrectPayload(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":0}`))
 	}))
 	defer srv.Close()
 
@@ -102,6 +104,7 @@ func TestFeishuSenderWithSecretAddsSign(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&receivedBody)
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":0}`))
 	}))
 	defer srv.Close()
 
@@ -125,6 +128,7 @@ func TestDingtalkSenderSendsMarkdown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&receivedBody)
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
 	}))
 	defer srv.Close()
 
@@ -145,6 +149,7 @@ func TestDingtalkSenderWithSecretAppendsToURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestURL = r.URL.RawQuery
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
 	}))
 	defer srv.Close()
 
@@ -171,6 +176,7 @@ func TestWecomSenderSendsMarkdown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&receivedBody)
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
 	}))
 	defer srv.Close()
 
@@ -182,6 +188,58 @@ func TestWecomSenderSendsMarkdown(t *testing.T) {
 	}
 	if receivedBody["msgtype"] != "markdown" {
 		t.Errorf("msgtype 应为 markdown，got %v", receivedBody["msgtype"])
+	}
+}
+func TestChannelSendRequiresBusinessSuccessAcknowledgement(t *testing.T) {
+	tests := []struct {
+		name    string
+		channel string
+		parse   func([]byte) (string, bool)
+		body    string
+	}{
+		{name: "feishu missing code", channel: "feishu", parse: parseFeishuAck, body: `{"msg":"success"}`},
+		{name: "feishu nonzero code", channel: "feishu", parse: parseFeishuAck, body: `{"code":19021,"msg":"token=SECRET"}`},
+		{name: "dingtalk null code", channel: "dingtalk", parse: parseDingtalkAck, body: `{"errcode":null}`},
+		{name: "wecom malformed code", channel: "wecom", parse: parseWecomAck, body: `{"errcode":"not-a-number"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			t.Cleanup(server.Close)
+			err := postJSONWithAck(http.DefaultClient, server.URL, test.channel, map[string]string{"text": "alert"}, test.parse)
+			if err == nil {
+				t.Fatal("business failure acknowledgement was accepted")
+			}
+			if strings.Contains(err.Error(), "SECRET") {
+				t.Fatalf("provider response body leaked into error: %v", err)
+			}
+		})
+	}
+}
+
+func TestFeishuLegacySuccessAcknowledgement(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"StatusCode":0,"StatusMessage":"success"}`))
+	}))
+	t.Cleanup(server.Close)
+	if err := postJSONWithAck(http.DefaultClient, server.URL, "feishu", map[string]string{"text": "alert"}, parseFeishuAck); err != nil {
+		t.Fatalf("legacy Feishu success was rejected: %v", err)
+	}
+}
+
+func TestChannelSendRejectsOversizedAcknowledgement(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":0,"padding":"` + strings.Repeat("x", notificationAckBodyLimit) + `"}`))
+	}))
+	t.Cleanup(server.Close)
+	err := postJSONWithAck(http.DefaultClient, server.URL, "feishu", map[string]string{"text": "alert"}, parseFeishuAck)
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("oversized acknowledgement result=%v, want bounded failure", err)
 	}
 }
 

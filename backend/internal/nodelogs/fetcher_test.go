@@ -22,7 +22,7 @@ func (f *fakeRunner) Run(ctx context.Context, node model.Node, cmd string, timeo
 }
 
 func TestFetch_EmptyJournalAndFiles(t *testing.T) {
-	out := "\n" + JournalDelim + "\n"
+	out := "\n" + JournalDelim + "\n" + FetchEnd + "\n"
 	f := &Fetcher{runner: &fakeRunner{out: out}}
 	cs := map[CursorKey]Cursor{
 		{SourceJournalctl, ""}: {NodeID: 1, Source: SourceJournalctl},
@@ -38,8 +38,8 @@ func TestFetch_EmptyJournalAndFiles(t *testing.T) {
 }
 
 func TestFetch_JournalOnly(t *testing.T) {
-	journalJSON := `{"__REALTIME_TIMESTAMP":"1713600000000000","__CURSOR":"c1","PRIORITY":"3","MESSAGE":"err1"}`
-	out := journalJSON + "\n" + JournalDelim + "\n"
+	journalJSON := fmt.Sprintf(`{"__REALTIME_TIMESTAMP":"%d","__CURSOR":"c1","PRIORITY":"3","MESSAGE":"err1"}`, time.Now().UnixMicro())
+	out := journalJSON + "\n" + JournalDelim + "\n" + FetchEnd + "\n"
 	f := &Fetcher{runner: &fakeRunner{out: out}}
 	n := model.Node{ID: 1, LogJournalctlEnabled: true}
 	cs := map[CursorKey]Cursor{
@@ -68,7 +68,7 @@ func TestFetch_JournalOnly(t *testing.T) {
 
 func TestFetch_FilesWithRotation(t *testing.T) {
 	fileOut := "INODE=42 SIZE=100\nhello\nworld\n"
-	out := "\n" + JournalDelim + "\n" + fileOut + "\n" + FileEnd + "\n"
+	out := "\n" + JournalDelim + "\n" + fileOut + "\n" + FileEnd + "\n" + FetchEnd + "\n"
 	f := &Fetcher{runner: &fakeRunner{out: out}}
 	n := model.Node{
 		ID:       1,
@@ -104,7 +104,7 @@ func TestFetch_FilesWithRotation(t *testing.T) {
 
 func TestFetch_InodeChangeResetsOffset(t *testing.T) {
 	fileOut := "INODE=99 SIZE=50\nnew-line\n"
-	out := "\n" + JournalDelim + "\n" + fileOut + "\n" + FileEnd + "\n"
+	out := "\n" + JournalDelim + "\n" + fileOut + "\n" + FileEnd + "\n" + FetchEnd + "\n"
 	f := &Fetcher{runner: &fakeRunner{out: out}}
 	n := model.Node{ID: 1, LogPaths: `["/var/log/app.log"]`}
 	cs := map[CursorKey]Cursor{
@@ -143,7 +143,7 @@ func TestFetch_SSHError(t *testing.T) {
 func TestBuildScript_JournalAfterCursor(t *testing.T) {
 	n := model.Node{LogJournalctlEnabled: true}
 	cs := map[CursorKey]Cursor{
-		{SourceJournalctl, ""}: {CursorText: "abc123"},
+		{SourceJournalctl, ""}: {CursorText: "abc123", UpdatedAt: time.Now()},
 	}
 	script := buildScript(n, cs)
 	if !strings.Contains(script, "--after-cursor='abc123'") {
@@ -159,7 +159,7 @@ func TestBuildScript_QuoteInjectionNeutralized(t *testing.T) {
 		LogPaths:             `["/var/log/$(id).log"]`,
 	}
 	cs := map[CursorKey]Cursor{
-		{SourceJournalctl, ""}: {CursorText: `abc"$(hostname)` + "`pwd`"},
+		{SourceJournalctl, ""}: {CursorText: `abc"$(hostname)` + "`pwd`", UpdatedAt: time.Now()},
 	}
 	script := buildScript(n, cs)
 	// The whole cursor payload must sit inside single quotes with the only
@@ -184,7 +184,7 @@ func TestBuildScript_FileWithOffset(t *testing.T) {
 	if !strings.Contains(script, "/var/log/a.log") {
 		t.Fatalf("path missing")
 	}
-	if !strings.Contains(script, fmt.Sprintf("%s\n", FileEnd)) {
+	if !strings.Contains(script, shellQuote(FileEnd)) {
 		t.Fatalf("file end delim missing")
 	}
 }

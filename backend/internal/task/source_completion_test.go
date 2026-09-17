@@ -112,14 +112,15 @@ func loadSourceCompletionState(t *testing.T, db *gorm.DB, taskID, runID uint) (m
 
 func TestRunTaskObservesLegacyRsyncSourceAfterPostHookBeforeSuccess(t *testing.T) {
 	db := openManagerTestDB(t)
+	source := t.TempDir()
 	target := t.TempDir()
-	node := model.Node{Name: "source-completion-node", Host: "example.invalid", Port: 22, Username: "reader", AuthType: "password", Password: "FAKE_NODE_PASSWORD_FOR_TEST_ONLY"}
+	node := model.Node{Name: "source-completion-node", Host: "", Port: 22, Username: "root", AuthType: "key"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatal(err)
 	}
 	taskEntity := model.Task{
 		Name: "source-completion-task", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), Enabled: true,
-		RsyncSource: "/source", RsyncTarget: target,
+		RsyncSource: source + "/", RsyncTarget: target,
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatal(err)
@@ -187,6 +188,13 @@ func TestRunTaskObservesLegacyRsyncSourceAfterPostHookBeforeSuccess(t *testing.T
 func TestRunTaskObservesBeforeVerificationWarning(t *testing.T) {
 	db := openManagerTestDB(t)
 	taskEntity := seedTaskForManagerTest(t, db)
+	var captureTask model.Task
+	if err := db.First(&captureTask, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(strings.TrimSuffix(captureTask.RsyncSource, "/"), "verify.txt"), []byte("captured"), 0o600); err != nil {
+		t.Fatalf("seed verification source: %v", err)
+	}
 	completionPolicy(t, db, taskEntity.ID, true, "")
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 	shutdownManagerOnCleanup(t, manager)
@@ -274,6 +282,10 @@ func TestRunTaskDoesNotObserveNonRsyncManagedOrFailedExecutions(t *testing.T) {
 	t.Run("managed-rsync", func(t *testing.T) {
 		db := openManagerTestDB(t)
 		taskEntity := seedTaskForManagerTest(t, db)
+		if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
+			Update("executor_config", `{"version":1,"publication_mode":"versioned_hardlink"}`).Error; err != nil {
+			t.Fatalf("configure managed Rsync fixture: %v", err)
+		}
 		runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 		attempt := publicationRsyncAttempt(taskEntity.ID, runID)
 		commit := provider.NewRsyncTreeProviderCommit(provider.RsyncTreeCommitV1{
@@ -311,6 +323,9 @@ func TestRunTaskDoesNotObserveNonRsyncManagedOrFailedExecutions(t *testing.T) {
 	t.Run("transfer-failure", func(t *testing.T) {
 		db := openManagerTestDB(t)
 		taskEntity := seedTaskForManagerTest(t, db)
+		if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", "command").Error; err != nil {
+			t.Fatal(err)
+		}
 		policy := completionPolicy(t, db, taskEntity.ID, false, "")
 		if err := db.Model(&model.Policy{}).Where("id = ?", policy.ID).UpdateColumn("max_retries", 1).Error; err != nil {
 			t.Fatal(err)
@@ -445,13 +460,14 @@ func TestRunTaskRealRepositoryObserverInvalidatesCatalogAfterPostHook(t *testing
 		t.Fatalf("migrate source completion repository tables: %v", err)
 	}
 	target := t.TempDir()
-	node := model.Node{Name: "source-completion-real-node", Host: "example.invalid", Port: 22, Username: "reader", AuthType: "password", Password: "FAKE_NODE_PASSWORD_FOR_TEST_ONLY"}
+	source := t.TempDir()
+	node := model.Node{Name: "source-completion-real-node", Host: "", Port: 22, Username: "root", AuthType: "key"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatal(err)
 	}
 	taskEntity := model.Task{
 		Name: "source-completion-real-task", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), Enabled: true,
-		RsyncSource: "/source", RsyncTarget: target,
+		RsyncSource: source + "/", RsyncTarget: target,
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatal(err)

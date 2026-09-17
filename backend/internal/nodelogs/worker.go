@@ -13,6 +13,8 @@ type Worker struct {
 	jobs    <-chan CollectJob
 	fetcher *Fetcher
 	curRepo *CursorRepo
+	onStart func(uint)
+	onDone  func(uint)
 }
 
 func (w *Worker) Run(ctx context.Context) {
@@ -30,10 +32,17 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) process(ctx context.Context, job CollectJob) {
-	// queueDepth is updated by the scheduler on enqueue (see scheduler.go);
-	// concurrent workers reading len(channel) here previously made the
-	// gauge jitter under load.
-	cursors, err := w.curRepo.LoadForNode(job.Node.ID)
+	if w.onDone != nil {
+		defer w.onDone(job.Node.ID)
+	}
+	if w.onStart != nil {
+		w.onStart(job.Node.ID)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	curRepo := NewCursorRepo(w.curRepo.db.WithContext(ctx))
+	cursors, err := curRepo.LoadForNode(job.Node.ID)
 	if err != nil {
 		logger.Module("nodelogs").Warn().
 			Uint("node_id", job.Node.ID).Err(err).
@@ -50,7 +59,7 @@ func (w *Worker) process(ctx context.Context, job CollectJob) {
 	}
 	if len(entries) > 0 {
 		sanitizeLogEntries(entries)
-		if err := w.db.CreateInBatches(&entries, InsertBatchSize).Error; err != nil {
+		if err := w.db.WithContext(ctx).CreateInBatches(&entries, InsertBatchSize).Error; err != nil {
 			logger.Module("nodelogs").Warn().
 				Uint("node_id", job.Node.ID).Err(err).
 				Int("count", len(entries)).
@@ -67,10 +76,20 @@ func (w *Worker) process(ctx context.Context, job CollectJob) {
 		}
 	}
 	if len(newCursors) > 0 {
-		if err := w.curRepo.SaveForNode(job.Node.ID, newCursors); err != nil {
+		if err := curRepo.SaveForNode(job.Node.ID, newCursors); err != nil {
 			logger.Module("nodelogs").Warn().
 				Uint("node_id", job.Node.ID).Err(err).
 				Msg("save cursors failed")
+			return
 		}
+	}
+	for _, c := range newCursors {
+		if c.recoveryReason == "" {
+			continue
+		}
+		journalRecoveries.WithLabelValues(c.recoveryReason).Inc()
+		logger.Module("nodelogs").Warn().Uint("node_id", job.Node.ID).
+			Str("reason", c.recoveryReason).Int("window_seconds", int(JournalRecoveryWindow.Seconds())).
+			Int("batch_limit", JournalBatchSize).Msg("journal recovery boundary reset; historical continuity not guaranteed")
 	}
 }

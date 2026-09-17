@@ -1,6 +1,11 @@
 import type {
   LogEvent,
   NewTaskInput,
+  ResticExecutorSettings,
+  RcloneExecutorSettings,
+  TaskExecutorSecretsConfigured,
+  TaskExecutorSettings,
+  UpdateTaskInput,
   RcloneBindingSetupResult,
   RcloneCostClass,
   RcloneEncryptionProfile,
@@ -43,7 +48,9 @@ type TaskResponse = {
   rsync_source?: string;
   rsync_target?: string;
   executor_type?: string;
-  executor_config?: string;
+  revision?: string;
+  executor_settings?: unknown;
+  executor_secrets_configured?: unknown;
   cron_spec?: string;
   policy_id?: number | null;
   depends_on_task_id?: number | null;
@@ -272,6 +279,95 @@ function safePositiveInteger(raw: unknown, fallback: number): number {
 
 function safeTaskRevision(raw: unknown): string {
   return typeof raw === "string" && /^[1-9]\d*$/.test(raw) ? raw : "";
+}
+
+function mapResticExecutorSettings(raw: unknown): ResticExecutorSettings {
+  if (!raw || typeof raw !== "object") {
+    return { excludePatterns: [], repositoryVersion: null };
+  }
+  const patterns = "exclude_patterns" in raw && Array.isArray(raw.exclude_patterns)
+    ? raw.exclude_patterns.filter((item): item is string => typeof item === "string")
+    : [];
+  const version = "repository_version" in raw ? raw.repository_version : null;
+  return {
+    excludePatterns: patterns,
+    repositoryVersion: version === 1 || version === 2 ? version : null,
+  };
+}
+
+function mapRcloneExecutorSettings(raw: unknown): RcloneExecutorSettings {
+  if (!raw || typeof raw !== "object") {
+    return { bandwidthLimit: "", transfers: 0 };
+  }
+  const transfers = "transfers" in raw && typeof raw.transfers === "number" && Number.isInteger(raw.transfers)
+    ? raw.transfers
+    : 0;
+  return {
+    bandwidthLimit: "bandwidth_limit" in raw && typeof raw.bandwidth_limit === "string" ? raw.bandwidth_limit : "",
+    transfers,
+  };
+}
+
+function mapTaskExecutorSettings(executorType: TaskRecord["executorType"], raw: unknown): TaskExecutorSettings | undefined {
+  if (executorType === "restic") {
+    return mapResticExecutorSettings(raw);
+  }
+  if (executorType === "rclone") {
+    return mapRcloneExecutorSettings(raw);
+  }
+  return undefined;
+}
+
+function mapExecutorSecretsConfigured(raw: unknown): TaskExecutorSecretsConfigured | undefined {
+  if (!raw || typeof raw !== "object" || !("repository_password" in raw)) {
+    return undefined;
+  }
+  return {
+    repositoryPassword: raw.repository_password === true,
+  };
+}
+
+function wireExecutorSettings(settings: NonNullable<UpdateTaskInput["executorSettings"]>): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (settings.excludePatterns !== undefined) {
+    body.exclude_patterns = settings.excludePatterns;
+  }
+  if (settings.repositoryVersion !== undefined) {
+    body.repository_version = settings.repositoryVersion;
+  }
+  if (settings.bandwidthLimit !== undefined) {
+    body.bandwidth_limit = settings.bandwidthLimit;
+  }
+  if (settings.transfers !== undefined) {
+    body.transfers = settings.transfers;
+  }
+  return body;
+}
+
+function wireTaskUpdateBody(input: UpdateTaskInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    expected_revision: input.expectedRevision,
+  };
+  if (input.name !== undefined) body.name = input.name;
+  if (input.nodeId !== undefined) body.node_id = input.nodeId;
+  if (input.policyId !== undefined) body.policy_id = input.policyId;
+  if (input.dependsOnTaskId !== undefined) body.depends_on_task_id = input.dependsOnTaskId;
+  if (input.command !== undefined) body.command = input.command;
+  if (input.rsyncSource !== undefined) body.rsync_source = input.rsyncSource;
+  if (input.rsyncTarget !== undefined) body.rsync_target = input.rsyncTarget;
+  if (input.executorType !== undefined) body.executor_type = input.executorType;
+  if (input.cronSpec !== undefined) body.cron_spec = input.cronSpec;
+  if (input.executorSettings !== undefined) {
+    body.executor_settings = wireExecutorSettings(input.executorSettings);
+  }
+  if (input.executorSecrets !== undefined) {
+    const secrets: Record<string, unknown> = {};
+    if (input.executorSecrets.repositoryPassword !== undefined) {
+      secrets.repository_password = input.executorSecrets.repositoryPassword;
+    }
+    body.executor_secrets = secrets;
+  }
+  return body;
 }
 
 function blockedRsyncPublicationSummary(): RsyncPublicationSummary {
@@ -660,7 +756,9 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     rsyncSource: row.rsync_source ?? undefined,
     rsyncTarget: row.rsync_target ?? undefined,
     executorType,
-    executorConfig: row.executor_config ?? undefined,
+    revision: safeTaskRevision(row.revision),
+    executorSettings: mapTaskExecutorSettings(executorType, row.executor_settings),
+    executorSecretsConfigured: mapExecutorSecretsConfigured(row.executor_secrets_configured),
     cronSpec: row.cron_spec ?? undefined,
     updatedAt: formatTime(row.updated_at),
     speedMbps: 0,
@@ -854,22 +952,11 @@ export function createTasksApi() {
       return mapTask(row, 0);
     },
 
-    async updateTask(token: string, taskId: number, input: NewTaskInput): Promise<TaskRecord> {
+    async updateTask(token: string, taskId: number, input: UpdateTaskInput): Promise<TaskRecord> {
       const row = await request<TaskResponse>(`/tasks/${taskId}`, {
         method: "PUT",
         token,
-        body: {
-          name: input.name,
-          node_id: input.nodeId,
-          policy_id: input.policyId ?? null,
-          depends_on_task_id: input.dependsOnTaskId ?? null,
-          command: input.command,
-          rsync_source: input.rsyncSource,
-          rsync_target: input.rsyncTarget,
-          executor_type: input.executorType,
-          executor_config: input.executorConfig,
-          cron_spec: input.cronSpec
-        }
+        body: wireTaskUpdateBody(input),
       });
       return mapTask(row, 0);
     },

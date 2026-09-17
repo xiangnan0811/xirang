@@ -101,7 +101,7 @@ func HasPermission(role, permission string) bool {
 func RequireRole(role string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if CurrentRole(c) != role {
-			c.JSON(http.StatusForbidden, gin.H{"error": "权限不足"})
+			respondAPIError(c, http.StatusForbidden, "权限不足")
 			c.Abort()
 			return
 		}
@@ -114,7 +114,7 @@ func RBAC(permission string) gin.HandlerFunc {
 		role := CurrentRole(c)
 		permissions, ok := rolePermissions[role]
 		if !ok || !permissions[permission] {
-			c.JSON(http.StatusForbidden, gin.H{"error": "权限不足"})
+			respondAPIError(c, http.StatusForbidden, "权限不足")
 			c.Abort()
 			return
 		}

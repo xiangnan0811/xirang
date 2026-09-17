@@ -184,6 +184,7 @@ func TestManagedTaskRetentionDelegatesExactRecoveryPointIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	now := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
@@ -306,7 +307,7 @@ func TestManagedTaskRetentionDelegatesExactRecoveryPointIDs(t *testing.T) {
 
 	taskEntity.ExecutorType = "rsync"
 	manager.SetLineageGuard(guards[0])
-	manager.enforceRsyncRetention(policy, taskEntity, now.AddDate(0, 0, -7))
+	manager.enforceRsyncRetention(policy, taskEntity)
 	taskEntity.ExecutorType = "restic"
 	manager.SetLineageGuard(guards[1])
 	manager.enforceResticRetention(policy, taskEntity)
@@ -358,6 +359,7 @@ func TestManagedTaskRetentionDelegatesExactRecoveryPointIDs(t *testing.T) {
 func TestManagedResticRetentionBlocksForgetPruneBeforeCredentialAndSSH(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	policy := model.Policy{ID: 17, RetentionDays: 7}
@@ -394,6 +396,7 @@ func TestManagedResticRetentionBlocksForgetPruneBeforeCredentialAndSSH(t *testin
 func TestManagedRsyncRetentionBlocksLegacyDirectoryDeletion(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "rsync"
 	target := t.TempDir()
@@ -411,7 +414,7 @@ func TestManagedRsyncRetentionBlocksLegacyDirectoryDeletion(t *testing.T) {
 	manager.SetLineageGuard(guard)
 	manager.SetLegacyBlockRecorder(recorder)
 
-	manager.enforceRsyncRetention(model.Policy{ID: 22, TargetPath: target, RetentionDays: 7}, taskEntity, time.Now().AddDate(0, 0, -7))
+	manager.enforceRsyncRetention(model.Policy{ID: 22, TargetPath: target, RetentionDays: 7}, taskEntity)
 
 	if guard.calls != 1 || guard.operation != publication.OperationLegacyRetention {
 		t.Fatalf("guard calls=%d operation=%q", guard.calls, guard.operation)
@@ -431,6 +434,7 @@ func TestManagedRsyncRetentionBlocksLegacyDirectoryDeletion(t *testing.T) {
 func TestManagedRcloneRetentionBlocksLegacyDeleteBeforeSSH(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "rclone"
 	taskEntity.RsyncTarget = "backup:legacy"
@@ -457,9 +461,32 @@ func TestManagedRcloneRetentionBlocksLegacyDeleteBeforeSSH(t *testing.T) {
 	_ = manager.Shutdown(shutdownCtx)
 }
 
+func TestLegacyRcloneRetentionRejectsMutableMirrorBeforeSSH(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "rclone"
+	taskEntity.RsyncTarget = "backup:legacy-current-mirror"
+	session := &legacyLineageSessionFake{mode: publication.LineageCompatibility}
+	manager.SetLineageGuard(&legacyLineageGuardFake{session: session})
+	recorder := &legacyBlockRecorderFake{}
+	manager.SetLegacyBlockRecorder(recorder)
+
+	manager.enforceRcloneRetention(model.Policy{ID: 230, RetentionDays: 7}, taskEntity)
+
+	if len(recorder.blocks) != 1 || recorder.blocks[0].Operation != publication.OperationLegacyRetention {
+		t.Fatalf("legacy Rclone retention was not visibly rejected: %+v", recorder.blocks)
+	}
+	if got := atomic.LoadInt32(&session.closed); got != 1 {
+		t.Fatalf("legacy Rclone lineage session close count=%d, want 1", got)
+	}
+}
+
 func TestRollbackSafeDisabledRetentionRemainsBlocked(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	policy := model.Policy{ID: 18, RetentionDays: 7}
@@ -487,6 +514,7 @@ func TestRollbackSafeDisabledRetentionRemainsBlocked(t *testing.T) {
 func TestPristineResticRetentionRetainsCompatibility(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	policy := model.Policy{ID: 19, RetentionDays: 7}
@@ -518,6 +546,7 @@ func TestPristineResticRetentionRetainsCompatibility(t *testing.T) {
 func TestResticRetentionAdmissionDrainsThroughCommandAndConnectionClose(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	policy := model.Policy{ID: 20, RetentionDays: 7}
@@ -562,6 +591,7 @@ func TestManagedRestoreAndRetentionRecordTypedLegacyBlockAuditAndMetric(t *testi
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("must remain unreachable")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	restoreRunID := createTestTaskRun(t, db, taskEntity.ID, "restore")
@@ -639,76 +669,59 @@ func TestResolveResticRepositoryAccessForRetention(t *testing.T) {
 	}
 }
 
-func TestEnforceRsyncRetention(t *testing.T) {
-	// 1. 创建临时目录作为策略目标路径
+func TestEnforceRsyncRetentionRejectsMutableTreeWithoutVersionAge(t *testing.T) {
 	targetDir := t.TempDir()
-
-	freshDir := filepath.Join(targetDir, "fresh-dir")
-	staleDir := filepath.Join(targetDir, "stale-dir")
-	if err := os.Mkdir(freshDir, 0o755); err != nil {
-		t.Fatalf("创建 fresh-dir 失败: %v", err)
+	freshDir := filepath.Join(targetDir, "node-a")
+	staleDir := filepath.Join(targetDir, "node-b")
+	for _, path := range []string{freshDir, staleDir} {
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatalf("创建备份目录失败: %v", err)
+		}
 	}
-	if err := os.Mkdir(staleDir, 0o755); err != nil {
-		t.Fatalf("创建 stale-dir 失败: %v", err)
-	}
-
-	// 将 stale-dir 的修改时间设为 30 天前
 	staleTime := time.Now().AddDate(0, 0, -30)
 	if err := os.Chtimes(staleDir, staleTime, staleTime); err != nil {
-		t.Fatalf("设置 stale-dir 修改时间失败: %v", err)
+		t.Fatalf("设置旧目录修改时间失败: %v", err)
 	}
 
-	// 2. 创建 Manager 并初始化测试数据
 	db := openManagerTestDB(t)
-
 	node := model.Node{
-		Name:     "node-retention-test",
-		Host:     "127.0.0.1",
-		Port:     22,
-		Username: "root",
-		AuthType: "key",
+		Name: "node-retention-test", Host: "127.0.0.1", Port: 22,
+		Username: "root", AuthType: "key",
 	}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
-
 	policy := model.Policy{
-		Name:          "policy-retention-test",
-		SourcePath:    "/tmp/src",
-		TargetPath:    targetDir,
-		CronSpec:      "@daily",
-		RetentionDays: 7,
+		Name: "policy-retention-test", SourcePath: "/tmp/src",
+		TargetPath: targetDir, CronSpec: "@daily", RetentionDays: 7,
 	}
 	if err := db.Create(&policy).Error; err != nil {
 		t.Fatalf("创建策略失败: %v", err)
 	}
-
-	task := model.Task{
-		Name:         "task-retention-test",
-		NodeID:       node.ID,
-		ExecutorType: "rsync",
-		Status:       string(StatusPending),
-		RsyncSource:  "/tmp/src",
-		RsyncTarget:  targetDir,
-		PolicyID:     &policy.ID,
+	taskEntity := model.Task{
+		Name: "task-retention-test", NodeID: node.ID, ExecutorType: "rsync",
+		Status: string(StatusPending), RsyncSource: "/tmp/src",
+		RsyncTarget: targetDir, PolicyID: &policy.ID,
 	}
-	if err := db.Create(&task).Error; err != nil {
+	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("创建任务失败: %v", err)
 	}
-	// Preload Node 以避免 enforceRsyncRetention 内部访问空 Node
-	db.Preload("Node").First(&task, task.ID)
-
-	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
-
-	// 3. 调用 enforceRsyncRetention，cutoff 设为 7 天前
-	cutoff := time.Now().AddDate(0, 0, -7)
-	m.enforceRsyncRetention(policy, task, cutoff)
-
-	// 4. 断言：stale-dir 应被删除，fresh-dir 应保留
-	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
-		t.Fatalf("期望 stale-dir 已被删除，但仍存在")
+	if err := db.Preload("Node").First(&taskEntity, taskEntity.ID).Error; err != nil {
+		t.Fatalf("加载任务节点失败: %v", err)
 	}
-	if _, err := os.Stat(freshDir); err != nil {
-		t.Fatalf("期望 fresh-dir 仍存在，但访问失败: %v", err)
+
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	recorder := &legacyBlockRecorderFake{}
+	manager.SetLegacyBlockRecorder(recorder)
+	manager.enforceRsyncRetention(policy, taskEntity)
+
+	for _, path := range []string{freshDir, staleDir} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("旧版可变 Rsync 保留清理删除了当前材料 %q: %v", path, err)
+		}
+	}
+	if len(recorder.blocks) != 1 || recorder.blocks[0].Operation != publication.OperationLegacyRetention {
+		t.Fatalf("旧版可变 Rsync 保留清理未记录安全拒绝: %+v", recorder.blocks)
 	}
 }

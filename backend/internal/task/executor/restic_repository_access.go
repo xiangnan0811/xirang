@@ -1,12 +1,21 @@
 package executor
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"path"
+	"strings"
+	"time"
 
+	"xirang/backend/internal/logger"
+	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
+
+	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -61,11 +70,14 @@ func (access ResticRepositoryAccess) Password() string {
 }
 
 // BuildResticPasswordFilePath 生成一个唯一的 restic 密码临时文件路径。
-// 使用 crypto/rand 生成随机后缀，避免可预测的路径名。
+//
+// The password lives below a freshly-created, mode-0700 directory rather than
+// directly below /tmp.  Callers must pass this path to the create and cleanup
+// command helpers unchanged.
 func BuildResticPasswordFilePath() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
-	return fmt.Sprintf("/tmp/xirang_restic_pw_%s", hex.EncodeToString(b))
+	return fmt.Sprintf("/tmp/xirang_restic_pw_%s/password", hex.EncodeToString(b))
 }
 
 // BuildResticPasswordFileArg 返回 restic 命令使用的 --password-file 参数。
@@ -73,18 +85,214 @@ func BuildResticPasswordFileArg(passwordFilePath string) string {
 	return "--password-file " + ShellEscape(passwordFilePath)
 }
 
+// BuildResticCommandPrefix returns a binary-first restic command prefix with
+// the password-file option. It deliberately does not add sudo: compatibility
+// callers must preserve their existing privilege policy.
+func BuildResticCommandPrefix(binary, passwordFilePath string) string {
+	return binary + " " + BuildResticPasswordFileArg(passwordFilePath)
+}
+
 // BuildCreateResticPasswordFileCmd 返回在远程节点上创建 restic 密码文件的命令。
-// 密码写入临时文件并设置 chmod 600，确保只有文件所有者可读。
-func BuildCreateResticPasswordFileCmd(passwordFilePath string, access ResticRepositoryAccess) string {
-	pw := access.Password()
-	pwEscaped := ShellEscape(pw)
-	pathEscaped := ShellEscape(passwordFilePath)
-	return fmt.Sprintf("printf '%%s' %s > %s && chmod 600 %s", pwEscaped, pathEscaped, pathEscaped)
+//
+// The password is read only from the command's controlled stdin; it is never
+// interpolated into this shell command or placed in a process argument.
+// The directory is created without -p, so an existing directory or symlink
+// (including a dangling symlink) is a hard failure.  mktemp creates a private
+// regular file, and ln publishes it at the requested name without following
+// or replacing an existing destination.  The trap removes only files that
+// this command successfully published, and never removes a colliding path.
+func BuildCreateResticPasswordFileCmd(passwordFilePath string) string {
+	fileEscaped := ShellEscape(passwordFilePath)
+	dirEscaped := ShellEscape(path.Dir(passwordFilePath))
+	markerPath := path.Join(path.Dir(passwordFilePath), ".xirang_restic_pw_owner")
+	markerEscaped := ShellEscape(markerPath)
+	ownerMarker := ShellEscape("xirang-restic-password-v1:" + passwordFilePath)
+
+	return fmt.Sprintf(`umask 077
+dir=%s
+file=%s
+marker=%s
+dir_created=0
+created=0
+marker_created=0
+tmp=
+marker_tmp=
+cleanup() {
+	if [ "$created" = 1 ] && [ ! -L "$file" ]; then
+		rm -f "$file"
+	fi
+	if [ "$marker_created" = 1 ] && [ ! -L "$marker" ]; then
+		rm -f "$marker"
+	fi
+	if [ -n "$tmp" ] && [ ! -L "$tmp" ]; then
+		rm -f "$tmp"
+	fi
+	if [ -n "$marker_tmp" ] && [ ! -L "$marker_tmp" ]; then
+		rm -f "$marker_tmp"
+	fi
+	if [ "$dir_created" = 1 ]; then
+		rmdir "$dir" 2>/dev/null
+	fi
+}
+trap cleanup 0
+trap 'exit 1' 1 2 3 15
+if mkdir -m 700 "$dir"; then
+	dir_created=1
+	marker_tmp=$(mktemp "$dir/.owner.XXXXXX") &&
+		printf '%%s' %s > "$marker_tmp" &&
+		[ ! -e "$marker" ] &&
+		[ ! -L "$marker" ] &&
+		ln "$marker_tmp" "$marker" &&
+		marker_created=1 &&
+		rm -f "$marker_tmp" &&
+		marker_tmp= &&
+		tmp=$(mktemp "$dir/.pw.XXXXXX") &&
+		cat > "$tmp" &&
+		[ ! -e "$file" ] &&
+		[ ! -L "$file" ] &&
+		ln "$tmp" "$file" &&
+		created=1 &&
+		rm -f "$tmp" &&
+		tmp= &&
+		chmod 600 "$file" "$marker" &&
+		trap - 0 1 2 3 15
+else
+	exit 1
+fi
+`, dirEscaped, fileEscaped, markerEscaped, ownerMarker)
+}
+
+// CreateResticPasswordFile sends the exact repository password bytes through a
+// controlled stdin stream to the remote creator. In particular, an empty
+// password and a password ending in a newline are both preserved verbatim.
+func CreateResticPasswordFile(ctx context.Context, client *ssh.Client, passwordFilePath string, access ResticRepositoryAccess) error {
+	if client == nil {
+		return fmt.Errorf("restic password file SSH client is nil")
+	}
+	if strings.TrimSpace(passwordFilePath) == "" {
+		return fmt.Errorf("restic password file path is empty")
+	}
+	password := []byte(access.Password())
+	if len(password) > sshutil.MaximumSecretStdinBytes {
+		return fmt.Errorf("restic password exceeds controlled stdin limit")
+	}
+
+	runner := sshutil.NewSSHCommandRunnerWithTransportClose(client, 1)
+	stream, err := runner.OpenRawExecution(ctx, sshutil.RawCommandSpec{
+		Command:        BuildCreateResticPasswordFileCmd(passwordFilePath),
+		MaxStdoutBytes: 4 << 10,
+		MaxStderrBytes: 4 << 10,
+		MaxRecordBytes: 4 << 10,
+		SecretStdin: &sshutil.SecretStdin{
+			Value:         password,
+			AppendNewline: false,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("restic password file command start failed: %w", err)
+	}
+	if _, err := io.Copy(io.Discard, stream); err != nil {
+		cancelErr := stream.Cancel()
+		if cancelErr != nil && !errors.Is(cancelErr, sshutil.ErrCommandFailed) {
+			err = errors.Join(err, cancelErr)
+		}
+		return fmt.Errorf("restic password file command failed: %w", err)
+	}
+	completion, err := stream.Join()
+	if err != nil {
+		return fmt.Errorf("restic password file command join failed: %w", err)
+	}
+	if !completion.ExitCodeKnown {
+		return fmt.Errorf("restic password file command completed without an exit status")
+	}
+	if completion.ExitCode != 0 {
+		return fmt.Errorf("restic password file command exited with code %d", completion.ExitCode)
+	}
+	return nil
 }
 
 // BuildCleanupResticPasswordFileCmd 返回删除远程节点上 restic 密码临时文件的命令。
+//
+// Cleanup is deliberately conditional on the private owner marker.  This
+// makes it safe to arm cleanup before creation: a pre-existing file, regular
+// or symlink, is left untouched when directory creation failed.
 func BuildCleanupResticPasswordFileCmd(passwordFilePath string) string {
-	return "rm -f " + ShellEscape(passwordFilePath)
+	dir := path.Dir(passwordFilePath)
+	marker := path.Join(dir, ".xirang_restic_pw_owner")
+	return fmt.Sprintf(`dir=%s
+file=%s
+marker=%s
+if [ -d "$dir" ] && [ ! -L "$dir" ] &&
+	[ -f "$marker" ] && [ ! -L "$marker" ] &&
+	[ "$(cat "$marker" 2>/dev/null)" = %s ] &&
+	[ ! -L "$file" ] &&
+	{ [ ! -e "$file" ] || [ -f "$file" ]; }; then
+	rm -f "$file" "$marker" && rmdir "$dir" 2>/dev/null
+fi
+`, ShellEscape(dir), ShellEscape(passwordFilePath), ShellEscape(marker),
+		ShellEscape("xirang-restic-password-v1:"+passwordFilePath))
+}
+
+// resticPasswordCleanupTimeout bounds the independent post-operation cleanup
+// connection. It intentionally does not inherit a canceled operation context.
+const resticPasswordCleanupTimeout = 5 * time.Second
+
+// CleanupResticPasswordFile removes an attempt-owned Restic password file over
+// a fresh SSH connection. Operation streams may own (and force-close) their
+// original transport, so cleanup must redial the same node for the exact
+// cleanup purpose instead of reusing that client. A dial or command failure is
+// returned to the caller; an unreachable node cannot be promised to be clean.
+func CleanupResticPasswordFile(node model.Node, passwordFilePath, purpose string) (returnErr error) {
+	defer func() {
+		if returnErr != nil {
+			logger.Module("executor").Warn().
+				Uint("node_id", node.ID).
+				Str("purpose", sshutil.NormalizePurpose(purpose)).
+				Err(returnErr).
+				Msg("restic password cleanup failed; remote residue may remain")
+		}
+	}()
+	if strings.TrimSpace(passwordFilePath) == "" {
+		return fmt.Errorf("restic password cleanup path is empty")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), resticPasswordCleanupTimeout)
+	defer cancel()
+
+	client, err := DialSSHForNodePurpose(ctx, node, purpose)
+	if err != nil {
+		return fmt.Errorf("restic password cleanup SSH connection failed: %w", err)
+	}
+	defer client.Close() //nolint:errcheck // cleanup transport close is best effort
+
+	runner := sshutil.NewSSHCommandRunnerWithTransportClose(client, 1)
+	stream, err := runner.OpenRawExecution(ctx, sshutil.RawCommandSpec{
+		Command:        BuildCleanupResticPasswordFileCmd(passwordFilePath),
+		Timeout:        resticPasswordCleanupTimeout,
+		MaxStdoutBytes: 4 << 10,
+		MaxStderrBytes: 4 << 10,
+		MaxRecordBytes: 4 << 10,
+	})
+	if err != nil {
+		return fmt.Errorf("restic password cleanup command start failed: %w", err)
+	}
+	if _, err := io.Copy(io.Discard, stream); err != nil {
+		cancelErr := stream.Cancel()
+		if cancelErr != nil && !errors.Is(cancelErr, sshutil.ErrCommandFailed) {
+			err = errors.Join(err, cancelErr)
+		}
+		return fmt.Errorf("restic password cleanup command failed: %w", err)
+	}
+	completion, err := stream.Join()
+	if err != nil {
+		return fmt.Errorf("restic password cleanup command join failed: %w", err)
+	}
+	if !completion.ExitCodeKnown {
+		return fmt.Errorf("restic password cleanup command completed without an exit status")
+	}
+	if completion.ExitCode != 0 {
+		return fmt.Errorf("restic password cleanup command exited with code %d", completion.ExitCode)
+	}
+	return nil
 }
 
 func parseResticConfigWithRepositoryAccess(raw string) (ResticConfig, ResticRepositoryAccess, error) {

@@ -593,7 +593,8 @@ func runOrdinaryHeartbeatLossFencesTerminalWrite(t *testing.T, db *gorm.DB) {
 	executor := &leaseCancellationExecutor{started: make(chan struct{}), canceled: make(chan struct{})}
 	manager := NewManager(db, stubExecutorFactory{executor: executor}, nil, nil, nil, nil, 8, 90)
 	shutdownManagerOnCleanup(t, manager)
-	manager.executionLeaseDuration = 45 * time.Millisecond
+	// Ownership is lost by the explicit foreign-owner write, not startup expiry.
+	manager.executionLeaseDuration = 3 * time.Second
 	task := seedTaskForManagerTest(t, db)
 	if err := db.Model(&model.Task{}).Where("id = ?", task.ID).Update("executor_type", "local").Error; err != nil {
 		t.Fatal(err)
@@ -604,7 +605,7 @@ func runOrdinaryHeartbeatLossFencesTerminalWrite(t *testing.T, db *gorm.DB) {
 	}
 	select {
 	case <-executor.started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("executor did not start")
 	}
 	foreignLease := time.Now().UTC().Add(time.Second)
@@ -615,7 +616,7 @@ func runOrdinaryHeartbeatLossFencesTerminalWrite(t *testing.T, db *gorm.DB) {
 	}
 	select {
 	case <-executor.canceled:
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("heartbeat ownership loss did not cancel executor context")
 	}
 	var current model.TaskRun

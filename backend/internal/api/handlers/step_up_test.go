@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,8 @@ func openStepUpHandlerTestDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&model.User{},
+		&model.PendingAuthToken{},
+		&model.TokenRevocation{},
 		&model.CredentialAuditEvent{},
 		&model.CredentialAccessGrant{},
 		&model.AuditLog{},
@@ -57,6 +60,12 @@ func openStepUpHandlerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("初始化 step-up 测试表失败: %v", err)
 	}
 	return db
+}
+
+func newStepUpTestJWTManager(db *gorm.DB) *auth.JWTManager {
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager.SetDB(db)
+	return manager
 }
 
 func seedStepUpUser(t *testing.T, db *gorm.DB, username, role string) model.User {
@@ -121,7 +130,8 @@ func signExpiredStepUpProofForActionForTest(t *testing.T, user model.User, actio
 
 func TestOptionalStepUpAcceptsOnlyExactAssetSecretRevealAndFailsInfrastructureClosed(t *testing.T) {
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "optional-secret-reveal", "admin")
 	other := seedStepUpUser(t, db, "optional-secret-other", "admin")
 	exactProof := generateStepUpProofForAction(t, manager, user, auth.StepUpActionAssetSecretReveal)
@@ -199,7 +209,8 @@ func TestOptionalStepUpAcceptsOnlyExactAssetSecretRevealAndFailsInfrastructureCl
 
 func TestStepUpProofValidationBindsSessionAndExactIssuedLifetime(t *testing.T) {
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "session-bound-secret-reveal", "admin")
 	proof := generateStepUpProofForAction(
 		t,
@@ -316,7 +327,8 @@ func TestStepUpProofValidationBindsSessionAndExactIssuedLifetime(t *testing.T) {
 func TestStepUpRequiredEnvelopeReportsExactActionPolicyTTL(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "step-up-required-ttl", "admin")
 	primaryToken := generatePrimaryToken(t, manager, user)
 
@@ -379,7 +391,8 @@ func generateStepUpProofForAction(t *testing.T, manager *auth.JWTManager, user m
 func TestStepUpRequestRequiresKnownAction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "step-up-action-request", "admin")
 	primaryToken := generatePrimaryToken(t, manager, user)
 	handler := NewAuthHandler(nil, manager, nil).WithDB(db)
@@ -401,7 +414,8 @@ func TestStepUpRequestRequiresKnownAction(t *testing.T) {
 
 func TestStepUpProofRejectsMissingLegacyGenericAction(t *testing.T) {
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "legacy-generic-proof", "admin")
 	now := time.Now()
 	claims := auth.Claims{
@@ -429,7 +443,8 @@ func TestStepUpProofRejectsMissingLegacyGenericAction(t *testing.T) {
 
 func TestStepUpProofPairwiseCrossPurposeRejection(t *testing.T) {
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "pairwise-step-up", "admin")
 	actions := auth.AllStepUpActions()
 	accepted := 0
@@ -531,7 +546,8 @@ func assertNoForbiddenAuditMetadata(t *testing.T, metadata string) map[string]an
 func TestAuthHandlerStepUpIssuesProofForEnabledTOTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "step-up-admin", "admin")
 	primaryToken := generatePrimaryToken(t, manager, user)
 
@@ -578,7 +594,8 @@ func TestAuthHandlerStepUpIssuesProofForEnabledTOTP(t *testing.T) {
 func TestAuthHandlerStepUpReportsExactActionPolicyTTL(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "step-up-action-ttl", "admin")
 	primaryToken := generatePrimaryToken(t, manager, user)
 	handler := NewAuthHandler(nil, manager, nil).WithDB(db)
@@ -638,7 +655,8 @@ func TestAuthHandlerStepUpReportsExactActionPolicyTTL(t *testing.T) {
 func TestAuthHandlerStepUpRejectsDisabledOrInvalidTOTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "step-up-disabled", "admin")
 	validCode := currentStepUpCode(t, user)
 	if err := db.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]any{"totp_enabled": false, "totp_secret": ""}).Error; err != nil {
@@ -682,7 +700,8 @@ func TestAuthHandlerStepUpRejectsDisabledOrInvalidTOTP(t *testing.T) {
 func TestStepUpMiddlewareValidatesMissingInvalidExpiredWrongUserAndTokenVersion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "step-up-operator", "operator")
 	otherUser := seedStepUpUser(t, db, "step-up-other", "operator")
 	primaryToken := generatePrimaryToken(t, manager, user)
@@ -744,7 +763,8 @@ func TestStepUpMiddlewareValidatesMissingInvalidExpiredWrongUserAndTokenVersion(
 func TestPurposeScopedTokensCannotBePrimaryAuthTokens(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "purpose-admin", "admin")
 	stepUpProof := generateStepUpProof(t, manager, user)
 	pending2FA, err := manager.Generate2FAPendingToken(user)
@@ -760,7 +780,7 @@ func TestPurposeScopedTokensCannotBePrimaryAuthTokens(t *testing.T) {
 		if resp.Code != http.StatusUnauthorized {
 			t.Fatalf("purpose-scoped token 不应作为 REST 主认证通过，实际: %d，响应: %s", resp.Code, resp.Body.String())
 		}
-		if _, err := authorizeRealtimeToken(scopedToken, manager, db, realtimeAuthRequirements{Role: "admin"}); err == nil {
+		if _, err := authorizeRealtimeToken(context.Background(), scopedToken, manager, db, realtimeAuthRequirements{Role: "admin"}); err == nil {
 			t.Fatalf("purpose-scoped token 不应作为 WebSocket 主认证通过")
 		}
 	}
@@ -769,7 +789,8 @@ func TestPurposeScopedTokensCannotBePrimaryAuthTokens(t *testing.T) {
 func TestStepUpPreservesRBACAndOwnershipDenials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	operator := seedStepUpUser(t, db, "ownership-operator", "operator")
 	operatorToken := generatePrimaryToken(t, manager, operator)
 	node := model.Node{Name: "step-up-owned-node", Host: "10.0.20.1", Username: "root", AuthType: "key", BackupDir: "step-up-owned-node"}
@@ -799,7 +820,8 @@ func TestStepUpPreservesRBACAndOwnershipDenials(t *testing.T) {
 func TestConfigExportStepUpOnlyWhenIncludingSensitiveValues(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	admin := seedStepUpUser(t, db, "config-admin", "admin")
 	adminToken := generatePrimaryToken(t, manager, admin)
 	adminProof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)
@@ -826,7 +848,8 @@ func TestConfigExportStepUpOnlyWhenIncludingSensitiveValues(t *testing.T) {
 func TestTerminalAcceptsOnlyTerminalOpenProof(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	admin := seedStepUpUser(t, db, "terminal-admin", "admin")
 	adminToken := generatePrimaryToken(t, manager, admin)
 	adminProof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionTerminalOpen)
@@ -972,7 +995,8 @@ func assertRetentionLifecycleStepUpIsolation(t *testing.T, expected, cross auth.
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	admin := seedStepUpUser(t, db, "lifecycle-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	crossProof := generateStepUpProofForAction(t, manager, admin, cross)

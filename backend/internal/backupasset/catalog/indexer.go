@@ -769,15 +769,16 @@ func (indexer *Indexer) ReconcileAbandoned(ctx context.Context, abandonedAfter t
 			if result.RowsAffected == 0 {
 				return nil
 			}
-			var activeLeases int64
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Model(&model.RecoveryPointLease{}).
+			var activeLease model.RecoveryPointLease
+			leaseResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
 				Where("recovery_point_id = ? AND holder_type = ? AND owner_id = ? AND status = ? AND lease_expires_at > ? AND absolute_deadline > ?",
 					generation.RecoveryPointID, backupasset.LeaseHolderCatalogBuild, catalogBuildOwnerPrefix+generation.RecoveryPointID,
 					backupasset.LeaseActive, now, now).
-				Count(&activeLeases).Error; err != nil {
-				return fmt.Errorf("check abandoned Catalog lease: %w", err)
+				Limit(1).Find(&activeLease)
+			if leaseResult.Error != nil {
+				return fmt.Errorf("check abandoned Catalog lease: %w", leaseResult.Error)
 			}
-			if activeLeases != 0 {
+			if leaseResult.RowsAffected != 0 {
 				return nil
 			}
 			update := tx.Model(&model.CatalogGeneration{}).

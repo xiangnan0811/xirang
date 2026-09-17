@@ -141,14 +141,17 @@ export function PanelEditorDialog({
       setChartReady(false);
       return;
     }
-    const id1 = requestAnimationFrame(() => {
-      const id2 = requestAnimationFrame(() => setChartReady(true));
-      (setChartReady as unknown as { _raf?: number })._raf = id2;
+    let firstFrame: number | null = requestAnimationFrame(() => {
+      firstFrame = null;
+      secondFrame = requestAnimationFrame(() => {
+        secondFrame = null;
+        setChartReady(true);
+      });
     });
+    let secondFrame: number | null = null;
     return () => {
-      cancelAnimationFrame(id1);
-      const pending = (setChartReady as unknown as { _raf?: number })._raf;
-      if (pending) cancelAnimationFrame(pending);
+      if (firstFrame !== null) cancelAnimationFrame(firstFrame);
+      if (secondFrame !== null) cancelAnimationFrame(secondFrame);
     };
   }, [open]);
 

@@ -1,0 +1,57 @@
+{
+  "id": "backup-assets-search-startup-isolation",
+  "name": "backup-assets-search-startup-isolation",
+  "title": "Backup Assets Search Startup Isolation",
+  "description": "Prevent candidate-local Search projection failures from crashing the whole service at startup and resolve the exact sealed Catalog security-state interoperability gap without weakening Search integrity.",
+  "status": "completed",
+  "dev_type": "backend",
+  "scope": "backupasset-runtime-search",
+  "package": "backend",
+  "priority": "P0",
+  "creator": "murray",
+  "assignee": "murray",
+  "createdAt": "2026-08-26",
+  "completedAt": "2026-09-16",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "6c124d95fdf2b4432ab62b4a2b1d00669fd5ee61",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/464",
+  "subtasks": [],
+  "children": [],
+  "parent": "08-21-backup-assets-release-acceptance",
+  "relatedFiles": [
+    "backend/internal/backupasset/runtime/search_worker.go",
+    "backend/internal/backupasset/runtime/search_worker_test.go",
+    "backend/internal/backupasset/runtime/runtime_test.go",
+    "backend/internal/backupasset/search/indexer.go",
+    "backend/internal/backupasset/search/indexer_test.go",
+    ".trellis/tasks/08-26-backup-assets-search-startup-isolation/research/root-cause.md"
+  ],
+  "notes": "2026-09-16 reconciliation: Candidate-local startup failure isolation delivered; healthy startup and current Search readiness acceptance transferred. See reconciliation.md; older PRD/implement snapshots are historical where superseded.",
+  "meta": {
+    "historical_before_2026_09_16": {
+      "incident": "search_candidate_failure_global_startup_fatal",
+      "implementation_authorized": true,
+      "production_feature_state": "temporarily_disabled_fail_closed",
+      "production_task3": "paused_disabled_zero_active_runs",
+      "schema_change": "none_expected",
+      "api_change": "none_expected",
+      "provider_mutation": "forbidden",
+      "next_gate": "pr_464_required_ci",
+      "trellis_check": "passed_no_unresolved_findings"
+    },
+    "reconciliation": {
+      "date": "2026-09-16",
+      "baseline": "1ec1b2b8621fb2ae86b5888247ab49c69c629764",
+      "disposition": "archived_delivered_remaining_scope_transferred",
+      "evidence": ".trellis/workspace/weibo/task-reconciliation-2026-09-16.md",
+      "previous_status": "in_progress",
+      "previous_completed_at": null,
+      "production_verified_this_session": false,
+      "merged_pr": 464,
+      "remaining_scope_owner": "08-21-backup-assets-release-acceptance",
+      "remaining_scope_state": "transferred_not_passed"
+    }
+  }
+}

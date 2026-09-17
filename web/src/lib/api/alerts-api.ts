@@ -4,6 +4,7 @@ import type {
   AlertDeliveryRecord,
   AlertDeliveryRetryResult,
   AlertDeliveryStats,
+  AlertDeliveryStatus,
   AlertRecord
 } from "@/types/domain";
 import i18n from "@/i18n";
@@ -29,7 +30,7 @@ type AlertDeliveryResponse = {
   id: number;
   alert_id: number;
   integration_id: number;
-  status: "sent" | "failed";
+  status: string;
   created_at: string;
   attempt_count?: number;
   next_retry_at?: string | null;
@@ -90,12 +91,29 @@ function mapAlert(row: AlertResponse): AlertRecord {
   };
 }
 
-function mapAlertDelivery(row: AlertDeliveryResponse): AlertDeliveryRecord {
+export function mapAlertDeliveryStatus(rawStatus?: string | null): AlertDeliveryStatus {
+  switch (rawStatus) {
+    case "pending":
+      return "pending";
+    case "sending":
+      return "sending";
+    case "retrying":
+      return "retrying";
+    case "sent":
+      return "sent";
+    case "failed":
+      return "failed";
+    default:
+      return "unknown";
+  }
+}
+
+export function mapAlertDelivery(row: AlertDeliveryResponse): AlertDeliveryRecord {
   return {
     id: `delivery-${row.id}`,
     alertId: `alert-${row.alert_id}`,
     integrationId: `int-${row.integration_id}`,
-    status: row.status === "failed" ? "failed" : "sent",
+    status: mapAlertDeliveryStatus(row.status),
     createdAt: formatTime(row.created_at),
     attemptCount: row.attempt_count,
     nextRetryAt: row.next_retry_at ?? null,

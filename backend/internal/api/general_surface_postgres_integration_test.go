@@ -62,6 +62,7 @@ type generalSurfaceTaskResponse struct {
 	NodeID       uint   `json:"node_id"`
 	ExecutorType string `json:"executor_type"`
 	Status       string `json:"status"`
+	Revision     string `json:"revision"`
 }
 
 type generalSurfaceCreateTaskResponse struct {
@@ -317,7 +318,7 @@ func TestGeneralSurfacePostgres(t *testing.T) {
 	if err := json.Unmarshal(createBody, &created); err != nil {
 		t.Fatalf("decode PostgreSQL task create response: %v; body=%s", err, createBody)
 	}
-	if created.Code != http.StatusCreated || created.Data.ID == 0 || created.Data.Name != taskName || created.Data.NodeID != nodeEntity.ID || created.Data.ExecutorType != "command" {
+	if created.Code != http.StatusCreated || created.Data.ID == 0 || created.Data.Name != taskName || created.Data.NodeID != nodeEntity.ID || created.Data.ExecutorType != "command" || created.Data.Revision == "" {
 		t.Fatalf("unexpected PostgreSQL task create envelope: %+v", created)
 	}
 
@@ -347,10 +348,11 @@ func TestGeneralSurfacePostgres(t *testing.T) {
 	const updatedTaskName = "postgres-general-surface-task-updated"
 	updateStatus, updateBody := generalSurfaceRequest(t, client, server.URL, http.MethodPut,
 		fmt.Sprintf("/api/v1/tasks/%d", created.Data.ID), login.Data.Token, map[string]any{
-			"name":          updatedTaskName,
-			"node_id":       nodeEntity.ID,
-			"executor_type": "command",
-			"command":       "printf postgres-general-surface-updated",
+			"name":              updatedTaskName,
+			"node_id":           nodeEntity.ID,
+			"executor_type":     "command",
+			"command":           "printf postgres-general-surface-updated",
+			"expected_revision": created.Data.Revision,
 		})
 	if updateStatus != http.StatusOK {
 		t.Fatalf("PostgreSQL task update status=%d body=%s", updateStatus, updateBody)

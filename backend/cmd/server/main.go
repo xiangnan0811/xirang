@@ -27,6 +27,7 @@ import (
 	processingupdater "xirang/backend/internal/backupasset/processing/updater"
 	"xirang/backend/internal/backupasset/provider"
 	backupruntime "xirang/backend/internal/backupasset/runtime"
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/dashboards"
@@ -89,6 +90,9 @@ func main() {
 	if err := bootstrap.AutoMigrate(db, cfg.DBType); err != nil {
 		log.Fatal().Err(err).Msg("执行数据库迁移失败")
 	}
+	if err := backuphealth.RegisterBackupCompletionCollector(db); err != nil {
+		log.Fatal().Err(err).Msg("注册备份完成指标失败")
+	}
 	if err := bootstrap.SeedUsers(db); err != nil {
 		log.Fatal().Err(err).Msg("初始化管理员账号失败")
 	}
@@ -112,6 +116,9 @@ func main() {
 	}
 	if err := bootstrap.EncryptServiceMonitorHeaders(db); err != nil {
 		log.Fatal().Err(err).Msg("服务监控请求头加密失败，拒绝启动")
+	}
+	if err := bootstrap.MigrateLegacyResticTaskConfigs(db); err != nil {
+		log.Fatal().Err(err).Msg("Restic 历史任务配置迁移失败，拒绝启动")
 	}
 
 	hub := ws.NewHub(db, cfg.AllowedOrigins, cfg.WSAllowEmptyOrigin)

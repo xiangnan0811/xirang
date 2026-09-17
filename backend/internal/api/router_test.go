@@ -504,10 +504,11 @@ func TestRecoveryRouteMatrixEnforcesAuthenticatedAdminRecoverRBACWithClosedEnvel
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatal(err)
 	}
 	jwtManager := auth.NewJWTManager("FAKE_RECOVERY_ROUTE_MATRIX_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := map[string]string{}
 	for _, role := range []string{"admin", "operator"} {
 		user := model.User{
@@ -605,10 +606,11 @@ func TestRecoveryRouteRateLimitReturnsClosed429WithoutAuthorityEvidence(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatal(err)
 	}
 	jwtManager := auth.NewJWTManager("FAKE_RECOVERY_RATE_LIMIT_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	user := model.User{
 		Username: "recovery-rate-limit-admin", PasswordHash: "FAKE_HASH_FOR_TEST_ONLY",
 		Role: "admin", TokenVersion: 1,
@@ -698,7 +700,7 @@ func TestRouterInjectsTrustedProxySchemePolicyIntoBackupContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatal(err)
 	}
 	admin := model.User{
@@ -708,6 +710,7 @@ func TestRouterInjectsTrustedProxySchemePolicyIntoBackupContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	jwtManager := auth.NewJWTManager("FAKE_CONTENT_SCHEME_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	token, err := jwtManager.GenerateToken(admin)
 	if err != nil {
 		t.Fatal(err)
@@ -760,11 +763,12 @@ func TestSettingsSecurityRiskSummaryRouteRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
 	jwtManager := auth.NewJWTManager("settings-risk-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 2)
 	for _, role := range []string{"admin", "viewer"} {
 		user := model.User{
@@ -808,10 +812,11 @@ func TestTaskBatchTriggerStaticRouteUsesBatchHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{}, &model.TaskTrafficSample{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.SystemSetting{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{}, &model.TaskTrafficSample{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.SystemSetting{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 	jwtManager := auth.NewJWTManager("task-batch-static-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
 	admin := model.User{Username: "task-batch-static-admin", PasswordHash: "hash-redacted", Role: "admin", TOTPEnabled: true}
 	if err := db.Create(&admin).Error; err != nil {
 		t.Fatalf("创建 admin 失败: %v", err)
@@ -856,11 +861,12 @@ func TestCredentialAccessGrantTerminalRouteRBACAndStepUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
 	jwtManager := auth.NewJWTManager("grant-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 2)
 	proofs := make(map[string]string, 2)
 	for _, role := range []string{"admin", "viewer"} {
@@ -930,11 +936,12 @@ func TestCredentialAccessGrantListRouteRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
 	jwtManager := auth.NewJWTManager("grant-list-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 3)
 	for _, role := range []string{"admin", "operator", "viewer"} {
 		user := model.User{
@@ -995,11 +1002,12 @@ func TestCredentialAuditEventsRouteRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
 	jwtManager := auth.NewJWTManager("credential-audit-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 3)
 	for _, role := range []string{"admin", "operator", "viewer"} {
 		user := model.User{
@@ -1062,11 +1070,12 @@ func TestBackupConfidenceRouteRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
 	jwtManager := auth.NewJWTManager("backup-confidence-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 2)
 	for _, role := range []string{"admin", "viewer"} {
 		user := model.User{
@@ -1109,11 +1118,12 @@ func TestNodeDoctorRouteRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
 	jwtManager := auth.NewJWTManager("node-doctor-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 3)
 	userIDs := make(map[string]uint, 3)
 	for _, role := range []string{"admin", "operator", "viewer"} {
@@ -1193,11 +1203,12 @@ func TestAlertBulkResolveRouteRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Alert{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Alert{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 
 	jwtManager := auth.NewJWTManager("alert-bulk-resolve-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 3)
 	for _, role := range []string{"admin", "operator", "viewer"} {
 		user := model.User{

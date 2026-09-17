@@ -4915,11 +4915,21 @@ func newClaimedExpiryFixture(t *testing.T, base uint64) *claimedExpiryFixture {
 
 func newClaimedExpiryFixtureWithDB(t *testing.T, db *gorm.DB, base uint64) *claimedExpiryFixture {
 	t.Helper()
+	return newClaimedExpiryFixtureWithDBAndProvider(t, db, base, backupasset.ProviderRestic)
+}
+
+func newClaimedExpiryFixtureWithDBAndProvider(
+	t *testing.T,
+	db *gorm.DB,
+	base uint64,
+	providerKind backupasset.ProviderKind,
+) *claimedExpiryFixture {
+	t.Helper()
 	fixture := &claimedExpiryFixture{db: db, clock: time.Date(2026, 8, 17, 14, 0, 0, 0, time.UTC)}
 	repositoryID := testOpaqueID(base)
 	fixture.pointID = testOpaqueID(base + 1)
 	policyID := testOpaqueID(base + 2)
-	seedRetentionUsersAndRepository(t, db, repositoryID)
+	seedRetentionUsersAndRepositoryWithProvider(t, db, repositoryID, providerKind)
 	point := newSelectionPoint(fixture.pointID, repositoryID, nil, fixture.clock.Add(-96*time.Hour), 3)
 	point.PointRevision = 30
 	point.EncryptedProviderLocator = `{"snapshot":"private-exact-point"}`

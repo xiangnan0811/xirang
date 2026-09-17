@@ -324,7 +324,8 @@ func (s *Service) DisableTOTP(ctx context.Context, userID uint, password, code s
 	if s == nil || s.db == nil {
 		return errors.New("身份数据库未初始化")
 	}
-	password = strings.TrimSpace(password)
+	// Passwords are opaque values. Unlike the TOTP code, preserve the exact
+	// bytes supplied by the caller for bcrypt verification.
 	code = strings.TrimSpace(code)
 	return withIdentityTransaction(ctx, s.db, func(tx *gorm.DB) error {
 		row, err := loadStoredIdentityUser(tx, userID, true)

@@ -29,6 +29,16 @@ HTTP :10761  ───> │ Nginx                          │
 
 容器内入口端口固定为 `10761`。项目不在容器内处理 HTTPS；如需公网 HTTPS，请在外部使用 Caddy、Nginx Proxy Manager、Nginx 或云厂商负载均衡终止 TLS，再反代到 `http://127.0.0.1:10761`。
 
+### Rsync 路径隔离部署
+
+配置任一 `RSYNC_ALLOWED_SOURCE_PREFIXES` / `RSYNC_ALLOWED_TARGET_PREFIXES` 后，Rsync 使用一次性 `xirang-rsync-confined` helper 固定文件描述符并应用 Linux Landlock 文件系统权限；本地与 SSH 远端都必须具备所需隔离能力（Landlock ABI 至少 3，包含文件截断保护）。缺 helper、内核不支持或策略不可安全应用时拒绝执行，不回退到普通 Rsync。两项均留空保留原有不限制模式。允许列表是文件系统根边界，包含根本身及真实后代，不包含名称相似的兄弟目录或越界符号链接。
+
+All-in-One 镜像内置 `/usr/local/bin/xirang-rsync-confined`。SSH 备份节点须由管理员部署与 Core 同版本、匹配节点架构的 helper；可从同版本源码在 `backend` 目录执行 `go build -o xirang-rsync-confined ./cmd/rsync-confined`，再安装为节点 SSH 用户可执行且不可篡改的程序。`RSYNC_CONFINEMENT_HELPER` 选择本地程序，`RSYNC_CONFINEMENT_REMOTE_HELPER` 选择远端程序；默认均从执行环境查找 `xirang-rsync-confined`。不得用删除白名单作为缺少 helper 的自动补救。
+
+保留源目录根名或固定普通文件操作数的隔离路径还需要可用的非特权 user/mount namespace、`mount_setattr`，以及 util-linux 的 `unshare` 和 `mount`（位于 `/usr/bin` 或 `/bin`）。helper 在私有挂载命名空间内建立固定描述符的绑定挂载，源只读，接收目标可写；这些能力须在实际执行用户及容器安全策略下可用。默认 Docker 安全策略可能以 `EPERM` 拒绝创建命名空间；本次在默认 Alpine 容器中已观察到该限制，因此镜像包含 helper 不等于该环境支持所有隔离传输。遇到限制会拒绝执行。不要自动启用 privileged、授予 SYS_ADMIN、关闭 seccomp 或删除白名单；先由管理员评估合适的运行环境，并用一次性数据验收。
+
+部署后先使用一次性目录验证正常传输、内部链接、越界链接拒绝及缺失 helper 拒绝，再恢复备份调度。配置隔离时 SSH 不读取用户自定义配置文件，只使用 Core 生成的连接参数与精确凭据文件；需要的连接配置应在节点配置中显式提供。
+
 ## Docker Compose 部署（推荐）
 
 ### 1. 获取部署文件
@@ -247,7 +257,7 @@ DB_DSN=postgresql://user:pass@host:5432/xirang?sslmode=require
 
 ### 升级到稳定版
 
-1. 阅读目标版本的 GitHub Release 和 `CHANGELOG.md`。
+1. 阅读目标版本的 GitHub Release 和 `CHANGELOG.md`，并确认该版本的 `Publish Docker Images` 工作流已成功、官方 Docker Hub 稳定标签已发布。仅有 GitHub Release 不代表镜像可部署；若发行说明标记镜像发布受阻，应继续使用此前已验证版本。
 2. 备份数据库和 `.env`。
    手动部署 workflow 会从当前 workflow ref 上传受测试的 `scripts/predeploy-backup.sh`，进入 `DEPLOY_PATH` 后使用该目录固定的 `docker-compose.yml`、`./data` 和 `./backups` 判定并执行备份。仅当 `xirang` 容器不存在、`./data` 没有任何持久数据且 `.env` 未配置 PostgreSQL 时，才会明确报告首次部署并跳过备份。正常运行的升级必须备份；容器已停止，或容器缺失但仍有本地数据/外部 PostgreSQL 配置时，也必须通过 Compose 的环境、网络和持久挂载运行目标 All-in-One 镜像中的 `/usr/local/bin/backup-db.sh /backup/db`。任何必需备份、产物或 `.sha256` 校验失败都会阻断部署。
 
@@ -271,6 +281,18 @@ curl -fsS http://127.0.0.1:10761/readyz
 curl -fsS http://127.0.0.1:10761/healthz
 docker compose logs --tail=200 xirang
 ```
+
+### 恢复捕获、告警投递与调度/健康证据合同升级
+
+升级到包含 `000083_task_run_recovery_capture`、`000084_alert_delivery_intents`、`000085_alert_delivery_success`、`000086_task_cron_occurrences_resource_identity` 或 `000087_backup_completion_facts` 的版本时，先备份数据库、加密密钥和备份数据，暂停新任务准入并排空、停止所有旧 Core，再让新 Core 执行迁移；不要让不理解捕获代次、投递认领、定时意图或健康事实的旧进程继续写入同一数据库。
+
+- 历史 Rsync 成功记录不会自动成为可信捕获证据。**先隔离保全唯一剩余备份**，再决定是否重新备份；不要为了满足恢复准入而覆盖最后一份数据。详见[旧版 Rsync 恢复准入](admin/backup-recovery.md#旧版-rsync-恢复准入)。
+- 告警投递意图会在重启后恢复，已发送但回执未提交的外部结果仍可能重复投递；历史未知投递决策不会被盲目重发。升级后检查通知状态与接收通道，不要把未知状态视为已发送。
+- `000086` 会在本地、节点、资源和策略准入之前为每个 `(task_id, scheduled_at)` 持久化唯一的定时意图。任务忙、策略配额或共享资源阻塞时，意图保持排队并由后续 Core 排空；不同到期时间不得合并成一次执行。迁移同时记录不可变 TaskRun 资源身份，保护跨 Core 的共享可变目标。
+- `000087` 会保存分类且不可变的备份完成事实。只有具备可证明血缘的已提交恢复点才能建立受管完成时间；普通命令成功、导入基线和未验证历史时间戳仍明确保持未验证，不会刷新健康结论。已使用事实后，受保护的 schema 降级会拒绝抹除它们。
+- 新捕获使用可保全路径字节的 v2 manifest 及配套根字段编码；旧 v1 证据仍可读取，但不得让旧 Core 消费新 v2 证据。恢复前需要在 Core 上为选中内容的私有暂存副本预留磁盘空间；暂存不能替代原始备份保全。
+- 通知冷却期按真实发送成功时间计算；历史空时间戳不会被补造成成功。飞书、钉钉和企业微信需要业务成功回执，通用 webhook 保持 HTTP 2xx 语义。
+- 已使用的捕获、代次、投递或健康事实证据会阻止相应 schema 降级；`000085` 写入发送成功时间或未知投递身份后也会阻止降级。不要删除证据、修改迁移版本或强行混用旧二进制来绕过保护。优先前向修复；回退方案必须同时保全数据库、可变备份树和通知回执状态，而不只是替换镜像。
 
 ### 回滚到旧版本
 

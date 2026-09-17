@@ -67,6 +67,16 @@ func Verify(ctx context.Context, task model.Task, sampleRate int, db *gorm.DB, l
 		return Result{Status: "passed", Message: "无需校验：未配置同步路径"}
 	}
 
+	// Restore and backup Rsync both use one exact Core/selection contract.
+	// Restore evidence is a Core-local manifest compared with a node target;
+	// it must not fall back to the historical remote-to-remote probe.
+	if strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rsync") {
+		if isRestore {
+			return verifyRsyncRestoreManifest(ctx, task, logf)
+		}
+		return verifyRsyncBackupSelection(ctx, task, logf)
+	}
+
 	// 恢复模式：restic/rclone 恢复后路径含义已交换（RsyncTarget 是恢复目标而非仓库），
 	// 不能使用内建仓库校验；rsync 恢复使用远程对比校验。
 	if isRestore {
@@ -508,7 +518,7 @@ func sampleChecksumRemote(ctx context.Context, sshClient *ssh.Client, srcPath, d
 }
 
 // VerifyRestic 通过 SSH 在远程节点上执行 restic check 校验仓库完整性。
-func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(level, msg string)) Result {
+func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(level, msg string)) (result Result) {
 	sshClient, err := dialSSHForTask(ctx, task, db)
 	if err != nil {
 		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic 校验阶段建立 SSH 连接失败: %v", err))
@@ -526,16 +536,30 @@ func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := executor.BuildResticPasswordFilePath()
-	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := runRemoteCommand(ctx, sshClient, createPwCmd); err != nil {
+	defer func() {
+		if cleanupErr := executor.CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeIntegrityCheck); cleanupErr != nil {
+			message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic 校验阶段密码临时文件清理失败（校验业务结果降级为 warning）: %v", cleanupErr))
+			if logf != nil {
+				logf("warn", message)
+			}
+			switch {
+			case result.Status == "":
+				result.Status = "warning"
+				result.Message = message
+			case strings.TrimSpace(result.Message) == "":
+				result.Status = "warning"
+				result.Message = message
+			default:
+				result.Status = "warning"
+				result.Message = strings.TrimSpace(result.Message) + "; " + message
+			}
+		}
+	}()
+	if err := executor.CreateResticPasswordFile(ctx, sshClient, pwFilePath, access); err != nil {
 		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic 校验阶段创建密码临时文件失败: %v", err))
 		logf("warn", message)
 		return Result{Status: "warning", Message: message}
 	}
-	defer func() {
-		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = runRemoteCommand(context.Background(), sshClient, cleanupCmd)
-	}()
 	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
 
 	checkCmd := fmt.Sprintf("restic %s check -r %s 2>&1", pwFileArg, executor.ShellEscape(repo))

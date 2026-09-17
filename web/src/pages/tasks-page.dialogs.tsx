@@ -35,6 +35,7 @@ import type {
   PolicyRecord,
   TaskRecord,
   TaskRunRecord,
+  UpdateTaskInput,
 } from "@/types/domain";
 
 export interface TasksPageDialogsProps {
@@ -74,7 +75,7 @@ export interface TasksPageDialogsProps {
   tasks: TaskRecord[];
   authToken: string | null;
   handleCreateTask: (input: NewTaskInput) => Promise<void>;
-  handleUpdateTask: (input: NewTaskInput) => Promise<void>;
+  handleUpdateTask: (input: UpdateTaskInput) => Promise<void>;
   pauseConfirmTask: TaskRecord | null;
   setPauseConfirmTask: (task: TaskRecord | null) => void;
   onConfirmPause: (taskId: number, cancelRunning: boolean) => Promise<void>;
@@ -135,7 +136,7 @@ export function TasksPageDialogs({
           nodes={nodes}
           policies={policies}
           tasks={tasks}
-          onSave={handleCreateTask}
+          onCreate={handleCreateTask}
         />
       </Suspense>
 
@@ -188,7 +189,7 @@ export function TasksPageDialogs({
           nodes={nodes}
           policies={policies}
           tasks={tasks}
-          onSave={handleUpdateTask}
+          onUpdate={handleUpdateTask}
           editingTask={editingTask}
         />
       </Suspense>

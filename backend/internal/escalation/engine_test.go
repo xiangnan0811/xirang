@@ -3,6 +3,8 @@ package escalation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,10 +16,17 @@ import (
 
 func openEngineDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s/engine.db?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get SQLite handle: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(8)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(
 		&model.EscalationPolicy{}, &model.Alert{}, &model.Task{}, &model.Policy{},
 		&model.SLODefinition{}, &model.Node{}, &model.AlertEscalationEvent{},
@@ -32,14 +41,35 @@ type senderRecord struct {
 	ids     []uint
 }
 
-// recordingDispatcher captures every DispatchToIntegrations call so tests
-// can assert post-fire dispatch behaviour without touching engine internals.
+// recordingDispatcher captures only post-commit dispatch calls. Intent IDs
+// are synthetic because these unit tests do not migrate alert_deliveries.
 type recordingDispatcher struct {
+	mu    sync.Mutex
 	calls []senderRecord
 }
 
-func (r *recordingDispatcher) DispatchToIntegrations(alert model.Alert, ids []uint) {
-	r.calls = append(r.calls, senderRecord{alertID: alert.ID, ids: ids})
+func (r *recordingDispatcher) EnqueueEscalationDeliveriesTx(
+	_ *gorm.DB,
+	_ model.Alert,
+	_ model.AlertEscalationEvent,
+	ids []uint,
+) ([]uint, error) {
+	return append([]uint(nil), ids...), nil
+}
+
+func (r *recordingDispatcher) DispatchEscalationDeliveries(
+	_ context.Context,
+	alert model.Alert,
+	_ uint,
+	intentIDs []uint,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, senderRecord{
+		alertID: alert.ID,
+		ids:     append([]uint(nil), intentIDs...),
+	})
+	return nil
 }
 
 func seedPolicy(t *testing.T, s *Service, name string, levels []model.EscalationLevel, minSev string) *model.EscalationPolicy {

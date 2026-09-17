@@ -59,6 +59,66 @@ type Policy struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+// PolicyCreateExplicitColumns returns all persisted scalar columns whose
+// explicit zero/false values must survive GORM's struct default callback.
+// Callers should use CreatePolicyWithExplicitValues inside their existing
+// transaction so model encryption hooks remain active.
+func PolicyCreateExplicitColumns() []string {
+	return []string{
+		"name", "description", "source_path", "target_path", "cron_spec",
+		"exclude_rules", "bwlimit", "retention_days", "rpo_minutes",
+		"rto_minutes", "retention_mode", "keep_daily", "keep_weekly",
+		"keep_monthly", "keep_yearly", "max_concurrent", "enabled",
+		"skip_next", "verify_enabled", "verify_sample_rate", "is_template",
+		"pre_hook", "post_hook", "hook_timeout_seconds", "app_profile",
+		"app_credential_id", "max_execution_seconds", "max_retries",
+		"retry_base_seconds", "bandwidth_schedule", "escalation_policy_id",
+		"drill_enabled", "drill_cron", "drill_target_node_id",
+		"drill_restore_path", "drill_pre_verify", "drill_verify",
+		"drill_post_verify", "drill_auto_cleanup",
+	}
+}
+
+// CreatePolicyWithExplicitValues performs the one struct Create boundary used
+// by policy creation, cloning, and config import. GORM's Create callback still
+// runs (including Policy encryption hooks); the selected corrective update is
+// then executed in the same caller-owned transaction to restore explicit
+// scalar false/0 values that model defaults would otherwise replace.
+func CreatePolicyWithExplicitValues(tx *gorm.DB, policy *Policy, explicitColumns ...string) error {
+	if tx == nil {
+		return gorm.ErrInvalidDB
+	}
+	if policy == nil {
+		return gorm.ErrInvalidData
+	}
+	// GORM's default callback mutates zero/false struct fields in place during
+	// Create. Keep the caller's explicit values before that callback, then
+	// restore them for the corrective update while retaining generated identity
+	// and timestamps.
+	original := *policy
+	if err := tx.Create(policy).Error; err != nil {
+		return err
+	}
+	createdID, createdAt, updatedAt := policy.ID, policy.CreatedAt, policy.UpdatedAt
+	*policy = original
+	policy.ID, policy.CreatedAt, policy.UpdatedAt = createdID, createdAt, updatedAt
+	defer func() {
+		*policy = original
+		policy.ID, policy.CreatedAt, policy.UpdatedAt = createdID, createdAt, updatedAt
+	}()
+	if len(explicitColumns) == 0 {
+		return nil
+	}
+	return tx.Model(policy).Select(explicitColumns).Updates(policy).Error
+}
+
+// PolicyNode 策略-节点关联表
+type PolicyNode struct {
+	PolicyID  uint `gorm:"primaryKey"`
+	NodeID    uint `gorm:"primaryKey"`
+	CreatedAt time.Time
+}
+
 func (p *Policy) BeforeSave(_ *gorm.DB) error {
 	if err := encryptPolicyText(&p.PreHook); err != nil {
 		return err
@@ -125,11 +185,4 @@ func decryptPolicyText(field *string) error {
 	}
 	*field = decrypted
 	return nil
-}
-
-// PolicyNode 策略-节点关联表
-type PolicyNode struct {
-	PolicyID  uint `gorm:"primaryKey"`
-	NodeID    uint `gorm:"primaryKey"`
-	CreatedAt time.Time
 }

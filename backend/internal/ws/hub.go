@@ -3,7 +3,6 @@ package ws
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/runtimeevidence"
 	"xirang/backend/internal/util"
@@ -62,6 +62,7 @@ type Hub struct {
 	allowedOrigins   []string
 	allowEmptyOrigin bool
 	droppedCount     uint64
+	nextDropWarning  atomic.Int64
 	maxClients       int
 	pendingClients   int
 }
@@ -72,6 +73,7 @@ const (
 	maxWSLogMessageBytes   = 4 << 10
 	wsAuthReadTimeout      = 5 * time.Second
 	wsAuthenticatedReadTTL = 60 * time.Second
+	dropWarningInterval    = 30 * time.Second
 )
 
 func NewHub(db *gorm.DB, allowedOrigins []string, allowEmptyOrigin bool) *Hub {
@@ -195,11 +197,20 @@ func (h *Hub) snapshotClients() []*client {
 }
 
 func (h *Hub) Publish(event LogEvent) {
+	h.publishAt(event, time.Now())
+}
+
+func (h *Hub) publishAt(event LogEvent, now time.Time) {
 	select {
 	case h.broadcast <- event:
 	default:
-		atomic.AddUint64(&h.droppedCount, 1)
-		log.Printf("warn: broadcast channel full, event dropped (total dropped: %d)", atomic.LoadUint64(&h.droppedCount))
+		total := atomic.AddUint64(&h.droppedCount, 1)
+		next := h.nextDropWarning.Load()
+		// A single contender claims each warning interval; no overflow caller
+		// waits for a channel consumer or a logging mutex held by another caller.
+		if now.UnixNano() >= next && h.nextDropWarning.CompareAndSwap(next, now.Add(dropWarningInterval).UnixNano()) {
+			logger.Module("ws").Warn().Uint64("dropped_total", total).Msg("broadcast channel full, events dropped")
+		}
 	}
 }
 
@@ -280,7 +291,9 @@ func (h *Hub) ServeWS(c *gin.Context, authorize func(string) (AccessScope, error
 	_ = conn.SetReadDeadline(time.Now().Add(wsAuthReadTimeout))
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
-		log.Printf("debug: ws handshake read error: %v", err)
+		// Read errors can contain client-controlled close reasons. Keep only
+		// a stable diagnostic and respect the configured debug level.
+		logger.Module("ws").Debug().Msg("handshake read failed")
 		_ = conn.Close()
 		return
 	}

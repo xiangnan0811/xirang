@@ -22,6 +22,53 @@
 
 非 GA 的本地 `asset-worker` Compose profile 使用两个独立 socket volume：Core 同时挂载 `asset-worker-updater-runtime` 与嵌套的 `asset-worker-worker-runtime`，parser 只读挂载后者且不加入 updater GID，updater 只读挂载前者；双方都看不到对方的 socket 或 secret。Worker 没有稳定公共镜像，也不会由本功能发布到 Docker Hub/GitHub Release；普通 Core-only Compose 与 `10761` 端口不变。
 
+## Legacy backup safety and task lifecycle
+
+- Legacy Rsync and Rclone targets are mutable current backup trees, not historical recovery points. Retention refuses destructive age-based cleanup and records the reason in task logs/audit. Managed recovery-point retention and Restic snapshot retention keep their existing ownership gates.
+- Legacy Rsync restore transfers the actual Core-local backup to the selected node over SSH. A missing Core source fails before transfer; a same-named node directory is never a fallback source. Policy exclusions determine backup capture and transfer selection; restore uses that captured selection rather than reapplying patterns under a different source root.
+- Skip-next is consumed only at execution entry for cron runs, including a flag set before scheduling or while queued. Manual execution does not consume it. Each policy-associated task owns its own flag.
+- A busy downstream task leaves its durable chain effect retryable rather than acknowledging a nonexistent child run, including competing Core instances at the reservation boundary. Disabled or archived downstream tasks retain an explicit skipped child run. Retry exhaustion remains a failed effect; restart/replay must not duplicate an existing upstream/downstream edge.
+- Automatic recovery alerts are bounded by the ordinary task run that caused them. Delayed success must not resolve newer failures, and delayed failure must not reopen a fault superseded by recovery. Manual alert resolution remains an explicit separate action.
+- Established SSH terminals expire no later than their JWT or the terminal session limit. They recheck persisted revocation and current user authority periodically and before forwarding input, failing closed when authority cannot be checked. Closing a terminal uses bounded WebSocket control writes and closes the SSH transport before waiting for workers.
+- Managed publication finalization receives a fresh cleanup budget after the provider returns. Persistence failure must still release process admission; unknown provider outcomes remain unknown and must not be blindly retried. Password verification, including disabling TOTP, compares the original password bytes.
+
+Migration `000082_task_run_cron_provenance` adds private, immutable scheduled-occurrence and executed-backup configuration facts. Drain old Core processes before upgrading; do not mix old writers with the new scheduler.
+
+A replay of the same task/cron occurrence cannot create another execution after skip consumption. An occurrence committed as pending before a crash is reclaimed after the previous execution lease expires and enters through the same skip-next transaction. Running or unknown-outcome occurrences are not blindly replayed.
+
+Migration `000086_task_cron_occurrences_resource_identity` persists each scheduler tick as a unique `(task_id, scheduled_at)` occurrence before local, node, resource, or policy admission. Queued occurrences survive quota/busy refusal and Core restart; drain them only after the same admission checks succeed, and do not coalesce distinct due times. The migration also records immutable TaskRun resource identity and fences active keyed mutable resources across Core instances.
+
+Online reconciliation and restart preserve overdue known `next_run_at` intent as queued work rather than inferring system-wide downtime. Claim refusal and pre-launch errors release only the current local owner. New cron retry effects identify a separate regular cursor: `Task.NextRunAt` holds the cron cursor, while `TaskRunEffect.NextAttemptAt` holds retry delivery time. Historical unmarked retry effects retain their original interpretation.
+
+Retry rejection now applies the complete retry policy decision, including count advancement and exhaustion. Graceful shutdown seals local admission before waiting, releases unstarted durable runs for restart, and keeps explicit user cancellation distinct. Marked retry configuration changes and cancellation preserve the regular cursor; historical retry reservations retain their documented interpretation.
+
+Pre-executor rejection locks Task before TaskRun and revalidates the run identity before mutation, matching cancellation and ordinary terminalization.
+
+Task edits remain committed if immediate schedule synchronization fails. HTTP 503 explicitly reports the saved configuration; periodic reconciliation restores scheduling without stale whole-row compensation. Latest node backup health selects one verified completion per authorized node in the database, preserving `(completed_at, id)` ordering and all immutable history. Restic password files are created exclusively inside private directories before any credential bytes are written, and callers use bounded cancellation-independent cleanup.
+Migration `000087_backup_completion_facts` stores classified, immutable completion facts for freshness and health reporting. Only a committed recovery point with provable lineage establishes a managed completion; ordinary command success, imported baselines, and unverified historical timestamps remain explicitly unverified. Once these facts are used, guarded downgrade refuses to erase them. Back up the database, encryption keys, and backup data, then drain and stop old Core/executor writers before upgrading; never mix writers across the migration boundary.
+
+Legacy Rsync restore requires a successful ordinary backup with a matching configuration fingerprint and verified capture evidence for the current mutable generation. Migration `000083_task_run_recovery_capture` records directory-self, directory-content, or single-file layout and the source-selected file manifest. Restore reads the captured logical root on Core, writes it to the node, and verifies the captured bytes on both sides; missing sources, enumeration errors, and hash failures are not empty successful backups. Historical rows are not assigned guessed fingerprints or manifests. A failed or interrupted write leaves the current generation uncertain and cannot borrow an older successful run as restore authority. Preserve the remaining backup before deciding to run a new backup; this guard does not delete historical data or alter managed recovery-point restore.
+
+Legacy Rsync recovery evidence reads selected source and Core-target checksums independently of optional policy sampling. Disabling `verify_enabled` does not authorize an unproven generation. Evidence limits or collection failures do not alone prevent an ordinary backup transfer: a completed transfer without trustworthy evidence is a warning, not a verified restore source. Cancellation during read-only capture, before the write attempt, does not dirty an earlier generation.
+
+Automatic alert replay is idempotent per task/run/action independently of the configurable notification deduplication window, including already acknowledged or manually resolved alerts. Restore alerts recover only through a later successful restore; ordinary backup and restore failures never resolve each other. Terminal close auditing shares a bounded budget and logs persistence failures without keeping the closed shell handler alive indefinitely.
+
+Migration `000084_alert_delivery_intents` separates alert identity from durable per-channel delivery intent and leased sending attempts. Pending intent is committed before sending and recovered after restart. Suppression, escalation, and no-channel decisions remain explicit; historical unknown decisions are not blindly replayed. Initial, automatic, and manual sends share atomic claims and attempt-fenced results, so stale failures cannot overwrite a newer success. External delivery remains uncertain if a process exits after a remote send but before its receipt commits: this is not an exactly-once promise. Drain old writers before upgrading; used capture or delivery evidence blocks downgrade.
+
+Migration `000085_alert_delivery_success` adds private nullable `AlertDelivery.SentAt`, written only by a matching live delivery attempt, and an index on TaskRun restore-source references. Cooldown uses actual successful completion time; historical NULL timestamps remain unknown rather than being backfilled. Channel-specific Feishu, DingTalk, and WeCom responses require bounded business acknowledgements; generic webhooks keep HTTP 2xx semantics. Legacy blank-key attempts share identity resolution before every claim; ambiguous escalation history stays unknown and event-scoped intents remain distinct.
+
+Legacy Rsync restore verifies a private staging copy before any target mutation and transfers only that copy using content comparison. Post-restore verification remains required. New capture manifests use v2 Base64 byte fields for paths, roots, and link targets, with a version-matched encoded database root sidecar; persisted v1 manifests and raw sidecars remain readable without rewriting historical evidence. Drain old writers before upgrading. History cleanup retains current generation evidence (including dirty), restore source bindings, and active drill sources under transactional task locks; an active successor cannot obsolete the previous final generation. Temporary staging requires space for the selected content; this does not change ordinary backup incrementality or physical retention.
+
+Creating a policy or service monitor preserves explicit `enabled=false`; policy creation also preserves `verify_enabled=false` and `max_retries=0`. Policy creation, template cloning, and config import share explicit-value persistence while retaining model encryption hooks. Template clones remain disabled and preserve disabled verification. Omitted API fields retain their documented defaults, and zero retries means no automatic task retry.
+
+New policy Rsync targets use `<backup-root>/.xirang/policies/<policy-id>/nodes/<node-id>`. Existing stored task targets are not silently rewritten by synchronization or editable node labels. Core-local target validation rejects conflicting canonical paths, aliases, and ancestor/descendant ownership. Node migration requires quiescent tasks, independently owned sources, fresh destinations, verified copying, and locked snapshot revalidation before cutover; original data remains intact. See the [historical data procedure](../docs/admin/backup-recovery.md#policy-target-isolation-and-historical-data) before changing an existing installation.
+
+Legacy Restic retention, integrity checking, and snapshot indexing invoke the executable before its password-file arguments. Legacy Rclone streaming uses the shared SSH execution lifecycle: cancellation requests termination, closes the owned transport after a grace period when necessary, and returns an explicit unknown outcome if remote completion cannot be proven. Closing the local connection does not certify that a remote writer stopped.
+
+Legacy Rclone arms a durable `writing` generation after publication Prepare/preconditions, immediately before the mutating executor invocation. Unknown completion/crash retains a write hold, known failure becomes `dirty`, and complete success establishes a current `verified` generation without claiming immutable content evidence. Authoritative no-start records `no_start`; canceled status or error wording alone is not that proof. This includes same-owner cancellation after durable running entry but before provider invocation. Restore skips only proven no-start attempts and never jumps over ambiguous historical heads. Cleanup retains the current dirty/verified or ambiguous head, source bindings, and every unresolved writing/unknown hold. An authenticated administrator can reconcile one exact unresolved run using `POST /tasks/:id/reconcile-legacy-rclone` only while the task is paused, after explicitly confirming the original remote writer stopped. Live/unbounded owners and active siblings are refused. The transition to dirty and its audit are atomic; original diagnostics remain, no automatic retry/resume occurs, and a new complete backup is still required for restore. See the [operator procedure](../docs/admin/backup-recovery.md#explicit-operator-reconciliation).
+
+Policy `max_concurrent` is enforced across nodes/Core instances under the database policy lock at ordinary reservation and execution entry. Pending/running reservations consume capacity; full policies return busy without creating a new failed transfer. Terminal runs release capacity and policy disable cancels pending ordinary reservations. Restore/drill keep separate admission; the global execution semaphore remains independent.
+
 ## 快速运行
 
 ```bash
@@ -188,6 +235,7 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 | POST | /tasks/batch-trigger | 🔒 批量触发（需二次验证 + task.batch_trigger/task_command/task_id 临时授权） |
 | POST | /tasks/:id/trigger | 🔒 手动触发（需二次验证 + task.manual_trigger/task_command/task_id 临时授权） |
 | POST | /tasks/:id/cancel | 🔒 取消执行 |
+| POST | /tasks/:id/reconcile-legacy-rclone | 管理员确认指定旧版 Rclone 远端写入已停止；任务须暂停，写入 dirty 与审计同事务，不恢复调度或放行旧备份 |
 | POST | /tasks/:id/pause | 🔒 暂停调度 |
 | POST | /tasks/:id/resume | 🔒 恢复调度 |
 | POST | /tasks/:id/skip-next | 🔒 跳过下次 |
@@ -424,7 +472,9 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000081_batch_command_idempotency`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000088_task_cron_override`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+
+000088 持久化任务调度覆盖来源：显式设置 Cron（包括清空为手动）后，策略修改不会覆盖该任务的调度。历史策略任务的 Cron 与策略生效计划不同时回填为覆盖，相同时保留继承。升级前备份数据库、加密密钥和备份数据，停止并排空旧 Core/执行器，禁止混跑写入；存在显式覆盖记录时，降级保护拒绝抹除这些事实。
 
 本次审计整改增加 000078（单次两步登录、绑定会话、离线恢复审计）、000079（普通 TaskRun 执行租约、原子收尾和可恢复效果）与 000081（批次幂等及派发回执）。升级前停止并排空旧服务/执行进程，备份数据库及加密密钥；不得混跑旧的非租约执行器。历史未完成 TOTP 初始化在升级时失效，已启用的 TOTP 不受影响。历史重复 `(task_id, upstream_task_run_id)` 在标记 dirty 前拒绝升级，必须先离线核对真实执行历史，不得猜测去重。
 

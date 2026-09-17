@@ -1,0 +1,54 @@
+{
+  "id": "07-11-full-stack-audit-remediation",
+  "name": "07-11-full-stack-audit-remediation",
+  "title": "全仓前后端审计修复",
+  "description": "Track and integrate the 2026-07-11 full-stack audit remediation, including secondary-review fixes that expanded the original scope.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "fullstack",
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-11",
+  "completedAt": "2026-09-16",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "b0deb897e2a07dba4840bb66607b26f3f1788a58",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/367",
+  "subtasks": [],
+  "children": [
+    "07-11-07-11-b-p1-panel-query-ownership",
+    "07-11-07-11-b-p1-dev-env-hardening",
+    "07-11-07-11-b-p2-ownership-and-secrets",
+    "07-11-07-11-f-p2-i18n-nodes-detail",
+    "07-11-07-11-f-p2-domain-mapping-wave1",
+    "07-11-07-11-f-p2-poll-and-error-states"
+  ],
+  "parent": null,
+  "relatedFiles": [
+    "backend/internal/api/handlers",
+    "backend/internal/config/config.go",
+    "web/src/lib/api",
+    "web/src/features/nodes-detail",
+    "deploy",
+    ".trellis/spec"
+  ],
+  "notes": "2026-09-16 reconciliation: Six bounded audit children delivered and already archived in main. Remaining P3 is retained independently; no claim that its remaining items were implemented. See reconciliation.md; older PRD/implement snapshots are historical where superseded.",
+  "meta": {
+    "historical_before_2026_09_16": {},
+    "reconciliation": {
+      "date": "2026-09-16",
+      "baseline": "1ec1b2b8621fb2ae86b5888247ab49c69c629764",
+      "disposition": "archived_delivered_remaining_scope_transferred",
+      "evidence": ".trellis/workspace/weibo/task-reconciliation-2026-09-16.md",
+      "previous_status": "planning",
+      "previous_completed_at": null,
+      "production_verified_this_session": false,
+      "merged_pr": 367,
+      "remaining_scope_owner": "07-11-07-11-p3-quality-debt",
+      "remaining_scope_state": "transferred_not_passed"
+    }
+  }
+}

@@ -25,6 +25,9 @@ func (*rsyncManagedTree) openStagingTree(string) (int, error) {
 func (*rsyncManagedTree) openFinalTree(string) (int, error) {
 	return -1, errRsyncManagedTreeUnsupported
 }
+func (*rsyncManagedTree) repairRsyncHardlinkEntriesWithSource(context.Context, int, int, rsyncTreeManifest, ManifestLimits) (rsyncTreeManifest, error) {
+	return rsyncTreeManifest{}, errRsyncManagedTreeUnsupported
+}
 func (*rsyncManagedTree) stagingTreePath(string) (string, error) {
 	return "", errRsyncManagedTreeUnsupported
 }

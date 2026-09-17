@@ -20,6 +20,10 @@ var (
 	ErrCommandOutputLimit = errors.New("command output limit exceeded")
 	ErrCommandTimeout     = errors.New("command timed out")
 	ErrCommandFailed      = errors.New("command failed")
+	// ErrCommandStart marks an SSH command request that was rejected or whose
+	// transport failed while starting. Callers must not treat it as proof that
+	// the remote command never ran.
+	ErrCommandStart = errors.New("command start failed")
 )
 
 const (
@@ -42,6 +46,22 @@ type CommandSpec struct {
 	Binary         string
 	Args           []string
 	Timeout        time.Duration
+	MaxStdoutBytes int64
+	MaxStderrBytes int64
+	MaxRecordBytes int
+	SecretStdin    *SecretStdin `json:"-"`
+}
+
+// RawCommandSpec describes a command string that must be interpreted by the
+// remote shell. It is intentionally separate from CommandSpec: callers that
+// need argv-safe construction should use CommandSpec instead. Raw commands are
+// retained for compatibility paths whose command already contains shell
+// redirection or a server-side sudo wrapper.
+type RawCommandSpec struct {
+	Command string
+	// Timeout zero means the caller context controls lifetime.
+	Timeout time.Duration
+	// MaxStdoutBytes zero means no cumulative cap; MaxRecordBytes still applies.
 	MaxStdoutBytes int64
 	MaxStderrBytes int64
 	MaxRecordBytes int
@@ -91,9 +111,11 @@ type CommandSession interface {
 type CommandSessionFactory func(context.Context) (CommandSession, error)
 
 type CommandRunner struct {
-	factory          CommandSessionFactory
-	semaphore        chan struct{}
-	terminationGrace time.Duration
+	factory            CommandSessionFactory
+	semaphore          chan struct{}
+	terminationGrace   time.Duration
+	transportClose     func()
+	joinOwnedTransport bool
 }
 
 func NewCommandRunner(factory CommandSessionFactory, maxConcurrency int) *CommandRunner {
@@ -104,7 +126,34 @@ func NewCommandRunner(factory CommandSessionFactory, maxConcurrency int) *Comman
 }
 
 func NewSSHCommandRunner(client *ssh.Client, maxConcurrency int) *CommandRunner {
-	return NewCommandRunner(func(context.Context) (CommandSession, error) {
+	return newSSHCommandRunner(client, maxConcurrency, nil)
+}
+
+// NewSSHCommandRunnerWithTransportClose is for compatibility streams that
+// must force-close the local SSH transport when a remote command ignores its
+// signal and leaves the session wait blocked. Callers should use it only when
+// they own the client connection.
+func NewSSHCommandRunnerWithTransportClose(client *ssh.Client, maxConcurrency int) *CommandRunner {
+	return newSSHCommandRunner(client, maxConcurrency, func() {
+		if client != nil {
+			_ = client.Close()
+		}
+	})
+}
+
+// NewSSHCommandRunnerWithJoinedTransportClose owns a dedicated SSH client.
+// Cancellation closes its transport immediately and joins all command owners.
+// Unlike compatibility streams, it never returns with unfinished cleanup.
+// This contract applies to OpenExecution/OpenRawExecution only; Run/Open retain
+// their historical behavior. The caller must not share this client elsewhere.
+func NewSSHCommandRunnerWithJoinedTransportClose(client *ssh.Client, maxConcurrency int) *CommandRunner {
+	runner := NewSSHCommandRunnerWithTransportClose(client, maxConcurrency)
+	runner.joinOwnedTransport = true
+	return runner
+}
+
+func newSSHCommandRunner(client *ssh.Client, maxConcurrency int, transportClose func()) *CommandRunner {
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) {
 		if client == nil {
 			return nil, fmt.Errorf("SSH client unavailable")
 		}
@@ -114,6 +163,8 @@ func NewSSHCommandRunner(client *ssh.Client, maxConcurrency int) *CommandRunner 
 		}
 		return sshCommandSession{Session: session}, nil
 	}, maxConcurrency)
+	runner.transportClose = transportClose
+	return runner
 }
 
 func (runner *CommandRunner) Run(ctx context.Context, specification CommandSpec) (CommandResult, error) {
@@ -367,12 +418,48 @@ func (runner *CommandRunner) Open(ctx context.Context, specification CommandSpec
 
 // OpenExecution opens a command stream whose exit status is available only
 // after stdout reaches natural EOF and the complete SSH lifecycle is joined.
-// Existing Run and Open callers retain their established contracts.
+// Existing callers retain their established contracts.
 func (runner *CommandRunner) OpenExecution(ctx context.Context, specification CommandSpec) (CommandExecutionStream, error) {
 	specification, command, err := normalizeCommandSpec(specification)
 	if err != nil {
 		return nil, err
 	}
+	return runner.openExecution(ctx, specification, command)
+}
+
+// OpenRawExecution opens a compatibility command string while retaining the
+// same bounded cancellation, stream cleanup, and exit classification as
+// OpenExecution. The caller owns shell quoting and must keep the command
+// limited to its intended compatibility operation. A zero timeout binds the
+// execution lifetime to ctx; a zero stdout limit leaves cumulative output
+// uncapped while MaxRecordBytes still bounds each parsed record.
+func (runner *CommandRunner) OpenRawExecution(ctx context.Context, specification RawCommandSpec) (CommandExecutionStream, error) {
+	command := strings.TrimSpace(specification.Command)
+	if command == "" || strings.ContainsRune(command, '\x00') || len(command) > 64<<10 {
+		return nil, fmt.Errorf("%w: invalid raw command", ErrUnsafeCommandSpec)
+	}
+	if specification.MaxStdoutBytes < 0 {
+		return nil, fmt.Errorf("%w: invalid stdout limit", ErrUnsafeCommandSpec)
+	}
+	if specification.MaxStderrBytes <= 0 {
+		specification.MaxStderrBytes = defaultCommandStderrLimit
+	}
+	if specification.SecretStdin != nil && len(specification.SecretStdin.Value) > MaximumSecretStdinBytes {
+		return nil, fmt.Errorf("%w: invalid secret stdin", ErrUnsafeCommandSpec)
+	}
+	maxStdoutBytes := specification.MaxStdoutBytes
+	if maxStdoutBytes == 0 {
+		maxStdoutBytes = -1
+	}
+	return runner.openExecution(ctx, CommandSpec{
+		Timeout:        specification.Timeout,
+		MaxStdoutBytes: maxStdoutBytes,
+		MaxStderrBytes: specification.MaxStderrBytes,
+		MaxRecordBytes: specification.MaxRecordBytes,
+		SecretStdin:    specification.SecretStdin,
+	}, command)
+}
+func (runner *CommandRunner) openExecution(ctx context.Context, specification CommandSpec, command string) (CommandExecutionStream, error) {
 	if runner == nil || runner.factory == nil || runner.semaphore == nil {
 		return nil, fmt.Errorf("%w: runner unavailable", ErrCommandFailed)
 	}
@@ -385,7 +472,37 @@ func (runner *CommandRunner) OpenExecution(ctx context.Context, specification Co
 		return nil, fmt.Errorf("command canceled: %w", ctx.Err())
 	}
 	release := func() { <-runner.semaphore }
-	runContext, cancel := context.WithTimeout(ctx, specification.Timeout)
+	var runContext context.Context
+	var cancel context.CancelFunc
+	if specification.Timeout > 0 {
+		runContext, cancel = context.WithTimeout(ctx, specification.Timeout)
+	} else {
+		runContext, cancel = context.WithCancel(ctx)
+	}
+	var transportClose func()
+	var transportWatchDone chan struct{}
+	if runner.transportClose != nil {
+		var transportOnce sync.Once
+		transportClose = func() {
+			transportOnce.Do(runner.transportClose)
+		}
+		transportWatchDone = make(chan struct{})
+		watchExited := make(chan struct{})
+		go func() {
+			defer close(watchExited)
+			select {
+			case <-runContext.Done():
+				transportClose()
+			case <-transportWatchDone:
+			}
+		}()
+		defer func() {
+			close(transportWatchDone)
+			if runner.joinOwnedTransport {
+				<-watchExited
+			}
+		}()
+	}
 	session, err := runner.factory(runContext)
 	if err != nil {
 		cancel()
@@ -399,7 +516,16 @@ func (runner *CommandRunner) OpenExecution(ctx context.Context, specification Co
 	}
 	fail := func(cause error) (CommandExecutionStream, error) {
 		cancel()
-		_ = session.Close()
+		if transportClose != nil {
+			transportClose()
+			if runner.joinOwnedTransport {
+				_ = session.Close()
+			} else {
+				go func() { _ = session.Close() }()
+			}
+		} else {
+			_ = session.Close()
+		}
 		release()
 		return nil, cause
 	}
@@ -422,28 +548,32 @@ func (runner *CommandRunner) OpenExecution(ctx context.Context, specification Co
 		if stdin != nil {
 			_ = stdin.Close()
 		}
-		return fail(fmt.Errorf("%w: start", ErrCommandFailed))
+		startErr := fmt.Errorf("%w: %w", ErrCommandStart, err)
+		return fail(fmt.Errorf("%w: %w", ErrCommandFailed, startErr))
 	}
 
 	stream := &commandExecution{
-		session:          session,
-		stdout:           stdout,
-		stderr:           stderr,
-		stdin:            stdin,
-		secretStdin:      specification.SecretStdin,
-		parentContext:    ctx,
-		runContext:       runContext,
-		cancel:           cancel,
-		remaining:        specification.MaxStdoutBytes,
-		maxRecordBytes:   specification.MaxRecordBytes,
-		maxStderrBytes:   specification.MaxStderrBytes,
-		release:          release,
-		terminationGrace: runner.terminationGrace,
-		stdinDone:        make(chan struct{}),
-		stderrDone:       make(chan struct{}),
-		waitDone:         make(chan struct{}),
-		allDone:          make(chan struct{}),
-		finished:         make(chan struct{}),
+		session:            session,
+		stdout:             stdout,
+		stderr:             stderr,
+		stdin:              stdin,
+		secretStdin:        specification.SecretStdin,
+		parentContext:      ctx,
+		runContext:         runContext,
+		cancel:             cancel,
+		remaining:          specification.MaxStdoutBytes,
+		maxRecordBytes:     specification.MaxRecordBytes,
+		maxStderrBytes:     specification.MaxStderrBytes,
+		release:            release,
+		terminationGrace:   runner.terminationGrace,
+		transportClose:     transportClose,
+		joinOwnedTransport: runner.joinOwnedTransport,
+		watchDone:          make(chan struct{}),
+		stdinDone:          make(chan struct{}),
+		stderrDone:         make(chan struct{}),
+		waitDone:           make(chan struct{}),
+		allDone:            make(chan struct{}),
+		finished:           make(chan struct{}),
 	}
 	if closer, ok := stdout.(io.Closer); ok {
 		stream.stdoutCloser = closer
@@ -468,10 +598,13 @@ type commandExecution struct {
 	cancel        context.CancelFunc
 	release       func()
 
-	remaining        int64
-	maxRecordBytes   int
-	maxStderrBytes   int64
-	terminationGrace time.Duration
+	remaining          int64
+	maxRecordBytes     int
+	maxStderrBytes     int64
+	terminationGrace   time.Duration
+	transportClose     func()
+	joinOwnedTransport bool
+	watchDone          chan struct{}
 
 	stdinDone  chan struct{}
 	stderrDone chan struct{}
@@ -481,6 +614,7 @@ type commandExecution struct {
 
 	terminateOnce       sync.Once
 	connectionCloseOnce sync.Once
+	transportCloseOnce  sync.Once
 	finalizeOnce        sync.Once
 	releaseOnce         sync.Once
 
@@ -527,6 +661,7 @@ func (stream *commandExecution) start() {
 		close(stream.allDone)
 	}()
 	go func() {
+		defer close(stream.watchDone)
 		select {
 		case <-stream.runContext.Done():
 			stream.terminate()
@@ -572,7 +707,7 @@ func (stream *commandExecution) Read(buffer []byte) (int, error) {
 		}
 		return 0, nil
 	}
-	if int64(len(buffer)) > remaining {
+	if remaining > 0 && int64(len(buffer)) > remaining {
 		buffer = buffer[:remaining]
 	}
 	count, err := stream.stdout.Read(buffer)
@@ -624,8 +759,14 @@ func (stream *commandExecution) finalize(cancelRequested bool) {
 			stream.waitForNaturalCompletion()
 		}
 		stream.closeStreams()
+		if stream.joinOwnedTransport {
+			stream.closeTransport()
+		}
 		stream.closeConnection()
 		close(stream.finished)
+		if stream.joinOwnedTransport {
+			<-stream.watchDone
+		}
 		stream.cancel()
 		stream.releaseOnce.Do(stream.release)
 		stream.mu.Lock()
@@ -645,6 +786,10 @@ func (stream *commandExecution) waitForNaturalCompletion() {
 }
 
 func (stream *commandExecution) waitAfterTermination() {
+	if stream.joinOwnedTransport {
+		<-stream.allDone
+		return
+	}
 	timer := time.NewTimer(CommandExecutionJoinTimeout)
 	defer timer.Stop()
 	select {
@@ -661,6 +806,33 @@ func (stream *commandExecution) waitAfterTermination() {
 func (stream *commandExecution) terminate() {
 	stream.terminateOnce.Do(func() {
 		stream.cancel()
+		if stream.joinOwnedTransport {
+			stream.closeTransport()
+			stream.closeConnection()
+			return
+		}
+		if stream.transportClose != nil {
+			go func() {
+				if err := stream.session.Signal(ssh.SIGTERM); err != nil {
+					stream.mu.Lock()
+					stream.signalErr = err
+					stream.mu.Unlock()
+				}
+			}()
+			grace := stream.terminationGrace
+			if grace <= 0 {
+				grace = defaultTerminationGrace
+			}
+			timer := time.NewTimer(grace)
+			defer timer.Stop()
+			select {
+			case <-stream.allDone:
+			case <-timer.C:
+				stream.closeTransport()
+				stream.closeConnection()
+			}
+			return
+		}
 		if err := stream.session.Signal(ssh.SIGTERM); err != nil {
 			stream.mu.Lock()
 			stream.signalErr = err
@@ -681,6 +853,10 @@ func (stream *commandExecution) terminate() {
 }
 
 func (stream *commandExecution) requestTermination() {
+	if stream.joinOwnedTransport {
+		stream.terminate()
+		return
+	}
 	go stream.terminate()
 }
 
@@ -747,14 +923,14 @@ func (stream *commandExecution) writeStdin() {
 
 func (stream *commandExecution) closeStreams() {
 	if stream.stdoutCloser != nil {
-		if err := stream.stdoutCloser.Close(); err != nil {
+		if err := stream.stdoutCloser.Close(); err != nil && !errors.Is(err, io.EOF) {
 			stream.mu.Lock()
 			stream.stdoutCloseErr = err
 			stream.mu.Unlock()
 		}
 	}
 	if stream.stderrCloser != nil {
-		if err := stream.stderrCloser.Close(); err != nil {
+		if err := stream.stderrCloser.Close(); err != nil && !errors.Is(err, io.EOF) {
 			stream.mu.Lock()
 			stream.stderrCloseErr = err
 			stream.mu.Unlock()
@@ -764,11 +940,30 @@ func (stream *commandExecution) closeStreams() {
 
 func (stream *commandExecution) closeConnection() {
 	stream.connectionCloseOnce.Do(func() {
-		if err := stream.session.Close(); err != nil {
+		if stream.transportClose != nil && !stream.joinOwnedTransport {
+			go func() {
+				if err := stream.session.Close(); err != nil && !errors.Is(err, io.EOF) {
+					stream.mu.Lock()
+					stream.connectionErr = err
+					stream.mu.Unlock()
+				}
+			}()
+			return
+		}
+		if err := stream.session.Close(); err != nil && !errors.Is(err, io.EOF) {
 			stream.mu.Lock()
 			stream.connectionErr = err
 			stream.mu.Unlock()
 		}
+	})
+}
+
+func (stream *commandExecution) closeTransport() {
+	if stream.transportClose == nil {
+		return
+	}
+	stream.transportCloseOnce.Do(func() {
+		stream.transportClose()
 	})
 }
 
@@ -805,7 +1000,9 @@ func (stream *commandExecution) setStdoutEOF() {
 func (stream *commandExecution) advanceStdout(count int, value []byte) bool {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	stream.remaining -= int64(count)
+	if stream.remaining > 0 {
+		stream.remaining -= int64(count)
+	}
 	if stream.maxRecordBytes <= 0 {
 		return false
 	}
@@ -995,14 +1192,18 @@ func (stream *commandStream) finish(prefix bool) error {
 			suppressTerminationWaitErr = prefix && !stream.waitCompleted
 			stream.mu.Unlock()
 			stream.cancel()
-			sessionCloseErr = stream.session.Close()
+			if err := stream.session.Close(); err != nil && !errors.Is(err, io.EOF) {
+				sessionCloseErr = err
+			}
 		}
 		<-stream.stderrDone
 		<-stream.stdinDone
 		<-stream.waitDone
 		stream.cancel()
 		if joined {
-			sessionCloseErr = stream.session.Close()
+			if err := stream.session.Close(); err != nil && !errors.Is(err, io.EOF) {
+				sessionCloseErr = err
+			}
 		} else {
 			_ = stream.session.Close()
 		}
@@ -1082,7 +1283,7 @@ func normalizeCommandSpec(specification CommandSpec) (CommandSpec, string, error
 	if specification.Timeout <= 0 {
 		specification.Timeout = defaultCommandTimeout
 	}
-	if specification.SecretStdin != nil && (len(specification.SecretStdin.Value) == 0 || len(specification.SecretStdin.Value) > MaximumSecretStdinBytes) {
+	if specification.SecretStdin != nil && len(specification.SecretStdin.Value) > MaximumSecretStdinBytes {
 		return CommandSpec{}, "", fmt.Errorf("%w: invalid secret stdin", ErrUnsafeCommandSpec)
 	}
 	quoted := make([]string, len(operands))

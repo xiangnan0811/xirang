@@ -259,6 +259,253 @@ func (tree *rsyncManagedTree) openFinalTree(component string) (int, error) {
 	return openRsyncManagedTreeChildDir(pointFD, "tree")
 }
 
+// repairRsyncHardlinkEntriesWithSource replaces only complete, unchanged staged regular
+// files with links to their descriptor-pinned parent entries. Landlock cannot
+// reparent a read-only source hierarchy into a more permissive destination, so
+// this trusted provider-side step performs the link after the confined Rsync
+// copy has completed. The returned manifest is the source topology captured
+// before any parent-link reuse; every repair decision is made for a complete
+// staged hardlink equivalence class, never one pathname at a time. Every
+// candidate is revalidated by descriptor-relative lookup immediately before
+// the atomic exchange; any failure aborts the publication without touching the
+// parent tree.
+
+func (tree *rsyncManagedTree) repairRsyncHardlinkEntriesWithSource(ctx context.Context, parentFD, stagingFD int, parentBefore rsyncTreeManifest, limits ManifestLimits) (rsyncTreeManifest, error) {
+	if tree == nil || parentFD < 0 || stagingFD < 0 || ctx == nil {
+		return rsyncTreeManifest{}, fmt.Errorf("%w: invalid managed Rsync hardlink repair request", errRsyncManagedTreeUnsafe)
+	}
+	if err := ctx.Err(); err != nil {
+		return rsyncTreeManifest{}, err
+	}
+	if err := validateRsyncTreeManifestIdentity(parentBefore); err != nil {
+		return rsyncTreeManifest{}, err
+	}
+	if err := validateRsyncTreeLinkRoots(parentFD, stagingFD); err != nil {
+		return rsyncTreeManifest{}, err
+	}
+	currentParent, err := buildRsyncTreeManifest(ctx, parentFD, limits)
+	if err != nil {
+		return rsyncTreeManifest{}, err
+	}
+	if currentParent.Digest != parentBefore.Digest || string(currentParent.Encoded) != string(parentBefore.Encoded) {
+		return rsyncTreeManifest{}, fmt.Errorf("%w: managed Rsync hardlink parent changed before repair", errRsyncManagedTreeUnsafe)
+	}
+	if err := validateRsyncTreeManifestStableIdentity(parentBefore, currentParent); err != nil {
+		return rsyncTreeManifest{}, err
+	}
+	staged, err := buildRsyncTreeManifest(ctx, stagingFD, limits)
+	if err != nil {
+		return rsyncTreeManifest{}, err
+	}
+	parents := make(map[string]rsyncTreeManifestEntry, len(currentParent.Entries))
+	for _, entry := range currentParent.Entries {
+		parents[entry.RelativePath] = entry
+	}
+	parentGroups := rsyncTreeRegularInodeGroups(currentParent)
+	stagedGroups := rsyncTreeRegularInodeGroups(staged)
+	stagedPaths := rsyncTreeRegularPathSet(staged)
+	repairedGroups := make(map[rsyncTreeInode]struct{}, len(stagedGroups))
+	for _, stagedEntry := range staged.Entries {
+		if err := ctx.Err(); err != nil {
+			return rsyncTreeManifest{}, err
+		}
+		if stagedEntry.Kind != rsyncTreeManifestRegular {
+			continue
+		}
+		stagedInode := rsyncTreeInode{device: stagedEntry.Device, inode: stagedEntry.Inode}
+		if _, seen := repairedGroups[stagedInode]; seen {
+			continue
+		}
+		repairedGroups[stagedInode] = struct{}{}
+		stagedGroup := stagedGroups[stagedInode]
+		if _, compatible := rsyncTreeCompatibleParentGroup(parents, parentGroups, stagedPaths, stagedGroup); !compatible {
+			continue
+		}
+		for _, groupEntry := range stagedGroup {
+			parentEntry := parents[groupEntry.RelativePath]
+			if parentEntry.Device == groupEntry.Device && parentEntry.Inode == groupEntry.Inode {
+				continue
+			}
+			if err := tree.repairRsyncHardlinkEntry(ctx, parentFD, stagingFD, parentEntry, groupEntry); err != nil {
+				return rsyncTreeManifest{}, err
+			}
+		}
+	}
+	if err := tree.VerifyRootIdentity(); err != nil {
+		return rsyncTreeManifest{}, err
+	}
+	return staged, nil
+}
+
+func validateRsyncTreeLinkRoots(parentFD, stagingFD int) error {
+	var parent, staging unix.Stat_t
+	if err := unix.Fstat(parentFD, &parent); err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	if err := unix.Fstat(stagingFD, &staging); err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	if parent.Mode&unix.S_IFMT != unix.S_IFDIR || staging.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return fmt.Errorf("%w: managed Rsync hardlink roots must be directories", errRsyncManagedTreeUnsafe)
+	}
+	if parent.Dev != staging.Dev {
+		return fmt.Errorf("%w: managed Rsync hardlink roots use different devices", errRsyncManagedTreeUnsafe)
+	}
+	parentMount, err := rsyncManagedTreeMountID(parentFD)
+	if err != nil {
+		return err
+	}
+	stagingMount, err := rsyncManagedTreeMountID(stagingFD)
+	if err != nil {
+		return err
+	}
+	if parentMount != stagingMount {
+		return fmt.Errorf("%w: managed Rsync hardlink roots use different mounts", errRsyncManagedTreeUnsafe)
+	}
+	return nil
+}
+
+func validateRsyncTreeManifestStableIdentity(before, after rsyncTreeManifest) error {
+	if len(before.Entries) != len(after.Entries) {
+		return fmt.Errorf("%w: managed Rsync hardlink parent entry set changed", errRsyncManagedTreeUnsafe)
+	}
+	afterByPath := make(map[string]rsyncTreeManifestEntry, len(after.Entries))
+	for _, entry := range after.Entries {
+		afterByPath[entry.RelativePath] = entry
+	}
+	for _, entry := range before.Entries {
+		current, exists := afterByPath[entry.RelativePath]
+		if !exists || current.Kind != entry.Kind || current.Device != entry.Device || current.Inode != entry.Inode {
+			return fmt.Errorf("%w: managed Rsync hardlink parent identity changed at %s", errRsyncManagedTreeUnsafe, entry.RelativePath)
+		}
+	}
+	return nil
+}
+
+func (tree *rsyncManagedTree) repairRsyncHardlinkEntry(ctx context.Context, parentRootFD, stagingRootFD int, parentEntry, stagedEntry rsyncTreeManifestEntry) error {
+	parentDirFD, parentName, err := openRsyncTreeRelativeParent(parentRootFD, parentEntry.RelativePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(parentDirFD) }()
+	stagingDirFD, stagingName, err := openRsyncTreeRelativeParent(stagingRootFD, stagedEntry.RelativePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(stagingDirFD) }()
+	currentParent, err := readRsyncTreeRegularEntry(ctx, parentDirFD, parentName, parentEntry.RelativePath)
+	if err != nil {
+		return err
+	}
+	currentStaged, err := readRsyncTreeRegularEntry(ctx, stagingDirFD, stagingName, stagedEntry.RelativePath)
+	if err != nil {
+		return err
+	}
+	if !rsyncTreeRegularEntriesEquivalent(parentEntry, currentParent) ||
+		currentParent.Device != parentEntry.Device || currentParent.Inode != parentEntry.Inode ||
+		!rsyncTreeRegularEntriesEquivalent(stagedEntry, currentStaged) ||
+		currentStaged.Device != stagedEntry.Device || currentStaged.Inode != stagedEntry.Inode ||
+		currentParent.Device != currentStaged.Device {
+		return fmt.Errorf("%w: managed Rsync hardlink candidate changed at %s", errRsyncManagedTreeUnsafe, parentEntry.RelativePath)
+	}
+	if tree.linkat == nil || tree.renameat2 == nil {
+		return errRsyncManagedTreeUnsupported
+	}
+	temporaryID, err := backupasset.NewOpaqueID()
+	if err != nil {
+		return err
+	}
+	temporaryName := ".xirang-hardlink-" + temporaryID
+	if err := tree.linkat(parentDirFD, parentName, stagingDirFD, temporaryName, 0); err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	temporaryExists := true
+	defer func() {
+		if temporaryExists {
+			_ = unix.Unlinkat(stagingDirFD, temporaryName, 0)
+		}
+	}()
+	var linked unix.Stat_t
+	if err := unix.Fstatat(stagingDirFD, temporaryName, &linked, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	if linked.Mode&unix.S_IFMT != unix.S_IFREG || uint64(linked.Dev) != parentEntry.Device || linked.Ino != parentEntry.Inode {
+		return fmt.Errorf("%w: managed Rsync hardlink source changed at %s", errRsyncManagedTreeUnsafe, parentEntry.RelativePath)
+	}
+	if err := tree.renameat2(stagingDirFD, temporaryName, stagingDirFD, stagingName, unix.RENAME_EXCHANGE); err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	if err := unix.Unlinkat(stagingDirFD, temporaryName, 0); err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	temporaryExists = false
+	var replaced unix.Stat_t
+	if err := unix.Fstatat(stagingDirFD, stagingName, &replaced, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	if replaced.Mode&unix.S_IFMT != unix.S_IFREG || uint64(replaced.Dev) != parentEntry.Device || replaced.Ino != parentEntry.Inode {
+		return fmt.Errorf("%w: managed Rsync hardlink destination identity mismatch at %s", errRsyncManagedTreeUnsafe, parentEntry.RelativePath)
+	}
+	if err := tree.sync(stagingDirFD); err != nil {
+		return err
+	}
+	return nil
+}
+
+func readRsyncTreeRegularEntry(ctx context.Context, directoryFD int, name, relativePath string) (rsyncTreeManifestEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return rsyncTreeManifestEntry{}, err
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstatat(directoryFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return rsyncTreeManifestEntry{}, rsyncManagedTreeSystemError(err)
+	}
+	entry, err := rsyncTreeManifestEntryFromStat(relativePath, stat)
+	if err != nil {
+		return rsyncTreeManifestEntry{}, err
+	}
+	if entry.Kind != rsyncTreeManifestRegular {
+		return rsyncTreeManifestEntry{}, fmt.Errorf("%w: managed Rsync hardlink candidate is not regular at %s", errRsyncManagedTreeUnsafe, relativePath)
+	}
+	entry.ContentDigest, err = rsyncTreeRegularDigest(ctx, directoryFD, name, stat)
+	if err != nil {
+		return rsyncTreeManifestEntry{}, err
+	}
+	return entry, nil
+}
+
+func openRsyncTreeRelativeParent(rootFD int, relativePath string) (int, string, error) {
+	components := strings.Split(relativePath, "/")
+	if len(components) == 0 || components[len(components)-1] == "" {
+		return -1, "", fmt.Errorf("%w: invalid managed Rsync hardlink path", errRsyncManagedTreeUnsafe)
+	}
+	for _, component := range components {
+		if component == "" || component == "." || component == ".." || strings.ContainsRune(component, '\x00') {
+			return -1, "", fmt.Errorf("%w: invalid managed Rsync hardlink path", errRsyncManagedTreeUnsafe)
+		}
+	}
+	currentFD, err := unix.Dup(rootFD)
+	if err != nil {
+		return -1, "", rsyncManagedTreeSystemError(err)
+	}
+	for _, component := range components[:len(components)-1] {
+		nextFD, openErr := unix.Openat2(currentFD, component, &unix.OpenHow{
+			Flags:   unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC,
+			Resolve: rsyncManagedTreeResolve,
+		})
+		if openErr != nil {
+			_ = unix.Close(currentFD)
+			return -1, "", rsyncManagedTreeSystemError(openErr)
+		}
+		if closeErr := unix.Close(currentFD); closeErr != nil {
+			_ = unix.Close(nextFD)
+			return -1, "", rsyncManagedTreeSystemError(closeErr)
+		}
+		currentFD = nextFD
+	}
+	return currentFD, components[len(components)-1], nil
+}
+
 func (tree *rsyncManagedTree) stagingTreePath(component string) (string, error) {
 	fd, err := tree.openStagingTree(component)
 	if err != nil {
