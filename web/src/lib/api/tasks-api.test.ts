@@ -600,3 +600,115 @@ describe("task inventory pagination", () => {
     expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal);
   });
 });
+
+describe("task edit contract", () => {
+  const fetchMock = vi.fn();
+  const api = createTasksApi();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("maps revision as an exact string and loads only safe executor settings", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: {
+        id: 91,
+        name: "restic-nightly",
+        status: "pending",
+        node_id: 7,
+        executor_type: "restic",
+        revision: "9007199254740993",
+        executor_config: JSON.stringify({
+          repository_password: "FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY",
+          exclude_patterns: ["*.log"],
+          append_only: true,
+        }),
+        executor_settings: {
+          exclude_patterns: ["*.log", "/tmp"],
+          repository_version: 2,
+        },
+        executor_secrets_configured: { repository_password: true },
+      },
+    })));
+
+    const task = await api.getTask("token", 91);
+
+    expect(task.revision).toBe("9007199254740993");
+    expect(task.executorSettings).toEqual({
+      excludePatterns: ["*.log", "/tmp"],
+      repositoryVersion: 2,
+    });
+    expect(task.executorSecretsConfigured).toEqual({ repositoryPassword: true });
+    expect(JSON.stringify(task)).not.toContain("FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY");
+    expect(JSON.stringify(task)).not.toContain("append_only");
+    expect(JSON.stringify(task)).not.toContain("executor_config");
+  });
+
+  it("rejects numeric revision tokens instead of coercing them", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: {
+        id: 92,
+        name: "lossy-revision",
+        status: "pending",
+        node_id: 7,
+        executor_type: "rsync",
+        revision: 42,
+      },
+    })));
+
+    const task = await api.getTask("token", 92);
+    expect(task.revision).toBe("");
+  });
+
+  it("serializes only present update fields including empty cron and null unlinks", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: {
+        id: 93,
+        name: "renamed",
+        status: "pending",
+        node_id: 7,
+        executor_type: "restic",
+        revision: "9007199254740994",
+        executor_settings: { exclude_patterns: [], repository_version: null },
+        executor_secrets_configured: { repository_password: true },
+      },
+    })));
+
+    await api.updateTask("token", 93, {
+      expectedRevision: "9007199254740993",
+      name: "renamed",
+      cronSpec: "",
+      policyId: null,
+      dependsOnTaskId: null,
+      executorSettings: { excludePatterns: [], repositoryVersion: null },
+      executorSecrets: { repositoryPassword: "new-bytes" },
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({
+      expected_revision: "9007199254740993",
+      name: "renamed",
+      cron_spec: "",
+      policy_id: null,
+      depends_on_task_id: null,
+      executor_settings: {
+        exclude_patterns: [],
+        repository_version: null,
+      },
+      executor_secrets: {
+        repository_password: "new-bytes",
+      },
+    });
+  });
+});

@@ -212,6 +212,18 @@ func (service *LeaseService) AcquireTx(ctx context.Context, tx *gorm.DB, request
 	if err != nil {
 		return Lease{}, err
 	}
+	// Indexers restart abandoned work as a new generation rather than taking
+	// over its old attempt. Free only their exact expired owner slot in this
+	// transaction; other holders retain their explicit Takeover/deadline rules.
+	if request.HolderType == LeaseHolderCatalogBuild || request.HolderType == LeaseHolderSearchIndex {
+		if err := tx.WithContext(ctx).Model(&model.RecoveryPointLease{}).
+			Where(`recovery_point_id = ? AND holder_type = ? AND owner_id = ? AND status = ?
+				AND (lease_expires_at <= ? OR absolute_deadline <= ?)`,
+				request.RecoveryPointID, request.HolderType, request.OwnerID, LeaseActive, now, now).
+			Updates(map[string]any{"status": LeaseExpired, "updated_at": now}).Error; err != nil {
+			return Lease{}, fmt.Errorf("expire abandoned index lease owner slot: %w", err)
+		}
+	}
 	var activeCount int64
 	if err := tx.WithContext(ctx).Model(&model.RecoveryPointLease{}).
 		Where("recovery_point_id = ? AND holder_type = ? AND owner_id = ? AND status = ?",

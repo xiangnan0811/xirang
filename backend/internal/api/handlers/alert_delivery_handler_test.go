@@ -28,7 +28,7 @@ func openDeliveryTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Alert{}, &model.AlertDelivery{}, &model.Integration{}); err != nil {
+	if err := db.AutoMigrate(&model.Alert{}, &model.AlertDelivery{}, &model.Integration{}, &model.AlertEscalationEvent{}); err != nil {
 		t.Fatalf("迁移表失败: %v", err)
 	}
 	return db

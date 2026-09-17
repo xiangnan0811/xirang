@@ -23,6 +23,7 @@ examples so implementation and review agents match the existing codebase.
 | [Backup Content Transport](./backup-content-transport.md) | Private-LAN HTTP evidence, dynamic setting, and shared delivery policy | Filled |
 | [Backup File Catalog](./backup-file-catalog.md) | Retained-lineage projection, browse truth, and bounded reconciliation | Filled |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Filled |
+| [Node-log Collection](./node-log-collection.md) | Owned SSH cancellation, output bounds, scheduling and shutdown | Filled |
 | [Deployment Runtime Guidelines](./deployment-runtime.md) | Docker Compose and All-in-One image contracts | Filled |
 
 ---

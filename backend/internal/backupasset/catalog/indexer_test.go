@@ -685,10 +685,22 @@ func TestCatalogIndexerRevokeJoinsProviderBeforeExactFenceRelease(t *testing.T) 
 		t.Fatal(err)
 	}
 	buildDone := make(chan error, 1)
+	buildExited := make(chan struct{})
 	go func() {
 		_, buildErr := indexer.Build(context.Background(), BuildRequest{RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID})
 		buildDone <- buildErr
+		close(buildExited)
 	}()
+	var releaseProvider sync.Once
+	release := func() { releaseProvider.Do(func() { close(session.release) }) }
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-buildExited:
+		case <-time.After(catalogLifecycleTestTimeout):
+			t.Error("Catalog Build did not exit during revocation cleanup")
+		}
+	})
 	select {
 	case <-session.entered:
 	case <-time.After(time.Second):
@@ -699,13 +711,22 @@ func TestCatalogIndexerRevokeJoinsProviderBeforeExactFenceRelease(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("Catalog fence was not heartbeated")
 	}
-	var releaseProvider sync.Once
-	release := func() { releaseProvider.Do(func() { close(session.release) }) }
-	t.Cleanup(release)
-	revokeCtx, cancelRevoke := context.WithTimeout(context.Background(), time.Second)
+	revokeCtx, cancelRevoke := context.WithTimeout(context.Background(), catalogLifecycleTestTimeout)
 	defer cancelRevoke()
 	revokeDone := make(chan error, 1)
-	go func() { revokeDone <- indexer.RevokeActiveBuilds(revokeCtx) }()
+	revokeExited := make(chan struct{})
+	go func() {
+		defer close(revokeExited)
+		revokeDone <- indexer.RevokeActiveBuilds(revokeCtx)
+	}()
+	t.Cleanup(func() {
+		cancelRevoke()
+		select {
+		case <-revokeExited:
+		case <-time.After(catalogLifecycleTestTimeout):
+			t.Error("RevokeActiveBuilds did not exit during revocation cleanup")
+		}
+	})
 	select {
 	case <-session.canceled:
 	case <-time.After(time.Second):
@@ -728,24 +749,24 @@ func TestCatalogIndexerRevokeJoinsProviderBeforeExactFenceRelease(t *testing.T) 
 	}
 	release()
 	select {
-	case <-lease.released:
-	case <-time.After(time.Second):
-		t.Fatal("active Catalog fence was not released after Provider join")
-	}
-	select {
 	case err := <-buildDone:
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, backupasset.ErrLeaseFenceLost) {
 			t.Fatalf("revoked Build error=%v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(catalogLifecycleTestTimeout):
 		t.Fatal("revoked Catalog Build did not finish after Provider join")
+	}
+	select {
+	case <-lease.released:
+	case <-time.After(catalogLifecycleTestTimeout):
+		t.Fatal("active Catalog fence was not released after Provider join")
 	}
 	select {
 	case err := <-revokeDone:
 		if err != nil {
 			t.Fatalf("RevokeActiveBuilds after builder teardown: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(catalogLifecycleTestTimeout):
 		t.Fatal("RevokeActiveBuilds did not join builder teardown")
 	}
 	select {

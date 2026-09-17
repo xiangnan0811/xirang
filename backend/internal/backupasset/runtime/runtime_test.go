@@ -1401,7 +1401,7 @@ func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) 
 		&model.Node{}, &model.Task{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{},
 		&model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointLease{},
 		&model.BackupAssetManagedHistoryLatch{}, &model.BackupAssetInstallation{},
-		&model.BackupAssetInventoryRun{}, &model.BackupAssetRepositoryConflict{},
+		&model.BackupAssetInventoryRun{}, &model.BackupAssetRepositoryConflict{}, &model.BackupCompletion{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -3135,7 +3135,8 @@ func TestRuntimeSearchShutdownStopsAdmissionAndJoinsSearchBeforePublication(t *t
 		beforeCanceled: func() { searchActiveAtPublicationCancel <- searchBackend.active() },
 	}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
-		Foundation: fixture.controller.foundation, Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+		Foundation: fixture.controller.foundation, Reconciler: reconciler,
+		Completion: &workerCompletionRecorderFake{}, Metrics: publication.NoopMetrics{},
 	})
 	if err != nil {
 		t.Fatal(err)

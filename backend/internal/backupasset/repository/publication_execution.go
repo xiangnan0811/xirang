@@ -808,6 +808,19 @@ func (execution *publicationExecution) Abandon(cause error) error {
 	execution.closeAdmission()
 	return nil
 }
+func (execution *publicationExecution) abandonAfterFinalizationFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	cause := backupasset.ErrPublicationSessionAbandoned
+	if errors.Is(err, backupasset.ErrPublicationUnconfirmed) {
+		cause = backupasset.ErrPublicationUnconfirmed
+	}
+	if abandonErr := execution.Abandon(cause); abandonErr != nil {
+		return errors.Join(err, abandonErr)
+	}
+	return err
+}
 
 func (execution *publicationExecution) CompleteCompatibility(_ context.Context) error {
 	if execution == nil || execution.mode != publication.ModeCompatibility {
@@ -835,7 +848,7 @@ func (execution *publicationExecution) RecordProviderCommit(ctx context.Context,
 	defer cancel()
 	outcome, transitioned, err := execution.service.recordProviderCommit(commitContext, *execution.attempt, resticEvidence)
 	if err != nil {
-		return publication.Outcome{}, err
+		return publication.Outcome{}, execution.abandonAfterFinalizationFailure(err)
 	}
 	if transitioned {
 		execution.service.metrics.ObserveOutcome(backupasset.ProviderRestic, publication.StageExecution, backupasset.PublicationOutcomeSuccess)
@@ -902,7 +915,7 @@ func (execution *publicationExecution) Defer(ctx context.Context, deferral publi
 		return nil
 	})
 	if err != nil {
-		return err
+		return execution.abandonAfterFinalizationFailure(err)
 	}
 	if deferred {
 		if err := execution.service.writePublicationAudit(ctx, execution.attempt.Audit, backupasset.AuditActionRecoveryPointPublicationVerify, backupasset.AuditOutcomeFailure, execution.attempt, publication.StageExecution, deferredState, string(deferral.Code), deferral.Code); err != nil {
@@ -994,7 +1007,7 @@ func (execution *publicationExecution) terminalFail(ctx context.Context, code ba
 		return nil
 	})
 	if err != nil {
-		return err
+		return execution.abandonAfterFinalizationFailure(err)
 	}
 	if transitioned {
 		if err := execution.service.writePublicationAudit(ctx, execution.attempt.Audit, backupasset.AuditActionRecoveryPointPublicationFail, backupasset.AuditOutcomeFailure, execution.attempt, publication.StageExecution, backupasset.RecoveryPointFailed, string(code), code); err != nil {

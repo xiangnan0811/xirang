@@ -32,11 +32,12 @@ func setupAppCredentialRBACFixture(t *testing.T) appCredentialRBACTestFixture {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.AppCredential{}, &model.Policy{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.AppCredential{}, &model.Policy{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 
 	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 3)
 	for _, role := range []string{"admin", "operator", "viewer"} {
 		user := model.User{

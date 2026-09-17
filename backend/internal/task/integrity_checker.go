@@ -71,20 +71,20 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := executor.BuildResticPasswordFilePath()
-	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+	// Arm cleanup before creation so cancellation and partial setup are
+	// cleaned without ever removing a colliding path.
+	defer func() {
+		if cleanupErr := executor.CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeIntegrityCheck); cleanupErr != nil {
+			log.Warn().Uint("task_id", task.ID).Err(cleanupErr).Msg("restic 完整性检查: 密码临时文件清理失败（校验业务结果保持原状态）")
+		}
+	}()
+	if err := executor.CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("restic 完整性检查: 创建密码临时文件失败")
 		return
 	}
-	defer func() {
-		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
-	}()
-	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
 
 	resticBin := util.GetEnvOrDefault("RESTIC_BINARY", "restic")
-	cmd := fmt.Sprintf("%s %s check -r %s --json 2>&1",
-		pwFileArg, resticBin, shellEscape(repo))
+	cmd := buildLegacyResticIntegrityCommand(resticBin, pwFilePath, repo)
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
@@ -99,6 +99,10 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 	}
 }
 
+func buildLegacyResticIntegrityCommand(resticBin, passwordFilePath, repository string) string {
+	return fmt.Sprintf("%s check -r %s --json 2>&1",
+		executor.BuildResticCommandPrefix(resticBin, passwordFilePath), shellEscape(repository))
+}
 func (m *Manager) checkRcloneIntegrity(policy model.Policy, task model.Task) {
 	log := logger.Module("task")
 

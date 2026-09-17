@@ -920,7 +920,7 @@ func TestDeliveryGatewayArchiveMemberBindingMutationAfterReserveWritesNoByteAndC
 	harness := newArchiveMemberDeliveryGatewayHarness(t)
 	requestID := strings.Repeat("1", 32)
 	harness.requestIDs <- requestID
-	harness.source.beforeWrite = func() {
+	harness.source.beforeWrite = func(context.Context) {
 		if err := harness.db.Model(&model.BackupAssetExportDeliveryGrant{}).
 			Where("id = ?", harness.material.GrantID).
 			UpdateColumn("derived_digest", strings.Repeat("f", 64)).Error; err != nil {
@@ -1507,6 +1507,15 @@ func TestDeliveryGatewayArchiveMemberRevokeDrainsActiveRead(t *testing.T) {
 	requestID := strings.Repeat("7", 32)
 	harness.requestIDs <- requestID
 	writer := newBlockingDeliveryWriter()
+	readContexts := make(chan context.Context, 1)
+	harness.source.beforeWrite = func(readCtx context.Context) {
+		readContexts <- readCtx
+	}
+	var releaseOnce sync.Once
+	releaseWriter := func() {
+		releaseOnce.Do(func() { close(writer.release) })
+	}
+	t.Cleanup(releaseWriter)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- harness.gateway.Serve(context.Background(), content.GatewayRequest{
@@ -1519,6 +1528,12 @@ func TestDeliveryGatewayArchiveMemberRevokeDrainsActiveRead(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("member read did not reach response writer")
 	}
+	var readCtx context.Context
+	select {
+	case readCtx = <-readContexts:
+	case <-time.After(5 * time.Second):
+		t.Fatal("member read context was not captured")
+	}
 	revokeDone := make(chan error, 1)
 	go func() {
 		revokeDone <- harness.gateway.RevokeArchiveMember(
@@ -1526,12 +1541,32 @@ func TestDeliveryGatewayArchiveMemberRevokeDrainsActiveRead(t *testing.T) {
 		)
 	}()
 	waitForExportGrantState(t, harness.db, harness.material.GrantID, "draining")
-	close(writer.release)
-	if err := <-serveDone; !errors.Is(err, context.Canceled) || !errors.Is(err, content.ErrContentNotFound) {
-		t.Fatalf("serve error=%v", err)
+	select {
+	case <-readCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("member read context was not canceled")
 	}
-	if err := <-revokeDone; err != nil {
-		t.Fatalf("revoke error=%v", err)
+	select {
+	case err := <-revokeDone:
+		t.Fatalf("revoke returned while writer remained blocked: %v", err)
+	default:
+	}
+	releaseWriter()
+	select {
+	case err := <-serveDone:
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, content.ErrContentNotFound) {
+			t.Fatalf("serve error=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("member read did not finish after writer release")
+	}
+	select {
+	case err := <-revokeDone:
+		if err != nil {
+			t.Fatalf("revoke error=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("revoke did not finish after writer release")
 	}
 	var request model.BackupAssetExportDeliveryRequest
 	if err := harness.db.Where("id = ?", requestID).Take(&request).Error; err != nil {
@@ -3451,7 +3486,7 @@ type archiveMemberDeliverySourceStub struct {
 	payload         []byte
 	resolveRequests []content.ArchiveMemberArtifactRequest
 	readBindings    []content.ResolvedArchiveMemberArtifact
-	beforeWrite     func()
+	beforeWrite     func(context.Context)
 	err             error
 }
 
@@ -3498,7 +3533,7 @@ func (source *archiveMemberDeliverySourceStub) ReadArchiveMember(
 		return source.err
 	}
 	if source.beforeWrite != nil {
-		source.beforeWrite()
+		source.beforeWrite(ctx)
 	}
 	_, err := destination.Write(source.payload)
 	if err != nil {

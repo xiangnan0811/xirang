@@ -1,6 +1,106 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+// TaskRunCronCursorMode records which durable field owns a cron retry's
+// readiness deadline. An empty mode is the historical format where
+// Task.NextRunAt doubled as the retry deadline. The current format keeps the
+// regular cron cursor on Task.NextRunAt and stores the retry deadline on the
+// TaskRunEffect row.
+type TaskRunCronCursorMode string
+
+const (
+	TaskRunCronCursorModeLegacy    TaskRunCronCursorMode = ""
+	TaskRunCronCursorModeRegularV1 TaskRunCronCursorMode = "regular_cursor_v1"
+)
+
+// ParseTaskRunEffectCronCursorMode parses retry provenance without converting
+// malformed or unknown values into legacy. Legacy is represented only by an
+// omitted or empty string field.
+func ParseTaskRunEffectCronCursorMode(payload string) (TaskRunCronCursorMode, error) {
+	if strings.TrimSpace(payload) == "" {
+		return TaskRunCronCursorModeLegacy, fmt.Errorf("retry effect payload is empty")
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &top); err != nil {
+		return TaskRunCronCursorModeLegacy, fmt.Errorf("decode retry effect payload: %w", err)
+	}
+	if top == nil {
+		return TaskRunCronCursorModeLegacy, fmt.Errorf("retry effect payload must be an object")
+	}
+	raw, ok := top["cron_cursor_mode"]
+	if !ok {
+		return TaskRunCronCursorModeLegacy, nil
+	}
+	var mode string
+	if err := json.Unmarshal(raw, &mode); err != nil {
+		return TaskRunCronCursorModeLegacy, fmt.Errorf("decode cron cursor mode: %w", err)
+	}
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return TaskRunCronCursorModeLegacy, nil
+	}
+	if mode != string(TaskRunCronCursorModeRegularV1) {
+		return TaskRunCronCursorModeLegacy, fmt.Errorf("unsupported cron cursor mode %q", mode)
+	}
+	return TaskRunCronCursorModeRegularV1, nil
+}
+
+// RetryEffectCronCursorModeTx returns the mode carried by the retry effect
+// generated for exactly predecessorRunID. Missing effects are legacy for
+// compatibility. Callers must invoke this on the transaction that already
+// locks the associated Task/TaskRun rows.
+func RetryEffectCronCursorModeTx(tx *gorm.DB, predecessorRunID uint) (TaskRunCronCursorMode, error) {
+	if tx == nil {
+		return TaskRunCronCursorModeLegacy, fmt.Errorf("task run effect query unavailable")
+	}
+	if predecessorRunID == 0 {
+		return TaskRunCronCursorModeLegacy, nil
+	}
+	var effect TaskRunEffect
+	result := tx.Where("task_run_id = ? AND effect_type = ?", predecessorRunID, TaskRunEffectTypeRetry).
+		Order("id DESC").Limit(1).Find(&effect)
+	if result.Error != nil {
+		return TaskRunCronCursorModeLegacy, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return TaskRunCronCursorModeLegacy, nil
+	}
+	return ParseTaskRunEffectCronCursorMode(effect.Payload)
+}
+
+// LatestTaskRetryEffectCronCursorModeTx returns the mode on the newest
+// ordinary retry effect for taskID. This aggregate helper is only for
+// configuration/reconciliation paths that do not have the predecessor run ID;
+// terminal transitions must use RetryEffectCronCursorModeTx instead.
+func LatestTaskRetryEffectCronCursorModeTx(tx *gorm.DB, taskID uint) (TaskRunCronCursorMode, error) {
+	if tx == nil {
+		return TaskRunCronCursorModeLegacy, fmt.Errorf("task run effect query unavailable")
+	}
+	if taskID == 0 {
+		return TaskRunCronCursorModeLegacy, nil
+	}
+	var effect TaskRunEffect
+	result := tx.Where(
+		"effect_type = ? AND task_run_id IN "+
+			"(SELECT id FROM task_runs WHERE task_id = ? AND trigger_type NOT IN ?)",
+		TaskRunEffectTypeRetry, taskID, []string{"drill", "restore"},
+	).Order("id DESC").Limit(1).Find(&effect)
+	if result.Error != nil {
+		return TaskRunCronCursorModeLegacy, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return TaskRunCronCursorModeLegacy, nil
+	}
+	return ParseTaskRunEffectCronCursorMode(effect.Payload)
+}
 
 const (
 	TaskRunEffectStatusPending   = "pending"

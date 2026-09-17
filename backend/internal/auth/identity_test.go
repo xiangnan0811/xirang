@@ -63,3 +63,40 @@ func TestComplete2FALoginConsumesPendingJTIOnce(t *testing.T) {
 		t.Fatalf("successful completion must persist consumed_at")
 	}
 }
+func TestDisableTOTPPreservesOpaquePasswordWhitespace(t *testing.T) {
+	db := openIdentitySQLiteTestDB(t)
+	key, err := GenerateTOTPSecret("test", "admin")
+	if err != nil {
+		t.Fatalf("generate TOTP key: %v", err)
+	}
+	password := " ValidPass#2026 "
+	passwordHash, err := HashPassword(password)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	user := model.User{
+		Username:     "disable-totp-admin",
+		Role:         "admin",
+		PasswordHash: passwordHash,
+		TOTPSecret:   key.Secret(),
+		TOTPEnabled:  true,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create TOTP user: %v", err)
+	}
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{})
+	code, err := totp.GenerateCode(key.Secret(), time.Now())
+	if err != nil {
+		t.Fatalf("generate TOTP code: %v", err)
+	}
+	if err := service.DisableTOTP(context.Background(), user.ID, password, code); err != nil {
+		t.Fatalf("disable TOTP with exact password: %v", err)
+	}
+	var stored model.User
+	if err := db.First(&stored, user.ID).Error; err != nil {
+		t.Fatalf("load disabled user: %v", err)
+	}
+	if stored.TOTPEnabled {
+		t.Fatal("DisableTOTP should clear TOTP state")
+	}
+}

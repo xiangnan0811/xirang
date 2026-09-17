@@ -6,11 +6,11 @@ import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
-import { buildDemoTask } from "@/hooks/use-console-data.demo";
 import type {
   AlertRecord,
   LogEvent,
   NewTaskInput,
+  UpdateTaskInput,
   NodeRecord,
   PolicyRecord,
   TaskRecord
@@ -59,13 +59,15 @@ export function useTaskOperations({
       }
       return -1;
     }
+    // Demo builders must not enter the production startup chunk (same as mock.ts).
+    const { buildDemoTask } = await import("@/hooks/use-console-data.demo");
     const nextTask = buildDemoTask(input, nodes, policies, tasks);
     markTasksMutated();
     setTasks((prev) => [nextTask, ...prev]);
     return nextTask.id;
   }, [exec, markTasksMutated, nodes, policies, setTasks, tasks]);
 
-  const updateTask = useCallback(async (taskID: number, input: NewTaskInput): Promise<void> => {
+  const updateTask = useCallback(async (taskID: number, input: UpdateTaskInput): Promise<void> => {
     const result = await exec(i18n.t("tasks.actions.updateTask"), (t) => apiClient.updateTask(t, taskID, input));
     if (result) {
       if (result.ok) {
@@ -75,27 +77,70 @@ export function useTaskOperations({
       }
       throw new Error(i18n.t("tasks.actions.updateTaskFailed"));
     }
-    // demo mode fallback: update in-memory (与 buildDemoTask 保持一致的派生逻辑)
-    const node = nodes.find((n) => n.id === input.nodeId);
-    const policy = input.policyId ? policies.find((p) => p.id === input.policyId) : null;
     markTasksMutated();
     setTasks((prev) =>
-      prev.map((task) =>
-        task.id === taskID
-          ? {
-              ...task,
-              name: input.name,
-              policyName: policy?.name ?? input.name,
-              nodeId: input.nodeId,
-              nodeName: node?.name ?? i18n.t("common.nodeDefault", { id: input.nodeId }),
-              policyId: input.policyId ?? null,
-              rsyncSource: input.rsyncSource ?? policy?.sourcePath,
-              rsyncTarget: input.rsyncTarget ?? policy?.targetPath,
-              executorType: input.executorType ?? "rsync",
-              cronSpec: input.cronSpec ?? policy?.cron,
-            }
-          : task
-      )
+      prev.map((task) => {
+        if (task.id !== taskID) {
+          return task;
+        }
+        const next: TaskRecord = { ...task };
+        if (input.name !== undefined) {
+          next.name = input.name;
+        }
+        if (input.nodeId !== undefined) {
+          const node = nodes.find((item) => item.id === input.nodeId);
+          next.nodeId = input.nodeId;
+          next.nodeName = node?.name ?? i18n.t("common.nodeDefault", { id: input.nodeId });
+        }
+        if (input.policyId !== undefined) {
+          next.policyId = input.policyId;
+          const policy = input.policyId ? policies.find((item) => item.id === input.policyId) : undefined;
+          next.policyName = policy?.name ?? next.name ?? task.policyName;
+        }
+        if (input.dependsOnTaskId !== undefined) {
+          next.dependsOnTaskId = input.dependsOnTaskId;
+        }
+        if (input.command !== undefined) {
+          next.command = input.command;
+        }
+        if (input.rsyncSource !== undefined) {
+          next.rsyncSource = input.rsyncSource;
+        }
+        if (input.rsyncTarget !== undefined) {
+          next.rsyncTarget = input.rsyncTarget;
+        }
+        if (input.executorType !== undefined) {
+          next.executorType = input.executorType;
+        }
+        if (input.cronSpec !== undefined) {
+          next.cronSpec = input.cronSpec;
+        }
+        if (input.executorSettings !== undefined) {
+          if (next.executorType === "restic") {
+            const previous = next.executorSettings && "excludePatterns" in next.executorSettings
+              ? next.executorSettings
+              : { excludePatterns: [], repositoryVersion: null };
+            next.executorSettings = {
+              excludePatterns: input.executorSettings.excludePatterns ?? previous.excludePatterns,
+              repositoryVersion: input.executorSettings.repositoryVersion !== undefined
+                ? input.executorSettings.repositoryVersion
+                : previous.repositoryVersion,
+            };
+          } else if (next.executorType === "rclone") {
+            const previous = next.executorSettings && "bandwidthLimit" in next.executorSettings
+              ? next.executorSettings
+              : { bandwidthLimit: "", transfers: 0 };
+            next.executorSettings = {
+              bandwidthLimit: input.executorSettings.bandwidthLimit ?? previous.bandwidthLimit,
+              transfers: input.executorSettings.transfers ?? previous.transfers,
+            };
+          }
+        }
+        if (input.executorSecrets?.repositoryPassword && input.executorSecrets.repositoryPassword.trim() !== "") {
+          next.executorSecretsConfigured = { repositoryPassword: true };
+        }
+        return next;
+      })
     );
   }, [exec, markTasksMutated, nodes, policies, setTasks]);
 

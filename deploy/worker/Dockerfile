@@ -40,7 +40,7 @@ RUN apk add --no-cache \
       tesseract-ocr-data-eng=5.5.1-r0 \
       vips-tools=8.17.3-r1 \
       gzip=1.14-r3 \
-      xz=5.8.3-r0 \
+      xz=5.8.4-r0 \
       zstd=1.5.7-r2 && \
     addgroup -S -g 10000 asset-worker && \
 	    adduser -S -D -H -u 10000 -G asset-worker -s /sbin/nologin asset-worker && \

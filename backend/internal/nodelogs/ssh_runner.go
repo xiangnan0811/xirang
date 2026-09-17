@@ -15,9 +15,11 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
-	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 )
+
+// ErrOutputLimit means the complete collection exceeded its byte budget.
+var ErrOutputLimit = sshutil.ErrCommandOutputLimit
 
 // sshRunner is the production Runner. It dials the node each call.
 type sshRunner struct {
@@ -27,65 +29,73 @@ type sshRunner struct {
 func NewSSHRunner(db *gorm.DB) Runner { return &sshRunner{db: db} }
 
 func (r *sshRunner) Run(ctx context.Context, node model.Node, cmd string, timeout time.Duration, maxBytes int) (string, error) {
+	if timeout <= 0 || maxBytes <= 0 {
+		return "", errors.New("invalid collection bounds")
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	db := r.db
+	if db != nil {
+		db = db.WithContext(ctx)
+	}
 
-	auth, credential, err := sshutil.BuildSSHAuthForPurpose(node, r.db, sshutil.PurposeNodeLogs)
+	auth, credential, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeNodeLogs)
 	if err != nil {
-		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeBlocked, "auth_build", err, maxBytes)
-		return "", fmt.Errorf("build auth: %w", err)
+		r.writeCredentialAudit(ctx, node, credential, credentialaudit.OutcomeBlocked, "auth_build", err, maxBytes)
+		return "", collectionError(ctx, "auth_build", err)
 	}
 	hostKey, err := sshutil.ResolveSSHHostKeyCallback()
 	if err != nil {
-		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "host_key", err, maxBytes)
-		return "", fmt.Errorf("host key: %w", err)
+		r.writeCredentialAudit(ctx, node, credential, credentialaudit.OutcomeFailure, "host_key", err, maxBytes)
+		return "", collectionError(ctx, "host_key", err)
 	}
 	addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	client, err := sshutil.DialSSH(ctx, addr, node.Username, auth, hostKey)
 	if err != nil {
-		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "dial", err, maxBytes)
-		return "", fmt.Errorf("dial: %w", err)
+		r.writeCredentialAudit(ctx, node, credential, credentialaudit.OutcomeFailure, "dial", err, maxBytes)
+		return "", collectionError(ctx, "dial", err)
 	}
 	defer func() { _ = client.Close() }()
 
-	session, err := client.NewSession()
+	output, err := collectSSHOutput(ctx, sshutil.NewSSHCommandRunnerWithJoinedTransportClose(client, 1), cmd, maxBytes)
 	if err != nil {
-		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "session", err, maxBytes)
-		return "", fmt.Errorf("session: %w", err)
+		r.writeCredentialAudit(ctx, node, credential, credentialaudit.OutcomeFailure, "execution", err, maxBytes)
 	}
-	defer func() { _ = session.Close() }()
-
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "stdout", err, maxBytes)
-		return "", fmt.Errorf("stdout: %w", err)
-	}
-	if err := session.Start(cmd); err != nil {
-		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "start", err, maxBytes)
-		return "", fmt.Errorf("start: %w", err)
-	}
-
-	limited := io.LimitReader(stdout, int64(maxBytes))
-	buf, err := io.ReadAll(limited)
-	if err != nil {
-		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "read", err, maxBytes)
-		return "", fmt.Errorf("read: %w", err)
-	}
-	if err := session.Wait(); err != nil {
-		var exitErr *ssh.ExitError
-		if errors.As(err, &exitErr) {
-			// Clean remote exit with non-zero status; output is still usable
-			// (some shells / tail return nonzero even when stdout is complete).
-			return string(buf), nil
-		}
-		// Missing exit status / transport error → session broke mid-stream.
-		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "wait", err, maxBytes)
-		return string(buf), fmt.Errorf("wait: %w", err)
-	}
-	return string(buf), nil
+	return output, err
 }
 
-func (r *sshRunner) writeCredentialAudit(node model.Node, credential sshutil.ResolvedCredential, outcome, stage string, err error, maxBytes int) {
+func collectSSHOutput(ctx context.Context, runner *sshutil.CommandRunner, cmd string, maxBytes int) (string, error) {
+	stream, err := runner.OpenRawExecution(ctx, sshutil.RawCommandSpec{Command: cmd, MaxStdoutBytes: int64(maxBytes)})
+	if err != nil {
+		return "", collectionError(ctx, "execution", err)
+	}
+	output, readErr := io.ReadAll(stream)
+	completion, joinErr := stream.Join()
+	if readErr != nil || joinErr != nil {
+		return "", collectionError(ctx, "execution", errors.Join(readErr, joinErr))
+	}
+	if !completion.ExitCodeKnown {
+		return "", collectionError(ctx, "execution", sshutil.ErrCommandFailed)
+	}
+	// Explicit nonzero remote exits retain complete-output compatibility.
+	return string(output), nil
+}
+
+func collectionError(ctx context.Context, stage string, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("collection %s: %w", stage, ctx.Err())
+	}
+	if errors.Is(err, ErrOutputLimit) {
+		return ErrOutputLimit
+	}
+	// Do not expose remote command, output, host, or credential material.
+	return fmt.Errorf("collection %s failed", stage)
+}
+
+func (r *sshRunner) writeCredentialAudit(ctx context.Context, node model.Node, credential sshutil.ResolvedCredential, outcome, stage string, err error, maxBytes int) {
 	kind, source, keyID := nodelogCredentialFallback(node, credential)
 	event := credentialaudit.Event{
 		Username:         "system",
@@ -105,7 +115,11 @@ func (r *sshRunner) writeCredentialAudit(node model.Node, credential sshutil.Res
 	if err != nil {
 		event.ErrorMessage = strings.TrimSpace(stage) + " failed"
 	}
-	if writeErr := credentialaudit.Write(r.db, event); writeErr != nil {
+	db := r.db
+	if db != nil {
+		db = db.WithContext(ctx)
+	}
+	if writeErr := credentialaudit.Write(db, event); writeErr != nil {
 		logger.Module("credential_audit").Warn().Err(writeErr).
 			Str("action", event.Action).
 			Str("purpose", event.Purpose).

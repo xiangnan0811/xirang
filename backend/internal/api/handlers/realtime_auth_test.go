@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func openRealtimeAuthTestDB(t *testing.T) *gorm.DB {
 
 func TestAuthorizeRealtimeTokenRejectsStaleTokenVersion(t *testing.T) {
 	db := openRealtimeAuthTestDB(t)
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -35,6 +36,7 @@ func TestAuthorizeRealtimeTokenRejectsStaleTokenVersion(t *testing.T) {
 	}
 
 	jwtManager := auth.NewJWTManager("test-secret", time.Hour)
+	jwtManager.SetDB(db)
 	token, err := jwtManager.GenerateToken(user)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
@@ -44,14 +46,26 @@ func TestAuthorizeRealtimeTokenRejectsStaleTokenVersion(t *testing.T) {
 		t.Fatalf("更新 token_version 失败: %v", err)
 	}
 
-	if _, err := authorizeRealtimeToken(token, jwtManager, db, realtimeAuthRequirements{Permission: "tasks:read"}); err == nil {
+	if _, err := authorizeRealtimeToken(context.Background(), token, jwtManager, db, realtimeAuthRequirements{Permission: "tasks:read"}); err == nil {
 		t.Fatalf("过期 token_version 应被拒绝")
+	}
+}
+
+func TestAuthorizeRealtimeTokenFailsClosedWithoutRevocationStore(t *testing.T) {
+	manager := auth.NewJWTManager("test-secret", time.Hour)
+	token, err := manager.GenerateToken(model.User{ID: 1, Username: "operator", Role: "operator"})
+	if err != nil {
+		t.Fatalf("生成 token 失败: %v", err)
+	}
+
+	if _, err := authorizeRealtimeToken(context.Background(), token, manager, nil, realtimeAuthRequirements{Permission: "tasks:read"}); err == nil {
+		t.Fatal("缺少 session revocation store 时应拒绝 realtime token")
 	}
 }
 
 func TestAuthorizeRealtimeTokenRejectsRoleMismatch(t *testing.T) {
 	db := openRealtimeAuthTestDB(t)
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -61,12 +75,13 @@ func TestAuthorizeRealtimeTokenRejectsRoleMismatch(t *testing.T) {
 	}
 
 	jwtManager := auth.NewJWTManager("test-secret", time.Hour)
+	jwtManager.SetDB(db)
 	token, err := jwtManager.GenerateToken(user)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
 	}
 
-	if _, err := authorizeRealtimeToken(token, jwtManager, db, realtimeAuthRequirements{Role: "admin"}); err == nil {
+	if _, err := authorizeRealtimeToken(context.Background(), token, jwtManager, db, realtimeAuthRequirements{Role: "admin"}); err == nil {
 		t.Fatalf("非 admin token 应被拒绝")
 	} else if !strings.Contains(err.Error(), "权限不足") {
 		t.Fatalf("期望返回权限不足，实际: %v", err)

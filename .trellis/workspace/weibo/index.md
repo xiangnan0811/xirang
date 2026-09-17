@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 55
-- **Last Active**: 2026-09-08
+- **Total Sessions**: 61
+- **Last Active**: 2026-09-17
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~131 | Active |
+| `journal-2.md` | ~290 | Active |
 | `journal-1.md` | ~1993 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,12 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 61 | 2026-09-17 | Complete bounded P3 middleware RAF and logging fixes | `29ce30b0` | `fix/p3-quality-debt` |
+| 60 | 2026-09-17 | v0.55.16 backup assets production acceptance and program archive | `4504bbe5` | `docs/backup-assets-v05516-acceptance` |
+| 59 | 2026-09-16 | 节点日志 NAS 验收通过并归档 | `d3101cf1`, `4a0c0aed` | `codex/archive-node-logs-acceptance` |
+| 58 | 2026-09-16 | 节点日志近期恢复与脚本修复 | `d95de83f` | `codex/node-logs-recent-resume` |
+| 57 | 2026-09-16 | Node-log P1 implementation and PR 533 | `664555e6` | `codex/node-logs-collector-stall` |
+| 56 | 2026-09-16 | Reconcile delivered Trellis tasks and remaining acceptance | `886fd0c2` | `chore/trellis-task-reconciliation` |
 | 55 | 2026-09-08 | Rsync SQLite preview source consistency | `628b9e7b` | `fix/rsync-preview-source-consistency` |
 | 54 | 2026-09-07 | Deterministic export ciphertext tamper regression | `60e872f1` | `test/ciphertext-tamper-ci-stability` |
 | 53 | 2026-09-07 | Drill lifecycle recovery completion assertion | `50c511e8` | `test/drill-lifecycle-ci-stability` |

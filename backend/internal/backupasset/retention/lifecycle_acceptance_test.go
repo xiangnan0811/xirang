@@ -2768,7 +2768,7 @@ func runAcceptanceObserverResume(t *testing.T, db *gorm.DB, mode string) {
 
 func runAcceptanceRcloneNative(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	fixture := newClaimedExpiryFixtureWithDB(t, db, 31100)
+	fixture := newClaimedExpiryFixtureWithDBAndProvider(t, db, 31100, backupasset.ProviderRclone)
 	native := &acceptanceNativeVersionFake{
 		present: map[string]bool{}, entered: make(chan struct{}), release: make(chan struct{}),
 		minimumDeadline: fixture.clock.Add(30 * time.Minute),

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TaskEditorDialog } from "@/components/task-create-dialog";
 import { toast } from "@/components/ui/toast-sonner";
 import type { NodeRecord, PolicyRecord, TaskRecord } from "@/types/domain";
+import { ApiError } from "@/lib/api/core";
 
 vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
@@ -75,6 +76,7 @@ function createTask(): TaskRecord {
     rsyncSource: "/old/source",
     rsyncTarget: "/old/target",
     executorType: "rsync",
+    revision: "9007199254740993",
     cronSpec: "0 0 * * *",
     speedMbps: 0,
     enabled: true,
@@ -82,9 +84,9 @@ function createTask(): TaskRecord {
 }
 
 describe("TaskEditorDialog", () => {
-  it("编辑模式会回填任务字段，并在保存时转换为 NewTaskInput", async () => {
+  it("编辑模式只提交实际改动的字段并携带精确 revision 字符串", async () => {
     const user = userEvent.setup();
-    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
     const onOpenChange = vi.fn();
 
     render(
@@ -93,7 +95,7 @@ describe("TaskEditorDialog", () => {
         onOpenChange={onOpenChange}
         nodes={[createNode(1, "node-1"), createNode(2, "node-2")]}
         policies={[createPolicy(1, "每日备份"), createPolicy(2, "每小时同步")]}
-        onSave={onSave}
+        onUpdate={onUpdate}
         editingTask={createTask()}
       />
     );
@@ -104,7 +106,6 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByLabelText("关联策略（可选）")).toHaveValue("1");
     expect(screen.getByLabelText("Cron（可选）")).toHaveValue("0 0 * * *");
     expect(screen.getByLabelText("Rsync 源路径（可选）")).toHaveValue("/old/source");
-    // 编辑模式下 rsync 目标路径显示为只读文本（非输入框）
     expect(screen.getByText("/old/target")).toBeInTheDocument();
 
     await user.clear(screen.getByLabelText("任务名称"));
@@ -118,21 +119,19 @@ describe("TaskEditorDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "保存修改" }));
 
-    expect(onSave).toHaveBeenCalledWith({
+    expect(onUpdate).toHaveBeenCalledWith({
+      expectedRevision: "9007199254740993",
       name: "重命名任务",
       nodeId: 2,
       policyId: 2,
-      dependsOnTaskId: null,
-      executorType: "rsync",
       rsyncSource: "/new/source",
-      rsyncTarget: undefined,
       cronSpec: "0 */4 * * *",
     });
     expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("关闭后以新建模式重新打开时会重置为默认草稿", () => {
-    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
     const onOpenChange = vi.fn();
     const nodes = [createNode(1, "node-1")];
     const policies = [createPolicy(1, "每日备份")];
@@ -143,7 +142,7 @@ describe("TaskEditorDialog", () => {
         onOpenChange={onOpenChange}
         nodes={nodes}
         policies={policies}
-        onSave={onSave}
+        onUpdate={onUpdate}
         editingTask={createTask()}
       />
     );
@@ -157,7 +156,7 @@ describe("TaskEditorDialog", () => {
         onOpenChange={onOpenChange}
         nodes={nodes}
         policies={policies}
-        onSave={onSave}
+        onCreate={onUpdate}
         editingTask={null}
       />
     );
@@ -168,7 +167,7 @@ describe("TaskEditorDialog", () => {
         onOpenChange={onOpenChange}
         nodes={nodes}
         policies={policies}
-        onSave={onSave}
+        onCreate={onUpdate}
         editingTask={null}
       />
     );
@@ -190,7 +189,7 @@ describe("TaskEditorDialog", () => {
         onOpenChange={vi.fn()}
         nodes={[createNode(1, "node-1")]}
         policies={[createPolicy(1, "每日备份")]}
-        onSave={vi.fn().mockResolvedValue(undefined)}
+        onUpdate={vi.fn().mockResolvedValue(undefined)}
         editingTask={{
           ...createTask(),
           rsyncPublication: {
@@ -210,9 +209,9 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByText("已提交")).toBeInTheDocument();
   });
 
-  it("编辑受管 Rclone 任务时只显示安全摘要并省略普通 target/config 写入", async () => {
+  it("编辑受管 Rclone 任务时只显示安全摘要且未改动时只提交 revision", async () => {
     const user = userEvent.setup();
-    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
 
     render(
       <TaskEditorDialog
@@ -220,17 +219,12 @@ describe("TaskEditorDialog", () => {
         onOpenChange={vi.fn()}
         nodes={[createNode(1, "node-1")]}
         policies={[createPolicy(1, "每日备份")]}
-        onSave={onSave}
+        onUpdate={onUpdate}
         editingTask={{
           ...createTask(),
           executorType: "rclone",
           rsyncTarget: undefined,
-          executorConfig: JSON.stringify({
-            version: 1,
-            publication_mode: "native_object_versions",
-            bandwidth_limit: "10M",
-            transfers: 4,
-          }),
+          executorSettings: { bandwidthLimit: "10M", transfers: 4 },
           rclonePublication: {
             mode: "native_object_versions",
             state: "ready",
@@ -264,10 +258,106 @@ describe("TaskEditorDialog", () => {
     expect(screen.getByText("受管目标与发布配置只能通过 Rclone 版本化管理修改。")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "保存修改" }));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
-      executorType: "rclone",
-      rsyncTarget: undefined,
-      executorConfig: undefined,
-    }));
+    expect(onUpdate).toHaveBeenCalledWith({
+      expectedRevision: "9007199254740993",
+    });
+  });
+
+  it("清空 Cron 会显式提交空字符串而不是省略字段", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        nodes={[createNode(1, "node-1")]}
+        policies={[createPolicy(1, "每日备份")]}
+        onUpdate={onUpdate}
+        editingTask={createTask()}
+      />
+    );
+
+    await user.clear(screen.getByLabelText("Cron（可选）"));
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(onUpdate).toHaveBeenCalledWith({
+      expectedRevision: "9007199254740993",
+      cronSpec: "",
+    });
+  });
+
+  it("Restic 编辑器加载安全设置并标明删除保护未验证", () => {
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        nodes={[createNode(1, "node-1")]}
+        policies={[createPolicy(1, "每日备份")]}
+        onUpdate={vi.fn().mockResolvedValue(undefined)}
+        editingTask={{
+          ...createTask(),
+          executorType: "restic",
+          executorSettings: { excludePatterns: ["*.log", "/tmp"], repositoryVersion: 2 },
+          executorSecretsConfigured: { repositoryPassword: true },
+        }}
+      />
+    );
+
+    expect(screen.getByLabelText("仓库格式版本")).toHaveValue("2");
+    expect(screen.getByLabelText("排除规则（可选，每行一条）")).toHaveValue("*.log\n/tmp");
+    expect(screen.getByText("删除保护：未验证")).toBeInTheDocument();
+    expect(screen.getByText(/格式版本 2 不等于不可变/)).toBeInTheDocument();
+    expect(screen.queryByText(/Append-Only/)).not.toBeInTheDocument();
+    expect(screen.getByText(/已配置仓库密码/)).toBeInTheDocument();
+    expect(screen.getByLabelText("仓库密码")).toHaveValue("");
+  });
+
+  it("更换仓库密码保留首尾空白而不改变密码", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        nodes={[createNode(1, "node-1")]}
+        policies={[]}
+        onUpdate={onUpdate}
+        editingTask={{ ...createTask(), executorType: "restic" }}
+      />
+    );
+    await user.type(screen.getByLabelText("仓库密码"), "  FAKE replacement password  ");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(onUpdate).toHaveBeenCalledWith({
+      expectedRevision: "9007199254740993",
+      executorSecrets: { repositoryPassword: "  FAKE replacement password  " },
+    });
+  });
+
+  it("409 冲突时保留草稿并提示关闭后重新打开", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn().mockRejectedValue(new ApiError(409, "revision conflict"));
+    const onOpenChange = vi.fn();
+
+    render(
+      <TaskEditorDialog
+        open
+        onOpenChange={onOpenChange}
+        nodes={[createNode(1, "node-1")]}
+        policies={[createPolicy(1, "每日备份")]}
+        onUpdate={onUpdate}
+        editingTask={createTask()}
+      />
+    );
+
+    await user.clear(screen.getByLabelText("任务名称"));
+    await user.type(screen.getByLabelText("任务名称"), "未保存的草稿名");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(screen.getByText("编辑任务")).toBeInTheDocument();
+    expect(screen.getByLabelText("任务名称")).toHaveValue("未保存的草稿名");
+    expect(screen.getByText("任务已被更新")).toBeInTheDocument();
+    expect(screen.getByText(/关闭后重新打开编辑/)).toBeInTheDocument();
   });
 });

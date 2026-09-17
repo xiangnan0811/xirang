@@ -79,6 +79,7 @@ func TestRsyncTreeFidelityRejectsExternalFullCopyLinksAndSilentHardlinkFallback(
 
 	t.Run("hardlink fallback", func(t *testing.T) {
 		parent := t.TempDir()
+		source := t.TempDir()
 		candidate := t.TempDir()
 		if err := os.WriteFile(filepath.Join(parent, "same"), []byte("same"), 0o600); err != nil {
 			t.Fatal(err)
@@ -87,11 +88,24 @@ func TestRsyncTreeFidelityRejectsExternalFullCopyLinksAndSilentHardlinkFallback(
 			t.Fatal(err)
 		}
 		before := rsyncTreeManifestForTest(t, parent, limits)
-		if err := os.WriteFile(filepath.Join(candidate, "same"), []byte("same"), 0o600); err != nil {
-			t.Fatal(err)
-		}
 		parentInfo, err := os.Stat(filepath.Join(parent, "same"))
 		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(source, "same"), []byte("same"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(filepath.Join(source, "same"), parentInfo.ModTime(), parentInfo.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(source, "changed"), []byte("new"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sourceChangedInfo, err := os.Stat(filepath.Join(source, "changed"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(candidate, "same"), []byte("same"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chtimes(filepath.Join(candidate, "same"), parentInfo.ModTime(), parentInfo.ModTime()); err != nil {
@@ -100,9 +114,13 @@ func TestRsyncTreeFidelityRejectsExternalFullCopyLinksAndSilentHardlinkFallback(
 		if err := os.WriteFile(filepath.Join(candidate, "changed"), []byte("new"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chtimes(filepath.Join(candidate, "changed"), sourceChangedInfo.ModTime(), sourceChangedInfo.ModTime()); err != nil {
+			t.Fatal(err)
+		}
 		after := rsyncTreeManifestForTest(t, parent, limits)
+		sourceManifest := rsyncTreeManifestForTest(t, source, limits)
 		candidateManifest := rsyncTreeManifestForTest(t, candidate, limits)
-		if err := validateRsyncTreeHardlinkFidelity(before, after, candidateManifest); err == nil {
+		if err := validateRsyncTreeHardlinkFidelity(before, after, sourceManifest, candidateManifest); err == nil {
 			t.Fatal("hardlink fidelity accepted a silent copy fallback")
 		}
 	})
@@ -111,6 +129,7 @@ func TestRsyncTreeFidelityRejectsExternalFullCopyLinksAndSilentHardlinkFallback(
 func TestRsyncTreeHardlinkFidelityAcceptsSharedUnchangedAndIndependentChangedFiles(t *testing.T) {
 	limits := ManifestLimits{Timeout: time.Minute, MaxBytes: 1 << 20, MaxEntries: 100, MaxRecordBytes: 4096, MaxDepth: 10}
 	parent := t.TempDir()
+	source := t.TempDir()
 	candidate := t.TempDir()
 	for name, content := range map[string]string{"same": "same", "changed": "old", "deleted": "old-only"} {
 		if err := os.WriteFile(filepath.Join(parent, name), []byte(content), 0o600); err != nil {
@@ -118,15 +137,36 @@ func TestRsyncTreeHardlinkFidelityAcceptsSharedUnchangedAndIndependentChangedFil
 		}
 	}
 	before := rsyncTreeManifestForTest(t, parent, limits)
+	parentSameInfo, err := os.Stat(filepath.Join(parent, "same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "same"), []byte("same"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(source, "same"), parentSameInfo.ModTime(), parentSameInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "changed"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourceChangedInfo, err := os.Stat(filepath.Join(source, "changed"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Link(filepath.Join(parent, "same"), filepath.Join(candidate, "same")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(candidate, "changed"), []byte("new"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chtimes(filepath.Join(candidate, "changed"), sourceChangedInfo.ModTime(), sourceChangedInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
 	after := rsyncTreeManifestForTest(t, parent, limits)
+	sourceManifest := rsyncTreeManifestForTest(t, source, limits)
 	candidateManifest := rsyncTreeManifestForTest(t, candidate, limits)
-	if err := validateRsyncTreeHardlinkFidelity(before, after, candidateManifest); err != nil {
+	if err := validateRsyncTreeHardlinkFidelity(before, after, sourceManifest, candidateManifest); err != nil {
 		t.Fatalf("hardlink fidelity rejected valid candidate: %v", err)
 	}
 	entries := make(map[string]rsyncTreeManifestEntry, len(candidateManifest.Entries))

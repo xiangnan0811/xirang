@@ -16,7 +16,8 @@ func TestPublicationWorkerStartupPassRunsBeforePeriodicLoop(t *testing.T) {
 	reconciler := &workerReconciler{candidates: []string{workerPointIDOne, workerPointIDTwo}}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 		Foundation: workerFoundation(true), Reconciler: reconciler, Metrics: publication.NoopMetrics{},
-		Now: func() time.Time { return time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC) },
+		Completion: &workerCompletionRecorderFake{},
+		Now:        func() time.Time { return time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +50,7 @@ func TestPublicationWorkerFeatureDisableStopsNewWakeClaims(t *testing.T) {
 	reconciler := &wakeWorkerReconciler{processed: make(chan string, 1)}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 		Foundation: workerFoundation(false), Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+		Completion: &workerCompletionRecorderFake{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +103,7 @@ func TestPublicationWorkerObserverIsAtMostOnceForOneCommittedPoint(t *testing.T)
 	observer := &committedWorkerObserver{}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 		Foundation: workerFoundation(true), Reconciler: reconciler, Observer: observer, Metrics: publication.NoopMetrics{},
+		Completion: &workerCompletionRecorderFake{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +118,7 @@ func TestPublicationWorkerObserverIsAtMostOnceForOneCommittedPoint(t *testing.T)
 func TestPublicationWorkerShutdownStopsRunWithoutWaitingForPeriodicTimer(t *testing.T) {
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 		Foundation: workerFoundation(true), Reconciler: &workerReconciler{}, Metrics: publication.NoopMetrics{},
+		Completion: &workerCompletionRecorderFake{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +147,7 @@ func TestPublicationWorkerWakeTrafficDoesNotStarvePeriodicScan(t *testing.T) {
 	reconciler := &workerReconciler{}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 		Foundation: workerFoundation(true), Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+		Completion: &workerCompletionRecorderFake{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +183,7 @@ func TestPublicationWorkerWakeIsNonblockingAndDurableStateRecoversLostWake(t *te
 	reconciler := &workerReconciler{candidates: []string{workerPointIDOne}}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 		Foundation: workerFoundation(true), Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+		Completion: &workerCompletionRecorderFake{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -208,6 +214,7 @@ func TestPublicationWorkerSemaphoreBoundsWakeAndCandidateProcessPointTogether(t 
 	reconciler := &blockingWorkerReconciler{candidates: []string{workerPointIDOne, workerPointIDTwo}, started: make(chan struct{}, 2), release: make(chan struct{})}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 		Foundation: backupasset.NewFoundationService(settings), Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+		Completion: &workerCompletionRecorderFake{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -236,6 +243,7 @@ func TestPublicationWorkerReporterFailureDoesNotRollBackPublication(t *testing.T
 	reporter := &workerReporterFake{err: errWorkerReporter}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 		Foundation: workerFoundation(true), Reconciler: reconciler, Reporter: reporter, Metrics: publication.NoopMetrics{},
+		Completion: &workerCompletionRecorderFake{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -251,6 +259,7 @@ func TestPublicationWorkerRestartResumesVerifyingAndPreparingPoints(t *testing.T
 	for restart := 0; restart < 2; restart++ {
 		worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 			Foundation: workerFoundation(true), Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+			Completion: &workerCompletionRecorderFake{},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -268,6 +277,7 @@ func TestPublicationWorkerShutdownRejectsWakeCancelsAndJoinsActiveWork(t *testin
 	reconciler := &cancelableWorkerReconciler{started: make(chan struct{})}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
 		Foundation: workerFoundation(true), Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+		Completion: &workerCompletionRecorderFake{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -337,6 +347,22 @@ func (*blockingWorkerReconciler) HasUnresolvedPublication(context.Context) (bool
 }
 
 var errWorkerReporter = fmt.Errorf("FAKE_WORKER_REPORTER_FAILURE_FOR_TEST_ONLY")
+
+type workerCompletionRecorderFake struct {
+	err         error
+	recordCalls atomic.Int32
+	replayCalls atomic.Int32
+}
+
+func (recorder *workerCompletionRecorderFake) RecordManagedCommitted(context.Context, string) error {
+	recorder.recordCalls.Add(1)
+	return recorder.err
+}
+
+func (recorder *workerCompletionRecorderFake) ReplayManagedCommitted(context.Context, int) error {
+	recorder.replayCalls.Add(1)
+	return recorder.err
+}
 
 type workerReporterFake struct {
 	err   error

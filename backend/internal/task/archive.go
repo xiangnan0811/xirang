@@ -117,6 +117,9 @@ func (s *ArchiveService) Archive(ctx context.Context, taskID uint) (ArchiveResul
 		if err := tx.Model(&model.Task{}).Where("id = ?", taskID).Updates(updates).Error; err != nil {
 			return err
 		}
+		if err := cancelQueuedCronOccurrencesTx(tx, taskID, "任务已归档，定时执行已取消"); err != nil {
+			return err
+		}
 
 		if len(links) == 0 {
 			return nil

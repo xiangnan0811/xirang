@@ -27,6 +27,7 @@ import type {
   NewPolicyInput,
   NewSSHKeyInput,
   NewTaskInput,
+  UpdateTaskInput,
   NodeRecord,
   OverviewStats,
   OverviewSummary,
@@ -81,7 +82,7 @@ export interface ConsoleDataState {
   updatePolicy: (policyId: number, input: NewPolicyInput) => Promise<void>;
   deletePolicy: (policyId: number) => Promise<void>;
   createTask: (input: NewTaskInput) => Promise<number>;
-  updateTask: (taskId: number, input: NewTaskInput) => Promise<void>;
+  updateTask: (taskId: number, input: UpdateTaskInput) => Promise<void>;
   deleteTask: (taskId: number) => Promise<void>;
   triggerTask: (taskId: number) => Promise<void>;
   cancelTask: (taskId: number) => Promise<void>;

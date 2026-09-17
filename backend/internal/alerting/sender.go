@@ -101,7 +101,7 @@ func (s *feishuSender) Send(client *http.Client, endpoint, secret string, body p
 		msg["sign"] = sign
 	}
 
-	return postJSON(client, endpoint, msg)
+	return postJSONWithAck(client, endpoint, "feishu", msg, parseFeishuAck)
 }
 
 // --- 钉钉 ---
@@ -146,7 +146,7 @@ func (s *dingtalkSender) Send(client *http.Client, endpoint, secret string, body
 			"text":  text,
 		},
 	}
-	return postJSON(client, endpointURL, msg)
+	return postJSONWithAck(client, endpointURL, "dingtalk", msg, parseDingtalkAck)
 }
 
 // --- 企业微信 ---
@@ -164,5 +164,5 @@ func (s *wecomSender) Send(client *http.Client, endpoint, _ string, body payload
 			"content": text,
 		},
 	}
-	return postJSON(client, endpoint, msg)
+	return postJSONWithAck(client, endpoint, "wecom", msg, parseWecomAck)
 }

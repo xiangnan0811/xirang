@@ -69,6 +69,7 @@ func setupAuthUserFixture(t *testing.T) authUserTestFixture {
 	operatorUser := seedAuthUser(t, db, "operator", "operator", operatorPassword)
 
 	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	service := auth.NewService(db, jwtManager, nil, auth.LoginSecurityConfig{
 		FailLockThreshold: 5,
 		FailLockDuration:  time.Minute,

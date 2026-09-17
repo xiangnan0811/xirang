@@ -9549,6 +9549,15 @@ func TestContentBrokerDeliveryBranchClaimsOnly000066AndDelegates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close Content broker test database: %v", err)
+		}
+	})
 	if err := db.AutoMigrate(&model.BackupAssetDeliveryGrant{}); err != nil {
 		t.Fatal(err)
 	}
@@ -9651,6 +9660,15 @@ func TestRuntimeArchiveMemberIndexResolverKeepsSucceededNonCurrentJobDeadline(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close archive resolver test database: %v", err)
+		}
+	})
 	if err := db.AutoMigrate(
 		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingAttempt{},
 		&model.BackupAssetDerivedArtifactSet{}, &model.BackupAssetDerivedBlob{},

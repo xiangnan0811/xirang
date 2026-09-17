@@ -102,14 +102,18 @@ func (s *ControlService) DisableTx(ctx context.Context, tx *gorm.DB, policyID ui
 	if result.RowsAffected != 1 {
 		return nil, fmt.Errorf("policy %d not found", policyID)
 	}
-	var taskIDs []uint
-	if err := tx.Model(&model.Task{}).Where("policy_id = ? AND source = ?", policyID, "policy").Pluck("id", &taskIDs).Error; err != nil {
+	tasks, err := lockPolicyTasks(tx, policyID, nil)
+	if err != nil {
 		return nil, err
+	}
+	taskIDs := make([]uint, 0, len(tasks))
+	for _, task := range tasks {
+		taskIDs = append(taskIDs, task.ID)
 	}
 	if err := tx.Model(&model.Policy{}).Where("id = ?", policyID).Update("enabled", false).Error; err != nil {
 		return nil, err
 	}
-	if err := tx.Model(&model.Task{}).Where("policy_id = ? AND source = ?", policyID, "policy").Update("cron_spec", "").Error; err != nil {
+	if err := updateLockedPolicyTaskSchedules(tx, tasks, ""); err != nil {
 		return nil, err
 	}
 	return taskIDs, nil

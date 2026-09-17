@@ -24,10 +24,11 @@ func TestLegacySnapshotReadsGoneForAdminOperatorViewer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatal(err)
 	}
 	jwtManager := auth.NewJWTManager("FAKE_LEGACY_SNAPSHOT_HTTP_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := map[string]string{}
 	users := map[string]model.User{}
 	for _, role := range []string{"admin", "operator", "viewer"} {

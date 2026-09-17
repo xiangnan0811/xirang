@@ -36,7 +36,7 @@ func (h *WSHandler) ServeWS(c *gin.Context) {
 	// WebSocket 无法通过 HTTP 头传递 JWT，认证在升级后通过首条消息完成。
 	// 此处同时校验 token、RBAC 权限以及 operator 的对象级可见性边界。
 	h.hub.ServeWS(c, func(token string) (ws.AccessScope, error) {
-		claims, err := authorizeRealtimeToken(token, h.jwtManager, h.db, realtimeAuthRequirements{Permission: "tasks:read"})
+		claims, err := authorizeRealtimeToken(c.Request.Context(), token, h.jwtManager, h.db, realtimeAuthRequirements{Permission: "tasks:read"})
 		if err != nil {
 			return ws.AccessScope{}, err
 		}

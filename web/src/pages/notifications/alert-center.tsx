@@ -355,7 +355,7 @@ export function AlertCenter({
   };
 
   const handleRetryAllFailed = async (alertId: string) => {
-    const failedDeliveries = (deliveryMap[alertId] ?? []).filter((d) => d.status === "failed");
+    const failedDeliveries = (deliveryMap[alertId] ?? []).filter((d) => d.status === "failed" || d.status === "retrying");
     if (!failedDeliveries.length) return;
     setRetryingAllAlertId(alertId);
     const results = await Promise.allSettled(

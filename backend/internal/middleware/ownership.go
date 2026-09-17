@@ -28,7 +28,7 @@ func OwnershipNodeCheck(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		if role != "operator" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "权限不足"})
+			respondAPIError(c, http.StatusForbidden, "权限不足")
 			c.Abort()
 			return
 		}
@@ -36,7 +36,7 @@ func OwnershipNodeCheck(db *gorm.DB) gin.HandlerFunc {
 		nodeIDStr := c.Param("id")
 		nodeID, err := strconv.ParseUint(nodeIDStr, 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的节点 ID"})
+			respondAPIError(c, http.StatusBadRequest, "无效的节点 ID")
 			c.Abort()
 			return
 		}
@@ -46,12 +46,12 @@ func OwnershipNodeCheck(db *gorm.DB) gin.HandlerFunc {
 		if err := db.Model(&model.NodeOwner{}).
 			Where("node_id = ? AND user_id = ?", nodeID, userID).
 			Count(&count).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+			respondAPIError(c, http.StatusInternalServerError, "服务器内部错误")
 			c.Abort()
 			return
 		}
 		if count == 0 {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该节点"})
+			respondAPIError(c, http.StatusForbidden, "无权访问该节点")
 			c.Abort()
 			return
 		}
@@ -77,7 +77,7 @@ func OwnershipTaskCheck(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		if role != "operator" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "权限不足"})
+			respondAPIError(c, http.StatusForbidden, "权限不足")
 			c.Abort()
 			return
 		}
@@ -85,7 +85,7 @@ func OwnershipTaskCheck(db *gorm.DB) gin.HandlerFunc {
 		taskIDStr := c.Param("id")
 		taskID, err := strconv.ParseUint(taskIDStr, 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的任务 ID"})
+			respondAPIError(c, http.StatusBadRequest, "无效的任务 ID")
 			c.Abort()
 			return
 		}
@@ -97,12 +97,12 @@ func OwnershipTaskCheck(db *gorm.DB) gin.HandlerFunc {
 			Joins("JOIN node_owners ON node_owners.node_id = tasks.node_id").
 			Where("tasks.id = ? AND node_owners.user_id = ?", taskID, userID).
 			Count(&count).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+			respondAPIError(c, http.StatusInternalServerError, "服务器内部错误")
 			c.Abort()
 			return
 		}
 		if count == 0 {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该任务"})
+			respondAPIError(c, http.StatusForbidden, "无权访问该任务")
 			c.Abort()
 			return
 		}

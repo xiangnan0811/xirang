@@ -1809,7 +1809,7 @@ func TestManagedRecoveryNodeRevisionSourceRequiresExactManagedRecoveryCredential
 
 func TestManagedRecoveryReconciliationFindingSinkDeduplicatesAndResolvesWithoutRootLeak(t *testing.T) {
 	db := openRuntimeTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Alert{}, &model.Integration{}); err != nil {
+	if err := db.AutoMigrate(&model.Node{}, &model.Alert{}, &model.AlertDelivery{}, &model.Integration{}); err != nil {
 		t.Fatal(err)
 	}
 	node := model.Node{

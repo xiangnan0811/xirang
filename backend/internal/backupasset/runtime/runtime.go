@@ -794,7 +794,14 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	worker, err = NewPublicationWorker(PublicationWorkerDependencies{Foundation: foundation, Reconciler: publicationService, Metrics: metricsSink, Now: dependencies.Now})
+	completionStore, err := newManagedCompletionStore(dependencies.DB)
+	if err != nil {
+		return nil, err
+	}
+	worker, err = NewPublicationWorker(PublicationWorkerDependencies{
+		Foundation: foundation, Reconciler: publicationService, Completion: completionStore,
+		Metrics: metricsSink, Now: dependencies.Now,
+	})
 	if err != nil {
 		return nil, err
 	}

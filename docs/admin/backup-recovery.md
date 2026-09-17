@@ -12,7 +12,73 @@ Xirang 支持三类备份执行器：
 | Restic | 快照备份 | 支持快照浏览、快照对比、文件搜索、GFS 保留、完整性检查和快照异常检测。 |
 | Rclone | 对接对象存储/远端存储 | 适合把备份同步到云存储或其他 rclone 支持的后端。 |
 
-备份策略可配置 cron 调度、源/目标路径、排除规则、带宽限制、前后置 hook、重试策略和保留策略。
+备份策略可配置 cron 调度、源/目标路径、排除规则、带宽限制、前后置 hook、重试策略和保留策略。创建时显式设置 `enabled=false`、`verify_enabled=false` 或 `max_retries=0` 会保留原值；零次重试不会自动重跑失败任务，未提交字段仍使用默认值。
+
+### 任务编辑与仓库格式
+
+任务编辑是部分更新：未提交字段保持原值，显式空 `cron_spec` 改为手动任务，即使任务关联了策略也不会重新填入策略 Cron。更新必须提交读取任务时返回的字符串 `expected_revision`；并发修改返回 409，保留草稿并重新加载最新配置后再编辑，不自动重试覆盖。无效 Cron 在写入前拒绝；历史坏 Cron 只隔离对应任务并记录诊断，不阻断其他任务启动。
+
+策略生成任务会持久化调度继承状态。显式提交任务 Cron（包括留空改为手动）建立任务级覆盖；随后修改策略名称、Cron 或停用/恢复策略不会抹掉该覆盖。策略停用仍停止所有关联策略任务并清空活动游标；恢复时手动任务仍手动，自定义 Cron 按自己的表达式恢复，继承任务采用策略当前 Cron。迁移 `000088_task_cron_override` 将历史策略任务中与当时策略有效调度不同的 Cron 标记为覆盖；相同值无法证明曾经覆盖，保留继承关系。导入导出保留该状态。
+
+任务响应只公开白名单 `executor_settings` 与 `executor_secrets_configured`，不返回原始 `executor_config` 或仓库密码。Restic 排除规则传 `[]` 可清空；仓库密码留空保留原值，非空替换时保留原始字节（含首尾空白）。Rclone 带宽限制与并发数在仅改名等编辑中保持不变。
+
+Restic `repository_version` 仅选择新仓库的格式（默认、1、2），**不代表 Append-Only、不可变备份或删除保护**。删除保护状态为未验证，必须在存储后端独立配置和验证权限、保留锁等机制。升级前停止所有旧 Core/执行器并备份数据库及加密密钥；启动时将历史 `append_only=true` 转为格式 2，`false` 转为默认，保留密码、排除规则和其他字段，不改变仓库数据。转换在加密边界内幂等执行；非法或冲突配置隔离并记录任务诊断。旧字段只在显式配置导入边界转换，不再作为运行时配置接受。
+
+## Policy target isolation and historical data
+
+New policy-owned Rsync tasks use `<backup-root>/.xirang/policies/<policy-id>/nodes/<node-id>`. Persisted IDs, not source basenames or editable node labels, separate writers. Existing stored task targets remain unchanged on synchronization and node-label edits; changing a path is not evidence that historical bytes were migrated. Local target admission rejects conflicting canonical paths, symlink aliases, and ancestor/descendant ownership.
+
+Before upgrading, pause affected tasks and inventory stored `rsync_target` values and physical aliases. Preserve the database, encryption keys, TaskRun evidence, and an independent copy of each remaining backup tree. If policies shared a tree, neither historical manifest necessarily describes its current bytes. Never delete failed/dirty evidence, clear shared directories, or overwrite the only salvageable copy to regain restore eligibility.
+
+Node migration requires affected tasks to be disabled, unscheduled, and free of active durable runs. Local data migration copies independently owned sources to fresh isolated destinations, verifies the copies, and rechecks ownership/configuration before database cutover. Shared sources and existing destinations are refused rather than merged. Original sources remain intact; manually rewriting database targets is not a migration. Preserve and assess shared legacy data separately before choosing a new isolated baseline or an explicitly admitted managed migration.
+
+Configuration-import compensation follows the same ownership boundary. It captures task before-images under the global, policy, and task locks, then revalidates current claims and post-import row images before rollback. Concurrent changes or a new claimant at an old target cause compensation to fail closed rather than overwrite the newer state or recreate a shared target. If this conflict is reported, pause the affected imported tasks and inspect the failed import/current configuration before retrying; do not force old locators back into the database.
+
+Policy creation, template cloning, and config import share explicit-value persistence while retaining encryption hooks. A template clone remains disabled, and disabled verification stays disabled. Omitted API fields retain documented defaults.
+
+## Policy concurrency
+
+`max_concurrent` limits ordinary pending/running reservations across every node in the same policy, including competing Core instances. The database policy lock and execution-entry recheck are authoritative; the global execution limit still applies independently. A manual request that meets a busy policy keeps the manual busy response and does not create a deferred occurrence. A due cron occurrence first persists its durable intent, then waits for an available policy/global quota; that intent does not reserve a slot or bypass quota, so a full policy delays the occurrence instead of silently dropping it. Restore/drill admission keeps its separate safety boundary. Existing non-positive stored limits are treated conservatively as one; negative API values are rejected. Terminal completion releases ordinary capacity, while disabling a policy cancels its pending ordinary reservations and records explicit missed-occurrence state.
+
+## Legacy Rclone mutable-head recovery
+
+Legacy Rclone has no immutable snapshot or Rsync capture manifest. A completed current generation is not proof of historical object versions. Restore admission binds to the latest eligible current generation and rejects newer failed/dirty or untracked historical attempts instead of borrowing an older success. A proven no-start preserves the previous generation; a complete later success can establish a new current head after a known-complete failure.
+
+Publication Prepare and preconditions finish before a legacy writer arms its durable generation immediately before executor invocation. Prepare cancellation/failure and proven pre-child dial/lookup/start failures do not invalidate the prior verified generation. An ambiguous remote result remains `unknown`; a Core crash or expired lease is not proof that the remote process stopped. Local cancellation closes and joins the owned SSH lifecycle, but ordinary runs stay blocked while unresolved evidence remains, even after configuration edits. History cleanup preserves these holds. Managed Rclone recovery points retain their separate versioned contracts.
+
+### Explicit operator reconciliation
+
+Only an authenticated administrator with task-write permission may call `POST /api/v1/tasks/{id}/reconcile-legacy-rclone`. This endpoint records the operator confirmation; it does **not** stop or inspect the remote process.
+
+1. Pause the task. Identify the exact unresolved TaskRun and its original node/remote, including any configuration changes since that run. Confirm that the remote writer and any external writer have stopped, and preserve an independent salvage copy. A locally closed SSH connection or an expired execution lease is insufficient evidence by itself.
+2. Submit `{"task_run_id":123,"remote_stopped":true,"reason":"Confirmed original remote writer stopped; independent salvage copy retained"}` with the real TaskRun ID and a nonblank reason of at most 1024 characters. Do not include credentials or command output.
+3. The transaction refuses a live or unbounded execution owner, other active task runs, an enabled task, or a record that is not an eligible `writing`/`unknown` ordinary run. An abandoned active `writing` attempt needs an explicit expired lease as well as the operator confirmation; its stale owner is fenced and its active outcome is settled as failed.
+4. Successful reconciliation changes only the selected unresolved generation to `dirty`, retains the original diagnostics and evidence, and records the authenticated actor/confirmation in the same transaction. It does not mark the backup verified, select an older success, resume the task, or retry the old attempt. Audit persistence failure rolls the transition back.
+5. After all unresolved holds have been individually reconciled, explicitly resume and run a new ordinary backup. Restore remains blocked until a complete new successful generation establishes the current head. Never erase TaskRun evidence or launch another task at the same Remote to bypass a hold.
+
+### 共享 Legacy Rclone 资源与历史锁定
+
+Legacy Rclone 的未决写入按持久化的不可变资源身份划定冲突域，而不是按 TaskID 或当前可编辑的任务配置划定。共享同一 Remote、命名空间和节点证据的任务会一起保持写入锁定；独立资源仍可运行。历史运行如果缺少完整、可验证的资源键，仍按不可推断的节点/资源历史保持 hold，不能从后来编辑的目标路径、节点标签或普通任务字段补猜，也不能用另一个任务绕过。只有确认原写入者及外部 writer 已停止、保留独立副本并完成逐条管理员 reconciliation 后，才可清理该 hold。
+
+## 备份完成事实与健康投影
+
+普通 `command` 或维护任务成功只表示运维命令成功，不是备份完成，不会刷新节点 freshness、健康趋势、置信度或 RPO 报告。可信 freshness 只能来自带不可变执行器快照的 legacy transfer completion，或来自已提交、具备严格 Task/TaskRun/节点血缘与 Provider 证据的 managed RecoveryPoint；pending、warning、失败、恢复和演练运行都不能建立该事实。`imported_baseline` 以及迁移中无法证明的历史只保留为 `unverified` 标记，保留证据引用供调和，但排除在 authoritative freshness、健康统计和恢复点报告之外。
+
+000086/000087 升级前必须停止旧 writer，排空 backup、publication、reconciliation 与相关 worker，并备份数据库和加密密钥；升级按配对迁移顺序执行。000087 会先清除由可变 `Node.last_backup_at` 造成的旧投影，再只用可证明的 committed RecoveryPoint 重建 verified freshness，同时把无法证明的历史保留为 unverified，不得猜测或丢弃。只要新事实或标记已存在，used-down 会拒绝不安全降级；不得通过删除事实、跳过排空或回退到不理解该合同的旧 binary 来绕过门禁。
+
+## 旧版 Rsync 恢复准入
+
+旧版可变同步树不是历史快照。恢复需要当前配置对应的成功备份，以及该次捕获的目录布局、实际选择集合和已验证代次；目录本身、目录内容和单文件分别解释，不能统一给目标补斜杠。排除规则由 Rsync 自身的选择语义决定，不通过放宽校验阈值忽略差异。
+
+恢复在 Core 私有临时目录中隔离复制所选来源，并按持久捕获清单验证暂存文件内容、类型及链接目标；验证完成前不会创建或修改节点目标。传输只读取已验证的暂存副本，不会重新使用可变备份路径。恢复采用内容比较，因此大小和修改时间相同但内容损坏的目标也会修复；不会因此增加删除目标文件的行为。恢复后仍核对 Core 与节点目标证据。暂存需要额外本地空间和读取时间；空间不足、源缺失或校验失败会在目标写入前失败。
+
+新捕获清单使用 v2 字节安全编码（路径、逻辑根和链接目标使用 Base64），分别获取链接名称与目标，并将哈希结果与路径分离；中文、非 UTF-8 字节、换行（含链接目标末尾换行）、反斜杠、字面转义串及链接箭头均保留原始身份。数据库中的逻辑根旁字段也使用版本匹配的编码。已有 v1 清单与原始逻辑根继续按 v1 规则读取，不重写或凭空补证据；旧版本不能读取新 v2 清单，升级前必须排空旧执行进程。
+
+执行历史保留期不是恢复证据有效期：清理保留各任务/节点当前非空代次，包括 dirty/不确定事实，以及被恢复记录或活动演练引用的来源。新运行仍活动时不会淘汰上一代证据，避免尚未真正启动的尝试清除临时 dirty 后丢失最后可信来源。预约与清理在事务中串行核对引用；旧成功不能因较新的最终 dirty 记录被清理而重新获得恢复资格。被替代且无引用的历史仍按保留期清理，物理备份保留策略不变。
+
+升级前的记录不会被自动回填为可信捕获。缺少证据、配置变化或后续写入失败/中断时，旧的成功运行不能为当前树背书，恢复请求会要求新的有效备份。**先隔离保存唯一剩余备份，再决定如何重新备份；不要为了恢复准入覆盖最后一份可用数据。** 本门禁不删除现有文件，也不替代受管 RecoveryPoint 的独立恢复流程。
+
+兼容 Rsync 的恢复取证会读取所选源数据与 Core 目标的校验数据，它独立于策略中的可选备份抽样校验；关闭 `verify_enabled` 不会让缺少证据的代次获得恢复授权。清单超限或取证不可用不会单独阻断普通备份传输：传输完成但无法建立可信代次时，任务会报告警告，且该代次不可用于自动恢复。只读取证期间取消、尚未进入写入尝试的运行不会使先前代次变脏。
 
 ## Restic 精确血缘与安全回退
 
@@ -32,6 +98,8 @@ Rsync 任务默认继续使用传统的可变目标。只有管理员可以从�
 
 - **版本化硬链接树**：在同一受管仓库内复用上一个已提交点的未变更文件。预检必须验证挂载、硬链接、原子提交、容量、inode 和路径安全条件；失败时必须由管理员显式改选完整副本，系统不会自动降级。
 - **版本化完整副本树**：每个点都使用独立文件树，不与前一个点共享 inode。
+
+硬链接树会先传输保持源文件硬链接分组的完整暂存树，再按内容、元数据和 inode 分组兼容性复用上一点的文件；不会使用 `--link-dest` 把上一点的链接关系带入新点。源文件之间新建或断开的硬链接关系必须保留，不兼容的分组保持独立文件。该流程需要容纳完整暂存树的临时空间和传输量，最终提交点仍复用兼容的未变更文件，且不修改上一点。
 
 预检成功后，管理员必须明确选择以下其中一种迁移路径：
 
@@ -163,7 +231,7 @@ Text/OCR/classification 的 Derived 引用、Search postings、excerpt 和 cover
 默认保留模式。按 `retention_days` 清理过期快照或备份目录：
 
 - Restic：`restic forget --keep-within <N>d`
-- Rsync/Rclone：按 `retention_days` 清理旧备份目录
+- Legacy Rsync/Rclone: destructive age-based directory cleanup is disabled; mutable backup bytes and recovery evidence are not disposable historical snapshots.
 
 ### GFS 模式
 
@@ -182,7 +250,7 @@ GFS（Grandfather-Father-Son）按日/周/月/年多级保留快照。
 restic forget --keep-daily <N> --keep-weekly <N> --keep-monthly <N> --keep-yearly <N> --prune
 ```
 
-GFS 模式仅适用于 Restic 执行器。Rsync 和 Rclone 任务按 Simple 模式处理。出现 managed-history latch 后，上述无 tag `forget --prune` 路径会被安全阻止，直到受控生命周期功能接管；不会以删除 snapshot 作为回退或对账手段。
+GFS applies only to Restic. Legacy Rsync/Rclone do not perform destructive Simple-mode cleanup. A managed-history latch blocks untagged `forget --prune` until an admitted lifecycle owns it; rollback and reconciliation never delete snapshots merely to clear a gate.
 
 ### RPO/RTO 目标
 

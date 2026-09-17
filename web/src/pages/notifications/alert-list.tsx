@@ -102,6 +102,24 @@ export function AlertList({
   });
 
   // --- 投递记录面板 ---
+  const getDeliveryStatusMeta = (status: AlertDeliveryRecord["status"]) => {
+    switch (status) {
+      case "sent":
+        return { label: t("notifications.deliverySent"), tone: "success" as const };
+      case "failed":
+        return { label: t("notifications.deliveryFailed"), tone: "destructive" as const };
+      case "retrying":
+        return { label: t("notifications.deliveryRetrying"), tone: "warning" as const };
+      case "sending":
+        return { label: t("notifications.deliverySending"), tone: "info" as const };
+      case "pending":
+        return { label: t("notifications.deliveryPending"), tone: "neutral" as const };
+      case "unknown":
+      default:
+        return { label: t("notifications.deliveryUnknown"), tone: "neutral" as const };
+    }
+  };
+
   const renderDeliveryPanel = (alert: AlertRecord) => {
     const isOpen = deliveryOpenAlertId === alert.id;
     if (!isOpen) return null;
@@ -118,7 +136,7 @@ export function AlertList({
           <p className="text-xs text-muted-foreground">{t("notifications.deliveryLoading")}</p>
         ) : (deliveryMap[alert.id] ?? []).length ? (
           <div className="space-y-2">
-            {(deliveryMap[alert.id] ?? []).some((d) => d.status === "failed") ? (
+            {(deliveryMap[alert.id] ?? []).some((d) => d.status === "failed" || d.status === "retrying") ? (
               <Button
                 size="sm"
                 variant="outline"
@@ -129,49 +147,53 @@ export function AlertList({
                 {t("notifications.resendAllFailed")}
               </Button>
             ) : null}
-            {(deliveryMap[alert.id] ?? []).map((delivery) => (
-              <div key={delivery.id} className="rounded border border-border bg-card px-2 py-1.5 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-medium">
-                    {integrationNameMap.get(delivery.integrationId) ?? delivery.integrationId}
-                  </span>
-                  <Badge tone={delivery.status === "sent" ? "success" : "destructive"}>
-                    {delivery.status === "sent" ? t("notifications.deliverySent") : t("notifications.deliveryFailed")}
-                  </Badge>
+            {(deliveryMap[alert.id] ?? []).map((delivery) => {
+              const statusMeta = getDeliveryStatusMeta(delivery.status);
+              const isRetryable = delivery.status === "failed" || delivery.status === "retrying";
+              return (
+                <div key={delivery.id} className="rounded border border-border bg-card px-2 py-1.5 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium">
+                      {integrationNameMap.get(delivery.integrationId) ?? delivery.integrationId}
+                    </span>
+                    <Badge tone={statusMeta.tone}>
+                      {statusMeta.label}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-muted-foreground">{t("notifications.deliveryTime", { time: delivery.createdAt })}</p>
+                  {delivery.attemptCount != null && (
+                    <p className="mt-0.5 text-muted-foreground">尝试 {delivery.attemptCount}/4</p>
+                  )}
+                  {delivery.nextRetryAt && (
+                    <p className="mt-0.5 text-muted-foreground">
+                      下次重试 {(() => {
+                        const diff = new Date(delivery.nextRetryAt).getTime() - Date.now();
+                        if (diff <= 0) return "即将开始";
+                        const mins = Math.round(diff / 60_000);
+                        return mins < 1 ? "< 1 分钟后" : `${mins} 分钟后`;
+                      })()}
+                    </p>
+                  )}
+                  {delivery.lastError ? (
+                    <p className="mt-0.5 text-destructive truncate max-w-xs" title={delivery.lastError}>
+                      {delivery.lastError.length > 120 ? delivery.lastError.slice(0, 120) + "…" : delivery.lastError}
+                    </p>
+                  ) : null}
+                  {isRetryable ? (
+                    <Button
+                      className="mt-2"
+                      size="sm"
+                      variant="outline"
+                      disabled={retryingDeliveryKey === delivery.id}
+                      onClick={() => onRetryDelivery(alert.id, delivery.id)}
+                    >
+                      {retryingDeliveryKey === delivery.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden="true" />}
+                      {t("notifications.resendNotification")}
+                    </Button>
+                  ) : null}
                 </div>
-                <p className="mt-1 text-muted-foreground">{t("notifications.deliveryTime", { time: delivery.createdAt })}</p>
-                {delivery.attemptCount != null && (
-                  <p className="mt-0.5 text-muted-foreground">尝试 {delivery.attemptCount}/4</p>
-                )}
-                {delivery.nextRetryAt && (
-                  <p className="mt-0.5 text-muted-foreground">
-                    下次重试 {(() => {
-                      const diff = new Date(delivery.nextRetryAt).getTime() - Date.now();
-                      if (diff <= 0) return "即将开始";
-                      const mins = Math.round(diff / 60_000);
-                      return mins < 1 ? "< 1 分钟后" : `${mins} 分钟后`;
-                    })()}
-                  </p>
-                )}
-                {delivery.lastError ? (
-                  <p className="mt-0.5 text-destructive truncate max-w-xs" title={delivery.lastError}>
-                    {delivery.lastError.length > 120 ? delivery.lastError.slice(0, 120) + "…" : delivery.lastError}
-                  </p>
-                ) : null}
-                {delivery.status === "failed" ? (
-                  <Button
-                    className="mt-2"
-                    size="sm"
-                    variant="outline"
-                    disabled={retryingDeliveryKey === delivery.id}
-                    onClick={() => onRetryDelivery(alert.id, delivery.id)}
-                  >
-                    {retryingDeliveryKey === delivery.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden="true" />}
-                    {t("notifications.resendNotification")}
-                  </Button>
-                ) : null}
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">{t("notifications.noDeliveryRecords")}</p>

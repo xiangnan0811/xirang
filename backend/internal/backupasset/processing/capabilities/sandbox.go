@@ -909,7 +909,7 @@ func productionToolchainInventory() toolchainInventory {
 			{Name: "tesseract-ocr-data-chi_sim", Version: "5.5.1-r0", Runtime: true},
 			{Name: "tesseract-ocr-data-eng", Version: "5.5.1-r0", Runtime: true},
 			{Name: "vips-tools", Version: "8.17.3-r1", Runtime: true},
-			{Name: "xz", Version: "5.8.3-r0", Runtime: true},
+			{Name: "xz", Version: "5.8.4-r0", Runtime: true},
 			{Name: "zstd", Version: "1.5.7-r2", Runtime: true},
 		},
 		Components: []toolchainComponent{
@@ -938,7 +938,7 @@ func productionToolchainInventory() toolchainInventory {
 				{ID: "ffmpeg-encoders", Executable: "/usr/bin/ffmpeg", Arguments: []string{"-hide_banner", "-encoders"}, Required: []string{"libx264", "aac", "png"}},
 			}},
 			{ID: "gzip", Revision: "gzip-1.14", Packages: []string{"gzip"}, Assets: []toolchainAsset{{ID: "gzip", Path: "/bin/gzip", Executable: true}}},
-			{ID: "xz", Revision: "xz-5.8.3", Packages: []string{"xz"}, Assets: []toolchainAsset{{ID: "xz", Path: "/usr/bin/xz", Executable: true}}},
+			{ID: "xz", Revision: "xz-5.8.4", Packages: []string{"xz"}, Assets: []toolchainAsset{{ID: "xz", Path: "/usr/bin/xz", Executable: true}}},
 			{ID: "zstd", Revision: "zstd-1.5.7", Packages: []string{"zstd"}, Assets: []toolchainAsset{{ID: "zstd", Path: "/usr/bin/zstd", Executable: true}}},
 			{ID: "builtin-text", Revision: "bounded-text-v1"},
 			{ID: "builtin-archive", Revision: "archive-parser-v1"},

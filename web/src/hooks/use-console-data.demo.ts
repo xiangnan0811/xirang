@@ -82,6 +82,7 @@ export function buildDemoTask(
     rsyncSource: input.rsyncSource ?? policy?.sourcePath,
     rsyncTarget: input.rsyncTarget ?? policy?.targetPath,
     executorType: input.executorType ?? "rsync",
+    revision: String(Date.now()),
     cronSpec: input.cronSpec ?? policy?.cron,
     speedMbps: 0,
     enabled: true
@@ -141,6 +142,7 @@ export function buildDemoBackupTask(
     status: "running",
     progress: 6,
     startedAt: formatTime(new Date().toISOString()),
+    revision: String(Date.now()),
     speedMbps: 96,
     enabled: true
   };

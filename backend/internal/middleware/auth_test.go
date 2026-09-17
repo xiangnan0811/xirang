@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
-
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/model"
 
@@ -41,9 +41,23 @@ func setupAuthHandler(jwtManager *auth.JWTManager, db *gorm.DB) *gin.Engine {
 	return r
 }
 
-// newTestJWTManager 创建用于测试的 JWTManager
+// newTestJWTManager creates a manager with the same durable revocation
+// capability required by the ordinary middleware.
 func newTestJWTManager() *auth.JWTManager {
-	return auth.NewJWTManager("test-secret-at-least-16-chars", 1*time.Hour)
+	return newConfiguredTestJWTManager("test-secret-at-least-16-chars", time.Hour)
+}
+
+func newConfiguredTestJWTManager(secret string, ttl time.Duration) *auth.JWTManager {
+	manager := auth.NewJWTManager(secret, ttl)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		panic(err)
+	}
+	if err := db.AutoMigrate(&model.PendingAuthToken{}, &model.TokenRevocation{}); err != nil {
+		panic(err)
+	}
+	manager.SetDB(db)
+	return manager
 }
 
 // generateTestToken 生成一个有效的测试 token
@@ -160,7 +174,7 @@ func TestAuthMiddleware_InvalidFormat(t *testing.T) {
 
 func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	// 使用极短的 ttl，生成一个马上过期的 token
-	m := auth.NewJWTManager("test-secret-at-least-16-chars", 1*time.Nanosecond)
+	m := newConfiguredTestJWTManager("test-secret-at-least-16-chars", 1*time.Nanosecond)
 	user := model.User{ID: 1, Username: "admin", Role: "admin", TokenVersion: 1}
 	token := generateTestToken(m, user)
 
@@ -179,7 +193,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 func TestAuthMiddleware_InvalidSignature(t *testing.T) {
 	m := newTestJWTManager()
 	// 用另一个 key 的 manager 生成一个 token，然后用第一个 manager 验证
-	otherManager := auth.NewJWTManager("different-secret-at-least-16-chars", 1*time.Hour)
+	otherManager := newConfiguredTestJWTManager("different-secret-at-least-16-chars", 1*time.Hour)
 	user := model.User{ID: 1, Username: "admin", Role: "admin", TokenVersion: 1}
 	token := generateTestToken(otherManager, user)
 
@@ -319,5 +333,81 @@ func TestCurrentRole_NotSet(t *testing.T) {
 	role := CurrentRole(c)
 	if role != "" {
 		t.Errorf("期望未设置时返回空字符串，实际 %q", role)
+	}
+}
+
+func TestAuthMiddlewareDurableLogoutIsSharedAndDatabaseFailureFailsClosed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open shared auth db: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.TokenRevocation{}); err != nil {
+		t.Fatalf("migrate shared auth db: %v", err)
+	}
+	user := model.User{Username: "shared-operator", Role: "operator", TokenVersion: 1}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create shared user: %v", err)
+	}
+
+	managerA := auth.NewJWTManager("shared-middleware-test-secret", time.Hour)
+	managerB := auth.NewJWTManager("shared-middleware-test-secret", time.Hour)
+	managerA.SetDB(db)
+	managerB.SetDB(db)
+	tokenA := generateTestToken(managerA, user)
+	tokenB := generateTestToken(managerB, user)
+	claimsA, err := managerA.ParseToken(tokenA)
+	if err != nil {
+		t.Fatalf("parse token A: %v", err)
+	}
+	if err := managerA.RevokeSession(claimsA.ID, user.ID, claimsA.ExpiresAt.Time); err != nil {
+		t.Fatalf("revoke token A: %v", err)
+	}
+
+	router := setupAuthHandler(managerB, db)
+	router.POST("/test-post", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		token  string
+		want   int
+	}{
+		{name: "revoked GET", method: http.MethodGet, path: "/test", token: tokenA, want: http.StatusUnauthorized},
+		{name: "revoked POST", method: http.MethodPost, path: "/test-post", token: tokenA, want: http.StatusUnauthorized},
+		{name: "other GET", method: http.MethodGet, path: "/test", token: tokenB, want: http.StatusOK},
+		{name: "other POST", method: http.MethodPost, path: "/test-post", token: tokenB, want: http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req.Header.Set("Authorization", "Bearer "+tc.token)
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			if resp.Code != tc.want {
+				t.Fatalf("status=%d want=%d body=%s", resp.Code, tc.want, resp.Body.String())
+			}
+		})
+	}
+
+	failureDSN := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "_failure?mode=memory&cache=shared&_loc=UTC"
+	failureDB, err := gorm.Open(sqlite.Open(failureDSN), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open failure db: %v", err)
+	}
+	if err := failureDB.AutoMigrate(&model.User{}); err != nil {
+		t.Fatalf("migrate failure user db: %v", err)
+	}
+	failureUser := model.User{ID: 9, Username: "failure-operator", Role: "operator", TokenVersion: 1}
+	if err := failureDB.Create(&failureUser).Error; err != nil {
+		t.Fatalf("create failure user: %v", err)
+	}
+	failureManager := auth.NewJWTManager("shared-middleware-test-secret", time.Hour)
+	failureManager.SetDB(failureDB)
+	failureToken := generateTestToken(failureManager, failureUser)
+	failureRouter := setupAuthHandler(failureManager, failureDB)
+	failureResp := authPerformRequest(failureRouter, failureToken)
+	if failureResp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("revocation DB failure status=%d want=%d body=%s", failureResp.Code, http.StatusServiceUnavailable, failureResp.Body.String())
 	}
 }

@@ -19,6 +19,9 @@ import (
 // and a reconstructed manager drains that effect exactly once.
 func TestInterruptedOrdinaryTaskReconstructsAndDrainsDurableEffects(t *testing.T) {
 	db := openManagerTestDB(t)
+	if err := db.AutoMigrate(&model.AlertDelivery{}); err != nil {
+		t.Fatalf("migrate terminal recovery alert deliveries: %v", err)
+	}
 	upstream := seedTaskForManagerTest(t, db)
 	downstream := model.Task{
 		Name:            "task-manager-downstream-recovery",

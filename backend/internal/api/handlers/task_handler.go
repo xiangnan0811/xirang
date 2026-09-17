@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
+	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/credentialaudit"
@@ -136,32 +140,226 @@ type taskRequest struct {
 	CronSpec        string `json:"cron_spec"`
 }
 
+// taskUpdateRequest keeps raw JSON members so omitted fields remain
+// distinguishable from explicit empty/null values. Create requests retain the
+// historical complete task shape above; updates use this separate protocol.
+type taskUpdateRequest struct {
+	ExpectedRevision json.RawMessage `json:"expected_revision"`
+	Name             json.RawMessage `json:"name"`
+	NodeID           json.RawMessage `json:"node_id"`
+	PolicyID         json.RawMessage `json:"policy_id"`
+	DependsOnTaskID  json.RawMessage `json:"depends_on_task_id"`
+	Command          json.RawMessage `json:"command"`
+	RsyncSource      json.RawMessage `json:"rsync_source"`
+	RsyncTarget      json.RawMessage `json:"rsync_target"`
+	ExecutorType     json.RawMessage `json:"executor_type"`
+	CronSpec         json.RawMessage `json:"cron_spec"`
+	ExecutorSettings json.RawMessage `json:"executor_settings"`
+	ExecutorSecrets  json.RawMessage `json:"executor_secrets"`
+}
+
+// TaskUpdateExecutorSettingsSchema describes the optional executor settings
+// accepted by the typed Swagger task update body.
+type TaskUpdateExecutorSettingsSchema struct {
+	ExcludePatterns   []string `json:"exclude_patterns"`
+	RepositoryVersion *int     `json:"repository_version" extensions:"x-nullable"`
+	BandwidthLimit    string   `json:"bandwidth_limit"`
+	Transfers         int      `json:"transfers"`
+}
+
+// TaskUpdateExecutorSecretsSchema describes the optional executor secrets
+// accepted by the typed Swagger task update body.
+type TaskUpdateExecutorSecretsSchema struct {
+	RepositoryPassword string `json:"repository_password" format:"password"`
+}
+
+// TaskUpdateRequestSchema is the typed Swagger body schema for the
+// presence-aware update protocol. Runtime decoding intentionally uses
+// taskUpdateRequest above so omission, explicit empty values, and nullable
+// relationship clears remain distinguishable.
+type TaskUpdateRequestSchema struct {
+	ExpectedRevision string                            `json:"expected_revision" binding:"required" minLength:"1" maxLength:"20" example:"1789344404185193005"`
+	Name             string                            `json:"name"`
+	NodeID           uint                              `json:"node_id"`
+	PolicyID         *uint                             `json:"policy_id" extensions:"x-nullable"`
+	DependsOnTaskID  *uint                             `json:"depends_on_task_id" extensions:"x-nullable"`
+	Command          string                            `json:"command"`
+	RsyncSource      string                            `json:"rsync_source"`
+	RsyncTarget      string                            `json:"rsync_target"`
+	ExecutorType     string                            `json:"executor_type"`
+	CronSpec         string                            `json:"cron_spec"`
+	ExecutorSettings *TaskUpdateExecutorSettingsSchema `json:"executor_settings"`
+	ExecutorSecrets  *TaskUpdateExecutorSecretsSchema  `json:"executor_secrets"`
+}
+
+func parseTaskUpdateRequest(req taskUpdateRequest) (task.UpdateTaskInput, error) {
+	var result task.UpdateTaskInput
+	if len(req.ExpectedRevision) == 0 {
+		return result, fmt.Errorf("expected_revision is required")
+	}
+	var revision string
+	if isJSONNull(req.ExpectedRevision) || json.Unmarshal(req.ExpectedRevision, &revision) != nil {
+		return result, fmt.Errorf("expected_revision must be a string")
+	}
+	result.ExpectedRevision = revision
+
+	var err error
+	result.Name, err = parsePresentTaskString(req.Name, "name")
+	if err != nil {
+		return result, err
+	}
+	result.NodeID, err = parsePresentTaskUint(req.NodeID, "node_id", false)
+	if err != nil {
+		return result, err
+	}
+	result.PolicyID, result.PolicyIDSet, err = parseNullableTaskUint(req.PolicyID, "policy_id")
+	if err != nil {
+		return result, err
+	}
+	result.DependsOnTaskID, result.DependsOnTaskIDSet, err = parseNullableTaskUint(req.DependsOnTaskID, "depends_on_task_id")
+	if err != nil {
+		return result, err
+	}
+	result.Command, err = parsePresentTaskString(req.Command, "command")
+	if err != nil {
+		return result, err
+	}
+	result.RsyncSource, err = parsePresentTaskString(req.RsyncSource, "rsync_source")
+	if err != nil {
+		return result, err
+	}
+	result.RsyncTarget, err = parsePresentTaskString(req.RsyncTarget, "rsync_target")
+	if err != nil {
+		return result, err
+	}
+	result.ExecutorType, err = parsePresentTaskString(req.ExecutorType, "executor_type")
+	if err != nil {
+		return result, err
+	}
+	result.CronSpec, err = parsePresentTaskString(req.CronSpec, "cron_spec")
+	if err != nil {
+		return result, err
+	}
+	if len(req.ExecutorSettings) > 0 {
+		if isJSONNull(req.ExecutorSettings) {
+			return result, fmt.Errorf("executor_settings must be an object")
+		}
+		settings, parseErr := task.ParseExecutorSettingsPatch(req.ExecutorSettings)
+		if parseErr != nil {
+			return result, parseErr
+		}
+		result.ExecutorSettings = &settings
+	}
+	if len(req.ExecutorSecrets) > 0 {
+		if isJSONNull(req.ExecutorSecrets) {
+			return result, fmt.Errorf("executor_secrets must be an object")
+		}
+		secrets, parseErr := task.ParseExecutorSecretsPatch(req.ExecutorSecrets)
+		if parseErr != nil {
+			return result, parseErr
+		}
+		result.ExecutorSecrets = &secrets
+	}
+	return result, nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+func parsePresentTaskString(raw json.RawMessage, field string) (*string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if isJSONNull(raw) {
+		return nil, fmt.Errorf("%s must not be null", field)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%s must be a string", field)
+	}
+	return &value, nil
+}
+
+func parsePresentTaskUint(raw json.RawMessage, field string, allowNull bool) (*uint, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if isJSONNull(raw) {
+		if allowNull {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s must not be null", field)
+	}
+	var value uint
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%s must be an integer", field)
+	}
+	return &value, nil
+}
+
+func parseNullableTaskUint(raw json.RawMessage, field string) (*uint, bool, error) {
+	if len(raw) == 0 {
+		return nil, false, nil
+	}
+	if isJSONNull(raw) {
+		return nil, true, nil
+	}
+	value, err := parsePresentTaskUint(raw, field, false)
+	return value, true, err
+}
+
+type taskPolicyResponse struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+}
+
+func taskPolicyResponseFor(policy *model.Policy) *taskPolicyResponse {
+	if policy == nil {
+		return nil
+	}
+	return &taskPolicyResponse{ID: policy.ID, Name: policy.Name}
+}
+
 func sanitizeTaskForResponse(taskEntity model.Task) model.Task {
 	taskEntity.LastError = task.SanitizeRuntimeEvidenceForRead(taskEntity.LastError)
-	if taskEntity.Policy != nil {
-		policyCopy := *taskEntity.Policy
-		policyCopy.PreHook = ""
-		policyCopy.PostHook = ""
-		taskEntity.Policy = &policyCopy
-	}
+	// Policy is projected explicitly by taskResponse below. Never let the
+	// persistence model's decrypted hooks/drill scripts cross this boundary.
+	taskEntity.Policy = nil
 	return taskEntity
 }
 
-// taskResponse embeds the stable Task JSON shape and adds only the explicit
-// safe Rsync publication projection. It must never contain binding, root,
-// marker, manifest, fence, command, or credential data.
+// taskResponse embeds the stable Task JSON shape and adds only explicit safe
+// nested Policy, executor settings/status, revision, and publication
+// projections. It never serializes the encrypted executor_config.
 type taskResponse struct {
 	model.Task
-	RsyncPublication  *backupasset.RsyncVersioningSummary   `json:"rsync_publication,omitempty"`
-	RclonePublication *backupasset.RclonePublicationSummary `json:"rclone_publication,omitempty"`
+	Policy                    *taskPolicyResponse                   `json:"policy,omitempty"`
+	Revision                  string                                `json:"revision"`
+	ExecutorSettings          any                                   `json:"executor_settings"`
+	ExecutorSecretsConfigured any                                   `json:"executor_secrets_configured"`
+	RsyncPublication          *backupasset.RsyncVersioningSummary   `json:"rsync_publication,omitempty"`
+	RclonePublication         *backupasset.RclonePublicationSummary `json:"rclone_publication,omitempty"`
 }
 
 func (h *TaskHandler) taskResponse(ctx context.Context, taskEntity model.Task) taskResponse {
-	response := taskResponse{Task: sanitizeTaskForResponse(taskEntity)}
+	policy := taskPolicyResponseFor(taskEntity.Policy)
+	response := taskResponse{
+		Task:     sanitizeTaskForResponse(taskEntity),
+		Policy:   policy,
+		Revision: task.TaskRevision(taskEntity),
+	}
+	if settings, err := task.ProjectExecutorSettings(taskEntity.ExecutorType, taskEntity.ExecutorConfig); err == nil {
+		response.ExecutorSettings = settings
+	}
+	if configured, err := task.ProjectExecutorSecretsConfigured(taskEntity.ExecutorConfig); err == nil {
+		response.ExecutorSecretsConfigured = configured
+	}
 	if h == nil {
 		return response
 	}
 	executorType := strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType))
+
 	if executorType == "rsync" && h.rsyncVersioning != nil {
 		summary, err := h.rsyncVersioning.RsyncVersioningSummary(ctx, taskEntity.ID)
 		if err != nil || summary.Validate() != nil {
@@ -206,7 +404,7 @@ func (h *TaskHandler) taskResponses(ctx context.Context, tasks []model.Task) []t
 // @Param        node_id    query     int     false  "节点 ID 过滤"
 // @Param        policy_id  query     int     false  "策略 ID 过滤"
 // @Param        keyword    query     string  false  "关键字模糊搜索"
-// @Success      200  {object}  handlers.PaginatedResponse{data=[]model.Task}
+// @Success      200  {object}  handlers.PaginatedResponse{data=[]taskResponse}
 // @Failure      401  {object}  handlers.Response
 // @Router       /tasks [get]
 func (h *TaskHandler) List(c *gin.Context) {
@@ -315,7 +513,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 // @Security     Bearer
 // @Produce      json
 // @Param        id   path      int  true  "任务 ID"
-// @Success      200  {object}  handlers.Response{data=model.Task}
+// @Success      200  {object}  handlers.Response{data=taskResponse}
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
 // @Router       /tasks/{id} [get]
@@ -350,7 +548,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        body  body      taskRequest  true  "创建任务请求"
-// @Success      201   {object}  handlers.Response{data=model.Task}
+// @Success      201   {object}  handlers.Response{data=taskResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      403   {object}  handlers.Response
@@ -401,24 +599,58 @@ func (h *TaskHandler) Create(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        id    path      int          true  "任务 ID"
-// @Param        body  body      taskRequest  true  "更新任务请求"
-// @Success      200   {object}  handlers.Response{data=model.Task}
+// @Param        body  body      TaskUpdateRequestSchema  true  "更新任务请求"
+// @Success      200   {object}  handlers.Response{data=taskResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
+// @Failure      503   {object}  handlers.Response
 // @Router       /tasks/{id} [put]
 func (h *TaskHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
-	var req taskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var req taskUpdateRequest
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	input, err := parseTaskUpdateRequest(req)
+	if err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
 
-	if allowed, err := authorizeNodeOwnership(c, h.db, req.NodeID); err != nil {
+	// An omitted node_id retains the locked task's current node. Authorization
+	// still runs before the mutation, while the service revalidates all
+	// references against its transaction snapshot.
+	nodeID := uint(0)
+	if input.NodeID != nil {
+		nodeID = *input.NodeID
+	} else {
+		var current struct {
+			NodeID uint `gorm:"column:node_id"`
+		}
+		if result := h.db.Model(&model.Task{}).Select("node_id").Where("id = ?", id).Limit(1).Find(&current); result.Error != nil {
+			respondInternalError(c, result.Error)
+			return
+		} else if result.RowsAffected != 1 {
+			respondNotFound(c, "任务不存在")
+			return
+		}
+		nodeID = current.NodeID
+	}
+	if allowed, err := authorizeNodeOwnership(c, h.db, nodeID); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
@@ -426,21 +658,18 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
-	taskEntity, err := h.service().UpdateTask(c.Request.Context(), id, task.CreateTaskInput{
-		Name:            req.Name,
-		NodeID:          req.NodeID,
-		PolicyID:        req.PolicyID,
-		DependsOnTaskID: req.DependsOnTaskID,
-		Command:         req.Command,
-		RsyncSource:     req.RsyncSource,
-		RsyncTarget:     req.RsyncTarget,
-		ExecutorType:    req.ExecutorType,
-		ExecutorConfig:  req.ExecutorConfig,
-		CronSpec:        req.CronSpec,
-	})
+	taskEntity, err := h.service().UpdateTask(c.Request.Context(), id, input)
 	if err != nil {
 		if errors.Is(err, task.ErrTaskArchived) {
 			respondConflict(c, "任务已归档，无法修改")
+			return
+		}
+		if errors.Is(err, task.ErrTaskRevisionConflict) {
+			respondConflict(c, "任务已被其他请求修改，请刷新后重试")
+			return
+		}
+		if errors.Is(err, task.ErrTaskScheduleSyncUnavailable) {
+			respondServiceUnavailable(c, "任务配置已保存，但定时调度暂不可用；服务恢复后将自动对账恢复，无需重复编辑")
 			return
 		}
 		if task.IsTaskValidationError(err) {
@@ -555,6 +784,65 @@ func (h *TaskHandler) Cancel(c *gin.Context) {
 		return
 	}
 	respondMessage(c, "canceled")
+}
+
+// ReconcileLegacyRcloneWriteRequest records an explicit operator confirmation;
+// identity and authorization are taken only from the authenticated request.
+type ReconcileLegacyRcloneWriteRequest struct {
+	TaskRunID     uint   `json:"task_run_id" binding:"required"`
+	RemoteStopped bool   `json:"remote_stopped" binding:"required"`
+	Reason        string `json:"reason" binding:"required,max=1024"`
+}
+
+// ReconcileLegacyRcloneWrite acknowledges remote quiescence, not backup validity.
+// @Summary      协调旧版 Rclone 未知写入
+// @Description  管理员确认远端已停止后，将暂停任务的指定 writing/unknown 代次标记为 dirty；不恢复调度、不执行备份、不放行旧代次恢复。
+// @Tags         tasks
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path  int  true  "任务 ID"
+// @Param        body  body  handlers.ReconcileLegacyRcloneWriteRequest  true  "明确的远端停止确认与原因"
+// @Success      200   {object} handlers.Response
+// @Failure      400   {object} handlers.Response
+// @Failure      401   {object} handlers.Response
+// @Failure      403   {object} handlers.Response
+// @Failure      404   {object} handlers.Response
+// @Failure      409   {object} handlers.Response
+// @Failure      500   {object} handlers.Response
+// @Router       /tasks/{id}/reconcile-legacy-rclone [post]
+func (h *TaskHandler) ReconcileLegacyRcloneWrite(c *gin.Context) {
+	if middleware.CurrentRole(c) != "admin" || middleware.CurrentUserID(c) == 0 {
+		respondForbidden(c, "仅管理员可确认远端写入已停止")
+		return
+	}
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var req ReconcileLegacyRcloneWriteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "需提供执行记录 ID、明确的远端停止确认和不超过 1024 字符的原因")
+		return
+	}
+	err := task.ReconcileLegacyRcloneWrite(c.Request.Context(), h.db, task.LegacyRcloneReconcileRequest{
+		TaskID: id, TaskRunID: req.TaskRunID, RemoteStopped: req.RemoteStopped, Reason: req.Reason,
+		Actor: credentialaudit.FromGin(c, credentialaudit.Event{}),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, apperr.ErrValidation):
+			respondBadRequest(c, err.Error())
+		case errors.Is(err, apperr.ErrNotFound):
+			respondNotFound(c, "任务或执行记录不存在")
+		case errors.Is(err, apperr.ErrConflict):
+			respondConflict(c, err.Error())
+		default:
+			respondInternalError(c, err)
+		}
+		return
+	}
+	respondMessage(c, "已确认远端停止；任务保持暂停，需完成新备份后才能恢复")
 }
 
 // Pause 暂停任务调度。
