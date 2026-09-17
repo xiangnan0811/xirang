@@ -3,7 +3,7 @@
   "name": "backup-assets-release-acceptance",
   "title": "备份资产发布验收",
   "description": "统一承接已交付备份修复的真实数据验收：先核实当前部署，再验证目录、搜索、授权、传输与内容预览；节点日志代码规划独立，生产恢复另行验收。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": "backup-assets",
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "weibo",
   "assignee": "weibo",
   "createdAt": "2026-08-21",
-  "completedAt": null,
+  "completedAt": "2026-09-17",
   "branch": "docs/backup-assets-v05516-acceptance",
   "base_branch": "main",
   "worktree_path": null,
@@ -32,9 +32,9 @@
   ],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [
-    ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-console-runbook.md",
-    ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-real-data-acceptance.md",
-    ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v05516-real-data-acceptance.md"
+    ".trellis/tasks/archive/2026-09/08-21-backup-assets-release-acceptance/research/v0504-console-runbook.md",
+    ".trellis/tasks/archive/2026-09/08-21-backup-assets-release-acceptance/research/v0504-real-data-acceptance.md",
+    ".trellis/tasks/archive/2026-09/08-21-backup-assets-release-acceptance/research/v05516-real-data-acceptance.md"
   ],
   "notes": "2026-09-17 continuation: v0.55.16 released with required CI and registry verification; user upgraded and declined additional backup. Task 13 search/preview pass by user report; previously indexing tasks now preview and no current preview failure is reported. current functional acceptance is ready for archival with explicit health-probe/log-audit limitations; see research/v05516-real-data-acceptance.md. Parent stays open; preserve accepted node-log settings. No new task or reopened child.",
   "meta": {
@@ -70,7 +70,7 @@
       "production_verified_this_session": false,
       "next_action": "Retain as the single owner of outstanding real-data production acceptance from ten delivered repair tasks. Current NAS version, enabled state and collectors were not inspected. Rebaseline before any live steps."
     },
-    "parent_archive": "forbidden_until_current_acceptance_closes",
+    "parent_archive": "permitted_current_acceptance_closed",
     "production_state": "v0.55.16_functional_acceptance_ready_for_archive",
     "current_acceptance": {
       "date": "2026-09-17",
