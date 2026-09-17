@@ -34,7 +34,7 @@ import { useConsoleData } from "@/hooks/use-console-data";
 import { apiClient } from "@/lib/api/client";
 import { CommandPaletteProvider } from "@/context/command-palette-context";
 import { useCommandPalette } from "@/context/command-palette-context.hooks";
-import { CommandPalette } from "@/components/ui/command-palette";
+import { LazyCommandPalette } from "@/components/ui/lazy-command-palette";
 
 function AnimatedOutlet() {
   const location = useLocation();
@@ -341,7 +341,7 @@ function AppShellInner() {
         <SetupWizard />
       </Suspense>
 
-      <CommandPalette />
+      <LazyCommandPalette />
     </div>
   );
 }
