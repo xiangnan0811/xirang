@@ -315,10 +315,10 @@ func TestCatalogGenerationGCSkipsRestrictedGenerationButReclaimsOthers(t *testin
 	if entries := fixture.catalogEntryCount(t, restricted.ID); entries != 1 {
 		t.Fatalf("restricted generation lost entries=%d", entries)
 	}
-	// With only the restricted generation left the pass deletes nothing and
-	// reports why, instead of erroring on the foreign key.
+	// The restricted generation stays out of the candidate query, so a later
+	// pass deletes nothing and does not increment skipped-restricted.
 	later, err := gc.Collect(context.Background())
-	if err != nil || later.DeletedGenerations != 0 || later.SkippedRestricted != 1 {
+	if err != nil || later.DeletedGenerations != 0 || later.SkippedRestricted != 0 {
 		t.Fatalf("repeated restricted pass result=%+v err=%v", later, err)
 	}
 	if ids := fixture.generationIDs(t); len(ids) != 2 {

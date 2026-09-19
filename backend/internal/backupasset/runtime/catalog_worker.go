@@ -380,9 +380,7 @@ func (worker *CatalogWorker) adjustActiveBuilds(delta int) {
 }
 
 // collectGenerations runs one bounded reclamation pass. Failures are logged and
-// counted but never stop the scan: a generation the collector cannot finish is
-// retried by the next scan, so the worker never stalls and Catalog builds are
-// never blocked by reclamation.
+// do not fail the scan; the next scan retries any unfinished generation.
 func (worker *CatalogWorker) collectGenerations(ctx context.Context) {
 	if worker == nil || worker.gc == nil || worker.metrics == nil {
 		return

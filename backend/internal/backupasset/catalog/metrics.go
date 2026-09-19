@@ -129,7 +129,7 @@ func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics,
 		}),
 		gcSkippedRestricted: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "xirang_backup_asset_catalog_gc_skipped_restricted_total",
-			Help: "Total Catalog generations retained because RESTRICT child rows still reference them.",
+			Help: "Catalog generations skipped during reclamation because a RESTRICT child appeared after candidate selection.",
 		}),
 	}
 	for _, collector := range []prometheus.Collector{
@@ -212,8 +212,8 @@ func (metrics *PrometheusMetrics) AddGCDeletedGenerations(count int) {
 	}
 }
 
-// AddGCSkippedRestricted counts Catalog generations retained because a RESTRICT
-// child row still references them. It carries no point, path, or locator label.
+// AddGCSkippedRestricted counts generations skipped this pass after a RESTRICT
+// child appeared between candidate selection and delete.
 func (metrics *PrometheusMetrics) AddGCSkippedRestricted(count int) {
 	if metrics != nil && count > 0 {
 		metrics.gcSkippedRestricted.Add(float64(count))

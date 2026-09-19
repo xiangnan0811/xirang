@@ -14,9 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Bounded Catalog generation reclamation. Retention here is a product
-// invariant, not a tunable: the first version uses fixed constants so the
-// protection set cannot drift with configuration.
+// Reclamation keeps a fixed protection set; do not add a retain setting.
 const (
 	// catalogGCMaxGenerationsPerScan deletes at most one generation per scan.
 	// A single generation can own millions of batched rows, so reclaiming more
@@ -54,11 +52,7 @@ type CatalogGCResult struct {
 	SkippedRestricted  int
 }
 
-// CatalogGenerationGC reclaims Catalog generations and the Search projections
-// they own, in bounded batches. It deliberately lives outside
-// backupasset/retention: the recovery-point purge path owns its own
-// lease/admission protocol, while this collector runs from the Catalog worker so
-// it still reclaims space while the backup-asset feature is disabled.
+// CatalogGenerationGC reclaims non-protected Catalog generations in bounded batches.
 type CatalogGenerationGC struct {
 	db  *gorm.DB
 	now func() time.Time
@@ -79,10 +73,8 @@ type catalogGCCandidate struct {
 	RecoveryPointID string
 }
 
-// Collect reclaims at most one non-protected generation per scan, in the order
-// Search payload, Search generation rows, catalog entries, then the generation
-// row. A generation whose payload exceeds the per-scan budget keeps its row and
-// is resumed by the next scan.
+// Collect reclaims at most one generation per scan. A zero delete means the
+// generation row was left for the next scan to resume.
 func (gc *CatalogGenerationGC) Collect(ctx context.Context) (CatalogGCResult, error) {
 	var result CatalogGCResult
 	if gc == nil || gc.db == nil {
@@ -94,7 +86,7 @@ func (gc *CatalogGenerationGC) Collect(ctx context.Context) (CatalogGCResult, er
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	candidates, err := gc.reclaimableCandidates(ctx, true)
+	candidates, err := gc.reclaimableCandidates(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -127,42 +119,10 @@ func (gc *CatalogGenerationGC) Collect(ctx context.Context) (CatalogGCResult, er
 			return result, nil
 		}
 	}
-	// Nothing was reclaimable. Report the generations RESTRICT children still
-	// pin, so an operator can see why reclamation is being held back.
-	if err := gc.countRestrictedCandidates(ctx, &result); err != nil {
-		return result, err
-	}
 	return result, nil
 }
 
-// countRestrictedCandidates records how many otherwise-reclaimable generations
-// are retained only because a RESTRICT child still references them.
-func (gc *CatalogGenerationGC) countRestrictedCandidates(ctx context.Context, result *CatalogGCResult) error {
-	candidates, err := gc.reclaimableCandidates(ctx, false)
-	if err != nil {
-		return err
-	}
-	for _, candidate := range candidates {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		restricted, err := gc.restrictedReferences(ctx, candidate)
-		if err != nil {
-			return err
-		}
-		if restricted {
-			result.SkippedRestricted++
-		}
-	}
-	return nil
-}
-
-// reclaimableCandidates lists generations outside the protection set, oldest
-// first: not active, not building, on a point with no live build/index lease,
-// not the latest generation, and not within the most recent failure evidence.
-// When excludeRestricted is set it also omits generations a RESTRICT child still
-// references, which is what lets reclamation always make progress.
-func (gc *CatalogGenerationGC) reclaimableCandidates(ctx context.Context, excludeRestricted bool) ([]catalogGCCandidate, error) {
+func (gc *CatalogGenerationGC) reclaimableCandidates(ctx context.Context) ([]catalogGCCandidate, error) {
 	now := gc.now().UTC()
 	failureStates := []string{string(catalog.GenerationFailed), string(catalog.GenerationPartial)}
 	query := gc.db.WithContext(ctx).Table("catalog_generations AS generations").
@@ -188,10 +148,8 @@ func (gc *CatalogGenerationGC) reclaimableCandidates(ctx context.Context, exclud
 			SELECT COUNT(*) FROM catalog_generations AS recent
 			WHERE recent.recovery_point_id = generations.recovery_point_id
 			  AND recent.state IN ? AND recent.generation > generations.generation
-		) >= ?`, failureStates, failureStates, catalogGCRecentFailureEvidence)
-	if excludeRestricted {
-		query = query.Where(restrictedGuardSQL())
-	}
+		) >= ?`, failureStates, failureStates, catalogGCRecentFailureEvidence).
+		Where(restrictedGuardSQL())
 	var candidates []catalogGCCandidate
 	if err := query.
 		Order("generations.updated_at ASC, generations.id ASC").
@@ -202,12 +160,6 @@ func (gc *CatalogGenerationGC) reclaimableCandidates(ctx context.Context, exclud
 	return candidates, nil
 }
 
-// restrictedTables are the children whose foreign key to catalog_entries is ON
-// DELETE RESTRICT. Deleting a generation they reference would abort on a
-// foreign-key error, so the generation is skipped instead. This is the complete
-// set of tables that carry a catalog_generation_id and reference catalog_entries
-// with RESTRICT; backup_asset_recovery_grants is deliberately absent because it
-// has no catalog_generation_id column and cannot reference a generation.
 func restrictedTables() []string {
 	return []string{
 		"backup_asset_delivery_grants",
@@ -218,9 +170,7 @@ func restrictedTables() []string {
 	}
 }
 
-// restrictedGuardSQL excludes generations any RESTRICT child still references.
-// It is applied to the reclamation query, not only checked afterwards, so a
-// permanently referenced prefix of old generations cannot stall reclamation.
+// restrictedGuardSQL keeps a permanently referenced prefix from stalling GC.
 func restrictedGuardSQL() string {
 	clauses := make([]string, 0, len(restrictedTables()))
 	for _, table := range restrictedTables() {
@@ -245,10 +195,6 @@ func (gc *CatalogGenerationGC) restrictedReferences(ctx context.Context, candida
 	return false, nil
 }
 
-// reclaimGeneration clears one generation's Search payload and catalog entries
-// within the per-scan budget and then deletes its row. It returns the number of
-// generations deleted, which is zero when the budget ran out or the row is no
-// longer reclaimable; either way the next scan re-evaluates it.
 func (gc *CatalogGenerationGC) reclaimGeneration(ctx context.Context, candidate catalogGCCandidate) (int, error) {
 	for batches := 0; ; batches++ {
 		if err := ctx.Err(); err != nil {
