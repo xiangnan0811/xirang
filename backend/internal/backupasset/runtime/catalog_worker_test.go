@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +25,7 @@ func TestCatalogWorkerBoundsConcurrencySerializesRepositoriesAndKeepsFairness(t 
 		{RepositoryID: catalogWorkerID('c'), RecoveryPointID: catalogWorkerID('4')},
 	})
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: foundation, Backend: backend, Metrics: catalog.NoopMetrics{},
 		Now: func() time.Time { return time.Date(2026, 7, 18, 2, 0, 0, 0, time.UTC) },
 	})
@@ -65,8 +67,10 @@ func TestCatalogWorkerStartupIsAsyncPeriodicAndDynamicallyDisabled(t *testing.T)
 	backend := newCatalogWorkerBackendFake(nil)
 	ticks := make(chan time.Time, 2)
 	afterCalled := make(chan time.Duration, 2)
-	metrics := &catalogWorkerMetricsFake{scans: make(chan catalog.MetricScanOutcome, 4)}
+	metrics := &catalogWorkerMetricsFake{scans: make(chan catalog.MetricScanOutcome, 4), storage: make(chan catalog.StorageObservation, 4)}
+	gc := newCatalogWorkerGCFake()
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         gc,
 		Foundation: foundation, Backend: backend, Metrics: metrics,
 		After: func(duration time.Duration) <-chan time.Time {
 			afterCalled <- duration
@@ -94,13 +98,26 @@ func TestCatalogWorkerStartupIsAsyncPeriodicAndDynamicallyDisabled(t *testing.T)
 	if outcome := <-metrics.scans; outcome != catalog.MetricScanSuccess {
 		t.Fatalf("startup scan outcome=%q", outcome)
 	}
+	if gc.callCount() != 1 {
+		t.Fatalf("enabled scan reclamation calls=%d want 1", gc.callCount())
+	}
 	settings["backup_assets.enabled"] = "false"
 	ticks <- time.Now()
 	if outcome := <-metrics.scans; outcome != catalog.MetricScanDisabled {
 		t.Fatalf("disabled scan outcome=%q", outcome)
 	}
-	if backend.listCallCount() != 1 || backend.reconcileCallCount() != 1 {
-		t.Fatalf("disabled scan touched backend: list=%d reconcile=%d", backend.listCallCount(), backend.reconcileCallCount())
+	// A disabled scan still reclaims generations and refreshes the storage
+	// gauges, but must never schedule Catalog candidates or builds.
+	if gc.callCount() != 2 {
+		t.Fatalf("disabled scan reclamation calls=%d want 2", gc.callCount())
+	}
+	if metrics.storageObservationCount() < 2 {
+		t.Fatalf("disabled scan storage observations=%d want at least 2", metrics.storageObservationCount())
+	}
+	if backend.listCallCount() != 1 || backend.reconcileCallCount() != 1 ||
+		backend.buildCallCount() != 0 || backend.maximumActive() != 0 {
+		t.Fatalf("disabled scan scheduled Catalog work: list=%d reconcile=%d builds=%d",
+			backend.listCallCount(), backend.reconcileCallCount(), backend.buildCallCount())
 	}
 	cancel()
 	select {
@@ -132,6 +149,7 @@ func TestCatalogWorkerWakeInterruptsLongPeriodicWaitAndCoalesces(t *testing.T) {
 		releaseAfterOnce.Do(func() { close(afterRelease) })
 	}
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
 		After: after,
 	})
@@ -180,6 +198,7 @@ func TestCatalogWorkerWakeInterruptsLongPeriodicWaitAndCoalesces(t *testing.T) {
 
 func TestCatalogWorkerTryWakeNeverBlocksWhenQueueIsSaturated(t *testing.T) {
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: newCatalogWorkerBackendFake(nil), Metrics: catalog.NoopMetrics{},
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
@@ -205,6 +224,7 @@ func TestCatalogWorkerTryWakeNeverBlocksWhenQueueIsSaturated(t *testing.T) {
 func TestCatalogWorkerWakeDuringScanRemainsPending(t *testing.T) {
 	backend := newCatalogWorkerBackendFake([]catalog.BuildCandidate{{RepositoryID: catalogWorkerID('a'), RecoveryPointID: catalogWorkerID('1')}})
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
@@ -229,6 +249,7 @@ func TestCatalogWorkerOverduePeriodicPassWinsOverSustainedWake(t *testing.T) {
 	ticks := make(chan time.Time)
 	afterCalled := make(chan time.Duration, 4)
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
 		After: func(duration time.Duration) <-chan time.Time {
 			afterCalled <- duration
@@ -272,6 +293,7 @@ func TestCatalogWorkerOverduePeriodicPassWinsOverSustainedWake(t *testing.T) {
 
 func TestCatalogWorkerChoosesDuePeriodicWhenScanCompletionAndTimerAreReadyTogether(t *testing.T) {
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: newCatalogWorkerBackendFake(nil), Metrics: catalog.NoopMetrics{},
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
@@ -299,6 +321,7 @@ func TestCatalogWorkerChoosesDuePeriodicWhenScanCompletionAndTimerAreReadyTogeth
 func TestCatalogWorkerPreRunWakeFoldsIntoInitialPass(t *testing.T) {
 	backend := newCatalogWorkerBackendFake(nil)
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
@@ -326,6 +349,7 @@ func TestCatalogWorkerShutdownRevokesCancelsAndBoundedlyJoins(t *testing.T) {
 	backend.ignoreCancellation = true
 	metrics := &catalogWorkerMetricsFake{scans: make(chan catalog.MetricScanOutcome, 4)}
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
@@ -363,6 +387,7 @@ func TestCatalogWorkerShutdownRevokesCancelsAndBoundedlyJoins(t *testing.T) {
 	stuckBackend := newCatalogWorkerBackendFake([]catalog.BuildCandidate{{RepositoryID: catalogWorkerID('b'), RecoveryPointID: catalogWorkerID('2')}})
 	stuckBackend.ignoreCancellation = true
 	stuckWorker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: stuckBackend, Metrics: catalog.NoopMetrics{},
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
@@ -383,6 +408,7 @@ func TestCatalogWorkerActiveBuildGaugeCannotPublishStaleCountAfterJoin(t *testin
 	backend := newCatalogWorkerBackendFake(nil)
 	metrics := newOrderedCatalogWorkerMetricsFake()
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
 	})
 	if err != nil {
@@ -448,6 +474,37 @@ func TestCatalogRetryDelayIsDeterministicBoundedAndResets(t *testing.T) {
 	}
 }
 
+// TestCatalogWorkerPublishesReclamationOutcomes proves one scan publishes both
+// reclamation counters from the collector's result, on the disabled path too, so
+// an operator can see reclaim progress while the feature is off.
+func TestCatalogWorkerPublishesReclamationOutcomes(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			gc := newCatalogWorkerGCFake()
+			gc.result = CatalogGCResult{DeletedGenerations: 2, SkippedRestricted: 3}
+			metrics := &catalogWorkerMetricsFake{scans: make(chan catalog.MetricScanOutcome, 4)}
+			worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+				GC:         gc,
+				Foundation: workerFoundation(enabled), Backend: newCatalogWorkerBackendFake(nil), Metrics: metrics,
+				After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := worker.runScan(context.Background()); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			deleted, skipped := metrics.gcCounts()
+			if deleted != 2 || skipped != 3 {
+				t.Fatalf("reclamation counters deleted=%d skipped=%d want 2/3", deleted, skipped)
+			}
+			if gc.callCount() != 1 {
+				t.Fatalf("reclamation calls=%d want 1", gc.callCount())
+			}
+		})
+	}
+}
+
 // TestCatalogWorkerCountsRebuildNotRequiredAsSkipped proves the Build
 // short-circuit is a successful, non-failing scan outcome: the pass still
 // succeeds and the build is recorded as skipped, never as complete or failed.
@@ -460,6 +517,7 @@ func TestCatalogWorkerCountsRebuildNotRequiredAsSkipped(t *testing.T) {
 		scans: make(chan catalog.MetricScanOutcome, 4), builds: make(chan catalog.MetricBuildOutcome, 4),
 	}
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
@@ -494,10 +552,10 @@ func TestCatalogWorkerCountsRebuildNotRequiredAsSkipped(t *testing.T) {
 	}
 }
 
-// TestCatalogWorkerCollectsStorageFactsOncePerEnabledScan proves the scan-end
-// storage aggregate is published on a completed scan and, matching the existing
-// Search contract, that a disabled scan touches the backend not at all.
-func TestCatalogWorkerCollectsStorageFactsOncePerEnabledScan(t *testing.T) {
+// TestCatalogWorkerStorageFactsFollowBothScanOutcomes proves the scan-end
+// storage aggregate is published on a completed scan and on a disabled scan,
+// while a disabled scan still schedules no Catalog candidate or build.
+func TestCatalogWorkerStorageFactsFollowBothScanOutcomes(t *testing.T) {
 	backend := newCatalogWorkerBackendFake(nil)
 	backend.storage = catalog.StorageObservation{
 		GenerationsByState:     map[string]int64{string(catalog.GenerationComplete): 2},
@@ -508,6 +566,7 @@ func TestCatalogWorkerCollectsStorageFactsOncePerEnabledScan(t *testing.T) {
 		storage: make(chan catalog.StorageObservation, 4),
 	}
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         newCatalogWorkerGCFake(),
 		Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
@@ -531,8 +590,14 @@ func TestCatalogWorkerCollectsStorageFactsOncePerEnabledScan(t *testing.T) {
 	}
 
 	disabledBackend := newCatalogWorkerBackendFake(nil)
-	disabledMetrics := &catalogWorkerMetricsFake{scans: make(chan catalog.MetricScanOutcome, 4)}
+	disabledBackend.storage = catalog.StorageObservation{EntryCount: 7}
+	disabledGC := newCatalogWorkerGCFake()
+	disabledMetrics := &catalogWorkerMetricsFake{
+		scans:   make(chan catalog.MetricScanOutcome, 4),
+		storage: make(chan catalog.StorageObservation, 4),
+	}
 	disabledWorker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC:         disabledGC,
 		Foundation: workerFoundation(false), Backend: disabledBackend, Metrics: disabledMetrics,
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
@@ -542,8 +607,24 @@ func TestCatalogWorkerCollectsStorageFactsOncePerEnabledScan(t *testing.T) {
 	if err := disabledWorker.runScan(context.Background()); err != nil {
 		t.Fatalf("disabled scan: %v", err)
 	}
-	if disabledBackend.storageCallCount() != 0 {
-		t.Fatalf("disabled scan touched the backend for storage metrics")
+	select {
+	case observation := <-disabledMetrics.storage:
+		if observation.EntryCount != 7 {
+			t.Fatalf("disabled storage observation=%+v", observation)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("disabled scan did not publish storage facts")
+	}
+	if disabledBackend.storageCallCount() != 1 {
+		t.Fatalf("disabled storage collection calls=%d want 1", disabledBackend.storageCallCount())
+	}
+	if disabledGC.callCount() != 1 {
+		t.Fatalf("disabled reclamation calls=%d want 1", disabledGC.callCount())
+	}
+	if disabledBackend.listCallCount() != 0 || disabledBackend.buildCallCount() != 0 ||
+		disabledBackend.reconcileCallCount() != 0 {
+		t.Fatalf("disabled scan scheduled Catalog work: list=%d builds=%d reconcile=%d",
+			disabledBackend.listCallCount(), disabledBackend.buildCallCount(), disabledBackend.reconcileCallCount())
 	}
 }
 
@@ -559,6 +640,7 @@ type catalogWorkerBackendFake struct {
 	builds             chan *catalogWorkerBuildCall
 	reconcileCalls     int
 	listCalls          int
+	buildCalls         int
 	revokeCalls        int
 	storageCalls       int
 	storageErr         error
@@ -602,6 +684,7 @@ func (backend *catalogWorkerBackendFake) Build(ctx context.Context, request cata
 	}
 	backend.mu.Lock()
 	backend.active++
+	backend.buildCalls++
 	if backend.active > backend.maxActive {
 		backend.maxActive = backend.active
 	}
@@ -646,6 +729,12 @@ func (backend *catalogWorkerBackendFake) storageCallCount() int {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
 	return backend.storageCalls
+}
+
+func (backend *catalogWorkerBackendFake) buildCallCount() int {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	return backend.buildCalls
 }
 
 func (backend *catalogWorkerBackendFake) RevokeActiveBuilds(context.Context) error {
@@ -712,12 +801,37 @@ func (backend *catalogWorkerBackendFake) reconcileCallCount() int {
 	return backend.reconcileCalls
 }
 
+type catalogWorkerGCFake struct {
+	mu     sync.Mutex
+	calls  int
+	result CatalogGCResult
+	err    error
+}
+
+func newCatalogWorkerGCFake() *catalogWorkerGCFake { return &catalogWorkerGCFake{} }
+
+func (gc *catalogWorkerGCFake) Collect(context.Context) (CatalogGCResult, error) {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+	gc.calls++
+	return gc.result, gc.err
+}
+
+func (gc *catalogWorkerGCFake) callCount() int {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+	return gc.calls
+}
+
 type catalogWorkerMetricsFake struct {
-	mu           sync.Mutex
-	scans        chan catalog.MetricScanOutcome
-	builds       chan catalog.MetricBuildOutcome
-	storage      chan catalog.StorageObservation
-	activeBuilds int
+	mu                   sync.Mutex
+	scans                chan catalog.MetricScanOutcome
+	builds               chan catalog.MetricBuildOutcome
+	storage              chan catalog.StorageObservation
+	storageCalls         int
+	gcDeletedGenerations int
+	gcSkippedRestricted  int
+	activeBuilds         int
 }
 
 type orderedCatalogWorkerMetricsFake struct {
@@ -740,6 +854,8 @@ func newOrderedCatalogWorkerMetricsFake() *orderedCatalogWorkerMetricsFake {
 func (*orderedCatalogWorkerMetricsFake) ObserveBuild(catalog.MetricBuildOutcome, time.Duration) {}
 func (*orderedCatalogWorkerMetricsFake) ObserveScan(catalog.MetricScanOutcome)                  {}
 func (*orderedCatalogWorkerMetricsFake) AddReconciledAbandoned(int)                             {}
+func (*orderedCatalogWorkerMetricsFake) AddGCDeletedGenerations(int)                            {}
+func (*orderedCatalogWorkerMetricsFake) AddGCSkippedRestricted(int)                             {}
 func (*orderedCatalogWorkerMetricsFake) ObserveStorage(catalog.StorageObservation)              {}
 func (metrics *orderedCatalogWorkerMetricsFake) SetActiveBuilds(count int) {
 	metrics.mu.Lock()
@@ -780,10 +896,35 @@ func (metrics *catalogWorkerMetricsFake) SetActiveBuilds(count int) {
 	metrics.mu.Unlock()
 }
 func (*catalogWorkerMetricsFake) AddReconciledAbandoned(int) {}
+func (metrics *catalogWorkerMetricsFake) AddGCDeletedGenerations(count int) {
+	metrics.mu.Lock()
+	metrics.gcDeletedGenerations += count
+	metrics.mu.Unlock()
+}
+func (metrics *catalogWorkerMetricsFake) AddGCSkippedRestricted(count int) {
+	metrics.mu.Lock()
+	metrics.gcSkippedRestricted += count
+	metrics.mu.Unlock()
+}
+
+func (metrics *catalogWorkerMetricsFake) gcCounts() (int, int) {
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	return metrics.gcDeletedGenerations, metrics.gcSkippedRestricted
+}
 func (metrics *catalogWorkerMetricsFake) ObserveStorage(observation catalog.StorageObservation) {
+	metrics.mu.Lock()
+	metrics.storageCalls++
+	metrics.mu.Unlock()
 	if metrics.storage != nil {
 		metrics.storage <- observation
 	}
+}
+
+func (metrics *catalogWorkerMetricsFake) storageObservationCount() int {
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	return metrics.storageCalls
 }
 
 func (metrics *catalogWorkerMetricsFake) activeBuildCount() int {

@@ -472,7 +472,9 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000088_task_cron_override`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000089_backup_asset_search_document_point`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+
+000089 为 `backup_asset_search_documents(recovery_point_id, search_generation_id)` 建立索引，供恢复点吊销证明按 `recovery_point_id` 计数；SQLite 与 PostgreSQL 语法一致，仅建索引，不改数据。
 
 000088 持久化任务调度覆盖来源：显式设置 Cron（包括清空为手动）后，策略修改不会覆盖该任务的调度。历史策略任务的 Cron 与策略生效计划不同时回填为覆盖，相同时保留继承。升级前备份数据库、加密密钥和备份数据，停止并排空旧 Core/执行器，禁止混跑写入；存在显式覆盖记录时，降级保护拒绝抹除这些事实。
 

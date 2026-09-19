@@ -1084,8 +1084,12 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	catalogGenerationGC, err := NewCatalogGenerationGC(dependencies.DB, dependencies.Now)
+	if err != nil {
+		return nil, err
+	}
 	catalogWorker, err := NewCatalogWorker(CatalogWorkerDependencies{
-		Foundation: foundation, Backend: catalogIndexer, Metrics: catalogMetrics, Now: dependencies.Now,
+		Foundation: foundation, Backend: catalogIndexer, GC: catalogGenerationGC, Metrics: catalogMetrics, Now: dependencies.Now,
 	})
 	if err != nil {
 		return nil, err

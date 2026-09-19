@@ -44,6 +44,8 @@ type Metrics interface {
 	SetActiveBuilds(int)
 	AddReconciledAbandoned(int)
 	ObserveStorage(StorageObservation)
+	AddGCDeletedGenerations(int)
+	AddGCSkippedRestricted(int)
 }
 
 type NoopMetrics struct{}
@@ -53,6 +55,8 @@ func (NoopMetrics) ObserveScan(MetricScanOutcome)                  {}
 func (NoopMetrics) SetActiveBuilds(int)                            {}
 func (NoopMetrics) AddReconciledAbandoned(int)                     {}
 func (NoopMetrics) ObserveStorage(StorageObservation)              {}
+func (NoopMetrics) AddGCDeletedGenerations(int)                    {}
+func (NoopMetrics) AddGCSkippedRestricted(int)                     {}
 
 // metricGenerationStates is the frozen Catalog generation-state label set
 // (every persisted state, including building), so a stray database value can
@@ -74,6 +78,8 @@ type PrometheusMetrics struct {
 	generationsMaxPerPoint prometheus.Gauge
 	entries                prometheus.Gauge
 	sqliteFileBytes        prometheus.Gauge
+	gcDeletedGenerations   prometheus.Counter
+	gcSkippedRestricted    prometheus.Counter
 }
 
 func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics, error) {
@@ -117,10 +123,19 @@ func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics,
 			Name: "xirang_backup_asset_sqlite_file_bytes",
 			Help: "On-disk bytes of the SQLite main database file; 0 on other backends.",
 		}),
+		gcDeletedGenerations: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "xirang_backup_asset_catalog_gc_deleted_generations_total",
+			Help: "Total non-protected Catalog generations reclaimed with their Search payload.",
+		}),
+		gcSkippedRestricted: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "xirang_backup_asset_catalog_gc_skipped_restricted_total",
+			Help: "Total Catalog generations retained because RESTRICT child rows still reference them.",
+		}),
 	}
 	for _, collector := range []prometheus.Collector{
 		metrics.builds, metrics.buildDuration, metrics.scans, metrics.activeBuilds, metrics.reconciledAbandoned,
 		metrics.generations, metrics.generationsMaxPerPoint, metrics.entries, metrics.sqliteFileBytes,
+		metrics.gcDeletedGenerations, metrics.gcSkippedRestricted,
 	} {
 		if err := registerer.Register(collector); err != nil {
 			return nil, fmt.Errorf("register backup asset Catalog metric: %w", err)
@@ -187,6 +202,22 @@ func nonNegativeMetricValue(value int64) float64 {
 		return 0
 	}
 	return float64(value)
+}
+
+// AddGCDeletedGenerations counts Catalog generations reclaimed with their Search
+// payload. It carries no point, path, or locator label.
+func (metrics *PrometheusMetrics) AddGCDeletedGenerations(count int) {
+	if metrics != nil && count > 0 {
+		metrics.gcDeletedGenerations.Add(float64(count))
+	}
+}
+
+// AddGCSkippedRestricted counts Catalog generations retained because a RESTRICT
+// child row still references them. It carries no point, path, or locator label.
+func (metrics *PrometheusMetrics) AddGCSkippedRestricted(count int) {
+	if metrics != nil && count > 0 {
+		metrics.gcSkippedRestricted.Add(float64(count))
+	}
 }
 
 func metricBuildOutcome(outcome MetricBuildOutcome) string {

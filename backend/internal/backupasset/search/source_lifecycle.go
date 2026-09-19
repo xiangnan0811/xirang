@@ -93,7 +93,7 @@ func (owner *SourceLifecycle) RevokeRecoveryPoint(ctx context.Context, request b
 					}
 				}
 				if request.Stage == backupasset.SourceLifecycleCleanup {
-					deleted, payloadRemaining, err := owner.deleteProjectionBatchTx(ctx, tx, generation.ID, payloadBudget)
+					deleted, payloadRemaining, err := DeleteGenerationProjectionBatchTx(ctx, tx, generation.ID, payloadBudget)
 					if err != nil {
 						return err
 					}
@@ -173,114 +173,65 @@ func (owner *SourceLifecycle) ProveRecoveryPointRevoked(ctx context.Context, req
 	})
 }
 
-type searchDocumentFieldDeleteKey struct {
-	DocumentID string
-	Field      string
-}
+// maxProjectionDeleteBatchSize bounds one Search projection delete statement.
+// Every statement filters by document_id IN (?), so this is also the bind
+// parameter count and stays far below SQLite's variable limit.
+const maxProjectionDeleteBatchSize = 1000
 
-type searchPostingDeleteKey struct {
-	DocumentID string
-	Field      string
-	TokenKind  string
-	KeyVersion int
-	TokenHMAC  string
-}
-
-func (owner *SourceLifecycle) deleteProjectionBatchTx(
+// DeleteGenerationProjectionBatchTx deletes one bounded batch of the Search
+// payload owned by a single Search generation and reports how many documents it
+// removed. Recovery-point cleanup and Catalog generation GC share this exact
+// path so neither can rely on a single CASCADE over millions of posting rows:
+// fields and postings are removed explicitly for the selected document_ids
+// before their documents. A full batch means more payload may remain; an empty
+// batch means the generation's projection is gone.
+func DeleteGenerationProjectionBatchTx(
 	ctx context.Context,
 	tx *gorm.DB,
 	generationID string,
 	budget int,
 ) (int, bool, error) {
-	if budget <= 0 {
-		return 0, true, fmt.Errorf("%w: invalid Search cleanup payload budget", backupasset.ErrInvalidState)
+	if tx == nil || generationID == "" || budget <= 0 || budget > maxProjectionDeleteBatchSize {
+		return 0, false, fmt.Errorf("%w: invalid Search projection delete request", backupasset.ErrInvalidState)
 	}
-	deleted := 0
-	fieldKeys := make([]searchDocumentFieldDeleteKey, 0, budget)
-	if err := tx.WithContext(ctx).Model(&model.BackupAssetSearchDocumentField{}).
-		Select("document_id", "field").Where("search_generation_id = ?", generationID).
-		Order("document_id ASC, field ASC").Limit(budget).Find(&fieldKeys).Error; err != nil {
-		return 0, true, fmt.Errorf("load Search source field cleanup batch: %w", err)
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if len(fieldKeys) > 0 {
-		query := tx.WithContext(ctx).Where(
-			"search_generation_id = ? AND document_id = ? AND field = ?",
-			generationID, fieldKeys[0].DocumentID, fieldKeys[0].Field,
-		)
-		for _, key := range fieldKeys[1:] {
-			query = query.Or(
-				"search_generation_id = ? AND document_id = ? AND field = ?",
-				generationID, key.DocumentID, key.Field,
-			)
-		}
-		result := query.Delete(&model.BackupAssetSearchDocumentField{})
-		if result.Error != nil {
-			return 0, true, fmt.Errorf("delete Search source field batch: %w", result.Error)
-		}
-		if result.RowsAffected != int64(len(fieldKeys)) {
-			return 0, true, fmt.Errorf("%w: Search source field cleanup evidence changed", backupasset.ErrConflict)
-		}
-		deleted += len(fieldKeys)
-		if deleted == budget {
-			return deleted, true, nil
-		}
+	if err := ctx.Err(); err != nil {
+		return 0, true, err
 	}
-
-	remaining := budget - deleted
-	postingKeys := make([]searchPostingDeleteKey, 0, remaining)
-	if err := tx.WithContext(ctx).Model(&model.BackupAssetSearchPosting{}).
-		Select("document_id", "field", "token_kind", "key_version", "token_hmac").
-		Where("search_generation_id = ?", generationID).
-		Order("document_id ASC, field ASC, token_kind ASC, key_version ASC, token_hmac ASC").
-		Limit(remaining).Find(&postingKeys).Error; err != nil {
-		return 0, true, fmt.Errorf("load Search source posting cleanup batch: %w", err)
-	}
-	if len(postingKeys) > 0 {
-		query := tx.WithContext(ctx).Where(
-			"search_generation_id = ? AND document_id = ? AND field = ? AND token_kind = ? AND key_version = ? AND token_hmac = ?",
-			generationID, postingKeys[0].DocumentID, postingKeys[0].Field, postingKeys[0].TokenKind,
-			postingKeys[0].KeyVersion, postingKeys[0].TokenHMAC,
-		)
-		for _, key := range postingKeys[1:] {
-			query = query.Or(
-				"search_generation_id = ? AND document_id = ? AND field = ? AND token_kind = ? AND key_version = ? AND token_hmac = ?",
-				generationID, key.DocumentID, key.Field, key.TokenKind, key.KeyVersion, key.TokenHMAC,
-			)
-		}
-		result := query.Delete(&model.BackupAssetSearchPosting{})
-		if result.Error != nil {
-			return 0, true, fmt.Errorf("delete Search source posting batch: %w", result.Error)
-		}
-		if result.RowsAffected != int64(len(postingKeys)) {
-			return 0, true, fmt.Errorf("%w: Search source posting cleanup evidence changed", backupasset.ErrConflict)
-		}
-		deleted += len(postingKeys)
-		if deleted == budget {
-			return deleted, true, nil
-		}
-	}
-
-	remaining = budget - deleted
 	var documentIDs []string
 	if err := tx.WithContext(ctx).Model(&model.BackupAssetSearchDocument{}).
-		Where("search_generation_id = ?", generationID).Order("document_id ASC").
-		Limit(remaining).Pluck("document_id", &documentIDs).Error; err != nil {
-		return 0, true, fmt.Errorf("load Search source document cleanup batch: %w", err)
+		Where("search_generation_id = ?", generationID).
+		Order("document_id ASC").Limit(budget).Pluck("document_id", &documentIDs).Error; err != nil {
+		return 0, true, fmt.Errorf("load Search projection cleanup batch: %w", err)
 	}
 	if len(documentIDs) == 0 {
-		return deleted, false, nil
+		return 0, false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, true, err
+	}
+	if err := tx.WithContext(ctx).
+		Where("search_generation_id = ? AND document_id IN ?", generationID, documentIDs).
+		Delete(&model.BackupAssetSearchDocumentField{}).Error; err != nil {
+		return 0, true, fmt.Errorf("delete Search projection field batch: %w", err)
+	}
+	if err := tx.WithContext(ctx).
+		Where("search_generation_id = ? AND document_id IN ?", generationID, documentIDs).
+		Delete(&model.BackupAssetSearchPosting{}).Error; err != nil {
+		return 0, true, fmt.Errorf("delete Search projection posting batch: %w", err)
 	}
 	result := tx.WithContext(ctx).
 		Where("search_generation_id = ? AND document_id IN ?", generationID, documentIDs).
 		Delete(&model.BackupAssetSearchDocument{})
 	if result.Error != nil {
-		return 0, true, fmt.Errorf("delete Search source document batch: %w", result.Error)
+		return 0, true, fmt.Errorf("delete Search projection document batch: %w", result.Error)
 	}
 	if result.RowsAffected != int64(len(documentIDs)) {
-		return 0, true, fmt.Errorf("%w: Search source document cleanup evidence changed", backupasset.ErrConflict)
+		return 0, true, fmt.Errorf("%w: Search projection cleanup evidence changed", backupasset.ErrConflict)
 	}
-	deleted += len(documentIDs)
-	return deleted, deleted == budget, nil
+	return len(documentIDs), len(documentIDs) == budget, nil
 }
 
 func (owner *SourceLifecycle) releaseSearchLeasesTx(ctx context.Context, tx *gorm.DB, pointID string, now time.Time) error {

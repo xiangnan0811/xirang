@@ -23,18 +23,22 @@ func TestCatalogMetricsExposeOnlyFrozenLowCardinalityLabels(t *testing.T) {
 		GenerationsByState:     map[string]int64{string(GenerationComplete): 1, "not-a-state": 7},
 		MaxGenerationsPerPoint: 1, EntryCount: 2, SQLiteFileBytes: 3,
 	})
+	metrics.AddGCDeletedGenerations(1)
+	metrics.AddGCSkippedRestricted(2)
 
 	actual := catalogMetricLabelNames(t, registry)
 	expected := map[string][]string{
-		"xirang_backup_asset_catalog_builds_total":               {"outcome"},
-		"xirang_backup_asset_catalog_build_duration_seconds":     {"outcome"},
-		"xirang_backup_asset_catalog_scans_total":                {"outcome"},
-		"xirang_backup_asset_catalog_active_builds":              {},
-		"xirang_backup_asset_catalog_reconciled_abandoned_total": {},
-		"xirang_backup_asset_catalog_generations":                {"state"},
-		"xirang_backup_asset_catalog_generations_max_per_point":  {},
-		"xirang_backup_asset_catalog_entries":                    {},
-		"xirang_backup_asset_sqlite_file_bytes":                  {},
+		"xirang_backup_asset_catalog_builds_total":                 {"outcome"},
+		"xirang_backup_asset_catalog_build_duration_seconds":       {"outcome"},
+		"xirang_backup_asset_catalog_scans_total":                  {"outcome"},
+		"xirang_backup_asset_catalog_active_builds":                {},
+		"xirang_backup_asset_catalog_reconciled_abandoned_total":   {},
+		"xirang_backup_asset_catalog_generations":                  {"state"},
+		"xirang_backup_asset_catalog_generations_max_per_point":    {},
+		"xirang_backup_asset_catalog_entries":                      {},
+		"xirang_backup_asset_sqlite_file_bytes":                    {},
+		"xirang_backup_asset_catalog_gc_deleted_generations_total": {},
+		"xirang_backup_asset_catalog_gc_skipped_restricted_total":  {},
 	}
 	if len(actual) != len(expected) {
 		t.Fatalf("metric family count=%d want=%d: %#v", len(actual), len(expected), actual)
