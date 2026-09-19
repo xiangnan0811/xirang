@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.55.18](https://github.com/xiangnan0811/xirang/compare/v0.55.17...v0.55.18) (2026-09-19)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** reclaim superseded catalog and search generations ([#545](https://github.com/xiangnan0811/xirang/issues/545)) ([06c7948](https://github.com/xiangnan0811/xirang/commit/06c79484c4356599cb7c7d6639afd0fc7f584010))
+* **backup-assets:** stop unbounded periodic catalog rebuilds ([#544](https://github.com/xiangnan0811/xirang/issues/544)) ([fdf122d](https://github.com/xiangnan0811/xirang/commit/fdf122d4ccfec70df1e83cbda65a34348d79492e))
+
 ## [0.55.17](https://github.com/xiangnan0811/xirang/compare/v0.55.16...v0.55.17) (2026-09-17)
 
 
