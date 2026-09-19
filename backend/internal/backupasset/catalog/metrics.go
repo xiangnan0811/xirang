@@ -44,6 +44,8 @@ type Metrics interface {
 	SetActiveBuilds(int)
 	AddReconciledAbandoned(int)
 	ObserveStorage(StorageObservation)
+	AddGCDeletedGenerations(int)
+	AddGCSkippedRestricted(int)
 }
 
 type NoopMetrics struct{}
@@ -53,9 +55,12 @@ func (NoopMetrics) ObserveScan(MetricScanOutcome)                  {}
 func (NoopMetrics) SetActiveBuilds(int)                            {}
 func (NoopMetrics) AddReconciledAbandoned(int)                     {}
 func (NoopMetrics) ObserveStorage(StorageObservation)              {}
+func (NoopMetrics) AddGCDeletedGenerations(int)                    {}
+func (NoopMetrics) AddGCSkippedRestricted(int)                     {}
 
-// metricGenerationStates freezes the closed generation-state label set so a
-// stray database value can never become a Prometheus series.
+// metricGenerationStates is the frozen Catalog generation-state label set
+// (every persisted state, including building), so a stray database value can
+// never become a Prometheus series.
 func metricGenerationStates() []string {
 	return []string{
 		string(GenerationBuilding), string(GenerationComplete),
@@ -73,6 +78,8 @@ type PrometheusMetrics struct {
 	generationsMaxPerPoint prometheus.Gauge
 	entries                prometheus.Gauge
 	sqliteFileBytes        prometheus.Gauge
+	gcDeletedGenerations   prometheus.Counter
+	gcSkippedRestricted    prometheus.Counter
 }
 
 func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics, error) {
@@ -102,7 +109,7 @@ func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics,
 		}),
 		generations: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "xirang_backup_asset_catalog_generations",
-			Help: "Current backup asset Catalog generations by terminal state.",
+			Help: "Current backup asset Catalog generations by frozen generation state.",
 		}, []string{"state"}),
 		generationsMaxPerPoint: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "xirang_backup_asset_catalog_generations_max_per_point",
@@ -116,10 +123,19 @@ func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics,
 			Name: "xirang_backup_asset_sqlite_file_bytes",
 			Help: "On-disk bytes of the SQLite main database file; 0 on other backends.",
 		}),
+		gcDeletedGenerations: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "xirang_backup_asset_catalog_gc_deleted_generations_total",
+			Help: "Total non-protected Catalog generations reclaimed with their Search payload.",
+		}),
+		gcSkippedRestricted: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "xirang_backup_asset_catalog_gc_skipped_restricted_total",
+			Help: "Catalog generations skipped during reclamation because a RESTRICT child appeared after candidate selection.",
+		}),
 	}
 	for _, collector := range []prometheus.Collector{
 		metrics.builds, metrics.buildDuration, metrics.scans, metrics.activeBuilds, metrics.reconciledAbandoned,
 		metrics.generations, metrics.generationsMaxPerPoint, metrics.entries, metrics.sqliteFileBytes,
+		metrics.gcDeletedGenerations, metrics.gcSkippedRestricted,
 	} {
 		if err := registerer.Register(collector); err != nil {
 			return nil, fmt.Errorf("register backup asset Catalog metric: %w", err)
@@ -162,9 +178,9 @@ func (metrics *PrometheusMetrics) AddReconciledAbandoned(count int) {
 	}
 }
 
-// ObserveStorage publishes the scan-end storage aggregate. Every series it
-// touches uses a frozen label set (or no label at all): an unknown state value
-// is folded into the existing closed set rather than creating a new series.
+// ObserveStorage publishes the scan-end storage aggregate. The generation gauge
+// only ever uses the frozen generation-state label set; a state value outside
+// that set is ignored rather than turned into a new series.
 func (metrics *PrometheusMetrics) ObserveStorage(observation StorageObservation) {
 	if metrics == nil {
 		return
@@ -186,6 +202,22 @@ func nonNegativeMetricValue(value int64) float64 {
 		return 0
 	}
 	return float64(value)
+}
+
+// AddGCDeletedGenerations counts Catalog generations reclaimed with their Search
+// payload. It carries no point, path, or locator label.
+func (metrics *PrometheusMetrics) AddGCDeletedGenerations(count int) {
+	if metrics != nil && count > 0 {
+		metrics.gcDeletedGenerations.Add(float64(count))
+	}
+}
+
+// AddGCSkippedRestricted counts generations skipped this pass after a RESTRICT
+// child appeared between candidate selection and delete.
+func (metrics *PrometheusMetrics) AddGCSkippedRestricted(count int) {
+	if metrics != nil && count > 0 {
+		metrics.gcSkippedRestricted.Add(float64(count))
+	}
 }
 
 func metricBuildOutcome(outcome MetricBuildOutcome) string {

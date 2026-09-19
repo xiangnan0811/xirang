@@ -239,11 +239,8 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 	if err != nil {
 		return model.CatalogGeneration{}, err
 	}
-	// The post-refresh short-circuit lives inside beginGeneration's transaction
-	// so the active/latest decision cannot race a concurrent activation. A
-	// mutable build is skipped only when an active complete generation still
-	// matches the refreshed fingerprint *and* it is the latest generation, so a
-	// due failed retry is never swallowed.
+	// Skip only when the current complete projection is still latest after
+	// refresh.
 	generation, err = indexer.beginGeneration(buildContext, request, frozen, lease.Fence, true)
 	if err != nil {
 		if errors.Is(err, ErrCatalogRebuildNotRequired) {
@@ -475,19 +472,8 @@ func (indexer *Indexer) beginGeneration(
 		if err := indexer.lease.ValidateFenceTx(ctx, tx, fence); err != nil {
 			return err
 		}
-		// Short-circuit a mutable rebuild only when the exact active complete
-		// projection is still current. All three facts are required:
-		//
-		//   1. a generation with is_active=1 and state=complete exists,
-		//   2. its source_fingerprint equals the refreshed point fingerprint,
-		//   3. the generation-DESC latest row is that same active generation.
-		//
-		// Missing any one of them must build a new generation. Completion and
-		// preview drift supersede the active row first, so (1) fails and the
-		// replacement is built; a newer failed/partial attempt makes (3) fail so
-		// its retry is not swallowed. The point row is locked above and the
-		// active/latest read happens in the same transaction, so a concurrent
-		// activation cannot slip between the check and the insert.
+		// Skip only when the current complete projection is still latest after
+		// refresh.
 		if reuseUnchangedMutable && backupasset.PointVersionSemantics(frozen.point.Semantics) == backupasset.PointMutableHead {
 			reusable, active, reuseErr := indexer.reusableActiveGenerationTx(tx, frozen)
 			if reuseErr != nil {
@@ -527,11 +513,8 @@ func (indexer *Indexer) beginGeneration(
 	return generation, err
 }
 
-// reusableActiveGenerationTx reports whether the exact active complete mutable
-// projection is still the latest generation for the frozen fingerprint, so the
-// caller may settle without inserting a new one. It runs inside the build's
-// point-locked transaction; the point-before-generation lock order matches
-// beginGeneration and activate.
+// reusableActiveGenerationTx reports whether the current complete projection is
+// still the latest generation, so the caller may settle without inserting one.
 func (indexer *Indexer) reusableActiveGenerationTx(tx *gorm.DB, frozen frozenBuild) (bool, model.CatalogGeneration, error) {
 	var active model.CatalogGeneration
 	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -1174,14 +1157,11 @@ func (indexer *Indexer) ListCandidates(
 	return result, nil
 }
 
-// catalogPointEligibleAt answers only "is another Catalog build due?" from
-// durable point/generation facts. The point's observation clock is deliberately
-// not consulted: for a mutable head, RefreshMutableObservation rewrites
-// observed_at on every observation, and a child change leaves the root
-// fingerprint unchanged, so an aged timestamp is not evidence of source drift.
-// Enqueueing on clock expiry would re-project an unchanged tree forever. The
-// completion and preview drift paths supersede the active generation instead,
-// which is what makes a replacement genuinely due here.
+// catalogPointEligibleAt answers "is another Catalog build due?" from durable
+// point/generation facts. An aged observation clock is not source drift: a
+// mutable head's observed_at is rewritten by every refresh and an in-place child
+// change leaves the root fingerprint unchanged, so only a superseded projection,
+// a fingerprint change, or a due retry makes a replacement genuine.
 func (indexer *Indexer) catalogPointEligibleAt(
 	ctx context.Context,
 	pointID, semantics, sourceFingerprint, manifestDigest string,

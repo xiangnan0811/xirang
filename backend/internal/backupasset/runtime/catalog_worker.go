@@ -33,6 +33,7 @@ type CatalogWorkerBackend interface {
 type CatalogWorkerDependencies struct {
 	Foundation *backupasset.FoundationService
 	Backend    CatalogWorkerBackend
+	GC         CatalogGenerationCollector
 	Metrics    catalog.Metrics
 	Now        func() time.Time
 	After      func(time.Duration) <-chan time.Time
@@ -41,6 +42,7 @@ type CatalogWorkerDependencies struct {
 type CatalogWorker struct {
 	foundation *backupasset.FoundationService
 	backend    CatalogWorkerBackend
+	gc         CatalogGenerationCollector
 	metrics    catalog.Metrics
 	now        func() time.Time
 	after      func(time.Duration) <-chan time.Time
@@ -68,7 +70,7 @@ const (
 )
 
 func NewCatalogWorker(dependencies CatalogWorkerDependencies) (*CatalogWorker, error) {
-	if dependencies.Foundation == nil || dependencies.Backend == nil || dependencies.Metrics == nil {
+	if dependencies.Foundation == nil || dependencies.Backend == nil || dependencies.GC == nil || dependencies.Metrics == nil {
 		return nil, fmt.Errorf("%w: Catalog worker dependencies unavailable", backupasset.ErrInvalidState)
 	}
 	if dependencies.Now == nil {
@@ -78,7 +80,7 @@ func NewCatalogWorker(dependencies CatalogWorkerDependencies) (*CatalogWorker, e
 		dependencies.After = time.After
 	}
 	return &CatalogWorker{
-		foundation: dependencies.Foundation, backend: dependencies.Backend, metrics: dependencies.Metrics,
+		foundation: dependencies.Foundation, backend: dependencies.Backend, gc: dependencies.GC, metrics: dependencies.Metrics,
 		now: dependencies.Now, after: dependencies.After, wake: make(chan struct{}, 1), stop: make(chan struct{}),
 	}, nil
 }
@@ -247,8 +249,13 @@ func (worker *CatalogWorker) runScan(ctx context.Context) error {
 		worker.metrics.ObserveScan(catalog.MetricScanFailure)
 		return err
 	}
+	// Reclaim before the disabled short-circuit: this is the only path that
+	// returns space after the feature was turned off, and it must never block
+	// Catalog builds, so a reclamation failure is logged rather than fatal.
+	worker.collectGenerations(ctx)
 	if !config.Enabled {
 		worker.metrics.ObserveScan(catalog.MetricScanDisabled)
+		worker.observeStorageFacts()
 		return nil
 	}
 	abandonedAfter := config.BuildTimeout
@@ -372,6 +379,20 @@ func (worker *CatalogWorker) adjustActiveBuilds(delta int) {
 	worker.metrics.SetActiveBuilds(worker.activeBuilds)
 }
 
+// collectGenerations runs one bounded reclamation pass. Failures are logged and
+// do not fail the scan; the next scan retries any unfinished generation.
+func (worker *CatalogWorker) collectGenerations(ctx context.Context) {
+	if worker == nil || worker.gc == nil || worker.metrics == nil {
+		return
+	}
+	result, err := worker.gc.Collect(ctx)
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		logger.Module("backupasset.catalog").Warn().Err(err).Str("stage", "generation_gc").Msg("Catalog 世代回收失败")
+	}
+	worker.metrics.AddGCDeletedGenerations(result.DeletedGenerations)
+	worker.metrics.AddGCSkippedRestricted(result.SkippedRestricted)
+}
+
 // observeStorageFacts publishes the scan-end storage aggregate. It uses its own
 // bounded context so a canceled scan still reports the final state, and a failed
 // aggregate is logged only: it must never turn a completed scan into a failure.
@@ -383,7 +404,7 @@ func (worker *CatalogWorker) observeStorageFacts() {
 	defer cancel()
 	observation, err := worker.backend.ObserveStorageFacts(ctx)
 	if err != nil {
-		logger.Module("backupasset.catalog").Warn().Str("stage", "storage_metrics").Msg("Catalog 存储指标采集失败")
+		logger.Module("backupasset.catalog").Warn().Err(err).Str("stage", "storage_metrics").Msg("Catalog 存储指标采集失败")
 		return
 	}
 	worker.metrics.ObserveStorage(observation)

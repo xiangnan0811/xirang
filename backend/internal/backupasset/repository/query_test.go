@@ -429,12 +429,9 @@ func TestMutableRsyncCatalogBuildRefreshesRootSourceBeforeOpeningSession(t *test
 	}
 }
 
-// TestMutableRsyncCatalogBuildReplacesGenerationAfterCompletionObserver is the
-// PR-A end-to-end guard for the v0.55.2 contract: even though an in-place child
-// change leaves the mutable root fingerprint unchanged, backup completion must
-// supersede the active Catalog generation and the worker must build a genuine
-// replacement. A fingerprint-only short-circuit would leave Files permanently
-// indexing.
+// TestMutableRsyncCatalogBuildReplacesGenerationAfterCompletionObserver proves
+// backup completion still supersedes and rebuilds even when an in-place child
+// change leaves the mutable root fingerprint unchanged.
 func TestMutableRsyncCatalogBuildReplacesGenerationAfterCompletionObserver(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("strict local Rsync catalog access is Linux-only")

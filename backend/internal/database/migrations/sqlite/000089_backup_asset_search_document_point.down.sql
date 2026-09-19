@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_backup_asset_search_documents_recovery_point;

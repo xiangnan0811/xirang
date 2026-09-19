@@ -1659,7 +1659,13 @@ func TestRecoveryPointSourceLifecycleSearchCleanupBoundsPayloadRowsPerTransactio
 		}
 	}
 	const payloadRows = 5
+	// The cleanup budget is document-scoped: one batch selects at most rowBudget
+	// document_ids and deletes their fields, postings and documents through a
+	// single `document_id IN (?)` predicate per table. This fixture seeds one
+	// posting and one field per document, so a batch touches at most three times
+	// the budget in a transaction.
 	const rowBudget = 2
+	const maxTransactionDeleted = rowBudget * 3
 	seedPayload(generationID, pointID, strings.Repeat("7", 32), payloadRows)
 	seedPayload(otherGenerationID, otherPointID, strings.Repeat("8", 32), 1)
 
@@ -1759,31 +1765,40 @@ func TestRecoveryPointSourceLifecycleSearchCleanupBoundsPayloadRowsPerTransactio
 		t.Fatalf("bounded cleanup observations statements=%d transactions=%d, want non-zero", len(deleteObservations), len(transactionDeleteTotals))
 	}
 	for _, observation := range deleteObservations {
+		// Each table is cleared with one `document_id IN (?)` predicate over at
+		// most rowBudget documents, so no statement may exceed the budget.
 		if observation.rows > rowBudget {
-			t.Errorf("Search cleanup DELETE table=%s rows=%d, want at most row budget %d", observation.table, observation.rows, rowBudget)
+			t.Errorf("Search cleanup DELETE table=%s rows=%d, want at most document budget %d", observation.table, observation.rows, rowBudget)
 		}
 	}
 	for _, total := range transactionDeleteTotals {
-		if total > rowBudget {
-			t.Errorf("Search cleanup transaction deleted rows=%d, want at most row budget %d", total, rowBudget)
+		if total > maxTransactionDeleted {
+			t.Errorf("Search cleanup transaction deleted rows=%d, want at most %d for one document batch", total, maxTransactionDeleted)
 		}
 	}
+	// Within one document batch the child rows must go before the documents they
+	// belong to; across batches the sequence restarts at the fields stage.
+	fieldStage, postingStage, documentStage := 0, 1, 2
 	stageByTable := map[string]int{
-		(model.BackupAssetSearchDocumentField{}).TableName(): 0,
-		(model.BackupAssetSearchPosting{}).TableName():       1,
-		(model.BackupAssetSearchDocument{}).TableName():      2,
+		(model.BackupAssetSearchDocumentField{}).TableName(): fieldStage,
+		(model.BackupAssetSearchPosting{}).TableName():       postingStage,
+		(model.BackupAssetSearchDocument{}).TableName():      documentStage,
 	}
-	lastStage := -1
+	batchStages := make([]int, 0, len(deleteObservations))
 	for _, observation := range deleteObservations {
 		stage, recognized := stageByTable[observation.table]
 		if !recognized {
 			t.Errorf("Search cleanup deleted unexpected table=%q", observation.table)
 			continue
 		}
-		if stage < lastStage {
-			t.Errorf("Search cleanup delete order regressed from stage=%d to stage=%d", lastStage, stage)
+		if len(batchStages) > 0 && batchStages[len(batchStages)-1] == documentStage && stage == fieldStage {
+			batchStages = batchStages[:0]
 		}
-		lastStage = stage
+		if len(batchStages) > 0 && stage < batchStages[len(batchStages)-1] {
+			t.Errorf("Search cleanup delete order regressed within a document batch from stage=%d to stage=%d",
+				batchStages[len(batchStages)-1], stage)
+		}
+		batchStages = append(batchStages, stage)
 	}
 	documents, postings, fields = searchGenerationPayloadCounts(t, db, generationID)
 	if documents != 0 || postings != 0 || fields != 0 {
@@ -2072,5 +2087,102 @@ func assertSearchKeyCount(t *testing.T, db *gorm.DB, want int64) {
 	var count int64
 	if err := db.Model(&model.WrappedDomainKey{}).Where("domain = ?", backupasset.KeyDomainSearchToken).Count(&count).Error; err != nil || count != want {
 		t.Fatalf("Search key count=%d err=%v, want %d", count, err, want)
+	}
+}
+
+// TestSearchProjectionDeleteBatchUsesDocumentIDInPredicate proves the shared
+// projection delete path never rebuilds a long OR chain: every statement filters
+// on `document_id IN (?)` over one bounded batch, which is what keeps a Catalog
+// generation GC from depending on a single CASCADE over millions of postings.
+func TestSearchProjectionDeleteBatchUsesDocumentIDInPredicate(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/projection-delete.db?_busy_timeout=5000&_loc=UTC"),
+		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open projection delete database: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&model.BackupAssetSearchGeneration{}, &model.BackupAssetSearchDocument{},
+		&model.BackupAssetSearchPosting{}, &model.BackupAssetSearchDocumentField{},
+	); err != nil {
+		t.Fatalf("migrate projection delete tables: %v", err)
+	}
+	now := time.Date(2026, 8, 18, 9, 0, 0, 0, time.UTC)
+	generationID := strings.Repeat("a", 32)
+	if err := db.Create(&model.BackupAssetSearchGeneration{
+		ID: generationID, RecoveryPointID: strings.Repeat("b", 32), CatalogGenerationID: strings.Repeat("c", 32),
+		Generation: 1, State: string(SearchGenerationSuperseded), StartedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed projection delete generation: %v", err)
+	}
+	const documentCount = 3
+	for index := 0; index < documentCount; index++ {
+		documentID := strings.Repeat(string(rune('d'+index)), 64)
+		if err := db.Create(&model.BackupAssetSearchDocument{
+			SearchGenerationID: generationID, DocumentID: documentID, RecoveryPointID: strings.Repeat("b", 32),
+			CatalogGenerationID: strings.Repeat("c", 32), EntryID: documentID, EntryType: "file", CreatedAt: now, UpdatedAt: now,
+		}).Error; err != nil {
+			t.Fatalf("seed projection delete document: %v", err)
+		}
+		if err := db.Create(&model.BackupAssetSearchPosting{
+			SearchGenerationID: generationID, DocumentID: documentID, Field: "name", TokenKind: "exact", TermFrequency: 1,
+		}).Error; err != nil {
+			t.Fatalf("seed projection delete posting: %v", err)
+		}
+		if err := db.Create(&model.BackupAssetSearchDocumentField{
+			SearchGenerationID: generationID, DocumentID: documentID, Field: "content",
+			State: string(FieldCoverageComplete), UpdatedAt: now,
+		}).Error; err != nil {
+			t.Fatalf("seed projection delete field: %v", err)
+		}
+	}
+
+	var statements []string
+	const probe = "search:test_projection_delete_sql"
+	if err := db.Callback().Delete().After("gorm:delete").Register(probe, func(tx *gorm.DB) {
+		if tx.Statement.SQL.Len() > 0 {
+			statements = append(statements, tx.Statement.SQL.String())
+		}
+	}); err != nil {
+		t.Fatalf("register projection delete SQL probe: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Callback().Delete().Remove(probe); err != nil {
+			t.Errorf("remove projection delete SQL probe: %v", err)
+		}
+	})
+
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		deleted, remaining, deleteErr := DeleteGenerationProjectionBatchTx(context.Background(), tx, generationID, documentCount)
+		if deleteErr != nil {
+			return deleteErr
+		}
+		if deleted != documentCount || !remaining {
+			t.Fatalf("first projection delete batch deleted=%d remaining=%t", deleted, remaining)
+		}
+		empty, cleared, clearErr := DeleteGenerationProjectionBatchTx(context.Background(), tx, generationID, documentCount)
+		if clearErr != nil {
+			return clearErr
+		}
+		if empty != 0 || cleared {
+			t.Fatalf("drained projection delete batch deleted=%d remaining=%t", empty, cleared)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("delete Search projection batch: %v", err)
+	}
+	if len(statements) != 3 {
+		t.Fatalf("projection delete statements=%d want 3: %v", len(statements), statements)
+	}
+	for _, statement := range statements {
+		if !strings.Contains(statement, "document_id IN (") {
+			t.Errorf("projection delete statement is not document-scoped: %s", statement)
+		}
+		if strings.Contains(statement, " OR ") {
+			t.Errorf("projection delete statement rebuilt an OR chain: %s", statement)
+		}
+	}
+	documents, postings, fields := searchGenerationPayloadCounts(t, db, generationID)
+	if documents != 0 || postings != 0 || fields != 0 {
+		t.Errorf("projection delete left payload documents=%d postings=%d fields=%d", documents, postings, fields)
 	}
 }

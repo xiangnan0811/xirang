@@ -132,15 +132,37 @@ belongs only to the asynchronous reconciler.
   leave a `building` row, record failure evidence, or request another wake. The
   completion and preview-drift paths keep superseding the active generation
   first, so a real replacement is still always built.
-- Each recovery point may retain only a bounded number of non-protected Catalog
-  generations. A generation is protected while it is active, `building`,
-  referenced by an `ON DELETE RESTRICT` child, or required as the latest
-  failed/partial evidence for backoff. Unbounded per-point generation growth is
-  a product defect, not a configuration choice.
+- Each recovery point retains only a bounded number of non-protected Catalog
+  generations. A generation is protected, and must never be reclaimed, while it
+  is `is_active=1`, is `building`, belongs to a point with a live
+  `catalog_build`/`search_index` lease, is that point's `generation DESC` latest
+  row, is one of that point's two most recent `failed`/`partial` attempts, or is
+  still referenced by a child with a `RESTRICT` foreign key to `catalog_entries`
+  (`backup_asset_delivery_grants`, `backup_asset_processing_jobs`,
+  `backup_asset_derived_artifact_sets`, `backup_asset_derived_blob_references`,
+  `backup_asset_recovery_plan_items`). Everything else with `is_active=0` and a
+  `complete`/`superseded`/`failed`/`partial` state is reclaimable. Unbounded
+  per-point generation growth is a product defect, not a configuration choice.
+- Reclamation is ordered and resumable: the Search projection of the reclaimed
+  generation is deleted in bounded `document_id IN (?)` batches, then its Search
+  generation rows, then `catalog_entries` in bounded batches, and only then the
+  `catalog_generations` row. No step may rely on one CASCADE over a whole
+  generation's postings, a generation whose payload outlasts one scan keeps its
+  row for the next scan, cancellation stops between batches, and a
+  `RESTRICT`-referenced generation is never deleted. Reclamation always makes
+  progress: the reclaim query itself excludes referenced generations, so an
+  older referenced generation cannot stall a newer reclaimable one, and a pass
+  that can only find referenced generations deletes nothing, counts them, and
+  reports why instead of aborting on a foreign-key error. Reclamation runs from
+  the Catalog worker before the disabled-feature short-circuit, so it still
+  reclaims while the feature is off,
+  and it never schedules candidate builds. It is never part of the
+  recovery-point retention purge path.
 - Catalog and Search workers expose generation-count (by closed state),
-  largest-per-point generation count, entry and posting row counts, and on-disk
-  SQLite size as gauges. These labels stay low cardinality: a recovery point,
-  path, document, or locator must never become a metric label.
+  largest-per-point generation count, entry and posting row counts, on-disk
+  SQLite size, and reclamation outcome counters as metrics. These labels stay low
+  cardinality: a recovery point, path, document, or locator must never become a
+  metric label.
 - The backup script purges orphaned `*.tmp.*` artifacts (including SQLite
   `-journal`/`-wal`/`-shm` sidecars) whose owner pid is gone or which are older
   than a day, and refuses to start a SQLite backup when the destination
@@ -228,7 +250,17 @@ belongs only to the asynchronous reconciler.
   already-superseded/absent active generation keep their existing rearm paths.
 - Metric regressions assert the storage gauges use only the closed
   generation-state label set, clamp negatives, carry no identity label, and are
-  collected on a completed scan without a disabled worker touching its backend.
+  collected on a completed scan, and that a disabled scan still reclaims and
+  collects metrics while scheduling no candidate or build.
+- Reclamation regressions cover the full protection set (active, building, live
+  lease, latest, two most recent failed/partial, `RESTRICT`-referenced), that a
+  `RESTRICT`-referenced generation is skipped and counted without a foreign-key
+  failure while other generations still progress, that a reclaimed generation's
+  Search postings reach zero, that the payload delete uses `document_id IN (?)`
+  and never a rebuilt `OR` chain, that the per-scan budget defers rather than
+  loses work, and that a canceled pass leaves the generation row for the next
+  scan. Run at least one reclamation case against the migrated schema so the real
+  foreign keys are exercised.
 
 ### 7. Wrong vs Correct
 
