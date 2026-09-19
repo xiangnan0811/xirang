@@ -215,6 +215,72 @@ assert_mode "$sqlite_zero_file.sha256" 600
 assert_logged_mode ".db.tmp." 600
 assert_logged_mode ".sha256.tmp." 600
 
+# Interrupted backups leave `*.tmp.*` artifacts and SQLite sidecars behind. The
+# script must purge provably orphaned ones (dead pid) before copying, must keep
+# an artifact whose owner is still running, and must never touch its own names.
+orphan_dir="$WORK/orphan-backups"
+mkdir -p "$orphan_dir"
+chmod 0700 "$orphan_dir"
+orphan_artifact="$orphan_dir/xirang-sqlite-fake.db.tmp.9999999"
+orphan_checksum="$orphan_dir/xirang-sqlite-fake.db.sha256.tmp.9999999"
+orphan_journal="$orphan_dir/xirang-sqlite-fake.db.tmp.9999999-journal"
+orphan_wal="$orphan_dir/xirang-sqlite-fake.db.tmp.9999999-wal"
+orphan_shm="$orphan_dir/xirang-sqlite-fake.db.tmp.9999999-shm"
+for orphan in "$orphan_artifact" "$orphan_checksum" "$orphan_journal" "$orphan_wal" "$orphan_shm"; do
+  printf 'orphan\n' >"$orphan"
+done
+# A kept artifact whose owning pid is genuinely alive: use this test's own pid
+# plus a live background child so neither is this invocation's $$.
+sleep 30 &
+live_tmp_pid=$!
+live_tmp="$orphan_dir/xirang-postgres-fake.dump.tmp.$live_tmp_pid"
+printf 'in-flight\n' >"$live_tmp"
+if ! DB_TYPE=sqlite SQLITE_PATH="$source_db" bash "$BACKUP_SCRIPT" "$orphan_dir" >"$WORK/orphan-backup.out" 2>&1; then
+  echo "FAIL: backup failed while purging orphan temporary files" >&2
+  cat "$WORK/orphan-backup.out" >&2
+  exit 1
+fi
+kill "$live_tmp_pid" 2>/dev/null || true
+wait "$live_tmp_pid" 2>/dev/null || true
+for orphan in "$orphan_artifact" "$orphan_checksum" "$orphan_journal" "$orphan_wal" "$orphan_shm"; do
+  [[ ! -e "$orphan" ]] || {
+    echo "FAIL: orphan temporary artifact survived backup: $orphan" >&2
+    exit 1
+  }
+done
+[[ -e "$live_tmp" ]] || {
+  echo "FAIL: backup deleted a temporary artifact whose owning pid is still running" >&2
+  exit 1
+}
+rm -f -- "$live_tmp"
+
+# The SQLite path must refuse to start when the destination filesystem cannot
+# hold the source database plus the safety reserve.
+space_dir="$WORK/space-backups"
+mkdir -p "$space_dir"
+chmod 0700 "$space_dir"
+cat >"$STUB_BIN/df" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on'
+printf '%s\n' 'fakefs 1024 1 1 1% /'
+STUB
+chmod +x "$STUB_BIN/df"
+if PATH="$STUB_BIN:$PATH" DB_TYPE=sqlite SQLITE_PATH="$source_db" \
+  bash "$BACKUP_SCRIPT" "$space_dir" >"$WORK/space-backup.out" 2>&1; then
+  echo "FAIL: backup started without enough destination space" >&2
+  exit 1
+fi
+grep -Fq '备份目录可用空间不足' "$WORK/space-backup.out" || {
+  echo "FAIL: backup did not report the destination space shortfall" >&2
+  exit 1
+}
+if compgen -G "$space_dir/xirang-sqlite-*" >/dev/null; then
+  echo "FAIL: space-constrained backup left artifacts behind" >&2
+  exit 1
+fi
+rm -f -- "$STUB_BIN/df"
+
 for caller_umask in 000 022; do
   postgres_backup_dir="$WORK/postgres-backups-$caller_umask"
   : >"$MODE_LOG"

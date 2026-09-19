@@ -36,6 +36,84 @@ require_mode() {
 
 require_mode "${output_dir}" 700
 
+# A killed backup (SIGKILL, OOM, container restart) cannot run its EXIT trap, so
+# its `*.tmp.<pid>` artifacts, the matching SQLite sidecars, and the checksum
+# temporary are left behind forever and can silently consume the whole volume.
+# Remove only what is provably orphaned: the owning pid is gone, or the file is
+# older than a day. Never touch this invocation's own temporary names.
+pid_is_running() {
+  local pid="$1"
+  [[ -n "${pid}" ]] || return 1
+  # /proc also covers pids owned by another user, where kill -0 may report EPERM.
+  [[ -d "/proc/${pid}" ]] && return 0
+  kill -0 "${pid}" 2>/dev/null
+}
+
+artifact_is_older_than_a_day() {
+  local path="$1"
+  [[ -n "$(find "${path}" -maxdepth 0 -mmin +1440 -print -quit 2>/dev/null)" ]]
+}
+
+purge_orphan_temp_artifacts() {
+  local dir="$1"
+  local path base suffix pid
+  shopt -s nullglob
+  for path in \
+    "${dir}"/xirang-sqlite-*.db.tmp.* \
+    "${dir}"/xirang-postgres-*.dump.tmp.* \
+    "${dir}"/*.sha256.tmp.* \
+    "${dir}"/*.tmp.*-journal \
+    "${dir}"/*.tmp.*-wal \
+    "${dir}"/*.tmp.*-shm; do
+    [[ -f "${path}" ]] || continue
+    base="$(basename -- "${path}")"
+    suffix="${base##*.tmp.}"
+    pid="${suffix%%-*}"
+    if [[ "${pid}" == "$$" ]]; then
+      continue
+    fi
+    if pid_is_running "${pid}"; then
+      continue
+    fi
+    if [[ "${pid}" =~ ^[0-9]+$ ]] || artifact_is_older_than_a_day "${path}"; then
+      if ! rm -f -- "${path}"; then
+        echo "⚠️  无法清理孤儿备份临时文件：${path}" >&2
+      fi
+    fi
+  done
+  shopt -u nullglob
+}
+
+purge_orphan_temp_artifacts "${output_dir}"
+
+# Refuse to start a SQLite snapshot when the destination filesystem cannot hold
+# the source database plus a fixed reserve. `sqlite3 .backup` and the integrity
+# check both need headroom, and failing mid-copy is what produces the orphaned
+# temporary files this script otherwise cleans up.
+require_sqlite_backup_space() {
+  local source="$1"
+  local dir="$2"
+  local source_bytes available_kib required_bytes available_bytes
+  if ! source_bytes="$(stat -c '%s' -- "${source}")"; then
+    echo "❌ 无法读取 SQLite 源库大小：${source}" >&2
+    return 1
+  fi
+  if ! available_kib="$(df -Pk -- "${dir}" | awk 'NR==2 {print $4}')"; then
+    echo "❌ 无法读取备份目录可用空间：${dir}" >&2
+    return 1
+  fi
+  if [[ ! "${available_kib}" =~ ^[0-9]+$ ]]; then
+    echo "❌ 备份目录可用空间无法解析：${dir}" >&2
+    return 1
+  fi
+  required_bytes=$(( source_bytes + 64 * 1024 * 1024 ))
+  available_bytes=$(( available_kib * 1024 ))
+  if (( available_bytes < required_bytes )); then
+    echo "❌ 备份目录可用空间不足：${dir} 可用 ${available_bytes} 字节，至少需要 ${required_bytes} 字节（源库 ${source_bytes} + 64MiB）" >&2
+    return 1
+  fi
+}
+
 if command -v sha256sum >/dev/null 2>&1; then
   checksum_tool="sha256sum"
 elif command -v shasum >/dev/null 2>&1; then
@@ -158,6 +236,7 @@ if [[ "${db_type}" == "sqlite" ]]; then
     exit 1
   fi
   artifact_tmp="${backup_file}.tmp.$$"
+  require_sqlite_backup_space "${sqlite_path}" "${output_dir}"
   sqlite3 "${sqlite_path}" ".timeout 5000" ".backup '${artifact_tmp}'"
   if [[ ! -s "${artifact_tmp}" ]]; then
     echo "❌ SQLite 备份产物为空：${artifact_tmp}" >&2

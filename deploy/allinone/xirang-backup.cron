@@ -1,6 +1,7 @@
 # Xirang 平台数据库自动备份
-# 每日 02:00 执行备份，02:30 清理 30 天前的旧备份
-# 注意：此 cron 使用 mtime 按天清理（30 天），与 DB_BACKUP_MAX_COUNT（默认 20，按数量）不同。
-# 两者互补：DB_BACKUP_MAX_COUNT 控制备份脚本保留数量，cron find 按时间兜底清理。
+# 每日 02:00 执行备份，02:30 清理 30 天前的旧备份（含中断残留的 *.tmp.* 临时文件）
+# 注意：这条 cron 只按文件 mtime 清理（30 天），不读取 DB_BACKUP_MAX_COUNT。
+# DB_BACKUP_MAX_COUNT 只约束管理 API POST /system/backup-db 的保留数量，与本 cron 无关。
+# backup-db.sh 自身负责“本次失败不留 tmp”，并在备份前清理 pid 已消失或超过 24h 的孤儿临时文件。
 0 2 * * * /usr/local/bin/backup-db.sh /backup/db
-30 2 * * * find /backup/db -maxdepth 1 \( -name "*.db" -o -name "*.dump" -o -name "*.sha256" \) -mtime +30 -delete
+30 2 * * * find /backup/db -maxdepth 1 \( -name "*.db" -o -name "*.dump" -o -name "*.sha256" -o -name "*.tmp.*" \) -mtime +30 -delete
