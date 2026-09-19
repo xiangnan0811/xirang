@@ -30,6 +30,7 @@ web/.env
 .omo/
 .opencode/
 .codegraph/
+.dsh-project-memory/
 .gemini/
 .agent/
 CLAUDE.md
