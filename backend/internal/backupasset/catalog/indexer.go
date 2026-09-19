@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -225,7 +226,7 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 			}
 			failureFrozen, failureErr := indexer.loadRefreshFailureBuild(buildContext, request)
 			if failureErr == nil {
-				generation, err = indexer.beginGeneration(buildContext, request, failureFrozen, lease.Fence)
+				generation, err = indexer.beginGeneration(buildContext, request, failureFrozen, lease.Fence, false)
 				if err == nil {
 					return generation, refreshErr
 				}
@@ -238,8 +239,17 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 	if err != nil {
 		return model.CatalogGeneration{}, err
 	}
-	generation, err = indexer.beginGeneration(buildContext, request, frozen, lease.Fence)
+	// The post-refresh short-circuit lives inside beginGeneration's transaction
+	// so the active/latest decision cannot race a concurrent activation. A
+	// mutable build is skipped only when an active complete generation still
+	// matches the refreshed fingerprint *and* it is the latest generation, so a
+	// due failed retry is never swallowed.
+	generation, err = indexer.beginGeneration(buildContext, request, frozen, lease.Fence, true)
 	if err != nil {
+		if errors.Is(err, ErrCatalogRebuildNotRequired) {
+			generationSettled = true
+			return generation, err
+		}
 		return model.CatalogGeneration{}, err
 	}
 
@@ -447,6 +457,7 @@ func (indexer *Indexer) beginGeneration(
 	request BuildRequest,
 	frozen frozenBuild,
 	fence backupasset.LeaseFence,
+	reuseUnchangedMutable bool,
 ) (model.CatalogGeneration, error) {
 	var generation model.CatalogGeneration
 	err := indexer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -463,6 +474,29 @@ func (indexer *Indexer) beginGeneration(
 		}
 		if err := indexer.lease.ValidateFenceTx(ctx, tx, fence); err != nil {
 			return err
+		}
+		// Short-circuit a mutable rebuild only when the exact active complete
+		// projection is still current. All three facts are required:
+		//
+		//   1. a generation with is_active=1 and state=complete exists,
+		//   2. its source_fingerprint equals the refreshed point fingerprint,
+		//   3. the generation-DESC latest row is that same active generation.
+		//
+		// Missing any one of them must build a new generation. Completion and
+		// preview drift supersede the active row first, so (1) fails and the
+		// replacement is built; a newer failed/partial attempt makes (3) fail so
+		// its retry is not swallowed. The point row is locked above and the
+		// active/latest read happens in the same transaction, so a concurrent
+		// activation cannot slip between the check and the insert.
+		if reuseUnchangedMutable && backupasset.PointVersionSemantics(frozen.point.Semantics) == backupasset.PointMutableHead {
+			reusable, active, reuseErr := indexer.reusableActiveGenerationTx(tx, frozen)
+			if reuseErr != nil {
+				return reuseErr
+			}
+			if reusable {
+				generation = active
+				return ErrCatalogRebuildNotRequired
+			}
 		}
 		var sequence int
 		if err := tx.Model(&model.CatalogGeneration{}).Where("recovery_point_id = ?", frozen.point.ID).
@@ -491,6 +525,36 @@ func (indexer *Indexer) beginGeneration(
 		return nil
 	})
 	return generation, err
+}
+
+// reusableActiveGenerationTx reports whether the exact active complete mutable
+// projection is still the latest generation for the frozen fingerprint, so the
+// caller may settle without inserting a new one. It runs inside the build's
+// point-locked transaction; the point-before-generation lock order matches
+// beginGeneration and activate.
+func (indexer *Indexer) reusableActiveGenerationTx(tx *gorm.DB, frozen frozenBuild) (bool, model.CatalogGeneration, error) {
+	var active model.CatalogGeneration
+	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("recovery_point_id = ? AND state = ? AND is_active = ?", frozen.point.ID, GenerationComplete, true).
+		Order("generation DESC").Limit(1).Find(&active)
+	if result.Error != nil {
+		return false, model.CatalogGeneration{}, fmt.Errorf("lock active Catalog generation: %w", result.Error)
+	}
+	if result.RowsAffected != 1 || !active.IsActive || active.State != string(GenerationComplete) ||
+		active.SourceFingerprint != frozen.point.SourceFingerprint {
+		return false, model.CatalogGeneration{}, nil
+	}
+	var latest model.CatalogGeneration
+	latestResult := tx.Select("id", "generation", "state", "is_active").
+		Where("recovery_point_id = ?", frozen.point.ID).
+		Order("generation DESC").Limit(1).Find(&latest)
+	if latestResult.Error != nil {
+		return false, model.CatalogGeneration{}, fmt.Errorf("load latest Catalog generation: %w", latestResult.Error)
+	}
+	if latestResult.RowsAffected != 1 || latest.ID != active.ID {
+		return false, model.CatalogGeneration{}, nil
+	}
+	return true, active, nil
 }
 
 func (indexer *Indexer) catalogEntryFromRecord(
@@ -695,6 +759,80 @@ func (indexer *Indexer) RetireProjection(ctx context.Context, recoveryPointID st
 	return indexer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return indexer.DeactivatePointProjectionTx(ctx, tx, recoveryPointID)
 	})
+}
+
+// ObserveStorageFacts returns the bounded, identity-free storage aggregates the
+// Catalog worker publishes once per scan. It is deliberately whole-table: no
+// recovery point, path, or locator ever reaches a metric label.
+func (indexer *Indexer) ObserveStorageFacts(ctx context.Context) (StorageObservation, error) {
+	if indexer == nil || indexer.db == nil {
+		return StorageObservation{}, fmt.Errorf("%w: Catalog storage observation unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	observation := StorageObservation{GenerationsByState: make(map[string]int64, len(metricGenerationStates()))}
+	type generationStateCount struct {
+		State string
+		Count int64
+	}
+	var stateCounts []generationStateCount
+	if err := indexer.db.WithContext(ctx).Model(&model.CatalogGeneration{}).
+		Select("state, COUNT(*) AS count").Group("state").Scan(&stateCounts).Error; err != nil {
+		return StorageObservation{}, fmt.Errorf("aggregate Catalog generation states: %w", err)
+	}
+	for _, row := range stateCounts {
+		observation.GenerationsByState[row.State] = row.Count
+	}
+	var maxPerPoint struct {
+		MaxPerPoint int64
+	}
+	generationsTable := (model.CatalogGeneration{}).TableName()
+	if err := indexer.db.WithContext(ctx).Raw(
+		"SELECT COALESCE(MAX(point_generations), 0) AS max_per_point FROM (" +
+			"SELECT COUNT(*) AS point_generations FROM " + generationsTable + " GROUP BY recovery_point_id" +
+			") AS point_generation_counts",
+	).Scan(&maxPerPoint).Error; err != nil {
+		return StorageObservation{}, fmt.Errorf("aggregate Catalog generations per point: %w", err)
+	}
+	observation.MaxGenerationsPerPoint = maxPerPoint.MaxPerPoint
+	if err := indexer.db.WithContext(ctx).Model(&model.CatalogEntry{}).Count(&observation.EntryCount).Error; err != nil {
+		return StorageObservation{}, fmt.Errorf("count Catalog entries: %w", err)
+	}
+	fileBytes, err := indexer.sqliteMainFileBytes(ctx)
+	if err != nil {
+		return StorageObservation{}, err
+	}
+	observation.SQLiteFileBytes = fileBytes
+	return observation, nil
+}
+
+// sqliteMainFileBytes reports the on-disk size of the SQLite main database, or
+// zero on any other backend or an unnamed/in-memory database.
+func (indexer *Indexer) sqliteMainFileBytes(ctx context.Context) (int64, error) {
+	if indexer.db.Dialector == nil || indexer.db.Name() != "sqlite" {
+		return 0, nil
+	}
+	type sqliteDatabase struct {
+		Seq  int
+		Name string
+		File string
+	}
+	var databases []sqliteDatabase
+	if err := indexer.db.WithContext(ctx).Raw("PRAGMA database_list").Scan(&databases).Error; err != nil {
+		return 0, fmt.Errorf("list SQLite databases: %w", err)
+	}
+	for _, database := range databases {
+		if database.Name != "main" || strings.TrimSpace(database.File) == "" {
+			continue
+		}
+		info, statErr := os.Stat(database.File)
+		if statErr != nil {
+			return 0, fmt.Errorf("stat SQLite main database: %w", statErr)
+		}
+		return info.Size(), nil
+	}
+	return 0, nil
 }
 
 // DeactivatePointProjectionTx lets the point lifecycle coordinator remove a
@@ -993,7 +1131,6 @@ func (indexer *Indexer) ListCandidates(
 		SourceFingerprint string
 		ManifestDigest    string
 		EntryCount        int64
-		ObservedAt        *time.Time
 		ProviderKind      string
 	}
 	scanLimit := limit * 20
@@ -1006,7 +1143,7 @@ func (indexer *Indexer) ListCandidates(
 	var points []pointControl
 	if err := indexer.db.WithContext(ctx).Table("recovery_points AS points").
 		Select(`points.id, points.repository_id, points.semantics, points.state, points.source_fingerprint,
-			points.manifest_digest, points.entry_count, points.observed_at, repositories.provider_kind`).
+			points.manifest_digest, points.entry_count, repositories.provider_kind`).
 		Joins("JOIN backup_repositories AS repositories ON repositories.id = points.repository_id").
 		Where("repositories.provider_kind <> ?", backupasset.ProviderCommand).
 		Where(`points.semantics <> ? OR repositories.status IN ?`,
@@ -1023,7 +1160,7 @@ func (indexer *Indexer) ListCandidates(
 	result := make([]BuildCandidate, 0, min(limit, len(points)))
 	for _, point := range points {
 		eligible, err := indexer.catalogPointEligibleAt(ctx, point.ID, point.Semantics, point.SourceFingerprint, point.ManifestDigest,
-			point.EntryCount, point.ObservedAt, now.UTC(), config)
+			point.EntryCount, now.UTC(), config)
 		if err != nil {
 			return nil, err
 		}
@@ -1037,11 +1174,18 @@ func (indexer *Indexer) ListCandidates(
 	return result, nil
 }
 
+// catalogPointEligibleAt answers only "is another Catalog build due?" from
+// durable point/generation facts. The point's observation clock is deliberately
+// not consulted: for a mutable head, RefreshMutableObservation rewrites
+// observed_at on every observation, and a child change leaves the root
+// fingerprint unchanged, so an aged timestamp is not evidence of source drift.
+// Enqueueing on clock expiry would re-project an unchanged tree forever. The
+// completion and preview drift paths supersede the active generation instead,
+// which is what makes a replacement genuinely due here.
 func (indexer *Indexer) catalogPointEligibleAt(
 	ctx context.Context,
 	pointID, semantics, sourceFingerprint, manifestDigest string,
 	entryCount int64,
-	observedAt *time.Time,
 	now time.Time,
 	config backupasset.CatalogConfig,
 ) (bool, error) {
@@ -1082,10 +1226,10 @@ func (indexer *Indexer) catalogPointEligibleAt(
 				return !now.Before(nextAt), nil
 			}
 		}
-		if observedAt != nil && now.Before(observedAt.UTC().Add(2*config.ReconcileInterval)) {
-			return false, nil
-		}
-		return true, nil
+		// The active complete generation already matches the point fingerprint
+		// and the latest generation is not a different due retry, so the
+		// projection is current. Clock expiry alone never makes it due.
+		return false, nil
 	}
 	if len(generations) == 0 {
 		return true, nil

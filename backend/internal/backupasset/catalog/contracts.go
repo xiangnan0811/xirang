@@ -25,6 +25,11 @@ var (
 	ErrOwnershipProjectionLimit = errors.New("catalog ownership projection limit reached")
 	ErrCatalogUnavailable       = errors.New("catalog unavailable")
 	ErrFeatureDisabled          = errors.New("catalog feature disabled")
+	// ErrCatalogRebuildNotRequired reports that a mutable Catalog build found
+	// the exact active complete generation still current after refreshing its
+	// source observation. It is not a failure: the caller must settle without
+	// persisting a new generation, a failure row, or a new wake.
+	ErrCatalogRebuildNotRequired = errors.New("catalog rebuild not required")
 )
 
 type GenerationState string

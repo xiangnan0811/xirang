@@ -129,6 +129,10 @@ func TestRuntimePreparePreviewSourceRepairsMutableRsyncBeforeFirstIssue(t *testi
 // Catalog builder already owns the next generation. Preparation must supersede
 // the stale active generation, preserve the live builder and lease, and project
 // a pending gap until the builder publishes the replacement.
+//
+// The live build is made genuinely due the PR-A way: a newer, already-due failed
+// attempt keeps the last-good active generation in place, so the active row is
+// no longer the latest generation and the rebuild must not be short-circuited.
 func TestRuntimePreparePreviewSourceJoinsLiveBuildWithoutPreparingStaleActiveGeneration(t *testing.T) {
 	if runtimepkg.GOOS != "linux" {
 		t.Skip("local Rsync Provider access requires Linux openat2 support")
@@ -155,6 +159,22 @@ func TestRuntimePreparePreviewSourceJoinsLiveBuildWithoutPreparingStaleActiveGen
 	}
 	if point.ObservedAt == nil || !point.ObservedAt.Equal(fixture.clock) {
 		t.Fatalf("mutable point observed_at=%v, want recent fixture clock %v", point.ObservedAt, fixture.clock)
+	}
+	// A newer failed attempt whose backoff has already expired makes the
+	// replacement due while the last-good active generation is still present.
+	// The active row is therefore not the latest generation, which is exactly
+	// the case the build short-circuit must not swallow.
+	failedAt := fixture.clock.Add(-time.Hour)
+	dueRetry := model.CatalogGeneration{
+		ID: strings.Repeat("d", 31) + "1", RecoveryPointID: initial.ref.RecoveryPointID,
+		Generation: initialGeneration.Generation + 1, State: string(catalog.GenerationFailed),
+		IsActive: false, SourceFingerprint: initialGeneration.SourceFingerprint,
+		ErrorCode: "catalog_provider_unavailable",
+		StartedAt: failedAt.Add(-time.Minute), FinishedAt: &failedAt,
+		CreatedAt: failedAt.Add(-time.Minute), UpdatedAt: failedAt,
+	}
+	if err := fixture.db.Create(&dueRetry).Error; err != nil {
+		t.Fatalf("seed due failed Catalog retry: %v", err)
 	}
 
 	pausedFactory, _ := fixture.configurePausedCatalogWorker(t)
@@ -619,9 +639,11 @@ func TestRuntimePreparePreviewSourceRearmsOrphanedMutableCatalogBuild(t *testing
 
 // TestRuntimePreparePreviewSourceRearmsAgedStaleActiveCatalog verifies that a
 // healthy mutable source does not merely wake a worker behind a failed retry
-// backoff. Preparation must invalidate the stale active generation through the
-// existing CAS path, then the ordinary first Issue must serve the exact bytes
-// from the newly active generation.
+// backoff. Here the aged observation is not what re-arms preparation: an
+// unchanged fingerprint must stay Fresh whatever the clock says. The re-arm
+// comes from the newer failed attempt (LatestBuild), which must invalidate the
+// last-good active generation through the existing CAS path, after which the
+// ordinary first Issue serves the exact bytes from the newly active generation.
 func TestRuntimePreparePreviewSourceRearmsAgedStaleActiveCatalog(t *testing.T) {
 	if runtimepkg.GOOS != "linux" {
 		t.Skip("local Rsync Provider access requires Linux openat2 support")
@@ -654,9 +676,12 @@ func TestRuntimePreparePreviewSourceRearmsAgedStaleActiveCatalog(t *testing.T) {
 		t.Fatalf("seed latest failed Catalog attempt: %v", err)
 	}
 	before := previewPreparationCatalogStatus(t, fixture.runtime.CatalogService(), initial.ref.RecoveryPointID)
-	if before.Generation == nil || before.Staleness.Status != catalog.StalenessStale ||
+	// Clock age is not source drift: the fingerprint still matches, so the
+	// projection stays Fresh even though observed_at is two hours old. Rearm is
+	// driven by the newer failed attempt below, not by the aged timestamp.
+	if before.Generation == nil || before.Staleness.Status != catalog.StalenessFresh ||
 		before.LatestBuild == nil || before.LatestBuild.State != catalog.GenerationFailed {
-		t.Fatalf("failed to seed aged stale active Catalog: %+v", before)
+		t.Fatalf("failed to seed aged active Catalog behind a newer failure: %+v", before)
 	}
 
 	pausedFactory, workerCtx := fixture.configurePausedCatalogWorker(t)
@@ -709,6 +734,136 @@ func TestRuntimePreparePreviewSourceRearmsAgedStaleActiveCatalog(t *testing.T) {
 	}
 	issueAndServePreviewFirst(t, fixture.runtime.ContentBroker(), fixture.db, initial, fixture.clock, fixture.payloads[0])
 	assertPreviewPreparationGenerationUnchanged(t, fixture.db, fixture.generations[1].RecoveryPointID, fixture.generations[1].ID)
+}
+
+// TestRuntimePreparePreviewSourceKeepsAgedActiveCatalogWhenFingerprintMatches is
+// the PR-A regression guard for "clock expiry is not source drift". An active
+// complete projection whose fingerprint still matches its point must survive a
+// preparation call that observed nothing but an aged observed_at: the exact
+// generation stays active, the observation timestamp is not rewritten, and no
+// replacement build is requested. Physical drift keeps its own CAS path in the
+// sibling preparation tests.
+func TestRuntimePreparePreviewSourceKeepsAgedActiveCatalogWhenFingerprintMatches(t *testing.T) {
+	if runtimepkg.GOOS != "linux" {
+		t.Skip("local Rsync Provider access requires Linux openat2 support")
+	}
+	fixture := newPreviewSourcePreparationFixture(t, []byte("aged payload"), []byte("sibling payload"))
+	initial := fixture.entries[0]
+	initialGeneration := fixture.generations[0]
+	oldObservedAt := fixture.clock.Add(-2 * time.Hour)
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", initial.ref.RecoveryPointID).
+		Update("observed_at", oldObservedAt).Error; err != nil {
+		t.Fatalf("age mutable source observation: %v", err)
+	}
+	var pointBefore model.RecoveryPoint
+	if err := fixture.db.First(&pointBefore, "id = ?", initial.ref.RecoveryPointID).Error; err != nil {
+		t.Fatalf("load aged mutable point: %v", err)
+	}
+	if pointBefore.ObservedAt == nil || !pointBefore.ObservedAt.Equal(oldObservedAt) {
+		t.Fatalf("aged mutable point observation=%v, want %v", pointBefore.ObservedAt, oldObservedAt)
+	}
+	// The fixture's Connect already requested a wake. Drain it so a later pending
+	// wake can only have come from this preparation call.
+	drainPreviewPreparationCatalogWake(t, fixture.runtime)
+
+	status, err := fixture.runtime.PreparePreviewSource(context.Background(), previewPreparationAdminActor(), initial.ref)
+	if err != nil {
+		t.Fatalf("prepare aged current active Catalog: status=%+v err=%v", status, err)
+	}
+	if status.Generation == nil || status.Generation.ID != initialGeneration.ID ||
+		status.Coverage.Status != catalog.CoverageComplete ||
+		status.Staleness.Status != catalog.StalenessFresh || !status.ContentAvailability.Available {
+		t.Fatalf("aged current Catalog status=%+v", status)
+	}
+	assertPreviewPreparationGenerationUnchanged(t, fixture.db, initial.ref.RecoveryPointID, initialGeneration.ID)
+	var pointAfter model.RecoveryPoint
+	if err := fixture.db.First(&pointAfter, "id = ?", initial.ref.RecoveryPointID).Error; err != nil {
+		t.Fatalf("reload aged mutable point after preparation: %v", err)
+	}
+	if pointAfter.ObservedAt == nil || !pointAfter.ObservedAt.Equal(oldObservedAt) ||
+		pointAfter.SourceFingerprint != pointBefore.SourceFingerprint {
+		t.Fatalf("preparation rewrote aged source evidence: before=%+v after=%+v", pointBefore, pointAfter)
+	}
+	if fixture.runtime.catalogWorker.hasPendingWake() {
+		t.Fatal("a fingerprint-matching but clock-aged Catalog requested a replacement build")
+	}
+	// A sibling point on the same node stays isolated.
+	assertPreviewPreparationGenerationUnchanged(t, fixture.db, fixture.generations[1].RecoveryPointID, fixture.generations[1].ID)
+}
+
+// TestRuntimeCatalogWorkerReplacesGenerationAfterBackupCompletion drives the
+// PR-A end-to-end path through the real Catalog worker: a completed backup whose
+// in-place child change leaves the mutable root fingerprint unchanged supersedes
+// the active projection, the next worker scan still selects the point as a
+// candidate, and the worker publishes a genuine replacement generation. A
+// fingerprint-only short-circuit would leave Files indexing forever.
+func TestRuntimeCatalogWorkerReplacesGenerationAfterBackupCompletion(t *testing.T) {
+	if runtimepkg.GOOS != "linux" {
+		t.Skip("local Rsync Provider access requires Linux openat2 support")
+	}
+	fixture := newPreviewSourcePreparationFixture(t,
+		[]byte("services:\n  api:\n    image: nginx:completion-old\n"),
+		[]byte("services:\n  worker:\n    image: nginx:completion-sibling\n"),
+	)
+	ctx := context.Background()
+	initial := fixture.entries[0]
+	initialGeneration := fixture.generations[0]
+	rootInfo := fixture.rootInfos[0]
+	updatedPayload := []byte("services:\n  api:\n    image: nginx:completion-new\n")
+	var pointBefore model.RecoveryPoint
+	if err := fixture.db.First(&pointBefore, "id = ?", initial.ref.RecoveryPointID).Error; err != nil {
+		t.Fatalf("load mutable point before completion: %v", err)
+	}
+
+	// The backup replaces child content in place and preserves root metadata, so
+	// the mutable root fingerprint cannot be what makes the rebuild due.
+	writePreviewFirstPayload(t, fixture.sourceRoots[0], fixture.targetRoots[0], updatedPayload)
+	if err := os.Chtimes(fixture.targetRoots[0], rootInfo.ModTime(), rootInfo.ModTime()); err != nil {
+		t.Fatalf("preserve mutable target root metadata: %v", err)
+	}
+	if err := fixture.runtime.RepositoryService().ObserveBackupSourceCompletion(ctx, fixture.tasks[0].ID); err != nil {
+		t.Fatalf("observe backup source completion: %v", err)
+	}
+	var pointAfter model.RecoveryPoint
+	if err := fixture.db.First(&pointAfter, "id = ?", initial.ref.RecoveryPointID).Error; err != nil {
+		t.Fatalf("load mutable point after completion: %v", err)
+	}
+	if pointAfter.SourceFingerprint != pointBefore.SourceFingerprint {
+		t.Fatalf("completion changed the mutable root fingerprint: before=%q after=%q", pointBefore.SourceFingerprint, pointAfter.SourceFingerprint)
+	}
+	var superseded model.CatalogGeneration
+	if err := fixture.db.First(&superseded, "id = ?", initialGeneration.ID).Error; err != nil {
+		t.Fatalf("reload completion-superseded generation: %v", err)
+	}
+	if superseded.State != string(catalog.GenerationSuperseded) || superseded.IsActive {
+		t.Fatalf("completion did not supersede the active generation: %+v", superseded)
+	}
+
+	// The worker scan must select the completion-superseded point and build the
+	// replacement even though the fingerprint is unchanged.
+	if err := fixture.runtime.catalogWorker.runScan(ctx); err != nil {
+		t.Fatalf("Catalog worker scan after backup completion: %v", err)
+	}
+	replacement, replacementEntry := waitForPreviewFirstCatalog(
+		t, fixture.db, initial.ref.RecoveryPointID, initialGeneration.ID, updatedPayload,
+	)
+	if replacement.Generation <= initialGeneration.Generation ||
+		replacement.SourceFingerprint != pointAfter.SourceFingerprint {
+		t.Fatalf("completion replacement generation=%+v initial=%+v", replacement, initialGeneration)
+	}
+	if replacementEntry.EntryID != initial.modelEntry.EntryID || replacementEntry.Size != int64(len(updatedPayload)) {
+		t.Fatalf("completion replacement lost exact entry lineage: entry=%+v", replacementEntry)
+	}
+	// A fully superseded completion must leave exactly the one replacement
+	// generation behind.
+	var generations int64
+	if err := fixture.db.Model(&model.CatalogGeneration{}).
+		Where("recovery_point_id = ?", initial.ref.RecoveryPointID).Count(&generations).Error; err != nil {
+		t.Fatalf("count completion generations: %v", err)
+	}
+	if generations != 2 {
+		t.Fatalf("completion produced %d generations, want exactly one replacement", generations)
+	}
 }
 
 // TestRuntimePreparePreviewSourcePreservesFreshCatalogAcrossPendingAuthorization
@@ -1195,6 +1350,23 @@ func (fixture *previewSourcePreparationFixture) startPausedCatalogWorker(t *test
 
 func previewPreparationAdminActor() content.DeliveryActor {
 	return content.DeliveryActor{UserID: 1, Username: "preview-admin", Role: "admin"}
+}
+
+// drainPreviewPreparationCatalogWake clears the lifecycle-owned Catalog worker's
+// coalesced wake so a test can prove that a later call requested no new build.
+func drainPreviewPreparationCatalogWake(t *testing.T, runtime *Runtime) {
+	t.Helper()
+	worker := runtime.catalogWorker
+	if worker == nil {
+		t.Fatal("preview preparation runtime has no Catalog worker")
+	}
+	worker.mu.Lock()
+	worker.wakePending = false
+	worker.mu.Unlock()
+	select {
+	case <-worker.wake:
+	default:
+	}
 }
 
 func previewPreparationCatalogStatus(t *testing.T, service *catalog.Service, pointID string) catalog.StatusDTO {

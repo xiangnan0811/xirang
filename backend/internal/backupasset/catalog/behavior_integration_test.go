@@ -161,7 +161,7 @@ func runCatalogGenerationBehavior(t *testing.T, primary, observer *gorm.DB) {
 				generation, buildErr := candidate.beginGeneration(context.Background(), BuildRequest{
 					RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID,
 					CorrelationID: fmt.Sprintf("sequence-%d", index),
-				}, frozen, lease.Fence)
+				}, frozen, lease.Fence, false)
 				if buildErr != nil {
 					errorsCh <- buildErr
 					return
@@ -293,7 +293,7 @@ func prepareCatalogActivation(
 	}
 	building, err := indexer.beginGeneration(context.Background(), BuildRequest{
 		RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID,
-	}, frozen, lease.Fence)
+	}, frozen, lease.Fence, false)
 	if err != nil {
 		t.Fatal(err)
 	}

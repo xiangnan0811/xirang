@@ -581,7 +581,7 @@ func TestRecoveryPointSourceLifecycleCatalogSeparatesPrepareFromCleanup(t *testi
 	if err := db.First(&point, "id = ?", pointID).Error; err != nil {
 		t.Fatalf("load lifecycle Catalog point: %v", err)
 	}
-	statusService := &Service{db: db, now: func() time.Time { return now }, reconcileInterval: time.Minute}
+	statusService := &Service{db: db, now: func() time.Time { return now }}
 	status, err := statusService.projectStatus(context.Background(), point, model.BackupRepository{})
 	if err != nil {
 		t.Errorf("project lifecycle-closed Catalog status: %v", err)

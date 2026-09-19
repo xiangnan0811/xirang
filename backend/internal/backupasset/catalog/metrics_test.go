@@ -19,6 +19,10 @@ func TestCatalogMetricsExposeOnlyFrozenLowCardinalityLabels(t *testing.T) {
 	metrics.ObserveScan(MetricScanSuccess)
 	metrics.SetActiveBuilds(2)
 	metrics.AddReconciledAbandoned(3)
+	metrics.ObserveStorage(StorageObservation{
+		GenerationsByState:     map[string]int64{string(GenerationComplete): 1, "not-a-state": 7},
+		MaxGenerationsPerPoint: 1, EntryCount: 2, SQLiteFileBytes: 3,
+	})
 
 	actual := catalogMetricLabelNames(t, registry)
 	expected := map[string][]string{
@@ -27,6 +31,10 @@ func TestCatalogMetricsExposeOnlyFrozenLowCardinalityLabels(t *testing.T) {
 		"xirang_backup_asset_catalog_scans_total":                {"outcome"},
 		"xirang_backup_asset_catalog_active_builds":              {},
 		"xirang_backup_asset_catalog_reconciled_abandoned_total": {},
+		"xirang_backup_asset_catalog_generations":                {"state"},
+		"xirang_backup_asset_catalog_generations_max_per_point":  {},
+		"xirang_backup_asset_catalog_entries":                    {},
+		"xirang_backup_asset_sqlite_file_bytes":                  {},
 	}
 	if len(actual) != len(expected) {
 		t.Fatalf("metric family count=%d want=%d: %#v", len(actual), len(expected), actual)
@@ -34,6 +42,51 @@ func TestCatalogMetricsExposeOnlyFrozenLowCardinalityLabels(t *testing.T) {
 	for name, labels := range expected {
 		if !slices.Equal(actual[name], labels) {
 			t.Fatalf("metric %s labels=%v want=%v", name, actual[name], labels)
+		}
+	}
+}
+
+// TestCatalogStorageMetricsPublishClosedStateSetAndClamp proves the storage
+// gauges only expose the frozen generation-state set (an unknown database value
+// never becomes a series) and never publish a negative value.
+func TestCatalogStorageMetricsPublishClosedStateSetAndClamp(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewPrometheusMetrics(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics.ObserveStorage(StorageObservation{
+		GenerationsByState: map[string]int64{
+			string(GenerationComplete): 2, string(GenerationFailed): 1, "point/SECRET": 9,
+		},
+		MaxGenerationsPerPoint: -4, EntryCount: -1, SQLiteFileBytes: -2,
+	})
+	values := map[string]float64{}
+	for _, family := range catalogMetricFamilies(t, registry) {
+		for _, metric := range family.GetMetric() {
+			if family.GetName() == "xirang_backup_asset_catalog_generations" {
+				for _, label := range metric.GetLabel() {
+					if label.GetName() != "state" {
+						t.Fatalf("generation gauge leaked label %s", label.GetName())
+					}
+					switch label.GetValue() {
+					case string(GenerationBuilding), string(GenerationComplete), string(GenerationPartial),
+						string(GenerationFailed), string(GenerationSuperseded):
+					default:
+						t.Fatalf("generation gauge leaked state series %q", label.GetValue())
+					}
+				}
+			}
+			values[family.GetName()] = metric.GetGauge().GetValue()
+		}
+	}
+	for _, name := range []string{
+		"xirang_backup_asset_catalog_generations_max_per_point",
+		"xirang_backup_asset_catalog_entries",
+		"xirang_backup_asset_sqlite_file_bytes",
+	} {
+		if values[name] != 0 {
+			t.Fatalf("metric %s published negative value %v", name, values[name])
 		}
 	}
 }

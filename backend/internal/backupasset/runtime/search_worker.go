@@ -9,7 +9,11 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/search"
+	"xirang/backend/internal/logger"
 )
+
+// searchStorageObservationTimeout bounds the pass-end posting aggregate.
+const searchStorageObservationTimeout = 10 * time.Second
 
 type SearchWorkerConfig struct {
 	Enabled            bool
@@ -24,6 +28,7 @@ type SearchWorkerBackend interface {
 	Build(context.Context, search.BuildRequest) error
 	ReconcileAbandoned(context.Context, time.Time, int) (int64, error)
 	ReconcileOverlays(context.Context, int) (int64, error)
+	ObserveStorageFacts(context.Context) (int64, error)
 }
 
 type SearchWorkerDependencies struct {
@@ -195,18 +200,44 @@ func (worker *SearchWorker) runPass(ctx context.Context) error {
 	return worker.runPassWithConfig(ctx, config)
 }
 
+// observeStorageFacts publishes the pass-end Search posting count using its own
+// bounded context. A failed aggregate is logged only: it must not turn a
+// completed pass into a failure.
+func (worker *SearchWorker) observeStorageFacts() {
+	if worker == nil || worker.backend == nil || worker.metrics == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), searchStorageObservationTimeout)
+	defer cancel()
+	postings, err := worker.backend.ObserveStorageFacts(ctx)
+	if err != nil {
+		logger.Module("backupasset.search").Warn().Str("stage", "storage_metrics").Msg("Search 存储指标采集失败")
+		return
+	}
+	worker.metrics.SetPostings(postings)
+}
+
+// runPassWithConfig runs one full Search pass and publishes the pass-end posting
+// gauge only after the pass actually did its work. Infrastructure-only
+// preparation must not collect it.
 func (worker *SearchWorker) runPassWithConfig(ctx context.Context, config SearchWorkerConfig) error {
 	candidates, concurrency, enabled, err := worker.prepareWithConfig(ctx, config)
 	if err != nil || !enabled {
 		return err
 	}
-	return worker.buildCandidates(ctx, candidates, concurrency)
+	if err := worker.buildCandidates(ctx, candidates, concurrency); err != nil {
+		return err
+	}
+	worker.observeStorageFacts()
+	return nil
 }
 
 func (worker *SearchWorker) prepareWithConfig(
 	ctx context.Context,
 	config SearchWorkerConfig,
 ) ([]search.BuildCandidate, int, bool, error) {
+	// A disabled pass must not touch the backend at all, so the posting gauge is
+	// collected only after a real, enabled pass completes.
 	if !config.Enabled {
 		worker.metrics.ObserveScan(search.ScanOutcomeDisabled)
 		return nil, 0, false, nil

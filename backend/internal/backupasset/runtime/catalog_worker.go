@@ -17,6 +17,9 @@ const (
 	catalogCandidateMinimum = 200
 	catalogCandidateMaximum = 2000
 	catalogAbandonedLimit   = 1000
+	// catalogStorageObservationTimeout bounds the scan-end aggregate so a large
+	// database cannot stall the worker behind its own metrics collection.
+	catalogStorageObservationTimeout = 10 * time.Second
 )
 
 type CatalogWorkerBackend interface {
@@ -24,6 +27,7 @@ type CatalogWorkerBackend interface {
 	ReconcileAbandoned(context.Context, time.Duration, int) (int, error)
 	Build(context.Context, catalog.BuildRequest) (model.CatalogGeneration, error)
 	RevokeActiveBuilds(context.Context) error
+	ObserveStorageFacts(context.Context) (catalog.StorageObservation, error)
 }
 
 type CatalogWorkerDependencies struct {
@@ -277,6 +281,7 @@ func (worker *CatalogWorker) runScan(ctx context.Context) error {
 		return err
 	}
 	worker.metrics.ObserveScan(catalog.MetricScanSuccess)
+	worker.observeStorageFacts()
 	return nil
 }
 
@@ -345,6 +350,11 @@ func (worker *CatalogWorker) buildCandidate(ctx context.Context, candidate catal
 	})
 	outcome := catalog.MetricBuildComplete
 	switch {
+	case errors.Is(buildErr, catalog.ErrCatalogRebuildNotRequired):
+		// The exact active complete projection was still current after the
+		// refresh, so no generation was created. This is a successful,
+		// non-failing scan outcome, not a rebuild.
+		outcome = catalog.MetricBuildSkipped
 	case errors.Is(buildErr, context.Canceled), errors.Is(buildErr, context.DeadlineExceeded):
 		outcome = catalog.MetricBuildCanceled
 	case buildErr != nil && generation.State == string(catalog.GenerationPartial):
@@ -360,6 +370,23 @@ func (worker *CatalogWorker) adjustActiveBuilds(delta int) {
 	defer worker.activeBuildMu.Unlock()
 	worker.activeBuilds += delta
 	worker.metrics.SetActiveBuilds(worker.activeBuilds)
+}
+
+// observeStorageFacts publishes the scan-end storage aggregate. It uses its own
+// bounded context so a canceled scan still reports the final state, and a failed
+// aggregate is logged only: it must never turn a completed scan into a failure.
+func (worker *CatalogWorker) observeStorageFacts() {
+	if worker == nil || worker.backend == nil || worker.metrics == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), catalogStorageObservationTimeout)
+	defer cancel()
+	observation, err := worker.backend.ObserveStorageFacts(ctx)
+	if err != nil {
+		logger.Module("backupasset.catalog").Warn().Str("stage", "storage_metrics").Msg("Catalog 存储指标采集失败")
+		return
+	}
+	worker.metrics.ObserveStorage(observation)
 }
 
 // Shutdown cancels schedules, revokes every active durable point fence, then

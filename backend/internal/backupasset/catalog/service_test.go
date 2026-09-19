@@ -133,6 +133,53 @@ func TestCatalogGenerationDTORejectsUnknownErrorCodeWithoutEcho(t *testing.T) {
 	}
 }
 
+// TestCatalogServiceProjectStalenessTracksFingerprintNotClock proves the
+// Staleness contract directly: for a mutable head only a fingerprint mismatch is
+// source drift. An unchanged fingerprint stays Fresh no matter how old
+// observed_at is, so preview and Files cannot rebuild a current generation on a
+// timer.
+func TestCatalogServiceProjectStalenessTracksFingerprintNotClock(t *testing.T) {
+	now := time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC)
+	service := &Service{now: func() time.Time { return now }}
+	fingerprint := strings.Repeat("a", 64)
+	aged := now.Add(-30 * 24 * time.Hour)
+	mutable := model.RecoveryPoint{
+		ID: strings.Repeat("2", 32), Semantics: string(backupasset.PointMutableHead),
+		SourceFingerprint: fingerprint, ObservedAt: &aged,
+	}
+	matching := model.CatalogGeneration{SourceFingerprint: fingerprint}
+
+	fresh := service.projectStaleness(mutable, matching)
+	if fresh.Status != StalenessFresh || fresh.Reason != nil {
+		t.Fatalf("aged fingerprint-matching mutable staleness=%+v", fresh)
+	}
+	if fresh.ObservedAt == nil || !fresh.ObservedAt.Equal(aged.UTC()) {
+		t.Fatalf("staleness observation=%v want %v", fresh.ObservedAt, aged.UTC())
+	}
+
+	drifted := service.projectStaleness(mutable, model.CatalogGeneration{SourceFingerprint: strings.Repeat("b", 64)})
+	if drifted.Status != StalenessStale || drifted.Reason == nil ||
+		drifted.Reason.Code != backupasset.CapabilityMutableSourceChanged {
+		t.Fatalf("fingerprint-mismatch mutable staleness=%+v", drifted)
+	}
+
+	unobserved := mutable
+	unobserved.ObservedAt = nil
+	if unknown := service.projectStaleness(unobserved, matching); unknown.Status != StalenessUnknown {
+		t.Fatalf("unobserved mutable staleness=%+v", unknown)
+	}
+
+	committed := now
+	immutable := model.RecoveryPoint{
+		ID: strings.Repeat("3", 32), Semantics: string(backupasset.PointNativeSnapshot),
+		SourceFingerprint: fingerprint, CommittedAt: &committed,
+	}
+	immutableStatus := service.projectStaleness(immutable, model.CatalogGeneration{SourceFingerprint: strings.Repeat("b", 64)})
+	if immutableStatus.Status != StalenessFresh {
+		t.Fatalf("immutable staleness=%+v", immutableStatus)
+	}
+}
+
 func TestCatalogServiceEntryCursorBindsActiveGenerationAndStableBinaryOrder(t *testing.T) {
 	db, _ := openCatalogBehaviorSQLite(t)
 	now := time.Date(2026, 7, 17, 14, 0, 0, 0, time.UTC)

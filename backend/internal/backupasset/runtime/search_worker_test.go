@@ -92,6 +92,58 @@ func TestSearchWorkerDynamicDisableTouchesNoBackend(t *testing.T) {
 	}
 }
 
+// TestSearchWorkerPublishesPostingsOnEnabledPassesOnly proves the pass-end
+// posting gauge is collected on a completed enabled pass, and that a disabled
+// worker still touches no backend at all.
+func TestSearchWorkerPublishesPostingsOnEnabledPassesOnly(t *testing.T) {
+	backend := newSearchWorkerBackendFake()
+	backend.postings = 17
+	config := &searchWorkerConfigFake{config: SearchWorkerConfig{
+		Enabled: true, ReconcileInterval: time.Millisecond, ReconcileBatchSize: 10, WorkerConcurrency: 2,
+	}}
+	metrics := newSearchWorkerMetricsSpy()
+	worker, err := NewSearchWorker(SearchWorkerDependencies{Config: config.Get, Backend: backend, Metrics: metrics})
+	if err != nil {
+		t.Fatalf("NewSearchWorker: %v", err)
+	}
+	if err := worker.StartupPass(context.Background()); err != nil {
+		t.Fatalf("StartupPass: %v", err)
+	}
+	if metrics.postingCount() != 17 {
+		t.Fatalf("postings gauge=%d want 17", metrics.postingCount())
+	}
+	if backend.storageCallCount() != 1 {
+		t.Fatalf("storage collection calls=%d want 1", backend.storageCallCount())
+	}
+	// Infrastructure-only preparation is not a scan end and must not collect the
+	// gauge, nor touch the backend beyond its declared reconcile/list work.
+	if err := worker.PrepareWithConfig(context.Background(), config.config); err != nil {
+		t.Fatalf("PrepareWithConfig: %v", err)
+	}
+	if backend.storageCallCount() != 1 {
+		t.Fatalf("infrastructure preparation collected storage metrics: calls=%d", backend.storageCallCount())
+	}
+
+	disabledBackend := newSearchWorkerBackendFake()
+	disabledMetrics := newSearchWorkerMetricsSpy()
+	disabledConfig := &searchWorkerConfigFake{config: SearchWorkerConfig{
+		Enabled: false, ReconcileInterval: time.Millisecond, ReconcileBatchSize: 10, WorkerConcurrency: 2,
+	}}
+	disabledWorker, err := NewSearchWorker(SearchWorkerDependencies{
+		Config: disabledConfig.Get, Backend: disabledBackend, Metrics: disabledMetrics,
+	})
+	if err != nil {
+		t.Fatalf("NewSearchWorker: %v", err)
+	}
+	if err := disabledWorker.StartupPass(context.Background()); err != nil {
+		t.Fatalf("StartupPass: %v", err)
+	}
+	if disabledBackend.storageCallCount() != 0 || disabledMetrics.postingCount() != 0 {
+		t.Fatalf("disabled worker collected storage metrics: calls=%d postings=%d",
+			disabledBackend.storageCallCount(), disabledMetrics.postingCount())
+	}
+}
+
 func TestSearchWorkerSchedulesRepositoryFairAndJoinsCanceledBuilds(t *testing.T) {
 	backend := newSearchWorkerBackendFake()
 	backend.candidates = []search.BuildCandidate{
@@ -328,6 +380,9 @@ func (source *searchWorkerConfigFake) Get() (SearchWorkerConfig, error) {
 	return source.config, source.err
 }
 
+// searchWorkerCalls deliberately tracks only the infrastructure calls the
+// behavioral contracts pin. The pass-end storage aggregate is counted separately
+// (storageCalls) so adding a metric cannot rewrite those contracts.
 type searchWorkerCalls struct{ list, build, reconcile, overlay int }
 
 type searchWorkerBackendFake struct {
@@ -340,6 +395,9 @@ type searchWorkerBackendFake struct {
 	reconcileErr      error
 	listErr           error
 	overlayErr        error
+	storageErr        error
+	postings          int64
+	storageCalls      int
 	overlayReconciled int64
 	started           chan search.BuildCandidate
 	activeNow         int
@@ -407,6 +465,19 @@ func (backend *searchWorkerBackendFake) ReconcileOverlays(ctx context.Context, l
 	return reconciled, err
 }
 
+func (backend *searchWorkerBackendFake) ObserveStorageFacts(context.Context) (int64, error) {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	backend.storageCalls++
+	return backend.postings, backend.storageErr
+}
+
+func (backend *searchWorkerBackendFake) storageCallCount() int {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	return backend.storageCalls
+}
+
 func (backend *searchWorkerBackendFake) waitStarted(t *testing.T) search.BuildCandidate {
 	t.Helper()
 	select {
@@ -434,6 +505,7 @@ type searchWorkerMetricsSpy struct {
 	mu        sync.Mutex
 	builds    map[search.BuildOutcome]int
 	activeNow int
+	postings  int64
 }
 
 func newSearchWorkerMetricsSpy() *searchWorkerMetricsSpy {
@@ -449,6 +521,17 @@ func (metrics *searchWorkerMetricsSpy) ObserveBuild(outcome search.BuildOutcome)
 func (*searchWorkerMetricsSpy) ObserveScan(search.ScanOutcome) {}
 func (*searchWorkerMetricsSpy) AddReconciledAbandoned(int64)   {}
 func (*searchWorkerMetricsSpy) AddReconciledOverlays(int64)    {}
+func (metrics *searchWorkerMetricsSpy) SetPostings(count int64) {
+	metrics.mu.Lock()
+	metrics.postings = count
+	metrics.mu.Unlock()
+}
+
+func (metrics *searchWorkerMetricsSpy) postingCount() int64 {
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	return metrics.postings
+}
 
 func (metrics *searchWorkerMetricsSpy) SetActiveBuilds(count int) {
 	metrics.mu.Lock()

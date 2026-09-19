@@ -3654,6 +3654,13 @@ func (backend searchIndexerWorkerBackend) ReconcileAbandoned(ctx context.Context
 	return backend.indexer.ReconcileAbandoned(ctx, cutoff, limit)
 }
 
+func (backend searchIndexerWorkerBackend) ObserveStorageFacts(ctx context.Context) (int64, error) {
+	if backend.indexer == nil {
+		return 0, fmt.Errorf("%w: Search indexer unavailable", backupasset.ErrInvalidState)
+	}
+	return backend.indexer.ObserveStorageFacts(ctx)
+}
+
 func (backend searchIndexerWorkerBackend) ReconcileOverlays(ctx context.Context, limit int) (int64, error) {
 	if backend.overlays == nil {
 		return 0, fmt.Errorf("%w: overlay reconciler unavailable", backupasset.ErrInvalidState)
