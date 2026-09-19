@@ -33,13 +33,12 @@ type ServiceDependencies struct {
 }
 
 type Service struct {
-	db                *gorm.DB
-	ownership         *Ownership
-	cursor            *CursorCodec
-	identityKeys      IdentityKeySource
-	now               func() time.Time
-	reconcileInterval time.Duration
-	featureEnabled    func() (bool, error)
+	db             *gorm.DB
+	ownership      *Ownership
+	cursor         *CursorCodec
+	identityKeys   IdentityKeySource
+	now            func() time.Time
+	featureEnabled func() (bool, error)
 }
 
 type RecoveryPointListRequest struct {
@@ -102,8 +101,7 @@ func NewService(dependencies ServiceDependencies) (*Service, error) {
 	}
 	return &Service{
 		db: dependencies.DB, ownership: dependencies.Ownership, cursor: dependencies.Cursor, identityKeys: dependencies.IdentityKeys,
-		now: dependencies.Now, reconcileInterval: dependencies.ReconcileInterval,
-		featureEnabled: dependencies.FeatureEnabled,
+		now: dependencies.Now, featureEnabled: dependencies.FeatureEnabled,
 	}, nil
 }
 
@@ -622,6 +620,12 @@ func (service *Service) projectStatus(ctx context.Context, point model.RecoveryP
 	return status, nil
 }
 
+// projectStaleness reports source drift, not clock age. A mutable head's
+// observed_at is rewritten by every refresh and its root fingerprint does not
+// move for an in-place child change, so an aged timestamp is never by itself
+// evidence that the projection is stale. StalenessStale therefore requires a
+// fingerprint mismatch; an unchanged fingerprint stays Fresh so preview and
+// Files never rebuild or CAS-invalidate a current generation on a timer.
 func (service *Service) projectStaleness(point model.RecoveryPoint, generation model.CatalogGeneration) StalenessDTO {
 	if backupasset.PointVersionSemantics(point.Semantics) != backupasset.PointMutableHead {
 		return StalenessDTO{Status: StalenessFresh, ObservedAt: utcPointer(point.CommittedAt)}
@@ -630,7 +634,7 @@ func (service *Service) projectStaleness(point model.RecoveryPoint, generation m
 		return StalenessDTO{Status: StalenessUnknown}
 	}
 	observed := point.ObservedAt.UTC()
-	if generation.SourceFingerprint != point.SourceFingerprint || !service.utcNow().Before(observed.Add(2*service.reconcileInterval)) {
+	if generation.SourceFingerprint != point.SourceFingerprint {
 		return StalenessDTO{
 			Status: StalenessStale, ObservedAt: &observed,
 			Reason: &backupasset.CapabilityReason{Code: backupasset.CapabilityMutableSourceChanged},
@@ -978,8 +982,6 @@ func (service *Service) ensureFeatureEnabled() error {
 	}
 	return nil
 }
-
-func (service *Service) utcNow() time.Time { return service.now().UTC() }
 
 func sameOptionalString(value *string, expected string) bool {
 	if expected == "" {

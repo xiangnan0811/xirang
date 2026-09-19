@@ -320,7 +320,9 @@ Docker Compose 默认持久化目录：
 | 时间 | 操作 |
 |---|---|
 | 每日 02:00 | 执行 `backup-db.sh` 备份数据库到 `/backup/db/` |
-| 每日 02:30 | 清理 30 天前的旧备份文件 |
+| 每日 02:30 | 清理 30 天前的旧备份文件，并一并删除 30 天前残留的 `*.tmp.*` 临时文件 |
+
+cron 只按文件 `mtime` 清理（30 天），不读取 `DB_BACKUP_MAX_COUNT`；`DB_BACKUP_MAX_COUNT`（默认 20）只约束管理 API `POST /system/backup-db` 的保留数量。备份脚本 `backup-db.sh` 同时承担两层兜底：备份开始前清理 `output_dir` 中 pid 已消失或超过 24h 的孤儿 `*.tmp.*`（含 SQLite 的 `-journal`/`-wal`/`-shm` 边车文件），并且本次失败不会留下临时文件；SQLite 备份前还会检查目标文件系统可用空间至少为「源库大小 + 64MiB」，不足则直接拒绝并返回非零，不会开始 `.backup`。
 
 ### 手动备份与恢复
 

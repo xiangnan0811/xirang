@@ -114,6 +114,37 @@ belongs only to the asynchronous reconciler.
   A last-good active generation must not override a newer failed or in-progress
   build when deciding whether another mutable build is due. Transient Provider
   failures must remain eligible for later automatic recovery.
+- Clock expiry is not source drift. Periodic Catalog eligibility for a mutable
+  head with an **active complete** generation whose `source_fingerprint` equals
+  the point fingerprint must not enqueue a rebuild solely because `observed_at`
+  is older than `2 × ReconcileInterval`. `observed_at` is rewritten by every
+  refresh and an in-place child change leaves the root fingerprint unchanged, so
+  it is never by itself evidence that the projection is stale.
+- `StalenessStale` plus `CapabilityMutableSourceChanged` requires a fingerprint
+  mismatch (or equivalent durable source evidence), never an aged timestamp.
+  Preview HTTP must not CAS-invalidate an active complete Catalog, and must not
+  rewrite `observed_at`, only because the observation timestamp aged.
+- After a mutable refresh under the Catalog lease, `Build` may persist a new
+  generation only if there is no matching active complete generation, or the
+  latest generation is a due failed/partial retry, or the refreshed fingerprint
+  differs. A build that reuses the current projection settles with a
+  non-failing "rebuild not required" outcome: it must not insert a generation,
+  leave a `building` row, record failure evidence, or request another wake. The
+  completion and preview-drift paths keep superseding the active generation
+  first, so a real replacement is still always built.
+- Each recovery point may retain only a bounded number of non-protected Catalog
+  generations. A generation is protected while it is active, `building`,
+  referenced by an `ON DELETE RESTRICT` child, or required as the latest
+  failed/partial evidence for backoff. Unbounded per-point generation growth is
+  a product defect, not a configuration choice.
+- Catalog and Search workers expose generation-count (by closed state),
+  largest-per-point generation count, entry and posting row counts, and on-disk
+  SQLite size as gauges. These labels stay low cardinality: a recovery point,
+  path, document, or locator must never become a metric label.
+- The backup script purges orphaned `*.tmp.*` artifacts (including SQLite
+  `-journal`/`-wal`/`-shm` sidecars) whose owner pid is gone or which are older
+  than a day, and refuses to start a SQLite backup when the destination
+  filesystem cannot hold the source plus a safety reserve.
 
 ### 4. Validation & Error Matrix
 
@@ -181,6 +212,23 @@ belongs only to the asynchronous reconciler.
 - Frontend mapper/control tests require the closed state/count/reason contract,
   keep non-browsable lineages visible but disabled, and clear descendants until
   the exact selected version is browsable. Run repeat/race/full gates.
+- Mutable clock-vs-drift regressions assert that a periodic scan enqueues
+  nothing for an active complete generation whose fingerprint matches an aged
+  `observed_at`, that a fingerprint mismatch and a superseded active generation
+  are still eligible, and that a due failed/partial retry is never
+  short-circuited. An untouched immutable point keeps its digest behavior.
+- Completion regressions assert the end-to-end replacement: after
+  `ObserveBackupSourceCompletion` with an unchanged root fingerprint the point is
+  a candidate and a new active complete generation is built. The in-flight
+  observation-drift case must still fail with retryable `catalog_source_changed`
+  evidence and backoff.
+- Preview regressions assert that an aged but fingerprint-matching active
+  Catalog survives preparation unchanged (same generation, same `observed_at`,
+  no requested build), while physical drift, a newer failed attempt, and an
+  already-superseded/absent active generation keep their existing rearm paths.
+- Metric regressions assert the storage gauges use only the closed
+  generation-state label set, clamp negatives, carry no identity label, and are
+  collected on a completed scan without a disabled worker touching its backend.
 
 ### 7. Wrong vs Correct
 

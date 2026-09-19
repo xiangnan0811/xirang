@@ -488,6 +488,14 @@ func TestCatalogIndexerRejectsMutableSourceRaceAndLostFence(t *testing.T) {
 		})
 	}
 }
+
+// TestCatalogIndexerRetriesMutableObservedAtDrift proves that a mutable build
+// which actually proceeds still detects an observation-timestamp drift between
+// freezing and activation: it must fail with catalog_source_changed and remain
+// a bounded, retryable attempt rather than being mistaken for a non-retryable
+// failure. The rebuild is made genuinely due by replacing the root fingerprint,
+// because an unchanged fingerprint with a live active generation is deliberately
+// not rebuilt at all.
 func TestCatalogIndexerRetriesMutableObservedAtDrift(t *testing.T) {
 	fixture := newCatalogIndexerFixture(t, true, 0)
 	factory := fixture.factory()
@@ -496,6 +504,17 @@ func TestCatalogIndexerRetriesMutableObservedAtDrift(t *testing.T) {
 	if _, err := indexer.Build(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
+	// Replace the root fingerprint so the existing active generation no longer
+	// matches and the second build must really run. The in-flight mutate below
+	// then moves only observed_at, isolating the drift under test.
+	updatedFingerprint := strings.Repeat("f", 64)
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.point.ID).
+		Update("source_fingerprint", updatedFingerprint).Error; err != nil {
+		t.Fatalf("replace mutable root fingerprint: %v", err)
+	}
+	factory.mu.Lock()
+	factory.source = updatedFingerprint
+	factory.mu.Unlock()
 	factory.mutate = func() {
 		observedAt := fixture.now.Add(-2 * time.Hour)
 		if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.point.ID).
@@ -952,8 +971,12 @@ func TestCatalogIndexerCandidatesHonorActiveProjectionAndDurableBackoff(t *testi
 		t.Fatalf("fresh active mutable candidates=%+v err=%v", candidates, err)
 	}
 	staleNow := fixture.point.ObservedAt.Add(2 * config.ReconcileInterval)
+	// A mutable head whose active complete generation still matches the point
+	// fingerprint is not due just because its observation clock aged: the clock
+	// is not source drift. Completion and preview supersede the active row
+	// instead, which is what makes a replacement due.
 	candidates, err = indexer.ListCandidates(context.Background(), 20, staleNow, config)
-	if err != nil || len(candidates) != 1 {
+	if err != nil || len(candidates) != 0 {
 		t.Fatalf("stale active mutable candidates=%+v err=%v", candidates, err)
 	}
 	recentFailureFinishedAt := staleNow
@@ -973,6 +996,241 @@ func TestCatalogIndexerCandidatesHonorActiveProjectionAndDurableBackoff(t *testi
 	candidates, err = indexer.ListCandidates(context.Background(), 20, staleNow.Add(recentDelay+time.Second), config)
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("latest failure backoff did not expire: candidates=%+v err=%v delay=%s", candidates, err, recentDelay)
+	}
+}
+
+func catalogCandidateTestConfig() backupasset.CatalogConfig {
+	return backupasset.CatalogConfig{
+		Enabled: true, BatchSize: 2, BuildTimeout: 30 * time.Minute, ReconcileInterval: 15 * time.Minute,
+		MaxConcurrency: 2, MaxEntries: 100,
+		Lease: backupasset.LeaseConfig{Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour},
+	}
+}
+
+func seedCatalogActiveCompleteGeneration(
+	t *testing.T,
+	fixture catalogIndexerFixture,
+	sequence int,
+	options ...func(*model.CatalogGeneration),
+) model.CatalogGeneration {
+	t.Helper()
+	finished := fixture.now
+	row := model.CatalogGeneration{
+		ID: fmt.Sprintf("%032x", 0x9000+sequence), RecoveryPointID: fixture.point.ID, Generation: sequence,
+		State: string(GenerationComplete), IsActive: true, SourceFingerprint: fixture.point.SourceFingerprint,
+		ExpectedDigest: fixture.point.ManifestDigest, ExpectedEntryCount: fixture.point.EntryCount,
+		WrittenDigest: strings.Repeat("a", 64),
+		StartedAt:     fixture.now, FinishedAt: &finished, CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}
+	for _, option := range options {
+		option(&row)
+	}
+	if err := fixture.db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+// TestCatalogIndexerCandidatesSkipClockAgedCurrentMutableProjection proves that
+// periodic eligibility never reasons from the observation clock: a mutable head
+// with an active complete generation that matches the point fingerprint stays
+// unqueued even when observed_at is a year old.
+func TestCatalogIndexerCandidatesSkipClockAgedCurrentMutableProjection(t *testing.T) {
+	fixture := newCatalogIndexerFixture(t, true, 0)
+	seedCatalogActiveCompleteGeneration(t, fixture, 1)
+	indexer := fixture.newIndexer(t, fixture.factory())
+	ancient := fixture.now.AddDate(-1, 0, 0)
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.point.ID).
+		Update("observed_at", ancient).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := indexer.ListCandidates(context.Background(), 20, fixture.now, catalogCandidateTestConfig())
+	if err != nil || len(candidates) != 0 {
+		t.Fatalf("clock-aged current mutable candidates=%+v err=%v", candidates, err)
+	}
+}
+
+// TestCatalogIndexerCandidatesRebuildOnMutableFingerprintMismatch proves the
+// mismatch branch is intact: a replaced root fingerprint is still discovered by
+// the periodic path even with an active complete generation present.
+func TestCatalogIndexerCandidatesRebuildOnMutableFingerprintMismatch(t *testing.T) {
+	fixture := newCatalogIndexerFixture(t, true, 0)
+	seedCatalogActiveCompleteGeneration(t, fixture, 1, func(row *model.CatalogGeneration) {
+		row.SourceFingerprint = strings.Repeat("f", 64)
+	})
+	indexer := fixture.newIndexer(t, fixture.factory())
+	candidates, err := indexer.ListCandidates(context.Background(), 20, fixture.now, catalogCandidateTestConfig())
+	if err != nil || len(candidates) != 1 || candidates[0].RecoveryPointID != fixture.point.ID {
+		t.Fatalf("fingerprint-mismatch mutable candidates=%+v err=%v", candidates, err)
+	}
+}
+
+// TestCatalogIndexerCandidatesRebuildWhenMutableActiveSuperseded proves the
+// replacement path after completion/preview: once the active complete generation
+// is superseded, the same unchanged fingerprint is eligible again so Files
+// cannot stay indexing forever.
+func TestCatalogIndexerCandidatesRebuildWhenMutableActiveSuperseded(t *testing.T) {
+	fixture := newCatalogIndexerFixture(t, true, 0)
+	seedCatalogActiveCompleteGeneration(t, fixture, 1, func(row *model.CatalogGeneration) {
+		row.State = string(GenerationSuperseded)
+		row.IsActive = false
+	})
+	indexer := fixture.newIndexer(t, fixture.factory())
+	candidates, err := indexer.ListCandidates(context.Background(), 20, fixture.now, catalogCandidateTestConfig())
+	if err != nil || len(candidates) != 1 || candidates[0].RecoveryPointID != fixture.point.ID {
+		t.Fatalf("superseded mutable candidates=%+v err=%v", candidates, err)
+	}
+}
+
+// TestCatalogIndexerCandidatesHonorImmutableManifestDigest proves immutable
+// behavior is untouched by the mutable clock change: a matching active digest
+// stays unqueued and a changed digest is a rebuild.
+func TestCatalogIndexerCandidatesHonorImmutableManifestDigest(t *testing.T) {
+	fixture := newCatalogIndexerFixture(t, false, 3)
+	active := seedCatalogActiveCompleteGeneration(t, fixture, 1)
+	indexer := fixture.newIndexer(t, fixture.factory())
+	config := catalogCandidateTestConfig()
+	candidates, err := indexer.ListCandidates(context.Background(), 20, fixture.now, config)
+	if err != nil || len(candidates) != 0 {
+		t.Fatalf("matching immutable digest candidates=%+v err=%v", candidates, err)
+	}
+	if err := fixture.db.Model(&model.CatalogGeneration{}).Where("id = ?", active.ID).
+		Update("expected_digest", strings.Repeat("c", 64)).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = indexer.ListCandidates(context.Background(), 20, fixture.now, config)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("changed immutable digest candidates=%+v err=%v", candidates, err)
+	}
+}
+
+// TestCatalogIndexerBuildSkipsUnchangedMutableActiveGeneration proves the
+// post-refresh short-circuit: an active complete generation that still matches
+// the refreshed fingerprint and is still the latest generation is reused with
+// no new row, no failure evidence, and no leaked lease or building row.
+func TestCatalogIndexerBuildSkipsUnchangedMutableActiveGeneration(t *testing.T) {
+	fixture := newCatalogIndexerFixture(t, true, 0)
+	indexer := fixture.newIndexer(t, fixture.factory())
+	request := BuildRequest{RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID}
+	first, err := indexer.Build(context.Background(), request)
+	if err != nil || first.State != string(GenerationComplete) || !first.IsActive {
+		t.Fatalf("initial build generation=%+v err=%v", first, err)
+	}
+	skipped, err := indexer.Build(context.Background(), request)
+	if !errors.Is(err, ErrCatalogRebuildNotRequired) {
+		t.Fatalf("Build error=%v want %v", err, ErrCatalogRebuildNotRequired)
+	}
+	if skipped.ID != first.ID || skipped.State != string(GenerationComplete) || !skipped.IsActive || skipped.IsActive != first.IsActive {
+		t.Fatalf("skipped build returned generation=%+v want reuse of %+v", skipped, first)
+	}
+	var generations []model.CatalogGeneration
+	if err := fixture.db.Where("recovery_point_id = ?", fixture.point.ID).Order("generation ASC").Find(&generations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(generations) != 1 {
+		t.Fatalf("skipped build persisted generations=%+v", generations)
+	}
+	var building int64
+	if err := fixture.db.Model(&model.CatalogGeneration{}).
+		Where("recovery_point_id = ? AND state = ?", fixture.point.ID, GenerationBuilding).Count(&building).Error; err != nil {
+		t.Fatal(err)
+	}
+	if building != 0 {
+		t.Fatalf("skipped build left building rows=%d", building)
+	}
+	var activeLeases int64
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).
+		Where("recovery_point_id = ? AND status = ?", fixture.point.ID, backupasset.LeaseActive).Count(&activeLeases).Error; err != nil {
+		t.Fatal(err)
+	}
+	if activeLeases != 0 {
+		t.Fatalf("skipped build retained active leases=%d", activeLeases)
+	}
+}
+
+// TestCatalogIndexerBuildRebuildsMutableWhenNotReusable covers every case where
+// the short-circuit must NOT fire: a superseded active generation, a refreshed
+// fingerprint change, and a newer due failed retry.
+func TestCatalogIndexerBuildRebuildsMutableWhenNotReusable(t *testing.T) {
+	tests := []struct {
+		name   string
+		before func(t *testing.T, fixture catalogIndexerFixture, first model.CatalogGeneration, factory *catalogIndexerFactory)
+		verify func(t *testing.T, second model.CatalogGeneration, first model.CatalogGeneration)
+	}{
+		{
+			name: "active superseded by completion",
+			before: func(t *testing.T, fixture catalogIndexerFixture, first model.CatalogGeneration, _ *catalogIndexerFactory) {
+				if err := fixture.db.Model(&model.CatalogGeneration{}).Where("id = ?", first.ID).
+					Updates(map[string]any{"state": string(GenerationSuperseded), "is_active": false}).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+			verify: func(t *testing.T, second, first model.CatalogGeneration) {
+				if second.ID == first.ID {
+					t.Fatalf("completion-superseded active was reused: %+v", second)
+				}
+			},
+		},
+		{
+			name: "refreshed fingerprint changed",
+			before: func(t *testing.T, fixture catalogIndexerFixture, _ model.CatalogGeneration, factory *catalogIndexerFactory) {
+				updated := strings.Repeat("f", 64)
+				if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.point.ID).
+					Update("source_fingerprint", updated).Error; err != nil {
+					t.Fatal(err)
+				}
+				factory.mu.Lock()
+				factory.source = updated
+				factory.mu.Unlock()
+			},
+			verify: func(t *testing.T, second, first model.CatalogGeneration) {
+				if second.SourceFingerprint != strings.Repeat("f", 64) || second.ID == first.ID {
+					t.Fatalf("fingerprint change did not rebuild: %+v", second)
+				}
+			},
+		},
+		{
+			name: "newer due failed retry",
+			before: func(t *testing.T, fixture catalogIndexerFixture, first model.CatalogGeneration, _ *catalogIndexerFactory) {
+				finished := fixture.now.Add(-time.Hour)
+				retry := model.CatalogGeneration{
+					ID: strings.Repeat("e", 32), RecoveryPointID: fixture.point.ID, Generation: first.Generation + 1,
+					State: string(GenerationFailed), SourceFingerprint: fixture.point.SourceFingerprint,
+					ErrorCode: "catalog_provider_unavailable",
+					StartedAt: finished.Add(-time.Minute), FinishedAt: &finished,
+					CreatedAt: finished.Add(-time.Minute), UpdatedAt: finished,
+				}
+				if err := fixture.db.Create(&retry).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+			verify: func(t *testing.T, second, first model.CatalogGeneration) {
+				if second.Generation != first.Generation+2 || second.ID == first.ID {
+					t.Fatalf("due failed retry was swallowed: %+v", second)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCatalogIndexerFixture(t, true, 0)
+			factory := fixture.factory()
+			indexer := fixture.newIndexer(t, factory)
+			request := BuildRequest{RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID}
+			first, err := indexer.Build(context.Background(), request)
+			if err != nil || first.State != string(GenerationComplete) || !first.IsActive {
+				t.Fatalf("initial build generation=%+v err=%v", first, err)
+			}
+			test.before(t, fixture, first, factory)
+			second, err := indexer.Build(context.Background(), request)
+			if err != nil {
+				t.Fatalf("rebuild error=%v", err)
+			}
+			if second.State != string(GenerationComplete) || !second.IsActive {
+				t.Fatalf("rebuild generation=%+v", second)
+			}
+			test.verify(t, second, first)
+		})
 	}
 }
 func TestCatalogIndexerCandidatesSkipDisconnectedMutableBeforeLimit(t *testing.T) {

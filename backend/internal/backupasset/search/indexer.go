@@ -296,6 +296,22 @@ func (indexer *Indexer) ReconcileAbandoned(ctx context.Context, cutoff time.Time
 	return result.RowsAffected, nil
 }
 
+// ObserveStorageFacts returns the whole-table Search posting row count for the
+// scan-end gauge collection. It exposes no document, point, or path identity.
+func (indexer *Indexer) ObserveStorageFacts(ctx context.Context) (int64, error) {
+	if indexer == nil || indexer.db == nil {
+		return 0, fmt.Errorf("%w: Search storage observation unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var postings int64
+	if err := indexer.db.WithContext(ctx).Model(&model.BackupAssetSearchPosting{}).Count(&postings).Error; err != nil {
+		return 0, fmt.Errorf("count Search postings: %w", err)
+	}
+	return postings, nil
+}
+
 func (indexer *Indexer) loadFrozenProjection(ctx context.Context, request BuildRequest) (frozenProjection, error) {
 	var point model.RecoveryPoint
 	if err := indexer.db.WithContext(ctx).Where("id = ?", request.RecoveryPointID).Take(&point).Error; errors.Is(err, gorm.ErrRecordNotFound) {

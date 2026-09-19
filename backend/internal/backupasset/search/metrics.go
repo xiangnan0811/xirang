@@ -31,6 +31,7 @@ type Metrics interface {
 	SetActiveBuilds(int)
 	AddReconciledAbandoned(int64)
 	AddReconciledOverlays(int64)
+	SetPostings(int64)
 }
 
 type NoopMetrics struct{}
@@ -40,6 +41,7 @@ func (NoopMetrics) ObserveScan(ScanOutcome)      {}
 func (NoopMetrics) SetActiveBuilds(int)          {}
 func (NoopMetrics) AddReconciledAbandoned(int64) {}
 func (NoopMetrics) AddReconciledOverlays(int64)  {}
+func (NoopMetrics) SetPostings(int64)            {}
 
 type PrometheusMetrics struct {
 	builds              *prometheus.CounterVec
@@ -47,6 +49,7 @@ type PrometheusMetrics struct {
 	activeBuilds        prometheus.Gauge
 	reconciledAbandoned prometheus.Counter
 	reconciledOverlays  prometheus.Counter
+	postings            prometheus.Gauge
 }
 
 func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics, error) {
@@ -74,9 +77,14 @@ func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics,
 			Name: "xirang_backup_asset_search_reconciled_overlays_total",
 			Help: "Total Search overlay rows reconciled.",
 		}),
+		postings: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "xirang_backup_asset_search_postings",
+			Help: "Current backup asset Search posting rows.",
+		}),
 	}
 	for _, collector := range []prometheus.Collector{
 		metrics.builds, metrics.scans, metrics.activeBuilds, metrics.reconciledAbandoned, metrics.reconciledOverlays,
+		metrics.postings,
 	} {
 		if err := registerer.Register(collector); err != nil {
 			return nil, fmt.Errorf("register backup asset Search metric: %w", err)
@@ -117,6 +125,19 @@ func (metrics *PrometheusMetrics) AddReconciledOverlays(count int64) {
 	if metrics != nil && count > 0 {
 		metrics.reconciledOverlays.Add(float64(count))
 	}
+}
+
+// SetPostings publishes the whole-table Search posting row count. It is a single
+// unlabeled gauge, so no document, point, or path identity can leak into a
+// Prometheus series.
+func (metrics *PrometheusMetrics) SetPostings(count int64) {
+	if metrics == nil {
+		return
+	}
+	if count < 0 {
+		count = 0
+	}
+	metrics.postings.Set(float64(count))
 }
 
 func metricBuildOutcome(outcome BuildOutcome) string {

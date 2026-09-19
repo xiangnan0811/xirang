@@ -289,7 +289,7 @@ All-in-One 容器固定监听 `10761`，生产 Compose 固定映射 `10761:10761
 | `DB_BACKUP_DIR` | string | `./backups`（相对于 DB 文件目录） | 否 | 数据库备份文件存放目录 |
 | `DB_BACKUP_MAX_COUNT` | int | `20` | 否 | 系统自助 SQLite 备份接口保留的最大备份数量 |
 
-**读取位置**：`VERSION_CHECK_URL` → `backend/internal/api/handlers/version_handler.go`；`DB_BACKUP_DIR` / `DB_BACKUP_MAX_COUNT` → `backend/internal/api/handlers/system_handler.go`。容器内 cron 备份使用 `scripts/backup-db.sh` 与 `/etc/supercronic/xirang-backup`，按文件 mtime 清理 30 天前的备份，不读取 `DB_BACKUP_MAX_COUNT`。
+**读取位置**：`VERSION_CHECK_URL` → `backend/internal/api/handlers/version_handler.go`；`DB_BACKUP_DIR` / `DB_BACKUP_MAX_COUNT` → `backend/internal/api/handlers/system_handler.go`。容器内 cron 备份使用 `scripts/backup-db.sh` 与 `/etc/supercronic/xirang-backup`，按文件 mtime 清理 30 天前的备份，并一并清理 30 天前残留的 `*.tmp.*` 临时文件；cron 与 `backup-db.sh` 都不读取 `DB_BACKUP_MAX_COUNT`，该变量只约束管理 API `POST /system/backup-db` 的保留数量（默认 20）。`backup-db.sh` 自身还会在备份前清理 pid 已消失或超过 24h 的孤儿 `*.tmp.*`，并在 SQLite 目标空间不足「源库大小 + 64MiB」时拒绝备份。
 
 版本检查会把 GitHub latest release 的 `tag_name` 与服务端当前构建版本比较；当前构建版本来自编译时注入。未注入版本信息的本地二进制或镜像会显示 `dev`，检查结果只适合作为开发提示。
 

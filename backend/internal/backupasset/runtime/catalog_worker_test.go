@@ -448,6 +448,105 @@ func TestCatalogRetryDelayIsDeterministicBoundedAndResets(t *testing.T) {
 	}
 }
 
+// TestCatalogWorkerCountsRebuildNotRequiredAsSkipped proves the Build
+// short-circuit is a successful, non-failing scan outcome: the pass still
+// succeeds and the build is recorded as skipped, never as complete or failed.
+func TestCatalogWorkerCountsRebuildNotRequiredAsSkipped(t *testing.T) {
+	backend := newCatalogWorkerBackendFake([]catalog.BuildCandidate{
+		{RepositoryID: catalogWorkerID('a'), RecoveryPointID: catalogWorkerID('1')},
+	})
+	backend.buildErr = catalog.ErrCatalogRebuildNotRequired
+	metrics := &catalogWorkerMetricsFake{
+		scans: make(chan catalog.MetricScanOutcome, 4), builds: make(chan catalog.MetricBuildOutcome, 4),
+	}
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
+		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanDone := make(chan error, 1)
+	go func() { scanDone <- worker.runScan(context.Background()) }()
+	call := backend.nextBuild(t)
+	if call.candidate.RecoveryPointID != catalogWorkerID('1') {
+		t.Fatalf("unexpected build candidate: %+v", call.candidate)
+	}
+	close(call.release)
+	if err := <-scanDone; err != nil {
+		t.Fatalf("scan over a skipped rebuild: %v", err)
+	}
+	select {
+	case outcome := <-metrics.builds:
+		if outcome != catalog.MetricBuildSkipped {
+			t.Fatalf("build outcome=%s want %s", outcome, catalog.MetricBuildSkipped)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("skipped rebuild was not recorded")
+	}
+	select {
+	case outcome := <-metrics.scans:
+		if outcome != catalog.MetricScanSuccess {
+			t.Fatalf("scan outcome=%s want %s", outcome, catalog.MetricScanSuccess)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scan outcome was not recorded")
+	}
+}
+
+// TestCatalogWorkerCollectsStorageFactsOncePerEnabledScan proves the scan-end
+// storage aggregate is published on a completed scan and, matching the existing
+// Search contract, that a disabled scan touches the backend not at all.
+func TestCatalogWorkerCollectsStorageFactsOncePerEnabledScan(t *testing.T) {
+	backend := newCatalogWorkerBackendFake(nil)
+	backend.storage = catalog.StorageObservation{
+		GenerationsByState:     map[string]int64{string(catalog.GenerationComplete): 2},
+		MaxGenerationsPerPoint: 4, EntryCount: 42, SQLiteFileBytes: 1024,
+	}
+	metrics := &catalogWorkerMetricsFake{
+		scans:   make(chan catalog.MetricScanOutcome, 4),
+		storage: make(chan catalog.StorageObservation, 4),
+	}
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
+		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.runScan(context.Background()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	select {
+	case observation := <-metrics.storage:
+		if observation.MaxGenerationsPerPoint != 4 || observation.EntryCount != 42 ||
+			observation.SQLiteFileBytes != 1024 || observation.GenerationsByState[string(catalog.GenerationComplete)] != 2 {
+			t.Fatalf("storage observation=%+v", observation)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scan-end storage aggregate was not published")
+	}
+	if backend.storageCallCount() != 1 {
+		t.Fatalf("storage collection calls=%d want 1", backend.storageCallCount())
+	}
+
+	disabledBackend := newCatalogWorkerBackendFake(nil)
+	disabledMetrics := &catalogWorkerMetricsFake{scans: make(chan catalog.MetricScanOutcome, 4)}
+	disabledWorker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(false), Backend: disabledBackend, Metrics: disabledMetrics,
+		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := disabledWorker.runScan(context.Background()); err != nil {
+		t.Fatalf("disabled scan: %v", err)
+	}
+	if disabledBackend.storageCallCount() != 0 {
+		t.Fatalf("disabled scan touched the backend for storage metrics")
+	}
+}
+
 type catalogWorkerBuildCall struct {
 	candidate catalog.BuildCandidate
 	release   chan struct{}
@@ -461,11 +560,15 @@ type catalogWorkerBackendFake struct {
 	reconcileCalls     int
 	listCalls          int
 	revokeCalls        int
+	storageCalls       int
+	storageErr         error
+	storage            catalog.StorageObservation
 	active             int
 	maxActive          int
 	activeRepositories map[string]int
 	repositoryOverlap  bool
 	ignoreCancellation bool
+	buildErr           error
 	revoked            chan struct{}
 	revokeOnce         sync.Once
 }
@@ -521,8 +624,28 @@ func (backend *catalogWorkerBackendFake) Build(ctx context.Context, request cata
 	backend.mu.Lock()
 	backend.active--
 	backend.activeRepositories[request.RepositoryID]--
+	buildErr := backend.buildErr
 	backend.mu.Unlock()
+	if buildErr != nil {
+		return model.CatalogGeneration{ID: strings.Repeat("f", 32), State: string(catalog.GenerationComplete), IsActive: true}, errors.Join(err, buildErr)
+	}
 	return model.CatalogGeneration{State: string(catalog.GenerationComplete)}, err
+}
+
+func (backend *catalogWorkerBackendFake) ObserveStorageFacts(context.Context) (catalog.StorageObservation, error) {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	backend.storageCalls++
+	if backend.storageErr != nil {
+		return catalog.StorageObservation{}, backend.storageErr
+	}
+	return backend.storage, nil
+}
+
+func (backend *catalogWorkerBackendFake) storageCallCount() int {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	return backend.storageCalls
 }
 
 func (backend *catalogWorkerBackendFake) RevokeActiveBuilds(context.Context) error {
@@ -592,6 +715,8 @@ func (backend *catalogWorkerBackendFake) reconcileCallCount() int {
 type catalogWorkerMetricsFake struct {
 	mu           sync.Mutex
 	scans        chan catalog.MetricScanOutcome
+	builds       chan catalog.MetricBuildOutcome
+	storage      chan catalog.StorageObservation
 	activeBuilds int
 }
 
@@ -615,6 +740,7 @@ func newOrderedCatalogWorkerMetricsFake() *orderedCatalogWorkerMetricsFake {
 func (*orderedCatalogWorkerMetricsFake) ObserveBuild(catalog.MetricBuildOutcome, time.Duration) {}
 func (*orderedCatalogWorkerMetricsFake) ObserveScan(catalog.MetricScanOutcome)                  {}
 func (*orderedCatalogWorkerMetricsFake) AddReconciledAbandoned(int)                             {}
+func (*orderedCatalogWorkerMetricsFake) ObserveStorage(catalog.StorageObservation)              {}
 func (metrics *orderedCatalogWorkerMetricsFake) SetActiveBuilds(count int) {
 	metrics.mu.Lock()
 	if count == 1 {
@@ -640,7 +766,11 @@ func (metrics *orderedCatalogWorkerMetricsFake) activeBuildCount() int {
 	return metrics.activeBuilds
 }
 
-func (*catalogWorkerMetricsFake) ObserveBuild(catalog.MetricBuildOutcome, time.Duration) {}
+func (metrics *catalogWorkerMetricsFake) ObserveBuild(outcome catalog.MetricBuildOutcome, _ time.Duration) {
+	if metrics.builds != nil {
+		metrics.builds <- outcome
+	}
+}
 func (metrics *catalogWorkerMetricsFake) ObserveScan(outcome catalog.MetricScanOutcome) {
 	metrics.scans <- outcome
 }
@@ -650,6 +780,11 @@ func (metrics *catalogWorkerMetricsFake) SetActiveBuilds(count int) {
 	metrics.mu.Unlock()
 }
 func (*catalogWorkerMetricsFake) AddReconciledAbandoned(int) {}
+func (metrics *catalogWorkerMetricsFake) ObserveStorage(observation catalog.StorageObservation) {
+	if metrics.storage != nil {
+		metrics.storage <- observation
+	}
+}
 
 func (metrics *catalogWorkerMetricsFake) activeBuildCount() int {
 	metrics.mu.Lock()

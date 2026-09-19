@@ -429,6 +429,135 @@ func TestMutableRsyncCatalogBuildRefreshesRootSourceBeforeOpeningSession(t *test
 	}
 }
 
+// TestMutableRsyncCatalogBuildReplacesGenerationAfterCompletionObserver is the
+// PR-A end-to-end guard for the v0.55.2 contract: even though an in-place child
+// change leaves the mutable root fingerprint unchanged, backup completion must
+// supersede the active Catalog generation and the worker must build a genuine
+// replacement. A fingerprint-only short-circuit would leave Files permanently
+// indexing.
+func TestMutableRsyncCatalogBuildReplacesGenerationAfterCompletionObserver(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local Rsync catalog access is Linux-only")
+	}
+	now := time.Date(2026, 7, 13, 9, 0, 0, 0, time.UTC)
+	clock := now
+	db := newRepositoryTestDB(t)
+	root := t.TempDir()
+	payload := []byte("services:\n  app:\n    image: xirang:completion\n")
+	if err := os.WriteFile(filepath.Join(root, "docker-compose.yml"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyring := backupasset.NewKeyring(db, func() time.Time { return clock })
+	if _, err := keyring.Ensure(context.Background(), backupasset.KeyDomainCursorSigning); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keyring.Ensure(context.Background(), backupasset.KeyDomainEntryIdentity); err != nil {
+		t.Fatal(err)
+	}
+	cursors := provider.NewCursorCodec(keyring, func() time.Time { return clock }, time.Hour)
+	limits, err := provider.NewMetadataOperationLimits(time.Minute, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := provider.NewRsyncAdapter(cursors, limits, 100, func() time.Time { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	prober := &transientRsyncProber{adapter: adapter}
+	registry := provider.NewRegistry()
+	if err := registry.Register(backupasset.ProviderRsync, provider.Registration{
+		Prober: prober, PointLister: adapter, EntryStatter: adapter,
+		SequentialReader: adapter, RangeReader: adapter, CatalogReader: adapter,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: db, Foundation: enabledFoundation(), Registry: registry, Keyring: keyring,
+		Now: func() time.Time { return clock }, Admission: &publicationAdmission{
+			mode: publication.AdmissionManaged, generation: 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskEntity := seedTask(t, db, "rsync", root, "")
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil || connected.MutablePoint == nil {
+		t.Fatalf("connect local Rsync repository: result=%+v err=%v", connected, err)
+	}
+	lease, err := backupasset.NewLeaseService(db, func() time.Time { return clock }, backupasset.LeaseConfig{
+		Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexer, err := catalog.NewIndexer(catalog.IndexerDependencies{
+		DB: db, Factory: service, Lease: lease, IdentityKeys: keyring,
+		Now:    func() time.Time { return clock },
+		Config: catalog.IndexerConfig{BatchSize: 100, BuildTimeout: time.Minute, MaxEntries: 100, HeartbeatInterval: time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := indexer.Build(context.Background(), catalog.BuildRequest{
+		RepositoryID: connected.Repository.ID, RecoveryPointID: connected.MutablePoint.ID,
+	})
+	if err != nil || first.State != string(catalog.GenerationComplete) || !first.IsActive {
+		t.Fatalf("initial catalog generation=%+v err=%v", first, err)
+	}
+	var before model.RecoveryPoint
+	if err := db.First(&before, "id = ?", connected.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// A completed backup whose child content changed in place: the root
+	// fingerprint is unchanged but the projection must still be invalidated.
+	if err := service.ObserveBackupSourceCompletion(context.Background(), taskEntity.ID); err != nil {
+		t.Fatalf("observe backup source completion: %v", err)
+	}
+	var pointAfter model.RecoveryPoint
+	if err := db.First(&pointAfter, "id = ?", connected.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if pointAfter.SourceFingerprint != before.SourceFingerprint {
+		t.Fatalf("completion changed the mutable root fingerprint: before=%q after=%q", before.SourceFingerprint, pointAfter.SourceFingerprint)
+	}
+	var superseded model.CatalogGeneration
+	if err := db.First(&superseded, "id = ?", first.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if superseded.State != string(catalog.GenerationSuperseded) || superseded.IsActive {
+		t.Fatalf("completion did not supersede the active generation: %+v", superseded)
+	}
+
+	config := backupasset.CatalogConfig{
+		Enabled: true, BatchSize: 100, BuildTimeout: time.Minute, ReconcileInterval: time.Minute,
+		MaxConcurrency: 1, MaxEntries: 100,
+		Lease: backupasset.LeaseConfig{Duration: 5 * time.Minute, Heartbeat: time.Second, AbsoluteDeadline: time.Hour},
+	}
+	candidates, err := indexer.ListCandidates(context.Background(), 20, clock, config)
+	if err != nil || len(candidates) != 1 || candidates[0].RecoveryPointID != connected.MutablePoint.ID {
+		t.Fatalf("completion candidate candidates=%+v err=%v", candidates, err)
+	}
+	replacement, err := indexer.Build(context.Background(), catalog.BuildRequest{
+		RepositoryID: connected.Repository.ID, RecoveryPointID: connected.MutablePoint.ID,
+	})
+	if err != nil {
+		t.Fatalf("build completion replacement: %v", err)
+	}
+	if replacement.State != string(catalog.GenerationComplete) || !replacement.IsActive ||
+		replacement.ID == first.ID || replacement.SourceFingerprint != pointAfter.SourceFingerprint {
+		t.Fatalf("completion replacement generation=%+v first=%+v", replacement, first)
+	}
+	var generations int64
+	if err := db.Model(&model.CatalogGeneration{}).Where("recovery_point_id = ?", connected.MutablePoint.ID).Count(&generations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if generations != 2 {
+		t.Fatalf("completion produced %d generations, want exactly the replacement", generations)
+	}
+}
+
 type transientRsyncProber struct {
 	adapter *provider.RsyncAdapter
 	fail    atomic.Bool

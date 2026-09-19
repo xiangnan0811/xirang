@@ -26,6 +26,7 @@ func TestSearchMetricsLabelsRemainClosedAndLowCardinality(t *testing.T) {
 	metrics.SetActiveBuilds(2)
 	metrics.AddReconciledAbandoned(3)
 	metrics.AddReconciledOverlays(4)
+	metrics.SetPostings(5)
 	if validBuildOutcome(BuildOutcome("point-id")) || validScanOutcome(ScanOutcome("repository-id")) {
 		t.Fatal("high-cardinality metric label was accepted")
 	}
@@ -37,6 +38,7 @@ func TestSearchMetricsLabelsRemainClosedAndLowCardinality(t *testing.T) {
 		"xirang_backup_asset_search_active_builds":              {},
 		"xirang_backup_asset_search_reconciled_abandoned_total": {},
 		"xirang_backup_asset_search_reconciled_overlays_total":  {},
+		"xirang_backup_asset_search_postings":                   {},
 	}
 	if len(actual) != len(expected) {
 		t.Fatalf("metric family count=%d want=%d: %#v", len(actual), len(expected), actual)
@@ -95,6 +97,33 @@ func TestSearchNoopMetricsAreSafe(t *testing.T) {
 	metrics.SetActiveBuilds(1)
 	metrics.AddReconciledAbandoned(1)
 	metrics.AddReconciledOverlays(1)
+	metrics.SetPostings(1)
+}
+
+// TestSearchPostingsGaugeClampsNegativeValues proves the posting gauge is a
+// single unlabeled series and never accepts a negative count.
+func TestSearchPostingsGaugeClampsNegativeValues(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewPrometheusMetrics(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics.SetPostings(-3)
+	for _, family := range searchMetricFamilies(t, registry) {
+		if family.GetName() != "xirang_backup_asset_search_postings" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			if len(metric.GetLabel()) != 0 {
+				t.Fatalf("postings gauge must be unlabeled: %+v", metric.GetLabel())
+			}
+			if metric.GetGauge().GetValue() != 0 {
+				t.Fatalf("postings gauge published negative value %v", metric.GetGauge().GetValue())
+			}
+			return
+		}
+	}
+	t.Fatal("postings gauge was not registered")
 }
 
 func searchMetricLabelNames(t *testing.T, registry *prometheus.Registry) map[string][]string {
