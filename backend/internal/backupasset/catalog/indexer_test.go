@@ -489,13 +489,9 @@ func TestCatalogIndexerRejectsMutableSourceRaceAndLostFence(t *testing.T) {
 	}
 }
 
-// TestCatalogIndexerRetriesMutableObservedAtDrift proves that a mutable build
-// which actually proceeds still detects an observation-timestamp drift between
-// freezing and activation: it must fail with catalog_source_changed and remain
-// a bounded, retryable attempt rather than being mistaken for a non-retryable
-// failure. The rebuild is made genuinely due by replacing the root fingerprint,
-// because an unchanged fingerprint with a live active generation is deliberately
-// not rebuilt at all.
+// TestCatalogIndexerRetriesMutableObservedAtDrift proves a proceeding rebuild
+// still fails with catalog_source_changed and stays retryable. The rebuild is
+// made due by replacing the root fingerprint; an unchanged one is not rebuilt.
 func TestCatalogIndexerRetriesMutableObservedAtDrift(t *testing.T) {
 	fixture := newCatalogIndexerFixture(t, true, 0)
 	factory := fixture.factory()
@@ -1104,10 +1100,9 @@ func TestCatalogIndexerCandidatesHonorImmutableManifestDigest(t *testing.T) {
 	}
 }
 
-// TestCatalogIndexerBuildSkipsUnchangedMutableActiveGeneration proves the
-// post-refresh short-circuit: an active complete generation that still matches
-// the refreshed fingerprint and is still the latest generation is reused with
-// no new row, no failure evidence, and no leaked lease or building row.
+// TestCatalogIndexerBuildSkipsUnchangedMutableActiveGeneration proves an
+// unchanged current projection is reused with no new row, failure evidence,
+// lease, or building row.
 func TestCatalogIndexerBuildSkipsUnchangedMutableActiveGeneration(t *testing.T) {
 	fixture := newCatalogIndexerFixture(t, true, 0)
 	indexer := fixture.newIndexer(t, fixture.factory())

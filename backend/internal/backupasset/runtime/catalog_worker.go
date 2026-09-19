@@ -383,7 +383,7 @@ func (worker *CatalogWorker) observeStorageFacts() {
 	defer cancel()
 	observation, err := worker.backend.ObserveStorageFacts(ctx)
 	if err != nil {
-		logger.Module("backupasset.catalog").Warn().Str("stage", "storage_metrics").Msg("Catalog 存储指标采集失败")
+		logger.Module("backupasset.catalog").Warn().Err(err).Str("stage", "storage_metrics").Msg("Catalog 存储指标采集失败")
 		return
 	}
 	worker.metrics.ObserveStorage(observation)

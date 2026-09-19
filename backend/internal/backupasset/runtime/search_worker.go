@@ -211,7 +211,7 @@ func (worker *SearchWorker) observeStorageFacts() {
 	defer cancel()
 	postings, err := worker.backend.ObserveStorageFacts(ctx)
 	if err != nil {
-		logger.Module("backupasset.search").Warn().Str("stage", "storage_metrics").Msg("Search 存储指标采集失败")
+		logger.Module("backupasset.search").Warn().Err(err).Str("stage", "storage_metrics").Msg("Search 存储指标采集失败")
 		return
 	}
 	worker.metrics.SetPostings(postings)

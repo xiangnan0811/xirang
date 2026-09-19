@@ -54,8 +54,9 @@ func (NoopMetrics) SetActiveBuilds(int)                            {}
 func (NoopMetrics) AddReconciledAbandoned(int)                     {}
 func (NoopMetrics) ObserveStorage(StorageObservation)              {}
 
-// metricGenerationStates freezes the closed generation-state label set so a
-// stray database value can never become a Prometheus series.
+// metricGenerationStates is the frozen Catalog generation-state label set
+// (every persisted state, including building), so a stray database value can
+// never become a Prometheus series.
 func metricGenerationStates() []string {
 	return []string{
 		string(GenerationBuilding), string(GenerationComplete),
@@ -102,7 +103,7 @@ func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics,
 		}),
 		generations: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "xirang_backup_asset_catalog_generations",
-			Help: "Current backup asset Catalog generations by terminal state.",
+			Help: "Current backup asset Catalog generations by frozen generation state.",
 		}, []string{"state"}),
 		generationsMaxPerPoint: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "xirang_backup_asset_catalog_generations_max_per_point",
@@ -162,9 +163,9 @@ func (metrics *PrometheusMetrics) AddReconciledAbandoned(count int) {
 	}
 }
 
-// ObserveStorage publishes the scan-end storage aggregate. Every series it
-// touches uses a frozen label set (or no label at all): an unknown state value
-// is folded into the existing closed set rather than creating a new series.
+// ObserveStorage publishes the scan-end storage aggregate. The generation gauge
+// only ever uses the frozen generation-state label set; a state value outside
+// that set is ignored rather than turned into a new series.
 func (metrics *PrometheusMetrics) ObserveStorage(observation StorageObservation) {
 	if metrics == nil {
 		return

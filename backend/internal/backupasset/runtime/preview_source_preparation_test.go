@@ -736,13 +736,9 @@ func TestRuntimePreparePreviewSourceRearmsAgedStaleActiveCatalog(t *testing.T) {
 	assertPreviewPreparationGenerationUnchanged(t, fixture.db, fixture.generations[1].RecoveryPointID, fixture.generations[1].ID)
 }
 
-// TestRuntimePreparePreviewSourceKeepsAgedActiveCatalogWhenFingerprintMatches is
-// the PR-A regression guard for "clock expiry is not source drift". An active
-// complete projection whose fingerprint still matches its point must survive a
-// preparation call that observed nothing but an aged observed_at: the exact
-// generation stays active, the observation timestamp is not rewritten, and no
-// replacement build is requested. Physical drift keeps its own CAS path in the
-// sibling preparation tests.
+// TestRuntimePreparePreviewSourceKeepsAgedActiveCatalogWhenFingerprintMatches
+// proves an aged but fingerprint-matching projection survives preparation: same
+// generation, unchanged observed_at, no requested build.
 func TestRuntimePreparePreviewSourceKeepsAgedActiveCatalogWhenFingerprintMatches(t *testing.T) {
 	if runtimepkg.GOOS != "linux" {
 		t.Skip("local Rsync Provider access requires Linux openat2 support")
