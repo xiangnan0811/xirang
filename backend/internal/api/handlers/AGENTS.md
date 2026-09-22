@@ -1,7 +1,7 @@
 # API Handlers
 
 > Quick reference for `backend/internal/api/handlers/` — the REST handler layer.
-> Full conventions: [Backend directory structure](../../../../.trellis/spec/backend/directory-structure.md) · [Error handling](../../../../.trellis/spec/backend/error-handling.md) · [Quality](../../../../.trellis/spec/backend/quality-guidelines.md)
+> Full conventions: [Backend directory structure](../../../../spec/backend/directory-structure.md) · [Error handling](../../../../spec/backend/error-handling.md) · [Quality](../../../../spec/backend/quality-guidelines.md)
 
 ---
 

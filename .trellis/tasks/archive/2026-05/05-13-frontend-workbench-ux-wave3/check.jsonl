@@ -1,5 +1,0 @@
-{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend guideline index for review"}
-{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Verify shared primitive reuse and page composition"}
-{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "Verify accessibility semantics for tabs, buttons, icons, and responsive behavior"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Verify lint, type-check, tests, and build evidence"}
-{"file": ".trellis/tasks/05-13-frontend-workbench-ux-wave3/research/wave3-page-audit.md", "reason": "Verify implementation covers the intended wave 3 page scope"}

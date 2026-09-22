@@ -1,7 +1,7 @@
 # Pages
 
 > Quick reference for `web/src/pages/` — route-level screens and page fragments.
-> Full conventions: [Frontend directory structure](../../../.trellis/spec/frontend/directory-structure.md) · [Component guidelines](../../../.trellis/spec/frontend/component-guidelines.md) · [Type safety](../../../.trellis/spec/frontend/type-safety.md)
+> Full conventions: [Frontend directory structure](../../../spec/frontend/directory-structure.md) · [Component guidelines](../../../spec/frontend/component-guidelines.md) · [Type safety](../../../spec/frontend/type-safety.md)
 
 ---
 

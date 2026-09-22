@@ -24,7 +24,7 @@ web/.env
 .idea/
 .vscode/
 
-# ai（Trellis 平台文件由 .claude/ .codex/ 下提交，不整体忽略）
+# Local agent runtime data; native project adapters are tracked separately.
 .claude/settings.local.json
 .codex/*.local.toml
 .omo/

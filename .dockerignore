@@ -2,7 +2,8 @@
 /.github
 /.githooks
 /.agents
-/.trellis
+/spec
+/.omp
 node_modules
 web/node_modules
 web/.vite
@@ -12,6 +13,7 @@ web/coverage
 .env.*
 .claude
 .codex
+.grok
 .gemini
 backend/*.db
 backend/*.db-shm

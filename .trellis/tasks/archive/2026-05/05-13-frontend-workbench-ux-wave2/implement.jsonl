@@ -1,5 +1,0 @@
-{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend guideline index for Xirang console work"}
-{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Shared component and page primitive conventions"}
-{"file": ".trellis/spec/frontend/a11y-guidelines.md", "reason": "Accessibility requirements for tabs, buttons, icons, and responsive UI"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend verification and quality gate expectations"}
-{"file": ".trellis/tasks/05-13-frontend-workbench-ux-wave2/research/wave2-page-audit.md", "reason": "Wave 2 target pages and UI drift findings"}

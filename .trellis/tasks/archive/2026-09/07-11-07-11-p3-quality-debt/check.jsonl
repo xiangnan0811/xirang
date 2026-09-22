@@ -1,5 +1,0 @@
-{"file":".trellis/tasks/archive/2026-09/07-11-07-11-p3-quality-debt/design.md","reason":"Current acceptance and non-goals"}
-{"file":".trellis/spec/backend/error-handling.md","reason":"API envelope and protocol boundaries"}
-{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Structured bounded logging"}
-{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"RAF cleanup"}
-{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend full gate"}

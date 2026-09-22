@@ -33,6 +33,12 @@ run_case "config-without-env-doc" $'backend/internal/config/config.go' warn
 run_case "config-with-env-doc" $'backend/internal/config/config.go\ndocs/env-vars.md' clean
 run_case "model-without-model-doc" $'backend/internal/model/models.go' warn
 run_case "model-with-backend-doc" $'backend/internal/model/models.go\nbackend/README_backend.md' clean
+run_case "model-with-current-spec" $'backend/internal/model/models.go\nspec/backend/database-guidelines.md' clean
+run_case "model-with-retired-spec" $'backend/internal/model/models.go\n.trellis/spec/backend/database-guidelines.md' warn
+run_case "model-with-unrelated-spec" $'backend/internal/model/models.go\nspec/frontend/type-safety.md' warn
+run_case "route-with-current-spec" $'web/src/router.tsx\nspec/frontend/directory-structure.md' clean
+run_case "route-without-doc" $'web/src/router.tsx' warn
+run_case "migration-with-current-spec" $'backend/internal/database/migrations/000999_example.up.sql\nspec/backend/database-guidelines.md' clean
 run_case "release-without-doc" $'.github/workflows/publish-images.yml' warn
 run_case "release-with-doc" $'.github/workflows/publish-images.yml\ndocs/maintainers/release.md' clean
 

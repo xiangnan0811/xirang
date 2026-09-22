@@ -46,7 +46,7 @@ has_doc() {
 
 # 规则 1：模型变更 → backend/README_backend.md 或 backend 数据库规范
 if echo "$CHANGED" | grep -q "backend/internal/model/models.go"; then
-  if ! has_doc '^(backend/README_backend\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$'; then
+  if ! has_doc '^(backend/README_backend\.md|docs/env-vars\.md|spec/backend/database-guidelines\.md)$'; then
     warn "backend/internal/model/models.go 已修改，但 backend 模型/数据库文档未同步更新"
   fi
 fi
@@ -60,14 +60,14 @@ fi
 
 # 规则 3：前端路由变更 → README / docs / frontend structure spec
 if echo "$CHANGED" | grep -q "web/src/router.tsx"; then
-  if ! has_doc '^(README\.md|docs/|\.trellis/spec/frontend/directory-structure\.md)$'; then
+  if ! has_doc '^(README\.md|docs/|spec/frontend/directory-structure\.md)$'; then
     warn "web/src/router.tsx 已修改，但公开入口文档或 frontend structure spec 未同步更新"
   fi
 fi
 
 # 规则 4：新增迁移文件 → backend README / migration docs / database spec
 if echo "$CHANGED" | grep -q "backend/internal/database/migrations/"; then
-  if ! has_doc '^(backend/README_backend\.md|docs/deployment\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$'; then
+  if ! has_doc '^(backend/README_backend\.md|docs/deployment\.md|docs/env-vars\.md|spec/backend/database-guidelines\.md)$'; then
     warn "数据库迁移文件有变更，但 backend 迁移/部署文档或数据库规范未同步更新"
   fi
 fi
