@@ -33,7 +33,6 @@ web/.env
 .dsh-project-memory/
 .gemini/
 .agent/
-CLAUDE.md
 GEMINI.md
 .codebuddy/
 

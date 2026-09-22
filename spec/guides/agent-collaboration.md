@@ -6,8 +6,15 @@ The checkout's root AGENTS.md and relevant nested AGENTS.md files govern this
 repository. Codex, Grok and OMP are required supported platforms. Each uses its
 native instruction, skill, role and permission mechanisms; shared harness skill
 source does not authorize importing another tool's runtime settings. OMP's
-project `.omp/AGENTS.md` includes the root authority. No CLAUDE.md copy is needed
-for Claude versions supporting the native AGENTS.md fallback.
+project `.omp/AGENTS.md` includes the root authority. Claude's `CLAUDE.md` contains
+only `@AGENTS.md`: its native import keeps one project authority even when the
+AGENTS fallback plugin is unavailable (including gated third-party-provider
+sessions). A supporting version alone does not establish that fallback is active.
+On first entry from a subdirectory or worktree, Claude may ask for project-scoped
+approval to import the root file outside the starting directory. Approve that
+project's intended import through the native prompt; this is not a global allow.
+Verify both the entry and imported authority in the native source list before
+claiming automatic loading succeeded.
 
 From a subdirectory or worktree, resolve the current Git root before reading
 specs or running commands. Backend commands run in `backend/`, frontend commands
