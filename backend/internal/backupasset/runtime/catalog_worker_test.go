@@ -98,6 +98,9 @@ func TestCatalogWorkerStartupIsAsyncPeriodicAndDynamicallyDisabled(t *testing.T)
 	if outcome := <-metrics.scans; outcome != catalog.MetricScanSuccess {
 		t.Fatalf("startup scan outcome=%q", outcome)
 	}
+	// The outcome precedes storage observations and clearing scanning. Join the
+	// scan before changing settings or delivering the next periodic tick.
+	worker.wg.Wait()
 	if gc.callCount() != 1 {
 		t.Fatalf("enabled scan reclamation calls=%d want 1", gc.callCount())
 	}
@@ -106,6 +109,7 @@ func TestCatalogWorkerStartupIsAsyncPeriodicAndDynamicallyDisabled(t *testing.T)
 	if outcome := <-metrics.scans; outcome != catalog.MetricScanDisabled {
 		t.Fatalf("disabled scan outcome=%q", outcome)
 	}
+	worker.wg.Wait()
 	// A disabled scan still reclaims generations and refreshes the storage
 	// gauges, but must never schedule Catalog candidates or builds.
 	if gc.callCount() != 2 {
