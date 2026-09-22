@@ -22,16 +22,19 @@
 1. Fork 本仓库并 clone 到本地
 2. 先同步 `main`，再基于 `main` 创建工作分支：`git checkout -b feat/your-feature`
 
-> 不要直接在 `main` 分支提交。任何功能开发、问题修复、文档、配置、CI、Trellis 任务或流程规范变更，都应在独立工作分支完成，并通过 Pull Request 合入。
+> 不要直接在 `main` 分支提交。任何功能开发、问题修复、文档、配置、CI 或规范变更，都应在独立工作分支完成，并通过 Pull Request 合入。
+
+开发规范入口是 [spec/index.md](spec/index.md)，项目协作规则见 [AGENTS.md](AGENTS.md)。无需安装个人 harness 或工作流框架，也无需创建任务目录、规划审批或例行日志。
 
 3. 完成开发后运行校验：
 
 ```bash
+# 以下从仓库根目录运行；括号确保命令结束后仍在根目录。
 # 后端
-cd backend && go test ./... && go build ./...
+(cd backend && go test ./... && go build ./...)
 
 # 前端
-cd web && npm run check   # typecheck + lint + test + build
+(cd web && npm run check)   # typecheck + lint + test + build
 
 # 仓库脚本/文档
 bash scripts/check-doc-freshness.sh
@@ -96,11 +99,11 @@ git push origin feat/your-feature
 
 PR 涉及以下变更时，请同步更新对应文档：
 
-- 新增/修改数据库模型 → 更新 `backend/README_backend.md` 的核心模型说明，必要时同步 `.trellis/spec/backend/database-guidelines.md`
+- 新增/修改数据库模型 → 更新 `backend/README_backend.md` 的核心模型说明，必要时同步 `spec/backend/database-guidelines.md`
 - 新增/修改 API 路由 → 更新 `backend/README_backend.md` 接口列表
-- 新增/修改前端页面或公开入口 → 更新 `README.md` / `docs/**` 中对应的用户入口说明；如果是结构约定变化，同步 `.trellis/spec/frontend/directory-structure.md`
+- 新增/修改前端页面或公开入口 → 更新 `README.md` / `docs/**` 中对应的用户入口说明；如果是结构约定变化，同步 `spec/frontend/directory-structure.md`
 - 新增/修改环境变量 → 更新 `docs/env-vars.md`、相关 `.env*.example` 或 `.env.deploy`
-- 新增数据库迁移 → 更新 `backend/README_backend.md` 当前迁移版本号；如改变迁移约定，同步 `.trellis/spec/backend/database-guidelines.md`
+- 新增数据库迁移 → 更新 `backend/README_backend.md` 当前迁移版本号；如改变迁移约定，同步 `spec/backend/database-guidelines.md`
 - 修改 release / image / deploy / version-check 路径 → 更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md`、`docs/maintainers/release.md` 和 PR 模板/流程说明
 
 CI 中的 `doc-freshness` 检查会在关键文件变更但文档未同步时发出提醒。
@@ -115,7 +118,7 @@ CI 中的 `doc-freshness` 检查会在关键文件变更但文档未同步时发
 make setup-hooks
 ```
 
-这会启用 pre-commit 文档新鲜度检查，在关键代码文件变更但文档未同步时阻止提交。
+这会启用 pre-commit 暂存内容快检、文档同步及适用的迁移检查，以及 pre-push 的 `scripts/local-ci-parity.sh` 门禁。不要绕过 hooks 或 required CI。
 
 ## 发布流程
 

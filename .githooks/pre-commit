@@ -41,16 +41,16 @@ check() {
   fi
 }
 
-check "backend/internal/model/models.go" "^(backend/README_backend\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$" \
+check "backend/internal/model/models.go" "^(backend/README_backend\.md|docs/env-vars\.md|spec/backend/database-guidelines\.md)$" \
   "models.go 已修改，请同步更新 backend 模型/数据库文档"
 
 check "backend/internal/api/router.go" "^backend/README_backend\.md$" \
   "router.go 已修改，请同步更新 backend/README_backend.md 接口列表"
 
-check "web/src/router.tsx" "^(README\.md|docs/|\.trellis/spec/frontend/directory-structure\.md)$" \
+check "web/src/router.tsx" "^(README\.md|docs/|spec/frontend/directory-structure\.md)$" \
   "router.tsx 已修改，请同步更新公开入口文档或 frontend structure spec"
 
-check "backend/internal/database/migrations/" "^(backend/README_backend\.md|docs/deployment\.md|docs/env-vars\.md|\.trellis/spec/backend/database-guidelines\.md)$" \
+check "backend/internal/database/migrations/" "^(backend/README_backend\.md|docs/deployment\.md|docs/env-vars\.md|spec/backend/database-guidelines\.md)$" \
   "数据库迁移文件有变更，请同步更新 backend 迁移/部署文档或数据库规范"
 
 check "backend/internal/config/config.go" "^docs/env-vars\.md$" \

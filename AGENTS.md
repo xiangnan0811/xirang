@@ -1,34 +1,42 @@
-<!-- TRELLIS:START -->
-# Trellis Instructions
+# Xirang development instructions
 
-These instructions are for AI assistants working in this project.
+This file is the canonical project entrypoint for contributors and coding agents.
+The project owns its contracts in [spec/](spec/index.md), verification commands,
+and delivery requirements. A personal harness is optional: a clean checkout is
+sufficient to find and follow these requirements.
 
-This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
+## Work directly within the authorized scope
 
-- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
-- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
-- `.trellis/workspace/` — per-developer journals and session traces
-- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
-
-If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
-
-If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
-- `.agents/skills/` — reusable Trellis skills
-- `.codex/agents/` — optional custom subagents
-
-Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
-
-<!-- TRELLIS:END -->
-
-## OpenCode / Oh My OpenAgent Notes
-
-- Treat `.trellis/` as the shared project memory for OpenCode, Claude Code, Codex, and other agent tools. Start OpenCode sessions by loading `trellis-start` so the agent reads the same workflow, task, spec, and workspace journal context used by Claude Code and Codex.
-- Do not commit local OpenCode / Oh My OpenAgent runtime directories. `.omo/`, `.opencode/`, and `.codegraph/` are generated per machine or per session and are ignored by this repository.
+- Read only the relevant layer index and contracts before editing. Resolve paths
+  relative to the checkout root (`git rev-parse --show-toplevel`), including when
+  entering from `backend/`, `web/`, or a linked worktree. For a multi-repository
+  assignment, identify each repository's own authority and verification directory.
+- Clear, authorized requests proceed directly. Ask only about unresolved material
+  requirements, risks, or authorization. Small changes do not require a task,
+  PRD, design document, phase approval, routine journal, or migration receipt.
+- Read-only requests stay read-only, including private recovery/index writes.
+  Trellis and Superpowers lifecycle instructions are retired for this project;
+  do not recreate their artifacts or load historical tasks as live instructions.
+- Keep generic personal guidance in the personal harness and recovery/index data
+  outside Git. Indexes contain pointers, not copied specifications or transcripts.
+  Historical sessions and old memory are leads; current project contracts and
+  current repository evidence govern. Completed/cancelled work is not active work.
+- Authorized implementation may use native implementation agents with explicit
+  file ownership. Read-only investigator/reviewer restrictions apply to those
+  roles, not to separately authorized implementers or main-agent repairs.
+- Preserve native model, reasoning and Advisor configuration. Use native role
+  dispatch; never import another platform's runtime configuration. For parallel
+  work, independent GPT + Grok review, repair verification, and candidate evidence,
+  follow [collaboration and verification](spec/guides/agent-collaboration.md).
+- Synchronize affected contracts and regression evidence when behavior changes.
+  At completion name the spec and checks, or explain why no spec change applies.
+  Keep current evidence while valid; the same HEAD alone does not prove unchanged
+  staged, unstaged, untracked content or verification conditions.
 
 ## Repository Workflow
 
 - Do not commit directly on `main`. Treat `main` as an integration branch that should track `origin/main`.
-- Before any file-changing work, create or switch to a dedicated work branch from an up-to-date `main`. This applies to feature work, bug fixes, docs/config changes, Trellis task/spec updates, and process changes.
+- Before any file-changing work, create or switch to a dedicated work branch from an up-to-date `main`. This applies to feature work, bug fixes, docs/config changes, specifications, and process changes.
 - Allowed on `main`: read-only inspection, fetch/pull synchronization, branch creation, and post-merge sync. If `main` has local-only commits, stop and resolve the branch state before starting new work.
 - Complete changes through a pull request with CI checks. After squash merge, sync local `main` to `origin/main` before starting the next branch.
 - After creating a pull request, the responsible agent or maintainer must monitor all required CI jobs, fix failures on the same work branch, push the fix, and keep monitoring until the required checks pass or a real external blocker is recorded. Do not merge while required checks are failing, pending, or missing.
@@ -40,7 +48,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 **xirang (息壤)** is a lightweight, agentless server operations management platform. It provides backup credibility verification, recovery drill automation, node diagnostics, monitoring/alerting, web terminal, and audit logging through SSH-based multi-server management — all in a single ops loop.
 
 - **Backend**: Go 1.26, Gin, GORM (SQLite + PostgreSQL), zerolog, gorilla/websocket, robfig/cron/v3
-- **Frontend**: React 18, TypeScript 5.8 (strict), Vite 7, Tailwind CSS 3.4, Radix UI (shadcn/ui), i18next (zh default)
+- **Frontend**: React 18, TypeScript 5.8 (strict), Vite 7, Tailwind CSS 4, Radix UI (shadcn/ui), i18next (zh default)
 - **Deploy**: Single all-in-one Docker image (frontend + backend + nginx), multi-arch (amd64 + arm64)
 - **License**: MIT
 
@@ -70,21 +78,21 @@ xirang/
 ├── deploy/               # Docker, nginx, docker-compose
 ├── scripts/              # CI/ops helper scripts
 ├── docs/                 # user documentation
-├── .trellis/             # Trellis workflow + coding specs (READ BEFORE CODING)
+├── spec/                 # authoritative development contracts and regression requirements
 └── Makefile              # all build/test/lint/deploy commands
 ```
 
 ## Where to Find Conventions
 
-**Before writing code in any layer, read the relevant Trellis spec.** These specs are the authoritative source for coding conventions — this file is a navigation hub, not a replacement.
+**Before writing code in any layer, read the relevant spec.** These specs are the authoritative source for coding conventions — this file is a navigation hub, not a replacement. Dependency versions come from `backend/go.mod` and `web/package.json`/lockfile.
 
 | Layer | Spec Location | Key Topics |
 |-------|---------------|------------|
-| Backend | `.trellis/spec/backend/` | directory structure, database/migrations, error handling, quality, logging, deployment runtime |
-| Frontend | `.trellis/spec/frontend/` | directory structure, components, hooks, state management, quality, type safety, a11y |
-| Cross-cutting | `.trellis/spec/guides/` | branch workflow, code reuse, cross-layer thinking, documentation truth |
+| Backend | `spec/backend/` | directory structure, database/migrations, error handling, quality, logging, deployment runtime |
+| Frontend | `spec/frontend/` | directory structure, components, hooks, state management, quality, type safety, a11y |
+| Cross-cutting | `spec/guides/` | branch workflow, code reuse, cross-layer thinking, documentation truth |
 
-Quick links: [Backend index](.trellis/spec/backend/index.md) · [Frontend index](.trellis/spec/frontend/index.md) · [Guides index](.trellis/spec/guides/index.md)
+Quick links: [Backend index](spec/backend/index.md) · [Frontend index](spec/frontend/index.md) · [Guides index](spec/guides/index.md)
 
 Subdirectory guides: [backend/internal/api/handlers/](backend/internal/api/handlers/AGENTS.md) · [web/src/pages/](web/src/pages/AGENTS.md)
 
@@ -105,11 +113,18 @@ Subdirectory guides: [backend/internal/api/handlers/](backend/internal/api/handl
 - **`npm run check`** — THE full gate: typecheck + lint + test + build
 
 ### Full project
+- Run the following commands from the checkout root, not from `backend/` or `web/`.
 - `make check` — lint (golangci-lint + eslint) + test (backend + frontend) + build
 - `make lint` — golangci-lint + eslint only
 - `make coverage` — coverage report
 - `make docker-build` / `make docker-buildx` — Docker image (single or multi-arch)
 - `make setup-hooks` — install git pre-commit/pre-push hooks
+- `bash scripts/check-doc-freshness.sh` and `bash scripts/check-doc-freshness.test.sh` — documentation checks
+- `bash scripts/local-ci-parity.sh` — existing pre-push gate; includes frontend full checks, bundle budget, backend vulnerability checks, and documentation/migration checks
+
+Git hooks and required CI remain mandatory; do not bypass them. CI also owns
+PostgreSQL parity, selected race tests, browser acceptance, coverage, and Docker
+runtime checks. Local success does not replace those results or live acceptance.
 
 ## CI/CD
 

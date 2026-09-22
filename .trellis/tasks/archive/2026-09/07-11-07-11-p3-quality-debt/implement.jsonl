@@ -1,7 +1,0 @@
-{"file":".trellis/tasks/archive/2026-09/07-11-07-11-p3-quality-debt/design.md","reason":"Current bounded scope and decisions"}
-{"file":".trellis/spec/backend/error-handling.md","reason":"API envelope and protocol boundaries"}
-{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Structured logging and redaction"}
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Go checks"}
-{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Effect cleanup"}
-{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend gate"}
-{"file":".trellis/spec/frontend/type-safety.md","reason":"No setter mutation or unknown casts"}

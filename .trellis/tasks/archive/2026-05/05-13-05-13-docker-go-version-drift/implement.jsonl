@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Repository changes must use a dedicated branch, PR, CI monitoring, and post-merge release/Docker monitoring."}
-{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "README and version/image claims must stay aligned with current source and config truth."}
