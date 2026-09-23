@@ -18,7 +18,7 @@
 HTTP :10761  ───> │ Nginx                          │
                   │   ├── /api/v1/*  ──> Backend   │
                   │   ├── /healthz   ──> Backend   │  (liveness)
-                  │   ├── /readyz    ──> Backend   │  (DB readiness)
+                  │   ├── /readyz    ──> Backend   │  (数据库连通性)
                   │   └── /*         ──> Web UI    │
                   │                                │
                   │ Backend (:3000)                │
@@ -27,7 +27,7 @@ HTTP :10761  ───> │ Nginx                          │
                   └────────────────────────────────┘
 ```
 
-容器内入口端口固定为 `10761`。项目不在容器内处理 HTTPS；如需公网 HTTPS，请在外部使用 Caddy、Nginx Proxy Manager、Nginx 或云厂商负载均衡终止 TLS，再反代到 `http://127.0.0.1:10761`。
+容器内入口端口固定为 `10761`，后端默认监听 `:3000`。入口脚本和 Nginx 都使用后端 3000 端口，不应只通过 `SERVER_ADDR` 改变镜像内部端口。项目不在容器内处理 HTTPS；公网 HTTPS 由外部代理终止 TLS，再反代到 `http://127.0.0.1:10761`。宿主机端口默认发布到所有接口，若只允许同机代理访问，将 Compose 的 `ports` 改为 `127.0.0.1:10761:10761`。
 
 ### Rsync 路径隔离部署
 
@@ -35,7 +35,7 @@ HTTP :10761  ───> │ Nginx                          │
 
 All-in-One 镜像内置 `/usr/local/bin/xirang-rsync-confined`。SSH 备份节点须由管理员部署与 Core 同版本、匹配节点架构的 helper；可从同版本源码在 `backend` 目录执行 `go build -o xirang-rsync-confined ./cmd/rsync-confined`，再安装为节点 SSH 用户可执行且不可篡改的程序。`RSYNC_CONFINEMENT_HELPER` 选择本地程序，`RSYNC_CONFINEMENT_REMOTE_HELPER` 选择远端程序；默认均从执行环境查找 `xirang-rsync-confined`。不得用删除白名单作为缺少 helper 的自动补救。
 
-保留源目录根名或固定普通文件操作数的隔离路径还需要可用的非特权 user/mount namespace、`mount_setattr`，以及 util-linux 的 `unshare` 和 `mount`（位于 `/usr/bin` 或 `/bin`）。helper 在私有挂载命名空间内建立固定描述符的绑定挂载，源只读，接收目标可写；这些能力须在实际执行用户及容器安全策略下可用。默认 Docker 安全策略可能以 `EPERM` 拒绝创建命名空间；本次在默认 Alpine 容器中已观察到该限制，因此镜像包含 helper 不等于该环境支持所有隔离传输。遇到限制会拒绝执行。不要自动启用 privileged、授予 SYS_ADMIN、关闭 seccomp 或删除白名单；先由管理员评估合适的运行环境，并用一次性数据验收。
+保留源目录根名或固定普通文件操作数的隔离路径还需要可用的非特权 user/mount namespace、`mount_setattr`，以及 util-linux 的 `unshare` 和 `mount`（位于 `/usr/bin` 或 `/bin`）。这些能力须在实际执行用户及容器安全策略下可用。Docker 安全策略可能以 `EPERM` 拒绝创建命名空间；镜像包含 helper 不等于环境支持所有隔离传输，遇到限制会拒绝执行。不要自动启用 privileged、授予 SYS_ADMIN、关闭 seccomp 或删除白名单；先评估运行环境并用一次性数据验收。隔离实现约束见[凭据与访问合同](spec/domains/credentials-access.md)。
 
 部署后先使用一次性目录验证正常传输、内部链接、越界链接拒绝及缺失 helper 拒绝，再恢复备份调度。配置隔离时 SSH 不读取用户自定义配置文件，只使用 Core 生成的连接参数与精确凭据文件；需要的连接配置应在节点配置中显式提供。
 
@@ -116,7 +116,9 @@ curl -fsS http://127.0.0.1:10761/healthz
 
 仓库根 Compose 提供 `asset-worker` 可选 profile，用于在本机从源码构建和验证 parser Worker 与独立 updater。该能力当前**不是 GA**，没有稳定公共 Worker 镜像，也不会发布到 Docker Hub 或 GitHub Release。它使用本地镜像名 `xirang-asset-worker:${ASSET_WORKER_IMAGE_TAG:-local}`；官方 Core 仍是 `linnea7171/xirang:${IMAGE_TAG:-latest}`，公开端口仍只有 `10761`。
 
-普通 `docker compose up -d` 不会启动 profile 服务，Catalog、元数据搜索、Content Broker、workspace、原生预览、下载和 recovery 继续工作。未部署 Worker、没有 active verified bundle 或 capability 不匹配时，增强处理显示 `not_deployed`/`unsupported`，不会制造备份失败或告警。
+普通 `docker compose up -d` 不会启动 profile 服务；在备份资产启用门禁和各自授权满足时，Catalog、元数据搜索、Content Broker、workspace、原生预览和下载可继续工作。未部署 Worker、没有 active verified bundle 或 capability 不匹配时，增强处理显示 `not_deployed`/`unsupported`，不会仅因此制造备份失败或告警。
+
+受管 Recovery 不属于上述无 Worker 可用承诺：当前实现启用它时要求 Processing 已就绪且具备恶意软件证据服务，本机与远程 Worker 均关闭时不满足准入。旧版普通任务恢复仍按各执行器的证据和授权要求处理，不能代替受管恢复的安全检查。部署前须按[处理与导出合同](spec/domains/backup-processing-export.md)核验实际需要的恢复路径。
 
 Profile 固定使用以下本地身份和权限合同：
 
@@ -201,7 +203,7 @@ docker compose --profile asset-worker stop asset-worker asset-worker-updater
 docker compose up -d xirang
 ```
 
-不要使用 `down -v` 作为功能回退，也不要删除 Provider bytes、RecoveryPoint、Catalog 或源备份。加密 Derived 数据和已验签 bundle 可保留给受控调和或后续重新启用；移除 profile 不影响原生预览、下载与 recovery。
+不要使用 `down -v` 作为功能回退，也不要删除 Provider bytes、RecoveryPoint、Catalog 或源备份。加密 Derived 数据和已验签 bundle 可保留给受控调和或后续重新启用。移除 profile 后仍获准的原生预览和下载可继续使用；若没有其他就绪的 Worker，受管 Recovery 的安全准入会受影响，回退前须核验。
 
 ### 5. 可选：外部反向代理与 HTTPS
 
@@ -258,10 +260,7 @@ DB_DSN=postgresql://user:pass@host:5432/xirang?sslmode=require
 ### 升级到稳定版
 
 1. 阅读目标版本的 GitHub Release 和 `CHANGELOG.md`，并确认该版本的 `Publish Docker Images` 工作流已成功、官方 Docker Hub 稳定标签已发布。仅有 GitHub Release 不代表镜像可部署；若发行说明标记镜像发布受阻，应继续使用此前已验证版本。
-2. 备份数据库和 `.env`。
-   手动部署 workflow 会从当前 workflow ref 上传受测试的 `scripts/predeploy-backup.sh`，进入 `DEPLOY_PATH` 后使用该目录固定的 `docker-compose.yml`、`./data` 和 `./backups` 判定并执行备份。仅当 `xirang` 容器不存在、`./data` 没有任何持久数据且 `.env` 未配置 PostgreSQL 时，才会明确报告首次部署并跳过备份。正常运行的升级必须备份；容器已停止，或容器缺失但仍有本地数据/外部 PostgreSQL 配置时，也必须通过 Compose 的环境、网络和持久挂载运行目标 All-in-One 镜像中的 `/usr/local/bin/backup-db.sh /backup/db`。任何必需备份、产物或 `.sha256` 校验失败都会阻断部署。
-
-   `DEPLOY_PATH` 必须是现有部署目录，并包含当前有效的 `docker-compose.yml` 和 `.env`；workflow 自带备份门禁脚本，不依赖远端目录预先出现该脚本。
+2. 备份数据库、`.env` 及匹配的加密密钥，验证数据库产物和同名 `.sha256` 文件。容器已停止不代表没有数据，也不能跳过升级前备份。使用仓库手动部署工作流时，按[维护者发布手册](maintainers/release.md)准备当前部署目录与备份门禁。
 3. 修改 `.env`：
 
 ```env
@@ -282,17 +281,19 @@ curl -fsS http://127.0.0.1:10761/healthz
 docker compose logs --tail=200 xirang
 ```
 
-### 恢复捕获、告警投递与调度/健康证据合同升级
+### 跨数据合同升级
 
-升级到包含 `000083_task_run_recovery_capture`、`000084_alert_delivery_intents`、`000085_alert_delivery_success`、`000086_task_cron_occurrences_resource_identity` 或 `000087_backup_completion_facts` 的版本时，先备份数据库、加密密钥和备份数据，暂停新任务准入并排空、停止所有旧 Core，再让新 Core 执行迁移；不要让不理解捕获代次、投递认领、定时意图或健康事实的旧进程继续写入同一数据库。
+涉及恢复捕获、投递认领、定时意图或备份完成事实的升级，须先备份数据库、加密密钥和备份数据，暂停新任务准入并排空、停止所有旧 Core，再让新 Core 执行迁移。不要混用不理解当前数据合同的旧进程写同一数据库。
 
 - 历史 Rsync 成功记录不会自动成为可信捕获证据。**先隔离保全唯一剩余备份**，再决定是否重新备份；不要为了满足恢复准入而覆盖最后一份数据。详见[旧版 Rsync 恢复准入](admin/backup-recovery.md#旧版-rsync-恢复准入)。
 - 告警投递意图会在重启后恢复，已发送但回执未提交的外部结果仍可能重复投递；历史未知投递决策不会被盲目重发。升级后检查通知状态与接收通道，不要把未知状态视为已发送。
-- `000086` 会在本地、节点、资源和策略准入之前为每个 `(task_id, scheduled_at)` 持久化唯一的定时意图。任务忙、策略配额或共享资源阻塞时，意图保持排队并由后续 Core 排空；不同到期时间不得合并成一次执行。迁移同时记录不可变 TaskRun 资源身份，保护跨 Core 的共享可变目标。
-- `000087` 会保存分类且不可变的备份完成事实。只有具备可证明血缘的已提交恢复点才能建立受管完成时间；普通命令成功、导入基线和未验证历史时间戳仍明确保持未验证，不会刷新健康结论。已使用事实后，受保护的 schema 降级会拒绝抹除它们。
+- 到期定时意图会持久化并等待容量；升级后检查积压及共享可变目标的未决占用，不要以删除运行记录解除阻塞。
+- 健康数据只使用可证明的备份完成事实。普通命令成功、导入基线或无法证明的旧时间戳不会自动成为可信备份，升级后可能显露此前未被正确标记的证据不足。
 - 新捕获使用可保全路径字节的 v2 manifest 及配套根字段编码；旧 v1 证据仍可读取，但不得让旧 Core 消费新 v2 证据。恢复前需要在 Core 上为选中内容的私有暂存副本预留磁盘空间；暂存不能替代原始备份保全。
 - 通知冷却期按真实发送成功时间计算；历史空时间戳不会被补造成成功。飞书、钉钉和企业微信需要业务成功回执，通用 webhook 保持 HTTP 2xx 语义。
-- 已使用的捕获、代次、投递或健康事实证据会阻止相应 schema 降级；`000085` 写入发送成功时间或未知投递身份后也会阻止降级。不要删除证据、修改迁移版本或强行混用旧二进制来绕过保护。优先前向修复；回退方案必须同时保全数据库、可变备份树和通知回执状态，而不只是替换镜像。
+- 已使用的捕获、代次、投递或健康证据会阻止不安全 schema 降级。不要删除证据、修改迁移版本或强行混用旧二进制。优先前向修复；回退必须同时保全数据库、可变备份树和通知回执状态，不能只替换镜像。
+
+具体版本变化查阅 GitHub Release 与 CHANGELOG；当前迁移位置和受检查版本号见[后端入口](../backend/README.md)，配对迁移与降级要求见[数据库合同](spec/backend/database-guidelines.md)。
 
 ### 回滚到旧版本
 
@@ -314,6 +315,8 @@ Docker Compose 默认持久化目录：
 | `./data` | `/data` | SQLite 数据库及应用数据 |
 | `./backups` | `/backup` | 自动/手动备份文件 |
 | `./logs` | `/logs` | 应用日志与 Nginx 访问/错误日志 |
+
+根 Compose 还为 Core 挂载两个运行时 socket named volume，以及 Derived Store 和 Export Store 的独立持久 volume；这些挂载不以启用 Worker profile 为前提。启用备份资产前必须满足私有存储权限和路径就绪条件，详见上文可选 profile。数据库和 Provider 仓库以外的加密派生/导出数据也应按保留需求纳入运维盘点；不要把 `docker compose down -v` 当成升级或功能回退。
 
 容器内置 cron：
 
@@ -369,6 +372,10 @@ DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
 
 ## 健康检查与日志
 
+`/healthz` 仅表示后端能处理请求；`/readyz` 用 2 秒超时 Ping 数据库，不验证每个业务表、备份仓库、Worker 或第三方通道。入口脚本最多等待后端就绪约 30 秒再启动 Nginx，后端、定时任务进程或 Nginx 任一退出都会终止容器。容器显示 healthy 不能代替一次真实登录和所需业务路径验证。
+
+Compose 的 Docker `json-file` 日志限制为每文件 `10m`、最多 3 个，只约束容器标准输出。`/logs/xirang.log` 和 Nginx 日志没有内置轮转；需在宿主机另行安排轮转和空间监控。后端长期持有日志文件句柄，不会自动重新打开被重命名的文件，轮转方案须适配这一行为。日志文件打开失败时后端回退为仅标准输出并记录错误，不会因此拒绝启动。
+
 ```bash
 # 容器状态
 docker compose ps
@@ -403,29 +410,7 @@ docker exec -it xirang sh -lc \
 
 ## Prometheus `/metrics`
 
-`/metrics` 是后端进程提供的 Prometheus 指标端点。**除显式 `APP_ENV=development` 外必须配置随机 `METRICS_TOKEN`**（含未声明 APP_ENV），否则进程拒绝启动。仅开发环境可留空 token 以兼容本地抓取，但会暴露路由标签和流量画像，并周期性打 warn 日志。
-All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*`、`/healthz`（进程存活）和 `/readyz`（数据库就绪）以及前端静态资源，不会暴露 `/metrics`。如果需要抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并务必启用 token。
-
-```bash
-# 后端直连部署（例如源码运行 SERVER_ADDR=:8080）
-curl -fsS http://127.0.0.1:8080/metrics | head
-
-# 启用 token
-curl -fsS -H "Authorization: Bearer ${METRICS_TOKEN}" http://127.0.0.1:8080/metrics | head
-```
-
-Prometheus 示例：
-
-```yaml
-scrape_configs:
-  - job_name: xirang
-    metrics_path: /metrics
-    bearer_token_file: /etc/prometheus/secrets/xirang-metrics-token
-    static_configs:
-      - targets: ['backend-host:8080']  # 替换为 Prometheus 可访问的后端地址
-```
-
-详见 [监控、告警与状态页](admin/monitoring-alerting.md)。
+All-in-One 入口不代理 `/metrics`，外层代理也必须能直接连到后端才可转发此路径。抓取地址、Token、Prometheus 示例与备份资产指标统一见[监控指南](admin/monitoring-alerting.md#prometheus-指标)。
 
 ## 迁移 dirty 状态排障
 
@@ -454,19 +439,9 @@ schema_migrations.dirty=1
 
 服务启动路径不会自动 `force`、重试 dirty 迁移或在 schema 不完整时继续写入。不要用手工版本号变更掩盖失败迁移。
 
-## UTC 时间戳约定
+## 数据库时间与迁移开发
 
-当前后端使用 UTC 写入时间：
-
-- GORM `NowFunc` 返回 UTC。
-- SQLite DSN 包含 `_loc=UTC`。
-- PostgreSQL DSN 默认追加 `timezone=UTC`。
-
-新增 migration 不应使用 SQL `DEFAULT CURRENT_TIMESTAMP`、`datetime('now')`、`localtime` 或显式时区转换。涉及迁移文件时运行：
-
-```bash
-bash scripts/check-migration-utc-safety.sh
-```
+数据库时间统一按 UTC 写入；容器 `TZ` 影响定时任务与运维展示，不改变数据库存储合同。新增迁移和 UTC 检查步骤统一见[数据库合同](spec/backend/database-guidelines.md)与[后端入口](../backend/README.md)。
 
 ## 本地构建镜像（高级用户）
 

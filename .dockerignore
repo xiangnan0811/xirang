@@ -2,7 +2,7 @@
 /.github
 /.githooks
 /.agents
-/spec
+/docs/spec
 /.omp
 node_modules
 web/node_modules

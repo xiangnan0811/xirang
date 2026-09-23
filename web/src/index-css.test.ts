@@ -234,8 +234,8 @@ describe("global CSS motion and decoration guardrails", () => {
   });
 });
 
-describe("DESIGN.md dark tokens stay aligned with index.css", () => {
-  const designMd = readFileSync(path.join(process.cwd(), "..", "DESIGN.md"), "utf8");
+describe("design-system.md dark tokens stay aligned with index.css", () => {
+  const designMd = readFileSync(path.join(process.cwd(), "..", "docs", "spec", "guides", "design-system.md"), "utf8");
   const darkBlock = css.match(/\.dark\s*\{([\s\S]*?)\n {2}\}/)?.[1] ?? "";
 
   const semanticTokens = [

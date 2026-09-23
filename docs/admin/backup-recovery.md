@@ -1,6 +1,6 @@
 # 备份、恢复与快照
 
-本文档说明 Xirang 的备份策略、应用感知备份、保留策略、快照浏览/搜索和快照异常检测。生产环境恢复演练当前不可用。
+本文档说明备份策略、仓库迁移、恢复操作、保留策略和可信度判断。生产环境恢复演练当前不可用。开发实现与回归要求统一见[领域合同入口](../spec/domains/README.md)。
 
 ## 备份引擎
 
@@ -24,37 +24,37 @@ Xirang 支持三类备份执行器：
 
 Restic `repository_version` 仅选择新仓库的格式（默认、1、2），**不代表 Append-Only、不可变备份或删除保护**。删除保护状态为未验证，必须在存储后端独立配置和验证权限、保留锁等机制。升级前停止所有旧 Core/执行器并备份数据库及加密密钥；启动时将历史 `append_only=true` 转为格式 2，`false` 转为默认，保留密码、排除规则和其他字段，不改变仓库数据。转换在加密边界内幂等执行；非法或冲突配置隔离并记录任务诊断。旧字段只在显式配置导入边界转换，不再作为运行时配置接受。
 
-## Policy target isolation and historical data
+## 策略目标隔离与历史数据
 
-New policy-owned Rsync tasks use `<backup-root>/.xirang/policies/<policy-id>/nodes/<node-id>`. Persisted IDs, not source basenames or editable node labels, separate writers. Existing stored task targets remain unchanged on synchronization and node-label edits; changing a path is not evidence that historical bytes were migrated. Local target admission rejects conflicting canonical paths, symlink aliases, and ancestor/descendant ownership.
+策略新建的 Rsync 任务使用 `<backup-root>/.xirang/policies/<policy-id>/nodes/<node-id>`，以持久 ID 隔离写入目标。已有目标不会因同步或修改节点标签而变更；修改路径也不能证明历史数据已经迁移。冲突的规范路径、符号链接别名及祖先/后代目录占用会被拒绝。
 
-Before upgrading, pause affected tasks and inventory stored `rsync_target` values and physical aliases. Preserve the database, encryption keys, TaskRun evidence, and an independent copy of each remaining backup tree. If policies shared a tree, neither historical manifest necessarily describes its current bytes. Never delete failed/dirty evidence, clear shared directories, or overwrite the only salvageable copy to regain restore eligibility.
+升级前暂停受影响任务，盘点 `rsync_target` 与物理别名，保存数据库、加密密钥、运行证据和剩余备份树的独立副本。多个策略曾共享目录时，历史清单未必描述当前数据。不得删除失败或 dirty 证据、清空共享目录或覆盖唯一可保全副本来恢复准入。
 
-Node migration requires affected tasks to be disabled, unscheduled, and free of active durable runs. Local data migration copies independently owned sources to fresh isolated destinations, verifies the copies, and rechecks ownership/configuration before database cutover. Shared sources and existing destinations are refused rather than merged. Original sources remain intact; manually rewriting database targets is not a migration. Preserve and assess shared legacy data separately before choosing a new isolated baseline or an explicitly admitted managed migration.
+节点迁移前须禁用受影响任务、取消调度并排空活动运行。本地数据迁移将独立占用的源复制到新的隔离目标，验证副本并复核占用与配置后才切换数据库；共享源或已有目标不会自动合并。原始源保持不变，直接改数据库目标不等于迁移。先单独保全并评估共享历史数据，再选择新基线或受控迁移。
 
-Configuration-import compensation follows the same ownership boundary. It captures task before-images under the global, policy, and task locks, then revalidates current claims and post-import row images before rollback. Concurrent changes or a new claimant at an old target cause compensation to fail closed rather than overwrite the newer state or recreate a shared target. If this conflict is reported, pause the affected imported tasks and inspect the failed import/current configuration before retrying; do not force old locators back into the database.
+配置导入补偿也遵守目标占用边界。并发修改或旧目标出现新占用者时，补偿拒绝覆盖较新状态。遇到此类冲突，应暂停导入涉及的任务，检查失败导入与当前配置后再决定重试，不要强行把旧定位器写回数据库。
 
-Policy creation, template cloning, and config import share explicit-value persistence while retaining encryption hooks. A template clone remains disabled, and disabled verification stays disabled. Omitted API fields retain documented defaults.
+策略创建、模板克隆和配置导入保留显式提交值与加密保护；模板克隆保持禁用，关闭的校验不会自动开启。未提交字段使用接口默认值。
 
-## Policy concurrency
+## 策略并发
 
-`max_concurrent` limits ordinary pending/running reservations across every node in the same policy, including competing Core instances. The database policy lock and execution-entry recheck are authoritative; the global execution limit still applies independently. A manual request that meets a busy policy keeps the manual busy response and does not create a deferred occurrence. A due cron occurrence first persists its durable intent, then waits for an available policy/global quota; that intent does not reserve a slot or bypass quota, so a full policy delays the occurrence instead of silently dropping it. Restore/drill admission keeps its separate safety boundary. Existing non-positive stored limits are treated conservatively as one; negative API values are rejected. Terminal completion releases ordinary capacity, while disabling a policy cancels its pending ordinary reservations and records explicit missed-occurrence state.
+`max_concurrent` 限制同一策略跨节点、跨 Core 的普通待执行/执行中预约，全局并发限制仍独立生效。策略繁忙时，手动请求返回繁忙，不转为延后任务；到期 Cron 先持久化意图，再等待策略与全局配额，不静默丢弃，也不预占配额。恢复与演练使用独立安全准入。历史非正限制按 1 保守处理，API 拒绝负值。运行终态释放普通容量，禁用策略取消待处理普通预约和未投递意图。详见[任务执行与恢复合同](../spec/domains/task-execution-recovery.md)。
 
-## Legacy Rclone mutable-head recovery
+## 旧版 Rclone 可变目标恢复
 
-Legacy Rclone has no immutable snapshot or Rsync capture manifest. A completed current generation is not proof of historical object versions. Restore admission binds to the latest eligible current generation and rejects newer failed/dirty or untracked historical attempts instead of borrowing an older success. A proven no-start preserves the previous generation; a complete later success can establish a new current head after a known-complete failure.
+旧版 Rclone 没有不可变快照或 Rsync 捕获清单，当前代次完成不能证明历史对象版本。恢复只能使用最新合格代次；较新失败、dirty 或无法追踪的历史尝试会阻止借用旧成功。可证明未开始的尝试保留上一代次，已知结束的失败后可由新的一次完整成功建立当前恢复来源。
 
-Publication Prepare and preconditions finish before a legacy writer arms its durable generation immediately before executor invocation. Prepare cancellation/failure and proven pre-child dial/lookup/start failures do not invalidate the prior verified generation. An ambiguous remote result remains `unknown`; a Core crash or expired lease is not proof that the remote process stopped. Local cancellation closes and joins the owned SSH lifecycle, but ordinary runs stay blocked while unresolved evidence remains, even after configuration edits. History cleanup preserves these holds. Managed Rclone recovery points retain their separate versioned contracts.
+准备阶段取消或失败、以及可证明远端进程尚未启动的连接/查找/启动失败，不会使前代证据失效。远端结果无法确认时保持 `unknown`；Core 退出、租约过期或本地 SSH 关闭不能证明远端写入结束。未决证据会持续阻止普通执行，配置编辑和历史清理不能绕过。受管 Rclone 恢复点使用独立版本化合同。
 
-### Explicit operator reconciliation
+### 显式人工协调
 
-Only an authenticated administrator with task-write permission may call `POST /api/v1/tasks/{id}/reconcile-legacy-rclone`. This endpoint records the operator confirmation; it does **not** stop or inspect the remote process.
+已认证且具备任务写权限的管理员可调用 `POST /api/v1/tasks/{id}/reconcile-legacy-rclone`。此接口记录人工确认，不会检查或停止远端进程。
 
-1. Pause the task. Identify the exact unresolved TaskRun and its original node/remote, including any configuration changes since that run. Confirm that the remote writer and any external writer have stopped, and preserve an independent salvage copy. A locally closed SSH connection or an expired execution lease is insufficient evidence by itself.
-2. Submit `{"task_run_id":123,"remote_stopped":true,"reason":"Confirmed original remote writer stopped; independent salvage copy retained"}` with the real TaskRun ID and a nonblank reason of at most 1024 characters. Do not include credentials or command output.
-3. The transaction refuses a live or unbounded execution owner, other active task runs, an enabled task, or a record that is not an eligible `writing`/`unknown` ordinary run. An abandoned active `writing` attempt needs an explicit expired lease as well as the operator confirmation; its stale owner is fenced and its active outcome is settled as failed.
-4. Successful reconciliation changes only the selected unresolved generation to `dirty`, retains the original diagnostics and evidence, and records the authenticated actor/confirmation in the same transaction. It does not mark the backup verified, select an older success, resume the task, or retry the old attempt. Audit persistence failure rolls the transition back.
-5. After all unresolved holds have been individually reconciled, explicitly resume and run a new ordinary backup. Restore remains blocked until a complete new successful generation establishes the current head. Never erase TaskRun evidence or launch another task at the same Remote to bypass a hold.
+1. 暂停任务，确认未决 TaskRun、原始节点和 Remote，以及运行后的配置变化。核实原写入进程和外部写入者均已停止，保留独立副本；仅有 SSH 关闭或租约过期不足以确认。
+2. 提交 `{"task_run_id":123,"remote_stopped":true,"reason":"已核实原远端写入者停止，并保留独立副本"}`，替换为真实 TaskRun ID，原因非空且不超过 1024 字符，不含凭据或命令输出。
+3. 系统拒绝仍存活或没有明确到期边界的执行者、其他活动运行、仍启用的任务，以及不合格的 `writing`/`unknown` 普通运行。遗弃的活动写入还须具备明确过期租约，旧执行者会被隔离，活动运行结算为失败。
+4. 成功仅将所选未决代次改为 `dirty` 并保留诊断、证据和操作审计；审计写入失败会回滚。它不会认定备份可信、选择旧成功、恢复任务或重试。
+5. 逐条解除所有未决占用后，再显式恢复任务并执行新备份。新完整成功建立当前代次前，恢复仍被阻止；不能删证据或在同一 Remote 上新建任务绕过。
 
 ### 共享 Legacy Rclone 资源与历史锁定
 
@@ -64,7 +64,7 @@ Legacy Rclone 的未决写入按持久化的不可变资源身份划定冲突域
 
 普通 `command` 或维护任务成功只表示运维命令成功，不是备份完成，不会刷新节点 freshness、健康趋势、置信度或 RPO 报告。可信 freshness 只能来自带不可变执行器快照的 legacy transfer completion，或来自已提交、具备严格 Task/TaskRun/节点血缘与 Provider 证据的 managed RecoveryPoint；pending、warning、失败、恢复和演练运行都不能建立该事实。`imported_baseline` 以及迁移中无法证明的历史只保留为 `unverified` 标记，保留证据引用供调和，但排除在 authoritative freshness、健康统计和恢复点报告之外。
 
-000086/000087 升级前必须停止旧 writer，排空 backup、publication、reconciliation 与相关 worker，并备份数据库和加密密钥；升级按配对迁移顺序执行。000087 会先清除由可变 `Node.last_backup_at` 造成的旧投影，再只用可证明的 committed RecoveryPoint 重建 verified freshness，同时把无法证明的历史保留为 unverified，不得猜测或丢弃。只要新事实或标记已存在，used-down 会拒绝不安全降级；不得通过删除事实、跳过排空或回退到不理解该合同的旧 binary 来绕过门禁。
+涉及完成事实的升级前必须停止旧写入者，排空备份、发布、调和及相关工作器，并备份数据库与加密密钥。历史无法证明的时间戳保持未验证，不能猜测或丢弃。已经使用的证据会阻止不安全降级，不得删除事实或回退旧进程绕过保护。升级操作见[部署指南](../deployment.md#跨数据合同升级)，健康与回归口径见[告警与健康合同](../spec/domains/alerting-health.md)。
 
 ## 旧版 Rsync 恢复准入
 
@@ -88,7 +88,7 @@ Legacy Rclone 的未决写入按持久化的不可变资源身份划定冲突域
 
 一旦安装产生 native managed 恢复点或保留 tombstone，持久的 managed-history latch 会生效。此后即使关闭 feature，也进入 rollback-safe 模式：继续执行精确 Task lineage guard，禁止无 tag 的 legacy backup fallback、`restore latest`、仓库级最新快照异常比较和无 tag 的 Restic retention。该保护不会执行 `forget`、`prune`、`delete`，也不会删除原生 snapshot。
 
-已经使用 managed publication 的安装必须保留 migration `000063_backup_asset_publication_contract`，并在 feature 关闭时继续使用兼容 Child 3 的二进制。回退到不理解该合同的应用版本或执行 schema down 前，必须走独占 preflight；只要存在 active publication lease、managed history 或 tombstone，preflight 会拒绝继续。
+已经使用受管发布的安装必须保留相应 schema 与理解[仓库发布合同](../spec/domains/backup-repository.md)的二进制，关闭功能也不例外。回退旧版本或降级 schema 前必须独占预检；活动发布租约、受管历史或 tombstone 都会阻止不安全回退。
 
 ## Rsync 版本化恢复点
 
@@ -112,7 +112,7 @@ Rsync 任务默认继续使用传统的可变目标。只有管理员可以从�
 
 - Xirang 管理的目录树不等于存储 WORM。拥有底层目录写权限的外部主体仍可能修改文件；保护边界是受控命名空间、权限和 admission，而不是物理不可变介质。
 - Rsync 也不是源端的时间点快照。需要应用一致性时，应在源端静默应用或使用底层卷快照。
-- 版本化点的恢复/浏览、通用 retention/purge 和物理删除不属于当前功能。系统不会为了回退、对账或迁移而删除已提交点。
+- 版本化点使用统一 Catalog、内容交付和受控恢复路径；保留与清除遵守[生命周期合同](../spec/domains/backup-lifecycle.md)，需要精确点身份、能力和安全证据。回退、对账或迁移不会自行删除已提交点。
 - “准备回退”会停止新的受管准入、排空相关工作，并恢复保留的 legacy locator 后让任务保持暂停；它不会删除已提交恢复点，也不会自动恢复旧的可变执行路径。
 - 一旦存在受管 Rsync 历史，managed-history latch 会阻止不安全的 mutable fallback，即使备份资产功能后来被关闭。执行 schema down 前也会因受管 history、versioned link 或活动 lease 而失败关闭；保留 `000064_backup_asset_rsync_publication_contract`。
 
@@ -160,7 +160,7 @@ Clean rollback 只适用于 `first_new_point` 激活后且从未出现任何受�
 ### 明确不提供的保证
 
 - Portable 前缀和 AWS 原生对象版本都不是 WORM。Native 的 `backend_versioned` 只说明 Xirang 能按精确 `VersionId` 证明和读取版本；拥有底层删除权限的外部主体仍可能破坏数据，也不代表启用了 Object Lock、合规保留或不可删除介质。
-- 当前不实现 Provider deletion、精确版本清理、通用 retention/purge 或已提交恢复点删除；回退、调和和健康检查都不会删除已提交前缀、对象版本或 delete marker。
+- 受控生命周期已接入精确点删除，须通过能力、冻结、租约、血缘和删除证据检查；不能将普通远端清理当作受管删除。回退、调和和健康检查不会自行删除已提交前缀、对象版本或 delete marker。
 - Rclone 不是源端时间点快照。需要数据库或应用一致性时，仍应使用应用静默、dump 或底层卷快照。
 - 一旦产生受管 reservation/history，持久 latch 会在 feature 后续关闭时继续阻止不安全的 legacy mutable fallback。关闭 `backup_assets.enabled` 不是降级或清除受管历史的方法。
 
@@ -168,29 +168,29 @@ Clean rollback 只适用于 `first_new_point` 激活后且从未出现任何受�
 
 备份资产 Worker 是可选的增强处理面，当前**不是 GA**，也没有稳定公共 Worker 镜像。它不会替代备份引擎、Provider、RecoveryPoint、Catalog、Content Broker 或 recovery 流程。全局 `backup_assets.enabled`、本机/远程 Worker transport、独立 updater 和有限秘密分类默认都是关闭状态；仓库 Compose 的 `asset-worker` profile 仅供本地 build 与验证。
 
-本地 profile 把 parser 与 updater UDS 分在 `asset-worker-worker-runtime` 和 `asset-worker-updater-runtime` 两个 named volume 中。Parser 只读挂载前者且不加入 updater GID，updater 只读挂载后者；双方都无法看到对方的 socket。Bundle store 另行共享为 updater 可写、parser 只读，inbox/trust 仍是 updater-only。该隔离不会改变官方 All-in-One image、`10761` 端口，也不会建立 Docker Hub/GitHub Release Worker 发布合同。
-
-加密 Derived Store 使用独立 named volume `asset-worker-derived-store`，由 initializer 设为 `0700:10000:10000` 后只挂载给 Core。加密 Export Store 使用同样权限合同的 `asset-worker-export-store`，挂载到 `/var/lib/xirang-asset-runtime/export`。它们都不会复用 `/data`、`/backup`、`/logs`、Content cache 或任何 Provider 源，parser/updater 也无法观察其中的加密产物。缺少 Worker 不能阻止 Core GA；Worker 当前**不是 GA**，也没有 Docker Hub / GitHub Release 发布合同。
-
-Worker 只从一次性、attempt-bound Input grant 读取源内容，并把产物经一次性 Sink grant 返回 Core。它不能修改 Provider bytes，也不能访问 Repository locator、数据库、SSH/Restic/Rclone/Command 凭据、宿主源路径或网络。增强能力使用闭合 profile/limit，覆盖静态图片缩略图、有界文本/OCR、静态文档页、malware finding、媒体探测/预览以及有界归档索引；不支持或超限的内容保持原生预览、下载或 recovery 路径。
+安装、隔离挂载和停用步骤统一见[部署指南](../deployment.md)，信任边界见[安全加固](security.md#备份资产-worker-与-updater-信任边界)。增强能力包括有界缩略图、文本/OCR、文档页、恶意软件检测、媒体预览和归档索引；不支持或超限时保留仍获准的原生预览与下载路径。
 
 资产检查器使用以下闭合状态，不会把缺少 Worker 解释为文件不存在或备份失败：
 
 | 状态 | 含义 | 可用回退 |
 |---|---|---|
-| `native` | 当前内容应继续使用现有安全原生 renderer | 原生预览、下载、recovery |
-| `derived` | 当前 source/profile/policy 对应的派生产物可用 | 可切回原生预览、下载、recovery |
+| `native` | 当前内容应继续使用现有安全原生 renderer | 仍获准的原生预览、下载 |
+| `derived` | 当前 source/profile/policy 对应的派生产物可用 | 可切回仍获准的原生预览、下载 |
 | `partial` | 只处理了有界页数、字符、时长或成员范围 | 显示精确 coverage，并保留原生路径 |
 | `queued` | 当前用户的 processing interest 已排队或运行 | 按服务端 `poll_after_seconds` 轮询；原生路径仍可用 |
-| `unsupported` | MIME/profile 或安全策略不支持该增强表示 | 原生预览、下载、recovery |
-| `not_deployed` | Worker、sandbox 或 verified bundle 未配置/不可用 | 原生预览、下载、recovery；不创建噪声失败任务 |
+| `unsupported` | MIME/profile 或安全策略不支持该增强表示 | 仍获准的原生预览、下载 |
+| `not_deployed` | Worker、sandbox 或 verified bundle 未配置/不可用 | 仍获准的原生预览、下载；不创建噪声失败任务 |
 | `failed` | 一次增强处理在有界重试后失败 | 显示安全原因；不改变 RecoveryPoint 可信度或源数据 |
 
 Malware 状态严格区分 `not_scanned`、`no_finding`、`finding` 和 `stale`。`finding` 是一次成功扫描得到的安全结果，不是 Worker crash，也不会被重试成 `no_finding`；`not_scanned`/`stale` 也绝不显示为安全。Preview job 创建、派生 ticket、实际读取和 Search 结果/摘要释放都会重新执行服务端 malware 与 sensitivity gate，前端状态不能放宽权限。可选 `secret.classify` 默认关闭，并且只能加强已有 Core 分类；`unknown` 与 `secret` 继续失败关闭。
 
-Text/OCR/classification 的 Derived 引用、Search postings、excerpt 和 coverage 在同一个 processing fence 与数据库事务内发布或撤销。任何一步失败都会整体回滚；旧 attempt、丢失 fence 或 Search revoke 失败不能留下 ghost projection，也不能先删除派生引用/key/blob。派生 bytes 仍通过现有 Content Broker ticket/cookie/Range/审计边界交付，不提供直接 blob URL。
+派生产物通过受控内容票据交付，没有直接 blob URL。处理状态、搜索投影、秘密分类和撤销的一致性由[处理与导出合同](../spec/domains/backup-processing-export.md)统一约束。
 
-无 Worker、禁用 profile、bundle 激活失败或增强处理失败时，Catalog、元数据 Search、workspace、原生 text/image/PDF/audio/video/metadata 预览、下载和 recovery 均保持可用；系统不会仅因 `not_deployed` 产生 backup failure 或告警。回退应暂停 backfill、关闭 Worker/updater 设置并停止可选 profile；不得删除 Provider bytes、RecoveryPoint、Catalog 或源备份。加密 Derived 数据可留给受控调和或之后重建。
+无 Worker、禁用 profile、bundle 激活失败或增强处理失败时，Catalog、元数据 Search、workspace 以及仍获准的原生预览、下载可继续使用；系统不会仅因 `not_deployed` 产生 backup failure 或告警。
+
+受管 Recovery 另有安全准入：当前实现启用它时要求 Processing 已就绪且具备恶意软件证据服务；本机和远程 Worker 均关闭时无法满足该条件。某项增强处理失败也不能直接推导受管恢复可用，须检查所选内容的恢复资格与安全证据。旧版普通任务恢复继续遵守各执行器自己的证据与授权合同，不能拿它绕过受管恢复准入；完整边界见[处理与导出合同](../spec/domains/backup-processing-export.md)。
+
+回退应暂停 backfill、关闭 Worker/updater 设置并停止可选 profile，同时评估受管 Recovery 的可用性变化；不得删除 Provider bytes、RecoveryPoint、Catalog 或源备份。加密 Derived 数据可留给受控调和或之后重建。
 
 ## 应用感知备份
 
@@ -220,7 +220,7 @@ Text/OCR/classification 的 Derived 引用、Search postings、excerpt 和 cover
 
 - 应用凭据密码加密存储。
 - API 响应不会返回明文密码。
-- 渲染后的 hook 脚本对有权限的用户可见，请按 RBAC 控制管理权限。
+- 渲染后的 hook 脚本只向管理员返回，operator/viewer 得到空字符串；脚本可能含凭据，不应分享或写入排障材料。
 
 旧版 hook 模板端点已移除；应用感知备份的受支持路径是 `GET /api/v1/app-credentials/profiles`。
 
@@ -228,10 +228,10 @@ Text/OCR/classification 的 Derived 引用、Search postings、excerpt 和 cover
 
 ### Simple 模式
 
-默认保留模式。按 `retention_days` 清理过期快照或备份目录：
+默认保留模式使用 `retention_days`，实际动作取决于执行器与是否已有受管历史：
 
 - Restic：`restic forget --keep-within <N>d`
-- Legacy Rsync/Rclone: destructive age-based directory cleanup is disabled; mutable backup bytes and recovery evidence are not disposable historical snapshots.
+- 旧版 Rsync/Rclone 不执行按目录年龄的破坏性清理；可变备份字节和恢复证据不能当作可丢弃的历史快照。
 
 ### GFS 模式
 
@@ -250,7 +250,13 @@ GFS（Grandfather-Father-Son）按日/周/月/年多级保留快照。
 restic forget --keep-daily <N> --keep-weekly <N> --keep-monthly <N> --keep-yearly <N> --prune
 ```
 
-GFS applies only to Restic. Legacy Rsync/Rclone do not perform destructive Simple-mode cleanup. A managed-history latch blocks untagged `forget --prune` until an admitted lifecycle owns it; rollback and reconciliation never delete snapshots merely to clear a gate.
+GFS 仅适用于 Restic。出现受管历史后，禁止无标签的 `forget --prune`；删除必须由受控生命周期接管，回退或调和不能为了通过门禁删除快照。受管保留、冻结、清除及失败重试统一见[生命周期合同](../spec/domains/backup-lifecycle.md)。
+
+### 受管保留、冻结与仓库清除
+
+管理员通过受管保留策略管理恢复点，先查看策略影响再调整范围。需要保全的恢复点应创建冻结记录；解除冻结需要对应二次验证，不能通过直接删除数据库记录绕过。断开仓库、关闭功能、准备回退都不等于清除仓库数据。
+
+仓库清除分为预览、创建计划和执行三个步骤，对应 `/api/v1/backup-repositories/:id/purge-preview`、`purge-plans` 和 `purges`。执行需要管理员身份、专用清除权限和二次验证；计划只是待执行意图，不能当作数据已删除。活动租约、冻结、证据不足或能力不支持会阻止删除。失败后先查看当前结果和持久删除证据，再按生命周期流程继续，不要绕过平台直接批量删除 Provider 数据。
 
 ### RPO/RTO 目标
 
@@ -259,11 +265,9 @@ GFS applies only to Restic. Legacy Rsync/Rclone do not perform destructive Simpl
 - RPO 目标（分钟）：预期恢复点目标，0 表示不设目标。
 - RTO 目标（分钟）：预期恢复时间目标，0 表示不设目标。
 
-SLA 报告会计算：
+查看 SLA 报告前，先确认所选节点关联哪些策略，以及各策略是否设置了目标。阅读实际值和达标状态时，同时核对备份与恢复证据；空值不能当作零或已达标，普通命令成功也不能当作备份成功。
 
-- 实际 RPO：该策略关联任务最近成功执行记录中，相邻两次 `started_at` 的最大间隔。
-- 实际 RTO：最近一次恢复任务（`trigger_type=restore`）的 `duration_ms / 60000`。
-- 达标判断：`actual <= target`。
+报告 RPO 不能替代备份可信度中的新鲜度检查，也不要把报告时间范围直接理解为 RPO/RTO 的证据筛选窗口。计算、聚合、作用域与缺少证据时的处理统一见[任务合同的报表口径](../spec/domains/task-execution-recovery.md#完成事实rpo-与回归)。
 
 ## 恢复演练
 
@@ -307,7 +311,7 @@ POST /api/v1/asset-search
 
 ## 快照异常检测
 
-Restic 备份完成后，Xirang 会分析最新两个快照之间的文件变更，检测异常行为。
+Restic 备份完成后会分析快照差异。受管模式只比较同一任务/链接中新提交点与其前一个已提交点；只有从未进入受管历史的兼容路径使用仓库最近两个快照，不会借用其他任务的受管点。
 
 | 维度 | 检测方法 | 严重度 | error_code |
 |---|---|---|---|
@@ -317,8 +321,8 @@ Restic 备份完成后，Xirang 会分析最新两个快照之间的文件变更
 基线建立规则：
 
 - 每次备份后的 diff 统计写入历史记录。
-- 首次 2 次备份仅收集基线，不触发检测。
-- 第 3 次起，与最近 10 次历史的移动平均和标准差比对。
+- 变更量基线取同策略最近最多 10 条历史差异记录，排除当前记录；至少已有 3 条历史差异才检测当前变更量，因此不能把“执行 3 次备份”视为已建立基线。
+- 勒索后缀检测独立于基线，当前差异命中已知后缀即可产生异常事件。
 
 已知勒索后缀包括：
 
@@ -333,7 +337,7 @@ Restic 备份完成后，Xirang 会分析最新两个快照之间的文件变更
 
 - 仅支持 Restic 任务。
 - 检测在备份完成后异步执行，不影响备份任务本身。
-- 首次部署后需要至少 3 次备份才能建立有效基线。
+- 变更量检测依赖历史差异样本是否足够，首次快照没有可比较前代；界面无异常不等于内容已完成安全扫描。
 
 ## 控制面灾难恢复
 

@@ -77,7 +77,7 @@ Web SSH 终端在打开会话前需要同时满足：有效的 admin 主认证�
 
 含敏感字段的配置导出（`include_secrets=true`）需要有效的 admin 主认证、TOTP 二次验证 proof，以及绑定当前用户、`config.export` 操作和 `config_export` 用途的短时系统级授权；缺少、过期、撤销、拒绝或不匹配的授权会在读取或序列化敏感配置前被拒绝。普通配置导出不包含敏感字段，不需要临时授权。
 
-快照恢复是远端文件恢复/覆盖类高风险操作。`POST /tasks/:id/snapshots/:sid/restore` 需要有效的 admin 主认证、TOTP 二次验证 proof，以及绑定当前用户、`snapshot.restore` 操作、`snapshot` 用途和当前任务 ID 的短时任务级授权；缺少、过期、撤销、拒绝或任务不匹配的授权会在恢复执行前被拒绝。快照列表、文件浏览、搜索和差异比较不需要该恢复授权。
+快照恢复是远端文件恢复/覆盖类高风险操作。兼容端点 `POST /api/v1/tasks/:id/snapshots/:sid/restore` 还要求备份资产有效开启，并需要 admin 主认证、TOTP 二次验证和绑定当前用户、`snapshot.restore` 操作、`snapshot` 用途及当前任务 ID 的短时任务级授权。旧快照列表、文件浏览、搜索和差异 HTTP 端点已退役；当前读取使用 Catalog 与资产搜索，详见[备份资产搜索](backup-recovery.md#备份资产搜索)。
 
 任务恢复触发同样会写入恢复目标。`POST /tasks/:id/restore` 需要有效的 admin 主认证、TOTP 二次验证 proof，以及绑定当前用户、`task.restore_trigger` 操作、`task_restore` 用途和当前任务 ID 的短时任务级授权；缺少、过期、撤销、拒绝、用户/角色变化或任务不匹配的授权会在进入恢复执行前被拒绝。授权创建只校验任务存在性和当前恢复资格，不记录恢复目标路径或恢复 payload。
 
@@ -85,25 +85,19 @@ Web SSH 终端在打开会话前需要同时满足：有效的 admin 主认证�
 
 ## 备份资产 Worker 与 updater 信任边界
 
-备份资产 Worker 当前是默认关闭、非 GA 的可选本地 profile，没有稳定公共 Worker 镜像或 Docker Hub/GitHub Release 发布合同。官方 All-in-One Core 和公开端口 `10761` 不变。未部署 Worker 时，Catalog、原生预览、下载和 recovery 继续可用。
+备份资产 Worker 当前是默认关闭、非 GA 的可选本地 profile，没有稳定公共 Worker 镜像或 Docker Hub/GitHub Release 发布合同。官方 All-in-One Core 和公开端口 `10761` 不变。未部署 Worker 时，仍获准的 Catalog、原生预览和下载可继续使用；受管 Recovery 另依赖 Processing 就绪与恶意软件证据，不能承诺无 Worker 可恢复，完整要求见[处理与导出合同](../spec/domains/backup-processing-export.md)。
 
-Parser Worker 使用固定 non-root UID/GID `10000:10000`，read-only rootfs、drop-all capabilities、`no-new-privileges`、reviewed seccomp、PID/CPU/memory 上限和 `noexec,nosuid,nodev` job tmpfs。仓库 Compose 把 `memswap_limit` 固定为与 `mem_limit` 相同，禁止 parser/updater 容器使用 swap；运维侧仍应关闭宿主 swap，或只使用经过审计的全盘加密 swap，避免其他运行方式让敏感 tmpfs 页面落到明文交换空间。仓库 Compose 为 parser Worker 设置 `network_mode: none`，不配置 DNS；它只读挂载 `asset-worker-worker-runtime` 到 `/run/xirang/worker`，连接 mode `0600`、owner `10000:10000` 的 Core UDS，并只读挂载 active bundle。Worker 不加入 updater GID，也不挂载 `asset-worker-updater-runtime`、`/data`、`/backup`、`/logs`、Docker socket、updater inbox/credential 或任何 Provider 源路径。
+按[部署指南](../deployment.md)保留 Compose 的固定用户、独立 socket volume、只读文件系统、无网络、资源限制和敏感 tmpfs 配置。Parser 不能挂载数据库、源备份、Docker socket、updater 凭据或可写 bundle。容器禁止 swap 仍不能替代宿主的禁用或受审计加密 swap 配置。
 
-所有 parser/tool 调用来自服务端闭合 capability/profile：不经过 shell，不接受调用方 executable、argv、环境变量、codec、字体、模型、路径、URL 或工具配置。输入只来自一次性 attempt-bound grant，输出在 Core 再次检查 MIME、数量、大小、digest、coverage 和安全策略后才能发布。取消、超时或 fence 丢失会终止整个进程组并清理私有 workspace；缺少可验证 tmpfs/Landlock/seccomp 合同时 capability 不会被 advertised。
+Worker 只能通过一次性授权处理受限输入，不能任意访问路径或执行调用方提供的命令。运行环境缺少沙箱能力时，增强处理不可用，不能通过放宽隔离来强制启用。
 
-Updater 与 parser 使用不同进程、UID/GID `10002:10002`、PID namespace、socket 和可写 bundle volume。Updater 只读挂载独立的 `asset-worker-updater-runtime` 到 `/run/xirang`，不挂载 `asset-worker-worker-runtime`，因此不能观察 parser socket；parser 的隔离方向与之对称。Core 使用 setgid mode `2770`、owner/group `10000:10002` 的 updater runtime 创建 mode `0660`、owner/group `10000:10002` 的 `/run/xirang/asset-worker-updater.sock`，并在解码 receipt 前校验 socket 与 Linux peer credential。跨 PID namespace 时 `SO_PEERCRED` 的 peer PID 可以是 `0`；PID 只作为诊断元数据，不是授权主体，认证仍由受保护 UDS、精确 UID/GID 与 socket owner/mode 共同完成。
-
-Content-addressed bundle volume 是唯一的共享数据 mount：根目录为 updater owner、Worker reader group `10002:10000` 与 setgid mode `2750`。Updater mount 可写，parser mount 强制只读，因此 parser 可验证 active bundle 但不能修改 store。Inbox 与 Ed25519 trust secret 仍只挂载到 updater。Socket volumes、bundle volume 与 secret mounts 不能互相替代或合并。
-
-Core 加密 Derived Store 使用单独的 `asset-worker-derived-store` named volume，由 initializer 固定为 `0700:10000:10000` 并挂载到 `/var/lib/xirang-asset-runtime/derived`。加密 Export Store 使用同样权限合同的 `asset-worker-export-store`，挂载到 `/var/lib/xirang-asset-runtime/export`。只有 Core 与 initializer 能看到这两个 volume；parser/updater 不挂载它们，且 private-runtime guard 会拒绝把 Derived/Export root 放到 `/data`、`/backup`、`/logs` 或已知 Provider 源路径下。
-
-默认更新路径是 signed offline import：运维人员把候选目录放入固定 updater-only inbox，目录要求 `10002:10002`、mode `0555`；Ed25519 trust 文件要求 `10002:10002`、mode `0440`。Updater no-follow 扫描并验证 canonical manifest、Ed25519 signature、精确 tar/file SHA-256、大小/时间/路径/类型限制，fsync content-addressed store 后通过 journal 与原子 pointer rename 激活。浏览器和 Core HTTP API 不接收 bundle bytes、multipart、URL、服务器路径、inbox 文件名或原始 manifest；Admin API 只使用脱敏 candidate ID 和 expected fingerprint 的小型 JSON 控制请求。
+Updater 与 parser 的身份、socket、PID namespace 和权限必须隔离。只有 updater 可更新经过签名验证的 bundle，parser 只读；派生与导出存储只对 Core 可见，不能放入数据库卷或 Provider 源。离线导入只使用固定 inbox 和受保护的 Ed25519 公钥集合，浏览器不能上传 bundle 字节或任意服务器路径。
 
 仓库 Compose 对 updater 同样使用 `network_mode: none`，只支持 offline-only。Online updater 默认关闭；若未来单独部署，必须同时具备 exact HTTPS origin allowlist、独立 allowlist proxy/firewall、隔离网络和 updater-only credential secret。应用层 allowlist 不能代替 egress firewall，parser Worker 永远不得继承 updater 网络或凭据。
 
-Malware 结果区分 `not_scanned`、`no_finding`、`finding`、`stale`；positive finding 是成功扫描结果，不会被当成失败重试或篡改 RecoveryPoint 信任状态。Preview job、Derived ticket/read 和 Search release 均由服务端重新执行 malware/sensitivity gate。有限秘密分类默认关闭，并且只能加强 Core 结论；`unknown`/`secret` 在缺少精确 proof 时继续失败关闭。
+恶意软件结果区分 `not_scanned`、`no_finding`、`finding`、`stale`；“未扫描”或“过期”不表示安全。检测到风险不会因重试变成无风险，也不会改变源备份可信事实。有限秘密分类默认关闭，不能放宽 Core 权限。
 
-处理 API、日志、指标、审计和管理聚合只记录闭合 capability/profile/state/error category、opaque 资源引用及有界计数。禁止记录 Provider locator、宿主/tmp/bundle/inbox 路径、Worker UID/PID/证书、credential、grant/session/attempt/fence/activation secret、原始 argv/stdout/stderr/tool diagnostic、manifest/body 或源内容。回退只关闭 settings/可选 profile并保留数据；不得删除 Provider bytes、RecoveryPoint、Catalog 或源备份。
+排障资料不能包含源内容、原始工具输出、凭据或运行授权。完整实现与回归约束见[处理与导出合同](../spec/domains/backup-processing-export.md)。回退时关闭设置及可选 profile，保留源备份、恢复点、Catalog 和加密数据。
 
 ## 敏感字段保护
 
@@ -111,11 +105,9 @@ Xirang 会加密存储 SSH 密码、SSH 私钥、TOTP 密钥、通知端点、�
 
 备份资产控制面同样依赖该密钥。仓库访问绑定、冻结原因和 wrapped domain key 只有在恢复原数据库 **并且** 使用匹配的 `DATA_ENCRYPTION_KEY` 时才可读。仅保留 Provider 仓库只能在 Admin 有效重连/导入后重建可验证的 RecoveryPoint/Catalog 事实，不能重建 overlays、审计、策略、冻结或 Task 关系。错误或缺失密钥必须失败关闭，不得静默换绑或把 rebuild 报成成功。详见 [备份、恢复与快照](./backup-recovery.md#控制面灾难恢复)。
 
-监控 HTTP 请求头采用写入专用语义：查询只返回已配置标志和头名称，不返回值或 `***` 占位值。`http_headers` 沿用 JSON 对象字符串编码：更新时省略该字段仅在类型、完整目标（含路径和查询参数）及 HTTP 方法均未变化时保留已有配置；用途变化时必须显式替换或提交字符串 `"{}"` 清空。此类拒绝返回 `409` 与 `data.reason.code=service_monitor_target_change_requires_headers`；并发更新返回 `service_monitor_concurrent_update`，客户端应重新加载后重试。
+监控 HTTP 请求头为写入专用秘密；变更监控目标时须显式替换或清空，操作步骤见[监控指南](monitoring-alerting.md#httptcp-uptime-监控)。
 
-任务响应中的嵌套 `policy` 始终采用安全白名单，只返回 `id` 和 `name`；无论角色或列表、详情、创建、更新入口，都不会返回已解密的 hook 或演练脚本。管理员仍可通过策略编辑入口修改策略，策略敏感字段继续按现有加密规则在库中保存。
-
-两步登录的 pending token 绑定当前账户版本和 TOTP 状态，成功完成后只能消费一次。恢复码消费使用并发安全事务，不会因为正常登录而撤销该用户的其他合法会话。TOTP 初始化返回 `enrollment_id` 和 `expires_at`，验证必须提交同一个未过期初始化标识；再次初始化会使旧标识失效，已启用的账户不能直接覆盖现有密钥。
+任务中的策略摘要不返回 hook 或演练脚本；有权限的管理员从策略编辑入口管理。TOTP 初始化具有有效期，重新初始化会使上次二维码失效；已启用账户不能直接覆盖密钥。敏感字段、登录会话和临时授权的完整合同见[凭据与访问](../spec/domains/credentials-access.md)。
 
 ## 最后管理员与离线恢复
 

@@ -8,19 +8,20 @@ assignees: ''
 
 ## 问题描述
 
-请说明节点连接测试或 Fleet Doctor 的异常现象。
+请说明节点连接测试或 Fleet Doctor 的异常现象。操作说明见[使用与运维入口](../../docs/admin/README.md)。
 
 ## 节点与认证信息（请脱敏）
 
 - 节点系统：
 - SSH 端口是否为 22：是 / 否
-- 认证方式：密码 / SSH Key / sudo
+- SSH 认证方式：密码 / SSH 密钥
+- 提权方式（如使用）：sudo / 其他
 - 是否启用严格主机密钥检查：是 / 否 / 不确定
 - known_hosts 或自动接受新主机策略：
 
 ## 诊断结果
 
-请粘贴测试连接或 Fleet Doctor 的状态、evidence、suggestion 与错误码。不要提交私钥、密码、Token 或完整真实主机名。
+请粘贴测试连接或 Fleet Doctor 的状态、`evidence`、`suggestion` 与错误码。不要提交私钥、密码、令牌或完整真实主机名；安全漏洞按[安全政策](../../SECURITY.md)私下报告。
 
 ## 复现步骤
 

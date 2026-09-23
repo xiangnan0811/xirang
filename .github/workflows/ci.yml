@@ -479,6 +479,9 @@ jobs:
       - name: Self-test migration documentation checker
         run: bash scripts/check-migration-version.test.sh
 
+      - name: Self-test documentation structure checker
+        run: python3 scripts/check-doc-structure.test.py
+
   migration-utc-safety:
     name: Migration UTC Safety
     runs-on: ubuntu-latest

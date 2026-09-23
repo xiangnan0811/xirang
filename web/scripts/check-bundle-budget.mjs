@@ -4,7 +4,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 历史预算调整背景；当前契约见 spec/frontend/quality-guidelines.md：
+// 历史预算调整背景；当前契约见 docs/spec/frontend/quality-guidelines.md：
 // PR-A 引入 @tanstack/react-virtual v3（gzipped 5.4 KiB，含 virtual-core）用于 logs-viewer
 // 列表虚拟化，预算从 540 → 546 KiB，留 ~6 KiB 缓冲覆盖该依赖与未来微调。
 // 05-14 frontend-bundle-budget-governance: locale resources are lazy-loaded,

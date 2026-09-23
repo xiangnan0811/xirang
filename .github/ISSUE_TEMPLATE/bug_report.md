@@ -1,6 +1,6 @@
 ---
-name: Bug 报告
-about: 提交一个 Bug 帮助我们改进
+name: 缺陷报告
+about: 提交缺陷帮助我们改进
 title: '[Bug] '
 labels: bug
 assignees: ''
@@ -8,7 +8,7 @@ assignees: ''
 
 ## 描述
 
-简要描述你遇到的问题。部署、备份/恢复、SSH 诊断类问题可优先使用对应模板；安全漏洞请按 SECURITY.md 私下报告。
+简要描述你遇到的问题。部署、备份/恢复、SSH 诊断类问题可优先使用对应模板；安全漏洞请按[安全政策](../../SECURITY.md)私下报告。使用方法见[文档入口](../../docs/README.md)。
 
 ## 复现步骤
 
@@ -27,6 +27,8 @@ assignees: ''
 ## 环境信息
 
 - 部署方式：Docker / 源码编译
-- 系统：例如 Ubuntu 22.04 / macOS 14
-- 浏览器：例如 Chrome 120
-- 版本/Commit：
+- 操作系统与版本：
+- 浏览器与版本：
+- Xirang 版本或提交 ID：
+
+提交日志或截图前，请移除密钥、密码、令牌、Cookie 和个人信息。

@@ -1,224 +1,86 @@
-# 维护者发布手册
+# 发布手册
 
-本文档面向 Xirang 维护者，定义公开发布、镜像发布和私有部署的标准流程。
+## 公开发布合同
 
-## 发布标准
+GitHub Release 是公开版本和变更说明的权威来源，Docker Hub 的 `docker.io/linnea7171/xirang` 是唯一官方公开镜像源。仅发布稳定 semver `vX.Y.Z`；正式镜像包含 `vX.Y.Z`、`X.Y.Z` 和 `latest`，后者表示最近正式发布的稳定版。手动重发不得移动 `latest`。
 
-- GitHub Release 是唯一权威公开版本源和变更说明源。
-- Docker Hub 是唯一官方公开镜像源。
-- 当前仅支持稳定版 semver：`vX.Y.Z`。
-- `latest` 仅表示最新稳定版；手动重发和恢复构建不得移动 `latest`。
-- 私有部署不绑定公开 release 事件；部署仅通过手动 workflow 触发。
+版本基线见 [.release-please-manifest.json](../../.release-please-manifest.json)，版本历史见 [CHANGELOG](../../CHANGELOG.md)。不要在多个维护文档中复制当前版本。需要调整下一版本时使用 Release Please 的 `Release-As:`，或经明确的基线重置修改 manifest；不要手动打正式 tag 绕过发布链路。
 
-## Release Please 状态与基线
+仅在重建发布链路、迁移仓库或重置首发版本时重新检查 bootstrap：manifest 起始版本、CHANGELOG 接管、README/部署/环境变量文档默认使用 Docker Hub 预构建镜像，以及 GitHub 仓库和 Docker Hub 命名空间已确定后再公布 `VERSION_CHECK_URL` 示例。
 
-当前仓库已启用 Release Please，当前版本基线见 `.release-please-manifest.json`；
-`CHANGELOG.md` 已由 Release Please 维护。不要在文档中手写“当前版本”后长期
-依赖它；需要确认时以 manifest 和 GitHub Release 为准。
+## 仓库设置与凭据
 
-仅在重建发布链路、迁移仓库或重置首发版本时，才需要重新执行 bootstrap 检查：
+GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 squash merge 并自动删除合并分支；这些设置无法仅靠仓库文件保证。分支及 PR 操作以[贡献指南](../../CONTRIBUTING.md)为准。
 
-1. 确认 `.release-please-manifest.json` 中的起始版本号就是你希望公开的首个稳定版。
-2. 确认 `CHANGELOG.md` 已纳入仓库，并由 Release Please 接管。
-3. 确认 `README.md`、`docs/deployment.md`、`docs/env-vars.md` 中的默认安装路径是 Docker Hub 预构建镜像，而不是本地 `docker build`。
-4. 确认 Docker Hub 命名空间和 GitHub 仓库名已经最终确定，再向外公开 `VERSION_CHECK_URL` 示例。
+| 范围 | 凭据或变量 | 用途 |
+| --- | --- | --- |
+| 仓库 Secret | `RELEASE_PLEASE_TOKEN` | 创建 Release PR 并允许后续 CI 触发；经典 PAT 需要 `repo`、`workflow` 权限 |
+| 仓库 Secret | `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN` | 镜像发布及部署前登录 |
+| 仓库 Secret | `DOCKERHUB_DESCRIPTION_PASSWORD` | 修改 Docker Hub 仓库元数据 |
+| 仓库 Secret | `DOCKERHUB_DESCRIPTION_USERNAME` | 可选；回退到 `DOCKERHUB_USERNAME` |
+| Deploy Environment Secret | `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_PATH` | 手动部署目标 |
+| Deploy Environment Variable 或 Secret | `DEPLOY_SSH_PORT` | variable 优先，其次 secret，默认 22 |
+| Deploy Environment Variable | `IMAGE_WAIT_MAX_ATTEMPTS`、`IMAGE_WAIT_INTERVAL_SECONDS` | 等待镜像，默认分别为 90 次、10 秒 |
 
-若需要调整下一版号，不要手动打正式 tag；优先使用 Release Please 支持的 `Release-As:` 机制，或在明确重置基线时修改 `.release-please-manifest.json` 后等待/触发新的 Release PR。
+镜像发布和描述同步工作流固定官方仓库名，不读取命名空间变量。镜像推送 token 不一定拥有元数据编辑权限，两者使用独立凭据。
 
-## GitHub 仓库设置
+## Release PR 与镜像发布
 
-以下设置无法通过仓库文件强制，需要在 GitHub 仓库设置中手动启用：
+普通 PR 的提交语义和合并前门禁由贡献指南规定。合并后检查 [Release Please](../../.github/workflows/release-please.yml) 是否成功创建或更新 Release PR；没有生成正式 release 时，交付说明明确记录没有预期的 GitHub Release 或 Docker Hub 发布，仍需处理自动化失败。
 
-- `main` 开启 branch protection。
-- 禁止直接 push 到 `main`。
-- 要求 CI 通过后才能合并。
-- 默认使用 `Squash and merge`，关闭普通 merge commit。
-- 合并后自动删除分支。
+审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。required checks 全部通过后合并，确认 GitHub Release 创建。
 
-## 必要 Secrets / Variables
+[Publish Docker Images](../../.github/workflows/publish-images.yml)监听 `release.published`，按以下顺序发布：
 
-### 仓库级
+1. 从发布工作流自身的不可变提交加载验证策略，一次解析并冻结源码 SHA。
+2. 等待同仓库 `main` 的同 SHA、`push` 事件、完整 `ci.yml` 成功，默认最多 25 分钟。缺失、未完成、失败、取消或超时均拒绝发布，新的失败运行不能被旧成功掩盖。
+3. 在原生 amd64/arm64 runner 分别构建并按 digest 推送，再用显式 `TRIVY_PLATFORM` 扫描各自 digest。
+4. 提升 multi-arch manifest/tag 前再次验证同 SHA CI；只有全部平台任务成功才发布正式标签。
+5. 发布后生成 provenance attestation 和摘要，记录源码 SHA、CI run、平台 digest 与扫描结论。
 
-- `RELEASE_PLEASE_TOKEN`（PAT，至少需要 `repo` 和 `workflow`；用于让 release-please 创建的分支正常触发 CI）
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`
-- 官方 Docker Hub 仓库固定为 `linnea7171/xirang`，发布与描述同步 workflow 不读取命名空间变量。
+当前 Trivy 设置为 `severity: HIGH,CRITICAL`、`exit-code: 1`、`ignore-unfixed: true`：扫描识别且已有修复版本的高危/严重漏洞阻断正式标签，未修复漏洞被过滤。不能将通过结果解释为不存在任何高危漏洞。基础镜像或包漏洞阻断时，更新来源并重新走 PR/release；不得降低 severity、添加临时 ignore 或绕过扫描。Actions pin 和依赖维护见[仓库自动化](automation.md)。
 
-本项目不使用 Codecov，也不要求配置其账户、令牌或 OIDC 上传权限。CI 继续强制执行后端覆盖率及备份资产覆盖率阈值，前端必须生成非空 LCOV 报告；测试、竞态检查、安全扫描和正式发布的固定 SHA / 主干 CI 校验均保持阻断。外部覆盖率服务不再是发布前置条件。
-### Deploy Environment 级
+持续监控发布直至结束。标签推送发生在 attestation 之前，因此后置证明失败时可能已有公开镜像；核对失败步骤及 digest，不能把 workflow 失败等同于完全未发布。交付声明区分 GitHub Release、镜像、证明与实际部署结果。
 
-- `DEPLOY_HOST`
-- `DEPLOY_USER`
-- `DEPLOY_SSH_KEY`
-- `DEPLOY_PATH`
-- `DEPLOY_SSH_PORT`（可用 variable；不设时默认 22）
+## 升级说明必须覆盖的风险
 
-## 标准发布流程
+根据候选改动查阅[任务与恢复等领域合同](../spec/domains/README.md)及[运维恢复手册](../admin/backup-recovery.md)，将受影响条款写进该版本说明：
 
-1. 功能 PR 标题使用 Conventional Commits，合并到 `main` 时保持语义不变。
-2. 创建 PR 后，负责人必须监控 required CI jobs；失败时在同一工作分支修复、推送并重新监控。required checks 失败、pending 或缺失时不得合并。
-3. PR 合并到 `main` 后，继续监控 `Release Please` workflow，确认它成功并按配置和提交语义创建或更新 Release PR。若 Release Please 只更新现有 Release PR 或未产生正式 release，需在交付记录中说明；不要把 post-merge 状态留空。
-4. `release-please.yml` 使用 `RELEASE_PLEASE_TOKEN` 创建或更新 Release PR，确保 release 分支会触发 CI。Release Please action 使用 `googleapis/release-please-action`，不要退回已归档的 `google-github-actions/release-please-action`。
-5. 审阅 Release PR：将本次已交付的 `Unreleased` 条目归入目标版本，并把数据库迁移、旧进程排空、备份保全及降级限制写入该版本说明，不能只保留自动生成的 PR 标题。监控其 required checks，通过后合并。
-6. GitHub 创建对应 `vX.Y.Z` Release。
-7. `publish-images.yml` 监听 `release.published`，向 Docker Hub 官方仓库 `docker.io/linnea7171/xirang` 发布：
-   - `vX.Y.Z`
-   - `X.Y.Z`
-   - `latest`
+- 数据库和加密密钥、备份副本及必要日志/游标的保全，旧 Core/调度器/执行器是否须排空。
+- 新迁移的不可逆数据和降级保护；迁移号相同不证明执行器可安全降级。
+- 恢复准入、未知写入 hold、人工协调及配置导入补偿的边界；不得用降级、删记录或改配置绕过保护。
+- Core 与可选 Worker 的源码和工具链指纹一致性、文件系统隔离能力及容量要求。
+- 节点日志采集窗口、历史不补采的边界，以及逐节点恢复验证要求。
 
-   发布步骤为 **一次解析并冻结 source SHA → 等待同仓库 main push 的同 SHA 完整 CI 成功 → 按平台原生构建 digest → Trivy 扫描每个平台 digest → 再次核验 CI → 提升正式 multi-arch manifest/tag → attest**。
-   不接受其他 SHA、fork、PR 或其他工作流的绿色结果。缺失/未完成 CI 最多等待 25 分钟；失败、取消或等待超时均拒绝发布，较新的失败运行不能被旧成功运行掩盖。所有架构只 checkout 冻结的 SHA；构建期间移动输入分支不会改变来源。验证脚本来自发布工作流自身的不可变提交，手动重建历史源码也不能替换验证规则。
-   正式标签仅指向扫描通过的 digest；发布摘要记录 source SHA、CI run、各架构 digest 和扫描结论。当扫描到 HIGH/CRITICAL 漏洞时，workflow 在 manifest/tag 发布前失败，不会更新 `latest`。Trivy 当前固定到 v0.36.0 的解引用 commit
-   `ed142fd0673e97e23eac54620cfb913e5ce36c25`，该 ref 已在 2026-05-06
-   通过 `git ls-remote` 核验。扫描平台 digest 时 workflow 会显式传入
-   `TRIVY_PLATFORM`，避免 arm64 digest 被 Trivy 默认按 amd64 解析。
-   维护者按需 bump（建议查看
-   <https://github.com/aquasecurity/trivy-action/releases> 选择最新稳定 tag，并写入其
-   解引用 commit 或可审计的 SHA pin）。GitHub Actions JavaScript action
-   需要保持 Node 24 兼容；升级 release、publish、deploy 相关 action 时，
-   维护者应核对目标 tag 的 `action.yml` / `action.yaml` runtime，并同步更新
-   SHA pin 与旁注版本号，不要用临时 Node 20 opt-out 作为常态方案。
-8. 监控 `Publish Docker Images` 直到成功。若 Trivy 因基础镜像或系统包 HIGH/CRITICAL CVE 阻断发布，应升级运行时基础镜像或包来源并重新走 PR/release 流程；不要降低 severity、添加 ignore 或绕过扫描。只有在符合“手动重发镜像”条件时才使用 `workflow_dispatch`。
-9. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
+历史版本的具体迁移编号和交付事件保留在 CHANGELOG/发行说明；当前迁移版本唯一声明在[后端入口](../../backend/README.md)。公开发布成功不代表生产已经升级、采集已经开启或真实恢复已经验收。
 
-### 任务身份迁移的升级检查
+## Docker Hub 描述同步
 
-包含 `000082_task_run_cron_provenance` 的版本发布时，变更说明必须提示以下升级边界：
+[Sync Docker Hub Description](../../.github/workflows/dockerhub-description.yml)在 `README.md` 或该工作流文件变更并 push 到 `main` 时运行，也支持手动触发。短描述取 GitHub 仓库 description（为空时使用工作流默认文本），长描述取根 README。
 
-- 升级前备份数据库及加密密钥，停止并排空旧 Core；不得混跑旧调度器或执行进程。
-- Legacy Rsync/Rclone 当前镜像不再执行破坏性的按年龄清理；受管恢复点及 Restic 保留机制不变。
-- Legacy Rsync 恢复必须匹配一次成功的普通备份及其来源、节点、策略执行输入。升级后或这些输入变化后，先完成新备份，否则恢复返回 `new-backup-required`；历史备份文件不会因此被删除。
-- 新迁移的定时触发身份或备份指纹一旦写入，降级会拒绝抹除这些事实；不要绕过降级保护。
-- 可选 Worker 的工具链指纹包含精确系统包版本。升级时从同一发布源码重建/更新 Core 与 Worker，保持指纹一致。
+缺少元数据凭据时任务会报告跳过而不是失败；绿色 workflow 不等于描述已更新。涉及 README/发布文档的交付需检查这项自动化的实际结果。
 
-完整运行语义见 [后端说明](../../backend/README_backend.md#legacy-backup-safety-and-task-lifecycle)。
+## 手动重发与私有部署
 
-### Legacy 写入证据修复的升级检查
+`publish-images.yml` 的 `workflow_dispatch` 仅用于已有稳定版本的推送故障恢复、重建或补发证明。填写 `version` 和 `source_ref`，人工确认二者对应同一正式代码；脚本验证来源 SHA 的主干 CI，但不会替代版本与源码对应关系的审阅。手动重发仅写版本标签，不移动 `latest`，也不替代 GitHub Release。
 
-发布包含目标归属、`no_start` 与人工 reconcile 修复的版本时，还需在版本说明中提示：
+[Manual Deploy](../../.github/workflows/deploy.yml)只由手动触发，选择 `staging` 或 `production` 并填写 `image_tag`；优先使用具体稳定 tag。`latest` 仅适合临时试用。工作流等待官方镜像、执行部署前数据库备份、通过 SSH 更新 Compose，并等待容器健康检查，最多约 90 秒。部署目标必须已有正确 Compose 和环境配置；操作与恢复以[部署指南](../deployment.md)为准。
 
-- 本批修复不新增数据库迁移；仍须排空旧 Core，避免旧进程继续使用旧的写入判定规则。
-- 迁移版本相同不代表可安全回退执行器。降级前应保全数据库及备份副本，并核对旧版本对写入证据、恢复准入和目标归属的处理；不得用降级解除未知写入 hold。
-- 对遗留 Rclone 的 `writing` / `unknown` 记录，租约到期或本地连接关闭不等于远端已停止。管理员应先暂停任务并实际确认远端停止，再对指定执行记录调用 reconcile；协调只会标记 `dirty` 并记录审计，不会自动重试、恢复调度或恢复资格。
-- 恢复资格需要显式恢复调度后完成一次新备份；不要通过删除未知记录或修改执行器配置绕过历史写入约束。
-- 配置导入的补偿回滚遇到并发修改或旧目标已被占用时会拒绝覆盖。应暂停受影响任务、核对当前配置及目标归属，不要强行恢复旧目标。
+### 部署前数据库备份门禁
 
-- 目标版本的 Release Notes 还须明确写出排空旧 Core、数据库与备份保全、配对迁移 `000085` 不变、`unknown` hold 处理和降级限制；不能只保留自动生成摘要。
+工作流从本次 checkout 的 workflow ref 读取并通过 SSH 执行 [predeploy-backup.sh](../../scripts/predeploy-backup.sh)，不依赖远端预先安装脚本。`DEPLOY_PATH` 必须指向现有部署目录，并包含当前有效的 `docker-compose.yml` 和 `.env`；脚本进入该目录，固定使用 `./data` 判断本地持久数据、`./backups` 映射备份产物。Compose 必须保持相应的环境文件、网络和持久挂载。
 
-操作步骤见 [备份与恢复手册](../admin/backup-recovery.md)。
+只有 `xirang` 容器不存在、`./data` 没有任何持久数据且 `.env` 未配置 `DB_TYPE=postgres` 三项同时成立时，门禁才明确报告首次部署并跳过备份。Docker daemon 不可达、容器状态无法识别、数据路径异常或无法读取，都必须失败，不能解释为首次部署。
 
-### 任务覆盖与文件系统约束的升级检查
+运行中的升级必须备份；容器已停止，或容器不存在但仍有本地数据或 PostgreSQL 配置时，也必须备份。脚本拉取本次 `IMAGE_TAG` 的官方镜像，通过 `docker compose -f docker-compose.yml run --rm --no-deps` 保留服务的环境、网络和挂载，在目标 All-in-One 镜像中执行 `/usr/local/bin/backup-db.sh /backup/db`。
 
-包含 `000088_task_cron_override` 的发布，须提示历史 schedule provenance 回填规则与受保护降级限制；Task PUT 客户端必须用当前 `revision` 提交 `expected_revision`，并处理 400/409，而不是盲目重试覆盖。
+备份命令必须返回位于 `/backup/` 内且不含越界路径片段的产物，备份文件和 `.sha256` 均须非空。门禁还确认备份目录权限为 `0700`、文件及校验文件权限为 `0600`，执行 `xirang:xirang` 所有权设置，并校验 SHA-256 一致。任何必需备份、产物、权限、所有权操作或校验失败都阻断后续部署；不能仅凭备份命令启动成功就继续更新容器。
 
-配置 Rsync allowlist 时，核对 Linux Landlock ABI 3、匹配的本地/远端 helper 及私有 user/mount namespace 能力。默认容器策略可能拒绝 namespace；此时执行应失败关闭，不得自动移除 allowlist 或授予 privileged 权限。受管 hardlink 备份须预留完整 staging 树空间与传输容量。Restic repository version 只是格式选择，不提供删除保护保证。
+## 故障定位
 
-### v0.55.14 节点日志修复交付
+- Release PR 未产生：检查 squash commit 语义、Release Please 运行及 token；不要手动打正式 tag。
+- Release 已有而镜像缺失：按发布步骤定位构建、扫描、CI 再核验、manifest 或 attestation 的失败点。仅瞬时推送故障时按原版号及来源重发。
+- 旧 release run 长时间未结束：先等待或取消旧运行，避免跨版本运行延迟回写 `latest`；当前 concurrency 按 ref 分组，不保证不同版本串行。
+- 版本提示异常：核对 `VERSION_CHECK_URL`、响应中的 `tag_name`/`html_url`、稳定 tag 格式及后端构建版本；开发版本 `dev` 不构成正式发布证据。
 
-本版不新增数据库迁移，配对迁移仍为 `000088_task_cron_override`。升级前保全数据库备份及日志/游标，停止旧 Core 后再启动新镜像，避免旧采集进程继续占用连接。回退镜像会重新引入采集卡死缺陷，应先关闭受影响的采集源；不要通过删除游标或日志恢复。
-
-发布不会自动开启已禁用的节点日志。生产恢复须单独核对版本、镜像 digest 和现有配置，经授权先恢复一个低风险节点，观察至少两个采集周期，再分批恢复。GitHub Release 和 Docker Hub 发布成功只代表镜像交付，不代表生产已完成验收。
-
-### v0.55.15 节点日志近期恢复策略的升级检查
-
-包含近期恢复修复的版本不新增数据库迁移；配对迁移仍为 `000088_task_cron_override`。首次采集、长期停用或过期游标从最近 1 小时内的最新 200 条开始，短暂中断按最多 200 条分批继续。超过窗口的历史不会自动补采，发布说明必须明确这项有意的恢复边界。
-
-升级前保全数据库、加密密钥及日志/游标，停止旧 Core 后再启动新镜像。无需删除游标，也不要清理远端 journal。保持受影响采集源关闭，升级后先恢复一个节点验证至少两个周期；回退到旧镜像前先关闭采集，避免重新触发无界追赶或脚本失败。镜像发布成功不等于 NAS 已完成验证。
-
-## PR 后监控要求
-
-Alpine 软件源可能不再提供 Dockerfile 锁定的旧包版本。遇到 `apk` 精确版本安装
-失败时，应在锁定的基础镜像中复现，并分别核对目标 Alpine 分支的 amd64/arm64
-软件源，再更新必要的版本锁定。`apk` 错误中列出的镜像已安装版本不一定是软件源
-当前可安装版本。保留构建、完整 Compose smoke 和漏洞扫描门禁；不要仅凭另一个
-架构成功就判定通过。维护性锁定更新随 `chore` 合并时仍须检查 Release Please
-结果，不手动提升版本或重发现有镜像。
-
-- PR 创建后，负责人必须监控 GitHub required checks，包括 `PR Title`、`Backend Test & Build`、`Frontend Test & Build`、`Doc Freshness Check`，以及当前 branch protection 要求的其他 jobs。
-- CI 失败时，负责人应修复失败原因、推送到同一工作分支并重新监控；只有确认是真实外部阻塞时，才可把阻塞原因和下一步记录到 PR 或任务交付说明。
-- 合并只能发生在 required checks 全部通过之后；不要在 checks 失败、pending 或缺失时合并。
-- 普通 PR 合并后，负责人或 maintainer 必须检查 `Release Please` workflow 是否成功，并确认它是否创建或更新 Release PR。若本次合并不应触发正式 release，应明确记录“未触发正式 release”，并确认没有失败的 release automation 需要处理。
-- Release PR 合并后，必须检查 GitHub Release 是否创建成功，并继续监控 `Publish Docker Images`。Docker Hub 仍是唯一官方公开镜像源；不要用其他 registry 或非稳定 tag 替代失败的正式发布链路。
-- 公开 release tag 必须保持稳定 semver `vX.Y.Z`。不要发布 prerelease/nightly，不要手动创建绕过 GitHub Release 权威源的 Docker Hub tag。
-
-## Docker Hub 仓库介绍同步
-
-- 工作流：`.github/workflows/dockerhub-description.yml`
-- 触发：
-  - `README.md` 变更并合并到 `main`
-  - 手动 `workflow_dispatch`
-- 同步规则：
-  - Docker Hub 短描述使用 GitHub 仓库 description
-  - Docker Hub 长描述使用仓库 `README.md`
-- 需要额外仓库 secret：
-  - `DOCKERHUB_DESCRIPTION_PASSWORD`
-  - `DOCKERHUB_DESCRIPTION_USERNAME`（可选；不设时回退到 `DOCKERHUB_USERNAME`）
-
-说明：
-
-- 当前用于镜像推送的 `DOCKERHUB_TOKEN` 可能没有 Docker Hub 仓库元数据编辑权限。
-- 因此，仓库介绍同步与镜像推送使用分离凭据更稳妥。
-- 如果缺少上述 metadata 凭据，workflow 会跳过同步而不是失败。
-
-## 手动重发镜像
-
-仅在以下情况使用 `publish-images.yml` 的 `workflow_dispatch`：
-
-- Docker Hub 短暂故障导致推送失败
-- 需要基于已有 tag 或 commit 重新推送稳定版镜像
-- 需要补发 provenance / digest 记录
-
-注意：
-
-- 手动重发不会更新 `latest`；只会重发 `vX.Y.Z` 和 `X.Y.Z`
-- 手动重发不替代正式 GitHub Release
-- 手动重发前必须确认 `version` 与 `source_ref` 对应的是同一份正式代码
-
-## 手动部署
-
-`deploy.yml` 是维护者私有运维入口，不属于公开发布主链。
-
-使用原则：
-
-- 手动选择 `environment`
-- 显式填写 `image_tag`
-- 默认优先部署具体稳定版 tag；`latest` 仅适合临时试用环境
-
-## 变更同步要求
-
-只要改动以下任一入口，就必须同步检查和更新文档、模板与规范：
-
-- `.github/workflows/release-please.yml`
-- `.github/workflows/publish-images.yml`
-- `.github/workflows/deploy.yml`
-- `.github/workflows/dockerhub-description.yml`
-- `docker-compose.yml`
-- `.env.deploy`
-- `backend/.env.production.example`
-- `backend/internal/api/handlers/version_handler.go`
-- `README.md`
-- `docs/deployment.md`
-- `docs/env-vars.md`
-- `AGENTS.md`
-
-## 故障恢复
-
-### Release Please 没有生成 Release PR
-
-- 检查最近合并到 `main` 的 squash commit 是否仍符合 Conventional Commits。
-- 检查 `release-please.yml` 是否有失败记录。
-- 如需强制指定下个版本，优先通过 release-please 支持的 `Release-As:` 机制处理，不要手工打正式 tag。
-
-### GitHub Release 已创建，但 Docker 镜像缺失
-
-- 先检查 `publish-images.yml` 失败原因。
-- 若只是推送瞬时失败，使用 `workflow_dispatch` 按原版本号和原 tag 重发。
-- 若平台 digest 已发布但正式 manifest/tag 未更新，优先修复发布 workflow 后按原版本号和原 tag 手动重发；手动重发不会覆盖 `latest`。
-- 若正式 release run 仍在长时间运行但已明显超过近期成功发布耗时，不要同时发布新版本；先取消旧 run 或等待其结束，避免旧 release 延迟回写 `latest`。
-
-### 版本检查提示异常
-
-- 检查 `VERSION_CHECK_URL` 是否仍指向 GitHub latest release API。
-- 检查返回 JSON 是否包含 `tag_name` 和 `html_url`。
-- 检查 Release tag 是否保持稳定版 `vX.Y.Z` 格式。
-- 检查构建产物是否注入了 `backend/internal/version` 中的当前版本；未注入时 `/api/v1/version` 会返回 `dev`，版本检查只能作为开发提示。
+修改 release/publish/deploy/描述同步工作流、安装模板或版本检查行为时，同步本篇及对应部署/配置主文。不要以关闭门禁处理外部故障；确实受外部条件阻塞时记录失败步骤和缺失证据。

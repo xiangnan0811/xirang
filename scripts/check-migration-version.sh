@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT_DIR="${MIGRATION_FRESHNESS_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
-README_PATH="${MIGRATION_FRESHNESS_README:-$ROOT_DIR/backend/README_backend.md}"
+README_PATH="${MIGRATION_FRESHNESS_README:-$ROOT_DIR/backend/README.md}"
 SQLITE_DIR="$ROOT_DIR/backend/internal/database/migrations/sqlite"
 POSTGRES_DIR="$ROOT_DIR/backend/internal/database/migrations/postgres"
 
