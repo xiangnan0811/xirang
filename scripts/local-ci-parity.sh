@@ -41,6 +41,7 @@ require_cmd go "请安装 Go，版本以 backend/go.mod 为准。"
 require_cmd golangci-lint "请安装 golangci-lint（CI 使用 v2.11.4），或用 git push --no-verify 紧急跳过。"
 require_cmd npm "请安装 Node.js/npm，CI 使用 Node.js 20。"
 require_cmd node "请安装 Node.js，CI 使用 Node.js 20。"
+require_cmd python3 "请安装 Python 3.9+，用于文档结构检查。"
 
 section "Backend: golangci-lint run ./..."
 run_in_dir "$BACKEND_DIR" golangci-lint run ./...
@@ -71,6 +72,9 @@ run_script "$ROOT_DIR/scripts/check-doc-freshness.sh"
 
 section "Docs: freshness self-test"
 run_script "$ROOT_DIR/scripts/check-doc-freshness.test.sh"
+
+section "Docs: structure self-test"
+python3 "$ROOT_DIR/scripts/check-doc-structure.test.py"
 
 section "Docs: migration version freshness self-test"
 run_script "$ROOT_DIR/scripts/check-migration-version.test.sh"

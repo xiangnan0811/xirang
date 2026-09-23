@@ -1,36 +1,28 @@
-# Xirang Gateway Template (Nginx)
+# Nginx 网关模板
 
-该目录提供 Nginx 模板，供生产 All-in-One 镜像使用（静态前端 + 反向代理）。
+[文档入口](../../docs/README.md) · [部署指南](../../docs/deployment.md)
 
-## 当前生产镜像
+本目录的 [default.conf.template](templates/default.conf.template) 供[一体化镜像](../allinone/Dockerfile)使用，负责前端静态资源与后端反向代理。网关固定监听容器内 `10761`，上游为 `127.0.0.1:3000`；后端镜像默认 `SERVER_ADDR=:3000`，不要仅修改后端端口而不调整网关。容器入口先等候后端 `/readyz` 成功，再启动 Nginx。
 
-- 推荐使用一体化镜像：`deploy/allinone/Dockerfile`
-- 该镜像内包含：
-  - 后端二进制（容器内部监听 `:3000`）
-  - 前端静态资源
-  - Nginx 反向代理（容器内部固定监听 `10761`）
-  - `supercronic` 数据库备份任务（每日 02:00 备份，02:30 清理 30 天前备份）
+## 路由
 
-## 路由说明
+| 路径 | 行为 |
+|---|---|
+| `/api/v1/asset-content/<opaque-id>` | 精确匹配 32 位小写十六进制 ID；关闭代理响应和请求缓冲、缓存、临时文件与 gzip，转发 `Range` / `If-Range`；读、写和发送超时为 75 秒 |
+| `/api/v1/asset-content` 形状但不满足精确 ID 的路径 | 使用专用脱敏日志并交由后端安全拒绝，不继承精确内容路由的流式传输、缓冲或超时配置 |
+| `/api/v1/*` | 普通 API 与 WebSocket 升级，响应读取超时为 3600 秒 |
+| `/healthz` | 后端进程存活检查，不访问数据库 |
+| `/readyz` | 后端数据库连接检查，数据库缺失或 Ping 失败返回 503；不表示所有后台子系统就绪 |
+| 其他路径 | 静态资源与 SPA history 回退 |
 
-- `/api/v1/asset-content/<opaque-id>`：仅转发精确 32 位小写十六进制内容交付 ID；关闭代理缓冲、请求缓冲、缓存、临时文件与 gzip，并保留单 Range/If-Range 请求头
-- `/api/v1/*`：转发到后端 API（含 WebSocket 升级）
-- `/healthz`：转发到后端进程存活检查（不访问数据库）
-- `/readyz`：转发到后端数据库就绪检查（数据库 Ping 失败返回 503）
-- 其它路径：前端 SPA 静态资源与 history 回退
+内容交付 ID 的授权、Cookie、单 Range 和缓存安全要求由[内容交付合同](../../docs/spec/domains/backup-content-delivery.md)维护。精确路由不改变普通 API 的超时与 WebSocket 行为。
 
-内容交付 ID 不具备独立授权能力；后端仅接受精确路径 Cookie，并在每次请求重新校验会话、权限、资源与预算。该专用路由不改变普通 API 的超时或 WebSocket 合同。
+## 日志与安全响应头
 
-`/api/v1/asset-content` 形状但不匹配精确 32 位 ID 的请求只进入脱敏日志与安全拒绝回退；该回退不继承精确内容路由的 streaming、Range、buffering 或专用 timeout 策略。
+普通访问日志写入 `/logs/nginx-access.log`，错误日志写入 `/logs/nginx-error.log`。普通访问日志请求行仅记录路径，但仍包含来源页和 User-Agent 等字段，不能将其视为完全脱敏的日志。
 
-## HTTPS
+内容交付路径使用 `/logs/nginx-asset-content.log`，仅记录请求 ID、状态、响应字节数与时延，不记录 URI、参数、Cookie、来源页或 User-Agent。相关路由把 Nginx 错误日志设为 `/dev/null crit`，避免完整 URI 泄露；故障诊断使用安全访问日志、后端指标与聚合审计。
 
-容器只提供 HTTP 单入口。HTTPS/TLS 由用户在外部反向代理层处理，例如 Caddy、Nginx Proxy Manager、Nginx 或云厂商负载均衡。
+普通页面由模板设置 CSP 等安全响应头；外部 WebSocket 构建需要配套 `CSP_CONNECT_SRC_EXTRA`。内容交付路由拥有独立响应头配置，使后端经过审查的渲染器 CSP 与框架策略透传。更改时运行[内容网关检查](../../scripts/check-asset-content-nginx.sh)及其[自测](../../scripts/check-asset-content-nginx.test.sh)。
 
-## 日志
-
-Nginx 访问日志和错误日志写入 `/logs/nginx-access.log` 与 `/logs/nginx-error.log`，生产 Compose 默认将容器内 `/logs` 映射到宿主机 `./logs`；访问日志请求行仅记录路径，不记录查询字符串。
-
-内容交付请求使用 `/logs/nginx-asset-content.log`，只记录请求 ID、状态、响应字节数与时延，不记录 URI、参数、Cookie、来源页或 User-Agent。专用 location 禁止继承可能包含完整 URI 的 Nginx error log；故障诊断使用安全访问日志、后端指标与聚合审计。
-
-认证分块缓存根目录为 `/var/cache/xirang/asset-content`。它不属于 `/data`、`/backup`、`/logs`，也不声明为持久卷；进程重启后旧分块因进程密钥失效而由后端对账删除，不能将该路径映射到备份源或持久数据目录。
+TLS 终止、日志轮转、持久化卷、数据库备份和容器启动参数统一见[部署指南](../../docs/deployment.md)与[环境变量](../../docs/env-vars.md)。认证分块缓存目录 `/var/cache/xirang/asset-content` 不得映射到备份源或持久数据目录，详细生命周期见内容交付合同。

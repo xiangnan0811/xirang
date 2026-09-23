@@ -1,5 +1,5 @@
-# Native project roles inherit the user's model and reasoning configuration.
-# Keep implementation delegation bounded to the main session's direct children.
+# 原生项目角色继承用户的模型与推理配置。
+# 实施委派限制为主会话的直接子代理。
 project_doc_fallback_filenames = ["AGENTS.md"]
 
 [agents]

@@ -1,97 +1,31 @@
 #!/usr/bin/env bash
-# check-doc-freshness.sh — CI 文档新鲜度检查
-# 当代码关键文件被修改但对应文档未同步更新时输出警告。
-# 仅在 PR / push diff 中检查；非阻断（exit 0）。
-
+# 主题同步为 CI 提醒、hook 阻断；结构和迁移始终阻断。
 set -euo pipefail
-
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-if ! bash "$ROOT_DIR/scripts/check-migration-version.sh"; then
-  echo "❌ 迁移版本文档新鲜度检查失败" >&2
-  exit 1
-fi
-WARN=0
+source "$ROOT_DIR/scripts/doc-freshness-rules.sh"
 
-# 获取本次变更的文件列表。DOC_FRESHNESS_CHANGED_FILES 仅供脚本自测注入 fixture。
-if [ -n "${DOC_FRESHNESS_CHANGED_FILES:-}" ]; then
-  CHANGED="${DOC_FRESHNESS_CHANGED_FILES}"
-elif [ -n "${GITHUB_BASE_REF:-}" ]; then
-  # PR：对比 base branch
-  CHANGED=$(git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" 2>/dev/null || true)
-elif git rev-parse HEAD~1 >/dev/null 2>&1; then
-  # push：对比上一个 commit
-  CHANGED=$(git diff --name-only HEAD~1 2>/dev/null || true)
+if [[ "${1:-}" == "--staged" ]]; then
+  CHANGED="$(git -C "$ROOT_DIR" diff --cached --name-only)"
+  UPDATED="$(git -C "$ROOT_DIR" diff --cached --name-only --diff-filter=ACMR)"
 else
-  echo "ℹ️  无法获取变更文件列表，跳过文档新鲜度检查"
-  exit 0
-fi
-
-if [ -z "$CHANGED" ]; then
-  echo "✅ 无文件变更，跳过文档新鲜度检查"
-  exit 0
-fi
-
-warn() {
-  echo "⚠️  $1"
-  WARN=$((WARN + 1))
-}
-
-has_changed() {
-  echo "$CHANGED" | grep -qE "$1"
-}
-
-has_doc() {
-  echo "$CHANGED" | grep -qE "$1"
-}
-
-# 规则 1：模型变更 → backend/README_backend.md 或 backend 数据库规范
-if echo "$CHANGED" | grep -q "backend/internal/model/models.go"; then
-  if ! has_doc '^(backend/README_backend\.md|docs/env-vars\.md|spec/backend/database-guidelines\.md)$'; then
-    warn "backend/internal/model/models.go 已修改，但 backend 模型/数据库文档未同步更新"
+  bash "$ROOT_DIR/scripts/check-migration-version.sh"
+  python3 "$ROOT_DIR/scripts/check-doc-structure.py"
+  if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
+    CHANGED="$(git -C "$ROOT_DIR" diff --name-only "origin/${GITHUB_BASE_REF}...HEAD")"
+    UPDATED="$(git -C "$ROOT_DIR" diff --name-only --diff-filter=ACMR "origin/${GITHUB_BASE_REF}...HEAD")"
+  elif git -C "$ROOT_DIR" rev-parse HEAD~1 >/dev/null 2>&1; then
+    CHANGED="$(git -C "$ROOT_DIR" diff --name-only HEAD~1)"
+    UPDATED="$(git -C "$ROOT_DIR" diff --name-only --diff-filter=ACMR HEAD~1)"
+  else
+    CHANGED=""
+    UPDATED=""
   fi
 fi
 
-# 规则 2：API 路由变更 → backend/README_backend.md
-if echo "$CHANGED" | grep -q "backend/internal/api/router.go"; then
-  if ! echo "$CHANGED" | grep -q "backend/README_backend.md"; then
-    warn "backend/internal/api/router.go 已修改，但 backend/README_backend.md 未同步更新"
-  fi
-fi
-
-# 规则 3：前端路由变更 → README / docs / frontend structure spec
-if echo "$CHANGED" | grep -q "web/src/router.tsx"; then
-  if ! has_doc '^(README\.md|docs/|spec/frontend/directory-structure\.md)$'; then
-    warn "web/src/router.tsx 已修改，但公开入口文档或 frontend structure spec 未同步更新"
-  fi
-fi
-
-# 规则 4：新增迁移文件 → backend README / migration docs / database spec
-if echo "$CHANGED" | grep -q "backend/internal/database/migrations/"; then
-  if ! has_doc '^(backend/README_backend\.md|docs/deployment\.md|docs/env-vars\.md|spec/backend/database-guidelines\.md)$'; then
-    warn "数据库迁移文件有变更，但 backend 迁移/部署文档或数据库规范未同步更新"
-  fi
-fi
-
-# 规则 5：配置变更 → docs/env-vars.md
-if has_changed "backend/internal/config/config.go"; then
-  if ! echo "$CHANGED" | grep -q "docs/env-vars.md"; then
-    warn "backend/internal/config/config.go 已修改，但 docs/env-vars.md 未同步更新"
-  fi
-fi
-
-# 规则 6：发布/镜像/部署/版本检查变更 → 发布文档
-if echo "$CHANGED" | grep -qE '^(\.github/workflows/(release-please|publish-images|deploy)\.yml|docker-compose\.yml|docker-compose\.prod\.yml|\.env\.deploy|deploy/allinone/.*|deploy/nginx/.*|backend/\.env\.production\.example|backend/internal/api/handlers/version_handler\.go|CHANGELOG\.md)$'; then
-  if ! echo "$CHANGED" | grep -qE '^(README\.md|CONTRIBUTING\.md|docs/deployment\.md|docs/env-vars\.md|docs/maintainers/release\.md|AGENTS\.md|\.github/PULL_REQUEST_TEMPLATE\.md)$'; then
-    warn "发布/镜像/部署/版本检查相关文件已修改，但配套文档或仓库规范未同步更新"
-  fi
-fi
-
-if [ "$WARN" -gt 0 ]; then
-  echo ""
-  echo "📝 共 ${WARN} 条文档同步提醒。请确认是否需要更新对应文档。"
+doc_freshness_check "$CHANGED" "$UPDATED"
+if (( DOC_FRESHNESS_WARNINGS > 0 )); then
+  echo "文档同步提醒：${DOC_FRESHNESS_WARNINGS} 项，请核对对应主题。"
+  [[ "${1:-}" != "--staged" ]] || exit 1
 else
   echo "✅ 文档新鲜度检查通过"
 fi
-
-# 不阻断 CI
-exit 0

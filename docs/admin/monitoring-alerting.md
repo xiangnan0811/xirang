@@ -61,15 +61,15 @@ Web 入口：
 - 登录后管理监控项：`/app/service-monitors`
 - 公开状态页：`/status`
 
-API：
+API 需要对应权限；admin/operator 可管理监控项，viewer 只读，公开状态页例外：
 
 | 方法 | 路径 | 认证 | 说明 |
 |---|---|---|---|
-| GET | `/api/v1/service-monitors` | 需要 | 列出监控项 |
-| POST | `/api/v1/service-monitors` | 需要 | 创建监控项 |
-| GET | `/api/v1/service-monitors/:id` | 需要 | 获取详情 |
-| PUT | `/api/v1/service-monitors/:id` | 需要 | 更新监控项 |
-| DELETE | `/api/v1/service-monitors/:id` | 需要 | 删除监控项 |
+| GET | `/api/v1/service-monitors` | `service_monitors:read` | 列出监控项 |
+| POST | `/api/v1/service-monitors` | `service_monitors:write` | 创建监控项 |
+| GET | `/api/v1/service-monitors/:id` | `service_monitors:read` | 获取详情 |
+| PUT | `/api/v1/service-monitors/:id` | `service_monitors:write` | 更新监控项 |
+| DELETE | `/api/v1/service-monitors/:id` | `service_monitors:write` | 删除监控项 |
 | GET | `/api/v1/status-page` | 公开 | 状态页数据 |
 
 当前限制：
@@ -110,13 +110,11 @@ Xirang 支持以下通知渠道：
 
 首次外发前会持久化通道投递意图；进程重启后继续未完成投递，而不是只看到告警已存在就停止。静默、分组、阈值抑制、升级接管和无通道结果有明确持久状态，不会因重放误发。升级前没有投递决定的历史告警不会被批量补发。
 
-升级策略的每一级事件与该级通道投递意图在同一事务中提交；提交失败不会推进升级级别，提交后退出可由重试工作器继续投递。同一通道用于不同升级级别时，各事件保留独立投递身份。分组窗口允许同一持久告警在决策写入失败后重放，不会把自己的重试误认为另一条重复告警。
-
-自动与手动重试共享数据库原子认领和有期限的尝试身份，迟到或过期回执不能覆盖较新的状态，也不能刷新成功时间。界面区分等待发送、发送中、重试中、发送成功、发送失败和未知状态；等待或未知不是已发送。外部渠道收到消息后、数据库回执提交前若进程退出，仍存在重复投递的不确定性，不承诺无条件恰好一次。
+界面区分等待发送、发送中、重试中、发送成功、发送失败和未知状态；等待或未知不是已发送。自动与手动重试共享同一投递认领边界。外部渠道收到消息后、数据库回执提交前若进程退出，仍可能重复投递。
 
 飞书、钉钉、企业微信的发送成功要求渠道业务成功码，HTTP 200 本身不足以确认；空、畸形、缺少确认字段或超限响应不能成为 sent。通用 webhook 保留 HTTP 2xx 成功语义。已识别的永久配置拒绝终止自动重试，暂时失败按退避策略重试；错误中不保存响应原文或 webhook 令牌。
 
-升级前空投递键的重复记录在所有认领入口共用身份归一处理；可证明属于同一次直接通知的记录共享规范意图，不同升级事件保持独立身份。无法判定升级归属的历史记录保留为 unknown，不盲删或自动重发。冷却按有效尝试成功确认时写入的 sent_at 计算，而不是意图创建时间；升级前成功时间未知的记录保持 NULL，不参与近期成功冷却，也不回填成升级时刚发送。
+无法确定身份的历史通知保持未知，不会盲目删除或自动重发。冷却从可证明的发送成功时间开始计算，未知历史时间不会回填为升级时间。投递、升级、分组、重试和兼容的完整约束见[告警与健康合同](../spec/domains/alerting-health.md)。
 
 创建服务监控时显式提交 `enabled=false` 会保持禁用；未提交该字段才使用默认启用值。HTTP 请求头等秘密字段仍通过加密 hooks 持久化。
 
@@ -165,10 +163,7 @@ API：
 All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*`、`/healthz`（进程存活）和 `/readyz`（数据库就绪）以及前端静态资源，不会通过容器入口 `10761` 暴露 `/metrics`。如需抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并使用 Bearer token。
 
 ```bash
-# 后端直连部署（例如源码运行 SERVER_ADDR=:8080）
-curl -fsS http://127.0.0.1:8080/metrics | head
-
-# 设置 METRICS_TOKEN 后
+# 后端直连部署（例如源码运行 SERVER_ADDR=127.0.0.1:8080）
 curl -fsS -H "Authorization: Bearer ${METRICS_TOKEN}" http://127.0.0.1:8080/metrics | head
 ```
 
@@ -192,3 +187,33 @@ scrape_configs:
 | `METRICS_REMOTE_TIMEOUT` | 单次请求超时，默认 `5s`。 |
 
 详细变量见 [环境变量参考](../env-vars.md)。
+
+## 备份资产监控
+
+备份资产默认关闭。请求开启后还须通过[启用门禁](../spec/domains/backup-enablement.md)，请求值与有效状态 `FeatureLive` 不一致通常表示等待就绪或确认，不应直接当作服务宕机。
+
+| 信号 | 指标或日志 | 运维解释 |
+|---|---|---|
+| 搜索 5xx 比例 | `http_requests_total{method="POST",path="/api/v1/asset-search"}` | 10 分钟窗口内 5xx 占比超过 1%，持续 10 分钟触发建议告警 |
+| 搜索 503 | 同一序列的 `status="503"` | 15 分钟内出现即排查；503 也可由就绪等原因产生，须结合 `备份资产搜索审计写入失败` 日志判断审计故障 |
+| 请求与有效状态偏差 | `xirang_backup_asset_feature_requested`、`xirang_backup_asset_feature_live` | 差异持续 5 分钟时检查启用条件 |
+| 搜索构建失败 | `xirang_backup_asset_search_builds_total{outcome="error"}` | 观察增长并排查构建错误 |
+| 遗弃搜索调和 | `xirang_backup_asset_search_reconciled_abandoned_total` | 结合实际遗弃任务判断调和是否推进，不能只凭零增量断言故障 |
+
+后端提供三条 PromQL 建议表达式，启动时只记录规则数量，不会自动向 Prometheus 或 Grafana 安装告警。运维人员须在自己的告警系统中配置表达式、持续时间和接收渠道：
+
+```promql
+# backup_asset_search_5xx：持续 10 分钟，级别 page
+sum(rate(http_requests_total{method="POST",path="/api/v1/asset-search",status=~"5.."}[10m]))
+/
+sum(rate(http_requests_total{method="POST",path="/api/v1/asset-search"}[10m]))
+> 0.01
+
+# backup_asset_search_audit_fail：立即，级别 page；需结合日志确认原因
+increase(http_requests_total{method="POST",path="/api/v1/asset-search",status="503"}[15m]) > 0
+
+# backup_asset_feature_live_jitter：持续 5 分钟，级别 warn
+xirang_backup_asset_feature_requested - xirang_backup_asset_feature_live != 0
+```
+
+这些表达式不等于“15 分钟内搜索 2xx 达到 99%”的服务保证：第一条只计算 5xx 比例，没有排除 4xx，也没有单独筛选 FeatureLive 请求。关闭 `backup_assets.enabled` 可停止功能准入，但不会恢复已退役的 snapshot 读取 API；旧接口仍返回 410。

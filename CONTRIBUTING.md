@@ -1,127 +1,119 @@
 # 贡献指南
 
-感谢你对 Xirang（息壤）的关注！欢迎提交 Issue、Pull Request 或参与讨论。
+欢迎通过 [Issues](https://github.com/xiangnan0811/xirang/issues) 或 Pull Request 参与。
+请选择部署、备份恢复、SSH 诊断、功能建议或通用问题模板，提供脱敏后的版本、
+复现步骤和相关日志；安全漏洞按 [安全政策](SECURITY.md) 私下报告。
+社区交流遵循 [行为准则](CODE_OF_CONDUCT.md)。
 
-## 行为准则
+开发合同从 [docs/spec](docs/spec/README.md) 按任务读取；代理加载范围见
+[项目入口](AGENTS.md)。无需安装个人 harness、创建任务目录、规划审批或例行日志。
 
-请保持友善与尊重。我们致力于维护一个开放、包容的社区环境。
+## 开发环境
 
-## 如何贡献
+后端使用 Go / Gin / GORM，前端使用 React / TypeScript / Vite / Tailwind CSS。
+版本以 `backend/go.mod`、`web/package.json` 及锁文件为准。需要 Go 1.26.6
+或兼容版本、SQLite 驱动所需 C 编译工具链（CGO），以及 Node.js
+20.19+（20.x）、22.13+（22.x）或 24+ 和 npm。文档结构检查使用 Python 3.9+
+（仅标准库）。升级工具链后也须确认 linter 兼容。
 
-### 报告问题
-
-- 使用 [GitHub Issues](https://github.com/xiangnan0811/xirang/issues) 提交问题或功能建议，提交前请先搜索是否已有相同 Issue。
-- 请选择最接近的反馈入口：部署/升级、备份/恢复、SSH 诊断、功能建议；通用 Bug 可继续使用 Bug 报告模板。
-- 部署类问题请包含部署方式、版本/Commit、关键环境变量是否已设置、日志片段和反向代理信息。
-- 备份/恢复类问题请包含执行器类型、策略配置摘要、任务/恢复演练状态、相关任务日志和错误码。
-- SSH 诊断类问题请包含节点系统、认证方式、Fleet Doctor/测试连接结果、主机密钥策略和可脱敏的错误信息。
-- 安全漏洞不要提交公开 Issue，请按 [安全政策](SECURITY.md) 私下报告。
-
-### 提交代码
-
-1. Fork 本仓库并 clone 到本地
-2. 先同步 `main`，再基于 `main` 创建工作分支：`git checkout -b feat/your-feature`
-
-> 不要直接在 `main` 分支提交。任何功能开发、问题修复、文档、配置、CI 或规范变更，都应在独立工作分支完成，并通过 Pull Request 合入。
-
-开发规范入口是 [spec/index.md](spec/index.md)，项目协作规则见 [AGENTS.md](AGENTS.md)。无需安装个人 harness 或工作流框架，也无需创建任务目录、规划审批或例行日志。
-
-3. 完成开发后运行校验：
+两个终端均从仓库根目录开始：
 
 ```bash
-# 以下从仓库根目录运行；括号确保命令结束后仍在根目录。
-# 后端
-(cd backend && go test ./... && go build ./...)
+# 终端 1：后端 (:8080)
+cd backend
+ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development go run ./cmd/server
 
-# 前端
-(cd web && npm run check)   # typecheck + lint + test + build
-
-# 仓库脚本/文档
-bash scripts/check-doc-freshness.sh
-bash scripts/check-migration-utc-safety.sh
+# 终端 2：前端 (:5173)
+cd web
+npm ci
+npm run dev
 ```
 
-4. 提交代码并推送：
+后端不自动读取 `.env`，通过 shell、systemd 或容器注入变量；默认值、优先级和
+生效条件见 [环境变量](docs/env-vars.md)。不要将示例开发密码用于真实实例。
+
+仅查看界面时，可在 `web/` 安装依赖后运行
+`VITE_ENABLE_DEMO_MODE=true npm run dev`。Demo 使用本地 mock，不连接真实服务器
+或备份存储，仅用于开发演示；生产构建禁止启用，不能作为真实备份或恢复证据。
+
+首次 clone 后从根目录运行 `make setup-hooks`。它启用暂存内容快检、文档同步、
+适用迁移检查和 pre-push 完整门禁。不要绕过 hooks 或 required CI。
+
+## 常用命令
+
+下表无特别说明时均从 checkout 根目录运行。
+
+| 目的 | 命令 |
+| --- | --- |
+| 启动、构建后端 | `make backend-run`、`make backend-build` |
+| 后端测试 | `make backend-test` |
+| 更新 OpenAPI/Swagger 生成物 | `make swag-init` |
+| 前端完整检查 | `(cd web && npm run check)` |
+| 前端逐项检查 | 在 `web/` 执行 `npm run typecheck`、`npm run lint`、`npm run test`、`npm run build` |
+| 项目 lint、测试和构建 | `make check` |
+| 仅 lint、覆盖率 | `make lint`、`make coverage` |
+| 单架构、多架构镜像 | `make docker-build`、`make docker-buildx` |
+| 文档新鲜度及结构 | `bash scripts/check-doc-freshness.sh` |
+| 文档检查回归 | `bash scripts/check-doc-freshness.test.sh`、`python3 scripts/check-doc-structure.test.py` |
+| 迁移版本及回归 | `bash scripts/check-migration-version.sh`、`bash scripts/check-migration-version.test.sh` |
+| 迁移 UTC 安全及回归 | `bash scripts/check-migration-utc-safety.sh`、`bash scripts/check-migration-utc-safety.test.sh` |
+| 推送前完整门禁 | `bash scripts/local-ci-parity.sh` |
+
+前端 `npm run check` 包括 typecheck、lint、测试与构建；pre-push 还执行后端 lint、
+测试、构建、漏洞检查、前端依赖审计、bundle budget 和文档/迁移检查。
+CI 另有 PostgreSQL parity、选定 race、浏览器验收、覆盖率和 Docker 运行时检查。
+本地通过不能替代 CI 或真实环境验收。测试证据的选择见
+[测试约定](docs/spec/guides/testing.md)。
+
+## 分支与提交
+
+`main` 是跟踪 `origin/main` 的集成分支。功能、修复、文档、配置、CI 和规范变更
+都须在工作分支完成；`main` 仅允许只读检查、fetch、快进同步、创建分支与合并后同步。
+开始新的文件修改前：
+
+```bash
+git fetch origin --prune
+git switch main
+git pull --ff-only
+git switch -c <type>/<short-description>
+```
+
+若 `main` 有本地独有提交，先解决其应进入工作分支、PR 或经明确授权丢弃的归属，
+不要继续在 `main` 上修改。延续已授权工作时核验当前分支和远端基线，保留已有改动。
+隔离 worktree 使用仓库内已忽略的 `.worktrees/<task-slug>`，创建前重新确认忽略规则。
+
+提交消息与 PR 标题遵循 Conventional Commits：`<type>(<scope>): <description>`。
+常用 type 为 `feat`、`fix`、`docs`、`chore`、`refactor`、`test`、`ci`；
+scope 可用 `web`、`backend`、`deploy` 等。完成相关检查及候选审查后：
 
 ```bash
 git add <files>
-git commit -m "feat(web): 添加XX功能"
-git push origin feat/your-feature
+git commit -m "docs: 整合维护文档"
+git push origin <branch>
 ```
 
-5. 在 GitHub 上发起 Pull Request，并由 PR 负责人持续监控 required CI jobs。CI 失败时，应在同一工作分支修复、推送并重新监控；不要把失败或未完成的 required checks 留给维护者猜测。
+独立审查、暂存与未暂存内容的证据绑定及原生加载验收见
+[代理协作与验证](docs/spec/guides/agent-collaboration.md)。
 
-### Pull Request 标题与合并方式
+## PR 与合并
 
-- Pull Request 标题必须遵循 Conventional Commits；CI 会校验标题格式。
-- PR 创建后，负责人必须监控 required checks，失败则修复并继续监控，直到全部 required checks 通过或明确记录真实外部阻塞。
-- Maintainer 合并到 `main` 时应优先使用 `Squash and merge`，并保留符合规范的 PR 标题，让最终进入发布分支的提交语义稳定可预测。
-- Maintainer 只能在 required checks 全部通过后合并；checks 失败、pending 或缺失时不要合并。
-- PR 合并后，负责人或 maintainer 必须继续检查 post-merge automation：`Release Please` workflow 是否成功并按规则创建或更新 Release PR、正式 GitHub Release、`Publish Docker Images`，以及 README/release 文档相关的 `Sync Docker Hub Description` workflow。若本次合并没有触发正式 release，也必须在交付记录中明确说明没有预期生成 GitHub Release 或 Docker Hub 镜像发布。
-- Maintainer 也不要绕过 PR 直接在 `main` 提交功能或修复；如需维护仓库流程规范，也应走独立分支和 PR。
-- 不要直接向 `main` 推送发布相关改动；正式版本通过 Release Please 生成的 Release PR 落地。
-
-### Commit 规范
-
-采用 [Conventional Commits](https://www.conventionalcommits.org/) 格式：
-
-```
-<type>(<scope>): <description>
-```
-
-- **type**: `feat` | `fix` | `docs` | `chore` | `refactor` | `test` | `ci`
-- **scope**: `web` | `backend` | `ci` | `deploy` 等
-
-示例：
-- `feat(web): 添加节点批量操作功能`
-- `fix(backend): 修复任务调度器内存泄漏`
-- `docs: 更新部署文档`
-
-### 代码规范
-
-- 默认使用简体中文注释（必要时保留英文术语）
-- 后端遵循 Go 标准代码风格
-- 前端改动需关注可访问性（`aria-*`、键盘操作）
-- 优先复用 `web/src/components/ui/` 下已有组件
-- 不引入无必要的外部依赖
-
-## 发布与镜像标准
-
-- GitHub Release 是 Xirang 唯一权威公开版本源；`CHANGELOG.md` 由 Release Please 自动维护。
-- Docker Hub 是唯一官方公开镜像源；`latest` 仅代表最新稳定版。
-- 本仓库当前只支持稳定版 `vX.Y.Z` 发布，不支持 prerelease/nightly 通道。
-- 公开发布流程不自动部署私有环境；`.github/workflows/deploy.yml` 仅用于维护者手动部署。
-- 合并普通 PR 后必须检查 `Release Please` workflow 是否成功，并确认它是否按规则创建或更新 Release PR；合并 Release PR 后必须检查 GitHub Release 与 Docker Hub 镜像发布 workflow，失败时修复或记录外部阻塞。
-- 若某次合并只是 docs/ci/infra/process 变更且没有触发正式 release，应在 PR 或交付记录中明确写明“未触发正式 release”，避免把 auto release 状态留空。
-- 如修改 release/image/deploy/version-check 路径，必须同步更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md` 以及维护者发布文档。
+1. 向 `main` 创建 PR，说明具体问题、最终行为、受影响合同、验证和未完成验收。
+2. 负责人持续监控全部 required checks；失败在同一工作分支修复、推送并继续监控，
+   直到通过或记录真实外部阻塞。失败、pending 或缺失时不得合并。
+3. 维护者优先使用 squash merge，保留符合规范的 PR 标题；不要直接向 `main` 推送变更。
+4. 合并后按 [发布手册](docs/maintainers/release.md) 检查 Release Please、正式发布、
+   Docker 镜像和相关 Docker Hub 描述同步。未触发正式发布时，明确说明未预期产生
+   GitHub Release 或 Docker Hub 镜像。
+5. 将本地 `main` 同步到 `origin/main` 后再开始下一分支。Squash 后不要从旧工作分支
+   开始新任务。
 
 ## 文档同步
 
-PR 涉及以下变更时，请同步更新对应文档：
+维护正文统一简体中文，标识符、代码和必要英文术语保持原样；历史 CHANGELOG 与生成物
+不批量翻译。文档唯一归属、主题同步和结构门禁见
+[文档维护](docs/spec/guides/documentation-truth-guide.md)。
+模型、API、路由、配置、迁移、发布与部署的改动需同步其对应主题主文；
+无关文档的改动不能替代必要同步。迁移号只在 [后端 README](backend/README.md) 维护。
 
-- 新增/修改数据库模型 → 更新 `backend/README_backend.md` 的核心模型说明，必要时同步 `spec/backend/database-guidelines.md`
-- 新增/修改 API 路由 → 更新 `backend/README_backend.md` 接口列表
-- 新增/修改前端页面或公开入口 → 更新 `README.md` / `docs/**` 中对应的用户入口说明；如果是结构约定变化，同步 `spec/frontend/directory-structure.md`
-- 新增/修改环境变量 → 更新 `docs/env-vars.md`、相关 `.env*.example` 或 `.env.deploy`
-- 新增数据库迁移 → 更新 `backend/README_backend.md` 当前迁移版本号；如改变迁移约定，同步 `spec/backend/database-guidelines.md`
-- 修改 release / image / deploy / version-check 路径 → 更新 `README.md`、`docs/deployment.md`、`docs/env-vars.md`、`docs/maintainers/release.md` 和 PR 模板/流程说明
-
-CI 中的 `doc-freshness` 检查会在关键文件变更但文档未同步时发出提醒。
-
-## 开发环境搭建
-
-参考 [README.md](README.md) 中的快速开始章节。
-
-首次 clone 后请安装 Git hooks：
-
-```bash
-make setup-hooks
-```
-
-这会启用 pre-commit 暂存内容快检、文档同步及适用的迁移检查，以及 pre-push 的 `scripts/local-ci-parity.sh` 门禁。不要绕过 hooks 或 required CI。
-
-## 发布流程
-
-本项目使用 [Release Please](https://github.com/googleapis/release-please) 自动管理版本和 `CHANGELOG.md`。合并到 `main` 的 PR 会触发 `Release Please` workflow，并由 Release Please 按配置和提交语义创建或更新 Release PR；合并该 Release PR 后会创建 GitHub Release，并触发 Docker Hub 镜像发布。维护者合并后必须检查这些 workflow 的结果；如果没有正式 release 被触发，应明确记录这一点。
-
-维护者发布与仓库设置说明见 [docs/maintainers/release.md](docs/maintainers/release.md)。
+发布版本和镜像标准统一见 [发布手册](docs/maintainers/release.md)，
+依赖、漏洞与 Actions 维护统一见 [仓库自动化](docs/maintainers/automation.md)。

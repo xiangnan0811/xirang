@@ -13,7 +13,7 @@
 #   process-restart      — restart/reconcile + SIGKILL owners
 #   million-catalog-full — reserved; fails unless BACKUP_ASSET_LOAD_ALLOW_MILLION=1
 #
-# Operator notes: docs/admin/backup-assets-load.md
+# Operator notes: docs/maintainers/verification.md
 #
 # Usage:
 #   bash scripts/test-backup-asset-load.sh
@@ -78,7 +78,7 @@ EXPORT_DELIVERY_TEST="$BACKEND_DIR/internal/backupasset/export/delivery_test.go"
 EXPORT_SERVICE_TEST="$BACKEND_DIR/internal/backupasset/export/service_test.go"
 RECOVERY_STATE_TEST="$BACKEND_DIR/internal/backupasset/recovery/state_test.go"
 AUDIT_TEST="$BACKEND_DIR/internal/backupasset/audit_action_test.go"
-LOAD_DOC="$ROOT_DIR/docs/admin/backup-assets-load.md"
+LOAD_DOC="$ROOT_DIR/docs/maintainers/verification.md"
 
 require_text "$CATALOG_TEST" "func TestCatalogPaginatesTenThousandCommittedEntries"
 require_text "$CATALOG_TEST" "const total = 10000"
@@ -94,7 +94,7 @@ require_text "$EXPORT_DELIVERY_TEST" "func TestControlledProcessSIGKILLThenResta
 require_text "$EXPORT_SERVICE_TEST" "func TestExportCommitZeroDeadlinePersistsExactLeaseAndReplays"
 require_text "$RECOVERY_STATE_TEST" "func TestStateResultSetRetryAndTakeoverRequireFreshFence"
 require_text "$AUDIT_TEST" "func TestAuditSanitizerDropsForbiddenKeysAndValues"
-require_text "$LOAD_DOC" "10k catalog pagination"
+require_text "$LOAD_DOC" "1 万条 Catalog 分页"
 
 callers=$(awk '
   /func TestContentLeaseHeartbeatCoalescesConcurrentRenewals/ { inside = 1 }

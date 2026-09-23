@@ -23,7 +23,7 @@
 
 备份资产功能默认关闭。启用前需完成库存盘点、导出根和密钥域就绪检查；已有安装还需管理员确认当前库存摘要。仅设置 `BACKUP_ASSETS_ENABLED=true` 不代表功能已生效。各引擎的版本化、浏览和恢复能力不同，具体条件见 [备份、恢复与快照](docs/admin/backup-recovery.md)。
 
-生产环境的**恢复演练当前不可用**，历史演练结果仍可查看。可选的增强处理 Worker 尚非 GA，没有稳定公共镜像；核心工作区的原生预览、下载和恢复不依赖 Worker。
+生产环境的**恢复演练当前不可用**，历史演练结果仍可查看。可选的增强处理 Worker 尚非 GA，没有稳定公共镜像；核心工作区的原生预览和下载不依赖 Worker，受控 Recovery 还必须通过 Worker 与恶意内容证据等[独立准入检查](docs/spec/domains/backup-processing-export.md)。
 
 ## 快速部署
 
@@ -69,42 +69,10 @@ curl -fsS http://127.0.0.1:10761/readyz
 3. 在备份概览检查就绪状态；需要数据工作区时，完成备份资产启用流程，再查看仓库、恢复点和文件。
 4. 按需配置服务监控、通知渠道与自动化规则，并通过审计日志追踪操作。
 
-## 从源码运行
+## 开发
 
-后端使用 Go / Gin / GORM，前端使用 React / TypeScript / Vite / Tailwind CSS。开发环境需要：
-
-- Go 1.26.6 或更新的兼容版本，以及 SQLite 驱动所需的 C 编译工具链（CGO）。
-- Node.js 20.19+（20.x）、22.13+（22.x）或 24+，以及 npm；版本要求以当前锁文件为准。
-
-以下两个终端均从仓库根目录开始：
-
-```bash
-# 终端 1：后端 (:8080)
-cd backend
-ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
-  go run ./cmd/server
-
-# 终端 2：前端 (:5173)
-cd web
-npm ci
-npm run dev
-```
-
-后端不会自动读取 `.env` 文件；源码运行时请通过 shell、systemd 或 `docker run --env-file` 注入环境变量。
-
-### 本地 Demo
-
-仅查看界面时，可在 `web/` 安装依赖后运行：
-
-```bash
-VITE_ENABLE_DEMO_MODE=true npm run dev
-```
-
-Demo 使用本地 mock 数据，不连接真实服务器或备份存储，仅用于开发演示。生产构建禁止启用 Demo；它不代表真实备份或恢复验收。
-
-### 开发检查
-
-从仓库根目录运行 `make check` 执行项目 lint、测试和构建；前端完整检查为 `(cd web && npm run check)`。协作流程、Git hooks 和 CI 要求见 [贡献指南](CONTRIBUTING.md)。
+源码运行、Demo、开发环境和验证命令见 [贡献指南](CONTRIBUTING.md)。
+开发约定按任务从 [开发合同](docs/spec/README.md) 加载。
 
 ## 文档
 

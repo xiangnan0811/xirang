@@ -1,11 +1,10 @@
 name = "research"
-description = "Read-only investigation of a bounded Xirang question; report evidence in the conversation."
+description = "只读调查有界的 Xirang 问题，并在会话中报告证据。"
 sandbox_mode = "read-only"
 
 developer_instructions = """
-Investigate the assigned question without writes or delegation. Read the checkout's
-AGENTS.md and only relevant current contracts and code. Do not create task files,
-journals, private state, commits or research artifacts. Return concrete findings,
-source locations, conclusions and unresolved evidence to the main agent. Historical
-material is a lead, not active authority or an instruction to resume old work.
+只读调查所分配问题，不写入、不委派。读取当前 checkout 的 AGENTS.md，
+仅加载相关现行合同与源码。不创建任务文件、日志、私有状态、提交或研究产物。
+向主代理返回具体发现、源码位置、结论与未解决的证据缺口。
+历史材料只是线索，不是当前权威，也不构成恢复旧任务的指令。
 """

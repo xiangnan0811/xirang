@@ -22,22 +22,22 @@
 ### 重启与错过的时刻
 
 - Core 启动和周期扫描都会投递 `queued` 意图。调度租约过期后，其他 Core 可以接管未完成的投递；已经绑定 TaskRun 的 occurrence 不会重复执行。
-- Online reconciliation and Core restart preserve an overdue persisted `next_run_at` as a `queued` occurrence. A late callback and reconciliation share the same occurrence key; an overdue clock value is not proof of system-wide downtime and never creates an automatic downtime `skipped` result. This preserves known due intent, without claiming to reconstruct every unknown tick during downtime.
-- If a task edit commits but immediate schedule synchronization fails, the API returns HTTP 503 and explicitly reports that the configuration was saved. Periodic reconciliation restores scheduling from persisted configuration; the failed request does not roll back a concurrent pause, edit, or execution result.
+- 在线调和或 Core 重启会将已持久化、但逾期的 `next_run_at` 保存为排队意图；迟到回调与调和使用同一唯一键。逾期不等于系统曾停机，不会自动生成停机跳过记录，也不承诺还原停机期间所有未知时刻。
+- 任务配置已提交但即时调度同步失败时，API 返回 HTTP 503 并明确提示配置已保存。周期调和会从持久配置恢复调度；不要把请求失败当作配置回滚，也不要盲目覆盖后续修改。
 - 禁用或归档任务、取消任务，或禁用所属策略时，尚未投递的 occurrence 会在同一持久化边界标记为 `canceled` 并清除租约；重新启用后只等待新的调度时刻。正在执行的 TaskRun 仍按任务取消和执行租约规则收敛，不会因删除本地调度器记录而被假定停止。
 
 ### Legacy Rclone 的共享目标占用
 
-Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数据库持久化占用保护；`writing` 或 `unknown` 事实会继续阻止新的写入，Core 重启、租约到期或本地 SSH 关闭都不等于远端写入已经停止。管理员必须先暂停任务并确认远端及外部写入者停止，再按[备份恢复文档中的显式协调流程](backup-recovery.md#explicit-operator-reconciliation)对指定 TaskRun 调用 `POST /api/v1/tasks/{id}/reconcile-legacy-rclone`。协调只会记录审计并解除已确认的占用，不会自动重试、恢复调度或把旧成功记录提升为新的恢复证据。
+Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数据库持久化占用保护；`writing` 或 `unknown` 事实会继续阻止新的写入，Core 重启、租约到期或本地 SSH 关闭都不等于远端写入已经停止。管理员必须先暂停任务并确认远端及外部写入者停止，再按[显式人工协调流程](backup-recovery.md#显式人工协调)处理指定 TaskRun。完整调度合同见[任务执行与恢复](../spec/domains/task-execution-recovery.md)。
 
 ## 事件类型
 
 | event_type | 说明 | 可过滤字段 | 当前触发来源 |
 |---|---|---|---|
 | `anomaly_detected` | 异常事件产生 | `detector`, `metric`, `severity`, `node_id` | 异常检测器写入 `anomaly_events` 后触发 |
-| `backup_failed` | 备份任务失败 | `policy_id`, `node_id`, `executor_type`, `task_id`, `task_run_id` | 任务执行失败时触发 |
-| `backup_succeeded` | 备份任务成功 | `policy_id`, `node_id`, `executor_type`, `task_id`, `task_run_id` | 任务执行成功时触发 |
-| `drill_failed` | 恢复演练失败 | `policy_id`, `task_run_id` | 恢复演练失败时触发 |
+| `backup_failed` | 策略关联普通任务失败 | `policy_id`, `node_id`, `executor_type`, `task_id`, `task_run_id`, `status` | 关联策略的普通运行最终失败时产生；等待重试的中间失败不立即产生 |
+| `backup_succeeded` | 策略关联普通任务成功 | `policy_id`, `node_id`, `executor_type`, `task_id`, `task_run_id`, `status` | 关联策略的普通运行成功时产生；事件名本身不等于已有可信恢复点 |
+| `drill_failed` | 恢复演练失败 | `policy_id`, `task_run_id` | 已定义事件；当前生产恢复演练不可执行，不应依赖它触发新动作 |
 | `node_offline` | 节点离线 | `node_id` | 可创建规则的预留事件类型；当前节点探测路径未主动派发该事件 |
 | `node_disk_high` | 节点磁盘使用率过高 | `node_id` | 可创建规则的预留事件类型；当前节点探测路径未主动派发该事件 |
 
@@ -52,13 +52,15 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 
 ## 模板变量
 
-动作配置支持 Go template 风格变量：
+动作配置支持 `{{.字段名}}` 字符串替换，字段名区分大小写，必须与事件上下文一致；这不是完整的 Go template 表达式引擎。缺失变量保持原样，不能当作可用资源 ID：
 
 | 变量 | 说明 | 适用事件 |
 |---|---|---|
-| `{{.PolicyID}}` | 事件中的策略 ID | `backup_failed`, `backup_succeeded`, `drill_failed` |
-| `{{.TaskID}}` | 事件中的任务 ID | `backup_failed`, `backup_succeeded` |
-| `{{.NodeID}}` | 事件中的节点 ID | `node_offline`, `node_disk_high`, `backup_failed`, `backup_succeeded` |
+| `{{.policy_id}}` | 事件中的策略 ID；任务须关联策略 | `backup_failed`, `backup_succeeded`, `drill_failed` |
+| `{{.task_id}}` | 事件中的任务 ID | `backup_failed`, `backup_succeeded` |
+| `{{.node_id}}` | 事件中的节点 ID | `anomaly_detected`, `backup_failed`, `backup_succeeded`；预留节点事件需实际派发上下文 |
+
+`anomaly_detected` 不包含 `policy_id`。针对异常暂停某个策略时，必须显式填入经确认的策略 ID，并按节点等条件限制匹配范围。
 
 ## Web UI
 
@@ -85,14 +87,16 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 
 ```json
 {
-  "name": "Ransomware pause policy",
+  "name": "指定节点勒索异常时暂停策略",
   "event_type": "anomaly_detected",
-  "event_filter": { "metric": "ransomware_pattern" },
+  "event_filter": "{\"metric\":\"ransomware_pattern\",\"node_id\":\"5\"}",
   "action_type": "pause_policy",
-  "action_config": { "policy_id": "{{.PolicyID}}" },
+  "action_config": "{\"policy_id\":\"12\"}",
   "enabled": true
 }
 ```
+
+`event_filter` 和 `action_config` 的 API 类型都是 JSON 对象编码后的字符串。示例中的节点 `5` 和策略 `12` 必须替换为实际 ID。
 
 ## 示例
 
@@ -100,9 +104,9 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 
 ```text
 事件：anomaly_detected
-过滤：{ "metric": "ransomware_pattern" }
+过滤：{ "metric": "ransomware_pattern", "node_id": "5" }
 动作：pause_policy
-动作配置：{ "policy_id": "{{.PolicyID}}" }
+动作配置：{ "policy_id": "12" }
 ```
 
 ### 备份失败时记录通知消息
@@ -110,7 +114,7 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 ```text
 事件：backup_failed
 动作：send_notification
-动作配置：{ "message": "Backup failed for policy {{.PolicyID}} on node {{.NodeID}}" }
+动作配置：{ "message": "节点 {{.node_id}} 的任务 {{.task_id}} 备份失败" }
 ```
 
 ### 预留磁盘事件触发清理任务
