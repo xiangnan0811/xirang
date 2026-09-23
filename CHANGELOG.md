@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.19](https://github.com/xiangnan0811/xirang/compare/v0.55.18...v0.55.19) (2026-09-23)
+
+
+### 🐛 Bug Fixes
+
+* **docs:** repair staged migration and documentation gates ([#549](https://github.com/xiangnan0811/xirang/issues/549)) ([bd8653d](https://github.com/xiangnan0811/xirang/commit/bd8653d6a60ab50af31e4e237aead4aebaf64b54))
+
 ## [0.55.18](https://github.com/xiangnan0811/xirang/compare/v0.55.17...v0.55.18) (2026-09-19)
 
 
