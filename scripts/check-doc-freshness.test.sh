@@ -21,11 +21,12 @@ git -C "$WORK" config user.email fixture@example.invalid
 git -C "$WORK" add .
 git -C "$WORK" -c core.hooksPath=/dev/null commit -qm initial
 git -C "$WORK" -c core.hooksPath=/dev/null commit --allow-empty -qm baseline
+git -C "$WORK" update-ref refs/remotes/origin/fixture-base HEAD
 
 run_case() {
   local label="$1" changed="$2" expected="$3" path out staged hook_output status
   # reset/clean 仅操作本测试创建的临时仓库。
-  git -C "$WORK" reset --hard -q HEAD
+  git -C "$WORK" reset --hard -q origin/fixture-base
   git -C "$WORK" clean -fdq
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
@@ -67,13 +68,17 @@ run_case() {
   fi
   # 对可组成完整文档树的候选实际跑 CI 入口，并比较相同主题提醒。
   if [[ "$label" != *old* ]]; then
-    local ci_output
-    ci_output="$(cd "$WORK" && bash scripts/check-doc-freshness.sh)"
-    if [[ "$expected" == warn ]]; then
-      grep -q '⚠️' <<<"$ci_output" || { echo "FAIL[$label] CI 提醒缺失"; exit 1; }
-    else
-      ! grep -q '⚠️' <<<"$ci_output" || { echo "FAIL[$label] CI 提醒漂移"; exit 1; }
-    fi
+    git -C "$WORK" -c core.hooksPath=/dev/null commit -qm "$label"
+    local ci_output ci_base
+    # 显式覆盖宿主 PR 环境；分别验证本地回退和 fixture 自己的远端基线。
+    for ci_base in '' fixture-base; do
+      ci_output="$(cd "$WORK" && GITHUB_BASE_REF="$ci_base" bash scripts/check-doc-freshness.sh)"
+      if [[ "$expected" == warn ]]; then
+        grep -q '⚠️' <<<"$ci_output" || { echo "FAIL[$label/$ci_base] CI 提醒缺失"; exit 1; }
+      else
+        ! grep -q '⚠️' <<<"$ci_output" || { echo "FAIL[$label/$ci_base] CI 提醒漂移"; exit 1; }
+      fi
+    done
   fi
   echo "OK[$label]"
 }
@@ -102,7 +107,7 @@ run_case dockerhub-synced $'.github/workflows/dockerhub-description.yml\ndocs/ma
 run_case release-verifier-missing $'scripts/verify-release-ci.mjs' warn
 run_case release-verifier-synced $'scripts/verify-release-ci.mjs\ndocs/maintainers/release.md' clean
 run_case unrelated $'docs/env-vars.md' clean
-git -C "$WORK" reset --hard -q HEAD
+git -C "$WORK" reset --hard -q origin/fixture-base
 git -C "$WORK" clean -fdq
 printf '# 环境变量\n' >"$WORK/docs/env-vars.md"
 git -C "$WORK" add .
