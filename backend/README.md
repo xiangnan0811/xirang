@@ -16,7 +16,8 @@
 | [cmd/server/main.go](cmd/server/main.go) | 服务启动及依赖装配 |
 | [internal/api/router.go](internal/api/router.go) | 真实路由与中间件注册 |
 | [internal/api/handlers](internal/api/handlers/AGENTS.md) | 请求绑定、领域服务调用及响应 |
-| [internal/model/models.go](internal/model/models.go) | 共享模型与模型 hooks |
+| [internal/model/models.go](internal/model/models.go) | 模型分领域文件索引 |
+| [internal/model/node.go](internal/model/node.go) | Node 模型、GORM tags、脱敏方法与模型 hooks 示例 |
 | [internal/database/database.go](internal/database/database.go) | SQLite/PostgreSQL 连接与时间语义 |
 | [internal/database/migrator.go](internal/database/migrator.go) | 内嵌 SQL 迁移与启动准入 |
 | [internal/settings/service.go](internal/settings/service.go) | 动态设置注册、覆盖和缓存 |

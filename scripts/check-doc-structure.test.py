@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """以独立 Git fixture 验证文档检查，不依赖当前工作区的完整程度。"""
 import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -8,6 +9,11 @@ import unittest
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+
+# Fixture Git commands must never inherit the parent hook index/worktree.
+for key in list(os.environ):
+    if key.startswith("GIT_") or key == "GITHUB_BASE_REF":
+        os.environ.pop(key)
 
 spec = importlib.util.spec_from_file_location("doc_structure", Path(__file__).with_name("check-doc-structure.py"))
 module = importlib.util.module_from_spec(spec)
@@ -44,6 +50,41 @@ class StructureTest(unittest.TestCase):
     def test_empty_directory(self):
         (self.root / "docs/empty").mkdir()
         self.assert_problem("缺少 README.md")
+
+    def test_docs_root_still_requires_readme_when_ignored(self):
+        self.write(".gitignore", "docs/\n")
+        (self.root / "docs/README.md").unlink()
+        self.assert_problem("docs: 缺少 README.md")
+
+    def test_ignored_directory_is_skipped(self):
+        self.write(".gitignore", "docs/private/\n")
+        self.write("docs/private/secret.md", "# 私有材料\n")
+        self.assertEqual(module.check(self.root), [])
+
+    def test_tracked_document_in_ignored_directory_still_requires_readme(self):
+        self.write(".gitignore", "docs/private/\n")
+        self.write("docs/private/contract.md", "# 合同\n")
+        subprocess.run(
+            ["git", "-C", str(self.root), "add", "-f", "--", "docs/private/contract.md"],
+            check=True,
+        )
+        self.assert_problem("docs/private: 缺少 README.md")
+
+        self.write(
+            "docs/README.md",
+            "# 文档\n\n[合同](spec/README.md)\n[私有合同](private/README.md)\n",
+        )
+        self.write("docs/private/README.md", "# 私有合同\n\n[合同正文](contract.md)\n")
+        subprocess.run(
+            ["git", "-C", str(self.root), "add", "-f", "--", "docs/private/README.md"],
+            check=True,
+        )
+        self.assertEqual(module.check(self.root), [])
+
+    def test_ignored_empty_directory_is_skipped(self):
+        self.write(".gitignore", "docs/private/\n")
+        (self.root / "docs/private/empty").mkdir(parents=True)
+        self.assertEqual(module.check(self.root), [])
 
     def test_broken_relative_link(self):
         self.write("docs/spec/rules.md", "# 规则\n[坏链接](missing.md)\n")

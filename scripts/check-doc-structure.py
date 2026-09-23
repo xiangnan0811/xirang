@@ -63,6 +63,38 @@ def check(root):
     ).decode().split("\0")
     files = sorted({root / p for p in paths if p and (root / p).is_file()})
     errors = []
+    docs_root = root / "docs"
+    visible_doc_directories = set()
+    for path in files:
+        if path.is_relative_to(docs_root):
+            directory = path.parent
+            while directory.is_relative_to(docs_root):
+                visible_doc_directories.add(directory)
+                if directory == docs_root:
+                    break
+                directory = directory.parent
+    directories = [docs_root, *[
+        directory for directory in docs_root.rglob("*") if directory.is_dir()
+    ]]
+    ignored_directories = set()
+    if directories:
+        directory_paths = [
+            (directory.relative_to(root).as_posix() + "/")
+            for directory in directories
+        ]
+        result = subprocess.run(
+            ["git", "-C", str(root), "check-ignore", "--stdin", "-z"],
+            input="\0".join(directory_paths).encode(),
+            capture_output=True,
+        )
+        if result.returncode in (0, 1):
+            ignored_directories = set(result.stdout.decode().split("\0")) - {""}
+        else:
+            detail = result.stderr.decode(errors="replace").strip()
+            errors.append(
+                f"docs/: git check-ignore 失败"
+                f"{': ' + detail if detail else f'（退出码 {result.returncode}）'}"
+            )
     documents = [p for p in files if p.suffix == ".md" and p.name != "CHANGELOG.md"]
     graph = {p: set() for p in documents}
     retired = re.compile(
@@ -74,11 +106,16 @@ def check(root):
     )
     if (root / "spec").exists():
         errors.append("spec/: 退役根目录仍存在")
-    for directory in [root / "docs", *(root / "docs").rglob("*")]:
-        if not directory.is_dir():
+    for directory in directories:
+        rel = directory.relative_to(root).as_posix()
+        if (
+            directory != docs_root
+            and rel + "/" in ignored_directories
+            and directory not in visible_doc_directories
+        ):
             continue
         if not (directory / "README.md").is_file():
-            errors.append(f"{directory.relative_to(root)}: 缺少 README.md 入口")
+            errors.append(f"{rel}: 缺少 README.md 入口")
     for path in files:
         rel = path.relative_to(root).as_posix()
         if retired.search(rel):
