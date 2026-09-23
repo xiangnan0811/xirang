@@ -53,4 +53,4 @@
 
 Go 导出字段采用 PascalCase；JSON 和数据库字段采用 snake_case。数据库命名、迁移命名及历史兼容由[数据库合同](database-guidelines.md)定义。
 
-可参考 `dashboard_handler.go` 的薄 Handler、`dashboards/service.go` 的验证与事务、`settings/service.go` 的注册表和缓存、`model/models.go` 的 GORM tags、`Sanitized()` 与 hooks。示例是导航，不替代对应领域的授权和状态合同。
+可参考 `dashboard_handler.go` 的薄 Handler、`dashboards/service.go` 的验证与事务、`settings/service.go` 的注册表和缓存、`model/node.go` 的 GORM tags、`Node.Sanitized()` 与 `BeforeSave`/`AfterFind` hooks；`model/models.go` 仅为模型分领域文件索引。示例是导航，不替代对应领域的授权和状态合同。

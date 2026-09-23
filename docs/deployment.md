@@ -439,6 +439,7 @@ schema_migrations.dirty=1
 
 服务启动路径不会自动 `force`、重试 dirty 迁移或在 schema 不完整时继续写入。不要用手工版本号变更掩盖失败迁移。
 
+<a id="utc-时间戳约定"></a>
 ## 数据库时间与迁移开发
 
 数据库时间统一按 UTC 写入；容器 `TZ` 影响定时任务与运维展示，不改变数据库存储合同。新增迁移和 UTC 检查步骤统一见[数据库合同](spec/backend/database-guidelines.md)与[后端入口](../backend/README.md)。

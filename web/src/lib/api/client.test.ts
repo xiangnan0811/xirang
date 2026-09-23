@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "./client";
-import { ApiError, buildLoginRedirectPath, bumpAuthSessionGeneration, fetchWithFallback, isStepUpRequiredError, normalizeRedirectTarget, request } from "./core";
+import { ApiError, buildLoginRedirectPath, bumpAuthSessionGeneration, fetchWithFallback, isCredentialGrantRequiredError, isStepUpRequiredError, normalizeRedirectTarget, request } from "./core";
 import { saveStepUpProof, STEP_UP_ACTIONS } from "@/lib/step-up-storage";
 
 function createMockResponse(status = 200, body = "") {
@@ -118,6 +118,146 @@ describe("request envelope handling", () => {
     await expect(request("/limited")).rejects.toMatchObject({
       status: 429, message: "请求过于频繁", retryAfter: 15,
     });
+  });
+  describe("challenge error classifiers (STEP_UP_REQUIRED and CREDENTIAL_GRANT_REQUIRED)", () => {
+    it("recognizes 403 STEP_UP_REQUIRED only in isStepUpRequiredError", async () => {
+      fetchMock.mockResolvedValueOnce(
+        createMockResponse(
+          403,
+          JSON.stringify({
+            code: 403,
+            message: "需要二次验证",
+            data: { error_code: "STEP_UP_REQUIRED", proof_ttl_seconds: 300 },
+          })
+        )
+      );
+
+      let captured: unknown;
+      try {
+        await request("/protected-action");
+      } catch (error) {
+        captured = error;
+      }
+
+      expect(captured).toBeInstanceOf(ApiError);
+      expect((captured as ApiError).status).toBe(403);
+      expect(isStepUpRequiredError(captured)).toBe(true);
+      expect(isCredentialGrantRequiredError(captured)).toBe(false);
+    });
+
+    it("recognizes 403 CREDENTIAL_GRANT_REQUIRED only in isCredentialGrantRequiredError", async () => {
+      fetchMock.mockResolvedValueOnce(
+        createMockResponse(
+          403,
+          JSON.stringify({
+            code: 403,
+            message: "需要凭据授权",
+            data: { error_code: "CREDENTIAL_GRANT_REQUIRED", grant_scope: "ssh" },
+          })
+        )
+      );
+
+      let captured: unknown;
+      try {
+        await request("/protected-action");
+      } catch (error) {
+        captured = error;
+      }
+
+      expect(captured).toBeInstanceOf(ApiError);
+      expect((captured as ApiError).status).toBe(403);
+      expect(isCredentialGrantRequiredError(captured)).toBe(true);
+      expect(isStepUpRequiredError(captured)).toBe(false);
+    });
+
+    it.each([
+      ["generic error_code", { code: 403, message: "权限不足", data: { error_code: "FORBIDDEN" } }],
+      ["empty data object", { code: 403, message: "权限不足", data: {} }],
+      ["null data object", { code: 403, message: "权限不足", data: null }],
+    ])("rejects ordinary 403 with %s in both classifiers", async (_, payload) => {
+      fetchMock.mockResolvedValueOnce(createMockResponse(403, JSON.stringify(payload)));
+
+      let captured: unknown;
+      try {
+        await request("/protected-action");
+      } catch (error) {
+        captured = error;
+      }
+
+      expect(captured).toBeInstanceOf(ApiError);
+      expect((captured as ApiError).status).toBe(403);
+      expect(isStepUpRequiredError(captured)).toBe(false);
+      expect(isCredentialGrantRequiredError(captured)).toBe(false);
+    });
+
+    it.each(["STEP_UP_REQUIRED", "CREDENTIAL_GRANT_REQUIRED"])(
+      "preserves HTTP-success/code=403 compatibility for %s",
+      async (errorCode) => {
+        fetchMock.mockResolvedValueOnce(
+          createMockResponse(200, JSON.stringify({
+            code: 403, message: "challenge", data: { error_code: errorCode },
+          }))
+        );
+        let captured: unknown;
+        try {
+          await request("/protected-action");
+        } catch (error) {
+          captured = error;
+        }
+        expect(captured).toBeInstanceOf(ApiError);
+        expect(isStepUpRequiredError(captured)).toBe(errorCode === "STEP_UP_REQUIRED");
+        expect(isCredentialGrantRequiredError(captured)).toBe(errorCode === "CREDENTIAL_GRANT_REQUIRED");
+      }
+    );
+
+    it.each([
+      [400, "STEP_UP_REQUIRED"],
+      [400, "CREDENTIAL_GRANT_REQUIRED"],
+    ])("rejects non-403 HTTP failure status %i carrying %s in both classifiers", async (status, errorCode) => {
+      fetchMock.mockResolvedValueOnce(
+        createMockResponse(
+          status,
+          JSON.stringify({
+            code: status,
+            message: "error",
+            data: { error_code: errorCode },
+          })
+        )
+      );
+
+      let captured: unknown;
+      try {
+        await request("/auth/login");
+      } catch (error) {
+        captured = error;
+      }
+
+      expect(captured).toBeInstanceOf(ApiError);
+      expect((captured as ApiError).status).toBe(status);
+      expect(isStepUpRequiredError(captured)).toBe(false);
+      expect(isCredentialGrantRequiredError(captured)).toBe(false);
+    });
+
+    it.each([
+      ["missing data field", JSON.stringify({ code: 403, message: "forbidden" })],
+      ["string data field", JSON.stringify({ code: 403, message: "forbidden", data: "STEP_UP_REQUIRED" })],
+      ["array data field", JSON.stringify({ code: 403, message: "forbidden", data: ["STEP_UP_REQUIRED"] })],
+    ])("rejects 403 response with missing or non-object data (%s) in both classifiers", async (_, body) => {
+      fetchMock.mockResolvedValueOnce(createMockResponse(403, body));
+
+      let captured: unknown;
+      try {
+        await request("/protected-action");
+      } catch (error) {
+        captured = error;
+      }
+
+      expect(captured).toBeInstanceOf(ApiError);
+      expect((captured as ApiError).status).toBe(403);
+      expect(isStepUpRequiredError(captured)).toBe(false);
+      expect(isCredentialGrantRequiredError(captured)).toBe(false);
+    });
+
   });
 
   it("sets Idempotency-Key only when the typed request option is supplied", async () => {
@@ -477,6 +617,38 @@ describe("apiClient 会话跳转", () => {
 
     expect(captured).toBeInstanceOf(ApiError);
     expect(isStepUpRequiredError(captured)).toBe(true);
+    expect(isCredentialGrantRequiredError(captured)).toBe(false);
+    expect(sessionStorage.getItem("xirang-auth-token")).toBe("token-1");
+    expect(sessionStorage.getItem("xirang-step-up-proof")).toBe("proof-1");
+    expect(window.location.href).toBe(originalHref);
+  });
+
+  it("CREDENTIAL_GRANT_REQUIRED 可被识别且不会触发会话过期跳转", async () => {
+    sessionStorage.setItem("xirang-auth-token", "token-1");
+    sessionStorage.setItem("xirang-step-up-proof", "proof-1");
+    sessionStorage.setItem("xirang-step-up-expires-at", String(Date.now() + 60_000));
+    const originalHref = window.location.href;
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(
+        403,
+        JSON.stringify({
+          code: 403,
+          message: "需要凭据授权",
+          data: { error_code: "CREDENTIAL_GRANT_REQUIRED", grant_scope: "ssh" },
+        })
+      )
+    );
+
+    let captured: unknown;
+    try {
+      await apiClient.triggerTask("token-task", 101);
+    } catch (error) {
+      captured = error;
+    }
+
+    expect(captured).toBeInstanceOf(ApiError);
+    expect(isCredentialGrantRequiredError(captured)).toBe(true);
+    expect(isStepUpRequiredError(captured)).toBe(false);
     expect(sessionStorage.getItem("xirang-auth-token")).toBe("token-1");
     expect(sessionStorage.getItem("xirang-step-up-proof")).toBe("proof-1");
     expect(window.location.href).toBe(originalHref);

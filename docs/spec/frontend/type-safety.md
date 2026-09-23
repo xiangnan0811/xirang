@@ -17,9 +17,11 @@ TypeScript 静态检查不能证明网络数据可信。跨模块领域类型放
 
 ## 响应信封与限流
 
-成功信封为 `{ code: 0 | <HTTP 状态码>, message: string, data: T }`；错误信封为 `{ code: number, message: string, data?: unknown }`。普通 JSON 包装不可绕过中心请求边界。
+服务端标准信封为 `{ code: <HTTP 状态码>, message: string, data: T }`；错误信封为 `{ code: number, message: string, data?: unknown }`，生产者要求见[后端错误处理](../backend/error-handling.md#响应与错误归属)。普通 JSON 包装不可绕过中心请求边界。
 
-| 响应 | 结果 |
+客户端额外接受 HTTP 成功且 `code=0` 的兼容响应；这是消费者兼容行为，不授权新 handler 返回 `code=0`。
+
+| 响应 | 客户端消费者行为 |
 |---|---|
 | HTTP 成功，`code=0` | 返回 `data` |
 | HTTP 成功，`code` 等于 HTTP 状态码（如 201） | 返回 `data` |
@@ -45,7 +47,8 @@ TypeScript 静态检查不能证明网络数据可信。跨模块领域类型放
 
 | 修改主题 | 唯一主文 |
 |---|---|
-| Doctor、临时凭据授权、SSH key scope、安全风险摘要与 CAPTCHA | [凭据与访问](../domains/credentials-access.md) |
+| Doctor | [告警与健康：SSH Fleet Doctor](../domains/alerting-health.md#ssh-fleet-doctor) |
+| 临时凭据授权、SSH key scope、安全风险摘要与 CAPTCHA | [凭据与访问](../domains/credentials-access.md) |
 | 演练摘要、完整 task-run evidence 与 trigger type | [任务执行与恢复](../domains/task-execution-recovery.md) |
 | 备份可信度、健康事件时间线、告警与指标 | [告警与健康](../domains/alerting-health.md) |
 | Rsync CAS 字符串、Rclone mode/profile/KMS 闭合摘要 | [备份仓库与发布](../domains/backup-repository.md) |

@@ -10,6 +10,8 @@
 
 Handler 使用 `respondOK`、`respondCreated`、`respondAccepted`、`respondMessage`、`respondPaginated` 及对应错误辅助函数，不临时构造 `c.JSON` map。需要新状态时先扩展命名辅助函数和响应测试。分页响应另含 `total`、`page`、`page_size`。
 
+客户端额外容忍 `code=0` 不改变服务端标准，也不授权新 handler 返回 0；参见[客户端兼容行为](../frontend/type-safety.md#响应信封与限流)。
+
 领域服务返回错误，由 Handler 决定 HTTP 映射。需要稳定分类时定义 sentinel，通过 `errors.Is` / `errors.As` 判断；添加上下文用 `%w`，多个失败用 `errors.Join` 保留原始身份。数据库未找到用 `errors.Is(err, gorm.ErrRecordNotFound)` 识别。可向用户解释的校验错误才映射为安全的 400 消息。
 
 常见流程是 `parseID` → `ShouldBindJSON` → 领域校验 → 服务/查询 → 错误映射 → 响应。检查数据库的 `.Error`，条件写入还要检查 `RowsAffected`；不能把零行更新当成已成功执行状态转换。
@@ -54,3 +56,5 @@ Handler 使用 `respondOK`、`respondCreated`、`respondAccepted`、`respondMess
 ## 领域错误
 
 凭据、Doctor、登录挑战、任务恢复、健康查询及备份资产的具体错误码、授权掩蔽、补偿和状态要求统一见[领域合同](../domains/README.md)。通用响应约定不能放宽领域的闭合错误码、无泄漏和失败关闭要求。
+
+二次验证与临时凭据授权挑战的机器协议统一见[按操作绑定的 step-up](../domains/credentials-access.md#按操作绑定的-step-up)，不从普通 403 推断挑战类型。

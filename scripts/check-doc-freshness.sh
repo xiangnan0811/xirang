@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 主题同步为 CI 提醒、hook 阻断；结构和迁移始终阻断。
+# --staged 仅执行主题同步门禁；普通模式阻断迁移版本/文档结构，主题同步只提醒。
 set -euo pipefail
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/doc-freshness-rules.sh"
@@ -27,5 +27,5 @@ if (( DOC_FRESHNESS_WARNINGS > 0 )); then
   echo "文档同步提醒：${DOC_FRESHNESS_WARNINGS} 项，请核对对应主题。"
   [[ "${1:-}" != "--staged" ]] || exit 1
 else
-  echo "✅ 文档新鲜度检查通过"
+  echo "未发现缺少必需主题文档的路径信号；导航提醒仍需人工核对"
 fi

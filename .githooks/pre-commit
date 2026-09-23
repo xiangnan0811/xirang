@@ -10,6 +10,46 @@ bash "$FAST_CHECK"
 bash "$REPO_ROOT/scripts/check-doc-freshness.sh" --staged
 
 if grep -qE '^backend/internal/database/migrations/.*\.sql$' <<<"$STAGED"; then
-  bash "$REPO_ROOT/scripts/check-migration-version.sh"
-  bash "$REPO_ROOT/scripts/check-migration-utc-safety.sh"
+  snapshot="$(mktemp -d /tmp/xirang-migration-index.XXXXXX)"
+  trap 'rm -rf -- "$snapshot"' EXIT
+  mkdir -p "$snapshot/tree"
+
+  if ! git -C "$REPO_ROOT" ls-files --stage -z -- \
+    backend/README.md \
+    backend/internal/database/migrations/sqlite \
+    backend/internal/database/migrations/postgres >"$snapshot/index"; then
+    echo "[FAIL] 无法读取 staged migration index entries" >&2
+    exit 1
+  fi
+
+  : >"$snapshot/paths"
+  while IFS= read -r -d '' record; do
+    if [[ "$record" != *$'\t'* ]]; then
+      echo "[FAIL] staged migration index entry is malformed" >&2
+      exit 1
+    fi
+    metadata="${record%%$'\t'*}"
+    path="${record#*$'\t'}"
+    IFS=' ' read -r mode object stage <<<"$metadata"
+    if [[ -z "$path" || -z "$mode" || -z "$object" || -z "$stage" ]]; then
+      echo "[FAIL] staged migration index entry is incomplete: $path" >&2
+      exit 1
+    fi
+    if [[ "$stage" != 0 || ( "$mode" != 100644 && "$mode" != 100755 ) ]]; then
+      echo "[FAIL] unsupported staged migration index entry (mode=$mode stage=$stage): $path" >&2
+      exit 1
+    fi
+    printf '%s\0' "$path" >>"$snapshot/paths"
+  done <"$snapshot/index"
+
+  if ! git -C "$REPO_ROOT" checkout-index --prefix="$snapshot/tree/" -z --stdin <"$snapshot/paths"; then
+    echo "[FAIL] 无法导出 staged migration index snapshot" >&2
+    exit 1
+  fi
+
+  MIGRATION_FRESHNESS_ROOT="$snapshot/tree" \
+    MIGRATION_FRESHNESS_README="$snapshot/tree/backend/README.md" \
+    bash "$REPO_ROOT/scripts/check-migration-version.sh"
+  MIGRATION_LINT_ROOT="$snapshot/tree" \
+    bash "$REPO_ROOT/scripts/check-migration-utc-safety.sh"
 fi

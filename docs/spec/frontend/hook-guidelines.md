@@ -7,7 +7,7 @@ Hook 用于复用界面状态、请求编排、操作封装、偏好、过滤、
 - Hook 使用 `use*` 名称，按[目录结构](directory-structure.md)存放。
 - 纯函数与 React 生命周期分离，例如 `use-console-data.utils.ts`。不要为了省略属性传递，把不相关领域塞入一个 Hook。
 - 写操作提供稳定动作函数与一致 loading/error 状态，参考 `use-api-action.ts`。按操作域拆分，参考 `use-console-node-operations.ts`、`use-console-policy-operations.ts`、`use-console-task-operations.ts` 和 `use-console-integration-alert-operations.ts`。
-- 偏好持久化复用 `usePersistentState`、`useUserPreferences`；行为适配时复用 `usePageFilters`。
+- 偏好持久化复用 `usePersistentState`，用户偏好使用 `use-user-preferences.ts` 导出的 `useRefreshInterval`、`useDefaultPageSize`、`useDatetimeFormat`；行为适配时复用 `usePageFilters`。
 
 ## 请求与副作用
 
