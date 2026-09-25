@@ -1,5 +1,5 @@
 import { createContext } from "react";
-import type { NewNodeInput, NodeRecord } from "@/types/domain";
+import type { NewNodeInput, NodeConnectionProbeOutcome, NodeRecord } from "@/types/domain";
 
 export interface NodesContextValue {
   nodes: NodeRecord[];
@@ -11,7 +11,7 @@ export interface NodesContextValue {
   updateNode: (nodeId: number, input: NewNodeInput) => Promise<void>;
   deleteNode: (nodeId: number) => Promise<void>;
   deleteNodes: (nodeIds: number[]) => Promise<{ deleted: number; notFoundIds: number[] }>;
-  testNodeConnection: (nodeId: number) => Promise<{ ok: boolean; message: string }>;
+  testNodeConnection: (nodeId: number) => Promise<NodeConnectionProbeOutcome>;
   triggerNodeBackup: (nodeId: number) => Promise<void>;
 };
 

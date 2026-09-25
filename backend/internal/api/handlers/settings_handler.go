@@ -997,7 +997,13 @@ func (h *SettingsHandler) sshHostKeyTrustPostureRiskItem() securityRiskItem {
 	} else if !strictHostCheck {
 		examples = append(examples, "SSH 主机密钥校验已关闭")
 	} else {
-		autoAccept, autoAcceptErr := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
+		var autoAccept bool
+		var autoAcceptErr error
+		if h.svc != nil {
+			autoAccept, autoAcceptErr = sshutil.ParseAutoAcceptNewHosts(h.svc.GetEffective(sshutil.AutoAcceptNewHostsSettingKey))
+		} else {
+			autoAccept, autoAcceptErr = sshutil.AutoAcceptNewHosts()
+		}
 		if autoAcceptErr != nil {
 			examples = append(examples, "SSH 自动接受未知主机密钥配置值无效")
 		} else if autoAccept {

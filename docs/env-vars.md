@@ -75,9 +75,9 @@
 |------|------|--------|------|------|
 | `SSH_STRICT_HOST_KEY_CHECKING` | bool | `true` | 否 | 严格校验远端主机指纹，配合 known_hosts 校验主机指纹（生产建议 `true`） |
 | `SSH_KNOWN_HOSTS_PATH` | string | `~/.ssh/known_hosts` | 否 | known_hosts 文件路径 |
-| `SSH_AUTO_ACCEPT_NEW_HOSTS` | bool | `false` | 否 | 是否自动接受首次出现的主机指纹并写入 known_hosts（设为 `true` 可启用，生产建议 `false`） |
+| `SSH_AUTO_ACCEPT_NEW_HOSTS` | bool | `false` | 否 | 是否自动接受首次出现的主机指纹并写入 known_hosts（settings 键 `ssh.auto_accept_new_hosts`，可在 系统设置 → 安全 实时调整，DB 值优先；生产建议 `false`） |
 
-**读取位置**：`backend/internal/sshutil/ssh_auth.go` 和 `backend/internal/task/executor/executor.go`。All-in-One 镜像默认将 `SSH_KNOWN_HOSTS_PATH` 设为 `/data/.ssh/known_hosts`，使自动接受的新主机指纹随数据卷持久化。
+**读取位置**：`backend/internal/sshutil/ssh_auth.go`（`SSH_STRICT_HOST_KEY_CHECKING`、`SSH_KNOWN_HOSTS_PATH`，以及未安装 settings 取值源时的 `SSH_AUTO_ACCEPT_NEW_HOSTS` 回退）和 `backend/internal/task/executor/executor.go`；运行时自动接受由 settings 服务 `ssh.auto_accept_new_hosts` 决定。All-in-One 镜像默认将 `SSH_KNOWN_HOSTS_PATH` 设为 `/data/.ssh/known_hosts`，使信任或自动接受的主机指纹随数据卷持久化。
 
 ## 备份与执行
 

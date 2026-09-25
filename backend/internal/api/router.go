@@ -614,6 +614,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.PUT("/nodes/:id", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Update)
 	secured.DELETE("/nodes/:id", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Delete)
 	secured.POST("/nodes/:id/test-connection", middleware.RBAC("nodes:test"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.TestConnection)
+	secured.POST("/nodes/:id/trust-host-key", middleware.RequireRole("admin"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.TrustHostKey)
 	secured.POST("/nodes/:id/doctor", middleware.RBAC("nodes:test"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.RunDoctor)
 	secured.GET("/nodes/:id/metrics", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Metrics)
 	nodeMetricsHandler := handlers.NewNodeMetricsHandler(dep.DB)

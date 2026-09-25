@@ -49,6 +49,33 @@ func TestRsyncTreeCommandScrubsTransferAffectingEnvironment(t *testing.T) {
 	}
 }
 
+func TestBuildRsyncTreeCommandRemoteTransportNeverLetsOpenSSHWriteKnownHosts(t *testing.T) {
+	command, err := BuildRsyncTreeCommand(RsyncTreeCommandInput{
+		Mode: backupasset.PublicationVersionedFullCopy,
+		Source: RsyncTreeCommandSource{Remote: &RsyncTreeRemoteSource{
+			User: "backup", Host: "node.example", Path: "/data",
+			Transport: RsyncTreeSSHTransport{Port: 2222, HostKeyMode: RsyncTreeHostKeyStrict, KnownHostsFile: "/private/known_hosts"},
+		}},
+		StagingTree: "/private/managed/staging/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/tree",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := ""
+	for index, argument := range command.Args {
+		if argument == "-e" && index+1 < len(command.Args) {
+			transport = command.Args[index+1]
+		}
+	}
+	// Strict checking alone still lets OpenSSH append server-announced keys
+	// after authentication when UpdateHostKeys is enabled in ssh config.
+	for _, required := range []string{"StrictHostKeyChecking=yes", "UpdateHostKeys=no", "UserKnownHostsFile=/private/known_hosts", "-p 2222"} {
+		if !strings.Contains(transport, required) {
+			t.Fatalf("remote transport %q lacks %q", transport, required)
+		}
+	}
+}
+
 func TestBuildRsyncTreeCommandKeepsRootSourceAsSingleSlash(t *testing.T) {
 	command, err := BuildRsyncTreeCommand(RsyncTreeCommandInput{
 		Mode:        backupasset.PublicationVersionedFullCopy,

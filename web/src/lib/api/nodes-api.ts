@@ -1,4 +1,4 @@
-import type { NewNodeInput, NodeDoctorCheckStatus, NodeDoctorResult, NodeRecord, NodeStatus } from "@/types/domain";
+import type { NewNodeInput, NodeDoctorCheckStatus, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, NodeStatus } from "@/types/domain";
 import { parseNumericId, request, formatTime } from "./core";
 import { finiteNumber } from "./number-utils";
 
@@ -38,6 +38,11 @@ type TestNodeResponse = {
   latency_ms?: number;
   disk_used_gb?: number;
   disk_total_gb?: number;
+  error_code?: string;
+  host_key?: {
+    algorithm?: string;
+    fingerprint_sha256?: string;
+  };
 };
 
 type NodeDoctorCheckResponse = {
@@ -70,6 +75,8 @@ export type NodeConnectionTestResult = {
   latencyMs?: number;
   diskUsedGb?: number;
   diskTotalGb?: number;
+  errorCode?: NodeHostKeyIssueCode;
+  hostKey?: NodeHostKeyInfo;
 };
 
 export type EmergencyBackupResult = {
@@ -155,6 +162,25 @@ function mapNodeDoctorResult(row: NodeDoctorResponse): NodeDoctorResult {
 }
 
 export const __test__ = { mapNodeDoctorResult, mapNode };
+
+function isHostKeyIssueCode(value: unknown): value is NodeHostKeyIssueCode {
+  return value === "ssh_host_key_unknown" || value === "ssh_host_key_mismatch";
+}
+
+function mapHostKeyIssue(row: TestNodeResponse | null | undefined): Pick<NodeConnectionTestResult, "errorCode" | "hostKey"> {
+  const fingerprint = row?.host_key?.fingerprint_sha256;
+  if (!isHostKeyIssueCode(row?.error_code) || typeof fingerprint !== "string" || fingerprint.length === 0) {
+    return {};
+  }
+  const algorithm = row.host_key?.algorithm;
+  return {
+    errorCode: row.error_code,
+    hostKey: {
+      algorithm: typeof algorithm === "string" ? algorithm : "",
+      fingerprintSha256: fingerprint,
+    },
+  };
+}
 
 export function createNodesApi() {
   return {
@@ -255,6 +281,28 @@ export function createNodesApi() {
         latencyMs: row?.latency_ms,
         diskUsedGb: row?.disk_used_gb,
         diskTotalGb: row?.disk_total_gb,
+        ...mapHostKeyIssue(row),
+      };
+    },
+
+    async trustNodeHostKey(
+      token: string,
+      nodeId: number,
+      fingerprintSha256: string,
+    ): Promise<{ alreadyTrusted: boolean; algorithm: string; fingerprintSha256: string }> {
+      const row = await request<{
+        already_trusted?: boolean;
+        algorithm?: string;
+        fingerprint_sha256?: string;
+      }>(`/nodes/${nodeId}/trust-host-key`, {
+        method: "POST",
+        token,
+        body: { fingerprint_sha256: fingerprintSha256 },
+      });
+      return {
+        alreadyTrusted: Boolean(row?.already_trusted),
+        algorithm: typeof row?.algorithm === "string" ? row.algorithm : "",
+        fingerprintSha256: typeof row?.fingerprint_sha256 === "string" ? row.fingerprint_sha256 : "",
       };
     },
 

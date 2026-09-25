@@ -38,11 +38,11 @@ SSH_KNOWN_HOSTS_PATH=/data/.ssh/known_hosts
 
 含义：
 
-- 首次连接未知主机时拒绝连接；先通过独立可信渠道核验主机指纹，再预置 known_hosts。
-- 已知主机指纹变化时拒绝连接，避免中间人攻击。
+- 首次连接未知主机时拒绝连接。节点页「测试连接」（含保存后的自动测试）会弹窗显示服务器算法与 SHA256 指纹；通过独立可信渠道（如在服务器控制台执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`）核对一致后，管理员可点击「信任并重试」写入 known_hosts。服务端确认时只读取主机密钥，不向未信任主机发送凭据；指纹与弹窗时不一致会拒绝写入。非管理员只能看到指纹并联系管理员。也可以继续手工预置 known_hosts。
+- 已知主机指纹变化时拒绝连接，避免中间人攻击。页面只显示安全警告，不提供一键覆盖；核实服务器确已重装后，由管理员手工更新 known_hosts。
 - All-in-One 镜像默认把 known_hosts 放在 `/data` 下，随数据卷持久化。
 
-只有明确接受首次连接信任风险时，才设置 `SSH_AUTO_ACCEPT_NEW_HOSTS=true`。此选项会自动记录未知主机密钥，但不会允许已知主机密钥变化；`strict=true` 本身不代表首连身份已经人工核验。
+只有明确接受首次连接信任风险时，才开启「自动接受新主机密钥」：在 系统设置 → 安全 修改 `ssh.auto_accept_new_hosts`，保存后立即生效，无需重启；未在页面设置时回退 `SSH_AUTO_ACCEPT_NEW_HOSTS`（默认 `false`）。此选项会自动记录未知主机密钥，但不会允许已知主机密钥变化；`strict=true` 本身不代表首连身份已经人工核验。`SSH_STRICT_HOST_KEY_CHECKING` 仍只能通过环境变量设置。rsync 类任务调用的 OpenSSH 始终使用 `StrictHostKeyChecking=yes` 与 `UpdateHostKeys=no`，自身不写 known_hosts；开启自动接受时，Xirang 在执行前沿用同一 ssh 路由（包括 `~/.ssh/config` 中的 ProxyJump/ProxyCommand）做一次不提交任何凭据的探测并统一登记，以保证同一主机不会记录两把不同密钥。该保证只覆盖 Xirang 自身的写入，请避免在服务运行、备份执行期间手工改写 known_hosts。
 
 ## Webhook / 通知 SSRF 防护
 

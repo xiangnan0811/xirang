@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1192,6 +1193,81 @@ func TestNodeDoctorRouteRBAC(t *testing.T) {
 	router.ServeHTTP(adminResp, adminReq)
 	if adminResp.Code != http.StatusOK {
 		t.Fatalf("admin 应能访问 Doctor 接口，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
+	}
+}
+
+func TestNodeTrustHostKeyRouteRequiresAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
+	t.Setenv("SSH_KNOWN_HOSTS_PATH", filepath.Join(t.TempDir(), "known_hosts"))
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Alert{}, &model.AuditLog{}, &model.CredentialAuditEvent{}, &model.TokenRevocation{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("node-trust-host-key-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
+	tokens := make(map[string]string, 3)
+	userIDs := make(map[string]uint, 3)
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		user := model.User{Username: "node-trust-host-key-" + role, PasswordHash: "hash-redacted", Role: role}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建 %s 用户失败: %v", role, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s token 失败: %v", role, err)
+		}
+		tokens[role] = token
+		userIDs[role] = user.ID
+	}
+
+	// A closed local port keeps the admin request on the handler's unreachable path.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	node := model.Node{Name: "node-trust-host-key", Host: "127.0.0.1", Port: closedPort, Username: "root", AuthType: "password", BackupDir: "node-trust-host-key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: node.ID, UserID: userIDs["operator"]}).Error; err != nil {
+		t.Fatalf("创建节点 owner 失败: %v", err)
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	do := func(role, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tokens[role])
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		return resp
+	}
+	trustPath := fmt.Sprintf("/api/v1/nodes/%d/trust-host-key", node.ID)
+	trustBody := `{"fingerprint_sha256":"SHA256:AAAA"}`
+	for _, role := range []string{"viewer", "operator"} {
+		if resp := do(role, trustPath, trustBody); resp.Code != http.StatusForbidden {
+			t.Fatalf("%s 不应能信任主机指纹，实际状态码: %d，body=%s", role, resp.Code, resp.Body.String())
+		}
+	}
+	if resp := do("admin", trustPath, trustBody); resp.Code != http.StatusBadGateway {
+		t.Fatalf("admin 应通过权限校验并得到不可达结果，实际状态码: %d，body=%s", resp.Code, resp.Body.String())
+	}
+
+	testPath := fmt.Sprintf("/api/v1/nodes/%d/test-connection", node.ID)
+	if resp := do("operator", testPath, ""); resp.Code != http.StatusOK {
+		t.Fatalf("拥有节点的 operator 应仍能测试连接，实际状态码: %d，body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := do("viewer", testPath, ""); resp.Code != http.StatusForbidden {
+		t.Fatalf("viewer 测试连接权限不应变化，实际状态码: %d，body=%s", resp.Code, resp.Body.String())
 	}
 }
 

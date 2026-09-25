@@ -44,6 +44,7 @@ import (
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/slo"
 	"xirang/backend/internal/snapshot"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
@@ -131,6 +132,9 @@ func main() {
 	defer cronScheduler.Stop()
 
 	settingsSvc := settings.NewService(db)
+	sshutil.SetAutoAcceptNewHostsSource(func() string {
+		return settingsSvc.GetEffective(sshutil.AutoAcceptNewHostsSettingKey)
+	})
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	jwtManager.SetDB(db)
 	escSvc := escalation.NewService(db)

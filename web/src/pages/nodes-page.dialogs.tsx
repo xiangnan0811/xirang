@@ -22,6 +22,7 @@ import {
 import { DockerVolumesPanel } from "@/components/docker-volumes-panel";
 import { FileBrowser } from "@/components/file-browser";
 import { NodeDoctorDialog } from "@/components/node-doctor-dialog";
+import { NodeHostKeyDialog } from "@/components/node-host-key-dialog";
 import { createFilesApi } from "@/lib/api/files-api";
 import type { NodesPageState } from "@/pages/nodes-page.state";
 
@@ -64,6 +65,13 @@ export type NodesPageDialogsProps = Pick<
   | "refreshNodes"
   | "handleSaveNode"
   | "handleTestConnection"
+  | "isAdmin"
+  | "hostKeyIssue"
+  | "hostKeyTrusting"
+  | "hostKeyError"
+  | "trustHostKey"
+  | "openHostKeySettings"
+  | "handleHostKeyOpenChange"
 >;
 
 export function NodesPageDialogs({
@@ -100,6 +108,13 @@ export function NodesPageDialogs({
   refreshNodes,
   handleSaveNode,
   handleTestConnection,
+  isAdmin,
+  hostKeyIssue,
+  hostKeyTrusting,
+  hostKeyError,
+  trustHostKey,
+  openHostKeySettings,
+  handleHostKeyOpenChange,
 }: NodesPageDialogsProps) {
   const { t } = useTranslation();
 
@@ -159,6 +174,17 @@ export function NodesPageDialogs({
         error={doctorError}
         onOpenChange={handleDoctorOpenChange}
         onRun={runDoctorForNode}
+      />
+
+      <NodeHostKeyDialog
+        open={hostKeyIssue !== null}
+        issue={hostKeyIssue}
+        isAdmin={isAdmin}
+        trusting={hostKeyTrusting}
+        error={hostKeyError}
+        onTrust={() => { void trustHostKey(); }}
+        onOpenSettings={openHostKeySettings}
+        onOpenChange={handleHostKeyOpenChange}
       />
 
       {token && canBrowseNodeFiles && fileBrowserNode && (

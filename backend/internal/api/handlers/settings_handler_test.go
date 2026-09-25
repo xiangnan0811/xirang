@@ -2,10 +2,14 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +20,7 @@ import (
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/ssh"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -631,5 +636,61 @@ func TestSettingsUpdateAnomalyEnabledKeepsAnomalyEventsEndpointAvailable(t *test
 	w = doSettingsAnomalySmoke(r, "GET", "/api/v1/anomaly-events", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("anomaly events status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestSSHAutoAcceptSettingOverridesEnvAtRuntime(t *testing.T) {
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	t.Setenv("SSH_KNOWN_HOSTS_PATH", filepath.Join(t.TempDir(), "known_hosts"))
+	db := openSettingsAnomalySmokeDB(t)
+	svc := settings.NewService(db)
+	sshutil.SetAutoAcceptNewHostsSource(func() string { return svc.GetEffective(sshutil.AutoAcceptNewHostsSettingKey) })
+	t.Cleanup(func() { sshutil.SetAutoAcceptNewHostsSource(nil) })
+	handler := NewSettingsHandler(db, svc)
+
+	callback, err := sshutil.ResolveSSHHostKeyCallback()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &net.TCPAddr{IP: net.ParseIP("203.0.113.20"), Port: 22}
+	newKey := func() ssh.PublicKey {
+		public, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, err := ssh.NewPublicKey(public)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	const autoAcceptExample = "SSH 自动接受首次发现的主机密钥"
+
+	if err := callback("before.example.test:22", remote, newKey()); err == nil {
+		t.Fatal("env=false without DB override must reject unknown host keys")
+	}
+	if item := handler.sshHostKeyTrustPostureRiskItem(); item.Count != 0 {
+		t.Fatalf("risk item must be clean before override: %+v", item)
+	}
+
+	if err := svc.Update(sshutil.AutoAcceptNewHostsSettingKey, "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := callback("override.example.test:22", remote, newKey()); err != nil {
+		t.Fatalf("DB override must accept unknown host keys without restart: %v", err)
+	}
+	if item := handler.sshHostKeyTrustPostureRiskItem(); item.Severity != "warning" || len(item.Examples) != 1 || item.Examples[0] != autoAcceptExample {
+		t.Fatalf("risk item must report DB-enabled auto accept: %+v", item)
+	}
+
+	if err := svc.Delete(sshutil.AutoAcceptNewHostsSettingKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := callback("after.example.test:22", remote, newKey()); err == nil {
+		t.Fatal("removing the DB override must restore env=false rejection")
+	}
+	if item := handler.sshHostKeyTrustPostureRiskItem(); item.Count != 0 {
+		t.Fatalf("risk item must be clean after override removal: %+v", item)
 	}
 }

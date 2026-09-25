@@ -9,6 +9,7 @@ import type {
   AlertRecord,
   NewNodeInput,
   NewSSHKeyInput,
+  NodeConnectionProbeOutcome,
   NodeRecord,
   PolicyRecord,
   SSHKeyRecord,
@@ -267,7 +268,7 @@ export function useNodeOperations({
     return { deleted: normalized.length, notFoundIds: [] };
   }, [exec, markInventoryMutated, markTasksMutated, setAlerts, setNodes, setTasks]);
 
-  const testNodeConnection = useCallback(async (nodeID: number): Promise<{ ok: boolean; message: string }> => {
+  const testNodeConnection = useCallback(async (nodeID: number): Promise<NodeConnectionProbeOutcome> => {
     const result = await exec(i18n.t("nodes.actions.testConnection"), (t) => apiClient.testNodeConnection(t, nodeID));
     if (result) {
       if (result.ok) {
@@ -299,7 +300,7 @@ export function useNodeOperations({
               : node
           )
         );
-        return { ok: r.ok, message: r.message };
+        return { ok: r.ok, message: r.message, errorCode: r.errorCode, hostKey: r.hostKey };
       }
       return { ok: false, message: i18n.t("nodes.probeFailed") };
     }

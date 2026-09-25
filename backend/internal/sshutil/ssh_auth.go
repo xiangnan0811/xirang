@@ -1,7 +1,10 @@
 package sshutil
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"log"
@@ -9,8 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xirang/backend/internal/model"
@@ -80,7 +85,191 @@ func credentialFromSSHKey(nodeSSHKeyID *uint, keyID uint) ResolvedCredential {
 	return ResolvedCredential{Kind: "ssh_key", Source: fmt.Sprintf("ssh_key_id=%d", resolvedID), Provider: CredentialProviderLocal, KeyID: &resolvedID}
 }
 
-// ResolveSSHHostKeyCallback returns the host key callback based on env config.
+// AutoAcceptNewHostsSettingKey is the dynamic setting controlling whether
+// unknown SSH host keys are appended to known_hosts on first connection.
+const AutoAcceptNewHostsSettingKey = "ssh.auto_accept_new_hosts"
+
+var autoAcceptNewHostsSource atomic.Pointer[func() string]
+
+// SetAutoAcceptNewHostsSource installs the effective-value reader
+// (settings.Service.GetEffective) at startup; nil restores env fallback.
+func SetAutoAcceptNewHostsSource(source func() string) {
+	if source == nil {
+		autoAcceptNewHostsSource.Store(nil)
+		return
+	}
+	autoAcceptNewHostsSource.Store(&source)
+}
+
+// AutoAcceptNewHosts parses the effective ssh.auto_accept_new_hosts value
+// (DB > SSH_AUTO_ACCEPT_NEW_HOSTS > false). Empty means false.
+func AutoAcceptNewHosts() (bool, error) {
+	var raw string
+	if source := autoAcceptNewHostsSource.Load(); source != nil {
+		raw = (*source)()
+	} else {
+		raw = os.Getenv("SSH_AUTO_ACCEPT_NEW_HOSTS")
+	}
+	return ParseAutoAcceptNewHosts(raw)
+}
+
+// ParseAutoAcceptNewHosts parses a raw ssh.auto_accept_new_hosts value.
+func ParseAutoAcceptNewHosts(raw string) (bool, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(trimmed)
+	if err != nil {
+		return false, errors.New("SSH 自动接受未知主机密钥配置值无效")
+	}
+	return value, nil
+}
+
+// HostKeyErrorKind classifies a rejected SSH host key.
+type HostKeyErrorKind string
+
+const (
+	HostKeyUnknown  HostKeyErrorKind = "unknown"
+	HostKeyMismatch HostKeyErrorKind = "mismatch"
+)
+
+// HostKeyError reports a host key rejected by known_hosts verification. Its
+// message never contains the host name or address.
+type HostKeyError struct {
+	Kind HostKeyErrorKind
+	Key  ssh.PublicKey
+}
+
+func (e *HostKeyError) Error() string {
+	if e.Kind == HostKeyMismatch {
+		return "主机密钥与 known_hosts 记录不一致，已拒绝连接：请先核实服务器是否重装或存在中间人攻击，确认可信后由管理员更新 known_hosts"
+	}
+	return "未知主机密钥被拒绝：请在节点页「测试连接」中核对并信任主机指纹，或由管理员在 系统设置 → 安全 中开启“自动接受新主机密钥”"
+}
+
+// Algorithm returns the presented host key algorithm.
+func (e *HostKeyError) Algorithm() string {
+	if e.Key == nil {
+		return ""
+	}
+	return e.Key.Type()
+}
+
+// Fingerprint returns the presented host key SHA256 fingerprint.
+func (e *HostKeyError) Fingerprint() string {
+	if e.Key == nil {
+		return ""
+	}
+	return ssh.FingerprintSHA256(e.Key)
+}
+
+// knownHostsPathFromEnv resolves SSH_KNOWN_HOSTS_PATH without touching disk.
+func knownHostsPathFromEnv() (string, error) {
+	rawPath := strings.TrimSpace(util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts"))
+	knownHostsPath, err := util.ExpandHomePath(rawPath)
+	if err != nil {
+		return "", fmt.Errorf("解析 SSH_KNOWN_HOSTS_PATH 失败")
+	}
+	if strings.TrimSpace(knownHostsPath) == "" {
+		return "", fmt.Errorf("SSH_KNOWN_HOSTS_PATH 不能为空")
+	}
+	return knownHostsPath, nil
+}
+
+// resolveKnownHostsPath resolves SSH_KNOWN_HOSTS_PATH and ensures the file exists.
+func resolveKnownHostsPath() (string, error) {
+	knownHostsPath, err := knownHostsPathFromEnv()
+	if err != nil {
+		return "", err
+	}
+	if err := ensureKnownHostsFile(knownHostsPath); err != nil {
+		return "", fmt.Errorf("准备 known_hosts 失败")
+	}
+	return knownHostsPath, nil
+}
+
+// knownHostsLookupKey is an all-zero Ed25519 key that never matches a real
+// record; checking it yields the KeyError listing every key recorded for a host.
+var knownHostsLookupKey = func() ssh.PublicKey {
+	key, err := ssh.NewPublicKey(ed25519.PublicKey(make([]byte, ed25519.PublicKeySize)))
+	if err != nil {
+		panic(err)
+	}
+	return key
+}()
+
+// HostKeyAlgorithmsForAddress returns a ClientConfig.HostKeyAlgorithms list
+// that prefers the key types already recorded in known_hosts for address and
+// then offers every other algorithm, mirroring OpenSSH. Without it, a server
+// offering several host keys negotiates Go's default (ECDSA first) and a host
+// recorded with, e.g., its Ed25519 key would be reported as a mismatch. A
+// matching @cert-authority record keeps certificate algorithms first (a CA's
+// own key type says nothing about the server's raw key). It returns nil (Go
+// defaults) when strict checking is off or the host has no record.
+func HostKeyAlgorithmsForAddress(address string) []string {
+	strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
+	if err != nil || !strictHostCheck {
+		return nil
+	}
+	knownHostsPath, err := knownHostsPathFromEnv()
+	if err != nil {
+		return nil
+	}
+	content, err := os.ReadFile(knownHostsPath)
+	if err != nil {
+		return nil
+	}
+	verify, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil
+	}
+	var keyErr *knownhosts.KeyError
+	if !errors.As(verify(address, &net.TCPAddr{IP: net.IPv4zero}, knownHostsLookupKey), &keyErr) || len(keyErr.Want) == 0 {
+		return nil
+	}
+	certAuthorityLines := knownHostsCertAuthorityLines(content)
+	allAlgorithms := slices.Concat(ssh.SupportedAlgorithms().HostKeys, ssh.InsecureAlgorithms().HostKeys)
+	preferred := make([]string, 0, len(allAlgorithms))
+	for _, known := range keyErr.Want {
+		if certAuthorityLines[known.Line] {
+			for _, algorithm := range allAlgorithms {
+				if strings.Contains(algorithm, "-cert-") {
+					preferred = append(preferred, algorithm)
+				}
+			}
+			continue
+		}
+		if known.Key.Type() == ssh.KeyAlgoRSA {
+			preferred = append(preferred, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA)
+			continue
+		}
+		preferred = append(preferred, known.Key.Type())
+	}
+	algorithms := make([]string, 0, len(allAlgorithms))
+	for _, algorithm := range slices.Concat(preferred, allAlgorithms) {
+		if !slices.Contains(algorithms, algorithm) {
+			algorithms = append(algorithms, algorithm)
+		}
+	}
+	return algorithms
+}
+
+// knownHostsCertAuthorityLines returns the 1-based numbers of @cert-authority
+// lines, numbered exactly as knownhosts.KnownKey.Line reports them.
+func knownHostsCertAuthorityLines(content []byte) map[int]bool {
+	lines := make(map[int]bool)
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for lineNumber := 1; scanner.Scan(); lineNumber++ {
+		if fields := strings.Fields(scanner.Text()); len(fields) > 0 && fields[0] == "@cert-authority" {
+			lines[lineNumber] = true
+		}
+	}
+	return lines
+}
+
+// ResolveSSHHostKeyCallback returns the host key callback based on env config
+// and the dynamic ssh.auto_accept_new_hosts setting.
 func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 	strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
 	if err != nil {
@@ -91,16 +280,9 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
 
-	rawPath := strings.TrimSpace(util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts"))
-	knownHostsPath, err := util.ExpandHomePath(rawPath)
+	knownHostsPath, err := resolveKnownHostsPath()
 	if err != nil {
-		return nil, fmt.Errorf("解析 SSH_KNOWN_HOSTS_PATH 失败")
-	}
-	if strings.TrimSpace(knownHostsPath) == "" {
-		return nil, fmt.Errorf("SSH_KNOWN_HOSTS_PATH 不能为空")
-	}
-	if err := ensureKnownHostsFile(knownHostsPath); err != nil {
-		return nil, fmt.Errorf("准备 known_hosts 失败")
+		return nil, err
 	}
 
 	callback, err := knownhosts.New(knownHostsPath)
@@ -110,13 +292,20 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		if callbackErr := callback(hostname, remote, key); callbackErr != nil {
 			var keyErr *knownhosts.KeyError
-			if errors.As(callbackErr, &keyErr) && len(keyErr.Want) == 0 {
-				autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
-				if !autoAccept {
-					return fmt.Errorf("未知主机密钥被拒绝，当前已禁用自动接受(SSH_AUTO_ACCEPT_NEW_HOSTS=false)")
+			if errors.As(callbackErr, &keyErr) {
+				if len(keyErr.Want) > 0 {
+					return &HostKeyError{Kind: HostKeyMismatch, Key: key}
 				}
-				log.Printf("info: 自动接受未知主机密钥并写入 known_hosts；如需禁用可设置 SSH_AUTO_ACCEPT_NEW_HOSTS=false")
-				if appendErr := AppendKnownHost(knownHostsPath, hostname, key); appendErr != nil {
+				autoAccept, autoAcceptErr := AutoAcceptNewHosts()
+				if autoAcceptErr != nil || !autoAccept {
+					return &HostKeyError{Kind: HostKeyUnknown, Key: key}
+				}
+				log.Printf("info: 自动接受未知主机密钥并写入 known_hosts；可在 系统设置 → 安全 中关闭")
+				if _, recordErr := recordNewKnownHost(knownHostsPath, hostname, remote, key); recordErr != nil {
+					var hostKeyErr *HostKeyError
+					if errors.As(recordErr, &hostKeyErr) {
+						return hostKeyErr
+					}
 					return fmt.Errorf("knownhosts: accept new host failed")
 				}
 				refreshedCallback, refreshErr := knownhosts.New(knownHostsPath)
@@ -124,9 +313,6 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 					return fmt.Errorf("加载 known_hosts 失败")
 				}
 				callback = refreshedCallback
-				if verifyErr := callback(hostname, remote, key); verifyErr != nil {
-					return fmt.Errorf("knownhosts: host key verification failed")
-				}
 				return nil
 			}
 			return fmt.Errorf("knownhosts: host key verification failed")
@@ -138,10 +324,11 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 // DialSSH 建立 SSH 连接，支持 context 取消。
 func DialSSH(ctx context.Context, addr, user string, auth []ssh.AuthMethod, hostKey ssh.HostKeyCallback) (*ssh.Client, error) {
 	config := &ssh.ClientConfig{
-		User:            user,
-		Auth:            auth,
-		HostKeyCallback: hostKey,
-		Timeout:         5 * time.Second,
+		User:              user,
+		Auth:              auth,
+		HostKeyCallback:   hostKey,
+		HostKeyAlgorithms: HostKeyAlgorithmsForAddress(addr),
+		Timeout:           5 * time.Second,
 	}
 
 	var d net.Dialer
@@ -203,7 +390,43 @@ func ensureKnownHostsFile(path string) error {
 func AppendKnownHost(path, hostname string, key ssh.PublicKey) error {
 	knownHostsWriteMu.Lock()
 	defer knownHostsWriteMu.Unlock()
+	return appendKnownHostLocked(path, hostname, key)
+}
 
+// recordNewKnownHost re-reads known_hosts while holding the write lock and
+// appends key only when the file has no entry for hostname yet, so concurrent
+// writers can never record two different keys for the same host. It reports
+// alreadyTrusted when the exact key is already recorded and a mismatch
+// HostKeyError when a different key is.
+func recordNewKnownHost(path, hostname string, remote net.Addr, key ssh.PublicKey) (alreadyTrusted bool, err error) {
+	knownHostsWriteMu.Lock()
+	defer knownHostsWriteMu.Unlock()
+
+	if err := ensureKnownHostsFile(path); err != nil {
+		return false, fmt.Errorf("准备 known_hosts 失败")
+	}
+	verify, err := knownhosts.New(path)
+	if err != nil {
+		return false, fmt.Errorf("加载 known_hosts 失败")
+	}
+	verifyErr := verify(hostname, remote, key)
+	if verifyErr == nil {
+		return true, nil
+	}
+	var keyErr *knownhosts.KeyError
+	if !errors.As(verifyErr, &keyErr) {
+		return false, verifyErr
+	}
+	if len(keyErr.Want) > 0 {
+		return false, &HostKeyError{Kind: HostKeyMismatch, Key: key}
+	}
+	if err := appendKnownHostLocked(path, hostname, key); err != nil {
+		return false, fmt.Errorf("写入 known_hosts 失败")
+	}
+	return false, nil
+}
+
+func appendKnownHostLocked(path, hostname string, key ssh.PublicKey) error {
 	if err := ensureKnownHostsFile(path); err != nil {
 		return err
 	}

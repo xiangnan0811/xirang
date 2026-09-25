@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,10 +29,12 @@ const dockerSSHTestPassword = "FAKE_DOCKER_SSH_PASSWORD_FOR_TEST_ONLY"
 type dockerSSHTestServer struct {
 	addr     string
 	password string
+	hostKey  ssh.PublicKey
 	listener net.Listener
 	config   *ssh.ServerConfig
 	behavior func(command string, channel ssh.Channel, connectionDone <-chan struct{})
 
+	authAttempts     atomic.Int32
 	commands         chan string
 	connectionClosed chan struct{}
 	connectionClose  sync.Once
@@ -58,8 +61,19 @@ func startDockerSSHTestServer(t *testing.T, behavior func(string, ssh.Channel, <
 		_ = listener.Close()
 		t.Fatalf("load Docker SSH host key: %v", err)
 	}
+	server := &dockerSSHTestServer{
+		addr:             listener.Addr().String(),
+		password:         dockerSSHTestPassword,
+		hostKey:          hostSigner.PublicKey(),
+		listener:         listener,
+		behavior:         behavior,
+		commands:         make(chan string, 8),
+		connectionClosed: make(chan struct{}),
+		connections:      make(map[net.Conn]struct{}),
+	}
 	config := &ssh.ServerConfig{
 		PasswordCallback: func(metadata ssh.ConnMetadata, supplied []byte) (*ssh.Permissions, error) {
+			server.authAttempts.Add(1)
 			if metadata.User() != "docker-test" || string(supplied) != dockerSSHTestPassword {
 				return nil, fmt.Errorf("Docker SSH test credentials rejected")
 			}
@@ -67,16 +81,7 @@ func startDockerSSHTestServer(t *testing.T, behavior func(string, ssh.Channel, <
 		},
 	}
 	config.AddHostKey(hostSigner)
-	server := &dockerSSHTestServer{
-		addr:             listener.Addr().String(),
-		password:         dockerSSHTestPassword,
-		listener:         listener,
-		config:           config,
-		behavior:         behavior,
-		commands:         make(chan string, 8),
-		connectionClosed: make(chan struct{}),
-		connections:      make(map[net.Conn]struct{}),
-	}
+	server.config = config
 	server.workers.Add(1)
 	go server.acceptLoop()
 	t.Cleanup(func() {

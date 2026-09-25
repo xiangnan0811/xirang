@@ -33,10 +33,9 @@ type RsyncTreeCommandSource struct {
 
 type RsyncTreeHostKeyMode string
 
-const (
-	RsyncTreeHostKeyStrict    RsyncTreeHostKeyMode = "strict"
-	RsyncTreeHostKeyAcceptNew RsyncTreeHostKeyMode = "accept_new"
-)
+// RsyncTreeHostKeyStrict is the only accepted mode: OpenSSH never writes
+// known_hosts; first registration happens on the locked Go path in sshutil.
+const RsyncTreeHostKeyStrict RsyncTreeHostKeyMode = "strict"
 
 // RsyncTreeSSHTransport is a typed projection of an already-authorized node
 // transport. It intentionally has no raw ssh argument or option fields.
@@ -379,24 +378,17 @@ func (transport RsyncTreeSSHTransport) commandWithConfinement(disableUserConfig 
 	if err != nil {
 		return "", err
 	}
-	port := transport.Port
-	if port == 0 {
-		port = 22
-	}
 	hostKeyValue := ""
 	switch transport.HostKeyMode {
 	case RsyncTreeHostKeyStrict:
 		hostKeyValue = "yes"
-	case RsyncTreeHostKeyAcceptNew:
-		hostKeyValue = "accept-new"
 	default:
 		return "", fmt.Errorf("%w: invalid managed Rsync host key mode", backupasset.ErrInvalidState)
 	}
-	arguments := []string{"ssh"}
-	if disableUserConfig {
-		arguments = append(arguments, "-F", "/dev/null")
-	}
-	arguments = append(arguments, "-p", strconv.FormatUint(uint64(port), 10), "-o", "StrictHostKeyChecking="+hostKeyValue, "-o", "UserKnownHostsFile="+knownHosts)
+	// UpdateHostKeys=no: even under strict checking OpenSSH may otherwise append
+	// server-announced keys after authentication; known_hosts is written only by
+	// Xirang's locked registration path.
+	arguments := append(transport.OpenSSHBase(disableUserConfig), "-o", "StrictHostKeyChecking="+hostKeyValue, "-o", "UpdateHostKeys=no", "-o", "UserKnownHostsFile="+knownHosts)
 	if transport.IdentityFile != "" {
 		identityFile, err := normalizedRsyncTreeDirectory(transport.IdentityFile, false)
 		if err != nil {
@@ -408,6 +400,21 @@ func (transport RsyncTreeSSHTransport) commandWithConfinement(disableUserConfig 
 		arguments[index] = rsyncTreeShellQuote(arguments[index])
 	}
 	return strings.Join(arguments, " "), nil
+}
+
+// OpenSSHBase is the ssh command prefix (binary, config isolation, port) shared
+// by the transport command and the executor's first-registration probe, so
+// both take the same route to the host.
+func (transport RsyncTreeSSHTransport) OpenSSHBase(disableUserConfig bool) []string {
+	port := transport.Port
+	if port == 0 {
+		port = 22
+	}
+	arguments := []string{"ssh"}
+	if disableUserConfig {
+		arguments = append(arguments, "-F", "/dev/null")
+	}
+	return append(arguments, "-p", strconv.FormatUint(uint64(port), 10))
 }
 
 func validRsyncTreeRemoteUser(value string) bool {

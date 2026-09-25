@@ -1,15 +1,32 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
+import type { NodeConnectionProbeOutcome, NodeHostKeyIssueCode } from "@/types/domain";
 
-const { toastSuccessMock, toastErrorMock, runNodeDoctorMock } = vi.hoisted(() => ({
+const { toastSuccessMock, toastErrorMock, runNodeDoctorMock, trustNodeHostKeyMock, authRef } = vi.hoisted(() => ({
   toastSuccessMock: vi.fn(),
   toastErrorMock: vi.fn(),
   runNodeDoctorMock: vi.fn(),
+  trustNodeHostKeyMock: vi.fn(),
+  authRef: { current: { role: "admin" as "admin" | "operator" | "viewer", token: "test-token" } },
 }));
+
+const HOST_KEY_FINGERPRINT = "SHA256:hostKeyProbeFingerprintForNodesPage";
+
+function hostKeyProbe(code: NodeHostKeyIssueCode): NodeConnectionProbeOutcome {
+  return {
+    ok: false,
+    message: "未知主机密钥被拒绝",
+    errorCode: code,
+    hostKey: {
+      algorithm: "ssh-ed25519",
+      fingerprintSha256: HOST_KEY_FINGERPRINT,
+    },
+  };
+}
 
 function createMemoryStorage() {
   const store = new Map<string, string>();
@@ -63,10 +80,43 @@ vi.mock("@/hooks/use-confirm", () => ({
 }));
 
 vi.mock("@/components/node-editor-dialog", () => ({
-  NodeEditorDialog: ({ open, editingNode }: { open: boolean; editingNode: { name: string } | null }) =>
+  NodeEditorDialog: ({
+    open,
+    editingNode,
+    onSave,
+  }: {
+    open: boolean;
+    editingNode: { id?: number; name: string } | null;
+    onSave?: (input: {
+      name: string;
+      host: string;
+      port: number;
+      username: string;
+      authType: "key";
+      tags: string;
+    }, nodeId?: number) => Promise<void>;
+  }) =>
     open ? (
       <div role="dialog" aria-label={editingNode ? `编辑节点 - ${editingNode.name}` : "编辑节点"}>
         editor
+        <button
+          type="button"
+          onClick={() => {
+            void onSave?.(
+              {
+                name: editingNode?.name ?? "node-new",
+                host: "10.0.0.9",
+                port: 22,
+                username: "root",
+                authType: "key",
+                tags: "prod",
+              },
+              editingNode?.id,
+            );
+          }}
+        >
+          保存并探测
+        </button>
       </div>
     ) : null,
 }));
@@ -85,14 +135,15 @@ vi.mock("@/components/ui/toast-sonner", () => ({
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
     runNodeDoctor: runNodeDoctorMock,
+    trustNodeHostKey: trustNodeHostKeyMock,
   },
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
-    token: "test-token",
-    username: "admin",
-    role: "admin",
+    token: authRef.current.token,
+    username: authRef.current.role,
+    role: authRef.current.role,
     userId: 1,
     isAuthenticated: true,
     login: vi.fn(),
@@ -203,6 +254,13 @@ describe("NodesPage", () => {
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     runNodeDoctorMock.mockReset();
+    trustNodeHostKeyMock.mockReset();
+    trustNodeHostKeyMock.mockResolvedValue({
+      alreadyTrusted: false,
+      algorithm: "ssh-ed25519",
+      fingerprintSha256: HOST_KEY_FINGERPRINT,
+    });
+    authRef.current = { role: "admin", token: "test-token" };
     runNodeDoctorMock.mockResolvedValue({
       nodeId: 1,
       nodeName: "node-prod-1",
@@ -341,14 +399,10 @@ describe("NodesPage", () => {
     expect(screen.getByRole("menuitem", { name: /导出节点/ })).toBeInTheDocument();
   });
 
-  it("测试连接失败时走错误提示而不是成功提示", async () => {
+  it("未知主机密钥弹出指纹确认且不走错误提示", async () => {
     const user = userEvent.setup();
-
     createContext({
-      testNodeConnection: vi.fn().mockResolvedValue({
-        ok: false,
-        message: "连接失败：ssh: handshake failed: knownhosts: key is unknown",
-      }),
+      testNodeConnection: vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown")),
     });
 
     render(
@@ -357,15 +411,179 @@ describe("NodesPage", () => {
       </MemoryRouter>
     );
 
-    const testButtons = screen.getAllByRole("button", { name: /测试节点.*连接|Test connection to node/ });
-    await user.click(testButtons[0]);
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
 
-    expect(toastErrorMock).toHaveBeenCalledWith(
-      expect.stringContaining("连接失败：ssh: handshake failed: knownhosts: key is unknown")
+    expect(await screen.findByRole("dialog", { name: /未知主机密钥/ })).toBeInTheDocument();
+    expect(screen.getByText(HOST_KEY_FINGERPRINT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "信任并重试" })).toBeInTheDocument();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "前往系统设置" }));
+    expect(navigateMock).toHaveBeenCalledWith("/app/settings?tab=system");
+  });
+
+  it("管理员信任并重试后调用信任接口并再次测试连接", async () => {
+    const user = userEvent.setup();
+    const testNodeConnection = vi.fn()
+      .mockResolvedValueOnce(hostKeyProbe("ssh_host_key_unknown"))
+      .mockResolvedValueOnce({ ok: true, message: "连接成功" });
+    createContext({ testNodeConnection });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
     );
-    expect(toastSuccessMock).not.toHaveBeenCalledWith(
-      expect.stringContaining("连接失败：ssh: handshake failed: knownhosts: key is unknown")
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+
+    await waitFor(() => {
+      expect(trustNodeHostKeyMock).toHaveBeenCalledWith("test-token", 1, HOST_KEY_FINGERPRINT);
+      expect(testNodeConnection).toHaveBeenCalledTimes(2);
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("已信任该主机指纹，正在重新测试连接。");
+    expect(toastSuccessMock).toHaveBeenCalledWith("node-prod-1：连接成功");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("信任请求进行中不能关闭弹窗，失败信息留在原弹窗", async () => {
+    const user = userEvent.setup();
+    let rejectTrust: (error: Error) => void = () => {};
+    trustNodeHostKeyMock.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectTrust = reject;
+      })
     );
+    const testNodeConnection = vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown"));
+    createContext({ testNodeConnection });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+    await user.keyboard("{Escape}");
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(HOST_KEY_FINGERPRINT);
+
+    await act(async () => {
+      rejectTrust(new Error("服务器当前主机指纹与确认的指纹不一致，请重新测试连接后再确认"));
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("服务器当前主机指纹与确认的指纹不一致");
+    expect(screen.getByRole("dialog")).toHaveTextContent(HOST_KEY_FINGERPRINT);
+    expect(testNodeConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it("信任请求进行中另一节点的主机密钥结果不会替换当前弹窗", async () => {
+    const user = userEvent.setup();
+    let rejectTrust: (error: Error) => void = () => {};
+    trustNodeHostKeyMock.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectTrust = reject;
+      })
+    );
+    let resolveSecondProbe: (value: NodeConnectionProbeOutcome) => void = () => {};
+    const testNodeConnection = vi.fn((nodeId: number) =>
+      nodeId === 2
+        ? new Promise<NodeConnectionProbeOutcome>((resolve) => {
+            resolveSecondProbe = resolve;
+          })
+        : Promise.resolve(hostKeyProbe("ssh_host_key_unknown"))
+    );
+    createContext({ testNodeConnection });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-dr-2 连接" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+
+    await act(async () => {
+      resolveSecondProbe(hostKeyProbe("ssh_host_key_mismatch"));
+    });
+    expect(screen.getByRole("dialog")).toHaveTextContent("node-prod-1");
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("node-dr-2");
+    expect(toastErrorMock).toHaveBeenCalledWith("node-dr-2：未知主机密钥被拒绝");
+
+    await act(async () => {
+      rejectTrust(new Error("无法连接节点读取主机密钥，请检查主机地址与端口"));
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法连接节点读取主机密钥");
+    expect(screen.getByRole("dialog")).toHaveTextContent("node-prod-1");
+  });
+
+  it("非管理员看到指纹但没有信任按钮", async () => {
+    const user = userEvent.setup();
+    authRef.current.role = "operator";
+    createContext({
+      testNodeConnection: vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown")),
+    });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+
+    expect(await screen.findByText(HOST_KEY_FINGERPRINT)).toBeInTheDocument();
+    expect(screen.getByText("请联系管理员核对并信任该指纹。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "信任并重试" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "前往系统设置" })).not.toBeInTheDocument();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("主机密钥不一致时任何角色都没有信任按钮", async () => {
+    const user = userEvent.setup();
+    createContext({
+      testNodeConnection: vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_mismatch")),
+    });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+
+    expect(await screen.findByRole("dialog", { name: /主机密钥不一致/ })).toBeInTheDocument();
+    expect(screen.getByText(HOST_KEY_FINGERPRINT)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("中间人攻击");
+    expect(screen.queryByRole("button", { name: "信任并重试" })).not.toBeInTheDocument();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("保存后自动测试遇到未知主机密钥时弹出指纹确认", async () => {
+    const user = userEvent.setup();
+    const testNodeConnection = vi.fn().mockResolvedValue(hostKeyProbe("ssh_host_key_unknown"));
+    const createNode = vi.fn().mockResolvedValue(9);
+    createContext({ testNodeConnection, createNode });
+
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole("button", { name: "新增节点" }));
+    await user.click(await screen.findByRole("button", { name: "保存并探测" }));
+
+    expect(await screen.findByRole("dialog", { name: /未知主机密钥 — node-new/ })).toBeInTheDocument();
+    expect(screen.getByText(HOST_KEY_FINGERPRINT)).toBeInTheDocument();
+    expect(createNode).toHaveBeenCalled();
+    expect(testNodeConnection).toHaveBeenCalledWith(9);
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   it("节点页提供 Fleet Doctor 入口并展示诊断结果", async () => {

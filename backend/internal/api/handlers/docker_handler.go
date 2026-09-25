@@ -103,7 +103,12 @@ func (h *DockerHandler) ListVolumes(c *gin.Context) {
 	sshClient, credential, err := dialSSHForDocker(operationCtx, node, h.db)
 	if err != nil {
 		h.writeDockerVolumeAudit(c, node, credential, credentialAuditSSHOutcome("dial", err), "dial", err, 0, false)
-		respondBadGateway(c, "SSH 连接失败")
+		message := "SSH 连接失败"
+		var hostKeyErr *sshutil.HostKeyError
+		if errors.As(err, &hostKeyErr) {
+			message = hostKeyErr.Error()
+		}
+		respondBadGateway(c, message)
 		return
 	}
 	defer sshClient.Close() //nolint:errcheck // close error not actionable on deferred cleanup
