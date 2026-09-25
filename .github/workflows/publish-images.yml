@@ -29,7 +29,8 @@ jobs:
   prepare:
     name: Verify immutable release source
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Allow the full 60-minute CI wait plus checkout and API overhead.
+    timeout-minutes: 65
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
       ci_run_id: ${{ steps.source.outputs.ci_run_id }}

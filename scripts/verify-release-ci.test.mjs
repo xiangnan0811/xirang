@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { selectReleaseCI, verifyReleaseCI } from './verify-release-ci.mjs';
+import { DEFAULT_CI_WAIT_SECONDS, selectReleaseCI, verifyReleaseCI } from './verify-release-ci.mjs';
 
 const repository = 'owner/project';
 const sha = 'a'.repeat(40);
@@ -38,4 +38,42 @@ test('pending evidence remains denied until complete and only within the wait bo
 test('a movable ref or malformed verification response never authorizes promotion', async () => {
   await assert.rejects(verifyReleaseCI({ repository, sha: 'main', request: async () => ({ workflow_runs: [success] }) }), /immutable/);
   await assert.rejects(verifyReleaseCI({ repository, sha, request: async () => ({}) }), /Invalid CI response/);
+});
+
+test('slow complete CI can succeed after the former 25-minute deadline', async () => {
+  let clock = 0;
+  const run = await verifyReleaseCI({ repository, sha, waitSeconds: DEFAULT_CI_WAIT_SECONDS,
+    request: async () => ({ workflow_runs: [{ ...success, status: clock < 35 * 60_000 ? 'in_progress' : 'completed' }] }),
+    now: () => clock, sleep: async ms => { clock += ms; } });
+  assert.equal(run.id, success.id);
+  assert.equal(clock, 35 * 60_000);
+});
+
+test('extended wait still denies missing CI at its deadline', async () => {
+  let clock = 0;
+  await assert.rejects(verifyReleaseCI({ repository, sha, waitSeconds: DEFAULT_CI_WAIT_SECONDS,
+    request: async () => ({ workflow_runs: [] }), now: () => clock,
+    sleep: async ms => { clock += ms; } }), /missing or pending/);
+  assert.equal(clock, DEFAULT_CI_WAIT_SECONDS * 1000);
+});
+
+test('failed CI aborts the extended wait immediately', async () => {
+  let clock = 0;
+  await assert.rejects(verifyReleaseCI({ repository, sha, waitSeconds: DEFAULT_CI_WAIT_SECONDS,
+    request: async () => ({ workflow_runs: [{ ...success, status: clock === 0 ? 'in_progress' : 'completed', conclusion: 'failure' }] }),
+    now: () => clock, sleep: async ms => { clock += ms; } }), /concluded failure/);
+  assert.equal(clock, 15_000);
+});
+
+test('promotion with zero wait still refuses pending CI without sleeping', async () => {
+  await assert.rejects(verifyReleaseCI({ repository, sha, waitSeconds: 0,
+    request: async () => ({ workflow_runs: [{ ...success, status: 'in_progress' }] }),
+    sleep: async () => { assert.fail('promotion must not wait'); } }), /missing or pending/);
+});
+
+test('invalid wait bounds are rejected before querying CI', async () => {
+  for (const waitSeconds of [-1, NaN, Infinity, DEFAULT_CI_WAIT_SECONDS + 1]) {
+    await assert.rejects(verifyReleaseCI({ repository, sha, waitSeconds,
+      request: async () => { assert.fail('invalid wait must not query CI'); } }), /Invalid CI wait bound/);
+  }
 });
