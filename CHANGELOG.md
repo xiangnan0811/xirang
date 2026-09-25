@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.20](https://github.com/xiangnan0811/xirang/compare/v0.55.19...v0.55.20) (2026-09-25)
+
+
+### 🐛 Bug Fixes
+
+* **ssh:** support runtime host key trust management ([#552](https://github.com/xiangnan0811/xirang/issues/552)) ([1d2cf7b](https://github.com/xiangnan0811/xirang/commit/1d2cf7b06ba002d6e63f11dd8ebd9d88cd6863f4))
+
 ## [0.55.19](https://github.com/xiangnan0811/xirang/compare/v0.55.18...v0.55.19) (2026-09-23)
 
 
