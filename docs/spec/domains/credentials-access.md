@@ -40,6 +40,18 @@ pending login token 绑定当前账户版本和 TOTP 状态，完成后只能消
 
 回归覆盖空 scope 兼容、过期等于当前时间、用途/节点/标签拒绝、归一化去重与未知值、显式清空、无秘密导入导出 round trip、至少一个共享 SSH 路径和一个 executor 路径；前端覆盖 mapper、编辑及列表徽章和无障碍标签，批量示例仅用明显假密钥。
 
+## SSH 主机密钥信任
+
+`SSH_STRICT_HOST_KEY_CHECKING` 只由环境变量控制（默认 true）。首次连接是否自动接受未知主机密钥由动态设置 `ssh.auto_accept_new_hosts` 决定，优先级 DB > `SSH_AUTO_ACCEPT_NEW_HOSTS` > 默认 false，保存后无需重启即生效；`sshutil.ResolveSSHHostKeyCallback` 的 Go SSH 回调、rsync/受管 Rsync executor 与安全风险卡片 `ssh_host_key_trust_posture` 统一经 `sshutil.AutoAcceptNewHosts()`（服务启动时安装 settings 取值源）读取。Fleet Doctor 是只读诊断，自带严格 known_hosts 回调，从不自动接受或写入 known_hosts。非法值按拒绝处理；受管 Rsync 仍在非法值时失败。已知主机的密钥变化（含改用未记录的算法）无论设置如何都拒绝。
+
+Xirang 对 known_hosts 的全部写入（Go 回调自动接受、人工信任、外部 OpenSSH 的首次登记）都在 `sshutil` 的同一写锁内重新读取文件后判定：已有相同密钥视为已信任，已有其他密钥按 mismatch 拒绝，因此同一主机不会并存两把不同密钥。rsync 与受管 Rsync 调用的外部 OpenSSH 一律带 `StrictHostKeyChecking=yes` 与 `UpdateHostKeys=no`（`sshutil.OpenSSHKnownHostsWriteGuard`；严格校验本身不阻止 OpenSSH 在认证后按 UpdateHostKeys 追加服务器公布的密钥），自身从不写 known_hosts。自动接受开启时，执行前由 `sshutil.RegisterNewHostKeyWithOpenSSH` 用与实际传输相同的 ssh 命令前缀（同一二进制、`-F` 隔离与端口；因此沿用 ProxyJump/ProxyCommand/HostName/HostKeyAlias/CA 及已记录密钥类型偏好）对 known_hosts 私有副本以 `accept-new` 探测，`PreferredAuthentications=none`、`BatchMode`、禁用复用与转发，确保在向目标主机提供任何密钥、密码或 agent 凭据前结束（跳板主机的认证与实际传输一致）；探测在独立进程组中运行（Linux），取消、30 秒超时或正常结束时整组回收，ProxyCommand/ProxyJump 辅助进程不会遗留；OpenSSH 追加到副本的条目在写锁内重新校验后并入 known_hosts（HashKnownHosts=no，以其解析后的主机形式记录）。副本无新增（不可达、已知或 OpenSSH 拒绝了变化的密钥）时不登记，由严格传输报告结果。Go 侧拨号与探测（`DialSSH`、节点探测、测试连接、信任探测）经 `sshutil.HostKeyAlgorithmsForAddress` 优先协商 known_hosts 中该主机已记录的密钥类型，其余算法仍在后备列表中；因此多密钥服务器上已记录的 Ed25519/RSA 密钥不会因 Go 默认偏好 ECDSA 而被误判为 mismatch，而已记录类型的密钥真的变化时仍报 mismatch。命中 `@cert-authority` 记录时优先协商证书算法（CA 自身的密钥类型不代表服务器原始密钥类型）。剩余风险：该锁只协调 Xirang 进程内的写入，管理员手工编辑或其他进程并发改写 known_hosts 不在保证范围内。
+
+校验失败返回 `sshutil.HostKeyError`（`unknown|mismatch`），消息固定且不含主机名、地址或 known_hosts 路径，指向页面操作而非环境变量；以 `%w` 透传的任务 last_error 与 Docker 卷发现 502 消息沿用该文本，终端 WebSocket 关闭原因使用不超过 123 字节的对应短文本，Doctor 建议指向节点页「测试连接」。`POST /nodes/:id/test-connection` 在拨号阶段命中该错误时仍返回 200 `ok=false`，附加 `error_code`（`ssh_host_key_unknown|ssh_host_key_mismatch`）与 `host_key.{algorithm,fingerprint_sha256}`，其他失败保持泛化消息；凭据审计 metadata 增加 `host_key_issue`。
+
+`POST /nodes/:id/trust-host-key` 仅 admin（`RequireRole("admin")` + 节点 ownership），body `{fingerprint_sha256:"SHA256:..."}`，空或非 `SHA256:` 前缀 400。服务端重新连接节点，只在 host key 回调内捕获密钥后立即中止握手，**不向未信任主机发送任何凭据**；先比对当前指纹与提交值，不一致即 409 `ssh_host_key_changed`（即使当前密钥已受信任，也不以幂等成功掩盖确认对象的变化），一致后才在 known_hosts 写锁内重新读取文件：已记录则 `already_trusted`，无冲突则追加。结果：成功 200 `{trusted, already_trusted, algorithm, fingerprint_sha256}`；指纹已变化 409 `ssh_host_key_changed`；已有冲突记录 409 `ssh_host_key_mismatch`（不提供覆盖）；strict 关闭 409 `ssh_host_key_checking_disabled`；无法连接 502。每次请求写 `node.host_key.trust` 凭据审计（success/blocked/failure，metadata 含算法、指纹、`already_trusted`、`stage=host_key_trust`）。
+
+前端节点页三个测试入口（行/卡片、编辑器、保存后自动测试）遇结构化主机密钥失败时弹窗展示算法与指纹，不再 toast。unknown：admin 可「信任并重试」或前往 系统设置 → 安全；非 admin 仅提示联系管理员。mismatch：仅安全警告，任何角色均无信任按钮。信任请求进行中弹窗不可关闭，也不会被其他节点并发返回的主机密钥结果替换（该结果改为 toast），失败信息留在原弹窗；信任成功后关闭弹窗再重测，普通测试结果只 toast、不改动弹窗。mapper 只接受上述两个 code 且指纹非空，其余视为普通失败。回归覆盖未知/信任/重连、重复信任幂等、已信任其他密钥时提交旧指纹仍 409、错误指纹与冲突不改文件、并发/过期快照不写入第二把密钥、rsync 与受管 Rsync 始终严格并经 Go 路径登记、多密钥主机保留已记录的非默认类型密钥、零认证尝试、真实路由权限、DB 覆盖 env 即时生效，以及前端 mapper、三种弹窗状态、进行中关闭与并发探测。
+
 ## 临时凭据授权与终端
 
 `credential_access_grants` 是后端行记录授权，不是 bearer token。仅保存请求者/审批者安全 ID 与标签、action、purpose、资源 ID、status、UTC expiry、TTL 和有界脱敏 reason；不得保存 token、step-up、OTP、命令、流、文件、导出内容、原始 SQL、endpoint/proxy 或敏感主机信息。

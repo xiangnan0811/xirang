@@ -53,7 +53,7 @@ RUN apk add --no-cache \
       c-ares=1.34.8-r0 \
       curl=8.22.0-r0 \
       libcrypto3=3.5.8-r0 \
-      libexpat=2.8.4-r0 \
+      libexpat=2.8.5-r0 \
       libssl3=3.5.8-r0 \
       libuuid=2.41.6-r1 \
       mount=2.41.6-r1 \

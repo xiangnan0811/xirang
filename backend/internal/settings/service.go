@@ -274,6 +274,7 @@ var registry = []SettingDef{
 	{Key: "login.fail_lock_duration", EnvVar: "LOGIN_FAIL_LOCK_DURATION", CodeDefault: "15m", Type: TypeDuration, Category: "security", Description: "登录锁定持续时间", MinDuration: "1m"},
 	{Key: "login.captcha_enabled", EnvVar: "LOGIN_CAPTCHA_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "启用登录验证码"},
 	{Key: "login.second_captcha_enabled", EnvVar: "LOGIN_SECOND_CAPTCHA_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "启用登录二次验证码"},
+	{Key: "ssh.auto_accept_new_hosts", EnvVar: "SSH_AUTO_ACCEPT_NEW_HOSTS", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "SSH 首次连接时自动接受未知主机密钥并写入 known_hosts（已知密钥变化仍拒绝）"},
 	// Overlap note: node.probe_interval is also defined in config.Config as
 	// NodeProbeInterval. Config provides the default at startup;
 	// settings.Service can override at runtime. RequiresRestart: true.

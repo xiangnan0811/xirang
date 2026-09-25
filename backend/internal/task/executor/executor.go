@@ -627,13 +627,7 @@ func buildRsyncSSHArgs(ctx context.Context, node model.Node, purpose string) ([]
 	if policyErr != nil {
 		return nil, func() {}, policyErr
 	}
-	sshParts := []string{"ssh"}
-	if confinementPolicy.Configured() {
-		// Do not consult the account's implicit ~/.ssh/config while the
-		// confined process is granted only bounded runtime-read exceptions.
-		sshParts = append(sshParts, "-F", "/dev/null")
-	}
-	sshParts = append(sshParts, "-p", fmt.Sprintf("%d", port))
+	sshParts := rsyncOpenSSHBase(confinementPolicy.Configured(), port)
 	strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
 	if err != nil {
 		return nil, func() {}, err
@@ -644,15 +638,14 @@ func buildRsyncSSHArgs(ctx context.Context, node model.Node, purpose string) ([]
 		if err != nil {
 			return nil, func() {}, fmt.Errorf("SSH 主机密钥配置异常，请联系管理员")
 		}
-		autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
-		hostKeyMode := "yes"
-		if autoAccept {
-			hostKeyMode = "accept-new"
+		// OpenSSH never writes known_hosts itself; with auto-accept the host is
+		// first registered over the same ssh route under the Go write lock.
+		if autoAccept, _ := sshutil.AutoAcceptNewHosts(); autoAccept {
+			if err := sshutil.RegisterNewHostKeyWithOpenSSH(ctx, sshParts, ResolveSSHUser(node), strings.TrimSpace(node.Host)); err != nil {
+				return nil, func() {}, err
+			}
 		}
-		sshParts = append(sshParts,
-			"-o", fmt.Sprintf("StrictHostKeyChecking=%s", hostKeyMode),
-			"-o", fmt.Sprintf("UserKnownHostsFile=%s", expandedKnownHosts),
-		)
+		sshParts = append(sshParts, sshutil.OpenSSHKnownHostsWriteGuard(expandedKnownHosts)...)
 	} else {
 		sshParts = append(sshParts, "-o", "StrictHostKeyChecking=no")
 		if confinementPolicy.Configured() {
@@ -686,6 +679,19 @@ func buildRsyncSSHArgs(ctx context.Context, node model.Node, purpose string) ([]
 		cleanup = func() { _ = os.Remove(keyFile.Name()) }
 	}
 	return sshParts, cleanup, nil
+}
+
+// rsyncOpenSSHBase is the ssh command prefix (binary, config isolation, port)
+// shared by the rsync transport and its first-registration probe, so both take
+// the same route (including ProxyJump/ProxyCommand from ~/.ssh/config).
+func rsyncOpenSSHBase(disableUserConfig bool, port int) []string {
+	parts := []string{"ssh"}
+	if disableUserConfig {
+		// Do not consult the account's implicit ~/.ssh/config while the
+		// confined process is granted only bounded runtime-read exceptions.
+		parts = append(parts, "-F", "/dev/null")
+	}
+	return append(parts, "-p", strconv.Itoa(port))
 }
 
 func rsyncSSHRuntimeReadPaths(parts []string) []string {

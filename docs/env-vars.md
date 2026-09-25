@@ -10,6 +10,7 @@
 - 系统设置的合同为 **数据库覆盖值 > 非空环境变量 > 代码默认值**。环境变量不是仅首次启动有效：删除数据库覆盖值后会再次回退到它。Settings API 更新会清除对应缓存；直接改数据库可能等到 30 秒缓存过期。标记“重启”的设置不能热切换已启动的组件。
 - `backup_assets.*` 的环境变量映射、默认值和范围列于下表；一般可经 Settings API 调整，重启项单独标记。合法的单项值仍须通过关联校验，不能用环境变量绕过领域安全约束。
 - `VITE_*` 在开发服务器或前端构建时读取；修改已经构建好的容器运行时环境不会重写前端静态资源。`CSP_CONNECT_SRC_EXTRA` 则由容器启动时的 Nginx 模板读取。
+- 镜像内 Alpine 依赖的精确版本由 Dockerfile 固定，不由 `.env` 或系统设置覆盖。构建时包版本不可用的处理见[镜像构建依赖](maintainers/automation.md#镜像构建依赖)。
 
 **当前实现与配置合同的已知偏差**：节点探测的三个 `node.probe_*` 键、任务流量与执行记录保留键虽然注册在 Settings 服务中，实际组件由 `config.Load()` 的环境值构造，数据库覆盖目前不生效，重启也不能修复这一点。远程指标推送的 URL/token 实现又显式优先读取非空环境变量。配置合同仍要求统一优先级；这些是待修复的实现问题，不应据此放宽合同。当前部署应使用下表所述实际生效方式。
 
@@ -75,9 +76,9 @@
 |------|------|--------|------|------|
 | `SSH_STRICT_HOST_KEY_CHECKING` | bool | `true` | 否 | 严格校验远端主机指纹，配合 known_hosts 校验主机指纹（生产建议 `true`） |
 | `SSH_KNOWN_HOSTS_PATH` | string | `~/.ssh/known_hosts` | 否 | known_hosts 文件路径 |
-| `SSH_AUTO_ACCEPT_NEW_HOSTS` | bool | `false` | 否 | 是否自动接受首次出现的主机指纹并写入 known_hosts（设为 `true` 可启用，生产建议 `false`） |
+| `SSH_AUTO_ACCEPT_NEW_HOSTS` | bool | `false` | 否 | 是否自动接受首次出现的主机指纹并写入 known_hosts（settings 键 `ssh.auto_accept_new_hosts`，可在 系统设置 → 安全 实时调整，DB 值优先；生产建议 `false`） |
 
-**读取位置**：`backend/internal/sshutil/ssh_auth.go` 和 `backend/internal/task/executor/executor.go`。All-in-One 镜像默认将 `SSH_KNOWN_HOSTS_PATH` 设为 `/data/.ssh/known_hosts`，使自动接受的新主机指纹随数据卷持久化。
+**读取位置**：`backend/internal/sshutil/ssh_auth.go`（`SSH_STRICT_HOST_KEY_CHECKING`、`SSH_KNOWN_HOSTS_PATH`，以及未安装 settings 取值源时的 `SSH_AUTO_ACCEPT_NEW_HOSTS` 回退）和 `backend/internal/task/executor/executor.go`；运行时自动接受由 settings 服务 `ssh.auto_accept_new_hosts` 决定。All-in-One 镜像默认将 `SSH_KNOWN_HOSTS_PATH` 设为 `/data/.ssh/known_hosts`，使信任或自动接受的主机指纹随数据卷持久化。
 
 ## 备份与执行
 

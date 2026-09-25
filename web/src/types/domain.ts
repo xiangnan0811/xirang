@@ -206,6 +206,20 @@ export interface NodeDoctorResult {
   checks: NodeDoctorCheckResult[];
 }
 
+export type NodeHostKeyIssueCode = "ssh_host_key_unknown" | "ssh_host_key_mismatch";
+
+export interface NodeHostKeyInfo {
+  algorithm: string;
+  fingerprintSha256: string;
+}
+
+export interface NodeConnectionProbeOutcome {
+  ok: boolean;
+  message: string;
+  errorCode?: NodeHostKeyIssueCode;
+  hostKey?: NodeHostKeyInfo;
+}
+
 export type RestoreDrillStatus = "pending" | "running" | "success" | "failed" | "skipped" | "canceled";
 
 export interface PolicyLatestDrillSummary {

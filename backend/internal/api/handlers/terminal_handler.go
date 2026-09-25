@@ -194,6 +194,20 @@ func writeTerminalOutput(conn *websocket.Conn, payload []byte) error {
 	return conn.WriteMessage(websocket.BinaryMessage, payload)
 }
 
+// terminalDialFailureReason maps a dial error to a WebSocket close reason. Host
+// key rejections point at the node-page trust flow; texts stay under the
+// 123-byte close-reason limit.
+func terminalDialFailureReason(err error) string {
+	var hostKeyErr *sshutil.HostKeyError
+	if !errors.As(err, &hostKeyErr) {
+		return "SSH 连接失败，请检查节点配置"
+	}
+	if hostKeyErr.Kind == sshutil.HostKeyMismatch {
+		return "主机密钥与 known_hosts 不一致，已拒绝连接"
+	}
+	return "主机密钥未受信任：请在节点页「测试连接」中确认指纹"
+}
+
 func closeTerminalConnection(conn *websocket.Conn, code int, reason string) {
 	if conn == nil {
 		return
@@ -516,7 +530,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		})
 		freePending()
 		_ = conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "SSH 连接失败，请检查节点配置"))
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, terminalDialFailureReason(err)))
 		_ = conn.Close()
 		return
 	}

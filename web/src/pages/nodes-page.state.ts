@@ -15,7 +15,7 @@ import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { getErrorMessage } from "@/lib/utils";
-import type { NewNodeInput, NodeDoctorResult, NodeRecord } from "@/types/domain";
+import type { NewNodeInput, NodeConnectionProbeOutcome, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
@@ -27,6 +27,13 @@ const sortStorageKey = "xirang.nodes.sort";
 const viewStorageKey = "xirang.nodes.view";
 const groupViewStorageKey = "xirang.nodes.groupView";
 const selectedStorageKey = "xirang.nodes.selected";
+
+type HostKeyIssueState = {
+  nodeId: number;
+  nodeName: string;
+  code: NodeHostKeyIssueCode;
+  hostKey: NodeHostKeyInfo;
+};
 
 export function useNodesPageState() {
   const { t } = useTranslation();
@@ -98,6 +105,12 @@ export function useNodesPageState() {
   const [doctorResult, setDoctorResult] = useState<NodeDoctorResult | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(false);
   const [doctorError, setDoctorError] = useState<string | null>(null);
+  const [hostKeyIssue, setHostKeyIssue] = useState<HostKeyIssueState | null>(null);
+  const [hostKeyTrusting, setHostKeyTrusting] = useState(false);
+  const [hostKeyError, setHostKeyError] = useState<string | null>(null);
+  // Node whose trust request currently owns the host key dialog; a ref so async
+  // probe completions observe it without stale closures.
+  const hostKeyTrustOwnerRef = useRef<number | null>(null);
   const [triggeringNodeId, setTriggeringNodeId] = useState<number | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [batchCmdOpen, setBatchCmdOpen] = useState(false);
@@ -237,6 +250,39 @@ export function useNodesPageState() {
     setEditorOpen(true);
   };
 
+  const presentProbeResult = (
+    nodeId: number,
+    nodeName: string,
+    result: NodeConnectionProbeOutcome,
+    prefixName: boolean,
+  ) => {
+    const message = prefixName ? `${nodeName}：${result.message}` : result.message;
+    if (!result.ok && result.errorCode && result.hostKey) {
+      // While a trust request owns the dialog, a concurrent probe for another
+      // node must not replace it; report that node's failure as a toast instead.
+      const trustOwner = hostKeyTrustOwnerRef.current;
+      if (trustOwner !== null && trustOwner !== nodeId) {
+        toast.error(message);
+        return;
+      }
+      setHostKeyIssue({
+        nodeId,
+        nodeName,
+        code: result.errorCode,
+        hostKey: result.hostKey,
+      });
+      setHostKeyError(null);
+      return;
+    }
+    // Plain results never touch the host key dialog: it belongs to whichever
+    // node last reported a host key issue.
+    if (result.ok) {
+      toast.success(message);
+    } else {
+      toast.error(message);
+    }
+  };
+
   const handleSaveNode = async (input: NewNodeInput, nodeId?: number) => {
     if (!input.name.trim() || !input.host.trim() || !input.username.trim()) {
       toast.error(t("nodes.saveFailedEmpty"));
@@ -269,11 +315,7 @@ export function useNodesPageState() {
         setTestingNodeId(savedNodeId);
         const result = await testNodeConnection(savedNodeId);
         setTestingNodeId(null);
-        if (result.ok) {
-          toast.success(result.message);
-        } else {
-          toast.error(result.message);
-        }
+        presentProbeResult(savedNodeId, input.name, result, false);
       }
     } catch (error) {
       setTestingNodeId(null);
@@ -407,15 +449,62 @@ export function useNodesPageState() {
       setTestingNodeId(node.id);
       const result = await testNodeConnection(node.id);
       setTestingNodeId(null);
-      if (result.ok) {
-        toast.success(`${node.name}：${result.message}`);
-      } else {
-        toast.error(`${node.name}：${result.message}`);
-      }
+      presentProbeResult(node.id, node.name, result, true);
     } catch (error) {
       setTestingNodeId(null);
       toast.error(getErrorMessage(error));
     }
+  };
+
+  const trustHostKey = async () => {
+    const issue = hostKeyIssue;
+    if (!issue) {
+      return;
+    }
+    if (!token) {
+      setHostKeyError(t("console.notLoggedIn"));
+      return;
+    }
+    hostKeyTrustOwnerRef.current = issue.nodeId;
+    setHostKeyTrusting(true);
+    setHostKeyError(null);
+    try {
+      await apiClient.trustNodeHostKey(token, issue.nodeId, issue.hostKey.fingerprintSha256);
+    } catch (error) {
+      setHostKeyError(getErrorMessage(error));
+      hostKeyTrustOwnerRef.current = null;
+      setHostKeyTrusting(false);
+      return;
+    }
+    toast.success(t("nodes.hostKeyTrusted"));
+    setHostKeyIssue(null);
+    hostKeyTrustOwnerRef.current = null;
+    setHostKeyTrusting(false);
+    setTestingNodeId(issue.nodeId);
+    try {
+      const result = await testNodeConnection(issue.nodeId);
+      presentProbeResult(issue.nodeId, issue.nodeName, result, true);
+    } catch (error) {
+      // The dialog is already closed once trust succeeded; report retest failures as a toast.
+      toast.error(`${issue.nodeName}：${getErrorMessage(error)}`);
+    } finally {
+      setTestingNodeId(null);
+    }
+  };
+
+  const handleHostKeyOpenChange = (open: boolean) => {
+    // Keep the dialog bound to its pending trust request so the outcome
+    // (error or success) cannot land on a different node's dialog.
+    if (open || hostKeyTrusting) {
+      return;
+    }
+    setHostKeyIssue(null);
+    setHostKeyError(null);
+  };
+
+  const openHostKeySettings = () => {
+    handleHostKeyOpenChange(false);
+    navigate("/app/settings?tab=system");
   };
 
   const handleTriggerBackup = async (nodeId: number, nodeName: string) => {
@@ -598,6 +687,12 @@ export function useNodesPageState() {
     doctorError,
     handleDoctorOpenChange,
     runDoctorForNode,
+    hostKeyIssue,
+    hostKeyTrusting,
+    hostKeyError,
+    trustHostKey,
+    openHostKeySettings,
+    handleHostKeyOpenChange,
     // file browser
     fileBrowserNode,
     setFileBrowserNode,

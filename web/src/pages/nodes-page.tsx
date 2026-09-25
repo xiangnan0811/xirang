@@ -331,6 +331,13 @@ export function NodesPage() {
         doctorError={state.doctorError}
         handleDoctorOpenChange={state.handleDoctorOpenChange}
         runDoctorForNode={state.runDoctorForNode}
+        isAdmin={state.isAdmin}
+        hostKeyIssue={state.hostKeyIssue}
+        hostKeyTrusting={state.hostKeyTrusting}
+        hostKeyError={state.hostKeyError}
+        trustHostKey={state.trustHostKey}
+        openHostKeySettings={state.openHostKeySettings}
+        handleHostKeyOpenChange={state.handleHostKeyOpenChange}
       />
     </div>
   );

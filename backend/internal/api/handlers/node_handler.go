@@ -407,7 +407,7 @@ func (h *NodeHandler) Exec(c *gin.Context) {
 // @Success      200  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
-// @Router       /nodes/{id}/test [post]
+// @Router       /nodes/{id}/test-connection [post]
 func (h *NodeHandler) TestConnection(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -490,10 +490,11 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 
 	start := time.Now()
 	client, err := ssh.Dial("tcp", address, &ssh.ClientConfig{
-		User:            node.Username,
-		Auth:            authMethods,
-		HostKeyCallback: hostKeyCallback,
-		Timeout:         5 * time.Second,
+		User:              node.Username,
+		Auth:              authMethods,
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: sshutil.HostKeyAlgorithmsForAddress(address),
+		Timeout:           5 * time.Second,
 	})
 	probeAt := time.Now()
 	if err != nil {
@@ -507,6 +508,15 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 			nodeLog.Warn().Err(alertErr).Msg("创建节点探测告警失败")
 		}
 		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
+		var hostKeyErr *sshutil.HostKeyError
+		isHostKeyErr := errors.As(err, &hostKeyErr)
+		metadata := map[string]any{
+			"stage":      "dial",
+			"latency_ms": int(time.Since(start).Milliseconds()),
+		}
+		if isHostKeyErr {
+			metadata["host_key_issue"] = string(hostKeyErr.Kind)
+		}
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 			Action:           "node.credential.test_connection",
 			Purpose:          sshutil.PurposeNodeTest,
@@ -516,11 +526,24 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 			NodeID:           credentialaudit.PtrUint(node.ID),
 			Outcome:          credentialaudit.OutcomeFailure,
 			ErrorMessage:     err.Error(),
-			Metadata: map[string]any{
-				"stage":      "dial",
-				"latency_ms": int(time.Since(start).Milliseconds()),
-			},
+			Metadata:         metadata,
 		})
+		if isHostKeyErr {
+			errorCode := "ssh_host_key_unknown"
+			if hostKeyErr.Kind == sshutil.HostKeyMismatch {
+				errorCode = "ssh_host_key_mismatch"
+			}
+			respondOK(c, gin.H{
+				"ok":         false,
+				"message":    hostKeyErr.Error(),
+				"error_code": errorCode,
+				"host_key": gin.H{
+					"algorithm":          hostKeyErr.Algorithm(),
+					"fingerprint_sha256": hostKeyErr.Fingerprint(),
+				},
+			})
+			return
+		}
 		respondOK(c, gin.H{
 			"ok":      false,
 			"message": "SSH 连接失败，请检查主机地址、端口、认证配置",
@@ -601,6 +624,105 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		"disk_total_gb": node.DiskTotalGB,
 		"probe_at":      probeAt,
 	})
+}
+
+type trustHostKeyRequest struct {
+	FingerprintSHA256 string `json:"fingerprint_sha256"`
+}
+
+// TrustHostKey godoc
+// @Summary      信任节点 SSH 主机指纹
+// @Description  重新读取节点当前主机密钥（不发送任何凭据），仅当其 SHA256 指纹与提交值一致且 known_hosts 中没有冲突记录时写入 known_hosts。仅管理员可用。
+// @Tags         nodes
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                  true  "节点 ID"
+// @Param        body  body      trustHostKeyRequest  true  "确认的主机指纹"
+// @Success      200   {object}  handlers.Response
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
+// @Failure      404   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
+// @Failure      502   {object}  handlers.Response
+// @Router       /nodes/{id}/trust-host-key [post]
+func (h *NodeHandler) TrustHostKey(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var req trustHostKeyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请提供有效的 SHA256 主机指纹")
+		return
+	}
+	fingerprint := strings.TrimSpace(req.FingerprintSHA256)
+	if fingerprint == "" || !strings.HasPrefix(fingerprint, "SHA256:") {
+		respondBadRequest(c, "请提供有效的 SHA256 主机指纹")
+		return
+	}
+
+	var node model.Node
+	if err := h.db.First(&node, id).Error; err != nil {
+		respondNotFound(c, "节点不存在")
+		return
+	}
+
+	address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
+	result, err := sshutil.TrustNewHostKey(c.Request.Context(), address, fingerprint)
+
+	metadata := map[string]any{"stage": "host_key_trust"}
+	if result.Algorithm != "" {
+		metadata["host_key_algorithm"] = result.Algorithm
+	}
+	if result.Fingerprint != "" {
+		metadata["host_key_fingerprint"] = result.Fingerprint
+	}
+	event := credentialaudit.Event{
+		Action:  "node.host_key.trust",
+		Purpose: sshutil.PurposeNodeTest,
+		NodeID:  credentialaudit.PtrUint(node.ID),
+		Outcome: credentialaudit.OutcomeSuccess,
+	}
+
+	var hostKeyErr *sshutil.HostKeyError
+	var conflictCode string
+	switch {
+	case err == nil:
+		metadata["already_trusted"] = result.AlreadyTrusted
+	case errors.Is(err, sshutil.ErrHostKeyFingerprintChanged):
+		conflictCode = "ssh_host_key_changed"
+	case errors.As(err, &hostKeyErr) && hostKeyErr.Kind == sshutil.HostKeyMismatch:
+		conflictCode = "ssh_host_key_mismatch"
+	case errors.Is(err, sshutil.ErrHostKeyCheckingDisabled):
+		conflictCode = "ssh_host_key_checking_disabled"
+	}
+	if err != nil {
+		event.ErrorMessage = err.Error()
+		event.Outcome = credentialaudit.OutcomeFailure
+		if conflictCode != "" {
+			event.Outcome = credentialaudit.OutcomeBlocked
+		}
+	}
+	event.Metadata = metadata
+	writeCredentialAuditFromGin(c, h.db, event)
+
+	switch {
+	case err == nil:
+		respondOK(c, gin.H{
+			"trusted":            true,
+			"already_trusted":    result.AlreadyTrusted,
+			"algorithm":          result.Algorithm,
+			"fingerprint_sha256": result.Fingerprint,
+		})
+	case conflictCode != "":
+		respondConflictData(c, err.Error(), gin.H{"error_code": conflictCode})
+	case errors.Is(err, sshutil.ErrHostKeyUnreachable):
+		respondBadGateway(c, err.Error())
+	default:
+		respondInternalError(c, err)
+	}
 }
 
 // Metrics godoc

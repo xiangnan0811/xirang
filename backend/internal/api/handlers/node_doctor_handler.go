@@ -337,7 +337,7 @@ func classifyDoctorSSHSuggestion(err error) string {
 	evidence := classifyDoctorSSHEvidence(err)
 	switch evidence {
 	case "known_hosts 校验失败或主机密钥冲突":
-		return "核对服务器指纹；确认变更可信后更新 known_hosts。"
+		return "核对服务器指纹：首次连接可在节点页「测试连接」中确认信任；已知指纹变化需先核实服务器再更新 known_hosts。"
 	case "SSH 认证失败":
 		return "检查用户名、密码、SSH Key、公钥授权和 sudo 用户登录权限。"
 	case "SSH 网络连接失败或端口不可达":

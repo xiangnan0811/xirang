@@ -670,6 +670,17 @@ const zh = {
     cpuDisplayMode_clipped: "削峰",
     metricExpandTitle: "放大图表",
     metricExpandAriaLabel: "放大 {{label}} 图表",
+    hostKeyUnknownTitle: "未知主机密钥",
+    hostKeyMismatchTitle: "主机密钥不一致",
+    hostKeyFingerprintLabel: "主机指纹",
+    hostKeyAlgorithmLabel: "密钥算法",
+    hostKeyVerifyHint: "首次连接该服务器，请通过可信渠道（如服务器控制台执行 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub）核对指纹。",
+    hostKeyTrustAndRetry: "信任并重试",
+    hostKeyOpenSettings: "前往系统设置",
+    hostKeyAutoAcceptHint: "可在 系统设置 → 安全 中开启“自动接受新主机密钥”。",
+    hostKeyContactAdmin: "请联系管理员核对并信任该指纹。",
+    hostKeyMismatchWarning: "主机密钥与 known_hosts 记录不一致。服务器可能已重装，也可能存在中间人攻击。请先人工核实，确认可信后再由管理员更新 known_hosts。",
+    hostKeyTrusted: "已信任该主机指纹，正在重新测试连接。",
   },
 
   // ── node editor dialog ──

@@ -40,10 +40,11 @@ func ProbeNodeForPurpose(node model.Node, db *gorm.DB, purpose string) (ProbeRes
 	address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	start := time.Now()
 	client, err := ssh.Dial("tcp", address, &ssh.ClientConfig{
-		User:            node.Username,
-		Auth:            authMethods,
-		HostKeyCallback: hostKeyCallback,
-		Timeout:         5 * time.Second,
+		User:              node.Username,
+		Auth:              authMethods,
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: HostKeyAlgorithmsForAddress(address),
+		Timeout:           5 * time.Second,
 	})
 	if err != nil {
 		return ProbeResult{}, credential, fmt.Errorf("SSH 连接失败: %w", err)

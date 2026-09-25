@@ -179,4 +179,88 @@ describe("nodes api", () => {
       errors: [],
     });
   });
+
+  it("maps structured host-key failures and drops unknown or empty fingerprints", async () => {
+    const envelope = (data: Record<string, unknown>) => createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data,
+    }));
+    fetchMock
+      .mockResolvedValueOnce(envelope({
+        ok: false,
+        message: "未知主机密钥被拒绝",
+        error_code: "ssh_host_key_unknown",
+        host_key: { algorithm: "ssh-ed25519", fingerprint_sha256: "SHA256:abc" },
+      }))
+      .mockResolvedValueOnce(envelope({
+        ok: false,
+        message: "主机密钥不一致",
+        error_code: "ssh_host_key_mismatch",
+        host_key: { algorithm: "ssh-ed25519", fingerprint_sha256: "SHA256:mismatch" },
+      }))
+      .mockResolvedValueOnce(envelope({
+        ok: false,
+        message: "连接失败",
+        error_code: "ssh_timeout",
+        host_key: { algorithm: "ssh-ed25519", fingerprint_sha256: "SHA256:ignored" },
+      }))
+      .mockResolvedValueOnce(envelope({
+        ok: false,
+        message: "连接失败",
+        error_code: "ssh_host_key_unknown",
+        host_key: { algorithm: "ssh-ed25519", fingerprint_sha256: "" },
+      }))
+      .mockResolvedValueOnce(envelope({
+        ok: false,
+        message: "连接失败",
+        error_code: "ssh_host_key_mismatch",
+      }));
+
+    await expect(api.testNodeConnection("token-node", 7)).resolves.toMatchObject({
+      ok: false,
+      message: "未知主机密钥被拒绝",
+      errorCode: "ssh_host_key_unknown",
+      hostKey: { algorithm: "ssh-ed25519", fingerprintSha256: "SHA256:abc" },
+    });
+    await expect(api.testNodeConnection("token-node", 7)).resolves.toMatchObject({
+      ok: false,
+      message: "主机密钥不一致",
+      errorCode: "ssh_host_key_mismatch",
+      hostKey: { algorithm: "ssh-ed25519", fingerprintSha256: "SHA256:mismatch" },
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      const dropped = await api.testNodeConnection("token-node", 7);
+      expect(dropped.ok).toBe(false);
+      expect(dropped.errorCode).toBeUndefined();
+      expect(dropped.hostKey).toBeUndefined();
+    }
+  });
+
+  it("trustNodeHostKey posts the confirmed fingerprint and maps camelCase fields", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: {
+        trusted: true,
+        already_trusted: false,
+        algorithm: "ssh-ed25519",
+        fingerprint_sha256: "SHA256:abc",
+      },
+    })));
+
+    await expect(api.trustNodeHostKey("token-node", 7, "SHA256:abc")).resolves.toEqual({
+      alreadyTrusted: false,
+      algorithm: "ssh-ed25519",
+      fingerprintSha256: "SHA256:abc",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/nodes/7/trust-host-key");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({ Authorization: "Bearer token-node" });
+    expect(JSON.parse(String(init.body))).toEqual({ fingerprint_sha256: "SHA256:abc" });
+  });
 });

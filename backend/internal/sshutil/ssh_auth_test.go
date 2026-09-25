@@ -91,6 +91,50 @@ func TestResolveSSHHostKeyCallbackAcceptsUnknownKeyOnceAndRejectsMismatch(t *tes
 	if strings.Contains(err.Error(), "example.com") || strings.Contains(err.Error(), "203.0.113.10") || strings.Contains(err.Error(), knownHostsPath) {
 		t.Fatalf("主机密钥冲突错误不应暴露主机标识或 known_hosts 路径: %v", err)
 	}
+	var hostKeyErr *HostKeyError
+	if !errors.As(err, &hostKeyErr) || hostKeyErr.Kind != HostKeyMismatch || hostKeyErr.Fingerprint() != ssh.FingerprintSHA256(changedKey) {
+		t.Fatalf("主机密钥冲突应返回 mismatch HostKeyError 并携带当前指纹，实际: %#v", err)
+	}
+}
+
+func TestResolveSSHHostKeyCallbackFollowsDynamicAutoAcceptSource(t *testing.T) {
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	knownHostsPath := filepath.Join(t.TempDir(), "ssh", "known_hosts")
+	t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
+	effective := "true"
+	SetAutoAcceptNewHostsSource(func() string { return effective })
+	t.Cleanup(func() { SetAutoAcceptNewHostsSource(nil) })
+
+	callback, err := ResolveSSHHostKeyCallback()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 22}
+	if err := callback("accepted.example.com:22", remote, newTestPublicKey(t)); err != nil {
+		t.Fatalf("动态设置开启时应接受未知主机密钥（覆盖 env=false），实际: %v", err)
+	}
+
+	// The same callback instance must observe the change without restart.
+	effective = "false"
+	if err := callback("rejected.example.com:22", remote, newTestPublicKey(t)); err == nil {
+		t.Fatal("动态设置关闭后未知主机密钥应被拒绝")
+	}
+	effective = "not-a-bool"
+	var hostKeyErr *HostKeyError
+	if err := callback("invalid.example.com:22", remote, newTestPublicKey(t)); !errors.As(err, &hostKeyErr) || hostKeyErr.Kind != HostKeyUnknown {
+		t.Fatalf("无效设置值应按拒绝处理，实际: %v", err)
+	}
+	if _, err := AutoAcceptNewHosts(); err == nil || err.Error() != "SSH 自动接受未知主机密钥配置值无效" {
+		t.Fatalf("无效设置值应返回固定错误，实际: %v", err)
+	}
+	content, err := os.ReadFile(knownHostsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "accepted.example.com") || strings.Contains(string(content), "rejected.example.com") || strings.Contains(string(content), "invalid.example.com") {
+		t.Fatalf("known_hosts 应只记录动态开启时的主机，实际: %s", content)
+	}
 }
 
 func TestResolveSSHHostKeyCallbackRejectsUnknownKeyByDefault(t *testing.T) {
@@ -103,8 +147,14 @@ func TestResolveSSHHostKeyCallbackRejectsUnknownKeyByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 22}
-	if err := callback("example.com:22", remote, newTestPublicKey(t)); err == nil {
+	key := newTestPublicKey(t)
+	err = callback("example.com:22", remote, key)
+	if err == nil {
 		t.Fatal("unknown host keys must be rejected without explicit trust")
+	}
+	var hostKeyErr *HostKeyError
+	if !errors.As(err, &hostKeyErr) || hostKeyErr.Kind != HostKeyUnknown || hostKeyErr.Fingerprint() != ssh.FingerprintSHA256(key) || hostKeyErr.Algorithm() != key.Type() {
+		t.Fatalf("unknown host key must be reported as HostKeyError with presented key, got %#v", err)
 	}
 	stored, err := os.ReadFile(knownHostsPath)
 	if err != nil || len(stored) != 0 {

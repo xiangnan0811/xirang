@@ -10,6 +10,7 @@ import (
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/rsyncconfinement"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
 )
@@ -167,28 +168,38 @@ func managedRsyncRemoteSource(ctx context.Context, node model.Node, source strin
 		cleanup()
 		return provider.RsyncTreeRemoteSource{}, func() {}, fmt.Errorf("resolve managed Rsync known-hosts path: %w", err)
 	}
-	autoAccept, err := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
+	autoAccept, err := sshutil.AutoAcceptNewHosts()
 	if err != nil {
 		cleanup()
 		return provider.RsyncTreeRemoteSource{}, func() {}, err
 	}
-	hostKeyMode := provider.RsyncTreeHostKeyStrict
-	if autoAccept {
-		hostKeyMode = provider.RsyncTreeHostKeyAcceptNew
+	if node.Port < 0 || node.Port > 65535 {
+		cleanup()
+		return provider.RsyncTreeRemoteSource{}, func() {}, fmt.Errorf("%w: managed Rsync SSH port is invalid", backupasset.ErrInvalidState)
 	}
 	user := strings.TrimSpace(node.Username)
 	if user == "" {
 		cleanup()
 		return provider.RsyncTreeRemoteSource{}, func() {}, fmt.Errorf("%w: managed Rsync SSH user is unavailable", backupasset.ErrInvalidState)
 	}
-	if node.Port < 0 || node.Port > 65535 {
-		cleanup()
-		return provider.RsyncTreeRemoteSource{}, func() {}, fmt.Errorf("%w: managed Rsync SSH port is invalid", backupasset.ErrInvalidState)
+	transport := provider.RsyncTreeSSHTransport{Port: uint16(node.Port), HostKeyMode: provider.RsyncTreeHostKeyStrict, KnownHostsFile: knownHosts, IdentityFile: keyFile.Name()}
+	// OpenSSH never writes known_hosts itself; with auto-accept the host is first
+	// registered over the same ssh route the provider will use.
+	if autoAccept {
+		confinementPolicy, err := rsyncconfinement.LoadPolicyFromEnv()
+		if err != nil {
+			cleanup()
+			return provider.RsyncTreeRemoteSource{}, func() {}, err
+		}
+		if err := sshutil.RegisterNewHostKeyWithOpenSSH(ctx, transport.OpenSSHBase(confinementPolicy.Configured()), user, strings.TrimSpace(node.Host)); err != nil {
+			cleanup()
+			return provider.RsyncTreeRemoteSource{}, func() {}, err
+		}
 	}
 	writeRsyncCredentialAudit(ctx, node, credential, credentialaudit.OutcomeSuccess, "managed_rsync_key_prepare", nil)
 	return provider.RsyncTreeRemoteSource{
 		User: user, Host: strings.TrimSpace(node.Host), Path: source, UseSudoRsync: NeedsSudo(node),
-		Transport: provider.RsyncTreeSSHTransport{Port: uint16(node.Port), HostKeyMode: hostKeyMode, KnownHostsFile: knownHosts, IdentityFile: keyFile.Name()},
+		Transport: transport,
 	}, cleanup, nil
 }
 

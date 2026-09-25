@@ -670,6 +670,17 @@ const en = {
     cpuDisplayMode_clipped: "Clipped",
     metricExpandTitle: "Expand chart",
     metricExpandAriaLabel: "Expand {{label}} chart",
+    hostKeyUnknownTitle: "Unknown host key",
+    hostKeyMismatchTitle: "Host key mismatch",
+    hostKeyFingerprintLabel: "Host fingerprint",
+    hostKeyAlgorithmLabel: "Key algorithm",
+    hostKeyVerifyHint: "This is the first connection to this server. Verify the fingerprint through a trusted channel (for example, run ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub in the server console).",
+    hostKeyTrustAndRetry: "Trust and retry",
+    hostKeyOpenSettings: "Open system settings",
+    hostKeyAutoAcceptHint: "You can turn on automatic acceptance of new host keys in System settings → Security.",
+    hostKeyContactAdmin: "Ask an administrator to verify and trust this fingerprint.",
+    hostKeyMismatchWarning: "The host key does not match the known_hosts record. The server may have been reinstalled, or this may be a man-in-the-middle attack. Verify it manually, then have an administrator update known_hosts.",
+    hostKeyTrusted: "Host fingerprint trusted. Retrying the connection.",
   },
 
   // ── node editor dialog ──

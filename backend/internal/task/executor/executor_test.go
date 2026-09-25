@@ -2,17 +2,23 @@ package executor
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"golang.org/x/crypto/ssh"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/model"
 	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/sshutil"
@@ -361,50 +367,222 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 	}
 }
 
-func TestRsyncExecutorUsesStrictHostKeyCheckingWhenAutoAcceptDisabled(t *testing.T) {
+// startHostKeyOnlySSHServer serves SSH handshakes with a fresh Ed25519 host key
+// (plus an ECDSA key when withECDSA, which Go would negotiate by default); it
+// never authenticates anyone, which is all the registration probe needs.
+func startHostKeyOnlySSHServer(t *testing.T, withECDSA bool) (string, int, ssh.PublicKey) {
+	t.Helper()
+	_, hostPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(hostPrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := &ssh.ServerConfig{
+		PasswordCallback: func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+			return nil, errors.New("denied")
+		},
+	}
+	config.AddHostKey(signer)
+	if withECDSA {
+		ecdsaPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ecdsaSigner, err := ssh.NewSignerFromKey(ecdsaPrivateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.AddHostKey(ecdsaSigner)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func() {
+				defer conn.Close() //nolint:errcheck
+				_, _, _, _ = ssh.NewServerConn(conn, config)
+			}()
+		}
+	}()
+	address := listener.Addr().(*net.TCPAddr)
+	return address.IP.String(), address.Port, signer.PublicKey()
+}
+
+func requireOpenSSHClient(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("OpenSSH client not available")
+	}
+}
+
+func TestRsyncExecutorRunsOpenSSHStrictAndPreRegistersWhenAutoAcceptEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		env        string
+		source     func() string
+		registered bool
+	}{
+		{name: "auto accept disabled", env: "", registered: false},
+		{name: "dynamic setting overrides env", env: "false", source: func() string { return "true" }, registered: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
+			t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", tc.env)
+			knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
+			t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
+			sshutil.SetAutoAcceptNewHostsSource(tc.source)
+			t.Cleanup(func() { sshutil.SetAutoAcceptNewHostsSource(nil) })
+			if tc.registered {
+				requireOpenSSHClient(t)
+			}
+			host, port, hostKey := startHostKeyOnlySSHServer(t, false)
+			exec := &RsyncExecutor{binary: createArgEchoScript(t)}
+			target := t.TempDir()
+
+			rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
+			if err != nil {
+				t.Fatalf("生成测试私钥失败: %v", err)
+			}
+			privateKey := pem.EncodeToMemory(&pem.Block{
+				Type:  "RSA PRIVATE KEY",
+				Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+			})
+
+			task := model.Task{
+				ExecutorType: "rsync",
+				RsyncSource:  "/var/data",
+				RsyncTarget:  target,
+				Node: model.Node{
+					Host:     host,
+					Port:     port,
+					Username: "root",
+					AuthType: "key",
+					SSHKey: &model.SSHKey{
+						PrivateKey: string(privateKey),
+					},
+				},
+			}
+
+			var lines []string
+			exitCode, runErr := exec.Run(context.Background(), task, func(_ string, message string) {
+				lines = append(lines, message)
+			}, nil)
+			if runErr != nil {
+				t.Fatalf("期望执行成功，实际失败: %v", runErr)
+			}
+			if exitCode != 0 {
+				t.Fatalf("期望退出码=0，实际=%d", exitCode)
+			}
+
+			joined := strings.Join(lines, "\n")
+			if !strings.Contains(joined, "StrictHostKeyChecking=yes") || strings.Contains(joined, "accept-new") {
+				t.Fatalf("OpenSSH 必须始终严格校验，实际日志: %s", joined)
+			}
+			// Strict checking alone still lets OpenSSH append server-announced keys
+			// after authentication when UpdateHostKeys is enabled in ssh config.
+			sshParts, cleanupParts, err := buildRsyncSSHArgs(context.Background(), task.Node, sshutil.PurposeTaskBackup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cleanupParts()
+			if !strings.Contains(strings.Join(sshParts, " "), "-o UpdateHostKeys=no") {
+				t.Fatalf("OpenSSH 必须禁止写入 known_hosts，实际参数: %q", sshParts)
+			}
+			content, err := os.ReadFile(knownHostsPath)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			recorded := strings.Contains(string(content), strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostKey))))
+			if recorded != tc.registered {
+				t.Fatalf("known_hosts 登记=%v，期望 %v，内容: %q", recorded, tc.registered, content)
+			}
+		})
+	}
+}
+
+func TestManagedRsyncRemoteSourceStaysStrictAndPreRegistersWhenAutoAcceptEnabled(t *testing.T) {
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
-	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "")
-	exec := &RsyncExecutor{binary: createArgEchoScript(t)}
-	target := t.TempDir()
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
+	t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
+	sshutil.SetAutoAcceptNewHostsSource(func() string { return "true" })
+	t.Cleanup(func() { sshutil.SetAutoAcceptNewHostsSource(nil) })
+	requireOpenSSHClient(t)
+	host, port, hostKey := startHostKeyOnlySSHServer(t, false)
 
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
-		t.Fatalf("生成测试私钥失败: %v", err)
+		t.Fatal(err)
 	}
-	privateKey := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
-	})
+	privateKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaKey)})
+	node := model.Node{Host: host, Port: port, Username: "backup", AuthType: "key", SSHKey: &model.SSHKey{PrivateKey: string(privateKey)}}
 
-	task := model.Task{
-		ExecutorType: "rsync",
-		RsyncSource:  "/var/data",
-		RsyncTarget:  target,
-		Node: model.Node{
-			Host:     "1.2.3.4",
-			Port:     22,
-			Username: "root",
-			AuthType: "key",
-			SSHKey: &model.SSHKey{
-				PrivateKey: string(privateKey),
-			},
-		},
+	remote, cleanup, err := managedRsyncRemoteSource(context.Background(), node, "/data")
+	if err != nil {
+		t.Fatalf("managed remote source: %v", err)
 	}
+	defer cleanup()
+	if remote.Transport.HostKeyMode != provider.RsyncTreeHostKeyStrict {
+		t.Fatalf("managed Rsync must run OpenSSH strictly, got %q", remote.Transport.HostKeyMode)
+	}
+	content, err := os.ReadFile(knownHostsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostKey)))) {
+		t.Fatalf("auto-accept must pre-register the host key over the OpenSSH route, known_hosts=%q", content)
+	}
+}
 
-	var lines []string
-	exitCode, runErr := exec.Run(context.Background(), task, func(_ string, message string) {
-		lines = append(lines, message)
-	}, nil)
-	if runErr != nil {
-		t.Fatalf("期望执行成功，实际失败: %v", runErr)
+func TestRsyncPathsKeepRecordedEd25519KeyOnMultiKeyHost(t *testing.T) {
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
+	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
+	t.Setenv("SSH_KNOWN_HOSTS_PATH", knownHostsPath)
+	sshutil.SetAutoAcceptNewHostsSource(func() string { return "true" })
+	t.Cleanup(func() { sshutil.SetAutoAcceptNewHostsSource(nil) })
+	requireOpenSSHClient(t)
+	host, port, ed25519Key := startHostKeyOnlySSHServer(t, true)
+	if err := sshutil.AppendKnownHost(knownHostsPath, net.JoinHostPort(host, strconv.Itoa(port)), ed25519Key); err != nil {
+		t.Fatal(err)
 	}
-	if exitCode != 0 {
-		t.Fatalf("期望退出码=0，实际=%d", exitCode)
+	before, err := os.ReadFile(knownHostsPath)
+	if err != nil {
+		t.Fatal(err)
 	}
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaKey)})
+	node := model.Node{Host: host, Port: port, Username: "backup", AuthType: "key", SSHKey: &model.SSHKey{PrivateKey: string(privateKey)}}
 
-	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "StrictHostKeyChecking=yes") {
-		t.Fatalf("期望显式禁用时携带 StrictHostKeyChecking=yes，实际日志: %s", joined)
+	exitCode, runErr := (&RsyncExecutor{binary: createArgEchoScript(t)}).Run(context.Background(), model.Task{
+		ExecutorType: "rsync", RsyncSource: "/var/data", RsyncTarget: t.TempDir(), Node: node,
+	}, func(string, string) {}, nil)
+	if runErr != nil || exitCode != 0 {
+		t.Fatalf("legacy rsync must accept the recorded key, exit=%d err=%v", exitCode, runErr)
+	}
+	_, cleanup, err := managedRsyncRemoteSource(context.Background(), node, "/data")
+	if err != nil {
+		t.Fatalf("managed rsync must accept the recorded key: %v", err)
+	}
+	cleanup()
+	after, err := os.ReadFile(knownHostsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("known_hosts must not change: before=%q after=%q", before, after)
 	}
 }
 
