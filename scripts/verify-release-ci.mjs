@@ -2,6 +2,8 @@ import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
+export const DEFAULT_CI_WAIT_SECONDS = 3600;
+
 // Only a complete CI push run in this repository's main branch is release evidence.
 // A newer failed/pending attempt must never be hidden by an older successful run.
 export function selectReleaseCI(runs, repository, sha) {
@@ -22,7 +24,7 @@ export async function verifyReleaseCI({ repository, sha, request, waitSeconds = 
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !/^[a-f0-9]{40}$/.test(sha)) {
     throw new Error('A repository and immutable 40-hex source SHA are required');
   }
-  if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > 1800) throw new Error('Invalid CI wait bound');
+  if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > DEFAULT_CI_WAIT_SECONDS) throw new Error('Invalid CI wait bound');
   const deadline = now() + waitSeconds * 1000;
   while (true) {
     const result = await request(`/repos/${repository}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&branch=main&per_page=100`);
@@ -54,7 +56,7 @@ async function main() {
     const commit = await request(`/repos/${repository}/commits/${encodeURIComponent(ref)}`);
     sha = commit.sha;
   }
-  const run = await verifyReleaseCI({ repository, sha, request, waitSeconds: Number(process.env.CI_WAIT_SECONDS ?? 1500) });
+  const run = await verifyReleaseCI({ repository, sha, request, waitSeconds: Number(process.env.CI_WAIT_SECONDS ?? DEFAULT_CI_WAIT_SECONDS) });
   const evidence = `source_sha=${sha}\nci_run_id=${run.id}\nci_run_attempt=${run.run_attempt}\n`;
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, evidence);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY,

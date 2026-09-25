@@ -33,7 +33,7 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 [Publish Docker Images](../../.github/workflows/publish-images.yml)监听 `release.published`，按以下顺序发布：
 
 1. 从发布工作流自身的不可变提交加载验证策略，一次解析并冻结源码 SHA。
-2. 等待同仓库 `main` 的同 SHA、`push` 事件、完整 `ci.yml` 成功，默认最多 25 分钟。缺失、未完成、失败、取消或超时均拒绝发布，新的失败运行不能被旧成功掩盖。
+2. 等待同仓库 `main` 的同 SHA、`push` 事件、完整 `ci.yml` 成功，默认最多 60 分钟，为 PostgreSQL 等串行合同测试留出时间；验证任务超时为 65 分钟，预留 checkout 和 API 调用开销。缺失、未完成、失败、取消或超时均拒绝发布，新的失败运行不能被旧成功掩盖。
 3. 在原生 amd64/arm64 runner 分别构建并按 digest 推送，再用显式 `TRIVY_PLATFORM` 扫描各自 digest。
 4. 提升 multi-arch manifest/tag 前再次验证同 SHA CI；只有全部平台任务成功才发布正式标签。
 5. 发布后生成 provenance attestation 和摘要，记录源码 SHA、CI run、平台 digest 与扫描结论。
@@ -80,6 +80,7 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 - Release PR 未产生：检查 squash commit 语义、Release Please 运行及 token；不要手动打正式 tag。
 - Release 已有而镜像缺失：按发布步骤定位构建、扫描、CI 再核验、manifest 或 attestation 的失败点。仅瞬时推送故障时按原版号及来源重发。
+- 等待 CI 超时：先确认同 SHA 的主干 CI 全部成功，再重跑原发布运行；重跑使用原工作流策略，后续合并的等待时间调整不会修改旧运行。原运行的构建、扫描与发布前复核仍须通过，并先确认没有更新版本已发布，避免旧版本回写 `latest`。
 - 旧 release run 长时间未结束：先等待或取消旧运行，避免跨版本运行延迟回写 `latest`；当前 concurrency 按 ref 分组，不保证不同版本串行。
 - 版本提示异常：核对 `VERSION_CHECK_URL`、响应中的 `tag_name`/`html_url`、稳定 tag 格式及后端构建版本；开发版本 `dev` 不构成正式发布证据。
 
