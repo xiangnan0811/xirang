@@ -51,6 +51,10 @@ env -u NODE_ENV npm --prefix web audit --audit-level=moderate
 
 [CI](../../.github/workflows/ci.yml)使用 `pull_request` 检查 PR，push 仅监听 `main`，避免同一 PR 提交重复运行。required checks 的设置与交付步骤见贡献指南；发布链路与凭据归[发布手册](release.md)。
 
+PR 打开、更新提交、重新打开及编辑时都会运行 CI；编辑事件用于重新校验修改后的
+Conventional Commits 标题。旧运行的重跑仍使用原始事件中的标题，应以编辑后触发的
+新运行结果为准。
+
 后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI action 与
 `scripts/lint-backend.sh` 同步更新。本地通过带版本的 `go run` 隔离工具依赖，
 以当前选中的 Go 工具链构建并运行，避免系统 Go 升级后继续加载由旧 Go 构建的 linter。
