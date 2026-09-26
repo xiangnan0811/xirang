@@ -34,7 +34,7 @@
 
 ## 用户可见文本的共享脱敏
 
-用户可见的运行证据、通知载荷、投递错误、演练输出和事件消息，只要可能含有命令输出或秘密，都必须在持久化、响应或外发边界使用共享 `util.SanitizeMessage`；错误对象可经 `util.SanitizeError`。不能仅对 `key=value` token 做局部替换：必须覆盖多行 PEM 私钥整个 BEGIN/END 块，并脱敏 URL 凭据、路径/query 中的 token 和其他秘密模式。共享实现位于 `backend/internal/util/sanitize.go`，先移除私钥块再处理其他模式，最后限制长度。
+用户可见的运行证据、通知载荷、投递错误、演练输出和事件消息，只要可能含有命令输出或秘密，都必须在持久化、响应或外发边界使用共享 `util.SanitizeMessage`；错误对象可经 `util.SanitizeError`。不能仅对 `key=value` token 做局部替换：必须覆盖多行 PEM 私钥整个 BEGIN/END 块；若有界输出截断了 END 标记，则从 BEGIN 到文本末尾均按私钥处理。还须脱敏 URL 凭据、路径/query 中的 token 和其他秘密模式。共享实现位于 `backend/internal/util/sanitize.go`，先移除私钥块再处理其他模式，最后限制长度。
 
 这条要求不授权输出原本禁止返回的命令正文、内容或领域私有字段。领域已有更严格的闭合错误、只返回摘要和读取历史数据时再次脱敏等规则继续有效。新增文本出口复用共享入口，不能复制出逐渐分歧的 sanitizer。
 

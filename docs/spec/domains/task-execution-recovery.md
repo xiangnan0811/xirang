@@ -43,6 +43,8 @@ v2 manifest 对路径、逻辑根、link target 用 Base64 保留字节，哈希
 
 取证独立于可选 policy sampling，`verify_enabled=false` 不授权无证据代次。取证上限/失败本身不阻断普通传输，但完成后只能 warning、不可自动恢复；只读 capture 期间取消且从未开始写入不弄脏前代。真实写入失败/中断保留不确定代次，不能借旧 success 背书。
 
+Rsync 取证命令失败须保留失败阶段、底层原因、退出码（已启动进程时）及有界、脱敏的 stderr 诊断；任务历史和日志应能区分源文件消失、权限拒绝、空间不足、启动失败及取消/超时，不能统一抹成 `evidence copy failed`。错误链保留供调用者识别；stdout 文件清单不作为错误详情。输出超限须明确标注，凭据及完整或被截断的 PEM 私钥仍须脱敏。
+
 ## 旧版 Rclone 可变代次
 
 Legacy Rclone 没有 immutable snapshot，也不使用 Rsync manifest。Prepare/前置条件完成后，在调用变更 executor 前才持久化 `writing`；明确失败成为 `dirty`，模糊完成、crash 或未知停止保留 `unknown` hold，完整成功才成为当前 `verified` head，仍不代表历史对象版本。

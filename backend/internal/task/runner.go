@@ -875,12 +875,24 @@ func (m *Manager) runTaskWithContext(
 			}
 		}
 		if execCtx.Err() != nil || runCtx.Err() != nil {
+			captureContextErr := execCtx.Err()
+			if captureContextErr == nil {
+				captureContextErr = runCtx.Err()
+			}
+			message := "Rsync 捕获证据期间任务中止: " + captureContextErr.Error()
+			if captureError != "" {
+				message += "; " + captureError
+			}
+			message = sanitizeTaskLastError(message)
+			// Explicit user cancellation may already own the terminal row. Keep
+			// the capture diagnostic in the run log even in that case.
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", message, "")
 			if cancelErr := m.cancelTaskExecutionBeforeExecutor(
 				runID,
 				taskID,
 				taskEntity.NodeID,
 				&previousTaskOutcome,
-				"任务已取消",
+				message,
 			); cancelErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("捕获证据后取消失败")
 			} else {
