@@ -58,10 +58,12 @@ func SanitizeError(err error) string {
 // redact webhook targets that carry bearer tokens in path or query.
 var urlLikePattern = regexp.MustCompile(`(https?|wss?)://[^\s"'<>]+`)
 
+// A bounded command diagnostic can end in the middle of a PEM block. Treat
+// the remaining text as private key material when the END marker is absent.
+var privateKeyBlockSanitizer = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)`)
+
 // sensitivePatterns matches tokens/secrets in key=value or key: value form.
 // Captures the key name and replaces the value with "***".
-var privateKeyBlockSanitizer = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
-
 var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(authorization|bearer|token|api[_-]?key|secret|password)[=:]\s*[^\s"',;)]+`),
 }

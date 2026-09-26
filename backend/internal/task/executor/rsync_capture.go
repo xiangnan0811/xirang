@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,20 +57,51 @@ type rsyncCaptureListEntry struct {
 }
 
 type rsyncCaptureOutputBuffer struct {
-	buf   bytes.Buffer
-	limit int
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
 }
 
 func (b *rsyncCaptureOutputBuffer) Write(p []byte) (int, error) {
 	remaining := b.limit - b.buf.Len()
 	if remaining <= 0 {
+		b.truncated = true
 		return 0, io.ErrShortWrite
 	}
 	if len(p) > remaining {
+		b.truncated = true
 		_, _ = b.buf.Write(p[:remaining])
 		return remaining, io.ErrShortWrite
 	}
 	return b.buf.Write(p)
+}
+
+// Keep the original error available to errors.Is/As while exposing bounded,
+// sanitized diagnostics to task history. In particular, do not flatten an
+// ExitError or a context cancellation into a generic capture failure.
+type rsyncCaptureFailure struct {
+	cause   error
+	message string
+}
+
+func (e *rsyncCaptureFailure) Error() string { return e.message }
+func (e *rsyncCaptureFailure) Unwrap() error { return e.cause }
+
+func newRsyncCaptureFailure(operation string, cause error, outputs ...*rsyncCaptureOutputBuffer) error {
+	message := operation + ": " + cause.Error()
+	for _, output := range outputs {
+		if output.truncated {
+			message += fmt.Sprintf("; diagnostic output exceeded %d bytes", output.limit)
+		}
+	}
+	// The first buffer is stderr. stdout can contain a complete file listing,
+	// so only its limit failure is relevant to the diagnostic.
+	if len(outputs) > 0 {
+		if diagnostic := strings.TrimSpace(outputs[0].buf.String()); diagnostic != "" {
+			message += "; diagnostic: " + diagnostic
+		}
+	}
+	return &rsyncCaptureFailure{cause: cause, message: util.SanitizeMessage(message)}
 }
 
 func rsyncCommandBinary(task model.Task) string {
@@ -351,15 +383,15 @@ func rsyncCaptureSourceKind(ctx context.Context, task model.Task, source string,
 		kind, kindErr := rsyncCaptureLocalPathKind(checkedPath, roots, label)
 		if kindErr != nil {
 			if os.IsNotExist(kindErr) {
-				return "", fmt.Errorf("rsync capture source does not exist")
+				return "", newRsyncCaptureFailure("rsync capture source does not exist", kindErr)
 			}
-			return "", fmt.Errorf("rsync capture source is unavailable")
+			return "", newRsyncCaptureFailure("rsync capture source is unavailable", kindErr)
 		}
 		return kind, nil
 	}
 	listed, listErr := listRsyncCaptureEntries(ctx, task, checkedPath, nil, role)
 	if listErr != nil {
-		return "", fmt.Errorf("rsync capture source inspection failed")
+		return "", newRsyncCaptureFailure("rsync capture source inspection failed", listErr)
 	}
 	if len(listed) == 0 {
 		return "", fmt.Errorf("rsync capture source does not exist")
@@ -401,7 +433,7 @@ func prepareRsyncCaptureSource(
 	operand = fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), source)
 	sshParts, sshCleanup, sshErr := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeIntegrityCheck)
 	if sshErr != nil {
-		return "", "", nil, nil, cleanup, fmt.Errorf("rsync capture SSH setup failed")
+		return "", "", nil, nil, cleanup, newRsyncCaptureFailure("rsync capture SSH setup failed", sshErr)
 	}
 	cleanup = sshCleanup
 	transportArgs = append(transportArgs, "-e", strings.Join(sshParts, " "))
@@ -448,7 +480,10 @@ func runRsyncCaptureCommand(
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return errors.Join(err, ctx.Err())
+	}
+	return nil
 }
 
 func copyRsyncCaptureSelection(ctx context.Context, task model.Task, source string, rules []string, role RsyncCaptureRole) (string, error) {
@@ -474,7 +509,7 @@ func copyRsyncCaptureSelection(ctx context.Context, task model.Task, source stri
 	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
 	if err := runRsyncCaptureCommand(ctx, task, args, localSource, destination, false, role == RsyncCaptureTargetRole, runtimeReadPaths, stdout, stderr); err != nil {
 		_ = os.RemoveAll(destination)
-		return "", fmt.Errorf("rsync capture evidence copy failed")
+		return "", newRsyncCaptureFailure("rsync capture evidence copy failed", err, stderr, stdout)
 	}
 	return destination, nil
 }
@@ -515,7 +550,7 @@ func listRsyncCaptureEntries(ctx context.Context, task model.Task, source string
 	stdout := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureManifestLen}
 	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
 	if err := runRsyncCaptureCommand(ctx, task, args, localSource, destination, false, role == RsyncCaptureTargetRole, runtimeReadPaths, stdout, stderr); err != nil {
-		return nil, fmt.Errorf("rsync capture selection failed")
+		return nil, newRsyncCaptureFailure("rsync capture selection failed", err, stderr, stdout)
 	}
 	lines := strings.Split(strings.TrimRight(stdout.buf.String(), "\r\n"), "\n")
 	entries := make([]rsyncCaptureListEntry, 0, len(lines))

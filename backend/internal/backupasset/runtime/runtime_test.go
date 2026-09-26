@@ -609,7 +609,7 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 		t.Fatal("production runtime omitted CatalogRebuild / DerivedBackfill ports")
 	}
 	catalogWake := repositoryService.FieldByName("catalogWake")
-	if !catalogWake.IsValid() || catalogWake.IsNil() || catalogWake.Elem().Kind() != reflect.Ptr ||
+	if !catalogWake.IsValid() || catalogWake.IsNil() || catalogWake.Elem().Kind() != reflect.Pointer ||
 		catalogWake.Elem().Pointer() != reflect.ValueOf(runtime.catalogWorker).Pointer() {
 		t.Fatal("production Repository service did not receive the exact CatalogWorker wake requester")
 	}

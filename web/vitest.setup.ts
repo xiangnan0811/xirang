@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import type {} from "vitest/jsdom";
 // Wave 4 PR-A: vitest-axe 自定义 matcher（toHaveNoViolations 等）。
 // 注：
 // 1. vitest-axe@0.1.0 的 `extend-expect.js` 是空文件，必须显式 expect.extend(matchers) 才能在 vitest 4 注册。
@@ -7,65 +8,20 @@ import "@testing-library/jest-dom/vitest";
 import * as axeMatchers from "vitest-axe/matchers";
 import { afterAll, afterEach, beforeAll, expect } from "vitest";
 
-import { server } from "@/test/mocks/server";
 expect.extend(axeMatchers);
 
-function createMemoryStorage(): Storage {
-  const store = new Map<string, string>();
-
-  return {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store.clear();
-    },
-    getItem(key: string) {
-      return store.has(key) ? store.get(key)! : null;
-    },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(String(key), String(value));
-    }
-  };
-}
-
-function ensureStorage(name: "localStorage" | "sessionStorage") {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const candidate = window[name];
-  if (
-    candidate &&
-    typeof candidate.getItem === "function" &&
-    typeof candidate.setItem === "function" &&
-    typeof candidate.removeItem === "function" &&
-    typeof candidate.clear === "function"
-  ) {
-    return;
-  }
-
-  const storage = createMemoryStorage();
-  Object.defineProperty(window, name, {
-    configurable: true,
-    writable: true,
-    value: storage,
-  });
+// Vitest can retain Node's storage globals while installing jsdom's Storage
+// constructor. Use the current jsdom realm for all three before MSW/i18n read
+// storage; plain-object fallbacks break Storage.prototype spies and semantics.
+for (const name of ["Storage", "localStorage", "sessionStorage"] as const) {
   Object.defineProperty(globalThis, name, {
     configurable: true,
     writable: true,
-    value: storage,
+    value: jsdom.window[name],
   });
 }
 
-ensureStorage("localStorage");
-ensureStorage("sessionStorage");
+const { server } = await import("@/test/mocks/server");
 
 // Default to Chinese for tests (matches existing test assertions)
 if (typeof window !== "undefined") {

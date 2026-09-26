@@ -495,6 +495,39 @@ func TestProductionToolchainRuntimePackagePinsMatchWorkerDockerfile(t *testing.T
 	}
 }
 
+func TestProductionGoBuildersMatchModuleAndToolchainInventory(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..", "..")
+	module, err := os.ReadFile(filepath.Join(root, "backend", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var goVersion string
+	for line := range strings.SplitSeq(string(module), "\n") {
+		if fields := strings.Fields(line); len(fields) == 2 && fields[0] == "go" {
+			goVersion = fields[1]
+		}
+	}
+	builder := productionToolchainInventory().BuilderBase
+	if goVersion == "" || !strings.HasPrefix(builder, "golang:"+goVersion+"-alpine") {
+		t.Fatalf("builder %q does not match module Go version %q", builder, goVersion)
+	}
+	for file, stages := range map[string][]string{
+		"allinone": {"backend-builder", "supercronic-builder"},
+		"worker":   {"worker-builder"},
+	} {
+		dockerfile, err := os.ReadFile(filepath.Join(root, "deploy", file, "Dockerfile"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, stage := range stages {
+			want := "FROM " + builder + " AS " + stage + "\n"
+			if !strings.Contains(string(dockerfile), want) {
+				t.Errorf("%s Dockerfile must use inventory builder for %s: %s", file, stage, builder)
+			}
+		}
+	}
+}
+
 func TestToolchainPreflightPreservesClosedRuntimeClosureDiagnostics(t *testing.T) {
 	ready := map[string]bool{
 		capabilityspec.CapabilityImageOCR:   true,

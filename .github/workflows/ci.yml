@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -49,10 +50,13 @@ jobs:
       - name: Install recovery integration tools
         run: sudo apt-get update && sudo apt-get install -y rsync openssh-server
 
+      - name: Verify local lint toolchain launcher
+        run: bash ../scripts/lint-backend.test.sh
+
       - name: Lint backend
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.11.4
+          version: v2.14.0
           working-directory: backend
           # Full-repository lint avoids GitHub's 20,000-line PR patch limit for
           # large checkpoint deliveries while preserving the stricter local gate.

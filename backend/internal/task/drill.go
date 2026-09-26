@@ -1798,82 +1798,8 @@ func (m *Manager) runDrillRestore(ctx context.Context, srcTask model.Task, sandb
 
 // restoreBackupToSandbox 将备份恢复到沙箱节点。
 // 当前安全基线禁用旧跨节点传输路径，因此默认实现会在任何远端写操作前失败。
-func (m *Manager) restoreBackupToSandbox(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error {
-	if err := validateDrillCrossNodeTransferAllowed(srcTask.Node, sandboxNode); err != nil {
-		return err
-	}
-
-	// Step A: 在源节点上将备份数据恢复到临时路径
-	tempPath := fmt.Sprintf("/tmp/xirang-drill-src-%d", time.Now().UnixNano())
-	logf("info", "在源节点恢复到临时路径")
-
-	// 构建恢复任务（源→临时路径）
-	restoreTask := srcTask
-	restoreTask.RsyncSource = srcTask.RsyncTarget // 备份目的地作为源
-	restoreTask.RsyncTarget = tempPath            // 临时恢复路径
-
-	// 同步执行恢复
-	if err := m.executeSyncRestore(ctx, restoreTask, logf); err != nil {
-		// 清理临时目录
-		_ = m.runDrillSSHScript(ctx, srcTask.Node, fmt.Sprintf("rm -rf %s", executor.ShellEscape(tempPath)))
-		return fmt.Errorf("恢复备份到临时目录失败: %w", err)
-	}
-
-	// Step B: 将恢复的数据从源节点传输到沙箱节点
-	logf("info", "传输恢复数据到沙箱节点")
-
-	if err := m.transferFilesToSandbox(ctx, srcTask.Node, tempPath, sandboxNode, drillPath, logf); err != nil {
-		// 清理两边的临时文件；沙箱路径必须再次通过边界校验后才允许 rm -rf。
-		_ = m.runDrillSSHScript(ctx, srcTask.Node, fmt.Sprintf("rm -rf %s", executor.ShellEscape(tempPath)))
-		if validateErr := validateDrillSandboxPath(drillPath); validateErr == nil {
-			_ = m.runDrillSSHScript(ctx, sandboxNode, fmt.Sprintf("rm -rf %s", executor.ShellEscape(drillPath)))
-		} else {
-			logger.Module("task").Warn().Err(validateErr).Msg("跳过恢复演练传输失败后的沙箱清理：路径不在安全边界内")
-		}
-		return fmt.Errorf("传输文件到沙箱失败: %w", err)
-	}
-
-	// 清理源节点临时目录
-	_ = m.runDrillSSHScript(ctx, srcTask.Node, fmt.Sprintf("rm -rf %s", executor.ShellEscape(tempPath)))
-
-	return nil
-}
-
-// executeSyncRestore 在源节点上同步执行备份恢复。
-func (m *Manager) executeSyncRestore(ctx context.Context, restoreTask model.Task, logf func(string, string)) error {
-	// 确保远程目标路径可用
-	if err := executor.EnsureRemoteTargetReadyForPurpose(ctx, restoreTask.Node, restoreTask.RsyncTarget, sshutil.PurposeDrill); err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("恢复前检查已取消")
-		}
-		return fmt.Errorf("恢复前检查失败（目标路径）: %w", err)
-	}
-
-	logf("info", "开始执行源节点临时恢复")
-
-	// 使用 RunSSHCommandOutput 执行 rsync 恢复（复用 runRemoteRestore 的核心逻辑）
-	client, err := executor.DialSSHForNodePurpose(ctx, restoreTask.Node, sshutil.PurposeDrill)
-	if err != nil {
-		return fmt.Errorf("SSH 连接失败: %w", err)
-	}
-	defer client.Close() //nolint:errcheck
-
-	rsyncBin := "rsync"
-	if executor.NeedsSudo(restoreTask.Node) {
-		rsyncBin = "sudo rsync"
-	}
-	rsyncCmd := fmt.Sprintf("%s -avz --info=progress2 -- %s %s",
-		rsyncBin,
-		executor.ShellEscape(restoreTask.RsyncSource),
-		executor.ShellEscape(restoreTask.RsyncTarget))
-
-	logf("info", "执行 rsync 恢复命令")
-	output, err := executor.RunSSHCommandOutput(ctx, client, rsyncCmd)
-	if err != nil {
-		return fmt.Errorf("恢复执行失败: %s", sanitizeTaskLastError(err.Error()+", 输出: "+output))
-	}
-
-	return nil
+func (m *Manager) restoreBackupToSandbox(_ context.Context, srcTask model.Task, sandboxNode model.Node, _ string, _ func(string, string)) error {
+	return validateDrillCrossNodeTransferAllowed(srcTask.Node, sandboxNode)
 }
 
 // validateDrillCrossNodeTransferAllowed 阻断旧的恢复演练跨节点传输路径。
