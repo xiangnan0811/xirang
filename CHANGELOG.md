@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.22](https://github.com/xiangnan0811/xirang/compare/v0.55.21...v0.55.22) (2026-09-26)
+
+
+### 🐛 Bug Fixes
+
+* 保留 Rsync 取证诊断并统一 Go 1.27 工具链 ([#556](https://github.com/xiangnan0811/xirang/issues/556)) ([5b65d27](https://github.com/xiangnan0811/xirang/commit/5b65d2740603ad18d848526cf7161415ef94ec5d))
+
 ## [0.55.21](https://github.com/xiangnan0811/xirang/compare/v0.55.20...v0.55.21) (2026-09-25)
 
 
