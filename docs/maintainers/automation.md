@@ -8,6 +8,22 @@
 
 安全告警与安全修复不受常规版本更新排期约束。替换旧机器人 PR 前先记录精确 PR 编号与 head 分支，只关闭该名单；不得用动态“全部关闭”查询误伤新安全 PR。
 
+### Go 工具链升级
+
+项目使用 Go 1.27.1；CI 从 `backend/go.mod` 读取版本。Core、Worker 和
+supercronic 的构建镜像同步固定到 Go 1.27.1 / Alpine 3.24 的多架构摘要，
+Worker 的 `BuilderBase` 运行环境指纹和镜像检查脚本须随之更新。
+保留 SQLite 所需的 CGO，以及与运行镜像兼容的 musl；升级 Go 不自动升级 Alpine 主线。
+
+Go 升级不要求所有模块跟随更新。先核对上游兼容说明、构建标签、CGO、
+运行时内部接口和漏洞结果，仅升级不兼容或需要安全修复的依赖；不要用批量
+`go get -u` 扩大变更。`go.mod` 的版本指令也会影响运行时兼容默认值，必须在
+修改指令后重新验证，不能仅复用新编译器搭配旧指令的结果。
+
+验收包括模块完整性、完整后端测试与构建、lint、漏洞扫描、并发敏感路径的 race、
+SQLite / PostgreSQL 行为，以及目标镜像的启动和 `/readyz`。
+amd64 验证不能替代 arm64 原生 Worker 沙箱验收；本地通过也不代表线上已部署。
+
 ## 前端依赖审计
 
 更改锁文件、升级依赖或排查本地与 CI/Docker 差异时，使用与 [CI](../../.github/workflows/ci.yml)及 [Docker web-builder](../../deploy/allinone/Dockerfile)一致的 Node 主版本，当前两者均为 Node 20。不要把 Actions 自身的 JavaScript runtime 与项目 Node 版本混为一谈。
@@ -34,6 +50,11 @@ env -u NODE_ENV npm --prefix web audit --audit-level=moderate
 ## Actions 与 CI
 
 [CI](../../.github/workflows/ci.yml)使用 `pull_request` 检查 PR，push 仅监听 `main`，避免同一 PR 提交重复运行。required checks 的设置与交付步骤见贡献指南；发布链路与凭据归[发布手册](release.md)。
+
+后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI action 与
+`scripts/lint-backend.sh` 同步更新。本地通过带版本的 `go run` 隔离工具依赖，
+以当前选中的 Go 工具链构建并运行，避免系统 Go 升级后继续加载由旧 Go 构建的 linter。
+该方式不改项目模块或全局安装；升级 linter 后执行配置校验、全仓库 lint 和本地完整门禁。
 
 更新工作流 action 时：
 

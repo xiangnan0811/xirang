@@ -412,7 +412,7 @@ for contract in \
 done
 
 for contract in \
-  'FROM golang:1.26.6-alpine@sha256:' \
+  'FROM golang:1.27.1-alpine3.24@sha256:' \
   'gcc=15.2.0-r5' \
   'musl-dev=1.2.6-r2' \
   'bash=5.3.3-r1' \

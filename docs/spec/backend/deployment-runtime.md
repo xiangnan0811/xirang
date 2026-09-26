@@ -41,4 +41,4 @@ Compose 与 Dockerfile 的健康检查均访问 `http://127.0.0.1:10761/readyz`�
 
 Worker 保持可选、本地构建且不发布公共镜像。启用能力与安装就绪不能混为一谈；Core-only 运行保留 `10761` 入口。Compose 改动须通过 `check-compose-config.sh` 及自测；涉及 Worker 的静态检查使用 `ASSET_WORKER_STATIC_ONLY=1 scripts/test-asset-worker.sh`，静态通过不代表实际沙箱或容器验收完成。
 
-依赖固定、镜像发布、版本来源与部署文档同步归维护者主文。Alpine 软件源移除已锁定版本时，按[镜像构建依赖](../../maintainers/automation.md#镜像构建依赖)核对两个架构的可安装版本；包解析错误中出现的基础镜像已安装旧版本不是降级依据，安全修复库仍须保留精确锁定。修改镜像/配置后按贡献指南执行对应 backend、frontend、YAML、Nginx、文档及 CI 门禁；本篇不以文档检查代替真实容器运行证据。
+依赖固定、镜像发布、版本来源与部署文档同步归维护者主文。[Go 工具链升级](../../maintainers/automation.md#go-工具链升级)须同时覆盖模块声明、Core/Worker/supercronic 构建和 Worker 指纹，保持 CGO 与运行镜像的 libc 兼容。Alpine 软件源移除已锁定版本时，按[镜像构建依赖](../../maintainers/automation.md#镜像构建依赖)核对两个架构的可安装版本；包解析错误中出现的基础镜像已安装旧版本不是降级依据，安全修复库仍须保留精确锁定。修改镜像/配置后按贡献指南执行对应 backend、frontend、YAML、Nginx、文档及 CI 门禁；本篇不以文档检查代替真实容器运行证据。

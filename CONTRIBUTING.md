@@ -11,10 +11,15 @@
 ## 开发环境
 
 后端使用 Go / Gin / GORM，前端使用 React / TypeScript / Vite / Tailwind CSS。
-版本以 `backend/go.mod`、`web/package.json` 及锁文件为准。需要 Go 1.26.6
+版本以 `backend/go.mod`、`web/package.json` 及锁文件为准。需要 Go 1.27.1
 或兼容版本、SQLite 驱动所需 C 编译工具链（CGO），以及 Node.js
 20.19+（20.x）、22.13+（22.x）或 24+ 和 npm。文档结构检查使用 Python 3.9+
 （仅标准库）。升级工具链后也须确认 linter 兼容。
+
+本地 Go 1.27 可直接运行 `make lint-backend` 或推送前门禁。两者通过
+`scripts/lint-backend.sh` 使用当前 Go 工具链构建并运行与 CI 对齐的固定 linter，
+不依赖 PATH 中旧版 `golangci-lint`，也不强制降级 Go。首次执行需要下载工具依赖，
+后续复用 Go 缓存；版本化 `go run` 不修改项目 `go.mod` / `go.sum`。
 
 两个终端均从仓库根目录开始：
 

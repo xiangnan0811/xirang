@@ -58,7 +58,7 @@ setup-hooks:
 lint: lint-backend lint-frontend ## Run all linters
 
 lint-backend: ## Run golangci-lint
-	cd backend && golangci-lint run ./...
+	bash scripts/lint-backend.sh
 
 lint-frontend: ## Run ESLint
 	cd web && npm run lint
