@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.21](https://github.com/xiangnan0811/xirang/compare/v0.55.20...v0.55.21) (2026-09-25)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** extend release CI wait window ([#554](https://github.com/xiangnan0811/xirang/issues/554)) ([333ab5f](https://github.com/xiangnan0811/xirang/commit/333ab5fd14665fb81cf50045962cc34277efb3ab))
+
 ## [0.55.20](https://github.com/xiangnan0811/xirang/compare/v0.55.19...v0.55.20) (2026-09-25)
 
 
