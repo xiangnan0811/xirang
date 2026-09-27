@@ -375,8 +375,6 @@ func runCronCallbackReconcileBarrier(t *testing.T, callbackFirst bool) {
 	db := openConcurrentManagerTestDB(t)
 	exec := &successExecutor{}
 	cron := taskscheduler.NewCronScheduler()
-	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, cron, nil, nil, 8, 90)
-	shutdownManagerOnCleanup(t, manager)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	scheduledAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
@@ -425,6 +423,11 @@ func runCronCallbackReconcileBarrier(t *testing.T, callbackFirst bool) {
 		t.Fatalf("register reconciliation observer: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Callback().Query().Remove(queryCallback) })
+
+	// NewManager starts database workers, so install every GORM callback first.
+	// Cleanup runs in reverse order: stop the workers before removing callbacks.
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, cron, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 
 	triggerDone := make(chan error, 1)
 	reconcileDone := make(chan error, 1)
