@@ -412,6 +412,13 @@ func prepareRsyncCaptureSource(
 	policy rsyncconfinement.Policy,
 	role RsyncCaptureRole,
 ) (operand, localSource string, transportArgs, runtimeReadPaths []string, cleanup func(), err error) {
+	return prepareRsyncCaptureSourceForPurpose(ctx, task, source, policy, role, sshutil.PurposeIntegrityCheck)
+}
+
+func prepareRsyncCaptureSourceForPurpose(
+	ctx context.Context, task model.Task, source string, policy rsyncconfinement.Policy,
+	role RsyncCaptureRole, purpose string,
+) (operand, localSource string, transportArgs, runtimeReadPaths []string, cleanup func(), err error) {
 	cleanup = func() {}
 	roots, label, roleErr := rsyncCapturePolicy(policy, role)
 	if roleErr != nil {
@@ -431,7 +438,7 @@ func prepareRsyncCaptureSource(
 		return "", "", nil, nil, cleanup, fmt.Errorf("rsync capture remote source must be absolute")
 	}
 	operand = fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), source)
-	sshParts, sshCleanup, sshErr := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeIntegrityCheck)
+	sshParts, sshCleanup, sshErr := buildRsyncSSHArgs(ctx, task.Node, purpose)
 	if sshErr != nil {
 		return "", "", nil, nil, cleanup, newRsyncCaptureFailure("rsync capture SSH setup failed", sshErr)
 	}
@@ -552,7 +559,11 @@ func listRsyncCaptureEntries(ctx context.Context, task model.Task, source string
 	if err := runRsyncCaptureCommand(ctx, task, args, localSource, destination, false, role == RsyncCaptureTargetRole, runtimeReadPaths, stdout, stderr); err != nil {
 		return nil, newRsyncCaptureFailure("rsync capture selection failed", err, stderr, stdout)
 	}
-	lines := strings.Split(strings.TrimRight(stdout.buf.String(), "\r\n"), "\n")
+	return parseRsyncCaptureEntries(stdout.buf.String())
+}
+
+func parseRsyncCaptureEntries(output string) ([]rsyncCaptureListEntry, error) {
+	lines := strings.Split(strings.TrimRight(output, "\r\n"), "\n")
 	entries := make([]rsyncCaptureListEntry, 0, len(lines))
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
@@ -714,7 +725,7 @@ func hashLocalRsyncFile(ctx context.Context, path string) (string, int64, error)
 func populateLocalRsyncEntry(ctx context.Context, path string, entry *model.RsyncCaptureManifestEntry) error {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("rsync capture source changed during evidence collection")
+		return newRsyncCaptureFailure("rsync capture source changed during evidence collection", err)
 	}
 	switch entry.Kind {
 	case "directory":
@@ -730,7 +741,7 @@ func populateLocalRsyncEntry(ctx context.Context, path string, entry *model.Rsyn
 		}
 		digest, size, err := hashLocalRsyncFile(ctx, path)
 		if err != nil {
-			return fmt.Errorf("rsync capture source hashing failed")
+			return newRsyncCaptureFailure("rsync capture source hashing failed", err)
 		}
 		entry.SHA256 = digest
 		entry.Size = size
@@ -740,7 +751,7 @@ func populateLocalRsyncEntry(ctx context.Context, path string, entry *model.Rsyn
 		}
 		target, err := os.Readlink(path)
 		if err != nil {
-			return fmt.Errorf("rsync capture symlink evidence failed")
+			return newRsyncCaptureFailure("rsync capture symlink evidence failed", err)
 		}
 		if len(target) > maxRsyncCapturePathLen {
 			return fmt.Errorf("rsync capture symlink target is too long")
@@ -767,7 +778,7 @@ func (r *rsyncCaptureContextReader) Read(buffer []byte) (int, error) {
 func verifyRsyncDirectoryReadable(ctx context.Context, path string) error {
 	directory, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("rsync capture directory is unreadable")
+		return newRsyncCaptureFailure("rsync capture directory is unreadable", err)
 	}
 	defer func() { _ = directory.Close() }()
 	for {
@@ -779,7 +790,7 @@ func verifyRsyncDirectoryReadable(ctx context.Context, path string) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("rsync capture directory enumeration failed")
+			return newRsyncCaptureFailure("rsync capture directory enumeration failed", err)
 		}
 	}
 }

@@ -450,6 +450,6 @@ func verifyStagedRsyncTree(root string, manifest model.RsyncCaptureManifest) err
 				return nil
 			}
 		}
-		return fmt.Errorf("rsync restore staging tree contains an unselected entry")
+		return fmt.Errorf("rsync restore staging tree contains an unselected entry: %q", relative)
 	})
 }

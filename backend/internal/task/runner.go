@@ -849,6 +849,7 @@ func (m *Manager) runTaskWithContext(
 		return
 	}
 	var captureManifest string
+	var backupCapture *executor.RsyncBackupCapture
 	var captureLayout string
 	var captureRoot string
 	m.populateRsyncBinary(&taskEntity)
@@ -856,7 +857,16 @@ func (m *Manager) runTaskWithContext(
 	captureAttempted := isLegacyMutableRsyncTask(taskEntity)
 	captureError := ""
 	if captureAttempted {
-		captureManifest, err = executor.CaptureRsyncManifest(execCtx, taskEntity, executor.RsyncCaptureSourceRole)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始生成 Rsync 备份捕获副本", taskEntity.Status)
+		backupCapture, err = executor.PrepareRsyncBackupCapture(execCtx, taskEntity)
+		if backupCapture != nil {
+			defer func() {
+				if cleanupErr := backupCapture.Close(); cleanupErr != nil {
+					m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", sanitizeTaskLastError("Rsync 捕获副本清理失败: "+cleanupErr.Error()), taskEntity.Status)
+				}
+			}()
+			captureManifest = backupCapture.Manifest()
+		}
 		if err != nil {
 			captureError = sanitizeTaskLastError("Rsync 捕获证据生成失败: " + err.Error())
 			captureManifest = ""
@@ -953,14 +963,14 @@ func (m *Manager) runTaskWithContext(
 		runCompleted = true
 		return
 	}
-	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, armMutableGeneration, func(level, message string) {
+	providerResult := m.executeProviderWithCapture(execCtx, taskEntity, runID, reason, chainRunID, armMutableGeneration, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
 		m.sampleWriter.Write(taskID, taskEntity.NodeID, runStartedAt, sample)
 		if sample.Percent > 0 {
 			m.sampleWriter.WriteProgress(taskID, runID, sample.Percent)
 		}
-	})
+	}, backupCapture)
 	exitCode, err := providerResult.ExitCode, providerResult.Err
 	suppressRetry := providerResult.SuppressRetry
 	var remoteUnknownErr *executor.RemoteExecutionUnknownError

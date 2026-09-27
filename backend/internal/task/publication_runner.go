@@ -90,6 +90,14 @@ func (m *Manager) executeProvider(
 	logf executor.LogFunc,
 	progressf executor.ProgressFunc,
 ) (providerResult providerRunResult) {
+	return m.executeProviderWithCapture(ctx, taskEntity, runID, reason, chainRunID, beforeExecutor, logf, progressf, nil)
+}
+
+func (m *Manager) executeProviderWithCapture(
+	ctx context.Context, taskEntity model.Task, runID uint, reason, chainRunID string,
+	beforeExecutor func() error, logf executor.LogFunc, progressf executor.ProgressFunc,
+	capture *executor.RsyncBackupCapture,
+) (providerResult providerRunResult) {
 	if m == nil || m.executorFactory == nil {
 		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor factory unavailable", backupasset.ErrInvalidState), ExecutorNotInvoked: true}
 	}
@@ -97,12 +105,23 @@ func (m *Manager) executeProvider(
 	if exec == nil {
 		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor unavailable", backupasset.ErrInvalidState), ExecutorNotInvoked: true}
 	}
+	compatibilityExecutor := exec
+	if capture != nil {
+		factory, ok := m.executorFactory.(executor.CapturedRsyncFactory)
+		if !ok {
+			return providerRunResult{ExitCode: -1, Err: fmt.Errorf("executor factory does not support captured Rsync backups"), ExecutorNotInvoked: true}
+		}
+		compatibilityExecutor = factory.ResolveRsyncBackupCapture(capture)
+		if compatibilityExecutor == nil {
+			return providerRunResult{ExitCode: -1, Err: fmt.Errorf("captured Rsync executor unavailable"), ExecutorNotInvoked: true}
+		}
+	}
 	providerKind := strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType))
 	if m.publicationCoordinator == nil || (providerKind != "restic" && providerKind != "rsync" && providerKind != "rclone") {
 		if beforeErr := invokeBeforeProvider(ctx, beforeExecutor); beforeErr != nil {
 			return providerRunResult{ExitCode: -1, Err: beforeErr, ExecutorNotInvoked: true}
 		}
-		exitCode, err := exec.Run(ctx, taskEntity, logf, progressf)
+		exitCode, err := compatibilityExecutor.Run(ctx, taskEntity, logf, progressf)
 		return providerResultFromExecutor(exitCode, err)
 	}
 
@@ -163,7 +182,7 @@ func (m *Manager) executeProvider(
 			}
 			return result
 		}
-		exitCode, runErr := exec.Run(commandCtx, taskEntity, logf, progressf)
+		exitCode, runErr := compatibilityExecutor.Run(commandCtx, taskEntity, logf, progressf)
 		cleanupCtx, cleanupCancel := newPublicationCleanupContext(ctx)
 		completeErr := session.CompleteCompatibility(cleanupCtx)
 		cleanupCancel()
