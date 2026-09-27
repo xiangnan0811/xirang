@@ -101,8 +101,15 @@ exec sleep 60
 			if err := db.First(&run, runID).Error; err != nil {
 				t.Fatal(err)
 			}
-			if run.Status != model.TaskRunStatusCanceled || run.BackupGenerationState != "" || executor.Calls() != 0 {
-				t.Fatalf("cancellation changed write boundary: %+v calls=%d", run, executor.Calls())
+			wantStatus := model.TaskRunStatusCanceled
+			if reason == context.DeadlineExceeded {
+				wantStatus = model.TaskRunStatusFailed
+				if !strings.Contains(run.LastError, "超时") {
+					t.Fatalf("deadline must retain timeout diagnostic: %q", run.LastError)
+				}
+			}
+			if run.Status != wantStatus || run.BackupGenerationState != "" || executor.Calls() != 0 {
+				t.Fatalf("interruption classification or write boundary changed: %+v calls=%d", run, executor.Calls())
 			}
 			var logs []model.TaskLog
 			if err := db.Where("task_run_id = ? AND level = ?", runID, "warn").Find(&logs).Error; err != nil {
@@ -127,6 +134,62 @@ exec sleep 60
 }
 
 func (e *captureDiagnosticExecutor) RsyncBinary() string { return e.binary }
+
+func TestCaptureDeadlineWaitsForClaimedUserCancellation(t *testing.T) {
+	db := openManagerTestDB(t)
+	previous := seedTaskForManagerTest(t, db)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
+	runID := createTestTaskRun(t, db, previous.ID, "manual")
+	current := previous
+	if err := m.enterTaskExecution(context.Background(), runID, previous.NodeID, time.Now().UTC(), &current); err != nil {
+		t.Fatal(err)
+	}
+	ownership := &pendingRunOwnership{cancelPersistenceStarted: make(chan struct{}), cancelSettled: make(chan struct{})}
+	ownership.beginCancellationPersistence()
+	ownership.requestUserCancel()
+	m.pendingRuns.Store(previous.ID, ownership)
+	t.Cleanup(func() { m.pendingRuns.Delete(previous.ID) })
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		finished <- m.stopTaskExecutionBeforeExecutor(ctx, runID, previous.ID, previous.NodeID, &previous, "capture deadline")
+	}()
+	defer ownership.markCancellationPersistenceSettled()
+	select {
+	case err := <-finished:
+		t.Fatalf("runner raced unsettled user cancellation: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.TaskRunStatusRunning {
+		t.Fatalf("runner stole terminal decision: %+v", run)
+	}
+	var effects int64
+	if err := db.Model(&model.TaskRunEffect{}).Where("task_run_id = ?", runID).Count(&effects).Error; err != nil || effects != 0 {
+		t.Fatalf("unexpected terminal effects: %d %v", effects, err)
+	}
+	// Complete the cancellation's persistence while its barrier is held.
+	if err := db.Model(&run).Update("status", model.TaskRunStatusCanceled).Error; err != nil {
+		t.Fatal(err)
+	}
+	ownership.markCancellationPersistenceSettled()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not resume after cancellation settled")
+	}
+	if err := db.First(&run, runID).Error; err != nil || run.Status != model.TaskRunStatusCanceled {
+		t.Fatalf("cancellation overwritten: %+v %v", run, err)
+	}
+}
 
 func TestRsyncCaptureDiagnosticsReachTaskHistoryAndLogs(t *testing.T) {
 	rsync, err := exec.LookPath("rsync")

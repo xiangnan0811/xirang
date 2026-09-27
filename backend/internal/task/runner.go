@@ -38,6 +38,26 @@ const defaultGlobalTaskTimeout = 24 * time.Hour
 
 var globalTaskTimeoutOverride time.Duration // 仅供测试，0 = 不覆盖
 
+// stopTaskExecutionBeforeExecutor distinguishes an exhausted execution budget
+// from cancellation while retaining the no-write boundary of preparation.
+func (m *Manager) stopTaskExecutionBeforeExecutor(ctx context.Context, runID, taskID, nodeID uint, previous *model.Task, message string) error {
+	if value, ok := m.pendingRuns.Load(taskID); ok {
+		if ownership, ok := value.(*pendingRunOwnership); ok && ownership.cancellationKind() == pendingRunCancellationUser {
+			// A user cancellation already owns the terminal decision, even if
+			// this context first stopped because its deadline expired.
+			return m.cancelTaskExecutionBeforeExecutor(runID, taskID, nodeID, previous, message)
+		}
+	}
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return m.cancelTaskExecutionBeforeExecutor(runID, taskID, nodeID, previous, message)
+	}
+	message = "任务执行超时，尚未启动 executor: " + message
+	finishedAt := time.Now().UTC()
+	return m.failTaskExecutionBeforeExecutor(context.Background(), taskID, runID,
+		map[string]interface{}{"next_run_at": cronutil.Next(previous.CronSpec), "last_error": message},
+		map[string]interface{}{"finished_at": &finishedAt, "last_error": message})
+}
+
 // computeExecTimeout 计算单次任务执行的最大允许时长：
 //   - 优先使用 Policy.MaxExecutionSeconds（>0 时）
 //   - 否则读环境变量 TASK_MAX_EXECUTION_SECONDS（秒）
@@ -897,7 +917,7 @@ func (m *Manager) runTaskWithContext(
 			// Explicit user cancellation may already own the terminal row. Keep
 			// the capture diagnostic in the run log even in that case.
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", message, "")
-			if cancelErr := m.cancelTaskExecutionBeforeExecutor(
+			if cancelErr := m.stopTaskExecutionBeforeExecutor(execCtx,
 				runID,
 				taskID,
 				taskEntity.NodeID,
