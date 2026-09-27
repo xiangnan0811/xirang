@@ -48,6 +48,10 @@ func (f stubExecutorFactory) Resolve(_ string) taskexec.Executor {
 	return f.executor
 }
 
+func (f stubExecutorFactory) ResolveRsyncBackupCapture(_ *taskexec.RsyncBackupCapture) taskexec.Executor {
+	return f.executor
+}
+
 type nodeWriteAdmissionFake struct {
 	mu                  sync.Mutex
 	calls               int

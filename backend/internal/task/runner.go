@@ -38,6 +38,26 @@ const defaultGlobalTaskTimeout = 24 * time.Hour
 
 var globalTaskTimeoutOverride time.Duration // 仅供测试，0 = 不覆盖
 
+// stopTaskExecutionBeforeExecutor distinguishes an exhausted execution budget
+// from cancellation while retaining the no-write boundary of preparation.
+func (m *Manager) stopTaskExecutionBeforeExecutor(ctx context.Context, runID, taskID, nodeID uint, previous *model.Task, message string) error {
+	if value, ok := m.pendingRuns.Load(taskID); ok {
+		if ownership, ok := value.(*pendingRunOwnership); ok && ownership.cancellationKind() == pendingRunCancellationUser {
+			// A user cancellation already owns the terminal decision, even if
+			// this context first stopped because its deadline expired.
+			return m.cancelTaskExecutionBeforeExecutor(runID, taskID, nodeID, previous, message)
+		}
+	}
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return m.cancelTaskExecutionBeforeExecutor(runID, taskID, nodeID, previous, message)
+	}
+	message = "任务执行超时，尚未启动 executor: " + message
+	finishedAt := time.Now().UTC()
+	return m.failTaskExecutionBeforeExecutor(context.Background(), taskID, runID,
+		map[string]interface{}{"next_run_at": cronutil.Next(previous.CronSpec), "last_error": message},
+		map[string]interface{}{"finished_at": &finishedAt, "last_error": message})
+}
+
 // computeExecTimeout 计算单次任务执行的最大允许时长：
 //   - 优先使用 Policy.MaxExecutionSeconds（>0 时）
 //   - 否则读环境变量 TASK_MAX_EXECUTION_SECONDS（秒）
@@ -849,6 +869,7 @@ func (m *Manager) runTaskWithContext(
 		return
 	}
 	var captureManifest string
+	var backupCapture *executor.RsyncBackupCapture
 	var captureLayout string
 	var captureRoot string
 	m.populateRsyncBinary(&taskEntity)
@@ -856,7 +877,16 @@ func (m *Manager) runTaskWithContext(
 	captureAttempted := isLegacyMutableRsyncTask(taskEntity)
 	captureError := ""
 	if captureAttempted {
-		captureManifest, err = executor.CaptureRsyncManifest(execCtx, taskEntity, executor.RsyncCaptureSourceRole)
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始生成 Rsync 备份捕获副本", taskEntity.Status)
+		backupCapture, err = executor.PrepareRsyncBackupCapture(execCtx, taskEntity)
+		if backupCapture != nil {
+			defer func() {
+				if cleanupErr := backupCapture.Close(); cleanupErr != nil {
+					m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", sanitizeTaskLastError("Rsync 捕获副本清理失败: "+cleanupErr.Error()), taskEntity.Status)
+				}
+			}()
+			captureManifest = backupCapture.Manifest()
+		}
 		if err != nil {
 			captureError = sanitizeTaskLastError("Rsync 捕获证据生成失败: " + err.Error())
 			captureManifest = ""
@@ -887,7 +917,7 @@ func (m *Manager) runTaskWithContext(
 			// Explicit user cancellation may already own the terminal row. Keep
 			// the capture diagnostic in the run log even in that case.
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", message, "")
-			if cancelErr := m.cancelTaskExecutionBeforeExecutor(
+			if cancelErr := m.stopTaskExecutionBeforeExecutor(execCtx,
 				runID,
 				taskID,
 				taskEntity.NodeID,
@@ -953,14 +983,14 @@ func (m *Manager) runTaskWithContext(
 		runCompleted = true
 		return
 	}
-	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, armMutableGeneration, func(level, message string) {
+	providerResult := m.executeProviderWithCapture(execCtx, taskEntity, runID, reason, chainRunID, armMutableGeneration, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
 		m.sampleWriter.Write(taskID, taskEntity.NodeID, runStartedAt, sample)
 		if sample.Percent > 0 {
 			m.sampleWriter.WriteProgress(taskID, runID, sample.Percent)
 		}
-	})
+	}, backupCapture)
 	exitCode, err := providerResult.ExitCode, providerResult.Err
 	suppressRetry := providerResult.SuppressRetry
 	var remoteUnknownErr *executor.RemoteExecutionUnknownError

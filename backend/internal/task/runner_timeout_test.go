@@ -31,11 +31,18 @@ func TestRunTaskHonorsGlobalTimeout(t *testing.T) {
 	shutdownManagerOnCleanup(t, m)
 
 	taskEntity := seedTaskForManagerTest(t, db)
+	// This test targets the executor budget, not real rsync capture startup.
+	if err := db.Model(&taskEntity).Update("executor_type", "restic").Error; err != nil {
+		t.Fatal(err)
+	}
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 
 	start := time.Now()
 	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
 	elapsed := time.Since(start)
+	if exec.Calls() != 1 {
+		t.Fatalf("blocking executor must run exactly once, got %d", exec.Calls())
+	}
 
 	// 应在 ~150ms 后超时退出，加上一些调度余量
 	if elapsed > 2*time.Second {
@@ -79,6 +86,7 @@ func TestRunTaskHonorsPolicyTimeout(t *testing.T) {
 		t.Fatalf("建 policy 失败: %v", err)
 	}
 	taskEntity := seedTaskForManagerTest(t, db)
+	taskEntity.ExecutorType = "restic"
 	taskEntity.PolicyID = &policy.ID
 	if err := db.Save(&taskEntity).Error; err != nil {
 		t.Fatalf("绑定 policy 失败: %v", err)
@@ -89,6 +97,9 @@ func TestRunTaskHonorsPolicyTimeout(t *testing.T) {
 	start := time.Now()
 	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
 	elapsed := time.Since(start)
+	if exec.Calls() != 1 {
+		t.Fatalf("blocking executor must run exactly once, got %d", exec.Calls())
+	}
 
 	// Policy 1s 超时应在 ~1s 后触发；远小于全局 10s
 	if elapsed > 5*time.Second {
