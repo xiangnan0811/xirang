@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.24](https://github.com/xiangnan0811/xirang/compare/v0.55.23...v0.55.24) (2026-09-27)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 从稳定捕获副本执行 legacy Rsync 备份 ([#560](https://github.com/xiangnan0811/xirang/issues/560)) ([b6e1621](https://github.com/xiangnan0811/xirang/commit/b6e162106e743f7e3bd81b7a7ddb4b759d0ae20d))
+
 ## [0.55.23](https://github.com/xiangnan0811/xirang/compare/v0.55.22...v0.55.23) (2026-09-27)
 
 
