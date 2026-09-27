@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.23](https://github.com/xiangnan0811/xirang/compare/v0.55.22...v0.55.23) (2026-09-27)
+
+
+### 🐛 Bug Fixes
+
+* **task:** 修复 Cron 回归测试回调竞态 ([#558](https://github.com/xiangnan0811/xirang/issues/558)) ([f6e9ee9](https://github.com/xiangnan0811/xirang/commit/f6e9ee92b6af8cf962aa28c2cba6ac6a83af8b87))
+
 ## [0.55.22](https://github.com/xiangnan0811/xirang/compare/v0.55.21...v0.55.22) (2026-09-26)
 
 
