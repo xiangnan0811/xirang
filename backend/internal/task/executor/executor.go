@@ -652,6 +652,9 @@ func buildRsyncSSHArgs(ctx context.Context, node model.Node, purpose string) ([]
 			sshParts = append(sshParts, "-o", "UserKnownHostsFile=/dev/null")
 		}
 	}
+	// A silently dropped connection otherwise leaves rsync blocked until the
+	// task-level timeout (24h by default) with no further output.
+	sshParts = append(sshParts, rsyncSSHLivenessOptions...)
 
 	cleanup := func() {}
 	if normalizedKey != "" {
@@ -679,6 +682,14 @@ func buildRsyncSSHArgs(ctx context.Context, node model.Node, purpose string) ([]
 		cleanup = func() { _ = os.Remove(keyFile.Name()) }
 	}
 	return sshParts, cleanup, nil
+}
+
+// Probe the peer every 15s and give up after 4 missed replies, so a dead
+// route fails the transfer within about a minute instead of hanging.
+var rsyncSSHLivenessOptions = []string{
+	"-o", "ConnectTimeout=30",
+	"-o", "ServerAliveInterval=15",
+	"-o", "ServerAliveCountMax=4",
 }
 
 // rsyncOpenSSHBase is the ssh command prefix (binary, config isolation, port)

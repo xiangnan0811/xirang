@@ -591,3 +591,72 @@ func TestConfinementCleanupSurvivesForcedHelperKill(t *testing.T) {
 		}
 	}
 }
+
+// A private --copy-dest basis (outside the configured roots) is readable so
+// unchanged files are reused, stays unmodified, must be a directory, and must
+// be exactly the pinned path.
+func TestConfinementLocalBasisIsReadOnlyAndPinned(t *testing.T) {
+	rsync := requireLandlockRsync(t)
+	root := t.TempDir()
+	source, target := filepath.Join(root, "source"), filepath.Join(root, "target")
+	basis, outside := filepath.Join(t.TempDir(), "basis"), t.TempDir()
+	for _, directory := range []string{source, basis, target} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stamp := time.Unix(1700000000, 0)
+	for _, directory := range []string{source, basis} {
+		path := filepath.Join(directory, "payload")
+		if err := os.WriteFile(path, []byte("same"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv(AllowedSourceRootsEnv, source)
+	t.Setenv(AllowedTargetRootsEnv, root)
+	run := func(basisPath, copyDest string) (string, error) {
+		t.Helper()
+		cmd, cleanup, err := NewCommand(context.Background(), CommandRequest{
+			Binary: rsync,
+			Args: []string{"-a", "--checksum", "--itemize-changes", "--itemize-changes", "--out-format=%i %n",
+				"--copy-dest=" + copyDest, "--", source + string(filepath.Separator), target + string(filepath.Separator)},
+			LocalSource: source,
+			LocalTarget: target,
+			LocalBasis:  basisPath,
+		})
+		if err != nil {
+			return "", err
+		}
+		defer cleanup()
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			return stdout.String(), errors.Join(err, errors.New(stderr.String()))
+		}
+		return stdout.String(), nil
+	}
+	output, err := run(basis, basis)
+	if err != nil {
+		t.Fatalf("confined basis transfer: %v", err)
+	}
+	// "cf" means the file was copied locally from the basis, proving read access.
+	if !strings.Contains(output, "cf          payload") {
+		t.Fatalf("basis was not reused under confinement: %q", output)
+	}
+	if got, err := os.ReadFile(filepath.Join(basis, "payload")); err != nil || string(got) != "same" {
+		t.Fatalf("basis modified: %q %v", got, err)
+	}
+	if _, err := run(basis, outside); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("mismatched --copy-dest accepted: %v", err)
+	}
+	fileBasis := filepath.Join(outside, "file")
+	if err := os.WriteFile(fileBasis, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(fileBasis, fileBasis); !errors.Is(err, ErrCapabilityUnavailable) {
+		t.Fatalf("non-directory basis accepted: %v", err)
+	}
+}

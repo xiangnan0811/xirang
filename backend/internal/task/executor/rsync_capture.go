@@ -468,6 +468,7 @@ func runRsyncCaptureCommand(
 	trustedLocalSource bool,
 	localSourceTargetRole bool,
 	runtimeReadPaths []string,
+	localBasis string,
 	stdout, stderr io.Writer,
 ) error {
 	cmd, cleanup, err := rsyncconfinement.NewCommand(ctx, rsyncconfinement.CommandRequest{
@@ -479,6 +480,7 @@ func runRsyncCaptureCommand(
 		RuntimeReadPaths:      append([]string(nil), runtimeReadPaths...),
 		TrustedLocalSource:    trustedLocalSource,
 		TrustedLocalTarget:    true,
+		LocalBasis:            localBasis,
 	})
 	if err != nil {
 		return err
@@ -514,7 +516,7 @@ func copyRsyncCaptureSelection(ctx context.Context, task model.Task, source stri
 	args = append(args, "--", operand, destination+string(filepath.Separator))
 	stdout := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
 	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
-	if err := runRsyncCaptureCommand(ctx, task, args, localSource, destination, false, role == RsyncCaptureTargetRole, runtimeReadPaths, stdout, stderr); err != nil {
+	if err := runRsyncCaptureCommand(ctx, task, args, localSource, destination, false, role == RsyncCaptureTargetRole, runtimeReadPaths, "", stdout, stderr); err != nil {
 		_ = os.RemoveAll(destination)
 		return "", newRsyncCaptureFailure("rsync capture evidence copy failed", err, stderr, stdout)
 	}
@@ -556,7 +558,7 @@ func listRsyncCaptureEntries(ctx context.Context, task model.Task, source string
 	args = append(args, "--", operand, destination+string(filepath.Separator))
 	stdout := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureManifestLen}
 	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
-	if err := runRsyncCaptureCommand(ctx, task, args, localSource, destination, false, role == RsyncCaptureTargetRole, runtimeReadPaths, stdout, stderr); err != nil {
+	if err := runRsyncCaptureCommand(ctx, task, args, localSource, destination, false, role == RsyncCaptureTargetRole, runtimeReadPaths, "", stdout, stderr); err != nil {
 		return nil, newRsyncCaptureFailure("rsync capture selection failed", err, stderr, stdout)
 	}
 	return parseRsyncCaptureEntries(stdout.buf.String())
@@ -1265,7 +1267,7 @@ func RsyncSelectionDifferences(ctx context.Context, task model.Task, isRestore b
 	var stdout, stderr rsyncCaptureOutputBuffer
 	stdout.limit = maxRsyncCaptureManifestLen
 	stderr.limit = maxRsyncCaptureCommandBytes
-	if err := runRsyncCaptureCommand(ctx, task, args, localSource, localTarget, trustedLocalSource, false, runtimeReadPaths, &stdout, &stderr); err != nil {
+	if err := runRsyncCaptureCommand(ctx, task, args, localSource, localTarget, trustedLocalSource, false, runtimeReadPaths, "", &stdout, &stderr); err != nil {
 		return 0, fmt.Errorf("rsync verification comparison failed")
 	}
 	differences := 0

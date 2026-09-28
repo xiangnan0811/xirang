@@ -133,6 +133,31 @@ func newConfinedCommand(ctx context.Context, helper, binary string, request Comm
 		args = append(args, "--mount-write="+mountTargetPath, "--mount-write-fd="+helperFD(targetFDIndex))
 		args = append(args, "--write-fd="+helperFD(targetFDIndex))
 	}
+	if request.LocalBasis != "" {
+		basis := filepath.Clean(strings.TrimSpace(request.LocalBasis))
+		if basis == "." || !filepath.IsAbs(basis) {
+			closeFiles()
+			return nil, func() {}, fmt.Errorf("%w: local basis must be absolute", ErrCapabilityUnavailable)
+		}
+		basisFile, basisErr := openPinnedPath(basis)
+		if basisErr != nil {
+			closeFiles()
+			return nil, func() {}, fmt.Errorf("%w: pin local basis %s: %v", ErrCapabilityUnavailable, basis, basisErr)
+		}
+		info, statErr := basisFile.Stat()
+		if statErr != nil || !info.IsDir() {
+			_ = basisFile.Close()
+			closeFiles()
+			if statErr == nil {
+				statErr = fmt.Errorf("not a directory")
+			}
+			return nil, func() {}, fmt.Errorf("%w: local basis %s: %v", ErrCapabilityUnavailable, basis, statErr)
+		}
+		index := len(fds)
+		fds = append(fds, basisFile)
+		// Read-only: the basis is never an operand and receives no write rule.
+		args = append(args, "--read-fd="+helperFD(3+index))
+	}
 	for _, runtimePath := range request.RuntimeReadPaths {
 		clean := filepath.Clean(strings.TrimSpace(runtimePath))
 		if clean == "." || !filepath.IsAbs(clean) {
