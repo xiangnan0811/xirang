@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/rsyncconfinement"
@@ -57,7 +58,7 @@ func (f *factory) ResolveRsyncBackupCapture(c *RsyncBackupCapture) Executor { re
 // PrepareRsyncBackupCapture records selection in the same rsync invocation that
 // creates a fresh private tree. Operation records are not completion evidence:
 // only exit zero plus an exact tree check and hashes may produce a manifest.
-func PrepareRsyncBackupCapture(ctx context.Context, task model.Task) (_ *RsyncBackupCapture, err error) {
+func PrepareRsyncBackupCapture(ctx context.Context, task model.Task, logf LogFunc) (_ *RsyncBackupCapture, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -102,7 +103,23 @@ func PrepareRsyncBackupCapture(ctx context.Context, task model.Task) (_ *RsyncBa
 	if err := os.Mkdir(tree, 0700); err != nil {
 		return nil, err
 	}
-	args := appendRsyncExcludeArgs([]string{"-a", "--8-bit-output", "--out-format=%i %n"}, rules)
+	// The previous backup is the delta basis: unchanged files are copied
+	// locally and changed files transfer only their differences, instead of
+	// re-downloading the whole source into an empty tree each run.
+	basis, err := snapshotRsyncBackupCaptureBasis(ctx, task, directory, logf)
+	if err != nil {
+		return nil, err
+	}
+	// A doubled --itemize-changes lists every selected entry, including ones
+	// satisfied from the basis, so stdout stays the complete selection record.
+	args := []string{"-a", "--8-bit-output", "--itemize-changes", "--itemize-changes", "--out-format=%i %n"}
+	if basis != "" {
+		// Keeps a basis file with matching size/mtime but different bytes
+		// from entering the evidence. Delta-built files are verified by rsync
+		// against the sender's whole-file checksum either way.
+		args = append(args, "--checksum", "--copy-dest="+basis)
+	}
+	args = appendRsyncExcludeArgs(args, rules)
 	args = append(args, transport...)
 	if bw := resolveBwLimit(task); bw > 0 {
 		args = append(args, "--bwlimit", fmt.Sprintf("%dk", bw*1000/8))
@@ -110,8 +127,18 @@ func PrepareRsyncBackupCapture(ctx context.Context, task model.Task) (_ *RsyncBa
 	args = append(args, "--", operand, tree+string(filepath.Separator))
 	stdout := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureManifestLen}
 	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
-	if err := runRsyncCaptureCommand(ctx, task, args, localSource, tree, false, false, runtimePaths, stdout, stderr); err != nil {
-		return nil, newRsyncCaptureFailure("rsync capture evidence copy failed", err, stderr, stdout)
+	stopHeartbeat := startRsyncCaptureHeartbeat(ctx, tree, logf, rsyncCaptureHeartbeatInterval)
+	copyErr := runRsyncCaptureCommand(ctx, task, args, localSource, tree, false, false, runtimePaths, basis, stdout, stderr)
+	stopHeartbeat()
+	if basis != "" {
+		// Free the snapshot before hashing; Close still removes it on failure.
+		_ = os.RemoveAll(basis)
+	}
+	if copyErr != nil {
+		return nil, newRsyncCaptureFailure("rsync capture evidence copy failed", copyErr, stderr, stdout)
+	}
+	if logf != nil {
+		logf("info", fmt.Sprintf("Rsync 备份捕获副本传输完成（%s），正在校验捕获内容", formatRsyncCaptureBytes(rsyncCaptureTreeBytes(ctx, tree))))
 	}
 	listed, err := parseRsyncCaptureEntries(stdout.buf.String())
 	if err != nil {
@@ -180,6 +207,134 @@ func PrepareRsyncBackupCapture(ctx context.Context, task model.Task) (_ *RsyncBa
 		return nil, fmt.Errorf("rsync capture evidence exceeds size limit")
 	}
 	return capture, nil
+}
+
+// Only an existing real directory can serve as basis; a missing target, a
+// single-file target, or a symlinked target falls back to a full transfer.
+func rsyncBackupCaptureBasis(target string) string {
+	clean := filepath.Clean(strings.TrimSpace(target))
+	if !filepath.IsAbs(clean) {
+		return ""
+	}
+	info, err := os.Lstat(clean)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return clean
+}
+
+// rsync checks a --copy-dest file before copying it and never re-verifies the
+// copied bytes. The target stays writable by others, so it is snapshotted into
+// the owned 0700 capture directory first; checksum and copy then read the same
+// private bytes. A failed snapshot only costs the delta optimization.
+func snapshotRsyncBackupCaptureBasis(ctx context.Context, task model.Task, directory string, logf LogFunc) (string, error) {
+	target := rsyncBackupCaptureBasis(task.RsyncTarget)
+	if target == "" {
+		return "", nil
+	}
+	snapshot := filepath.Join(directory, "basis")
+	if err := os.Mkdir(snapshot, 0o700); err != nil {
+		return "", fmt.Errorf("create rsync capture basis: %w", err)
+	}
+	if logf != nil {
+		logf("info", "正在从上次备份准备本地增量基准")
+	}
+	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
+	args := []string{"-a", "--", target + string(filepath.Separator), snapshot + string(filepath.Separator)}
+	if err := runRsyncCaptureCommand(ctx, task, args, target, snapshot, false, true, nil, "", io.Discard, stderr); err != nil {
+		_ = os.RemoveAll(snapshot)
+		failure := newRsyncCaptureFailure("rsync capture basis snapshot failed", err, stderr)
+		if ctx.Err() != nil {
+			return "", failure
+		}
+		if logf != nil {
+			logf("warn", "增量基准准备失败，本次改为全量捕获: "+failure.Error())
+		}
+		return "", nil
+	}
+	return snapshot, nil
+}
+
+const rsyncCaptureHeartbeatInterval = time.Minute
+
+// The capture copy keeps stdout as the authoritative file list, so it cannot
+// stream rsync progress. Report the bytes already received into the private
+// tree instead, so a slow or stalled capture stays visible in the task log.
+// Before the first byte arrives rsync may still be building the file list or
+// comparing checksums, which is reported as info rather than a stall.
+func startRsyncCaptureHeartbeat(ctx context.Context, tree string, logf LogFunc, interval time.Duration) func() {
+	if logf == nil || interval <= 0 {
+		return func() {}
+	}
+	started := time.Now()
+	walkCtx, stop := context.WithCancel(ctx)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		last := int64(0)
+		for {
+			select {
+			case <-walkCtx.Done():
+				return
+			case now := <-ticker.C:
+				received := rsyncCaptureTreeBytes(walkCtx, tree)
+				if walkCtx.Err() != nil {
+					return
+				}
+				elapsed := now.Sub(started).Round(time.Second)
+				switch received {
+				case 0:
+					logf("info", fmt.Sprintf("Rsync 备份捕获正在比对源文件清单，尚未写入数据（已用时 %s）", elapsed))
+				case last:
+					logf("warn", fmt.Sprintf("Rsync 备份捕获副本在最近 %s 内未接收到新数据（已接收 %s，已用时 %s）", interval, formatRsyncCaptureBytes(received), elapsed))
+				default:
+					logf("info", fmt.Sprintf("Rsync 备份捕获副本传输中：已接收 %s，已用时 %s", formatRsyncCaptureBytes(received), elapsed))
+				}
+				last = received
+			}
+		}
+	}()
+	return func() {
+		stop()
+		<-finished
+	}
+}
+
+// Includes rsync's in-progress temporary files; entries renamed or removed
+// while walking are skipped rather than treated as errors. The walk stops as
+// soon as ctx ends so it never delays cancellation reporting.
+func rsyncCaptureTreeBytes(ctx context.Context, tree string) int64 {
+	var total int64
+	_ = filepath.WalkDir(tree, func(_ string, entry fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return fs.SkipAll
+		}
+		if err != nil || !entry.Type().IsRegular() {
+			return nil
+		}
+		if info, infoErr := entry.Info(); infoErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+func formatRsyncCaptureBytes(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
+	}
+	value := float64(size)
+	for _, suffix := range []string{"KiB", "MiB", "GiB", "TiB"} {
+		value /= unit
+		if value < unit || suffix == "TiB" {
+			return fmt.Sprintf("%.1f %s", value, suffix)
+		}
+	}
+	return fmt.Sprintf("%d B", size)
 }
 
 // Check both directions before reading any payload. WalkDir does not follow
@@ -275,10 +430,10 @@ func (c *RsyncBackupCapture) Run(ctx context.Context, task model.Task, logf LogF
 	if err := EnsureLocalTargetReady(task.RsyncTarget); err != nil {
 		return -1, markNoProcessStart(err)
 	}
+	// The bandwidth limit already applied to the capture, the only transfer
+	// that reads the source. This copy is Core-local disk I/O from the private
+	// tree and must not be throttled a second time.
 	args := []string{"-av", "--checksum", "--info=progress2"}
-	if bw := resolveBwLimit(task); bw > 0 {
-		args = append(args, "--bwlimit", fmt.Sprintf("%dk", bw*1000/8))
-	}
 	args = append(args, "--", c.source, task.RsyncTarget)
 	if logf != nil {
 		logf("info", "从本次 Rsync 捕获副本执行备份传输")

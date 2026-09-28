@@ -51,3 +51,34 @@ func TestRemovedLinkDestGrammarRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestConfinedBasisArgsFollowOptionGrammar(t *testing.T) {
+	const basis = "/private/basis"
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		basis string
+		ok    bool
+	}{
+		{"matching basis", []string{"-a", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, true},
+		{"separate value", []string{"-a", "--copy-dest", basis, "--", "/s/", "/t/"}, basis, true},
+		{"exclude value looks like copy-dest", []string{"-a", "--exclude", "--copy-dest=/etc", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, true},
+		{"exclude value is separator", []string{"-a", "--exclude", "--", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, true},
+		{"no basis and exclude value", []string{"-a", "--exclude", "--copy-dest=/etc", "--", "/s/", "/t/"}, "", true},
+		{"copy-dest hidden after exclude separator", []string{"-a", "--exclude", "--", "--copy-dest=/etc", "--", "/s/", "/t/"}, "", false},
+		{"other directory", []string{"-a", "--copy-dest=/etc", "--", "/s/", "/t/"}, basis, false},
+		{"relative basis", []string{"-a", "--copy-dest=private/basis", "--", "/s/", "/t/"}, "private/basis", false},
+		{"repeated", []string{"-a", "--copy-dest=" + basis, "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, false},
+		{"basis without option", []string{"-a", "--", "/s/", "/t/"}, basis, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateConfinedBasisArgs(tc.args, tc.basis)
+			if tc.ok && err != nil {
+				t.Fatalf("rejected: %v", err)
+			}
+			if !tc.ok && !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("error=%v, want ErrInvalidRequest", err)
+			}
+		})
+	}
+}

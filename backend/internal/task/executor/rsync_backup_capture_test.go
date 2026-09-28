@@ -39,13 +39,14 @@ func TestRsyncBackupCaptureUsesActualCopySelection(t *testing.T) {
 				change = fmt.Sprintf("rm -f -- %q", filepath.Join(source, "before.txt"))
 			}
 			binary := filepath.Join(t.TempDir(), "rsync")
-			// Mutate only when the initial real copy starts, after layout probing.
-			script := fmt.Sprintf("#!/bin/sh\nfor arg do\n if [ \"$arg\" = '--checksum' ]; then exec %q \"$@\"; fi\ndone\n%s\nexec %q \"$@\"\n", backupCaptureBinary(t), change, backupCaptureBinary(t))
+			// Mutate only when the capture copy starts, after layout probing and
+			// never during the later transfer from the private tree.
+			script := fmt.Sprintf("#!/bin/sh\nfor arg do\n if [ \"$arg\" = '--itemize-changes' ]; then %s; fi\ndone\nexec %q \"$@\"\n", change, backupCaptureBinary(t))
 			if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
 				t.Fatal(err)
 			}
 			task := model.Task{ExecutorType: "rsync", RsyncSource: source + "/", RsyncTarget: target, RsyncBinary: binary}
-			capture, err := PrepareRsyncBackupCapture(context.Background(), task)
+			capture, err := PrepareRsyncBackupCapture(context.Background(), task, nil)
 			if err != nil {
 				t.Fatalf("copy selection should be authoritative: %v", err)
 			}
@@ -108,7 +109,7 @@ func TestRsyncBackupCaptureStableLayouts(t *testing.T) {
 					operand = filepath.Join(source, "link")
 				}
 				task := model.Task{ExecutorType: "rsync", RsyncSource: operand, RsyncTarget: target, RsyncBinary: backupCaptureBinary(t), Policy: &model.Policy{ExcludeRules: "excluded"}}
-				capture, err := PrepareRsyncBackupCapture(ctx, task)
+				capture, err := PrepareRsyncBackupCapture(ctx, task, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -154,7 +155,7 @@ func TestRsyncBackupCaptureBytePathsAndChecksum(t *testing.T) {
 		}
 	}
 	task := model.Task{ExecutorType: "rsync", RsyncSource: source + "/", RsyncTarget: target, RsyncBinary: backupCaptureBinary(t), Policy: &model.Policy{ExcludeRules: "excluded"}}
-	capture, err := PrepareRsyncBackupCapture(ctx, task)
+	capture, err := PrepareRsyncBackupCapture(ctx, task, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,6 +182,64 @@ func TestRsyncBackupCaptureBytePathsAndChecksum(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(target, name)); !os.IsNotExist(err) {
 			t.Fatalf("unexpected %s: %v", name, err)
 		}
+	}
+}
+
+// A later run reuses the previous backup as rsync basis. Entries satisfied
+// from that basis must still be part of the capture evidence, and a changed
+// file must carry the new source bytes.
+func TestRsyncBackupCaptureWithPreviousBackupKeepsFullSelection(t *testing.T) {
+	ctx := context.Background()
+	source, target := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(source, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backupCaptureWrite(t, filepath.Join(source, "sub", "unchanged"), "same")
+	backupCaptureWrite(t, filepath.Join(source, "changed"), strings.Repeat("a", 64<<10))
+	if err := os.Symlink("changed", filepath.Join(source, "link")); err != nil {
+		t.Fatal(err)
+	}
+	task := model.Task{ExecutorType: "rsync", RsyncSource: source + "/", RsyncTarget: target, RsyncBinary: backupCaptureBinary(t)}
+	runCapture := func() model.RsyncCaptureManifest {
+		t.Helper()
+		capture, err := PrepareRsyncBackupCapture(ctx, task, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := capture.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		if code, err := capture.Run(ctx, task, func(string, string) {}, nil); code != 0 || err != nil {
+			t.Fatalf("run=%d %v", code, err)
+		}
+		if err := VerifyRsyncCaptureManifestTarget(ctx, task, capture.Manifest()); err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := model.DecodeRsyncCaptureManifest(capture.Manifest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return manifest
+	}
+	first := runCapture()
+	backupCaptureWrite(t, filepath.Join(source, "changed"), strings.Repeat("a", 32<<10)+"b"+strings.Repeat("a", 32<<10-1))
+	second := runCapture()
+	if len(second.Entries) != len(first.Entries) || len(first.Entries) != 5 {
+		t.Fatalf("selection lost with basis: first=%+v second=%+v", first.Entries, second.Entries)
+	}
+	for index, entry := range second.Entries {
+		if entry.Path != first.Entries[index].Path || entry.Kind != first.Entries[index].Kind {
+			t.Fatalf("entry %d differs: first=%+v second=%+v", index, first.Entries[index], entry)
+		}
+		if entry.Path == "changed" && entry.SHA256 == first.Entries[index].SHA256 {
+			t.Fatalf("changed file kept stale basis bytes")
+		}
+	}
+	got, err := os.ReadFile(filepath.Join(target, "changed"))
+	if err != nil || !strings.Contains(string(got), "b") {
+		t.Fatalf("target not updated: err=%v", err)
 	}
 }
 
@@ -217,7 +276,7 @@ func TestRsyncBackupCaptureRejectsIncompleteOrUnreportedCopy(t *testing.T) {
 				t.Fatal(err)
 			}
 			task := model.Task{ExecutorType: "rsync", RsyncSource: source + "/", RsyncTarget: target, RsyncBinary: binary}
-			capture, err := PrepareRsyncBackupCapture(context.Background(), task)
+			capture, err := PrepareRsyncBackupCapture(context.Background(), task, nil)
 			if err == nil || capture != nil {
 				t.Fatalf("invalid capture accepted: %v", err)
 			}
@@ -256,7 +315,7 @@ func TestRsyncBackupCapturePrivateOwnerAndReadonlyCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := model.Task{ExecutorType: "rsync", RsyncSource: source + "/", RsyncTarget: target, RsyncBinary: backupCaptureBinary(t)}
-	capture, err := PrepareRsyncBackupCapture(context.Background(), task)
+	capture, err := PrepareRsyncBackupCapture(context.Background(), task, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

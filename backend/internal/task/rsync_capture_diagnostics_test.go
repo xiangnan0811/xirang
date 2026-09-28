@@ -49,10 +49,14 @@ func TestRsyncCaptureInterruptedDiagnosticsReachTaskHistoryAndLogs(t *testing.T)
 			dir := t.TempDir()
 			ready := filepath.Join(dir, "ready")
 			binary := filepath.Join(dir, "rsync")
+			// Fail only the capture copy; layout probing and the basis
+			// snapshot run the real rsync.
 			script := fmt.Sprintf(`#!/bin/sh
+capture=
 for arg in "$@"; do
-  if [ "$arg" = '--dry-run' ]; then exec %q "$@"; fi
+  if [ "$arg" = '--itemize-changes' ]; then capture=1; fi
 done
+[ -n "$capture" ] || exec %q "$@"
 printf 'rsync: waiting for data\n' >&2
 printf ready > %q
 exec sleep 60
@@ -199,10 +203,14 @@ func TestRsyncCaptureDiagnosticsReachTaskHistoryAndLogs(t *testing.T) {
 	db := openManagerTestDB(t)
 	taskEntity := seedTaskForManagerTest(t, db)
 	binary := filepath.Join(t.TempDir(), "rsync")
+	// Fail only the capture copy; layout probing and the basis snapshot run
+	// the real rsync.
 	script := fmt.Sprintf(`#!/bin/sh
+capture=
 for arg in "$@"; do
-  if [ "$arg" = '--dry-run' ]; then exec %q "$@"; fi
+  if [ "$arg" = '--itemize-changes' ]; then capture=1; fi
 done
+[ -n "$capture" ] || exec %q "$@"
 cat >&2 <<'DIAGNOSTIC'
 rsync: write failed: No space left on device (28)
 token=FAKE_CAPTURE_TOKEN_FOR_TEST_ONLY

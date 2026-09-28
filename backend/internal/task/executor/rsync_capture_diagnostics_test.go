@@ -84,7 +84,7 @@ func TestRsyncCaptureRunningCommandPreservesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	err := runRsyncCaptureCommand(ctx, model.Task{RsyncBinary: "/bin/sh"},
-		[]string{"-c", "printf ready >&2; exec sleep 60"}, "", "", false, false, nil,
+		[]string{"-c", "printf ready >&2; exec sleep 60"}, "", "", false, false, nil, "",
 		io.Discard, captureCancelWriter{cancel: cancel})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("lost cancellation after process start: %v", err)

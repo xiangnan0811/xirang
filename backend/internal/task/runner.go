@@ -878,7 +878,9 @@ func (m *Manager) runTaskWithContext(
 	captureError := ""
 	if captureAttempted {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始生成 Rsync 备份捕获副本", taskEntity.Status)
-		backupCapture, err = executor.PrepareRsyncBackupCapture(execCtx, taskEntity)
+		backupCapture, err = executor.PrepareRsyncBackupCapture(execCtx, taskEntity, func(level, message string) {
+			m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, taskEntity.Status)
+		})
 		if backupCapture != nil {
 			defer func() {
 				if cleanupErr := backupCapture.Close(); cleanupErr != nil {

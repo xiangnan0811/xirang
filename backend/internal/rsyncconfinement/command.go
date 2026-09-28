@@ -55,6 +55,13 @@ type CommandRequest struct {
 	// It is pinned and granted only through the target descriptor, without
 	// widening the configured target roots.
 	TrustedLocalTarget bool
+
+	// LocalBasis is a server-created private directory passed to Rsync as
+	// --copy-dest (a snapshot of the previous backup). Like the trusted
+	// staging operands it is not required to lie below the configured roots;
+	// it is pinned and granted read-only access so the receiver can reuse
+	// unchanged content and delta-transfer changed files.
+	LocalBasis string
 }
 
 // NewCommand creates the one-shot confined helper process when either
@@ -79,7 +86,7 @@ func NewCommand(ctx context.Context, request CommandRequest) (*exec.Cmd, func(),
 	if !policy.Configured() {
 		return exec.CommandContext(ctx, request.Binary, request.Args...), func() {}, nil
 	}
-	if err := validateConfinedRsyncArgs(request.Args); err != nil {
+	if err := validateConfinedBasisArgs(request.Args, request.LocalBasis); err != nil {
 		return nil, func() {}, err
 	}
 	if request.LocalSource == "" && request.LocalTarget == "" {
@@ -128,6 +135,34 @@ func NewCommand(ctx context.Context, request CommandRequest) (*exec.Cmd, func(),
 // the option grammar so a value such as "-L" remains data rather than a
 // forwarded switch.
 func validateConfinedRsyncArgs(args []string) error {
+	_, err := scanConfinedRsyncArgs(args)
+	return err
+}
+
+// A --copy-dest value must be exactly the pinned basis. Any other path would
+// be read through an unpinned lookup outside the granted descriptors. The
+// grammar-aware scan keeps option values such as an --exclude pattern named
+// "--copy-dest=x" or "--" from being mistaken for switches.
+func validateConfinedBasisArgs(args []string, basis string) error {
+	copyDests, err := scanConfinedRsyncArgs(args)
+	if err != nil {
+		return err
+	}
+	if basis == "" {
+		if len(copyDests) > 0 {
+			return fmt.Errorf("%w: --copy-dest requires a pinned local basis", ErrInvalidRequest)
+		}
+		return nil
+	}
+	if len(copyDests) != 1 || !filepath.IsAbs(copyDests[0]) || filepath.Clean(copyDests[0]) != filepath.Clean(basis) {
+		return fmt.Errorf("%w: --copy-dest must name the pinned local basis exactly once", ErrInvalidRequest)
+	}
+	return nil
+}
+
+// scanConfinedRsyncArgs validates args and returns every --copy-dest value.
+func scanConfinedRsyncArgs(args []string) ([]string, error) {
+	var copyDests []string
 	separator := -1
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
@@ -136,22 +171,24 @@ func validateConfinedRsyncArgs(args []string) error {
 			break
 		}
 		if strings.HasPrefix(argument, "--") {
-			option, _, hasValue := strings.Cut(argument, "=")
+			option, value, hasValue := strings.Cut(argument, "=")
 			takesValue, ok := confinedLongOptions[option]
 			if !ok {
-				return fmt.Errorf("%w: Rsync option %s is not allowed under filesystem confinement", ErrInvalidRequest, option)
+				return nil, fmt.Errorf("%w: Rsync option %s is not allowed under filesystem confinement", ErrInvalidRequest, option)
 			}
 			if hasValue {
 				if !takesValue {
-					return fmt.Errorf("%w: Rsync option %s does not take a value", ErrInvalidRequest, option)
+					return nil, fmt.Errorf("%w: Rsync option %s does not take a value", ErrInvalidRequest, option)
 				}
-				continue
-			}
-			if takesValue {
+			} else if takesValue {
 				if index+1 >= len(args) {
-					return fmt.Errorf("%w: Rsync option %s is missing its value", ErrInvalidRequest, option)
+					return nil, fmt.Errorf("%w: Rsync option %s is missing its value", ErrInvalidRequest, option)
 				}
 				index++
+				value = args[index]
+			}
+			if option == "--copy-dest" {
+				copyDests = append(copyDests, value)
 			}
 			continue
 		}
@@ -162,27 +199,27 @@ func validateConfinedRsyncArgs(args []string) error {
 				if option == 'e' {
 					if position == len(shortOptions)-1 {
 						if index+1 >= len(args) {
-							return fmt.Errorf("%w: Rsync option -e is missing its value", ErrInvalidRequest)
+							return nil, fmt.Errorf("%w: Rsync option -e is missing its value", ErrInvalidRequest)
 						}
 						index++
 					}
 					break
 				}
 				if !strings.ContainsRune("avz", rune(option)) {
-					return fmt.Errorf("%w: Rsync option -%c is not allowed under filesystem confinement", ErrInvalidRequest, option)
+					return nil, fmt.Errorf("%w: Rsync option -%c is not allowed under filesystem confinement", ErrInvalidRequest, option)
 				}
 			}
 			continue
 		}
-		return fmt.Errorf("%w: unexpected Rsync operand before --", ErrInvalidRequest)
+		return nil, fmt.Errorf("%w: unexpected Rsync operand before --", ErrInvalidRequest)
 	}
 	if separator < 0 {
-		return fmt.Errorf("%w: confined Rsync command requires -- before operands", ErrInvalidRequest)
+		return nil, fmt.Errorf("%w: confined Rsync command requires -- before operands", ErrInvalidRequest)
 	}
 	if len(args)-separator-1 != 2 {
-		return fmt.Errorf("%w: confined Rsync command requires exactly two operands", ErrInvalidRequest)
+		return nil, fmt.Errorf("%w: confined Rsync command requires exactly two operands", ErrInvalidRequest)
 	}
-	return nil
+	return copyDests, nil
 }
 
 var confinedLongOptions = map[string]bool{
@@ -205,6 +242,9 @@ var confinedLongOptions = map[string]bool{
 	"--rsh":          true,
 	"--rsync-path":   true,
 	"--bwlimit":      true,
+	"--copy-dest":    true,
+	// Receiver-side only; rsync does not forward it to the server.
+	"--itemize-changes": false,
 }
 
 // BuildRemoteRsyncPath returns a fixed shell command for Rsync's

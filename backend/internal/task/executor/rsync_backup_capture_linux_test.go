@@ -35,7 +35,7 @@ func TestRsyncBackupCaptureConfinedRemoteSource(t *testing.T) {
 	t.Setenv(rsyncconfinement.AllowedSourceRootsEnv, sourceRoot)
 	t.Setenv(rsyncconfinement.AllowedTargetRootsEnv, targetRoot)
 	task := model.Task{ExecutorType: "rsync", RsyncSource: source + "/", RsyncTarget: filepath.Join(targetRoot, "backup"), RsyncBinary: backupCaptureBinary(t), Node: node}
-	capture, err := PrepareRsyncBackupCapture(context.Background(), task)
+	capture, err := PrepareRsyncBackupCapture(context.Background(), task, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +56,34 @@ func TestRsyncBackupCaptureConfinedRemoteSource(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(task.RsyncTarget, "payload"))
 	if err != nil || string(got) != "remote captured bytes" {
 		t.Fatalf("payload=%q %v", got, err)
+	}
+	// The next run uses the confined target as a read-only delta basis.
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	backupCaptureWrite(t, filepath.Join(source, "payload"), "remote captured bytes, revised")
+	backupCaptureWrite(t, filepath.Join(source, "added"), "added bytes")
+	next, err := PrepareRsyncBackupCapture(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("confined capture with basis: %v", err)
+	}
+	got, err = os.ReadFile(filepath.Join(task.RsyncTarget, "payload"))
+	if err != nil || string(got) != "remote captured bytes" {
+		t.Fatalf("basis modified before transfer=%q %v", got, err)
+	}
+	if code, err := next.Run(context.Background(), task, func(string, string) {}, nil); code != 0 || err != nil {
+		t.Fatalf("confined transfer from basis capture=%d %v", code, err)
+	}
+	if err := next.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyRsyncCaptureManifestTarget(context.Background(), task, next.Manifest()); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"payload": "remote captured bytes, revised", "added": "added bytes"} {
+		if got, err := os.ReadFile(filepath.Join(task.RsyncTarget, name)); err != nil || string(got) != want {
+			t.Fatalf("%s after basis capture=%q %v", name, got, err)
+		}
 	}
 	// An owned staging source must not widen target capabilities. Replace the
 	// original target with a symlink to a different tree before another attempt.
