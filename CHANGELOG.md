@@ -7,6 +7,15 @@
 
 * **backend:** Rsync 捕获副本改为增量传输并可观测 ([#562](https://github.com/xiangnan0811/xirang/issues/562)) ([198434e](https://github.com/xiangnan0811/xirang/commit/198434e305f08ed452d596dbc3d1840a2c319059))
 
+### 行为与升级说明
+
+- Legacy Rsync 重复运行不再全量下载：目标已是真实目录时，Core 先把上次备份复制为本次私有快照，再以其为只读增量基准，未变文件本地复制、变更文件只传差异；有基准时按内容（`--checksum`）比较，同大小/mtime 的损坏不会进入证据。升级后第一次运行仍按目标现状建立基准。
+- 暂存树到目标的 Core 本地复制不再重复应用带宽限制；带宽限制只作用于读取来源的准备副本。
+- Rsync SSH 增加连接超时与 keepalive，静默断开的连接约一分钟内失败并保留诊断，不再挂到任务超时；准备副本期间每分钟记录已接收字节，已有数据后停滞记 warning。
+- Core 临时目录除本次副本外，还需在准备阶段临时容纳一份上次备份的快照（传输后立即释放）；快照失败只记 warning 并改为全量捕获。
+- 本版本没有新增数据库迁移。更新 Core 前等待正在执行的备份／恢复任务结束，并保全数据库、加密密钥及现有备份副本。启用 `RSYNC_ALLOWED_*` 隔离时，Core 本地 `xirang-rsync-confined` 须与 Core 同版本（All-in-One 镜像自带）；SSH 节点上的远端 helper 无需更新。使用可选 Worker 时保持 Core 与 Worker 的版本一致。
+- 文件级证据一致不等于活动数据库的事务一致性快照。发布成功不代表生产已升级或现场备份／恢复已验收，部署后仍需检查实际任务结果。
+
 ## [0.55.24](https://github.com/xiangnan0811/xirang/compare/v0.55.23...v0.55.24) (2026-09-27)
 
 
