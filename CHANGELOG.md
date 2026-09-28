@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.25](https://github.com/xiangnan0811/xirang/compare/v0.55.24...v0.55.25) (2026-09-28)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** Rsync 捕获副本改为增量传输并可观测 ([#562](https://github.com/xiangnan0811/xirang/issues/562)) ([198434e](https://github.com/xiangnan0811/xirang/commit/198434e305f08ed452d596dbc3d1840a2c319059))
+
 ## [0.55.24](https://github.com/xiangnan0811/xirang/compare/v0.55.23...v0.55.24) (2026-09-27)
 
 
