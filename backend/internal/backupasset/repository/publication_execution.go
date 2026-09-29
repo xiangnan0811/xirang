@@ -111,33 +111,35 @@ func (service *PublicationService) Prepare(ctx context.Context, run publication.
 		ctx = context.Background()
 	}
 
+	// The admission mode, not the requested feature setting, decides the path:
+	// a requested enable whose readiness is blocked starts Core with disabled
+	// admission, and that mismatch persists until an admission transition.
+	// The request only picks the first operation hint; a token whose mode
+	// needs the other operation is re-acquired, which repeats only when a
+	// transition changed the mode in between.
+	requested, err := service.foundation.FeatureEnabled()
+	if err != nil {
+		return nil, err
+	}
+	managed := requested
 	for {
-		enabled, err := service.foundation.FeatureEnabled()
-		if err != nil {
-			return nil, err
-		}
 		hintedOperation := publication.OperationLegacyBackup
-		if enabled {
+		if managed {
 			hintedOperation = publication.OperationEvidenceBackup
 		}
 		token, err := service.admission.Acquire(ctx, hintedOperation)
 		if err != nil {
 			return nil, err
 		}
-		actualEnabled, err := service.foundation.FeatureEnabled()
-		if err != nil {
-			_ = token.Close()
-			return nil, err
-		}
-		if actualEnabled != enabled || (actualEnabled && token.Mode() != publication.AdmissionManaged) ||
-			(!actualEnabled && token.Mode() == publication.AdmissionManaged) {
+		if tokenManaged := token.Mode() == publication.AdmissionManaged; tokenManaged != managed {
 			_ = token.Close()
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
+			managed = tokenManaged
 			continue
 		}
-		if !actualEnabled {
+		if !managed {
 			return service.prepareDisabled(ctx, run, token)
 		}
 		return service.prepareEvidence(ctx, run, token)
