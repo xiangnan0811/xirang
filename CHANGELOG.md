@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.55.26](https://github.com/xiangnan0811/xirang/compare/v0.55.25...v0.55.26) (2026-09-29)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 备份资产未就绪时发布准备不再空转 ([3df0dee](https://github.com/xiangnan0811/xirang/commit/3df0dee779a01c89e8a6b29aaaa836d8aa0f2ff8))
+
+### 行为与升级说明
+
+- 请求 `backup_assets.enabled=true` 但 GA readiness 尚未通过（例如现有安装未确认 inventory digest）时，StartupPass 仍保持 disabled admission。`PublicationService.Prepare` 依据 admission token 走 legacy compatibility 路径及既有 history guards，不因请求值不一致而空转重试，也不会自动转为 managed/evidence；须按现有库存确认流程通过 readiness 后再启用。
+- 本版本没有新增数据库／schema 迁移，不改写设置、inventory、managed-history 或 Provider 备份字节。更新前仍应保全数据库、加密密钥和现有备份副本。
+- 修复仅在新版 Core 生效；更新时须确认旧版 Core 已退出。旧版 Core 中已运行的 Prepare 空转不会因另一个新版本实例启动而自动修复，请通过现有任务运维流程检查相关运行；本修复不要求单独升级 Worker。
+- 回退至 v0.55.25 不需要 schema 回退，但当启用请求仍被 readiness 阻塞时会重新引入 Prepare 空转；不要通过绕过库存确认或 managed-history guards 处理回退风险。尚未在真实安装的阻塞启用场景执行部署 smoke；发布不代表现场部署或运行验收。
+
 ## [0.55.25](https://github.com/xiangnan0811/xirang/compare/v0.55.24...v0.55.25) (2026-09-28)
 
 
