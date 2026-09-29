@@ -122,10 +122,6 @@ function createNode(id: number, name: string): NodeRecord {
     status: "offline",
     lastSeenAt: "-",
     lastBackupAt: "-",
-    diskFreePercent: 0,
-    diskUsedGb: 0,
-    diskTotalGb: 0,
-    diskProbeAt: "-",
     connectionLatencyMs: undefined,
   };
 }
@@ -214,11 +210,7 @@ describe("useConsoleData", () => {
     apiClientMock.getSSHKeys.mockResolvedValue([]);
     apiClientMock.getIntegrations.mockResolvedValue([]);
     apiClientMock.getOverviewSummary.mockResolvedValue({
-      totalNodes: 0,
-      healthyNodes: 0,
       activePolicies: 0,
-      runningTasks: 0,
-      failedTasks24h: 0,
     });
     apiClientMock.getOverviewTraffic.mockResolvedValue(createTrafficSeries());
   });
@@ -435,15 +427,10 @@ describe("useConsoleData", () => {
     vi.unstubAllEnvs();
   });
 
-  it("会用服务端概览摘要覆盖 failedTasks24h", async () => {
-    apiClientMock.getNodes.mockResolvedValue([createNode(1, "node-1")]);
-    apiClientMock.getTasks.mockResolvedValue([createTask(1, "failed", 10)]);
+  it("会用服务端概览摘要覆盖 activePolicies", async () => {
+    apiClientMock.getPolicies.mockResolvedValue([]);
     apiClientMock.getOverviewSummary.mockResolvedValue({
-      totalNodes: 1,
-      healthyNodes: 0,
-      activePolicies: 0,
-      runningTasks: 0,
-      failedTasks24h: 7,
+      activePolicies: 4,
     });
 
     const { result } = renderHook(() => useConsoleData("token-1"));
@@ -452,7 +439,7 @@ describe("useConsoleData", () => {
       expect(result.current.loading).toBe(false);
     });
 
-    expect(result.current.overview.failedTasks24h).toBe(7);
+    expect(result.current.overview.activePolicies).toBe(4);
   });
 
   it("refresh 会推进 refreshVersion", async () => {
@@ -482,7 +469,7 @@ describe("useConsoleData", () => {
     expect(result.current.warning).toBeNull();
     expect(result.current.nodes.length).toBeGreaterThan(0);
     expect(result.current.tasks.length).toBeGreaterThan(0);
-    expect(result.current.overview.avgSyncMbps).toBe(318);
+    expect(result.current.overview.activePolicies).toBeGreaterThan(0);
     expect(result.current.policies.find((policy) => policy.id === 1)?.latestDrill?.status).toBe("success");
     expect(result.current.policies.find((policy) => policy.id === 11)?.latestDrill?.status).toBe("failed");
 

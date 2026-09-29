@@ -53,7 +53,7 @@ type doctorResponse struct {
 
 // RunDoctor godoc
 // @Summary      运行节点 SSH Fleet Doctor
-// @Description  执行服务端 allowlist 只读诊断，覆盖 SSH、known_hosts、sudo、工具、备份目录、磁盘和探针状态；不接受请求体或自定义命令。
+// @Description  执行服务端 allowlist 只读诊断，覆盖 SSH、known_hosts、sudo、工具、备份目录和磁盘空间；不接受请求体或自定义命令。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
@@ -170,7 +170,6 @@ func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, sshutil.Res
 	r.checkTools(ctx, client)
 	r.checkBackupDirectories(ctx, client)
 	r.checkDisk(ctx, client)
-	r.checkProbeStatus()
 
 	return r.response(), credential, nil
 }
@@ -354,7 +353,6 @@ func (r *nodeDoctorRunner) addSSHDependentSkips() {
 	r.add("tools", doctorStatusSkip, "未建立 SSH 连接，跳过工具检查", "先修复 SSH 连接。")
 	r.add("backup_dir", doctorStatusSkip, "未建立 SSH 连接，跳过备份目录检查", "先修复 SSH 连接。")
 	r.add("disk", doctorStatusSkip, "未建立 SSH 连接，跳过磁盘空间检查", "先修复 SSH 连接。")
-	r.checkProbeStatus()
 }
 
 func (r *nodeDoctorRunner) checkSudo(ctx context.Context, client *ssh.Client) {
@@ -570,23 +568,6 @@ func (r *nodeDoctorRunner) doctorMinFreeGB() int {
 		}
 	}
 	return minFreeGB
-}
-
-func (r *nodeDoctorRunner) checkProbeStatus() {
-	if r.node.LastProbeAt == nil {
-		r.add("probe", doctorStatusWarn, "节点尚无探针采样记录", "确认后台 Prober 正在运行，并稍后重新检查。")
-		return
-	}
-	age := r.now.Sub(r.node.LastProbeAt.UTC())
-	if r.node.Status == "offline" || r.node.ConsecutiveFailures > 0 {
-		r.add("probe", doctorStatusFail, fmt.Sprintf("最近探针状态为 %s，连续失败 %d 次", r.node.Status, r.node.ConsecutiveFailures), "修复 SSH 或系统指标采集问题后等待下一次探针。")
-		return
-	}
-	if age > 30*time.Minute {
-		r.add("probe", doctorStatusWarn, fmt.Sprintf("最近探针采样距今约 %d 分钟", int(age.Minutes())), "确认 Prober 调度正常。")
-		return
-	}
-	r.add("probe", doctorStatusPass, fmt.Sprintf("最近探针采样距今约 %d 分钟", int(age.Minutes())), "探针状态正常。")
 }
 
 func runDoctorCommand(ctx context.Context, client *ssh.Client, command string) (string, error) {

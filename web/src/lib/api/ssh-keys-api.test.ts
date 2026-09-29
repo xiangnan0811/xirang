@@ -56,6 +56,51 @@ describe("ssh keys api mapper", () => {
     expect(rows[0]).not.toHaveProperty("privateKey");
   });
 
+  it("keeps a retired-only purpose list instead of mapping it to empty", async () => {
+    requestMock.mockResolvedValueOnce([
+      {
+        id: 11,
+        name: "legacy-probe-key",
+        username: "deploy",
+        key_type: "ed25519",
+        fingerprint: "SHA256:legacy",
+        allowed_purposes: " probe , node_logs ",
+        broad_scope: true,
+        created_at: "2026-05-18T00:00:00Z",
+      },
+    ]);
+
+    const rows = await createSSHKeysApi().getSSHKeys("FAKE_TOKEN_FOR_TEST_ONLY");
+    expect(rows[0]?.allowedPurposes).toBe("probe,node_logs");
+
+    requestMock.mockResolvedValueOnce({
+      id: 11,
+      name: "legacy-probe-key",
+      username: "deploy",
+      key_type: "ed25519",
+      fingerprint: "SHA256:legacy",
+      allowed_purposes: "probe,node_logs",
+      created_at: "2026-05-18T00:00:00Z",
+    });
+    await createSSHKeysApi().updateSSHKey("FAKE_TOKEN_FOR_TEST_ONLY", "key-11", {
+      name: "legacy-probe-key",
+      username: "deploy",
+      keyType: "ed25519",
+      privateKey: "",
+      disabled: false,
+      expiresAt: "",
+      allowedPurposes: " probe , node_logs ",
+      allowedNodeIds: "",
+      allowedNodeTags: "",
+    });
+    expect(requestMock).toHaveBeenLastCalledWith("/ssh-keys/11", expect.objectContaining({
+      method: "PUT",
+      body: expect.objectContaining({
+        allowed_purposes: "probe,node_logs",
+      }),
+    }));
+  });
+
   it("normalizes unknown key types to auto", async () => {
     requestMock.mockResolvedValueOnce([
       {

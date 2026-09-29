@@ -1209,7 +1209,6 @@ func TestConfigExportOmitsSecretsByDefaultAndWritesSafeAudit(t *testing.T) {
 	}
 	for _, setting := range []model.SystemSetting{
 		{Key: "smtp.password", Value: "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY"},
-		{Key: "metrics.remote_bearer_token", Value: "FAKE_METRICS_TOKEN_FOR_TEST_ONLY"},
 		{Key: "storage.min_free_gb", Value: "42"},
 	} {
 		if err := db.Create(&setting).Error; err != nil {
@@ -1238,8 +1237,6 @@ func TestConfigExportOmitsSecretsByDefaultAndWritesSafeAudit(t *testing.T) {
 		"FAKE_NODE_PRIVATE_KEY_FOR_TEST_ONLY",
 		"FAKE_EXECUTOR_TOKEN_FOR_TEST_ONLY",
 		"FAKE_SMTP_PASSWORD_FOR_TEST_ONLY",
-		"FAKE_METRICS_TOKEN_FOR_TEST_ONLY",
-		"metrics.remote_bearer_token",
 		"private_key",
 		"password",
 		"executor_config",

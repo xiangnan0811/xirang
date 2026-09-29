@@ -2789,8 +2789,8 @@ func runAcceptanceRcloneNative(t *testing.T, db *gorm.DB) {
 	deleter.SetAfterEffect(func() {
 		now := fixture.clock.UTC()
 		if err := db.Model(&model.Node{}).Where("id = ?", nodeID).Updates(map[string]any{
-			"last_seen_at": now, "last_probe_at": now, "last_backup_at": now,
-			"connection_latency": 17, "consecutive_failures": 0, "updated_at": now,
+			"last_seen_at": now, "last_backup_at": now,
+			"connection_latency": 17, "updated_at": now,
 		}).Error; err != nil {
 			t.Errorf("persist acceptance Rclone Node telemetry: %v", err)
 		}
@@ -2888,8 +2888,7 @@ func runAcceptanceRcloneNative(t *testing.T, db *gorm.DB) {
 	if err := db.First(&telemetryKey, "id = ?", keyID).Error; err != nil {
 		t.Fatalf("load persisted Rclone SSH key telemetry: %v", err)
 	}
-	if telemetryNode.LastSeenAt == nil || telemetryNode.LastProbeAt == nil ||
-		telemetryNode.LastBackupAt == nil || telemetryNode.ConnectionLatency != 17 ||
+	if telemetryNode.LastSeenAt == nil || telemetryNode.LastBackupAt == nil || telemetryNode.ConnectionLatency != 17 ||
 		telemetryKey.LastUsedAt == nil ||
 		!telemetryNode.UpdatedAt.UTC().Equal(fixture.clock.UTC()) ||
 		!telemetryKey.UpdatedAt.UTC().Equal(fixture.clock.UTC()) {

@@ -41,7 +41,6 @@ func migrateHealthIncidentTimelineTables(t *testing.T, db *gorm.DB) {
 		&model.BackupCompletion{},
 		&model.Alert{},
 		&model.AlertDelivery{},
-		&model.NodeMetricSample{},
 		&model.AnomalyEvent{},
 	); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
@@ -162,10 +161,14 @@ func TestHealthIncidentTimelineAggregatesSortsSeverityAndTaskResource(t *testing
 		t.Fatalf("创建告警失败: %v", err)
 	}
 
-	metricTime := now.Add(-10 * time.Minute)
-	metric := model.NodeMetricSample{NodeID: nodeB.ID, CpuPct: 12, MemPct: 20, DiskPct: 96, ProbeOK: true, SampledAt: metricTime}
-	if err := db.Create(&metric).Error; err != nil {
-		t.Fatalf("创建指标样本失败: %v", err)
+	anomalyTime := now.Add(-10 * time.Minute)
+	anomaly := model.AnomalyEvent{
+		NodeID: nodeB.ID, Detector: "snapshot_diff", Metric: "content",
+		Severity: "critical", ObservedValue: 96, BaselineValue: 20,
+		Details: "{}", FiredAt: anomalyTime,
+	}
+	if err := db.Create(&anomaly).Error; err != nil {
+		t.Fatalf("创建 snapshot-diff 异常事件失败: %v", err)
 	}
 
 	resp, data := callHealthIncidentTimeline(t, db, "admin", 1)
@@ -179,10 +182,25 @@ func TestHealthIncidentTimelineAggregatesSortsSeverityAndTaskResource(t *testing
 		t.Fatalf("期望 2 个事件组，实际: %d", len(data.Groups))
 	}
 	if data.Groups[0].Resource.Type != "node" || data.Groups[0].Resource.ID != nodeB.ID {
-		t.Fatalf("期望最新事件组为 node-b 指标异常，实际: %+v", data.Groups[0].Resource)
+		t.Fatalf("期望最新事件组为 node-b 异常，实际: %+v", data.Groups[0].Resource)
 	}
 	if !data.Groups[0].LastSeenAt.After(data.Groups[1].LastSeenAt) {
 		t.Fatalf("事件组应按 last_seen_at 倒序排列: %v <= %v", data.Groups[0].LastSeenAt, data.Groups[1].LastSeenAt)
+	}
+	if !healthIncidentHasSource(data.Groups[0], "anomaly") {
+		t.Fatalf("snapshot-diff 应作为 anomaly 来源保留，实际 sources=%v", data.Groups[0].SourceTypes)
+	}
+	for _, group := range data.Groups {
+		for _, sourceType := range group.SourceTypes {
+			if sourceType == "probe" || sourceType == "metric" {
+				t.Fatalf("退役资源来源不应出现在时间线: %v", sourceType)
+			}
+		}
+		for _, action := range group.NextActions {
+			if action.Code == "view_node_metrics" {
+				t.Fatal("时间线不应提供已退役节点指标动作")
+			}
+		}
 	}
 
 	taskGroup := data.Groups[1]
@@ -260,5 +278,109 @@ func TestHealthIncidentTimelineOperatorWithNoOwnedNodesReturnsEmpty(t *testing.T
 	}
 	if data.Summary.Total != 0 || len(data.Groups) != 0 {
 		t.Fatalf("无 owner 的 operator 应返回空时间线，实际 summary=%+v groups=%+v", data.Summary, data.Groups)
+	}
+}
+func TestHealthIncidentTimelineExcludesRetiredDeliveriesBeforeLimit(t *testing.T) {
+	db := openHealthIncidentTimelineTestDB(t)
+	migrateHealthIncidentTimelineTables(t, db)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	const retiredCount = maxHealthIncidentSourceRows
+	retiredAlerts := make([]model.Alert, retiredCount)
+	for i := range retiredAlerts {
+		createdAt := now.Add(-time.Duration(i+1) * time.Minute)
+		retiredAlerts[i] = model.Alert{
+			NodeID:            1,
+			NodeName:          "retired-node",
+			Severity:          "critical",
+			Status:            "resolved",
+			ErrorCode:         "XR-NODE-1",
+			Message:           "retired node probe failure",
+			TriggeredAt:       createdAt,
+			DeliveryDecision:  model.AlertDeliveryDecisionUnknown,
+			DeliveryReason:    "feature_retired",
+			DeliveryDecidedAt: &createdAt,
+			CreatedAt:         createdAt,
+			UpdatedAt:         createdAt,
+		}
+	}
+	if err := db.Create(&retiredAlerts).Error; err != nil {
+		t.Fatalf("创建退役告警失败: %v", err)
+	}
+
+	retiredDeliveries := make([]model.AlertDelivery, retiredCount)
+	retiredDeliveryIDs := make(map[uint]struct{}, retiredCount)
+	for i := range retiredDeliveries {
+		createdAt := retiredAlerts[i].CreatedAt
+		retiredDeliveries[i] = model.AlertDelivery{
+			AlertID:       retiredAlerts[i].ID,
+			IntegrationID: 1,
+			Status:        model.AlertDeliveryStatusFailed,
+			Decision:      model.AlertDeliveryDecisionUnknown,
+			AttemptCount:  1,
+			LastError:     "retired transport failure",
+			CreatedAt:     createdAt,
+			UpdatedAt:     createdAt,
+		}
+	}
+	if err := db.Create(&retiredDeliveries).Error; err != nil {
+		t.Fatalf("创建退役投递失败: %v", err)
+	}
+	for _, delivery := range retiredDeliveries {
+		retiredDeliveryIDs[delivery.ID] = struct{}{}
+	}
+
+	genuineTime := now.Add(-12 * time.Hour)
+	genuineAlert := model.Alert{
+		NodeID:           2,
+		NodeName:         "retained-node",
+		Severity:         "critical",
+		Status:           "resolved",
+		ErrorCode:        "XR-TASK-FAILED",
+		Message:          "retained notification failure",
+		TriggeredAt:      genuineTime,
+		DeliveryDecision: model.AlertDeliveryDecisionUnknown,
+		DeliveryReason:   "transport_failure",
+		CreatedAt:        genuineTime,
+		UpdatedAt:        genuineTime,
+	}
+	if err := db.Create(&genuineAlert).Error; err != nil {
+		t.Fatalf("创建保留告警失败: %v", err)
+	}
+	genuineDelivery := model.AlertDelivery{
+		AlertID:       genuineAlert.ID,
+		IntegrationID: 1,
+		Status:        model.AlertDeliveryStatusFailed,
+		Decision:      model.AlertDeliveryDecisionUnknown,
+		AttemptCount:  2,
+		LastError:     "retained transport failure",
+		CreatedAt:     genuineTime,
+		UpdatedAt:     genuineTime,
+	}
+	if err := db.Create(&genuineDelivery).Error; err != nil {
+		t.Fatalf("创建保留投递失败: %v", err)
+	}
+
+	resp, data := callHealthIncidentTimeline(t, db, "admin", 1)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+
+	var foundGenuine bool
+	for _, group := range data.Groups {
+		for _, signal := range group.Signals {
+			if signal.Type != "notification_failure" {
+				continue
+			}
+			if _, retired := retiredDeliveryIDs[signal.DeliveryID]; retired {
+				t.Fatalf("退役投递不应出现在时间线: delivery_id=%d", signal.DeliveryID)
+			}
+			if signal.DeliveryID == genuineDelivery.ID {
+				foundGenuine = true
+			}
+		}
+	}
+	if !foundGenuine {
+		t.Fatalf("保留的 unknown 决策通知失败应可见，实际 groups=%+v", data.Groups)
 	}
 }

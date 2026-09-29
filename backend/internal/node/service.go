@@ -91,17 +91,15 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 
 	// Build node model
 	node := model.Node{
-		Name:        input.Name,
-		Host:        input.Host,
-		Port:        input.Port,
-		Username:    input.Username,
-		AuthType:    input.AuthType,
-		Tags:        input.Tags,
-		Status:      input.Status,
-		BasePath:    input.BasePath,
-		BackupDir:   backupDir,
-		DiskTotalGB: 0,
-		DiskUsedGB:  0,
+		Name:      input.Name,
+		Host:      input.Host,
+		Port:      input.Port,
+		Username:  input.Username,
+		AuthType:  input.AuthType,
+		Tags:      input.Tags,
+		Status:    input.Status,
+		BasePath:  input.BasePath,
+		BackupDir: backupDir,
 	}
 
 	switch input.AuthType {

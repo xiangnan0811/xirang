@@ -22,7 +22,7 @@ vi.mock("@/lib/api/client", async () => {
 vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: vi.fn() },
   useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) => {
+    t: (key: string) => {
       const map: Record<string, string> = {
         "anomaly.tab.empty": "该节点尚无异常记录",
         "anomaly.table.firedAt": "时间",
@@ -32,12 +32,10 @@ vi.mock("react-i18next", () => ({
         "anomaly.table.baselineObserved": "基线 → 观测",
         "anomaly.table.extra": "附加",
         "anomaly.table.alert": "告警",
-        "anomaly.detector.ewma": "基线异常",
-        "anomaly.detector.disk_forecast": "磁盘预测",
+        "anomaly.detector.snapshot_diff": "快照差异",
         "anomaly.severity.warning": "告警",
         "anomaly.severity.critical": "严重",
         "anomaly.extra.sigmaSuffix": "σ",
-        "anomaly.extra.forecastPrefix": `预计 ${opts?.days ?? "?"} 天爆满`,
         "anomaly.errors.loadFailed": "加载异常事件失败",
         "common.loading": "加载中...",
       };
@@ -49,13 +47,12 @@ vi.mock("react-i18next", () => ({
 const makeEvent = (overrides: Partial<AnomalyEvent> = {}): AnomalyEvent => ({
   id: 1,
   nodeId: 10,
-  detector: "ewma",
-  metric: "cpu_percent",
+  detector: "snapshot_diff",
+  metric: "snapshot_churn",
   severity: "warning",
-  observedValue: 95.5,
-  baselineValue: 30.2,
+  observedValue: 40,
+  baselineValue: 8,
   sigma: 3.14,
-  forecastDays: null,
   alertId: null,
   raisedAlert: true,
   firedAt: "2026-04-21T10:00:00Z",
@@ -94,28 +91,16 @@ describe("AnomalyTab", () => {
 
   it("renders 2 event rows when API returns 2 events", async () => {
     mockListNodeAnomalyEvents.mockResolvedValue([
-      makeEvent({ id: 1, metric: "cpu_percent" }),
-      makeEvent({ id: 2, metric: "mem_percent" }),
+      makeEvent({ id: 1, metric: "snapshot_churn" }),
+      makeEvent({ id: 2, metric: "ransomware_pattern", sigma: null }),
     ]);
     renderTab();
     await waitFor(() => {
       expect(screen.getByTestId("anomaly-tab")).toBeInTheDocument();
     });
-    expect(screen.getByText("cpu_percent")).toBeInTheDocument();
-    expect(screen.getByText("mem_percent")).toBeInTheDocument();
-  });
-
-  it("renders different detector badges for ewma and disk_forecast events", async () => {
-    mockListNodeAnomalyEvents.mockResolvedValue([
-      makeEvent({ id: 1, detector: "ewma" }),
-      makeEvent({ id: 2, detector: "disk_forecast", sigma: null, forecastDays: 5.0 }),
-    ]);
-    renderTab();
-    await waitFor(() => {
-      expect(screen.getByTestId("anomaly-tab")).toBeInTheDocument();
-    });
-    expect(screen.getByText("基线异常")).toBeInTheDocument();
-    expect(screen.getByText("磁盘预测")).toBeInTheDocument();
+    expect(screen.getByText("snapshot_churn")).toBeInTheDocument();
+    expect(screen.getByText("ransomware_pattern")).toBeInTheDocument();
+    expect(screen.getByText("3.14σ")).toBeInTheDocument();
   });
 
   it("skips loading when token is missing", () => {

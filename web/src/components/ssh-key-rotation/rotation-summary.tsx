@@ -1,12 +1,12 @@
 import { useTranslation } from "react-i18next";
-import { CheckCircle2, Loader2, SkipForward, XCircle } from "lucide-react";
+import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
 
 export interface NodeVerifyResult {
   nodeId: string;
   name: string;
-  status: "verified" | "skipped" | "failed";
+  status: "verified" | "failed";
   error?: string;
 }
 
@@ -32,7 +32,6 @@ export function RotationSummary({
   onDone,
 }: RotationSummaryProps) {
   const { t } = useTranslation();
-  const skippedCount = results.filter((r) => r.status === "skipped").length;
 
   return (
     <>
@@ -79,28 +78,18 @@ export function RotationSummary({
                   {r.status === "verified" && (
                     <CheckCircle2 className="size-4 shrink-0 text-success" />
                   )}
-                  {r.status === "skipped" && (
-                    <SkipForward className="size-4 shrink-0 text-muted-foreground" />
-                  )}
                   {r.status === "failed" && (
                     <XCircle className="size-4 shrink-0 text-destructive" />
                   )}
                   <span className="min-w-0 truncate">{r.name}</span>
                   <span className="ml-auto text-xs text-muted-foreground">
                     {r.status === "verified" && t("sshKeys.rotationVerified")}
-                    {r.status === "skipped" && t("sshKeys.rotationSkipped")}
                     {r.status === "failed" && t("sshKeys.rotationFailed")}
                   </span>
                 </div>
               ))}
             </div>
           </div>
-
-          {skippedCount > 0 && (
-            <InlineAlert tone="warning">
-              {t("sshKeys.rotationOfflineHint", { count: skippedCount })}
-            </InlineAlert>
-          )}
         </div>
       )}
 

@@ -13,7 +13,7 @@
 - 镜像内 Alpine 依赖的精确版本由 Dockerfile 固定，不由 `.env` 或系统设置覆盖。构建时包版本不可用的处理见[镜像构建依赖](maintainers/automation.md#镜像构建依赖)。
 - 官方镜像的 Go 工具链由 Dockerfile 构建阶段固定；容器启动时设置 `GOTOOLCHAIN` 不会替换已经编译的程序。源码开发的工具链选择与 linter 入口见[贡献指南](../CONTRIBUTING.md#开发环境)，版本同步要求见[Go 工具链升级](maintainers/automation.md#go-工具链升级)。
 
-**当前实现与配置合同的已知偏差**：节点探测的三个 `node.probe_*` 键、任务流量与执行记录保留键虽然注册在 Settings 服务中，实际组件由 `config.Load()` 的环境值构造，数据库覆盖目前不生效，重启也不能修复这一点。远程指标推送的 URL/token 实现又显式优先读取非空环境变量。配置合同仍要求统一优先级；这些是待修复的实现问题，不应据此放宽合同。当前部署应使用下表所述实际生效方式。
+**当前实现与配置合同的已知偏差**：任务流量与执行记录保留键虽然注册在 Settings 服务中，实际组件由 `config.Load()` 的环境值构造，数据库覆盖目前不生效，重启也不能修复这一点。配置合同仍要求统一优先级；这是待修复的实现问题，不应据此放宽合同。当前部署应使用下表所述实际生效方式。
 
 依据：[启动组装](../backend/cmd/server/main.go)、[配置加载](../backend/internal/config/config.go)、[设置注册表及解析](../backend/internal/settings/service.go)、[任务保留](../backend/internal/task/manager.go)。
 
@@ -360,15 +360,34 @@
 | `BACKUP_ASSETS_ARCHIVE_MAX_COMPRESSION_RATIO`<br>`backup_assets.archive.max_compression_ratio` | int | `100` | 归档压缩比上限；范围 `1..100` |
 | `BACKUP_ASSETS_ARCHIVE_MAX_DURATION`<br>`backup_assets.archive.max_duration` | duration | `10m` | 归档处理绝对时长；范围 `1s..10m` |
 
-## 节点探测
+## 按需节点连接检查
 
-| 变量 | 类型 | 默认值 | 必填 | 说明 |
-|------|------|--------|------|------|
-| `NODE_PROBE_INTERVAL` | duration | `5m` | 否 | 探测间隔（最小 30s） |
-| `NODE_PROBE_FAIL_THRESHOLD` | int | `3` | 否 | 连续失败多少次标记节点离线 |
-| `NODE_PROBE_CONCURRENCY` | int | `10` | 否 | 并发探测数（生产建议 `20`） |
+周期 SSH 存活与资源探测已退役，`NODE_PROBE_INTERVAL`、`NODE_PROBE_FAIL_THRESHOLD`、
+`NODE_PROBE_CONCURRENCY` 及对应 `node.probe_*` Settings 不再读取。节点连接状态、
+延迟和 LastSeenAt 仅记录最近手动连接测试，不代表实时在线状态。
+手动测试不执行 df；迁移预检分别即时读取源/目标容量，Doctor 保留按需备份空间诊断。
 
-**读取位置**：`backend/internal/config/config.go`；这三个键虽然注册为需重启的 Settings 项，当前启动组装仍直接使用 `config.Load()` 的环境值，数据库覆盖未被消费；修改环境变量后重启生效。此偏差见本文开头，不能把设置 API 写入成功视为探测配置已采用。
+### 退役设置与配置导入
+
+备份职责收敛后，下列历史 Settings 键不再注册、不再读取，也不能作为新版本配置合同的一部分：
+
+```text
+node.probe_interval
+node.probe_fail_threshold
+node.probe_concurrency
+logs.retention_days_default
+anomaly.enabled
+anomaly.ewma_alpha
+anomaly.ewma_sigma
+anomaly.ewma_window_hours
+anomaly.ewma_min_samples
+anomaly.disk_forecast_days
+anomaly.disk_forecast_min_history_hours
+metrics.remote_url
+metrics.remote_bearer_token
+```
+
+旧配置导入包含任一退役键（或其它未知 Settings 键）时，按当前注册表执行正常校验并拒绝**整份**导入；不能静默丢弃键、只导入剩余字段或将失败伪装成成功。环境变量/数据库覆盖的优先级规则不为退役键提供兼容执行路径。节点历史 `probe`/`node_logs` SSH scope 仍按凭据合同解析、展示和保留限制，但不再生成周期执行或新用途授权。
 
 ## 数据保留
 
@@ -380,10 +399,10 @@
 | `BACKUP_STORAGE_MIN_FREE_GB` | int | `10` | 否 | 本地备份存储最低剩余空间（GB），低于此值触发告警 |
 | `BACKUP_STORAGE_MAX_USAGE_PCT` | int | `90` | 否 | 本地备份存储最大使用率（%），超过此值触发告警 |
 | `INTEGRITY_CHECK_MULTIPLIER` | int | `4` | 否 | 完整性检查频率倍数——每隔多少个保留清理周期运行一次 `restic check` / `rclone check`（默认 4，即 `RETENTION_CHECK_INTERVAL=6h` 时每 24h 一次） |
-| `LOG_RETENTION_DAYS_DEFAULT` | int | `30` | 否 | 节点日志默认保留天数，节点未单独配置时生效 |
 | `SILENCE_RETENTION_DAYS` | int | `30` | 否 | 已过期静默规则的审计保留天数，超出后删除 |
 
-**读取位置**：基础任务保留与存储阈值 → `backend/internal/config/config.go` 和 settings 服务；`INTEGRITY_CHECK_MULTIPLIER` → `backend/internal/task/retention_worker.go`；节点日志保留 → `backend/internal/nodelogs/retention.go`；静默规则保留 → `backend/internal/alerting/silence_retention.go`。
+**读取位置**：基础任务保留与存储阈值 → `backend/internal/config/config.go` 和 settings 服务；`INTEGRITY_CHECK_MULTIPLIER` → `backend/internal/task/retention_worker.go`；静默规则保留 → `backend/internal/alerting/silence_retention.go`。
+任务执行记录、任务日志和实时任务日志流属于任务领域；节点系统日志已退役，不再有独立的采集或保留配置。
 
 ## 邮件通知
 
@@ -412,21 +431,14 @@
 
 ### 异常检测
 
-异常检测默认保留事件记录，但不会升级为告警中心告警或外部通知。需要恢复异常通知时，将 `ANOMALY_ALERTS_ENABLED` 设为 `true`，或在系统设置中打开 `anomaly.alerts_enabled`。
+备份快照异常保留事件记录，默认不升级为告警中心告警或外部通知。需要异常通知时，将 `ANOMALY_ALERTS_ENABLED` 设为 `true`，或在系统设置中打开 `anomaly.alerts_enabled`。周期 EWMA、磁盘预测及其开关/参数已退役，旧环境变量与 Settings 不再生效。
 
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
-| `ANOMALY_ENABLED` | bool | `true` | 否 | 启用异常检测总开关；关闭后 EWMA 与磁盘预测检测器都停止 |
 | `ANOMALY_ALERTS_ENABLED` | bool | `false` | 否 | 是否将异常事件升级为告警/通知；默认仅写入 `anomaly_events` 供诊断 |
-| `ANOMALY_EWMA_ALPHA` | string | `0.3` | 否 | EWMA 平滑因子 α |
-| `ANOMALY_EWMA_SIGMA` | string | `5.0` | 否 | EWMA 异常判定标准差倍数，默认更保守以降低低负载误报 |
-| `ANOMALY_EWMA_WINDOW_HOURS` | int | `6` | 否 | EWMA 回看样本窗口（小时） |
-| `ANOMALY_EWMA_MIN_SAMPLES` | int | `24` | 否 | EWMA 最少样本数 |
-| `ANOMALY_DISK_FORECAST_DAYS` | int | `7` | 否 | 磁盘预测阈值，预计小于等于该天数爆满时记录事件 |
-| `ANOMALY_DISK_FORECAST_MIN_HISTORY_HOURS` | int | `72` | 否 | 磁盘预测所需最少历史小时数 |
 | `ANOMALY_EVENTS_RETENTION_DAYS` | int | `30` | 否 | 异常事件保留天数 |
 
-**读取位置**：settings 服务键 `anomaly.enabled` / `anomaly.alerts_enabled` / `anomaly.ewma_*` / `anomaly.disk_forecast_*` / `anomaly.events_retention_days`，消费端位于 `backend/internal/anomaly/`。
+**读取位置**：settings 服务键 `anomaly.alerts_enabled` / `anomaly.events_retention_days`，消费端位于 `backend/internal/anomaly/`。
 
 ## 前端
 
@@ -468,19 +480,11 @@ All-in-One 的 Nginx 固定监听 `10761`，后端默认监听 `:3000`，生产 
 
 **读取位置**：[版本检查](../backend/internal/api/handlers/version_handler.go)、[系统备份 API](../backend/internal/api/handlers/system_handler.go)。`DB_BACKUP_MAX_COUNT` 只约束 `POST /api/v1/system/backup-db`，无效或非正值回退到 20；不会控制容器 cron 或 `scripts/backup-db.sh`。cron 使用固定的 `/backup/db` 和文件年龄保留策略，备份/恢复步骤见[部署指南](deployment.md)。版本检查比较 GitHub Release 的稳定 semver 与编译时版本；未注入构建版本时显示 `dev`。
 
-## 指标远程推送（Prometheus remote-write）
+## 应用指标
 
-可选功能。设置 `METRICS_REMOTE_URL` 后，每次节点探测样本同时通过 Prometheus remote-write 协议（snappy + protobuf）推送到外部 TSDB（Mimir、Cortex、VictoriaMetrics、Grafana Cloud 等）。`FanSink` 自动吞掉远程错误，DBSink 不受影响。
-
-| 变量 | 类型 | 默认值 | 必填 | 说明 |
-|------|------|--------|------|------|
-| `METRICS_REMOTE_URL` | string | 空 | 否 | Prometheus remote-write 端点 URL（如 `https://mimir.example.com/api/v1/push`）；环境值为空时回退 Settings，最终有效值为空才禁用推送 |
-| `METRICS_REMOTE_BEARER_TOKEN` | string | 空 | 否 | 可选 Bearer token；Settings 键 `metrics.remote_bearer_token` 为敏感键，会加密入库。可由密钥管理系统注入环境。 |
-| `METRICS_REMOTE_TIMEOUT` | duration | `5s` | 否 | 单次 HTTP 请求超时（Go duration 格式）。解析失败或非正值时回退到 5 秒 |
-
-可观测性：失败时通过 `xirang_metrics_remote_write_total{status="failure"}` 计数，建议在 Grafana 上配置 `rate(...)` 持续大于 0 的告警面板。
-
-**读取位置**：`backend/cmd/server/main.go` 的 `buildRemoteWriteSinkFromConfig`，仅启动时读取；当前 URL/token 的非空环境值优先，否则读取 Settings 键 `metrics.remote_url` / `metrics.remote_bearer_token`，变更需重启。该实现与通用数据库优先合同的偏差见本文开头。
+节点资源 remote-write 已退役，`METRICS_REMOTE_URL`、`METRICS_REMOTE_BEARER_TOKEN`、
+`METRICS_REMOTE_TIMEOUT` 及对应 `metrics.remote_*` Settings 不再读取；
+`/admin/metrics/rollup-status` 也已移除。应用自身 `/metrics` 及以下认证、限流设置保留。
 
 ### /metrics 端点鉴权与限流
 

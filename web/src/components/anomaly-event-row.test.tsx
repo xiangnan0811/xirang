@@ -7,14 +7,12 @@ import type { AnomalyEvent } from "@/types/domain";
 vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: vi.fn() },
   useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) => {
+    t: (key: string) => {
       const map: Record<string, string> = {
-        "anomaly.detector.ewma": "基线异常",
-        "anomaly.detector.disk_forecast": "磁盘预测",
+        "anomaly.detector.snapshot_diff": "快照差异",
         "anomaly.severity.warning": "告警",
         "anomaly.severity.critical": "严重",
         "anomaly.extra.sigmaSuffix": "σ",
-        "anomaly.extra.forecastPrefix": `预计 ${opts?.days ?? "?"} 天爆满`,
       };
       return map[key] ?? key;
     },
@@ -24,13 +22,12 @@ vi.mock("react-i18next", () => ({
 const baseEvent: AnomalyEvent = {
   id: 1,
   nodeId: 10,
-  detector: "ewma",
-  metric: "cpu_percent",
+  detector: "snapshot_diff",
+  metric: "snapshot_churn",
   severity: "warning",
-  observedValue: 95.5,
-  baselineValue: 30.2,
+  observedValue: 40,
+  baselineValue: 8,
   sigma: 3.14,
-  forecastDays: null,
   alertId: null,
   raisedAlert: true,
   firedAt: "2026-04-21T10:00:00Z",
@@ -49,30 +46,27 @@ function renderRow(event: AnomalyEvent) {
 }
 
 describe("AnomalyEventRow", () => {
-  it("renders EWMA event with sigma, baseline and observed values", () => {
+  it("renders snapshot diff with sigma, baseline and observed values", () => {
     renderRow(baseEvent);
 
-    expect(screen.getByText("基线异常")).toBeInTheDocument();
-    expect(screen.getByText("cpu_percent")).toBeInTheDocument();
-    // baseline → observed
-    expect(screen.getByText("30.20 → 95.50")).toBeInTheDocument();
-    // sigma extra
+    expect(screen.getByText("快照差异")).toBeInTheDocument();
+    expect(screen.getByText("snapshot_churn")).toBeInTheDocument();
+    expect(screen.getByText("8.00 → 40.00")).toBeInTheDocument();
     expect(screen.getByText("3.14σ")).toBeInTheDocument();
   });
 
-  it("renders disk forecast event with forecastDays text", () => {
-    const event: AnomalyEvent = {
+  it("omits sigma when the snapshot event has no deviation", () => {
+    renderRow({
       ...baseEvent,
       id: 2,
-      detector: "disk_forecast",
-      metric: "disk_used_percent",
+      metric: "ransomware_pattern",
+      severity: "critical",
       sigma: null,
-      forecastDays: 5.3,
-    };
-    renderRow(event);
+    });
 
-    expect(screen.getByText("磁盘预测")).toBeInTheDocument();
-    expect(screen.getByText(/5\.3.*天爆满|预计.*5\.3/)).toBeInTheDocument();
+    expect(screen.getByText("快照差异")).toBeInTheDocument();
+    expect(screen.getByText("ransomware_pattern")).toBeInTheDocument();
+    expect(screen.queryByText(/σ$/)).not.toBeInTheDocument();
   });
 
   it("renders alert link when alertId is set", () => {

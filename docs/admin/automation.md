@@ -38,8 +38,6 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 | `backup_failed` | 策略关联普通任务失败 | `policy_id`, `node_id`, `executor_type`, `task_id`, `task_run_id`, `status` | 关联策略的普通运行最终失败时产生；等待重试的中间失败不立即产生 |
 | `backup_succeeded` | 策略关联普通任务成功 | `policy_id`, `node_id`, `executor_type`, `task_id`, `task_run_id`, `status` | 关联策略的普通运行成功时产生；事件名本身不等于已有可信恢复点 |
 | `drill_failed` | 恢复演练失败 | `policy_id`, `task_run_id` | 已定义事件；当前生产恢复演练不可执行，不应依赖它触发新动作 |
-| `node_offline` | 节点离线 | `node_id` | 可创建规则的预留事件类型；当前节点探测路径未主动派发该事件 |
-| `node_disk_high` | 节点磁盘使用率过高 | `node_id` | 可创建规则的预留事件类型；当前节点探测路径未主动派发该事件 |
 
 ## 动作类型
 
@@ -58,7 +56,7 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 |---|---|---|
 | `{{.policy_id}}` | 事件中的策略 ID；任务须关联策略 | `backup_failed`, `backup_succeeded`, `drill_failed` |
 | `{{.task_id}}` | 事件中的任务 ID | `backup_failed`, `backup_succeeded` |
-| `{{.node_id}}` | 事件中的节点 ID | `anomaly_detected`, `backup_failed`, `backup_succeeded`；预留节点事件需实际派发上下文 |
+| `{{.node_id}}` | 事件中的节点 ID | `anomaly_detected`, `backup_failed`, `backup_succeeded` |
 
 `anomaly_detected` 不包含 `policy_id`。针对异常暂停某个策略时，必须显式填入经确认的策略 ID，并按节点等条件限制匹配范围。
 
@@ -116,17 +114,6 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 动作：send_notification
 动作配置：{ "message": "节点 {{.node_id}} 的任务 {{.task_id}} 备份失败" }
 ```
-
-### 预留磁盘事件触发清理任务
-
-```text
-事件：node_disk_high
-过滤：{ "node_id": "5" }
-动作：trigger_task
-动作配置：{ "task_id": "12" }
-```
-
-> `node_disk_high` 当前是可配置的预留事件类型；只有当系统派发该事件时，上述规则才会执行。
 
 ## 执行记录
 

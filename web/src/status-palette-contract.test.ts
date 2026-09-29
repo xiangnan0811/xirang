@@ -3,9 +3,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const forbidden = /\b(?:text|bg|border)-(?:emerald|red|amber|sky)-(?:400|500|600)\b/;
-const allowed: Record<string, true> = {
-  [path.join("src", "pages", "dashboards", "panel-renderer.tsx")]: true,
-};
 
 function walk(dir: string, files: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -29,7 +26,6 @@ describe("status color palettes", () => {
     const hits: string[] = [];
     for (const file of walk(root)) {
       const relative = path.relative(process.cwd(), file);
-      if (allowed[relative]) continue;
       if (relative.includes(`${path.sep}terminal`) || relative.includes("web-terminal")) continue;
       const source = readFileSync(file, "utf8");
       if (forbidden.test(source)) {

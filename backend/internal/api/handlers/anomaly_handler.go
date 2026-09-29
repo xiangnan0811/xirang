@@ -39,10 +39,8 @@ func (h *AnomalyHandler) List(c *gin.Context) {
 		q = q.Where("node_id IN ?", ownedIDs)
 	}
 	if v := c.Query("detector"); v != "" {
-		switch v {
-		case "ewma", "disk_forecast", "snapshot_diff":
-		default:
-			respondBadRequest(c, "detector: 仅支持 ewma / disk_forecast / snapshot_diff")
+		if v != "snapshot_diff" {
+			respondBadRequest(c, "detector: 仅支持 snapshot_diff")
 			return
 		}
 		q = q.Where("detector = ?", v)
@@ -115,7 +113,12 @@ func (h *AnomalyHandler) ListForNode(c *gin.Context) {
 	}
 	// Optional filters
 	q := h.db.Model(&model.AnomalyEvent{}).Where("node_id = ?", nodeID)
+	// Only the retained snapshot-diff detector has a queryable event surface.
 	if v := strings.TrimSpace(c.Query("detector")); v != "" {
+		if v != "snapshot_diff" {
+			respondBadRequest(c, "detector: 仅支持 snapshot_diff")
+			return
+		}
 		q = q.Where("detector = ?", v)
 	}
 	var rows []model.AnomalyEvent

@@ -7,8 +7,7 @@ import (
 	"xirang/backend/internal/model"
 )
 
-// recordingSink captures SLO IDs whose RaiseSLOBreach was invoked, mirroring
-// the prior raiseFn lambda so test assertions stay comparable.
+// recordingSink captures SLO IDs whose RaiseSLOBreach was invoked.
 type recordingSink struct {
 	raised []uint
 }
@@ -18,22 +17,15 @@ func (r *recordingSink) RaiseSLOBreach(def *model.SLODefinition, _ *Compliance) 
 	return nil
 }
 
-func TestEvaluator_RaisesBreachWhenBurnRateOverTwo(t *testing.T) {
+func TestEvaluator_RaisesBreachWhenSuccessRateBurnRateOverTwo(t *testing.T) {
 	db := openSLOTestDB(t)
 	db.Create(&model.Node{ID: 1, Name: "n1", Tags: "prod"})
+	db.Create(&model.Task{ID: 1, Name: "backup", NodeID: 1})
 	now := time.Now().UTC().Truncate(time.Hour)
-	// Window has enough samples to avoid insufficient_data (≥100 total).
-	// Last 1h is all failures → burn rate very high.
-	for h := 1; h < 28*24; h++ {
-		db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-time.Duration(h) * time.Hour), ProbeOK: 10, ProbeFail: 0, SampleCount: 10})
+	for i := range 200 {
+		db.Create(&model.TaskRun{TaskID: 1, Status: "failed", CreatedAt: now.Add(-time.Duration(i+1) * time.Minute)})
 	}
-	db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-30 * time.Minute), ProbeOK: 0, ProbeFail: 100, SampleCount: 100})
-	// BurnRate1h reads the raw table; seed 1h worth of failing probes so
-	// the 1h burn clears the min-sample threshold and reports breach.
-	for i := 0; i < 20; i++ {
-		db.Create(&model.NodeMetricSample{NodeID: 1, SampledAt: now.Add(-time.Duration(i+1) * 3 * time.Minute), ProbeOK: false})
-	}
-	def := &model.SLODefinition{ID: 1, Name: "prod", MetricType: "availability", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
+	def := &model.SLODefinition{ID: 1, Name: "prod", MetricType: "success_rate", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
 	db.Create(def)
 
 	sink := &recordingSink{}
@@ -44,14 +36,15 @@ func TestEvaluator_RaisesBreachWhenBurnRateOverTwo(t *testing.T) {
 	}
 }
 
-func TestEvaluator_SkipsHealthySLO(t *testing.T) {
+func TestEvaluator_SkipsHealthySuccessRateSLO(t *testing.T) {
 	db := openSLOTestDB(t)
 	db.Create(&model.Node{ID: 1, Tags: "prod"})
+	db.Create(&model.Task{ID: 1, Name: "backup", NodeID: 1})
 	now := time.Now().UTC().Truncate(time.Hour)
-	for h := 0; h < 28*24; h++ {
-		db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-time.Duration(h) * time.Hour), ProbeOK: 10, ProbeFail: 0, SampleCount: 10})
+	for i := range 200 {
+		db.Create(&model.TaskRun{TaskID: 1, Status: "success", CreatedAt: now.Add(-time.Duration(i+1) * time.Minute)})
 	}
-	def := &model.SLODefinition{ID: 1, MetricType: "availability", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
+	def := &model.SLODefinition{ID: 1, MetricType: "success_rate", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
 	db.Create(def)
 
 	sink := &recordingSink{}
@@ -65,12 +58,13 @@ func TestEvaluator_SkipsHealthySLO(t *testing.T) {
 func TestEvaluator_SkipsDisabled(t *testing.T) {
 	db := openSLOTestDB(t)
 	db.Create(&model.Node{ID: 1, Tags: "prod"})
+	db.Create(&model.Task{ID: 1, Name: "backup", NodeID: 1})
 	now := time.Now().UTC().Truncate(time.Hour)
-	for h := 0; h < 100; h++ {
-		db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-time.Duration(h) * time.Hour), ProbeOK: 0, ProbeFail: 10, SampleCount: 10})
+	for i := range 100 {
+		db.Create(&model.TaskRun{TaskID: 1, Status: "failed", CreatedAt: now.Add(-time.Duration(i+1) * time.Minute)})
 	}
 	// Use raw SQL to bypass GORM's zero-value skip + SQLite column default:true.
-	db.Exec("INSERT INTO slo_definitions (id,name,metric_type,threshold,window_days,enabled,created_by,created_at,updated_at) VALUES (1,'disabled-slo','availability',0.99,28,0,1,datetime('now'),datetime('now'))")
+	db.Exec("INSERT INTO slo_definitions (id,name,metric_type,threshold,window_days,enabled,created_by,created_at,updated_at) VALUES (1,'disabled-slo','success_rate',0.99,28,0,1,datetime('now'),datetime('now'))")
 
 	sink := &recordingSink{}
 	w := NewEvaluator(db, sink)
@@ -83,10 +77,12 @@ func TestEvaluator_SkipsDisabled(t *testing.T) {
 func TestEvaluator_SkipsInsufficient(t *testing.T) {
 	db := openSLOTestDB(t)
 	db.Create(&model.Node{ID: 1, Tags: "prod"})
+	db.Create(&model.Task{ID: 1, Name: "backup", NodeID: 1})
 	now := time.Now().UTC().Truncate(time.Hour)
-	// Only 5 samples — insufficient_data.
-	db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-30 * time.Minute), ProbeOK: 0, ProbeFail: 5, SampleCount: 5})
-	def := &model.SLODefinition{ID: 1, MetricType: "availability", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
+	for i := range 5 {
+		db.Create(&model.TaskRun{TaskID: 1, Status: "failed", CreatedAt: now.Add(-time.Duration(i+1) * time.Minute)})
+	}
+	def := &model.SLODefinition{ID: 1, MetricType: "success_rate", Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
 	db.Create(def)
 
 	sink := &recordingSink{}

@@ -66,16 +66,6 @@ export function parseCSVRows(content: string): CSVNodeRow[] {
     .filter((item): item is CSVNodeRow => Boolean(item));
 }
 
-export function getDiskBarToneClass(percent: number) {
-  if (percent < 20) {
-    return "bg-destructive";
-  }
-  if (percent < 40) {
-    return "bg-warning";
-  }
-  return "bg-success";
-}
-
 export type NodesViewProps = {
   loading: boolean;
   requestFailed?: boolean;

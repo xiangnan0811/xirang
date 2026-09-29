@@ -1,26 +1,12 @@
 import i18n from "@/i18n";
-import type { NodeRecord, OverviewStats, OverviewSummary, PolicyRecord, TaskRecord } from "@/types/domain";
+import type { OverviewStats, OverviewSummary, PolicyRecord } from "@/types/domain";
 
 export function deriveOverview(
-  nodes: NodeRecord[],
   policies: PolicyRecord[],
-  tasks: TaskRecord[],
   summary?: OverviewSummary | null
 ): OverviewStats {
-  const localHealthy = nodes.filter((node) => node.status === "online").length;
-  const localFailed = tasks.filter((task) => task.status === "failed").length;
-  const successCount = tasks.filter((task) => task.status === "success").length;
-  const successRate = tasks.length > 0 ? Number(((successCount / tasks.length) * 100).toFixed(1)) : 100;
-  const avgSyncMbps = summary?.currentThroughputMbps ?? 0;
-
   return {
-    totalNodes: summary?.totalNodes ?? nodes.length,
-    healthyNodes: summary?.healthyNodes ?? localHealthy,
     activePolicies: summary?.activePolicies ?? policies.filter((policy) => policy.enabled).length,
-    runningTasks: summary?.runningTasks ?? tasks.filter((task) => task.status === "running" || task.status === "retrying").length,
-    failedTasks24h: summary?.failedTasks24h ?? localFailed,
-    overallSuccessRate: successRate,
-    avgSyncMbps
   };
 }
 

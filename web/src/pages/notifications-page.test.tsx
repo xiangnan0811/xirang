@@ -8,8 +8,7 @@ import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { NotificationsPage } from "./notifications-page";
 import { AlertCenter } from "./notifications/alert-center";
 
-// Router wrapper: AlertList's "查看关联指标" Link needs a router context (added in
-// P5a Task 24). Existing tests predate the link, so we inject MemoryRouter here.
+// Alert actions use navigate(), so the page needs a router context.
 function render(ui: ReactElement, options?: RenderOptions) {
   return rtlRender(<MemoryRouter>{ui}</MemoryRouter>, options);
 }

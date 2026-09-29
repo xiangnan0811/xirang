@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
@@ -190,29 +189,6 @@ func TestNodeDoctorAuditOutcomeClassifiesAuthFailureAsBlocked(t *testing.T) {
 	}
 	if got := doctorAuditOutcome(checks); got != credentialaudit.OutcomeBlocked {
 		t.Fatalf("auth/ssh failure 应归类为 blocked，got %s", got)
-	}
-}
-
-func TestNodeDoctorProbeStatusClassification(t *testing.T) {
-	db := openNodeHandlerTestDB(t)
-	now := time.Now().UTC()
-	runner := nodeDoctorRunner{
-		db: db,
-		node: model.Node{
-			Name:                "doctor-node-probe",
-			Status:              "offline",
-			ConsecutiveFailures: 3,
-			LastProbeAt:         &now,
-		},
-		now: now.Add(2 * time.Minute),
-	}
-	runner.checkProbeStatus()
-	if len(runner.checks) != 1 {
-		t.Fatalf("期望生成 1 个 probe 检查，实际: %d", len(runner.checks))
-	}
-	check := runner.checks[0]
-	if check.Check != "probe" || check.Status != doctorStatusFail {
-		t.Fatalf("期望 probe fail，实际: %+v", check)
 	}
 }
 

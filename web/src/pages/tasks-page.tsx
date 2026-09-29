@@ -30,6 +30,7 @@ import { TasksPageDialogs } from "@/pages/tasks-page.dialogs";
 import { TasksFilters } from "@/pages/tasks-page.filters";
 import { TasksHero } from "@/pages/tasks-page.hero";
 import { TasksBulkBar } from "@/pages/tasks-page.bulk-bar";
+import { TaskRunStatistics } from "@/pages/tasks-page.statistics-panel";
 
 const keywordStorageKey = "xirang.tasks.keyword";
 const statusStorageKey = "xirang.tasks.status";
@@ -469,6 +470,8 @@ export function TasksPage() {
           },
         ]}
       />
+
+      <TaskRunStatistics tasks={tasks} />
 
       <DataSurface>
         <DataSurfaceToolbar className="space-y-3">

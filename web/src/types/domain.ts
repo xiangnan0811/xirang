@@ -53,22 +53,11 @@ export function parseSSHKeyType(value: string): SSHKeyType {
 }
 
 export interface OverviewStats {
-  totalNodes: number;
-  healthyNodes: number;
   activePolicies: number;
-  runningTasks: number;
-  failedTasks24h: number;
-  overallSuccessRate: number;
-  avgSyncMbps: number;
 }
 
 export interface OverviewSummary {
-  totalNodes: number;
-  healthyNodes: number;
   activePolicies: number;
-  runningTasks: number;
-  failedTasks24h: number;
-  currentThroughputMbps: number;
 }
 
 export type OverviewTrafficWindow = "1h" | "24h" | "7d";
@@ -101,8 +90,6 @@ export type HealthIncidentSourceType =
   | "task_failure"
   | "notification_failure"
   | "anomaly"
-  | "probe"
-  | "metric"
   | "backup_stale"
   | "backup_degraded";
 
@@ -174,14 +161,10 @@ export interface NodeRecord {
   basePath?: string;
   status: NodeStatus;
   tags: string[];
+  /** Latest manual connection test. Empty when this node has not been tested. */
   lastSeenAt: string;
   lastBackupAt: string;
-  diskFreePercent: number;
-  diskUsedGb: number;
-  diskTotalGb: number;
-  diskProbeAt?: string;
   connectionLatencyMs?: number;
-  lastProbeAt?: string;
   maintenanceStart?: string;
   maintenanceEnd?: string;
   expiryDate?: string;
@@ -1071,7 +1054,7 @@ export interface ProfileSchema {
   configSchema: ConfigField[];
 }
 
-export type SLOMetricType = "availability" | "success_rate";
+export type SLOMetricType = "success_rate";
 export type SLOStatus = "healthy" | "warning" | "breached" | "insufficient_data";
 
 export type SLODefinition = {
@@ -1108,108 +1091,6 @@ export type SLOSummary = {
   warning: number;
   breached: number;
   insufficient: number;
-};
-
-export type NodeLogSource = "journalctl" | "file";
-export type NodeLogPriority =
-  | "emerg"
-  | "alert"
-  | "crit"
-  | "err"
-  | "warning"
-  | "notice"
-  | "info"
-  | "debug"
-  | "";
-
-export type NodeLogEntry = {
-  id: number;
-  nodeId: number;
-  source: NodeLogSource;
-  path: string;
-  timestamp: string;
-  priority: NodeLogPriority;
-  message: string;
-  createdAt: string;
-};
-
-export type NodeLogQueryResult = {
-  data: NodeLogEntry[];
-  total: number;
-  hasMore: boolean;
-};
-
-export type NodeLogConfig = {
-  logPaths: string[];
-  logJournalctlEnabled: boolean;
-  logRetentionDays: number;
-};
-
-export type AlertLogsResult = {
-  data: NodeLogEntry[];
-  nodeId: number;
-  windowStart: string;
-  windowEnd: string;
-  hint?: string;
-};
-
-export type NodeLogsSettings = {
-  defaultRetentionDays: number;
-};
-
-export type DashboardTimeRange = "1h" | "6h" | "24h" | "7d" | "custom";
-export type ChartType = "line" | "area" | "bar" | "number" | "table";
-export type Aggregation = "avg" | "max" | "min" | "sum" | "p50" | "p95" | "p99";
-
-export type PanelFilters = {
-  nodeIds?: number[];
-  taskIds?: number[];
-};
-
-export type Panel = {
-  id: number;
-  dashboardId: number;
-  title: string;
-  chartType: ChartType;
-  metric: string;
-  filters: PanelFilters;
-  aggregation: Aggregation;
-  layoutX: number;
-  layoutY: number;
-  layoutW: number;
-  layoutH: number;
-};
-
-export type Dashboard = {
-  id: number;
-  ownerId: number;
-  name: string;
-  description: string;
-  timeRange: DashboardTimeRange;
-  customStart?: string | null;
-  customEnd?: string | null;
-  autoRefreshSeconds: number;
-  createdAt: string;
-  updatedAt: string;
-  panels?: Panel[];
-};
-
-export type MetricDescriptor = {
-  key: string;
-  label: string;
-  family: "node" | "task";
-  defaultAggregation: Aggregation;
-  supportedAggregations: Aggregation[];
-};
-
-export type PanelQueryPoint = { ts: string; value: number };
-export type PanelQuerySeries = { name: string; points: PanelQueryPoint[] };
-export type PanelQueryResult = {
-  series: PanelQuerySeries[];
-  stepSeconds: number;
-  /** Set when the backend fetch hit MaxRowsPerQuery. UI should warn the user
-   *  their series is incomplete and suggest narrowing the range/filters. */
-  truncated?: boolean;
 };
 
 /** Domain silence after API mapping. Wire match_tags (string|array|null) is
@@ -1269,7 +1150,7 @@ export type EscalationEvent = {
   firedAt: string;
 };
 
-export type AnomalyDetector = "ewma" | "disk_forecast";
+export type AnomalyDetector = "snapshot_diff";
 
 export type AnomalyEvent = {
   id: number;
@@ -1280,7 +1161,6 @@ export type AnomalyEvent = {
   observedValue: number;
   baselineValue: number;
   sigma?: number | null;
-  forecastDays?: number | null;
   alertId?: number | null;
   raisedAlert: boolean;
   details?: string;

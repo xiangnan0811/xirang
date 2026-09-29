@@ -51,10 +51,6 @@ const nodes: NodeRecord[] = [
     status: "online",
     lastSeenAt: "-",
     lastBackupAt: "-",
-    diskFreePercent: 0,
-    diskUsedGb: 0,
-    diskTotalGb: 0,
-    diskProbeAt: "-",
   },
   {
     id: 2,
@@ -70,10 +66,6 @@ const nodes: NodeRecord[] = [
     status: "online",
     lastSeenAt: "-",
     lastBackupAt: "-",
-    diskFreePercent: 0,
-    diskUsedGb: 0,
-    diskTotalGb: 0,
-    diskProbeAt: "-",
   },
 ];
 

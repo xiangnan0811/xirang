@@ -45,8 +45,8 @@ type RawSLOComplianceResult = {
   status?: string
 }
 
-function mapMetricType(raw?: string): SLOMetricType {
-  return raw === "success_rate" ? "success_rate" : "availability"
+function mapMetricType(raw?: string): SLOMetricType | null {
+  return raw === "success_rate" ? "success_rate" : null
 }
 
 function mapSLOStatus(raw?: string): SLOStatus {
@@ -56,11 +56,13 @@ function mapSLOStatus(raw?: string): SLOStatus {
   return "insufficient_data"
 }
 
-function mapSLO(row: RawSLODefinition): SLODefinition {
+function mapSLO(row: RawSLODefinition): SLODefinition | null {
+  const metricType = mapMetricType(row.metric_type)
+  if (!metricType) return null
   return {
     id: row.id,
     name: row.name,
-    metricType: mapMetricType(row.metric_type),
+    metricType,
     matchTags: row.match_tags ?? null,
     threshold: Number(row.threshold) || 0,
     windowDays: Number(row.window_days) || 0,
@@ -72,11 +74,13 @@ function mapSLO(row: RawSLODefinition): SLODefinition {
   }
 }
 
-function mapCompliance(row: RawSLOComplianceResult): SLOComplianceResult {
+function mapCompliance(row: RawSLOComplianceResult): SLOComplianceResult | null {
+  const metricType = mapMetricType(row.metric_type)
+  if (!metricType) return null
   return {
     sloId: Number(row.slo_id) || 0,
     name: String(row.name ?? ""),
-    metricType: mapMetricType(row.metric_type),
+    metricType,
     windowStart: String(row.window_start ?? ""),
     windowEnd: String(row.window_end ?? ""),
     threshold: Number(row.threshold) || 0,
@@ -115,17 +119,21 @@ export function createSLOApi() {
   return {
     async listSLOs(token: string, options?: { signal?: AbortSignal }): Promise<SLODefinition[]> {
       const rows = await request<RawSLODefinition[]>("/slos", { token, signal: options?.signal })
-      return (rows ?? []).map(mapSLO)
+      return (rows ?? []).map(mapSLO).filter((row): row is SLODefinition => row != null)
     },
 
     async createSLO(token: string, input: SLOInput): Promise<SLODefinition> {
       const row = await request<RawSLODefinition>("/slos", { method: "POST", token, body: toSLOWire(input) })
-      return mapSLO(row)
+      const mapped = mapSLO(row)
+      if (!mapped) throw new Error("")
+      return mapped
     },
 
     async updateSLO(token: string, id: number, input: SLOInput): Promise<SLODefinition> {
       const row = await request<RawSLODefinition>(`/slos/${id}`, { method: "PATCH", token, body: toSLOWire(input) })
-      return mapSLO(row)
+      const mapped = mapSLO(row)
+      if (!mapped) throw new Error("")
+      return mapped
     },
 
     async deleteSLO(token: string, id: number): Promise<void> {
@@ -134,7 +142,9 @@ export function createSLOApi() {
 
     async getSLOCompliance(token: string, id: number, options?: { signal?: AbortSignal }): Promise<SLOComplianceResult> {
       const row = await request<RawSLOComplianceResult>(`/slos/${id}/compliance`, { token, signal: options?.signal })
-      return mapCompliance(row)
+      const mapped = mapCompliance(row)
+      if (!mapped) throw new Error("")
+      return mapped
     },
 
     async getSLOSummary(token: string, options?: { signal?: AbortSignal }): Promise<SLOSummary> {

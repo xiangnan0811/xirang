@@ -35,9 +35,9 @@ func (req *sloCreateRequest) validate() error {
 		return errors.New("name must be 1-128 characters")
 	}
 	switch req.MetricType {
-	case "availability", "success_rate":
+	case "success_rate":
 	default:
-		return errors.New("metric_type must be availability or success_rate")
+		return errors.New("metric_type must be success_rate")
 	}
 	if req.Threshold <= 0 || req.Threshold >= 1 {
 		return errors.New("threshold must be in (0, 1)")

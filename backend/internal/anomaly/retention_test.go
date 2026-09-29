@@ -30,13 +30,13 @@ func TestRetention_DeletesOld_KeepsRecent(t *testing.T) {
 	now := time.Now().UTC()
 	// Old event (40 days ago)
 	db.Create(&model.AnomalyEvent{
-		NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
+		NodeID: 1, Detector: "snapshot_diff", Metric: "snapshot_churn", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30, Details: "{}",
 		FiredAt: now.AddDate(0, 0, -40),
 	})
 	// Recent event (2 days ago)
 	db.Create(&model.AnomalyEvent{
-		NodeID: 1, Detector: "ewma", Metric: "mem_pct", Severity: "warning",
+		NodeID: 1, Detector: "snapshot_diff", Metric: "ransomware_pattern", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30, Details: "{}",
 		FiredAt: now.AddDate(0, 0, -2),
 	})
@@ -51,7 +51,7 @@ func TestRetention_DeletesOld_KeepsRecent(t *testing.T) {
 	}
 	var kept model.AnomalyEvent
 	db.First(&kept)
-	if kept.Metric != "mem_pct" {
+	if kept.Metric != "ransomware_pattern" {
 		t.Fatalf("wrong row kept: %+v", kept)
 	}
 }
@@ -61,12 +61,12 @@ func TestRetention_HonorsCustomDays(t *testing.T) {
 	db.Create(&model.SystemSetting{Key: "anomaly.events_retention_days", Value: "7"})
 	now := time.Now().UTC()
 	db.Create(&model.AnomalyEvent{
-		NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
+		NodeID: 1, Detector: "snapshot_diff", Metric: "snapshot_churn", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30, Details: "{}",
 		FiredAt: now.AddDate(0, 0, -10), // older than 7d
 	})
 	db.Create(&model.AnomalyEvent{
-		NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
+		NodeID: 1, Detector: "snapshot_diff", Metric: "snapshot_churn", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30, Details: "{}",
 		FiredAt: now.AddDate(0, 0, -3), // newer than 7d
 	})

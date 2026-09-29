@@ -91,8 +91,6 @@ func TestRBAC_ViewerHasReadOnlyPermissions(t *testing.T) {
 	readPerms := []string{
 		"nodes:read", "policies:read", "tasks:read",
 		"ssh_keys:read", "integrations:read", "alerts:read",
-		"alerts:deliveries", "reports:read", "logs:read",
-		"dashboards:read", "escalation:read", "service_monitors:read",
 	}
 	for _, perm := range readPerms {
 		r := setupRBACHandler(perm)
@@ -192,9 +190,6 @@ func TestHasPermission_AdminHasAllPermissions(t *testing.T) {
 		"alerts:read", "alerts:deliveries", "alerts:write",
 		"audit:read", "users:manage",
 		"reports:read", "reports:write",
-		"logs:read", "logs:write",
-		"dashboards:read", "dashboards:write",
-		"escalation:read", "escalation:write",
 		"service_monitors:read", "service_monitors:write",
 		"automation:read", "automation:write",
 	}

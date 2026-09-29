@@ -14,7 +14,7 @@ import (
 type SLODefinition struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`
 	Name               string    `gorm:"size:128;not null" json:"name"`
-	MetricType         string    `gorm:"size:32;not null" json:"metric_type"` // success_rate | availability
+	MetricType         string    `gorm:"size:32;not null" json:"metric_type"` // success_rate
 	MatchTags          string    `gorm:"type:text" json:"match_tags"`         // JSON-encoded []string (nil = all)
 	Threshold          float64   `gorm:"not null" json:"threshold"`           // 0–1 range
 	WindowDays         int       `gorm:"not null;default:28" json:"window_days"`
@@ -37,71 +37,6 @@ func (s *SLODefinition) DecodedMatchTags() []string {
 	return tags
 }
 
-// Dashboard is a user-owned collection of panels.
-type Dashboard struct {
-	ID                 uint             `gorm:"primaryKey" json:"id"`
-	OwnerID            uint             `gorm:"not null;uniqueIndex:uk_dashboards_owner_name,priority:1" json:"owner_id"`
-	Name               string           `gorm:"size:100;not null;uniqueIndex:uk_dashboards_owner_name,priority:2" json:"name"`
-	Description        string           `gorm:"type:text;not null;default:''" json:"description"`
-	TimeRange          string           `gorm:"size:16;not null;default:'1h'" json:"time_range"`
-	CustomStart        *time.Time       `json:"custom_start,omitempty"`
-	CustomEnd          *time.Time       `json:"custom_end,omitempty"`
-	AutoRefreshSeconds int              `gorm:"not null;default:30" json:"auto_refresh_seconds"`
-	CreatedAt          time.Time        `json:"created_at"`
-	UpdatedAt          time.Time        `json:"updated_at"`
-	Panels             []DashboardPanel `gorm:"foreignKey:DashboardID;constraint:OnDelete:CASCADE" json:"panels,omitempty"`
-}
-
-// DashboardPanel is a single chart configuration inside a dashboard.
-// Filters is stored as a JSON string in the DB but serialized as a structured
-// object on the wire (see MarshalJSON). This keeps the TS contract clean and
-// lets the frontend round-trip filters through `panel-query` without re-encoding.
-type DashboardPanel struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	DashboardID uint      `gorm:"not null;index:idx_dashboard_panels_dashboard" json:"dashboard_id"`
-	Title       string    `gorm:"size:100;not null" json:"title"`
-	ChartType   string    `gorm:"size:16;not null" json:"chart_type"`
-	Metric      string    `gorm:"size:32;not null" json:"metric"`
-	Filters     string    `gorm:"type:text;not null;default:'{}'" json:"-"`
-	Aggregation string    `gorm:"size:16;not null" json:"aggregation"`
-	LayoutX     int       `gorm:"not null;default:0" json:"layout_x"`
-	LayoutY     int       `gorm:"not null;default:0" json:"layout_y"`
-	LayoutW     int       `gorm:"not null;default:6" json:"layout_w"`
-	LayoutH     int       `gorm:"not null;default:4" json:"layout_h"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-// PanelFilters is the decoded shape of DashboardPanel.Filters.
-type PanelFilters struct {
-	NodeIDs []uint `json:"node_ids,omitempty"`
-	TaskIDs []uint `json:"task_ids,omitempty"`
-}
-
-// DecodedFilters returns the parsed filters; zero-value PanelFilters on empty/invalid JSON.
-func (p *DashboardPanel) DecodedFilters() PanelFilters {
-	var f PanelFilters
-	s := strings.TrimSpace(p.Filters)
-	if s == "" {
-		return f
-	}
-	_ = json.Unmarshal([]byte(s), &f)
-	return f
-}
-
-// MarshalJSON emits `filters` as the decoded object so clients don't need to
-// re-parse a JSON string when round-tripping through /dashboards/panel-query.
-func (p DashboardPanel) MarshalJSON() ([]byte, error) {
-	type alias DashboardPanel
-	return json.Marshal(&struct {
-		alias
-		Filters PanelFilters `json:"filters"`
-	}{
-		alias:   alias(p),
-		Filters: p.DecodedFilters(),
-	})
-}
-
 // AnomalyEvent records one detector finding; written whether or not a new
 // alert was raised (dedup hits still persist an event with RaisedAlert=false).
 type AnomalyEvent struct {
@@ -113,7 +48,6 @@ type AnomalyEvent struct {
 	ObservedValue float64   `gorm:"not null" json:"observed_value"`
 	BaselineValue float64   `gorm:"not null" json:"baseline_value"`
 	Sigma         *float64  `json:"sigma,omitempty"`
-	ForecastDays  *float64  `json:"forecast_days,omitempty"`
 	AlertID       *uint     `json:"alert_id,omitempty"`
 	RaisedAlert   bool      `gorm:"not null;default:false" json:"raised_alert"`
 	Details       string    `gorm:"type:text;not null;default:'{}'" json:"details"`

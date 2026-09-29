@@ -95,7 +95,7 @@ func TestAutomationRuleCRUD(t *testing.T) {
 	}
 
 	// Update
-	updateBody := `{"name":"FAKE_TEST_RULE_UPDATED_FOR_TEST_ONLY","description":"updated","event_type":"node_offline","event_filter":"{\"node_id\":1}","action_type":"pause_policy","action_config":"{\"policy_id\":\"1\"}","enabled":false}`
+	updateBody := `{"name":"FAKE_TEST_RULE_UPDATED_FOR_TEST_ONLY","description":"updated","event_type":"backup_failed","event_filter":"{\"node_id\":1}","action_type":"pause_policy","action_config":"{\"policy_id\":\"1\"}","enabled":false}`
 	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/automation-rules/%d", ruleID), strings.NewReader(updateBody))
 	req.Header.Set("Content-Type", "application/json")
 	resp = httptest.NewRecorder()
@@ -111,8 +111,8 @@ func TestAutomationRuleCRUD(t *testing.T) {
 	if updated.Data.Name != "FAKE_TEST_RULE_UPDATED_FOR_TEST_ONLY" {
 		t.Errorf("名称应为 'FAKE_TEST_RULE_UPDATED_FOR_TEST_ONLY'，实际 %q", updated.Data.Name)
 	}
-	if updated.Data.EventType != "node_offline" {
-		t.Errorf("event_type 应为 node_offline，实际 %q", updated.Data.EventType)
+	if updated.Data.EventType != "backup_failed" {
+		t.Errorf("event_type 应为 backup_failed，实际 %q", updated.Data.EventType)
 	}
 	if updated.Data.ActionType != "pause_policy" {
 		t.Errorf("action_type 应为 pause_policy，实际 %q", updated.Data.ActionType)
@@ -154,6 +154,8 @@ func TestAutomationRuleCreateValidation(t *testing.T) {
 		{"missing event_type", `{"name":"r1","action_type":"send_notification"}`, http.StatusBadRequest},
 		{"missing action_type", `{"name":"r1","event_type":"backup_failed"}`, http.StatusBadRequest},
 		{"invalid event_type", `{"name":"r1","event_type":"INVALID","action_type":"send_notification"}`, http.StatusBadRequest},
+		{"retired node_offline event_type", `{"name":"r1","event_type":"node_offline","action_type":"send_notification"}`, http.StatusBadRequest},
+		{"retired node_disk_high event_type", `{"name":"r1","event_type":"node_disk_high","action_type":"send_notification"}`, http.StatusBadRequest},
 		{"invalid action_type", `{"name":"r1","event_type":"backup_failed","action_type":"INVALID"}`, http.StatusBadRequest},
 	}
 
@@ -179,7 +181,7 @@ func TestAutomationRuleDuplicateName(t *testing.T) {
 	r.POST("/automation-rules", handler.Create)
 
 	body1 := `{"name":"FAKE_TEST_DUP_RULE_FOR_TEST_ONLY","event_type":"backup_failed","action_type":"send_notification"}`
-	body2 := `{"name":"FAKE_TEST_DUP_RULE_FOR_TEST_ONLY","event_type":"node_offline","action_type":"pause_policy","action_config":"{}"}`
+	body2 := `{"name":"FAKE_TEST_DUP_RULE_FOR_TEST_ONLY","event_type":"backup_succeeded","action_type":"pause_policy","action_config":"{}"}`
 
 	req := httptest.NewRequest(http.MethodPost, "/automation-rules", strings.NewReader(body1))
 	req.Header.Set("Content-Type", "application/json")

@@ -131,7 +131,10 @@ export const NodesGrid = React.memo(function NodesGrid({
 
               <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                 <p>
-                  {t("nodes.diskFreeLabel", { pct: node.diskFreePercent, probe: node.diskProbeAt || t("nodes.probeNever") })}
+                  {t("nodes.lastConnectionLabel", { time: node.lastSeenAt || t("nodes.lastConnectionNever") })}
+                </p>
+                <p>
+                  {t("nodes.connectionLatency", { latency: node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-" })}
                 </p>
                 <p>{t("nodes.lastBackupLabel", { time: node.lastBackupAt })}</p>
                 <p className="break-words">{t("nodes.tagsLabel", { tags: node.tags.join(" / ") || "-" })}</p>
@@ -305,9 +308,11 @@ export const NodesGrid = React.memo(function NodesGrid({
                     : t("nodes.authPassword")}
                 </p>
                 <p>
-                  {t("nodes.diskFreeDetail", { pct: node.diskFreePercent, latency: node.connectionLatencyMs ? `${node.connectionLatencyMs}ms` : "-" })}
+                  {t("nodes.lastConnectionLabel", { time: node.lastSeenAt || t("nodes.lastConnectionNever") })}
                 </p>
-                <p>{t("nodes.probeLabel", { time: node.diskProbeAt || t("nodes.probeNever") })}</p>
+                <p>
+                  {t("nodes.connectionLatency", { latency: node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-" })}
+                </p>
                 <p>{t("nodes.lastBackupLabel", { time: node.lastBackupAt })}</p>
                 <p className="break-words">
                   {t("nodes.tagsLabel", { tags: node.tags.length ? node.tags.join(" / ") : "-" })}

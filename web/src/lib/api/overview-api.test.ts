@@ -22,7 +22,7 @@ describe("overview api", () => {
     fetchMock.mockReset();
   });
 
-  it("getOverviewSummary 请求 /overview 并映射 currentThroughputMbps", async () => {
+  it("getOverviewSummary maps active policy coverage and ignores retired resource fields", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
         code: 0,
@@ -44,28 +44,21 @@ describe("overview api", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/overview");
     expect(init.headers).toMatchObject({ Authorization: "Bearer token-1" });
-    expect(result.failedTasks24h).toBe(1);
-    expect(result.currentThroughputMbps).toBe(42.5);
+    expect(result).toEqual({ activePolicies: 3 });
   });
 
-  it("getOverviewSummary 后端未返回 currentThroughputMbps 时降级为 0", async () => {
+  it("getOverviewSummary defaults a missing activePolicies count to 0", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
         code: 0,
         message: "ok",
-        data: {
-          totalNodes: 5,
-          healthyNodes: 3,
-          activePolicies: 1,
-          runningTasks: 0,
-          failedTasks24h: 0
-        }
+        data: {}
       }))
     );
 
     const result = await api.getOverviewSummary("token-1");
 
-    expect(result.currentThroughputMbps).toBe(0);
+    expect(result.activePolicies).toBe(0);
   });
 
   it("getBackupConfidence 请求 /overview/backup-confidence 并映射可信度字段", async () => {
@@ -245,6 +238,55 @@ describe("overview api", () => {
     });
     expect(result.groups[0].nextActions[0]).toEqual({ code: "view_task_logs", label: "查看任务日志", href: "/app/logs?task=7" });
     expect(result.groups[0].signals[0]).toMatchObject({ type: "task_failure", taskRunId: 11, nodeId: 3, policyId: 5 });
+  });
+
+  it("drops retired probe and metric timeline sources and view-node-metrics actions", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          groups: [
+            {
+              id: "mixed",
+              severity: "warning",
+              resource: { type: "node", id: 3, name: "node-a" },
+              source_types: ["probe", "alert", "metric"],
+              next_actions: [
+                { code: "view_node_metrics", label: "查看节点指标", href: "/app/nodes/3?tab=metrics" },
+                { code: "view_node_alerts", label: "查看节点告警", href: "/app/nodes/3?tab=alerts" }
+              ],
+              signals: [
+                { type: "probe", severity: "warning", message: "probe down" },
+                { type: "alert", severity: "warning", message: "open alert" }
+              ]
+            },
+            {
+              id: "metrics-only",
+              severity: "warning",
+              resource: { type: "node", id: 4, name: "node-b" },
+              source_types: ["metric"],
+              next_actions: [
+                { code: "view_node_metrics", label: "查看节点指标", href: "/app/nodes/4?tab=metrics" }
+              ],
+              signals: [
+                { type: "metric", severity: "warning", message: "disk high" }
+              ]
+            }
+          ]
+        }
+      }))
+    );
+
+    const result = await api.getHealthIncidentTimeline("token-1");
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0].id).toBe("mixed");
+    expect(result.groups[0].sourceTypes).toEqual(["alert"]);
+    expect(result.groups[0].signals.map((signal) => signal.type)).toEqual(["alert"]);
+    expect(result.groups[0].nextActions).toEqual([
+      { code: "view_node_alerts", label: "查看节点告警", href: "/app/nodes/3?tab=alerts" }
+    ]);
   });
 
   it("getHealthIncidentTimeline 对缺失数组、未知枚举和非法数字降级到安全默认值", async () => {

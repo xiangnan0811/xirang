@@ -1,41 +1,20 @@
 # 监控、告警与状态页
 
-本文档说明 Xirang 的节点资源监控、HTTP/TCP uptime 监控、公开状态页、异常事件、告警投递和 Prometheus 指标。
+本文档说明 Xirang 的按需节点连接测试、HTTP/TCP uptime 监控、公开状态页、备份快照异常、告警投递和应用 Prometheus 指标。服务器持续资源监控交由专用监控系统。
 
-## 节点资源监控
+## 节点连接与业务状态
 
-Xirang 通过 SSH 探测节点状态，并采样 CPU、内存、磁盘、负载、延迟等指标。节点页面可查看实时状态、历史序列、磁盘容量趋势和异常事件。
+节点状态、延迟和最近连接时间仅表示最近一次手动 SSH 测试，不代表实时在线情况。测试不执行磁盘查询；迁移预检与 Doctor 在操作时读取容量，不将容量持久化为节点指标。
 
-相关环境变量：
+节点详情仅展示未解决告警与运行中任务两个业务计数，由 `GET /api/v1/nodes/:id/summary` 按节点读取权限返回。资源采样、历史指标、磁盘预测及旧 metrics/status/metric-series/disk-forecast 接口已移除。
 
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `NODE_PROBE_INTERVAL` | `5m` | 节点探测间隔，最小 30 秒。 |
-| `NODE_PROBE_FAIL_THRESHOLD` | `3` | 连续失败多少次后标记节点离线。 |
-| `NODE_PROBE_CONCURRENCY` | `10` | 并发探测数量，生产可按规模提高。 |
+基础 `GET /api/v1/overview` 现在只返回当前身份可见的 `activePolicies`；不在该响应中嵌入节点资源、健康事件、最近任务或任务流量。节点两个业务计数由独立的 `GET /api/v1/nodes/:id/summary` 返回；`/overview/backup-health`、`/overview/backup-confidence` 和 `/overview/storage-usage` 仍是独立的备份接口，不因基础 Overview 收缩而删除。历史成功率、采样吞吐量和运行时长统一在[任务执行与恢复合同的历史任务统计](../spec/domains/task-execution-recovery.md#历史任务统计)和任务页查询。
 
-## 节点日志采集
+## 任务日志与历史统计
 
-节点启用 journalctl 或配置日志文件路径后，后台定期通过 SSH 采集。同一节点最多有一个排队或执行中的采集任务；慢节点不会在每轮调度时重复占用队列。
+节点系统日志采集、节点日志配置、节点日志查询和告警关联已退役；Xirang 不再通过 SSH 周期读取 journal 或文件日志。日志页面现仅提供任务及 TaskRun 执行日志；`GET /api/v1/tasks/:id/logs`、`GET /api/v1/task-runs/:id/logs` 和 `/api/v1/ws/logs` 实时任务日志 WebSocket 继续保留，并使用 `tasks:read` 授权。安全审计日志仍由独立审计链保留。
 
-首次采集或长期停用后，journalctl 从最近 1 小时内的最新 200 条开始，不会自动追赶几个月的历史。短暂中断后按时间顺序分批补采，每批最多 200 条，补采范围仍限于最近 1 小时。超过窗口的历史会被跳过并记录恢复原因，不能将这段历史视为完整采集。已有入库日志和远端 journal 不会因此删除。
-
-文件白名单为空时只采集 journalctl；需要采集文件时填写 SSH 用户可读的绝对路径，每行一个，不使用通配符。节点保留天数为 `0` 表示继承系统默认值，与上述补采时间窗口无关。
-
-采集超时、输出超过上限、命令失败或响应不完整时，本轮不写入日志，也不推进游标。重试会重新判断恢复窗口；不能把截断输出当作采集成功。持续超限仍需检查日志量或单条日志大小。关闭服务时，采集器取消自己的任务并等待工作线程退出。
-
-排查时可关注以下指标（均在下文的受保护 `/metrics` 端点）：
-
-| 指标 | 含义 |
-|---|---|
-| `xirang_node_logs_jobs_deduplicated_total` | 节点已排队或执行中而跳过的重复任务数。 |
-| `xirang_node_logs_queue_rejected_total{reason="full"\|"shutdown"}` | 因队列满或正在关闭而拒绝的任务数。 |
-| `xirang_node_logs_in_flight` | 当前执行中的采集任务数。 |
-| `xirang_node_logs_fetch_errors_total{reason="timeout"\|"canceled"\|"output_limit"\|"ssh_error"\|"protocol"}` | 采集失败原因；`protocol` 包括命令失败、响应不完整或格式无效；既有写入失败另记为 `insert`。 |
-| `xirang_node_logs_journal_recoveries_total{reason="unknown_age"\|"stale_poll"\|"cursor_unavailable"\|"window_expired"}` | 成功保存的 journal 恢复边界重设次数，分别对应未知游标年龄、长期未采集、游标已不可用和日志超出恢复窗口；不是跳过的日志条数。 |
-| `xirang_node_logs_shutdown_timeouts_total` | 调用方等待期限内未完成关闭的次数，不代表工作线程已经退出。 |
-
-升级不会自动开启已关闭的采集。恢复采集时，先确认运行版本和现有配置，再启用一个低风险节点，观察至少两个采集周期的游标、写入和队列指标后分批恢复。出现异常时关闭对应采集源，保留已有日志和游标用于排查。
+历史成功率、采样吞吐量和运行时长分位的接口、窗口和授权口径见[任务执行与恢复合同的历史任务统计](../spec/domains/task-execution-recovery.md#历史任务统计)。
 
 ## HTTP/TCP Uptime 监控
 
@@ -106,7 +85,6 @@ Xirang 支持以下通知渠道：
 - 投递状态追踪。
 - 失败投递重试和批量重试。
 - 静默规则。
-- 告警触发前后节点日志关联。
 
 首次外发前会持久化通道投递意图；进程重启后继续未完成投递，而不是只看到告警已存在就停止。静默、分组、阈值抑制、升级接管和无通道结果有明确持久状态，不会因重放误发。升级前没有投递决定的历史告警不会被批量补发。
 
@@ -115,6 +93,8 @@ Xirang 支持以下通知渠道：
 飞书、钉钉、企业微信的发送成功要求渠道业务成功码，HTTP 200 本身不足以确认；空、畸形、缺少确认字段或超限响应不能成为 sent。通用 webhook 保留 HTTP 2xx 成功语义。已识别的永久配置拒绝终止自动重试，暂时失败按退避策略重试；错误中不保存响应原文或 webhook 令牌。
 
 无法确定身份的历史通知保持未知，不会盲目删除或自动重发。冷却从可证明的发送成功时间开始计算，未知历史时间不会回填为升级时间。投递、升级、分组、重试和兼容的完整约束见[告警与健康合同](../spec/domains/alerting-health.md)。
+
+职责收敛迁移只封存退役监控/日志来源的历史告警投递：告警行、升级和已发送事实保留，未发送记录以 `unknown`/`feature_retired` 围栏终止自动和手动 claim；`XR-NODE-EXPIRY-*` 到期告警不在退役集合。精确代码集合与状态转换见[告警与健康合同](../spec/domains/alerting-health.md#退役来源告警封存与投递围栏)。
 
 创建服务监控时显式提交 `enabled=false` 会保持禁用；未提交该字段才使用默认启用值。HTTP 请求头等秘密字段仍通过加密 hooks 持久化。
 
@@ -128,20 +108,17 @@ Xirang 支持以下通知渠道：
 
 ## 异常事件
 
-异常检测默认启用，但默认只写入 `anomaly_events`，不升级为告警和外部通知。
+备份快照异常默认只写入 `anomaly_events`，不升级为告警和外部通知。周期资源异常检测已退役。
 
 相关设置：
 
 | 设置/环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `anomaly.enabled` / `ANOMALY_ENABLED` | `true` | 异常检测总开关。 |
 | `anomaly.alerts_enabled` / `ANOMALY_ALERTS_ENABLED` | `false` | 是否将异常事件升级为告警通知。 |
 | `anomaly.events_retention_days` / `ANOMALY_EVENTS_RETENTION_DAYS` | `30` | 异常事件保留天数。 |
 
 检测器包括：
 
-- EWMA 基线异常：对 CPU、内存、负载等节点指标做基线检测。
-- 磁盘容量预测：基于历史磁盘用量预测是否将在阈值天数内写满。
 - Restic 快照异常：检测快照变更量异常和勒索后缀，详见 [备份、恢复与快照](backup-recovery.md)。
 
 查看入口：
@@ -178,14 +155,9 @@ scrape_configs:
       - targets: ['backend-host:8080']  # 替换为 Prometheus 可访问的后端地址
 ```
 
-可选 remote-write：
-
-| 变量 | 说明 |
-|---|---|
-| `METRICS_REMOTE_URL` | Prometheus remote-write 端点，留空禁用。 |
-| `METRICS_REMOTE_BEARER_TOKEN` | 可选 Bearer Token。 |
-| `METRICS_REMOTE_TIMEOUT` | 单次请求超时，默认 `5s`。 |
-
+节点资源采集、聚合与 remote-write 已退役，旧 `METRICS_REMOTE_*` 配置不再生效。
+应用 `/metrics` 仅保留进程和业务可观测性，不替代服务器资源监控。
+节点手动测试仅验证 SSH；迁移预检与 Doctor 仍按需检查容量，不周期访问节点。
 详细变量见 [环境变量参考](../env-vars.md)。
 
 ## 备份资产监控

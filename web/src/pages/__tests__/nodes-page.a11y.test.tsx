@@ -89,10 +89,6 @@ function buildContext() {
       status: "online" as const,
       lastSeenAt: "2026-02-24 12:00:00",
       lastBackupAt: "2026-02-24 11:50:00",
-      diskFreePercent: 60,
-      diskUsedGb: 40,
-      diskTotalGb: 100,
-      diskProbeAt: "2026-02-24 11:55:00",
       connectionLatencyMs: 12,
     },
   ];

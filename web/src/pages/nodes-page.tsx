@@ -218,9 +218,9 @@ export function NodesPage() {
               }
             >
               <option value="all">{t("nodes.allStatus")}</option>
-              <option value="online">{t("nodes.statusOnline")}</option>
-              <option value="warning">{t("nodes.statusWarning")}</option>
-              <option value="offline">{t("nodes.statusOffline")}</option>
+              <option value="online">{t("status.node.online")}</option>
+              <option value="warning">{t("status.node.warning")}</option>
+              <option value="offline">{t("status.node.offline")}</option>
             </Select>
             <Select
               containerClassName="w-full"
@@ -237,7 +237,7 @@ export function NodesPage() {
             <Select
               containerClassName="w-full col-span-2 md:col-span-1"
               aria-label={t("nodes.sortAriaLabel")}
-              value={sortBy}
+              value={sortBy === "disk-low" ? "status" : sortBy}
               onChange={(event) =>
                 setSortBy(event.target.value as typeof sortBy)
               }
@@ -245,7 +245,6 @@ export function NodesPage() {
               <option value="status">{t("nodes.sortStatus")}</option>
               <option value="name-asc">{t("nodes.sortNameAsc")}</option>
               <option value="name-desc">{t("nodes.sortNameDesc")}</option>
-              <option value="disk-low">{t("nodes.sortDiskLow")}</option>
               <option value="backup-recent">{t("nodes.sortBackupRecent")}</option>
             </Select>
           </FilterPanel>

@@ -275,19 +275,6 @@ var registry = []SettingDef{
 	{Key: "login.captcha_enabled", EnvVar: "LOGIN_CAPTCHA_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "启用登录验证码"},
 	{Key: "login.second_captcha_enabled", EnvVar: "LOGIN_SECOND_CAPTCHA_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "启用登录二次验证码"},
 	{Key: "ssh.auto_accept_new_hosts", EnvVar: "SSH_AUTO_ACCEPT_NEW_HOSTS", CodeDefault: "false", Type: TypeBool, Category: "security", Description: "SSH 首次连接时自动接受未知主机密钥并写入 known_hosts（已知密钥变化仍拒绝）"},
-	// Overlap note: node.probe_interval is also defined in config.Config as
-	// NodeProbeInterval. Config provides the default at startup;
-	// settings.Service can override at runtime. RequiresRestart: true.
-	{Key: "node.probe_interval", EnvVar: "NODE_PROBE_INTERVAL", CodeDefault: "5m", Type: TypeDuration, Category: "node_monitor", Description: "节点探测间隔", RequiresRestart: true},
-	// Overlap note: node.probe_fail_threshold is also defined in
-	// config.Config as NodeProbeFailThreshold. Config provides the default
-	// at startup; settings.Service can override at runtime.
-	// RequiresRestart: true.
-	{Key: "node.probe_fail_threshold", EnvVar: "NODE_PROBE_FAIL_THRESHOLD", CodeDefault: "3", Type: TypeInt, Category: "node_monitor", Description: "节点探测失败阈值", Min: "1", Max: "100", RequiresRestart: true},
-	// Overlap note: node.probe_concurrency is also defined in config.Config
-	// as NodeProbeConcurrency. Config provides the default at startup;
-	// settings.Service can override at runtime. RequiresRestart: true.
-	{Key: "node.probe_concurrency", EnvVar: "NODE_PROBE_CONCURRENCY", CodeDefault: "10", Type: TypeInt, Category: "node_monitor", Description: "节点探测并发数", Min: "1", Max: "100", RequiresRestart: true},
 	// Overlap note: retention.task_traffic_days is also defined in
 	// config.Config as TaskTrafficRetentionDays. Config provides the
 	// default at startup; settings.Service can override at runtime.
@@ -309,19 +296,9 @@ var registry = []SettingDef{
 	// default at startup; settings.Service can override at runtime.
 	{Key: "storage.max_usage_pct", EnvVar: "BACKUP_STORAGE_MAX_USAGE_PCT", CodeDefault: "90", Type: TypeInt, Category: "storage", Description: "备份存储最大使用率 (%)", Min: "0", Max: "100"},
 	{Key: "alert.dedup_window", EnvVar: "ALERT_DEDUP_WINDOW", CodeDefault: "10m", Type: TypeDuration, Category: "alert", Description: "告警去重时间窗口"},
-	{Key: "logs.retention_days_default", EnvVar: "LOG_RETENTION_DAYS_DEFAULT", CodeDefault: "30", Type: TypeInt, Category: "logs", Description: "节点日志默认保留天数（节点未单独配置时生效）", Min: "1", Max: "365"},
-	{Key: "anomaly.enabled", EnvVar: "ANOMALY_ENABLED", CodeDefault: "true", Type: TypeBool, Category: "anomaly", Description: "启用基线异常检测总开关"},
 	{Key: "anomaly.alerts_enabled", EnvVar: "ANOMALY_ALERTS_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "anomaly", Description: "将异常事件升级为告警通知；默认仅记录事件"},
-	{Key: "anomaly.ewma_alpha", EnvVar: "ANOMALY_EWMA_ALPHA", CodeDefault: "0.3", Type: TypeString, Category: "anomaly", Description: "EWMA 平滑因子 α (0.1-0.9)"},
-	{Key: "anomaly.ewma_sigma", EnvVar: "ANOMALY_EWMA_SIGMA", CodeDefault: "5.0", Type: TypeString, Category: "anomaly", Description: "EWMA 异常判定 k 倍标准差 (默认 5.0)"},
-	{Key: "anomaly.ewma_window_hours", EnvVar: "ANOMALY_EWMA_WINDOW_HOURS", CodeDefault: "6", Type: TypeInt, Category: "anomaly", Description: "EWMA 回看样本窗口 (小时)", Min: "1", Max: "6"},
-	{Key: "anomaly.ewma_min_samples", EnvVar: "ANOMALY_EWMA_MIN_SAMPLES", CodeDefault: "24", Type: TypeInt, Category: "anomaly", Description: "EWMA 最少样本数", Min: "5", Max: "50"},
-	{Key: "anomaly.disk_forecast_days", EnvVar: "ANOMALY_DISK_FORECAST_DAYS", CodeDefault: "7", Type: TypeInt, Category: "anomaly", Description: "磁盘预测事件天数阈值", Min: "1", Max: "30"},
-	{Key: "anomaly.disk_forecast_min_history_hours", EnvVar: "ANOMALY_DISK_FORECAST_MIN_HISTORY_HOURS", CodeDefault: "72", Type: TypeInt, Category: "anomaly", Description: "磁盘预测所需最少历史小时", Min: "24", Max: "720"},
 	{Key: "anomaly.events_retention_days", EnvVar: "ANOMALY_EVENTS_RETENTION_DAYS", CodeDefault: "30", Type: TypeInt, Category: "anomaly", Description: "异常事件保留天数", Min: "7", Max: "365"},
 	{Key: "alerts.silence_retention_days", EnvVar: "SILENCE_RETENTION_DAYS", CodeDefault: "30", Type: TypeInt, Category: "retention", Description: "已过期静默规则的审计保留天数（超出后删除）", Min: "1", Max: "365"},
-	{Key: "metrics.remote_url", EnvVar: "METRICS_REMOTE_URL", CodeDefault: "", Type: TypeString, Category: "metrics", Description: "Prometheus remote-write 端点 URL（如 https://mimir.example.com/api/v1/push）；留空禁用远程推送", RequiresRestart: true},
-	{Key: "metrics.remote_bearer_token", EnvVar: "METRICS_REMOTE_BEARER_TOKEN", CodeDefault: "", Type: TypeString, Category: "metrics", Description: "Prometheus remote-write 鉴权 Bearer token；生产环境建议使用环境变量配置以避免明文存库", RequiresRestart: true, Sensitive: true},
 	{Key: "smtp.host", EnvVar: "SMTP_HOST", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "SMTP 服务器地址（启用邮件告警时必填）"},
 	{Key: "smtp.port", EnvVar: "SMTP_PORT", CodeDefault: "587", Type: TypeString, Category: "alerting", Description: "SMTP 端口（默认 587 STARTTLS；465 走隐式 TLS）"},
 	{Key: "smtp.user", EnvVar: "SMTP_USER", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "SMTP 用户名"},

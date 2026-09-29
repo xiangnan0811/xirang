@@ -5,7 +5,6 @@ import { createCredentialAuditApi } from "./credential-audit-api";
 import { createCredentialAccessGrantsApi } from "./credential-access-grants-api";
 import { createBatchApi } from "./batch-api";
 import { createIntegrationsApi } from "./integrations-api";
-import { createNodeMetricsApi } from "./node-metrics-api";
 import { createNodesApi } from "./nodes-api";
 import { createOverviewApi } from "./overview-api";
 import { createPoliciesApi } from "./policies-api";
@@ -21,12 +20,10 @@ import { createDockerApi } from "./docker-api";
 import { createStorageGuideApi } from "./storage-guide-api";
 import { createSettingsApi } from "./settings-api";
 import { createSnapshotDiffApi } from "./snapshot-diff-api";
-import { createDashboardsApi } from "./dashboards";
 import { createSilencesApi } from "./silences";
 import { createSLOApi } from "./slo";
 import { createAnomalyApi } from "./anomaly";
 import { createEscalationApi } from "./escalation";
-import { createNodeLogsApi } from "./node-logs";
 import { createAlertDeliveriesApi } from "./alert-deliveries";
 import { createAppCredentialsApi } from "./app-credentials";
 import { createAutomationRulesApi } from "./automation-rules";
@@ -298,7 +295,6 @@ const lazyBackupRetentionApi: BackupRetentionApi = {
 export const apiClient = {
   ...createAuthApi(),
   ...createNodesApi(),
-  ...createNodeMetricsApi(),
   ...createOverviewApi(),
   ...createPoliciesApi(),
   ...createTasksApi(),
@@ -319,12 +315,10 @@ export const apiClient = {
   ...createStorageGuideApi(),
   ...createSettingsApi(),
   ...createSnapshotDiffApi(),
-  ...createDashboardsApi(),
   ...createSilencesApi(),
   ...createSLOApi(),
   ...createAnomalyApi(),
   ...createEscalationApi(),
-  ...createNodeLogsApi(),
   ...createAlertDeliveriesApi(),
   ...createAppCredentialsApi(),
   ...createAutomationRulesApi(),

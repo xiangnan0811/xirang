@@ -10,9 +10,8 @@ import (
 
 // ctxAwareLogger wraps GORM's default logger and silences the queries whose
 // error is context.Canceled or context.DeadlineExceeded. GORM's default logger
-// treats these as DB errors and floods the log whenever a client aborts mid-
-// query (the panel-query endpoint does this on every keystroke via
-// AbortController). Everything else is forwarded unchanged.
+// treats these as DB errors and floods the log whenever a client aborts an
+// in-flight task statistics query. Everything else is forwarded unchanged.
 type ctxAwareLogger struct {
 	inner logger.Interface
 }

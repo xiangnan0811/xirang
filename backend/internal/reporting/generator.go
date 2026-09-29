@@ -25,12 +25,6 @@ type FailureEntry struct {
 	LastErr  string `json:"last_err"`
 }
 
-// DiskTrendEntry 磁盘趋势采样点
-type DiskTrendEntry struct {
-	Date    string  `json:"date"`
-	AvgFree float64 `json:"avg_free_pct"`
-}
-
 // Generate 生成一份 SLA 报告并持久化。
 func Generate(db *gorm.DB, cfg model.ReportConfig, start, end time.Time) (*model.Report, error) {
 	// 1. 确定作用域节点 ID 列表
@@ -52,19 +46,12 @@ func Generate(db *gorm.DB, cfg model.ReportConfig, start, end time.Time) (*model
 	}
 	topFailuresJSON, _ := json.Marshal(topFailures)
 
-	// 4. 磁盘趋势
-	diskTrend, err := buildDiskTrend(db, nodeIDs, start, end)
-	if err != nil {
-		return nil, err
-	}
-	diskTrendJSON, _ := json.Marshal(diskTrend)
-
 	successRate := 0.0
 	if stats.Total > 0 {
 		successRate = float64(stats.Success) / float64(stats.Total) * 100
 	}
 
-	// 6. RPO/RTO 实际值及达标计算
+	// 4. RPO/RTO 实际值及达标计算
 	actualRPO, actualRTO, rpoCompliant, rtoCompliant := computeRPOAndRTO(db, nodeIDs)
 
 	report := &model.Report{
@@ -81,7 +68,6 @@ func Generate(db *gorm.DB, cfg model.ReportConfig, start, end time.Time) (*model
 		RPOCompliant:     rpoCompliant,
 		RTOCompliant:     rtoCompliant,
 		TopFailures:      string(topFailuresJSON),
-		DiskTrend:        string(diskTrendJSON),
 		GeneratedAt:      time.Now(),
 	}
 
@@ -197,32 +183,6 @@ func buildTopFailures(db *gorm.DB, nodeIDs []uint, start, end time.Time) ([]Fail
 	entries := make([]FailureEntry, 0, len(rows))
 	for _, r := range rows {
 		entries = append(entries, FailureEntry(r))
-	}
-	return entries, nil
-}
-
-func buildDiskTrend(db *gorm.DB, nodeIDs []uint, start, end time.Time) ([]DiskTrendEntry, error) {
-	if len(nodeIDs) == 0 {
-		return nil, nil
-	}
-	type row struct {
-		Date    string  `gorm:"column:date_label"`
-		AvgFree float64 `gorm:"column:avg_free"`
-	}
-	// SQLite: date(sampled_at), PostgreSQL: DATE(sampled_at) — 均兼容
-	var rows []row
-	err := db.Table("node_metric_samples").
-		Select("DATE(sampled_at) as date_label, AVG(100 - disk_pct) as avg_free").
-		Where("node_id IN ? AND sampled_at >= ? AND sampled_at < ?", nodeIDs, start, end).
-		Group("date_label").
-		Order("date_label asc").
-		Scan(&rows).Error
-	if err != nil {
-		return nil, fmt.Errorf("查询磁盘趋势失败: %w", err)
-	}
-	entries := make([]DiskTrendEntry, 0, len(rows))
-	for _, r := range rows {
-		entries = append(entries, DiskTrendEntry(r))
 	}
 	return entries, nil
 }

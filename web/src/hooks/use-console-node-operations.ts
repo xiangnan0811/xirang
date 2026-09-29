@@ -3,6 +3,7 @@ import i18n from "@/i18n";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { toast } from "@/components/ui/toast-sonner";
 import { formatTime } from "@/lib/api/core";
+import { preserveSSHPurposeScope, sshKeyIsBroadScope } from "@/lib/ssh-purpose-scope";
 import { parseTags } from "@/hooks/use-console-data.utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import type {
@@ -96,10 +97,10 @@ export function useNodeOperations({
               fingerprint: buildDemoSSHKey(input).fingerprint,
               disabled: input.disabled,
               expiresAt: input.expiresAt || undefined,
-              allowedPurposes: input.allowedPurposes,
+              allowedPurposes: preserveSSHPurposeScope(input.allowedPurposes),
               allowedNodeIds: input.allowedNodeIds,
               allowedNodeTags: input.allowedNodeTags,
-              broadScope: !input.allowedPurposes || (!input.allowedNodeIds && !input.allowedNodeTags)
+              broadScope: sshKeyIsBroadScope(input)
             }
           : item
       )
@@ -273,7 +274,7 @@ export function useNodeOperations({
     if (result) {
       if (result.ok) {
         const r = result.data;
-        const probeTime = formatTime(new Date().toISOString());
+        const testedAt = r.testedAt || formatTime(new Date().toISOString());
         markInventoryMutated();
         setNodes((prev) =>
           prev.map((node) =>
@@ -281,28 +282,15 @@ export function useNodeOperations({
               ? {
                   ...node,
                   status: r.ok ? "online" : "offline",
-                  lastSeenAt: probeTime,
-                  diskProbeAt: probeTime,
+                  lastSeenAt: testedAt,
                   connectionLatencyMs: r.ok ? r.latencyMs : undefined,
-                  diskUsedGb: r.diskUsedGb ?? node.diskUsedGb,
-                  diskTotalGb: r.diskTotalGb ?? node.diskTotalGb,
-                  diskFreePercent: r.diskTotalGb
-                    ? Math.max(
-                        1,
-                        Math.round(
-                          ((r.diskTotalGb - (r.diskUsedGb ?? node.diskUsedGb)) /
-                            r.diskTotalGb) *
-                            100
-                        )
-                      )
-                    : node.diskFreePercent
                 }
               : node
           )
         );
         return { ok: r.ok, message: r.message, errorCode: r.errorCode, hostKey: r.hostKey };
       }
-      return { ok: false, message: i18n.t("nodes.probeFailed") };
+      return { ok: false, message: i18n.t("nodes.connectionTestFailed") };
     }
 
     // Demo 模式模拟

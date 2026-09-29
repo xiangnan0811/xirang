@@ -13,8 +13,6 @@ import {
   BackupsOverviewPage,
   BackupsRecoveryPage,
   CredentialsPage,
-  DashboardDetailPage,
-  DashboardsPage,
   LazyPage,
   LogsPage,
   MorePage,
@@ -60,14 +58,6 @@ export const AppRouter = createBrowserRouter([
       {
         path: "overview",
         element: <LazyPage><OverviewPage /></LazyPage>
-      },
-      {
-        path: "dashboards",
-        element: <LazyPage><DashboardsPage /></LazyPage>
-      },
-      {
-        path: "dashboards/:id",
-        element: <LazyPage><DashboardDetailPage /></LazyPage>
       },
       {
         path: "nodes",

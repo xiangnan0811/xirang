@@ -73,18 +73,6 @@ type Config struct {
 	LoginFailLockDuration        time.Duration
 	LoginGlobalFailLockThreshold int
 	LoginGlobalFailLockDuration  time.Duration
-	// Overlap note: NodeProbeInterval is also defined in settings.Service as
-	// "node.probe_interval". Config provides the default at startup;
-	// settings.Service can override at runtime.
-	NodeProbeInterval time.Duration
-	// Overlap note: NodeProbeFailThreshold is also defined in settings.Service
-	// as "node.probe_fail_threshold". Config provides the default at startup;
-	// settings.Service can override at runtime.
-	NodeProbeFailThreshold int
-	// Overlap note: NodeProbeConcurrency is also defined in settings.Service as
-	// "node.probe_concurrency". Config provides the default at startup;
-	// settings.Service can override at runtime.
-	NodeProbeConcurrency int
 	// Overlap note: RetentionCheckInterval is also defined in settings.Service
 	// as "retention.check_interval". Config provides the default at startup;
 	// settings.Service can override at runtime.
@@ -201,27 +189,6 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("解析 LOGIN_GLOBAL_FAIL_LOCK_DURATION 失败: %w", err)
 	}
 	cfg.LoginGlobalFailLockDuration = failGlobalLockDuration
-
-	probeIntervalRaw := util.GetEnvOrDefault("NODE_PROBE_INTERVAL", "5m")
-	probeInterval, err := time.ParseDuration(probeIntervalRaw)
-	if err != nil || probeInterval < 30*time.Second {
-		return Config{}, fmt.Errorf("解析 NODE_PROBE_INTERVAL 失败")
-	}
-	cfg.NodeProbeInterval = probeInterval
-
-	probeFailThresholdRaw := util.GetEnvOrDefault("NODE_PROBE_FAIL_THRESHOLD", "3")
-	probeFailThreshold, err := strconv.Atoi(probeFailThresholdRaw)
-	if err != nil || probeFailThreshold <= 0 {
-		return Config{}, fmt.Errorf("解析 NODE_PROBE_FAIL_THRESHOLD 失败")
-	}
-	cfg.NodeProbeFailThreshold = probeFailThreshold
-
-	probeConcurrencyRaw := util.GetEnvOrDefault("NODE_PROBE_CONCURRENCY", "10")
-	probeConcurrency, err := strconv.Atoi(probeConcurrencyRaw)
-	if err != nil || probeConcurrency <= 0 {
-		return Config{}, fmt.Errorf("解析 NODE_PROBE_CONCURRENCY 失败")
-	}
-	cfg.NodeProbeConcurrency = probeConcurrency
 
 	retentionCheckIntervalRaw := util.GetEnvOrDefault("RETENTION_CHECK_INTERVAL", "6h")
 	retentionCheckInterval, err := time.ParseDuration(retentionCheckIntervalRaw)

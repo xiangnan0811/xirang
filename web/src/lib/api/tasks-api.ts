@@ -39,6 +39,7 @@ import type {
 } from "@/types/domain";
 import i18n from "@/i18n";
 import { ApiError, extractErrorCode, formatTime, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
+import { nullableFiniteNumber } from "./number-utils";
 
 type TaskResponse = {
   id: number;
@@ -876,6 +877,83 @@ function mapTaskLog(row: TaskLogResponse): LogEvent {
 
 const TASK_INVENTORY_PAGE_SIZE = 100;
 
+export type TaskStatisticMetric = "task.success_rate" | "task.throughput" | "task.duration";
+export type TaskStatisticAggregation = "avg" | "sum" | "p50" | "p95" | "p99";
+
+export type TaskStatisticQuery = {
+  metric: TaskStatisticMetric;
+  aggregation: TaskStatisticAggregation;
+  start: string;
+  end: string;
+  taskIds?: number[];
+};
+
+export type TaskStatisticPoint = { ts: string; value: number };
+export type TaskStatisticSeries = { name: string; points: TaskStatisticPoint[] };
+export type TaskStatisticResult = {
+  series: TaskStatisticSeries[];
+  stepSeconds: number;
+  truncated: boolean;
+};
+
+export class TaskStatisticPayloadError extends Error {
+  constructor() {
+    super("invalid task statistics payload");
+    this.name = "TaskStatisticPayloadError";
+  }
+}
+
+function statisticTaskIds(taskIds: number[] | undefined): number[] {
+  if (!taskIds || taskIds.length === 0) return [];
+  const unique: number[] = [];
+  for (const id of taskIds) {
+    if (!Number.isInteger(id) || id <= 0 || unique.includes(id)) continue;
+    unique.push(id);
+  }
+  return unique;
+}
+
+function mapTaskStatisticResult(raw: unknown): TaskStatisticResult {
+  if (!raw || typeof raw !== "object") {
+    throw new TaskStatisticPayloadError();
+  }
+  const record = raw as Record<string, unknown>;
+  if (!Array.isArray(record.series)) {
+    throw new TaskStatisticPayloadError();
+  }
+  const series: TaskStatisticSeries[] = [];
+  for (const item of record.series) {
+    if (!item || typeof item !== "object" || !Array.isArray((item as { points?: unknown }).points)) {
+      throw new TaskStatisticPayloadError();
+    }
+    const row = item as { name?: unknown; points: unknown[] };
+    const name = typeof row.name === "string" ? row.name : "";
+    const points: TaskStatisticPoint[] = [];
+    for (const point of row.points) {
+      if (!point || typeof point !== "object") {
+        throw new TaskStatisticPayloadError();
+      }
+      const candidate = point as { ts?: unknown; value?: unknown };
+      const ts = typeof candidate.ts === "string" ? candidate.ts : "";
+      const value = nullableFiniteNumber(candidate.value);
+      if (!ts || Number.isNaN(Date.parse(ts)) || value === null) {
+        throw new TaskStatisticPayloadError();
+      }
+      points.push({ ts, value });
+    }
+    series.push({ name, points });
+  }
+  const step = record.step_seconds;
+  if (typeof step !== "number" || !Number.isInteger(step) || step < 0) {
+    throw new TaskStatisticPayloadError();
+  }
+  return {
+    series,
+    stepSeconds: step,
+    truncated: record.truncated === true,
+  };
+}
+
 export function createTasksApi() {
   return {
     async getTasks(token: string, options?: { signal?: AbortSignal }): Promise<TaskRecord[]> {
@@ -1233,6 +1311,36 @@ export function createTasksApi() {
         method: "POST",
         token
       });
-    }
+    },
+
+    async queryTaskStatistics(
+      token: string,
+      query: TaskStatisticQuery,
+      options?: { signal?: AbortSignal },
+    ): Promise<TaskStatisticResult> {
+      const taskIds = statisticTaskIds(query.taskIds);
+      const body: {
+        metric: TaskStatisticMetric;
+        aggregation: TaskStatisticAggregation;
+        start: string;
+        end: string;
+        filters?: { task_ids: number[] };
+      } = {
+        metric: query.metric,
+        aggregation: query.aggregation,
+        start: query.start,
+        end: query.end,
+      };
+      if (taskIds.length > 0) {
+        body.filters = { task_ids: taskIds };
+      }
+      const raw = await request<unknown>("/tasks/statistics/query", {
+        method: "POST",
+        token,
+        body,
+        signal: options?.signal,
+      });
+      return mapTaskStatisticResult(raw);
+    },
   };
 }

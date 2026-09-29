@@ -6534,7 +6534,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "执行服务端 allowlist 只读诊断，覆盖 SSH、known_hosts、sudo、工具、备份目录、磁盘和探针状态；不接受请求体或自定义命令。",
+                "description": "执行服务端 allowlist 只读诊断，覆盖 SSH、known_hosts、sudo、工具、备份目录和磁盘空间；不接受请求体或自定义命令。",
                 "produces": [
                     "application/json"
                 ],
@@ -6778,64 +6778,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/nodes/{id}/metrics": {
-            "get": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "返回节点最近的 CPU/内存/磁盘/负载资源采样数据，用于趋势图",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "nodes"
-                ],
-                "summary": "获取节点资源采样",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "节点 ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "返回条数（默认 288，最大 2016）",
-                        "name": "limit",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "时间范围，如 24h、7d（默认 24h）",
-                        "name": "since",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    }
-                }
-            }
-        },
         "/nodes/{id}/migrate": {
             "post": {
                 "security": [
@@ -6906,7 +6848,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/nodes/{id}/migrate-preflight": {
+        "/nodes/{id}/migrate/preflight": {
             "post": {
                 "security": [
                     {
@@ -7155,6 +7097,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/nodes/{id}/summary": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回节点的未解决告警和运行中任务数量，不包含资源探测数据",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "nodes"
+                ],
+                "summary": "获取节点业务摘要",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "节点 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.nodeSummaryResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/nodes/{id}/test-connection": {
             "post": {
                 "security": [
@@ -7162,7 +7174,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "测试节点的 SSH 连通性，成功时更新延迟和磁盘信息",
+                "description": "测试节点的 SSH 连通性，成功时更新连接延迟和最近连接时间",
                 "produces": [
                     "application/json"
                 ],
@@ -7290,7 +7302,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回节点数、活跃策略数、运行中/失败任务数及当前吞吐量",
+                "description": "返回当前身份可见的启用策略数",
                 "produces": [
                     "application/json"
                 ],
@@ -7389,7 +7401,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "只读聚合近期告警、任务失败、节点探测/指标、通知失败和备份健康降级",
+                "description": "只读聚合近期告警、任务失败、异常事件、通知失败和备份健康降级",
                 "produces": [
                     "application/json"
                 ],
@@ -14008,6 +14020,74 @@ const docTemplate = `{
                 }
             }
         },
+        "/tasks/statistics/query": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "查询历史任务统计",
+                "parameters": [
+                    {
+                        "description": "任务指标、聚合方式与半开时间窗口",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.taskStatisticsPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_taskstats.QueryResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/tasks/{id}": {
             "get": {
                 "security": [
@@ -18525,6 +18605,17 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.nodeSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "open_alerts": {
+                    "type": "integer"
+                },
+                "running_tasks": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_api_handlers.nodeUpdateResponse": {
             "type": "object",
             "properties": {
@@ -19232,6 +19323,37 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "expected_task_revision": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskStatisticsFilters": {
+            "type": "object",
+            "properties": {
+                "task_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "internal_api_handlers.taskStatisticsPayload": {
+            "type": "object",
+            "properties": {
+                "aggregation": {
+                    "type": "string"
+                },
+                "end": {
+                    "type": "string"
+                },
+                "filters": {
+                    "$ref": "#/definitions/internal_api_handlers.taskStatisticsFilters"
+                },
+                "metric": {
+                    "type": "string"
+                },
+                "start": {
                     "type": "string"
                 }
             }
@@ -24194,19 +24316,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "connection_latency_ms": {
-                    "type": "integer"
-                },
-                "consecutive_failures": {
+                    "description": "Most recent successful manual connection-test latency.",
                     "type": "integer"
                 },
                 "created_at": {
                     "type": "string"
-                },
-                "disk_total_gb": {
-                    "type": "integer"
-                },
-                "disk_used_gb": {
-                    "type": "integer"
                 },
                 "escalation_policy_id": {
                     "type": "integer"
@@ -24223,20 +24337,9 @@ const docTemplate = `{
                 "last_backup_at": {
                     "type": "string"
                 },
-                "last_probe_at": {
-                    "type": "string"
-                },
                 "last_seen_at": {
+                    "description": "Most recent successful manual connection test.",
                     "type": "string"
-                },
-                "log_journalctl_enabled": {
-                    "type": "boolean"
-                },
-                "log_paths": {
-                    "type": "string"
-                },
-                "log_retention_days": {
-                    "type": "integer"
                 },
                 "maintenance_end": {
                     "type": "string"
@@ -24263,6 +24366,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "status": {
+                    "description": "Most recent manual connection-test result, not live availability.",
                     "type": "string"
                 },
                 "tags": {
@@ -24433,10 +24537,6 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "created_at": {
-                    "type": "string"
-                },
-                "disk_trend": {
-                    "description": "JSON",
                     "type": "string"
                 },
                 "failed_runs": {
@@ -24696,6 +24796,48 @@ const docTemplate = `{
                 },
                 "safe_label": {
                     "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_taskstats.Point": {
+            "type": "object",
+            "properties": {
+                "ts": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "number"
+                }
+            }
+        },
+        "xirang_backend_internal_taskstats.QueryResponse": {
+            "type": "object",
+            "properties": {
+                "series": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_taskstats.Series"
+                    }
+                },
+                "step_seconds": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "xirang_backend_internal_taskstats.Series": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "points": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_taskstats.Point"
+                    }
                 }
             }
         }

@@ -712,3 +712,91 @@ describe("task edit contract", () => {
     });
   });
 });
+
+describe("task statistics query", () => {
+  const fetchMock = vi.fn();
+  const api = createTasksApi();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function envelope(data: unknown) {
+    return createMockResponse(200, JSON.stringify({ code: 200, message: "ok", data }));
+  }
+
+  it("posts the all-visible query without task or node filters", async () => {
+    fetchMock.mockResolvedValueOnce(envelope({
+      series: [{ name: "全部任务", points: [{ ts: "2026-04-21T10:00:00Z", value: 0.75 }] }],
+      step_seconds: 900,
+    }));
+
+    const result = await api.queryTaskStatistics("token", {
+      metric: "task.success_rate",
+      aggregation: "avg",
+      start: "2026-04-20T10:00:00.000Z",
+      end: "2026-04-21T10:00:00.000Z",
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/tasks/statistics/query");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      metric: "task.success_rate",
+      aggregation: "avg",
+      start: "2026-04-20T10:00:00.000Z",
+      end: "2026-04-21T10:00:00.000Z",
+    });
+    expect(String(init.body)).not.toContain("node_ids");
+    expect(String(init.body)).not.toContain("task_ids");
+    expect(result).toEqual({
+      series: [{ name: "全部任务", points: [{ ts: "2026-04-21T10:00:00Z", value: 0.75 }] }],
+      stepSeconds: 900,
+      truncated: false,
+    });
+  });
+
+  it("sends only explicit task ids and preserves truncated", async () => {
+    fetchMock.mockResolvedValueOnce(envelope({
+      series: [{ name: "alpha", points: [{ ts: "2026-04-21T10:00:00Z", value: 20 }] }],
+      step_seconds: 3600,
+      truncated: true,
+    }));
+    const controller = new AbortController();
+
+    const result = await api.queryTaskStatistics("token", {
+      metric: "task.throughput",
+      aggregation: "avg",
+      start: "2026-04-20T10:00:00.000Z",
+      end: "2026-04-21T10:00:00.000Z",
+      taskIds: [4, 0, 4, 9],
+    }, { signal: controller.signal });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({
+      metric: "task.throughput",
+      aggregation: "avg",
+      start: "2026-04-20T10:00:00.000Z",
+      end: "2026-04-21T10:00:00.000Z",
+      filters: { task_ids: [4, 9] },
+    });
+    expect(init.signal).toBe(controller.signal);
+    expect(result.truncated).toBe(true);
+    expect(result.stepSeconds).toBe(3600);
+  });
+
+  it("rejects a statistics payload that is not a series", async () => {
+    fetchMock.mockResolvedValueOnce(envelope({ step_seconds: 900 }));
+    await expect(api.queryTaskStatistics("token", {
+      metric: "task.duration",
+      aggregation: "p95",
+      start: "2026-04-20T10:00:00.000Z",
+      end: "2026-04-21T10:00:00.000Z",
+    })).rejects.toMatchObject({ name: "TaskStatisticPayloadError" });
+  });
+});

@@ -9,15 +9,20 @@ type NodeDetailTabProps = {
   token: string | null;
 };
 
-const { mockUseNodeStatus, mockTabs } = vi.hoisted(() => ({
-  mockUseNodeStatus: vi.fn(),
+type OverviewProps = NodeDetailTabProps & {
+  summary: { openAlerts: number; runningTasks: number } | null;
+  summaryError: unknown;
+  summaryLoading: boolean;
+};
+
+const { mockUseNodeRecord, mockUseNodeSummary, mockTabs } = vi.hoisted(() => ({
+  mockUseNodeRecord: vi.fn(),
+  mockUseNodeSummary: vi.fn(),
   mockTabs: {
     overview: vi.fn(),
-    metrics: vi.fn(),
     tasks: vi.fn(),
     alerts: vi.fn(),
     profile: vi.fn(),
-    logConfig: vi.fn(),
     anomaly: vi.fn(),
   },
 }));
@@ -26,21 +31,18 @@ vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({ token: "test-token" }),
 }));
 
-vi.mock("@/features/nodes-detail/use-node-status", () => ({
-  useNodeStatus: mockUseNodeStatus,
+vi.mock("@/features/nodes-detail/use-node-record", () => ({
+  useNodeRecord: mockUseNodeRecord,
+}));
+
+vi.mock("@/features/nodes-detail/use-node-summary", () => ({
+  useNodeSummary: mockUseNodeSummary,
 }));
 
 vi.mock("@/features/nodes-detail/overview-tab", () => ({
-  default: (props: NodeDetailTabProps) => {
+  default: (props: OverviewProps) => {
     mockTabs.overview(props);
     return <div data-testid="overview-tab" />;
-  },
-}));
-
-vi.mock("@/features/nodes-detail/metrics-tab", () => ({
-  default: (props: NodeDetailTabProps) => {
-    mockTabs.metrics(props);
-    return <div data-testid="metrics-tab" />;
   },
 }));
 
@@ -65,13 +67,6 @@ vi.mock("@/features/nodes-detail/profile-tab", () => ({
   },
 }));
 
-vi.mock("@/features/nodes-detail/log-config-tab", () => ({
-  default: (props: NodeDetailTabProps) => {
-    mockTabs.logConfig(props);
-    return <div data-testid="log-config-tab" />;
-  },
-}));
-
 vi.mock("@/features/nodes-detail/anomaly-tab", () => ({
   default: (props: NodeDetailTabProps) => {
     mockTabs.anomaly(props);
@@ -92,107 +87,47 @@ function renderAt(path: string) {
 describe("NodesDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseNodeStatus.mockReturnValue({
-      data: {
-        online: true,
-        probedAt: null,
-        current: { cpuPct: 0, memPct: 0, diskPct: 0, load1: 0, latencyMs: null },
-        trend1h: {
-          cpuPctAvg: 0,
-          memPctAvg: 0,
-          diskPctAvg: 0,
-          load1Avg: 0,
-          latencyMsAvg: null,
-          probeOkRatio: null,
-        },
-        trend24h: {
-          cpuPctAvg: 0,
-          memPctAvg: 0,
-          diskPctAvg: 0,
-          load1Avg: 0,
-          latencyMsAvg: null,
-          probeOkRatio: null,
-        },
-        openAlerts: 0,
-        runningTasks: 0,
-      },
+    mockUseNodeRecord.mockReturnValue({
+      data: { id: 42, name: "db-1", host: "10.0.0.7", port: 22 },
+      isLoading: false,
+      error: null,
+    });
+    mockUseNodeSummary.mockReturnValue({
+      data: { openAlerts: 2, runningTasks: 1 },
       isLoading: false,
       error: null,
       refetch: vi.fn(),
     });
   });
 
-  it("overview tab is active by default and receives shared status (no second poll)", () => {
+  it("titles the page from the node record and shares one summary with overview", () => {
     renderAt("/app/nodes/42");
-    const overviewTab = screen.getByRole("tab", { name: /概览/ });
-    expect(overviewTab).toHaveAttribute("aria-selected", "true");
-    expect(mockUseNodeStatus).toHaveBeenCalledWith(42, "test-token");
-    expect(mockUseNodeStatus).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("heading", { name: "db-1" })).toBeInTheDocument();
+    expect(screen.getByText("10.0.0.7:22")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /概览/ })).toHaveAttribute("aria-selected", "true");
+    expect(mockUseNodeRecord).toHaveBeenCalledWith(42, "test-token");
+    expect(mockUseNodeSummary).toHaveBeenCalledWith(42, "test-token");
+    expect(mockUseNodeSummary).toHaveBeenCalledTimes(1);
     expect(mockTabs.overview).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: 42,
         token: "test-token",
-        status: expect.objectContaining({ online: true }),
-        statusError: null,
+        summary: { openAlerts: 2, runningTasks: 1 },
+        summaryError: null,
+        summaryLoading: false,
       }),
     );
   });
 
-  it("renders unknown status (not offline) when status poll fails", () => {
-    mockUseNodeStatus.mockReturnValue({
+  it("shows the node load error when the record request fails", () => {
+    mockUseNodeRecord.mockReturnValue({
       data: null,
       isLoading: false,
       error: new Error("network"),
-      refetch: vi.fn(),
-    });
-    renderAt("/app/nodes/42?tab=metrics");
-    expect(screen.getByText("未知")).toBeInTheDocument();
-    expect(screen.getByText("状态加载失败")).toBeInTheDocument();
-    expect(screen.queryByText("离线")).not.toBeInTheDocument();
-  });
-
-  it("renders unknown (not offline) when node has never been probed", () => {
-    mockUseNodeStatus.mockReturnValue({
-      data: {
-        online: false,
-        probedAt: null,
-        current: { cpuPct: 0, memPct: 0, diskPct: 0, load1: 0, latencyMs: null },
-        trend1h: {
-          cpuPctAvg: 0,
-          memPctAvg: 0,
-          diskPctAvg: 0,
-          load1Avg: 0,
-          latencyMsAvg: null,
-          probeOkRatio: null,
-        },
-        trend24h: {
-          cpuPctAvg: 0,
-          memPctAvg: 0,
-          diskPctAvg: 0,
-          load1Avg: 0,
-          latencyMsAvg: null,
-          probeOkRatio: null,
-        },
-        openAlerts: 0,
-        runningTasks: 0,
-      },
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
     });
     renderAt("/app/nodes/42");
-    expect(screen.getByText("未知")).toBeInTheDocument();
-    expect(screen.queryByText("离线")).not.toBeInTheDocument();
-  });
-
-  it("?tab=metrics activates the metrics tab", () => {
-    renderAt("/app/nodes/42?tab=metrics");
-    const metricsTab = screen.getByRole("tab", { name: /指标/ });
-    expect(metricsTab).toHaveAttribute("aria-selected", "true");
-    expect(mockTabs.metrics).toHaveBeenCalledWith({
-      nodeId: 42,
-      token: "test-token",
-    });
+    expect(screen.getByRole("heading", { name: "节点详情" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("属性加载失败");
   });
 
   it("clicking a tab updates aria-selected", () => {
@@ -211,9 +146,9 @@ describe("NodesDetailPage", () => {
 
     expect(tablist).toHaveClass("overflow-x-auto");
     expect(tablist).toHaveAttribute("aria-label", "节点详情标签页");
-    expect(screen.getByRole("tab", { name: /日志配置/ })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: /属性/ })).toHaveAttribute(
       "aria-controls",
-      "node-detail-panel-log-config"
+      "node-detail-panel-profile"
     );
     for (const tab of screen.getAllByRole("tab")) {
       const panelId = tab.getAttribute("aria-controls");
@@ -231,9 +166,9 @@ describe("NodesDetailPage", () => {
     const overviewTab = screen.getByRole("tab", { name: /概览/ });
 
     fireEvent.keyDown(overviewTab, { key: "ArrowRight" });
-    expect(screen.getByRole("tab", { name: /指标/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /任务/ })).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(screen.getByRole("tab", { name: /指标/ }), { key: "End" });
+    fireEvent.keyDown(screen.getByRole("tab", { name: /任务/ }), { key: "End" });
     expect(screen.getByRole("tab", { name: /异常事件/ })).toHaveAttribute("aria-selected", "true");
 
     fireEvent.keyDown(screen.getByRole("tab", { name: /异常事件/ }), { key: "Home" });

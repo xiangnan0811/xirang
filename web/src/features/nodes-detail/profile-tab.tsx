@@ -4,6 +4,14 @@ import { apiClient } from "@/lib/api/client";
 import type { NodeRecord } from "@/types/domain";
 import type { NodeDetailTabProps } from "./types";
 
+function formatRecordedTime(value: string): string {
+  if (!value || value === "-") {
+    return "-";
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
 export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
   const { t } = useTranslation();
   const [node, setNode] = useState<NodeRecord | null>(null);
@@ -84,14 +92,10 @@ export default function ProfileTab({ nodeId, token }: NodeDetailTabProps) {
       <section className="rounded-md border border-border bg-card p-4">
         <h3 className="text-base font-medium">{t("nodes.nodeDetail.profileTimeMaint")}</h3>
         <dl className="mt-3 grid grid-cols-[140px_1fr] gap-y-2 text-sm">
-          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastProbe")}</dt>
-          <dd>
-            {node.lastProbeAt ? new Date(node.lastProbeAt).toLocaleString() : "-"}
-          </dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastSeen")}</dt>
-          <dd>
-            {node.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "-"}
-          </dd>
+          <dd>{formatRecordedTime(node.lastSeenAt)}</dd>
+          <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLatency")}</dt>
+          <dd>{node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-"}</dd>
           <dt className="text-muted-foreground">{t("nodes.nodeDetail.profileLastBackup")}</dt>
           <dd>
             {node.lastBackupAt ? new Date(node.lastBackupAt).toLocaleString() : "-"}

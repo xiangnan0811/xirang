@@ -20,6 +20,7 @@ const (
 	taskCronOccurrenceResourceIdentitySchemaVersion int64 = 86
 	backupCompletionFactsSchemaVersion              int64 = 87
 	taskCronOverrideSchemaVersion                   int64 = 88
+	backupFocusRetirementSchemaVersion              int64 = 90
 )
 
 const lifecycleEffectClaimAuditSlotAdmissionTrigger = "trg_recovery_point_lifecycle_effect_claim_audit_slot_downgrade_admission"
@@ -41,6 +42,9 @@ const backupCompletionImmutableUpdateTrigger = "trg_backup_completions_immutable
 const backupCompletionImmutableDeleteTrigger = "trg_backup_completions_immutable_delete"
 const backupCompletionImmutableTrigger = "trg_backup_completions_immutable"
 const taskCronOverrideDowngradeAdmissionTrigger = "trg_task_cron_override_downgrade_admission"
+const backupFocusRetirementAdmissionTrigger = "trg_backup_focus_retirement_downgrade_admission"
+const backupFocusRetirementUpdateAdmissionTrigger = "trg_backup_focus_retirement_downgrade_update_admission"
+const backupFocusRetirementAdmissionFunction = "backup_focus_retirement_downgrade_admission"
 
 type lifecycleEffectClaimAuditSlotTriggerContract struct {
 	table                                 string
@@ -629,6 +633,16 @@ var plainTextContentPostgresConstraintFragments = map[string][]string{
 	"backup_asset_delivery_grants_representation_product_check": {"renderer", "plain_text", "representation_source_bytes", "source_size"},
 }
 
+const backupFocusRetirementSQLiteAdmissionWhen = "NEW.version < 90"
+const backupFocusRetirementSQLiteAdmissionBody = "SELECT RAISE(ABORT, '000090 downgrade blocked: backup-focus retirement is irreversible');"
+const backupFocusRetirementPostgresAdmissionBody = `
+BEGIN
+	IF NEW.version < 90 THEN
+		RAISE EXCEPTION '000090 downgrade blocked: backup-focus retirement is irreversible';
+	END IF;
+	RETURN NEW;
+END;`
+
 // ErrMigrationSchemaDrift means schema_migrations records a clean migration-69
 // or newer database, but the minimum recovery schema is incomplete. The error is
 // intentionally sanitized: callers can classify it with errors.Is without
@@ -822,6 +836,12 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 		return nil
 	}
 	if err := validateTaskCronOverrideSchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < backupFocusRetirementSchemaVersion {
+		return nil
+	}
+	if err := validateBackupFocusRetirementAdmission(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
 
@@ -2014,28 +2034,35 @@ func lifecyclePostgresGuardDefinitionExact(
 ) bool {
 	normalized := strings.TrimSuffix(strings.TrimSpace(normalizeMigrationGuardText(definition)), ";")
 	tokens := strings.Fields(normalized)
-	if len(tokens) != 13 {
-		return false
-	}
 	event := strings.Fields(normalizeMigrationGuardText(contract.triggerFragments[0]))
-	if len(event) != 2 {
+	eventStart := 3
+	eventEnd := eventStart + len(event)
+	on := eventEnd
+	if len(event) == 0 || len(tokens) != on+8 {
 		return false
 	}
-	function := strings.TrimSuffix(tokens[12], "()")
-	return tokens[0] == "create" &&
-		tokens[1] == "trigger" &&
-		tokens[2] == migrationCatalogIdentifier("postgres", contract.name) &&
-		tokens[3] == event[0] &&
-		tokens[4] == event[1] &&
-		tokens[5] == "on" &&
-		migrationUnqualifiedCatalogIdentifier(tokens[6]) == contract.table &&
-		tokens[7] == "for" &&
-		tokens[8] == "each" &&
-		tokens[9] == "row" &&
-		tokens[10] == "execute" &&
-		tokens[11] == "function" &&
-		migrationUnqualifiedCatalogIdentifier(function) ==
-			migrationCatalogIdentifier("postgres", contract.postgresFunctionName)
+	if tokens[0] != "create" ||
+		tokens[1] != "trigger" ||
+		tokens[2] != migrationCatalogIdentifier("postgres", contract.name) {
+		return false
+	}
+	for index, want := range event {
+		if tokens[eventStart+index] != want {
+			return false
+		}
+	}
+	if tokens[on] != "on" ||
+		migrationUnqualifiedCatalogIdentifier(tokens[on+1]) != contract.table ||
+		tokens[on+2] != "for" ||
+		tokens[on+3] != "each" ||
+		tokens[on+4] != "row" ||
+		tokens[on+5] != "execute" ||
+		tokens[on+6] != "function" {
+		return false
+	}
+	function := strings.TrimSuffix(tokens[on+7], "()")
+	return migrationUnqualifiedCatalogIdentifier(function) ==
+		migrationCatalogIdentifier("postgres", contract.postgresFunctionName)
 }
 
 func migrationUnqualifiedCatalogIdentifier(identifier string) string {
@@ -2524,6 +2551,100 @@ func validatePlainTextContentAdmission(db *sql.DB, dbType string) error {
 		}
 	}
 	return nil
+}
+
+func validateBackupFocusRetirementAdmission(db *sql.DB, dbType string) error {
+	if dbType == "sqlite" {
+		for _, trigger := range []struct {
+			name  string
+			event string
+		}{
+			{name: backupFocusRetirementAdmissionTrigger, event: "BEFORE INSERT"},
+			{name: backupFocusRetirementUpdateAdmissionTrigger, event: "BEFORE UPDATE"},
+		} {
+			definition, err := migrationTriggerDefinition(db, dbType, "schema_migrations", trigger.name)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errors.New("missing_backup_focus_retirement_admission_trigger")
+				}
+				return errors.New("catalog_query_failed")
+			}
+			if !backupFocusRetirementSQLiteGuardDefinitionExact(definition, trigger.name, trigger.event) {
+				return errors.New("invalid_backup_focus_retirement_admission_trigger")
+			}
+		}
+		return nil
+	}
+
+	definition, err := migrationTriggerDefinition(
+		db,
+		dbType,
+		"schema_migrations",
+		backupFocusRetirementAdmissionTrigger,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_backup_focus_retirement_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	enabled, enabledErr := migrationTriggerEnabled(
+		db,
+		dbType,
+		"schema_migrations",
+		backupFocusRetirementAdmissionTrigger,
+	)
+	if enabledErr != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !enabled || !backupFocusRetirementPostgresTriggerDefinitionExact(definition) {
+		return errors.New("invalid_backup_focus_retirement_admission_trigger")
+	}
+
+	functionDefinition, functionErr := migrationTriggerFunctionDefinition(
+		db,
+		"schema_migrations",
+		backupFocusRetirementAdmissionTrigger,
+	)
+	if functionErr != nil {
+		if errors.Is(functionErr, sql.ErrNoRows) {
+			return errors.New("invalid_backup_focus_retirement_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !backupFocusRetirementPostgresFunctionDefinitionExact(functionDefinition) {
+		return errors.New("invalid_backup_focus_retirement_admission_trigger")
+	}
+	return nil
+}
+
+func backupFocusRetirementSQLiteGuardDefinitionExact(
+	definition,
+	triggerName,
+	event string,
+) bool {
+	return lifecycleSQLiteGuardDefinitionExact(definition, lifecycleEffectClaimAuditSlotTriggerContract{
+		table:            "schema_migrations",
+		name:             triggerName,
+		triggerFragments: []string{event},
+		sqliteWhen:       backupFocusRetirementSQLiteAdmissionWhen,
+		sqliteBody:       backupFocusRetirementSQLiteAdmissionBody,
+	})
+}
+
+func backupFocusRetirementPostgresTriggerDefinitionExact(definition string) bool {
+	return lifecyclePostgresGuardDefinitionExact(definition, lifecycleEffectClaimAuditSlotTriggerContract{
+		table:                "schema_migrations",
+		name:                 backupFocusRetirementAdmissionTrigger,
+		triggerFragments:     []string{"BEFORE INSERT OR UPDATE"},
+		postgresFunctionName: backupFocusRetirementAdmissionFunction,
+	})
+}
+
+func backupFocusRetirementPostgresFunctionDefinitionExact(definition string) bool {
+	body, ok := migrationPostgresFunctionBody(definition)
+	return ok && normalizeMigrationGuardBody(body) ==
+		normalizeMigrationGuardBody(backupFocusRetirementPostgresAdmissionBody)
 }
 
 func normalizeMigrationDefinition(definition string) string {

@@ -23,7 +23,6 @@ type RawAnomalyEvent = {
   observed_value?: number
   baseline_value?: number
   sigma?: number | null
-  forecast_days?: number | null
   alert_id?: number | null
   raised_alert?: boolean
   details?: string
@@ -36,21 +35,17 @@ type RawAnomalyListResult = {
   has_more?: boolean
 }
 
-function mapDetector(raw?: string): AnomalyDetector {
-  return raw === "disk_forecast" ? "disk_forecast" : "ewma"
-}
-
-function mapEvent(row: RawAnomalyEvent): AnomalyEvent {
+function mapEvent(row: RawAnomalyEvent): AnomalyEvent | null {
+  if (row.detector !== "snapshot_diff") return null
   return {
     id: row.id,
     nodeId: Number(row.node_id) || 0,
-    detector: mapDetector(row.detector),
+    detector: "snapshot_diff",
     metric: String(row.metric ?? ""),
     severity: row.severity === "critical" ? "critical" : "warning",
     observedValue: Number(row.observed_value) || 0,
     baselineValue: Number(row.baseline_value) || 0,
     sigma: row.sigma ?? null,
-    forecastDays: row.forecast_days ?? null,
     alertId: row.alert_id ?? null,
     raisedAlert: Boolean(row.raised_alert),
     details: row.details,
@@ -82,7 +77,9 @@ export function createAnomalyApi() {
         signal: options?.signal,
       })
       return {
-        data: Array.isArray(row.data) ? row.data.map(mapEvent) : [],
+        data: Array.isArray(row.data)
+          ? row.data.map(mapEvent).filter((event): event is AnomalyEvent => event != null)
+          : [],
         total: Number(row.total) || 0,
         hasMore: Boolean(row.has_more),
       }
@@ -103,7 +100,7 @@ export function createAnomalyApi() {
         token,
         signal: options?.signal,
       })
-      return (rows ?? []).map(mapEvent)
+      return (rows ?? []).map(mapEvent).filter((event): event is AnomalyEvent => event != null)
     },
   }
 }

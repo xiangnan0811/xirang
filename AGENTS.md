@@ -14,7 +14,7 @@
 | 开发环境、命令、hooks、分支与 PR | [贡献指南](CONTRIBUTING.md) |
 | Go、API、数据库、迁移、运行时 | [后端合同](docs/spec/backend/README.md) |
 | React、组件、Hook、状态、类型、可访问性 | [前端合同](docs/spec/frontend/README.md) |
-| 凭据、任务、告警、节点日志、备份资产 | [领域合同](docs/spec/domains/README.md) |
+| 凭据、任务、告警、备份资产 | [领域合同](docs/spec/domains/README.md) |
 | 架构、跨层设计、测试、文档维护 | [开发指南](docs/spec/guides/README.md) |
 | 并行代理、独立审查、原生加载、候选证据 | [代理协作与验证](docs/spec/guides/agent-collaboration.md) |
 | 部署、配置、使用、发布 | [文档总入口](docs/README.md) |

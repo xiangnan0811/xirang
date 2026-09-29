@@ -74,6 +74,7 @@ INTEGRATION_BLOCK_PRIVATE_ENDPOINTS=true
 Web SSH 终端在打开会话前需要同时满足：有效的 admin 主认证、TOTP 二次验证 proof，以及绑定当前用户、`terminal.open` 操作、`terminal` 用途和目标节点的短时授权。授权由管理员在终端弹窗中填写原因并通过二次验证后自助创建，默认有效期很短，到期、撤销、拒绝或资源不匹配都不会放行。
 
 配置导入在执行前同样需要有效的 admin 主认证、TOTP 二次验证 proof，以及绑定当前用户、`config.import` 操作和 `config_import` 用途的短时系统级授权；缺少、过期、撤销、拒绝或不匹配的授权会在导入写入前被拒绝。
+配置导入中的系统设置逐项按当前 Settings 注册表进行正常校验；已退役或未知的设置键会拒绝整个导入，不会被静默丢弃或忽略。
 
 含敏感字段的配置导出（`include_secrets=true`）需要有效的 admin 主认证、TOTP 二次验证 proof，以及绑定当前用户、`config.export` 操作和 `config_export` 用途的短时系统级授权；缺少、过期、撤销、拒绝或不匹配的授权会在读取或序列化敏感配置前被拒绝。普通配置导出不包含敏感字段，不需要临时授权。
 
@@ -101,9 +102,9 @@ Updater 与 parser 的身份、socket、PID namespace 和权限必须隔离。�
 
 ## 敏感字段保护
 
-Xirang 会加密存储 SSH 密码、SSH 私钥、TOTP 密钥、通知端点、代理地址等敏感字段。请妥善备份 `DATA_ENCRYPTION_KEY`；数据库备份没有对应密钥时无法恢复敏感字段明文。
+Xirang 会加密存储 SSH 密码、SSH 私钥、TOTP 密钥、通知端点、代理地址等敏感字段。请妥善备份 `DATA_ENCRYPTION_KEY`；数据库备份没有对应密钥时无法恢复敏感字段明文。若部署仍处于密钥轮替或含历史 v1 字段/旧 v2 domain-key envelope，还必须原样保留适用的 `DATA_ENCRYPTION_LEGACY_KEY` 及其它历史 key-ring/decryption key；不能用新密钥代替旧密钥完成数据库恢复。
 
-备份资产控制面同样依赖该密钥。仓库访问绑定、冻结原因和 wrapped domain key 只有在恢复原数据库 **并且** 使用匹配的 `DATA_ENCRYPTION_KEY` 时才可读。仅保留 Provider 仓库只能在 Admin 有效重连/导入后重建可验证的 RecoveryPoint/Catalog 事实，不能重建 overlays、审计、策略、冻结或 Task 关系。错误或缺失密钥必须失败关闭，不得静默换绑或把 rebuild 报成成功。详见 [备份、恢复与快照](./backup-recovery.md#控制面灾难恢复)。
+备份资产控制面同样依赖该密钥。仓库访问绑定、冻结原因和 wrapped domain key 只有在恢复原数据库 **并且** 使用匹配的 `DATA_ENCRYPTION_KEY` 与适用历史密钥时才可读。仅保留 Provider 仓库只能在 Admin 有效重连/导入后重建可验证的 RecoveryPoint/Catalog 事实，不能重建 overlays、审计、策略、冻结或 Task 关系。错误或缺失密钥必须失败关闭，不得静默换绑或把 rebuild 报成成功。数据库退役迁移的升级前保全、旧版隔离恢复和不可逆回退见[备份、恢复与快照](./backup-recovery.md#升级与灾难恢复)。
 
 监控 HTTP 请求头为写入专用秘密；变更监控目标时须显式替换或清空，操作步骤见[监控指南](monitoring-alerting.md#httptcp-uptime-监控)。
 

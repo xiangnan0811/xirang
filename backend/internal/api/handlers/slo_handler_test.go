@@ -29,7 +29,7 @@ func openSLOHandlerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SLODefinition{}, &model.NodeMetricSample{}, &model.NodeMetricSampleHourly{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.TaskRun{}, &model.SLODefinition{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
@@ -86,7 +86,7 @@ func TestCreateSLO_RequiresAdmin(t *testing.T) {
 	h := NewSLOHandler(db)
 	r.POST("/api/v1/slos", middleware.RequireRole("admin"), h.Create)
 
-	body := `{"name":"test-slo","metric_type":"availability","threshold":0.99,"window_days":28,"enabled":true}`
+	body := `{"name":"test-slo","metric_type":"success_rate","threshold":0.99,"window_days":28,"enabled":true}`
 	w := doSLOJSON(r, "POST", "/api/v1/slos", body)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("期望 403 Forbidden，实际: %d — %s", w.Code, w.Body.String())
@@ -98,7 +98,7 @@ func TestCreateSLO_Success(t *testing.T) {
 	db := openSLOHandlerTestDB(t)
 	r := newSLORouter(db, "admin", 1)
 
-	body := `{"name":"uptime-slo","metric_type":"availability","match_tags":["prod","web"],"threshold":0.995,"window_days":30,"enabled":true}`
+	body := `{"name":"uptime-slo","metric_type":"success_rate","match_tags":["prod","web"],"threshold":0.995,"window_days":30,"enabled":true}`
 	w := doSLOJSON(r, "POST", "/api/v1/slos", body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("期望 201，实际: %d — %s", w.Code, w.Body.String())
@@ -114,8 +114,8 @@ func TestCreateSLO_Success(t *testing.T) {
 	if out.Name != "uptime-slo" {
 		t.Fatalf("name 不匹配，期望 uptime-slo，实际: %s", out.Name)
 	}
-	if out.MetricType != "availability" {
-		t.Fatalf("metric_type 不匹配，期望 availability，实际: %s", out.MetricType)
+	if out.MetricType != "success_rate" {
+		t.Fatalf("metric_type 不匹配，期望 success_rate，实际: %s", out.MetricType)
 	}
 	if out.Threshold != 0.995 {
 		t.Fatalf("threshold 不匹配，期望 0.995，实际: %f", out.Threshold)
@@ -139,7 +139,7 @@ func TestCreateSLO_InvalidMetricType(t *testing.T) {
 	db := openSLOHandlerTestDB(t)
 	r := newSLORouter(db, "admin", 1)
 
-	body := `{"name":"bad-slo","metric_type":"latency","threshold":0.99}`
+	body := `{"name":"bad-slo","metric_type":"availability","threshold":0.99}`
 	w := doSLOJSON(r, "POST", "/api/v1/slos", body)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("期望 400 BadRequest，实际: %d — %s", w.Code, w.Body.String())
@@ -152,9 +152,9 @@ func TestCreateSLO_InvalidThreshold(t *testing.T) {
 	r := newSLORouter(db, "admin", 1)
 
 	cases := []string{
-		`{"name":"bad-slo","metric_type":"availability","threshold":0}`,
-		`{"name":"bad-slo","metric_type":"availability","threshold":1}`,
-		`{"name":"bad-slo","metric_type":"availability","threshold":1.5}`,
+		`{"name":"bad-slo","metric_type":"success_rate","threshold":0}`,
+		`{"name":"bad-slo","metric_type":"success_rate","threshold":1}`,
+		`{"name":"bad-slo","metric_type":"success_rate","threshold":1.5}`,
 	}
 	for _, body := range cases {
 		w := doSLOJSON(r, "POST", "/api/v1/slos", body)
@@ -171,7 +171,7 @@ func TestListSLOs_Success(t *testing.T) {
 	// 正常创建 enabled=true 的记录（GORM Create 不会丢弃 true）
 	s1 := model.SLODefinition{
 		Name:       "slo-enabled",
-		MetricType: "availability",
+		MetricType: "success_rate",
 		MatchTags:  "[]",
 		Threshold:  0.99,
 		WindowDays: 28,
@@ -237,7 +237,7 @@ func TestUpdateSLO_Success(t *testing.T) {
 
 	s := model.SLODefinition{
 		Name:       "original-name",
-		MetricType: "availability",
+		MetricType: "success_rate",
 		MatchTags:  `["prod"]`,
 		Threshold:  0.99,
 		WindowDays: 28,
@@ -285,7 +285,7 @@ func TestDeleteSLO_HardDelete(t *testing.T) {
 
 	s := model.SLODefinition{
 		Name:       "to-delete",
-		MetricType: "availability",
+		MetricType: "success_rate",
 		MatchTags:  "[]",
 		Threshold:  0.99,
 		WindowDays: 28,
@@ -318,16 +318,17 @@ func TestDeleteSLO_HardDelete(t *testing.T) {
 	}
 }
 
-// TestSLOCompliance_ReturnsStructure 验证单条 SLO 合规端点返回正确结构与 healthy 状态。
+// TestSLOCompliance_ReturnsStructure 验证单条 success_rate SLO 合规端点返回 healthy 状态。
 func TestSLOCompliance_ReturnsStructure(t *testing.T) {
 	db := openSLOHandlerTestDB(t)
 	db.Create(&model.Node{ID: 1, Name: "n1", Tags: "prod"})
-	s := model.SLODefinition{Name: "prod avail", MetricType: "availability", MatchTags: `["prod"]`, Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
-	db.Create(&s)
+	db.Create(&model.Task{ID: 1, Name: "backup", NodeID: 1})
 	now := time.Now().UTC().Truncate(time.Hour)
-	for h := 0; h < 28*24; h++ {
-		db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-time.Duration(h) * time.Hour), ProbeOK: 10, ProbeFail: 0, SampleCount: 10})
+	for i := range 200 {
+		db.Create(&model.TaskRun{TaskID: 1, Status: "success", CreatedAt: now.Add(-time.Duration(i+1) * time.Minute)})
 	}
+	s := model.SLODefinition{Name: "prod success", MetricType: "success_rate", MatchTags: `["prod"]`, Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1}
+	db.Create(&s)
 	r := newSLORouter(db, "viewer", 2)
 	w := doSLOJSON(r, "GET", "/api/v1/slos/"+sloIDStr(s.ID)+"/compliance", "")
 	if w.Code != http.StatusOK {
@@ -342,20 +343,19 @@ func TestSLOCompliance_ReturnsStructure(t *testing.T) {
 	}
 }
 
-// TestSLOComplianceSummary_ReturnsCounts 验证汇总端点只计入已启用 SLO，且计数正确。
+// TestSLOComplianceSummary_ReturnsCounts 验证汇总端点只计入已启用 success_rate SLO。
 func TestSLOComplianceSummary_ReturnsCounts(t *testing.T) {
 	db := openSLOHandlerTestDB(t)
 	db.Create(&model.Node{ID: 1, Name: "n1", Tags: "prod"})
+	db.Create(&model.Task{ID: 1, Name: "backup", NodeID: 1})
 	now := time.Now().UTC().Truncate(time.Hour)
-	// seed enough samples to get healthy status
-	for h := 0; h < 28*24; h++ {
-		db.Create(&model.NodeMetricSampleHourly{NodeID: 1, BucketStart: now.Add(-time.Duration(h) * time.Hour), ProbeOK: 10, ProbeFail: 0, SampleCount: 10})
+	for i := range 200 {
+		db.Create(&model.TaskRun{TaskID: 1, Status: "success", CreatedAt: now.Add(-time.Duration(i+1) * time.Minute)})
 	}
-	// one enabled
-	db.Create(&model.SLODefinition{Name: "a", MetricType: "availability", MatchTags: `["prod"]`, Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1})
-	// one disabled — use raw SQL to bypass GORM default:true for zero bool
+	db.Create(&model.SLODefinition{Name: "a", MetricType: "success_rate", MatchTags: `["prod"]`, Threshold: 0.99, WindowDays: 28, Enabled: true, CreatedBy: 1})
+	// One disabled — use raw SQL to bypass GORM default:true for zero bool.
 	db.Exec("INSERT INTO slo_definitions (name, metric_type, match_tags, threshold, window_days, enabled, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-		"b", "availability", `["prod"]`, 0.99, 28, 0, 1)
+		"b", "success_rate", `["prod"]`, 0.99, 28, 0, 1)
 
 	r := newSLORouter(db, "viewer", 2)
 	w := doSLOJSON(r, "GET", "/api/v1/slos/compliance-summary", "")

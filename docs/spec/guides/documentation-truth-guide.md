@@ -36,7 +36,7 @@
 | 模型（相对 backend/internal/model） | 可满足同步的领域主文 |
 | --- | --- |
 | user.go、audit.go、token_revocation.go | credentials-access.md |
-| node.go | credentials-access.md 或 node-log-collection.md 或 alerting-health.md |
+| node.go | credentials-access.md 或 alerting-health.md |
 | task.go、task_occurrence.go、task_resource.go、task_terminal_effect.go、backup_completion.go | task-execution-recovery.md |
 | alert.go | alerting-health.md |
 | monitor.go、integration.go | alerting-health.md 或 credentials-access.md |

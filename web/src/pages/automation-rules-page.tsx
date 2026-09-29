@@ -21,8 +21,6 @@ const EVENT_TYPES = [
   "backup_failed",
   "backup_succeeded",
   "drill_failed",
-  "node_offline",
-  "node_disk_high",
 ] as const;
 
 const ACTION_TYPES = [
@@ -38,8 +36,6 @@ const FILTER_KEYS_BY_EVENT: Record<string, string[]> = {
   backup_failed: ["policy_id", "node_id", "executor_type"],
   backup_succeeded: ["policy_id", "node_id", "executor_type"],
   drill_failed: ["policy_id"],
-  node_offline: ["node_id"],
-  node_disk_high: ["node_id"],
 };
 
 /** Config field labels available for each action type. */

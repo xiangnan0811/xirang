@@ -166,9 +166,9 @@ func configureSQLitePool(db *gorm.DB) error {
 // registers GORM callback-driven Prometheus metrics.
 func Open(cfg config.Config) (*gorm.DB, error) {
 	// Wrap GORM's default logger so client-aborted queries (ctx canceled /
-	// deadline exceeded) don't get logged at Error level. The panel-query
-	// endpoint fires an AbortController on every keystroke by design; those
-	// cancellations must not show up as server errors.
+	// deadline exceeded) don't get logged at Error level. The task statistics
+	// endpoint may cancel an in-flight query when its caller changes windows;
+	// those cancellations must not show up as server errors.
 	//
 	// NowFunc forces GORM-managed CreatedAt/UpdatedAt timestamps to UTC.
 	// Combined with SQLite `_loc=UTC` and Postgres `timezone=UTC`, this gives

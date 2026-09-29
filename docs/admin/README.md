@@ -7,7 +7,8 @@
 | 安装、升级、备份平台数据库、排查容器 | [部署、升级与运维](../deployment.md) |
 | 配置环境变量和设置覆盖 | [环境变量参考](../env-vars.md) |
 | 配置备份策略、评估恢复证据、迁移版本化仓库 | [备份、恢复与快照](backup-recovery.md) |
-| 查看节点日志、服务状态、告警和备份资产指标 | [监控、告警与状态页](monitoring-alerting.md) |
+| 查看任务执行记录、任务日志和历史统计 | [任务执行与恢复合同](../spec/domains/task-execution-recovery.md#历史任务统计) |
+| 查看服务状态、告警和备份资产指标 | [监控、告警与状态页](monitoring-alerting.md) |
 | 创建事件规则、理解调度与自动化动作 | [自动化规则](automation.md) |
 | 配置密钥、SSH、临时授权和灾难恢复权限 | [安全加固](security.md) |
 

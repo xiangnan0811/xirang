@@ -34,7 +34,7 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string) => {
       const labels: Record<string, string> = {
-        "dashboards.pageTitle": "Dashboards",
+        "nav.tasks": "Tasks",
         "nav.credentials": "Credentials",
         "nav.automationRules": "Automation Rules",
         "nav.serviceMonitors": "Service Monitors",
@@ -64,7 +64,8 @@ describe("CommandPalette", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByText("Dashboards")).toBeInTheDocument();
+    expect(screen.getByText("Tasks")).toBeInTheDocument();
+    expect(screen.queryByText("Dashboards")).not.toBeInTheDocument();
     expect(screen.getByText("Credentials")).toBeInTheDocument();
     expect(screen.getByText("Automation Rules")).toBeInTheDocument();
     expect(screen.getByText("Service Monitors")).toBeInTheDocument();

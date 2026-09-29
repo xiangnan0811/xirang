@@ -17,8 +17,6 @@ interface NodeRecord {
   host: string;
   status: string;
   archived?: boolean;
-  disk_used_gb?: number;
-  disk_total_gb?: number;
 }
 
 interface NodeMigrateWizardProps {

@@ -10,8 +10,8 @@ export interface ChartTheme {
 // Tooltip styling uses the card/border tokens so it blends with surrounding
 // UI instead of flipping to an inverted chip. The old values (black chip on
 // light, white chip on dark) were a Recharts-era default and looked jarring
-// against our Sage paper-tone cards — matching the dashboards panel-renderer
-// and nodes-detail TrendChart's CompactTooltip look.
+// against our Sage paper-tone cards — matching nodes-detail TrendChart's
+// CompactTooltip look.
 const cardTooltip = {
   bg: "hsl(var(--card))",
   text: "hsl(var(--card-foreground))",

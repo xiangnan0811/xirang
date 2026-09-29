@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { createSSHKeysApi } from "@/lib/api/ssh-keys-api";
+import { preserveSSHPurposeScope } from "@/lib/ssh-purpose-scope";
 import { parseSSHKeyType, type NewSSHKeyInput } from "@/types/domain";
 
 // ── 类型定义 ──
@@ -80,7 +81,9 @@ function validateEntries(
     const privateKey = typeof obj.privateKey === "string" ? obj.privateKey.trim() : "";
     const disabled = typeof obj.disabled === "boolean" ? obj.disabled : false;
     const expiresAt = typeof obj.expiresAt === "string" ? obj.expiresAt.trim() : "";
-    const allowedPurposes = typeof obj.allowedPurposes === "string" ? obj.allowedPurposes.trim() : "";
+    const allowedPurposes = typeof obj.allowedPurposes === "string"
+      ? preserveSSHPurposeScope(obj.allowedPurposes)
+      : "";
     const allowedNodeIds = typeof obj.allowedNodeIds === "string" ? obj.allowedNodeIds.trim() : "";
     const allowedNodeTags = typeof obj.allowedNodeTags === "string" ? obj.allowedNodeTags.trim() : "";
 

@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 
 const APP_SECTION_TITLE_KEYS: Record<string, string> = {
   overview: "nav.overview",
-  dashboards: "dashboards.pageTitle",
   nodes: "nav.nodes",
   "ssh-keys": "nav.sshKeys",
   policies: "nav.policies",

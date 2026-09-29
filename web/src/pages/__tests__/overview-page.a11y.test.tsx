@@ -59,22 +59,13 @@ function buildContext() {
       tags: ["prod"],
       lastSeenAt: "2026-02-24 12:00:00",
       lastBackupAt: "2026-02-24 11:00:00",
-      diskFreePercent: 80,
-      diskUsedGb: 40,
-      diskTotalGb: 100,
-      speedMbps: 0,
+      connectionLatencyMs: 12,
     },
   ];
 
   sharedRef.current = {
     overview: {
-      totalNodes: nodes.length,
-      healthyNodes: 1,
       activePolicies: 2,
-      runningTasks: 1,
-      failedTasks24h: 0,
-      overallSuccessRate: 99,
-      avgSyncMbps: 64,
     },
     refreshVersion: 0,
     fetchOverviewTraffic: fetchOverviewTrafficMock,

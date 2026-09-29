@@ -36,10 +36,6 @@ const affectedNodes: NodeRecord[] = [
     status: "online",
     lastSeenAt: "-",
     lastBackupAt: "-",
-    diskFreePercent: 0,
-    diskUsedGb: 0,
-    diskTotalGb: 0,
-    diskProbeAt: "-",
   },
   {
     id: 2,
@@ -56,10 +52,6 @@ const affectedNodes: NodeRecord[] = [
     status: "offline",
     lastSeenAt: "-",
     lastBackupAt: "-",
-    diskFreePercent: 0,
-    diskUsedGb: 0,
-    diskTotalGb: 0,
-    diskProbeAt: "-",
   },
 ];
 
@@ -82,8 +74,9 @@ describe("RotationProgress", () => {
     const confirmButton = screen.getByRole("button", { name: "确认轮换" });
     expect(confirmButton).toBeDisabled();
     expect(screen.getByText("影响总数")).toBeInTheDocument();
-    expect(screen.getByText("在线")).toBeInTheDocument();
-    expect(screen.getByText("离线 / 未验证")).toBeInTheDocument();
+    expect(screen.getByText("最近测试通过")).toBeInTheDocument();
+    expect(screen.getByText("最近测试未通过")).toBeInTheDocument();
+    expect(screen.getByText("这里的状态只是最近一次手动连接测试。轮换会验证全部受影响节点。")).toBeInTheDocument();
 
     await user.type(screen.getByLabelText("输入 2 以确认受影响节点数"), "1");
     expect(onAcknowledgementChange).toHaveBeenLastCalledWith("1");

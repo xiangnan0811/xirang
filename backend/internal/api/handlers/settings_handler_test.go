@@ -37,24 +37,6 @@ func openSettingsAnomalySmokeDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func newSettingsAnomalySmokeRouter(t *testing.T, db *gorm.DB) *gin.Engine {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	settingsSvc := settings.NewService(db)
-	settingsHandler := NewSettingsHandler(db, settingsSvc)
-	anomalyHandler := NewAnomalyHandler(db)
-	inject := func(c *gin.Context) {
-		c.Set(middleware.CtxUserID, uint(1))
-		c.Set("role", "admin")
-		c.Next()
-	}
-	g := r.Group("/api/v1", inject)
-	g.PUT("/settings", middleware.RequireRole("admin"), settingsHandler.BatchUpdate)
-	g.GET("/anomaly-events", middleware.RBAC("nodes:read"), anomalyHandler.List)
-	return r
-}
-
 func doSettingsAnomalySmoke(r *gin.Engine, method, path, body string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
@@ -621,21 +603,6 @@ func TestSettingsSecurityRiskSummaryBackupRestorePostureInfoWhenHealthy(t *testi
 	item := byCode["backup_restore_posture"]
 	if item.Severity != "info" || item.Count != 0 || len(item.Examples) != 0 {
 		t.Fatalf("健康备份恢复姿态应为 info 且无风险: %+v", item)
-	}
-}
-
-func TestSettingsUpdateAnomalyEnabledKeepsAnomalyEventsEndpointAvailable(t *testing.T) {
-	db := openSettingsAnomalySmokeDB(t)
-	r := newSettingsAnomalySmokeRouter(t, db)
-
-	w := doSettingsAnomalySmoke(r, "PUT", "/api/v1/settings", `{"anomaly.enabled":"true"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("settings update status=%d body=%s", w.Code, w.Body.String())
-	}
-
-	w = doSettingsAnomalySmoke(r, "GET", "/api/v1/anomaly-events", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("anomaly events status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

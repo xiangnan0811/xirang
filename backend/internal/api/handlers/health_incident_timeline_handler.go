@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -151,17 +150,6 @@ type healthIncidentAnomalyRow struct {
 	FiredAt       time.Time `gorm:"column:fired_at"`
 }
 
-type healthIncidentMetricRow struct {
-	ID        uint      `gorm:"column:id"`
-	NodeID    uint      `gorm:"column:node_id"`
-	NodeName  string    `gorm:"column:node_name"`
-	CpuPct    float64   `gorm:"column:cpu_pct"`
-	MemPct    float64   `gorm:"column:mem_pct"`
-	DiskPct   float64   `gorm:"column:disk_pct"`
-	ProbeOK   bool      `gorm:"column:probe_ok"`
-	SampledAt time.Time `gorm:"column:sampled_at"`
-}
-
 type healthIncidentPolicyRunRow struct {
 	PolicyID   uint      `gorm:"column:policy_id"`
 	PolicyName string    `gorm:"column:policy_name"`
@@ -174,7 +162,7 @@ type healthIncidentPolicyRunRow struct {
 
 // Get godoc
 // @Summary      获取健康事件时间线
-// @Description  只读聚合近期告警、任务失败、节点探测/指标、通知失败和备份健康降级
+// @Description  只读聚合近期告警、任务失败、异常事件、通知失败和备份健康降级
 // @Tags         overview
 // @Security     Bearer
 // @Produce      json
@@ -336,14 +324,6 @@ func (h *HealthIncidentTimelineHandler) Get(c *gin.Context) {
 	}
 
 	if err := h.addAnomalySignals(db, acc, since, ownedIDs, needOwnerFilter); err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	if err := h.addNodeProbeSignals(db, acc, ownedIDs, needOwnerFilter); err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	if err := h.addMetricSignals(db, acc, since, ownedIDs, needOwnerFilter); err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -515,7 +495,8 @@ func (h *HealthIncidentTimelineHandler) recentDeliveryFailures(db *gorm.DB, sinc
 			a.node_id AS node_id, a.node_name AS node_name, a.task_id AS task_id, a.task_run_id AS task_run_id,
 			a.policy_name AS policy_name, a.severity AS alert_severity, a.error_code AS error_code`).
 		Joins("JOIN alerts AS a ON a.id = ad.alert_id").
-		Where("ad.status IN ? AND ad.created_at >= ?", []string{"failed", "retrying"}, since)
+		Where("ad.status IN ? AND ad.created_at >= ?", []string{"failed", "retrying"}, since).
+		Where("(a.delivery_reason IS NULL OR a.delivery_reason <> ?)", "feature_retired")
 	if needOwnerFilter {
 		query = query.Where("a.node_id IN ?", ownedIDs)
 	}
@@ -593,7 +574,7 @@ func (h *HealthIncidentTimelineHandler) addAnomalySignals(db *gorm.DB, acc *heal
 	}
 	for _, row := range rows {
 		resource := nodeHealthIncidentResource(row.NodeID, row.NodeName)
-		message := fmt.Sprintf("%s/%s 指标异常：观测 %.1f，基线 %.1f", row.Detector, row.Metric, row.ObservedValue, row.BaselineValue)
+		message := fmt.Sprintf("%s/%s 异常事件：观测 %.1f，基线 %.1f", row.Detector, row.Metric, row.ObservedValue, row.BaselineValue)
 		signal := healthIncidentSignal{
 			Type:       "anomaly",
 			Severity:   normalizeHealthIncidentSeverity(row.Severity),
@@ -607,84 +588,6 @@ func (h *HealthIncidentTimelineHandler) addAnomalySignals(db *gorm.DB, acc *heal
 			alertID = *row.AlertID
 		}
 		acc.addSignal(resource, signal, message, actionsForResource(resource, alertID, "anomaly"))
-	}
-	return nil
-}
-
-func (h *HealthIncidentTimelineHandler) addNodeProbeSignals(db *gorm.DB, acc *healthIncidentAccumulator, ownedIDs []uint, needOwnerFilter bool) error {
-	query := db.Model(&model.Node{}).
-		Where("status <> ? OR consecutive_failures > ?", "online", 0)
-	if needOwnerFilter {
-		query = query.Where("id IN ?", ownedIDs)
-	}
-	var nodes []model.Node
-	if err := query.Order("updated_at DESC").Limit(maxHealthIncidentSourceRows).Find(&nodes).Error; err != nil {
-		return err
-	}
-	for _, node := range nodes {
-		resource := nodeHealthIncidentResource(node.ID, node.Name)
-		lastSeen := node.UpdatedAt.UTC()
-		if node.LastProbeAt != nil {
-			lastSeen = node.LastProbeAt.UTC()
-		}
-		severity := "warning"
-		if node.Status == "offline" && node.ConsecutiveFailures >= 5 {
-			severity = "critical"
-		}
-		message := fmt.Sprintf("节点状态为 %s", node.Status)
-		if node.ConsecutiveFailures > 0 {
-			message = fmt.Sprintf("节点状态为 %s，连续探测失败 %d 次", node.Status, node.ConsecutiveFailures)
-		}
-		acc.addSignal(resource, healthIncidentSignal{
-			Type:       "probe",
-			Severity:   severity,
-			OccurredAt: lastSeen,
-			Message:    message,
-			NodeID:     node.ID,
-		}, message, actionsForResource(resource, 0, "probe"))
-	}
-	return nil
-}
-
-func (h *HealthIncidentTimelineHandler) addMetricSignals(db *gorm.DB, acc *healthIncidentAccumulator, since time.Time, ownedIDs []uint, needOwnerFilter bool) error {
-	query := db.Table("node_metric_samples AS nms").
-		Select("nms.id AS id, nms.node_id AS node_id, COALESCE(nodes.name, '') AS node_name, nms.cpu_pct AS cpu_pct, nms.mem_pct AS mem_pct, nms.disk_pct AS disk_pct, nms.probe_ok AS probe_ok, nms.sampled_at AS sampled_at").
-		Joins("LEFT JOIN nodes ON nodes.id = nms.node_id").
-		Where("nms.sampled_at >= ?", since).
-		Where("nms.probe_ok = ? OR nms.cpu_pct >= ? OR nms.mem_pct >= ? OR nms.disk_pct >= ?", false, 90, 90, 90)
-	if needOwnerFilter {
-		query = query.Where("nms.node_id IN ?", ownedIDs)
-	}
-	var rows []healthIncidentMetricRow
-	if err := query.Order("nms.sampled_at DESC").Limit(maxHealthIncidentSourceRows).Scan(&rows).Error; err != nil {
-		return err
-	}
-	for _, row := range rows {
-		resource := nodeHealthIncidentResource(row.NodeID, row.NodeName)
-		severity := "warning"
-		message := "节点指标超过阈值"
-		if !row.ProbeOK {
-			message = "节点探测样本失败"
-		}
-		if row.DiskPct >= 90 {
-			message = fmt.Sprintf("磁盘使用率 %.1f%% 超过阈值", row.DiskPct)
-		}
-		if row.CpuPct >= 90 && row.CpuPct >= row.MemPct && row.CpuPct >= row.DiskPct {
-			message = fmt.Sprintf("CPU 使用率 %.1f%% 超过阈值", row.CpuPct)
-		}
-		if row.MemPct >= 90 && row.MemPct >= row.CpuPct && row.MemPct >= row.DiskPct {
-			message = fmt.Sprintf("内存使用率 %.1f%% 超过阈值", row.MemPct)
-		}
-		if row.CpuPct >= 95 || row.MemPct >= 95 || row.DiskPct >= 95 {
-			severity = "critical"
-		}
-		acc.addSignal(resource, healthIncidentSignal{
-			Type:       "metric",
-			Severity:   severity,
-			OccurredAt: row.SampledAt.UTC(),
-			Message:    message,
-			NodeID:     row.NodeID,
-		}, message, actionsForResource(resource, 0, "metric"))
 	}
 	return nil
 }
@@ -990,12 +893,8 @@ func actionsForResource(resource healthIncidentResource, alertID uint, sourceTyp
 	case "node":
 		if resource.ID > 0 {
 			actions = append(actions,
-				healthIncidentAction{Code: "view_node_metrics", Label: "查看节点指标", Href: fmt.Sprintf("/app/nodes/%d?tab=metrics", resource.ID)},
 				healthIncidentAction{Code: "view_node_alerts", Label: "查看节点告警", Href: fmt.Sprintf("/app/nodes/%d?tab=alerts", resource.ID)},
 			)
-			if sourceType == "probe" || sourceType == "metric" {
-				actions = append(actions, healthIncidentAction{Code: "open_node_doctor", Label: "打开节点诊断入口", Href: "/app/nodes?keyword=" + url.QueryEscape(resource.Name)})
-			}
 		}
 	case "policy":
 		actions = append(actions,

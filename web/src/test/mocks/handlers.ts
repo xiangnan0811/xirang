@@ -51,16 +51,33 @@ export const handlers = [
     });
   }),
 
-  // GET /overview — empty dashboard data
+  // POST /tasks/statistics/query — empty historical series
+  http.post(`${API_BASE}/tasks/statistics/query`, () => {
+    return HttpResponse.json({
+      code: 200,
+      message: "ok",
+      data: { series: [], step_seconds: 900, truncated: false },
+    });
+  }),
+
+  // GET /overview — policy coverage only; retired node/resource counts are not part of the contract
   http.get(`${API_BASE}/overview`, () => {
     return HttpResponse.json({
       code: 200,
       message: "ok",
       data: {
-        nodes: [],
-        tasks: [],
-        policies: [],
-        alerts: [],
+        activePolicies: 0,
+      },
+    });
+  }),
+  // GET /nodes/:id/summary — open alerts and running tasks
+  http.get(`${API_BASE}/nodes/:id/summary`, () => {
+    return HttpResponse.json({
+      code: 200,
+      message: "ok",
+      data: {
+        open_alerts: 0,
+        running_tasks: 0,
       },
     });
   }),

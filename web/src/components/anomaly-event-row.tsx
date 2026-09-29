@@ -16,22 +16,10 @@ export default function AnomalyEventRow({ event, showNode, nodeName }: Props) {
       ? "bg-destructive/10 text-destructive"
       : "bg-warning/10 text-warning-foreground dark:text-warning";
 
-  const detectorLabel =
-    event.detector === "ewma"
-      ? t("anomaly.detector.ewma")
-      : t("anomaly.detector.disk_forecast");
-
-  const extra = (() => {
-    if (event.detector === "ewma" && event.sigma != null) {
-      return `${event.sigma.toFixed(2)}${t("anomaly.extra.sigmaSuffix")}`;
-    }
-    if (event.detector === "disk_forecast" && event.forecastDays != null) {
-      return t("anomaly.extra.forecastPrefix", {
-        days: event.forecastDays.toFixed(1),
-      });
-    }
-    return "-";
-  })();
+  const detectorLabel = t("anomaly.detector.snapshot_diff");
+  const extra = event.sigma != null
+    ? `${event.sigma.toFixed(2)}${t("anomaly.extra.sigmaSuffix")}`
+    : "-";
 
   return (
     <tr

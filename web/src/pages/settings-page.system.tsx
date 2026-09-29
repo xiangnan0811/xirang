@@ -4,8 +4,6 @@ import { AlertTriangle, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { toast } from "@/components/ui/toast-sonner";
 import { formatTime } from "@/lib/date-utils";
 import { cn, getErrorMessage } from "@/lib/utils";
 import type { SecurityRiskItem, SecurityRiskSummary, SettingDef, ResolvedSetting } from "@/lib/api/settings-api";
@@ -52,8 +50,6 @@ function SystemTabContent() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  const [logRetentionDays, setLogRetentionDays] = useState(30);
-  const [logRetentionSaving, setLogRetentionSaving] = useState(false);
   const [securityRisk, setSecurityRisk] = useState<SecurityRiskSummary | null>(null);
   const [securityRiskError, setSecurityRiskError] = useState<string | null>(null);
 
@@ -61,9 +57,8 @@ function SystemTabContent() {
     if (!token) return;
     return Promise.allSettled([
       apiClient.getSettings(token),
-      apiClient.getLogsSettings(token),
       apiClient.getSecurityRiskSummary(token),
-    ]).then(([settingsResult, logSettingsResult, riskResult]) => {
+    ]).then(([settingsResult, riskResult]) => {
       if (signal?.aborted) return;
       if (settingsResult.status === "fulfilled") {
         const res = settingsResult.value;
@@ -74,9 +69,6 @@ function SystemTabContent() {
           edits[key] = val.value;
         }
         setEditValues(edits);
-      }
-      if (logSettingsResult.status === "fulfilled") {
-        setLogRetentionDays(logSettingsResult.value.defaultRetentionDays);
       }
       if (riskResult.status === "fulfilled") {
         setSecurityRisk(riskResult.value);
@@ -94,21 +86,6 @@ function SystemTabContent() {
     void loadSettings(controller.signal);
     return () => controller.abort();
   }, [loadSettings]);
-
-  const handleSaveLogRetention = async () => {
-    if (!token) return;
-    setLogRetentionSaving(true);
-    try {
-      const updated = await apiClient.updateLogsSettings(token, { defaultRetentionDays: logRetentionDays });
-      setLogRetentionDays(updated.defaultRetentionDays);
-      toast.success(t("settings.system.saved"));
-    } catch (err: unknown) {
-      toast.error(getErrorMessage(err));
-    } finally {
-      setLogRetentionSaving(false);
-    }
-  };
-
 
   const handleSave = async () => {
     if (!token) return;
@@ -313,27 +290,6 @@ function SystemTabContent() {
       <Button onClick={handleSave} disabled={saving}>
         {saving ? t("common.loading") : t("common.save")}
       </Button>
-
-      <div className="rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-4">
-        <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
-        <h3 className="text-sm font-semibold">{t("nodeLogs.settings.defaultRetention")}</h3>
-        <div className="space-y-1.5">
-          <Input
-            id="log-default-retention"
-            type="number"
-            min={1}
-            max={365}
-            value={logRetentionDays}
-            onChange={(e) => setLogRetentionDays(Number(e.target.value))}
-            className="w-32"
-            aria-label={t("nodeLogs.settings.defaultRetention")}
-          />
-          <p className="text-xs text-muted-foreground">{t("nodeLogs.settings.defaultRetentionHint")}</p>
-        </div>
-        <Button size="sm" onClick={handleSaveLogRetention} disabled={logRetentionSaving}>
-          {logRetentionSaving ? t("common.loading") : t("common.save")}
-        </Button>
-      </div>
     </div>
   );
 }

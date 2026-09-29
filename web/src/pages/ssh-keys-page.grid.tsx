@@ -210,6 +210,11 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   <p className="font-medium">{key.name}</p>
                 </div>
                 <p className="mt-0.5 text-xs text-muted-foreground">{key.username}</p>
+                {key.allowedPurposes ? (
+                  <p className="mt-1 truncate text-xs text-muted-foreground" title={key.allowedPurposes}>
+                    {key.allowedPurposes}
+                  </p>
+                ) : null}
               </div>
 
               {/* 指纹 + 最后使用 */}
@@ -295,6 +300,11 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   <div className="min-w-0">
                     <p className="font-medium truncate">{key.name}</p>
                     <p className="text-xs text-muted-foreground truncate">{key.username}</p>
+                    {key.allowedPurposes ? (
+                      <p className="truncate text-xs text-muted-foreground" title={key.allowedPurposes}>
+                        {key.allowedPurposes}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
