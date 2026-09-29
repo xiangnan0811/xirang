@@ -78,6 +78,30 @@ func TestPreparePristineDisabledReturnsSideEffectFreeCompatibilitySession(t *tes
 	}
 }
 
+// A requested enable whose readiness is blocked leaves admission disabled
+// until a transition; Prepare must follow the admission mode instead of
+// retrying until the requested setting and the mode agree.
+func TestPrepareRequestedEnableWithDisabledAdmissionUsesCompatibility(t *testing.T) {
+	fixture := newPublicationFixture(t, true, publication.AdmissionPristineLegacy)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	execution, err := fixture.service.Prepare(ctx, fixture.run())
+	if err != nil {
+		t.Fatalf("prepare with blocked requested enable: %v", err)
+	}
+	defer func() { _ = execution.CompleteCompatibility(context.Background()) }()
+	if execution.Mode() != publication.ModeCompatibility || execution.Attempt() != nil {
+		t.Fatalf("compatibility execution=%s attempt=%+v", execution.Mode(), execution.Attempt())
+	}
+	if fixture.prober.calls != 0 {
+		t.Fatalf("blocked requested enable reached provider probe %d times", fixture.prober.calls)
+	}
+	fixture.requirePublicationCounts(t, 0, 0)
+	if got := fixture.admission.operations(); len(got) != 2 || got[0] != publication.OperationEvidenceBackup || got[1] != publication.OperationLegacyBackup {
+		t.Fatalf("admission operations=%v, want evidence hint then legacy", got)
+	}
+}
+
 func TestPrepareDisabledManagedHistoryBlocksLegacyBackupBeforeExecutorOrProvider(t *testing.T) {
 	fixture := newPublicationFixture(t, false, publication.AdmissionPristineLegacy)
 	fixture.connectExactResticBinding(t)

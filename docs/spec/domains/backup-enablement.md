@@ -5,7 +5,7 @@
 ## 请求值与有效开启
 
 - `backup_assets.enabled` CodeDefault 永远为 `false`，按 DB > env > default 解析。`FoundationService.FeatureEnabled()` 仅请求值；产品面注入 `Runtime.FeatureLive()`，即请求 true 且 `ga.EvaluateEnablement(snapshot)==nil`。readiness 异常失败关闭，blocked/ack-required 返回 `(false,nil)`。
-- `AdmissionController.Initialize` 从 disabled 开始；只有 `StartupPass` 授权后 `InitializeManaged`。请求启用但未 ready 时 Core 继续启动且 disabled，允许 Admin inventory/ack，不能 Fatal 或暗中 managed。
+- `AdmissionController.Initialize` 从 disabled 开始；只有 `StartupPass` 授权后 `InitializeManaged`。请求启用但未 ready 时 Core 继续启动且 disabled，允许 Admin inventory/ack，不能 Fatal 或暗中 managed。发布 `Prepare` 以准入令牌模式决定 compatibility/evidence 路径，请求值只作首次操作提示；请求值与准入模式长期不一致时不得重试等待，任务按 disabled 语义继续。
 - readiness 校验真实 Foundation config、所需 key domains、迁移与有效 export root；非空路径字符串不构成就绪。fresh+ready 无需 ack；existing 必须 Admin 确认当前 64-hex inventory digest。class 仅 fresh→existing，不能反向。
 - 开启前先授权，再 `PrepareEnable`/admission transition；`FeatureTransitioner` 返回 Runtime 而非绕过门禁的 AdmissionController。关闭仍排空，不需 readiness/ack。
 - 持久化成功 callback 首次记录 `enablement_succeeded_at`。计算 passing readiness 必须通过 `MaterializeReadiness` 写 stored ready；DryRun persist 保持 unknown，不 stamp。门禁使用的 durable latch 必须由生产代码真实写入。
