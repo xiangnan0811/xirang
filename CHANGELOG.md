@@ -11,6 +11,13 @@
 - 退役来源告警以 `unknown` / `feature_retired` 封存，未发送投递停止自动/手动重试与升级，已发送事实及历史记录保留；该封存不是新的通知故障。
 - down SQL 和低于本迁移版本的元数据写入均被拒绝；日常回退只能恢复升级前完整数据库并使用匹配旧二进制及密钥，不能只换旧镜像、伪造空历史或删除保护器。新行为只在新版进程生效；发布不代表生产已升级或现场恢复已验收。
 
+## [0.56.0](https://github.com/xiangnan0811/xirang/compare/v0.55.26...v0.56.0) (2026-09-29)
+
+
+### ✨ Features
+
+* **core:** 收敛备份职责并退役节点监控与看板 ([#566](https://github.com/xiangnan0811/xirang/issues/566)) ([ea78db7](https://github.com/xiangnan0811/xirang/commit/ea78db7d95b321f196fe6782b8ace992681fe1c3))
+
 ## [0.55.26](https://github.com/xiangnan0811/xirang/compare/v0.55.25...v0.55.26) (2026-09-29)
 
 
