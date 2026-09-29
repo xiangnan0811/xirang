@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.26](https://github.com/xiangnan0811/xirang/compare/v0.55.25...v0.55.26) (2026-09-29)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 备份资产未就绪时发布准备不再空转 ([3df0dee](https://github.com/xiangnan0811/xirang/commit/3df0dee779a01c89e8a6b29aaaa836d8aa0f2ff8))
+
 ## [0.55.25](https://github.com/xiangnan0811/xirang/compare/v0.55.24...v0.55.25) (2026-09-28)
 
 
