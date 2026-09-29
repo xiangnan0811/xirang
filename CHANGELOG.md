@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.56.0](https://github.com/xiangnan0811/xirang/compare/v0.55.26...v0.56.0) (2026-09-29)
+
+
+### ✨ Features
+
+* **core:** 收敛备份职责并退役节点监控与看板 ([#566](https://github.com/xiangnan0811/xirang/issues/566)) ([ea78db7](https://github.com/xiangnan0811/xirang/commit/ea78db7d95b321f196fe6782b8ace992681fe1c3))
+
 ### 行为与升级说明
 
 - 息壤收敛为备份、恢复与内容浏览工具：任务页保留历史成功率、采样吞吐量及运行时长统计；可配置看板、周期 SSH/资源探测和节点系统日志的页面、API、采集与专用存储退役，不提供旧接口转发。任务日志、安全审计、按需 SSH/容量检查、应用自身 `/metrics`、HTTP/TCP 服务监控和节点到期提醒保留。
@@ -10,13 +17,6 @@
 - 迁移删除节点资源采样、节点系统日志、看板及专用字段/设置；保留任务/运行/流量/任务日志、备份资产与 Provider 元数据、安全审计、snapshot-diff 和有效告警。精确数字尾码 `XR-NODE-<数字>` 无来源区分，因此同码历史手动连接失败告警也会封存；节点到期告警不在退役集合中。
 - 退役来源告警以 `unknown` / `feature_retired` 封存，未发送投递停止自动/手动重试与升级，已发送事实及历史记录保留；该封存不是新的通知故障。
 - down SQL 和低于本迁移版本的元数据写入均被拒绝；日常回退只能恢复升级前完整数据库并使用匹配旧二进制及密钥，不能只换旧镜像、伪造空历史或删除保护器。新行为只在新版进程生效；发布不代表生产已升级或现场恢复已验收。
-
-## [0.56.0](https://github.com/xiangnan0811/xirang/compare/v0.55.26...v0.56.0) (2026-09-29)
-
-
-### ✨ Features
-
-* **core:** 收敛备份职责并退役节点监控与看板 ([#566](https://github.com/xiangnan0811/xirang/issues/566)) ([ea78db7](https://github.com/xiangnan0811/xirang/commit/ea78db7d95b321f196fe6782b8ace992681fe1c3))
 
 ## [0.55.26](https://github.com/xiangnan0811/xirang/compare/v0.55.25...v0.55.26) (2026-09-29)
 
