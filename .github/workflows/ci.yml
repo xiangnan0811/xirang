@@ -271,6 +271,10 @@ jobs:
 
       - name: Run backup-asset Playwright matrix
         run: env -u NODE_ENV npm run e2e
+      - name: Prepare real-backend smoke build cache
+        working-directory: backend
+        run: go build -o /dev/null ./cmd/server
+
       - name: Run real-backend Playwright smoke
         run: env -u NODE_ENV npx playwright test e2e/real-backend-smoke.spec.ts --config=playwright.real-backend.config.ts --project=chromium
 
