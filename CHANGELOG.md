@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.56.0](https://github.com/xiangnan0811/xirang/compare/v0.55.26...v0.56.0) (2026-09-29)
+
+
+### ✨ Features
+
+* **core:** 收敛备份职责并退役节点监控与看板 ([#566](https://github.com/xiangnan0811/xirang/issues/566)) ([ea78db7](https://github.com/xiangnan0811/xirang/commit/ea78db7d95b321f196fe6782b8ace992681fe1c3))
+
 ### 行为与升级说明
 
 - 息壤收敛为备份、恢复与内容浏览工具：任务页保留历史成功率、采样吞吐量及运行时长统计；可配置看板、周期 SSH/资源探测和节点系统日志的页面、API、采集与专用存储退役，不提供旧接口转发。任务日志、安全审计、按需 SSH/容量检查、应用自身 `/metrics`、HTTP/TCP 服务监控和节点到期提醒保留。
