@@ -2,17 +2,16 @@ import { useRef, type KeyboardEvent } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import OverviewTab from "@/features/nodes-detail/overview-tab";
-import MetricsTab from "@/features/nodes-detail/metrics-tab";
 import TasksTab from "@/features/nodes-detail/tasks-tab";
 import AlertsTab from "@/features/nodes-detail/alerts-tab";
 import ProfileTab from "@/features/nodes-detail/profile-tab";
-import LogConfigTab from "@/features/nodes-detail/log-config-tab";
 import AnomalyTab from "@/features/nodes-detail/anomaly-tab";
-import { useNodeStatus } from "@/features/nodes-detail/use-node-status";
+import { useNodeRecord } from "@/features/nodes-detail/use-node-record";
+import { useNodeSummary } from "@/features/nodes-detail/use-node-summary";
 import { useAuth } from "@/context/auth-context.hooks";
 import { PageHero } from "@/components/ui/page-hero";
 
-const TAB_IDS = ["overview", "metrics", "tasks", "alerts", "profile", "log-config", "anomaly"] as const;
+const TAB_IDS = ["overview", "tasks", "alerts", "profile", "anomaly"] as const;
 type TabId = typeof TAB_IDS[number];
 
 function isTabId(v: string | null): v is TabId {
@@ -24,41 +23,20 @@ export function NodesDetailPage() {
   const [params, setParams] = useSearchParams();
   const { t } = useTranslation();
   const { token } = useAuth();
-  const nodeId = Number(id ?? 0);
+  const parsedNodeId = Number(id);
+  const nodeId = Number.isFinite(parsedNodeId) && parsedNodeId > 0 ? parsedNodeId : 0;
   const tabRefs = useRef<Record<TabId, HTMLButtonElement | null>>({
     overview: null,
-    metrics: null,
     tasks: null,
     alerts: null,
     profile: null,
-    "log-config": null,
     anomaly: null,
   });
 
   const tabParam = params.get("tab");
   const activeTab: TabId = isTabId(tabParam) ? tabParam : "overview";
-  // Single shared poll for page header + overview tab (avoid double /status).
-  const { data: status, isLoading, error: statusError } = useNodeStatus(nodeId, token);
-
-  // Prefer last known status while background-refreshing. Only show loading on
-  // first fetch / after clear; never paint failed/empty/never-probed as "offline".
-  let statusBadge: string;
-  let badgeClass = "bg-muted text-muted-foreground";
-  if (status?.probedAt) {
-    // Online/offline only meaningful after at least one probe sample.
-    if (status.online) {
-      statusBadge = t("nodes.statusOnline");
-      badgeClass = "bg-success/10 text-success";
-    } else {
-      statusBadge = t("nodes.statusOffline");
-    }
-  } else if (isLoading) {
-    statusBadge = t("nodes.nodeDetail.statusLoading");
-  } else {
-    // No sample yet (or status poll failed after clear) → unknown, not offline.
-    statusBadge = t("nodes.nodeDetail.statusUnknown");
-    badgeClass = "bg-warning/10 text-warning";
-  }
+  const { data: node, isLoading: nodeLoading, error: nodeError } = useNodeRecord(nodeId, token);
+  const { data: summary, isLoading: summaryLoading, error: summaryError } = useNodeSummary(nodeId, token);
 
   const setTab = (tab: TabId) => {
     const next = new URLSearchParams(params);
@@ -68,11 +46,9 @@ export function NodesDetailPage() {
 
   const TABS: { id: TabId; label: string }[] = [
     { id: "overview", label: t("nodes.nodeDetail.tabOverview") },
-    { id: "metrics", label: t("nodes.nodeDetail.tabMetrics") },
     { id: "tasks", label: t("nodes.nodeDetail.tabTasks") },
     { id: "alerts", label: t("nodes.nodeDetail.tabAlerts") },
     { id: "profile", label: t("nodes.nodeDetail.tabProfile") },
-    { id: "log-config", label: t("nodeLogs.nodeConfig.tab") },
     { id: "anomaly", label: t("anomaly.tab.title") },
   ];
 
@@ -101,25 +77,22 @@ export function NodesDetailPage() {
     focusTab(nextTab);
   };
 
+  const title = node?.name || (nodeLoading ? t("nodes.nodeDetail.loading") : t("nodes.nodeDetail.title"));
+  const subtitle = node
+    ? `${node.host}:${node.port}`
+    : t("nodes.nodeDetail.subtitle", { id: nodeId });
+
   return (
     <div className="flex flex-col gap-6">
       <PageHero
-        title={t("nodes.nodeDetail.title")}
-        subtitle={t("nodes.nodeDetail.subtitle", { id: nodeId })}
+        title={title}
+        subtitle={subtitle}
         meta={
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeClass}`}>
-              {statusBadge}
+          nodeError ? (
+            <span className="text-destructive" role="alert">
+              {t("nodes.nodeDetail.profileError")}
             </span>
-            {statusError ? (
-              <span className="text-destructive" role="alert">
-                {t("nodes.nodeDetail.statusLoadFailed")}
-              </span>
-            ) : null}
-            {!statusError && status?.probedAt ? (
-              <span>{t("nodes.nodeDetail.probedAt", { time: new Date(status.probedAt).toLocaleString() })}</span>
-            ) : null}
-          </div>
+          ) : null
         }
       />
 
@@ -128,16 +101,16 @@ export function NodesDetailPage() {
         aria-label={t("nodes.nodeDetail.tabsAriaLabel")}
         className="-mx-4 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-border px-4 thin-scrollbar sm:mx-0 sm:px-0"
       >
-        {TABS.map((t, index) => {
-          const isActive = activeTab === t.id;
-          const tabId = `node-detail-tab-${t.id}`;
-          const panelId = `node-detail-panel-${t.id}`;
+        {TABS.map((tab, index) => {
+          const isActive = activeTab === tab.id;
+          const tabId = `node-detail-tab-${tab.id}`;
+          const panelId = `node-detail-panel-${tab.id}`;
           return (
             <button
-              key={t.id}
+              key={tab.id}
               id={tabId}
               ref={(element) => {
-                tabRefs.current[t.id] = element;
+                tabRefs.current[tab.id] = element;
               }}
               role="tab"
               type="button"
@@ -150,10 +123,10 @@ export function NodesDetailPage() {
                   ? "border-primary text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
-              onClick={() => setTab(t.id)}
+              onClick={() => setTab(tab.id)}
               onKeyDown={(event) => handleTabKeyDown(event, index)}
             >
-              {t.label}
+              {tab.label}
             </button>
           );
         })}
@@ -172,12 +145,10 @@ export function NodesDetailPage() {
               key={`overview-${nodeId}`}
               nodeId={nodeId}
               token={token}
-              status={status}
-              statusError={statusError}
+              summary={summary}
+              summaryError={summaryError}
+              summaryLoading={summaryLoading}
             />
-          ) : null}
-          {activeTab === "metrics" && tab.id === "metrics" ? (
-            <MetricsTab key={`metrics-${nodeId}`} nodeId={nodeId} token={token} />
           ) : null}
           {activeTab === "tasks" && tab.id === "tasks" ? (
             <TasksTab key={`tasks-${nodeId}`} nodeId={nodeId} token={token} />
@@ -187,9 +158,6 @@ export function NodesDetailPage() {
           ) : null}
           {activeTab === "profile" && tab.id === "profile" ? (
             <ProfileTab key={`profile-${nodeId}`} nodeId={nodeId} token={token} />
-          ) : null}
-          {activeTab === "log-config" && tab.id === "log-config" ? (
-            <LogConfigTab key={`log-config-${nodeId}`} nodeId={nodeId} token={token} />
           ) : null}
           {activeTab === "anomaly" && tab.id === "anomaly" ? (
             <AnomalyTab key={`anomaly-${nodeId}`} nodeId={nodeId} token={token} />

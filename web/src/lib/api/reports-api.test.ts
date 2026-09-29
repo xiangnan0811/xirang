@@ -60,7 +60,6 @@ describe("reports-api mapping", () => {
       success_rate: 90,
       avg_duration_ms: 1200,
       top_failures: '[{"node_name":"n1","task_name":"t1","count":2,"last_err":"boom"}]',
-      disk_trend: "[]",
       generated_at: "2026-01-08T00:00:00Z",
       created_at: "2026-01-08T00:00:01Z",
     })).toMatchObject({

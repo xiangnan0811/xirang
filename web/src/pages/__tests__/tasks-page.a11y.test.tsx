@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { runAxe } from "@/test/a11y-helpers";
@@ -63,6 +63,16 @@ vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
+  },
+}));
+
+vi.mock("@/lib/api/client", () => ({
+  apiClient: {
+    queryTaskStatistics: vi.fn().mockResolvedValue({
+      series: [],
+      stepSeconds: 900,
+      truncated: false,
+    }),
   },
 }));
 
@@ -187,6 +197,11 @@ describe("TasksPage a11y smoke", () => {
         <TasksPage />
       </MemoryRouter>
     );
+
+    expect(await screen.findAllByRole("heading", { name: "该窗口没有历史样本" })).toHaveLength(3);
+    expect(screen.getByRole("group", { name: "时间窗口" })).toBeInTheDocument();
+    expect(screen.getByLabelText("统计范围")).toHaveValue("all");
+    expect(screen.getByLabelText("运行时长分位")).toHaveValue("p95");
 
     const results = await runAxe(container);
     expect(results).toHaveNoViolations();

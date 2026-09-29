@@ -32,9 +32,11 @@ pending login token 绑定当前账户版本和 TOTP 状态，完成后只能消
 - 禁用或 `expires_at <= now` 的密钥在使用私钥之前拒绝，包括测试和导出。purpose 非空时必须包含当前用途；节点 ID 非空须精确匹配；标签非空须有一个精确匹配；ID 和标签同时设置时都须满足。
 - 新调用点必须用 `BuildSSHAuthForPurpose`、`BuildSSHAuthWithKeyForPurpose` 或 `DialSSHForNodePurpose` 等共享 purpose helper。兼容的无用途 helper 不可复制到新边界。
 - 闭合用途包括 `ssh_key_test`、`ssh_key_export`、`node_test`、`terminal`、`task_command`、`batch_command`、`drill`、`probe`、`file_browser`、`docker_volumes`、`node_logs`、`task_backup`、`task_restore`、`task_hook`、`snapshot`、`snapshot_diff`、`integrity_check`、`retention`、`node_migration`。新增值同步归一化、调用方和回归；创建/更新拒绝未知值。
+- `probe`、`node_logs` 是历史受限 scope 的保留 token，仅继续解析、展示和保留限制，不再有执行生产者或新用途建议。不得过滤它们导致“空=全部”；仅含退役用途的凭据对 `node_test/task_backup/task_restore` 等现存用途仍拒绝。
 - scope 只约束受管 `ssh_keys`。节点内联密码/私钥仍须凭据审计，但不伪称受 SSHKey scope 控制。拒绝信息不得泄露密钥、密码、用户名加主机、endpoint、执行配置或原始 SSH/SQL/加密错误。
 - `GET /ssh-keys/export` 只导出满足 `ssh_key_export` 的密钥，被拒绝项计入安全审计数量但不进入 payload。配置导入导出始终保留 scope 元数据；私钥仅在 `include_secrets=true` 时导出，导入复用 scope 归一化工具。
 - API 正常响应不返回私钥；`broad_scope` 是响应派生风险标记。更新区分缺字段与显式清空，创建、更新、批量导入均传递 scope。
+- 宽范围风险按两个独立维度判断：用途为空，或节点 ID 与标签限制同时为空，任一满足即为宽范围。仅含 `probe/node_logs` 不会取得现存用途权限，但无节点限制时仍显示宽范围，与安全风险摘要一致。
 
 前端只使用映射后的 `disabled/expiresAt/allowedPurposes/allowedNodeIds/allowedNodeTags/broadScope`；未知 key type 回退 `auto`，非法数值回退有限值，缺 broad scope 不自行推导 true。过期时间转换为安全的 `datetime-local` 值，非法写入时间序列化为 null，不产生 Invalid Date。表单解释空维度兼容含义；列表以文字和颜色区分禁用、到期、宽范围及受限状态，控件有 label，装饰图标隐藏于辅助技术。scope 卡片不补充敏感连接数据或一键变更入口。
 
@@ -51,6 +53,12 @@ Xirang 对 known_hosts 的全部写入（Go 回调自动接受、人工信任、
 `POST /nodes/:id/trust-host-key` 仅 admin（`RequireRole("admin")` + 节点 ownership），body `{fingerprint_sha256:"SHA256:..."}`，空或非 `SHA256:` 前缀 400。服务端重新连接节点，只在 host key 回调内捕获密钥后立即中止握手，**不向未信任主机发送任何凭据**；先比对当前指纹与提交值，不一致即 409 `ssh_host_key_changed`（即使当前密钥已受信任，也不以幂等成功掩盖确认对象的变化），一致后才在 known_hosts 写锁内重新读取文件：已记录则 `already_trusted`，无冲突则追加。结果：成功 200 `{trusted, already_trusted, algorithm, fingerprint_sha256}`；指纹已变化 409 `ssh_host_key_changed`；已有冲突记录 409 `ssh_host_key_mismatch`（不提供覆盖）；strict 关闭 409 `ssh_host_key_checking_disabled`；无法连接 502。每次请求写 `node.host_key.trust` 凭据审计（success/blocked/failure，metadata 含算法、指纹、`already_trusted`、`stage=host_key_trust`）。
 
 前端节点页三个测试入口（行/卡片、编辑器、保存后自动测试）遇结构化主机密钥失败时弹窗展示算法与指纹，不再 toast。unknown：admin 可「信任并重试」或前往 系统设置 → 安全；非 admin 仅提示联系管理员。mismatch：仅安全警告，任何角色均无信任按钮。信任请求进行中弹窗不可关闭，也不会被其他节点并发返回的主机密钥结果替换（该结果改为 toast），失败信息留在原弹窗；信任成功后关闭弹窗再重测，普通测试结果只 toast、不改动弹窗。mapper 只接受上述两个 code 且指纹非空，其余视为普通失败。回归覆盖未知/信任/重连、重复信任幂等、已信任其他密钥时提交旧指纹仍 409、错误指纹与冲突不改文件、并发/过期快照不写入第二把密钥、rsync 与受管 Rsync 始终严格并经 Go 路径登记、多密钥主机保留已记录的非默认类型密钥、零认证尝试、真实路由权限、DB 覆盖 env 即时生效，以及前端 mapper、三种弹窗状态、进行中关闭与并发探测。
+
+手动连接测试只进行按需 SSH 握手，不执行 df、不返回或持久化容量，也不创建周期节点探测告警。
+Node 的 status、connection_latency_ms、last_seen_at 表示最近手动测试结果而非实时在线；
+SSH 密钥轮换对本次全部受影响节点显式验证，不能按旧 online 状态跳过。
+迁移预检使用当次源/目标容量且仅放在预检响应中，空间不足仍是 warning；源、目标的凭据使用分别按各自节点、密钥及 `success|failure|blocked` 结果审计，不能以目标成功掩盖源的授权拒绝。
+Doctor 继续按需验证 SSH、权限、工具、目录和备份空间，不检查已退役的周期采样状态。
 
 ## 临时凭据授权与终端
 
@@ -86,11 +94,11 @@ Xirang 对 known_hosts 的全部写入（Go 回调自动接受、人工信任、
 
 `credential_audit_events` 是领域事件表，补充 hash-chain HTTP `audit_logs`，覆盖 GET、WebSocket 和后台执行。SQLite/PostgreSQL 的 metadata 都是 text JSON；需要检索的事实加明确列和索引，不依赖专属 JSON 查询。
 
-事件记录安全 actor/resource ID、action/purpose、credential kind/source、安全结果 `success|failure|blocked`、脱敏 error 和小型 metadata。source 用 `ssh_key_id=<id>`、`node.password` 等标签，不含值。维护测试、导出、节点测试、terminal open/failure/close、任务 manual/restore/batch/运行时用凭据、drill、文件浏览、卷发现、配置导出、Doctor、迁移预检、probe、metrics、节点日志等调用点的现有动作身份。
+事件记录安全 actor/resource ID、action/purpose、资源 ID 与关联、安全结果 `success|failure|blocked`、脱敏 error 和小型 metadata。source 用 `ssh_key_id=<id>`、`node.password` 等标签，不含值。维护测试、导出、节点测试、terminal open/failure/close、任务 manual/restore/batch/运行时用凭据、drill、文件浏览、卷发现、配置导出、Doctor 和迁移预检的动作身份；历史 probe/metrics/节点日志动作仍可展示，但退役生产者不再写入新事件。
 
 禁止密码、私钥、TOTP/JWT/recovery code、解密执行配置、终端流、SFTP/file/export payload、Docker 输出/卷名、诊断输出及完整命令。metadata 只保存数量、阶段、格式/scope、安全 hash、run ID、延迟和布尔值；含 `private/password/token/secret/credential/config/output/stream/command/content/payload` 的 key/value 丢弃。错误使用共享 sanitizer，输出标记 `输出:`、`output:`、`stdout:`、`stderr:` 后替换为 `[REDACTED_OUTPUT]`。字段必须有界；JSON marshal 失败保存 `{}`。
 
-一般调用点尽力写审计：nil DB 或无 runtime context 为 no-op，写失败仅由 `logger.Module("credential_audit")` 发安全警告，不改变主操作结果；有明确原子审计要求的操作（如 [Legacy Rclone reconciliation](task-execution-recovery.md#旧版-rclone-可变代次)）必须失败回滚，不能套用默认尽力规则。runtime 通过 `WithRuntimeContext/WriteRuntime` 保持 task/run/policy/node/actor 关联。后台只记录有意义的阻断/失败及稀疏重复 probe 失败，不逐成功 dial 写无限事件。
+一般调用点尽力写审计：nil DB 或无 runtime context 为 no-op，写失败仅由 `logger.Module("credential_audit")` 发安全警告，不改变主操作结果；有明确原子审计要求的操作（如 [Legacy Rclone reconciliation](task-execution-recovery.md#旧版-rclone-可变代次)）必须失败回滚，不能套用默认尽力规则。runtime 通过 `WithRuntimeContext/WriteRuntime` 保持 task/run/policy/node/actor 关联。后台只记录有意义的阻断/失败，不逐成功 dial 写无限事件。
 
 回归验证禁用 metadata key/value、字段长度和输出脱敏、terminal 不含输入输出、各使用点安全身份与资源关联、runtime 合并上下文、无 DB/context，以及显式原子审计边界的失败回滚。
 
@@ -98,7 +106,7 @@ Xirang 对 known_hosts 的全部写入（Go 回调自动接受、人工信任、
 
 `policies.pre_hook/post_hook` 含秘密，模型 hook 保存时加密、读取时解密。非管理员响应为空，非管理员非空输入 403，更新空/隐藏字段保留原 hook；管理员可按命令验证规则设置或清空。应用 profile 自动 hook 仅在执行时由加密 app credential 渲染，创建/更新只保存 profile 和 credential ID，不持久化生成的含密码命令。
 
-敏感 setting（如 `smtp.password`、`metrics.remote_bearer_token`）注册 `Sensitive: true` 并加入 v1→v2 迁移 allowlist；Update/UpdateWithTx 入库前加密，空值可为空，在服务边界解密。GetEffective 数据库读取失败时保留已有过期缓存，不能用 env/default 覆盖缓存。迁移计数覆盖 policy、app credential、integration proxy 和全部敏感 setting。监控 HTTP headers 也加密且不直接 JSON 输出，API 只公开配置标记和头名；启动回填不可解密/无法保存时不就绪。环境覆盖和当前实现例外见[环境变量](../../env-vars.md)。
+敏感 setting（如 `smtp.password`）注册 `Sensitive: true` 并加入 v1→v2 迁移 allowlist；Update/UpdateWithTx 入库前加密，空值可为空，在服务边界解密。GetEffective 数据库读取失败时保留已有过期缓存，不能用 env/default 覆盖缓存。迁移计数覆盖 policy、app credential、integration proxy 和全部现存敏感 setting。监控 HTTP headers 也加密且不直接 JSON 输出，API 只公开配置标记和头名；启动回填不可解密/无法保存时不就绪。环境覆盖和当前实现例外见[环境变量](../../env-vars.md)。
 
 监控 `http_headers` 为 JSON 对象字符串且仅写入，查询不返回值或 `***`；更新省略时只有类型、完整目标（含路径/查询参数）、HTTP method 都未变才保留旧配置。用途变化必须显式替换或提交字符串 `"{}"` 清空，否则返回 409 与 `service_monitor_target_change_requires_headers`；并发变更返回 `service_monitor_concurrent_update`，客户端重新加载再编辑。Task 所有响应中的嵌套 policy 仅含 `id/name`，管理员也不能经任务接口读到解密 hook/演练脚本。
 

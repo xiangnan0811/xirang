@@ -19,10 +19,9 @@ import {
 } from "@/lib/api/slo";
 import { getErrorMessage } from "@/lib/utils";
 import { useConfirm } from "@/hooks/use-confirm";
-import type { EscalationPolicy, SLODefinition, SLOComplianceResult, SLOSummary } from "@/types/domain";
+import type { EscalationPolicy, SLODefinition, SLOComplianceResult, SLOMetricType, SLOSummary } from "@/types/domain";
 
 const METRIC_TYPES = [
-  { value: "availability", i18nKey: "slo.metricType.availability" },
   { value: "success_rate", i18nKey: "slo.metricType.successRate" },
 ] as const;
 
@@ -277,7 +276,7 @@ function SLODialogSession({
   const { t } = useTranslation();
   const { token } = useAuth();
   const [name, setName] = useState(existing?.name ?? "");
-  const [metricType, setMetricType] = useState<"availability" | "success_rate">(existing?.metricType ?? "availability");
+  const [metricType, setMetricType] = useState<SLOMetricType>(existing?.metricType ?? "success_rate");
   const [tags, setTags] = useState<string[]>(existing ? parseSLOTags(existing) : []);
   const [threshold, setThreshold] = useState(existing ? (existing.threshold * 100).toString() : "99");
   const [windowDays] = useState(existing?.windowDays ?? 28);
@@ -354,7 +353,7 @@ function SLODialogSession({
         <Select
           id="slo-type"
           value={metricType}
-          onChange={(e) => setMetricType(e.target.value as "availability" | "success_rate")}
+          onChange={(e) => setMetricType(e.target.value as SLOMetricType)}
         >
           {METRIC_TYPES.map((m) => (
             <option key={m.value} value={m.value}>

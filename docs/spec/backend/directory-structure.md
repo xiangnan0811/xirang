@@ -16,8 +16,8 @@
 | `internal/auth/`、`internal/secure/` | 身份验证与敏感字段加密基础设施 |
 | `internal/sshutil/`、`internal/fileaccess/` | 共享 SSH 机制与受约束文件访问 |
 | `internal/task/`、`internal/task/executor/` | 调度、任务状态及执行器 |
-| `internal/alerting/`、`internal/dashboards/`、`internal/metrics/` | 告警、看板与指标服务 |
-| `internal/backupasset/`、`internal/nodelogs/` | 备份资产、节点日志领域 |
+| `internal/alerting/`、`internal/taskstats/` | 告警、历史任务统计 |
+| `internal/backupasset/` | 备份资产领域 |
 | `internal/credentialaudit/` | 凭据使用领域审计；与 HTTP 请求审计分开 |
 | `internal/ws/`、`internal/util/` | WebSocket Hub 与小型通用辅助函数 |
 
@@ -53,4 +53,4 @@
 
 Go 导出字段采用 PascalCase；JSON 和数据库字段采用 snake_case。数据库命名、迁移命名及历史兼容由[数据库合同](database-guidelines.md)定义。
 
-可参考 `dashboard_handler.go` 的薄 Handler、`dashboards/service.go` 的验证与事务、`settings/service.go` 的注册表和缓存、`model/node.go` 的 GORM tags、`Node.Sanitized()` 与 `BeforeSave`/`AfterFind` hooks；`model/models.go` 仅为模型分领域文件索引。示例是导航，不替代对应领域的授权和状态合同。
+可参考 `task_statistics_handler.go` 的薄 Handler、`taskstats/taskstats.go` 的查询与验证、`settings/service.go` 的注册表和缓存、`model/node.go` 的 GORM tags、`Node.Sanitized()` 与 `BeforeSave`/`AfterFind` hooks；`model/models.go` 仅为模型分领域文件索引。示例是导航，不替代对应领域的授权和状态合同。

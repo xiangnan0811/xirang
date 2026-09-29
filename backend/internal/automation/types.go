@@ -6,8 +6,6 @@ const (
 	EventBackupFailed    = "backup_failed"
 	EventBackupSucceeded = "backup_succeeded"
 	EventDrillFailed     = "drill_failed"
-	EventNodeOffline     = "node_offline"
-	EventNodeDiskHigh    = "node_disk_high"
 )
 
 // Action types
@@ -30,8 +28,6 @@ var ValidEventTypes = map[string]bool{
 	EventBackupFailed:    true,
 	EventBackupSucceeded: true,
 	EventDrillFailed:     true,
-	EventNodeOffline:     true,
-	EventNodeDiskHigh:    true,
 }
 
 // ValidActionTypes is the set of all known action types.

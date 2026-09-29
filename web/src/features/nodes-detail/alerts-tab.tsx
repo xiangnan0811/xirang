@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
 import { apiClient } from "@/lib/api/client";
 import type { AlertRecord, AlertStatus } from "@/types/domain";
-import { buildAlertJumpHref } from "./alert-jump";
 import type { NodeDetailTabProps } from "./types";
 
 type Filter = AlertStatus; // "open" | "acked" | "resolved"
@@ -104,13 +102,6 @@ export default function AlertsTab({ nodeId, token }: NodeDetailTabProps) {
                   {a.message || a.errorCode || t("nodes.nodeDetail.alertsUnnamed")}
                 </p>
               </div>
-              <Link
-                to={buildAlertJumpHref(a)}
-                data-testid={`alert-jump-${a.id}`}
-                className="text-xs text-primary hover:underline whitespace-nowrap shrink-0"
-              >
-                {t("nodes.nodeDetail.alertsViewMetrics")}
-              </Link>
             </li>
           ))}
         </ul>

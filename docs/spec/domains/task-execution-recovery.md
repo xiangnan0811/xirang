@@ -15,6 +15,27 @@
 - Restic `repository_version` 仅选择新仓库格式（默认/1/2），不是 append-only 或删除保护。旧 `append_only=true/false` 在加密配置边界分别幂等转为 2/默认，保留其他字段，冲突或非法值隔离诊断；旧字段只允许显式导入转换，不再作为运行时配置。删除保护须在存储后端独立验证。
 - Rsync allowlist 依赖 Linux Landlock ABI 3、匹配本地/远端 helper 及私有 user/mount namespace；运行环境不满足时失败关闭，不能移除 allowlist 或自动授予 privileged。受管 hardlink staging 要预留完整树容量和传输空间。可选 Worker 的精确系统包版本影响工具链 fingerprint，Core/Worker 必须由同一发布源码重建并匹配；细节见[处理与导出](backup-processing-export.md)。
 
+## 历史任务统计
+
+`POST /api/v1/tasks/statistics/query` 经主认证与 `tasks:read`，请求仅接受
+`metric/aggregation/filters.task_ids/start/end`，拒绝节点资源指标、`node_ids` 和客户端
+ownership 字段。空 task_ids 聚合当前身份全部可读任务，不限于前端当前页；operator
+按任务所属节点过滤，无 owned node 返回空结果。显式 task_ids 逐项检查归属，缺失或
+任一未授权任务整请求 403，不返回部分结果或回退全量；admin/viewer 沿用全局读取权限。
+
+窗口为 `[start,end)`，最长 30 天，单次最多读取 500000 行；响应为
+`{series:[{name,points:[{ts,value}]}],step_seconds,truncated}`，无样本不补零，
+触及行数上限提示缩小窗口。`task.success_rate` 仅支持 avg：分母为窗口内所有
+finished_at 非空运行，分子为 status=success，不按当前 Task 状态或 verified completion
+替代。`task.throughput` 支持 sum/avg，单位 Mbps，描述采样速率聚合而非累计传输量。
+`task.duration` 支持 p50/p95/p99，仅统计正 duration_ms，按既有 nearest-rank
+分位算法返回毫秒；不接受旧 `task.duration_p95` 别名。
+
+任务页提供固定三图，默认最近 24 小时，可选 7 天/30 天；时长默认 p95，可切换
+p50/p99。“全部可见任务/指定任务”与任务列表当前状态筛选独立。可配置看板、
+面板 CRUD、指标目录及旧 dashboard URL/API 已退役，不提供兼容转发。
+任务日志仅属于任务领域：`GET /api/v1/tasks/:id/logs`、`GET /api/v1/task-runs/:id/logs` 和 `/api/v1/ws/logs` 提供任务/运行日志，并继续使用 `tasks:read` 授权；安全审计日志由独立审计领域保留，不能用任务日志替代。
+
 ## 持久化执行与调度
 
 普通 TaskRun 创建冻结正数 `node_id_snapshot`，必须等于当时 Task 节点；`task_id` 与 snapshot 不可变。执行、恢复、演练、发布与准入同时核对任务 ID、节点快照及预期状态，不能只查询任意成功历史。snapshot 0 仅是迁移保留的 terminal orphan `legacy_unknown`：允许 `success|failed|canceled|warning|skipped`，状态不可变，所有可执行消费方拒绝它。活动/未知状态 orphan 或非正/不匹配 live Task 使迁移原子失败。

@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { getVisibleNavItems, navItems } from "./navigation";
 
 describe("getVisibleNavItems", () => {
+  it("does not keep a dashboards navigation entry", () => {
+    expect(navItems.some((item) => item.path === "/app/dashboards")).toBe(false);
+    expect(getVisibleNavItems("admin").some((item) => item.path === "/app/dashboards")).toBe(false);
+  });
+
   it("keeps exactly one Backups navigation entry", () => {
     const backupItems = navItems.filter((item) => item.path.startsWith("/app/backups"));
     expect(backupItems).toHaveLength(1);

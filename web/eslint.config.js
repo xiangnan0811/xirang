@@ -46,7 +46,7 @@ export default tseslint.config(
       //   - label-has-associated-control: tasks-page.dialogs.tsx 3 处 + rotation-preview 1 处
       //     需重构 label/input 关联（非纯 attribute 增补）。
       //   - click-events-have-key-events / no-static-element-interactions:
-      //     dashboards-page + nodes-page.grid.tsx，需替换为 button 或加键盘 handler。
+      //     nodes-page.grid.tsx，需替换为 button 或加键盘 handler。
       //   - no-noninteractive-tabindex: nodes-page.grid.tsx 1 处。
       "jsx-a11y/label-has-associated-control": "warn",
       "jsx-a11y/no-noninteractive-tabindex": "warn",

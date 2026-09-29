@@ -20,6 +20,8 @@ Compose 与 Dockerfile 的健康检查均访问 `http://127.0.0.1:10761/readyz`�
 
 回归入口为 `scripts/test-core-compose.sh` 及其自测、入口脚本相关测试、`internal/api/router_test.go` 中 readyz 的健康/数据库关闭/nil DB 案例。Compose 渲染在临时环境使用示例 env，不能覆盖操作者现有 `.env`。
 
+数据库迁移和恢复不是普通 Core 重启：先停止并排空旧版 Core、scheduler、executor、collector、notification worker 及独立 writer，确认没有旧连接后再由新版本迁移、最后启动新 worker；旧/新二进制不得混写同一数据库或投递状态。SQLite 数据库恢复必须离线，PostgreSQL 恢复必须由 DBA/运维手动 stop/drain 应用连接。不可逆退役迁移失败时按[部署指南](../../deployment.md#回滚与灾难恢复)恢复升级前数据库、匹配旧版二进制和原密钥，不执行 down 或手改迁移元数据。
+
 ## 持久化与日志
 
 | 存储 | 用途及约束 |

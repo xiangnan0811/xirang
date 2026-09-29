@@ -28,7 +28,7 @@ web/src/
 - 拥有独立 Hook、分页签、图表和测试的内聚功能放在 `features/<feature>/`，例如 `features/nodes-detail/`。
 - 共用视觉原语放在 `components/ui/`；跨页面业务对话框和面板放在 `components/`，单路由内容就近存放。
 - API 包装及 snake_case 到 camelCase 的映射放在 `lib/api/`。
-- 可复用 Hook 放在 `hooks/`；功能内 Hook 放在功能目录；页面专用 Hook 可放在 `pages/dashboards/hooks/`。
+- 可复用 Hook 放在 `hooks/`；功能内 Hook 放在功能目录；页面专用 Hook 与对应页面功能共同维护。
 - 备份入口、文件中心和仓库管理的路由职责见[Catalog 合同](../domains/backup-catalog.md)。
 
 ## 命名与类型位置

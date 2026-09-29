@@ -1,4 +1,4 @@
-import type { NodeStatus } from "@/lib/api/node-metrics-api";
+import type { NodeSummary } from "@/lib/api/nodes-api";
 
 export type NodeDetailAuthToken = string | null;
 
@@ -7,8 +7,9 @@ export type NodeDetailTabProps = {
   token: NodeDetailAuthToken;
 };
 
-/** Overview tab reuses the page-level status poll (no second poll). */
+/** Overview tab reuses the page-level summary request. */
 export type OverviewTabProps = NodeDetailTabProps & {
-  status: NodeStatus | null;
-  statusError: unknown;
+  summary: NodeSummary | null;
+  summaryError: unknown;
+  summaryLoading: boolean;
 };

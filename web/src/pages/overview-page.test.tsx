@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { default as userEvent } from "@testing-library/user-event";
 import { OverviewPage } from "./overview-page";
 
@@ -46,10 +46,7 @@ function createNodes(total: number) {
       tags: ["prod"],
       lastSeenAt: "2026-02-24 12:00:00",
       lastBackupAt: "2026-02-24 11:00:00",
-      diskFreePercent: Math.max(10, 95 - (id % 50)),
-      diskUsedGb: 40 + (id % 20),
-      diskTotalGb: 100,
-      speedMbps: 0
+      connectionLatencyMs: 12,
     };
   });
 }
@@ -63,13 +60,7 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
   const nodes = createNodes(nodeCount);
   sharedRef.current = {
     overview: {
-      totalNodes: nodeCount,
-      healthyNodes: nodes.filter((node) => node.status === "online").length,
       activePolicies: 3,
-      runningTasks: 2,
-      failedTasks24h: 1,
-      overallSuccessRate: 97.3,
-      avgSyncMbps: 318,
     },
     refreshVersion,
     fetchOverviewTraffic: fetchOverviewTrafficMock,
@@ -219,66 +210,7 @@ describe("OverviewPage", () => {
     });
   });
 
-  it("状态矩阵默认仅渲染预览节点，全屏后可查看全部并保留链接语义", async () => {
-    const user = userEvent.setup();
-    setContext(210, true);
-
-    render(<OverviewPage />);
-
-    await screen.findByText("近期未发现健康事件");
-    await screen.findByRole("img", { name: /近 1 小时流量与活动趋势图/ });
-
-    const preview = screen.getByRole("group", { name: /主机状态矩阵预览/ });
-    const previewDots = within(preview)
-      .getAllByRole("link")
-      .filter((link) => link.getAttribute("aria-label")?.startsWith("Node-"));
-    expect(previewDots).toHaveLength(80);
-    expect(previewDots[0]).toHaveAttribute("href", "/app/nodes/1");
-    expect(screen.getByText("当前仅展示 80 / 210 台节点，点击右上角可全屏查看全部。"))
-      .toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "全屏查看状态矩阵" }));
-
-    const dialog = await screen.findByRole("dialog", { name: /主机状态矩阵/ });
-    const fullscreen = within(dialog).getByRole("group", { name: /主机状态矩阵全量/ });
-    const fullscreenDots = within(fullscreen)
-      .getAllByRole("link")
-      .filter((link) => link.getAttribute("aria-label")?.startsWith("Node-"));
-    expect(fullscreenDots).toHaveLength(210);
-    expect(within(fullscreen).getByRole("link", { name: /Node-001，状态在线/ }))
-      .toHaveAttribute("href", "/app/nodes/1");
-  });
-
-  it("矩阵链接通过 aria-describedby 关联 tooltip 且 tooltip 支持键盘焦点", async () => {
-    fetchHealthIncidentTimelineMock.mockReturnValue(new Promise(() => undefined));
-    fetchOverviewTrafficMock.mockReturnValue(new Promise(() => undefined));
-    setContext(3, true);
-
-    render(<OverviewPage />);
-
-    const preview = screen.getByRole("group", { name: /主机状态矩阵预览/ });
-    const firstLink = within(preview)
-      .getAllByRole("link")
-      .find((link) => link.getAttribute("aria-label")?.startsWith("Node-"));
-
-    if (!firstLink) {
-      throw new Error("Expected the matrix preview to include a node status link.");
-    }
-
-    const describedBy = firstLink.getAttribute("aria-describedby");
-    if (!describedBy) {
-      throw new Error("Expected the node status link to reference a tooltip description.");
-    }
-
-    const tooltip = document.getElementById(describedBy);
-    if (!tooltip) {
-      throw new Error("Expected the described tooltip element to exist.");
-    }
-    expect(tooltip).toHaveAttribute("role", "tooltip");
-    expect(tooltip.className).toContain("group-focus-within:opacity-100");
-  });
-
-  it("无数据时显示空提示并输出图表可访问名称", async () => {
+  it("无真实流量样本时输出图表可访问名称", async () => {
     fetchOverviewTrafficMock.mockResolvedValueOnce({
       window: "1h",
       bucketMinutes: 5,
@@ -298,8 +230,8 @@ describe("OverviewPage", () => {
 
     render(<OverviewPage />);
 
-    expect(screen.getByText("暂无可展示节点，请先在节点页完成接入。")).toBeInTheDocument();
     expect(await screen.findByRole("img", { name: "近 1 小时流量与活动趋势图，暂无真实样本" })).toBeInTheDocument();
+    expect(screen.getByText("策略覆盖")).toBeInTheDocument();
   });
 
   it("常量非零吞吐曲线渲染可访问图表容器", async () => {
@@ -421,18 +353,6 @@ describe("OverviewPage", () => {
     });
   });
 
-  it("全屏查看按钮存在且可点击", async () => {
-    setContext(5, true);
-
-    render(<OverviewPage />);
-
-    await waitFor(() => {
-      expect(fetchOverviewTrafficMock).toHaveBeenCalled();
-    });
-
-    expect(screen.getByRole("button", { name: "全屏查看状态矩阵" })).toBeInTheDocument();
-  });
-
   it("能正确渲染最近同步任务框及预计传输量", async () => {
     setContext(2, true);
 
@@ -480,13 +400,7 @@ describe("OverviewPage", () => {
       fetchOverviewTraffic: fetchOverviewTrafficMock,
       fetchHealthIncidentTimeline: fetchHealthIncidentTimelineMock,
       overview: {
-        totalNodes: nodes.length,
-        healthyNodes: nodes.length,
         activePolicies: 3,
-        runningTasks: 1,
-        failedTasks24h: 0,
-        overallSuccessRate: 99,
-        avgSyncMbps: 256,
       },
       refreshVersion: 0,
       loading: false,

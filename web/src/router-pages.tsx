@@ -62,12 +62,6 @@ export const MorePage = lazy(() =>
 export const NodesDetailPage = lazy(() =>
   import("@/pages/nodes-detail-page").then((m) => ({ default: m.NodesDetailPage }))
 );
-export const DashboardsPage = lazy(() =>
-  import("@/pages/dashboards/dashboards-page").then((m) => ({ default: m.DashboardsPage }))
-);
-export const DashboardDetailPage = lazy(() =>
-  import("@/pages/dashboards/dashboard-detail-page").then((m) => ({ default: m.DashboardDetailPage }))
-);
 export const AutomationRulesPage = lazy(() =>
   import("@/pages/automation-rules-page").then((m) => ({ default: m.AutomationRulesPage }))
 );

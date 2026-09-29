@@ -147,16 +147,6 @@ func ResolveTaskAlertsForRestoreRun(db *gorm.DB, taskID, runID uint, note string
 	return ensureDispatcher(db).ResolveTaskAlertsForRestoreRun(taskID, runID, note)
 }
 
-// RaiseNodeProbeFailure emits a warning alert for a node connectivity probe failure.
-func RaiseNodeProbeFailure(db *gorm.DB, node model.Node, message string) error {
-	return ensureDispatcher(db).RaiseNodeProbeFailure(node, message)
-}
-
-// RaiseDiskUsageAlert emits a warning alert when node disk usage exceeds threshold.
-func RaiseDiskUsageAlert(db *gorm.DB, node model.Node, diskPct float64) error {
-	return ensureDispatcher(db).RaiseDiskUsageAlert(node, diskPct)
-}
-
 // RaiseNodeExpiryWarning emits a warning when a node is past or near its expiry date.
 func RaiseNodeExpiryWarning(db *gorm.DB, node model.Node, message string) error {
 	return ensureDispatcher(db).RaiseNodeExpiryWarning(node, message)
@@ -189,11 +179,6 @@ func ResolveAlertsByErrorCode(db *gorm.DB, errorCode string, note string) error 
 // RaiseStorageSpaceAlert emits an alert when local backup storage is low.
 func RaiseStorageSpaceAlert(db *gorm.DB, targetPath string, freeGB float64, totalGB float64, usagePct float64) error {
 	return ensureDispatcher(db).RaiseStorageSpaceAlert(targetPath, freeGB, totalGB, usagePct)
-}
-
-// ResolveNodeAlerts resolves all open/acked node-level (task_id IS NULL) alerts.
-func ResolveNodeAlerts(db *gorm.DB, nodeID uint, note string) error {
-	return ensureDispatcher(db).ResolveNodeAlerts(nodeID, note)
 }
 
 // SendProbe sends a connectivity test message through the given integration channel.
@@ -528,41 +513,6 @@ func (d *Dispatcher) resolveTaskAlertsForRun(taskID, runID uint, note, triggerTy
 	})
 }
 
-// RaiseNodeProbeFailure emits a warning alert for a node connectivity probe failure.
-func (d *Dispatcher) RaiseNodeProbeFailure(node model.Node, message string) error {
-	errorCode := fmt.Sprintf("XR-NODE-%d", node.ID)
-	alert := model.Alert{
-		NodeID:      node.ID,
-		NodeName:    node.Name,
-		TaskID:      nil,
-		PolicyName:  "",
-		Severity:    "warning",
-		Status:      "open",
-		ErrorCode:   errorCode,
-		Message:     message,
-		Retryable:   false,
-		TriggeredAt: time.Now(),
-	}
-	return d.raiseAndDispatch(&alert)
-}
-
-// RaiseDiskUsageAlert emits a warning alert when node disk usage exceeds threshold.
-func (d *Dispatcher) RaiseDiskUsageAlert(node model.Node, diskPct float64) error {
-	alert := model.Alert{
-		NodeID:      node.ID,
-		NodeName:    node.Name,
-		TaskID:      nil,
-		PolicyName:  "",
-		Severity:    "warning",
-		Status:      "open",
-		ErrorCode:   "XR-NODE-DISK-FULL",
-		Message:     fmt.Sprintf("节点磁盘使用率 %.1f%% 超过 90%%", diskPct),
-		Retryable:   false,
-		TriggeredAt: time.Now(),
-	}
-	return d.raiseAndDispatch(&alert)
-}
-
 // RaiseNodeExpiryWarning emits a warning when a node is past or near its expiry date.
 func (d *Dispatcher) RaiseNodeExpiryWarning(node model.Node, message string) error {
 	severity := "warning"
@@ -672,21 +622,6 @@ func (d *Dispatcher) RaiseStorageSpaceAlert(targetPath string, freeGB float64, t
 		TriggeredAt: time.Now(),
 	}
 	return d.raiseAndDispatch(&alert)
-}
-
-// ResolveNodeAlerts resolves all open/acked node-level (task_id IS NULL) alerts.
-func (d *Dispatcher) ResolveNodeAlerts(nodeID uint, note string) error {
-	updates := map[string]interface{}{
-		"status":           "resolved",
-		"retryable":        false,
-		"last_notified_at": time.Now(),
-	}
-	if note != "" {
-		updates["message"] = note
-	}
-	return d.DB.Model(&model.Alert{}).
-		Where("node_id = ? AND task_id IS NULL AND status IN ?", nodeID, []string{"open", "acked"}).
-		Updates(updates).Error
 }
 
 // raiseAndDispatch creates the alert in the database and dispatches it to

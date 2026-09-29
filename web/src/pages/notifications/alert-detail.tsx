@@ -136,8 +136,7 @@ type AnomalyAlertContextProps = {
 };
 
 function detectAnomalyDetector(errorCode: string): AnomalyDetector | null {
-  if (errorCode.startsWith("XR-ANOMALY-")) return "ewma";
-  if (errorCode.startsWith("XR-DISKFORECAST-")) return "disk_forecast";
+  if (errorCode.startsWith("XR-SNAPSHOT-")) return "snapshot_diff";
   return null;
 }
 
@@ -173,10 +172,7 @@ export function AnomalyAlertContext({
 
   if (!detector) return null;
 
-  const badge =
-    detector === "ewma"
-      ? t("anomaly.alertDetail.anomalyBadge")
-      : t("anomaly.alertDetail.diskForecastBadge");
+  const badge = t("anomaly.detector.snapshot_diff");
 
   return (
     <section
@@ -200,17 +196,10 @@ export function AnomalyAlertContext({
           <dt className="text-muted-foreground">{t("anomaly.alertDetail.observed")}</dt>
           <dd>{event.observedValue.toFixed(2)}</dd>
 
-          {detector === "ewma" && event.sigma != null && (
+          {event.sigma != null && (
             <>
               <dt className="text-muted-foreground">{t("anomaly.alertDetail.sigma")}</dt>
               <dd>{event.sigma.toFixed(2)}σ</dd>
-            </>
-          )}
-
-          {detector === "disk_forecast" && event.forecastDays != null && (
-            <>
-              <dt className="text-muted-foreground">{t("anomaly.alertDetail.forecastDays")}</dt>
-              <dd>{event.forecastDays.toFixed(1)}</dd>
             </>
           )}
         </dl>

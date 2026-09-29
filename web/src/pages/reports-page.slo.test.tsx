@@ -34,7 +34,7 @@ vi.mock("@/lib/api/client", async () => {
         {
           id: 1,
           name: "prod availability",
-          metricType: "availability",
+          metricType: "success_rate",
           matchTags: '["prod"]',
           threshold: 0.999,
           windowDays: 28,
@@ -66,7 +66,7 @@ describe("SLOPanel", () => {
     getSLOComplianceMock.mockResolvedValue({
       sloId: 1,
       name: "prod availability",
-      metricType: "availability",
+      metricType: "success_rate",
       windowStart: "2026-03-23T00:00:00Z",
       windowEnd: "2026-04-20T00:00:00Z",
       threshold: 0.999,

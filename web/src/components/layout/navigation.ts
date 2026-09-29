@@ -50,13 +50,6 @@ export const navItems: NavItem[] = [
     mobileTab: true
   },
   {
-    titleKey: "dashboards.pageTitle",
-    path: "/app/dashboards",
-    icon: LayoutDashboard,
-    group: "operate",
-    mobileTab: false
-  },
-  {
     titleKey: "nav.nodes",
     path: "/app/nodes",
     icon: Server,

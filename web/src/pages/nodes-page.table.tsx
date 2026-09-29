@@ -13,8 +13,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getNodeStatusMeta } from "@/lib/status";
-import { getDiskBarToneClass } from "@/pages/nodes-page.utils";
-import { cn } from "@/lib/utils";
 import type { NodesViewProps } from "@/pages/nodes-page.utils";
 
 export const NodesTable = React.memo(function NodesTable({
@@ -64,7 +62,7 @@ export const NodesTable = React.memo(function NodesTable({
             <th scope="col" className="px-3 py-2.5">{t("nodes.colAddress")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colAuth")}</th>
             <th scope="col" className="px-3 py-2.5 whitespace-nowrap">{t("nodes.colStatus")}</th>
-            <th scope="col" className="px-3 py-2.5">{t("nodes.colDiskProbe")}</th>
+            <th scope="col" className="px-3 py-2.5">{t("nodes.colLastConnection")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colLastBackup")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colTags")}</th>
             <th scope="col" className="px-3 py-2.5 text-right">{t("nodes.colActions")}</th>
@@ -139,31 +137,13 @@ export const NodesTable = React.memo(function NodesTable({
                       {status.label}
                     </Badge>
                   </td>
-                  <td className="px-3 py-2.5">
-                    <div className="w-44">
-                      <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                        <span>{t("nodes.diskFreePercent", { pct: node.diskFreePercent })}</span>
-                        <span>
-                          {node.connectionLatencyMs
-                            ? `${node.connectionLatencyMs} ms`
-                            : "-"}
-                        </span>
-                      </div>
-                      <div className="h-2 rounded-full bg-muted">
-                        <div
-                          className={cn(
-                            "h-2 rounded-full",
-                            getDiskBarToneClass(node.diskFreePercent)
-                          )}
-                          style={{
-                            width: `${Math.max(4, node.diskFreePercent)}%`,
-                          }}
-                        />
-                      </div>
-                      <p className="mt-1 text-xs text-foreground/70">
-                        {t("nodes.probeLabel", { time: node.diskProbeAt || t("nodes.probeNever") })}
-                      </p>
-                    </div>
+                  <td className="px-3 py-2.5 text-muted-foreground">
+                    <p>{node.lastSeenAt || t("nodes.lastConnectionNever")}</p>
+                    <p className="text-xs">
+                      {t("nodes.connectionLatency", {
+                        latency: node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-",
+                      })}
+                    </p>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">
                     {node.lastBackupAt}

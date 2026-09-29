@@ -1,7 +1,7 @@
 // Package retention defines the contract and scaffold for periodic
-// data-pruning workers. Each retention loop in the project (anomaly
-// events, node logs, expired silences, task runs) lives in its own
-// package but shares the same Run/Prune/Shutdown shape declared here.
+// data-pruning workers. Each retention loop in the project (anomaly events,
+// expired silences, task runs) lives in its own package but shares the same
+// Run/Prune/Shutdown shape declared here.
 package retention
 
 import (

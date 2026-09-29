@@ -16,9 +16,6 @@ type NodeResponse = {
   last_seen_at?: string | null;
   last_backup_at?: string | null;
   connection_latency_ms?: number;
-  disk_used_gb?: number;
-  disk_total_gb?: number;
-  last_probe_at?: string | null;
   maintenance_start?: string | null;
   maintenance_end?: string | null;
   expiry_date?: string | null;
@@ -36,8 +33,8 @@ type TestNodeResponse = {
   ok: boolean;
   message: string;
   latency_ms?: number;
-  disk_used_gb?: number;
-  disk_total_gb?: number;
+  /** Immediate timestamp of this manual test. Not a periodic probe. */
+  probe_at?: string;
   error_code?: string;
   host_key?: {
     algorithm?: string;
@@ -73,8 +70,8 @@ export type NodeConnectionTestResult = {
   ok: boolean;
   message: string;
   latencyMs?: number;
-  diskUsedGb?: number;
-  diskTotalGb?: number;
+  /** Display time of this manual test, when the server returned one. */
+  testedAt?: string;
   errorCode?: NodeHostKeyIssueCode;
   hostKey?: NodeHostKeyInfo;
 };
@@ -84,6 +81,24 @@ export type EmergencyBackupResult = {
   taskIds: number[];
   errors: string[];
 };
+
+/** Business counts from GET /nodes/:id/summary. Not a resource-status snapshot. */
+export type NodeSummary = {
+  openAlerts: number;
+  runningTasks: number;
+};
+
+type RawNodeSummary = {
+  open_alerts?: unknown;
+  running_tasks?: unknown;
+};
+
+export function mapNodeSummary(raw: RawNodeSummary | null | undefined): NodeSummary {
+  return {
+    openAlerts: finiteNumber(raw?.open_alerts),
+    runningTasks: finiteNumber(raw?.running_tasks),
+  };
+}
 
 function mapNodeStatus(raw?: string): NodeStatus {
   switch (raw) {
@@ -97,12 +112,6 @@ function mapNodeStatus(raw?: string): NodeStatus {
 }
 
 function mapNode(row: NodeResponse): NodeRecord {
-  const diskTotalGb = row.disk_total_gb && row.disk_total_gb > 0 ? row.disk_total_gb : 0;
-  const diskUsedGb = row.disk_used_gb && row.disk_used_gb >= 0 ? row.disk_used_gb : 0;
-  const freePercent = diskTotalGb > 0
-    ? Math.max(0, Math.round(((diskTotalGb - diskUsedGb) / diskTotalGb) * 100))
-    : 0;
-
   return {
     id: row.id,
     name: row.name,
@@ -118,12 +127,7 @@ function mapNode(row: NodeResponse): NodeRecord {
     tags: row.tags ? row.tags.split(",").map((one) => one.trim()).filter(Boolean) : [],
     lastSeenAt: formatTime(row.last_seen_at),
     lastBackupAt: formatTime(row.last_backup_at),
-    diskFreePercent: freePercent,
-    diskUsedGb,
-    diskTotalGb,
-    diskProbeAt: formatTime(row.last_probe_at ?? row.last_seen_at),
     connectionLatencyMs: row.connection_latency_ms,
-    lastProbeAt: formatTime(row.last_probe_at),
     maintenanceStart: row.maintenance_start ?? undefined,
     maintenanceEnd: row.maintenance_end ?? undefined,
     expiryDate: row.expiry_date ?? undefined,
@@ -187,6 +191,19 @@ export function createNodesApi() {
     async getNodes(token: string, options?: { signal?: AbortSignal }): Promise<NodeRecord[]> {
       const rows = (await request<NodeResponse[]>("/nodes", { token, signal: options?.signal })) ?? [];
       return rows.map((row) => mapNode(row));
+    },
+
+    async getNode(token: string, nodeId: number, options?: { signal?: AbortSignal }): Promise<NodeRecord> {
+      const row = await request<NodeResponse>(`/nodes/${nodeId}`, { token, signal: options?.signal });
+      if (!row || typeof row.id !== "number" || !row.name || !row.host) {
+        throw new Error("invalid node response");
+      }
+      return mapNode(row);
+    },
+
+    async getNodeSummary(token: string, nodeId: number, options?: { signal?: AbortSignal }): Promise<NodeSummary> {
+      const row = await request<RawNodeSummary>(`/nodes/${nodeId}/summary`, { token, signal: options?.signal });
+      return mapNodeSummary(row);
     },
 
     async createNode(token: string, input: NewNodeInput): Promise<NodeRecord> {
@@ -275,12 +292,12 @@ export function createNodesApi() {
         method: "POST",
         token
       });
+      const testedAt = typeof row?.probe_at === "string" ? formatTime(row.probe_at) : "";
       return {
         ok: Boolean(row?.ok),
         message: String(row?.message ?? ""),
         latencyMs: row?.latency_ms,
-        diskUsedGb: row?.disk_used_gb,
-        diskTotalGb: row?.disk_total_gb,
+        ...(testedAt && testedAt !== "-" ? { testedAt } : {}),
         ...mapHostKeyIssue(row),
       };
     },

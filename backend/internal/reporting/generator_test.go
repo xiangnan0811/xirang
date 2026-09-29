@@ -17,8 +17,7 @@ import (
 )
 
 // reportingTimeAnchor is the fixed reference "now" for every time-sensitive
-// test in this package. Pinning to a literal date keeps the suite stable
-// regardless of when CI fires (cf. metrics aggregator flake fix).
+// test in this package. Pinning to a literal date keeps the suite stable.
 var reportingTimeAnchor = time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC)
 
 func openReportingTestDB(t *testing.T) *gorm.DB {
@@ -33,7 +32,6 @@ func openReportingTestDB(t *testing.T) *gorm.DB {
 		&model.Task{},
 		&model.TaskRun{},
 		&model.BackupCompletion{},
-		&model.NodeMetricSample{},
 		&model.Alert{},
 		&model.ReportConfig{},
 		&model.Report{},
@@ -71,7 +69,6 @@ func recordReportCompletion(t *testing.T, db *gorm.DB, taskID, taskRunID, nodeID
 //   - 2 nodes (node "n1" tagged "prod", node "n2" tagged "dev")
 //   - 5 tasks (3 on n1, 2 on n2)
 //   - 30 TaskRuns spanning [base-7d, base-1d): 24 success, 6 failed
-//   - 10 NodeMetricSamples (5 per node) for disk trend
 //   - 3 Alerts (2 critical, 1 warning) for alertCount sanity
 func seedReportFixtureBasic(t *testing.T, db *gorm.DB, base time.Time) {
 	t.Helper()
@@ -118,20 +115,6 @@ func seedReportFixtureBasic(t *testing.T, db *gorm.DB, base time.Time) {
 			if status == "success" {
 				recordReportCompletion(t, db, run.TaskID, run.ID, run.NodeIDSnapshot, finished)
 			}
-		}
-	}
-	// 10 disk samples
-	for i := 0; i < 10; i++ {
-		nodeID := uint(1)
-		if i >= 5 {
-			nodeID = 2
-		}
-		ts := base.AddDate(0, 0, -((i % 5) + 1))
-		if err := db.Create(&model.NodeMetricSample{
-			NodeID: nodeID, SampledAt: ts, DiskPct: 40 + float64(i),
-			ProbeOK: true,
-		}).Error; err != nil {
-			t.Fatalf("seed metric: %v", err)
 		}
 	}
 	// 3 alerts
@@ -291,48 +274,11 @@ func TestGenerate_FailureTopN_TruncatesAndSorts(t *testing.T) {
 	}
 }
 
-func TestGenerate_DiskTrend_DailyAggregation(t *testing.T) {
-	db := openReportingTestDB(t)
-	base := reportingTimeAnchor
-	seedReportFixtureBasic(t, db, base)
-
-	cfg := model.ReportConfig{
-		Name: "trend", ScopeType: "all", Period: "weekly",
-		Cron: "* * * * *", IntegrationIDs: "[]", Enabled: true,
-	}
-	if err := db.Create(&cfg).Error; err != nil {
-		t.Fatalf("seed cfg: %v", err)
-	}
-	report, err := Generate(db, cfg, base.AddDate(0, 0, -7), base)
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	var trend []DiskTrendEntry
-	if err := json.Unmarshal([]byte(report.DiskTrend), &trend); err != nil {
-		t.Fatalf("unmarshal DiskTrend: %v", err)
-	}
-	if len(trend) == 0 {
-		t.Fatal("DiskTrend empty; expected ≥1 daily entry")
-	}
-	// Dates must be strictly ascending (production query uses ORDER BY date_label asc).
-	for i := 1; i < len(trend); i++ {
-		if trend[i].Date <= trend[i-1].Date {
-			t.Fatalf("date order violated: %q <= %q at index %d", trend[i].Date, trend[i-1].Date, i)
-		}
-	}
-	// AvgFree = 100 - disk_pct, so for the seeded values 40..49 expect entries in [51, 60].
-	for _, e := range trend {
-		if e.AvgFree < 50 || e.AvgFree > 61 {
-			t.Fatalf("AvgFree out of expected band [50,61]: got %f for %s", e.AvgFree, e.Date)
-		}
-	}
-}
-
 func TestGenerate_EmptyData_NoPanic(t *testing.T) {
 	db := openReportingTestDB(t)
 	base := reportingTimeAnchor
 
-	// One node so scope=all resolves non-empty, but ZERO TaskRuns / samples / alerts.
+	// One node so scope=all resolves non-empty, but ZERO TaskRuns / alerts.
 	if err := db.Create(&model.Node{ID: 1, Name: "lonely", Host: "h", Username: "u", BackupDir: "/x"}).Error; err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
@@ -350,9 +296,8 @@ func TestGenerate_EmptyData_NoPanic(t *testing.T) {
 	if report.TotalRuns != 0 || report.SuccessRate != 0 || report.AvgDurationMs != 0 {
 		t.Fatalf("empty-data report should be all zeros, got %+v", report)
 	}
-	if report.TopFailures == "" || report.DiskTrend == "" {
-		t.Fatalf("JSON fields must round-trip as 'null' or '[]', got TopFailures=%q DiskTrend=%q",
-			report.TopFailures, report.DiskTrend)
+	if report.TopFailures == "" {
+		t.Fatalf("JSON fields must round-trip as 'null' or '[]', got TopFailures=%q", report.TopFailures)
 	}
 }
 
@@ -405,8 +350,7 @@ func TestGenerate_PersistsToReportsTable(t *testing.T) {
 		got.SuccessRuns != report.SuccessRuns ||
 		got.FailedRuns != report.FailedRuns ||
 		!approxEqual(got.SuccessRate, report.SuccessRate) ||
-		got.TopFailures != report.TopFailures ||
-		got.DiskTrend != report.DiskTrend {
+		got.TopFailures != report.TopFailures {
 		t.Fatalf("persisted report differs from returned:\nin-mem  %+v\nfromDB  %+v", report, got)
 	}
 }

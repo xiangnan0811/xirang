@@ -37,6 +37,8 @@ export function RotationProgress({
         {t("sshKeys.rotationWarning", { count: affectedNodes.length })}
       </InlineAlert>
 
+      <p className="text-xs text-muted-foreground">{t("sshKeys.rotationStatusHint")}</p>
+
       <div className="grid gap-2 rounded-lg border border-border/60 bg-muted/30 p-3 text-sm sm:grid-cols-3">
         <div>
           <p className="text-xs text-muted-foreground">{t("sshKeys.rotationAffectedTotal")}</p>

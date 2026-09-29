@@ -93,8 +93,6 @@ export const mockSSHKeys: SSHKeyRecord[] = [
 export const mockNodes: NodeRecord[] = Array.from({ length: 36 }, (_, idx) => {
   const id = idx + 1;
   const status = nodeStatusByIndex(id);
-  const usedGb = 180 + (id * 13) % 420;
-  const totalGb = 800;
   const host = `10.30.${Math.floor(id / 10) + 1}.${(id * 7) % 255}`;
 
   return {
@@ -112,10 +110,6 @@ export const mockNodes: NodeRecord[] = Array.from({ length: 36 }, (_, idx) => {
     tags: [tagPool[idx % tagPool.length], tagPool[(idx + 2) % tagPool.length]],
     lastSeenAt: formatDate(status === "offline" ? 130 : 1 + (id % 4)),
     lastBackupAt: formatDate(status === "offline" ? 500 : 10 + (id % 40)),
-    diskFreePercent: Math.max(4, Math.round(((totalGb - usedGb) / totalGb) * 100)),
-    diskUsedGb: usedGb,
-    diskTotalGb: totalGb,
-    diskProbeAt: formatDate(5 + (id % 8)),
     connectionLatencyMs: 22 + (id * 9) % 78
   };
 });
@@ -435,22 +429,11 @@ export const mockTasks: TaskRecord[] = Array.from({ length: 18 }, (_, idx) => {
 const mockTrafficTotals = [308, 348, 330, 390, 430, 415, 451, 419, 473, 495, 479, 508];
 
 export const mockOverview: OverviewStats = {
-  totalNodes: mockNodes.length,
-  healthyNodes: mockNodes.filter((node) => node.status === "online").length,
   activePolicies: mockPolicies.filter((policy) => policy.enabled).length,
-  runningTasks: mockTasks.filter((task) => task.status === "running").length,
-  failedTasks24h: mockTasks.filter((task) => task.status === "failed").length,
-  overallSuccessRate: 95.7,
-  avgSyncMbps: 182
 };
 
 export const mockOverviewSummary: OverviewSummary = {
-  totalNodes: mockOverview.totalNodes,
-  healthyNodes: mockOverview.healthyNodes,
   activePolicies: mockOverview.activePolicies,
-  runningTasks: mockOverview.runningTasks,
-  failedTasks24h: mockOverview.failedTasks24h,
-  currentThroughputMbps: 318
 };
 
 function generateTrafficValues(count: number, base: number, step: number) {
@@ -468,7 +451,7 @@ export function buildMockHealthIncidentTimeline(): HealthIncidentTimelineData {
   return {
     generatedAt: now.toISOString(),
     windowHours: 72,
-    summary: { total: 2, critical: 1, warning: 1, info: 0 },
+    summary: { total: 1, critical: 1, warning: 0, info: 0 },
     groups: [
       {
         id: "task-3014-demo-auth",
@@ -495,17 +478,6 @@ export function buildMockHealthIncidentTimeline(): HealthIncidentTimelineData {
           { type: "alert", severity: "critical", occurredAt: earlier, message: "演示数据：XR-AUTH-011，私钥过期或未授权。", alertId: 1, taskId: 3014, nodeId: 24, policyId: 11 },
           { type: "backup_degraded", severity: "critical", occurredAt: recent, message: "演示数据：最近恢复演练停在沙箱预检，可信度降为有风险。", taskId: 3014, taskRunId: 9114, nodeId: 24, policyId: 11 }
         ]
-      },
-      {
-        id: "node-3-demo-disk",
-        severity: "warning",
-        resource: { type: "node", id: 3, name: "广州归档-1", nodeId: 3, nodeName: "广州归档-1" },
-        lastSeenAt: earlier,
-        eventCount: 1,
-        likelyCause: "演示数据：磁盘使用率 91.5% 超过阈值，建议扩容或调整保留策略。",
-        sourceTypes: ["metric"],
-        nextActions: [{ code: "view_node_metrics", label: "查看节点指标", href: "/app/nodes/3?tab=metrics" }],
-        signals: [{ type: "metric", severity: "warning", occurredAt: earlier, message: "演示数据：磁盘使用率 91.5% 超过阈值。", nodeId: 3 }]
       }
     ]
   };

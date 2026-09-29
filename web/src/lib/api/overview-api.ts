@@ -4,12 +4,7 @@ import { request } from "./core";
 import { finiteNumber, positiveNumberOrUndefined } from "./number-utils";
 
 type OverviewSummaryResponse = {
-  totalNodes: number;
-  healthyNodes: number;
-  activePolicies: number;
-  runningTasks: number;
-  failedTasks24h: number;
-  currentThroughputMbps?: number;
+  activePolicies?: number;
 };
 
 type OverviewTrafficPointResponse = {
@@ -42,12 +37,7 @@ function formatOverviewTrafficLabel(timestampMs: number, timestamp: string, wind
 
 function mapOverviewSummary(payload?: OverviewSummaryResponse | null): OverviewSummary {
   return {
-    totalNodes: Number(payload?.totalNodes || 0),
-    healthyNodes: Number(payload?.healthyNodes || 0),
-    activePolicies: Number(payload?.activePolicies || 0),
-    runningTasks: Number(payload?.runningTasks || 0),
-    failedTasks24h: Number(payload?.failedTasks24h || 0),
-    currentThroughputMbps: Number(payload?.currentThroughputMbps ?? 0),
+    activePolicies: finiteNumber(payload?.activePolicies),
   };
 }
 
@@ -182,20 +172,25 @@ function mapHealthIncidentResourceType(raw?: string): HealthIncidentResourceType
   }
 }
 
-function mapHealthIncidentSourceType(raw?: string): HealthIncidentSourceType {
+function mapHealthIncidentSourceType(raw?: string): HealthIncidentSourceType | null {
   switch (raw) {
     case "alert":
     case "task_failure":
     case "notification_failure":
     case "anomaly":
-    case "probe":
-    case "metric":
     case "backup_stale":
     case "backup_degraded":
       return raw;
+    case "probe":
+    case "metric":
+      return null;
     default:
       return "alert";
   }
+}
+
+function isRetiredHealthIncidentAction(code: string, href: string): boolean {
+  return code === "view_node_metrics" || href.includes("tab=metrics");
 }
 
 function mapHealthIncidentResource(raw?: HealthIncidentResourceRaw | null): HealthIncidentResource {
@@ -212,17 +207,22 @@ function mapHealthIncidentResource(raw?: HealthIncidentResourceRaw | null): Heal
   };
 }
 
-function mapHealthIncidentAction(raw: HealthIncidentActionRaw): HealthIncidentAction {
+function mapHealthIncidentAction(raw: HealthIncidentActionRaw): HealthIncidentAction | null {
+  const href = String(raw.href || "");
+  const code = String(raw.code || "unknown");
+  if (!href || isRetiredHealthIncidentAction(code, href)) return null;
   return {
-    code: String(raw.code || "unknown"),
+    code,
     label: String(raw.label || raw.code || ""),
-    href: String(raw.href || ""),
+    href,
   };
 }
 
-function mapHealthIncidentSignal(raw: HealthIncidentSignalRaw): HealthIncidentSignal {
+function mapHealthIncidentSignal(raw: HealthIncidentSignalRaw): HealthIncidentSignal | null {
+  const type = mapHealthIncidentSourceType(raw.type);
+  if (!type) return null;
   return {
-    type: mapHealthIncidentSourceType(raw.type),
+    type,
     severity: mapHealthIncidentSeverity(raw.severity),
     occurredAt: String(raw.occurred_at || ""),
     message: String(raw.message || ""),
@@ -235,7 +235,14 @@ function mapHealthIncidentSignal(raw: HealthIncidentSignalRaw): HealthIncidentSi
   };
 }
 
-function mapHealthIncidentGroup(raw: HealthIncidentGroupRaw): HealthIncidentGroup {
+function mapHealthIncidentGroup(raw: HealthIncidentGroupRaw): HealthIncidentGroup | null {
+  const sourceTypes = Array.isArray(raw.source_types)
+    ? raw.source_types.map(mapHealthIncidentSourceType).filter((source): source is HealthIncidentSourceType => source != null)
+    : [];
+  const signals = Array.isArray(raw.signals)
+    ? raw.signals.map(mapHealthIncidentSignal).filter((signal): signal is HealthIncidentSignal => signal != null)
+    : [];
+  if (sourceTypes.length === 0 && signals.length === 0) return null;
   return {
     id: String(raw.id || "incident-unknown"),
     severity: mapHealthIncidentSeverity(raw.severity),
@@ -243,9 +250,11 @@ function mapHealthIncidentGroup(raw: HealthIncidentGroupRaw): HealthIncidentGrou
     lastSeenAt: String(raw.last_seen_at || ""),
     eventCount: finiteNumber(raw.event_count),
     likelyCause: String(raw.likely_cause || ""),
-    sourceTypes: Array.isArray(raw.source_types) ? raw.source_types.map(mapHealthIncidentSourceType) : [],
-    nextActions: Array.isArray(raw.next_actions) ? raw.next_actions.map(mapHealthIncidentAction).filter((action) => action.href) : [],
-    signals: Array.isArray(raw.signals) ? raw.signals.map(mapHealthIncidentSignal) : [],
+    sourceTypes,
+    nextActions: Array.isArray(raw.next_actions)
+      ? raw.next_actions.map(mapHealthIncidentAction).filter((action): action is HealthIncidentAction => action != null)
+      : [],
+    signals,
   };
 }
 
@@ -259,7 +268,9 @@ function mapHealthIncidentTimeline(raw: HealthIncidentTimelineRaw | null | undef
       warning: finiteNumber(raw?.summary?.warning),
       info: finiteNumber(raw?.summary?.info),
     },
-    groups: Array.isArray(raw?.groups) ? raw.groups.map(mapHealthIncidentGroup) : [],
+    groups: Array.isArray(raw?.groups)
+      ? raw.groups.map(mapHealthIncidentGroup).filter((group): group is HealthIncidentGroup => group != null)
+      : [],
   };
 }
 

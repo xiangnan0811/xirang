@@ -35,7 +35,6 @@ type Report struct {
 	RPOCompliant     *bool         `json:"rpo_compliant"`
 	RTOCompliant     *bool         `json:"rto_compliant"`
 	TopFailures      string        `gorm:"type:text;not null;default:'[]'" json:"top_failures"` // JSON
-	DiskTrend        string        `gorm:"type:text;not null;default:'[]'" json:"disk_trend"`   // JSON
 	GeneratedAt      time.Time     `gorm:"not null" json:"generated_at"`
 	CreatedAt        time.Time     `json:"created_at"`
 	UpdatedAt        time.Time     `json:"updated_at"`

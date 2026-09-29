@@ -1,4 +1,5 @@
 import { parseSSHKeyType, type NewSSHKeyInput, type SSHKeyRecord } from "@/types/domain";
+import { preserveSSHPurposeScope } from "@/lib/ssh-purpose-scope";
 import { ApiError, formatTime, parseNumericId, request } from "./core";
 import { finiteNumber } from "./number-utils";
 
@@ -43,7 +44,7 @@ function mapSSHKey(row: SSHKeyResponse): SSHKeyRecord {
     fingerprint: String(row.fingerprint ?? ""),
     disabled: Boolean(row.disabled),
     expiresAt: normalizeDateTimeLocal(row.expires_at),
-    allowedPurposes: String(row.allowed_purposes ?? ""),
+    allowedPurposes: preserveSSHPurposeScope(row.allowed_purposes),
     allowedNodeIds: String(row.allowed_node_ids ?? ""),
     allowedNodeTags: String(row.allowed_node_tags ?? ""),
     broadScope: Boolean(row.broad_scope),
@@ -56,7 +57,7 @@ function toSSHKeyScopePayload(input: NewSSHKeyInput) {
   return {
     disabled: input.disabled,
     expires_at: toRfc3339(input.expiresAt),
-    allowed_purposes: input.allowedPurposes,
+    allowed_purposes: preserveSSHPurposeScope(input.allowedPurposes),
     allowed_node_ids: input.allowedNodeIds,
     allowed_node_tags: input.allowedNodeTags,
   };

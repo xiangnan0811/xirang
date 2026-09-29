@@ -14,9 +14,7 @@ const mockConsoleData = {
   loading: false,
   nodes: [],
   overview: {
-    healthyNodes: 0,
-    runningTasks: 0,
-    failedTasks24h: 0,
+    activePolicies: 0,
   },
   warning: null as string | null,
 };

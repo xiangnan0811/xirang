@@ -62,8 +62,8 @@ func TestAnomalyHandler_ListBasic(t *testing.T) {
 	db := openAnomalyTestDB(t)
 	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (1, 'n', 'h', 'u', '/b')")
 	now := time.Now()
-	seedAnomalyEvent(db, 1, "ewma", "cpu_pct", "warning", now.Add(-1*time.Hour))
-	seedAnomalyEvent(db, 1, "ewma", "mem_pct", "critical", now)
+	seedAnomalyEvent(db, 1, "snapshot_diff", "snapshot_churn", "warning", now.Add(-1*time.Hour))
+	seedAnomalyEvent(db, 1, "snapshot_diff", "ransomware_pattern", "critical", now)
 	r := newAnomalyRouter(t, db, "viewer")
 	w := doAnomaly(r, "GET", "/api/v1/anomaly-events")
 	if w.Code != http.StatusOK {
@@ -79,7 +79,7 @@ func TestAnomalyHandler_ListBasic(t *testing.T) {
 	if resp.Data.Total != 2 {
 		t.Fatalf("total=%d want 2", resp.Data.Total)
 	}
-	if resp.Data.Data[0].Metric != "mem_pct" {
+	if resp.Data.Data[0].Metric != "ransomware_pattern" {
 		t.Fatalf("expected desc order; first=%s", resp.Data.Data[0].Metric)
 	}
 }
@@ -87,8 +87,8 @@ func TestAnomalyHandler_ListBasic(t *testing.T) {
 func TestAnomalyHandler_ListFilterBySeverity(t *testing.T) {
 	db := openAnomalyTestDB(t)
 	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (1, 'n', 'h', 'u', '/b')")
-	seedAnomalyEvent(db, 1, "ewma", "cpu_pct", "warning", time.Now())
-	seedAnomalyEvent(db, 1, "ewma", "cpu_pct", "critical", time.Now())
+	seedAnomalyEvent(db, 1, "snapshot_diff", "snapshot_churn", "warning", time.Now())
+	seedAnomalyEvent(db, 1, "snapshot_diff", "snapshot_churn", "critical", time.Now())
 	r := newAnomalyRouter(t, db, "viewer")
 	w := doAnomaly(r, "GET", "/api/v1/anomaly-events?severity=critical")
 	if w.Code != http.StatusOK {
@@ -138,8 +138,8 @@ func TestAnomalyHandler_ForNode(t *testing.T) {
 	db := openAnomalyTestDB(t)
 	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (1, 'n', 'h', 'u', '/b')")
 	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (2, 'n2', 'h2', 'u', '/b2')")
-	seedAnomalyEvent(db, 1, "ewma", "cpu_pct", "warning", time.Now())
-	seedAnomalyEvent(db, 2, "ewma", "cpu_pct", "warning", time.Now())
+	seedAnomalyEvent(db, 1, "snapshot_diff", "snapshot_churn", "warning", time.Now())
+	seedAnomalyEvent(db, 2, "snapshot_diff", "snapshot_churn", "warning", time.Now())
 	r := newAnomalyRouter(t, db, "viewer")
 	w := doAnomaly(r, "GET", "/api/v1/nodes/1/anomaly-events")
 	if w.Code != http.StatusOK {
@@ -166,12 +166,12 @@ func TestAnomalyHandler_ForNode_404(t *testing.T) {
 	}
 }
 
-func TestAnomalyHandler_ListInvalidDetector_400(t *testing.T) {
+func TestAnomalyHandler_ListRetiredDetector_400(t *testing.T) {
 	db := openAnomalyTestDB(t)
 	r := newAnomalyRouter(t, db, "viewer")
-	w := doAnomaly(r, "GET", "/api/v1/anomaly-events?detector=bogus")
+	w := doAnomaly(r, "GET", "/api/v1/anomaly-events?detector=ewma")
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for invalid detector, got %d", w.Code)
+		t.Fatalf("expected 400 for retired detector, got %d", w.Code)
 	}
 }
 
@@ -179,11 +179,9 @@ func TestAnomalyHandler_ListValidDetectors(t *testing.T) {
 	db := openAnomalyTestDB(t)
 	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (1, 'n', 'h', 'u', '/b')")
 	r := newAnomalyRouter(t, db, "viewer")
-	for _, det := range []string{"ewma", "disk_forecast", "snapshot_diff"} {
-		w := doAnomaly(r, "GET", "/api/v1/anomaly-events?detector="+det)
-		if w.Code != http.StatusOK {
-			t.Fatalf("detector=%s should be accepted, got %d: %s", det, w.Code, w.Body.String())
-		}
+	w := doAnomaly(r, "GET", "/api/v1/anomaly-events?detector=snapshot_diff")
+	if w.Code != http.StatusOK {
+		t.Fatalf("snapshot_diff should be accepted, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -192,7 +190,7 @@ func TestAnomalyHandler_Pagination(t *testing.T) {
 	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (1, 'n', 'h', 'u', '/b')")
 	base := time.Now()
 	for i := 0; i < 15; i++ {
-		seedAnomalyEvent(db, 1, "ewma", "cpu_pct", "warning", base.Add(-time.Duration(i)*time.Minute))
+		seedAnomalyEvent(db, 1, "snapshot_diff", "snapshot_churn", "warning", base.Add(-time.Duration(i)*time.Minute))
 	}
 	r := newAnomalyRouter(t, db, "viewer")
 	w := doAnomaly(r, "GET", "/api/v1/anomaly-events?page=1&page_size=10")
@@ -210,5 +208,15 @@ func TestAnomalyHandler_Pagination(t *testing.T) {
 	if len(resp.Data.Data) != 10 || resp.Data.Total != 15 || !resp.Data.HasMore {
 		t.Fatalf("pagination broken: len=%d total=%d hasmore=%v",
 			len(resp.Data.Data), resp.Data.Total, resp.Data.HasMore)
+	}
+}
+
+func TestAnomalyHandler_ForNode_RetiredDetector_400(t *testing.T) {
+	db := openAnomalyTestDB(t)
+	db.Exec("INSERT INTO nodes (id, name, host, username, backup_dir) VALUES (1, 'n', 'h', 'u', '/b')")
+	r := newAnomalyRouter(t, db, "viewer")
+	w := doAnomaly(r, "GET", "/api/v1/nodes/1/anomaly-events?detector=disk_forecast")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for retired detector, got %d", w.Code)
 	}
 }

@@ -40,9 +40,9 @@ func TestRaise_DefaultSettings_WritesEventWithoutAlertUpgrade(t *testing.T) {
 		return 0, false, nil
 	}
 	fn := NewRaiseFn(db, settings.NewService(db), raiser, nil)
-	f := Finding{NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
+	f := Finding{NodeID: 1, Detector: "snapshot_diff", Metric: "snapshot_churn", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30,
-		ErrorCode: "XR-ANOMALY-CPU-1", Message: "test",
+		ErrorCode: "XR-SNAPSHOT-CHURN-1", Message: "test",
 	}
 	if err := fn(context.Background(), f); err != nil {
 		t.Fatalf("raise: %v", err)
@@ -71,9 +71,9 @@ func TestRaise_NewFinding_WritesEventAndLinksAlert(t *testing.T) {
 	}
 	fn := NewRaiseFn(db, enableAnomalyAlerts(t, db), raiser, nil)
 	sigma := 3.5
-	f := Finding{NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
+	f := Finding{NodeID: 1, Detector: "snapshot_diff", Metric: "snapshot_churn", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30, Sigma: &sigma,
-		ErrorCode: "XR-ANOMALY-CPU-1", Message: "test",
+		ErrorCode: "XR-SNAPSHOT-CHURN-1", Message: "test",
 		Details: map[string]any{"samples": 12},
 	}
 	if err := fn(context.Background(), f); err != nil {
@@ -101,9 +101,9 @@ func TestRaise_DedupFinding_EventStillWritten_RaisedAlertFalse(t *testing.T) {
 		return 99, false, nil // deduped to existing alert 99
 	}
 	fn := NewRaiseFn(db, enableAnomalyAlerts(t, db), raiser, nil)
-	f := Finding{NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
+	f := Finding{NodeID: 1, Detector: "snapshot_diff", Metric: "snapshot_churn", Severity: "warning",
 		ObservedValue: 85, BaselineValue: 30,
-		ErrorCode: "XR-ANOMALY-CPU-1", Message: "test",
+		ErrorCode: "XR-SNAPSHOT-CHURN-1", Message: "test",
 	}
 	if err := fn(context.Background(), f); err != nil {
 		t.Fatalf("raise: %v", err)
@@ -124,8 +124,8 @@ func TestRaise_AlertError_EventStillWritten(t *testing.T) {
 		return 0, false, gorm.ErrInvalidDB
 	}
 	fn := NewRaiseFn(db, enableAnomalyAlerts(t, db), raiser, nil)
-	f := Finding{NodeID: 1, Detector: "ewma", Metric: "cpu_pct", Severity: "warning",
-		ErrorCode: "XR-ANOMALY-CPU-1", Message: "test",
+	f := Finding{NodeID: 1, Detector: "snapshot_diff", Metric: "snapshot_churn", Severity: "warning",
+		ErrorCode: "XR-SNAPSHOT-CHURN-1", Message: "test",
 	}
 	err := fn(context.Background(), f)
 	if err == nil {

@@ -43,6 +43,14 @@ golang-migrate 在运行 down SQL 前先调用 `SetVersion(target, true)`。因�
 | 未使用 schema | 降级成功，前一版本 clean，保护器及对应 schema 正确移除 |
 | 后续向前迁移或退至保护版本 | 元数据准入不误拦截 |
 
+### 不可逆退役迁移
+
+涉及历史监控、节点系统日志和可配置看板的退役迁移只能删除已列明的采样/日志/看板表、专用列、forecast 字段和专用 Settings；备份资产及 Provider 元数据、任务/TaskRun 与任务日志、审计、snapshot-diff 事件和仍有效的告警投递事实必须保留。删除来源记录前须先物化退役告警 ID，再按[告警与健康合同](../domains/alerting-health.md#退役来源告警封存与投递围栏)封存 Alert 和未发送 delivery；不能宽匹配仍有效的到期或服务监控来源。
+
+此类迁移的 down 文件可以明确失败，不能伪造空历史或提供“自动回滚”。执行失败（包括 migrate 驱动在 down 前尝试写旧版本号）后，保护器必须让 `schema_migrations` 版本、dirty 状态、触发器/约束和业务数据保持新版本的 clean 状态。日常回退只能恢复升级前数据库备份，并使用匹配的旧版二进制、完整旧配置、`DATA_ENCRYPTION_KEY` 及适用的历史解密密钥；不得手工修改迁移元数据或删除保护器。删除边界和 SQLite/PostgreSQL 灾难恢复步骤见[备份、恢复与快照](../../admin/backup-recovery.md#升级与灾难恢复)。
+
+启动时还必须验证退役版本保护器的真实语义：SQLite 的 INSERT、UPDATE 触发器，以及 PostgreSQL 的触发器附着、启用状态和函数体均须保留版本下限拒绝逻辑。缺失或同名空操作保护器返回 `ErrMigrationSchemaDrift`，不能因为版本已经 clean 就跳过，也不自动重建或绕过损坏的保护器。
+
 ## 时间与连接一致性
 
 GORM `NowFunc` 使用 UTC。SQLite DSN 对每条物理连接固定 WAL、`_busy_timeout=5000`、外键、`_synchronous=NORMAL`、`_txlock=immediate` 和 `_loc=UTC`；用户传入别名不能绕过这些选项。时间迁移 SQL 的 UTC 安全另由仓库检查脚本验证。

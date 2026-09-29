@@ -91,6 +91,29 @@ func TestNormalizeScopeLists(t *testing.T) {
 	}
 }
 
+func TestRetiredPurposesRemainScopedWithoutBecomingBroad(t *testing.T) {
+	normalized, err := NormalizePurposeList(" probe, node_logs, probe ")
+	if err != nil {
+		t.Fatalf("normalize retired purposes: %v", err)
+	}
+	if normalized != PurposeProbe+","+PurposeNodeLogs {
+		t.Fatalf("retired purpose tokens changed during normalization: %q", normalized)
+	}
+
+	key := model.SSHKey{AllowedPurposes: normalized}
+	node := model.Node{ID: 1}
+	for _, retired := range []string{PurposeProbe, PurposeNodeLogs} {
+		if err := ValidateSSHKeyScope(key, node, retired); err != nil {
+			t.Fatalf("historical retired purpose %q should remain representable: %v", retired, err)
+		}
+	}
+	for _, live := range []string{PurposeNodeTest, PurposeTaskBackup, PurposeTaskRestore} {
+		if err := ValidateSSHKeyScope(key, node, live); err == nil {
+			t.Fatalf("retired-only scope unexpectedly allowed live purpose %q", live)
+		}
+	}
+}
+
 func TestRepositoryPurposesRemainIndependent(t *testing.T) {
 	purposes := []string{PurposeRepositoryProbe, PurposeRepositoryList, PurposeRepositoryRead}
 	for _, allowed := range purposes {

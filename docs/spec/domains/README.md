@@ -7,7 +7,6 @@
 | 身份、SSH 范围、step-up、临时授权和凭据审计 | [凭据与访问](credentials-access.md) |
 | 调度、执行证据、恢复、演练及 RPO/RTO 定义 | [任务执行与恢复](task-execution-recovery.md) |
 | 投递、健康和诊断（RPO 引用任务合同） | [告警与健康](alerting-health.md) |
-| 节点日志采集、游标和关闭 | [节点日志](node-log-collection.md) |
 | Provider、访问绑定、版本化和恢复点发布 | [备份仓库与发布](backup-repository.md) |
 | 文件来源、目录、可变源刷新和代次回收 | [Catalog](backup-catalog.md) |
 | 索引、内容匹配、收藏、标签和保存搜索 | [搜索与用户状态](backup-search.md) |

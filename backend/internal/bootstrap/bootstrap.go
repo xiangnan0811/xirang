@@ -183,7 +183,6 @@ func EncryptPlaintextPolicyDrillScripts(db *gorm.DB) error {
 }
 
 var encryptedSystemSettingKeys = []string{
-	"metrics.remote_bearer_token",
 	"smtp.password",
 }
 

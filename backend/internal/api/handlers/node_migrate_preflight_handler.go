@@ -77,7 +77,7 @@ type MigratePreflightResponse struct {
 // @Failure      401  {object}  handlers.Response
 // @Failure      403  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
-// @Router       /nodes/{id}/migrate-preflight [post]
+// @Router       /nodes/{id}/migrate/preflight [post]
 func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	sourceID, ok := parseID(c, "id")
 	if !ok {
@@ -193,11 +193,11 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	resp := MigratePreflightResponse{
 		SourceNode: PreflightNodeInfo{
 			ID: sourceNode.ID, Name: sourceNode.Name, Host: sanitizeDiagnosticHostField(sourceNode.Host),
-			Status: sourceNode.Status, DiskUsedGB: sourceNode.DiskUsedGB, DiskTotalGB: sourceNode.DiskTotalGB,
+			Status: sourceNode.Status,
 		},
 		TargetNode: PreflightNodeInfo{
 			ID: targetNode.ID, Name: targetNode.Name, Host: sanitizeDiagnosticHostField(targetNode.Host),
-			Status: targetNode.Status, DiskUsedGB: targetNode.DiskUsedGB, DiskTotalGB: targetNode.DiskTotalGB,
+			Status: targetNode.Status,
 		},
 		Policies:   policyInfos,
 		TaskCount:  len(tasks),
@@ -205,29 +205,32 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	}
 
 	var checks []PreflightCheckItem
-
-	// === 检查 1: SSH 连通性 ===
-	sshFailed := false
-	auditCredential := sshutil.ResolvedCredential{}
-	probe, probeCredential, probeErr := sshutil.ProbeNodeForPurpose(targetNode, h.db, sshutil.PurposeNodeMigration)
-	if probeCredential.Kind != "" || probeCredential.Source != "" || probeCredential.KeyID != nil {
-		auditCredential = probeCredential
+	sourceCapacity, sourceCredential, sourceCapacityErr := sshutil.CheckNodeCapacityForPurpose(sourceNode, h.db, sshutil.PurposeNodeMigration)
+	targetCapacity, targetCredential, targetCapacityErr := sshutil.CheckNodeCapacityForPurpose(targetNode, h.db, sshutil.PurposeNodeMigration)
+	auditCredential := targetCredential
+	if sourceCapacity.DiskAvailable {
+		resp.SourceNode.DiskUsedGB = sourceCapacity.DiskUsed
+		resp.SourceNode.DiskTotalGB = sourceCapacity.DiskTotal
 	}
-	if probeErr != nil {
+	if targetCapacity.DiskAvailable {
+		resp.TargetNode.DiskUsedGB = targetCapacity.DiskUsed
+		resp.TargetNode.DiskTotalGB = targetCapacity.DiskTotal
+	}
+
+	// === 检查 1: SSH 连通性（目标节点） ===
+	sshFailed := false
+	if targetCapacityErr != nil {
 		checks = append(checks, PreflightCheckItem{
 			Name: "ssh", Status: "fail",
-			Message: fmt.Sprintf("SSH 连接目标节点失败: %s", classifyDoctorSSHEvidence(probeErr)),
+			Message: fmt.Sprintf("SSH 连接目标节点失败: %s", classifyDoctorSSHEvidence(targetCapacityErr)),
 		})
 		sshFailed = true
 		resp.CanProceed = false
 	} else {
 		checks = append(checks, PreflightCheckItem{
 			Name: "ssh", Status: "pass",
-			Message: fmt.Sprintf("SSH 连接成功，延迟 %dms", probe.Latency),
+			Message: fmt.Sprintf("SSH 连接成功，延迟 %dms", targetCapacity.Latency),
 		})
-		// 更新目标节点磁盘信息
-		resp.TargetNode.DiskUsedGB = probe.DiskUsed
-		resp.TargetNode.DiskTotalGB = probe.DiskTotal
 	}
 
 	// === 检查 2: 工具检测 ===
@@ -299,12 +302,25 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	}
 
 	// === 检查 4: 磁盘空间 ===
-	if !sshFailed && probe.DiskTotal > 0 {
-		freeGB := probe.DiskTotal - probe.DiskUsed
-		if freeGB < sourceNode.DiskUsedGB {
+	switch {
+	case sshFailed:
+		checks = append(checks, PreflightCheckItem{
+			Name: "disk", Status: "skip", Message: "SSH 不通，跳过磁盘检查",
+		})
+	case sourceCapacityErr != nil || !sourceCapacity.DiskAvailable:
+		checks = append(checks, PreflightCheckItem{
+			Name: "disk", Status: "warn", Message: "无法读取源节点磁盘空间，未执行容量比较",
+		})
+	case !targetCapacity.DiskAvailable:
+		checks = append(checks, PreflightCheckItem{
+			Name: "disk", Status: "warn", Message: "无法读取目标节点磁盘空间，未执行容量比较",
+		})
+	default:
+		freeGB := targetCapacity.DiskTotal - targetCapacity.DiskUsed
+		if freeGB < sourceCapacity.DiskUsed {
 			checks = append(checks, PreflightCheckItem{
 				Name: "disk", Status: "warn",
-				Message: fmt.Sprintf("目标节点可用空间 %dGB，可能不足（源节点已用 %dGB）", freeGB, sourceNode.DiskUsedGB),
+				Message: fmt.Sprintf("目标节点可用空间 %dGB，可能不足（源节点已用 %dGB）", freeGB, sourceCapacity.DiskUsed),
 			})
 		} else {
 			checks = append(checks, PreflightCheckItem{
@@ -312,10 +328,6 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 				Message: fmt.Sprintf("目标节点可用空间 %dGB", freeGB),
 			})
 		}
-	} else if sshFailed {
-		checks = append(checks, PreflightCheckItem{
-			Name: "disk", Status: "skip", Message: "SSH 不通，跳过磁盘检查",
-		})
 	}
 
 	// === 检查 5: 运行中的任务 ===
@@ -374,7 +386,7 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 	}
 
 	resp.Checks = checks
-	h.writeMigrationPreflightAudit(c, targetNode, auditCredential, preflightAuditOutcome(checks), checks, map[string]any{
+	metadata := map[string]any{
 		"source_node_id":  sourceNode.ID,
 		"target_node_id":  targetNode.ID,
 		"policy_count":    len(policies),
@@ -382,7 +394,9 @@ func (h *NodeHandler) MigratePreflight(c *gin.Context) {
 		"tool_count":      len(toolSet),
 		"can_proceed":     resp.CanProceed,
 		"data_migratable": resp.DataMigratable,
-	})
+	}
+	h.writeMigrationPreflightAudit(c, sourceNode, sourceCredential, credentialAuditSSHOutcome("capacity", sourceCapacityErr), checks, metadata)
+	h.writeMigrationPreflightAudit(c, targetNode, auditCredential, preflightAuditOutcome(checks), checks, metadata)
 	respondOK(c, resp)
 }
 
@@ -408,8 +422,8 @@ func resolveNodeCredentialForAudit(node model.Node, db *gorm.DB, purpose string)
 	return credential
 }
 
-func (h *NodeHandler) writeMigrationPreflightAudit(c *gin.Context, targetNode model.Node, credential sshutil.ResolvedCredential, outcome string, checks []PreflightCheckItem, metadata map[string]any) {
-	fallbackKind, fallbackSource, fallbackKeyID := nodeCredentialFallback(targetNode)
+func (h *NodeHandler) writeMigrationPreflightAudit(c *gin.Context, node model.Node, credential sshutil.ResolvedCredential, outcome string, checks []PreflightCheckItem, metadata map[string]any) {
+	fallbackKind, fallbackSource, fallbackKeyID := nodeCredentialFallback(node)
 	kind, source, keyID := eventCredentialFields(credential, fallbackKind, fallbackSource)
 	if keyID == nil {
 		keyID = fallbackKeyID
@@ -430,7 +444,7 @@ func (h *NodeHandler) writeMigrationPreflightAudit(c *gin.Context, targetNode mo
 		CredentialKind:   kind,
 		CredentialSource: source,
 		SSHKeyID:         keyID,
-		NodeID:           credentialaudit.PtrUint(targetNode.ID),
+		NodeID:           credentialaudit.PtrUint(node.ID),
 		Outcome:          outcome,
 		Metadata:         metadata,
 	})

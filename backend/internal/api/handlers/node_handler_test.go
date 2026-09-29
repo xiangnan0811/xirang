@@ -265,7 +265,7 @@ func TestMigrationPreflightAuditDoesNotCopyDiagnosticHostOrPath(t *testing.T) {
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
-	source := model.Node{Name: "source-audit-node", Host: "10.91.0.1", Port: 22, Username: "root", AuthType: "password", Password: "FAKE_SOURCE_PASSWORD_FOR_TEST_ONLY", BackupDir: "source-audit-node", DiskUsedGB: 12}
+	source := model.Node{Name: "source-audit-node", Host: "10.91.0.1", Port: 22, Username: "root", AuthType: "password", BackupDir: "source-audit-node"}
 	target := model.Node{Name: "target-audit-node", Host: "10.91.0.2", Port: 22, Username: "root", AuthType: "password", Password: "", BackupDir: "target-audit-node"}
 	if err := db.Create(&source).Error; err != nil {
 		t.Fatalf("创建源节点失败: %v", err)
@@ -301,24 +301,32 @@ func TestMigrationPreflightAuditDoesNotCopyDiagnosticHostOrPath(t *testing.T) {
 		t.Fatalf("预检认证失败仍应返回结构化 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
 
-	var event model.CredentialAuditEvent
-	if err := db.Where("action = ?", "node_migration.preflight").First(&event).Error; err != nil {
+	var events []model.CredentialAuditEvent
+	if err := db.Where("action = ?", "node_migration.preflight").Find(&events).Error; err != nil {
 		t.Fatalf("应写入 node_migration.preflight 审计事件: %v", err)
 	}
-	if event.Purpose != sshutil.PurposeNodeMigration || event.Outcome != credentialaudit.OutcomeBlocked || event.NodeID == nil || *event.NodeID != target.ID {
-		t.Fatalf("migration preflight audit event 不符合预期: %+v", event)
+	if len(events) != 2 {
+		t.Fatalf("源和目标应分别审计，实际: %d", len(events))
 	}
-	for _, forbidden := range []string{"10.91.0.", "target-audit-node", "source-audit-node", "/very/sensitive/source/path", "FAKE_", "SSH 连接目标节点失败"} {
-		if strings.Contains(event.Metadata, forbidden) || strings.Contains(event.ErrorMessage, forbidden) {
-			t.Fatalf("preflight audit 不应复制诊断主机/路径/证据 %q: metadata=%s error=%s", forbidden, event.Metadata, event.ErrorMessage)
+	auditedNodes := make(map[uint]bool)
+	for _, event := range events {
+		if event.Purpose != sshutil.PurposeNodeMigration || event.Outcome != credentialaudit.OutcomeBlocked || event.NodeID == nil ||
+			(*event.NodeID != source.ID && *event.NodeID != target.ID) || auditedNodes[*event.NodeID] {
+			t.Fatalf("migration preflight audit event 不符合预期: %+v", event)
 		}
-	}
-	var metadata map[string]any
-	if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
-		t.Fatalf("metadata json: %v", err)
-	}
-	if metadata["source_node_id"] == nil || metadata["target_node_id"] == nil || metadata["policy_count"] == nil || metadata["check_count"] == nil || metadata["failure_count"] == nil || metadata["stage"] != "complete" {
-		t.Fatalf("preflight audit metadata 缺少安全字段: %#v", metadata)
+		auditedNodes[*event.NodeID] = true
+		for _, forbidden := range []string{"10.91.0.", "target-audit-node", "source-audit-node", "/very/sensitive/source/path", "FAKE_", "SSH 连接目标节点失败"} {
+			if strings.Contains(event.Metadata, forbidden) || strings.Contains(event.ErrorMessage, forbidden) {
+				t.Fatalf("preflight audit 不应复制诊断主机/路径/证据 %q: metadata=%s error=%s", forbidden, event.Metadata, event.ErrorMessage)
+			}
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+			t.Fatalf("metadata json: %v", err)
+		}
+		if metadata["source_node_id"] == nil || metadata["target_node_id"] == nil || metadata["policy_count"] == nil || metadata["check_count"] == nil || metadata["failure_count"] == nil || metadata["stage"] != "complete" {
+			t.Fatalf("preflight audit metadata 缺少安全字段: %#v", metadata)
+		}
 	}
 }
 
@@ -327,7 +335,7 @@ func TestMigrationPreflightResponseSanitizesDiagnosticFields(t *testing.T) {
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
-	source := model.Node{Name: "source-response-node", Host: "source-db.example.internal", Port: 22, Username: "root", AuthType: "password", Password: "FAKE_SOURCE_PASSWORD_FOR_TEST_ONLY", BackupDir: "source-response-node", DiskUsedGB: 12}
+	source := model.Node{Name: "source-response-node", Host: "source-db.example.internal", Port: 22, Username: "root", AuthType: "password", Password: "FAKE_SOURCE_PASSWORD_FOR_TEST_ONLY", BackupDir: "source-response-node"}
 	target := model.Node{Name: "target-response-node", Host: "10.92.0.2", Port: 22, Username: "root", AuthType: "password", Password: "", BackupDir: "target-response-node"}
 	if err := db.Create(&source).Error; err != nil {
 		t.Fatalf("创建源节点失败: %v", err)

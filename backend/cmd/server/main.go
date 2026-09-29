@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -30,16 +29,11 @@ import (
 	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
-	"xirang/backend/internal/dashboards"
-	"xirang/backend/internal/dashboards/providers"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/escalation"
 	"xirang/backend/internal/lifecycle"
 	"xirang/backend/internal/logger"
-	"xirang/backend/internal/metrics"
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/nodelogs"
-	"xirang/backend/internal/probe"
 	"xirang/backend/internal/reporting"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/slo"
@@ -192,19 +186,12 @@ func main() {
 		raiser,
 	)
 
-	// Anomaly detection engine + retention
+	// Snapshot-diff anomaly sink and event retention.
 	anomalySink := anomaly.NewSink(db, settingsSvc, func(_ *gorm.DB, nodeID uint, severity, errorCode, message string) (uint, bool, error) {
 		return raiser.RaiseAnomalyAlert(alerting.AnomalyAlertInput{
 			NodeID: nodeID, Severity: severity, ErrorCode: errorCode, Message: message,
 		})
 	}, autoDispatcher)
-	anomalyEngine := anomaly.NewEngine(
-		db, settingsSvc,
-		anomalySink,
-		anomaly.NewEWMADetector(db, settingsSvc),
-		anomaly.NewDiskForecastDetector(db, settingsSvc),
-	)
-
 	anomalyRetention := anomaly.NewRetentionWorker(db, settingsSvc)
 
 	executorFactory := executor.NewFactoryWithPublicationStrategies(
@@ -261,13 +248,6 @@ func main() {
 
 	taskRetention := task.NewRetentionWorker(settingsSvc, taskManager)
 
-	sinks := []metrics.Sink{metrics.NewDBSink(db)}
-	if rs := buildRemoteWriteSinkFromConfig(settingsSvc); rs != nil {
-		sinks = append(sinks, rs)
-	}
-	metricSink := metrics.NewFanSink(sinks...)
-	prober := probe.NewProber(db, cfg.NodeProbeInterval, cfg.NodeProbeFailThreshold, cfg.NodeProbeConcurrency, metricSink, alertDispatcher)
-
 	uptimeProber := uptime.NewProber(db, 60*time.Second)
 	uptimeProber.SetAlertCallback(func(monitor model.ServiceMonitor, oldStatus, newStatus string) {
 		if newStatus == "down" {
@@ -293,8 +273,6 @@ func main() {
 		}
 	})
 
-	aggregator := metrics.NewAggregator(db, cfg.DBType)
-
 	reportScheduler := reporting.NewScheduler(db)
 
 	retryWorker := alerting.NewRetryWorker(db)
@@ -303,16 +281,9 @@ func main() {
 
 	sloEvaluator := slo.NewEvaluator(db, raiser)
 
-	nodeLogRunner := nodelogs.NewSSHRunner(db)
-	nodeLogScheduler := nodelogs.NewScheduler(db, nodeLogRunner)
-
-	nodeLogRetention := nodelogs.NewRetentionWorker(db, settingsSvc)
-
 	// LIFECYCLE PHASE: assemble workers in startup order, then start all.
 	workers := []lifecycle.Worker{
-		prober,
 		uptimeProber,
-		aggregator,
 		assetRuntime,
 		taskManager,
 		taskRetention,
@@ -320,18 +291,12 @@ func main() {
 		retryWorker,
 		silenceRetention,
 		sloEvaluator,
-		nodeLogScheduler,
-		nodeLogRetention,
-		anomalyEngine,
 		anomalyRetention,
 		escEngine,
 	}
 	for _, w := range workers {
 		go w.Run(hubCtx)
 	}
-
-	dashboards.Register(providers.NewNodeProvider(db))
-	dashboards.Register(providers.NewTaskProvider(db))
 
 	authService := auth.NewService(db, jwtManager, settingsSvc, auth.LoginSecurityConfig{
 		FailLockThreshold:       cfg.LoginFailLockThreshold,
@@ -431,31 +396,6 @@ func main() {
 	// temporary SSH key file. Cleanup remains after the bounded runtime drain.
 	executor.CleanupTempKeyDir()
 	hubCancel()
-}
-
-// buildRemoteWriteSinkFromConfig reads METRICS_REMOTE_URL / _BEARER_TOKEN /
-// _TIMEOUT env vars first, falling back to settings.GetEffective. Returns
-// nil when no URL is configured (sink disabled). Read once at boot;
-// changes require restart.
-func buildRemoteWriteSinkFromConfig(svc *settings.Service) *metrics.RemoteWriteSink {
-	url := strings.TrimSpace(os.Getenv("METRICS_REMOTE_URL"))
-	if url == "" && svc != nil {
-		url = strings.TrimSpace(svc.GetEffective("metrics.remote_url"))
-	}
-	if url == "" {
-		return nil
-	}
-	token := strings.TrimSpace(os.Getenv("METRICS_REMOTE_BEARER_TOKEN"))
-	if token == "" && svc != nil {
-		token = strings.TrimSpace(svc.GetEffective("metrics.remote_bearer_token"))
-	}
-	timeout := 5 * time.Second
-	if raw := strings.TrimSpace(os.Getenv("METRICS_REMOTE_TIMEOUT")); raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
-			timeout = parsed
-		}
-	}
-	return metrics.NewRemoteWriteSink(url, token, timeout)
 }
 
 type workerHTTPServerSet struct {

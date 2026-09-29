@@ -12,6 +12,8 @@ function TitleProbe({ title }: { title: string }) {
 describe("document title", () => {
   it("maps routes to i18n keys", () => {
     expect(titleKeyForPathname("/app/overview")).toBe("nav.overview");
+    expect(titleKeyForPathname("/app/dashboards")).toBe("notFound.title");
+    expect(titleKeyForPathname("/app/dashboards/1")).toBe("notFound.title");
     expect(titleKeyForPathname("/app/backups/data")).toBe("nav.backups");
     expect(titleKeyForPathname("/app/foo")).toBe("notFound.title");
     expect(titleKeyForPathname("/login")).toBe("login.welcomeTitle");

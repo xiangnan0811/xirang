@@ -392,18 +392,11 @@ func TestDeletionTargetIdentityIgnoresOpaqueRuntimeAndTelemetry(t *testing.T) {
 	node.Status = "maintenance"
 	node.LastSeenAt = timePtr(time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC))
 	node.LastBackupAt = timePtr(time.Date(2026, 8, 18, 12, 1, 0, 0, time.UTC))
-	node.LastProbeAt = timePtr(time.Date(2026, 8, 18, 12, 2, 0, 0, time.UTC))
 	node.ConnectionLatency = 99
-	node.DiskUsedGB = 11
-	node.DiskTotalGB = 22
-	node.ConsecutiveFailures = 3
 	node.MaintenanceStart = timePtr(time.Date(2026, 8, 18, 12, 3, 0, 0, time.UTC))
 	node.MaintenanceEnd = timePtr(time.Date(2026, 8, 18, 12, 4, 0, 0, time.UTC))
 	node.ExpiryDate = timePtr(time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC))
 	node.Archived = true
-	node.LogPaths = `["/opaque/log"]`
-	node.LogJournalctlEnabled = false
-	node.LogRetentionDays = 2
 	node.UpdatedAt = time.Date(2026, 8, 18, 12, 5, 0, 0, time.UTC)
 	runtime.Command = &RemoteCommandAccess{Node: node}
 	runtime.Command.Audit.CorrelationID = "audit-only-change"
@@ -435,18 +428,11 @@ func TestDeletionTargetIdentityIgnoresRclonePrefixTelemetry(t *testing.T) {
 		node.Status = "maintenance"
 		node.LastSeenAt = timePtr(time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC))
 		node.LastBackupAt = timePtr(time.Date(2026, 8, 18, 12, 1, 0, 0, time.UTC))
-		node.LastProbeAt = timePtr(time.Date(2026, 8, 18, 12, 2, 0, 0, time.UTC))
 		node.ConnectionLatency = 99
-		node.DiskUsedGB = 11
-		node.DiskTotalGB = 22
-		node.ConsecutiveFailures = 3
 		node.MaintenanceStart = timePtr(time.Date(2026, 8, 18, 12, 3, 0, 0, time.UTC))
 		node.MaintenanceEnd = timePtr(time.Date(2026, 8, 18, 12, 4, 0, 0, time.UTC))
 		node.ExpiryDate = timePtr(time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC))
 		node.Archived = true
-		node.LogPaths = `["/opaque/log"]`
-		node.LogJournalctlEnabled = false
-		node.LogRetentionDays = 2
 		node.UpdatedAt = time.Date(2026, 8, 18, 12, 5, 0, 0, time.UTC)
 	})
 	access := mutated.Request.Snapshot.Access

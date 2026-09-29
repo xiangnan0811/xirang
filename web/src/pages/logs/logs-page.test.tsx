@@ -128,10 +128,6 @@ function createContext(tasks: Array<{ id: number; progress: number; status: stri
         status: "online" as const,
         lastSeenAt: "2026-02-24 09:56:00",
         lastBackupAt: "2026-02-24 09:55:00",
-        diskFreePercent: 80,
-        diskUsedGb: 120,
-        diskTotalGb: 500,
-        diskProbeAt: "2026-02-24 09:55:00",
         connectionLatencyMs: 12,
       },
     ],
@@ -227,38 +223,13 @@ describe("LogsPage", () => {
     expect(screen.getByRole("progressbar", { name: "日志任务进度" })).toHaveAttribute("aria-valuenow", "10");
   });
 
-  it("renders the workbench header and URL-backed task tab panel", () => {
+  it("renders the task log workbench", () => {
     render(<LogsPage />);
 
     expect(
       screen.getByRole("heading", { name: "日志工作台" })
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("tablist", { name: "日志视图" })
-    ).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "任务日志" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    );
-    expect(
-      screen.getByRole("tabpanel", { name: "任务日志" })
-    ).toBeInTheDocument();
     expect(screen.getByText("任务日志流")).toBeInTheDocument();
-  });
-
-  it("supports arrow-key navigation across log workbench tabs", async () => {
-    const user = userEvent.setup();
-    render(<LogsPage />);
-
-    screen.getByRole("tab", { name: "任务日志" }).focus();
-    await user.keyboard("{ArrowRight}");
-
-    expect(setSearchParamsMock).toHaveBeenCalledWith(
-      expect.objectContaining({}),
-      { replace: true }
-    );
-    const nextParams = setSearchParamsMock.mock.calls.at(-1)?.[0] as URLSearchParams;
-    expect(nextParams.get("tab")).toBe("node");
   });
 
   it("显示筛选摘要，并在关键词不匹配时显示空态", async () => {

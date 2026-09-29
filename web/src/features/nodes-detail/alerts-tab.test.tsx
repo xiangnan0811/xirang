@@ -62,7 +62,7 @@ describe("AlertsTab", () => {
 
     expect(await screen.findByText("连接超时")).toBeInTheDocument();
     expect(screen.queryByText("磁盘满")).not.toBeInTheDocument();
-    expect(screen.getByTestId("alert-jump-alert-1")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /指标/ })).not.toBeInTheDocument();
   });
 
   test("skips fetching when token is missing", () => {

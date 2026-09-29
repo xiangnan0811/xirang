@@ -78,6 +78,12 @@ export function useNodesPageState() {
     sort: { key: sortStorageKey, default: "status" },
   }, globalSearch, setGlobalSearch);
 
+  useEffect(() => {
+    if (sortBy === "disk-low") {
+      setSortBy("status");
+    }
+  }, [setSortBy, sortBy]);
+
   const [viewMode, setViewMode] = usePersistentState<ViewMode>(
     viewStorageKey,
     "cards"
@@ -194,9 +200,6 @@ export function useNodesPageState() {
       }
       if (sortBy === "name-desc") {
         return second.name.localeCompare(first.name);
-      }
-      if (sortBy === "disk-low") {
-        return first.diskFreePercent - second.diskFreePercent;
       }
       return (
         parseDateTime(second.lastBackupAt) - parseDateTime(first.lastBackupAt)

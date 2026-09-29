@@ -1,37 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { AlertTriangle, ArrowRight, Maximize2, ShieldAlert, TrendingUp } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ArrowRight, ShieldAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { DataSurface, DataSurfaceContent, DataSurfaceHeader } from "@/components/ui/data-surface";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { Stagger, Reveal } from "@/components/ui/reveal";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogCloseButton,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { LoadingState } from "@/components/ui/loading-state";
-import { NodeMetricsPanel } from "@/components/node-metrics-panel";
 import { useSharedContext } from "@/context/shared-context.hooks";
-import { useNodesContext } from "@/context/nodes-context.hooks";
 import { useTasksContext } from "@/context/tasks-context.hooks";
 import { useAuth } from "@/context/auth-context.hooks";
 import { formatRelativeTime, formatTime } from "@/lib/date-utils";
 import { getErrorMessage, getLocale } from "@/lib/utils";
-import type { HealthIncidentGroup, HealthIncidentSeverity, HealthIncidentSourceType, OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
+import type { HealthIncidentAction, HealthIncidentGroup, HealthIncidentSeverity, HealthIncidentSourceType, OverviewTrafficSeries, OverviewTrafficWindow } from "@/types/domain";
 import { OverviewTrafficChart } from "@/pages/overview-page.traffic";
 import { OverviewRecentTasks } from "@/pages/overview-page.recent-tasks";
 import { OverviewHero } from "@/pages/overview-page.hero";
 
-const MATRIX_PREVIEW_LIMIT = 80;
 const INCIDENT_PREVIEW_LIMIT = 4;
+
+function isRetiredIncidentAction(action: HealthIncidentAction): boolean {
+  return action.code === "view_node_metrics" || action.href.includes("tab=metrics");
+}
 
 type TFunction = ReturnType<typeof useTranslation>["t"];
 
@@ -121,7 +113,7 @@ function HealthIncidentTimelinePanel({
         {!loading && !error && groups.length > 0 ? (
           <div className="space-y-3" role="list" aria-label={t("overview.healthIncidentListAriaLabel")}>
             {visibleGroups.map((group) => {
-              const primaryAction = group.nextActions[0];
+              const primaryAction = group.nextActions.find((action) => action.href && !isRetiredIncidentAction(action));
               return (
                 <article
                   key={group.id}
@@ -197,19 +189,12 @@ export function OverviewPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const { overview, loading, refreshVersion, fetchOverviewTraffic, fetchHealthIncidentTimeline } = useSharedContext();
-  const { nodes, refreshNodes } = useNodesContext();
   const { tasks, refreshTasks } = useTasksContext();
 
   useEffect(() => {
-    void refreshNodes();
     void refreshTasks();
-  }, [refreshNodes, refreshTasks]);
+  }, [refreshTasks]);
 
-  const healthRate = overview.totalNodes > 0
-    ? Math.round((overview.healthyNodes / overview.totalNodes) * 100)
-    : 0;
-
-  const [matrixFullscreen, setMatrixFullscreen] = useState(false);
   const [trafficWindow, setTrafficWindow] = useState<OverviewTrafficWindow>("1h");
   const [trafficData, setTrafficData] = useState<OverviewTrafficSeries | null>(null);
   const [trafficLoading, setTrafficLoading] = useState(true);
@@ -221,12 +206,6 @@ export function OverviewPage() {
   const [visibleLayers, setVisibleLayers] = useState({ throughput: true, activity: true, failures: true });
   const trafficRequestRef = useRef(0);
   const incidentRequestRef = useRef(0);
-  const previewNodes = useMemo(() => nodes.slice(0, MATRIX_PREVIEW_LIMIT), [nodes]);
-  const hiddenNodeCount = Math.max(0, nodes.length - previewNodes.length);
-  const abnormalNodeCount = useMemo(
-    () => nodes.filter((node) => node.status !== "online").length,
-    [nodes]
-  );
   const incidentScope = `${token}:${refreshVersion}:${incidentReloadKey}`;
   const trafficScope = `${token}:${refreshVersion}:${trafficWindow}`;
   const [previousIncident, setPreviousIncident] = useState({ scope: incidentScope, fetch: fetchHealthIncidentTimeline });
@@ -361,41 +340,8 @@ export function OverviewPage() {
       <Reveal><OverviewHero /></Reveal>
       <StatCardsSection
         compact
-        className="animate-slide-up [animation-delay:150ms]"
+        className="max-w-md animate-slide-up [animation-delay:150ms] sm:grid-cols-1 xl:grid-cols-1"
         items={[
-          {
-            title: t("overview.abnormalNodes"),
-            value: abnormalNodeCount,
-            icon: abnormalNodeCount > 0 ? (
-              <AlertTriangle className="hidden size-4 text-destructive sm:block" aria-hidden />
-            ) : undefined,
-            description: t("overview.abnormalNodesDesc", { count: overview.failedTasks24h }),
-            tone: abnormalNodeCount > 0 || overview.failedTasks24h > 0 ? "destructive" : "success",
-          },
-          {
-            title: t("overview.healthRateTitle"),
-            value: healthRate,
-            unit: "%",
-            icon: healthRate >= 90 ? (
-              <TrendingUp className="size-4 sm:size-5 text-success hidden sm:block" aria-hidden />
-            ) : undefined,
-            description: t("overview.healthRateDesc", { healthy: overview.healthyNodes, total: overview.totalNodes }),
-            tone: "success",
-          },
-          {
-            title: t("overview.taskSuccessRate"),
-            value: overview.overallSuccessRate,
-            unit: "%",
-            description: t("overview.taskSuccessRateDesc", { count: overview.failedTasks24h }),
-            tone: "info",
-          },
-          {
-            title: t("overview.currentThroughput"),
-            value: overview.avgSyncMbps,
-            unit: "Mbps",
-            description: t("overview.currentThroughputDesc", { count: overview.runningTasks }),
-            tone: "warning",
-          },
           {
             title: t("overview.policyCoverage"),
             value: overview.activePolicies,
@@ -415,173 +361,18 @@ export function OverviewPage() {
       </Reveal>
 
       <Reveal>
-        <section className="grid gap-4 grid-cols-1 lg:grid-cols-2">
-          <div className="flex flex-col gap-2 w-full min-w-0">
-            <Card className="rounded-lg border border-border bg-card flex-1 flex flex-col min-h-0">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-base">{t("overview.matrixTitle")}</CardTitle>
-                  {nodes.length > 0 ? (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-7 text-muted-foreground hover:text-foreground"
-                      onClick={() => setMatrixFullscreen(true)}
-                      aria-label={t("overview.fullscreenAriaLabel")}
-                      title={t("overview.fullscreenTitle")}
-                    >
-                      <Maximize2 className="size-3.5" aria-hidden />
-                    </Button>
-                  ) : null}
-                </div>
-              </CardHeader>
-              <CardContent className="flex-1 flex flex-col min-h-0">
-                {loading ? (
-                  <LoadingState
-                    className="mb-3"
-                    title={t("overview.matrixLoading")}
-                    description={t("overview.matrixLoadingDesc")}
-                    rows={2}
-                  />
-                ) : null}
-                {!loading && nodes.length === 0 ? (
-                  <p className="rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground">
-                    {t("overview.matrixEmpty")}
-                  </p>
-                ) : (
-                  <div className="flex flex-col flex-1 min-h-0 h-full">
-                    <div
-                      role="group"
-                      aria-label={t("overview.matrixPreviewAriaLabel", { shown: previewNodes.length, total: nodes.length })}
-                      className="flex flex-wrap gap-1 overflow-y-auto pb-4"
-                    >
-                      {previewNodes.map((node) => {
-                        let dotColor = "bg-muted-foreground/30";
-                        if (node.status === "online") dotColor = "bg-success";
-                        if (node.status === "warning") dotColor = "bg-warning";
-                        const tooltipId = `overview-node-tooltip-${node.id}`;
-                        return (
-                          <Link
-                            key={node.id}
-                            to={`/app/nodes/${node.id}`}
-                            data-testid={`overview-node-link-${node.id}`}
-                            className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
-                            aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
-                            aria-describedby={tooltipId}
-                          >
-                            {/* Tooltip on hover and keyboard focus */}
-                            <span
-                              id={tooltipId}
-                              role="tooltip"
-                              className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 z-10 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md"
-                            >
-                              <span className="font-medium">{node.name}</span>
-                              <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>
-                            </span>
-                          </Link>
-                        );
-                      })}
-                    </div>
-
-                    {hiddenNodeCount > 0 ? (
-                      <p className="pb-3 text-xs text-foreground/70">
-                        {t("overview.matrixPreviewHint", { shown: previewNodes.length, total: nodes.length })}
-                      </p>
-                    ) : null}
-
-                    {nodes.length > 0 && (
-                      <div className="mt-auto shrink-0 flex items-center gap-4 text-xs text-foreground/70 pt-3 border-t border-border">
-                        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success"></span>{t("overview.legendOnline")}</span>
-                        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning"></span>{t("overview.legendWarning")}</span>
-                        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30"></span>{t("overview.legendOffline")}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          <OverviewTrafficChart
-            trafficWindow={trafficWindow}
-            setTrafficWindow={setTrafficWindow}
-            trafficLoading={trafficLoading}
-            trafficError={trafficError}
-            chartMetrics={chartMetrics}
-            visibleLayers={visibleLayers}
-            setVisibleLayers={setVisibleLayers}
-            yMaxLeft={yMaxLeft}
-            yMaxRight={yMaxRight}
-          />
-        </section>
+        <OverviewTrafficChart
+          trafficWindow={trafficWindow}
+          setTrafficWindow={setTrafficWindow}
+          trafficLoading={trafficLoading}
+          trafficError={trafficError}
+          chartMetrics={chartMetrics}
+          visibleLayers={visibleLayers}
+          setVisibleLayers={setVisibleLayers}
+          yMaxLeft={yMaxLeft}
+          yMaxRight={yMaxRight}
+        />
       </Reveal>
-
-      {/* 节点资源概览 */}
-      {nodes.length > 0 && nodes.some(n => n.status === "online") && token && (
-        <Reveal>
-          <section>
-            <Card className="rounded-lg border border-border bg-card">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">{t("overview.nodeResources")}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <NodeMetricsPanel nodes={nodes} token={token} />
-                {nodes.filter(n => n.status === "online").length > 8 && (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    {t("overview.nodeResourcesHint")}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </section>
-        </Reveal>
-      )}
-
-      <Dialog open={matrixFullscreen} onOpenChange={setMatrixFullscreen}>
-        <DialogContent size="lg" className="max-h-[90vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle>{t("overview.matrixFullTitle", { count: nodes.length })}</DialogTitle>
-            <DialogDescription>{t("overview.matrixFullDesc")}</DialogDescription>
-            <DialogCloseButton />
-          </DialogHeader>
-          <div className="flex-1 overflow-y-auto px-6 pb-6">
-            <div role="group" aria-label={t("overview.matrixFullAriaLabel", { count: nodes.length })} className="flex flex-wrap gap-1">
-              {nodes.map((node) => {
-                let dotColor = "bg-muted-foreground/30";
-                if (node.status === "online") dotColor = "bg-success";
-                if (node.status === "warning") dotColor = "bg-warning";
-                const tooltipId = `overview-node-tooltip-full-${node.id}`;
-                return (
-                  <Link
-                    key={node.id}
-                    to={`/app/nodes/${node.id}`}
-                    data-testid={`overview-node-link-full-${node.id}`}
-                    className={`relative size-[18px] rounded-xs ${dotColor} hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 group`}
-                    onClick={() => setMatrixFullscreen(false)}
-                    aria-label={t("overview.nodeStatusAriaLabel", { name: node.name, status: node.status === "online" ? t("overview.legendOnline") : node.status === "warning" ? t("overview.legendWarning") : t("overview.legendOffline") })}
-                    aria-describedby={tooltipId}
-                  >
-                    <span
-                      id={tooltipId}
-                      role="tooltip"
-                      className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-max -translate-x-1/2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 z-10 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md"
-                    >
-                      <span className="font-medium">{node.name}</span>
-                      <span className="ml-2 text-muted-foreground">{node.ip}</span>
-                      <span className="ml-2 text-muted-foreground">{node.lastProbeAt || node.lastSeenAt || t("common.unknown")}</span>
-                    </span>
-                  </Link>
-                );
-              })}
-            </div>
-            <div className="mt-4 flex items-center gap-4 text-xs text-foreground/70 pt-3 border-t border-border">
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success" />{t("overview.legendOnline")}</span>
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-warning" />{t("overview.legendWarning")}</span>
-              <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted-foreground/30" />{t("overview.legendOffline")}</span>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <Reveal>
         <OverviewRecentTasks tasks={tasks} recentTasks={recentTasks} loading={loading} />

@@ -335,14 +335,14 @@ func TestDispatch_TriggerTask(t *testing.T) {
 
 	seedRule(t, db, model.AutomationRule{
 		Name:         "FAKE_TEST_RULE_TRIGGER_TASK_FOR_TEST_ONLY",
-		EventType:    EventNodeOffline,
+		EventType:    EventBackupFailed,
 		EventFilter:  `{}`,
 		ActionType:   ActionTriggerTask,
 		ActionConfig: `{"task_id":"1"}`,
 		Enabled:      true,
 	})
 
-	evt := Event{Type: EventNodeOffline, Context: map[string]interface{}{"node_id": uint(3)}}
+	evt := Event{Type: EventBackupFailed, Context: map[string]interface{}{"node_id": uint(3)}}
 	if err := d.Dispatch(context.Background(), evt); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
@@ -373,14 +373,14 @@ func TestDispatch_TriggerTaskWithoutRuntimeTriggererLogsError(t *testing.T) {
 
 	seedRule(t, db, model.AutomationRule{
 		Name:         "FAKE_TEST_RULE_TRIGGER_TASK_WITHOUT_RUNTIME_FOR_TEST_ONLY",
-		EventType:    EventNodeOffline,
+		EventType:    EventBackupFailed,
 		EventFilter:  `{}`,
 		ActionType:   ActionTriggerTask,
 		ActionConfig: `{"task_id":"1"}`,
 		Enabled:      true,
 	})
 
-	evt := Event{Type: EventNodeOffline, Context: map[string]interface{}{"node_id": uint(3)}}
+	evt := Event{Type: EventBackupFailed, Context: map[string]interface{}{"node_id": uint(3)}}
 	if err := d.Dispatch(context.Background(), evt); err == nil {
 		t.Fatal("dispatch should report the missing runtime triggerer")
 	}
@@ -533,7 +533,7 @@ func TestDispatch_EventTypeMismatch(t *testing.T) {
 		Enabled:    true,
 	})
 
-	evt := Event{Type: EventNodeOffline, Context: map[string]interface{}{}}
+	evt := Event{Type: EventBackupSucceeded, Context: map[string]interface{}{}}
 	if err := d.Dispatch(context.Background(), evt); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}

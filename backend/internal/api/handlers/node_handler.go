@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
@@ -31,11 +30,10 @@ type NodeTaskTrigger interface {
 }
 
 type NodeHandler struct {
-	db              *gorm.DB
-	trigger         NodeTaskTrigger
-	settingsSvc     *settings.Service
-	alertDispatcher *alerting.Dispatcher
-	svc             *node.NodeService
+	db          *gorm.DB
+	trigger     NodeTaskTrigger
+	settingsSvc *settings.Service
+	svc         *node.NodeService
 }
 
 func NewNodeHandler(db *gorm.DB, trigger NodeTaskTrigger, svc *node.NodeService) *NodeHandler {
@@ -45,18 +43,6 @@ func NewNodeHandler(db *gorm.DB, trigger NodeTaskTrigger, svc *node.NodeService)
 func (h *NodeHandler) WithSettingsService(settingsSvc *settings.Service) *NodeHandler {
 	h.settingsSvc = settingsSvc
 	return h
-}
-
-func (h *NodeHandler) WithAlertDispatcher(alertDispatcher *alerting.Dispatcher) *NodeHandler {
-	h.alertDispatcher = alertDispatcher
-	return h
-}
-
-func (h *NodeHandler) getAlertDispatcher() *alerting.Dispatcher {
-	if h.alertDispatcher == nil {
-		return alerting.NewDispatcher(h.db, nil, nil)
-	}
-	return h.alertDispatcher
 }
 
 type nodeRequest struct {
@@ -399,7 +385,7 @@ func (h *NodeHandler) Exec(c *gin.Context) {
 
 // TestConnection godoc
 // @Summary      测试节点 SSH 连接
-// @Description  测试节点的 SSH 连通性，成功时更新延迟和磁盘信息
+// @Description  测试节点的 SSH 连通性，成功时更新连接延迟和最近连接时间
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
@@ -423,15 +409,12 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 
 	authMethods, _, credential, err := sshutil.BuildSSHAuthWithKeyForPurpose(node, h.db, sshutil.PurposeNodeTest)
 	if err != nil {
-		probeAt := time.Now()
+		testedAt := time.Now()
 		node.Status = "offline"
 		node.ConnectionLatency = 0
-		node.LastSeenAt = &probeAt
+		node.LastSeenAt = &testedAt
 		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			nodeLog.Warn().Err(saveErr).Msg("更新节点探测状态失败")
-		}
-		if alertErr := h.getAlertDispatcher().RaiseNodeProbeFailure(node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
-			nodeLog.Warn().Err(alertErr).Msg("创建节点探测告警失败")
+			nodeLog.Warn().Err(saveErr).Msg("更新节点连接状态失败")
 		}
 		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
@@ -457,15 +440,12 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 	address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
 	if err != nil {
-		probeAt := time.Now()
+		testedAt := time.Now()
 		node.Status = "offline"
 		node.ConnectionLatency = 0
-		node.LastSeenAt = &probeAt
+		node.LastSeenAt = &testedAt
 		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			nodeLog.Warn().Err(saveErr).Msg("更新节点探测状态失败")
-		}
-		if alertErr := h.getAlertDispatcher().RaiseNodeProbeFailure(node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
-			nodeLog.Warn().Err(alertErr).Msg("创建节点探测告警失败")
+			nodeLog.Warn().Err(saveErr).Msg("更新节点连接状态失败")
 		}
 		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
@@ -496,16 +476,13 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		HostKeyAlgorithms: sshutil.HostKeyAlgorithmsForAddress(address),
 		Timeout:           5 * time.Second,
 	})
-	probeAt := time.Now()
+	testedAt := time.Now()
 	if err != nil {
 		node.Status = "offline"
 		node.ConnectionLatency = 0
-		node.LastSeenAt = &probeAt
+		node.LastSeenAt = &testedAt
 		if saveErr := h.db.Save(&node).Error; saveErr != nil {
-			nodeLog.Warn().Err(saveErr).Msg("更新节点探测状态失败")
-		}
-		if alertErr := h.getAlertDispatcher().RaiseNodeProbeFailure(node, fmt.Sprintf("连接失败：%v", err)); alertErr != nil {
-			nodeLog.Warn().Err(alertErr).Msg("创建节点探测告警失败")
+			nodeLog.Warn().Err(saveErr).Msg("更新节点连接状态失败")
 		}
 		nodeLog.Warn().Err(err).Msg("SSH 连接测试失败")
 		var hostKeyErr *sshutil.HostKeyError
@@ -559,35 +536,10 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 
 	node.Status = "online"
 	node.ConnectionLatency = latency
-	node.LastSeenAt = &probeAt
-
-	if session, err := client.NewSession(); err == nil {
-		output, runErr := session.Output("df -BG / | awk 'NR==2 {print $2\" \"$3}'")
-		_ = session.Close()
-		if runErr == nil {
-			if used, total, ok := sshutil.ParseDiskProbe(string(output)); ok {
-				node.DiskUsedGB = used
-				node.DiskTotalGB = total
-			}
-		}
-	}
-
-	if node.DiskTotalGB > 0 {
-		if node.DiskUsedGB < 0 {
-			node.DiskUsedGB = 0
-		}
-		if node.DiskUsedGB > node.DiskTotalGB {
-			node.DiskUsedGB = node.DiskTotalGB
-		}
-	} else {
-		node.DiskUsedGB = 0
-	}
+	node.LastSeenAt = &testedAt
 	if err := h.db.Save(&node).Error; err != nil {
 		respondInternalError(c, err)
 		return
-	}
-	if resolveErr := h.getAlertDispatcher().ResolveNodeAlerts(node.ID, "节点探测恢复正常"); resolveErr != nil {
-		nodeLog.Warn().Err(resolveErr).Msg("恢复节点探测告警失败")
 	}
 
 	lastUsedUpdated := false
@@ -611,18 +563,15 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		Metadata: map[string]any{
 			"stage":                "success",
 			"latency_ms":           latency,
-			"disk_probe_success":   node.DiskTotalGB > 0,
 			"last_used_at_updated": lastUsedUpdated,
 		},
 	})
 
 	respondOK(c, gin.H{
-		"ok":            true,
-		"message":       "SSH 连通性检测成功",
-		"latency_ms":    latency,
-		"disk_used_gb":  node.DiskUsedGB,
-		"disk_total_gb": node.DiskTotalGB,
-		"probe_at":      probeAt,
+		"ok":         true,
+		"message":    "SSH 连通性检测成功",
+		"latency_ms": latency,
+		"probe_at":   testedAt,
 	})
 }
 
@@ -723,52 +672,6 @@ func (h *NodeHandler) TrustHostKey(c *gin.Context) {
 	default:
 		respondInternalError(c, err)
 	}
-}
-
-// Metrics godoc
-// @Summary      获取节点资源采样
-// @Description  返回节点最近的 CPU/内存/磁盘/负载资源采样数据，用于趋势图
-// @Tags         nodes
-// @Security     Bearer
-// @Produce      json
-// @Param        id     path      int     true   "节点 ID"
-// @Param        limit  query     int     false  "返回条数（默认 288，最大 2016）"
-// @Param        since  query     string  false  "时间范围，如 24h、7d（默认 24h）"
-// @Success      200    {object}  handlers.Response
-// @Failure      401    {object}  handlers.Response
-// @Failure      404    {object}  handlers.Response
-// @Router       /nodes/{id}/metrics [get]
-func (h *NodeHandler) Metrics(c *gin.Context) {
-	nodeID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	limit := 288 // 24h * 12 samples/hour (5min interval)
-	if raw := c.Query("limit"); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 2016 {
-			limit = v
-		}
-	}
-
-	// since=24h, 7d, etc.
-	since := 24 * time.Hour
-	if raw := c.Query("since"); raw != "" {
-		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
-			since = d
-		}
-	}
-
-	cutoff := time.Now().UTC().Add(-since)
-	var samples []model.NodeMetricSample
-	if err := h.db.Where("node_id = ? AND sampled_at >= ?", nodeID, cutoff).
-		Order("sampled_at asc").
-		Limit(limit).
-		Find(&samples).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	respondOK(c, gin.H{"items": samples})
 }
 
 // ListOwners godoc

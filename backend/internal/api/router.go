@@ -307,7 +307,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	taskRepo := gormrepo.NewTaskRepository(dep.DB)
 
 	nodeSvc := node.NewNodeService(nodeRepo)
-	nodeHandler := handlers.NewNodeHandler(dep.DB, dep.TaskManager, nodeSvc).WithSettingsService(dep.SettingsService).WithAlertDispatcher(dep.AlertDispatcher)
+	nodeHandler := handlers.NewNodeHandler(dep.DB, dep.TaskManager, nodeSvc).WithSettingsService(dep.SettingsService)
 	policySvc := policy.NewPolicyService(policyRepo, dep.TaskManager)
 	policyHandler := handlers.NewPolicyHandler(dep.DB, dep.TaskManager).WithPolicyService(policySvc)
 	taskSvc := task.NewTaskApiService(taskRepo, nodeRepo, policyRepo, dep.TaskManager)
@@ -616,11 +616,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/nodes/:id/test-connection", middleware.RBAC("nodes:test"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.TestConnection)
 	secured.POST("/nodes/:id/trust-host-key", middleware.RequireRole("admin"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.TrustHostKey)
 	secured.POST("/nodes/:id/doctor", middleware.RBAC("nodes:test"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.RunDoctor)
-	secured.GET("/nodes/:id/metrics", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Metrics)
-	nodeMetricsHandler := handlers.NewNodeMetricsHandler(dep.DB)
-	secured.GET("/nodes/:id/status", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeMetricsHandler.Status)
-	secured.GET("/nodes/:id/metric-series", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeMetricsHandler.Metrics)
-	secured.GET("/nodes/:id/disk-forecast", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeMetricsHandler.DiskForecast)
+	nodeSummaryHandler := handlers.NewNodeSummaryHandler(dep.DB)
+	secured.GET("/nodes/:id/summary", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), nodeSummaryHandler.Get)
 	secured.GET("/nodes/:id/files", middleware.RBAC("nodes:files"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.ListNodeFiles)
 	secured.GET("/nodes/:id/files/content", middleware.RBAC("nodes:files"), middleware.OwnershipNodeCheck(dep.DB), fileHandler.GetNodeFileContent)
 	secured.GET("/nodes/:id/docker-volumes", middleware.RBAC("nodes:read"), middleware.OwnershipNodeCheck(dep.DB), dockerHandler.ListVolumes)
@@ -628,32 +625,6 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/nodes/:id/owners", middleware.RBAC("nodes:owners"), nodeHandler.AddOwner)
 	secured.DELETE("/nodes/:id/owners/:user_id", middleware.RBAC("nodes:owners"), nodeHandler.RemoveOwner)
 	secured.POST("/nodes/:id/emergency-backup", middleware.RBAC("tasks:trigger"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.EmergencyBackup)
-
-	logCfgHandler := handlers.NewNodeLogConfigHandler(dep.DB)
-	secured.GET("/nodes/:id/log-config", middleware.RBAC("logs:read"), middleware.OwnershipNodeCheck(dep.DB), logCfgHandler.Get)
-	secured.PATCH("/nodes/:id/log-config", middleware.RBAC("logs:write"), middleware.OwnershipNodeCheck(dep.DB), logCfgHandler.Patch)
-
-	nodeLogsHandler := handlers.NewNodeLogsHandler(dep.DB, dep.SettingsService)
-	secured.GET("/node-logs", middleware.RBAC("logs:read"), nodeLogsHandler.Query)
-	secured.GET("/alerts/:id/logs", middleware.RBAC("alerts:read"), nodeLogsHandler.AlertLogs)
-	secured.GET("/settings/logs", middleware.RequireRole("admin"), nodeLogsHandler.GetSettings)
-	secured.PATCH("/settings/logs", middleware.RequireRole("admin"), nodeLogsHandler.PatchSettings)
-
-	dashboardHandler := handlers.NewDashboardHandler(dep.DB)
-	secured.GET("/dashboards", middleware.RBAC("dashboards:read"), dashboardHandler.List)
-	secured.POST("/dashboards", middleware.RBAC("dashboards:write"), dashboardHandler.Create)
-	secured.GET("/dashboards/:id", middleware.RBAC("dashboards:read"), dashboardHandler.Get)
-	secured.PATCH("/dashboards/:id", middleware.RBAC("dashboards:write"), dashboardHandler.Update)
-	secured.DELETE("/dashboards/:id", middleware.RBAC("dashboards:write"), dashboardHandler.Delete)
-
-	secured.POST("/dashboards/:id/panels", middleware.RBAC("dashboards:write"), dashboardHandler.AddPanel)
-	secured.PATCH("/dashboards/:id/panels/:pid", middleware.RBAC("dashboards:write"), dashboardHandler.UpdatePanel)
-	secured.DELETE("/dashboards/:id/panels/:pid", middleware.RBAC("dashboards:write"), dashboardHandler.DeletePanel)
-	secured.PUT("/dashboards/:id/panels/layout", middleware.RBAC("dashboards:write"), dashboardHandler.UpdateLayout)
-
-	panelQueryHandler := handlers.NewPanelQueryHandler(dep.DB)
-	secured.POST("/dashboards/panel-query", middleware.RBAC("dashboards:read"), panelQueryHandler.Query)
-	secured.GET("/dashboards/metrics", middleware.RBAC("dashboards:read"), panelQueryHandler.ListMetrics)
 
 	escalationHandler := handlers.NewEscalationHandler(dep.DB)
 	secured.GET("/escalation-policies", middleware.RBAC("escalation:read"), escalationHandler.List)
@@ -742,6 +713,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/policies/:id/drill-trigger", middleware.RBAC("tasks:trigger"), policyHandler.TriggerDrill)
 
 	secured.GET("/tasks", middleware.RBAC("tasks:read"), taskHandler.List)
+	taskStatisticsHandler := handlers.NewTaskStatisticsHandler(dep.DB)
+	secured.POST("/tasks/statistics/query", middleware.RBAC("tasks:read"), taskStatisticsHandler.Query)
 	secured.GET("/tasks/:id", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Get)
 	secured.GET("/tasks/:id/logs", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Logs)
 	secured.POST("/tasks", middleware.RBAC("tasks:write"), taskHandler.Create)
@@ -826,13 +799,11 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		secured.POST("/alert-deliveries/:id/retry", middleware.RequireRole("admin"), alertDeliveryHandler.Retry)
 	}
 
-	adminMetricsHandler := handlers.NewAdminMetricsHandler(dep.DB)
 	secured.GET("/version/check", middleware.RequireRole("admin"), versionHandler.Check)
 	secured.POST("/system/backup-db", middleware.RequireRole("admin"), systemHandler.BackupDB)
 	secured.GET("/system/backups", middleware.RequireRole("admin"), systemHandler.ListBackups)
 	secured.GET("/system/encryption-status", middleware.RequireRole("admin"), systemHandler.EncryptionStatus)
 	secured.POST("/system/verify-mount", middleware.RequireRole("admin"), storageGuideHandler.VerifyMount)
-	secured.GET("/admin/metrics/rollup-status", middleware.RequireRole("admin"), adminMetricsHandler.RollupStatus)
 
 	secured.POST("/nodes/:id/migrate", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Migrate)
 	secured.POST("/nodes/:id/migrate/preflight", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.MigratePreflight)

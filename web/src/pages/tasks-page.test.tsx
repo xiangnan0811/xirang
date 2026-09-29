@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
@@ -21,6 +21,7 @@ const { apiClientMock, authRef, withStepUpMock, useStepUpActionMock, oneShotStep
     apiClientMock: {
       requestTaskBatchTriggerCredentialGrant: vi.fn(),
       batchTriggerTasks: vi.fn(),
+      queryTaskStatistics: vi.fn(),
     },
     authRef: {
       current: {
@@ -325,8 +326,17 @@ describe("TasksPage", () => {
     navigateMock.mockReset();
     apiClientMock.requestTaskBatchTriggerCredentialGrant.mockReset();
     apiClientMock.batchTriggerTasks.mockReset();
+    apiClientMock.queryTaskStatistics.mockReset();
     apiClientMock.requestTaskBatchTriggerCredentialGrant.mockResolvedValue([{ id: 1, status: "active" }]);
     apiClientMock.batchTriggerTasks.mockResolvedValue({ successCount: 2, total: 2 });
+    apiClientMock.queryTaskStatistics.mockImplementation(async (_token: string, query: { metric: string }) => {
+      const value = query.metric === "task.success_rate" ? 0.75 : query.metric === "task.throughput" ? 20 : 1500;
+      return {
+        series: [{ name: "全部任务", points: [{ ts: "2026-04-21T10:00:00.000Z", value }] }],
+        stepSeconds: 900,
+        truncated: false,
+      };
+    });
     withStepUpMock.mockClear();
     withStepUpMock.mockImplementation((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
     useStepUpActionMock.mockClear();
@@ -1155,5 +1165,114 @@ describe("TasksPage", () => {
     // 显示错误 toast，不显示成功 toast
     expect(toast.error).toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining("已更新"));
+  });
+
+  it("loads historical run charts for all visible tasks without using the current page", async () => {
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    await waitFor(() => expect(apiClientMock.queryTaskStatistics).toHaveBeenCalledTimes(3));
+    const queries = apiClientMock.queryTaskStatistics.mock.calls.map((call) => call[1] as {
+      metric: string;
+      aggregation: string;
+      start: string;
+      end: string;
+      taskIds?: number[];
+    });
+    const byMetric = Object.fromEntries(queries.map((query) => [query.metric, query]));
+    expect(byMetric["task.success_rate"]?.aggregation).toBe("avg");
+    expect(byMetric["task.throughput"]?.aggregation).toBe("avg");
+    expect(byMetric["task.duration"]?.aggregation).toBe("p95");
+    for (const query of queries) {
+      expect(query.taskIds).toBeUndefined();
+      expect(Date.parse(query.end) - Date.parse(query.start)).toBe(24 * 60 * 60 * 1000);
+      expect(apiClientMock.queryTaskStatistics.mock.calls[0]?.[0]).toBe("test-token");
+    }
+    expect((await screen.findAllByText("75%")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("20 Mbps").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1.5 s").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "24 小时" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("changes the historical window and duration quantile without following list filters", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+    await waitFor(() => expect(apiClientMock.queryTaskStatistics).toHaveBeenCalledTimes(3));
+
+    await user.click(screen.getByRole("button", { name: "7 天" }));
+    await waitFor(() => expect(apiClientMock.queryTaskStatistics.mock.calls.length).toBeGreaterThanOrEqual(6));
+    const windowed = apiClientMock.queryTaskStatistics.mock.calls.slice(-3).map((call) => call[1] as {
+      start: string;
+      end: string;
+      taskIds?: number[];
+    });
+    expect(windowed.every((query) => Date.parse(query.end) - Date.parse(query.start) === 7 * 24 * 60 * 60 * 1000)).toBe(true);
+    expect(windowed.every((query) => query.taskIds === undefined)).toBe(true);
+
+    await user.selectOptions(screen.getByLabelText("运行时长分位"), "p99");
+    await waitFor(() => {
+      const duration = apiClientMock.queryTaskStatistics.mock.calls
+        .map((call) => call[1] as { metric: string; aggregation: string })
+        .filter((query) => query.metric === "task.duration");
+      expect(duration.at(-1)?.aggregation).toBe("p99");
+    });
+
+    await user.selectOptions(screen.getByLabelText("统计范围"), "specified");
+    expect(await screen.findByText("至少选择一个任务。未选择时不会改成查询全部可见任务。")).toBeInTheDocument();
+    const callsAfterScope = apiClientMock.queryTaskStatistics.mock.calls.length;
+    await user.selectOptions(screen.getByLabelText("任务状态筛选"), "failed");
+    expect(screen.queryByRole("button", { name: "查看任务 #102 执行历史" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "统计任务 手动同步" })).toBeInTheDocument();
+    expect(apiClientMock.queryTaskStatistics).toHaveBeenCalledTimes(callsAfterScope);
+
+    await user.click(screen.getByRole("checkbox", { name: "统计任务 手动同步" }));
+    await waitFor(() => {
+      const specified = apiClientMock.queryTaskStatistics.mock.calls.slice(callsAfterScope);
+      expect(specified.length).toBeGreaterThanOrEqual(3);
+      expect(specified.every((call) => {
+        const query = call[1] as { taskIds?: number[] };
+        return query.taskIds?.length === 1 && query.taskIds[0] === 102;
+      })).toBe(true);
+    });
+  });
+
+  it("shows an empty historical chart without fabricating zeroes", async () => {
+    apiClientMock.queryTaskStatistics.mockResolvedValue({
+      series: [{ name: "全部任务", points: [] }],
+      stepSeconds: 900,
+      truncated: false,
+    });
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(await screen.findAllByText("该窗口没有历史样本")).toHaveLength(3);
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
+    expect(screen.queryByText("0 Mbps")).not.toBeInTheDocument();
+  });
+
+  it("shows a historical statistics error and retries the query", async () => {
+    apiClientMock.queryTaskStatistics.mockRejectedValue(new Error("统计失败"));
+    const user = userEvent.setup();
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(await screen.findAllByText("统计失败")).toHaveLength(3);
+
+    apiClientMock.queryTaskStatistics.mockImplementation(async (_token: string, query: { metric: string }) => ({
+      series: [{ name: "全部任务", points: [{ ts: "2026-04-21T10:00:00.000Z", value: query.metric === "task.success_rate" ? 0.75 : 1 }] }],
+      stepSeconds: 900,
+      truncated: false,
+    }));
+    await user.click(screen.getByRole("button", { name: "重试成功率" }));
+    expect((await screen.findAllByText("75%")).length).toBeGreaterThan(0);
+  });
+
+  it("warns to narrow the window when a historical query is truncated", async () => {
+    apiClientMock.queryTaskStatistics.mockImplementation(async (_token: string, query: { metric: string }) => ({
+      series: [{ name: "全部任务", points: [{ ts: "2026-04-21T10:00:00.000Z", value: query.metric === "task.success_rate" ? 0.5 : 10 }] }],
+      stepSeconds: 3600,
+      truncated: query.metric === "task.throughput",
+    }));
+    const user = userEvent.setup();
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(await screen.findByRole("alert")).toHaveTextContent("缩小时间窗口");
+    const before = apiClientMock.queryTaskStatistics.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "刷新历史统计" }));
+    await waitFor(() => expect(apiClientMock.queryTaskStatistics.mock.calls.length).toBe(before + 3));
   });
 });

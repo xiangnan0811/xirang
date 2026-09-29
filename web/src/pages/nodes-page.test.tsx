@@ -115,7 +115,7 @@ vi.mock("@/components/node-editor-dialog", () => ({
             );
           }}
         >
-          保存并探测
+          保存并测试
         </button>
       </div>
     ) : null,
@@ -167,10 +167,6 @@ function createContext(overrides?: Record<string, unknown>) {
       status: "online" as const,
       lastSeenAt: "2026-02-24 12:00:00",
       lastBackupAt: "2026-02-24 11:50:00",
-      diskFreePercent: 60,
-      diskUsedGb: 40,
-      diskTotalGb: 100,
-      diskProbeAt: "2026-02-24 11:55:00",
       connectionLatencyMs: 12,
     },
     {
@@ -187,10 +183,6 @@ function createContext(overrides?: Record<string, unknown>) {
       status: "warning" as const,
       lastSeenAt: "2026-02-24 12:00:00",
       lastBackupAt: "2026-02-24 11:40:00",
-      diskFreePercent: 42,
-      diskUsedGb: 210,
-      diskTotalGb: 500,
-      diskProbeAt: "2026-02-24 11:56:00",
       connectionLatencyMs: 20,
     },
   ];
@@ -577,7 +569,7 @@ describe("NodesPage", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "新增节点" }));
-    await user.click(await screen.findByRole("button", { name: "保存并探测" }));
+    await user.click(await screen.findByRole("button", { name: "保存并测试" }));
 
     expect(await screen.findByRole("dialog", { name: /未知主机密钥 — node-new/ })).toBeInTheDocument();
     expect(screen.getByText(HOST_KEY_FINGERPRINT)).toBeInTheDocument();

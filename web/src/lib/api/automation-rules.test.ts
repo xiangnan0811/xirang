@@ -12,9 +12,9 @@ function createMockResponse(body: unknown) {
 
 const mappedRule = {
   id: 4,
-  name: "pause-offline",
-  description: "pause on offline",
-  eventType: "node_offline",
+  name: "pause-on-failure",
+  description: "pause on backup failure",
+  eventType: "backup_failed",
   eventFilter: { node_id: "1" },
   actionType: "pause_policy",
   actionConfig: { policy_id: "1" },
@@ -40,9 +40,9 @@ describe("automation rules api mapping", () => {
     fetchMock.mockResolvedValueOnce(createMockResponse([
       {
         id: 4,
-        name: "pause-offline",
-        description: "pause on offline",
-        event_type: "node_offline",
+        name: "pause-on-failure",
+        description: "pause on backup failure",
+        event_type: "backup_failed",
         event_filter: "{\"node_id\":\"1\"}",
         action_type: "pause_policy",
         action_config: "{\"policy_id\":\"1\"}",
@@ -58,8 +58,8 @@ describe("automation rules api mapping", () => {
   it("coerces numeric JSON values and drops malformed JSON without unsafe casts", async () => {
     fetchMock.mockResolvedValueOnce(createMockResponse({
       id: 4,
-      name: "pause-offline",
-      event_type: "node_offline",
+      name: "pause-on-failure",
+      event_type: "backup_failed",
       event_filter: "{\"node_id\":1}",
       action_type: "pause_policy",
       action_config: "{not-json",
@@ -69,8 +69,8 @@ describe("automation rules api mapping", () => {
     }));
 
     const rule = await api.create("token", {
-      name: "pause-offline",
-      eventType: "node_offline",
+      name: "pause-on-failure",
+      eventType: "backup_failed",
       eventFilter: { node_id: "1" },
       actionType: "pause_policy",
       actionConfig: { policy_id: "1" },
@@ -80,8 +80,8 @@ describe("automation rules api mapping", () => {
     expect(rule.eventFilter).toEqual({ node_id: "1" });
     expect(rule.actionConfig).toEqual({});
     expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
-      name: "pause-offline",
-      event_type: "node_offline",
+      name: "pause-on-failure",
+      event_type: "backup_failed",
       event_filter: "{\"node_id\":\"1\"}",
       action_type: "pause_policy",
       action_config: "{\"policy_id\":\"1\"}",
@@ -92,8 +92,8 @@ describe("automation rules api mapping", () => {
   it("JSON-stringifies records on update", async () => {
     fetchMock.mockResolvedValueOnce(createMockResponse({
       id: 4,
-      name: "pause-offline",
-      event_type: "node_offline",
+      name: "pause-on-failure",
+      event_type: "backup_failed",
       event_filter: { node_id: "2" },
       action_type: "pause_policy",
       action_config: { policy_id: "9" },
@@ -103,8 +103,8 @@ describe("automation rules api mapping", () => {
     }));
 
     const rule = await api.update("token", 4, {
-      name: "pause-offline",
-      eventType: "node_offline",
+      name: "pause-on-failure",
+      eventType: "backup_failed",
       eventFilter: { node_id: "2" },
       actionType: "pause_policy",
       actionConfig: { policy_id: "9" },
@@ -114,8 +114,8 @@ describe("automation rules api mapping", () => {
     expect(rule.eventFilter).toEqual({ node_id: "2" });
     expect(rule.actionConfig).toEqual({ policy_id: "9" });
     expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
-      name: "pause-offline",
-      event_type: "node_offline",
+      name: "pause-on-failure",
+      event_type: "backup_failed",
       event_filter: "{\"node_id\":\"2\"}",
       action_type: "pause_policy",
       action_config: "{\"policy_id\":\"9\"}",

@@ -8,7 +8,7 @@ package model
 // All type definitions have been moved to domain-grouped files:
 //
 //	user.go        — User, SSHKey, LoginFailure
-//	node.go        — Node, NodeOwner, NodeMetricSample, NodeMetricSampleHourly, NodeMetricSampleDaily, NodeLog, NodeLogCursor
+//	node.go        — Node, NodeOwner
 //	task.go        — Task, TaskRun, TaskLog, TaskTrafficSample
 //	task_occurrence.go — TaskCronOccurrence
 //	task_resource.go — TaskRunResourceIdentity and resource identity helpers
@@ -16,6 +16,6 @@ package model
 //	integration.go — Integration, AppCredential
 //	report.go      — ReportConfig, Report
 //	audit.go       — AuditLog, CredentialAuditEvent, CredentialAccessGrant
-//	monitor.go     — Dashboard, DashboardPanel, PanelFilters, ServiceMonitor, ServiceUptimeSample, AnomalyEvent, SLODefinition
+//	monitor.go     — ServiceMonitor, ServiceUptimeSample, AnomalyEvent, SLODefinition
 //	backup.go      — RestoreDrillEvidence, SnapshotDiffHistory, SnapshotFileIndex, AutomationRule, AutomationRuleLog
 //	system.go      — SystemSetting

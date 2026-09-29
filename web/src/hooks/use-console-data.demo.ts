@@ -6,6 +6,7 @@ import {
   parseTags
 } from "@/hooks/use-console-data.utils";
 import { formatTime } from "@/lib/api/core";
+import { preserveSSHPurposeScope, sshKeyIsBroadScope } from "@/lib/ssh-purpose-scope";
 import type {
   IntegrationChannel,
   NewIntegrationInput,
@@ -29,10 +30,10 @@ export function buildDemoSSHKey(input: NewSSHKeyInput): SSHKeyRecord {
     fingerprint: buildFingerprint(input.privateKey),
     disabled: input.disabled,
     expiresAt: input.expiresAt || undefined,
-    allowedPurposes: input.allowedPurposes,
+    allowedPurposes: preserveSSHPurposeScope(input.allowedPurposes),
     allowedNodeIds: input.allowedNodeIds,
     allowedNodeTags: input.allowedNodeTags,
-    broadScope: !input.allowedPurposes || (!input.allowedNodeIds && !input.allowedNodeTags),
+    broadScope: sshKeyIsBroadScope(input),
     createdAt: formatTime(new Date().toISOString())
   };
 }
@@ -50,13 +51,10 @@ export function buildDemoNode(input: NewNodeInput, nodes: NodeRecord[], keyId: s
     authType: input.authType,
     keyId,
     basePath: input.basePath || "/",
-    status: "warning",
+    status: "offline",
     tags: parseTags(input.tags),
-    lastSeenAt: "尚未探测",
+    lastSeenAt: "",
     lastBackupAt: "尚未执行",
-    diskFreePercent: 100,
-    diskUsedGb: 0,
-    diskTotalGb: 800
   };
 }
 
@@ -164,26 +162,18 @@ export function simulateDemoConnection(nodeID: number): {
         ...node,
         status: "offline",
         lastSeenAt: probeTime,
-        diskProbeAt: probeTime,
         connectionLatencyMs: undefined
       })
     };
   }
 
   return {
-    result: { ok: true, message: "SSH 握手成功，已更新磁盘探测信息。" },
-    nodeUpdate: (node) => {
-      const total = node.diskTotalGb || 800;
-      const used = Math.max(10, Math.min(total - 5, node.diskUsedGb + ((seed % 3) - 1) * 8));
-      return {
-        ...node,
-        status: used / total >= 0.9 ? "warning" : "online",
-        lastSeenAt: probeTime,
-        diskProbeAt: probeTime,
-        connectionLatencyMs: 18 + (seed * 11) % 120,
-        diskUsedGb: used,
-        diskFreePercent: Math.max(1, Math.round(((total - used) / total) * 100))
-      };
-    }
+    result: { ok: true, message: "SSH 握手成功，已记录最近一次手动连接测试。" },
+    nodeUpdate: (node) => ({
+      ...node,
+      status: "online",
+      lastSeenAt: probeTime,
+      connectionLatencyMs: 18 + (seed * 11) % 120,
+    })
   };
 }

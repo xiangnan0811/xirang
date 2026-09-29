@@ -153,12 +153,38 @@ describe("nodes api", () => {
     })).rejects.toThrow("invalid node update response");
   });
 
+  it("maps the latest manual connection fields and ignores retired disk and probe payload", () => {
+    const node = __test__.mapNode({
+      id: 3,
+      name: "edge-1",
+      host: "10.0.0.3",
+      status: "warning",
+      last_seen_at: "2026-09-01T00:00:00Z",
+      connection_latency_ms: 15,
+      disk_used_gb: 40,
+      disk_total_gb: 100,
+      last_probe_at: "2026-09-01T00:00:00Z",
+    } as never);
+
+    expect(node).toMatchObject({
+      id: 3,
+      status: "warning",
+      connectionLatencyMs: 15,
+    });
+    expect(node.lastSeenAt).not.toBe("");
+    expect(node).not.toHaveProperty("diskUsedGb");
+    expect(node).not.toHaveProperty("diskTotalGb");
+    expect(node).not.toHaveProperty("diskFreePercent");
+    expect(node).not.toHaveProperty("lastProbeAt");
+    expect(node).not.toHaveProperty("diskProbeAt");
+  });
+
   it("maps test-connection and emergency-backup snake_case results", async () => {
     fetchMock
       .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
         code: 0,
         message: "ok",
-        data: { ok: true, message: "alive", latency_ms: 12, disk_used_gb: 40, disk_total_gb: 100 },
+        data: { ok: true, message: "alive", latency_ms: 12, probe_at: "2026-09-01T00:00:00Z", disk_used_gb: 40, disk_total_gb: 100 },
       })))
       .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
         code: 0,
@@ -166,13 +192,17 @@ describe("nodes api", () => {
         data: { triggered: 2, task_ids: [11, 12], errors: [] },
       })));
 
-    await expect(api.testNodeConnection("token-node", 7)).resolves.toEqual({
+    const connection = await api.testNodeConnection("token-node", 7);
+    expect(connection).toMatchObject({
       ok: true,
       message: "alive",
       latencyMs: 12,
-      diskUsedGb: 40,
-      diskTotalGb: 100,
     });
+    expect(connection.testedAt).toMatch(/^\d{4}-\d{2}-\d{2} /);
+    expect(connection).not.toHaveProperty("probeAt");
+    expect(connection).not.toHaveProperty("lastProbeAt");
+    expect(connection).not.toHaveProperty("diskUsedGb");
+    expect(connection).not.toHaveProperty("diskTotalGb");
     await expect(api.emergencyBackup("token-node", 7)).resolves.toEqual({
       triggered: 2,
       taskIds: [11, 12],
@@ -262,5 +292,39 @@ describe("nodes api", () => {
     expect(init.method).toBe("POST");
     expect(init.headers).toMatchObject({ Authorization: "Bearer token-node" });
     expect(JSON.parse(String(init.body))).toEqual({ fingerprint_sha256: "SHA256:abc" });
+  });
+
+  it("getNodeSummary maps open_alerts and running_tasks and ignores extra fields", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: {
+        open_alerts: 2,
+        running_tasks: "3",
+        cpu_pct: 90,
+        disk_pct: 80,
+      },
+    })));
+
+    await expect(api.getNodeSummary("token-node", 42)).resolves.toEqual({
+      openAlerts: 2,
+      runningTasks: 3,
+    });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/nodes/42/summary");
+  });
+
+  it("getNodeSummary treats missing counts as zero", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: {},
+    })));
+
+    await expect(api.getNodeSummary("token-node", 7)).resolves.toEqual({
+      openAlerts: 0,
+      runningTasks: 0,
+    });
   });
 });

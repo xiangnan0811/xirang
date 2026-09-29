@@ -17,8 +17,8 @@ const item = {
 };
 
 /**
- * Staggers the entrance of its direct <Reveal> children. Used to give dashboard
- * sections a coordinated, premium reveal. Respects reduced-motion via MotionConfig.
+ * Staggers the entrance of its direct <Reveal> children.
+ * Respects reduced-motion via MotionConfig.
  */
 export function Stagger({ children, className }: { children: ReactNode; className?: string }) {
   return (

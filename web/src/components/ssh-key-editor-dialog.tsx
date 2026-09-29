@@ -13,6 +13,7 @@ import {
   type NewSSHKeyInput,
   type SSHKeyRecord,
 } from "@/types/domain";
+import { preserveSSHPurposeScope, retiredSSHPurposesIn } from "@/lib/ssh-purpose-scope";
 
 type SSHKeyDraft = NewSSHKeyInput & {
   id?: string;
@@ -96,11 +97,16 @@ export function SSHKeyEditorDialog({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await onSave(draft);
+      await onSave({
+        ...draft,
+        allowedPurposes: preserveSSHPurposeScope(draft.allowedPurposes),
+      });
     } finally {
       setSaving(false);
     }
   };
+
+  const historicalPurposes = retiredSSHPurposesIn(draft.allowedPurposes);
 
   return (
     <FormDialog
@@ -229,6 +235,11 @@ export function SSHKeyEditorDialog({
                 setDraft((prev) => ({ ...prev, allowedPurposes: event.target.value }))
               }
             />
+            {historicalPurposes.length > 0 ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("sshKeys.scopeHistoricalNote", { purposes: historicalPurposes.join(", ") })}
+              </p>
+            ) : null}
           </div>
           <div>
             <label htmlFor="ssh-key-edit-node-ids" className="mb-1 block text-sm font-medium">

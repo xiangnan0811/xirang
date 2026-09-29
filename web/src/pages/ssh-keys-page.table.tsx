@@ -198,6 +198,11 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
                         </Badge>
                       ))}
                     </div>
+                    {key.allowedPurposes ? (
+                      <p className="mt-1 max-w-56 truncate text-xs text-muted-foreground" title={key.allowedPurposes}>
+                        {key.allowedPurposes}
+                      </p>
+                    ) : null}
                   </td>
                   <td className="px-3 py-2.5">
                     <Badge tone={nodeCount > 0 ? "success" : "neutral"}>

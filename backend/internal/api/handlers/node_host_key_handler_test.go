@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"xirang/backend/internal/model"
 	nodePkg "xirang/backend/internal/node"
@@ -168,6 +169,61 @@ func TestNodeHostKeyUnknownThenTrustThenConnect(t *testing.T) {
 	}
 	if !strings.Contains(events[0].Metadata, `"stage":"host_key_trust"`) || !strings.Contains(events[0].Metadata, `"host_key_algorithm":"`+f.server.hostKey.Type()+`"`) || !strings.Contains(events[0].Metadata, `"host_key_fingerprint":"`+expectedFingerprint+`"`) {
 		t.Fatalf("trust audit metadata missing fields: %s", events[0].Metadata)
+	}
+}
+
+func TestNodeTestConnectionDoesNotRunDiskProbeOrPersistCapacity(t *testing.T) {
+	f := newHostKeyHandlerFixture(t)
+	expectedFingerprint := ssh.FingerprintSHA256(f.server.hostKey)
+	if code, trusted := f.trust(t, expectedFingerprint); code != http.StatusOK || !trusted.Data.Trusted {
+		t.Fatalf("trust status=%d response=%+v", code, trusted)
+	}
+
+	response := httptest.NewRecorder()
+	f.router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/test-connection", f.node.ID), nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("test-connection status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "disk_used_gb") || strings.Contains(response.Body.String(), "disk_total_gb") {
+		t.Fatalf("manual connection response must not expose capacity: %s", response.Body.String())
+	}
+
+	var envelope struct {
+		Data hostKeyTestConnectionData `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode test-connection: %v body=%s", err, response.Body.String())
+	}
+	if !envelope.Data.OK {
+		t.Fatalf("trusted SSH connection should succeed: %+v", envelope.Data)
+	}
+	select {
+	case command := <-f.server.commands:
+		t.Fatalf("manual TestConnection must not execute remote command %q", command)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	var persisted model.Node
+	if err := f.db.First(&persisted, f.node.ID).Error; err != nil {
+		t.Fatalf("reload node: %v", err)
+	}
+	if persisted.Status != "online" || persisted.ConnectionLatency <= 0 || persisted.LastSeenAt == nil {
+		t.Fatalf("manual test should update connection state: %+v", persisted)
+	}
+	var alertCount int64
+	if err := f.db.Model(&model.Alert{}).Where("node_id = ?", f.node.ID).Count(&alertCount).Error; err != nil {
+		t.Fatalf("count connection alerts: %v", err)
+	}
+	if alertCount != 0 {
+		t.Fatalf("manual TestConnection must not raise or resolve periodic alerts: %d", alertCount)
+	}
+
+	var audit model.CredentialAuditEvent
+	if err := f.db.Where("action = ?", "node.credential.test_connection").Order("id DESC").First(&audit).Error; err != nil {
+		t.Fatalf("load connection audit: %v", err)
+	}
+	if audit.Purpose != sshutil.PurposeNodeTest || !strings.Contains(audit.Metadata, `"latency_ms"`) || strings.Contains(audit.Metadata, "disk") {
+		t.Fatalf("manual test audit must be SSH-only: %+v", audit)
 	}
 }
 

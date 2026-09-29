@@ -30,10 +30,6 @@ function createNode(id: number, name: string): NodeRecord {
     tags: ["prod"],
     lastSeenAt: "2026-03-10 10:00:00",
     lastBackupAt: "2026-03-10 09:30:00",
-    diskFreePercent: 80,
-    diskUsedGb: 20,
-    diskTotalGb: 100,
-    diskProbeAt: "2026-03-10 10:00:00",
     connectionLatencyMs: 12,
     backupDir: name,
   };

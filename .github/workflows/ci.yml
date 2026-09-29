@@ -69,7 +69,7 @@ jobs:
         run: go test -coverprofile=coverage.out ./...
 
       - name: Race concurrency-sensitive backend packages
-        run: go test -race ./internal/nodelogs ./internal/sshutil ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/task/executor ./internal/task/verifier ./internal/ws ./internal/auth ./internal/bootstrap ./internal/uptime ./internal/policy ./internal/automation ./internal/alerting ./internal/escalation -count=1
+        run: go test -race ./internal/sshutil ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/task/executor ./internal/task/verifier ./internal/ws ./internal/auth ./internal/bootstrap ./internal/uptime ./internal/policy ./internal/automation ./internal/alerting ./internal/escalation -count=1
 
       - name: Backup-asset coverage floor
         run: bash ../scripts/check-backupasset-coverage.sh
@@ -199,9 +199,9 @@ jobs:
       - name: Run PostgreSQL durable automation contracts
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable automation contracts' ./internal/automation '^Test.*Postgres$'
       - name: Run PostgreSQL alerting durable delivery
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alerting durable delivery' ./internal/alerting '^Test(Alerting(DurableDeliveryPostgres|DeliveryConcurrencyPostgres|DeliveryClaimLoadFencePostgres|DeliveryLegacyBlankAutoManualConcurrencyPostgres)|RetryTickSkipsUnknownPagePostgres)$'
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alerting durable delivery' ./internal/alerting '^Test(Alerting(DurableDeliveryPostgres|DeliveryConcurrencyPostgres|DeliveryClaimLoadFencePostgres|DeliveryLegacyBlankAutoManualConcurrencyPostgres)|RetryTickSkipsUnknownPagePostgres|MigrationRetiredDeliveryFencePostgres)$'
       - name: Run PostgreSQL escalation delivery contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL escalation delivery contract' ./internal/escalation '^TestEngineEscalationDeliveryConcurrencyPostgres$'
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL escalation delivery contract' ./internal/escalation '^Test(EngineEscalationDeliveryConcurrencyPostgres|MigrationEscalationDeliveryFencePostgres)$'
 
       - name: Run PostgreSQL alert delivery migration contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alert delivery migration contract' ./internal/database '^TestAlertDeliveryMigration.*Postgres$'
@@ -271,6 +271,10 @@ jobs:
 
       - name: Run backup-asset Playwright matrix
         run: env -u NODE_ENV npm run e2e
+      - name: Prepare real-backend smoke build cache
+        working-directory: backend
+        run: go build -o /dev/null ./cmd/server
+
       - name: Run real-backend Playwright smoke
         run: env -u NODE_ENV npx playwright test e2e/real-backend-smoke.spec.ts --config=playwright.real-backend.config.ts --project=chromium
 

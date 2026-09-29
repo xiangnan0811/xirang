@@ -134,7 +134,7 @@ func TestAutomationRuleRoutesRBACAdminAuthorized(t *testing.T) {
 				id := seedAutomationRuleForRBACTest(t, fx.db)
 				return fmt.Sprintf("/api/v1/automation-rules/%d", id)
 			},
-			body: `{"name":"FAKE_AUTOMATION_RBAC_UPDATED_FOR_TEST_ONLY","event_type":"node_offline","event_filter":"{\"node_id\":\"1\"}","action_type":"pause_policy","action_config":"{\"policy_id\":\"1\"}","enabled":false}`,
+			body: `{"name":"FAKE_AUTOMATION_RBAC_UPDATED_FOR_TEST_ONLY","event_type":"backup_failed","event_filter":"{\"node_id\":\"1\"}","action_type":"pause_policy","action_config":"{\"policy_id\":\"1\"}","enabled":false}`,
 			want: http.StatusOK,
 		},
 		{
@@ -194,7 +194,7 @@ func TestAutomationRuleRoutesRBACNonAdminForbidden(t *testing.T) {
 				id := seedAutomationRuleForRBACTest(t, fx.db)
 				return fmt.Sprintf("/api/v1/automation-rules/%d", id)
 			},
-			body: `{"name":"FAKE_AUTOMATION_RBAC_FORBIDDEN_UPDATE_FOR_TEST_ONLY","event_type":"node_offline","action_type":"pause_policy","enabled":false}`,
+			body: `{"name":"FAKE_AUTOMATION_RBAC_FORBIDDEN_UPDATE_FOR_TEST_ONLY","event_type":"backup_failed","action_type":"pause_policy","enabled":false}`,
 		},
 		{
 			name:   "delete rule",

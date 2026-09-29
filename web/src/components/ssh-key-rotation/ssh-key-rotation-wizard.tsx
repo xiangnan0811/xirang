@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { KeyRound } from "lucide-react";
 import {
@@ -68,11 +68,10 @@ function SSHKeyRotationSession({
     (key) => (keyUsageMap.get(key.id)?.length ?? 0) > 0,
   );
 
-  const affectedNodes = selectedKey
-    ? keyUsageMap.get(selectedKey.id) ?? []
-    : [];
-  const onlineNodes = affectedNodes.filter((n) => n.status === "online");
-  const offlineNodes = affectedNodes.filter((n) => n.status !== "online");
+  const affectedNodes = useMemo(
+    () => selectedKey ? keyUsageMap.get(selectedKey.id) ?? [] : [],
+    [keyUsageMap, selectedKey],
+  );
 
   const executeRotation = useCallback(async () => {
     if (!selectedKey) return;
@@ -101,25 +100,18 @@ function SSHKeyRotationSession({
 
       const verifyResults: NodeVerifyResult[] = [];
 
-      for (const node of offlineNodes) {
-        verifyResults.push({
-          nodeId: `node-${node.id}`,
-          name: node.name,
-          status: "skipped",
-        });
-      }
-
-      if (onlineNodes.length > 0) {
-        const nodeIds = onlineNodes.map((n) => `node-${n.id}`);
+      if (affectedNodes.length > 0) {
+        const nodeIds = affectedNodes.map((node) => `node-${node.id}`);
         try {
           const testResults = await apiClient.testConnection(
             token,
             selectedKey.id,
             nodeIds,
           );
+          const returned = new Set(testResults.map((result) => result.nodeId));
 
           for (const tr of testResults) {
-            const node = onlineNodes.find((n) => `node-${n.id}` === tr.nodeId);
+            const node = affectedNodes.find((item) => `node-${item.id}` === tr.nodeId);
             verifyResults.push({
               nodeId: tr.nodeId,
               name: node?.name ?? tr.name,
@@ -127,8 +119,19 @@ function SSHKeyRotationSession({
               error: tr.error,
             });
           }
+          for (const node of affectedNodes) {
+            const nodeId = `node-${node.id}`;
+            if (!returned.has(nodeId)) {
+              verifyResults.push({
+                nodeId,
+                name: node.name,
+                status: "failed",
+                error: t("sshKeys.connectionFailed"),
+              });
+            }
+          }
         } catch {
-          for (const node of onlineNodes) {
+          for (const node of affectedNodes) {
             verifyResults.push({
               nodeId: `node-${node.id}`,
               name: node.name,
@@ -151,8 +154,7 @@ function SSHKeyRotationSession({
     newKeyType,
     newPrivateKey,
     token,
-    onlineNodes,
-    offlineNodes,
+    affectedNodes,
     t,
   ]);
 

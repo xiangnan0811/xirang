@@ -48,7 +48,6 @@ Radix Portal 位于 `document.body` 时扫描 body，不能只扫描 render cont
 
 ## 已知限制与回退
 
-- 仪表盘拖拽有独立键盘回退：`pages/dashboards/panel-card.tsx` 在编辑模式显示“上移/下移”按钮。保留并测试它们；不能把鼠标拖拽当作完整键盘支持。
 - `components/web-terminal.tsx` 当前为终端外层提供名称，但初始化未启用 `screenReaderMode`。终端缓冲区读屏可用性尚无本合同认可的验收证据；不能因使用 xterm/canvas 就声称天然豁免 WCAG。
 - jsdom 不检查对比度；应以真实浏览器检查补充。新增豁免必须说明具体限制、影响和回退，不能通过删要求掩盖实现缺口。
 - 当前 smoke 不构成全站 E2E、移动触控或读屏兼容性证明；触及这些行为时按受影响场景补充实际验证。

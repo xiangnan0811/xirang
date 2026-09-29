@@ -20,8 +20,8 @@ doc_freshness_check() {
     '^docs/spec/domains/credentials-access\.md$' \
     '凭据模型已修改，请同步凭据与访问领域合同'
   doc_rule '^backend/internal/model/node\.go$' \
-    '^docs/spec/domains/(credentials-access|node-log-collection|alerting-health)\.md$' \
-    'Node 模型已修改，请同步凭据、日志或健康领域中对应的合同'
+    '^docs/spec/domains/(credentials-access|alerting-health)\.md$' \
+    'Node 模型已修改，请同步凭据或健康领域中对应的合同'
   doc_rule '^backend/internal/model/(task|task_occurrence|task_resource|task_terminal_effect|backup_completion)\.go$' \
     '^docs/spec/domains/task-execution-recovery\.md$' \
     '任务执行模型已修改，请同步任务执行与恢复领域合同'

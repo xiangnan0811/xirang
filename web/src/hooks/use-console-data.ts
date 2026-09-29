@@ -315,7 +315,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     { enabled: Boolean(token), immediate: false }
   );
 
-  const overview = useMemo(() => deriveOverview(nodes, policies, tasks, overviewSummary), [nodes, overviewSummary, policies, tasks]);
+  const overview = useMemo(() => deriveOverview(policies, overviewSummary), [overviewSummary, policies]);
 
   const fetchOverviewTraffic = useCallback(async (window: OverviewTrafficWindow, options?: { signal?: AbortSignal }): Promise<OverviewTrafficSeries> => {
     if (!token) {

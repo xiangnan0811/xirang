@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -21,7 +20,6 @@ import {
 } from "@/components/ui/data-surface";
 import { PageHero } from "@/components/ui/page-hero";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast-sonner";
 import { getErrorMessage } from "@/lib/utils";
 import type { LogEvent } from "@/types/domain";
@@ -39,13 +37,8 @@ import { LogsFullscreenDialog } from "../logs-page.fullscreen-dialog";
 import { LogsFilterBar } from "./logs-filter-bar";
 import { LogsViewer } from "./logs-viewer";
 import { LogsHistory } from "./logs-history";
-import { NodeLogsPanel } from "./logs-page.nodes";
-import { AlertLogsPanel } from "./logs-page.alert";
 
 const RSYNC_PROGRESS_RE = /^\s*[\d,]+\s+(\d+)%\s+[\d.]+[KMGT]?i?B\/s/i;
-
-type LogTab = "task" | "node" | "alert";
-const LOG_TABS: LogTab[] = ["task", "node", "alert"];
 
 export function LogsPage() {
   const { token } = useAuth();
@@ -64,43 +57,6 @@ function LogsPageSession() {
   }, [refreshNodes, refreshTasks]);
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const tabRefs = useRef<Partial<Record<LogTab, HTMLButtonElement | null>>>({});
-
-  const rawTab = searchParams.get("tab") as LogTab | null;
-  const activeTab = rawTab && LOG_TABS.includes(rawTab) ? rawTab : "task";
-
-  const setTab = useCallback((tab: LogTab) => {
-    const next = new URLSearchParams(searchParams);
-    next.set("tab", tab);
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
-
-  const handleTabKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      const currentIndex = LOG_TABS.indexOf(activeTab);
-      let nextIndex: number | null = null;
-
-      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-        nextIndex = (currentIndex + 1) % LOG_TABS.length;
-      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-        nextIndex = (currentIndex - 1 + LOG_TABS.length) % LOG_TABS.length;
-      } else if (event.key === "Home") {
-        nextIndex = 0;
-      } else if (event.key === "End") {
-        nextIndex = LOG_TABS.length - 1;
-      }
-
-      if (nextIndex === null) {
-        return;
-      }
-
-      event.preventDefault();
-      const nextTab = LOG_TABS[nextIndex];
-      setTab(nextTab);
-      tabRefs.current[nextTab]?.focus();
-    },
-    [activeTab, setTab],
-  );
 
   const initialTask = searchParams.get("task") ?? "all";
   const initialNode = searchParams.get("node") ?? "all";
@@ -475,36 +431,6 @@ function LogsPageSession() {
     }
   };
 
-  const tabList = (
-    <div
-      className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-border bg-background/70 p-1"
-      role="tablist"
-      aria-label={t("logs.tabListLabel")}
-      tabIndex={-1}
-      onKeyDown={handleTabKeyDown}
-    >
-      {LOG_TABS.map((tab) => (
-        <Button
-          key={tab}
-          ref={(node) => {
-            tabRefs.current[tab] = node;
-          }}
-          type="button"
-          id={`logs-tab-${tab}`}
-          role="tab"
-          aria-controls={`logs-panel-${tab}`}
-          aria-selected={activeTab === tab}
-          tabIndex={activeTab === tab ? 0 : -1}
-          variant={activeTab === tab ? "default" : "ghost"}
-          size="sm"
-          onClick={() => setTab(tab)}
-        >
-          {t(`nodeLogs.tab.${tab}`)}
-        </Button>
-      ))}
-    </div>
-  );
-
   return (
     <div className="animate-fade-in space-y-5">
       <PageHero
@@ -523,100 +449,71 @@ function LogsPageSession() {
             </Badge>
           </>
         }
-        actions={tabList}
       />
 
-      {activeTab === "task" && (
-        <section
-          id="logs-panel-task"
-          role="tabpanel"
-          aria-labelledby="logs-tab-task"
-        >
-          <DataSurface>
-            <DataSurfaceHeader
-              title={t("logs.taskSurfaceTitle")}
-              description={t("logs.taskSurfaceDesc")}
-            />
-            <DataSurfaceToolbar className="space-y-4">
-              <LogsFilterBar
-                nodes={nodes}
-                tasks={tasks}
-                selectedNode={selectedNode}
-                selectedTask={selectedTask}
-                keyword={keyword}
-                connected={connected}
-                connectionWarning={connectionWarning}
-                progressValue={progressValue}
-                normalizedProgress={normalizedProgress}
-                showProgress={focusedTask !== null || runningTasks.length > 0}
-                filteredCount={filteredLogs.length}
-                totalCount={mergedLogs.length}
-                errorCode={focusedTask?.errorCode}
-                onNodeChange={(value) => {
-                  setSelectedNode(value);
-                  syncSearchParams({ node: value });
-                }}
-                onTaskChange={(value) => {
-                  setSelectedTask(value);
-                  syncSearchParams({ task: value });
-                }}
-                onKeywordChange={(value) => {
-                  setKeyword(value);
-                  syncSearchParams({ q: value });
-                }}
-                onReset={resetFilters}
-                onExport={exportAsText}
-                onFullscreen={() => setFullScreen(true)}
-              />
-            </DataSurfaceToolbar>
-
-            <DataSurfaceContent className="space-y-3">
-              <div className="space-y-3">
-                <LogsViewer
-                  filteredLogs={filteredLogs}
-                  historyLoading={historyLoading}
-                  onReset={resetFilters}
-                />
-
-                {focusedTaskNumber ? (
-                  <LogsHistory
-                    historyCount={historyLogs.length}
-                    historyCursor={historyCursor}
-                    historyPaging={historyPaging}
-                    onLoadMore={() => void loadMoreHistory()}
-                  />
-                ) : null}
-              </div>
-            </DataSurfaceContent>
-          </DataSurface>
-
-          <LogsFullscreenDialog
-            open={fullScreen}
-            onOpenChange={setFullScreen}
-            filteredLogs={filteredLogs}
+      <DataSurface>
+        <DataSurfaceHeader
+          title={t("logs.taskSurfaceTitle")}
+          description={t("logs.taskSurfaceDesc")}
+        />
+        <DataSurfaceToolbar className="space-y-4">
+          <LogsFilterBar
+            nodes={nodes}
+            tasks={tasks}
+            selectedNode={selectedNode}
+            selectedTask={selectedTask}
+            keyword={keyword}
+            connected={connected}
+            connectionWarning={connectionWarning}
+            progressValue={progressValue}
+            normalizedProgress={normalizedProgress}
+            showProgress={focusedTask !== null || runningTasks.length > 0}
+            filteredCount={filteredLogs.length}
+            totalCount={mergedLogs.length}
+            errorCode={focusedTask?.errorCode}
+            onNodeChange={(value) => {
+              setSelectedNode(value);
+              syncSearchParams({ node: value });
+            }}
+            onTaskChange={(value) => {
+              setSelectedTask(value);
+              syncSearchParams({ task: value });
+            }}
+            onKeywordChange={(value) => {
+              setKeyword(value);
+              syncSearchParams({ q: value });
+            }}
+            onReset={resetFilters}
+            onExport={exportAsText}
+            onFullscreen={() => setFullScreen(true)}
           />
-        </section>
-      )}
+        </DataSurfaceToolbar>
 
-      {activeTab === "node" && (
-        <section
-          id="logs-panel-node"
-          role="tabpanel"
-          aria-labelledby="logs-tab-node"
-        >
-          <NodeLogsPanel />
-        </section>
-      )}
+        <DataSurfaceContent className="space-y-3">
+          <div className="space-y-3">
+            <LogsViewer
+              filteredLogs={filteredLogs}
+              historyLoading={historyLoading}
+              onReset={resetFilters}
+            />
 
-      {activeTab === "alert" && (
-        <section
-          id="logs-panel-alert"
-          role="tabpanel"
-          aria-labelledby="logs-tab-alert"
-        >
-          <AlertLogsPanel />
-        </section>
-      )}
+            {focusedTaskNumber ? (
+              <LogsHistory
+                historyCount={historyLogs.length}
+                historyCursor={historyCursor}
+                historyPaging={historyPaging}
+                onLoadMore={() => void loadMoreHistory()}
+              />
+            ) : null}
+          </div>
+        </DataSurfaceContent>
+      </DataSurface>
+
+      <LogsFullscreenDialog
+        open={fullScreen}
+        onOpenChange={setFullScreen}
+        filteredLogs={filteredLogs}
+      />
     </div>
   );
 }

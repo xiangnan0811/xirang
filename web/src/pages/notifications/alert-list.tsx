@@ -1,5 +1,4 @@
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { alertStatusMeta } from "@/pages/notifications-page.utils";
 import { Badge } from "@/components/ui/badge";
@@ -9,8 +8,6 @@ import { getSeverityMeta } from "@/lib/status";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import { AlertBulkActions } from "./alert-bulk-actions";
 import { AlertEscalationTimeline, AnomalyAlertContext } from "./alert-detail";
-import { buildAlertJumpHref } from "@/features/nodes-detail/alert-jump";
-
 type SortField = "triggered_at" | "severity" | "status" | "node_name";
 
 export type AlertListProps = {
@@ -74,7 +71,6 @@ export function AlertList({
   onRetryAllFailed,
 }: AlertListProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
 
   const selectedSet = new Set(selectedAlertIds);
   const visibleUnresolvedAlerts = alerts.filter((alert) => alert.status !== "resolved");
@@ -257,28 +253,7 @@ export function AlertList({
                   )}
                   <span>{alert.policyName}</span>
                   <span>{alert.triggeredAt}</span>
-                  {alert.nodeId ? (
-                    <Link
-                      to={buildAlertJumpHref(alert)}
-                      data-testid={`alert-jump-${alert.id}`}
-                      className="text-primary hover:underline"
-                    >
-                      {t("notifications.viewRelatedMetrics", { defaultValue: "查看关联指标 →" })}
-                    </Link>
-                  ) : null}
                 </div>
-                {alert.nodeId !== 0 && (
-                  <div className="mt-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => navigate(`/app/logs?tab=alert&alert_id=${alert.id}`)}
-                      aria-label={t("nodeLogs.alertJumpButton")}
-                    >
-                      {t("nodeLogs.alertJumpButton")}
-                    </Button>
-                  </div>
-                )}
               </div>
               <div className="shrink-0">
                 <AlertBulkActions

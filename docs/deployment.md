@@ -260,6 +260,8 @@ DB_DSN=postgresql://user:pass@host:5432/xirang?sslmode=require
 ### 升级到稳定版
 
 1. 阅读目标版本的 GitHub Release 和 `CHANGELOG.md`，并确认该版本的 `Publish Docker Images` 工作流已成功、官方 Docker Hub 稳定标签已发布。仅有 GitHub Release 不代表镜像可部署；若发行说明标记镜像发布受阻，应继续使用此前已验证版本。
+
+   > 若目标版本包含备份职责收敛迁移，不能直接执行下面的 `pull`/`up -d`；必须先完成[备份职责收敛升级](#备份职责收敛升级)的 STOP、保全、旧版隔离恢复演练、迁移和新 worker 启动顺序。
 2. 备份数据库、`.env` 及匹配的加密密钥，验证数据库产物和同名 `.sha256` 文件。容器已停止不代表没有数据，也不能跳过升级前备份。使用仓库手动部署工作流时，按[维护者发布手册](maintainers/release.md)准备当前部署目录与备份门禁。
 3. 修改 `.env`：
 
@@ -281,9 +283,27 @@ curl -fsS http://127.0.0.1:10761/healthz
 docker compose logs --tail=200 xirang
 ```
 
+<a id="备份职责收敛升级"></a>
+### 备份职责收敛升级（不可逆）
+
+这是一次不可逆的数据退役，不是普通的镜像替换。升级前必须先安排维护窗口；任何前置条件无法确认时都应 **STOP**，不要让迁移“先跑起来再观察”。
+
+1. **STOP 并排空旧写入者。** 先暂停调度和新的任务、备份、恢复、快照异常处理、保留清理、告警投递及升级动作，等待正在运行的工作收敛。随后停止并确认已经退出所有旧版 Core、scheduler、executor、collector、notification worker 以及独立部署在 Compose 之外的同类进程。必须确认没有旧进程仍会写数据库、备份资产元数据、任务运行、告警、投递或审计；仅停止 HTTP 入口、关闭 SSH 或等待租约过期都不算排空，也不能把容器“已停止”当成远端写入已结束。
+2. **制作一致的升级前保全副本。** 在同一维护窗口保存经校验的数据库备份、备份资产/Provider 所需的独立保全副本、旧版二进制或镜像标识及完整旧部署配置。密钥必须与这份数据库一致：至少保存 `DATA_ENCRYPTION_KEY`；若部署设置了 `DATA_ENCRYPTION_LEGACY_KEY` 或其他历史 key-ring/decryption key，也必须原样保存全部适用的旧密钥。不要在这一步轮换密钥、用新密钥覆盖旧密钥，或只备份 `.env` 而漏掉外部 secret store。备份产物和 `.sha256` 均须非空并通过校验。
+3. **用旧版匹配二进制做隔离的实际数据库恢复演练。** 只能在临时、与生产隔离且可销毁的数据库、存储和网络环境恢复副本；使用与该副本 schema/写入合同匹配的旧版 Core/worker 二进制和同一组 `DATA_ENCRYPTION_KEY`/适用历史密钥启动，实际登录并读取任务、审计和备份资产，再用匹配的旧版数据库/备份工具把选定副本恢复到临时目标并核对恢复结果。只执行 `PRAGMA integrity_check`、`pg_restore --list` 或检查文件存在不算恢复演练。演练应验证敏感字段可解密、任务/运行历史和审计可读；演练副本绝不能连接生产数据库、Provider 写入端或通知渠道。
+4. **新版本先迁移，后启动新 worker。** 旧进程确认全部退出且恢复演练通过后，才部署新匹配二进制。先由新版本执行成对迁移并确认 `schema_migrations` 为 clean，再启动新的 Core、scheduler、executor、collector、notification worker；不得把“新 Core 正在迁移”与旧 worker 并行，也不得在迁移完成前启动新 worker。旧版和新版不得混写同一数据库、同一投递状态或同一备份资产控制面。
+5. **核对保留和围栏事实。** 迁移后检查备份资产、任务/TaskRun 历史、任务日志、审计、告警行、升级历史和已发送投递事实仍在；检查退役告警已 resolved/不可重试，未发送投递为 `unknown` 且原因 `feature_retired`、无 lease/next-retry，不能被自动或手动 claim。旧配置导入若包含退役设置键必须整份正常拒绝，不能静默丢弃。只有这些核对完成后才解除维护窗口。
+
+#### SQLite 与 PostgreSQL 恢复边界
+
+- **SQLite：** 数据库恢复必须离线执行。停止整个 Compose 栈以及任何独立旧 worker，确认没有运行中的 Xirang 进程后，使用 `XIRANG_RESTORE_OFFLINE=1` 调用 `scripts/restore-db.sh`；保留并校验升级前的数据库副本，按脚本处理 `-wal`/`-shm`，再运行 `PRAGMA integrity_check`。不要覆盖仍被进程打开的数据库文件，也不要只替换主库而留下旧 sidecar。
+- **PostgreSQL：** 恢复和迁移前必须由 DBA/运维人员手动停止并排空所有 Core、scheduler、executor、collector、notification worker 及其连接；核对数据库活动会话和写入者均已退出后，才使用匹配的 `pg_restore`/SQL 恢复。仅执行 `docker compose stop` 或停止一个 HTTP 容器不足以满足 PostgreSQL 的手动 stop/drain 要求；恢复、迁移期间不得让旧版或新版应用连接同一目标库。
+
+若隔离恢复演练、备份校验、排空确认或迁移后的保留/围栏核对任一失败，**STOP**：不要重试到生产库，不要手工修 `schema_migrations`，恢复升级前数据库并使用匹配旧版二进制和原密钥处理。该迁移的 down SQL 明确失败，不能作为回滚路径。
+
 ### 跨数据合同升级
 
-涉及恢复捕获、投递认领、定时意图或备份完成事实的升级，须先备份数据库、加密密钥和备份数据，暂停新任务准入并排空、停止所有旧 Core，再让新 Core 执行迁移。不要混用不理解当前数据合同的旧进程写同一数据库。
+涉及恢复捕获、投递认领、定时意图或备份完成事实的升级，须先按[备份职责收敛升级](#备份职责收敛升级)停止并排空全部旧 Core、scheduler、executor、collector、notification worker，备份数据库、加密密钥和备份数据，完成隔离恢复演练，再让新 Core 执行迁移。不要混用不理解当前数据合同的旧进程写同一数据库。
 
 - 历史 Rsync 成功记录不会自动成为可信捕获证据。**先隔离保全唯一剩余备份**，再决定是否重新备份；不要为了满足恢复准入而覆盖最后一份数据。详见[旧版 Rsync 恢复准入](admin/backup-recovery.md#旧版-rsync-恢复准入)。
 - 告警投递意图会在重启后恢复，已发送但回执未提交的外部结果仍可能重复投递；历史未知投递决策不会被盲目重发。升级后检查通知状态与接收通道，不要把未知状态视为已发送。
@@ -295,16 +315,16 @@ docker compose logs --tail=200 xirang
 
 具体版本变化查阅 GitHub Release 与 CHANGELOG；当前迁移位置和受检查版本号见[后端入口](../backend/README.md)，配对迁移与降级要求见[数据库合同](spec/backend/database-guidelines.md)。
 
-### 回滚到旧版本
+### 回滚与灾难恢复
 
-回滚镜像版本：
+本次备份职责收敛迁移执行后不提供日常版本回滚：down SQL 明确失败，迁移驱动写入旧版本号的动作受 `schema_migrations` guard 拦截。不得手工修改版本号或 dirty 标记、删除 guard、直接执行 down、删数据来“凑”旧 schema，或让旧二进制绕过保护器继续写新库。
 
-```bash
-IMAGE_TAG=vX.Y.Z docker compose pull
-IMAGE_TAG=vX.Y.Z docker compose up -d
-```
+发生不可接受的迁移结果或需要回到旧版时，走显式灾难恢复，而不是替换镜像：
 
-如果新版本已经执行数据库迁移，回滚前请确认旧版本是否兼容当前 schema。无法确认时，优先恢复升级前数据库备份。
+1. **STOP** 新版 Core、scheduler、executor、collector、notification worker，并等待所有新写入和投递 lease 收敛；按 SQLite 离线或 PostgreSQL 手动 stop/drain 要求确认没有连接和写入者。
+2. 从升级前已验证的数据库备份恢复**整个升级前数据库**，不要用迁移后的库拼接或只恢复某几张表；同时恢复与它匹配的旧版二进制/镜像、完整旧配置、`DATA_ENCRYPTION_KEY` 及所有适用的 `DATA_ENCRYPTION_LEGACY_KEY`/历史解密密钥。
+3. 仅启动匹配旧版的 Core 和旧 worker，先核对 schema、任务/审计/投递状态及备份资产控制面，再恢复对外服务。新版产生的控制面写入不能假定存在于旧库；需要保留的升级后资产和外部备份必须另行保全，不得把 Provider 数据清理或数据库降级当作资产恢复。
+4. 记录灾难恢复审计和丢失窗口；完成新的备份与恢复验证后，才能重新规划前向升级。显式灾难恢复是唯一解除不可逆退役影响的路径，不能作为日常发布回滚或 `schema_migrations` bypass。
 
 ## 数据目录与备份
 
@@ -359,16 +379,20 @@ docker compose start
 until curl -fsS http://127.0.0.1:10761/readyz >/dev/null; do sleep 1; done
 curl -fsS http://127.0.0.1:10761/healthz
 ```
+恢复后只启动与该备份 schema 匹配的二进制和原配置/密钥；若这是职责收敛迁移的灾难恢复，必须启动升级前旧版而不是当前新版。上面的 `docker compose start` 仅适用于镜像、schema 与备份匹配且已完成隔离核对的普通恢复。
 
-PostgreSQL：
+PostgreSQL 备份可使用在线 `pg_dump`，但升级前仍必须先停止并排空会写该库的旧 worker；恢复不是在线操作。先由 DBA/运维手动停止并 drain 全部 Core、scheduler、executor、collector、notification worker，核对 `pg_stat_activity` 等活动会话已无旧/新应用写入，再执行恢复；`docker compose stop` 不能替代 PostgreSQL 的连接排空：
 
 ```bash
 DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
   bash scripts/backup-db.sh ./backups
 
+# 在人工 stop/drain、确认无应用连接后执行；恢复期间不得启动任何旧/新版 worker
 DB_TYPE=postgres DB_DSN='postgresql://user:pass@host:5432/xirang' \
   bash scripts/restore-db.sh ./backups/xirang-postgres-20260301-020000.dump
 ```
+
+恢复完成后仍须使用与备份匹配的二进制和密钥启动，并在隔离环境完成实际恢复核对；不得把 PG 恢复命令当作允许旧/新 writer 并行的信号。
 
 ## 健康检查与日志
 

@@ -250,7 +250,7 @@ log "PASS: silence smoke"
 # === P5d-1: SLO smoke test ===
 log "=== P5d-1: SLO smoke test ==="
 
-api_call POST "/slos" '{"name":"smoke-slo","metric_type":"availability","match_tags":[],"threshold":0.99,"window_days":28,"enabled":true}'
+api_call POST "/slos" '{"name":"smoke-slo","metric_type":"success_rate","match_tags":[],"threshold":0.99,"window_days":28,"enabled":true}'
 assert_status 201
 SLO_ID=$(json_get data.id)
 if [ -z "${SLO_ID:-}" ] || [ "$SLO_ID" = "null" ]; then
@@ -277,96 +277,23 @@ assert_status 200
 
 log "PASS: SLO smoke"
 
-# === P5c: node log config + global log settings smoke test ===
-log "=== P5c: node log config smoke test ==="
-
-log "P5c: GET /nodes/\$NODE_ID/log-config → 200"
-api_call GET "/nodes/${NODE_ID}/log-config"
-assert_status 200
-
-log "P5c: PATCH /nodes/\$NODE_ID/log-config 有效配置 → 200，并验证 log_retention_days=14"
-api_call PATCH "/nodes/${NODE_ID}/log-config" \
-  "{\"log_paths\":[\"/var/log/app.log\"],\"log_journalctl_enabled\":false,\"log_retention_days\":14}"
-assert_status 200
-ACTUAL_RETENTION="$(json_get log_retention_days)"
-if [[ "$ACTUAL_RETENTION" != "14" ]]; then
-  echo "[smoke][error] FAIL: log_retention_days 期望 14，实际 ${ACTUAL_RETENTION}"
-  echo "[smoke][error] 响应体: $HTTP_BODY"
-  exit 1
-fi
-log "P5c: log_retention_days 验证通过（实际值 ${ACTUAL_RETENTION}）"
-
-log "P5c: PATCH /nodes/\$NODE_ID/log-config 黑名单路径 /etc/passwd → 400"
-api_call PATCH "/nodes/${NODE_ID}/log-config" \
-  "{\"log_paths\":[\"/etc/passwd\"],\"log_journalctl_enabled\":false,\"log_retention_days\":7}"
-assert_status 400
-
-log "P5c: GET /settings/logs → 200"
-api_call GET "/settings/logs"
-assert_status 200
-
-log "P5c: PATCH /settings/logs default_retention_days=45 → 200"
-api_call PATCH "/settings/logs" "{\"default_retention_days\":45}"
-assert_status 200
-
-log "PASS: P5c node log config smoke"
-
-# === P5d-2: custom dashboards smoke test ===
-log "=== P5d-2: custom dashboards smoke test ==="
-
-DASHBOARD_ID=""
-PANEL_ID=""
-
-# 1. 创建看板
-log "P5d-2: POST /dashboards → 200"
-api_call POST "/dashboards" "{\"name\":\"smoke-dash-${RUN_ID}\",\"description\":\"smoke\",\"time_range\":\"1h\",\"auto_refresh_seconds\":30}"
-assert_status 200
-DASHBOARD_ID="$(json_get data.id)"
-if [[ -z "$DASHBOARD_ID" || "$DASHBOARD_ID" == "null" ]]; then
-  echo "[smoke][error] FAIL: dashboard create — response: $HTTP_BODY"
-  exit 1
-fi
-log "  created dashboard $DASHBOARD_ID"
-
-# 2. 新增面板
-log "P5d-2: POST /dashboards/:id/panels → 200"
-api_call POST "/dashboards/${DASHBOARD_ID}/panels" \
-  "{\"title\":\"CPU smoke\",\"chart_type\":\"line\",\"metric\":\"node.cpu\",\"filters\":{\"node_ids\":[${NODE_ID}]},\"aggregation\":\"avg\",\"layout_x\":0,\"layout_y\":0,\"layout_w\":6,\"layout_h\":4}"
-assert_status 200
-PANEL_ID="$(json_get data.id)"
-if [[ -z "$PANEL_ID" || "$PANEL_ID" == "null" ]]; then
-  echo "[smoke][error] FAIL: panel create — response: $HTTP_BODY"
-  exit 1
-fi
-log "  created panel $PANEL_ID"
-
-# 3. 面板查询（合法指标）
-log "P5d-2: POST /dashboards/panel-query node.cpu → 200"
+# 历史任务统计使用固定任务领域接口；旧看板和节点日志接口不再注册。
+log "=== historical task statistics ==="
 NOW_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 HOUR_AGO="$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)"
-api_call POST "/dashboards/panel-query" \
-  "{\"metric\":\"node.cpu\",\"filters\":{\"node_ids\":[${NODE_ID}]},\"aggregation\":\"avg\",\"start\":\"${HOUR_AGO}\",\"end\":\"${NOW_TS}\"}"
+api_call POST "/tasks/statistics/query" \
+  "{\"metric\":\"task.success_rate\",\"filters\":{},\"aggregation\":\"avg\",\"start\":\"${HOUR_AGO}\",\"end\":\"${NOW_TS}\"}"
 assert_status 200
-
-# 4. 更新布局
-log "P5d-2: PUT /dashboards/:id/panels/layout → 200"
-api_call PUT "/dashboards/${DASHBOARD_ID}/panels/layout" \
-  "{\"items\":[{\"id\":${PANEL_ID},\"layout_x\":2,\"layout_y\":0,\"layout_w\":8,\"layout_h\":5}]}"
-assert_status 200
-
-# 5. 面板查询（无效指标）→ 400
-log "P5d-2: POST /dashboards/panel-query bogus metric → 400"
-api_call POST "/dashboards/panel-query" \
-  "{\"metric\":\"bogus.metric\",\"filters\":{},\"aggregation\":\"avg\",\"start\":\"${HOUR_AGO}\",\"end\":\"${NOW_TS}\"}"
+api_call POST "/tasks/statistics/query" \
+  "{\"metric\":\"node.cpu\",\"filters\":{},\"aggregation\":\"avg\",\"start\":\"${HOUR_AGO}\",\"end\":\"${NOW_TS}\"}"
 assert_status 400
-
-# 6. 删除看板
-log "P5d-2: DELETE /dashboards/:id → 200"
-api_call DELETE "/dashboards/${DASHBOARD_ID}"
+api_call GET "/nodes/${NODE_ID}/summary"
 assert_status 200
-DASHBOARD_ID=""  # 防止重复清理
-
-log "PASS: P5d-2 custom dashboards smoke"
+api_call GET "/node-logs"
+assert_status 404
+api_call POST "/dashboards/panel-query" "{}"
+assert_status 404
+log "PASS: historical task statistics and retired routes"
 
 # === P5e: escalation policy smoke test ===
 log "=== P5e: escalation policy smoke test ==="
@@ -430,9 +357,9 @@ log "PASS: P5e escalation policy smoke"
 # === P5f: anomaly detection smoke test ===
 log "=== P5f: anomaly detection ==="
 
-# Toggle via settings
+# 已退役的周期检测开关不能重新启用采集。
 api_call PUT "/settings" '{"anomaly.enabled":"true"}'
-assert_status 200
+assert_status 400
 
 # Per-node events (should respond 200 even if empty)
 api_call GET "/nodes/${NODE_ID}/anomaly-events" ""

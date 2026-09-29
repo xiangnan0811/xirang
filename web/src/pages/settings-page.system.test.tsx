@@ -4,9 +4,7 @@ import { SystemTab } from "./settings-page.system";
 
 const apiClientMock = vi.hoisted(() => ({
   getSettings: vi.fn(),
-  getLogsSettings: vi.fn(),
   getSecurityRiskSummary: vi.fn(),
-  updateLogsSettings: vi.fn(),
   updateSettings: vi.fn(),
   resetSetting: vi.fn(),
 }));
@@ -47,7 +45,6 @@ describe("SystemTab security risk summary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiClientMock.getSettings.mockResolvedValue({ definitions: [], values: {} });
-    apiClientMock.getLogsSettings.mockResolvedValue({ defaultRetentionDays: 30 });
     apiClientMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
       summary: { totalRisks: 19, categories: 9 },

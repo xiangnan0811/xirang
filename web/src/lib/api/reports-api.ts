@@ -36,7 +36,6 @@ export type Report = {
   successRate: number;
   avgDurationMs: number;
   topFailures: ReportFailure[];
-  diskTrend: unknown[];
   actualRpoMinutes?: number | null;
   actualRtoMinutes?: number | null;
   rpoCompliant?: boolean | null;
@@ -80,7 +79,6 @@ type RawReport = {
   success_rate?: unknown;
   avg_duration_ms?: unknown;
   top_failures?: unknown;
-  disk_trend?: unknown;
   actual_rpo_minutes?: unknown;
   actual_rto_minutes?: unknown;
   rpo_compliant?: unknown;
@@ -153,7 +151,6 @@ export function mapReport(row: RawReport | null | undefined): Report {
         lastErr: String(failure.last_err ?? ""),
       };
     }),
-    diskTrend: parseJsonArray(row?.disk_trend),
     actualRpoMinutes: nullableFiniteNumber(row?.actual_rpo_minutes),
     actualRtoMinutes: nullableFiniteNumber(row?.actual_rto_minutes),
     rpoCompliant: row?.rpo_compliant == null ? null : Boolean(row.rpo_compliant),

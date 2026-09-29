@@ -13,7 +13,7 @@ Hook 用于复用界面状态、请求编排、操作封装、偏好、过滤、
 
 - Hook 和 Context 调用[类型化 API 边界](type-safety.md)，接收领域数据，不直接 `fetch` 或保存原始 DTO。
 - API 支持时传递 `AbortSignal`，例如 overview API 的 `options?: { signal?: AbortSignal }`。取消或过期请求不能提交旧结果。
-- 实时日志复用 `lib/ws/` 与 `use-live-logs.ts`，页面不另写 Socket 生命周期。业务规则见[节点日志采集](../domains/node-log-collection.md)。
+- 实时任务日志复用 `lib/ws/` 与 `use-live-logs.ts`，页面不另写 Socket 生命周期。业务规则见[任务执行与恢复](../domains/task-execution-recovery.md)。
 - effect 清理订阅、定时器、可取消请求与 WebSocket 监听；存储遵守[认证所有权](state-management.md#浏览器存储与认证所有权)。
 
 ## 动画帧所有权
@@ -22,6 +22,7 @@ Hook 用于复用界面状态、请求编排、操作封装、偏好、过滤、
 
 RAF ID 是不透明数值，`0` 有效；使用 `number | null` 和显式 `!== null` 判断。保留有意设计的两帧布局等待。
 
-面板编辑器回归覆盖首帧前清理、两帧之间清理（第二个 ID 为 `0`）、关闭重开、卸载，以及正常两帧后图表就绪。参考 `pages/dashboards/panel-editor-dialog.tsx` 与同级 `.raf.test.tsx`。
+涉及两帧布局等待的回归覆盖首帧前清理、两帧之间清理（第二个 ID 为 `0`）、关闭重开、
+卸载，以及正常两帧后内容就绪。
 
 返回[前端入口](README.md)。
