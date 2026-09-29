@@ -28,7 +28,7 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 普通 PR 的提交语义和合并前门禁由贡献指南规定。合并后检查 [Release Please](../../.github/workflows/release-please.yml) 是否成功创建或更新 Release PR；没有生成正式 release 时，交付说明明确记录没有预期的 GitHub Release 或 Docker Hub 发布，仍需处理自动化失败。
 
-审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。required checks 全部通过后合并，确认 GitHub Release 创建。
+审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
 
 [Publish Docker Images](../../.github/workflows/publish-images.yml)监听 `release.published`，按以下顺序发布：
 
