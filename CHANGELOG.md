@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.57.0](https://github.com/xiangnan0811/xirang/compare/v0.56.0...v0.57.0) (2026-09-30)
+
+
+### ✨ Features
+
+* **core:** 移除服务监控并保全备份恢复 ([#568](https://github.com/xiangnan0811/xirang/issues/568)) ([c00f4eb](https://github.com/xiangnan0811/xirang/commit/c00f4eb0d87e9b1a1615ab2dd851acb1de7bb69a))
+
 ### 行为与升级说明
 
 - 移除 HTTP/TCP 服务监控管理页、公开状态页、专属 API 与周期探测。旧 `/app/service-monitors`、`/status` 显示未找到页；六个旧 API method/path 返回 404。备份概览、数据、恢复、任务告警以及 `/healthz`、`/readyz`、`/metrics` 保留。
@@ -10,13 +17,6 @@
 - 升级前 STOP 并排空全部旧 Core、scheduler、executor、collector 和 notification worker，禁止旧 prober 与新库混跑。保全一致性整库备份、`DATA_ENCRYPTION_KEY`、适用历史密钥及独立备份树，并先使用匹配旧二进制、配置及密钥做隔离实际恢复验证；SQLite 离线操作，PostgreSQL 手动 stop/drain 全部 writer。新版迁移完成后才启动新版 worker；可选 Worker 与 Core 保持版本一致。
 - 本次 down 和低于新版本下限的元数据写入均被拒绝，即使空库也不能原地降级；原有版本保护器保留。需要回退时仅恢复本次升级前的完整数据库并配套旧二进制、配置与密钥，不能只替换旧镜像、重建空表、Force dirty 或删除保护器。
 - 新行为只在新版进程生效；旧进程中已开始的探测/投递必须在升级前排空，不能依赖迁移取消在途网络操作。本地验收包含 SQLite/PostgreSQL 整库备份恢复，以及 SQLite 恢复副本的真实服务启动与页面/API 检查；不代表远端 Provider 文件恢复或生产部署已经验收。
-
-## [0.57.0](https://github.com/xiangnan0811/xirang/compare/v0.56.0...v0.57.0) (2026-09-30)
-
-
-### ✨ Features
-
-* **core:** 移除服务监控并保全备份恢复 ([#568](https://github.com/xiangnan0811/xirang/issues/568)) ([c00f4eb](https://github.com/xiangnan0811/xirang/commit/c00f4eb0d87e9b1a1615ab2dd851acb1de7bb69a))
 
 ## [0.56.0](https://github.com/xiangnan0811/xirang/compare/v0.55.26...v0.56.0) (2026-09-29)
 
