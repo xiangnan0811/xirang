@@ -9,7 +9,7 @@
 - 配对迁移 `000088_task_cron_override` 仅把与当时策略有效计划不同的历史 Cron 标记为 override；相同值不猜测曾经覆盖。配置导入导出保留来源；使用后禁止降级抹除。
 - Cron 在写入前验证；历史坏 Cron 只隔离该任务并留诊断，不阻断全部启动。配置已保存而即时同步调度失败时返回明确“已保存”的 503，不用旧全行回滚；周期调和恢复调度。
 - API 只公开白名单 `executor_settings`、`executor_secrets_configured`，不输出原始 `executor_config`。Restic 排除规则 `[]` 显式清空；密码空值保留，非空替换保留原始字节（包括空白）。仅重命名等更新保留 Rclone 带宽/并发配置。
-- policy、模板克隆、导入和 service monitor 创建均保留显式 `enabled=false`；policy 还保留 `verify_enabled=false`、`max_retries=0`。模板克隆始终禁用；省略字段才使用默认，零重试不自动重跑；持久化仍执行加密 hook。
+- policy、模板克隆和导入均保留显式 `enabled=false`；policy 还保留 `verify_enabled=false`、`max_retries=0`。模板克隆始终禁用；省略字段才使用默认，零重试不自动重跑；持久化仍执行加密 hook。
 - 新 policy Rsync 目标为 `<backup-root>/.xirang/policies/<policy-id>/nodes/<node-id>`。持久化 ID 隔离 writer，不能靠 source basename 或可改节点名称。同步/改名不改已有 target；路径变化不证明历史数据已经迁移。Core 本地准入拒绝规范路径冲突、symlink alias 和祖先/后代归属重叠。
 - 节点迁移要求相关任务禁用、无调度及无活动 durable run；只把独立归属的源复制到全新隔离目标，验证后在锁下重核归属/配置再切换 DB。共享源及已有目标拒绝合并，保留原源。导入补偿先在全局/policy/task 锁下捕获 before-image，再核对当前 claim 与导入后行；并发变化或旧目标的新 owner 均拒绝补偿覆盖，不强制恢复旧 locator。
 - Restic `repository_version` 仅选择新仓库格式（默认/1/2），不是 append-only 或删除保护。旧 `append_only=true/false` 在加密配置边界分别幂等转为 2/默认，保留其他字段，冲突或非法值隔离诊断；旧字段只允许显式导入转换，不再作为运行时配置。删除保护须在存储后端独立验证。

@@ -65,12 +65,6 @@ export const NodesDetailPage = lazy(() =>
 export const AutomationRulesPage = lazy(() =>
   import("@/pages/automation-rules-page").then((m) => ({ default: m.AutomationRulesPage }))
 );
-export const ServiceMonitorsPage = lazy(() =>
-  import("@/pages/service-monitors-page").then((m) => ({ default: m.ServiceMonitorsPage }))
-);
-export const StatusPage = lazy(() =>
-  import("@/pages/status-page").then((m) => ({ default: m.StatusPage }))
-);
 export const NotFoundPage = lazy(() =>
   import("@/pages/not-found-page").then((m) => ({ default: m.NotFoundPage }))
 );

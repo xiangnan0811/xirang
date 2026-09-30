@@ -34,7 +34,7 @@ import (
 
 // migrationRuntimeFixture deliberately uses the real versioned migration files
 // from the database source tree rather than AutoMigrate. The database package
-// owns schema-contract tests; this package verifies post-000090 runtime delivery.
+// owns schema-contract tests; this package verifies post-retirement runtime delivery.
 type migrationRuntimeFixture struct {
 	engine   string
 	migrator *migrate.Migrate
@@ -162,6 +162,19 @@ func (f *migrationRuntimeFixture) migrateToRetirement(t *testing.T) {
 	}
 	if version != 90 || dirty {
 		t.Fatalf("%s migration version=%d dirty=%v, want 90 clean", f.engine, version, dirty)
+	}
+}
+func (f *migrationRuntimeFixture) migrateToServiceMonitorRetirement(t *testing.T) {
+	t.Helper()
+	if err := f.migrator.Steps(2); err != nil {
+		t.Fatalf("apply 000090 and 000091 retirement migrations on %s: %v", f.engine, err)
+	}
+	version, dirty, err := f.migrator.Version()
+	if err != nil {
+		t.Fatalf("read %s migration version: %v", f.engine, err)
+	}
+	if version != 91 || dirty {
+		t.Fatalf("%s migration version=%d dirty=%v, want 91 clean", f.engine, version, dirty)
 	}
 }
 
@@ -484,5 +497,101 @@ func testMigrationRetiredDeliveryFence(t *testing.T, fixture *migrationRuntimeFi
 	worker.tick(context.Background(), time.Now().UTC())
 	if retiredSends.Load() != 0 || retainedSends.Load() != 1 {
 		t.Fatalf("retry replay changed sink sends: retired_sends=%d retained_sends=%d", retiredSends.Load(), retainedSends.Load())
+	}
+	testMigrationServiceMonitorDeliveryFence(t, fixture.engine)
+}
+
+func testMigrationServiceMonitorDeliveryFence(t *testing.T, engine string) {
+	t.Helper()
+	var serviceSends, retainedSends atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/retained" {
+			retainedSends.Add(1)
+		} else {
+			serviceSends.Add(1)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	fixture := newAlertingMigrationRuntimeFixture(t, engine)
+	seed := seedAlertingMigrationDeliveryState(t, fixture.db, server.URL)
+	var node model.Node
+	if err := fixture.db.First(&node).Error; err != nil {
+		t.Fatalf("load service-monitor migration node: %v", err)
+	}
+	now := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	serviceAlert := &model.Alert{
+		NodeID: node.ID, NodeName: node.Name, Severity: "critical", Status: "open",
+		ErrorCode: "XR-SERVICE-DOWN-42", Message: "retired service source", Retryable: true,
+		TriggeredAt: now, Tags: "[]", LastLevelFired: -1, DeliveryDecision: model.AlertDeliveryDecisionDirect,
+	}
+	if err := fixture.db.Create(serviceAlert).Error; err != nil {
+		t.Fatalf("create service-monitor migration alert: %v", err)
+	}
+	serviceDelivery := &model.AlertDelivery{
+		AlertID: serviceAlert.ID, IntegrationID: seed.integrationID,
+		Status: model.AlertDeliveryStatusRetrying, Decision: "deliver",
+		DeliveryKey: deliveryIntentKey(serviceAlert.ID, seed.integrationID),
+		AttemptID:   "service-monitor-migration-attempt", AttemptCount: 3,
+		LastError:   "service-monitor migration failure",
+		NextRetryAt: &now,
+	}
+	if err := fixture.db.Create(serviceDelivery).Error; err != nil {
+		t.Fatalf("create service-monitor migration delivery: %v", err)
+	}
+	fixture.migrateToServiceMonitorRetirement(t)
+
+	var retired model.Alert
+	if err := fixture.db.First(&retired, serviceAlert.ID).Error; err != nil {
+		t.Fatalf("load retired service-monitor alert: %v", err)
+	}
+	if retired.Status != "resolved" || retired.Retryable || retired.DeliveryDecision != model.AlertDeliveryDecisionUnknown || retired.DeliveryReason != "feature_retired" {
+		t.Fatalf("retired service-monitor alert was not fenced: %+v", retired)
+	}
+	var retiredDelivery model.AlertDelivery
+	if err := fixture.db.First(&retiredDelivery, serviceDelivery.ID).Error; err != nil {
+		t.Fatalf("load retired service-monitor delivery: %v", err)
+	}
+	if retiredDelivery.Status != model.AlertDeliveryStatusFailed || retiredDelivery.Decision != model.AlertDeliveryDecisionUnknown ||
+		retiredDelivery.AttemptCount != 3 || retiredDelivery.LastError != "service-monitor migration failure" ||
+		retiredDelivery.LeaseExpiresAt != nil || retiredDelivery.NextRetryAt != nil {
+		t.Fatalf("retired service-monitor delivery was not fenced: %+v", retiredDelivery)
+	}
+
+	dispatcher := NewDispatcher(fixture.db, nil, nil)
+	worker := NewRetryWorker(fixture.db)
+	worker.dispatcher = dispatcher
+	worker.sendFn = dispatcher.send
+	worker.tick(context.Background(), time.Now().UTC())
+	if got := serviceSends.Load(); got != 0 {
+		t.Fatalf("automatic retry sent retired service-monitor delivery: sends=%d", got)
+	}
+	if got := retainedSends.Load(); got != 1 {
+		t.Fatalf("automatic retry did not deliver retained source after service retirement: sends=%d", got)
+	}
+
+	beforeCount := int64(0)
+	if err := fixture.db.Model(&model.AlertDelivery{}).Where("alert_id = ?", serviceAlert.ID).Count(&beforeCount).Error; err != nil {
+		t.Fatalf("count service-monitor deliveries before replay: %v", err)
+	}
+	if err := worker.ManualRetry(serviceDelivery.ID); err != nil {
+		t.Fatalf("manual retry of retired service-monitor delivery: %v", err)
+	}
+	if _, err := dispatcher.RetryDeliveryByID(context.Background(), serviceDelivery.ID); err != nil {
+		t.Fatalf("dispatcher retry of retired service-monitor delivery: %v", err)
+	}
+	if _, err := dispatcher.RetryDelivery(context.Background(), serviceAlert.ID, seed.integrationID); err != nil {
+		t.Fatalf("dispatcher alert/channel retry of retired service-monitor delivery: %v", err)
+	}
+	if err := dispatcher.dispatchCreatedAlertWithSender(&retired, dispatcher.send); err != nil {
+		t.Fatalf("replay retired service-monitor alert: %v", err)
+	}
+	afterCount := int64(0)
+	if err := fixture.db.Model(&model.AlertDelivery{}).Where("alert_id = ?", serviceAlert.ID).Count(&afterCount).Error; err != nil {
+		t.Fatalf("count service-monitor deliveries after replay: %v", err)
+	}
+	if afterCount != beforeCount || serviceSends.Load() != 0 {
+		t.Fatalf("retired service-monitor replay changed delivery state: before=%d after=%d sends=%d", beforeCount, afterCount, serviceSends.Load())
 	}
 }

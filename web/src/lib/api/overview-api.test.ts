@@ -301,7 +301,7 @@ describe("overview api", () => {
             {
               id: "platform",
               severity: "unexpected",
-              resource: { type: "unknown", id: "bad", name: "status-page", node_id: "invalid", policy_id: "0" },
+              resource: { type: "unknown", id: "bad", name: "platform", node_id: "invalid", policy_id: "0" },
               event_count: "bad",
               source_types: ["unknown-source"],
               next_actions: [{ code: "bad", label: "bad", href: "" }],

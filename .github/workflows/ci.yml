@@ -69,7 +69,7 @@ jobs:
         run: go test -coverprofile=coverage.out ./...
 
       - name: Race concurrency-sensitive backend packages
-        run: go test -race ./internal/sshutil ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/task/executor ./internal/task/verifier ./internal/ws ./internal/auth ./internal/bootstrap ./internal/uptime ./internal/policy ./internal/automation ./internal/alerting ./internal/escalation -count=1
+        run: go test -race ./internal/sshutil ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/task/executor ./internal/task/verifier ./internal/ws ./internal/auth ./internal/bootstrap ./internal/policy ./internal/automation ./internal/alerting ./internal/escalation -count=1
 
       - name: Backup-asset coverage floor
         run: bash ../scripts/check-backupasset-coverage.sh
@@ -190,8 +190,6 @@ jobs:
       - name: Run PostgreSQL offline recovery race
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL offline recovery race' ./internal/bootstrap '^TestBreakGlassOnlyOneConcurrentZeroAdminPromotionPostgres$'
 
-      - name: Run PostgreSQL monitor configuration race
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL monitor configuration race' ./internal/uptime '^TestMonitorResultConfigCommitRacePostgres$'
 
       - name: Run PostgreSQL durable task runtime contracts
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable task runtime contracts' ./internal/task '^Test.*Postgres$'
@@ -208,8 +206,8 @@ jobs:
 
       - name: Run PostgreSQL batch idempotency contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch idempotency contract' ./internal/api/handlers '^TestBatchCreationRollbackAndConcurrentIdempotency$'
-      - name: Run PostgreSQL monitor and policy configuration parity
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL monitor and policy configuration parity' ./internal/api/handlers '^TestR306(ServiceMonitorCreateValuesAcrossDatabases|PolicyCreateValuesAndSchedulesAcrossDatabases)$'
+      - name: Run PostgreSQL policy configuration parity
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL policy configuration parity' ./internal/api/handlers '^TestR306PolicyCreateValuesAndSchedulesAcrossDatabases$'
 
       - name: Run PostgreSQL general API surface parity
         run: go test ./internal/api -run '^TestGeneralSurfacePostgres$' -count=1

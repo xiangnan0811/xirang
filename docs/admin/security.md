@@ -106,8 +106,6 @@ Xirang 会加密存储 SSH 密码、SSH 私钥、TOTP 密钥、通知端点、�
 
 备份资产控制面同样依赖该密钥。仓库访问绑定、冻结原因和 wrapped domain key 只有在恢复原数据库 **并且** 使用匹配的 `DATA_ENCRYPTION_KEY` 与适用历史密钥时才可读。仅保留 Provider 仓库只能在 Admin 有效重连/导入后重建可验证的 RecoveryPoint/Catalog 事实，不能重建 overlays、审计、策略、冻结或 Task 关系。错误或缺失密钥必须失败关闭，不得静默换绑或把 rebuild 报成成功。数据库退役迁移的升级前保全、旧版隔离恢复和不可逆回退见[备份、恢复与快照](./backup-recovery.md#升级与灾难恢复)。
 
-监控 HTTP 请求头为写入专用秘密；变更监控目标时须显式替换或清空，操作步骤见[监控指南](monitoring-alerting.md#httptcp-uptime-监控)。
-
 任务中的策略摘要不返回 hook 或演练脚本；有权限的管理员从策略编辑入口管理。TOTP 初始化具有有效期，重新初始化会使上次二维码失效；已启用账户不能直接覆盖密钥。敏感字段、登录会话和临时授权的完整合同见[凭据与访问](../spec/domains/credentials-access.md)。
 
 ## 最后管理员与离线恢复

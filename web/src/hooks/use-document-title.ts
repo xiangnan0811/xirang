@@ -18,13 +18,11 @@ const APP_SECTION_TITLE_KEYS: Record<string, string> = {
   settings: "nav.settings",
   more: "nav.more",
   "automation-rules": "nav.automationRules",
-  "service-monitors": "nav.serviceMonitors",
 };
 
 export function titleKeyForPathname(pathname: string): string {
   const path = pathname.split("?")[0] ?? pathname;
   if (path === "/login") return "login.welcomeTitle";
-  if (path === "/status") return "serviceMonitor.statusPageTitle";
   const parts = path.split("/").filter(Boolean);
   if (parts[0] === "app" && parts[1]) {
     return APP_SECTION_TITLE_KEYS[parts[1]] ?? "notFound.title";

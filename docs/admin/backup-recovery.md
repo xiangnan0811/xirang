@@ -3,13 +3,13 @@
 本文档说明备份策略、仓库迁移、恢复操作、保留策略和可信度判断。生产环境恢复演练当前不可用。开发实现与回归要求统一见[领域合同入口](../spec/domains/README.md)。
 
 <a id="升级与灾难恢复"></a>
-## 备份职责收敛升级与灾难恢复
+## 不可逆退役升级与灾难恢复
 
-本次职责收敛迁移是一次不可逆退役。实际停机、排空、备份校验、旧版隔离恢复演练以及 SQLite/PostgreSQL 的恢复操作按[部署指南的升级 runbook](../deployment.md#备份职责收敛升级)执行；本节定义迁移允许删除和必须保留的备份/恢复事实。任何一步无法确认时都应 **STOP**，不能先让新旧 writer 混跑。
+节点监控职责收敛与服务监控退役是两次独立的不可逆迁移，删除范围和告警来源集合分别定义如下，不能把后一次退役算入已发布的前一次迁移。实际停机、排空、备份校验、旧版隔离恢复演练以及 SQLite/PostgreSQL 的恢复操作按[部署指南的升级 runbook](../deployment.md#备份职责收敛升级)执行。任何一步无法确认时都应 **STOP**，不能先让新旧 writer 混跑。
 
-### 删除边界与保留事实
+### 节点监控职责收敛的删除边界
 
-迁移只删除已退役的节点监控、节点系统日志和可配置看板存储，不删除备份资产或任务领域历史：
+`backup_focus_retirement` 只删除已退役的节点监控、节点系统日志和可配置看板存储，不删除备份资产或任务领域历史，也不删除服务监控配置与采样表：
 
 | 退役并删除 | 保留 |
 |---|---|
@@ -17,21 +17,31 @@
 | `node_logs`、`node_log_cursors` | `tasks`、`task_runs`、任务流量采样、Task/TaskRun 日志和历史任务统计 |
 | `dashboard_panels`、`dashboards` | 安全审计、凭据审计、任务审计及其它仍有效的审计链 |
 | Node 的 `disk_used_gb`、`disk_total_gb`、`last_probe_at`、`consecutive_failures`、`log_paths`、`log_journalctl_enabled`、`log_retention_days` | `anomaly_events` 主表及 snapshot-diff、Sigma、事件保留和通知链；仅删除退役 forecast 字段/来源 |
-| `reports.disk_trend`、`anomaly_events.forecast_days` 及退役设置 | 任务 `success_rate` SLO、RPO/RTO、到期提醒、维护窗口、HTTP/TCP 服务监控、备份健康/可信度/存储用量接口 |
+| `reports.disk_trend`、`anomaly_events.forecast_days` 及退役设置 | 任务 `success_rate` SLO、RPO/RTO、到期提醒、维护窗口、备份健康/可信度/存储用量接口 |
 
 availability SLO 定义及 Alert 的 `slo_id` 引用在告警 ID 集合物化后清除并删除；对应 Alert 行和投递证据仍保留。任务 `success_rate` SLO 不受影响。
 
 退役设置键包括 `node.probe_interval`、`node.probe_fail_threshold`、`node.probe_concurrency`、`logs.retention_days_default`、`anomaly.enabled`、`anomaly.ewma_alpha`、`anomaly.ewma_sigma`、`anomaly.ewma_window_hours`、`anomaly.ewma_min_samples`、`anomaly.disk_forecast_days`、`anomaly.disk_forecast_min_history_hours`、`metrics.remote_url` 和 `metrics.remote_bearer_token`。配置导入按当前 Settings 注册表逐项正常校验；旧导出若含这些退役键或其它未知键，整份导入拒绝并保留当前配置，不能静默丢弃键后继续写入。已保留的 `probe`/`node_logs` SSH scope 只是历史限制的解析、展示和保留，不恢复执行生产者，也不能被过滤成“空 scope=全部用途”。
 
-### 退役来源告警与投递围栏
+该迁移只封存 `^XR-NODE-[0-9]+$`（含沿用同一旧代码的历史手动连接测试失败）、`XR-NODE-DISK-FULL`、退役 EWMA/`disk_forecast` 来源及 availability SLO 告警。`XR-NODE-EXPIRY-*` 到期告警和服务监控告警不属于它的退役集合；仅升级到这一边界时，HTTP/TCP 服务监控仍按原合同运行。历史迁移及其验收保持这一语义。
 
-迁移会在删除来源记录前物化退役告警 ID，严格区分 `^XR-NODE-[0-9]+$`（含沿用同一旧代码的历史手动连接测试失败）、`XR-NODE-DISK-FULL`、退役 EWMA/`disk_forecast` 来源及 availability SLO；`XR-NODE-EXPIRY-*` 到期告警明确不属于集合。完整的代码匹配、Alert/升级历史/已发送证据保留、`resolved`/`retryable=false` 处理和未发送 delivery 的 `unknown`/`feature_retired` 围栏由[告警与健康合同](../spec/domains/alerting-health.md#退役来源告警封存与投递围栏)统一规定。
+### 服务监控退役的独立删除边界
 
-备份恢复验收必须逐项确认：退役 Alert 与升级历史仍在，sent evidence 未改写，未发送投递没有 lease/`next_retry_at` 且自动和手动 claim 都被拒绝；非退役来源（含到期、任务、恢复、快照差异和 HTTP/TCP 服务监控）仍按原合同发送。
+后续 `service_monitor_retirement` 是独立的双引擎 forward migration，不改写 `backup_focus_retirement` 或更早迁移。它只删除 `service_uptime_samples` 和 `service_monitors`（含请求头配置），不删除共享 `AnomalyEvent`、`SLODefinition`、备份资产、任务或恢复证据。
+
+它在同一事务中先物化自己的告警 ID 集合：仅精确匹配 `^XR-SERVICE-DOWN-[0-9]+$`，包括监控项已删除的孤立告警，不要求节点 ID 为零。空尾、非数字尾和近似前缀不属于集合。封存后再删除两个专属表；不解密退休请求头，坏的历史密文不阻止删除，也不改变其它功能的加密初始化。
+
+升级到这一边界前必须停机并排空旧 Core/worker，保全数据库、加密密钥及独立备份树，禁止新库与旧 prober 混跑。这一迁移有自己的不可逆版本下限，即使空库也禁止原地 down；先前迁移的保护器继续保留。回退只能恢复本次升级前的整库备份，并配套匹配的旧二进制、配置与密钥，不能重建空表伪装恢复。
+
+### 共用的告警投递围栏与恢复验收
+
+两次迁移各自只对上述来源集合应用 `unknown`/`feature_retired` 围栏，不把两个集合混作前一次迁移的输入。完整的 Alert/升级历史/已发送证据保留、`resolved`/`retryable=false` 处理和未发送 delivery 围栏由[告警与健康合同](../spec/domains/alerting-health.md#退役来源告警封存与投递围栏)统一规定。
+
+备份恢复验收须按实际跨越的迁移边界逐项确认：对应退役 Alert 与升级历史仍在，sent evidence 未改写，未发送投递没有 lease/`next_retry_at` 且自动和手动 claim 都被拒绝；不属于该迁移集合的来源仍按原合同发送。任务、恢复、到期和快照差异来源不因这两次迁移退役。
 
 ### 灾难恢复与回退
 
-本次退役迁移的 down 不提供回退，`schema_migrations` metadata guard 也不允许通过迁移驱动的旧版本写入绕过保护。必须保留升级前一致的数据库备份、匹配的旧版 Core/worker 二进制、完整旧配置、`DATA_ENCRYPTION_KEY` 及适用的历史解密密钥；灾难恢复时停止并排空新版所有 writer，恢复整个升级前数据库，再只启动匹配旧版和原密钥。不要用新库手工补回已删除表/列，不要直接改迁移版本，也不要把 Provider 资产清理当作数据库回退。
+上述两次退役迁移的 down 都不提供回退，各自的 `schema_migrations` metadata guard 也不允许通过迁移驱动的旧版本写入绕过保护。必须保留目标升级边界之前一致的数据库备份、匹配的旧版 Core/worker 二进制、完整旧配置、`DATA_ENCRYPTION_KEY` 及适用的历史解密密钥；灾难恢复时停止并排空新版所有 writer，恢复整个升级前数据库，再只启动匹配旧版和原密钥。不要用新库手工补回已删除表/列，不要直接改迁移版本，也不要把 Provider 资产清理当作数据库回退。
 
 SQLite 恢复只能在全栈及独立 worker 停止后离线进行；PostgreSQL 恢复必须由 DBA/运维手动 stop/drain 全部应用连接和 writer 后进行。两引擎都需要先在隔离、可销毁环境使用旧版匹配二进制对恢复副本做实际恢复核对；仅做完整性检查或列出 dump 内容不算通过。完整步骤、失败后的 STOP 边界和恢复后的前向升级见[部署指南](../deployment.md#回滚与灾难恢复)。
 

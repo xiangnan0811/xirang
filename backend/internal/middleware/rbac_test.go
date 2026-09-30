@@ -190,7 +190,6 @@ func TestHasPermission_AdminHasAllPermissions(t *testing.T) {
 		"alerts:read", "alerts:deliveries", "alerts:write",
 		"audit:read", "users:manage",
 		"reports:read", "reports:write",
-		"service_monitors:read", "service_monitors:write",
 		"automation:read", "automation:write",
 	}
 	for _, perm := range allPerms {

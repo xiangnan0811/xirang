@@ -24,16 +24,28 @@ API/前端区分 pending、sending、retrying、sent、failed 和兼容 unknown�
 <a id="退役来源告警封存与投递围栏"></a>
 ## 退役来源告警封存与投递围栏
 
-不可逆退役迁移在删除监控/日志来源记录前，先物化退役告警 ID 集合。精确匹配：
+两次不可逆退役迁移各自在删除来源记录前物化自己的告警 ID 集合；它们共用投递围栏机制，但来源边界不能合并解释。
+
+### 节点监控职责收敛来源
+
+已发布的 `backup_focus_retirement` 仅匹配以下集合：
 
 - `^XR-NODE-[0-9]+$`（`XR-NODE-<纯数字>`）；历史手动连接测试失败若沿用同一代码也属于该集合；
 - `XR-NODE-DISK-FULL`；
 - EWMA / `disk_forecast` 事件关联的告警，以及确定的 CPU、MEM、LOAD、DISKFORECAST 错误码；
 - `slo_id` 指向 availability 定义的告警。
 
-`XR-NODE-EXPIRY-*` 到期告警明确排除；不能用宽泛的 `XR-NODE-*` 把到期或其它仍有效来源一起封存。备份快照异常、任务/恢复/执行、success-rate SLO、HTTP/TCP 服务监控和节点到期告警继续按各自合同处理。
+服务监控告警不属于这次迁移的集合；它不删除服务监控配置/采样表。其历史 SQL 与验收仍保留这一边界，不能将后续退役语义追溯到它。
 
-集合中的 Alert 行、升级历史、delivery attempt/lease 历史和已发送证据保留。`open`/`acked` 告警改为 `resolved`，并设 `retryable=false`、`delivery_decision=unknown`、`delivery_reason=feature_retired`。未发送 delivery 改为 `status=failed`、`decision=unknown`，清空 lease/`next_retry_at`，保留 attempt count、错误和历史标识；已发送记录的 `sent_at` 不改写。该 unknown 围栏阻止自动 retry、升级和手动 claim，不能把 resolved 当作可重发许可；其它来源的投递不受影响。
+### 服务监控退役来源
+
+后续独立的 `service_monitor_retirement` 仅匹配 `^XR-SERVICE-DOWN-[0-9]+$`（纯数字服务 ID），包括监控项已删除的孤立告警，不要求节点 ID 为零；空尾、非数字尾及近似前缀不属于集合。它封存自己的集合后才删除两个服务监控专属表，不重新定义前一次迁移的来源。
+
+### 两次迁移共用的投递围栏
+
+`XR-NODE-EXPIRY-*` 到期告警明确排除；不能用宽泛的 `XR-NODE-*` 把到期或其它仍有效来源一起封存。备份快照异常、任务/恢复/执行、success-rate SLO 和节点到期告警继续按各自合同处理。
+
+集合中的 Alert 行、升级历史、delivery attempt 历史和已发送证据保留。`open`/`acked` 告警改为 `resolved`，其余状态不变，并设 `retryable=false`、`delivery_decision=unknown`、`delivery_reason=feature_retired`；只在原决定时间为空时填入迁移时间。`status <> sent` 的 delivery 改为 `status=failed`、`decision=unknown`，清空 lease/`next_retry_at` 并更新 `updated_at`，保留 attempt count、错误、`sent_at` 和历史标识；`status=sent` 的行完全不修改，即使其历史 `sent_at` 为空。该 unknown 围栏阻止自动 retry、升级和手动 claim，不能把 resolved 当作可重发许可；其它来源的投递不受影响。
 
 迁移的数据删除边界、备份资产/任务/审计保留项和灾难恢复要求见[备份、恢复与快照的升级章节](../../admin/backup-recovery.md#升级与灾难恢复)；本节是告警状态与投递事实的主文。
 
@@ -61,7 +73,7 @@ API/前端区分 pending、sending、retrying、sent、failed 和兼容 unknown�
 
 SLO 仅接受任务 `success_rate`，不接受 `availability`。异常仅保留 `snapshot_diff`
 及其 Sigma、事件保留和通知链；不接受 EWMA/disk_forecast 查询筛选。报表保留任务结果、
-RPO/RTO，移除 DiskTrend。HTTP/TCP 监控、到期提醒和维护窗口保持原有边界。
+RPO/RTO，移除 DiskTrend。到期提醒和维护窗口保持原有边界。
 
 `GET /api/v1/overview` 只返回当前身份可见的 `activePolicies`。它不再嵌入节点计数、健康事件、最近任务、任务流量或备份指标；节点的 `open_alerts`/`running_tasks` 仍由独立的 `GET /api/v1/nodes/:id/summary` 提供，`/overview/backup-health`、`/overview/backup-confidence` 和 `/overview/storage-usage` 仍是独立接口。
 
@@ -86,9 +98,10 @@ TaskRun 关联 Task 读取任务名字/policy，节点归属使用不可变 `nod
 
 前端在共享 context 前全部 camelCase 映射；groups/sourceTypes/nextActions/signals 缺失为 []，非法可选 ID 为 undefined，count 为 0；未知 severity→warning、source→alert、resource→platform。过滤空 href，不用 credentials/config/raw log 扩充信息；请求失败不展示旧 groups 为当前结果。回归覆盖聚合、排序、严重度提升、TaskRun snapshot、各种来源、双端 drill 权限关联、next action、mapper 及 loading/empty/error UI。
 
-## 服务监控
+## 服务监控退役
 
-历史任务统计已迁入[任务合同](task-execution-recovery.md#历史任务统计)；可配置看板、
-panel-query 和通用指标目录已退役。HTTP/TCP 服务监控不受看板退役影响。
+HTTP/TCP 周期探测、管理页面、公开状态页及其专属配置/采样表已退役。旧 `/app/service-monitors`、`/status` 地址使用现有未找到页；旧 service-monitors CRUD API 和 `/api/v1/status-page` 返回 404，不提供兼容跳转。历史服务告警按上述精确代码集合封存，不删除业务历史。
 
-service monitor 创建保留显式 disabled，HTTP headers 的写入专用及并发用途边界归[凭据与访问](credentials-access.md)。周期节点 probe 与资源采集已退役；task retention 的注册项不能仅凭注册便宣称动态生效：当前启动注入仍直接使用 cfg，对应数据库 registry 修改未接入消费方，准确启动/覆盖范围见[环境变量](../../env-vars.md)。
+历史任务统计已迁入[任务合同](task-execution-recovery.md#历史任务统计)；可配置看板、panel-query 和通用指标目录已退役。备份健康、恢复校验、任务告警以及程序自身的 `/healthz`、`/readyz`、`/metrics` 保留。
+
+周期节点 probe 与资源采集已退役；task retention 的注册项不能仅凭注册便宣称动态生效：当前启动注入仍直接使用 cfg，对应数据库 registry 修改未接入消费方，准确启动/覆盖范围见[环境变量](../../env-vars.md)。

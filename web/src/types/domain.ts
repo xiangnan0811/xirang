@@ -1195,58 +1195,6 @@ export interface AutomationRuleInput {
   enabled?: boolean;
 }
 
-export type HttpMethod = "GET" | "POST" | "HEAD";
-
-export interface ServiceMonitorView {
-  id: number;
-  /** Stable monitor identifier. */
-  name: string;
-  description: string;
-  type: "http" | "tcp";
-  target: string;
-  intervalSeconds: number;
-  timeoutSeconds: number;
-  httpMethod: HttpMethod;
-  httpExpectedStatus: number;
-  /** Header names are safe to display; values never cross the API boundary. */
-  httpHeaderNames: string[];
-  httpHeadersConfigured: boolean;
-  enabled: boolean;
-  lastStatus: "up" | "down" | "unknown";
-  uptimePct: number;
-  lastCheckedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface NewServiceMonitorInput {
-  name: string;
-  description?: string;
-  type: "http" | "tcp";
-  target: string;
-  intervalSeconds?: number;
-  timeoutSeconds?: number;
-  httpMethod?: HttpMethod;
-  httpExpectedStatus?: number;
-  /** Undefined preserves hidden headers only when monitor use is unchanged; [] explicitly clears them. */
-  httpHeaderList?: HeaderKV[];
-  enabled?: boolean;
-}
-
-/** Key/value pair used for HTTP monitor headers (UI editing + API boundary transport). */
-export interface HeaderKV {
-  key: string;
-  value: string;
-}
-
-export interface StatusPageItem {
-  name: string;
-  type: string;
-  status: "up" | "down" | "unknown";
-  uptimePct: number;
-  lastCheckedAt: string | null;
-}
-
 // Backup asset Catalog boundary. Raw snake_case DTOs remain private to
 // web/src/lib/api; consumers receive only these closed, camelCase projections.
 export type CatalogCapabilityCode =

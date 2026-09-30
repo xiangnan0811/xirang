@@ -343,6 +343,39 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	}
 }
 
+func TestRetiredServiceMonitoringRoutesReturnNotFound(t *testing.T) {
+	router := NewRouter(Dependencies{})
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/service-monitors"},
+		{http.MethodPost, "/api/v1/service-monitors"},
+		{http.MethodGet, "/api/v1/service-monitors/1"},
+		{http.MethodPut, "/api/v1/service-monitors/1"},
+		{http.MethodDelete, "/api/v1/service-monitors/1"},
+		{http.MethodGet, "/api/v1/status-page"},
+	} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(route.method, route.path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("retired route %s %s returned %d, want %d", route.method, route.path, response.Code, http.StatusNotFound)
+		}
+	}
+	routes := router.Routes()
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/overview/backup-health"},
+		{http.MethodGet, "/api/v1/recovery-plans/:id"},
+	} {
+		if !hasRoute(routes, route.method, route.path) {
+			t.Fatalf("retained backup/recovery route is missing: %s %s", route.method, route.path)
+		}
+	}
+}
+
 func TestHealthAndReadyEndpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"

@@ -39,28 +39,27 @@ import (
 )
 
 type Dependencies struct {
-	AppContext             context.Context
-	DB                     *gorm.DB
-	AuthService            *auth.Service
-	JWTManager             *auth.JWTManager
-	TaskManager            *task.Manager
-	ServiceMonitorNotifier handlers.ServiceMonitorChangeNotifier
-	Hub                    *ws.Hub
-	AllowedOrigins         []string
-	LoginRateLimit         int
-	LoginRateWindow        time.Duration
-	SettingsService        *settings.Service
-	RetryWorker            *alerting.RetryWorker
-	AlertDispatcher        *alerting.Dispatcher
-	MetricsToken           string
-	MetricsRateLimit       int
-	MetricsRateWindow      time.Duration
-	BackupAssets           *backupruntime.Runtime
-	BackupContent          handlers.BackupContentService
-	BackupContentConfig    handlers.BackupContentHandlerConfigSource
-	LegacyResticSnapshots  handlers.LegacyResticSnapshots
-	SnapshotDiffRunner     handlers.SnapshotDiffRunner
-	SnapshotIndexer        *snapshot.Indexer
+	AppContext            context.Context
+	DB                    *gorm.DB
+	AuthService           *auth.Service
+	JWTManager            *auth.JWTManager
+	TaskManager           *task.Manager
+	Hub                   *ws.Hub
+	AllowedOrigins        []string
+	LoginRateLimit        int
+	LoginRateWindow       time.Duration
+	SettingsService       *settings.Service
+	RetryWorker           *alerting.RetryWorker
+	AlertDispatcher       *alerting.Dispatcher
+	MetricsToken          string
+	MetricsRateLimit      int
+	MetricsRateWindow     time.Duration
+	BackupAssets          *backupruntime.Runtime
+	BackupContent         handlers.BackupContentService
+	BackupContentConfig   handlers.BackupContentHandlerConfigSource
+	LegacyResticSnapshots handlers.LegacyResticSnapshots
+	SnapshotDiffRunner    handlers.SnapshotDiffRunner
+	SnapshotIndexer       *snapshot.Indexer
 	// TrustedProxies limits which reverse proxies may set X-Forwarded-For.
 	// Empty = trust none (ClientIP uses RemoteAddr only).
 	TrustedProxies []string
@@ -635,13 +634,6 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/alerts/:id/escalation-events", middleware.RBAC("alerts:read"), alertHandler.EscalationEvents)
 
-	serviceMonitorHandler := handlers.NewServiceMonitorHandler(dep.DB, dep.ServiceMonitorNotifier)
-	secured.GET("/service-monitors", middleware.RBAC("service_monitors:read"), serviceMonitorHandler.List)
-	secured.GET("/service-monitors/:id", middleware.RBAC("service_monitors:read"), serviceMonitorHandler.Get)
-	secured.POST("/service-monitors", middleware.RBAC("service_monitors:write"), serviceMonitorHandler.Create)
-	secured.PUT("/service-monitors/:id", middleware.RBAC("service_monitors:write"), serviceMonitorHandler.Update)
-	secured.DELETE("/service-monitors/:id", middleware.RBAC("service_monitors:write"), serviceMonitorHandler.Delete)
-
 	automationRuleHandler := handlers.NewAutomationRuleHandler(dep.DB)
 	secured.GET("/automation-rules", middleware.RBAC("automation:read"), automationRuleHandler.List)
 	secured.POST("/automation-rules", middleware.RBAC("automation:write"), automationRuleHandler.Create)
@@ -807,9 +799,6 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.POST("/nodes/:id/migrate", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.Migrate)
 	secured.POST("/nodes/:id/migrate/preflight", middleware.RBAC("nodes:write"), middleware.OwnershipNodeCheck(dep.DB), nodeHandler.MigratePreflight)
-
-	// Status Page 无需认证的公开端点
-	v1.GET("/status-page", serviceMonitorHandler.StatusPage)
 
 	// WebSocket 路由放在 secured 外部：浏览器 WebSocket API 无法设置自定义 HTTP 头，
 	// 因此无法通过 AuthMiddleware。认证改由 WS 协议内首条消息完成（含 RBAC 校验）。

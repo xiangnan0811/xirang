@@ -43,6 +43,8 @@ env -u NODE_ENV npm --prefix web audit --audit-level=moderate
 - 分别记录实际漏洞摘要、退出码和去重后的 GHSA 集合。一个公告可能经多个父依赖传播，不能用包计数下降或 GHSA 减少单独宣称通过；结合 `via`、`nodes`、`npm ls`、`npm explain` 核对依赖路径。
 - 本地通过而 CI 失败时，先核对 Node/npm、环境变量和干净锁文件安装，不能绕过审计。
 
+构建链中的 `brace-expansion` 必须同时核对 ESLint/minimatch 的旧主版本分支与 TypeScript ESLint 的新分支，不能只更新顶层解析结果。针对括号展开拒绝服务公告，分别在父依赖允许的 semver 范围内更新锁定补丁版本，保持 `package.json`、平台选择元数据和审计阈值不变；使用 CI Node 主版本干净安装后执行完整审计与前端门禁。
+
 ### jsdom 选择器兼容性
 
 [package.json](../../web/package.json)中的 jsdom 专属 override 将 `nwsapi` 固定为已验证的 2.2.25。既有回归记录表明 jsdom 26 下 2.2.26/2.2.27 的 `:modal` 匹配会递归进入原生匹配适配器，导致下拉交互超时。调整 override 前，在 CI Node 版本下同时验证独立选择器匹配、节点和通知下拉确认测试，保留完整审计及前端门禁；不得通过增加超时或修改产品交互掩盖问题。
@@ -70,7 +72,7 @@ Conventional Commits 标题。旧运行的重跑仍使用原始事件中的标�
 
 仓库不依赖 Codecov 账户或上传令牌。覆盖率由 CI 自行阻断：后端总覆盖率和备份资产专项阈值、前端非空 LCOV；竞态、漏洞、PostgreSQL、浏览器和容器验收各自保留。
 
-备份职责收敛后，CI 的 race 列表不再引用已删除的节点 probe、metrics 或系统日志包；按需 SSH、任务、备份资产及投递并发检查保留。PostgreSQL 的 alerting/escalation 必需选择器包含退役迁移后的直接投递与升级投递围栏测试，数据库选择器同时覆盖退役 schema 和启动保护器漂移。删除看板只移除其专用网格布局依赖，任务图表仍使用 Recharts；锁文件和 bundle budget 继续按上述门禁验证。
+备份职责收敛后，CI 的 race 列表不再引用已删除的节点 probe、metrics、系统日志或服务 uptime 包，也不运行服务监控配置的专属 race 步骤；按需 SSH、任务、备份资产及投递并发检查保留。创建默认值的双引擎 parity 仅保留策略创建与调度行为。PostgreSQL 的 alerting/escalation 必需选择器包含节点及服务来源退役迁移后的直接投递与升级投递围栏测试，数据库选择器同时覆盖退役 schema 和启动保护器漂移。删除看板只移除其专用网格布局依赖，任务图表仍使用 Recharts；锁文件和 bundle budget 继续按上述门禁验证。
 
 真实后端 Playwright smoke 在独立 CI 步骤先编译服务以准备 Go 构建缓存，避免冷缓存依赖下载和首次编译消耗浏览器 webServer 的就绪窗口。smoke 仍由隔离脚本构建并启动临时二进制与数据库，保留原有就绪超时及真实浏览器断言，不复用外部运行中的服务。
 

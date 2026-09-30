@@ -23,10 +23,8 @@ import {
   OverviewPage,
   PoliciesPage,
   ReportsPage,
-  ServiceMonitorsPage,
   SettingsPage,
   SSHKeysPage,
-  StatusPage,
   TasksPage,
 } from "@/router-pages";
 
@@ -38,10 +36,6 @@ export const AppRouter = createBrowserRouter([
   {
     path: "/login",
     element: <LoginPage />
-  },
-  {
-    path: "/status",
-    element: <LazyPage><StatusPage /></LazyPage>
   },
   {
     path: "/app",
@@ -137,10 +131,6 @@ export const AppRouter = createBrowserRouter([
       {
         path: "automation-rules",
         element: <LazyPage><AutomationRulesPage /></LazyPage>
-      },
-      {
-        path: "service-monitors",
-        element: <LazyPage><ServiceMonitorsPage /></LazyPage>
       },
       {
         path: "*",

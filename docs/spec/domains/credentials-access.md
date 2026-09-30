@@ -106,9 +106,9 @@ Doctor 继续按需验证 SSH、权限、工具、目录和备份空间，不检
 
 `policies.pre_hook/post_hook` 含秘密，模型 hook 保存时加密、读取时解密。非管理员响应为空，非管理员非空输入 403，更新空/隐藏字段保留原 hook；管理员可按命令验证规则设置或清空。应用 profile 自动 hook 仅在执行时由加密 app credential 渲染，创建/更新只保存 profile 和 credential ID，不持久化生成的含密码命令。
 
-敏感 setting（如 `smtp.password`）注册 `Sensitive: true` 并加入 v1→v2 迁移 allowlist；Update/UpdateWithTx 入库前加密，空值可为空，在服务边界解密。GetEffective 数据库读取失败时保留已有过期缓存，不能用 env/default 覆盖缓存。迁移计数覆盖 policy、app credential、integration proxy 和全部现存敏感 setting。监控 HTTP headers 也加密且不直接 JSON 输出，API 只公开配置标记和头名；启动回填不可解密/无法保存时不就绪。环境覆盖和当前实现例外见[环境变量](../../env-vars.md)。
+敏感 setting（如 `smtp.password`）注册 `Sensitive: true` 并加入 v1→v2 迁移 allowlist；Update/UpdateWithTx 入库前加密，空值可为空，在服务边界解密。GetEffective 数据库读取失败时保留已有过期缓存，不能用 env/default 覆盖缓存。迁移计数覆盖 policy、app credential、integration proxy 和全部现存敏感 setting。环境覆盖和当前实现例外见[环境变量](../../env-vars.md)。
 
-监控 `http_headers` 为 JSON 对象字符串且仅写入，查询不返回值或 `***`；更新省略时只有类型、完整目标（含路径/查询参数）、HTTP method 都未变才保留旧配置。用途变化必须显式替换或提交字符串 `"{}"` 清空，否则返回 409 与 `service_monitor_target_change_requires_headers`；并发变更返回 `service_monitor_concurrent_update`，客户端重新加载再编辑。Task 所有响应中的嵌套 policy 仅含 `id/name`，管理员也不能经任务接口读到解密 hook/演练脚本。
+Task 所有响应中的嵌套 policy 仅含 `id/name`，管理员也不能经任务接口读到解密 hook/演练脚本。
 
 `GET /api/v1/settings/security-risk-summary` 只读且仅 admin，任何风险项都不修改节点、密钥、配置、known_hosts 或远端。类别为 `root_ssh_users`、`reused_ssh_keys`、`sudo_enabled_nodes`、`broad_scope_ssh_keys`、`disabled_ssh_keys_in_use`、`expired_ssh_keys_in_use`、`stale_ssh_keys`、`recent_credential_operations`、`weak_security_defaults`；零发现仍保留类别。examples 只含脱敏节点/密钥名字、设置标签或 action 数量，限制为实现的 `maxSecurityRiskExamples`，总 count 独立返回；不回显审计 metadata/error 或连接信息。查询失败返回标准 internal error，不包装成部分成功。
 
