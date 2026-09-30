@@ -245,7 +245,7 @@ func TestHealthIncidentTimelineOperatorOwnershipFiltersNodeScopedAndPlatformAler
 	alerts := []model.Alert{
 		{NodeID: ownedNode.ID, NodeName: ownedNode.Name, Severity: "warning", Status: "open", ErrorCode: "XR-OWNED", Message: "owned alert", TriggeredAt: now.Add(-10 * time.Minute)},
 		{NodeID: otherNode.ID, NodeName: otherNode.Name, Severity: "critical", Status: "open", ErrorCode: "XR-OTHER", Message: "other alert", TriggeredAt: now.Add(-5 * time.Minute)},
-		{NodeID: 0, NodeName: "status-page", Severity: "critical", Status: "open", ErrorCode: "XR-SERVICE-DOWN", Message: "service down", TriggeredAt: now.Add(-1 * time.Minute)},
+		{NodeID: 0, NodeName: "platform", Severity: "critical", Status: "open", ErrorCode: "XR-PLATFORM-TEST", Message: "platform alert", TriggeredAt: now.Add(-1 * time.Minute)},
 	}
 	if err := db.Create(&alerts).Error; err != nil {
 		t.Fatalf("创建告警失败: %v", err)
@@ -267,7 +267,7 @@ func TestHealthIncidentTimelineOperatorWithNoOwnedNodesReturnsEmpty(t *testing.T
 	db := openHealthIncidentTimelineTestDB(t)
 	migrateHealthIncidentTimelineTables(t, db)
 
-	alert := model.Alert{NodeID: 0, NodeName: "platform", Severity: "critical", Status: "open", ErrorCode: "XR-PLATFORM", Message: "platform alert", TriggeredAt: time.Now().UTC()}
+	alert := model.Alert{NodeID: 0, NodeName: "platform", Severity: "critical", Status: "open", ErrorCode: "XR-PLATFORM-TEST", Message: "platform alert", TriggeredAt: time.Now().UTC()}
 	if err := db.Create(&alert).Error; err != nil {
 		t.Fatalf("创建平台告警失败: %v", err)
 	}

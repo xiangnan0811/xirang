@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### 行为与升级说明
+
+- 移除 HTTP/TCP 服务监控管理页、公开状态页、专属 API 与周期探测。旧 `/app/service-monitors`、`/status` 显示未找到页；六个旧 API method/path 返回 404。备份概览、数据、恢复、任务告警以及 `/healthz`、`/readyz`、`/metrics` 保留。
+- 新增独立不可逆迁移 `000091_service_monitor_retirement`，只删除 `service_uptime_samples` 和 `service_monitors`。已发布的 `000090_backup_focus_retirement` 及其节点监控/日志/看板删除边界保持不变；服务监控不属于该历史迁移的删除范围。
+- 本次仅将精确匹配 `^XR-SERVICE-DOWN-[0-9]+$` 的告警封存为 `unknown` / `feature_retired`，包括监控已删除的孤立告警；保留告警行、已发送投递、attempt 和升级历史，未发送投递停止自动/手动重试与升级。其它任务、恢复、到期及快照差异来源不受影响。
+- 升级前 STOP 并排空全部旧 Core、scheduler、executor、collector 和 notification worker，禁止旧 prober 与新库混跑。保全一致性整库备份、`DATA_ENCRYPTION_KEY`、适用历史密钥及独立备份树，并先使用匹配旧二进制、配置及密钥做隔离实际恢复验证；SQLite 离线操作，PostgreSQL 手动 stop/drain 全部 writer。新版迁移完成后才启动新版 worker；可选 Worker 与 Core 保持版本一致。
+- 本次 down 和低于新版本下限的元数据写入均被拒绝，即使空库也不能原地降级；原有版本保护器保留。需要回退时仅恢复本次升级前的完整数据库并配套旧二进制、配置与密钥，不能只替换旧镜像、重建空表、Force dirty 或删除保护器。
+- 新行为只在新版进程生效；旧进程中已开始的探测/投递必须在升级前排空，不能依赖迁移取消在途网络操作。本地验收包含 SQLite/PostgreSQL 整库备份恢复，以及 SQLite 恢复副本的真实服务启动与页面/API 检查；不代表远端 Provider 文件恢复或生产部署已经验收。
+
 ## [0.56.0](https://github.com/xiangnan0811/xirang/compare/v0.55.26...v0.56.0) (2026-09-29)
 
 

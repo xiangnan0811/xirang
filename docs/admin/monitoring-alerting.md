@@ -1,6 +1,6 @@
-# 监控、告警与状态页
+# 监控与告警
 
-本文档说明 Xirang 的按需节点连接测试、HTTP/TCP uptime 监控、公开状态页、备份快照异常、告警投递和应用 Prometheus 指标。服务器持续资源监控交由专用监控系统。
+本文档说明 Xirang 的按需节点连接测试、备份快照异常、告警投递和应用 Prometheus 指标。服务器持续资源监控交由专用监控系统。
 
 ## 节点连接与业务状态
 
@@ -15,56 +15,6 @@
 节点系统日志采集、节点日志配置、节点日志查询和告警关联已退役；Xirang 不再通过 SSH 周期读取 journal 或文件日志。日志页面现仅提供任务及 TaskRun 执行日志；`GET /api/v1/tasks/:id/logs`、`GET /api/v1/task-runs/:id/logs` 和 `/api/v1/ws/logs` 实时任务日志 WebSocket 继续保留，并使用 `tasks:read` 授权。安全审计日志仍由独立审计链保留。
 
 历史成功率、采样吞吐量和运行时长分位的接口、窗口和授权口径见[任务执行与恢复合同的历史任务统计](../spec/domains/task-execution-recovery.md#历史任务统计)。
-
-## HTTP/TCP Uptime 监控
-
-服务监控从 Xirang 服务端主动探测 HTTP/TCP 端点，不依赖远程节点 SSH。
-
-支持能力：
-
-- HTTP 探测：支持 GET/POST/HEAD，校验状态码。
-- TCP 探测：连接指定 host:port。
-- Uptime 计算：按小时聚合并展示过去 24 小时可用率。
-- 告警联动：服务从 up 变 down 时产生 critical 告警，恢复时自动 resolve。
-- 公开状态页：`/status` 无需登录即可访问。
-
-默认探测参数：
-
-| 参数 | 默认值 | 范围 |
-|---|---:|---|
-| interval | 60 秒 | 5-3600 秒 |
-| timeout | 10 秒 | 1-300 秒 |
-
-Web 入口：
-
-- 登录后管理监控项：`/app/service-monitors`
-- 公开状态页：`/status`
-
-API 需要对应权限；admin/operator 可管理监控项，viewer 只读，公开状态页例外：
-
-| 方法 | 路径 | 认证 | 说明 |
-|---|---|---|---|
-| GET | `/api/v1/service-monitors` | `service_monitors:read` | 列出监控项 |
-| POST | `/api/v1/service-monitors` | `service_monitors:write` | 创建监控项 |
-| GET | `/api/v1/service-monitors/:id` | `service_monitors:read` | 获取详情 |
-| PUT | `/api/v1/service-monitors/:id` | `service_monitors:write` | 更新监控项 |
-| DELETE | `/api/v1/service-monitors/:id` | `service_monitors:write` | 删除监控项 |
-| GET | `/api/v1/status-page` | 公开 | 状态页数据 |
-
-当前限制：
-
-- 不检测 TLS 证书过期。
-- 不支持响应体关键字或正则匹配。
-- 仅支持单探测源，即 Xirang 服务端自身。
-- HTTP headers 通过 JSON 字符串传入。
-
-
-请求头与监控用途绑定：
-
-- HTTP 请求头是写入专用字段；查询只返回请求头名称和是否已配置，不返回值或密文。
-- 更新时省略 `http_headers` 仅在监控用途未变化时保留现有请求头。监控用途包括类型、完整目标（含路径和查询参数）以及 HTTP 方法。
-- 若改变类型、目标或 HTTP 方法，且已有请求头，必须显式提交新的 JSON 请求头，或提交字符串 `"{}"` 清空；不能靠省略字段把旧凭据带到新目标。
-- 此类更新的 `409` 响应在 `data.reason.code` 中返回 `service_monitor_target_change_requires_headers`。并发更新冲突返回 `service_monitor_concurrent_update`；客户端应重新加载监控后重试，不应盲目重复旧请求。
 
 ## 告警与通知
 
@@ -95,8 +45,6 @@ Xirang 支持以下通知渠道：
 无法确定身份的历史通知保持未知，不会盲目删除或自动重发。冷却从可证明的发送成功时间开始计算，未知历史时间不会回填为升级时间。投递、升级、分组、重试和兼容的完整约束见[告警与健康合同](../spec/domains/alerting-health.md)。
 
 职责收敛迁移只封存退役监控/日志来源的历史告警投递：告警行、升级和已发送事实保留，未发送记录以 `unknown`/`feature_retired` 围栏终止自动和手动 claim；`XR-NODE-EXPIRY-*` 到期告警不在退役集合。精确代码集合与状态转换见[告警与健康合同](../spec/domains/alerting-health.md#退役来源告警封存与投递围栏)。
-
-创建服务监控时显式提交 `enabled=false` 会保持禁用；未提交该字段才使用默认启用值。HTTP 请求头等秘密字段仍通过加密 hooks 持久化。
 
 常用环境变量：
 

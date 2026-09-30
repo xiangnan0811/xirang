@@ -32,6 +32,28 @@ func openBackupHealthTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func withBackupHealthPostgresTimezone(dsn string) string {
+	if strings.Contains(dsn, "://") {
+		separator := "?"
+		if strings.Contains(dsn, "?") {
+			separator = "&"
+		}
+		return dsn + separator + "timezone=UTC"
+	}
+	return dsn + " timezone=UTC"
+}
+
+func withBackupHealthPostgresSchema(dsn, schema string) string {
+	if strings.Contains(dsn, "://") {
+		separator := "?"
+		if strings.Contains(dsn, "?") {
+			separator = "&"
+		}
+		return dsn + separator + "search_path=" + schema + "&timezone=UTC"
+	}
+	return dsn + " search_path=" + schema + " timezone=UTC"
+}
+
 func openBackupHealthPostgresTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
@@ -39,7 +61,7 @@ func openBackupHealthPostgresTestDB(t *testing.T) *gorm.DB {
 		t.Skip("TEST_POSTGRES_DSN required")
 	}
 	t.Setenv("APP_ENV", "development")
-	base, err := gorm.Open(postgres.Open(withServiceMonitorPostgresTimezone(dsn)), &gorm.Config{})
+	base, err := gorm.Open(postgres.Open(withBackupHealthPostgresTimezone(dsn)), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open PostgreSQL backup health base: %v", err)
 	}
@@ -47,7 +69,7 @@ func openBackupHealthPostgresTestDB(t *testing.T) *gorm.DB {
 	if err := base.Exec("CREATE SCHEMA " + schema).Error; err != nil {
 		t.Fatalf("create PostgreSQL backup health schema: %v", err)
 	}
-	db, err := gorm.Open(postgres.Open(withServiceMonitorPostgresSchema(dsn, schema)), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(withBackupHealthPostgresSchema(dsn, schema)), &gorm.Config{})
 	if err != nil {
 		_ = base.Exec("DROP SCHEMA " + schema + " CASCADE").Error
 		if sqlDB, dbErr := base.DB(); dbErr == nil {

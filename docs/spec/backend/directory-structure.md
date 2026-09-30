@@ -39,7 +39,6 @@
 | `GET /auth/captcha`、`POST /auth/login`、`POST /auth/2fa/login` | 登录前入口，使用登录限流；登录挑战和二步登录自行校验其证明 |
 | `GET /version` | 公开版本信息；其他版本管理操作不因此公开 |
 | `/asset-content/:deliveryId` 及尾斜杠/不支持方法的拒绝路由 | 内容网关使用自身 cookie/grant/session 授权和安全 recovery；不把 opaque ID 或 Bearer header 当内容权限，错误形状也必须走安全拒绝链。详见[内容交付](../domains/backup-content-delivery.md) |
-| `GET /status-page` | 明确公开的服务状态页，只返回该端点允许的公开视图 |
 | `GET /ws/logs` | WebSocket 首条协议消息验证主 token、当前会话权限及 `tasks:read`，并限制 operator 对象可见性；不是匿名日志流 |
 | `GET /ws/terminal` | WebSocket 协议内验证当前 admin 主 token、step-up 与匹配的临时凭据授权，再进入节点/凭据/SSH 边界；不是匿名终端。详见[凭据与访问](../domains/credentials-access.md) |
 

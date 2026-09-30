@@ -16,6 +16,6 @@ package model
 //	integration.go — Integration, AppCredential
 //	report.go      — ReportConfig, Report
 //	audit.go       — AuditLog, CredentialAuditEvent, CredentialAccessGrant
-//	monitor.go     — ServiceMonitor, ServiceUptimeSample, AnomalyEvent, SLODefinition
+//	monitor.go     — AnomalyEvent, SLODefinition
 //	backup.go      — RestoreDrillEvidence, SnapshotDiffHistory, SnapshotFileIndex, AutomationRule, AutomationRuleLog
 //	system.go      — SystemSetting

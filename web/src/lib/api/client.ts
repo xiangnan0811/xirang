@@ -27,7 +27,6 @@ import { createEscalationApi } from "./escalation";
 import { createAlertDeliveriesApi } from "./alert-deliveries";
 import { createAppCredentialsApi } from "./app-credentials";
 import { createAutomationRulesApi } from "./automation-rules";
-import { createServiceMonitorsApi } from "./service-monitors";
 
 export { ApiError } from "./core";
 
@@ -322,7 +321,6 @@ export const apiClient = {
   ...createAlertDeliveriesApi(),
   ...createAppCredentialsApi(),
   ...createAutomationRulesApi(),
-  ...createServiceMonitorsApi(),
   ...lazyRecoveryPointsApi,
   ...lazyBackupAssetsApi,
   ...lazyBackupAssetSearchApi,

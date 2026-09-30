@@ -42,7 +42,6 @@ import (
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
-	"xirang/backend/internal/uptime"
 	"xirang/backend/internal/util"
 	"xirang/backend/internal/version"
 	"xirang/backend/internal/ws"
@@ -108,9 +107,6 @@ func main() {
 	// scripts may remain readable at rest with no health signal.
 	if err := bootstrap.EncryptPlaintextPolicyDrillScripts(db); err != nil {
 		log.Fatal().Err(err).Msg("策略演练脚本明文加密失败，拒绝启动")
-	}
-	if err := bootstrap.EncryptServiceMonitorHeaders(db); err != nil {
-		log.Fatal().Err(err).Msg("服务监控请求头加密失败，拒绝启动")
 	}
 	if err := bootstrap.MigrateLegacyResticTaskConfigs(db); err != nil {
 		log.Fatal().Err(err).Msg("Restic 历史任务配置迁移失败，拒绝启动")
@@ -248,31 +244,6 @@ func main() {
 
 	taskRetention := task.NewRetentionWorker(settingsSvc, taskManager)
 
-	uptimeProber := uptime.NewProber(db, 60*time.Second)
-	uptimeProber.SetAlertCallback(func(monitor model.ServiceMonitor, oldStatus, newStatus string) {
-		if newStatus == "down" {
-			_, _, alertErr := raiser.RaiseAnomalyAlert(alerting.AnomalyAlertInput{
-				NodeID:    0, // service monitors are not node-scoped
-				NodeName:  monitor.Name,
-				Severity:  "critical",
-				ErrorCode: fmt.Sprintf("XR-SERVICE-DOWN-%d", monitor.ID),
-				Message:   fmt.Sprintf("服务 %s 不可达 (%s)", monitor.Name, monitor.Target),
-			})
-			if alertErr != nil {
-				logger.Module("uptime").Warn().Uint("monitor_id", monitor.ID).Err(alertErr).Msg("创建 down 告警失败")
-			}
-		} else if newStatus == "up" && oldStatus == "down" {
-			if resolveErr := db.Model(&model.Alert{}).Where("error_code = ? AND status = 'open'",
-				fmt.Sprintf("XR-SERVICE-DOWN-%d", monitor.ID)).
-				Updates(map[string]interface{}{
-					"status":     "resolved",
-					"updated_at": time.Now(),
-				}).Error; resolveErr != nil {
-				logger.Module("uptime").Warn().Uint("monitor_id", monitor.ID).Err(resolveErr).Msg("恢复 down 告警失败")
-			}
-		}
-	})
-
 	reportScheduler := reporting.NewScheduler(db)
 
 	retryWorker := alerting.NewRetryWorker(db)
@@ -283,7 +254,6 @@ func main() {
 
 	// LIFECYCLE PHASE: assemble workers in startup order, then start all.
 	workers := []lifecycle.Worker{
-		uptimeProber,
 		assetRuntime,
 		taskManager,
 		taskRetention,
@@ -307,25 +277,24 @@ func main() {
 	snapshotIndexer := snapshot.NewIndexer(db, assetRuntime.LineageGuard(), assetRuntime.FoundationService())
 
 	router := api.NewRouter(api.Dependencies{
-		AppContext:             hubCtx,
-		DB:                     db,
-		AuthService:            authService,
-		JWTManager:             jwtManager,
-		TaskManager:            taskManager,
-		ServiceMonitorNotifier: uptimeProber,
-		Hub:                    hub,
-		SettingsService:        settingsSvc,
-		AllowedOrigins:         cfg.AllowedOrigins,
-		LoginRateLimit:         cfg.LoginRateLimit,
-		LoginRateWindow:        cfg.LoginRateWindow,
-		RetryWorker:            retryWorker,
-		AlertDispatcher:        alertDispatcher,
-		MetricsToken:           cfg.MetricsToken,
-		MetricsRateLimit:       cfg.MetricsRateLimit,
-		TrustedProxies:         cfg.TrustedProxies,
-		MetricsRateWindow:      cfg.MetricsRateWindow,
-		BackupAssets:           assetRuntime,
-		BackupContent:          assetRuntime.ContentService(),
+		AppContext:        hubCtx,
+		DB:                db,
+		AuthService:       authService,
+		JWTManager:        jwtManager,
+		TaskManager:       taskManager,
+		Hub:               hub,
+		SettingsService:   settingsSvc,
+		AllowedOrigins:    cfg.AllowedOrigins,
+		LoginRateLimit:    cfg.LoginRateLimit,
+		LoginRateWindow:   cfg.LoginRateWindow,
+		RetryWorker:       retryWorker,
+		AlertDispatcher:   alertDispatcher,
+		MetricsToken:      cfg.MetricsToken,
+		MetricsRateLimit:  cfg.MetricsRateLimit,
+		TrustedProxies:    cfg.TrustedProxies,
+		MetricsRateWindow: cfg.MetricsRateWindow,
+		BackupAssets:      assetRuntime,
+		BackupContent:     assetRuntime.ContentService(),
 		BackupContentConfig: func(context.Context) (handlers.BackupContentHandlerConfig, error) {
 			contentConfig, contentConfigErr := assetRuntime.ContentConfig()
 			if contentConfigErr != nil {

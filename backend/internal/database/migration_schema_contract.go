@@ -21,6 +21,7 @@ const (
 	backupCompletionFactsSchemaVersion              int64 = 87
 	taskCronOverrideSchemaVersion                   int64 = 88
 	backupFocusRetirementSchemaVersion              int64 = 90
+	serviceMonitorRetirementSchemaVersion           int64 = 91
 )
 
 const lifecycleEffectClaimAuditSlotAdmissionTrigger = "trg_recovery_point_lifecycle_effect_claim_audit_slot_downgrade_admission"
@@ -45,6 +46,9 @@ const taskCronOverrideDowngradeAdmissionTrigger = "trg_task_cron_override_downgr
 const backupFocusRetirementAdmissionTrigger = "trg_backup_focus_retirement_downgrade_admission"
 const backupFocusRetirementUpdateAdmissionTrigger = "trg_backup_focus_retirement_downgrade_update_admission"
 const backupFocusRetirementAdmissionFunction = "backup_focus_retirement_downgrade_admission"
+const serviceMonitorRetirementAdmissionTrigger = "trg_service_monitor_retirement_downgrade_admission"
+const serviceMonitorRetirementUpdateAdmissionTrigger = "trg_service_monitor_retirement_downgrade_update_admission"
+const serviceMonitorRetirementAdmissionFunction = "service_monitor_retirement_downgrade_admission"
 
 type lifecycleEffectClaimAuditSlotTriggerContract struct {
 	table                                 string
@@ -642,6 +646,15 @@ BEGIN
 	END IF;
 	RETURN NEW;
 END;`
+const serviceMonitorRetirementSQLiteAdmissionWhen = "NEW.version < 91"
+const serviceMonitorRetirementSQLiteAdmissionBody = "SELECT RAISE(ABORT, '000091 downgrade blocked: service-monitor retirement is irreversible');"
+const serviceMonitorRetirementPostgresAdmissionBody = `
+BEGIN
+	IF NEW.version < 91 THEN
+		RAISE EXCEPTION '000091 downgrade blocked: service-monitor retirement is irreversible';
+	END IF;
+	RETURN NEW;
+END;`
 
 // ErrMigrationSchemaDrift means schema_migrations records a clean migration-69
 // or newer database, but the minimum recovery schema is incomplete. The error is
@@ -842,6 +855,12 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 		return nil
 	}
 	if err := validateBackupFocusRetirementAdmission(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < serviceMonitorRetirementSchemaVersion {
+		return nil
+	}
+	if err := validateServiceMonitorRetirementAdmission(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
 
@@ -2645,6 +2664,99 @@ func backupFocusRetirementPostgresFunctionDefinitionExact(definition string) boo
 	body, ok := migrationPostgresFunctionBody(definition)
 	return ok && normalizeMigrationGuardBody(body) ==
 		normalizeMigrationGuardBody(backupFocusRetirementPostgresAdmissionBody)
+}
+func validateServiceMonitorRetirementAdmission(db *sql.DB, dbType string) error {
+	if dbType == "sqlite" {
+		for _, trigger := range []struct {
+			name  string
+			event string
+		}{
+			{name: serviceMonitorRetirementAdmissionTrigger, event: "BEFORE INSERT"},
+			{name: serviceMonitorRetirementUpdateAdmissionTrigger, event: "BEFORE UPDATE"},
+		} {
+			definition, err := migrationTriggerDefinition(db, dbType, "schema_migrations", trigger.name)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errors.New("missing_service_monitor_retirement_admission_trigger")
+				}
+				return errors.New("catalog_query_failed")
+			}
+			if !serviceMonitorRetirementSQLiteGuardDefinitionExact(definition, trigger.name, trigger.event) {
+				return errors.New("invalid_service_monitor_retirement_admission_trigger")
+			}
+		}
+		return nil
+	}
+
+	definition, err := migrationTriggerDefinition(
+		db,
+		dbType,
+		"schema_migrations",
+		serviceMonitorRetirementAdmissionTrigger,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_service_monitor_retirement_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	enabled, enabledErr := migrationTriggerEnabled(
+		db,
+		dbType,
+		"schema_migrations",
+		serviceMonitorRetirementAdmissionTrigger,
+	)
+	if enabledErr != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !enabled || !serviceMonitorRetirementPostgresTriggerDefinitionExact(definition) {
+		return errors.New("invalid_service_monitor_retirement_admission_trigger")
+	}
+
+	functionDefinition, functionErr := migrationTriggerFunctionDefinition(
+		db,
+		"schema_migrations",
+		serviceMonitorRetirementAdmissionTrigger,
+	)
+	if functionErr != nil {
+		if errors.Is(functionErr, sql.ErrNoRows) {
+			return errors.New("invalid_service_monitor_retirement_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !serviceMonitorRetirementPostgresFunctionDefinitionExact(functionDefinition) {
+		return errors.New("invalid_service_monitor_retirement_admission_trigger")
+	}
+	return nil
+}
+
+func serviceMonitorRetirementSQLiteGuardDefinitionExact(
+	definition,
+	triggerName,
+	event string,
+) bool {
+	return lifecycleSQLiteGuardDefinitionExact(definition, lifecycleEffectClaimAuditSlotTriggerContract{
+		table:            "schema_migrations",
+		name:             triggerName,
+		triggerFragments: []string{event},
+		sqliteWhen:       serviceMonitorRetirementSQLiteAdmissionWhen,
+		sqliteBody:       serviceMonitorRetirementSQLiteAdmissionBody,
+	})
+}
+
+func serviceMonitorRetirementPostgresTriggerDefinitionExact(definition string) bool {
+	return lifecyclePostgresGuardDefinitionExact(definition, lifecycleEffectClaimAuditSlotTriggerContract{
+		table:                "schema_migrations",
+		name:                 serviceMonitorRetirementAdmissionTrigger,
+		triggerFragments:     []string{"BEFORE INSERT OR UPDATE"},
+		postgresFunctionName: serviceMonitorRetirementAdmissionFunction,
+	})
+}
+
+func serviceMonitorRetirementPostgresFunctionDefinitionExact(definition string) bool {
+	body, ok := migrationPostgresFunctionBody(definition)
+	return ok && normalizeMigrationGuardBody(body) ==
+		normalizeMigrationGuardBody(serviceMonitorRetirementPostgresAdmissionBody)
 }
 
 func normalizeMigrationDefinition(definition string) string {

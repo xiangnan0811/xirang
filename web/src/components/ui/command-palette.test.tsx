@@ -37,7 +37,6 @@ vi.mock("react-i18next", () => ({
         "nav.tasks": "Tasks",
         "nav.credentials": "Credentials",
         "nav.automationRules": "Automation Rules",
-        "nav.serviceMonitors": "Service Monitors",
         "search.placeholder": "Search",
         "search.title": "Search",
         "search.description": "Search and open console pages, nodes, or tasks.",
@@ -68,7 +67,6 @@ describe("CommandPalette", () => {
     expect(screen.queryByText("Dashboards")).not.toBeInTheDocument();
     expect(screen.getByText("Credentials")).toBeInTheDocument();
     expect(screen.getByText("Automation Rules")).toBeInTheDocument();
-    expect(screen.getByText("Service Monitors")).toBeInTheDocument();
   });
 
   it("hides admin-only navigation for non-admin roles", () => {

@@ -21,15 +21,15 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 	t.Helper()
 
 	t.Run("valid", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
-		if err := RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine); err != nil {
+		migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
+		if err := validateMinimumRecoverySchema(db, fixture.engine, int64(backupFocusRetirementMigrationVersion)); err != nil {
 			t.Fatalf("valid %s 000090 schema rejected: %v", fixture.engine, err)
 		}
-		assertMigrationVersion(t, migrator, latestMigrationVersion)
+		assertMigrationVersion(t, migrator, backupFocusRetirementMigrationVersion)
 	})
 
 	t.Run("same-name no-op admission guard", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION backup_focus_retirement_downgrade_admission()
 				RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
@@ -44,7 +44,7 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 
 	if fixture.engine == "sqlite" {
 		t.Run("additional SQLite predicate is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
 			fixture.mustExec(t, db, `DROP TRIGGER trg_backup_focus_retirement_downgrade_admission`)
 			fixture.mustExec(t, db, `CREATE TRIGGER trg_backup_focus_retirement_downgrade_admission
 				BEFORE INSERT ON schema_migrations
@@ -56,7 +56,7 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 		})
 
 		t.Run("same-name no-op update admission guard", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
 			fixture.mustExec(t, db, `DROP TRIGGER trg_backup_focus_retirement_downgrade_update_admission`)
 			fixture.mustExec(t, db, `CREATE TRIGGER trg_backup_focus_retirement_downgrade_update_admission
 				BEFORE UPDATE ON schema_migrations
@@ -67,7 +67,7 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 
 	if fixture.engine == "postgres" {
 		t.Run("early return before exception is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
 			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION backup_focus_retirement_downgrade_admission()
 				RETURNS trigger LANGUAGE plpgsql AS $$
 				BEGIN
@@ -81,7 +81,7 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 		})
 
 		t.Run("statement-level trigger is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
 			fixture.mustExec(t, db, `DROP TRIGGER trg_backup_focus_retirement_downgrade_admission ON schema_migrations`)
 			fixture.mustExec(t, db, `CREATE TRIGGER trg_backup_focus_retirement_downgrade_admission
 				BEFORE INSERT OR UPDATE ON schema_migrations
@@ -105,11 +105,11 @@ func assertRunMigrations090SchemaDrift(
 	if err != nil {
 		t.Fatalf("read preflight migration version: %v", err)
 	}
-	if beforeVersion != latestMigrationVersion || beforeDirty {
-		t.Fatalf("preflight migration state got version=%d dirty=%v, want version=%d clean", beforeVersion, beforeDirty, latestMigrationVersion)
+	if beforeVersion != backupFocusRetirementMigrationVersion || beforeDirty {
+		t.Fatalf("preflight migration state got version=%d dirty=%v, want version=%d clean", beforeVersion, beforeDirty, backupFocusRetirementMigrationVersion)
 	}
 
-	err = RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine)
+	err = validateMinimumRecoverySchema(db, fixture.engine, int64(backupFocusRetirementMigrationVersion))
 	if !errors.Is(err, ErrMigrationSchemaDrift) || !strings.Contains(err.Error(), reason) {
 		t.Fatalf("clean %s 000090 drift returned %v, want %s", fixture.engine, err, reason)
 	}

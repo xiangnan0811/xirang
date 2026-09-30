@@ -45,7 +45,7 @@ golang-migrate 在运行 down SQL 前先调用 `SetVersion(target, true)`。因�
 
 ### 不可逆退役迁移
 
-涉及历史监控、节点系统日志和可配置看板的退役迁移只能删除已列明的采样/日志/看板表、专用列、forecast 字段和专用 Settings；备份资产及 Provider 元数据、任务/TaskRun 与任务日志、审计、snapshot-diff 事件和仍有效的告警投递事实必须保留。删除来源记录前须先物化退役告警 ID，再按[告警与健康合同](../domains/alerting-health.md#退役来源告警封存与投递围栏)封存 Alert 和未发送 delivery；不能宽匹配仍有效的到期或服务监控来源。
+退役迁移必须按各自独立边界删除数据：已发布的 `backup_focus_retirement` 只处理列明的节点采样/系统日志/看板表、专用列、forecast 字段和专用 Settings，不删除服务监控表或封存服务告警；后续 `service_monitor_retirement` 只删除 `service_uptime_samples`、`service_monitors`，并封存精确纯数字服务代码集合，不改写前一次迁移及其验收语义。备份资产及 Provider 元数据、任务/TaskRun 与任务日志、审计、snapshot-diff 事件和仍有效的告警投递事实必须保留。各迁移在删除自己的来源记录前分别物化告警 ID，再按[告警与健康合同](../domains/alerting-health.md#退役来源告警封存与投递围栏)的对应来源边界及共用围栏处理 Alert 和未发送 delivery；不能混合两个集合或宽匹配仍有效的到期、任务/恢复来源。服务来源不依赖存活监控项或节点归属。
 
 此类迁移的 down 文件可以明确失败，不能伪造空历史或提供“自动回滚”。执行失败（包括 migrate 驱动在 down 前尝试写旧版本号）后，保护器必须让 `schema_migrations` 版本、dirty 状态、触发器/约束和业务数据保持新版本的 clean 状态。日常回退只能恢复升级前数据库备份，并使用匹配的旧版二进制、完整旧配置、`DATA_ENCRYPTION_KEY` 及适用的历史解密密钥；不得手工修改迁移元数据或删除保护器。删除边界和 SQLite/PostgreSQL 灾难恢复步骤见[备份、恢复与快照](../../admin/backup-recovery.md#升级与灾难恢复)。
 

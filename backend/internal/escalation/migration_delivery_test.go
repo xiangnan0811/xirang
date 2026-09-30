@@ -161,6 +161,19 @@ func (f *escalationMigrationRuntimeFixture) migrateToRetirement(t *testing.T) {
 		t.Fatalf("%s migration version=%d dirty=%v, want 90 clean", f.engine, version, dirty)
 	}
 }
+func (f *escalationMigrationRuntimeFixture) migrateToServiceMonitorRetirement(t *testing.T) {
+	t.Helper()
+	if err := f.migrator.Steps(2); err != nil {
+		t.Fatalf("apply 000090 and 000091 retirement migrations on %s: %v", f.engine, err)
+	}
+	version, dirty, err := f.migrator.Version()
+	if err != nil {
+		t.Fatalf("read %s migration version: %v", f.engine, err)
+	}
+	if version != 91 || dirty {
+		t.Fatalf("%s migration version=%d dirty=%v, want 91 clean", f.engine, version, dirty)
+	}
+}
 
 type escalationMigrationSeed struct {
 	integrationID     uint
@@ -328,5 +341,139 @@ func testMigrationEscalationDeliveryFence(t *testing.T, fixture *escalationMigra
 	}
 	if retainedDelivery.Status != model.AlertDeliveryStatusSent || retainedDelivery.SentAt == nil || retainedDelivery.Decision != "deliver" {
 		t.Fatalf("retained escalation did not successfully deliver: %+v", retainedDelivery)
+	}
+	testMigrationServiceMonitorEscalationFence(t, fixture.engine)
+}
+
+func testMigrationServiceMonitorEscalationFence(t *testing.T, engine string) {
+	t.Helper()
+	var serviceSends, retainedSends atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode escalation migration webhook payload: %v", err)
+		}
+		switch payload.ErrorCode {
+		case "XR-TASK-RETAINED":
+			retainedSends.Add(1)
+		case "XR-SERVICE-DOWN-42":
+			serviceSends.Add(1)
+		default:
+			t.Errorf("unexpected escalation migration webhook error code %q", payload.ErrorCode)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	fixture := newEscalationMigrationRuntimeFixture(t, engine)
+	seed := seedEscalationMigrationState(t, fixture.db, server.URL)
+	var node model.Node
+	if err := fixture.db.First(&node).Error; err != nil {
+		t.Fatalf("load service-monitor escalation node: %v", err)
+	}
+	var policy model.EscalationPolicy
+	if err := fixture.db.First(&policy).Error; err != nil {
+		t.Fatalf("load service-monitor escalation policy: %v", err)
+	}
+	now := time.Now().UTC().Add(-time.Hour)
+	serviceAlert := &model.Alert{
+		NodeID: node.ID, NodeName: node.Name, Severity: "critical", Status: "open",
+		ErrorCode: "XR-SERVICE-DOWN-42", Message: "retired service escalation source", Retryable: true,
+		TriggeredAt: now, Tags: "[]", LastLevelFired: 0, DeliveryDecision: model.AlertDeliveryDecisionEscalated,
+	}
+	if err := fixture.db.Create(serviceAlert).Error; err != nil {
+		t.Fatalf("create service-monitor escalation alert: %v", err)
+	}
+	event := &model.AlertEscalationEvent{
+		AlertID: serviceAlert.ID, EscalationPolicyID: &policy.ID, LevelIndex: 0,
+		IntegrationIDs: fmt.Sprintf("[%d]", seed.integrationID), SeverityBefore: "critical", SeverityAfter: "critical",
+		TagsAdded: "[\"migration\"]", FiredAt: now,
+	}
+	if err := fixture.db.Create(event).Error; err != nil {
+		t.Fatalf("create service-monitor escalation event: %v", err)
+	}
+	var serviceEventBeforeMigration model.AlertEscalationEvent
+	if err := fixture.db.First(&serviceEventBeforeMigration, event.ID).Error; err != nil {
+		t.Fatalf("load service-monitor escalation event before migration: %v", err)
+	}
+	assertServiceEventUnchanged := func(stage string) {
+		var persisted model.AlertEscalationEvent
+		if err := fixture.db.First(&persisted, event.ID).Error; err != nil {
+			t.Fatalf("load service-monitor escalation event after %s: %v", stage, err)
+		}
+		policyMatches := persisted.EscalationPolicyID == nil && serviceEventBeforeMigration.EscalationPolicyID == nil
+		if persisted.EscalationPolicyID != nil && serviceEventBeforeMigration.EscalationPolicyID != nil {
+			policyMatches = *persisted.EscalationPolicyID == *serviceEventBeforeMigration.EscalationPolicyID
+		}
+		if !policyMatches ||
+			persisted.ID != serviceEventBeforeMigration.ID ||
+			persisted.AlertID != serviceEventBeforeMigration.AlertID ||
+			persisted.LevelIndex != serviceEventBeforeMigration.LevelIndex ||
+			persisted.IntegrationIDs != serviceEventBeforeMigration.IntegrationIDs ||
+			persisted.SeverityBefore != serviceEventBeforeMigration.SeverityBefore ||
+			persisted.SeverityAfter != serviceEventBeforeMigration.SeverityAfter ||
+			persisted.TagsAdded != serviceEventBeforeMigration.TagsAdded ||
+			!persisted.FiredAt.Equal(serviceEventBeforeMigration.FiredAt) {
+			t.Fatalf("service-monitor escalation event changed after %s: before=%+v after=%+v", stage, serviceEventBeforeMigration, persisted)
+		}
+	}
+	delivery := &model.AlertDelivery{
+		AlertID: serviceAlert.ID, IntegrationID: seed.integrationID,
+		Status: model.AlertDeliveryStatusPending, Decision: "deliver",
+		DeliveryKey: fmt.Sprintf("%d:%d:%d", serviceAlert.ID, event.ID, seed.integrationID),
+		AttemptID:   "service-monitor-escalation-attempt",
+	}
+	if err := fixture.db.Create(delivery).Error; err != nil {
+		t.Fatalf("create service-monitor escalation delivery: %v", err)
+	}
+	fixture.migrateToServiceMonitorRetirement(t)
+	assertServiceEventUnchanged("SQL migration")
+
+	var retired model.Alert
+	if err := fixture.db.First(&retired, serviceAlert.ID).Error; err != nil {
+		t.Fatalf("load retired service-monitor escalation alert: %v", err)
+	}
+	if retired.Status != "resolved" || retired.Retryable || retired.DeliveryDecision != model.AlertDeliveryDecisionUnknown || retired.DeliveryReason != "feature_retired" {
+		t.Fatalf("retired service-monitor escalation alert was not fenced: %+v", retired)
+	}
+	var retiredDelivery model.AlertDelivery
+	if err := fixture.db.First(&retiredDelivery, delivery.ID).Error; err != nil {
+		t.Fatalf("load retired service-monitor escalation delivery: %v", err)
+	}
+	if retiredDelivery.Status != model.AlertDeliveryStatusFailed || retiredDelivery.Decision != model.AlertDeliveryDecisionUnknown ||
+		retiredDelivery.LeaseExpiresAt != nil || retiredDelivery.NextRetryAt != nil {
+		t.Fatalf("retired service-monitor escalation delivery was not fenced: %+v", retiredDelivery)
+	}
+
+	dispatcher := alerting.NewDispatcher(fixture.db, nil, nil)
+	if _, err := dispatcher.RetryDeliveryByID(context.Background(), retiredDelivery.ID); err != nil {
+		t.Fatalf("manual retry of retired service-monitor escalation delivery: %v", err)
+	}
+	if err := dispatcher.DispatchEscalationDeliveries(context.Background(), retired, event.ID, []uint{retiredDelivery.ID}); err != nil {
+		t.Fatalf("automatic replay of retired service-monitor escalation delivery: %v", err)
+	}
+	if got := serviceSends.Load(); got != 0 {
+		t.Fatalf("retired service-monitor escalation intent was sent: sends=%d", got)
+	}
+
+	var beforeRetiredEvents int64
+	if err := fixture.db.Model(&model.AlertEscalationEvent{}).Where("alert_id = ?", retired.ID).Count(&beforeRetiredEvents).Error; err != nil {
+		t.Fatalf("count retired service-monitor escalation events before tick: %v", err)
+	}
+	engineService := NewEngine(fixture.db, NewService(fixture.db), nil, dispatcher)
+	engineService.SetNowFn(func() time.Time { return time.Now().UTC() })
+	engineService.Tick(context.Background())
+	var afterRetiredEvents int64
+	if err := fixture.db.Model(&model.AlertEscalationEvent{}).Where("alert_id = ?", retired.ID).Count(&afterRetiredEvents).Error; err != nil {
+		t.Fatalf("count retired service-monitor escalation events after tick: %v", err)
+	}
+	if afterRetiredEvents != beforeRetiredEvents || serviceSends.Load() != 0 {
+		t.Fatalf("retired service-monitor escalation changed after tick: before=%d after=%d sends=%d", beforeRetiredEvents, afterRetiredEvents, serviceSends.Load())
+	}
+	assertServiceEventUnchanged("replay and tick")
+	if got := retainedSends.Load(); got != 1 {
+		t.Fatalf("retained escalation source sends=%d, want one", got)
 	}
 }
