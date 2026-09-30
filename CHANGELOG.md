@@ -9,6 +9,13 @@
 - 新依赖只在重建并启动的新镜像中生效。Core 与可选本地 Worker 必须使用同源新构建，按新工具链指纹重新生成架构匹配的运行时闭包及签名运行包；升级前停止新任务并排空在途操作，不依赖替换镜像取消已开始的处理。
 - 回退不得绕过既有数据库版本下限；旧源码重新构建仍可能因旧包已从软件源移除而失败。已发布标签保持不变，修复通过新补丁版本交付；正式镜像发布、生产部署和现场恢复验收分别确认。
 
+## [0.57.1](https://github.com/xiangnan0811/xirang/compare/v0.57.0...v0.57.1) (2026-09-30)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** 前移 Core 与 Worker OpenSSL 包锁定 ([#571](https://github.com/xiangnan0811/xirang/issues/571)) ([1a12810](https://github.com/xiangnan0811/xirang/commit/1a128103e3f10ffab5d537b5bee29039142518ad))
+
 ## [0.57.0](https://github.com/xiangnan0811/xirang/compare/v0.56.0...v0.57.0) (2026-09-30)
 
 
