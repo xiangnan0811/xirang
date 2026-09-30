@@ -32,6 +32,8 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
 
+镜像软件包锁定补丁的目标版本说明还须保留新锁定版本、同源 Core/Worker 重建、架构匹配的闭包及签名运行包更新要求；不能将包可安装或本地单架构构建成功等同于正式双架构发布通过。
+
 人工补齐 Release PR 时，先核对 manifest 的目标版本与 CHANGELOG 版本标题一致，再原样迁移已审阅的升级警告；不要为了移动章节改写上一发行版的保留/删除边界。编辑 PR 正文必须保留 Release Please 生成的首尾标识及分隔符，只更新中间版本说明，否则合并后可能无法识别发布。该补充提交仍走提交钩子与 PR required checks，不直接修改正式 tag。已合并 PR 的正文编辑也可能触发 CI 并取消同 ref 的运行；如需恢复，应重跑原 `push` CI 并核对同 SHA 的完整结果，不能用 PR CI 代替发布准入。
 
 [Publish Docker Images](../../.github/workflows/publish-images.yml)监听 `release.published`，按以下顺序发布：
