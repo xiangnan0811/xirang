@@ -11,6 +11,13 @@
 - 本次 down 和低于新版本下限的元数据写入均被拒绝，即使空库也不能原地降级；原有版本保护器保留。需要回退时仅恢复本次升级前的完整数据库并配套旧二进制、配置与密钥，不能只替换旧镜像、重建空表、Force dirty 或删除保护器。
 - 新行为只在新版进程生效；旧进程中已开始的探测/投递必须在升级前排空，不能依赖迁移取消在途网络操作。本地验收包含 SQLite/PostgreSQL 整库备份恢复，以及 SQLite 恢复副本的真实服务启动与页面/API 检查；不代表远端 Provider 文件恢复或生产部署已经验收。
 
+## [0.57.0](https://github.com/xiangnan0811/xirang/compare/v0.56.0...v0.57.0) (2026-09-30)
+
+
+### ✨ Features
+
+* **core:** 移除服务监控并保全备份恢复 ([#568](https://github.com/xiangnan0811/xirang/issues/568)) ([c00f4eb](https://github.com/xiangnan0811/xirang/commit/c00f4eb0d87e9b1a1615ab2dd851acb1de7bb69a))
+
 ## [0.56.0](https://github.com/xiangnan0811/xirang/compare/v0.55.26...v0.56.0) (2026-09-29)
 
 
