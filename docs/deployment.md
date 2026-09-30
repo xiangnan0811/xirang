@@ -118,6 +118,8 @@ curl -fsS http://127.0.0.1:10761/healthz
 
 普通 `docker compose up -d` 不会启动 profile 服务；在备份资产启用门禁和各自授权满足时，Catalog、元数据搜索、Content Broker、workspace、原生预览和下载可继续工作。未部署 Worker、没有 active verified bundle 或 capability 不匹配时，增强处理显示 `not_deployed`/`unsupported`，不会仅因此制造备份失败或告警。
 
+共享运行时包补丁会改变 Core/Worker 的生产工具链指纹。升级此类补丁时同时重建同源 Core 与可选 Worker，并重新生成匹配当前源码和架构的运行时闭包及签名运行包；不得复用旧指纹的运行包或绕过就绪检查。包版本不通过 `.env` 覆盖，维护步骤见[镜像构建依赖](maintainers/automation.md#镜像构建依赖)。
+
 受管 Recovery 不属于上述无 Worker 可用承诺：当前实现启用它时要求 Processing 已就绪且具备恶意软件证据服务，本机与远程 Worker 均关闭时不满足准入。旧版普通任务恢复仍按各执行器的证据和授权要求处理，不能代替受管恢复的安全检查。部署前须按[处理与导出合同](spec/domains/backup-processing-export.md)核验实际需要的恢复路径。
 
 Profile 固定使用以下本地身份和权限合同：

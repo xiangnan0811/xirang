@@ -35,8 +35,8 @@ if [[ -z "$runtime_packages" ]]; then
 fi
 for package in \
   'c-ares=1.34.8-r0' \
-  'libcrypto3=3.5.8-r0' \
-  'libssl3=3.5.8-r0' \
+  'libcrypto3=3.5.9-r0' \
+  'libssl3=3.5.9-r0' \
   'libexpat=2.8.5-r0' \
   'libuuid=2.41.6-r1' \
   'libxml2=2.13.9-r1' \
