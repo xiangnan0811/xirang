@@ -43,6 +43,8 @@ env -u NODE_ENV npm --prefix web audit --audit-level=moderate
 - 分别记录实际漏洞摘要、退出码和去重后的 GHSA 集合。一个公告可能经多个父依赖传播，不能用包计数下降或 GHSA 减少单独宣称通过；结合 `via`、`nodes`、`npm ls`、`npm explain` 核对依赖路径。
 - 本地通过而 CI 失败时，先核对 Node/npm、环境变量和干净锁文件安装，不能绕过审计。
 
+构建链中的 `brace-expansion` 必须同时核对 ESLint/minimatch 的旧主版本分支与 TypeScript ESLint 的新分支，不能只更新顶层解析结果。针对括号展开拒绝服务公告，分别在父依赖允许的 semver 范围内更新锁定补丁版本，保持 `package.json`、平台选择元数据和审计阈值不变；使用 CI Node 主版本干净安装后执行完整审计与前端门禁。
+
 ### jsdom 选择器兼容性
 
 [package.json](../../web/package.json)中的 jsdom 专属 override 将 `nwsapi` 固定为已验证的 2.2.25。既有回归记录表明 jsdom 26 下 2.2.26/2.2.27 的 `:modal` 匹配会递归进入原生匹配适配器，导致下拉交互超时。调整 override 前，在 CI Node 版本下同时验证独立选择器匹配、节点和通知下拉确认测试，保留完整审计及前端门禁；不得通过增加超时或修改产品交互掩盖问题。
