@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.57.0](https://github.com/xiangnan0811/xirang/compare/v0.56.0...v0.57.0) (2026-09-30)
+
+
+### ✨ Features
+
+* **core:** 移除服务监控并保全备份恢复 ([#568](https://github.com/xiangnan0811/xirang/issues/568)) ([c00f4eb](https://github.com/xiangnan0811/xirang/commit/c00f4eb0d87e9b1a1615ab2dd851acb1de7bb69a))
+
 ### 行为与升级说明
 
 - 移除 HTTP/TCP 服务监控管理页、公开状态页、专属 API 与周期探测。旧 `/app/service-monitors`、`/status` 显示未找到页；六个旧 API method/path 返回 404。备份概览、数据、恢复、任务告警以及 `/healthz`、`/readyz`、`/metrics` 保留。
