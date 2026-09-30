@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.57.1](https://github.com/xiangnan0811/xirang/compare/v0.57.0...v0.57.1) (2026-09-30)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** 前移 Core 与 Worker OpenSSL 包锁定 ([#571](https://github.com/xiangnan0811/xirang/issues/571)) ([1a12810](https://github.com/xiangnan0811/xirang/commit/1a128103e3f10ffab5d537b5bee29039142518ad))
+
 ### 行为与升级说明
 
 - 修复 Alpine 软件源移除旧包后 Core/Worker 镜像无法重建的问题：将共享 `libcrypto3` / `libssl3` 精确锁定前移至 `3.5.9-r0`，同步生产工具链 inventory 和安装合同，不降级、不移除版本锁定或跳过漏洞扫描。
