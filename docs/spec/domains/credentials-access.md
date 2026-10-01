@@ -88,7 +88,13 @@ Doctor 继续按需验证 SSH、权限、工具、目录和备份空间，不检
 
 以上均叠加对应 action step-up 和主认证。管理员 grant 列表是只读筛选/查看入口，不提供批准、拒绝或撤销按钮。回归覆盖 TTL/reason/DTO、真实 RBAC 与 step-up、全部元组不匹配及到期边界、gate 早于秘密读取或执行、授权创建/使用/拒绝审计、终端撤销与关闭、grant-required dialog 重连和无浏览器持久化。
 
-已知实现差异：`web-terminal.tsx` 当前两次调用 `ensureStepUpProof(terminalOpen)` 未显式禁用持久化和缓存，而 auth provider 默认 `persist=true` 并存储 proof，未满足上面的单次操作要求。该要求继续有效；本次文档整合不修改产品实现，也不将该路径记为验收通过。
+节点紧急备份 `POST /nodes/:id/emergency-backup` 保持 `tasks:trigger` 与节点 ownership，使用普通手动任务的 `task.manual_trigger / task_command` step-up；空任务集合也须通过二次验证。服务端按 ID 升序一次性选取该节点的 policy 来源 rsync/restic/rclone 任务，先核对整组逐 Task ID 的有效 grant，再开始触发，不能把 Node ID 当作 Task ID。任一授权缺失时整组不提交；授权后的业务触发仍可部分失败，`task_ids` 仅返回成功提交的 Task ID（不是 Run ID），`triggered` 为其数量，`errors` 经共享脱敏处理。整组准入沿用批量授权的时间点语义，不承诺提交期间撤销可原子取消全部任务。
+
+节点页确认紧急备份后重新读取完整任务库存，使用不持久化、不复用缓存的 proof，依次建立所需短期 manual-trigger grant 后仅提交一次；库存或 grant 失败不提交，部分业务失败明确显示错误。页面离开或认证会话变化后不继续旧操作，不自动重放网络结果不确定的提交；已创建 grant 按原 TTL 到期，不自动撤销。
+
+终端每次新的连接操作都在创建 WebSocket **之前**完成 fresh step-up（`persist:false,reuseCached:false`），不在首消息认证的五秒期限内等待用户输入。普通网络断线保留共享退避重连，但下一次连接必须取得新 proof；认证取消或失败停止该次连接，不自动反复挑战。首帧为 auth，在它之前不发送键盘或 resize 帧。父组件轮询导致的回调身份变化不重建连接，节点、token、会话代次变化及卸载使旧操作失效。
+
+同一次初连遇 grant-required 时，组件私有操作记录暂持本次 proof；grant 成功后通过一次性 handoff 续接，通常不增加第二次 OTP。grant 返回标准 `STEP_UP_REQUIRED` 时仅重新验证并重试一次；其他失败保留原因草稿并清失效 proof，等待人工提交。续接再次被 grant 拒绝时不自动循环申请。取消、普通断线、身份变更和卸载清除记录，只有绑定相同身份的 grant 成功续接可消费 handoff 一次；这些前端生命周期约束不表示服务端 token 具有一次性消费语义。proof、grant 与原因不进入浏览器持久存储。
 
 ## 凭据使用审计
 

@@ -2472,6 +2472,72 @@ func TestGetEffectiveDBErrorKeepsExpiredCache(t *testing.T) {
 	}
 }
 
+func TestResolveEffectiveUsesLiveDBEnvAndDefaultPrecedence(t *testing.T) {
+	t.Setenv("LOGIN_RATE_LIMIT", "20")
+	db := setupTestDB(t)
+	svc := NewService(db)
+
+	if got, err := svc.ResolveEffective("login.rate_limit"); err != nil || got != "20" {
+		t.Fatalf("ResolveEffective env value=%q err=%v, want 20", got, err)
+	}
+	if err := svc.Update("login.rate_limit", "30"); err != nil {
+		t.Fatalf("set DB override: %v", err)
+	}
+	svc.cache["login.rate_limit"] = cachedValue{value: "stale-cache", expiresAt: time.Now().Add(time.Hour)}
+	if got, err := svc.ResolveEffective("login.rate_limit"); err != nil || got != "30" {
+		t.Fatalf("ResolveEffective DB value=%q err=%v, want live DB 30", got, err)
+	}
+	if err := svc.Delete("login.rate_limit"); err != nil {
+		t.Fatalf("delete DB override: %v", err)
+	}
+	if got, err := svc.ResolveEffective("login.rate_limit"); err != nil || got != "20" {
+		t.Fatalf("ResolveEffective fallback value=%q err=%v, want env 20", got, err)
+	}
+}
+
+func TestResolveEffectiveRejectsUnavailableKeys(t *testing.T) {
+	svc := NewService(setupTestDB(t))
+	var nilService *Service
+	tests := []struct {
+		name string
+		svc  *Service
+		key  string
+	}{
+		{name: "nil service", svc: nilService, key: "login.rate_limit"},
+		{name: "nil DB", svc: &Service{}, key: "login.rate_limit"},
+		{name: "internal key", svc: svc, key: ProcessingContentPipelineRevisionKey},
+		{name: "unknown key", svc: svc, key: "unknown.key"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := testCase.svc.ResolveEffective(testCase.key); err == nil {
+				t.Fatalf("ResolveEffective(%q) unexpectedly succeeded", testCase.key)
+			} else if testCase.name != "unknown key" && !errors.Is(err, ErrInternalSettingUnavailable) {
+				t.Fatalf("ResolveEffective(%q) err=%v, want ErrInternalSettingUnavailable", testCase.key, err)
+			}
+		})
+	}
+}
+
+func TestResolveEffectivePropagatesDBReadFailure(t *testing.T) {
+	db := setupTestDB(t)
+	svc := NewService(db)
+	svc.cache["login.rate_limit"] = cachedValue{value: "stale-cache", expiresAt: time.Now().Add(time.Hour)}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get SQL DB: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close SQL DB: %v", err)
+	}
+
+	if got, err := svc.ResolveEffective("login.rate_limit"); err == nil {
+		t.Fatalf("ResolveEffective returned value %q after DB close", got)
+	} else if got != "" {
+		t.Fatalf("ResolveEffective returned fallback value %q after DB close", got)
+	}
+}
+
 func TestGetEffective_Default(t *testing.T) {
 	svc := NewService(setupTestDB(t))
 	val := svc.GetEffective("login.rate_limit")

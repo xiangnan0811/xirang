@@ -13,7 +13,7 @@
 - 镜像内 Alpine 依赖的精确版本由 Dockerfile 固定，不由 `.env` 或系统设置覆盖。共享加密库补丁同样需要重建 Core 与可选 Worker，不能在运行中用环境变量切换版本；构建时包版本不可用的处理见[镜像构建依赖](maintainers/automation.md#镜像构建依赖)。
 - 官方镜像的 Go 工具链由 Dockerfile 构建阶段固定；容器启动时设置 `GOTOOLCHAIN` 不会替换已经编译的程序。源码开发的工具链选择与 linter 入口见[贡献指南](../CONTRIBUTING.md#开发环境)，版本同步要求见[Go 工具链升级](maintainers/automation.md#go-工具链升级)。
 
-**当前实现与配置合同的已知偏差**：任务流量与执行记录保留键虽然注册在 Settings 服务中，实际组件由 `config.Load()` 的环境值构造，数据库覆盖目前不生效，重启也不能修复这一点。配置合同仍要求统一优先级；这是待修复的实现问题，不应据此放宽合同。当前部署应使用下表所述实际生效方式。
+任务流量与执行记录的保留期限在每轮实际清理开始时按 DB → 环境变量 → 注册默认值读取一次，整轮固定 cutoff；成功清理的一小时节流不变，设置保存不打断正在运行的轮次，从下一轮生效。查询失败、非整数、负数、溢出或超出注册范围时跳过删除，不回退到更短窗口；`0` 禁用清理。Settings API 的正数范围不变；扩大窗口只保护尚未删除的数据，不恢复已删除历史。
 
 依据：[启动组装](../backend/cmd/server/main.go)、[配置加载](../backend/internal/config/config.go)、[设置注册表及解析](../backend/internal/settings/service.go)、[任务保留](../backend/internal/task/manager.go)。
 
@@ -393,11 +393,11 @@ metrics.remote_bearer_token
 
 | 变量 | 类型 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
-| `TASK_TRAFFIC_RETENTION_DAYS` | int | `8` | 否 | 任务流量数据保留天数；当前由启动环境值控制，`0` 停止清理，Settings API 允许范围为 `1..365` |
-| `TASK_RUN_RETENTION_DAYS` | int | `90` | 否 | 普通任务执行历史保留天数；当前由启动环境值控制，`0` 停止清理，Settings API 允许范围为 `1..3650`；当前非空备份代次（含 dirty）、恢复记录及活动演练引用的来源证据不按此期限删除 |
+| `TASK_TRAFFIC_RETENTION_DAYS` | int | `8` | 否 | 任务流量数据保留天数；Settings 键 `retention.task_traffic_days`，DB 覆盖优先，每轮动态读取；环境 `0` 停止清理，Settings API 允许范围为 `1..365` |
+| `TASK_RUN_RETENTION_DAYS` | int | `90` | 否 | 普通任务执行历史保留天数；Settings 键 `retention.task_run_days`，DB 覆盖优先，每轮动态读取；环境 `0` 停止清理，Settings API 允许范围为 `1..3650`；当前非空备份代次（含 dirty）、恢复记录及活动演练引用的来源证据不按此期限删除 |
 | `RETENTION_CHECK_INTERVAL` | duration | `6h` | 否 | 备份保留策略检查间隔（最小 1m），定期清理过期备份并检查存储空间 |
-| `BACKUP_STORAGE_MIN_FREE_GB` | int | `10` | 否 | 本地备份存储最低剩余空间（GB），低于此值触发告警 |
-| `BACKUP_STORAGE_MAX_USAGE_PCT` | int | `90` | 否 | 本地备份存储最大使用率（%），超过此值触发告警 |
+| `BACKUP_STORAGE_MIN_FREE_GB` | int | `10` | 否 | 本地备份存储最低剩余空间（GB），低于此值触发告警；Settings 键 `storage.min_free_gb`，DB 覆盖优先，更新后在下一次空间检查使用 |
+| `BACKUP_STORAGE_MAX_USAGE_PCT` | int | `90` | 否 | 本地备份存储最大使用率（%），超过此值触发告警；Settings 键 `storage.max_usage_pct`，DB 覆盖优先，恢复到阈值内时解除同路径告警 |
 | `INTEGRITY_CHECK_MULTIPLIER` | int | `4` | 否 | 完整性检查频率倍数——每隔多少个保留清理周期运行一次 `restic check` / `rclone check`（默认 4，即 `RETENTION_CHECK_INTERVAL=6h` 时每 24h 一次） |
 | `SILENCE_RETENTION_DAYS` | int | `30` | 否 | 已过期静默规则的审计保留天数，超出后删除 |
 

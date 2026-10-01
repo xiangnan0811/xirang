@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/ssh"
+	"gorm.io/gorm"
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
@@ -15,10 +18,7 @@ import (
 	"xirang/backend/internal/node"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
-
-	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/ssh"
-	"gorm.io/gorm"
+	"xirang/backend/internal/util"
 )
 
 // NodeTaskTrigger 用于紧急备份触发任务执行及节点迁移时的调度管理。
@@ -791,33 +791,42 @@ func (h *NodeHandler) EmergencyBackup(c *gin.Context) {
 
 	var tasks []model.Task
 	if err := h.db.Where("node_id = ? AND source = ? AND executor_type IN ?",
-		id, "policy", []string{"rsync", "restic", "rclone"}).Find(&tasks).Error; err != nil {
+		id, "policy", []string{"rsync", "restic", "rclone"}).
+		Order("id asc").
+		Find(&tasks).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
 
-	if len(tasks) == 0 {
+	if len(tasks) > 0 {
+		taskIDs := make([]uint, 0, len(tasks))
+		for _, taskEntity := range tasks {
+			taskIDs = append(taskIDs, taskEntity.ID)
+		}
+		if !EnforceTaskManualTriggerCredentialGrants(c, h.db, taskIDs) {
+			return
+		}
+	} else {
 		respondOK(c, gin.H{"triggered": 0, "task_ids": []uint{}, "errors": []string{}})
 		return
 	}
 
 	triggered := 0
-	taskIDs := make([]uint, 0)
-	errors := make([]string, 0)
+	successfulTaskIDs := make([]uint, 0, len(tasks))
+	triggerErrors := make([]string, 0)
 
-	for _, t := range tasks {
-		runID, err := h.trigger.TriggerManual(t.ID)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("任务 %d 触发失败: %v", t.ID, err))
+	for _, taskEntity := range tasks {
+		if _, err := h.trigger.TriggerManual(taskEntity.ID); err != nil {
+			triggerErrors = append(triggerErrors, fmt.Sprintf("任务 %d 触发失败: %s", taskEntity.ID, util.SanitizeError(err)))
 			continue
 		}
 		triggered++
-		taskIDs = append(taskIDs, runID)
+		successfulTaskIDs = append(successfulTaskIDs, taskEntity.ID)
 	}
 
 	respondOK(c, gin.H{
 		"triggered": triggered,
-		"task_ids":  taskIDs,
-		"errors":    errors,
+		"task_ids":  successfulTaskIDs,
+		"errors":    triggerErrors,
 	})
 }

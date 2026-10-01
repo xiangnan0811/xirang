@@ -331,10 +331,10 @@ export function createNodesApi() {
       return mapNodeDoctorResult(row);
     },
 
-    async emergencyBackup(token: string, nodeId: number): Promise<EmergencyBackupResult> {
+    async emergencyBackup(token: string, nodeId: number, stepUpProof?: string): Promise<EmergencyBackupResult> {
       const row = await request<{ triggered?: unknown; task_ids?: unknown; errors?: unknown }>(
         `/nodes/${nodeId}/emergency-backup`,
-        { token, method: "POST" }
+        { token, method: "POST", stepUpProof }
       );
       return {
         triggered: finiteNumber(row?.triggered),

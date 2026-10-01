@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
 )
@@ -15,8 +16,8 @@ import (
 func openStorageMonitorTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := openManagerTestDB(t)
-	if err := db.AutoMigrate(&model.Integration{}, &model.AlertDelivery{}); err != nil {
-		t.Fatalf("迁移 alerting 相关表失败: %v", err)
+	if err := db.AutoMigrate(&model.Integration{}, &model.AlertDelivery{}, &model.SystemSetting{}); err != nil {
+		t.Fatalf("迁移 alerting/settings 相关表失败: %v", err)
 	}
 	return db
 }
@@ -86,6 +87,63 @@ func TestCheckLocalStorageSpace_ValidLocalPath(t *testing.T) {
 	}
 	if !strings.HasPrefix(alerts[0].ErrorCode, "XR-STORAGE-LOW:") {
 		t.Fatalf("告警错误码期望 XR-STORAGE-LOW，实际: %s", alerts[0].ErrorCode)
+	}
+}
+
+func TestCheckLocalStorageSpace_SettingsOverrideActivatesAndResolves(t *testing.T) {
+	db := openStorageMonitorTestDB(t)
+	settingsSvc := settings.NewService(db)
+	tmpDir := t.TempDir()
+
+	policy := model.Policy{
+		Name:       "settings-local-policy",
+		SourcePath: "/data/src",
+		TargetPath: tmpDir,
+		CronSpec:   "@daily",
+		Enabled:    true,
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(tmpDir, &stat); err != nil {
+		t.Fatalf("获取测试目录磁盘信息失败: %v", err)
+	}
+	freeGB := float64(stat.Bavail*uint64(stat.Bsize)) / (1024 * 1024 * 1024)
+	triggerThreshold := int(freeGB) + 1
+
+	t.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "0")
+	t.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "100")
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+	if err := settingsSvc.Update("storage.min_free_gb", strconv.Itoa(triggerThreshold)); err != nil {
+		t.Fatalf("设置最小剩余空间覆盖值失败: %v", err)
+	}
+
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, settingsSvc, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
+
+	m.checkLocalStorageSpace()
+
+	errorCode := "XR-STORAGE-LOW:" + sanitizeTaskLogMessage(tmpDir)
+	var alert model.Alert
+	if err := db.Where("error_code = ?", errorCode).First(&alert).Error; err != nil {
+		t.Fatalf("设置覆盖值未产生存储空间告警: %v", err)
+	}
+	if alert.Status != "open" {
+		t.Fatalf("存储空间告警状态=%q，期望 open", alert.Status)
+	}
+
+	if err := settingsSvc.Update("storage.min_free_gb", "0"); err != nil {
+		t.Fatalf("清除告警阈值覆盖值失败: %v", err)
+	}
+	m.checkLocalStorageSpace()
+
+	if err := db.Where("error_code = ?", errorCode).First(&alert).Error; err != nil {
+		t.Fatalf("查询存储空间告警失败: %v", err)
+	}
+	if alert.Status != "resolved" {
+		t.Fatalf("恢复空间阈值后告警状态=%q，期望 resolved", alert.Status)
 	}
 }
 

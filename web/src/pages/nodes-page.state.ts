@@ -11,13 +11,17 @@ import {
   parseDateTime,
 } from "@/pages/nodes-page.utils";
 import { toast } from "@/components/ui/toast-sonner";
+import { isAbortError } from "@/hooks/inventory-request-state";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { getErrorMessage } from "@/lib/utils";
-import type { NewNodeInput, NodeConnectionProbeOutcome, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord } from "@/types/domain";
+import type { NewNodeInput, NodeConnectionProbeOutcome, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, TaskRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import { getAuthSessionGeneration } from "@/lib/api/core";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
 
 const keywordStorageKey = "xirang.nodes.keyword";
@@ -34,6 +38,20 @@ type HostKeyIssueState = {
   code: NodeHostKeyIssueCode;
   hostKey: NodeHostKeyInfo;
 };
+
+function policyEmergencyTaskIds(tasks: readonly TaskRecord[], nodeId: number): number[] {
+  const seen = new Set<number>();
+  const ids: number[] = [];
+  for (const task of tasks) {
+    if (task.nodeId !== nodeId || task.source !== "policy") continue;
+    if (task.executorType !== "rsync" && task.executorType !== "restic" && task.executorType !== "rclone") continue;
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    ids.push(task.id);
+  }
+  ids.sort((left, right) => left - right);
+  return ids;
+}
 
 export function useNodesPageState() {
   const { t } = useTranslation();
@@ -124,6 +142,23 @@ export function useNodesPageState() {
   const [batchRetain, setBatchRetain] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = usePersistentState<number | null>(selectedStorageKey, null);
   const [emergencyNodeId, setEmergencyNodeId] = useState<number | null>(null);
+  // Non-zero while a click owns the flow, including the confirm dialog. The
+  // button's disabled state is async, so a second click must be rejected here.
+  const emergencyOperationRef = useRef(0);
+  const emergencyAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const withEmergencyStepUp = useStepUpAction(STEP_UP_ACTIONS.taskManualTrigger, {
+    persist: false,
+    reuseCached: false,
+  });
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      emergencyAbortRef.current?.abort();
+    };
+  }, []);
   const [migrateSourceNode, setMigrateSourceNode] = useState<NodeRecord | null>(null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -599,20 +634,68 @@ export function useNodesPageState() {
   };
 
   const handleEmergencyBackup = async (nodeId: number, nodeName: string) => {
-    if (!token) return;
-    const ok = await confirm({
-      title: t("nodes.emergencyBackupConfirmTitle"),
-      description: t("nodes.emergencyBackupConfirmDesc", { name: nodeName }),
-    });
-    if (!ok) return;
+    if (!token || emergencyOperationRef.current !== 0) return;
+    const operationId = emergencyOperationRef.current + 1;
+    emergencyOperationRef.current = operationId;
+    const sessionGeneration = getAuthSessionGeneration();
+    const capturedToken = token;
+    let controller: AbortController | null = null;
+    const isCurrentAttempt = () => mountedRef.current
+      && emergencyOperationRef.current === operationId
+      && getAuthSessionGeneration() === sessionGeneration;
+
     try {
+      const ok = await confirm({
+        title: t("nodes.emergencyBackupConfirmTitle"),
+        description: t("nodes.emergencyBackupConfirmDesc", { name: nodeName }),
+      });
+      if (!ok || !isCurrentAttempt()) return;
+
       setEmergencyNodeId(nodeId);
-      const result = await apiClient.emergencyBackup(token, nodeId);
-      toast.success(t("nodes.emergencyBackupTriggered", { count: result.triggered }));
+      controller = new AbortController();
+      emergencyAbortRef.current = controller;
+      const tasks = await apiClient.getTasks(capturedToken, { signal: controller.signal });
+      if (!isCurrentAttempt()) return;
+
+      const taskIds = policyEmergencyTaskIds(tasks, nodeId);
+      await withEmergencyStepUp(async (proof) => {
+        try {
+          if (!isCurrentAttempt()) return;
+          for (const taskId of taskIds) {
+            if (!isCurrentAttempt()) return;
+            await apiClient.requestTaskManualTriggerCredentialGrant(capturedToken, {
+              taskId,
+              reason: t("tasks.manualTriggerGrantReason", { id: taskId }),
+              requestedTtlSeconds: 600,
+            }, proof);
+          }
+          if (!isCurrentAttempt()) return;
+          const result = await apiClient.emergencyBackup(capturedToken, nodeId, proof);
+          if (!isCurrentAttempt()) return;
+          const summary = t("nodes.emergencyBackupTriggered", { count: result.triggered });
+          if (result.errors.length > 0) {
+            toast.error(`${summary} ${result.errors.join(" | ")}`);
+            return;
+          }
+          toast.success(summary);
+        } catch (error) {
+          // A rejection that lands after unmount or session change must not reach
+          // useStepUpAction, which would open a global OTP for the abandoned operation.
+          if (!isCurrentAttempt()) return;
+          throw error;
+        }
+      });
     } catch (error) {
+      if (!isCurrentAttempt() || isAbortError(error)) return;
       toast.error(getErrorMessage(error));
     } finally {
-      setEmergencyNodeId(null);
+      if (controller && emergencyAbortRef.current === controller) {
+        emergencyAbortRef.current = null;
+      }
+      if (emergencyOperationRef.current === operationId) {
+        emergencyOperationRef.current = 0;
+        if (mountedRef.current) setEmergencyNodeId(null);
+      }
     }
   };
 

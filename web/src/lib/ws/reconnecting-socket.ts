@@ -41,6 +41,11 @@ export type ReconnectingSocketOptions = {
 
   /** 收到关闭码 4401 时调用，用于刷新 token；返回 promise，resolve 后才会重连 */
   onTokenRefreshNeeded?: () => void | Promise<void>;
+  /**
+   * 可选连接前准入。返回的 Promise 完成前不会构造 WebSocket。
+   * 当前 attempt 被拒绝时停止自动重连并调用一次 onGiveUp；过期的拒绝不再动作。
+   */
+  beforeConnect?: () => Promise<void>;
 
   /** 连接打开后的回调（每次 open 都会触发，包括 reconnect 后） */
   onOpen?: (socket: WebSocket) => void;
@@ -80,6 +85,7 @@ export class ReconnectingSocket {
   private heartbeatTimeoutTimer: number | null = null;
   private retries = 0;
   private connectAttempt = 0;
+  private preparing = false;
   private manuallyClosed = false;
   private gaveUp = false;
   private visibilityHandler: (() => void) | null = null;
@@ -91,6 +97,7 @@ export class ReconnectingSocket {
       | "heartbeatPing"
       | "isPongMessage"
       | "onTokenRefreshNeeded"
+      | "beforeConnect"
       | "onOpen"
       | "onMessage"
       | "onReconnect"
@@ -107,6 +114,7 @@ export class ReconnectingSocket {
       | "heartbeatPing"
       | "isPongMessage"
       | "onTokenRefreshNeeded"
+      | "beforeConnect"
       | "onOpen"
       | "onMessage"
       | "onReconnect"
@@ -130,6 +138,7 @@ export class ReconnectingSocket {
       heartbeatPing: options.heartbeatPing,
       isPongMessage: options.isPongMessage,
       onTokenRefreshNeeded: options.onTokenRefreshNeeded,
+      beforeConnect: options.beforeConnect,
       onOpen: options.onOpen,
       onMessage: options.onMessage,
       onReconnect: options.onReconnect,
@@ -142,6 +151,7 @@ export class ReconnectingSocket {
 
   /** 启动连接（仅首次调用有效；后续会自动重连） */
   connect(): void {
+    if (this.preparing) return;
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -168,6 +178,8 @@ export class ReconnectingSocket {
   /** 主动关闭，关闭后不会再尝试重连 */
   close(code = 1000, reason = "manual-close"): void {
     this.manuallyClosed = true;
+    this.connectAttempt += 1;
+    this.preparing = false;
     this.clearReconnectTimer();
     this.stopHeartbeat();
     this.removeVisibilityListener();
@@ -175,7 +187,13 @@ export class ReconnectingSocket {
 
     const current = this.socket;
     this.socket = null;
+    current.onmessage = null;
+    current.onerror = null;
+    current.onclose = (event) => {
+      this.opts.onClose?.(event);
+    };
     if (current.readyState === WebSocket.OPEN) {
+      current.onopen = null;
       current.close(code, reason);
     } else if (current.readyState === WebSocket.CONNECTING) {
       current.onopen = () => current.close(code, reason);
@@ -196,12 +214,51 @@ export class ReconnectingSocket {
   }
 
   private open(): void {
-    if (this.manuallyClosed) return;
+    if (this.manuallyClosed || this.preparing) return;
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
+    const beforeConnect = this.opts.beforeConnect;
+    if (!beforeConnect) {
+      this.createSocket(++this.connectAttempt);
+      return;
+    }
+
     const attempt = ++this.connectAttempt;
+    this.preparing = true;
+    void this.admit(attempt, beforeConnect);
+  }
+
+  private async admit(attempt: number, beforeConnect: () => Promise<void>): Promise<void> {
+    let rejected = false;
+    try {
+      await beforeConnect();
+    } catch {
+      rejected = true;
+    } finally {
+      if (attempt === this.connectAttempt) {
+        this.preparing = false;
+      }
+    }
+    if (attempt !== this.connectAttempt || this.manuallyClosed) return;
+    if (rejected) {
+      this.gaveUp = true;
+      this.clearReconnectTimer();
+      this.stopHeartbeat();
+      this.removeVisibilityListener();
+      this.opts.onGiveUp?.();
+      return;
+    }
+    this.createSocket(attempt);
+  }
+
+  private createSocket(attempt: number): void {
+    if (this.manuallyClosed || attempt !== this.connectAttempt) return;
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
     const url = this.resolveUrl();
     const socket = this.opts.protocols !== undefined
       ? new WebSocket(url, this.opts.protocols)
@@ -356,7 +413,7 @@ export class ReconnectingSocket {
     if (typeof document === "undefined") return;
     this.removeVisibilityListener();
     this.visibilityHandler = () => {
-      if (document.visibilityState !== "visible" || this.manuallyClosed) return;
+      if (document.visibilityState !== "visible" || this.manuallyClosed || this.preparing) return;
       // 标签页恢复可见，通知调用方刷新数据（避免展示陈旧信息）
       this.opts.onVisibilityRestore?.();
       // 已放弃重连：标签页恢复时重置计数尝试一次

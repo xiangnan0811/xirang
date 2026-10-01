@@ -208,6 +208,43 @@ describe("nodes api", () => {
       taskIds: [11, 12],
       errors: [],
     });
+    const [, backupInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(backupInit.headers).not.toHaveProperty("X-Xirang-Step-Up");
+  });
+
+  it("emergencyBackup 只映射 task_ids，并把 step-up proof 放进请求头", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: {
+        triggered: 1,
+        task_ids: [7],
+        run_ids: [101],
+        errors: ["task 20: executor failed"],
+      },
+    })));
+
+    const emergencyBackup = api.emergencyBackup as (
+      token: string,
+      nodeId: number,
+      stepUpProof?: string,
+    ) => ReturnType<typeof api.emergencyBackup>;
+
+    await expect(emergencyBackup("token-node", 9, "fresh-manual-proof")).resolves.toEqual({
+      triggered: 1,
+      taskIds: [7],
+      errors: ["task 20: executor failed"],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/nodes/9/emergency-backup");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer token-node",
+      "X-Xirang-Step-Up": "fresh-manual-proof",
+    });
   });
 
   it("maps structured host-key failures and drops unknown or empty fingerprints", async () => {
