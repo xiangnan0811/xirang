@@ -921,6 +921,7 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		executorFactory:             executorFactory,
 		hub:                         hub,
 		scheduler:                   scheduler,
+		settingsSvc:                 settingsSvc,
 		semaphore:                   make(chan struct{}, 8),
 		hookRunFunc:                 nil, // 初始化后设置为默认 runSSHHook
 		executionOwnerID:            generateChainRunID(),
@@ -952,7 +953,7 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 
 	// Create and start sub-components.
 	m.logDispatcher = NewLogDispatcher(db, hub)
-	m.sampleWriter = NewSampleWriter(db, sampleRetentionDays)
+	m.sampleWriter = NewSampleWriter(db, sampleRetentionDays, settingsSvc)
 	m.chainRunner = NewChainRunner()
 
 	m.logDispatcher.Start(m.rootCtx, m.cleanupExpiredTaskRuns)
@@ -3941,14 +3942,14 @@ func (m *Manager) dispatchDrillFailure(policyID, taskRunID uint) {
 	})
 }
 
-// cleanupExpiredTaskRuns removes TaskRun records older than taskRunRetentionDays
-// while retaining the minimum capture evidence needed by restore admission.
-// Candidate selection and dependent cleanup run in one transaction. The task
-// rows are locked before the candidate predicate is evaluated again so a
-// concurrent reservation and cleanup have one serialized answer about whether
-// a source run is still referenced.
+// cleanupExpiredTaskRuns removes TaskRun records older than the effective
+// retention setting while retaining the minimum capture evidence needed by
+// restore admission. Candidate selection and dependent cleanup run in one
+// transaction. The task rows are locked before the candidate predicate is
+// evaluated again so a concurrent reservation and cleanup have one serialized
+// answer about whether a source run is still referenced.
 func (m *Manager) cleanupExpiredTaskRuns() {
-	if m.taskRunRetentionDays <= 0 || m.db == nil {
+	if m == nil || m.db == nil {
 		return
 	}
 
@@ -3960,7 +3961,16 @@ func (m *Manager) cleanupExpiredTaskRuns() {
 		return
 	}
 
-	cutoff := now.AddDate(0, 0, -m.taskRunRetentionDays)
+	retentionDays, err := resolveRetentionDays(m.settingsSvc, "retention.task_run_days", m.taskRunRetentionDays)
+	if err != nil {
+		logger.Module("task").Warn().Str("setting", "retention.task_run_days").Msg("任务执行记录保留设置不可用，本轮跳过清理")
+		return
+	}
+	if retentionDays <= 0 {
+		return
+	}
+
+	cutoff := now.AddDate(0, 0, -retentionDays)
 	for {
 		deleted, err := m.cleanupExpiredTaskRunBatch(cutoff)
 		if err != nil {

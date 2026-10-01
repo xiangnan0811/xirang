@@ -4,15 +4,43 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
-import type { NodeConnectionProbeOutcome, NodeHostKeyIssueCode } from "@/types/domain";
+import { bumpAuthSessionGeneration } from "@/lib/api/core";
+import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import type { NodeConnectionProbeOutcome, NodeHostKeyIssueCode, TaskRecord } from "@/types/domain";
 
-const { toastSuccessMock, toastErrorMock, runNodeDoctorMock, trustNodeHostKeyMock, authRef } = vi.hoisted(() => ({
-  toastSuccessMock: vi.fn(),
-  toastErrorMock: vi.fn(),
-  runNodeDoctorMock: vi.fn(),
-  trustNodeHostKeyMock: vi.fn(),
-  authRef: { current: { role: "admin" as "admin" | "operator" | "viewer", token: "test-token" } },
-}));
+const EMERGENCY_PROOF = "fresh-manual-proof";
+
+const {
+  toastSuccessMock,
+  toastErrorMock,
+  runNodeDoctorMock,
+  trustNodeHostKeyMock,
+  authRef,
+  getTasksMock,
+  grantMock,
+  emergencyBackupMock,
+  useStepUpActionMock,
+  oneShotStepUpOptions,
+} = vi.hoisted(() => {
+  const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
+    stepUpHookMock.lastAction = stepUpAction;
+    stepUpHookMock.lastOptions = options;
+    return action("fresh-manual-proof");
+  }) as ReturnType<typeof vi.fn> & { lastAction?: unknown; lastOptions?: unknown };
+
+  return {
+    toastSuccessMock: vi.fn(),
+    toastErrorMock: vi.fn(),
+    runNodeDoctorMock: vi.fn(),
+    trustNodeHostKeyMock: vi.fn(),
+    authRef: { current: { role: "admin" as "admin" | "operator" | "viewer", token: "test-token" } },
+    getTasksMock: vi.fn(),
+    grantMock: vi.fn(),
+    emergencyBackupMock: vi.fn(),
+    useStepUpActionMock: stepUpHookMock,
+    oneShotStepUpOptions: { persist: false, reuseCached: false },
+  };
+});
 
 const HOST_KEY_FINGERPRINT = "SHA256:hostKeyProbeFingerprintForNodesPage";
 
@@ -136,7 +164,14 @@ vi.mock("@/lib/api/client", () => ({
   apiClient: {
     runNodeDoctor: runNodeDoctorMock,
     trustNodeHostKey: trustNodeHostKeyMock,
+    getTasks: getTasksMock,
+    requestTaskManualTriggerCredentialGrant: grantMock,
+    emergencyBackup: emergencyBackupMock,
   },
+}));
+
+vi.mock("@/hooks/use-step-up-action", () => ({
+  useStepUpAction: useStepUpActionMock,
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
@@ -233,6 +268,59 @@ function createContext(overrides?: Record<string, unknown>) {
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function policyBackupTask(id: number, overrides?: Partial<TaskRecord>): TaskRecord {
+  return {
+    id,
+    policyName: "nightly",
+    nodeName: "node-prod-1",
+    nodeId: 1,
+    status: "pending",
+    progress: 0,
+    startedAt: "",
+    speedMbps: 0,
+    enabled: true,
+    source: "policy",
+    executorType: "rsync",
+    ...overrides,
+  };
+}
+
+function emergencyInventory(): TaskRecord[] {
+  return [
+    policyBackupTask(20, { executorType: "rclone" }),
+    policyBackupTask(7, { executorType: "restic" }),
+    policyBackupTask(7, { executorType: "restic", name: "duplicate" }),
+    policyBackupTask(11),
+    policyBackupTask(30, { nodeId: 2, nodeName: "node-dr-2" }),
+    policyBackupTask(31, { source: "manual" }),
+    policyBackupTask(32, { executorType: "command" }),
+    policyBackupTask(33, { source: "operator" }),
+  ];
+}
+
+function renderNodesPage() {
+  return render(
+    <MemoryRouter>
+      <NodesPage />
+    </MemoryRouter>,
+  );
+}
+
+async function clickNodeEmergency(user: ReturnType<typeof userEvent.setup>, nodeName = "node-prod-1") {
+  const card = screen.getByLabelText(`节点卡片 ${nodeName}`);
+  await user.click(within(card).getByRole("button", { name: "紧急备份" }));
+}
+
 describe("NodesPage", () => {
   beforeEach(() => {
     Object.defineProperty(window, "localStorage", {
@@ -247,6 +335,12 @@ describe("NodesPage", () => {
     toastErrorMock.mockReset();
     runNodeDoctorMock.mockReset();
     trustNodeHostKeyMock.mockReset();
+    getTasksMock.mockReset();
+    grantMock.mockReset();
+    emergencyBackupMock.mockReset();
+    useStepUpActionMock.mockClear();
+    useStepUpActionMock.lastAction = undefined;
+    useStepUpActionMock.lastOptions = undefined;
     trustNodeHostKeyMock.mockResolvedValue({
       alreadyTrusted: false,
       algorithm: "ssh-ed25519",
@@ -784,5 +878,241 @@ describe("NodesPage", () => {
     await user.click(row.getByRole("button", { name: /节点 node-prod-1 更多操作/ }));
     await user.click(screen.getByRole("menuitem", { name: /编辑节点/ }));
     expect(await screen.findByRole("dialog", { name: /编辑节点 - node-prod-1/ })).toBeInTheDocument();
+  });
+
+  it("紧急备份确认后用一次性 proof 按任务 ID 顺序授权，再提交一次", async () => {
+    const user = userEvent.setup();
+    getTasksMock.mockResolvedValue(emergencyInventory());
+    grantMock.mockResolvedValue({ id: 1, status: "active" });
+    emergencyBackupMock.mockResolvedValue({ triggered: 3, taskIds: [7, 11, 20], errors: [] });
+    createContext();
+
+    renderNodesPage();
+    await clickNodeEmergency(user);
+
+    await waitFor(() => {
+      expect(emergencyBackupMock).toHaveBeenCalled();
+    });
+
+    expect(confirmMock).toHaveBeenCalledWith({
+      title: "紧急备份确认",
+      description: "确认对节点 node-prod-1 执行紧急备份？将立即触发该节点关联的所有备份策略。",
+    });
+    expect(useStepUpActionMock).toHaveBeenCalledWith(
+      STEP_UP_ACTIONS.taskManualTrigger,
+      oneShotStepUpOptions,
+    );
+    expect(useStepUpActionMock.lastOptions).toEqual(oneShotStepUpOptions);
+    expect(getTasksMock).toHaveBeenCalledTimes(1);
+    expect(getTasksMock).toHaveBeenCalledWith("test-token", {
+      signal: expect.any(AbortSignal),
+    });
+    expect(grantMock).toHaveBeenCalledTimes(3);
+    expect(grantMock).toHaveBeenNthCalledWith(1, "test-token", {
+      taskId: 7,
+      reason: "手动触发任务 #7",
+      requestedTtlSeconds: 600,
+    }, EMERGENCY_PROOF);
+    expect(grantMock).toHaveBeenNthCalledWith(2, "test-token", {
+      taskId: 11,
+      reason: "手动触发任务 #11",
+      requestedTtlSeconds: 600,
+    }, EMERGENCY_PROOF);
+    expect(grantMock).toHaveBeenNthCalledWith(3, "test-token", {
+      taskId: 20,
+      reason: "手动触发任务 #20",
+      requestedTtlSeconds: 600,
+    }, EMERGENCY_PROOF);
+    expect(emergencyBackupMock).toHaveBeenCalledTimes(1);
+    expect(emergencyBackupMock).toHaveBeenCalledWith("test-token", 1, EMERGENCY_PROOF);
+
+    const inventoryOrder = getTasksMock.mock.invocationCallOrder[0];
+    const grantOrders = grantMock.mock.invocationCallOrder;
+    const submitOrder = emergencyBackupMock.mock.invocationCallOrder[0];
+    expect(inventoryOrder).toBeLessThan(grantOrders[0]);
+    expect(grantOrders[0]).toBeLessThan(grantOrders[1]);
+    expect(grantOrders[1]).toBeLessThan(grantOrders[2]);
+    expect(grantOrders[2]).toBeLessThan(submitOrder);
+    expect(toastSuccessMock).toHaveBeenCalledWith("紧急备份已触发：3 个任务已启动。");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("没有策略备份任务时仍用 proof 调用紧急备份且不申请授权", async () => {
+    const user = userEvent.setup();
+    getTasksMock.mockResolvedValue([
+      policyBackupTask(31, { source: "manual" }),
+      policyBackupTask(32, { executorType: "command" }),
+      policyBackupTask(30, { nodeId: 2 }),
+    ]);
+    emergencyBackupMock.mockResolvedValue({ triggered: 0, taskIds: [], errors: [] });
+    createContext();
+
+    renderNodesPage();
+    await clickNodeEmergency(user);
+
+    await waitFor(() => {
+      expect(emergencyBackupMock).toHaveBeenCalled();
+    });
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).toHaveBeenCalledTimes(1);
+    expect(emergencyBackupMock).toHaveBeenCalledWith("test-token", 1, EMERGENCY_PROOF);
+    expect(toastSuccessMock).toHaveBeenCalledWith("紧急备份已触发：0 个任务已启动。");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("取消确认后不读取库存也不提交紧急备份", async () => {
+    const user = userEvent.setup();
+    confirmMock.mockResolvedValueOnce(false);
+    getTasksMock.mockResolvedValue(emergencyInventory());
+    createContext();
+
+    renderNodesPage();
+    await clickNodeEmergency(user);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(getTasksMock).not.toHaveBeenCalled();
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("任一授权失败时不调用紧急备份，也不继续申请后续任务", async () => {
+    const user = userEvent.setup();
+    getTasksMock.mockResolvedValue(emergencyInventory());
+    grantMock
+      .mockResolvedValueOnce({ id: 1, status: "active" })
+      .mockRejectedValueOnce(new Error("grant denied"));
+    emergencyBackupMock.mockResolvedValue({ triggered: 3, taskIds: [7, 11, 20], errors: [] });
+    createContext();
+
+    renderNodesPage();
+    await clickNodeEmergency(user);
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith("grant denied");
+    });
+    expect(getTasksMock).toHaveBeenCalledTimes(1);
+    expect(grantMock).toHaveBeenCalledTimes(2);
+    expect(grantMock).toHaveBeenNthCalledWith(1, "test-token", expect.objectContaining({ taskId: 7 }), EMERGENCY_PROOF);
+    expect(grantMock).toHaveBeenNthCalledWith(2, "test-token", expect.objectContaining({ taskId: 11 }), EMERGENCY_PROOF);
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  it("会话切换后不再申请授权、提交或显示旧结果", async () => {
+    const user = userEvent.setup();
+    const pending = createDeferred<TaskRecord[]>();
+    getTasksMock.mockReturnValue(pending.promise);
+    grantMock.mockResolvedValue({ id: 1, status: "active" });
+    emergencyBackupMock.mockResolvedValue({ triggered: 3, taskIds: [7, 11, 20], errors: [] });
+    createContext();
+
+    renderNodesPage();
+    await clickNodeEmergency(user);
+    await waitFor(() => {
+      expect(getTasksMock).toHaveBeenCalled();
+    });
+
+    bumpAuthSessionGeneration();
+    await act(async () => {
+      pending.resolve(emergencyInventory());
+    });
+
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("离开页面会中止任务库存读取且不再提交", async () => {
+    const user = userEvent.setup();
+    const pending = createDeferred<TaskRecord[]>();
+    getTasksMock.mockReturnValue(pending.promise);
+    createContext();
+
+    const view = renderNodesPage();
+    await clickNodeEmergency(user);
+    await waitFor(() => {
+      expect(getTasksMock).toHaveBeenCalled();
+    });
+    const signal = (getTasksMock.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined)?.signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    view.unmount();
+    expect(signal?.aborted).toBe(true);
+
+    await act(async () => {
+      pending.reject(new DOMException("The operation was aborted.", "AbortError"));
+    });
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("同步阻止并发紧急备份点击", async () => {
+    const user = userEvent.setup();
+    const pending = createDeferred<boolean>();
+    confirmMock.mockImplementationOnce(() => pending.promise);
+    createContext();
+
+    renderNodesPage();
+    const card = screen.getByLabelText("节点卡片 node-prod-1");
+    const button = within(card).getByRole("button", { name: "紧急备份" });
+    await user.click(button);
+    await user.click(button);
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      pending.resolve(false);
+    });
+    expect(getTasksMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+  });
+
+  it("部分失败时显示错误而不是纯成功提示", async () => {
+    const user = userEvent.setup();
+    getTasksMock.mockResolvedValue(emergencyInventory());
+    grantMock.mockResolvedValue({ id: 1, status: "active" });
+    emergencyBackupMock.mockResolvedValue({
+      triggered: 1,
+      taskIds: [7],
+      errors: ["task 20: executor failed", "task 11: skipped"],
+    });
+    createContext();
+
+    renderNodesPage();
+    await clickNodeEmergency(user);
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "紧急备份已触发：1 个任务已启动。 task 20: executor failed | task 11: skipped",
+      );
+    });
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).toHaveBeenCalledTimes(1);
+    expect(getTasksMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("紧急备份失败后不自动重放库存、授权或提交", async () => {
+    const user = userEvent.setup();
+    getTasksMock.mockResolvedValue(emergencyInventory());
+    grantMock.mockResolvedValue({ id: 1, status: "active" });
+    emergencyBackupMock.mockRejectedValue(new Error("network down"));
+    createContext();
+
+    renderNodesPage();
+    await clickNodeEmergency(user);
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith("network down");
+    });
+    expect(getTasksMock).toHaveBeenCalledTimes(1);
+    expect(grantMock).toHaveBeenCalledTimes(3);
+    expect(emergencyBackupMock).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 });

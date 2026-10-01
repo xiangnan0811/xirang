@@ -99,6 +99,10 @@ Legacy Rclone 没有 immutable snapshot，也不使用 Rsync manifest。Prepare/
 
 历史 cleanup 在同一事务锁 Task 并重核谓词，保留每任务/节点最新非空代次（含 dirty）、所有未决 writing/unknown、restore source binding 和 active drill source；活动 successor 不能淘汰前一 final generation，避免 no-start 清除临时 dirty 后丢失前代。预约在同锁下重新解析来源；不能清除较新 dirty 令旧 success 复活。仅无引用且被替代历史按 retention 清理。
 
+## 任务历史动态保留
+
+任务执行与流量历史的清理期限通过同一 Settings 服务每轮动态解析，整轮固定 UTC cutoff，沿用一小时成功清理节流。读取失败或非法值时不删除、不推进成功清理时间，下一次既有调度可重试。任务执行记录的清理继续保留活动记录、未决 effect、代次、恢复与演练引用保护；流量样本沿用自身的分批删除条件，不共享任务执行记录的代次锁。默认值、范围、`0` 禁用及 DB → 环境 → 默认优先级见[环境变量](../../env-vars.md#数据保留)。
+
 ## 恢复演练准入与证据
 
 **当前生产演练传输未启用。** `POST /policies/:id/drill-trigger` 返回 unavailable，不创建演练 TaskRun、不启动计划演练；UI 不提供手动触发/启用执行入口。以下是现有存储/准入/证据和未来启用仍须满足的合同，不代表生产执行已验收。
