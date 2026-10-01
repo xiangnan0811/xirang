@@ -10,6 +10,13 @@
 - 本版本没有新增 schema migration，不改变既有不可逆迁移与降级下限。升级前保全一致性数据库、全部适用加密密钥及独立备份副本，停止新任务并排空旧 Core／调度器／执行器中的在途操作；替换进程不会原子撤销已经提交的任务或中断旧清理轮。新逻辑在新版 Core 与前端生效，更新后刷新页面并重新建立终端；可选 Worker 与 Core 保持同源版本。
 - 回退会重新引入紧急备份准入缺口、错误 ID、Settings 消费缺失与终端 proof 复用，不能作为安全补救。沿用此前版本的数据库恢复与降级限制；本地双引擎及替身边界 smoke 不代表真实远端备份、生产部署或现场恢复已验收。
 
+## [0.57.2](https://github.com/xiangnan0811/xirang/compare/v0.57.1...v0.57.2) (2026-10-01)
+
+
+### 🐛 Bug Fixes
+
+* **core:** 修复紧急备份准入、动态保留和终端授权生命周期 ([#577](https://github.com/xiangnan0811/xirang/issues/577)) ([6d3986c](https://github.com/xiangnan0811/xirang/commit/6d3986c538c559f2a628b053fbcae19e77221b70))
+
 ## [0.57.1](https://github.com/xiangnan0811/xirang/compare/v0.57.0...v0.57.1) (2026-09-30)
 
 
