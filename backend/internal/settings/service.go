@@ -686,6 +686,23 @@ func (s *Service) GetEffective(key string) string {
 	return value
 }
 
+// ResolveEffective resolves one registered setting directly from the current
+// database state, without consulting or updating the TTL cache. Database
+// failures are returned to fail-closed consumers instead of falling back to
+// environment or default values.
+func (s *Service) ResolveEffective(key string) (string, error) {
+	if s == nil || s.db == nil {
+		return "", ErrInternalSettingUnavailable
+	}
+	if IsInternalSettingKey(key) {
+		return "", ErrInternalSettingUnavailable
+	}
+	if _, ok := registryMap[key]; !ok {
+		return "", fmt.Errorf("未知的设置项: %s", key)
+	}
+	return s.resolveValue(key)
+}
+
 // resolveValue 按 DB → env → default 优先级解析值（无缓存）
 func (s *Service) resolveValue(key string) (string, error) {
 	if IsInternalSettingKey(key) {

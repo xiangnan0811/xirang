@@ -684,8 +684,23 @@ func RequireTaskManualTriggerCredentialGrant(db *gorm.DB) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		requireCredentialGrant(db, credentialGrantMatch{Action: CredentialGrantActionTaskManualTrigger, Purpose: sshutil.PurposeTaskCommand, TaskID: credentialaudit.PtrUint(taskID)}, nil)(c)
+		if !EnforceTaskManualTriggerCredentialGrants(c, db, []uint{taskID}) {
+			return
+		}
+		c.Next()
 	}
+}
+
+func EnforceTaskManualTriggerCredentialGrants(c *gin.Context, db *gorm.DB, taskIDs []uint) bool {
+	matches := make([]credentialGrantMatch, 0, len(taskIDs))
+	for _, taskID := range normalizeCredentialGrantResourceIDs(taskIDs) {
+		matches = append(matches, credentialGrantMatch{
+			Action:  CredentialGrantActionTaskManualTrigger,
+			Purpose: sshutil.PurposeTaskCommand,
+			TaskID:  credentialaudit.PtrUint(taskID),
+		})
+	}
+	return enforceCredentialGrantMatches(c, db, matches)
 }
 
 func EnforceTaskBatchTriggerCredentialGrants(c *gin.Context, db *gorm.DB, taskIDs []uint) bool {

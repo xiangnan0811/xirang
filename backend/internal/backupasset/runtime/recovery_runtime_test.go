@@ -4601,11 +4601,17 @@ func newManagedRecoveryConcurrentCoordinator(total int) *managedRecoveryConcurre
 }
 
 func (coordinator *managedRecoveryConcurrentCoordinator) ClaimNext(
-	_ context.Context,
+	ctx context.Context,
 	workerID string,
 ) (recovery.RecoveryWorkerClaim, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return recovery.RecoveryWorkerClaim{}, false, err
+	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return recovery.RecoveryWorkerClaim{}, false, err
+	}
 	if coordinator.remaining == 0 {
 		return recovery.RecoveryWorkerClaim{}, false, nil
 	}
