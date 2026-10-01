@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.57.2](https://github.com/xiangnan0811/xirang/compare/v0.57.1...v0.57.2) (2026-10-01)
+
+
+### 🐛 Bug Fixes
+
+* **core:** 修复紧急备份准入、动态保留和终端授权生命周期 ([#577](https://github.com/xiangnan0811/xirang/issues/577)) ([6d3986c](https://github.com/xiangnan0811/xirang/commit/6d3986c538c559f2a628b053fbcae19e77221b70))
+
 ### 行为与升级说明
 
 - 紧急备份沿用普通手动任务的 `tasks:trigger`、节点归属、`task.manual_trigger` step-up 与逐 Task ID 的 `task_command` 临时授权；空任务也须二次验证，整组授权通过前不触发任何任务。响应 `task_ids` 返回成功提交的 Task ID，而非 Run ID；业务部分失败明确显示并脱敏。
