@@ -2152,15 +2152,6 @@ func BackupAssetFoundationSettingKeys() []string {
 	return keys
 }
 
-// BackupAssetCoreSettingKeys returns the pre-Search setting set used by legacy
-// typed getters. Search and Overlay must use BackupAssetSettingsSnapshot so
-// their coupled limits are read atomically.
-func BackupAssetCoreSettingKeys() []string {
-	keys := make([]string, len(backupAssetCoreSettingKeys))
-	copy(keys, backupAssetCoreSettingKeys)
-	return keys
-}
-
 func IsBackupAssetFoundationSetting(key string) bool {
 	return backupAssetFoundationSettingSet[key]
 }

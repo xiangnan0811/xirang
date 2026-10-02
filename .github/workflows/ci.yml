@@ -204,6 +204,9 @@ jobs:
       - name: Run PostgreSQL alert delivery migration contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alert delivery migration contract' ./internal/database '^TestAlertDeliveryMigration.*Postgres$'
 
+      - name: Run PostgreSQL alert delivery stats
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alert delivery stats' ./internal/api/handlers '^TestAlertDeliveryStatsPostgres$'
+
       - name: Run PostgreSQL batch idempotency contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch idempotency contract' ./internal/api/handlers '^TestBatchCreationRollbackAndConcurrentIdempotency$'
       - name: Run PostgreSQL policy configuration parity

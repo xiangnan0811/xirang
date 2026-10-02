@@ -1262,12 +1262,13 @@ func (service *FoundationService) effectiveFoundationValues() (map[string]string
 	if service == nil || service.settings == nil {
 		return nil, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
 	}
-	values := make(map[string]string, len(settings.BackupAssetCoreSettingKeys()))
-	for _, key := range settings.BackupAssetCoreSettingKeys() {
+	keys := settings.BackupAssetFoundationSettingKeys()
+	values := make(map[string]string, len(keys))
+	for _, key := range keys {
 		values[key] = service.settings.GetEffective(key)
 	}
-	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	if err := validateCompleteFoundationValues(values); err != nil {
+		return nil, err
 	}
 	return values, nil
 }

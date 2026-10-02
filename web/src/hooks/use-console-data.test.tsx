@@ -761,4 +761,22 @@ describe("useConsoleData", () => {
     expect(result.current.alerts[0]?.retryable).toBe(false);
     expect(result.current.tasks[0]?.status).toBe("success");
   });
+
+  it("已登录时投递统计失败会传给调用者", async () => {
+    apiClientMock.getNodes.mockResolvedValue([]);
+    apiClientMock.getAlertDeliveryStats.mockRejectedValue(new Error("stats down"));
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    expect(result.current.warning).toBeNull();
+
+    await act(async () => {
+      await expect(result.current.fetchAlertDeliveryStats(24)).rejects.toThrow("stats down");
+    });
+
+    expect(result.current.warning).toBeNull();
+    expect(apiClientMock.getAlertDeliveryStats).toHaveBeenCalledWith("token-1", { hours: 24 });
+  });
 });

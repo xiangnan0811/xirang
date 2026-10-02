@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,8 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
+
+	"gorm.io/gorm"
 )
 
 const enableTransitionDeadlockHelperEnv = "XIRANG_TEST_ENABLE_TRANSITION_DEADLOCK_HELPER"
@@ -75,6 +78,50 @@ func (manager *productionDeadlockContentManager) PrepareEnable(ctx context.Conte
 	return manager.managedContentRuntime.PrepareEnable(ctx, config)
 }
 
+func seedPendingTerminalContentGrant(t *testing.T, db *gorm.DB, now time.Time) string {
+	t.Helper()
+	grantID := strings.Repeat("a", 32)
+	deliveryID := strings.Repeat("b", 32)
+	recoveryPointID := strings.Repeat("c", 32)
+	catalogGenerationID := strings.Repeat("d", 32)
+	entryID := strings.Repeat("e", 64)
+	leaseID := strings.Repeat("f", 32)
+	leaseAttemptID := strings.Repeat("1", 32)
+	grant := model.BackupAssetDeliveryGrant{
+		ID: grantID, DeliveryID: deliveryID, ResourceKind: string(content.DeliveryResourceBackupAsset),
+		RecoveryPointID: &recoveryPointID, CatalogGenerationID: &catalogGenerationID, EntryID: &entryID,
+		OwnerUserID: 42, SessionJTI: strings.Repeat("2", 32), SessionRole: "operator",
+		SessionExpiresAt: now.Add(time.Hour), Action: string(content.DeliveryPreview),
+		MethodPolicy: string(content.MethodGetHead), RangePolicy: string(content.RangeSingle),
+		Renderer: string(content.RendererPlainText), Profile: string(content.ProfileTextV2),
+		Classification: string(content.ClassificationNonSecret), ClassificationRevision: 1,
+		ClassificationSourceRevision: 1, ProviderKind: string(backupasset.ProviderRsync),
+		SourceFingerprint: "source-v1", EntryFingerprint: "entry-v1", FingerprintStrength: "strong",
+		RepresentationETag: `"content-v1"`, SourceSize: 1, DetectedMediaType: "text/plain",
+		RepresentationSourceBytes: 1, RepresentationSize: 1, CookieSecretHash: strings.Repeat("3", 64),
+		State: string(content.DeliveryClosed), RevocationReason: "process_restarted", RevokedAt: &now,
+		LeaseID: leaseID, LeaseAttemptID: leaseAttemptID, LeaseFenceTokenHash: strings.Repeat("4", 64),
+		AbsoluteExpiresAt: now.Add(time.Hour), IdleExpiresAt: now.Add(time.Minute), IdleTTLSeconds: 60,
+		LastActivityAt: now, MaxBytesPerRequest: 1, MaxCumulativeBytes: 1, MaxRequests: 1,
+		MaxInFlight: 1, Version: 1, AuditState: "pending", AuditRangeCount: 1, AuditRangeBytes: 1,
+		AuditRequestCount: 1, AuditSuccessCount: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatalf("seed pending terminal Content grant: %v", err)
+	}
+	requestID := strings.Repeat("5", 32)
+	finishedAt := now
+	request := model.BackupAssetDeliveryRequest{
+		ID: requestID, GrantID: grantID, Method: "GET", RangeKind: string(content.HTTPRangeFull),
+		State: string(content.RequestSucceeded), ProviderBytes: 1, ResponseBytes: 1, HTTPStatus: 200,
+		StartedAt: now, LastProgressAt: now, FinishedAt: &finishedAt, CreatedAt: now, UpdatedAt: now, Version: 1,
+	}
+	if err := db.Create(&request).Error; err != nil {
+		t.Fatalf("seed terminal Content request: %v", err)
+	}
+	return grantID
+}
+
 func TestRuntimeEnableTransitionContentConfigDoesNotReenterSettingsMutation(t *testing.T) {
 	if os.Getenv(enableTransitionDeadlockHelperEnv) == "content" {
 		runContentConfigDeadlockHelper(t)
@@ -107,7 +154,10 @@ func TestEnableTransitionHelperAllowsSlowStartupBeforeStageDeadline(t *testing.T
 func runContentConfigDeadlockHelper(t *testing.T) {
 	t.Helper()
 	db := openRuntimeTestDB(t)
-	if err := db.AutoMigrate(&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{},
+		&model.BackupAssetAuditCheckpoint{}, &model.BackupAssetAuditEvent{},
+	); err != nil {
 		t.Fatalf("migrate production Content fixture: %v", err)
 	}
 	settingsService := settings.NewService(db)
@@ -149,6 +199,7 @@ func runContentConfigDeadlockHelper(t *testing.T) {
 	runtime.keyring = nil
 	runtime.searchWorker = nil
 	runtime.enablement = readyGAEnablement()
+	pendingGrantID := seedPendingTerminalContentGrant(t, db, time.Now().UTC().Truncate(time.Second))
 
 	writeEnableTransitionHelperReady("content")
 	if err := runRealEnabledSettingsMutation(settingsService, runtime); err != nil {
@@ -162,6 +213,20 @@ func runContentConfigDeadlockHelper(t *testing.T) {
 	}
 	if got := settingsService.GetEffective("backup_assets.enabled"); got != "true" {
 		t.Fatalf("persisted backup_assets.enabled=%q, want true", got)
+	}
+	var grant model.BackupAssetDeliveryGrant
+	if err := db.First(&grant, "id = ?", pendingGrantID).Error; err != nil {
+		t.Fatalf("load pending terminal Content grant: %v", err)
+	}
+	if grant.AuditState != "emitted" {
+		t.Fatalf("pending terminal Content grant audit state=%q, want emitted", grant.AuditState)
+	}
+	var auditEvents []model.BackupAssetAuditEvent
+	if err := db.Where("grant_id = ?", pendingGrantID).Find(&auditEvents).Error; err != nil {
+		t.Fatalf("load terminal Content audit event: %v", err)
+	}
+	if len(auditEvents) != 1 || auditEvents[0].Action != string(backupasset.AuditActionPreviewRead) {
+		t.Fatalf("terminal Content audit events=%+v", auditEvents)
 	}
 }
 

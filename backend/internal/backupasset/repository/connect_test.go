@@ -1439,10 +1439,11 @@ func TestConnectClampsRecordLimitToValidMetadataCeiling(t *testing.T) {
 	prober := scopedObservationProber(backupasset.ProviderRsync)
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, prober)
 	service.foundation = backupasset.NewFoundationService(repositorySettings{
-		"backup_assets.enabled":                       "true",
-		"backup_assets.provider_operation_timeout":    "5s",
-		"backup_assets.provider_max_concurrency":      "1",
-		"backup_assets.provider_metadata_limit_bytes": "65536",
+		"backup_assets.enabled":                          "true",
+		"backup_assets.provider_operation_timeout":       "5s",
+		"backup_assets.provider_max_concurrency":         "1",
+		"backup_assets.provider_metadata_limit_bytes":    "65536",
+		"backup_assets.content_provider_max_concurrency": "1",
 	})
 	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); err != nil {
 		t.Fatal(err)

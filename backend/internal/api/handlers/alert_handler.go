@@ -714,30 +714,32 @@ func (h *AlertHandler) DeliveryStats(c *gin.Context) {
 		return
 	}
 
-	totalQuery := h.db.Model(&model.AlertDelivery{}).
-		Where("created_at >= ?", from)
-	if needFilter {
-		totalQuery = totalQuery.Where("alert_id IN (SELECT id FROM alerts WHERE node_id IN ?)", nodeIDs)
+	newStatsQuery := func() *gorm.DB {
+		query := h.db.WithContext(c.Request.Context()).
+			Table("alert_deliveries AS ad").
+			Where("ad.created_at >= ?", from).
+			Where("(ad.status = 'sent' OR NOT EXISTS (SELECT 1 FROM alerts AS retired_alert WHERE retired_alert.id = ad.alert_id AND retired_alert.delivery_reason = ?))", "feature_retired")
+		if needFilter {
+			query = query.Where("ad.alert_id IN (SELECT id FROM alerts WHERE node_id IN ?)", nodeIDs)
+		}
+		return query
 	}
 
+	totalQuery := newStatsQuery()
 	var totals struct {
 		Sent   int64 `gorm:"column:sent"`
 		Failed int64 `gorm:"column:failed"`
 	}
 	if err := totalQuery.
-		Select("COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent, COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed").
+		Select("COALESCE(SUM(CASE WHEN ad.status = 'sent' THEN 1 ELSE 0 END), 0) AS sent, COALESCE(SUM(CASE WHEN ad.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed").
 		Scan(&totals).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
 
-	byIntQuery := h.db.Table("alert_deliveries AS ad").
+	byIntQuery := newStatsQuery().
 		Select("ad.integration_id AS integration_id, COALESCE(i.name, '') AS name, COALESCE(i.type, '') AS type, COALESCE(SUM(CASE WHEN ad.status = 'sent' THEN 1 ELSE 0 END), 0) AS sent, COALESCE(SUM(CASE WHEN ad.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed").
-		Joins("LEFT JOIN integrations AS i ON i.id = ad.integration_id").
-		Where("ad.created_at >= ?", from)
-	if needFilter {
-		byIntQuery = byIntQuery.Where("ad.alert_id IN (SELECT id FROM alerts WHERE node_id IN ?)", nodeIDs)
-	}
+		Joins("LEFT JOIN integrations AS i ON i.id = ad.integration_id")
 
 	var byIntegration []deliveryStatsByIntegration
 	if err := byIntQuery.

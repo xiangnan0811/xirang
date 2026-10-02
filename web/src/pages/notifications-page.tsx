@@ -46,12 +46,33 @@ export function NotificationsPage() {
   }, [refreshAlertStats, refreshVersion]);
 
   // 投递重试统计
-  const [deliveryFailedCount, setDeliveryFailedCount] = useState(0);
+  const [deliveryFailedCount, setDeliveryFailedCount] = useState<number | null>(null);
+  const [deliveryStatsError, setDeliveryStatsError] = useState(false);
   useEffect(() => {
-    if (!token) return;
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setDeliveryFailedCount(null);
+    setDeliveryStatsError(false);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    if (!token) {
+      return;
+    }
+    let active = true;
     fetchAlertDeliveryStats(24)
-      .then((stats) => setDeliveryFailedCount(stats.totalFailed))
-      .catch(() => {});
+      .then((stats) => {
+        if (!active) {
+          return;
+        }
+        setDeliveryFailedCount(stats.totalFailed);
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setDeliveryStatsError(true);
+      });
+    return () => {
+      active = false;
+    };
   }, [fetchAlertDeliveryStats, token, refreshVersion]);
 
   const activeIntegrations = integrations.filter((item) => item.enabled).length;
@@ -73,10 +94,22 @@ export function NotificationsPage() {
                 total: integrations.length || 0,
               })}
             </Badge>
-            <Badge tone={deliveryFailedCount > 0 ? "warning" : "neutral"}>
-              {t("notifications.deliveryFailedMeta", {
-                count: deliveryFailedCount,
-              })}
+            <Badge
+              tone={
+                deliveryFailedCount === null
+                  ? deliveryStatsError
+                    ? "warning"
+                    : "neutral"
+                  : deliveryFailedCount > 0
+                    ? "warning"
+                    : "neutral"
+              }
+            >
+              {deliveryFailedCount === null
+                ? t(deliveryStatsError ? "notifications.deliveryStatsLoadFailed" : "common.loading")
+                : t("notifications.deliveryFailedMeta", {
+                    count: deliveryFailedCount,
+                  })}
             </Badge>
           </>
         }
@@ -112,9 +145,19 @@ export function NotificationsPage() {
           },
           {
             title: t("notifications.statDeliveryFailed24h"),
-            value: deliveryFailedCount,
-            description: t("notifications.statDeliveryFailed24hDesc"),
-            tone: deliveryFailedCount > 0 ? ("warning" as const) : ("success" as const),
+            value: deliveryFailedCount === null ? "—" : deliveryFailedCount,
+            description:
+              deliveryFailedCount === null
+                ? t(deliveryStatsError ? "notifications.deliveryStatsLoadFailed" : "common.loading")
+                : t("notifications.statDeliveryFailed24hDesc"),
+            tone:
+              deliveryFailedCount === null
+                ? deliveryStatsError
+                  ? ("warning" as const)
+                  : undefined
+                : deliveryFailedCount > 0
+                  ? ("warning" as const)
+                  : ("success" as const),
           },
         ]}
       />
