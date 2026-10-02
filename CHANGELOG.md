@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.57.3](https://github.com/xiangnan0811/xirang/compare/v0.57.2...v0.57.3) (2026-10-02)
+
+
+### 🐛 Bug Fixes
+
+* **core:** 修复 Foundation 配置读取与通知投递统计 ([#580](https://github.com/xiangnan0811/xirang/issues/580)) ([4f97cce](https://github.com/xiangnan0811/xirang/commit/4f97cce38fd8753d785ad5ee6ad0eefb04fb4f45))
+
 ### 行为与升级说明
 
 - Foundation 旧式配置读取器改为读取全部注册键的实际有效值，再执行完整校验；合法的短租约／Search／Processing 时限组合不再因遗漏 Search 值而被默认值误拒绝。保留 DB → 环境 → 默认优先级、既有缓存及读取错误回退，不增加 mutation gate 等待，也不把逐项读取承诺为原子快照。已保存的相关数据库覆盖值会在新版 Core 读取配置时参与完整校验；升级前核对跨字段时限与并发约束，不能靠遗漏值绕过校验。
@@ -9,13 +16,6 @@
 - 统计请求失败不再返回伪造的全零成功。切换窗口、刷新或重试先隐藏旧数字，失败显示错误并允许重试；只接受当前请求代次的结果，A→B→A 会重新请求 A。顶部 24h 统计失败时显示未知而非成功零值；迟到请求只失去提交资格，不代表网络请求被取消。
 - 本补丁没有新增 schema migration，不改变既有不可逆迁移和降级下限。升级前保全一致性数据库、全部适用加密密钥和独立备份副本，停止新任务并排空旧 Core／调度器／执行器／通知 worker 的在途操作；换版不会取消已经提交的任务或网络投递。新配置读取与统计逻辑在新版 Core 生效，前端状态修复在加载新版页面后生效，请更新后刷新页面；可选 Worker 与 Core 保持同源版本。
 - 回退会重新引入合法配置误拒绝、退役投递误计失败和旧窗口数字错配，不能通过修改历史迁移、删除投递或绕过配置校验补救。沿用既有数据库恢复边界；本地双数据库、HTTP 与浏览器验收不代表生产部署、远端 Provider 备份或现场恢复已验收。
-
-## [0.57.3](https://github.com/xiangnan0811/xirang/compare/v0.57.2...v0.57.3) (2026-10-02)
-
-
-### 🐛 Bug Fixes
-
-* **core:** 修复 Foundation 配置读取与通知投递统计 ([#580](https://github.com/xiangnan0811/xirang/issues/580)) ([4f97cce](https://github.com/xiangnan0811/xirang/commit/4f97cce38fd8753d785ad5ee6ad0eefb04fb4f45))
 
 ## [0.57.2](https://github.com/xiangnan0811/xirang/compare/v0.57.1...v0.57.2) (2026-10-01)
 
