@@ -294,8 +294,17 @@ jobs:
           echo "Frontend covered lines entries: ${COVERED}"
 
   docker-build:
-    name: Docker Build
-    runs-on: ubuntu-latest
+    name: Docker Build (${{ matrix.arch }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -315,16 +324,65 @@ jobs:
       - name: Self-test predeploy backup state handling
         run: bash scripts/predeploy-backup.test.sh
 
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
       - name: Build Docker image
-        run: docker build -t linnea7171/xirang:ci-core-smoke -f deploy/allinone/Dockerfile .
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/allinone/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: false
+          load: true
+          provenance: false
+          tags: linnea7171/xirang:ci-core-smoke-${{ matrix.arch }}
+
+      - name: Inspect local Core image
+        env:
+          CORE_IMAGE_REF: linnea7171/xirang:ci-core-smoke-${{ matrix.arch }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          BUILD_IMAGE_ID: ${{ steps.build.outputs.imageid }}
+        run: |
+          set -euo pipefail
+          test -n "${BUILD_IMAGE_ID}"
+          actual_os="$(docker image inspect --format '{{.Os}}' "${CORE_IMAGE_REF}")"
+          actual_arch="$(docker image inspect --format '{{.Architecture}}' "${CORE_IMAGE_REF}")"
+          actual_image_id="$(docker image inspect --format '{{.Id}}' "${CORE_IMAGE_REF}")"
+          if [[ "${actual_os}" != "linux" ]]; then
+            echo "::error::Core image OS ${actual_os} is not linux"
+            exit 1
+          fi
+          if [[ "${actual_arch}" != "${EXPECTED_ARCH}" ]]; then
+            echo "::error::Core image architecture ${actual_arch} does not match ${EXPECTED_ARCH}"
+            exit 1
+          fi
+          if [[ "${actual_image_id}" != "${BUILD_IMAGE_ID}" ]]; then
+            echo "::error::Core image ID ${actual_image_id} does not match Buildx output ${BUILD_IMAGE_ID}"
+            exit 1
+          fi
+          printf 'Verified Core image: os=%s arch=%s imageid=%s\n' \
+            "${actual_os}" "${actual_arch}" "${actual_image_id}"
+
+      - name: Scan local Core image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: ${{ steps.build.outputs.imageid }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
 
       - name: Self-test core-only Compose smoke
         run: bash scripts/test-core-compose.test.sh
 
       - name: Run core-only Compose smoke
         env:
-          CORE_COMPOSE_IMAGE_TAG: ci-core-smoke
-          CORE_COMPOSE_PROJECT: xirang-core-smoke-ci
+          CORE_COMPOSE_IMAGE_TAG: ci-core-smoke-${{ matrix.arch }}
+          CORE_COMPOSE_PROJECT: xirang-core-smoke-${{ matrix.arch }}
         run: bash scripts/test-core-compose.sh
 
   asset-worker-closure:
