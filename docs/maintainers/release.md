@@ -48,6 +48,19 @@ Release Please 自动插入版本标题时可能将原有升级说明留在 `Unr
 
 当前 Trivy 设置为 `severity: HIGH,CRITICAL`、`exit-code: 1`、`ignore-unfixed: true`：扫描识别且已有修复版本的高危/严重漏洞阻断正式标签，未修复漏洞被过滤。不能将通过结果解释为不存在任何高危漏洞。基础镜像或包漏洞阻断时，更新来源并重新走 PR/release；不得降低 severity、添加临时 ignore 或绕过扫描。Actions pin 和依赖维护见[仓库自动化](automation.md)。
 
+### 持续 CI 与正式发布证据边界
+
+持续 CI 的 Core `docker-build` 仅在原生 `amd64`/`arm64` runner 上构建并加载本地
+镜像：`push: false`，无 Docker Hub 登录或发布凭据。它会核对本地镜像的
+OS/架构和 Buildx image ID，使用显式 `TRIVY_PLATFORM` 扫描本地 image ID，并运行
+架构专属 Compose readiness smoke。该绿色结果是候选源码的双架构构建、漏洞门槛和
+临时运行时证据，不是远端镜像已存在、已推送或已完成证明的证据。
+
+只有本手册上文发布顺序中的正式工作流，才能证明按 digest 推送、远端 digest 扫描、
+multi-arch manifest/tag 提升、发布凭据使用和 provenance attestation。交付记录必须
+分别列出持续 CI 的 no-push 结果与正式发布的 digest、凭据使用范围及 attestation
+结果；不得用 CI 的本地 tag 或绿色 Compose smoke 替代任一正式发布证据。
+
 持续监控发布直至结束。标签推送发生在 attestation 之前，因此后置证明失败时可能已有公开镜像；核对失败步骤及 digest，不能把 workflow 失败等同于完全未发布。交付声明区分 GitHub Release、镜像、证明与实际部署结果。
 
 ## 升级说明必须覆盖的风险

@@ -77,6 +77,25 @@ Conventional Commits 标题。旧运行的重跑仍使用原始事件中的标�
 - 已归档或废弃的 action 应迁到受维护上游，再更新版本。Release Please 使用 `googleapis/release-please-action`。
 - 修改发布工作流时分别验证 amd64/arm64 构建和扫描的实际平台选择；multi-arch manifest 成功不能证明每个平台扫描正确。
 
+### Core 双架构持续构建的证据边界
+
+CI 的 `docker-build` 作业在 `ubuntu-24.04` 与 `ubuntu-24.04-arm` 上分别原生构建
+`amd64` 和 `arm64` Core 镜像，不安装 QEMU。该作业使用固定 SHA 的 Buildx
+Actions，以 `push: false`、`load: true` 将单平台镜像只加载到当前 runner；不登录
+Docker Hub、不读取发布凭据，也不创建远端 digest、manifest 或 provenance
+attestation。
+
+每个矩阵任务都检查本地镜像的 `.Os`、`.Architecture` 与矩阵值匹配，并要求
+`.Id` 与 Buildx `imageid` 输出相等且非空；Trivy 使用该本地 image ID，并通过
+`TRIVY_PLATFORM`、`HIGH,CRITICAL`、`exit-code: 1` 和 `ignore-unfixed: true` 保持
+严格扫描门槛。随后使用架构专属的 Compose tag/project 执行 Core readiness
+smoke。因而该作业证明候选源码在两种原生平台上的构建、扫描和临时运行时检查，
+但不能证明 Docker Hub 已收到镜像或已完成正式发布。
+
+正式发布所需的按 digest 推送、远端 digest 扫描、multi-arch manifest/tag 提升、
+凭据使用和 provenance attestation，仍只由[发布手册](release.md)规定的发布工作流
+提供证据；不得用持续 CI 的绿色结果替代这些证据。
+
 仓库不依赖 Codecov 账户或上传令牌。覆盖率由 CI 自行阻断：后端总覆盖率和备份资产专项阈值、前端非空 LCOV；竞态、漏洞、PostgreSQL、浏览器和容器验收各自保留。
 
 备份职责收敛后，CI 的 race 列表不再引用已删除的节点 probe、metrics、系统日志或服务 uptime 包，也不运行服务监控配置的专属 race 步骤；按需 SSH、任务、备份资产及投递并发检查保留。创建默认值的双引擎 parity 仅保留策略创建与调度行为。PostgreSQL 的 alerting/escalation 必需选择器包含节点及服务来源退役迁移后的直接投递与升级投递围栏测试，数据库选择器同时覆盖退役 schema 和启动保护器漂移。删除看板只移除其专用网格布局依赖，任务图表仍使用 Recharts；锁文件和 bundle budget 继续按上述门禁验证。
