@@ -364,6 +364,137 @@ func runSearchBehaviorContract(t *testing.T, fixture searchBehaviorFixture) {
 		t.Fatalf("%s behavior summary=%+v want=%+v second_generation=%s", fixture.engine, summary, want, second.QueryGeneration)
 	}
 	assertAtomicContentProjectionBehavior(t, fixture, harness, pointID, searchGenerationIDForBehavior(t, fixture.db, pointID))
+	assertNormalizerUpgradeRebuild(t, indexer, harness)
+}
+
+func assertNormalizerUpgradeRebuild(t *testing.T, indexer *Indexer, harness *indexerTestHarness) {
+	t.Helper()
+	const historicalNormalizerVersion = 3
+	const unicodeName = "\U00010041\u0300"
+
+	entryID := strings.Repeat("b", 64)
+	pointID, catalogID := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: unicodeName, Name: unicodeName,
+		EntryType: "file", SecurityState: "non_secret",
+	}})
+	historical, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatalf("build Search projection before normalizer upgrade: %v", err)
+	}
+	if historical.NormalizerVersion != NormalizerVersion || historical.State != string(SearchGenerationComplete) || !historical.IsActive {
+		t.Fatalf("initial Search generation=%+v", historical)
+	}
+	key, err := harness.ring.Active(context.Background(), backupasset.KeyDomainSearchToken)
+	if err != nil {
+		t.Fatalf("load Search token key for historical projection: %v", err)
+	}
+	if err := harness.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.BackupAssetSearchGeneration{}).Where("id = ?", historical.ID).
+			Update("normalizer_version", historicalNormalizerVersion).Error; err != nil {
+			return fmt.Errorf("mark historical Search generation: %w", err)
+		}
+		if err := tx.Where("search_generation_id = ?", historical.ID).Delete(&model.BackupAssetSearchPosting{}).Error; err != nil {
+			return fmt.Errorf("replace historical Search postings: %w", err)
+		}
+		postings := make([]model.BackupAssetSearchPosting, 0, 4)
+		for _, field := range []SearchField{SearchFieldName, SearchFieldPath} {
+			for _, kind := range []TokenKind{TokenKindSegment, TokenKindExact} {
+				digest, err := TokenHMAC(
+					key.Key, key.Version, historicalNormalizerVersion, field, kind, "à",
+				)
+				if err != nil {
+					return fmt.Errorf("hash historical Search posting: %w", err)
+				}
+				postings = append(postings, model.BackupAssetSearchPosting{
+					SearchGenerationID: historical.ID, DocumentID: entryID, Field: string(field),
+					TokenKind: string(kind), KeyVersion: key.Version, TokenHMAC: digest, TermFrequency: 1,
+				})
+			}
+		}
+		if err := tx.Create(&postings).Error; err != nil {
+			return fmt.Errorf("create historical Search postings: %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := newSearchServiceForHarness(t, harness, map[string]bool{pointID: true}, nil)
+	actor := SearchActor{Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1}}
+	request := SearchRequest{
+		SchemaVersion: QuerySchemaVersion,
+		Root:          QueryNode{Op: QueryOpTerm, Field: SearchFieldName, Text: unicodeName},
+		Scope:         SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+		Sort:          SearchSortRelevance,
+		Limit:         20,
+	}
+	before, err := service.Search(context.Background(), actor, request)
+	if err != nil {
+		t.Fatalf("search before normalizer rebuild: %v", err)
+	}
+	if len(before.Items) != 0 || before.Coverage.Status != CoverageUnavailable ||
+		before.Total != nil || before.TotalRelation != TotalRelationUnavailable || before.AuthoritativeEmpty {
+		t.Fatalf("stale normalizer projection remained authoritative: %+v", before)
+	}
+
+	candidates, err := indexer.ListCandidates(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("list normalizer rebuild candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].RecoveryPointID != pointID || candidates[0].CatalogGenerationID != catalogID {
+		t.Fatalf("normalizer rebuild candidates=%+v, want point=%s catalog=%s", candidates, pointID, catalogID)
+	}
+
+	rebuilt, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatalf("rebuild Search projection after normalizer upgrade: %v", err)
+	}
+	if rebuilt.ID == historical.ID || rebuilt.Generation != historical.Generation+1 ||
+		rebuilt.State != string(SearchGenerationComplete) || !rebuilt.IsActive ||
+		rebuilt.NormalizerVersion != NormalizerVersion {
+		t.Fatalf("rebuilt Search generation=%+v, historical=%+v", rebuilt, historical)
+	}
+	var prior model.BackupAssetSearchGeneration
+	if err := harness.db.Where("id = ?", historical.ID).Take(&prior).Error; err != nil {
+		t.Fatalf("load superseded historical Search generation: %v", err)
+	}
+	var active model.BackupAssetSearchGeneration
+	if err := harness.db.Where("recovery_point_id = ? AND is_active = ?", pointID, true).Take(&active).Error; err != nil {
+		t.Fatalf("load active rebuilt Search generation: %v", err)
+	}
+	if prior.IsActive || prior.State != string(SearchGenerationSuperseded) || prior.NormalizerVersion != historicalNormalizerVersion ||
+		active.ID != rebuilt.ID || !active.IsActive || active.State != string(SearchGenerationComplete) ||
+		active.NormalizerVersion != NormalizerVersion {
+		t.Fatalf("normalizer generations prior=%+v active=%+v rebuilt=%+v", prior, active, rebuilt)
+	}
+	candidates, err = indexer.ListCandidates(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("list candidates after normalizer rebuild: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("normalizer rebuild candidate remained after build: %+v", candidates)
+	}
+
+	after, err := service.Search(context.Background(), actor, request)
+	if err != nil {
+		t.Fatalf("search after normalizer rebuild: %v", err)
+	}
+	if len(after.Items) != 1 || after.Items[0].Ref.EntryID != entryID || after.Items[0].Asset.Name != unicodeName ||
+		after.Coverage.Status != CoverageComplete || after.Total == nil || *after.Total != 1 ||
+		after.TotalRelation != TotalRelationExact || after.AuthoritativeEmpty {
+		t.Fatalf("rebuilt Unicode search response=%+v", after)
+	}
+
+	legacyRequest := request
+	legacyRequest.Root = QueryNode{Op: QueryOpTerm, Field: SearchFieldName, Text: "à"}
+	legacy, err := service.Search(context.Background(), actor, legacyRequest)
+	if err != nil {
+		t.Fatalf("search historical canonical after normalizer rebuild: %v", err)
+	}
+	if len(legacy.Items) != 0 || legacy.Coverage.Status != CoverageComplete || legacy.Total == nil ||
+		*legacy.Total != 0 || legacy.TotalRelation != TotalRelationExact || !legacy.AuthoritativeEmpty {
+		t.Fatalf("historical canonical unexpectedly matched rebuilt projection: %+v", legacy)
+	}
 }
 
 func assertAtomicContentProjectionBehavior(

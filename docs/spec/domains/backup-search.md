@@ -19,6 +19,13 @@ Catalog `security_state=sealed` 证明 locator 已认证加密，不是非秘密
 
 候选本地 Build 失败保留 durable failed generation/metrics，但不使整个 startup 失败；必须 bounded join 全部工作。caller cancel、配置/密钥、abandoned reconciliation、overlay、candidate listing 等 pass 基础设施失败仍传播并保持 Search unready。旧失败代次不可重写，下一个 sequence 单调收敛并原子激活。回归必须消费真实 Catalog producer 输出，不能手写 `non_secret` 伪造通过。
 
+## 归一化代次升级与恢复
+
+- `NormalizerVersion` 是持久化 token 输出协议的一部分。任何规范化输出变化都必须推进该版本；旧代即使状态为 `complete` 也不得被当前 Search 消费。升级前的 durable postings 保留为历史事实，当前查询必须报告 `coverage=unavailable`、`total_relation=unavailable` 且 `authoritative_empty=false`，不能回退旧代继续命中。
+- 旧代失效后只由既有 Search worker 使用 `Indexer.ListCandidates` 和 `Indexer.Build` 做有界异步重建；不增加平行调度器、启动时批量 `UPDATE` 或删除旧 postings。新代必须先完整写入，再原子切换为当前版本的 active/complete，旧代随后才可按既有生命周期规则清理。
+- Core 与 Indexer 必须作为同一版本整体升级。metadata 重建只证明当前 Catalog 的 metadata postings；content/OCR 仍按各自 projection、pipeline 与 coverage 合同处理，不得把 metadata rebuild 宣称为内容或 OCR 已完成。
+- 回退时旧版 Core/Indexer 不能复用新版 postings；必须恢复与旧版匹配的数据库/镜像并按旧协议重建，不能手工降写版本、删 postings 或绕过版本围栏。
+
 ## API、审计与 overlay
 
 - 查询使用 `POST /api/v1/asset-search`，AST/scope/cursor 在 body；不放 GET URL。未知 schema/op/field、坏 exact scope、任一限额超限拒绝整个查询。
@@ -43,5 +50,7 @@ Catalog `security_state=sealed` 证明 locator 已认证加密，不是非秘密
 双引擎真实 apply/pristine/used-down、FK/CHECK/index/UTC；normalization/property、HMAC 独立/丢失/rewrap、候选 hydration 前截断门禁、path proximity、stable ordering/grouping/拼页、coverage 与全部 cursor stale 绑定；三值逻辑、wrong-purpose/expired proof、resolver failure、metadata-only suggestion 与 query/log/audit/cursor 隐私扫描。
 
 同时覆盖 ingest source/fence/classification CAS、sibling invalidation/rollback、无 plaintext/ciphertext ownership；owner/事务授权/quota race/幂等/tag revision/lifecycle cleanup 且不改 hold/retention/Provider。真实 Catalog→Search fixture 在 SQLite 与真实 PostgreSQL 上验证 sealed→unknown、坏变体拒绝、不改 prior active、候选失败隔离与所有基础设施失败、下一代收敛。
+
+- 归一化代次升级必须固定历史协议版本（当前升级前代次为 `3`），证明旧代查询为 unavailable 且非 authoritative，候选包含精确 point/catalog pair；现有 Indexer 重建后只返回新代 EntryID，旧规范化字符不命中，content/OCR 不因 metadata rebuild 变为 complete。
 
 前端测试 full/partial 产品、复合 ref、全部 contradiction、合法 non-secret content、retained count、overlay mutation 精确 header/body、Admin proof复用/拒绝/并发/owner；source guard 针对 API 层禁止 direct fetch、storage/router/URL、`any`/`unknown as T`，中央 proof store 的明确例外不能误报为 Search 持久化授权。

@@ -24,6 +24,13 @@ Go 升级不要求所有模块跟随更新。先核对上游兼容说明、构�
 SQLite / PostgreSQL 行为，以及目标镜像的启动和 `/readyz`。
 amd64 验证不能替代 arm64 原生 Worker 沙箱验收；本地通过也不代表线上已部署。
 
+Go minor/patch 依赖更新也须沿生产者与消费者验证兼容性：STS 的可选 token
+指标按[仓库准入合同](../spec/domains/backup-repository.md)解释，不能沿用已取消的
+packed-policy-size 阈值；pgx 的 libpq URI 解析将 `+` 视为字面量，隔离测试通过
+直接 `search_path` 参数选择 schema，不把 `options` 中的空格编码成 `+`。
+Unicode 规范化输出变化须推进持久化 Search normalizer 版本，并验证旧代失效、
+调度重建和查询恢复；升级及降级边界见[搜索合同](../spec/domains/backup-search.md)。
+
 ## 前端依赖审计
 
 更改锁文件、升级依赖或排查本地与 CI/Docker 差异时，使用与 [CI](../../.github/workflows/ci.yml)及 [Docker web-builder](../../deploy/allinone/Dockerfile)一致的 Node 主版本，当前两者均为 Node 20。不要把 Actions 自身的 JavaScript runtime 与项目 Node 版本混为一谈。

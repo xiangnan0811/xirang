@@ -40,7 +40,7 @@ func openBreakGlassPostgresTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("create isolated schema: %v", err)
 	}
 	query := parsed.Query()
-	query.Set("options", "-c search_path="+schema)
+	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
 	db, err := gorm.Open(postgres.Open(parsed.String()), &gorm.Config{})
 	if err != nil {

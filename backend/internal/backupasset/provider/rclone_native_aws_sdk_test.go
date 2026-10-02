@@ -25,15 +25,18 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-type rcloneNativeSTSClientFake struct {
-	input  *sts.AssumeRoleInput
-	output *sts.AssumeRoleOutput
-	err    error
+type rcloneNativeAdmissionSTSClientFake struct {
+	output     *sts.AssumeRoleOutput
+	externalID string
+	inputs     []*sts.AssumeRoleInput
 }
 
-func (fake *rcloneNativeSTSClientFake) AssumeRole(_ context.Context, input *sts.AssumeRoleInput, _ ...func(*sts.Options)) (*sts.AssumeRoleOutput, error) {
-	fake.input = input
-	return fake.output, fake.err
+func (fake *rcloneNativeAdmissionSTSClientFake) AssumeRole(_ context.Context, input *sts.AssumeRoleInput, _ ...func(*sts.Options)) (*sts.AssumeRoleOutput, error) {
+	fake.inputs = append(fake.inputs, input)
+	if aws.ToString(input.ExternalId) != fake.externalID {
+		return nil, &smithy.GenericAPIError{Code: "AccessDenied"}
+	}
+	return fake.output, nil
 }
 
 type rcloneNativeS3ClientFake struct {
@@ -110,38 +113,67 @@ func (fake *rcloneNativeKMSClientFake) DescribeKey(_ context.Context, input *kms
 	return fake.output, nil
 }
 
-func TestRcloneNativeAWSSDKAssumeRoleMapsOnlyTemporarySession(t *testing.T) {
-	expires := time.Date(2026, 7, 16, 11, 0, 0, 0, time.UTC)
-	client := &rcloneNativeSTSClientFake{output: &sts.AssumeRoleOutput{
-		Credentials: &ststypes.Credentials{
-			AccessKeyId:     aws.String("FAKE_AWS_ACCESS_KEY_ID_FOR_TEST_ONLY"),
-			SecretAccessKey: aws.String("FAKE_AWS_SECRET_ACCESS_KEY_FOR_TEST_ONLY"),
-			SessionToken:    aws.String("FAKE_AWS_SESSION_TOKEN_FOR_TEST_ONLY"), Expiration: &expires,
-		},
-		AssumedRoleUser:  &ststypes.AssumedRoleUser{Arn: aws.String("arn:aws:sts::123456789012:assumed-role/xirang/test")},
-		PackedPolicySize: aws.Int32(17),
-	}}
-	factory := newRcloneNativeAWSFactoryForTest(client, nil, aws.Config{Region: "us-east-1"}, 3)
+func TestRcloneNativeAWSSDKSessionTokenMetricsDriveAdmission(t *testing.T) {
+	now := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
 	externalID := "FAKE_EXTERNAL_ID_FOR_TEST_ONLY"
-	result, err := factory.AssumeRole(context.Background(), RcloneNativeAssumeRoleRequest{
-		RoleARN: "arn:aws:iam::123456789012:role/xirang", ExternalID: &externalID,
-		Duration: 47 * time.Minute, SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
-		SessionName: "xirang-rclone-publication",
-	})
-	if err != nil || !result.Session.valid() || result.Session.AccountID() != "123456789012" || result.PackedPolicySize != 17 {
-		t.Fatalf("AssumeRole result=%+v err=%v", result, err)
+	sessionToken := "FAKE_AWS_SESSION_TOKEN_FOR_TEST_ONLY"
+	metric := func(value int32) *int32 { return &value }
+	matchingSize := int32(len(sessionToken))
+	expires := now.Add(50 * time.Minute)
+	request := RcloneNativeSessionRequest{
+		Profile: validRcloneNativeProfileForTest(), RoleARN: "arn:aws:iam::123456789012:role/xirang",
+		ExternalID: externalID, PointDeadlineAt: now.Add(45 * time.Minute), SessionMargin: 2 * time.Minute,
+		BootstrapTemporary: true, Encryption: RcloneNativeEncryptionSelection{Profile: RcloneNativeSSES3V1},
 	}
-	if client.input == nil || aws.ToString(client.input.RoleArn) == "" || aws.ToString(client.input.ExternalId) != externalID ||
-		aws.ToInt32(client.input.DurationSeconds) != 47*60 || aws.ToString(client.input.Policy) == "" {
-		t.Fatalf("AssumeRole input=%+v", client.input)
-	}
-
-	denied := newRcloneNativeAWSFactoryForTest(&rcloneNativeSTSClientFake{err: &smithy.GenericAPIError{Code: "AccessDenied"}}, nil, aws.Config{Region: "us-east-1"}, 3)
-	if _, err := denied.AssumeRole(context.Background(), RcloneNativeAssumeRoleRequest{
-		RoleARN: "arn:aws:iam::123456789012:role/xirang", Duration: 15 * time.Minute,
-		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`, SessionName: "xirang-rclone-publication",
-	}); !errors.Is(err, ErrRcloneNativeAssumeRoleDenied) {
-		t.Fatalf("AccessDenied error=%v", err)
+	for _, test := range []struct {
+		name          string
+		size          *int32
+		utilization   *int32
+		wantAdmission bool
+	}{
+		{"nil metrics are accepted", nil, nil, true},
+		{"100 percent utilization is accepted", metric(matchingSize), metric(100), true},
+		{"out of range utilization is rejected", metric(matchingSize), metric(101), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &rcloneNativeAdmissionSTSClientFake{
+				output: &sts.AssumeRoleOutput{
+					Credentials: &ststypes.Credentials{
+						AccessKeyId:     aws.String("FAKE_AWS_ACCESS_KEY_ID_FOR_TEST_ONLY"),
+						SecretAccessKey: aws.String("FAKE_AWS_SECRET_ACCESS_KEY_FOR_TEST_ONLY"),
+						SessionToken:    aws.String(sessionToken), Expiration: &expires,
+					},
+					AssumedRoleUser:         &ststypes.AssumedRoleUser{Arn: aws.String("arn:aws:sts::123456789012:assumed-role/xirang/test")},
+					SessionTokenSize:        test.size,
+					SessionTokenUtilization: test.utilization,
+				},
+				externalID: externalID,
+			}
+			bootstrap := &rcloneNativeS3ClientFake{headError: &smithy.GenericAPIError{Code: "AccessDenied"}}
+			factory := newRcloneNativeAWSFactoryForTest(client, bootstrap, aws.Config{Region: "us-east-1"}, 3)
+			result, err := EstablishRcloneNativeSession(
+				context.Background(), factory, factory, request, now, strings.NewReader(strings.Repeat("x", 64)),
+			)
+			if !test.wantAdmission {
+				if rcloneNativeReason(err) != backupasset.RcloneReasonCredentialInvalid {
+					t.Fatalf("invalid metric error=%v reason=%q", err, rcloneNativeReason(err))
+				}
+				if len(client.inputs) != 1 || bootstrap.headInput != nil {
+					t.Fatalf("invalid metric reached probes inputs=%d head=%+v", len(client.inputs), bootstrap.headInput)
+				}
+				return
+			}
+			if err != nil || !result.Session.valid() || result.Session.AccountID() != "123456789012" ||
+				result.SessionPolicy == "" || len(result.RcloneConfig) == 0 {
+				t.Fatalf("session result=%+v err=%v", result, err)
+			}
+			if len(client.inputs) != 3 || client.inputs[0] == nil || client.inputs[1] == nil || client.inputs[2] == nil ||
+				aws.ToString(client.inputs[0].ExternalId) != externalID || client.inputs[1].ExternalId != nil ||
+				aws.ToString(client.inputs[0].RoleArn) == "" || aws.ToInt32(client.inputs[0].DurationSeconds) != 47*60 ||
+				aws.ToString(client.inputs[0].Policy) == "" || bootstrap.headInput == nil {
+				t.Fatalf("admission probe sequence inputs=%+v head=%+v", client.inputs, bootstrap.headInput)
+			}
+		})
 	}
 }
 
@@ -715,6 +747,6 @@ func TestRcloneNativeAWSSDKDeletesOnlyCurrentCanaryAndReturnsDeleteMarkerVersion
 	}
 }
 
-var _ rcloneNativeSTSAPI = (*rcloneNativeSTSClientFake)(nil)
+var _ rcloneNativeSTSAPI = (*rcloneNativeAdmissionSTSClientFake)(nil)
 var _ rcloneNativeS3API = (*rcloneNativeS3ClientFake)(nil)
 var _ rcloneNativeKMSAPI = (*rcloneNativeKMSClientFake)(nil)

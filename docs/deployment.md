@@ -285,6 +285,14 @@ curl -fsS http://127.0.0.1:10761/healthz
 docker compose logs --tail=200 xirang
 ```
 
+### 搜索派生索引协议升级
+
+若目标版本改变备份资产搜索的规范化输出，`NormalizerVersion` 会推进以使旧 token postings 失效。这不是源 Catalog 或数据库 schema 迁移：Core 与 Indexer 必须使用同一版本整体升级；旧代在重建完成前由 Search 报告 `unavailable` 且不报告 authoritative empty，不得回退旧代继续提供命中。
+
+现有 Search worker 会通过候选列表和 bounded `Indexer.Build` 异步重建 metadata index，完成后再原子切换 active generation。该重建不启动平行 scheduler、不在启动时批量改写或删除旧 postings；metadata 重建也不代表 content/OCR projection 已完成，二者仍须各自恢复到合同要求的 coverage。
+
+需要回退时，旧版 Core/Indexer 不得读取或复用新版 postings。应恢复与旧版匹配的完整数据库、镜像和密钥，再按旧协议重建；不能手工改写 normalizer version、删除 postings 或把替换镜像当作安全回滚。
+
 <a id="备份职责收敛升级"></a>
 ### 备份职责收敛升级（不可逆）
 
