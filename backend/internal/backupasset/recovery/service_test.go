@@ -5334,7 +5334,7 @@ func TestPlanIdempotencyReplaysAcrossLocatorKeyAndCiphertextRotation(t *testing.
 }
 
 func TestPlanCreateConcurrentSameIntent(t *testing.T) {
-	fixture := newPlanServiceTestFixture(t, false)
+	fixture := newPlanServiceTestFixtureWithSQLiteConcurrency(t, false)
 	const callers = 12
 	timeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
