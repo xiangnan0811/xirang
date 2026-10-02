@@ -60,6 +60,7 @@ RUN apk add --no-cache \
       util-linux-misc=2.41.6-r1 \
       libxml2=2.13.9-r1 \
       nghttp2-libs=1.69.0-r0 \
+      pcre2=10.49-r0 \
       rsync=3.5.0-r0 \
       openssh-client=10.2_p1-r0 \
       sqlite=3.53.4-r0 \
