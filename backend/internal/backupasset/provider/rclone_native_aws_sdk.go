@@ -165,11 +165,11 @@ func (factory *RcloneNativeAWSFactory) AssumeRole(ctx context.Context, request R
 	if !session.valid() {
 		return RcloneNativeAssumeRoleResult{}, fmt.Errorf("%w: invalid AWS temporary session", backupasset.ErrInvalidState)
 	}
-	packedPolicySize := 0
-	if output.PackedPolicySize != nil {
-		packedPolicySize = int(*output.PackedPolicySize)
-	}
-	return RcloneNativeAssumeRoleResult{Session: session, PackedPolicySize: packedPolicySize}, nil
+	return RcloneNativeAssumeRoleResult{
+		Session:                 session,
+		SessionTokenSize:        output.SessionTokenSize,
+		SessionTokenUtilization: output.SessionTokenUtilization,
+	}, nil
 }
 
 func (factory *RcloneNativeAWSFactory) Probe(ctx context.Context, request RcloneNativeDenyProbeRequest) (RcloneNativeDenyProbeResult, error) {

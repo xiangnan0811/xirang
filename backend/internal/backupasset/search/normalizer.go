@@ -14,7 +14,7 @@ import (
 // NormalizerVersion identifies the persisted token output. Bump it whenever
 // normalization changes so older generations are not treated as complete.
 const (
-	NormalizerVersion = 3
+	NormalizerVersion = 4
 
 	// Prefixes are optional index entries. Keep their expansion bounded so a
 	// deeply nested or unusually long path cannot consume the mandatory token

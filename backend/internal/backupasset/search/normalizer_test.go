@@ -49,6 +49,20 @@ func TestNormalizerV1CanonicalEquivalence(t *testing.T) {
 	}
 }
 
+func TestNormalizerV1PreservesSupplementaryCombiningSequence(t *testing.T) {
+	input := "\U00010041\u0300"
+	value, err := NormalizeFieldV1(SearchFieldName, input, DefaultNormalizerLimits())
+	if err != nil {
+		t.Fatalf("NormalizeFieldV1: %v", err)
+	}
+	if value.Canonical != input {
+		t.Fatalf("canonical=%q, want original supplementary-plus-combining sequence %q", value.Canonical, input)
+	}
+	if value.Canonical == "à" {
+		t.Fatal("canonical normalization collapsed the supplementary-plus-combining sequence to à")
+	}
+}
+
 func TestNormalizerV1HanBigramsLatinExtensionAndUTCDate(t *testing.T) {
 	value, err := NormalizeFieldV1(SearchFieldName, "年度报告 Report_2026.TXT", DefaultNormalizerLimits())
 	if err != nil {

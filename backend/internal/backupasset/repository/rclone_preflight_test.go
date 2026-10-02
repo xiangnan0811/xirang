@@ -192,7 +192,7 @@ func (fake *productionRclonePreflightAWSFactoryFake) AssumeRole(_ context.Contex
 	if err != nil {
 		return provider.RcloneNativeAssumeRoleResult{}, err
 	}
-	return provider.RcloneNativeAssumeRoleResult{Session: session, PackedPolicySize: 10}, nil
+	return provider.RcloneNativeAssumeRoleResult{Session: session}, nil
 }
 
 func (*productionRclonePreflightAWSFactoryFake) Probe(context.Context, provider.RcloneNativeDenyProbeRequest) (provider.RcloneNativeDenyProbeResult, error) {

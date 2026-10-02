@@ -69,6 +69,7 @@ legacy mutable 不自动升级；管理员暂停任务后显式选择 `versioned
 - 受管 Portable 使用加密持久化的同一份 bound config bytes/revision；当前运行时必须精确通过 `rclone v1.74.4` 校验，旧版、新版及 prerelease 不能自动视为兼容。`node_default` 只属于 legacy；不自动导入节点配置。拒绝动态凭据、未知选项、未认证 backend/wrapper 和不闭合依赖。变更版本须同步路径 codec 和实际适配器验证，不从命令名称推断支持。
 - Native 仅限官方 AWS 区域端点的通用 S3 bucket；directory bucket、access point/Outposts、自定义/S3-compatible、Azure/GCS 不可冒充已认证 Native。实际 live 认证状态与支持矩阵必须分开报告，存在 opt-in 测试不等于通过。
 - Native 使用同账户专用 IAM Role、信任策略强制 external ID 和覆盖单次操作时限的 STS 会话，不能用节点静态身份替代绑定。external ID 只在短期 setup 显示一次。两次 versioning/lifecycle/身份/capability 稳定观察至少间隔 15 分钟，并通过精确版本 canary。
+- Native STS `AssumeRole` 的 `SessionTokenSize` 与 `SessionTokenUtilization` 都是可选指标；存在时前者必须为正且精确等于会话 token 的字节长度，后者必须落在含端点的 `[0,100]`。任一指标缺失不阻止准入；异常指标按 `credential_invalid` 拒绝，并在 external ID 否定探针与 bootstrap deny probe 之前检查。不得由 size 推算 utilization、另加固定 4096 字节限制或恢复已移除的 packed-policy 准入条件；会话 token 仍遵守既有有效性边界。
 - 预检绑定 Task/binding/credential/capability/lifecycle/encryption revisions 和有效期。任一漂移必须重做，不静默降级 Portable/mutable。
 - Native 仅支持 `sse_s3` 或同账户 customer-managed `sse_kms_cmk`。后者有一个 active write key 和有界 decrypt-only read key ring；先保留旧读 key 再切写 key。任何 committed VersionId 仍引用旧 key 时必须保留可解密性。校验账户、区域、状态、用途、来源和权限，DTO/日志/审计不公开 ARN。Xirang 不创建、修改或删除 KMS key。
 - 与 namespace 重叠的 current/noncurrent expiration、delete-marker cleanup、未知 lifecycle 动作或未认证离线转换都阻止准入；不自动修改 bucket lifecycle。Native `backend_versioned` 不等于 Object Lock/WORM。

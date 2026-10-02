@@ -40,7 +40,7 @@ func openIdentityPostgresTestDB(t *testing.T) *gorm.DB {
 	}
 
 	query := parsed.Query()
-	query.Set("options", "-c search_path="+schema)
+	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
 	db, err := gorm.Open(postgres.Open(parsed.String()), &gorm.Config{})
 	if err != nil {

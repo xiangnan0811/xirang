@@ -699,8 +699,9 @@ type RcloneNativeAssumeRoleRequest struct {
 }
 
 type RcloneNativeAssumeRoleResult struct {
-	Session          RcloneNativeSession
-	PackedPolicySize int
+	Session                 RcloneNativeSession
+	SessionTokenSize        *int32
+	SessionTokenUtilization *int32
 }
 
 type STSAssumer interface {
@@ -771,8 +772,16 @@ func EstablishRcloneNativeSession(ctx context.Context, assumer STSAssumer, denyP
 		return RcloneNativeSessionResult{}, rcloneNativeError(backupasset.RcloneReasonCredentialInvalid, err)
 	}
 	if !correct.Session.valid() || correct.Session.accountID != accountID ||
-		correct.Session.expiresAt.Before(request.PointDeadlineAt.Add(request.SessionMargin)) || correct.PackedPolicySize < 0 || correct.PackedPolicySize >= 100 {
+		correct.Session.expiresAt.Before(request.PointDeadlineAt.Add(request.SessionMargin)) {
 		return RcloneNativeSessionResult{}, rcloneNativeError(backupasset.RcloneReasonSessionTooShort, nil)
+	}
+	if correct.SessionTokenSize != nil &&
+		(*correct.SessionTokenSize <= 0 || int(*correct.SessionTokenSize) != len(correct.Session.sessionToken)) {
+		return RcloneNativeSessionResult{}, rcloneNativeError(backupasset.RcloneReasonCredentialInvalid, nil)
+	}
+	if correct.SessionTokenUtilization != nil &&
+		(*correct.SessionTokenUtilization < 0 || *correct.SessionTokenUtilization > 100) {
+		return RcloneNativeSessionResult{}, rcloneNativeError(backupasset.RcloneReasonCredentialInvalid, nil)
 	}
 	missing := correctRequest
 	missing.ExternalID = nil

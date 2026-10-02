@@ -506,6 +506,80 @@ func (fake rcloneNativeDenyProbeFake) Probe(_ context.Context, _ RcloneNativeDen
 	return RcloneNativeDenyProbeResult{Denied: fake.denied}, fake.err
 }
 
+type countingRcloneNativeDenyProbe struct {
+	denied bool
+	err    error
+	calls  int
+}
+
+func (fake *countingRcloneNativeDenyProbe) Probe(_ context.Context, _ RcloneNativeDenyProbeRequest) (RcloneNativeDenyProbeResult, error) {
+	fake.calls++
+	return RcloneNativeDenyProbeResult{Denied: fake.denied}, fake.err
+}
+
+func TestRcloneNativeSessionTokenMetrics(t *testing.T) {
+	now := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	session := newRcloneNativeSession(
+		"FAKE_AWS_ACCESS_KEY_ID_FOR_TEST_ONLY", "FAKE_AWS_SECRET_ACCESS_KEY_FOR_TEST_ONLY",
+		"FAKE_AWS_SESSION_TOKEN_FOR_TEST_ONLY", "123456789012", strings.Repeat("a", 64), now.Add(50*time.Minute),
+	)
+	metric := func(value int32) *int32 { return &value }
+	matchingSize := int32(len(session.sessionToken))
+	request := RcloneNativeSessionRequest{
+		Profile: validRcloneNativeProfileForTest(), RoleARN: "arn:aws:iam::123456789012:role/xirang-backup-test",
+		ExternalID: "FAKE_EXTERNAL_ID_FOR_TEST_ONLY", PointDeadlineAt: now.Add(45 * time.Minute),
+		SessionMargin: 2 * time.Minute, BootstrapTemporary: true,
+		Encryption: RcloneNativeEncryptionSelection{Profile: RcloneNativeSSES3V1},
+	}
+	for _, test := range []struct {
+		name          string
+		size          *int32
+		utilization   *int32
+		wantAdmission bool
+	}{
+		{"both metrics nil", nil, nil, true},
+		{"matching size and zero utilization", metric(matchingSize), metric(0), true},
+		{"matching size and 99 utilization", metric(matchingSize), metric(99), true},
+		{"matching size and 100 utilization", metric(matchingSize), metric(100), true},
+		{"size only", metric(matchingSize), nil, true},
+		{"utilization only", nil, metric(42), true},
+		{"zero size", metric(0), nil, false},
+		{"negative size", metric(-1), nil, false},
+		{"mismatched size", metric(matchingSize + 1), nil, false},
+		{"negative utilization", nil, metric(-1), false},
+		{"over-limit utilization", nil, metric(101), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sts := &scriptedRcloneNativeSTS{
+				results: []RcloneNativeAssumeRoleResult{
+					{Session: session, SessionTokenSize: test.size, SessionTokenUtilization: test.utilization}, {}, {},
+				},
+				errors: []error{nil, ErrRcloneNativeAssumeRoleDenied, ErrRcloneNativeAssumeRoleDenied},
+			}
+			probe := &countingRcloneNativeDenyProbe{denied: true}
+			result, err := EstablishRcloneNativeSession(
+				context.Background(), sts, probe, request, now, strings.NewReader(strings.Repeat("x", 64)),
+			)
+			if test.wantAdmission {
+				if err != nil || result.Session.IdentityDigest() != strings.Repeat("a", 64) ||
+					result.SessionPolicy == "" || len(result.RcloneConfig) == 0 {
+					t.Fatalf("session result=%+v err=%v", result, err)
+				}
+				if len(sts.requests) != 3 || sts.requests[1].ExternalID != nil || sts.requests[2].ExternalID == nil || probe.calls != 1 {
+					t.Fatalf("valid metric probe sequence=%+v probeCalls=%d", sts.requests, probe.calls)
+				}
+				return
+			}
+			if rcloneNativeReason(err) != backupasset.RcloneReasonCredentialInvalid {
+				t.Fatalf("invalid metric error=%v reason=%q", err, rcloneNativeReason(err))
+			}
+			if len(sts.requests) != 1 || probe.calls != 0 {
+				t.Fatalf("invalid metric reached probes requests=%+v probeCalls=%d", sts.requests, probe.calls)
+			}
+		})
+	}
+}
+
 func TestRcloneNativeSTSContractRequiresCorrectAndRejectedNegativeExternalIDs(t *testing.T) {
 	now := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
 	session := newRcloneNativeSession(

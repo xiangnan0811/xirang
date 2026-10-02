@@ -505,7 +505,7 @@ func (fake *rcloneNativeRepositoryFactoryFake) AssumeRole(_ context.Context, req
 	if request.ExternalID == nil || *request.ExternalID != expectedExternalID {
 		return provider.RcloneNativeAssumeRoleResult{}, provider.ErrRcloneNativeAssumeRoleDenied
 	}
-	return provider.RcloneNativeAssumeRoleResult{Session: fake.session, PackedPolicySize: 10}, nil
+	return provider.RcloneNativeAssumeRoleResult{Session: fake.session}, nil
 }
 
 func (fake *rcloneNativeRepositoryFactoryFake) Probe(context.Context, provider.RcloneNativeDenyProbeRequest) (provider.RcloneNativeDenyProbeResult, error) {
