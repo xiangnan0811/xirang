@@ -49,6 +49,14 @@ API/前端区分 pending、sending、retrying、sent、failed 和兼容 unknown�
 
 迁移的数据删除边界、备份资产/任务/审计保留项和灾难恢复要求见[备份、恢复与快照的升级章节](../../admin/backup-recovery.md#升级与灾难恢复)；本节是告警状态与投递事实的主文。
 
+### 投递统计与窗口状态
+
+`GET /api/v1/alerts/delivery-stats` 继续按 delivery `created_at` 和既有 hours 默认值/上限定义窗口。总量与逐通道聚合使用同一可见关系：保留所有 `sent` 成功事实（包括退役父告警与历史 `sent_at=NULL`），排除父告警 `delivery_reason=feature_retired` 的所有非 `sent` 行。仅退役封存的通道不生成零成功率警告；非退役 failed、其它 unknown、NULL/空 reason 及 admin/viewer 原本可见的孤立父记录保留原统计语义，operator 仍只见 owned node 的父告警。普通 pending-only 通道表现不变，任一聚合查询失败不返回部分结果。
+
+已认证统计请求失败必须传播给页面，不能返回伪造的全零成功。卡片结果绑定实际请求窗口；切换、刷新或重试先清空旧数字，失败显示可重试错误，折叠摘要也不显示旧窗口数值。A→B→A 重新请求 A；只允许当前请求代次提交，窗口/身份回调变化及卸载使旧结果失效，不声称取消网络请求。返回窗口与请求不符同样视为失败。顶部 24h 统计在加载、失败或无身份时保持未知，不使用成功零值；成功后才恢复数字与对应状态。
+
+回归覆盖 SQLite/真实 PostgreSQL 的退役成功保留、非成功过滤、孤立/NULL/ownership 矩阵，以及真实 API mapper 到页面的失败、重试、刷新与乱序响应；全局总量及逐通道使用同一口径。
+
 ## 批量解决
 
 `POST /api/v1/alerts/bulk-resolve` 需要认证和 `alerts:write`，路由在动态 alert 路由前注册。请求恰好一种目标：`alert_ids`（去重、过滤零）或正数 `node_id`。缺少、同时提交、过滤后为空均 400；任一明确 ID 不存在 404；任一目标节点无 ownership 403；全部验证后在一个事务只更新未 resolved 的行，置 `status=resolved,retryable=false,updated_at=now`。

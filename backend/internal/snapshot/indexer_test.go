@@ -12,6 +12,7 @@ import (
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -40,7 +41,7 @@ type indexerSettings map[string]string
 func (settings indexerSettings) GetEffective(key string) string { return settings[key] }
 
 func indexerFoundation() *backupasset.FoundationService {
-	return backupasset.NewFoundationService(indexerSettings{
+	values := indexerSettings{
 		"backup_assets.enabled":                          "false",
 		"backup_assets.retention_reconcile_interval":     "5m",
 		"backup_assets.retention_batch_size":             "100",
@@ -82,7 +83,15 @@ func indexerFoundation() *backupasset.FoundationService {
 		"backup_assets.rclone_health_interval":           "15m",
 		"backup_assets.rclone_health_batch_size":         "100",
 		"backup_assets.rclone_aws_sdk_max_attempts":      "3",
-	})
+	}
+	for _, definition := range settings.NewService(nil).Registry() {
+		if settings.IsBackupAssetFoundationSetting(definition.Key) {
+			if _, exists := values[definition.Key]; !exists {
+				values[definition.Key] = definition.CodeDefault
+			}
+		}
+	}
+	return backupasset.NewFoundationService(values)
 }
 
 type indexerLineageSession struct {

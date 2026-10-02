@@ -173,11 +173,7 @@ export function useIntegrationAlertOperations({
     const normalizedHours = Number.isFinite(hours) && hours > 0 ? Math.floor(hours) : 24;
 
     if (token) {
-      try {
-        return await apiClient.getAlertDeliveryStats(token, { hours: normalizedHours });
-      } catch (error) {
-        setWarning(getErrorMessage(error, i18n.t("notifications.deliveryStatsLoadFailed")));
-      }
+      return apiClient.getAlertDeliveryStats(token, { hours: normalizedHours });
     }
 
     return {
@@ -187,7 +183,7 @@ export function useIntegrationAlertOperations({
       successRate: 0,
       byIntegration: []
     };
-  }, [setWarning, token]);
+  }, [token]);
 
   const retryAlertDelivery = useCallback(async (alertID: string, integrationID: string): Promise<AlertDeliveryRetryResult> => {
     const result = await exec(i18n.t("notifications.actions.retryDelivery"), (t) => apiClient.retryAlertDelivery(t, alertID, integrationID));

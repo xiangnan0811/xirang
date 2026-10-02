@@ -1,8 +1,12 @@
 package backupasset
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"sync"
@@ -271,6 +275,355 @@ func TestFoundationConfigGettersUseFullEffectiveLeaseAndPublicationValues(t *tes
 	}
 }
 
+func openFoundationEffectiveSettingsTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	name := strings.ReplaceAll(t.Name(), "/", "_")
+	db, err := gorm.Open(sqlite.Open("file:"+name+"?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func clearFoundationSettingEnvironment(t *testing.T) {
+	t.Helper()
+	for _, definition := range settings.NewService(nil).Registry() {
+		t.Setenv(definition.EnvVar, "")
+	}
+}
+
+func shortFoundationDeadlineOverrides() map[string]string {
+	return map[string]string{
+		"backup_assets.enabled":                    "true",
+		"backup_assets.lease_duration":             "71s",
+		"backup_assets.lease_heartbeat":            "10s",
+		"backup_assets.lease_absolute_deadline":    "20m",
+		"backup_assets.publication_missing_grace":  "10m",
+		"backup_assets.manifest_timeout":           "5m",
+		"backup_assets.search_build_timeout":       "5m",
+		"backup_assets.processing_attempt_timeout": "5m",
+	}
+}
+
+func TestFoundationConfigGettersAcceptCompleteShortDeadlineSettings(t *testing.T) {
+	clearFoundationSettingEnvironment(t)
+	tests := []struct {
+		name                   string
+		overrides              map[string]string
+		wantEnabled            bool
+		wantLeaseDuration      time.Duration
+		wantLeaseHeartbeat     time.Duration
+		wantLeaseDeadline      time.Duration
+		wantMissingGrace       time.Duration
+		wantManifestTimeout    time.Duration
+		wantSearchBuildTimeout time.Duration
+		wantProcessingAttempt  time.Duration
+	}{
+		{
+			name:                   "defaults",
+			wantEnabled:            false,
+			wantLeaseDuration:      5 * time.Minute,
+			wantLeaseHeartbeat:     time.Minute,
+			wantLeaseDeadline:      168 * time.Hour,
+			wantMissingGrace:       30 * time.Minute,
+			wantManifestTimeout:    2 * time.Hour,
+			wantSearchBuildTimeout: 30 * time.Minute,
+			wantProcessingAttempt:  2 * time.Hour,
+		},
+		{
+			name:                   "short deadlines",
+			overrides:              shortFoundationDeadlineOverrides(),
+			wantEnabled:            true,
+			wantLeaseDuration:      71 * time.Second,
+			wantLeaseHeartbeat:     10 * time.Second,
+			wantLeaseDeadline:      20 * time.Minute,
+			wantMissingGrace:       10 * time.Minute,
+			wantManifestTimeout:    5 * time.Minute,
+			wantSearchBuildTimeout: 5 * time.Minute,
+			wantProcessingAttempt:  5 * time.Minute,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openFoundationEffectiveSettingsTestDB(t)
+			reader := settings.NewService(db)
+			initial, err := reader.BackupAssetSettingsSnapshot()
+			if err != nil {
+				t.Fatalf("initial Foundation snapshot: %v", err)
+			}
+			if err := settings.ValidateBackupAssetFoundationConfig(initial); err != nil {
+				t.Fatalf("initial Foundation snapshot validation: %v", err)
+			}
+			if len(testCase.overrides) > 0 {
+				if err := reader.UpdateManyContext(context.Background(), testCase.overrides); err != nil {
+					t.Fatalf("short-deadline Foundation update: %v", err)
+				}
+			}
+			values, err := reader.BackupAssetSettingsSnapshot()
+			if err != nil {
+				t.Fatalf("effective Foundation snapshot: %v", err)
+			}
+			if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
+				t.Fatalf("effective Foundation snapshot validation: %v", err)
+			}
+
+			foundation := NewFoundationService(reader)
+			enabled, err := foundation.FeatureEnabled()
+			if err != nil {
+				t.Fatalf("FeatureEnabled: %v", err)
+			}
+			retention, err := foundation.RetentionConfig()
+			if err != nil {
+				t.Fatalf("RetentionConfig: %v", err)
+			}
+			lease, err := foundation.LeaseConfig()
+			if err != nil {
+				t.Fatalf("LeaseConfig: %v", err)
+			}
+			provider, err := foundation.ProviderConfig()
+			if err != nil {
+				t.Fatalf("ProviderConfig: %v", err)
+			}
+			catalog, err := foundation.CatalogConfig()
+			if err != nil {
+				t.Fatalf("CatalogConfig: %v", err)
+			}
+			detailDays, checkpointDays, err := foundation.AuditRetentionConfig()
+			if err != nil {
+				t.Fatalf("AuditRetentionConfig: %v", err)
+			}
+			audit, err := foundation.AuditConfig()
+			if err != nil {
+				t.Fatalf("AuditConfig: %v", err)
+			}
+			publication, err := foundation.PublicationConfig()
+			if err != nil {
+				t.Fatalf("PublicationConfig: %v", err)
+			}
+			search, overlay, err := foundation.SearchOverlayConfig()
+			if err != nil {
+				t.Fatalf("SearchOverlayConfig: %v", err)
+			}
+			processing, err := foundation.ProcessingConfig()
+			if err != nil {
+				t.Fatalf("ProcessingConfig: %v", err)
+			}
+
+			if enabled != testCase.wantEnabled {
+				t.Fatalf("FeatureEnabled=%v, want %v", enabled, testCase.wantEnabled)
+			}
+			if retention.ReconcileInterval != 5*time.Minute || retention.BatchSize != 100 ||
+				retention.DrainTimeout != 30*time.Second || provider.OperationTimeout != 2*time.Minute ||
+				provider.MaxConcurrency != 4 || provider.MetadataLimitBytes != 16777216 ||
+				catalog.BuildTimeout != 30*time.Minute || detailDays != 180 || checkpointDays != 2555 ||
+				audit.SegmentMaxEvents != 10000 || audit.SegmentMaxAge != 24*time.Hour ||
+				search.Enabled != enabled || overlay.Enabled != enabled {
+				t.Fatalf("legacy Foundation getter values retention=%+v provider=%+v catalog=%+v detail=%d checkpoint=%d audit=%+v search=%+v overlay=%+v",
+					retention, provider, catalog, detailDays, checkpointDays, audit, search, overlay)
+			}
+			if lease.Duration != testCase.wantLeaseDuration || lease.Heartbeat != testCase.wantLeaseHeartbeat ||
+				lease.AbsoluteDeadline != testCase.wantLeaseDeadline ||
+				publication.MissingGrace != testCase.wantMissingGrace ||
+				publication.ManifestTimeout != testCase.wantManifestTimeout ||
+				search.BuildTimeout != testCase.wantSearchBuildTimeout ||
+				processing.AttemptTimeout != testCase.wantProcessingAttempt {
+				t.Fatalf("parsed deadline values lease=%+v publication=%+v search=%+v processing=%+v",
+					lease, publication, search, processing)
+			}
+			if catalog.Lease != lease || search.Lease != lease {
+				t.Fatalf("coupled lease values diverged: lease=%+v catalog=%+v search=%+v", lease, catalog.Lease, search.Lease)
+			}
+		})
+	}
+}
+
+func TestFoundationConfigGettersRejectInvalidSearchTimeout(t *testing.T) {
+	invalidCrossField := staticSettingsReader{
+		"backup_assets.lease_absolute_deadline":   "20m",
+		"backup_assets.publication_missing_grace": "10m",
+		"backup_assets.manifest_timeout":          "5m",
+		"backup_assets.search_build_timeout":      "30m",
+	}
+	if _, err := NewFoundationService(invalidCrossField).FeatureEnabled(); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("search build timeout beyond deadline got %v, want ErrInvalidState", err)
+	}
+
+	emptySearchDuration := staticSettingsReader{
+		"backup_assets.search_query_timeout": "",
+	}
+	if _, err := NewFoundationService(emptySearchDuration).FeatureEnabled(); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("empty search query timeout got %v, want ErrInvalidState", err)
+	}
+}
+
+func TestFoundationConfigGettersObserveCommittedUpdates(t *testing.T) {
+	clearFoundationSettingEnvironment(t)
+	reader := settings.NewService(openFoundationEffectiveSettingsTestDB(t))
+	initial, err := reader.BackupAssetSettingsSnapshot()
+	if err != nil {
+		t.Fatalf("initial Foundation snapshot: %v", err)
+	}
+	if err := settings.ValidateBackupAssetFoundationConfig(initial); err != nil {
+		t.Fatalf("initial Foundation snapshot validation: %v", err)
+	}
+	foundation := NewFoundationService(reader)
+	initialLease, err := foundation.LeaseConfig()
+	if err != nil {
+		t.Fatalf("initial LeaseConfig: %v", err)
+	}
+	initialPublication, err := foundation.PublicationConfig()
+	if err != nil {
+		t.Fatalf("initial PublicationConfig: %v", err)
+	}
+	initialSearch, _, err := foundation.SearchOverlayConfig()
+	if err != nil {
+		t.Fatalf("initial SearchOverlayConfig: %v", err)
+	}
+	initialProcessing, err := foundation.ProcessingConfig()
+	if err != nil {
+		t.Fatalf("initial ProcessingConfig: %v", err)
+	}
+
+	short := shortFoundationDeadlineOverrides()
+	if err := reader.UpdateManyContext(context.Background(), short); err != nil {
+		t.Fatalf("commit short Foundation settings: %v", err)
+	}
+	updatedLease, err := foundation.LeaseConfig()
+	if err != nil {
+		t.Fatalf("updated LeaseConfig: %v", err)
+	}
+	updatedPublication, err := foundation.PublicationConfig()
+	if err != nil {
+		t.Fatalf("updated PublicationConfig: %v", err)
+	}
+	updatedSearch, _, err := foundation.SearchOverlayConfig()
+	if err != nil {
+		t.Fatalf("updated SearchOverlayConfig: %v", err)
+	}
+	updatedProcessing, err := foundation.ProcessingConfig()
+	if err != nil {
+		t.Fatalf("updated ProcessingConfig: %v", err)
+	}
+	if updatedLease.AbsoluteDeadline != 20*time.Minute || updatedPublication.MissingGrace != 10*time.Minute ||
+		updatedPublication.ManifestTimeout != 5*time.Minute || updatedSearch.BuildTimeout != 5*time.Minute ||
+		updatedProcessing.AttemptTimeout != 5*time.Minute {
+		t.Fatalf("Foundation getter did not observe committed short settings: lease=%+v publication=%+v search=%+v processing=%+v",
+			updatedLease, updatedPublication, updatedSearch, updatedProcessing)
+	}
+
+	restore := make(map[string]string, len(short))
+	for key := range short {
+		restore[key] = initial[key]
+	}
+	if err := reader.UpdateManyContext(context.Background(), restore); err != nil {
+		t.Fatalf("restore Foundation settings: %v", err)
+	}
+	restoredLease, err := foundation.LeaseConfig()
+	if err != nil {
+		t.Fatalf("restored LeaseConfig: %v", err)
+	}
+	restoredPublication, err := foundation.PublicationConfig()
+	if err != nil {
+		t.Fatalf("restored PublicationConfig: %v", err)
+	}
+	restoredSearch, _, err := foundation.SearchOverlayConfig()
+	if err != nil {
+		t.Fatalf("restored SearchOverlayConfig: %v", err)
+	}
+	restoredProcessing, err := foundation.ProcessingConfig()
+	if err != nil {
+		t.Fatalf("restored ProcessingConfig: %v", err)
+	}
+	if restoredLease != initialLease || restoredPublication != initialPublication ||
+		restoredSearch != initialSearch ||
+		restoredProcessing.AttemptTimeout != initialProcessing.AttemptTimeout ||
+		restoredProcessing.PullLease != initialProcessing.PullLease ||
+		restoredProcessing.PullHeartbeat != initialProcessing.PullHeartbeat ||
+		restoredProcessing.RetryMax != initialProcessing.RetryMax ||
+		restoredProcessing.Updater.Enabled != initialProcessing.Updater.Enabled {
+		t.Fatalf("Foundation getter did not observe restored settings: lease=%+v/%+v publication=%+v/%+v search=%+v/%+v processing=%+v/%+v",
+			restoredLease, initialLease, restoredPublication, initialPublication,
+			restoredSearch, initialSearch, restoredProcessing, initialProcessing)
+	}
+}
+
+const foundationLegacyCallbacksHelperEnv = "XIRANG_TEST_FOUNDATION_LEGACY_CALLBACKS_HELPER"
+
+func TestFoundationLegacyCallbacksCompleteWhileMutationHeld(t *testing.T) {
+	if os.Getenv(foundationLegacyCallbacksHelperEnv) == "1" {
+		runFoundationLegacyCallbacksHelper(t)
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	cmd := exec.Command(executable, "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.v")
+	cmd.Env = append(os.Environ(), foundationLegacyCallbacksHelperEnv+"=1")
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start Foundation callback helper: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Foundation callback helper failed: %v\n%s", err, output.String())
+		}
+	case <-timer.C:
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatalf("Foundation legacy callback blocked while mutation gate was held\n%s", output.String())
+	}
+}
+
+func runFoundationLegacyCallbacksHelper(t *testing.T) {
+	t.Helper()
+	clearFoundationSettingEnvironment(t)
+	db := openFoundationEffectiveSettingsTestDB(t)
+	reader := settings.NewService(db)
+	foundation := NewFoundationService(reader)
+	err := reader.WithBackupAssetMutation(context.Background(), func(current map[string]string) error {
+		if len(current) == 0 {
+			return errors.New("Foundation mutation callback received no current settings")
+		}
+		lease, err := foundation.LeaseConfig()
+		if err != nil {
+			return err
+		}
+		provider, err := foundation.ProviderConfig()
+		if err != nil {
+			return err
+		}
+		publication, err := foundation.PublicationConfig()
+		if err != nil {
+			return err
+		}
+		audit, err := foundation.AuditConfig()
+		if err != nil {
+			return err
+		}
+		if lease.Duration != 5*time.Minute || provider.OperationTimeout != 2*time.Minute ||
+			publication.ManifestTimeout != 2*time.Hour || audit.SegmentMaxEvents != 10000 {
+			return errors.New("Foundation legacy callback parsed unexpected settings")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("complete Foundation legacy callbacks: %v", err)
+	}
+	_, _ = os.Stdout.WriteString("foundation-legacy-callbacks-done\n")
+}
+
 func TestFoundationCatalogConfigUsesRegisteredSettingsAndBounds(t *testing.T) {
 	reader := staticSettingsReader{
 		"backup_assets.enabled":                       "true",
@@ -406,53 +759,53 @@ func TestFoundationSearchConfigAndOverlayConfigRequireCompleteSnapshotPort(t *te
 func TestFoundationContentConfigUsesOneAtomicSnapshot(t *testing.T) {
 	values := cloneFoundationTestValues(staticFoundationDefaults)
 	for key, value := range map[string]string{
-		"backup_assets.enabled":                           "true",
-		"backup_assets.content_preview_ttl":               "3m",
-		"backup_assets.content_media_ttl":                 "20m",
-		"backup_assets.content_idle_ttl":                  "45s",
-		"backup_assets.content_write_idle_timeout":        "25s",
-		"backup_assets.content_ticket_timeout":            "15s",
-		"backup_assets.content_request_max_bytes":         "33554432",
-		"backup_assets.content_cumulative_max_bytes":      "268435456",
-		"backup_assets.content_max_requests":              "128",
-		"backup_assets.content_grant_max_in_flight":       "2",
-		"backup_assets.content_user_max_concurrency":      "3",
-		"backup_assets.content_provider_max_concurrency":  "3",
-		"backup_assets.content_global_max_concurrency":    "12",
-		"backup_assets.content_rate_window":               "2m",
-		"backup_assets.content_user_window_bytes":         "536870912",
-		"backup_assets.content_provider_window_bytes":     "2147483648",
-		"backup_assets.content_global_window_bytes":       "4294967296",
-		"backup_assets.content_user_window_requests":      "512",
-		"backup_assets.content_provider_window_requests":  "2048",
-		"backup_assets.content_global_window_requests":    "4096",
-		"backup_assets.content_classification_scan_bytes": "131072",
-		"backup_assets.content_text_preview_bytes":        "524288",
-		"backup_assets.content_hex_preview_bytes":         "32768",
-		"backup_assets.content_raster_max_pixels":         "50000000",
-		"backup_assets.content_memory_object_bytes":       "2097152",
-		"backup_assets.content_memory_user_bytes":         "8388608",
-		"backup_assets.content_memory_provider_bytes":     "16777216",
-		"backup_assets.content_memory_global_bytes":       "33554432",
-		"backup_assets.content_cache_enabled":             "false",
-		"backup_assets.content_cache_root":                "/var/cache/xirang/content-test",
-		"backup_assets.content_cache_chunk_bytes":         "524288",
-		"backup_assets.content_cache_object_bytes":        "268435456",
-		"backup_assets.content_cache_user_bytes":          "1073741824",
-		"backup_assets.content_cache_provider_bytes":      "2147483648",
-		"backup_assets.content_cache_global_bytes":        "4294967296",
-		"backup_assets.content_cache_object_files":        "1024",
-		"backup_assets.content_cache_user_files":          "2048",
-		"backup_assets.content_cache_provider_files":      "4096",
-		"backup_assets.content_cache_global_files":        "8192",
-		"backup_assets.content_cache_idle_ttl":            "10m",
-		"backup_assets.content_cache_absolute_ttl":        "90m",
-		"backup_assets.content_reconcile_interval":        "45s",
-		"backup_assets.content_reconcile_batch_size":      "80",
-		"backup_assets.content_audit_backlog_max":         "5000",
-		"backup_assets.content_allow_insecure_loopback":   "true",
+		"backup_assets.enabled":                                "true",
+		"backup_assets.content_preview_ttl":                    "3m",
+		"backup_assets.content_media_ttl":                      "20m",
+		"backup_assets.content_idle_ttl":                       "45s",
+		"backup_assets.content_write_idle_timeout":             "25s",
+		"backup_assets.content_ticket_timeout":                 "15s",
+		"backup_assets.content_request_max_bytes":              "33554432",
+		"backup_assets.content_cumulative_max_bytes":           "268435456",
+		"backup_assets.content_max_requests":                   "128",
+		"backup_assets.content_grant_max_in_flight":            "2",
+		"backup_assets.content_user_max_concurrency":           "3",
+		"backup_assets.content_provider_max_concurrency":       "3",
+		"backup_assets.content_global_max_concurrency":         "12",
+		"backup_assets.content_rate_window":                    "2m",
+		"backup_assets.content_user_window_bytes":              "536870912",
+		"backup_assets.content_provider_window_bytes":          "2147483648",
+		"backup_assets.content_global_window_bytes":            "4294967296",
+		"backup_assets.content_user_window_requests":           "512",
+		"backup_assets.content_provider_window_requests":       "2048",
+		"backup_assets.content_global_window_requests":         "4096",
+		"backup_assets.content_classification_scan_bytes":      "131072",
+		"backup_assets.content_text_preview_bytes":             "524288",
+		"backup_assets.content_hex_preview_bytes":              "32768",
+		"backup_assets.content_raster_max_pixels":              "50000000",
+		"backup_assets.content_memory_object_bytes":            "2097152",
+		"backup_assets.content_memory_user_bytes":              "8388608",
+		"backup_assets.content_memory_provider_bytes":          "16777216",
+		"backup_assets.content_memory_global_bytes":            "33554432",
+		"backup_assets.content_cache_enabled":                  "false",
+		"backup_assets.content_cache_root":                     "/var/cache/xirang/content-test",
+		"backup_assets.content_cache_chunk_bytes":              "524288",
+		"backup_assets.content_cache_object_bytes":             "268435456",
+		"backup_assets.content_cache_user_bytes":               "1073741824",
+		"backup_assets.content_cache_provider_bytes":           "2147483648",
+		"backup_assets.content_cache_global_bytes":             "4294967296",
+		"backup_assets.content_cache_object_files":             "1024",
+		"backup_assets.content_cache_user_files":               "2048",
+		"backup_assets.content_cache_provider_files":           "4096",
+		"backup_assets.content_cache_global_files":             "8192",
+		"backup_assets.content_cache_idle_ttl":                 "10m",
+		"backup_assets.content_cache_absolute_ttl":             "90m",
+		"backup_assets.content_reconcile_interval":             "45s",
+		"backup_assets.content_reconcile_batch_size":           "80",
+		"backup_assets.content_audit_backlog_max":              "5000",
+		"backup_assets.content_allow_insecure_loopback":        "true",
 		"backup_assets.content_allow_insecure_private_network": "true",
-		"backup_assets.provider_max_concurrency":          "4",
+		"backup_assets.provider_max_concurrency":               "4",
 	} {
 		values[key] = value
 	}

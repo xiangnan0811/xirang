@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import type { AlertDeliveryStats } from "@/types/domain";
 import { NotificationsPage } from "./notifications-page";
 import { AlertCenter } from "./notifications/alert-center";
 
@@ -30,6 +31,7 @@ const {
   mockGetAlerts,
   useStepUpActionMock,
   oneShotStepUpOptions,
+  authRef,
 } = vi.hoisted(() => {
   const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
     stepUpHookMock.lastAction = stepUpAction;
@@ -52,6 +54,7 @@ const {
     mockGetAlerts: vi.fn(),
     useStepUpActionMock: stepUpHookMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
+    authRef: { current: { token: "test-token" as string | null } },
   };
 });
 
@@ -109,7 +112,7 @@ vi.mock("@/components/ui/toast-sonner", () => ({
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ token: "test-token" }),
+  useAuth: () => authRef.current,
 }));
 
 vi.mock("@/hooks/use-step-up-action", () => ({
@@ -326,6 +329,50 @@ function createContext(overrides?: Record<string, unknown>) {
   };
 }
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function deliveryStatsResult(partial: Pick<AlertDeliveryStats, "totalSent" | "totalFailed" | "successRate">): AlertDeliveryStats {
+  return {
+    windowHours: 24,
+    byIntegration: [],
+    ...partial,
+  };
+}
+
+function deliveryStatParts() {
+  const card = screen.getByText("24h 投递失败").closest("[data-tone]");
+  if (!(card instanceof HTMLElement)) {
+    throw new Error("missing delivery stat card");
+  }
+  const value = card.querySelector(".tabular-nums");
+  if (!(value instanceof HTMLElement)) {
+    throw new Error("missing delivery stat value");
+  }
+  return { card, value };
+}
+
+function deliveryHero() {
+  const hero = screen.getByRole("heading", { name: "通知与告警" }).closest("header");
+  if (!(hero instanceof HTMLElement)) {
+    throw new Error("missing notifications hero");
+  }
+  return hero;
+}
+
 /* ---------- tests ---------- */
 
 describe("NotificationsPage", () => {
@@ -335,6 +382,7 @@ describe("NotificationsPage", () => {
       value: createMemoryStorage(),
     });
     window.localStorage.clear();
+    authRef.current = { token: "test-token" };
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     mockGetAlertsPaginated.mockReset();
@@ -636,13 +684,164 @@ describe("NotificationsPage", () => {
   it("投递失败统计卡片显示 24h 失败数", async () => {
     createContext();
     render(<NotificationsPage />);
-    // fetchAlertDeliveryStats mock returns totalFailed: 1
     await waitFor(() => {
-      expect(screen.getByText("24h 投递失败")).toBeInTheDocument();
+      expect(deliveryStatParts().value.textContent).toBe("1");
     });
-    // value "1" appears in the stat card
-    const statCard = screen.getByText("24h 投递失败").closest("div");
-    expect(statCard).toBeTruthy();
+    const { card } = deliveryStatParts();
+    expect(card).toHaveAttribute("data-tone", "warning");
+    expect(card).toHaveTextContent("近 24 小时内失败的通知投递数");
+    expect(deliveryHero()).toHaveTextContent("1 条投递失败");
+  });
+
+  it("顶部投递失败在首次和刷新失败时保持未知，恢复后显示数字", async () => {
+    const requests: Array<Deferred<AlertDeliveryStats>> = [];
+    let mode: "reject" | "defer" = "reject";
+    const fetchAlertDeliveryStats = vi.fn(() => {
+      if (mode === "reject") {
+        return Promise.reject(new Error("stats down"));
+      }
+      const deferred = createDeferred<AlertDeliveryStats>();
+      requests.push(deferred);
+      return deferred.promise;
+    });
+    createContext({ fetchAlertDeliveryStats });
+    const view = render(<NotificationsPage />);
+
+    await waitFor(() => {
+      expect(deliveryStatParts().card).toHaveAttribute("data-tone", "warning");
+    });
+    expect(deliveryStatParts().value.textContent).toBe("—");
+    expect(deliveryStatParts().card).toHaveTextContent("获取告警投递统计失败");
+    expect(deliveryStatParts().card).not.toHaveAttribute("data-tone", "success");
+    expect(deliveryHero()).toHaveTextContent("获取告警投递统计失败");
+    expect(deliveryHero()).not.toHaveTextContent("条投递失败");
+
+    mode = "defer";
+    createContext({ fetchAlertDeliveryStats, refreshVersion: 1 });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(deliveryStatParts().card).toHaveTextContent("加载中...");
+      expect(deliveryStatParts().card).not.toHaveTextContent("获取告警投递统计失败");
+    });
+    expect(deliveryStatParts().value.textContent).toBe("—");
+    expect(deliveryStatParts().card).not.toHaveAttribute("data-tone", "success");
+    expect(deliveryHero()).toHaveTextContent("加载中...");
+    expect(deliveryHero()).not.toHaveTextContent("获取告警投递统计失败");
+
+    await act(async () => {
+      requests.at(-1)?.reject(new Error("refresh down"));
+    });
+    await waitFor(() => {
+      expect(deliveryStatParts().card).toHaveAttribute("data-tone", "warning");
+    });
+    expect(deliveryStatParts().value.textContent).toBe("—");
+    expect(deliveryStatParts().card).toHaveTextContent("获取告警投递统计失败");
+    expect(deliveryHero()).not.toHaveTextContent("条投递失败");
+
+    createContext({ fetchAlertDeliveryStats, refreshVersion: 2 });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(deliveryStatParts().card).toHaveTextContent("加载中...");
+    });
+    await act(async () => {
+      requests.at(-1)?.resolve(deliveryStatsResult({ totalSent: 10, totalFailed: 2, successRate: 83.3 }));
+    });
+    await waitFor(() => {
+      expect(deliveryStatParts().value.textContent).toBe("2");
+    });
+    expect(deliveryStatParts().card).toHaveAttribute("data-tone", "warning");
+    expect(deliveryStatParts().card).toHaveTextContent("近 24 小时内失败的通知投递数");
+    expect(deliveryHero()).toHaveTextContent("2 条投递失败");
+  });
+
+  it("迟到的旧身份投递统计不能写回当前顶部数字", async () => {
+    const calls: Array<Deferred<AlertDeliveryStats>> = [];
+    const fetchAlertDeliveryStats = vi.fn(() => {
+      const deferred = createDeferred<AlertDeliveryStats>();
+      calls.push(deferred);
+      return deferred.promise;
+    });
+    authRef.current = { token: "user-a" };
+    createContext({ fetchAlertDeliveryStats });
+    const view = render(<NotificationsPage />);
+
+    await waitFor(() => {
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    });
+    const firstGeneration = calls.length;
+
+    authRef.current = { token: "user-b" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(calls.length).toBeGreaterThan(firstGeneration);
+    });
+    const secondGeneration = calls.length;
+
+    await act(async () => {
+      calls.slice(0, firstGeneration).forEach((deferred) => {
+        deferred.resolve(deliveryStatsResult({ totalSent: 1, totalFailed: 7, successRate: 12.5 }));
+      });
+    });
+    expect(deliveryStatParts().value.textContent).toBe("—");
+    expect(deliveryStatParts().card).toHaveTextContent("加载中...");
+    expect(deliveryHero()).not.toHaveTextContent("7 条投递失败");
+
+    authRef.current = { token: "user-c" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(calls.length).toBeGreaterThan(secondGeneration);
+    });
+
+    await act(async () => {
+      calls.slice(firstGeneration, secondGeneration).forEach((deferred) => {
+        deferred.reject(new Error("old identity failed"));
+      });
+    });
+    expect(deliveryStatParts().value.textContent).toBe("—");
+    expect(deliveryStatParts().card).toHaveTextContent("加载中...");
+    expect(deliveryStatParts().card).not.toHaveTextContent("获取告警投递统计失败");
+    expect(deliveryStatParts().card).not.toHaveAttribute("data-tone", "success");
+    expect(deliveryHero()).not.toHaveTextContent("获取告警投递统计失败");
+
+    await act(async () => {
+      calls.at(-1)?.resolve(deliveryStatsResult({ totalSent: 8, totalFailed: 2, successRate: 80 }));
+    });
+    await waitFor(() => {
+      expect(deliveryStatParts().value.textContent).toBe("2");
+    });
+    expect(deliveryHero()).toHaveTextContent("2 条投递失败");
+    expect(deliveryHero()).not.toHaveTextContent("7 条投递失败");
+  });
+
+  it("退出登录后不保留上一身份的投递失败数字", async () => {
+    const calls: Array<Deferred<AlertDeliveryStats>> = [];
+    const fetchAlertDeliveryStats = vi.fn(() => {
+      const deferred = createDeferred<AlertDeliveryStats>();
+      calls.push(deferred);
+      return deferred.promise;
+    });
+    createContext({ fetchAlertDeliveryStats });
+    const view = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    });
+    const beforeLogout = calls.length;
+
+    authRef.current = { token: null };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(deliveryStatParts().value.textContent).toBe("—");
+    });
+
+    await act(async () => {
+      calls.slice(0, beforeLogout).forEach((deferred) => {
+        deferred.resolve(deliveryStatsResult({ totalSent: 3, totalFailed: 4, successRate: 42.9 }));
+      });
+    });
+    expect(deliveryStatParts().value.textContent).toBe("—");
+    expect(deliveryStatParts().card).not.toHaveAttribute("data-tone", "success");
+    expect(deliveryHero()).not.toHaveTextContent("4 条投递失败");
+    expect(deliveryHero()).toHaveTextContent("加载中...");
   });
 
   // 注意：通知方式（IntegrationManager）相关测试已移至 settings-page.channels 中

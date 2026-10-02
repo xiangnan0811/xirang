@@ -17,6 +17,7 @@ import (
 func TestCatalogWorkerBoundsConcurrencySerializesRepositoriesAndKeepsFairness(t *testing.T) {
 	settings := workerSettingsFromEnabled(true)
 	settings["backup_assets.provider_max_concurrency"] = "2"
+	settings["backup_assets.content_provider_max_concurrency"] = "2"
 	foundation := backupasset.NewFoundationService(settings)
 	backend := newCatalogWorkerBackendFake([]catalog.BuildCandidate{
 		{RepositoryID: catalogWorkerID('a'), RecoveryPointID: catalogWorkerID('1')},

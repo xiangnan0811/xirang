@@ -23,7 +23,8 @@
 
 ## 设置锁序、前瞻配置与工作所有权
 
-- mutation owner 恰一次调用 `settings.Service.WithBackupAssetMutation(ctx, callback)`，从 supplied snapshot 得到完整、不可变 current/prospective bundle，再调 runtime。外部 reader 可用阻塞 `BackupAssetSettingsSnapshot`；内部 Content/Search/Overlay/Export/Recovery/admission/persist/compensation（含 disabled 组件）都不可重入 Foundation getter/gate。
+- mutation owner 恰一次调用 `settings.Service.WithBackupAssetMutation(ctx, callback)`，从 supplied snapshot 得到完整、不可变 current/prospective bundle，再调 runtime。外部原子 reader 可用阻塞 `BackupAssetSettingsSnapshot`；内部 Content/Search/Overlay/Export/Recovery/admission/persist/compensation（含 disabled 组件）的前瞻配置必须使用 supplied bundle，不可重入 settings gate。
+- legacy Foundation getter 逐项读取全部注册 Foundation keys，沿用 `GetEffective` 的缓存、DB > env > default 及读取错误回退语义，完整校验后再解析；不得遗漏 Search 等组后让校验器用静态默认替代真实值。它不是跨并发更新的原子快照，也不得增加 mutation gate 等待：持 gate 的 pending-audit flush、持 admission token 的 Provider/publication 最终审计仍会读取这些配置。原子快照、transition bundle 的既有所有权不变。
 - 使用 `ContentConfigFromValues`、`SearchOverlayConfigFromValues`、`ExportConfigFromValues`、`RecoveryConfigFromValues`、`FoundationTransitionConfigFromValues`。缺项/非法 bundle 在副作用前失败。
 - runtime 使用 `TransitionBackupAssetSettingsContext[WithRestore]`，persist/restore callback 接收 runtime context。`UpdateContext/UpdateWithTxContext/UpdateManyContext/DeleteContext/DeleteWithTxContext` 保持同一 context 进 GORM，不能内降级为 Background 或无 context adapter。
 - `Content.PrepareEnable` 接受显式 config；Search `PrepareWithConfig` 只校验 config/key、reconcile abandoned/overlay、list candidates，不同步 Build。候选 projection 归已有生命周期 worker 和 Search timeout，不继承 HTTP/settings deadline，不另起无 owner goroutine。
@@ -48,6 +49,6 @@
 
 覆盖 fresh/existing/current/stale ack、四种冲突、默认 false、startup blocked 仍 Core ready、PUT/DELETE/import 不落 true、FeatureLive 注入所有门、inventory 无 Provider mutation、真实 ready/stamp 写入、GA mapper/A11y/Admin mount、非 Admin secret proof 拒绝、退役 410。
 
-配置测试必须真实或证明与生产等价：Content/Search deadlock subprocess watchdog、gate cancellation/高重复、AST 禁内部 getter/context 降级、各 stage failure（含 imported graph）精确恢复、mixed PUT old row/absence/timestamp/cache、错误 identity、deadline 与 sticky fence。blocked candidate 证明 enable 可先返回；failed stage 零 wake，committed disabled wake 零 backend call；race/repeat 全覆盖。
+配置测试必须真实或证明与生产等价：完整默认/短时限组合、非法或空 Search 时限、同一 Foundation 实例观察已提交设置更新、真实 Runtime 构造；Content/Search deadlock subprocess watchdog、真实 pending terminal grant 审计 emitted/event、持 mutation gate 的 legacy callbacks、gate cancellation/高重复、各 stage failure（含 imported graph）精确恢复、mixed PUT old row/absence/timestamp/cache、错误 identity、deadline 与 sticky fence。config-aware transition 的 AST 回归按 `configAwareForbiddenSelectors` 检查指定入口及其可追踪委派，禁止 `FeatureEnabled`/`FeatureLive`、`ContentConfig`/`SearchConfig`/`SearchOverlayConfig`、`BackupAssetSettingsSnapshot`/`foundationValuesSnapshot`/`atomicFoundationValues`/`effectiveFoundationValues`/`config` selector；这不只是禁止阻塞 gate，也保护 supplied bundle 不被重新读取的配置替代。context 降级另有边界回归。blocked candidate 证明 enable 可先返回；failed stage 零 wake，committed disabled wake 零 backend call；race/repeat 全覆盖。
 
 运行配对 `BackupAssetMigration071*`（ready/ack/conflict/stamp/pristine）、`scripts/check-backup-asset-migration.sh`、required PostgreSQL、Compose export 隔离与相关完整门禁。源码检查或缺 DSN skip 不能作为真实 gate 通过。

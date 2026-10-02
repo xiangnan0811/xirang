@@ -100,6 +100,8 @@ smoke。因而该作业证明候选源码在两种原生平台上的构建、扫
 
 备份职责收敛后，CI 的 race 列表不再引用已删除的节点 probe、metrics、系统日志或服务 uptime 包，也不运行服务监控配置的专属 race 步骤；按需 SSH、任务、备份资产及投递并发检查保留。创建默认值的双引擎 parity 仅保留策略创建与调度行为。PostgreSQL 的 alerting/escalation 必需选择器包含节点及服务来源退役迁移后的直接投递与升级投递围栏测试，数据库选择器同时覆盖退役 schema 和启动保护器漂移。删除看板只移除其专用网格布局依赖，任务图表仍使用 Recharts；锁文件和 bundle budget 继续按上述门禁验证。
 
+通知投递统计的 SQLite／PostgreSQL 回归共用退役分类和权限夹具；PostgreSQL job 通过 `run-required-postgres-tests.sh` 必跑 `TestAlertDeliveryStatsPostgres`，防止缺少 DSN 或空选择器伪装通过。该入口与 alert delivery migration contract 相邻，但验证实际 handler 聚合，不替代迁移围栏测试；统计口径见[告警合同](../spec/domains/alerting-health.md#投递统计与窗口状态)。
+
 真实后端 Playwright smoke 在独立 CI 步骤先编译服务以准备 Go 构建缓存，避免冷缓存依赖下载和首次编译消耗浏览器 webServer 的就绪窗口。smoke 仍由隔离脚本构建并启动临时二进制与数据库，保留原有就绪超时及真实浏览器断言，不复用外部运行中的服务。
 
 ## 镜像构建依赖

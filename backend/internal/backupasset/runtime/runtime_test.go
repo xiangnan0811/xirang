@@ -149,6 +149,84 @@ func openRuntimeTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestRuntimeNewAcceptsCompleteShortDeadlineSettings(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_SHORT_DEADLINE_DATA_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{},
+		&model.WrappedDomainKey{}, &model.BackupAssetExportJob{}, &model.BackupAssetExportKey{},
+		&model.BackupAssetExportItem{}, &model.BackupAssetExportAttempt{}, &model.BackupAssetExportItemAttempt{},
+		&model.BackupAssetExportSourceLease{}, &model.BackupAssetExportArtifact{}, &model.BackupAssetExportIdempotency{},
+		&model.BackupAssetExportQuotaBucket{}, &model.BackupAssetExportReservation{},
+		&model.BackupAssetDeliveryGrant{}, &model.BackupAssetDeliveryRequest{},
+		&model.BackupAssetDeliveryUsage{}, &model.BackupAssetArchiveMemberRequest{},
+		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
+		&model.BackupAssetDerivedArtifactSet{}, &model.BackupAssetDerivedArtifact{}, &model.BackupAssetDerivedBlob{},
+	); err != nil {
+		t.Fatalf("migrate Runtime short-deadline fixture: %v", err)
+	}
+	for _, definition := range settings.NewService(nil).Registry() {
+		t.Setenv(definition.EnvVar, "")
+	}
+	settingsService := settings.NewService(db)
+	short := map[string]string{
+		"backup_assets.enabled":                    "true",
+		"backup_assets.lease_duration":             "71s",
+		"backup_assets.lease_heartbeat":            "10s",
+		"backup_assets.lease_absolute_deadline":    "20m",
+		"backup_assets.publication_missing_grace":  "10m",
+		"backup_assets.manifest_timeout":           "5m",
+		"backup_assets.search_build_timeout":       "5m",
+		"backup_assets.processing_attempt_timeout": "5m",
+	}
+	if err := settingsService.UpdateManyContext(context.Background(), short); err != nil {
+		t.Fatalf("write short-deadline settings: %v", err)
+	}
+	values, err := settingsService.BackupAssetSettingsSnapshot()
+	if err != nil {
+		t.Fatalf("read complete short-deadline snapshot: %v", err)
+	}
+	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
+		t.Fatalf("validate complete short-deadline snapshot: %v", err)
+	}
+
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return time.Now().UTC() },
+	})
+	if err != nil {
+		t.Fatalf("Runtime.New with complete short-deadline settings: %v", err)
+	}
+	lease, err := runtime.FoundationService().LeaseConfig()
+	if err != nil {
+		t.Fatalf("Runtime Foundation LeaseConfig: %v", err)
+	}
+	publicationConfig, err := runtime.FoundationService().PublicationConfig()
+	if err != nil {
+		t.Fatalf("Runtime Foundation PublicationConfig: %v", err)
+	}
+	searchConfig, _, err := runtime.FoundationService().SearchOverlayConfig()
+	if err != nil {
+		t.Fatalf("Runtime Foundation SearchOverlayConfig: %v", err)
+	}
+	processingConfig, err := runtime.FoundationService().ProcessingConfig()
+	if err != nil {
+		t.Fatalf("Runtime Foundation ProcessingConfig: %v", err)
+	}
+	if lease.AbsoluteDeadline != 20*time.Minute || publicationConfig.ManifestTimeout != 5*time.Minute ||
+		searchConfig.BuildTimeout != 5*time.Minute || processingConfig.AttemptTimeout != 5*time.Minute {
+		t.Fatalf("Runtime.New did not retain short-deadline values: lease=%+v publication=%+v search=%+v processing=%+v",
+			lease, publicationConfig, searchConfig, processingConfig)
+	}
+}
+
 func TestRuntimeNewReconcilesCurrentPostArmWorkBeforePermanentCleanupKeyFailure(t *testing.T) {
 	testCases := []struct {
 		name     string
