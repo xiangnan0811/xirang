@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ReconnectingSocket,
   TOKEN_REFRESH_CLOSE_CODE,
+  type ReconnectingSocketOptions,
 } from "@/lib/ws/reconnecting-socket";
 
 /**
@@ -332,5 +333,233 @@ describe("ReconnectingSocket", () => {
     FakeWebSocket.instances[0]!.fireOpen();
     expect(sock.send("hi")).toBe(true);
     expect(FakeWebSocket.instances[0]!.sent).toEqual(["hi"]);
+  });
+
+  it("callers without beforeConnect still open the socket synchronously", () => {
+    const onOpen = vi.fn();
+    const sock = new ReconnectingSocket({ url: "ws://test/sync", onOpen });
+    sock.connect();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]!.readyState).toBe(FakeWebSocket.CONNECTING);
+    expect(onOpen).not.toHaveBeenCalled();
+    FakeWebSocket.instances[0]!.fireOpen();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
+type AdmissionGate = {
+  resolve: () => void;
+  reject: (error: Error) => void;
+};
+
+function openAdmissionSocket(
+  options: ReconnectingSocketOptions,
+  beforeConnect?: () => Promise<void>,
+): ReconnectingSocket {
+  if (beforeConnect) {
+    Object.assign(options, { beforeConnect });
+  }
+  return new ReconnectingSocket(options);
+}
+
+async function flushAdmission(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function setDocumentHidden(hidden: boolean) {
+  Object.defineProperty(document, "hidden", {
+    configurable: true,
+    get: () => hidden,
+  });
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => (hidden ? "hidden" : "visible"),
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+describe("ReconnectingSocket beforeConnect admission", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    installWebSocket(FakeWebSocket);
+    // Earlier cases leave visibility listeners behind. Flush them once, then
+    // drop the sockets they open so this case starts from a quiet document.
+    setDocumentHidden(false);
+    FakeWebSocket.reset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    installWebSocket(originalWebSocket);
+    setDocumentHidden(false);
+  });
+
+  it("F04 beforeConnect pending 超过 5 秒仍不构造 WebSocket，resolve 后只创建一次并立即发送 auth", async () => {
+    let release!: () => void;
+    const beforeConnect = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const onOpen = vi.fn((ws: WebSocket) => {
+      ws.send(JSON.stringify({ type: "auth", token: "token-1", step_up_proof: "fresh" }));
+    });
+    const sock = openAdmissionSocket(
+      {
+        url: "ws://test/pending",
+        onOpen,
+      },
+      beforeConnect,
+    );
+
+    sock.connect();
+    expect(beforeConnect).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.map((ws) => ws.url)).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(onOpen).not.toHaveBeenCalled();
+
+    release();
+    await flushAdmission();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    const ws = FakeWebSocket.instances[0]!;
+    expect(ws.readyState).toBe(FakeWebSocket.CONNECTING);
+    ws.fireOpen();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(ws.sent).toEqual([
+      JSON.stringify({ type: "auth", token: "token-1", step_up_proof: "fresh" }),
+    ]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(beforeConnect).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("F04 close 之后的 resolve 或 reject 不创建 socket，也不影响之后的 connect", async () => {
+    const gates: AdmissionGate[] = [];
+    const beforeConnect = vi.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          gates.push({ resolve, reject });
+        }),
+    );
+    const onGiveUp = vi.fn();
+    const onOpen = vi.fn();
+    const sock = openAdmissionSocket(
+      {
+        url: "ws://test/pending",
+        onGiveUp,
+        onOpen,
+      },
+      beforeConnect,
+    );
+
+    sock.connect();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    sock.close();
+    gates[0]!.resolve();
+    await flushAdmission();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(onGiveUp).not.toHaveBeenCalled();
+    expect(onOpen).not.toHaveBeenCalled();
+
+    sock.connect();
+    expect(beforeConnect).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    sock.close();
+    gates[1]!.reject(new Error("stale-admission"));
+    await flushAdmission();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(onGiveUp).not.toHaveBeenCalled();
+
+    sock.connect();
+    expect(beforeConnect).toHaveBeenCalledTimes(3);
+    gates[2]!.resolve();
+    await flushAdmission();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    FakeWebSocket.instances[0]!.fireOpen();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onGiveUp).not.toHaveBeenCalled();
+  });
+
+  it("F04 preparing 期间 connect、visibility 和定时器不重复准入", async () => {
+    const releases: Array<() => void> = [];
+    const beforeConnect = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const sock = openAdmissionSocket(
+      {
+        url: "ws://test/pending",
+        baseDelayMs: 100,
+        maxDelayMs: 100,
+        jitter: false,
+        maxRetries: 5,
+      },
+      beforeConnect,
+    );
+
+    sock.connect();
+    sock.connect();
+    setDocumentHidden(true);
+    setDocumentHidden(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(beforeConnect).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    releases[0]!();
+    await flushAdmission();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    FakeWebSocket.instances[0]!.fireOpen();
+    FakeWebSocket.instances[0]!.fireClose(1006);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(beforeConnect).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    sock.connect();
+    setDocumentHidden(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(beforeConnect).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    releases[1]!();
+    await flushAdmission();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it("F04 beforeConnect reject 只触发一次 onGiveUp 且不自动重试", async () => {
+    const beforeConnect = vi.fn(() => Promise.reject(new Error("otp-cancelled")));
+    const onGiveUp = vi.fn();
+    const sock = openAdmissionSocket(
+      {
+        url: "ws://test/pending",
+        baseDelayMs: 50,
+        jitter: false,
+        maxRetries: 5,
+        onGiveUp,
+      },
+      beforeConnect,
+    );
+
+    sock.connect();
+    await flushAdmission();
+    expect(beforeConnect).toHaveBeenCalledTimes(1);
+    expect(onGiveUp).toHaveBeenCalledTimes(1);
+    expect(sock.isGivingUp()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    setDocumentHidden(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(beforeConnect).toHaveBeenCalledTimes(1);
+    expect(onGiveUp).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 });

@@ -2,11 +2,14 @@ package task
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 	"xirang/backend/internal/task/executor"
 
 	"gorm.io/gorm"
@@ -18,30 +21,68 @@ const defaultProgressThrottleWindow = 3 * time.Second
 // asynchronously. It owns the sample queue, worker goroutine, throttle state,
 // and expired-sample cleanup logic.
 type SampleWriter struct {
-	db                     *gorm.DB
-	queue                  chan queuedTaskSample
-	batchSize              int
-	flushInterval          time.Duration
-	cancel                 context.CancelFunc
-	done                   chan struct{}
+	db                       *gorm.DB
+	settingsSvc              *settings.Service
+	queue                    chan queuedTaskSample
+	batchSize                int
+	flushInterval            time.Duration
+	cancel                   context.CancelFunc
+	done                     chan struct{}
 	lastSampleBucketByTask   sync.Map
 	lastProgressBucketByTask sync.Map
-	sampleRetentionDays    int
-	lastSampleCleanupAt    time.Time
-	sampleCleanupMu        sync.Mutex
+	sampleRetentionDays      int
+	lastSampleCleanupAt      time.Time
+	sampleCleanupMu          sync.Mutex
 }
 
-// NewSampleWriter creates a SampleWriter. sampleRetentionDays controls how
-// long traffic samples are kept before cleanup; <=0 disables cleanup.
-func NewSampleWriter(db *gorm.DB, sampleRetentionDays int) *SampleWriter {
+// NewSampleWriter creates a SampleWriter. A non-nil settings service supplies
+// the live traffic retention value; sampleRetentionDays remains the startup
+// fallback for callers without settings.
+func NewSampleWriter(db *gorm.DB, sampleRetentionDays int, settingsSvc *settings.Service) *SampleWriter {
 	return &SampleWriter{
 		db:                  db,
+		settingsSvc:         settingsSvc,
 		queue:               make(chan queuedTaskSample, defaultSampleQueueCapacity),
 		batchSize:           defaultSampleBatchSize,
 		flushInterval:       defaultSampleFlushInterval,
 		done:                make(chan struct{}),
 		sampleRetentionDays: sampleRetentionDays,
 	}
+}
+
+func resolveRetentionDays(svc *settings.Service, key string, fallback int) (int, error) {
+	if svc == nil {
+		if fallback <= 0 {
+			return 0, nil
+		}
+		return fallback, nil
+	}
+
+	raw, err := svc.ResolveEffective(key)
+	if err != nil {
+		return 0, err
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("retention value is not an integer")
+	}
+	if days == 0 {
+		return 0, nil
+	}
+
+	var minDays, maxDays int
+	switch key {
+	case "retention.task_run_days":
+		minDays, maxDays = 1, 3650
+	case "retention.task_traffic_days":
+		minDays, maxDays = 1, 365
+	default:
+		return 0, fmt.Errorf("retention setting is unsupported")
+	}
+	if days < minDays || days > maxDays {
+		return 0, fmt.Errorf("retention value is outside the registered range")
+	}
+	return days, nil
 }
 
 // Start begins the sample worker goroutine.
@@ -195,7 +236,7 @@ func (sw *SampleWriter) persistBatch(batch []queuedTaskSample) {
 }
 
 func (sw *SampleWriter) cleanupExpired() {
-	if sw.sampleRetentionDays <= 0 || sw.db == nil {
+	if sw == nil || sw.db == nil {
 		return
 	}
 
@@ -207,7 +248,16 @@ func (sw *SampleWriter) cleanupExpired() {
 		return
 	}
 
-	cutoff := now.AddDate(0, 0, -sw.sampleRetentionDays)
+	retentionDays, err := resolveRetentionDays(sw.settingsSvc, "retention.task_traffic_days", sw.sampleRetentionDays)
+	if err != nil {
+		logger.Module("task").Warn().Str("setting", "retention.task_traffic_days").Msg("吞吐采样保留设置不可用，本轮跳过清理")
+		return
+	}
+	if retentionDays <= 0 {
+		return
+	}
+
+	cutoff := now.AddDate(0, 0, -retentionDays)
 	for {
 		var ids []uint
 		if err := sw.db.Model(&model.TaskTrafficSample{}).Where("sampled_at < ?", cutoff).Order("id asc").Limit(defaultSampleCleanupBatchSize).Pluck("id", &ids).Error; err != nil {

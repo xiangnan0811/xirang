@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
 )
@@ -89,6 +90,291 @@ func seedExpiredHistoryRun(t *testing.T, db *gorm.DB, taskEntity model.Task, cre
 
 func retentionManager(db *gorm.DB) *Manager {
 	return &Manager{db: db, taskRunRetentionDays: 1}
+}
+
+func openRetentionSettingsService(t *testing.T, db *gorm.DB) *settings.Service {
+	t.Helper()
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatalf("migrate retention settings table: %v", err)
+	}
+	return settings.NewService(db)
+}
+
+func forceTaskRunCleanup(manager *Manager) {
+	manager.lastTaskRunCleanupAt = time.Now().UTC().Add(-defaultSampleCleanupInterval - time.Second)
+}
+
+func stopRetentionWorkers(t *testing.T, manager *Manager) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if manager.logDispatcher != nil {
+		if err := manager.logDispatcher.Stop(ctx); err != nil {
+			t.Fatalf("stop retention log worker: %v", err)
+		}
+	}
+	if manager.sampleWriter != nil {
+		if err := manager.sampleWriter.Stop(ctx); err != nil {
+			t.Fatalf("stop retention sample worker: %v", err)
+		}
+	}
+}
+
+func installRetentionSettingUpdateAfterRead(
+	t *testing.T,
+	db *gorm.DB,
+	svc *settings.Service,
+	key string,
+	value string,
+) func() error {
+	t.Helper()
+	callbackName := fmt.Sprintf("test:retention-settings-update-after-read:%s:%d", t.Name(), time.Now().UnixNano())
+	var once sync.Once
+	var updateErr error
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Table != "system_settings" {
+			return
+		}
+		once.Do(func() {
+			updateErr = svc.Update(key, value)
+		})
+	}); err != nil {
+		t.Fatalf("register retention settings barrier: %v", err)
+	}
+	remove := func() {
+		_ = db.Callback().Query().Remove(callbackName)
+	}
+	t.Cleanup(remove)
+	return func() error {
+		return updateErr
+	}
+}
+
+func retentionTaskRunCount(t *testing.T, db *gorm.DB, runID uint) int64 {
+	t.Helper()
+	var count int64
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", runID).Count(&count).Error; err != nil {
+		t.Fatalf("count retention task run %d: %v", runID, err)
+	}
+	return count
+}
+
+func TestTaskRunRetentionUsesLiveSettings(t *testing.T) {
+	runTaskRunRetentionUsesLiveSettings(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionUsesLiveSettingsPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionUsesLiveSettings(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionUsesLiveSettings(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	t.Setenv("TASK_RUN_RETENTION_DAYS", "")
+	settingsSvc := openRetentionSettingsService(t, db)
+	if err := settingsSvc.Update("retention.task_run_days", "365"); err != nil {
+		t.Fatalf("set task-run retention override: %v", err)
+	}
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, settingsSvc, nil, 0, 90)
+	shutdownManagerOnCleanup(t, manager)
+	stopRetentionWorkers(t, manager)
+
+	taskEntity := seedRetentionTask(t, db)
+	old := time.Now().UTC().Add(-100 * 24 * time.Hour)
+	run := seedExpiredHistoryRun(t, db, taskEntity, old)
+
+	manager.cleanupExpiredTaskRuns()
+	if got := retentionTaskRunCount(t, db, run.ID); got != 1 {
+		t.Fatalf("DB retention=365 deleted 100-day run, count=%d", got)
+	}
+
+	if err := settingsSvc.Update("retention.task_run_days", "30"); err != nil {
+		t.Fatalf("shrink task-run retention override: %v", err)
+	}
+	forceTaskRunCleanup(manager)
+	manager.cleanupExpiredTaskRuns()
+	if got := retentionTaskRunCount(t, db, run.ID); got != 0 {
+		t.Fatalf("DB retention=30 kept 100-day run, count=%d", got)
+	}
+
+	expanded := seedExpiredHistoryRun(t, db, taskEntity, old)
+	if err := settingsSvc.Update("retention.task_run_days", "365"); err != nil {
+		t.Fatalf("expand task-run retention override: %v", err)
+	}
+	forceTaskRunCleanup(manager)
+	manager.cleanupExpiredTaskRuns()
+	if got := retentionTaskRunCount(t, db, expanded.ID); got != 1 {
+		t.Fatalf("expanded DB retention=365 deleted new 100-day run, count=%d", got)
+	}
+
+	if err := settingsSvc.Delete("retention.task_run_days"); err != nil {
+		t.Fatalf("delete task-run retention override: %v", err)
+	}
+	defaultRun := seedExpiredHistoryRun(t, db, taskEntity, old)
+	forceTaskRunCleanup(manager)
+	manager.cleanupExpiredTaskRuns()
+	if got := retentionTaskRunCount(t, db, defaultRun.ID); got != 0 {
+		t.Fatalf("registered default retention=90 kept 100-day run, count=%d", got)
+	}
+
+	t.Setenv("TASK_RUN_RETENTION_DAYS", "0")
+	envDisabled := seedExpiredHistoryRun(t, db, taskEntity, old)
+	forceTaskRunCleanup(manager)
+	manager.cleanupExpiredTaskRuns()
+	if got := retentionTaskRunCount(t, db, envDisabled.ID); got != 1 {
+		t.Fatalf("deleted DB override with env retention=0, count=%d", got)
+	}
+}
+
+func TestTaskRunRetentionFixesCutoffPerRound(t *testing.T) {
+	runTaskRunRetentionFixesCutoffPerRound(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionFixesCutoffPerRoundPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionFixesCutoffPerRound(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionFixesCutoffPerRound(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	settingsSvc := openRetentionSettingsService(t, db)
+	if err := settingsSvc.Update("retention.task_run_days", "365"); err != nil {
+		t.Fatalf("set initial task-run retention: %v", err)
+	}
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, settingsSvc, nil, 0, 90)
+	shutdownManagerOnCleanup(t, manager)
+	stopRetentionWorkers(t, manager)
+	taskEntity := seedRetentionTask(t, db)
+	old := time.Now().UTC().Add(-100 * 24 * time.Hour)
+	run := seedExpiredHistoryRun(t, db, taskEntity, old)
+
+	updateErr := installRetentionSettingUpdateAfterRead(t, db, settingsSvc, "retention.task_run_days", "30")
+	forceTaskRunCleanup(manager)
+	manager.cleanupExpiredTaskRuns()
+	if err := updateErr(); err != nil {
+		t.Fatalf("update retention during cleanup round: %v", err)
+	}
+	if got := retentionTaskRunCount(t, db, run.ID); got != 1 {
+		t.Fatalf("round read at 365 used later 30-day setting, count=%d", got)
+	}
+
+	forceTaskRunCleanup(manager)
+	manager.cleanupExpiredTaskRuns()
+	if got := retentionTaskRunCount(t, db, run.ID); got != 0 {
+		t.Fatalf("next round did not use updated 30-day setting, count=%d", got)
+	}
+
+	if err := settingsSvc.Update("retention.task_run_days", "30"); err != nil {
+		t.Fatalf("set reverse task-run retention: %v", err)
+	}
+	reverse := seedExpiredHistoryRun(t, db, taskEntity, old)
+	updateErr = installRetentionSettingUpdateAfterRead(t, db, settingsSvc, "retention.task_run_days", "365")
+	forceTaskRunCleanup(manager)
+	manager.cleanupExpiredTaskRuns()
+	if err := updateErr(); err != nil {
+		t.Fatalf("expand retention during cleanup round: %v", err)
+	}
+	if got := retentionTaskRunCount(t, db, reverse.ID); got != 0 {
+		t.Fatalf("round read at 30 used later 365-day setting, count=%d", got)
+	}
+
+	expanded := seedExpiredHistoryRun(t, db, taskEntity, old)
+	forceTaskRunCleanup(manager)
+	manager.cleanupExpiredTaskRuns()
+	if got := retentionTaskRunCount(t, db, expanded.ID); got != 1 {
+		t.Fatalf("next round did not use expanded 365-day setting, count=%d", got)
+	}
+}
+
+func TestTaskRunRetentionSkipsSettingsReadFailure(t *testing.T) {
+	runTaskRunRetentionSkipsSettingsReadFailure(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionSkipsSettingsReadFailurePostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionSkipsSettingsReadFailure(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionSkipsSettingsReadFailure(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	t.Setenv("TASK_RUN_RETENTION_DAYS", "1")
+	settingsSvc := openRetentionSettingsService(t, db)
+	if err := settingsSvc.Update("retention.task_run_days", "30"); err != nil {
+		t.Fatalf("set task-run retention for read failure: %v", err)
+	}
+	taskEntity := seedRetentionTask(t, db)
+	run := seedExpiredHistoryRun(t, db, taskEntity, time.Now().UTC().Add(-100*24*time.Hour))
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, settingsSvc, nil, 1, 90)
+	shutdownManagerOnCleanup(t, manager)
+	stopRetentionWorkers(t, manager)
+
+	callbackName := fmt.Sprintf("test:retention-settings-read-failure:%s:%d", t.Name(), time.Now().UnixNano())
+	injected := errors.New("FAKE_SETTINGS_QUERY_FAILURE_FOR_TEST_ONLY")
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Schema != nil && tx.Statement.Schema.Table == "system_settings" {
+			_ = tx.AddError(injected)
+		}
+	}); err != nil {
+		t.Fatalf("register settings read failure: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
+	manager.cleanupExpiredTaskRuns()
+	if got := retentionTaskRunCount(t, db, run.ID); got != 1 {
+		t.Fatalf("settings read failure fell back to env retention=1, count=%d", got)
+	}
+	if !manager.lastTaskRunCleanupAt.IsZero() {
+		t.Fatal("settings read failure advanced cleanup throttle timestamp")
+	}
+}
+
+func TestTaskRunRetentionSkipsInvalidSettingsValues(t *testing.T) {
+	runTaskRunRetentionSkipsInvalidSettingsValues(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionSkipsInvalidSettingsValuesPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionSkipsInvalidSettingsValues(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionSkipsInvalidSettingsValues(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	t.Setenv("TASK_RUN_RETENTION_DAYS", "1")
+	settingsSvc := openRetentionSettingsService(t, db)
+	taskEntity := seedRetentionTask(t, db)
+	invalidValues := []string{"0", "-1", "abc", "3651", "9223372036854775808"}
+	for _, value := range invalidValues {
+		t.Run("value_"+strings.NewReplacer("-", "negative_", " ", "_").Replace(value), func(t *testing.T) {
+			if err := settingsSvc.Update("retention.task_run_days", "30"); err != nil {
+				t.Fatalf("seed task-run retention setting: %v", err)
+			}
+			if err := db.Model(&model.SystemSetting{}).
+				Where("key = ?", "retention.task_run_days").
+				Update("value", value).Error; err != nil {
+				t.Fatalf("corrupt task-run retention setting with %q: %v", value, err)
+			}
+			run := seedExpiredHistoryRun(t, db, taskEntity, time.Now().UTC().Add(-100*24*time.Hour))
+			manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, settingsSvc, nil, 1, 90)
+			shutdownManagerOnCleanup(t, manager)
+			stopRetentionWorkers(t, manager)
+			manager.cleanupExpiredTaskRuns()
+			if got := retentionTaskRunCount(t, db, run.ID); got != 1 {
+				t.Fatalf("invalid DB retention=%q deleted history, count=%d", value, got)
+			}
+		})
+	}
 }
 
 func TestTaskRunCaptureSidecarPersistencePreservesRawBytes(t *testing.T) {
@@ -1146,8 +1432,8 @@ func seedRetentionTask(t *testing.T, db *gorm.DB) model.Task {
 func openTaskRetentionPostgresDB(t *testing.T, dsn string) *gorm.DB {
 	t.Helper()
 	db := openTaskTerminalPostgresDB(t, dsn)
-	if err := db.AutoMigrate(&model.RestoreDrillEvidence{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}, &model.TaskTrafficSample{}); err != nil {
-		t.Fatalf("migrate isolated PostgreSQL retention tables: %v", err)
+	if err := db.AutoMigrate(&model.RestoreDrillEvidence{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}, &model.TaskTrafficSample{}, &model.SystemSetting{}); err != nil {
+		t.Fatalf("migrate isolated PostgreSQL retention/settings tables: %v", err)
 	}
 	return db
 }
