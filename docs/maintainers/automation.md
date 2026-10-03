@@ -102,6 +102,20 @@ smoke。因而该作业证明候选源码在两种原生平台上的构建、扫
 
 通知投递统计的 SQLite／PostgreSQL 回归共用退役分类和权限夹具；PostgreSQL job 通过 `run-required-postgres-tests.sh` 必跑 `TestAlertDeliveryStatsPostgres`，防止缺少 DSN 或空选择器伪装通过。该入口与 alert delivery migration contract 相邻，但验证实际 handler 聚合，不替代迁移围栏测试；统计口径见[告警合同](../spec/domains/alerting-health.md#投递统计与窗口状态)。
 
+RecoveryPoint 生产者历史保全由双引擎回归覆盖。PostgreSQL durable task runtime
+选择器包含 TaskRun retention 回归；其后的 producer retention consumers 步骤通过
+`run-required-postgres-tests.sh` 必跑
+`TestRecoveryPointProducerRetentionConsumersPostgres` 和
+`TestRecoveryPointProducerRetentionPublicationPostgres`，验证完整迁移库上的真实
+Manager 清理、搜索及生命周期解析消费者和 Prepare 并发边界。缺少 DSN、空选择器或
+跳过 PostgreSQL 不构成通过；保留规则归属[任务执行与恢复合同](../spec/domains/task-execution-recovery.md)。
+
+Recovery 授权收据的 PostgreSQL 必需步骤使用同一 runner 执行
+`TestRecoveryAuthorizationReceiptRollbackBeforeCommitPostgres` 和
+`TestRecoveryAuthorizationReceiptReaperHandlesAllEffectKindsPostgres`：
+exact-mirror 删除授权必须基于真实已暂停的执行证据验证事务回滚；清理用例通过真实
+授权生成短有效期收据，等待数据库时钟确认到期，不修改不可变收据或绕过数据库约束。
+
 真实后端 Playwright smoke 在独立 CI 步骤先编译服务以准备 Go 构建缓存，避免冷缓存依赖下载和首次编译消耗浏览器 webServer 的就绪窗口。smoke 仍由隔离脚本构建并启动临时二进制与数据库，保留原有就绪超时及真实浏览器断言，不复用外部运行中的服务。
 
 ## 镜像构建依赖

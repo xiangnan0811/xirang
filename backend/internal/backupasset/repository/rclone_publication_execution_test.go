@@ -65,6 +65,41 @@ func TestRclonePreparePersistsStablePointFreshAttemptAndKeepsTaskRunTruthSeparat
 	}
 }
 
+func TestRclonePrepareRejectsExpiredTerminalTaskRunWithoutPublication(t *testing.T) {
+	fixture := newRclonePublicationFixture(t, backupasset.PublicationVersionedPrefix)
+	startedAt := fixture.now.Add(-72 * time.Hour)
+	finishedAt := startedAt.Add(time.Minute)
+	if err := fixture.db.Model(&model.TaskRun{}).Where("id = ?", fixture.taskRun.ID).Updates(map[string]any{
+		"status":      model.TaskRunStatusSuccess,
+		"started_at":  startedAt,
+		"finished_at": finishedAt,
+		"created_at":  startedAt,
+		"updated_at":  finishedAt,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.taskRun.Status = model.TaskRunStatusSuccess
+	fixture.taskRun.StartedAt = &startedAt
+	fixture.taskRun.FinishedAt = &finishedAt
+	fixture.taskRun.CreatedAt = startedAt
+	fixture.taskRun.UpdatedAt = finishedAt
+
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if execution != nil || !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("prepare terminal managed Rclone TaskRun execution=%v err=%v, want nil and ErrConflict", execution, err)
+	}
+	var points, leases int64
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Count(&points).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).Count(&leases).Error; err != nil {
+		t.Fatal(err)
+	}
+	if points != 0 || leases != 0 {
+		t.Fatalf("terminal managed Rclone prepare created points=%d leases=%d, want zero", points, leases)
+	}
+}
+
 func TestRcloneNativePrepareRejectsSecondUnresolvedPhysicalWriter(t *testing.T) {
 	fixture := newRclonePublicationFixture(t, backupasset.PublicationNativeObjectVersions)
 	lineage, err := backupasset.EncodePublicationLineage(backupasset.PublicationLineageV1{

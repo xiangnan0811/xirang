@@ -158,6 +158,33 @@ func TestPrepareEnabledRequiresExactActiveResticBindingBeforeMutation(t *testing
 	}
 }
 
+func TestPrepareResticRejectsExpiredTerminalTaskRunWithoutPublication(t *testing.T) {
+	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
+	fixture.connectExactResticBinding(t)
+	startedAt := fixture.now.Add(-72 * time.Hour)
+	finishedAt := startedAt.Add(time.Minute)
+	if err := fixture.db.Model(&model.TaskRun{}).Where("id = ?", fixture.taskRun.ID).Updates(map[string]any{
+		"status":      model.TaskRunStatusSuccess,
+		"started_at":  startedAt,
+		"finished_at": finishedAt,
+		"created_at":  startedAt,
+		"updated_at":  finishedAt,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.taskRun.Status = model.TaskRunStatusSuccess
+	fixture.taskRun.StartedAt = &startedAt
+	fixture.taskRun.FinishedAt = &finishedAt
+	fixture.taskRun.CreatedAt = startedAt
+	fixture.taskRun.UpdatedAt = finishedAt
+
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if execution != nil || !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("prepare terminal Restic TaskRun execution=%v err=%v, want nil and ErrConflict", execution, err)
+	}
+	fixture.requirePublicationCounts(t, 0, 0)
+}
+
 func TestPrepareCreatesOneDeterministicPointAndExecutionLease(t *testing.T) {
 	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
 	fixture.connectExactResticBinding(t)
@@ -369,15 +396,19 @@ type publicationFixture struct {
 
 func newPublicationFixture(t *testing.T, enabled bool, mode publication.AdmissionMode) *publicationFixture {
 	t.Helper()
-	db := newRepositoryTestDB(t)
 	now := time.Date(2026, 7, 14, 11, 0, 0, 0, time.UTC)
+	return newPublicationFixtureWithDB(t, newRepositoryTestDB(t), enabled, mode, now)
+}
+
+func newPublicationFixtureWithDB(t *testing.T, db *gorm.DB, enabled bool, mode publication.AdmissionMode, now time.Time) *publicationFixture {
+	t.Helper()
 	task := seedTask(t, db, "restic", "sftp:user@example.invalid:/repository", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
 	var node model.Node
 	if err := db.First(&node, task.NodeID).Error; err != nil {
 		t.Fatal(err)
 	}
 	task.Node = node
-	taskRun := model.TaskRun{TaskID: task.ID, TriggerType: "manual", Status: "running", StartedAt: timePointer(now.Add(-time.Minute)), CreatedAt: now, UpdatedAt: now}
+	taskRun := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: task.NodeID, TriggerType: "manual", Status: "running", StartedAt: timePointer(now.Add(-time.Minute)), CreatedAt: now, UpdatedAt: now}
 	if err := db.Create(&taskRun).Error; err != nil {
 		t.Fatal(err)
 	}

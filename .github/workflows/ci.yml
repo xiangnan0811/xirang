@@ -164,6 +164,9 @@ jobs:
       - name: Run PostgreSQL Recovery behavior parity
         run: go test ./internal/backupasset/recovery -run '^TestRecoveryBehaviorPostgres$' -count=1
 
+      - name: Run PostgreSQL Recovery authorization receipt contracts
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL Recovery authorization receipts' ./internal/backupasset/recovery '^TestRecoveryAuthorizationReceipt(RollbackBeforeCommit|ReaperHandlesAllEffectKinds)Postgres$'
+
       - name: Run PostgreSQL Catalog behavior parity
         run: go test ./internal/backupasset/catalog -run '^TestCatalogBehaviorPostgres$' -count=1
 
@@ -193,6 +196,9 @@ jobs:
 
       - name: Run PostgreSQL durable task runtime contracts
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable task runtime contracts' ./internal/task '^Test.*Postgres$'
+
+      - name: Run PostgreSQL producer retention consumers
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL producer retention consumers' ./internal/backupasset/repository '^TestRecoveryPointProducerRetention(Consumers|Publication)Postgres$'
 
       - name: Run PostgreSQL durable automation contracts
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable automation contracts' ./internal/automation '^Test.*Postgres$'

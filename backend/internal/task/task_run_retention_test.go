@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
@@ -1327,6 +1329,580 @@ func runTaskRunRetentionCleanupIsAtomic(t *testing.T, db *gorm.DB) {
 	if storedAlert.TaskRunID == nil || *storedAlert.TaskRunID != run.ID {
 		t.Fatalf("alert task_run_id=%v after rollback, want %d", storedAlert.TaskRunID, run.ID)
 	}
+}
+
+func configureRetentionTaskExecutor(t *testing.T, db *gorm.DB, taskEntity model.Task, executorType string) model.Task {
+	t.Helper()
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", executorType).Error; err != nil {
+		t.Fatalf("configure retention task executor %q: %v", executorType, err)
+	}
+	if err := db.Preload("Node").Preload("Policy").First(&taskEntity, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload retention task executor %q: %v", executorType, err)
+	}
+	return taskEntity
+}
+
+func seedRetentionRecoveryPoint(
+	t *testing.T,
+	db *gorm.DB,
+	producer model.TaskRun,
+	semantics backupasset.PointVersionSemantics,
+	state backupasset.RecoveryPointState,
+	mutate func(*model.RecoveryPoint, time.Time),
+) model.RecoveryPoint {
+	t.Helper()
+	producerRunID := producer.ID
+	return seedRetentionRecoveryPointReference(
+		t, db, fmt.Sprintf("%032x", uint64(producer.ID)), producer.TaskID,
+		producer.NodeIDSnapshot, &producerRunID, semantics, state, mutate,
+	)
+}
+
+func seedRetentionRecoveryPointReference(
+	t *testing.T,
+	db *gorm.DB,
+	pointID string,
+	taskID uint,
+	nodeID uint,
+	producerRunID *uint,
+	semantics backupasset.PointVersionSemantics,
+	state backupasset.RecoveryPointState,
+	mutate func(*model.RecoveryPoint, time.Time),
+) model.RecoveryPoint {
+	t.Helper()
+	now := time.Now().UTC().Add(-72 * time.Hour)
+	point := model.RecoveryPoint{
+		ID:                        pointID,
+		RepositoryID:              fmt.Sprintf("%032x", uint64(taskID)+0x1000000000000000),
+		ProducingTaskID:           &taskID,
+		ProducingTaskRunID:        producerRunID,
+		ProducingTaskNameSnapshot: fmt.Sprintf("retention-task-%d", taskID),
+		ProducingNodeIDSnapshot:   nodeID,
+		ProducingNodeNameSnapshot: "retention-node",
+		LineageJSON:               `{}`,
+		EncryptedProviderLocator:  "retention-provider-locator",
+		Semantics:                 string(semantics),
+		State:                     string(state),
+		CapturedAt:                &now,
+		SourceFingerprint:         strings.Repeat("a", 32) + pointID,
+		ManifestDigestAlgorithm:   "sha256",
+		ManifestDigest:            strings.Repeat("b", 64),
+		ConsistencyJSON:           `{}`,
+		FidelityJSON:              `{}`,
+		CapabilityRevision:        1,
+		CapabilitiesJSON:          `{}`,
+		ImmutabilityLevel:         string(backupasset.ImmutabilityXirangManaged),
+		PhysicalAvailability:      string(backupasset.PhysicalOnline),
+		HoldState:                 string(backupasset.HoldNone),
+		CreatedAt:                 now,
+		UpdatedAt:                 now,
+	}
+	if semantics == backupasset.PointNativeSnapshot {
+		point.ImmutabilityLevel = string(backupasset.ImmutabilityStorageWORM)
+	}
+	if semantics == backupasset.PointMutableHead {
+		point.LineageJSON = fmt.Sprintf(`{"producing_task_id":%d}`, taskID)
+		point.ImmutabilityLevel = string(backupasset.ImmutabilityMutable)
+		point.CapturedAt = nil
+		point.ObservedAt = &now
+		if state == backupasset.RecoveryPointRetired {
+			point.EncryptedProviderLocator = ""
+			point.EncryptedRollbackLocator = "retention-rollback-locator"
+			retiredAt := now.Add(time.Minute)
+			reason := string(backupasset.RetirementWithdrawn)
+			point.RetiredAt = &retiredAt
+			point.RetirementReason = &reason
+		}
+	}
+	switch state {
+	case backupasset.RecoveryPointCommitted,
+		backupasset.RecoveryPointDegraded,
+		backupasset.RecoveryPointExpiring,
+		backupasset.RecoveryPointExpired,
+		backupasset.RecoveryPointPurgeBlocked:
+		committedAt := now.Add(time.Minute)
+		point.CommittedAt = &committedAt
+	}
+	if mutate != nil {
+		mutate(&point, now)
+	}
+	if err := db.Create(&point).Error; err != nil {
+		t.Fatalf("create retention recovery point %s: %v", point.ID, err)
+	}
+	return point
+}
+
+func seedRetentionLogAndAlert(
+	t *testing.T,
+	db *gorm.DB,
+	taskEntity model.Task,
+	run model.TaskRun,
+	label string,
+) (model.TaskLog, model.Alert) {
+	t.Helper()
+	runID := run.ID
+	createdAt := run.CreatedAt
+	log := model.TaskLog{
+		TaskID:    taskEntity.ID,
+		TaskRunID: &runID,
+		Level:     "info",
+		Message:   "retention-" + label,
+		CreatedAt: createdAt,
+	}
+	if err := db.Create(&log).Error; err != nil {
+		t.Fatalf("create retention %s log: %v", label, err)
+	}
+	taskID := taskEntity.ID
+	alert := model.Alert{
+		NodeID:      taskEntity.NodeID,
+		NodeName:    "retention-node",
+		TaskID:      &taskID,
+		TaskRunID:   &runID,
+		Severity:    "warning",
+		Status:      "resolved",
+		ErrorCode:   "RETENTION_" + strings.ToUpper(label),
+		Message:     "retention-" + label,
+		Tags:        "[]",
+		TriggeredAt: createdAt,
+		CreatedAt:   createdAt,
+		UpdatedAt:   createdAt,
+	}
+	if err := db.Create(&alert).Error; err != nil {
+		t.Fatalf("create retention %s alert: %v", label, err)
+	}
+	return log, alert
+}
+
+func assertRetentionRecoveryPointProducer(t *testing.T, db *gorm.DB, pointID string, wantRunID uint) {
+	t.Helper()
+	var point model.RecoveryPoint
+	if err := db.First(&point, "id = ?", pointID).Error; err != nil {
+		t.Fatalf("load retention recovery point %s: %v", pointID, err)
+	}
+	if point.ProducingTaskRunID == nil || *point.ProducingTaskRunID != wantRunID {
+		t.Fatalf("retention recovery point %s producer=%v, want %d", pointID, point.ProducingTaskRunID, wantRunID)
+	}
+}
+
+func ensureRetentionAssetEncryptionKey(t *testing.T) {
+	t.Helper()
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+}
+
+func TestTaskRunRetentionKeepsRecoveryPointProducer(t *testing.T) {
+	runTaskRunRetentionKeepsRecoveryPointProducer(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionKeepsRecoveryPointProducerPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionKeepsRecoveryPointProducer(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionKeepsRecoveryPointProducer(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	ensureRetentionAssetEncryptionKey(t)
+	type protectionCase struct {
+		name            string
+		executorType    string
+		generationState string
+		runStatus       string
+		newerGeneration bool
+		semantics       backupasset.PointVersionSemantics
+		state           backupasset.RecoveryPointState
+		withDependents  bool
+		mutatePoint     func(*model.RecoveryPoint, time.Time)
+	}
+	cases := []protectionCase{
+		{
+			name: "restic-empty-generation", executorType: "restic",
+			runStatus: model.TaskRunStatusSuccess, semantics: backupasset.PointNativeSnapshot,
+			state: backupasset.RecoveryPointCommitted,
+		},
+		{
+			name: "rsync-known-terminal-generation", executorType: "rsync",
+			generationState: model.TaskRunGenerationStateVerified, runStatus: model.TaskRunStatusSuccess,
+			newerGeneration: true, semantics: backupasset.PointXirangManifest,
+			state: backupasset.RecoveryPointCommitted,
+		},
+		{
+			name: "rclone-known-terminal-generation", executorType: "rclone",
+			generationState: model.TaskRunGenerationStateVerified, runStatus: model.TaskRunStatusSuccess,
+			newerGeneration: true, semantics: backupasset.PointXirangManifest,
+			state: backupasset.RecoveryPointCommitted,
+		},
+		{
+			name: "committed-retention-future", executorType: "restic",
+			runStatus: model.TaskRunStatusSuccess, semantics: backupasset.PointNativeSnapshot,
+			state: backupasset.RecoveryPointCommitted, withDependents: true,
+			mutatePoint: func(point *model.RecoveryPoint, _ time.Time) {
+				retentionUntil := time.Now().UTC().Add(48 * time.Hour)
+				point.RetentionUntil = &retentionUntil
+			},
+		},
+		{
+			name: "committed-active-hold", executorType: "restic",
+			runStatus: model.TaskRunStatusSuccess, semantics: backupasset.PointNativeSnapshot,
+			state: backupasset.RecoveryPointCommitted,
+			mutatePoint: func(point *model.RecoveryPoint, now time.Time) {
+				point.HoldState = string(backupasset.HoldActive)
+				holdUntil := now.Add(48 * time.Hour)
+				point.HoldUntil = &holdUntil
+			},
+		},
+		{
+			name: "preparing", executorType: "restic",
+			runStatus: model.TaskRunStatusFailed, semantics: backupasset.PointNativeSnapshot,
+			state: backupasset.RecoveryPointPreparing,
+		},
+		{
+			name: "verifying", executorType: "restic",
+			runStatus: model.TaskRunStatusFailed, semantics: backupasset.PointNativeSnapshot,
+			state: backupasset.RecoveryPointVerifying,
+		},
+		{
+			name: "failed", executorType: "restic",
+			runStatus: model.TaskRunStatusFailed, semantics: backupasset.PointNativeSnapshot,
+			state: backupasset.RecoveryPointFailed,
+		},
+		{
+			name: "expired", executorType: "restic",
+			runStatus: model.TaskRunStatusSuccess, semantics: backupasset.PointNativeSnapshot,
+			state: backupasset.RecoveryPointExpired,
+			mutatePoint: func(point *model.RecoveryPoint, now time.Time) {
+				retentionUntil := now.Add(-24 * time.Hour)
+				point.RetentionUntil = &retentionUntil
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Helper()
+			producerTask := configureRetentionTaskExecutor(t, db, seedRetentionTask(t, db), testCase.executorType)
+			createdAt := time.Now().UTC().Add(-72 * time.Hour)
+			var producer model.TaskRun
+			if testCase.executorType == "rclone" {
+				producer = seedRcloneGeneration(t, db, producerTask, testCase.runStatus, testCase.generationState, "", createdAt)
+			} else {
+				producer = seedRetentionGeneration(t, db, producerTask, createdAt, testCase.runStatus, testCase.generationState)
+			}
+			if testCase.newerGeneration {
+				newerAt := createdAt.Add(time.Minute)
+				if testCase.executorType == "rclone" {
+					seedRcloneGeneration(t, db, producerTask, model.TaskRunStatusSuccess, model.TaskRunGenerationStateVerified, "", newerAt)
+				} else {
+					seedRetentionGeneration(t, db, producerTask, newerAt, model.TaskRunStatusSuccess, model.TaskRunGenerationStateVerified)
+				}
+			}
+			point := seedRetentionRecoveryPoint(t, db, producer, testCase.semantics, testCase.state, testCase.mutatePoint)
+
+			controlTask := seedRetentionTask(t, db)
+			control := seedExpiredHistoryRun(t, db, controlTask, createdAt.Add(2*time.Minute))
+			var protectedLog, controlLog model.TaskLog
+			var protectedAlert, controlAlert model.Alert
+			if testCase.withDependents {
+				protectedLog, protectedAlert = seedRetentionLogAndAlert(t, db, producerTask, producer, "protected")
+				controlLog, controlAlert = seedRetentionLogAndAlert(t, db, controlTask, control, "control")
+			}
+
+			cutoff := time.Now().UTC().Add(-24 * time.Hour)
+			if testCase.name == "committed-retention-future" {
+				if point.RetentionUntil == nil || !point.RetentionUntil.After(cutoff) {
+					t.Fatalf("retention until %v is not after cleanup cutoff %v", point.RetentionUntil, cutoff)
+				}
+			}
+			deleted, err := retentionManager(db).cleanupExpiredTaskRunBatch(cutoff)
+			if err != nil {
+				t.Fatalf("cleanup %s: %v", testCase.name, err)
+			}
+			if deleted != 1 {
+				t.Fatalf("cleanup %s deleted=%d, want one unreferenced control run", testCase.name, deleted)
+			}
+			if got := retentionTaskRunCount(t, db, control.ID); got != 0 {
+				t.Fatalf("control run %d survived cleanup, count=%d", control.ID, got)
+			}
+			if got := retentionTaskRunCount(t, db, producer.ID); got != 1 {
+				t.Fatalf("producer run %d was deleted, count=%d", producer.ID, got)
+			}
+			assertRetentionRecoveryPointProducer(t, db, point.ID, producer.ID)
+
+			if !testCase.withDependents {
+				return
+			}
+			if err := db.First(&model.TaskLog{}, protectedLog.ID).Error; err != nil {
+				t.Fatalf("protected log was deleted: %v", err)
+			}
+			var storedProtectedLog model.TaskLog
+			if err := db.First(&storedProtectedLog, protectedLog.ID).Error; err != nil {
+				t.Fatalf("load protected log: %v", err)
+			}
+			if storedProtectedLog.TaskRunID == nil || *storedProtectedLog.TaskRunID != producer.ID {
+				t.Fatalf("protected log task_run_id=%v, want %d", storedProtectedLog.TaskRunID, producer.ID)
+			}
+			if err := db.First(&model.Alert{}, protectedAlert.ID).Error; err != nil {
+				t.Fatalf("protected alert was deleted: %v", err)
+			}
+			var storedProtectedAlert model.Alert
+			if err := db.First(&storedProtectedAlert, protectedAlert.ID).Error; err != nil {
+				t.Fatalf("load protected alert: %v", err)
+			}
+			if storedProtectedAlert.TaskRunID == nil || *storedProtectedAlert.TaskRunID != producer.ID {
+				t.Fatalf("protected alert task_run_id=%v, want %d", storedProtectedAlert.TaskRunID, producer.ID)
+			}
+			var deletedLogs int64
+			if err := db.Model(&model.TaskLog{}).Where("id = ?", controlLog.ID).Count(&deletedLogs).Error; err != nil {
+				t.Fatalf("count control log: %v", err)
+			}
+			if deletedLogs != 0 {
+				t.Fatalf("control log survived cleanup")
+			}
+			var updatedControlAlert model.Alert
+			if err := db.First(&updatedControlAlert, controlAlert.ID).Error; err != nil {
+				t.Fatalf("load control alert after cleanup: %v", err)
+			}
+			if updatedControlAlert.TaskRunID != nil {
+				t.Fatalf("control alert task_run_id=%v, want nil", updatedControlAlert.TaskRunID)
+			}
+		})
+	}
+	runTaskRunRetentionRecoveryPointReverseControls(t, db)
+}
+
+func TestTaskRunRetentionRecoveryPointBatchProgress(t *testing.T) {
+	runTaskRunRetentionRecoveryPointBatchProgress(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionRecoveryPointBatchProgressPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionRecoveryPointBatchProgress(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionRecoveryPointBatchProgress(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	ensureRetentionAssetEncryptionKey(t)
+	producerTask := seedRetentionTask(t, db)
+	createdAt := time.Now().UTC().Add(-72 * time.Hour)
+	protected := make([]model.TaskRun, 0, defaultSampleCleanupBatchSize+1)
+	for index := 0; index <= defaultSampleCleanupBatchSize; index++ {
+		run := seedExpiredHistoryRun(t, db, producerTask, createdAt.Add(time.Duration(index)*time.Second))
+		seedRetentionRecoveryPoint(t, db, run, backupasset.PointNativeSnapshot, backupasset.RecoveryPointCommitted, nil)
+		protected = append(protected, run)
+	}
+	controlTask := seedRetentionTask(t, db)
+	control := seedExpiredHistoryRun(t, db, controlTask, createdAt.Add((defaultSampleCleanupBatchSize+2)*time.Second))
+	if control.ID <= protected[len(protected)-1].ID {
+		t.Fatalf("control run id=%d is not later than protected batch tail id=%d", control.ID, protected[len(protected)-1].ID)
+	}
+
+	retentionManager(db).cleanupExpiredTaskRuns()
+	if got := retentionTaskRunCount(t, db, control.ID); got != 0 {
+		t.Fatalf("higher-ID unreferenced control run survived batch progress cleanup, count=%d", got)
+	}
+	for _, run := range protected {
+		if got := retentionTaskRunCount(t, db, run.ID); got != 1 {
+			t.Fatalf("protected run %d was deleted during batch progress cleanup, count=%d", run.ID, got)
+		}
+		var point model.RecoveryPoint
+		if err := db.Where("producing_task_run_id = ?", run.ID).First(&point).Error; err != nil {
+			t.Fatalf("recovery point for protected run %d was deleted: %v", run.ID, err)
+		}
+		if point.ProducingTaskRunID == nil || *point.ProducingTaskRunID != run.ID {
+			t.Fatalf("protected point %s producer=%v, want %d", point.ID, point.ProducingTaskRunID, run.ID)
+		}
+	}
+}
+
+func TestTaskRunRetentionRecoveryPointLockedRecheck(t *testing.T) {
+	runTaskRunRetentionRecoveryPointLockedRecheck(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionRecoveryPointLockedRecheckPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionRecoveryPointLockedRecheck(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionRecoveryPointLockedRecheck(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	ensureRetentionAssetEncryptionKey(t)
+	taskEntity := seedRetentionTask(t, db)
+	createdAt := time.Now().UTC().Add(-72 * time.Hour)
+	target := seedExpiredHistoryRun(t, db, taskEntity, createdAt)
+	control := seedExpiredHistoryRun(t, db, taskEntity, createdAt.Add(time.Minute))
+
+	callbackName := fmt.Sprintf("test:retention-recovery-point-after-candidate-%d", target.ID)
+	var selectedInitialCandidate bool
+	var injected bool
+	var injectOnce sync.Once
+	candidateSelectionQueries := 0
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx == nil || tx.Statement == nil || tx.Statement.Schema == nil ||
+			tx.Statement.Schema.Table != "task_runs" {
+			return
+		}
+		if _, hasLimit := tx.Statement.Clauses["LIMIT"]; !hasLimit {
+			return
+		}
+		candidateSelectionQueries++
+		if candidateSelectionQueries != 1 {
+			return
+		}
+		candidateIDs, ok := tx.Statement.Dest.(*[]uint)
+		if !ok || candidateIDs == nil {
+			return
+		}
+		targetSelected := false
+		for _, candidateID := range *candidateIDs {
+			if candidateID == target.ID {
+				targetSelected = true
+				break
+			}
+		}
+		if !targetSelected {
+			return
+		}
+		injectOnce.Do(func() {
+			selectedInitialCandidate = true
+			producerRunID := target.ID
+			// NewDB resets GORM's statement while retaining the callback's
+			// transaction ConnPool; the point write must be in this cleaner
+			// transaction rather than a second SQLite connection.
+			point := seedRetentionRecoveryPointReference(
+				t, tx.Session(&gorm.Session{NewDB: true}),
+				fmt.Sprintf("%032x", uint64(target.ID)), target.TaskID, target.NodeIDSnapshot,
+				&producerRunID, backupasset.PointNativeSnapshot, backupasset.RecoveryPointCommitted, nil,
+			)
+			_ = point
+			injected = true
+		})
+	}); err != nil {
+		t.Fatalf("register locked recheck injection: %v", err)
+	}
+	removeCallback := func() {
+		_ = db.Callback().Query().Remove(callbackName)
+	}
+	t.Cleanup(removeCallback)
+
+	cutoff := time.Now().UTC().Add(-24 * time.Hour)
+	deleted, cleanupErr := retentionManager(db).cleanupExpiredTaskRunBatch(cutoff)
+	removeCallback()
+	if cleanupErr != nil {
+		t.Fatalf("locked recheck cleanup: %v", cleanupErr)
+	}
+	if !selectedInitialCandidate {
+		t.Fatal("locked recheck callback did not prove target was in the initial candidate set")
+	}
+	if !injected {
+		t.Fatal("locked recheck callback did not insert a recovery point")
+	}
+	if deleted != 1 {
+		t.Fatalf("locked recheck deleted=%d, want control only", deleted)
+	}
+	if got := retentionTaskRunCount(t, db, target.ID); got != 1 {
+		t.Fatalf("target run %d was deleted after same-transaction point insertion, count=%d", target.ID, got)
+	}
+	if got := retentionTaskRunCount(t, db, control.ID); got != 0 {
+		t.Fatalf("control run %d survived locked recheck cleanup, count=%d", control.ID, got)
+	}
+	assertRetentionRecoveryPointProducer(t, db, fmt.Sprintf("%032x", uint64(target.ID)), target.ID)
+}
+
+func runTaskRunRetentionRecoveryPointReverseControls(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	t.Run("table-exists-without-point", func(t *testing.T) {
+		taskEntity := seedRetentionTask(t, db)
+		run := seedExpiredHistoryRun(t, db, taskEntity, time.Now().UTC().Add(-72*time.Hour))
+		deleted, err := retentionManager(db).cleanupExpiredTaskRunBatch(time.Now().UTC().Add(-24 * time.Hour))
+		if err != nil {
+			t.Fatalf("cleanup without recovery point: %v", err)
+		}
+		if deleted != 1 || retentionTaskRunCount(t, db, run.ID) != 0 {
+			t.Fatalf("unreferenced run count=%d deleted=%d, want deleted", retentionTaskRunCount(t, db, run.ID), deleted)
+		}
+	})
+	t.Run("point-with-null-producer", func(t *testing.T) {
+		taskEntity := seedRetentionTask(t, db)
+		run := seedExpiredHistoryRun(t, db, taskEntity, time.Now().UTC().Add(-72*time.Hour))
+		point := seedRetentionRecoveryPointReference(
+			t, db, fmt.Sprintf("%032x", uint64(run.ID)+0x1000), taskEntity.ID, taskEntity.NodeID,
+			nil, backupasset.PointNativeSnapshot, backupasset.RecoveryPointCommitted, nil,
+		)
+		deleted, err := retentionManager(db).cleanupExpiredTaskRunBatch(time.Now().UTC().Add(-24 * time.Hour))
+		if err != nil {
+			t.Fatalf("cleanup with NULL producer recovery point: %v", err)
+		}
+		if deleted != 1 || retentionTaskRunCount(t, db, run.ID) != 0 {
+			t.Fatalf("NULL-producer control run count=%d deleted=%d, want deleted", retentionTaskRunCount(t, db, run.ID), deleted)
+		}
+		var storedPoint model.RecoveryPoint
+		if err := db.First(&storedPoint, point.ID).Error; err != nil {
+			t.Fatalf("NULL-producer recovery point was deleted: %v", err)
+		}
+		if storedPoint.ProducingTaskRunID != nil {
+			t.Fatalf("NULL-producer recovery point run reference=%v, want nil", storedPoint.ProducingTaskRunID)
+		}
+	})
+	t.Run("retired-mutable-point-with-null-producer", func(t *testing.T) {
+		taskEntity := seedRetentionTask(t, db)
+		run := seedExpiredHistoryRun(t, db, taskEntity, time.Now().UTC().Add(-72*time.Hour))
+		point := seedRetentionRecoveryPointReference(
+			t, db, fmt.Sprintf("%032x", uint64(run.ID)+0x2000), taskEntity.ID, taskEntity.NodeID,
+			nil, backupasset.PointMutableHead, backupasset.RecoveryPointRetired, nil,
+		)
+		deleted, err := retentionManager(db).cleanupExpiredTaskRunBatch(time.Now().UTC().Add(-24 * time.Hour))
+		if err != nil {
+			t.Fatalf("cleanup with retired mutable NULL-producer recovery point: %v", err)
+		}
+		if deleted != 1 || retentionTaskRunCount(t, db, run.ID) != 0 {
+			t.Fatalf("retired mutable NULL-producer control run count=%d deleted=%d, want deleted", retentionTaskRunCount(t, db, run.ID), deleted)
+		}
+		var storedPoint model.RecoveryPoint
+		if err := db.First(&storedPoint, point.ID).Error; err != nil {
+			t.Fatalf("retired mutable NULL-producer recovery point was deleted: %v", err)
+		}
+		if storedPoint.ProducingTaskRunID != nil {
+			t.Fatalf("retired mutable NULL-producer recovery point run reference=%v, want nil", storedPoint.ProducingTaskRunID)
+		}
+		if storedPoint.Semantics != string(backupasset.PointMutableHead) ||
+			storedPoint.State != string(backupasset.RecoveryPointRetired) ||
+			storedPoint.LineageJSON != fmt.Sprintf(`{"producing_task_id":%d}`, taskEntity.ID) ||
+			storedPoint.RetiredAt == nil ||
+			storedPoint.RetirementReason == nil ||
+			*storedPoint.RetirementReason != string(backupasset.RetirementWithdrawn) ||
+			storedPoint.EncryptedProviderLocator != "" ||
+			storedPoint.EncryptedRollbackLocator != "retention-rollback-locator" {
+			t.Fatalf("retired mutable NULL-producer recovery point metadata mismatch: %+v", storedPoint)
+		}
+	})
+	t.Run("point-references-another-run", func(t *testing.T) {
+		producerTask := seedRetentionTask(t, db)
+		producer := seedExpiredHistoryRun(t, db, producerTask, time.Now().UTC().Add(-72*time.Hour))
+		seedRetentionRecoveryPoint(t, db, producer, backupasset.PointNativeSnapshot, backupasset.RecoveryPointCommitted, nil)
+		controlTask := seedRetentionTask(t, db)
+		control := seedExpiredHistoryRun(t, db, controlTask, time.Now().UTC().Add(-72*time.Hour))
+		deleted, err := retentionManager(db).cleanupExpiredTaskRunBatch(time.Now().UTC().Add(-24 * time.Hour))
+		if err != nil {
+			t.Fatalf("cleanup with point referencing another run: %v", err)
+		}
+		if deleted != 1 || retentionTaskRunCount(t, db, control.ID) != 0 {
+			t.Fatalf("other-run control count=%d deleted=%d, want deleted", retentionTaskRunCount(t, db, control.ID), deleted)
+		}
+		if retentionTaskRunCount(t, db, producer.ID) != 1 {
+			t.Fatalf("referenced other producer run %d was deleted", producer.ID)
+		}
+		assertRetentionRecoveryPointProducer(t, db, fmt.Sprintf("%032x", uint64(producer.ID)), producer.ID)
+	})
 }
 
 func installTaskRunCreateGate(t *testing.T, db *gorm.DB, taskID uint, triggerType string) (<-chan struct{}, func(), func()) {

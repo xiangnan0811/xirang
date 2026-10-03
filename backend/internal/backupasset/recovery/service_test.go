@@ -2831,7 +2831,14 @@ func TestRecoveryAuthorizationReceiptRollbackBeforeCommit(t *testing.T) {
 		AuthorizationReceiptExecute,
 	} {
 		t.Run(string(operation), func(t *testing.T) {
-			fixture := recoveryServiceTestAuthorizationFixture(t, operation, false)
+			var fixture *authorizationReceiptServiceFixture
+			var request RecoveryAuthorizationRequest
+			if operation == AuthorizationReceiptDeleteAuthorize {
+				fixture, request = newExactMirrorDeleteAuthorizationFixture(t, false)
+			} else {
+				fixture = recoveryServiceTestAuthorizationFixture(t, operation, false)
+				request = fixture.request
+			}
 			before := fixture.effectCounts(t)
 			injected := errors.New("injected authorization receipt before-commit failure")
 			fixture.service.beforePersist = func(stage authorizationPersistStage) error {
@@ -2840,7 +2847,7 @@ func TestRecoveryAuthorizationReceiptRollbackBeforeCommit(t *testing.T) {
 				}
 				return nil
 			}
-			if _, err := fixture.service.Authorize(context.Background(), fixture.request); !errors.Is(err, injected) {
+			if _, err := fixture.service.Authorize(context.Background(), request); !errors.Is(err, injected) {
 				t.Fatalf("%s rollback error=%v, want injected", operation, err)
 			}
 			if got := fixture.effectCounts(t); got != before {
@@ -3210,7 +3217,14 @@ func TestRecoveryAuthorizationReceiptRollbackBeforeCommitPostgres(t *testing.T) 
 		AuthorizationReceiptExecute,
 	} {
 		t.Run(string(operation), func(t *testing.T) {
-			fixture := newAuthorizationReceiptPostgresServiceFixture(t, operation)
+			var fixture *authorizationReceiptServiceFixture
+			var request RecoveryAuthorizationRequest
+			if operation == AuthorizationReceiptDeleteAuthorize {
+				fixture, request = newExactMirrorDeleteAuthorizationFixture(t, true)
+			} else {
+				fixture = newAuthorizationReceiptPostgresServiceFixture(t, operation)
+				request = fixture.request
+			}
 			before := fixture.effectCounts(t)
 			injected := errors.New("injected PostgreSQL authorization receipt rollback failure")
 			fixture.service.beforePersist = func(stage authorizationPersistStage) error {
@@ -3219,7 +3233,7 @@ func TestRecoveryAuthorizationReceiptRollbackBeforeCommitPostgres(t *testing.T) 
 				}
 				return nil
 			}
-			if _, err := fixture.service.Authorize(context.Background(), fixture.request); !errors.Is(err, injected) {
+			if _, err := fixture.service.Authorize(context.Background(), request); !errors.Is(err, injected) {
 				t.Fatalf("PostgreSQL %s rollback error=%v, want injected", operation, err)
 			}
 			if got := fixture.effectCounts(t); got != before {
@@ -3292,28 +3306,12 @@ func testRecoveryAuthorizationReceiptReaperHandlesAllEffectKinds(t *testing.T, p
 	}
 	for _, operation := range operations {
 		t.Run(string(operation), func(t *testing.T) {
-			fixture := recoveryServiceTestAuthorizationFixture(t, operation, postgres)
-			result, err := fixture.service.Authorize(context.Background(), fixture.request)
+			fixture, request := newAuthorizationReceiptReaperFixture(t, operation, postgres)
+			result, err := fixture.service.Authorize(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
-			expired := time.Now().UTC().Add(-time.Hour)
-			if err := fixture.db.Model(&model.BackupAssetRecoveryEvidence{}).
-				Where("id = ?", result.ReceiptID).
-				Updates(map[string]any{
-					"proof_expires_at":              expired.Add(-2 * time.Hour),
-					"replay_expires_at":             expired,
-					"presenting_session_expires_at": expired.Add(time.Hour),
-				}).Error; err != nil {
-				t.Fatal(err)
-			}
-			if result.GrantID != "" {
-				if err := fixture.db.Model(&model.BackupAssetRecoveryGrant{}).
-					Where("id = ?", result.GrantID).
-					Update("expires_at", expired).Error; err != nil {
-					t.Fatal(err)
-				}
-			}
+			assertAuthorizationReceiptExpiredAtDatabaseClock(t, fixture, result)
 			removed, err := fixture.service.ReapAuthorizationReceipts(context.Background(), 1000)
 			if err != nil {
 				t.Fatal(err)
@@ -3331,6 +3329,163 @@ func testRecoveryAuthorizationReceiptReaperHandlesAllEffectKinds(t *testing.T, p
 			}
 		})
 	}
+}
+
+func newExactMirrorDeleteAuthorizationFixture(
+	t *testing.T,
+	postgres bool,
+) (*authorizationReceiptServiceFixture, RecoveryAuthorizationRequest) {
+	t.Helper()
+	var execution exactMirrorOrdinaryExecutionFixture
+	if postgres {
+		execution = newExactMirrorOrdinaryExecutionPostgresMigrationFixture(t)
+	} else {
+		execution = newExactMirrorOrdinaryExecutionFixture(t)
+	}
+	return exactMirrorDeleteAuthorizationRequestFromExecution(t, execution)
+}
+
+func exactMirrorDeleteAuthorizationRequestFromExecution(
+	t *testing.T,
+	execution exactMirrorOrdinaryExecutionFixture,
+) (*authorizationReceiptServiceFixture, RecoveryAuthorizationRequest) {
+	t.Helper()
+	pauseSource := newRecoveryRepositoryContractSource(t, execution.serviceFixture.db, execution.jobID)
+	if err := execution.coordinator.ExecuteClaim(context.Background(), execution.claim, pauseSource, ""); err != nil {
+		t.Fatalf("pause exact-mirror execution for authorization receipt: %v", err)
+	}
+	var job model.BackupAssetRecoveryJob
+	if err := execution.serviceFixture.db.Where("id = ?", execution.jobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	var checkpoints []model.BackupAssetRecoveryCheckpoint
+	if err := execution.serviceFixture.db.Where("job_id = ?", execution.jobID).
+		Order("sequence ASC").Find(&checkpoints).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints) == 0 ||
+		checkpoints[len(checkpoints)-1].Phase != string(CheckpointPhaseDeleteAuthorityRequired) {
+		t.Fatalf("exact-mirror delete authority was not durably paused: %+v", checkpoints)
+	}
+	required := checkpoints[len(checkpoints)-1]
+	request := execution.serviceFixture.request
+	request.Operation = AuthorizationReceiptDeleteAuthorize
+	request.Category = AuthorizationReceiptCategoryExactMirrorDelete
+	request.Endpoint = recoveryDeleteAuthorizationEndpoint
+	request.IdempotencyKey = "authorization-receipt-exact-mirror-delete-key"
+	request.Proof.JTI = "FAKE_RECOVERY_AUTHORIZATION_RECEIPT_EXACT_DELETE_PROOF"
+	request.ExpectedPlanRevision = jobPlanTransitionRevision(t, execution.serviceFixture.db, job.PlanID)
+	request.PreflightID = ""
+	request.JobID = execution.jobID
+	request.CheckpointID = required.ID
+	request.AttemptID = execution.claim.AttemptID
+	request.GrantID = ""
+	request.Reason = "FAKE_RECOVERY_AUTHORIZATION_RECEIPT_EXACT_DELETE_REASON"
+	request.GrantSecret = mustAuthorizationReceiptSecretForFixture()
+	return execution.serviceFixture, request
+}
+
+func newExpiringExactMirrorDeleteAuthorizationFixture(
+	t *testing.T,
+	postgres bool,
+) (*authorizationReceiptServiceFixture, RecoveryAuthorizationRequest) {
+	t.Helper()
+	fixture, request := newExactMirrorDeleteAuthorizationFixture(t, postgres)
+	configureAuthorizationReceiptExpiry(t, fixture, &request)
+	return fixture, request
+}
+
+func configureAuthorizationReceiptExpiry(
+	t *testing.T,
+	fixture *authorizationReceiptServiceFixture,
+	request *RecoveryAuthorizationRequest,
+) {
+	t.Helper()
+	// Keep the request valid at authorization time, then let the database clock
+	// make the newly inserted receipt eligible. This avoids mutating immutable
+	// preflight or receipt timestamps in the production-migration fixture.
+	now := fixture.now.UTC()
+	request.Proof.ExpiresAt = now.Add(4 * time.Second)
+	request.Session.ExpiresAt = now.Add(10 * time.Second)
+	fixture.dependencies.ReceiptReplayTTL = 8 * time.Second
+	fixture.dependencies.WriteGrantTTL = 6 * time.Second
+	fixture.dependencies.DeleteGrantTTL = 6 * time.Second
+	service, err := NewAuthorizationService(fixture.dependencies)
+	if err != nil {
+		t.Fatalf("rebuild authorization service with short expiry clock: %v", err)
+	}
+	fixture.service = service
+}
+
+func assertAuthorizationReceiptExpiredAtDatabaseClock(
+	t *testing.T,
+	fixture *authorizationReceiptServiceFixture,
+	result RecoveryAuthorizationResult,
+) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var receiptCount int64
+		if err := fixture.db.Model(&model.BackupAssetRecoveryEvidence{}).
+			Where(
+				"id = ? AND proof_expires_at <= CURRENT_TIMESTAMP AND replay_expires_at <= CURRENT_TIMESTAMP AND presenting_session_expires_at <= CURRENT_TIMESTAMP",
+				result.ReceiptID,
+			).Count(&receiptCount).Error; err != nil {
+			t.Fatal(err)
+		}
+		grantExpired := true
+		if result.GrantID != "" {
+			var grantCount int64
+			if err := fixture.db.Model(&model.BackupAssetRecoveryGrant{}).
+				Where("id = ? AND expires_at <= CURRENT_TIMESTAMP", result.GrantID).
+				Count(&grantCount).Error; err != nil {
+				t.Fatal(err)
+			}
+			grantExpired = grantCount == 1
+		}
+		if receiptCount == 1 && grantExpired {
+			return
+		}
+		if time.Now().After(deadline) {
+			if result.GrantID == "" {
+				t.Fatalf("receipt %s deadlines are not expired at database clock", result.ReceiptID)
+			}
+			t.Fatalf("receipt %s or grant %s deadline is not expired at database clock",
+				result.ReceiptID, result.GrantID)
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		<-timer.C
+	}
+}
+
+func newAuthorizationReceiptReaperFixture(
+	t *testing.T,
+	operation AuthorizationReceiptOperation,
+	postgres bool,
+) (*authorizationReceiptServiceFixture, RecoveryAuthorizationRequest) {
+	t.Helper()
+	if operation == AuthorizationReceiptDeleteAuthorize {
+		return newExpiringExactMirrorDeleteAuthorizationFixture(t, postgres)
+	}
+
+	var fixture *authorizationReceiptServiceFixture
+	if operation == AuthorizationReceiptExecute {
+		if postgres {
+			db := newAuthorizationReceiptPostgresScopedDB(t)
+			fixture = newAuthorizationReceiptServiceFixtureOnDBConfigured(
+				t, db, operation, false, false, true, 0, nil,
+			)
+		} else {
+			fixture = newAuthorizationReceiptServiceFixtureConfigured(t, operation, false, false)
+		}
+	} else {
+		fixture = recoveryServiceTestAuthorizationFixture(t, operation, postgres)
+	}
+	configureAuthorizationReceiptExpiry(t, fixture, &fixture.request)
+	if operation == AuthorizationReceiptExecute {
+		fixture.prepareOperation(t, operation)
+	}
+	return fixture, fixture.request
 }
 
 func testRecoveryAuthorizationReceiptReaperSkipsLiveGrantBeforeLimit(

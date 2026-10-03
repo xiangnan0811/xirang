@@ -1416,6 +1416,11 @@ func TestResolveLifecycleDeletePointResticIdentityClosure(t *testing.T) {
 func newResticLifecycleDeleteFixture(t *testing.T) (*publicationFixture, *Service, model.RecoveryPoint) {
 	t.Helper()
 	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
+	return seedResticLifecycleDeleteFixture(t, fixture)
+}
+
+func seedResticLifecycleDeleteFixture(t *testing.T, fixture *publicationFixture) (*publicationFixture, *Service, model.RecoveryPoint) {
+	t.Helper()
 	fixture.connectExactResticBinding(t)
 	native := strings.Repeat("c", 64)
 	identity := *fixture.repository.RepositoryIdentity

@@ -61,6 +61,42 @@ func TestPrepareManagedRsyncCreatesVersionedAttemptAndChildLease(t *testing.T) {
 		t.Fatalf("managed Rsync child leases=%+v", leases)
 	}
 }
+
+func TestPrepareManagedRsyncRejectsExpiredTerminalTaskRunWithoutPublication(t *testing.T) {
+	fixture := newRsyncPublicationFixture(t)
+	startedAt := fixture.now.Add(-72 * time.Hour)
+	finishedAt := startedAt.Add(time.Minute)
+	if err := fixture.db.Model(&model.TaskRun{}).Where("id = ?", fixture.taskRun.ID).Updates(map[string]any{
+		"status":      model.TaskRunStatusSuccess,
+		"started_at":  startedAt,
+		"finished_at": finishedAt,
+		"created_at":  startedAt,
+		"updated_at":  finishedAt,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.taskRun.Status = model.TaskRunStatusSuccess
+	fixture.taskRun.StartedAt = &startedAt
+	fixture.taskRun.FinishedAt = &finishedAt
+	fixture.taskRun.CreatedAt = startedAt
+	fixture.taskRun.UpdatedAt = finishedAt
+
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if execution != nil || !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("prepare terminal managed Rsync TaskRun execution=%v err=%v, want nil and ErrConflict", execution, err)
+	}
+	var points, leases int64
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Count(&points).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).Count(&leases).Error; err != nil {
+		t.Fatal(err)
+	}
+	if points != 0 || leases != 0 {
+		t.Fatalf("terminal managed Rsync prepare created points=%d leases=%d, want zero", points, leases)
+	}
+}
+
 func TestPrepareManagedRsyncLocksRepositoryBeforeDependentRows(t *testing.T) {
 	fixture := newRsyncPublicationFixture(t)
 	var lockedTables []string
