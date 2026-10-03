@@ -6,6 +6,7 @@ import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { AlertDeliveryStats } from "@/types/domain";
+import type { TaskFailureSummary } from "@/lib/api/tasks-api";
 import { NotificationsPage } from "./notifications-page";
 import { AlertCenter } from "./notifications/alert-center";
 
@@ -29,6 +30,7 @@ const {
   mockTriggerTask,
   mockRequestTaskManualTriggerCredentialGrant,
   mockGetAlerts,
+  mockGetTaskFailureSummary,
   useStepUpActionMock,
   oneShotStepUpOptions,
   authRef,
@@ -52,6 +54,7 @@ const {
     mockTriggerTask: vi.fn(),
     mockRequestTaskManualTriggerCredentialGrant: vi.fn(),
     mockGetAlerts: vi.fn(),
+    mockGetTaskFailureSummary: vi.fn(),
     useStepUpActionMock: stepUpHookMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
     authRef: { current: { token: "test-token" as string | null } },
@@ -130,6 +133,7 @@ vi.mock("@/lib/api/client", () => ({
     triggerTask: mockTriggerTask,
     requestTaskManualTriggerCredentialGrant: mockRequestTaskManualTriggerCredentialGrant,
     getAlerts: mockGetAlerts,
+    getTaskFailureSummary: mockGetTaskFailureSummary,
     getAlert: vi.fn().mockRejectedValue(new Error("not found")),
     // Lazy-fetched for the "+N 条同类" badge when a delivery panel opens.
     // Default resolves with count=1 so badge never renders in existing
@@ -222,6 +226,7 @@ function setupDefaultMocks() {
   mockTriggerTask.mockResolvedValue({ runId: 1 });
   mockRequestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 1, status: "active" });
   mockGetAlerts.mockResolvedValue([]);
+  mockGetTaskFailureSummary.mockResolvedValue({ failedTasks: 0, windowHours: 24 });
 }
 
 /* ---------- context builder ---------- */
@@ -353,6 +358,28 @@ function deliveryStatsResult(partial: Pick<AlertDeliveryStats, "totalSent" | "to
   };
 }
 
+function failureStatParts() {
+  const card = screen.getByText("24h 失败任务").closest("[data-tone]");
+  if (!(card instanceof HTMLElement)) {
+    throw new Error("missing failed task stat card");
+  }
+  const value = card.querySelector(".tabular-nums");
+  if (!(value instanceof HTMLElement)) {
+    throw new Error("missing failed task stat value");
+  }
+  return { card, value };
+}
+
+function deferredFailureSummaries() {
+  const calls: Array<Deferred<TaskFailureSummary>> = [];
+  mockGetTaskFailureSummary.mockImplementation(() => {
+    const deferred = createDeferred<TaskFailureSummary>();
+    calls.push(deferred);
+    return deferred.promise;
+  });
+  return calls;
+}
+
 function deliveryStatParts() {
   const card = screen.getByText("24h 投递失败").closest("[data-tone]");
   if (!(card instanceof HTMLElement)) {
@@ -398,6 +425,7 @@ describe("NotificationsPage", () => {
     useStepUpActionMock.lastAction = undefined;
     useStepUpActionMock.lastOptions = undefined;
     mockGetAlerts.mockReset();
+    mockGetTaskFailureSummary.mockReset();
     setupDefaultMocks();
     createContext();
   });
@@ -842,6 +870,244 @@ describe("NotificationsPage", () => {
     expect(deliveryStatParts().card).not.toHaveAttribute("data-tone", "success");
     expect(deliveryHero()).not.toHaveTextContent("4 条投递失败");
     expect(deliveryHero()).toHaveTextContent("加载中...");
+  });
+
+  it("失败任务摘要与当前任务状态不一致时以摘要为准", async () => {
+    mockGetTaskFailureSummary.mockResolvedValue({ failedTasks: 0, windowHours: 24 });
+    createContext();
+    render(<NotificationsPage />);
+
+    await waitFor(() => {
+      expect(failureStatParts().value.textContent).toBe("0");
+    });
+    const { card } = failureStatParts();
+    expect(card).toHaveAttribute("data-tone", "info");
+    expect(card).toHaveTextContent("现存执行历史中，过去 24 小时内失败过的去重任务数；清理或删除历史后可能减少。");
+    expect(failureStatParts().value.textContent).not.toBe("1");
+    expect(screen.queryByRole("button", { name: "重试失败任务统计" })).not.toBeInTheDocument();
+    expect(tasksRef.current.refreshTasks).not.toHaveBeenCalled();
+    expect(integrationsRef.current.refreshIntegrations).toHaveBeenCalled();
+  });
+
+  it("失败任务摘要未返回时显示加载和破折号", async () => {
+    const calls = deferredFailureSummaries();
+    createContext();
+    render(<NotificationsPage />);
+
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("加载中...");
+    expect(failureStatParts().card).not.toHaveAttribute("data-tone", "warning");
+    expect(screen.queryByRole("button", { name: "重试失败任务统计" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().value.textContent).not.toBe("0");
+    expect(failureStatParts().value.textContent).not.toBe("1");
+  });
+
+  it("失败任务摘要失败时显示错误、破折号和可操作的重试按钮", async () => {
+    const calls = deferredFailureSummaries();
+    createContext();
+    render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+
+    await act(async () => {
+      calls[0]?.reject(new Error("summary down"));
+    });
+    await waitFor(() => {
+      expect(failureStatParts().card).toHaveAttribute("data-tone", "warning");
+    });
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().value.textContent).not.toBe("1");
+    expect(failureStatParts().card).toHaveTextContent("失败任务统计加载失败");
+    const retry = screen.getByRole("button", { name: "重试失败任务统计" });
+    expect(retry).toHaveTextContent("重试");
+    expect(retry).toBeEnabled();
+  });
+
+  it("重试失败任务摘要成功后显示新数字", async () => {
+    const user = userEvent.setup();
+    const calls = deferredFailureSummaries();
+    createContext();
+    render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    await act(async () => {
+      calls[0]?.reject(new Error("summary down"));
+    });
+    await screen.findByRole("button", { name: "重试失败任务统计" });
+
+    await user.click(screen.getByRole("button", { name: "重试失败任务统计" }));
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("加载中...");
+    expect(screen.queryByRole("button", { name: "重试失败任务统计" })).not.toBeInTheDocument();
+    expect(calls.length).toBe(2);
+
+    await act(async () => {
+      calls[1]?.resolve({ failedTasks: 5, windowHours: 24 });
+    });
+    await waitFor(() => {
+      expect(failureStatParts().value.textContent).toBe("5");
+    });
+    expect(failureStatParts().card).toHaveAttribute("data-tone", "info");
+    expect(failureStatParts().card).not.toHaveTextContent("失败任务统计加载失败");
+    expect(screen.queryByRole("button", { name: "重试失败任务统计" })).not.toBeInTheDocument();
+  });
+
+  it("刷新后立即隐藏上一轮失败任务数字", async () => {
+    const calls = deferredFailureSummaries();
+    createContext();
+    const view = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    await act(async () => {
+      calls[0]?.resolve({ failedTasks: 3, windowHours: 24 });
+    });
+    await waitFor(() => {
+      expect(failureStatParts().value.textContent).toBe("3");
+    });
+
+    createContext({ refreshVersion: 1 });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("加载中...");
+    expect(failureStatParts().card).not.toHaveTextContent("现存执行历史中，过去 24 小时内失败过的去重任务数；清理或删除历史后可能减少。");
+    expect(calls.length).toBe(2);
+
+    await act(async () => {
+      calls[1]?.resolve({ failedTasks: 1, windowHours: 24 });
+    });
+    await waitFor(() => {
+      expect(failureStatParts().value.textContent).toBe("1");
+    });
+  });
+
+  it("失败任务摘要在 token A→B→A 与迟到结果下不提交旧值", async () => {
+    const calls = deferredFailureSummaries();
+    authRef.current = { token: "token-a" };
+    createContext();
+    const view = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+
+    authRef.current = { token: "token-b" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(failureStatParts().value.textContent).toBe("—");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+
+    authRef.current = { token: "token-a" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(failureStatParts().value.textContent).toBe("—");
+    await waitFor(() => {
+      expect(calls.length).toBe(3);
+    });
+
+    await act(async () => {
+      calls[0]?.resolve({ failedTasks: 8, windowHours: 24 });
+    });
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("加载中...");
+
+    await act(async () => {
+      calls[1]?.reject(new Error("stale token B"));
+    });
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("加载中...");
+    expect(failureStatParts().card).not.toHaveTextContent("失败任务统计加载失败");
+    expect(screen.queryByRole("button", { name: "重试失败任务统计" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      calls[2]?.resolve({ failedTasks: 2, windowHours: 24 });
+    });
+    await waitFor(() => {
+      expect(failureStatParts().value.textContent).toBe("2");
+    });
+    expect(failureStatParts().value.textContent).not.toBe("8");
+  });
+
+  it("退出登录后立即隐藏失败任务数字且不提交迟到结果", async () => {
+    const calls = deferredFailureSummaries();
+    createContext();
+    const view = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    await act(async () => {
+      calls[0]?.resolve({ failedTasks: 6, windowHours: 24 });
+    });
+    await waitFor(() => {
+      expect(failureStatParts().value.textContent).toBe("6");
+    });
+
+    createContext({ refreshVersion: 1 });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+
+    authRef.current = { token: null };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("暂无可用的执行历史统计");
+    expect(mockGetTaskFailureSummary).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      calls[1]?.resolve({ failedTasks: 4, windowHours: 24 });
+    });
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("暂无可用的执行历史统计");
+    expect(failureStatParts().card).not.toHaveTextContent("失败任务统计加载失败");
+    expect(mockGetTaskFailureSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("无 token 时不请求失败任务摘要并显示不可用", () => {
+    authRef.current = { token: null };
+    createContext();
+    render(<NotificationsPage />);
+
+    expect(mockGetTaskFailureSummary).not.toHaveBeenCalled();
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("暂无可用的执行历史统计");
+    expect(failureStatParts().card).not.toHaveTextContent("加载中...");
+    expect(screen.queryByRole("button", { name: "重试失败任务统计" })).not.toBeInTheDocument();
+  });
+
+  it("卸载后迟到的成功或失败结果不会显示在新挂载上", async () => {
+    const calls = deferredFailureSummaries();
+    const first = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    first.unmount();
+    await act(async () => {
+      calls[0]?.resolve({ failedTasks: 9, windowHours: 24 });
+    });
+
+    const second = render(<NotificationsPage />);
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("加载中...");
+    expect(failureStatParts().value.textContent).not.toBe("9");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+    second.unmount();
+    await act(async () => {
+      calls[1]?.reject(new Error("late reject"));
+    });
+
+    render(<NotificationsPage />);
+    expect(failureStatParts().value.textContent).toBe("—");
+    expect(failureStatParts().card).toHaveTextContent("加载中...");
+    expect(failureStatParts().card).not.toHaveTextContent("失败任务统计加载失败");
+    expect(failureStatParts().value.textContent).not.toBe("9");
   });
 
   // 注意：通知方式（IntegrationManager）相关测试已移至 settings-page.channels 中

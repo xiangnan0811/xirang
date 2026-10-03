@@ -94,3 +94,31 @@ func TestTaskStatisticsRouteUsesTasksReadAuthorization(t *testing.T) {
 		t.Fatalf("guest status=%d body=%s", response.Code, response.Body.String())
 	}
 }
+
+func performTaskFailureSummaryRouterRequest(t *testing.T, router *gin.Engine, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/failure-summary", nil)
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	return response
+}
+
+func TestTaskFailureSummaryRouteUsesTasksReadAuthorization(t *testing.T) {
+	fixture := setupTaskStatisticsRouterRBACFixture(t)
+
+	if response := performTaskFailureSummaryRouterRequest(t, fixture.router, ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		response := performTaskFailureSummaryRouterRequest(t, fixture.router, fixture.tokens[role])
+		if response.Code != http.StatusOK {
+			t.Fatalf("role=%s status=%d body=%s", role, response.Code, response.Body.String())
+		}
+	}
+	if response := performTaskFailureSummaryRouterRequest(t, fixture.router, fixture.tokens["guest"]); response.Code != http.StatusForbidden {
+		t.Fatalf("guest status=%d body=%s", response.Code, response.Body.String())
+	}
+}

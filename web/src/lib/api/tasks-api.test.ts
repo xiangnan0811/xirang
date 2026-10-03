@@ -800,3 +800,63 @@ describe("task statistics query", () => {
     })).rejects.toMatchObject({ name: "TaskStatisticPayloadError" });
   });
 });
+
+describe("task failure summary", () => {
+  const fetchMock = vi.fn();
+  const api = createTasksApi();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function envelope(data: unknown) {
+    return createMockResponse(200, JSON.stringify({ code: 200, message: "ok", data }));
+  }
+
+  it("maps a valid zero and nonzero safe-integer summary", async () => {
+    fetchMock.mockResolvedValueOnce(envelope({ failed_tasks: 0, window_hours: 24 }));
+    await expect(api.getTaskFailureSummary("token")).resolves.toEqual({
+      failedTasks: 0,
+      windowHours: 24,
+    });
+
+    fetchMock.mockResolvedValueOnce(envelope({ failed_tasks: 3, window_hours: 24 }));
+    await expect(api.getTaskFailureSummary("token")).resolves.toEqual({
+      failedTasks: 3,
+      windowHours: 24,
+    });
+
+    fetchMock.mockResolvedValueOnce(envelope({ failed_tasks: Number.MAX_SAFE_INTEGER, window_hours: 24 }));
+    await expect(api.getTaskFailureSummary("token")).resolves.toEqual({
+      failedTasks: Number.MAX_SAFE_INTEGER,
+      windowHours: 24,
+    });
+  });
+
+  it.each([
+    ["null", null],
+    ["array", []],
+    ["missing failed_tasks", { window_hours: 24 }],
+    ["negative failed_tasks", { failed_tasks: -1, window_hours: 24 }],
+    ["fractional failed_tasks", { failed_tasks: 1.5, window_hours: 24 }],
+    ["string failed_tasks", { failed_tasks: "2", window_hours: 24 }],
+    ["string zero failed_tasks", { failed_tasks: "0", window_hours: 24 }],
+    ["unsafe integer failed_tasks", { failed_tasks: Number.MAX_SAFE_INTEGER + 1, window_hours: 24 }],
+    ["missing window_hours", { failed_tasks: 1 }],
+    ["window_hours not 24", { failed_tasks: 1, window_hours: 23 }],
+    ["fractional window_hours", { failed_tasks: 1, window_hours: 24.5 }],
+    ["string window_hours", { failed_tasks: 0, window_hours: "24" }],
+    ["camelCase aliases", { failedTasks: 1, windowHours: 24 }],
+  ])("rejects %s without coercing it to zero", async (_label, data) => {
+    fetchMock.mockResolvedValueOnce(envelope(data));
+    await expect(api.getTaskFailureSummary("token")).rejects.toMatchObject({
+      name: "TaskFailureSummaryPayloadError",
+      message: "invalid task failure summary payload",
+    });
+  });
+});

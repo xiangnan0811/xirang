@@ -217,6 +217,9 @@ jobs:
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch idempotency contract' ./internal/api/handlers '^TestBatchCreationRollbackAndConcurrentIdempotency$'
       - name: Run PostgreSQL policy configuration parity
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL policy configuration parity' ./internal/api/handlers '^TestR306PolicyCreateValuesAndSchedulesAcrossDatabases$'
+      - name: Run PostgreSQL task failure summary
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL task failure summary' ./internal/api/handlers '^TestTaskFailureSummaryPostgres$'
+
 
       - name: Run PostgreSQL general API surface parity
         run: go test ./internal/api -run '^TestGeneralSurfacePostgres$' -count=1

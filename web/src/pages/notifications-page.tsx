@@ -1,30 +1,29 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useSharedContext } from "@/context/shared-context.hooks";
-import { useTasksContext } from "@/context/tasks-context.hooks";
 import { useAlertsContext } from "@/context/alerts-context.hooks";
 import { useIntegrationsContext } from "@/context/integrations-context.hooks";
 import { DeliveryStatsCard } from "@/pages/notifications-page.delivery-stats";
 import { AlertCenter } from "@/pages/notifications/alert-center";
 import { PageHero } from "@/components/ui/page-hero";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import type { TaskFailureSummary } from "@/lib/api/tasks-api";
 
 export function NotificationsPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const { globalSearch, setGlobalSearch, refreshVersion } = useSharedContext();
-  const { tasks, refreshTasks } = useTasksContext();
   const { fetchAlertDeliveryStats } = useAlertsContext();
   const { integrations, refreshIntegrations } = useIntegrationsContext();
 
   useEffect(() => {
     void refreshIntegrations();
-    void refreshTasks();
-  }, [refreshIntegrations, refreshTasks]);
+  }, [refreshIntegrations]);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightAlertId = searchParams.get("alert");
@@ -75,8 +74,86 @@ export function NotificationsPage() {
     };
   }, [fetchAlertDeliveryStats, token, refreshVersion]);
 
+  const [retryVersion, setRetryVersion] = useState(0);
+  const requestKey = useMemo(
+    () => ({ token, refreshVersion, retryVersion }),
+    [token, refreshVersion, retryVersion],
+  );
+  const [failureSummary, setFailureSummary] = useState<
+    | { key: typeof requestKey; status: "success"; data: TaskFailureSummary }
+    | { key: typeof requestKey; status: "error" }
+    | null
+  >(null);
+
+  useEffect(() => {
+    const key = requestKey;
+    if (!key.token) {
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    apiClient
+      .getTaskFailureSummary(key.token, { signal: controller.signal })
+      .then((data) => {
+        if (!active || controller.signal.aborted) {
+          return;
+        }
+        setFailureSummary({ key, status: "success", data });
+      })
+      .catch(() => {
+        if (!active || controller.signal.aborted) {
+          return;
+        }
+        setFailureSummary({ key, status: "error" });
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [requestKey]);
+
+  let failureSummaryPhase: "unavailable" | "loading" | "success" | "error";
+  let failureSummaryValue: number | "—" = "—";
+  if (!token) {
+    failureSummaryPhase = "unavailable";
+  } else if (!failureSummary || failureSummary.key !== requestKey) {
+    failureSummaryPhase = "loading";
+  } else if (failureSummary.status === "error") {
+    failureSummaryPhase = "error";
+  } else {
+    failureSummaryPhase = "success";
+    failureSummaryValue = failureSummary.data.failedTasks;
+  }
+  let failureSummaryDescription: ReactNode;
+  if (failureSummaryPhase === "success") {
+    failureSummaryDescription = (
+      <span className="block max-w-full break-words">{t("notifications.statFailedTasks24hDesc")}</span>
+    );
+  } else if (failureSummaryPhase === "error") {
+    failureSummaryDescription = (
+      <span className="flex min-w-0 max-w-full flex-col items-start gap-2">
+        <span className="max-w-full break-words">{t("notifications.taskFailureStatsLoadFailed")}</span>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="max-w-full"
+          aria-label={t("notifications.taskFailureStatsRetry")}
+          onClick={() => setRetryVersion((version) => version + 1)}
+        >
+          {t("common.retry")}
+        </Button>
+      </span>
+    );
+  } else if (failureSummaryPhase === "loading") {
+    failureSummaryDescription = t("common.loading");
+  } else {
+    failureSummaryDescription = (
+      <span className="block max-w-full break-words">{t("notifications.taskFailureStatsUnavailable")}</span>
+    );
+  }
+
   const activeIntegrations = integrations.filter((item) => item.enabled).length;
-  const failedTasks = tasks.filter((task) => task.status === "failed").length;
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -139,9 +216,9 @@ export function NotificationsPage() {
           },
           {
             title: t("notifications.statFailedTasks24h"),
-            value: failedTasks,
-            description: t("notifications.statFailedTasks24hDesc"),
-            tone: "info",
+            value: failureSummaryValue,
+            description: failureSummaryDescription,
+            tone: failureSummaryPhase === "error" ? "warning" : failureSummaryPhase === "success" ? "info" : undefined,
           },
           {
             title: t("notifications.statDeliveryFailed24h"),
