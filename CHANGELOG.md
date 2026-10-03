@@ -2,13 +2,15 @@
 
 ## Unreleased
 
+## [0.57.5](https://github.com/xiangnan0811/xirang/compare/v0.57.4...v0.57.5) (2026-10-03)
+
 ### 行为与升级说明
 
-- 自动 TaskRun 历史清理保留任何仍被 RecoveryPoint 的 `producing_task_run_id` 引用的执行记录及其任务日志、告警关联，不受恢复点状态、保留期限或 hold 状态影响；无引用历史仍按原规则回收。即使恢复点已 expired／retired，只要引用仍在，生产者历史也可能长期保留。本次不新增释放引用机制，不改变显式 Task／Node／批量删除语义。
-- 没有新增 schema migration，也不修改既有外键和不可逆迁移。升级前保全一致性数据库、全部适用加密密钥和独立备份副本，停止并排空旧 Core 的历史清理及其它在途操作；保护从新版 Core 的清理轮开始生效，替换进程不会撤销旧清理轮已经提交的删除。可选 Worker 与 Core 保持同源版本。
-- 本补丁只防止后续自动清理破坏生产者引用，不回填已有 NULL producer、不恢复已删执行历史，也不以 lineage 回退绕过消费者校验。回退旧版会重新引入该清理缺陷；本地双引擎及替身 Provider 边界验收不代表正式镜像发布、生产部署、真实远端删除或现场恢复已验收。
-
-## [0.57.5](https://github.com/xiangnan0811/xirang/compare/v0.57.4...v0.57.5) (2026-10-03)
+- 通知页的 24h 失败任务数改为服务端 UTC `[now-24h, now)` 内、按 `finished_at` 完成的现存失败 TaskRun 去重任务数；后续成功不抵消窗口内失败。只统计仍保留的执行历史，清理或显式删除历史可能减少数字，不恢复缺失历史，也不保证永久审计完整性。
+- admin／viewer 查看全局合格历史（包括 legacy snapshot 0）；operator 仅统计运行时节点快照与当前 owned 节点相交且快照大于 0 的历史。任务迁移不转移旧运行的历史授权，不同用户数字不可相加。既有 POST 任务统计仍按当前 Task 节点授权。
+- 无新增数据库 schema migration，不修改历史记录、保留策略或显式删除流程。新摘要从新版 Core 接收请求时生效；新版页面加载后区分真实零值、加载、错误与不可用，并隔离刷新、认证变化和迟到响应。忽略迟到响应不表示撤销已经发生的网络投递或服务端操作。
+- 前后端应同版本部署；新版前端遇旧后端 404 显示错误并允许重试，不回退旧计数。升级前按既有流程保全数据库与适用加密密钥；本补丁不改变执行器或在途任务，无额外任务排空要求，旧进程已开始的执行及清理仍受既有规则约束。回退旧版会恢复按当前 Task.status 计数的缺陷；无迁移不解除既有版本的不可逆迁移及恢复限制。
+- 本次仅交付 S02，不宣称关闭 S01、K01/#579 或 D01；测试与公开镜像发布不等于生产已升级或现场恢复已验收。
 
 
 ### 🐛 Bug Fixes
@@ -16,6 +18,12 @@
 * **notifications:** count retained task failures with snapshot authorization ([#584](https://github.com/xiangnan0811/xirang/issues/584)) ([b333b65](https://github.com/xiangnan0811/xirang/commit/b333b65840860d85bf139bf0f1da9c7c63dc80c1))
 
 ## [0.57.4](https://github.com/xiangnan0811/xirang/compare/v0.57.3...v0.57.4) (2026-10-03)
+### 行为与升级说明
+
+- 自动 TaskRun 历史清理保留任何仍被 RecoveryPoint 的 `producing_task_run_id` 引用的执行记录及其任务日志、告警关联，不受恢复点状态、保留期限或 hold 状态影响；无引用历史仍按原规则回收。即使恢复点已 expired／retired，只要引用仍在，生产者历史也可能长期保留。本次不新增释放引用机制，不改变显式 Task／Node／批量删除语义。
+- 没有新增 schema migration，也不修改既有外键和不可逆迁移。升级前保全一致性数据库、全部适用加密密钥和独立备份副本，停止并排空旧 Core 的历史清理及其它在途操作；保护从新版 Core 的清理轮开始生效，替换进程不会撤销旧清理轮已经提交的删除。可选 Worker 与 Core 保持同源版本。
+- 本补丁只防止后续自动清理破坏生产者引用，不回填已有 NULL producer、不恢复已删执行历史，也不以 lineage 回退绕过消费者校验。回退旧版会重新引入该清理缺陷；本地双引擎及替身 Provider 边界验收不代表正式镜像发布、生产部署、真实远端删除或现场恢复已验收。
+
 
 
 ### 🐛 Bug Fixes
