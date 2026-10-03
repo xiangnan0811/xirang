@@ -102,6 +102,7 @@ Legacy Rclone 没有 immutable snapshot，也不使用 Rsync manifest。Prepare/
 ## 任务历史动态保留
 
 任务执行与流量历史的清理期限通过同一 Settings 服务每轮动态解析，整轮固定 UTC cutoff，沿用一小时成功清理节流。读取失败或非法值时不删除、不推进成功清理时间，下一次既有调度可重试。任务执行记录的清理继续保留活动记录、未决 effect、代次、恢复与演练引用保护；流量样本沿用自身的分批删除条件，不共享任务执行记录的代次锁。默认值、范围、`0` 禁用及 DB → 环境 → 默认优先级见[环境变量](../../env-vars.md#数据保留)。
+只要 `RecoveryPoint.producing_task_run_id` 持有某个 TaskRun 的引用，该 TaskRun 就优先于普通任务历史 retention 保留：自动清理不得删除该 TaskRun，也不得删除其 TaskLog 或解除其 Alert 关联。保护不按 RecoveryPoint 的 semantics、state、retention_until 或 hold_state 缩小；没有 producer-run 引用（包括 `NULL`）的 RecoveryPoint 不保护任何 TaskRun。无引用历史继续按上述普通规则清理。
 
 ## 恢复演练准入与证据
 

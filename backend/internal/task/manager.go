@@ -4041,6 +4041,14 @@ func expiredTaskRunCleanupQuery(tx *gorm.DB, cutoff time.Time) *gorm.DB {
 			FROM task_runs AS source_reference
 			WHERE source_reference.backup_source_run_id = task_runs.id
 		)`).
+		// A RecoveryPoint producer reference keeps the TaskRun and all
+		// dependent history attached to its consumer, regardless of point
+		// state or retention metadata.
+		Where(`NOT EXISTS (
+			SELECT 1
+			FROM recovery_points AS point_reference
+			WHERE point_reference.producing_task_run_id = task_runs.id
+		)`).
 		// Drill evidence is retained only for active recovery work. Terminal
 		// drill provenance is intentionally not a retention dependency here.
 		Where(`NOT EXISTS (
