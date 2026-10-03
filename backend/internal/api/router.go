@@ -706,7 +706,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/tasks", middleware.RBAC("tasks:read"), taskHandler.List)
 	taskStatisticsHandler := handlers.NewTaskStatisticsHandler(dep.DB)
+	taskFailureSummaryHandler := handlers.NewTaskFailureSummaryHandler(dep.DB, nil)
 	secured.POST("/tasks/statistics/query", middleware.RBAC("tasks:read"), taskStatisticsHandler.Query)
+	secured.GET("/tasks/failure-summary", middleware.RBAC("tasks:read"), taskFailureSummaryHandler.Get)
 	secured.GET("/tasks/:id", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Get)
 	secured.GET("/tasks/:id/logs", middleware.RBAC("tasks:read"), middleware.OwnershipTaskCheck(dep.DB), taskHandler.Logs)
 	secured.POST("/tasks", middleware.RBAC("tasks:write"), taskHandler.Create)

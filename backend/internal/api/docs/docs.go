@@ -13775,6 +13775,61 @@ const docTemplate = `{
                 }
             }
         },
+        "/tasks/failure-summary": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "固定统计服务端 UTC 最近 24 小时内仍保留的失败 TaskRun，按 task_id 去重；admin/viewer 查看全局历史，operator 按运行时节点快照与当前 owned 节点相交，legacy_unknown 仅 admin/viewer 计入。清理或显式删除历史可能减少结果。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "查询通知页过去 24 小时失败任务摘要",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.taskFailureSummaryResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/tasks/statistics/query": {
             "post": {
                 "security": [
@@ -18683,6 +18738,17 @@ const docTemplate = `{
                 },
                 "username": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskFailureSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "failed_tasks": {
+                    "type": "integer"
+                },
+                "window_hours": {
+                    "type": "integer"
                 }
             }
         },

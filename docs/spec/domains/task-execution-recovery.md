@@ -36,6 +36,37 @@ p50/p99。“全部可见任务/指定任务”与任务列表当前状态筛选
 面板 CRUD、指标目录及旧 dashboard URL/API 已退役，不提供兼容转发。
 任务日志仅属于任务领域：`GET /api/v1/tasks/:id/logs`、`GET /api/v1/task-runs/:id/logs` 和 `/api/v1/ws/logs` 提供任务/运行日志，并继续使用 `tasks:read` 授权；安全审计日志由独立审计领域保留，不能用任务日志替代。
 
+### 通知页失败任务摘要
+
+`GET /api/v1/tasks/failure-summary` 是只读的固定 24 小时摘要，经主认证和
+`tasks:read` 授权；不接受窗口、筛选或分页参数。每次请求只读取一次服务端 UTC
+`now`，按 `TaskRun.finished_at` 统计半开窗口 `[now-24h, now)`。仅
+`status=failed` 且 `finished_at` 非空的行参与，对授权过滤后的行按 `task_id`
+`COUNT(DISTINCT ...)`；同一任务多次失败仍计 1，窗口内失败不会被随后成功抵消。
+warning、canceled、skipped、success 以及窗口外、未来或未完成的运行不计入。
+成功响应使用统一信封
+`{"code":200,"message":"ok","data":{"failed_tasks":0,"window_hours":24}}`（数字随统计结果变化），
+并设置 `Cache-Control: private, no-store`；请求 body 和额外 query 参数均忽略，不改变固定窗口
+或授权。ownership 查询或统计查询失败返回安全 500，不返回部分结果；请求 context 取消或
+超时沿既有 API 约定返回 499。
+
+摘要只统计当前仍存在的 `TaskRun`，不保证审计完整性；清理或显式删除历史（包括
+创建很早但最近完成的运行）可能使数字减少，不恢复缺失历史，也不改变 retention、
+显式删除策略或增加汇总表。查询不 JOIN 当前 `Task`，不使用 `Task.status`、
+`Task.node_id`、`last_run_at` 或任务存活状态过滤，不返回任务 ID、名称或明细链接；
+运行类别、触发类型及归档状态也不增加额外过滤。
+
+admin/viewer 查看全部合格的现存历史，包含 `node_id_snapshot=0` 的
+`legacy_unknown` 行。operator 只查看当前 owned node 集合与运行时
+`node_id_snapshot` 的交集，且快照必须为正数；空 owned 集合成功返回零，绝不回退
+全局查询。任务从节点 A 迁移到 B 后，旧 A 运行仍由当前拥有 A 的 operator 看到，
+当前拥有 B 的 operator 不因此获得 A 的历史；同一任务在 A、B 都有合格失败时两方
+各可计 1，而全局仍计 1，因此不同用户的数字不可相加。
+
+该摘要的权限按执行节点快照解释历史，不使用单任务当前节点的 ownership 检查。
+既有 `POST /tasks/statistics/query` 继续按当前 `Task.node_id` 授权，健康时间线的
+既有 source/window/cap 口径保持不变；本摘要不恢复已退役的 overview.failedTasks24h。
+
 ## 持久化执行与调度
 
 普通 TaskRun 创建冻结正数 `node_id_snapshot`，必须等于当时 Task 节点；`task_id` 与 snapshot 不可变。执行、恢复、演练、发布与准入同时核对任务 ID、节点快照及预期状态，不能只查询任意成功历史。snapshot 0 仅是迁移保留的 terminal orphan `legacy_unknown`：允许 `success|failed|canceled|warning|skipped`，状态不可变，所有可执行消费方拒绝它。活动/未知状态 orphan 或非正/不匹配 live Task 使迁移原子失败。

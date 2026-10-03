@@ -954,6 +954,35 @@ function mapTaskStatisticResult(raw: unknown): TaskStatisticResult {
   };
 }
 
+export type TaskFailureSummary = {
+  failedTasks: number;
+  windowHours: 24;
+};
+
+class TaskFailureSummaryPayloadError extends Error {
+  constructor() {
+    super("invalid task failure summary payload");
+    this.name = "TaskFailureSummaryPayloadError";
+  }
+}
+
+function mapTaskFailureSummary(raw: unknown): TaskFailureSummary {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new TaskFailureSummaryPayloadError();
+  }
+  const failedTasks = (raw as { failed_tasks?: unknown }).failed_tasks;
+  const windowHours = (raw as { window_hours?: unknown }).window_hours;
+  if (
+    typeof failedTasks !== "number" ||
+    !Number.isSafeInteger(failedTasks) ||
+    failedTasks < 0 ||
+    windowHours !== 24
+  ) {
+    throw new TaskFailureSummaryPayloadError();
+  }
+  return { failedTasks, windowHours: 24 };
+}
+
 export function createTasksApi() {
   return {
     async getTasks(token: string, options?: { signal?: AbortSignal }): Promise<TaskRecord[]> {
@@ -1341,6 +1370,17 @@ export function createTasksApi() {
         signal: options?.signal,
       });
       return mapTaskStatisticResult(raw);
+    },
+
+    async getTaskFailureSummary(
+      token: string,
+      options?: { signal?: AbortSignal },
+    ): Promise<TaskFailureSummary> {
+      const raw = await request<unknown>("/tasks/failure-summary", {
+        token,
+        signal: options?.signal,
+      });
+      return mapTaskFailureSummary(raw);
     },
   };
 }
