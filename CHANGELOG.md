@@ -8,6 +8,13 @@
 - 没有新增 schema migration，也不修改既有外键和不可逆迁移。升级前保全一致性数据库、全部适用加密密钥和独立备份副本，停止并排空旧 Core 的历史清理及其它在途操作；保护从新版 Core 的清理轮开始生效，替换进程不会撤销旧清理轮已经提交的删除。可选 Worker 与 Core 保持同源版本。
 - 本补丁只防止后续自动清理破坏生产者引用，不回填已有 NULL producer、不恢复已删执行历史，也不以 lineage 回退绕过消费者校验。回退旧版会重新引入该清理缺陷；本地双引擎及替身 Provider 边界验收不代表正式镜像发布、生产部署、真实远端删除或现场恢复已验收。
 
+## [0.57.4](https://github.com/xiangnan0811/xirang/compare/v0.57.3...v0.57.4) (2026-10-03)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** preserve recovery point producer history ([#582](https://github.com/xiangnan0811/xirang/issues/582)) ([85bebba](https://github.com/xiangnan0811/xirang/commit/85bebba30d7f4a4fe70daf58deda08bd58f93962))
+
 ## [0.57.3](https://github.com/xiangnan0811/xirang/compare/v0.57.2...v0.57.3) (2026-10-02)
 
 
