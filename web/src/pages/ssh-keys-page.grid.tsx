@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast-sonner";
 import { formatTime } from "@/lib/api/core";
-import { cn } from "@/lib/utils";
 import type { NodeRecord, SSHKeyRecord } from "@/types/domain";
 
 // ---------------------------------------------------------------------------
@@ -159,15 +158,11 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
 
         {pagedItems.map((key) => {
           const nodeCount = keyUsageMap.get(key.id)?.length ?? 0;
-          const isUnused = nodeCount === 0;
 
           return (
             <div
               key={key.id}
-              className={cn(
-                "rounded-lg border border-border bg-card p-3 shadow-sm",
-                isUnused && "opacity-60",
-              )}
+              className="rounded-lg border border-border bg-card p-3 shadow-sm"
             >
               {/* 顶部：选择框 + 类型 Badge */}
               <div className="flex items-start justify-between gap-2">
@@ -274,15 +269,11 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
 
         {pagedItems.map((key) => {
           const nodeCount = keyUsageMap.get(key.id)?.length ?? 0;
-          const isUnused = nodeCount === 0;
 
           return (
             <div
               key={key.id}
-              className={cn(
-                "rounded-lg border border-border bg-card shadow-sm hover:shadow-md transition-shadow p-3",
-                isUnused && "opacity-60",
-              )}
+              className="rounded-lg border border-border bg-card shadow-sm hover:shadow-md transition-shadow p-3"
             >
               {/* 顶部：选择框 + 名称 + 用户名 + 类型 + 操作菜单 */}
               <div className="flex items-start justify-between gap-2">

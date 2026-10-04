@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Copy, Plus, ShieldCheck, Trash2, Wrench } from "lucide-react";
 import { useSharedContext } from "@/context/shared-context.hooks";
@@ -8,6 +8,11 @@ import {
   PolicyEditorDialog,
   type PolicyDraft,
 } from "@/components/policy-editor-dialog";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -135,12 +140,19 @@ export function PoliciesPage() {
   const activeCount = policies.filter((policy) => policy.enabled).length;
   const disabledCount = policies.length - activeCount;
 
-  const openCreateDialog = () => {
+  const editorOpenerRef = useRef<HTMLElement | null>(null);
+  const editorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, editorOpenerRef.current);
+  };
+
+  const openCreateDialog = (event?: { currentTarget: EventTarget | null }) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingPolicy(null);
     setEditorOpen(true);
   };
 
-  const openEditDialog = (policy: PolicyRecord) => {
+  const openEditDialog = (policy: PolicyRecord, opener?: EventTarget | null) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingPolicy(policy);
     setEditorOpen(true);
   };
@@ -461,7 +473,7 @@ export function PoliciesPage() {
                             variant="ghost"
                             size="icon"
                             className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                            onClick={() => openEditDialog(policy)}
+                            onClick={(event) => openEditDialog(policy, event.currentTarget)}
                             aria-label={t('policies.editAriaLabel')}
                           >
                             <Wrench className="size-4" aria-hidden="true" />
@@ -521,6 +533,7 @@ export function PoliciesPage() {
           setEditorOpen(open);
           if (!open) setEditingPolicy(null);
         }}
+        onCloseAutoFocus={editorOnCloseAutoFocus}
         editingPolicy={editingPolicy}
         onSave={handleSave}
         nodes={nodes}

@@ -18,10 +18,34 @@ interface InlineAlertProps {
 }
 
 const toneMap = {
-  info: { bg: "bg-info/10", text: "text-info", line: "bg-info", defaultIcon: Info },
-  warning: { bg: "bg-warning/10", text: "text-warning", line: "bg-warning", defaultIcon: AlertTriangle },
-  success: { bg: "bg-success/10", text: "text-success", line: "bg-success", defaultIcon: CheckCircle2 },
-  critical: { bg: "bg-destructive/10", text: "text-destructive", line: "bg-destructive", defaultIcon: AlertTriangle },
+  info: {
+    bg: "bg-info/10",
+    iconText: "text-info",
+    text: "text-[hsl(var(--info-text))]",
+    line: "bg-info",
+    defaultIcon: Info,
+  },
+  warning: {
+    bg: "bg-warning/10",
+    iconText: "text-warning",
+    text: "text-[hsl(var(--warning-text))]",
+    line: "bg-warning",
+    defaultIcon: AlertTriangle,
+  },
+  success: {
+    bg: "bg-success/10",
+    iconText: "text-success",
+    text: "text-[hsl(var(--success-text))]",
+    line: "bg-success",
+    defaultIcon: CheckCircle2,
+  },
+  critical: {
+    bg: "bg-destructive/10",
+    iconText: "text-destructive",
+    text: "text-[hsl(var(--destructive-text))]",
+    line: "bg-destructive",
+    defaultIcon: AlertTriangle,
+  },
 };
 
 export function InlineAlert({
@@ -48,7 +72,7 @@ export function InlineAlert({
     <div role={role} className={cn("rounded-lg border border-border bg-card overflow-hidden relative group p-3 transition-colors", className)}>
       <div className={cn("absolute top-0 left-0 w-1 h-full opacity-60 group-hover:opacity-100 transition-opacity", s.line)} />
       <div className="flex items-start gap-3 pl-2">
-        <div className={cn("flex items-center justify-center rounded-lg p-2 shrink-0", s.bg, s.text)}>
+        <div className={cn("flex items-center justify-center rounded-lg p-2 shrink-0", s.bg, s.iconText)}>
           {icon || <Icon className="size-4" aria-hidden="true" />}
         </div>
         <div className="flex flex-col gap-0.5 min-w-0 text-sm py-0.5">

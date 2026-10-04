@@ -346,7 +346,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
             {t('cron.parseResult')}
           </div>
           <p className="font-medium">{naturalDescription}</p>
-          <p className="mt-1 text-xs text-info">{nextRun}</p>
+          <p className="mt-1 text-xs text-[hsl(var(--info-text))]">{nextRun}</p>
         </div>
       )}
     </div>

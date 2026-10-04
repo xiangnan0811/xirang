@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Edit2, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast-sonner";
 import { EscalationPolicyEditor } from "@/components/escalation-policy-editor";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { apiClient } from "@/lib/api/client";
 import type { EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
@@ -39,6 +44,10 @@ function SettingsPageEscalationContent() {
   const [policies, setPolicies] = useState<EscalationPolicy[]>([]);
   const [loading, setLoading] = useState(Boolean(token));
   const [editorOpen, setEditorOpen] = useState(false);
+  const editorOpenerRef = useRef<HTMLElement | null>(null);
+  const editorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, editorOpenerRef.current);
+  };
   const [editingPolicy, setEditingPolicy] = useState<EscalationPolicy | undefined>(undefined);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [togglingId, setTogglingId] = useState<number | null>(null);
@@ -59,12 +68,14 @@ function SettingsPageEscalationContent() {
     return () => controller.abort();
   }, [token]);
 
-  const handleOpenNew = () => {
+  const handleOpenNew = (event?: { currentTarget: EventTarget | null }) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingPolicy(undefined);
     setEditorOpen(true);
   };
 
-  const handleOpenEdit = (policy: EscalationPolicy) => {
+  const handleOpenEdit = (policy: EscalationPolicy, opener?: EventTarget | null) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingPolicy(policy);
     setEditorOpen(true);
   };
@@ -190,7 +201,7 @@ function SettingsPageEscalationContent() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => handleOpenEdit(policy)}
+                          onClick={(event) => handleOpenEdit(policy, event.currentTarget)}
                           aria-label={`编辑 ${policy.name}`}
                         >
                           <Edit2 className="size-4" />
@@ -217,6 +228,7 @@ function SettingsPageEscalationContent() {
       <EscalationPolicyEditor
         open={editorOpen}
         onOpenChange={setEditorOpen}
+        onCloseAutoFocus={editorOnCloseAutoFocus}
         policy={editingPolicy}
         onSaved={handleSaved}
       />

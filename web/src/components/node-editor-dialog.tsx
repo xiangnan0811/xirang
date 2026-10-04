@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ServerCog } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { FormDialog } from "@/components/ui/form-dialog";
+import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -135,6 +135,7 @@ type NodeEditorDialogProps = {
   sshKeys: SSHKeyRecord[];
   onSave: (input: NewNodeInput, nodeId?: number) => Promise<void>;
   onTestConnection?: (nodeId: number) => Promise<void>;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 export function NodeEditorDialog({
@@ -144,6 +145,7 @@ export function NodeEditorDialog({
   sshKeys,
   onSave,
   onTestConnection,
+  onCloseAutoFocus,
 }: NodeEditorDialogProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useDialogDraft<NodeEditorDraft, NodeRecord>(open, emptyDraft, editingNode, toDraft);
@@ -190,6 +192,7 @@ export function NodeEditorDialog({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
+      onCloseAutoFocus={onCloseAutoFocus}
       size="lg"
       icon={<ServerCog className="size-5 text-primary" />}
       title={isEditing ? t('nodeEditor.titleEdit', { name: draft.name }) : t('nodeEditor.titleCreate')}

@@ -302,6 +302,7 @@ export function NodesPage() {
         sshKeys={state.sshKeys}
         editorOpen={state.editorOpen}
         handleEditorOpenChange={state.handleEditorOpenChange}
+        nodeEditorOnCloseAutoFocus={state.nodeEditorOnCloseAutoFocus}
         editingNode={state.editingNode}
         terminalNode={state.terminalNode}
         setTerminalNode={state.setTerminalNode}

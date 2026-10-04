@@ -75,7 +75,7 @@ export function SSHKeysToolbar({
           variant="ghost"
           size="sm"
           className="shrink-0"
-          onClick={() => openRotationWizard()}
+          onClick={(event) => openRotationWizard(undefined, event.currentTarget)}
         >
           <RefreshCw className="mr-1 size-3.5" />
           {t("sshKeys.rotateKeys")}

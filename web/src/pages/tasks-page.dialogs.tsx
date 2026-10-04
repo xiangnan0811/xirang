@@ -29,6 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import type {
   NewTaskInput,
   NodeRecord,
@@ -41,7 +42,9 @@ import type {
 export interface TasksPageDialogsProps {
   createDialogOpen: boolean;
   setCreateDialogOpen: (open: boolean) => void;
+  createOnCloseAutoFocus?: DialogCloseAutoFocus;
   editDialogOpen: boolean;
+  editOnCloseAutoFocus?: DialogCloseAutoFocus;
   setEditDialogOpen: (open: boolean) => void;
   editingTask: TaskRecord | null;
   setEditingTask: (task: TaskRecord | null) => void;
@@ -85,7 +88,9 @@ export interface TasksPageDialogsProps {
 export function TasksPageDialogs({
   createDialogOpen,
   setCreateDialogOpen,
+  createOnCloseAutoFocus,
   editDialogOpen,
+  editOnCloseAutoFocus,
   setEditDialogOpen,
   editingTask,
   setEditingTask,
@@ -133,6 +138,7 @@ export function TasksPageDialogs({
         <TaskEditorDialog
           open={createDialogOpen}
           onOpenChange={setCreateDialogOpen}
+          onCloseAutoFocus={createOnCloseAutoFocus}
           nodes={nodes}
           policies={policies}
           tasks={tasks}
@@ -186,6 +192,7 @@ export function TasksPageDialogs({
             setEditDialogOpen(open);
             if (!open) setEditingTask(null);
           }}
+          onCloseAutoFocus={editOnCloseAutoFocus}
           nodes={nodes}
           policies={policies}
           tasks={tasks}

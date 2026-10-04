@@ -11,6 +11,11 @@ import {
   parseDateTime,
 } from "@/pages/nodes-page.utils";
 import { toast } from "@/components/ui/toast-sonner";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { isAbortError } from "@/hooks/inventory-request-state";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
@@ -113,6 +118,10 @@ export function useNodesPageState() {
 
   const { confirm, dialog } = useConfirm();
   const [editorOpen, setEditorOpen] = useState(false);
+  const nodeEditorOpenerRef = useRef<HTMLElement | null>(null);
+  const nodeEditorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, nodeEditorOpenerRef.current);
+  };
   const handleEditorOpenChange = (open: boolean) => {
     setEditorOpen(open);
     if (!open) {
@@ -278,12 +287,14 @@ export function useNodesPageState() {
     sortedNodes.length > 0 &&
     sortedNodes.every((node) => selectedNodeSet.has(node.id));
 
-  const openCreateDialog = () => {
+  const openCreateDialog = (event?: { currentTarget: EventTarget | null }) => {
+    nodeEditorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingNode(null);
     setEditorOpen(true);
   };
 
-  const openEditDialog = (node: NodeRecord) => {
+  const openEditDialog = (node: NodeRecord, opener?: EventTarget | null) => {
+    nodeEditorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingNode(node);
     setEditorOpen(true);
   };
@@ -760,6 +771,7 @@ export function useNodesPageState() {
     // editor
     editorOpen,
     handleEditorOpenChange,
+    nodeEditorOnCloseAutoFocus,
     editingNode,
     // terminal
     terminalNode,

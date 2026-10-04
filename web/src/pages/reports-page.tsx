@@ -39,6 +39,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { PageHero } from "@/components/ui/page-hero";
 import { toast } from "@/components/ui/toast-sonner";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { useConfirm } from "@/hooks/use-confirm";
 const ReportConfigDialog = React.lazy(() =>
   import("@/components/report-config-dialog").then(m => ({ default: m.ReportConfigDialog }))
@@ -146,7 +151,7 @@ function ConfigCard({
   cfg: ReportConfig;
   isAdmin: boolean;
   token: string;
-  onEdit: (cfg: ReportConfig) => void;
+  onEdit: (cfg: ReportConfig, opener?: EventTarget | null) => void;
   onDelete: (id: number) => void;
   onGenerate: (id: number) => void;
 }) {
@@ -233,7 +238,7 @@ function ConfigCard({
                 className="size-8 text-muted-foreground hover:text-foreground"
                 title={t("common.edit")}
                 aria-label={t("common.edit")}
-                onClick={() => onEdit(cfg)}
+                onClick={(event) => onEdit(cfg, event.currentTarget)}
               >
                 <Pencil className="size-4" aria-hidden="true" />
               </Button>
@@ -300,6 +305,10 @@ function SLAContentSession() {
   const [loading, setLoading] = useState(Boolean(token));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<ReportConfig | null>(null);
+  const configOpenerRef = useRef<HTMLElement | null>(null);
+  const configOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, configOpenerRef.current);
+  };
 
   const [reload, setReload] = useState(0);
   const loadConfigs = useCallback(() => {
@@ -363,7 +372,11 @@ function SLAContentSession() {
                 {t("common.refresh")}
               </Button>
               {isAdmin && (
-                <Button size="sm" onClick={() => { setEditingConfig(null); setDialogOpen(true); }}>
+                <Button size="sm" onClick={(event) => {
+                  configOpenerRef.current = dialogOpenerFromTarget(event.currentTarget);
+                  setEditingConfig(null);
+                  setDialogOpen(true);
+                }}>
                   <Plus className="mr-1.5 size-4" aria-hidden="true" />
                   {t("reports.addConfig")}
                 </Button>
@@ -392,7 +405,11 @@ function SLAContentSession() {
                   cfg={cfg}
                   isAdmin={isAdmin}
                   token={token ?? ""}
-                  onEdit={(c) => { setEditingConfig(c); setDialogOpen(true); }}
+                  onEdit={(config, opener) => {
+                    configOpenerRef.current = dialogOpenerFromTarget(opener);
+                    setEditingConfig(config);
+                    setDialogOpen(true);
+                  }}
                   onDelete={(id) => void handleDelete(id)}
                   onGenerate={handleGenerate}
                 />
@@ -407,6 +424,7 @@ function SLAContentSession() {
           <ReportConfigDialog
             open={dialogOpen}
             onOpenChange={(v) => { setDialogOpen(v); if (!v) setEditingConfig(null); }}
+            onCloseAutoFocus={configOnCloseAutoFocus}
             onSaved={(cfg) =>
               setConfigs((prev) =>
                 prev.some((c) => c.id === cfg.id)

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast-sonner";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { createSSHKeysApi } from "@/lib/api/ssh-keys-api";
 import { getErrorMessage } from "@/lib/utils";
 import { type NodeRecord, type SSHKeyRecord, type SSHKeyType } from "@/types/domain";
@@ -34,6 +35,7 @@ export interface SSHKeyRotationWizardProps {
   preselectedKey?: SSHKeyRecord | null;
   token: string;
   onComplete: () => void;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 }
 
 export function SSHKeyRotationWizard(props: SSHKeyRotationWizardProps) {
@@ -48,6 +50,7 @@ function SSHKeyRotationSession({
   preselectedKey,
   token,
   onComplete,
+  onCloseAutoFocus,
 }: SSHKeyRotationWizardProps) {
   const { t } = useTranslation();
 
@@ -280,7 +283,7 @@ function SSHKeyRotationSession({
         if (!o && !loading) onOpenChange(false);
       }}
     >
-      <DialogContent size="md">
+      <DialogContent size="md" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <KeyRound className="size-5 text-primary" />

@@ -200,7 +200,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                     aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
-                    onClick={() => openEditDialog(node)}
+                    onClick={(event) => openEditDialog(node, event.currentTarget)}
                   >
                     <Wrench className="size-4" aria-hidden />
                   </Button>
@@ -379,7 +379,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                     size="icon"
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                     aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
-                    onClick={() => openEditDialog(node)}
+                    onClick={(event) => openEditDialog(node, event.currentTarget)}
                   >
                     <Wrench className="size-4" aria-hidden />
                   </Button>

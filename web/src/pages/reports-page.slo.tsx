@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Pencil, Target, Trash2 } from "lucide-react";
 import { useAuth } from "@/context/auth-context.hooks";
@@ -10,7 +10,11 @@ import { Switch } from "@/components/ui/switch";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { TagChips } from "@/components/ui/tag-chips";
-import { FormDialog } from "@/components/ui/form-dialog";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { toast } from "@/components/ui/toast-sonner";
 import { apiClient } from "@/lib/api/client";
 import {
@@ -42,6 +46,14 @@ function SLOPanelSession() {
   const [summary, setSummary] = useState<SLOSummary | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<SLODefinition | null>(null);
+  const createOpenerRef = useRef<HTMLElement | null>(null);
+  const editOpenerRef = useRef<HTMLElement | null>(null);
+  const createOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, createOpenerRef.current);
+  };
+  const editOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, editOpenerRef.current);
+  };
   // First paint must show loading (not empty) when a fetch is expected.
   const [loading, setLoading] = useState(() => Boolean(token));
   const [error, setError] = useState<string | null>(null);
@@ -114,7 +126,10 @@ function SLOPanelSession() {
           )}
         </div>
         {isAdmin && (
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Button size="sm" onClick={(event) => {
+            createOpenerRef.current = dialogOpenerFromTarget(event.currentTarget);
+            setCreateOpen(true);
+          }}>
             <Plus className="mr-1.5 size-4" aria-hidden="true" />
             {t("slo.new")}
           </Button>
@@ -184,7 +199,10 @@ function SLOPanelSession() {
                               className="size-8 text-muted-foreground hover:text-foreground"
                               title={t("common.edit")}
                               aria-label={t("common.edit")}
-                              onClick={() => setEditing(row)}
+                              onClick={(event) => {
+                                editOpenerRef.current = dialogOpenerFromTarget(event.currentTarget);
+                                setEditing(row);
+                              }}
                             >
                               <Pencil className="size-4" aria-hidden="true" />
                             </Button>
@@ -216,6 +234,7 @@ function SLOPanelSession() {
       <SLODialog
         open={createOpen}
         onOpenChange={setCreateOpen}
+        onCloseAutoFocus={createOnCloseAutoFocus}
         onSubmitted={() => {
           setCreateOpen(false);
           void refresh();
@@ -226,6 +245,7 @@ function SLOPanelSession() {
         onOpenChange={(open) => {
           if (!open) setEditing(null);
         }}
+        onCloseAutoFocus={editOnCloseAutoFocus}
         existing={editing}
         onSubmitted={() => {
           setEditing(null);
@@ -257,6 +277,7 @@ function SLODialog(props: {
   onOpenChange: (open: boolean) => void;
   existing?: SLODefinition | null;
   onSubmitted: () => void;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 }) {
   const { token } = useAuth();
   return props.open ? <SLODialogSession key={`${token}:${props.existing?.id ?? "new"}`} {...props} /> : null;
@@ -267,11 +288,13 @@ function SLODialogSession({
   onOpenChange,
   existing,
   onSubmitted,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   existing?: SLODefinition | null;
   onSubmitted: () => void;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 }) {
   const { t } = useTranslation();
   const { token } = useAuth();
@@ -328,6 +351,7 @@ function SLODialogSession({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
+      onCloseAutoFocus={onCloseAutoFocus}
       title={existing ? t("slo.edit") : t("slo.new")}
       description={existing ? t("slo.dialog.editDesc") : t("slo.dialog.createDesc")}
       size="md"

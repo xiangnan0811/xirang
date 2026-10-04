@@ -95,6 +95,7 @@ export const NodesTable = React.memo(function NodesTable({
               const keyLabel = node.keyId
                 ? sshKeys.find((key) => key.id === node.keyId)?.name || t("common.keyBound")
                 : t("common.keyUnbound");
+              const editTrigger: { current: HTMLButtonElement | null } = { current: null };
 
               return (
                 <tr key={node.id} className="border-b border-border transition-colors duration-200 ease-out hover:bg-accent">
@@ -191,6 +192,9 @@ export const NodesTable = React.memo(function NodesTable({
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
+                            ref={(element) => {
+                              editTrigger.current = element;
+                            }}
                             variant="ghost"
                             size="icon"
                             className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -222,7 +226,7 @@ export const NodesTable = React.memo(function NodesTable({
                               {t("nodes.fileBrowser")}
                             </DropdownMenuItem>
                           )}
-                          <DropdownMenuItem onClick={() => openEditDialog(node)}>
+                          <DropdownMenuItem onClick={() => openEditDialog(node, editTrigger.current)}>
                             <Wrench className="mr-2 size-4" aria-hidden />
                             {t("nodes.editNode")}
                           </DropdownMenuItem>

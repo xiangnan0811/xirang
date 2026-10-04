@@ -1,4 +1,4 @@
-import React, { Suspense, useCallback, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useIntegrationsContext } from "@/context/integrations-context.hooks";
 import type { IntegrationEditorDraft } from "@/components/integration-editor-dialog";
@@ -11,6 +11,11 @@ const IntegrationEditorDialog = React.lazy(() =>
 );
 import { IntegrationManager } from "@/pages/notifications-page.integration-manager";
 import { toast } from "@/components/ui/toast-sonner";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import type { IntegrationChannel } from "@/types/domain";
 
 export function ChannelsTab() {
@@ -30,6 +35,14 @@ export function ChannelsTab() {
   }, [refreshIntegrations]);
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const createOpenerRef = useRef<HTMLElement | null>(null);
+  const createOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, createOpenerRef.current);
+  };
+  const openCreateDialog = (event?: { currentTarget: EventTarget | null }) => {
+    createOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
+    setCreateDialogOpen(true);
+  };
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<IntegrationChannel | null>(null);
 
@@ -85,7 +98,7 @@ export function ChannelsTab() {
         toggleIntegration={toggleIntegration}
         testIntegration={testIntegration}
         removeIntegration={handleRemoveIntegration}
-        onOpenCreate={() => setCreateDialogOpen(true)}
+        onOpenCreate={openCreateDialog}
         onOpenEdit={openEditDialog}
       />
 
@@ -93,6 +106,7 @@ export function ChannelsTab() {
         <IntegrationCreateDialog
           open={createDialogOpen}
           onOpenChange={setCreateDialogOpen}
+          onCloseAutoFocus={createOnCloseAutoFocus}
           onSave={async (input) => {
             await addIntegration(input);
             setCreateDialogOpen(false);

@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { KeyRound, Upload } from "lucide-react";
 import { toast } from "@/components/ui/toast-sonner";
-import { FormDialog } from "@/components/ui/form-dialog";
+import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -51,6 +51,7 @@ type SSHKeyEditorDialogProps = {
   onOpenChange: (open: boolean) => void;
   editingKey?: SSHKeyRecord | null;
   onSave: (draft: SSHKeyDraft) => Promise<void>;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 export function SSHKeyEditorDialog({
@@ -58,6 +59,7 @@ export function SSHKeyEditorDialog({
   onOpenChange,
   editingKey,
   onSave,
+  onCloseAutoFocus,
 }: SSHKeyEditorDialogProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useDialogDraft<SSHKeyDraft, SSHKeyRecord>(
@@ -112,6 +114,7 @@ export function SSHKeyEditorDialog({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
+      onCloseAutoFocus={onCloseAutoFocus}
       size="sm"
       icon={<KeyRound className="size-5 text-primary" aria-hidden />}
       title={

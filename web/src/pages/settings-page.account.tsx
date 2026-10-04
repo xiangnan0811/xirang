@@ -116,9 +116,11 @@ export function AccountTab() {
         <div className="flex items-center gap-3">
           {totpEnabled ? (
             <>
-              <span className="inline-flex items-center gap-1.5 rounded-md bg-success/15 px-2.5 py-1 text-sm font-medium text-success">
-                <ShieldCheck className="size-4" />
-                {t("settings.account.twoFactorEnabled")}
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-success/15 px-2.5 py-1 text-sm font-medium">
+                <ShieldCheck className="size-4 text-success" />
+                <span className="text-[hsl(var(--success-text))]">
+                  {t("settings.account.twoFactorEnabled")}
+                </span>
               </span>
               <Button
                 variant="outline"

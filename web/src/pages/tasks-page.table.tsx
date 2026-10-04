@@ -139,7 +139,7 @@ export const TasksTable = React.memo(function TasksTable({
                       {isRunning && (
                         <span
                           className="pulse-online size-2 shrink-0 rounded-full"
-                          aria-label={t("tasks.statusRunning")}
+                          aria-hidden="true"
                         />
                       )}
                       {/* Chain expand/collapse toggle for parent rows */}
@@ -341,7 +341,7 @@ export const TasksTable = React.memo(function TasksTable({
                         className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                         aria-label={t("tasks.editAriaLabel")}
                         disabled={isPendingAny}
-                        onClick={() => onEdit(task)}
+                        onClick={(event) => onEdit(task, event.currentTarget)}
                       >
                         <Pencil className="size-4" />
                       </Button>
@@ -423,7 +423,7 @@ export const TasksTable = React.memo(function TasksTable({
                   title={t("tasks.emptyTitle")}
                   description={t("tasks.emptyDesc")}
                   onReset={resetFilters}
-                  onCreate={() => setCreateDialogOpen(true)}
+                  onCreate={(event) => setCreateDialogOpen(true, event.currentTarget)}
                   createLabel={t("tasks.emptyCreateLabel")}
                   createIcon={Plus}
                 />

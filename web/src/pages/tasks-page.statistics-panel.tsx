@@ -139,7 +139,7 @@ function StatisticChart({
         <LatestValues metric={meta.metric} series={visible} allLabel={allLabel} />
         <div className="h-56 min-w-0" aria-hidden="true">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <LineChart accessibilityLayer={false} data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey="ts"

@@ -64,6 +64,7 @@ export function SSHKeysPage() {
     // 对话框
     editorOpen,
     handleEditorOpenChange,
+    editorOnCloseAutoFocus,
     editingKey,
     testConnectionKey,
     setTestConnectionKey,
@@ -71,6 +72,7 @@ export function SSHKeysPage() {
     setAssociatedNodesKey,
     rotationOpen,
     setRotationOpen,
+    rotationOnCloseAutoFocus,
     rotationKey,
     batchImportOpen,
     setBatchImportOpen,
@@ -313,6 +315,7 @@ export function SSHKeysPage() {
       <SSHKeyEditorDialog
         open={editorOpen}
         onOpenChange={handleEditorOpenChange}
+        onCloseAutoFocus={editorOnCloseAutoFocus}
         editingKey={editingKey}
         onSave={handleEditorSave}
       />
@@ -359,6 +362,7 @@ export function SSHKeysPage() {
         <SSHKeyRotationWizard
           open={rotationOpen}
           onOpenChange={setRotationOpen}
+          onCloseAutoFocus={rotationOnCloseAutoFocus}
           sshKeys={sshKeys}
           keyUsageMap={keyUsageMap}
           preselectedKey={rotationKey}

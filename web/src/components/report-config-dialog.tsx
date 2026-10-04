@@ -12,7 +12,7 @@ import { getErrorMessage } from "@/lib/utils";
 import type { IntegrationChannel } from "@/types/domain";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { Select } from "@/components/ui/select";
-import { FormDialog } from "@/components/ui/form-dialog";
+import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast-sonner";
@@ -27,6 +27,7 @@ type Props = {
   onSaved: (cfg: ReportConfig) => void;
   token: string;
   editingConfig?: ReportConfig | null;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 const SCOPE_VALUES = ["all", "tag", "node_ids"] as const;
@@ -102,6 +103,7 @@ function ReportConfigSession({
   onSaved,
   token,
   editingConfig,
+  onCloseAutoFocus,
 }: Props) {
   const { t } = useTranslation();
   const [draft, setDraft] = useDialogDraft(open, DEFAULT_DRAFT, editingConfig, toDraft);
@@ -188,6 +190,7 @@ function ReportConfigSession({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
+      onCloseAutoFocus={onCloseAutoFocus}
       title={t(isEditing ? "reportConfig.titleEdit" : "reportConfig.title")}
       description={t(isEditing ? "reportConfig.descriptionEdit" : "reportConfig.description")}
       icon={isEditing ? <Pencil className="size-5" /> : <FileText className="size-5" />}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Shield } from "lucide-react";
 import { toast } from "@/components/ui/toast-sonner";
-import { FormDialog } from "@/components/ui/form-dialog";
+import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useAuth } from "@/context/auth-context.hooks";
@@ -20,6 +20,7 @@ type CredentialEditorDialogProps = {
   onOpenChange: (open: boolean) => void;
   editingCredential?: AppCredential | null;
   onSaved: () => void;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 export function CredentialEditorDialog(props: CredentialEditorDialogProps) {
@@ -31,6 +32,7 @@ function CredentialEditorSession({
   onOpenChange,
   editingCredential,
   onSaved,
+  onCloseAutoFocus,
 }: CredentialEditorDialogProps) {
   const { t } = useTranslation();
   const { token } = useAuth();
@@ -211,6 +213,7 @@ function CredentialEditorSession({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
+      onCloseAutoFocus={onCloseAutoFocus}
       size="sm"
       icon={<Shield className="size-5 text-primary" />}
       title={

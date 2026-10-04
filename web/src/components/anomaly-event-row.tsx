@@ -14,7 +14,7 @@ export default function AnomalyEventRow({ event, showNode, nodeName }: Props) {
   const severityClass =
     event.severity === "critical"
       ? "bg-destructive/10 text-destructive"
-      : "bg-warning/10 text-warning-foreground dark:text-warning";
+      : "bg-warning/10 text-[hsl(var(--warning-text))]";
 
   const detectorLabel = t("anomaly.detector.snapshot_diff");
   const extra = event.sigma != null

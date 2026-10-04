@@ -88,9 +88,9 @@ agy 的 Mock 驱动浏览器扫描提供了有用的问题线索，标签与宽�
 
 现有对比度样本既包含 Badge，也包含说明文字、表头和状态文字。不能将全部违规归因于 Badge。部分样本已带新 Badge 类名，仍有不足 4.5:1 的记录；需在字体、数据和动效稳定后复验，不能据此宣称当前最终样式已通过或确定其失败根因。
 
-## 3. 方法局限与下一次采集要求
+## 3. 历史方法局限与新采集边界
 
-现有未交付走查候选位于 `web/e2e/walkthrough/`，包含套件、采集助手和 Mock 响应；它们将在独立 PR 改造，不属于首个产品修复 PR 的验收门禁。
+以下局限描述原始快照的旧采集方式，不是当前 `web/e2e/walkthrough/` 的实现。PR2 将采集与普通 E2E 分离，执行入口和证据规则见[前端质量合同](docs/spec/frontend/quality-guidelines.md#独立-mock-浏览器走查)；原始历史数据不因此获得新的验收效力。
 
 - 路由循环在 `domcontentloaded` 后固定等待 100–120ms，没有断言目标页签、数据完成或关键内容可见；可能扫描过渡态。
 - 路由套件只断言记录数，axe 违规、页面错误和横向溢出不直接导致失败。
@@ -100,7 +100,7 @@ agy 的 Mock 驱动浏览器扫描提供了有用的问题线索，标签与宽�
 - 没有完整明暗主题矩阵、键盘滚动、焦点恢复、实际读屏或移动触控验收。axe 无违规不等于 WCAG 符合性。
 - [项目可访问性合同](docs/spec/frontend/a11y-guidelines.md)目标为 WCAG 2.1 AA；扫描包含 WCAG 2.2 AA 标签属于额外检查，不自动升级产品合同。
 
-后续若保留套件，应按实际运行隔离输出，记录候选内容指纹、run ID、浏览器版本/项目、主题、视口、语言和角色；缺项显式报告。等待目标状态稳定，以必需场景清单核对成功/失败/未覆盖，未知 Mock 请求失败而不是成功兜底。重复执行单列，不能增加覆盖率。本次没有改造或重新执行采集套件。
+当前采集按运行隔离输出，记录候选内容指纹、run ID、实际浏览器版本、主题、视口、语言和角色；声明 384 个路由、48 个弹窗、30 个边缘状态及 2 个登录错误场景，共 464 个独立场景。初始化只写存储；导航后真正等待异步就绪结果、字体和有限过渡，不修改产品颜色来掩盖过渡态。未知 Mock 请求、运行错误、axe 违规及横向溢出使场景失败；重试单列且不能掩盖首次失败。未执行的审计保持 `null`，不计为零违规。
 
 ## 4. 经源码及合同校正的问题清单
 
@@ -143,7 +143,7 @@ axe impact 与项目缺陷优先级分开判断，不直接把 `critical` 映射
 
 ## 6. 复核命令与交付状态
 
-以下为尚待独立工具 PR 交付的历史快照重算入口，不是首个产品修复 PR 的门禁。从 checkout 根目录运行，参数可指向任何取得的原始快照；路径不是工具默认值：
+历史快照重算入口如下。从 checkout 根目录运行，参数可指向取得的原始快照；路径不是工具默认值，干净 checkout 缺少历史文件时不伪造替代数据：
 
 ```bash
 node web/scripts/compile-walkthrough-evidence.mjs .agents/teamwork/teamwork_preview_worker_walkthrough_1/walkthrough_evidence.json
@@ -151,7 +151,7 @@ node web/scripts/compile-walkthrough-evidence.mjs .agents/teamwork/teamwork_prev
 
 工具向标准输出打印源文件 SHA-256、观察数、按已记录字段区分的覆盖键数、路由矩阵、规则/节点出现次数和遥测条目数。不写入源文件，不聚合固定临时目录，不伪造缺失维度，不把旧 `meta.summary` 当作重算结果。
 
-重新运行 `npx playwright test e2e/walkthrough/walkthrough.spec.ts --project=chromium` 会产生新的 Mock 浏览器观察，不能复原此快照；现有采集器仍会向固定临时目录追加文件。在完成第 3 节的采集改造前，不以重跑后的累计 chunk 数量发布新的覆盖宣称。
+新采集在 `web/` 执行 `npm run walkthrough`，入口独占创建并打印 `.tmp/agent/walkthrough-<UUID>/`。完成后在根目录运行 `node web/scripts/compile-walkthrough-evidence.mjs --run <本次目录>`。只汇编该运行，不读取旧 chunk 或其他运行；候选改变、场景缺失、重试断档、重复或失败记录均不能通过。该矩阵是 Mock 界面证明，不是后端生命周期或全面 WCAG 合规证明。
 
 当前状态：历史统计与产品验收分别记录。首个产品候选的定向验证已观察到：
 
@@ -162,4 +162,14 @@ node web/scripts/compile-walkthrough-evidence.mjs .agents/teamwork/teamwork_prev
 - 显式设置 `prefers-reduced-motion` 为 `no-preference` 与 `reduce` 后，浏览器 `matchMedia` 分别返回 false 与 true；概览明暗主题四组对比度扫描均无违规，实际 Toast 用 Enter 关闭后剩余节点数均为 0。
 - 修复后的定向回归 6 个文件、43 个测试通过；完整 `scripts/local-ci-parity.sh` 通过，包含前端 209 个文件、2057 个测试及构建、后端 lint/test/build、漏洞检查、bundle budget、文档与迁移门禁。
 
-这些是 Mock 数据下的针对性产品证明，不是完整走查矩阵或后端证明。首个产品候选的独立 GPT/Grok 双审发现已修复或依批准范围裁定不适用，修复复核完成；远程 required checks 与合并另行跟进。走查工具未交付，第二批尚未实施。旧报告的全站合规、完整生命周期通过、零回归和架构重构工期结论均不保留。
+这些是 Mock 数据下的针对性产品证明，不是完整走查矩阵或后端证明。PR1 已在独立 GPT/Grok 双审、项目门禁和远程 CI 通过后合并（PR #588）。
+
+PR2 的后续定向验证还观察到：
+
+- 匿名/管理员 × 明暗主题四项初始化 smoke 通过；目标 URL 正确、无 pageerror，管理员通过 Enter 打开节点弹窗后 Escape 恢复原按钮焦点。
+- 主题就绪修复后，凭据表格继承文字从过渡期浅色值收敛为深色前景，axe 对比度检查无违规；不改变原主题调色板。
+- 节点详情、凭据、SSH Key 和备份概览相关的 116 个独立定向场景在禁用重试的检查中通过。
+- 未使用 SSH Key 的表格与卡片不再用父级透明度弱化全部文字；存储用量文字使用语义文字 token，进度条背景色不变。真实 Chromium normal-motion 下，SSH Key 与备份概览的明暗、桌面/移动检查无 axe 违规或文档横向溢出；SSH 编辑弹窗 Escape 返回持久的下拉菜单触发按钮。
+- 证据编译器的合成故障夹具验证重试缺口、缺失记录、跨运行记录和 scratch 越界会被拒绝；这些夹具不是浏览器验收。
+
+完整 464 场景及最终候选指纹以本次运行 manifest、编译结果和对应 PR 的交付记录为准，不能由上述定向检查替代。日志连接旧回调污染新连接状态的问题已另获授权纳入 PR2 的有界修复，不引入新重连算法。第二批 B2/B1 仍按后续独立 PR 顺序交付。旧报告的全站合规、完整生命周期通过、零回归和架构重构工期结论均不保留。

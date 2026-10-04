@@ -57,7 +57,15 @@ export default function AnomalyTab({ nodeId, token }: NodeDetailTabProps) {
   }
 
   return (
-    <div data-testid="anomaly-tab" className="overflow-x-auto rounded-md border border-border">
+    <div
+      role="region"
+      // Keyboard focus enables native horizontal scrolling.
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+      tabIndex={0}
+      aria-label={t("anomaly.tab.title")}
+      data-testid="anomaly-tab"
+      className="overflow-x-auto rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+    >
       <table className="min-w-full text-sm">
         <thead className="bg-muted">
           <tr>

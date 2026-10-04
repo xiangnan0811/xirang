@@ -32,7 +32,14 @@ export function OverviewRecentTasks({ tasks, recentTasks, loading }: OverviewRec
           ) : tasks.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">{t("overview.noTaskData")}</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div
+              role="region"
+              // Keyboard focus enables native horizontal scrolling.
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+              tabIndex={0}
+              aria-label={t("overview.recentTasks")}
+              className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            >
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-border text-xs text-muted-foreground uppercase bg-secondary">
                   <tr>
