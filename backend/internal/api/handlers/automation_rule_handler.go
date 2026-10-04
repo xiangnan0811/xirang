@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/automation"
@@ -46,6 +49,116 @@ func (h *AutomationRuleHandler) List(c *gin.Context) {
 		return
 	}
 	respondOK(c, items)
+}
+
+// automationRuleLogResponse deliberately excludes free-form diagnostics and configuration.
+type automationRuleLogResponse struct {
+	ID              uint      `json:"id"`
+	RuleID          uint      `json:"rule_id"`
+	EventType       string    `json:"event_type"`
+	ActionType      string    `json:"action_type"`
+	Result          string    `json:"result"`
+	CreatedAt       time.Time `json:"created_at"`
+	ErrorCode       *string   `json:"error_code"`
+	TargetTaskID    *int64    `json:"target_task_id"`
+	TargetTaskRunID *int64    `json:"target_task_run_id"`
+}
+
+func automationLogTargetID(raw json.RawMessage) *int64 {
+	if len(raw) == 0 || raw[0] < '1' || raw[0] > '9' {
+		return nil
+	}
+	value, err := json.Number(raw).Int64()
+	if err != nil || value <= 0 || value > 9007199254740991 {
+		return nil
+	}
+	return &value
+}
+
+func mapAutomationRuleLog(item model.AutomationRuleLog) automationRuleLogResponse {
+	out := automationRuleLogResponse{
+		ID: item.ID, RuleID: item.RuleID, CreatedAt: item.CreatedAt,
+		EventType: "unknown", ActionType: "unknown", Result: "unknown",
+	}
+	if automation.ValidEventTypes[item.EventType] {
+		out.EventType = item.EventType
+	}
+	if automation.ValidActionTypes[item.ActionType] {
+		out.ActionType = item.ActionType
+	}
+	switch item.Result {
+	case automation.ResultSuccess:
+		out.Result = automation.ResultSuccess
+	case automation.ResultError:
+		out.Result = automation.ResultError
+		code := "ACTION_FAILED"
+		out.ErrorCode = &code
+	}
+	if out.ActionType == automation.ActionTriggerTask {
+		var targets struct {
+			TaskID    json.RawMessage `json:"task_id"`
+			TaskRunID json.RawMessage `json:"task_run_id"`
+		}
+		if err := json.Unmarshal([]byte(item.Details), &targets); err == nil {
+			taskID, runID := automationLogTargetID(targets.TaskID), automationLogTargetID(targets.TaskRunID)
+			if taskID != nil && runID != nil {
+				out.TargetTaskID, out.TargetTaskRunID = taskID, runID
+			}
+		}
+	}
+	return out
+}
+
+// ListLogs godoc
+// @Summary      查询安全的自动化执行历史
+// @Description  仅管理员；不公开原始错误、消息、配置或 details。成功仅表示动作已记录，不代表任务最终成功或通知已投递。
+// @Tags         automation-rules
+// @Security     Bearer
+// @Produce      json
+// @Param        rule_id    query int    false "规则 ID（允许已删除规则）"
+// @Param        result     query string false "动作结果" Enums(success,error)
+// @Param        page       query int    false "页码" default(1)
+// @Param        page_size  query int    false "每页数量，最大 500" default(30)
+// @Param        sort_order query string false "按日志 ID 排序" Enums(asc,desc) default(desc)
+// @Success      200 {object} handlers.PaginatedResponse{data=[]automationRuleLogResponse}
+// @Failure      400 {object} handlers.Response
+// @Failure      401 {object} handlers.Response
+// @Failure      403 {object} handlers.Response
+// @Failure      500 {object} handlers.Response
+// @Router       /automation-rule-logs [get]
+func (h *AutomationRuleHandler) ListLogs(c *gin.Context) {
+	query := h.db.WithContext(c.Request.Context()).Model(&model.AutomationRuleLog{})
+	if raw := c.Query("rule_id"); raw != "" {
+		id, err := strconv.ParseUint(raw, 10, 63)
+		if err != nil || id == 0 {
+			respondBadRequest(c, "rule_id 必须为正整数")
+			return
+		}
+		query = query.Where("rule_id = ?", id)
+	}
+	if result := c.Query("result"); result != "" {
+		if result != automation.ResultSuccess && result != automation.ResultError {
+			respondBadRequest(c, "result 必须为 success 或 error")
+			return
+		}
+		query = query.Where("result = ?", result)
+	}
+	pagination := parsePagination(c, 30, "id", map[string]bool{"id": true})
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	var rows []model.AutomationRuleLog
+	if err := applyPagination(query, pagination).Find(&rows).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	items := make([]automationRuleLogResponse, len(rows))
+	for i := range rows {
+		items[i] = mapAutomationRuleLog(rows[i])
+	}
+	respondPaginated(c, items, total, pagination.Page, pagination.PageSize)
 }
 
 // Get godoc

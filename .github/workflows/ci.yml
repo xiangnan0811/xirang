@@ -223,6 +223,10 @@ jobs:
 
       - name: Run PostgreSQL general API surface parity
         run: go test ./internal/api -run '^TestGeneralSurfacePostgres$' -count=1
+      - name: Run PostgreSQL automation history query contract
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL automation history queries' ./internal/api/handlers '^TestAutomationRuleLogsPostgres$'
+      - name: Run PostgreSQL automation history dispatcher contract
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL automation history dispatcher' ./internal/api '^TestAutomationRuleLogsDispatcherPostgres$'
 
       - name: Run PostgreSQL backup and restore round-trip
         working-directory: .

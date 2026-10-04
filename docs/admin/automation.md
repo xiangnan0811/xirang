@@ -62,12 +62,15 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 
 ## Web UI
 
-登录后进入 `/app/automation-rules`，可执行：
+管理员登录后进入 `/app/automation-rules`，可执行：
 
 - 创建规则。
 - 编辑规则。
 - 删除规则。
 - 启用或禁用规则。
+- 在规则列表下方查看执行历史，按规则和动作结果筛选、刷新及翻页；默认每页 30 条。桌面表格支持键盘横向滚动，移动端使用卡片。
+
+operator、viewer 访问此页会返回概览，且不会请求规则或执行历史。后端权限校验仍是安全边界。
 
 ## API
 
@@ -80,6 +83,7 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 | GET | `/api/v1/automation-rules/:id` | 获取详情 |
 | PUT | `/api/v1/automation-rules/:id` | 更新规则 |
 | DELETE | `/api/v1/automation-rules/:id` | 删除规则 |
+| GET | `/api/v1/automation-rule-logs` | 分页查询安全执行历史 |
 
 创建示例：
 
@@ -117,11 +121,22 @@ Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数
 
 ## 执行记录
 
-规则执行结果记录在 `automation_rule_logs` 表中，包含规则 ID、事件类型、动作类型、结果和错误信息。当前没有独立的前端执行日志页面。
+规则执行结果保存在现有 `automation_rule_logs` 表中。执行历史只读，不增加日志表、保留策略或运行关联回填：
+
+- `GET /api/v1/automation-rule-logs` 使用 `automation:read`，仅管理员可读；未登录为 401，operator/viewer 为 403。
+- 可选 `rule_id` 必须为正整数，`result` 仅接受 `success` 或 `error`，省略表示全部；非法非空筛选返回 400。查询不要求当前规则仍存在，因此已删除规则的保留日志仍可读取，界面显示“规则 #ID（当前列表不可用）”。
+- 分页沿用统一工具：默认 `page=1`、`page_size=30`；每页有效范围 1–500，无效值回退默认值，而非截断到 500。默认按日志 `id desc` 排序，可指定 `sort_order=asc`。响应为 `{code:200,message:"ok",data:[...],total,page,page_size}`；未匹配时 `data=[]`、`total=0`，超出末页时仍保留筛选总数。
+- 安全 DTO 仅包含 `id`、`rule_id`、`event_type`、`action_type`、`result`、`created_at`、`error_code`、`target_task_id`、`target_task_run_id`。事件和动作仅公开上表各四种值，其他值为 `unknown`；结果仅公开 `success`、`error`，其他值同样为 `unknown`，不能推断为成功。
+- `result=error` 时 `error_code` 固定为 `ACTION_FAILED`，其他结果为 null。原始 `Error`、`Details`、通知消息、动作配置及 effect payload 不公开；旧错误可能包含完整配置，不能只靠通用脱敏正则保证安全。页面提示“动作失败；原始诊断可能包含敏感配置，未公开”，保留日志 ID 供管理员定位后台记录。
+- 仅 `trigger_task` 可从旧 `details.task_id`、`details.task_run_id` 提取目标；两者都必须是 JSON 整数格式的正数且不超过 JavaScript 安全整数上限。任意一项缺失、字符串、非整数、超界或 JSON 损坏时两者同时为 null；其他动作始终为 null。目标是历史 ID，不保证任务仍存在，不额外查询任务状态。
+- `success` 只表示“动作已记录”。`trigger_task` 表示已派发，不代表任务最终成功；`send_notification` 仅记录通知动作，不代表通知已投递。
+
+Legacy 直接派发失败会保留错误日志；durable 动作、日志和 effect 确认在同一事务中提交，事务失败回滚时不会凭空生成失败日志。因此此视图不是所有事件、重试或未提交执行的完整清单，不从缺失记录推断未发生动作。
+
+加载、无匹配记录和请求失败分别展示，失败可重试；筛选改变回到第一页。切换筛选、页码、刷新或身份后取消旧请求并隔离旧结果，不能把旧筛选行显示为新结果；失去管理员权限时立即移除历史。SQLite 和 PostgreSQL 回归覆盖筛选分页、安全字段、真实 Dispatcher 落库及 durable 回滚后的读取；实际部署环境的生命周期验收仍须单独进行。
 
 ## 当前限制
 
 - 过滤条件只支持简单 key-value 等值匹配，不支持 AND/OR 表达式和时间窗口。
 - 动作类型仅限当前内置动作。
 - 不支持自定义事件类型。
-- 暂无前端执行日志查看器。

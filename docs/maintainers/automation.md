@@ -102,6 +102,8 @@ smoke。因而该作业证明候选源码在两种原生平台上的构建、扫
 
 通知投递统计的 SQLite／PostgreSQL 回归共用退役分类和权限夹具；PostgreSQL job 通过 `run-required-postgres-tests.sh` 必跑 `TestAlertDeliveryStatsPostgres`，防止缺少 DSN 或空选择器伪装通过。该入口与 alert delivery migration contract 相邻，但验证实际 handler 聚合，不替代迁移围栏测试；统计口径见[告警合同](../spec/domains/alerting-health.md#投递统计与窗口状态)。
 
+自动化执行历史在 PostgreSQL job 中通过同一 required runner 分别执行 `TestAutomationRuleLogsPostgres`（过滤、分页、安全 DTO、数据库故障）和 `TestAutomationRuleLogsDispatcherPostgres`（真实 Dispatcher 的 legacy 错误、durable 提交/回滚到认证路由的读取）。两者使用隔离 schema，缺少 DSN 或空选择器不构成通过；不以 SQLite 结果代替 PostgreSQL，也不修改持久模型或执行引擎。行为合同见[自动化规则](../admin/automation.md#执行记录)。
+
 通知页失败任务摘要的 PostgreSQL handler parity 通过同一 runner 必跑
 `TestTaskFailureSummaryPostgres`，与 SQLite 共用时间窗口、任务去重、运行时节点快照
 授权、历史删除及错误处理矩阵。缺少 DSN 或空选择器不得视为通过；该独立摘要不改变
