@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { mapAlertDelivery, mapAlertDeliveryStatus } from "./alerts-api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAlertsApi, mapAlertDelivery, mapAlertDeliveryStatus } from "./alerts-api";
 
 describe("alerts-api delivery status mapping", () => {
   it("preserves exact known delivery states", () => {
@@ -81,5 +81,73 @@ describe("alerts-api delivery status mapping", () => {
       attemptCount: 4,
       lastError: "max retries exceeded",
     });
+  });
+});
+
+
+function unreadCountResponse(data: unknown, status = 200) {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: { get: vi.fn().mockReturnValue(null) },
+    text: vi.fn().mockResolvedValue(JSON.stringify({
+      code: status === 200 ? 0 : status,
+      message: status === 200 ? "ok" : "unavailable",
+      data,
+    })),
+  } as unknown as Response;
+}
+
+describe("getAlertUnreadCount", () => {
+  const fetchMock = vi.fn();
+  const api = createAlertsApi();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("maps a valid all-zero unread count as success", async () => {
+    fetchMock.mockResolvedValueOnce(unreadCountResponse({ total: 0, critical: 0, warning: 0 }));
+
+    await expect(api.getAlertUnreadCount("token")).resolves.toEqual({
+      total: 0,
+      critical: 0,
+      warning: 0,
+    });
+  });
+
+  it("rejects HTTP 500 instead of inventing a zero success", async () => {
+    fetchMock.mockResolvedValueOnce(unreadCountResponse({ total: 1, critical: 1, warning: 0 }, 500));
+
+    await expect(api.getAlertUnreadCount("token")).rejects.toMatchObject({ status: 500 });
+  });
+
+  it("rejects when a pending unread request is aborted", async () => {
+    const controller = new AbortController();
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      let rejectPromise: (error: unknown) => void = () => {};
+      const promise = new Promise<Response>((_resolve, reject) => {
+        rejectPromise = reject;
+      });
+      const fail = () => {
+        rejectPromise(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+      };
+      if (init?.signal?.aborted) {
+        fail();
+        return promise;
+      }
+      init?.signal?.addEventListener("abort", fail, { once: true });
+      return promise;
+    });
+
+    const pending = api.getAlertUnreadCount("token", { signal: controller.signal });
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 });
