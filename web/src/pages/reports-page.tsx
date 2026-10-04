@@ -62,6 +62,77 @@ function SuccessRateBadge({ rate }: { rate: number }) {
   return <Badge tone={tone}>{rate.toFixed(1)}%</Badge>;
 }
 
+function RecoveryObjectiveCard({
+  title,
+  actual,
+  compliant,
+  explanation,
+}: {
+  title: string;
+  actual: number | null | undefined;
+  compliant: boolean | null | undefined;
+  explanation: string;
+}) {
+  const { t } = useTranslation();
+  const hasActual = typeof actual === "number" && Number.isFinite(actual);
+  const valueDisplay = hasActual ? String(actual) : t("reports.recoveryObjectives.unknown");
+
+  let status: "compliant" | "nonCompliant" | "notAssessed";
+  let tone: "success" | "destructive" | "neutral";
+
+  if (compliant === true) {
+    if (hasActual) {
+      status = "compliant";
+      tone = "success";
+    } else {
+      status = "notAssessed";
+      tone = "neutral";
+    }
+  } else if (compliant === false) {
+    status = "nonCompliant";
+    tone = "destructive";
+  } else {
+    status = "notAssessed";
+    tone = "neutral";
+  }
+
+  const showInsufficientEvidence = !hasActual && compliant === false;
+  const statusLabel =
+    status === "compliant"
+      ? t("reports.recoveryObjectives.compliant")
+      : status === "nonCompliant"
+        ? t("reports.recoveryObjectives.nonCompliant")
+        : t("reports.recoveryObjectives.notAssessed");
+
+  return (
+    <Card
+      role="group"
+      aria-label={title}
+      className="flex flex-col justify-between border-border/60 bg-background/50"
+    >
+      <CardHeader className="flex flex-col gap-1.5 p-3.5 pb-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-medium text-foreground">{title}</span>
+          <Badge tone={tone} dot={false}>{statusLabel}</Badge>
+        </div>
+        <div className="text-lg font-semibold tabular-nums text-foreground">
+          {valueDisplay}
+        </div>
+        {showInsufficientEvidence && (
+          <p className="text-xs text-[hsl(var(--destructive-text))]">
+            {t("reports.recoveryObjectives.insufficientEvidence")}
+          </p>
+        )}
+      </CardHeader>
+      <CardContent className="p-3.5 pt-0">
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          {explanation}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ReportRow({ report }: { report: Report }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -97,7 +168,22 @@ function ReportRow({ report }: { report: Report }) {
       </button>
 
       {open && (
-        <div className="overflow-x-auto px-6 pb-4 pt-1 text-sm text-muted-foreground">
+        <div className="overflow-x-auto px-6 pb-4 pt-2 text-sm text-muted-foreground">
+          <div className="mb-4 grid gap-3">
+            <RecoveryObjectiveCard
+              title={t("reports.recoveryObjectives.actualRpo")}
+              actual={report.actualRpoMinutes}
+              compliant={report.rpoCompliant}
+              explanation={t("reports.recoveryObjectives.rpoExplanation")}
+            />
+            <RecoveryObjectiveCard
+              title={t("reports.recoveryObjectives.actualRto")}
+              actual={report.actualRtoMinutes}
+              compliant={report.rtoCompliant}
+              explanation={t("reports.recoveryObjectives.rtoExplanation")}
+            />
+          </div>
+
           {topFailures.length > 0 ? (
             <div>
               <p className="mb-2 font-medium text-foreground">

@@ -113,7 +113,7 @@ axe impact 与项目缺陷优先级分开判断，不直接把 `critical` 映射
 | A3 文字对比度 | 已改为独立状态文字 token，仍按实际表面验收，不宣称全站关闭 | [Badge 变体](web/src/components/ui/badge.variants.ts)保留语义背景、恢复原有字重并移除额外字距；侧栏分组移除额外透明度；普通小字仍需 4.5:1 |
 | A4 Toast 点击区域 | 已收敛为 CSS 单一尺寸来源，真实 Toast 验收独立记录 | [index.css](web/src/index.css)提供 24px 关闭按钮尺寸；已删除未触发 Toast 的伪尺寸测试，不以 live region 属性作为热区证据 |
 | B1 自动化运行可观测性 | 缺前端查询展示，不是没有持久日志 | [dispatcher](backend/internal/automation/dispatcher.go)已有逐规则日志及 durable effect 路径；[路由](backend/internal/api/router.go)和[前端 API](web/src/lib/api/automation-rules.ts)当前提供规则 CRUD。新增查询应复用执行事实，区分动作派发和最终任务结果，处理权限、脱敏、分页和保留语义 |
-| B2 RPO/RTO 呈现 | 已聚合、已映射，报表未展示 | [generator](backend/internal/reporting/generator.go)、[Report 模型](backend/internal/model/report.go)、[前端映射](web/src/lib/api/reports-api.ts)、[报表行](web/src/pages/reports-page.tsx)。先展示已有值与未知状态，不新增重复聚合器 |
+| B2 RPO/RTO 呈现 | 已展示已有值、未知及达标状态 | [报表行](web/src/pages/reports-page.tsx)使用[现有映射](web/src/lib/api/reports-api.ts)，不新增聚合器；真实 `reporting.Generate` 落库并经 API 返回的 720/10 分钟达标记录与 null/false 缺证据记录已验证到界面。统计口径和缺失组合见[任务合同](docs/spec/domains/task-execution-recovery.md#完成事实rpo-与回归) |
 | B3 权限入口一致性 | 只保留逐页核对建议，不宣称普遍缺少拦截 | 凭据审计已有非 admin 不加载和重定向；自动化页情况不同。后端授权仍是安全边界，统一前端入口不能替代它 |
 | C1 遗留用户页面 | 未挂载路由是线索，不代表引用清理已完成 | [router](web/src/router.tsx)没有挂载 [users-page](web/src/pages/users-page.tsx)；删除前核对所有引用和配套测试，不能以补标签代替清理 |
 | C2 Cron 自然语言解释 | 暂缓，缺少定位到具体未覆盖控件的证据 | 旧报告的约 15 行实现量没有验证依据，不列入已确认缺陷 |
