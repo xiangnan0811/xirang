@@ -29,6 +29,10 @@
     --warning-foreground: 42 45% 97%;
     --info: 199 87% 39%;
     --info-foreground: 200 52% 97%;
+    --success-text: 156 70% 24%;
+    --warning-text: 36 90% 28%;
+    --destructive-text: 0 75% 35%;
+    --info-text: 199 85% 28%;
     --border: 220 16% 86%;
     --input: 220 16% 86%;
     --ring: 217 84% 43%;
@@ -107,6 +111,10 @@
     --warning-foreground: 224 60% 6%;
     --info: 199 95% 58%;
     --info-foreground: 224 60% 6%;
+    --success-text: 158 70% 48%;
+    --warning-text: 38 95% 60%;
+    --destructive-text: 0 80% 72%;
+    --info-text: 199 95% 58%;
     --border: 220 20% 18%;
     --input: 220 20% 18%;
     --ring: 217 100% 62%;
@@ -537,4 +545,12 @@ html[data-power="save"] .pulse-offline {
 @keyframes shimmer {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
+}
+
+/* Ensure toast close button satisfies WCAG 2.2 AA target-size (>= 24px x 24px) */
+[data-sonner-toast] [data-close-button] {
+  width: 24px !important;
+  height: 24px !important;
+  min-width: 24px !important;
+  min-height: 24px !important;
 }

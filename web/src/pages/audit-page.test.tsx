@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AuditPage } from "./audit-page";
 import type { AuditLogRecord } from "@/types/domain";
+import i18n from "@/i18n";
 
 const {
   getAuditLogsMock,
@@ -110,6 +111,18 @@ describe("AuditPage", () => {
     });
 
     expect(screen.getByRole("heading", { level: 1, name: "审计" })).toBeInTheDocument();
+  });
+
+  it("names the scrollable table region with the audit title and accepts focus", async () => {
+    render(<AuditPage />);
+
+    await waitFor(() => {
+      expect(getAuditLogsMock).toHaveBeenCalledTimes(1);
+    });
+
+    const region = screen.getByRole("region", { name: i18n.t("audit.title") });
+    region.focus();
+    expect(region).toHaveFocus();
   });
 
   it("筛选参数变更后会带入查询请求", async () => {

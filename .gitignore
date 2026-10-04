@@ -35,6 +35,7 @@ web/.env
 .agent/
 GEMINI.md
 .codebuddy/
+.agents/
 
 # git worktrees
 .worktrees/

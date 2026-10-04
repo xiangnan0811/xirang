@@ -186,6 +186,7 @@ function UsersTabContent() {
             onChange={(event) => setNewUserPassword(event.target.value)}
           />
           <Select
+            aria-label={t("users.role")}
             value={newUserRole}
             onChange={(event) => setNewUserRole(event.target.value as RoleType)}
           >

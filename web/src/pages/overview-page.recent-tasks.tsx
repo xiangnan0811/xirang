@@ -52,27 +52,32 @@ export function OverviewRecentTasks({ tasks, recentTasks, loading }: OverviewRec
 
                     let StatusIcon = Clock;
                     let statusColor = "text-muted-foreground";
+                    let statusTextColor = "text-muted-foreground";
                     let statusLabel = t("overview.taskStatusQueued");
 
                     switch (task.status) {
                       case "success":
                         StatusIcon = CheckCircle2;
                         statusColor = "text-success";
+                        statusTextColor = "text-[hsl(var(--success-text))]";
                         statusLabel = t("overview.taskStatusSuccess");
                         break;
                       case "failed":
                         StatusIcon = AlertTriangle;
                         statusColor = "text-destructive";
+                        statusTextColor = "text-[hsl(var(--destructive-text))]";
                         statusLabel = t("overview.taskStatusFailed");
                         break;
                       case "running":
                         StatusIcon = TrendingUp;
                         statusColor = "text-info";
+                        statusTextColor = "text-[hsl(var(--info-text))]";
                         statusLabel = t("overview.taskStatusRunning");
                         break;
                       case "retrying":
                         StatusIcon = AlertTriangle;
                         statusColor = "text-warning";
+                        statusTextColor = "text-[hsl(var(--warning-text))]";
                         statusLabel = t("overview.taskStatusRetrying");
                         break;
                     }
@@ -84,7 +89,7 @@ export function OverviewRecentTasks({ tasks, recentTasks, loading }: OverviewRec
                         <td className="px-4 py-2.5">
                           <span className={`inline-flex items-center gap-1.5 ${statusColor}`}>
                             <StatusIcon className="size-3.5" />
-                            {statusLabel}
+                            <span className={statusTextColor}>{statusLabel}</span>
                           </span>
                         </td>
                         <td className="px-4 py-2.5 font-mono text-xs">{transferData}</td>

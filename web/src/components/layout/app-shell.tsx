@@ -294,7 +294,7 @@ function AppShellInner() {
               <div
                 role="status"
                 aria-live="polite"
-                className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+                className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-[hsl(var(--warning-text))]"
               >
                 <span className="font-medium">{t("appShell.demoBannerTitle")}</span>
                 <span className="ml-2">{t("appShell.demoBannerDesc")}</span>
@@ -304,7 +304,7 @@ function AppShellInner() {
               <div
                 role="status"
                 aria-live="polite"
-                className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+                className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-[hsl(var(--warning-text))]"
               >
                 {consoleData.warning}
               </div>
