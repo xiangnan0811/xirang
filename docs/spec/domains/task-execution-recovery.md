@@ -157,4 +157,6 @@ freshness 只来自可证 legacy transfer completion 或已提交、严格 Task/
 
 SLA 报告的 RPO：每个设置正数目标的策略，合并其关联任务最近 20 条 verified completion，按 `completed_at` 排序，取相邻最大间隔的整数分钟；不足两条为未知，不可当零且该目标不达标。RTO：该策略最新成功 `trigger_type=restore` 的 `duration_ms/60000` 整数分钟。报告 actual 取有关策略最差值，全部有目标策略都 `actual<=target` 才达标，无任何目标返回 null。当前实现先用报告节点作用域选策略，再读该策略所有任务；这两项不按报告 period 起止时间筛选，也不是距现在的 freshness。这些事实来自 `reporting/generator.go`，不能再描述为 TaskRun started_at 的间隔。
 
+SLA 历史报告展开后在失败排行之前显示实际 RPO/RTO（分钟）与达标状态，并说明上述统计口径。实际值为零时显示 `0`，缺失时显示“未知”；有实际值且 compliance 为 true 才显示“达标”，false 显示“未达标”，缺失 compliance 显示“未评估”。实际值缺失且 compliance 为 false 时附“缺少足够证据，未判定达标”；实际值缺失但 compliance 为 true 的不完整响应只能显示“未知／未评估”，不得显示通过状态。历史 null 不等同于“未配置目标”，页面不补零、不额外计算或请求另一套指标。
+
 升级前备份数据库、密钥和独立备份树，停止并排空旧 Core/executor/publication/reconciliation worker；同 migration version 也不能证明旧 writer 可理解新证据。used schema 禁止以删除事实、强制版本或旧 binary 降级绕过 hold。后端 focused 回归覆盖 CAS/override/显式零值/导入补偿、cron 去重/跳过/重启/配额/链式 effect、immutable snapshot、旧版 capture/byte path/staging、Rclone no-start/未知/跨任务 hold/原子 reconcile、cleanup 来源引用、完成事实与 RPO；涉及持久化竞争须双引擎与 race，前端覆盖配置冲突、安全 DTO 和证据 detail。实现验收、CI 与真实部署恢复各自举证。

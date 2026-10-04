@@ -2165,6 +2165,17 @@ const en = {
     avgDuration: "Avg Duration",
     scopeTagValue: "Tag: {{tag}}",
     loading: "Loading report configurations…",
+    recoveryObjectives: {
+      actualRpo: "Actual RPO (minutes)",
+      actualRto: "Actual RTO (minutes)",
+      compliant: "Compliant",
+      nonCompliant: "Non-compliant",
+      notAssessed: "Not assessed",
+      unknown: "Unknown",
+      insufficientEvidence: "Insufficient evidence; compliance not established.",
+      rpoExplanation: "For each relevant policy with a positive RPO target, take the largest whole-minute gap in its latest 20 verified completions, then show the worst policy value. Fewer than two facts makes that policy unknown and non-compliant. Not limited to the report period; not current backup freshness or drill duration.",
+      rtoExplanation: "For each relevant policy with a positive RTO target, take its latest successful restore duration in whole minutes, then show the worst policy value. Not limited to the report period; not backup freshness or drill duration.",
+    },
   },
 
   // ── report config dialog ──

@@ -2165,6 +2165,17 @@ const zh = {
     avgDuration: "平均耗时",
     scopeTagValue: "标签：{{tag}}",
     loading: "正在加载报告配置…",
+    recoveryObjectives: {
+      actualRpo: "实际 RPO（分钟）",
+      actualRto: "实际 RTO（分钟）",
+      compliant: "达标",
+      nonCompliant: "未达标",
+      notAssessed: "未评估",
+      unknown: "未知",
+      insufficientEvidence: "缺少足够证据，未判定达标",
+      rpoExplanation: "对每个设置正数 RPO 目标的相关策略，取其最近至多 20 条已验证完成事实的最大相邻间隔（整数分钟），报告显示各策略结果的最差值。不足两条事实时，该策略为未知且未达标。不按报告周期筛选，亦非当前备份新鲜度或演练耗时。",
+      rtoExplanation: "对每个设置正数 RTO 目标的相关策略，取其最近成功恢复运行的耗时（整数分钟），报告显示各策略结果的最差值。不按报告周期筛选，亦非备份新鲜度或演练耗时。",
+    },
   },
 
   // ── report config dialog ──
