@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 import { render as rtlRender, screen, waitFor, act, type RenderOptions } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactElement } from "react";
@@ -358,6 +359,46 @@ function deliveryStatsResult(partial: Pick<AlertDeliveryStats, "totalSent" | "to
   };
 }
 
+type AlertUnreadStats = { total: number; critical: number; warning: number };
+
+function deferredUnreadCounts() {
+  const calls: Array<Deferred<AlertUnreadStats>> = [];
+  mockGetAlertUnreadCount.mockImplementation(() => {
+    const deferred = createDeferred<AlertUnreadStats>();
+    calls.push(deferred);
+    return deferred.promise;
+  });
+  return calls;
+}
+
+async function renderSettledUnread(initial: AlertUnreadStats) {
+  const calls = deferredUnreadCounts();
+  createContext();
+  const view = render(<NotificationsPage />);
+  await waitFor(() => {
+    expect(calls.length).toBe(1);
+  });
+  await act(async () => {
+    calls[0]?.resolve(initial);
+  });
+  await waitFor(() => {
+    expect(alertStatCard("待处理告警").value).toHaveTextContent(String(initial.total));
+  });
+  return { calls, view };
+}
+
+function alertStatCard(title: string) {
+  const card = screen.getByText(title).closest("[data-tone]");
+  if (!(card instanceof HTMLElement)) {
+    throw new Error(`missing ${title} stat card`);
+  }
+  const value = card.querySelector(".tabular-nums");
+  if (!(value instanceof HTMLElement)) {
+    throw new Error(`missing ${title} stat value`);
+  }
+  return { card, value };
+}
+
 function failureStatParts() {
   const card = screen.getByText("24h 失败任务").closest("[data-tone]");
   if (!(card instanceof HTMLElement)) {
@@ -398,6 +439,22 @@ function deliveryHero() {
     throw new Error("missing notifications hero");
   }
   return hero;
+}
+
+function heroCountBadge(label: string) {
+  const badge = Array.from(deliveryHero().querySelectorAll("span")).find((element) =>
+    Array.from(element.childNodes).some(
+      (node) => node.nodeType === Node.TEXT_NODE && (node.textContent ?? "").includes(label),
+    ),
+  );
+  if (!(badge instanceof HTMLElement)) {
+    throw new Error(`missing hero badge ${label}`);
+  }
+  const tone = badge.querySelector(".sr-only");
+  if (!(tone instanceof HTMLElement)) {
+    throw new Error(`missing hero badge tone ${label}`);
+  }
+  return { badge, tone };
 }
 
 /* ---------- tests ---------- */
@@ -1155,5 +1212,512 @@ describe("NotificationsPage", () => {
     expect(await screen.findByText("\u5171 2 \u6761")).toBeInTheDocument();
     // mobile + desktop 视图各渲染一次，使用 getAllByText
     expect(screen.getAllByText("\u8FDE\u63A5\u5931\u8D25").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("未读统计未返回时显示破折号和未知态，而不是成功零值", async () => {
+    const calls = deferredUnreadCounts();
+    createContext();
+    render(<NotificationsPage />);
+
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("0");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("加载中...");
+    expect(alertStatCard("待处理告警").card).not.toHaveAttribute("data-tone", "destructive");
+    expect(alertStatCard("严重告警").card).not.toHaveAttribute("data-tone", "warning");
+    expect(deliveryHero()).toHaveTextContent("加载中...");
+    expect(deliveryHero()).not.toHaveTextContent("0 条待处理");
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+  });
+
+  it("未读统计成功后才恢复待处理和严重数量", async () => {
+    const calls = deferredUnreadCounts();
+    createContext();
+    render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+
+    await act(async () => {
+      calls[0]?.resolve({ total: 4, critical: 1, warning: 2 });
+    });
+
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("4");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("1");
+    expect(alertStatCard("待处理告警").card).toHaveAttribute("data-tone", "destructive");
+    expect(alertStatCard("严重告警").card).toHaveAttribute("data-tone", "warning");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("当前待处理的告警数量");
+    expect(deliveryHero()).toHaveTextContent("4 条待处理");
+    expect(screen.queryByRole("button", { name: "重试告警统计" })).not.toBeInTheDocument();
+  });
+
+  it("未读统计失败后重试成功并显示 9/3/6", async () => {
+    const user = userEvent.setup();
+    const calls = deferredUnreadCounts();
+    createContext();
+    render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+
+    await act(async () => {
+      calls[0]?.reject(new Error("unread down"));
+    });
+
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").card).toHaveAttribute("data-tone", "warning");
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("9");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("告警统计加载失败");
+    expect(deliveryHero()).toHaveTextContent("告警统计加载失败");
+    expect(deliveryHero()).not.toHaveTextContent("0 条待处理");
+
+    const retry = screen.getByRole("button", { name: "重试告警统计" });
+    expect(retry).toHaveTextContent("重试");
+    expect(retry).toBeEnabled();
+    await user.click(retry);
+
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("加载中...");
+    expect(screen.queryByRole("button", { name: "重试告警统计" })).not.toBeInTheDocument();
+    expect(calls.length).toBe(2);
+
+    await act(async () => {
+      calls[1]?.resolve({ total: 9, critical: 3, warning: 6 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("9");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("3");
+    expect(deliveryHero()).toHaveTextContent("9 条待处理");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+  });
+
+  it("同一 token 刷新后提交 B 的成功 7，再忽略 A 的成功 0 和旧失败", async () => {
+    const calls = deferredUnreadCounts();
+    createContext();
+    const view = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+
+    createContext({ refreshVersion: 1 });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+
+    await act(async () => {
+      calls[1]?.resolve({ total: 7, critical: 2, warning: 5 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("7");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("2");
+
+    await act(async () => {
+      calls[0]?.resolve({ total: 0, critical: 0, warning: 0 });
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("7");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("2");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("0");
+
+    view.unmount();
+    const failureCalls = deferredUnreadCounts();
+    createContext({ refreshVersion: 0 });
+    const again = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(failureCalls.length).toBe(1);
+    });
+    createContext({ refreshVersion: 1 });
+    again.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(failureCalls.length).toBe(2);
+    });
+
+    await act(async () => {
+      failureCalls[1]?.resolve({ total: 7, critical: 2, warning: 5 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("7");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("2");
+    expect(deliveryHero()).toHaveTextContent("7 条待处理");
+
+    await act(async () => {
+      failureCalls[0]?.reject(new Error("old failure"));
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("7");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("2");
+    expect(deliveryHero()).toHaveTextContent("7 条待处理");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+    expect(alertStatCard("严重告警").card).not.toHaveTextContent("告警统计加载失败");
+    expect(deliveryHero()).not.toHaveTextContent("告警统计加载失败");
+    expect(screen.queryByRole("button", { name: "重试告警统计" })).not.toBeInTheDocument();
+  });
+
+  it("未读统计在 token A→B→A 下忽略旧成功和旧失败", async () => {
+    const calls = deferredUnreadCounts();
+    authRef.current = { token: "token-a" };
+    createContext();
+    const view = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+
+    authRef.current = { token: "token-b" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+
+    authRef.current = { token: "token-a" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    await waitFor(() => {
+      expect(calls.length).toBe(3);
+    });
+
+    await act(async () => {
+      calls[0]?.resolve({ total: 8, critical: 8, warning: 0 });
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("加载中...");
+
+    await act(async () => {
+      calls[1]?.reject(new Error("stale token B"));
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("加载中...");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+    expect(screen.queryByRole("button", { name: "重试告警统计" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      calls[2]?.resolve({ total: 2, critical: 1, warning: 1 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("2");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("1");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("8");
+  });
+
+  it("退出登录后立即隐藏未读统计且不提交迟到结果", async () => {
+    const calls = deferredUnreadCounts();
+    createContext();
+    const view = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    await act(async () => {
+      calls[0]?.resolve({ total: 6, critical: 1, warning: 2 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("6");
+    });
+
+    createContext({ refreshVersion: 1 });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+
+    authRef.current = { token: null };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("暂无可用的告警统计");
+    expect(mockGetAlertUnreadCount).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      calls[1]?.resolve({ total: 4, critical: 4, warning: 0 });
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("暂无可用的告警统计");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+    expect(mockGetAlertUnreadCount).toHaveBeenCalledTimes(2);
+  });
+
+  it("无 token 时不请求未读统计并显示不可用", () => {
+    authRef.current = { token: null };
+    createContext();
+    render(<NotificationsPage />);
+
+    expect(mockGetAlertUnreadCount).not.toHaveBeenCalled();
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("暂无可用的告警统计");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("加载中...");
+    expect(deliveryHero()).toHaveTextContent("暂无可用的告警统计");
+    expect(screen.queryByRole("button", { name: "重试告警统计" })).not.toBeInTheDocument();
+  });
+
+  it("卸载后迟到的未读成功或失败不会显示在新挂载上", async () => {
+    const calls = deferredUnreadCounts();
+    const first = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    first.unmount();
+    await act(async () => {
+      calls[0]?.resolve({ total: 9, critical: 9, warning: 0 });
+    });
+
+    const second = render(<NotificationsPage />);
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("加载中...");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("9");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+    second.unmount();
+    await act(async () => {
+      calls[1]?.reject(new Error("late reject"));
+    });
+
+    render(<NotificationsPage />);
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("加载中...");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("9");
+  });
+
+  it("严格模式下 mock 故意忽略 abort，只显示仍有效的未读统计", async () => {
+    const calls = deferredUnreadCounts();
+    createContext();
+    render(<StrictMode><NotificationsPage /></StrictMode>);
+
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+
+    await act(async () => {
+      calls[1]?.resolve({ total: 4, critical: 1, warning: 2 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("4");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("1");
+
+    await act(async () => {
+      calls[0]?.resolve({ total: 8, critical: 8, warning: 8 });
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("4");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("1");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("8");
+    expect(alertStatCard("严重告警").value).not.toHaveTextContent("8");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+    expect(screen.queryByRole("button", { name: "重试告警统计" })).not.toBeInTheDocument();
+  });
+
+  it("确认告警后未读统计先失效，再显示新的数量", async () => {
+    const user = userEvent.setup();
+    const { calls } = await renderSettledUnread({ total: 3, critical: 2, warning: 1 });
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "确认" }));
+
+    await waitFor(() => {
+      expect(mockAckAlert).toHaveBeenCalledWith("test-token", "alert-open");
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("告警 E_CONN 已确认");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("加载中...");
+
+    await act(async () => {
+      calls[1]?.resolve({ total: 2, critical: 1, warning: 1 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("2");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("1");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+  });
+
+  it("恢复告警后未读统计先失效，再显示新的数量", async () => {
+    const user = userEvent.setup();
+    const { calls } = await renderSettledUnread({ total: 3, critical: 2, warning: 1 });
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "恢复" }));
+
+    await waitFor(() => {
+      expect(mockResolveAlert).toHaveBeenCalledWith("test-token", "alert-open");
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("告警 E_CONN 已恢复");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+
+    await act(async () => {
+      calls[1]?.resolve({ total: 1, critical: 0, warning: 1 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("1");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("0");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("3");
+  });
+
+  it("批量恢复后未读统计先失效，再显示新的数量", async () => {
+    const user = userEvent.setup();
+    const { calls } = await renderSettledUnread({ total: 5, critical: 2, warning: 3 });
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" })[0]);
+    await user.click(screen.getAllByRole("checkbox", { name: "选择节点 node-2 的告警 E_WARN" })[0]);
+    expect(screen.getByText("已选择 2 条未恢复告警")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "批量恢复所选告警" }));
+
+    await waitFor(() => {
+      expect(mockResolveAlertsBulk).toHaveBeenCalledWith("test-token", { alertIds: ["alert-open", "alert-acked"] });
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("已恢复 2 条告警");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+
+    await act(async () => {
+      calls[1]?.resolve({ total: 0, critical: 0, warning: 0 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("0");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("0");
+    expect(deliveryHero()).toHaveTextContent("0 条待处理");
+    expect(heroCountBadge("0 条待处理").tone).toHaveTextContent("success");
+    expect(heroCountBadge("0 条待处理").tone).not.toHaveTextContent("destructive");
+    expect(heroCountBadge("0 条待处理").tone).not.toHaveTextContent("warning");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+  });
+
+  it("全局刷新与告警确认重叠时只提交当前未读统计", async () => {
+    const user = userEvent.setup();
+    const { calls, view } = await renderSettledUnread({ total: 4, critical: 1, warning: 1 });
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "确认" }));
+    await waitFor(() => {
+      expect(mockAckAlert).toHaveBeenCalledWith("test-token", "alert-open");
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("告警 E_CONN 已确认");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+
+    createContext({ refreshVersion: 1 });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(calls.length).toBe(3);
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+
+    await act(async () => {
+      calls[1]?.resolve({ total: 9, critical: 9, warning: 0 });
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("9");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+
+    await act(async () => {
+      calls[2]?.resolve({ total: 2, critical: 0, warning: 2 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("2");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("0");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("9");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("4");
+  });
+
+  it("展示 9/3/6 后全局刷新立即未知，当前失败不恢复 9，重试得到新数量", async () => {
+    const user = userEvent.setup();
+    const calls = deferredUnreadCounts();
+    createContext();
+    const view = render(<NotificationsPage />);
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+
+    await act(async () => {
+      calls[0]?.resolve({ total: 9, critical: 3, warning: 6 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("9");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("3");
+    expect(deliveryHero()).toHaveTextContent("9 条待处理");
+
+    createContext({ refreshVersion: 1 });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").card).toHaveTextContent("加载中...");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("9");
+    expect(alertStatCard("严重告警").value).not.toHaveTextContent("3");
+    expect(deliveryHero()).not.toHaveTextContent("9 条待处理");
+    await waitFor(() => {
+      expect(calls.length).toBe(2);
+    });
+
+    await act(async () => {
+      calls[1]?.reject(new Error("current unread failed"));
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").card).toHaveTextContent("告警统计加载失败");
+    });
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("9");
+    expect(alertStatCard("严重告警").value).not.toHaveTextContent("3");
+    expect(deliveryHero()).toHaveTextContent("告警统计加载失败");
+    expect(deliveryHero()).not.toHaveTextContent("9 条待处理");
+
+    await user.click(screen.getByRole("button", { name: "重试告警统计" }));
+    expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
+    expect(alertStatCard("严重告警").value).toHaveTextContent("—");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("9");
+    expect(screen.queryByRole("button", { name: "重试告警统计" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(calls.length).toBe(3);
+    });
+
+    await act(async () => {
+      calls[2]?.resolve({ total: 2, critical: 1, warning: 1 });
+    });
+    await waitFor(() => {
+      expect(alertStatCard("待处理告警").value).toHaveTextContent("2");
+    });
+    expect(alertStatCard("严重告警").value).toHaveTextContent("1");
+    expect(deliveryHero()).toHaveTextContent("2 条待处理");
+    expect(alertStatCard("待处理告警").value).not.toHaveTextContent("9");
+    expect(alertStatCard("严重告警").value).not.toHaveTextContent("3");
+    expect(deliveryHero()).not.toHaveTextContent("9 条待处理");
+    expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
+    expect(screen.queryByRole("button", { name: "重试告警统计" })).not.toBeInTheDocument();
   });
 });

@@ -292,8 +292,11 @@ export function createAlertsApi() {
       };
     },
 
-    async getAlertUnreadCount(token: string): Promise<{ total: number; critical: number; warning: number }> {
-      const data = await request<{ total: number; critical: number; warning: number }>("/alerts/unread-count", { token });
+    async getAlertUnreadCount(token: string, options?: { signal?: AbortSignal }): Promise<{ total: number; critical: number; warning: number }> {
+      const data = await request<{ total: number; critical: number; warning: number }>("/alerts/unread-count", {
+        token,
+        signal: options?.signal,
+      });
       return {
         total: Number(data?.total ?? 0),
         critical: Number(data?.critical ?? 0),

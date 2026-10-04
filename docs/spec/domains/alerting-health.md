@@ -57,6 +57,14 @@ API/前端区分 pending、sending、retrying、sent、failed 和兼容 unknown�
 
 回归覆盖 SQLite/真实 PostgreSQL 的退役成功保留、非成功过滤、孤立/NULL/ownership 矩阵，以及真实 API mapper 到页面的失败、重试、刷新与乱序响应；全局总量及逐通道使用同一口径。
 
+### 通知页未读告警统计
+
+`GET /api/v1/alerts/unread-count` 返回当前身份可见的未读总数、严重数和警告数。前端 wrapper 接受可选 `AbortSignal` 并传给该请求；不传 signal 的既有调用保持原来的请求。合法全零计数是成功。HTTP 500，以及仍在进行的请求被 abort，都必须抛出，不能伪装成全零成功。
+
+通知页只更新既有的待处理总数和严重数，不新增警告卡片。两处与顶部未读徽章绑定同一次请求代次。加载、失败或无身份时保持破折号和未知态，不使用成功零值；失败显示可重试错误，重试与告警变更共用同一个刷新回调。成功后才恢复数字与对应状态。同一 token 刷新、告警确认、单条解决、批量解决、按节点解决、身份切换和卸载都会使旧结果失效。只允许当前代次提交：较新的成功 7 不会被更早的成功 0 或失败覆盖；A→B→A 重新请求 A，迟到的成功和失败都不提交。代次已经结束或 signal 已经中止时不提交；仍有效的请求若收到 AbortError，仍按失败处理。
+
+回归覆盖 wrapper 的全零成功、HTTP 500 和未完成请求 abort 拒绝，以及页面加载未知态、失败后重试得到 9/3/6、同一 token 刷新、身份 ABA 的旧成功与旧失败、退出、卸载、严格模式（mock 故意忽略 abort）、确认/恢复/批量恢复的可见失效与新值，以及与全局刷新重叠。
+
 ## 批量解决
 
 `POST /api/v1/alerts/bulk-resolve` 需要认证和 `alerts:write`，路由在动态 alert 路由前注册。请求恰好一种目标：`alert_ids`（去重、过滤零）或正数 `node_id`。缺少、同时提交、过滤后为空均 400；任一明确 ID 不存在 404；任一目标节点无 ownership 403；全部验证后在一个事务只更新未 resolved 的行，置 `status=resolved,retryable=false,updated_at=now`。

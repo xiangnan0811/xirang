@@ -5492,7 +5492,12 @@ func TestPlanCreateConcurrentSameIntent(t *testing.T) {
 	fixture := newPlanServiceTestFixtureWithSQLiteConcurrency(t, false)
 	const callers = 12
 	timeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	t.Cleanup(cancel)
+	var callersDone sync.WaitGroup
+	callersDone.Add(callers)
+	t.Cleanup(func() {
+		cancel()
+		callersDone.Wait()
+	})
 	start := make(chan struct{})
 	type outcome struct {
 		result CreatePlanResult
@@ -5503,6 +5508,7 @@ func TestPlanCreateConcurrentSameIntent(t *testing.T) {
 	callersReady.Add(callers)
 	for index := 0; index < callers; index++ {
 		go func(index int) {
+			defer callersDone.Done()
 			callersReady.Done()
 			<-start
 			request := cloneCreatePlanRequest(fixture.request)
@@ -5538,6 +5544,7 @@ func TestPlanCreateConcurrentSameIntent(t *testing.T) {
 			t.Fatalf("wait for concurrent plan creators: %v", timeout.Err())
 		}
 	}
+	callersDone.Wait()
 	if created != 1 || replayed != callers-1 {
 		t.Fatalf("same-intent results: created=%d replayed=%d", created, replayed)
 	}

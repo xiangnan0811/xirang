@@ -14,6 +14,8 @@ import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { TaskFailureSummary } from "@/lib/api/tasks-api";
 
+type AlertUnreadStats = { total: number; critical: number; warning: number };
+
 export function NotificationsPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
@@ -34,15 +36,46 @@ export function NotificationsPage() {
     }
   }, [searchParams, setSearchParams]);
 
-  // 统计卡片数据：复用 getAlertUnreadCount API
-  const [alertStats, setAlertStats] = useState({ total: 0, critical: 0, warning: 0 });
+  // 未读统计绑定当前请求代次。确认、解决、刷新、换身份或卸载都会让旧响应失效。
+  const [alertStatsVersion, setAlertStatsVersion] = useState(0);
+  const alertStatsRequestKey = useMemo(
+    () => ({ token, refreshVersion, alertStatsVersion }),
+    [token, refreshVersion, alertStatsVersion],
+  );
+  const [alertStats, setAlertStats] = useState<
+    | { key: typeof alertStatsRequestKey; status: "success"; data: AlertUnreadStats }
+    | { key: typeof alertStatsRequestKey; status: "error" }
+    | null
+  >(null);
   const refreshAlertStats = useCallback(() => {
-    if (!token) return;
-    apiClient.getAlertUnreadCount(token).then(setAlertStats).catch(() => {});
-  }, [token]);
+    setAlertStatsVersion((version) => version + 1);
+  }, []);
   useEffect(() => {
-    refreshAlertStats();
-  }, [refreshAlertStats, refreshVersion]);
+    const key = alertStatsRequestKey;
+    if (!key.token) {
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    apiClient
+      .getAlertUnreadCount(key.token, { signal: controller.signal })
+      .then((data) => {
+        if (!active || controller.signal.aborted) {
+          return;
+        }
+        setAlertStats({ key, status: "success", data });
+      })
+      .catch(() => {
+        if (!active || controller.signal.aborted) {
+          return;
+        }
+        setAlertStats({ key, status: "error" });
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [alertStatsRequestKey]);
 
   // 投递重试统计
   const [deliveryFailedCount, setDeliveryFailedCount] = useState<number | null>(null);
@@ -153,6 +186,60 @@ export function NotificationsPage() {
     );
   }
 
+  let alertStatsPhase: "unavailable" | "loading" | "success" | "error";
+  let alertStatsValue: AlertUnreadStats | null = null;
+  if (!token) {
+    alertStatsPhase = "unavailable";
+  } else if (!alertStats || alertStats.key !== alertStatsRequestKey) {
+    alertStatsPhase = "loading";
+  } else if (alertStats.status === "error") {
+    alertStatsPhase = "error";
+  } else {
+    alertStatsPhase = "success";
+    alertStatsValue = alertStats.data;
+  }
+
+  const alertStatsDescription = (successText: string, withRetry: boolean): ReactNode => {
+    if (alertStatsPhase === "success") {
+      return <span className="block max-w-full break-words">{successText}</span>;
+    }
+    if (alertStatsPhase === "error") {
+      return (
+        <span className="flex min-w-0 max-w-full flex-col items-start gap-2">
+          <span className="max-w-full break-words">{t("notifications.alertStatsLoadFailed")}</span>
+          {withRetry ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="max-w-full"
+              aria-label={t("notifications.alertStatsRetry")}
+              onClick={refreshAlertStats}
+            >
+              {t("common.retry")}
+            </Button>
+          ) : null}
+        </span>
+      );
+    }
+    if (alertStatsPhase === "loading") {
+      return t("common.loading");
+    }
+    return (
+      <span className="block max-w-full break-words">{t("notifications.alertStatsUnavailable")}</span>
+    );
+  };
+  const alertStatsHeroText =
+    alertStatsPhase === "success" && alertStatsValue
+      ? t("notifications.pendingAlertsMeta", { count: alertStatsValue.total })
+      : t(
+          alertStatsPhase === "error"
+            ? "notifications.alertStatsLoadFailed"
+            : alertStatsPhase === "unavailable"
+              ? "notifications.alertStatsUnavailable"
+              : "common.loading",
+        );
+
   const activeIntegrations = integrations.filter((item) => item.enabled).length;
 
   return (
@@ -162,8 +249,18 @@ export function NotificationsPage() {
         subtitle={t("notifications.pageDesc")}
         meta={
           <>
-            <Badge tone={alertStats.total > 0 ? "destructive" : "success"}>
-              {t("notifications.pendingAlertsMeta", { count: alertStats.total })}
+            <Badge
+              tone={
+                alertStatsPhase === "success" && alertStatsValue && alertStatsValue.total > 0
+                  ? "destructive"
+                  : alertStatsPhase === "error"
+                    ? "warning"
+                    : alertStatsPhase === "success"
+                      ? "success"
+                      : "neutral"
+              }
+            >
+              {alertStatsHeroText}
             </Badge>
             <Badge tone={activeIntegrations > 0 ? "success" : "warning"}>
               {t("notifications.channelsMeta", {
@@ -198,15 +295,21 @@ export function NotificationsPage() {
         items={[
           {
             title: t("notifications.statOpenAlerts"),
-            value: alertStats.total,
-            description: t("notifications.statOpenAlertsDesc"),
-            tone: "destructive",
+            value: alertStatsValue ? alertStatsValue.total : "—",
+            description: alertStatsDescription(t("notifications.statOpenAlertsDesc"), true),
+            tone:
+              alertStatsPhase === "success"
+                ? "destructive"
+                : alertStatsPhase === "error"
+                  ? "warning"
+                  : undefined,
           },
           {
             title: t("notifications.statCriticalAlerts"),
-            value: alertStats.critical,
-            description: t("notifications.statCriticalAlertsDesc"),
-            tone: "warning",
+            value: alertStatsValue ? alertStatsValue.critical : "—",
+            description: alertStatsDescription(t("notifications.statCriticalAlertsDesc"), false),
+            tone:
+              alertStatsPhase === "success" || alertStatsPhase === "error" ? "warning" : undefined,
           },
           {
             title: t("notifications.statEnabledChannels"),
