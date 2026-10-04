@@ -112,9 +112,9 @@ axe impact 与项目缺陷优先级分开判断，不直接把 `critical` 映射
 | A2 宽表键盘访问 | region、名称和 `tabIndex` 方向认可，待实际滚动验证 | [操作审计](web/src/pages/audit-page.tsx)、[凭据审计](web/src/pages/credential-audit-page.tsx)、[临时授权](web/src/pages/credential-access-grants-page.tsx)；属性断言不证明方向键滚动和焦点可见 |
 | A3 文字对比度 | 已改为独立状态文字 token，仍按实际表面验收，不宣称全站关闭 | [Badge 变体](web/src/components/ui/badge.variants.ts)保留语义背景、恢复原有字重并移除额外字距；侧栏分组移除额外透明度；普通小字仍需 4.5:1 |
 | A4 Toast 点击区域 | 已收敛为 CSS 单一尺寸来源，真实 Toast 验收独立记录 | [index.css](web/src/index.css)提供 24px 关闭按钮尺寸；已删除未触发 Toast 的伪尺寸测试，不以 live region 属性作为热区证据 |
-| B1 自动化运行可观测性 | 缺前端查询展示，不是没有持久日志 | [dispatcher](backend/internal/automation/dispatcher.go)已有逐规则日志及 durable effect 路径；[路由](backend/internal/api/router.go)和[前端 API](web/src/lib/api/automation-rules.ts)当前提供规则 CRUD。新增查询应复用执行事实，区分动作派发和最终任务结果，处理权限、脱敏、分页和保留语义 |
+| B1 自动化运行可观测性 | 已增加管理员安全查询和执行历史 | [路由](backend/internal/api/router.go)提供分页白名单 DTO；[执行历史](web/src/pages/automation-rules-page.history.tsx)区分动作记录、任务派发及通知未投递。SQLite/PostgreSQL 经真实 Dispatcher、落库和认证路由验证 legacy 错误与 durable 提交/回滚；真实浏览器已验证分页、筛选、缺失规则、安全字段和服务中断后重试，不将 Mock 走查当作派发证据。完整边界见[自动化合同](docs/admin/automation.md#执行记录) |
 | B2 RPO/RTO 呈现 | 已展示已有值、未知及达标状态 | [报表行](web/src/pages/reports-page.tsx)使用[现有映射](web/src/lib/api/reports-api.ts)，不新增聚合器；真实 `reporting.Generate` 落库并经 API 返回的 720/10 分钟达标记录与 null/false 缺证据记录已验证到界面。统计口径和缺失组合见[任务合同](docs/spec/domains/task-execution-recovery.md#完成事实rpo-与回归) |
-| B3 权限入口一致性 | 只保留逐页核对建议，不宣称普遍缺少拦截 | 凭据审计已有非 admin 不加载和重定向；自动化页情况不同。后端授权仍是安全边界，统一前端入口不能替代它 |
+| B3 权限入口一致性 | 保留逐页建议，不宣称全局重构 | 凭据审计及本轮自动化页均在非 admin 时不加载并重定向；后端授权仍是安全边界，不能据此推断其他页面已统一 |
 | C1 遗留用户页面 | 未挂载路由是线索，不代表引用清理已完成 | [router](web/src/router.tsx)没有挂载 [users-page](web/src/pages/users-page.tsx)；删除前核对所有引用和配套测试，不能以补标签代替清理 |
 | C2 Cron 自然语言解释 | 暂缓，缺少定位到具体未覆盖控件的证据 | 旧报告的约 15 行实现量没有验证依据，不列入已确认缺陷 |
 | C3 WebSocket 退避 | 撤回新增算法建议 | [重连客户端](web/src/lib/ws/reconnecting-socket.ts)已有指数退避、jitter、上限与最大次数；日志和终端均复用。没有重试风暴复现，不再重复建设 |

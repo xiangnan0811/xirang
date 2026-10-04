@@ -1,5 +1,6 @@
 import type { AutomationRule, AutomationRuleInput } from "@/types/domain";
-import { request } from "./core";
+import { request, unwrapPaginated, type PaginatedEnvelope } from "./core";
+import { finiteNumber } from "./number-utils";
 
 type RawAutomationRule = {
   id: number;
@@ -13,6 +14,62 @@ type RawAutomationRule = {
   created_at?: string;
   updated_at?: string;
 };
+
+const logEvents = ["anomaly_detected", "backup_failed", "backup_succeeded", "drill_failed"] as const;
+const logActions = ["pause_policy", "disable_policy", "trigger_task", "send_notification"] as const;
+
+export type AutomationRuleLog = {
+  id: number;
+  ruleId: number;
+  eventType: typeof logEvents[number] | "unknown";
+  actionType: typeof logActions[number] | "unknown";
+  result: "success" | "error" | "unknown";
+  createdAt: string;
+  errorCode: "ACTION_FAILED" | null;
+  targetTaskId: number | null;
+  targetTaskRunId: number | null;
+};
+
+export type AutomationRuleLogPage = {
+  items: AutomationRuleLog[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type AutomationRuleLogQuery = {
+  ruleId?: number;
+  result?: "success" | "error";
+  page?: number;
+  pageSize?: number;
+};
+
+type RawAutomationRuleLog = Partial<Record<
+  "id" | "rule_id" | "event_type" | "action_type" | "result" | "created_at" |
+  "error_code" | "target_task_id" | "target_task_run_id", unknown
+>>;
+
+function safeLogTarget(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function mapLog(row: RawAutomationRuleLog): AutomationRuleLog {
+  const actionType = logActions.find((value) => value === row.action_type) ?? "unknown";
+  const taskId = safeLogTarget(row.target_task_id);
+  const runId = safeLogTarget(row.target_task_run_id);
+  const validTargets = actionType === "trigger_task" && taskId !== null && runId !== null;
+  return {
+    id: finiteNumber(row.id),
+    ruleId: finiteNumber(row.rule_id),
+    eventType: logEvents.find((value) => value === row.event_type) ?? "unknown",
+    actionType,
+    result: row.result === "success" || row.result === "error" ? row.result : "unknown",
+    createdAt: typeof row.created_at === "string" ? row.created_at : "",
+    errorCode: row.result === "error" && row.error_code === "ACTION_FAILED" ? "ACTION_FAILED" : null,
+    targetTaskId: validTargets ? taskId : null,
+    targetTaskRunId: validTargets ? runId : null,
+  };
+}
 
 function asStringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -76,6 +133,23 @@ export function createAutomationRulesApi() {
     async list(token: string, options?: { signal?: AbortSignal }): Promise<AutomationRule[]> {
       const rows = (await request<RawAutomationRule[]>("/automation-rules", { token, signal: options?.signal })) ?? [];
       return rows.map(mapRule);
+    },
+
+    async listLogs(
+      token: string,
+      query: AutomationRuleLogQuery = {},
+      options?: { signal?: AbortSignal },
+    ): Promise<AutomationRuleLogPage> {
+      const params = new URLSearchParams();
+      if (query.ruleId !== undefined) params.set("rule_id", String(query.ruleId));
+      if (query.result !== undefined) params.set("result", query.result);
+      if (query.page !== undefined) params.set("page", String(query.page));
+      if (query.pageSize !== undefined) params.set("page_size", String(query.pageSize));
+      const response = await request<PaginatedEnvelope<RawAutomationRuleLog[]>>(
+        `/automation-rule-logs?${params.toString()}`, { token, signal: options?.signal },
+      );
+      const page = unwrapPaginated(response);
+      return { ...page, items: page.items.map(mapLog) };
     },
 
     async create(token: string, input: AutomationRuleInput): Promise<AutomationRule> {

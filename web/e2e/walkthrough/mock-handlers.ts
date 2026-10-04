@@ -8,6 +8,7 @@ import {
   appCredentials,
   auditLogs,
   automationRules,
+  automationRuleLogs,
   credentialAccessGrants,
   credentialAuditEvents,
   deliveryStats,
@@ -269,6 +270,12 @@ async function replyFor(
   if (method === "GET" && apiPath === "/users") return ok(standardUsers);
   if (method === "GET" && apiPath === "/automation-rules") {
     return ok(listFor(scenario, "/app/automation-rules", automationRules));
+  }
+  if (method === "GET" && apiPath === "/automation-rule-logs") {
+    const rows = listFor(scenario, "/app/automation-rules", automationRuleLogs).filter((row) =>
+      (!url.searchParams.get("rule_id") || row.rule_id === Number(url.searchParams.get("rule_id"))) &&
+      (!url.searchParams.get("result") || row.result === url.searchParams.get("result")));
+    return paginated(url, rows);
   }
   if (method === "GET" && apiPath === "/audit-logs") {
     return paginated(url, listFor(scenario, "/app/audit", auditLogs));

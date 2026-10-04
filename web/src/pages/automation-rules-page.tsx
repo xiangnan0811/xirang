@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Trash2, Zap } from "lucide-react";
+import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +20,7 @@ import { useConfirm } from "@/hooks/use-confirm";
 import { createAutomationRulesApi } from "@/lib/api/automation-rules";
 import { getErrorMessage } from "@/lib/utils";
 import type { AutomationRule, AutomationRuleInput } from "@/types/domain";
+import { AutomationRuleHistory } from "./automation-rules-page.history";
 
 const EVENT_TYPES = [
   "anomaly_detected",
@@ -69,7 +71,8 @@ function recordToKV(rec: Record<string, string> | undefined): KV[] {
 }
 
 export function AutomationRulesPage() {
-  const { token } = useAuth();
+  const { token, role } = useAuth();
+  if (role !== "admin") return <Navigate to="/app/overview" replace />;
   return <AutomationRulesPageContent key={token ?? ""} />;
 }
 
@@ -110,7 +113,7 @@ function AutomationRulesPageContent() {
   useEffect(() => {
     if (!token) return;
     const controller = new AbortController();
-    createAutomationRulesApi().list(token)
+    createAutomationRulesApi().list(token, { signal: controller.signal })
       .then((data) => {
         if (!controller.signal.aborted) setRules(data);
       })
@@ -423,6 +426,8 @@ function AutomationRulesPageContent() {
           )}
         </CardContent>
       </Card>
+
+      {token && <AutomationRuleHistory token={token} rules={rules} />}
 
       {/* ── Editor Dialog ── */}
       <FormDialog

@@ -295,7 +295,7 @@ export const automationRules = [
     id: 1,
     name: "自动暂停故障策略",
     description: "连续失败后暂停关联策略",
-    event_type: "task.failed",
+    event_type: "backup_failed",
     event_filter: {},
     action_type: "disable_policy",
     action_config: { policy_id: "1" },
@@ -303,6 +303,12 @@ export const automationRules = [
     created_at: "2026-09-01T00:00:00Z",
     updated_at: AT,
   },
+];
+
+export const automationRuleLogs = [
+  { id: 3, rule_id: 1, event_type: "backup_failed", action_type: "trigger_task", result: "success", created_at: AT, error_code: null, target_task_id: 1, target_task_run_id: 101 },
+  { id: 2, rule_id: 99, event_type: "anomaly_detected", action_type: "pause_policy", result: "error", created_at: AT, error_code: "ACTION_FAILED", target_task_id: null, target_task_run_id: null },
+  { id: 1, rule_id: 1, event_type: "backup_succeeded", action_type: "send_notification", result: "success", created_at: AT, error_code: null, target_task_id: null, target_task_run_id: null },
 ];
 
 export const auditLogs = [

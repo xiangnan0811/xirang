@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -27,11 +28,18 @@ func setupAutomationRuleRBACFixture(t *testing.T) automationRuleRBACTestFixture 
 	t.Setenv("APP_ENV", "development")
 	gin.SetMode(gin.TestMode)
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	dsn := fmt.Sprintf("file:%s_%d?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"), time.Now().UnixNano())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	return automationRuleRBACFixtureWithDB(t, db)
+}
+
+func automationRuleRBACFixtureWithDB(t *testing.T, db *gorm.DB) automationRuleRBACTestFixture {
+	t.Helper()
+	t.Setenv("APP_ENV", "development")
+	gin.SetMode(gin.TestMode)
 	if err := db.AutoMigrate(&model.User{}, &model.AutomationRule{}, &model.AutomationRuleLog{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
@@ -216,5 +224,49 @@ func TestAutomationRuleRoutesRBACNonAdminForbidden(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAutomationRuleLogsRBAC(t *testing.T) {
+	fx := setupAutomationRuleRBACFixture(t)
+	row := model.AutomationRuleLog{RuleID: 77, EventType: "backup_failed", ActionType: "pause_policy", Result: "error", Error: "FAKE_DIAGNOSTIC_FOR_TEST_ONLY"}
+	if err := fx.db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		role string
+		want int
+	}{{"admin", 200}, {"operator", 403}, {"viewer", 403}, {"", 401}} {
+		t.Run(tc.role, func(t *testing.T) {
+			resp := performAutomationRuleRBACRequest(t, fx.router, http.MethodGet, "/api/v1/automation-rule-logs", fx.tokens[tc.role], "")
+			if resp.Code != tc.want {
+				t.Fatalf("HTTP=%d body=%s", resp.Code, resp.Body.String())
+			}
+			var envelope struct {
+				Code int             `json:"code"`
+				Data json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Code != tc.want || strings.Contains(resp.Body.String(), "FAKE_DIAGNOSTIC") {
+				t.Fatalf("unsafe or inconsistent envelope: %s", resp.Body.String())
+			}
+			if tc.want != 200 && string(envelope.Data) != "null" {
+				t.Fatalf("denied request exposed data: %s", envelope.Data)
+			}
+			if tc.want == 200 {
+				var rows []struct {
+					ID        uint   `json:"id"`
+					ErrorCode string `json:"error_code"`
+				}
+				if err := json.Unmarshal(envelope.Data, &rows); err != nil {
+					t.Fatal(err)
+				}
+				if len(rows) != 1 || rows[0].ID != row.ID || rows[0].ErrorCode != "ACTION_FAILED" {
+					t.Fatalf("admin history=%+v", rows)
+				}
+			}
+		})
 	}
 }
