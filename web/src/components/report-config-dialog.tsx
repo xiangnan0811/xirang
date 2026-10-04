@@ -212,8 +212,9 @@ function ReportConfigSession({
         </LabelRow>
 
         <div className="grid grid-cols-2 gap-3">
-          <LabelRow label={t("reportConfig.scope")}>
+          <LabelRow label={t("reportConfig.scope")} htmlFor="report-config-scope">
             <Select
+              id="report-config-scope"
               value={draft.scopeType}
               onChange={(e) =>
                 set({ scopeType: e.target.value as Draft["scopeType"] })
@@ -226,8 +227,9 @@ function ReportConfigSession({
               ))}
             </Select>
           </LabelRow>
-          <LabelRow label={t("reportConfig.period")}>
+          <LabelRow label={t("reportConfig.period")} htmlFor="report-config-period">
             <Select
+              id="report-config-period"
               value={draft.period}
               onChange={(e) =>
                 set({ period: e.target.value as Draft["period"] })

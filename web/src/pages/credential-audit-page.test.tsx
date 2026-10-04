@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { CredentialAuditPage } from "./credential-audit-page";
 import type { CredentialAuditEventRecord } from "@/types/domain";
+import i18n from "@/i18n";
 
 const {
   authState,
@@ -112,6 +113,18 @@ describe("CredentialAuditPage", () => {
       page: 1,
       pageSize: 30,
     });
+  });
+
+  it("names the scrollable table region with the credential audit title and accepts focus", async () => {
+    render(<CredentialAuditPage />);
+
+    await waitFor(() => {
+      expect(getCredentialAuditEventsMock).toHaveBeenCalledTimes(1);
+    });
+
+    const region = screen.getByRole("region", { name: i18n.t("credentialAudit.pageTitle") });
+    region.focus();
+    expect(region).toHaveFocus();
   });
 
   it("筛选参数变更后会带入查询请求", async () => {

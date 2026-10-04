@@ -16,7 +16,7 @@
 
 ### 颜色
 
-颜色变量以 HSL 通道值定义，通过 `hsl(var(--token))` 消费；阴影、尺寸和时长变量使用各自 CSS 值。浅色定义在 `:root`，深色在 `.dark`。下表记录实现对应的语义颜色合同；修改颜色时同步源码与本表，并重新验证对比度。[设计变量回归](../../../web/src/index-css.test.ts)检查深色语义值与文档一致。
+颜色变量以 HSL 通道值定义，通过 `hsl(var(--token))` 消费；阴影、尺寸和时长变量使用各自 CSS 值。浅色定义在 `:root`，深色在 `.dark`。下表记录实现对应的语义颜色合同；修改颜色时同步源码与本表，并在真实浏览器重新验证受影响表面的对比度，不能用源码或文档字符串相等代替可读性证明。
 
 | 变量 | 浅色值 | 深色值 | 职责 |
 |---|---|---|---|
@@ -32,10 +32,16 @@
 | `--success` / `--success-foreground` | `156 66% 32%` / `150 45% 96%` | `158 70% 48%` / `224 60% 6%` | 成功、健康、在线 |
 | `--warning` / `--warning-foreground` | `36 88% 42%` / `42 45% 97%` | `38 95% 60%` / `224 60% 6%` | 警告与风险 |
 | `--info` / `--info-foreground` | `199 87% 39%` / `200 52% 97%` | `199 95% 58%` / `224 60% 6%` | 信息提示 |
+| `--success-text` | `156 70% 24%` | `158 70% 48%` | 成功状态普通文字及 Badge 文字 |
+| `--warning-text` | `36 90% 28%` | `38 95% 60%` | 警告状态普通文字及 Badge 文字 |
+| `--destructive-text` | `0 75% 35%` | `0 80% 72%` | 错误状态普通文字及 Badge 文字 |
+| `--info-text` | `199 85% 28%` | `199 95% 58%` | 信息状态普通文字及 Badge 文字 |
 | `--border` / `--input` | `220 16% 86%` | `220 20% 18%` | 边框与输入框 |
 | `--ring` | `217 84% 43%` | `217 100% 62%` | 焦点轮廓 |
 
 `--chart-1/2/3`、`--chart-ingress`、`--chart-egress` 用于图表序列，不代表状态文字。导航与面板使用 `--nav-active`、`--nav-active-foreground`、`--shadow-panel`、`--shadow-panel-hover`、`--shadow-mobile-sheet`；这些变量独立定义，不能假定它们在所有主题中与 `accent`、`foreground` 数值相同。
+
+普通状态文字使用对应 `text-[hsl(var(--状态-text))]`，与图标、背景、边框和图表颜色分开。四个 `*-text` 变量只用于文字，不替换原状态色。Badge 保留语义背景；四种语义状态文字不要叠加透明度来弱化。中性 Badge 沿用 `bg-muted text-foreground/85`，明暗主题均不退回更弱的文字色。深色错误文字需同时在卡片、悬停和弱化表面验证，不能仅凭普通卡片上的正文对比度推断 Badge 合格。
 
 ### 字体与字号
 
@@ -70,12 +76,12 @@
 
 ## 状态与终端边界
 
-| 状态 | 使用 | 禁止的固定调色板示例 |
-|---|---|---|
-| 在线、健康、成功 | `bg-success`、`text-success`、`border-success/30`、`bg-success/5` | `emerald-500` |
-| 离线、错误、破坏性操作 | `bg-destructive`、`text-destructive`、`border-destructive/30`、`bg-destructive/5` | `red-500` |
-| 警告 | `bg-warning`、`text-warning` | `amber-500` |
-| 信息 | `bg-info`、`text-info` | `sky-500` |
+| 状态 | 图标、背景与边框 | 普通文字 | 禁止的固定调色板示例 |
+|---|---|---|---|
+| 在线、健康、成功 | `bg-success`、`text-success`、`border-success/30`、`bg-success/5` | `text-[hsl(var(--success-text))]` | `emerald-500` |
+| 离线、错误、破坏性操作 | `bg-destructive`、`text-destructive`、`border-destructive/30`、`bg-destructive/5` | `text-[hsl(var(--destructive-text))]` | `red-500` |
+| 警告 | `bg-warning`、`text-warning` | `text-[hsl(var(--warning-text))]` | `amber-500` |
+| 信息 | `bg-info`、`text-info` | `text-[hsl(var(--info-text))]` | `sky-500` |
 
 禁止用固定十六进制、RGB 或 Tailwind 调色板值表达状态。未知、中性状态点可使用 `muted-foreground/30`。`panel-renderer.tsx` 的 `SERIES_COLORS` 固定颜色数组是现有图表序列例外，不得用于状态。
 

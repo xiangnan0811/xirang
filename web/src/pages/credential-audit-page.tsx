@@ -420,7 +420,14 @@ export function CredentialAuditPage() {
             {!rows.length && !loading ? <EmptyState title={t("credentialAudit.emptyTitle")} /> : null}
           </div>
 
-          <div className="hidden overflow-x-auto rounded-lg border border-border bg-card md:block">
+          <div
+            role="region"
+            // Keyboard focus enables native horizontal scrolling.
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+            tabIndex={0}
+            aria-label={t("credentialAudit.pageTitle")}
+            className="hidden overflow-x-auto rounded-lg border border-border bg-card md:block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          >
             <table className="min-w-[1180px] text-left text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/35 text-mini uppercase tracking-wide text-muted-foreground">

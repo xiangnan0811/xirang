@@ -1657,6 +1657,7 @@ const en = {
 
   // ── audit page ──
   audit: {
+    title: "Audit Logs",
     exportCSV: "Export CSV",
     exporting: "Exporting...",
     pathFilterPlaceholder: "Filter by path keyword, e.g. /nodes /policies",

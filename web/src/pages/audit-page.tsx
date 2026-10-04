@@ -306,7 +306,14 @@ export function AuditPage() {
             ) : null}
           </div>
 
-          <div className="rounded-lg border border-border bg-card hidden overflow-x-auto md:block">
+          <div
+            role="region"
+            // Keyboard focus enables native horizontal scrolling.
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+            tabIndex={0}
+            aria-label={t("audit.title")}
+            className="rounded-lg border border-border bg-card hidden overflow-x-auto md:block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          >
             <table className="min-w-[1080px] text-left text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/35 text-mini uppercase tracking-wide text-muted-foreground">

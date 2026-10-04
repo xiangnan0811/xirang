@@ -16,14 +16,15 @@ vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => authState.current,
 }));
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) =>
-      typeof options?.count === "number" ? `${key}:${options.count}` : key,
-    i18n: { language: "zh", changeLanguage: vi.fn() },
-  }),
-  initReactI18next: { type: "3rdParty", init: vi.fn() },
-}));
+vi.mock("react-i18next", () => {
+  const t = (key: string, options?: Record<string, unknown>) =>
+    typeof options?.count === "number" ? `${key}:${options.count}` : key;
+  const i18n = { language: "zh", changeLanguage: vi.fn() };
+  return {
+    useTranslation: () => ({ t, i18n }),
+    initReactI18next: { type: "3rdParty", init: vi.fn() },
+  };
+});
 
 vi.mock("@/context/theme-context.hooks", () => ({
   useTheme: () => ({
@@ -45,6 +46,7 @@ vi.mock("@/lib/api/client", () => ({
     backupDB: vi.fn(),
     listBackups: vi.fn().mockResolvedValue([]),
     exportConfig: vi.fn().mockResolvedValue({}),
+    getUsers: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -54,10 +56,6 @@ vi.mock("./settings-page.personal", () => ({
 
 vi.mock("./settings-page.account", () => ({
   AccountTab: () => <div>settings.account.title</div>,
-}));
-
-vi.mock("./settings-page.users", () => ({
-  UsersTab: () => <div>settings.users.title</div>,
 }));
 
 vi.mock("./settings-page.channels", () => ({
@@ -197,5 +195,22 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("tab", { name: "settings.tabs.personal" })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("tab", { name: "settings.tabs.users" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "settings.tabs.system" })).not.toBeInTheDocument();
+  });
+
+  it("names the create-user role from users.role and keeps the selected role", async () => {
+    const user = userEvent.setup();
+    renderSettingsPage(["/app/settings?tab=users"]);
+
+    expect(
+      await screen.findByRole("heading", { name: "users.userManagement" }),
+    ).toBeInTheDocument();
+    const roleSelect = screen.getByRole("combobox", { name: "users.role" });
+    expect(roleSelect).toBeInstanceOf(HTMLSelectElement);
+    expect(roleSelect).toHaveValue("operator");
+
+    await user.selectOptions(roleSelect, "users.roles.admin");
+
+    expect(await screen.findByText("users.emptyTitle")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "users.role" })).toHaveValue("admin");
   });
 });

@@ -1657,6 +1657,7 @@ const zh = {
 
   // ── audit page ──
   audit: {
+    title: "操作审计",
     exportCSV: "导出 CSV",
     exporting: "导出中...",
     pathFilterPlaceholder: "按路径关键字过滤，例如 /nodes /policies",

@@ -106,42 +106,51 @@ function SnapshotDiffViewerContent({ taskId, token }: SnapshotDiffViewerProps) {
       {diff && (
         <div className="space-y-2">
           <div className="flex gap-3 text-xs">
-            <span className="text-success">+{diff.stats.added} {t('snapshots.added')}</span>
-            <span className="text-destructive">-{diff.stats.removed} {t('snapshots.removed')}</span>
-            <span className="text-warning">~{diff.stats.changed} {t('snapshots.changed')}</span>
+            <span className="text-[hsl(var(--success-text))]">+{diff.stats.added} {t('snapshots.added')}</span>
+            <span className="text-[hsl(var(--destructive-text))]">-{diff.stats.removed} {t('snapshots.removed')}</span>
+            <span className="text-[hsl(var(--warning-text))]">~{diff.stats.changed} {t('snapshots.changed')}</span>
           </div>
 
           <div className="rounded-md border border-border/60 divide-y divide-border/30 max-h-64 overflow-y-auto">
             {diff.changes.length === 0 && (
               <p className="px-3 py-4 text-sm text-muted-foreground text-center">{t('snapshots.noDifference')}</p>
             )}
-            {diff.changes.map((change) => (
-              <div
-                key={change.path}
-                className={
-                  change.type === "added"
-                    ? "flex items-center gap-2 px-3 py-1.5 font-mono text-xs bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))]"
-                    : change.type === "removed"
-                      ? "flex items-center gap-2 px-3 py-1.5 font-mono text-xs bg-[hsl(var(--destructive)/0.08)] text-[hsl(var(--destructive))]"
-                      : "flex items-center gap-2 px-3 py-1.5 text-sm"
-                }
-              >
-                {change.type === "added" && <FilePlus className="size-3.5 shrink-0" />}
-                {change.type === "removed" && <FileMinus className="size-3.5 shrink-0" />}
-                {change.type === "changed" && <File className="size-3.5 text-warning shrink-0" />}
-                <span className="truncate">{change.path}</span>
-                {change.size_before != null && change.size_after != null && (
-                  <span className="ml-auto shrink-0 opacity-75">
-                    {formatBytes(change.size_before)} → {formatBytes(change.size_after)}
-                  </span>
-                )}
-                {change.size_before == null && change.size_after != null && (
-                  <span className="ml-auto shrink-0 opacity-75">
-                    {formatBytes(change.size_after)}
-                  </span>
-                )}
-              </div>
-            ))}
+            {diff.changes.map((change) => {
+              const statusTextColor =
+                change.type === "added"
+                  ? "text-[hsl(var(--success-text))]"
+                  : change.type === "removed"
+                    ? "text-[hsl(var(--destructive-text))]"
+                    : "";
+
+              return (
+                <div
+                  key={change.path}
+                  className={
+                    change.type === "added"
+                      ? "flex items-center gap-2 px-3 py-1.5 font-mono text-xs bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))]"
+                      : change.type === "removed"
+                        ? "flex items-center gap-2 px-3 py-1.5 font-mono text-xs bg-[hsl(var(--destructive)/0.08)] text-[hsl(var(--destructive))]"
+                        : "flex items-center gap-2 px-3 py-1.5 text-sm"
+                  }
+                >
+                  {change.type === "added" && <FilePlus className="size-3.5 shrink-0" />}
+                  {change.type === "removed" && <FileMinus className="size-3.5 shrink-0" />}
+                  {change.type === "changed" && <File className="size-3.5 text-warning shrink-0" />}
+                  <span className={statusTextColor ? `truncate ${statusTextColor}` : "truncate"}>{change.path}</span>
+                  {change.size_before != null && change.size_after != null && (
+                    <span className={statusTextColor ? `ml-auto shrink-0 ${statusTextColor}` : "ml-auto shrink-0"}>
+                      {formatBytes(change.size_before)} → {formatBytes(change.size_after)}
+                    </span>
+                  )}
+                  {change.size_before == null && change.size_after != null && (
+                    <span className={statusTextColor ? `ml-auto shrink-0 ${statusTextColor}` : "ml-auto shrink-0"}>
+                      {formatBytes(change.size_after)}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

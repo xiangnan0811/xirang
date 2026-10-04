@@ -40,13 +40,13 @@ type StatCardsSectionProps = {
 function toneTextClass(tone: StatCardTone | undefined): string {
   switch (tone) {
     case "success":
-      return "text-[hsl(var(--success))]";
+      return "text-[hsl(var(--success-text))]";
     case "warning":
-      return "text-[hsl(var(--warning))]";
+      return "text-[hsl(var(--warning-text))]";
     case "destructive":
-      return "text-[hsl(var(--destructive))]";
+      return "text-[hsl(var(--destructive-text))]";
     case "info":
-      return "text-[hsl(var(--info))]";
+      return "text-[hsl(var(--info-text))]";
     case "primary":
       return "text-[hsl(var(--primary))]";
     default:

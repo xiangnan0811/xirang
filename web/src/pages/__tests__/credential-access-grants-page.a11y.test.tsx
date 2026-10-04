@@ -1,10 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { runAxe } from "@/test/a11y-helpers";
 import { CredentialAccessGrantsPage } from "../credential-access-grants-page";
+import i18n from "@/i18n";
 
 const { authState, listCredentialAccessGrantsMock } = vi.hoisted(() => ({
   authState: { token: "test-token", role: "admin" },
@@ -72,5 +73,18 @@ describe("CredentialAccessGrantsPage a11y smoke", () => {
     await waitFor(() => expect(listCredentialAccessGrantsMock).toHaveBeenCalledTimes(1));
     const results = await runAxe(container);
     expect(results).toHaveNoViolations();
+  });
+
+  it("names the scrollable table region with the grants title and accepts focus", async () => {
+    render(
+      <MemoryRouter>
+        <CredentialAccessGrantsPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(listCredentialAccessGrantsMock).toHaveBeenCalledTimes(1));
+    const region = screen.getByRole("region", { name: i18n.t("credentialGrants.pageTitle") });
+    region.focus();
+    expect(region).toHaveFocus();
   });
 });

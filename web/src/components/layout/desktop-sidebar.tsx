@@ -58,7 +58,7 @@ export function DesktopSidebar({
             <div key={group.key} className={cn(groupIndex > 0 && "mt-4")}>
               {/* Group label — hidden in collapsed mode */}
               {!isCollapsed && (
-                <span className="px-3 mb-1.5 block text-micro font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+                <span className="px-3 mb-1.5 block text-micro font-medium uppercase tracking-[0.08em] text-muted-foreground">
                   {t(group.labelKey)}
                 </span>
               )}
