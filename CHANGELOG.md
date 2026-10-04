@@ -8,6 +8,13 @@
 - 本次无 schema migration，不修改在途任务或恢复生产逻辑。恢复计划并发测试补齐取消后的 worker 完成等待，避免 Fatal 后先销毁 fixture；这不代表已定位或解决 #579 最初的 `recovery plan is unavailable`。回退前端会恢复统计错误时误显零值及旧响应覆盖的风险，既有迁移与恢复限制不变。
 - 已补齐 v0.57.4 公开 Release 中原有的三条行为与升级说明，保留原摘要、链接与 tag；不重新发布镜像，也不代表生产部署或现场恢复已验收。
 
+## [0.57.6](https://github.com/xiangnan0811/xirang/compare/v0.57.5...v0.57.6) (2026-10-04)
+
+
+### 🐛 Bug Fixes
+
+* **notifications:** guard alert counts by request generation ([#586](https://github.com/xiangnan0811/xirang/issues/586)) ([4f347d4](https://github.com/xiangnan0811/xirang/commit/4f347d4fbb5faf2587365c44064136f0b82a58e2))
+
 ## [0.57.5](https://github.com/xiangnan0811/xirang/compare/v0.57.4...v0.57.5) (2026-10-03)
 
 ### 行为与升级说明
