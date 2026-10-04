@@ -6,7 +6,6 @@ import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { formatTime } from "@/lib/api/core";
-import { cn } from "@/lib/utils";
 import type { NodeRecord, SSHKeyRecord } from "@/types/domain";
 
 // ---------------------------------------------------------------------------
@@ -143,15 +142,11 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
           ) : (
             pagedItems.map((key) => {
               const nodeCount = keyUsageMap.get(key.id)?.length ?? 0;
-              const isUnused = nodeCount === 0;
 
               return (
                 <tr
                   key={key.id}
-                  className={cn(
-                    "border-b border-border transition-colors duration-200 ease-out hover:bg-accent",
-                    isUnused && "opacity-60",
-                  )}
+                  className="border-b border-border transition-colors duration-200 ease-out hover:bg-accent"
                 >
                   <td className="px-3 py-2.5">
                     <input

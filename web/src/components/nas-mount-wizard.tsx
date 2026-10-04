@@ -18,6 +18,7 @@ import { apiClient } from "@/lib/api/client";
 import type { MountVerifyResult } from "@/lib/api/storage-guide-api";
 import { getErrorMessage } from "@/lib/utils";
 import { toast } from "sonner";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 
 type Protocol = "nfs" | "smb" | "usb";
 
@@ -90,7 +91,15 @@ function isStep2Valid(protocol: Protocol, nfs: NfsFields, smb: SmbFields, usb: U
 const inputClass = "w-full rounded-lg border border-input bg-background/70 px-3 py-2 text-sm placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/35";
 const labelClass = "block text-xs font-medium text-foreground mb-1";
 
-export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+export function NasMountWizard({
+  open,
+  onOpenChange,
+  onCloseAutoFocus,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
+}) {
   const { t } = useTranslation();
   const { token } = useAuth();
   const [step, setStep] = useState(0);
@@ -162,7 +171,7 @@ export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenCh
 
   return (
     <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) handleReset(); }}>
-      <DialogContent size="lg" className="max-h-[90vh] flex flex-col">
+      <DialogContent size="lg" className="max-h-[90vh] flex flex-col" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>{t("nasMountWizard.title")}</DialogTitle>
           <DialogDescription>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Shield, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,11 @@ import {
 import { PageHero } from "@/components/ui/page-hero";
 import { toast } from "@/components/ui/toast-sonner";
 import { CredentialEditorDialog } from "@/components/credential-editor-dialog";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { useAuth } from "@/context/auth-context.hooks";
 import { useConfirm } from "@/hooks/use-confirm";
 import {
@@ -35,6 +40,10 @@ function CredentialsPageContent() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingCredential, setEditingCredential] =
     useState<AppCredential | null>(null);
+  const editorOpenerRef = useRef<HTMLElement | null>(null);
+  const editorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, editorOpenerRef.current);
+  };
 
   const [requestVersion, setRequestVersion] = useState(0);
   const fetchCredentials = useCallback(() => {
@@ -59,12 +68,14 @@ function CredentialsPageContent() {
     return () => controller.abort();
   }, [token, requestVersion]);
 
-  const openCreateDialog = () => {
+  const openCreateDialog = (event?: { currentTarget: EventTarget | null }) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingCredential(null);
     setEditorOpen(true);
   };
 
-  const openEditDialog = (cred: AppCredential) => {
+  const openEditDialog = (cred: AppCredential, opener?: EventTarget | null) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingCredential(cred);
     setEditorOpen(true);
   };
@@ -247,7 +258,7 @@ function CredentialsPageContent() {
                             variant="ghost"
                             size="icon"
                             aria-label={t("common.edit")}
-                            onClick={() => openEditDialog(cred)}
+                            onClick={(event) => openEditDialog(cred, event.currentTarget)}
                           >
                             <Pencil className="size-3.5" aria-hidden="true" />
                           </Button>
@@ -277,6 +288,7 @@ function CredentialsPageContent() {
       <CredentialEditorDialog
         open={editorOpen}
         onOpenChange={setEditorOpen}
+        onCloseAutoFocus={editorOnCloseAutoFocus}
         editingCredential={editingCredential}
         onSaved={fetchCredentials}
       />

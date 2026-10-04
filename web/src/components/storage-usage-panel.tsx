@@ -29,9 +29,9 @@ function pctColor(pct: number): string {
 }
 
 function pctTextColor(pct: number): string {
-  if (pct >= 90) return "text-destructive";
-  if (pct >= 70) return "text-warning";
-  return "text-success";
+  if (pct >= 90) return "text-[hsl(var(--destructive-text))]";
+  if (pct >= 70) return "text-[hsl(var(--warning-text))]";
+  return "text-[hsl(var(--success-text))]";
 }
 
 export function StorageUsagePanel() {

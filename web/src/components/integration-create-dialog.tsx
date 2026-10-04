@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Bell, Building2, Mail, MessageSquare, Send, Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { FormDialog } from "@/components/ui/form-dialog";
+import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { InlineAlert } from "@/components/ui/inline-alert";
@@ -140,12 +140,14 @@ type IntegrationCreateDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (input: NewIntegrationInput) => Promise<void>;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 export function IntegrationCreateDialog({
   open,
   onOpenChange,
   onSave,
+  onCloseAutoFocus,
 }: IntegrationCreateDialogProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useDialogDraft<NewIntegrationInput>(open, defaultDraft);
@@ -199,6 +201,7 @@ export function IntegrationCreateDialog({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
+      onCloseAutoFocus={onCloseAutoFocus}
       icon={<TypeIcon className="size-5 text-primary" />}
       title={t("integration.titleCreate")}
       description={t("integration.descCreate")}

@@ -127,17 +127,16 @@ export class LogsSocketClient {
     this.taskId = options?.taskId;
     this.sinceId = options?.sinceId;
     this.candidateIndex = 0;
+    this.detachSocket("reconnect-with-new-token");
 
-    if (this.socket) {
-      this.socket.close(1000, "reconnect-with-new-token");
-      this.socket = null;
-    }
-
-    this.socket = new ReconnectingSocket({
+    const socket = new ReconnectingSocket({
       url: () => this.buildRequestUrl(),
       // logs 使用 JSON 文本协议：发送 {type:"ping"} 心跳
       heartbeatPing: () => JSON.stringify({ type: "ping" }),
       onOpen: (ws) => {
+        if (this.socket !== socket) {
+          return;
+        }
         // 连接建立后立即用最新 token 发送 auth 消息
         ws.send(JSON.stringify({ type: "auth", token: this.currentToken() }));
         // 重置 candidate 索引：握手成功表示当前候选可用
@@ -145,6 +144,9 @@ export class LogsSocketClient {
         this.emitStatus(true);
       },
       onMessage: (event) => {
+        if (this.socket !== socket) {
+          return;
+        }
         try {
           const parsed = normalizeIncoming(JSON.parse(event.data));
           if (parsed) {
@@ -155,6 +157,9 @@ export class LogsSocketClient {
         }
       },
       onClose: () => {
+        if (this.socket !== socket) {
+          return;
+        }
         this.emitStatus(false);
         // 当前 candidate 失败 → 切换到下一个，下次 open 时由 url callback 选中
         if (this.wsCandidates.length > 1) {
@@ -162,14 +167,22 @@ export class LogsSocketClient {
         }
       },
       onError: () => {
+        if (this.socket !== socket) {
+          return;
+        }
         this.emitStatus(false);
       },
       onGiveUp: () => {
+        if (this.socket !== socket) {
+          return;
+        }
         this.emitStatus(false);
       },
     });
 
-    this.socket.connect();
+    // 先发布实例身份再连接，同步 open/close 才能识别为当前连接。
+    this.socket = socket;
+    socket.connect();
   }
 
   updateSinceId(sinceId: number | undefined) {
@@ -180,10 +193,7 @@ export class LogsSocketClient {
   }
 
   disconnect() {
-    if (this.socket) {
-      this.socket.close(1000, "manual-close");
-      this.socket = null;
-    }
+    this.detachSocket("manual-close");
     this.emitStatus(false);
   }
 
@@ -200,6 +210,16 @@ export class LogsSocketClient {
   /** 是否已达最大重试次数（不再自动重连） */
   isGivingUp(): boolean {
     return this.socket?.isGivingUp() ?? false;
+  }
+
+  private detachSocket(reason: string) {
+    const current = this.socket;
+    if (!current) {
+      return;
+    }
+    // 先解除身份，close 换上的无条件 onclose 不再代表当前连接。
+    this.socket = null;
+    current.close(1000, reason);
   }
 
   private buildRequestUrl() {

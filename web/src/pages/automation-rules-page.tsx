@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Trash2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { FormDialog } from "@/components/ui/form-dialog";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { PageHero } from "@/components/ui/page-hero";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -79,6 +83,10 @@ function AutomationRulesPageContent() {
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<AutomationRule | null>(null);
+  const editorOpenerRef = useRef<HTMLElement | null>(null);
+  const editorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, editorOpenerRef.current);
+  };
   const [saving, setSaving] = useState(false);
 
   // Form state
@@ -145,13 +153,15 @@ function AutomationRulesPageContent() {
     [actionType],
   );
 
-  const openCreateDialog = () => {
+  const openCreateDialog = (event?: { currentTarget: EventTarget | null }) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     resetForm(null);
     setEditingRule(null);
     setEditorOpen(true);
   };
 
-  const openEditDialog = (rule: AutomationRule) => {
+  const openEditDialog = (rule: AutomationRule, opener?: EventTarget | null) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(opener);
     resetForm(rule);
     setEditingRule(rule);
     setEditorOpen(true);
@@ -391,7 +401,7 @@ function AutomationRulesPageContent() {
                             variant="ghost"
                             size="icon"
                             aria-label={t("common.edit")}
-                            onClick={() => openEditDialog(rule)}
+                            onClick={(event) => openEditDialog(rule, event.currentTarget)}
                           >
                             <Pencil className="size-3.5" />
                           </Button>
@@ -418,6 +428,7 @@ function AutomationRulesPageContent() {
       <FormDialog
         open={editorOpen}
         onOpenChange={setEditorOpen}
+        onCloseAutoFocus={editorOnCloseAutoFocus}
         size="md"
         icon={<Zap className="size-5 text-primary" />}
         title={isEditing ? t("automation.editTitle") : t("automation.createTitle")}

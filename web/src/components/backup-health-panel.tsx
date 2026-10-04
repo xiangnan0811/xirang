@@ -282,7 +282,7 @@ function BackupHealthPanelContent() {
                 <div className="rounded-full bg-success/10 p-3">
                   <CheckCircle2 className="size-8 text-success" aria-hidden />
                 </div>
-                <p className="text-sm font-medium text-success">{t("backupHealth.allHealthy")}</p>
+                <p className="text-sm font-medium text-[hsl(var(--success-text))]">{t("backupHealth.allHealthy")}</p>
               </div>
             )}
           </DataSurfaceContent>

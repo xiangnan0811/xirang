@@ -125,4 +125,18 @@ describe("SLOPanel", () => {
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveTextContent(/创建新的 SLO 目标/);
   });
+
+  it("returns focus to the create button after Escape", async () => {
+    render(<SLOPanel />);
+    const createButton = await screen.findByRole("button", { name: "新建 SLO 目标" });
+    await userEvent.click(createButton);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(createButton).toHaveFocus();
+    });
+  });
 });

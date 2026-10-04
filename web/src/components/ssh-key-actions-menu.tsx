@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Copy,
@@ -23,11 +24,11 @@ import type { SSHKeyRecord } from "@/types/domain";
 export interface SSHKeyActionsMenuProps {
   sshKey: SSHKeyRecord;
   nodeCount: number;
-  onEdit: (key: SSHKeyRecord) => void;
+  onEdit: (key: SSHKeyRecord, opener?: EventTarget | null) => void;
   onDelete: (key: SSHKeyRecord) => void;
   onTestConnection: (key: SSHKeyRecord) => void;
   onViewAssociatedNodes: (key: SSHKeyRecord) => void;
-  onRotate: (key: SSHKeyRecord) => void;
+  onRotate: (key: SSHKeyRecord, opener?: EventTarget | null) => void;
 }
 
 export function SSHKeyActionsMenu({
@@ -40,6 +41,7 @@ export function SSHKeyActionsMenu({
   onRotate,
 }: SSHKeyActionsMenuProps) {
   const { t } = useTranslation();
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const handleCopyPublicKey = async () => {
     if (!sshKey.publicKey) {
@@ -58,6 +60,7 @@ export function SSHKeyActionsMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
+          ref={triggerRef}
           variant="ghost"
           size="icon"
           className="size-8 text-muted-foreground hover:text-foreground"
@@ -67,7 +70,7 @@ export function SSHKeyActionsMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem onClick={() => onEdit(sshKey)}>
+        <DropdownMenuItem onClick={() => onEdit(sshKey, triggerRef.current)}>
           <Pencil className="mr-2 size-4" aria-hidden="true" />
           {t("common.edit")}
         </DropdownMenuItem>
@@ -88,7 +91,7 @@ export function SSHKeyActionsMenu({
             </Badge>
           )}
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onRotate(sshKey)}>
+        <DropdownMenuItem onClick={() => onRotate(sshKey, triggerRef.current)}>
           <RefreshCw className="mr-2 size-4" aria-hidden="true" />
           {t("sshKeys.rotateKey")}
         </DropdownMenuItem>

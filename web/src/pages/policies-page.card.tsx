@@ -30,7 +30,7 @@ export type PolicyCardProps = {
   nodes: NodeRecord[];
   selected: boolean;
   onToggleSelect: (id: number, checked: boolean) => void;
-  onEdit: (policy: PolicyRecord) => void;
+  onEdit: (policy: PolicyRecord, opener?: EventTarget | null) => void;
   onDelete: (policy: PolicyRecord) => void;
   onToggle: (policy: PolicyRecord) => void;
   onCloneFromTemplate: (policy: PolicyRecord) => void;
@@ -130,7 +130,7 @@ export function PolicyCard({
             variant="ghost"
             size="icon"
             className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-            onClick={() => onEdit(policy)}
+            onClick={(event) => onEdit(policy, event.currentTarget)}
             aria-label={t('policies.editAriaLabel')}
           >
             <Wrench className="size-4" aria-hidden="true" />

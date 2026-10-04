@@ -37,6 +37,7 @@ export type NodesPageDialogsProps = Pick<
   | "sshKeys"
   | "editorOpen"
   | "handleEditorOpenChange"
+  | "nodeEditorOnCloseAutoFocus"
   | "editingNode"
   | "terminalNode"
   | "setTerminalNode"
@@ -80,6 +81,7 @@ export function NodesPageDialogs({
   sshKeys,
   editorOpen,
   handleEditorOpenChange,
+  nodeEditorOnCloseAutoFocus,
   editingNode,
   terminalNode,
   setTerminalNode,
@@ -124,6 +126,7 @@ export function NodesPageDialogs({
         <NodeEditorDialog
           open={editorOpen}
           onOpenChange={handleEditorOpenChange}
+          onCloseAutoFocus={nodeEditorOnCloseAutoFocus}
           editingNode={editingNode}
           sshKeys={sshKeys}
           onSave={handleSaveNode}

@@ -1,4 +1,4 @@
-import type { FormEvent, ReactNode } from "react";
+import type { ComponentProps, FormEvent, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +12,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+export type DialogCloseAutoFocus = NonNullable<ComponentProps<typeof DialogContent>["onCloseAutoFocus"]>;
+
 type FormDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -24,6 +26,7 @@ type FormDialogProps = {
   submitLabel: ReactNode;
   savingLabel?: ReactNode;
   extraFooter?: ReactNode;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
   children: ReactNode;
 };
 
@@ -39,6 +42,7 @@ export function FormDialog({
   submitLabel,
   savingLabel,
   extraFooter,
+  onCloseAutoFocus,
   children,
 }: FormDialogProps) {
   const { t } = useTranslation();
@@ -52,7 +56,7 @@ export function FormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size={size}>
+      <DialogContent size={size} onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           {icon ? (
             <div className="flex items-center gap-2">

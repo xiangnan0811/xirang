@@ -16,6 +16,7 @@ import {
   DialogCloseButton,
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast-sonner";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { EscalationLevelRow, type EscalationLevelRowErrors } from "./escalation-level-row";
 import { createIntegrationsApi } from "@/lib/api/integrations-api";
 import { apiClient } from "@/lib/api/client";
@@ -93,13 +94,14 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   policy?: EscalationPolicy;
   onSaved: (policy: EscalationPolicy) => void;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 export function EscalationPolicyEditor(props: Props) {
   return <EscalationPolicySession key={`${props.open}:${props.policy?.id}`} {...props} />;
 }
 
-function EscalationPolicySession({ open, onOpenChange, policy, onSaved }: Props) {
+function EscalationPolicySession({ open, onOpenChange, policy, onSaved, onCloseAutoFocus }: Props) {
   const { t } = useTranslation();
   const { token } = useAuth();
 
@@ -185,7 +187,7 @@ function EscalationPolicySession({ open, onOpenChange, policy, onSaved }: Props)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="lg" className="max-h-[90vh] overflow-y-auto">
+      <DialogContent size="lg" className="max-h-[90vh] overflow-y-auto" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>
             {isEdit ? t("escalation.editTitle", { name: policy?.name ?? "" }) : t("escalation.newButton")}

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Plus } from "lucide-react";
-import { FormDialog } from "@/components/ui/form-dialog";
+import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { ApiError } from "@/lib/api/core";
@@ -263,6 +263,7 @@ type TaskEditorDialogProps = {
   onCreate?: (input: NewTaskInput) => Promise<void>;
   onUpdate?: (input: UpdateTaskInput) => Promise<void>;
   editingTask?: TaskRecord | null;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 export function TaskEditorDialog({
@@ -274,6 +275,7 @@ export function TaskEditorDialog({
   onCreate,
   onUpdate,
   editingTask,
+  onCloseAutoFocus,
 }: TaskEditorDialogProps) {
   const { t } = useTranslation();
   const isEditing = Boolean(editingTask);
@@ -334,6 +336,7 @@ export function TaskEditorDialog({
         }
         onOpenChange(nextOpen);
       }}
+      onCloseAutoFocus={onCloseAutoFocus}
       icon={
         isEditing ? (
           <Pencil className="size-5 text-primary" />

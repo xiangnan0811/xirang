@@ -33,6 +33,11 @@ setSearchParams(next, { replace: true });
 
 领域禁止入 URL 的敏感查询、内容票据等不适用此模式；见[搜索](../domains/backup-search.md)与[内容交付](../domains/backup-content-delivery.md)。
 
+实时日志客户端替换或断开连接时，先解除旧实例的所有权再关闭；只有当前实例的
+open、message、close、error 与重试耗尽回调可以更新连接状态、日志和候选端点。
+旧连接的迟到回调不得污染新连接，主动断开仍立即报告未连接。此约束不改变
+共享 WebSocket 客户端既有重连、退避或心跳策略。
+
 ## 浏览器存储与认证所有权
 
 页面或认证顶层通过 `useAuth()` 取令牌，显式传给功能组件、Hook 与页面片段。功能模块不得自行读取 `xirang-auth-token`。auth Context 负责持久化、旧存储迁移、登出清理和存储不可用处理。

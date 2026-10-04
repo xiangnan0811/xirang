@@ -11,7 +11,7 @@ type FilteredEmptyStateProps = {
   icon?: LucideIcon;
   onReset?: () => void;
   resetLabel?: string;
-  onCreate?: () => void;
+  onCreate?: (event: { currentTarget: EventTarget | null }) => void;
   createLabel?: string;
   createIcon?: LucideIcon;
   action?: ReactNode;
@@ -44,7 +44,7 @@ export function FilteredEmptyState({
           </Button>
         ) : null}
         {onCreate ? (
-          <Button size="sm" onClick={onCreate}>
+          <Button size="sm" onClick={(event) => onCreate?.(event)}>
             {CreateIcon ? <CreateIcon className="mr-1 size-4" /> : null}
             {createLabel ?? t('common.create')}
           </Button>

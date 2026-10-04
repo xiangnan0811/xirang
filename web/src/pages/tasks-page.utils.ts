@@ -73,14 +73,14 @@ export type TasksViewProps = {
   filteredTasks: TaskRecord[];
   pendingAction: PendingActionType;
   resetFilters: () => void;
-  setCreateDialogOpen: (open: boolean) => void;
+  setCreateDialogOpen: (open: boolean, opener?: EventTarget | null) => void;
   handleRetry: (taskId: number) => Promise<void>;
   handleCancel: (taskId: number) => Promise<void>;
   handleDelete: (taskId: number) => Promise<void>;
   handleTrigger: (taskId: number) => Promise<void>;
   handlePause: (taskId: number, cancelRunning?: boolean) => Promise<void>;
   handleResume: (taskId: number) => Promise<void>;
-  onEdit: (task: TaskRecord) => void;
+  onEdit: (task: TaskRecord, opener?: EventTarget | null) => void;
   onViewHistory: (task: TaskRecord) => void;
   canConnectTaskPreview: boolean;
   onConnectTaskPreview: (task: TaskRecord) => void;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, Clock3 } from "lucide-react";
-import { FormDialog } from "@/components/ui/form-dialog";
+import { FormDialog, type DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -110,6 +110,7 @@ type PolicyEditorDialogProps = {
   editingPolicy?: PolicyRecord | null;
   onSave: (draft: PolicyDraft) => Promise<void>;
   nodes?: NodeRecord[];
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 export function PolicyEditorDialog({
@@ -118,6 +119,7 @@ export function PolicyEditorDialog({
   editingPolicy,
   onSave,
   nodes = [],
+  onCloseAutoFocus,
 }: PolicyEditorDialogProps) {
   const { t } = useTranslation();
   const { token } = useAuth();
@@ -168,6 +170,7 @@ export function PolicyEditorDialog({
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
+      onCloseAutoFocus={onCloseAutoFocus}
       icon={<Clock3 className="size-5 text-primary" />}
       title={isEditing ? t('policyEditor.titleEdit', { name: draft.name }) : t('policyEditor.titleCreate')}
       description={isEditing

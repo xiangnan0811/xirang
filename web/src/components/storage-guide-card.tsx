@@ -1,7 +1,8 @@
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useRef, useState } from "react";
 import { HardDrive } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { dialogOpenerFromTarget, restoreConnectedDialogOpener } from "@/components/ui/dialog-opener";
 import {
   DataSurface,
   DataSurfaceContent,
@@ -17,6 +18,7 @@ export function StorageGuideCard() {
   const { t } = useTranslation();
   const { token, role } = useAuth();
   const [wizardOpen, setWizardOpen] = useState(false);
+  const wizardOpenerRef = useRef<HTMLElement | null>(null);
 
   if (!token || role !== "admin") return null;
 
@@ -28,14 +30,21 @@ export function StorageGuideCard() {
           <p className="mb-3 text-xs text-muted-foreground">
             {t("storage.guideDesc")}
           </p>
-          <Button size="lg" variant="outline" onClick={() => setWizardOpen(true)}>
+          <Button size="lg" variant="outline" onClick={(event) => {
+            wizardOpenerRef.current = dialogOpenerFromTarget(event.currentTarget);
+            setWizardOpen(true);
+          }}>
             <HardDrive className="mr-1 size-3.5" />
             {t("storage.configureExternal")}
           </Button>
         </DataSurfaceContent>
       </DataSurface>
       <Suspense fallback={null}>
-        <NasMountWizard open={wizardOpen} onOpenChange={setWizardOpen} />
+        <NasMountWizard
+          open={wizardOpen}
+          onOpenChange={setWizardOpen}
+          onCloseAutoFocus={(event) => restoreConnectedDialogOpener(event, wizardOpenerRef.current)}
+        />
       </Suspense>
     </>
   );

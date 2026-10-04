@@ -75,7 +75,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                   {isRunning && (
                     <span
                       className="pulse-online size-2 shrink-0 rounded-full"
-                      aria-label={t("tasks.statusRunning")}
+                      aria-hidden="true"
                     />
                   )}
                   <div>
@@ -242,7 +242,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                   className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                   aria-label={t('tasks.editAriaLabel')}
                   disabled={isPendingAny}
-                  onClick={() => onEdit(task)}
+                  onClick={(event) => onEdit(task, event.currentTarget)}
                 >
                   <Pencil className="size-4" />
                 </Button>
@@ -309,7 +309,7 @@ export const TasksGrid = React.memo(function TasksGrid({
           title={t('tasks.emptyTitle')}
           description={t('tasks.emptyDesc')}
           onReset={resetFilters}
-          onCreate={() => setCreateDialogOpen(true)}
+          onCreate={(event) => setCreateDialogOpen(true, event.currentTarget)}
           createLabel={t('tasks.emptyCreateLabel')}
           createIcon={Plus}
         />

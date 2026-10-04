@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useNodesContext } from "@/context/nodes-context.hooks";
@@ -10,6 +10,11 @@ import { Pagination } from "@/components/ui/pagination";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { InventoryRetryAlert } from "@/components/ui/inventory-retry-alert";
 import { toast } from "@/components/ui/toast-sonner";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { useConfirm } from "@/hooks/use-confirm";
@@ -102,6 +107,18 @@ export function TasksPage() {
   const viewMode: TasksViewMode = viewModeRaw === "list" ? "list" : "cards";
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const createTaskOpenerRef = useRef<HTMLElement | null>(null);
+  const editTaskOpenerRef = useRef<HTMLElement | null>(null);
+  const restoreCreateTaskOpener: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, createTaskOpenerRef.current);
+  };
+  const restoreEditTaskOpener: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, editTaskOpenerRef.current);
+  };
+  const openTaskCreateFromInventory = (open: boolean, opener?: EventTarget | null) => {
+    if (open) createTaskOpenerRef.current = dialogOpenerFromTarget(opener);
+    setCreateDialogOpen(open);
+  };
   const { token: authToken, role } = useAuth();
   const withStepUp = useStepUpAction(
     STEP_UP_ACTIONS.taskBatchTrigger,
@@ -230,7 +247,8 @@ export function TasksPage() {
     }
   };
 
-  const handleEdit = (task: TaskRecord) => {
+  const handleEdit = (task: TaskRecord, opener?: EventTarget | null) => {
+    editTaskOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingTask(task);
     setEditDialogOpen(true);
   };
@@ -431,7 +449,10 @@ export function TasksPage() {
       <TasksHero
         totalCount={tasks.length}
         runningCount={taskStats.running}
-        onCreate={() => setCreateDialogOpen(true)}
+        onCreate={(event?: { currentTarget: EventTarget | null }) => {
+          createTaskOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
+          setCreateDialogOpen(true);
+        }}
       />
 
       <StatCardsSection
@@ -527,7 +548,7 @@ export function TasksPage() {
               filteredTasks={pagedTasks}
               pendingAction={pendingAction}
               resetFilters={resetFilters}
-              setCreateDialogOpen={setCreateDialogOpen}
+              setCreateDialogOpen={openTaskCreateFromInventory}
               handleRetry={handleRetry}
               handleCancel={handleCancel}
               handleDelete={handleDelete}
@@ -554,7 +575,7 @@ export function TasksPage() {
               filteredTasks={pagedTasks}
               pendingAction={pendingAction}
               resetFilters={resetFilters}
-              setCreateDialogOpen={setCreateDialogOpen}
+              setCreateDialogOpen={openTaskCreateFromInventory}
               handleRetry={handleRetry}
               handleCancel={handleCancel}
               handleDelete={handleDelete}
@@ -591,7 +612,9 @@ export function TasksPage() {
       <TasksPageDialogs
         createDialogOpen={createDialogOpen}
         setCreateDialogOpen={setCreateDialogOpen}
+        createOnCloseAutoFocus={restoreCreateTaskOpener}
         editDialogOpen={editDialogOpen}
+        editOnCloseAutoFocus={restoreEditTaskOpener}
         setEditDialogOpen={setEditDialogOpen}
         editingTask={editingTask}
         setEditingTask={setEditingTask}

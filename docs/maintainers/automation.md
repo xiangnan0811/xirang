@@ -123,6 +123,12 @@ exact-mirror 删除授权必须基于真实已暂停的执行证据验证事务�
 
 真实后端 Playwright smoke 在独立 CI 步骤先编译服务以准备 Go 构建缓存，避免冷缓存依赖下载和首次编译消耗浏览器 webServer 的就绪窗口。smoke 仍由隔离脚本构建并启动临时二进制与数据库，保留原有就绪超时及真实浏览器断言，不复用外部运行中的服务。
 
+独立 Mock 可访问性走查使用 `web/` 下的 `npm run walkthrough`，不属于普通
+`npm run e2e` 的收集范围，也不替代上述真实后端 smoke。该命令独占启动 Vite，
+执行固定 464 场景，并输出候选指纹绑定的运行目录；在根目录显式执行
+`node web/scripts/compile-walkthrough-evidence.mjs --run <目录>` 验证证据。
+矩阵、严格 Mock、重试与缺失测量规则统一见[前端质量合同](../spec/frontend/quality-guidelines.md#独立-mock-浏览器走查)。
+
 ## 镜像构建依赖
 
 基础镜像以 digest 固定，显式安装的 Alpine 包使用精确版本。软件源可能移除旧包：安装失败时在锁定基础镜像中复现，分别核对该 Alpine 分支的 amd64 与 arm64 软件源，再更新必要锁定。`apk` 显示的已安装版本不代表软件源仍可安装。

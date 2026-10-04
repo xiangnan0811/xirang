@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useNodesContext } from "@/context/nodes-context.hooks";
 import { useSSHKeysContext } from "@/context/ssh-keys-context.hooks";
 import { toast } from "@/components/ui/toast-sonner";
+import {
+  dialogOpenerFromTarget,
+  restoreConnectedDialogOpener,
+} from "@/components/ui/dialog-opener";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
@@ -226,6 +231,14 @@ export function useSSHKeysPageState() {
   // ----- 对话框状态 -----
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<SSHKeyRecord | null>(null);
+  const editorOpenerRef = useRef<HTMLElement | null>(null);
+  const rotationOpenerRef = useRef<HTMLElement | null>(null);
+  const editorOnCloseAutoFocus: DialogCloseAutoFocus = useCallback((event) => {
+    restoreConnectedDialogOpener(event, editorOpenerRef.current);
+  }, []);
+  const rotationOnCloseAutoFocus: DialogCloseAutoFocus = useCallback((event) => {
+    restoreConnectedDialogOpener(event, rotationOpenerRef.current);
+  }, []);
   const [testConnectionKey, setTestConnectionKey] =
     useState<SSHKeyRecord | null>(null);
   const [associatedNodesKey, setAssociatedNodesKey] =
@@ -248,12 +261,14 @@ export function useSSHKeysPageState() {
   );
 
   // ----- Handlers -----
-  const openCreateDialog = useCallback(() => {
+  const openCreateDialog = useCallback((event?: { currentTarget: EventTarget | null }) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingKey(null);
     setEditorOpen(true);
   }, []);
 
-  const openEditDialog = useCallback((key: SSHKeyRecord) => {
+  const openEditDialog = useCallback((key: SSHKeyRecord, opener?: EventTarget | null) => {
+    editorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingKey(key);
     setEditorOpen(true);
   }, []);
@@ -300,7 +315,8 @@ export function useSSHKeysPageState() {
     [confirm, deleteSSHKey, t],
   );
 
-  const openRotationWizard = useCallback((key?: SSHKeyRecord) => {
+  const openRotationWizard = useCallback((key?: SSHKeyRecord, opener?: EventTarget | null) => {
+    rotationOpenerRef.current = dialogOpenerFromTarget(opener);
     setRotationKey(key ?? null);
     setRotationOpen(true);
   }, []);
@@ -347,6 +363,7 @@ export function useSSHKeysPageState() {
     // 对话框
     editorOpen,
     handleEditorOpenChange,
+    editorOnCloseAutoFocus,
     editingKey,
     testConnectionKey,
     setTestConnectionKey,
@@ -354,6 +371,7 @@ export function useSSHKeysPageState() {
     setAssociatedNodesKey,
     rotationOpen,
     setRotationOpen,
+    rotationOnCloseAutoFocus,
     rotationKey,
     setRotationKey,
     batchImportOpen,
