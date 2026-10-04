@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## [0.58.0](https://github.com/xiangnan0811/xirang/compare/v0.57.6...v0.58.0) (2026-10-04)
+
+
+### ✨ Features
+
+* **automation:** add safe execution history ([#592](https://github.com/xiangnan0811/xirang/issues/592)) ([f53b67b](https://github.com/xiangnan0811/xirang/commit/f53b67b11b61de462bd30c43e700596249e7e3e1))
+* **web:** display report recovery objectives ([#591](https://github.com/xiangnan0811/xirang/issues/591)) ([63db4c8](https://github.com/xiangnan0811/xirang/commit/63db4c8dcbf54696cdfc57a8ed97a712e07a1079))
+
+
+### 🐛 Bug Fixes
+
+* **web:** close audited accessibility gaps ([#588](https://github.com/xiangnan0811/xirang/issues/588)) ([bad12b3](https://github.com/xiangnan0811/xirang/commit/bad12b3fce471d4dca5593ac26c0457055db9cba))
+
 ## [0.57.6](https://github.com/xiangnan0811/xirang/compare/v0.57.5...v0.57.6) (2026-10-04)
 
 
