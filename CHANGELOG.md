@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.58.1](https://github.com/xiangnan0811/xirang/compare/v0.58.0...v0.58.1) (2026-10-05)
+
+
+### 🐛 Bug Fixes
+
+* **web:** unify permission entry points and remove legacy users page ([#594](https://github.com/xiangnan0811/xirang/issues/594)) ([affca30](https://github.com/xiangnan0811/xirang/commit/affca305f0518aacd635725727ef764e5f738472))
+
 ## [0.58.0](https://github.com/xiangnan0811/xirang/compare/v0.57.6...v0.58.0) (2026-10-04)
 
 
