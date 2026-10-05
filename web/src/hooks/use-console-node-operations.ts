@@ -57,17 +57,34 @@ export function useNodeOperations({
 }: UseNodeOperationsParams) {
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
 
-  const createSSHKey = useCallback(async (input: NewSSHKeyInput): Promise<string> => {
-    const result = await exec(i18n.t("nodes.actions.createSSHKey"), (t) => apiClient.createSSHKey(t, input));
+  const createSSHKey = useCallback(async (input: NewSSHKeyInput, isCurrent?: () => boolean): Promise<string> => {
+    const result = await exec<SSHKeyRecord | null>(i18n.t("nodes.actions.createSSHKey"), async (t) => {
+      try {
+        return await apiClient.createSSHKey(t, input);
+      } catch (error) {
+        // 身份已失效时在共享错误处理前结束；已提交的创建不回滚。
+        if (isCurrent && !isCurrent()) {
+          return null;
+        }
+        throw error;
+      }
+    });
+    if (isCurrent && !isCurrent()) {
+      return "";
+    }
     if (result) {
-      if (result.ok) {
+      if (result.ok && result.data) {
+        const created = result.data;
         markInventoryMutated();
-        setSSHKeys((prev) => [result.data, ...prev]);
-        return result.data.id;
+        setSSHKeys((prev) => [created, ...prev]);
+        return created.id;
       }
       return "";
     }
     const { buildDemoSSHKey } = await loadDemoBuilders();
+    if (isCurrent && !isCurrent()) {
+      return "";
+    }
     const item = buildDemoSSHKey(input);
     markInventoryMutated();
     setSSHKeys((prev) => [item, ...prev]);
@@ -143,96 +160,157 @@ export function useNodeOperations({
     return true;
   }, [demoModeEnabled, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, nodes, setSSHKeys, setWarning, token]);
 
-  const createNode = useCallback(async (input: NewNodeInput): Promise<number> => {
+  const createNode = useCallback(async (input: NewNodeInput, isCurrent?: () => boolean): Promise<number> => {
     let keyId = input.keyId ?? null;
 
     if (input.authType === "key" && input.inlinePrivateKey?.trim()) {
-      keyId = await createSSHKey({
-        name: input.inlineKeyName?.trim() || `${input.name}-key`,
-        username: input.username,
-        keyType: input.inlineKeyType ?? "auto",
-        privateKey: input.inlinePrivateKey.trim(),
-        disabled: false,
-        expiresAt: "",
-        allowedPurposes: "",
-        allowedNodeIds: "",
-        allowedNodeTags: ""
-      });
+      try {
+        keyId = await createSSHKey({
+          name: input.inlineKeyName?.trim() || `${input.name}-key`,
+          username: input.username,
+          keyType: input.inlineKeyType ?? "auto",
+          privateKey: input.inlinePrivateKey.trim(),
+          disabled: false,
+          expiresAt: "",
+          allowedPurposes: "",
+          allowedNodeIds: "",
+          allowedNodeTags: ""
+        }, isCurrent);
+      } catch (error) {
+        if (isCurrent && !isCurrent()) {
+          return -1;
+        }
+        throw error;
+      }
+      if (isCurrent && !isCurrent()) {
+        return -1;
+      }
     }
 
     const finalInput: NewNodeInput = { ...input, keyId };
+    const label = i18n.t("nodes.actions.createNode");
 
-    const result = await exec(i18n.t("nodes.actions.createNode"), (t) => apiClient.createNode(t, finalInput));
-    if (result) {
-      if (result.ok) {
-        markInventoryMutated();
-        setNodes((prev) => [result.data, ...prev]);
-        return result.data.id;
+    if (!token) {
+      ensureDemoWriteAllowed(label);
+      const { buildDemoNode } = await loadDemoBuilders();
+      if (isCurrent && !isCurrent()) {
+        return -1;
       }
+      const nextNode = buildDemoNode(input, nodes, keyId);
+      markInventoryMutated();
+      setNodes((prev) => [nextNode, ...prev]);
+      return nextNode.id;
+    }
+
+    try {
+      const created = await apiClient.createNode(token, finalInput);
+      if (isCurrent && !isCurrent()) {
+        return -1;
+      }
+      markInventoryMutated();
+      setNodes((prev) => [created, ...prev]);
+      return created.id;
+    } catch (error) {
+      if (isCurrent && !isCurrent()) {
+        return -1;
+      }
+      handleWriteApiError(label, error);
       return -1;
     }
-    const { buildDemoNode } = await loadDemoBuilders();
-    const nextNode = buildDemoNode(input, nodes, keyId);
-    markInventoryMutated();
-    setNodes((prev) => [nextNode, ...prev]);
-    return nextNode.id;
-  }, [createSSHKey, exec, markInventoryMutated, nodes, setNodes]);
+  }, [createSSHKey, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, nodes, setNodes, token]);
 
-  const updateNode = useCallback(async (nodeID: number, input: NewNodeInput) => {
+  const updateNode = useCallback(async (nodeID: number, input: NewNodeInput, isCurrent?: () => boolean) => {
     let keyId = input.keyId ?? null;
     if (input.authType === "key" && input.inlinePrivateKey?.trim()) {
-      keyId = await createSSHKey({
-        name: input.inlineKeyName?.trim() || `${input.name}-key`,
-        username: input.username,
-        keyType: input.inlineKeyType ?? "auto",
-        privateKey: input.inlinePrivateKey.trim(),
-        disabled: false,
-        expiresAt: "",
-        allowedPurposes: "",
-        allowedNodeIds: "",
-        allowedNodeTags: ""
-      });
+      try {
+        keyId = await createSSHKey({
+          name: input.inlineKeyName?.trim() || `${input.name}-key`,
+          username: input.username,
+          keyType: input.inlineKeyType ?? "auto",
+          privateKey: input.inlinePrivateKey.trim(),
+          disabled: false,
+          expiresAt: "",
+          allowedPurposes: "",
+          allowedNodeIds: "",
+          allowedNodeTags: ""
+        }, isCurrent);
+      } catch (error) {
+        if (isCurrent && !isCurrent()) {
+          return;
+        }
+        throw error;
+      }
+      if (isCurrent && !isCurrent()) {
+        return;
+      }
     }
 
     const finalInput: NewNodeInput = { ...input, keyId };
+    const label = i18n.t("nodes.actions.updateNode");
 
-    const result = await exec(i18n.t("nodes.actions.updateNode"), (t) => apiClient.updateNode(t, nodeID, finalInput));
-    if (result) {
-      if (result.ok) {
-        markInventoryMutated();
-        setNodes((prev) => prev.map((node) => (node.id === nodeID ? result.data.node : node)));
-        if (result.data.warning) {
-          setWarning(result.data.warning);
-          toast.warning(result.data.warning);
-        }
+    if (!token) {
+      ensureDemoWriteAllowed(label);
+      if (isCurrent && !isCurrent()) {
+        return;
       }
+      markInventoryMutated();
+      setNodes((prev) =>
+        prev.map((node) =>
+          node.id === nodeID
+            ? {
+                ...node,
+                name: input.name,
+                host: input.host,
+                address: input.host,
+                ip: input.host,
+                port: input.port || 22,
+                username: input.username,
+                authType: input.authType,
+                keyId,
+                basePath: input.basePath || "/",
+                tags: parseTags(input.tags)
+              }
+            : node
+        )
+      );
       return;
     }
-    markInventoryMutated();
-    setNodes((prev) =>
-      prev.map((node) =>
-        node.id === nodeID
-          ? {
-              ...node,
-              name: input.name,
-              host: input.host,
-              address: input.host,
-              ip: input.host,
-              port: input.port || 22,
-              username: input.username,
-              authType: input.authType,
-              keyId,
-              basePath: input.basePath || "/",
-              tags: parseTags(input.tags)
-            }
-          : node
-      )
-    );
-  }, [createSSHKey, exec, markInventoryMutated, setNodes, setWarning]);
+
+    try {
+      const updated = await apiClient.updateNode(token, nodeID, finalInput);
+      if (isCurrent && !isCurrent()) {
+        return;
+      }
+      markInventoryMutated();
+      setNodes((prev) => prev.map((node) => (node.id === nodeID ? updated.node : node)));
+      if (updated.warning) {
+        setWarning(updated.warning);
+        toast.warning(updated.warning);
+      }
+    } catch (error) {
+      if (isCurrent && !isCurrent()) {
+        return;
+      }
+      handleWriteApiError(label, error);
+    }
+  }, [createSSHKey, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, setNodes, setWarning, token]);
 
 
-  const deleteNode = useCallback(async (nodeID: number) => {
-    await exec(i18n.t("nodes.actions.deleteNode"), (t) => apiClient.deleteNode(t, nodeID));
+  const deleteNode = useCallback(async (nodeID: number, isCurrent?: () => boolean) => {
+    await exec(i18n.t("nodes.actions.deleteNode"), async (t) => {
+      try {
+        await apiClient.deleteNode(t, nodeID);
+      } catch (error) {
+        // 身份已失效时在共享错误处理前结束；已提交的删除不回滚。
+        if (isCurrent && !isCurrent()) {
+          return;
+        }
+        throw error;
+      }
+    });
+    if (isCurrent && !isCurrent()) {
+      return;
+    }
     markInventoryMutated();
     markTasksMutated();
     setNodes((prev) => prev.filter((node) => node.id !== nodeID));
@@ -240,22 +318,39 @@ export function useNodeOperations({
     setAlerts((prev) => prev.filter((alert) => alert.nodeId !== nodeID));
   }, [exec, markInventoryMutated, markTasksMutated, setAlerts, setNodes, setTasks]);
 
-  const deleteNodes = useCallback(async (nodeIDs: number[]): Promise<{ deleted: number; notFoundIds: number[] }> => {
+  const deleteNodes = useCallback(async (nodeIDs: number[], isCurrent?: () => boolean): Promise<{ deleted: number; notFoundIds: number[] }> => {
     const normalized = Array.from(new Set(nodeIDs.filter((item) => Number.isFinite(item) && item > 0)));
     if (!normalized.length) {
       return { deleted: 0, notFoundIds: [] };
     }
 
-    const result = await exec(i18n.t("nodes.actions.deleteNodes"), (t) => apiClient.deleteNodes(t, normalized));
+    const result = await exec<{ deleted: number; notFoundIds: number[] } | null>(
+      i18n.t("nodes.actions.deleteNodes"),
+      async (t) => {
+        try {
+          return await apiClient.deleteNodes(t, normalized);
+        } catch (error) {
+          // 身份已失效时在共享错误处理前结束；已提交的删除不回滚。
+          if (isCurrent && !isCurrent()) {
+            return null;
+          }
+          throw error;
+        }
+      }
+    );
+    if (isCurrent && !isCurrent()) {
+      return { deleted: 0, notFoundIds: [] };
+    }
     if (result) {
-      if (result.ok) {
-        const deletedSet = new Set(normalized.filter((id) => !result.data.notFoundIds.includes(id)));
+      if (result.ok && result.data) {
+        const data = result.data;
+        const deletedSet = new Set(normalized.filter((id) => !data.notFoundIds.includes(id)));
         markInventoryMutated();
         markTasksMutated();
         setNodes((prev) => prev.filter((node) => !deletedSet.has(node.id)));
         setTasks((prev) => prev.filter((task) => !deletedSet.has(task.nodeId)));
         setAlerts((prev) => prev.filter((alert) => !deletedSet.has(alert.nodeId)));
-        return result.data;
+        return data;
       }
       return { deleted: 0, notFoundIds: normalized };
     }

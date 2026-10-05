@@ -18,6 +18,7 @@ import {
 import type { UserRecord } from "@/types/domain";
 import {
   BACKUP_FILES_PATH,
+  backupEntryPath,
   backupFilesHref,
   isNavPathActive,
   normalizeAppPathname,
@@ -110,7 +111,8 @@ export const navItems: NavItem[] = [
     path: "/app/audit",
     icon: FileSearch,
     group: "observe",
-    mobileTab: false
+    mobileTab: false,
+    adminOnly: true
   },
   {
     titleKey: "nav.credentialAudit",
@@ -153,7 +155,9 @@ export const navItems: NavItem[] = [
 ];
 
 export function getVisibleNavItems(role: UserRecord["role"] | null): NavItem[] {
-  return navItems.filter((item) => !item.adminOnly || role === "admin");
+  return navItems
+    .filter((item) => !item.adminOnly || role === "admin")
+    .map((item) => item.path === BACKUP_FILES_PATH ? { ...item, path: backupEntryPath(role) } : item);
 }
 
 export { BACKUP_FILES_PATH, backupFilesHref, isNavPathActive, normalizeAppPathname };

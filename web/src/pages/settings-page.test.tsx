@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
+import { apiClient } from "@/lib/api/client";
+import type { UserRecord } from "@/types/domain";
 import { SettingsPage } from "./settings-page";
 
 const authState = vi.hoisted(() => ({
@@ -47,6 +49,9 @@ vi.mock("@/lib/api/client", () => ({
     listBackups: vi.fn().mockResolvedValue([]),
     exportConfig: vi.fn().mockResolvedValue({}),
     getUsers: vi.fn().mockResolvedValue([]),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
+    deleteUser: vi.fn(),
   },
 }));
 
@@ -74,6 +79,16 @@ vi.mock("./settings-page.escalation", () => ({
   SettingsPageEscalation: () => <div>escalation.tabTitle</div>,
 }));
 
+function usersSettingsSurface() {
+  return (
+    <MemoryRouter initialEntries={["/app/settings?tab=users"]}>
+      <Routes>
+        <Route path="/app/settings" element={<SettingsPage />} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
+
 function renderSettingsPage(initialEntries: string[] = ["/app/settings"]) {
   const router = createMemoryRouter(
     [{ path: "/app/settings", element: <SettingsPage /> }],
@@ -93,6 +108,11 @@ describe("SettingsPage", () => {
       username: "admin",
       role: "admin",
     };
+    vi.mocked(apiClient.getUsers).mockReset();
+    vi.mocked(apiClient.getUsers).mockResolvedValue([]);
+    vi.mocked(apiClient.createUser).mockReset();
+    vi.mocked(apiClient.updateUser).mockReset();
+    vi.mocked(apiClient.deleteUser).mockReset();
   });
 
   it("renders the workbench header and admin metadata", () => {
@@ -212,5 +232,115 @@ describe("SettingsPage", () => {
 
     expect(await screen.findByText("users.emptyTitle")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "users.role" })).toHaveValue("admin");
+  });
+
+  it.each(["operator", "viewer"])(
+    "returns %s from the users settings URL to personal settings and still opens account without loading users",
+    async (role) => {
+      const user = userEvent.setup();
+      authState.current = {
+        token: "test-token",
+        username: role,
+        role,
+      };
+
+      renderSettingsPage(["/app/settings?tab=users"]);
+
+      expect(screen.getByRole("tab", { name: "settings.tabs.personal" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("settings.personal.title")).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "settings.tabs.users" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "users.userManagement" })).not.toBeInTheDocument();
+      expect(apiClient.getUsers).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole("tab", { name: "settings.tabs.account" }));
+
+      expect(screen.getByRole("tab", { name: "settings.tabs.account" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("settings.account.title")).toBeInTheDocument();
+      expect(apiClient.getUsers).not.toHaveBeenCalled();
+    },
+  );
+
+  it("discards a pending user list on role loss and fetches a fresh list when admin access returns", async () => {
+    let resolveUsers!: (users: UserRecord[]) => void;
+    const pendingUsers = new Promise<UserRecord[]>((resolve) => { resolveUsers = resolve; });
+    vi.mocked(apiClient.getUsers).mockReturnValueOnce(pendingUsers);
+    const { rerender } = render(usersSettingsSurface());
+    await waitFor(() => expect(apiClient.getUsers).toHaveBeenCalledTimes(1));
+
+    authState.current = {
+      token: "test-token",
+      username: "viewer",
+      role: "viewer",
+    };
+    rerender(usersSettingsSurface());
+
+    await act(async () => {
+      resolveUsers([{ id: 2, username: "stale-user", role: "admin" }]);
+    });
+
+    expect(screen.queryByText("stale-user")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "users.userManagement" })).not.toBeInTheDocument();
+    expect(apiClient.getUsers).toHaveBeenCalledTimes(1);
+
+    vi.mocked(apiClient.getUsers).mockResolvedValueOnce([
+      { id: 3, username: "fresh-user", role: "viewer" },
+    ]);
+    authState.current = {
+      token: "test-token",
+      username: "admin",
+      role: "admin",
+    };
+    rerender(usersSettingsSurface());
+
+    expect(await screen.findByText("fresh-user")).toBeInTheDocument();
+    expect(screen.queryByText("stale-user")).not.toBeInTheDocument();
+    expect(apiClient.getUsers).toHaveBeenCalledTimes(2);
+    expect(apiClient.getUsers).toHaveBeenNthCalledWith(2, "test-token");
+  });
+
+  it("creates, updates, and deletes a user through labelled role selectors", async () => {
+    const user = userEvent.setup();
+    const created: UserRecord = { id: 7, username: "ada", role: "viewer" };
+    vi.mocked(apiClient.createUser).mockResolvedValue(created);
+    vi.mocked(apiClient.updateUser).mockResolvedValue({ ...created, role: "admin" });
+    vi.mocked(apiClient.deleteUser).mockResolvedValue(undefined);
+    renderSettingsPage(["/app/settings?tab=users"]);
+
+    expect(await screen.findByText("users.emptyTitle")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "users.newUsername" }), "ada");
+    await user.type(screen.getByLabelText("users.initialPassword"), "long-enough-pass");
+    await user.selectOptions(screen.getByRole("combobox", { name: "users.role" }), "users.roles.viewer");
+    await user.click(screen.getByRole("button", { name: "users.createUser" }));
+
+    expect(await screen.findByText("ada")).toBeInTheDocument();
+    expect(apiClient.createUser).toHaveBeenCalledWith("test-token", {
+      username: "ada",
+      password: "long-enough-pass",
+      role: "viewer",
+    });
+
+    const roleSelect = screen.getByRole("combobox", { name: "users.roleForUser" });
+    expect(roleSelect).toBeInstanceOf(HTMLSelectElement);
+    await user.selectOptions(roleSelect, "users.roles.admin");
+    await user.click(screen.getByRole("button", { name: "common.save" }));
+
+    await waitFor(() => {
+      expect(apiClient.updateUser).toHaveBeenCalledWith("test-token", 7, {
+        role: "admin",
+        password: undefined,
+      });
+      expect(screen.getByText("ada").parentElement?.textContent).toContain("ID: 7");
+      expect(screen.getByText("ada").parentElement?.textContent).toContain("users.roles.admin");
+    });
+
+    await user.click(screen.getByRole("button", { name: "common.delete" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "users.confirmDeleteTitle" });
+    await user.click(within(dialog).getByRole("button", { name: "common.delete" }));
+
+    await waitFor(() => {
+      expect(apiClient.deleteUser).toHaveBeenCalledWith("test-token", 7);
+      expect(screen.queryByText("ada")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("users.emptyTitle")).toBeInTheDocument();
   });
 });

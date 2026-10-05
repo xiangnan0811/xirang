@@ -3,6 +3,7 @@ import { Play, Terminal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export type TasksBulkBarProps = {
+  canWriteTasks: boolean;
   selectedCount: number;
   onBatchExecute: () => void;
   onBatchTrigger: () => void;
@@ -10,6 +11,7 @@ export type TasksBulkBarProps = {
 };
 
 export function TasksBulkBar({
+  canWriteTasks,
   selectedCount,
   onBatchExecute,
   onBatchTrigger,
@@ -17,7 +19,7 @@ export function TasksBulkBar({
 }: TasksBulkBarProps) {
   const { t } = useTranslation();
 
-  if (selectedCount === 0) return null;
+  if (!canWriteTasks || selectedCount === 0) return null;
 
   return (
     <div className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5 animate-fade-in">

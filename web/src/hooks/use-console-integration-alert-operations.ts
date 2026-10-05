@@ -24,7 +24,7 @@ type UseIntegrationAlertOperationsParams = {
   setWarning: Dispatch<SetStateAction<string | null>>;
   ensureDemoWriteAllowed: (action: string) => void;
   handleWriteApiError: (action: string, error: unknown) => void;
-  retryTask: (taskID: number) => Promise<void>;
+  retryTask: (taskID: number, isCurrent?: () => boolean) => Promise<void>;
 };
 
 export function useIntegrationAlertOperations({

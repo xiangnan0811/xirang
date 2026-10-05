@@ -15,7 +15,6 @@ import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { useClientPagination } from "@/hooks/use-client-pagination";
-import type { NodeRecord } from "@/types/domain";
 
 export function NodesPage() {
   const { t } = useTranslation();
@@ -52,6 +51,7 @@ export function NodesPage() {
     triggeringNodeId,
     emergencyNodeId,
     isAdmin,
+    canOperateNodes,
     canBrowseNodeFiles,
     openCreateDialog,
     openEditDialog,
@@ -62,16 +62,7 @@ export function NodesPage() {
     handleBulkDelete,
     handleTriggerBackup,
     handleEmergencyBackup,
-    setTerminalNode,
-    setTerminalKey,
-    setMigrateSourceNode,
-    setFileBrowserNode,
   } = state;
-
-  const onOpenTerminal = (node: NodeRecord) => {
-    setTerminalNode(node);
-    setTerminalKey((k) => k + 1);
-  };
 
   const {
     pagedItems: pagedNodes,
@@ -120,10 +111,11 @@ export function NodesPage() {
     handleTriggerBackup,
     onEmergencyBackup: handleEmergencyBackup,
     emergencyNodeId,
-    onOpenTerminal,
-    onMigrate: setMigrateSourceNode,
-    onOpenFileBrowser: canBrowseNodeFiles ? setFileBrowserNode : undefined,
+    onOpenTerminal: state.openTerminal,
+    onMigrate: state.openMigrate,
+    onOpenFileBrowser: canBrowseNodeFiles ? state.openFileBrowser : undefined,
     isAdmin,
+    canOperateNodes,
     canBrowseNodeFiles,
   };
 
@@ -140,10 +132,12 @@ export function NodesPage() {
           </>
         }
         actions={
-          <Button size="sm" onClick={openCreateDialog}>
-            <ServerCog className="size-4" aria-hidden />
-            {t("nodes.addNode")}
-          </Button>
+          isAdmin ? (
+            <Button size="sm" onClick={openCreateDialog}>
+              <ServerCog className="size-4" aria-hidden />
+              {t("nodes.addNode")}
+            </Button>
+          ) : undefined
         }
       />
 
@@ -197,8 +191,10 @@ export function NodesPage() {
             handleImportCSV={state.handleImportCSV}
             handleExportCSV={state.handleExportCSV}
             handleDownloadTemplate={state.handleDownloadTemplate}
-            setBatchCmdOpen={state.setBatchCmdOpen}
+            setBatchCmdOpen={state.openBatchCommand}
             resetFilters={state.resetFilters}
+            isAdmin={state.isAdmin}
+            canOperateNodes={state.canOperateNodes}
           />
 
           <FilterPanel sticky={false} className="grid grid-cols-2 items-center gap-3 border-0 bg-transparent p-0 md:grid-cols-3 xl:grid-cols-[2fr_1fr_1fr_1fr]">
@@ -332,6 +328,7 @@ export function NodesPage() {
         handleDoctorOpenChange={state.handleDoctorOpenChange}
         runDoctorForNode={state.runDoctorForNode}
         isAdmin={state.isAdmin}
+        canOperateNodes={state.canOperateNodes}
         hostKeyIssue={state.hostKeyIssue}
         hostKeyTrusting={state.hostKeyTrusting}
         hostKeyError={state.hostKeyError}

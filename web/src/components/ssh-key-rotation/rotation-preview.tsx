@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,7 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast-sonner";
+import type { AuthRole } from "@/context/auth-context.shared";
 import {
   parseSSHKeyType,
   type NodeRecord,
@@ -101,6 +102,8 @@ interface RotationUploadProps {
   newPrivateKey: string;
   onNewPrivateKeyChange: (key: string) => void;
   preselectedKey?: SSHKeyRecord | null;
+  token: string;
+  role: AuthRole | null;
   onBack: () => void;
   onNext: () => void;
 }
@@ -114,11 +117,33 @@ export function RotationUpload({
   newPrivateKey,
   onNewPrivateKeyChange,
   preselectedKey,
+  token,
+  role,
   onBack,
   onNext,
 }: RotationUploadProps) {
   const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mountedRef = useRef(false);
+  const readGenerationRef = useRef(0);
+  const activeReaderRef = useRef<FileReader | null>(null);
+
+  const releaseActiveReader = useCallback(() => {
+    readGenerationRef.current += 1;
+    const activeReader = activeReaderRef.current;
+    activeReaderRef.current = null;
+    if (activeReader && activeReader.readyState === FileReader.LOADING) {
+      activeReader.abort();
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      releaseActiveReader();
+    };
+  }, [releaseActiveReader, role, token]);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -128,14 +153,29 @@ export function RotationUpload({
       event.target.value = "";
       return;
     }
+
+    releaseActiveReader();
+    const requestGeneration = readGenerationRef.current;
     const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = e.target?.result;
+    activeReaderRef.current = reader;
+
+    const isCurrentRead = () => (
+      mountedRef.current &&
+      readGenerationRef.current === requestGeneration &&
+      activeReaderRef.current === reader
+    );
+
+    reader.onload = (loadEvent) => {
+      if (!isCurrentRead()) return;
+      activeReaderRef.current = null;
+      const content = loadEvent.target?.result;
       if (typeof content === "string") {
         onNewPrivateKeyChange(content);
       }
     };
     reader.onerror = () => {
+      if (!isCurrentRead()) return;
+      activeReaderRef.current = null;
       toast.error(t("sshKeys.fileReadFailed"));
     };
     reader.readAsText(file);

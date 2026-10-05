@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BellRing, Loader2 } from "lucide-react";
+import { useAuth } from "@/context/auth-context.hooks";
 import { useConfirm } from "@/hooks/use-confirm";
 import {
   DataSurface,
@@ -28,6 +29,9 @@ type SortField = "triggered_at" | "severity" | "status" | "node_name";
 
 type AlertCenterProps = {
   token: string;
+  canWriteAlerts: boolean;
+  canTriggerTasks: boolean;
+  canRetryDelivery: boolean;
   integrations: { id: string; name: string }[];
   globalSearch: string;
   setGlobalSearch: (value: string) => void;
@@ -37,12 +41,28 @@ type AlertCenterProps = {
   refreshVersion?: number;
 };
 
+type AlertConfirm = ReturnType<typeof useConfirm>["confirm"];
+
+function AlertWriteConfirm({ confirmRef }: { confirmRef: { current: AlertConfirm | null } }) {
+  const { confirm, dialog } = useConfirm();
+  useEffect(() => {
+    confirmRef.current = confirm;
+    return () => {
+      confirmRef.current = null;
+    };
+  }, [confirm, confirmRef]);
+  return dialog;
+}
+
 export function AlertCenter(props: AlertCenterProps) {
   return <AlertCenterSession key={props.token} {...props} />;
 }
 
 function AlertCenterSession({
   token,
+  canWriteAlerts,
+  canTriggerTasks,
+  canRetryDelivery,
   integrations,
   globalSearch,
   setGlobalSearch,
@@ -52,7 +72,8 @@ function AlertCenterSession({
   refreshVersion,
 }: AlertCenterProps) {
   const { t } = useTranslation();
-  const { confirm, dialog: confirmDialog } = useConfirm();
+  const { role } = useAuth();
+  const authRole = role ?? null;
   const withStepUp = useStepUpAction(
     STEP_UP_ACTIONS.taskManualTrigger,
     { persist: false, reuseCached: false },
@@ -91,6 +112,28 @@ function AlertCenterSession({
   const [deliveryMap, setDeliveryMap] = useState<Record<string, AlertDeliveryRecord[]>>({});
   const [retryingDeliveryKey, setRetryingDeliveryKey] = useState<string | null>(null);
   const [retryingAllAlertId, setRetryingAllAlertId] = useState<string | null>(null);
+  const [appliedAccess, setAppliedAccess] = useState({
+    token,
+    role: authRole,
+    canWriteAlerts,
+    canTriggerTasks,
+    canRetryDelivery,
+  });
+  const confirmRef = useRef<AlertConfirm | null>(null);
+  const mountedRef = useRef(true);
+  const capsRef = useRef({ canWriteAlerts, canTriggerTasks, canRetryDelivery });
+  const authIdentityRef = useRef({ role: authRole, token });
+  const sessionGenerationRef = useRef(0);
+  const bulkAttemptRef = useRef(0);
+  const deliveryAttemptRef = useRef(0);
+  const retryAllAttemptRef = useRef(0);
+  const deliveryLoadAttemptRef = useRef(0);
+
+  const isCurrentSession = (generation: number) =>
+    mountedRef.current
+    && sessionGenerationRef.current === generation
+    && authIdentityRef.current.role === authRole
+    && authIdentityRef.current.token === token;
 
   // --- 分组计数缓存 ---
   // Lazy: only fetched when a delivery panel opens (the only context where
@@ -129,6 +172,22 @@ function AlertCenterSession({
     setAlerts([]);
     setLoading(true);
   }
+  if (
+    appliedAccess.token !== token
+    || appliedAccess.role !== authRole
+    || appliedAccess.canWriteAlerts !== canWriteAlerts
+    || appliedAccess.canTriggerTasks !== canTriggerTasks
+    || appliedAccess.canRetryDelivery !== canRetryDelivery
+  ) {
+    setAppliedAccess({ token, role: authRole, canWriteAlerts, canTriggerTasks, canRetryDelivery });
+    if (bulkResolving) setBulkResolving(false);
+    if (retryingDeliveryKey !== null) setRetryingDeliveryKey(null);
+    if (retryingAllAlertId !== null) setRetryingAllAlertId(null);
+  }
+  if (!canWriteAlerts && selectedAlertIds.length > 0) setSelectedAlertIds([]);
+  if (!canWriteAlerts && bulkResolving) setBulkResolving(false);
+  if (!canRetryDelivery && retryingDeliveryKey !== null) setRetryingDeliveryKey(null);
+  if (!canRetryDelivery && retryingAllAlertId !== null) setRetryingAllAlertId(null);
   useEffect(() => {
     const controller = new AbortController();
     void apiClient.getAlertsPaginated(token, {
@@ -138,7 +197,7 @@ function AlertCenterSession({
       keyword: deferredKeyword.trim() || undefined,
       signal: controller.signal,
     }).then((result) => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || !mountedRef.current) return;
       setAlerts(result.items);
       setTotal(result.total);
       setSelectedAlertIds((current) => {
@@ -146,18 +205,33 @@ function AlertCenterSession({
         return current.filter((alertId) => unresolvedIds.has(alertId));
       });
     }).catch((err) => {
-      if (!controller.signal.aborted && !(err instanceof DOMException && err.name === "AbortError")) toast.error(getErrorMessage(err));
-    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+      if (controller.signal.aborted || !mountedRef.current || (err instanceof DOMException && err.name === "AbortError")) return;
+      toast.error(getErrorMessage(err));
+    }).finally(() => { if (!controller.signal.aborted && mountedRef.current) setLoading(false); });
     return () => { controller.abort(); };
   }, [token, page, pageSize, sortBy, sortOrder, statusFilter, severityFilter, deferredKeyword, refreshVersion, reload]);
 
-  useEffect(() => {
-    return () => {
-      if (highlightClearTimerRef.current !== null) {
-        window.clearTimeout(highlightClearTimerRef.current);
-      }
-    };
+  useLayoutEffect(() => () => {
+    deliveryLoadAttemptRef.current += 1;
   }, []);
+
+  // 身份、权限和代次在绘制前提交。清理时先作废挂载和代次，再取消高亮定时器。
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    capsRef.current = { canWriteAlerts, canTriggerTasks, canRetryDelivery };
+    authIdentityRef.current = { role: authRole, token };
+    sessionGenerationRef.current += 1;
+    return () => {
+      mountedRef.current = false;
+      sessionGenerationRef.current += 1;
+      bulkAttemptRef.current += 1;
+      deliveryAttemptRef.current += 1;
+      retryAllAttemptRef.current += 1;
+      const highlightTimer = highlightClearTimerRef.current;
+      highlightClearTimerRef.current = null;
+      if (highlightTimer !== null) window.clearTimeout(highlightTimer);
+    };
+  }, [token, authRole, canWriteAlerts, canTriggerTasks, canRetryDelivery]);
 
   const handlePageChange = (p: number) => {
     setPage(p);
@@ -201,15 +275,28 @@ function AlertCenterSession({
 
   // --- 投递记录操作 ---
   const refreshDeliveries = (alertId: string) => {
+    const attempt = ++deliveryLoadAttemptRef.current;
     setDeliveryLoadingAlertId(alertId);
     void apiClient.getAlertDeliveries(token, alertId)
-      .then((rows) => setDeliveryMap((prev) => ({ ...prev, [alertId]: rows })))
-      .catch((error) => toast.error(getErrorMessage(error)))
-      .finally(() => setDeliveryLoadingAlertId(null));
+      .then((rows) => {
+        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current) return;
+        setDeliveryMap((prev) => ({ ...prev, [alertId]: rows }));
+      })
+      .catch((error) => {
+        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current) return;
+        toast.error(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current) return;
+        setDeliveryLoadingAlertId(null);
+      });
     // Fetch group count in parallel. Best-effort: a failure here must not
     // block delivery rendering, so the error is logged at debug only.
     void apiClient.getAlertGroupInfo(token, alertId)
-      .then((gi) => setGroupInfoMap((prev) => ({ ...prev, [alertId]: { count: gi.count } })))
+      .then((gi) => {
+        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current) return;
+        setGroupInfoMap((prev) => ({ ...prev, [alertId]: { count: gi.count } }));
+      })
       .catch(() => { /* non-critical; badge simply doesn't render */ });
   };
 
@@ -226,29 +313,40 @@ function AlertCenterSession({
 
   // --- 告警操作 ---
   const handleAck = async (alert: AlertRecord) => {
+    if (!capsRef.current.canWriteAlerts) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
     try {
       await apiClient.ackAlert(token, alert.id);
+      if (!isCurrentSession(generation) || !capsRef.current.canWriteAlerts) return;
       toast.success(t("notifications.ackSuccess", { code: alert.errorCode }));
       setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
+      if (!isCurrentSession(generation) || !capsRef.current.canWriteAlerts) return;
       toast.error(getErrorMessage(err));
     }
   };
 
   const handleResolve = async (alert: AlertRecord) => {
+    if (!capsRef.current.canWriteAlerts) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
     try {
       await apiClient.resolveAlert(token, alert.id);
+      if (!isCurrentSession(generation) || !capsRef.current.canWriteAlerts) return;
       toast.success(t("notifications.resolveSuccess", { code: alert.errorCode }));
       setSelectedAlertIds((current) => current.filter((alertId) => alertId !== alert.id));
       setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
+      if (!isCurrentSession(generation) || !capsRef.current.canWriteAlerts) return;
       toast.error(getErrorMessage(err));
     }
   };
 
   const handleSelectionChange = (alertId: string, selected: boolean) => {
+    if (!capsRef.current.canWriteAlerts) return;
     setSelectedAlertIds((current) => {
       if (selected) {
         return current.includes(alertId) ? current : [...current, alertId];
@@ -258,6 +356,7 @@ function AlertCenterSession({
   };
 
   const handleSelectAllVisible = (selected: boolean) => {
+    if (!capsRef.current.canWriteAlerts) return;
     const visibleUnresolvedIds = displayAlerts.filter((alert) => alert.status !== "resolved").map((alert) => alert.id);
     setSelectedAlertIds((current) => {
       if (!selected) {
@@ -270,31 +369,44 @@ function AlertCenterSession({
   };
 
   const handleBulkResolveSelected = async () => {
+    if (!capsRef.current.canWriteAlerts) return;
     if (!selectedAlertIds.length || bulkResolving) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
+    const alertIds = selectedAlertIds;
+    const attempt = ++bulkAttemptRef.current;
     setBulkResolving(true);
     try {
-      const result = await apiClient.resolveAlertsBulk(token, { alertIds: selectedAlertIds });
+      const result = await apiClient.resolveAlertsBulk(token, { alertIds });
+      if (bulkAttemptRef.current !== attempt || !isCurrentSession(generation) || !capsRef.current.canWriteAlerts) return;
       toast.success(t("notifications.bulkResolveSuccess", { count: result.resolvedCount }));
       setSelectedAlertIds([]);
       setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
+      if (bulkAttemptRef.current !== attempt || !isCurrentSession(generation) || !capsRef.current.canWriteAlerts) return;
       toast.error(getErrorMessage(err));
     } finally {
-      setBulkResolving(false);
+      if (bulkAttemptRef.current === attempt && isCurrentSession(generation)) setBulkResolving(false);
     }
   };
 
   const handleResolveNodeAlerts = async (alert: AlertRecord) => {
-    const ok = await confirm({
+    if (!capsRef.current.canWriteAlerts) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
+    const requestConfirm = confirmRef.current;
+    if (!requestConfirm) return;
+    const ok = await requestConfirm({
       title: t("notifications.resolveNodeConfirmTitle"),
       description: t("notifications.resolveNodeConfirmDesc", { node: alert.nodeName }),
       confirmText: t("notifications.resolveNodeConfirmAction"),
     });
-    if (!ok) return;
+    if (!ok || !isCurrentSession(generation) || !capsRef.current.canWriteAlerts) return;
 
     try {
       const result = await apiClient.resolveAlertsBulk(token, { nodeId: alert.nodeId });
+      if (!isCurrentSession(generation) || !capsRef.current.canWriteAlerts) return;
       toast.success(t("notifications.resolveNodeSuccess", { node: alert.nodeName, count: result.resolvedCount }));
       setSelectedAlertIds((current) => current.filter((alertId) => {
         const row = displayAlerts.find((item) => item.id === alertId);
@@ -303,61 +415,106 @@ function AlertCenterSession({
       setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
+      if (!isCurrentSession(generation) || !capsRef.current.canWriteAlerts) return;
       toast.error(getErrorMessage(err));
     }
   };
 
   const handleRetry = async (alert: AlertRecord) => {
+    if (!capsRef.current.canTriggerTasks) return;
     if (!alert.taskId) {
       toast.error(t("notifications.noAlertTask"));
       return;
     }
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
     const taskId = alert.taskId;
+    let triggered = false;
     try {
       await withStepUp(async (proof) => {
-        await apiClient.requestTaskManualTriggerCredentialGrant(token, {
-          taskId,
-          reason: t("tasks.manualTriggerGrantReason", { id: taskId }),
-          requestedTtlSeconds: 600,
-        }, proof);
-        return apiClient.triggerTask(token, taskId, proof);
+        if (!isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
+        try {
+          await apiClient.requestTaskManualTriggerCredentialGrant(token, {
+            taskId,
+            reason: t("tasks.manualTriggerGrantReason", { id: taskId }),
+            requestedTtlSeconds: 600,
+          }, proof);
+          if (!isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
+          await apiClient.triggerTask(token, taskId, proof);
+          if (!isCurrentSession(generation)) return;
+          triggered = true;
+        } catch (error) {
+          if (!isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
+          throw error;
+        }
       });
+      if (!triggered || !isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
       toast.success(t("notifications.retryTriggered", { id: taskId }));
       setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
+      if (!isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
       toast.error(getErrorMessage(err));
     }
   };
 
   const handleRetryDelivery = async (alertId: string, deliveryId: string) => {
-    setRetryingDeliveryKey(String(deliveryId));
+    if (!capsRef.current.canRetryDelivery) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
+    const attempt = ++deliveryAttemptRef.current;
+    const deliveryKey = String(deliveryId);
+    setRetryingDeliveryKey(deliveryKey);
     try {
       await apiClient.retryDelivery(token, deliveryId);
+      if (deliveryAttemptRef.current !== attempt || !isCurrentSession(generation) || !capsRef.current.canRetryDelivery) return;
       toast.success(t("notifications.resendSuccess", { defaultValue: "重发成功" }));
       refreshDeliveries(alertId);
     } catch (err) {
+      if (deliveryAttemptRef.current !== attempt || !isCurrentSession(generation) || !capsRef.current.canRetryDelivery) return;
       toast.error(getErrorMessage(err));
     } finally {
-      setRetryingDeliveryKey(null);
+      if (deliveryAttemptRef.current === attempt && isCurrentSession(generation)) {
+        setRetryingDeliveryKey((current) => (current === deliveryKey ? null : current));
+      }
     }
   };
 
   const handleRetryAllFailed = async (alertId: string) => {
+    if (!capsRef.current.canRetryDelivery) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
     const failedDeliveries = (deliveryMap[alertId] ?? []).filter((d) => d.status === "failed" || d.status === "retrying");
     if (!failedDeliveries.length) return;
+    const attempt = ++retryAllAttemptRef.current;
     setRetryingAllAlertId(alertId);
-    const results = await Promise.allSettled(
-      failedDeliveries.map((d) => apiClient.retryDelivery(token, d.id))
-    );
-    const failed = results.filter(r => r.status === "rejected").length;
-    if (failed === 0) {
-      toast.success("批量重发成功");
-    } else {
-      toast.error(`批量重发：${results.length - failed} 成功，${failed} 失败`);
+    let failed = 0;
+    let succeeded = 0;
+    try {
+      for (const delivery of failedDeliveries) {
+        if (retryAllAttemptRef.current !== attempt || !isCurrentSession(generation) || !capsRef.current.canRetryDelivery) return;
+        try {
+          await apiClient.retryDelivery(token, delivery.id);
+        } catch {
+          if (retryAllAttemptRef.current !== attempt || !isCurrentSession(generation) || !capsRef.current.canRetryDelivery) return;
+          failed += 1;
+          continue;
+        }
+        if (retryAllAttemptRef.current !== attempt || !isCurrentSession(generation) || !capsRef.current.canRetryDelivery) return;
+        succeeded += 1;
+      }
+      if (retryAllAttemptRef.current !== attempt || !isCurrentSession(generation) || !capsRef.current.canRetryDelivery) return;
+      if (failed === 0) {
+        toast.success("批量重发成功");
+      } else {
+        toast.error(`批量重发：${succeeded} 成功，${failed} 失败`);
+      }
+      refreshDeliveries(alertId);
+    } finally {
+      if (retryAllAttemptRef.current === attempt && isCurrentSession(generation)) {
+        setRetryingAllAlertId((current) => (current === alertId ? null : current));
+      }
     }
-    refreshDeliveries(alertId);
-    setRetryingAllAlertId(null);
   };
 
   // --- 合并高亮告警和普通列表 ---
@@ -384,7 +541,7 @@ function AlertCenterSession({
           total={total}
           onReset={() => { resetFilters(); setPage(1); setSelectedAlertIds([]); }}
         />
-        {selectedAlertIds.length > 0 ? (
+        {canWriteAlerts && selectedAlertIds.length > 0 ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2">
             <span className="text-sm text-muted-foreground">
               {t("notifications.selectedAlerts", { count: selectedAlertIds.length })}
@@ -437,6 +594,9 @@ function AlertCenterSession({
             integrationNameMap={integrationNameMap}
             selectedAlertIds={selectedAlertIds}
             bulkResolving={bulkResolving}
+            canWriteAlerts={canWriteAlerts}
+            canTriggerTasks={canTriggerTasks}
+            canRetryDelivery={canRetryDelivery}
             onSelectionChange={handleSelectionChange}
             onSelectAllVisible={handleSelectAllVisible}
             onRetry={(alert) => void handleRetry(alert)}
@@ -458,7 +618,7 @@ function AlertCenterSession({
       </DataSurfaceContent>
 
       <DataSurfaceFooter>
-        {confirmDialog}
+        {canWriteAlerts ? <AlertWriteConfirm key={`${authRole}:${canTriggerTasks}:${canRetryDelivery}`} confirmRef={confirmRef} /> : null}
         <Pagination
           page={page}
           pageSize={pageSize}

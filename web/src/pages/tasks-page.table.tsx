@@ -48,6 +48,8 @@ export const TasksTable = React.memo(function TasksTable({
   onManageRsyncVersioning,
   canManageRcloneVersioning,
   onManageRcloneVersioning,
+  canWriteTasks,
+  canTriggerTasks,
   selectedTaskSet,
   allVisibleSelected,
   toggleTaskSelection,
@@ -61,6 +63,7 @@ export const TasksTable = React.memo(function TasksTable({
   const chainParentMap = buildChainParentMap(filteredTasks);
 
   // Determine which tasks to show (hide child rows whose parent is collapsed)
+  const columnCount = canWriteTasks ? 9 : 8;
   const visibleTasks = filteredTasks.filter((task) => {
     if (!task.dependsOnTaskId) return true;
     // Check if any parent in the chain is expanded
@@ -77,15 +80,17 @@ export const TasksTable = React.memo(function TasksTable({
       <table className="min-w-[1100px] text-left text-sm">
         <thead>
           <tr className="border-b border-border bg-muted/35 text-mini uppercase tracking-wide text-muted-foreground">
-            <th scope="col" className="w-10 px-3 py-2.5">
-              <input
-                type="checkbox"
-                className="size-4 accent-primary rounded-sm"
-                checked={allVisibleSelected}
-                onChange={(e) => toggleSelectAllVisible(e.target.checked)}
-                aria-label={t("tasks.selectAllVisible")}
-              />
-            </th>
+            {canWriteTasks ? (
+              <th scope="col" className="w-10 px-3 py-2.5">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-primary rounded-sm"
+                  checked={allVisibleSelected}
+                  onChange={(e) => toggleSelectAllVisible(e.target.checked)}
+                  aria-label={t("tasks.selectAllVisible")}
+                />
+              </th>
+            ) : null}
             <th scope="col" className="px-3 py-2.5">{t("tasks.columnTask")}</th>
             <th scope="col" className="px-3 py-2.5">{t("tasks.columnNode")}</th>
             <th scope="col" className="px-3 py-2.5">{t("tasks.columnStatus")}</th>
@@ -124,15 +129,17 @@ export const TasksTable = React.memo(function TasksTable({
                     isChild && "bg-muted/20"
                   )}
                 >
-                  <td className="px-3 py-2.5">
-                    <input
-                      type="checkbox"
-                      className="size-4 accent-primary rounded-sm"
-                      checked={selectedTaskSet.has(task.id)}
-                      onChange={(e) => toggleTaskSelection(task.id, e.target.checked)}
-                      aria-label={t("tasks.selectTaskAriaLabel", { name: task.name || task.policyName })}
-                    />
-                  </td>
+                  {canWriteTasks ? (
+                    <td className="px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-primary rounded-sm"
+                        checked={selectedTaskSet.has(task.id)}
+                        onChange={(e) => toggleTaskSelection(task.id, e.target.checked)}
+                        aria-label={t("tasks.selectTaskAriaLabel", { name: task.name || task.policyName })}
+                      />
+                    </td>
+                  ) : null}
                   <td className="px-3 py-2.5">
                     <div className={cn("flex items-center gap-1.5", isChild && "pl-6")}>
                       {/* Running pulse indicator */}
@@ -252,20 +259,22 @@ export const TasksTable = React.memo(function TasksTable({
                   </td>
                   <td className="px-3 py-2.5 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={t("tasks.retryAriaLabel")}
-                        disabled={task.status !== "failed" || isPendingAny}
-                        onClick={() => void handleRetry(task.id)}
-                      >
-                        {isPendingRetry ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <RotateCcw className="size-4" />
-                        )}
-                      </Button>
+                      {canTriggerTasks ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t("tasks.retryAriaLabel")}
+                          disabled={task.status !== "failed" || isPendingAny}
+                          onClick={() => void handleRetry(task.id)}
+                        >
+                          {isPendingRetry ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <RotateCcw className="size-4" />
+                          )}
+                        </Button>
+                      ) : null}
                       {canManageRsyncVersioning && task.executorType === "rsync" && task.rsyncPublication ? (
                         <Button
                           variant="ghost"
@@ -335,17 +344,19 @@ export const TasksTable = React.memo(function TasksTable({
                       >
                         <History className="size-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={t("tasks.editAriaLabel")}
-                        disabled={isPendingAny}
-                        onClick={(event) => onEdit(task, event.currentTarget)}
-                      >
-                        <Pencil className="size-4" />
-                      </Button>
-                      {task.enabled !== false ? (
+                      {canWriteTasks ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t("tasks.editAriaLabel")}
+                          disabled={isPendingAny}
+                          onClick={(event) => onEdit(task, event.currentTarget)}
+                        >
+                          <Pencil className="size-4" />
+                        </Button>
+                      ) : null}
+                      {canWriteTasks && task.enabled !== false ? (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -356,7 +367,8 @@ export const TasksTable = React.memo(function TasksTable({
                         >
                           <Pause className="size-4" />
                         </Button>
-                      ) : (
+                      ) : null}
+                      {canWriteTasks && task.enabled === false ? (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -367,49 +379,55 @@ export const TasksTable = React.memo(function TasksTable({
                         >
                           <Play className="size-4" />
                         </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={t("tasks.cancelAriaLabel")}
-                        disabled={!canCancel(task.status) || isPendingAny}
-                        onClick={() => void handleCancel(task.id)}
-                      >
-                        {isPendingCancel ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <Square className="size-4" />
-                        )}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                        aria-label={t("tasks.deleteAriaLabel")}
-                        disabled={isPendingAny}
-                        onClick={() => void handleDelete(task.id)}
-                      >
-                        {isPendingDelete ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="size-4" />
-                        )}
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="ml-2"
-                        disabled={!canTrigger(task) || !!task.dependsOnTaskId || isPendingAny}
-                        title={task.enabled === false ? t("tasks.pausedTooltip") : undefined}
-                        onClick={() => void handleTrigger(task.id)}
-                      >
-                        {isPendingTrigger ? (
-                          <Loader2 className="size-4 mr-1 animate-spin" />
-                        ) : (
-                          <Play className="size-4 mr-1" />
-                        )}
-                        {t("tasks.trigger")}
-                      </Button>
+                      ) : null}
+                      {canWriteTasks ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t("tasks.cancelAriaLabel")}
+                          disabled={!canCancel(task.status) || isPendingAny}
+                          onClick={() => void handleCancel(task.id)}
+                        >
+                          {isPendingCancel ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Square className="size-4" />
+                          )}
+                        </Button>
+                      ) : null}
+                      {canWriteTasks ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                          aria-label={t("tasks.deleteAriaLabel")}
+                          disabled={isPendingAny}
+                          onClick={() => void handleDelete(task.id)}
+                        >
+                          {isPendingDelete ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-4" />
+                          )}
+                        </Button>
+                      ) : null}
+                      {canTriggerTasks ? (
+                        <Button
+                          size="sm"
+                          className="ml-2"
+                          disabled={!canTrigger(task) || !!task.dependsOnTaskId || isPendingAny}
+                          title={task.enabled === false ? t("tasks.pausedTooltip") : undefined}
+                          onClick={() => void handleTrigger(task.id)}
+                        >
+                          {isPendingTrigger ? (
+                            <Loader2 className="size-4 mr-1 animate-spin" />
+                          ) : (
+                            <Play className="size-4 mr-1" />
+                          )}
+                          {t("tasks.trigger")}
+                        </Button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -417,13 +435,13 @@ export const TasksTable = React.memo(function TasksTable({
             })
           ) : !loading && !requestFailed ? (
             <tr>
-              <td colSpan={9} className="px-3 py-6">
+              <td colSpan={columnCount} className="px-3 py-6">
                 <FilteredEmptyState
                   className="py-8"
                   title={t("tasks.emptyTitle")}
                   description={t("tasks.emptyDesc")}
                   onReset={resetFilters}
-                  onCreate={(event) => setCreateDialogOpen(true, event.currentTarget)}
+                  onCreate={canWriteTasks ? (event) => setCreateDialogOpen(true, event.currentTarget) : undefined}
                   createLabel={t("tasks.emptyCreateLabel")}
                   createIcon={Plus}
                 />

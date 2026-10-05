@@ -1,9 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { useAuth } from "@/context/auth-context.hooks";
+import type { AuthRole } from "@/context/auth-context.shared";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { apiClient } from "@/lib/api/client";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
@@ -23,6 +25,13 @@ type BatchCommandDialogProps = {
   onSuccess?: (result: BatchCommandResult) => void;
 };
 
+type BatchCommandLifetime = {
+  generation: number;
+  token: string;
+  role: AuthRole | null;
+  open: boolean;
+};
+
 const dangerousCommandPatterns = [
   { key: "fileRemoval", pattern: /\brm\s+-[^\n;|&]*[rf][^\n;|&]*\s+/i },
   { key: "diskFormatting", pattern: /\b(?:mkfs(?:\.\w+)?|wipefs)\b/i },
@@ -39,7 +48,7 @@ function detectDangerousCommandKeys(command: string): string[] {
 }
 
 export function BatchCommandDialog(props: BatchCommandDialogProps) {
-  return <BatchCommandSession key={String(props.open)} {...props} />;
+  return <BatchCommandSession key={JSON.stringify([props.open, props.token])} {...props} />;
 }
 
 function BatchCommandSession({
@@ -51,6 +60,13 @@ function BatchCommandSession({
   onSuccess,
 }: BatchCommandDialogProps) {
   const { t } = useTranslation();
+  const { role } = useAuth();
+  const lifetimeRef = useRef<BatchCommandLifetime>({
+    generation: 0,
+    token,
+    role,
+    open,
+  });
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>(() => defaultNodeIds ?? []);
   const [command, setCommand] = useState("");
   const [name, setName] = useState("");
@@ -59,11 +75,30 @@ function BatchCommandSession({
   const [error, setError] = useState("");
   const [reviewing, setReviewing] = useState(false);
   const [acknowledgement, setAcknowledgement] = useState("");
+  const [appliedRole, setAppliedRole] = useState(role);
+  if (appliedRole !== role) {
+    setAppliedRole(role);
+    setSaving(false);
+  }
   const submissionRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const withStepUp = useStepUpAction(
     STEP_UP_ACTIONS.batchCommandCreate,
     { persist: false, reuseCached: false },
   );
+  useLayoutEffect(() => {
+    lifetimeRef.current = {
+      generation: lifetimeRef.current.generation + 1,
+      token,
+      role,
+      open,
+    };
+    return () => {
+      lifetimeRef.current = {
+        ...lifetimeRef.current,
+        generation: lifetimeRef.current.generation + 1,
+      };
+    };
+  }, [open, role, token]);
   const batchErrorId = "batch-command-error";
 
   const selectedNodes = useMemo(
@@ -116,6 +151,16 @@ function BatchCommandSession({
       return;
     }
 
+    const generation = lifetimeRef.current.generation;
+    const stillCurrent = () => {
+      const current = lifetimeRef.current;
+      return current.generation === generation
+        && current.open
+        && current.token.length > 0
+        && (current.role === "admin" || current.role === "operator");
+    };
+    if (!stillCurrent()) return;
+
     setSaving(true);
     setError("");
     try {
@@ -125,28 +170,44 @@ function BatchCommandSession({
         submissionRef.current = { fingerprint, key: crypto.randomUUID() };
       }
       const idempotencyKey = submissionRef.current.key;
+      const requestToken = lifetimeRef.current.token;
       const result = await withStepUp(async (proof) => {
-        await apiClient.requestBatchCommandCredentialGrant(token, {
-          nodeIds,
-          reason: t("batchCommand.grantReason", { count: nodeIds.length }),
-          requestedTtlSeconds: 600,
-        }, proof);
-        return apiClient.createBatchCommand(
-          token,
-          nodeIds,
-          command.trim(),
-          name.trim() || undefined,
-          retain,
-          proof,
-          idempotencyKey
-        );
+        if (!stillCurrent()) return null;
+        try {
+          await apiClient.requestBatchCommandCredentialGrant(requestToken, {
+            nodeIds,
+            reason: t("batchCommand.grantReason", { count: nodeIds.length }),
+            requestedTtlSeconds: 600,
+          }, proof);
+          if (!stillCurrent()) return null;
+          const created = await apiClient.createBatchCommand(
+            requestToken,
+            nodeIds,
+            command.trim(),
+            name.trim() || undefined,
+            retain,
+            proof,
+            idempotencyKey
+          );
+          if (!stillCurrent()) return null;
+          return created;
+        } catch (error) {
+          // A challenge that lands after token, role, or dialog lifetime changed must
+          // not reach useStepUpAction, which would open the shared step-up dialog.
+          if (!stillCurrent()) return null;
+          throw error;
+        }
       });
+      if (!stillCurrent() || result == null) return;
       onOpenChange(false);
       onSuccess?.({ batchId: result.batchId, retain: result.retain });
     } catch (err) {
+      if (!stillCurrent()) return;
       setError(err instanceof Error ? err.message : t("batchCommand.errorExecutionFailed"));
     } finally {
-      setSaving(false);
+      if (stillCurrent()) {
+        setSaving(false);
+      }
     }
   }, [
     validateInputs,
@@ -157,7 +218,6 @@ function BatchCommandSession({
     command,
     name,
     retain,
-    token,
     onOpenChange,
     onSuccess,
     t,

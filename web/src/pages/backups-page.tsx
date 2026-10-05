@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { PageHero } from "@/components/ui/page-hero";
-import { getBackupActivePage } from "@/lib/backup-navigation";
+import { useAuth } from "@/context/auth-context.hooks";
+import { canAccessBackupData, getBackupActivePage } from "@/lib/backup-navigation";
 import { cn } from "@/lib/utils";
 
 const routeTabs = [
@@ -17,30 +18,37 @@ export function BackupsPage() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
+  const { role } = useAuth();
   const tabRefs = useRef<Array<HTMLAnchorElement | null>>([]);
-  const activePage = getBackupActivePage(location.pathname);
+  const routeActivePage = getBackupActivePage(location.pathname);
   const [lastDataSearch, setLastDataSearch] = useState(() =>
-    activePage === "data" ? location.search : "",
+    routeActivePage === "data" ? location.search : "",
   );
-  if (activePage === "data" && lastDataSearch !== location.search) {
+  const visibleTabs = canAccessBackupData(role)
+    ? routeTabs
+    : routeTabs.filter((tab) => tab.page !== "data");
+  const activePage = visibleTabs.some((tab) => tab.page === routeActivePage)
+    ? routeActivePage
+    : "overview";
+  if (routeActivePage === "data" && lastDataSearch !== location.search) {
     setLastDataSearch(location.search);
   }
-  const filesSearch = activePage === "data" ? location.search : lastDataSearch;
+  const filesSearch = routeActivePage === "data" ? location.search : lastDataSearch;
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLAnchorElement>, index: number) => {
     let targetIndex: number | null = null;
     if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      targetIndex = (index + 1) % routeTabs.length;
+      targetIndex = (index + 1) % visibleTabs.length;
     } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-      targetIndex = (index - 1 + routeTabs.length) % routeTabs.length;
+      targetIndex = (index - 1 + visibleTabs.length) % visibleTabs.length;
     } else if (event.key === "Home") {
       targetIndex = 0;
     } else if (event.key === "End") {
-      targetIndex = routeTabs.length - 1;
+      targetIndex = visibleTabs.length - 1;
     }
     if (targetIndex === null) return;
     event.preventDefault();
-    const target = routeTabs[targetIndex];
+    const target = visibleTabs[targetIndex];
     navigate(target.page === "data" ? `${target.path}${filesSearch}` : target.path);
     requestAnimationFrame(() => tabRefs.current[targetIndex]?.focus());
   };
@@ -63,7 +71,7 @@ export function BackupsPage() {
           aria-label={t("backups.tabsAriaLabel")}
           className="inline-flex min-h-11 min-w-max items-center gap-1 rounded-lg border border-border bg-background/70 p-1"
         >
-          {routeTabs.map((tab, index) => {
+          {visibleTabs.map((tab, index) => {
             const selected = activePage === tab.page;
             return (
               <NavLink
@@ -93,7 +101,7 @@ export function BackupsPage() {
       </div>
 
       <div className="min-h-0 flex-1">
-        {routeTabs.map((tab) => {
+        {visibleTabs.map((tab) => {
           const selected = activePage === tab.page;
           return (
             <section

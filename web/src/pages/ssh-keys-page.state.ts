@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useAuth } from "@/context/auth-context.hooks";
+import type { AuthRole } from "@/context/auth-context.shared";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useNodesContext } from "@/context/nodes-context.hooks";
 import { useSSHKeysContext } from "@/context/ssh-keys-context.hooks";
@@ -48,6 +50,34 @@ export function useSSHKeysPageState() {
     deleteSSHKey,
     refreshSSHKeys,
   } = useSSHKeysContext();
+  const { role, token } = useAuth();
+  const demoRole: AuthRole | null = !token && import.meta.env.VITE_ENABLE_DEMO_MODE === "true" ? "viewer" : null;
+  const effectiveRole = role ?? demoRole;
+  const canManageSSHKeys = effectiveRole === "admin";
+  const { confirm, dialog, cancelPending } = useConfirm();
+  const mountedRef = useRef(false);
+  const authIdentityRef = useRef({ role: effectiveRole, token });
+  const sessionGenerationRef = useRef(0);
+
+  useLayoutEffect(() => {
+    authIdentityRef.current = { role: effectiveRole, token };
+    sessionGenerationRef.current += 1;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      sessionGenerationRef.current += 1;
+      cancelPending();
+    };
+  }, [cancelPending, effectiveRole, token]);
+
+  const captureSessionGeneration = useCallback(() => sessionGenerationRef.current, []);
+  const isCurrentSession = useCallback(
+    (generation: number) =>
+      mountedRef.current &&
+      sessionGenerationRef.current === generation &&
+      authIdentityRef.current.role === "admin",
+    [],
+  );
 
   // 首次挂载时刷新数据
   useEffect(() => {
@@ -239,68 +269,103 @@ export function useSSHKeysPageState() {
   const rotationOnCloseAutoFocus: DialogCloseAutoFocus = useCallback((event) => {
     restoreConnectedDialogOpener(event, rotationOpenerRef.current);
   }, []);
-  const [testConnectionKey, setTestConnectionKey] =
+  const [testConnectionKey, setTestConnectionKeyState] =
     useState<SSHKeyRecord | null>(null);
   const [associatedNodesKey, setAssociatedNodesKey] =
     useState<SSHKeyRecord | null>(null);
-  const [rotationOpen, setRotationOpen] = useState(false);
+  const [rotationOpen, setRotationOpenState] = useState(false);
   const [rotationKey, setRotationKey] = useState<SSHKeyRecord | null>(null);
-  const [batchImportOpen, setBatchImportOpen] = useState(false);
+  const [batchImportOpen, setBatchImportOpenState] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
-  // ----- 确认对话框 -----
-  const { confirm, dialog } = useConfirm();
+  const [previousAuth, setPreviousAuth] = useState({ role: effectiveRole, token });
+  if (previousAuth.role !== effectiveRole || previousAuth.token !== token) {
+    setPreviousAuth({ role: effectiveRole, token });
+    if (effectiveRole !== "admin" || previousAuth.token !== token) {
+      setEditorOpen(false);
+      setEditingKey(null);
+      setTestConnectionKeyState(null);
+      setRotationOpenState(false);
+      setRotationKey(null);
+      setBatchImportOpenState(false);
+    }
+  }
+
+  const setTestConnectionKey = useCallback((key: SSHKeyRecord | null) => {
+    if (key && !canManageSSHKeys) return;
+    setTestConnectionKeyState(key);
+  }, [canManageSSHKeys]);
+
+  const setRotationOpen = useCallback((open: boolean) => {
+    if (open && !canManageSSHKeys) return;
+    setRotationOpenState(open);
+    if (!open) setRotationKey(null);
+  }, [canManageSSHKeys]);
+
+  const setBatchImportOpen = useCallback((open: boolean) => {
+    if (open && !canManageSSHKeys) return;
+    setBatchImportOpenState(open);
+  }, [canManageSSHKeys]);
 
   // ----- 编辑器开关 -----
   const handleEditorOpenChange = useCallback(
     (open: boolean) => {
+      if (open && !canManageSSHKeys) return;
       setEditorOpen(open);
       if (!open) setEditingKey(null);
     },
-    [],
+    [canManageSSHKeys],
   );
 
   // ----- Handlers -----
   const openCreateDialog = useCallback((event?: { currentTarget: EventTarget | null }) => {
+    if (!canManageSSHKeys) return;
     editorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingKey(null);
     setEditorOpen(true);
-  }, []);
+  }, [canManageSSHKeys]);
 
   const openEditDialog = useCallback((key: SSHKeyRecord, opener?: EventTarget | null) => {
+    if (!canManageSSHKeys) return;
     editorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingKey(key);
     setEditorOpen(true);
-  }, []);
+  }, [canManageSSHKeys]);
 
   const handleSave = useCallback(
     async (draft: NewSSHKeyInput, keyId?: string) => {
+      if (!canManageSSHKeys) return;
+      const generation = sessionGenerationRef.current;
       try {
         if (keyId) {
           await updateSSHKey(keyId, draft);
-          toast.success(t("sshKeys.keyUpdated", { name: draft.name }));
         } else {
           await createSSHKey(draft);
-          toast.success(t("sshKeys.keyCreated", { name: draft.name }));
         }
+        if (!isCurrentSession(generation)) return;
+        toast.success(t(keyId ? "sshKeys.keyUpdated" : "sshKeys.keyCreated", { name: draft.name }));
         setEditorOpen(false);
         setEditingKey(null);
       } catch (error) {
+        if (!isCurrentSession(generation)) return;
         toast.error(getErrorMessage(error));
       }
     },
-    [createSSHKey, updateSSHKey, t],
+    [canManageSSHKeys, createSSHKey, isCurrentSession, updateSSHKey, t],
   );
 
   const handleDelete = useCallback(
     async (key: SSHKeyRecord) => {
+      if (!canManageSSHKeys) return;
+      const generation = sessionGenerationRef.current;
       const ok = await confirm({
         title: t("sshKeys.confirmDeleteTitle"),
         description: t("sshKeys.confirmDeleteDesc", { name: key.name }),
       });
-      if (!ok) return;
+      if (!ok || !isCurrentSession(generation)) return;
       try {
         await deleteSSHKey(key.id);
+        if (!isCurrentSession(generation)) return;
         setSelectedIds((prev) => {
           if (!prev.has(key.id)) return prev;
           const next = new Set(prev);
@@ -309,17 +374,19 @@ export function useSSHKeysPageState() {
         });
         toast.success(t("sshKeys.keyDeleted", { name: key.name }));
       } catch (error) {
+        if (!isCurrentSession(generation)) return;
         toast.error(getErrorMessage(error));
       }
     },
-    [confirm, deleteSSHKey, t],
+    [canManageSSHKeys, confirm, deleteSSHKey, isCurrentSession, t],
   );
 
   const openRotationWizard = useCallback((key?: SSHKeyRecord, opener?: EventTarget | null) => {
+    if (!canManageSSHKeys) return;
     rotationOpenerRef.current = dialogOpenerFromTarget(opener);
     setRotationKey(key ?? null);
-    setRotationOpen(true);
-  }, []);
+    setRotationOpenState(true);
+  }, [canManageSSHKeys]);
 
   // ----- Return -----
   return {
@@ -327,6 +394,9 @@ export function useSSHKeysPageState() {
     sshKeys,
     nodes,
     loading,
+    canManageSSHKeys,
+    captureSessionGeneration,
+    isCurrentSession,
 
     // 筛选
     keyword,

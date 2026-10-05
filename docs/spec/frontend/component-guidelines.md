@@ -35,6 +35,11 @@ return (
 - 承载异步数据的组件显式处理加载、空、错误和权限状态。
 - 侧栏、移动抽屉、命令面板等导航入口统一通过 `getVisibleNavItems(role)` 筛选，不直接遍历 `navItems`。后端 RBAC 仍是最终权限边界。
 - 导航项权限变更时更新 registry 测试，并测试至少一个替代入口（如命令面板），验证未授权角色不可见。
+- 共享 registry 仅保留一个 canonical 备份 data 项；`getVisibleNavItems(role)` 通过
+  `backupEntryPath(role)` 派生角色可访问路径，不修改全局 registry。admin/operator 保留 data，
+  viewer/null 使用 overview；仅 data 入口保留 data 查询参数，overview 不继承这些参数。
+- 导航隐藏不能代替页面请求前门禁或动作入口检查。角色收窄后的页签渲染、active fallback、
+  方向键循环、Home/End 和 ref 索引必须使用同一个可见页签集合，不能只隐藏 DOM。
 
 ## 工作台页面外壳
 

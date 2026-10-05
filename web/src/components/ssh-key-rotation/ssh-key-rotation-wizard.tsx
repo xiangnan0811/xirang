@@ -1,6 +1,8 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { KeyRound } from "lucide-react";
+import { useAuth } from "@/context/auth-context.hooks";
+import type { AuthRole } from "@/context/auth-context.shared";
 import {
   Dialog,
   DialogCloseButton,
@@ -26,6 +28,33 @@ const stepLabels = [
   "rotationStep3",
   "rotationStep4",
 ] as const;
+
+function useCommittedDialogScope(role: AuthRole | null, token: string, open: boolean) {
+  const mountedRef = useRef(false);
+  const openRef = useRef(open);
+  const generationRef = useRef(0);
+  const identityRef = useRef({ role, token, open });
+
+  useLayoutEffect(() => {
+    identityRef.current = { role, token, open };
+    openRef.current = open;
+    generationRef.current += 1;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      openRef.current = false;
+      generationRef.current += 1;
+    };
+  }, [open, role, token]);
+
+  const isCurrent = useCallback((generation: number) => (
+    mountedRef.current &&
+    openRef.current &&
+    generationRef.current === generation
+  ), []);
+
+  return { generationRef, isCurrent, mountedRef };
+}
 
 export interface SSHKeyRotationWizardProps {
   open: boolean;
@@ -53,6 +82,8 @@ function SSHKeyRotationSession({
   onCloseAutoFocus,
 }: SSHKeyRotationWizardProps) {
   const { t } = useTranslation();
+  const { role } = useAuth();
+  const { generationRef, isCurrent, mountedRef } = useCommittedDialogScope(role, token, open);
 
   // wizard state
   const [step, setStep] = useState<Step>(preselectedKey ? 2 : 1);
@@ -78,6 +109,8 @@ function SSHKeyRotationSession({
 
   const executeRotation = useCallback(async () => {
     if (!selectedKey) return;
+    const generation = generationRef.current;
+    if (!isCurrent(generation)) return;
     setLoading(true);
     setRotationError(null);
     setResults([]);
@@ -97,6 +130,7 @@ function SSHKeyRotationSession({
         allowedNodeIds: selectedKey.allowedNodeIds,
         allowedNodeTags: selectedKey.allowedNodeTags,
       });
+      if (!isCurrent(generation)) return;
 
       setNewFingerprint(updatedKey.fingerprint);
       toast.success(t("sshKeys.rotationSuccess", { name: updatedKey.name }));
@@ -111,6 +145,7 @@ function SSHKeyRotationSession({
             selectedKey.id,
             nodeIds,
           );
+          if (!isCurrent(generation)) return;
           const returned = new Set(testResults.map((result) => result.nodeId));
 
           for (const tr of testResults) {
@@ -134,6 +169,7 @@ function SSHKeyRotationSession({
             }
           }
         } catch {
+          if (!isCurrent(generation)) return;
           for (const node of affectedNodes) {
             verifyResults.push({
               nodeId: `node-${node.id}`,
@@ -145,20 +181,27 @@ function SSHKeyRotationSession({
         }
       }
 
+      if (!isCurrent(generation)) return;
       setResults(verifyResults);
     } catch (err) {
+      if (!isCurrent(generation)) return;
       setRotationError(getErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   }, [
-    selectedKey,
+    affectedNodes,
+    generationRef,
+    isCurrent,
+    mountedRef,
     newKeyName,
     newKeyType,
     newPrivateKey,
-    token,
-    affectedNodes,
+    selectedKey,
     t,
+    token,
   ]);
 
   const handleSelectKey = (key: SSHKeyRecord) => {
@@ -245,6 +288,8 @@ function SSHKeyRotationSession({
           newPrivateKey={newPrivateKey}
           onNewPrivateKeyChange={setNewPrivateKey}
           preselectedKey={preselectedKey}
+          token={token}
+          role={role}
           onBack={handleBack}
           onNext={handleNext}
         />

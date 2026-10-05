@@ -15,7 +15,7 @@ export type UseAlertsIntegrationsDomainParams = {
   setWarning: Dispatch<SetStateAction<string | null>>;
   ensureDemoWriteAllowed: (action: string) => void;
   handleWriteApiError: (action: string, error: unknown) => void;
-  retryTask: (taskId: number) => Promise<void>;
+  retryTask: (taskId: number, isCurrent?: () => boolean) => Promise<void>;
 };
 
 // 告警 + 集成域：自持 refreshIntegrations 与 abort 控制，

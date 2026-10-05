@@ -31,6 +31,9 @@ export type AlertListProps = {
   integrationNameMap: Map<string, string>;
   selectedAlertIds: string[];
   bulkResolving: boolean;
+  canWriteAlerts: boolean;
+  canTriggerTasks: boolean;
+  canRetryDelivery: boolean;
   onSelectionChange: (alertId: string, selected: boolean) => void;
   onSelectAllVisible: (selected: boolean) => void;
   onRetry: (alert: AlertRecord) => void;
@@ -60,6 +63,9 @@ export function AlertList({
   integrationNameMap,
   selectedAlertIds,
   bulkResolving,
+  canWriteAlerts,
+  canTriggerTasks,
+  canRetryDelivery,
   onSelectionChange,
   onSelectAllVisible,
   onRetry,
@@ -132,7 +138,7 @@ export function AlertList({
           <p className="text-xs text-muted-foreground">{t("notifications.deliveryLoading")}</p>
         ) : (deliveryMap[alert.id] ?? []).length ? (
           <div className="space-y-2">
-            {(deliveryMap[alert.id] ?? []).some((d) => d.status === "failed" || d.status === "retrying") ? (
+            {canRetryDelivery && (deliveryMap[alert.id] ?? []).some((d) => d.status === "failed" || d.status === "retrying") ? (
               <Button
                 size="sm"
                 variant="outline"
@@ -175,7 +181,7 @@ export function AlertList({
                       {delivery.lastError.length > 120 ? delivery.lastError.slice(0, 120) + "…" : delivery.lastError}
                     </p>
                   ) : null}
-                  {isRetryable ? (
+                  {canRetryDelivery && isRetryable ? (
                     <Button
                       className="mt-2"
                       size="sm"
@@ -218,12 +224,14 @@ export function AlertList({
             <div className="flex flex-wrap items-start justify-between gap-2 pl-2">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <Checkbox
-                    checked={selectedSet.has(alert.id)}
-                    disabled={alert.status === "resolved" || bulkResolving}
-                    aria-label={t("notifications.selectAlert", { node: displayNode, code: alert.errorCode })}
-                    onCheckedChange={(checked) => onSelectionChange(alert.id, checked === true)}
-                  />
+                  {canWriteAlerts ? (
+                    <Checkbox
+                      checked={selectedSet.has(alert.id)}
+                      disabled={alert.status === "resolved" || bulkResolving}
+                      aria-label={t("notifications.selectAlert", { node: displayNode, code: alert.errorCode })}
+                      onCheckedChange={(checked) => onSelectionChange(alert.id, checked === true)}
+                    />
+                  ) : null}
                   <span className="font-medium text-foreground/90 truncate">
                     {displayNode}
                   </span>
@@ -259,6 +267,8 @@ export function AlertList({
                 <AlertBulkActions
                   alert={alert}
                   deliveryOpen={deliveryOpenAlertId === alert.id}
+                  canWriteAlerts={canWriteAlerts}
+                  canTriggerTasks={canTriggerTasks}
                   onRetry={onRetry}
                   onAck={onAck}
                   onResolve={onResolve}
@@ -280,14 +290,16 @@ export function AlertList({
       <table className="min-w-[960px] text-left text-sm w-full">
         <thead>
           <tr className="border-b border-border bg-muted/35 text-mini uppercase tracking-wide text-muted-foreground">
-            <th scope="col" className="px-3 py-2.5 w-[44px]">
-              <Checkbox
-                checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
-                disabled={!visibleUnresolvedAlerts.length || bulkResolving}
-                aria-label={t("notifications.selectAllVisibleAlerts")}
-                onCheckedChange={(checked) => onSelectAllVisible(checked === true)}
-              />
-            </th>
+            {canWriteAlerts ? (
+              <th scope="col" className="px-3 py-2.5 w-[44px]">
+                <Checkbox
+                  checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
+                  disabled={!visibleUnresolvedAlerts.length || bulkResolving}
+                  aria-label={t("notifications.selectAllVisibleAlerts")}
+                  onCheckedChange={(checked) => onSelectAllVisible(checked === true)}
+                />
+              </th>
+            ) : null}
             <th scope="col" {...sortableThProps("severity")} className="px-3 py-2.5 w-[80px] cursor-pointer select-none">
               {t("notifications.colSeverity")} {sortIndicator("severity")}
             </th>
@@ -318,14 +330,16 @@ export function AlertList({
                 ref={alert.id === highlightedAlertId ? (el) => highlightRef(alert.id, el) : undefined}
                 className="border-b border-border/60 transition-colors duration-200 ease-out hover:bg-muted/40 group"
               >
-                <td className="px-3 py-2.5">
-                  <Checkbox
-                    checked={selectedSet.has(alert.id)}
-                    disabled={alert.status === "resolved" || bulkResolving}
-                    aria-label={t("notifications.selectAlert", { node: displayNode, code: alert.errorCode })}
-                    onCheckedChange={(checked) => onSelectionChange(alert.id, checked === true)}
-                  />
-                </td>
+                {canWriteAlerts ? (
+                  <td className="px-3 py-2.5">
+                    <Checkbox
+                      checked={selectedSet.has(alert.id)}
+                      disabled={alert.status === "resolved" || bulkResolving}
+                      aria-label={t("notifications.selectAlert", { node: displayNode, code: alert.errorCode })}
+                      onCheckedChange={(checked) => onSelectionChange(alert.id, checked === true)}
+                    />
+                  </td>
+                ) : null}
                 <td className="px-3 py-2.5">
                   <Badge tone={severity.variant}>{severity.label}</Badge>
                 </td>
@@ -358,6 +372,8 @@ export function AlertList({
                   <AlertBulkActions
                     alert={alert}
                     deliveryOpen={deliveryOpenAlertId === alert.id}
+                    canWriteAlerts={canWriteAlerts}
+                    canTriggerTasks={canTriggerTasks}
                     onRetry={onRetry}
                     onAck={onAck}
                     onResolve={onResolve}

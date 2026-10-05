@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode } from "react";
-import { render as rtlRender, screen, waitFor, act, type RenderOptions } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor, within, act, type RenderOptions } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
@@ -58,7 +58,7 @@ const {
     mockGetTaskFailureSummary: vi.fn(),
     useStepUpActionMock: stepUpHookMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
-    authRef: { current: { token: "test-token" as string | null } },
+    authRef: { current: { token: "test-token" as string | null, role: "admin" as "admin" | "operator" | "viewer" | null } },
   };
 });
 
@@ -433,6 +433,17 @@ function deliveryStatParts() {
   return { card, value };
 }
 
+function alertSurfaces() {
+  const heading = screen.getByRole("heading", { name: "告警中心" });
+  const surface = heading.closest("section");
+  const mobile = surface?.querySelector(".md\\:hidden");
+  const desktop = surface?.querySelector(".hidden.md\\:block");
+  if (!(mobile instanceof HTMLElement) || !(desktop instanceof HTMLElement)) {
+    throw new Error("missing alert list surfaces");
+  }
+  return { mobile, desktop };
+}
+
 function deliveryHero() {
   const hero = screen.getByRole("heading", { name: "通知与告警" }).closest("header");
   if (!(hero instanceof HTMLElement)) {
@@ -466,7 +477,7 @@ describe("NotificationsPage", () => {
       value: createMemoryStorage(),
     });
     window.localStorage.clear();
-    authRef.current = { token: "test-token" };
+    authRef.current = { token: "test-token", role: "admin" };
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     mockGetAlertsPaginated.mockReset();
@@ -490,7 +501,7 @@ describe("NotificationsPage", () => {
   it("preserves unresolved alert selection across an external refresh", async () => {
     const user = userEvent.setup();
     const setGlobalSearch = vi.fn();
-    const center = (refreshVersion: number) => <MemoryRouter><AlertCenter token="test-token" integrations={[]} globalSearch="" setGlobalSearch={setGlobalSearch} refreshVersion={refreshVersion} /></MemoryRouter>;
+    const center = (refreshVersion: number) => <MemoryRouter><AlertCenter token="test-token" canWriteAlerts canTriggerTasks canRetryDelivery integrations={[]} globalSearch="" setGlobalSearch={setGlobalSearch} refreshVersion={refreshVersion} /></MemoryRouter>;
     const view = rtlRender(center(0));
     const checkbox = (await screen.findAllByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" }))[0];
     await user.click(checkbox);
@@ -504,7 +515,7 @@ describe("NotificationsPage", () => {
     mockGetAlertsPaginated.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
     mockGetAlertsPaginated.mockResolvedValueOnce({ items: [defaultAlerts[1]], total: 1 });
     const setGlobalSearch = vi.fn();
-    const center = (token: string) => <MemoryRouter><AlertCenter token={token} integrations={[]} globalSearch="" setGlobalSearch={setGlobalSearch} /></MemoryRouter>;
+    const center = (token: string) => <MemoryRouter><AlertCenter token={token} canWriteAlerts canTriggerTasks canRetryDelivery integrations={[]} globalSearch="" setGlobalSearch={setGlobalSearch} /></MemoryRouter>;
     const view = rtlRender(center("old-token"));
     view.rerender(center("new-token"));
     expect((await screen.findAllByRole("checkbox", { name: "选择节点 node-2 的告警 E_WARN" }))[0]).toBeInTheDocument();
@@ -667,6 +678,30 @@ describe("NotificationsPage", () => {
     });
     expect(mockGetAlertDeliveries).toHaveBeenCalledTimes(1);
   });
+  it("drops old delivery caches and pending errors across token A→B→A", async () => {
+    const user = userEvent.setup();
+    const oldDelivery = createDeferred<never>();
+    mockGetAlertDeliveries.mockReturnValueOnce(oldDelivery.promise);
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
+    await waitFor(() => expect(mockGetAlertDeliveries).toHaveBeenCalledWith("test-token", "alert-open"));
+
+    authRef.current = { token: "other-token", role: "admin" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(screen.queryByRole("region", { name: "告警 E_CONN 的投递记录" })).not.toBeInTheDocument();
+    authRef.current = { token: "test-token", role: "admin" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await act(async () => oldDelivery.reject(new Error("old principal delivery")));
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
+    await waitFor(() => expect(mockGetAlertDeliveries).toHaveBeenCalledTimes(2));
+    expect(await screen.findAllByRole("button", { name: "重发通知" })).not.toHaveLength(0);
+  });
+
 
   it("\u5931\u8D25\u6295\u9012\u652F\u6301\u91CD\u53D1\u5E76\u5237\u65B0\u6295\u9012\u8BB0\u5F55", async () => {
     const user = userEvent.setup();
@@ -846,7 +881,7 @@ describe("NotificationsPage", () => {
       calls.push(deferred);
       return deferred.promise;
     });
-    authRef.current = { token: "user-a" };
+    authRef.current = { token: "user-a", role: "admin" };
     createContext({ fetchAlertDeliveryStats });
     const view = render(<NotificationsPage />);
 
@@ -855,7 +890,7 @@ describe("NotificationsPage", () => {
     });
     const firstGeneration = calls.length;
 
-    authRef.current = { token: "user-b" };
+    authRef.current = { token: "user-b", role: "admin" };
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await waitFor(() => {
       expect(calls.length).toBeGreaterThan(firstGeneration);
@@ -871,7 +906,7 @@ describe("NotificationsPage", () => {
     expect(deliveryStatParts().card).toHaveTextContent("加载中...");
     expect(deliveryHero()).not.toHaveTextContent("7 条投递失败");
 
-    authRef.current = { token: "user-c" };
+    authRef.current = { token: "user-c", role: "admin" };
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await waitFor(() => {
       expect(calls.length).toBeGreaterThan(secondGeneration);
@@ -912,7 +947,7 @@ describe("NotificationsPage", () => {
     });
     const beforeLogout = calls.length;
 
-    authRef.current = { token: null };
+    authRef.current = { token: null, role: null };
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await waitFor(() => {
       expect(deliveryStatParts().value.textContent).toBe("—");
@@ -1046,21 +1081,21 @@ describe("NotificationsPage", () => {
 
   it("失败任务摘要在 token A→B→A 与迟到结果下不提交旧值", async () => {
     const calls = deferredFailureSummaries();
-    authRef.current = { token: "token-a" };
+    authRef.current = { token: "token-a", role: "admin" };
     createContext();
     const view = render(<NotificationsPage />);
     await waitFor(() => {
       expect(calls.length).toBe(1);
     });
 
-    authRef.current = { token: "token-b" };
+    authRef.current = { token: "token-b", role: "admin" };
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(failureStatParts().value.textContent).toBe("—");
     await waitFor(() => {
       expect(calls.length).toBe(2);
     });
 
-    authRef.current = { token: "token-a" };
+    authRef.current = { token: "token-a", role: "admin" };
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(failureStatParts().value.textContent).toBe("—");
     await waitFor(() => {
@@ -1110,7 +1145,7 @@ describe("NotificationsPage", () => {
       expect(calls.length).toBe(2);
     });
 
-    authRef.current = { token: null };
+    authRef.current = { token: null, role: null };
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(failureStatParts().value.textContent).toBe("—");
     expect(failureStatParts().card).toHaveTextContent("暂无可用的执行历史统计");
@@ -1126,7 +1161,7 @@ describe("NotificationsPage", () => {
   });
 
   it("无 token 时不请求失败任务摘要并显示不可用", () => {
-    authRef.current = { token: null };
+    authRef.current = { token: null, role: null };
     createContext();
     render(<NotificationsPage />);
 
@@ -1367,21 +1402,21 @@ describe("NotificationsPage", () => {
 
   it("未读统计在 token A→B→A 下忽略旧成功和旧失败", async () => {
     const calls = deferredUnreadCounts();
-    authRef.current = { token: "token-a" };
+    authRef.current = { token: "token-a", role: "admin" };
     createContext();
     const view = render(<NotificationsPage />);
     await waitFor(() => {
       expect(calls.length).toBe(1);
     });
 
-    authRef.current = { token: "token-b" };
+    authRef.current = { token: "token-b", role: "admin" };
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
     await waitFor(() => {
       expect(calls.length).toBe(2);
     });
 
-    authRef.current = { token: "token-a" };
+    authRef.current = { token: "token-a", role: "admin" };
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
     await waitFor(() => {
@@ -1433,7 +1468,7 @@ describe("NotificationsPage", () => {
       expect(calls.length).toBe(2);
     });
 
-    authRef.current = { token: null };
+    authRef.current = { token: null, role: null };
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
     expect(alertStatCard("严重告警").value).toHaveTextContent("—");
@@ -1450,7 +1485,7 @@ describe("NotificationsPage", () => {
   });
 
   it("无 token 时不请求未读统计并显示不可用", () => {
-    authRef.current = { token: null };
+    authRef.current = { token: null, role: null };
     createContext();
     render(<NotificationsPage />);
 
@@ -1719,5 +1754,312 @@ describe("NotificationsPage", () => {
     expect(deliveryHero()).not.toHaveTextContent("9 条待处理");
     expect(alertStatCard("待处理告警").card).not.toHaveTextContent("告警统计加载失败");
     expect(screen.queryByRole("button", { name: "重试告警统计" })).not.toBeInTheDocument();
+  });
+
+  it("lets an operator ack and retry a task from both mobile cards and the desktop table", async () => {
+    const user = userEvent.setup();
+    authRef.current = { token: "test-token", role: "operator" };
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    const { mobile, desktop } = alertSurfaces();
+
+    expect(within(mobile).getAllByRole("button", { name: "一键重试" })).toHaveLength(2);
+    expect(within(mobile).getByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" })).toBeInTheDocument();
+    expect(within(mobile).queryByRole("checkbox", { name: "选择当前页所有未恢复告警" })).not.toBeInTheDocument();
+    expect(within(desktop).getAllByRole("button", { name: "一键重试" })).toHaveLength(2);
+    expect(within(desktop).getByRole("checkbox", { name: "选择当前页所有未恢复告警" })).toBeInTheDocument();
+    expect(within(desktop).getByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" })).toBeInTheDocument();
+
+    await user.click(within(mobile).getAllByRole("button", { name: "更多操作" })[0]);
+    expect(screen.getByRole("menuitem", { name: "确认" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "恢复" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "解决此节点未处理告警" })).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "确认" }));
+    await waitFor(() => {
+      expect(mockAckAlert).toHaveBeenCalledWith("test-token", "alert-open");
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("告警 E_CONN 已确认");
+
+    // Ack reloads the list and unmounts the previous mobile/desktop nodes.
+    await waitFor(() => {
+      expect(within(alertSurfaces().desktop).getAllByRole("button", { name: "更多操作" })).toHaveLength(2);
+    });
+    const { desktop: liveDesktop } = alertSurfaces();
+
+    await user.click(within(liveDesktop).getAllByRole("button", { name: "更多操作" })[0]);
+    expect(screen.getByRole("menuitem", { name: "恢复" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "解决此节点未处理告警" })).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "投递记录" }));
+
+    await user.click(within(liveDesktop).getAllByRole("button", { name: "一键重试" })[0]);
+    await waitFor(() => {
+      expect(mockRequestTaskManualTriggerCredentialGrant).toHaveBeenCalledWith("test-token", {
+        taskId: 101,
+        reason: "手动触发任务 #101",
+        requestedTtlSeconds: 600,
+      }, "step-up-marker");
+    });
+    expect(mockTriggerTask).toHaveBeenCalledWith("test-token", 101, "step-up-marker");
+    expect(mockRequestTaskManualTriggerCredentialGrant.mock.invocationCallOrder[0]).toBeLessThan(
+      mockTriggerTask.mock.invocationCallOrder[0],
+    );
+    expect(toastSuccessMock).toHaveBeenCalledWith("任务 #101 已触发重试");
+    expect(mockRetryDelivery).not.toHaveBeenCalled();
+  });
+
+  it("hides delivery resend from an operator and does not call retryDelivery", async () => {
+    const user = userEvent.setup();
+    authRef.current = { token: "test-token", role: "operator" };
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    const { mobile, desktop } = alertSurfaces();
+
+    await user.click(within(mobile).getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
+    expect((await screen.findAllByRole("region", { name: "告警 E_CONN 的投递记录" })).length).toBeGreaterThan(0);
+    expect(mockGetAlertDeliveries).toHaveBeenCalledWith("test-token", "alert-open");
+    expect(within(mobile).queryByRole("button", { name: "重发通知" })).not.toBeInTheDocument();
+    expect(within(desktop).queryByRole("button", { name: "重发通知" })).not.toBeInTheDocument();
+    expect(within(mobile).queryByRole("button", { name: "重发全部失败投递" })).not.toBeInTheDocument();
+    expect(within(desktop).queryByRole("button", { name: "重发全部失败投递" })).not.toBeInTheDocument();
+    expect(mockRetryDelivery).not.toHaveBeenCalled();
+  });
+
+  it("keeps alert reads for a viewer and issues no mutation, step-up, or grant", async () => {
+    const user = userEvent.setup();
+    authRef.current = { token: "test-token", role: "viewer" };
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    expect(mockGetAlertsPaginated).toHaveBeenCalled();
+    const { mobile, desktop } = alertSurfaces();
+
+    expect(within(mobile).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(within(desktop).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(within(mobile).queryByRole("button", { name: "一键重试" })).not.toBeInTheDocument();
+    expect(within(desktop).queryByRole("button", { name: "一键重试" })).not.toBeInTheDocument();
+
+    await user.click(within(mobile).getAllByRole("button", { name: "更多操作" })[0]);
+    expect(screen.getByRole("menuitem", { name: "投递记录" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "确认" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "恢复" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "解决此节点未处理告警" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "投递记录" }));
+    expect((await screen.findAllByRole("region", { name: "告警 E_CONN 的投递记录" })).length).toBeGreaterThan(0);
+    expect(mockGetAlertDeliveries).toHaveBeenCalledWith("test-token", "alert-open");
+
+    await user.click(within(mobile).getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "收起投递" }));
+    expect(screen.queryByRole("region", { name: "告警 E_CONN 的投递记录" })).not.toBeInTheDocument();
+
+    await user.click(within(desktop).getAllByRole("button", { name: "更多操作" })[0]);
+    expect(screen.queryByRole("menuitem", { name: "确认" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "恢复" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "解决此节点未处理告警" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重发通知" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重发全部失败投递" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "批量恢复所选告警" })).not.toBeInTheDocument();
+
+    expect(mockAckAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlertsBulk).not.toHaveBeenCalled();
+    expect(mockRetryDelivery).not.toHaveBeenCalled();
+    expect(mockRequestTaskManualTriggerCredentialGrant).not.toHaveBeenCalled();
+    expect(mockTriggerTask).not.toHaveBeenCalled();
+    expect(useStepUpActionMock.lastAction).toBeUndefined();
+  });
+
+  it("treats a null role as read-only", async () => {
+    authRef.current = { token: "test-token", role: null };
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    expect(mockGetAlertsPaginated).toHaveBeenCalled();
+    const { mobile, desktop } = alertSurfaces();
+    expect(within(mobile).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(within(desktop).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(within(mobile).queryByRole("button", { name: "一键重试" })).not.toBeInTheDocument();
+    expect(within(desktop).queryByRole("button", { name: "一键重试" })).not.toBeInTheDocument();
+    expect(mockAckAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlertsBulk).not.toHaveBeenCalled();
+    expect(mockRetryDelivery).not.toHaveBeenCalled();
+    expect(mockRequestTaskManualTriggerCredentialGrant).not.toHaveBeenCalled();
+    expect(mockTriggerTask).not.toHaveBeenCalled();
+  });
+
+  it("clears write selection on downgrade and does not restore it when write access returns", async () => {
+    const user = userEvent.setup();
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" })[0]);
+    expect(screen.getByText("已选择 1 条未恢复告警")).toBeInTheDocument();
+
+    authRef.current = { token: "test-token", role: "viewer" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(screen.queryByText("已选择 1 条未恢复告警")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+
+    authRef.current = { token: "test-token", role: "admin" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(screen.queryByText("已选择 1 条未恢复告警")).not.toBeInTheDocument();
+    for (const box of screen.getAllByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" })) {
+      expect(box).not.toBeChecked();
+    }
+  });
+
+  it("drops a pending ack when the role leaves admin and returns", async () => {
+    const user = userEvent.setup();
+    const ack = createDeferred<{ id: string; status: string }>();
+    mockAckAlert.mockReturnValueOnce(ack.promise);
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "确认" }));
+    await waitFor(() => {
+      expect(mockAckAlert).toHaveBeenCalledWith("test-token", "alert-open");
+    });
+
+    authRef.current = { token: "test-token", role: "viewer" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    authRef.current = { token: "test-token", role: "admin" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await act(async () => {
+      ack.resolve({ id: "alert-open", status: "acked" });
+    });
+
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(mockAckAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["operator", "viewer"] as const)("closes a pending node-resolve confirm on downgrade to %s and does not reopen it", async (role) => {
+    const user = userEvent.setup();
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "解决此节点未处理告警" }));
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+
+    authRef.current = { token: "test-token", role };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+    expect(mockResolveAlertsBulk).not.toHaveBeenCalled();
+
+    authRef.current = { token: "test-token", role: "admin" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(mockResolveAlertsBulk).not.toHaveBeenCalled();
+  });
+
+  it("cancels node resolve without calling the resolve API", async () => {
+    const user = userEvent.setup();
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "解决此节点未处理告警" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+    expect(mockResolveAlertsBulk).not.toHaveBeenCalled();
+  });
+
+  it("does not trigger a task when the role drops while the grant is pending", async () => {
+    const user = userEvent.setup();
+    const grant = createDeferred<{ id: number; status: string }>();
+    mockRequestTaskManualTriggerCredentialGrant.mockReturnValueOnce(grant.promise);
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "一键重试" })[0]);
+    await waitFor(() => {
+      expect(mockRequestTaskManualTriggerCredentialGrant).toHaveBeenCalledTimes(1);
+    });
+
+    authRef.current = { token: "test-token", role: "viewer" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await act(async () => {
+      grant.resolve({ id: 1, status: "active" });
+    });
+
+    expect(mockTriggerTask).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(mockRequestTaskManualTriggerCredentialGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not toast a delivery resend that finishes after admin access is lost", async () => {
+    const user = userEvent.setup();
+    const pending = createDeferred<void>();
+    mockRetryDelivery.mockReturnValueOnce(pending.promise);
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
+    await user.click((await screen.findAllByRole("button", { name: "重发通知" }))[0]);
+    await waitFor(() => {
+      expect(mockRetryDelivery).toHaveBeenCalledWith("test-token", "delivery-1");
+    });
+
+    authRef.current = { token: "test-token", role: "operator" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await act(async () => {
+      pending.resolve(undefined);
+    });
+
+    expect(mockRetryDelivery).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "重发通知" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("region", { name: "告警 E_CONN 的投递记录" }).length).toBeGreaterThan(0);
+  });
+
+  it("stops later delivery retries when admin access is lost during the batch", async () => {
+    const user = userEvent.setup();
+    mockGetAlertDeliveries.mockResolvedValue([
+      {
+        id: "delivery-a",
+        alertId: "alert-open",
+        integrationId: "int-1",
+        status: "failed",
+        error: "timeout",
+        createdAt: "2026-02-24 10:01:00",
+      },
+      {
+        id: "delivery-b",
+        alertId: "alert-open",
+        integrationId: "int-1",
+        status: "failed",
+        error: "connection refused",
+        createdAt: "2026-02-24 10:01:30",
+      },
+    ]);
+    const first = createDeferred<void>();
+    mockRetryDelivery.mockImplementation((_token: string, id: string) => {
+      if (id === "delivery-a") return first.promise;
+      return Promise.resolve();
+    });
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
+    await user.click((await screen.findAllByRole("button", { name: "重发全部失败投递" }))[0]);
+    await waitFor(() => {
+      expect(mockRetryDelivery).toHaveBeenCalledWith("test-token", "delivery-a");
+    });
+
+    authRef.current = { token: "test-token", role: "operator" };
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await act(async () => {
+      first.resolve(undefined);
+    });
+
+    expect(mockRetryDelivery).toHaveBeenCalledTimes(1);
+    expect(mockRetryDelivery).not.toHaveBeenCalledWith("test-token", "delivery-b");
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "重发全部失败投递" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("region", { name: "告警 E_CONN 的投递记录" }).length).toBeGreaterThan(0);
   });
 });

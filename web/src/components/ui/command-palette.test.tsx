@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { CommandPalette } from "./command-palette";
 
 const { useAuthMock } = vi.hoisted(() => ({
@@ -50,6 +50,10 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
+function LocationProbe() {
+  return <output data-testid="location">{useLocation().pathname}</output>;
+}
+
 describe("CommandPalette", () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
@@ -80,5 +84,18 @@ describe("CommandPalette", () => {
 
     expect(screen.queryByText("Credentials")).not.toBeInTheDocument();
     expect(screen.queryByText("Automation Rules")).not.toBeInTheDocument();
+  });
+
+  it.each(["viewer", null] as const)("opens backup evidence for %s without offering audit", (role) => {
+    useAuthMock.mockReturnValue({ role });
+    render(
+      <MemoryRouter>
+        <CommandPalette />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    expect(screen.queryByText("nav.audit")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("nav.backups"));
+    expect(screen.getByTestId("location")).toHaveTextContent("/app/backups/overview");
   });
 });

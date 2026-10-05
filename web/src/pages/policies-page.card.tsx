@@ -28,6 +28,7 @@ function drillTone(status?: string): "success" | "destructive" | "warning" | "ne
 export type PolicyCardProps = {
   policy: PolicyRecord;
   nodes: NodeRecord[];
+  canManagePolicies: boolean;
   selected: boolean;
   onToggleSelect: (id: number, checked: boolean) => void;
   onEdit: (policy: PolicyRecord, opener?: EventTarget | null) => void;
@@ -39,6 +40,7 @@ export type PolicyCardProps = {
 export function PolicyCard({
   policy,
   nodes,
+  canManagePolicies,
   selected,
   onToggleSelect,
   onEdit,
@@ -52,13 +54,15 @@ export function PolicyCard({
     <div className="rounded-lg border border-border bg-card shadow-sm hover:shadow-md transition-shadow p-4 flex flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            className="size-4 accent-primary rounded-sm"
-            checked={selected}
-            onChange={(e) => onToggleSelect(policy.id, e.target.checked)}
-            aria-label={t('policies.selectAriaLabel', { name: policy.name })}
-          />
+          {canManagePolicies ? (
+            <input
+              type="checkbox"
+              className="size-4 accent-primary rounded-sm"
+              checked={selected}
+              onChange={(e) => onToggleSelect(policy.id, e.target.checked)}
+              aria-label={t('policies.selectAriaLabel', { name: policy.name })}
+            />
+          ) : null}
           <div>
             <h3 className="font-medium">{policy.name}</h3>
             <p className="text-xs text-muted-foreground">{policy.naturalLanguage}</p>
@@ -108,44 +112,46 @@ export function PolicyCard({
         ) : null}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-        <Switch
-          checked={policy.enabled}
-          aria-label={t('policies.toggleAriaLabel', { action: policy.enabled ? t('common.disable') : t('common.enable'), name: policy.name })}
-          onCheckedChange={() => void onToggle(policy)}
-        />
-        <div className="flex items-center gap-1">
-          {policy.isTemplate && (
+      {canManagePolicies ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+          <Switch
+            checked={policy.enabled}
+            aria-label={t('policies.toggleAriaLabel', { action: policy.enabled ? t('common.disable') : t('common.enable'), name: policy.name })}
+            onCheckedChange={() => void onToggle(policy)}
+          />
+          <div className="flex items-center gap-1">
+            {policy.isTemplate && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                onClick={() => void onCloneFromTemplate(policy)}
+                aria-label={t('policies.cloneAriaLabel', { name: policy.name })}
+              >
+                <Copy className="size-4" aria-hidden="true" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
               className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={() => void onCloneFromTemplate(policy)}
-              aria-label={t('policies.cloneAriaLabel', { name: policy.name })}
+              onClick={(event) => onEdit(policy, event.currentTarget)}
+              aria-label={t('policies.editAriaLabel')}
             >
-              <Copy className="size-4" aria-hidden="true" />
+              <Wrench className="size-4" aria-hidden="true" />
             </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-            onClick={(event) => onEdit(policy, event.currentTarget)}
-            aria-label={t('policies.editAriaLabel')}
-          >
-            <Wrench className="size-4" aria-hidden="true" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-            aria-label={t('policies.deleteAriaLabel', { name: policy.name })}
-            onClick={() => void onDelete(policy)}
-          >
-            <Trash2 className="size-4" aria-hidden="true" />
-          </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+              aria-label={t('policies.deleteAriaLabel', { name: policy.name })}
+              onClick={() => void onDelete(policy)}
+            >
+              <Trash2 className="size-4" aria-hidden="true" />
+            </Button>
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

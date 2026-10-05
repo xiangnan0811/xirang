@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useAuth } from "@/context/auth-context.hooks";
+import type { AuthRole } from "@/context/auth-context.shared";
 import { Download, FileText, FileJson, FileSpreadsheet } from "lucide-react";
 import {
   Dialog,
@@ -16,7 +18,6 @@ import { toast } from "@/components/ui/toast-sonner";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { createSSHKeysApi, fetchSSHKeyExportFile } from "@/lib/api/ssh-keys-api";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
-import { isStepUpRequiredError } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import type { SSHKeyRecord } from "@/types/domain";
 
@@ -86,6 +87,40 @@ const DOWNLOAD_FILENAMES: Record<ExportFormat, string> = {
   csv: "ssh-keys.csv",
 };
 
+class StaleExportOperation extends Error {
+  constructor() {
+    super("stale-export");
+    this.name = "StaleExportOperation";
+  }
+}
+
+function useCommittedDialogScope(role: AuthRole | null, token: string, open: boolean) {
+  const mountedRef = useRef(false);
+  const openRef = useRef(open);
+  const generationRef = useRef(0);
+  const identityRef = useRef({ role, token, open });
+
+  useLayoutEffect(() => {
+    identityRef.current = { role, token, open };
+    openRef.current = open;
+    generationRef.current += 1;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      openRef.current = false;
+      generationRef.current += 1;
+    };
+  }, [open, role, token]);
+
+  const isCurrent = useCallback((generation: number) => (
+    mountedRef.current &&
+    openRef.current &&
+    generationRef.current === generation
+  ), []);
+
+  return { generationRef, isCurrent, mountedRef };
+}
+
 export function SSHKeyExportDialog({
   open,
   onOpenChange,
@@ -95,6 +130,8 @@ export function SSHKeyExportDialog({
   token,
 }: SSHKeyExportDialogProps) {
   const { t } = useTranslation();
+  const { role } = useAuth();
+  const { generationRef, isCurrent, mountedRef } = useCommittedDialogScope(role, token, open);
   const [format, setFormat] = useState<ExportFormat>("authorized_keys");
   const [scope, setScope] = useState<ExportScope>("all");
   const [downloading, setDownloading] = useState(false);
@@ -132,6 +169,8 @@ export function SSHKeyExportDialog({
   );
 
   const handleDownload = async () => {
+    const generation = generationRef.current;
+    if (!isCurrent(generation)) return;
     setDownloading(true);
     try {
       const apiClient = createSSHKeysApi();
@@ -141,26 +180,39 @@ export function SSHKeyExportDialog({
       const url = apiClient.getExportUrl(format, apiScope, ids);
 
       const response = await withStepUp(async (proof) => {
+        if (!isCurrent(generation)) {
+          throw new StaleExportOperation();
+        }
         try {
           return await fetchSSHKeyExportFile(url, token, proof);
         } catch (error) {
-          if (isStepUpRequiredError(error)) {
-            throw error;
+          if (!isCurrent(generation)) {
+            throw new StaleExportOperation();
           }
           throw error;
         }
       });
 
+      if (!isCurrent(generation)) return;
       const blob = await response.blob();
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = DOWNLOAD_FILENAMES[format];
-      a.click();
-      URL.revokeObjectURL(a.href);
+      if (!isCurrent(generation)) return;
+      const objectUrl = URL.createObjectURL(blob);
+      if (!isCurrent(generation)) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = DOWNLOAD_FILENAMES[format];
+      anchor.click();
+      URL.revokeObjectURL(objectUrl);
     } catch (err) {
+      if (!isCurrent(generation) || err instanceof StaleExportOperation) return;
       toast.error(getErrorMessage(err, t("sshKeys.exportFailed")));
     } finally {
-      setDownloading(false);
+      if (mountedRef.current) {
+        setDownloading(false);
+      }
     }
   };
 

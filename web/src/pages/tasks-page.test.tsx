@@ -1,13 +1,16 @@
 import "@testing-library/jest-dom/vitest";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import { toast } from "@/components/ui/toast-sonner";
 import { taskPreviewConnectEligibility } from "./tasks-page.utils";
 import { TasksPage } from "./tasks-page";
 
 const confirmMock = vi.fn().mockResolvedValue(true);
+const cancelPendingMock = vi.fn();
 const navigateMock = vi.fn();
 const { apiClientMock, authRef, withStepUpMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
   const withStepUpMock = vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
@@ -27,7 +30,7 @@ const { apiClientMock, authRef, withStepUpMock, useStepUpActionMock, oneShotStep
       current: {
         token: "test-token",
         username: "admin",
-        role: "admin" as "admin" | "operator" | "viewer",
+        role: "admin" as "admin" | "operator" | "viewer" | null,
         logout: vi.fn(),
       },
     },
@@ -41,6 +44,14 @@ const sharedRef: { current: Record<string, unknown> } = { current: {} };
 const nodesRef: { current: Record<string, unknown> } = { current: {} };
 const tasksRef: { current: Record<string, unknown> } = { current: {} };
 const policiesRef: { current: Record<string, unknown> } = { current: {} };
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 function createMemoryStorage() {
   const store = new Map<string, string>();
@@ -107,16 +118,18 @@ vi.mock("@/hooks/use-confirm", () => ({
   useConfirm: () => ({
     confirm: confirmMock,
     dialog: null,
+    cancelPending: cancelPendingMock,
   }),
 }));
 
 vi.mock("@/components/task-create-dialog", () => ({
   TaskCreateDialog: () => null,
-  TaskEditorDialog: ({ open, onCreate, onUpdate, editingTask }: {
+  TaskEditorDialog: ({ open, onCreate, onUpdate, editingTask, onOpenChange }: {
     open: boolean;
     onCreate?: (input: Record<string, unknown>) => Promise<void>;
     onUpdate?: (input: Record<string, unknown>) => Promise<void>;
     editingTask?: { id: number; name?: string } | null;
+    onOpenChange?: (open: boolean) => void;
   }) => {
     if (!open) return null;
     if (editingTask) {
@@ -129,6 +142,9 @@ vi.mock("@/components/task-create-dialog", () => ({
           >
             保存
           </button>
+          <button type="button" data-testid="edit-close-btn" onClick={() => onOpenChange?.(false)}>
+            关闭
+          </button>
         </div>
       );
     }
@@ -139,6 +155,9 @@ vi.mock("@/components/task-create-dialog", () => ({
           onClick={() => void onCreate?.({ name: "新任务", nodeId: 1 })}
         >
           创建
+        </button>
+        <button type="button" data-testid="create-close-btn" onClick={() => onOpenChange?.(false)}>
+          关闭
         </button>
       </div>
     );
@@ -297,6 +316,9 @@ function createContext(overrides?: Record<string, unknown>) {
     ...(overrides?.triggerTask !== undefined ? { triggerTask: overrides.triggerTask } : {}),
     ...(overrides?.cancelTask !== undefined ? { cancelTask: overrides.cancelTask } : {}),
     ...(overrides?.retryTask !== undefined ? { retryTask: overrides.retryTask } : {}),
+    ...(overrides?.pauseTask !== undefined ? { pauseTask: overrides.pauseTask } : {}),
+    ...(overrides?.resumeTask !== undefined ? { resumeTask: overrides.resumeTask } : {}),
+    ...(overrides?.skipNextTask !== undefined ? { skipNextTask: overrides.skipNextTask } : {}),
     ...(overrides?.refreshTasks !== undefined ? { refreshTasks: overrides.refreshTasks } : {}),
   };
   policiesRef.current = {
@@ -323,6 +345,7 @@ describe("TasksPage", () => {
     });
     window.localStorage.clear();
     confirmMock.mockClear();
+    cancelPendingMock.mockClear();
     navigateMock.mockReset();
     apiClientMock.requestTaskBatchTriggerCredentialGrant.mockReset();
     apiClientMock.batchTriggerTasks.mockReset();
@@ -674,7 +697,8 @@ describe("TasksPage", () => {
     const triggerButtons = screen.getAllByRole("button", { name: "触发" });
     await user.click(triggerButtons[0]);
 
-    expect(triggerTaskMock).toHaveBeenCalledWith(102);
+    expect(triggerTaskMock).toHaveBeenCalledWith(102, expect.any(Function));
+    expect((triggerTaskMock.mock.calls[0]?.[1] as () => boolean)()).toBe(true);
   });
 
   it("批量触发会先申请任务级授权，再触发任务", async () => {
@@ -1274,5 +1298,398 @@ describe("TasksPage", () => {
     const before = apiClientMock.queryTaskStatistics.mock.calls.length;
     await user.click(screen.getByRole("button", { name: "刷新历史统计" }));
     await waitFor(() => expect(apiClientMock.queryTaskStatistics.mock.calls.length).toBe(before + 3));
+  });
+
+  function taskFixture(overrides: Record<string, unknown>) {
+    return {
+      id: 1,
+      name: "任务",
+      policyId: 1,
+      policyName: "策略",
+      nodeId: 1,
+      nodeName: "node-prod-1",
+      status: "success" as const,
+      progress: 100,
+      startedAt: "2026-02-24 10:00:00",
+      nextRunAt: "2026-02-24 22:00:00",
+      speedMbps: 1,
+      ...overrides,
+    };
+  }
+
+  function expectWriteActionsAbsent() {
+    expect(screen.queryByRole("button", { name: "新建任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "暂停" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "恢复" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "取消任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "触发" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "全选" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /选择任务/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /批量执行/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /触发 \d+ 个任务/ })).not.toBeInTheDocument();
+  }
+
+  it("keeps operator card mutations and single-task trigger", async () => {
+    authRef.current.role = "operator";
+    const updateTask = vi.fn().mockResolvedValue(undefined);
+    const pauseTask = vi.fn().mockResolvedValue(undefined);
+    const retryTask = vi.fn().mockResolvedValue(undefined);
+    const triggerTask = vi.fn().mockResolvedValue(undefined);
+    createContext({ updateTask, pauseTask, retryTask, triggerTask });
+    const user = userEvent.setup();
+
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    await user.click(screen.getAllByRole("button", { name: "编辑任务" })[0]);
+    await user.click(screen.getByTestId("edit-save-btn"));
+    expect(updateTask).toHaveBeenCalledWith(102, expect.objectContaining({ name: "新名称" }));
+
+    await user.click(screen.getAllByRole("button", { name: "暂停" })[0]);
+    expect(pauseTask).toHaveBeenCalledWith(102, undefined);
+
+    const retry = screen.getAllByRole("button", { name: "重试任务" }).find((button) => !button.hasAttribute("disabled"));
+    await user.click(retry!);
+    expect(retryTask).toHaveBeenCalledWith(101, expect.any(Function));
+    expect((retryTask.mock.calls[0]?.[1] as () => boolean)()).toBe(true);
+
+    await user.click(screen.getAllByRole("button", { name: "触发" })[0]);
+    expect(triggerTask).toHaveBeenCalledWith(102, expect.any(Function));
+    expect((triggerTask.mock.calls[0]?.[1] as () => boolean)()).toBe(true);
+    expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).not.toHaveBeenCalled();
+  });
+
+  it("keeps operator list delete and batch trigger grant", async () => {
+    window.localStorage.setItem("xirang.tasks.view", JSON.stringify("list"));
+    authRef.current.role = "operator";
+    const deleteTask = vi.fn().mockResolvedValue(undefined);
+    createContext({ deleteTask });
+    const user = userEvent.setup();
+
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "全选" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "删除任务" })[0]);
+    expect(deleteTask).toHaveBeenCalledWith(102);
+
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 手动同步" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 每日备份任务" }));
+    await user.click(screen.getByRole("button", { name: "触发 2 个任务" }));
+    expect(withStepUpMock).toHaveBeenCalledTimes(1);
+    expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).toHaveBeenCalledWith("test-token", {
+      taskIds: [102, 101],
+      reason: "批量触发 2 个任务",
+      requestedTtlSeconds: 600,
+    }, "step-up-marker");
+    expect(apiClientMock.batchTriggerTasks).toHaveBeenCalledWith("test-token", [102, 101], "step-up-marker");
+  });
+
+  it("hides viewer write and trigger actions on cards and list without mutations or grants", async () => {
+    authRef.current.role = "viewer";
+    const createTask = vi.fn();
+    const updateTask = vi.fn();
+    const deleteTask = vi.fn();
+    const triggerTask = vi.fn();
+    const cancelTask = vi.fn();
+    const retryTask = vi.fn();
+    const pauseTask = vi.fn();
+    const resumeTask = vi.fn();
+    const skipNextTask = vi.fn();
+    createContext({
+      tasks: [
+        taskFixture({ id: 102, name: "手动同步", policyName: "每小时备份", nodeId: 2, nodeName: "node-dr-2", status: "success" }),
+        taskFixture({ id: 101, name: "每日备份任务", policyName: "每日备份", status: "failed", progress: 20, cronSpec: "0 0 * * *", lastError: "连接失败" }),
+        taskFixture({ id: 103, name: "运行中的任务", status: "running", progress: 40 }),
+        taskFixture({ id: 104, name: "已暂停任务", enabled: false, status: "success" }),
+      ],
+      createTask,
+      updateTask,
+      deleteTask,
+      triggerTask,
+      cancelTask,
+      retryTask,
+      pauseTask,
+      resumeTask,
+      skipNextTask,
+    });
+    const user = userEvent.setup();
+    const cards = render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    expectWriteActionsAbsent();
+    expect(screen.getByRole("link", { name: "查看任务 #102 日志" })).toHaveAttribute("href", "/app/logs?task=102");
+    await user.click(screen.getByRole("button", { name: "查看任务 #102 执行历史" }));
+    expect(screen.getByTestId("task-run-history")).toBeInTheDocument();
+    expect(createTask).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(deleteTask).not.toHaveBeenCalled();
+    expect(triggerTask).not.toHaveBeenCalled();
+    expect(cancelTask).not.toHaveBeenCalled();
+    expect(retryTask).not.toHaveBeenCalled();
+    expect(pauseTask).not.toHaveBeenCalled();
+    expect(resumeTask).not.toHaveBeenCalled();
+    expect(skipNextTask).not.toHaveBeenCalled();
+    expect(withStepUpMock).not.toHaveBeenCalled();
+    expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).not.toHaveBeenCalled();
+    expect(apiClientMock.batchTriggerTasks).not.toHaveBeenCalled();
+
+    cards.unmount();
+    window.localStorage.setItem("xirang.tasks.view", JSON.stringify("list"));
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expectWriteActionsAbsent();
+    expect(screen.getByRole("link", { name: "查看任务 #102 日志" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "查看任务 #102 执行历史" })).toBeInTheDocument();
+    expect(withStepUpMock).not.toHaveBeenCalled();
+    expect(apiClientMock.batchTriggerTasks).not.toHaveBeenCalled();
+  });
+
+  it("does not offer create when a viewer has no tasks", () => {
+    authRef.current.role = "viewer";
+    createContext({ tasks: [] });
+    const cards = render(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(screen.queryByRole("button", { name: "新建任务" })).not.toBeInTheDocument();
+    cards.unmount();
+
+    window.localStorage.setItem("xirang.tasks.view", JSON.stringify("list"));
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "全选" })).not.toBeInTheDocument();
+  });
+
+  it("treats a null role as read-only", () => {
+    authRef.current.role = null;
+    const deleteTask = vi.fn();
+    const triggerTask = vi.fn();
+    createContext({ deleteTask, triggerTask });
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expectWriteActionsAbsent();
+    expect(screen.getByRole("button", { name: "查看任务 #102 执行历史" })).toBeInTheDocument();
+    expect(deleteTask).not.toHaveBeenCalled();
+    expect(triggerTask).not.toHaveBeenCalled();
+    expect(withStepUpMock).not.toHaveBeenCalled();
+    expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).not.toHaveBeenCalled();
+  });
+
+  it("still closes the task editor for an admin", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+    await user.click(screen.getAllByRole("button", { name: "编辑任务" })[0]);
+    expect(screen.getByTestId("edit-dialog")).toBeInTheDocument();
+    await user.click(screen.getByTestId("edit-close-btn"));
+    expect(screen.queryByTestId("edit-dialog")).not.toBeInTheDocument();
+  });
+
+  it("drops an open editor on downgrade and does not restore it when write access returns", async () => {
+    const pendingUpdate = createDeferred<void>();
+    const updateTask = vi.fn().mockReturnValue(pendingUpdate.promise);
+    createContext({ updateTask });
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+    const user = userEvent.setup();
+    const view = render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    await user.click(screen.getAllByRole("button", { name: "编辑任务" })[0]);
+    await user.click(screen.getByTestId("edit-save-btn"));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+
+    authRef.current.role = "viewer";
+    view.rerender(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(screen.queryByTestId("edit-dialog")).not.toBeInTheDocument();
+
+    await act(async () => {
+      pendingUpdate.resolve();
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledTimes(1);
+
+    authRef.current.role = "admin";
+    view.rerender(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(screen.queryByTestId("edit-dialog")).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "编辑任务" })[0]);
+    expect(screen.getByTestId("edit-dialog")).toBeInTheDocument();
+  });
+
+  it("removes a pause choice dialog on downgrade and does not reopen it", async () => {
+    const pauseTask = vi.fn().mockResolvedValue(undefined);
+    const skipNextTask = vi.fn().mockResolvedValue(undefined);
+    createContext({ pauseTask, skipNextTask });
+    const user = userEvent.setup();
+    const view = render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    await user.click(screen.getAllByRole("button", { name: "暂停" })[1]);
+    expect(screen.getByRole("radiogroup", { name: "暂停定时任务" })).toBeInTheDocument();
+
+    authRef.current.role = "viewer";
+    view.rerender(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(screen.queryByRole("radiogroup", { name: "暂停定时任务" })).not.toBeInTheDocument();
+    expect(pauseTask).not.toHaveBeenCalled();
+    expect(skipNextTask).not.toHaveBeenCalled();
+
+    authRef.current.role = "admin";
+    view.rerender(<MemoryRouter><TasksPage /></MemoryRouter>);
+    expect(screen.queryByRole("radiogroup", { name: "暂停定时任务" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "暂停" }).length).toBeGreaterThan(0);
+  });
+
+  it("does not delete after confirmation if the role leaves and returns", async () => {
+    const deleteTask = vi.fn().mockResolvedValue(undefined);
+    createContext({ deleteTask });
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(true);
+    const pendingConfirm = createDeferred<boolean>();
+    confirmMock.mockImplementationOnce(() => pendingConfirm.promise);
+    vi.mocked(toast.success).mockClear();
+    const user = userEvent.setup();
+    const view = render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    await user.click(screen.getAllByRole("button", { name: "删除任务" })[0]);
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+
+    authRef.current.role = "operator";
+    view.rerender(<MemoryRouter><TasksPage /></MemoryRouter>);
+    authRef.current.role = "admin";
+    view.rerender(<MemoryRouter><TasksPage /></MemoryRouter>);
+    await act(async () => {
+      pendingConfirm.resolve(true);
+    });
+
+    expect(deleteTask).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+
+    await user.click(screen.getAllByRole("button", { name: "删除任务" })[0]);
+    await waitFor(() => expect(deleteTask).toHaveBeenCalledTimes(1));
+    expect(deleteTask).toHaveBeenCalledWith(102);
+  });
+
+  it("does not delete when the page unmounts during confirmation", async () => {
+    const deleteTask = vi.fn().mockResolvedValue(undefined);
+    createContext({ deleteTask });
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(true);
+    const pendingConfirm = createDeferred<boolean>();
+    confirmMock.mockImplementationOnce(() => pendingConfirm.promise);
+    const user = userEvent.setup();
+    const view = render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    await user.click(screen.getAllByRole("button", { name: "删除任务" })[0]);
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    view.unmount();
+    await act(async () => {
+      pendingConfirm.resolve(true);
+    });
+
+    expect(deleteTask).not.toHaveBeenCalled();
+  });
+
+  it("does not grant or trigger a batch after the role drops during confirmation", async () => {
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(true);
+    const pendingConfirm = createDeferred<boolean>();
+    confirmMock.mockImplementationOnce(() => pendingConfirm.promise);
+    const user = userEvent.setup();
+    const view = render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 手动同步" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 每日备份任务" }));
+    await user.click(screen.getByRole("button", { name: "触发 2 个任务" }));
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+
+    authRef.current.role = "viewer";
+    view.rerender(<MemoryRouter><TasksPage /></MemoryRouter>);
+    await act(async () => {
+      pendingConfirm.resolve(true);
+    });
+
+    expect(withStepUpMock).not.toHaveBeenCalled();
+    expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).not.toHaveBeenCalled();
+    expect(apiClientMock.batchTriggerTasks).not.toHaveBeenCalled();
+  });
+
+  it("does not continue a batch trigger after the grant if the identity changed", async () => {
+    const pendingGrant = createDeferred<unknown>();
+    apiClientMock.requestTaskBatchTriggerCredentialGrant.mockReturnValueOnce(pendingGrant.promise);
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+    const user = userEvent.setup();
+    const view = render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 手动同步" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 每日备份任务" }));
+    await user.click(screen.getByRole("button", { name: "触发 2 个任务" }));
+    await waitFor(() => expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).toHaveBeenCalledTimes(1));
+
+    authRef.current.role = "viewer";
+    view.rerender(<MemoryRouter><TasksPage /></MemoryRouter>);
+    authRef.current.role = "admin";
+    view.rerender(<MemoryRouter><TasksPage /></MemoryRouter>);
+    await act(async () => {
+      pendingGrant.resolve([{ id: 1, status: "active" }]);
+    });
+
+    expect(apiClientMock.batchTriggerTasks).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps an operator trigger after StrictMode replay and drops drafts when the token changes", async () => {
+    authRef.current.role = "operator";
+    const pendingUpdate = createDeferred<void>();
+    const updateTask = vi.fn().mockReturnValue(pendingUpdate.promise);
+    const triggerTask = vi.fn().mockResolvedValue(undefined);
+    createContext({ updateTask, triggerTask });
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+    const user = userEvent.setup();
+    const view = render(
+      <StrictMode>
+        <MemoryRouter><TasksPage /></MemoryRouter>
+      </StrictMode>,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "触发" })[0]);
+    expect(triggerTask).toHaveBeenCalledTimes(1);
+    expect(triggerTask).toHaveBeenCalledWith(102, expect.any(Function));
+    const triggerIsCurrent = triggerTask.mock.calls[0]?.[1] as () => boolean;
+    expect(triggerIsCurrent()).toBe(true);
+
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 手动同步" }));
+    await user.click(screen.getAllByRole("button", { name: "编辑任务" })[0]);
+    await user.click(screen.getByTestId("edit-save-btn"));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+
+    authRef.current = { ...authRef.current, token: "replacement-token" };
+    view.rerender(
+      <StrictMode>
+        <MemoryRouter><TasksPage /></MemoryRouter>
+      </StrictMode>,
+    );
+    expect(screen.queryByTestId("edit-dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择任务 手动同步" })).not.toBeChecked();
+
+    authRef.current = { ...authRef.current, token: "test-token" };
+    view.rerender(
+      <StrictMode>
+        <MemoryRouter><TasksPage /></MemoryRouter>
+      </StrictMode>,
+    );
+    await act(async () => {
+      pendingUpdate.resolve();
+    });
+
+    expect(screen.queryByTestId("edit-dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择任务 手动同步" })).not.toBeChecked();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledTimes(1);
+    expect(triggerTask).toHaveBeenCalledTimes(1);
+    expect(triggerIsCurrent()).toBe(false);
+    expect(cancelPendingMock).toHaveBeenCalled();
   });
 });

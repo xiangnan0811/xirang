@@ -16,6 +16,7 @@ const { toastSuccessMock, toastErrorMock } = vi.hoisted(() => ({
 const searchParamsRef = { current: new URLSearchParams() };
 const setSearchParamsMock = vi.fn();
 const confirmMock = vi.fn().mockResolvedValue(true);
+const cancelPendingMock = vi.fn();
 const navigateMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
@@ -47,6 +48,7 @@ vi.mock("@/hooks/use-confirm", () => ({
   useConfirm: () => ({
     confirm: confirmMock,
     dialog: null,
+    cancelPending: cancelPendingMock,
   }),
 }));
 

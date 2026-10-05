@@ -72,10 +72,10 @@ export interface ConsoleDataState {
   refreshSSHKeys: () => Promise<void>;
   refreshIntegrations: () => Promise<void>;
 
-  createNode: (input: NewNodeInput) => Promise<number>;
-  updateNode: (nodeId: number, input: NewNodeInput) => Promise<void>;
-  deleteNode: (nodeId: number) => Promise<void>;
-  deleteNodes: (nodeIds: number[]) => Promise<{ deleted: number; notFoundIds: number[] }>;
+  createNode: (input: NewNodeInput, isCurrent?: () => boolean) => Promise<number>;
+  updateNode: (nodeId: number, input: NewNodeInput, isCurrent?: () => boolean) => Promise<void>;
+  deleteNode: (nodeId: number, isCurrent?: () => boolean) => Promise<void>;
+  deleteNodes: (nodeIds: number[], isCurrent?: () => boolean) => Promise<{ deleted: number; notFoundIds: number[] }>;
   testNodeConnection: (nodeId: number) => Promise<NodeConnectionProbeOutcome>;
   triggerNodeBackup: (nodeId: number) => Promise<void>;
 
@@ -85,9 +85,9 @@ export interface ConsoleDataState {
   createTask: (input: NewTaskInput) => Promise<number>;
   updateTask: (taskId: number, input: UpdateTaskInput) => Promise<void>;
   deleteTask: (taskId: number) => Promise<void>;
-  triggerTask: (taskId: number) => Promise<void>;
+  triggerTask: (taskId: number, isCurrent?: () => boolean) => Promise<void>;
   cancelTask: (taskId: number) => Promise<void>;
-  retryTask: (taskId: number) => Promise<void>;
+  retryTask: (taskId: number, isCurrent?: () => boolean) => Promise<void>;
   pauseTask: (taskId: number, cancelRunning?: boolean) => Promise<void>;
   resumeTask: (taskId: number) => Promise<void>;
   skipNextTask: (taskId: number) => Promise<void>;

@@ -1,12 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
 import { bumpAuthSessionGeneration } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
-import type { NodeConnectionProbeOutcome, NodeHostKeyIssueCode, TaskRecord } from "@/types/domain";
+import type { NewNodeInput, NodeConnectionProbeOutcome, NodeHostKeyIssueCode, TaskRecord } from "@/types/domain";
 
 const EMERGENCY_PROOF = "fresh-manual-proof";
 
@@ -21,6 +21,7 @@ const {
   emergencyBackupMock,
   useStepUpActionMock,
   oneShotStepUpOptions,
+  getBatchStatusMock,
 } = vi.hoisted(() => {
   const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
     stepUpHookMock.lastAction = stepUpAction;
@@ -39,6 +40,7 @@ const {
     emergencyBackupMock: vi.fn(),
     useStepUpActionMock: stepUpHookMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
+    getBatchStatusMock: vi.fn(),
   };
 });
 
@@ -73,6 +75,7 @@ function createMemoryStorage() {
 const searchParamsRef = { current: new URLSearchParams() };
 const setSearchParamsMock = vi.fn();
 const confirmMock = vi.fn().mockResolvedValue(true);
+const cancelPendingMock = vi.fn();
 const navigateMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
@@ -104,7 +107,24 @@ vi.mock("@/hooks/use-confirm", () => ({
   useConfirm: () => ({
     confirm: confirmMock,
     dialog: null,
+    cancelPending: cancelPendingMock,
   }),
+}));
+
+vi.mock("@/components/batch-command-dialog", () => ({
+  BatchCommandDialog: ({
+    open,
+    onSuccess,
+  }: {
+    open: boolean;
+    onSuccess?: (result: { batchId: string; retain: boolean }) => void;
+  }) => (
+    open ? (
+      <button type="button" onClick={() => onSuccess?.({ batchId: "batch-77", retain: true })}>
+        提交批量命令
+      </button>
+    ) : null
+  ),
 }));
 
 vi.mock("@/components/node-editor-dialog", () => ({
@@ -167,6 +187,7 @@ vi.mock("@/lib/api/client", () => ({
     getTasks: getTasksMock,
     requestTaskManualTriggerCredentialGrant: grantMock,
     emergencyBackup: emergencyBackupMock,
+    getBatchStatus: getBatchStatusMock,
   },
 }));
 
@@ -321,6 +342,44 @@ async function clickNodeEmergency(user: ReturnType<typeof userEvent.setup>, node
   await user.click(within(card).getByRole("button", { name: "紧急备份" }));
 }
 
+function rerenderAuth(
+  view: ReturnType<typeof renderNodesPage>,
+  next: { role: "admin" | "operator" | "viewer"; token: string },
+) {
+  authRef.current = next;
+  view.rerender(
+    <MemoryRouter>
+      <NodesPage />
+    </MemoryRouter>,
+  );
+}
+
+function chooseCsvFile(file: File) {
+  const input = screen.getByLabelText("CSV 导入");
+  Object.defineProperties(input, {
+    files: {
+      configurable: true,
+      get: () => [file],
+    },
+    value: {
+      configurable: true,
+      get: () => `C:\\fakepath\\${file.name}`,
+      set: () => undefined,
+    },
+  });
+  fireEvent.change(input);
+}
+
+class DeferredTextFile extends File {
+  constructor(private readonly pendingText: Promise<string>) {
+    super(["placeholder"], "nodes.csv", { type: "text/csv" });
+  }
+
+  override text(): Promise<string> {
+    return this.pendingText;
+  }
+}
+
 describe("NodesPage", () => {
   beforeEach(() => {
     Object.defineProperty(window, "localStorage", {
@@ -328,7 +387,10 @@ describe("NodesPage", () => {
       value: createMemoryStorage(),
     });
     window.localStorage.clear();
-    confirmMock.mockClear();
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(true);
+    cancelPendingMock.mockClear();
+    getBatchStatusMock.mockReset();
     navigateMock.mockReset();
     setSearchParamsMock.mockReset();
     toastSuccessMock.mockReset();
@@ -842,7 +904,7 @@ describe("NodesPage", () => {
 
     expect(confirmMock).toHaveBeenCalled();
     await waitFor(() => {
-      expect(deleteNodeMock).toHaveBeenCalledWith(1);
+      expect(deleteNodeMock).toHaveBeenCalledWith(1, expect.any(Function));
     });
     expect(toastSuccessMock).toHaveBeenCalledWith(
       expect.stringContaining("节点 node-prod-1 已删除")
@@ -1114,5 +1176,537 @@ describe("NodesPage", () => {
     expect(grantMock).toHaveBeenCalledTimes(3);
     expect(emergencyBackupMock).toHaveBeenCalledTimes(1);
     expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  function mobileNodeCard(name: string) {
+    const grid = document.querySelector(".space-y-3.p-2.md\\:hidden");
+    if (!(grid instanceof HTMLElement)) {
+      throw new Error("未找到移动端节点卡片");
+    }
+    const link = within(grid).getByRole("link", { name });
+    const card = link.closest(".rounded-lg");
+    if (!(card instanceof HTMLElement)) {
+      throw new Error(`未找到移动端节点 ${name}`);
+    }
+    return card;
+  }
+
+  function expectOperateActions(scope: ReturnType<typeof within>, present: boolean) {
+    const names = [
+      /测试节点 node-prod-1 连接/,
+      /运行节点 node-prod-1 Fleet Doctor/,
+      "手动备份",
+      "紧急备份",
+      /浏览节点 node-prod-1 文件/,
+    ] as const;
+    for (const name of names) {
+      const button = scope.queryByRole("button", { name });
+      if (present) {
+        expect(button).toBeInTheDocument();
+      } else {
+        expect(button).not.toBeInTheDocument();
+      }
+    }
+  }
+
+  function expectAdminActions(scope: ReturnType<typeof within>, present: boolean) {
+    const names = [
+      /编辑节点 node-prod-1/,
+      /删除节点 node-prod-1/,
+      /打开节点 node-prod-1 Web 终端/,
+      "迁移",
+    ] as const;
+    for (const name of names) {
+      const button = scope.queryByRole("button", { name });
+      if (present) {
+        expect(button).toBeInTheDocument();
+      } else {
+        expect(button).not.toBeInTheDocument();
+      }
+    }
+  }
+
+  it("操作员在桌面和移动端可以测试、诊断、备份和浏览，不能管理节点", async () => {
+    const user = userEvent.setup();
+    authRef.current.role = "operator";
+    const testNodeConnection = vi.fn().mockResolvedValue({ ok: true, message: "连接成功" });
+    getTasksMock.mockResolvedValue([]);
+    emergencyBackupMock.mockResolvedValue({ triggered: 0, taskIds: [], errors: [] });
+    createContext({ testNodeConnection });
+
+    renderNodesPage();
+
+    const desktopCard = within(screen.getByLabelText("节点卡片 node-prod-1"));
+    const mobileCard = within(mobileNodeCard("node-prod-1"));
+    expectOperateActions(desktopCard, true);
+    expectOperateActions(mobileCard, true);
+    expectAdminActions(desktopCard, false);
+    expectAdminActions(mobileCard, false);
+    expect(screen.queryByRole("button", { name: "新增节点" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /查看节点 node-prod-1 日志/ }).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "更多" }));
+    expect(screen.queryByRole("menuitem", { name: /CSV 导入/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /导出节点/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("button", { name: "批量" }));
+    expect(screen.getByRole("menuitem", { name: /批量执行命令/ })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /删除/ })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.click(desktopCard.getByRole("button", { name: /测试节点 node-prod-1 连接/ }));
+    await waitFor(() => {
+      expect(testNodeConnection).toHaveBeenCalledWith(1);
+    });
+    await user.click(desktopCard.getByRole("button", { name: "紧急备份" }));
+    await waitFor(() => {
+      expect(emergencyBackupMock).toHaveBeenCalledWith("test-token", 1, EMERGENCY_PROOF);
+    });
+    expect(grantMock).not.toHaveBeenCalled();
+    await user.click(desktopCard.getByRole("button", { name: /浏览节点 node-prod-1 文件/ }));
+    expect(await screen.findByRole("dialog", { name: /文件浏览 — node-prod-1/ })).toBeInTheDocument();
+  });
+
+  it("只读用户在桌面和移动端可以查看日志、导出和下载模板", async () => {
+    const user = userEvent.setup();
+    authRef.current.role = "viewer";
+    createContext();
+
+    renderNodesPage();
+
+    const desktopCard = within(screen.getByLabelText("节点卡片 node-prod-1"));
+    const mobileCard = within(mobileNodeCard("node-prod-1"));
+    expectOperateActions(desktopCard, false);
+    expectOperateActions(mobileCard, false);
+    expectAdminActions(desktopCard, false);
+    expectAdminActions(mobileCard, false);
+    expect(desktopCard.getByRole("link", { name: /查看节点 node-prod-1 日志/ })).toHaveAttribute("href", "/app/logs?node=node-prod-1");
+    expect(mobileCard.getByRole("link", { name: /查看节点 node-prod-1 日志/ })).toHaveAttribute("href", "/app/logs?node=node-prod-1");
+    expect(screen.queryByRole("button", { name: "新增节点" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /删除 \(0\)/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "更多" }));
+    expect(screen.queryByRole("menuitem", { name: /CSV 导入/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /下载模板/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /导出节点/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "模板" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "批量" }));
+    expect(screen.queryByRole("menuitem", { name: /批量执行命令/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /删除/ })).not.toBeInTheDocument();
+  });
+
+  it("桌面列表里操作员保留诊断和文件浏览，只读用户不显示更多操作", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+    authRef.current.role = "operator";
+    createContext();
+
+    const view = renderNodesPage();
+    const table = screen.getByRole("table");
+    const row = within(within(table).getByRole("link", { name: "node-prod-1" }).closest("tr") as HTMLElement);
+    expect(row.getByRole("button", { name: /测试节点 node-prod-1 连接/ })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "手动备份" })).toBeInTheDocument();
+    expect(row.queryByRole("button", { name: /打开节点 node-prod-1 Web 终端/ })).not.toBeInTheDocument();
+
+    await user.click(row.getByRole("button", { name: /节点 node-prod-1 更多操作/ }));
+    expect(screen.getByRole("menuitem", { name: /Fleet Doctor/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /文件浏览/ })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Web 终端/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /编辑节点/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /迁移/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /删除节点/ })).not.toBeInTheDocument();
+
+    authRef.current.role = "viewer";
+    view.rerender(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>,
+    );
+    const viewerRow = within(within(screen.getByRole("table")).getByRole("link", { name: "node-prod-1" }).closest("tr") as HTMLElement);
+    expect(viewerRow.queryByRole("button", { name: /测试节点 node-prod-1 连接/ })).not.toBeInTheDocument();
+    expect(viewerRow.queryByRole("button", { name: "手动备份" })).not.toBeInTheDocument();
+    expect(viewerRow.queryByRole("button", { name: /节点 node-prod-1 更多操作/ })).not.toBeInTheDocument();
+    expect(viewerRow.getByRole("link", { name: /查看节点 node-prod-1 日志/ })).toBeInTheDocument();
+  });
+
+  it("删除确认期间降级后不再删除", async () => {
+    const user = userEvent.setup();
+    const pendingConfirm = createDeferred<boolean>();
+    confirmMock.mockImplementationOnce(() => pendingConfirm.promise);
+    createContext();
+    const deleteNodeMock = nodesRef.current.deleteNode as ReturnType<typeof vi.fn>;
+
+    const view = renderNodesPage();
+    const card = screen.getByLabelText("节点卡片 node-prod-1");
+    await user.click(within(card).getByRole("button", { name: /删除节点 node-prod-1/ }));
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledTimes(1);
+    });
+
+    authRef.current.role = "viewer";
+    view.rerender(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      pendingConfirm.resolve(true);
+    });
+
+    expect(deleteNodeMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  it("信任成功后按当前身份决定是否重新测试", async () => {
+    const user = userEvent.setup();
+    let resolveTrust: (value: unknown) => void = () => {};
+    trustNodeHostKeyMock.mockReturnValue(new Promise((resolve) => {
+      resolveTrust = resolve;
+    }));
+    const testNodeConnection = vi.fn()
+      .mockResolvedValueOnce(hostKeyProbe("ssh_host_key_unknown"))
+      .mockResolvedValueOnce({ ok: true, message: "连接成功" });
+    createContext({ testNodeConnection });
+
+    const view = renderNodesPage();
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+    await waitFor(() => {
+      expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(1);
+    });
+
+    authRef.current.role = "viewer";
+    view.rerender(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      resolveTrust({
+        alreadyTrusted: false,
+        algorithm: "ssh-ed25519",
+        fingerprintSha256: HOST_KEY_FINGERPRINT,
+      });
+    });
+
+    expect(testNodeConnection).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("会话切换后信任成功不再提示正在重测", async () => {
+    const user = userEvent.setup();
+    let resolveTrust: (value: unknown) => void = () => {};
+    trustNodeHostKeyMock.mockReturnValue(new Promise((resolve) => {
+      resolveTrust = resolve;
+    }));
+    const testNodeConnection = vi.fn()
+      .mockResolvedValueOnce(hostKeyProbe("ssh_host_key_unknown"))
+      .mockResolvedValueOnce({ ok: true, message: "连接成功" });
+    createContext({ testNodeConnection });
+
+    renderNodesPage();
+    await user.click(screen.getAllByRole("button", { name: "测试节点 node-prod-1 连接" })[0]);
+    await user.click(await screen.findByRole("button", { name: "信任并重试" }));
+    await waitFor(() => {
+      expect(trustNodeHostKeyMock).toHaveBeenCalledTimes(1);
+    });
+
+    bumpAuthSessionGeneration();
+    await act(async () => {
+      resolveTrust({
+        alreadyTrusted: false,
+        algorithm: "ssh-ed25519",
+        fingerprintSha256: HOST_KEY_FINGERPRINT,
+      });
+    });
+
+    expect(testNodeConnection).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("新增保存返回前身份往返后不提示、不测试", async () => {
+    const user = userEvent.setup();
+    const pendingSave = createDeferred<number>();
+    const createNode = vi.fn<(input: NewNodeInput, isCurrent?: () => boolean) => Promise<number>>(() => pendingSave.promise);
+    const testNodeConnection = vi.fn();
+    createContext({ createNode, testNodeConnection });
+
+    const view = renderNodesPage();
+    await user.click(screen.getByRole("button", { name: "新增节点" }));
+    await user.click(await screen.findByRole("button", { name: "保存并测试" }));
+    await waitFor(() => {
+      expect(createNode).toHaveBeenCalledTimes(1);
+    });
+    const saveStillCurrent = createNode.mock.calls[0]?.[1] as () => boolean;
+    expect(saveStillCurrent()).toBe(true);
+
+    rerenderAuth(view, { role: "viewer", token: "test-token" });
+    rerenderAuth(view, { role: "admin", token: "test-token" });
+    expect(saveStillCurrent()).toBe(false);
+
+    await act(async () => {
+      pendingSave.resolve(9);
+    });
+
+    expect(testNodeConnection).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("更新保存失败返回前换 token 后不报错", async () => {
+    const user = userEvent.setup();
+    const pendingSave = createDeferred<void>();
+    const updateNode = vi.fn<(id: number, input: NewNodeInput, isCurrent?: () => boolean) => Promise<void>>(() => pendingSave.promise);
+    const testNodeConnection = vi.fn();
+    createContext({ updateNode, testNodeConnection });
+
+    const view = renderNodesPage();
+    await user.click(screen.getAllByRole("button", { name: /编辑节点 node-prod-1/ })[0]);
+    await user.click(await screen.findByRole("button", { name: "保存并测试" }));
+    await waitFor(() => {
+      expect(updateNode).toHaveBeenCalledTimes(1);
+    });
+    const saveStillCurrent = updateNode.mock.calls[0]?.[2] as () => boolean;
+    expect(saveStillCurrent()).toBe(true);
+
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    expect(saveStillCurrent()).toBe(false);
+    await act(async () => {
+      pendingSave.reject(new Error("save exploded"));
+    });
+
+    expect(testNodeConnection).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("保存后的连接测试返回时身份已变则不展示结果", async () => {
+    const user = userEvent.setup();
+    const pendingTest = createDeferred<NodeConnectionProbeOutcome>();
+    const createNode = vi.fn().mockResolvedValue(9);
+    const testNodeConnection = vi.fn(() => pendingTest.promise);
+    createContext({ createNode, testNodeConnection });
+
+    const view = renderNodesPage();
+    await user.click(screen.getByRole("button", { name: "新增节点" }));
+    await user.click(await screen.findByRole("button", { name: "保存并测试" }));
+    await waitFor(() => {
+      expect(testNodeConnection).toHaveBeenCalledWith(9);
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("节点 node-new 已新增。");
+
+    rerenderAuth(view, { role: "operator", token: "test-token" });
+    await act(async () => {
+      pendingTest.resolve({ ok: true, message: "连接成功" });
+    });
+
+    expect(toastSuccessMock).not.toHaveBeenCalledWith("连接成功");
+    expect(toastSuccessMock).toHaveBeenCalledTimes(1);
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("删除确认期间身份往返、换 token 或卸载后不再删除", async () => {
+    const user = userEvent.setup();
+    const deleteCases = [
+      async (view: ReturnType<typeof renderNodesPage>) => {
+        rerenderAuth(view, { role: "viewer", token: "test-token" });
+        rerenderAuth(view, { role: "admin", token: "test-token" });
+        return false;
+      },
+      async (view: ReturnType<typeof renderNodesPage>) => {
+        rerenderAuth(view, { role: "admin", token: "next-token" });
+        return false;
+      },
+      async (view: ReturnType<typeof renderNodesPage>) => {
+        view.unmount();
+        return true;
+      },
+    ];
+
+    for (const changeIdentity of deleteCases) {
+      const pendingConfirm = createDeferred<boolean>();
+      confirmMock.mockImplementationOnce(() => pendingConfirm.promise);
+      createContext();
+      const view = renderNodesPage();
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await user.click(within(card).getByRole("button", { name: /删除节点 node-prod-1/ }));
+      await waitFor(() => {
+        expect(confirmMock).toHaveBeenCalled();
+      });
+      const deleteNode = nodesRef.current.deleteNode as ReturnType<typeof vi.fn>;
+
+      const unmounted = await changeIdentity(view);
+      await act(async () => {
+        pendingConfirm.resolve(true);
+      });
+
+      expect(deleteNode).not.toHaveBeenCalled();
+      expect(toastSuccessMock).not.toHaveBeenCalled();
+      expect(toastErrorMock).not.toHaveBeenCalled();
+      if (!unmounted) {
+        view.unmount();
+      }
+      confirmMock.mockReset();
+      confirmMock.mockResolvedValue(true);
+      toastSuccessMock.mockReset();
+      toastErrorMock.mockReset();
+    }
+  });
+
+  it("批量删除确认期间身份往返、换 token 或卸载后不再删除", async () => {
+    const user = userEvent.setup();
+    const changeIdentities = [
+      async (view: ReturnType<typeof renderNodesPage>) => {
+        rerenderAuth(view, { role: "operator", token: "test-token" });
+        rerenderAuth(view, { role: "admin", token: "test-token" });
+        return false;
+      },
+      async (view: ReturnType<typeof renderNodesPage>) => {
+        rerenderAuth(view, { role: "admin", token: "rotated-token" });
+        return false;
+      },
+      async (view: ReturnType<typeof renderNodesPage>) => {
+        view.unmount();
+        return true;
+      },
+    ];
+
+    for (const changeIdentity of changeIdentities) {
+      const pendingConfirm = createDeferred<boolean>();
+      confirmMock.mockImplementationOnce(() => pendingConfirm.promise);
+      createContext();
+      const view = renderNodesPage();
+      await user.click(screen.getAllByRole("checkbox", { name: "选择节点 node-prod-1" })[0]);
+      await user.click(screen.getByRole("button", { name: /批量/ }));
+      await user.click(screen.getByRole("menuitem", { name: "删除 (1)" }));
+      await waitFor(() => {
+        expect(confirmMock).toHaveBeenCalled();
+      });
+      const deleteNodes = nodesRef.current.deleteNodes as ReturnType<typeof vi.fn>;
+
+      const unmounted = await changeIdentity(view);
+      await act(async () => {
+        pendingConfirm.resolve(true);
+      });
+
+      expect(deleteNodes).not.toHaveBeenCalled();
+      expect(toastSuccessMock).not.toHaveBeenCalled();
+      expect(toastErrorMock).not.toHaveBeenCalled();
+      if (!unmounted) {
+        view.unmount();
+      }
+      confirmMock.mockReset();
+      confirmMock.mockResolvedValue(true);
+      toastSuccessMock.mockReset();
+      toastErrorMock.mockReset();
+    }
+  });
+
+  it("CSV 文件读取期间身份往返后不再导入", async () => {
+    const pendingText = createDeferred<string>();
+    const createNode = vi.fn().mockResolvedValue(8);
+    createContext({ createNode });
+    const view = renderNodesPage();
+    chooseCsvFile(new DeferredTextFile(pendingText.promise));
+    expect(createNode).not.toHaveBeenCalled();
+
+    rerenderAuth(view, { role: "viewer", token: "test-token" });
+    rerenderAuth(view, { role: "admin", token: "test-token" });
+    await act(async () => {
+      pendingText.resolve("name,host,username,port,tags\nrow-a,10.0.0.8,root,22,prod\n");
+    });
+
+    expect(createNode).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("CSV 导入中途身份失效后不继续下一行也不提示", async () => {
+    const pendingRow = createDeferred<number>();
+    const createNode = vi.fn()
+      .mockImplementationOnce(() => pendingRow.promise)
+      .mockResolvedValue(5);
+    createContext({ createNode });
+    const view = renderNodesPage();
+    const csv = [
+      "name,host,username,port,tags",
+      "row-a,10.0.0.8,root,22,prod",
+      "row-b,10.0.0.9,root,22,dr",
+    ].join("\n");
+    chooseCsvFile(new DeferredTextFile(Promise.resolve(csv)));
+    await waitFor(() => {
+      expect(createNode).toHaveBeenCalledTimes(1);
+    });
+    const importStillCurrent = createNode.mock.calls[0]?.[1] as () => boolean;
+    expect(importStillCurrent()).toBe(true);
+
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    expect(importStillCurrent()).toBe(false);
+    await act(async () => {
+      pendingRow.resolve(4);
+    });
+
+    expect(createNode).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("CSV 文件读取期间卸载后不再导入", async () => {
+    const pendingText = createDeferred<string>();
+    const createNode = vi.fn().mockResolvedValue(8);
+    createContext({ createNode });
+    const view = renderNodesPage();
+    chooseCsvFile(new DeferredTextFile(pendingText.promise));
+    view.unmount();
+    await act(async () => {
+      pendingText.resolve("name,host,username,port,tags\nrow-a,10.0.0.8,root,22,prod\n");
+    });
+
+    expect(createNode).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("角色降级保留批量结果，更换 token 后清除", async () => {
+    const user = userEvent.setup();
+    authRef.current.role = "operator";
+    getBatchStatusMock.mockResolvedValue({
+      batchId: "batch-77",
+      total: 1,
+      statusCounts: { success: 1 },
+      tasks: [{
+        id: 1,
+        name: "cmd",
+        status: "success",
+        nodeId: 1,
+        nodeName: "node-prod-1",
+        dispatchStatus: "accepted",
+      }],
+    });
+    const view = renderNodesPage();
+    await user.click(screen.getAllByRole("checkbox", { name: "选择节点 node-prod-1" })[0]);
+    await user.click(screen.getByRole("button", { name: /批量/ }));
+    await user.click(screen.getByRole("menuitem", { name: "批量执行命令 (1)" }));
+    await user.click(await screen.findByRole("button", { name: "提交批量命令" }));
+
+    expect(await screen.findByRole("dialog", { name: /批量执行结果/ })).toBeInTheDocument();
+    expect(screen.getByText(/batch-77/)).toBeInTheDocument();
+    expect(getBatchStatusMock).toHaveBeenCalledWith("test-token", "batch-77");
+
+    rerenderAuth(view, { role: "viewer", token: "test-token" });
+    expect(screen.getByRole("dialog", { name: /批量执行结果/ })).toBeInTheDocument();
+    expect(screen.getByText(/batch-77/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交批量命令" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导出", hidden: true })).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /查看节点 node-prod-1 日志/, hidden: true }).length).toBeGreaterThan(0);
+
+    rerenderAuth(view, { role: "viewer", token: "next-token" });
+    expect(screen.queryByRole("dialog", { name: /批量执行结果/ })).not.toBeInTheDocument();
+    expect(getBatchStatusMock).not.toHaveBeenCalledWith("next-token", "batch-77");
   });
 });

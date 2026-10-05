@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { getVisibleNavItems, navItems } from "./navigation";
 
+  it.each(["operator", "viewer", null] as const)("hides audit for %s", (role) => {
+    expect(getVisibleNavItems(role).some((item) => item.path === "/app/audit")).toBe(false);
+  });
+
+  it.each([
+    ["admin", "/app/backups/data"],
+    ["operator", "/app/backups/data"],
+    ["viewer", "/app/backups/overview"],
+    [null, "/app/backups/overview"],
+  ] as const)("routes %s to its permitted backup entry", (role, path) => {
+    expect(getVisibleNavItems(role).find((item) => item.titleKey === "nav.backups")?.path).toBe(path);
+    expect(navItems.find((item) => item.titleKey === "nav.backups")?.path).toBe("/app/backups/data");
+  });
+
 describe("getVisibleNavItems", () => {
   it("does not keep a dashboards navigation entry", () => {
     expect(navItems.some((item) => item.path === "/app/dashboards")).toBe(false);

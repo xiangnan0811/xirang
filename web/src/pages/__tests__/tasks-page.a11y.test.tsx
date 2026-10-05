@@ -9,6 +9,7 @@ import { runAxe } from "@/test/a11y-helpers";
 // PR-D: 改用 runAxe 共享辅助（默认关闭 color-contrast，详见 a11y-helpers.ts）。
 
 const confirmMock = vi.fn().mockResolvedValue(true);
+const cancelPending = vi.fn();
 const navigateMock = vi.fn();
 
 const sharedRef: { current: Record<string, unknown> } = { current: {} };
@@ -43,6 +44,7 @@ vi.mock("@/hooks/use-confirm", () => ({
   useConfirm: () => ({
     confirm: confirmMock,
     dialog: null,
+    cancelPending,
   }),
 }));
 

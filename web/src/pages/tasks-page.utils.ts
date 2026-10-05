@@ -88,6 +88,8 @@ export type TasksViewProps = {
   onManageRsyncVersioning: (task: TaskRecord) => void;
   canManageRcloneVersioning: boolean;
   onManageRcloneVersioning: (task: TaskRecord) => void;
+  canWriteTasks: boolean;
+  canTriggerTasks: boolean;
   selectedTaskSet: Set<number>;
   allVisibleSelected: boolean;
   toggleTaskSelection: (id: number, checked: boolean) => void;

@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -7,7 +8,13 @@ import { runAxe } from "@/test/a11y-helpers";
 import type { RclonePublicationSummary, TaskRecord } from "@/types/domain";
 import { TaskRcloneVersioningDialog } from "./task-rclone-versioning-dialog";
 
-const { apiClientMock } = vi.hoisted(() => ({
+const { apiClientMock, authRef } = vi.hoisted(() => ({
+  authRef: {
+    current: {
+      token: "token" as string | null,
+      role: "admin" as "admin" | "operator" | "viewer" | null,
+    },
+  },
   apiClientMock: {
     createRclonePortableBindingSetup: vi.fn(),
     setRclonePortableBinding: vi.fn(),
@@ -21,6 +28,9 @@ const { apiClientMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api/client", () => ({ apiClient: apiClientMock }));
+vi.mock("@/context/auth-context.hooks", () => ({
+  useAuth: () => authRef.current,
+}));
 
 const legacySummary: RclonePublicationSummary = {
   mode: "legacy_mutable",
@@ -75,6 +85,7 @@ function portableSummary(overrides: Partial<RclonePublicationSummary> = {}): Rcl
 
 describe("TaskRcloneVersioningDialog", () => {
   beforeEach(() => {
+    authRef.current = { token: "token", role: "admin" };
     for (const mock of Object.values(apiClientMock)) {
       mock.mockReset();
     }
@@ -332,5 +343,98 @@ describe("TaskRcloneVersioningDialog", () => {
     expect(screen.getByText("已保留")).toBeInTheDocument();
     expect(screen.getByText("安全原因")).toBeInTheDocument();
     expect(screen.getByText("绑定、能力和验证条件已就绪。")).toBeInTheDocument();
+  });
+
+  function createDeferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function dialogElement(open: boolean, token: string, onUpdated: () => void) {
+    return (
+      <TaskRcloneVersioningDialog open={open} onOpenChange={vi.fn()} task={task} token={token} onUpdated={onUpdated} />
+    );
+  }
+
+  async function startPortableSetup() {
+    const setup = createDeferred<{ setupId: string; expiresAt: string }>();
+    const calls = apiClientMock.createRclonePortableBindingSetup.mock.calls.length;
+    apiClientMock.createRclonePortableBindingSetup.mockReturnValueOnce(setup.promise);
+    fireEvent.change(screen.getByLabelText("Remote 名称"), { target: { value: "archive" } });
+    fireEvent.change(screen.getByLabelText("受管根目录"), { target: { value: "archive:managed/v1" } });
+    fireEvent.change(screen.getByLabelText("Rclone 配置"), { target: { value: "[archive]\ntype = s3\nsecret = late" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Portable 绑定" }));
+    await waitFor(() => expect(apiClientMock.createRclonePortableBindingSetup).toHaveBeenCalledTimes(calls + 1));
+    return setup;
+  }
+
+  it("completes portable binding after StrictMode replay for an admin", async () => {
+    apiClientMock.createRclonePortableBindingSetup.mockResolvedValue({
+      setupId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      expiresAt: futureExpiry(),
+    });
+    apiClientMock.setRclonePortableBinding.mockResolvedValue(portableSummary());
+    const onUpdated = vi.fn().mockResolvedValue(undefined);
+    render(<StrictMode>{dialogElement(true, "token", onUpdated)}</StrictMode>);
+    fireEvent.change(screen.getByLabelText("Remote 名称"), { target: { value: "archive" } });
+    fireEvent.change(screen.getByLabelText("受管根目录"), { target: { value: "archive:managed/v1" } });
+    fireEvent.change(screen.getByLabelText("Rclone 配置"), { target: { value: "[archive]\ntype = s3\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Portable 绑定" }));
+    await waitFor(() => expect(apiClientMock.setRclonePortableBinding).toHaveBeenCalledTimes(1));
+    expect(onUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start portable setup when the committed role is not admin", () => {
+    authRef.current.role = "operator";
+    render(dialogElement(true, "token", vi.fn()));
+    fireEvent.change(screen.getByLabelText("Remote 名称"), { target: { value: "archive" } });
+    fireEvent.change(screen.getByLabelText("受管根目录"), { target: { value: "archive:managed/v1" } });
+    fireEvent.change(screen.getByLabelText("Rclone 配置"), { target: { value: "[archive]\ntype = s3\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Portable 绑定" }));
+    expect(apiClientMock.createRclonePortableBindingSetup).not.toHaveBeenCalled();
+  });
+
+  it("stops before portable secret binding when token and role return", async () => {
+    const onUpdated = vi.fn().mockResolvedValue(undefined);
+    const view = render(dialogElement(true, "token", onUpdated));
+    const setup = await startPortableSetup();
+
+    authRef.current = { token: "token-b", role: "viewer" };
+    view.rerender(dialogElement(true, "token-b", onUpdated));
+    authRef.current = { token: "token", role: "admin" };
+    view.rerender(dialogElement(true, "token", onUpdated));
+    await act(async () => {
+      setup.resolve({ setupId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expiresAt: futureExpiry() });
+    });
+
+    expect(apiClientMock.setRclonePortableBinding).not.toHaveBeenCalled();
+    expect(onUpdated).not.toHaveBeenCalled();
+    expect(screen.queryByText("版本化操作未完成，请刷新后重试。")).not.toBeInTheDocument();
+  });
+
+  it("does not publish portable binding after close, reopen, or unmount", async () => {
+    const onUpdated = vi.fn().mockResolvedValue(undefined);
+    const view = render(<StrictMode>{dialogElement(true, "token", onUpdated)}</StrictMode>);
+    const setup = await startPortableSetup();
+    view.rerender(<StrictMode>{dialogElement(false, "token", onUpdated)}</StrictMode>);
+    view.rerender(<StrictMode>{dialogElement(true, "token", onUpdated)}</StrictMode>);
+    await act(async () => {
+      setup.resolve({ setupId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expiresAt: futureExpiry() });
+    });
+    expect(apiClientMock.setRclonePortableBinding).not.toHaveBeenCalled();
+    expect(onUpdated).not.toHaveBeenCalled();
+
+    const rejected = await startPortableSetup();
+    view.unmount();
+    await act(async () => {
+      rejected.reject(new Error("unmounted"));
+    });
+    expect(apiClientMock.setRclonePortableBinding).not.toHaveBeenCalled();
+    expect(onUpdated).not.toHaveBeenCalled();
   });
 });
