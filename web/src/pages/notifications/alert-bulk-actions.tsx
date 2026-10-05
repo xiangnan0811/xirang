@@ -12,6 +12,8 @@ import type { AlertRecord } from "@/types/domain";
 export type AlertBulkActionsProps = {
   alert: AlertRecord;
   deliveryOpen: boolean;
+  canWriteAlerts: boolean;
+  canTriggerTasks: boolean;
   onRetry: (alert: AlertRecord) => void;
   onAck: (alert: AlertRecord) => void;
   onResolve: (alert: AlertRecord) => void;
@@ -22,6 +24,8 @@ export type AlertBulkActionsProps = {
 export function AlertBulkActions({
   alert,
   deliveryOpen,
+  canWriteAlerts,
+  canTriggerTasks,
   onRetry,
   onAck,
   onResolve,
@@ -32,13 +36,15 @@ export function AlertBulkActions({
 
   return (
     <div className="flex items-center gap-1">
-      <Button
-        size="sm"
-        onClick={() => onRetry(alert)}
-        disabled={!alert.retryable || !alert.taskId || alert.status === "resolved"}
-      >
-        {t("notifications.oneClickRetry")}
-      </Button>
+      {canTriggerTasks ? (
+        <Button
+          size="sm"
+          onClick={() => onRetry(alert)}
+          disabled={!alert.retryable || !alert.taskId || alert.status === "resolved"}
+        >
+          {t("notifications.oneClickRetry")}
+        </Button>
+      ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size="sm" variant="outline" aria-label={t("common.more")}>
@@ -46,24 +52,28 @@ export function AlertBulkActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          <DropdownMenuItem
-            disabled={alert.status !== "open"}
-            onClick={() => onAck(alert)}
-          >
-            {t("notifications.markRead")}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            disabled={alert.status === "resolved"}
-            onClick={() => onResolve(alert)}
-          >
-            {t("notifications.markResolved")}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            disabled={alert.status === "resolved" || alert.nodeId === 0}
-            onClick={() => onResolveNodeAlerts(alert)}
-          >
-            {t("notifications.resolveNodeAlerts")}
-          </DropdownMenuItem>
+          {canWriteAlerts ? (
+            <>
+              <DropdownMenuItem
+                disabled={alert.status !== "open"}
+                onClick={() => onAck(alert)}
+              >
+                {t("notifications.markRead")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={alert.status === "resolved"}
+                onClick={() => onResolve(alert)}
+              >
+                {t("notifications.markResolved")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={alert.status === "resolved" || alert.nodeId === 0}
+                onClick={() => onResolveNodeAlerts(alert)}
+              >
+                {t("notifications.resolveNodeAlerts")}
+              </DropdownMenuItem>
+            </>
+          ) : null}
           <DropdownMenuItem onClick={() => onToggleDeliveries(alert.id)}>
             {deliveryOpen ? t("notifications.collapseDelivery") : t("notifications.deliveryRecords")}
           </DropdownMenuItem>

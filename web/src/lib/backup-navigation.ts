@@ -1,4 +1,5 @@
 import { redirect } from "react-router-dom";
+import type { AuthRole } from "@/context/auth-context.shared";
 
 export const BACKUP_FILES_PATH = "/app/backups/data";
 
@@ -14,6 +15,14 @@ const BACKUP_SECTION_PATHS: Record<string, true> = {
 const BACKUP_TABS = [BACKUP_FILES_PATH, BACKUP_OVERVIEW, BACKUP_RECOVERY] as const;
 
 export type BackupRouteTab = "data" | "overview" | "recovery";
+
+export function canAccessBackupData(role: AuthRole | null): boolean {
+  return role === "admin" || role === "operator";
+}
+
+export function backupEntryPath(role: AuthRole | null): string {
+  return canAccessBackupData(role) ? BACKUP_FILES_PATH : BACKUP_OVERVIEW;
+}
 
 export function normalizeAppPathname(pathname: string): string {
   if (pathname.length <= 1) {

@@ -21,12 +21,16 @@ import {
   type BackupAssetsSemanticIssue,
 } from "@/features/backup-assets/use-backup-assets-state";
 import { useAuth } from "@/context/auth-context.hooks";
-import { normalizeAppPathname } from "@/lib/backup-navigation";
+import { canAccessBackupData, normalizeAppPathname } from "@/lib/backup-navigation";
 
 export function BackupsDataPage() {
   const location = useLocation();
+  const { token, role } = useAuth();
   if (normalizeAppPathname(location.pathname) !== "/app/backups/data") {
     return null;
+  }
+  if (!canAccessBackupData(role)) {
+    return <Navigate to="/app/backups/overview" replace />;
   }
 
   const route = parseBackupAssetsRoute(location.pathname, location.search);
@@ -37,6 +41,7 @@ export function BackupsDataPage() {
 
   return (
     <BackupsDataWorkspace
+      key={`${token ?? ""}:${role ?? ""}`}
       route={route.state}
       routeHasExplicitLayout={new URLSearchParams(location.search).has("layout")}
     />

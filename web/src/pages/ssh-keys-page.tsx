@@ -39,6 +39,9 @@ export function SSHKeysPage() {
     sshKeys,
     nodes,
     loading,
+    canManageSSHKeys,
+    captureSessionGeneration,
+    isCurrentSession,
     // 筛选
     keyword,
     setKeyword,
@@ -115,15 +118,19 @@ export function SSHKeysPage() {
 
   // 批量删除
   const handleBulkDelete = async () => {
-    if (!token || selectedIds.size === 0) return;
+    if (!canManageSSHKeys || !token || selectedIds.size === 0) return;
+    const generation = captureSessionGeneration();
+    const activeToken = token;
+    const ids = Array.from(selectedIds);
     const ok = await state.confirm({
       title: t("sshKeys.confirmDeleteTitle"),
-      description: t("sshKeys.batchDeleteConfirm", { count: selectedIds.size }),
+      description: t("sshKeys.batchDeleteConfirm", { count: ids.length }),
     });
-    if (!ok) return;
+    if (!ok || !isCurrentSession(generation)) return;
     try {
       const api = createSSHKeysApi();
-      const result = await api.deleteSSHKeys(token, Array.from(selectedIds));
+      const result = await api.deleteSSHKeys(activeToken, ids);
+      if (!isCurrentSession(generation)) return;
       if (result.skippedInUse.length > 0) {
         toast.warning(
           t("sshKeys.bulkDeletePartial", {
@@ -137,6 +144,7 @@ export function SSHKeysPage() {
       state.clearSelection();
       void refreshSSHKeys();
     } catch (error) {
+      if (!isCurrentSession(generation)) return;
       toast.error(getErrorMessage(error));
     }
   };
@@ -158,6 +166,7 @@ export function SSHKeysPage() {
     setTestConnectionKey,
     setAssociatedNodesKey,
     openRotationWizard,
+    canManageSSHKeys,
   };
 
   // 测试连接对话框所需的关联节点
@@ -178,10 +187,12 @@ export function SSHKeysPage() {
           </>
         }
         actions={
-          <Button size="sm" onClick={openCreateDialog}>
-            <KeyRound className="size-4" aria-hidden />
-            {t("sshKeys.addKey")}
-          </Button>
+          canManageSSHKeys ? (
+            <Button size="sm" onClick={openCreateDialog}>
+              <KeyRound className="size-4" aria-hidden />
+              {t("sshKeys.addKey")}
+            </Button>
+          ) : null
         }
       />
 
@@ -235,6 +246,7 @@ export function SSHKeysPage() {
             setBatchImportOpen={state.setBatchImportOpen}
             setExportOpen={state.setExportOpen}
             openRotationWizard={state.openRotationWizard}
+            canManageSSHKeys={canManageSSHKeys}
             onBulkDelete={handleBulkDelete}
           />
 
@@ -312,23 +324,27 @@ export function SSHKeysPage() {
       </DataSurface>
 
       {/* ── 对话框 ── */}
-      <SSHKeyEditorDialog
-        open={editorOpen}
-        onOpenChange={handleEditorOpenChange}
-        onCloseAutoFocus={editorOnCloseAutoFocus}
-        editingKey={editingKey}
-        onSave={handleEditorSave}
-      />
+      {canManageSSHKeys ? (
+        <SSHKeyEditorDialog
+          open={editorOpen}
+          onOpenChange={handleEditorOpenChange}
+          onCloseAutoFocus={editorOnCloseAutoFocus}
+          editingKey={editingKey}
+          onSave={handleEditorSave}
+        />
+      ) : null}
 
-      <SSHKeyTestConnectionDialog
-        open={!!testConnectionKey}
-        onOpenChange={(open) => {
-          if (!open) setTestConnectionKey(null);
-        }}
-        sshKey={testConnectionKey}
-        associatedNodes={testConnectionNodes}
-        token={token ?? ""}
-      />
+      {canManageSSHKeys ? (
+        <SSHKeyTestConnectionDialog
+          open={!!testConnectionKey}
+          onOpenChange={(open) => {
+            if (!open) setTestConnectionKey(null);
+          }}
+          sshKey={testConnectionKey}
+          associatedNodes={testConnectionNodes}
+          token={token ?? ""}
+        />
+      ) : null}
 
       <SSHKeyAssociatedNodesSheet
         open={!!associatedNodesKey}
@@ -339,15 +355,17 @@ export function SSHKeysPage() {
         nodes={nodes}
       />
 
-      <Suspense fallback={null}>
-        <SSHKeyBatchImportDialog
-          open={batchImportOpen}
-          onOpenChange={setBatchImportOpen}
-          existingKeyNames={sshKeys.map((k) => k.name)}
-          token={token ?? ""}
-          onImportComplete={() => void refreshSSHKeys()}
-        />
-      </Suspense>
+      {canManageSSHKeys ? (
+        <Suspense fallback={null}>
+          <SSHKeyBatchImportDialog
+            open={batchImportOpen}
+            onOpenChange={setBatchImportOpen}
+            existingKeyNames={sshKeys.map((k) => k.name)}
+            token={token ?? ""}
+            onImportComplete={() => void refreshSSHKeys()}
+          />
+        </Suspense>
+      ) : null}
 
       <SSHKeyExportDialog
         open={exportOpen}
@@ -358,18 +376,20 @@ export function SSHKeysPage() {
         token={token ?? ""}
       />
 
-      <Suspense fallback={null}>
-        <SSHKeyRotationWizard
-          open={rotationOpen}
-          onOpenChange={setRotationOpen}
-          onCloseAutoFocus={rotationOnCloseAutoFocus}
-          sshKeys={sshKeys}
-          keyUsageMap={keyUsageMap}
-          preselectedKey={rotationKey}
-          token={token ?? ""}
-          onComplete={() => void refreshSSHKeys()}
-        />
-      </Suspense>
+      {canManageSSHKeys ? (
+        <Suspense fallback={null}>
+          <SSHKeyRotationWizard
+            open={rotationOpen}
+            onOpenChange={setRotationOpen}
+            onCloseAutoFocus={rotationOnCloseAutoFocus}
+            sshKeys={sshKeys}
+            keyUsageMap={keyUsageMap}
+            preselectedKey={rotationKey}
+            token={token ?? ""}
+            onComplete={() => void refreshSSHKeys()}
+          />
+        </Suspense>
+      ) : null}
 
       {/* 确认对话框（useConfirm） */}
       {dialog}

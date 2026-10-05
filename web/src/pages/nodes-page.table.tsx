@@ -38,6 +38,7 @@ export const NodesTable = React.memo(function NodesTable({
   onMigrate,
   onOpenFileBrowser,
   isAdmin,
+  canOperateNodes,
   canBrowseNodeFiles,
 }: NodesViewProps) {
   const { t } = useTranslation();
@@ -83,7 +84,7 @@ export const NodesTable = React.memo(function NodesTable({
                   title={t("nodes.emptyTitle")}
                   description={t("nodes.emptyDesc")}
                   onReset={resetFilters}
-                  onCreate={openCreateDialog}
+                  onCreate={isAdmin ? openCreateDialog : undefined}
                   createLabel={t("nodes.emptyCreateLabel")}
                   createIcon={ServerCog}
                 />
@@ -160,16 +161,18 @@ export const NodesTable = React.memo(function NodesTable({
                   </td>
                   <td className="px-3 py-2.5 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
-                        onClick={() => void onTestNode(node)}
-                        disabled={testingNodeId === node.id}
-                      >
-                        {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
-                      </Button>
+                      {canOperateNodes && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
+                          onClick={() => void onTestNode(node)}
+                          disabled={testingNodeId === node.id}
+                        >
+                          {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -181,14 +184,17 @@ export const NodesTable = React.memo(function NodesTable({
                           <Terminal className="size-4" aria-hidden />
                         </Link>
                       </Button>
-                      <Button
-                        size="sm"
-                        disabled={triggeringNodeId === node.id}
-                        onClick={() => void handleTriggerBackup(node.id, node.name)}
-                      >
-                        {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
-                        {t("nodes.manualBackup")}
-                      </Button>
+                      {canOperateNodes && (
+                        <Button
+                          size="sm"
+                          disabled={triggeringNodeId === node.id}
+                          onClick={() => void handleTriggerBackup(node.id, node.name)}
+                        >
+                          {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
+                          {t("nodes.manualBackup")}
+                        </Button>
+                      )}
+                      {(canOperateNodes || isAdmin || canBrowseNodeFiles) && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
@@ -205,15 +211,17 @@ export const NodesTable = React.memo(function NodesTable({
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48">
-                          <DropdownMenuItem
-                            disabled={doctorNodeId === node.id}
-                            onClick={() => onOpenDoctor?.(node)}
-                          >
-                            {doctorNodeId === node.id
-                              ? <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
-                              : <Stethoscope className="mr-2 size-4" aria-hidden />}
-                            {t("nodes.doctor")}
-                          </DropdownMenuItem>
+                          {canOperateNodes && (
+                            <DropdownMenuItem
+                              disabled={doctorNodeId === node.id}
+                              onClick={() => onOpenDoctor?.(node)}
+                            >
+                              {doctorNodeId === node.id
+                                ? <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+                                : <Stethoscope className="mr-2 size-4" aria-hidden />}
+                              {t("nodes.doctor")}
+                            </DropdownMenuItem>
+                          )}
                           {isAdmin && (
                             <DropdownMenuItem onClick={() => onOpenTerminal?.(node)}>
                               <MonitorPlay className="mr-2 size-4" aria-hidden />
@@ -226,26 +234,31 @@ export const NodesTable = React.memo(function NodesTable({
                               {t("nodes.fileBrowser")}
                             </DropdownMenuItem>
                           )}
-                          <DropdownMenuItem onClick={() => openEditDialog(node, editTrigger.current)}>
-                            <Wrench className="mr-2 size-4" aria-hidden />
-                            {t("nodes.editNode")}
-                          </DropdownMenuItem>
-                          {onMigrate && (
+                          {isAdmin && (
+                            <DropdownMenuItem onClick={() => openEditDialog(node, editTrigger.current)}>
+                              <Wrench className="mr-2 size-4" aria-hidden />
+                              {t("nodes.editNode")}
+                            </DropdownMenuItem>
+                          )}
+                          {isAdmin && onMigrate && (
                             <DropdownMenuItem onClick={() => onMigrate(node)}>
                               <ArrowRightLeft className="mr-2 size-4" aria-hidden />
                               {t("nodes.migrateShort")}
                             </DropdownMenuItem>
                           )}
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            className="text-destructive focus:text-destructive"
-                            onClick={() => onDeleteNode(node)}
-                          >
-                            <Trash2 className="mr-2 size-4" aria-hidden />
-                            {t("nodes.deleteNode")}
-                          </DropdownMenuItem>
+                          {isAdmin && <DropdownMenuSeparator />}
+                          {isAdmin && (
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => onDeleteNode(node)}
+                            >
+                              <Trash2 className="mr-2 size-4" aria-hidden />
+                              {t("nodes.deleteNode")}
+                            </DropdownMenuItem>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
+                      )}
                     </div>
                   </td>
                 </tr>

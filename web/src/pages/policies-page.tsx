@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { Copy, Plus, ShieldCheck, Trash2, Wrench } from "lucide-react";
 import { useSharedContext } from "@/context/shared-context.hooks";
@@ -40,6 +40,28 @@ import { PoliciesFilters } from "@/pages/policies-page.filters";
 
 const keywordStorageKey = "xirang.policies.keyword";
 
+type PolicyConfirm = (options: {
+  title: string;
+  description: string;
+  confirmText?: string;
+  cancelText?: string;
+}) => Promise<boolean>;
+
+function PolicyConfirmHost({
+  confirmRef,
+}: {
+  confirmRef: MutableRefObject<PolicyConfirm>;
+}) {
+  const { confirm, dialog } = useConfirm();
+  useEffect(() => {
+    confirmRef.current = confirm;
+    return () => {
+      confirmRef.current = async () => false;
+    };
+  }, [confirm, confirmRef]);
+  return dialog;
+}
+
 function formatDuration(ms: number): string {
   if (ms <= 0) return "-";
   if (ms < 1000) return `${ms}ms`;
@@ -62,7 +84,17 @@ function drillTone(status?: string): "success" | "destructive" | "warning" | "ne
 
 export function PoliciesPage() {
   const { t } = useTranslation();
-  const { token } = useAuth();
+  const { token, role } = useAuth();
+  const canManagePolicies = role === "admin";
+  const mountedRef = useRef(false);
+  const authIdentityRef = useRef({ role, token });
+  const sessionGenerationRef = useRef(0);
+  const operationAbortsRef = useRef<Set<AbortController>>(new Set());
+  const isCurrentSession = (generation: number) =>
+    mountedRef.current &&
+    sessionGenerationRef.current === generation &&
+    authIdentityRef.current.role === "admin";
+
   const { globalSearch, setGlobalSearch } = useSharedContext();
   const { nodes, refreshNodes } = useNodesContext();
   const {
@@ -96,23 +128,57 @@ export function PoliciesPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<PolicyRecord | null>(null);
   const [selectedPolicyIds, setSelectedPolicyIds] = useState<number[]>([]);
-  const { confirm, dialog } = useConfirm();
+  const confirmRef = useRef<PolicyConfirm>(async () => false);
+
+  useLayoutEffect(() => {
+    const previous = authIdentityRef.current;
+    const identityChanged = previous.role !== role || previous.token !== token;
+    sessionGenerationRef.current += 1;
+    authIdentityRef.current = { role, token };
+    mountedRef.current = true;
+    if (identityChanged) {
+      setEditorOpen(false);
+      setEditingPolicy(null);
+      setSelectedPolicyIds((current) => (current.length === 0 ? current : []));
+    }
+    return () => {
+      mountedRef.current = false;
+      sessionGenerationRef.current += 1;
+      const pending = operationAbortsRef.current;
+      operationAbortsRef.current = new Set();
+      for (const controller of pending) {
+        controller.abort();
+      }
+    };
+  }, [token, role]);
 
   const togglePolicySelection = (id: number, checked: boolean) => {
+    if (authIdentityRef.current.role !== "admin") return;
     setSelectedPolicyIds((prev) =>
       checked ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((pid) => pid !== id)
     );
   };
 
   const handleBatchToggle = async (enabled: boolean) => {
-    if (!selectedPolicyIds.length || !token) return;
+    if (authIdentityRef.current.role !== "admin") return;
+    const requestToken = authIdentityRef.current.token;
+    const policyIds = [...selectedPolicyIds];
+    if (!requestToken || policyIds.length === 0) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
+    const controller = new AbortController();
+    operationAbortsRef.current.add(controller);
     try {
-      await apiClient.batchTogglePolicies(token, selectedPolicyIds, enabled);
-      toast.success(t('policies.batchToggleSuccess', { action: enabled ? t('common.enable') : t('common.disable'), count: selectedPolicyIds.length }));
+      await apiClient.batchTogglePolicies(requestToken, policyIds, enabled);
+      if (controller.signal.aborted || !isCurrentSession(generation)) return;
+      toast.success(t('policies.batchToggleSuccess', { action: enabled ? t('common.enable') : t('common.disable'), count: policyIds.length }));
       setSelectedPolicyIds([]);
       void refreshPolicies();
     } catch (error) {
+      if (controller.signal.aborted || !isCurrentSession(generation)) return;
       toast.error(getErrorMessage(error));
+    } finally {
+      operationAbortsRef.current.delete(controller);
     }
   };
 
@@ -146,20 +212,27 @@ export function PoliciesPage() {
   };
 
   const openCreateDialog = (event?: { currentTarget: EventTarget | null }) => {
+    if (authIdentityRef.current.role !== "admin") return;
     editorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingPolicy(null);
     setEditorOpen(true);
   };
 
   const openEditDialog = (policy: PolicyRecord, opener?: EventTarget | null) => {
+    if (authIdentityRef.current.role !== "admin") return;
     editorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingPolicy(policy);
     setEditorOpen(true);
   };
 
   const handleSave = async (draft: PolicyDraft) => {
+    if (authIdentityRef.current.role !== "admin") return;
     // Dialog validates required fields before calling this handler; early-return silently if bypassed
     if (!draft.name.trim() || !draft.sourcePath.trim() || !draft.cron.trim()) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
+    const controller = new AbortController();
+    operationAbortsRef.current.add(controller);
 
     const input: NewPolicyInput = {
       name: draft.name.trim(),
@@ -201,54 +274,90 @@ export function PoliciesPage() {
     try {
       if (draft.id) {
         await updatePolicy(draft.id, input);
-        toast.success(t('policies.updateSuccess', { name: draft.name }));
       } else {
         await createPolicy(input);
-        toast.success(t('policies.createSuccess', { name: draft.name }));
       }
-
+      if (controller.signal.aborted || !isCurrentSession(generation)) return;
+      toast.success(draft.id
+        ? t('policies.updateSuccess', { name: draft.name })
+        : t('policies.createSuccess', { name: draft.name }));
       setEditorOpen(false);
       setEditingPolicy(null);
     } catch (error) {
+      if (controller.signal.aborted || !isCurrentSession(generation)) return;
       toast.error(getErrorMessage(error));
+    } finally {
+      operationAbortsRef.current.delete(controller);
     }
   };
 
   const onDelete = async (policy: PolicyRecord) => {
-    const ok = await confirm({
-      title: t('policies.confirmDelete'),
-      description: t('policies.confirmDeleteDesc', { name: policy.name }),
-    });
-    if (!ok) {
-      return;
-    }
+    if (authIdentityRef.current.role !== "admin") return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
+    const controller = new AbortController();
+    operationAbortsRef.current.add(controller);
     try {
-      await deletePolicy(policy.id);
-      toast.success(t('policies.deleteSuccess', { name: policy.name }));
-    } catch (error) {
-      toast.error(getErrorMessage(error));
+      const ok = await confirmRef.current({
+        title: t('policies.confirmDelete'),
+        description: t('policies.confirmDeleteDesc', { name: policy.name }),
+      });
+      if (!ok || controller.signal.aborted || !isCurrentSession(generation)) {
+        return;
+      }
+      try {
+        await deletePolicy(policy.id);
+        if (controller.signal.aborted || !isCurrentSession(generation)) return;
+        toast.success(t('policies.deleteSuccess', { name: policy.name }));
+      } catch (error) {
+        if (controller.signal.aborted || !isCurrentSession(generation)) return;
+        toast.error(getErrorMessage(error));
+      }
+    } finally {
+      operationAbortsRef.current.delete(controller);
     }
   };
 
   const onTogglePolicy = async (policy: PolicyRecord) => {
+    if (authIdentityRef.current.role !== "admin") return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
+    const controller = new AbortController();
+    operationAbortsRef.current.add(controller);
     try {
       await togglePolicy(policy.id);
+      if (controller.signal.aborted || !isCurrentSession(generation)) return;
       toast.success(t('policies.toggleSuccess', { name: policy.name, action: policy.enabled ? t('common.disable') : t('common.enable') }));
     } catch (error) {
+      if (controller.signal.aborted || !isCurrentSession(generation)) return;
       toast.error(getErrorMessage(error));
+    } finally {
+      operationAbortsRef.current.delete(controller);
     }
   };
 
   const onCloneFromTemplate = async (policy: PolicyRecord) => {
-    if (!token) return;
+    if (authIdentityRef.current.role !== "admin") return;
+    const requestToken = authIdentityRef.current.token;
+    if (!requestToken) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
+    const controller = new AbortController();
+    operationAbortsRef.current.add(controller);
     try {
-      await apiClient.clonePolicyFromTemplate(token, policy.id);
+      await apiClient.clonePolicyFromTemplate(requestToken, policy.id);
+      if (controller.signal.aborted || !isCurrentSession(generation)) return;
       toast.success(t('policies.cloneSuccess', { name: policy.name }));
       void refreshPolicies();
     } catch (error) {
+      if (controller.signal.aborted || !isCurrentSession(generation)) return;
       toast.error(getErrorMessage(error));
+    } finally {
+      operationAbortsRef.current.delete(controller);
     }
   };
+
+  const tableColumnCount = canManagePolicies ? 9 : 7;
 
   return (
     <div className="animate-fade-in space-y-5">
@@ -268,12 +377,12 @@ export function PoliciesPage() {
             </Badge>
           </>
         }
-        actions={
+        actions={canManagePolicies ? (
           <Button size="sm" onClick={openCreateDialog}>
             <Plus className="mr-1 size-4" aria-hidden="true" />
             {t('policies.addPolicy')}
           </Button>
-        }
+        ) : null}
       />
 
       <DataSurface>
@@ -282,26 +391,28 @@ export function PoliciesPage() {
           description={t("policies.surfaceDesc", { total: policies.length })}
         />
         <DataSurfaceToolbar className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              {selectedPolicyIds.length > 0 && (
-                <>
-                  <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(true)}>
-                    {t('policies.batchEnableCount', { count: selectedPolicyIds.length })}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(false)}>
-                    {t('policies.batchDisableCount', { count: selectedPolicyIds.length })}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setSelectedPolicyIds([])}>
-                    {t('policies.clearSelection')}
-                  </Button>
-                </>
-              )}
+          {canManagePolicies ? (
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                {selectedPolicyIds.length > 0 && (
+                  <>
+                    <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(true)}>
+                      {t('policies.batchEnableCount', { count: selectedPolicyIds.length })}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(false)}>
+                      {t('policies.batchDisableCount', { count: selectedPolicyIds.length })}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setSelectedPolicyIds([])}>
+                      {t('policies.clearSelection')}
+                    </Button>
+                  </>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge tone="neutral">{t('policies.selectedCount', { count: selectedPolicyIds.length })}</Badge>
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone="neutral">{t('policies.selectedCount', { count: selectedPolicyIds.length })}</Badge>
-            </div>
-          </div>
+          ) : null}
           <PoliciesFilters
             keyword={keyword}
             setKeyword={setKeyword}
@@ -330,6 +441,7 @@ export function PoliciesPage() {
                 key={policy.id}
                 policy={policy}
                 nodes={nodes}
+                canManagePolicies={canManagePolicies}
                 selected={selectedPolicyIds.includes(policy.id)}
                 onToggleSelect={togglePolicySelection}
                 onEdit={openEditDialog}
@@ -349,10 +461,12 @@ export function PoliciesPage() {
                     <Button size="sm" variant="outline" onClick={resetFilters}>
                       {t('policies.clearFilter')}
                     </Button>
-                    <Button size="sm" onClick={openCreateDialog}>
-                      <Plus className="mr-1 size-4" aria-hidden="true" />
-                      {t('policies.addPolicy')}
-                    </Button>
+                    {canManagePolicies ? (
+                      <Button size="sm" onClick={openCreateDialog}>
+                        <Plus className="mr-1 size-4" aria-hidden="true" />
+                        {t('policies.addPolicy')}
+                      </Button>
+                    ) : null}
                   </div>
                 )}
               />
@@ -371,22 +485,25 @@ export function PoliciesPage() {
             <table className="min-w-[980px] text-left text-sm">
               <thead>
                 <tr className="border-b border-border bg-secondary text-mini uppercase tracking-wide text-muted-foreground">
-                  <th scope="col" className="w-10 px-3 py-2.5">
-                    <input
-                      type="checkbox"
-                      className="size-4 accent-primary rounded-sm"
-                      checked={pagedPolicies.length > 0 && pagedPolicies.every((p) => selectedPolicyIds.includes(p.id))}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedPolicyIds((prev) => Array.from(new Set([...prev, ...pagedPolicies.map((p) => p.id)])));
-                        } else {
-                          const pagedIds = new Set(pagedPolicies.map((p) => p.id));
-                          setSelectedPolicyIds((prev) => prev.filter((id) => !pagedIds.has(id)));
-                        }
-                      }}
-                      aria-label={t('policies.selectAllAriaLabel')}
-                    />
-                  </th>
+                  {canManagePolicies ? (
+                    <th scope="col" className="w-10 px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-primary rounded-sm"
+                        checked={pagedPolicies.length > 0 && pagedPolicies.every((p) => selectedPolicyIds.includes(p.id))}
+                        onChange={(e) => {
+                          if (authIdentityRef.current.role !== "admin") return;
+                          if (e.target.checked) {
+                            setSelectedPolicyIds((prev) => Array.from(new Set([...prev, ...pagedPolicies.map((p) => p.id)])));
+                          } else {
+                            const pagedIds = new Set(pagedPolicies.map((p) => p.id));
+                            setSelectedPolicyIds((prev) => prev.filter((id) => !pagedIds.has(id)));
+                          }
+                        }}
+                        aria-label={t('policies.selectAllAriaLabel')}
+                      />
+                    </th>
+                  ) : null}
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnName')}</th>
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnCron')}</th>
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnSource')}</th>
@@ -394,22 +511,26 @@ export function PoliciesPage() {
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnNodes')}</th>
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnLatestDrill')}</th>
                   <th scope="col" className="px-3 py-2.5">{t('policies.columnStatus')}</th>
-                  <th scope="col" className="px-3 py-2.5 text-right">{t('policies.columnActions')}</th>
+                  {canManagePolicies ? (
+                    <th scope="col" className="px-3 py-2.5 text-right">{t('policies.columnActions')}</th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
                 {filteredPolicies.length ? (
                   pagedPolicies.map((policy) => (
                     <tr key={policy.id} className="border-b border-border transition-colors duration-200 ease-out hover:bg-accent">
-                      <td className="px-3 py-2.5">
-                        <input
-                          type="checkbox"
-                          className="size-4 accent-primary rounded-sm"
-                          checked={selectedPolicyIds.includes(policy.id)}
-                          onChange={(e) => togglePolicySelection(policy.id, e.target.checked)}
-                          aria-label={t('policies.selectAriaLabel', { name: policy.name })}
-                        />
-                      </td>
+                      {canManagePolicies ? (
+                        <td className="px-3 py-2.5">
+                          <input
+                            type="checkbox"
+                            className="size-4 accent-primary rounded-sm"
+                            checked={selectedPolicyIds.includes(policy.id)}
+                            onChange={(e) => togglePolicySelection(policy.id, e.target.checked)}
+                            aria-label={t('policies.selectAriaLabel', { name: policy.name })}
+                          />
+                        </td>
+                      ) : null}
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5">
                           <p className="font-medium">{policy.name}</p>
@@ -450,50 +571,58 @@ export function PoliciesPage() {
                         )}
                       </td>
                       <td className="px-3 py-2.5">
-                        <Switch
-                          checked={policy.enabled}
-                          aria-label={t('policies.toggleAriaLabel', { action: policy.enabled ? t('common.disable') : t('common.enable'), name: policy.name })}
-                          onCheckedChange={() => void onTogglePolicy(policy)}
-                        />
+                        {canManagePolicies ? (
+                          <Switch
+                            checked={policy.enabled}
+                            aria-label={t('policies.toggleAriaLabel', { action: policy.enabled ? t('common.disable') : t('common.enable'), name: policy.name })}
+                            onCheckedChange={() => void onTogglePolicy(policy)}
+                          />
+                        ) : (
+                          <Badge tone={policy.enabled ? "success" : "neutral"}>
+                            {policy.enabled ? t('common.enabled') : t('common.disabled')}
+                          </Badge>
+                        )}
                       </td>
-                      <td className="px-3 py-2.5 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {policy.isTemplate && (
+                      {canManagePolicies ? (
+                        <td className="px-3 py-2.5 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            {policy.isTemplate && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                onClick={() => void onCloneFromTemplate(policy)}
+                                aria-label={t('policies.cloneAriaLabel', { name: policy.name })}
+                              >
+                                <Copy className="size-4" aria-hidden="true" />
+                              </Button>
+                            )}
                             <Button
                               variant="ghost"
                               size="icon"
                               className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                              onClick={() => void onCloneFromTemplate(policy)}
-                              aria-label={t('policies.cloneAriaLabel', { name: policy.name })}
+                              onClick={(event) => openEditDialog(policy, event.currentTarget)}
+                              aria-label={t('policies.editAriaLabel')}
                             >
-                              <Copy className="size-4" aria-hidden="true" />
+                              <Wrench className="size-4" aria-hidden="true" />
                             </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                            onClick={(event) => openEditDialog(policy, event.currentTarget)}
-                            aria-label={t('policies.editAriaLabel')}
-                          >
-                            <Wrench className="size-4" aria-hidden="true" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                            aria-label={t('policies.deleteAriaLabel', { name: policy.name })}
-                            onClick={() => onDelete(policy)}
-                          >
-                            <Trash2 className="size-4" aria-hidden="true" />
-                          </Button>
-                        </div>
-                      </td>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                              aria-label={t('policies.deleteAriaLabel', { name: policy.name })}
+                              onClick={() => onDelete(policy)}
+                            >
+                              <Trash2 className="size-4" aria-hidden="true" />
+                            </Button>
+                          </div>
+                        </td>
+                      ) : null}
                     </tr>
                   ))
                 ) : !loading && !requestFailed ? (
                   <tr>
-                    <td colSpan={9} className="px-3 py-5">
+                    <td colSpan={tableColumnCount} className="px-3 py-5">
                       <EmptyState
                         className="py-8"
                         title={t('policies.noMatchTitle')}
@@ -503,10 +632,12 @@ export function PoliciesPage() {
                             <Button size="sm" variant="outline" onClick={resetFilters}>
                               {t('policies.clearFilter')}
                             </Button>
-                            <Button size="sm" onClick={openCreateDialog}>
-                              <Plus className="mr-1 size-4" aria-hidden="true" />
-                              {t('policies.addPolicy')}
-                            </Button>
+                            {canManagePolicies ? (
+                              <Button size="sm" onClick={openCreateDialog}>
+                                <Plus className="mr-1 size-4" aria-hidden="true" />
+                                {t('policies.addPolicy')}
+                              </Button>
+                            ) : null}
                           </div>
                         )}
                       />
@@ -527,19 +658,22 @@ export function PoliciesPage() {
         </DataSurfaceContent>
       </DataSurface>
 
-      <PolicyEditorDialog
-        open={editorOpen}
-        onOpenChange={(open) => {
-          setEditorOpen(open);
-          if (!open) setEditingPolicy(null);
-        }}
-        onCloseAutoFocus={editorOnCloseAutoFocus}
-        editingPolicy={editingPolicy}
-        onSave={handleSave}
-        nodes={nodes}
-      />
+      {canManagePolicies ? (
+        <PolicyEditorDialog
+          open={editorOpen}
+          onOpenChange={(open) => {
+            if (open && authIdentityRef.current.role !== "admin") return;
+            setEditorOpen(open);
+            if (!open) setEditingPolicy(null);
+          }}
+          onCloseAutoFocus={editorOnCloseAutoFocus}
+          editingPolicy={editingPolicy}
+          onSave={handleSave}
+          nodes={nodes}
+        />
+      ) : null}
 
-      {dialog}
+      {canManagePolicies ? <PolicyConfirmHost key={`${token}:${role}`} confirmRef={confirmRef} /> : null}
     </div>
   );
 }

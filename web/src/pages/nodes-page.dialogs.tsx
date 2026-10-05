@@ -67,6 +67,7 @@ export type NodesPageDialogsProps = Pick<
   | "handleSaveNode"
   | "handleTestConnection"
   | "isAdmin"
+  | "canOperateNodes"
   | "hostKeyIssue"
   | "hostKeyTrusting"
   | "hostKeyError"
@@ -111,6 +112,7 @@ export function NodesPageDialogs({
   handleSaveNode,
   handleTestConnection,
   isAdmin,
+  canOperateNodes,
   hostKeyIssue,
   hostKeyTrusting,
   hostKeyError,
@@ -122,20 +124,22 @@ export function NodesPageDialogs({
 
   return (
     <>
-      <Suspense fallback={null}>
-        <NodeEditorDialog
-          open={editorOpen}
-          onOpenChange={handleEditorOpenChange}
-          onCloseAutoFocus={nodeEditorOnCloseAutoFocus}
-          editingNode={editingNode}
-          sshKeys={sshKeys}
-          onSave={handleSaveNode}
-          onTestConnection={handleTestConnection}
-        />
-      </Suspense>
+      {isAdmin && (
+        <Suspense fallback={null}>
+          <NodeEditorDialog
+            open={editorOpen}
+            onOpenChange={handleEditorOpenChange}
+            onCloseAutoFocus={nodeEditorOnCloseAutoFocus}
+            editingNode={editingNode}
+            sshKeys={sshKeys}
+            onSave={handleSaveNode}
+            onTestConnection={handleTestConnection}
+          />
+        </Suspense>
+      )}
 
       <Dialog
-        open={terminalNode !== null}
+        open={isAdmin && terminalNode !== null}
         onOpenChange={(open) => { if (!open) setTerminalNode(null); }}
       >
         <DialogContent
@@ -153,7 +157,7 @@ export function NodesPageDialogs({
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-hidden px-4 pb-4">
-            {terminalNode !== null && token !== null && (
+            {isAdmin && terminalNode !== null && token !== null && (
               <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t("nodes.terminalLoading")}</div>}>
                 <ErrorBoundary>
                   <WebTerminal
@@ -170,7 +174,7 @@ export function NodesPageDialogs({
       </Dialog>
 
       <NodeDoctorDialog
-        open={doctorNode !== null}
+        open={canOperateNodes && doctorNode !== null}
         node={doctorNode}
         result={doctorResult}
         loading={doctorLoading}
@@ -251,33 +255,36 @@ export function NodesPageDialogs({
         </Dialog>
       )}
 
+      {token && canOperateNodes && (
+        <ErrorBoundary>
+          <BatchCommandDialog
+            open={batchCmdOpen}
+            onOpenChange={setBatchCmdOpen}
+            nodes={nodes}
+            token={token}
+            defaultNodeIds={selectedNodeIds}
+            onSuccess={(result) => {
+              setBatchResultId(result.batchId);
+              setBatchRetain(result.retain);
+            }}
+          />
+        </ErrorBoundary>
+      )}
+
       {token && (
         <ErrorBoundary>
-          <>
-            <BatchCommandDialog
-              open={batchCmdOpen}
-              onOpenChange={setBatchCmdOpen}
-              nodes={nodes}
-              token={token}
-              defaultNodeIds={selectedNodeIds}
-              onSuccess={(result) => {
-                setBatchResultId(result.batchId);
-                setBatchRetain(result.retain);
-              }}
-            />
-            <BatchResultDialog
-              open={batchResultId !== null}
-              onOpenChange={(open) => { if (!open) setBatchResultId(null); }}
-              batchId={batchResultId}
-              retain={batchRetain}
-              token={token}
-            />
-          </>
+          <BatchResultDialog
+            open={batchResultId !== null}
+            onOpenChange={(open) => { if (!open) setBatchResultId(null); }}
+            batchId={batchResultId}
+            retain={batchRetain}
+            token={token}
+          />
         </ErrorBoundary>
       )}
 
       {/* 迁移节点向导 */}
-      {token && migrateSourceNode !== null && (
+      {isAdmin && token && migrateSourceNode !== null && (
         <Suspense fallback={null}>
           <ErrorBoundary>
             <NodeMigrateWizard

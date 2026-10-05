@@ -1,12 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { AuditPage } from "./audit-page";
 import type { AuditLogRecord } from "@/types/domain";
 import i18n from "@/i18n";
 
 const {
+  authState,
   getAuditLogsMock,
   exportAuditLogsCSVMock,
   toastSuccessMock,
@@ -23,6 +25,7 @@ const {
   }
 
   return {
+    authState: { token: "test-token" as string | null, role: "admin" as string | null },
     getAuditLogsMock: vi.fn(),
     exportAuditLogsCSVMock: vi.fn(),
     toastSuccessMock: vi.fn(),
@@ -46,9 +49,7 @@ function createMemoryStorage() {
 }
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({
-    token: "test-token",
-  }),
+  useAuth: () => authState,
 }));
 
 vi.mock("@/lib/api/client", () => {
@@ -67,6 +68,33 @@ vi.mock("@/components/ui/toast-sonner", () => ({
     error: toastErrorMock,
   },
 }));
+
+type AuditQueryResult = {
+  items: AuditLogRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+function auditResult(id: number, method = "GET"): AuditQueryResult {
+  return {
+    items: [createAuditLogRecord(id, method)],
+    total: 1,
+    page: 1,
+    pageSize: 30,
+  };
+}
+
+function pageSurface() {
+  return (
+    <MemoryRouter initialEntries={["/app/audit"]}>
+      <Routes>
+        <Route path="/app/audit" element={<AuditPage />} />
+        <Route path="/app/overview" element={<p>Overview destination</p>} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
 
 function createAuditLogRecord(id: number, method = "GET"): AuditLogRecord {
   return {
@@ -90,6 +118,8 @@ describe("AuditPage", () => {
       value: createMemoryStorage(),
     });
     window.localStorage.clear();
+    authState.token = "test-token";
+    authState.role = "admin";
     getAuditLogsMock.mockReset();
     exportAuditLogsCSVMock.mockReset();
     toastSuccessMock.mockReset();
@@ -302,5 +332,203 @@ describe("AuditPage", () => {
     await waitFor(() => {
       expect(toastErrorMock).toHaveBeenCalledWith("导出失败：网络异常");
     });
+  });
+
+  it.each(["operator", "viewer"])("redirects %s before loading or exporting audit logs", async (role) => {
+    authState.role = role;
+    render(pageSurface());
+
+    expect(await screen.findByText("Overview destination")).toBeInTheDocument();
+    expect(getAuditLogsMock).not.toHaveBeenCalled();
+    expect(exportAuditLogsCSVMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "审计" })).not.toBeInTheDocument();
+  });
+
+  it("ignores a superseded load's late success and loading reset", async () => {
+    const user = userEvent.setup();
+    let resolveOld!: (value: AuditQueryResult) => void;
+    let resolveNext!: (value: AuditQueryResult) => void;
+    getAuditLogsMock
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOld = resolve;
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveNext = resolve;
+      }));
+
+    render(<AuditPage />);
+    await waitFor(() => expect(getAuditLogsMock).toHaveBeenCalledTimes(1));
+    await user.selectOptions(screen.getByRole("combobox"), "POST");
+    await waitFor(() => expect(getAuditLogsMock).toHaveBeenCalledTimes(2));
+
+    const refresh = screen.getByRole("button", { name: "刷新" });
+    expect(refresh).toBeDisabled();
+    await act(async () => {
+      resolveOld(auditResult(1));
+    });
+    expect(within(screen.getByRole("table")).queryByText("user-1")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新" })).toBeDisabled();
+
+    await act(async () => {
+      resolveNext(auditResult(2, "POST"));
+    });
+    expect(within(screen.getByRole("table")).getByText("user-2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新" })).toBeEnabled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a superseded load's late failure without clearing the newer request", async () => {
+    const user = userEvent.setup();
+    let rejectOld!: (error: Error) => void;
+    let resolveNext!: (value: AuditQueryResult) => void;
+    getAuditLogsMock
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectOld = reject;
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveNext = resolve;
+      }));
+
+    render(<AuditPage />);
+    await waitFor(() => expect(getAuditLogsMock).toHaveBeenCalledTimes(1));
+    await user.selectOptions(screen.getByRole("combobox"), "DELETE");
+    await waitFor(() => expect(getAuditLogsMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      rejectOld(new ApiErrorMock(403, "forbidden"));
+    });
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "刷新" })).toBeDisabled();
+    expect(screen.queryAllByText("当前筛选条件下没有审计记录。")).toHaveLength(0);
+
+    await act(async () => {
+      resolveNext(auditResult(3, "DELETE"));
+    });
+    expect(within(screen.getByRole("table")).getByText("user-3")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新" })).toBeEnabled();
+  });
+
+  it("drops the audit view and ignores a pending load when admin access is lost", async () => {
+    let resolveOld!: (value: AuditQueryResult) => void;
+    getAuditLogsMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveOld = resolve;
+    }));
+    const view = render(pageSurface());
+    await waitFor(() => expect(getAuditLogsMock).toHaveBeenCalledTimes(1));
+
+    authState.role = "viewer";
+    view.rerender(pageSurface());
+    expect(await screen.findByText("Overview destination")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "审计" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveOld(auditResult(999));
+    });
+    expect(screen.queryAllByText("user-999")).toHaveLength(0);
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(getAuditLogsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not download or toast when an export finishes after unmount", async () => {
+    let resolveOld!: (blob: Blob) => void;
+    const createObjectURLSpy = vi.fn(() => "blob:late");
+    const revokeObjectURLSpy = vi.fn();
+    const linkClickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, writable: true, value: createObjectURLSpy });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, writable: true, value: revokeObjectURLSpy });
+
+    exportAuditLogsCSVMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveOld = resolve;
+    }));
+    try {
+      const view = render(<AuditPage />);
+      await waitFor(() => expect(screen.getByRole("button", { name: "导出 CSV" })).toBeEnabled());
+      await userEvent.setup().click(screen.getByRole("button", { name: "导出 CSV" }));
+      await waitFor(() => expect(exportAuditLogsCSVMock).toHaveBeenCalledTimes(1));
+
+      view.unmount();
+      await act(async () => {
+        resolveOld(new Blob(["late"]));
+      });
+
+      expect(createObjectURLSpy).not.toHaveBeenCalled();
+      expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+      expect(linkClickSpy).not.toHaveBeenCalled();
+      expect(toastSuccessMock).not.toHaveBeenCalled();
+      expect(toastErrorMock).not.toHaveBeenCalled();
+    } finally {
+      linkClickSpy.mockRestore();
+      Object.defineProperty(URL, "createObjectURL", { configurable: true, writable: true, value: originalCreate });
+      Object.defineProperty(URL, "revokeObjectURL", { configurable: true, writable: true, value: originalRevoke });
+    }
+  });
+
+  it("does not download or surface an export that loses the account before it settles", async () => {
+    const user = userEvent.setup();
+    let rejectOld!: (error: Error) => void;
+    exportAuditLogsCSVMock.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectOld = reject;
+    }));
+    const view = render(<AuditPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "导出 CSV" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "导出 CSV" }));
+    await waitFor(() => expect(exportAuditLogsCSVMock).toHaveBeenCalledTimes(1));
+
+    authState.token = "next-token";
+    getAuditLogsMock.mockResolvedValueOnce(auditResult(8));
+    view.rerender(<AuditPage />);
+    expect(await screen.findAllByText("user-8")).not.toHaveLength(0);
+    expect(screen.getByRole("button", { name: "导出 CSV" })).toBeEnabled();
+
+    await act(async () => {
+      rejectOld(new ApiErrorMock(403, "forbidden"));
+    });
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "导出 CSV" })).toBeEnabled();
+    expect(screen.getAllByText("user-8").length).toBeGreaterThan(0);
+  });
+
+  it("blocks another export while one is still running", async () => {
+    const user = userEvent.setup();
+    let resolveExport!: (blob: Blob) => void;
+    const createObjectURLSpy = vi.fn(() => "blob:only");
+    const revokeObjectURLSpy = vi.fn();
+    const linkClickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, writable: true, value: createObjectURLSpy });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, writable: true, value: revokeObjectURLSpy });
+    exportAuditLogsCSVMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveExport = resolve;
+    }));
+
+    try {
+      render(<AuditPage />);
+      await waitFor(() => expect(screen.getByRole("button", { name: "导出 CSV" })).toBeEnabled());
+      await user.click(screen.getByRole("button", { name: "导出 CSV" }));
+
+      const exporting = await screen.findByRole("button", { name: "导出中..." });
+      expect(exporting).toBeDisabled();
+      expect(exportAuditLogsCSVMock).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("button", { name: "导出 CSV" })).not.toBeInTheDocument();
+
+      await act(async () => {
+        resolveExport(new Blob(["only"]));
+      });
+      expect(exportAuditLogsCSVMock).toHaveBeenCalledTimes(1);
+      expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+      expect(revokeObjectURLSpy).toHaveBeenCalledWith("blob:only");
+      expect(linkClickSpy).toHaveBeenCalledTimes(1);
+      expect(toastSuccessMock).toHaveBeenCalledTimes(1);
+      expect(toastSuccessMock).toHaveBeenCalledWith("审计日志 CSV 导出成功。");
+      expect(screen.getByRole("button", { name: "导出 CSV" })).toBeEnabled();
+    } finally {
+      linkClickSpy.mockRestore();
+      Object.defineProperty(URL, "createObjectURL", { configurable: true, writable: true, value: originalCreate });
+      Object.defineProperty(URL, "revokeObjectURL", { configurable: true, writable: true, value: originalRevoke });
+    }
   });
 });

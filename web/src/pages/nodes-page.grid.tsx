@@ -41,6 +41,7 @@ export const NodesGrid = React.memo(function NodesGrid({
   onMigrate,
   emergencyNodeId,
   isAdmin,
+  canOperateNodes,
   canBrowseNodeFiles,
 }: NodesViewProps) {
   const { t } = useTranslation();
@@ -61,14 +62,16 @@ export const NodesGrid = React.memo(function NodesGrid({
             />
             <span>{t("common.selectAll")}</span>
           </div>
-          <Button
-            size="sm"
-            variant="destructive"
-            disabled={!selectedNodeIds.length}
-            onClick={() => void handleBulkDelete()}
-          >
-            {t("nodes.deleteCount", { count: selectedNodeIds.length })}
-          </Button>
+          {isAdmin ? (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={!selectedNodeIds.length}
+              onClick={() => void handleBulkDelete()}
+            >
+              {t("nodes.deleteCount", { count: selectedNodeIds.length })}
+            </Button>
+          ) : null}
         </div>
 
         {loading ? (
@@ -83,7 +86,7 @@ export const NodesGrid = React.memo(function NodesGrid({
             title={t("nodes.emptyTitle")}
             description={t("nodes.emptyDesc")}
             onReset={resetFilters}
-            onCreate={openCreateDialog}
+            onCreate={isAdmin ? openCreateDialog : undefined}
             createLabel={t("nodes.emptyCreateLabel")}
             createIcon={ServerCog}
           />
@@ -142,26 +145,30 @@ export const NodesGrid = React.memo(function NodesGrid({
 
               <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border pt-3">
                 <div className="flex flex-wrap items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
-                    onClick={() => void onTestNode(node)}
-                    disabled={testingNodeId === node.id}
-                  >
-                    {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
-                    onClick={() => onOpenDoctor?.(node)}
-                    disabled={doctorNodeId === node.id}
-                  >
-                    {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
-                  </Button>
+                  {canOperateNodes && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
+                      onClick={() => void onTestNode(node)}
+                      disabled={testingNodeId === node.id}
+                    >
+                      {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
+                    </Button>
+                  )}
+                  {canOperateNodes && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
+                      onClick={() => onOpenDoctor?.(node)}
+                      disabled={doctorNodeId === node.id}
+                    >
+                      {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -195,33 +202,66 @@ export const NodesGrid = React.memo(function NodesGrid({
                       <FolderOpen className="size-4" aria-hidden />
                     </Button>
                   )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
-                    onClick={(event) => openEditDialog(node, event.currentTarget)}
-                  >
-                    <Wrench className="size-4" aria-hidden />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                    aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
-                    onClick={() => onDeleteNode(node)}
-                  >
-                    <Trash2 className="size-4" aria-hidden />
-                  </Button>
+                  {isAdmin && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
+                      onClick={(event) => openEditDialog(node, event.currentTarget)}
+                    >
+                      <Wrench className="size-4" aria-hidden />
+                    </Button>
+                  )}
+                  {isAdmin && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                      aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
+                      onClick={() => onDeleteNode(node)}
+                    >
+                      <Trash2 className="size-4" aria-hidden />
+                    </Button>
+                  )}
                 </div>
-                <Button
-                  size="sm"
-                  disabled={triggeringNodeId === node.id}
-                  onClick={() => void handleTriggerBackup(node.id, node.name)}
-                >
-                  {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
-                  {t("nodes.manualBackup")}
-                </Button>
+                <div className="flex flex-wrap items-center gap-1">
+                  {canOperateNodes && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="text-xs"
+                      disabled={emergencyNodeId === node.id}
+                      onClick={() => onEmergencyBackup?.(node.id, node.name)}
+                      title={t("nodes.emergencyBackup")}
+                    >
+                      {emergencyNodeId === node.id ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <ShieldAlert className="mr-1 size-3.5" aria-hidden />}
+                      {t("nodes.emergencyBackup")}
+                    </Button>
+                  )}
+                  {isAdmin && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs"
+                      onClick={() => onMigrate?.(node)}
+                      title={t("nodes.migrateTo")}
+                    >
+                      <ArrowRightLeft className="mr-1 size-3.5" aria-hidden />
+                      {t("nodes.migrateShort")}
+                    </Button>
+                  )}
+                  {canOperateNodes && (
+                    <Button
+                      size="sm"
+                      disabled={triggeringNodeId === node.id}
+                      onClick={() => void handleTriggerBackup(node.id, node.name)}
+                    >
+                      {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
+                      {t("nodes.manualBackup")}
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           );
@@ -243,7 +283,7 @@ export const NodesGrid = React.memo(function NodesGrid({
             title={t("nodes.emptyTitle")}
             description={t("nodes.emptyDesc")}
             onReset={resetFilters}
-            onCreate={openCreateDialog}
+            onCreate={isAdmin ? openCreateDialog : undefined}
             createLabel={t("nodes.emptyCreateLabel")}
             createIcon={ServerCog}
           />
@@ -321,26 +361,30 @@ export const NodesGrid = React.memo(function NodesGrid({
 
               <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border pt-3">
                 <div className="flex flex-wrap items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
-                    onClick={() => void onTestNode(node)}
-                    disabled={testingNodeId === node.id}
-                  >
-                    {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
-                    onClick={() => onOpenDoctor?.(node)}
-                    disabled={doctorNodeId === node.id}
-                  >
-                    {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
-                  </Button>
+                  {canOperateNodes && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
+                      onClick={() => void onTestNode(node)}
+                      disabled={testingNodeId === node.id}
+                    >
+                      {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
+                    </Button>
+                  )}
+                  {canOperateNodes && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
+                      onClick={() => onOpenDoctor?.(node)}
+                      disabled={doctorNodeId === node.id}
+                    >
+                      {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -374,56 +418,66 @@ export const NodesGrid = React.memo(function NodesGrid({
                       <FolderOpen className="size-4" aria-hidden />
                     </Button>
                   )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
-                    onClick={(event) => openEditDialog(node, event.currentTarget)}
-                  >
-                    <Wrench className="size-4" aria-hidden />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                    aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
-                    onClick={() => onDeleteNode(node)}
-                  >
-                    <Trash2 className="size-4" aria-hidden />
-                  </Button>
+                  {isAdmin && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
+                      onClick={(event) => openEditDialog(node, event.currentTarget)}
+                    >
+                      <Wrench className="size-4" aria-hidden />
+                    </Button>
+                  )}
+                  {isAdmin && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                      aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
+                      onClick={() => onDeleteNode(node)}
+                    >
+                      <Trash2 className="size-4" aria-hidden />
+                    </Button>
+                  )}
                 </div>
                 <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    className="text-xs"
-                    disabled={emergencyNodeId === node.id}
-                    onClick={() => onEmergencyBackup?.(node.id, node.name)}
-                    title={t("nodes.emergencyBackup")}
-                  >
-                    {emergencyNodeId === node.id ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <ShieldAlert className="mr-1 size-3.5" aria-hidden />}
-                    {t("nodes.emergencyBackup")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="text-xs"
-                    onClick={() => onMigrate?.(node)}
-                    title={t("nodes.migrateTo")}
-                  >
-                    <ArrowRightLeft className="mr-1 size-3.5" aria-hidden />
-                    {t("nodes.migrateShort")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={triggeringNodeId === node.id}
-                    onClick={() => void handleTriggerBackup(node.id, node.name)}
-                  >
-                    {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
-                    {t("nodes.manualBackup")}
-                  </Button>
+                  {canOperateNodes && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="text-xs"
+                      disabled={emergencyNodeId === node.id}
+                      onClick={() => onEmergencyBackup?.(node.id, node.name)}
+                      title={t("nodes.emergencyBackup")}
+                    >
+                      {emergencyNodeId === node.id ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <ShieldAlert className="mr-1 size-3.5" aria-hidden />}
+                      {t("nodes.emergencyBackup")}
+                    </Button>
+                  )}
+                  {isAdmin && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs"
+                      onClick={() => onMigrate?.(node)}
+                      title={t("nodes.migrateTo")}
+                    >
+                      <ArrowRightLeft className="mr-1 size-3.5" aria-hidden />
+                      {t("nodes.migrateShort")}
+                    </Button>
+                  )}
+                  {canOperateNodes && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={triggeringNodeId === node.id}
+                      onClick={() => void handleTriggerBackup(node.id, node.name)}
+                    >
+                      {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
+                      {t("nodes.manualBackup")}
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>

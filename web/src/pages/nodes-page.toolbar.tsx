@@ -17,28 +17,33 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
-import { toast } from "@/components/ui/toast-sonner";
-import { getErrorMessage } from "@/lib/utils";
 import type { NodesPageState } from "@/pages/nodes-page.state";
 
-export type NodesPageToolbarProps = Pick<
-  NodesPageState,
-  | "viewMode"
-  | "setViewMode"
-  | "groupView"
-  | "setGroupView"
-  | "selectedNodeIds"
-  | "setSelectedNodeIds"
-  | "allVisibleSelected"
-  | "csvInputRef"
-  | "toggleSelectAllVisible"
-  | "handleBulkDelete"
-  | "handleImportCSV"
-  | "handleExportCSV"
-  | "handleDownloadTemplate"
-  | "setBatchCmdOpen"
-  | "resetFilters"
->;
+export type NodesPageToolbarProps = Omit<
+  Pick<
+    NodesPageState,
+    | "viewMode"
+    | "setViewMode"
+    | "groupView"
+    | "setGroupView"
+    | "selectedNodeIds"
+    | "setSelectedNodeIds"
+    | "allVisibleSelected"
+    | "csvInputRef"
+    | "toggleSelectAllVisible"
+    | "handleBulkDelete"
+    | "handleImportCSV"
+    | "handleExportCSV"
+    | "handleDownloadTemplate"
+    | "setBatchCmdOpen"
+    | "resetFilters"
+    | "isAdmin"
+    | "canOperateNodes"
+  >,
+  "setBatchCmdOpen"
+> & {
+  setBatchCmdOpen: (open: boolean) => void;
+};
 
 export function NodesPageToolbar({
   viewMode,
@@ -56,6 +61,8 @@ export function NodesPageToolbar({
   handleDownloadTemplate,
   setBatchCmdOpen,
   resetFilters,
+  isAdmin,
+  canOperateNodes,
 }: NodesPageToolbarProps) {
   const { t } = useTranslation();
 
@@ -70,10 +77,12 @@ export function NodesPageToolbar({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          <DropdownMenuItem onClick={() => csvInputRef.current?.click()}>
-            <FileUp className="mr-2 size-3.5" />
-            {t("nodes.csvImport")}
-          </DropdownMenuItem>
+          {isAdmin && (
+            <DropdownMenuItem onClick={() => csvInputRef.current?.click()}>
+              <FileUp className="mr-2 size-3.5" />
+              {t("nodes.csvImport")}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={handleDownloadTemplate}>
             <Download className="mr-2 size-3.5" />
             {t("nodes.downloadTemplate")}
@@ -85,17 +94,19 @@ export function NodesPageToolbar({
         </DropdownMenuContent>
       </DropdownMenu>
       {/* 平板/桌面端：展示独立按钮 */}
-      <Button
-        variant="outline"
-        size="sm"
-        className="hidden shrink-0 md:inline-flex"
-        onClick={() => {
-          csvInputRef.current?.click();
-        }}
-      >
-        <FileUp className="mr-1 size-3.5" />
-        {t("nodes.csvImport")}
-      </Button>
+      {isAdmin && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="hidden shrink-0 md:inline-flex"
+          onClick={() => {
+            csvInputRef.current?.click();
+          }}
+        >
+          <FileUp className="mr-1 size-3.5" />
+          {t("nodes.csvImport")}
+        </Button>
+      )}
       <Button
         variant="outline"
         size="sm"
@@ -109,26 +120,23 @@ export function NodesPageToolbar({
         <Download className="mr-1 size-3.5" />
         {t("nodes.exportShort")}
       </Button>
-      <input
-        ref={csvInputRef}
-        type="file"
-        accept=".csv,text/csv"
-        className="hidden"
-        aria-label={t("nodes.csvImport")}
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (!file) {
-            return;
-          }
-          void file
-            .text()
-            .then((content) => handleImportCSV(content))
-            .catch((error) =>
-              toast.error(getErrorMessage(error))
-            );
-          event.target.value = "";
-        }}
-      />
+      {isAdmin && (
+        <input
+          ref={csvInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          aria-label={t("nodes.csvImport")}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (!file || !isAdmin) {
+              return;
+            }
+            void handleImportCSV(file);
+          }}
+        />
+      )}
       {/* 分隔线：区分操作与视图/工具 */}
       <div className="hidden h-6 w-px bg-border md:block" aria-hidden="true" />
       <ViewModeToggle
@@ -168,22 +176,26 @@ export function NodesPageToolbar({
             {t("nodes.clearSelection")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem
-            disabled={!selectedNodeIds.length}
-            onClick={() => setBatchCmdOpen(true)}
-          >
-            <Terminal className="mr-2 size-3.5" />
-            {t("nodes.batchCommandCount", { count: selectedNodeIds.length })}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            disabled={!selectedNodeIds.length}
-            className="text-destructive focus:text-destructive"
-            onClick={() => void handleBulkDelete()}
-          >
-            <Trash2 className="mr-2 size-3.5" />
-            {t("nodes.deleteCount", { count: selectedNodeIds.length })}
-          </DropdownMenuItem>
+          {canOperateNodes && (
+            <DropdownMenuItem
+              disabled={!selectedNodeIds.length}
+              onClick={() => setBatchCmdOpen(true)}
+            >
+              <Terminal className="mr-2 size-3.5" />
+              {t("nodes.batchCommandCount", { count: selectedNodeIds.length })}
+            </DropdownMenuItem>
+          )}
+          {isAdmin && <DropdownMenuSeparator />}
+          {isAdmin && (
+            <DropdownMenuItem
+              disabled={!selectedNodeIds.length}
+              className="text-destructive focus:text-destructive"
+              onClick={() => void handleBulkDelete()}
+            >
+              <Trash2 className="mr-2 size-3.5" />
+              {t("nodes.deleteCount", { count: selectedNodeIds.length })}
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       <Button size="sm" variant="outline" onClick={resetFilters}>

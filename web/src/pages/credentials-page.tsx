@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Shield, Trash2 } from "lucide-react";
+import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,7 +26,8 @@ import {
 import { getErrorMessage } from "@/lib/utils";
 
 export function CredentialsPage() {
-  const { token } = useAuth();
+  const { token, role } = useAuth();
+  if (role !== "admin") return <Navigate to="/app/overview" replace />;
   return <CredentialsPageContent key={token ?? ""} />;
 }
 

@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -22,7 +23,7 @@ const {
 } = vi.hoisted(() => ({
   toastSuccessMock: vi.fn(),
   toastErrorMock: vi.fn(),
-  authRef: { current: { role: "admin" as const, token: "test-token" } },
+  authRef: { current: { role: "admin" as "admin" | "operator" | "viewer", token: "test-token" } },
   getTasksMock: vi.fn(),
   grantMock: vi.fn(),
   emergencyBackupMock: vi.fn(),
@@ -63,6 +64,7 @@ function createStepUpRequiredError() {
 }
 
 const confirmMock = vi.fn().mockResolvedValue(true);
+const cancelPendingMock = vi.fn();
 const searchParamsRef = { current: new URLSearchParams() };
 const sharedRef: { current: Record<string, unknown> } = { current: {} };
 const nodesRef: { current: Record<string, unknown> } = { current: {} };
@@ -87,7 +89,7 @@ vi.mock("@/context/ssh-keys-context.hooks", () => ({
   useSSHKeysContext: () => sshKeysRef.current,
 }));
 vi.mock("@/hooks/use-confirm", () => ({
-  useConfirm: () => ({ confirm: confirmMock, dialog: null }),
+  useConfirm: () => ({ confirm: confirmMock, dialog: null, cancelPending: cancelPendingMock }),
 }));
 vi.mock("@/components/node-editor-dialog", () => ({
   NodeEditorDialog: () => null,
@@ -337,5 +339,192 @@ describe("emergency backup stale step-up", () => {
     expect(emergencyBackupMock).toHaveBeenCalledWith("test-token", 1, PROOF);
     expect(toastSuccessMock).toHaveBeenCalledWith("紧急备份已触发：1 个任务已启动。");
     expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("确认等待期间降级后不再读取库存、授权或提交", async () => {
+    const user = userEvent.setup();
+    const pendingConfirm = createDeferred<boolean>();
+    confirmMock.mockImplementationOnce(() => pendingConfirm.promise);
+    getTasksMock.mockResolvedValue([policyTask(7)]);
+
+    const view = renderNodesPage();
+    await clickEmergency(user);
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledTimes(1);
+    });
+
+    authRef.current.role = "viewer";
+    view.rerender(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      pendingConfirm.resolve(true);
+    });
+
+    expect(getTasksMock).not.toHaveBeenCalled();
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expectNoStepUpPromptOrFollowUp();
+  });
+
+  it("库存等待期间降级后中止读取且不再授权或提交", async () => {
+    const user = userEvent.setup();
+    const pendingInventory = createDeferred<ReturnType<typeof policyTask>[]>();
+    getTasksMock.mockReturnValue(pendingInventory.promise);
+    grantMock.mockResolvedValue({ id: 1, status: "active" });
+    emergencyBackupMock.mockResolvedValue({ triggered: 1, taskIds: [7], errors: [] });
+
+    const view = renderNodesPage();
+    await clickEmergency(user);
+    await waitFor(() => {
+      expect(getTasksMock).toHaveBeenCalledTimes(1);
+    });
+    const signal = (getTasksMock.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined)?.signal;
+
+    authRef.current.role = "viewer";
+    view.rerender(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>,
+    );
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {
+      pendingInventory.resolve([policyTask(7)]);
+    });
+
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expectNoStepUpPromptOrFollowUp();
+  });
+
+  it("确认等待期间身份从管理员到操作员再回到管理员后仍不读取库存", async () => {
+    const user = userEvent.setup();
+    const pendingConfirm = createDeferred<boolean>();
+    confirmMock.mockImplementationOnce(() => pendingConfirm.promise);
+    getTasksMock.mockResolvedValue([policyTask(7)]);
+    grantMock.mockResolvedValue({ id: 1, status: "active" });
+    emergencyBackupMock.mockResolvedValue({ triggered: 1, taskIds: [7], errors: [] });
+
+    const view = renderNodesPage();
+    await clickEmergency(user);
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledTimes(1);
+    });
+
+    authRef.current.role = "operator";
+    view.rerender(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>,
+    );
+    authRef.current.role = "admin";
+    view.rerender(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      pendingConfirm.resolve(true);
+    });
+
+    expect(getTasksMock).not.toHaveBeenCalled();
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expectNoStepUpPromptOrFollowUp();
+
+    await clickEmergency(user);
+    await waitFor(() => {
+      expect(emergencyBackupMock).toHaveBeenCalledTimes(1);
+    });
+    expect(getTasksMock).toHaveBeenCalledTimes(1);
+    expect(grantMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("库存等待期间身份从管理员到只读再回到管理员后仍不授权或提交", async () => {
+    const user = userEvent.setup();
+    const pendingInventory = createDeferred<ReturnType<typeof policyTask>[]>();
+    getTasksMock.mockReturnValueOnce(pendingInventory.promise);
+    grantMock.mockResolvedValue({ id: 1, status: "active" });
+    emergencyBackupMock.mockResolvedValue({ triggered: 1, taskIds: [7], errors: [] });
+
+    const view = renderNodesPage();
+    await clickEmergency(user);
+    await waitFor(() => {
+      expect(getTasksMock).toHaveBeenCalledTimes(1);
+    });
+
+    authRef.current.role = "viewer";
+    view.rerender(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>,
+    );
+    authRef.current.role = "admin";
+    view.rerender(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      pendingInventory.resolve([policyTask(7)]);
+    });
+
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expectNoStepUpPromptOrFollowUp();
+  });
+
+  it("StrictMode 挂载后令牌更换先失效在途库存，新一代仍可提交", async () => {
+    const user = userEvent.setup();
+    const pendingInventory = createDeferred<ReturnType<typeof policyTask>[]>();
+    getTasksMock.mockReturnValueOnce(pendingInventory.promise);
+    getTasksMock.mockResolvedValueOnce([]);
+    emergencyBackupMock.mockResolvedValue({ triggered: 0, taskIds: [], errors: [] });
+
+    const view = render(
+      <StrictMode>
+        <MemoryRouter>
+          <NodesPage />
+        </MemoryRouter>
+      </StrictMode>,
+    );
+    await clickEmergency(user);
+    await waitFor(() => {
+      expect(getTasksMock).toHaveBeenCalledTimes(1);
+    });
+    expect(getTasksMock).toHaveBeenCalledWith("test-token", expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
+    const signal = (getTasksMock.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined)?.signal;
+    expect(signal?.aborted).toBe(false);
+
+    authRef.current = { role: "admin", token: "next-token" };
+    view.rerender(
+      <StrictMode>
+        <MemoryRouter>
+          <NodesPage />
+        </MemoryRouter>
+      </StrictMode>,
+    );
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {
+      pendingInventory.resolve([policyTask(7)]);
+    });
+
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expectNoStepUpPromptOrFollowUp();
+
+    await clickEmergency(user);
+    await waitFor(() => {
+      expect(emergencyBackupMock).toHaveBeenCalledTimes(1);
+    });
+    expect(getTasksMock).toHaveBeenNthCalledWith(2, "next-token", expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
+    expect(emergencyBackupMock).toHaveBeenCalledWith("next-token", 1, undefined);
+    expect(grantMock).not.toHaveBeenCalled();
   });
 });

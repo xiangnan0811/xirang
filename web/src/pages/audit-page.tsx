@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, RefreshCw, Search } from "lucide-react";
+import { Navigate } from "react-router-dom";
 import { useAuth } from "@/context/auth-context.hooks";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
@@ -59,6 +60,12 @@ function resolveTimeRange(range: TimeRange): { from?: string; to?: string } {
 }
 
 export function AuditPage() {
+  const { token, role } = useAuth();
+  if (role !== "admin") return <Navigate to="/app/overview" replace />;
+  return <AuditPageContent key={token ?? ""} />;
+}
+
+function AuditPageContent() {
   const { t } = useTranslation();
   const { token } = useAuth();
   const [rows, setRows] = useState<AuditLogRecord[]>([]);
@@ -71,6 +78,14 @@ export function AuditPage() {
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
 
   const autoLoadKeyRef = useRef("");
+  const requestLifetimeRef = useRef({ mounted: true, loadId: 0, exportId: 0 });
+  useEffect(() => {
+    const lifetime = requestLifetimeRef.current;
+    lifetime.mounted = true;
+    return () => {
+      lifetime.mounted = false;
+    };
+  }, []);
 
   const auditStats = useMemo(() => {
     let writeOps = 0;
@@ -101,6 +116,9 @@ export function AuditPage() {
       return;
     }
 
+    const lifetime = requestLifetimeRef.current;
+    const requestId = ++lifetime.loadId;
+    const stillCurrent = () => lifetime.mounted && lifetime.loadId === requestId;
     const { from, to } = resolveTimeRange(timeRange);
 
     setLoading(true);
@@ -113,17 +131,19 @@ export function AuditPage() {
         pageSize,
         page: nextPage,
       });
+      if (!stillCurrent()) return;
       setRows(result.items);
       setTotal(result.total);
       setPage(result.page);
     } catch (error) {
+      if (!stillCurrent()) return;
       if (error instanceof ApiError && error.status === 403) {
         toast.error(t("audit.errorForbidden"));
       } else {
         toast.error(getErrorMessage(error));
       }
     } finally {
-      setLoading(false);
+      if (stillCurrent()) setLoading(false);
     }
   };
 
@@ -133,6 +153,9 @@ export function AuditPage() {
       return;
     }
 
+    const lifetime = requestLifetimeRef.current;
+    const requestId = ++lifetime.exportId;
+    const stillCurrent = () => lifetime.mounted && lifetime.exportId === requestId;
     const { from, to } = resolveTimeRange(timeRange);
 
     setExporting(true);
@@ -144,6 +167,7 @@ export function AuditPage() {
         to,
         pageSize: 5000,
       });
+      if (!stillCurrent()) return;
 
       const link = document.createElement("a");
       const url = URL.createObjectURL(blob);
@@ -154,13 +178,14 @@ export function AuditPage() {
 
       toast.success(t("audit.exportSuccess"));
     } catch (error) {
+      if (!stillCurrent()) return;
       if (error instanceof ApiError && error.status === 403) {
         toast.error(t("audit.errorExportForbidden"));
       } else {
         toast.error(getErrorMessage(error));
       }
     } finally {
-      setExporting(false);
+      if (stillCurrent()) setExporting(false);
     }
   };
 

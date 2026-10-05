@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   CheckCircle2,
@@ -18,6 +18,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { apiClient } from "@/lib/api/client";
+import { useAuth } from "@/context/auth-context.hooks";
+import type { AuthRole } from "@/context/auth-context.shared";
 import type { BatchStatus } from "@/lib/api/batch-api";
 import type { LogEvent } from "@/types/domain";
 
@@ -27,6 +29,13 @@ type BatchResultDialogProps = {
   batchId: string | null;
   retain: boolean;
   token: string;
+};
+
+type BatchResultLifetime = {
+  generation: number;
+  token: string;
+  role: AuthRole | null;
+  open: boolean;
 };
 
 const statusIcon: Record<string, React.ReactNode> = {
@@ -44,7 +53,7 @@ function isBatchTaskActive(task: BatchStatus["tasks"][number]) {
 }
 
 export function BatchResultDialog(props: BatchResultDialogProps) {
-  return <BatchResultSession key={`${props.open}:${props.batchId}`} {...props} />;
+  return <BatchResultSession key={JSON.stringify([props.open, props.batchId, props.token])} {...props} />;
 }
 
 function BatchResultSession({
@@ -55,13 +64,40 @@ function BatchResultSession({
   token,
 }: BatchResultDialogProps) {
   const { t } = useTranslation();
+  const { role } = useAuth();
+  const lifetimeRef = useRef<BatchResultLifetime>({
+    generation: 0,
+    token,
+    role,
+    open,
+  });
+  const statusTokenRef = useRef<string | null>(null);
   const [status, setStatus] = useState<BatchStatus | null>(null);
   const [error, setError] = useState("");
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null);
   const [taskLogs, setTaskLogs] = useState<Record<number, LogEvent[]>>({});
   const [loadingLogs, setLoadingLogs] = useState<number | null>(null);
+  const [appliedRole, setAppliedRole] = useState(role);
+  if (appliedRole !== role) {
+    setAppliedRole(role);
+    setLoadingLogs(null);
+  }
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const taskLogsRef = useRef<Record<number, LogEvent[]>>({});
+  useLayoutEffect(() => {
+    lifetimeRef.current = {
+      generation: lifetimeRef.current.generation + 1,
+      token,
+      role,
+      open,
+    };
+    return () => {
+      lifetimeRef.current = {
+        ...lifetimeRef.current,
+        generation: lifetimeRef.current.generation + 1,
+      };
+    };
+  }, [open, role, token]);
 
   const stopPolling = useCallback(() => {
     if (intervalRef.current) {
@@ -72,7 +108,12 @@ function BatchResultSession({
 
   const fetchStatus = useCallback(() => {
     if (!batchId) return;
-    return apiClient.getBatchStatus(token, batchId).then((result) => {
+    const generation = lifetimeRef.current.generation;
+    const requestToken = lifetimeRef.current.token;
+    if (!requestToken) return;
+    return apiClient.getBatchStatus(requestToken, batchId).then((result) => {
+      if (lifetimeRef.current.generation !== generation) return;
+      statusTokenRef.current = requestToken;
       setStatus(result);
       setError("");
 
@@ -81,13 +122,14 @@ function BatchResultSession({
         stopPolling();
       }
     }).catch((err: unknown) => {
+      if (lifetimeRef.current.generation !== generation) return;
       setError(err instanceof Error ? err.message : t("batch.fetchStatusFailed"));
     });
-  }, [batchId, token, stopPolling, t]);
+  }, [batchId, stopPolling, t]);
 
   // 打开时开始轮询
   useEffect(() => {
-    if (!open || !batchId) {
+    if (!open || !batchId || !token) {
       stopPolling();
       return;
     }
@@ -98,26 +140,33 @@ function BatchResultSession({
     }, 3_000);
 
     return stopPolling;
-  }, [open, batchId, fetchStatus, stopPolling]);
+  }, [open, batchId, token, role, fetchStatus, stopPolling]);
 
   // 加载单个任务的日志输出
   const loadTaskLogs = useCallback(
     async (taskId: number) => {
-      if (taskLogsRef.current[taskId]) return; // 已加载
+      if (taskLogsRef.current[taskId]) return;
+      const generation = lifetimeRef.current.generation;
+      const requestToken = lifetimeRef.current.token;
+      if (!requestToken) return;
       setLoadingLogs(taskId);
       try {
-        const logs = await apiClient.getTaskLogs(token, taskId, { limit: 50 });
+        const logs = await apiClient.getTaskLogs(requestToken, taskId, { limit: 50 });
+        if (lifetimeRef.current.generation !== generation) return;
         taskLogsRef.current[taskId] = logs;
         setTaskLogs((prev) => ({ ...prev, [taskId]: logs }));
       } catch {
+        if (lifetimeRef.current.generation !== generation) return;
         const fallback: LogEvent[] = [{ id: "0", level: "error", message: t("batch.logLoadFailed"), timestamp: "" }];
         taskLogsRef.current[taskId] = fallback;
         setTaskLogs((prev) => ({ ...prev, [taskId]: fallback }));
       } finally {
-        setLoadingLogs(null);
+        if (lifetimeRef.current.generation === generation) {
+          setLoadingLogs(null);
+        }
       }
     },
-    [token, t]
+    [t]
   );
 
   const handleToggleExpand = useCallback(
@@ -142,14 +191,26 @@ function BatchResultSession({
   // 关闭时清理
   const handleClose = useCallback(
     (nextOpen: boolean) => {
-      const settled = status?.tasks.every((task) => !isBatchTaskActive(task)) ?? false;
-      if (!nextOpen && batchId && !retain && settled) {
-        // 后台清理，不阻塞关闭
-        void apiClient.deleteBatch(token, batchId).catch(() => {});
+      try {
+        if (!nextOpen) {
+          const current = lifetimeRef.current;
+          const settled = status?.tasks.every((task) => !isBatchTaskActive(task)) ?? false;
+          if (
+            batchId
+            && !retain
+            && settled
+            && current.token.length > 0
+            && statusTokenRef.current === current.token
+            && (current.role === "admin" || current.role === "operator")
+          ) {
+            void apiClient.deleteBatch(current.token, batchId).catch(() => {});
+          }
+        }
+      } finally {
+        onOpenChange(nextOpen);
       }
-      onOpenChange(nextOpen);
     },
-    [batchId, retain, token, onOpenChange, status]
+    [batchId, retain, onOpenChange, status]
   );
 
   const allDone = status

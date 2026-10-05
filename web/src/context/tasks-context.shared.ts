@@ -10,9 +10,9 @@ export interface TasksContextValue {
   createTask: (input: NewTaskInput) => Promise<number>;
   updateTask: (taskId: number, input: UpdateTaskInput) => Promise<void>;
   deleteTask: (taskId: number) => Promise<void>;
-  triggerTask: (taskId: number) => Promise<void>;
+  triggerTask: (taskId: number, isCurrent?: () => boolean) => Promise<void>;
   cancelTask: (taskId: number) => Promise<void>;
-  retryTask: (taskId: number) => Promise<void>;
+  retryTask: (taskId: number, isCurrent?: () => boolean) => Promise<void>;
   pauseTask: (taskId: number, cancelRunning?: boolean) => Promise<void>;
   resumeTask: (taskId: number) => Promise<void>;
   skipNextTask: (taskId: number) => Promise<void>;

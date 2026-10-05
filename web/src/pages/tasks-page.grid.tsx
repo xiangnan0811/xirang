@@ -32,6 +32,8 @@ export const TasksGrid = React.memo(function TasksGrid({
   onManageRsyncVersioning,
   canManageRcloneVersioning,
   onManageRcloneVersioning,
+  canWriteTasks,
+  canTriggerTasks,
   selectedTaskSet,
   toggleTaskSelection,
 }: TasksViewProps) {
@@ -64,13 +66,15 @@ export const TasksGrid = React.memo(function TasksGrid({
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  className="size-4 accent-primary rounded-sm"
-                  checked={selectedTaskSet.has(task.id)}
-                  onChange={(e) => toggleTaskSelection(task.id, e.target.checked)}
-                  aria-label={t('tasks.selectTaskAriaLabel', { name: task.name || task.policyName })}
-                />
+                {canWriteTasks ? (
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-primary rounded-sm"
+                    checked={selectedTaskSet.has(task.id)}
+                    onChange={(e) => toggleTaskSelection(task.id, e.target.checked)}
+                    aria-label={t('tasks.selectTaskAriaLabel', { name: task.name || task.policyName })}
+                  />
+                ) : null}
                 <div className="flex items-center gap-1.5">
                   {isRunning && (
                     <span
@@ -157,16 +161,18 @@ export const TasksGrid = React.memo(function TasksGrid({
 
             <div className="mt-auto flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
               <div className="flex flex-wrap items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label={t('tasks.retryAriaLabel')}
-                  disabled={task.status !== "failed" || isPendingAny}
-                  onClick={() => void handleRetry(task.id)}
-                >
-                  {isPendingRetry ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
-                </Button>
+                {canTriggerTasks ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    aria-label={t('tasks.retryAriaLabel')}
+                    disabled={task.status !== "failed" || isPendingAny}
+                    onClick={() => void handleRetry(task.id)}
+                  >
+                    {isPendingRetry ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                  </Button>
+                ) : null}
                 {canManageRsyncVersioning && task.executorType === "rsync" && task.rsyncPublication ? (
                   <Button
                     variant="ghost"
@@ -236,17 +242,19 @@ export const TasksGrid = React.memo(function TasksGrid({
                 >
                   <History className="size-4" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label={t('tasks.editAriaLabel')}
-                  disabled={isPendingAny}
-                  onClick={(event) => onEdit(task, event.currentTarget)}
-                >
-                  <Pencil className="size-4" />
-                </Button>
-                {task.enabled !== false ? (
+                {canWriteTasks ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    aria-label={t('tasks.editAriaLabel')}
+                    disabled={isPendingAny}
+                    onClick={(event) => onEdit(task, event.currentTarget)}
+                  >
+                    <Pencil className="size-4" />
+                  </Button>
+                ) : null}
+                {canWriteTasks && task.enabled !== false ? (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -257,7 +265,8 @@ export const TasksGrid = React.memo(function TasksGrid({
                   >
                     <Pause className="size-4" />
                   </Button>
-                ) : (
+                ) : null}
+                {canWriteTasks && task.enabled === false ? (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -268,28 +277,33 @@ export const TasksGrid = React.memo(function TasksGrid({
                   >
                     <Play className="size-4" />
                   </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label={t('tasks.cancelAriaLabel')}
-                  disabled={!canCancel(task.status) || isPendingAny}
-                  onClick={() => void handleCancel(task.id)}
-                >
-                  {isPendingCancel ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                  aria-label={t('tasks.deleteAriaLabel')}
-                  disabled={isPendingAny}
-                  onClick={() => void handleDelete(task.id)}
-                >
-                  {isPendingDelete ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                </Button>
+                ) : null}
+                {canWriteTasks ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    aria-label={t('tasks.cancelAriaLabel')}
+                    disabled={!canCancel(task.status) || isPendingAny}
+                    onClick={() => void handleCancel(task.id)}
+                  >
+                    {isPendingCancel ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}
+                  </Button>
+                ) : null}
+                {canWriteTasks ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                    aria-label={t('tasks.deleteAriaLabel')}
+                    disabled={isPendingAny}
+                    onClick={() => void handleDelete(task.id)}
+                  >
+                    {isPendingDelete ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                  </Button>
+                ) : null}
               </div>
+              {canTriggerTasks ? (
               <Button
                 size="sm"
                 disabled={!canTrigger(task) || !!task.dependsOnTaskId || isPendingAny}
@@ -299,6 +313,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                 {isPendingTrigger ? <Loader2 className="mr-1 size-4 animate-spin" /> : <Play className="mr-1 size-4" />}
                 {t('tasks.trigger')}
               </Button>
+              ) : null}
             </div>
           </div>
         );
@@ -309,7 +324,7 @@ export const TasksGrid = React.memo(function TasksGrid({
           title={t('tasks.emptyTitle')}
           description={t('tasks.emptyDesc')}
           onReset={resetFilters}
-          onCreate={(event) => setCreateDialogOpen(true, event.currentTarget)}
+          onCreate={canWriteTasks ? (event) => setCreateDialogOpen(true, event.currentTarget) : undefined}
           createLabel={t('tasks.emptyCreateLabel')}
           createIcon={Plus}
         />

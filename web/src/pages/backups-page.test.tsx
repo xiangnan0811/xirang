@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -86,6 +86,7 @@ const {
   listBackupFileSourceVersionsMock,
   resolveBackupFileSourceRecoveryPointMock,
   getRecoveryPlanMock,
+  getRecoveryJobMock,
   verifyMountMock,
 } = vi.hoisted(() => ({
   authRef: {
@@ -110,6 +111,7 @@ const {
   listBackupFileSourceVersionsMock: vi.fn(),
   resolveBackupFileSourceRecoveryPointMock: vi.fn(),
   getRecoveryPlanMock: vi.fn(),
+  getRecoveryJobMock: vi.fn(),
   verifyMountMock: vi.fn(),
 }));
 
@@ -188,11 +190,11 @@ vi.mock("@/lib/api/backup-recovery-api", async (importOriginal) => {
     createBackupRecoveryApi: () => ({
       createPlan: vi.fn(),
       getPlan: getRecoveryPlanMock,
+      getJob: getRecoveryJobMock,
       preflight: vi.fn(),
       overrideSecurity: vi.fn(),
       authorizeWrite: vi.fn(),
       execute: vi.fn(),
-      getJob: vi.fn(),
       authorizeExactMirrorDelete: vi.fn(),
       getJobItems: vi.fn(),
       getJobResults: vi.fn(),
@@ -263,6 +265,7 @@ describe("BackupsPage", () => {
       reason: { code: "unknown_internal_state", params: {} },
     });
     getRecoveryPlanMock.mockReset();
+    getRecoveryJobMock.mockReset();
     verifyMountMock.mockReset();
   });
 
@@ -727,13 +730,15 @@ describe("BackupsPage", () => {
 
   it("fails closed with an explicit unavailable state when a recovery route lacks admin authority", async () => {
     const planId = "1".repeat(32);
+    const jobId = "2".repeat(32);
     getBackupHealthMock.mockResolvedValue(backupHealth);
     authRef.current = { token: "test-token", role: "viewer", ensureStepUpProof: vi.fn() };
 
-    renderBackups(`/app/backups/recovery?recoveryPointId=${recoveryPoint.id}&planId=${planId}`);
+    renderBackups(`/app/backups/recovery?recoveryPointId=${recoveryPoint.id}&planId=${planId}&jobId=${jobId}`);
 
     expect(await screen.findByText(/Recovery unavailable|恢复不可用/)).toBeInTheDocument();
     expect(getRecoveryPlanMock).not.toHaveBeenCalled();
+    expect(getRecoveryJobMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /Create recovery plan|创建恢复计划|Start recovery|开始恢复/ })).not.toBeInTheDocument();
   });
 
@@ -934,6 +939,166 @@ describe("BackupsPage", () => {
     await user.click(screen.getByRole("tab", { name: /Files|文件/ }));
     expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/data");
   });
+
+  it.each<[string, string, "viewer" | null]>([
+    ["viewer index", "/app/backups", "viewer"],
+    ["viewer index query", `/app/backups?nodeId=3&repositoryId=${repository.id}`, "viewer"],
+    ["viewer data", "/app/backups/data", "viewer"],
+    ["viewer data query", `/app/backups/data?nodeId=3&repositoryId=${repository.id}`, "viewer"],
+    ["viewer trailing data slash", `/app/backups/data/?nodeId=3&repositoryId=${repository.id}`, "viewer"],
+    ["viewer invalid data query", "/app/backups/data?path=%2Fprivate%2Fpayroll.csv", "viewer"],
+    ["missing role data", "/app/backups/data", null],
+  ])("sends %s to overview without backup data requests", async (_label, entry, role) => {
+    authRef.current = { token: "test-token", role, ensureStepUpProof: vi.fn() };
+    getBackupConfidenceMock.mockResolvedValue(backupConfidence);
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    getStorageUsageMock.mockResolvedValue(storageUsage);
+
+    renderGuardedBackups(entry);
+
+    expect(await screen.findByText("daily-policy")).toBeInTheDocument();
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/overview");
+    expect(getBackupConfidenceMock).toHaveBeenCalled();
+    expect(getBackupHealthMock).toHaveBeenCalled();
+    expect(getStorageUsageMock).toHaveBeenCalled();
+    expect(screen.queryByRole("tab", { name: /Files|文件/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Overview|概览/ })).toHaveAttribute("aria-selected", "true");
+    expectNoBackupDataRequests();
+  });
+
+  it.each(["admin", "operator"] as const)(
+    "loads backup data for %s from the index and a direct node link",
+    async (role) => {
+      authRef.current = { token: `${role}-token`, role, ensureStepUpProof: vi.fn() };
+      const index = renderGuardedBackups("/app/backups");
+
+      await waitFor(() => {
+        expect(screen.getByTestId("backups-location").textContent?.startsWith("/app/backups/data")).toBe(true);
+      });
+      await waitFor(() => expect(listBackupFileSourceNodesMock).toHaveBeenCalledWith(
+        `${role}-token`,
+        expect.objectContaining({ limit: 100 }),
+      ));
+      expect(listBackupRepositoriesMock).toHaveBeenCalledWith(
+        `${role}-token`,
+        expect.objectContaining({ limit: 100 }),
+      );
+      expect(screen.getAllByRole("tab")).toHaveLength(3);
+      expect(screen.getByRole("tab", { name: /Files|文件/ })).toHaveAttribute("aria-selected", "true");
+      index.unmount();
+
+      clearBackupDataRequests();
+      renderGuardedBackups("/app/backups/data?nodeId=3");
+      await waitFor(() => expect(listBackupFileSourceNodesMock).toHaveBeenCalledWith(
+        `${role}-token`,
+        expect.objectContaining({ limit: 100 }),
+      ));
+      await waitFor(() => expect(listBackupFileSourceSetsMock).toHaveBeenCalled());
+      expect(listBackupRepositoriesMock).toHaveBeenCalled();
+      expect(screen.getByTestId("backups-location").textContent?.startsWith("/app/backups/data")).toBe(true);
+      expect(screen.getByRole("tab", { name: /Files|文件/ })).toHaveAttribute("aria-selected", "true");
+    },
+  );
+
+  it("keeps viewer recovery evidence readable without plan or job requests", async () => {
+    authRef.current = { token: "viewer-token", role: "viewer", ensureStepUpProof: vi.fn() };
+
+    renderBackups(`/app/backups/recovery?taskId=7&recoveryPointId=${recoveryPoint.id}`);
+
+    expect(await screen.findByText(/Recovery point evidence|恢复点证据/)).toBeInTheDocument();
+    expect(screen.getByTitle(recoveryPoint.id)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Task context|任务上下文/ })).toHaveAttribute(
+      "href",
+      "/app/backups/data?taskId=7",
+    );
+    expect(screen.queryByRole("tab", { name: /Files|文件/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("href"))).toEqual([
+      "/app/backups/overview",
+      "/app/backups/recovery",
+    ]);
+    expectNoBackupDataRequests();
+  });
+
+  it("removes backup data after the role loses access", async () => {
+    const user = userEvent.setup();
+    authRef.current = { token: "test-token", role: "admin", ensureStepUpProof: vi.fn() };
+    getBackupConfidenceMock.mockResolvedValue(backupConfidence);
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    getStorageUsageMock.mockResolvedValue(storageUsage);
+    render(<BackupAccessHarness />);
+
+    expect(await screen.findByRole("heading", { name: /Files|文件/ })).toBeInTheDocument();
+    await waitFor(() => expect(listBackupFileSourceNodesMock).toHaveBeenCalled());
+    await waitFor(() => expect(listBackupRepositoriesMock).toHaveBeenCalled());
+    expect(screen.getByTestId("backups-location").textContent?.startsWith("/app/backups/data")).toBe(true);
+
+    clearBackupDataRequests();
+    await user.click(screen.getByRole("button", { name: "Drop backup access" }));
+
+    expect(await screen.findByText("daily-policy")).toBeInTheDocument();
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/overview");
+    expect(screen.queryByRole("tab", { name: /Files|文件/ })).not.toBeInTheDocument();
+    expectNoBackupDataRequests();
+  });
+
+  it.each(["admin", "operator"] as const)("keeps %s Home and End on the full backup tab range", (role) => {
+    authRef.current = { token: `${role}-token`, role, ensureStepUpProof: vi.fn() };
+    renderBackupTabs(`/app/backups/data${filesSearch}`);
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("href"))).toEqual([
+      `/app/backups/data${filesSearch}`,
+      "/app/backups/overview",
+      "/app/backups/recovery",
+    ]);
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Files|文件/ }), { key: "End" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/recovery");
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Recovery|恢复/ }), { key: "Home" });
+    expect(screen.getByTestId("backups-location").textContent).toBe(`/app/backups/data${filesSearch}`);
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Files|文件/ }), { key: "ArrowDown" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/overview");
+  });
+
+  it.each([
+    ["viewer", "viewer" as const],
+    ["missing role", null],
+  ])("keeps %s keyboard navigation on overview and recovery", async (_label, role) => {
+    authRef.current = { token: "test-token", role, ensureStepUpProof: vi.fn() };
+    renderBackupTabs("/app/backups/data?nodeId=3");
+
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/data?nodeId=3");
+    expect(screen.queryByRole("tab", { name: /Files|文件/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("href"))).toEqual([
+      "/app/backups/overview",
+      "/app/backups/recovery",
+    ]);
+    expect(screen.getByRole("tab", { name: /Overview|概览/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: /Overview|概览/ })).toHaveTextContent("files-panel");
+    expect(screen.queryByRole("tabpanel", { name: /Files|文件/ })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Overview|概览/ }), { key: "ArrowRight" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/recovery");
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Recovery|恢复/ })).toHaveFocus());
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Recovery|恢复/ }), { key: "ArrowRight" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/overview");
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Overview|概览/ }), { key: "ArrowLeft" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/recovery");
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Recovery|恢复/ }), { key: "Home" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/overview");
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Overview|概览/ })).toHaveFocus());
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Overview|概览/ }), { key: "End" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/recovery");
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Recovery|恢复/ })).toHaveFocus());
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Recovery|恢复/ }), { key: "ArrowUp" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/overview");
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Overview|概览/ }), { key: "ArrowDown" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/recovery");
+    expect(screen.queryByRole("tab", { name: /Files|文件/ })).not.toBeInTheDocument();
+  });
 });
 
 function renderBackups(
@@ -971,6 +1136,88 @@ function renderBackupTabs(initialEntry: string) {
       <LocationProbe />
     </MemoryRouter>,
   );
+}
+
+function renderGuardedBackups(initialEntry: string) {
+  const router = createMemoryRouter(
+    [
+      {
+        path: "/",
+        HydrateFallback: () => null,
+        element: (
+          <>
+            <Outlet />
+            <LocationProbe />
+          </>
+        ),
+        children: [
+          {
+            path: "app/backups",
+            loader: canonicalizeBackupLocation,
+            HydrateFallback: () => null,
+            element: <BackupsPage />,
+            children: [
+              { path: "overview", element: <BackupsOverviewPage /> },
+              { path: "data", element: <BackupsDataPage /> },
+              { path: "recovery", element: <BackupsRecoveryPage /> },
+            ],
+          },
+        ],
+      },
+    ],
+    { initialEntries: [initialEntry] },
+  );
+  return render(<RouterProvider router={router} />);
+}
+
+function BackupAccessHarness() {
+  const [, setRole] = useState<"admin" | "viewer">("admin");
+  return (
+    <>
+      <button type="button" onClick={() => {
+        authRef.current = { ...authRef.current, role: "viewer" };
+        setRole("viewer");
+      }}>Drop backup access</button>
+      <MemoryRouter initialEntries={["/app/backups/data"]}>
+        <Routes>
+          <Route path="/app/backups" element={<BackupsPage />}>
+            <Route path="data" element={<BackupsDataPage />} />
+            <Route path="overview" element={<BackupsOverviewPage />} />
+            <Route path="recovery" element={<BackupsRecoveryPage />} />
+          </Route>
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>
+    </>
+  );
+}
+
+function clearBackupDataRequests() {
+  listBackupFileSourceNodesMock.mockClear();
+  listBackupFileSourceSetsMock.mockClear();
+  listBackupFileSourceVersionsMock.mockClear();
+  listBackupRepositoriesMock.mockClear();
+  listRecoveryPointsMock.mockClear();
+  listBackupAssetsMock.mockClear();
+  resolveBackupFileSourceRecoveryPointMock.mockClear();
+  getRecoveryPointMock.mockClear();
+  getBackupAssetMock.mockClear();
+  getRecoveryPlanMock.mockClear();
+  getRecoveryJobMock.mockClear();
+}
+
+function expectNoBackupDataRequests() {
+  expect(listBackupFileSourceNodesMock).not.toHaveBeenCalled();
+  expect(listBackupFileSourceSetsMock).not.toHaveBeenCalled();
+  expect(listBackupFileSourceVersionsMock).not.toHaveBeenCalled();
+  expect(listBackupRepositoriesMock).not.toHaveBeenCalled();
+  expect(listRecoveryPointsMock).not.toHaveBeenCalled();
+  expect(listBackupAssetsMock).not.toHaveBeenCalled();
+  expect(resolveBackupFileSourceRecoveryPointMock).not.toHaveBeenCalled();
+  expect(getRecoveryPointMock).not.toHaveBeenCalled();
+  expect(getBackupAssetMock).not.toHaveBeenCalled();
+  expect(getRecoveryPlanMock).not.toHaveBeenCalled();
+  expect(getRecoveryJobMock).not.toHaveBeenCalled();
 }
 
 function LocationProbe() {

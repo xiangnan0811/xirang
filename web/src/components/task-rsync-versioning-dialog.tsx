@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@/context/auth-context.hooks";
 import { useTranslation } from "react-i18next";
 import { GitBranch, Loader2, RotateCcw, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -64,10 +65,51 @@ function defaultRequestedMode(mode?: RsyncPublicationMode): RsyncVersionedPublic
     : "versioned_hardlink";
 }
 
+function useAdminDialogAttempt(open: boolean, token: string | null) {
+  const { role, token: authToken } = useAuth();
+  const generationRef = useRef(0);
+  const mountedRef = useRef(false);
+  const openRef = useRef(open);
+  const tokenRef = useRef(token);
+  const authTokenRef = useRef(authToken);
+  const roleRef = useRef(role);
+
+  useLayoutEffect(() => {
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    openRef.current = open;
+    tokenRef.current = token;
+    authTokenRef.current = authToken;
+    roleRef.current = role;
+    mountedRef.current = true;
+    return () => {
+      generationRef.current = generation + 1;
+      mountedRef.current = false;
+    };
+  }, [open, token, authToken, role]);
+
+  const beginAttempt = () => {
+    const generation = generationRef.current;
+    const attemptToken = tokenRef.current;
+    const attemptAuthToken = authTokenRef.current;
+    const isCurrent = () =>
+      mountedRef.current
+      && generationRef.current === generation
+      && openRef.current
+      && roleRef.current === "admin"
+      && tokenRef.current === attemptToken
+      && authTokenRef.current === attemptAuthToken;
+    return { isCurrent };
+  };
+
+  return { beginAttempt, roleRef, openRef };
+}
+
 export function TaskRsyncVersioningDialog(props: TaskRsyncVersioningDialogProps) {
+  const { role, token: authToken } = useAuth();
   const summary = props.task?.rsyncPublication;
   return <TaskRsyncVersioningDialogContent key={JSON.stringify([
-    props.open, props.task?.id, props.token, summary?.mode, summary?.taskRevision,
+    props.open, props.task?.id, props.token, authToken, role, summary?.mode, summary?.taskRevision,
   ])} {...props} />;
 }
 
@@ -79,6 +121,7 @@ function TaskRsyncVersioningDialogContent({
   onUpdated,
 }: TaskRsyncVersioningDialogProps) {
   const { t } = useTranslation();
+  const { beginAttempt, roleRef, openRef } = useAdminDialogAttempt(open, token);
   const [requestedMode, setRequestedMode] = useState<RsyncVersionedPublicationMode>(defaultRequestedMode(task?.rsyncPublication?.mode));
   const [preflight, setPreflight] = useState<RsyncVersioningPreflightResult | null>(null);
   const [migrationChoice, setMigrationChoice] = useState<RsyncVersioningMigrationChoice | null>(null);
@@ -134,10 +177,13 @@ function TaskRsyncVersioningDialogContent({
   const choiceLabelID = "rsync-versioning-choice-" + task.id;
 
   const runPreflight = async () => {
+    if (roleRef.current !== "admin" || !openRef.current) return;
     if (!canStartMigration || !token) {
       setNotice("unsupported");
       return;
     }
+    const { isCurrent } = beginAttempt();
+    if (!isCurrent()) return;
     setPreflighting(true);
     setNotice(null);
     setPreflight(null);
@@ -147,22 +193,28 @@ function TaskRsyncVersioningDialogContent({
         expectedTaskRevision: taskRevision,
         requestedMode,
       });
+      if (!isCurrent()) return;
       if (result.state !== "ready" || !result.preflightId || result.mode !== requestedMode) {
         setNotice(result.reasonCode);
         return;
       }
       setPreflight(result);
     } catch (error) {
+      if (!isCurrent()) return;
       setNotice(getRsyncVersioningErrorCode(error));
     } finally {
-      setPreflighting(false);
+      if (isCurrent()) {
+        setPreflighting(false);
+      }
     }
   };
 
   const activate = async () => {
-    if (!canActivate || !token || !preflight || !migrationChoice) {
+    if (roleRef.current !== "admin" || !openRef.current || !canActivate || !token || !preflight || !migrationChoice) {
       return;
     }
+    const { isCurrent } = beginAttempt();
+    if (!isCurrent()) return;
     setActivating(true);
     setNotice(null);
     try {
@@ -171,33 +223,43 @@ function TaskRsyncVersioningDialogContent({
         preflightId: preflight.preflightId,
         migrationChoice,
       });
+      if (!isCurrent()) return;
       setSummaryOverride(result.summary);
       setPreflight(null);
       setMigrationChoice(null);
       await onUpdated();
     } catch (error) {
+      if (!isCurrent()) return;
       setNotice(getRsyncVersioningErrorCode(error));
     } finally {
-      setActivating(false);
+      if (isCurrent()) {
+        setActivating(false);
+      }
     }
   };
 
   const prepareRollback = async () => {
-    if (!canPrepareRollback || !token) {
+    if (roleRef.current !== "admin" || !openRef.current || !canPrepareRollback || !token) {
       return;
     }
+    const { isCurrent } = beginAttempt();
+    if (!isCurrent()) return;
     setPreparingRollback(true);
     setNotice(null);
     try {
       const result = await apiClient.prepareRsyncVersioningRollback(token, task.id, {
         expectedTaskRevision: taskRevision,
       });
+      if (!isCurrent()) return;
       setSummaryOverride(result.summary);
       await onUpdated();
     } catch (error) {
+      if (!isCurrent()) return;
       setNotice(getRsyncVersioningErrorCode(error));
     } finally {
-      setPreparingRollback(false);
+      if (isCurrent()) {
+        setPreparingRollback(false);
+      }
     }
   };
 

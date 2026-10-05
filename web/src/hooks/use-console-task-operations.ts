@@ -16,6 +16,10 @@ import type {
   TaskRecord
 } from "@/types/domain";
 
+function attemptIsCurrent(isCurrent?: () => boolean) {
+  return isCurrent?.() !== false;
+}
+
 type UseTaskOperationsParams = {
   token: string | null;
   demoModeEnabled: boolean;
@@ -151,18 +155,31 @@ export function useTaskOperations({
     setAlerts((prev) => prev.filter((alert) => alert.taskId !== taskID));
   }, [exec, markTasksMutated, setAlerts, setTasks]);
 
-  const triggerTask = useCallback(async (taskID: number) => {
+  const triggerTask = useCallback(async (taskID: number, isCurrent?: () => boolean) => {
+    if (!attemptIsCurrent(isCurrent)) return;
     const result = await exec(i18n.t("tasks.actions.triggerTask"), async (t) => {
+      if (!attemptIsCurrent(isCurrent)) return null;
       await withStepUp(async (proof) => {
-        await apiClient.requestTaskManualTriggerCredentialGrant(t, {
-          taskId: taskID,
-          reason: i18n.t("tasks.manualTriggerGrantReason", { id: taskID }),
-          requestedTtlSeconds: 600,
-        }, proof);
-        return apiClient.triggerTask(t, taskID, proof);
+        if (!attemptIsCurrent(isCurrent)) return;
+        try {
+          await apiClient.requestTaskManualTriggerCredentialGrant(t, {
+            taskId: taskID,
+            reason: i18n.t("tasks.manualTriggerGrantReason", { id: taskID }),
+            requestedTtlSeconds: 600,
+          }, proof);
+          if (!attemptIsCurrent(isCurrent)) return;
+          await apiClient.triggerTask(t, taskID, proof);
+        } catch (error) {
+          if (!attemptIsCurrent(isCurrent)) return;
+          throw error;
+        }
       });
-      return apiClient.getTask(t, taskID).catch(() => null);
+      if (!attemptIsCurrent(isCurrent)) return null;
+      const latestTask = await apiClient.getTask(t, taskID).catch(() => null);
+      if (!attemptIsCurrent(isCurrent)) return null;
+      return latestTask;
     });
+    if (!attemptIsCurrent(isCurrent)) return;
     if (result && !result.ok) return;
 
     const latest = result?.ok ? result.data : null;
@@ -201,13 +218,15 @@ export function useTaskOperations({
     );
   }, [exec, markTasksMutated, setTasks]);
 
-  const retryTask = useCallback(async (taskID: number) => {
-    await triggerTask(taskID);
-    if (!token) {
+  const retryTask = useCallback(async (taskID: number, isCurrent?: () => boolean) => {
+    await triggerTask(taskID, isCurrent);
+    if (!token || !attemptIsCurrent(isCurrent)) {
       return;
     }
     try {
-      setAlerts(await apiClient.getAlerts(token));
+      const alerts = await apiClient.getAlerts(token);
+      if (!attemptIsCurrent(isCurrent)) return;
+      setAlerts(alerts);
     } catch {
       // Keep last known open/acked alerts. Retry must not invent resolved.
     }

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useAuth } from "@/context/auth-context.hooks";
 import { AlertCircle, CheckCircle2, FileUp, Upload, XCircle } from "lucide-react";
 import { toast } from "@/components/ui/toast-sonner";
 import { Button } from "@/components/ui/button";
@@ -140,7 +141,12 @@ function validateEntries(
 
 // ── 组件 ──
 
-export function SSHKeyBatchImportDialog({
+export function SSHKeyBatchImportDialog(props: SSHKeyBatchImportDialogProps) {
+  const { role } = useAuth();
+  return <SSHKeyBatchImportSession key={JSON.stringify([props.open, props.token, role])} {...props} />;
+}
+
+function SSHKeyBatchImportSession({
   open,
   onOpenChange,
   existingKeyNames,
@@ -148,6 +154,7 @@ export function SSHKeyBatchImportDialog({
   onImportComplete,
 }: SSHKeyBatchImportDialogProps) {
   const { t } = useTranslation();
+  const { role } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [phase, setPhase] = useState<ImportPhase>("idle");
@@ -158,15 +165,8 @@ export function SSHKeyBatchImportDialog({
   const fileReaderSequenceRef = useRef(0);
   const activeReaderRef = useRef<FileReader | null>(null);
   const openRef = useRef(open);
-  const resetTimerRef = useRef<number | null>(null);
-
-  const cancelScheduledReset = useCallback(() => {
-    if (resetTimerRef.current !== null) {
-      window.clearTimeout(resetTimerRef.current);
-      resetTimerRef.current = null;
-    }
-  }, []);
-
+  const operationGenerationRef = useRef(0);
+  const committedIdentityRef = useRef({ role, token, open });
   const discardActiveReader = useCallback(() => {
     fileReaderSequenceRef.current += 1;
 
@@ -190,31 +190,20 @@ export function SSHKeyBatchImportDialog({
   }, []);
 
   const resetState = useCallback(() => {
-    cancelScheduledReset();
     discardActiveReader();
     clearParsedState();
-  }, [cancelScheduledReset, clearParsedState, discardActiveReader]);
+  }, [clearParsedState, discardActiveReader]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    committedIdentityRef.current = { role, token, open };
     openRef.current = open;
-
-    if (open) {
-      return;
-    }
-
-    discardActiveReader();
-    privateKeysRef.current.clear();
-    resetTimerRef.current = window.setTimeout(() => {
-      resetTimerRef.current = null;
-      clearParsedState();
-    }, 0);
-  }, [cancelScheduledReset, clearParsedState, discardActiveReader, open]);
-
-  useEffect(() => () => {
-    openRef.current = false;
-    cancelScheduledReset();
-    discardActiveReader();
-  }, [cancelScheduledReset, discardActiveReader]);
+    operationGenerationRef.current += 1;
+    return () => {
+      operationGenerationRef.current += 1;
+      openRef.current = false;
+      discardActiveReader();
+    };
+  }, [discardActiveReader, open, role, token]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -236,6 +225,7 @@ export function SSHKeyBatchImportDialog({
     (file: File) => {
       discardActiveReader();
       const requestSequence = fileReaderSequenceRef.current;
+      const requestGeneration = operationGenerationRef.current;
       setParseError("");
 
       if (!file.name.endsWith(".json")) {
@@ -254,7 +244,8 @@ export function SSHKeyBatchImportDialog({
       const shouldIgnoreReaderResult = () => (
         !openRef.current ||
         fileReaderSequenceRef.current !== requestSequence ||
-        activeReaderRef.current !== reader
+        activeReaderRef.current !== reader ||
+        operationGenerationRef.current !== requestGeneration
       );
 
       reader.onload = (e) => {
@@ -314,7 +305,8 @@ export function SSHKeyBatchImportDialog({
   // ── 导入 ──
 
   const handleImport = async () => {
-    if (validEntries.length === 0) return;
+    if (validEntries.length === 0 || !openRef.current) return;
+    const generation = operationGenerationRef.current;
     setPhase("importing");
 
     const keys: NewSSHKeyInput[] = validEntries.map((e) => ({
@@ -331,11 +323,13 @@ export function SSHKeyBatchImportDialog({
 
     try {
       const results = await createSSHKeysApi().batchCreate(token, keys);
+      if (!openRef.current || operationGenerationRef.current !== generation) return;
       const created = results.filter((r) => r.status === "created").length;
       toast.success(t("sshKeys.importSuccess", { count: created }));
       onImportComplete();
       handleOpenChange(false);
     } catch (err) {
+      if (!openRef.current || operationGenerationRef.current !== generation) return;
       toast.error(err instanceof Error ? err.message : t("common.operationFailed"));
       // 回退到预览状态以便用户重试
       setPhase("preview");

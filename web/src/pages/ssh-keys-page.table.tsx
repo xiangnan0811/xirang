@@ -19,6 +19,7 @@ export interface SSHKeysTableProps {
   selectedIds: Set<string>;
   allVisibleSelected: boolean;
   isFiltered: boolean;
+  canManageSSHKeys: boolean;
   toggleSelection: (keyId: string, checked: boolean) => void;
   toggleSelectAllVisible: (checked: boolean) => void;
   resetFilters: () => void;
@@ -75,6 +76,7 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
   selectedIds,
   allVisibleSelected,
   isFiltered,
+  canManageSSHKeys,
   toggleSelection,
   toggleSelectAllVisible,
   resetFilters,
@@ -127,9 +129,9 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
                     title={t("sshKeys.emptyFilteredTitle")}
                     description={t("sshKeys.emptyFilteredDesc")}
                     onReset={resetFilters}
-                    onCreate={openCreateDialog}
-                    createLabel={t("sshKeys.addKey")}
-                    createIcon={KeyRound}
+                    onCreate={canManageSSHKeys ? openCreateDialog : undefined}
+                    createLabel={canManageSSHKeys ? t("sshKeys.addKey") : undefined}
+                    createIcon={canManageSSHKeys ? KeyRound : undefined}
                   />
                 ) : (
                   <EmptyState
@@ -208,6 +210,7 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
                     <SSHKeyActionsMenu
                       sshKey={key}
                       nodeCount={nodeCount}
+                      canManageSSHKeys={canManageSSHKeys}
                       onEdit={openEditDialog}
                       onDelete={handleDelete}
                       onTestConnection={(k) => setTestConnectionKey(k)}

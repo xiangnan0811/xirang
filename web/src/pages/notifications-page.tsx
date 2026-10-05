@@ -18,7 +18,10 @@ type AlertUnreadStats = { total: number; critical: number; warning: number };
 
 export function NotificationsPage() {
   const { t } = useTranslation();
-  const { token } = useAuth();
+  const { token, role } = useAuth();
+  const canWriteAlerts = role === "admin" || role === "operator";
+  const canTriggerTasks = role === "admin" || role === "operator";
+  const canRetryDelivery = role === "admin";
   const { globalSearch, setGlobalSearch, refreshVersion } = useSharedContext();
   const { fetchAlertDeliveryStats } = useAlertsContext();
   const { integrations, refreshIntegrations } = useIntegrationsContext();
@@ -347,6 +350,9 @@ export function NotificationsPage() {
       {token ? (
         <AlertCenter
           token={token}
+          canWriteAlerts={canWriteAlerts}
+          canTriggerTasks={canTriggerTasks}
+          canRetryDelivery={canRetryDelivery}
           integrations={integrations}
           globalSearch={globalSearch}
           setGlobalSearch={setGlobalSearch}

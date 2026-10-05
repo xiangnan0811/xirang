@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { parseBackupAssetsRoute } from "@/features/backup-assets/backup-assets-route-state";
 import {
+  backupEntryPath,
+  canAccessBackupData,
   backupFilesHref,
   canonicalizeBackupLocation,
   getBackupActivePage,
@@ -12,6 +14,18 @@ import {
 const savedSearchId = "e".repeat(32);
 const filesSavedSearch = `?view=search&savedSearchId=${savedSearchId}`;
 
+
+describe("backup role entry", () => {
+  it.each([
+    ["admin", true, "/app/backups/data"],
+    ["operator", true, "/app/backups/data"],
+    ["viewer", false, "/app/backups/overview"],
+    [null, false, "/app/backups/overview"],
+  ] as const)("restricts %s to the permitted surface", (role, allowed, path) => {
+    expect(canAccessBackupData(role)).toBe(allowed);
+    expect(backupEntryPath(role)).toBe(path);
+  });
+});
 describe("normalizeAppPathname", () => {
   it("strips trailing slashes without collapsing the root", () => {
     expect(normalizeAppPathname("/")).toBe("/");

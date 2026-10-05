@@ -13,6 +13,15 @@ vi.mock("@/hooks/use-step-up-action", () => ({
   useStepUpAction: useStepUpActionMock,
 }));
 
+vi.mock("@/context/auth-context.hooks", () => ({
+  useAuth: () => ({
+    role: "admin" as const,
+    token: "token",
+    ensureStepUpProof: vi.fn(),
+    clearStepUpProof: vi.fn(),
+  }),
+}));
+
 function createMockResponse(status = 200, body = "") {
   return {
     status,

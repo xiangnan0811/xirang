@@ -22,6 +22,7 @@ export interface SSHKeysGridProps {
   selectedIds: Set<string>;
   allVisibleSelected: boolean;
   isFiltered: boolean;
+  canManageSSHKeys: boolean;
   toggleSelection: (keyId: string, checked: boolean) => void;
   toggleSelectAllVisible: (checked: boolean) => void;
   resetFilters: () => void;
@@ -78,6 +79,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
   selectedIds,
   allVisibleSelected,
   isFiltered,
+  canManageSSHKeys,
   toggleSelection,
   toggleSelectAllVisible,
   resetFilters,
@@ -122,9 +124,9 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
             title={t("sshKeys.emptyFilteredTitle")}
             description={t("sshKeys.emptyFilteredDesc")}
             onReset={resetFilters}
-            onCreate={openCreateDialog}
-            createLabel={t("sshKeys.addKey")}
-            createIcon={KeyRound}
+            onCreate={canManageSSHKeys ? openCreateDialog : undefined}
+            createLabel={canManageSSHKeys ? t("sshKeys.addKey") : undefined}
+            createIcon={canManageSSHKeys ? KeyRound : undefined}
           />
         ) : (
           <EmptyState
@@ -187,6 +189,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   <SSHKeyActionsMenu
                     sshKey={key}
                     nodeCount={nodeCount}
+                    canManageSSHKeys={canManageSSHKeys}
                     onEdit={openEditDialog}
                     onDelete={handleDelete}
                     onTestConnection={(k) => setTestConnectionKey(k)}
@@ -246,16 +249,18 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   >
                     <Copy className="size-4" aria-hidden />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("sshKeys.testConnection")}
-                    title={t("sshKeys.testConnection")}
-                    onClick={() => setTestConnectionKey(key)}
-                  >
-                    <Plug className="size-4" aria-hidden />
-                  </Button>
+                  {canManageSSHKeys ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={t("sshKeys.testConnection")}
+                      title={t("sshKeys.testConnection")}
+                      onClick={() => setTestConnectionKey(key)}
+                    >
+                      <Plug className="size-4" aria-hidden />
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -310,6 +315,7 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   <SSHKeyActionsMenu
                     sshKey={key}
                     nodeCount={nodeCount}
+                    canManageSSHKeys={canManageSSHKeys}
                     onEdit={openEditDialog}
                     onDelete={handleDelete}
                     onTestConnection={(k) => setTestConnectionKey(k)}
@@ -353,16 +359,18 @@ export const SSHKeysGrid = React.memo(function SSHKeysGrid({
                   >
                     <Copy className="size-4" aria-hidden />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("sshKeys.testConnection")}
-                    title={t("sshKeys.testConnection")}
-                    onClick={() => setTestConnectionKey(key)}
-                  >
-                    <Plug className="size-4" aria-hidden />
-                  </Button>
+                  {canManageSSHKeys ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={t("sshKeys.testConnection")}
+                      title={t("sshKeys.testConnection")}
+                      onClick={() => setTestConnectionKey(key)}
+                    >
+                      <Plug className="size-4" aria-hidden />
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </div>

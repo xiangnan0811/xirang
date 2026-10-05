@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { AuthRole } from "@/context/auth-context.shared";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSharedContext } from "@/context/shared-context.hooks";
@@ -64,7 +65,12 @@ export function useNodesPageState() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { token, role } = useAuth();
   const isAdmin = role === "admin";
-  const canBrowseNodeFiles = role === "admin" || role === "operator";
+  const canOperateNodes = role === "admin" || role === "operator";
+  const canBrowseNodeFiles = canOperateNodes;
+  const demoRole: AuthRole | null = !token && import.meta.env.VITE_ENABLE_DEMO_MODE === "true" ? "viewer" : null;
+  const effectiveRole = role ?? demoRole;
+  const roleRef = useRef(effectiveRole);
+  const authEpochRef = useRef(0);
   const { globalSearch, setGlobalSearch } = useSharedContext();
   const {
     nodes,
@@ -116,7 +122,11 @@ export function useNodesPageState() {
     false
   );
 
-  const { confirm, dialog } = useConfirm();
+  const { confirm, dialog, cancelPending } = useConfirm();
+  const cancelPendingRef = useRef(cancelPending);
+  useLayoutEffect(() => {
+    cancelPendingRef.current = cancelPending;
+  }, [cancelPending]);
   const [editorOpen, setEditorOpen] = useState(false);
   const nodeEditorOpenerRef = useRef<HTMLElement | null>(null);
   const nodeEditorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
@@ -161,15 +171,53 @@ export function useNodesPageState() {
     reuseCached: false,
   });
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      emergencyAbortRef.current?.abort();
-    };
-  }, []);
   const [migrateSourceNode, setMigrateSourceNode] = useState<NodeRecord | null>(null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
+  const [authIdentity, setAuthIdentity] = useState({ token, role });
+  if (authIdentity.token !== token || authIdentity.role !== role) {
+    const tokenChanged = authIdentity.token !== token;
+    setAuthIdentity({ token, role });
+    setTestingNodeId(null);
+    setTriggeringNodeId(null);
+    setEditorOpen(false);
+    setEditingNode(null);
+    setTerminalNode(null);
+    setFileBrowserNode(null);
+    setBatchCmdOpen(false);
+    if (tokenChanged) {
+      setBatchResultId(null);
+      setBatchRetain(false);
+    }
+    setMigrateSourceNode(null);
+    setDoctorNode(null);
+    setDoctorResult(null);
+    setDoctorError(null);
+    setDoctorLoading(false);
+    setHostKeyIssue(null);
+    setHostKeyError(null);
+    setHostKeyTrusting(false);
+  }
+
+  useLayoutEffect(() => {
+    roleRef.current = effectiveRole;
+    authEpochRef.current += 1;
+    mountedRef.current = true;
+    hostKeyTrustOwnerRef.current = null;
+    return () => {
+      authEpochRef.current += 1;
+      mountedRef.current = false;
+      emergencyAbortRef.current?.abort();
+      cancelPendingRef.current();
+    };
+  }, [effectiveRole, role, token]);
+
+  const captureAuthLifetime = () => {
+    const authEpoch = authEpochRef.current;
+    const sessionGeneration = getAuthSessionGeneration();
+    return () => mountedRef.current
+      && authEpochRef.current === authEpoch
+      && getAuthSessionGeneration() === sessionGeneration;
+  };
 
   const nodeIdSet = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
 
@@ -288,12 +336,18 @@ export function useNodesPageState() {
     sortedNodes.every((node) => selectedNodeSet.has(node.id));
 
   const openCreateDialog = (event?: { currentTarget: EventTarget | null }) => {
+    if (roleRef.current !== "admin") {
+      return;
+    }
     nodeEditorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingNode(null);
     setEditorOpen(true);
   };
 
   const openEditDialog = (node: NodeRecord, opener?: EventTarget | null) => {
+    if (roleRef.current !== "admin") {
+      return;
+    }
     nodeEditorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingNode(node);
     setEditorOpen(true);
@@ -333,6 +387,9 @@ export function useNodesPageState() {
   };
 
   const handleSaveNode = async (input: NewNodeInput, nodeId?: number) => {
+    if (roleRef.current !== "admin") {
+      return;
+    }
     if (!input.name.trim() || !input.host.trim() || !input.username.trim()) {
       toast.error(t("nodes.saveFailedEmpty"));
       return;
@@ -346,33 +403,60 @@ export function useNodesPageState() {
       return;
     }
 
+    const saveStillCurrent = captureAuthLifetime();
     let savedNodeId = nodeId;
 
     try {
       if (nodeId) {
-        await updateNode(nodeId, input);
+        await updateNode(nodeId, input, saveStillCurrent);
+        if (!saveStillCurrent()) {
+          return;
+        }
         toast.success(t("nodes.nodeUpdated", { name: input.name }));
       } else {
-        savedNodeId = await createNode(input);
+        savedNodeId = await createNode(input, saveStillCurrent);
+        if (!saveStillCurrent()) {
+          return;
+        }
         toast.success(t("nodes.nodeCreated", { name: input.name }));
       }
 
       setEditorOpen(false);
       setEditingNode(null);
 
-      if (savedNodeId) {
-        setTestingNodeId(savedNodeId);
+      if (!savedNodeId || !saveStillCurrent()) {
+        return;
+      }
+      setTestingNodeId(savedNodeId);
+      try {
         const result = await testNodeConnection(savedNodeId);
-        setTestingNodeId(null);
+        if (!saveStillCurrent()) {
+          return;
+        }
         presentProbeResult(savedNodeId, input.name, result, false);
+      } catch (error) {
+        if (!saveStillCurrent()) {
+          return;
+        }
+        toast.error(getErrorMessage(error));
+      } finally {
+        if (saveStillCurrent()) {
+          setTestingNodeId(null);
+        }
       }
     } catch (error) {
+      if (!saveStillCurrent()) {
+        return;
+      }
       setTestingNodeId(null);
       toast.error(getErrorMessage(error));
     }
   };
 
   const handleTestConnection = async (nodeId: number) => {
+    if (roleRef.current !== "admin" && roleRef.current !== "operator") {
+      return;
+    }
     const existing = nodes.find((node) => node.id === nodeId);
     if (!existing) {
       toast.error(t("nodes.nodeChangedRetry"));
@@ -386,30 +470,47 @@ export function useNodesPageState() {
   };
 
   const runDoctorForNode = async (node: NodeRecord) => {
+    if (roleRef.current !== "admin" && roleRef.current !== "operator") {
+      return;
+    }
+    const authEpoch = authEpochRef.current;
     setDoctorNode(node);
     setDoctorLoading(true);
     setDoctorError(null);
+    const doctorStillCurrent = () => authEpochRef.current === authEpoch
+      && (roleRef.current === "admin" || roleRef.current === "operator");
     try {
       const result = token
         ? await apiClient.runNodeDoctor(token, node.id)
         : import.meta.env.VITE_ENABLE_DEMO_MODE === "true"
           ? (await import("@/data/mock")).buildMockNodeDoctorResult(node)
           : null;
+      if (!doctorStillCurrent()) {
+        return;
+      }
       if (!result) {
         setDoctorError(t("console.notLoggedIn"));
         return;
       }
       setDoctorResult(result);
     } catch (error) {
+      if (!doctorStillCurrent()) {
+        return;
+      }
       const message = getErrorMessage(error);
       setDoctorError(message);
       toast.error(message);
     } finally {
-      setDoctorLoading(false);
+      if (doctorStillCurrent()) {
+        setDoctorLoading(false);
+      }
     }
   };
 
   const openDoctor = (node: NodeRecord) => {
+    if (roleRef.current !== "admin" && roleRef.current !== "operator") {
+      return;
+    }
     setDoctorResult(null);
     setDoctorError(null);
     void runDoctorForNode(node);
@@ -425,18 +526,28 @@ export function useNodesPageState() {
   };
 
   const onDeleteNode = async (node: NodeRecord) => {
+    if (roleRef.current !== "admin") {
+      return;
+    }
+    const deleteStillCurrent = captureAuthLifetime();
     const ok = await confirm({
       title: t("nodes.confirmDeleteTitle"),
       description: t("nodes.confirmDeleteNodeDesc", { name: node.name }),
     });
-    if (!ok) {
+    if (!ok || !deleteStillCurrent()) {
       return;
     }
     try {
-      await deleteNode(node.id);
+      await deleteNode(node.id, deleteStillCurrent);
+      if (!deleteStillCurrent()) {
+        return;
+      }
       setSelectedNodeIds((prev) => prev.filter((id) => id !== node.id));
       toast.success(t("nodes.nodeDeleted", { name: node.name }));
     } catch (error) {
+      if (!deleteStillCurrent()) {
+        return;
+      }
       toast.error(getErrorMessage(error));
     }
   };
@@ -465,21 +576,29 @@ export function useNodesPageState() {
   };
 
   const handleBulkDelete = async () => {
+    if (roleRef.current !== "admin") {
+      return;
+    }
     if (!selectedNodeIds.length) {
       toast.error(t("nodes.selectAtLeastOne"));
       return;
     }
 
+    const ids = [...selectedNodeIds];
+    const bulkStillCurrent = captureAuthLifetime();
     const ok = await confirm({
       title: t("nodes.bulkDeleteConfirmTitle"),
-      description: t("nodes.bulkDeleteConfirmDesc", { count: selectedNodeIds.length }),
+      description: t("nodes.bulkDeleteConfirmDesc", { count: ids.length }),
     });
-    if (!ok) {
+    if (!ok || !bulkStillCurrent()) {
       return;
     }
 
     try {
-      const result = await deleteNodes(selectedNodeIds);
+      const result = await deleteNodes(ids, bulkStillCurrent);
+      if (!bulkStillCurrent()) {
+        return;
+      }
       setSelectedNodeIds([]);
       if (result.notFoundIds.length > 0) {
         toast.success(
@@ -489,17 +608,39 @@ export function useNodesPageState() {
         toast.success(t("nodes.bulkDeleteSuccess", { count: result.deleted }));
       }
     } catch (error) {
+      if (!bulkStillCurrent()) {
+        return;
+      }
       toast.error(getErrorMessage(error));
     }
   };
 
   const onTestNode = async (node: NodeRecord) => {
+    if (roleRef.current !== "admin" && roleRef.current !== "operator") {
+      return;
+    }
+    const authEpoch = authEpochRef.current;
+    const sessionGeneration = getAuthSessionGeneration();
     try {
       setTestingNodeId(node.id);
       const result = await testNodeConnection(node.id);
+      if (
+        authEpochRef.current !== authEpoch
+        || getAuthSessionGeneration() !== sessionGeneration
+        || (roleRef.current !== "admin" && roleRef.current !== "operator")
+      ) {
+        return;
+      }
       setTestingNodeId(null);
       presentProbeResult(node.id, node.name, result, true);
     } catch (error) {
+      if (
+        authEpochRef.current !== authEpoch
+        || getAuthSessionGeneration() !== sessionGeneration
+        || (roleRef.current !== "admin" && roleRef.current !== "operator")
+      ) {
+        return;
+      }
       setTestingNodeId(null);
       toast.error(getErrorMessage(error));
     }
@@ -510,34 +651,64 @@ export function useNodesPageState() {
     if (!issue) {
       return;
     }
+    if (roleRef.current !== "admin") {
+      return;
+    }
     if (!token) {
       setHostKeyError(t("console.notLoggedIn"));
       return;
     }
+    const sessionGeneration = getAuthSessionGeneration();
+    const authEpoch = authEpochRef.current;
     hostKeyTrustOwnerRef.current = issue.nodeId;
     setHostKeyTrusting(true);
     setHostKeyError(null);
+    const trustStillCurrent = () => mountedRef.current
+      && getAuthSessionGeneration() === sessionGeneration
+      && authEpochRef.current === authEpoch
+      && roleRef.current === "admin";
     try {
       await apiClient.trustNodeHostKey(token, issue.nodeId, issue.hostKey.fingerprintSha256);
     } catch (error) {
-      setHostKeyError(getErrorMessage(error));
       hostKeyTrustOwnerRef.current = null;
-      setHostKeyTrusting(false);
+      if (mountedRef.current) {
+        setHostKeyTrusting(false);
+      }
+      if (!trustStillCurrent()) {
+        return;
+      }
+      setHostKeyError(getErrorMessage(error));
+      return;
+    }
+    if (!trustStillCurrent()) {
+      hostKeyTrustOwnerRef.current = null;
+      if (mountedRef.current) {
+        setHostKeyTrusting(false);
+      }
       return;
     }
     toast.success(t("nodes.hostKeyTrusted"));
     setHostKeyIssue(null);
     hostKeyTrustOwnerRef.current = null;
     setHostKeyTrusting(false);
-    setTestingNodeId(issue.nodeId);
+    const retestNodeId = issue.nodeId;
+    setTestingNodeId(retestNodeId);
     try {
-      const result = await testNodeConnection(issue.nodeId);
-      presentProbeResult(issue.nodeId, issue.nodeName, result, true);
+      const result = await testNodeConnection(retestNodeId);
+      if (!trustStillCurrent()) {
+        return;
+      }
+      presentProbeResult(retestNodeId, issue.nodeName, result, true);
     } catch (error) {
+      if (!trustStillCurrent()) {
+        return;
+      }
       // The dialog is already closed once trust succeeded; report retest failures as a toast.
       toast.error(`${issue.nodeName}：${getErrorMessage(error)}`);
     } finally {
-      setTestingNodeId(null);
+      if (trustStillCurrent()) {
+        setTestingNodeId(null);
+      }
     }
   };
 
@@ -557,18 +728,49 @@ export function useNodesPageState() {
   };
 
   const handleTriggerBackup = async (nodeId: number, nodeName: string) => {
+    if (roleRef.current !== "admin" && roleRef.current !== "operator") {
+      return;
+    }
+    const authEpoch = authEpochRef.current;
+    const backupStillCurrent = () => authEpochRef.current === authEpoch
+      && (roleRef.current === "admin" || roleRef.current === "operator");
     try {
       setTriggeringNodeId(nodeId);
       await triggerNodeBackup(nodeId);
+      if (!backupStillCurrent()) {
+        return;
+      }
       toast.success(t("nodes.backupTriggered", { name: nodeName }));
     } catch (error) {
+      if (!backupStillCurrent()) {
+        return;
+      }
       toast.error(getErrorMessage(error));
     } finally {
-      setTriggeringNodeId(null);
+      if (backupStillCurrent()) {
+        setTriggeringNodeId(null);
+      }
     }
   };
 
-  const handleImportCSV = async (content: string) => {
+  const handleImportCSV = async (file: File) => {
+    if (roleRef.current !== "admin") {
+      return;
+    }
+    const importStillCurrent = captureAuthLifetime();
+    let content: string;
+    try {
+      content = await file.text();
+    } catch (error) {
+      if (!importStillCurrent()) {
+        return;
+      }
+      toast.error(getErrorMessage(error));
+      return;
+    }
+    if (!importStillCurrent()) {
+      return;
+    }
     const rows = parseCSVRows(content);
     if (!rows.length) {
       toast.error(t("nodes.csvImportEmpty"));
@@ -593,6 +795,9 @@ export function useNodesPageState() {
     const errors: string[] = [];
 
     for (const row of rows) {
+      if (!importStillCurrent()) {
+        return;
+      }
       try {
         await createNode({
           name: row.name,
@@ -604,9 +809,15 @@ export function useNodesPageState() {
           keyId: defaultKeyID,
           password: undefined,
           basePath: "/",
-        });
+        }, importStillCurrent);
+        if (!importStillCurrent()) {
+          return;
+        }
         successCount += 1;
       } catch (error) {
+        if (!importStillCurrent()) {
+          return;
+        }
         failedCount += 1;
         if (errors.length < 3) {
           errors.push(`${row.name}: ${getErrorMessage(error)}`);
@@ -614,6 +825,9 @@ export function useNodesPageState() {
       }
     }
 
+    if (!importStillCurrent()) {
+      return;
+    }
     const summary = t("nodes.csvImportSummary", { success: successCount, failed: failedCount });
     toast.success(errors.length ? `${summary} ${errors.join(" | ")}` : summary);
   };
@@ -644,16 +858,49 @@ export function useNodesPageState() {
     toast.success(t("nodes.csvExported", { count: sortedNodes.length }));
   };
 
+  const openTerminal = (node: NodeRecord) => {
+    if (roleRef.current !== "admin") {
+      return;
+    }
+    setTerminalNode(node);
+    setTerminalKey((key) => key + 1);
+  };
+
+  const openFileBrowser = (node: NodeRecord) => {
+    if (roleRef.current !== "admin" && roleRef.current !== "operator") {
+      return;
+    }
+    setFileBrowserNode(node);
+  };
+
+  const openBatchCommand = (open: boolean) => {
+    if (open && roleRef.current !== "admin" && roleRef.current !== "operator") {
+      return;
+    }
+    setBatchCmdOpen(open);
+  };
+
+  const openMigrate = (node: NodeRecord | null) => {
+    if (node && roleRef.current !== "admin") {
+      return;
+    }
+    setMigrateSourceNode(node);
+  };
+
   const handleEmergencyBackup = async (nodeId: number, nodeName: string) => {
+    if (roleRef.current !== "admin" && roleRef.current !== "operator") return;
     if (!token || emergencyOperationRef.current !== 0) return;
     const operationId = emergencyOperationRef.current + 1;
     emergencyOperationRef.current = operationId;
     const sessionGeneration = getAuthSessionGeneration();
+    const authEpoch = authEpochRef.current;
     const capturedToken = token;
     let controller: AbortController | null = null;
     const isCurrentAttempt = () => mountedRef.current
       && emergencyOperationRef.current === operationId
-      && getAuthSessionGeneration() === sessionGeneration;
+      && getAuthSessionGeneration() === sessionGeneration
+      && authEpochRef.current === authEpoch
+      && (roleRef.current === "admin" || roleRef.current === "operator");
 
     try {
       const ok = await confirm({
@@ -729,6 +976,7 @@ export function useNodesPageState() {
     // auth
     token,
     isAdmin,
+    canOperateNodes,
     canBrowseNodeFiles,
     // data
     nodes,
@@ -776,6 +1024,7 @@ export function useNodesPageState() {
     // terminal
     terminalNode,
     setTerminalNode,
+    openTerminal,
     terminalKey,
     setTerminalKey,
     // doctor
@@ -794,11 +1043,13 @@ export function useNodesPageState() {
     // file browser
     fileBrowserNode,
     setFileBrowserNode,
+    openFileBrowser,
     fileBrowserTab,
     setFileBrowserTab,
     // batch
     batchCmdOpen,
     setBatchCmdOpen,
+    openBatchCommand,
     batchResultId,
     setBatchResultId,
     batchRetain,
@@ -806,6 +1057,7 @@ export function useNodesPageState() {
     // migrate
     migrateSourceNode,
     setMigrateSourceNode,
+    openMigrate,
     // csv
     csvInputRef,
     // confirm dialog

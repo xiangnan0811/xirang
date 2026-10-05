@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useAuth } from "@/context/auth-context.hooks";
 import { useTranslation } from "react-i18next";
 import { Cloud, DatabaseZap, KeyRound, Layers3, Loader2, RotateCcw, ShieldCheck } from "lucide-react";
 
@@ -68,10 +69,51 @@ function stateTone(state: RclonePublicationState): "success" | "warning" | "dest
   }
 }
 
+function useAdminDialogAttempt(open: boolean, token: string | null) {
+  const { role, token: authToken } = useAuth();
+  const generationRef = useRef(0);
+  const mountedRef = useRef(false);
+  const openRef = useRef(open);
+  const tokenRef = useRef(token);
+  const authTokenRef = useRef(authToken);
+  const roleRef = useRef(role);
+
+  useLayoutEffect(() => {
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    openRef.current = open;
+    tokenRef.current = token;
+    authTokenRef.current = authToken;
+    roleRef.current = role;
+    mountedRef.current = true;
+    return () => {
+      generationRef.current = generation + 1;
+      mountedRef.current = false;
+    };
+  }, [open, token, authToken, role]);
+
+  const beginAttempt = () => {
+    const generation = generationRef.current;
+    const attemptToken = tokenRef.current;
+    const attemptAuthToken = authTokenRef.current;
+    const isCurrent = () =>
+      mountedRef.current
+      && generationRef.current === generation
+      && openRef.current
+      && roleRef.current === "admin"
+      && tokenRef.current === attemptToken
+      && authTokenRef.current === attemptAuthToken;
+    return { isCurrent };
+  };
+
+  return { beginAttempt, roleRef, openRef };
+}
+
 export function TaskRcloneVersioningDialog(props: TaskRcloneVersioningDialogProps) {
+  const { role, token: authToken } = useAuth();
   const summary = props.task?.rclonePublication;
   return <TaskRcloneVersioningDialogContent key={JSON.stringify([
-    props.open, props.task?.id, props.token, summary?.mode, summary?.taskRevision, summary?.bindingRevision,
+    props.open, props.task?.id, props.token, authToken, role, summary?.mode, summary?.taskRevision, summary?.bindingRevision,
   ])} {...props} />;
 }
 
@@ -83,6 +125,7 @@ function TaskRcloneVersioningDialogContent({
   onUpdated,
 }: TaskRcloneVersioningDialogProps) {
   const { t } = useTranslation();
+  const { beginAttempt, roleRef, openRef } = useAdminDialogAttempt(open, token);
   const [selectedMode, setSelectedMode] = useState<RcloneVersionedPublicationMode>(
     task?.rclonePublication?.mode === "native_object_versions" ? "native_object_versions" : "versioned_prefix",
   );
@@ -161,16 +204,20 @@ function TaskRcloneVersioningDialogContent({
   };
 
   const savePortableBinding = async () => {
+    if (roleRef.current !== "admin" || !openRef.current) return;
     if (!token || !taskRevision || !targetRemote.trim() || !managedRootLocator.trim() || !boundConfig) {
       setNotice("admission_blocked");
       return;
     }
+    const { isCurrent } = beginAttempt();
+    if (!isCurrent()) return;
     setBusy("portable");
     setNotice(null);
     try {
       const setup = await apiClient.createRclonePortableBindingSetup(token, task.id, {
         expectedTaskRevision: taskRevision,
       });
+      if (!isCurrent()) return;
       const next = await apiClient.setRclonePortableBinding(token, task.id, {
         expectedTaskRevision: taskRevision,
         expectedBindingRevision: bindingRevision,
@@ -179,40 +226,53 @@ function TaskRcloneVersioningDialogContent({
         managedRootLocator: managedRootLocator.trim(),
         boundConfig,
       });
+      if (!isCurrent()) return;
       setSummaryOverride(next);
       setPreflight(null);
       await onUpdated();
     } catch (error) {
+      if (!isCurrent()) return;
       setNotice(getRcloneVersioningErrorCode(error));
     } finally {
-      setBoundConfig("");
-      setBusy(null);
+      if (isCurrent()) {
+        setBoundConfig("");
+        setBusy(null);
+      }
     }
   };
 
   const createNativeSetup = async () => {
-    if (!token || !taskRevision) return;
+    if (roleRef.current !== "admin" || !openRef.current || !token || !taskRevision) return;
+    const { isCurrent } = beginAttempt();
+    if (!isCurrent()) return;
     setBusy("native-setup");
     setNotice(null);
     try {
       const setup = await apiClient.createRcloneNativeBindingSetup(token, task.id, {
         expectedTaskRevision: taskRevision,
       });
+      if (!isCurrent()) return;
       setNativeSetup(setup);
     } catch (error) {
+      if (!isCurrent()) return;
       setNotice(getRcloneVersioningErrorCode(error));
     } finally {
-      setBusy(null);
+      if (isCurrent()) {
+        setBusy(null);
+      }
     }
   };
 
   const saveNativeBinding = async () => {
+    if (roleRef.current !== "admin" || !openRef.current) return;
     if (!token || !taskRevision || !nativeSetup?.setupId || !region.trim() || !bucket.trim() ||
         !managedPrefix.trim() || !roleArn.trim() || (bootstrapMode === "static_sts_bootstrap" && (!accessKeyId || !secretAccessKey)) ||
         (encryptionProfile === "sse_kms_cmk" && !kmsKeyArn.trim())) {
       setNotice("admission_blocked");
       return;
     }
+    const { isCurrent } = beginAttempt();
+    if (!isCurrent()) return;
     setBusy("native");
     setNotice(null);
     try {
@@ -230,22 +290,28 @@ function TaskRcloneVersioningDialogContent({
         encryptionProfile,
         kmsKeyArn: encryptionProfile === "sse_kms_cmk" ? kmsKeyArn.trim() : undefined,
       });
+      if (!isCurrent()) return;
       setSummaryOverride(next);
       setNativeSetup(null);
       setPreflight(null);
       await onUpdated();
     } catch (error) {
+      if (!isCurrent()) return;
       setNotice(getRcloneVersioningErrorCode(error));
     } finally {
-      setAccessKeyId("");
-      setSecretAccessKey("");
-      setKmsKeyArn("");
-      setBusy(null);
+      if (isCurrent()) {
+        setAccessKeyId("");
+        setSecretAccessKey("");
+        setKmsKeyArn("");
+        setBusy(null);
+      }
     }
   };
 
   const runPreflight = async () => {
-    if (!canRunPreflight || !token) return;
+    if (roleRef.current !== "admin" || !openRef.current || !canRunPreflight || !token) return;
+    const { isCurrent } = beginAttempt();
+    if (!isCurrent()) return;
     setBusy("preflight");
     setNotice(null);
     setPreflight(null);
@@ -254,24 +320,30 @@ function TaskRcloneVersioningDialogContent({
         expectedTaskRevision: taskRevision,
         requestedMode: selectedMode,
       });
+      if (!isCurrent()) return;
       setSummaryOverride(result.summary);
       setNow(Date.now());
       setPreflight(result);
       if (result.summary.state !== "ready") setNotice(result.summary.reasonCode);
     } catch (error) {
+      if (!isCurrent()) return;
       setNotice(getRcloneVersioningErrorCode(error));
     } finally {
-      setBusy(null);
+      if (isCurrent()) {
+        setBusy(null);
+      }
     }
   };
 
   const activate = async () => {
-    if (!canActivate || !token || !preflight) return;
+    if (roleRef.current !== "admin" || !openRef.current || !canActivate || !token || !preflight) return;
     // The click can precede the next clock tick; admission must check real time.
     if (!(Date.parse(preflight.expiresAt) > Date.now())) {
       setNow(Date.now());
       return;
     }
+    const { isCurrent } = beginAttempt();
+    if (!isCurrent()) return;
     setBusy("activate");
     setNotice(null);
     try {
@@ -280,19 +352,25 @@ function TaskRcloneVersioningDialogContent({
         preflightId: preflight.preflightId,
         migrationChoice,
       });
+      if (!isCurrent()) return;
       setSummaryOverride(result.summary);
       setPreflight(null);
       setConfirmImportedBaseline(false);
       await onUpdated();
     } catch (error) {
+      if (!isCurrent()) return;
       setNotice(getRcloneVersioningErrorCode(error));
     } finally {
-      setBusy(null);
+      if (isCurrent()) {
+        setBusy(null);
+      }
     }
   };
 
   const rollback = async (clean: boolean) => {
-    if (!token || !taskRevision || !bindingRevision || isBusy) return;
+    if (roleRef.current !== "admin" || !openRef.current || !token || !taskRevision || !bindingRevision || isBusy) return;
+    const { isCurrent } = beginAttempt();
+    if (!isCurrent()) return;
     setBusy("rollback");
     setNotice(null);
     try {
@@ -305,12 +383,16 @@ function TaskRcloneVersioningDialogContent({
             expectedTaskRevision: taskRevision,
             expectedBindingRevision: bindingRevision,
           });
+      if (!isCurrent()) return;
       setSummaryOverride(result.summary);
       await onUpdated();
     } catch (error) {
+      if (!isCurrent()) return;
       setNotice(getRcloneVersioningErrorCode(error));
     } finally {
-      setBusy(null);
+      if (isCurrent()) {
+        setBusy(null);
+      }
     }
   };
 

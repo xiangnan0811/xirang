@@ -24,6 +24,7 @@ import type { SSHKeyRecord } from "@/types/domain";
 export interface SSHKeyActionsMenuProps {
   sshKey: SSHKeyRecord;
   nodeCount: number;
+  canManageSSHKeys: boolean;
   onEdit: (key: SSHKeyRecord, opener?: EventTarget | null) => void;
   onDelete: (key: SSHKeyRecord) => void;
   onTestConnection: (key: SSHKeyRecord) => void;
@@ -34,6 +35,7 @@ export interface SSHKeyActionsMenuProps {
 export function SSHKeyActionsMenu({
   sshKey,
   nodeCount,
+  canManageSSHKeys,
   onEdit,
   onDelete,
   onTestConnection,
@@ -70,18 +72,22 @@ export function SSHKeyActionsMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem onClick={() => onEdit(sshKey, triggerRef.current)}>
-          <Pencil className="mr-2 size-4" aria-hidden="true" />
-          {t("common.edit")}
-        </DropdownMenuItem>
+        {canManageSSHKeys ? (
+          <DropdownMenuItem onClick={() => onEdit(sshKey, triggerRef.current)}>
+            <Pencil className="mr-2 size-4" aria-hidden="true" />
+            {t("common.edit")}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem onClick={() => void handleCopyPublicKey()}>
           <Copy className="mr-2 size-4" aria-hidden="true" />
           {t("sshKeys.copyPublicKey")}
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onTestConnection(sshKey)}>
-          <Plug className="mr-2 size-4" aria-hidden="true" />
-          {t("sshKeys.testConnection")}
-        </DropdownMenuItem>
+        {canManageSSHKeys ? (
+          <DropdownMenuItem onClick={() => onTestConnection(sshKey)}>
+            <Plug className="mr-2 size-4" aria-hidden="true" />
+            {t("sshKeys.testConnection")}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem onClick={() => onViewAssociatedNodes(sshKey)}>
           <Monitor className="mr-2 size-4" aria-hidden="true" />
           {t("sshKeys.viewAssociatedNodes")}
@@ -91,18 +97,22 @@ export function SSHKeyActionsMenu({
             </Badge>
           )}
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onRotate(sshKey, triggerRef.current)}>
-          <RefreshCw className="mr-2 size-4" aria-hidden="true" />
-          {t("sshKeys.rotateKey")}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
-          onClick={() => onDelete(sshKey)}
-        >
-          <Trash2 className="mr-2 size-4" aria-hidden="true" />
-          {t("common.delete")}
-        </DropdownMenuItem>
+        {canManageSSHKeys ? (
+          <DropdownMenuItem onClick={() => onRotate(sshKey, triggerRef.current)}>
+            <RefreshCw className="mr-2 size-4" aria-hidden="true" />
+            {t("sshKeys.rotateKey")}
+          </DropdownMenuItem>
+        ) : null}
+        {canManageSSHKeys ? <DropdownMenuSeparator /> : null}
+        {canManageSSHKeys ? (
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            onClick={() => onDelete(sshKey)}
+          >
+            <Trash2 className="mr-2 size-4" aria-hidden="true" />
+            {t("common.delete")}
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -67,6 +67,18 @@ export function useConfirm() {
     [openNext]
   );
 
+  const cancelPending = useCallback(() => {
+    const active = currentRef.current;
+    const pending = queueRef.current;
+    currentRef.current = null;
+    queueRef.current = [];
+    setState(null);
+    active?.resolve(false);
+    for (const request of pending) {
+      request.resolve(false);
+    }
+  }, []);
+
   useEffect(() => {
     return () => {
       currentRef.current?.resolve(false);
@@ -104,5 +116,5 @@ export function useConfirm() {
     </AlertDialog>
   ) : null;
 
-  return { confirm, dialog };
+  return { confirm, dialog, cancelPending };
 }

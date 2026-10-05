@@ -2,8 +2,10 @@ import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { CredentialsPage } from "./credentials-page";
+import { toast } from "@/components/ui/toast-sonner";
 import type { AppCredential } from "@/lib/api/credentials";
 
 const {
@@ -99,10 +101,22 @@ const credentials: AppCredential[] = [
   },
 ];
 
+function pageSurface() {
+  return (
+    <MemoryRouter initialEntries={["/app/credentials"]}>
+      <Routes>
+        <Route path="/app/credentials" element={<CredentialsPage />} />
+        <Route path="/app/overview" element={<p>Overview destination</p>} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
+
 describe("CredentialsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authState.token = "test-token";
+    authState.role = "admin";
     confirmMock.mockResolvedValue(true);
     deleteMock.mockResolvedValue(undefined);
   });
@@ -189,5 +203,58 @@ describe("CredentialsPage", () => {
       });
       expect(deleteMock).toHaveBeenCalledWith("test-token", 1);
     });
+  });
+
+  it.each(["operator", "viewer"])("redirects %s before listing credentials", async (role) => {
+    authState.role = role;
+    listMock.mockReturnValue(new Promise(() => undefined));
+
+    render(pageSurface());
+
+    expect(await screen.findByText("Overview destination")).toBeInTheDocument();
+    expect(listMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "credentials.pageTitle" })).not.toBeInTheDocument();
+  });
+
+  it("redirects and ignores a pending credential list when admin access is lost", async () => {
+    let resolveOld!: (rows: AppCredential[]) => void;
+    listMock.mockReturnValueOnce(new Promise<AppCredential[]>((resolve) => {
+      resolveOld = resolve;
+    }));
+    const view = render(pageSurface());
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+
+    authState.role = "operator";
+    view.rerender(pageSurface());
+    expect(await screen.findByText("Overview destination")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "credentials.pageTitle" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveOld(credentials);
+    });
+    expect(screen.queryByText("Prod MySQL")).not.toBeInTheDocument();
+    expect(listMock).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("ignores a pending credential failure after the signed-in account changes", async () => {
+    let rejectOld!: (error: Error) => void;
+    listMock.mockReturnValueOnce(new Promise<AppCredential[]>((_resolve, reject) => {
+      rejectOld = reject;
+    }));
+    const view = render(<CredentialsPage />);
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+
+    listMock.mockResolvedValueOnce([{ ...credentials[1], name: "Replacement credential" }]);
+    authState.token = "replacement-token";
+    view.rerender(<CredentialsPage />);
+    expect(await screen.findByText("Replacement credential")).toBeInTheDocument();
+
+    await act(async () => {
+      rejectOld(new Error("late credential failure"));
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.getByText("Replacement credential")).toBeInTheDocument();
+    expect(screen.queryByText("Prod MySQL")).not.toBeInTheDocument();
   });
 });

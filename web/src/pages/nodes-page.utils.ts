@@ -94,6 +94,7 @@ export type NodesViewProps = {
   onEmergencyBackup?: (nodeId: number, nodeName: string) => void;
   onMigrate?: (node: NodeRecord) => void;
   emergencyNodeId?: number | null;
-  isAdmin?: boolean;
-  canBrowseNodeFiles?: boolean;
+  isAdmin: boolean;
+  canOperateNodes: boolean;
+  canBrowseNodeFiles: boolean;
 };

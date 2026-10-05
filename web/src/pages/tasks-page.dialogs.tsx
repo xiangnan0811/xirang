@@ -77,6 +77,7 @@ export interface TasksPageDialogsProps {
   policies: PolicyRecord[];
   tasks: TaskRecord[];
   authToken: string | null;
+  canWriteTasks: boolean;
   handleCreateTask: (input: NewTaskInput) => Promise<void>;
   handleUpdateTask: (input: UpdateTaskInput) => Promise<void>;
   pauseConfirmTask: TaskRecord | null;
@@ -123,6 +124,7 @@ export function TasksPageDialogs({
   policies,
   tasks,
   authToken,
+  canWriteTasks,
   handleCreateTask,
   handleUpdateTask,
   pauseConfirmTask,
@@ -134,17 +136,19 @@ export function TasksPageDialogs({
 
   return (
     <>
-      <Suspense fallback={null}>
-        <TaskEditorDialog
-          open={createDialogOpen}
-          onOpenChange={setCreateDialogOpen}
-          onCloseAutoFocus={createOnCloseAutoFocus}
-          nodes={nodes}
-          policies={policies}
-          tasks={tasks}
-          onCreate={handleCreateTask}
-        />
-      </Suspense>
+      {canWriteTasks ? (
+        <Suspense fallback={null}>
+          <TaskEditorDialog
+            open={createDialogOpen}
+            onOpenChange={setCreateDialogOpen}
+            onCloseAutoFocus={createOnCloseAutoFocus}
+            nodes={nodes}
+            policies={policies}
+            tasks={tasks}
+            onCreate={handleCreateTask}
+          />
+        </Suspense>
+      ) : null}
 
       {canManageRsyncVersioning ? (
         <TaskRsyncVersioningDialog
@@ -185,21 +189,23 @@ export function TasksPageDialogs({
         />
       ) : null}
 
-      <Suspense fallback={null}>
-        <TaskEditorDialog
-          open={editDialogOpen}
-          onOpenChange={(open) => {
-            setEditDialogOpen(open);
-            if (!open) setEditingTask(null);
-          }}
-          onCloseAutoFocus={editOnCloseAutoFocus}
-          nodes={nodes}
-          policies={policies}
-          tasks={tasks}
-          onUpdate={handleUpdateTask}
-          editingTask={editingTask}
-        />
-      </Suspense>
+      {canWriteTasks ? (
+        <Suspense fallback={null}>
+          <TaskEditorDialog
+            open={editDialogOpen}
+            onOpenChange={(open) => {
+              setEditDialogOpen(open);
+              if (!open) setEditingTask(null);
+            }}
+            onCloseAutoFocus={editOnCloseAutoFocus}
+            nodes={nodes}
+            policies={policies}
+            tasks={tasks}
+            onUpdate={handleUpdateTask}
+            editingTask={editingTask}
+          />
+        </Suspense>
+      ) : null}
 
       <Dialog
         open={!!historyTask}
@@ -284,7 +290,7 @@ export function TasksPageDialogs({
         </DialogContent>
       </Dialog>
 
-      {authToken && (
+      {authToken && canWriteTasks ? (
         <ErrorBoundary>
           <BatchCommandDialog
             open={batchDialogOpen}
@@ -300,6 +306,10 @@ export function TasksPageDialogs({
               setBatchRetain(result.retain);
             }}
           />
+        </ErrorBoundary>
+      ) : null}
+      {authToken ? (
+        <ErrorBoundary>
           <BatchResultDialog
             open={batchResultId !== null}
             onOpenChange={(open) => { if (!open) setBatchResultId(null); }}
@@ -308,8 +318,9 @@ export function TasksPageDialogs({
             token={authToken}
           />
         </ErrorBoundary>
-      )}
+      ) : null}
 
+      {canWriteTasks ? (
       <Dialog
         open={!!pauseConfirmTask}
         onOpenChange={(open) => { if (!open) setPauseConfirmTask(null); }}
@@ -340,6 +351,7 @@ export function TasksPageDialogs({
           </DialogBody>
         </DialogContent>
       </Dialog>
+      ) : null}
     </>
   );
 }

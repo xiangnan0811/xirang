@@ -26,6 +26,7 @@ export type SSHKeysToolbarProps = Pick<
   | "setBatchImportOpen"
   | "setExportOpen"
   | "openRotationWizard"
+  | "canManageSSHKeys"
 >;
 
 export interface SSHKeysToolbarExtraProps extends SSHKeysToolbarProps {
@@ -44,6 +45,7 @@ export function SSHKeysToolbar({
   setBatchImportOpen,
   setExportOpen,
   openRotationWizard,
+  canManageSSHKeys,
   onBulkDelete,
 }: SSHKeysToolbarExtraProps) {
   const { t } = useTranslation();
@@ -53,15 +55,17 @@ export function SSHKeysToolbar({
     <div className="flex flex-wrap items-center justify-between gap-2">
       {/* ---------- 左侧操作按钮 ---------- */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          onClick={() => setBatchImportOpen(true)}
-        >
-          <Upload className="mr-1 size-3.5" />
-          {t("sshKeys.batchImport")}
-        </Button>
+        {canManageSSHKeys ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => setBatchImportOpen(true)}
+          >
+            <Upload className="mr-1 size-3.5" />
+            {t("sshKeys.batchImport")}
+          </Button>
+        ) : null}
         <Button
           variant="outline"
           size="sm"
@@ -71,29 +75,33 @@ export function SSHKeysToolbar({
           <Download className="mr-1 size-3.5" />
           {t("sshKeys.exportPublicKeys")}
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="shrink-0"
-          onClick={(event) => openRotationWizard(undefined, event.currentTarget)}
-        >
-          <RefreshCw className="mr-1 size-3.5" />
-          {t("sshKeys.rotateKeys")}
-        </Button>
+        {canManageSSHKeys ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0"
+            onClick={(event) => openRotationWizard(undefined, event.currentTarget)}
+          >
+            <RefreshCw className="mr-1 size-3.5" />
+            {t("sshKeys.rotateKeys")}
+          </Button>
+        ) : null}
 
         {/* 选中项操作 */}
         {selectedCount > 0 && (
           <>
             <div className="hidden h-6 w-px bg-border md:block" aria-hidden="true" />
-            <Button
-              variant="destructive"
-              size="sm"
-              className="shrink-0"
-              onClick={onBulkDelete}
-            >
-              <Trash2 className="mr-1 size-3.5" />
-              {t("sshKeys.batchDelete")}
-            </Button>
+            {canManageSSHKeys ? (
+              <Button
+                variant="destructive"
+                size="sm"
+                className="shrink-0"
+                onClick={onBulkDelete}
+              >
+                <Trash2 className="mr-1 size-3.5" />
+                {t("sshKeys.batchDelete")}
+              </Button>
+            ) : null}
             <span className="text-xs text-muted-foreground">
               {t("sshKeys.selectedCount", { count: selectedCount })}
             </span>
