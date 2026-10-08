@@ -76,3 +76,7 @@ Worker 保持可选、本地构建且不发布公共镜像。启用能力与安�
 依赖固定、镜像发布、版本来源与部署文档同步归维护者主文。[Go 工具链升级](../../maintainers/automation.md#go-工具链升级)须同时覆盖模块声明、Core/Worker/supercronic 构建和 Worker 指纹，保持 CGO 与运行镜像的 libc 兼容。Alpine 软件源移除已锁定版本时，按[镜像构建依赖](../../maintainers/automation.md#镜像构建依赖)核对两个架构的可安装版本；包解析错误中出现的基础镜像已安装旧版本不是降级依据，安全修复库仍须保留精确锁定。修改镜像/配置后按贡献指南执行对应 backend、frontend、YAML、Nginx、文档及 CI 门禁；本篇不以文档检查代替真实容器运行证据。
 
 共享加密库补丁不改变 BuilderBase 或运行接口，但必须同步两个镜像与生产工具链 inventory；工具链和 pipeline 指纹按新 inventory 派生。两架构运行时闭包及签名运行包须按新源码重新生成，并保持 Core/Worker 一致，不能手改摘要或把旧闭包声明为新包版本。
+
+Core 的 `tzdata` 锁定更新仅影响 All-in-One 时区数据库；Worker 未安装独立
+tzdata 包，不因此改变工具链 inventory。更新后须重新构建 Core，并复核受规则
+变化地区的本地调度时间；既有 UTC 时刻不做数据迁移。

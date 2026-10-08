@@ -524,6 +524,10 @@ Web SQLite 快照不支持 PostgreSQL 时，该观测仍独立可用。
 
 **读取位置**：`TZ` → 容器初始化时被 musl 解析，应用层 `time.Now()` 自动遵循；`LOG_FILE` → `backend/internal/logger/logger.go`；`TASK_MAX_EXECUTION_SECONDS` → `backend/internal/task/runner.go`。
 
+All-in-One 的时区规则来自镜像内精确锁定的 `tzdata`，切换 `TZ` 不会更新规则数据。
+本次镜像将该包从 `2026d-r0` 更新到 `2026e-r0`；默认时区不变，规则更新随
+新镜像生效，已保存的 UTC 时刻不会被迁移。
+
 ---
 
 ## 密钥管理
