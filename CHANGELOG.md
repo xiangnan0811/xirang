@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.58.2](https://github.com/xiangnan0811/xirang/compare/v0.58.1...v0.58.2) (2026-10-08)
+
+
+### 🐛 Bug Fixes
+
+* **lifecycle:** close P1 lifecycle safety and UX gaps ([#596](https://github.com/xiangnan0811/xirang/issues/596)) ([e2519b3](https://github.com/xiangnan0811/xirang/commit/e2519b376d879792b77fcc34e42d142863fd4a0c))
+
 ### 行为与升级说明
 
 - 本次完成生命周期体验审计的 P1 批次：静音窗口按本地时间及实际 UTC offset 编辑，预设保留真实时刻；终端连接结束后保留输出和安全状态，只能由用户显式建立新 SSH 会话，不自动重连或重复弹出验证。重连不恢复旧 PTY，也不自动重放终端命令。
