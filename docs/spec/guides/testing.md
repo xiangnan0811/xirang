@@ -13,15 +13,17 @@
 
 ## 真实浏览器与 SSH 生命周期
 
-`web/` 下的 `npm run e2e` 使用模拟 API，不选择 `real-backend-smoke.spec.ts` 或
-`lifecycle-p1.spec.ts`。真实验收使用：
+`web/` 下的 `npm run e2e` 使用模拟 API，不选择 `real-backend-smoke.spec.ts`、
+`lifecycle-p1.spec.ts` 或 `config-name-mapping.spec.ts`。真实验收使用：
 
 ```bash
 env -u NODE_ENV npx playwright test --config=playwright.real-backend.config.ts --project=chromium
 ```
 
-该入口先完成密码登录 smoke，再执行生命周期场景，自动启动隔离后端和 loopback
-OpenSSH。本机需有 Go、Chromium、`sshd`、`ssh`、`ssh-keygen`、`sqlite3` 和
+该入口先完成密码登录 smoke，再执行生命周期及配置名称关联场景，自动启动隔离
+后端和 loopback OpenSSH。名称关联使用独立账户、真实 TOTP/proof/grant、Maintenance
+实际下载文件原样上传及 API/数据库读回；同实例重建 ID 不替代双引擎跨库回归。
+本机需有 Go、Chromium、`sshd`、`ssh`、`ssh-keygen`、`sqlite3` 和
 `python3`；CI 安装同样依赖，不以缺 SSH 配置跳过终端场景。生成的密钥、私有
 known_hosts、SQLite 与 cron 产物均位于本次唯一 `.tmp/agent/lifecycle-p1-e2e/runtime.*`
 目录，严格主机校验保持启用；退出时只清理该次夹具，不触碰真实 SSH 配置或数据库。

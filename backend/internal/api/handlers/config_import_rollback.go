@@ -36,13 +36,15 @@ type configImportRollbackSnapshot struct {
 }
 
 type configImportTableSnapshot struct {
-	table      string
-	primaryKey string
-	where      string
-	args       []any
-	prior      map[string]map[string]any
-	current    map[string]map[string]any
-	created    []any
+	table                 string
+	primaryKey            string
+	where                 string
+	args                  []any
+	prior                 map[string]map[string]any
+	current               map[string]map[string]any
+	created               []any
+	trackCreatedOwnership bool
+	ownedCreated          map[string]struct{}
 }
 
 type configImportGraphRollback struct {
@@ -73,6 +75,12 @@ func captureConfigImportRollbackSnapshot(
 		policies: newConfigImportTableSnapshot("policies", "id", "name IN ?", importRecordNames(data.Policies)),
 		tasks:    newConfigImportTableSnapshot("tasks", "id", "name IN ?", importRecordNames(data.Tasks)),
 	}
+	// Nodes and SSH keys must only be compensated when this transaction
+	// actually wrote their IDs. A name-based before/after diff cannot establish
+	// ownership when a rejected or skipped record races with a concurrent insert.
+	snapshot.sshKeys.trackCreatedOwnership = true
+	snapshot.nodes.trackCreatedOwnership = true
+
 	for _, setting := range settingsPlan {
 		snapshot.settingKeys = append(snapshot.settingKeys, setting.key)
 	}
@@ -253,10 +261,37 @@ func (snapshot *configImportRollbackSnapshot) lockTaskRollbackPolicies(ctx conte
 
 func newConfigImportTableSnapshot(table, primaryKey, where string, args ...any) configImportTableSnapshot {
 	return configImportTableSnapshot{
-		table: table, primaryKey: primaryKey, where: where, args: args,
-		prior:   make(map[string]map[string]any),
-		current: make(map[string]map[string]any),
+		table:        table,
+		primaryKey:   primaryKey,
+		where:        where,
+		args:         args,
+		prior:        make(map[string]map[string]any),
+		current:      make(map[string]map[string]any),
+		ownedCreated: make(map[string]struct{}),
 	}
+}
+
+func (snapshot *configImportTableSnapshot) registerOwnedCreated(ids map[uint]struct{}) {
+	if snapshot == nil {
+		return
+	}
+	snapshot.trackCreatedOwnership = true
+	if snapshot.ownedCreated == nil {
+		snapshot.ownedCreated = make(map[string]struct{}, len(ids))
+	}
+	for id := range ids {
+		if id != 0 {
+			snapshot.ownedCreated[fmt.Sprint(id)] = struct{}{}
+		}
+	}
+}
+
+func (snapshot *configImportTableSnapshot) ownsCreated(key string) bool {
+	if snapshot == nil || !snapshot.trackCreatedOwnership {
+		return true
+	}
+	_, owned := snapshot.ownedCreated[key]
+	return owned
 }
 
 func (snapshot *configImportTableSnapshot) capture(ctx context.Context, tx *gorm.DB) error {
@@ -283,23 +318,21 @@ func (snapshot *configImportTableSnapshot) seal(ctx context.Context, tx *gorm.DB
 	snapshot.current = make(map[string]map[string]any, len(rows))
 	for _, row := range rows {
 		key := rawConfigImportKey(row[snapshot.primaryKey])
+		if key == "" {
+			return fmt.Errorf("config import rollback row identity is unavailable")
+		}
+		if _, exists := snapshot.prior[key]; !exists && !snapshot.ownsCreated(key) {
+			// A row that appeared after capture is not importer-owned merely
+			// because it shares an input name. Ignore it for both CAS and
+			// compensation; concurrent user rows must survive restore.
+			continue
+		}
 		snapshot.current[key] = row
 		if _, exists := snapshot.prior[key]; !exists {
 			snapshot.created = append(snapshot.created, row[snapshot.primaryKey])
 		}
 	}
 	return nil
-}
-
-func (snapshot *configImportTableSnapshot) load(ctx context.Context, tx *gorm.DB) ([]map[string]any, error) {
-	if snapshot.table == "" || len(snapshot.args) == 0 || configImportEmptyTarget(snapshot.args) {
-		return nil, nil
-	}
-	rows := make([]map[string]any, 0)
-	if err := tx.WithContext(ctx).Table(snapshot.table).Where(snapshot.where, snapshot.args...).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	return rows, nil
 }
 
 func (snapshot *configImportTableSnapshot) verifyCurrent(ctx context.Context, tx *gorm.DB) error {
@@ -316,6 +349,11 @@ func (snapshot *configImportTableSnapshot) verifyCurrent(ctx context.Context, tx
 		if key == "" {
 			return fmt.Errorf("config import rollback row identity is unavailable")
 		}
+		if snapshot.trackCreatedOwnership {
+			if _, expected := snapshot.current[key]; !expected && !snapshot.ownsCreated(key) {
+				continue
+			}
+		}
 		actual[key] = row
 	}
 	if len(actual) != len(snapshot.current) {
@@ -328,6 +366,17 @@ func (snapshot *configImportTableSnapshot) verifyCurrent(ctx context.Context, tx
 		}
 	}
 	return nil
+}
+
+func (snapshot *configImportTableSnapshot) load(ctx context.Context, tx *gorm.DB) ([]map[string]any, error) {
+	if snapshot.table == "" || len(snapshot.args) == 0 || configImportEmptyTarget(snapshot.args) {
+		return nil, nil
+	}
+	rows := make([]map[string]any, 0)
+	if err := tx.WithContext(ctx).Table(snapshot.table).Where(snapshot.where, snapshot.args...).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func configImportRowsEqual(expected, actual map[string]any) bool {

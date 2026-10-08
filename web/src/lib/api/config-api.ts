@@ -23,6 +23,9 @@ const CONFIG_IMPORT_WARNING_CODES: Record<ConfigImportWarningCode, true> = {
   missing_password: true,
   missing_inline_private_key: true,
   unresolved_ssh_key: true,
+  duplicate_name: true,
+  invalid_reference: true,
+  reference_conflict: true,
 };
 
 type ConfigImportWire = {

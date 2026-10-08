@@ -253,20 +253,20 @@ func validateConfigAssetGraph(graph configAssetGraph) error {
 	return nil
 }
 
-func (h *ConfigHandler) buildConfigAssetExportGraph(includeSecrets bool) (configAssetGraph, configAssetExportCounts, error) {
+func (h *ConfigHandler) buildConfigAssetExportGraph(tx *gorm.DB, includeSecrets bool) (configAssetGraph, configAssetExportCounts, error) {
 	graph := configAssetGraph{
 		BackupRepositories:      []configAssetRepositoryExport{},
 		TaskRepositoryLinks:     []configAssetLinkExport{},
 		BackupRetentionPolicies: []configAssetPolicyExport{},
 		RecoveryPointHolds:      []configAssetHoldExport{},
 	}
-	if h == nil || h.db == nil {
+	if h == nil || tx == nil {
 		return graph, configAssetExportCounts{}, nil
 	}
 
 	var repositories []model.BackupRepository
-	if h.db.Migrator().HasTable(&model.BackupRepository{}) {
-		if err := h.db.Order("id").Find(&repositories).Error; err != nil {
+	if tx.Migrator().HasTable(&model.BackupRepository{}) {
+		if err := tx.Order("id").Find(&repositories).Error; err != nil {
 			return configAssetGraph{}, configAssetExportCounts{}, err
 		}
 	}
@@ -285,7 +285,7 @@ func (h *ConfigHandler) buildConfigAssetExportGraph(includeSecrets bool) (config
 			IdentityRef:       configAssetIdentityRef(repository.RepositoryIdentity),
 		}
 		if includeSecrets {
-			envelope, err := h.exportRepositoryBindingEnvelope(repository.ID)
+			envelope, err := h.exportRepositoryBindingEnvelope(tx, repository.ID)
 			if err != nil {
 				return configAssetGraph{}, configAssetExportCounts{}, err
 			}
@@ -295,9 +295,9 @@ func (h *ConfigHandler) buildConfigAssetExportGraph(includeSecrets bool) (config
 	}
 
 	var links []model.TaskRepositoryLink
-	if h.db.Migrator().HasTable(&model.TaskRepositoryLink{}) {
-		query := h.db.Where("unlinked_at IS NULL")
-		if h.db.Migrator().HasTable(&model.Task{}) {
+	if tx.Migrator().HasTable(&model.TaskRepositoryLink{}) {
+		query := tx.Where("unlinked_at IS NULL")
+		if tx.Migrator().HasTable(&model.Task{}) {
 			query = query.Where("task_id IS NULL OR task_id NOT IN (SELECT id FROM tasks WHERE archived_at IS NOT NULL)")
 		}
 		if err := query.Order("id").Find(&links).Error; err != nil {
@@ -323,8 +323,8 @@ func (h *ConfigHandler) buildConfigAssetExportGraph(includeSecrets bool) (config
 	}
 
 	var policies []model.BackupRetentionPolicy
-	if h.db.Migrator().HasTable(&model.BackupRetentionPolicy{}) {
-		if err := h.db.Where("status = ? AND deleted_at IS NULL", "active").Order("id").Find(&policies).Error; err != nil {
+	if tx.Migrator().HasTable(&model.BackupRetentionPolicy{}) {
+		if err := tx.Where("status = ? AND deleted_at IS NULL", "active").Order("id").Find(&policies).Error; err != nil {
 			return configAssetGraph{}, configAssetExportCounts{}, err
 		}
 	}
@@ -356,12 +356,12 @@ func (h *ConfigHandler) buildConfigAssetExportGraph(includeSecrets bool) (config
 	}, nil
 }
 
-func (h *ConfigHandler) exportRepositoryBindingEnvelope(repositoryID string) (*configAssetBindingEnvelope, error) {
-	if h == nil || h.db == nil || !h.db.Migrator().HasTable(&model.RepositoryAccessBinding{}) {
+func (h *ConfigHandler) exportRepositoryBindingEnvelope(tx *gorm.DB, repositoryID string) (*configAssetBindingEnvelope, error) {
+	if h == nil || tx == nil || !tx.Migrator().HasTable(&model.RepositoryAccessBinding{}) {
 		return nil, nil
 	}
 	var binding model.RepositoryAccessBinding
-	err := h.db.Where("repository_id = ? AND status = ?", repositoryID, configAssetBindingStatusActive).
+	err := tx.Where("repository_id = ? AND status = ?", repositoryID, configAssetBindingStatusActive).
 		Order("id").First(&binding).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil

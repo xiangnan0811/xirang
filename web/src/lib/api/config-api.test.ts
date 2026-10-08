@@ -197,6 +197,30 @@ describe("config api", () => {
     expect(JSON.stringify(result)).not.toContain("bad\nname");
   });
 
+  it("recognizes name-mapping warning codes and drops raw server text", () => {
+    const result = mapConfigImportResult({
+      rejected: 3,
+      warnings: [
+        { entity: "nodes", index: 0, name: "web,1", code: "duplicate_name", message: "RAW_DUPLICATE", detail: "SELECT secret FROM nodes" },
+        { entity: "ssh_keys", index: 1, name: "edge,key", code: "invalid_reference", error: "RAW_REFERENCE" },
+        { entity: "ssh_keys", index: 2, code: "reference_conflict", reason: "RAW_CONFLICT" },
+        { entity: "nodes", index: 4, code: "not_a_code", message: "RAW_UNKNOWN" },
+      ],
+    });
+
+    expect(result.warnings).toEqual([
+      { entity: "nodes", index: 0, name: "web,1", code: "duplicate_name" },
+      { entity: "ssh_keys", index: 1, name: "edge,key", code: "invalid_reference" },
+      { entity: "ssh_keys", index: 2, code: "reference_conflict" },
+    ]);
+    const encoded = JSON.stringify(result);
+    expect(encoded).not.toContain("RAW_DUPLICATE");
+    expect(encoded).not.toContain("RAW_REFERENCE");
+    expect(encoded).not.toContain("RAW_CONFLICT");
+    expect(encoded).not.toContain("RAW_UNKNOWN");
+    expect(encoded).not.toContain("SELECT secret");
+  });
+
   it("caps mapped warnings and ignores unsafe count types", () => {
     const warnings = Array.from({ length: 101 }, (_, index) => ({
       entity: "tasks",
