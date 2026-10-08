@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.58.2](https://github.com/xiangnan0811/xirang/compare/v0.58.1...v0.58.2) (2026-10-08)
+
+
+### 🐛 Bug Fixes
+
+* **lifecycle:** close P1 lifecycle safety and UX gaps ([#596](https://github.com/xiangnan0811/xirang/issues/596)) ([e2519b3](https://github.com/xiangnan0811/xirang/commit/e2519b376d879792b77fcc34e42d142863fd4a0c))
+
 ### 行为与升级说明
 
 - 本次完成生命周期体验审计的 P1 批次：静音窗口按本地时间及实际 UTC offset 编辑，预设保留真实时刻；终端连接结束后保留输出和安全状态，只能由用户显式建立新 SSH 会话，不自动重连或重复弹出验证。重连不恢复旧 PTY，也不自动重放终端命令。
@@ -14,13 +21,6 @@
 - 本次无新增数据库 schema migration，不重写既有任务、备份产物或恢复码，不恢复已删除数据；既有不可逆迁移和恢复限制仍适用。回退旧版会重新引入时间、身份生命周期、导入及反馈缺陷，不能将无新增迁移当作安全降级证明。公开版本、镜像及本地隔离验收不代表生产已部署或生产恢复已验收。
 - 构建依赖 `source-map-js` 从 1.2.1 锁定至兼容补丁 1.2.2，修复 GHSA-68fv-2mgg-jv7q。须用更新后的锁文件重新构建前端及镜像；回退旧锁文件会恢复该已知风险。未扩大为其他依赖升级或降低漏洞扫描门槛。
 - All-in-One 的 `tzdata` 从软件源已移除的 `2026d-r0` 精确锁定到 `2026e-r0`，恢复镜像构建并更新容器时区数据；须重新构建 Core 镜像。默认 `TZ=Asia/Shanghai` 不变，受 IANA 规则更新影响的地区应复核本地计划时间；不重写已保存的 UTC 时刻。Worker 没有独立 tzdata 锁定，本次不改变其工具链 inventory；回退旧镜像也会回退时区数据。
-
-## [0.58.2](https://github.com/xiangnan0811/xirang/compare/v0.58.1...v0.58.2) (2026-10-08)
-
-
-### 🐛 Bug Fixes
-
-* **lifecycle:** close P1 lifecycle safety and UX gaps ([#596](https://github.com/xiangnan0811/xirang/issues/596)) ([e2519b3](https://github.com/xiangnan0811/xirang/commit/e2519b376d879792b77fcc34e42d142863fd4a0c))
 
 ## [0.58.1](https://github.com/xiangnan0811/xirang/compare/v0.58.0...v0.58.1) (2026-10-05)
 

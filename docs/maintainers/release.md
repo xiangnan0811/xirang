@@ -98,6 +98,10 @@ PostgreSQL 外部备份各自的能力边界。
 发布须重新构建并扫描双架构镜像；不修改默认时区或迁移已保存的 UTC 时刻。
 升级前复核受规则变化地区的本地调度时间，回退旧镜像也会回退时区数据。
 
+`v0.58.2` 的生命周期行为、备份能力边界、旧操作排空、无新增 schema migration
+及依赖回退风险集中于 CHANGELOG 对应版本的“行为与升级说明”；发布时将该节完整
+同步至 Release PR 和 GitHub Release 正文，不将本地或 CI 验收写成生产部署完成。
+
 ## Docker Hub 描述同步
 
 [Sync Docker Hub Description](../../.github/workflows/dockerhub-description.yml)在 `README.md` 或该工作流文件变更并 push 到 `main` 时运行，也支持手动触发。短描述取 GitHub 仓库 description（为空时使用工作流默认文本），长描述取根 README。
