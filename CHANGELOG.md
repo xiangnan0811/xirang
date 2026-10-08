@@ -15,6 +15,13 @@
 - 构建依赖 `source-map-js` 从 1.2.1 锁定至兼容补丁 1.2.2，修复 GHSA-68fv-2mgg-jv7q。须用更新后的锁文件重新构建前端及镜像；回退旧锁文件会恢复该已知风险。未扩大为其他依赖升级或降低漏洞扫描门槛。
 - All-in-One 的 `tzdata` 从软件源已移除的 `2026d-r0` 精确锁定到 `2026e-r0`，恢复镜像构建并更新容器时区数据；须重新构建 Core 镜像。默认 `TZ=Asia/Shanghai` 不变，受 IANA 规则更新影响的地区应复核本地计划时间；不重写已保存的 UTC 时刻。Worker 没有独立 tzdata 锁定，本次不改变其工具链 inventory；回退旧镜像也会回退时区数据。
 
+## [0.58.2](https://github.com/xiangnan0811/xirang/compare/v0.58.1...v0.58.2) (2026-10-08)
+
+
+### 🐛 Bug Fixes
+
+* **lifecycle:** close P1 lifecycle safety and UX gaps ([#596](https://github.com/xiangnan0811/xirang/issues/596)) ([e2519b3](https://github.com/xiangnan0811/xirang/commit/e2519b376d879792b77fcc34e42d142863fd4a0c))
+
 ## [0.58.1](https://github.com/xiangnan0811/xirang/compare/v0.58.0...v0.58.1) (2026-10-05)
 
 
