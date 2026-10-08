@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { LoadingState } from "@/components/ui/loading-state";
 import type { AuthContextValue } from "@/context/auth-context.shared";
 import type { AssetRef, BackupAsset, BackupContentTicket } from "@/types/domain";
@@ -71,7 +72,7 @@ export interface AssetPreviewProps {
   canPreview: boolean;
   canDownload: boolean;
   canRetryPreview?: boolean;
-  processingRuntime?: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof">;
+  processingRuntime?: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof"> & Partial<Pick<AuthContextValue, "totpEnabled" | "authTransitioning">>;
   archiveContentAvailable?: boolean;
   archiveDownloadAllowed?: boolean;
   online?: boolean;
@@ -171,6 +172,9 @@ export function AssetPreview({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {processingRuntime?.role === "admin" || (processingRuntime?.role === "operator" && canDownload) ? (
+        <StepUpPrerequisiteNotice className="m-2" />
+      ) : null}
       <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-end gap-2 border-b border-border px-2 py-1.5">
         {processingRuntime?.token ? (
           <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 lg:min-h-8" onClick={() => setProcessingOpen(true)}>

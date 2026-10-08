@@ -1,8 +1,10 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, isStepUpRequiredError } from "@/lib/api/core";
 import { fetchSSHKeyExportFile } from "@/lib/api/ssh-keys-api";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import type { SSHKeyRecord } from "@/types/domain";
 import { SSHKeyExportDialog } from "./ssh-key-export-dialog";
 
 const { useStepUpActionMock } = vi.hoisted(() => ({
@@ -88,5 +90,51 @@ describe("fetchSSHKeyExportFile", () => {
 
     expect(captured).toBeInstanceOf(ApiError);
     expect(isStepUpRequiredError(captured)).toBe(true);
+  });
+
+  it("explains the private-key digest without changing download fields", async () => {
+    const user = userEvent.setup();
+    const key: SSHKeyRecord = {
+      id: "key-1",
+      name: "生产密钥",
+      username: "root",
+      keyType: "ed25519",
+      publicKey: "ssh-ed25519 AAAA",
+      fingerprint: "SHA256:abc",
+      disabled: false,
+      expiresAt: "",
+      allowedPurposes: "",
+      allowedNodeIds: "",
+      allowedNodeTags: "",
+      broadScope: false,
+      createdAt: "2026-01-01 00:00:00",
+    };
+    render(
+      <SSHKeyExportDialog
+        open
+        onOpenChange={vi.fn()}
+        sshKeys={[key]}
+        selectedKeyIds={[]}
+        stats={{ total: 1, inUse: 0 }}
+        token="token"
+      />,
+    );
+
+    const preview = () => document.querySelector("pre")?.textContent ?? "";
+    expect(screen.getByText(/sshKeys\.exportAuthorizedKeysFieldNote|authorized_keys 仅包含公钥/)).toBeInTheDocument();
+    expect(preview()).toBe("ssh-ed25519 AAAA");
+    expect(preview()).not.toMatch(/^\s*#/m);
+
+    await user.click(screen.getByRole("button", { name: /JSON/ }));
+    expect(screen.getByText(/sshKeys\.exportDigestFieldNote|fingerprint 字段是私钥摘要/)).toBeInTheDocument();
+    expect(preview()).toContain('"fingerprint": "SHA256:abc"');
+    expect(preview()).toContain('"public_key": "ssh-ed25519 AAAA"');
+    expect(preview()).not.toContain("public_key_fingerprint");
+    expect(preview()).not.toMatch(/^\s*#/m);
+
+    await user.click(screen.getByRole("button", { name: /CSV/ }));
+    expect(preview().split("\n")[0]).toBe("name,fingerprint,public_key,created_at");
+    expect(preview()).toContain('"SHA256:abc"');
+    expect(preview()).not.toMatch(/^\s*#/m);
   });
 });

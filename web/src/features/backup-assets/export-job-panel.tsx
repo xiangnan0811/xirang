@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import type { AuthContextValue } from "@/context/auth-context.shared";
 import { formatBytes } from "@/lib/utils";
 import type { AssetRef, BackupExportArchiveFormat, BackupExportArchiveProfile } from "@/types/domain";
@@ -14,6 +15,7 @@ import {
   type BackupAssetExportApi,
   type BackupAssetExportCreateOptions,
 } from "./use-backup-asset-export";
+import { backupStepUpErrorKey } from "./backup-sensitive-runtime";
 import { ContentTransportGuidance } from "./content-transport-guidance";
 
 export interface ExportJobPanelSelection {
@@ -25,7 +27,7 @@ export interface ExportJobPanelProps {
   open: boolean;
   selection: readonly ExportJobPanelSelection[];
   exportJobId?: string;
-  runtime: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof">;
+  runtime: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof"> & Partial<Pick<AuthContextValue, "totpEnabled" | "authTransitioning">>;
   onRouteChange: (exportJobId: string | null, options: { replace: boolean }) => void;
   onDismiss: () => void;
   api?: BackupAssetExportApi;
@@ -54,6 +56,8 @@ export function ExportJobPanel({
     token: runtime.token,
     role: runtime.role,
     ensureStepUpProof: runtime.ensureStepUpProof,
+    totpEnabled: runtime.totpEnabled,
+    authTransitioning: runtime.authTransitioning,
     exportJobId,
     onRouteChange,
     api,
@@ -98,6 +102,7 @@ export function ExportJobPanel({
       </header>
 
       <div className="min-h-0 space-y-4 overflow-y-auto px-5 py-4">
+        {runtime.role === "admin" ? <StepUpPrerequisiteNotice /> : null}
         {!authoritative ? (
           <section className="grid gap-3 rounded-md border border-border bg-muted/50 p-3" aria-label={t("backupAssets.export.estimate")}>
             <div className="flex items-center justify-between gap-3">
@@ -229,7 +234,9 @@ export function ExportJobPanel({
             <ContentTransportGuidance authRole={runtime.role} />
           </InlineAlert>
         ) : controller.state.error ? (
-          <p role="alert" className="text-xs text-destructive">{t("backupAssets.export.error")}</p>
+          <p role="alert" className="text-xs text-destructive">
+            {t(backupStepUpErrorKey(controller.state.error) ?? "backupAssets.export.error")}
+          </p>
         ) : null}
         <p className="sr-only" aria-live="polite">{announcementText(controller.state.announcement, t)}</p>
       </div>

@@ -1,6 +1,8 @@
+import type { ReactElement } from "react";
 import { StrictMode } from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render as renderRoot, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
 import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
@@ -9,11 +11,12 @@ import WebTerminal from "./web-terminal";
 
 const FRESH_PROOF = { persist: false, reuseCached: false };
 
-const { ensureStepUpProofMock, clearStepUpProofMock, requestTerminalCredentialGrantMock, socketInstances, terminalInstances } = vi.hoisted(() => {
+const { ensureStepUpProofMock, clearStepUpProofMock, requestTerminalCredentialGrantMock, socketInstances, terminalInstances, authControls } = vi.hoisted(() => {
   const instances: Array<{
     options: {
       url: string;
       binaryType?: BinaryType;
+      autoReconnect?: boolean;
       heartbeatIntervalMs?: number;
       onOpen?: (socket: { send: (value: string) => void }) => void;
       onClose?: (event: { code: number; reason: string }) => void;
@@ -25,9 +28,18 @@ const { ensureStepUpProofMock, clearStepUpProofMock, requestTerminalCredentialGr
     connect: () => void;
     send: (value: string) => boolean;
     close: () => void;
-    reopen: () => Promise<void>;
   }> = [];
-  const terminals: Array<{ emitData: (data: string) => void }> = [];
+  const terminals: Array<{
+    emitData: (data: string) => void;
+    write: ReturnType<typeof vi.fn>;
+    clear: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+  }> = [];
+  const authControls = {
+    totpEnabled: true,
+    authTransitioning: false,
+    token: "token-1",
+  };
 
   return {
     ensureStepUpProofMock: vi.fn(),
@@ -35,6 +47,7 @@ const { ensureStepUpProofMock, clearStepUpProofMock, requestTerminalCredentialGr
     requestTerminalCredentialGrantMock: vi.fn(),
     socketInstances: instances,
     terminalInstances: terminals,
+    authControls,
   };
 });
 
@@ -43,8 +56,21 @@ vi.mock("@/context/auth-context.hooks", () => ({
     // 每次渲染换新函数身份，锁住“鉴权 helper 变化不得拆掉当前连接”。
     ensureStepUpProof: (...args: Parameters<typeof ensureStepUpProofMock>) => ensureStepUpProofMock(...args),
     clearStepUpProof: (...args: Parameters<typeof clearStepUpProofMock>) => clearStepUpProofMock(...args),
+    totpEnabled: authControls.totpEnabled,
+    authTransitioning: authControls.authTransitioning,
+    token: authControls.token,
   }),
 }));
+
+function render(ui: ReactElement) {
+  const view = renderRoot(<MemoryRouter initialEntries={["/app/nodes"]}>{ui}</MemoryRouter>);
+  return {
+    ...view,
+    rerender(next: ReactElement) {
+      view.rerender(<MemoryRouter initialEntries={["/app/nodes"]}>{next}</MemoryRouter>);
+    },
+  };
+}
 
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
@@ -116,17 +142,6 @@ vi.mock("@/lib/ws/reconnecting-socket", () => ({
       this.options.onOpen?.({ send: (value: string) => this.sent.push(value) });
     }
 
-    async reopen(): Promise<void> {
-      const pending = this.options.beforeConnect?.();
-      if (pending) {
-        await pending;
-      }
-      if (this.closed) {
-        return;
-      }
-      this.options.onOpen?.({ send: (value: string) => this.sent.push(value) });
-    }
-
     send(value: string) {
       this.sent.push(value);
       return true;
@@ -177,6 +192,9 @@ describe("WebTerminal", () => {
     requestTerminalCredentialGrantMock.mockReset();
     socketInstances.length = 0;
     terminalInstances.length = 0;
+    authControls.totpEnabled = true;
+    authControls.authTransitioning = false;
+    authControls.token = "token-1";
     sessionStorage.clear();
     localStorage.clear();
     ensureStepUpProofMock.mockResolvedValue("proof-1");
@@ -204,6 +222,8 @@ describe("WebTerminal", () => {
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
     expect(ensureStepUpProofMock).toHaveBeenCalledWith(STEP_UP_ACTIONS.terminalOpen, FRESH_PROOF);
     expect(socketInstances[0].options.url).toBe("wss://ops.example.test/api/v1/ws/terminal?node_id=7");
+    expect(socketInstances[0].options.autoReconnect).toBe(false);
+    expect(socketInstances[0].options.heartbeatIntervalMs).toBe(0);
     expect(JSON.parse(socketInstances[0].sent[0] ?? "{}")).toEqual({
       type: "auth",
       token: "token-1",
@@ -231,8 +251,7 @@ describe("WebTerminal", () => {
 
   it("grant-required close 会打开授权原因弹窗、申请授权并重试终端连接", async () => {
     const user = userEvent.setup();
-    const onDisconnect = vi.fn();
-    render(<WebTerminal nodeId={7} token="token-1" onDisconnect={onDisconnect} />);
+    render(<WebTerminal nodeId={7} token="token-1" />);
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -246,7 +265,6 @@ describe("WebTerminal", () => {
 
     expect(clearStepUpProofMock).not.toHaveBeenCalled();
     expect(socketInstances[0].closed).toBe(true);
-    expect(onDisconnect).not.toHaveBeenCalled();
     expect(await screen.findByRole("dialog", { name: "需要终端临时授权" })).toBeInTheDocument();
 
     await user.type(screen.getByLabelText("授权原因"), "处理告警");
@@ -347,39 +365,53 @@ describe("WebTerminal", () => {
     expect(localStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
   });
 
-  it("F04 网络重连不会复用上一连接的 proof", async () => {
+  it("手动重连保留输出并取得新 proof，旧回调不能作用到新尝试", async () => {
+    const gate = deferred<string>();
     ensureStepUpProofMock
       .mockResolvedValueOnce("proof-connect-1")
-      .mockResolvedValueOnce("proof-connect-2");
+      .mockImplementationOnce(() => gate.promise);
 
     render(<WebTerminal nodeId={7} token="token-1" />);
+    await settleTerminal();
+    await waitFor(() => expect(socketInstances[0]?.sent.length ?? 0).toBeGreaterThan(0));
+    expect(terminalInstances).toHaveLength(1);
+    const oldSocket = socketInstances[0];
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-    await waitFor(() => expect(socketInstances).toHaveLength(1));
-    expect(JSON.parse(socketInstances[0].sent[0] ?? "{}")).toMatchObject({
-      type: "auth",
-      step_up_proof: "proof-connect-1",
-    });
-
-    await act(async () => {
-      await socketInstances[0].reopen();
+    expect(await screen.findByText("重新连接会建立新的 SSH 会话，不会恢复原来的终端。")).toBeInTheDocument();
+    const reconnect = screen.getByRole("button", { name: "重新连接" });
+    act(() => {
+      reconnect.click();
+      reconnect.click();
     });
 
-    const authFrames = socketInstances[0].sent
-      .map((value) => JSON.parse(value) as { type?: string; step_up_proof?: string })
-      .filter((frame) => frame.type === "auth");
-    expect(authFrames.map((frame) => frame.step_up_proof)).toEqual(["proof-connect-1", "proof-connect-2"]);
+    expect(socketInstances).toHaveLength(2);
+    expect(oldSocket.closed).toBe(true);
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(2);
-    expect(ensureStepUpProofMock).toHaveBeenNthCalledWith(1, STEP_UP_ACTIONS.terminalOpen, {
-      persist: false,
-      reuseCached: false,
+    expect(ensureStepUpProofMock).toHaveBeenNthCalledWith(2, STEP_UP_ACTIONS.terminalOpen, FRESH_PROOF);
+    expect(terminalInstances).toHaveLength(1);
+    expect(terminalInstances[0].dispose).not.toHaveBeenCalled();
+    expect(terminalInstances[0].clear).not.toHaveBeenCalled();
+    expect(terminalInstances[0].write).toHaveBeenCalledWith(expect.stringContaining("—— 新的 SSH 会话 ——"));
+
+    act(() => {
+      oldSocket.options.onOpen?.({ send: (value: string) => oldSocket.sent.push(value) });
+      oldSocket.options.onClose?.({ code: 1011, reason: "stale-secret" });
     });
-    expect(ensureStepUpProofMock).toHaveBeenNthCalledWith(2, STEP_UP_ACTIONS.terminalOpen, {
-      persist: false,
-      reuseCached: false,
+    expect(oldSocket.sent).toHaveLength(1);
+    expect(screen.queryByText("stale-secret")).not.toBeInTheDocument();
+    expect(screen.queryByText("终端连接失败 (1011)")).not.toBeInTheDocument();
+    expect(socketInstances).toHaveLength(2);
+
+    await act(async () => {
+      gate.resolve("proof-connect-2");
     });
+    await waitFor(() => expect(socketInstances[1]?.sent.length ?? 0).toBeGreaterThan(0));
+    expect(JSON.parse(socketInstances[1].sent[0] ?? "{}")).toMatchObject({
+      type: "auth",
+      token: "token-1",
+      step_up_proof: "proof-connect-2",
+    });
+    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(2);
     expect(sessionStorage.getItem("xirang-step-up-proofs-v2") ?? "").not.toContain("proof-connect-2");
     expect(localStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
   });
@@ -488,9 +520,8 @@ describe("WebTerminal", () => {
 
   it("延迟的 proof 在 session generation 变化后不会连接或再次请求", async () => {
     const gate = deferred<string>();
-    const onDisconnect = vi.fn();
     ensureStepUpProofMock.mockImplementation(() => gate.promise);
-    render(<WebTerminal nodeId={7} token="token-1" onDisconnect={onDisconnect} />);
+    render(<WebTerminal nodeId={7} token="token-1" />);
     await settleTerminal();
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
 
@@ -501,18 +532,19 @@ describe("WebTerminal", () => {
     await flushTicks();
 
     expect(socketInstances[0]?.sent ?? []).toEqual([]);
+    expect(socketInstances).toHaveLength(1);
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
+    expect(terminalInstances).toHaveLength(1);
+    expect(terminalInstances[0]?.dispose).not.toHaveBeenCalled();
     expect(requestTerminalCredentialGrantMock).not.toHaveBeenCalled();
-    expect(onDisconnect).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByText("stale-proof")).not.toBeInTheDocument();
   });
 
   it("延迟的 proof 在卸载后不会连接或更新", async () => {
     const gate = deferred<string>();
-    const onDisconnect = vi.fn();
     ensureStepUpProofMock.mockImplementation(() => gate.promise);
-    const view = render(<WebTerminal nodeId={7} token="token-1" onDisconnect={onDisconnect} />);
+    const view = render(<WebTerminal nodeId={7} token="token-1" />);
     await settleTerminal();
     view.unmount();
 
@@ -524,7 +556,6 @@ describe("WebTerminal", () => {
     expect(socketInstances).toHaveLength(1);
     expect(socketInstances[0].sent).toEqual([]);
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
-    expect(onDisconnect).not.toHaveBeenCalled();
     expect(requestTerminalCredentialGrantMock).not.toHaveBeenCalled();
   });
 
@@ -629,10 +660,9 @@ describe("WebTerminal", () => {
   it("延迟的授权申请在卸载后不会重试连接或更新", async () => {
     const user = userEvent.setup();
     const gate = deferred<{ id: number; status: string }>();
-    const onDisconnect = vi.fn();
     ensureStepUpProofMock.mockResolvedValue("proof-1");
     requestTerminalCredentialGrantMock.mockImplementation(() => gate.promise);
-    const view = render(<WebTerminal nodeId={7} token="token-1" onDisconnect={onDisconnect} />);
+    const view = render(<WebTerminal nodeId={7} token="token-1" />);
     await settleTerminal();
     await waitFor(() => expect(socketInstances[0]?.sent.length ?? 0).toBeGreaterThan(0));
     act(() => {
@@ -651,7 +681,6 @@ describe("WebTerminal", () => {
     expect(requestTerminalCredentialGrantMock).toHaveBeenCalledTimes(1);
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
     expect(socketInstances).toHaveLength(1);
-    expect(onDisconnect).not.toHaveBeenCalled();
   });
 
   it("授权失败会保留弹窗和原因，并在下次提交时重新获取 proof", async () => {
@@ -709,6 +738,7 @@ describe("WebTerminal", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByText("草稿原因")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("授权已取消。重新连接会建立新的 SSH 会话。")).toBeInTheDocument();
     expect(socketInstances).toHaveLength(1);
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
     expect(requestTerminalCredentialGrantMock).not.toHaveBeenCalled();
@@ -807,31 +837,34 @@ describe("WebTerminal", () => {
     expect(ensureStepUpProofMock).toHaveBeenCalledWith(STEP_UP_ACTIONS.terminalOpen, FRESH_PROOF);
   });
 
-  it("OTP 失败只结束当前尝试一次", async () => {
-    const onDisconnect = vi.fn();
-    ensureStepUpProofMock.mockRejectedValueOnce(new Error("otp-cancelled"));
-    render(<WebTerminal nodeId={7} token="token-1" onDisconnect={onDisconnect} />);
+  it("取消二次验证会显示取消并且不会再次挑战", async () => {
+    ensureStepUpProofMock.mockRejectedValueOnce(new Error("已取消二次验证。"));
+    render(<WebTerminal nodeId={7} token="token-1" />);
     await settleTerminal();
-    await waitFor(() => expect(onDisconnect).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("已取消二次验证。")).toBeInTheDocument();
+    await flushTicks();
     expect(socketInstances[0]?.sent ?? []).toEqual([]);
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
     expect(requestTerminalCredentialGrantMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("其他二次验证失败只显示安全摘要", async () => {
+    ensureStepUpProofMock.mockRejectedValueOnce(new Error("服务器爆炸"));
+    render(<WebTerminal nodeId={7} token="token-1" />);
+    await settleTerminal();
+    expect(await screen.findByRole("alert")).toHaveTextContent("二次验证失败。");
+    expect(screen.queryByText("服务器爆炸")).not.toBeInTheDocument();
+    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
+    expect(socketInstances[0]?.sent ?? []).toEqual([]);
   });
 
   it("父级重渲染更换回调但节点令牌和会话不变时保持当前连接和授权弹窗", async () => {
-    const disconnects: string[] = [];
-    function TerminalParent({ nodeId, token, label }: { nodeId: number; token: string; label: string }) {
-      return (
-        <WebTerminal
-          nodeId={nodeId}
-          token={token}
-          onDisconnect={() => { disconnects.push(label); }}
-        />
-      );
+    function TerminalParent({ nodeId, token }: { nodeId: number; token: string }) {
+      return <WebTerminal nodeId={nodeId} token={token} />;
     }
 
-    const view = render(<TerminalParent nodeId={7} token="token-1" label="first" />);
+    const view = render(<TerminalParent nodeId={7} token="token-1" />);
     await settleTerminal();
     await waitFor(() => expect(socketInstances[0]?.sent.length ?? 0).toBeGreaterThan(0));
     const socket = socketInstances[0];
@@ -843,7 +876,7 @@ describe("WebTerminal", () => {
     expect(socket.closed).toBe(true);
 
     const closeAfterGrant = vi.spyOn(socket, "close");
-    view.rerender(<TerminalParent nodeId={7} token="token-1" label="second" />);
+    view.rerender(<TerminalParent nodeId={7} token="token-1" />);
     await settleTerminal();
     await flushTicks();
 
@@ -857,42 +890,121 @@ describe("WebTerminal", () => {
     expect(requestTerminalCredentialGrantMock).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "需要终端临时授权" })).toBeInTheDocument();
     expect(socket.sent).toHaveLength(1);
-    expect(disconnects).toEqual([]);
   });
 
-  it("父级重渲染后的正常关闭调用最新 onDisconnect 且不重新验证", async () => {
-    const disconnects: string[] = [];
-    function TerminalParent({ nodeId, token, label }: { nodeId: number; token: string; label: string }) {
-      return (
-        <WebTerminal
-          nodeId={nodeId}
-          token={token}
-          onDisconnect={() => { disconnects.push(label); }}
-        />
-      );
+  it("关闭后保留可复制的安全摘要，键盘和 resize 不再发帧", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const cases = [
+      [1000, "连接已结束 (1000)", "exit", false],
+      [1001, "连接已结束 (1001)", "going-away", false],
+      [1006, "网络连接中断 (1006)", "RAW_NETWORK_SECRET", true],
+      [1007, "节点不可用 (1007)", "RAW_NODE_SECRET", true],
+      [1011, "终端连接失败 (1011)", "RAW_TERMINAL_SECRET", true],
+      [4401, "终端连接已结束 (4401)", "token-expired-secret", false],
+      [1012, "终端连接已结束 (1012)", "RAW_OTHER_SECRET", false],
+    ] as const;
+
+    for (const [code, message, raw, isAlert] of cases) {
+      socketInstances.length = 0;
+      terminalInstances.length = 0;
+      ensureStepUpProofMock.mockClear();
+      const view = render(<WebTerminal nodeId={7} token="token-1" />);
+      await settleTerminal();
+      await waitFor(() => expect(socketInstances[0]?.sent.length ?? 0).toBeGreaterThan(0));
+      const socket = socketInstances[0];
+      act(() => {
+        socket.options.onClose?.({ code, reason: raw });
+      });
+
+      const summary = await screen.findByText(message);
+      expect(summary).toBeInTheDocument();
+      expect(screen.queryByText(raw)).not.toBeInTheDocument();
+      expect(isAlert ? summary.closest("[role='alert']") : summary.closest("[role='status']")).not.toBeNull();
+      expect(socketInstances).toHaveLength(1);
+      expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
+      terminalInstances[0].emitData("ls\n");
+      window.dispatchEvent(new Event("resize"));
+      expect(socket.sent).toHaveLength(1);
+      expect(socket.sent.join("")).not.toContain("resize");
+
+      writeText.mockClear();
+      await user.click(screen.getByRole("button", { name: "复制状态" }));
+      expect(writeText).toHaveBeenCalledWith(message);
+      view.unmount();
     }
+  });
 
-    const view = render(<TerminalParent nodeId={7} token="token-1" label="first" />);
+  it("1008 非授权关闭显示需重新验证且不展示原始原因", async () => {
+    render(<WebTerminal nodeId={7} token="token-1" />);
     await settleTerminal();
-    await waitFor(() => expect(socketInstances[0]?.sent.length ?? 0).toBeGreaterThan(0));
-    const socket = socketInstances[0];
+    await waitFor(() => expect(socketInstances).toHaveLength(1));
+    clearStepUpProofMock.mockClear();
+    act(() => {
+      socketInstances[0].options.onClose?.({ code: 1008, reason: "需要二次验证" });
+    });
+    expect(await screen.findByText("需重新验证 (1008)")).toBeInTheDocument();
+    expect(screen.queryByText("需要二次验证")).not.toBeInTheDocument();
+    expect(clearStepUpProofMock).toHaveBeenCalledWith(STEP_UP_ACTIONS.terminalOpen);
+    expect(socketInstances).toHaveLength(1);
+    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
+  });
 
-    view.rerender(<TerminalParent nodeId={7} token="token-1" label="second" />);
+  it("未启用两步验证时不连接也不申请 proof", async () => {
+    authControls.totpEnabled = false;
+    render(<WebTerminal nodeId={7} token="token-1" />);
     await settleTerminal();
     await flushTicks();
-    act(() => {
-      socket.options.onClose?.({ code: 1000, reason: "exit" });
-    });
-
-    expect(disconnects).toEqual(["second"]);
-    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
-    expect(socketInstances).toHaveLength(1);
-    expect(socketInstances[0]).toBe(socket);
-    expect(socket.closed).toBe(false);
+    expect(socketInstances).toHaveLength(0);
+    expect(ensureStepUpProofMock).not.toHaveBeenCalled();
+    expect(requestTerminalCredentialGrantMock).not.toHaveBeenCalled();
+    const notice = screen.getByRole("alert");
+    expect(notice).toHaveClass("shrink-0");
+    expect(notice).toHaveTextContent("需先启用两步验证。实际执行仍需二次验证及适用的授权原因。");
+    expect(screen.getByRole("link", { name: "启用两步验证" })).toHaveAttribute("href", "/app/settings?tab=account");
   });
 
-  it("会话代际变化后的重渲染仍放弃当前连接和授权弹窗", async () => {
-    const view = render(<WebTerminal nodeId={7} token="token-1" onDisconnect={() => undefined} />);
+  it("登录会话更新时关闭旧 socket 且结束后不自动重连", async () => {
+    const view = render(<WebTerminal nodeId={7} token="token-1" />);
+    await settleTerminal();
+    await waitFor(() => expect(socketInstances[0]?.sent.length ?? 0).toBeGreaterThan(0));
+    authControls.authTransitioning = true;
+    view.rerender(<WebTerminal nodeId={7} token="token-1" />);
+    expect(await screen.findByText("账户安全状态正在更新。请等待完成，此操作不会自动继续。")).toBeInTheDocument();
+    expect(socketInstances[0].closed).toBe(true);
+    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
+    terminalInstances[0].emitData("ls\n");
+    window.dispatchEvent(new Event("resize"));
+    expect(socketInstances[0].sent).toHaveLength(1);
+    expect(terminalInstances[0].dispose).not.toHaveBeenCalled();
+
+    authControls.authTransitioning = false;
+    view.rerender(<WebTerminal nodeId={7} token="token-1" />);
+    await settleTerminal();
+    await flushTicks();
+    expect(socketInstances).toHaveLength(1);
+    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("切换节点会清空终端输出", async () => {
+    const view = render(<WebTerminal nodeId={7} token="token-1" />);
+    await settleTerminal();
+    await waitFor(() => expect(socketInstances[0]?.sent.length ?? 0).toBeGreaterThan(0));
+    view.rerender(<WebTerminal nodeId={8} token="token-1" />);
+    await settleTerminal();
+    await waitFor(() => expect(socketInstances[1]?.sent.length ?? 0).toBeGreaterThan(0));
+    expect(terminalInstances[0].dispose).toHaveBeenCalledTimes(1);
+    expect(terminalInstances).toHaveLength(2);
+    expect(socketInstances[0].closed).toBe(true);
+  });
+
+  it("会话代际变化后放弃当前连接且不自动再次验证，手动重连才取得新 proof", async () => {
+    const user = userEvent.setup();
+    const view = render(<WebTerminal nodeId={7} token="token-1" />);
     await settleTerminal();
     await waitFor(() => expect(socketInstances[0]?.sent.length ?? 0).toBeGreaterThan(0));
     const socket = socketInstances[0];
@@ -902,20 +1014,29 @@ describe("WebTerminal", () => {
     expect(await screen.findByRole("dialog", { name: "需要终端临时授权" })).toBeInTheDocument();
 
     bumpAuthSessionGeneration();
-    view.rerender(<WebTerminal nodeId={7} token="token-1" onDisconnect={() => undefined} />);
+    view.rerender(<WebTerminal nodeId={7} token="token-1" />);
     await settleTerminal();
-    await waitFor(() => expect(socketInstances).toHaveLength(2));
-    await waitFor(() => expect(socketInstances[1]?.sent.length ?? 0).toBeGreaterThan(0));
+    await flushTicks();
 
     expect(socket.closed).toBe(true);
-    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(2);
-    expect(clearStepUpProofMock).toHaveBeenCalledTimes(2);
+    expect(socketInstances).toHaveLength(1);
+    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
+    expect(clearStepUpProofMock).toHaveBeenCalledTimes(1);
+    expect(terminalInstances).toHaveLength(1);
+    expect(terminalInstances[0]?.dispose).not.toHaveBeenCalled();
     expect(requestTerminalCredentialGrantMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "需要终端临时授权" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "重新连接" }));
+    await waitFor(() => expect(socketInstances[1]?.sent.length ?? 0).toBeGreaterThan(0));
+    expect(ensureStepUpProofMock).toHaveBeenCalledTimes(2);
+    expect(ensureStepUpProofMock).toHaveBeenLastCalledWith(STEP_UP_ACTIONS.terminalOpen, FRESH_PROOF);
+    expect(clearStepUpProofMock).toHaveBeenCalledTimes(2);
     expect(socketInstances[1].options.url).toContain("node_id=7");
     expect(JSON.parse(socketInstances[1].sent[0] ?? "{}")).toMatchObject({
       type: "auth",
       token: "token-1",
+      step_up_proof: "proof-1",
     });
   });
 });

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -23,10 +24,13 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/node"
 	policyPkg "xirang/backend/internal/policy"
+	"xirang/backend/internal/repository"
 	gormrepo "xirang/backend/internal/repository/gorm"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 	taskPkg "xirang/backend/internal/task"
+	"xirang/backend/internal/util"
 )
 
 // ConfigHandler 处理配置导出/导入
@@ -52,9 +56,203 @@ type importTaskKey struct {
 	nodeID uint
 }
 
+type configImportTaskCandidate struct {
+	task                    model.Task
+	req                     taskPkg.CreateTaskInput
+	dependencyKey           importTaskKey
+	hasDependency           bool
+	dependencyID            *uint
+	taskIndex               int
+	name                    string
+	existing                bool
+	rejected                bool
+	hasImportedCronOverride bool
+	importedCronOverride    bool
+	managedRsync            bool
+	managedRclone           bool
+	hasExplicitEnabled      bool
+	requestedEnabled        bool
+	previousCronSpec        string
+}
+
+// configImportTaskRefRepository overlays the not-yet-published task
+// candidates on the transaction repository. ValidateTaskRefs can therefore
+// validate a complete imported graph, including forward references, without
+// requiring a write-and-compensate pass.
+type configImportTaskRefRepository struct {
+	repository.TaskRepository
+	candidates map[uint]model.Task
+}
+
+func (r *configImportTaskRefRepository) ExistsLiveByID(ctx context.Context, id uint) (bool, error) {
+	if r != nil {
+		if candidate, ok := r.candidates[id]; ok {
+			return candidate.ArchivedAt == nil, nil
+		}
+	}
+	return r.TaskRepository.ExistsLiveByID(ctx, id)
+}
+
+func (r *configImportTaskRefRepository) FindByIDFields(ctx context.Context, id uint, fields ...string) (*model.Task, error) {
+	if r != nil {
+		if candidate, ok := r.candidates[id]; ok {
+			copy := candidate
+			return &copy, nil
+		}
+	}
+	return r.TaskRepository.FindByIDFields(ctx, id, fields...)
+}
+
 type configImportSetting struct {
 	key   string
 	value string
+}
+
+const (
+	configImportWarningLimit = 100
+
+	configImportEntityNodes          = "nodes"
+	configImportEntitySSHKeys        = "ssh_keys"
+	configImportEntityPolicies       = "policies"
+	configImportEntityTasks          = "tasks"
+	configImportEntitySystemSettings = "system_settings"
+
+	configImportWarningInvalidInput        = "invalid_input"
+	configImportWarningInvalidScope        = "invalid_scope"
+	configImportWarningUnresolvedNodeScope = "unresolved_node_scope"
+	configImportWarningInvalidPrivateKey   = "invalid_private_key"
+	configImportWarningMissingPrivateKey   = "missing_private_key"
+	configImportWarningMissingPassword     = "missing_password"
+	configImportWarningMissingInlineKey    = "missing_inline_private_key"
+	configImportWarningUnresolvedSSHKey    = "unresolved_ssh_key"
+)
+
+// configImportWarning is the intentionally small, stable public warning
+// contract. It never contains parser, SQL, path, or payload details.
+type configImportWarning struct {
+	Entity string `json:"entity"`
+	Index  int    `json:"index"`
+	Name   string `json:"name,omitempty"`
+	Code   string `json:"code"`
+}
+
+// configImportResult reports only successful writes for the five classic
+// entity classes. The asset graph is an atomic side effect and is not included
+// in these counts.
+type configImportResult struct {
+	Nodes             int                   `json:"nodes"`
+	SSHKeys           int                   `json:"ssh_keys"`
+	Policies          int                   `json:"policies"`
+	Tasks             int                   `json:"tasks"`
+	SystemSettings    int                   `json:"system_settings"`
+	Imported          int                   `json:"imported"`
+	Skipped           int                   `json:"skipped"`
+	Created           int                   `json:"created"`
+	Updated           int                   `json:"updated"`
+	Rejected          int                   `json:"rejected"`
+	DisabledImported  int                   `json:"disabled_imported"`
+	Warnings          []configImportWarning `json:"warnings"`
+	WarningsTruncated int                   `json:"warnings_truncated"`
+}
+
+type configImportAccumulator struct {
+	result configImportResult
+}
+
+func newConfigImportAccumulator() *configImportAccumulator {
+	return &configImportAccumulator{
+		result: configImportResult{
+			Warnings: make([]configImportWarning, 0, configImportWarningLimit),
+		},
+	}
+}
+
+func (a *configImportAccumulator) warning(entity string, index int, name, code string) {
+	if a == nil {
+		return
+	}
+	warning := configImportWarning{
+		Entity: entity,
+		Index:  index,
+		Name:   sanitizeConfigImportWarningName(name),
+		Code:   code,
+	}
+	if len(a.result.Warnings) < configImportWarningLimit {
+		a.result.Warnings = append(a.result.Warnings, warning)
+		return
+	}
+	a.result.WarningsTruncated++
+}
+
+func (a *configImportAccumulator) rejected(entity string, index int, name, code string) {
+	if a == nil {
+		return
+	}
+	a.result.Rejected++
+	a.warning(entity, index, name, code)
+}
+
+func (a *configImportAccumulator) skipped() {
+	if a != nil {
+		a.result.Skipped++
+	}
+}
+
+func (a *configImportAccumulator) created(entity string, disabled bool) {
+	if a == nil {
+		return
+	}
+	a.result.Created++
+	a.classCount(entity)
+	if entity == configImportEntitySSHKeys && disabled {
+		a.result.DisabledImported++
+	}
+}
+
+func (a *configImportAccumulator) updated(entity string) {
+	if a == nil {
+		return
+	}
+	a.result.Updated++
+	a.classCount(entity)
+}
+
+func (a *configImportAccumulator) classCount(entity string) {
+	switch entity {
+	case configImportEntityNodes:
+		a.result.Nodes++
+	case configImportEntitySSHKeys:
+		a.result.SSHKeys++
+	case configImportEntityPolicies:
+		a.result.Policies++
+	case configImportEntityTasks:
+		a.result.Tasks++
+	case configImportEntitySystemSettings:
+		a.result.SystemSettings++
+	}
+}
+
+func (a *configImportAccumulator) finalize() configImportResult {
+	if a == nil {
+		return configImportResult{}
+	}
+	a.result.Imported = a.result.Created + a.result.Updated
+	return a.result
+}
+
+func sanitizeConfigImportWarningName(name string) string {
+	clean := strings.TrimSpace(util.SanitizeMessage(name))
+	clean = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, clean)
+	runes := []rune(clean)
+	if len(runes) > 120 {
+		return string(runes[:120])
+	}
+	return clean
 }
 
 func NewConfigHandler(db *gorm.DB, settingsSvc *settings.Service) *ConfigHandler {
@@ -398,7 +596,7 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 // @Produce      json
 // @Param        conflict  query     string  false  "冲突策略（skip 默认/overwrite）"
 // @Param        body      body      object  true   "配置 JSON 数据"
-// @Success      200  {object}  handlers.Response
+// @Success      200  {object}  handlers.Response{data=configImportResult}
 // @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
 // @Router       /config/import [post]
@@ -428,50 +626,52 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		return
 	}
 	if err := validateConfigImportEnvelope(envelope); err != nil {
-		respondBadRequest(c, err.Error())
+		logger.Module("config").Warn().Msg("配置导入包络校验失败")
+		respondBadRequest(c, "无效的导入数据")
 		return
 	}
 	data := envelope.Classic
 	settingsPlan, foundationSettings, err := h.normalizeImportSettings(data.SystemSettings)
 	if err != nil {
-		respondBadRequest(c, err.Error())
+		logger.Module("config").Warn().Msg("配置导入系统设置校验失败")
+		respondBadRequest(c, "导入系统设置无效")
 		return
 	}
 
-	// 导入前校验节点数据：host 合法性、base_path 绝对路径
-	var importErrList []importValidationError
+	accumulator := newConfigImportAccumulator()
+	preRejected := map[string]map[int]bool{}
+	markPreRejected := func(entity string, index int) {
+		indexes := preRejected[entity]
+		if indexes == nil {
+			indexes = make(map[int]bool)
+			preRejected[entity] = indexes
+		}
+		if indexes[index] {
+			return
+		}
+		indexes[index] = true
+	}
+
+	// Path and node-address validation remains fail-closed, but invalid
+	// individual records are now represented as rejected warnings so valid
+	// records in the same import can still be committed.
 	for i, nodeData := range data.Nodes {
 		if errs := validateNodeImportData(nodeData, i); len(errs) > 0 {
-			importErrList = append(importErrList, errs...)
+			markPreRejected(configImportEntityNodes, i)
 		}
 	}
-	// 校验策略路径
 	for i, policyData := range data.Policies {
-		name, _ := policyData["name"].(string)
+		invalid := false
 		if src, ok := policyData["source_path"].(string); ok && src != "" {
-			if err := validateImportPath(src); err != nil {
-				importErrList = append(importErrList, importValidationError{
-					Resource: "policies",
-					Index:    i,
-					Name:     name,
-					Field:    "source_path",
-					Message:  err.Error(),
-				})
-			}
+			invalid = invalid || validateImportPath(src) != nil
 		}
 		if tgt, ok := policyData["target_path"].(string); ok && tgt != "" {
-			if err := validateImportPath(tgt); err != nil {
-				importErrList = append(importErrList, importValidationError{
-					Resource: "policies",
-					Index:    i,
-					Name:     name,
-					Field:    "target_path",
-					Message:  err.Error(),
-				})
-			}
+			invalid = invalid || validateImportPath(tgt) != nil
+		}
+		if invalid {
+			markPreRejected(configImportEntityPolicies, i)
 		}
 	}
-	// 校验任务路径
 	for i, taskData := range data.Tasks {
 		executorType := readStringField(taskData, "executor_type")
 		executorConfig := readStringField(taskData, "executor_config")
@@ -479,59 +679,17 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			continue
 		}
 		managedRcloneImport := importedRcloneConfigRequiresDisconnect(executorType, executorConfig)
-		name, _ := taskData["name"].(string)
+		invalid := false
 		if src, ok := taskData["rsync_source"].(string); ok && src != "" {
-			if err := validateImportPath(src); err != nil {
-				importErrList = append(importErrList, importValidationError{
-					Resource: "tasks",
-					Index:    i,
-					Name:     name,
-					Field:    "rsync_source",
-					Message:  err.Error(),
-				})
-			}
+			invalid = invalid || validateImportPath(src) != nil
 		}
 		if tgt, ok := taskData["rsync_target"].(string); ok && tgt != "" && !managedRcloneImport {
-			if err := validateImportPath(tgt); err != nil {
-				importErrList = append(importErrList, importValidationError{
-					Resource: "tasks",
-					Index:    i,
-					Name:     name,
-					Field:    "rsync_target",
-					Message:  err.Error(),
-				})
-			}
+			invalid = invalid || validateImportPath(tgt) != nil
+		}
+		if invalid {
+			markPreRejected(configImportEntityTasks, i)
 		}
 	}
-
-	if len(importErrList) > 0 {
-		for _, ve := range importErrList {
-			logger.Module("config").Warn().
-				Str("resource", ve.Resource).
-				Int("index", ve.Index).
-				Str("name", ve.Name).
-				Str("field", ve.Field).
-				Str("message", ve.Message).
-				Msg("配置导入校验失败")
-		}
-		// 构建人类可读的错误消息
-		errDetail := make([]string, 0, len(importErrList))
-		for _, ve := range importErrList {
-			label := fmt.Sprintf("#%d", ve.Index+1)
-			if ve.Name != "" {
-				label = ve.Name
-			}
-			errDetail = append(errDetail, fmt.Sprintf("%s.%s: %s", label, ve.Field, ve.Message))
-		}
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    http.StatusBadRequest,
-			Message: fmt.Sprintf("导入数据校验失败（共 %d 项），请修复后重试", len(importErrList)),
-			Data:    gin.H{"detail": errDetail, "items": importErrList},
-		})
-		return
-	}
-
-	var importedNodes, importedKeys, importedPolicies, importedTasks, importedSettings int
 	rollbackJournal := newConfigImportRollbackJournal(h.db, h.settingsSvc)
 
 	persistImport := func(persistCtx context.Context) error {
@@ -586,7 +744,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if captureErr != nil {
 				return captureErr
 			}
-			validateImportedTarget := func(req taskPkg.CreateTaskInput, taskID uint) error {
+			validateImportedTarget := func(req taskPkg.CreateTaskInput, taskID uint, reserve bool) error {
 				target := strings.TrimSpace(req.RsyncTarget)
 				if target == "" || !filepath.IsAbs(target) {
 					return nil
@@ -598,180 +756,257 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				if _, err := policyPkg.ValidateTargetOwnership(target, owner, targetClaims); err != nil {
 					return fmt.Errorf("%w: 导入任务 %q 的备份目标存在重叠或归属不明: %w", errConfigImportTargetConflict, req.Name, err)
 				}
-				targetClaims = append(targetClaims, owner)
+				if reserve {
+					targetClaims = append(targetClaims, owner)
+				}
 				return nil
 			}
 
-			resolvedTaskIDs := make(map[importTaskKey]uint)
-			type taskDependencyUpdate struct {
-				taskID        uint
-				dependencyKey importTaskKey
-				hasDependency bool
-			}
-			var taskDependencyUpdates []taskDependencyUpdate
-
 			// 导入 SSH 密钥
-			for _, keyData := range data.SSHKeys {
+			for keyIndex, keyData := range data.SSHKeys {
 				name, _ := keyData["name"].(string)
+				name = strings.TrimSpace(name)
 				if name == "" {
+					accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidInput)
 					continue
 				}
-				var existing model.SSHKey
-				found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
+
+				var existingSSHKeyPlaceholder model.SSHKey
+				result := tx.Session(&gorm.Session{SkipHooks: true}).
+					Where("name = ?", name).Limit(1).Find(&existingSSHKeyPlaceholder)
+				if result.Error != nil {
+					return fmt.Errorf("查询导入 SSH 密钥失败: %w", result.Error)
+				}
+				found := result.RowsAffected > 0
+				if found && conflict != "overwrite" {
+					accumulator.skipped()
+					continue
+				}
+
+				scope, scopeCode := parseImportedSSHKeyScope(keyData)
+				if found && scopeCode != "" {
+					accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, scopeCode)
+					continue
+				}
+
 				if found {
-					if conflict != "overwrite" {
+					existing := existingSSHKeyPlaceholder
+					sourcePrivateKey, sourcePrivateKeyProvided := keyData["private_key"].(string)
+					if (!sourcePrivateKeyProvided || strings.TrimSpace(sourcePrivateKey) == "") &&
+						strings.TrimSpace(existing.PrivateKey) != "" {
+						decrypted, decryptErr := secure.DecryptIfNeeded(existing.PrivateKey)
+						if decryptErr != nil {
+							accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidPrivateKey)
+							continue
+						}
+						existing.PrivateKey = decrypted
+					}
+					selectedType, err := importedSSHKeySelectedType(keyData, existing.KeyType)
+					if err != nil {
+						accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidInput)
 						continue
 					}
-					// overwrite: 更新已有记录
+					preparedKey, storedType, err := prepareImportedSSHKeyPrivateKey(keyData, &existing, selectedType)
+					if err != nil {
+						accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidPrivateKey)
+						continue
+					}
+
+					candidate := existing
 					if username, ok := keyData["username"].(string); ok {
-						existing.Username = username
+						candidate.Username = strings.TrimSpace(username)
 					}
-					if keyType, ok := keyData["key_type"].(string); ok {
-						existing.KeyType = keyType
+					candidate.KeyType = storedType
+					candidate.PrivateKey = preparedKey
+					if strings.TrimSpace(preparedKey) == "" {
+						candidate.PrivateKey = ""
+						candidate.Fingerprint = ""
+						candidate.Disabled = true
+						accumulator.warning(configImportEntitySSHKeys, keyIndex, name, configImportWarningMissingPrivateKey)
+					} else {
+						candidate.Fingerprint = generateFingerprint(preparedKey)
 					}
-					if privateKey, ok := keyData["private_key"].(string); ok && privateKey != "" {
-						existing.PrivateKey = privateKey
+					applyImportedSSHKeyScopeCandidate(&candidate, scope)
+					if strings.TrimSpace(candidate.PrivateKey) == "" {
+						candidate.Fingerprint = ""
+						candidate.Disabled = true
 					}
-					applyImportedSSHKeyScope(&existing, keyData)
-					if err := tx.Save(&existing).Error; err == nil {
-						importedKeys++
+					if err := tx.Save(&candidate).Error; err != nil {
+						return fmt.Errorf("保存导入 SSH 密钥失败: %w", err)
 					}
-				} else {
-					newKey := model.SSHKey{Name: name}
-					if username, ok := keyData["username"].(string); ok {
-						newKey.Username = username
-					}
-					if keyType, ok := keyData["key_type"].(string); ok {
-						newKey.KeyType = keyType
-					}
-					if privateKey, ok := keyData["private_key"].(string); ok {
-						newKey.PrivateKey = privateKey
-					}
-					if fingerprint, ok := keyData["fingerprint"].(string); ok {
-						newKey.Fingerprint = fingerprint
-					}
-					applyImportedSSHKeyScope(&newKey, keyData)
-					if err := tx.Create(&newKey).Error; err == nil {
-						importedKeys++
-					}
+					accumulator.updated(configImportEntitySSHKeys)
+					continue
 				}
+
+				selectedType, err := importedSSHKeySelectedType(keyData, "")
+				if err != nil {
+					accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidInput)
+					continue
+				}
+				preparedKey, storedType, err := prepareImportedSSHKeyPrivateKey(keyData, nil, selectedType)
+				if err != nil {
+					accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidPrivateKey)
+					continue
+				}
+				newKey := model.SSHKey{Name: name, KeyType: storedType}
+				if username, ok := keyData["username"].(string); ok {
+					newKey.Username = strings.TrimSpace(username)
+				}
+				newKey.PrivateKey = preparedKey
+				if strings.TrimSpace(preparedKey) != "" {
+					newKey.Fingerprint = generateFingerprint(preparedKey)
+				} else {
+					newKey.Fingerprint = ""
+					newKey.Disabled = true
+					accumulator.warning(configImportEntitySSHKeys, keyIndex, name, configImportWarningMissingPrivateKey)
+				}
+				applyImportedSSHKeyScopeCandidate(&newKey, scope)
+				if scopeCode != "" {
+					accumulator.warning(configImportEntitySSHKeys, keyIndex, name, scopeCode)
+					newKey.Disabled = true
+					newKey.AllowedNodeIDs = ""
+				}
+				if strings.TrimSpace(newKey.PrivateKey) == "" {
+					newKey.Fingerprint = ""
+					newKey.Disabled = true
+				}
+				if err := tx.Create(&newKey).Error; err != nil {
+					return fmt.Errorf("创建导入 SSH 密钥失败: %w", err)
+				}
+				accumulator.created(configImportEntitySSHKeys, newKey.Disabled)
 			}
 
 			// 导入节点
-			for _, nodeData := range data.Nodes {
+			for nodeIndex, nodeData := range data.Nodes {
 				name, _ := nodeData["name"].(string)
+				name = strings.TrimSpace(name)
 				if name == "" {
+					accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
 					continue
 				}
+
 				var existing model.Node
-				found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
-				if found {
-					if conflict != "overwrite" {
-						continue
-					}
-					if host, ok := nodeData["host"].(string); ok {
-						existing.Host = host
-					}
-					if port, ok := nodeData["port"].(float64); ok {
-						existing.Port = int(port)
-					}
-					if username, ok := nodeData["username"].(string); ok {
-						existing.Username = username
-					}
-					if authType, ok := nodeData["auth_type"].(string); ok {
-						existing.AuthType = authType
-					}
-					if tags, ok := nodeData["tags"].(string); ok {
-						existing.Tags = tags
-					}
-					if basePath, ok := nodeData["base_path"].(string); ok {
-						existing.BasePath = basePath
-					}
-					if err := node.ValidateNodeHostPort(existing.Host, existing.Port); err != nil {
-						logger.Module("config").Warn().
-							Str("node", name).
-							Str("host", existing.Host).
-							Err(err).
-							Msg("导入节点覆盖时 host 校验失败，跳过")
-						continue
-					}
-					if err := tx.Save(&existing).Error; err == nil {
-						importedNodes++
-					}
-				} else {
-					newNode := model.Node{
-						Name:   name,
-						Status: "offline",
-						Port:   22,
-					}
-					if host, ok := nodeData["host"].(string); ok {
-						newNode.Host = host
-					}
-					if port, ok := nodeData["port"].(float64); ok {
-						newNode.Port = int(port)
-					}
-					if username, ok := nodeData["username"].(string); ok {
-						newNode.Username = username
-					}
-					if authType, ok := nodeData["auth_type"].(string); ok {
-						newNode.AuthType = authType
-					}
-					if tags, ok := nodeData["tags"].(string); ok {
-						newNode.Tags = tags
-					}
-					if basePath, ok := nodeData["base_path"].(string); ok {
-						newNode.BasePath = basePath
-					}
-					if password, ok := nodeData["password"].(string); ok {
-						newNode.Password = password
-					}
-					if privateKey, ok := nodeData["private_key"].(string); ok {
-						newNode.PrivateKey = privateKey
-					}
-					if newNode.Username == "" {
-						logger.Module("config").Warn().
-							Str("node", name).
-							Msg("导入节点缺少用户名，跳过")
-						continue
-					}
-					if newNode.AuthType != "" && newNode.AuthType != "password" && newNode.AuthType != "key" && newNode.AuthType != "ssh_key" {
-						logger.Module("config").Warn().
-							Str("node", name).
-							Str("auth_type", newNode.AuthType).
-							Msg("导入节点认证类型无效，跳过")
-						continue
-					}
-					if err := node.ValidateNodeHostPort(newNode.Host, newNode.Port); err != nil {
-						logger.Module("config").Warn().
-							Str("node", name).
-							Str("host", newNode.Host).
-							Err(err).
-							Msg("导入新节点时 host 校验失败，跳过")
-						continue
-					}
-					if err := tx.Create(&newNode).Error; err == nil {
-						importedNodes++
-					}
+				result := tx.Where("name = ?", name).Limit(1).Find(&existing)
+				if result.Error != nil {
+					return fmt.Errorf("查询导入节点失败: %w", result.Error)
 				}
+				found := result.RowsAffected > 0
+				if found && conflict != "overwrite" {
+					accumulator.skipped()
+					continue
+				}
+				if preRejected[configImportEntityNodes][nodeIndex] {
+					accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
+					continue
+				}
+
+				if found {
+					candidate := existing
+					if host, ok := nodeData["host"].(string); ok {
+						candidate.Host = strings.TrimSpace(host)
+					}
+					if port, ok := nodeData["port"].(float64); ok {
+						candidate.Port = int(port)
+					}
+					if username, ok := nodeData["username"].(string); ok {
+						candidate.Username = strings.TrimSpace(username)
+					}
+					if authType, ok := nodeData["auth_type"].(string); ok {
+						candidate.AuthType = strings.ToLower(strings.TrimSpace(authType))
+					}
+					if tags, ok := nodeData["tags"].(string); ok {
+						candidate.Tags = tags
+					}
+					if basePath, ok := nodeData["base_path"].(string); ok {
+						candidate.BasePath = strings.TrimSpace(basePath)
+					}
+					if candidate.Username == "" ||
+						(candidate.AuthType != "" && candidate.AuthType != "password" && candidate.AuthType != "key" && candidate.AuthType != "ssh_key") {
+						accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
+						continue
+					}
+					if err := node.ValidateNodeHostPort(candidate.Host, candidate.Port); err != nil {
+						accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
+						continue
+					}
+					if err := tx.Save(&candidate).Error; err != nil {
+						return fmt.Errorf("保存导入节点失败: %w", err)
+					}
+					accumulator.updated(configImportEntityNodes)
+					addImportedNodeCredentialWarnings(accumulator, nodeIndex, name, nodeData, candidate)
+					continue
+				}
+
+				newNode := model.Node{
+					Name:     name,
+					Status:   "offline",
+					Port:     22,
+					AuthType: "key",
+				}
+				if host, ok := nodeData["host"].(string); ok {
+					newNode.Host = strings.TrimSpace(host)
+				}
+				if port, ok := nodeData["port"].(float64); ok {
+					newNode.Port = int(port)
+				}
+				if username, ok := nodeData["username"].(string); ok {
+					newNode.Username = strings.TrimSpace(username)
+				}
+				if authType, ok := nodeData["auth_type"].(string); ok {
+					newNode.AuthType = strings.ToLower(strings.TrimSpace(authType))
+				}
+				if tags, ok := nodeData["tags"].(string); ok {
+					newNode.Tags = tags
+				}
+				if basePath, ok := nodeData["base_path"].(string); ok {
+					newNode.BasePath = strings.TrimSpace(basePath)
+				}
+				if password, ok := nodeData["password"].(string); ok {
+					newNode.Password = password
+				}
+				if privateKey, ok := nodeData["private_key"].(string); ok {
+					newNode.PrivateKey = privateKey
+				}
+				if newNode.Username == "" ||
+					(newNode.AuthType != "" && newNode.AuthType != "password" && newNode.AuthType != "key" && newNode.AuthType != "ssh_key") {
+					accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
+					continue
+				}
+				if err := node.ValidateNodeHostPort(newNode.Host, newNode.Port); err != nil {
+					accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
+					continue
+				}
+				if err := tx.Create(&newNode).Error; err != nil {
+					return fmt.Errorf("创建导入节点失败: %w", err)
+				}
+				accumulator.created(configImportEntityNodes, false)
+				addImportedNodeCredentialWarnings(accumulator, nodeIndex, name, nodeData, newNode)
 			}
 
 			// 导入策略
-			for _, policyData := range data.Policies {
+			for policyIndex, policyData := range data.Policies {
 				name, _ := policyData["name"].(string)
+				name = strings.TrimSpace(name)
 				if name == "" {
+					accumulator.rejected(configImportEntityPolicies, policyIndex, name, configImportWarningInvalidInput)
 					continue
 				}
 				var existing model.Policy
 				result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 					Where("name = ?", name).Limit(1).Find(&existing)
 				if result.Error != nil {
-					return result.Error
+					return fmt.Errorf("查询导入策略失败: %w", result.Error)
 				}
 				found := result.RowsAffected > 0
+				if found && conflict != "overwrite" {
+					accumulator.skipped()
+					continue
+				}
+				if preRejected[configImportEntityPolicies][policyIndex] {
+					accumulator.rejected(configImportEntityPolicies, policyIndex, name, configImportWarningInvalidInput)
+					continue
+				}
 				if found {
-					if conflict != "overwrite" {
-						continue
-					}
 					if desc, ok := policyData["description"].(string); ok {
 						existing.Description = desc
 					}
@@ -783,11 +1018,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					}
 					if cron, ok := policyData["cron_spec"].(string); ok {
 						if err := validateCronSpec(cron); err != nil {
-							logger.Module("config").Warn().
-								Str("policy", name).
-								Str("cron_spec", cron).
-								Err(err).
-								Msg("导入策略覆盖时 cron spec 校验失败，跳过")
+							accumulator.rejected(configImportEntityPolicies, policyIndex, name, configImportWarningInvalidInput)
 							continue
 						}
 						existing.CronSpec = cron
@@ -830,16 +1061,13 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 						}
 					}
 					if err := applyImportedPolicyFields(&existing, policyData); err != nil {
-						logger.Module("config").Warn().
-							Str("policy", name).
-							Err(err).
-							Msg("导入策略覆盖时字段校验失败，跳过")
+						accumulator.rejected(configImportEntityPolicies, policyIndex, name, configImportWarningInvalidInput)
 						continue
 					}
 					if err := tx.Save(&existing).Error; err != nil {
-						return err
+						return fmt.Errorf("保存导入策略失败: %w", err)
 					}
-					importedPolicies++
+					accumulator.updated(configImportEntityPolicies)
 				} else {
 					newPolicy := model.Policy{
 						Name:               name,
@@ -865,11 +1093,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					}
 					if cron, ok := policyData["cron_spec"].(string); ok {
 						if err := validateCronSpec(cron); err != nil {
-							logger.Module("config").Warn().
-								Str("policy", name).
-								Str("cron_spec", cron).
-								Err(err).
-								Msg("导入新策略时 cron spec 校验失败，跳过")
+							accumulator.rejected(configImportEntityPolicies, policyIndex, name, configImportWarningInvalidInput)
 							continue
 						}
 						newPolicy.CronSpec = cron
@@ -927,35 +1151,93 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 						newPolicy.IsTemplate = isTmpl
 					}
 					if err := applyImportedPolicyFields(&newPolicy, policyData); err != nil {
-						logger.Module("config").Warn().
-							Str("policy", name).
-							Err(err).
-							Msg("导入新策略时字段校验失败，跳过")
+						accumulator.rejected(configImportEntityPolicies, policyIndex, name, configImportWarningInvalidInput)
 						continue
 					}
 					if err := importPolicyRepo.CreateWithExplicitValues(persistCtx, &newPolicy, model.PolicyCreateExplicitColumns()...); err != nil {
-						return err
+						return fmt.Errorf("创建导入策略失败: %w", err)
 					}
-					importedPolicies++
+					accumulator.created(configImportEntityPolicies, false)
 				}
 			}
 
-			// 导入任务
-			for _, taskData := range data.Tasks {
+			// 导入任务采用两阶段边界：先解析并校验完整候选图，再发布
+			// 行变更和计数。这样无效依赖不会留下半成品任务或虚假的
+			// created/updated 结果，同时仍允许引用后续导入的节点和任务。
+			importTaskNodeIDs := make([]uint, len(data.Tasks))
+			importTaskNames := make([]string, len(data.Tasks))
+			for taskIndex, taskData := range data.Tasks {
 				name, _ := taskData["name"].(string)
 				name = strings.TrimSpace(name)
+				importTaskNames[taskIndex] = name
 				if name == "" {
 					continue
 				}
+				nodeID, ok, err := resolveImportNodeID(tx, taskData)
+				if err != nil {
+					return fmt.Errorf("解析导入任务节点失败: %w", err)
+				}
+				if ok {
+					importTaskNodeIDs[taskIndex] = nodeID
+				}
+			}
 
-				nodeID, ok := resolveImportNodeID(tx, taskData)
-				if !ok {
+			nextSyntheticTaskID := ^uint(0)
+			provisionalTaskIDs := make(map[importTaskKey]uint, len(data.Tasks))
+			for taskIndex, name := range importTaskNames {
+				nodeID := importTaskNodeIDs[taskIndex]
+				if name == "" || nodeID == 0 {
+					continue
+				}
+				key := buildImportTaskKey(name, nodeID)
+				if _, exists := provisionalTaskIDs[key]; exists {
+					continue
+				}
+				provisionalTaskIDs[key] = nextSyntheticTaskID
+				nextSyntheticTaskID--
+			}
+
+			taskCandidates := make([]*configImportTaskCandidate, 0, len(data.Tasks))
+			candidateByKey := make(map[importTaskKey]*configImportTaskCandidate, len(data.Tasks))
+			for taskIndex, taskData := range data.Tasks {
+				name := importTaskNames[taskIndex]
+				if name == "" {
+					accumulator.rejected(configImportEntityTasks, taskIndex, name, configImportWarningInvalidInput)
+					continue
+				}
+				nodeID := importTaskNodeIDs[taskIndex]
+				if nodeID == 0 {
+					accumulator.rejected(configImportEntityTasks, taskIndex, name, configImportWarningInvalidInput)
+					continue
+				}
+
+				var existingTask model.Task
+				existingTaskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("name = ? AND node_id = ?", name, nodeID).Limit(1).Find(&existingTask)
+				if existingTaskResult.Error != nil {
+					return fmt.Errorf("查询导入任务失败: %w", existingTaskResult.Error)
+				}
+				existingTaskFound := existingTaskResult.RowsAffected > 0
+				taskKey := buildImportTaskKey(name, nodeID)
+				previousCandidate := candidateByKey[taskKey]
+				if (existingTaskFound || previousCandidate != nil) && conflict != "overwrite" {
+					accumulator.skipped()
+					continue
+				}
+				if preRejected[configImportEntityTasks][taskIndex] {
+					accumulator.rejected(configImportEntityTasks, taskIndex, name, configImportWarningInvalidInput)
 					continue
 				}
 
 				var policyID *uint
-				if id, ok := resolveImportPolicyID(tx, taskData); ok {
+				policySpecified := importTaskFieldSpecified(taskData, "policy_name", "policy_id")
+				if id, found, err := resolveImportPolicyID(tx, taskData); err != nil {
+					return fmt.Errorf("解析导入任务策略失败: %w", err)
+				} else if found {
 					policyID = &id
+				} else if policySpecified {
+					accumulator.rejected(configImportEntityTasks, taskIndex, name, configImportWarningInvalidInput)
+					continue
 				}
 
 				req := taskPkg.CreateTaskInput{
@@ -970,11 +1252,32 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					ExecutorConfig:  readStringField(taskData, "executor_config"),
 					CronSpec:        readStringField(taskData, "cron_spec"),
 				}
-				dependencyKey, hasDependency := resolveImportedDependencyKey(tx, taskData)
+				dependencyKey, hasDependency, err := resolveImportedDependencyKey(tx, taskData, req.NodeID)
+				if err != nil {
+					return fmt.Errorf("解析导入任务依赖失败: %w", err)
+				}
+				if importTaskFieldSpecified(taskData, "depends_on_task_name") && !hasDependency {
+					accumulator.rejected(configImportEntityTasks, taskIndex, name, configImportWarningInvalidInput)
+					continue
+				}
 				importedCronOverride, hasImportedCronOverride := readImportedBoolField(taskData, "cron_override")
 				explicitCronSpec := req.CronSpec
 				_, hasExplicitCronSpec := taskData["cron_spec"]
-				taskPkg.HydrateTaskDefaultsFromPolicy(persistCtx, importPolicyRepo, importNodeRepo, &req)
+				if policyID != nil {
+					var importedPolicy model.Policy
+					if err := tx.First(&importedPolicy, *policyID).Error; err != nil {
+						return fmt.Errorf("读取导入任务策略失败: %w", err)
+					}
+					if strings.TrimSpace(req.RsyncSource) == "" {
+						req.RsyncSource = importedPolicy.SourcePath
+					}
+					if strings.TrimSpace(req.RsyncTarget) == "" && req.NodeID != 0 {
+						req.RsyncTarget = policyPkg.PolicyNodeTargetPath(importedPolicy.TargetPath, importedPolicy.ID, req.NodeID)
+					}
+					if strings.TrimSpace(req.CronSpec) == "" {
+						req.CronSpec = importedPolicy.CronSpec
+					}
+				}
 				if hasImportedCronOverride && importedCronOverride && hasExplicitCronSpec {
 					// An explicitly exported empty cron is a deliberate manual
 					// schedule; policy hydration must not fill it back in.
@@ -990,10 +1293,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				if strings.EqualFold(strings.TrimSpace(req.ExecutorType), "restic") {
 					migratedConfig, migrateErr := taskPkg.NormalizeImportedResticConfig(req.ExecutorConfig)
 					if migrateErr != nil {
-						logger.Module("config").Warn().
-							Str("task", req.Name).
-							Err(migrateErr).
-							Msg("导入 Restic 任务兼容配置失败，跳过")
+						accumulator.rejected(configImportEntityTasks, taskIndex, name, configImportWarningInvalidInput)
 						continue
 					}
 					req.ExecutorConfig = migratedConfig
@@ -1025,146 +1325,302 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					validationErr = taskPkg.ValidateTaskInput(req)
 				}
 				if validationErr != nil {
-					logger.Module("config").Warn().
-						Str("task", req.Name).
-						Err(validationErr).
-						Msg("导入任务校验失败，跳过")
+					if !taskPkg.IsTaskValidationError(validationErr) {
+						return fmt.Errorf("校验导入任务失败: %w", validationErr)
+					}
+					accumulator.rejected(configImportEntityTasks, taskIndex, name, configImportWarningInvalidInput)
 					continue
 				}
-				taskKey := buildImportTaskKey(req.Name, req.NodeID)
 
-				var existing model.Task
-				result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-					Where("name = ? AND node_id = ?", req.Name, req.NodeID).Limit(1).Find(&existing)
-				if result.Error != nil {
-					return result.Error
+				baseTask := existingTask
+				existing := existingTaskFound
+				if previousCandidate != nil {
+					baseTask = previousCandidate.task
+					existing = previousCandidate.existing
 				}
-				found := result.RowsAffected > 0
-				if found {
-					previousCronSpec := strings.TrimSpace(existing.CronSpec)
-					existing.DependsOnTaskID = nil
-					existing.Command = req.Command
-					existing.RsyncSource = req.RsyncSource
-					existing.RsyncTarget = req.RsyncTarget
-					existing.ExecutorType = req.ExecutorType
-					existing.ExecutorConfig = req.ExecutorConfig
-					existing.CronSpec = req.CronSpec
-					if hasImportedCronOverride {
-						existing.CronOverride = importedCronOverride
+				candidateTask := baseTask
+				if !existing {
+					candidateTask = model.Task{
+						ID:             provisionalTaskIDs[taskKey],
+						Name:           req.Name,
+						NodeID:         req.NodeID,
+						PolicyID:       req.PolicyID,
+						Command:        req.Command,
+						RsyncSource:    req.RsyncSource,
+						RsyncTarget:    req.RsyncTarget,
+						ExecutorType:   req.ExecutorType,
+						ExecutorConfig: req.ExecutorConfig,
+						CronSpec:       req.CronSpec,
+						Status:         "pending",
+						Source:         readStringField(taskData, "source"),
+						Enabled:        !managedRsyncImport && !managedRcloneImport,
 					}
-					existing.Source = readStringField(taskData, "source")
+					if hasImportedCronOverride {
+						candidateTask.CronOverride = importedCronOverride
+					}
+					if candidateTask.Source == "" {
+						candidateTask.Source = "manual"
+					}
+				} else {
+					candidateTask.DependsOnTaskID = nil
+					candidateTask.Command = req.Command
+					candidateTask.RsyncSource = req.RsyncSource
+					candidateTask.RsyncTarget = req.RsyncTarget
+					candidateTask.ExecutorType = req.ExecutorType
+					candidateTask.ExecutorConfig = req.ExecutorConfig
+					candidateTask.CronSpec = req.CronSpec
+					if hasImportedCronOverride {
+						candidateTask.CronOverride = importedCronOverride
+					}
+					candidateTask.Source = readStringField(taskData, "source")
 					// Foreign managed publication configuration is always imported paused.
 					if managedRsyncImport || managedRcloneImport {
-						existing.Enabled = false
+						candidateTask.Enabled = false
 					} else if enabled, ok := readImportedBoolField(taskData, "enabled"); ok {
-						existing.Enabled = enabled
+						candidateTask.Enabled = enabled
 					}
-					if err := applyImportedTaskCronCursor(tx, &existing, previousCronSpec, req.CronSpec); err != nil {
-						return err
+				}
+				explicitEnabled, hasExplicitEnabled := readImportedBoolField(taskData, "enabled")
+				if !existing && hasExplicitEnabled && !managedRsyncImport && !managedRcloneImport {
+					candidateTask.Enabled = explicitEnabled
+				}
+				if !existing && candidateTask.Enabled {
+					candidateTask.NextRunAt = cronutil.Next(candidateTask.CronSpec)
+				}
+				candidate := &configImportTaskCandidate{
+					task:                    candidateTask,
+					req:                     req,
+					dependencyKey:           dependencyKey,
+					hasDependency:           hasDependency,
+					taskIndex:               taskIndex,
+					name:                    name,
+					existing:                existing,
+					hasImportedCronOverride: hasImportedCronOverride,
+					importedCronOverride:    importedCronOverride,
+					managedRsync:            managedRsyncImport,
+					managedRclone:           managedRcloneImport,
+					hasExplicitEnabled:      hasExplicitEnabled,
+					requestedEnabled:        candidateTask.Enabled,
+					previousCronSpec:        strings.TrimSpace(baseTask.CronSpec),
+				}
+				if previousCandidate != nil && conflict == "overwrite" {
+					*previousCandidate = *candidate
+					candidate = previousCandidate
+				} else {
+					taskCandidates = append(taskCandidates, candidate)
+				}
+				candidateByKey[taskKey] = candidate
+			}
+
+			candidateIDs := make(map[importTaskKey]uint, len(taskCandidates))
+			candidateRows := make(map[uint]model.Task, len(taskCandidates))
+			for _, candidate := range taskCandidates {
+				taskKey := buildImportTaskKey(candidate.task.Name, candidate.task.NodeID)
+				candidateIDs[taskKey] = candidate.task.ID
+				candidateRows[candidate.task.ID] = candidate.task
+			}
+			rejectCandidate := func(candidate *configImportTaskCandidate) {
+				if candidate == nil || candidate.rejected {
+					return
+				}
+				candidate.rejected = true
+				accumulator.rejected(configImportEntityTasks, candidate.taskIndex, candidate.name, configImportWarningInvalidInput)
+			}
+
+			for _, candidate := range taskCandidates {
+				if !candidate.hasDependency {
+					candidate.dependencyID = nil
+					continue
+				}
+				dependencyID, ok := candidateIDs[candidate.dependencyKey]
+				if !ok {
+					var dependency model.Task
+					result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+						Where("name = ? AND node_id = ?", candidate.dependencyKey.name, candidate.dependencyKey.nodeID).
+						Limit(1).Find(&dependency)
+					if result.Error != nil {
+						return fmt.Errorf("查询导入任务依赖失败: %w", result.Error)
 					}
-					if err := tx.Save(&existing).Error; err != nil {
-						return err
+					if result.RowsAffected == 0 {
+						rejectCandidate(candidate)
+						continue
 					}
-					importedTasks++
-					taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: existing.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
+					dependencyID = dependency.ID
+				}
+				if dependencyID == 0 {
+					rejectCandidate(candidate)
+					continue
+				}
+				candidate.dependencyID = &dependencyID
+				candidate.req.DependsOnTaskID = &dependencyID
+				candidate.task.DependsOnTaskID = &dependencyID
+				candidateRows[candidate.task.ID] = candidate.task
+			}
+
+			taskRefRepo := &configImportTaskRefRepository{
+				TaskRepository: importTaskRepo,
+				candidates:     candidateRows,
+			}
+			// The shared single-task validator has a finite depth bound. Walk
+			// the complete staged graph (including referenced existing rows)
+			// once so a long cycle cannot be accepted as a valid import.
+			const (
+				dependencyVisiting = 1
+				dependencyValid    = 2
+				dependencyInvalid  = 3
+			)
+			dependencyState := make(map[uint]uint8, len(candidateRows))
+			dependencyPath := make([]uint, 0, len(candidateRows))
+			for _, candidate := range taskCandidates {
+				dependencyPath = dependencyPath[:0]
+				currentID := candidate.task.ID
+				valid := true
+				for currentID != 0 {
+					if state := dependencyState[currentID]; state != 0 {
+						valid = state == dependencyValid
+						break
+					}
+					dependencyState[currentID] = dependencyVisiting
+					dependencyPath = append(dependencyPath, currentID)
+					row, err := taskRefRepo.FindByIDFields(persistCtx, currentID, "id", "depends_on_task_id")
+					if err != nil {
+						if errors.Is(err, gorm.ErrRecordNotFound) {
+							valid = false
+							break
+						}
+						return fmt.Errorf("读取导入任务依赖图失败: %w", err)
+					}
+					if row == nil {
+						valid = false
+						break
+					}
+					currentID = 0
+					if row.DependsOnTaskID != nil {
+						currentID = *row.DependsOnTaskID
+					}
+				}
+				state := uint8(dependencyValid)
+				if !valid {
+					state = dependencyInvalid
+					rejectCandidate(candidate)
+				}
+				for _, id := range dependencyPath {
+					dependencyState[id] = state
+				}
+			}
+			for _, candidate := range taskCandidates {
+				if candidate.rejected {
+					continue
+				}
+				if err := taskPkg.ValidateTaskRefs(
+					persistCtx, importNodeRepo, importPolicyRepo, taskRefRepo,
+					candidate.req, candidate.task.ID,
+				); err != nil {
+					if !taskPkg.IsTaskValidationError(err) {
+						return fmt.Errorf("校验导入任务依赖失败: %w", err)
+					}
+					rejectCandidate(candidate)
+				}
+			}
+			changed := true
+			for changed {
+				changed = false
+				for _, candidate := range taskCandidates {
+					if candidate.rejected || candidate.dependencyID == nil {
+						continue
+					}
+					if dependency, ok := candidateRows[*candidate.dependencyID]; ok {
+						for _, dependencyCandidate := range taskCandidates {
+							if dependencyCandidate.task.ID == dependency.ID && dependencyCandidate.rejected {
+								rejectCandidate(candidate)
+								changed = true
+								break
+							}
+						}
+					}
+				}
+			}
+
+			publishedTaskIDs := make(map[uint]uint, len(taskCandidates))
+			for _, candidate := range taskCandidates {
+				if candidate.rejected {
+					continue
+				}
+				candidate.req.DependsOnTaskID = candidate.dependencyID
+				// Dependency IDs for new candidates are provisional overlay IDs.
+				// Rows are published without that field, then linked after all
+				// inserts have returned their real database IDs.
+				candidateSourceID := candidate.task.ID
+				candidate.task.DependsOnTaskID = nil
+				if candidate.existing {
+					if err := applyImportedTaskCronCursor(
+						tx, &candidate.task, candidate.previousCronSpec, candidate.task.CronSpec,
+					); err != nil {
+						return fmt.Errorf("更新导入任务调度游标失败: %w", err)
+					}
+					if err := tx.Save(&candidate.task).Error; err != nil {
+						return fmt.Errorf("保存导入任务失败: %w", err)
+					}
+					publishedTaskIDs[candidateSourceID] = candidate.task.ID
+					accumulator.updated(configImportEntityTasks)
 					continue
 				}
 
-				explicitEnabled, hasExplicitEnabled := readImportedBoolField(taskData, "enabled")
-				newTask := model.Task{
-					Name:           req.Name,
-					NodeID:         req.NodeID,
-					PolicyID:       req.PolicyID,
-					Command:        req.Command,
-					RsyncSource:    req.RsyncSource,
-					RsyncTarget:    req.RsyncTarget,
-					ExecutorType:   req.ExecutorType,
-					ExecutorConfig: req.ExecutorConfig,
-					CronSpec:       req.CronSpec,
-					Status:         "pending",
-					Source:         readStringField(taskData, "source"),
-					Enabled:        !managedRsyncImport && !managedRcloneImport,
-				}
-				if hasImportedCronOverride {
-					newTask.CronOverride = importedCronOverride
-				}
-				if newTask.Source == "" {
-					newTask.Source = "manual"
-				}
-				if hasExplicitEnabled && !managedRsyncImport && !managedRcloneImport {
-					newTask.Enabled = explicitEnabled
-				}
-				if newTask.Enabled {
-					newTask.NextRunAt = cronutil.Next(newTask.CronSpec)
-				}
-				if err := validateImportedTarget(req, 0); err != nil {
+				if err := validateImportedTarget(candidate.req, 0, true); err != nil {
 					return err
 				}
-				requestedEnabled := newTask.Enabled
-				if err := tx.Create(&newTask).Error; err != nil {
-					return err
+				candidate.task.ID = 0
+				requestedEnabled := candidate.task.Enabled
+				if err := tx.Create(&candidate.task).Error; err != nil {
+					return fmt.Errorf("创建导入任务失败: %w", err)
 				}
+				publishedTaskIDs[candidateSourceID] = candidate.task.ID
 				// GORM omits false bools when the model declares default:true.
 				// Restore explicit task values in this transaction while keeping
 				// foreign managed publication tasks paused.
-				if hasExplicitEnabled || managedRsyncImport || managedRcloneImport {
-					if err := tx.Model(&model.Task{}).Where("id = ?", newTask.ID).Update("enabled", requestedEnabled).Error; err != nil {
-						return err
+				if candidate.hasExplicitEnabled || candidate.managedRsync || candidate.managedRclone {
+					if err := tx.Model(&model.Task{}).Where("id = ?", candidate.task.ID).
+						Update("enabled", requestedEnabled).Error; err != nil {
+						return fmt.Errorf("恢复导入任务启用状态失败: %w", err)
 					}
 				}
-				resolvedTaskIDs[taskKey] = newTask.ID
-				taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: newTask.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
+				accumulator.created(configImportEntityTasks, false)
 			}
 
-			for _, update := range taskDependencyUpdates {
+			for _, candidate := range taskCandidates {
+				if candidate.rejected {
+					continue
+				}
 				var dependencyID *uint
-				if update.hasDependency {
-					resolvedID, ok := resolvedTaskIDs[update.dependencyKey]
-					if !ok || resolvedID == 0 || resolvedID == update.taskID {
-						continue
+				if candidate.dependencyID != nil {
+					resolvedID := *candidate.dependencyID
+					if publishedID, ok := publishedTaskIDs[resolvedID]; ok {
+						resolvedID = publishedID
 					}
 					dependencyID = &resolvedID
 				}
-
-				var current model.Task
-				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, update.taskID).Error; err != nil {
-					return err
-				}
-				req := taskPkg.CreateTaskInput{
-					Name:            current.Name,
-					NodeID:          current.NodeID,
-					PolicyID:        current.PolicyID,
-					DependsOnTaskID: dependencyID,
-					Command:         current.Command,
-					RsyncSource:     current.RsyncSource,
-					RsyncTarget:     current.RsyncTarget,
-					ExecutorType:    current.ExecutorType,
-					ExecutorConfig:  current.ExecutorConfig,
-					CronSpec:        current.CronSpec,
-				}
-				if err := taskPkg.ValidateTaskRefs(persistCtx, importNodeRepo, importPolicyRepo, importTaskRepo, req, current.ID); err != nil {
-					logger.Module("config").Warn().
-						Str("task", current.Name).
-						Err(err).
-						Msg("导入任务依赖更新校验失败，跳过")
-					continue
-				}
-				if err := tx.Model(&current).Update("depends_on_task_id", dependencyID).Error; err != nil {
-					logger.Module("config").Warn().
-						Str("task", current.Name).
-						Err(err).
-						Msg("导入任务依赖关系更新失败，跳过")
-					continue
+				if err := tx.Model(&model.Task{}).Where("id = ?", candidate.task.ID).
+					Update("depends_on_task_id", dependencyID).Error; err != nil {
+					return fmt.Errorf("更新导入任务依赖失败: %w", err)
 				}
 			}
 
 			// 导入系统设置（使用事务 handle 确保原子性）
 			if h.settingsSvc != nil {
 				for _, setting := range settingsPlan {
-					if err := h.settingsSvc.UpdateWithTxContext(persistCtx, tx, setting.key, setting.value); err != nil {
-						return err
+					var existingSetting model.SystemSetting
+					result := tx.Where("key = ?", setting.key).Limit(1).Find(&existingSetting)
+					if result.Error != nil {
+						return fmt.Errorf("查询导入系统设置失败: %w", result.Error)
 					}
-					importedSettings++
+					if err := h.settingsSvc.UpdateWithTxContext(persistCtx, tx, setting.key, setting.value); err != nil {
+						return fmt.Errorf("保存导入系统设置失败: %w", err)
+					}
+					if result.RowsAffected > 0 {
+						accumulator.updated(configImportEntitySystemSettings)
+					} else {
+						accumulator.created(configImportEntitySystemSettings, false)
+					}
 				}
 			}
 
@@ -1195,13 +1651,14 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			return
 		}
 		if errors.Is(importErr, errConfigAssetGraphInvalid) {
-			respondBadRequest(c, importErr.Error())
+			respondBadRequest(c, "导入数据无效")
 			return
 		}
 		respondInternalError(c, importErr)
 		return
 	}
 
+	result := accumulator.finalize()
 	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 		Action:           "config.import",
 		Purpose:          "config_import",
@@ -1210,23 +1667,19 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		Outcome:          credentialaudit.OutcomeSuccess,
 		Metadata: map[string]any{
 			"stage":          "success",
-			"node_count":     importedNodes,
-			"key_count":      importedKeys,
-			"policy_count":   importedPolicies,
-			"task_count":     importedTasks,
-			"settings_count": importedSettings,
+			"node_count":     result.Nodes,
+			"key_count":      result.SSHKeys,
+			"policy_count":   result.Policies,
+			"task_count":     result.Tasks,
+			"settings_count": result.SystemSettings,
+			"created_count":  result.Created,
+			"updated_count":  result.Updated,
+			"rejected_count": result.Rejected,
+			"skipped_count":  result.Skipped,
 		},
 	})
 
-	respondOK(c, gin.H{
-		"nodes":           importedNodes,
-		"ssh_keys":        importedKeys,
-		"policies":        importedPolicies,
-		"tasks":           importedTasks,
-		"system_settings": importedSettings,
-		"imported":        importedNodes + importedKeys + importedPolicies + importedTasks + importedSettings,
-		"skipped":         0,
-	})
+	respondOK(c, result)
 }
 
 func configExportSettingLooksSensitive(setting model.SystemSetting) bool {
@@ -1553,78 +2006,208 @@ func discardImportedConfigValue(decoder *json.Decoder) error {
 	return nil
 }
 
-func applyImportedSSHKeyScope(key *model.SSHKey, data map[string]interface{}) {
-	if key == nil {
-		return
-	}
-	if disabled, ok := data["disabled"].(bool); ok {
-		key.Disabled = disabled
+type importedSSHKeyScopeCandidate struct {
+	disabled        *bool
+	expiresAt       *time.Time
+	expiresAtSet    bool
+	allowedPurposes *string
+	allowedNodeIDs  *string
+	allowedNodeTags *string
+	unsafeCode      string
+}
+
+func parseImportedSSHKeyScope(data map[string]interface{}) (importedSSHKeyScopeCandidate, string) {
+	var candidate importedSSHKeyScopeCandidate
+	invalid := false
+
+	if raw, ok := data["disabled"]; ok {
+		value, valid := raw.(bool)
+		if !valid {
+			invalid = true
+		} else {
+			candidate.disabled = &value
+		}
 	}
 	if raw, ok := data["expires_at"]; ok {
-		key.ExpiresAt = parseImportedTimePtr(raw)
+		candidate.expiresAtSet = true
+		switch value := raw.(type) {
+		case nil:
+			// Explicit null clears the expiry.
+		case string:
+			value = strings.TrimSpace(value)
+			if value != "" {
+				parsed, err := time.Parse(time.RFC3339, value)
+				if err != nil {
+					invalid = true
+				} else {
+					parsed = parsed.UTC()
+					candidate.expiresAt = &parsed
+				}
+			}
+		default:
+			invalid = true
+		}
 	}
 	if raw, ok := data["allowed_purposes"]; ok {
-		if normalized, err := sshutil.NormalizePurposeList(importStringValue(raw)); err == nil {
-			key.AllowedPurposes = normalized
+		value, valid := raw.(string)
+		if !valid {
+			invalid = true
+		} else if normalized, err := sshutil.NormalizePurposeList(strings.TrimSpace(value)); err != nil {
+			invalid = true
+		} else {
+			candidate.allowedPurposes = &normalized
 		}
 	}
 	if raw, ok := data["allowed_node_ids"]; ok {
-		if normalized, err := sshutil.NormalizeNodeIDList(importStringValue(raw)); err == nil {
-			key.AllowedNodeIDs = normalized
+		value, valid := raw.(string)
+		if !valid {
+			invalid = true
+		} else if normalized, err := sshutil.NormalizeNodeIDList(strings.TrimSpace(value)); err != nil {
+			invalid = true
+		} else {
+			candidate.allowedNodeIDs = &normalized
 		}
 	}
 	if raw, ok := data["allowed_node_tags"]; ok {
-		key.AllowedNodeTags = sshutil.NormalizeTagList(importStringValue(raw))
-	}
-}
-
-func importStringValue(raw interface{}) string {
-	switch v := raw.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case json.Number:
-		return strings.TrimSpace(v.String())
-	case float64:
-		if v == float64(uint64(v)) {
-			return strconv.FormatUint(uint64(v), 10)
+		value, valid := raw.(string)
+		if !valid {
+			invalid = true
+		} else {
+			normalized := sshutil.NormalizeTagList(strings.TrimSpace(value))
+			candidate.allowedNodeTags = &normalized
 		}
-		return strings.TrimSpace(fmt.Sprint(v))
-	default:
-		return ""
+	}
+	if invalid {
+		candidate.unsafeCode = configImportWarningInvalidScope
+	} else if candidate.allowedNodeIDs != nil && strings.TrimSpace(*candidate.allowedNodeIDs) != "" {
+		candidate.unsafeCode = configImportWarningUnresolvedNodeScope
+	}
+	return candidate, candidate.unsafeCode
+}
+
+func applyImportedSSHKeyScopeCandidate(key *model.SSHKey, candidate importedSSHKeyScopeCandidate) {
+	if key == nil {
+		return
+	}
+	if candidate.disabled != nil {
+		key.Disabled = *candidate.disabled
+	}
+	if candidate.expiresAtSet {
+		key.ExpiresAt = candidate.expiresAt
+	}
+	if candidate.allowedPurposes != nil {
+		key.AllowedPurposes = *candidate.allowedPurposes
+	}
+	if candidate.allowedNodeIDs != nil {
+		key.AllowedNodeIDs = *candidate.allowedNodeIDs
+	}
+	if candidate.allowedNodeTags != nil {
+		key.AllowedNodeTags = *candidate.allowedNodeTags
+	}
+	if candidate.allowedNodeIDs != nil && strings.TrimSpace(*candidate.allowedNodeIDs) != "" {
+		key.AllowedNodeIDs = ""
 	}
 }
 
-func parseImportedTimePtr(raw interface{}) *time.Time {
+func importedSSHKeySelectedType(data map[string]interface{}, fallback string) (string, error) {
+	raw, ok := data["key_type"]
+	if !ok || raw == nil {
+		return sshutil.NormalizeKeyType(fallback), nil
+	}
 	value, ok := raw.(string)
-	if !ok || strings.TrimSpace(value) == "" {
-		return nil
+	if !ok {
+		return "", fmt.Errorf("imported key_type must be a string")
 	}
-	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
-	if err != nil {
-		return nil
-	}
-	parsed = parsed.UTC()
-	return &parsed
+	return sshutil.NormalizeKeyType(value), nil
 }
 
-func resolveImportNodeID(tx *gorm.DB, taskData map[string]interface{}) (uint, bool) {
-	if name := readStringField(taskData, "node_name"); name != "" {
-		var node model.Node
-		if err := tx.Select("id").Where("name = ?", name).First(&node).Error; err == nil {
-			return node.ID, true
+func prepareImportedSSHKeyPrivateKey(
+	data map[string]interface{},
+	existing *model.SSHKey,
+	selectedType string,
+) (string, string, error) {
+	if raw, ok := data["private_key"]; ok && raw != nil {
+		value, valid := raw.(string)
+		if !valid {
+			return "", "", fmt.Errorf("imported private_key must be a string")
+		}
+		if strings.TrimSpace(value) != "" {
+			return sshutil.ValidateAndPreparePrivateKey(value, selectedType)
 		}
 	}
+	if existing != nil && strings.TrimSpace(existing.PrivateKey) != "" {
+		return sshutil.ValidateAndPreparePrivateKey(existing.PrivateKey, selectedType)
+	}
+	return "", sshutil.NormalizeKeyType(selectedType), nil
+}
 
-	if rawID, ok := taskData["node_id"]; ok {
-		if nodeID, ok := normalizeUintValue(rawID); ok {
-			var node model.Node
-			if err := tx.Select("id").Where("id = ?", nodeID).First(&node).Error; err == nil {
-				return node.ID, true
+func importedNodeSourceSSHKeyIDPresent(data map[string]interface{}) bool {
+	raw, ok := data["ssh_key_id"]
+	if !ok || raw == nil {
+		return false
+	}
+	if value, ok := raw.(string); ok {
+		return strings.TrimSpace(value) != ""
+	}
+	return true
+}
+
+func addImportedNodeCredentialWarnings(
+	accumulator *configImportAccumulator,
+	index int,
+	name string,
+	source map[string]interface{},
+	nodeItem model.Node,
+) {
+	if importedNodeSourceSSHKeyIDPresent(source) {
+		accumulator.warning(configImportEntityNodes, index, name, configImportWarningUnresolvedSSHKey)
+	}
+	switch strings.ToLower(strings.TrimSpace(nodeItem.AuthType)) {
+	case "password":
+		if strings.TrimSpace(nodeItem.Password) == "" {
+			accumulator.warning(configImportEntityNodes, index, name, configImportWarningMissingPassword)
+		}
+	case "key", "ssh_key":
+		if nodeItem.SSHKeyID == nil && strings.TrimSpace(nodeItem.PrivateKey) == "" {
+			accumulator.warning(configImportEntityNodes, index, name, configImportWarningMissingInlineKey)
+		}
+	}
+}
+
+func importTaskFieldSpecified(data map[string]interface{}, keys ...string) bool {
+	for _, key := range keys {
+		raw, ok := data[key]
+		if !ok || raw == nil {
+			continue
+		}
+		if value, ok := raw.(string); ok {
+			if strings.TrimSpace(value) != "" {
+				return true
 			}
+			continue
 		}
+		return true
 	}
+	return false
+}
 
-	return 0, false
+func resolveImportNodeID(tx *gorm.DB, taskData map[string]interface{}) (uint, bool, error) {
+	name := readStringField(taskData, "node_name")
+	if name == "" {
+		// Numeric node IDs belong to the source database and are not stable
+		// identity evidence for an import. The export format carries the
+		// target node name for this mapping.
+		return 0, false, nil
+	}
+	var node model.Node
+	result := tx.Select("id").Where("name = ?", name).First(&node)
+	if result.Error == nil {
+		return node.ID, true, nil
+	}
+	if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return 0, false, result.Error
+	}
+	return 0, false, nil
 }
 
 // applyImportedTaskCronCursor updates only the cursor owned by this task's
@@ -1664,25 +2247,33 @@ func applyImportedTaskCronCursor(
 	return nil
 }
 
-func resolveImportPolicyID(tx *gorm.DB, taskData map[string]interface{}) (uint, bool) {
+func resolveImportPolicyID(tx *gorm.DB, taskData map[string]interface{}) (uint, bool, error) {
 	if name := readStringField(taskData, "policy_name"); name != "" {
 		var policy model.Policy
-		if err := tx.Select("id").Where("name = ?", name).First(&policy).Error; err == nil {
-			return policy.ID, true
+		result := tx.Select("id").Where("name = ?", name).First(&policy)
+		if result.Error == nil {
+			return policy.ID, true, nil
 		}
-		return 0, false
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return 0, false, nil
+		}
+		return 0, false, result.Error
 	}
 
 	if rawID, ok := taskData["policy_id"]; ok {
 		if policyID, ok := normalizeUintValue(rawID); ok {
 			var policy model.Policy
-			if err := tx.Select("id").Where("id = ?", policyID).First(&policy).Error; err == nil {
-				return policy.ID, true
+			result := tx.Select("id").Where("id = ?", policyID).First(&policy)
+			if result.Error == nil {
+				return policy.ID, true, nil
+			}
+			if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				return 0, false, result.Error
 			}
 		}
 	}
 
-	return 0, false
+	return 0, false, nil
 }
 
 func normalizeUintValue(raw interface{}) (uint, bool) {
@@ -1713,25 +2304,32 @@ func buildImportTaskKey(name string, nodeID uint) importTaskKey {
 	return importTaskKey{name: strings.TrimSpace(name), nodeID: nodeID}
 }
 
-func resolveImportedDependencyKey(tx *gorm.DB, taskData map[string]interface{}) (importTaskKey, bool) {
+func resolveImportedDependencyKey(tx *gorm.DB, taskData map[string]interface{}, ownNodeIDs ...uint) (importTaskKey, bool, error) {
 	dependencyName := readStringField(taskData, "depends_on_task_name")
 	if dependencyName == "" {
-		return importTaskKey{}, false
+		return importTaskKey{}, false, nil
 	}
 
 	nodeName := readStringField(taskData, "depends_on_task_node_name")
 	if nodeName != "" {
 		var node model.Node
-		if err := tx.Select("id").Where("name = ?", nodeName).First(&node).Error; err == nil {
-			return buildImportTaskKey(dependencyName, node.ID), true
+		result := tx.Select("id").Where("name = ?", nodeName).First(&node)
+		if result.Error == nil {
+			return buildImportTaskKey(dependencyName, node.ID), true, nil
 		}
+		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return importTaskKey{}, false, result.Error
+		}
+		// A named dependency node that cannot be resolved must not fall back
+		// to a source numeric ID or to the dependent task's node.
+		return importTaskKey{}, false, nil
 	}
 
-	if rawNodeID, ok := taskData["depends_on_task_node_id"]; ok {
-		if nodeID, ok := normalizeUintValue(rawNodeID); ok {
-			return buildImportTaskKey(dependencyName, nodeID), true
-		}
+	// Older same-node exports may omit the dependency node name. In that
+	// established shape, the candidate task's already-resolved local node is
+	// the only safe mapping. Numeric source IDs are never interpreted here.
+	if len(ownNodeIDs) > 0 && ownNodeIDs[0] != 0 {
+		return buildImportTaskKey(dependencyName, ownNodeIDs[0]), true, nil
 	}
-
-	return importTaskKey{}, false
+	return importTaskKey{}, false, nil
 }

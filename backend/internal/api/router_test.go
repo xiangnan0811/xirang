@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,8 +21,11 @@ import (
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pquerna/otp/totp"
+	"golang.org/x/crypto/ssh"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -62,6 +69,28 @@ func (*routerBackupContentSchemeService) Serve(context.Context, content.GatewayR
 
 func (*routerBackupContentSchemeService) RevokeSession(context.Context, string, string) error {
 	return nil
+}
+
+type routerActivationResponseBarrier struct {
+	*httptest.ResponseRecorder
+	entered chan<- struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (w *routerActivationResponseBarrier) signalAndWait() {
+	w.once.Do(func() { close(w.entered) })
+	<-w.release
+}
+
+func (w *routerActivationResponseBarrier) Write(data []byte) (int, error) {
+	w.signalAndWait()
+	return w.ResponseRecorder.Write(data)
+}
+
+func (w *routerActivationResponseBarrier) WriteString(data string) (int, error) {
+	w.signalAndWait()
+	return w.ResponseRecorder.WriteString(data)
 }
 
 func TestEveryStepUpRouteDeclaresExpectedAction(t *testing.T) {
@@ -1304,6 +1333,152 @@ func TestNodeTrustHostKeyRouteRequiresAdmin(t *testing.T) {
 	}
 }
 
+func TestSSHKeyPreviewRouteRequiresAuthenticatedAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "preview.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.SSHKey{}, &model.AuditLog{}, &model.CredentialAuditEvent{}, &model.TokenRevocation{}, &model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	manager := auth.NewJWTManager("FAKE_PREVIEW_ROUTE_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	manager.SetDB(db)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(private, "FAKE_PREVIEW_TEST_ONLY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]string{"private_key": string(pem.EncodeToMemory(block)), "key_type": "ed25519"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, err := ssh.NewPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(Dependencies{DB: db, JWTManager: manager})
+	for _, role := range []string{"", "viewer", "operator", "admin"} {
+		t.Run(role, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-keys/preview", strings.NewReader(string(body)))
+			req.Header.Set("Content-Type", "application/json")
+			wantStatus := http.StatusUnauthorized
+			if role != "" {
+				user := model.User{Username: "preview-" + role, PasswordHash: "FAKE_HASH_FOR_TEST_ONLY", Role: role}
+				if err := db.Create(&user).Error; err != nil {
+					t.Fatal(err)
+				}
+				token, err := manager.GenerateToken(user)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "Bearer "+token)
+				wantStatus = http.StatusForbidden
+				if role == "admin" {
+					wantStatus = http.StatusOK
+				}
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			if response.Code != wantStatus {
+				t.Fatalf("status=%d, want %d", response.Code, wantStatus)
+			}
+			if role == "admin" {
+				var envelope struct {
+					Data struct {
+						KeyType     string `json:"key_type"`
+						PublicKey   string `json:"public_key"`
+						Fingerprint string `json:"public_key_fingerprint"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				if envelope.Data.KeyType != "ed25519" || envelope.Data.PublicKey != strings.TrimSpace(string(ssh.MarshalAuthorizedKey(publicKey))) || envelope.Data.Fingerprint != ssh.FingerprintSHA256(publicKey) {
+					t.Fatal("preview does not describe the supplied public key")
+				}
+				if !strings.Contains(response.Header().Get("Cache-Control"), "no-store") || strings.Contains(response.Body.String(), "PRIVATE KEY") {
+					t.Fatal("preview cache or private-key disclosure boundary failed")
+				}
+			}
+		})
+	}
+	var count int64
+	if err := db.Model(&model.SSHKey{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("preview persisted an SSH key: count=%d err=%v", count, err)
+	}
+}
+
+func TestCronBackupStatusRouteRequiresAdminAndUsesRuntimeDialect(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("DB_TYPE", "postgres")
+	t.Setenv("CRON_DB_BACKUP_DIR", "")
+	t.Setenv("CRON_DB_BACKUP_MAX_AGE_HOURS", "26")
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "observer.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.TokenRevocation{}, &model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	manager := auth.NewJWTManager("FAKE_CRON_OBSERVER_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	manager.SetDB(db)
+	router := NewRouter(Dependencies{DB: db, JWTManager: manager})
+	for _, role := range []string{"", "viewer", "operator", "admin"} {
+		t.Run(role, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/system/cron-backup-status", nil)
+			want := http.StatusUnauthorized
+			if role != "" {
+				user := model.User{Username: "observer-" + role, PasswordHash: "FAKE_HASH_FOR_TEST_ONLY", Role: role}
+				if err := db.Create(&user).Error; err != nil {
+					t.Fatal(err)
+				}
+				token, err := manager.GenerateToken(user)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "Bearer "+token)
+				want = http.StatusForbidden
+				if role == "admin" {
+					want = http.StatusOK
+				}
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			if response.Code != want {
+				t.Fatalf("status=%d want=%d", response.Code, want)
+			}
+			if role == "admin" {
+				var envelope struct {
+					Data struct {
+						Status          string `json:"status"`
+						Engine          string `json:"engine"`
+						ContentVerified bool   `json:"content_verified"`
+						Evidence        string `json:"evidence"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				if envelope.Data.Status != "not_configured" || envelope.Data.Engine != "sqlite" ||
+					envelope.Data.ContentVerified || envelope.Data.Evidence != "artifact_pair" {
+					t.Fatalf("unexpected runtime evidence: %+v", envelope.Data)
+				}
+				webReq := httptest.NewRequest(http.MethodGet, "/api/v1/system/backups", nil)
+				webReq.Header.Set("Authorization", req.Header.Get("Authorization"))
+				webResponse := httptest.NewRecorder()
+				router.ServeHTTP(webResponse, webReq)
+				if webResponse.Code != http.StatusNotImplemented {
+					t.Fatalf("expected independent Web backup 501, got %d", webResponse.Code)
+				}
+			}
+		})
+	}
+}
+
 func TestAlertBulkResolveRouteRBAC(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1477,6 +1652,158 @@ func TestRouterRegistersBackupAssetExportAndArchiveMemberRoutes(t *testing.T) {
 		if !hasRoute(routes, route.method, route.path) {
 			t.Fatalf("missing backup asset Export/archive route %s %s", route.method, route.path)
 		}
+	}
+}
+
+func TestRouterTOTPActivationResponseBarrierAllowsOriginalLogoutAndKeepsReplacementRevoked(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "dGVzdC1rZXktZGF0YS1lbmNyeXB0aW9uLWtleS0zMmEh")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open router auth database: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}, &model.TokenRevocation{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("migrate router auth database: %v", err)
+	}
+	passwordHash, err := auth.HashPassword("FAKE_RouterAdminPass2026!_FOR_TEST_ONLY")
+	if err != nil {
+		t.Fatalf("hash router test password: %v", err)
+	}
+	user := model.User{
+		Username: "router-totp-admin", PasswordHash: passwordHash, Role: "admin", TokenVersion: 1,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create router auth user: %v", err)
+	}
+	manager := auth.NewJWTManager("FAKE_ROUTER_TOTP_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	manager.SetDB(db)
+	service := auth.NewService(db, manager, nil, auth.LoginSecurityConfig{
+		FailLockThreshold: 5, FailLockDuration: time.Minute,
+	})
+	router := NewRouter(Dependencies{DB: db, AuthService: service, JWTManager: manager})
+
+	serve := func(method, path, token, body string, writer http.ResponseWriter) {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if strings.TrimSpace(token) != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		router.ServeHTTP(writer, req)
+	}
+	token, err := manager.GenerateToken(user)
+	if err != nil {
+		t.Fatalf("generate router auth token: %v", err)
+	}
+	setupResp := httptest.NewRecorder()
+	serve(http.MethodPost, "/api/v1/auth/2fa/setup", token, "", setupResp)
+	if setupResp.Code != http.StatusOK {
+		t.Fatalf("setup failed: %d %s", setupResp.Code, setupResp.Body.String())
+	}
+	var setup struct {
+		Data struct {
+			EnrollmentID string `json:"enrollment_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(setupResp.Body.Bytes(), &setup); err != nil {
+		t.Fatalf("decode setup response: %v", err)
+	}
+	if setup.Data.EnrollmentID == "" {
+		t.Fatal("setup did not return enrollment id")
+	}
+	var pending model.User
+	if err := db.First(&pending, user.ID).Error; err != nil {
+		t.Fatalf("load pending user: %v", err)
+	}
+	code, err := totp.GenerateCode(pending.TOTPSecret, time.Now())
+	if err != nil {
+		t.Fatalf("generate TOTP code: %v", err)
+	}
+	oldClaims, err := manager.ParseToken(token)
+	if err != nil || oldClaims.ExpiresAt == nil {
+		t.Fatalf("parse original token: claims=%+v err=%v", oldClaims, err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	activationResponse := httptest.NewRecorder()
+	barrierWriter := &routerActivationResponseBarrier{
+		ResponseRecorder: activationResponse,
+		entered:          entered,
+		release:          release,
+	}
+	activationDone := make(chan struct{})
+	go func() {
+		defer close(activationDone)
+		serve(http.MethodPost, "/api/v1/auth/2fa/verify", token,
+			fmt.Sprintf(`{"code":%q,"enrollment_id":%q}`, code, setup.Data.EnrollmentID),
+			barrierWriter)
+	}()
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	select {
+	case <-entered:
+	case <-waitCtx.Done():
+		close(release)
+		t.Fatalf("activation did not reach committed response barrier: %v", waitCtx.Err())
+	}
+
+	staleMeResp := httptest.NewRecorder()
+	serve(http.MethodGet, "/api/v1/me", token, "", staleMeResp)
+	if staleMeResp.Code != http.StatusUnauthorized {
+		close(release)
+		t.Fatalf("original token unexpectedly remained valid on normal route after activation: %d %s", staleMeResp.Code, staleMeResp.Body.String())
+	}
+	logoutResp := httptest.NewRecorder()
+	serve(http.MethodPost, "/api/v1/auth/logout", token, `{}`, logoutResp)
+	if logoutResp.Code != http.StatusOK {
+		close(release)
+		t.Fatalf("original token logout during response barrier failed: %d %s", logoutResp.Code, logoutResp.Body.String())
+	}
+	close(release)
+	select {
+	case <-activationDone:
+	case <-waitCtx.Done():
+		t.Fatalf("activation did not finish after response release: %v", waitCtx.Err())
+	}
+
+	var verify struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(activationResponse.Body.Bytes(), &verify); err != nil {
+		t.Fatalf("decode activation response: %v", err)
+	}
+	if verify.Data.Token == "" {
+		t.Fatalf("activation response did not contain replacement token: %s", activationResponse.Body.String())
+	}
+	replacementManager := auth.NewJWTManager("FAKE_ROUTER_TOTP_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	replacementClaims, err := replacementManager.ParseToken(verify.Data.Token)
+	if err != nil || replacementClaims.ExpiresAt == nil ||
+		replacementClaims.ID != oldClaims.ID ||
+		!replacementClaims.ExpiresAt.Equal(oldClaims.ExpiresAt.Time) ||
+		replacementClaims.TokenVersion != oldClaims.TokenVersion+1 {
+		t.Fatalf("replacement claims changed across response/logout ordering: old=%+v replacement=%+v err=%v", oldClaims, replacementClaims, err)
+	}
+
+	oldMe := httptest.NewRecorder()
+	replacementMe := httptest.NewRecorder()
+	serve(http.MethodGet, "/api/v1/me", token, "", oldMe)
+	serve(http.MethodGet, "/api/v1/me", verify.Data.Token, "", replacementMe)
+	if oldMe.Code != http.StatusUnauthorized || replacementMe.Code != http.StatusUnauthorized {
+		t.Fatalf("activation session logout statuses: old=%d replacement=%d", oldMe.Code, replacementMe.Code)
+	}
+	var revocation model.TokenRevocation
+	if err := db.Where("token_hash = ?", "jti:"+oldClaims.ID).First(&revocation).Error; err != nil {
+		t.Fatalf("load durable logout revocation: %v", err)
+	}
+	if !revocation.ExpiresAt.Equal(oldClaims.ExpiresAt.Time) {
+		t.Fatalf("logout changed durable session expiry: got=%s want=%s", revocation.ExpiresAt, oldClaims.ExpiresAt.Time)
 	}
 }
 

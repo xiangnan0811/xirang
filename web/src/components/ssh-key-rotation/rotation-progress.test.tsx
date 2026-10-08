@@ -62,8 +62,11 @@ describe("RotationProgress", () => {
     const onNext = vi.fn();
     const { rerender } = render(
       <RotationProgress
-        selectedKey={selectedKey}
         affectedNodes={affectedNodes}
+        candidatePublicKey="ssh-ed25519 AAAA"
+        oldPublicKeyFingerprint="SHA256:public-old"
+        newPublicKeyFingerprint="SHA256:public-new"
+        onCopyPublicKey={vi.fn()}
         acknowledgement=""
         onAcknowledgementChange={onAcknowledgementChange}
         onBack={vi.fn()}
@@ -77,6 +80,9 @@ describe("RotationProgress", () => {
     expect(screen.getByText("最近测试通过")).toBeInTheDocument();
     expect(screen.getByText("最近测试未通过")).toBeInTheDocument();
     expect(screen.getByText("这里的状态只是最近一次手动连接测试。轮换会验证全部受影响节点。")).toBeInTheDocument();
+    expect(screen.getByText("SHA256:public-old")).toBeInTheDocument();
+    expect(screen.getByText("SHA256:public-new")).toBeInTheDocument();
+    expect(screen.queryByText(selectedKey.fingerprint)).not.toBeInTheDocument();
 
     await user.type(screen.getByLabelText("输入 2 以确认受影响节点数"), "1");
     expect(onAcknowledgementChange).toHaveBeenLastCalledWith("1");
@@ -84,8 +90,11 @@ describe("RotationProgress", () => {
 
     rerender(
       <RotationProgress
-        selectedKey={selectedKey}
         affectedNodes={affectedNodes}
+        candidatePublicKey="ssh-ed25519 AAAA"
+        oldPublicKeyFingerprint="SHA256:public-old"
+        newPublicKeyFingerprint="SHA256:public-new"
+        onCopyPublicKey={vi.fn()}
         acknowledgement="1"
         onAcknowledgementChange={onAcknowledgementChange}
         onBack={vi.fn()}
@@ -103,8 +112,11 @@ describe("RotationProgress", () => {
     const onNext = vi.fn();
     render(
       <RotationProgress
-        selectedKey={selectedKey}
         affectedNodes={affectedNodes}
+        candidatePublicKey="ssh-ed25519 AAAA"
+        oldPublicKeyFingerprint="SHA256:public-old"
+        newPublicKeyFingerprint="SHA256:public-new"
+        onCopyPublicKey={vi.fn()}
         acknowledgement="2"
         onAcknowledgementChange={vi.fn()}
         onBack={vi.fn()}

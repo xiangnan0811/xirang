@@ -1,8 +1,15 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { AlertRecord, NewTaskInput, NodeRecord, OverviewTrafficSeries, TaskRecord } from "@/types/domain";
+import { beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
+import { AuthProvider } from "@/context/auth-context";
 import { useConsoleData } from "./use-console-data";
+
+function ConsoleAuth({ children }: { children: ReactNode }) {
+  return <AuthProvider>{children}</AuthProvider>;
+}
 
 const { apiClientMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
   const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
@@ -200,8 +207,21 @@ function createTrafficSeries(window: OverviewTrafficSeries["window"] = "1h"): Ov
 }
 
 describe("useConsoleData", () => {
+  afterEach(() => {
+    clearAuthTransitionBarrier();
+  });
   beforeEach(() => {
+    sessionStorage.setItem("xirang-auth-token", "token-1");
+    sessionStorage.setItem("xirang-username", "alice");
+    sessionStorage.setItem("xirang-role", "admin");
+    sessionStorage.setItem("xirang-user-id", "1");
+    sessionStorage.setItem("xirang-totp-enabled", "true");
     vi.clearAllMocks();
+    for (const fn of Object.values(apiClientMock)) {
+      if (typeof fn === "function" && "mockReset" in fn) {
+        fn.mockReset();
+      }
+    }
     useStepUpActionMock.lastAction = undefined;
     useStepUpActionMock.lastOptions = undefined;
     apiClientMock.getPolicies.mockResolvedValue([]);
@@ -223,7 +243,7 @@ describe("useConsoleData", () => {
     apiClientMock.getNodes.mockReturnValueOnce(pendingNodes.promise);
     apiClientMock.createNode.mockResolvedValue(createdNode);
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
 
     await act(async () => {
       const savedId = await result.current.createNode({
@@ -259,7 +279,7 @@ describe("useConsoleData", () => {
     apiClientMock.getTasks.mockResolvedValue([createTask(101, "running", 18)]);
     apiClientMock.getTask.mockResolvedValue(createTask(101, "success", 100));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -291,7 +311,7 @@ describe("useConsoleData", () => {
     apiClientMock.createTask.mockResolvedValue(createdTask);
     apiClientMock.getTask.mockResolvedValue(createTask(101, "success", 100));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
 
     await act(async () => {
       await result.current.createTask(createTaskInput(101));
@@ -325,7 +345,7 @@ describe("useConsoleData", () => {
     apiClientMock.requestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 1, status: "active" });
     apiClientMock.getTask.mockResolvedValue(createTask(202, "running", 12));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
 
     await act(async () => {
       await result.current.createTask(createTaskInput(202));
@@ -358,7 +378,7 @@ describe("useConsoleData", () => {
   it("demo 模式下 updateTask 只应用提交字段且不从策略回填", async () => {
     vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
 
-    const { result } = renderHook(() => useConsoleData(null));
+    const { result } = renderHook(() => useConsoleData(null), { wrapper: ConsoleAuth });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -407,7 +427,7 @@ describe("useConsoleData", () => {
     vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
     apiClientMock.updateTask.mockRejectedValueOnce(new Error("boom"));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -433,7 +453,7 @@ describe("useConsoleData", () => {
       activePolicies: 4,
     });
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -443,7 +463,7 @@ describe("useConsoleData", () => {
   });
 
   it("refresh 会推进 refreshVersion", async () => {
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -460,7 +480,7 @@ describe("useConsoleData", () => {
   it("demo 模式且无 token 时会返回 mock 数据与 mock 趋势", async () => {
     vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
 
-    const { result } = renderHook(() => useConsoleData(null));
+    const { result } = renderHook(() => useConsoleData(null), { wrapper: ConsoleAuth });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -494,7 +514,7 @@ describe("useConsoleData", () => {
       warning: "备份目录标识已更改",
     });
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -530,7 +550,7 @@ describe("useConsoleData", () => {
       .mockResolvedValueOnce([createTask(101, "running", 18)])
       .mockRejectedValueOnce(new Error("tasks down"));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -559,7 +579,7 @@ describe("useConsoleData", () => {
       .mockReturnValueOnce(pending.promise)
       .mockResolvedValueOnce([existing]);
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
     await act(async () => {
       await result.current.refreshNodes();
     });
@@ -601,7 +621,7 @@ describe("useConsoleData", () => {
         });
       });
 
-      const { result } = renderHook(() => useConsoleData("token-1"));
+      const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
       await act(async () => {
         await Promise.resolve();
       });
@@ -642,7 +662,7 @@ describe("useConsoleData", () => {
       return pending.promise;
     });
 
-    const { result, unmount } = renderHook(() => useConsoleData("token-1"));
+    const { result, unmount } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -666,7 +686,7 @@ describe("useConsoleData", () => {
     apiClientMock.triggerTask.mockResolvedValue(undefined);
     apiClientMock.getTask.mockResolvedValue(createTask(101, "running", 12));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -694,7 +714,7 @@ describe("useConsoleData", () => {
     apiClientMock.triggerTask.mockResolvedValue(undefined);
     apiClientMock.getTask.mockResolvedValue(createTask(202, "pending", 0));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -721,7 +741,7 @@ describe("useConsoleData", () => {
     apiClientMock.triggerTask.mockResolvedValue(undefined);
     apiClientMock.getTask.mockResolvedValue(createTask(303, "running", 8));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -747,7 +767,7 @@ describe("useConsoleData", () => {
     apiClientMock.triggerTask.mockResolvedValue(undefined);
     apiClientMock.getTask.mockResolvedValue(createTask(404, "success", 100));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -766,7 +786,7 @@ describe("useConsoleData", () => {
     apiClientMock.getNodes.mockResolvedValue([]);
     apiClientMock.getAlertDeliveryStats.mockRejectedValue(new Error("stats down"));
 
-    const { result } = renderHook(() => useConsoleData("token-1"));
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -778,5 +798,54 @@ describe("useConsoleData", () => {
 
     expect(result.current.warning).toBeNull();
     expect(apiClientMock.getAlertDeliveryStats).toHaveBeenCalledWith("token-1", { hours: 24 });
+  });
+
+  it("启用换发期间丢弃在途总览结果并且不再发起轮询", async () => {
+    const pendingAlerts = createDeferred<AlertRecord[]>();
+    const pendingOverview = createDeferred<{ activePolicies: number }>();
+    apiClientMock.getAlerts.mockReturnValue(pendingAlerts.promise);
+    apiClientMock.getOverviewSummary.mockReturnValue(pendingOverview.promise);
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
+    await waitFor(() => expect(apiClientMock.getAlerts).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      beginAuthTransitionBarrier();
+    });
+    await act(async () => {
+      pendingAlerts.resolve([createAlert("stale-alert", 1, "open")]);
+      pendingOverview.resolve({ activePolicies: 9 });
+    });
+
+    expect(result.current.alerts).toEqual([]);
+    expect(result.current.overview.activePolicies).not.toBe(9);
+    expect(apiClientMock.getAlerts).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      clearAuthTransitionBarrier();
+    });
+    await waitFor(() => expect(apiClientMock.getAlerts.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("drops an in-flight overview that started before the session generation moved A→B→A", async () => {
+    const pendingAlerts = createDeferred<AlertRecord[]>();
+    const pendingOverview = createDeferred<{ activePolicies: number }>();
+    apiClientMock.getAlerts.mockReturnValueOnce(pendingAlerts.promise);
+    apiClientMock.getOverviewSummary.mockReturnValueOnce(pendingOverview.promise);
+    apiClientMock.getAlerts.mockResolvedValue([]);
+    apiClientMock.getOverviewSummary.mockResolvedValue({ activePolicies: 1 });
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
+    await waitFor(() => expect(apiClientMock.getOverviewSummary).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      bumpAuthSessionGeneration();
+      bumpAuthSessionGeneration();
+    });
+    await act(async () => {
+      pendingAlerts.resolve([createAlert("stale-alert", 1, "open")]);
+      pendingOverview.resolve({ activePolicies: 9 });
+    });
+
+    expect(result.current.alerts).toEqual([]);
+    expect(result.current.overview.activePolicies).not.toBe(9);
   });
 });

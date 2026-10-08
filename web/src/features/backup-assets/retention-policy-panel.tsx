@@ -13,10 +13,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { Input } from "@/components/ui/input";
 import { LoadingState } from "@/components/ui/loading-state";
 import type { AuthContextValue } from "@/context/auth-context.shared";
 import { STEP_UP_ACTIONS } from "@/lib/step-up-storage";
+import {
+  backupSensitiveCurrent,
+  backupSensitiveDenialFromError,
+  backupSensitiveRuntime,
+  beginBackupSensitiveAction,
+} from "@/features/backup-assets/backup-sensitive-runtime";
 import type {
   BackupRecoveryPoint,
   BackupRepository,
@@ -110,7 +117,7 @@ export interface RetentionPolicyPanelProps {
   recoveryPoints: Array<CatalogProjection<BackupRecoveryPoint>>;
   selectedRepositoryId?: string;
   selectedRecoveryPointId?: string;
-  runtime?: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof">;
+  runtime?: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof"> & Partial<Pick<AuthContextValue, "totpEnabled" | "authTransitioning">>;
   onRefresh?: () => void;
   api?: RetentionLifecycleApi;
 }
@@ -147,7 +154,7 @@ export function RetentionPolicyPanel({
   const [pendingDelete, setPendingDelete] = useState<BackupRetentionPolicy | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const [notice, setNotice] = useState<"conflict" | "blocked" | "success" | "partial" | "claimed" | null>(null);
+  const [notice, setNotice] = useState<"conflict" | "blocked" | "success" | "partial" | "claimed" | "totp_required" | "auth_transitioning" | null>(null);
   const [busy, setBusy] = useState(false);
   const [holdPointId, setHoldPointId] = useState(selectedRecoveryPointId ?? "");
   const [holdTypeDraft, setHoldTypeDraft] = useState<"legal" | "operational">("legal");
@@ -290,6 +297,24 @@ export function RetentionPolicyPanel({
   }
 
   const token = runtime.token;
+  const sensitive = backupSensitiveRuntime(token, runtime.totpEnabled, runtime.authTransitioning);
+
+  const requireSensitiveProof = async (action: (typeof STEP_UP_ACTIONS)[keyof typeof STEP_UP_ACTIONS]) => {
+    let generation: number;
+    try {
+      generation = beginBackupSensitiveAction(sensitive);
+    } catch (error) {
+      const denial = backupSensitiveDenialFromError(error);
+      setNotice(denial ?? "blocked");
+      return null;
+    }
+    const proof = await runtime.ensureStepUpProof(action, { persist: false, reuseCached: false });
+    if (!backupSensitiveCurrent(generation)) {
+      setNotice("auth_transitioning");
+      return null;
+    }
+    return { proof, generation };
+  };
 
   const run = async (action: (client: RetentionLifecycleApi) => Promise<void>) => {
     setBusy(true);
@@ -326,6 +351,7 @@ export function RetentionPolicyPanel({
       aria-label={t("backupAssets.lifecycle.policiesTitle")}
       className="space-y-4 border-b border-border px-3 py-4"
     >
+      <StepUpPrerequisiteNotice />
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold">{t("backupAssets.lifecycle.policiesTitle")}</h2>
         {availablePolicies[0] ? <Badge tone="neutral">{availablePolicies[0].revision}</Badge> : null}
@@ -336,6 +362,8 @@ export function RetentionPolicyPanel({
       {notice === "success" ? <InlineAlert tone="success">{t("backupAssets.lifecycle.success")}</InlineAlert> : null}
       {notice === "claimed" ? <InlineAlert tone="info">{t("backupAssets.lifecycle.purgeClaimed")}</InlineAlert> : null}
       {notice === "partial" ? <InlineAlert tone="warning">{t("backupAssets.lifecycle.purgePartial")}</InlineAlert> : null}
+      {notice === "totp_required" ? <InlineAlert tone="warning">{t("stepUp.totpRequired")}</InlineAlert> : null}
+      {notice === "auth_transitioning" ? <InlineAlert tone="warning">{t("stepUp.authTransitioning")}</InlineAlert> : null}
 
       {loading ? <LoadingState title={t("backupAssets.lifecycle.loading")} rows={3} /> : null}
       {!loading && availablePolicies.length === 0 ? (
@@ -872,15 +900,17 @@ export function RetentionPolicyPanel({
                             setNotice("blocked");
                             return;
                           }
-                          const proof = await runtime.ensureStepUpProof(STEP_UP_ACTIONS.retentionHoldRelease, {
-                            persist: false,
-                            reuseCached: false,
-                          });
+                          const secured = await requireSensitiveProof(STEP_UP_ACTIONS.retentionHoldRelease);
+                          if (!secured) return;
+                          if (!backupSensitiveCurrent(secured.generation)) {
+                            setNotice("auth_transitioning");
+                            return;
+                          }
                           const result = await client.releaseRecoveryPointHold(
                             token,
                             selectedRecoveryPoint.id,
                             hold.id,
-                            { reason, stepUpProof: proof },
+                            { reason, stepUpProof: secured.proof },
                             new AbortController().signal,
                           );
                           if (result.status === "blocked") {
@@ -922,6 +952,7 @@ export function RetentionPolicyPanel({
             <DialogCloseButton />
           </DialogHeader>
           <DialogBody className="space-y-3">
+            <StepUpPrerequisiteNotice />
             {impact ? (
               <>
                 <p>{t("backupAssets.lifecycle.selectedCount", { value: impact.selectedCount })}</p>
@@ -974,10 +1005,8 @@ export function RetentionPolicyPanel({
                     setNotice("blocked");
                     return;
                   }
-                  const proof = await runtime.ensureStepUpProof(STEP_UP_ACTIONS.repositoryPurge, {
-                    persist: false,
-                    reuseCached: false,
-                  });
+                  const secured = await requireSensitiveProof(STEP_UP_ACTIONS.repositoryPurge);
+                  if (!secured) return;
                   const plan = await client.createRepositoryPurgePlan(
                     token,
                     repositoryId,
@@ -988,6 +1017,10 @@ export function RetentionPolicyPanel({
                     setNotice("blocked");
                     return;
                   }
+                  if (!backupSensitiveCurrent(secured.generation)) {
+                    setNotice("auth_transitioning");
+                    return;
+                  }
                   const result = await client.executeRepositoryPurge(
                     token,
                     repositoryId,
@@ -996,7 +1029,7 @@ export function RetentionPolicyPanel({
                       expectedRevision: plan.value.revision,
                       expectedImpactRevision: plan.value.impactRevision,
                       reason: purgeReason,
-                      stepUpProof: proof,
+                      stepUpProof: secured.proof,
                     },
                     new AbortController().signal,
                   );

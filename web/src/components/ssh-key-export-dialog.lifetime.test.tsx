@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
@@ -12,6 +13,8 @@ const { toastError, ensureStepUpProof, clearStepUpProof, authRef } = vi.hoisted(
     current: {
       role: "admin" as "admin" | "operator" | "viewer" | null,
       token: "token-a" as string | null,
+      totpEnabled: true,
+      authTransitioning: false,
       ensureStepUpProof,
       clearStepUpProof,
     },
@@ -105,6 +108,8 @@ describe("SSHKeyExportDialog lifetime", () => {
   beforeEach(() => {
     authRef.current.role = "admin";
     authRef.current.token = "token-a";
+    authRef.current.totpEnabled = true;
+    authRef.current.authTransitioning = false;
     ensureStepUpProof.mockClear();
     ensureStepUpProof.mockResolvedValue("proof-1");
     clearStepUpProof.mockClear();
@@ -228,5 +233,24 @@ describe("SSHKeyExportDialog lifetime", () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
     expect(HTMLAnchorElement.prototype.click).not.toHaveBeenCalled();
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not download or request proof when two-factor authentication is disabled", async () => {
+    authRef.current.totpEnabled = false;
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <ExportHarness />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "下载文件" }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(ensureStepUpProof).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: /stepUp.enableTOTP|启用两步验证|Enable two-factor/ })).toHaveAttribute(
+      "href",
+      "/app/settings?tab=account",
+    );
   });
 });

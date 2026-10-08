@@ -3,6 +3,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type FormEvent,
   type PropsWithChildren
 } from "react";
@@ -13,11 +14,28 @@ import {
   AuthContext,
   type AuthContextValue,
   type AuthRole,
+  type TOTPActivationUser,
 } from "@/context/auth-context.shared";
 import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
-import { ApiError, bumpAuthSessionGeneration, getAuthSessionGeneration } from "@/lib/api/core";
+import {
+  ApiError,
+  AuthTransitionRejectedError,
+  beginAuthTransitionBarrier,
+  bumpAuthSessionGeneration,
+  clearAuthTransitionBarrier,
+  dismissTOTPActivationFailure,
+  getAuthSessionGeneration,
+  isAuthTransitionActive,
+  publishTOTPActivationFailure,
+  rememberAuthIdentity,
+  readTOTPActivationFailure,
+  releaseAuthTransitionBarrier,
+  subscribeAuthTransition,
+  subscribeTOTPActivationFailure,
+} from "@/lib/api/core";
 import type { StepUpAction } from "@/lib/api/totp-api";
+import { assertStepUpPrerequisite } from "@/lib/step-up-prerequisite";
 import { clearStepUpProof as clearStoredStepUpProof, readStepUpProof, saveStepUpProof } from "@/lib/step-up-storage";
 
 const AUTH_TOKEN_KEY = "xirang-auth-token";
@@ -85,6 +103,36 @@ function parseAuthRole(role: string | null): AuthRole | null {
   return role === "admin" || role === "operator" || role === "viewer" ? role : null;
 }
 
+function isActivationUser(user: TOTPActivationUser): boolean {
+  return Number.isInteger(user.id)
+    && user.id > 0
+    && typeof user.username === "string"
+    && user.username.trim() !== ""
+    && (user.role === "admin" || user.role === "operator" || user.role === "viewer")
+    && user.totpEnabled === true;
+}
+
+function persistActivationSession(nextToken: string, user: TOTPActivationUser): boolean {
+  const storage = getSessionStorage();
+  if (!storage || nextToken.trim() === "") {
+    return false;
+  }
+  try {
+    storage.setItem(AUTH_TOKEN_KEY, nextToken);
+    storage.setItem(AUTH_USERNAME_KEY, user.username);
+    storage.setItem(AUTH_ROLE_KEY, user.role);
+    storage.setItem(AUTH_USER_ID_KEY, String(user.id));
+    storage.setItem(AUTH_TOTP_ENABLED_KEY, "true");
+    return storage.getItem(AUTH_TOKEN_KEY) === nextToken
+      && storage.getItem(AUTH_USERNAME_KEY) === user.username
+      && storage.getItem(AUTH_ROLE_KEY) === user.role
+      && storage.getItem(AUTH_USER_ID_KEY) === String(user.id)
+      && storage.getItem(AUTH_TOTP_ENABLED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 function readStoredAuthState(): StoredAuthState {
   const sessionStorageRef = getSessionStorage();
   const localStorageRef = getLocalStorage();
@@ -145,12 +193,20 @@ function readStoredAuthState(): StoredAuthState {
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [{ token, username, role, userId, totpEnabled }, setAuthState] = useState<StoredAuthState>(() => readStoredAuthState());
+  const [{ token, username, role, userId, totpEnabled }, setAuthState] = useState<StoredAuthState>(() => {
+    const stored = readStoredAuthState();
+    rememberAuthIdentity(stored.token, stored.role);
+    return stored;
+  });
   const pendingStepUpRef = useRef<PendingStepUpRequest | null>(null);
+  const stepUpSubmitAttemptRef = useRef(0);
+  const activationOwnerRef = useRef<number | null>(null);
   const [stepUpDialogOpen, setStepUpDialogOpen] = useState(false);
   const [stepUpCode, setStepUpCode] = useState("");
   const [stepUpError, setStepUpError] = useState<string | null>(null);
   const [stepUpSubmitting, setStepUpSubmitting] = useState(false);
+  const authTransitioning = useSyncExternalStore(subscribeAuthTransition, isAuthTransitionActive, () => false);
+  const activationFailure = useSyncExternalStore(subscribeTOTPActivationFailure, readTOTPActivationFailure, () => null);
 
   const login = useCallback((
     nextToken: string,
@@ -159,6 +215,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
     nextUserID?: number,
     nextTotpEnabled?: boolean
   ) => {
+    activationOwnerRef.current = null;
+    clearAuthTransitionBarrier();
     const sessionStorageRef = getSessionStorage();
     const localStorageRef = getLocalStorage();
     bumpAuthSessionGeneration();
@@ -192,10 +250,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
     safeRemoveItem(localStorageRef, AUTH_ROLE_KEY);
     safeRemoveItem(localStorageRef, AUTH_USER_ID_KEY);
 
+    const nextRoleValue = nextRole ?? null;
+    rememberAuthIdentity(nextToken, nextRoleValue);
     setAuthState({
       token: nextToken,
       username: nextUsername,
-      role: nextRole ?? null,
+      role: nextRoleValue,
       userId: validUserId,
       totpEnabled: totpEnabledValue
     });
@@ -204,6 +264,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const logout = useCallback(() => {
     const sessionStorageRef = getSessionStorage();
     const localStorageRef = getLocalStorage();
+    activationOwnerRef.current = null;
+    clearAuthTransitionBarrier();
 
     bumpAuthSessionGeneration();
     pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.loginRequired")));
@@ -223,13 +285,57 @@ export function AuthProvider({ children }: PropsWithChildren) {
     safeRemoveItem(localStorageRef, AUTH_ROLE_KEY);
     safeRemoveItem(localStorageRef, AUTH_USER_ID_KEY);
 
+    rememberAuthIdentity(null, null);
     setAuthState({ token: null, username: null, role: null, userId: null, totpEnabled: false });
   }, []);
+
+  const beginTOTPActivation = useCallback((): number => {
+    if (activationOwnerRef.current !== null || isAuthTransitionActive()) {
+      throw new AuthTransitionRejectedError();
+    }
+    const id = beginAuthTransitionBarrier();
+    activationOwnerRef.current = id;
+    bumpAuthSessionGeneration();
+    pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.loginRequired")));
+    pendingStepUpRef.current = null;
+    setStepUpDialogOpen(false);
+    setStepUpCode("");
+    setStepUpError(null);
+    setStepUpSubmitting(false);
+    clearStoredStepUpProof();
+    return id;
+  }, []);
+
+  const abortTOTPActivation = useCallback((id: number) => {
+    if (activationOwnerRef.current !== id) {
+      return;
+    }
+    activationOwnerRef.current = null;
+    releaseAuthTransitionBarrier(id);
+  }, []);
+
+  const completeTOTPActivation = useCallback((id: number, nextToken: string, user: TOTPActivationUser): boolean => {
+    if (activationOwnerRef.current !== id) {
+      return false;
+    }
+    if (!isActivationUser(user) || !persistActivationSession(nextToken, user)) {
+      activationOwnerRef.current = null;
+      clearAuthTransitionBarrier();
+      publishTOTPActivationFailure("install-failed");
+      logout();
+      return false;
+    }
+    activationOwnerRef.current = null;
+    login(nextToken, user.username, user.role, user.id, true);
+    return true;
+  }, [login, logout]);
 
   const setTotpEnabled = useCallback((enabled: boolean) => {
     const sessionStorageRef = getSessionStorage();
     safeSetItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY, String(enabled));
     if (!enabled) {
+      activationOwnerRef.current = null;
+      clearAuthTransitionBarrier();
       bumpAuthSessionGeneration();
       pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.totpRequired")));
       pendingStepUpRef.current = null;
@@ -247,6 +353,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
   }, []);
 
   const ensureStepUpProof = useCallback(async (action: StepUpAction, options: { persist?: boolean; reuseCached?: boolean } = {}): Promise<string> => {
+    assertStepUpPrerequisite(token, totpEnabled);
+    if (isAuthTransitionActive()) {
+      throw new AuthTransitionRejectedError();
+    }
     const persist = options.persist ?? true;
     const reuseCached = options.reuseCached ?? persist;
     if (reuseCached) {
@@ -258,12 +368,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (!reuseCached) {
       clearStoredStepUpProof(action);
     }
-    if (!token) {
-      throw new Error(i18n.t("stepUp.loginRequired"));
-    }
-    if (!totpEnabled) {
-      throw new Error(i18n.t("stepUp.totpRequired"));
-    }
     if (pendingStepUpRef.current) {
       if (pendingStepUpRef.current.action === action && pendingStepUpRef.current.persist === persist) {
         return pendingStepUpRef.current.promise;
@@ -272,6 +376,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
     setStepUpCode("");
     setStepUpError(null);
+    setStepUpSubmitting(false);
     setStepUpDialogOpen(true);
     let resolveRequest!: (proof: string) => void;
     let rejectRequest!: (error: Error) => void;
@@ -311,16 +416,24 @@ export function AuthProvider({ children }: PropsWithChildren) {
       setStepUpError(i18n.t("stepUp.codeRequired"));
       return;
     }
+    if (isAuthTransitionActive()) {
+      return;
+    }
+    const pendingRequest = pendingStepUpRef.current;
+    if (!pendingRequest) {
+      return;
+    }
+    stepUpSubmitAttemptRef.current += 1;
+    const submitAttempt = stepUpSubmitAttemptRef.current;
     setStepUpSubmitting(true);
     setStepUpError(null);
     try {
-      const pendingRequest = pendingStepUpRef.current;
       const response = await apiClient.requestStepUpProof(token, code, pendingRequest.action);
-      if (
-        pendingStepUpRef.current !== pendingRequest ||
-        pendingRequest.authGeneration !== getAuthSessionGeneration() ||
-        safeGetItem(getSessionStorage(), AUTH_TOKEN_KEY) !== token
-      ) {
+      const stillCurrent = pendingStepUpRef.current === pendingRequest
+        && pendingRequest.authGeneration === getAuthSessionGeneration()
+        && safeGetItem(getSessionStorage(), AUTH_TOKEN_KEY) === token
+        && !isAuthTransitionActive();
+      if (!stillCurrent) {
         pendingRequest.reject(new Error(i18n.t("stepUp.loginRequired")));
         if (pendingStepUpRef.current === pendingRequest) {
           pendingStepUpRef.current = null;
@@ -342,10 +455,19 @@ export function AuthProvider({ children }: PropsWithChildren) {
       setStepUpDialogOpen(false);
       setStepUpCode("");
     } catch (error) {
+      if (
+        pendingStepUpRef.current !== pendingRequest ||
+        pendingRequest.authGeneration !== getAuthSessionGeneration() ||
+        isAuthTransitionActive()
+      ) {
+        return;
+      }
       const message = error instanceof ApiError ? error.message : i18n.t("stepUp.verifyFailed");
       setStepUpError(message || i18n.t("stepUp.verifyFailed"));
     } finally {
-      setStepUpSubmitting(false);
+      if (stepUpSubmitAttemptRef.current === submitAttempt) {
+        setStepUpSubmitting(false);
+      }
     }
   }, [stepUpCode, token]);
 
@@ -357,18 +479,56 @@ export function AuthProvider({ children }: PropsWithChildren) {
       userId,
       totpEnabled,
       isAuthenticated: Boolean(token),
+      authTransitioning,
+      beginTOTPActivation,
+      abortTOTPActivation,
+      completeTOTPActivation,
       login,
       logout,
       setTotpEnabled,
       ensureStepUpProof,
       clearStepUpProof
     }),
-    [login, logout, role, token, userId, username, totpEnabled, setTotpEnabled, ensureStepUpProof, clearStepUpProof]
+    [
+      abortTOTPActivation,
+      authTransitioning,
+      beginTOTPActivation,
+      clearStepUpProof,
+      completeTOTPActivation,
+      ensureStepUpProof,
+      login,
+      logout,
+      role,
+      setTotpEnabled,
+      token,
+      totpEnabled,
+      userId,
+      username,
+    ]
   );
 
   return (
     <AuthContext.Provider value={value}>
       {children}
+      <Dialog open={activationFailure !== null} onOpenChange={(open) => {
+        if (!open) {
+          dismissTOTPActivationFailure();
+        }
+      }}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>
+              {i18n.t(activationFailure === "install-failed" ? "totp.activationInstallFailed" : "totp.activationUncertain")}
+            </DialogTitle>
+            <DialogDescription>{i18n.t("stepUp.loginRequired")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" onClick={() => dismissTOTPActivationFailure()}>
+              {i18n.t("common.close")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={stepUpDialogOpen} onOpenChange={(open) => {
         if (!open) {
           closeStepUpDialog();

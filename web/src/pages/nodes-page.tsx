@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Layers, ServerCog } from "lucide-react";
 import { NodesGrid } from "@/pages/nodes-page.grid";
 import { NodesTable } from "@/pages/nodes-page.table";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useNodesPageState } from "@/pages/nodes-page.state";
 import { NodesPageDialogs } from "@/pages/nodes-page.dialogs";
 import { NodesPageToolbar } from "@/pages/nodes-page.toolbar";
@@ -51,6 +52,7 @@ export function NodesPage() {
     triggeringNodeId,
     emergencyNodeId,
     isAdmin,
+    totpEnabled,
     canOperateNodes,
     canBrowseNodeFiles,
     openCreateDialog,
@@ -140,6 +142,8 @@ export function NodesPage() {
           ) : undefined
         }
       />
+
+      {canOperateNodes && totpEnabled === false ? <StepUpPrerequisiteNotice /> : null}
 
       <StatCardsSection
         compact

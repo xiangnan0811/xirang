@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -23,6 +24,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mattn/go-sqlite3"
+	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 )
 
@@ -60,11 +62,14 @@ func logSSHKeyPersistenceError(operation, name string, err error) {
 }
 
 const (
-	sshKeyDuplicateMessage    = "名称已存在"
-	sshKeyPersistenceMessage  = "服务器内部错误"
-	sshKeyValidationErrorCode = "validation_error"
-	sshKeyDuplicateErrorCode  = "duplicate_name"
-	sshKeyPersistenceCode     = "persistence_error"
+	sshKeyDuplicateMessage       = "名称已存在"
+	sshKeyPersistenceMessage     = "服务器内部错误"
+	sshKeyValidationErrorCode    = "validation_error"
+	sshKeyDuplicateErrorCode     = "duplicate_name"
+	sshKeyPersistenceCode        = "persistence_error"
+	sshKeyPreviewInvalidMessage  = "候选密钥无效"
+	sshKeyPreviewTooLargeMessage = "候选密钥请求超过 1 MiB 限制"
+	sshKeyTestAuthFailureMessage = "SSH 认证配置无效，请检查 SSH Key 与节点配置"
 )
 
 type sshKeyScopeRequest struct {
@@ -119,21 +124,43 @@ func (r *sshKeyUpdateRequest) UnmarshalJSON(data []byte) error {
 
 // sshKeyResponseItem 是 SSH Key API 响应结构，包含派生的公钥，不暴露私钥。
 type sshKeyResponseItem struct {
-	ID              uint       `json:"id"`
-	Name            string     `json:"name"`
-	Username        string     `json:"username"`
-	KeyType         string     `json:"key_type"`
-	Fingerprint     string     `json:"fingerprint"`
-	PublicKey       string     `json:"public_key,omitempty"`
-	Disabled        bool       `json:"disabled"`
-	ExpiresAt       *time.Time `json:"expires_at"`
-	AllowedPurposes string     `json:"allowed_purposes"`
-	AllowedNodeIDs  string     `json:"allowed_node_ids"`
-	AllowedNodeTags string     `json:"allowed_node_tags"`
-	BroadScope      bool       `json:"broad_scope"`
-	LastUsedAt      *time.Time `json:"last_used_at"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                   uint       `json:"id"`
+	Name                 string     `json:"name"`
+	Username             string     `json:"username"`
+	KeyType              string     `json:"key_type"`
+	Fingerprint          string     `json:"fingerprint"`
+	PublicKey            string     `json:"public_key,omitempty"`
+	PublicKeyFingerprint string     `json:"public_key_fingerprint,omitempty"`
+	Disabled             bool       `json:"disabled"`
+	ExpiresAt            *time.Time `json:"expires_at"`
+	AllowedPurposes      string     `json:"allowed_purposes"`
+	AllowedNodeIDs       string     `json:"allowed_node_ids"`
+	AllowedNodeTags      string     `json:"allowed_node_tags"`
+	BroadScope           bool       `json:"broad_scope"`
+	LastUsedAt           *time.Time `json:"last_used_at"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+// sshKeyPreviewRequest contains candidate key material that is parsed without persistence.
+type sshKeyPreviewRequest struct {
+	PrivateKey string `json:"private_key" binding:"required"`
+	KeyType    string `json:"key_type"`
+}
+
+// sshKeyPreviewResponse contains only public material derived from a candidate key.
+type sshKeyPreviewResponse struct {
+	KeyType              string `json:"key_type"`
+	PublicKey            string `json:"public_key"`
+	PublicKeyFingerprint string `json:"public_key_fingerprint"`
+}
+
+func publicKeyFingerprint(publicKey string) string {
+	parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(publicKey)))
+	if err != nil || parsed == nil {
+		return ""
+	}
+	return ssh.FingerprintSHA256(parsed)
 }
 
 // toSSHKeyResponse 将 model.SSHKey 转换为安全的响应结构（含派生公钥，不含私钥）。
@@ -144,21 +171,22 @@ func toSSHKeyResponse(item model.SSHKey) sshKeyResponseItem {
 		keyType = sshutil.SSHKeyTypeAuto
 	}
 	return sshKeyResponseItem{
-		ID:              item.ID,
-		Name:            item.Name,
-		Username:        item.Username,
-		KeyType:         keyType,
-		Fingerprint:     item.Fingerprint,
-		PublicKey:       publicKey,
-		Disabled:        item.Disabled,
-		ExpiresAt:       item.ExpiresAt,
-		AllowedPurposes: item.AllowedPurposes,
-		AllowedNodeIDs:  item.AllowedNodeIDs,
-		AllowedNodeTags: item.AllowedNodeTags,
-		BroadScope:      sshutil.IsBroadScope(item),
-		LastUsedAt:      item.LastUsedAt,
-		CreatedAt:       item.CreatedAt,
-		UpdatedAt:       item.UpdatedAt,
+		ID:                   item.ID,
+		Name:                 item.Name,
+		Username:             item.Username,
+		KeyType:              keyType,
+		Fingerprint:          item.Fingerprint,
+		PublicKey:            publicKey,
+		PublicKeyFingerprint: publicKeyFingerprint(publicKey),
+		Disabled:             item.Disabled,
+		ExpiresAt:            item.ExpiresAt,
+		AllowedPurposes:      item.AllowedPurposes,
+		AllowedNodeIDs:       item.AllowedNodeIDs,
+		AllowedNodeTags:      item.AllowedNodeTags,
+		BroadScope:           sshutil.IsBroadScope(item),
+		LastUsedAt:           item.LastUsedAt,
+		CreatedAt:            item.CreatedAt,
+		UpdatedAt:            item.UpdatedAt,
 	}
 }
 
@@ -250,6 +278,64 @@ func applySSHKeyScopePatch(item *model.SSHKey, scope sshKeyScopePatchRequest) er
 		item.AllowedNodeTags = sshutil.NormalizeTagList(*scope.AllowedNodeTags)
 	}
 	return nil
+}
+
+// Preview godoc
+// @Summary      预览 SSH Key 候选
+// @Description  解析候选私钥并返回派生公钥及标准公钥指纹，不写入数据库或建立 SSH 连接
+// @Tags         ssh-keys
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      handlers.sshKeyPreviewRequest  true  "候选 SSH Key"
+// @Success      200  {object}  handlers.Response{data=handlers.sshKeyPreviewResponse}
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      413  {object}  handlers.Response
+// @Router       /ssh-keys/preview [post]
+func (h *SSHKeyHandler) Preview(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			respondPayloadTooLarge(c, sshKeyPreviewTooLargeMessage)
+			return
+		}
+		respondBadRequest(c, sshKeyPreviewInvalidMessage)
+		return
+	}
+	var req sshKeyPreviewRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		respondBadRequest(c, sshKeyPreviewInvalidMessage)
+		return
+	}
+
+	preparedKey, keyType, err := sshutil.ValidateAndPreparePrivateKey(req.PrivateKey, req.KeyType)
+	if err != nil {
+		respondBadRequest(c, sshKeyPreviewInvalidMessage)
+		return
+	}
+
+	publicKey, err := sshutil.DerivePublicKey(preparedKey)
+	if err != nil {
+		respondBadRequest(c, sshKeyPreviewInvalidMessage)
+		return
+	}
+	publicKey = strings.TrimSpace(publicKey)
+	publicKeyParsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(publicKey))
+	if err != nil || publicKeyParsed == nil {
+		respondBadRequest(c, sshKeyPreviewInvalidMessage)
+		return
+	}
+
+	respondOK(c, sshKeyPreviewResponse{
+		KeyType:              keyType,
+		PublicKey:            publicKey,
+		PublicKeyFingerprint: ssh.FingerprintSHA256(publicKeyParsed),
+	})
 }
 
 // List godoc
@@ -573,7 +659,7 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 				Host:    node.Host,
 				Port:    node.Port,
 				Success: false,
-				Error:   sanitizedClientError(err),
+				Error:   sshKeyTestAuthFailureMessage,
 			})
 			continue
 		}
@@ -595,7 +681,7 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 				Port:      node.Port,
 				Success:   false,
 				LatencyMs: latency,
-				Error:     sanitizedClientError(dialErr),
+				Error:     terminalDialFailureReason(dialErr),
 			})
 			continue
 		}

@@ -2811,7 +2811,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "使用服务端暂存的密钥校验验证码，成功后启用 2FA 并返回恢复码",
+                "description": "使用当前会话绑定验证 TOTP；成功返回同 JTI、同到期时间的替换主令牌、安全用户信息及本次恢复码，不授予 step-up",
                 "consumes": [
                     "application/json"
                 ],
@@ -2837,7 +2837,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.totpVerifyResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -5548,7 +5560,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.configImportResult"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -13123,6 +13147,75 @@ const docTemplate = `{
                 }
             }
         },
+        "/ssh-keys/preview": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "解析候选私钥并返回派生公钥及标准公钥指纹，不写入数据库或建立 SSH 连接",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ssh-keys"
+                ],
+                "summary": "预览 SSH Key 候选",
+                "parameters": [
+                    {
+                        "description": "候选 SSH Key",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.sshKeyPreviewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.sshKeyPreviewResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/ssh-keys/{id}": {
             "get": {
                 "security": [
@@ -13436,6 +13529,55 @@ const docTemplate = `{
                     },
                     "501": {
                         "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/cron-backup-status": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "只读检查配置目录中的受管数据库产物及其校验文件；不执行 cron、不读取整库且不验证内容摘要。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "查询 cron 数据库备份产物状态",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.CronBackupStatusResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -16496,6 +16638,60 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.CronBackupStatusResponse": {
+            "type": "object",
+            "properties": {
+                "artifact_name": {
+                    "type": "string"
+                },
+                "checked_at": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "content_verified": {
+                    "type": "boolean"
+                },
+                "directory": {
+                    "type": "string"
+                },
+                "engine": {
+                    "description": "Engine is empty when the runtime dialect is unsupported and Status is invalid_configuration.",
+                    "type": "string"
+                },
+                "evidence": {
+                    "type": "string",
+                    "enum": [
+                        "artifact_pair"
+                    ]
+                },
+                "latest_complete_at": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "max_age_seconds": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "not_configured",
+                        "invalid_configuration",
+                        "directory_unreadable",
+                        "no_complete_backup",
+                        "scan_limit_exceeded",
+                        "clock_anomaly",
+                        "stale",
+                        "fresh"
+                    ]
+                },
+                "time_source": {
+                    "type": "string",
+                    "enum": [
+                        "mtime"
+                    ]
+                }
+            }
+        },
         "internal_api_handlers.MigratePreflightRequest": {
             "type": "object",
             "required": [
@@ -18124,6 +18320,70 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.configImportResult": {
+            "type": "object",
+            "properties": {
+                "created": {
+                    "type": "integer"
+                },
+                "disabled_imported": {
+                    "type": "integer"
+                },
+                "imported": {
+                    "type": "integer"
+                },
+                "nodes": {
+                    "type": "integer"
+                },
+                "policies": {
+                    "type": "integer"
+                },
+                "rejected": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "type": "integer"
+                },
+                "ssh_keys": {
+                    "type": "integer"
+                },
+                "system_settings": {
+                    "type": "integer"
+                },
+                "tasks": {
+                    "type": "integer"
+                },
+                "updated": {
+                    "type": "integer"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.configImportWarning"
+                    }
+                },
+                "warnings_truncated": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.configImportWarning": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "entity": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.createUserRequest": {
             "type": "object",
             "required": [
@@ -18794,6 +19054,34 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.sshKeyPreviewRequest": {
+            "type": "object",
+            "required": [
+                "private_key"
+            ],
+            "properties": {
+                "key_type": {
+                    "type": "string"
+                },
+                "private_key": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.sshKeyPreviewResponse": {
+            "type": "object",
+            "properties": {
+                "key_type": {
+                    "type": "string"
+                },
+                "public_key": {
+                    "type": "string"
+                },
+                "public_key_fingerprint": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.sshKeyResponseItem": {
             "type": "object",
             "properties": {
@@ -18834,6 +19122,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "public_key": {
+                    "type": "string"
+                },
+                "public_key_fingerprint": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -19250,15 +19541,45 @@ const docTemplate = `{
         },
         "internal_api_handlers.totpVerifyRequest": {
             "type": "object",
-            "required": [
-                "code",
-                "enrollment_id"
-            ],
             "properties": {
                 "code": {
                     "type": "string"
                 },
                 "enrollment_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.totpVerifyResponse": {
+            "type": "object",
+            "properties": {
+                "recovery_codes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "token": {
+                    "type": "string"
+                },
+                "user": {
+                    "$ref": "#/definitions/internal_api_handlers.totpVerifyUserResponse"
+                }
+            }
+        },
+        "internal_api_handlers.totpVerifyUserResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "totp_enabled": {
+                    "type": "boolean"
+                },
+                "username": {
                     "type": "string"
                 }
             }

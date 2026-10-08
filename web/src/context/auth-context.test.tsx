@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -7,6 +7,8 @@ import { useAuth } from "./auth-context.hooks";
 import { saveStepUpProof } from "@/lib/step-up-storage";
 import { apiClient } from "@/lib/api/client";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import { AuthTransitionRejectedError, clearAuthTransitionBarrier, dismissTOTPActivationFailure, request } from "@/lib/api/core";
+import { StepUpPrerequisiteError } from "@/lib/step-up-prerequisite";
 
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
@@ -97,11 +99,68 @@ function StepUpBoundaryProbe() {
   );
 }
 
+function PrerequisiteProbe() {
+  const { login, ensureStepUpProof } = useAuth();
+  const [result, setResult] = useState("pending");
+  const check = () => {
+    void ensureStepUpProof(STEP_UP_ACTIONS.taskManualTrigger).then(
+      () => setResult("proof"),
+      (error: unknown) => setResult(error instanceof StepUpPrerequisiteError ? error.code : error instanceof Error ? error.message : "error"),
+    );
+  };
+
+  return (
+    <div>
+      <button type="button" onClick={() => login("auth-marker", "alice", "admin", 1, false)}>登录未启用</button>
+      <button type="button" onClick={check}>未登录检查</button>
+      <button type="button" onClick={check}>未启用检查</button>
+      <span data-testid="prerequisite">{result}</span>
+    </div>
+  );
+}
+
+function ActivationProbe() {
+  const auth = useAuth();
+  const [owner, setOwner] = useState<number | null>(null);
+  const [completed, setCompleted] = useState("idle");
+
+  return (
+    <div>
+      <span data-testid="token">{auth.token ?? "null"}</span>
+      <span data-testid="user-id">{auth.userId ?? "null"}</span>
+      <span data-testid="totp">{String(auth.totpEnabled)}</span>
+      <span data-testid="transitioning">{String(auth.authTransitioning)}</span>
+      <span data-testid="completed">{completed}</span>
+      <button type="button" onClick={() => auth.login("old-token", "alice", "admin", 7, false)}>登录旧会话</button>
+      <button type="button" onClick={() => setOwner(auth.beginTOTPActivation())}>开始启用</button>
+      <button type="button" onClick={() => { if (owner !== null) auth.abortTOTPActivation(owner); }}>取消启用</button>
+      <button type="button" onClick={() => {
+        if (owner === null) return;
+        const ok = auth.completeTOTPActivation(owner, "new-token", {
+          id: 7,
+          username: "alice",
+          role: "admin",
+          totpEnabled: true,
+        });
+        setCompleted(ok ? "yes" : "no");
+      }}>完成启用</button>
+      <button type="button" onClick={() => auth.logout()}>退出启用</button>
+    </div>
+  );
+}
+
 describe("AuthProvider", () => {
   beforeEach(() => {
+    dismissTOTPActivationFailure();
+    clearAuthTransitionBarrier();
     localStorage.clear();
     sessionStorage.clear();
     requestStepUpProofMock.mockReset();
+  });
+
+  afterEach(() => {
+    dismissTOTPActivationFailure();
+    clearAuthTransitionBarrier();
   });
 
   it("初始化时可迁移旧 localStorage 到 sessionStorage", () => {
@@ -178,7 +237,7 @@ describe("AuthProvider", () => {
   });
 
   it("ensureStepUpProof 会复用未过期 proof", async () => {
-    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "cached-step-up-marker", Date.now() + 60_000);
+    const user = userEvent.setup();
 
     render(
       <AuthProvider>
@@ -186,13 +245,36 @@ describe("AuthProvider", () => {
       </AuthProvider>
     );
 
-    await act(async () => {
-      screen.getByRole("button", { name: "请求二次验证" }).click();
-    });
+    await user.click(screen.getByRole("button", { name: "登录" }));
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "cached-step-up-marker", Date.now() + 60_000);
+
+    await user.click(screen.getByRole("button", { name: "请求二次验证" }));
 
     expect(screen.getByTestId("step-up-proof").textContent).toBe("cached-step-up-marker");
     expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toContain("cached-step-up-marker");
     expect(screen.queryByText("需要二次验证")).toBeNull();
+  });
+
+  it("未登录或未启用两步验证时不会先读取缓存 proof", async () => {
+    const user = userEvent.setup();
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "cached-step-up-marker", Date.now() + 60_000);
+    render(
+      <AuthProvider>
+        <PrerequisiteProbe />
+      </AuthProvider>
+    );
+
+    await user.click(screen.getByRole("button", { name: "未登录检查" }));
+    expect(screen.getByTestId("prerequisite").textContent).toBe("请重新登录后继续。");
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toContain("cached-step-up-marker");
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "登录未启用" }));
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "cached-step-up-marker", Date.now() + 60_000);
+    await user.click(screen.getByRole("button", { name: "未启用检查" }));
+    expect(screen.getByTestId("prerequisite").textContent).toBe("TOTP_REQUIRED");
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toContain("cached-step-up-marker");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("可请求一次性 step-up proof 而不复用且清除 sessionStorage proof", async () => {
@@ -272,6 +354,42 @@ describe("AuthProvider", () => {
     expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
   });
 
+  it("成功签发后下一次验证码输入仍可提交", async () => {
+    const user = userEvent.setup();
+    const freshProof = (proof: string) => ({
+      proof,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      proofTtlSeconds: 60,
+    });
+    requestStepUpProofMock
+      .mockResolvedValueOnce(freshProof("first-fresh-proof"))
+      .mockResolvedValueOnce(freshProof("second-fresh-proof"));
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>
+    );
+    await user.click(screen.getByRole("button", { name: "登录" }));
+
+    await user.click(screen.getByRole("button", { name: "请求一次性二次验证" }));
+    const firstCode = await screen.findByLabelText("验证器验证码");
+    expect(firstCode).toBeEnabled();
+    await user.type(firstCode, "111111");
+    await user.click(screen.getByRole("button", { name: "验证" }));
+    await waitFor(() => expect(screen.getByTestId("step-up-proof").textContent).toBe("first-fresh-proof"));
+    expect(screen.queryByRole("dialog", { name: "需要二次验证" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "请求一次性二次验证" }));
+    const secondCode = await screen.findByLabelText("验证器验证码");
+    expect(secondCode).toBeEnabled();
+    await user.type(secondCode, "222222");
+    await user.click(screen.getByRole("button", { name: "验证" }));
+    await waitFor(() => expect(screen.getByTestId("step-up-proof").textContent).toBe("second-fresh-proof"));
+    expect(requestStepUpProofMock).toHaveBeenNthCalledWith(1, "auth-marker", "111111", STEP_UP_ACTIONS.taskManualTrigger);
+    expect(requestStepUpProofMock).toHaveBeenNthCalledWith(2, "auth-marker", "222222", STEP_UP_ACTIONS.taskManualTrigger);
+  });
+
   it("同 action 并发请求共用一个弹窗和同一签发结果", async () => {
     const user = userEvent.setup();
     requestStepUpProofMock.mockResolvedValueOnce({
@@ -339,4 +457,90 @@ describe("AuthProvider", () => {
       expect(screen.queryByRole("dialog", { name: "需要二次验证" })).toBeNull();
     }
   );
+});
+
+describe("TOTP activation session", () => {
+  beforeEach(() => {
+    dismissTOTPActivationFailure();
+    clearAuthTransitionBarrier();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    dismissTOTPActivationFailure();
+    clearAuthTransitionBarrier();
+    vi.restoreAllMocks();
+  });
+
+  it("开始启用会占住 owner、清掉 proof，并在请求发出前拒绝其他请求", async () => {
+    const user = userEvent.setup();
+    render(<AuthProvider><ActivationProbe /></AuthProvider>);
+    await user.click(screen.getByRole("button", { name: "登录旧会话" }));
+    saveStepUpProof(STEP_UP_ACTIONS.terminalOpen, "proof-before-activation", Date.now() + 60_000);
+
+    await user.click(screen.getByRole("button", { name: "开始启用" }));
+
+    expect(screen.getByTestId("transitioning").textContent).toBe("true");
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
+    expect(sessionStorage.getItem("xirang-auth-token")).toBe("old-token");
+    await expect(request("/nodes", { token: "old-token" })).rejects.toBeInstanceOf(AuthTransitionRejectedError);
+  });
+
+  it("取消启用释放阻断并保留旧会话", async () => {
+    const user = userEvent.setup();
+    render(<AuthProvider><ActivationProbe /></AuthProvider>);
+    await user.click(screen.getByRole("button", { name: "登录旧会话" }));
+    await user.click(screen.getByRole("button", { name: "开始启用" }));
+    await user.click(screen.getByRole("button", { name: "取消启用" }));
+
+    expect(screen.getByTestId("transitioning").textContent).toBe("false");
+    expect(screen.getByTestId("token").textContent).toBe("old-token");
+    expect(screen.getByTestId("totp").textContent).toBe("false");
+  });
+
+  it("完成启用安装替换会话，退出后迟到完成不能复活", async () => {
+    const user = userEvent.setup();
+    render(<AuthProvider><ActivationProbe /></AuthProvider>);
+    await user.click(screen.getByRole("button", { name: "登录旧会话" }));
+    await user.click(screen.getByRole("button", { name: "开始启用" }));
+    await user.click(screen.getByRole("button", { name: "完成启用" }));
+
+    expect(screen.getByTestId("completed").textContent).toBe("yes");
+    expect(screen.getByTestId("token").textContent).toBe("new-token");
+    expect(screen.getByTestId("user-id").textContent).toBe("7");
+    expect(screen.getByTestId("totp").textContent).toBe("true");
+    expect(screen.getByTestId("transitioning").textContent).toBe("false");
+    expect(sessionStorage.getItem("xirang-auth-token")).toBe("new-token");
+    expect(sessionStorage.getItem("xirang-totp-enabled")).toBe("true");
+
+    await user.click(screen.getByRole("button", { name: "退出启用" }));
+    await user.click(screen.getByRole("button", { name: "完成启用" }));
+    expect(screen.getByTestId("completed").textContent).toBe("no");
+    expect(screen.getByTestId("token").textContent).toBe("null");
+    expect(sessionStorage.getItem("xirang-auth-token")).toBeNull();
+  });
+
+  it("会话安装失败时清理登录并保留失败提示", async () => {
+    const user = userEvent.setup();
+    const original = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function setItem(this: Storage, key: string, value: string) {
+      if (value === "new-token") {
+        throw new Error("quota");
+      }
+      return original.call(this, key, value);
+    });
+    try {
+      render(<AuthProvider><ActivationProbe /></AuthProvider>);
+      await user.click(screen.getByRole("button", { name: "登录旧会话" }));
+      await user.click(screen.getByRole("button", { name: "开始启用" }));
+      await user.click(screen.getByRole("button", { name: "完成启用" }));
+
+      expect(screen.getByTestId("completed").textContent).toBe("no");
+      expect(screen.getByTestId("token").textContent).toBe("null");
+      expect(sessionStorage.getItem("xirang-auth-token")).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

@@ -98,12 +98,12 @@ func detectPrivateKeyType(normalizedKey string) (string, error) {
 	switch rawKey.(type) {
 	case *rsa.PrivateKey:
 		return SSHKeyTypeRSA, nil
-	case ed25519.PrivateKey:
+	case ed25519.PrivateKey, *ed25519.PrivateKey:
 		return SSHKeyTypeED25519, nil
 	case *ecdsa.PrivateKey:
 		return SSHKeyTypeECDSA, nil
 	default:
-		return SSHKeyTypeAuto, nil
+		return "", fmt.Errorf("不支持的私钥类型")
 	}
 }
 
@@ -164,11 +164,7 @@ func convertPrivateKeyToPEM(normalizedKey string) (string, bool) {
 		}
 		return encode("PRIVATE KEY", der)
 	default:
-		der, err := x509.MarshalPKCS8PrivateKey(rawKey)
-		if err != nil {
-			return "", false
-		}
-		return encode("PRIVATE KEY", der)
+		return "", false
 	}
 }
 

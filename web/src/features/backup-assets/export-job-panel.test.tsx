@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +8,7 @@ import { runAxe } from "@/test/a11y-helpers";
 import type { BackupExportJob } from "@/types/domain";
 import type { BackupAssetExportApi } from "./use-backup-asset-export";
 
+import { renderBackupSurface as render } from "./__tests__/test-utils";
 import { ExportJobPanel } from "./export-job-panel";
 
 const ref = { recoveryPointId: "1".repeat(32), entryId: "2".repeat(64) };
@@ -51,10 +52,12 @@ function api(): BackupAssetExportApi {
   };
 }
 
-const runtime: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof"> = {
+const runtime: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof" | "totpEnabled" | "authTransitioning"> = {
   token: "token",
   role: "admin",
   ensureStepUpProof: vi.fn().mockResolvedValue("fresh-proof"),
+  totpEnabled: true,
+  authTransitioning: false,
 };
 
 describe("ExportJobPanel", () => {

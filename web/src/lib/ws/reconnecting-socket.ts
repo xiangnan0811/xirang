@@ -8,8 +8,8 @@
  * - 收到自定义关闭码 4401 时调用 `onTokenRefreshNeeded` 刷新 token 后再重连
  *
  * 协议固有限制：
- * - 重连后服务端 session 已失效（如 SSH PTY），调用方需要在 `onReconnect`
- *   回调中重置上层状态（如清屏、提示用户重新登录）。
+ * - 重连后服务端 session 已失效（如 SSH PTY）。需要新会话的调用方应关闭
+ *   `autoReconnect`，自行决定何时显式 `connect`。
  */
 export type SocketUrl = string | (() => string);
 
@@ -29,6 +29,12 @@ export type ReconnectingSocketOptions = {
   maxRetries?: number;
   /** 是否在退避之上叠加 [0.5, 1.0) 的随机系数，默认 true */
   jitter?: boolean;
+  /**
+   * 意外关闭后是否自动再连接。默认 true，日志流保持该行为。
+   * false 时不做退避、4401 刷新重连、心跳超时重连和标签页复活，并清理这些定时器；
+   * 之后仍可显式调用 connect。
+   */
+  autoReconnect?: boolean;
 
   /** 心跳间隔毫秒，默认 25_000；设为 0 禁用心跳 */
   heartbeatIntervalMs?: number;
@@ -105,8 +111,11 @@ export class ReconnectingSocket {
       | "onError"
       | "onGiveUp"
       | "onVisibilityRestore"
+      | "autoReconnect"
     >
-  > &
+  > & {
+    autoReconnect: boolean;
+  } &
     Pick<
       ReconnectingSocketOptions,
       | "protocols"
@@ -133,6 +142,7 @@ export class ReconnectingSocket {
       maxDelayMs: options.maxDelayMs ?? DEFAULT_MAX_DELAY,
       maxRetries: options.maxRetries ?? DEFAULT_MAX_RETRIES,
       jitter: options.jitter ?? true,
+      autoReconnect: options.autoReconnect ?? true,
       heartbeatIntervalMs: options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL,
       heartbeatTimeoutMs: options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT,
       heartbeatPing: options.heartbeatPing,
@@ -149,7 +159,7 @@ export class ReconnectingSocket {
     };
   }
 
-  /** 启动连接（仅首次调用有效；后续会自动重连） */
+  /** 启动连接。autoReconnect 为 true 时，之后的意外关闭会自动重连。 */
   connect(): void {
     if (this.preparing) return;
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
@@ -158,7 +168,12 @@ export class ReconnectingSocket {
     this.manuallyClosed = false;
     this.gaveUp = false;
     this.retries = 0;
-    this.addVisibilityListener();
+    if (this.opts.autoReconnect) {
+      this.addVisibilityListener();
+    } else {
+      this.removeVisibilityListener();
+      this.clearReconnectTimer();
+    }
     this.open();
   }
 
@@ -312,6 +327,13 @@ export class ReconnectingSocket {
 
       if (this.manuallyClosed) return;
 
+      if (!this.opts.autoReconnect) {
+        this.clearReconnectTimer();
+        this.stopHeartbeat();
+        this.removeVisibilityListener();
+        return;
+      }
+
       if (event.code === TOKEN_REFRESH_CLOSE_CODE && this.opts.onTokenRefreshNeeded) {
         this.handleTokenRefresh();
         return;
@@ -327,17 +349,22 @@ export class ReconnectingSocket {
   }
 
   private async handleTokenRefresh(): Promise<void> {
+    if (!this.opts.autoReconnect) return;
     try {
       await this.opts.onTokenRefreshNeeded?.();
     } catch {
       // 刷新失败也走普通重连流程；调用方应在 onTokenRefreshNeeded 内自己处理
     }
-    if (this.manuallyClosed) return;
+    if (this.manuallyClosed || !this.opts.autoReconnect) return;
     // token 刷新视为成功事件，不消耗 retry 计数；立即重连
     this.open();
   }
 
   private scheduleReconnect(): void {
+    if (!this.opts.autoReconnect) {
+      this.clearReconnectTimer();
+      return;
+    }
     if (this.retries >= this.opts.maxRetries) {
       this.gaveUp = true;
       this.opts.onGiveUp?.();
@@ -385,8 +412,9 @@ export class ReconnectingSocket {
       clearTimeout(this.heartbeatTimeoutTimer);
       this.heartbeatTimeoutTimer = null;
     }
-    if (this.opts.heartbeatTimeoutMs <= 0) return;
+    if (!this.opts.autoReconnect || this.opts.heartbeatTimeoutMs <= 0) return;
     this.heartbeatTimeoutTimer = window.setTimeout(() => {
+      if (!this.opts.autoReconnect) return;
       // 超时未收到 pong：主动关闭以触发 reconnect 流程
       if (this.socket && this.socket.readyState === WebSocket.OPEN) {
         try {
@@ -413,6 +441,7 @@ export class ReconnectingSocket {
     if (typeof document === "undefined") return;
     this.removeVisibilityListener();
     this.visibilityHandler = () => {
+      if (!this.opts.autoReconnect) return;
       if (document.visibilityState !== "visible" || this.manuallyClosed || this.preparing) return;
       // 标签页恢复可见，通知调用方刷新数据（避免展示陈旧信息）
       this.opts.onVisibilityRestore?.();

@@ -563,3 +563,89 @@ describe("ReconnectingSocket beforeConnect admission", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 });
+
+describe("ReconnectingSocket autoReconnect false", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    installWebSocket(FakeWebSocket);
+    setDocumentHidden(false);
+    FakeWebSocket.reset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    installWebSocket(originalWebSocket);
+    setDocumentHidden(false);
+  });
+
+  function socketsFor(url: string): FakeWebSocket[] {
+    return FakeWebSocket.instances.filter((socket) => socket.url === url);
+  }
+
+  it("关闭、4401 和标签页恢复不会自动重连，显式 connect 可以", async () => {
+    const onTokenRefreshNeeded = vi.fn().mockResolvedValue(undefined);
+    const onVisibilityRestore = vi.fn();
+    const onClose = vi.fn();
+    const sock = new ReconnectingSocket({
+      url: "ws://test/manual",
+      autoReconnect: false,
+      baseDelayMs: 100,
+      maxDelayMs: 100,
+      maxRetries: 20,
+      jitter: false,
+      onTokenRefreshNeeded,
+      onVisibilityRestore,
+      onClose,
+    });
+
+    sock.connect();
+    const first = socketsFor("ws://test/manual")[0];
+    expect(first).toBeDefined();
+    first!.fireOpen();
+    first!.fireClose(1006, "raw-network");
+    await vi.advanceTimersByTimeAsync(60_000);
+    setDocumentHidden(true);
+    setDocumentHidden(false);
+    expect(socketsFor("ws://test/manual")).toHaveLength(1);
+    expect(onTokenRefreshNeeded).not.toHaveBeenCalled();
+    expect(onVisibilityRestore).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    sock.connect();
+    const refreshed = socketsFor("ws://test/manual")[1];
+    expect(refreshed).toBeDefined();
+    refreshed!.fireOpen();
+    refreshed!.fireClose(TOKEN_REFRESH_CLOSE_CODE, "token-expired");
+    await vi.advanceTimersByTimeAsync(60_000);
+    setDocumentHidden(false);
+    expect(onTokenRefreshNeeded).not.toHaveBeenCalled();
+    expect(socketsFor("ws://test/manual")).toHaveLength(2);
+
+    sock.connect();
+    expect(socketsFor("ws://test/manual")).toHaveLength(3);
+  });
+
+  it("心跳超时不会关闭连接或打开新 socket", () => {
+    const sock = new ReconnectingSocket({
+      url: "ws://test/heartbeat-off",
+      autoReconnect: false,
+      heartbeatIntervalMs: 500,
+      heartbeatTimeoutMs: 1_000,
+      heartbeatPing: () => JSON.stringify({ type: "ping" }),
+      isPongMessage: () => false,
+      baseDelayMs: 100,
+      jitter: false,
+      maxRetries: 5,
+    });
+    sock.connect();
+    const ws = socketsFor("ws://test/heartbeat-off")[0];
+    expect(ws).toBeDefined();
+    ws!.fireOpen();
+    vi.advanceTimersByTime(10_000);
+    setDocumentHidden(true);
+    setDocumentHidden(false);
+    expect(socketsFor("ws://test/heartbeat-off")).toHaveLength(1);
+    expect(ws!.readyState).toBe(FakeWebSocket.OPEN);
+    expect(ws!.sent.length).toBeGreaterThan(0);
+  });
+});

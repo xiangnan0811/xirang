@@ -1,5 +1,47 @@
+import type { ReactElement, ReactNode } from "react";
+import { render as rtlRender, type RenderResult } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+
+import { AuthContext, type AuthContextValue } from "@/context/auth-context.shared";
 import type { BackupRecoveryPoint, BackupRepository } from "@/types/domain";
 import type { BackupAssetResultRow } from "../backup-assets-state";
+
+export function backupTestAuth(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
+  return {
+    token: "token",
+    username: "tester",
+    role: "admin",
+    userId: 1,
+    totpEnabled: true,
+    isAuthenticated: true,
+    authTransitioning: false,
+    beginTOTPActivation: () => 1,
+    abortTOTPActivation: () => undefined,
+    completeTOTPActivation: () => true,
+    login: () => undefined,
+    logout: () => undefined,
+    setTotpEnabled: () => undefined,
+    ensureStepUpProof: async () => "proof",
+    clearStepUpProof: () => undefined,
+    ...overrides,
+  };
+}
+
+export function renderBackupSurface(
+  ui: ReactElement,
+  auth?: Partial<AuthContextValue>,
+): RenderResult {
+  const host = (node: ReactNode) => (
+    <MemoryRouter initialEntries={["/app/backups/data"]}>
+      <AuthContext.Provider value={backupTestAuth(auth)}>{node}</AuthContext.Provider>
+    </MemoryRouter>
+  );
+  const view = rtlRender(host(ui));
+  return {
+    ...view,
+    rerender: (next: ReactNode) => view.rerender(<>{host(next)}</>),
+  };
+}
 
 export const repository: BackupRepository = {
   id: "a".repeat(32),

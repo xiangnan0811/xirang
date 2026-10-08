@@ -1,3 +1,4 @@
+import type { AuthRole } from "@/context/auth-context.shared";
 import i18n from "@/i18n";
 import { clearStepUpProof } from "@/lib/step-up-storage";
 
@@ -13,6 +14,140 @@ export function getAuthSessionGeneration(): number {
 export function bumpAuthSessionGeneration(): number {
   authSessionGeneration += 1;
   return authSessionGeneration;
+}
+
+export type AuthIdentitySnapshot = {
+  token: string | null;
+  role: AuthRole | null;
+};
+
+let authIdentitySnapshot: AuthIdentitySnapshot = { token: null, role: null };
+
+export function getAuthIdentitySnapshot(): AuthIdentitySnapshot {
+  return authIdentitySnapshot;
+}
+
+export function rememberAuthIdentity(token: string | null, role: AuthRole | null): void {
+  authIdentitySnapshot = { token, role };
+}
+
+let authTransitionId: number | null = null;
+let nextAuthTransitionId = 0;
+const authTransitionListeners = new Set<() => void>();
+
+export class AuthTransitionRejectedError extends Error {
+  readonly code = "AUTH_TRANSITION" as const;
+
+  constructor() {
+    super("auth transition in progress");
+    this.name = "AuthTransitionRejectedError";
+  }
+}
+
+function emitAuthTransition(): void {
+  for (const listener of authTransitionListeners) {
+    listener();
+  }
+}
+
+export function subscribeAuthTransition(listener: () => void): () => void {
+  authTransitionListeners.add(listener);
+  return () => {
+    authTransitionListeners.delete(listener);
+  };
+}
+
+export function isAuthTransitionActive(): boolean {
+  return authTransitionId !== null;
+}
+
+export function beginAuthTransitionBarrier(): number {
+  if (authTransitionId !== null) {
+    throw new AuthTransitionRejectedError();
+  }
+  nextAuthTransitionId += 1;
+  authTransitionId = nextAuthTransitionId;
+  emitAuthTransition();
+  return authTransitionId;
+}
+
+export function releaseAuthTransitionBarrier(id: number): void {
+  if (authTransitionId !== id) {
+    return;
+  }
+  authTransitionId = null;
+  emitAuthTransition();
+}
+
+export function clearAuthTransitionBarrier(): void {
+  if (authTransitionId === null) {
+    return;
+  }
+  authTransitionId = null;
+  emitAuthTransition();
+}
+
+export type TOTPActivationFailureNotice = "uncertain" | "install-failed";
+
+let activationFailureNotice: TOTPActivationFailureNotice | null = null;
+const activationFailureListeners = new Set<() => void>();
+
+function emitActivationFailure(): void {
+  for (const listener of activationFailureListeners) {
+    listener();
+  }
+}
+
+export function subscribeTOTPActivationFailure(listener: () => void): () => void {
+  activationFailureListeners.add(listener);
+  return () => {
+    activationFailureListeners.delete(listener);
+  };
+}
+
+const ACTIVATION_FAILURE_NOTICE_KEY = "xirang-totp-activation-notice";
+
+function readStoredActivationFailure(): TOTPActivationFailureNotice | null {
+  try {
+    const stored = sessionStorage.getItem(ACTIVATION_FAILURE_NOTICE_KEY);
+    return stored === "uncertain" || stored === "install-failed" ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readTOTPActivationFailure(): TOTPActivationFailureNotice | null {
+  return activationFailureNotice ?? readStoredActivationFailure();
+}
+
+export function publishTOTPActivationFailure(notice: TOTPActivationFailureNotice): void {
+  activationFailureNotice = notice;
+  try {
+    sessionStorage.setItem(ACTIVATION_FAILURE_NOTICE_KEY, notice);
+  } catch {
+    // Keep the in-memory notice when storage is unavailable.
+  }
+  emitActivationFailure();
+}
+
+export function dismissTOTPActivationFailure(): void {
+  if (activationFailureNotice === null && readStoredActivationFailure() === null) {
+    return;
+  }
+  activationFailureNotice = null;
+  try {
+    sessionStorage.removeItem(ACTIVATION_FAILURE_NOTICE_KEY);
+  } catch {
+    // The memory flag is already cleared.
+  }
+  emitActivationFailure();
+}
+
+function assertAuthTransitionAllowed(authTransitionIdOption: number | undefined): void {
+  if (authTransitionId === null || authTransitionIdOption === authTransitionId) {
+    return;
+  }
+  throw new AuthTransitionRejectedError();
 }
 
 export class ApiError extends Error {
@@ -36,6 +171,7 @@ export type RequestOptions = {
   stepUpProof?: string;
   idempotencyKey?: string;
   signal?: AbortSignal;
+  authTransitionId?: number;
 };
 
 export type Envelope<T> = {
@@ -109,6 +245,7 @@ function isCurrentAuthSession(requestToken: string | undefined, requestGeneratio
 }
 
 function invalidateCurrentAuthSession(): void {
+  clearAuthTransitionBarrier();
   bumpAuthSessionGeneration();
   try {
     sessionStorage.removeItem(AUTH_TOKEN_KEY);
@@ -223,6 +360,7 @@ function isSuccessEnvelopeCode(code: number, responseStatus: number): boolean {
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  assertAuthTransitionAllowed(options.authTransitionId);
   const method = options.method ?? "GET";
   const isWriteOperation = method !== "GET";
   const requestToken = options.token;
@@ -315,6 +453,7 @@ export function isCredentialGrantRequiredError(error: unknown): error is ApiErro
 }
 
 export async function fetchWithFallback(url: string, options: RequestInit): Promise<Response> {
+  assertAuthTransitionAllowed(undefined);
   const method = (options.method ?? "GET").toUpperCase();
   const directApiBaseUrl = method === "GET" && !hasFetchAuthMaterial(options.headers) && canUseDevDirectFallback(API_BASE_URL)
     ? configuredDevDirectApiUrl()

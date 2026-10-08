@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
+import { backupStepUpErrorKey } from "@/features/backup-assets/backup-sensitive-runtime";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Pagination } from "@/components/ui/pagination";
 import type { AuthContextValue } from "@/context/auth-context.shared";
@@ -26,7 +28,7 @@ interface ArchiveMemberPresentation {
 
 export interface ArchiveMemberPanelProps {
   refValue: AssetRef;
-  runtime: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof">;
+  runtime: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof"> & Partial<Pick<AuthContextValue, "totpEnabled" | "authTransitioning">>;
   contentAvailable: boolean;
   downloadAllowed: boolean;
   online?: boolean;
@@ -53,6 +55,8 @@ export function ArchiveMemberPanel({
     role: runtime.role,
     ref: refValue,
     ensureStepUpProof: runtime.ensureStepUpProof,
+    totpEnabled: runtime.totpEnabled,
+    authTransitioning: runtime.authTransitioning,
     api,
     contentAvailable,
     downloadAllowed,
@@ -86,9 +90,10 @@ export function ArchiveMemberPanel({
     return (
       <div className="p-4">
         <InlineAlert tone="warning">
-          {t(secureTransport
+          {t(backupStepUpErrorKey(controller.state.error)
+            ?? (secureTransport
             ? "backupAssets.errors.secureTransportRequired"
-            : `backupAssets.archive.error.${controller.state.error ?? "unavailable"}`)}
+            : `backupAssets.archive.error.${controller.state.error ?? "unavailable"}`))}
           {secureTransport ? <ContentTransportGuidance authRole={runtime.role} /> : null}
         </InlineAlert>
         <div className="mt-3 flex flex-wrap justify-end gap-2">
@@ -120,6 +125,7 @@ export function ArchiveMemberPanel({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {runtime.role === "admin" || runtime.role === "operator" ? <StepUpPrerequisiteNotice className="mb-3" /> : null}
         {entries.length ? (
           <>
             <ul className="divide-y divide-border" aria-label={t("backupAssets.archive.members")}>

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import type { RefObject } from "react"
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
 import { Plus, Trash2 } from "lucide-react"
@@ -31,6 +32,8 @@ const ALERT_TYPES = [
   { value: "XR-REPORT",      i18nKey: "silences.types.report" },
   { value: "XR-SLO",         i18nKey: "silences.types.slo" },
 ] as const
+
+const DATETIME_LOCAL_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
 
 // ---------- helpers ----------
 
@@ -69,6 +72,137 @@ function remaining(endAt: string, t: TFunction): string {
   return t("silences.remaining.hours", { hours })
 }
 
+function pad2(value: number): string {
+  return value.toString().padStart(2, "0")
+}
+
+function formatDatetimeLocal(date: Date): string {
+  return `${date.getFullYear().toString().padStart(4, "0")}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
+function formatSignedOffset(date: Date): string {
+  const totalMinutes = -date.getTimezoneOffset()
+  const sign = totalMinutes >= 0 ? "+" : "-"
+  const absolute = Math.abs(totalMinutes)
+  return `${sign}${pad2(Math.floor(absolute / 60))}:${pad2(absolute % 60)}`
+}
+
+function floorToMinute(date: Date): Date {
+  return new Date(Math.floor(date.getTime() / 60_000) * 60_000)
+}
+
+/** Strict YYYY-MM-DDTHH:mm. Round-trip rejects impossible dates and spring-forward gaps. */
+function parseDatetimeLocal(value: string): Date | null {
+  const match = DATETIME_LOCAL_PATTERN.exec(value)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null
+  const parsed = new Date(value)
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day ||
+    parsed.getHours() !== hour ||
+    parsed.getMinutes() !== minute
+  ) {
+    return null
+  }
+  return parsed
+}
+
+type SilenceWindowEnd = {
+  text: string
+  /** Preset instant. Cleared on edit so a repeated clock time is not reparsed into the other DST occurrence. */
+  instant: Date | null
+}
+
+type SilenceWindowState = {
+  start: SilenceWindowEnd
+  end: SilenceWindowEnd
+}
+
+type SilenceFieldErrors = {
+  name?: string
+  start?: string
+  end?: string
+}
+
+function windowFromNow(now: Date, hours: number): SilenceWindowState {
+  const start = floorToMinute(now)
+  const end = new Date(start.getTime() + hours * 3_600_000)
+  return {
+    start: { text: formatDatetimeLocal(start), instant: start },
+    end: { text: formatDatetimeLocal(end), instant: end },
+  }
+}
+
+function resolveWindowEnd(end: SilenceWindowEnd): Date | null {
+  return end.instant ?? parseDatetimeLocal(end.text)
+}
+
+function formatWindowSummary(start: Date, end: Date, t: TFunction): string {
+  const point = (date: Date) =>
+    `${formatDatetimeLocal(date)} ${t("silences.utcOffset", { offset: formatSignedOffset(date) })}`
+  return `${point(start)} → ${point(end)}`
+}
+
+function SilenceWindowField({
+  id,
+  label,
+  end,
+  error,
+  inputRef,
+  onValueChange,
+}: {
+  id: string
+  label: string
+  end: SilenceWindowEnd
+  error?: string
+  inputRef: RefObject<HTMLInputElement>
+  onValueChange: (value: string) => void
+}) {
+  const { t } = useTranslation()
+  const instant = resolveWindowEnd(end)
+  const offset = instant ? t("silences.utcOffset", { offset: formatSignedOffset(instant) }) : null
+  const offsetId = offset ? `${id}-offset` : undefined
+  const errorId = error ? `${id}-error` : undefined
+  const describedBy = [offsetId, errorId].filter((item): item is string => Boolean(item)).join(" ")
+
+  return (
+    <div className="min-w-0 space-y-1">
+      <div className="flex items-baseline justify-between gap-2">
+        <label htmlFor={id} className="text-xs text-muted-foreground">
+          {label}
+        </label>
+        {offset ? (
+          <span id={offsetId} className="text-xs font-medium tabular-nums text-foreground">
+            {offset}
+          </span>
+        ) : null}
+      </div>
+      <Input
+        ref={inputRef}
+        id={id}
+        aria-label={label}
+        aria-invalid={Boolean(error)}
+        aria-describedby={describedBy || undefined}
+        type="datetime-local"
+        value={end.text}
+        onChange={(event) => onValueChange(event.target.value)}
+      />
+      {error ? (
+        <p id={errorId} role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 // ---------- CreateSilenceDialog ----------
 
 type CreateSilenceDialogProps = {
@@ -78,20 +212,19 @@ type CreateSilenceDialogProps = {
   token: string
 }
 
-function nowPlusHours(h: number): string {
-  return new Date(Date.now() + h * 3_600_000).toISOString().slice(0, 16)
-}
-
 function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSilenceDialogProps) {
   const { t } = useTranslation()
   const [name, setName] = useState("")
   const [matchNodeId, setMatchNodeId] = useState("")
   const [matchCategory, setMatchCategory] = useState("")
   const [tags, setTags] = useState<string[]>([])
-  const [startsAt, setStartsAt] = useState(() => nowPlusHours(0))
-  const [endsAt, setEndsAt] = useState(() => nowPlusHours(1))
+  const [silenceWindow, setSilenceWindow] = useState(() => windowFromNow(new Date(), 1))
   const [note, setNote] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState<SilenceFieldErrors>({})
+  const nameRef = useRef<HTMLInputElement>(null)
+  const startRef = useRef<HTMLInputElement>(null)
+  const endRef = useRef<HTMLInputElement>(null)
 
   const [nodes, setNodes] = useState<NodeRecord[]>([])
 
@@ -104,32 +237,54 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
   }, [token]);
 
   const applyPreset = (hours: number) => {
-    setStartsAt(nowPlusHours(0))
-    setEndsAt(nowPlusHours(hours))
+    setSilenceWindow(windowFromNow(new Date(), hours))
+    setFieldErrors((current) => (
+      current.start || current.end ? { ...current, start: undefined, end: undefined } : current
+    ))
+  }
+
+  const editWindowEnd = (which: "start" | "end", text: string) => {
+    if (silenceWindow[which].text === text) return
+    setSilenceWindow((current) => ({
+      ...current,
+      [which]: { text, instant: null },
+    }))
+    setFieldErrors((current) => (
+      current.start || current.end ? { ...current, start: undefined, end: undefined } : current
+    ))
   }
 
   const handleSubmit = async () => {
-    if (!name.trim()) {
-      toast.error(t("silences.name"))
+    const startInstant = resolveWindowEnd(silenceWindow.start)
+    const endInstant = resolveWindowEnd(silenceWindow.end)
+    const nextErrors: SilenceFieldErrors = {}
+    if (!name.trim()) nextErrors.name = t("silences.nameRequired")
+    if (!startInstant) nextErrors.start = t("silences.validationDateInvalid")
+    if (!endInstant) nextErrors.end = t("silences.validationDateInvalid")
+    if (startInstant && endInstant && endInstant.getTime() <= startInstant.getTime()) {
+      nextErrors.end = t("silences.validationWindowInvalid")
+    }
+    if (nextErrors.name || nextErrors.start || nextErrors.end || !startInstant || !endInstant) {
+      setFieldErrors(nextErrors)
+      if (nextErrors.name) nameRef.current?.focus()
+      else if (nextErrors.start) startRef.current?.focus()
+      else if (nextErrors.end) endRef.current?.focus()
       return
     }
-    if (new Date(endsAt) <= new Date(startsAt)) {
-      toast.error(t("silences.validationWindowInvalid"))
-      return
-    }
+
     const input: SilenceInput = {
       name: name.trim(),
       matchNodeId: matchNodeId ? Number(matchNodeId) : null,
-      matchCategory: matchCategory,
+      matchCategory,
       matchTags: tags,
-      startsAt: new Date(startsAt).toISOString(),
-      endsAt: new Date(endsAt).toISOString(),
+      startsAt: startInstant.toISOString(),
+      endsAt: endInstant.toISOString(),
       note: note.trim() || undefined,
     }
     setSubmitting(true)
     try {
       await apiClient.createSilence(token, input)
-      toast.success(t("silences.title"))
+      toast.success(t("silences.created", { window: formatWindowSummary(startInstant, endInstant, t) }))
       onOpenChange(false)
       onCreated()
     } catch (err) {
@@ -157,12 +312,23 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
           {t("silences.name")}
         </label>
         <Input
+          ref={nameRef}
           id="silence-name"
           aria-label={t("silences.name")}
+          aria-invalid={Boolean(fieldErrors.name)}
+          aria-describedby={fieldErrors.name ? "silence-name-error" : undefined}
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value)
+            setFieldErrors((current) => (current.name ? { ...current, name: undefined } : current))
+          }}
           placeholder="维护窗口-A"
         />
+        {fieldErrors.name ? (
+          <p id="silence-name-error" role="alert" className="text-xs text-destructive">
+            {fieldErrors.name}
+          </p>
+        ) : null}
       </div>
 
       {/* 节点 dropdown */}
@@ -217,7 +383,7 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
 
       {/* 静默窗口 */}
       <div className="space-y-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm font-medium">{t("silences.window")}</label>
           {[
             { label: t("silences.preset1h"), h: 1 },
@@ -229,31 +395,24 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
             </Button>
           ))}
         </div>
-        <div className="grid grid-cols-2 gap-3 mt-2">
-          <div className="space-y-1">
-            <label htmlFor="silence-starts" className="text-xs text-muted-foreground">
-              {t("silences.startsAt")}
-            </label>
-            <Input
-              id="silence-starts"
-              aria-label={t("silences.startsAt")}
-              type="datetime-local"
-              value={startsAt}
-              onChange={(e) => setStartsAt(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1">
-            <label htmlFor="silence-ends" className="text-xs text-muted-foreground">
-              {t("silences.endsAt")}
-            </label>
-            <Input
-              id="silence-ends"
-              aria-label={t("silences.endsAt")}
-              type="datetime-local"
-              value={endsAt}
-              onChange={(e) => setEndsAt(e.target.value)}
-            />
-          </div>
+        <p className="text-xs text-muted-foreground">{t("silences.presetDurationHint")}</p>
+        <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <SilenceWindowField
+            id="silence-starts"
+            label={t("silences.startsAt")}
+            end={silenceWindow.start}
+            error={fieldErrors.start}
+            inputRef={startRef}
+            onValueChange={(value) => editWindowEnd("start", value)}
+          />
+          <SilenceWindowField
+            id="silence-ends"
+            label={t("silences.endsAt")}
+            end={silenceWindow.end}
+            error={fieldErrors.end}
+            inputRef={endRef}
+            onValueChange={(value) => editWindowEnd("end", value)}
+          />
         </div>
       </div>
 

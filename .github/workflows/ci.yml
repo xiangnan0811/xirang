@@ -289,8 +289,11 @@ jobs:
         working-directory: backend
         run: go build -o /dev/null ./cmd/server
 
-      - name: Run real-backend Playwright smoke
-        run: env -u NODE_ENV npx playwright test e2e/real-backend-smoke.spec.ts --config=playwright.real-backend.config.ts --project=chromium
+      - name: Install isolated OpenSSH and sqlite3
+        run: sudo apt-get update && sudo apt-get install -y openssh-server sqlite3
+
+      - name: Run real-backend Playwright lifecycle
+        run: env -u NODE_ENV npx playwright test --config=playwright.real-backend.config.ts --project=chromium
 
       - name: Check frontend bundle budget
         # Requires dist/ produced by 'npm run check' (which includes build)

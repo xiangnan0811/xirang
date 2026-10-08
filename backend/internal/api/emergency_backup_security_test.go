@@ -41,9 +41,10 @@ type emergencyBackupRecordingExecutor struct {
 	calls   []uint
 	callCh  chan uint
 	errByID map[uint]error
+	release <-chan struct{}
 }
 
-func (e *emergencyBackupRecordingExecutor) Run(_ context.Context, taskEntity model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {
+func (e *emergencyBackupRecordingExecutor) Run(ctx context.Context, taskEntity model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {
 	e.mu.Lock()
 	e.calls = append(e.calls, taskEntity.ID)
 	e.mu.Unlock()
@@ -51,6 +52,13 @@ func (e *emergencyBackupRecordingExecutor) Run(_ context.Context, taskEntity mod
 		select {
 		case e.callCh <- taskEntity.ID:
 		default:
+		}
+	}
+	if e.release != nil {
+		select {
+		case <-e.release:
+		case <-ctx.Done():
+			return 0, ctx.Err()
 		}
 	}
 	if err := e.errByID[taskEntity.ID]; err != nil {
@@ -395,6 +403,11 @@ func TestEmergencyBackupRouterChecksAllTaskGrantsBeforeManagerTrigger(t *testing
 
 func TestEmergencyBackupRouterReturnsSuccessfulTaskIDsAndPartialErrors(t *testing.T) {
 	fixture := newEmergencyBackupRouterFixture(t)
+	// Keep parent completion separate from the synchronous trigger assertions:
+	// its eventual chain continuation legitimately records a skipped child run.
+	release := make(chan struct{})
+	fixture.executor.release = release
+	t.Cleanup(func() { close(release) })
 	node := seedEmergencyBackupNode(t, fixture.db, 100)
 	first := seedEmergencyBackupTask(t, fixture.db, 500, node.ID, true)
 	second := seedEmergencyBackupTask(t, fixture.db, 501, node.ID, false)

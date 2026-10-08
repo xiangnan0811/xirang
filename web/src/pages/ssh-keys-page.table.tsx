@@ -106,7 +106,12 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colName")}</th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colUsername")}</th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colType")}</th>
-            <th scope="col" className="px-3 py-2.5">{t("sshKeys.colFingerprint")}</th>
+            <th scope="col" className="px-3 py-2.5">
+              <span className="block">{t("sshKeys.privateKeyDigest")}</span>
+              <span className="mt-0.5 block text-[10px] font-normal normal-case tracking-normal">
+                {t("sshKeys.privateKeyDigestHint")}
+              </span>
+            </th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colLastUsed")}</th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colScope")}</th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colNodes")}</th>

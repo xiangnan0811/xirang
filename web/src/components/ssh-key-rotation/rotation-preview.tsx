@@ -1,10 +1,12 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { toast } from "@/components/ui/toast-sonner";
 import type { AuthRole } from "@/context/auth-context.shared";
 import {
@@ -14,12 +16,25 @@ import {
   type SSHKeyType,
 } from "@/types/domain";
 
-// Step 1: select which key to rotate
+export function DisabledKeyRemediation({ onNavigate }: { onNavigate: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <InlineAlert tone="warning">
+      <p>{t("sshKeys.rotationDisabledRemediation")}</p>
+      <Button asChild size="sm" variant="outline" className="mt-2">
+        <Link to="/app/ssh-keys" onClick={onNavigate}>{t("sshKeys.rotationDisabledOpenKeys")}</Link>
+      </Button>
+    </InlineAlert>
+  );
+}
+
 interface RotationPreviewProps {
   rotatableKeys: SSHKeyRecord[];
   keyUsageMap: Map<string, NodeRecord[]>;
   selectedKey: SSHKeyRecord | null;
+  showDisabledRemediation: boolean;
   onSelectKey: (key: SSHKeyRecord) => void;
+  onNavigate: () => void;
   onNext: () => void;
 }
 
@@ -27,16 +42,20 @@ export function RotationPreview({
   rotatableKeys,
   keyUsageMap,
   selectedKey,
+  showDisabledRemediation,
   onSelectKey,
+  onNavigate,
   onNext,
 }: RotationPreviewProps) {
   const { t } = useTranslation();
+  const selectedEnabled = Boolean(selectedKey && !selectedKey.disabled);
 
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        {t("sshKeys.rotationSelectKeyDesc")}
+        {t("sshKeys.rotationSelectAnyKeyDesc")}
       </p>
+      {showDisabledRemediation ? <DisabledKeyRemediation onNavigate={onNavigate} /> : null}
       <div className="max-h-64 space-y-2 overflow-y-auto thin-scrollbar">
         {rotatableKeys.map((key) => {
           const nodes = keyUsageMap.get(key.id) ?? [];
@@ -48,10 +67,12 @@ export function RotationPreview({
               key={key.id}
               htmlFor={optionId}
               aria-label={key.name}
-              className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors ${
-                isSelected
-                  ? "border-primary/50 bg-primary/5"
-                  : "border-border/60 hover:border-border hover:bg-accent/30"
+              className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${
+                key.disabled
+                  ? "cursor-not-allowed border-border/60 opacity-60"
+                  : isSelected
+                    ? "cursor-pointer border-primary/50 bg-primary/5"
+                    : "cursor-pointer border-border/60 hover:border-border hover:bg-accent/30"
               }`}
             >
               <input
@@ -60,16 +81,22 @@ export function RotationPreview({
                 name="rotation-key"
                 className="accent-primary"
                 checked={isSelected}
+                disabled={key.disabled}
                 onChange={() => onSelectKey(key)}
                 aria-labelledby={optionLabelId}
               />
               <span className="sr-only">{key.name}</span>
-              <div className="flex-1 min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span id={optionLabelId} className="font-medium text-sm">{key.name}</span>
+                  <span id={optionLabelId} className="text-sm font-medium">{key.name}</span>
                   <span className="text-xs text-muted-foreground">
                     {key.username}
                   </span>
+                  {key.disabled ? (
+                    <span className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground">
+                      {t("sshKeys.rotationDisabledBadge")}
+                    </span>
+                  ) : null}
                 </div>
                 <div aria-hidden="true" className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span>{String(key.keyType).toUpperCase()}</span>
@@ -84,7 +111,7 @@ export function RotationPreview({
         })}
       </div>
       <div className="flex justify-end pt-2">
-        <Button disabled={!selectedKey} onClick={onNext}>
+        <Button disabled={!selectedEnabled} onClick={onNext}>
           {t("sshKeys.rotationNext")}
         </Button>
       </div>
@@ -92,7 +119,6 @@ export function RotationPreview({
   );
 }
 
-// Step 2: upload new key material
 interface RotationUploadProps {
   selectedKey: SSHKeyRecord | null;
   newKeyName: string;
@@ -104,6 +130,10 @@ interface RotationUploadProps {
   preselectedKey?: SSHKeyRecord | null;
   token: string;
   role: AuthRole | null;
+  candidateReady?: boolean;
+  checkingCandidate?: boolean;
+  checkError?: string | null;
+  onCheckCandidate?: () => void;
   onBack: () => void;
   onNext: () => void;
 }
@@ -119,6 +149,10 @@ export function RotationUpload({
   preselectedKey,
   token,
   role,
+  candidateReady = false,
+  checkingCandidate = false,
+  checkError = null,
+  onCheckCandidate,
   onBack,
   onNext,
 }: RotationUploadProps) {
@@ -181,6 +215,8 @@ export function RotationUpload({
     reader.readAsText(file);
     event.target.value = "";
   };
+
+  const nextDisabled = onCheckCandidate ? !candidateReady || checkingCandidate : !newPrivateKey.trim();
 
   return (
     <>
@@ -258,6 +294,8 @@ export function RotationUpload({
         />
       </div>
 
+      {checkError ? <InlineAlert tone="critical">{checkError}</InlineAlert> : null}
+
       <div className="flex justify-between pt-2">
         {!preselectedKey ? (
           <Button variant="outline" onClick={onBack}>
@@ -266,9 +304,22 @@ export function RotationUpload({
         ) : (
           <div />
         )}
-        <Button disabled={!newPrivateKey.trim()} onClick={onNext}>
-          {t("sshKeys.rotationNext")}
-        </Button>
+        <div className="flex gap-2">
+          {onCheckCandidate ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onCheckCandidate}
+              disabled={!newPrivateKey.trim() || checkingCandidate}
+              loading={checkingCandidate}
+            >
+              {t("sshKeys.rotationCheckCandidate")}
+            </Button>
+          ) : null}
+          <Button disabled={nextDisabled} onClick={onNext}>
+            {t("sshKeys.rotationNext")}
+          </Button>
+        </div>
       </div>
     </>
   );

@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { Stepper } from "@/components/ui/stepper";
 import type {
   RecoveryConflictPolicy,
@@ -35,6 +36,7 @@ import type { AuthRole } from "@/context/auth-context.shared";
 import { RecoveryImpactPanel } from "./recovery-impact-panel";
 import { RecoveryJobPanel } from "./recovery-job-panel";
 import type { useBackupRecovery } from "./use-backup-recovery";
+import { backupStepUpErrorKey } from "./backup-sensitive-runtime";
 import { ContentTransportGuidance } from "./content-transport-guidance";
 
 type BackupRecoveryController = ReturnType<typeof useBackupRecovery>;
@@ -290,6 +292,7 @@ export function RecoveryPlanWizard({ open, recovery, authRole = null, onOpenChan
         </DialogHeader>
 
         <DialogBody className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4">
+          {authRole === "admin" ? <StepUpPrerequisiteNotice className="mb-3" /> : null}
           {(state.phase === "target" || state.phase === "creating") ? (
             state.plan === null ? (
               <section className="space-y-4" aria-labelledby="recovery-target-title">
@@ -450,9 +453,10 @@ export function RecoveryPlanWizard({ open, recovery, authRole = null, onOpenChan
           {state.error !== null && state.phase !== "unavailable" ? (
             <div ref={errorFocusRef} tabIndex={-1} data-testid="recovery-error" className="outline-none">
               <InlineAlert tone="critical">
-                {t(state.error === "secure_transport_required"
+                {t(backupStepUpErrorKey(state.error)
+                  ?? (state.error === "secure_transport_required"
                   ? "backupAssets.errors.secureTransportRequired"
-                  : `backupAssets.recovery.error.${state.error}`)}
+                  : `backupAssets.recovery.error.${state.error}`))}
                 {state.error === "secure_transport_required" ? <ContentTransportGuidance authRole={authRole} /> : null}
               </InlineAlert>
             </div>

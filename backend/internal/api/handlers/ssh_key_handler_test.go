@@ -1,13 +1,18 @@
 package handlers
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,8 +23,10 @@ import (
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/ssh"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -42,7 +49,7 @@ func openSSHKeyHandlerTestDB(t *testing.T) *gorm.DB {
 	sqlDB.SetMaxOpenConns(10)
 	sqlDB.SetMaxIdleConns(5)
 	sqlDB.SetConnMaxLifetime(5 * time.Minute)
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.NodeOwner{}); err != nil {
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.NodeOwner{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 	return db
@@ -105,11 +112,13 @@ func newSSHKeyHandlerRouter(db *gorm.DB, role string, userID uint) *gin.Engine {
 		c.Next()
 	})
 	handler := NewSSHKeyHandler(db)
+	r.POST("/ssh-keys/preview", handler.Preview)
 	r.GET("/ssh-keys", handler.List)
 	r.POST("/ssh-keys", handler.Create)
 	r.GET("/ssh-keys/export", handler.Export)
 	r.GET("/ssh-keys/:id", handler.Get)
 	r.PUT("/ssh-keys/:id", handler.Update)
+	r.POST("/ssh-keys/:id/test-connection", handler.TestConnection)
 	return r
 }
 
@@ -155,6 +164,290 @@ func assertSSHKeyNames(t *testing.T, items []sshKeyResponseItem, want []string) 
 		if items[i].Name != want[i] {
 			t.Fatalf("SSH key 顺序/名称不符合预期，want=%v got=%+v", want, items)
 		}
+	}
+}
+func buildSSHKeyPrivateKeyForHandlerTestType(t *testing.T, keyType string) string {
+	t.Helper()
+	switch keyType {
+	case "rsa":
+		return buildSSHKeyPrivateKeyForHandlerTest(t)
+	case "ecdsa":
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("生成 ECDSA 测试私钥失败: %v", err)
+		}
+		der, err := x509.MarshalECPrivateKey(key)
+		if err != nil {
+			t.Fatalf("编码 ECDSA 测试私钥失败: %v", err)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
+	case "ed25519":
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatalf("生成 ED25519 测试私钥失败: %v", err)
+		}
+		block, err := ssh.MarshalPrivateKey(key, "")
+		if err != nil {
+			t.Fatalf("编码 ED25519 OpenSSH 测试私钥失败: %v", err)
+		}
+		return string(pem.EncodeToMemory(block))
+	default:
+		t.Fatalf("不支持的测试密钥类型: %s", keyType)
+		return ""
+	}
+}
+
+func buildSSHKeyPassphraseProtectedForHandlerTest(t *testing.T) string {
+	t.Helper()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("生成受保护 ED25519 测试私钥失败: %v", err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(key, "", []byte("test-passphrase"))
+	if err != nil {
+		t.Fatalf("编码受保护 ED25519 测试私钥失败: %v", err)
+	}
+	return string(pem.EncodeToMemory(block))
+}
+
+func requestSSHKeyPreview(t *testing.T, r *gin.Engine, privateKey, keyType string) *httptest.ResponseRecorder {
+	t.Helper()
+	payload, err := json.Marshal(sshKeyPreviewRequest{PrivateKey: privateKey, KeyType: keyType})
+	if err != nil {
+		t.Fatalf("编码 SSH key preview 请求失败: %v", err)
+	}
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ssh-keys/preview", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(resp, req)
+	return resp
+}
+
+func TestSSHKeyPreviewSupportsKeyEncodingsAndFingerprints(t *testing.T) {
+	router := newSSHKeyHandlerRouter(nil, "admin", 1)
+	tests := []struct {
+		name         string
+		keyType      string
+		selectedType string
+		publicPrefix string
+	}{
+		{name: "rsa_pkcs1_auto", keyType: "rsa", selectedType: "auto", publicPrefix: "ssh-rsa "},
+		{name: "ecdsa_sec1_explicit", keyType: "ecdsa", selectedType: "ecdsa", publicPrefix: "ecdsa-sha2-nistp256 "},
+		{name: "ed25519_openssh_explicit", keyType: "ed25519", selectedType: "ed25519", publicPrefix: "ssh-ed25519 "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			privateKey := buildSSHKeyPrivateKeyForHandlerTestType(t, tt.keyType)
+			resp := requestSSHKeyPreview(t, router, privateKey, tt.selectedType)
+			if resp.Code != http.StatusOK {
+				t.Fatalf("预览 status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			if got := resp.Header().Get("Cache-Control"); got != "private, no-store" {
+				t.Fatalf("预览应禁止共享缓存，实际 Cache-Control=%q", got)
+			}
+
+			var envelope struct {
+				Data sshKeyPreviewResponse `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("解析预览响应失败: %v body=%s", err, resp.Body.String())
+			}
+			prepared, expectedType, err := sshutil.ValidateAndPreparePrivateKey(privateKey, tt.selectedType)
+			if err != nil {
+				t.Fatalf("准备预期私钥失败: %v", err)
+			}
+			expectedPublic, err := sshutil.DerivePublicKey(prepared)
+			if err != nil {
+				t.Fatalf("派生预期公钥失败: %v", err)
+			}
+			expectedParsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(expectedPublic))
+			if err != nil {
+				t.Fatalf("解析预期公钥失败: %v", err)
+			}
+			if envelope.Data.KeyType != expectedType {
+				t.Fatalf("预览 key_type=%q，期望 %q", envelope.Data.KeyType, expectedType)
+			}
+			if !strings.HasPrefix(envelope.Data.PublicKey, tt.publicPrefix) {
+				t.Fatalf("预览 public_key=%q，不符合 %s", envelope.Data.PublicKey, tt.publicPrefix)
+			}
+			if envelope.Data.PublicKeyFingerprint != ssh.FingerprintSHA256(expectedParsed) {
+				t.Fatalf("预览公钥指纹不符合预期，实际=%q", envelope.Data.PublicKeyFingerprint)
+			}
+			if strings.Contains(resp.Body.String(), privateKey) || strings.Contains(resp.Body.String(), `"private_key"`) {
+				t.Fatalf("预览响应不得回显私钥: %s", resp.Body.String())
+			}
+		})
+	}
+}
+
+func TestSSHKeyPreviewDoesNotRequireDatabase(t *testing.T) {
+	privateKey := buildSSHKeyPrivateKeyForHandlerTest(t)
+	resp := requestSSHKeyPreview(t, newSSHKeyHandlerRouter(nil, "admin", 1), privateKey, "rsa")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("nil DB 预览 status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("nil DB 预览应禁止共享缓存，实际 Cache-Control=%q", got)
+	}
+}
+
+func TestSSHKeyPreviewRejectsUnsafeInputsWithoutParserDetails(t *testing.T) {
+	privateKey := buildSSHKeyPrivateKeyForHandlerTest(t)
+	ed25519PrivateKey := buildSSHKeyPrivateKeyForHandlerTestType(t, "ed25519")
+	tests := []struct {
+		name       string
+		privateKey string
+		keyType    string
+		forbidden  []string
+	}{
+		{
+			name:       "invalid",
+			privateKey: "-----BEGIN RSA PRIVATE KEY-----\nnot-a-private-key\n-----END RSA PRIVATE KEY-----",
+			keyType:    "auto",
+			forbidden:  []string{"not-a-private-key", "ssh:", "parse"},
+		},
+		{
+			name:       "protected",
+			privateKey: buildSSHKeyPassphraseProtectedForHandlerTest(t),
+			keyType:    "auto",
+			forbidden:  []string{"passphrase", "protected", "ssh:"},
+		},
+		{
+			name:       "type_mismatch",
+			privateKey: privateKey,
+			keyType:    "ed25519",
+			forbidden:  []string{"RSA", "ED25519", "ssh:", "mismatch"},
+		},
+		{
+			name:       "ed25519_candidate_as_rsa",
+			privateKey: ed25519PrivateKey,
+			keyType:    "rsa",
+			forbidden:  []string{"RSA", "ED25519", "ssh:", "mismatch"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := requestSSHKeyPreview(t, newSSHKeyHandlerRouter(nil, "admin", 1), tt.privateKey, tt.keyType)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("预览拒绝 status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			if got := resp.Header().Get("Cache-Control"); got != "private, no-store" {
+				t.Fatalf("拒绝响应应禁止共享缓存，实际 Cache-Control=%q", got)
+			}
+			body := resp.Body.String()
+			for _, forbidden := range tt.forbidden {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("预览错误响应泄漏 %q: %s", forbidden, body)
+				}
+			}
+			if strings.Contains(body, `"private_key"`) || strings.Contains(body, tt.privateKey) {
+				t.Fatalf("预览错误响应不得回显私钥: %s", body)
+			}
+		})
+	}
+}
+
+func TestSSHKeyPreviewRejectsOversizeBody(t *testing.T) {
+	payload := fmt.Sprintf(`{"private_key":%q,"key_type":"auto"}`, strings.Repeat("A", 1<<20))
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ssh-keys/preview", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	newSSHKeyHandlerRouter(nil, "admin", 1).ServeHTTP(resp, req)
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("超大预览请求 status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("超大请求响应应禁止共享缓存，实际 Cache-Control=%q", got)
+	}
+	if strings.Contains(resp.Body.String(), "A") || strings.Contains(resp.Body.String(), "private_key") {
+		t.Fatalf("超大请求响应不得回显请求数据: %s", resp.Body.String())
+	}
+}
+
+func TestSSHKeyPreviewConsumesEntireBoundedJSONBody(t *testing.T) {
+	key := buildSSHKeyPrivateKeyForHandlerTest(t)
+	prefix := fmt.Sprintf(`{"private_key":%q,"key_type":"auto"}`, key)
+	for _, tc := range []struct {
+		name          string
+		body          string
+		unknownLength bool
+		want          int
+	}{
+		{"exact limit", prefix + strings.Repeat(" ", (1<<20)-len(prefix)), false, http.StatusOK},
+		{"oversize trailing whitespace", prefix + strings.Repeat(" ", 1<<20), false, http.StatusRequestEntityTooLarge},
+		{"oversize unknown length", prefix + strings.Repeat(" ", 1<<20), true, http.StatusRequestEntityTooLarge},
+		{"second JSON document", prefix + `{}`, false, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/ssh-keys/preview", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			if tc.unknownLength {
+				req.ContentLength = -1
+			}
+			resp := httptest.NewRecorder()
+			newSSHKeyHandlerRouter(nil, "admin", 1).ServeHTTP(resp, req)
+			if resp.Code != tc.want {
+				t.Fatalf("status=%d want=%d body=%s", resp.Code, tc.want, resp.Body.String())
+			}
+			if strings.Contains(resp.Body.String(), key) {
+				t.Fatal("response exposed private key")
+			}
+		})
+	}
+}
+
+func TestSSHKeyResponsePreservesPrivateDigestAndAddsPublicFingerprint(t *testing.T) {
+	db := openSSHKeyHandlerTestDB(t)
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	privateKey := buildSSHKeyPrivateKeyForHandlerTest(t)
+	key := model.SSHKey{
+		Name:        "response-compatibility-key",
+		Username:    "root",
+		KeyType:     "rsa",
+		PrivateKey:  privateKey,
+		Fingerprint: "SHA256:historical-private-digest",
+	}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatalf("创建兼容性测试 SSH key 失败: %v", err)
+	}
+
+	resp := requestSSHKeyVisibility(newSSHKeyHandlerRouter(db, "admin", 1), http.MethodGet, fmt.Sprintf("/ssh-keys/%d", key.ID))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("读取兼容性测试 SSH key status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Data sshKeyResponseItem `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, err := sshutil.DerivePublicKey(privateKey)
+	if err != nil {
+		t.Fatalf("派生兼容性测试公钥失败: %v", err)
+	}
+	parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(publicKey))
+	if err != nil {
+		t.Fatalf("解析兼容性测试公钥失败: %v", err)
+	}
+	if envelope.Data.Fingerprint != key.Fingerprint {
+		t.Fatalf("历史 fingerprint 被改变，实际=%q 期望=%q", envelope.Data.Fingerprint, key.Fingerprint)
+	}
+	if envelope.Data.PublicKeyFingerprint != ssh.FingerprintSHA256(parsed) {
+		t.Fatalf("标准公钥指纹不符合预期，实际=%q", envelope.Data.PublicKeyFingerprint)
+	}
+	if strings.Contains(resp.Body.String(), privateKey) || strings.Contains(resp.Body.String(), `"private_key"`) {
+		t.Fatalf("存储 SSH key 响应不得回显私钥: %s", resp.Body.String())
+	}
+
+	invalidResponse := toSSHKeyResponse(model.SSHKey{
+		Fingerprint: "SHA256:private-only",
+		PrivateKey:  "not-a-private-key",
+	})
+	if invalidResponse.PublicKeyFingerprint != "" {
+		t.Fatalf("无法从公钥派生时不得回退私钥摘要，实际=%q", invalidResponse.PublicKeyFingerprint)
 	}
 }
 
@@ -387,5 +680,121 @@ func TestSSHKeyBatchCreateEncryptionFailureIsSanitized(t *testing.T) {
 	}
 	if !strings.Contains(body, sshKeyPersistenceMessage) || !strings.Contains(body, sshKeyPersistenceCode) {
 		t.Fatalf("批量 SSH key 响应应返回通用持久化错误: %s", body)
+	}
+}
+
+const remoteSSHFailureMarker = "REMOTE_SSH_DISCONNECT_MARKER_5e7c"
+
+func appendSSHUint32(dst []byte, value uint32) []byte {
+	return append(dst,
+		byte(value>>24),
+		byte(value>>16),
+		byte(value>>8),
+		byte(value),
+	)
+}
+
+func writeRawSSHDisconnect(conn net.Conn, marker string) error {
+	payload := []byte{1}
+	payload = appendSSHUint32(payload, 2)
+	payload = appendSSHUint32(payload, uint32(len(marker)))
+	payload = append(payload, marker...)
+	payload = appendSSHUint32(payload, 0)
+
+	paddingLength := 4
+	for (1+len(payload)+paddingLength)%8 != 0 {
+		paddingLength++
+	}
+	packetLength := 1 + len(payload) + paddingLength
+	packet := make([]byte, 4+packetLength)
+	packet = packet[:4]
+	packet[0] = byte(packetLength >> 24)
+	packet[1] = byte(packetLength >> 16)
+	packet[2] = byte(packetLength >> 8)
+	packet[3] = byte(packetLength)
+	packet = append(packet, byte(paddingLength))
+	packet = append(packet, payload...)
+	packet = append(packet, make([]byte, paddingLength)...)
+	_, err := conn.Write(packet)
+	return err
+}
+
+func startRawSSHDisconnectServer(t *testing.T, marker string) (string, int) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("监听 SSH 测试服务失败: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		if _, readErr := bufio.NewReader(conn).ReadString('\n'); readErr != nil {
+			return
+		}
+		if _, writeErr := conn.Write([]byte("SSH-2.0-xirang-test\r\n")); writeErr != nil {
+			return
+		}
+		_ = writeRawSSHDisconnect(conn, marker)
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("SSH 测试服务未及时退出")
+		}
+	})
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("SSH 测试服务地址类型错误: %T", listener.Addr())
+	}
+	return tcpAddr.IP.String(), tcpAddr.Port
+}
+
+func TestSSHKeyTestConnectionSanitizesRemoteSSHDisconnect(t *testing.T) {
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	db := openSSHKeyHandlerTestDB(t)
+	key := seedSSHKeyForVisibility(t, db, "remote-error-key")
+	host, port := startRawSSHDisconnectServer(t, remoteSSHFailureMarker)
+	node := model.Node{
+		Name:      "remote-error-node",
+		Host:      host,
+		Port:      port,
+		Username:  "root",
+		AuthType:  "key",
+		SSHKeyID:  &key.ID,
+		BackupDir: "remote-error-backup",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建 SSH 失败测试节点失败: %v", err)
+	}
+
+	router := newSSHKeyHandlerRouter(db, "admin", 1)
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/ssh-keys/%d/test-connection", key.ID),
+		strings.NewReader(fmt.Sprintf(`{"node_ids":[%d]}`, node.ID)),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("SSH 连通性失败应返回结构化 200，实际 status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	if strings.Contains(body, remoteSSHFailureMarker) {
+		t.Fatalf("SSH 连通性响应泄漏远端断开文本 %q: %s", remoteSSHFailureMarker, body)
+	}
+	if !strings.Contains(body, `"success":false`) {
+		t.Fatalf("SSH 连通性响应应记录失败结果: %s", body)
 	}
 }

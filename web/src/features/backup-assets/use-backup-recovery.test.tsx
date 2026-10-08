@@ -9,7 +9,7 @@ import type {
   RecoveryPreflight,
   RecoveryProduct,
 } from "@/lib/api/backup-recovery-api";
-import { ApiError } from "@/lib/api/core";
+import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { AssetRef } from "@/types/domain";
 
@@ -146,6 +146,8 @@ function options(api: BackupRecoveryApi) {
     sessionKey: "session-1",
     api,
     ensureStepUpProof: vi.fn().mockResolvedValueOnce("write-proof").mockResolvedValueOnce("execute-proof"),
+    totpEnabled: true,
+    authTransitioning: false,
     onRouteChange: vi.fn(),
     newIdempotencyKey: (endpoint: string) => `${endpoint}-stable-replay-key`,
     cryptoSource: {
@@ -339,6 +341,50 @@ describe("useBackupRecovery", () => {
     expect(result.current.state).toMatchObject({ phase: "closed", plan: null, writeGrant: null });
     expect(JSON.stringify(result.current.state)).not.toContain("session-owned reason");
     expect(JSON.stringify(result.current.state)).not.toContain("stale-proof");
+  });
+
+  it("does not submit recovery authority when step-up is disabled or the auth generation changes", async () => {
+    const authorizeWrite = vi.fn();
+    const api = mockApi({
+      createPlan: vi.fn().mockResolvedValue(available({ planId, state: "draft", replay: false })),
+      getPlan: vi.fn().mockResolvedValue(available(plan({ state: "draft", revision: "1" }))),
+      preflight: vi.fn().mockResolvedValue(available(preflight())),
+      authorizeWrite,
+    });
+    const disabled = renderHook(() => useBackupRecovery({
+      ...options(api),
+      totpEnabled: false,
+      ensureStepUpProof: vi.fn(),
+    }));
+    act(() => disabled.result.current.open([ref], {
+      repositoryId: plan().repositoryId,
+      catalogGenerationId: "b".repeat(32),
+    }));
+    act(() => disabled.result.current.setTarget({
+      targetMode: "in_place", targetNodeId: 4, targetRootId: "root-1", conflictPolicy: "exact_mirror",
+    }));
+    await act(async () => disabled.result.current.createPlan());
+    await act(async () => disabled.result.current.runPreflight());
+    await act(async () => disabled.result.current.authorizeWrite("same reason"));
+    expect(disabled.result.current.state.error).toBe("totp_required");
+    expect(authorizeWrite).not.toHaveBeenCalled();
+
+    const ensureStepUpProof = vi.fn(async () => {
+      bumpAuthSessionGeneration();
+      return "stale-write-proof";
+    });
+    const stale = renderHook(() => useBackupRecovery({ ...options(api), ensureStepUpProof }));
+    act(() => stale.result.current.open([ref], {
+      repositoryId: plan().repositoryId,
+      catalogGenerationId: "b".repeat(32),
+    }));
+    act(() => stale.result.current.setTarget({
+      targetMode: "in_place", targetNodeId: 4, targetRootId: "root-1", conflictPolicy: "exact_mirror",
+    }));
+    await act(async () => stale.result.current.createPlan());
+    await act(async () => stale.result.current.runPreflight());
+    await act(async () => stale.result.current.authorizeWrite("same reason"));
+    expect(authorizeWrite).not.toHaveBeenCalled();
   });
 
   it("uses an independent confirmation, reason, proof, key and one-shot secret at the exact delete checkpoint", async () => {

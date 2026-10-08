@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LogEvent } from "@/types/domain";
 import { useLiveLogs } from "./use-live-logs";
+import { beginAuthTransitionBarrier, clearAuthTransitionBarrier } from "@/lib/api/core";
 
 const socket = vi.hoisted(() => ({
   connect: vi.fn(), disconnect: vi.fn(), updateSinceId: vi.fn(),
@@ -41,8 +42,10 @@ describe("useLiveLogs", () => {
     });
     vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
   });
-  afterEach(() => vi.unstubAllGlobals());
-
+  afterEach(() => {
+    clearAuthTransitionBarrier();
+    vi.unstubAllGlobals();
+  });
   function emit(logId: number) {
     socket.messages.forEach((listener) => listener({ id: String(logId), logId, level: "info", message: "log", timestamp: "" }));
   }
@@ -77,5 +80,23 @@ describe("useLiveLogs", () => {
     expect(result.current.connectionWarning).toBeTruthy();
     expect(socket.messages.size).toBe(0);
     unmount();
+  });
+
+  it("closes the log socket during an auth transition and reconnects after it ends", () => {
+    renderHook(() => useLiveLogs("token-1"));
+    expect(socket.connect).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      beginAuthTransitionBarrier();
+    });
+    expect(socket.disconnect).toHaveBeenCalled();
+    const connectsWhilePaused = socket.connect.mock.calls.length;
+
+    act(() => {
+      clearAuthTransitionBarrier();
+    });
+    expect(socket.connect).toHaveBeenCalledTimes(connectsWhilePaused + 1);
+    const options = socket.connect.mock.lastCall?.[1] as { tokenGetter: () => string | null };
+    expect(options.tokenGetter()).toBe("token-1");
   });
 });

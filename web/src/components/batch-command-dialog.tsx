@@ -4,10 +4,13 @@ import { Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
 import type { AuthRole } from "@/context/auth-context.shared";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
+import { sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
 import { apiClient } from "@/lib/api/client";
+import { getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { NodeRecord } from "@/types/domain";
 
@@ -60,7 +63,7 @@ function BatchCommandSession({
   onSuccess,
 }: BatchCommandDialogProps) {
   const { t } = useTranslation();
-  const { role } = useAuth();
+  const { role, totpEnabled } = useAuth();
   const lifetimeRef = useRef<BatchCommandLifetime>({
     generation: 0,
     token,
@@ -152,14 +155,21 @@ function BatchCommandSession({
     }
 
     const generation = lifetimeRef.current.generation;
+    const sessionGeneration = getAuthSessionGeneration();
     const stillCurrent = () => {
       const current = lifetimeRef.current;
       return current.generation === generation
         && current.open
         && current.token.length > 0
-        && (current.role === "admin" || current.role === "operator");
+        && (current.role === "admin" || current.role === "operator")
+        && !isAuthTransitionActive()
+        && getAuthSessionGeneration() === sessionGeneration;
     };
     if (!stillCurrent()) return;
+    if (sensitiveStepUpBlock({
+      token: lifetimeRef.current.token,
+      totpEnabled,
+    }) !== "ready") return;
 
     setSaving(true);
     setError("");
@@ -222,6 +232,7 @@ function BatchCommandSession({
     onSuccess,
     t,
     withStepUp,
+    totpEnabled,
   ]);
 
   return (
@@ -242,6 +253,7 @@ function BatchCommandSession({
         </Button>
       ) : null}
     >
+      {(role === "admin" || role === "operator") && totpEnabled === false ? <StepUpPrerequisiteNotice /> : null}
       {error && (
         <div id={batchErrorId} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}

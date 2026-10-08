@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
-import { ApiError } from "@/lib/api/core";
+import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
 import type { AssetRef, BackupExportJob } from "@/types/domain";
 
 import {
@@ -75,6 +75,8 @@ function baseOptions(api: BackupAssetExportApi, onRouteChange = vi.fn()) {
     token: "token",
     role: "admin" as const,
     ensureStepUpProof: vi.fn().mockResolvedValue("fresh-proof"),
+    totpEnabled: true,
+    authTransitioning: false,
     onRouteChange,
     api,
   };
@@ -130,6 +132,47 @@ describe("useBackupAssetExport", () => {
 
     expect(result.current.state.error).toBe("secure_transport_required");
     expect(JSON.stringify(result.current.state)).not.toContain("localized");
+  });
+
+  it("does not request an export proof or create when step-up is disabled", async () => {
+    const api: BackupAssetExportApi = {
+      create: vi.fn(),
+      status: vi.fn(),
+      cancel: vi.fn(),
+      issueDownloadTicket: vi.fn(),
+    };
+    const ensureStepUpProof = vi.fn();
+    const { result } = renderHook(() => useBackupAssetExport({
+      ...baseOptions(api),
+      totpEnabled: false,
+      ensureStepUpProof,
+    }));
+    act(() => result.current.open([ref], { count: 1, logicalBytes: 10 }));
+    await act(async () => result.current.create(zipCreateOptions));
+    expect(ensureStepUpProof).not.toHaveBeenCalled();
+    expect(api.create).not.toHaveBeenCalled();
+    expect(result.current.state.error).toBe("totp_required");
+  });
+
+  it("does not submit an export create after the auth generation changes", async () => {
+    const api: BackupAssetExportApi = {
+      create: vi.fn(),
+      status: vi.fn(),
+      cancel: vi.fn(),
+      issueDownloadTicket: vi.fn(),
+    };
+    const ensureStepUpProof = vi.fn(async () => {
+      bumpAuthSessionGeneration();
+      return "stale-proof";
+    });
+    const { result } = renderHook(() => useBackupAssetExport({
+      ...baseOptions(api),
+      ensureStepUpProof,
+    }));
+    act(() => result.current.open([ref], { count: 1, logicalBytes: 10 }));
+    await act(async () => result.current.create(zipCreateOptions));
+    expect(api.create).not.toHaveBeenCalled();
+    expect(result.current.state.error).toBe("auth_transitioning");
   });
 
   it("uses a one-time create proof and replaces estimates with authoritative job totals", async () => {

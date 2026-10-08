@@ -359,6 +359,20 @@ Docker Compose 默认持久化目录：
 
 cron 只按文件 `mtime` 清理（30 天），不读取 `DB_BACKUP_MAX_COUNT`；`DB_BACKUP_MAX_COUNT`（默认 20）只约束管理 API `POST /system/backup-db` 的保留数量。备份脚本 `backup-db.sh` 同时承担两层兜底：备份开始前清理 `output_dir` 中 pid 已消失或超过 24h 的孤儿 `*.tmp.*`（含 SQLite 的 `-journal`/`-wal`/`-shm` 边车文件），并且本次失败不会留下临时文件；SQLite 备份前还会检查目标文件系统可用空间至少为「源库大小 + 64MiB」，不足则直接拒绝并返回非零，不会开始 `.backup`。
 
+系统维护页将 **Web SQLite 快照** 和 **cron 产物观测** 分开展示。Web 快照仅含
+SQLite 数据库，不包含外部配置、当前/历史加密密钥、known_hosts 或远端数据；
+这些材料必须另行保全。Web 列表读取失败可重试，不能把失败当“暂无备份”。
+PostgreSQL 的 Web 自备份不支持提示也不代表没有 cron 数据库备份。
+
+All-in-One 设置 `CRON_DB_BACKUP_DIR=/backup/db`；源码/其他部署默认不观测，
+需要明确配置该进程可读的目录。页面仅显示容器内配置目录，不推断宿主机路径。
+`CRON_DB_BACKUP_MAX_AGE_HOURS` 默认 26，允许正整数 1–8760；无效配置、目录不可读、
+无完整对、扫描超限、未来时间和过期均有独立提示。
+“最近完整备份（由产物推断）”只检查本引擎受管产物及同名 `.sha256` 文件，
+以两者较晚 mtime 判断新鲜度，**未重新校验内容**。
+目录存在或状态 fresh 都不能证明 cron 已启用、作业成功或数据库可恢复；
+仍须按下述步骤执行真实离线恢复核对。
+
 ### 手动备份与恢复
 
 `backup-db.sh` 是 cron 和升级前保全共同使用的唯一数据库备份契约。成功必须同时生成非空数据库产物和同名 `.sha256` 校验文件；任一工具缺失、备份为空或校验文件生成失败都会返回非零。All-in-One 镜像已内置 `sqlite3` 和 PostgreSQL `pg_dump`/`pg_restore` 客户端。

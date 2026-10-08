@@ -62,6 +62,10 @@ func respondBadRequest(c *gin.Context, msg string) {
 	c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: msg, Data: nil})
 }
 
+func respondBadRequestData(c *gin.Context, msg string, data interface{}) {
+	c.JSON(http.StatusBadRequest, Response{Code: http.StatusBadRequest, Message: msg, Data: data})
+}
+
 func respondUnauthorized(c *gin.Context, msg string) {
 	c.JSON(http.StatusUnauthorized, Response{Code: http.StatusUnauthorized, Message: msg, Data: nil})
 }

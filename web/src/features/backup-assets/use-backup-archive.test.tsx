@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError } from "@/lib/api/core";
+import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
 import type {
   AssetRef,
   BackupArchiveIndex,
@@ -77,6 +77,8 @@ describe("useBackupArchive", () => {
     const { result } = renderHook(() => useBackupArchive({
       token: "token",
       role: "operator",
+      totpEnabled: true,
+      authTransitioning: false,
       ref,
       ensureStepUpProof: vi.fn().mockResolvedValue("fresh-proof"),
       api: archiveApi,
@@ -89,6 +91,59 @@ describe("useBackupArchive", () => {
 
     expect(result.current.state.error).toBe("secure_transport_required");
     expect(JSON.stringify(result.current.state)).not.toContain("localized");
+  });
+
+  it("does not request a member download proof when step-up is disabled", async () => {
+    const archiveApi = api();
+    const ensureStepUpProof = vi.fn().mockResolvedValue("fresh-proof");
+    vi.mocked(archiveApi.status).mockResolvedValue(status({
+      state: "ready",
+      failureProduct: null,
+      fallback: { action: null, reason: null },
+    }));
+    const { result } = renderHook(() => useBackupArchive({
+      token: "token",
+      role: "operator",
+      totpEnabled: false,
+      authTransitioning: false,
+      ref,
+      ensureStepUpProof,
+      api: archiveApi,
+      onPrepareDownload: vi.fn(),
+    }));
+    await act(async () => result.current.open());
+    await act(async () => result.current.create(memberId));
+    await act(async () => result.current.download());
+    expect(ensureStepUpProof).not.toHaveBeenCalled();
+    expect(archiveApi.issueTicket).not.toHaveBeenCalled();
+    expect(result.current.state.error).toBe("totp_required");
+  });
+
+  it("does not issue a member ticket after the auth generation changes", async () => {
+    const archiveApi = api();
+    const ensureStepUpProof = vi.fn(async () => {
+      bumpAuthSessionGeneration();
+      return "stale-proof";
+    });
+    vi.mocked(archiveApi.status).mockResolvedValue(status({
+      state: "ready",
+      failureProduct: null,
+      fallback: { action: null, reason: null },
+    }));
+    const { result } = renderHook(() => useBackupArchive({
+      token: "token",
+      role: "operator",
+      totpEnabled: true,
+      authTransitioning: false,
+      ref,
+      ensureStepUpProof,
+      api: archiveApi,
+      onPrepareDownload: vi.fn(),
+    }));
+    await act(async () => result.current.open());
+    await act(async () => result.current.create(memberId));
+    await act(async () => result.current.download());
+    expect(archiveApi.issueTicket).not.toHaveBeenCalled();
   });
 
   it("binds a member job to the returned index revision and one-hop member id", async () => {
@@ -199,6 +254,8 @@ describe("useBackupArchive", () => {
       ({ refValue }) => useBackupArchive({
         token: "token",
         role: "operator",
+      totpEnabled: true,
+      authTransitioning: false,
         ref: refValue,
         ensureStepUpProof,
         api: archiveApi,
@@ -537,6 +594,8 @@ describe("useBackupArchive", () => {
       const { result } = renderHook(() => useBackupArchive({
         token: "token",
         role: "operator",
+      totpEnabled: true,
+      authTransitioning: false,
         ref,
         ensureStepUpProof: vi.fn().mockResolvedValue("fresh-member-proof"),
         api: archiveApi,
@@ -715,6 +774,8 @@ describe("useBackupArchive", () => {
     const { result } = renderHook(() => useBackupArchive({
       token: "token",
       role: "operator",
+      totpEnabled: true,
+      authTransitioning: false,
       ref,
       ensureStepUpProof,
       api: archiveApi,
@@ -749,6 +810,8 @@ describe("useBackupArchive", () => {
       ({ downloadAllowed }) => useBackupArchive({
         token: "token",
         role: "operator",
+      totpEnabled: true,
+      authTransitioning: false,
         ref,
         ensureStepUpProof,
         api: archiveApi,
@@ -792,6 +855,8 @@ describe("useBackupArchive", () => {
       ({ downloadAllowed }) => useBackupArchive({
         token: "token",
         role: "operator",
+      totpEnabled: true,
+      authTransitioning: false,
         ref,
         ensureStepUpProof: vi.fn().mockResolvedValue("fresh-member-proof"),
         api: archiveApi,
@@ -835,6 +900,8 @@ describe("useBackupArchive", () => {
     const { result } = renderHook(() => useBackupArchive({
       token: "token",
       role: "operator",
+      totpEnabled: true,
+      authTransitioning: false,
       ref,
       ensureStepUpProof: vi.fn().mockResolvedValue("fresh-member-proof"),
       api: archiveApi,
@@ -1589,6 +1656,8 @@ describe("useBackupArchive", () => {
     const { result } = renderHook(() => useBackupArchive({
       token: "operator-token",
       role: "operator",
+      totpEnabled: true,
+      authTransitioning: false,
       ref,
       api: archiveApi,
       onPrepareDownload: vi.fn(),

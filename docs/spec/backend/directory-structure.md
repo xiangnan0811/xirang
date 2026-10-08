@@ -37,6 +37,7 @@
 | 路径（相对 `/api/v1`） | 独立边界 |
 | --- | --- |
 | `GET /auth/captcha`、`POST /auth/login`、`POST /auth/2fa/login` | 登录前入口，使用登录限流；登录挑战和二步登录自行校验其证明 |
+| `POST /auth/logout` | 专用 `LogoutMiddleware` 校验签名、主令牌用途、有效期及自身会话绑定，只允许撤销该 JTI；不要求当前账户版本/角色仍相同，以覆盖 TOTP 激活提交后的旧令牌注销。保留审计、API 限流及请求体上限，不授予普通业务访问权限。详见[凭据与访问](../domains/credentials-access.md) |
 | `GET /version` | 公开版本信息；其他版本管理操作不因此公开 |
 | `/asset-content/:deliveryId` 及尾斜杠/不支持方法的拒绝路由 | 内容网关使用自身 cookie/grant/session 授权和安全 recovery；不把 opaque ID 或 Bearer header 当内容权限，错误形状也必须走安全拒绝链。详见[内容交付](../domains/backup-content-delivery.md) |
 | `GET /ws/logs` | WebSocket 首条协议消息验证主 token、当前会话权限及 `tasks:read`，并限制 operator 对象可见性；不是匿名日志流 |

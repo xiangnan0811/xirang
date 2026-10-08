@@ -32,6 +32,13 @@ const { apiClientMock, authRef, withStepUpMock, useStepUpActionMock, oneShotStep
         username: "admin",
         role: "admin" as "admin" | "operator" | "viewer" | null,
         logout: vi.fn(),
+      } as {
+        token: string;
+        username: string;
+        role: "admin" | "operator" | "viewer" | null;
+        logout: () => void;
+        totpEnabled?: boolean;
+        authTransitioning?: boolean;
       },
     },
     withStepUpMock,
@@ -369,6 +376,8 @@ describe("TasksPage", () => {
       token: "test-token",
       username: "admin",
       role: "admin",
+      totpEnabled: true,
+      authTransitioning: false,
       logout: vi.fn(),
     };
     createContext();
@@ -699,6 +708,46 @@ describe("TasksPage", () => {
 
     expect(triggerTaskMock).toHaveBeenCalledWith(102, expect.any(Function));
     expect((triggerTaskMock.mock.calls[0]?.[1] as () => boolean)()).toBe(true);
+  });
+
+  it("does not trigger a task when two-factor authentication is disabled", async () => {
+    authRef.current.totpEnabled = false;
+    const triggerTaskMock = vi.fn().mockResolvedValue(undefined);
+    createContext({ triggerTask: triggerTaskMock });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <TasksPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "触发" })[0]);
+
+    expect(triggerTaskMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: /stepUp.enableTOTP|启用两步验证|Enable two-factor/ })).toHaveAttribute(
+      "href",
+      "/app/settings?tab=account",
+    );
+  });
+
+  it("does not confirm a batch trigger when two-factor authentication is disabled", async () => {
+    authRef.current.totpEnabled = false;
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <TasksPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 手动同步" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择任务 每日备份任务" }));
+    await user.click(screen.getByRole("button", { name: "触发 2 个任务" }));
+
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(apiClientMock.requestTaskBatchTriggerCredentialGrant).not.toHaveBeenCalled();
+    expect(apiClientMock.batchTriggerTasks).not.toHaveBeenCalled();
   });
 
   it("批量触发会先申请任务级授权，再触发任务", async () => {

@@ -8,6 +8,7 @@ import (
 
 	"xirang/backend/internal/model"
 
+	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -48,6 +49,93 @@ func TestJWTManagerRejectsNonCanonicalBase64URLSignature(t *testing.T) {
 	if _, err := manager.ParseToken(strings.Join(parts, ".")); err == nil {
 		t.Fatal("非规范 Base64URL 签名被接受")
 	}
+}
+
+func TestJWTManagerParseLogoutTokenRequiresPrimarySessionBinding(t *testing.T) {
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	primary, err := manager.GenerateToken(model.User{ID: 7, Username: "alice", Role: "admin", TokenVersion: 3})
+	if err != nil {
+		t.Fatalf("generate primary token: %v", err)
+	}
+	claims, err := manager.ParseLogoutToken(primary)
+	if err != nil || claims.UserID != 7 || claims.ID == "" || claims.ExpiresAt == nil {
+		t.Fatalf("primary logout token parse = claims=%+v err=%v", claims, err)
+	}
+
+	stepUp, _, err := manager.GenerateStepUpToken(
+		model.User{ID: 7, Username: "alice", Role: "admin", TokenVersion: 3},
+		StepUpActionTaskManualTrigger,
+	)
+	if err != nil {
+		t.Fatalf("generate step-up token: %v", err)
+	}
+	if _, err := manager.ParseLogoutToken(stepUp); err == nil {
+		t.Fatal("purpose-bound step-up token accepted as logout token")
+	}
+	for _, purpose := range []string{" ", "pending_login", "unknown-purpose"} {
+		t.Run("reject-purpose-"+purpose, func(t *testing.T) {
+			nonPrimary := *claims
+			nonPrimary.Purpose = purpose
+			token, err := manager.signToken(jwt.NewWithClaims(jwt.SigningMethodHS256, nonPrimary))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.ParseLogoutToken(token); err == nil {
+				t.Fatalf("non-primary purpose %q admitted", purpose)
+			}
+		})
+	}
+
+	zeroUser, err := manager.GenerateToken(model.User{Username: "alice", Role: "admin"})
+	if err != nil {
+		t.Fatalf("generate zero-user token: %v", err)
+	}
+	if _, err := manager.ParseLogoutToken(zeroUser); err == nil {
+		t.Fatal("logout token with zero user id accepted")
+	}
+
+	expiredManager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", -time.Hour)
+	expired, err := expiredManager.GenerateToken(model.User{ID: 7, Username: "alice", Role: "admin"})
+	if err != nil {
+		t.Fatalf("generate expired token: %v", err)
+	}
+	if _, err := manager.ParseLogoutToken(expired); err == nil {
+		t.Fatal("expired logout token accepted")
+	}
+	now := time.Now().UTC()
+	invalidJTI := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		UserID: 7,
+		Role:   "admin",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        "not-a-jti",
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+		},
+	})
+	invalidJTIToken, err := manager.signToken(invalidJTI)
+	if err != nil {
+		t.Fatalf("sign invalid-jti token: %v", err)
+	}
+	if _, err := manager.ParseLogoutToken(invalidJTIToken); err == nil {
+		t.Fatal("logout token with invalid jti accepted")
+	}
+
+	missingExpiry := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		UserID: 7,
+		Role:   "admin",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:       strings.Repeat("a", 32),
+			IssuedAt: jwt.NewNumericDate(now),
+		},
+	})
+	missingExpiryToken, err := manager.signToken(missingExpiry)
+	if err != nil {
+		t.Fatalf("sign missing-expiry token: %v", err)
+	}
+	if _, err := manager.ParseLogoutToken(missingExpiryToken); err == nil {
+		t.Fatal("logout token without expiry accepted")
+	}
+
 }
 
 func TestJWTManagerRevokeToken(t *testing.T) {

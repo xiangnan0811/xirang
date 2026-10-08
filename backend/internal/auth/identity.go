@@ -47,8 +47,42 @@ type TOTPSetupResult struct {
 	ExpiresAt    time.Time
 }
 
+type TOTPActivationSession struct {
+	JTI          string
+	UserID       uint
+	Role         string
+	TokenVersion uint
+	ExpiresAt    time.Time
+}
+
 type TOTPVerifyResult struct {
+	Token         string
+	User          model.User
 	RecoveryCodes []string
+}
+
+type TOTPVerifyErrorCode string
+
+const (
+	TOTPCodeInvalidErrorCode        TOTPVerifyErrorCode = "TOTP_CODE_INVALID"
+	TOTPEnrollmentRequiredErrorCode TOTPVerifyErrorCode = "TOTP_ENROLLMENT_REQUIRED"
+	TOTPEnrollmentExpiredErrorCode  TOTPVerifyErrorCode = "TOTP_ENROLLMENT_EXPIRED"
+	TOTPEnrollmentConflictErrorCode TOTPVerifyErrorCode = "TOTP_ENROLLMENT_CONFLICT"
+)
+
+func TOTPVerifyErrorCodeFor(err error) (TOTPVerifyErrorCode, bool) {
+	switch {
+	case errors.Is(err, ErrTOTPCodeInvalid):
+		return TOTPCodeInvalidErrorCode, true
+	case errors.Is(err, ErrTOTPEnrollmentRequired):
+		return TOTPEnrollmentRequiredErrorCode, true
+	case errors.Is(err, ErrTOTPEnrollmentExpired):
+		return TOTPEnrollmentExpiredErrorCode, true
+	case errors.Is(err, ErrTOTPEnrollmentConflict):
+		return TOTPEnrollmentConflictErrorCode, true
+	default:
+		return "", false
+	}
 }
 
 type TOTPLoginResult struct {
@@ -124,6 +158,19 @@ func withIdentityTransaction(ctx context.Context, db *gorm.DB, body func(*gorm.D
 		return errors.New("身份数据库未初始化")
 	}
 	return dbtx.WithSQLiteBusyRetryTx(ctx, db, body)
+}
+
+// withTOTPActivationTransaction deliberately bypasses the shared SQLite busy
+// retry helper. That helper cannot prove rollback before retrying a COMMIT
+// BUSY, which could duplicate activation or lose the replacement token.
+func withTOTPActivationTransaction(ctx context.Context, db *gorm.DB, body func(*gorm.DB) error) error {
+	if db == nil {
+		return errors.New("身份数据库未初始化")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return db.WithContext(ctx).Transaction(body)
 }
 
 // SerializeIdentityMutationLock takes a database-backed serialization lock
@@ -208,9 +255,15 @@ func (s *Service) SetupTOTP(ctx context.Context, userID uint, account string) (*
 	}, nil
 }
 
-func (s *Service) VerifyTOTP(ctx context.Context, userID uint, code, enrollmentID string) (*TOTPVerifyResult, error) {
-	if s == nil || s.db == nil {
-		return nil, errors.New("身份数据库未初始化")
+func (s *Service) VerifyTOTP(ctx context.Context, session TOTPActivationSession, code, enrollmentID string) (*TOTPVerifyResult, error) {
+	if s == nil || s.db == nil || s.jwt == nil {
+		return nil, errors.New("身份认证服务未初始化")
+	}
+	session.JTI = strings.TrimSpace(session.JTI)
+	session.ExpiresAt = session.ExpiresAt.UTC()
+	if session.UserID == 0 || !lowerHexID(session.JTI) || strings.TrimSpace(session.Role) == "" ||
+		session.ExpiresAt.IsZero() || !session.ExpiresAt.After(identityNow(s)) {
+		return nil, ErrSecurityConflict
 	}
 	code = strings.TrimSpace(code)
 	enrollmentID = strings.TrimSpace(enrollmentID)
@@ -223,10 +276,20 @@ func (s *Service) VerifyTOTP(ctx context.Context, userID uint, code, enrollmentI
 
 	var verified TOTPVerifyResult
 	var outcome error
-	err := withIdentityTransaction(ctx, s.db, func(tx *gorm.DB) error {
-		row, err := loadStoredIdentityUser(tx, userID, true)
+	err := withTOTPActivationTransaction(ctx, s.db, func(tx *gorm.DB) error {
+		// There is intentionally no retry around this callback. A COMMIT error
+		// may be post-publication, so its result must remain unknown.
+		verified = TOTPVerifyResult{}
+		outcome = nil
+		if !session.ExpiresAt.After(identityNow(s)) {
+			return ErrSecurityConflict
+		}
+		row, err := loadStoredIdentityUser(tx, session.UserID, true)
 		if err != nil {
 			return err
+		}
+		if row.ID != session.UserID || row.Role != session.Role || row.TokenVersion != session.TokenVersion {
+			return ErrSecurityConflict
 		}
 		user, err := row.user()
 		if err != nil {
@@ -246,7 +309,7 @@ func (s *Service) VerifyTOTP(ctx context.Context, userID uint, code, enrollmentI
 			// prevents abandoned secrets from remaining eligible indefinitely.
 			result := tx.Table("users").Where(
 				"id = ? AND token_version = ? AND totp_enabled = ? AND totp_secret = ? AND totp_enrollment_id = ?",
-				userID, row.TokenVersion, false, row.TOTPSecret, row.TOTPEnrollmentID,
+				session.UserID, row.TokenVersion, false, row.TOTPSecret, row.TOTPEnrollmentID,
 			).Updates(map[string]any{
 				"totp_secret":                "",
 				"totp_enrollment_id":         "",
@@ -258,7 +321,7 @@ func (s *Service) VerifyTOTP(ctx context.Context, userID uint, code, enrollmentI
 			if result.RowsAffected != 1 {
 				return ErrSecurityConflict
 			}
-			if err := deletePendingTokens(tx, userID); err != nil {
+			if err := deletePendingTokens(tx, session.UserID); err != nil {
 				return err
 			}
 			outcome = ErrTOTPEnrollmentExpired
@@ -288,9 +351,23 @@ func (s *Service) VerifyTOTP(ctx context.Context, userID uint, code, enrollmentI
 		if err != nil {
 			return fmt.Errorf("加密恢复码失败: %w", err)
 		}
+
+		activationUser := user
+		activationUser.TOTPEnabled = true
+		activationUser.TokenVersion = row.TokenVersion + 1
+		activationUser.TOTPEnrollmentID = ""
+		activationUser.TOTPEnrollmentExpiresAt = nil
+		token, err := s.jwt.generateActivationToken(activationUser, session)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(token) == "" {
+			return errors.New("签发激活令牌失败")
+		}
+
 		result := tx.Table("users").Where(
 			"id = ? AND token_version = ? AND totp_enabled = ? AND totp_secret = ? AND totp_enrollment_id = ?",
-			userID, row.TokenVersion, false, row.TOTPSecret, row.TOTPEnrollmentID,
+			session.UserID, row.TokenVersion, false, row.TOTPSecret, row.TOTPEnrollmentID,
 		).Updates(map[string]any{
 			"totp_secret":                encryptedSecret,
 			"totp_enabled":               true,
@@ -305,10 +382,14 @@ func (s *Service) VerifyTOTP(ctx context.Context, userID uint, code, enrollmentI
 		if result.RowsAffected != 1 {
 			return ErrSecurityConflict
 		}
-		if err := deletePendingTokens(tx, userID); err != nil {
+		if err := deletePendingTokens(tx, session.UserID); err != nil {
 			return err
 		}
-		verified.RecoveryCodes = recoveryCodes
+		verified = TOTPVerifyResult{
+			Token:         token,
+			User:          activationUser,
+			RecoveryCodes: recoveryCodes,
+		}
 		return nil
 	})
 	if err != nil {
@@ -316,6 +397,9 @@ func (s *Service) VerifyTOTP(ctx context.Context, userID uint, code, enrollmentI
 	}
 	if outcome != nil {
 		return nil, outcome
+	}
+	if strings.TrimSpace(verified.Token) == "" || verified.User.ID == 0 || !verified.User.TOTPEnabled {
+		return nil, errors.New("激活结果无效")
 	}
 	return &verified, nil
 }

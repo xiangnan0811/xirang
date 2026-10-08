@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
@@ -11,16 +12,21 @@ const {
   restoreTaskMock,
   onOpenChangeMock,
   onSuccessMock,
+  authState,
 } = vi.hoisted(() => ({
   ensureStepUpProofMock: vi.fn(),
   requestTaskRestoreCredentialGrantMock: vi.fn(),
   restoreTaskMock: vi.fn(),
   onOpenChangeMock: vi.fn(),
   onSuccessMock: vi.fn(),
+  authState: { totpEnabled: true, authTransitioning: false },
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
+    token: "auth-marker",
+    totpEnabled: authState.totpEnabled,
+    authTransitioning: authState.authTransitioning,
     ensureStepUpProof: ensureStepUpProofMock,
   }),
 }));
@@ -37,6 +43,8 @@ describe("RestoreConfirmDialog", () => {
     vi.clearAllMocks();
     localStorage.clear();
     sessionStorage.clear();
+    authState.totpEnabled = true;
+    authState.authTransitioning = false;
     ensureStepUpProofMock.mockResolvedValue("step-up-marker");
     requestTaskRestoreCredentialGrantMock.mockResolvedValue({ id: 9, status: "active" });
     restoreTaskMock.mockResolvedValue({ runId: 88 });
@@ -44,6 +52,7 @@ describe("RestoreConfirmDialog", () => {
 
   function renderDialog() {
     render(
+      <MemoryRouter>
       <RestoreConfirmDialog
         open
         onOpenChange={onOpenChangeMock}
@@ -53,7 +62,8 @@ describe("RestoreConfirmDialog", () => {
         rsyncTarget="/backup/target"
         token="auth-marker"
         onSuccess={onSuccessMock}
-      />,
+      />
+      </MemoryRouter>,
     );
   }
 
@@ -138,5 +148,22 @@ describe("RestoreConfirmDialog", () => {
     expect(alert).toHaveTextContent("需要临时授权 <script>alert(1)</script>");
     expect(alert.innerHTML).not.toContain("<script>");
     expect(restoreTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("does not request a restore grant when two-factor authentication is disabled", async () => {
+    authState.totpEnabled = false;
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.type(screen.getByLabelText("授权原因"), "恢复误删目录");
+    await user.click(screen.getByRole("button", { name: "申请授权并恢复" }));
+
+    expect(ensureStepUpProofMock).not.toHaveBeenCalled();
+    expect(requestTaskRestoreCredentialGrantMock).not.toHaveBeenCalled();
+    expect(restoreTaskMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: /stepUp.enableTOTP|启用两步验证|Enable two-factor/ })).toHaveAttribute(
+      "href",
+      "/app/settings?tab=account",
+    );
   });
 });

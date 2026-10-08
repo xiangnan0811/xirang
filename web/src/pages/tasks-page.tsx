@@ -21,12 +21,14 @@ import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
+import { sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
 import type { AuthRole } from "@/context/auth-context.shared";
 import { apiClient } from "@/lib/api/client";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { getErrorMessage } from "@/lib/utils";
-import { ApiError, getAuthSessionGeneration } from "@/lib/api/core";
+import { ApiError, getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import type { NewTaskInput, TaskRecord, TaskRunRecord, UpdateTaskInput } from "@/types/domain";
 import { TasksGrid } from "@/pages/tasks-page.grid";
 import type { PendingActionType } from "@/pages/tasks-page.utils";
@@ -133,7 +135,7 @@ export function TasksPage() {
     if (open) createTaskOpenerRef.current = dialogOpenerFromTarget(opener);
     setCreateDialogOpen(open);
   };
-  const { token: authToken, role } = useAuth();
+  const { token: authToken, role, totpEnabled } = useAuth();
   const canWriteTasks = isTaskWriteRole(role);
   const canTriggerTasks = isTaskTriggerRole(role);
   const canManageRsyncVersioning = role === "admin";
@@ -214,6 +216,7 @@ export function TasksPage() {
     mountedRef.current
     && identityGenerationRef.current === generation
     && getAuthSessionGeneration() === sessionGeneration
+    && !isAuthTransitionActive()
     && isTaskTriggerRole(roleRef.current);
 
   const filteredTasks = useMemo(() => {
@@ -389,8 +392,17 @@ export function TasksPage() {
     }
   };
 
+  const protectedTaskBlocked = () => {
+    if (!tokenRef.current) return false;
+    return sensitiveStepUpBlock({
+      token: tokenRef.current,
+      totpEnabled,
+    }) !== "ready";
+  };
+
   const handleTrigger = async (taskId: number) => {
     if (!isTaskTriggerRole(roleRef.current)) return;
+    if (protectedTaskBlocked()) return;
     const generation = identityGenerationRef.current;
     const sessionGeneration = getAuthSessionGeneration();
     const isCurrent = () => triggerStillCurrent(generation, sessionGeneration);
@@ -430,6 +442,7 @@ export function TasksPage() {
 
   const handleRetry = async (taskId: number) => {
     if (!isTaskTriggerRole(roleRef.current)) return;
+    if (protectedTaskBlocked()) return;
     const generation = identityGenerationRef.current;
     const sessionGeneration = getAuthSessionGeneration();
     const isCurrent = () => triggerStillCurrent(generation, sessionGeneration);
@@ -565,6 +578,7 @@ export function TasksPage() {
       toast.error(t("tasks.selectAtLeastOne"));
       return;
     }
+    if (protectedTaskBlocked()) return;
     const generation = identityGenerationRef.current;
     const sessionGeneration = getAuthSessionGeneration();
     const taskIds = [...selectedTaskIds];
@@ -654,6 +668,8 @@ export function TasksPage() {
       />
 
       <TaskRunStatistics tasks={tasks} />
+
+      {canTriggerTasks && totpEnabled === false ? <StepUpPrerequisiteNotice /> : null}
 
       <DataSurface>
         <DataSurfaceToolbar className="space-y-3">

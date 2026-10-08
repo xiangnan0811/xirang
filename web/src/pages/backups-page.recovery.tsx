@@ -22,6 +22,7 @@ import {
 import { RecoveryPlanWizard } from "@/features/backup-assets/recovery-plan-wizard";
 import { useBackupRecovery } from "@/features/backup-assets/use-backup-recovery";
 import { normalizeAppPathname } from "@/lib/backup-navigation";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 
 export function BackupsRecoveryPage() {
   const location = useLocation();
@@ -41,7 +42,7 @@ export function BackupsRecoveryPage() {
 function BackupsRecoveryContent({ route }: { route: BackupAssetsRouteState }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { token, role, userId, ensureStepUpProof } = useAuth();
+  const { token, role, userId, ensureStepUpProof, totpEnabled, authTransitioning } = useAuth();
   const routeToRecovery = useCallback((planId: string | null, jobId: string | null, replace: boolean) => {
     navigate(serializeBackupAssetsRoute({
       ...defaultBackupAssetsRouteState("recovery"),
@@ -71,6 +72,8 @@ function BackupsRecoveryContent({ route }: { route: BackupAssetsRouteState }) {
     planId: route.planId,
     jobId: route.jobId,
     ensureStepUpProof,
+    totpEnabled,
+    authTransitioning,
     onRouteChange: handleRouteChange,
     onDownloadTicket: handleTicket,
   });
@@ -99,6 +102,7 @@ function BackupsRecoveryContent({ route }: { route: BackupAssetsRouteState }) {
     return (
       <div className="min-h-[24rem]" aria-labelledby="backup-assets-recovery-title">
         <h2 id="backup-assets-recovery-title" className="sr-only">{t("backups.recoveryTitle")}</h2>
+        {role === "admin" ? <StepUpPrerequisiteNotice className="mb-3" /> : null}
         <RecoveryPlanWizard
           open
           recovery={recovery}
@@ -123,6 +127,7 @@ function BackupsRecoveryContent({ route }: { route: BackupAssetsRouteState }) {
             headingLevel="h2"
           />
           <DataSurfaceContent className="space-y-4">
+            {role === "admin" ? <StepUpPrerequisiteNotice /> : null}
             <InlineAlert tone="info" title={t("backups.recoveryEvidenceTitle")}>
               {recoveryPointId ? (
                 <div className="space-y-1.5">

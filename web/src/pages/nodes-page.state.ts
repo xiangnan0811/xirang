@@ -22,11 +22,12 @@ import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
+import { sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewNodeInput, NodeConnectionProbeOutcome, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, TaskRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
-import { getAuthSessionGeneration } from "@/lib/api/core";
+import { getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
 
@@ -63,7 +64,7 @@ export function useNodesPageState() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { token, role } = useAuth();
+  const { token, role, totpEnabled } = useAuth();
   const isAdmin = role === "admin";
   const canOperateNodes = role === "admin" || role === "operator";
   const canBrowseNodeFiles = canOperateNodes;
@@ -890,6 +891,7 @@ export function useNodesPageState() {
   const handleEmergencyBackup = async (nodeId: number, nodeName: string) => {
     if (roleRef.current !== "admin" && roleRef.current !== "operator") return;
     if (!token || emergencyOperationRef.current !== 0) return;
+    if (sensitiveStepUpBlock({ token, totpEnabled }) !== "ready") return;
     const operationId = emergencyOperationRef.current + 1;
     emergencyOperationRef.current = operationId;
     const sessionGeneration = getAuthSessionGeneration();
@@ -900,6 +902,7 @@ export function useNodesPageState() {
       && emergencyOperationRef.current === operationId
       && getAuthSessionGeneration() === sessionGeneration
       && authEpochRef.current === authEpoch
+      && !isAuthTransitionActive()
       && (roleRef.current === "admin" || roleRef.current === "operator");
 
     try {
@@ -975,6 +978,7 @@ export function useNodesPageState() {
   return {
     // auth
     token,
+    totpEnabled,
     isAdmin,
     canOperateNodes,
     canBrowseNodeFiles,

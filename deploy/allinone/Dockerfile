@@ -65,7 +65,7 @@ RUN apk add --no-cache \
       openssh-client=10.2_p1-r0 \
       sqlite=3.53.4-r0 \
       bash=5.3.3-r1 \
-      tzdata=2026d-r0 \
+      tzdata=2026e-r0 \
       postgresql18-client=18.6-r0
 
 COPY --from=supercronic-builder /out/supercronic /usr/local/bin/supercronic
@@ -97,6 +97,7 @@ RUN chmod +x /usr/local/bin/backup-db.sh /entrypoint.sh /usr/local/bin/xirang-rs
 ENV SERVER_ADDR=:3000
 ENV DB_TYPE=sqlite
 ENV SQLITE_PATH=/data/xirang.db
+ENV CRON_DB_BACKUP_DIR=/backup/db
 # known_hosts 默认存放在持久化卷，容器重启不丢失
 ENV SSH_KNOWN_HOSTS_PATH=/data/.ssh/known_hosts
 ENV LOG_FILE=/logs/xirang.log

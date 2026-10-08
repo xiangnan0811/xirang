@@ -753,10 +753,17 @@ export interface SSHKeyRecord extends SSHKeyScopeFields {
   keyType: SSHKeyType;
   privateKey?: string;
   publicKey?: string;
+  publicKeyFingerprint?: string;
   fingerprint: string;
   broadScope: boolean;
   createdAt: string;
   lastUsedAt?: string;
+}
+
+export interface SSHKeyPreview {
+  keyType: Exclude<SSHKeyType, "auto">;
+  publicKey: string;
+  publicKeyFingerprint: string;
 }
 
 export interface NewSSHKeyInput extends SSHKeyScopeFields {
@@ -2293,4 +2300,38 @@ export interface RecoveryPointDiff {
   items: RecoveryPointDiffItem[];
   nextCursor: string | null;
   providerEvidence: RecoveryPointDiffProviderEvidence;
+}
+
+export type ConfigImportEntity = "nodes" | "ssh_keys" | "policies" | "tasks" | "system_settings";
+export type ConfigImportWarningCode =
+  | "invalid_input"
+  | "invalid_scope"
+  | "unresolved_node_scope"
+  | "invalid_private_key"
+  | "missing_private_key"
+  | "missing_password"
+  | "missing_inline_private_key"
+  | "unresolved_ssh_key";
+
+export interface ConfigImportWarning {
+  entity: ConfigImportEntity;
+  index: number;
+  name?: string;
+  code: ConfigImportWarningCode;
+}
+
+export interface ConfigImportResult {
+  nodes: number;
+  sshKeys: number;
+  policies: number;
+  tasks: number;
+  systemSettings: number;
+  imported: number;
+  skipped: number;
+  created: number;
+  updated: number;
+  rejected: number;
+  disabledImported: number;
+  warnings: ConfigImportWarning[];
+  warningsTruncated: number;
 }

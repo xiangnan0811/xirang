@@ -1,11 +1,13 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { STEP_UP_ACTIONS } from "@/lib/step-up-storage";
 
-import { recoveryPoint, repository } from "./__tests__/test-utils";
+import { recoveryPoint, renderBackupSurface, repository } from "./__tests__/test-utils";
 import { RetentionPolicyPanel } from "./retention-policy-panel";
+
+const render = renderBackupSurface;
 
 const { apiClientMock } = vi.hoisted(() => ({
   apiClientMock: {
@@ -114,7 +116,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[{ status: "available", value: recoveryPoint }]}
         selectedRecoveryPointId={recoveryPoint.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof }}
         onRefresh={onRefresh}
         api={api}
       />,
@@ -161,6 +163,49 @@ describe("RetentionPolicyPanel", () => {
     expect(document.body.textContent).not.toMatch(/locator|PRIVATE|rule_digest/i);
   });
 
+  it("shows the account link and does not purge when step-up is disabled", async () => {
+    const user = userEvent.setup();
+    const ensureStepUpProof = vi.fn();
+    const api = {
+      listRetentionPolicies: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+      previewRepositoryPurge: vi.fn().mockResolvedValue({
+        status: "available",
+        value: {
+          repositoryId: repository.id,
+          impactRevision: 11,
+          selectedCount: 1,
+          holdCount: 0,
+          leaseCount: 0,
+          wormCount: 0,
+          points: [{ recoveryPointId: recoveryPoint.id, pointRevision: 3, capabilityRevision: 5 }],
+        },
+      }),
+      createRepositoryPurgePlan: vi.fn(),
+      executeRepositoryPurge: vi.fn(),
+    };
+    renderBackupSurface(
+      <RetentionPolicyPanel
+        repositories={[{ status: "available", value: repository }]}
+        recoveryPoints={[{ status: "available", value: recoveryPoint }]}
+        selectedRecoveryPointId={recoveryPoint.id}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: false, authTransitioning: false, ensureStepUpProof }}
+        api={api}
+      />,
+      { token: "admin-token", totpEnabled: false, authTransitioning: false },
+    );
+    expect(await screen.findByRole("link", { name: /Enable two-factor authentication|启用两步验证/ })).toHaveAttribute(
+      "href",
+      "/app/settings?tab=account",
+    );
+    await user.click(screen.getByRole("button", { name: /Preview purge|预览清理/ }));
+    await user.type(await screen.findByLabelText(/Type selected count|输入选中数量/), "1");
+    await user.type(screen.getByLabelText(/Purge reason|清理原因/), "approved-purge");
+    await user.click(screen.getByRole("button", { name: /Execute purge|执行清理/ }));
+    expect(ensureStepUpProof).not.toHaveBeenCalled();
+    expect(api.createRepositoryPurgePlan).not.toHaveBeenCalled();
+    expect(api.executeRepositoryPurge).not.toHaveBeenCalled();
+  });
+
   it("creates a legal hold and releases it with an isolated proof", async () => {
     const user = userEvent.setup();
     const ensureStepUpProof = vi.fn().mockResolvedValue("hold-proof");
@@ -204,7 +249,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[{ status: "available", value: recoveryPoint }]}
         selectedRecoveryPointId={recoveryPoint.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof }}
         onRefresh={onRefresh}
         api={api}
       />,
@@ -274,7 +319,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[{ status: "available", value: recoveryPoint }]}
         selectedRecoveryPointId={recoveryPoint.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof }}
         api={api}
       />,
     );
@@ -305,7 +350,7 @@ describe("RetentionPolicyPanel", () => {
       <RetentionPolicyPanel
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[{ status: "available", value: recoveryPoint }]}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -335,7 +380,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -393,7 +438,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -463,7 +508,7 @@ describe("RetentionPolicyPanel", () => {
         recoveryPoints={[{ status: "available", value: recoveryPoint }]}
         selectedRepositoryId={repository.id}
         selectedRecoveryPointId={recoveryPoint.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn().mockResolvedValue("purge-proof") }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn().mockResolvedValue("purge-proof") }}
         api={api}
       />,
     );
@@ -505,7 +550,7 @@ describe("RetentionPolicyPanel", () => {
       <RetentionPolicyPanel
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
       />,
     );
     await user.click(await screen.findByRole("button", { name: /Preview impact|预览影响/ }));
@@ -539,7 +584,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[{ status: "available", value: recoveryPoint }, { status: "available", value: otherPoint }]}
         selectedRecoveryPointId={otherPoint.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -580,7 +625,7 @@ describe("RetentionPolicyPanel", () => {
       <RetentionPolicyPanel
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[{ status: "available", value: recoveryPoint }, { status: "available", value: otherPoint }]}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -677,7 +722,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[{ status: "available", value: recoveryPoint }]}
         selectedRecoveryPointId={recoveryPoint.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn().mockResolvedValue("hold-proof") }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn().mockResolvedValue("hold-proof") }}
         api={api}
       />,
     );
@@ -745,7 +790,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -802,7 +847,7 @@ describe("RetentionPolicyPanel", () => {
       <RetentionPolicyPanel
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[{ status: "available", value: recoveryPoint }]}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -833,7 +878,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }, { status: "available", value: otherRepository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -857,7 +902,7 @@ describe("RetentionPolicyPanel", () => {
       <RetentionPolicyPanel
         repositories={[{ status: "available", value: repository }, { status: "available", value: otherRepository }]}
         recoveryPoints={[]}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={{
           listRetentionPolicies: vi.fn().mockResolvedValue({
             items: [
@@ -902,7 +947,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -956,7 +1001,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -992,7 +1037,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -1026,7 +1071,7 @@ describe("RetentionPolicyPanel", () => {
           { status: "available", value: mutableHead },
         ]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -1081,7 +1126,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -1157,7 +1202,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: dualLinkRepository }]}
         recoveryPoints={[]}
         selectedRepositoryId={dualLinkRepository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -1192,7 +1237,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );
@@ -1263,7 +1308,7 @@ describe("RetentionPolicyPanel", () => {
         repositories={[{ status: "available", value: repository }]}
         recoveryPoints={[]}
         selectedRepositoryId={repository.id}
-        runtime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        runtime={{ token: "admin-token", role: "admin", totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn() }}
         api={api}
       />,
     );

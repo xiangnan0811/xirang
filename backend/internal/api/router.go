@@ -440,6 +440,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	} {
 		v1.Handle(method, "/asset-content/:deliveryId/", contentRouteHandlers...)
 	}
+	v1.POST("/auth/logout",
+		middleware.LogoutMiddleware(dep.JWTManager),
+		middleware.AuditLogger(dep.DB),
+		middleware.APIRateLimit(200, time.Minute),
+		middleware.MaxBodySize(20<<20),
+		authHandler.Logout,
+	)
 	secured := v1.Group("")
 	secured.Use(middleware.AuthMiddleware(dep.JWTManager, dep.DB))
 	secured.Use(middleware.AuditLogger(dep.DB))
@@ -447,7 +454,6 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.Use(middleware.MaxBodySize(20 << 20)) // 20 MB
 	secured.GET("/me", authHandler.Me)
 	secured.POST("/me/onboarded", authHandler.CompleteOnboarding)
-	secured.POST("/auth/logout", authHandler.Logout)
 	secured.POST("/auth/change-password", authHandler.ChangePassword)
 	secured.POST("/auth/2fa/setup", authHandler.TOTPSetup)
 	secured.POST("/auth/2fa/verify", authHandler.TOTPVerify)
@@ -648,6 +654,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/ssh-keys", middleware.ETag(), middleware.RBAC("ssh_keys:read"), sshKeyHandler.List)
 	secured.POST("/ssh-keys", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Create)
+	secured.POST("/ssh-keys/preview", middleware.RequireRole("admin"), middleware.RBAC("ssh_keys:write"), sshKeyHandler.Preview)
 	secured.POST("/ssh-keys/batch", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchCreate)
 	secured.POST("/ssh-keys/batch-delete", middleware.RBAC("ssh_keys:write"), sshKeyHandler.BatchDelete)
 	secured.GET("/ssh-keys/export", middleware.RBAC("ssh_keys:read"), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionSSHKeyExport, sshutil.PurposeSSHKeyExport, "ssh_export"), sshKeyHandler.Export)
@@ -797,6 +804,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/version/check", middleware.RequireRole("admin"), versionHandler.Check)
 	secured.POST("/system/backup-db", middleware.RequireRole("admin"), systemHandler.BackupDB)
 	secured.GET("/system/backups", middleware.RequireRole("admin"), systemHandler.ListBackups)
+	secured.GET("/system/cron-backup-status", middleware.RequireRole("admin"), systemHandler.CronBackupStatus)
 	secured.GET("/system/encryption-status", middleware.RequireRole("admin"), systemHandler.EncryptionStatus)
 	secured.POST("/system/verify-mount", middleware.RequireRole("admin"), storageGuideHandler.VerifyMount)
 

@@ -1,16 +1,19 @@
 import type { FC, FormEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { ApiError, getAuthSessionGeneration, isStepUpRequiredError } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import { assertStepUpPrerequisite, StepUpPrerequisiteError } from "@/lib/step-up-prerequisite";
+import { cn } from "@/lib/utils";
 import { ReconnectingSocket } from "@/lib/ws/reconnecting-socket";
 
 // Terminal color palette is intentionally decoupled from the Xirang site
@@ -52,6 +55,16 @@ const TERMINAL_GRANT_MAX_REASON_LENGTH = 240;
 const TERMINAL_GRANT_TTL_SECONDS = 600;
 const FRESH_TERMINAL_PROOF = { persist: false, reuseCached: false } as const;
 
+type ConnectionStatus = "idle" | "connecting" | "connected" | "ended" | "failed";
+type SummaryTone = "info" | "critical";
+type AttemptMode = "initial" | "manual" | "handoff";
+type AdmissionKind = "cancel" | "prerequisite" | "failed";
+
+type TerminalSummary = {
+  copyText: string;
+  tone: SummaryTone;
+};
+
 type PendingGrantRequest = {
   message: string;
 };
@@ -71,13 +84,30 @@ type TerminalProofHandoff = {
   authGeneration: number;
   operationId: number;
   proof: string;
-  preserveAcrossRetry: boolean;
+};
+
+type AttemptBinding = {
+  id: number;
+  nodeId: number;
+  token: string;
+  authGeneration: number;
 };
 
 type WebTerminalProps = {
   nodeId: number;
   token: string;
-  onDisconnect?: () => void;
+};
+
+type ClosePresentation = {
+  status: "ended" | "failed";
+  tone: SummaryTone;
+  key:
+    | "terminal.connectionEnded"
+    | "terminal.networkInterrupted"
+    | "terminal.nodeUnavailable"
+    | "terminal.connectionFailed"
+    | "terminal.reverificationRequired"
+    | "terminal.connectionEndedGeneric";
 };
 
 function isTerminalGrantClose(event: Pick<CloseEvent, "code" | "reason">): boolean {
@@ -93,45 +123,142 @@ function terminalGrantMessage(reason: string, fallback: string): string {
   return safeDetail ? fallback + ` (${safeDetail})` : fallback;
 }
 
-const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
+function closePresentation(code: number): ClosePresentation {
+  switch (code) {
+    case 1000:
+    case 1001:
+      return { status: "ended", tone: "info", key: "terminal.connectionEnded" };
+    case 1006:
+      return { status: "failed", tone: "critical", key: "terminal.networkInterrupted" };
+    case 1007:
+      return { status: "failed", tone: "critical", key: "terminal.nodeUnavailable" };
+    case 1011:
+      return { status: "failed", tone: "critical", key: "terminal.connectionFailed" };
+    case 1008:
+      return { status: "failed", tone: "critical", key: "terminal.reverificationRequired" };
+    default:
+      return { status: "ended", tone: "info", key: "terminal.connectionEndedGeneric" };
+  }
+}
+
+const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token }) => {
   const { t } = useTranslation();
-  const { ensureStepUpProof, clearStepUpProof } = useAuth();
+  const { ensureStepUpProof, clearStepUpProof, totpEnabled, authTransitioning } = useAuth();
   const authGeneration = getAuthSessionGeneration();
   const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const handoffRef = useRef<TerminalProofHandoff | null>(null);
   const operationRef = useRef<TerminalGrantOperation | null>(null);
   const operationSeqRef = useRef(0);
+  const attemptSeqRef = useRef(0);
+  const attemptRef = useRef<AttemptBinding | null>(null);
+  const attemptLockRef = useRef(false);
+  const socketRef = useRef<ReconnectingSocket | null>(null);
+  const authSentRef = useRef(false);
+  const connectionProofRef = useRef("");
   const mountedRef = useRef(true);
-  const grantBindingRef = useRef({ nodeId, token, authGeneration });
-  const [retryNonce, setRetryNonce] = useState(0);
+  const sessionAliveRef = useRef(false);
+  const terminalReadyRef = useRef(false);
+  const initialStartedRef = useRef(false);
+  const sessionGenerationRef = useRef(authGeneration);
+  const previousIdentityRef = useRef({ nodeId, token });
+  const canSendFramesRef = useRef<() => boolean>(() => false);
+  const beginAttemptRef = useRef<(mode: AttemptMode) => void>(() => {});
+  const suppressGrantDismissRef = useRef(false);
+  const resizeRef = useRef<() => void>(() => {});
+  const ensureStepUpProofRef = useRef(ensureStepUpProof);
+  const clearStepUpProofRef = useRef(clearStepUpProof);
+  const totpEnabledRef = useRef(totpEnabled);
+  const authTransitioningRef = useRef(authTransitioning);
+  const tRef = useRef(t);
+  const openGrantDialogRef = useRef<(message: string) => void>(() => {});
+  const showSummaryRef = useRef<(tone: SummaryTone, message: string, code?: number) => void>(() => {});
+  const statusRef = useRef<ConnectionStatus>("idle");
+
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("idle");
+  const [summary, setSummary] = useState<TerminalSummary | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [pendingGrant, setPendingGrant] = useState<PendingGrantRequest | null>(null);
   const [grantReason, setGrantReason] = useState("");
   const [grantError, setGrantError] = useState<string | null>(null);
   const [grantSubmitting, setGrantSubmitting] = useState(false);
+  const grantOpenRef = useRef(false);
+
+  const setStatus = (next: ConnectionStatus) => {
+    statusRef.current = next;
+    setConnectionStatus(next);
+  };
+
+  const releaseSockets = () => {
+    attemptSeqRef.current += 1;
+    attemptRef.current = null;
+    attemptLockRef.current = false;
+    authSentRef.current = false;
+    connectionProofRef.current = "";
+    handoffRef.current = null;
+    operationRef.current = null;
+    const current = socketRef.current;
+    socketRef.current = null;
+    current?.close();
+  };
+
+  const canSendFrames = useCallback(() => {
+    const attempt = attemptRef.current;
+    return mountedRef.current
+      && sessionAliveRef.current
+      && statusRef.current === "connected"
+      && authSentRef.current
+      && totpEnabledRef.current
+      && !authTransitioningRef.current
+      && attempt !== null
+      && attempt.nodeId === nodeId
+      && attempt.token === token
+      && getAuthSessionGeneration() === attempt.authGeneration;
+  }, [nodeId, token]);
 
   const openGrantDialog = useCallback((message: string) => {
+    suppressGrantDismissRef.current = false;
     setPendingGrant({ message });
     setGrantReason("");
     setGrantError(null);
   }, []);
 
-  // 父页面轮询会重渲染，nodes-page 的 onDisconnect 是内联函数；鉴权 helper 与 t 的身份也可能变。
-  // 这些只在连接事件里读取。放进连接 effect 依赖会在授权弹窗仍打开时拆掉 socket 并重新请求 OTP。
-  const onDisconnectRef = useRef(onDisconnect);
-  const ensureStepUpProofRef = useRef(ensureStepUpProof);
-  const clearStepUpProofRef = useRef(clearStepUpProof);
-  const openGrantDialogRef = useRef(openGrantDialog);
-  const tRef = useRef(t);
-
-  useEffect(() => {
-    onDisconnectRef.current = onDisconnect;
+  useLayoutEffect(() => {
+    grantOpenRef.current = pendingGrant !== null;
     ensureStepUpProofRef.current = ensureStepUpProof;
     clearStepUpProofRef.current = clearStepUpProof;
-    openGrantDialogRef.current = openGrantDialog;
+    totpEnabledRef.current = totpEnabled;
+    authTransitioningRef.current = authTransitioning;
     tRef.current = t;
-  }, [clearStepUpProof, ensureStepUpProof, onDisconnect, openGrantDialog, t]);
+    openGrantDialogRef.current = openGrantDialog;
+    canSendFramesRef.current = canSendFrames;
+    showSummaryRef.current = (tone, message, code) => {
+      const copyText = typeof code === "number" ? `${message} (${code})` : message;
+      const next = tone === "critical" ? "failed" : "ended";
+      statusRef.current = next;
+      setConnectionStatus(next);
+      setSummary({ copyText, tone });
+      setCopyFailed(false);
+      const color = tone === "critical" ? "31" : "33";
+      terminalRef.current?.write(`\r\n\x1b[${color}m${copyText}\x1b[0m\r\n`);
+    };
+  }, [
+    authTransitioning,
+    canSendFrames,
+    clearStepUpProof,
+    ensureStepUpProof,
+    openGrantDialog,
+    pendingGrant,
+    t,
+    totpEnabled,
+  ]);
 
   const closeGrantDialog = useCallback(() => {
+    if (suppressGrantDismissRef.current) {
+      suppressGrantDismissRef.current = false;
+      return;
+    }
     if (grantSubmitting) {
       return;
     }
@@ -143,12 +270,27 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
     if (currentOperation) {
       operationRef.current = { ...currentOperation, proof: "" };
     }
+    connectionProofRef.current = "";
+    const message = tRef.current("terminal.grantCancelled");
+    showSummaryRef.current("info", message);
   }, [grantSubmitting]);
+
+  const copySummary = async () => {
+    if (!summary) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(summary.copyText);
+      setCopyFailed(false);
+    } catch {
+      setCopyFailed(true);
+    }
+  };
 
   const handleGrantSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const op = operationRef.current;
-    if (!op || !pendingGrant) {
+    if (!op || !pendingGrant || authTransitioningRef.current || !totpEnabledRef.current) {
       return;
     }
     const reason = grantReason.trim();
@@ -167,6 +309,9 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
     const submitToken = op.token;
     const stillCurrent = () =>
       mountedRef.current
+      && sessionAliveRef.current
+      && !authTransitioningRef.current
+      && totpEnabledRef.current
       && operationRef.current?.id === activeOpId
       && operationRef.current.nodeId === submitNodeId
       && operationRef.current.token === submitToken
@@ -178,6 +323,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
     setGrantSubmitting(true);
     setGrantError(null);
     try {
+      assertStepUpPrerequisite(submitToken, totpEnabledRef.current);
       let proof = op.proof;
       if (!proof) {
         const generationNow = getAuthSessionGeneration();
@@ -221,6 +367,7 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
         if (!isStepUpRequiredError(error)) {
           throw error;
         }
+        assertStepUpPrerequisite(submitToken, totpEnabledRef.current);
         const freshProof = await ensureStepUpProof(STEP_UP_ACTIONS.terminalOpen, FRESH_TERMINAL_PROOF);
         if (!stillCurrent()) {
           return;
@@ -247,7 +394,6 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
         authGeneration: activeGeneration,
         operationId: activeOpId,
         proof,
-        preserveAcrossRetry: true,
       };
       const succeeded = operationRef.current;
       if (!succeeded) {
@@ -258,12 +404,13 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
         proof,
         grantContinuation: false,
       };
+      suppressGrantDismissRef.current = true;
       setPendingGrant(null);
       setGrantReason("");
       setGrantError(null);
-      setRetryNonce((value) => value + 1);
+      beginAttemptRef.current("handoff");
     } catch (error) {
-      if (!stillCurrent()) {
+      if (error instanceof StepUpPrerequisiteError || !stillCurrent()) {
         return;
       }
       const failedOperation = operationRef.current;
@@ -289,332 +436,497 @@ const WebTerminal: FC<WebTerminalProps> = ({ nodeId, token, onDisconnect }) => {
   }, []);
 
   useEffect(() => {
-    const previous = grantBindingRef.current;
-    grantBindingRef.current = { nodeId, token, authGeneration };
-    if (previous.nodeId === nodeId && previous.token === token && previous.authGeneration === authGeneration) {
-      return;
-    }
-    const generation = getAuthSessionGeneration();
-    const handoff = handoffRef.current;
-    if (handoff && (handoff.nodeId !== nodeId || handoff.token !== token || handoff.authGeneration !== generation)) {
-      handoffRef.current = null;
-    }
-    const op = operationRef.current;
-    if (op && (op.nodeId !== nodeId || op.token !== token || op.authGeneration !== generation)) {
-      operationRef.current = null;
-    }
-    setPendingGrant(null);
-    setGrantReason("");
-    setGrantError(null);
-    setGrantSubmitting(false);
-  }, [authGeneration, nodeId, token]);
-
-  useEffect(() => {
-    if (!containerRef.current) {
-      return;
-    }
-
     const nodeIdAtStart = nodeId;
     const tokenAtStart = token;
-    const generationAtStart = authGeneration;
     let active = true;
-    let terminal: Terminal | null = null;
-    let fitAddon: FitAddon | null = null;
-    let socket: ReconnectingSocket | null = null;
-    let resizeObserver: ResizeObserver | null = null;
-    let sendResize: (() => void) | null = null;
-    let connectionProof = "";
-    let authSent = false;
-    let admissionError: string | null = null;
-    let suppressSocketClose = false;
-
-    const existingHandoff = handoffRef.current;
-    const handoffMatches = Boolean(
-      existingHandoff
-      && existingHandoff.nodeId === nodeIdAtStart
-      && existingHandoff.token === tokenAtStart
-      && existingHandoff.authGeneration === generationAtStart
-      && existingHandoff.proof,
-    );
-    let operationId: number;
-    if (handoffMatches && existingHandoff) {
-      operationId = existingHandoff.operationId;
-      operationRef.current = {
-        id: operationId,
-        nodeId: nodeIdAtStart,
-        token: tokenAtStart,
-        authGeneration: generationAtStart,
-        proof: existingHandoff.proof,
-        grantContinuation: false,
-      };
-    } else {
-      if (handoffRef.current?.nodeId === nodeIdAtStart && handoffRef.current.token === tokenAtStart) {
-        handoffRef.current = null;
-      }
-      operationId = operationSeqRef.current + 1;
-      operationSeqRef.current = operationId;
-      operationRef.current = {
-        id: operationId,
-        nodeId: nodeIdAtStart,
-        token: tokenAtStart,
-        authGeneration: generationAtStart,
-        proof: "",
-        grantContinuation: false,
-      };
+    const previousIdentity = previousIdentityRef.current;
+    const identityChanged = previousIdentity.nodeId !== nodeId || previousIdentity.token !== token;
+    const sessionNotStarted = !initialStartedRef.current;
+    previousIdentityRef.current = { nodeId, token };
+    sessionAliveRef.current = true;
+    suppressGrantDismissRef.current = grantOpenRef.current;
+    initialStartedRef.current = false;
+    terminalReadyRef.current = false;
+    if (identityChanged || sessionNotStarted) {
+      setStatus("idle");
+      setSummary(null);
+      setCopyFailed(false);
+      setPendingGrant(null);
+      setGrantReason("");
+      setGrantError(null);
+      setGrantSubmitting(false);
     }
 
-    const isCurrent = () =>
-      active
-      && mountedRef.current
-      && operationRef.current?.id === operationId
-      && operationRef.current.nodeId === nodeIdAtStart
-      && operationRef.current.token === tokenAtStart
-      && getAuthSessionGeneration() === generationAtStart;
+    const isAttemptCurrent = (attemptId: number) => {
+      const attempt = attemptRef.current;
+      return active
+        && sessionAliveRef.current
+        && mountedRef.current
+        && attempt?.id === attemptId
+        && attempt.nodeId === nodeIdAtStart
+        && attempt.token === tokenAtStart
+        && getAuthSessionGeneration() === attempt.authGeneration
+        && !authTransitioningRef.current;
+    };
 
-    // 将所有初始化延迟到下一个事件循环，跳过 React StrictMode 的首次 mount→cleanup 循环。
-    // StrictMode 的 cleanup 会同步执行并 clearTimeout，因此首次 mount 不会创建任何资源。
-    // 这避免了 terminal.open() 抢占焦点→StrictMode dispose→焦点逃逸→Radix Dialog 关闭的问题。
-    const timerId = setTimeout(() => {
-      if (!active || !containerRef.current) {
+    const beginAttempt = (mode: AttemptMode) => {
+      if (!active || !sessionAliveRef.current || !mountedRef.current) {
+        return;
+      }
+      if (attemptLockRef.current) {
+        return;
+      }
+      const generationNow = getAuthSessionGeneration();
+      if (mode === "initial" && generationNow !== sessionGenerationRef.current) {
+        return;
+      }
+      if (!totpEnabledRef.current || authTransitioningRef.current) {
+        if (mode === "handoff") {
+          handoffRef.current = null;
+        }
+        return;
+      }
+      try {
+        assertStepUpPrerequisite(tokenAtStart, totpEnabledRef.current);
+      } catch (error) {
+        if (mode === "handoff") {
+          handoffRef.current = null;
+        }
+        if (error instanceof StepUpPrerequisiteError) {
+          return;
+        }
+        showSummaryRef.current("critical", tRef.current("terminal.stepUpFailed"));
         return;
       }
 
-      terminal = new Terminal({
+      let consumedProof = "";
+      let operationId = 0;
+      let grantContinuation = false;
+      if (mode === "handoff") {
+        const handoff = handoffRef.current;
+        const matches = Boolean(
+          handoff
+          && handoff.nodeId === nodeIdAtStart
+          && handoff.token === tokenAtStart
+          && handoff.authGeneration === generationNow
+          && handoff.proof,
+        );
+        handoffRef.current = null;
+        if (!matches || !handoff) {
+          return;
+        }
+        consumedProof = handoff.proof;
+        operationId = handoff.operationId;
+        grantContinuation = true;
+        operationRef.current = {
+          id: operationId,
+          nodeId: nodeIdAtStart,
+          token: tokenAtStart,
+          authGeneration: generationNow,
+          proof: consumedProof,
+          grantContinuation: true,
+        };
+      } else {
+        handoffRef.current = null;
+        operationId = operationSeqRef.current + 1;
+        operationSeqRef.current = operationId;
+        operationRef.current = {
+          id: operationId,
+          nodeId: nodeIdAtStart,
+          token: tokenAtStart,
+          authGeneration: generationNow,
+          proof: "",
+          grantContinuation: false,
+        };
+      }
+
+      attemptLockRef.current = true;
+      const attemptId = attemptSeqRef.current + 1;
+      attemptSeqRef.current = attemptId;
+      attemptRef.current = {
+        id: attemptId,
+        nodeId: nodeIdAtStart,
+        token: tokenAtStart,
+        authGeneration: generationNow,
+      };
+      sessionGenerationRef.current = generationNow;
+      authSentRef.current = false;
+      connectionProofRef.current = "";
+      const previous = socketRef.current;
+      socketRef.current = null;
+      previous?.close();
+
+      if (mode === "manual") {
+        terminalRef.current?.write(`\r\n\x1b[33m${tRef.current("terminal.sessionSeparator")}\x1b[0m\r\n`);
+      }
+      setSummary(null);
+      setCopyFailed(false);
+      setStatus("connecting");
+
+      let admissionKind: AdmissionKind | null = null;
+      let ignoreClose = false;
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsURL = `${protocol}//${window.location.host}/api/v1/ws/terminal?node_id=${nodeIdAtStart}`;
+      const socket = new ReconnectingSocket({
+        url: wsURL,
+        binaryType: "arraybuffer",
+        autoReconnect: false,
+        heartbeatIntervalMs: 0,
+        beforeConnect: async () => {
+          if (!isAttemptCurrent(attemptId)) {
+            throw new Error("stale-terminal-admission");
+          }
+          try {
+            assertStepUpPrerequisite(tokenAtStart, totpEnabledRef.current);
+          } catch (error) {
+            if (error instanceof StepUpPrerequisiteError) {
+              admissionKind = "prerequisite";
+            }
+            throw error;
+          }
+          if (grantContinuation) {
+            if (!consumedProof || !isAttemptCurrent(attemptId)) {
+              throw new Error("stale-terminal-admission");
+            }
+            connectionProofRef.current = consumedProof;
+            operationRef.current = {
+              id: operationId,
+              nodeId: nodeIdAtStart,
+              token: tokenAtStart,
+              authGeneration: generationNow,
+              proof: consumedProof,
+              grantContinuation: true,
+            };
+            return;
+          }
+          clearStepUpProofRef.current(STEP_UP_ACTIONS.terminalOpen);
+          try {
+            const proof = await ensureStepUpProofRef.current(STEP_UP_ACTIONS.terminalOpen, FRESH_TERMINAL_PROOF);
+            if (!isAttemptCurrent(attemptId)) {
+              throw new Error("stale-terminal-admission");
+            }
+            connectionProofRef.current = proof;
+            const currentOperation = operationRef.current;
+            if (currentOperation?.id === operationId) {
+              operationRef.current = { ...currentOperation, proof, grantContinuation: false };
+            }
+          } catch (error) {
+            if (isAttemptCurrent(attemptId)) {
+              const message = error instanceof Error ? error.message : "";
+              admissionKind = message === tRef.current("stepUp.cancelled") ? "cancel" : "failed";
+            }
+            throw error instanceof Error ? error : new Error(tRef.current("terminal.stepUpFailed"));
+          }
+        },
+        onOpen: (ws) => {
+          if (attemptRef.current?.id !== attemptId) {
+            return;
+          }
+          const proof = connectionProofRef.current;
+          if (!isAttemptCurrent(attemptId) || !proof) {
+            attemptLockRef.current = false;
+            authSentRef.current = false;
+            return;
+          }
+          ws.send(JSON.stringify({ type: "auth", token: tokenAtStart, step_up_proof: proof }));
+          authSentRef.current = true;
+          attemptLockRef.current = false;
+          setSummary(null);
+          setStatus("connected");
+        },
+        onMessage: (messageEvent) => {
+          if (!isAttemptCurrent(attemptId)) {
+            return;
+          }
+          if (messageEvent.data instanceof ArrayBuffer) {
+            terminalRef.current?.write(new Uint8Array(messageEvent.data));
+          } else if (typeof messageEvent.data === "string") {
+            terminalRef.current?.write(messageEvent.data);
+          }
+        },
+        onClose: (closeEvent) => {
+          if (attemptRef.current?.id !== attemptId || ignoreClose) {
+            return;
+          }
+          authSentRef.current = false;
+          attemptLockRef.current = false;
+          if (!mountedRef.current || !sessionAliveRef.current) {
+            return;
+          }
+          if (getAuthSessionGeneration() !== attemptRef.current?.authGeneration || authTransitioningRef.current) {
+            setStatus("ended");
+            return;
+          }
+          if (isTerminalGrantClose(closeEvent)) {
+            ignoreClose = true;
+            socket.close(1008, "grant-required");
+            const message = terminalGrantMessage(closeEvent.reason, tRef.current("terminal.grantRequired"));
+            terminalRef.current?.write(`\r\n\x1b[33m${message}\x1b[0m\r\n`);
+            const continued = operationRef.current;
+            if (continued?.grantContinuation && continued.id === operationId) {
+              connectionProofRef.current = "";
+              operationRef.current = { ...continued, proof: "", grantContinuation: false };
+              handoffRef.current = null;
+              suppressGrantDismissRef.current = false;
+              setSummary(null);
+              setStatus("ended");
+              setPendingGrant({ message });
+              setGrantError(message);
+              return;
+            }
+            setSummary(null);
+            setStatus("ended");
+            openGrantDialogRef.current(message);
+            return;
+          }
+          if (closeEvent.code === 1008) {
+            clearStepUpProofRef.current(STEP_UP_ACTIONS.terminalOpen);
+            connectionProofRef.current = "";
+            const denied = operationRef.current;
+            if (denied?.id === operationId) {
+              operationRef.current = { ...denied, proof: "" };
+            }
+            handoffRef.current = null;
+            ignoreClose = true;
+            socket.close(1008, "step-up-required");
+          } else {
+            handoffRef.current = null;
+            const currentOperation = operationRef.current;
+            if (currentOperation?.id === operationId) {
+              operationRef.current = { ...currentOperation, proof: "" };
+            }
+          }
+          const presentation = closePresentation(closeEvent.code);
+          showSummaryRef.current(presentation.tone, tRef.current(presentation.key), closeEvent.code);
+        },
+        onGiveUp: () => {
+          if (attemptRef.current?.id !== attemptId) {
+            return;
+          }
+          attemptLockRef.current = false;
+          authSentRef.current = false;
+          connectionProofRef.current = "";
+          if (!mountedRef.current || !sessionAliveRef.current) {
+            return;
+          }
+          if (getAuthSessionGeneration() !== attemptRef.current?.authGeneration || authTransitioningRef.current) {
+            setStatus("ended");
+            return;
+          }
+          if (admissionKind === "prerequisite") {
+            setSummary(null);
+            setStatus("idle");
+            return;
+          }
+          if (admissionKind === "cancel") {
+            showSummaryRef.current("info", tRef.current("stepUp.cancelled"));
+            return;
+          }
+          showSummaryRef.current("critical", tRef.current("terminal.stepUpFailed"));
+        },
+      });
+      socketRef.current = socket;
+      socket.connect();
+    };
+    beginAttemptRef.current = beginAttempt;
+
+    // 将展示初始化延迟到下一个事件循环，跳过 React StrictMode 的首次 mount→cleanup。
+    // StrictMode 的 cleanup 会同步 clearTimeout，因此首次 mount 不会创建终端或 socket。
+    const timerId = setTimeout(() => {
+      if (!active || !sessionAliveRef.current || !containerRef.current) {
+        return;
+      }
+      const terminal = new Terminal({
         cursorBlink: true,
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
         fontSize: 14,
         theme: TERMINAL_PALETTE,
       });
-
-      fitAddon = new FitAddon();
+      const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
       terminal.open(containerRef.current);
       fitAddon.fit();
-
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsURL = `${protocol}//${window.location.host}/api/v1/ws/terminal?node_id=${nodeIdAtStart}`;
-
-      const beforeConnect = async () => {
-        connectionProof = "";
-        authSent = false;
-        admissionError = null;
-        if (!isCurrent()) {
-          throw new Error("stale-terminal-admission");
-        }
-
-        const pendingHandoff = handoffRef.current;
-        const canConsume = Boolean(
-          pendingHandoff
-          && pendingHandoff.nodeId === nodeIdAtStart
-          && pendingHandoff.token === tokenAtStart
-          && pendingHandoff.authGeneration === generationAtStart
-          && pendingHandoff.operationId === operationId
-          && pendingHandoff.proof
-          && !pendingHandoff.preserveAcrossRetry,
-        );
-        if (canConsume && pendingHandoff) {
-          const proof = pendingHandoff.proof;
-          handoffRef.current = null;
-          if (!isCurrent()) {
-            throw new Error("stale-terminal-admission");
-          }
-          connectionProof = proof;
-          operationRef.current = {
-            id: operationId,
-            nodeId: nodeIdAtStart,
-            token: tokenAtStart,
-            authGeneration: generationAtStart,
-            proof,
-            grantContinuation: true,
-          };
-          return;
-        }
-
-        clearStepUpProofRef.current(STEP_UP_ACTIONS.terminalOpen);
-        let proof = "";
-        try {
-          proof = await ensureStepUpProofRef.current(STEP_UP_ACTIONS.terminalOpen, FRESH_TERMINAL_PROOF);
-        } catch (error) {
-          if (isCurrent()) {
-            admissionError = error instanceof Error ? error.message : tRef.current("terminal.stepUpFailed");
-          }
-          throw error instanceof Error ? error : new Error(tRef.current("terminal.stepUpFailed"));
-        }
-        if (!isCurrent()) {
-          throw new Error("stale-terminal-admission");
-        }
-        connectionProof = proof;
-        operationRef.current = {
-          id: operationId,
-          nodeId: nodeIdAtStart,
-          token: tokenAtStart,
-          authGeneration: generationAtStart,
-          proof,
-          grantContinuation: false,
-        };
-      };
-
-      socket = new ReconnectingSocket({
-        url: wsURL,
-        binaryType: "arraybuffer",
-        // SSH PTY 是状态化连接，重连后旧 session 已失效；这里不发心跳避免被旧 session 误识别
-        heartbeatIntervalMs: 0,
-        beforeConnect,
-        onOpen: (ws) => {
-          if (!isCurrent() || !connectionProof) {
-            return;
-          }
-          ws.send(JSON.stringify({ type: "auth", token: tokenAtStart, step_up_proof: connectionProof }));
-          authSent = true;
-        },
-        onMessage: (event) => {
-          if (event.data instanceof ArrayBuffer) {
-            terminal?.write(new Uint8Array(event.data));
-          } else if (typeof event.data === "string") {
-            terminal?.write(event.data);
-          }
-        },
-        onReconnect: () => {
-          // SSH PTY 是状态化连接，重连后旧 session 已失效，必须提示用户重新登录
-          terminal?.clear();
-          terminal?.write(`\r\n\x1b[33m${tRef.current("terminal.reconnected")}\x1b[0m\r\n`);
-        },
-        onClose: (event) => {
-          authSent = false;
-          if (suppressSocketClose) {
-            return;
-          }
-          if (isTerminalGrantClose(event)) {
-            suppressSocketClose = true;
-            socket?.close(1008, "grant-required");
-            const message = terminalGrantMessage(event.reason, tRef.current("terminal.grantRequired"));
-            terminal?.write(`\r\n\x1b[33m${message}\x1b[0m\r\n`);
-            if (!isCurrent()) {
-              return;
-            }
-            const continued = operationRef.current;
-            if (continued?.grantContinuation) {
-              connectionProof = "";
-              operationRef.current = { ...continued, proof: "" };
-              handoffRef.current = null;
-              setPendingGrant({ message });
-              setGrantError(message);
-              return;
-            }
-            openGrantDialogRef.current(message);
-            return;
-          }
-          if (event.code === 1008) {
-            clearStepUpProofRef.current(STEP_UP_ACTIONS.terminalOpen);
-            connectionProof = "";
-            const denied = operationRef.current;
-            if (denied?.id === operationId) {
-              operationRef.current = { ...denied, proof: "" };
-            }
-            if (handoffRef.current?.operationId === operationId) {
-              handoffRef.current = null;
-            }
-            suppressSocketClose = true;
-            socket?.close(1008, "step-up-required");
-          }
-          const detail = event.reason
-            ? ` (${event.code}: ${event.reason})`
-            : ` (code: ${event.code})`;
-          terminal?.write(`\r\n\x1b[31m${tRef.current("terminal.disconnected")}${detail}\x1b[0m\r\n`);
-          // 正常关闭(1000)或服务端主动关闭(1001)时自动关闭弹窗（如用户输入 exit）
-          // 异常关闭保留弹窗以便用户查看错误信息（重连流程会接管）
-          if (isCurrent() && (event.code === 1000 || event.code === 1001)) {
-            onDisconnectRef.current?.();
-          }
-        },
-        onError: () => {
-          terminal?.write(`\r\n\x1b[31m${tRef.current("terminal.wsError")}\x1b[0m\r\n`);
-        },
-        onGiveUp: () => {
-          if (!isCurrent()) {
-            return;
-          }
-          const message = admissionError ?? tRef.current("terminal.giveUp");
-          admissionError = null;
-          terminal?.write(`\r\n\x1b[31m${message}\x1b[0m\r\n`);
-          onDisconnectRef.current?.();
-        },
-      });
-
+      terminalRef.current = terminal;
+      fitRef.current = fitAddon;
       terminal.onData((data) => {
-        if (!authSent || !isCurrent()) {
+        if (!canSendFramesRef.current()) {
           return;
         }
-        socket?.send(data);
+        socketRef.current?.send(data);
       });
-
-      sendResize = () => {
-        fitAddon?.fit();
-        if (!authSent || !isCurrent()) {
+      resizeRef.current = () => {
+        fitAddon.fit();
+        if (!canSendFramesRef.current()) {
           return;
         }
-        socket?.send(JSON.stringify({
+        socketRef.current?.send(JSON.stringify({
           type: "resize",
-          cols: terminal?.cols ?? 80,
-          rows: terminal?.rows ?? 24,
+          cols: terminal.cols ?? 80,
+          rows: terminal.rows ?? 24,
         }));
       };
-
-      resizeObserver = new ResizeObserver(() => {
-        sendResize?.();
+      const resizeObserver = new ResizeObserver(() => {
+        resizeRef.current();
       });
-      if (containerRef.current) {
-        resizeObserver.observe(containerRef.current);
+      resizeObserver.observe(containerRef.current);
+      window.addEventListener("resize", resizeRef.current);
+      terminalReadyRef.current = true;
+      const observer = resizeObserver;
+      const onResize = resizeRef.current;
+      sessionCleanup.observer = observer;
+      sessionCleanup.onResize = onResize;
+      if (!totpEnabledRef.current || authTransitioningRef.current || initialStartedRef.current) {
+        return;
       }
-      window.addEventListener("resize", sendResize);
-      socket.connect();
+      initialStartedRef.current = true;
+      beginAttempt("initial");
     }, 0);
+
+    const sessionCleanup: { observer: ResizeObserver | null; onResize: (() => void) | null } = {
+      observer: null,
+      onResize: null,
+    };
 
     return () => {
       active = false;
+      sessionAliveRef.current = false;
       clearTimeout(timerId);
-      if (sendResize) {
-        window.removeEventListener("resize", sendResize);
+      if (sessionCleanup.onResize) {
+        window.removeEventListener("resize", sessionCleanup.onResize);
       }
-      resizeObserver?.disconnect();
-      suppressSocketClose = true;
-      socket?.close();
-      terminal?.dispose();
-
-      const pendingHandoff = handoffRef.current;
-      const preserve = Boolean(
-        pendingHandoff
-        && pendingHandoff.preserveAcrossRetry
-        && pendingHandoff.nodeId === nodeIdAtStart
-        && pendingHandoff.token === tokenAtStart
-        && pendingHandoff.authGeneration === getAuthSessionGeneration(),
-      );
-      if (preserve && pendingHandoff) {
-        pendingHandoff.preserveAcrossRetry = false;
-      } else {
-        if (
-          handoffRef.current
-          && handoffRef.current.nodeId === nodeIdAtStart
-          && handoffRef.current.token === tokenAtStart
-        ) {
-          handoffRef.current = null;
-        }
-        if (operationRef.current?.id === operationId) {
-          operationRef.current = null;
-        }
-      }
+      sessionCleanup.observer?.disconnect();
+      resizeRef.current = () => {};
+      beginAttemptRef.current = () => {};
+      releaseSockets();
+      terminalRef.current?.dispose();
+      terminalRef.current = null;
+      fitRef.current = null;
+      terminalReadyRef.current = false;
     };
-  }, [authGeneration, nodeId, retryNonce, token]);
+  }, [nodeId, token]);
+
+  useEffect(() => {
+    if (sessionGenerationRef.current === authGeneration || !sessionAliveRef.current) {
+      sessionGenerationRef.current = authGeneration;
+      return;
+    }
+    sessionGenerationRef.current = authGeneration;
+    initialStartedRef.current = true;
+    releaseSockets();
+    if (grantOpenRef.current) {
+      suppressGrantDismissRef.current = true;
+    }
+    setPendingGrant(null);
+    setGrantReason("");
+    setGrantError(null);
+    setGrantSubmitting(false);
+    setSummary(null);
+    setCopyFailed(false);
+    setStatus("ended");
+  }, [authGeneration]);
+
+  useEffect(() => {
+    if (authTransitioning || !totpEnabled) {
+      const activeAttempt = statusRef.current === "connecting" || statusRef.current === "connected" || socketRef.current !== null;
+      const shouldAnnounce = authTransitioning && totpEnabled && activeAttempt;
+      const shouldEnd = !totpEnabled && (statusRef.current !== "idle" || socketRef.current !== null);
+      const grantOpen = grantOpenRef.current;
+      releaseSockets();
+      if (grantOpen) {
+        suppressGrantDismissRef.current = true;
+        setPendingGrant(null);
+        setGrantReason("");
+        setGrantError(null);
+        setGrantSubmitting(false);
+      }
+      if (shouldAnnounce) {
+        showSummaryRef.current("info", tRef.current("stepUp.authTransitioning"));
+        return;
+      }
+      if (shouldEnd) {
+        setSummary(null);
+        setStatus("ended");
+      }
+      return;
+    }
+    if (!initialStartedRef.current && terminalReadyRef.current && sessionAliveRef.current && mountedRef.current) {
+      initialStartedRef.current = true;
+      beginAttemptRef.current("initial");
+    }
+  }, [authTransitioning, totpEnabled]);
+
+  const showReconnect = totpEnabled
+    && !authTransitioning
+    && pendingGrant === null
+    && (connectionStatus === "connected" || connectionStatus === "ended" || connectionStatus === "failed");
+  const showBanner = pendingGrant === null && connectionStatus !== "idle";
+  const failed = connectionStatus === "failed" && summary?.tone === "critical";
 
   return (
     <>
-      <div
-        ref={containerRef}
-        className="h-full w-full overflow-hidden rounded-md"
-        role="region"
-        aria-label={t("terminal.ariaLabel")}
-        style={{ minHeight: "400px", backgroundColor: TERMINAL_PALETTE.background }}
-      />
+      <div data-connection-status={connectionStatus} className="flex h-full min-h-[400px] flex-col gap-2">
+        <StepUpPrerequisiteNotice className="shrink-0" />
+        {showBanner && connectionStatus === "connecting" ? (
+          <p role="status" className="shrink-0 text-sm text-muted-foreground">{t("terminal.connecting")}</p>
+        ) : null}
+        {showBanner && connectionStatus !== "connecting" && (summary || showReconnect || connectionStatus === "connected") ? (
+          <div
+            role={failed ? "alert" : "status"}
+            className={cn(
+              "shrink-0",
+              summary
+                ? cn(
+                  "rounded-md border px-3 py-2",
+                  failed ? "border-destructive/40 bg-destructive/10" : "border-border bg-muted/40",
+                )
+                : "flex flex-wrap items-center justify-between gap-2",
+            )}
+          >
+            {summary ? (
+              <p id="terminal-connection-summary" className={cn("select-text text-sm font-medium", failed ? "text-destructive" : "text-foreground")}>
+                {summary.copyText}
+              </p>
+            ) : connectionStatus === "connected" ? (
+              <p className="sr-only">{t("terminal.connected")}</p>
+            ) : null}
+            {showReconnect ? (
+              <p id="terminal-reconnect-hint" className={cn("text-xs text-muted-foreground", summary ? "mt-1" : "")}>
+                {t("terminal.reconnectHint")}
+              </p>
+            ) : null}
+            {showReconnect || summary ? (
+              <div className={cn("flex flex-wrap gap-2", summary ? "mt-2" : "")}>
+                {summary ? (
+                  <Button type="button" variant="outline" size="sm" onClick={() => void copySummary()}>
+                    {t("terminal.copySummary")}
+                  </Button>
+                ) : null}
+                {showReconnect ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    aria-describedby="terminal-reconnect-hint"
+                    onClick={() => beginAttemptRef.current("manual")}
+                  >
+                    {t("terminal.reconnect")}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {copyFailed ? (
+          <p role="alert" className="shrink-0 text-xs text-destructive">{t("terminal.copyFailed")}</p>
+        ) : null}
+        <div
+          ref={containerRef}
+          className="min-h-0 w-full flex-1 overflow-hidden rounded-md"
+          role="region"
+          aria-label={t("terminal.ariaLabel")}
+          style={{ backgroundColor: TERMINAL_PALETTE.background }}
+        />
+      </div>
       <Dialog open={pendingGrant !== null} onOpenChange={(open) => { if (!open) closeGrantDialog(); }}>
         <DialogContent size="sm">
           <form onSubmit={handleGrantSubmit}>

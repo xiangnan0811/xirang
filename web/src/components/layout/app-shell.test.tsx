@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Outlet, Route, Routes, Link } from "react-router-dom";
 import * as React from "react";
+import { apiClient } from "@/lib/api/client";
 import { AppShell } from "./app-shell";
 import { appLayoutKey } from "./app-layout-key";
 
@@ -19,13 +20,18 @@ const mockConsoleData = {
   warning: null as string | null,
 };
 
+const { logoutMock } = vi.hoisted(() => ({
+  logoutMock: vi.fn(),
+}));
+
 vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
     username: "alice",
     role: "admin",
     token: "token-1",
     totpEnabled: false,
-    logout: vi.fn(),
+    authTransitioning: false,
+    logout: logoutMock,
     setTotpEnabled: vi.fn(),
   }),
 }));
@@ -55,7 +61,9 @@ vi.mock("@/components/error-boundary", () => ({
 }));
 
 vi.mock("@/components/layout/mobile-navigation", () => ({
-  MobileNavigation: () => null,
+  MobileNavigation: ({ onLogout }: { onLogout: () => void }) => (
+    <button type="button" onClick={() => void onLogout()}>测试退出</button>
+  ),
 }));
 
 vi.mock("@/components/ui/command-palette", () => ({
@@ -69,6 +77,7 @@ function renderShell() {
 
 >
       <Routes>
+        <Route path="/login" element={<div>登录页</div>} />
         <Route path="/app" element={<AppShell />}>
           <Route path="overview" element={<div>概览内容</div>} />
         </Route>
@@ -138,5 +147,32 @@ describe("AppShell", () => {
     await user.click(screen.getByRole("link", { name: "Overview tab" }));
     expect(await screen.findByText("overview-panel")).toBeInTheDocument();
     expect(parentMounts).toBe(1);
+  });
+
+  it("clears the local session before the backend logout request", async () => {
+    const order: string[] = [];
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    logoutMock.mockImplementation(() => {
+      order.push("local");
+    });
+    const logoutSpy = vi.spyOn(apiClient, "logout").mockImplementation((token: string) => {
+      order.push(`api:${token}`);
+      return promise;
+    });
+    mockConsoleData.warning = null;
+    const user = userEvent.setup();
+    try {
+      renderShell();
+      await user.click(screen.getByRole("button", { name: "测试退出" }));
+      expect(order).toEqual(["local", "api:token-1"]);
+      expect(screen.getByText("概览内容")).toBeInTheDocument();
+      resolve();
+      expect(await screen.findByText("登录页")).toBeInTheDocument();
+    } finally {
+      logoutSpy.mockRestore();
+    }
   });
 });

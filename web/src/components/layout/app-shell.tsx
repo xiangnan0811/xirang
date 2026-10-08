@@ -32,6 +32,7 @@ import { IntegrationsContextProvider } from "@/context/integrations-context";
 import { SSHKeysContextProvider } from "@/context/ssh-keys-context";
 import { useConsoleData } from "@/hooks/use-console-data";
 import { apiClient } from "@/lib/api/client";
+import { endAuthenticatedSession } from "@/lib/end-authenticated-session";
 import { CommandPaletteProvider } from "@/context/command-palette-context";
 import { useCommandPalette } from "@/context/command-palette-context.hooks";
 import { LazyCommandPalette } from "@/components/ui/lazy-command-palette";
@@ -75,14 +76,12 @@ function AppShellInner() {
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistentState<boolean>("xirang.sidebar.collapsed", false);
 
   const handleLogout = async () => {
-    if (token) {
-      try {
-        await apiClient.logout(token);
-      } catch {
-        // 即便服务端注销失败，也执行本地会话清理，避免前端残留登录态。
-      }
-    }
-    logout();
+    const capturedToken = token;
+    await endAuthenticatedSession({
+      token: capturedToken,
+      logout,
+      requestLogout: (sessionToken) => apiClient.logout(sessionToken),
+    });
     navigate("/login", { replace: true });
   };
 

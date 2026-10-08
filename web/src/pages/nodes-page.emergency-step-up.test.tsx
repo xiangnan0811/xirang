@@ -23,7 +23,7 @@ const {
 } = vi.hoisted(() => ({
   toastSuccessMock: vi.fn(),
   toastErrorMock: vi.fn(),
-  authRef: { current: { role: "admin" as "admin" | "operator" | "viewer", token: "test-token" } },
+  authRef: { current: { role: "admin" as "admin" | "operator" | "viewer", token: "test-token", totpEnabled: true, authTransitioning: false } },
   getTasksMock: vi.fn(),
   grantMock: vi.fn(),
   emergencyBackupMock: vi.fn(),
@@ -116,6 +116,8 @@ vi.mock("@/context/auth-context.hooks", () => ({
     role: authRef.current.role,
     userId: 1,
     isAuthenticated: true,
+    totpEnabled: authRef.current.totpEnabled,
+    authTransitioning: authRef.current.authTransitioning,
     login: vi.fn(),
     logout: vi.fn(),
     ensureStepUpProof: ensureStepUpProofMock,
@@ -225,7 +227,7 @@ describe("emergency backup stale step-up", () => {
     ensureStepUpProofMock.mockReset();
     clearStepUpProofMock.mockReset();
     ensureStepUpProofMock.mockResolvedValue(PROOF);
-    authRef.current = { role: "admin", token: "test-token" };
+    authRef.current = { role: "admin", token: "test-token", totpEnabled: true, authTransitioning: false };
     searchParamsRef.current = new URLSearchParams();
     installPageContext();
   });
@@ -500,7 +502,7 @@ describe("emergency backup stale step-up", () => {
     const signal = (getTasksMock.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined)?.signal;
     expect(signal?.aborted).toBe(false);
 
-    authRef.current = { role: "admin", token: "next-token" };
+    authRef.current = { role: "admin", token: "next-token", totpEnabled: true, authTransitioning: false };
     view.rerender(
       <StrictMode>
         <MemoryRouter>
@@ -526,5 +528,23 @@ describe("emergency backup stale step-up", () => {
     }));
     expect(emergencyBackupMock).toHaveBeenCalledWith("next-token", 1, undefined);
     expect(grantMock).not.toHaveBeenCalled();
+  });
+
+  it("does not read inventory, grant, or submit when two-factor authentication is disabled", async () => {
+    authRef.current.totpEnabled = false;
+    const user = userEvent.setup();
+    renderNodesPage();
+
+    await clickEmergency(user);
+
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(getTasksMock).not.toHaveBeenCalled();
+    expect(grantMock).not.toHaveBeenCalled();
+    expect(emergencyBackupMock).not.toHaveBeenCalled();
+    expect(ensureStepUpProofMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: /stepUp.enableTOTP|启用两步验证|Enable two-factor/ })).toHaveAttribute(
+      "href",
+      "/app/settings?tab=account",
+    );
   });
 });

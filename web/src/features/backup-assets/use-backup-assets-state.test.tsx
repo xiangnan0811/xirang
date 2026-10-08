@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode, useLayoutEffect, useRef, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError } from "@/lib/api/core";
+import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
 import type {
   AssetRef,
   AssetSearchResponse,
@@ -3280,6 +3280,8 @@ describe("useBackupAssetsState", () => {
       role: "admin",
       route: selectedAssetRoute(asset),
       ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
     }));
 
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
@@ -3313,6 +3315,8 @@ describe("useBackupAssetsState", () => {
       role: "admin",
       route: selectedAssetRoute(asset),
       ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
     }));
 
     await waitFor(() => expect(result.current.content.status).toBe("error"));
@@ -3343,6 +3347,8 @@ describe("useBackupAssetsState", () => {
         role: "admin",
         route,
         ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
       }),
       { initialProps: { token: "test-token" as string | null } },
     );
@@ -3368,6 +3374,8 @@ describe("useBackupAssetsState", () => {
       role: "operator",
       route: selectedAssetRoute(asset),
       ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
     }));
 
     await waitFor(() => expect(result.current.content.status).toBe("blocked"));
@@ -3462,6 +3470,8 @@ describe("useBackupAssetsState", () => {
         token: "test-token",
         route: defaultBackupAssetsRouteState("data"),
         ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
       })
     );
 
@@ -3502,6 +3512,8 @@ describe("useBackupAssetsState", () => {
         role: "admin",
         route: defaultBackupAssetsRouteState("data"),
         ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
       })
     );
 
@@ -3538,6 +3550,8 @@ describe("useBackupAssetsState", () => {
         role: "admin",
         route: selectedAssetRoute(asset),
         ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
       })
     );
 
@@ -3574,6 +3588,8 @@ describe("useBackupAssetsState", () => {
           role: "admin",
           route: defaultBackupAssetsRouteState("data"),
           ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
         }),
       { initialProps: { token: "test-token" } }
     );
@@ -3610,6 +3626,8 @@ describe("useBackupAssetsState", () => {
         role: "admin",
         route,
         ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
       }),
       { initialProps: { route: initialRoute } },
     );
@@ -3655,6 +3673,8 @@ describe("useBackupAssetsState", () => {
         role: "admin",
         route: defaultBackupAssetsRouteState("data"),
         ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
       })
     );
 
@@ -3697,6 +3717,8 @@ describe("useBackupAssetsState", () => {
         role: "admin",
         route: defaultBackupAssetsRouteState("data"),
         ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
         clearStepUpProof,
       })
     );
@@ -3735,6 +3757,8 @@ describe("useBackupAssetsState", () => {
           role,
           route: defaultBackupAssetsRouteState("data"),
           ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
         })
       );
 
@@ -3781,6 +3805,8 @@ describe("useBackupAssetsState", () => {
           role: "admin",
           route,
           ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
         }),
       { initialProps: { route: initialRoute } }
     );
@@ -3850,6 +3876,8 @@ describe("useBackupAssetsState", () => {
     const { result } = renderHook(() => useBackupAssetsState({
       token: "test-token",
       role: "admin",
+      totpEnabled: true,
+      authTransitioning: false,
       route,
     }));
 
@@ -3880,6 +3908,8 @@ describe("useBackupAssetsState", () => {
       role: "admin" as const,
       route: defaultBackupAssetsRouteState("data"),
       ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
     };
 
     const firstMount = renderHook(() => useBackupAssetsState(options));
@@ -4020,6 +4050,8 @@ describe("useBackupAssetsState", () => {
         token: "test-token",
         route: defaultBackupAssetsRouteState("data"),
         ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
       })
     );
 
@@ -4042,6 +4074,75 @@ describe("useBackupAssetsState", () => {
     );
   });
 
+  it("does not attach cached secret proof or request secret step-up when step-up is disabled", async () => {
+    saveStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, "cached-secret", Date.now() + 45 * 60_000);
+    const ensureStepUpProof = vi.fn();
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    searchMock.mockResolvedValue({
+      status: "available",
+      value: {
+        queryGeneration: "d".repeat(64),
+        indexes: [],
+        items: [],
+        nextCursor: null,
+        total: 0,
+        totalRelation: "exact",
+        authoritativeEmpty: true,
+        coverage: { status: "complete" },
+        suggestions: [],
+        capabilities: { metadata: true, content: false },
+        permissions: { list: true, secretReveal: false },
+      },
+    });
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      types: ["file" as const],
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      totpEnabled: false,
+      authTransitioning: false,
+      route,
+      ensureStepUpProof,
+    }));
+    await waitFor(() => expect(result.current.state.result.status).toBe("ready"));
+    expect(searchMock).toHaveBeenCalled();
+    expect(JSON.stringify(searchMock.mock.calls)).not.toContain("cached-secret");
+    expect(ensureStepUpProof).not.toHaveBeenCalled();
+    act(() => result.current.actions.prepareDownload(asset));
+    expect(ensureStepUpProof).not.toHaveBeenCalled();
+    expect(issueTicketMock).not.toHaveBeenCalled();
+  });
+
+  it("does not issue a download ticket after the auth generation changes", async () => {
+    const ensureStepUpProof = vi.fn(async () => {
+      bumpAuthSessionGeneration();
+      return "stale-download";
+    });
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      totpEnabled: true,
+      authTransitioning: false,
+      route: defaultBackupAssetsRouteState("data"),
+      ensureStepUpProof,
+    }));
+    act(() => result.current.actions.prepareDownload(asset));
+    await waitFor(() => expect(ensureStepUpProof).toHaveBeenCalled());
+    expect(issueTicketMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed on an untyped preview denial without guessing secret step-up", async () => {
     const ensureStepUpProof = vi.fn();
     listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
@@ -4051,6 +4152,8 @@ describe("useBackupAssetsState", () => {
         token: "test-token",
         route: defaultBackupAssetsRouteState("data"),
         ensureStepUpProof,
+      totpEnabled: true,
+      authTransitioning: false,
       })
     );
 
