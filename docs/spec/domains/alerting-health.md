@@ -21,6 +21,22 @@ API/前端区分 pending、sending、retrying、sent、failed 和兼容 unknown�
 
 回归覆盖 intent 先于网络、commit/receipt 失败重放、restart、historical NULL、全部终态 decision、resolved pending、sent 不重发、自动/手动并发 claim、stale/expired result、legacy blank key 与 escalation ambiguity、channel business ack、success-time cooldown、未知页不阻塞后续 retry，以及 SQLite/真实 PostgreSQL 竞争。`durable_delivery_test.go`、`dispatcher_test.go` 是当前关键证据入口。
 
+### 静默窗口的本地时间
+
+创建静默规则的日期控件显示浏览器本地时间，提交时转换为对应 UTC 瞬间，不截取 UTC
+字符串作为本地输入。默认窗口和 1/4/24 小时预设只捕获一次当前瞬间，向下舍入到分钟后
+按实际毫秒时长计算结束时间；24 小时不是下一日历日。预设保留原瞬间，即使夏令时回拨
+导致本地时间重复，也不重新解析为另一次出现的时间。
+
+手动编辑只使该端的预设瞬间失效；输入必须是有效的本地年月日时分，且转换后能逐字段
+往返一致。非法日期、空时间和夏令时跳过的时间不得提交。重复的手填时间使用 JavaScript
+本地解析得到的瞬间，每端紧邻显示实际 `UTC±HH:mm` 供提交前核对。名称不能为空，结束
+必须严格晚于开始；错误关联对应输入并聚焦首个错误，成功反馈包含实际窗口摘要。
+这些交互不修改后端 matcher、半开时间窗或告警状态，也不增加二次验证要求。
+
+回归使用独立进程的 UTC、Asia/Singapore、America/New_York 时区，覆盖预设时长、
+跨日、跳时与回拨；真实浏览器验证本地控件、UTC 请求和后端读回的一致性。
+
 <a id="退役来源告警封存与投递围栏"></a>
 ## 退役来源告警封存与投递围栏
 

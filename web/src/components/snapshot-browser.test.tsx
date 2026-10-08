@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
@@ -13,6 +14,7 @@ const {
   restoreSnapshotMock,
   toastSuccessMock,
   toastErrorMock,
+  authState,
 } = vi.hoisted(() => ({
   requestOneTimeStepUpProofMock: vi.fn(),
   listSnapshotsMock: vi.fn(),
@@ -21,10 +23,14 @@ const {
   restoreSnapshotMock: vi.fn(),
   toastSuccessMock: vi.fn(),
   toastErrorMock: vi.fn(),
+  authState: { totpEnabled: true, authTransitioning: false },
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => ({
+    token: "auth-marker",
+    totpEnabled: authState.totpEnabled,
+    authTransitioning: authState.authTransitioning,
     ensureStepUpProof: requestOneTimeStepUpProofMock,
   }),
 }));
@@ -50,6 +56,8 @@ describe("SnapshotBrowser", () => {
     vi.clearAllMocks();
     localStorage.clear();
     sessionStorage.clear();
+    authState.totpEnabled = true;
+    authState.authTransitioning = false;
     requestOneTimeStepUpProofMock.mockResolvedValue("step-up-marker");
     requestSnapshotRestoreCredentialGrantMock.mockResolvedValue({ id: 9, status: "active" });
     restoreSnapshotMock.mockResolvedValue(undefined);
@@ -156,5 +164,28 @@ describe("SnapshotBrowser", () => {
     expect(alert.innerHTML).not.toContain("<script>");
     expect(restoreSnapshotMock).not.toHaveBeenCalled();
     expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("does not open a restore grant when two-factor authentication is disabled", async () => {
+    authState.totpEnabled = false;
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <SnapshotBrowser taskId={101} token="auth-marker" />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /abcdef12/ }));
+    await user.click(await screen.findByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "恢复 1 项" }));
+
+    expect(screen.queryByRole("dialog", { name: "需要快照恢复临时授权" })).not.toBeInTheDocument();
+    expect(requestOneTimeStepUpProofMock).not.toHaveBeenCalled();
+    expect(requestSnapshotRestoreCredentialGrantMock).not.toHaveBeenCalled();
+    expect(restoreSnapshotMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: /stepUp.enableTOTP|启用两步验证|Enable two-factor/ })).toHaveAttribute(
+      "href",
+      "/app/settings?tab=account",
+    );
   });
 });

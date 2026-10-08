@@ -1,7 +1,9 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
+import { useAuth } from "@/context/auth-context.hooks";
 import i18n from "@/i18n";
+import { assertSensitiveStepUpReady } from "@/lib/sensitive-step-up";
 import { apiClient } from "@/lib/api/client";
-import { formatTime } from "@/lib/api/core";
+import { formatTime, getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
@@ -47,6 +49,7 @@ export function useTaskOperations({
   ensureDemoWriteAllowed,
   handleWriteApiError
 }: UseTaskOperationsParams) {
+  const { totpEnabled } = useAuth();
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
   const withStepUp = useStepUpAction(
     STEP_UP_ACTIONS.taskManualTrigger,
@@ -157,29 +160,35 @@ export function useTaskOperations({
 
   const triggerTask = useCallback(async (taskID: number, isCurrent?: () => boolean) => {
     if (!attemptIsCurrent(isCurrent)) return;
+    const sessionGeneration = token
+      ? assertSensitiveStepUpReady({ token, totpEnabled })
+      : getAuthSessionGeneration();
+    const producerCurrent = () => attemptIsCurrent(isCurrent)
+      && !isAuthTransitionActive()
+      && getAuthSessionGeneration() === sessionGeneration;
     const result = await exec(i18n.t("tasks.actions.triggerTask"), async (t) => {
-      if (!attemptIsCurrent(isCurrent)) return null;
+      if (!producerCurrent()) return null;
       await withStepUp(async (proof) => {
-        if (!attemptIsCurrent(isCurrent)) return;
+        if (!producerCurrent()) return;
         try {
           await apiClient.requestTaskManualTriggerCredentialGrant(t, {
             taskId: taskID,
             reason: i18n.t("tasks.manualTriggerGrantReason", { id: taskID }),
             requestedTtlSeconds: 600,
           }, proof);
-          if (!attemptIsCurrent(isCurrent)) return;
+          if (!producerCurrent()) return;
           await apiClient.triggerTask(t, taskID, proof);
         } catch (error) {
-          if (!attemptIsCurrent(isCurrent)) return;
+          if (!producerCurrent()) return;
           throw error;
         }
       });
-      if (!attemptIsCurrent(isCurrent)) return null;
+      if (!producerCurrent()) return null;
       const latestTask = await apiClient.getTask(t, taskID).catch(() => null);
-      if (!attemptIsCurrent(isCurrent)) return null;
+      if (!producerCurrent()) return null;
       return latestTask;
     });
-    if (!attemptIsCurrent(isCurrent)) return;
+    if (!producerCurrent()) return;
     if (result && !result.ok) return;
 
     const latest = result?.ok ? result.data : null;
@@ -198,7 +207,7 @@ export function useTaskOperations({
           : task
       )
     );
-  }, [exec, markTasksMutated, setTasks, withStepUp]);
+  }, [exec, markTasksMutated, setTasks, token, totpEnabled, withStepUp]);
 
   const cancelTask = useCallback(async (taskID: number) => {
     const result = await exec(i18n.t("tasks.actions.cancelTask"), async (t) => {

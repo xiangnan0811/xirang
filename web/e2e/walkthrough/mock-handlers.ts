@@ -310,6 +310,10 @@ async function replyFor(
   if (method === "GET" && apiPath === "/settings/security-risk-summary") return ok(securityRiskSummary);
   if (method === "GET" && apiPath === "/settings") return ok(settingsPayload);
   if (method === "GET" && apiPath === "/system/backups") return ok(systemBackups);
+  if (method === "GET" && apiPath === "/system/cron-backup-status") return ok({
+    status: "not_configured", engine: "sqlite", checked_at: "2026-10-07T00:00:00Z",
+    max_age_seconds: 93600, evidence: "artifact_pair", time_source: "mtime", content_verified: false,
+  });
 
   if (method === "GET" && apiPath === "/backup-file-sources/nodes") return ok(fileSourceNodesPage);
   const fileSets = method === "GET" ? /^\/backup-file-sources\/nodes\/(\d+)\/sets$/.exec(apiPath) : null;

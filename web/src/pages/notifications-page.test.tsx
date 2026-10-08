@@ -58,7 +58,17 @@ const {
     mockGetTaskFailureSummary: vi.fn(),
     useStepUpActionMock: stepUpHookMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
-    authRef: { current: { token: "test-token" as string | null, role: "admin" as "admin" | "operator" | "viewer" | null } },
+    authRef: {
+      current: {
+        token: "test-token",
+        role: "admin",
+      } as {
+        token: string | null;
+        role: "admin" | "operator" | "viewer" | null;
+        totpEnabled?: boolean;
+        authTransitioning?: boolean;
+      },
+    },
   };
 });
 
@@ -116,7 +126,11 @@ vi.mock("@/components/ui/toast-sonner", () => ({
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => authRef.current,
+  useAuth: () => ({
+    ...authRef.current,
+    totpEnabled: authRef.current.totpEnabled ?? true,
+    authTransitioning: authRef.current.authTransitioning ?? false,
+  }),
 }));
 
 vi.mock("@/hooks/use-step-up-action", () => ({
@@ -2061,5 +2075,21 @@ describe("NotificationsPage", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "重发全部失败投递" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("region", { name: "告警 E_CONN 的投递记录" }).length).toBeGreaterThan(0);
+  });
+
+  it("does not grant a task retry when two-factor authentication is disabled", async () => {
+    authRef.current = { token: "test-token", role: "operator", totpEnabled: false };
+    const user = userEvent.setup();
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "一键重试" })[0]);
+
+    expect(mockRequestTaskManualTriggerCredentialGrant).not.toHaveBeenCalled();
+    expect(mockTriggerTask).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: /stepUp.enableTOTP|启用两步验证|Enable two-factor/ })).toHaveAttribute(
+      "href",
+      "/app/settings?tab=account",
+    );
   });
 });

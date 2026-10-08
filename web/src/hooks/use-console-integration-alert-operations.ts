@@ -1,5 +1,7 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
+import { useAuth } from "@/context/auth-context.hooks";
 import i18n from "@/i18n";
+import { assertSensitiveStepUpReady } from "@/lib/sensitive-step-up";
 import { apiClient } from "@/lib/api/client";
 import { formatTime } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
@@ -38,6 +40,7 @@ export function useIntegrationAlertOperations({
   handleWriteApiError,
   retryTask
 }: UseIntegrationAlertOperationsParams) {
+  const { totpEnabled } = useAuth();
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
 
   const addIntegration = useCallback(async (input: NewIntegrationInput) => {
@@ -118,9 +121,12 @@ export function useIntegrationAlertOperations({
         setWarning(message);
         throw new Error(message);
       }
+      if (token) {
+        assertSensitiveStepUpReady({ token, totpEnabled });
+      }
       await retryTask(target.taskId);
     },
-    [alerts, retryTask, setWarning]
+    [alerts, retryTask, setWarning, token, totpEnabled]
   );
 
   const acknowledgeAlert = useCallback(async (alertID: string) => {

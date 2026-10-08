@@ -97,6 +97,7 @@ RUN chmod +x /usr/local/bin/backup-db.sh /entrypoint.sh /usr/local/bin/xirang-rs
 ENV SERVER_ADDR=:3000
 ENV DB_TYPE=sqlite
 ENV SQLITE_PATH=/data/xirang.db
+ENV CRON_DB_BACKUP_DIR=/backup/db
 # known_hosts 默认存放在持久化卷，容器重启不丢失
 ENV SSH_KNOWN_HOSTS_PATH=/data/.ssh/known_hosts
 ENV LOG_FILE=/logs/xirang.log

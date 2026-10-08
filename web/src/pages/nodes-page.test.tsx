@@ -202,6 +202,8 @@ vi.mock("@/context/auth-context.hooks", () => ({
     role: authRef.current.role,
     userId: 1,
     isAuthenticated: true,
+    totpEnabled: true,
+    authTransitioning: false,
     login: vi.fn(),
     logout: vi.fn(),
   }),

@@ -4,6 +4,14 @@ import type { AuthContextValue, AuthRole } from "@/context/auth-context.shared";
 import { ApiError } from "@/lib/api/core";
 import { mapBackupAssetsError } from "@/lib/api/backup-assets-error";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import {
+  backupAuthGeneration,
+  backupSensitiveBlock,
+  backupSensitiveCurrent,
+  backupSensitiveDenialFromError,
+  backupSensitiveRuntime,
+  beginBackupSensitiveAction,
+} from "@/features/backup-assets/backup-sensitive-runtime";
 import type {
   AssetRef,
   BackupArchiveFallback,
@@ -16,7 +24,7 @@ import type { createBackupArchiveApi } from "@/lib/api/backup-archive-api";
 export type BackupArchiveApi = ReturnType<typeof createBackupArchiveApi>;
 
 export type BackupArchivePhase = "closed" | "indexing" | "review" | "creating" | "active" | "terminal" | "error";
-export type BackupArchiveError = "forbidden" | "not_found" | "unavailable" | "invalid" | "secure_transport_required";
+export type BackupArchiveError = "forbidden" | "not_found" | "unavailable" | "invalid" | "secure_transport_required" | "totp_required" | "auth_transitioning";
 
 export interface BackupArchiveState {
   phase: BackupArchivePhase;
@@ -34,6 +42,8 @@ export interface UseBackupArchiveOptions {
   role: AuthRole | null;
   ref: AssetRef | null;
   ensureStepUpProof?: AuthContextValue["ensureStepUpProof"];
+  totpEnabled?: boolean;
+  authTransitioning?: boolean;
   api?: BackupArchiveApi;
   contentAvailable?: boolean;
   downloadAllowed?: boolean;
@@ -90,6 +100,8 @@ function initialState(): BackupArchiveState {
 }
 
 function classify(error: unknown): BackupArchiveError {
+  const denial = backupSensitiveDenialFromError(error);
+  if (denial) return denial;
   if (mapBackupAssetsError(error, "content_ticket").code === "secure_transport_required") {
     return "secure_transport_required";
   }
@@ -173,6 +185,9 @@ function isAmbiguousCreateFailure(error: unknown): boolean {
 export function useBackupArchive(options: UseBackupArchiveOptions) {
   const [state, setState] = useState<BackupArchiveState>(initialState);
   const { ensureStepUpProof, onDownloadTicket, role, token } = options;
+  const authTransitioningRef = useRef(options.authTransitioning === true);
+  authTransitioningRef.current = options.authTransitioning === true;
+  const pausedPollRef = useRef<{ requestId: string; indexRevision: string; operation: number; generation: number } | null>(null);
   const archiveRef = useMemo(
     () => {
       const recoveryPointId = options.ref?.recoveryPointId;
@@ -272,6 +287,11 @@ export function useBackupArchive(options: UseBackupArchiveOptions) {
 
   const poll = useCallback(async (requestId: string, indexRevision: string, operation: number): Promise<void> => {
     if (!options.token || !archiveRef || operation !== operationRef.current) return;
+    const generation = backupAuthGeneration();
+    if (authTransitioningRef.current) {
+      pausedPollRef.current = { requestId, indexRevision, operation, generation };
+      return;
+    }
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -281,14 +301,26 @@ export function useBackupArchive(options: UseBackupArchiveOptions) {
     controllerRef.current = controller;
     try {
       const api = await getApi();
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current || operation !== operationRef.current) return;
       const status = await api.status(options.token, archiveRef, indexRevision, requestId, controller.signal);
       if (controller.signal.aborted || operation !== operationRef.current) return;
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) {
+        pausedPollRef.current = { requestId, indexRevision, operation, generation };
+        return;
+      }
       applyStatus(status, operation);
       if (!TERMINAL.has(status.state)) {
-        timerRef.current = setTimeout(() => { void poll(requestId, indexRevision, operation); }, 1_000);
+        timerRef.current = setTimeout(() => {
+          if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) {
+            pausedPollRef.current = { requestId, indexRevision, operation, generation };
+            return;
+          }
+          void poll(requestId, indexRevision, operation);
+        }, 1_000);
       }
     } catch (error) {
       if (controller.signal.aborted || operation !== operationRef.current) return;
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       update((current) => ({ ...current, phase: "error", error: classify(error) }));
     }
   }, [applyStatus, archiveRef, getApi, options.token, update]);
@@ -384,7 +416,9 @@ export function useBackupArchive(options: UseBackupArchiveOptions) {
         return;
       }
       const reconciliationApi = api;
+      const createGeneration = backupAuthGeneration();
       reconcileAmbiguousCreate = async () => {
+        if (authTransitioningRef.current || !backupSensitiveCurrent(createGeneration)) return;
         try {
           const replay = await reconciliationApi.create(
             token,
@@ -412,6 +446,17 @@ export function useBackupArchive(options: UseBackupArchiveOptions) {
       let createAttempt = 0;
       let result: Awaited<ReturnType<BackupArchiveApi["create"]>>;
       for (;;) {
+        if (authTransitioningRef.current || !backupSensitiveCurrent(createGeneration)) {
+          if (pendingCreateTeardownRef.current?.request === request) pendingCreateTeardownRef.current = null;
+          update((value) => ({
+            ...value,
+            phase: "error",
+            error: "auth_transitioning",
+            requestId: null,
+            status: null,
+          }));
+          return;
+        }
         try {
           result = await api.create(
             token,
@@ -548,16 +593,33 @@ export function useBackupArchive(options: UseBackupArchiveOptions) {
   const download = useCallback(async () => {
     const requestId = stateRef.current.requestId;
     if (!requestId || !token || !archiveRoleAllowed(role) || !archiveRef || !ensureStepUpProof || !memberDownloadAllowed(downloadAllowedRef.current) || stateRef.current.status?.state !== "ready") return;
+    const runtime = backupSensitiveRuntime(token, options.totpEnabled, options.authTransitioning);
+    const denial = backupSensitiveBlock(runtime);
+    if (denial) {
+      update((value) => ({ ...value, error: denial }));
+      return;
+    }
+    let generation: number;
+    try {
+      generation = beginBackupSensitiveAction(runtime);
+    } catch (error) {
+      const classified = classify(error);
+      update((value) => ({ ...value, error: classified }));
+      return;
+    }
     const operation = operationRef.current;
     const controller = new AbortController();
     controllerRef.current?.abort();
     controllerRef.current = controller;
     try {
       const proof = await ensureStepUpProof(STEP_UP_ACTIONS.assetDownload, { persist: false, reuseCached: false });
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (operation !== operationRef.current || controller.signal.aborted || !memberDownloadAllowed(downloadAllowedRef.current)) return;
       const api = await getApi();
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (operation !== operationRef.current || controller.signal.aborted || !memberDownloadAllowed(downloadAllowedRef.current)) return;
       const ticket = await api.issueTicket(token, archiveRef, requestId, proof, controller.signal);
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (operation !== operationRef.current || controller.signal.aborted || !memberDownloadAllowed(downloadAllowedRef.current)) return;
       update((value) => ({ ...value, ticket, error: null }));
       onDownloadTicket?.(ticket);
@@ -568,11 +630,13 @@ export function useBackupArchive(options: UseBackupArchiveOptions) {
         anchor.click();
       }
     } catch (error) {
-      if (!controller.signal.aborted && operation === operationRef.current) update((value) => ({ ...value, error: classify(error) }));
+      if (!controller.signal.aborted && operation === operationRef.current && backupSensitiveCurrent(generation)) {
+        update((value) => ({ ...value, error: classify(error) }));
+      }
     } finally {
-      if (operation === operationRef.current) update((value) => ({ ...value, ticket: null }));
+      if (operation === operationRef.current && backupSensitiveCurrent(generation)) update((value) => ({ ...value, ticket: null }));
     }
-  }, [archiveRef, ensureStepUpProof, getApi, onDownloadTicket, role, token, update]);
+  }, [archiveRef, ensureStepUpProof, getApi, onDownloadTicket, options.authTransitioning, options.totpEnabled, role, token, update]);
 
   const reload = useCallback(async () => {
     const requestId = stateRef.current.requestId;
@@ -589,6 +653,18 @@ export function useBackupArchive(options: UseBackupArchiveOptions) {
     }
     update(initialState());
   }, [cancelPendingCreate, clear, reconcileAbandonedRequest, reconcilePendingCreateOnTeardown, update]);
+
+  useEffect(() => {
+    if (options.authTransitioning) return;
+    const paused = pausedPollRef.current;
+    if (!paused || paused.operation !== operationRef.current) return;
+    if (!backupSensitiveCurrent(paused.generation)) {
+      pausedPollRef.current = null;
+      return;
+    }
+    pausedPollRef.current = null;
+    void poll(paused.requestId, paused.indexRevision, paused.operation);
+  }, [options.authTransitioning, poll]);
 
   useEffect(() => {
     const previousBinding = assetBindingRef.current;

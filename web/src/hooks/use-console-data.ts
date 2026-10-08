@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import i18n from "@/i18n";
 import { useRefreshInterval } from "@/hooks/use-user-preferences";
 import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
-import { formatTimeOnly } from "@/lib/api/core";
+import { formatTimeOnly, getAuthSessionGeneration, isAuthTransitionActive, subscribeAuthTransition } from "@/lib/api/core";
 
 // mock 数据仅在 demo 模式下动态导入，避免生产包包含 mock 代码
 const loadMocks = () => import("@/data/mock");
@@ -118,6 +118,12 @@ export interface ConsoleDataState {
 
 export function useConsoleData(token: string | null): ConsoleDataState {
   const demoModeEnabled = import.meta.env.VITE_ENABLE_DEMO_MODE === "true";
+  const authTransitioning = useSyncExternalStore(subscribeAuthTransition, isAuthTransitionActive, () => false);
+  const generation = getAuthSessionGeneration();
+  const [seenGeneration, setSeenGeneration] = useState(generation);
+  if (seenGeneration !== generation) {
+    setSeenGeneration(generation);
+  }
 
   // 域数组与全局 UI 状态仍由协调者集中持有，避免引入注册式 setter 通道
   // （loadData 需直接写入各域 state，且需与 7 个 context 切片配合做重渲染隔离）。
@@ -233,6 +239,11 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     loadAbortRef.current?.abort();
     const controller = new AbortController();
     loadAbortRef.current = controller;
+    if (isAuthTransitionActive()) {
+      controller.abort();
+      return;
+    }
+    const requestGeneration = getAuthSessionGeneration();
 
     if (!token) {
       if (demoModeEnabled) {
@@ -265,7 +276,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
       apiClient.getOverviewSummary(token, { signal: controller.signal })
     ]);
 
-    if (controller.signal.aborted) {
+    if (controller.signal.aborted || isAuthTransitionActive() || getAuthSessionGeneration() !== requestGeneration) {
       return;
     }
 
@@ -298,12 +309,16 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   }, [token, demoModeEnabled]);
 
   useEffect(() => {
+    if (authTransitioning) {
+      loadAbortRef.current?.abort();
+      return;
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadData();
     return () => {
       loadAbortRef.current?.abort();
     };
-  }, [loadData]);
+  }, [authTransitioning, loadData, seenGeneration]);
 
   const [refreshIntervalSeconds] = useRefreshInterval();
 
@@ -312,7 +327,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   useVisibilityPolling(
     () => { void loadData(); },
     refreshIntervalSeconds > 0 ? refreshIntervalSeconds * 1000 : 0,
-    { enabled: Boolean(token), immediate: false }
+    { enabled: Boolean(token) && !authTransitioning, immediate: false }
   );
 
   const overview = useMemo(() => deriveOverview(policies, overviewSummary), [overviewSummary, policies]);

@@ -4,6 +4,15 @@ import type { AuthContextValue, AuthRole } from "@/context/auth-context.shared";
 import { ApiError } from "@/lib/api/core";
 import { mapBackupAssetsError } from "@/lib/api/backup-assets-error";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import {
+  backupAuthGeneration,
+  backupSensitiveBlock,
+  backupSensitiveCurrent,
+  backupSensitiveDenialFromError,
+  backupSensitiveRuntime,
+  beginBackupSensitiveAction,
+} from "@/features/backup-assets/backup-sensitive-runtime";
+import { StepUpPausedError } from "@/lib/sensitive-step-up";
 import type {
   AssetRef,
   BackupExportArchiveFormat,
@@ -34,7 +43,7 @@ export interface BackupAssetExportCreateOptions {
   archiveProfile: BackupExportArchiveProfile;
 }
 
-export type BackupAssetExportError = "forbidden" | "not_found" | "unavailable" | "invalid" | "canceled" | "secure_transport_required";
+export type BackupAssetExportError = "forbidden" | "not_found" | "unavailable" | "invalid" | "canceled" | "secure_transport_required" | "totp_required" | "auth_transitioning";
 
 export interface BackupAssetExportState {
   phase: BackupAssetExportPhase;
@@ -50,6 +59,8 @@ export interface UseBackupAssetExportOptions {
   token: string | null;
   role: AuthRole | null;
   ensureStepUpProof?: AuthContextValue["ensureStepUpProof"];
+  totpEnabled?: boolean;
+  authTransitioning?: boolean;
   exportJobId?: string;
   onRouteChange: (exportJobId: string | null, options: { replace: boolean }) => void;
   onDownloadTicket?: (ticket: BackupExportDownloadTicket) => void;
@@ -149,6 +160,8 @@ function downloadFilename(job: BackupExportJob): string {
 }
 
 function classifyError(error: unknown): BackupAssetExportError {
+  const denial = backupSensitiveDenialFromError(error);
+  if (denial) return denial;
   if (mapBackupAssetsError(error, "content_ticket").code === "secure_transport_required") {
     return "secure_transport_required";
   }
@@ -328,6 +341,8 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
   const previousJobRef = useRef<BackupExportJob | null>(null);
   const announcementsRef = useRef(new Set<string>());
   const pendingResumeRef = useRef(false);
+  const authTransitioningRef = useRef(options.authTransitioning === true);
+  authTransitioningRef.current = options.authTransitioning === true;
   const now = options.now ?? Date.now;
   routeJobIdRef.current = options.exportJobId;
 
@@ -460,8 +475,9 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
     const seconds = Number.isSafeInteger(job.pollAfterSeconds) && job.pollAfterSeconds > 0
       ? Math.min(job.pollAfterSeconds, 300)
       : 1;
+    const generation = backupAuthGeneration();
     timerRef.current = setTimeout(() => {
-      if (!canPollNow()) {
+      if (!canPollNow() || authTransitioningRef.current || !backupSensitiveCurrent(generation)) {
         pendingResumeRef.current = true;
         return;
       }
@@ -486,10 +502,11 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
       return;
     }
     if (operation !== operationRef.current) return;
-    if (!force && !canPollNow()) {
+    if (authTransitioningRef.current || (!force && !canPollNow())) {
       pendingResumeRef.current = true;
       return;
     }
+    const generation = backupAuthGeneration();
     const request = statusRequestRef.current + 1;
     statusRequestRef.current = request;
     const controller = new AbortController();
@@ -502,9 +519,15 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
     ));
     try {
       const api = await getApi();
-      if (!isCurrentStatusRequest(controller, jobId, operation, request)) return;
+      if (!isCurrentStatusRequest(controller, jobId, operation, request) || authTransitioningRef.current || !backupSensitiveCurrent(generation)) {
+        pendingResumeRef.current = true;
+        return;
+      }
       const job = await api.status(options.token, jobId, { limit: 100, signal: controller.signal });
-      if (!isCurrentStatusRequest(controller, jobId, operation, request)) return;
+      if (!isCurrentStatusRequest(controller, jobId, operation, request) || authTransitioningRef.current || !backupSensitiveCurrent(generation)) {
+        pendingResumeRef.current = true;
+        return;
+      }
       if (job.id !== jobId) {
         updateState((current) => ({ ...current, phase: "error", error: "invalid" }));
         return;
@@ -517,8 +540,9 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
       const delay = retryDelay(error, retryRef.current);
       if (delay !== null) {
         retryRef.current += 1;
+        const retryGeneration = backupAuthGeneration();
         timerRef.current = setTimeout(() => {
-          if (!canPollNow()) {
+          if (!canPollNow() || authTransitioningRef.current || !backupSensitiveCurrent(retryGeneration)) {
             pendingResumeRef.current = true;
             return;
           }
@@ -572,6 +596,19 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
       updateState((value) => ({ ...value, phase: "error", error: "invalid" }));
       return;
     }
+    const sensitive = backupSensitiveRuntime(token, options.totpEnabled, options.authTransitioning);
+    const denial = backupSensitiveBlock(sensitive);
+    if (denial) {
+      updateState((value) => ({ ...value, error: denial }));
+      return;
+    }
+    let createGeneration: number;
+    try {
+      createGeneration = beginBackupSensitiveAction(sensitive);
+    } catch (error) {
+      updateState((value) => ({ ...value, error: classifyError(error) }));
+      return;
+    }
     const operation = ++operationRef.current;
     abortCurrent();
     createInFlightRef.current = true;
@@ -606,14 +643,25 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
         finishCreate();
         return;
       }
-      const takeFreshProof = () => options.ensureStepUpProof!(
-        STEP_UP_ACTIONS.assetExportCreate,
-        { persist: false, reuseCached: false },
-      );
+      const takeFreshProof = async () => {
+        if (!backupSensitiveCurrent(createGeneration) || authTransitioningRef.current) {
+          throw new StepUpPausedError();
+        }
+        const proof = await options.ensureStepUpProof!(
+          STEP_UP_ACTIONS.assetExportCreate,
+          { persist: false, reuseCached: false },
+        );
+        if (!backupSensitiveCurrent(createGeneration) || authTransitioningRef.current) {
+          throw new StepUpPausedError();
+        }
+        return proof;
+      };
       const reconcileAmbiguousCreate = async () => {
+        if (!backupSensitiveCurrent(createGeneration) || authTransitioningRef.current) return;
         let replayRequested = false;
         try {
           const proof = await takeFreshProof();
+          if (!backupSensitiveCurrent(createGeneration) || authTransitioningRef.current) return;
           replayRequested = true;
           const replay = await api.create(token, input, proof, new AbortController().signal);
           clearPendingCreate();
@@ -632,6 +680,12 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
         try {
           proof = await takeFreshProof();
         } catch (error) {
+          const denial = backupSensitiveDenialFromError(error);
+          if (denial) {
+            finishCreate();
+            updateState((value) => ({ ...value, phase: "error", error: denial }));
+            return;
+          }
           if (canceledCreateOperationsRef.current.has(operation)) {
             if (provenance === "ambiguous_retry") await reconcileAmbiguousCreate();
             else {
@@ -667,8 +721,17 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
             operation,
             reconcile: () => { void reconcileAmbiguousCreate(); },
           };
+          if (!backupSensitiveCurrent(createGeneration) || authTransitioningRef.current) {
+            finishCreate();
+            updateState((value) => ({ ...value, phase: "error", error: "auth_transitioning" }));
+            return;
+          }
           const result = await api.create(token, input, proof, controller.signal);
           clearPendingCreate();
+          if (!backupSensitiveCurrent(createGeneration) || authTransitioningRef.current) {
+            finishCreate();
+            return;
+          }
           if (canceledCreateOperationsRef.current.delete(operation)) {
             finishCreate();
             await reconcileCanceledCreate(api, token, result.job.id);
@@ -744,7 +807,8 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
         finishCreate();
         return;
       }
-      clearPendingCreate();
+      const denial = backupSensitiveDenialFromError(error);
+      if (!denial) clearPendingCreate();
       finishCreate();
       updateState((value) => ({ ...value, phase: "error", error: classifyError(error) }));
     }
@@ -783,15 +847,31 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
       updateState((value) => ({ ...value, error: options.role === "admin" ? "unavailable" : "forbidden" }));
       return;
     }
+    const sensitive = backupSensitiveRuntime(options.token, options.totpEnabled, options.authTransitioning);
+    const denial = backupSensitiveBlock(sensitive);
+    if (denial) {
+      updateState((value) => ({ ...value, error: denial }));
+      return;
+    }
+    let generation: number;
+    try {
+      generation = beginBackupSensitiveAction(sensitive);
+    } catch (error) {
+      updateState((value) => ({ ...value, error: classifyError(error) }));
+      return;
+    }
     const operation = operationRef.current;
     const controller = new AbortController();
     controllerRef.current?.abort();
     controllerRef.current = controller;
     try {
       const proof = await options.ensureStepUpProof(STEP_UP_ACTIONS.assetExportDownload, { persist: false, reuseCached: false });
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (operation !== operationRef.current || controller.signal.aborted) return;
       const api = await getApi();
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       const ticket = await api.issueDownloadTicket(options.token, job.id, proof, controller.signal);
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (operation !== operationRef.current || controller.signal.aborted) return;
       updateState((value) => ({ ...value, ticket }));
       options.onDownloadTicket?.(ticket);
@@ -872,23 +952,40 @@ export function useBackupAssetExport(options: UseBackupAssetExportOptions) {
     options.onRouteChange(null, { replace: true });
   }, [abortCurrent, cancelPendingCreate, options, updateState]);
 
+  const routeLoadKey = options.exportJobId ? `${options.token ?? ""}:${options.exportJobId}` : null;
   useEffect(() => {
     if (!options.exportJobId) {
       loadedRouteRef.current = null;
       return;
     }
-    if (options.exportJobId === loadedRouteRef.current) return;
-    loadedRouteRef.current = options.exportJobId;
+    if (options.authTransitioning) {
+      clearTimer();
+      pendingResumeRef.current = true;
+      return;
+    }
+    if (routeLoadKey === loadedRouteRef.current) return;
+    loadedRouteRef.current = routeLoadKey;
     clearTimer();
     retryRef.current = 0;
     pendingResumeRef.current = false;
     abortItemRequest();
     void loadStatus(options.exportJobId, operationRef.current, true);
-  }, [abortItemRequest, clearTimer, loadStatus, options.exportJobId]);
+  }, [abortItemRequest, clearTimer, loadStatus, options.authTransitioning, options.exportJobId, routeLoadKey]);
+
+  useEffect(() => {
+    if (options.authTransitioning) {
+      clearTimer();
+      return;
+    }
+    if (!pendingResumeRef.current) return;
+    pendingResumeRef.current = false;
+    const id = stateRef.current.job?.id ?? options.exportJobId;
+    if (id) void loadStatus(id, operationRef.current, true);
+  }, [clearTimer, loadStatus, options.authTransitioning, options.exportJobId]);
 
   useEffect(() => {
     const resume = () => {
-      if (!pendingResumeRef.current || !canPollNow()) return;
+      if (!pendingResumeRef.current || !canPollNow() || authTransitioningRef.current) return;
       pendingResumeRef.current = false;
       void reload();
     };

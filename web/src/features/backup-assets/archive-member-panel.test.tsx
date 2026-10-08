@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,6 +13,7 @@ import type {
   BackupExportDownloadTicket,
 } from "@/types/domain";
 
+import { renderBackupSurface as render } from "./__tests__/test-utils";
 import { ArchiveMemberPanel } from "./archive-member-panel";
 import type { BackupArchiveApi } from "./use-backup-archive";
 
@@ -124,7 +125,7 @@ describe("ArchiveMemberPanel", () => {
     const rendered = render(
       <ArchiveMemberPanel
         refValue={ref}
-        runtime={{ token: "token", role: "admin", ensureStepUpProof: vi.fn().mockResolvedValue("proof") }}
+        runtime={{ token: "token", role: "admin", ensureStepUpProof: vi.fn().mockResolvedValue("proof"), totpEnabled: true, authTransitioning: false }}
         contentAvailable
         downloadAllowed
         online
@@ -312,7 +313,7 @@ describe("ArchiveMemberPanel", () => {
     render(
       <ArchiveMemberPanel
         refValue={ref}
-        runtime={{ token: "token", role: "operator", ensureStepUpProof }}
+        runtime={{ token: "token", role: "operator", ensureStepUpProof, totpEnabled: true, authTransitioning: false }}
         contentAvailable
         downloadAllowed
         online
@@ -348,7 +349,7 @@ describe("ArchiveMemberPanel", () => {
     render(
       <ArchiveMemberPanel
         refValue={ref}
-        runtime={{ token: "token", role: "operator", ensureStepUpProof }}
+        runtime={{ token: "token", role: "operator", ensureStepUpProof, totpEnabled: true, authTransitioning: false }}
         contentAvailable
         downloadAllowed
         online
@@ -371,7 +372,7 @@ describe("ArchiveMemberPanel", () => {
     render(
       <ArchiveMemberPanel
         refValue={ref}
-        runtime={{ token: "token", role: "operator", ensureStepUpProof }}
+        runtime={{ token: "token", role: "operator", ensureStepUpProof, totpEnabled: true, authTransitioning: false }}
         contentAvailable
         downloadAllowed={false}
         online
@@ -648,7 +649,7 @@ describe("ArchiveMemberPanel", () => {
     render(
       <ArchiveMemberPanel
         refValue={ref}
-        runtime={{ token: "token", role: "operator", ensureStepUpProof: vi.fn().mockResolvedValue("fresh-member-proof") }}
+        runtime={{ token: "token", role: "operator", ensureStepUpProof: vi.fn().mockResolvedValue("fresh-member-proof"), totpEnabled: true, authTransitioning: false }}
         contentAvailable
         downloadAllowed
         online

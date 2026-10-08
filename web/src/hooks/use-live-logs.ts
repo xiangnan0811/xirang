@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import i18n from "@/i18n";
 import { LogsSocketClient } from "@/lib/ws/logs-socket";
 import type { LogEvent } from "@/types/domain";
+import { isAuthTransitionActive, subscribeAuthTransition } from "@/lib/api/core";
 
 type UseLiveLogsOptions = {
   taskId?: number;
@@ -9,19 +10,27 @@ type UseLiveLogsOptions = {
 
 /** 待处理队列上限，防止后台标签页内存无限增长 */
 const MAX_PENDING = 500;
+function readSessionToken(): string | null {
+  try {
+    return sessionStorage.getItem("xirang-auth-token");
+  } catch {
+    return null;
+  }
+}
 
 export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) {
   const [logs, setLogs] = useState<LogEvent[]>([]);
-  const [connected, setConnected] = useState(false);
+  const [socketConnected, setSocketConnected] = useState(false);
   const [connectionWarning, setConnectionWarning] = useState<string | null>(null);
   const [cursorLogId, setCursorLogId] = useState<number>(0);
   const taskId = options?.taskId;
+  const authTransitioning = useSyncExternalStore(subscribeAuthTransition, isAuthTransitionActive, () => false);
   const [scope, setScope] = useState({ token, taskId });
   if (scope.token !== token || scope.taskId !== taskId) {
     setScope({ token, taskId });
     setLogs([]);
     setCursorLogId(0);
-    setConnected(false);
+    setSocketConnected(false);
     setConnectionWarning(null);
   }
 
@@ -63,10 +72,19 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
     }
   }, [client]);
 
+  useEffect(() => subscribeAuthTransition(() => {
+    if (isAuthTransitionActive()) {
+      setSocketConnected(false);
+    }
+  }), []);
+
   useEffect(() => {
     cursorRef.current = 0;
-    if (!token) return;
+    if (!token || authTransitioning) {
+      return;
+    }
 
+    const activeToken = readSessionToken() ?? token;
     const unsubscribeMessage = client.subscribe((event) => {
       pendingRef.current.push(event);
       // 限制队列长度，防止后台标签页无限增长；保留最新的
@@ -79,7 +97,7 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
     });
 
     const unsubscribeStatus = client.onStatusChange((status) => {
-      setConnected(status);
+      setSocketConnected(status);
       if (status) {
         setConnectionWarning(null);
       } else if (client.isGivingUp()) {
@@ -89,10 +107,13 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
       }
     });
 
-    client.connect(token, {
+    client.connect(activeToken, {
       taskId,
       sinceId: cursorRef.current > 0 ? cursorRef.current : undefined,
-      tokenGetter: () => token,
+      tokenGetter: () => {
+        if (isAuthTransitionActive()) return null;
+        return readSessionToken() ?? token;
+      },
     });
 
     return () => {
@@ -105,11 +126,11 @@ export function useLiveLogs(token: string | null, options?: UseLiveLogsOptions) 
       pendingRef.current = [];
       client.disconnect();
     };
-  }, [client, flushPending, taskId, token]);
+  }, [authTransitioning, client, flushPending, taskId, token]);
 
   return {
     logs,
-    connected,
+    connected: Boolean(token) && !authTransitioning && socketConnected,
     connectionWarning: token ? connectionWarning : i18n.t("logs.connectionWarning.notLoggedIn"),
     cursorLogId
   };

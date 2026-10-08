@@ -13,9 +13,11 @@ import {
 } from "@/components/ui/dialog";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Textarea } from "@/components/ui/textarea";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import { assertSensitiveStepUpCurrent, assertSensitiveStepUpReady, sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
 import { formatBytes, getErrorMessage } from "@/lib/utils";
 import { formatTime } from "@/lib/api/core";
 import type { ResticSnapshot, ResticEntry } from "@/lib/api/snapshots-api";
@@ -55,7 +57,7 @@ function SnapshotBrowserContent({ taskId, token, initialSnapshotId, initialPath 
   const [grantError, setGrantError] = useState<string | null>(null);
   const autoNavigated = useRef(false);
   const filesRequest = useRef<AbortController | null>(null);
-  const { ensureStepUpProof } = useAuth();
+  const { ensureStepUpProof, totpEnabled } = useAuth();
 
   const browseSnapshot = useCallback((snapshot: ResticSnapshot, path = "/") => {
     filesRequest.current?.abort();
@@ -139,6 +141,7 @@ function SnapshotBrowserContent({ taskId, token, initialSnapshotId, initialPath 
 
   const handleRestore = () => {
     if (!selectedSnapshot || selectedPaths.size === 0) return;
+    if (sensitiveStepUpBlock({ token, totpEnabled }) !== "ready") return;
     setGrantReason("");
     setGrantError(null);
     setGrantDialogOpen(true);
@@ -160,13 +163,16 @@ function SnapshotBrowserContent({ taskId, token, initialSnapshotId, initialPath 
     const snapshotId = selectedSnapshot.id;
     const includes = Array.from(selectedPaths);
     const targetPath = restoreTarget;
+    if (sensitiveStepUpBlock({ token, totpEnabled }) !== "ready") return;
     setRestoring(true);
     setGrantError(null);
     try {
+      const generation = assertSensitiveStepUpReady({ token, totpEnabled });
       const proof = await ensureStepUpProof(
         STEP_UP_ACTIONS.snapshotRestore,
         { persist: false, reuseCached: false },
       );
+      assertSensitiveStepUpCurrent(generation);
       await apiClient.requestSnapshotRestoreCredentialGrant(
         token,
         {
@@ -176,7 +182,9 @@ function SnapshotBrowserContent({ taskId, token, initialSnapshotId, initialPath 
         },
         proof,
       );
+      assertSensitiveStepUpCurrent(generation);
       await apiClient.restoreSnapshot(token, taskId, snapshotId, includes, targetPath, proof);
+      assertSensitiveStepUpCurrent(generation);
       toast.success(t('snapshots.restoreSuccess', { count: includes.length, target: targetPath }));
       setSelectedPaths(new Set());
       resetGrantPromptState();
@@ -200,6 +208,7 @@ function SnapshotBrowserContent({ taskId, token, initialSnapshotId, initialPath 
     return (
       <>
         <div className="space-y-3">
+          {totpEnabled === false ? <StepUpPrerequisiteNotice /> : null}
           <div className="flex items-center gap-2">
             <Button size="sm" variant="ghost" onClick={() => setSelectedSnapshot(null)}>
               <ArrowLeft className="mr-1 size-3.5" aria-hidden />

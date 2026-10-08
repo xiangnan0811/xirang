@@ -1,8 +1,10 @@
 import { StrictMode, type PropsWithChildren } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthContext, type AuthContextValue } from "@/context/auth-context.shared";
-import { ApiError } from "@/lib/api/core";
+import { ApiError, beginAuthTransitionBarrier, clearAuthTransitionBarrier } from "@/lib/api/core";
+import { StepUpPausedError } from "@/lib/sensitive-step-up";
+import { StepUpPrerequisiteError } from "@/lib/step-up-prerequisite";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { TaskRecord } from "@/types/domain";
 import { useTaskOperations } from "./use-console-task-operations";
@@ -53,9 +55,11 @@ function createTask(id: number): TaskRecord {
   };
 }
 
-function renderOperations(options?: { token?: string | null; demo?: boolean; strict?: boolean }) {
+function renderOperations(options?: { token?: string | null; demo?: boolean; strict?: boolean; totpEnabled?: boolean; authTransitioning?: boolean }) {
   const token = options && "token" in options ? options.token ?? null : "token-1";
   const demo = options?.demo ?? false;
+  const totpEnabled = options?.totpEnabled ?? true;
+  const authTransitioning = options?.authTransitioning ?? false;
   const tasks = [createTask(7)];
   const setTasks = vi.fn();
   const setAlerts = vi.fn();
@@ -72,8 +76,12 @@ function renderOperations(options?: { token?: string | null; demo?: boolean; str
     username: "operator",
     role: "operator",
     userId: 2,
-    totpEnabled: true,
+    totpEnabled,
     isAuthenticated: Boolean(token),
+    authTransitioning,
+    beginTOTPActivation: vi.fn(() => 1),
+    abortTOTPActivation: vi.fn(),
+    completeTOTPActivation: vi.fn(() => false),
     login: vi.fn(),
     logout: vi.fn(),
     setTotpEnabled: vi.fn(),
@@ -113,6 +121,7 @@ function renderOperations(options?: { token?: string | null; demo?: boolean; str
 
 describe("useTaskOperations trigger lifetime", () => {
   beforeEach(() => {
+    clearAuthTransitionBarrier();
     apiClientMock.requestTaskManualTriggerCredentialGrant.mockReset();
     apiClientMock.triggerTask.mockReset();
     apiClientMock.getTask.mockReset();
@@ -121,6 +130,10 @@ describe("useTaskOperations trigger lifetime", () => {
     apiClientMock.triggerTask.mockResolvedValue(undefined);
     apiClientMock.getTask.mockResolvedValue({ ...createTask(7), status: "running", progress: 40 });
     apiClientMock.getAlerts.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    clearAuthTransitionBarrier();
   });
 
   it("triggers and reads back while the captured predicate stays current", async () => {
@@ -307,5 +320,20 @@ describe("useTaskOperations trigger lifetime", () => {
     expect(ensureStepUpProof).not.toHaveBeenCalled();
     expect(apiClientMock.triggerTask).not.toHaveBeenCalled();
     expect(setTasks).not.toHaveBeenCalled();
+  });
+
+  it("does not grant or trigger when two-factor authentication is disabled", async () => {
+    const { result } = renderOperations({ totpEnabled: false });
+    await expect(result.current.triggerTask(7, () => true)).rejects.toBeInstanceOf(StepUpPrerequisiteError);
+    expect(apiClientMock.requestTaskManualTriggerCredentialGrant).not.toHaveBeenCalled();
+    expect(apiClientMock.triggerTask).not.toHaveBeenCalled();
+  });
+
+  it("does not grant while authentication is transitioning", async () => {
+    beginAuthTransitionBarrier();
+    const { result } = renderOperations();
+    await expect(result.current.triggerTask(7, () => true)).rejects.toBeInstanceOf(StepUpPausedError);
+    expect(apiClientMock.requestTaskManualTriggerCredentialGrant).not.toHaveBeenCalled();
+    expect(apiClientMock.triggerTask).not.toHaveBeenCalled();
   });
 });

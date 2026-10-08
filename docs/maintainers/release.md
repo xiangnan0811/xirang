@@ -88,6 +88,12 @@ multi-arch manifest/tag 提升、发布凭据使用和 provenance attestation。
 
 历史版本的具体迁移编号和交付事件保留在 CHANGELOG/发行说明；当前迁移版本唯一声明在[后端入口](../../backend/README.md)。公开发布成功不代表生产已经升级或真实恢复已经验收。
 
+All-in-One 镜像以 `CRON_DB_BACKUP_DIR=/backup/db` 提供 cron 数据库产物的只读观测默认目录，
+部署模板以 `CRON_DB_BACKUP_MAX_AGE_HOURS=26` 设置新鲜度窗口。升级后显示的是容器可见
+目录中的产物与时间，不证明 cron 已启用、备份内容有效或恢复已验收；仍须核对实际挂载、
+调度配置及恢复演练。此观测不新增 schema migration，也不替代 SQLite Web 快照与
+PostgreSQL 外部备份各自的能力边界。
+
 ## Docker Hub 描述同步
 
 [Sync Docker Hub Description](../../.github/workflows/dockerhub-description.yml)在 `README.md` 或该工作流文件变更并 push 到 `main` 时运行，也支持手动触发。短描述取 GitHub 仓库 description（为空时使用工作流默认文本），长描述取根 README。

@@ -479,8 +479,17 @@ All-in-One 的 Nginx 固定监听 `10761`，后端默认监听 `:3000`，生产 
 | `VERSION_CHECK_URL` | string | — | 否 | 版本检查地址，推荐使用 `https://api.github.com/repos/xiangnan0811/xirang/releases/latest`；当前仅支持稳定版 semver 响应，未设置时版本检查接口返回"未配置" |
 | `DB_BACKUP_DIR` | string | `./backups`（相对于 DB 文件目录） | 否 | 系统自助 SQLite 备份目录；未设置时取 SQLite 文件所在目录的 `backups` 子目录，显式相对路径则相对进程工作目录 |
 | `DB_BACKUP_MAX_COUNT` | int | `20` | 否 | 系统自助 SQLite 备份接口保留的最大备份数量 |
+| `CRON_DB_BACKUP_DIR` | string | 空（All-in-One 镜像为 `/backup/db`） | 否 | cron 数据库产物的只读观测目录；容器内路径，不猜测宿主机位置，也不启用调度。配置目录本身不能是符号链接 |
+| `CRON_DB_BACKUP_MAX_AGE_HOURS` | int | `26` | 否 | 完整产物对的新鲜度阈值，正整数 `1–8760`；无效值显示 `invalid_configuration`，不影响进程启动，不静默回退 |
 
 **读取位置**：[版本检查](../backend/internal/api/handlers/version_handler.go)、[系统备份 API](../backend/internal/api/handlers/system_handler.go)。`DB_BACKUP_MAX_COUNT` 只约束 `POST /api/v1/system/backup-db`，无效或非正值回退到 20；不会控制容器 cron 或 `scripts/backup-db.sh`。cron 使用固定的 `/backup/db` 和文件年龄保留策略，备份/恢复步骤见[部署指南](deployment.md)。版本检查比较 GitHub Release 的稳定 semver 与编译时版本；未注入构建版本时显示 `dev`。
+
+管理员接口 `GET /api/v1/system/cron-backup-status` 根据实际运行时数据库引擎，
+只读检查受管数据库文件及 `.sha256` 完整对；以两者较晚 mtime 推断最新完整产物。
+`fresh` 仅表示产物对在阈值内，不表示 cron 已启用、任务成功、内容已校验或可恢复。
+未配置、目录不可读、无完整对、扫描超限、未来时间及过期分别显示独立状态。
+实现见[cron 产物观测](../backend/internal/api/handlers/system_cron_backup_handler.go)；
+Web SQLite 快照不支持 PostgreSQL 时，该观测仍独立可用。
 
 ## 应用指标
 

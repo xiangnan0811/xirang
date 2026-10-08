@@ -70,7 +70,7 @@ const LazyRetentionPolicyPanel = lazy(() =>
 type BackupAssetsProcessingRuntime = Pick<
   AuthContextValue,
   "token" | "role" | "ensureStepUpProof"
-> & Partial<Pick<AuthContextValue, "userId">>;
+> & Partial<Pick<AuthContextValue, "userId" | "totpEnabled" | "authTransitioning">>;
 
 export interface BackupAssetsWorkspaceProps {
   controller: BackupAssetsController;

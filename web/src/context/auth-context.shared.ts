@@ -3,6 +3,13 @@ import type { StepUpAction } from "@/lib/api/totp-api";
 
 export type AuthRole = "admin" | "operator" | "viewer";
 
+export type TOTPActivationUser = {
+  id: number;
+  username: string;
+  role: AuthRole;
+  totpEnabled: true;
+};
+
 export type StoredAuthState = {
   token: string | null;
   username: string | null;
@@ -23,6 +30,10 @@ export type AuthContextValue = {
   userId: number | null;
   totpEnabled: boolean;
   isAuthenticated: boolean;
+  authTransitioning: boolean;
+  beginTOTPActivation: () => number;
+  abortTOTPActivation: (id: number) => void;
+  completeTOTPActivation: (id: number, token: string, user: TOTPActivationUser) => boolean;
   login: (
     token: string,
     username: string,

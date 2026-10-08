@@ -67,13 +67,6 @@ func credentialAuditNoExecutionOutcome(failureCount, blockedCount int) string {
 	return credentialaudit.OutcomeFailure
 }
 
-func sanitizedClientError(err error) string {
-	if err == nil {
-		return ""
-	}
-	return util.SanitizeMessage(err.Error())
-}
-
 func eventCredentialFields(credential sshutil.ResolvedCredential, fallbackKind, fallbackSource string) (string, string, *uint) {
 	kind := strings.TrimSpace(credential.Kind)
 	if kind == "" {

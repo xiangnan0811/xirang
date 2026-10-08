@@ -164,7 +164,6 @@ export function NodesPageDialogs({
                     key={terminalKey}
                     nodeId={terminalNode.id}
                     token={token}
-                    onDisconnect={() => setTerminalNode(null)}
                   />
                 </ErrorBoundary>
               </Suspense>

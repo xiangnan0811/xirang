@@ -1,8 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runAxe } from "@/test/a11y-helpers";
@@ -13,7 +12,7 @@ import { createInitialBackupAssetsState } from "./backup-assets-state";
 import { defaultBackupAssetsRouteState, updateBackupAssetsRoute, type BackupAssetsRouteState } from "./backup-assets-route-state";
 import { BackupAssetsWorkspace } from "./backup-assets-workspace";
 import type { BackupAssetsController } from "./use-backup-assets-state";
-import { buildAssetRows, recoveryPoint, repository } from "./__tests__/test-utils";
+import { buildAssetRows, recoveryPoint, renderBackupSurface as render, repository } from "./__tests__/test-utils";
 
 const { coveragePanelRenderMock } = vi.hoisted(() => ({
   coveragePanelRenderMock: vi.fn(),
@@ -846,29 +845,27 @@ describe("BackupAssetsWorkspace", () => {
     setViewport(1440);
     const onReturnOverview = vi.fn();
     render(
-      <MemoryRouter>
-        <BackupAssetsWorkspace
-          controller={controller({
-            state: createInitialBackupAssetsState({
-              ...defaultBackupAssetsRouteState("data"), view: "repositories", repositoryId: repository.id,
-            }),
-            repositories: {
-              status: "blocked",
-              items: [],
-              nextCursor: null,
-              error: {
-                code: "feature_disabled",
-                translationKey: "backupAssets.errors.featureDisabled",
-                retryable: false,
-                action: "return_overview",
-              },
+      <BackupAssetsWorkspace
+        controller={controller({
+          state: createInitialBackupAssetsState({
+            ...defaultBackupAssetsRouteState("data"), view: "repositories", repositoryId: repository.id,
+          }),
+          repositories: {
+            status: "blocked",
+            items: [],
+            nextCursor: null,
+            error: {
+              code: "feature_disabled",
+              translationKey: "backupAssets.errors.featureDisabled",
+              retryable: false,
+              action: "return_overview",
             },
-          })}
-          processingRuntime={{ token: "operator-token", role: "operator", ensureStepUpProof: vi.fn() }}
-          onRoutePatch={vi.fn()}
-          onReturnOverview={onReturnOverview}
-        />
-      </MemoryRouter>
+          },
+        })}
+        processingRuntime={{ token: "operator-token", role: "operator", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={onReturnOverview}
+      />,
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(/not enabled|未启用/);
@@ -880,29 +877,27 @@ describe("BackupAssetsWorkspace", () => {
   it("gives Admin a CTA from the disabled workspace to the readiness panel", () => {
     setViewport(1440);
     render(
-      <MemoryRouter>
-        <BackupAssetsWorkspace
-          controller={controller({
-            state: createInitialBackupAssetsState({
-              ...defaultBackupAssetsRouteState("data"), view: "repositories", repositoryId: repository.id,
-            }),
-            repositories: {
-              status: "blocked",
-              items: [],
-              nextCursor: null,
-              error: {
-                code: "feature_disabled",
-                translationKey: "backupAssets.errors.featureDisabled",
-                retryable: false,
-                action: "return_overview",
-              },
+      <BackupAssetsWorkspace
+        controller={controller({
+          state: createInitialBackupAssetsState({
+            ...defaultBackupAssetsRouteState("data"), view: "repositories", repositoryId: repository.id,
+          }),
+          repositories: {
+            status: "blocked",
+            items: [],
+            nextCursor: null,
+            error: {
+              code: "feature_disabled",
+              translationKey: "backupAssets.errors.featureDisabled",
+              retryable: false,
+              action: "return_overview",
             },
-          })}
-          processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
-          onRoutePatch={vi.fn()}
-          onReturnOverview={vi.fn()}
-        />
-      </MemoryRouter>
+          },
+        })}
+        processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
     );
 
     const cta = screen.getByRole("link", { name: /readiness panel|就绪面板/ });

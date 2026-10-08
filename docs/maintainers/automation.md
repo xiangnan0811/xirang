@@ -52,6 +52,10 @@ env -u NODE_ENV npm --prefix web audit --audit-level=moderate
 
 构建链中的 `brace-expansion` 必须同时核对 ESLint/minimatch 的旧主版本分支与 TypeScript ESLint 的新分支，不能只更新顶层解析结果。针对括号展开拒绝服务公告，分别在父依赖允许的 semver 范围内更新锁定补丁版本，保持 `package.json`、平台选择元数据和审计阈值不变；使用 CI Node 主版本干净安装后执行完整审计与前端门禁。
 
+`source-map-js` 的锁定补丁从 1.2.1 更新为 1.2.2；按上述规则保留父依赖范围与
+平台元数据，并使用包含开发依赖的完整审计及前端门禁验证。正式交付仍须重新构建镜像，
+回退旧镜像会恢复旧依赖，不能仅凭应用回归结果判断安全性。
+
 ### jsdom 选择器兼容性
 
 [package.json](../../web/package.json)中的 jsdom 专属 override 将 `nwsapi` 固定为已验证的 2.2.25。既有回归记录表明 jsdom 26 下 2.2.26/2.2.27 的 `:modal` 匹配会递归进入原生匹配适配器，导致下拉交互超时。调整 override 前，在 CI Node 版本下同时验证独立选择器匹配、节点和通知下拉确认测试，保留完整审计及前端门禁；不得通过增加超时或修改产品交互掩盖问题。
@@ -68,6 +72,13 @@ Conventional Commits 标题。旧运行的重跑仍使用原始事件中的标�
 `scripts/lint-backend.sh` 同步更新。本地通过带版本的 `go run` 隔离工具依赖，
 以当前选中的 Go 工具链构建并运行，避免系统 Go 升级后继续加载由旧 Go 构建的 linter。
 该方式不改项目模块或全局安装；升级 linter 后执行配置校验、全仓库 lint 和本地完整门禁。
+
+浏览器 CI 将 mock 三浏览器矩阵与真实后端场景分开：默认配置排除
+`real-backend-smoke.spec.ts` 和 `lifecycle-p1.spec.ts`；真实配置的 `chromium`
+项目依赖 `chromium-smoke`，在同一隔离后端上串行执行。Ubuntu runner 安装
+Playwright 系统依赖、OpenSSH server 与 sqlite3，由脚本生成独占 SSH/数据库
+fixture 并清理；不接受共享手工 fixture 作为自动化通过证据。命令、严格主机密钥
+校验与清理边界见[测试指南](../spec/guides/testing.md)。
 
 更新工作流 action 时：
 

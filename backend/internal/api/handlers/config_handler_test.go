@@ -1426,8 +1426,8 @@ func TestConfigExportImportPreservesSSHKeyScopeMetadata(t *testing.T) {
 	if err := targetDB.Where("name = ?", "scoped-key").First(&imported).Error; err != nil {
 		t.Fatalf("导入后应存在 SSH key，实际错误: %v", err)
 	}
-	if !imported.Disabled || imported.ExpiresAt == nil || !imported.ExpiresAt.Equal(future) || imported.AllowedPurposes != "terminal,task_command" || imported.AllowedNodeIDs != "1,2" || imported.AllowedNodeTags != "prod,db" {
-		t.Fatalf("SSH key scope 元数据未完整保留: disabled=%v expires=%v purposes=%q nodes=%q tags=%q", imported.Disabled, imported.ExpiresAt, imported.AllowedPurposes, imported.AllowedNodeIDs, imported.AllowedNodeTags)
+	if !imported.Disabled || imported.ExpiresAt == nil || !imported.ExpiresAt.Equal(future) || imported.AllowedPurposes != "terminal,task_command" || imported.AllowedNodeIDs != "" || imported.AllowedNodeTags != "prod,db" || imported.Fingerprint != "" {
+		t.Fatalf("SSH key scope 元数据未按跨库安全边界导入: disabled=%v expires=%v purposes=%q nodes=%q tags=%q fingerprint=%q", imported.Disabled, imported.ExpiresAt, imported.AllowedPurposes, imported.AllowedNodeIDs, imported.AllowedNodeTags, imported.Fingerprint)
 	}
 }
 

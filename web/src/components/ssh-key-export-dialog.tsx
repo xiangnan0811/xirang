@@ -1,7 +1,10 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
 import type { AuthRole } from "@/context/auth-context.shared";
+import { sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
+import { getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import { Download, FileText, FileJson, FileSpreadsheet } from "lucide-react";
 import {
   Dialog,
@@ -94,14 +97,18 @@ class StaleExportOperation extends Error {
   }
 }
 
-function useCommittedDialogScope(role: AuthRole | null, token: string, open: boolean) {
+function useCommittedDialogScope(
+  role: AuthRole | null,
+  token: string,
+  open: boolean,
+  authGeneration: number,
+  authTransitioning: boolean,
+) {
   const mountedRef = useRef(false);
   const openRef = useRef(open);
   const generationRef = useRef(0);
-  const identityRef = useRef({ role, token, open });
 
   useLayoutEffect(() => {
-    identityRef.current = { role, token, open };
     openRef.current = open;
     generationRef.current += 1;
     mountedRef.current = true;
@@ -110,18 +117,33 @@ function useCommittedDialogScope(role: AuthRole | null, token: string, open: boo
       openRef.current = false;
       generationRef.current += 1;
     };
-  }, [open, role, token]);
+  }, [authGeneration, authTransitioning, open, role, token]);
 
-  const isCurrent = useCallback((generation: number) => (
-    mountedRef.current &&
-    openRef.current &&
-    generationRef.current === generation
+  const isCurrent = useCallback((generation: number, sessionGeneration: number) => (
+    mountedRef.current
+    && openRef.current
+    && generationRef.current === generation
+    && getAuthSessionGeneration() === sessionGeneration
+    && !isAuthTransitionActive()
   ), []);
 
-  return { generationRef, isCurrent, mountedRef };
+  return { generationRef, isCurrent };
 }
 
-export function SSHKeyExportDialog({
+export function SSHKeyExportDialog(props: SSHKeyExportDialogProps) {
+  const { role, authTransitioning = false } = useAuth();
+  const authGeneration = getAuthSessionGeneration();
+  const sessionKey = [
+    props.open ? "1" : "0",
+    props.token,
+    role ?? "",
+    String(authGeneration),
+    authTransitioning ? "1" : "0",
+  ].join("|");
+  return <SSHKeyExportSession key={sessionKey} {...props} />;
+}
+
+function SSHKeyExportSession({
   open,
   onOpenChange,
   sshKeys,
@@ -130,11 +152,18 @@ export function SSHKeyExportDialog({
   token,
 }: SSHKeyExportDialogProps) {
   const { t } = useTranslation();
-  const { role } = useAuth();
-  const { generationRef, isCurrent, mountedRef } = useCommittedDialogScope(role, token, open);
+  const { role, totpEnabled, authTransitioning = false } = useAuth();
+  const authGeneration = getAuthSessionGeneration();
+  const { generationRef, isCurrent } = useCommittedDialogScope(
+    role,
+    token,
+    open,
+    authGeneration,
+    authTransitioning,
+  );
+  const [downloading, setDownloading] = useState(false);
   const [format, setFormat] = useState<ExportFormat>("authorized_keys");
   const [scope, setScope] = useState<ExportScope>("all");
-  const [downloading, setDownloading] = useState(false);
   const withStepUp = useStepUpAction(STEP_UP_ACTIONS.sshKeyExport);
 
   // 根据 scope 筛选出预览使用的密钥列表
@@ -170,7 +199,10 @@ export function SSHKeyExportDialog({
 
   const handleDownload = async () => {
     const generation = generationRef.current;
-    if (!isCurrent(generation)) return;
+    const sessionGeneration = getAuthSessionGeneration();
+    if (!isCurrent(generation, sessionGeneration)) return;
+    if (sensitiveStepUpBlock({ token, totpEnabled }) !== "ready") return;
+    const exportStillCurrent = () => isCurrent(generation, sessionGeneration);
     setDownloading(true);
     try {
       const apiClient = createSSHKeysApi();
@@ -180,24 +212,24 @@ export function SSHKeyExportDialog({
       const url = apiClient.getExportUrl(format, apiScope, ids);
 
       const response = await withStepUp(async (proof) => {
-        if (!isCurrent(generation)) {
+        if (!exportStillCurrent()) {
           throw new StaleExportOperation();
         }
         try {
           return await fetchSSHKeyExportFile(url, token, proof);
         } catch (error) {
-          if (!isCurrent(generation)) {
+          if (!exportStillCurrent()) {
             throw new StaleExportOperation();
           }
           throw error;
         }
       });
 
-      if (!isCurrent(generation)) return;
+      if (!exportStillCurrent()) return;
       const blob = await response.blob();
-      if (!isCurrent(generation)) return;
+      if (!exportStillCurrent()) return;
       const objectUrl = URL.createObjectURL(blob);
-      if (!isCurrent(generation)) {
+      if (!exportStillCurrent()) {
         URL.revokeObjectURL(objectUrl);
         return;
       }
@@ -207,10 +239,11 @@ export function SSHKeyExportDialog({
       anchor.click();
       URL.revokeObjectURL(objectUrl);
     } catch (err) {
-      if (!isCurrent(generation) || err instanceof StaleExportOperation) return;
+      if (!exportStillCurrent() || err instanceof StaleExportOperation) return;
+      if (sensitiveStepUpBlock({ token, totpEnabled }) !== "ready") return;
       toast.error(getErrorMessage(err, t("sshKeys.exportFailed")));
     } finally {
-      if (mountedRef.current) {
+      if (exportStillCurrent()) {
         setDownloading(false);
       }
     }
@@ -226,6 +259,7 @@ export function SSHKeyExportDialog({
         </DialogHeader>
 
         <DialogBody className="space-y-5">
+          {totpEnabled === false ? <StepUpPrerequisiteNotice /> : null}
           {/* 格式选择 */}
           <div className="space-y-2">
             <label className="text-sm font-medium">
@@ -254,6 +288,11 @@ export function SSHKeyExportDialog({
                 </button>
               ))}
             </div>
+            <p className="text-xs text-muted-foreground">
+              {format === "authorized_keys"
+                ? t("sshKeys.exportAuthorizedKeysFieldNote")
+                : t("sshKeys.exportDigestFieldNote")}
+            </p>
           </div>
 
           {/* 范围选择 */}

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BellRing, Loader2 } from "lucide-react";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
+import { sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
 import { useConfirm } from "@/hooks/use-confirm";
 import {
   DataSurface,
@@ -18,6 +20,7 @@ import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { apiClient } from "@/lib/api/client";
+import { getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { getErrorMessage } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
@@ -72,7 +75,7 @@ function AlertCenterSession({
   refreshVersion,
 }: AlertCenterProps) {
   const { t } = useTranslation();
-  const { role } = useAuth();
+  const { role, totpEnabled } = useAuth();
   const authRole = role ?? null;
   const withStepUp = useStepUpAction(
     STEP_UP_ACTIONS.taskManualTrigger,
@@ -426,34 +429,40 @@ function AlertCenterSession({
       toast.error(t("notifications.noAlertTask"));
       return;
     }
+    if (sensitiveStepUpBlock({ token, totpEnabled }) !== "ready") return;
     const generation = sessionGenerationRef.current;
-    if (!isCurrentSession(generation)) return;
+    const authGeneration = getAuthSessionGeneration();
+    const retryStillCurrent = () => isCurrentSession(generation)
+      && !isAuthTransitionActive()
+      && getAuthSessionGeneration() === authGeneration
+      && capsRef.current.canTriggerTasks;
+    if (!retryStillCurrent()) return;
     const taskId = alert.taskId;
     let triggered = false;
     try {
       await withStepUp(async (proof) => {
-        if (!isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
+        if (!retryStillCurrent()) return;
         try {
           await apiClient.requestTaskManualTriggerCredentialGrant(token, {
             taskId,
             reason: t("tasks.manualTriggerGrantReason", { id: taskId }),
             requestedTtlSeconds: 600,
           }, proof);
-          if (!isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
+          if (!retryStillCurrent()) return;
           await apiClient.triggerTask(token, taskId, proof);
-          if (!isCurrentSession(generation)) return;
+          if (!retryStillCurrent()) return;
           triggered = true;
         } catch (error) {
-          if (!isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
+          if (!retryStillCurrent()) return;
           throw error;
         }
       });
-      if (!triggered || !isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
+      if (!triggered || !retryStillCurrent()) return;
       toast.success(t("notifications.retryTriggered", { id: taskId }));
       setReload((value) => value + 1);
       onAlertMutated?.();
     } catch (err) {
-      if (!isCurrentSession(generation) || !capsRef.current.canTriggerTasks) return;
+      if (!retryStillCurrent()) return;
       toast.error(getErrorMessage(err));
     }
   };
@@ -523,7 +532,8 @@ function AlertCenterSession({
     : alerts;
 
   return (
-    <DataSurface>
+      <DataSurface>
+      {canTriggerTasks && totpEnabled === false ? <StepUpPrerequisiteNotice className="mb-3" /> : null}
       <DataSurfaceHeader
         title={t("notifications.alertCenterTitle")}
         description={t("notifications.alertCenterDesc", { total })}

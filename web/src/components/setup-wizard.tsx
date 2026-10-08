@@ -345,6 +345,12 @@ export function SetupWizard() {
                 })}
               </div>
 
+              {currentStep.id === "task" ? (
+                <p data-testid="setup-wizard-security-note" className="text-sm leading-6 text-muted-foreground">
+                  {t("setupWizard.securityPreparation")}
+                </p>
+              ) : null}
+
               {/* 操作链接按钮 */}
               {currentStep.linkTo && currentStep.linkLabel && (
                 <div className="flex justify-center pt-2">

@@ -3,9 +3,11 @@ import { RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FormDialog } from "@/components/ui/form-dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import { assertSensitiveStepUpCurrent, assertSensitiveStepUpReady, sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
 
 const TASK_RESTORE_GRANT_REASON_MAX_LENGTH = 240;
 const TASK_RESTORE_GRANT_TTL_SECONDS = 600;
@@ -46,7 +48,7 @@ function RestoreConfirmDialogContent({
   const [grantReason, setGrantReason] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const { ensureStepUpProof } = useAuth();
+  const { ensureStepUpProof, totpEnabled } = useAuth();
 
   const handleSubmit = useCallback(async () => {
     const reason = grantReason.trim();
@@ -59,24 +61,29 @@ function RestoreConfirmDialogContent({
       return;
     }
 
+    if (sensitiveStepUpBlock({ token, totpEnabled }) !== "ready") return;
     setSaving(true);
     setError("");
     try {
+      const generation = assertSensitiveStepUpReady({ token, totpEnabled });
       const proof = await ensureStepUpProof(
         STEP_UP_ACTIONS.taskRestoreTrigger,
         { persist: false, reuseCached: false },
       );
+      assertSensitiveStepUpCurrent(generation);
       await apiClient.requestTaskRestoreCredentialGrant(
         token,
         { taskId, reason, requestedTtlSeconds: TASK_RESTORE_GRANT_TTL_SECONDS },
         proof,
       );
+      assertSensitiveStepUpCurrent(generation);
       const result = await apiClient.restoreTask(
         token,
         taskId,
         targetPath.trim() || undefined,
         proof,
       );
+      assertSensitiveStepUpCurrent(generation);
       onOpenChange(false);
       if (result.runId) onSuccess?.(result.runId);
     } catch (err) {
@@ -84,7 +91,7 @@ function RestoreConfirmDialogContent({
     } finally {
       setSaving(false);
     }
-  }, [ensureStepUpProof, grantReason, onOpenChange, onSuccess, t, targetPath, taskId, token]);
+  }, [ensureStepUpProof, grantReason, onOpenChange, onSuccess, t, targetPath, taskId, token, totpEnabled]);
 
   return (
     <FormDialog
@@ -99,6 +106,7 @@ function RestoreConfirmDialogContent({
       submitLabel={t('restore.submit')}
       savingLabel={t('restore.saving')}
     >
+      {totpEnabled === false ? <StepUpPrerequisiteNotice /> : null}
       {error && (
         <div role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}

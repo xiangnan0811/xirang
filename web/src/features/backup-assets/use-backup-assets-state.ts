@@ -14,6 +14,13 @@ import { apiClient } from "@/lib/api/client";
 import { mapBackupAssetsError, type BackupAssetsUIError } from "@/lib/api/backup-assets-error";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import {
+  backupAuthGeneration,
+  backupSensitiveBlock,
+  backupSensitiveCurrent,
+  backupSensitiveRuntime,
+  type BackupSensitiveRuntime,
+} from "@/features/backup-assets/backup-sensitive-runtime";
+import {
   clearStepUpProof as clearStoredStepUpProof,
   readStepUpProof,
 } from "@/lib/step-up-storage";
@@ -261,6 +268,8 @@ export interface UseBackupAssetsStateOptions {
   refreshVersion?: number;
   ensureStepUpProof?: AuthContextValue["ensureStepUpProof"];
   clearStepUpProof?: AuthContextValue["clearStepUpProof"];
+  totpEnabled?: boolean;
+  authTransitioning?: boolean;
   onRouteRepair?: (repair: BackupAssetsSemanticIssue) => void;
 }
 
@@ -336,6 +345,8 @@ export function useBackupAssetsState({
   refreshVersion,
   ensureStepUpProof,
   clearStepUpProof,
+  totpEnabled,
+  authTransitioning = false,
   onRouteRepair,
 }: UseBackupAssetsStateOptions): BackupAssetsController {
   const [state, dispatch] = useReducer(backupAssetsReducer, route, createInitialBackupAssetsState);
@@ -369,7 +380,9 @@ export function useBackupAssetsState({
   >(emptyValueResource);
   const [recoveryPointLoadKey, setRecoveryPointLoadKey] = useState<string | null>(null);
   const [semanticIssue, setSemanticIssue] = useState<BackupAssetsSemanticIssue | null>(null);
-  const { runLatest, abort } = useBackupAssetsRequestCoordinator(state.selectionGeneration);
+  const { runLatest, abort, abortAll } = useBackupAssetsRequestCoordinator(state.selectionGeneration);
+  const securityRef = useRef<BackupSensitiveRuntime>(backupSensitiveRuntime(token, totpEnabled, authTransitioning));
+  securityRef.current = backupSensitiveRuntime(token, totpEnabled, authTransitioning);
   const routeKey = serializeBackupAssetsRoute(route);
   const resultRouteKey = backupAssetsResultRequestKey(route);
   const selectedEntryOwnerKey = selectedEntryOwnerKeyFor(token, role, route);
@@ -395,6 +408,12 @@ export function useBackupAssetsState({
   const contentSelectionKeyRef = useRef(contentSelectionKey);
   const previewAttemptRef = useRef(0);
   const startedPreviewKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!authTransitioning) return;
+    abortAll();
+    startedPreviewKeyRef.current = null;
+  }, [abortAll, authTransitioning]);
   const selectionGenerationRef = useRef(state.selectionGeneration);
   const routeRepairRef = useRef(onRouteRepair);
   const shared = useContext(SharedContext);
@@ -619,13 +638,14 @@ export function useBackupAssetsState({
       }
       const request = buildTemporarySearchRequest(currentRoute, normalized, null);
       if (!request) return;
+      if (securityRef.current.authTransitioning) return;
       const requestKey = `search:attempt-${++searchAttemptRef.current}`;
       dispatch({ type: "results_loading", requestKey, replace: true });
       void runLatest(
         "search",
         requestKey,
         (signal) =>
-          apiClient.search(token, withSecretRevealProof({ query: request, signal })),
+          apiClient.search(token, withSecretRevealProof({ query: request, signal }, securityRef.current)),
         (projection) => commitSearchProjection(projection, requestKey, false, dispatch),
         (error) => {
           clearRejectedSecretRevealProof(error, clearStepUpProof);
@@ -641,7 +661,7 @@ export function useBackupAssetsState({
   );
 
   const refreshResults = useCallback(() => {
-    if (!token) return;
+    if (!token || authTransitioning) return;
     const currentRoute = routeRef.current.value;
     const requestKey = `results:${refreshGeneration}:${resultRouteKey}`;
     if (backupAssetsFilterIssue(currentRoute) !== null) {
@@ -706,7 +726,7 @@ export function useBackupAssetsState({
         "search",
         requestKey,
         (signal) =>
-          apiClient.search(token, withSecretRevealProof({ savedSearchId: currentRoute.savedSearchId!, limit: 200, signal })),
+          apiClient.search(token, withSecretRevealProof({ savedSearchId: currentRoute.savedSearchId!, limit: 200, signal }, securityRef.current)),
         (projection) => commitSearchProjection(projection, requestKey, false, dispatch),
         (error) => {
           clearRejectedSecretRevealProof(error, clearStepUpProof);
@@ -726,7 +746,7 @@ export function useBackupAssetsState({
       if (text === null) return;
       executeSearch(text);
     }
-  }, [abort, clearStepUpProof, derivedRecoveryPointStatus, executeSearch, refreshGeneration, resultRouteKey, runLatest, selectedRecoveryPoint, token, visibleSemanticIssue]);
+  }, [abort, authTransitioning, clearStepUpProof, derivedRecoveryPointStatus, executeSearch, refreshGeneration, resultRouteKey, runLatest, selectedRecoveryPoint, token, visibleSemanticIssue]);
 
   useEffect(() => {
     const currentRoute = routeRef.current.value;
@@ -768,7 +788,7 @@ export function useBackupAssetsState({
   }, []);
 
   const loadMore = useCallback(() => {
-    if (!token || !state.result.nextCursor || !state.result.requestKey) return;
+    if (!token || authTransitioning || !state.result.nextCursor || !state.result.requestKey) return;
     const currentRoute = routeRef.current.value;
     const cursor = state.result.nextCursor;
     const requestKey = state.result.requestKey;
@@ -824,7 +844,7 @@ export function useBackupAssetsState({
         (signal) =>
           apiClient.search(
             token,
-            withSecretRevealProof(input ? { ...input, signal } : { query: query!, signal })
+            withSecretRevealProof(input ? { ...input, signal } : { query: query!, signal }, securityRef.current)
           ),
         (projection) => commitSearchProjection(projection, requestKey, true, dispatch),
         (error) => {
@@ -841,7 +861,7 @@ export function useBackupAssetsState({
             void runLatest(
               "search",
               requestKey,
-              (signal) => apiClient.search(token, withSecretRevealProof({ query: replay, signal })),
+              (signal) => apiClient.search(token, withSecretRevealProof({ query: replay, signal }, securityRef.current)),
               (projection) => commitSearchProjection(projection, requestKey, false, dispatch),
               (replayError) => {
                 clearRejectedSecretRevealProof(replayError, clearStepUpProof);
@@ -858,7 +878,7 @@ export function useBackupAssetsState({
         }
       );
     }
-  }, [clearStepUpProof, refreshResults, runLatest, state.result.nextCursor, state.result.requestKey, token]);
+  }, [authTransitioning, clearStepUpProof, refreshResults, runLatest, state.result.nextCursor, state.result.requestKey, token]);
 
   const loadSavedSearches = useCallback(() => {
     if (!token) {
@@ -1358,8 +1378,9 @@ export function useBackupAssetsState({
       correlationId?: string;
     },
   ) {
-    if (!token) return;
+    if (!token || securityRef.current.authTransitioning) return;
     const bindingKey = contentTicketBindingKey(selectedAsset, input, options.attempt);
+    const authGeneration = backupAuthGeneration();
     contentOwnerKeyRef.current = contentSelectionKey;
     setContent({ status: "loading", value: null });
     dispatch({ type: "ticket_issuing", bindingKey });
@@ -1387,13 +1408,30 @@ export function useBackupAssetsState({
             return { kind: "entry-only" as const, asset: ticketAsset };
           }
         }
+        if (
+          input.stepUpProof !== undefined &&
+          (!backupSensitiveCurrent(authGeneration) || backupSensitiveBlock(securityRef.current) !== null)
+        ) {
+          return { kind: "sensitive-stale" as const };
+        }
         const projection = await apiClient.issueTicket(token, ticketAsset.ref, {
           ...input,
           signal,
         });
+        if (
+          input.stepUpProof !== undefined &&
+          (!backupSensitiveCurrent(authGeneration) || backupSensitiveBlock(securityRef.current) !== null)
+        ) {
+          return { kind: "sensitive-stale" as const };
+        }
         return { kind: "ticket" as const, projection, asset: ticketAsset };
       },
       (value) => {
+        if (value.kind === "sensitive-stale") {
+          setContent(emptyValueResource());
+          dispatch({ type: "ticket_detached" });
+          return;
+        }
         if (value.kind === "blocked") {
           setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
           dispatch({ type: "ticket_failed", bindingKey });
@@ -1463,6 +1501,11 @@ export function useBackupAssetsState({
           ensureStepUpProof &&
           proofAttempt !== "fresh"
         ) {
+          if (backupSensitiveBlock(securityRef.current) !== null || !backupSensitiveCurrent(authGeneration)) {
+            setContent({ status: "blocked", value: null, error: mapped });
+            dispatch({ type: "ticket_failed", bindingKey });
+            return;
+          }
           const capturedGeneration = selectionGenerationRef.current;
           const capturedOwnerKey = contentSelectionKeyRef.current;
           const reuseCached = proofAttempt === "none";
@@ -1472,6 +1515,7 @@ export function useBackupAssetsState({
             reuseCached,
           })
             .then((proof) => {
+              if (!backupSensitiveCurrent(authGeneration) || backupSensitiveBlock(securityRef.current) !== null) return;
               if (selectionGenerationRef.current !== capturedGeneration ||
                   contentSelectionKeyRef.current !== capturedOwnerKey) return;
               const active = activePreviewRef.current;
@@ -1551,9 +1595,9 @@ export function useBackupAssetsState({
       action: "preview",
       ...resolvedProduct,
     };
-    const cachedProof = currentTicket.classification === "non_secret"
-      ? null
-      : readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
+    const secretRenewal = currentTicket.classification !== "non_secret";
+    if (secretRenewal && backupSensitiveBlock(securityRef.current) !== null) return;
+    const cachedProof = secretRenewal ? readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal) : null;
     if (cachedProof !== null) input = withContentStepUpProof(input, cachedProof.proof);
     const attempt = ++previewAttemptRef.current;
     activePreviewRef.current = { asset: selectedAsset, input, attempt };
@@ -1591,14 +1635,17 @@ export function useBackupAssetsState({
         setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
         return;
       }
+      if (backupSensitiveBlock(securityRef.current) !== null) return;
       activePreviewRef.current = null;
       const capturedGeneration = selectionGenerationRef.current;
       const capturedOwnerKey = contentSelectionKeyRef.current;
+      const authGeneration = backupAuthGeneration();
       void ensureStepUpProof(STEP_UP_ACTIONS.assetDownload, {
         persist: false,
         reuseCached: false,
       })
         .then((stepUpProof) => {
+          if (!backupSensitiveCurrent(authGeneration) || backupSensitiveBlock(securityRef.current) !== null) return;
           if (selectionGenerationRef.current !== capturedGeneration ||
               contentSelectionKeyRef.current !== capturedOwnerKey) return;
           const input: BackupContentTicketInput = {
@@ -1647,7 +1694,8 @@ export function useBackupAssetsState({
       selectedEntryOwnerKeyRef.current !== selectedEntryOwnerKey ||
       !selectedAsset ||
       selectedAsset.entryType !== "file" ||
-      !safePreviewPrepareEligible(role, selectedRecoveryPoint, route)
+      !safePreviewPrepareEligible(role, selectedRecoveryPoint, route) ||
+      authTransitioning
     ) {
       return;
     }
@@ -1669,6 +1717,7 @@ export function useBackupAssetsState({
     activePreviewRef.current = { asset: selectedAsset, input, attempt };
     issueContentTicket(selectedAsset, input, { revealOnce: true, attempt, prepareSource: true });
   }, [
+    authTransitioning,
     issueContentTicket,
     role,
     route,
@@ -1968,7 +2017,9 @@ function availableAssets(items: Array<CatalogProjection<BackupAsset>>) {
 
 function withSecretRevealProof<T extends object>(
   input: T,
+  runtime: BackupSensitiveRuntime,
 ): T & { secretRevealProof?: string } {
+  if (backupSensitiveBlock(runtime) !== null) return input;
   const cached = readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
   return cached === null ? input : { ...input, secretRevealProof: cached.proof };
 }

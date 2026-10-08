@@ -105,6 +105,53 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// LogoutMiddleware admits only a signed, non-purpose primary token with a
+// complete session binding. It intentionally does not consult current user
+// role/token_version state: logout must still reach the handler after a
+// successful TOTP activation has made the original bearer stale. The handler
+// can revoke only the JTI derived here; request bodies never participate.
+func LogoutMiddleware(jwtManager *auth.JWTManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request == nil || c.Request.Method != http.MethodPost {
+			respondAPIError(c, http.StatusMethodNotAllowed, "请求方法不允许")
+			c.Abort()
+			return
+		}
+		if jwtManager == nil {
+			respondAPIError(c, http.StatusServiceUnavailable, "认证服务不可用")
+			c.Abort()
+			return
+		}
+		header := c.GetHeader("Authorization")
+		if header == "" {
+			respondAPIError(c, http.StatusUnauthorized, "缺少 Authorization 头")
+			c.Abort()
+			return
+		}
+		parts := strings.SplitN(header, " ", 2)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			respondAPIError(c, http.StatusUnauthorized, "Authorization 格式错误")
+			c.Abort()
+			return
+		}
+		claims, err := jwtManager.ParseLogoutToken(parts[1])
+		if err != nil {
+			respondAPIError(c, http.StatusUnauthorized, "token 无效或过期")
+			c.Abort()
+			return
+		}
+		binding := SessionBinding{
+			JTI: claims.ID, UserID: claims.UserID, Role: claims.Role,
+			TokenVersion: claims.TokenVersion, ExpiresAt: claims.ExpiresAt.UTC(),
+		}
+		c.Set(CtxUserID, claims.UserID)
+		c.Set(CtxUsername, claims.Username)
+		c.Set(CtxRole, claims.Role)
+		c.Set(CtxSessionBinding, binding)
+		c.Next()
+	}
+}
+
 func CurrentSessionBinding(c *gin.Context) (SessionBinding, bool) {
 	value, exists := c.Get(CtxSessionBinding)
 	if !exists {

@@ -1,12 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { StrictMode, useEffect, useRef, useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BackupAsset, BackupContentRenderer, BackupContentTicket } from "@/types/domain";
 
-import { buildAssetRows } from "./__tests__/test-utils";
+import { buildAssetRows, renderBackupSurface as render } from "./__tests__/test-utils";
 import { AssetPreview } from "./asset-preview";
 import { selectBackupAssetExactPreviewProduct } from "./asset-preview-model";
 

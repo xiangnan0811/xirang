@@ -37,6 +37,36 @@ Compose 与 Dockerfile 的健康检查均访问 `http://127.0.0.1:10761/readyz`�
 
 镜像默认 `LOG_FILE=/logs/xirang.log`，Nginx 文件日志也写 `/logs`。Compose 的 Docker `json-file` 当前按 `max-size=10m`、`max-file=3` 轮转 stdout/stderr；该设置不会轮转 `/logs` 文件。镜像没有安装/调度 logrotate，应用也没有内置文件轮转。运维方必须单独控制文件日志增长；不能声称 Docker 日志选项已经保护挂载日志。文件轮转方式及打开句柄影响见[日志合同](logging-guidelines.md)。
 
+## 数据库快照与 cron 产物观测
+
+Web `POST /api/v1/system/backup-db` 仅以 SQLite `VACUUM INTO` 生成数据库快照，
+按 `DB_BACKUP_MAX_COUNT` 保留数量；列表失败、空列表和 PostgreSQL 的 501 不得
+混为同一状态。创建成功后的列表刷新失败不撤销已创建事实。外部配置、当前与历史
+加密密钥、known_hosts 及远端数据必须另行保全，恢复只走现有离线运维流程。
+
+独立 admin-only `GET /api/v1/system/cron-backup-status` 不继承 Web 的 SQLite 限制。
+以实际 DB dialect 选择 `xirang-sqlite-*.db` 或 `xirang-postgres-*.dump`；
+`CRON_DB_BACKUP_DIR` 默认空，All-in-One 显式 `/backup/db`，目录是容器内路径。
+`CRON_DB_BACKUP_MAX_AGE_HOURS` 默认 26、正整数 1–8760；非法配置作为响应状态呈现，
+不令启动失败。接口不创建目录、不执行调度、不写状态、不校验整个数据库内容。
+
+响应状态为 `not_configured`、`invalid_configuration`、`directory_unreadable`、
+`no_complete_backup`、`scan_limit_exceeded`、`clock_anomaly`、`stale`、`fresh`。
+`engine` 正常为 `sqlite` 或 `postgres`；仅无法识别运行时引擎的
+`invalid_configuration` 响应使用空值，不能伪称受支持引擎。
+固定证据字段为 `evidence=artifact_pair`、`time_source=mtime`、
+`content_verified=false`；时间是 RFC3339 UTC。只在有完整产物对时提供最新时间与
+产物名，以数据库/校验文件较晚的 mtime 作为发布时间。任一合格对未来 mtime
+返回时钟异常；否则 age ≤ 阈值才为 fresh。目录存在不证明 cron 已启用，
+不提供最近尝试、作业成功、调度时区或恢复成功声明。
+
+扫描以 `os.OpenRoot` 约束，配置根符号链接无效，产物/校验文件必须非空普通文件；
+Lstat、打开后 SameFile 及读取后身份/大小/mtime 核对拒绝替换或变化。
+目录最多 4096 项、每个校验文件最多 4096 字节、总校验读取最多 4 MiB；
+超限不得从部分结果宣称 fresh。校验文本恰好一条 SHA256 记录，名称仅接受对应
+basename 或配置目录下规范绝对路径，只作相等性验证，绝不据此打开文件。
+cron 每日备份、mtime 30 天清理与 Web 数量限制保持独立，详见[部署指南](../../deployment.md#手动备份与恢复)。
+
 ## 内容网关与可选 Worker
 
 资产内容精确路由与形状兜底路由的顺序、Range、buffering、75 秒网关上限、独立脱敏日志和转发头安全全部归[内容交付合同](../domains/backup-content-delivery.md)，改动 Nginx 时运行 `check-asset-content-nginx.sh` 及变异自测，并以实际渲染模板验证。应用授权和更短 deadline 仍是最终边界。

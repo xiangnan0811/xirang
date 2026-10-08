@@ -350,23 +350,53 @@ func (h *AuthHandler) TOTPSetup(c *gin.Context) {
 }
 
 type totpVerifyRequest struct {
-	Code         string `json:"code" binding:"required"`
-	EnrollmentID string `json:"enrollment_id" binding:"required"`
+	Code         string `json:"code"`
+	EnrollmentID string `json:"enrollment_id"`
+}
+
+type totpVerifyUserResponse struct {
+	ID          uint   `json:"id"`
+	Username    string `json:"username"`
+	Role        string `json:"role"`
+	TOTPEnabled bool   `json:"totp_enabled"`
+}
+
+type totpVerifyResponse struct {
+	Token         string                 `json:"token"`
+	User          totpVerifyUserResponse `json:"user"`
+	RecoveryCodes []string               `json:"recovery_codes"`
+}
+
+func respondTOTPVerifyFailure(c *gin.Context, err error) {
+	if code, ok := auth.TOTPVerifyErrorCodeFor(err); ok {
+		respondBadRequestData(c, err.Error(), gin.H{"error_code": string(code)})
+		return
+	}
+	switch {
+	case errors.Is(err, auth.ErrTOTPAlreadyEnabled),
+		errors.Is(err, auth.ErrSecurityConflict):
+		// These states can mean another request has already changed the
+		// account. Do not attach a retryable activation code.
+		respondBadRequest(c, err.Error())
+	default:
+		respondInternalError(c, fmt.Errorf("保存 2FA 配置失败: %w", err))
+	}
 }
 
 // TOTPVerify godoc
 // @Summary      验证并激活 2FA
-// @Description  使用服务端暂存的密钥校验验证码，成功后启用 2FA 并返回恢复码
+// @Description  使用当前会话绑定验证 TOTP；成功返回同 JTI、同到期时间的替换主令牌、安全用户信息及本次恢复码，不授予 step-up
 // @Tags         auth
 // @Security     Bearer
 // @Accept       json
 // @Produce      json
 // @Param        body  body      totpVerifyRequest  true  "TOTP 验证码"
-// @Success      200   {object}  handlers.Response
+// @Success      200   {object}  handlers.Response{data=totpVerifyResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Router       /auth/2fa/verify [post]
 func (h *AuthHandler) TOTPVerify(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	if h.authService == nil {
 		respondInternalError(c, fmt.Errorf("认证服务未注入"))
 		return
@@ -376,22 +406,38 @@ func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-	result, err := h.authService.VerifyTOTP(c.Request.Context(), c.GetUint(middleware.CtxUserID), req.Code, req.EnrollmentID)
-	if err != nil {
-		switch {
-		case errors.Is(err, auth.ErrTOTPEnrollmentRequired),
-			errors.Is(err, auth.ErrTOTPEnrollmentExpired),
-			errors.Is(err, auth.ErrTOTPEnrollmentConflict),
-			errors.Is(err, auth.ErrTOTPCodeInvalid),
-			errors.Is(err, auth.ErrTOTPAlreadyEnabled),
-			errors.Is(err, auth.ErrSecurityConflict):
-			respondBadRequest(c, err.Error())
-		default:
-			respondInternalError(c, fmt.Errorf("保存 2FA 配置失败: %w", err))
-		}
+	binding, ok := middleware.CurrentSessionBinding(c)
+	if !ok || binding.UserID == 0 || binding.JTI == "" || binding.ExpiresAt.IsZero() {
+		respondUnauthorized(c, "登录会话无效")
 		return
 	}
-	respondOK(c, gin.H{"recovery_codes": result.RecoveryCodes})
+	result, err := h.authService.VerifyTOTP(c.Request.Context(), auth.TOTPActivationSession{
+		JTI:          binding.JTI,
+		UserID:       binding.UserID,
+		Role:         binding.Role,
+		TokenVersion: binding.TokenVersion,
+		ExpiresAt:    binding.ExpiresAt,
+	}, req.Code, req.EnrollmentID)
+	if err != nil {
+		respondTOTPVerifyFailure(c, err)
+		return
+	}
+	if result == nil || strings.TrimSpace(result.Token) == "" || result.User.ID == 0 ||
+		strings.TrimSpace(result.User.Username) == "" || strings.TrimSpace(result.User.Role) == "" ||
+		!result.User.TOTPEnabled || result.RecoveryCodes == nil {
+		respondInternalError(c, fmt.Errorf("2FA 激活响应无效"))
+		return
+	}
+	respondOK(c, totpVerifyResponse{
+		Token: result.Token,
+		User: totpVerifyUserResponse{
+			ID:          result.User.ID,
+			Username:    result.User.Username,
+			Role:        result.User.Role,
+			TOTPEnabled: true,
+		},
+		RecoveryCodes: result.RecoveryCodes,
+	})
 }
 
 type stepUpRequest struct {

@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode } from "react";
@@ -43,6 +44,8 @@ const {
       current: {
         role: "admin" as "admin" | "operator" | "viewer" | null,
         token: "auth-marker",
+        totpEnabled: true,
+        authTransitioning: false,
       },
     },
   };
@@ -72,7 +75,8 @@ vi.mock("@/context/auth-context.hooks", () => ({
     login: vi.fn(),
     logout: vi.fn(),
     setTotpEnabled: vi.fn(),
-    totpEnabled: false,
+    totpEnabled: authRef.current.totpEnabled,
+    authTransitioning: authRef.current.authTransitioning,
     ensureStepUpProof: ensureStepUpProofMock,
     clearStepUpProof: clearStepUpProofMock,
   }),
@@ -183,7 +187,7 @@ describe("BatchCommandDialog", () => {
     localStorage.clear();
     sessionStorage.clear();
     useRealStepUpRef.current = false;
-    authRef.current = { role: "admin", token: "auth-marker" };
+    authRef.current = { role: "admin", token: "auth-marker", totpEnabled: true, authTransitioning: false };
     requestBatchCommandCredentialGrantMock.mockReset();
     requestBatchCommandCredentialGrantMock.mockResolvedValue([{ id: 11, status: "active" }]);
     createBatchCommandMock.mockReset();
@@ -549,7 +553,7 @@ describe("BatchCommandDialog", () => {
 
   it("lets the current operator complete grant step-up and create the batch", async () => {
     useRealStepUpRef.current = true;
-    authRef.current = { role: "operator", token: "auth-marker" };
+    authRef.current = { role: "operator", token: "auth-marker", totpEnabled: true, authTransitioning: false };
     const user = userEvent.setup();
     requestBatchCommandCredentialGrantMock
       .mockRejectedValueOnce(createStepUpRequiredError())
@@ -612,5 +616,26 @@ describe("BatchCommandDialog", () => {
 
     expectNoBatchFollowUp();
     expect(requestBatchCommandCredentialGrantMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not grant or create a command when two-factor authentication is disabled", async () => {
+    authRef.current.totpEnabled = false;
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        {commandElement()}
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText("命令"), "uptime");
+    await user.click(screen.getByRole("button", { name: "执行" }));
+    await user.click(screen.getByRole("button", { name: "确认并验证" }));
+
+    expect(requestBatchCommandCredentialGrantMock).not.toHaveBeenCalled();
+    expect(createBatchCommandMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: /stepUp.enableTOTP|启用两步验证|Enable two-factor/ })).toHaveAttribute(
+      "href",
+      "/app/settings?tab=account",
+    );
   });
 });

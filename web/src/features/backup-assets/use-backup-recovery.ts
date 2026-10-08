@@ -22,6 +22,15 @@ import {
 import { ApiError } from "@/lib/api/core";
 import { mapBackupAssetsError } from "@/lib/api/backup-assets-error";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import {
+  backupAuthGeneration,
+  backupSensitiveBlock,
+  backupSensitiveCurrent,
+  backupSensitiveDenialFromError,
+  backupSensitiveRuntime,
+  beginBackupSensitiveAction,
+  type BackupSensitiveDenial,
+} from "@/features/backup-assets/backup-sensitive-runtime";
 import type { AssetRef } from "@/types/domain";
 
 export type BackupRecoveryPhase =
@@ -40,7 +49,7 @@ export type BackupRecoveryPhase =
   | "unavailable"
   | "error";
 
-export type BackupRecoveryError = "forbidden" | "not_found" | "invalid" | "conflict" | "unavailable" | "secure_transport_required";
+export type BackupRecoveryError = "forbidden" | "not_found" | "invalid" | "conflict" | "unavailable" | "secure_transport_required" | "totp_required" | "auth_transitioning";
 
 export interface RecoverySourceContext {
   repositoryId: string;
@@ -90,6 +99,8 @@ export interface UseBackupRecoveryOptions {
   planId?: string;
   jobId?: string;
   ensureStepUpProof?: AuthContextValue["ensureStepUpProof"];
+  totpEnabled?: boolean;
+  authTransitioning?: boolean;
   onRouteChange: (handles: RecoveryRouteHandles, options: { replace: boolean }) => void;
   api?: BackupRecoveryApi;
   cryptoSource?: RecoveryCryptoSource;
@@ -164,6 +175,8 @@ function initialState(): BackupRecoveryState {
 }
 
 function classifyError(error: unknown): BackupRecoveryError {
+  const denial = backupSensitiveDenialFromError(error);
+  if (denial) return denial;
   if (mapBackupAssetsError(error, "content_ticket").code === "secure_transport_required") {
     return "secure_transport_required";
   }
@@ -302,6 +315,34 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
   const routeChanged = options.onRouteChange;
   const pollIntervalMs = options.pollIntervalMs;
   const ensureStepUpProof = options.ensureStepUpProof;
+  const authTransitioningRef = useRef(options.authTransitioning === true);
+  authTransitioningRef.current = options.authTransitioning === true;
+  const sensitiveRuntime = useCallback(() => backupSensitiveRuntime(
+    options.token,
+    options.totpEnabled,
+    options.authTransitioning,
+  ), [options.authTransitioning, options.token, options.totpEnabled]);
+  const noteSensitiveDenial = useCallback((denial: BackupSensitiveDenial) => {
+    update((value) => ({ ...value, error: denial }));
+  }, [update]);
+  const openSensitive = useCallback((): number | null => {
+    const runtime = sensitiveRuntime();
+    const denial = backupSensitiveBlock(runtime);
+    if (denial) {
+      noteSensitiveDenial(denial);
+      return null;
+    }
+    try {
+      return beginBackupSensitiveAction(runtime);
+    } catch (error) {
+      const classified = backupSensitiveDenialFromError(error);
+      if (classified) {
+        noteSensitiveDenial(classified);
+        return null;
+      }
+      throw error;
+    }
+  }, [noteSensitiveDenial, sensitiveRuntime]);
   const keyFactory = options.newIdempotencyKey;
   const cryptoSource = options.cryptoSource;
   const newKey = useCallback((endpoint: string) => {
@@ -311,11 +352,12 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
   }, [cryptoSource, keyFactory]);
 
   const reconcilePlan = useCallback(async (planId: string) => {
-    if (authToken === null || authRole !== "admin" || !/^[0-9a-f]{32}$/.test(planId) || !pageVisible()) return;
+    if (authToken === null || authRole !== "admin" || !/^[0-9a-f]{32}$/.test(planId) || !pageVisible() || authTransitioningRef.current) return;
+    const generation = backupAuthGeneration();
     const { controller, operation } = begin();
     try {
       const product = await getApi().getPlan(authToken, planId, controller.signal);
-      if (!current(operation)) return;
+      if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (product.status !== "available" || product.value.id !== planId) {
         update((value) => ({ ...value, phase: "unavailable", error: "unavailable" }));
         return;
@@ -330,11 +372,12 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
   }, [authRole, authToken, begin, current, getApi, routeChanged, update]);
 
   const reconcileJob = useCallback(async (jobId: string) => {
-    if (authToken === null || authRole !== "admin" || !/^[0-9a-f]{32}$/.test(jobId) || !pageVisible()) return;
+    if (authToken === null || authRole !== "admin" || !/^[0-9a-f]{32}$/.test(jobId) || !pageVisible() || authTransitioningRef.current) return;
+    const generation = backupAuthGeneration();
     const { controller, operation } = begin();
     try {
       const product = await getApi().getJob(authToken, jobId, controller.signal);
-      if (!current(operation)) return;
+      if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (product.status !== "available") {
         update((value) => ({ ...value, phase: "unavailable", error: "unavailable" }));
         return;
@@ -346,7 +389,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       let recoveredPlan = stateRef.current.plan;
       if (recoveredPlan?.id !== product.value.planId) {
         const planProduct = await getApi().getPlan(authToken, product.value.planId, controller.signal);
-        if (!current(operation)) return;
+        if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
         if (planProduct.status !== "available" || planProduct.value.id !== product.value.planId) {
           update((value) => ({ ...value, phase: "unavailable", error: "unavailable" }));
           return;
@@ -364,6 +407,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       if (shouldPoll(product.value) && pageVisible()) {
         timerRef.current = setTimeout(() => {
           timerRef.current = null;
+          if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
           void reconcileJob(product.value.id);
         }, pollIntervalMs ?? 2_000);
       }
@@ -498,12 +542,15 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       preflight?.preflightId === null || preflight?.preflightId === undefined || preflight.planRevision === null) {
       throw new Error("recovery preflight unavailable");
     }
+    const generation = openSensitive();
+    if (generation === null) return;
     let pending = pendingWriteRef.current;
     if (pending === null || pending.planId !== before.plan.id || pending.preflightId !== preflight.preflightId ||
       pending.expectedRevision !== before.plan.revision || pending.reason !== reason || pending.grant !== null) {
       const proofOperation = ++authorityProofRef.current;
       const proof = await options.ensureStepUpProof(STEP_UP_ACTIONS.assetRecover, { persist: false, reuseCached: false });
       if (!mountedRef.current || proofOperation !== authorityProofRef.current) return;
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       pending = {
         planId: before.plan.id,
         preflightId: preflight.preflightId,
@@ -516,11 +563,12 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       };
       pendingWriteRef.current = pending;
     }
+    if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
     const { controller, operation } = begin();
     update((value) => ({ ...value, phase: "authorizing_write", error: null }));
     try {
       const product = await getApi().authorizeWrite(options.token, { ...pending, signal: controller.signal });
-      if (!current(operation)) return;
+      if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (product.status !== "available" || product.value.grant === null || product.value.operation !== "write_authorize") {
         clearSensitive();
         update((value) => ({ ...value, phase: "unavailable", error: "unavailable" }));
@@ -537,11 +585,16 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       }));
     } catch (error) {
       if (!current(operation)) return;
+      const denial = backupSensitiveDenialFromError(error);
+      if (denial) {
+        noteSensitiveDenial(denial);
+        return;
+      }
       const ambiguous = isAmbiguous(error);
       if (!ambiguous) clearSensitive();
       update((value) => ({ ...value, phase: ambiguous ? "impact" : "error", error: classifyError(error) }));
     }
-  }, [begin, clearSensitive, current, getApi, newKey, options, update]);
+  }, [begin, clearSensitive, current, getApi, newKey, noteSensitiveDenial, openSensitive, options, update]);
 
   const overrideSecurity = useCallback(async (
     findingCategory: RecoverySecurityFindingCategory,
@@ -557,6 +610,8 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       !preflight.security.overridableCategories.includes(findingCategory)) {
       throw new Error("security finding is not overridable");
     }
+    const generation = openSensitive();
+    if (generation === null) return;
     let pending = pendingOverrideRef.current;
     if (pending === null || pending.planId !== before.plan.id || pending.preflightId !== preflight.preflightId ||
       pending.expectedRevision !== before.plan.revision || pending.findingCategory !== findingCategory ||
@@ -564,6 +619,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       const proofOperation = ++authorityProofRef.current;
       const proof = await options.ensureStepUpProof(STEP_UP_ACTIONS.assetRecover, { persist: false, reuseCached: false });
       if (!mountedRef.current || proofOperation !== authorityProofRef.current) return;
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       pending = {
         planId: before.plan.id,
         preflightId: preflight.preflightId,
@@ -575,11 +631,12 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       };
       pendingOverrideRef.current = pending;
     }
+    if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
     const { controller, operation } = begin();
     update((value) => ({ ...value, phase: "security", error: null }));
     try {
       const product = await getApi().overrideSecurity(options.token, { ...pending, signal: controller.signal });
-      if (!current(operation)) return;
+      if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (product.status !== "available" || product.value.operation !== "security_override" ||
         product.value.planId !== before.plan.id || product.value.grant !== null) {
         pendingOverrideRef.current = null;
@@ -605,11 +662,16 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       }));
     } catch (error) {
       if (!current(operation)) return;
+      const denial = backupSensitiveDenialFromError(error);
+      if (denial) {
+        noteSensitiveDenial(denial);
+        return;
+      }
       const ambiguous = isAmbiguous(error);
       if (!ambiguous) pendingOverrideRef.current = null;
       update((value) => ({ ...value, phase: ambiguous ? "security" : "error", error: classifyError(error) }));
     }
-  }, [begin, current, getApi, newKey, options, update]);
+  }, [begin, current, getApi, newKey, noteSensitiveDenial, openSensitive, options, update]);
 
   const execute = useCallback(async () => {
     const before = stateRef.current;
@@ -617,6 +679,8 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
     if (options.token === null || options.ensureStepUpProof === undefined || before.plan === null ||
       before.preflight?.preflightId === null || before.preflight?.preflightId === undefined || pending?.grant === null ||
       pending === null) throw new Error("write authority unavailable");
+    const generation = openSensitive();
+    if (generation === null) return;
     let executePending = pendingExecuteRef.current;
     if (executePending === null || executePending.planId !== before.plan.id ||
       executePending.preflightId !== before.preflight.preflightId ||
@@ -624,6 +688,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       const proofOperation = ++authorityProofRef.current;
       const proof = await options.ensureStepUpProof(STEP_UP_ACTIONS.assetRecover, { persist: false, reuseCached: false });
       if (!mountedRef.current || proofOperation !== authorityProofRef.current) return;
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       executePending = {
         planId: before.plan.id,
         preflightId: before.preflight.preflightId,
@@ -634,10 +699,12 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       };
       pendingExecuteRef.current = executePending;
     }
+    if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
     const { controller, operation } = begin();
     update((value) => ({ ...value, phase: "executing", error: null }));
     let durableJobId: string | null = null;
     try {
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       const product = await getApi().execute(options.token, {
         planId: executePending.planId,
         expectedRevision: executePending.expectedRevision,
@@ -648,7 +715,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
         idempotencyKey: executePending.idempotencyKey,
         signal: controller.signal,
       });
-      if (!current(operation)) return;
+      if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (product.status !== "available" || product.value.operation !== "execute" || product.value.jobId === null) {
         clearSensitive();
         update((value) => ({ ...value, phase: "unavailable", error: "unavailable" }));
@@ -670,6 +737,11 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       }));
     } catch (error) {
       if (!current(operation)) return;
+      const denial = backupSensitiveDenialFromError(error);
+      if (denial) {
+        noteSensitiveDenial(denial);
+        return;
+      }
       if (durableJobId !== null) {
         clearSensitive();
         update((value) => ({ ...value, phase: "unavailable", error: "unavailable", writeGrant: null }));
@@ -679,7 +751,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       if (!ambiguous) clearSensitive();
       update((value) => ({ ...value, phase: ambiguous ? "impact" : "error", error: classifyError(error) }));
     }
-  }, [begin, clearSensitive, current, getApi, newKey, options, update]);
+  }, [begin, clearSensitive, current, getApi, newKey, noteSensitiveDenial, openSensitive, options, update]);
 
   const authorizeExactMirrorDelete = useCallback(async (reason: string, confirmed: boolean) => {
     const before = stateRef.current;
@@ -688,6 +760,8 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       before.plan === null || checkpoint == null || before.job.targetMode !== "in_place") {
       throw new Error("delete confirmation unavailable");
     }
+    const generation = openSensitive();
+    if (generation === null) return;
     let pending = pendingDeleteRef.current;
     if (pending === null || pending.jobId !== before.job.id || pending.planId !== before.plan.id ||
       pending.checkpointId !== checkpoint.id || pending.attemptId !== checkpoint.attemptId ||
@@ -695,6 +769,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       const proofOperation = ++authorityProofRef.current;
       const proof = await options.ensureStepUpProof(STEP_UP_ACTIONS.assetRecover, { persist: false, reuseCached: false });
       if (!mountedRef.current || proofOperation !== authorityProofRef.current) return;
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       pending = {
         jobId: before.job.id,
         planId: before.plan.id,
@@ -708,11 +783,12 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       };
       pendingDeleteRef.current = pending;
     }
+    if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
     const { controller, operation } = begin();
     update((value) => ({ ...value, phase: "delete_authorization", error: null }));
     try {
       const product = await getApi().authorizeExactMirrorDelete(options.token, { ...pending, signal: controller.signal });
-      if (!current(operation)) return;
+      if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (product.status !== "available" || product.value.operation !== "exact_mirror_delete_authorize" ||
         product.value.jobId !== before.job.id) {
         pendingDeleteRef.current = null;
@@ -728,6 +804,11 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       }));
     } catch (error) {
       if (!current(operation)) return;
+      const denial = backupSensitiveDenialFromError(error);
+      if (denial) {
+        noteSensitiveDenial(denial);
+        return;
+      }
       const ambiguous = isAmbiguous(error);
       if (!ambiguous) pendingDeleteRef.current = null;
       update((value) => ({
@@ -736,7 +817,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
         error: classifyError(error),
       }));
     }
-  }, [begin, current, getApi, newKey, options, update]);
+  }, [begin, current, getApi, newKey, noteSensitiveDenial, openSensitive, options, update]);
 
   const loadJobItems = useCallback(async (page: number, pageSize = 25) => {
     const job = stateRef.current.job;
@@ -783,17 +864,21 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       job.targetMode !== "isolated" || job.resultSet?.lifecycle !== "ready") {
       throw new Error("recovery results unavailable");
     }
+    const generation = openSensitive();
+    if (generation === null) return;
     const proofOperation = ++authorityProofRef.current;
     const proof = await ensureStepUpProof(STEP_UP_ACTIONS.recoveryResultRetain, {
       persist: false, reuseCached: false,
     });
     if (!mountedRef.current || proofOperation !== authorityProofRef.current) return;
+    if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
     const { controller, operation } = begin();
     try {
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       const product = await getApi().retainResults(authToken, {
         jobId: job.id, expectedRevision: job.revision, requestedDeadline, proof, signal: controller.signal,
       });
-      if (!current(operation)) return;
+      if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (product.status !== "available" || product.value.jobId !== job.id ||
         product.value.resultSetId !== job.resultSet.id) {
         update((value) => ({ ...value, phase: "unavailable", error: "unavailable" }));
@@ -816,10 +901,16 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       }));
     } catch (error) {
       if (!current(operation)) return;
+      const denial = backupSensitiveDenialFromError(error);
+      if (denial) {
+        noteSensitiveDenial(denial);
+        return;
+      }
       if (!isAmbiguous(error)) {
         update((value) => ({ ...value, error: classifyError(error) }));
         return;
       }
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       try {
         const reconciled = await getApi().getJob(authToken, job.id, controller.signal);
         if (!current(operation)) return;
@@ -837,7 +928,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
         update((value) => ({ ...value, phase: "unavailable", error: "unavailable" }));
       }
     }
-  }, [authToken, begin, current, ensureStepUpProof, getApi, update]);
+  }, [authToken, begin, current, ensureStepUpProof, getApi, noteSensitiveDenial, openSensitive, update]);
 
   const downloadResult = useCallback(async (resultId: string) => {
     const before = stateRef.current;
@@ -847,17 +938,21 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       before.resultPage?.items.some((item) => item.id === resultId) !== true) {
       throw new Error("recovery result unavailable");
     }
+    const generation = openSensitive();
+    if (generation === null) return;
     const proofOperation = ++authorityProofRef.current;
     const proof = await options.ensureStepUpProof(STEP_UP_ACTIONS.recoveryResultDownload, {
       persist: false, reuseCached: false,
     });
     if (!mountedRef.current || proofOperation !== authorityProofRef.current) return;
+    if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
     const { controller, operation } = begin();
     try {
+      if (!backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       const product = await getApi().issueResultDownloadTicket(options.token, {
         jobId: job.id, resultId, proof, signal: controller.signal,
       });
-      if (!current(operation)) return;
+      if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
       if (product.status !== "available") {
         update((value) => ({ ...value, phase: "unavailable", error: "unavailable" }));
         return;
@@ -865,12 +960,15 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
       update((value) => ({ ...value, ticket: product.value, error: null }));
       options.onDownloadTicket?.(product.value);
     } catch (error) {
-      if (!current(operation)) return;
-      update((value) => ({ ...value, error: classifyError(error) }));
+      if (!current(operation) || !backupSensitiveCurrent(generation) || authTransitioningRef.current) return;
+      const denial = backupSensitiveDenialFromError(error);
+      update((value) => ({ ...value, error: denial ?? classifyError(error) }));
     } finally {
-      if (current(operation)) update((value) => ({ ...value, ticket: null }));
+      if (current(operation) && backupSensitiveCurrent(generation) && !authTransitioningRef.current) {
+        update((value) => ({ ...value, ticket: null }));
+      }
     }
-  }, [begin, current, getApi, options, update]);
+  }, [begin, current, getApi, openSensitive, options, update]);
 
   const cleanupResults = useCallback(async () => {
     const job = stateRef.current.job;
@@ -999,7 +1097,6 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
   const routeContextBinding = JSON.stringify([
     options.sessionKey ?? "",
     options.contextKey ?? "",
-    options.token ?? "",
     options.role ?? "",
     options.planId ?? "",
     options.jobId ?? "",
@@ -1012,11 +1109,15 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
   }, [reset, routeContextBinding]);
 
   useEffect(() => {
+    if (options.authTransitioning) {
+      clearWork();
+      return;
+    }
     const planId = options.planId;
     if (planId === undefined || options.jobId !== undefined) return;
     if (pageVisible()) void reconcilePlan(planId);
     const visibilityChanged = () => {
-      if (!pageVisible()) {
+      if (!pageVisible() || authTransitioningRef.current) {
         clearWork();
         operationRef.current += 1;
         return;
@@ -1025,14 +1126,18 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
     };
     document.addEventListener("visibilitychange", visibilityChanged);
     return () => document.removeEventListener("visibilitychange", visibilityChanged);
-  }, [clearWork, options.jobId, options.planId, reconcilePlan, routeContextBinding]);
+  }, [clearWork, options.authTransitioning, options.jobId, options.planId, reconcilePlan, routeContextBinding]);
 
   useEffect(() => {
+    if (options.authTransitioning) {
+      clearWork();
+      return;
+    }
     const jobId = options.jobId;
     if (jobId === undefined) return;
     if (pageVisible()) void reconcileJob(jobId);
     const visibilityChanged = () => {
-      if (!pageVisible()) {
+      if (!pageVisible() || authTransitioningRef.current) {
         clearWork();
         operationRef.current += 1;
         return;
@@ -1041,7 +1146,7 @@ export function useBackupRecovery(options: UseBackupRecoveryOptions) {
     };
     document.addEventListener("visibilitychange", visibilityChanged);
     return () => document.removeEventListener("visibilitychange", visibilityChanged);
-  }, [clearWork, options.jobId, reconcileJob, routeContextBinding]);
+  }, [clearWork, options.authTransitioning, options.jobId, reconcileJob, routeContextBinding]);
 
   useEffect(() => {
     return () => {

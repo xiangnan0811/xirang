@@ -22,6 +22,8 @@ const { apiClientMock, authRef, toastMock } = vi.hoisted(() => ({
       token: "test-token" as string | null,
       username: "admin",
       role: "admin" as "admin" | "operator" | "viewer" | null,
+      totpEnabled: true,
+      authTransitioning: false,
       ensureStepUpProof: vi.fn(),
       clearStepUpProof: vi.fn(),
       logout: vi.fn(),

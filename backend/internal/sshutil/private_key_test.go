@@ -1,6 +1,7 @@
 package sshutil
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -9,6 +10,8 @@ import (
 	"testing"
 
 	"xirang/backend/internal/secure"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func buildRSAPrivateKeyForTest(t *testing.T) string {
@@ -91,6 +94,46 @@ func TestValidateAndPreparePrivateKeyAcceptsEscapedOpenSSHLikeInput(t *testing.T
 	}
 	if !strings.HasPrefix(prepared, "-----BEGIN RSA PRIVATE KEY-----") {
 		t.Fatalf("期望输出 PEM RSA 私钥，实际: %s", prepared[:min(32, len(prepared))])
+	}
+}
+
+func buildED25519OpenSSHPrivateKeyForTest(t *testing.T) string {
+	t.Helper()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("生成 ED25519 测试私钥失败: %v", err)
+	}
+	block, err := ssh.MarshalPrivateKey(key, "")
+	if err != nil {
+		t.Fatalf("编码 ED25519 OpenSSH 测试私钥失败: %v", err)
+	}
+	return string(pem.EncodeToMemory(block))
+}
+
+func TestValidateAndPreparePrivateKeyDetectsOpenSSHED25519AndRejectsMismatch(t *testing.T) {
+	key := buildED25519OpenSSHPrivateKeyForTest(t)
+
+	prepared, detectedType, err := ValidateAndPreparePrivateKey(key, SSHKeyTypeAuto)
+	if err != nil {
+		t.Fatalf("OpenSSH ED25519 私钥自动识别失败: %v", err)
+	}
+	if detectedType != SSHKeyTypeED25519 {
+		t.Fatalf("OpenSSH ED25519 私钥识别为 %q，期望 %q", detectedType, SSHKeyTypeED25519)
+	}
+	original, err := ssh.ParsePrivateKey([]byte(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated, err := ssh.ParsePrivateKey([]byte(prepared))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ssh.FingerprintSHA256(original.PublicKey()) != ssh.FingerprintSHA256(validated.PublicKey()) {
+		t.Fatal("validation changed the candidate key identity")
+	}
+
+	if _, _, err := ValidateAndPreparePrivateKey(key, SSHKeyTypeRSA); err == nil {
+		t.Fatal("OpenSSH ED25519 私钥使用 rsa 类型应被拒绝")
 	}
 }
 

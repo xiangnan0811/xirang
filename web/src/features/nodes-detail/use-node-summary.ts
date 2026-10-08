@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { apiClient } from "@/lib/api/client";
+import { getAuthSessionGeneration, isAuthTransitionActive, subscribeAuthTransition } from "@/lib/api/core";
 import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import type { NodeSummary } from "@/lib/api/nodes-api";
 import type { NodeDetailAuthToken } from "./types";
@@ -11,7 +12,19 @@ interface UseNodeSummaryResult {
   refetch: () => void;
 }
 
+function isCurrentSummary(controller: AbortController, requestGeneration: number): boolean {
+  return !controller.signal.aborted
+    && !isAuthTransitionActive()
+    && getAuthSessionGeneration() === requestGeneration;
+}
+
 export function useNodeSummary(nodeId: number, token: NodeDetailAuthToken): UseNodeSummaryResult {
+  const authTransitioning = useSyncExternalStore(subscribeAuthTransition, isAuthTransitionActive, () => false);
+  const generation = getAuthSessionGeneration();
+  const [seenGeneration, setSeenGeneration] = useState(generation);
+  if (seenGeneration !== generation) {
+    setSeenGeneration(generation);
+  }
   const [data, setData] = useState<NodeSummary | null>(null);
   const [isLoading, setIsLoading] = useState(() => Boolean(token && nodeId > 0));
   const [error, setError] = useState<unknown>(null);
@@ -26,36 +39,45 @@ export function useNodeSummary(nodeId: number, token: NodeDetailAuthToken): UseN
   }
 
   const fetchSummary = useCallback(() => {
-    if (!token || nodeId <= 0) return;
+    if (!token || nodeId <= 0 || isAuthTransitionActive()) return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const requestGeneration = getAuthSessionGeneration();
     return apiClient.getNodeSummary(token, nodeId, { signal: controller.signal }).then((result) => {
-      if (!controller.signal.aborted) {
-        hasDataRef.current = true;
-        setData(result);
-        setError(null);
+      if (!isCurrentSummary(controller, requestGeneration)) {
+        return;
       }
+      hasDataRef.current = true;
+      setData(result);
+      setError(null);
     }).catch((err: unknown) => {
-      if (!controller.signal.aborted && !hasDataRef.current) {
-        setData(null);
-        setError(err);
+      if (!isCurrentSummary(controller, requestGeneration) || hasDataRef.current) {
+        return;
       }
+      setData(null);
+      setError(err);
     }).finally(() => {
-      if (!controller.signal.aborted) setIsLoading(false);
+      if (isCurrentSummary(controller, requestGeneration)) {
+        setIsLoading(false);
+      }
     });
   }, [token, nodeId]);
 
   useEffect(() => {
+    if (authTransitioning) {
+      abortRef.current?.abort();
+      return;
+    }
     hasDataRef.current = false;
     void fetchSummary();
     return () => {
       abortRef.current?.abort();
     };
-  }, [fetchSummary]);
+  }, [authTransitioning, fetchSummary, seenGeneration]);
 
   const refetch = useCallback(() => {
-    if (!token || nodeId <= 0) return;
+    if (!token || nodeId <= 0 || isAuthTransitionActive()) return;
     void fetchSummary();
   }, [fetchSummary, nodeId, token]);
 
@@ -64,7 +86,7 @@ export function useNodeSummary(nodeId: number, token: NodeDetailAuthToken): UseN
       refetch();
     },
     30_000,
-    { enabled: Boolean(token) && nodeId > 0, immediate: false },
+    { enabled: Boolean(token) && nodeId > 0 && !authTransitioning, immediate: false },
   );
 
   return { data, isLoading, error, refetch };

@@ -41,6 +41,118 @@ func setupAuthHandler(jwtManager *auth.JWTManager, db *gorm.DB) *gin.Engine {
 	return r
 }
 
+func setupLogoutAdmissionHandler(jwtManager *auth.JWTManager) *gin.Engine {
+	r := setupTestRouter()
+	r.POST("/logout", LogoutMiddleware(jwtManager), func(c *gin.Context) {
+		binding, ok := CurrentSessionBinding(c)
+		if !ok {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"user_id": binding.UserID,
+			"jti":     binding.JTI,
+			"role":    binding.Role,
+		})
+	})
+	return r
+}
+
+func logoutAdmissionRequest(r *gin.Engine, method, token string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(method, "/logout", nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func TestLogoutMiddlewareAllowsStaleVersionWithoutDatabaseIdentityRefresh(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open logout database: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.TokenRevocation{}); err != nil {
+		t.Fatalf("migrate logout database: %v", err)
+	}
+	user := model.User{ID: 7, Username: "logout-admin", Role: "admin", TokenVersion: 2}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create logout user: %v", err)
+	}
+	manager := auth.NewJWTManager("test-secret-at-least-16-chars", time.Hour)
+	manager.SetDB(db)
+	staleToken := generateTestToken(manager, model.User{
+		ID: user.ID, Username: user.Username, Role: user.Role, TokenVersion: 1,
+	})
+
+	response := logoutAdmissionRequest(setupLogoutAdmissionHandler(manager), http.MethodPost, staleToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("stale primary token logout admission status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		UserID uint   `json:"user_id"`
+		JTI    string `json:"jti"`
+		Role   string `json:"role"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode logout binding: %v", err)
+	}
+	if body.UserID != user.ID || body.Role != user.Role || body.JTI == "" {
+		t.Fatalf("logout binding=%+v", body)
+	}
+}
+
+func TestLogoutMiddlewareRejectsForgedExpiredAndPurposeBoundTokens(t *testing.T) {
+	manager := newTestJWTManager()
+	user := model.User{ID: 8, Username: "logout-operator", Role: "operator", TokenVersion: 1}
+	primary := generateTestToken(manager, user)
+	forged := primary[:len(primary)-1]
+	if forged[len(forged)-1] == 'a' {
+		forged = forged[:len(forged)-1] + "b"
+	} else {
+		forged += "a"
+	}
+	expiredManager := newConfiguredTestJWTManager("test-secret-at-least-16-chars", -time.Hour)
+	expired := generateTestToken(expiredManager, user)
+	purposeBound, _, err := manager.GenerateStepUpToken(user, auth.StepUpActionTaskManualTrigger)
+	if err != nil {
+		t.Fatalf("generate purpose-bound token: %v", err)
+	}
+
+	router := setupLogoutAdmissionHandler(manager)
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{name: "forged", token: forged},
+		{name: "expired", token: expired},
+		{name: "purpose bound", token: purposeBound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := logoutAdmissionRequest(router, http.MethodPost, tc.token)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("%s token admitted with status=%d body=%s", tc.name, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestLogoutMiddlewareRequiresExactPost(t *testing.T) {
+	manager := newTestJWTManager()
+	user := model.User{ID: 9, Username: "logout-viewer", Role: "viewer", TokenVersion: 1}
+	token := generateTestToken(manager, user)
+	router := setupTestRouter()
+	router.Any("/logout", LogoutMiddleware(manager), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	response := logoutAdmissionRequest(router, http.MethodGet, token)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET logout admission status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 // newTestJWTManager creates a manager with the same durable revocation
 // capability required by the ordinary middleware.
 func newTestJWTManager() *auth.JWTManager {

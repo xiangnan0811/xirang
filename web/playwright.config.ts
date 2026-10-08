@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: [/real-backend-smoke\.spec\.ts/, /\/walkthrough\//],
+  testIgnore: [/real-backend-smoke\.spec\.ts/, /lifecycle-p1\.spec\.ts/, /\/walkthrough\//],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,

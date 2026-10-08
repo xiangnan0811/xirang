@@ -42,6 +42,19 @@ type JWTManager struct {
 	revoked     map[string]time.Time
 	lastPruneAt time.Time
 	db          *gorm.DB
+	// signTokenFunc is only used by package tests to exercise signing
+	// failures before an activation transaction commits.
+	signTokenFunc func(*jwt.Token) (string, error)
+}
+
+func (m *JWTManager) signToken(token *jwt.Token) (string, error) {
+	if m == nil || token == nil {
+		return "", fmt.Errorf("JWT 管理器未初始化")
+	}
+	if m.signTokenFunc != nil {
+		return m.signTokenFunc(token)
+	}
+	return token.SignedString(m.secret)
 }
 
 func NewJWTManager(secret string, ttl time.Duration) *JWTManager {
@@ -105,7 +118,7 @@ func (m *JWTManager) Generate2FAPendingToken(user model.User) (string, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(m.secret)
+	signed, err := m.signToken(token)
 	if err != nil {
 		return "", err
 	}
@@ -170,7 +183,7 @@ func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction, s
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(m.secret)
+	signed, err := m.signToken(token)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -196,11 +209,67 @@ func (m *JWTManager) GenerateToken(user model.User) (string, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(m.secret)
+	return m.signToken(token)
+}
+
+// generateActivationToken signs the replacement primary token while the
+// activation transaction is still open. The caller must supply the incremented
+// user token version; the session JTI and expiry are deliberately preserved so
+// logout and the original session lifetime continue to apply.
+func (m *JWTManager) generateActivationToken(user model.User, session TOTPActivationSession) (string, error) {
+	if m == nil {
+		return "", fmt.Errorf("JWT 管理器未初始化")
+	}
+	if user.ID == 0 || session.UserID != user.ID || session.Role == "" || session.Role != user.Role ||
+		!lowerHexID(session.JTI) || session.ExpiresAt.IsZero() {
+		return "", fmt.Errorf("激活会话绑定无效")
+	}
+	now := time.Now().UTC()
+	expiresAt := session.ExpiresAt.UTC()
+	if !expiresAt.After(now) {
+		return "", fmt.Errorf("激活会话已过期")
+	}
+	claims := Claims{
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		TokenVersion: user.TokenVersion,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        session.JTI,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			Subject:   fmt.Sprintf("%d", user.ID),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return m.signToken(token)
 }
 
 func (m *JWTManager) ParseToken(tokenString string) (*Claims, error) {
 	return m.parseToken(tokenString, true)
+}
+
+// ParseLogoutToken validates the signed primary-session claims required by the
+// logout admission path. It deliberately skips current user version/role and
+// revocation checks so a token made stale by an activation can still revoke
+// its own session JTI. It never accepts a purpose-bound token or a caller
+// supplied identity.
+func (m *JWTManager) ParseLogoutToken(tokenString string) (*Claims, error) {
+	if m == nil {
+		return nil, fmt.Errorf("JWT 管理器未初始化")
+	}
+	claims, err := m.parseToken(tokenString, false)
+	if err != nil {
+		return nil, err
+	}
+	if claims.Purpose != "" ||
+		claims.UserID == 0 ||
+		!lowerHexID(claims.ID) ||
+		claims.ExpiresAt == nil ||
+		!claims.ExpiresAt.After(time.Now().UTC()) {
+		return nil, fmt.Errorf("logout token binding 无效")
+	}
+	return claims, nil
 }
 
 func (m *JWTManager) RevokeToken(tokenString string) error {
@@ -220,10 +289,11 @@ func (m *JWTManager) RevokeToken(tokenString string) error {
 	return m.revokeKey(key, claims.UserID, expireAt)
 }
 
-// RevokeSession revokes a login session using its non-bearer JTI. Callers do
-// not need to retain or replay the raw JWT after AuthMiddleware has validated
-// it. The in-memory revocation is applied before persistence so a storage
-// failure cannot make the session usable again in this process.
+// RevokeSession revokes a login session using its session JTI. Callers do
+// not need to retain or replay the raw JWT after a session-admission
+// middleware has validated it. The in-memory revocation is applied before
+// persistence so a storage failure cannot make the session usable again in
+// this process.
 func (m *JWTManager) RevokeSession(jti string, userID uint, expiresAt time.Time) error {
 	if !lowerHexID(jti) || expiresAt.IsZero() || !expiresAt.UTC().After(time.Now().UTC()) {
 		return fmt.Errorf("invalid session revocation")

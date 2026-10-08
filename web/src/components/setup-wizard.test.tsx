@@ -63,4 +63,23 @@ describe("SetupWizard", () => {
       token: "jwt-token",
     });
   });
+
+  it("shows the security preparation note only inside the existing test-backup step", async () => {
+    const user = userEvent.setup();
+    renderWizard();
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("setup-wizard-security-note")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Start Setup|开始配置/ }));
+    expect(screen.queryByTestId("setup-wizard-security-note")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Next$|^下一步$/ }));
+    await user.click(screen.getByRole("button", { name: /^Next$|^下一步$/ }));
+    await user.click(screen.getByRole("button", { name: /^Next$|^下一步$/ }));
+
+    expect(screen.getByTestId("setup-wizard-security-note")).toHaveTextContent(/setupWizard\.securityPreparation|two-factor|两步验证/);
+    await user.click(screen.getByRole("button", { name: /^Next$|^下一步$/ }));
+    expect(screen.queryByTestId("setup-wizard-security-note")).not.toBeInTheDocument();
+  });
 });

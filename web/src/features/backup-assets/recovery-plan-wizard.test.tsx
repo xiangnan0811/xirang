@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,7 @@ import type { BackupRecoveryApi, RecoveryJob, RecoveryPlan, RecoveryPreflight } 
 import { ApiError } from "@/lib/api/core";
 import type { BackupRecoveryState } from "./use-backup-recovery";
 
+import { renderBackupSurface as render } from "./__tests__/test-utils";
 import { RecoveryPlanWizard } from "./recovery-plan-wizard";
 import { useBackupRecovery } from "./use-backup-recovery";
 

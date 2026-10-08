@@ -1,4 +1,5 @@
-import { parseSSHKeyType, type NewSSHKeyInput, type SSHKeyRecord } from "@/types/domain";
+import i18n from "@/i18n";
+import { parseSSHKeyType, type NewSSHKeyInput, type SSHKeyPreview, type SSHKeyRecord, type SSHKeyType } from "@/types/domain";
 import { preserveSSHPurposeScope } from "@/lib/ssh-purpose-scope";
 import { ApiError, formatTime, parseNumericId, request } from "./core";
 import { finiteNumber } from "./number-utils";
@@ -18,7 +19,14 @@ type SSHKeyResponse = {
   broad_scope?: boolean;
   created_at: string;
   last_used_at?: string | null;
+  public_key_fingerprint?: string | null;
 };
+
+function mapPublicKeyFingerprint(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const fingerprint = value.trim();
+  return fingerprint.length > 0 ? fingerprint : undefined;
+}
 
 function normalizeDateTimeLocal(value: string | null | undefined): string | undefined {
   if (!value) return undefined;
@@ -35,6 +43,7 @@ function toRfc3339(value: string | undefined): string | null {
 }
 
 function mapSSHKey(row: SSHKeyResponse): SSHKeyRecord {
+  const publicKeyFingerprint = mapPublicKeyFingerprint(row.public_key_fingerprint);
   return {
     id: `key-${finiteNumber(row.id)}`,
     name: String(row.name ?? ""),
@@ -42,6 +51,7 @@ function mapSSHKey(row: SSHKeyResponse): SSHKeyRecord {
     keyType: parseSSHKeyType(String(row.key_type ?? "auto")),
     publicKey: row.public_key ?? "",
     fingerprint: String(row.fingerprint ?? ""),
+    ...(publicKeyFingerprint ? { publicKeyFingerprint } : {}),
     disabled: Boolean(row.disabled),
     expiresAt: normalizeDateTimeLocal(row.expires_at),
     allowedPurposes: preserveSSHPurposeScope(row.allowed_purposes),
@@ -53,10 +63,36 @@ function mapSSHKey(row: SSHKeyResponse): SSHKeyRecord {
   };
 }
 
+function mapSSHKeyPreview(raw: unknown): SSHKeyPreview {
+  if (!raw || typeof raw !== "object") {
+    throw new ApiError(500, i18n.t("sshKeys.previewInvalid"));
+  }
+  if (!("key_type" in raw) || !("public_key" in raw) || !("public_key_fingerprint" in raw)) {
+    throw new ApiError(500, i18n.t("sshKeys.previewInvalid"));
+  }
+  const keyType = raw.key_type;
+  const publicKey = raw.public_key;
+  const publicKeyFingerprint = raw.public_key_fingerprint;
+  if (keyType !== "rsa" && keyType !== "ed25519" && keyType !== "ecdsa") {
+    throw new ApiError(500, i18n.t("sshKeys.previewInvalid"));
+  }
+  if (typeof publicKey !== "string" || publicKey.trim() === "") {
+    throw new ApiError(500, i18n.t("sshKeys.previewInvalid"));
+  }
+  if (typeof publicKeyFingerprint !== "string" || publicKeyFingerprint.trim() === "") {
+    throw new ApiError(500, i18n.t("sshKeys.previewInvalid"));
+  }
+  return {
+    keyType,
+    publicKey: publicKey.trim(),
+    publicKeyFingerprint: publicKeyFingerprint.trim(),
+  };
+}
+
 function toSSHKeyScopePayload(input: NewSSHKeyInput) {
   return {
     disabled: input.disabled,
-    expires_at: toRfc3339(input.expiresAt),
+    ...(input.expiresAt === undefined ? {} : { expires_at: toRfc3339(input.expiresAt) }),
     allowed_purposes: preserveSSHPurposeScope(input.allowedPurposes),
     allowed_node_ids: input.allowedNodeIds,
     allowed_node_tags: input.allowedNodeTags,
@@ -122,6 +158,38 @@ export function createSSHKeysApi() {
     async getSSHKeys(token: string, options?: { signal?: AbortSignal }): Promise<SSHKeyRecord[]> {
       const rows = (await request<SSHKeyResponse[]>("/ssh-keys", { token, signal: options?.signal })) ?? [];
       return rows.map((row) => mapSSHKey(row));
+    },
+
+    async getSSHKey(token: string, keyId: string, options?: { signal?: AbortSignal }): Promise<SSHKeyRecord> {
+      const numericId = parseNumericId(keyId, "key");
+      const row = await request<SSHKeyResponse | null>(`/ssh-keys/${numericId}`, {
+        token,
+        signal: options?.signal,
+      });
+      if (!row || typeof row !== "object") {
+        throw new ApiError(404, i18n.t("sshKeys.rotationKeyMissing"));
+      }
+      return mapSSHKey(row);
+    },
+
+    async previewSSHKey(
+      token: string,
+      input: { privateKey: string; keyType?: SSHKeyType },
+      options?: { signal?: AbortSignal },
+    ): Promise<SSHKeyPreview> {
+      const body: { private_key: string; key_type?: SSHKeyType } = {
+        private_key: input.privateKey,
+      };
+      if (input.keyType) {
+        body.key_type = input.keyType;
+      }
+      const raw = await request<unknown>("/ssh-keys/preview", {
+        method: "POST",
+        token,
+        signal: options?.signal,
+        body,
+      });
+      return mapSSHKeyPreview(raw);
     },
 
     async createSSHKey(token: string, input: NewSSHKeyInput): Promise<SSHKeyRecord> {

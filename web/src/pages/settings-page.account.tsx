@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck, ShieldOff } from "lucide-react";
 import { useAuth } from "@/context/auth-context.hooks";
+import { securityReturnPath } from "@/lib/step-up-prerequisite";
 import { apiClient } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { TOTPSetupDialog } from "@/components/totp-setup-dialog";
@@ -10,7 +12,13 @@ import { cn } from "@/lib/utils";
 
 export function AccountTab() {
   const { t } = useTranslation();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { token, username, role, totpEnabled, setTotpEnabled } = useAuth();
+  const securityReturnTo = location.state && typeof location.state === "object"
+    ? (location.state as { securityReturnTo?: unknown }).securityReturnTo
+    : undefined;
+  const returnTo = securityReturnPath(securityReturnTo);
   const [totpSetupOpen, setTotpSetupOpen] = useState(false);
   const [totpDisableOpen, setTotpDisableOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -48,7 +56,14 @@ export function AccountTab() {
 
   return (
     <div className="space-y-8 max-w-2xl">
-      <h2 className="text-lg font-semibold">{t("settings.account.title")}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">{t("settings.account.title")}</h2>
+        {returnTo ? (
+          <Button type="button" variant="outline" onClick={() => navigate(returnTo)}>
+            {t("stepUp.returnToOperation")}
+          </Button>
+        ) : null}
+      </div>
 
       {/* 会话信息 */}
       <div className="rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-2">
@@ -153,7 +168,6 @@ export function AccountTab() {
             open={totpSetupOpen}
             onOpenChange={setTotpSetupOpen}
             token={token}
-            onSuccess={() => setTotpEnabled(true)}
           />
           <TOTPDisableDialog
             open={totpDisableOpen}

@@ -93,7 +93,11 @@ const {
     current: {
       token: "test-token" as string | null,
       role: "admin" as "admin" | "operator" | "viewer" | null,
+      userId: 7,
+      totpEnabled: true,
+      authTransitioning: false,
       ensureStepUpProof: vi.fn(),
+      clearStepUpProof: vi.fn(),
     },
   },
   getBackupConfidenceMock: vi.fn(),
@@ -223,7 +227,7 @@ describe("BackupsPage", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     window.localStorage.clear();
-    authRef.current = { token: "test-token", role: "admin", ensureStepUpProof: vi.fn() };
+    authRef.current = { token: "test-token", role: "admin", userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
     getBackupConfidenceMock.mockReset();
     getBackupHealthMock.mockReset();
     getStorageUsageMock.mockReset();
@@ -292,7 +296,7 @@ describe("BackupsPage", () => {
     admin.unmount();
 
     for (const role of ["operator", "viewer"] as const) {
-      authRef.current = { token: "test-token", role, ensureStepUpProof: vi.fn() };
+      authRef.current = { token: "test-token", role, userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
       const page = renderBackups("/app/backups/overview");
       await screen.findByText(/Backup Confidence|备份可信度/);
       expect(screen.queryByTestId("private-network-content-transport")).not.toBeInTheDocument();
@@ -302,7 +306,7 @@ describe("BackupsPage", () => {
 
   it("demo 模式无 token 时展示 mock 可信路径和故障路径", async () => {
     vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
-    authRef.current = { token: null, role: null, ensureStepUpProof: vi.fn() };
+    authRef.current = { token: null, role: null, userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
 
     renderBackups("/app/backups/overview");
 
@@ -501,7 +505,11 @@ describe("BackupsPage", () => {
     authRef.current = {
       token: "operator-token",
       role: "operator",
+      userId: 7,
+      totpEnabled: true,
+      authTransitioning: false,
       ensureStepUpProof: vi.fn(),
+      clearStepUpProof: vi.fn(),
     };
     renderBackups(route);
     expect(await screen.findByRole("region", { name: /File results|文件结果/ })).toBeInTheDocument();
@@ -732,7 +740,7 @@ describe("BackupsPage", () => {
     const planId = "1".repeat(32);
     const jobId = "2".repeat(32);
     getBackupHealthMock.mockResolvedValue(backupHealth);
-    authRef.current = { token: "test-token", role: "viewer", ensureStepUpProof: vi.fn() };
+    authRef.current = { token: "test-token", role: "viewer", userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
 
     renderBackups(`/app/backups/recovery?recoveryPointId=${recoveryPoint.id}&planId=${planId}&jobId=${jobId}`);
 
@@ -949,7 +957,7 @@ describe("BackupsPage", () => {
     ["viewer invalid data query", "/app/backups/data?path=%2Fprivate%2Fpayroll.csv", "viewer"],
     ["missing role data", "/app/backups/data", null],
   ])("sends %s to overview without backup data requests", async (_label, entry, role) => {
-    authRef.current = { token: "test-token", role, ensureStepUpProof: vi.fn() };
+    authRef.current = { token: "test-token", role, userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
     getBackupConfidenceMock.mockResolvedValue(backupConfidence);
     getBackupHealthMock.mockResolvedValue(backupHealth);
     getStorageUsageMock.mockResolvedValue(storageUsage);
@@ -969,7 +977,7 @@ describe("BackupsPage", () => {
   it.each(["admin", "operator"] as const)(
     "loads backup data for %s from the index and a direct node link",
     async (role) => {
-      authRef.current = { token: `${role}-token`, role, ensureStepUpProof: vi.fn() };
+      authRef.current = { token: `${role}-token`, role, userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
       const index = renderGuardedBackups("/app/backups");
 
       await waitFor(() => {
@@ -1001,7 +1009,7 @@ describe("BackupsPage", () => {
   );
 
   it("keeps viewer recovery evidence readable without plan or job requests", async () => {
-    authRef.current = { token: "viewer-token", role: "viewer", ensureStepUpProof: vi.fn() };
+    authRef.current = { token: "viewer-token", role: "viewer", userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
 
     renderBackups(`/app/backups/recovery?taskId=7&recoveryPointId=${recoveryPoint.id}`);
 
@@ -1021,7 +1029,7 @@ describe("BackupsPage", () => {
 
   it("removes backup data after the role loses access", async () => {
     const user = userEvent.setup();
-    authRef.current = { token: "test-token", role: "admin", ensureStepUpProof: vi.fn() };
+    authRef.current = { token: "test-token", role: "admin", userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
     getBackupConfidenceMock.mockResolvedValue(backupConfidence);
     getBackupHealthMock.mockResolvedValue(backupHealth);
     getStorageUsageMock.mockResolvedValue(storageUsage);
@@ -1042,7 +1050,7 @@ describe("BackupsPage", () => {
   });
 
   it.each(["admin", "operator"] as const)("keeps %s Home and End on the full backup tab range", (role) => {
-    authRef.current = { token: `${role}-token`, role, ensureStepUpProof: vi.fn() };
+    authRef.current = { token: `${role}-token`, role, userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
     renderBackupTabs(`/app/backups/data${filesSearch}`);
 
     expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("href"))).toEqual([
@@ -1062,7 +1070,7 @@ describe("BackupsPage", () => {
     ["viewer", "viewer" as const],
     ["missing role", null],
   ])("keeps %s keyboard navigation on overview and recovery", async (_label, role) => {
-    authRef.current = { token: "test-token", role, ensureStepUpProof: vi.fn() };
+    authRef.current = { token: "test-token", role, userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
     renderBackupTabs("/app/backups/data?nodeId=3");
 
     expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/data?nodeId=3");

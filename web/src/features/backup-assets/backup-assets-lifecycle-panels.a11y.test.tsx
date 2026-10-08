@@ -1,10 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { runAxe } from "@/test/a11y-helpers";
 
-import { recoveryPoint, repository } from "./__tests__/test-utils";
+import { recoveryPoint, renderBackupSurface as render, repository } from "./__tests__/test-utils";
 import { RepositoryManagementPanel } from "./repository-management-panel";
 import { RetentionPolicyPanel } from "./retention-policy-panel";
 

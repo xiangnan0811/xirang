@@ -1,4 +1,4 @@
-import { request } from "./core";
+import { ApiError, request } from "./core";
 import { finiteNumber } from "./number-utils";
 import type { StepUpAction } from "@/lib/step-up-storage";
 
@@ -14,6 +14,13 @@ export interface TOTPSetupResponse {
 }
 
 export interface TOTPVerifyResponse {
+  token: string;
+  user: {
+    id: number;
+    username: string;
+    role: "admin" | "operator" | "viewer";
+    totpEnabled: true;
+  };
   recoveryCodes: string[];
 }
 
@@ -41,9 +48,23 @@ type RawTOTPSetupResponse = {
   expires_at?: unknown;
 };
 
-type RawTOTPVerifyResponse = {
-  recovery_codes?: unknown;
-};
+export const TOTP_NO_COMMIT_ERROR_CODES = [
+  "TOTP_CODE_INVALID",
+  "TOTP_ENROLLMENT_REQUIRED",
+  "TOTP_ENROLLMENT_EXPIRED",
+  "TOTP_ENROLLMENT_CONFLICT",
+] as const;
+
+export type TOTPNoCommitErrorCode = (typeof TOTP_NO_COMMIT_ERROR_CODES)[number];
+
+export class TOTPVerifyContractError extends Error {
+  readonly code = "TOTP_VERIFY_CONTRACT" as const;
+
+  constructor() {
+    super("TOTP activation response did not match the required contract");
+    this.name = "TOTPVerifyContractError";
+  }
+}
 
 type RawTOTPLoginResponse = {
   token?: unknown;
@@ -75,12 +96,81 @@ export function mapTOTPSetupResponse(raw: RawTOTPSetupResponse | null | undefine
   };
 }
 
-export function mapTOTPVerifyResponse(raw: RawTOTPVerifyResponse | null | undefined): TOTPVerifyResponse {
+function isAuthRole(value: unknown): value is "admin" | "operator" | "viewer" {
+  return value === "admin" || value === "operator" || value === "viewer";
+}
+
+function isRecoveryCodeList(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((code) => typeof code === "string" && code.length > 0);
+}
+
+export function mapTOTPVerifyResponse(raw: unknown): TOTPVerifyResponse {
+  if (!raw || typeof raw !== "object") {
+    throw new TOTPVerifyContractError();
+  }
+  if (!("token" in raw) || !("user" in raw) || !("recovery_codes" in raw)) {
+    throw new TOTPVerifyContractError();
+  }
+  const token = raw.token;
+  const user = raw.user;
+  const recoveryCodes = raw.recovery_codes;
+  if (typeof token !== "string" || token.trim() === "" || !user || typeof user !== "object") {
+    throw new TOTPVerifyContractError();
+  }
+  if (!("id" in user) || !("username" in user) || !("role" in user) || !("totp_enabled" in user)) {
+    throw new TOTPVerifyContractError();
+  }
+  const id = user.id;
+  const username = user.username;
+  const role = user.role;
+  if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) {
+    throw new TOTPVerifyContractError();
+  }
+  if (typeof username !== "string" || username.trim() === "" || !isAuthRole(role) || user.totp_enabled !== true) {
+    throw new TOTPVerifyContractError();
+  }
+  if (!isRecoveryCodeList(recoveryCodes)) {
+    throw new TOTPVerifyContractError();
+  }
   return {
-    recoveryCodes: Array.isArray(raw?.recovery_codes)
-      ? raw.recovery_codes.map((code) => String(code))
-      : [],
+    token,
+    user: {
+      id,
+      username,
+      role,
+      totpEnabled: true,
+    },
+    recoveryCodes,
   };
+}
+
+export function totpVerifyErrorCode(error: unknown): string | null {
+  if (!(error instanceof ApiError)) {
+    return null;
+  }
+  const detail = error.detail;
+  if (!detail || typeof detail !== "object" || !("data" in detail)) {
+    return null;
+  }
+  const data = detail.data;
+  if (!data || typeof data !== "object" || !("error_code" in data)) {
+    return null;
+  }
+  const code = data.error_code;
+  return typeof code === "string" && code.length > 0 ? code : null;
+}
+
+export function classifyTOTPVerifyFailure(error: unknown): "no_commit" | "ambiguous" {
+  if (!(error instanceof ApiError) || error.status >= 500) {
+    return "ambiguous";
+  }
+  const code = totpVerifyErrorCode(error);
+  if (code !== null && (TOTP_NO_COMMIT_ERROR_CODES as readonly string[]).includes(code)) {
+    return "no_commit";
+  }
+  return "ambiguous";
 }
 
 export function mapTOTPLoginResponse(raw: RawTOTPLoginResponse | null | undefined): TOTPLoginResponse {
@@ -113,14 +203,15 @@ export function createTOTPApi() {
       return mapTOTPSetupResponse(raw);
     },
 
-    async totpVerify(token: string, code: string, enrollmentId: string): Promise<TOTPVerifyResponse> {
+    async totpVerify(token: string, code: string, enrollmentId: string, authTransitionId: number): Promise<TOTPVerifyResponse> {
       const enrollment = enrollmentId.trim();
       if (!enrollment) {
         throw new Error("enrollment_id is required");
       }
-      const raw = await request<RawTOTPVerifyResponse>("/auth/2fa/verify", {
+      const raw = await request<unknown>("/auth/2fa/verify", {
         method: "POST",
         token,
+        authTransitionId,
         body: { code, enrollment_id: enrollment },
       });
       return mapTOTPVerifyResponse(raw);

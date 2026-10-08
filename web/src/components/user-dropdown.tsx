@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import { endAuthenticatedSession } from "@/lib/end-authenticated-session";
 
 export function UserDropdown() {
   const { t } = useTranslation();
@@ -22,14 +23,12 @@ export function UserDropdown() {
   const displayRole = role ?? (demoModeEnabled ? "viewer" : null);
 
   const handleLogout = async () => {
-    if (token) {
-      try {
-        await apiClient.logout(token);
-      } catch {
-        // 即便服务端注销失败，也执行本地会话清理
-      }
-    }
-    logout();
+    const capturedToken = token;
+    await endAuthenticatedSession({
+      token: capturedToken,
+      logout,
+      requestLogout: (sessionToken) => apiClient.logout(sessionToken),
+    });
     navigate("/login", { replace: true });
   };
 

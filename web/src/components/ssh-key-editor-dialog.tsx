@@ -101,6 +101,7 @@ export function SSHKeyEditorDialog({
     try {
       await onSave({
         ...draft,
+        expiresAt: draft.expiresAt ?? "",
         allowedPurposes: preserveSSHPurposeScope(draft.allowedPurposes),
       });
     } finally {

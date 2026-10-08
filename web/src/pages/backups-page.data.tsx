@@ -22,6 +22,7 @@ import {
 } from "@/features/backup-assets/use-backup-assets-state";
 import { useAuth } from "@/context/auth-context.hooks";
 import { canAccessBackupData, normalizeAppPathname } from "@/lib/backup-navigation";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 
 export function BackupsDataPage() {
   const location = useLocation();
@@ -56,7 +57,7 @@ function BackupsDataWorkspace({
   routeHasExplicitLayout: boolean;
 }) {
   const { t } = useTranslation();
-  const { token, role, userId, ensureStepUpProof, clearStepUpProof } = useAuth();
+  const { token, role, userId, ensureStepUpProof, clearStepUpProof, totpEnabled, authTransitioning } = useAuth();
   const navigate = useNavigate();
   const [preferences, setPreferences] = useState(readBackupAssetsPreferences);
   const layout = resolveBackupAssetsLayout(
@@ -97,6 +98,8 @@ function BackupsDataWorkspace({
     route: controllerRoute,
     ensureStepUpProof,
     clearStepUpProof,
+    totpEnabled,
+    authTransitioning,
     onRouteRepair: handleRouteRepair,
   });
   const sourceWorkspaceUnavailable =
@@ -108,6 +111,7 @@ function BackupsDataWorkspace({
       <h2 id="backup-assets-data-title" className="sr-only">
         {t("backups.dataTitle")}
       </h2>
+      {role === "admin" || role === "operator" ? <StepUpPrerequisiteNotice className="m-3" /> : null}
       <BackupFileSourceControls
         status={fileSources.status}
         nodes={fileSources.nodes}
@@ -137,7 +141,7 @@ function BackupsDataWorkspace({
         <BackupAssetsWorkspace
           controller={controller}
           preferences={preferences}
-          processingRuntime={{ token, role, userId, ensureStepUpProof }}
+          processingRuntime={{ token, role, userId, ensureStepUpProof, totpEnabled, authTransitioning }}
           onRoutePatch={handleRoutePatch}
           onReturnOverview={() => navigate("/app/backups/overview")}
         />

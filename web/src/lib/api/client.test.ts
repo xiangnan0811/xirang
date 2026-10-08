@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "./client";
-import { ApiError, buildLoginRedirectPath, bumpAuthSessionGeneration, fetchWithFallback, isCredentialGrantRequiredError, isStepUpRequiredError, normalizeRedirectTarget, request } from "./core";
+import { ApiError, AuthTransitionRejectedError, beginAuthTransitionBarrier, buildLoginRedirectPath, bumpAuthSessionGeneration, clearAuthTransitionBarrier, dismissTOTPActivationFailure, fetchWithFallback, isCredentialGrantRequiredError, isStepUpRequiredError, normalizeRedirectTarget, releaseAuthTransitionBarrier, request } from "./core";
 import { saveStepUpProof, STEP_UP_ACTIONS } from "@/lib/step-up-storage";
 
 function createMockResponse(status = 200, body = "") {
@@ -879,5 +879,73 @@ describe("dev direct API fallback", () => {
     await expect(request("/health")).resolves.toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe(`${directBase}/health`);
+  });
+});
+
+describe("auth transition barrier", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    sessionStorage.clear();
+    clearAuthTransitionBarrier();
+    dismissTOTPActivationFailure();
+  });
+
+  afterEach(() => {
+    clearAuthTransitionBarrier();
+    dismissTOTPActivationFailure();
+    vi.unstubAllGlobals();
+  });
+
+  it("阻断期间在发起请求前拒绝不匹配的调用", async () => {
+    const id = beginAuthTransitionBarrier();
+    await expect(request("/nodes", { token: "old-token" })).rejects.toBeInstanceOf(AuthTransitionRejectedError);
+    await expect(fetchWithFallback("/exports", { method: "GET" })).rejects.toBeInstanceOf(AuthTransitionRejectedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    releaseAuthTransitionBarrier(id);
+  });
+
+  it("只放行匹配 authTransitionId 的 verify，并仍处理它自己的 401", async () => {
+    const location = {
+      href: "http://localhost/app/settings",
+      hostname: "localhost",
+      pathname: "/app/settings",
+      search: "",
+      hash: "",
+    };
+    vi.stubGlobal("window", { location, sessionStorage });
+    sessionStorage.setItem("xirang-auth-token", "old-token");
+
+    let resolveOld!: (value: string) => void;
+    const oldBody = new Promise<string>((resolve) => {
+      resolveOld = resolve;
+    });
+    fetchMock.mockResolvedValueOnce({
+      status: 401,
+      ok: false,
+      headers: { get: vi.fn().mockReturnValue(null) },
+      text: vi.fn(() => oldBody),
+    } as unknown as Response);
+    const stale = request("/protected", { token: "old-token" });
+    await Promise.resolve();
+
+    const id = beginAuthTransitionBarrier();
+    bumpAuthSessionGeneration();
+    resolveOld(JSON.stringify({ code: 401, message: "expired" }));
+    await expect(stale).rejects.toMatchObject({ status: 401 });
+    expect(sessionStorage.getItem("xirang-auth-token")).toBe("old-token");
+    expect(location.href).toBe("http://localhost/app/settings");
+
+    fetchMock.mockResolvedValueOnce(createMockResponse(401, JSON.stringify({ code: 401, message: "expired", data: null })));
+    await expect(request("/auth/2fa/verify", {
+      method: "POST",
+      token: "old-token",
+      authTransitionId: id,
+      body: { code: "123456", enrollment_id: "enrollment" },
+    })).rejects.toMatchObject({ status: 401 });
+    expect(sessionStorage.getItem("xirang-auth-token")).toBeNull();
+    expect(location.href).toContain("/login?redirect=");
   });
 });
