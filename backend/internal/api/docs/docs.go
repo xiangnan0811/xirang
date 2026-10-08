@@ -5483,7 +5483,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "导出节点、SSH 密钥、策略、任务配置为 JSON；默认不含敏感字段，include_secrets=true 且 admin 权限时可导出",
+                "description": "导出节点、SSH 密钥、策略、任务配置为 JSON；默认不含敏感字段，include_secrets=true 且 admin 权限时可导出。节点保留 ssh_key_id 并附带 ssh_key_name，密钥保留 allowed_node_ids 并附带 allowed_node_names；名称字段缺失/空/null 语义与导入兼容，导出始终使用 v2 格式。",
                 "produces": [
                     "application/json"
                 ],
@@ -5528,7 +5528,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "从 JSON 文件导入节点、SSH 密钥、策略、任务配置；conflict 参数控制冲突策略",
+                "description": "从 JSON 文件导入节点、SSH 密钥、策略、任务配置；nodes[].ssh_key_name 与 ssh_keys[].allowed_node_names 使用精确名称映射，缺失沿用旧数字字段规则，空值解除关联，null 或非法引用保留为未解析并返回 warning；名称字段优先于旧数字字段，冲突不会静默清空。支持 skip/overwrite；warning code 枚举为 invalid_input、invalid_scope、invalid_private_key、missing_private_key、missing_password、missing_inline_private_key、unresolved_ssh_key、unresolved_node_scope、duplicate_name、invalid_reference、reference_conflict，未知附加字段保持兼容",
                 "consumes": [
                     "application/json"
                 ],
@@ -5547,7 +5547,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "配置 JSON 数据",
+                        "description": "配置 JSON 数据；nodes[].ssh_key_name 为 string/null（空字符串解除关联），ssh_keys[].allowed_node_names 为 string[]/null（空数组清空范围）；字段缺失沿用旧数字 ID 规则",
                         "name": "body",
                         "in": "body",
                         "required": true,

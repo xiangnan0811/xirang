@@ -80,7 +80,7 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 	// Handle backup dir: auto-generate from name if empty
 	backupDir := input.BackupDir
 	if strings.TrimSpace(backupDir) == "" {
-		backupDir = sanitizeBackupDir(input.Name)
+		backupDir = SanitizeBackupDir(input.Name)
 	}
 	if strings.TrimSpace(backupDir) == "" {
 		return nil, validationError("节点名称无法自动生成备份目录标识，请手动指定 backup_dir（仅允许英文字母、数字、连字符、下划线）")
@@ -325,7 +325,8 @@ func validateBackupDir(dir string) error {
 	return nil
 }
 
-func sanitizeBackupDir(name string) string {
+// SanitizeBackupDir derives the canonical backup directory identifier from a node name.
+func SanitizeBackupDir(name string) string {
 	s := strings.ToLower(name)
 	var buf strings.Builder
 	for _, r := range s {

@@ -3801,9 +3801,13 @@ const en = {
       missing_password: "The node is missing a password.",
       missing_inline_private_key: "The node is missing an inline private key.",
       unresolved_ssh_key: "The node is not bound to an SSH key on this system.",
+      duplicate_name: "The name is duplicated in the file, so this item was rejected.",
+      invalid_reference: "The name field format is invalid.",
+      reference_conflict: "Clearing the name conflicts with an existing reference.",
     },
     remediation: {
       title: "Fix imported keys and nodes",
+      correctFile: "Correct the duplicated names in the import file, then import it again.",
       editKey: "Edit the key and add its private key.",
       reviewScope: "Review purpose, target nodes or tags, and expiry.",
       enableManually: "Enable the key manually. Key rotation does not enable a disabled key.",

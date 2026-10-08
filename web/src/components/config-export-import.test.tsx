@@ -473,6 +473,142 @@ describe("config import outcomes", () => {
     expect(importConfigMock).toHaveBeenCalledTimes(1);
   });
 
+  async function settleNameImport(user: UserEvent, warnings: Array<Record<string, unknown>>, rejected = 1, disabledImported = 0) {
+    importConfigMock.mockResolvedValue({
+      nodes: 1, sshKeys: 1, policies: 0, tasks: 0, systemSettings: 0,
+      imported: 1, skipped: 0, created: 0, updated: 0,
+      rejected, disabledImported, warningsTruncated: 0,
+      warnings,
+    });
+    render(panel());
+    await submitImport(user, createImportFile({ nodes: [{ name: "web,1", ssh_key_name: "edge,key" }] }));
+  }
+
+  it("sends duplicate names back to the file and does not open key or node remediation", async () => {
+    const user = userEvent.setup();
+    await settleNameImport(user, [
+      { entity: "nodes", index: 0, name: "web,1", code: "duplicate_name", message: "RAW_DUPLICATE" },
+      { entity: "ssh_keys", index: 1, name: "edge,key", code: "duplicate_name", detail: "SELECT secret FROM ssh_keys" },
+    ], 2);
+
+    await waitFor(() => expect(document.body).toHaveTextContent("文件内名称重复，该项已拒绝。"));
+    expect(document.body).toHaveTextContent("web,1");
+    expect(document.body).toHaveTextContent("edge,key");
+    expect(document.body).toHaveTextContent("请修正导入文件中的重复名称后再导入。");
+    expect(document.body).not.toHaveTextContent("修复导入的密钥和节点");
+    expect(document.body).not.toHaveTextContent("复核用途、目标节点或标签，以及到期时间。");
+    expect(document.body).not.toHaveTextContent("手动启用密钥");
+    expect(document.body).not.toHaveTextContent("编辑节点并重新绑定 SSH 密钥。");
+    expect(document.body).not.toHaveTextContent("编辑密钥并补上私钥。");
+    expect(document.body).not.toHaveTextContent("验证关联节点。");
+    expect(document.body).not.toHaveTextContent("RAW_DUPLICATE");
+    expect(document.body).not.toHaveTextContent("SELECT secret");
+    expect(screen.queryByRole("link", { name: "打开 SSH 密钥" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "打开节点" })).not.toBeInTheDocument();
+  });
+
+  it.each([0, 1])("routes ssh key name references with %i disabled imports to scope review and manual enable only", async (disabledImported) => {
+    const user = userEvent.setup();
+    await settleNameImport(user, [
+      { entity: "ssh_keys", index: 0, name: "edge,key", code: "invalid_reference", message: "RAW_REFERENCE" },
+      { entity: "ssh_keys", index: 0, code: "unresolved_node_scope" },
+      { entity: "ssh_keys", index: 2, code: "reference_conflict", error: "RAW_CONFLICT" },
+      { entity: "ssh_keys", index: 2, code: "unresolved_node_scope" },
+    ], 1, disabledImported);
+
+    await waitFor(() => expect(document.body).toHaveTextContent("名称字段格式无效。"));
+    expect(document.body).toHaveTextContent("名称清空与旧引用冲突。");
+    expect(document.body).toHaveTextContent("edge,key");
+    expect(document.body).toHaveTextContent("复核用途、目标节点或标签，以及到期时间。");
+    expect(document.body).toHaveTextContent("手动启用密钥。密钥轮换不会启用已禁用的密钥。");
+    expect(screen.getByRole("link", { name: "打开 SSH 密钥" })).toHaveAttribute("href", "/app/ssh-keys");
+    expect(screen.queryByRole("link", { name: "打开节点" })).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("请修正导入文件中的重复名称后再导入。");
+    expect(document.body).not.toHaveTextContent("编辑节点并重新绑定 SSH 密钥。");
+    expect(document.body).not.toHaveTextContent("编辑密钥并补上私钥。");
+    expect(document.body).not.toHaveTextContent("验证关联节点。");
+    expect(document.body).not.toHaveTextContent("RAW_REFERENCE");
+    expect(document.body).not.toHaveTextContent("RAW_CONFLICT");
+  });
+
+  it("routes node name references to the rebind entry only", async () => {
+    const user = userEvent.setup();
+    await settleNameImport(user, [
+      { entity: "nodes", index: 1, name: "web,1", code: "invalid_reference", message: "RAW_NODE_REFERENCE" },
+      { entity: "nodes", index: 1, code: "unresolved_ssh_key" },
+      { entity: "nodes", index: 3, code: "reference_conflict", detail: "RAW_NODE_CONFLICT" },
+      { entity: "nodes", index: 3, code: "unresolved_ssh_key" },
+    ]);
+
+    await waitFor(() => expect(document.body).toHaveTextContent("名称字段格式无效。"));
+    expect(document.body).toHaveTextContent("名称清空与旧引用冲突。");
+    expect(document.body).toHaveTextContent("web,1");
+    expect(document.body).toHaveTextContent("编辑节点并重新绑定 SSH 密钥。");
+    expect(screen.getByRole("link", { name: "打开节点" })).toHaveAttribute("href", "/app/nodes");
+    expect(screen.queryByRole("link", { name: "打开 SSH 密钥" })).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("请修正导入文件中的重复名称后再导入。");
+    expect(document.body).not.toHaveTextContent("复核用途、目标节点或标签，以及到期时间。");
+    expect(document.body).not.toHaveTextContent("手动启用密钥");
+    expect(document.body).not.toHaveTextContent("编辑密钥并补上私钥。");
+    expect(document.body).not.toHaveTextContent("验证关联节点。");
+    expect(document.body).not.toHaveTextContent("RAW_NODE_REFERENCE");
+    expect(document.body).not.toHaveTextContent("RAW_NODE_CONFLICT");
+  });
+
+  it("keeps independent unresolved warnings on their legacy remediation path", async () => {
+    const user = userEvent.setup();
+    await settleNameImport(user, [
+      { entity: "nodes", index: 1, code: "invalid_reference" },
+      { entity: "nodes", index: 2, code: "unresolved_ssh_key" },
+      { entity: "ssh_keys", index: 1, code: "unresolved_node_scope" },
+    ]);
+
+    await waitFor(() => expect(document.body).toHaveTextContent("名称字段格式无效。"));
+    expect(document.body).toHaveTextContent("复核用途、目标节点或标签，以及到期时间。");
+    expect(document.body).toHaveTextContent("编辑节点并重新绑定 SSH 密钥。");
+    expect(document.body).toHaveTextContent("验证关联节点。");
+    expect(screen.getByRole("link", { name: "打开 SSH 密钥" })).toHaveAttribute("href", "/app/ssh-keys");
+    expect(screen.getByRole("link", { name: "打开节点" })).toHaveAttribute("href", "/app/nodes");
+  });
+
+  it("keeps a non-node non-key name reference on the warning line only", async () => {
+    const user = userEvent.setup();
+    await settleNameImport(user, [
+      { entity: "policies", index: 0, code: "invalid_reference", message: "RAW_POLICY" },
+    ]);
+
+    await waitFor(() => expect(document.body).toHaveTextContent("名称字段格式无效。"));
+    expect(document.body).not.toHaveTextContent("修复导入的密钥和节点");
+    expect(document.body).not.toHaveTextContent("请修正导入文件中的重复名称后再导入。");
+    expect(document.body).not.toHaveTextContent("RAW_POLICY");
+    expect(screen.queryByRole("link", { name: "打开 SSH 密钥" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "打开节点" })).not.toBeInTheDocument();
+  });
+
+  it("shows file correction together with the entity route for each name warning", async () => {
+    const user = userEvent.setup();
+    await settleNameImport(user, [
+      { entity: "nodes", index: 0, name: "web,1", code: "duplicate_name", message: "RAW_DUPLICATE" },
+      { entity: "ssh_keys", index: 1, code: "invalid_reference", message: "RAW_REFERENCE" },
+      { entity: "nodes", index: 2, code: "reference_conflict", message: "RAW_CONFLICT" },
+    ], 3);
+
+    await waitFor(() => expect(document.body).toHaveTextContent("文件内名称重复，该项已拒绝。"));
+    expect(document.body).toHaveTextContent("名称字段格式无效。");
+    expect(document.body).toHaveTextContent("名称清空与旧引用冲突。");
+    expect(document.body).toHaveTextContent("请修正导入文件中的重复名称后再导入。");
+    expect(document.body).toHaveTextContent("复核用途、目标节点或标签，以及到期时间。");
+    expect(document.body).toHaveTextContent("手动启用密钥。密钥轮换不会启用已禁用的密钥。");
+    expect(document.body).toHaveTextContent("编辑节点并重新绑定 SSH 密钥。");
+    expect(screen.getByRole("link", { name: "打开 SSH 密钥" })).toHaveAttribute("href", "/app/ssh-keys");
+    expect(screen.getByRole("link", { name: "打开节点" })).toHaveAttribute("href", "/app/nodes");
+    expect(document.body).not.toHaveTextContent("编辑密钥并补上私钥。");
+    expect(document.body).not.toHaveTextContent("验证关联节点。");
+    expect(document.body).not.toHaveTextContent("RAW_DUPLICATE");
+    expect(document.body).not.toHaveTextContent("RAW_REFERENCE");
+    expect(document.body).not.toHaveTextContent("RAW_CONFLICT");
+  });
+
   it("shows a rejected count without offering another submission", async () => {
     const user = userEvent.setup();
     importConfigMock.mockResolvedValue({

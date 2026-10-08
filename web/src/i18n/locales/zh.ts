@@ -3801,9 +3801,13 @@ const zh = {
       missing_password: "节点缺少密码。",
       missing_inline_private_key: "节点缺少内嵌私钥。",
       unresolved_ssh_key: "节点未绑定当前系统中的 SSH 密钥。",
+      duplicate_name: "文件内名称重复，该项已拒绝。",
+      invalid_reference: "名称字段格式无效。",
+      reference_conflict: "名称清空与旧引用冲突。",
     },
     remediation: {
       title: "修复导入的密钥和节点",
+      correctFile: "请修正导入文件中的重复名称后再导入。",
       editKey: "编辑密钥并补上私钥。",
       reviewScope: "复核用途、目标节点或标签，以及到期时间。",
       enableManually: "手动启用密钥。密钥轮换不会启用已禁用的密钥。",

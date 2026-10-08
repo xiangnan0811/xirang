@@ -2311,7 +2311,10 @@ export type ConfigImportWarningCode =
   | "missing_private_key"
   | "missing_password"
   | "missing_inline_private_key"
-  | "unresolved_ssh_key";
+  | "unresolved_ssh_key"
+  | "duplicate_name"
+  | "invalid_reference"
+  | "reference_conflict";
 
 export interface ConfigImportWarning {
   entity: ConfigImportEntity;

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,7 +27,6 @@ import (
 	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/repository"
 	gormrepo "xirang/backend/internal/repository/gorm"
-	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 	taskPkg "xirang/backend/internal/task"
@@ -125,6 +125,9 @@ const (
 	configImportWarningMissingPassword     = "missing_password"
 	configImportWarningMissingInlineKey    = "missing_inline_private_key"
 	configImportWarningUnresolvedSSHKey    = "unresolved_ssh_key"
+	configImportWarningDuplicateName       = "duplicate_name"
+	configImportWarningInvalidReference    = "invalid_reference"
+	configImportWarningReferenceConflict   = "reference_conflict"
 )
 
 // configImportWarning is the intentionally small, stable public warning
@@ -154,9 +157,18 @@ type configImportResult struct {
 	Warnings          []configImportWarning `json:"warnings"`
 	WarningsTruncated int                   `json:"warnings_truncated"`
 }
+type configImportWarningKey struct {
+	entity string
+	index  int
+	code   string
+}
 
 type configImportAccumulator struct {
-	result configImportResult
+	result              configImportResult
+	warningKeys         map[configImportWarningKey]struct{}
+	credentialInventory *configImportCredentialInventory
+	createdNodeIDs      map[uint]struct{}
+	createdSSHKeyIDs    map[uint]struct{}
 }
 
 func newConfigImportAccumulator() *configImportAccumulator {
@@ -164,6 +176,21 @@ func newConfigImportAccumulator() *configImportAccumulator {
 		result: configImportResult{
 			Warnings: make([]configImportWarning, 0, configImportWarningLimit),
 		},
+		warningKeys:      make(map[configImportWarningKey]struct{}),
+		createdNodeIDs:   make(map[uint]struct{}),
+		createdSSHKeyIDs: make(map[uint]struct{}),
+	}
+}
+
+func (a *configImportAccumulator) recordCreatedID(entity string, id uint) {
+	if a == nil || id == 0 {
+		return
+	}
+	switch entity {
+	case configImportEntityNodes:
+		a.createdNodeIDs[id] = struct{}{}
+	case configImportEntitySSHKeys:
+		a.createdSSHKeyIDs[id] = struct{}{}
 	}
 }
 
@@ -171,6 +198,14 @@ func (a *configImportAccumulator) warning(entity string, index int, name, code s
 	if a == nil {
 		return
 	}
+	if a.warningKeys == nil {
+		a.warningKeys = make(map[configImportWarningKey]struct{})
+	}
+	key := configImportWarningKey{entity: entity, index: index, code: code}
+	if _, exists := a.warningKeys[key]; exists {
+		return
+	}
+	a.warningKeys[key] = struct{}{}
 	warning := configImportWarning{
 		Entity: entity,
 		Index:  index,
@@ -325,74 +360,46 @@ func (h *ConfigHandler) persistConfigImport(
 	})
 }
 
-// Export godoc
-// @Summary      导出配置
-// @Description  导出节点、SSH 密钥、策略、任务配置为 JSON；默认不含敏感字段，include_secrets=true 且 admin 权限时可导出
-// @Tags         config
-// @Security     Bearer
-// @Produce      json
-// @Param        include_secrets  query     bool    false  "是否包含敏感字段（仅 admin）"
-// @Success      200  {object}  handlers.Response
-// @Failure      401  {object}  handlers.Response
-// @Failure      403  {object}  handlers.Response
-// @Router       /config/export [get]
-func (h *ConfigHandler) Export(c *gin.Context) {
-	includeSecrets := c.Query("include_secrets") == "true"
+type configExportSnapshot struct {
+	nodes          []model.Node
+	sshKeys        []model.SSHKey
+	exportNodes    []gin.H
+	exportKeys     []gin.H
+	exportPolicies []gin.H
+	exportTasks    []gin.H
+	exportSettings []gin.H
+	assetGraph     configAssetGraph
+	assetCounts    configAssetExportCounts
+}
 
-	if includeSecrets {
-		role, _ := c.Get("role")
-		if role != "admin" {
-			writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
-				Action:           "config.export",
-				Purpose:          "config_export",
-				CredentialKind:   "config_export",
-				CredentialSource: "config.export",
-				Outcome:          credentialaudit.OutcomeBlocked,
-				Metadata: map[string]any{
-					"stage":          "authorization",
-					"with_sensitive": true,
-				},
-			})
-			respondForbidden(c, "仅管理员可导出敏感数据")
-			return
-		}
-		// H3: 审计日志 — 记录敏感数据导出
-		userID, _ := c.Get("user_id")
-		username, _ := c.Get("username")
-		logger.Module("audit").Warn().
-			Interface("user_id", userID).
-			Interface("username", username).
-			Msg("管理员导出了包含敏感数据的配置")
+func (h *ConfigHandler) buildConfigExportSnapshot(tx *gorm.DB, includeSecrets bool) (configExportSnapshot, error) {
+	var snapshot configExportSnapshot
+	if h == nil || tx == nil {
+		return snapshot, fmt.Errorf("config export transaction is unavailable")
 	}
 
-	var nodes []model.Node
-	if err := h.db.Find(&nodes).Error; err != nil {
-		respondInternalError(c, err)
-		return
+	if err := tx.Find(&snapshot.nodes).Error; err != nil {
+		return configExportSnapshot{}, err
 	}
-	var sshKeys []model.SSHKey
-	if err := h.db.Find(&sshKeys).Error; err != nil {
-		respondInternalError(c, err)
-		return
+	if err := tx.Find(&snapshot.sshKeys).Error; err != nil {
+		return configExportSnapshot{}, err
 	}
 	var policies []model.Policy
-	if err := h.db.Preload("Nodes").Find(&policies).Error; err != nil {
-		respondInternalError(c, err)
-		return
+	if err := tx.Preload("Nodes").Find(&policies).Error; err != nil {
+		return configExportSnapshot{}, err
 	}
 	var tasks []model.Task
-	if err := h.db.Preload("Node").Preload("Policy").Find(&tasks).Error; err != nil {
-		respondInternalError(c, err)
-		return
+	if err := tx.Preload("Node").Preload("Policy").Find(&tasks).Error; err != nil {
+		return configExportSnapshot{}, err
 	}
+
 	taskLookup := make(map[uint]model.Task, len(tasks))
 	for _, task := range tasks {
 		taskLookup[task.ID] = task
 	}
 
-	// 构建节点导出数据
-	exportNodes := make([]gin.H, 0, len(nodes))
-	for _, n := range nodes {
+	snapshot.exportNodes = make([]gin.H, 0, len(snapshot.nodes))
+	for _, n := range snapshot.nodes {
 		item := gin.H{
 			"name":       n.Name,
 			"host":       n.Host,
@@ -407,12 +414,11 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 			item["password"] = n.Password
 			item["private_key"] = n.PrivateKey
 		}
-		exportNodes = append(exportNodes, item)
+		snapshot.exportNodes = append(snapshot.exportNodes, item)
 	}
 
-	// 构建密钥导出数据
-	exportKeys := make([]gin.H, 0, len(sshKeys))
-	for _, k := range sshKeys {
+	snapshot.exportKeys = make([]gin.H, 0, len(snapshot.sshKeys))
+	for _, k := range snapshot.sshKeys {
 		item := gin.H{
 			"name":              k.Name,
 			"username":          k.Username,
@@ -427,11 +433,11 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		if includeSecrets {
 			item["private_key"] = k.PrivateKey
 		}
-		exportKeys = append(exportKeys, item)
+		snapshot.exportKeys = append(snapshot.exportKeys, item)
 	}
+	addConfigExportNameReferences(snapshot.nodes, snapshot.sshKeys, snapshot.exportNodes, snapshot.exportKeys)
 
-	// 构建策略导出数据
-	exportPolicies := make([]gin.H, 0, len(policies))
+	snapshot.exportPolicies = make([]gin.H, 0, len(policies))
 	for _, p := range policies {
 		nodeNames := make([]string, 0, len(p.Nodes))
 		for _, n := range p.Nodes {
@@ -479,11 +485,10 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 			item["drill_verify"] = p.DrillVerify
 			item["drill_post_verify"] = p.DrillPostVerify
 		}
-		exportPolicies = append(exportPolicies, item)
+		snapshot.exportPolicies = append(snapshot.exportPolicies, item)
 	}
 
-	// 构建任务导出数据
-	exportTasks := make([]gin.H, 0, len(tasks))
+	snapshot.exportTasks = make([]gin.H, 0, len(tasks))
 	for _, t := range tasks {
 		item := gin.H{
 			"name":          t.Name,
@@ -514,16 +519,14 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		if includeSecrets && t.ExecutorConfig != "" {
 			item["executor_config"] = t.ExecutorConfig
 		}
-		exportTasks = append(exportTasks, item)
+		snapshot.exportTasks = append(snapshot.exportTasks, item)
 	}
 
-	// 导出系统设置（仅 DB 覆盖值）
 	var dbSettings []model.SystemSetting
-	if err := h.db.Find(&dbSettings).Error; err != nil {
-		respondInternalError(c, err)
-		return
+	if err := tx.Find(&dbSettings).Error; err != nil {
+		return configExportSnapshot{}, err
 	}
-	exportSettings := make([]gin.H, 0, len(dbSettings))
+	snapshot.exportSettings = make([]gin.H, 0, len(dbSettings))
 	for _, s := range dbSettings {
 		if settings.IsInternalSettingKey(s.Key) {
 			continue
@@ -531,18 +534,81 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		if !includeSecrets && configExportSettingLooksSensitive(s) {
 			continue
 		}
-		exportSettings = append(exportSettings, gin.H{
+		snapshot.exportSettings = append(snapshot.exportSettings, gin.H{
 			"key":   s.Key,
 			"value": s.Value,
 		})
 	}
 
-	documentID, err := backupasset.NewOpaqueID()
+	assetGraph, assetCounts, err := h.buildConfigAssetExportGraph(tx, includeSecrets)
+	if err != nil {
+		return configExportSnapshot{}, err
+	}
+	snapshot.assetGraph = assetGraph
+	snapshot.assetCounts = assetCounts
+	return snapshot, nil
+}
+
+// Export godoc
+// @Summary      导出配置
+// @Description  导出节点、SSH 密钥、策略、任务配置为 JSON；默认不含敏感字段，include_secrets=true 且 admin 权限时可导出。节点保留 ssh_key_id 并附带 ssh_key_name，密钥保留 allowed_node_ids 并附带 allowed_node_names；名称字段缺失/空/null 语义与导入兼容，导出始终使用 v2 格式。
+// @Tags         config
+// @Security     Bearer
+// @Produce      json
+// @Param        include_secrets  query     bool    false  "是否包含敏感字段（仅 admin）"
+// @Success      200  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Router       /config/export [get]
+func (h *ConfigHandler) Export(c *gin.Context) {
+	includeSecrets := c.Query("include_secrets") == "true"
+
+	if includeSecrets {
+		role, _ := c.Get("role")
+		if role != "admin" {
+			writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+				Action:           "config.export",
+				Purpose:          "config_export",
+				CredentialKind:   "config_export",
+				CredentialSource: "config.export",
+				Outcome:          credentialaudit.OutcomeBlocked,
+				Metadata: map[string]any{
+					"stage":          "authorization",
+					"with_sensitive": true,
+				},
+			})
+			respondForbidden(c, "仅管理员可导出敏感数据")
+			return
+		}
+		userID, _ := c.Get("user_id")
+		username, _ := c.Get("username")
+		logger.Module("audit").Warn().
+			Interface("user_id", userID).
+			Interface("username", username).
+			Msg("管理员导出了包含敏感数据的配置")
+	}
+
+	var snapshot configExportSnapshot
+	transaction := func(tx *gorm.DB) error {
+		var err error
+		snapshot, err = h.buildConfigExportSnapshot(tx, includeSecrets)
+		return err
+	}
+	var err error
+	if strings.EqualFold(h.db.Name(), "postgres") {
+		err = h.db.WithContext(c.Request.Context()).Transaction(transaction, &sql.TxOptions{
+			Isolation: sql.LevelRepeatableRead,
+			ReadOnly:  true,
+		})
+	} else {
+		err = h.db.WithContext(c.Request.Context()).Transaction(transaction)
+	}
 	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
-	assetGraph, assetCounts, err := h.buildConfigAssetExportGraph(includeSecrets)
+
+	documentID, err := backupasset.NewOpaqueID()
 	if err != nil {
 		respondInternalError(c, err)
 		return
@@ -557,15 +623,15 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		Metadata: map[string]any{
 			"stage":                  "success",
 			"with_sensitive":         includeSecrets,
-			"node_count":             len(exportNodes),
-			"key_count":              len(exportKeys),
-			"policy_count":           len(exportPolicies),
-			"task_count":             len(exportTasks),
-			"setting_count":          len(exportSettings),
-			"repository_count":       assetCounts.Repositories,
-			"link_count":             assetCounts.Links,
-			"retention_policy_count": assetCounts.Policies,
-			"hold_count":             assetCounts.Holds,
+			"node_count":             len(snapshot.exportNodes),
+			"key_count":              len(snapshot.exportKeys),
+			"policy_count":           len(snapshot.exportPolicies),
+			"task_count":             len(snapshot.exportTasks),
+			"setting_count":          len(snapshot.exportSettings),
+			"repository_count":       snapshot.assetCounts.Repositories,
+			"link_count":             snapshot.assetCounts.Links,
+			"retention_policy_count": snapshot.assetCounts.Policies,
+			"hold_count":             snapshot.assetCounts.Holds,
 		},
 	})
 
@@ -574,28 +640,28 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		"version":     configExportVersion2,
 		"exported_at": time.Now().Format(time.RFC3339),
 		"data": gin.H{
-			"nodes":                     exportNodes,
-			"ssh_keys":                  exportKeys,
-			"policies":                  exportPolicies,
-			"tasks":                     exportTasks,
-			"system_settings":           exportSettings,
-			"backup_repositories":       assetGraph.BackupRepositories,
-			"task_repository_links":     assetGraph.TaskRepositoryLinks,
-			"backup_retention_policies": assetGraph.BackupRetentionPolicies,
-			"recovery_point_holds":      assetGraph.RecoveryPointHolds,
+			"nodes":                     snapshot.exportNodes,
+			"ssh_keys":                  snapshot.exportKeys,
+			"policies":                  snapshot.exportPolicies,
+			"tasks":                     snapshot.exportTasks,
+			"system_settings":           snapshot.exportSettings,
+			"backup_repositories":       snapshot.assetGraph.BackupRepositories,
+			"task_repository_links":     snapshot.assetGraph.TaskRepositoryLinks,
+			"backup_retention_policies": snapshot.assetGraph.BackupRetentionPolicies,
+			"recovery_point_holds":      snapshot.assetGraph.RecoveryPointHolds,
 		},
 	})
 }
 
 // Import godoc
 // @Summary      导入配置
-// @Description  从 JSON 文件导入节点、SSH 密钥、策略、任务配置；conflict 参数控制冲突策略
+// @Description  从 JSON 文件导入节点、SSH 密钥、策略、任务配置；nodes[].ssh_key_name 与 ssh_keys[].allowed_node_names 使用精确名称映射，缺失沿用旧数字字段规则，空值解除关联，null 或非法引用保留为未解析并返回 warning；名称字段优先于旧数字字段，冲突不会静默清空。支持 skip/overwrite；warning code 枚举为 invalid_input、invalid_scope、invalid_private_key、missing_private_key、missing_password、missing_inline_private_key、unresolved_ssh_key、unresolved_node_scope、duplicate_name、invalid_reference、reference_conflict，未知附加字段保持兼容
 // @Tags         config
 // @Security     Bearer
 // @Accept       json
 // @Produce      json
 // @Param        conflict  query     string  false  "冲突策略（skip 默认/overwrite）"
-// @Param        body      body      object  true   "配置 JSON 数据"
+// @Param        body      body      object  true   "配置 JSON 数据；nodes[].ssh_key_name 为 string/null（空字符串解除关联），ssh_keys[].allowed_node_names 为 string[]/null（空数组清空范围）；字段缺失沿用旧数字 ID 规则"
 // @Success      200  {object}  handlers.Response{data=configImportResult}
 // @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
@@ -700,6 +766,13 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					return fmt.Errorf("锁定导入任务备份目标失败: %w", err)
 				}
 			}
+			if len(data.Nodes) > 0 || len(data.SSHKeys) > 0 {
+				inventory, err := lockConfigImportCredentialInventory(tx, data)
+				if err != nil {
+					return err
+				}
+				accumulator.credentialInventory = inventory
+			}
 			// Create repos from tx for task helper functions.
 			importNodeRepo := gormrepo.NewNodeRepository(tx)
 			importPolicyRepo := gormrepo.NewPolicyRepository(tx)
@@ -761,226 +834,8 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 				return nil
 			}
-
-			// 导入 SSH 密钥
-			for keyIndex, keyData := range data.SSHKeys {
-				name, _ := keyData["name"].(string)
-				name = strings.TrimSpace(name)
-				if name == "" {
-					accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidInput)
-					continue
-				}
-
-				var existingSSHKeyPlaceholder model.SSHKey
-				result := tx.Session(&gorm.Session{SkipHooks: true}).
-					Where("name = ?", name).Limit(1).Find(&existingSSHKeyPlaceholder)
-				if result.Error != nil {
-					return fmt.Errorf("查询导入 SSH 密钥失败: %w", result.Error)
-				}
-				found := result.RowsAffected > 0
-				if found && conflict != "overwrite" {
-					accumulator.skipped()
-					continue
-				}
-
-				scope, scopeCode := parseImportedSSHKeyScope(keyData)
-				if found && scopeCode != "" {
-					accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, scopeCode)
-					continue
-				}
-
-				if found {
-					existing := existingSSHKeyPlaceholder
-					sourcePrivateKey, sourcePrivateKeyProvided := keyData["private_key"].(string)
-					if (!sourcePrivateKeyProvided || strings.TrimSpace(sourcePrivateKey) == "") &&
-						strings.TrimSpace(existing.PrivateKey) != "" {
-						decrypted, decryptErr := secure.DecryptIfNeeded(existing.PrivateKey)
-						if decryptErr != nil {
-							accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidPrivateKey)
-							continue
-						}
-						existing.PrivateKey = decrypted
-					}
-					selectedType, err := importedSSHKeySelectedType(keyData, existing.KeyType)
-					if err != nil {
-						accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidInput)
-						continue
-					}
-					preparedKey, storedType, err := prepareImportedSSHKeyPrivateKey(keyData, &existing, selectedType)
-					if err != nil {
-						accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidPrivateKey)
-						continue
-					}
-
-					candidate := existing
-					if username, ok := keyData["username"].(string); ok {
-						candidate.Username = strings.TrimSpace(username)
-					}
-					candidate.KeyType = storedType
-					candidate.PrivateKey = preparedKey
-					if strings.TrimSpace(preparedKey) == "" {
-						candidate.PrivateKey = ""
-						candidate.Fingerprint = ""
-						candidate.Disabled = true
-						accumulator.warning(configImportEntitySSHKeys, keyIndex, name, configImportWarningMissingPrivateKey)
-					} else {
-						candidate.Fingerprint = generateFingerprint(preparedKey)
-					}
-					applyImportedSSHKeyScopeCandidate(&candidate, scope)
-					if strings.TrimSpace(candidate.PrivateKey) == "" {
-						candidate.Fingerprint = ""
-						candidate.Disabled = true
-					}
-					if err := tx.Save(&candidate).Error; err != nil {
-						return fmt.Errorf("保存导入 SSH 密钥失败: %w", err)
-					}
-					accumulator.updated(configImportEntitySSHKeys)
-					continue
-				}
-
-				selectedType, err := importedSSHKeySelectedType(keyData, "")
-				if err != nil {
-					accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidInput)
-					continue
-				}
-				preparedKey, storedType, err := prepareImportedSSHKeyPrivateKey(keyData, nil, selectedType)
-				if err != nil {
-					accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidPrivateKey)
-					continue
-				}
-				newKey := model.SSHKey{Name: name, KeyType: storedType}
-				if username, ok := keyData["username"].(string); ok {
-					newKey.Username = strings.TrimSpace(username)
-				}
-				newKey.PrivateKey = preparedKey
-				if strings.TrimSpace(preparedKey) != "" {
-					newKey.Fingerprint = generateFingerprint(preparedKey)
-				} else {
-					newKey.Fingerprint = ""
-					newKey.Disabled = true
-					accumulator.warning(configImportEntitySSHKeys, keyIndex, name, configImportWarningMissingPrivateKey)
-				}
-				applyImportedSSHKeyScopeCandidate(&newKey, scope)
-				if scopeCode != "" {
-					accumulator.warning(configImportEntitySSHKeys, keyIndex, name, scopeCode)
-					newKey.Disabled = true
-					newKey.AllowedNodeIDs = ""
-				}
-				if strings.TrimSpace(newKey.PrivateKey) == "" {
-					newKey.Fingerprint = ""
-					newKey.Disabled = true
-				}
-				if err := tx.Create(&newKey).Error; err != nil {
-					return fmt.Errorf("创建导入 SSH 密钥失败: %w", err)
-				}
-				accumulator.created(configImportEntitySSHKeys, newKey.Disabled)
-			}
-
-			// 导入节点
-			for nodeIndex, nodeData := range data.Nodes {
-				name, _ := nodeData["name"].(string)
-				name = strings.TrimSpace(name)
-				if name == "" {
-					accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-					continue
-				}
-
-				var existing model.Node
-				result := tx.Where("name = ?", name).Limit(1).Find(&existing)
-				if result.Error != nil {
-					return fmt.Errorf("查询导入节点失败: %w", result.Error)
-				}
-				found := result.RowsAffected > 0
-				if found && conflict != "overwrite" {
-					accumulator.skipped()
-					continue
-				}
-				if preRejected[configImportEntityNodes][nodeIndex] {
-					accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-					continue
-				}
-
-				if found {
-					candidate := existing
-					if host, ok := nodeData["host"].(string); ok {
-						candidate.Host = strings.TrimSpace(host)
-					}
-					if port, ok := nodeData["port"].(float64); ok {
-						candidate.Port = int(port)
-					}
-					if username, ok := nodeData["username"].(string); ok {
-						candidate.Username = strings.TrimSpace(username)
-					}
-					if authType, ok := nodeData["auth_type"].(string); ok {
-						candidate.AuthType = strings.ToLower(strings.TrimSpace(authType))
-					}
-					if tags, ok := nodeData["tags"].(string); ok {
-						candidate.Tags = tags
-					}
-					if basePath, ok := nodeData["base_path"].(string); ok {
-						candidate.BasePath = strings.TrimSpace(basePath)
-					}
-					if candidate.Username == "" ||
-						(candidate.AuthType != "" && candidate.AuthType != "password" && candidate.AuthType != "key" && candidate.AuthType != "ssh_key") {
-						accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-						continue
-					}
-					if err := node.ValidateNodeHostPort(candidate.Host, candidate.Port); err != nil {
-						accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-						continue
-					}
-					if err := tx.Save(&candidate).Error; err != nil {
-						return fmt.Errorf("保存导入节点失败: %w", err)
-					}
-					accumulator.updated(configImportEntityNodes)
-					addImportedNodeCredentialWarnings(accumulator, nodeIndex, name, nodeData, candidate)
-					continue
-				}
-
-				newNode := model.Node{
-					Name:     name,
-					Status:   "offline",
-					Port:     22,
-					AuthType: "key",
-				}
-				if host, ok := nodeData["host"].(string); ok {
-					newNode.Host = strings.TrimSpace(host)
-				}
-				if port, ok := nodeData["port"].(float64); ok {
-					newNode.Port = int(port)
-				}
-				if username, ok := nodeData["username"].(string); ok {
-					newNode.Username = strings.TrimSpace(username)
-				}
-				if authType, ok := nodeData["auth_type"].(string); ok {
-					newNode.AuthType = strings.ToLower(strings.TrimSpace(authType))
-				}
-				if tags, ok := nodeData["tags"].(string); ok {
-					newNode.Tags = tags
-				}
-				if basePath, ok := nodeData["base_path"].(string); ok {
-					newNode.BasePath = strings.TrimSpace(basePath)
-				}
-				if password, ok := nodeData["password"].(string); ok {
-					newNode.Password = password
-				}
-				if privateKey, ok := nodeData["private_key"].(string); ok {
-					newNode.PrivateKey = privateKey
-				}
-				if newNode.Username == "" ||
-					(newNode.AuthType != "" && newNode.AuthType != "password" && newNode.AuthType != "key" && newNode.AuthType != "ssh_key") {
-					accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-					continue
-				}
-				if err := node.ValidateNodeHostPort(newNode.Host, newNode.Port); err != nil {
-					accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-					continue
-				}
-				if err := tx.Create(&newNode).Error; err != nil {
-					return fmt.Errorf("创建导入节点失败: %w", err)
-				}
-				accumulator.created(configImportEntityNodes, false)
-				addImportedNodeCredentialWarnings(accumulator, nodeIndex, name, nodeData, newNode)
+			if err := importConfigNodesAndSSHKeys(tx, data, conflict, preRejected, accumulator); err != nil {
+				return err
 			}
 
 			// 导入策略
@@ -1629,6 +1484,8 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					return err
 				}
 			}
+			rollbackSnapshot.nodes.registerOwnedCreated(accumulator.createdNodeIDs)
+			rollbackSnapshot.sshKeys.registerOwnedCreated(accumulator.createdSSHKeyIDs)
 
 			return rollbackSnapshot.seal(persistCtx, tx)
 		})
@@ -2104,9 +1961,6 @@ func applyImportedSSHKeyScopeCandidate(key *model.SSHKey, candidate importedSSHK
 	if candidate.allowedNodeTags != nil {
 		key.AllowedNodeTags = *candidate.allowedNodeTags
 	}
-	if candidate.allowedNodeIDs != nil && strings.TrimSpace(*candidate.allowedNodeIDs) != "" {
-		key.AllowedNodeIDs = ""
-	}
 }
 
 func importedSSHKeySelectedType(data map[string]interface{}, fallback string) (string, error) {
@@ -2159,7 +2013,7 @@ func addImportedNodeCredentialWarnings(
 	source map[string]interface{},
 	nodeItem model.Node,
 ) {
-	if importedNodeSourceSSHKeyIDPresent(source) {
+	if importedNodeKeyReferenceUnresolved(source, nodeItem) {
 		accumulator.warning(configImportEntityNodes, index, name, configImportWarningUnresolvedSSHKey)
 	}
 	switch strings.ToLower(strings.TrimSpace(nodeItem.AuthType)) {

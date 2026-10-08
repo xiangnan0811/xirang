@@ -50,6 +50,9 @@ const IMPORT_WARNING_CODES: Record<ConfigImportWarningCode, true> = {
   missing_password: true,
   missing_inline_private_key: true,
   unresolved_ssh_key: true,
+  duplicate_name: true,
+  invalid_reference: true,
+  reference_conflict: true,
 };
 const SCOPE_WARNING_CODES: Record<string, true> = {
   invalid_scope: true,
@@ -62,6 +65,15 @@ const NODE_WARNING_CODES: Record<string, true> = {
   missing_password: true,
   missing_inline_private_key: true,
   unresolved_ssh_key: true,
+};
+const NAME_REFERENCE_CODES: Record<string, true> = {
+  invalid_reference: true,
+  reference_conflict: true,
+};
+const IMPORT_NAME_WARNING_CODES: Record<string, true> = {
+  duplicate_name: true,
+  invalid_reference: true,
+  reference_conflict: true,
 };
 
 type ConfigGrantMode = "import" | "sensitive-export";
@@ -216,6 +228,30 @@ function hasWarningCode(warnings: ConfigImportWarning[], codes: Record<string, t
   return warnings.some((warning) => codes[warning.code] === true);
 }
 
+function hasEntityWarning(
+  warnings: ConfigImportWarning[],
+  codes: Record<string, true>,
+  entity: ConfigImportEntity,
+): boolean {
+  return warnings.some((warning) => warning.entity === entity && codes[warning.code] === true);
+}
+
+function remediationWarnings(warnings: ConfigImportWarning[]): ConfigImportWarning[] {
+  return warnings.filter((warning) => {
+    const isCompanion = (warning.entity === "nodes" && warning.code === "unresolved_ssh_key")
+      || (warning.entity === "ssh_keys" && warning.code === "unresolved_node_scope");
+    return !isCompanion || !warnings.some((reference) =>
+      reference.entity === warning.entity
+      && reference.index === warning.index
+      && NAME_REFERENCE_CODES[reference.code] === true,
+    );
+  });
+}
+
+function warningsUseNameMappingRoutesOnly(warnings: ConfigImportWarning[]): boolean {
+  return warnings.length > 0 && warnings.every((warning) => IMPORT_NAME_WARNING_CODES[warning.code] === true);
+}
+
 function presentImportResult(result: Partial<ConfigImportResult> | null | undefined): ImportPresentation {
   const warnings = visibleWarnings(result?.warnings);
   const display: DisplayImportResult = {
@@ -271,13 +307,14 @@ function CountStat({ label, value, emphasis }: { label: string; value: number; e
   );
 }
 
-function ReviewLinks() {
+function ReviewLinks({ keys = true, nodes = true }: { keys?: boolean; nodes?: boolean }) {
   const { t } = useTranslation();
+  if (!keys && !nodes) return null;
   const className = "text-xs font-medium text-primary underline underline-offset-4";
   return (
     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-      <Link className={className} to="/app/ssh-keys">{t("configExport.remediation.openKeys")}</Link>
-      <Link className={className} to="/app/nodes">{t("configExport.remediation.openNodes")}</Link>
+      {keys ? <Link className={className} to="/app/ssh-keys">{t("configExport.remediation.openKeys")}</Link> : null}
+      {nodes ? <Link className={className} to="/app/nodes">{t("configExport.remediation.openNodes")}</Link> : null}
     </div>
   );
 }
@@ -299,10 +336,24 @@ function ConfigImportOutcomePanel({ presentation }: { presentation: ImportPresen
   }
 
   const { result } = presentation;
-  const showDisabledKeySteps = result.disabledImported > 0 || hasWarningCode(result.warnings, DISABLED_KEY_WARNING_CODES);
-  const showScopeSteps = hasWarningCode(result.warnings, SCOPE_WARNING_CODES);
-  const showNodePath = hasWarningCode(result.warnings, NODE_WARNING_CODES);
-  const showKeyPath = showDisabledKeySteps || showScopeSteps || result.rejected > 0;
+  const routes = remediationWarnings(result.warnings);
+  const nameMappingOnly = warningsUseNameMappingRoutesOnly(routes) && result.warningsTruncated === 0;
+  const showSshNameReference = hasEntityWarning(routes, NAME_REFERENCE_CODES, "ssh_keys");
+  const showDisabledKeySteps = (result.disabledImported > 0 && !(nameMappingOnly && showSshNameReference))
+    || hasWarningCode(routes, DISABLED_KEY_WARNING_CODES);
+  const showScopeSteps = hasWarningCode(routes, SCOPE_WARNING_CODES);
+  const showNodePath = hasWarningCode(routes, NODE_WARNING_CODES);
+  const showNodeNameReference = hasEntityWarning(routes, NAME_REFERENCE_CODES, "nodes");
+  const showFileCorrection = hasWarningCode(routes, { duplicate_name: true });
+  const showKeyPath = showDisabledKeySteps || showScopeSteps || (result.rejected > 0 && !nameMappingOnly);
+  const showReviewScope = showKeyPath || showSshNameReference;
+  const showEnableManually = showDisabledKeySteps || showSshNameReference;
+  const showRebind = showNodePath || showNodeNameReference;
+  const showVerify = showKeyPath || showNodePath;
+  const showLegacyLinks = showKeyPath || showNodePath;
+  const showOpenKeys = showLegacyLinks || showSshNameReference;
+  const showOpenNodes = showLegacyLinks || showNodeNameReference;
+  const showNamedRoutes = showReviewScope || showEnableManually || showRebind || showVerify || showOpenKeys || showOpenNodes;
   const tone: InlineAlertTone = presentation.status === "success"
     ? "success"
     : presentation.status === "rejected" && result.imported === 0
@@ -352,17 +403,20 @@ function ConfigImportOutcomePanel({ presentation }: { presentation: ImportPresen
       {result.warningsTruncated > 0 ? (
         <p className="mt-1 text-xs">{t("configExport.result.warningsTruncated", { count: result.warningsTruncated })}</p>
       ) : null}
-      {showKeyPath || showNodePath ? (
+      {showFileCorrection ? (
+        <p className="mt-2 text-xs font-medium text-foreground">{t("configExport.remediation.correctFile")}</p>
+      ) : null}
+      {showNamedRoutes ? (
         <>
           <p className="mt-2 text-xs font-medium text-foreground">{t("configExport.remediation.title")}</p>
           <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs text-foreground">
             {showDisabledKeySteps ? <li>{t("configExport.remediation.editKey")}</li> : null}
-            {showKeyPath ? <li>{t("configExport.remediation.reviewScope")}</li> : null}
-            {showDisabledKeySteps ? <li>{t("configExport.remediation.enableManually")}</li> : null}
-            {showNodePath ? <li>{t("configExport.remediation.rebindNode")}</li> : null}
-            {showKeyPath || showNodePath ? <li>{t("configExport.remediation.verifyNodes")}</li> : null}
+            {showReviewScope ? <li>{t("configExport.remediation.reviewScope")}</li> : null}
+            {showEnableManually ? <li>{t("configExport.remediation.enableManually")}</li> : null}
+            {showRebind ? <li>{t("configExport.remediation.rebindNode")}</li> : null}
+            {showVerify ? <li>{t("configExport.remediation.verifyNodes")}</li> : null}
           </ol>
-          <ReviewLinks />
+          <ReviewLinks keys={showOpenKeys} nodes={showOpenNodes} />
         </>
       ) : null}
     </InlineAlert>
