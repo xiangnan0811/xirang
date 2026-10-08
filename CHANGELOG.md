@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.59.0](https://github.com/xiangnan0811/xirang/compare/v0.58.2...v0.59.0) (2026-10-08)
+
+
+### ✨ Features
+
+* **config:** restore imported credential relationships by name ([#598](https://github.com/xiangnan0811/xirang/issues/598)) ([7700d87](https://github.com/xiangnan0811/xirang/commit/7700d8722935cd0e1a6dce622903a4de393eea6f))
+
 ## [0.58.2](https://github.com/xiangnan0811/xirang/compare/v0.58.1...v0.58.2) (2026-10-08)
 
 
