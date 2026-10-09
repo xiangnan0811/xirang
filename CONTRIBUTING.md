@@ -11,7 +11,7 @@
 ## 开发环境
 
 后端使用 Go / Gin / GORM，前端使用 React / TypeScript / Vite / Tailwind CSS。
-版本以 `backend/go.mod`、`web/package.json` 及锁文件为准。需要 Go 1.27.1
+版本以 `backend/go.mod`、`web/package.json` 及锁文件为准。需要 Go 1.27.2
 或兼容版本、SQLite 驱动所需 C 编译工具链（CGO），以及 Node.js
 20.19+（20.x）、22.13+（22.x）或 24+ 和 npm。文档结构检查使用 Python 3.9+
 （仅标准库）。升级工具链后也须确认 linter 兼容。

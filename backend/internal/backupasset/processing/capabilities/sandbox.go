@@ -890,7 +890,7 @@ type toolchainInspection struct {
 func productionToolchainInventory() toolchainInventory {
 	return toolchainInventory{
 		SchemaVersion: "xirang.asset.toolchain.v2",
-		BuilderBase:   "golang:1.27.1-alpine3.24@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414",
+		BuilderBase:   "golang:1.27.2-alpine3.24@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673",
 		RuntimeBase:   "alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
 		Packages: []toolchainPackage{
 			{Name: "bash", Version: "5.3.3-r1", Runtime: true},
