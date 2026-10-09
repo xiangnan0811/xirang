@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.59.1](https://github.com/xiangnan0811/xirang/compare/v0.59.0...v0.59.1) (2026-10-09)
+
+
+### 🐛 Bug Fixes
+
+* **ssh:** validate candidate connections before rotating keys ([#600](https://github.com/xiangnan0811/xirang/issues/600)) ([1c1b56a](https://github.com/xiangnan0811/xirang/commit/1c1b56a85f013182d9ac278ee3aad3f16db364c1))
+
 ### 行为与升级说明
 
 - SSH 密钥轮换改为先验证候选、后保存：管理员显式预览并确认后，服务端验证完整关联节点库存（包括离线、归档节点），全部通过并在短事务中重新核对配置及会话后才替换。任一验证失败不替换；零关联节点只检查候选及使用范围，不声称完成 SSH 验证。普通密钥编辑仍可离线修复，不强制连接预验证。
