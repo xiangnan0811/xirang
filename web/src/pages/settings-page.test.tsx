@@ -50,6 +50,9 @@ vi.mock("@/lib/api/client", () => ({
     getCronBackupStatus: vi.fn().mockResolvedValue({
       status: "not_configured", engine: "sqlite", checkedAt: "2026-10-07T00:00:00Z",
       maxAgeSeconds: 93600, evidence: "artifact_pair", timeSource: "mtime", contentVerified: false,
+      job: {
+        evidence: "job_record", status: "not_configured", checkedAt: "2026-10-07T00:00:00Z", maxAgeSeconds: 93600,
+      },
     }),
     exportConfig: vi.fn().mockResolvedValue({}),
     getUsers: vi.fn().mockResolvedValue([]),

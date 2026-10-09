@@ -58,7 +58,7 @@ Web `POST /api/v1/system/backup-db` 仅以 SQLite `VACUUM INTO` 生成数据库�
 `content_verified=false`；时间是 RFC3339 UTC。只在有完整产物对时提供最新时间与
 产物名，以数据库/校验文件较晚的 mtime 作为发布时间。任一合格对未来 mtime
 返回时钟异常；否则 age ≤ 阈值才为 fresh。目录存在不证明 cron 已启用，
-不提供最近尝试、作业成功、调度时区或恢复成功声明。
+这些顶层产物字段不提供最近尝试、作业成功、调度时区或恢复成功声明。
 
 扫描以 `os.OpenRoot` 约束，配置根符号链接无效，产物/校验文件必须非空普通文件；
 Lstat、打开后 SameFile 及读取后身份/大小/mtime 核对拒绝替换或变化。
@@ -66,6 +66,58 @@ Lstat、打开后 SameFile 及读取后身份/大小/mtime 核对拒绝替换或
 超限不得从部分结果宣称 fresh。校验文本恰好一条 SHA256 记录，名称仅接受对应
 basename 或配置目录下规范绝对路径，只作相等性验证，绝不据此打开文件。
 cron 每日备份、mtime 30 天清理与 Web 数量限制保持独立，详见[部署指南](../../deployment.md#手动备份与恢复)。
+
+### cron 作业执行记录
+
+同一响应必含独立 `job` 对象，固定 `evidence=job_record`，包含 `status`、
+`checked_at`、`max_age_seconds`，以及可选的安全 `latest_attempt`、`last_success`。
+作业与产物证据不能相互覆盖：成功记录可以与产物缺失同时存在，旧的完整产物也不能
+掩盖最近失败。管理面不提供执行或重试 cron 的动作，读取不创建告警。
+
+`CRON_DB_BACKUP_STATE_DIR` 默认空（未接入），官方镜像显式设为
+`/backup/.cron-db-state`；它不改写产物目录或官方 cron 的 `/backup/db` 输出位置。
+以实际引擎划分 `sqlite/`、`postgres/`，目录 0700、永久锁文件和状态文件 0600。
+只允许具有可靠本机 Linux flock、rename、fsync 语义的持久文件系统，不承诺 NFS
+或多个独立本地卷的分布式互斥。Core 以实际 DB dialect 观察，runner 使用 `DB_TYPE`。
+
+`xirang-cron-db-backup init` 固定首次初始化时间与源身份；容器重启不刷新宽限。
+entrypoint 在 supercronic 启动前以相同非 root 身份初始化，失败仅输出固定警告，
+继续启动 Core；`run` 无法提交 running 记录时不启动脚本。每日 cron 调用 runner，
+30 天产物清理独立进行；手工 `backup-db.sh` 不产生 cron 作业记录。
+
+运行器持有整个执行期的 `run.lock`，子进程继承锁描述符。重复运行退出 75，
+不制造尝试；TERM/INT 转发到进程组，5 秒后升级 KILL。发送组信号期间保留未回收的
+直接子进程身份，避免 PID/进程组编号复用；僵尸不算活跃执行者。取消后只有确认组已
+停止并重新取得独立打开的 run.lock，才发布终态；继承锁仍被占用或无法确认时保留
+running，由后续观察推导状态。取消与完成竞态仍以合法 receipt 加零退出为成功条件。
+`state.lock` 保护状态提交及后台一致性决策，API 获取至多等待 100ms，后台观察至多
+1s；运行器最终发布等待至多 10s，覆盖后台锁内数据库操作的 5s 期限。底层 I/O 仍依赖
+本机文件系统，正常备份不新增总执行期限。观察时钟在锁内读完状态后采样，避免把
+等待期间刚提交的记录误报为未来时间。
+状态版本 1，单对象 UTF-8 JSON 上限 16KiB，拒绝重复键、未知字段、尾随对象、
+符号链接、特殊文件、错误引擎、非法关联及路径注入。
+
+`job.status` 为 `not_configured`、`invalid_configuration`、`not_initialized`、
+`state_unavailable`、`state_invalid`、`clock_anomaly`、`never_run`、`running`、
+`overdue_running`、`interrupted`、`failed`、`success` 或 `stale`。
+未来/倒序时间不视为成功；running 且锁仍被占用才表示执行中，超期为
+overdue_running；锁已释放但没有完成记录则只读推导 interrupted，不伪造终止时间。
+持久 interrupted 只记检测时间和 `process_interrupted`，不承诺备份没有发生。
+失败码闭合为 `backup_failed`、`backup_start_failed`、`result_invalid`、
+`process_interrupted`，不记录命令、DSN、密码、原始输出或错误路径。
+
+脚本在原有最终 SHA256 复核及输出后，仅在内部环境
+`XIRANG_BACKUP_RECEIPT_FD=3` 时写 basename receipt；未设置时离线操作保持原义。
+只有合法 receipt 与子进程零退出同时成立才写 success，并更新 last_success；
+新的 running、失败或中断保留旧 last_success。成功记录表示脚本完成证据，
+不等于 PostgreSQL 恢复验收、产物当前仍存在或完整灾备恢复。
+
+状态以同目录临时文件、文件 Sync、原子 Rename 和目录 Sync 发布。运行器只有全部
+成功才确认成功；失败输出 `state_publish_failed` 并非零退出，不删除已验证产物。
+**Rename 已成功而目录 Sync 失败时，发布结果不确定**：随后仍可能读到完整成功记录，
+并据此恢复告警；该记录不能证明原 runner 最后一次持久化确认成功。不能承诺在故障
+介质上保存失败事实，也不以回滚文件或重建状态掩盖不确定结果。
+损坏状态不自动覆盖或重置身份；运维须保全现场并从匹配的私有状态备份恢复。
 
 ## 内容网关与可选 Worker
 

@@ -64,6 +64,22 @@ const CRON_STATUSES = new Set([
   "stale",
   "fresh",
 ]);
+const CRON_JOB_STATUSES = new Set([
+  "not_configured",
+  "invalid_configuration",
+  "not_initialized",
+  "state_unavailable",
+  "state_invalid",
+  "clock_anomaly",
+  "never_run",
+  "running",
+  "overdue_running",
+  "interrupted",
+  "failed",
+  "success",
+  "stale",
+]);
+const UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/;
 const OWN_CRON_ARTIFACT = "xirang-sqlite-20261007-153000.db";
 const OWN_CRON_CHECKSUM = `${OWN_CRON_ARTIFACT}.sha256`;
 
@@ -77,6 +93,15 @@ type CronStatusName =
   | "stale"
   | "fresh";
 
+type CronJobStatus = {
+  evidence: "job_record";
+  status: string;
+  checked_at: string;
+  max_age_seconds: number;
+  latest_attempt?: unknown;
+  last_success?: unknown;
+};
+
 type CronStatus = {
   status: CronStatusName;
   engine: string;
@@ -88,6 +113,7 @@ type CronStatus = {
   evidence: string;
   time_source: string;
   content_verified: boolean;
+  job: CronJobStatus;
 };
 
 type ListedBackup = { filename: string; size: number; sha256: string };
@@ -226,8 +252,40 @@ async function readEnvelope(response: Response, label: string): Promise<unknown>
   return parsed.data;
 }
 
+function parseCronJob(value: unknown): CronJobStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("cron backup status is missing job");
+  }
+  const job = value as Record<string, unknown>;
+  if (job.evidence !== "job_record") throw new Error(`unexpected cron job evidence: ${String(job.evidence)}`);
+  if (typeof job.status !== "string" || !CRON_JOB_STATUSES.has(job.status)) {
+    throw new Error(`unexpected cron job status: ${String(job.status)}`);
+  }
+  if (typeof job.checked_at !== "string" || !UTC_INSTANT.test(job.checked_at)) {
+    throw new Error("cron job checked_at is not UTC");
+  }
+  if (typeof job.max_age_seconds !== "number" || !Number.isSafeInteger(job.max_age_seconds) || job.max_age_seconds < 0) {
+    throw new Error("cron job max_age_seconds is invalid");
+  }
+  const parsed: CronJobStatus = {
+    evidence: "job_record",
+    status: job.status,
+    checked_at: job.checked_at,
+    max_age_seconds: job.max_age_seconds,
+  };
+  if (Object.hasOwn(job, "latest_attempt")) {
+    if (job.latest_attempt == null) throw new Error("cron job latest_attempt is null");
+    parsed.latest_attempt = job.latest_attempt;
+  }
+  if (Object.hasOwn(job, "last_success")) {
+    if (job.last_success == null) throw new Error("cron job last_success is null");
+    parsed.last_success = job.last_success;
+  }
+  return parsed;
+}
+
 function parseCronStatus(data: unknown): CronStatus {
-  if (!data || typeof data !== "object") throw new Error("cron backup status response is not an object");
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("cron backup status response is not an object");
   const row = data as Record<string, unknown>;
   if (typeof row.status !== "string" || !CRON_STATUSES.has(row.status)) {
     throw new Error(`unexpected cron status: ${String(row.status)}`);
@@ -235,8 +293,8 @@ function parseCronStatus(data: unknown): CronStatus {
   if (typeof row.engine !== "string" || typeof row.checked_at !== "string" || typeof row.max_age_seconds !== "number") {
     throw new Error("cron backup status is missing engine, checked_at, or max_age_seconds");
   }
-  if (typeof row.evidence !== "string" || typeof row.time_source !== "string" || typeof row.content_verified !== "boolean") {
-    throw new Error("cron backup status is missing evidence fields");
+  if (row.evidence !== "artifact_pair" || row.time_source !== "mtime" || row.content_verified !== false) {
+    throw new Error("cron backup status evidence is not an unverified artifact pair");
   }
   return {
     status: row.status as CronStatusName,
@@ -249,6 +307,7 @@ function parseCronStatus(data: unknown): CronStatus {
     evidence: row.evidence,
     time_source: row.time_source,
     content_verified: row.content_verified,
+    job: parseCronJob(row.job),
   };
 }
 
@@ -284,8 +343,15 @@ function expectCronEvidence(cron: CronStatus, status: CronStatusName, maxAgeSeco
   expect(cron.time_source).toBe("mtime");
   expect(cron.content_verified).toBe(false);
   expect(cron.max_age_seconds).toBe(maxAgeSeconds);
-  expect(cron.checked_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/);
+  expect(cron.checked_at).toMatch(UTC_INSTANT);
   expect(Math.abs(Date.parse(cron.checked_at) - Date.now())).toBeLessThan(5 * 60_000);
+  expect(cron.job.evidence).toBe("job_record");
+  expect(cron.job.status).toBe("not_configured");
+  expect(cron.job.latest_attempt).toBeUndefined();
+  expect(cron.job.last_success).toBeUndefined();
+  expect(cron.job.max_age_seconds).toBe(maxAgeSeconds);
+  expect(cron.job.checked_at).toMatch(UTC_INSTANT);
+  expect(Math.abs(Date.parse(cron.job.checked_at) - Date.now())).toBeLessThan(5 * 60_000);
 }
 
 function waitForMaintenanceReads(page: Page): Promise<{ backups: ListedBackup[]; cron: CronStatus }> {
@@ -321,19 +387,29 @@ async function expectSeparateClock(observer: Locator, iso: string) {
   expect(found.localClocks).toContain(local);
 }
 
-async function expectObserverEvidence(observer: Locator, cron: CronStatus) {
-  if (cron.directory !== "") await expect(observer).toContainText(cron.directory);
-  if (cron.artifact_name !== "") await expect(observer).toContainText(cron.artifact_name);
-  const wires = await observer.locator("time.font-mono").evaluateAll((nodes) => nodes.map((node) => ({
+async function expectWiredClocks(root: Locator, isos: string[]) {
+  const wires = await root.locator("time.font-mono").evaluateAll((nodes) => nodes.map((node) => ({
     datetime: node.getAttribute("datetime"),
     text: node.textContent?.trim() ?? "",
   })));
+  expect(wires.map((row) => row.datetime).sort()).toEqual([...isos].sort());
+  for (const row of wires) expect(row.text).toBe(row.datetime);
+  for (const iso of isos) await expectSeparateClock(root, iso);
+}
+
+async function expectObserverEvidence(observer: Locator, cron: CronStatus) {
+  const artifact = observer.locator('[data-evidence="artifact_pair"]');
+  const job = observer.locator('[data-evidence="job_record"]');
+  if (cron.directory !== "") await expect(artifact).toContainText(cron.directory);
+  if (cron.artifact_name !== "") await expect(artifact).toContainText(cron.artifact_name);
   const expectedWires = [cron.checked_at];
   if (cron.latest_complete_at !== "") expectedWires.push(cron.latest_complete_at);
-  expect(wires.map((row) => row.datetime).sort()).toEqual([...expectedWires].sort());
-  for (const row of wires) expect(row.text).toBe(row.datetime);
-  await expectSeparateClock(observer, cron.checked_at);
-  if (cron.latest_complete_at !== "") await expectSeparateClock(observer, cron.latest_complete_at);
+  await expectWiredClocks(artifact, expectedWires);
+  expect(cron.job.status).toBe("not_configured");
+  await expect(job).toContainText("Job state is not configured");
+  await expect(job).not.toContainText("Completion record is visible");
+  await expect(job.getByRole("button")).toHaveCount(0);
+  await expectWiredClocks(job, [cron.job.checked_at]);
 }
 
 async function maintenancePanels(page: Page): Promise<{ web: Locator; observer: Locator }> {

@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The cron runner owns this private receipt descriptor. Manual invocations do
+# not emit receipts and retain their existing stdout contract.
+if [[ "${XIRANG_BACKUP_RECEIPT_FD+x}" == "x" && "${XIRANG_BACKUP_RECEIPT_FD}" != "3" ]]; then
+  echo "result_invalid" >&2
+  exit 1
+fi
+
 if ! umask 077; then
   echo "❌ 无法设置数据库备份私有 umask" >&2
   exit 1
@@ -216,6 +223,9 @@ finish_backup() {
   fi
   echo "✅ ${label} 备份完成：${backup_file}"
   echo "BACKUP_FILE=${backup_file}"
+  if [[ "${XIRANG_BACKUP_RECEIPT_FD:-}" == "3" ]]; then
+    printf '%s\n' "${backup_file##*/}" >&3
+  fi
 }
 
 if [[ "${db_type}" == "sqlite" ]]; then

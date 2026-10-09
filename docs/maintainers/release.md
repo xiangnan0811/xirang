@@ -94,11 +94,13 @@ multi-arch manifest/tag 提升、发布凭据使用和 provenance attestation。
 
 历史版本的具体迁移编号和交付事件保留在 CHANGELOG/发行说明；当前迁移版本唯一声明在[后端入口](../../backend/README.md)。公开发布成功不代表生产已经升级或真实恢复已经验收。
 
-All-in-One 镜像以 `CRON_DB_BACKUP_DIR=/backup/db` 提供 cron 数据库产物的只读观测默认目录，
-部署模板以 `CRON_DB_BACKUP_MAX_AGE_HOURS=26` 设置新鲜度窗口。升级后显示的是容器可见
-目录中的产物与时间，不证明 cron 已启用、备份内容有效或恢复已验收；仍须核对实际挂载、
-调度配置及恢复演练。此观测不新增 schema migration，也不替代 SQLite Web 快照与
-PostgreSQL 外部备份各自的能力边界。
+All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录
+`CRON_DB_BACKUP_STATE_DIR=/backup/.cron-db-state`，共用 26 小时默认窗口。发行验收须验证
+相同非 root 身份的初始化、实际 supercronic 调度、脚本 receipt、状态持久性及后台告警；
+仅启动容器或看到 fresh 产物不是该链路的证明。新的健康 cursor/永久使用标记通过
+双引擎迁移维护，已使用后拒绝 down；数据库与私有状态文件必须配套保全身份和 revision。
+发布说明须披露 Rename 后目录 Sync 失败的结果不确定窗口，不能由可见完成记录反推
+原 runner 最终持久化确认成功。它不替代 Web SQLite 快照或 PostgreSQL 离线恢复验收。
 
 本次 Core 时区数据锁定从源中已移除的 `tzdata=2026d-r0` 更新至 `2026e-r0`，
 发布须重新构建并扫描双架构镜像；不修改默认时区或迁移已保存的 UTC 时刻。

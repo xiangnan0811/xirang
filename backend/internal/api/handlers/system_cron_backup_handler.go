@@ -4,13 +4,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"xirang/backend/internal/cronbackup"
 )
 
 const (
@@ -26,32 +26,27 @@ const (
 	cronBackupEvidenceArtifactPair = "artifact_pair"
 	cronBackupTimeSourceMtime      = "mtime"
 
-	cronBackupDefaultMaxAgeHours = 26
-	cronBackupMinMaxAgeHours     = 1
-	cronBackupMaxMaxAgeHours     = 8760
-
 	cronBackupMaxEntries       = 4096
 	cronBackupMaxChecksumBytes = 4096
 	cronBackupMaxReadBytes     = 4 * 1024 * 1024
 	cronBackupReadDirBatch     = 256
 )
 
-// CronBackupStatusResponse is the bounded, read-only observation of the
-// configured cron backup artifact pair. It intentionally does not claim that a
-// scheduler ran, that the artifact contents are valid, or that a restore was
-// exercised.
+// CronBackupStatusResponse keeps artifact-pair observations separate from
+// recorded script execution. Neither evidence establishes disaster recovery.
 type CronBackupStatusResponse struct {
 	Status string `json:"status" enums:"not_configured,invalid_configuration,directory_unreadable,no_complete_backup,scan_limit_exceeded,clock_anomaly,stale,fresh"`
 	// Engine is empty when the runtime dialect is unsupported and Status is invalid_configuration.
-	Engine           string `json:"engine"`
-	CheckedAt        string `json:"checked_at" format:"date-time"`
-	MaxAgeSeconds    int64  `json:"max_age_seconds"`
-	Directory        string `json:"directory,omitempty"`
-	LatestCompleteAt string `json:"latest_complete_at,omitempty" format:"date-time"`
-	ArtifactName     string `json:"artifact_name,omitempty"`
-	Evidence         string `json:"evidence" enums:"artifact_pair"`
-	TimeSource       string `json:"time_source" enums:"mtime"`
-	ContentVerified  bool   `json:"content_verified"`
+	Engine           string                    `json:"engine"`
+	CheckedAt        string                    `json:"checked_at" format:"date-time"`
+	MaxAgeSeconds    int64                     `json:"max_age_seconds"`
+	Directory        string                    `json:"directory,omitempty"`
+	LatestCompleteAt string                    `json:"latest_complete_at,omitempty" format:"date-time"`
+	ArtifactName     string                    `json:"artifact_name,omitempty"`
+	Evidence         string                    `json:"evidence" enums:"artifact_pair"`
+	TimeSource       string                    `json:"time_source" enums:"mtime"`
+	ContentVerified  bool                      `json:"content_verified"`
+	Job              cronbackup.JobObservation `json:"job"`
 }
 
 type cronBackupScanResult struct {
@@ -62,8 +57,8 @@ type cronBackupScanResult struct {
 }
 
 // CronBackupStatus godoc
-// @Summary      查询 cron 数据库备份产物状态
-// @Description  只读检查配置目录中的受管数据库产物及其校验文件；不执行 cron、不读取整库且不验证内容摘要。
+// @Summary      查询 cron 数据库备份产物与作业记录
+// @Description  分别只读观察产物对和作业记录；不执行备份、不创建告警，也不证明完整灾备恢复。
 // @Tags         system
 // @Security     Bearer
 // @Produce      json
@@ -72,15 +67,17 @@ type cronBackupScanResult struct {
 // @Failure      403  {object} handlers.Response
 // @Router       /system/cron-backup-status [get]
 func (h *SystemHandler) CronBackupStatus(c *gin.Context) {
-	checkedAt := time.Now()
+	clock := time.Now
 	var db *gorm.DB
 	if h != nil {
 		db = h.db
 		if h.now != nil {
-			checkedAt = h.now()
+			clock = h.now
 		}
 	}
-	checkedAt = checkedAt.UTC()
+	// checkedAt is sampled for the independent artifact observation; Read
+	// samples its own clock after the state lock and state-file read.
+	checkedAt := clock().UTC()
 
 	engine := cronBackupRuntimeEngine(db)
 	maxAgeSeconds, maxAgeOK := cronBackupMaxAgeSeconds()
@@ -92,6 +89,24 @@ func (h *SystemHandler) CronBackupStatus(c *gin.Context) {
 		Evidence:        cronBackupEvidenceArtifactPair,
 		TimeSource:      cronBackupTimeSourceMtime,
 		ContentVerified: false,
+		Job: cronbackup.JobObservation{
+			Evidence:      "job_record",
+			Status:        cronbackup.JobStatusNotConfigured,
+			CheckedAt:     checkedAt,
+			MaxAgeSeconds: maxAgeSeconds,
+		},
+	}
+	if strings.TrimSpace(os.Getenv(cronbackup.StateDirectoryEnv)) != "" {
+		cfg, err := cronbackup.LoadConfig(engine)
+		if err != nil {
+			response.Job.Status = cronbackup.JobStatusInvalidConfiguration
+		} else {
+			observation, readErr := cronbackup.Read(c.Request.Context(), cfg, clock)
+			response.Job = observation.Job
+			if readErr != nil {
+				response.Job.Status = cronbackup.JobStatusStateUnavailable
+			}
+		}
 	}
 
 	if engine == "" || !maxAgeOK {
@@ -136,15 +151,8 @@ func cronBackupRuntimeEngine(db *gorm.DB) string {
 }
 
 func cronBackupMaxAgeSeconds() (int64, bool) {
-	raw := strings.TrimSpace(os.Getenv("CRON_DB_BACKUP_MAX_AGE_HOURS"))
-	if raw == "" {
-		return cronBackupDefaultMaxAgeHours * 60 * 60, true
-	}
-	hours, err := strconv.Atoi(raw)
-	if err != nil || hours < cronBackupMinMaxAgeHours || hours > cronBackupMaxMaxAgeHours {
-		return 0, false
-	}
-	return int64(hours) * 60 * 60, true
+	maxAge, err := cronbackup.ParseMaxAge(os.Getenv("CRON_DB_BACKUP_MAX_AGE_HOURS"))
+	return int64(maxAge / time.Second), err == nil
 }
 
 func scanCronBackupDirectory(directory, engine string, checkedAt time.Time, maxAge time.Duration) cronBackupScanResult {

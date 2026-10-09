@@ -481,7 +481,8 @@ All-in-One 的 Nginx 固定监听 `10761`，后端默认监听 `:3000`，生产 
 | `DB_BACKUP_DIR` | string | `./backups`（相对于 DB 文件目录） | 否 | 系统自助 SQLite 备份目录；未设置时取 SQLite 文件所在目录的 `backups` 子目录，显式相对路径则相对进程工作目录 |
 | `DB_BACKUP_MAX_COUNT` | int | `20` | 否 | 系统自助 SQLite 备份接口保留的最大备份数量 |
 | `CRON_DB_BACKUP_DIR` | string | 空（All-in-One 镜像为 `/backup/db`） | 否 | cron 数据库产物的只读观测目录；容器内路径，不猜测宿主机位置，也不启用调度。配置目录本身不能是符号链接 |
-| `CRON_DB_BACKUP_MAX_AGE_HOURS` | int | `26` | 否 | 完整产物对的新鲜度阈值，正整数 `1–8760`；无效值显示 `invalid_configuration`，不影响进程启动，不静默回退 |
+| `CRON_DB_BACKUP_STATE_DIR` | string | 空（All-in-One 镜像为 `/backup/.cron-db-state`） | 否 | cron 私有作业状态根目录，按引擎分目录；runner 初始化和写入，Core 只读。与产物目录独立，须是支持本机 Linux flock/rename/fsync 的持久目录 |
+| `CRON_DB_BACKUP_MAX_AGE_HOURS` | int | `26` | 否 | 产物与作业新鲜度、运行超期及首次告警宽限共用阈值，正整数 `1–8760`；无效值显示 `invalid_configuration`，不影响 Core 启动，不静默回退 |
 
 **读取位置**：[版本检查](../backend/internal/api/handlers/version_handler.go)、[系统备份 API](../backend/internal/api/handlers/system_handler.go)。`DB_BACKUP_MAX_COUNT` 只约束 `POST /api/v1/system/backup-db`，无效或非正值回退到 20；不会控制容器 cron 或 `scripts/backup-db.sh`。cron 使用固定的 `/backup/db` 和文件年龄保留策略，备份/恢复步骤见[部署指南](deployment.md)。版本检查比较 GitHub Release 的稳定 semver 与编译时版本；未注入构建版本时显示 `dev`。
 
@@ -491,6 +492,11 @@ All-in-One 的 Nginx 固定监听 `10761`，后端默认监听 `:3000`，生产 
 未配置、目录不可读、无完整对、扫描超限、未来时间及过期分别显示独立状态。
 实现见[cron 产物观测](../backend/internal/api/handlers/system_cron_backup_handler.go)；
 Web SQLite 快照不支持 PostgreSQL 时，该观测仍独立可用。
+响应另外必含 `job`，只使用运行器记录的尝试/成功证据，不从产物推断执行结果。
+未配置状态目录为 `not_configured`；接入和故障介质边界见
+[部署运行时合同](spec/backend/deployment-runtime.md#cron-作业执行记录)。
+`XIRANG_BACKUP_RECEIPT_FD` 是运行器内部传给脚本的描述符协议，不是部署配置：
+未设置时手工脚本保持原义，设置时只允许字面量 `3`。
 
 ## 应用指标
 

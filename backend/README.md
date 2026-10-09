@@ -29,17 +29,17 @@ API 以 Router 和生成的 OpenAPI 为准，本页不手工维护接口或模�
 
 ## 数据库迁移版本
 
-当前迁移版本：`000091_service_monitor_retirement`。
+当前迁移版本：`000092_cron_backup_health`。
 
 该迁移的 SQLite/PostgreSQL 配对文件为：
 
-- `internal/database/migrations/sqlite/000091_service_monitor_retirement.up.sql`
-- `internal/database/migrations/sqlite/000091_service_monitor_retirement.down.sql`
-- `internal/database/migrations/postgres/000091_service_monitor_retirement.up.sql`
-- `internal/database/migrations/postgres/000091_service_monitor_retirement.down.sql`
+- `internal/database/migrations/sqlite/000092_cron_backup_health.up.sql`
+- `internal/database/migrations/sqlite/000092_cron_backup_health.down.sql`
+- `internal/database/migrations/postgres/000092_cron_backup_health.up.sql`
+- `internal/database/migrations/postgres/000092_cron_backup_health.down.sql`
 
-`000091_service_monitor_retirement.up.sql` 是不可逆的服务监控退役迁移：在同一事务封存精确匹配 `^XR-SERVICE-DOWN-[0-9]+$` 的历史告警与未发送投递，再删除 `service_uptime_samples` 和 `service_monitors`。告警行、升级历史、已发送投递及 attempt 事实保留；备份资产及 Provider 元数据、任务与运行历史、任务日志、恢复证据、审计、异常和任务 SLO 不变。已发布的历史迁移（含职责收敛迁移及其保护器）保持不变。
+`000092_cron_backup_health.up.sql` 新增 cron 数据库备份故障游标及固定单行使用标记。游标约束来源密钥、来源身份、revision、故障与告警关联；首次 enrollment 与业务行同事务写入使用标记。为保存 `XR-CRON-DB-BACKUP-` 加 64 位 source key 的完整告警身份，PostgreSQL 将 `alerts.error_code` 扩展为 `VARCHAR(128)`；SQLite 保留基线 `VARCHAR(64)` 声明（SQLite 不执行声明宽度），两引擎都接受完整 82 字符值。SQLite/PostgreSQL 均在 `schema_migrations` 的 INSERT/UPDATE 降级准入点拒绝已使用 schema 或已存在超过 64 字符告警编码的降级，即使游标业务行后来被清理，使用标记仍保留。
 
-`000091_service_monitor_retirement.down.sql` 明确失败，不是回滚方案。独立 `schema_migrations` 保护器在迁移驱动写入旧版本/dirty 之前拒绝低于该版本，即使空库也不允许降级；失败后仍为 clean，允许后续向前迁移及未来版本退至该保护版本。启动精确验证保护器的事件、条件、函数体及启用状态，损坏时返回 `ErrMigrationSchemaDrift`。不可逆升级只能通过升级前已验证的整库备份，配套旧版二进制、配置、`DATA_ENCRYPTION_KEY` 及适用历史密钥恢复，不能手改迁移元数据、删除保护器或重建空表伪装恢复。
+`000092_cron_backup_health.down.sql` 仅允许未写入使用标记且不存在超过 64 字符告警编码的 schema 降级；PostgreSQL 仅在该准入检查通过后将 `error_code` 安全收窄回 `VARCHAR(64)`，SQLite 不重建 alerts 表。down 文件保留独立 body guard；已使用状态拒绝后版本保持 clean，迁移表、约束、外键和保护器不被删除。启动会验证两引擎真实列、默认值、NOT NULL、主键、CHECK、FK、告警编码容量以及保护器触发器/函数体；漂移返回 `ErrMigrationSchemaDrift`，不能以同名空操作对象放行。
 
 该声明与 `internal/database/migrations/{sqlite,postgres}` 中最新的成对 up/down 文件同步，并由迁移检查脚本校验。升级前提、旧写入者排空、双引擎恢复和降级保护要求见[数据库合同](../docs/spec/backend/database-guidelines.md)、[部署指南](../docs/deployment.md#备份职责收敛升级)及[备份、恢复与快照](../docs/admin/backup-recovery.md#升级与灾难恢复)；不要通过强制修改版本或删除安全证据绕过保护。

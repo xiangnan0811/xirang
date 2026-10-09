@@ -22,6 +22,7 @@ const (
 	taskCronOverrideSchemaVersion                   int64 = 88
 	backupFocusRetirementSchemaVersion              int64 = 90
 	serviceMonitorRetirementSchemaVersion           int64 = 91
+	cronBackupHealthSchemaVersion                   int64 = 92
 )
 
 const lifecycleEffectClaimAuditSlotAdmissionTrigger = "trg_recovery_point_lifecycle_effect_claim_audit_slot_downgrade_admission"
@@ -49,6 +50,9 @@ const backupFocusRetirementAdmissionFunction = "backup_focus_retirement_downgrad
 const serviceMonitorRetirementAdmissionTrigger = "trg_service_monitor_retirement_downgrade_admission"
 const serviceMonitorRetirementUpdateAdmissionTrigger = "trg_service_monitor_retirement_downgrade_update_admission"
 const serviceMonitorRetirementAdmissionFunction = "service_monitor_retirement_downgrade_admission"
+const cronBackupHealthAdmissionTrigger = "trg_cron_backup_health_downgrade_admission"
+const cronBackupHealthUpdateAdmissionTrigger = "trg_cron_backup_health_downgrade_update_admission"
+const cronBackupHealthAdmissionFunction = "cron_backup_health_downgrade_admission"
 
 type lifecycleEffectClaimAuditSlotTriggerContract struct {
 	table                                 string
@@ -655,6 +659,23 @@ BEGIN
 	END IF;
 	RETURN NEW;
 END;`
+const cronBackupHealthSQLiteAdmissionWhen = `
+	NEW.version < 92
+	AND (
+		EXISTS (SELECT 1 FROM cron_backup_health_usage)
+		OR EXISTS (SELECT 1 FROM alerts WHERE length(error_code) > 64)
+	)`
+const cronBackupHealthSQLiteAdmissionBody = "SELECT RAISE(ABORT, '000092 downgrade blocked: cron backup health usage or long alert code is permanent');"
+const cronBackupHealthPostgresAdmissionBody = `
+BEGIN
+	IF NEW.version < 92 AND (
+		EXISTS (SELECT 1 FROM cron_backup_health_usage)
+		OR EXISTS (SELECT 1 FROM alerts WHERE length(error_code) > 64)
+	) THEN
+		RAISE EXCEPTION '000092 downgrade blocked: cron backup health usage or long alert code is permanent';
+	END IF;
+	RETURN NEW;
+END;`
 
 // ErrMigrationSchemaDrift means schema_migrations records a clean migration-69
 // or newer database, but the minimum recovery schema is incomplete. The error is
@@ -861,6 +882,12 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 		return nil
 	}
 	if err := validateServiceMonitorRetirementAdmission(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < cronBackupHealthSchemaVersion {
+		return nil
+	}
+	if err := validateCronBackupHealthSchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
 
@@ -2665,6 +2692,271 @@ func backupFocusRetirementPostgresFunctionDefinitionExact(definition string) boo
 	return ok && normalizeMigrationGuardBody(body) ==
 		normalizeMigrationGuardBody(backupFocusRetirementPostgresAdmissionBody)
 }
+func validateCronBackupHealthSchema(db *sql.DB, dbType string) error {
+	const (
+		healthTable = "cron_backup_health"
+		usageTable  = "cron_backup_health_usage"
+	)
+	if err := validateCronBackupAlertErrorCodeColumn(db, dbType); err != nil {
+		return err
+	}
+
+	healthExists, err := migrationRelationExists(db, dbType, healthTable, "table")
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !healthExists {
+		return errors.New("missing_cron_backup_health_table")
+	}
+	usageExists, err := migrationRelationExists(db, dbType, usageTable, "table")
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !usageExists {
+		return errors.New("missing_cron_backup_health_usage_table")
+	}
+
+	healthColumns, err := migrationColumnCount(db, dbType, healthTable)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if healthColumns != 7 {
+		return errors.New("invalid_cron_backup_health_columns")
+	}
+	usageColumns, err := migrationColumnCount(db, dbType, usageTable)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if usageColumns != 1 {
+		return errors.New("invalid_cron_backup_health_usage_columns")
+	}
+
+	healthPrimaryKey, err := migrationPrimaryKeyColumns(db, dbType, healthTable)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !sameMigrationIndexColumns(healthPrimaryKey, []string{"source_key"}) {
+		return errors.New("invalid_cron_backup_health_primary_key")
+	}
+	usagePrimaryKey, err := migrationPrimaryKeyColumns(db, dbType, usageTable)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !sameMigrationIndexColumns(usagePrimaryKey, []string{"id"}) {
+		return errors.New("invalid_cron_backup_health_usage_primary_key")
+	}
+
+	type columnContract struct {
+		name         string
+		sqliteType   string
+		postgresType string
+		notNull      bool
+		defaultSQL   string
+	}
+	columns := []columnContract{
+		{name: "source_key", sqliteType: "text", postgresType: "text", notNull: true, defaultSQL: ""},
+		{name: "source_id", sqliteType: "text", postgresType: "text", notNull: true, defaultSQL: "''"},
+		{name: "highest_revision", sqliteType: "integer", postgresType: "bigint", notNull: true, defaultSQL: "0"},
+		{name: "enrolled_at", sqliteType: "datetime", postgresType: "timestamp with time zone", notNull: true, defaultSQL: ""},
+		{name: "fault_active", sqliteType: "boolean", postgresType: "boolean", notNull: true, defaultSQL: "0"},
+		{name: "alert_id", sqliteType: "integer", postgresType: "integer", notNull: false, defaultSQL: ""},
+		{name: "updated_at", sqliteType: "datetime", postgresType: "timestamp with time zone", notNull: true, defaultSQL: ""},
+	}
+	for _, want := range columns {
+		got, columnErr := migrationColumnContractOf(db, dbType, healthTable, want.name)
+		if columnErr != nil {
+			if errors.Is(columnErr, sql.ErrNoRows) {
+				return errors.New("missing_cron_backup_health_column")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		expectedType := want.sqliteType
+		expectedDefault := want.defaultSQL
+		if dbType == "postgres" {
+			expectedType = want.postgresType
+			if want.name == "fault_active" {
+				expectedDefault = "false"
+			}
+		}
+		if got.dataType != expectedType ||
+			got.notNull != want.notNull ||
+			!migrationCronBackupHealthDefaultEqual(dbType, got.defaultSQL, expectedDefault) {
+			return errors.New("invalid_cron_backup_health_column")
+		}
+	}
+	usageID, usageIDErr := migrationColumnContractOf(db, dbType, usageTable, "id")
+	if usageIDErr != nil {
+		if errors.Is(usageIDErr, sql.ErrNoRows) {
+			return errors.New("missing_cron_backup_health_usage_column")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	usageType := "integer"
+	if usageID.dataType != usageType || !usageID.notNull ||
+		!migrationCronBackupHealthDefaultEqual(dbType, usageID.defaultSQL, "") {
+		return errors.New("invalid_cron_backup_health_usage_column")
+	}
+
+	checks, err := migrationTableCheckDefinitions(db, dbType, healthTable)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	healthChecks := []string{
+		"length(source_key) = 64 AND source_key NOT GLOB '*[^0-9a-f]*'",
+		"source_id = '' OR (length(source_id) = 32 AND source_id NOT GLOB '*[^0-9a-f]*')",
+		"highest_revision >= 0",
+		"fault_active = 0 OR alert_id IS NOT NULL",
+	}
+	if dbType == "postgres" {
+		healthChecks = []string{
+			"length(source_key) = 64 AND source_key ~ '^[0-9a-f]{64}$'",
+			"source_id = '' OR source_id ~ '^[0-9a-f]{32}$'",
+			"highest_revision >= 0",
+			"NOT fault_active OR alert_id IS NOT NULL",
+		}
+	}
+	if !migrationCheckMultisetExact(dbType, checks, healthChecks) {
+		return errors.New("invalid_cron_backup_health_checks")
+	}
+	usageChecks, err := migrationTableCheckDefinitions(db, dbType, usageTable)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationCheckMultisetExact(dbType, usageChecks, []string{"id = 1"}) {
+		return errors.New("invalid_cron_backup_health_usage_check")
+	}
+
+	foreignKeys, err := migrationForeignKeyCount(db, dbType, healthTable)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if foreignKeys != 1 {
+		return errors.New("invalid_cron_backup_health_foreign_key")
+	}
+	foreignKeyValid, err := migrationForeignKeyExists(db, dbType, healthTable, "alert_id", "alerts")
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !foreignKeyValid {
+		return errors.New("invalid_cron_backup_health_foreign_key")
+	}
+
+	if dbType == "sqlite" {
+		for _, trigger := range []struct {
+			name  string
+			event string
+		}{
+			{name: cronBackupHealthAdmissionTrigger, event: "BEFORE INSERT"},
+			{name: cronBackupHealthUpdateAdmissionTrigger, event: "BEFORE UPDATE"},
+		} {
+			definition, triggerErr := migrationTriggerDefinition(db, dbType, "schema_migrations", trigger.name)
+			if triggerErr != nil {
+				if errors.Is(triggerErr, sql.ErrNoRows) {
+					return errors.New("missing_cron_backup_health_admission_trigger")
+				}
+				return errors.New("catalog_query_failed")
+			}
+			if !cronBackupHealthSQLiteGuardDefinitionExact(definition, trigger.name, trigger.event) {
+				return errors.New("invalid_cron_backup_health_admission_trigger")
+			}
+		}
+		return nil
+	}
+
+	definition, triggerErr := migrationTriggerDefinition(
+		db, dbType, "schema_migrations", cronBackupHealthAdmissionTrigger,
+	)
+	if triggerErr != nil {
+		if errors.Is(triggerErr, sql.ErrNoRows) {
+			return errors.New("missing_cron_backup_health_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	enabled, enabledErr := migrationTriggerEnabled(
+		db, dbType, "schema_migrations", cronBackupHealthAdmissionTrigger,
+	)
+	if enabledErr != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !enabled || !cronBackupHealthPostgresTriggerDefinitionExact(definition) {
+		return errors.New("invalid_cron_backup_health_admission_trigger")
+	}
+	functionDefinition, functionErr := migrationTriggerFunctionDefinition(
+		db, "schema_migrations", cronBackupHealthAdmissionTrigger,
+	)
+	if functionErr != nil {
+		if errors.Is(functionErr, sql.ErrNoRows) {
+			return errors.New("invalid_cron_backup_health_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !cronBackupHealthPostgresFunctionDefinitionExact(functionDefinition) {
+		return errors.New("invalid_cron_backup_health_admission_trigger")
+	}
+	return nil
+}
+
+func validateCronBackupAlertErrorCodeColumn(db *sql.DB, dbType string) error {
+	contract, err := migrationColumnContractOf(db, dbType, "alerts", "error_code")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_cron_backup_alert_error_code_column")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !contract.notNull || normalizeMigrationSQLToken(contract.defaultSQL) != "" {
+		return errors.New("invalid_cron_backup_alert_error_code_column")
+	}
+	if dbType == "postgres" {
+		if contract.dataType != "character varying" || contract.maxLength != 128 {
+			return errors.New("invalid_cron_backup_alert_error_code_column")
+		}
+		return nil
+	}
+	if contract.dataType != "varchar(64)" {
+		return errors.New("invalid_cron_backup_alert_error_code_column")
+	}
+	return nil
+}
+
+func migrationCronBackupHealthDefaultEqual(dbType, got, want string) bool {
+	got = normalizeMigrationSQLToken(got)
+	want = normalizeMigrationSQLToken(want)
+	if dbType == "postgres" {
+		got = strings.TrimSuffix(got, "::text")
+	}
+	return got == want
+}
+
+func cronBackupHealthSQLiteGuardDefinitionExact(
+	definition,
+	triggerName,
+	event string,
+) bool {
+	return lifecycleSQLiteGuardDefinitionExact(definition, lifecycleEffectClaimAuditSlotTriggerContract{
+		table:            "schema_migrations",
+		name:             triggerName,
+		triggerFragments: []string{event},
+		sqliteWhen:       cronBackupHealthSQLiteAdmissionWhen,
+		sqliteBody:       cronBackupHealthSQLiteAdmissionBody,
+	})
+}
+
+func cronBackupHealthPostgresTriggerDefinitionExact(definition string) bool {
+	return lifecyclePostgresGuardDefinitionExact(definition, lifecycleEffectClaimAuditSlotTriggerContract{
+		table:                "schema_migrations",
+		name:                 cronBackupHealthAdmissionTrigger,
+		triggerFragments:     []string{"BEFORE INSERT OR UPDATE"},
+		postgresFunctionName: cronBackupHealthAdmissionFunction,
+	})
+}
+
+func cronBackupHealthPostgresFunctionDefinitionExact(definition string) bool {
+	body, ok := migrationPostgresFunctionBody(definition)
+	return ok && normalizeMigrationGuardBody(body) ==
+		normalizeMigrationGuardBody(cronBackupHealthPostgresAdmissionBody)
+}
+
 func validateServiceMonitorRetirementAdmission(db *sql.DB, dbType string) error {
 	if dbType == "sqlite" {
 		for _, trigger := range []struct {

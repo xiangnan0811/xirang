@@ -42,7 +42,7 @@ type Alert struct {
 	PolicyName     string     `gorm:"size:128" json:"policy_name"`
 	Severity       string     `gorm:"size:16;not null;index" json:"severity"`
 	Status         string     `gorm:"size:16;not null;index" json:"status"`
-	ErrorCode      string     `gorm:"size:64;not null;index:idx_alerts_dedup" json:"error_code"`
+	ErrorCode      string     `gorm:"size:128;not null;index:idx_alerts_dedup" json:"error_code"`
 	Message        string     `gorm:"type:text;not null" json:"message"`
 	Retryable      bool       `gorm:"not null;default:false" json:"retryable"`
 	TriggeredAt    time.Time  `gorm:"index" json:"triggered_at"`

@@ -15,7 +15,8 @@ import {
   isAuthTransitionActive,
   subscribeAuthTransition,
 } from "@/lib/api/core";
-import type { BackupEntry, CronBackupStatus, CronBackupStatusCode } from "@/lib/api/system-api";
+import type { CronBackupStatus, CronBackupStatusCode, CronJobObservation, CronJobStatusCode } from "@/lib/api/cron-backup-status";
+import type { BackupEntry } from "@/lib/api/system-api";
 import { formatBytes, getErrorMessage } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -116,6 +117,12 @@ function observerTone(status: CronBackupStatusCode): InlineAlertTone {
   return "warning";
 }
 
+function jobTone(status: CronJobStatusCode): InlineAlertTone {
+  if (status === "success") return "success";
+  if (status === "not_configured" || status === "not_initialized" || status === "never_run" || status === "running") return "info";
+  return "warning";
+}
+
 function ObservedInstant({ value }: { value: string }) {
   const { t } = useTranslation();
   return (
@@ -149,6 +156,67 @@ function EvidenceFact({ label, children }: { label: string; children: ReactNode 
   );
 }
 
+function JobExecutionRecord({ job }: { job: CronJobObservation }) {
+  const { t } = useTranslation();
+  const attempt = job.latestAttempt;
+  const success = job.lastSuccess;
+  return (
+    <section data-evidence="job_record" aria-labelledby="cron-job-record-heading" className="min-w-0 space-y-3">
+      <h4 id="cron-job-record-heading" className="text-sm font-medium text-foreground">{t("selfBackup.jobTitle")}</h4>
+      <p className="text-xs leading-relaxed text-muted-foreground">{t("selfBackup.jobDisclaimer")}</p>
+      <InlineAlert tone={jobTone(job.status)} title={t(`selfBackup.jobStatus.${job.status}`)}>
+        {t(`selfBackup.jobDetail.${job.status}`)}
+      </InlineAlert>
+      <dl className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+        <EvidenceFact label={t("selfBackup.jobEvidence")}>{t("selfBackup.evidenceJobRecord")}</EvidenceFact>
+        <EvidenceFact label={t("selfBackup.jobCheckedAt")}><ObservedInstant value={job.checkedAt} /></EvidenceFact>
+        <EvidenceFact label={t("selfBackup.jobThreshold")}><FreshnessThreshold seconds={job.maxAgeSeconds} /></EvidenceFact>
+        {attempt ? <EvidenceFact label={t("selfBackup.jobAttempt")}>{t(`selfBackup.attemptResult.${attempt.result}`)}</EvidenceFact> : null}
+        {attempt ? <EvidenceFact label={t("selfBackup.jobStartedAt")}><ObservedInstant value={attempt.startedAt} /></EvidenceFact> : null}
+        {attempt?.finishedAt ? <EvidenceFact label={t("selfBackup.jobFinishedAt")}><ObservedInstant value={attempt.finishedAt} /></EvidenceFact> : null}
+        {attempt?.detectedAt ? <EvidenceFact label={t("selfBackup.jobDetectedAt")}><ObservedInstant value={attempt.detectedAt} /></EvidenceFact> : null}
+        {attempt?.failureCode ? <EvidenceFact label={t("selfBackup.jobFailure")}>{t(`selfBackup.failureCode.${attempt.failureCode}`)}</EvidenceFact> : null}
+        {attempt?.artifactName ? <EvidenceFact label={t("selfBackup.jobAttemptArtifact")}><span className="font-mono">{attempt.artifactName}</span></EvidenceFact> : null}
+        {success ? <EvidenceFact label={t("selfBackup.jobSuccessArtifact")}><span className="font-mono">{success.artifactName}</span></EvidenceFact> : null}
+        {success ? <EvidenceFact label={t("selfBackup.jobSuccessStarted")}><ObservedInstant value={success.startedAt} /></EvidenceFact> : null}
+        {success ? <EvidenceFact label={t("selfBackup.jobSuccessFinished")}><ObservedInstant value={success.finishedAt} /></EvidenceFact> : null}
+      </dl>
+    </section>
+  );
+}
+
+function ArtifactObservation({ status }: { status: CronBackupStatus }) {
+  const { t } = useTranslation();
+  return (
+    <section data-evidence="artifact_pair" aria-labelledby="cron-artifact-evidence-heading" className="min-w-0 space-y-3 border-t border-border/60 pt-4">
+      <h4 id="cron-artifact-evidence-heading" className="text-sm font-medium text-foreground">{t("selfBackup.artifactTitle")}</h4>
+      <p className="text-xs leading-relaxed text-muted-foreground">{t("selfBackup.cronDisclaimer")}</p>
+      <InlineAlert tone={observerTone(status.status)} title={t(`selfBackup.status.${status.status}`)}>
+        {t("selfBackup.cronNotEvidence")}
+      </InlineAlert>
+      <dl className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+        <EvidenceFact label={t("selfBackup.cronEngine")}>
+          {status.engine === "" ? t("selfBackup.engine.unknown") : t(`selfBackup.engine.${status.engine}`)}
+        </EvidenceFact>
+        <EvidenceFact label={t("selfBackup.cronCheckedAt")}><ObservedInstant value={status.checkedAt} /></EvidenceFact>
+        <EvidenceFact label={t("selfBackup.cronThreshold")}><FreshnessThreshold seconds={status.maxAgeSeconds} /></EvidenceFact>
+        <EvidenceFact label={t("selfBackup.cronEvidence")}>{t("selfBackup.evidenceArtifactPair")}</EvidenceFact>
+        <EvidenceFact label={t("selfBackup.cronTimeSource")}>{t("selfBackup.timeSourceMtime")}</EvidenceFact>
+        <EvidenceFact label={t("selfBackup.cronContent")}>{t("selfBackup.contentNotVerified")}</EvidenceFact>
+        {status.directory ? (
+          <EvidenceFact label={t("selfBackup.cronDirectory")}><span className="font-mono">{status.directory}</span></EvidenceFact>
+        ) : null}
+        {status.artifactName ? (
+          <EvidenceFact label={t("selfBackup.cronArtifact")}><span className="font-mono">{status.artifactName}</span></EvidenceFact>
+        ) : null}
+        {status.latestCompleteAt ? (
+          <EvidenceFact label={t("selfBackup.cronLatestComplete")}><ObservedInstant value={status.latestCompleteAt} /></EvidenceFact>
+        ) : null}
+      </dl>
+    </section>
+  );
+}
+
 function CronBackupEvidence({
   phase,
   status,
@@ -166,40 +234,19 @@ function CronBackupEvidence({
         <CardTitle id="cron-backup-evidence-heading" className="text-base">{t("selfBackup.cronTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="relative z-10">
-      <p className="text-xs leading-relaxed text-muted-foreground">{t("selfBackup.cronDisclaimer")}</p>
       {phase === "loading" ? (
-        <p className="mt-3 text-xs text-muted-foreground">{t("selfBackup.cronLoading")}</p>
+        <p className="text-xs text-muted-foreground">{t("selfBackup.cronLoading")}</p>
       ) : phase === "error" || !status ? (
-        <InlineAlert className="mt-3" tone="critical" title={t("selfBackup.cronLoadError")}>
+        <InlineAlert tone="critical" title={t("selfBackup.cronLoadError")}>
           <Button type="button" size="sm" variant="outline" className="mt-2" onClick={onRetry}>
             {t("selfBackup.retryCron")}
           </Button>
         </InlineAlert>
       ) : (
-        <>
-          <InlineAlert className="mt-3" tone={observerTone(status.status)} title={t(`selfBackup.status.${status.status}`)}>
-            {t("selfBackup.cronNotEvidence")}
-          </InlineAlert>
-          <dl className="mt-3 grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
-            <EvidenceFact label={t("selfBackup.cronEngine")}>
-              {status.engine === "" ? t("selfBackup.engine.unknown") : t(`selfBackup.engine.${status.engine}`)}
-            </EvidenceFact>
-            <EvidenceFact label={t("selfBackup.cronCheckedAt")}><ObservedInstant value={status.checkedAt} /></EvidenceFact>
-            <EvidenceFact label={t("selfBackup.cronThreshold")}><FreshnessThreshold seconds={status.maxAgeSeconds} /></EvidenceFact>
-            <EvidenceFact label={t("selfBackup.cronEvidence")}>{t("selfBackup.evidenceArtifactPair")}</EvidenceFact>
-            <EvidenceFact label={t("selfBackup.cronTimeSource")}>{t("selfBackup.timeSourceMtime")}</EvidenceFact>
-            <EvidenceFact label={t("selfBackup.cronContent")}>{t("selfBackup.contentNotVerified")}</EvidenceFact>
-            {status.directory ? (
-              <EvidenceFact label={t("selfBackup.cronDirectory")}><span className="font-mono">{status.directory}</span></EvidenceFact>
-            ) : null}
-            {status.artifactName ? (
-              <EvidenceFact label={t("selfBackup.cronArtifact")}><span className="font-mono">{status.artifactName}</span></EvidenceFact>
-            ) : null}
-            {status.latestCompleteAt ? (
-              <EvidenceFact label={t("selfBackup.cronLatestComplete")}><ObservedInstant value={status.latestCompleteAt} /></EvidenceFact>
-            ) : null}
-          </dl>
-        </>
+        <div className="space-y-4">
+          <JobExecutionRecord job={status.job} />
+          <ArtifactObservation status={status} />
+        </div>
       )}
       </CardContent>
     </Card>

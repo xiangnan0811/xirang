@@ -313,6 +313,10 @@ async function replyFor(
   if (method === "GET" && apiPath === "/system/cron-backup-status") return ok({
     status: "not_configured", engine: "sqlite", checked_at: "2026-10-07T00:00:00Z",
     max_age_seconds: 93600, evidence: "artifact_pair", time_source: "mtime", content_verified: false,
+    job: {
+      evidence: "job_record", status: "not_configured", checked_at: "2026-10-07T00:00:00Z",
+      max_age_seconds: 93600,
+    },
   });
 
   if (method === "GET" && apiPath === "/backup-file-sources/nodes") return ok(fileSourceNodesPage);

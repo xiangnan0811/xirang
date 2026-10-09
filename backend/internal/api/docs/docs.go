@@ -13637,14 +13637,14 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "只读检查配置目录中的受管数据库产物及其校验文件；不执行 cron、不读取整库且不验证内容摘要。",
+                "description": "分别只读观察产物对和作业记录；不执行备份、不创建告警，也不证明完整灾备恢复。",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "system"
                 ],
-                "summary": "查询 cron 数据库备份产物状态",
+                "summary": "查询 cron 数据库备份产物与作业记录",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -16757,6 +16757,9 @@ const docTemplate = `{
                     "enum": [
                         "artifact_pair"
                     ]
+                },
+                "job": {
+                    "$ref": "#/definitions/xirang_backend_internal_cronbackup.JobObservation"
                 },
                 "latest_complete_at": {
                     "type": "string",
@@ -24435,6 +24438,120 @@ const docTemplate = `{
                     "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchField"
                 },
                 "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_cronbackup.AttemptObservation": {
+            "type": "object",
+            "properties": {
+                "artifact_name": {
+                    "type": "string"
+                },
+                "detected_at": {
+                    "type": "string"
+                },
+                "failure_code": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "result": {
+                    "$ref": "#/definitions/xirang_backend_internal_cronbackup.AttemptResult"
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_cronbackup.AttemptResult": {
+            "type": "string",
+            "enum": [
+                "running",
+                "success",
+                "failed",
+                "interrupted"
+            ],
+            "x-enum-varnames": [
+                "AttemptRunning",
+                "AttemptSuccess",
+                "AttemptFailed",
+                "AttemptInterrupted"
+            ]
+        },
+        "xirang_backend_internal_cronbackup.JobObservation": {
+            "type": "object",
+            "properties": {
+                "checked_at": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "type": "string"
+                },
+                "last_success": {
+                    "$ref": "#/definitions/xirang_backend_internal_cronbackup.SuccessObservation"
+                },
+                "latest_attempt": {
+                    "$ref": "#/definitions/xirang_backend_internal_cronbackup.AttemptObservation"
+                },
+                "max_age_seconds": {
+                    "type": "integer"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_cronbackup.JobStatus"
+                }
+            }
+        },
+        "xirang_backend_internal_cronbackup.JobStatus": {
+            "type": "string",
+            "enum": [
+                "not_configured",
+                "invalid_configuration",
+                "not_initialized",
+                "state_unavailable",
+                "state_invalid",
+                "clock_anomaly",
+                "never_run",
+                "running",
+                "overdue_running",
+                "interrupted",
+                "failed",
+                "success",
+                "stale"
+            ],
+            "x-enum-varnames": [
+                "JobStatusNotConfigured",
+                "JobStatusInvalidConfiguration",
+                "JobStatusNotInitialized",
+                "JobStatusStateUnavailable",
+                "JobStatusStateInvalid",
+                "JobStatusClockAnomaly",
+                "JobStatusNeverRun",
+                "JobStatusRunning",
+                "JobStatusOverdueRunning",
+                "JobStatusInterrupted",
+                "JobStatusFailed",
+                "JobStatusSuccess",
+                "JobStatusStale"
+            ]
+        },
+        "xirang_backend_internal_cronbackup.SuccessObservation": {
+            "type": "object",
+            "properties": {
+                "artifact_name": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "started_at": {
                     "type": "string"
                 }
             }
