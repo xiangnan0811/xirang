@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.60.0](https://github.com/xiangnan0811/xirang/compare/v0.59.1...v0.60.0) (2026-10-09)
+
+
+### ✨ Features
+
+* **backup:** track cron job state and durable health alerts ([#602](https://github.com/xiangnan0811/xirang/issues/602)) ([242e60b](https://github.com/xiangnan0811/xirang/commit/242e60bf346362682b46856f5168fdb0bf499d9d))
+
 ### 行为与升级说明
 
 - cron 数据库备份新增持久作业记录：最近尝试、最近成功、失败及未取得完成记录的中断状态与产物对观察分开展示。旧成功不会掩盖新失败，Web SQLite 快照及 PostgreSQL Web 501 边界不变；手动执行 `backup-db.sh` 不伪装为 cron 作业。
