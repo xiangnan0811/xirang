@@ -1,8 +1,9 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import { ApiError, beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier, formatTime, releaseAuthTransitionBarrier, rememberAuthIdentity } from "@/lib/api/core";
-import type { BackupEntry, BackupResult, CronBackupStatus } from "@/lib/api/system-api";
+import type { CronBackupStatus, CronJobObservation } from "@/lib/api/cron-backup-status";
+import type { BackupEntry, BackupResult } from "@/lib/api/system-api";
 import { SelfBackupPanel } from "./self-backup-panel";
 
 const { auth, listBackups, backupDB, getCronBackupStatus, toastSuccess, toastError } = vi.hoisted(() => ({
@@ -31,6 +32,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function idleJob(status: CronJobObservation["status"], checkedAt: string): CronJobObservation {
+  return { evidence: "job_record", status, checkedAt, maxAgeSeconds: 93600 };
+}
+
 const notConfigured: CronBackupStatus = {
   status: "not_configured",
   engine: "sqlite",
@@ -39,6 +44,7 @@ const notConfigured: CronBackupStatus = {
   evidence: "artifact_pair",
   timeSource: "mtime",
   contentVerified: false,
+  job: idleJob("not_configured", "2026-10-07T00:00:00Z"),
 };
 
 const freshPostgres: CronBackupStatus = {
@@ -52,7 +58,20 @@ const freshPostgres: CronBackupStatus = {
   evidence: "artifact_pair",
   timeSource: "mtime",
   contentVerified: false,
+  job: idleJob("not_configured", "2026-10-07T02:00:00Z"),
 };
+
+function jobRegion(): HTMLElement {
+  const region = document.querySelector('[data-evidence="job_record"]');
+  if (!(region instanceof HTMLElement)) throw new Error("job record region is missing");
+  return region;
+}
+
+function artifactRegion(): HTMLElement {
+  const region = document.querySelector('[data-evidence="artifact_pair"]');
+  if (!(region instanceof HTMLElement)) throw new Error("artifact region is missing");
+  return region;
+}
 
 beforeEach(() => {
   clearAuthTransitionBarrier();
@@ -141,10 +160,13 @@ it("describes the sqlite snapshot limits and shows observed cron evidence withou
   expect(screen.getByText(i18n.t("selfBackup.retentionNote"))).toBeInTheDocument();
   expect(screen.getByText(i18n.t("selfBackup.cronDisclaimer"))).toBeInTheDocument();
   expect(screen.getByText(i18n.t("selfBackup.cronNotEvidence"))).toBeInTheDocument();
-  expect(screen.getByText(i18n.t("selfBackup.status.not_configured"))).toBeInTheDocument();
-  expect(screen.getByText(i18n.t("selfBackup.thresholdHours", { hours: 26 }))).toBeInTheDocument();
+  expect(within(artifactRegion()).getByRole("status")).toHaveTextContent(i18n.t("selfBackup.status.not_configured"));
+  expect(within(jobRegion()).getByRole("status")).toHaveTextContent(i18n.t("selfBackup.jobStatus.not_configured"));
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobAttempt"))).not.toBeInTheDocument();
+  expect(within(jobRegion()).queryByRole("button")).not.toBeInTheDocument();
+  expect(screen.getAllByText(i18n.t("selfBackup.thresholdHours", { hours: 26 }))).toHaveLength(2);
   expect(screen.getByText(i18n.t("selfBackup.contentNotVerified"))).toBeInTheDocument();
-  expect(screen.getByText(notConfigured.checkedAt)).toBeInTheDocument();
+  expect(screen.getAllByText(notConfigured.checkedAt)).toHaveLength(2);
   expect(screen.getAllByText(formatTime(notConfigured.checkedAt)).length).toBeGreaterThan(0);
   const observer = document.querySelector('[data-panel="cron-backup-status"]');
   expect(observer?.tagName).toBe("DIV");
@@ -185,7 +207,10 @@ it("keeps cron evidence visible when web self-backup is sqlite-only", async () =
   expect(observer).toHaveTextContent("/backup/db");
   expect(observer).toHaveTextContent(freshPostgres.latestCompleteAt ?? "");
   expect(observer).toHaveTextContent(formatTime(freshPostgres.latestCompleteAt ?? ""));
-  expect(screen.getByText(i18n.t("selfBackup.status.fresh"))).toBeInTheDocument();
+  expect(within(artifactRegion()).getByRole("status")).toHaveTextContent(i18n.t("selfBackup.status.fresh"));
+  expect(within(artifactRegion()).getByRole("status").querySelector(".bg-success")).not.toBeNull();
+  expect(within(jobRegion()).getByRole("status")).toHaveTextContent(i18n.t("selfBackup.jobStatus.not_configured"));
+  expect(within(jobRegion()).getByRole("status").querySelector(".bg-success")).toBeNull();
   expect(screen.getByText(i18n.t("selfBackup.engine.postgres"))).toBeInTheDocument();
   expect(screen.queryByText(i18n.t("selfBackup.noRecords"))).not.toBeInTheDocument();
   expect(getCronBackupStatus).toHaveBeenCalled();
@@ -292,11 +317,13 @@ it("shows invalid configuration with an unknown engine instead of a fetch error"
     evidence: "artifact_pair",
     timeSource: "mtime",
     contentVerified: false,
+    job: idleJob("invalid_configuration", "2026-10-07T02:00:00.123456789Z"),
   });
   render(<SelfBackupPanel />);
   expect(await screen.findByText(i18n.t("selfBackup.status.invalid_configuration"))).toBeInTheDocument();
+  expect(screen.getByText(i18n.t("selfBackup.jobStatus.invalid_configuration"))).toBeInTheDocument();
   expect(screen.getByText(i18n.t("selfBackup.engine.unknown"))).toBeInTheDocument();
-  expect(screen.getByText("2026-10-07T02:00:00.123456789Z")).toBeInTheDocument();
+  expect(screen.getAllByText("2026-10-07T02:00:00.123456789Z")).toHaveLength(2);
   expect(screen.queryByText(i18n.t("selfBackup.cronLoadError"))).not.toBeInTheDocument();
   expect(screen.queryByText(i18n.t("selfBackup.engine.sqlite"))).not.toBeInTheDocument();
 });
@@ -337,4 +364,224 @@ it("drops a late cron status from the previous session", async () => {
     resolveOld({ ...freshPostgres, artifactName: "xirang-postgres-stale.dump" });
   });
   expect(screen.queryByText("xirang-postgres-stale.dump")).not.toBeInTheDocument();
+});
+
+const OLD_SUCCESS = {
+  runId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  startedAt: "2026-10-07T01:29:00Z",
+  finishedAt: "2026-10-07T01:30:00Z",
+  artifactName: "xirang-sqlite-20261007-013000.db",
+};
+
+function observedBackup(overrides: Partial<CronBackupStatus>): CronBackupStatus {
+  return {
+    ...notConfigured,
+    status: "no_complete_backup",
+    directory: "/backup/db",
+    ...overrides,
+  };
+}
+
+it("keeps a failed job and its older success beside a fresh artifact pair", async () => {
+  getCronBackupStatus.mockResolvedValue(observedBackup({
+    status: "fresh",
+    checkedAt: "2026-10-08T02:00:00Z",
+    latestCompleteAt: "2026-10-08T01:40:00Z",
+    artifactName: "xirang-sqlite-20261008-014000.db",
+    job: {
+      evidence: "job_record",
+      status: "failed",
+      checkedAt: "2026-10-08T02:00:00Z",
+      maxAgeSeconds: 93600,
+      latestAttempt: {
+        runId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        startedAt: "2026-10-08T01:50:00Z",
+        result: "failed",
+        finishedAt: "2026-10-08T01:51:00Z",
+        failureCode: "backup_failed",
+      },
+      lastSuccess: OLD_SUCCESS,
+    },
+  }));
+  render(<SelfBackupPanel />);
+  expect(await screen.findByText(i18n.t("selfBackup.jobStatus.failed"))).toBeInTheDocument();
+  const observer = document.querySelector('[data-panel="cron-backup-status"]');
+  expect(observer?.className).not.toMatch(/bg-success/);
+  expect(within(jobRegion()).getByRole("alert").querySelector(".bg-warning")).not.toBeNull();
+  expect(within(jobRegion()).getByRole("alert")).toHaveTextContent(i18n.t("selfBackup.jobStatus.failed"));
+  expect(within(jobRegion()).getByText(OLD_SUCCESS.artifactName)).toBeInTheDocument();
+  expect(within(jobRegion()).getByText(i18n.t("selfBackup.failureCode.backup_failed"))).toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobStatus.success"))).not.toBeInTheDocument();
+  expect(within(artifactRegion()).getByRole("status").querySelector(".bg-success")).not.toBeNull();
+  expect(within(artifactRegion()).getByText("xirang-sqlite-20261008-014000.db")).toBeInTheDocument();
+  expect(observer?.querySelector("button")).toBeNull();
+  expect(backupDB).not.toHaveBeenCalled();
+});
+
+it("shows running, interrupted, and invalid job records without offering to run a backup", async () => {
+  async function show(status: CronBackupStatus) {
+    getCronBackupStatus.mockResolvedValue(status);
+    const view = render(<SelfBackupPanel />);
+    await screen.findByText(i18n.t(`selfBackup.jobStatus.${status.job.status}`));
+    return view;
+  }
+
+  const running = await show(observedBackup({
+    job: {
+      evidence: "job_record",
+      status: "running",
+      checkedAt: "2026-10-08T02:00:00Z",
+      maxAgeSeconds: 93600,
+      latestAttempt: {
+        runId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        startedAt: "2026-10-08T01:50:00Z",
+        result: "running",
+      },
+    },
+  }));
+  expect(within(jobRegion()).getByRole("status").querySelector(".bg-info")).not.toBeNull();
+  expect(within(jobRegion()).getByText("2026-10-08T01:50:00Z")).toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobFinishedAt"))).not.toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobDetectedAt"))).not.toBeInTheDocument();
+  expect(document.querySelector('[data-panel="cron-backup-status"]')?.querySelector("button")).toBeNull();
+  running.unmount();
+
+  const derived = await show(observedBackup({
+    job: {
+      evidence: "job_record",
+      status: "interrupted",
+      checkedAt: "2026-10-08T04:00:00Z",
+      maxAgeSeconds: 93600,
+      latestAttempt: {
+        runId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        startedAt: "2026-10-07T01:00:00Z",
+        result: "running",
+      },
+      lastSuccess: OLD_SUCCESS,
+    },
+  }));
+  expect(within(jobRegion()).getByRole("alert")).toHaveTextContent(i18n.t("selfBackup.jobDetail.interrupted"));
+  expect(within(jobRegion()).getByText(i18n.t("selfBackup.attemptResult.running"))).toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.attemptResult.interrupted"))).not.toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobDetectedAt"))).not.toBeInTheDocument();
+  expect(within(jobRegion()).getByText(OLD_SUCCESS.artifactName)).toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobStatus.success"))).not.toBeInTheDocument();
+  derived.unmount();
+
+  const stored = await show(observedBackup({
+    job: {
+      evidence: "job_record",
+      status: "interrupted",
+      checkedAt: "2026-10-08T02:00:00Z",
+      maxAgeSeconds: 93600,
+      latestAttempt: {
+        runId: "cccccccccccccccccccccccccccccccc",
+        startedAt: "2026-10-08T01:50:00Z",
+        result: "interrupted",
+        detectedAt: "2026-10-08T01:55:00Z",
+        failureCode: "process_interrupted",
+      },
+    },
+  }));
+  expect(within(jobRegion()).getByText("2026-10-08T01:55:00Z")).toBeInTheDocument();
+  expect(within(jobRegion()).getByText(i18n.t("selfBackup.failureCode.process_interrupted"))).toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobFinishedAt"))).not.toBeInTheDocument();
+  stored.unmount();
+
+  await show(observedBackup({ job: idleJob("state_invalid", "2026-10-08T02:00:00Z") }));
+  expect(within(jobRegion()).getByRole("alert")).toHaveTextContent(i18n.t("selfBackup.jobDetail.state_invalid"));
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobAttempt"))).not.toBeInTheDocument();
+  expect(within(artifactRegion()).getByText(i18n.t("selfBackup.contentNotVerified"))).toBeInTheDocument();
+  expect(document.querySelector('[data-panel="cron-backup-status"]')?.querySelector("button")).toBeNull();
+  expect(backupDB).not.toHaveBeenCalled();
+});
+
+it("shows a visible completion record when the artifact pair is gone", async () => {
+  getCronBackupStatus.mockResolvedValue({
+    status: "no_complete_backup",
+    engine: "sqlite",
+    checkedAt: "2026-10-07T02:00:00.123Z",
+    maxAgeSeconds: 93600,
+    directory: "/backup/db",
+    evidence: "artifact_pair",
+    timeSource: "mtime",
+    contentVerified: false,
+    job: {
+      evidence: "job_record",
+      status: "success",
+      checkedAt: "2026-10-07T02:00:00.123Z",
+      maxAgeSeconds: 93600,
+      latestAttempt: { ...OLD_SUCCESS, result: "success" },
+      lastSuccess: OLD_SUCCESS,
+    },
+  });
+  render(<SelfBackupPanel />);
+  expect(await screen.findByText(i18n.t("selfBackup.jobStatus.success"))).toBeInTheDocument();
+  expect(within(jobRegion()).getByText(i18n.t("selfBackup.jobDisclaimer"))).toBeInTheDocument();
+  expect(within(jobRegion()).getByRole("status").querySelector(".bg-success")).not.toBeNull();
+  expect(within(jobRegion()).getAllByText(OLD_SUCCESS.artifactName)).toHaveLength(2);
+  expect(within(artifactRegion()).getByRole("status")).toHaveTextContent(i18n.t("selfBackup.status.no_complete_backup"));
+  expect(within(artifactRegion()).getByRole("status").querySelector(".bg-success")).toBeNull();
+  expect(within(artifactRegion()).queryByText(OLD_SUCCESS.artifactName)).not.toBeInTheDocument();
+  expect(within(artifactRegion()).getByText(i18n.t("selfBackup.contentNotVerified"))).toBeInTheDocument();
+  expect(document.querySelector('[data-panel="cron-backup-status"]')?.className).not.toMatch(/bg-success/);
+  expect(document.querySelector('[data-panel="cron-backup-status"]')?.querySelector("button")).toBeNull();
+  expect(backupDB).not.toHaveBeenCalled();
+});
+
+it("shows a lock probe failure and a clock anomaly without turning recorded times into success", async () => {
+  getCronBackupStatus.mockResolvedValue(observedBackup({
+    job: {
+      evidence: "job_record",
+      status: "state_unavailable",
+      checkedAt: "2026-10-07T02:00:00Z",
+      maxAgeSeconds: 93600,
+      latestAttempt: {
+        runId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        startedAt: "2026-10-08T00:00:00Z",
+        result: "running",
+      },
+      lastSuccess: OLD_SUCCESS,
+    },
+  }));
+  const unavailable = render(<SelfBackupPanel />);
+  expect(await screen.findByText(i18n.t("selfBackup.jobStatus.state_unavailable"))).toBeInTheDocument();
+  expect(within(jobRegion()).getByRole("alert").querySelector(".bg-warning")).not.toBeNull();
+  expect(within(jobRegion()).getByText("2026-10-08T00:00:00Z")).toBeInTheDocument();
+  expect(within(jobRegion()).getByText(i18n.t("selfBackup.attemptResult.running"))).toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobDetectedAt"))).not.toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobFailure"))).not.toBeInTheDocument();
+  expect(within(jobRegion()).getByText(OLD_SUCCESS.artifactName)).toBeInTheDocument();
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobStatus.success"))).not.toBeInTheDocument();
+  unavailable.unmount();
+
+  getCronBackupStatus.mockResolvedValue(observedBackup({
+    job: {
+      evidence: "job_record",
+      status: "clock_anomaly",
+      checkedAt: "2026-10-07T02:00:00Z",
+      maxAgeSeconds: 93600,
+      latestAttempt: {
+        runId: OLD_SUCCESS.runId,
+        startedAt: "2026-10-07T03:10:00Z",
+        result: "success",
+        finishedAt: "2026-10-07T03:00:00Z",
+        artifactName: "xirang-sqlite-20261007-030000.db",
+      },
+      lastSuccess: {
+        ...OLD_SUCCESS,
+        startedAt: "2026-10-07T03:10:00Z",
+        finishedAt: "2026-10-07T03:00:00Z",
+        artifactName: "xirang-sqlite-20261007-030000.db",
+      },
+    },
+  }));
+  render(<SelfBackupPanel />);
+  expect(await screen.findByText(i18n.t("selfBackup.jobStatus.clock_anomaly"))).toBeInTheDocument();
+  expect(within(jobRegion()).getByRole("alert").querySelector(".bg-warning")).not.toBeNull();
+  expect(within(jobRegion()).getByRole("alert").querySelector(".bg-success")).toBeNull();
+  expect(within(jobRegion()).getAllByText("2026-10-07T03:10:00Z")).toHaveLength(2);
+  expect(within(jobRegion()).getAllByText("2026-10-07T03:00:00Z")).toHaveLength(2);
+  expect(within(jobRegion()).queryByText(i18n.t("selfBackup.jobStatus.success"))).not.toBeInTheDocument();
+  expect(document.querySelector('[data-panel="cron-backup-status"]')?.querySelector("button")).toBeNull();
 });

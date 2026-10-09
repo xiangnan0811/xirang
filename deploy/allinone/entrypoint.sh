@@ -20,6 +20,18 @@ is_root() {
   [ "$(id -u)" -eq 0 ]
 }
 
+init_cron_backup() {
+  if is_root; then
+    if ! su -s /bin/sh xirang -c 'exec /usr/local/bin/xirang-cron-db-backup init' >/dev/null 2>&1; then
+      echo "==> cron backup state initialization failed; continuing startup" >&2
+    fi
+  else
+    if ! /usr/local/bin/xirang-cron-db-backup init >/dev/null 2>&1; then
+      echo "==> cron backup state initialization failed; continuing startup" >&2
+    fi
+  fi
+}
+
 start_supercronic() {
   if is_root; then
     su -s /bin/sh xirang -c 'exec supercronic /etc/supercronic/xirang-backup' &
@@ -54,6 +66,7 @@ if is_root; then
 fi
 
 # 以 xirang 用户启动 supercronic
+init_cron_backup
 start_supercronic
 
 # 以 xirang 用户启动后端

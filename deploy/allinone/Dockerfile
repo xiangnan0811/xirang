@@ -26,7 +26,8 @@ RUN set -eux; \
     target_arch="${TARGETARCH:-$(go env GOARCH)}"; \
     CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server; \
     CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-recover-admin ./cmd/recover-admin; \
-    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-rsync-confined ./cmd/rsync-confined
+    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-rsync-confined ./cmd/rsync-confined; \
+    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-cron-db-backup ./cmd/cron-db-backup
 
 # 自行使用与后端一致的 Go 工具链编译 supercronic，避免官方预编译二进制带入过期 stdlib 的 HIGH CVE，
 # 并支持 linux/amd64 与 linux/arm64 交叉编译。
@@ -85,12 +86,13 @@ COPY --from=web-builder /app/web/dist /usr/share/nginx/html
 COPY --from=backend-builder /out/xirang /usr/local/bin/xirang
 COPY --from=backend-builder /out/xirang-recover-admin /usr/local/bin/xirang-recover-admin
 COPY --from=backend-builder /out/xirang-rsync-confined /usr/local/bin/xirang-rsync-confined
+COPY --from=backend-builder /out/xirang-cron-db-backup /usr/local/bin/xirang-cron-db-backup
 COPY deploy/nginx/templates/default.conf.template /etc/nginx/templates/default.conf.template
 COPY deploy/allinone/entrypoint.sh /entrypoint.sh
 COPY scripts/backup-db.sh /usr/local/bin/backup-db.sh
 COPY deploy/allinone/xirang-backup.cron /etc/supercronic/xirang-backup
 
-RUN chmod +x /usr/local/bin/backup-db.sh /entrypoint.sh /usr/local/bin/xirang-rsync-confined && \
+RUN chmod +x /usr/local/bin/backup-db.sh /entrypoint.sh /usr/local/bin/xirang-rsync-confined /usr/local/bin/xirang-cron-db-backup && \
     mkdir -p /data /backup/db /logs /var/cache/xirang/asset-content /etc/supercronic && \
     chown -R xirang:xirang /data /backup /logs /var/cache/xirang /usr/share/nginx/html /etc/supercronic /etc/nginx/templates
 
@@ -99,6 +101,8 @@ ENV SERVER_ADDR=:3000
 ENV DB_TYPE=sqlite
 ENV SQLITE_PATH=/data/xirang.db
 ENV CRON_DB_BACKUP_DIR=/backup/db
+# cron 作业状态记录持久化在备份卷中，与产物清理范围分离
+ENV CRON_DB_BACKUP_STATE_DIR=/backup/.cron-db-state
 # known_hosts 默认存放在持久化卷，容器重启不丢失
 ENV SSH_KNOWN_HOSTS_PATH=/data/.ssh/known_hosts
 ENV LOG_FILE=/logs/xirang.log

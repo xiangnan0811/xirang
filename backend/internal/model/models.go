@@ -19,3 +19,4 @@ package model
 //	monitor.go     — AnomalyEvent, SLODefinition
 //	backup.go      — RestoreDrillEvidence, SnapshotDiffHistory, SnapshotFileIndex, AutomationRule, AutomationRuleLog
 //	system.go      — SystemSetting
+//	cron_backup_health.go — CronBackupHealth and CronBackupHealthUsage

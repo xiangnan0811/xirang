@@ -21,6 +21,46 @@ API/前端区分 pending、sending、retrying、sent、failed 和兼容 unknown�
 
 回归覆盖 intent 先于网络、commit/receipt 失败重放、restart、historical NULL、全部终态 decision、resolved pending、sent 不重发、自动/手动并发 claim、stale/expired result、legacy blank key 与 escalation ambiguity、channel business ack、success-time cooldown、未知页不阻塞后续 retry，以及 SQLite/真实 PostgreSQL 竞争。`durable_delivery_test.go`、`dispatcher_test.go` 是当前关键证据入口。
 
+### 外部 cron 数据库备份健康
+
+外部数据库自备份不伪造 TaskRun。启用 `CRON_DB_BACKUP_STATE_DIR` 后，Core 的
+CronBackupWorker 启动立即观察，之后每 60 秒串行处理；运行记录的来源与故障介质
+边界归[部署运行时](../backend/deployment-runtime.md#cron-作业执行记录)。
+未配置或配置无效时不注册来源、不创建告警。
+
+`cron_backup_health` 以规范绝对状态目录加 NUL 加实际引擎的 SHA256 为 source_key，
+永久保存 enrollment、首次合法 source_id、最高 revision、当前故障周期及精确 alert_id。
+首次 enrollment 与 `cron_backup_health_usage` 的固定 id=1 永久使用标记同事务写入。
+删除业务 cursor 不能清除使用证明；已使用 schema 禁止 down，元数据准入拒绝须保持
+版本 clean。告警代码使用 `XR-CRON-DB-BACKUP-` 加完整 source_key；PostgreSQL
+error_code 容量扩展到 128，存在超过旧 64 字符容量的代码时同样禁止降级。
+
+生产锁顺序固定为 `state.lock → 数据库 source 行`；enrollment 独立先提交再获取
+文件锁，不反向持锁。取得文件锁后重新读取记录与 run.lock，并在读完状态后采样
+检查时间；事务内使用 PostgreSQL 行锁或 SQLite 写事务重核源身份及 high-water。
+单次数据库操作期限 5 秒；运行器最终发布的文件锁等待预算为 10 秒，不能短于此期限。
+state.lock 缺失、不可访问或锁超时不创建/解决告警，也不刷新首次宽限；
+这表示无法得到可信快照，需独立外部监控，不能用缓存错误覆盖刚提交的成功。
+
+锁内发现损坏/不支持版本、源身份改变、revision 回退，或已观察后文件缺失，
+均为 state_invalid，不自动重新注册。首次无记录/never_run 的宽限从 enrolled_at 与
+有效 initialized_at 的较早者起算，超过共用 max_age 才进入 stale。
+failed、interrupted、overdue_running、stale、state_invalid、clock_anomaly 开始故障；
+普通 running 不恢复故障，仅最新新鲜 success、格式/时钟/身份正常才恢复。
+
+每个 source 一个连续故障周期：首次故障与 cursor 同事务创建 warning/open、
+NodeID=0、NodeName=localhost、Retryable=false、DeliveryDecision=pending 的 Alert。
+消息仅含固定安全文案、引擎与故障类型。重复观察、Core 重启、故障类型变化或人工解决
+都不重建/重开该周期。新鲜成功仅条件解决 cursor.alert_id 的 open/acked 告警并关闭
+周期；人工已解决时不重复恢复通知，后续新的故障才能创建新 Alert。
+事务失败不能只推进 Alert 或 cursor 的一方。
+
+网络发送完全交给原 RetryWorker 的持久 pending 续发、静默、分组、升级与 intent
+围栏，不在文件锁或数据库事务内发请求。已 resolved 的 pending intent 可以按原合同
+完成而不 reopen。只保留最近尝试、最近成功及当前故障周期，不补造离线逐次历史，
+也不逐条重放停机时已经恢复的失败。Core/数据库停机时不能实时通知；状态文件和数据库
+恢复必须保留匹配的 source 身份与 revision，不能单独回退文件后宣称健康。
+
 ### 静默窗口的本地时间
 
 创建静默规则的日期控件显示浏览器本地时间，提交时转换为对应 UTC 瞬间，不截取 UTC

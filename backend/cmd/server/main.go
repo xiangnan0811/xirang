@@ -29,6 +29,7 @@ import (
 	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
+	"xirang/backend/internal/cronbackup"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/escalation"
 	"xirang/backend/internal/lifecycle"
@@ -248,6 +249,12 @@ func main() {
 
 	retryWorker := alerting.NewRetryWorker(db)
 
+	cronBackupConfig, cronBackupConfigErr := cronbackup.LoadConfig(db.Name())
+	if cronBackupConfigErr != nil {
+		log.Warn().Msg("cron backup health disabled: invalid configuration")
+	}
+	cronBackupWorker := alerting.NewCronBackupWorker(db, alertDispatcher, cronBackupConfig)
+
 	silenceRetention := alerting.NewSilenceRetentionWorker(db, settingsSvc)
 
 	sloEvaluator := slo.NewEvaluator(db, raiser)
@@ -259,6 +266,7 @@ func main() {
 		taskRetention,
 		reportScheduler,
 		retryWorker,
+		cronBackupWorker,
 		silenceRetention,
 		sloEvaluator,
 		anomalyRetention,

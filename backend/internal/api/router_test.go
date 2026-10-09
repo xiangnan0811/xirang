@@ -1416,6 +1416,7 @@ func TestCronBackupStatusRouteRequiresAdminAndUsesRuntimeDialect(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Setenv("DB_TYPE", "postgres")
 	t.Setenv("CRON_DB_BACKUP_DIR", "")
+	t.Setenv("CRON_DB_BACKUP_STATE_DIR", "")
 	t.Setenv("CRON_DB_BACKUP_MAX_AGE_HOURS", "26")
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "observer.db")), &gorm.Config{})
 	if err != nil {
@@ -1458,6 +1459,10 @@ func TestCronBackupStatusRouteRequiresAdminAndUsesRuntimeDialect(t *testing.T) {
 						Engine          string `json:"engine"`
 						ContentVerified bool   `json:"content_verified"`
 						Evidence        string `json:"evidence"`
+						Job             struct {
+							Status   string `json:"status"`
+							Evidence string `json:"evidence"`
+						} `json:"job"`
 					} `json:"data"`
 				}
 				if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
@@ -1466,6 +1471,9 @@ func TestCronBackupStatusRouteRequiresAdminAndUsesRuntimeDialect(t *testing.T) {
 				if envelope.Data.Status != "not_configured" || envelope.Data.Engine != "sqlite" ||
 					envelope.Data.ContentVerified || envelope.Data.Evidence != "artifact_pair" {
 					t.Fatalf("unexpected runtime evidence: %+v", envelope.Data)
+				}
+				if envelope.Data.Job.Status != "not_configured" || envelope.Data.Job.Evidence != "job_record" {
+					t.Fatalf("missing independent job evidence: %+v", envelope.Data.Job)
 				}
 				webReq := httptest.NewRequest(http.MethodGet, "/api/v1/system/backups", nil)
 				webReq.Header.Set("Authorization", req.Header.Get("Authorization"))
