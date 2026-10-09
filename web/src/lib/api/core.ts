@@ -154,6 +154,8 @@ export class ApiError extends Error {
   status: number;
   detail?: unknown;
   retryAfter?: number;
+  // Real HTTP status recorded by core.request. `status` remains the envelope or HTTP code step-up already checks.
+  httpStatus?: number;
 
   constructor(status: number, message: string, detail?: unknown, retryAfter?: number) {
     super(message);
@@ -359,6 +361,28 @@ function isSuccessEnvelopeCode(code: number, responseStatus: number): boolean {
   return code === 0 || code === responseStatus;
 }
 
+function requestError(
+  status: unknown,
+  message: unknown,
+  detail: unknown,
+  httpStatus: number,
+  retryAfter?: number,
+): ApiError {
+  const text = typeof message === "string" ? message : message == null ? "" : String(message);
+  const error = new ApiError(typeof status === "number" ? status : 0, text, detail, retryAfter);
+  error.httpStatus = httpStatus;
+  if (typeof status !== "number") {
+    // Keep a null or string envelope code on status. Step-up still reads that field, not httpStatus.
+    Object.defineProperty(error, "status", {
+      value: status,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  return error;
+}
+
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   assertAuthTransitionAllowed(options.authTransitionId);
   const method = options.method ?? "GET";
@@ -403,30 +427,36 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     if (isCurrentAuthSession(requestToken, requestGeneration)) {
       invalidateCurrentAuthSession();
     }
-    throw new ApiError(401, "session expired", payload);
+    throw requestError(401, "session expired", payload, response.status);
   }
 
   if (!response.ok) {
     const retryAfter = parseRetryAfter(response, payload);
-    // Try to extract message from the new envelope format
-    if (payload && typeof payload === "object" && "code" in (payload as Record<string, unknown>)) {
-      const envelope = payload as { code: number; message: string };
-      throw new ApiError(response.status, envelope.message || i18n.t("common.requestFailed", { status: response.status }), payload, retryAfter);
+    const fallback = i18n.t("common.requestFailed", { status: response.status });
+    let message: unknown = fallback;
+    if (payload && typeof payload === "object" && "code" in payload && "message" in payload) {
+      const envelopeMessage = payload.message;
+      if (typeof envelopeMessage === "string") {
+        message = envelopeMessage || fallback;
+      } else if (envelopeMessage != null) {
+        message = String(envelopeMessage) || fallback;
+      }
     }
-    throw new ApiError(response.status, i18n.t("common.requestFailed", { status: response.status }), payload, retryAfter);
+    throw requestError(response.status, message, payload, response.status, retryAfter);
   }
 
   // Auto-unwrap unified {code, message, data} envelope
-  if (payload && typeof payload === "object" && "code" in (payload as Record<string, unknown>)) {
-    const envelope = payload as { code: number; message: string; data: unknown };
-    if (!isSuccessEnvelopeCode(envelope.code, response.status)) {
-      throw new ApiError(envelope.code, envelope.message, payload);
+  if (payload && typeof payload === "object" && "code" in payload) {
+    const code = payload.code;
+    const envelopeMessage = "message" in payload ? payload.message : undefined;
+    if (typeof code === "number" && isSuccessEnvelopeCode(code, response.status)) {
+      // For paginated responses, return the full envelope (unwrapPaginated needs total/page/page_size)
+      if ("total" in payload) {
+        return payload as T;
+      }
+      return ("data" in payload ? payload.data : undefined) as T;
     }
-    // For paginated responses, return the full envelope (unwrapPaginated needs total/page/page_size)
-    if ("total" in (payload as Record<string, unknown>)) {
-      return payload as T;
-    }
-    return envelope.data as T;
+    throw requestError(code, envelopeMessage, payload, response.status);
   }
 
   return payload as T;

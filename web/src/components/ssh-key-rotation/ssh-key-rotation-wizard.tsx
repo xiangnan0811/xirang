@@ -13,7 +13,12 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast-sonner";
 import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
-import { createSSHKeysApi, type TestConnectionResult } from "@/lib/api/ssh-keys-api";
+import {
+  createSSHKeysApi,
+  rotateSSHKey,
+  SSHKeyRotationDecodeError,
+  type SSHKeyRotationReason,
+} from "@/lib/api/ssh-keys-api";
 import { ApiError, getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import { getErrorMessage } from "@/lib/utils";
 import { type NodeRecord, type SSHKeyPreview, type SSHKeyRecord, type SSHKeyType } from "@/types/domain";
@@ -22,7 +27,6 @@ import { RotationProgress } from "./rotation-progress";
 import { RotationSummary, type NodeVerifyResult, type RotationSaveStatus } from "./rotation-summary";
 
 type Step = 1 | 2 | 3 | 4;
-type SSHKeysApi = ReturnType<typeof createSSHKeysApi>;
 
 const stepLabels = [
   "rotationStep1",
@@ -75,61 +79,22 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-function isUncertainTransport(error: unknown): boolean {
+function isUncertainRotation(error: unknown): boolean {
   if (isAbortError(error)) return false;
+  if (error instanceof SSHKeyRotationDecodeError) return true;
   if (error instanceof ApiError) {
     return error.status === 408 || error.status === 429 || error.status >= 500;
   }
   return true;
 }
 
-function nodeResultId(node: NodeRecord): string {
-  return `node-${node.id}`;
-}
-
-function resultsFromTest(
-  nodes: NodeRecord[],
-  testResults: TestConnectionResult[] | null,
-): NodeVerifyResult[] {
-  const returned = new Map<string, TestConnectionResult>();
-  for (const result of testResults ?? []) {
-    if (!returned.has(result.nodeId)) returned.set(result.nodeId, result);
+function definiteFailureMessage(error: unknown, t: (key: "sshKeys.rotationKeyMissing" | "sshKeys.rotationForbidden" | "sshKeys.rotationPayloadTooLarge" | "sshKeys.rotationRequestRejected") => string): string {
+  if (error instanceof ApiError) {
+    if (error.status === 404) return t("sshKeys.rotationKeyMissing");
+    if (error.status === 403) return t("sshKeys.rotationForbidden");
+    if (error.status === 413) return t("sshKeys.rotationPayloadTooLarge");
   }
-  return nodes.map((node) => {
-    const nodeId = nodeResultId(node);
-    const result = testResults ? returned.get(nodeId) : undefined;
-    if (!testResults || !result) {
-      return { nodeId, name: node.name, status: "unknown" as const };
-    }
-    if (result.success) {
-      return { nodeId, name: node.name, status: "verified" as const };
-    }
-    return {
-      nodeId,
-      name: node.name,
-      status: "failed" as const,
-      ...(result.error ? { error: result.error } : {}),
-    };
-  });
-}
-
-async function verifyNodes(
-  apiClient: SSHKeysApi,
-  token: string,
-  keyId: string,
-  nodes: NodeRecord[],
-): Promise<NodeVerifyResult[]> {
-  try {
-    const testResults = await apiClient.testConnection(
-      token,
-      keyId,
-      nodes.map((node) => nodeResultId(node)),
-    );
-    return resultsFromTest(nodes, testResults);
-  } catch (error) {
-    if (isAbortError(error)) throw error;
-    return resultsFromTest(nodes, null);
-  }
+  return t("sshKeys.rotationRequestRejected");
 }
 
 export interface SSHKeyRotationWizardProps {
@@ -191,11 +156,10 @@ function SSHKeyRotationSession({
   const [checkingCandidate, setCheckingCandidate] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<RotationSaveStatus>("not_submitted");
-  const [verifying, setVerifying] = useState(false);
+  const [rotationReason, setRotationReason] = useState<SSHKeyRotationReason | null>(null);
   const [results, setResults] = useState<NodeVerifyResult[]>([]);
   const [savedPublicFingerprint, setSavedPublicFingerprint] = useState("");
   const [rotationError, setRotationError] = useState<string | null>(null);
-  const [showDisabledStop, setShowDisabledStop] = useState(false);
   const [rotationAcknowledgement, setRotationAcknowledgement] = useState("");
 
   const draftGenerationRef = useRef(0);
@@ -204,8 +168,6 @@ function SSHKeyRotationSession({
   const rotationAbortRef = useRef<AbortController | null>(null);
   const submitLockRef = useRef(false);
   const checkLockRef = useRef(false);
-  const reverifyLockRef = useRef(false);
-  const reverifyOpRef = useRef(0);
 
   useLayoutEffect(() => {
     draftRef.current = { privateKey: newPrivateKey, keyType: newKeyType };
@@ -237,6 +199,12 @@ function SSHKeyRotationSession({
     checkLockRef.current = false;
     setCheckingCandidate(false);
   }, []);
+
+  const clearDraft = useCallback(() => {
+    draftRef.current = { privateKey: "", keyType: draftRef.current.keyType };
+    setNewPrivateKey("");
+    invalidateDraft();
+  }, [invalidateDraft]);
 
   const handlePrivateKeyChange = (value: string) => {
     if (value === newPrivateKey) return;
@@ -301,155 +269,80 @@ function SSHKeyRotationSession({
     if (!isCurrent(generation, sessionGeneration)) return;
     const privateKey = checkedCandidate.privateKey;
     const keyType = checkedCandidate.keyType;
-    const publicFingerprint = checkedCandidate.preview.publicKeyFingerprint;
     const draftGeneration = draftGenerationRef.current;
     const keyName = newKeyName;
+    const keyId = selectedKey.id;
     submitLockRef.current = true;
+    rotationAbortRef.current?.abort();
     const controller = new AbortController();
     rotationAbortRef.current = controller;
-    setSaveStatus("saving");
+    setSaveStatus("validating");
+    setRotationReason(null);
     setRotationError(null);
-    setShowDisabledStop(false);
     setResults([]);
     setSavedPublicFingerprint("");
     setStep(4);
 
-    const still = () => isCurrent(generation, sessionGeneration) && !controller.signal.aborted
-      && draftGenerationRef.current === draftGeneration;
-    const apiClient = createSSHKeysApi();
-    let submitted = false;
+    const still = () => isCurrent(generation, sessionGeneration)
+      && !controller.signal.aborted
+      && draftGenerationRef.current === draftGeneration
+      && rotationAbortRef.current === controller;
     try {
-      const fresh = await apiClient.getSSHKey(token, selectedKey.id, { signal: controller.signal });
-      if (!still()) return;
-      if (fresh.id !== selectedKey.id) {
-        setSaveStatus("failed");
-        setRotationError(t("sshKeys.rotationKeyMissing"));
-        return;
-      }
-      if (fresh.disabled) {
-        setSaveStatus("failed");
-        setRotationError(t("sshKeys.rotationKeyDisabledStop"));
-        setShowDisabledStop(true);
-        return;
-      }
-      submitted = true;
-      await apiClient.updateSSHKey(token, fresh.id, {
-        name: keyName.trim() || fresh.name,
-        username: fresh.username,
-        keyType,
+      const outcome = await rotateSSHKey(token, keyId, {
         privateKey,
-        disabled: fresh.disabled,
-        allowedPurposes: fresh.allowedPurposes,
-        allowedNodeIds: fresh.allowedNodeIds,
-        allowedNodeTags: fresh.allowedNodeTags,
-      });
+        keyType,
+        name: keyName,
+      }, { signal: controller.signal });
       if (!still()) return;
-      setSaveStatus("saved");
-      setSavedPublicFingerprint(publicFingerprint);
-      draftRef.current = { privateKey: "", keyType };
-      setNewPrivateKey("");
-      draftGenerationRef.current += 1;
-      setCheckedCandidate(null);
-      toast.success(t("sshKeys.rotationKeyUpdated"));
-      const nodes = keyUsageMap.get(fresh.id) ?? [];
-      if (nodes.length === 0) {
-        setResults([]);
+      if (outcome.status === "saved") {
+        setSaveStatus("saved");
+        setRotationReason("");
+        setSavedPublicFingerprint(outcome.publicKeyFingerprint);
+        setResults(outcome.results);
+        clearDraft();
+        toast.success(t("sshKeys.rotationKeyUpdated"));
+        onComplete();
         return;
       }
-      setVerifying(true);
-      const nextResults = await verifyNodes(apiClient, token, fresh.id, nodes);
-      if (!isCurrent(generation, sessionGeneration) || controller.signal.aborted) return;
-      setResults(nextResults);
+      setSaveStatus("not_saved");
+      setRotationReason(outcome.reason);
+      setRotationError(null);
+      setResults(outcome.results);
+      setSavedPublicFingerprint("");
     } catch (error) {
-      if (!isCurrent(generation, sessionGeneration) || controller.signal.aborted || isAbortError(error)) return;
-      if (isUncertainTransport(error)) {
-        draftRef.current = { privateKey: "", keyType: newKeyType };
-        setNewPrivateKey("");
-        draftGenerationRef.current += 1;
-        setCheckedCandidate(null);
+      if (!still() || isAbortError(error)) return;
+      if (isUncertainRotation(error)) {
+        clearDraft();
         setSaveStatus("unknown");
-        setRotationError(t(submitted ? "sshKeys.rotationSaveUnknown" : "sshKeys.rotationReadUnknown"));
+        setRotationReason(null);
+        setResults([]);
+        setSavedPublicFingerprint("");
+        setRotationError(t("sshKeys.rotationSaveUnknown"));
         return;
       }
       setSaveStatus("failed");
-      setRotationError(
-        error instanceof ApiError && error.status === 404
-          ? t("sshKeys.rotationKeyMissing")
-          : getErrorMessage(error),
-      );
+      setRotationReason(null);
+      setResults([]);
+      setSavedPublicFingerprint("");
+      setRotationError(definiteFailureMessage(error, t));
     } finally {
-      if (isCurrent(generation, sessionGeneration)) {
-        setVerifying(false);
+      if (isCurrent(generation, sessionGeneration) && rotationAbortRef.current === controller && !controller.signal.aborted) {
         submitLockRef.current = false;
       }
     }
   }, [
     checkedCandidate,
+    clearDraft,
     generationRef,
     isCurrent,
-    keyUsageMap,
     newKeyName,
     newKeyType,
     newPrivateKey,
+    onComplete,
     selectedKey,
     t,
     token,
   ]);
-
-  const reverifyFailed = useCallback(async () => {
-    if (saveStatus !== "saved" || reverifyLockRef.current || !selectedKey) return;
-    const targets = results.filter((result) => result.status !== "verified");
-    if (targets.length === 0) return;
-    const generation = generationRef.current;
-    const sessionGeneration = getAuthSessionGeneration();
-    if (!isCurrent(generation, sessionGeneration)) return;
-    reverifyLockRef.current = true;
-    const op = reverifyOpRef.current + 1;
-    reverifyOpRef.current = op;
-    const controller = new AbortController();
-    rotationAbortRef.current = controller;
-    setVerifying(true);
-    const targetIds = new Set(targets.map((result) => result.nodeId));
-    const still = () => isCurrent(generation, sessionGeneration)
-      && reverifyOpRef.current === op
-      && !controller.signal.aborted;
-    try {
-      const testResults = await createSSHKeysApi().testConnection(
-        token,
-        selectedKey.id,
-        targets.map((result) => result.nodeId),
-      );
-      if (!still()) return;
-      const returned = new Map<string, TestConnectionResult>();
-      for (const result of testResults) {
-        if (!returned.has(result.nodeId)) returned.set(result.nodeId, result);
-      }
-      setResults((current) => current.map((result) => {
-        if (!targetIds.has(result.nodeId)) return result;
-        const match = returned.get(result.nodeId);
-        if (!match) return { nodeId: result.nodeId, name: result.name, status: "unknown" };
-        if (match.success) return { nodeId: result.nodeId, name: result.name, status: "verified" };
-        return {
-          nodeId: result.nodeId,
-          name: result.name,
-          status: "failed",
-          ...(match.error ? { error: match.error } : {}),
-        };
-      }));
-    } catch (error) {
-      if (!still() || isAbortError(error)) return;
-      setResults((current) => current.map((result) => (
-        targetIds.has(result.nodeId)
-          ? { nodeId: result.nodeId, name: result.name, status: "unknown" }
-          : result
-      )));
-    } finally {
-      if (still()) {
-        setVerifying(false);
-        reverifyLockRef.current = false;
-      }
-    }
-  }, [generationRef, isCurrent, results, saveStatus, selectedKey, token]);
 
   const copyCandidatePublicKey = useCallback(async () => {
     const generation = generationRef.current;
@@ -496,11 +389,13 @@ function SSHKeyRotationSession({
   };
 
   const handleEditAgain = () => {
-    if (saveStatus !== "failed") return;
+    if (saveStatus !== "failed" && saveStatus !== "not_saved") return;
     setSaveStatus("not_submitted");
+    setRotationReason(null);
     setRotationError(null);
-    setShowDisabledStop(false);
     setResults([]);
+    setSavedPublicFingerprint("");
+    invalidateDraft();
     setStep(2);
   };
 
@@ -585,30 +480,41 @@ function SSHKeyRotationSession({
         />
       );
     }
-    return (
-      <RotationSummary
-        saveStatus={saveStatus}
-        verifying={verifying}
-        rotationError={rotationError}
-        results={results}
-        newPublicKeyFingerprint={savedPublicFingerprint}
-        showDisabledRemediation={showDisabledStop}
-        onNavigate={() => onOpenChange(false)}
-        onReverify={() => void reverifyFailed()}
-        onEditAgain={handleEditAgain}
-        onDone={handleDone}
-      />
-    );
+    if (step === 4) {
+      return (
+        <RotationSummary
+          saveStatus={saveStatus}
+          reason={rotationReason}
+          rotationError={rotationError}
+          results={results}
+          newPublicKeyFingerprint={savedPublicFingerprint}
+          onEditAgain={handleEditAgain}
+          onDone={handleDone}
+        />
+      );
+    }
+    return null;
   };
 
   return (
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!nextOpen && saveStatus !== "saving" && !verifying) onOpenChange(false);
+        if (nextOpen) return;
+        if (saveStatus === "validating") {
+          // Drop the draft and ignore a late result. Closing does not claim a finished server commit was rolled back.
+          rotationAbortRef.current?.abort();
+          clearDraft();
+        }
+        onOpenChange(false);
       }}
     >
-      <DialogContent size="md" onCloseAutoFocus={onCloseAutoFocus}>
+      <DialogContent
+        size="md"
+        onCloseAutoFocus={onCloseAutoFocus}
+        data-rotation-draft={newPrivateKey.trim() ? "present" : "cleared"}
+        data-rotation-candidate={candidateReady ? "ready" : "absent"}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <KeyRound className="size-5 text-primary" />
@@ -624,7 +530,7 @@ function SSHKeyRotationSession({
 
         {renderStepIndicator()}
 
-        <div className="space-y-4 px-6 pb-6">{renderStep()}</div>
+        <div className="min-w-0 space-y-4 px-6 pb-6">{renderStep()}</div>
       </DialogContent>
     </Dialog>
   );

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NewSSHKeyInput } from "@/types/domain";
-import { createSSHKeysApi } from "./ssh-keys-api";
+import { createSSHKeysApi, decodeSSHKeyRotationResult, rotateSSHKey, SSHKeyRotationDecodeError } from "./ssh-keys-api";
 import { ApiError, request } from "./core";
 
 vi.mock("./core", async () => {
@@ -419,5 +419,140 @@ describe("ssh keys api mapper", () => {
       allowedNodeTags: "prod",
     });
     expect(putBody().expires_at).toBe(new Date(localExpiry).toISOString());
+  });
+});
+
+function verifiedNode(id = 1, name = "node-a") {
+  return { node_id: id, name, status: "verified" };
+}
+
+describe("ssh key rotation decoder", () => {
+  beforeEach(() => {
+    requestMock.mockReset();
+  });
+
+  it("posts one rotate request and decodes a saved result only when every node is verified", async () => {
+    const signal = new AbortController().signal;
+    requestMock.mockResolvedValueOnce({
+      status: "saved",
+      reason: "",
+      public_key_fingerprint: " SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y ",
+      results: [verifiedNode(4, "edge")],
+    });
+
+    const result = await rotateSSHKey("FAKE_TOKEN_FOR_TEST_ONLY", "key-4", {
+      privateKey: "SECRET",
+      keyType: "ed25519",
+      name: "  renamed  ",
+    }, { signal });
+
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(requestMock).toHaveBeenCalledWith("/ssh-keys/4/rotate", {
+      method: "POST",
+      token: "FAKE_TOKEN_FOR_TEST_ONLY",
+      signal,
+      body: { private_key: "SECRET", key_type: "ed25519", name: "renamed" },
+    });
+    expect(result).toEqual({
+      status: "saved",
+      reason: "",
+      publicKeyFingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y",
+      results: [{ nodeId: "node-4", name: "edge", status: "verified" }],
+    });
+  });
+
+  it("omits a blank name and key type instead of sending them", async () => {
+    requestMock.mockResolvedValueOnce({
+      status: "saved",
+      reason: "",
+      public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y",
+      results: [],
+    });
+
+    await rotateSSHKey("FAKE_TOKEN_FOR_TEST_ONLY", "key-4", {
+      privateKey: "SECRET",
+      name: "   ",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith("/ssh-keys/4/rotate", expect.objectContaining({
+      body: { private_key: "SECRET" },
+    }));
+  });
+
+  it("rejects contradictions and malformed rotation payloads", () => {
+    const cases = [
+      { status: "saved", reason: "validation_failed", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [{ node_id: 1, name: "a", status: "failed", error_code: "connection_failed" }] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [{ node_id: 1, name: "a", status: "verified", error_code: "timeout" }] },
+      { status: "not_saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "   ", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [{ node_id: 1, name: "a", status: "verified" }, { node_id: 1, name: "b", status: "verified" }] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [{ node_id: 1.5, name: "a", status: "verified" }] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [{ node_id: "1", name: "a", status: "verified" }] },
+      { status: "not_saved", reason: "nope", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [{ node_id: 1, name: "a", status: "unknown" }] },
+      { status: "not_saved", reason: "conflict", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [{ node_id: 2, name: "a", status: "failed" }] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [], extra: true },
+      { status: "saved", reason: "", public_key_fingerprint: "sha256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "MD5:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y=", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7YZ", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Z", results: [] },
+      { status: "saved", reason: "", public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3i*RxaIKt/qHJiuiIvfoVHtf7Y", results: [] },
+      null,
+      [],
+    ];
+
+    for (const body of cases) {
+      expect(() => decodeSSHKeyRotationResult(body)).toThrow(SSHKeyRotationDecodeError);
+    }
+  });
+
+  it("keeps a not-saved result authoritative without treating it as saved", () => {
+    const result = decodeSSHKeyRotationResult({
+      status: "not_saved",
+      reason: "scope_blocked",
+      public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y",
+      results: [
+        { node_id: 2, name: "edge", status: "failed", error_code: "scope_denied" },
+        { node_id: 3, name: "late", status: "unknown", error_code: "not_checked" },
+      ],
+    });
+
+    expect(result.status).toBe("not_saved");
+    expect(result.results.map((row) => row.nodeId)).toEqual(["node-2", "node-3"]);
+    expect(result.results[0]?.errorCode).toBe("scope_denied");
+  });
+
+  it("does not report success when rotate returns an invalid body", async () => {
+    requestMock.mockResolvedValueOnce({
+      status: "saved",
+      reason: "",
+      public_key_fingerprint: "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y",
+      results: [{ node_id: 1, name: "a", status: "failed", error_code: "connection_failed" }],
+    });
+
+    await expect(rotateSSHKey("FAKE_TOKEN_FOR_TEST_ONLY", "key-4", {
+      privateKey: "SECRET",
+      keyType: "ed25519",
+    })).rejects.toBeInstanceOf(SSHKeyRotationDecodeError);
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts canonical unpadded SHA256 fingerprints", () => {
+    const fingerprints = [
+      "SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y",
+      "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      " SHA256:90mMaj7XYS8JZzh6v3iARxaIKt/qHJiuiIvfoVHtf7Y ",
+    ];
+    for (const fingerprint of fingerprints) {
+      expect(decodeSSHKeyRotationResult({
+        status: "saved",
+        reason: "",
+        public_key_fingerprint: fingerprint,
+        results: [],
+      }).publicKeyFingerprint).toBe(fingerprint.trim());
+    }
   });
 });

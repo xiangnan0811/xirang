@@ -51,7 +51,9 @@ export function RotationProgress({
       </InlineAlert>
       <InlineAlert tone="info">{t("sshKeys.rotationAdminDeployNotice")}</InlineAlert>
 
-      <p className="text-xs text-muted-foreground">{t("sshKeys.rotationStatusHint")}</p>
+      <p className="text-xs text-muted-foreground" data-testid="rotation-inventory-estimate">
+        {t("sshKeys.rotationStatusHint")}
+      </p>
 
       <div className="grid gap-2 rounded-lg border border-border/60 bg-muted/30 p-3 text-sm sm:grid-cols-3">
         <div>
@@ -75,7 +77,7 @@ export function RotationProgress({
         <div className="max-h-40 space-y-1.5 overflow-y-auto rounded-lg border border-border/60 p-2 thin-scrollbar">
           {affectedNodes.length === 0 ? (
             <p className="px-2 py-1.5 text-sm text-muted-foreground">
-              {t("sshKeys.rotationNoNodeVerification")}
+              {t("sshKeys.rotationInventoryEmpty")}
             </p>
           ) : (
             affectedNodes.map((node) => (
