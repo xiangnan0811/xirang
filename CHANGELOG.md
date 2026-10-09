@@ -12,6 +12,13 @@
 - 脚本零退出及合法 receipt 表示脚本完成，不等于完整灾备可恢复。Rename 成功后最后一次目录 fsync 失败时，运行器会报告 `state_publish_failed` 并非零退出，但后续仍可能读到 success；可见记录不能反推原运行器最后一次持久化确认成功。继续独立执行 SHA256、完整性检查和 SQLite/PostgreSQL 隔离恢复演练。
 - 本次仅交付 R-09 第二阶段，不包含其他 P2/P3、网页执行 cron 或生产部署。公开版本、镜像及隔离验收不能替代生产恢复验收。
 
+## [0.60.0](https://github.com/xiangnan0811/xirang/compare/v0.59.1...v0.60.0) (2026-10-09)
+
+
+### ✨ Features
+
+* **backup:** track cron job state and durable health alerts ([#602](https://github.com/xiangnan0811/xirang/issues/602)) ([242e60b](https://github.com/xiangnan0811/xirang/commit/242e60bf346362682b46856f5168fdb0bf499d9d))
+
 ## [0.59.1](https://github.com/xiangnan0811/xirang/compare/v0.59.0...v0.59.1) (2026-10-09)
 
 
