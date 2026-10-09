@@ -108,19 +108,56 @@ SSH 标准派生，未知不得回退到私钥摘要。CSV/JSON 的既有 `finge
 保持兼容，authorized_keys 内容不插入说明行；主机信任指纹含义不变。
 
 轮换须显式检查当前候选后才能确认；修改草稿、返回编辑、关闭或身份失效清除预览。
-禁用键可见但不能选择或预选跳过，补救入口返回现有密钥页。提交前重新读取当前键，
-确认存在且未禁用，并保留当次 scope、disabled；轮换补丁省略 expiry，由服务端保留
-原始过期时刻，避免本地分钟精度或 DST 重叠转换改变它。该读取不构成并发原子保证。
-轮换不自动部署远端公钥，也不以轮换启用禁用键。所有异步响应、复制和 finally
-绑定本地操作及全局认证代次，A→B→A 不恢复旧草稿。
+禁用键可见但不能选择或预选跳过，补救入口返回现有密钥页。轮换不自动部署远端
+公钥，也不以轮换启用禁用键。所有异步响应、复制和 finally 绑定本地操作及全局
+认证代次，A→B→A 不恢复旧草稿。
 
-保存结果与节点验证分开：PUT 成功仅表示「密钥已更新」，传输结果未知不自动重放
-PUT。随后验证全部关联节点，不按历史在线状态跳过；明确返回失败为 failed，
-遗漏或请求失败为 unknown。全部通过才显示成功，部分失败/未知显示 warning，
-全部明确失败显示 critical，零节点为无需验证。「重新验证失败或未知节点」只测试
-该子集并保留成功项，绝不再次保存密钥。
-连接测试的节点失败说明使用固定安全分类或通用失败文案，不把 SSH 服务端提供的
-握手、断开或其他任意错误文本直接返回；正则脱敏本身不构成安全错误分类。
+`POST /api/v1/ssh-keys/:id/rotate` 仅 admin 且保留 `ssh_keys:write`，不新增 step-up。
+请求仅接受 `{private_key,key_type?,name?}`；私钥必须非空，名称缺省保留、显式空白
+拒绝。整个 body 上限 1 MiB，只接受一个 JSON，拒绝未知字段、null 和类型错误。
+响应 `private, no-store`，不回显私钥。普通 `PUT /ssh-keys/:id` 保留离线修复能力，
+不要求连接验证；轮换不能降级为 PUT 或忽略失败后替换。
+
+服务端读取所有绑定该键的节点，包括 offline、archived 及历史 password-auth 绑定，
+不依赖前端缓存或客户端节点列表。超过 256 个节点直接 `inventory_limit`，不联网、
+不保存、不截断后通过。用候选密钥的内存副本及原 scope/username/disabled/精确 expiry
+验证 `ssh_key_test` purpose 和每个节点 scope，绝不回退旧密钥或节点密码，不写
+LastUsedAt、节点健康或 known_hosts。连接只握手后关闭，不运行远端命令。
+轮换始终严格只读校验已有 known_hosts；全局 strict=false 或 auto-accept=true
+不能豁免，未知或变化主机拒绝，信任文件不可读取时拒绝保存。补救通过现有节点测试/
+人工信任流程，不自动登记。零节点只校验候选和 purpose，允许提交并显示无需连接验证，
+不声称验证过 SSH，也不要求 known_hosts。
+
+请求总预算 20 秒、SSH 阶段 15 秒、单节点 5 秒、最多 4 worker。返回全部已知节点
+结果 `{node_id,name,status,error_code?}`；status 为 `verified|failed|unknown`，
+错误仅限 `scope_denied|ssh_host_key_unknown|ssh_host_key_mismatch|connection_failed|timeout|not_checked`。
+未完成节点不能计作通过，取消会关闭连接并回收 worker。请求取消不能撤销已提交事务。
+
+全部通过后才进入不含网络的至多 2 秒短事务。PostgreSQL 先锁 nodes 表阻止新增、
+删除和重绑 phantom，再锁密钥；SQLite 先取得写保留。完整比较键配置及有序节点
+身份、名称、端点、用户名、认证类型、绑定、tags、archived 和集合，不把
+last_used_at/updated_at 或健康漂移误判冲突。联网前及提交事务内均重查当前 admin、
+token_version、会话到期和持久撤销；事务持有用户及撤销写入围栏。提交前再查
+purpose/scope/expiry，仅定点加密更新 name/key_type/private_key/fingerprint/updated_at，
+保留其余元数据及并发 LastUsedAt。锁失败不重试；提交成功才返回 saved。
+这是提交瞬间的数据库一致性保证，不承诺之后远端状态不变或阻止独立授权的离线编辑。
+
+业务结果使用 200 envelope：`status=saved|not_saved`、`reason`、
+`public_key_fingerprint` 和 `results`。saved 的 reason 为空；not_saved 的 reason
+为 `validation_failed|validation_timeout|conflict|scope_blocked|trust_unavailable|inventory_limit|busy`。
+格式/密钥错误 400、超限 413、不存在 404、身份/权限 401/403，非预期内部或不能确认
+提交结果的错误为安全 500，不能伪称已回滚。每次处理记录一次 `ssh_key.rotate`
+安全凭据审计，仅键 ID、结果、节点计数和固定 reason；审计上下文有界，不记录秘密、
+原始 SSH/SQL 错误或 payload。审计成功标记 reason 为 `saved`，其他没有业务原因的
+请求拒绝标记为 `request_rejected`。
+
+向导确认页标注缓存数量仅为预估，服务端检查完整库存；进行中只显示“正在验证候选
+连接，通过后保存”，不虚构精确保存阶段。saved 才显示成功、新公钥指纹并刷新数据。
+not_saved 显示“未替换，原密钥保持不变”及真实节点结果；只能返回修改并重新检查
+完整库存或关闭，不保留子集成功作为授权。冲突须重新检查，其他固定原因指向现有
+节点/密钥补救入口。网络中断、5xx 或非法响应均视为结果未知：清除草稿，提示核对
+当前已保存公钥指纹，不保证原键仍在，不提供一键重放。成功后不追加第二轮连接测试。
+独立的已保存密钥测试接口保留，节点失败说明仍使用固定安全分类，不返回远端任意文本。
 
 ## 配置导入的安全结果
 

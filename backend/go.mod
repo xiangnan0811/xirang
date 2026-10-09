@@ -1,6 +1,6 @@
 module xirang/backend
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
@@ -26,7 +26,7 @@ require (
 	github.com/swaggo/gin-swagger v1.6.1
 	github.com/swaggo/swag v1.16.6
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
 	gopkg.in/yaml.v3 v3.0.1

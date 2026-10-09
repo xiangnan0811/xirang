@@ -7,7 +7,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.27.1-alpine3.24@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS backend-builder
+FROM golang:1.27.2-alpine3.24@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS backend-builder
 
 WORKDIR /app/backend
 ARG TARGETOS
@@ -30,7 +30,7 @@ RUN set -eux; \
 
 # 自行使用与后端一致的 Go 工具链编译 supercronic，避免官方预编译二进制带入过期 stdlib 的 HIGH CVE，
 # 并支持 linux/amd64 与 linux/arm64 交叉编译。
-FROM golang:1.27.1-alpine3.24@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS supercronic-builder
+FROM golang:1.27.2-alpine3.24@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS supercronic-builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG SUPERCRONIC_COMMIT=c14d35dd8bb0d34e984097d5613cef2eea4a675f
@@ -65,6 +65,7 @@ RUN apk add --no-cache \
       openssh-client=10.2_p1-r0 \
       sqlite=3.53.4-r0 \
       bash=5.3.3-r1 \
+      tiff=4.7.2-r0 \
       tzdata=2026e-r0 \
       postgresql18-client=18.6-r0
 

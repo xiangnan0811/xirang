@@ -76,15 +76,16 @@ describe("RotationProgress", () => {
 
     const confirmButton = screen.getByRole("button", { name: "确认轮换" });
     expect(confirmButton).toBeDisabled();
-    expect(screen.getByText("影响总数")).toBeInTheDocument();
+    expect(screen.getByText("预估数量")).toBeInTheDocument();
     expect(screen.getByText("最近测试通过")).toBeInTheDocument();
     expect(screen.getByText("最近测试未通过")).toBeInTheDocument();
-    expect(screen.getByText("这里的状态只是最近一次手动连接测试。轮换会验证全部受影响节点。")).toBeInTheDocument();
+    expect(screen.getByText("这里只是页面缓存的预估数量。确认后，服务端会按完整库存验证并决定是否保存。")).toBeInTheDocument();
+    expect(screen.getByText("确认后将会连接主机以验证候选密钥，不会部署公钥，也不会修改 known_hosts。请先由管理员部署远端公钥。")).toBeInTheDocument();
     expect(screen.getByText("SHA256:public-old")).toBeInTheDocument();
     expect(screen.getByText("SHA256:public-new")).toBeInTheDocument();
     expect(screen.queryByText(selectedKey.fingerprint)).not.toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("输入 2 以确认受影响节点数"), "1");
+    await user.type(screen.getByLabelText("输入 2 以确认预估节点数"), "1");
     expect(onAcknowledgementChange).toHaveBeenLastCalledWith("1");
     expect(onNext).not.toHaveBeenCalled();
 
@@ -101,8 +102,8 @@ describe("RotationProgress", () => {
         onNext={onNext}
       />,
     );
-    expect(screen.getByText("请输入 2 以确认受影响节点数。")).toBeInTheDocument();
-    expect(screen.getByLabelText("输入 2 以确认受影响节点数")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("请输入 2 以确认预估节点数。")).toBeInTheDocument();
+    expect(screen.getByLabelText("输入 2 以确认预估节点数")).toHaveAttribute("aria-invalid", "true");
     await user.click(screen.getByRole("button", { name: "确认轮换" }));
     expect(onNext).not.toHaveBeenCalled();
   });

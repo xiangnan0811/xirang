@@ -13398,6 +13398,100 @@ const docTemplate = `{
                 }
             }
         },
+        "/ssh-keys/{id}/rotate": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "在保存前使用候选私钥验证完整关联节点库存，并以短事务重新核对后原子保存",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ssh-keys"
+                ],
+                "summary": "预验证并轮换 SSH Key",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "SSH Key ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "候选 SSH Key",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.sshKeyRotationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.sshKeyRotationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/ssh-keys/{id}/test-connection": {
             "post": {
                 "security": [
@@ -19131,6 +19225,57 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.sshKeyRotationNodeResult": {
+            "type": "object",
+            "properties": {
+                "error_code": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.sshKeyRotationRequest": {
+            "type": "object",
+            "properties": {
+                "key_type": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "private_key": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.sshKeyRotationResponse": {
+            "type": "object",
+            "properties": {
+                "public_key_fingerprint": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.sshKeyRotationNodeResult"
+                    }
+                },
+                "status": {
                     "type": "string"
                 }
             }

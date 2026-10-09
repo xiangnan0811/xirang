@@ -10,8 +10,8 @@
 
 ### Go 工具链升级
 
-项目使用 Go 1.27.1；CI 从 `backend/go.mod` 读取版本。Core、Worker 和
-supercronic 的构建镜像同步固定到 Go 1.27.1 / Alpine 3.24 的多架构摘要，
+项目使用 Go 1.27.2；CI 从 `backend/go.mod` 读取版本。Core、Worker 和
+supercronic 的构建镜像同步固定到 Go 1.27.2 / Alpine 3.24 的多架构摘要，
 Worker 的 `BuilderBase` 运行环境指纹和镜像检查脚本须随之更新。
 保留 SQLite 所需的 CGO，以及与运行镜像兼容的 musl；升级 Go 不自动升级 Alpine 主线。
 
@@ -19,6 +19,12 @@ Go 升级不要求所有模块跟随更新。先核对上游兼容说明、构�
 运行时内部接口和漏洞结果，仅升级不兼容或需要安全修复的依赖；不要用批量
 `go get -u` 扩大变更。`go.mod` 的版本指令也会影响运行时兼容默认值，必须在
 修改指令后重新验证，不能仅复用新编译器搭配旧指令的结果。
+
+SSH 轮换预验证候选将 `golang.org/x/net` 从 v0.59.0 定向更新到 v0.60.0，
+修复 HTTP/2 安全公告；未升级其他模块。验收继续使用固定版本 govulncheck
+及完整本地 CI 门禁，不以依赖升级代替业务验证。
+远端标准库扫描要求 Go 1.27.2 安全补丁；本地验证须显式使用
+`GOTOOLCHAIN=go1.27.2`，避免宿主工具链与 CI 不同导致错误复用证据。
 
 验收包括模块完整性、完整后端测试与构建、lint、漏洞扫描、并发敏感路径的 race、
 SQLite / PostgreSQL 行为，以及目标镜像的启动和 `/readyz`。

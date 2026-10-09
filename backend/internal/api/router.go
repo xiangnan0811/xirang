@@ -661,6 +661,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/ssh-keys/:id", middleware.RBAC("ssh_keys:read"), sshKeyHandler.Get)
 	secured.PUT("/ssh-keys/:id", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Update)
 	secured.DELETE("/ssh-keys/:id", middleware.RBAC("ssh_keys:write"), sshKeyHandler.Delete)
+	secured.POST("/ssh-keys/:id/rotate", middleware.RequireRole("admin"), middleware.RBAC("ssh_keys:write"), sshKeyHandler.Rotate)
 	secured.POST("/ssh-keys/:id/test-connection", middleware.RBAC("ssh_keys:write"), sshKeyHandler.TestConnection)
 
 	secured.GET("/integrations", middleware.ETag(), middleware.RBAC("integrations:read"), integrationHandler.List)

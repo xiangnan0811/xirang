@@ -212,6 +212,18 @@ func HostKeyAlgorithmsForAddress(address string) []string {
 	if err != nil || !strictHostCheck {
 		return nil
 	}
+	return hostKeyAlgorithmsForKnownHosts(address)
+}
+
+// HostKeyAlgorithmsForRotationAddress returns the algorithm preference derived
+// from the existing known_hosts record without consulting global strict-mode
+// settings. Rotation installs its own strict, read-only verifier and must
+// negotiate the recorded key type even when ordinary dialing is permissive.
+func HostKeyAlgorithmsForRotationAddress(address string) []string {
+	return hostKeyAlgorithmsForKnownHosts(address)
+}
+
+func hostKeyAlgorithmsForKnownHosts(address string) []string {
 	knownHostsPath, err := knownHostsPathFromEnv()
 	if err != nil {
 		return nil
@@ -323,11 +335,22 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 
 // DialSSH 建立 SSH 连接，支持 context 取消。
 func DialSSH(ctx context.Context, addr, user string, auth []ssh.AuthMethod, hostKey ssh.HostKeyCallback) (*ssh.Client, error) {
+	return dialSSH(ctx, addr, user, auth, hostKey, HostKeyAlgorithmsForAddress(addr))
+}
+
+// DialSSHForRotation uses the strict, read-only known_hosts negotiation
+// preference required by SSH key rotation while sharing DialSSH's cancellable
+// transport implementation.
+func DialSSHForRotation(ctx context.Context, addr, user string, auth []ssh.AuthMethod, hostKey ssh.HostKeyCallback) (*ssh.Client, error) {
+	return dialSSH(ctx, addr, user, auth, hostKey, HostKeyAlgorithmsForRotationAddress(addr))
+}
+
+func dialSSH(ctx context.Context, addr, user string, auth []ssh.AuthMethod, hostKey ssh.HostKeyCallback, hostKeyAlgorithms []string) (*ssh.Client, error) {
 	config := &ssh.ClientConfig{
 		User:              user,
 		Auth:              auth,
 		HostKeyCallback:   hostKey,
-		HostKeyAlgorithms: HostKeyAlgorithmsForAddress(addr),
+		HostKeyAlgorithms: hostKeyAlgorithms,
 		Timeout:           5 * time.Second,
 	}
 

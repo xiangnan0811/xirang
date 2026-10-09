@@ -29,7 +29,12 @@ TypeScript 静态检查不能证明网络数据可信。跨模块领域类型放
 | HTTP 错误且有合法信封 | 使用后端消息抛出 `ApiError` |
 | HTTP 错误且非信封 | 使用本地化通用请求失败消息 |
 
-`ApiError` 携带 `status`、`message`、`detail` 和可选 `retryAfter`。重试秒数优先取有效正数 `Retry-After` 响应头，其次取信封 `data.retry_after`；当前实现按秒数解析。分页使用 `PaginatedEnvelope<T>` 和 `unwrapPaginated`。
+`ApiError` 携带 `status`、`message`、`detail`、可选 `retryAfter` 及 `httpStatus`。
+`httpStatus` 保留真实 HTTP 状态；兼容信封错误仍以信封 code 作为 `status`，不改变
+既有 step-up 识别。敏感写入（如 SSH 轮换）据真实 HTTP 来源将不可用的 2xx 信封
+归为提交结果未知，不能把信封中的 400 当成已确认未写入。重试秒数优先取有效
+正数 `Retry-After` 响应头，其次取信封 `data.retry_after`；当前实现按秒数解析。
+分页使用 `PaginatedEnvelope<T>` 和 `unwrapPaginated`。
 
 中心请求回归至少包含 HTTP 201/`code=201` 成功、HTTP 200/`code=400` 错误、429 响应头和 body 两种 retryAfter 来源及无效 header 回退。mock `Response` 必须包含 `headers.get()`。
 

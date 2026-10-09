@@ -92,7 +92,7 @@ const chromium = { ...devices["Desktop Chrome"] };
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: /(real-backend-smoke|lifecycle-p1|config-name-mapping)\.spec\.ts/,
+  testMatch: /(real-backend-smoke|lifecycle-p1|config-name-mapping|ssh-key-rotation)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
@@ -140,7 +140,7 @@ export default defineConfig({
     },
     {
       name: "chromium",
-      testMatch: /(lifecycle-p1|config-name-mapping)\.spec\.ts/,
+      testMatch: /(lifecycle-p1|config-name-mapping|ssh-key-rotation)\.spec\.ts/,
       dependencies: ["chromium-smoke"],
       use: chromium,
     },

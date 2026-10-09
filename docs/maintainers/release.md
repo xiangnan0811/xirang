@@ -53,6 +53,11 @@ Release Please 自动插入版本标题时可能将原有升级说明留在 `Unr
 
 安全包版本锁定补丁的发行说明须指出替换的旧版本、固定的新版本及镜像重建要求；回退旧镜像会同时恢复旧依赖及其已知漏洞，不能仅按应用行为判断回退风险。
 
+SSH 轮换预验证版本同时包含 `golang.org/x/net` v0.59.0 → v0.60.0、
+Go 1.27.1 → 1.27.2 和 Core TIFF 4.7.1-r0 → 4.7.2-r0 安全更新。
+发布须同源重建 Core/Worker/supercronic，重新生成匹配架构的闭包、签名运行包和证明，
+并保留 CHANGELOG 中的升级与回退风险说明。
+
 ### 持续 CI 与正式发布证据边界
 
 持续 CI 的 Core `docker-build` 仅在原生 `amd64`/`arm64` runner 上构建并加载本地
@@ -101,6 +106,12 @@ PostgreSQL 外部备份各自的能力边界。
 `v0.58.2` 的生命周期行为、备份能力边界、旧操作排空、无新增 schema migration
 及依赖回退风险集中于 CHANGELOG 对应版本的“行为与升级说明”；发布时将该节完整
 同步至 Release PR 和 GitHub Release 正文，不将本地或 CI 验收写成生产部署完成。
+
+SSH 候选连接预验证的发行说明须明确：新版 Core 与向导同版本切换，排空旧版轮换
+操作，旧页面的先保存后测试不受新接口追溯保护；严格只读 known_hosts 不受全局
+自动接受/关闭严格校验豁免，普通编辑仍可离线修复。保留无新增 schema migration、
+关闭不撤销已提交替换、结果未知不重放及回退旧版恢复旧风险的边界；具体行为见
+[凭据与访问](../spec/domains/credentials-access.md#受管-ssh-key-scope)。
 
 ## Docker Hub 描述同步
 

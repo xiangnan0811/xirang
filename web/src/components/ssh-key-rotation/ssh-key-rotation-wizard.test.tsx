@@ -4,24 +4,29 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
+import { SSHKeyRotationDecodeError, type SSHKeyRotationResult } from "@/lib/api/ssh-keys-api";
 import type { NodeRecord, SSHKeyPreview, SSHKeyRecord } from "@/types/domain";
 import { SSHKeyRotationWizard } from "./ssh-key-rotation-wizard";
 
-const { updateSSHKey, testConnection, previewSSHKey, getSSHKey } = vi.hoisted(() => ({
+const { updateSSHKey, testConnection, previewSSHKey, rotateSSHKey } = vi.hoisted(() => ({
   updateSSHKey: vi.fn(),
   testConnection: vi.fn(),
   previewSSHKey: vi.fn(),
-  getSSHKey: vi.fn(),
+  rotateSSHKey: vi.fn(),
 }));
 
-vi.mock("@/lib/api/ssh-keys-api", () => ({
-  createSSHKeysApi: () => ({
-    updateSSHKey,
-    testConnection,
-    previewSSHKey,
-    getSSHKey,
-  }),
-}));
+vi.mock("@/lib/api/ssh-keys-api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/ssh-keys-api")>("@/lib/api/ssh-keys-api");
+  return {
+    ...actual,
+    createSSHKeysApi: () => ({
+      updateSSHKey,
+      testConnection,
+      previewSSHKey,
+    }),
+    rotateSSHKey,
+  };
+});
 
 const { toastSuccess, toastError } = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
@@ -96,6 +101,16 @@ const checkedPreview: SSHKeyPreview = {
   publicKeyFingerprint: "SHA256:new-public",
 };
 
+const savedRotation: SSHKeyRotationResult = {
+  status: "saved",
+  reason: "",
+  publicKeyFingerprint: "SHA256:saved-public",
+  results: [
+    { nodeId: "node-1", name: "node-online", status: "verified" },
+    { nodeId: "node-9", name: "server-only", status: "verified" },
+  ],
+};
+
 function textChoice(...parts: string[]) {
   return new RegExp(parts.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"));
 }
@@ -137,7 +152,7 @@ function DisabledKeyOnKeyPage({
   );
 }
 
-function wizardElement(token = "token", open = true) {
+function wizardElement(token = "token", open = true, onComplete = vi.fn()) {
   return (
     <SSHKeyRotationWizard
       open={open}
@@ -146,20 +161,20 @@ function wizardElement(token = "token", open = true) {
       keyUsageMap={new Map([[selectedKey.id, affected]])}
       preselectedKey={selectedKey}
       token={token}
-      onComplete={vi.fn()}
+      onComplete={onComplete}
     />
   );
 }
 
-async function confirmRotation(user: UserEvent) {
+async function confirmRotation(user: UserEvent, acknowledgement = "2") {
   await user.type(screen.getByLabelText("私钥内容"), "FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
   await user.click(screen.getByRole("button", { name: textChoice("sshKeys.rotationCheckCandidate", "检查候选密钥") }));
   await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled());
   await user.click(screen.getByRole("button", { name: "下一步" }));
-  await user.type(screen.getByLabelText("输入 2 以确认受影响节点数"), "2");
-  const callsBefore = updateSSHKey.mock.calls.length;
+  await user.type(screen.getByLabelText(`输入 ${acknowledgement} 以确认预估节点数`), acknowledgement);
+  const callsBefore = rotateSSHKey.mock.calls.length;
   await user.click(screen.getByRole("button", { name: "确认轮换" }));
-  await waitFor(() => expect(updateSSHKey.mock.calls.length).toBe(callsBefore + 1));
+  await waitFor(() => expect(rotateSSHKey.mock.calls.length).toBe(callsBefore + 1));
 }
 
 type DeferredRead = {
@@ -217,6 +232,7 @@ function changeKeyFile(name = "id_ed25519") {
   fireEvent.change(input, { target: { files: [new File(["ignored"], name)] } });
 }
 
+
 describe("SSHKeyRotationWizard", () => {
   beforeEach(() => {
     authRef.current = { role: "admin", token: "token" };
@@ -225,38 +241,19 @@ describe("SSHKeyRotationWizard", () => {
     updateSSHKey.mockReset();
     testConnection.mockReset();
     previewSSHKey.mockReset();
-    getSSHKey.mockReset();
+    rotateSSHKey.mockReset();
     previewSSHKey.mockResolvedValue(checkedPreview);
-    getSSHKey.mockImplementation(async () => ({ ...selectedKey }));
-    updateSSHKey.mockResolvedValue({ ...selectedKey, fingerprint: "SHA256:new" });
-    testConnection.mockResolvedValue([
-      { nodeId: "node-1", name: "node-online", host: "node-online.example", port: 22, success: true, latencyMs: 8 },
-      { nodeId: "node-2", name: "node-offline", host: "node-offline.example", port: 22, success: false, latencyMs: 0, error: "refused" },
-    ]);
+    rotateSSHKey.mockResolvedValue(savedRotation);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("verifies every affected node after rotation, including nodes whose stored status is not online", async () => {
+  it("submits one rotate call and renders the server node list", async () => {
     const user = userEvent.setup();
-    const affected = [
-      node(1, "online", "node-online"),
-      node(2, "offline", "node-offline"),
-    ];
-
-    render(
-      <SSHKeyRotationWizard
-        open
-        onOpenChange={vi.fn()}
-        sshKeys={[selectedKey]}
-        keyUsageMap={new Map([[selectedKey.id, affected]])}
-        preselectedKey={selectedKey}
-        token="token"
-        onComplete={vi.fn()}
-      />,
-    );
+    const onComplete = vi.fn();
+    render(wizardElement("token", true, onComplete));
 
     await user.type(screen.getByLabelText("私钥内容"), "FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
     expect(previewSSHKey).not.toHaveBeenCalled();
@@ -264,110 +261,121 @@ describe("SSHKeyRotationWizard", () => {
     await user.click(screen.getByRole("button", { name: textChoice("sshKeys.rotationCheckCandidate", "检查候选密钥") }));
     await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    await user.type(screen.getByLabelText("输入 2 以确认受影响节点数"), "2");
+    expect(screen.getByText("这里只是页面缓存的预估数量。确认后，服务端会按完整库存验证并决定是否保存。")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("输入 2 以确认预估节点数"), "2");
     await user.click(screen.getByRole("button", { name: "确认轮换" }));
 
-    expect(await screen.findByText("node-offline")).toBeInTheDocument();
-    expect(testConnection).toHaveBeenCalledWith("token", "key-1", ["node-1", "node-2"]);
-    expect(updateSSHKey).toHaveBeenCalledWith("token", "key-1", expect.objectContaining({
-      allowedPurposes: "probe",
-    }));
-    expect(screen.queryByText("跳过（离线）")).not.toBeInTheDocument();
-    expect(screen.getByText("验证失败")).toBeInTheDocument();
-    expect(screen.getByText("refused")).toBeInTheDocument();
-    expect(screen.getByText("SHA256:new-public")).toBeInTheDocument();
-    expect(screen.queryByText("SHA256:old")).not.toBeInTheDocument();
-    expect(screen.queryByText("SHA256:new")).not.toBeInTheDocument();
-    expect(previewSSHKey).toHaveBeenCalledWith("token", {
+    expect(await screen.findByText("server-only")).toBeInTheDocument();
+    expect(screen.getByText("node-online")).toBeInTheDocument();
+    expect(screen.queryByText("node-offline")).not.toBeInTheDocument();
+    expect(rotateSSHKey).toHaveBeenCalledTimes(1);
+    expect(rotateSSHKey).toHaveBeenCalledWith("token", "key-1", {
       privateKey: "FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
       keyType: "auto",
+      name: "生产密钥",
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
-    expect(previewSSHKey.mock.invocationCallOrder[0]).toBeLessThan(updateSSHKey.mock.invocationCallOrder[0]);
-    expect(getSSHKey.mock.invocationCallOrder[0]).toBeLessThan(updateSSHKey.mock.invocationCallOrder[0]);
+    expect(updateSSHKey).not.toHaveBeenCalled();
+    expect(testConnection).not.toHaveBeenCalled();
+    expect(screen.getByTestId("rotation-summary")).toHaveAttribute("data-rotation-status", "saved");
+    expect(screen.getByText("全部受影响节点已验证通过。")).toBeInTheDocument();
+    expect(screen.getByText("新公钥指纹:")).toBeInTheDocument();
+    expect(screen.getByText("SHA256:saved-public")).toBeInTheDocument();
+    expect(screen.queryByText("SHA256:new-public")).not.toBeInTheDocument();
+    expect(toastSuccess).toHaveBeenCalledWith("密钥已更新");
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "返回修改并重新检查" })).not.toBeInTheDocument();
+    expect(previewSSHKey.mock.invocationCallOrder[0]).toBeLessThan(rotateSSHKey.mock.invocationCallOrder[0]);
   });
 
-  it("StrictMode 下身份未变时仍测试全部受影响节点", async () => {
+  it("StrictMode 下身份未变时仍只提交一次轮换", async () => {
     const user = userEvent.setup();
     render(<StrictMode>{wizardElement()}</StrictMode>);
     await confirmRotation(user);
 
-    expect(await screen.findByText("node-offline")).toBeInTheDocument();
-    expect(testConnection).toHaveBeenCalledWith("token", "key-1", ["node-1", "node-2"]);
-    expect(toastSuccess).toHaveBeenCalled();
+    expect(await screen.findByText("server-only")).toBeInTheDocument();
+    expect(rotateSSHKey).toHaveBeenCalledTimes(1);
+    expect(toastSuccess).toHaveBeenCalledWith("密钥已更新");
   });
 
-  it("轮换更新返回前身份失效后，不提示成功也不测试节点", async () => {
+  it("轮换返回前身份失效后，不提示成功", async () => {
     const user = userEvent.setup();
-    const pending = createDeferred<SSHKeyRecord>();
-    updateSSHKey.mockReturnValue(pending.promise);
+    const pending = createDeferred<SSHKeyRotationResult>();
+    rotateSSHKey.mockReturnValue(pending.promise);
     const view = render(wizardElement());
     await confirmRotation(user);
-    expect(updateSSHKey).toHaveBeenCalledTimes(1);
+    expect(rotateSSHKey).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("正在验证候选连接，通过后保存")).toBeInTheDocument();
 
     authRef.current = { role: "viewer", token: "token" };
     view.rerender(wizardElement());
     await act(async () => {
-      pending.resolve({ ...selectedKey, fingerprint: "SHA256:new" });
+      pending.resolve(savedRotation);
     });
 
-    expect(testConnection).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(screen.queryByText("验证通过")).not.toBeInTheDocument();
+    expect(screen.queryByText("server-only")).not.toBeInTheDocument();
   });
 
-  it("令牌 A-B-A 后废弃的轮换更新不会继续测试节点", async () => {
+  it("令牌 A-B-A 后废弃的轮换结果不能成功，新的确认仍可提交", async () => {
     const user = userEvent.setup();
-    const pending = createDeferred<SSHKeyRecord>();
-    updateSSHKey.mockReturnValue(pending.promise);
+    const pending = createDeferred<SSHKeyRotationResult>();
+    rotateSSHKey.mockReturnValueOnce(pending.promise);
     const view = render(wizardElement("token-a"));
     await confirmRotation(user);
 
     view.rerender(wizardElement("token-b"));
     view.rerender(wizardElement("token-a"));
     await act(async () => {
-      pending.resolve({ ...selectedKey, fingerprint: "SHA256:new" });
+      pending.resolve(savedRotation);
     });
 
-    expect(testConnection).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
+    expect(screen.queryByText("server-only")).not.toBeInTheDocument();
+    rotateSSHKey.mockResolvedValue(savedRotation);
+    await confirmRotation(user);
+    expect(await screen.findByText("server-only")).toBeInTheDocument();
+    expect(rotateSSHKey).toHaveBeenCalledTimes(2);
+    expect(toastSuccess).toHaveBeenCalledTimes(1);
   });
 
-  it("关闭后，迟到的轮换更新不会测试节点", async () => {
+  it("关闭后，迟到的轮换结果不会记为成功", async () => {
     const user = userEvent.setup();
-    const pending = createDeferred<SSHKeyRecord>();
-    updateSSHKey.mockReturnValue(pending.promise);
+    const pending = createDeferred<SSHKeyRotationResult>();
+    rotateSSHKey.mockReturnValue(pending.promise);
     const view = render(wizardElement());
     await confirmRotation(user);
 
     view.rerender(wizardElement("token", false));
     await act(async () => {
-      pending.resolve({ ...selectedKey, fingerprint: "SHA256:new" });
+      pending.resolve(savedRotation);
     });
 
-    expect(testConnection).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
+    expect(screen.queryByText("验证通过")).not.toBeInTheDocument();
   });
 
-  it("卸载后，迟到的轮换更新不会测试节点", async () => {
+  it("卸载后，迟到的轮换结果和 finally 不会记为成功", async () => {
     const user = userEvent.setup();
-    const pending = createDeferred<SSHKeyRecord>();
-    updateSSHKey.mockReturnValue(pending.promise);
+    const pending = createDeferred<SSHKeyRotationResult>();
+    rotateSSHKey.mockReturnValue(pending.promise);
     const view = render(wizardElement());
     await confirmRotation(user);
 
     view.unmount();
     await act(async () => {
-      pending.resolve({ ...selectedKey, fingerprint: "SHA256:new" });
+      pending.resolve(savedRotation);
     });
 
-    expect(testConnection).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
+    expect(updateSSHKey).not.toHaveBeenCalled();
+    expect(testConnection).not.toHaveBeenCalled();
   });
 
-  it("更新失败且身份已变时不展示轮换错误，也不测试节点", async () => {
+  it("轮换失败且身份已变时不展示轮换错误", async () => {
     const user = userEvent.setup();
-    const pending = createDeferred<SSHKeyRecord>();
-    updateSSHKey.mockReturnValue(pending.promise);
+    const pending = createDeferred<SSHKeyRotationResult>();
+    rotateSSHKey.mockReturnValue(pending.promise);
     const view = render(wizardElement());
     await confirmRotation(user);
 
@@ -377,28 +385,54 @@ describe("SSHKeyRotationWizard", () => {
       pending.reject(new Error("rotation failed late"));
     });
 
-    expect(testConnection).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(screen.queryByText("rotation failed late")).not.toBeInTheDocument();
+    expect(screen.queryByText("无法确认是否已保存。请到密钥页核对当前公钥指纹，不要重试本次提交。")).not.toBeInTheDocument();
   });
 
-  it("连接测试进行中身份失效后，不展示验证结果或失败回填", async () => {
+  it("验证进行中关闭会中止请求、清空草稿，并忽略迟到的成功", async () => {
     const user = userEvent.setup();
-    const pendingTest = createDeferred<unknown>();
-    testConnection.mockReturnValue(pendingTest.promise);
-    const view = render(wizardElement());
+    const pending = createDeferred<SSHKeyRotationResult>();
+    const onOpenChange = vi.fn();
+    const onComplete = vi.fn();
+    rotateSSHKey.mockReturnValue(pending.promise);
+    render(
+      <SSHKeyRotationWizard
+        open
+        onOpenChange={onOpenChange}
+        sshKeys={[selectedKey]}
+        keyUsageMap={new Map([[selectedKey.id, affected]])}
+        preselectedKey={selectedKey}
+        token="token"
+        onComplete={onComplete}
+      />,
+    );
     await confirmRotation(user);
-    await waitFor(() => expect(testConnection).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("正在验证候选连接，通过后保存")).toBeInTheDocument();
+    const rotationOptions: unknown = rotateSSHKey.mock.calls[0]?.[3];
+    if (!rotationOptions || typeof rotationOptions !== "object" || !("signal" in rotationOptions)) {
+      throw new Error("rotation did not receive an abort signal");
+    }
+    const rotationSignal = rotationOptions.signal;
+    if (!(rotationSignal instanceof AbortSignal)) {
+      throw new Error("rotation did not receive an abort signal");
+    }
+    await user.click(screen.getByRole("button", { name: "Close" }));
 
-    authRef.current = { role: "admin", token: "token-b" };
-    view.rerender(wizardElement("token-b"));
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(rotationSignal.aborted).toBe(true);
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-rotation-draft", "cleared");
+
     await act(async () => {
-      pendingTest.reject(new Error("late test"));
+      pending.resolve(savedRotation);
     });
 
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
     expect(screen.queryByText("验证通过")).not.toBeInTheDocument();
-    expect(screen.queryByText("连接失败")).not.toBeInTheDocument();
-    expect(toastError).not.toHaveBeenCalled();
+    expect(screen.queryByText("密钥已更新")).not.toBeInTheDocument();
+    expect(rotateSSHKey).toHaveBeenCalledTimes(1);
   });
 
   it("当前上传会把密钥文件写入私钥内容", () => {
@@ -579,149 +613,172 @@ describe("SSHKeyRotationWizard", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(previewSSHKey).not.toHaveBeenCalled();
-    expect(getSSHKey).not.toHaveBeenCalled();
+    expect(rotateSSHKey).not.toHaveBeenCalled();
     expect(updateSSHKey).not.toHaveBeenCalled();
     expect(testConnection).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
   });
 
-  it("保存前重读当前作用域，禁用或缺失时不提交", async () => {
+
+  it("明确失败保留草稿并使用固定文案，解码失败和传输失败进入未知且不能成功", async () => {
     const user = userEvent.setup();
-    getSSHKey.mockResolvedValueOnce({
-      ...selectedKey,
-      disabled: false,
-      allowedPurposes: "terminal",
-      allowedNodeIds: "9",
-      allowedNodeTags: "edge",
-      expiresAt: "2026-08-01T09:30",
-    });
-    const saved = render(wizardElement());
+    const renderInRouter = () => render(<MemoryRouter>{wizardElement()}</MemoryRouter>);
+    rotateSSHKey.mockRejectedValueOnce(new ApiError(404, "raw missing"));
+    const missing = renderInRouter();
     await confirmRotation(user);
-    expect(getSSHKey).toHaveBeenCalledWith("token", "key-1", expect.objectContaining({
-      signal: expect.any(AbortSignal),
-    }));
-    expect(updateSSHKey).toHaveBeenCalledWith("token", "key-1", expect.objectContaining({
-      privateKey: "FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
-      disabled: false,
-      allowedPurposes: "terminal",
-      allowedNodeIds: "9",
-      allowedNodeTags: "edge",
-    }));
-    expect(Object.hasOwn(updateSSHKey.mock.calls[0]?.[2] as object, "expiresAt")).toBe(false);
-    saved.unmount();
+    expect(await screen.findByText("密钥已不存在，轮换未提交。")).toBeInTheDocument();
+    expect(screen.queryByText("raw missing")).not.toBeInTheDocument();
+    expect(screen.getByTestId("rotation-summary")).toHaveAttribute("data-rotation-status", "failed");
+    expect(toastSuccess).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "返回修改并重新检查" }));
+    expect(screen.getByLabelText("私钥内容")).toHaveValue("FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-rotation-draft", "present");
+    missing.unmount();
 
-    getSSHKey.mockResolvedValue({ ...selectedKey, disabled: true, allowedPurposes: "terminal" });
-    updateSSHKey.mockClear();
-    const blocked = render(
-      <MemoryRouter>
-        {wizardElement()}
-      </MemoryRouter>,
-    );
-    await user.type(screen.getByLabelText("私钥内容"), "FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
-    await user.click(screen.getByRole("button", { name: textChoice("sshKeys.rotationCheckCandidate", "检查候选密钥") }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled());
-    await user.click(screen.getByRole("button", { name: "下一步" }));
-    await user.type(screen.getByLabelText("输入 2 以确认受影响节点数"), "2");
-    await user.click(screen.getByRole("button", { name: "确认轮换" }));
-    expect(await screen.findAllByText(exactChoice(
-      "sshKeys.rotationKeyDisabledStop",
-      "该密钥已禁用。轮换未提交，也不会自动启用。",
-    ))).not.toHaveLength(0);
-    expect(updateSSHKey).not.toHaveBeenCalled();
-    expect(screen.getByRole("link", { name: textChoice("sshKeys.rotationDisabledOpenKeys", "打开密钥页") })).toHaveAttribute("href", "/app/ssh-keys");
-    blocked.unmount();
+    rotateSSHKey.mockRejectedValueOnce(new ApiError(403, "forbidden raw"));
+    const forbidden = renderInRouter();
+    await confirmRotation(user);
+    expect(await screen.findByText("当前身份不能轮换这把密钥。")).toBeInTheDocument();
+    expect(screen.queryByText("forbidden raw")).not.toBeInTheDocument();
+    forbidden.unmount();
 
-    getSSHKey.mockRejectedValueOnce(new ApiError(404, "missing"));
-    updateSSHKey.mockClear();
-    render(wizardElement());
-    await user.type(screen.getByLabelText("私钥内容"), "FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
-    await user.click(screen.getByRole("button", { name: textChoice("sshKeys.rotationCheckCandidate", "检查候选密钥") }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled());
-    await user.click(screen.getByRole("button", { name: "下一步" }));
-    await user.type(screen.getByLabelText("输入 2 以确认受影响节点数"), "2");
-    await user.click(screen.getByRole("button", { name: "确认轮换" }));
-    expect(await screen.findAllByText(exactChoice(
-      "sshKeys.rotationKeyMissing",
-      "密钥已不存在，轮换未提交。",
-    ))).not.toHaveLength(0);
-    expect(updateSSHKey).not.toHaveBeenCalled();
-  });
+    rotateSSHKey.mockRejectedValueOnce(new ApiError(413, "too large raw"));
+    const oversized = renderInRouter();
+    await confirmRotation(user);
+    expect(await screen.findByText("候选密钥过大，轮换未提交。")).toBeInTheDocument();
+    oversized.unmount();
 
-  it("保存结果未知时不自动重试，复测只覆盖失败或未知节点", async () => {
-    const user = userEvent.setup();
-    updateSSHKey.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    const unknownView = render(wizardElement());
-    await user.type(screen.getByLabelText("私钥内容"), "FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
-    await user.click(screen.getByRole("button", { name: textChoice("sshKeys.rotationCheckCandidate", "检查候选密钥") }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled());
-    await user.click(screen.getByRole("button", { name: "下一步" }));
-    await user.type(screen.getByLabelText("输入 2 以确认受影响节点数"), "2");
-    await user.click(screen.getByRole("button", { name: "确认轮换" }));
+    rotateSSHKey.mockRejectedValueOnce(new ApiError(400, "bad raw"));
+    const rejected = renderInRouter();
+    await confirmRotation(user);
+    expect(await screen.findByText("轮换请求被拒绝，原密钥未替换。")).toBeInTheDocument();
+    expect(screen.queryByText("bad raw")).not.toBeInTheDocument();
+    rejected.unmount();
+
+    rotateSSHKey.mockClear();
+    rotateSSHKey.mockRejectedValueOnce(new SSHKeyRotationDecodeError());
+    const decoded = renderInRouter();
+    await confirmRotation(user);
     expect((await screen.findAllByText(exactChoice(
-      "sshKeys.rotationSaveUnknown",
-      "保存结果未知。请刷新密钥事实后重新开始轮换，不要自动重试保存。",
+      "无法确认是否已保存。请到密钥页核对当前公钥指纹，不要重试本次提交。",
     ))).length).toBeGreaterThan(0);
-    expect(updateSSHKey).toHaveBeenCalledTimes(1);
-    expect(testConnection).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: textChoice("sshKeys.rotationReverifySubset", "重新验证失败或未知节点") })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: textChoice("sshKeys.rotationEditAgain", "返回修改") })).not.toBeInTheDocument();
-    unknownView.unmount();
+    expect(screen.getByTestId("rotation-summary")).toHaveAttribute("data-rotation-status", "unknown");
+    expect(screen.queryByText("验证通过")).not.toBeInTheDocument();
+    expect(screen.queryByText("全部受影响节点已验证通过。")).not.toBeInTheDocument();
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-rotation-draft", "cleared");
+    expect(screen.queryByRole("button", { name: "返回修改并重新检查" })).not.toBeInTheDocument();
+    expect(rotateSSHKey).toHaveBeenCalledTimes(1);
+    decoded.unmount();
 
-    updateSSHKey.mockClear();
-    testConnection.mockClear();
-    updateSSHKey.mockResolvedValue({ ...selectedKey, fingerprint: "SHA256:new" });
-    render(wizardElement());
+    rotateSSHKey.mockClear();
+    toastSuccess.mockClear();
+    rotateSSHKey.mockRejectedValueOnce(new ApiError(500, "boom"));
+    renderInRouter();
     await confirmRotation(user);
-    expect(await screen.findByText("验证失败")).toBeInTheDocument();
-    expect(screen.getAllByText(exactChoice("sshKeys.rotationOutcomePartial", "部分节点失败或结果未知。")).length).toBeGreaterThan(0);
-    testConnection.mockResolvedValueOnce([
-      { nodeId: "node-2", name: "node-offline", host: "node-offline.example", port: 22, success: true, latencyMs: 4 },
-    ]);
-    await user.click(screen.getByRole("button", { name: textChoice("sshKeys.rotationReverifySubset", "重新验证失败或未知节点") }));
-    await waitFor(() => expect(testConnection).toHaveBeenCalledTimes(2));
-    expect(testConnection).toHaveBeenLastCalledWith("token", "key-1", ["node-2"]);
-    expect(updateSSHKey).toHaveBeenCalledTimes(1);
+    expect((await screen.findAllByText(exactChoice(
+      "无法确认是否已保存。请到密钥页核对当前公钥指纹，不要重试本次提交。",
+    ))).length).toBeGreaterThan(0);
+    expect(screen.queryByText("boom")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "打开密钥页" })).toHaveAttribute("href", "/app/ssh-keys");
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(rotateSSHKey).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-rotation-draft", "cleared");
   });
 
-  it("遗漏和传输失败记为未知，全部失败为严重，零节点不假装验证通过", async () => {
+  it("未保存时展示服务端节点和固定补救，返回修改会保留私钥但作废检查", async () => {
     const user = userEvent.setup();
-    testConnection.mockResolvedValueOnce([
-      { nodeId: "node-1", name: "node-online", host: "node-online.example", port: 22, success: true, latencyMs: 8 },
-    ]);
-    const omitted = render(wizardElement());
+    const onComplete = vi.fn();
+    rotateSSHKey.mockResolvedValueOnce({
+      status: "not_saved",
+      reason: "validation_failed",
+      publicKeyFingerprint: "SHA256:candidate",
+      results: [
+        { nodeId: "node-1", name: "node-online", status: "verified" },
+        { nodeId: "node-4", name: "node-denied", status: "failed", errorCode: "connection_failed" },
+      ],
+    });
+    render(wizardElement("token", true, onComplete));
     await confirmRotation(user);
-    expect(await screen.findAllByText(exactChoice("sshKeys.rotationVerifyUnknown", "结果未知"))).toHaveLength(1);
-    expect(screen.queryByText("验证失败")).not.toBeInTheDocument();
-    expect(screen.getAllByText(exactChoice("sshKeys.rotationOutcomePartial", "部分节点失败或结果未知。")).length).toBeGreaterThan(0);
-    omitted.unmount();
 
-    updateSSHKey.mockClear();
-    toastSuccess.mockClear();
-    testConnection.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    const transport = render(wizardElement());
+    expect(screen.getByText("未替换，原密钥保持不变。")).toBeInTheDocument();
+    expect(screen.getByText("候选连接未全部通过。")).toBeInTheDocument();
+    expect(screen.getByText("连接失败")).toBeInTheDocument();
+    expect(screen.queryByText("connection_failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("SHA256:candidate")).not.toBeInTheDocument();
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    const rows = screen.getAllByTestId("rotation-node-result");
+    expect(rows[0]).toHaveAttribute("data-node-id", "node-1");
+    expect(rows[0]).toHaveAttribute("data-node-status", "verified");
+    expect(rows[1]).toHaveAttribute("data-node-id", "node-4");
+    expect(rows[1]).toHaveAttribute("data-node-status", "failed");
+    expect(screen.queryByRole("button", { name: /重新验证/ })).not.toBeInTheDocument();
+    expect(rotateSSHKey).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "返回修改并重新检查" }));
+    expect(screen.getByLabelText("私钥内容")).toHaveValue("FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
+    expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-rotation-draft", "present");
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-rotation-candidate", "absent");
+  });
+
+  it("范围、信任、超时、上限和占用给出固定补救并打开密钥页与节点页", async () => {
+    const user = userEvent.setup();
+    const cases = [
+      ["scope_blocked", "密钥用途或节点范围不允许这次轮换。", "范围不允许"],
+      ["trust_unavailable", "主机信任记录不可用。", "未检查"],
+      ["validation_timeout", "验证超时，原密钥未替换。", "超时"],
+      ["inventory_limit", "关联节点超过同步上限，原密钥未替换。", "未检查"],
+      ["busy", "其他修改正在占用这把密钥。", "未检查"],
+    ] as const;
+    for (const [reason, detail, nodeError] of cases) {
+      rotateSSHKey.mockResolvedValueOnce({
+        status: "not_saved",
+        reason,
+        publicKeyFingerprint: "SHA256:candidate",
+        results: [
+          { nodeId: "node-2", name: "edge", status: reason === "scope_blocked" ? "failed" : "unknown", errorCode: reason === "scope_blocked" ? "scope_denied" : reason === "validation_timeout" ? "timeout" : "not_checked" },
+        ],
+      });
+      const view = render(
+        <MemoryRouter>
+          {wizardElement()}
+        </MemoryRouter>,
+      );
+      await confirmRotation(user);
+      expect(screen.getByText("未替换，原密钥保持不变。")).toBeInTheDocument();
+      expect(screen.getByText(detail)).toBeInTheDocument();
+      expect(screen.getByText(nodeError)).toBeInTheDocument();
+      expect(screen.getByTestId("rotation-summary")).toHaveAttribute("data-rotation-reason", reason);
+      expect(screen.getByRole("link", { name: "打开密钥页" })).toHaveAttribute("href", "/app/ssh-keys");
+      expect(screen.getByRole("link", { name: "打开节点页" })).toHaveAttribute("href", "/app/nodes");
+      expect(toastSuccess).not.toHaveBeenCalled();
+      view.unmount();
+    }
+  });
+
+  it("冲突不提供重试，零节点保存不假装做过连接验证", async () => {
+    const user = userEvent.setup();
+    rotateSSHKey.mockResolvedValueOnce({
+      status: "not_saved",
+      reason: "conflict",
+      publicKeyFingerprint: "SHA256:candidate",
+      results: [],
+    });
+    const conflict = render(wizardElement());
     await confirmRotation(user);
-    expect(await screen.findAllByText(exactChoice("sshKeys.rotationVerifyUnknown", "结果未知"))).toHaveLength(2);
-    expect(screen.queryByText("验证失败")).not.toBeInTheDocument();
-    expect(toastSuccess).toHaveBeenCalled();
-    transport.unmount();
+    expect(screen.getByText("配置已变化，必须重新验证。")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "打开节点页" })).not.toBeInTheDocument();
+    expect(screen.queryByText("全部受影响节点已验证通过。")).not.toBeInTheDocument();
+    conflict.unmount();
 
-    testConnection.mockResolvedValue([
-      { nodeId: "node-1", name: "node-online", host: "node-online.example", port: 22, success: false, latencyMs: 0, error: "denied" },
-      { nodeId: "node-2", name: "node-offline", host: "node-offline.example", port: 22, success: false, latencyMs: 0, error: "denied" },
-    ]);
-    const failed = render(wizardElement());
-    await confirmRotation(user);
-    expect((await screen.findAllByText(exactChoice("sshKeys.rotationOutcomeFailed", "全部受影响节点验证失败。"))).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("denied")).toHaveLength(2);
-    const updates = updateSSHKey.mock.calls.length;
-    testConnection.mockClear();
-    await user.click(screen.getByRole("button", { name: textChoice("sshKeys.rotationReverifySubset", "重新验证失败或未知节点") }));
-    await waitFor(() => expect(testConnection).toHaveBeenCalledTimes(1));
-    expect(testConnection).toHaveBeenCalledWith("token", "key-1", ["node-1", "node-2"]);
-    expect(updateSSHKey).toHaveBeenCalledTimes(updates);
-    failed.unmount();
-
-    testConnection.mockClear();
+    rotateSSHKey.mockResolvedValueOnce({
+      status: "saved",
+      reason: "",
+      publicKeyFingerprint: "SHA256:saved-public",
+      results: [],
+    });
     render(
       <SSHKeyRotationWizard
         open
@@ -733,17 +790,11 @@ describe("SSHKeyRotationWizard", () => {
         onComplete={vi.fn()}
       />,
     );
-    await user.type(screen.getByLabelText("私钥内容"), "FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
-    await user.click(screen.getByRole("button", { name: textChoice("sshKeys.rotationCheckCandidate", "检查候选密钥") }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled());
-    await user.click(screen.getByRole("button", { name: "下一步" }));
-    await user.type(screen.getByLabelText("输入 0 以确认受影响节点数"), "0");
-    const callsBefore = updateSSHKey.mock.calls.length;
-    await user.click(screen.getByRole("button", { name: "确认轮换" }));
-    await waitFor(() => expect(updateSSHKey.mock.calls.length).toBe(callsBefore + 1));
-    expect((await screen.findAllByText(exactChoice("sshKeys.rotationNoNodeVerification", "无需节点验证"))).length).toBeGreaterThan(0);
+    await confirmRotation(user, "0");
+    expect(await screen.findByText("没有关联节点，无需连接验证。")).toBeInTheDocument();
+    expect(screen.queryByText("全部受影响节点已验证通过。")).not.toBeInTheDocument();
     expect(testConnection).not.toHaveBeenCalled();
-    expect(screen.queryByText(exactChoice("sshKeys.rotationOutcomeSuccess", "全部受影响节点已验证通过。"))).not.toBeInTheDocument();
+    expect(updateSSHKey).not.toHaveBeenCalled();
   });
 
   it("复制候选公钥前后都核对当前身份", async () => {
@@ -772,32 +823,4 @@ describe("SSHKeyRotationWizard", () => {
     expect(toastSuccess).not.toHaveBeenCalled();
   });
 
-  it("轮换更新不提交过期时间，并保留刚读到的其余元数据", async () => {
-    const user = userEvent.setup();
-    getSSHKey.mockResolvedValueOnce({
-      ...selectedKey,
-      username: "deploy",
-      disabled: false,
-      expiresAt: "2026-11-01T01:30",
-      allowedPurposes: "terminal",
-      allowedNodeIds: "9",
-      allowedNodeTags: "edge",
-    });
-    render(wizardElement());
-    await confirmRotation(user);
-
-    expect(updateSSHKey).toHaveBeenCalledTimes(1);
-    const payload = updateSSHKey.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(Object.hasOwn(payload, "expiresAt")).toBe(false);
-    expect(payload).toMatchObject({
-      name: "生产密钥",
-      username: "deploy",
-      keyType: "auto",
-      privateKey: "FAKE_PRIVATE_KEY_FOR_TEST_ONLY",
-      disabled: false,
-      allowedPurposes: "terminal",
-      allowedNodeIds: "9",
-      allowedNodeTags: "edge",
-    });
-  });
 });

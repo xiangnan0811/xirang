@@ -205,10 +205,44 @@ describe("request envelope handling", () => {
           captured = error;
         }
         expect(captured).toBeInstanceOf(ApiError);
+        if (!(captured instanceof ApiError)) {
+          throw new Error("expected ApiError");
+        }
+        expect(captured.status).toBe(403);
+        expect(captured.httpStatus).toBe(200);
         expect(isStepUpRequiredError(captured)).toBe(errorCode === "STEP_UP_REQUIRED");
         expect(isCredentialGrantRequiredError(captured)).toBe(errorCode === "CREDENTIAL_GRANT_REQUIRED");
       }
     );
+
+    it.each([null, "400"])("records HTTP 200 provenance for envelope code %s", async (code) => {
+      fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+        code, message: "bad", data: null,
+      })));
+      let captured: unknown;
+      try {
+        await request("/protected-action");
+      } catch (error) {
+        captured = error;
+      }
+      if (!(captured instanceof ApiError)) {
+        throw new Error("expected ApiError");
+      }
+      const envelopeStatus: unknown = captured.status;
+      expect(envelopeStatus).toBe(code);
+      expect(captured.httpStatus).toBe(200);
+      expect(isStepUpRequiredError(captured)).toBe(false);
+    });
+
+    it("records the same HTTP status for a real 400 envelope", async () => {
+      fetchMock.mockResolvedValueOnce(createMockResponse(400, JSON.stringify({
+        code: 400, message: "nope", data: null,
+      })));
+      await expect(request("/protected-action")).rejects.toMatchObject({
+        status: 400,
+        httpStatus: 400,
+      });
+    });
 
     it.each([
       [400, "STEP_UP_REQUIRED"],
