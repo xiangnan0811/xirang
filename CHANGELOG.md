@@ -12,6 +12,13 @@
 - 后端 `golang.org/x/net` 从 v0.59.0 更新至 v0.60.0，修复漏洞扫描发现的 HTTP/2 安全问题；须重新构建 Core，回退旧依赖会恢复已知风险。不扩大为其他依赖升级或降低扫描门槛。
 - Go 从 1.27.1 升级到 1.27.2，修复标准库安全漏洞；Core、Worker 与 supercronic 须同源重建，Worker 工具链指纹随之改变，须重新生成匹配架构的闭包、签名运行包和证明，不能复用旧产物。Core 将镜像中的 TIFF 4.7.1-r0 替换为直接锁定的 4.7.2-r0，修复 CVE-2026-4775；回退旧镜像会恢复旧工具链、旧依赖及已知风险，不降低扫描门槛。
 
+## [0.59.1](https://github.com/xiangnan0811/xirang/compare/v0.59.0...v0.59.1) (2026-10-09)
+
+
+### 🐛 Bug Fixes
+
+* **ssh:** validate candidate connections before rotating keys ([#600](https://github.com/xiangnan0811/xirang/issues/600)) ([1c1b56a](https://github.com/xiangnan0811/xirang/commit/1c1b56a85f013182d9ac278ee3aad3f16db364c1))
+
 ## [0.59.0](https://github.com/xiangnan0811/xirang/compare/v0.58.2...v0.59.0) (2026-10-08)
 
 
