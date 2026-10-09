@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.59.1](https://github.com/xiangnan0811/xirang/compare/v0.59.0...v0.59.1) (2026-10-09)
+
+
+### 🐛 Bug Fixes
+
+* **ssh:** validate candidate connections before rotating keys ([#600](https://github.com/xiangnan0811/xirang/issues/600)) ([1c1b56a](https://github.com/xiangnan0811/xirang/commit/1c1b56a85f013182d9ac278ee3aad3f16db364c1))
+
 ### 行为与升级说明
 
 - SSH 密钥轮换改为先验证候选、后保存：管理员显式预览并确认后，服务端验证完整关联节点库存（包括离线、归档节点），全部通过并在短事务中重新核对配置及会话后才替换。任一验证失败不替换；零关联节点只检查候选及使用范围，不声称完成 SSH 验证。普通密钥编辑仍可离线修复，不强制连接预验证。
@@ -11,13 +18,6 @@
 - 本次无新增数据库 schema migration，不改写已有密钥、节点或任务。回退旧版会恢复先保存后验证及其并发/结果边界缺陷；既有不可逆迁移与恢复限制仍适用。仅交付 R-05 第二阶段，不包含 R-09、其余 P2/P3 或远端自动部署/撤销；公开版本、镜像及隔离验收不表示生产已部署。
 - 后端 `golang.org/x/net` 从 v0.59.0 更新至 v0.60.0，修复漏洞扫描发现的 HTTP/2 安全问题；须重新构建 Core，回退旧依赖会恢复已知风险。不扩大为其他依赖升级或降低扫描门槛。
 - Go 从 1.27.1 升级到 1.27.2，修复标准库安全漏洞；Core、Worker 与 supercronic 须同源重建，Worker 工具链指纹随之改变，须重新生成匹配架构的闭包、签名运行包和证明，不能复用旧产物。Core 将镜像中的 TIFF 4.7.1-r0 替换为直接锁定的 4.7.2-r0，修复 CVE-2026-4775；回退旧镜像会恢复旧工具链、旧依赖及已知风险，不降低扫描门槛。
-
-## [0.59.1](https://github.com/xiangnan0811/xirang/compare/v0.59.0...v0.59.1) (2026-10-09)
-
-
-### 🐛 Bug Fixes
-
-* **ssh:** validate candidate connections before rotating keys ([#600](https://github.com/xiangnan0811/xirang/issues/600)) ([1c1b56a](https://github.com/xiangnan0811/xirang/commit/1c1b56a85f013182d9ac278ee3aad3f16db364c1))
 
 ## [0.59.0](https://github.com/xiangnan0811/xirang/compare/v0.58.2...v0.59.0) (2026-10-08)
 
