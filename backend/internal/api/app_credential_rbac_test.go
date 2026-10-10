@@ -38,8 +38,8 @@ func setupAppCredentialRBACFixture(t *testing.T) appCredentialRBACTestFixture {
 
 	jwtManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	jwtManager.SetDB(db)
-	tokens := make(map[string]string, 3)
-	for _, role := range []string{"admin", "operator", "viewer"} {
+	tokens := make(map[string]string, 5)
+	for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
 		user := model.User{
 			Username:     "rbac-" + role,
 			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
@@ -54,6 +54,16 @@ func setupAppCredentialRBACFixture(t *testing.T) appCredentialRBACTestFixture {
 		}
 		tokens[role] = token
 	}
+	expiredManager := auth.NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", -time.Hour)
+	expiredToken, err := expiredManager.GenerateToken(model.User{
+		ID:       1,
+		Username: "rbac-admin",
+		Role:     "admin",
+	})
+	if err != nil {
+		t.Fatalf("generate expired token: %v", err)
+	}
+	tokens["expired"] = expiredToken
 
 	router := NewRouter(Dependencies{
 		DB:         db,
@@ -127,6 +137,15 @@ func TestAppCredentialRoutesRBACAdminAuthorized(t *testing.T) {
 			want: http.StatusOK,
 		},
 		{
+			name:   "list credential references",
+			method: http.MethodGet,
+			path: func(t *testing.T, fx appCredentialRBACTestFixture) string {
+				id := seedAppCredentialForRBACTest(t, fx.db)
+				return fmt.Sprintf("/api/v1/app-credentials/%d/references", id)
+			},
+			want: http.StatusOK,
+		},
+		{
 			name:   "create saved credential",
 			method: http.MethodPost,
 			path:   func(*testing.T, appCredentialRBACTestFixture) string { return "/api/v1/app-credentials" },
@@ -196,6 +215,14 @@ func TestAppCredentialRoutesRBACNonAdminForbidden(t *testing.T) {
 			},
 		},
 		{
+			name:   "list credential references",
+			method: http.MethodGet,
+			path: func(t *testing.T, fx appCredentialRBACTestFixture) string {
+				id := seedAppCredentialForRBACTest(t, fx.db)
+				return fmt.Sprintf("/api/v1/app-credentials/%d/references", id)
+			},
+		},
+		{
 			name:   "create saved credential",
 			method: http.MethodPost,
 			path:   func(*testing.T, appCredentialRBACTestFixture) string { return "/api/v1/app-credentials" },
@@ -220,7 +247,7 @@ func TestAppCredentialRoutesRBACNonAdminForbidden(t *testing.T) {
 		},
 	}
 
-	for _, role := range []string{"operator", "viewer"} {
+	for _, role := range []string{"operator", "viewer", "unknown"} {
 		for _, tc := range cases {
 			t.Run(role+" "+tc.name, func(t *testing.T) {
 				fx := setupAppCredentialRBACFixture(t)
@@ -230,5 +257,26 @@ func TestAppCredentialRoutesRBACNonAdminForbidden(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAppCredentialReferencesRBACRequiresAuthentication(t *testing.T) {
+	fx := setupAppCredentialRBACFixture(t)
+	id := seedAppCredentialForRBACTest(t, fx.db)
+	path := fmt.Sprintf("/api/v1/app-credentials/%d/references", id)
+
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{name: "missing token"},
+		{name: "expired token", token: fx.tokens["expired"]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := performAppCredentialRBACRequest(t, fx.router, http.MethodGet, path, tc.token, "")
+			if resp.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401, got %d: %s", resp.Code, resp.Body.String())
+			}
+		})
 	}
 }

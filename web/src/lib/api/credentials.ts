@@ -1,4 +1,5 @@
-import { request } from "./core";
+import i18n from "@/i18n";
+import { ApiError, request, type PaginatedEnvelope, unwrapPaginated } from "./core";
 import { finiteNumber } from "./number-utils";
 import type {
   AppCredential,
@@ -11,6 +12,18 @@ export type { AppCredential, AppCredentialInput, ConfigField, ProfileSchema };
 
 /** @deprecated Use AppCredential (single domain type). */
 export type AppCredentialResponse = AppCredential;
+
+export type AppCredentialReference = {
+  id: number;
+  name: string;
+};
+
+export type AppCredentialReferencesPage = {
+  items: AppCredentialReference[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
 
 // ── Wire shapes (API boundary only) ──
 
@@ -35,6 +48,16 @@ type RawProfileSchema = {
   config_schema?: unknown;
 };
 
+type RawAppCredentialReference = {
+  id?: unknown;
+  name?: unknown;
+};
+
+type ValidRawAppCredentialReference = {
+  id: number;
+  name: string;
+};
+
 /** Wire body for create/update (backend expects snake_case keys). */
 type WireAppCredentialInput = {
   type: string;
@@ -56,6 +79,60 @@ function asString(value: unknown, fallback = ""): string {
 function asID(value: unknown): number {
   const n = finiteNumber(value, 0);
   return n >= 0 ? Math.trunc(n) : 0;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isValidRawAppCredentialReference(value: unknown): value is ValidRawAppCredentialReference {
+  return (
+    isObjectRecord(value) &&
+    isPositiveSafeInteger(value.id) &&
+    typeof value.name === "string"
+  );
+}
+
+function isValidAppCredentialReferencesPayload(
+  value: unknown,
+): value is PaginatedEnvelope<ValidRawAppCredentialReference[]> {
+  if (!isObjectRecord(value)) return false;
+  if (
+    typeof value.code !== "number" ||
+    !Number.isFinite(value.code) ||
+    typeof value.message !== "string" ||
+    !Array.isArray(value.data)
+  ) {
+    return false;
+  }
+  if (!value.data.every(isValidRawAppCredentialReference)) return false;
+  return (
+    isNonNegativeSafeInteger(value.total) &&
+    isPositiveSafeInteger(value.page) &&
+    isPositiveSafeInteger(value.page_size) &&
+    value.page_size <= 500
+  );
+}
+
+function mapAppCredentialReferencesPage(payload: unknown): AppCredentialReferencesPage {
+  if (!isValidAppCredentialReferencesPayload(payload)) {
+    throw new ApiError(500, i18n.t("credentials.referencesInvalidResponse"));
+  }
+  const page = unwrapPaginated(payload);
+  return {
+    items: page.items.map(({ id, name }) => ({ id, name })),
+    total: page.total,
+    page: page.page,
+    pageSize: page.pageSize,
+  };
 }
 
 function normalizeStringRecord(raw: unknown): Record<string, string> {
@@ -140,6 +217,25 @@ export function createCredentialsApi() {
         signal,
       });
       return (Array.isArray(rows) ? rows : []).map(mapAppCredential);
+    },
+
+    async listReferences(
+      token: string,
+      id: number,
+      options: { page: number; pageSize: number },
+      signal?: AbortSignal,
+    ): Promise<AppCredentialReferencesPage> {
+      const query = new URLSearchParams({
+        page: String(options.page),
+        page_size: String(options.pageSize),
+        sort_by: "id",
+        sort_order: "asc",
+      });
+      const payload = await request<PaginatedEnvelope<RawAppCredentialReference[]>>(
+        `/app-credentials/${id}/references?${query.toString()}`,
+        { token, signal },
+      );
+      return mapAppCredentialReferencesPage(payload);
     },
 
     async get(

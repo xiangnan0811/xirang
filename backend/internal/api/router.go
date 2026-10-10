@@ -674,6 +674,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/app-credentials", middleware.RBAC("app_credentials:read"), appCredentialHandler.List)
 	secured.GET("/app-credentials/profiles", middleware.RBAC("app_credentials:read"), appCredentialHandler.ListProfiles)
+	secured.GET("/app-credentials/:id/references", middleware.RBAC("app_credentials:read"), appCredentialHandler.References)
 	secured.GET("/app-credentials/:id", middleware.RBAC("app_credentials:read"), appCredentialHandler.Get)
 	secured.POST("/app-credentials", middleware.RBAC("app_credentials:write"), appCredentialHandler.Create)
 	secured.PUT("/app-credentials/:id", middleware.RBAC("app_credentials:write"), appCredentialHandler.Update)

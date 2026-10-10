@@ -13,22 +13,29 @@ const {
   confirmMock,
   deleteMock,
   listMock,
+  listReferencesMock,
 } = vi.hoisted(() => ({
-  authState: { token: "test-token" as string | null, role: "admin" },
+  authState: {
+    token: "test-token" as string | null,
+    role: "admin" as "admin" | "operator" | "viewer" | null,
+    authTransitioning: false,
+  },
   confirmMock: vi.fn(),
   deleteMock: vi.fn(),
   listMock: vi.fn(),
+  listReferencesMock: vi.fn(),
 }));
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {
-      if (typeof options?.count === "number") {
-        return `${key}:${options.count}`;
-      }
-      if (typeof options?.name === "string") {
-        return `${key}:${options.name}`;
-      }
+      const name = typeof options?.name === "string" ? options.name : undefined;
+      const count = typeof options?.count === "number" ? String(options.count) : undefined;
+      const id = typeof options?.id === "number" ? String(options.id) : undefined;
+      if (name !== undefined && count !== undefined) return `${key}:${name}:${count}`;
+      if (name !== undefined && id !== undefined) return `${key}:${name}:${id}`;
+      if (count !== undefined) return `${key}:${count}`;
+      if (name !== undefined) return `${key}:${name}`;
       return key;
     },
   }),
@@ -73,6 +80,7 @@ vi.mock("@/lib/api/credentials", () => ({
     delete: deleteMock,
     list: listMock,
     listProfiles: vi.fn().mockResolvedValue([]),
+    listReferences: listReferencesMock,
   }),
 }));
 
@@ -117,7 +125,17 @@ describe("CredentialsPage", () => {
     vi.clearAllMocks();
     authState.token = "test-token";
     authState.role = "admin";
+    authState.authTransitioning = false;
     confirmMock.mockResolvedValue(true);
+    listReferencesMock.mockResolvedValue({
+      items: [
+        { id: 11, name: "Nightly" },
+        { id: 12, name: "Hourly" },
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 20,
+    });
     deleteMock.mockResolvedValue(undefined);
   });
 
@@ -205,7 +223,7 @@ describe("CredentialsPage", () => {
     });
   });
 
-  it.each(["operator", "viewer"])("redirects %s before listing credentials", async (role) => {
+  it.each(["operator", "viewer"] as const)("redirects %s before listing credentials", async (role) => {
     authState.role = role;
     listMock.mockReturnValue(new Promise(() => undefined));
 
@@ -213,6 +231,7 @@ describe("CredentialsPage", () => {
 
     expect(await screen.findByText("Overview destination")).toBeInTheDocument();
     expect(listMock).not.toHaveBeenCalled();
+    expect(listReferencesMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: "credentials.pageTitle" })).not.toBeInTheDocument();
   });
 
@@ -256,5 +275,97 @@ describe("CredentialsPage", () => {
     expect(toast.error).not.toHaveBeenCalled();
     expect(screen.getByText("Replacement credential")).toBeInTheDocument();
     expect(screen.queryByText("Prod MySQL")).not.toBeInTheDocument();
+  });
+
+  it("passes an abort signal and shows an explicit retry instead of an empty inventory", async () => {
+    const user = userEvent.setup();
+    listMock.mockRejectedValueOnce(new Error("list failed"));
+
+    render(<CredentialsPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("list failed");
+    expect(screen.queryByText("credentials.empty")).not.toBeInTheDocument();
+    expect(screen.queryByText("common.all 0")).not.toBeInTheDocument();
+    expect(screen.queryByText("Prod MySQL")).not.toBeInTheDocument();
+    expect(listMock).toHaveBeenCalledWith("test-token", expect.any(AbortSignal));
+
+    listMock.mockResolvedValueOnce(credentials);
+    await user.click(screen.getByRole("button", { name: "common.retry" }));
+
+    expect(await screen.findByText("Prod MySQL")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("credentials.references 1")).toBeInTheDocument();
+  });
+
+  it("does not present the previous reference count when a later reload fails", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValueOnce(credentials);
+    render(<CredentialsPage />);
+    expect(await screen.findByText("Prod MySQL")).toBeInTheDocument();
+    expect(screen.getByText("credentials.references 1")).toBeInTheDocument();
+
+    listMock.mockRejectedValueOnce(new Error("reload failed"));
+    await user.click(screen.getAllByRole("button", { name: "common.delete" })[0]);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("reload failed");
+    expect(screen.queryByText("Prod MySQL")).not.toBeInTheDocument();
+    expect(screen.queryByText("credentials.references 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("common.all 0")).not.toBeInTheDocument();
+    expect(screen.queryByText("credentials.empty")).not.toBeInTheDocument();
+  });
+
+  it("opens named reference dialogs from zero and positive counts and restores focus", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue(credentials);
+    render(
+      <MemoryRouter>
+        <CredentialsPage />
+      </MemoryRouter>,
+    );
+
+    const zero = await screen.findByRole("button", { name: "credentials.referencesOpen:Docker Socket:0" });
+    const positive = screen.getByRole("button", { name: "credentials.referencesOpen:Prod MySQL:2" });
+    expect(zero).toBeEnabled();
+    expect(positive).toBeEnabled();
+
+    positive.focus();
+    await user.keyboard("{Enter}");
+
+    const dialog = await screen.findByRole("dialog", { name: "credentials.referencesTitle:Prod MySQL" });
+    expect(dialog).toHaveAccessibleDescription("credentials.referencesDescription");
+    expect(await screen.findByRole("link", { name: "credentials.referencesPolicyLink:Nightly:11" })).toHaveAttribute(
+      "href",
+      "/app/policies?policyId=11",
+    );
+    expect(screen.getByRole("link", { name: "credentials.referencesPolicyLink:Hourly:12" })).toHaveAttribute(
+      "href",
+      "/app/policies?policyId=12",
+    );
+    expect(listReferencesMock).toHaveBeenCalledWith(
+      "test-token",
+      1,
+      { page: 1, pageSize: 20 },
+      expect.any(AbortSignal),
+    );
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    await user.tab();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await user.tab({ shift: true });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(positive).toHaveFocus();
+  });
+
+  it("does not mount or redirect while auth is transitioning", () => {
+    authState.authTransitioning = true;
+    listMock.mockReturnValue(new Promise(() => undefined));
+    render(pageSurface());
+
+    expect(screen.queryByRole("heading", { name: "credentials.pageTitle" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Overview destination")).not.toBeInTheDocument();
+    expect(listMock).not.toHaveBeenCalled();
+    expect(listReferencesMock).not.toHaveBeenCalled();
   });
 });

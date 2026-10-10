@@ -191,6 +191,7 @@ function CredentialEditorSession({
       <Input
         id={`credential-field-${field.key}`}
         type="password"
+        aria-describedby={isEditing ? `credential-password-impact-${field.key}` : undefined}
         placeholder={
           isEditing
             ? t("credentials.leaveEmptyToKeep")
@@ -201,11 +202,11 @@ function CredentialEditorSession({
           handleFieldChange(field.key, event.target.value)
         }
       />
-      {isEditing && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("credentials.leaveEmptyToKeep")}
+      {isEditing ? (
+        <p id={`credential-password-impact-${field.key}`} className="mt-1 text-xs text-muted-foreground">
+          {t("credentials.referencesPasswordImpact")}
         </p>
-      )}
+      ) : null}
     </div>
   );
 

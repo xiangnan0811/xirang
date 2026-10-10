@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -525,4 +529,489 @@ func TestAppCredentialUpdateCascadeUserOverride(t *testing.T) {
 
 func uintPtr(v uint) *uint {
 	return &v
+}
+
+type appCredentialReferencesTestEnvelope struct {
+	Code     int                              `json:"code"`
+	Message  string                           `json:"message"`
+	Data     []appCredentialReferenceResponse `json:"data"`
+	Total    int64                            `json:"total"`
+	Page     int                              `json:"page"`
+	PageSize int                              `json:"page_size"`
+}
+
+func seedReferenceCredential(t *testing.T, db *gorm.DB, name, config string) model.AppCredential {
+	t.Helper()
+	credential := model.AppCredential{
+		Name:   name,
+		Type:   "mysql",
+		Config: config,
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&credential).Error; err != nil {
+		t.Fatalf("create reference credential: %v", err)
+	}
+	return credential
+}
+
+func seedReferencePolicy(t *testing.T, db *gorm.DB, name string, credentialID *uint, appProfile, preHook, postHook string) model.Policy {
+	t.Helper()
+	policy := model.Policy{
+		Name:            name,
+		SourcePath:      "/src",
+		TargetPath:      "/dst",
+		CronSpec:        "0 0 * * *",
+		AppProfile:      appProfile,
+		AppCredentialID: credentialID,
+		PreHook:         preHook,
+		PostHook:        postHook,
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&policy).Error; err != nil {
+		t.Fatalf("create reference policy: %v", err)
+	}
+	return policy
+}
+
+func requestCredentialReferences(t *testing.T, router *gin.Engine, path string) (*httptest.ResponseRecorder, appCredentialReferencesTestEnvelope) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	var envelope appCredentialReferencesTestEnvelope
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode credential references response: %v; body=%s", err, resp.Body.String())
+	}
+	return resp, envelope
+}
+
+func isFullCredentialOrPolicyDestination(dest interface{}) bool {
+	typ := reflect.TypeOf(dest)
+	for typ != nil && (typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice) {
+		typ = typ.Elem()
+	}
+	return typ == reflect.TypeOf(model.AppCredential{}) || typ == reflect.TypeOf(model.Policy{})
+}
+
+func TestAppCredentialReferencesPaginationAndSafeProjection(t *testing.T) {
+	db := setupCredentialTestDB(t)
+	credential := seedReferenceCredential(t, db, "reference-target", "enc:v2:FAKE_INVALID_CREDENTIAL_CIPHERTEXT_FOR_TEST_ONLY")
+	otherCredential := seedReferenceCredential(t, db, "reference-other", `{}`)
+	const preHookSecret = "enc:v2:FAKE_POLICY_PRE_HOOK_CIPHERTEXT_FOR_TEST_ONLY"
+	const postHookSecret = "enc:v2:FAKE_POLICY_POST_HOOK_CIPHERTEXT_FOR_TEST_ONLY"
+
+	policyIDs := make([]uint, 0, 45)
+	for i := 1; i <= 45; i++ {
+		appProfile := ""
+		preHook, postHook := "", ""
+		if i == 1 {
+			appProfile = "mysql"
+			preHook, postHook = preHookSecret, postHookSecret
+		}
+		policy := seedReferencePolicy(t, db, fmt.Sprintf("reference-policy-%02d", i), uintPtr(credential.ID), appProfile, preHook, postHook)
+		policyIDs = append(policyIDs, policy.ID)
+	}
+	seedReferencePolicy(t, db, "other-credential-policy", uintPtr(otherCredential.ID), "mysql", "", "")
+
+	r := setupCredentialRouter(db)
+	h := NewAppCredentialHandler(db)
+	r.GET("/app-credentials/:id/references", h.References)
+	callbackName := "test:app-credential-references-reject-full-model-destination"
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || !isFullCredentialOrPolicyDestination(tx.Statement.Dest) {
+			return
+		}
+		_ = tx.AddError(fmt.Errorf("reference endpoint read a full credential or policy model"))
+	}); err != nil {
+		t.Fatalf("register full-model destination callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Callback().Query().Remove(callbackName)
+	})
+	_, defaultPage := requestCredentialReferences(t, r, fmt.Sprintf("/app-credentials/%d/references", credential.ID))
+	if defaultPage.Total != 45 || defaultPage.Page != 1 || defaultPage.PageSize != 20 ||
+		len(defaultPage.Data) != 20 || defaultPage.Data[0].ID != policyIDs[44] {
+		t.Fatalf("default reference pagination=%+v, want newest IDs first", defaultPage)
+	}
+
+	for _, testCase := range []struct {
+		page     int
+		wantIDs  []uint
+		wantSize int
+	}{
+		{page: 1, wantIDs: policyIDs[:20], wantSize: 20},
+		{page: 2, wantIDs: policyIDs[20:40], wantSize: 20},
+		{page: 3, wantIDs: policyIDs[40:], wantSize: 5},
+		{page: 4, wantIDs: []uint{}, wantSize: 0},
+	} {
+		path := fmt.Sprintf(
+			"/app-credentials/%d/references?page=%d&page_size=20&sort_by=id&sort_order=asc",
+			credential.ID, testCase.page,
+		)
+		resp, envelope := requestCredentialReferences(t, r, path)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("page %d status=%d body=%s", testCase.page, resp.Code, resp.Body.String())
+		}
+		if envelope.Code != http.StatusOK || envelope.Message != "ok" ||
+			envelope.Total != 45 || envelope.Page != testCase.page || envelope.PageSize != 20 {
+			t.Fatalf("page %d envelope=%+v", testCase.page, envelope)
+		}
+		if len(envelope.Data) != testCase.wantSize {
+			t.Fatalf("page %d returned %d items, want %d", testCase.page, len(envelope.Data), testCase.wantSize)
+		}
+		for i, item := range envelope.Data {
+			if item.ID != testCase.wantIDs[i] || item.Name != fmt.Sprintf("reference-policy-%02d", int(testCase.wantIDs[i])) {
+				t.Fatalf("page %d item %d=%+v want id=%d", testCase.page, i, item, testCase.wantIDs[i])
+			}
+		}
+		if strings.Contains(resp.Body.String(), preHookSecret) ||
+			strings.Contains(resp.Body.String(), postHookSecret) ||
+			strings.Contains(resp.Body.String(), "FAKE_INVALID_CREDENTIAL") ||
+			strings.Contains(resp.Body.String(), "config") ||
+			strings.Contains(resp.Body.String(), "pre_hook") ||
+			strings.Contains(resp.Body.String(), "post_hook") {
+			t.Fatalf("reference response leaked secret fields: %s", resp.Body.String())
+		}
+	}
+
+	added := seedReferencePolicy(t, db, "reference-policy-46", uintPtr(credential.ID), "", "", "")
+	_, afterAdd := requestCredentialReferences(t, r, fmt.Sprintf("/app-credentials/%d/references", credential.ID))
+	if afterAdd.Total != 46 {
+		t.Fatalf("total after adding reference=%d, want 46", afterAdd.Total)
+	}
+	if err := db.Model(&model.Policy{}).Where("id = ?", added.ID).Update("app_credential_id", otherCredential.ID).Error; err != nil {
+		t.Fatalf("rebind reference policy: %v", err)
+	}
+	_, afterRebind := requestCredentialReferences(t, r, fmt.Sprintf("/app-credentials/%d/references", credential.ID))
+	if afterRebind.Total != 45 {
+		t.Fatalf("total after rebinding reference=%d, want 45", afterRebind.Total)
+	}
+	if err := db.Delete(&model.Policy{}, policyIDs[0]).Error; err != nil {
+		t.Fatalf("delete reference policy: %v", err)
+	}
+	_, afterDelete := requestCredentialReferences(t, r, fmt.Sprintf("/app-credentials/%d/references", credential.ID))
+	if afterDelete.Total != 44 {
+		t.Fatalf("total after deleting reference=%d, want 44", afterDelete.Total)
+	}
+}
+
+func TestAppCredentialReferencesDoNotAuthorizeDelete(t *testing.T) {
+	db := setupCredentialTestDB(t)
+	credential := seedReferenceCredential(t, db, "delete-recheck", `{}`)
+	r := setupCredentialRouter(db)
+	h := NewAppCredentialHandler(db)
+	r.GET("/app-credentials/:id/references", h.References)
+	r.DELETE("/app-credentials/:id", h.Delete)
+
+	_, before := requestCredentialReferences(t, r, fmt.Sprintf("/app-credentials/%d/references", credential.ID))
+	if before.Total != 0 || before.Data == nil {
+		t.Fatalf("initial references=%+v, want empty successful page", before)
+	}
+	seedReferencePolicy(t, db, "delete-recheck-policy", uintPtr(credential.ID), "", "", "")
+
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/app-credentials/%d", credential.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("delete status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var remaining int64
+	if err := db.Table("app_credentials").Where("id = ?", credential.ID).Count(&remaining).Error; err != nil {
+		t.Fatalf("check credential after rejected delete: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("credential count after rejected delete=%d, want 1", remaining)
+	}
+}
+
+func TestAppCredentialReferencesValidationAndDatabaseFailures(t *testing.T) {
+	db := setupCredentialTestDB(t)
+	credential := seedReferenceCredential(t, db, "reference-validation", `{}`)
+	r := setupCredentialRouter(db)
+	h := NewAppCredentialHandler(db)
+	r.GET("/app-credentials/:id/references", h.References)
+
+	for _, testCase := range []struct {
+		name    string
+		path    string
+		want    int
+		message string
+	}{
+		{name: "zero id", path: "/app-credentials/0/references", want: http.StatusBadRequest, message: "ID 格式错误"},
+		{name: "negative id", path: "/app-credentials/-1/references", want: http.StatusBadRequest, message: "ID 格式错误"},
+		{name: "non numeric id", path: "/app-credentials/nope/references", want: http.StatusBadRequest, message: "ID 格式错误"},
+		{name: "overflow id", path: "/app-credentials/18446744073709551616/references", want: http.StatusBadRequest, message: "ID 格式错误"},
+		{name: "unknown credential", path: "/app-credentials/999/references", want: http.StatusNotFound, message: "凭据不存在"},
+	} {
+		resp, _ := requestCredentialReferences(t, r, testCase.path)
+		if resp.Code != testCase.want || !strings.Contains(resp.Body.String(), testCase.message) {
+			t.Fatalf("%s status=%d body=%s", testCase.name, resp.Code, resp.Body.String())
+		}
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	overflowPath := fmt.Sprintf("/app-credentials/%d/references?page=%d&page_size=500", credential.ID, maxInt)
+	resp, _ := requestCredentialReferences(t, r, overflowPath)
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), "分页参数不合法") {
+		t.Fatalf("overflow pagination status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	offsetOverflowPath := fmt.Sprintf("/app-credentials/%d/references?limit=1&offset=%d", credential.ID, maxInt)
+	resp, _ = requestCredentialReferences(t, r, offsetOverflowPath)
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), "分页参数不合法") {
+		t.Fatalf("offset overflow pagination status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		query    string
+		wantSize int
+	}{
+		{name: "invalid page size uses default", query: "?page_size=501", wantSize: 20},
+		{name: "maximum page size accepted", query: "?page_size=500", wantSize: 500},
+	} {
+		resp, envelope := requestCredentialReferences(t, r, fmt.Sprintf("/app-credentials/%d/references%s", credential.ID, testCase.query))
+		if resp.Code != http.StatusOK || envelope.PageSize != testCase.wantSize || envelope.Total != 0 || envelope.Data == nil {
+			t.Fatalf("%s status=%d envelope=%+v body=%s", testCase.name, resp.Code, envelope, resp.Body.String())
+		}
+		if !strings.Contains(resp.Body.String(), `"data":[]`) {
+			t.Fatalf("%s returned non-empty/null data: %s", testCase.name, resp.Body.String())
+		}
+	}
+
+	cancelledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	cancelledRequest := httptest.NewRequestWithContext(
+		cancelledContext,
+		http.MethodGet,
+		fmt.Sprintf("/app-credentials/%d/references", credential.ID),
+		nil,
+	)
+	cancelledResponse := httptest.NewRecorder()
+	r.ServeHTTP(cancelledResponse, cancelledRequest)
+	if cancelledResponse.Code != http.StatusInternalServerError {
+		t.Fatalf("cancelled request status=%d body=%s", cancelledResponse.Code, cancelledResponse.Body.String())
+	}
+
+	dbWithMissingCredentialTable := setupCredentialTestDB(t)
+	missingTableCredential := seedReferenceCredential(t, dbWithMissingCredentialTable, "missing-credential-table", `{}`)
+	if err := dbWithMissingCredentialTable.Migrator().DropTable(&model.AppCredential{}); err != nil {
+		t.Fatalf("drop app credential table: %v", err)
+	}
+	missingTableRouter := setupCredentialRouter(dbWithMissingCredentialTable)
+	missingTableRouter.GET("/app-credentials/:id/references", NewAppCredentialHandler(dbWithMissingCredentialTable).References)
+	resp, _ = requestCredentialReferences(t, missingTableRouter, fmt.Sprintf("/app-credentials/%d/references", missingTableCredential.ID))
+	if resp.Code != http.StatusInternalServerError || strings.Contains(resp.Body.String(), "no such table") {
+		t.Fatalf("missing credential table status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	dbWithMissingPolicyTable := setupCredentialTestDB(t)
+	missingPolicyCredential := seedReferenceCredential(t, dbWithMissingPolicyTable, "missing-policy-table", `{}`)
+	if err := dbWithMissingPolicyTable.Migrator().DropTable(&model.Policy{}); err != nil {
+		t.Fatalf("drop policy table: %v", err)
+	}
+	missingPolicyRouter := setupCredentialRouter(dbWithMissingPolicyTable)
+	missingPolicyRouter.GET("/app-credentials/:id/references", NewAppCredentialHandler(dbWithMissingPolicyTable).References)
+	resp, _ = requestCredentialReferences(t, missingPolicyRouter, fmt.Sprintf("/app-credentials/%d/references", missingPolicyCredential.ID))
+	if resp.Code != http.StatusInternalServerError || strings.Contains(resp.Body.String(), "no such table") {
+		t.Fatalf("missing policy table status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestAppCredentialReferencesListDatabaseFailureIsGeneric(t *testing.T) {
+	db := setupCredentialTestDB(t)
+	credential := seedReferenceCredential(t, db, "reference-list-failure", `{}`)
+	seedReferencePolicy(t, db, "reference-list-failure-policy", uintPtr(credential.ID), "", "", "")
+
+	callbackName := "test:app-credential-reference-list-failure"
+	injected := fmt.Errorf("FAKE_REFERENCE_LIST_QUERY_FAILURE_SQL_SENTINEL")
+	countSeen := false
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Table != "policies" {
+			return
+		}
+		destType := reflect.TypeOf(tx.Statement.Dest)
+		if destType == reflect.TypeOf(new(int64)) {
+			countSeen = true
+			return
+		}
+		if destType != reflect.TypeOf(&[]appCredentialReferenceResponse{}) {
+			return
+		}
+		_ = tx.AddError(injected)
+	}); err != nil {
+		t.Fatalf("register list failure callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Callback().Query().Remove(callbackName)
+	})
+
+	r := setupCredentialRouter(db)
+	r.GET("/app-credentials/:id/references", NewAppCredentialHandler(db).References)
+	resp, _ := requestCredentialReferences(t, r, fmt.Sprintf("/app-credentials/%d/references", credential.ID))
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if !countSeen {
+		t.Fatal("reference list failure did not observe a successful count query")
+	}
+	if strings.Contains(resp.Body.String(), injected.Error()) || strings.Contains(resp.Body.String(), "SELECT") {
+		t.Fatalf("list database failure leaked SQL or sentinel: %s", resp.Body.String())
+	}
+}
+
+func TestAppCredentialReferenceCountFailuresAreNotReportedAsZero(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "list", method: http.MethodGet, path: "/app-credentials"},
+		{name: "get", method: http.MethodGet, path: "/app-credentials/1"},
+		{name: "delete", method: http.MethodDelete, path: "/app-credentials/1"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := setupCredentialTestDB(t)
+			seedReferenceCredential(t, db, "count-failure", `{}`)
+			if err := db.Migrator().DropTable(&model.Policy{}); err != nil {
+				t.Fatalf("drop policy table: %v", err)
+			}
+			r := setupCredentialRouter(db)
+			h := NewAppCredentialHandler(db)
+			r.GET("/app-credentials", h.List)
+			r.GET("/app-credentials/:id", h.Get)
+			r.DELETE("/app-credentials/:id", h.Delete)
+			req := httptest.NewRequest(testCase.method, testCase.path, nil)
+			resp := httptest.NewRecorder()
+			r.ServeHTTP(resp, req)
+			if resp.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			if strings.Contains(resp.Body.String(), `"reference_count":0`) {
+				t.Fatalf("count failure was reported as zero: %s", resp.Body.String())
+			}
+			var remaining int64
+			if err := db.Table("app_credentials").Where("id = ?", 1).Count(&remaining).Error; err != nil {
+				t.Fatalf("check credential after count failure: %v", err)
+			}
+			if remaining != 1 {
+				t.Fatalf("credential count=%d after failed %s, want 1", remaining, testCase.name)
+			}
+		})
+	}
+}
+
+func TestAppCredentialGetAndDeleteDatabaseFailuresAreNotNotFound(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			db := setupCredentialTestDB(t)
+			seedReferenceCredential(t, db, "database-failure", `{}`)
+			if err := db.Migrator().DropTable(&model.AppCredential{}); err != nil {
+				t.Fatalf("drop app credential table: %v", err)
+			}
+			r := setupCredentialRouter(db)
+			h := NewAppCredentialHandler(db)
+			r.GET("/app-credentials/:id", h.Get)
+			r.DELETE("/app-credentials/:id", h.Delete)
+			req := httptest.NewRequest(method, "/app-credentials/1", nil)
+			resp := httptest.NewRecorder()
+			r.ServeHTTP(resp, req)
+			if resp.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			if strings.Contains(resp.Body.String(), "凭据不存在") {
+				t.Fatalf("database failure was reported as not found: %s", resp.Body.String())
+			}
+		})
+	}
+}
+
+func TestAppCredentialUpdateReferenceCountFailureRollsBackTransaction(t *testing.T) {
+	db := setupCredentialTestDB(t)
+	oldConfig := map[string]interface{}{
+		"host":     "old-host",
+		"port":     "3306",
+		"user":     "root",
+		"password": "FAKE_OLD_UPDATE_PASSWORD_FOR_TEST_ONLY",
+	}
+	oldConfigJSON, err := json.Marshal(oldConfig)
+	if err != nil {
+		t.Fatalf("marshal old credential config: %v", err)
+	}
+	credential := seedReferenceCredential(t, db, "update-before", string(oldConfigJSON))
+	renderedPre, renderedPost, err := profile.RenderHooks("mysql", oldConfig)
+	if err != nil {
+		t.Fatalf("RenderHooks: %v", err)
+	}
+	policy := seedReferencePolicy(t, db, "update-before-policy", uintPtr(credential.ID), "mysql", renderedPre, renderedPost)
+
+	callbackName := "test:app-credential-reference-count-failure"
+	injected := fmt.Errorf("FAKE_REFERENCE_COUNT_FAILURE_FOR_TEST_ONLY")
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Table != "policies" {
+			return
+		}
+		destType := reflect.TypeOf(tx.Statement.Dest)
+		if destType == nil || destType.String() != "*int64" {
+			return
+		}
+		_ = tx.AddError(injected)
+	}); err != nil {
+		t.Fatalf("register count failure callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Callback().Query().Remove(callbackName)
+	})
+
+	r := setupCredentialRouter(db)
+	h := NewAppCredentialHandler(db)
+	r.PUT("/app-credentials/:id", h.Update)
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/app-credentials/1",
+		strings.NewReader(`{"type":"mysql","name":"update-after","host":"new-host"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var stored model.AppCredential
+	if err := db.First(&stored, 1).Error; err != nil {
+		t.Fatalf("load credential after rollback: %v", err)
+	}
+	if stored.Name != "update-before" {
+		t.Fatalf("credential name after rollback=%q, want update-before", stored.Name)
+	}
+	if !strings.Contains(stored.Config, "FAKE_OLD_UPDATE_PASSWORD_FOR_TEST_ONLY") {
+		t.Fatalf("credential config after rollback lost old password: %q", stored.Config)
+	}
+	var storedPolicy model.Policy
+	if err := db.First(&storedPolicy, policy.ID).Error; err != nil {
+		t.Fatalf("load policy after rollback: %v", err)
+	}
+	if storedPolicy.PreHook != renderedPre || storedPolicy.PostHook != renderedPost {
+		t.Fatalf("policy hooks changed after rollback: pre=%q post=%q", storedPolicy.PreHook, storedPolicy.PostHook)
+	}
+
+	if err := db.Callback().Query().Remove(callbackName); err != nil {
+		t.Fatalf("remove count failure callback: %v", err)
+	}
+	successReq := httptest.NewRequest(
+		http.MethodPut,
+		"/app-credentials/1",
+		strings.NewReader(`{"type":"mysql","name":"update-after-success","host":"new-host","port":"3306","user":"root","password":"FAKE_NEW_UPDATE_PASSWORD_FOR_TEST_ONLY"}`),
+	)
+	successReq.Header.Set("Content-Type", "application/json")
+	successResp := httptest.NewRecorder()
+	r.ServeHTTP(successResp, successReq)
+	if successResp.Code != http.StatusOK {
+		t.Fatalf("successful cascade status=%d body=%s", successResp.Code, successResp.Body.String())
+	}
+	var cascadedPolicy model.Policy
+	if err := db.First(&cascadedPolicy, policy.ID).Error; err != nil {
+		t.Fatalf("load policy after successful cascade: %v", err)
+	}
+	if cascadedPolicy.PreHook != "" || cascadedPolicy.PostHook != "" {
+		t.Fatalf("successful cascade should clear rendered hooks, pre=%q post=%q", cascadedPolicy.PreHook, cascadedPolicy.PostHook)
+	}
 }
