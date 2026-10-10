@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useAlertsContext } from "@/context/alerts-context.hooks";
 import { useIntegrationsContext } from "@/context/integrations-context.hooks";
@@ -291,6 +291,20 @@ export function NotificationsPage() {
           </>
         }
       />
+
+      {role === "admin" ? (
+        <nav aria-label={t("notifications.configNavLabel")} className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/app/settings?tab=channels">{t("notifications.configChannels")}</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/app/settings?tab=silences">{t("notifications.configSilences")}</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/app/settings?tab=escalation">{t("notifications.configEscalation")}</Link>
+          </Button>
+        </nav>
+      ) : null}
 
       <StatCardsSection
         className="animate-slide-up [animation-delay:150ms]"

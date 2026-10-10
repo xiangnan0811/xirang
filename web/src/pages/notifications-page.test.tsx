@@ -1,12 +1,20 @@
 import "@testing-library/jest-dom/vitest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode } from "react";
 import { render as rtlRender, screen, waitFor, within, act, type RenderOptions } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
+import {
+  beginAuthTransitionBarrier,
+  bumpAuthSessionGeneration,
+  clearAuthTransitionBarrier,
+  isAuthTransitionActive,
+  releaseAuthTransitionBarrier,
+  rememberAuthIdentity,
+} from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
-import type { AlertDeliveryStats } from "@/types/domain";
+import type { AlertDeliveryStats, NodeRecord, Silence } from "@/types/domain";
 import type { TaskFailureSummary } from "@/lib/api/tasks-api";
 import { NotificationsPage } from "./notifications-page";
 import { AlertCenter } from "./notifications/alert-center";
@@ -32,6 +40,8 @@ const {
   mockRequestTaskManualTriggerCredentialGrant,
   mockGetAlerts,
   mockGetTaskFailureSummary,
+  mockGetNode,
+  mockCreateSilence,
   useStepUpActionMock,
   oneShotStepUpOptions,
   authRef,
@@ -56,6 +66,8 @@ const {
     mockRequestTaskManualTriggerCredentialGrant: vi.fn(),
     mockGetAlerts: vi.fn(),
     mockGetTaskFailureSummary: vi.fn(),
+    mockGetNode: vi.fn(),
+    mockCreateSilence: vi.fn(),
     useStepUpActionMock: stepUpHookMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
     authRef: {
@@ -149,6 +161,8 @@ vi.mock("@/lib/api/client", () => ({
     requestTaskManualTriggerCredentialGrant: mockRequestTaskManualTriggerCredentialGrant,
     getAlerts: mockGetAlerts,
     getTaskFailureSummary: mockGetTaskFailureSummary,
+    getNode: mockGetNode,
+    createSilence: mockCreateSilence,
     getAlert: vi.fn().mockRejectedValue(new Error("not found")),
     // Lazy-fetched for the "+N 条同类" badge when a delivery panel opens.
     // Default resolves with count=1 so badge never renders in existing
@@ -242,6 +256,9 @@ function setupDefaultMocks() {
   mockRequestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 1, status: "active" });
   mockGetAlerts.mockResolvedValue([]);
   mockGetTaskFailureSummary.mockResolvedValue({ failedTasks: 0, windowHours: 24 });
+  // Resolves even if the caller aborts. Identity generation has to drop the stale result.
+  mockGetNode.mockImplementation(async (_token: string, nodeId: number) => matchedNode(nodeId, `node-${nodeId}`));
+  mockCreateSilence.mockResolvedValue(createdSilence);
 }
 
 /* ---------- context builder ---------- */
@@ -484,14 +501,103 @@ function heroCountBadge(label: string) {
 
 /* ---------- tests ---------- */
 
+const createdSilence: Silence = {
+  id: 9,
+  name: "created",
+  matchNodeId: 42,
+  matchCategory: "XR-EXEC",
+  matchTags: [],
+  startsAt: "2026-10-10T00:00:00.000Z",
+  endsAt: "2026-10-10T01:00:00.000Z",
+  createdBy: 1,
+  note: "",
+  createdAt: "",
+  updatedAt: "",
+};
+
+function matchedNode(id: number, name: string): NodeRecord {
+  return {
+    id,
+    name,
+    host: "10.0.0.8",
+    address: "10.0.0.8",
+    ip: "10.0.0.8",
+    port: 22,
+    username: "backup",
+    authType: "key",
+    status: "online",
+    tags: [],
+    lastSeenAt: "",
+    lastBackupAt: "",
+  };
+}
+
+function quickAlert(partial: {
+  id: string;
+  nodeId: number;
+  errorCode: string;
+  message: string;
+  sloId?: number | null;
+}) {
+  return {
+    id: partial.id,
+    nodeName: partial.nodeId > 0 ? `node-${partial.nodeId}` : "platform",
+    nodeId: partial.nodeId,
+    taskId: null,
+    taskRunId: null,
+    sloId: partial.sloId ?? null,
+    policyName: "每日备份",
+    severity: "warning" as const,
+    status: "open" as const,
+    errorCode: partial.errorCode,
+    message: partial.message,
+    triggeredAt: "2026-10-10 01:00:00",
+    retryable: false,
+  };
+}
+
+function showAlerts(items: ReturnType<typeof quickAlert>[]) {
+  mockGetAlertsPaginated.mockResolvedValue({
+    items,
+    total: items.length,
+    page: 1,
+    pageSize: 20,
+  });
+}
+
+function bumpAlertRefresh(view: { rerender: (ui: ReactElement) => void }, version: number) {
+  sharedRef.current = { ...sharedRef.current, refreshVersion: version };
+  view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+}
+
+function rowMore(surface: HTMLElement, message: string) {
+  const text = within(surface).getByText(message);
+  const row = text.closest("tr") ?? text.closest("div.rounded-lg");
+  if (!(row instanceof HTMLElement)) throw new Error(`missing row for ${message}`);
+  return within(row).getByRole("button", { name: "更多操作" });
+}
+
+async function chooseSilence(user: { click: (target: Element) => Promise<void> }, more: HTMLElement) {
+  await user.click(more);
+  await user.click(await screen.findByRole("menuitem", { name: "静音此类告警" }));
+}
+
+function setAuth(next: { token: string | null; role: "admin" | "operator" | "viewer" | null }) {
+  authRef.current = { ...authRef.current, token: next.token, role: next.role };
+  rememberAuthIdentity(next.token, next.role);
+  bumpAuthSessionGeneration();
+}
+
 describe("NotificationsPage", () => {
   beforeEach(() => {
+    if (isAuthTransitionActive()) clearAuthTransitionBarrier();
     Object.defineProperty(window, "localStorage", {
       configurable: true,
       value: createMemoryStorage(),
     });
     window.localStorage.clear();
     authRef.current = { token: "test-token", role: "admin" };
+    rememberAuthIdentity("test-token", "admin");
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     mockGetAlertsPaginated.mockReset();
@@ -508,8 +614,14 @@ describe("NotificationsPage", () => {
     useStepUpActionMock.lastOptions = undefined;
     mockGetAlerts.mockReset();
     mockGetTaskFailureSummary.mockReset();
+    mockGetNode.mockReset();
+    mockCreateSilence.mockReset();
     setupDefaultMocks();
     createContext();
+  });
+
+  afterEach(() => {
+    if (isAuthTransitionActive()) clearAuthTransitionBarrier();
   });
 
   it("preserves unresolved alert selection across an external refresh", async () => {
@@ -2091,5 +2203,409 @@ describe("NotificationsPage", () => {
       "href",
       "/app/settings?tab=account",
     );
+  });
+
+  it("links admins to channel, silence, and escalation settings", () => {
+    render(<NotificationsPage />);
+    const hero = screen.getByRole("heading", { name: "通知与告警" });
+    const nav = screen.getByRole("navigation", { name: "告警配置" });
+    expect(hero.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(within(nav).getByRole("link", { name: "通知渠道" })).toHaveAttribute("href", "/app/settings?tab=channels");
+    expect(within(nav).getByRole("link", { name: "静音规则" })).toHaveAttribute("href", "/app/settings?tab=silences");
+    expect(within(nav).getByRole("link", { name: "升级策略" })).toHaveAttribute("href", "/app/settings?tab=escalation");
+  });
+
+  it.each(["operator", "viewer"] as const)("hides silence settings and the silence action from %s", async (role) => {
+    authRef.current = { token: "test-token", role };
+    const user = userEvent.setup();
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "告警配置" })).not.toBeInTheDocument();
+    const { mobile, desktop } = alertSurfaces();
+    await user.click(within(mobile).getAllByRole("button", { name: "更多操作" })[0]);
+    expect(screen.queryByRole("menuitem", { name: "静音此类告警" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.click(within(desktop).getAllByRole("button", { name: "更多操作" })[0]);
+    expect(screen.queryByRole("menuitem", { name: "静音此类告警" })).not.toBeInTheDocument();
+    expect(mockGetNode).not.toHaveBeenCalled();
+    expect(mockCreateSilence).not.toHaveBeenCalled();
+    expect(mockAckAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlert).not.toHaveBeenCalled();
+  });
+
+  it("does not open quick silence unless the core identity is still admin", async () => {
+    const user = userEvent.setup();
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    rememberAuthIdentity("test-token", "viewer");
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "静音此类告警" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockGetNode).not.toHaveBeenCalled();
+    expect(mockCreateSilence).not.toHaveBeenCalled();
+  });
+
+  it("does not open quick silence during an auth transition", async () => {
+    const user = userEvent.setup();
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    let barrier = 0;
+    act(() => {
+      barrier = beginAuthTransitionBarrier();
+    });
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "静音此类告警" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockGetNode).not.toHaveBeenCalled();
+    expect(mockCreateSilence).not.toHaveBeenCalled();
+    act(() => {
+      releaseAuthTransitionBarrier(barrier);
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("creates one fixed silence from the table and replaces the draft from the card", async () => {
+    const user = userEvent.setup();
+    showAlerts([
+      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-vrfy", nodeId: 7, errorCode: "XR-VRFY-9", message: "校验失败" }),
+    ]);
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    await waitFor(() => expect(mockGetAlertUnreadCount.mock.calls.length).toBeGreaterThan(0));
+    const unreadCalls = mockGetAlertUnreadCount.mock.calls.length;
+    const listCalls = mockGetAlertsPaginated.mock.calls.length;
+    const { mobile, desktop } = alertSurfaces();
+
+    const desktopMore = rowMore(desktop, "执行失败");
+    await chooseSilence(user, desktopMore);
+    const first = await screen.findByRole("dialog");
+    expect(within(first).getByText("#42")).toBeInTheDocument();
+    expect(within(first).getByText("XR-EXEC")).toBeInTheDocument();
+    expect(await within(first).findByText("node-42")).toBeInTheDocument();
+    expect(within(first).getByText("此节点的这一类告警都会静音，不是仅当前这一条。")).toBeInTheDocument();
+    expect(within(first).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(mockGetNode).toHaveBeenCalledWith("test-token", 42, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    await user.click(within(first).getByRole("button", { name: "创建" }));
+    expect(mockCreateSilence).not.toHaveBeenCalled();
+    await user.type(within(first).getByLabelText("名称"), "old-draft");
+    await user.click(within(first).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(desktopMore).toHaveFocus());
+    expect(screen.queryByDisplayValue("old-draft")).not.toBeInTheDocument();
+
+    const mobileMore = rowMore(mobile, "校验失败");
+    await chooseSilence(user, mobileMore);
+    const replaced = await screen.findByRole("dialog");
+    expect(await within(replaced).findByLabelText("名称")).toHaveValue("");
+    expect(within(replaced).getByText("#7")).toBeInTheDocument();
+    expect(within(replaced).getByText("XR-VRFY")).toBeInTheDocument();
+    expect(within(replaced).queryByDisplayValue("old-draft")).not.toBeInTheDocument();
+    expect(mockCreateSilence).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(mobileMore).toHaveFocus());
+
+    await chooseSilence(user, desktopMore);
+    const ready = await screen.findByRole("dialog");
+    expect(await within(ready).findByLabelText("名称")).toHaveValue("");
+    await user.type(within(ready).getByLabelText("名称"), "quiet-exec");
+    await user.click(within(ready).getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(mockCreateSilence).toHaveBeenCalledTimes(1));
+    const payload = mockCreateSilence.mock.calls[0]?.[1] as { endsAt: string; startsAt: string; matchNodeId: number };
+    expect(payload).toEqual(expect.objectContaining({
+      name: "quiet-exec",
+      matchNodeId: 42,
+      matchCategory: "XR-EXEC",
+      matchTags: [],
+    }));
+    expect(payload.matchNodeId).not.toBeNull();
+    expect(Date.parse(payload.endsAt) - Date.parse(payload.startsAt)).toBe(3_600_000);
+    expect(mockAckAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlertsBulk).not.toHaveBeenCalled();
+    expect(mockGetAlertUnreadCount).toHaveBeenCalledTimes(unreadCalls);
+    expect(mockGetAlertsPaginated).toHaveBeenCalledTimes(listCalls);
+    expect(toastSuccessMock.mock.calls.some((call) => String(call[0]).includes("静默规则已创建"))).toBe(true);
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent("已创建静音规则。它只影响之后匹配的通知，不会确认或解决当前告警。");
+    expect(within(notice).getByRole("link", { name: "查看静音规则" })).toHaveAttribute("href", "/app/settings?tab=silences");
+    await waitFor(() => expect(desktopMore).toHaveFocus());
+  });
+
+  it("explains unsupported sources without reading a node or creating a rule", async () => {
+    const user = userEvent.setup();
+    showAlerts([
+      quickAlert({ id: "alert-platform", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
+      quickAlert({ id: "alert-retired", nodeId: 42, errorCode: "XR-NODE-1", message: "退役节点" }),
+      quickAlert({ id: "alert-unknown", nodeId: 42, errorCode: "XR-SERVICE-DOWN-123", message: "未知来源" }),
+      quickAlert({ id: "alert-slo", nodeId: 42, errorCode: "XR-EXEC-17", message: "SLO 来源", sloId: 4 }),
+      quickAlert({ id: "alert-bad-node", nodeId: -1, errorCode: "XR-EXEC-17", message: "坏节点" }),
+    ]);
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 5 条")).toBeInTheDocument();
+    const { mobile, desktop } = alertSurfaces();
+
+    const platformMore = rowMore(desktop, "平台定时");
+    platformMore.focus();
+    await user.keyboard("{Enter}");
+    const platformItem = await screen.findByRole("menuitem", { name: "静音此类告警" });
+    platformItem.focus();
+    await user.keyboard("{Enter}");
+    const platform = await screen.findByRole("dialog");
+    expect(platform).toHaveAccessibleName("无法快捷静音");
+    expect(platform).toHaveAccessibleDescription("现有快捷规则不能精确限定该平台来源，不会自动创建跨节点静音");
+    expect(within(platform).queryByRole("button", { name: "创建" })).not.toBeInTheDocument();
+    expect(within(platform).getByRole("link", { name: "查看静音规则" })).toHaveAttribute("href", "/app/settings?tab=silences");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(platformMore).toHaveFocus());
+
+    const cases = [
+      ["退役节点", "这个来源不可靠或尚未支持"],
+      ["未知来源", "这个来源不可靠或尚未支持"],
+      ["SLO 来源", "这个来源不可靠或尚未支持"],
+      ["坏节点", "这个节点不可靠"],
+    ] as const;
+    for (const [message, reason] of cases) {
+      const more = rowMore(mobile, message);
+      await chooseSilence(user, more);
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText(reason, { exact: false })).toBeInTheDocument();
+      expect(within(dialog).queryByRole("button", { name: "创建" })).not.toBeInTheDocument();
+      await user.click(within(dialog).getByRole("button", { name: "关闭" }));
+      await waitFor(() => expect(more).toHaveFocus());
+    }
+    expect(mockGetNode).not.toHaveBeenCalled();
+    expect(mockCreateSilence).not.toHaveBeenCalled();
+    expect(mockAckAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlert).not.toHaveBeenCalled();
+  });
+
+  it("keeps the quick draft when a late create arrives after the auth generation changes", async () => {
+    const user = userEvent.setup();
+    const pending = createDeferred<Silence>();
+    mockCreateSilence.mockReturnValueOnce(pending.promise);
+    showAlerts([
+      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+    ]);
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 1 条")).toBeInTheDocument();
+    const more = rowMore(alertSurfaces().desktop, "执行失败");
+    await chooseSilence(user, more);
+    const dialog = await screen.findByRole("dialog");
+    await user.type(await within(dialog).findByLabelText("名称"), "kept");
+    await user.click(within(dialog).getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(mockCreateSilence).toHaveBeenCalledTimes(1));
+
+    bumpAuthSessionGeneration();
+    await act(async () => {
+      pending.resolve(createdSilence);
+    });
+
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/已创建静音规则/)).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("名称")).toHaveValue("kept");
+    expect(mockCreateSilence).toHaveBeenCalledTimes(1);
+    expect(mockAckAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlert).not.toHaveBeenCalled();
+    expect(mockGetAlertUnreadCount.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("does not apply a silence that settles after transition or A→B→A", async () => {
+    const user = userEvent.setup();
+    const pending = createDeferred<Silence>();
+    mockCreateSilence.mockReturnValueOnce(pending.promise);
+    showAlerts([
+      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+    ]);
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 1 条")).toBeInTheDocument();
+    await chooseSilence(user, rowMore(alertSurfaces().desktop, "执行失败"));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(await within(dialog).findByLabelText("名称"), "late");
+    await user.click(within(dialog).getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(mockCreateSilence).toHaveBeenCalledTimes(1));
+
+    let barrier = 0;
+    act(() => {
+      barrier = beginAuthTransitionBarrier();
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    act(() => {
+      releaseAuthTransitionBarrier(barrier);
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByText(/已创建静音规则/)).not.toBeInTheDocument();
+
+    setAuth({ token: "other-token", role: "admin" });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    setAuth({ token: "test-token", role: "admin" });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(await screen.findByText("共 1 条")).toBeInTheDocument();
+    const unreadAfterReturn = mockGetAlertUnreadCount.mock.calls.length;
+    await act(async () => {
+      pending.resolve(createdSilence);
+    });
+
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/已创建静音规则/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockAckAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlertsBulk).not.toHaveBeenCalled();
+    expect(mockGetAlertUnreadCount).toHaveBeenCalledTimes(unreadAfterReturn);
+    expect(mockCreateSilence).toHaveBeenCalledTimes(1);
+
+    await chooseSilence(user, rowMore(alertSurfaces().desktop, "执行失败"));
+    expect(await screen.findByLabelText("名称")).toHaveValue("");
+  });
+
+  it("does not revive a silence when the same token loses admin and returns", async () => {
+    const user = userEvent.setup();
+    const pending = createDeferred<Silence>();
+    mockCreateSilence.mockReturnValueOnce(pending.promise);
+    showAlerts([
+      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+    ]);
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 1 条")).toBeInTheDocument();
+    await waitFor(() => expect(mockGetAlertUnreadCount.mock.calls.length).toBeGreaterThan(0));
+    const unreadCalls = mockGetAlertUnreadCount.mock.calls.length;
+    await chooseSilence(user, rowMore(alertSurfaces().mobile, "执行失败"));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(await within(dialog).findByLabelText("名称"), "downgraded");
+    await user.click(within(dialog).getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(mockCreateSilence).toHaveBeenCalledTimes(1));
+
+    setAuth({ token: "test-token", role: "operator" });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "静音此类告警" })).not.toBeInTheDocument();
+
+    setAuth({ token: "test-token", role: "admin" });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await act(async () => {
+      pending.resolve(createdSilence);
+    });
+
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/已创建静音规则/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockGetAlertUnreadCount).toHaveBeenCalledTimes(unreadCalls);
+    expect(mockAckAlert).not.toHaveBeenCalled();
+    expect(mockResolveAlert).not.toHaveBeenCalled();
+    expect(mockCreateSilence).toHaveBeenCalledTimes(1);
+
+    await chooseSilence(user, rowMore(alertSurfaces().mobile, "执行失败"));
+    expect(await screen.findByLabelText("名称")).toHaveValue("");
+  });
+
+  it("restores silence focus onto the replaced row for both dialogs", async () => {
+    const user = userEvent.setup();
+    showAlerts([
+      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-platform", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
+    ]);
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+
+    const supported = rowMore(alertSurfaces().desktop, "执行失败");
+    await chooseSilence(user, supported);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    bumpAlertRefresh(view, 1);
+    await waitFor(() => {
+      expect(supported.isConnected).toBe(false);
+      expect(document.querySelector('[data-silence-focus-scope] button[data-silence-alert="alert-exec"]')).toBeInstanceOf(HTMLButtonElement);
+    });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-silence-alert", "alert-exec"));
+    expect(supported.isConnected).toBe(false);
+    expect(document.activeElement).not.toBe(supported);
+
+    const explanation = rowMore(alertSurfaces().desktop, "平台定时");
+    await chooseSilence(user, explanation);
+    expect(await screen.findByRole("dialog")).toHaveAccessibleName("无法快捷静音");
+    bumpAlertRefresh(view, 2);
+    await waitFor(() => {
+      expect(explanation.isConnected).toBe(false);
+      expect(document.querySelector('[data-silence-focus-scope] button[data-silence-alert="alert-platform"]')).toBeInstanceOf(HTMLButtonElement);
+    });
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "关闭" }));
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-silence-alert", "alert-platform"));
+    expect(explanation.isConnected).toBe(false);
+    expect(document.activeElement).not.toBe(explanation);
+    expect(mockCreateSilence).not.toHaveBeenCalled();
+    expect(mockGetNode).not.toHaveBeenCalledWith("test-token", 0, expect.anything());
+  });
+
+  it("restores silence focus to the visible trigger when the saved surface is hidden", async () => {
+    const user = userEvent.setup();
+    showAlerts([
+      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-platform", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
+    ]);
+    render(<NotificationsPage />);
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    const { mobile, desktop } = alertSurfaces();
+
+    const supported = rowMore(desktop, "执行失败");
+    await chooseSilence(user, supported);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    // jsdom does not apply breakpoint CSS. Inline display:none is the hidden desktop surface.
+    desktop.style.display = "none";
+    expect(supported.isConnected).toBe(true);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(rowMore(mobile, "执行失败")).toHaveFocus());
+    expect(supported).not.toHaveFocus();
+
+    desktop.style.display = "";
+    const explanation = rowMore(desktop, "平台定时");
+    await chooseSilence(user, explanation);
+    desktop.style.display = "none";
+    expect(explanation.isConnected).toBe(true);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "关闭" }));
+    await waitFor(() => expect(rowMore(mobile, "平台定时")).toHaveFocus());
+    expect(explanation).not.toHaveFocus();
+    expect(mockCreateSilence).not.toHaveBeenCalled();
+  });
+
+  it("restores silence focus to the toolbar when the alert row is gone", async () => {
+    const user = userEvent.setup();
+    showAlerts([
+      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+    ]);
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 1 条")).toBeInTheDocument();
+    await chooseSilence(user, rowMore(alertSurfaces().desktop, "执行失败"));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    mockGetAlertsPaginated.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    bumpAlertRefresh(view, 1);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "更多操作" })).not.toBeInTheDocument());
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
+    await waitFor(() => {
+      const fallback = document.querySelector("[data-silence-focus-fallback]");
+      expect(fallback).toContainElement(document.activeElement as HTMLElement);
+    });
+  });
+
+  it("does not restore silence focus for an identity that no longer owns the dialog", async () => {
+    const user = userEvent.setup();
+    showAlerts([
+      quickAlert({ id: "alert-platform", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
+    ]);
+    const view = render(<NotificationsPage />);
+    expect(await screen.findByText("共 1 条")).toBeInTheDocument();
+    const more = rowMore(alertSurfaces().desktop, "平台定时");
+    await chooseSilence(user, more);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    setAuth({ token: "test-token", role: "operator" });
+    view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    expect(more).not.toHaveFocus();
+    expect(document.activeElement).not.toHaveAttribute("data-silence-alert");
+    expect(mockCreateSilence).not.toHaveBeenCalled();
   });
 });

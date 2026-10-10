@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { BellRing, Loader2 } from "lucide-react";
+import { CreateSilenceDialog } from "@/components/create-silence-dialog";
 import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
 import { sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
@@ -14,21 +16,123 @@ import {
 } from "@/components/ui/data-surface";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogCloseButton,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Pagination } from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast-sonner";
 import { usePageFilters } from "@/hooks/use-page-filters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
+import { selectQuickSilenceMatch, type QuickSilenceMatch, type QuickSilenceSelection } from "@/lib/alert-silence-match";
 import { apiClient } from "@/lib/api/client";
-import { getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
+import {
+  getAuthIdentitySnapshot,
+  getAuthSessionGeneration,
+  isAuthTransitionActive,
+  subscribeAuthTransition,
+} from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { getErrorMessage } from "@/lib/utils";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
 import { AlertFilters } from "./alert-filters";
+import { SILENCE_ALERT_TRIGGER_ATTRIBUTE } from "./alert-bulk-actions";
 import { AlertList } from "./alert-list";
 
 type SortField = "triggered_at" | "severity" | "status" | "node_name";
+type UnsupportedSilenceReason = Extract<QuickSilenceSelection, { kind: "unsupported" }>["reason"];
+
+type SilenceFocusOwner = {
+  alertId: string;
+  sessionGeneration: number;
+  authGeneration: number;
+  token: string;
+};
+
+const SILENCE_FALLBACK_SELECTOR = "button, a[href], input, select, textarea";
+
+function isUsableSilenceTarget(element: HTMLElement): boolean {
+  if (!element.isConnected) return false;
+  if (element instanceof HTMLButtonElement && element.disabled) return false;
+  let current: HTMLElement | null = element;
+  while (current) {
+    if (current.hidden) return false;
+    const style = window.getComputedStyle(current);
+    if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+    current = current.parentElement;
+  }
+  return true;
+}
+
+function pickSilenceTrigger(
+  scope: HTMLElement | null,
+  alertId: string,
+  saved: HTMLButtonElement | null,
+): HTMLButtonElement | null {
+  if (
+    saved
+    && saved.getAttribute(SILENCE_ALERT_TRIGGER_ATTRIBUTE) === alertId
+    && isUsableSilenceTarget(saved)
+  ) {
+    return saved;
+  }
+  if (!scope) return null;
+  for (const node of scope.querySelectorAll(`button[${SILENCE_ALERT_TRIGGER_ATTRIBUTE}]`)) {
+    if (!(node instanceof HTMLButtonElement)) continue;
+    if (node.getAttribute(SILENCE_ALERT_TRIGGER_ATTRIBUTE) !== alertId) continue;
+    if (!isUsableSilenceTarget(node)) continue;
+    return node;
+  }
+  return null;
+}
+
+function firstUsableControl(root: HTMLElement | null): HTMLElement | null {
+  if (!root?.isConnected) return null;
+  for (const node of root.querySelectorAll(SILENCE_FALLBACK_SELECTOR)) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (node.tabIndex < 0) continue;
+    if (!isUsableSilenceTarget(node)) continue;
+    return node;
+  }
+  return null;
+}
+
+function restoreOwnedSilenceFocus(input: {
+  owner: SilenceFocusOwner | null;
+  mounted: boolean;
+  sessionGeneration: number;
+  identityToken: string | null;
+  identityRole: string | null;
+  list: HTMLElement | null;
+  toolbar: HTMLElement | null;
+  savedTrigger: HTMLButtonElement | null;
+}): void {
+  const { owner } = input;
+  if (!owner || !input.mounted) return;
+  if (isAuthTransitionActive()) return;
+  if (input.sessionGeneration !== owner.sessionGeneration) return;
+  if (getAuthSessionGeneration() !== owner.authGeneration) return;
+  if (input.identityRole !== "admin" || input.identityToken !== owner.token) return;
+  const trigger = pickSilenceTrigger(input.list, owner.alertId, input.savedTrigger);
+  const fallback = trigger ?? firstUsableControl(input.toolbar) ?? firstUsableControl(input.list);
+  fallback?.focus();
+}
+
+type SupportedQuickSilence = {
+  alertId: string;
+  match: QuickSilenceMatch;
+  attempt: number;
+  sessionGeneration: number;
+  authGeneration: number;
+  token: string;
+};
 
 type AlertCenterProps = {
   token: string;
@@ -77,6 +181,7 @@ function AlertCenterSession({
   const { t } = useTranslation();
   const { role, totpEnabled } = useAuth();
   const authRole = role ?? null;
+  const canManageSilences = authRole === "admin";
   const withStepUp = useStepUpAction(
     STEP_UP_ACTIONS.taskManualTrigger,
     { persist: false, reuseCached: false },
@@ -131,6 +236,17 @@ function AlertCenterSession({
   const deliveryAttemptRef = useRef(0);
   const retryAllAttemptRef = useRef(0);
   const deliveryLoadAttemptRef = useRef(0);
+  const silenceReturnRef = useRef<HTMLButtonElement | null>(null);
+  const silenceListRef = useRef<HTMLDivElement>(null);
+  const silenceToolbarRef = useRef<HTMLDivElement>(null);
+  const silenceFocusOwnerRef = useRef<SilenceFocusOwner | null>(null);
+  const silenceAttemptRef = useRef(0);
+  const [supportedSilence, setSupportedSilence] = useState<SupportedQuickSilence | null>(null);
+  const [unsupportedSilence, setUnsupportedSilence] = useState<{
+    alertId: string;
+    reason: UnsupportedSilenceReason;
+  } | null>(null);
+  const [silenceNotice, setSilenceNotice] = useState(false);
 
   const isCurrentSession = (generation: number) =>
     mountedRef.current
@@ -187,6 +303,14 @@ function AlertCenterSession({
     if (retryingDeliveryKey !== null) setRetryingDeliveryKey(null);
     if (retryingAllAlertId !== null) setRetryingAllAlertId(null);
   }
+  if (
+    (!canManageSilences || appliedAccess.token !== token || appliedAccess.role !== authRole)
+    && (supportedSilence || unsupportedSilence || silenceNotice)
+  ) {
+    if (supportedSilence) setSupportedSilence(null);
+    if (unsupportedSilence) setUnsupportedSilence(null);
+    if (silenceNotice) setSilenceNotice(false);
+  }
   if (!canWriteAlerts && selectedAlertIds.length > 0) setSelectedAlertIds([]);
   if (!canWriteAlerts && bulkResolving) setBulkResolving(false);
   if (!canRetryDelivery && retryingDeliveryKey !== null) setRetryingDeliveryKey(null);
@@ -216,7 +340,48 @@ function AlertCenterSession({
 
   useLayoutEffect(() => () => {
     deliveryLoadAttemptRef.current += 1;
+    silenceAttemptRef.current += 1;
   }, []);
+
+  useLayoutEffect(() => {
+    return subscribeAuthTransition(() => {
+      if (!isAuthTransitionActive()) return;
+      silenceAttemptRef.current += 1;
+      setSupportedSilence((current) => (current === null ? current : null));
+      setUnsupportedSilence((current) => (current === null ? current : null));
+      setSilenceNotice((current) => (current ? false : current));
+    });
+  }, []);
+
+  const silenceUiOpen = supportedSilence !== null || unsupportedSilence !== null;
+  const silenceUiWasOpenRef = useRef(false);
+  const silenceFocusTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (silenceUiWasOpenRef.current && !silenceUiOpen) {
+      // After Radix's unmount focus. Both dialogs share this restore; the saved More node may be hidden or replaced.
+      if (silenceFocusTimerRef.current !== null) window.clearTimeout(silenceFocusTimerRef.current);
+      silenceFocusTimerRef.current = window.setTimeout(() => {
+        silenceFocusTimerRef.current = null;
+        restoreOwnedSilenceFocus({
+          owner: silenceFocusOwnerRef.current,
+          mounted: mountedRef.current,
+          sessionGeneration: sessionGenerationRef.current,
+          identityToken: authIdentityRef.current.token,
+          identityRole: authIdentityRef.current.role,
+          list: silenceListRef.current,
+          toolbar: silenceToolbarRef.current,
+          savedTrigger: silenceReturnRef.current,
+        });
+      }, 0);
+    }
+    silenceUiWasOpenRef.current = silenceUiOpen;
+    return () => {
+      if (silenceFocusTimerRef.current !== null) {
+        window.clearTimeout(silenceFocusTimerRef.current);
+        silenceFocusTimerRef.current = null;
+      }
+    };
+  }, [silenceUiOpen]);
 
   // 身份、权限和代次在绘制前提交。清理时先作废挂载和代次，再取消高亮定时器。
   useLayoutEffect(() => {
@@ -227,6 +392,7 @@ function AlertCenterSession({
     return () => {
       mountedRef.current = false;
       sessionGenerationRef.current += 1;
+      silenceAttemptRef.current += 1;
       bulkAttemptRef.current += 1;
       deliveryAttemptRef.current += 1;
       retryAllAttemptRef.current += 1;
@@ -526,19 +692,79 @@ function AlertCenterSession({
     }
   };
 
+  // 快捷静音只属于当前 admin 代次。身份、过渡和卸载都会作废尚未落地的成功提示。
+  const handleSilence = (alert: AlertRecord) => {
+    if (!canManageSilences || authRole !== "admin" || token.length === 0) return;
+    if (isAuthTransitionActive()) return;
+    const generation = sessionGenerationRef.current;
+    if (!isCurrentSession(generation)) return;
+    const snapshot = getAuthIdentitySnapshot();
+    if (snapshot.role !== "admin" || snapshot.token !== token) return;
+    const authGeneration = getAuthSessionGeneration();
+    const selection = selectQuickSilenceMatch(alert);
+    if (supportedSilence) silenceAttemptRef.current += 1;
+    const attempt = silenceAttemptRef.current;
+    silenceFocusOwnerRef.current = {
+      alertId: alert.id,
+      sessionGeneration: generation,
+      authGeneration,
+      token,
+    };
+    if (selection.kind === "supported") {
+      setUnsupportedSilence(null);
+      setSupportedSilence({
+        alertId: alert.id,
+        match: selection.match,
+        attempt,
+        sessionGeneration: generation,
+        authGeneration,
+        token,
+      });
+      return;
+    }
+    setSupportedSilence(null);
+    setUnsupportedSilence({ alertId: alert.id, reason: selection.reason });
+  };
+
+  const acceptSilenceCreated = (opened: SupportedQuickSilence) => {
+    if (silenceAttemptRef.current !== opened.attempt) return;
+    if (!mountedRef.current || !isCurrentSession(opened.sessionGeneration)) return;
+    if (isAuthTransitionActive() || getAuthSessionGeneration() !== opened.authGeneration) return;
+    if (authRole !== "admin" || token !== opened.token) return;
+    const snapshot = getAuthIdentitySnapshot();
+    if (snapshot.role !== "admin" || snapshot.token !== opened.token) return;
+    setSilenceNotice(true);
+  };
+
+  const unsupportedCopy = (reason: UnsupportedSilenceReason) => {
+    if (reason === "platform") return t("notifications.silenceUnsupportedPlatform");
+    if (reason === "unknown-node") return t("notifications.silenceUnsupportedNode");
+    return t("notifications.silenceUnsupportedSource");
+  };
+
   // --- 合并高亮告警和普通列表 ---
   const displayAlerts = highlightedAlert && !alerts.some((alert) => alert.id === highlightedAlert.id)
     ? [highlightedAlert, ...alerts]
     : alerts;
+  const silenceDialogMounted = canManageSilences && token.length > 0;
 
   return (
       <DataSurface>
       {canTriggerTasks && totpEnabled === false ? <StepUpPrerequisiteNotice className="mb-3" /> : null}
+      {silenceNotice ? (
+        <div role="status" className="mb-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-card px-3 py-2 text-sm">
+          <span className="min-w-0 break-words">{t("notifications.silenceCreated")}</span>
+          <Button asChild variant="link" size="sm" className="h-auto px-0">
+            <Link to="/app/settings?tab=silences">{t("notifications.silenceRulesLink")}</Link>
+          </Button>
+        </div>
+      ) : null}
       <DataSurfaceHeader
         title={t("notifications.alertCenterTitle")}
         description={t("notifications.alertCenterDesc", { total })}
       />
-      <DataSurfaceToolbar className="space-y-4">
+      <DataSurfaceToolbar>
+        <div ref={silenceToolbarRef} data-silence-focus-fallback="" className="space-y-4">
         <AlertFilters
           keyword={keyword}
           onKeywordChange={setKeyword}
@@ -577,6 +803,7 @@ function AlertCenterSession({
             </div>
           </div>
         ) : null}
+        </div>
       </DataSurfaceToolbar>
 
       <DataSurfaceContent className="space-y-4">
@@ -607,6 +834,7 @@ function AlertCenterSession({
             canWriteAlerts={canWriteAlerts}
             canTriggerTasks={canTriggerTasks}
             canRetryDelivery={canRetryDelivery}
+            canManageSilences={canManageSilences}
             onSelectionChange={handleSelectionChange}
             onSelectAllVisible={handleSelectAllVisible}
             onRetry={(alert) => void handleRetry(alert)}
@@ -616,6 +844,9 @@ function AlertCenterSession({
             onToggleDeliveries={toggleDeliveries}
             onRetryDelivery={(alertId, deliveryId) => void handleRetryDelivery(alertId, deliveryId)}
             onRetryAllFailed={(alertId) => void handleRetryAllFailed(alertId)}
+            onSilence={handleSilence}
+            silenceReturnRef={silenceReturnRef}
+            silenceFocusScopeRef={silenceListRef}
           />
         ) : (
           <FilteredEmptyState
@@ -638,6 +869,49 @@ function AlertCenterSession({
           onPageSizeChange={handlePageSizeChange}
         />
       </DataSurfaceFooter>
+      {silenceDialogMounted && supportedSilence ? (
+        <CreateSilenceDialog
+          key={`${supportedSilence.alertId}:${supportedSilence.match.nodeId}:${supportedSilence.match.category}`}
+          open
+          onOpenChange={(open) => {
+            if (!open) setSupportedSilence(null);
+          }}
+          onCreated={() => acceptSilenceCreated(supportedSilence)}
+          token={token}
+          initialMatch={supportedSilence.match}
+        />
+      ) : null}
+      {silenceDialogMounted && unsupportedSilence ? (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setUnsupportedSilence(null);
+          }}
+        >
+          <DialogContent
+            onCloseAutoFocus={(event) => {
+              // Same restore as the create dialog, queued by the close effect. Don't focus the saved node here.
+              event.preventDefault();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>{t("notifications.silenceUnsupportedTitle")}</DialogTitle>
+              <DialogDescription className="break-words text-sm leading-5 text-foreground/80">
+                {unsupportedCopy(unsupportedSilence.reason)}
+              </DialogDescription>
+              <DialogCloseButton />
+            </DialogHeader>
+            <DialogFooter className="flex-wrap">
+              <Button asChild variant="outline" size="sm">
+                <Link to="/app/settings?tab=silences">{t("notifications.silenceRulesLink")}</Link>
+              </Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => setUnsupportedSilence(null)}>
+                {t("common.close")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </DataSurface>
   );
 }
