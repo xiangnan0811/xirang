@@ -1,47 +1,31 @@
-import { useCallback, useEffect, useRef, useState } from "react"
-import type { RefObject } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
 import { Plus, Trash2 } from "lucide-react"
+import { CreateSilenceDialog } from "@/components/create-silence-dialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { FormDialog } from "@/components/ui/form-dialog"
-import { Input } from "@/components/ui/input"
-import { Select } from "@/components/ui/select"
-import { TagChips } from "@/components/ui/tag-chips"
 import { toast } from "@/components/ui/toast-sonner"
 import { useAuth } from "@/context/auth-context.hooks"
 import { apiClient } from "@/lib/api/client"
 import {
+  getAuthIdentitySnapshot,
+  getAuthSessionGeneration,
+  isAuthTransitionActive,
+  subscribeAuthTransition,
+} from "@/lib/api/core"
+import {
   parseSilenceTags,
   type Silence,
-  type SilenceInput,
 } from "@/lib/api/silences"
+import { SILENCE_CATEGORIES } from "@/lib/silence-categories"
 import { getErrorMessage } from "@/lib/utils"
-import type { NodeRecord } from "@/types/domain"
-
-// ---------- alert type catalogue ----------
-
-const ALERT_TYPES = [
-  { value: "XR-EXEC",        i18nKey: "silences.types.exec" },
-  { value: "XR-VRFY",        i18nKey: "silences.types.vrfy" },
-  { value: "XR-NODE",        i18nKey: "silences.types.node" },
-  { value: "XR-NODE-EXPIRY", i18nKey: "silences.types.nodeExpiry" },
-  { value: "XR-RETN",        i18nKey: "silences.types.retn" },
-  { value: "XR-INTG",        i18nKey: "silences.types.intg" },
-  { value: "XR-REPORT",      i18nKey: "silences.types.report" },
-  { value: "XR-SLO",         i18nKey: "silences.types.slo" },
-] as const
-
-const DATETIME_LOCAL_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
-
-// ---------- helpers ----------
 
 function describeMatch(s: Silence, t: TFunction): string {
   const parts: string[] = []
   if (s.matchNodeId) parts.push(`#${s.matchNodeId}`)
   if (s.matchCategory) {
-    const type = ALERT_TYPES.find((a) => a.value === s.matchCategory)
+    const type = SILENCE_CATEGORIES.find((item) => item.value === s.matchCategory)
     parts.push(type ? t(type.i18nKey) : s.matchCategory)
   }
   const tags = s.matchTags.length ? s.matchTags : parseSilenceTags(s)
@@ -72,483 +56,287 @@ function remaining(endAt: string, t: TFunction): string {
   return t("silences.remaining.hours", { hours })
 }
 
-function pad2(value: number): string {
-  return value.toString().padStart(2, "0")
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") return true
+  return error instanceof Error && error.name === "AbortError"
 }
 
-function formatDatetimeLocal(date: Date): string {
-  return `${date.getFullYear().toString().padStart(4, "0")}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`
-}
-
-function formatSignedOffset(date: Date): string {
-  const totalMinutes = -date.getTimezoneOffset()
-  const sign = totalMinutes >= 0 ? "+" : "-"
-  const absolute = Math.abs(totalMinutes)
-  return `${sign}${pad2(Math.floor(absolute / 60))}:${pad2(absolute % 60)}`
-}
-
-function floorToMinute(date: Date): Date {
-  return new Date(Math.floor(date.getTime() / 60_000) * 60_000)
-}
-
-/** Strict YYYY-MM-DDTHH:mm. Round-trip rejects impossible dates and spring-forward gaps. */
-function parseDatetimeLocal(value: string): Date | null {
-  const match = DATETIME_LOCAL_PATTERN.exec(value)
-  if (!match) return null
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
-  const hour = Number(match[4])
-  const minute = Number(match[5])
-  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null
-  const parsed = new Date(value)
-  if (
-    parsed.getFullYear() !== year ||
-    parsed.getMonth() !== month - 1 ||
-    parsed.getDate() !== day ||
-    parsed.getHours() !== hour ||
-    parsed.getMinutes() !== minute
-  ) {
-    return null
-  }
-  return parsed
-}
-
-type SilenceWindowEnd = {
-  text: string
-  /** Preset instant. Cleared on edit so a repeated clock time is not reparsed into the other DST occurrence. */
-  instant: Date | null
-}
-
-type SilenceWindowState = {
-  start: SilenceWindowEnd
-  end: SilenceWindowEnd
-}
-
-type SilenceFieldErrors = {
-  name?: string
-  start?: string
-  end?: string
-}
-
-function windowFromNow(now: Date, hours: number): SilenceWindowState {
-  const start = floorToMinute(now)
-  const end = new Date(start.getTime() + hours * 3_600_000)
-  return {
-    start: { text: formatDatetimeLocal(start), instant: start },
-    end: { text: formatDatetimeLocal(end), instant: end },
-  }
-}
-
-function resolveWindowEnd(end: SilenceWindowEnd): Date | null {
-  return end.instant ?? parseDatetimeLocal(end.text)
-}
-
-function formatWindowSummary(start: Date, end: Date, t: TFunction): string {
-  const point = (date: Date) =>
-    `${formatDatetimeLocal(date)} ${t("silences.utcOffset", { offset: formatSignedOffset(date) })}`
-  return `${point(start)} → ${point(end)}`
-}
-
-function SilenceWindowField({
-  id,
-  label,
-  end,
-  error,
-  inputRef,
-  onValueChange,
-}: {
-  id: string
-  label: string
-  end: SilenceWindowEnd
-  error?: string
-  inputRef: RefObject<HTMLInputElement>
-  onValueChange: (value: string) => void
-}) {
-  const { t } = useTranslation()
-  const instant = resolveWindowEnd(end)
-  const offset = instant ? t("silences.utcOffset", { offset: formatSignedOffset(instant) }) : null
-  const offsetId = offset ? `${id}-offset` : undefined
-  const errorId = error ? `${id}-error` : undefined
-  const describedBy = [offsetId, errorId].filter((item): item is string => Boolean(item)).join(" ")
-
-  return (
-    <div className="min-w-0 space-y-1">
-      <div className="flex items-baseline justify-between gap-2">
-        <label htmlFor={id} className="text-xs text-muted-foreground">
-          {label}
-        </label>
-        {offset ? (
-          <span id={offsetId} className="text-xs font-medium tabular-nums text-foreground">
-            {offset}
-          </span>
-        ) : null}
-      </div>
-      <Input
-        ref={inputRef}
-        id={id}
-        aria-label={label}
-        aria-invalid={Boolean(error)}
-        aria-describedby={describedBy || undefined}
-        type="datetime-local"
-        value={end.text}
-        onChange={(event) => onValueChange(event.target.value)}
-      />
-      {error ? (
-        <p id={errorId} role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
-    </div>
-  )
-}
-
-// ---------- CreateSilenceDialog ----------
-
-type CreateSilenceDialogProps = {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  onCreated: () => void
+type SilenceListOwner = {
+  localGeneration: number
+  authGeneration: number
   token: string
 }
 
-function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSilenceDialogProps) {
-  const { t } = useTranslation()
-  const [name, setName] = useState("")
-  const [matchNodeId, setMatchNodeId] = useState("")
-  const [matchCategory, setMatchCategory] = useState("")
-  const [tags, setTags] = useState<string[]>([])
-  const [silenceWindow, setSilenceWindow] = useState(() => windowFromNow(new Date(), 1))
-  const [note, setNote] = useState("")
-  const [submitting, setSubmitting] = useState(false)
-  const [fieldErrors, setFieldErrors] = useState<SilenceFieldErrors>({})
-  const nameRef = useRef<HTMLInputElement>(null)
-  const startRef = useRef<HTMLInputElement>(null)
-  const endRef = useRef<HTMLInputElement>(null)
-
-  const [nodes, setNodes] = useState<NodeRecord[]>([])
-
-  useEffect(() => {
-    let cancelled = false;
-    apiClient.getNodes(token).then((data) => {
-      if (!cancelled) setNodes(data);
-    }).catch(() => { /* silently ignore */ });
-    return () => { cancelled = true; };
-  }, [token]);
-
-  const applyPreset = (hours: number) => {
-    setSilenceWindow(windowFromNow(new Date(), hours))
-    setFieldErrors((current) => (
-      current.start || current.end ? { ...current, start: undefined, end: undefined } : current
-    ))
-  }
-
-  const editWindowEnd = (which: "start" | "end", text: string) => {
-    if (silenceWindow[which].text === text) return
-    setSilenceWindow((current) => ({
-      ...current,
-      [which]: { text, instant: null },
-    }))
-    setFieldErrors((current) => (
-      current.start || current.end ? { ...current, start: undefined, end: undefined } : current
-    ))
-  }
-
-  const handleSubmit = async () => {
-    const startInstant = resolveWindowEnd(silenceWindow.start)
-    const endInstant = resolveWindowEnd(silenceWindow.end)
-    const nextErrors: SilenceFieldErrors = {}
-    if (!name.trim()) nextErrors.name = t("silences.nameRequired")
-    if (!startInstant) nextErrors.start = t("silences.validationDateInvalid")
-    if (!endInstant) nextErrors.end = t("silences.validationDateInvalid")
-    if (startInstant && endInstant && endInstant.getTime() <= startInstant.getTime()) {
-      nextErrors.end = t("silences.validationWindowInvalid")
-    }
-    if (nextErrors.name || nextErrors.start || nextErrors.end || !startInstant || !endInstant) {
-      setFieldErrors(nextErrors)
-      if (nextErrors.name) nameRef.current?.focus()
-      else if (nextErrors.start) startRef.current?.focus()
-      else if (nextErrors.end) endRef.current?.focus()
-      return
-    }
-
-    const input: SilenceInput = {
-      name: name.trim(),
-      matchNodeId: matchNodeId ? Number(matchNodeId) : null,
-      matchCategory,
-      matchTags: tags,
-      startsAt: startInstant.toISOString(),
-      endsAt: endInstant.toISOString(),
-      note: note.trim() || undefined,
-    }
-    setSubmitting(true)
-    try {
-      await apiClient.createSilence(token, input)
-      toast.success(t("silences.created", { window: formatWindowSummary(startInstant, endInstant, t) }))
-      onOpenChange(false)
-      onCreated()
-    } catch (err) {
-      toast.error(getErrorMessage(err))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <FormDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title={t("silences.new")}
-      description={t("silences.dialogDesc")}
-      size="md"
-      saving={submitting}
-      onSubmit={handleSubmit}
-      submitLabel={t("silences.create")}
-      savingLabel={t("silences.creating")}
-    >
-      {/* 名称 */}
-      <div className="space-y-1">
-        <label htmlFor="silence-name" className="text-sm font-medium">
-          {t("silences.name")}
-        </label>
-        <Input
-          ref={nameRef}
-          id="silence-name"
-          aria-label={t("silences.name")}
-          aria-invalid={Boolean(fieldErrors.name)}
-          aria-describedby={fieldErrors.name ? "silence-name-error" : undefined}
-          value={name}
-          onChange={(e) => {
-            setName(e.target.value)
-            setFieldErrors((current) => (current.name ? { ...current, name: undefined } : current))
-          }}
-          placeholder="维护窗口-A"
-        />
-        {fieldErrors.name ? (
-          <p id="silence-name-error" role="alert" className="text-xs text-destructive">
-            {fieldErrors.name}
-          </p>
-        ) : null}
-      </div>
-
-      {/* 节点 dropdown */}
-      <div className="space-y-1">
-        <label htmlFor="silence-node" className="text-sm font-medium">
-          {t("silences.node")}
-          <span className="ml-1 text-xs text-muted-foreground">({t("silences.nodeHint")})</span>
-        </label>
-        <Select
-          id="silence-node"
-          value={matchNodeId}
-          onChange={(e) => setMatchNodeId(e.target.value)}
-        >
-          <option value="">{t("silences.nodeAll")}</option>
-          {nodes.map((n) => (
-            <option key={n.id} value={String(n.id)}>
-              {n.name}
-            </option>
-          ))}
-        </Select>
-      </div>
-
-      {/* 告警类型 Select */}
-      <div className="space-y-1">
-        <label htmlFor="silence-category" className="text-sm font-medium">
-          {t("silences.category")}
-          <span className="ml-1 text-xs text-muted-foreground">({t("silences.categoryHint")})</span>
-        </label>
-        <Select
-          id="silence-category"
-          value={matchCategory}
-          onChange={(e) => setMatchCategory(e.target.value)}
-        >
-          <option value="">{t("silences.categoryAll")}</option>
-          {ALERT_TYPES.map((type) => (
-            <option key={type.value} value={type.value}>
-              {t(type.i18nKey)}
-            </option>
-          ))}
-        </Select>
-      </div>
-
-      {/* 标签 chip picker */}
-      <div className="space-y-1">
-        <label className="text-sm font-medium">{t("silences.tags")}</label>
-        <TagChips
-          value={tags}
-          onChange={setTags}
-          placeholder={t("silences.tagsHint")}
-        />
-      </div>
-
-      {/* 静默窗口 */}
-      <div className="space-y-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="text-sm font-medium">{t("silences.window")}</label>
-          {[
-            { label: t("silences.preset1h"), h: 1 },
-            { label: t("silences.preset4h"), h: 4 },
-            { label: t("silences.preset1d"), h: 24 },
-          ].map((p) => (
-            <Button key={p.h} size="sm" variant="outline" type="button" onClick={() => applyPreset(p.h)}>
-              {p.label}
-            </Button>
-          ))}
-        </div>
-        <p className="text-xs text-muted-foreground">{t("silences.presetDurationHint")}</p>
-        <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <SilenceWindowField
-            id="silence-starts"
-            label={t("silences.startsAt")}
-            end={silenceWindow.start}
-            error={fieldErrors.start}
-            inputRef={startRef}
-            onValueChange={(value) => editWindowEnd("start", value)}
-          />
-          <SilenceWindowField
-            id="silence-ends"
-            label={t("silences.endsAt")}
-            end={silenceWindow.end}
-            error={fieldErrors.end}
-            inputRef={endRef}
-            onValueChange={(value) => editWindowEnd("end", value)}
-          />
-        </div>
-      </div>
-
-      {/* 备注 */}
-      <div className="space-y-1">
-        <label htmlFor="silence-note" className="text-sm font-medium">
-          {t("silences.note")}
-        </label>
-        <Input
-          id="silence-note"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder={t("silences.noteHint")}
-        />
-      </div>
-    </FormDialog>
-  )
-}
-
-// ---------- SilencesPanel ----------
-
 export function SilencesPanel() {
-  const { token } = useAuth();
-  return <SilencesPanelContent key={token ?? ""} />;
+  const { token, role } = useAuth()
+  return <SilencesPanelContent key={`${token ?? ""}\0${role ?? ""}`} />
 }
 
 function SilencesPanelContent() {
   const { t } = useTranslation()
-  const { token } = useAuth()
+  const { token, role } = useAuth()
   const [silences, setSilences] = useState<Silence[]>([])
-  const [loading, setLoading] = useState(Boolean(token))
+  const [loaded, setLoaded] = useState(false)
+  const [loading, setLoading] = useState(role === "admin" && Boolean(token))
+  const [listFailed, setListFailed] = useState(false)
+  const [listErrorDetail, setListErrorDetail] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [revoking, setRevoking] = useState<number | null>(null)
+  const [listNonce, setListNonce] = useState(0)
+  const mountedRef = useRef(false)
+  const localGenerationRef = useRef(0)
+  const listAttemptRef = useRef(0)
+  const listAbortRef = useRef<AbortController | null>(null)
+  const revokeAttemptRef = useRef(0)
+  // Released only by the owned finally or layout/transition cleanup.
+  const revokeLockRef = useRef(false)
+  const loadedRef = useRef(false)
+  const identityRef = useRef({ token, role })
 
-  const [requestVersion, setRequestVersion] = useState(0);
-  const refresh = useCallback(() => {
-    if (!token) return;
-    setLoading(true);
-    setRequestVersion((version) => version + 1);
-  }, [token]);
+  const canManage = role === "admin" && typeof token === "string" && token.length > 0
 
-  useEffect(() => {
-    if (!token) return;
-    const controller = new AbortController();
-    apiClient.listSilences(token)
-      .then((data) => {
-        if (!controller.signal.aborted) setSilences(data);
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) toast.error(getErrorMessage(error));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [token, requestVersion]);
-
-  const handleRevoke = async (id: number) => {
-    if (!token) return
-    setRevoking(id)
-    try {
-      await apiClient.deleteSilence(token, id)
-      toast.success(t("silences.revoke"))
-      refresh()
-    } catch (err) {
-      toast.error(getErrorMessage(err))
-    } finally {
-      setRevoking(null)
+  /**
+   * listSilences receives a signal, but a settled response is applied only when
+   * the attempt, this mount generation, and the admin identity still match the
+   * values captured before the request. A late response can ignore cancellation.
+   */
+  const captureOwner = (): SilenceListOwner | null => {
+    if (!mountedRef.current) return null
+    if (isAuthTransitionActive()) return null
+    const currentToken = identityRef.current.token
+    const currentRole = identityRef.current.role
+    if (currentRole !== "admin" || !currentToken) return null
+    const snapshot = getAuthIdentitySnapshot()
+    if (snapshot.token !== currentToken || snapshot.role !== "admin") return null
+    return {
+      localGeneration: localGenerationRef.current,
+      authGeneration: getAuthSessionGeneration(),
+      token: currentToken,
     }
   }
+
+  const ownerCurrent = (owner: SilenceListOwner): boolean => {
+    if (!mountedRef.current) return false
+    if (localGenerationRef.current !== owner.localGeneration) return false
+    if (isAuthTransitionActive()) return false
+    if (getAuthSessionGeneration() !== owner.authGeneration) return false
+    if (identityRef.current.token !== owner.token || identityRef.current.role !== "admin") return false
+    const snapshot = getAuthIdentitySnapshot()
+    return snapshot.token === owner.token && snapshot.role === "admin"
+  }
+
+
+  const requestList = useCallback(() => {
+    if (!mountedRef.current || isAuthTransitionActive()) return
+    const currentToken = identityRef.current.token
+    const currentRole = identityRef.current.role
+    if (currentRole !== "admin" || !currentToken) return
+    const snapshot = getAuthIdentitySnapshot()
+    if (snapshot.token !== currentToken || snapshot.role !== "admin") return
+    setLoading(true)
+    setListNonce((version) => version + 1)
+  }, [])
+
+  useLayoutEffect(() => {
+    mountedRef.current = true
+    identityRef.current = { token, role }
+    localGenerationRef.current += 1
+    return () => {
+      mountedRef.current = false
+      localGenerationRef.current += 1
+      listAttemptRef.current += 1
+      revokeAttemptRef.current += 1
+      revokeLockRef.current = false
+      listAbortRef.current?.abort()
+      listAbortRef.current = null
+    }
+  }, [token, role])
+
+
+  useLayoutEffect(() => {
+    const retire = () => {
+      localGenerationRef.current += 1
+      listAttemptRef.current += 1
+      revokeAttemptRef.current += 1
+      revokeLockRef.current = false
+      listAbortRef.current?.abort()
+      listAbortRef.current = null
+      setCreateOpen(false)
+      setRevoking(null)
+      setLoading(false)
+      if (!loadedRef.current) setListFailed(true)
+    }
+    if (isAuthTransitionActive()) retire()
+    return subscribeAuthTransition(() => {
+      if (isAuthTransitionActive()) {
+        retire()
+        return
+      }
+      requestList()
+    })
+  }, [requestList])
+
+  useEffect(() => {
+    if (role !== "admin" || !token) return
+    const owner = captureOwner()
+    if (!owner) return
+    const attempt = ++listAttemptRef.current
+    const controller = new AbortController()
+    listAbortRef.current = controller
+    void apiClient.listSilences(owner.token, false, { signal: controller.signal })
+      .then((data) => {
+        if (listAttemptRef.current !== attempt || !ownerCurrent(owner)) return
+        loadedRef.current = true
+        setSilences(data)
+        setLoaded(true)
+        setListFailed(false)
+        setListErrorDetail(null)
+      })
+      .catch((error: unknown) => {
+        if (listAttemptRef.current !== attempt || !ownerCurrent(owner)) return
+        if (isAbortError(error)) return
+        const message = getErrorMessage(error)
+        if (listAttemptRef.current !== attempt || !ownerCurrent(owner)) return
+        setListFailed(true)
+        setListErrorDetail(message)
+        if (listAttemptRef.current !== attempt || !ownerCurrent(owner)) return
+        toast.error(message)
+      })
+      .finally(() => {
+        if (listAttemptRef.current !== attempt) return
+        if (!ownerCurrent(owner)) return
+        setLoading(false)
+      })
+    return () => {
+      controller.abort()
+      if (listAbortRef.current === controller) listAbortRef.current = null
+    }
+    // Owner capture reads refs that the layout effects above maintain.
+  }, [token, role, listNonce])
+
+  const handleRevoke = async (id: number) => {
+    if (revokeLockRef.current) return
+    const owner = captureOwner()
+    if (!owner) return
+    revokeLockRef.current = true
+    const attempt = ++revokeAttemptRef.current
+    setRevoking(id)
+    try {
+      if (revokeAttemptRef.current !== attempt || !ownerCurrent(owner)) return
+      await apiClient.deleteSilence(owner.token, id)
+      if (revokeAttemptRef.current !== attempt || !ownerCurrent(owner)) return
+      toast.success(t("silences.revoke"))
+      if (revokeAttemptRef.current !== attempt || !ownerCurrent(owner)) return
+      requestList()
+    } catch (error: unknown) {
+      if (revokeAttemptRef.current !== attempt || !ownerCurrent(owner)) return
+      toast.error(getErrorMessage(error))
+    } finally {
+      if (revokeAttemptRef.current === attempt && ownerCurrent(owner)) {
+        revokeLockRef.current = false
+        setRevoking((current) => (current === id ? null : current))
+      }
+    }
+  }
+
+  const showInitialLoading = canManage && !loaded && (loading || !listFailed)
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="text-base">{t("silences.title")}</CardTitle>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="mr-1 size-4" />
-          {t("silences.new")}
-        </Button>
+        {canManage ? (
+          <Button
+            size="sm"
+            onClick={() => {
+              if (!captureOwner()) return
+              setCreateOpen(true)
+            }}
+          >
+            <Plus className="mr-1 size-4" />
+            {t("silences.new")}
+          </Button>
+        ) : null}
       </CardHeader>
       <CardContent>
-        {loading ? (
-          <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
-        ) : silences.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("silences.empty")}</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-muted-foreground">
-                  <th className="pb-2 pr-4 font-medium">{t("silences.columns.name")}</th>
-                  <th className="pb-2 pr-4 font-medium">{t("silences.columns.match")}</th>
-                  <th className="pb-2 pr-4 font-medium">{t("silences.columns.window")}</th>
-                  <th className="pb-2 pr-4 font-medium">{t("silences.columns.remaining")}</th>
-                  <th className="pb-2 font-medium">{t("silences.columns.actions")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {silences.map((s) => (
-                  <tr key={s.id} className="border-b border-border/50 last:border-0">
-                    <td className="py-2 pr-4 font-medium">{s.name}</td>
-                    <td className="py-2 pr-4 text-muted-foreground">{describeMatch(s, t)}</td>
-                    <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
-                      {formatWindow(s.startsAt, s.endsAt)}
-                    </td>
-                    <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
-                      {remaining(s.endsAt, t)}
-                    </td>
-                    <td className="py-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={revoking === s.id}
-                        onClick={() => void handleRevoke(s.id)}
-                        aria-label={`删除静默规则 ${s.name}`}
-                      >
-                        <Trash2 className="size-4" />
-                        {revoking === s.id ? t("common.loading") : t("silences.revoke")}
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {canManage ? (
+          showInitialLoading ? (
+            <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
+          ) : (
+            <div className="space-y-3">
+              {listFailed ? (
+                <div
+                  role="alert"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                >
+                  <div className="min-w-0 space-y-1">
+                    <p>{t("silences.loadFailed")}</p>
+                    {listErrorDetail ? <p className="break-words text-xs">{listErrorDetail}</p> : null}
+                  </div>
+                  <Button type="button" size="sm" variant="outline" onClick={requestList}>
+                    {t("silences.loadRetry")}
+                  </Button>
+                </div>
+              ) : null}
+              {loading && loaded ? (
+                <p className="text-xs text-muted-foreground">{t("common.loading")}</p>
+              ) : null}
+              {loaded && silences.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("silences.empty")}</p>
+              ) : silences.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left text-muted-foreground">
+                        <th className="pb-2 pr-4 font-medium">{t("silences.columns.name")}</th>
+                        <th className="pb-2 pr-4 font-medium">{t("silences.columns.match")}</th>
+                        <th className="pb-2 pr-4 font-medium">{t("silences.columns.window")}</th>
+                        <th className="pb-2 pr-4 font-medium">{t("silences.columns.remaining")}</th>
+                        <th className="pb-2 font-medium">{t("silences.columns.actions")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {silences.map((s) => (
+                        <tr key={s.id} className="border-b border-border/50 last:border-0">
+                          <td className="py-2 pr-4 font-medium">{s.name}</td>
+                          <td className="py-2 pr-4 text-muted-foreground">{describeMatch(s, t)}</td>
+                          <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
+                            {formatWindow(s.startsAt, s.endsAt)}
+                          </td>
+                          <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
+                            {remaining(s.endsAt, t)}
+                          </td>
+                          <td className="py-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={revoking !== null}
+                              onClick={() => void handleRevoke(s.id)}
+                              aria-label={`删除静默规则 ${s.name}`}
+                            >
+                              <Trash2 className="size-4" />
+                              {revoking === s.id ? t("common.loading") : t("silences.revoke")}
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+          )
+        ) : null}
       </CardContent>
 
-      {token && createOpen && (
+      {canManage && token && createOpen ? (
         <CreateSilenceDialog
           open={createOpen}
           onOpenChange={setCreateOpen}
-          onCreated={refresh}
+          onCreated={requestList}
           token={token}
         />
-      )}
+      ) : null}
     </Card>
   )
 }

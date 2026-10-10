@@ -1,3 +1,4 @@
+import type { MutableRefObject, Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { alertStatusMeta } from "@/pages/notifications-page.utils";
@@ -34,6 +35,7 @@ export type AlertListProps = {
   canWriteAlerts: boolean;
   canTriggerTasks: boolean;
   canRetryDelivery: boolean;
+  canManageSilences: boolean;
   onSelectionChange: (alertId: string, selected: boolean) => void;
   onSelectAllVisible: (selected: boolean) => void;
   onRetry: (alert: AlertRecord) => void;
@@ -43,6 +45,9 @@ export type AlertListProps = {
   onToggleDeliveries: (alertId: string) => void;
   onRetryDelivery: (alertId: string, deliveryId: string) => void;
   onRetryAllFailed: (alertId: string) => void;
+  onSilence: (alert: AlertRecord) => void;
+  silenceReturnRef: MutableRefObject<HTMLButtonElement | null>;
+  silenceFocusScopeRef: Ref<HTMLDivElement>;
 };
 
 export function AlertList({
@@ -66,6 +71,7 @@ export function AlertList({
   canWriteAlerts,
   canTriggerTasks,
   canRetryDelivery,
+  canManageSilences,
   onSelectionChange,
   onSelectAllVisible,
   onRetry,
@@ -75,6 +81,9 @@ export function AlertList({
   onToggleDeliveries,
   onRetryDelivery,
   onRetryAllFailed,
+  onSilence,
+  silenceReturnRef,
+  silenceFocusScopeRef,
 }: AlertListProps) {
   const { t } = useTranslation();
 
@@ -269,11 +278,14 @@ export function AlertList({
                   deliveryOpen={deliveryOpenAlertId === alert.id}
                   canWriteAlerts={canWriteAlerts}
                   canTriggerTasks={canTriggerTasks}
+                  canManageSilences={canManageSilences}
                   onRetry={onRetry}
                   onAck={onAck}
                   onResolve={onResolve}
                   onResolveNodeAlerts={onResolveNodeAlerts}
                   onToggleDeliveries={onToggleDeliveries}
+                  onSilence={onSilence}
+                  silenceReturnRef={silenceReturnRef}
                 />
               </div>
             </div>
@@ -374,11 +386,14 @@ export function AlertList({
                     deliveryOpen={deliveryOpenAlertId === alert.id}
                     canWriteAlerts={canWriteAlerts}
                     canTriggerTasks={canTriggerTasks}
+                    canManageSilences={canManageSilences}
                     onRetry={onRetry}
                     onAck={onAck}
                     onResolve={onResolve}
                     onResolveNodeAlerts={onResolveNodeAlerts}
                     onToggleDeliveries={onToggleDeliveries}
+                    onSilence={onSilence}
+                    silenceReturnRef={silenceReturnRef}
                   />
                 </td>
               </tr>
@@ -395,7 +410,7 @@ export function AlertList({
   );
 
   return (
-    <>
+    <div ref={silenceFocusScopeRef} data-silence-focus-scope="">
       {/* 移动端始终卡片，桌面端按 viewMode 切换 */}
       <div className="md:hidden">
         {renderCardView(alerts)}
@@ -403,6 +418,6 @@ export function AlertList({
       <div className="hidden md:block">
         {viewMode === "list" ? renderTableView(alerts) : renderCardView(alerts)}
       </div>
-    </>
+    </div>
   );
 }
