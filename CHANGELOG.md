@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.62.0](https://github.com/xiangnan0811/xirang/compare/v0.61.1...v0.62.0) (2026-10-10)
+
+
+### ✨ Features
+
+* **credentials:** 支持应用凭据引用策略反查 ([#608](https://github.com/xiangnan0811/xirang/issues/608)) ([76592b6](https://github.com/xiangnan0811/xirang/commit/76592b68d3efa30b30dcc1d6b87680767fa8a5df))
+
 ### 行为与升级说明
 
 - 管理员可从应用凭据的引用数量（包括零）打开只读策略列表，按每页 20 条查看名称与 ID，并通过 `/app/policies?policyId=<id>` 精确定位。定位暂时旁路但保留原搜索词，退出定位后恢复；不会自动打开编辑器或执行写操作。
