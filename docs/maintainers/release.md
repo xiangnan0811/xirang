@@ -98,6 +98,8 @@ multi-arch manifest/tag 提升、发布凭据使用和 provenance attestation。
 
 告警快捷静默的完整行为与升级说明已归档于 CHANGELOG `0.61.0` 版本节；发行 PR 与最终 GitHub Release 正文均须保留该节全部边界，不能只发布自动生成的功能标题。
 
+恢复空态导流的完整行为与升级说明归档于 CHANGELOG `0.61.1` 版本节；发行 PR 与最终 Release 正文须完整保留概览回退、导航角色、旧页面在途操作及无新增迁移的边界。
+
 All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录
 `CRON_DB_BACKUP_STATE_DIR=/backup/.cron-db-state`，共用 26 小时默认窗口。发行验收须验证
 相同非 root 身份的初始化、实际 supercronic 调度、脚本 receipt、状态持久性及后台告警；

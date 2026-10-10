@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.61.1](https://github.com/xiangnan0811/xirang/compare/v0.61.0...v0.61.1) (2026-10-10)
+
+
+### 🐛 Bug Fixes
+
+* **web:** 为恢复空态提供安全导航入口 ([#606](https://github.com/xiangnan0811/xirang/issues/606)) ([f320141](https://github.com/xiangnan0811/xirang/commit/f320141e5fd1b1b0cdd16a05b5fe285d20982a3a))
+
 ### 行为与升级说明
 
 - 恢复页未选择恢复点时提供中英文下一步说明和备份概览入口；当前页面没有可信的功能可用性信息，因此使用概览优先回退，不将入口存在解释为恢复已启用或数据可恢复。
