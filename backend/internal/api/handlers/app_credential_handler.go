@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -53,6 +54,15 @@ type appCredentialResponse struct {
 	ReferenceCount int64                  `json:"reference_count"`
 	CreatedAt      string                 `json:"created_at"`
 	UpdatedAt      string                 `json:"updated_at"`
+}
+
+type appCredentialReferenceResponse struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+}
+
+type appCredentialIdentity struct {
+	ID uint `gorm:"column:id"`
 }
 
 func sanitizeAppCredential(item *model.AppCredential, refCount int64) appCredentialResponse {
@@ -134,15 +144,20 @@ func countCredentialReferences(db *gorm.DB, credentialID uint) (int64, error) {
 // @Failure      401  {object}  handlers.Response
 // @Router       /app-credentials [get]
 func (h *AppCredentialHandler) List(c *gin.Context) {
+	db := h.db.WithContext(c.Request.Context())
 	var items []model.AppCredential
-	if err := h.db.Order("id asc").Find(&items).Error; err != nil {
+	if err := db.Order("id asc").Find(&items).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
 	out := make([]appCredentialResponse, 0, len(items))
 	for i := range items {
 		setHasPassword(&items[i])
-		refCount, _ := countCredentialReferences(h.db, items[i].ID)
+		refCount, err := countCredentialReferences(db, items[i].ID)
+		if err != nil {
+			respondInternalError(c, err)
+			return
+		}
 		out = append(out, sanitizeAppCredential(&items[i], refCount))
 	}
 	respondOK(c, out)
@@ -164,14 +179,98 @@ func (h *AppCredentialHandler) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
+	db := h.db.WithContext(c.Request.Context())
 	var item model.AppCredential
-	if err := h.db.First(&item, id).Error; err != nil {
-		respondNotFound(c, "凭据不存在")
+	if err := db.First(&item, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "凭据不存在")
+		} else {
+			respondInternalError(c, err)
+		}
 		return
 	}
 	setHasPassword(&item)
-	refCount, _ := countCredentialReferences(h.db, id)
+	refCount, err := countCredentialReferences(db, id)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
 	respondOK(c, sanitizeAppCredential(&item, refCount))
+}
+
+// References godoc
+// @Summary      列出引用凭据的策略
+// @Description  返回引用指定应用凭据的策略 ID 和名称，不读取凭据配置或策略秘密字段。
+// @Tags         app-credentials
+// @Security     Bearer
+// @Produce      json
+// @Param        id          path      int  true  "凭据 ID"
+// @Param        page        query     int  false "页码"
+// @Param        page_size   query     int  false "每页数量"
+// @Param        sort_by     query     string false "排序字段（仅支持 id）"
+// @Param        sort_order  query     string false "排序方向（asc 或 desc）"
+// @Success      200  {object} handlers.PaginatedResponse{data=[]appCredentialReferenceResponse}
+// @Failure      400  {object} handlers.Response
+// @Failure      401  {object} handlers.Response
+// @Failure      404  {object} handlers.Response
+// @Failure      500  {object} handlers.Response
+// @Router       /app-credentials/{id}/references [get]
+func (h *AppCredentialHandler) References(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if id == 0 {
+		respondBadRequest(c, "ID 格式错误")
+		return
+	}
+
+	db := h.db.WithContext(c.Request.Context())
+	var identity appCredentialIdentity
+	if err := db.Table("app_credentials").
+		Select("id").
+		Where("id = ?", id).
+		Take(&identity).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "凭据不存在")
+		} else {
+			respondInternalError(c, err)
+		}
+		return
+	}
+
+	pagination := parsePagination(c, 20, "id", map[string]bool{"id": true})
+	if pagination.Page <= 0 || pagination.PageSize <= 0 {
+		respondBadRequest(c, "分页参数不合法")
+		return
+	}
+	if pagination.Page > 1 {
+		maxInt := int(^uint(0) >> 1)
+		if pagination.Page-1 > maxInt/pagination.PageSize {
+			respondBadRequest(c, "分页参数不合法")
+			return
+		}
+	}
+
+	var total int64
+	countQuery := db.Table("policies").Where("app_credential_id = ?", id)
+	if err := countQuery.Count(&total).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+
+	references := make([]appCredentialReferenceResponse, 0, pagination.PageSize)
+	listQuery := db.Table("policies").
+		Select("policies.id, policies.name").
+		Where("app_credential_id = ?", id)
+	if err := applyPagination(listQuery, pagination).Find(&references).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if references == nil {
+		references = make([]appCredentialReferenceResponse, 0)
+	}
+	respondPaginated(c, references, total, pagination.Page, pagination.PageSize)
 }
 
 // Create godoc
@@ -244,9 +343,14 @@ func (h *AppCredentialHandler) Update(c *gin.Context) {
 		return
 	}
 
+	db := h.db.WithContext(c.Request.Context())
 	var item model.AppCredential
-	if err := h.db.First(&item, id).Error; err != nil {
-		respondNotFound(c, "凭据不存在")
+	if err := db.First(&item, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "凭据不存在")
+		} else {
+			respondInternalError(c, err)
+		}
 		return
 	}
 
@@ -280,19 +384,23 @@ func (h *AppCredentialHandler) Update(c *gin.Context) {
 	item.Description = strings.TrimSpace(req.Description)
 	item.Config = newCfg
 
-	err = h.db.Transaction(func(tx *gorm.DB) error {
+	var refCount int64
+	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(&item).Error; err != nil {
 			return err
 		}
 		// 清理旧版已持久化的自动生成 hook；当前版本在任务运行时即时渲染。
-		return cascadePolicyHooks(tx, id, oldConfigMap, newConfigMap)
+		if err := cascadePolicyHooks(tx, id, oldConfigMap, newConfigMap); err != nil {
+			return err
+		}
+		refCount, err = countCredentialReferences(tx, id)
+		return err
 	})
 	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
 	item.HasPassword = hadPassword || req.Password != ""
-	refCount, _ := countCredentialReferences(h.db, id)
 	respondOK(c, sanitizeAppCredential(&item, refCount))
 }
 
@@ -359,12 +467,17 @@ func (h *AppCredentialHandler) Delete(c *gin.Context) {
 	if !ok {
 		return
 	}
+	db := h.db.WithContext(c.Request.Context())
 	var item model.AppCredential
-	if err := h.db.First(&item, id).Error; err != nil {
-		respondNotFound(c, "凭据不存在")
+	if err := db.First(&item, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "凭据不存在")
+		} else {
+			respondInternalError(c, err)
+		}
 		return
 	}
-	refCount, err := countCredentialReferences(h.db, id)
+	refCount, err := countCredentialReferences(db, id)
 	if err != nil {
 		respondInternalError(c, err)
 		return
@@ -373,7 +486,7 @@ func (h *AppCredentialHandler) Delete(c *gin.Context) {
 		respondConflict(c, fmt.Sprintf("该凭据被 %d 个备份策略引用，无法删除", refCount))
 		return
 	}
-	if err := h.db.Delete(&item).Error; err != nil {
+	if err := db.Delete(&item).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}

@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { PoliciesPage } from "./policies-page";
 
 const {
@@ -18,6 +18,7 @@ const {
     current: {
       token: "test-token" as string | null,
       role: "admin" as "admin" | "operator" | "viewer" | null,
+      authTransitioning: false,
     },
   },
   confirmMock: vi.fn().mockResolvedValue(true),
@@ -224,19 +225,70 @@ function createContext(overrides?: Record<string, unknown>) {
     ...(overrides?.deletePolicy !== undefined ? { deletePolicy: overrides.deletePolicy } : {}),
     ...(overrides?.togglePolicy !== undefined ? { togglePolicy: overrides.togglePolicy } : {}),
     ...(overrides?.refreshPolicies !== undefined ? { refreshPolicies: overrides.refreshPolicies } : {}),
+    ...(overrides?.policiesLoading !== undefined ? { policiesLoading: overrides.policiesLoading } : {}),
+    ...(overrides?.policiesError !== undefined ? { policiesError: overrides.policiesError } : {}),
+    ...(overrides?.policiesLoaded !== undefined ? { policiesLoaded: overrides.policiesLoaded } : {}),
   };
 }
 
-function renderPolicies() {
+function renderPolicies(initialEntry = "/app/policies") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <PoliciesPage />
     </MemoryRouter>
   );
 }
 
+function manyPolicies(count: number): PolicyFixture[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: index + 1,
+    name: `策略 ${index + 1}`,
+    sourcePath: `/data/${index + 1}`,
+    targetPath: `/backup/${index + 1}`,
+    cron: "0 2 * * *",
+    naturalLanguage: "每天凌晨 2 点",
+    criticalThreshold: 1,
+    enabled: true,
+  }));
+}
+
 function withTemplate(policies: PolicyFixture[]): PolicyFixture[] {
   return policies.map((policy) => (policy.id === 2 ? { ...policy, isTemplate: true } : policy));
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
+}
+
+function HistoryControls() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate(-1)}>history-back</button>
+      <button type="button" onClick={() => navigate(1)}>history-forward</button>
+    </>
+  );
+}
+
+function PoliciesTargetHarness({ initialEntry }: { initialEntry: string }) {
+  return (
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/from" element={<Link to="/app/policies?policyId=21&view=archive">打开策略定位</Link>} />
+        <Route
+          path="/app/policies"
+          element={(
+            <>
+              <HistoryControls />
+              <PoliciesPage />
+              <LocationProbe />
+            </>
+          )}
+        />
+      </Routes>
+    </MemoryRouter>
+  );
 }
 
 describe("PoliciesPage", () => {
@@ -246,7 +298,7 @@ describe("PoliciesPage", () => {
       value: createMemoryStorage(),
     });
     window.localStorage.clear();
-    authRef.current = { token: "test-token", role: "admin" };
+    authRef.current = { token: "test-token", role: "admin", authTransitioning: false };
     confirmMock.mockReset();
     confirmMock.mockResolvedValue(true);
     toastSuccessMock.mockClear();
@@ -403,7 +455,7 @@ describe("PoliciesPage", () => {
     ["viewer", "viewer"],
     ["null", null],
   ] as const)("%s 在桌面表格和移动卡片上不能写策略，读取内容仍保留", (_label, role) => {
-    authRef.current = { token: "test-token", role };
+    authRef.current = { token: "test-token", role, authTransitioning: false };
     const policies = withTemplate(policiesRef.current.policies as PolicyFixture[]);
     createContext({ policies });
     policyEditorMock.mockClear();
@@ -437,7 +489,7 @@ describe("PoliciesPage", () => {
   });
 
   it("非管理员空筛选结果只保留清空筛选，不挂载编辑器", () => {
-    authRef.current = { token: "test-token", role: "viewer" };
+    authRef.current = { token: "test-token", role: "viewer", authTransitioning: false };
     createContext({ globalSearch: "does-not-match" });
     policyEditorMock.mockClear();
 
@@ -459,7 +511,7 @@ describe("PoliciesPage", () => {
     expect(screen.getByRole("dialog", { name: "策略编辑器" })).toBeInTheDocument();
 
     policyEditorMock.mockClear();
-    authRef.current = { token: "test-token", role: "viewer" };
+    authRef.current = { token: "test-token", role: "viewer", authTransitioning: false };
     view.rerender(
       <MemoryRouter>
         <PoliciesPage />
@@ -473,7 +525,7 @@ describe("PoliciesPage", () => {
     expect(screen.getAllByText("每日备份").length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 
-    authRef.current = { token: "test-token", role: "admin" };
+    authRef.current = { token: "test-token", role: "admin", authTransitioning: false };
     view.rerender(
       <MemoryRouter>
         <PoliciesPage />
@@ -497,7 +549,7 @@ describe("PoliciesPage", () => {
     await user.click(screen.getAllByRole("button", { name: "删除策略 每日备份" })[0]);
     expect(confirmMock).toHaveBeenCalledTimes(1);
 
-    authRef.current = { token: "test-token", role: "viewer" };
+    authRef.current = { token: "test-token", role: "viewer", authTransitioning: false };
     view.rerender(
       <MemoryRouter>
         <PoliciesPage />
@@ -513,8 +565,8 @@ describe("PoliciesPage", () => {
   });
 
   it.each([
-    ["role", { token: "test-token", role: "operator" as const }, { token: "test-token", role: "admin" as const }],
-    ["token", { token: "other-token", role: "admin" as const }, { token: "test-token", role: "admin" as const }],
+    ["role", { token: "test-token", role: "operator" as const, authTransitioning: false }, { token: "test-token", role: "admin" as const, authTransitioning: false }],
+    ["token", { token: "other-token", role: "admin" as const, authTransitioning: false }, { token: "test-token", role: "admin" as const, authTransitioning: false }],
   ])("删除确认期间 %s 发生 A-B-A 后，即使回到原身份也不删除", async (_kind, mid, restored) => {
     const user = userEvent.setup();
     const pendingConfirm = createDeferred<boolean>();
@@ -559,7 +611,7 @@ describe("PoliciesPage", () => {
     expect(batchTogglePoliciesMock).toHaveBeenCalledTimes(1);
     const refreshCalls = refreshPolicies.mock.calls.length;
 
-    authRef.current = { token: "test-token", role: "operator" };
+    authRef.current = { token: "test-token", role: "operator", authTransitioning: false };
     view.rerender(
       <MemoryRouter>
         <PoliciesPage />
@@ -586,7 +638,7 @@ describe("PoliciesPage", () => {
     await user.click(screen.getByRole("button", { name: "保存策略" }));
     expect(createPolicy).toHaveBeenCalledTimes(1);
 
-    authRef.current = { token: "test-token", role: "viewer" };
+    authRef.current = { token: "test-token", role: "viewer", authTransitioning: false };
     view.rerender(
       <MemoryRouter>
         <PoliciesPage />
@@ -597,7 +649,7 @@ describe("PoliciesPage", () => {
     });
 
     expect(toastSuccessMock).not.toHaveBeenCalled();
-    authRef.current = { token: "test-token", role: "admin" };
+    authRef.current = { token: "test-token", role: "admin", authTransitioning: false };
     view.rerender(
       <MemoryRouter>
         <PoliciesPage />
@@ -617,7 +669,7 @@ describe("PoliciesPage", () => {
     await user.click(screen.getByRole("button", { name: "保存策略" }));
     expect(updatePolicy).toHaveBeenCalledTimes(1);
 
-    authRef.current = { token: "test-token", role: "operator" };
+    authRef.current = { token: "test-token", role: "operator", authTransitioning: false };
     view.rerender(
       <MemoryRouter>
         <PoliciesPage />
@@ -629,5 +681,263 @@ describe("PoliciesPage", () => {
 
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  it("链接进入第 2 页目标时忽略不匹配的已存关键词且不打开编辑器", async () => {
+    const user = userEvent.setup();
+    const policies = manyPolicies(25);
+    createContext({ policies });
+    const view = render(<PoliciesTargetHarness initialEntry="/app/policies" />);
+
+    expect(screen.getAllByText("策略 1").length).toBeGreaterThan(0);
+    expect(screen.queryByText("策略 21")).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "下一页" })[0]);
+    expect(screen.getAllByText("第 2 页 · 共 25 条").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("策略 21").length).toBeGreaterThan(0);
+    expect(screen.queryByText("策略 1")).not.toBeInTheDocument();
+
+    window.localStorage.setItem("xirang.policies.keyword", "不匹配关键字");
+    view.unmount();
+    createContext({ policies });
+    render(<PoliciesTargetHarness initialEntry="/from" />);
+    await user.click(screen.getByRole("link", { name: "打开策略定位" }));
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/app/policies?policyId=21&view=archive");
+    expect(screen.queryByRole("textbox", { name: "搜索策略、路径或cron表达式" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("策略 21").length).toBeGreaterThan(0);
+    expect(screen.queryByText("策略 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("策略 20")).not.toBeInTheDocument();
+    expect(screen.queryByText("暂无匹配策略")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "已定位策略 策略 21（ID 21）" })).toHaveFocus();
+    expect(screen.queryByRole("dialog", { name: "策略编辑器" })).not.toBeInTheDocument();
+    expect(policiesRef.current.createPolicy).not.toHaveBeenCalled();
+    expect(policiesRef.current.updatePolicy).not.toHaveBeenCalled();
+    expect(policiesRef.current.deletePolicy).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("xirang.policies.keyword")).toBe("不匹配关键字");
+  });
+
+  it("显示全部只删除 policyId 并恢复关键词，后退和前进恢复定位", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.policies.keyword", "每小时");
+    render(<PoliciesTargetHarness initialEntry="/app/policies?policyId=1&view=archive" />);
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/app/policies?policyId=1&view=archive");
+    expect(screen.queryByRole("textbox", { name: "搜索策略、路径或cron表达式" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("每日备份").length).toBeGreaterThan(0);
+    expect(screen.queryByText("每小时备份")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("xirang.policies.keyword")).toBe("每小时");
+
+    await user.click(screen.getByRole("button", { name: "显示全部策略" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("/app/policies?view=archive");
+    expect(screen.getByTestId("location").textContent).not.toContain("policyId");
+    expect(screen.getByRole("textbox", { name: "搜索策略、路径或cron表达式" })).toHaveValue("每小时");
+    expect(screen.queryByText("每日备份")).not.toBeInTheDocument();
+    expect(screen.getAllByText("每小时备份").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "history-back" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("/app/policies?policyId=1&view=archive");
+    expect(screen.queryByRole("textbox", { name: "搜索策略、路径或cron表达式" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("每日备份").length).toBeGreaterThan(0);
+    expect(screen.queryByText("每小时备份")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "已定位策略 每日备份（ID 1）" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "history-forward" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("/app/policies?view=archive");
+    expect(screen.getByRole("textbox", { name: "搜索策略、路径或cron表达式" })).toHaveValue("每小时");
+    expect(screen.getAllByText("每小时备份").length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["zero", "/app/policies?policyId=0"],
+    ["negative", "/app/policies?policyId=-1"],
+    ["decimal", "/app/policies?policyId=1.5"],
+    ["signed", "/app/policies?policyId=%2B1"],
+    ["leading zero", "/app/policies?policyId=01"],
+    ["exponent", "/app/policies?policyId=1e2"],
+    ["empty", "/app/policies?policyId="],
+    ["unsafe", "/app/policies?policyId=9007199254740993"],
+    ["duplicate", "/app/policies?policyId=1&policyId=2"],
+  ])("拒绝无效 policyId（%s）且不定位任何策略", (_label, entry) => {
+    window.localStorage.setItem("xirang.policies.keyword", "不匹配关键字");
+    const policies = manyPolicies(2);
+    policies.push({
+      id: 9007199254740992,
+      name: "越界舍入策略",
+      sourcePath: "/data/rounded",
+      targetPath: "/backup/rounded",
+      cron: "0 2 * * *",
+      naturalLanguage: "每天凌晨 2 点",
+      criticalThreshold: 1,
+      enabled: true,
+    });
+    createContext({ policies });
+    render(<PoliciesTargetHarness initialEntry={entry} />);
+
+    expect(screen.getByText("策略定位参数无效。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "显示全部策略" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /已定位策略/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("找不到该策略或当前账户不可见。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "搜索策略、路径或cron表达式" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("location").textContent).toContain("policyId");
+    expect(screen.queryByRole("dialog", { name: "策略编辑器" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("策略 1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("策略 2").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("越界舍入策略").length).toBeGreaterThan(0);
+    expect(screen.queryByText("暂无匹配策略")).not.toBeInTheDocument();
+  });
+
+  it("接受唯一的最大安全整数 policyId", () => {
+    const id = Number.MAX_SAFE_INTEGER;
+    createContext({
+      policies: [{
+        ...manyPolicies(1)[0],
+        id,
+        name: "边界策略",
+      }],
+    });
+    render(<PoliciesTargetHarness initialEntry={`/app/policies?policyId=${id}`} />);
+    expect(screen.getByRole("heading", { name: `已定位策略 边界策略（ID ${id}）` })).toHaveFocus();
+    expect(screen.queryByText("策略定位参数无效。")).not.toBeInTheDocument();
+    expect(screen.getAllByText("边界策略").length).toBeGreaterThan(0);
+  });
+
+  it("成功加载但目标不可见时提示不可见，不宣称已删除", () => {
+    render(<PoliciesTargetHarness initialEntry="/app/policies?policyId=999" />);
+    expect(screen.getAllByText("找不到该策略或当前账户不可见。")).toHaveLength(2);
+    expect(screen.queryByText(/已删除/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /已定位策略/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+    expect(screen.queryByText("暂无匹配策略")).not.toBeInTheDocument();
+    expect(screen.queryByText("每日备份")).not.toBeInTheDocument();
+    expect(screen.queryByText("策略数据加载中")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "显示全部策略" })).toHaveLength(2);
+  });
+
+  it("加载失败时只提供重试，不用旧库存宣布已找到或目标不存在", async () => {
+    const user = userEvent.setup();
+    const refreshPolicies = vi.fn().mockResolvedValue(undefined);
+    createContext({
+      policiesError: "策略列表加载失败",
+      policiesLoaded: true,
+      refreshPolicies,
+    });
+    render(<PoliciesTargetHarness initialEntry="/app/policies?policyId=1" />);
+    expect(screen.getByText("策略列表加载失败")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(screen.queryByText("找不到该策略或当前账户不可见。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /已定位策略/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("每日备份")).not.toBeInTheDocument();
+    expect(screen.queryByText("策略数据加载中")).not.toBeInTheDocument();
+    expect(screen.queryByText("暂无匹配策略")).not.toBeInTheDocument();
+    refreshPolicies.mockClear();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(refreshPolicies).toHaveBeenCalledTimes(1);
+  });
+
+  it("目标库存尚未成功加载时不显示缺失或定位", () => {
+    createContext({
+      policies: [],
+      policiesLoaded: false,
+      policiesLoading: true,
+      policiesError: null,
+    });
+    render(<PoliciesTargetHarness initialEntry="/app/policies?policyId=1" />);
+    expect(screen.getAllByText("策略数据加载中").length).toBeGreaterThan(0);
+    expect(screen.queryByText("找不到该策略或当前账户不可见。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /已定位策略/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+  });
+
+  it("身份转换期间不定位旧库存，同令牌刷新不抢焦点，换令牌后要等新库存才定位一次", () => {
+    authRef.current = { token: "test-token", role: "admin", authTransitioning: true };
+    const view = render(<PoliciesTargetHarness initialEntry="/app/policies?policyId=1" />);
+    expect(screen.queryByRole("heading", { name: /已定位策略/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("找不到该策略或当前账户不可见。")).not.toBeInTheDocument();
+    expect(screen.queryByText("每日备份")).not.toBeInTheDocument();
+    expect(screen.getByText("策略数据加载中")).toBeInTheDocument();
+
+    authRef.current = { token: "test-token", role: "admin", authTransitioning: false };
+    view.rerender(<PoliciesTargetHarness initialEntry="/app/policies?policyId=1" />);
+    const locatedName = "已定位策略 每日备份（ID 1）";
+    expect(screen.getByRole("heading", { name: locatedName })).toHaveFocus();
+    expect(screen.getAllByText("每日备份").length).toBeGreaterThan(0);
+
+    screen.getByRole("button", { name: "显示全部策略" }).focus();
+    const current = policiesRef.current;
+    policiesRef.current = {
+      ...current,
+      policies: (current.policies as PolicyFixture[]).map((policy) => ({ ...policy })),
+    };
+    view.rerender(<PoliciesTargetHarness initialEntry="/app/policies?policyId=1" />);
+    expect(screen.getByRole("button", { name: "显示全部策略" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: locatedName })).not.toHaveFocus();
+
+    authRef.current = { token: "next-token", role: "admin", authTransitioning: false };
+    policiesRef.current = {
+      ...policiesRef.current,
+      policiesLoaded: false,
+      policiesLoading: true,
+      policiesError: null,
+    };
+    view.rerender(<PoliciesTargetHarness initialEntry="/app/policies?policyId=1" />);
+    expect(screen.queryByRole("heading", { name: /已定位策略/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("找不到该策略或当前账户不可见。")).not.toBeInTheDocument();
+    expect(screen.queryByText("每日备份")).not.toBeInTheDocument();
+    expect(screen.queryByText("暂无匹配策略")).not.toBeInTheDocument();
+    expect(screen.getByText("策略数据加载中")).toBeInTheDocument();
+
+    policiesRef.current = {
+      ...policiesRef.current,
+      policies: (policiesRef.current.policies as PolicyFixture[]).map((policy) => (
+        policy.id === 1 ? { ...policy, name: "令牌B备份" } : policy
+      )),
+      policiesLoaded: true,
+      policiesLoading: false,
+      policiesError: null,
+    };
+    view.rerender(<PoliciesTargetHarness initialEntry="/app/policies?policyId=1" />);
+    const tokenBName = "已定位策略 令牌B备份（ID 1）";
+    expect(screen.getByRole("heading", { name: tokenBName })).toHaveFocus();
+    expect(screen.getAllByText("令牌B备份").length).toBeGreaterThan(0);
+    expect(screen.queryByText("每日备份")).not.toBeInTheDocument();
+
+    screen.getByRole("button", { name: "显示全部策略" }).focus();
+    view.rerender(<PoliciesTargetHarness initialEntry="/app/policies?policyId=1" />);
+    expect(screen.getByRole("button", { name: "显示全部策略" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: tokenBName })).not.toHaveFocus();
+  });
+
+  it("切换定位目标时清空选择，并且只能选中当前目标", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/app/policies"]}>
+        <Routes>
+          <Route
+            path="/app/policies"
+            element={(
+              <>
+                <Link to="/app/policies?policyId=2">定位每小时</Link>
+                <PoliciesPage />
+              </>
+            )}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getAllByRole("checkbox", { name: "选择策略 每日备份" })[0]);
+    expect(screen.getByText("已选 1 个策略")).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "定位每小时" }));
+    expect(screen.getByText("已选 0 个策略")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "选择策略 每日备份" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /批量启用/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: "全选策略" }));
+    expect(screen.getByText("已选 1 个策略")).toBeInTheDocument();
+    expect(screen.getAllByRole("checkbox", { name: "选择策略 每小时备份" })).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "批量启用 (1)" }));
+    await waitFor(() => {
+      expect(batchTogglePoliciesMock).toHaveBeenCalledWith("test-token", [2], true);
+    });
   });
 });

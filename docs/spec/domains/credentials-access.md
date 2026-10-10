@@ -320,3 +320,48 @@ Task 所有响应中的嵌套 policy 仅含 `id/name`，管理员也不能经任
 `GET /api/v1/settings/security-risk-summary` 只读且仅 admin，任何风险项都不修改节点、密钥、配置、known_hosts 或远端。类别为 `root_ssh_users`、`reused_ssh_keys`、`sudo_enabled_nodes`、`broad_scope_ssh_keys`、`disabled_ssh_keys_in_use`、`expired_ssh_keys_in_use`、`stale_ssh_keys`、`recent_credential_operations`、`weak_security_defaults`；零发现仍保留类别。examples 只含脱敏节点/密钥名字、设置标签或 action 数量，限制为实现的 `maxSecurityRiskExamples`，总 count 独立返回；不回显审计 metadata/error 或连接信息。查询失败返回标准 internal error，不包装成部分成功。
 
 前端 `generated_at/total_risks` 映射 camelCase，未知 code 回退已知安全值，未知 severity 回退 warning，非法数量为零，缺数组为空；卡片只显示建议，不提供停用、旋转、重设 scope 等一键操作，请求失败不把旧结果标为当前确认。回归覆盖权限、全部风险类别、零项、有界脱敏例子、mapper、无变更入口，以及 policy hook 加密/可见性/保留和完整加密迁移。
+
+## 应用凭据的策略引用
+
+`GET /api/v1/app-credentials/:id/references` 使用现有 `app_credentials:read` 权限，仅
+admin 可读。缺失/过期认证返回 401，operator/viewer/未知角色返回 403；不收窄原有
+策略读权限。成功信封为 `{code:200,message:"ok",data:[{id,name}],total,page,page_size}`，
+空页的 data 为 `[]`。正整数凭据 ID 才有效，零、负数、非数字或溢出返回安全 400；
+凭据不存在为 404，数据库故障为安全 500，不回显 SQL、配置或秘密。
+
+存在性查询只投影凭据 id，引用查询只投影策略 id/name 到无秘密模型 hook 的 DTO；
+不加载凭据 config、完整 Policy、hook、executor 或连接端点。引用定义始终为
+`policies.app_credential_id = :id`，包括未设置 app_profile、禁用或不同类型的策略。
+计数和列表查询均检查错误。List/Get 计数失败不能返回伪零；Update 在保存与 hook
+清理的同一事务内取得响应所需计数，计数失败回滚该事务。
+
+分页复用 page/page_size 与 limit/offset 约定，默认每页 20、上限 500、默认 ID
+降序；客户端显式请求 ID 升序。分页偏移的整数乘法溢出返回安全 400，超过末页仍返回
+空数组及真实 total。各次请求及同次计数/列表不承诺持续快照，引用可以增加、删除、
+改绑。删除每次独立重查引用，已提交的新绑定使其返回 409；这不等同于数据库外键
+保证，也不宣称对现有 count/delete 微窗口提供全局并发写入围栏。
+
+管理员在应用凭据清单中查看每个凭据的引用数量，包括零。计数是可聚焦的原生按钮，读屏名称包含凭据名和数量；正数为 info，零为 neutral。该按钮在所有屏宽都属于同一清单，不另做一套隐藏交互。打开只读对话框时只传入凭据 `id` 和 `name`，不传入 config、密码或连接信息。
+
+对话框仅在 admin、持有 token 且不处于身份转换时请求和展示。角色、token 或身份转换变化立即关闭并清空。每次打开、切换凭据或翻页都重新读取，并取消上一次请求；关闭、卸载、过期响应和 A→B→A 不得写回旧结果。固定每页 20 条，按策略 ID 升序，只提供上一页和下一页。引用数据只留在该次对话框内存，不进入 URL、localStorage 或全局缓存。
+
+成功且 total 为 0 时说明当前没有策略引用。404 说明凭据不存在并可关闭，不显示成空引用。其他失败提供当前页重试，不把失败当成空列表。total 大于 0 但当前页没有记录时说明引用已变化，可回到第一页，不自动循环请求。刷新是显式动作。新请求进行时不把上一页的策略链接当作当前结果。
+
+每一行只显示策略名称和 ID，并用该数值 ID 组成 `/app/policies?policyId=<id>`。长名称换行，读屏名称包含策略名和 ID。说明写明引用可能变化，删除时服务器会重新检查。查询不是删除授权，不以本地数量禁用删除。
+
+凭据清单请求携带 AbortSignal。失败显示可重试错误，不进入“暂无凭据”，也不用旧数量或失败后的零宣称当前引用。身份转换期间不挂载凭据内容，也不重定向正在转换的管理员。非 admin 仍在挂载前进入概览，且不请求凭据或引用。
+
+编辑凭据时，密码字段始终展示静态说明：更改密码会影响引用此凭据的策略，留空保留原密码。说明通过 `aria-describedby` 关联密码输入，即使缓存的 referenceCount 为 0 也保留。不为此额外探测引用，不改变留空密码的更新协议。
+
+客户端引用 DTO 只接受 `id` 和 `name`。非法载荷使用 `credentials.referencesInvalidResponse`，不得当成空列表。
+
+策略页只接受唯一且匹配 `/^[1-9]\d*$/` 的安全整数 `policyId`。无效值或重复参数保留
+在 URL 中并显示参数错误，不误定位策略。有效时按 ID 精确过滤，临时隐藏并旁路原
+keyword，但不改写其持久状态；目标切换清空选择并回到第一页，批量操作只覆盖目标。
+「显示全部策略」仅删除 policyId、保留其他参数，使用正常导航并支持 Back/Forward。
+没有 policyId 时沿用原搜索分页行为。
+
+定位标题位于移动卡片和桌面表格之外，是唯一可见的命名焦点目标，含名称及 ID。
+成功加载且目标存在后，每个 location/token/目标组合只自动聚焦一次；轮询或后续操作
+不再抢焦点，不自动打开编辑器或写入。身份转换或请求失败时不基于旧库存宣布找到；
+加载失败优先显示重试，成功但目标不可见时说明「找不到该策略或当前账户不可见」。

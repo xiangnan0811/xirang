@@ -1690,6 +1690,103 @@ const docTemplate = `{
                 }
             }
         },
+        "/app-credentials/{id}/references": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回引用指定应用凭据的策略 ID 和名称，不读取凭据配置或策略秘密字段。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app-credentials"
+                ],
+                "summary": "列出引用凭据的策略",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "凭据 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序字段（仅支持 id）",
+                        "name": "sort_by",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序方向（asc 或 desc）",
+                        "name": "sort_order",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.PaginatedResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/internal_api_handlers.appCredentialReferenceResponse"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/asset-content/{deliveryId}": {
             "get": {
                 "description": "Cookie-only 同源内容路由；禁止 Authorization 与 query。支持 HEAD、完整 GET、单个 normal/open/suffix Range 和 If-Range；multipart Range 返回 416。content_url 中的 delivery ID 本身不授权。",
@@ -17041,6 +17138,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "rsync_target": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.appCredentialReferenceResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
                     "type": "string"
                 }
             }

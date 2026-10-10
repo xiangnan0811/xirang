@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useTranslation } from "react-i18next";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { Copy, Plus, ShieldCheck, Trash2, Wrench } from "lucide-react";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useNodesContext } from "@/context/nodes-context.hooks";
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui/data-surface";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { InventoryRetryAlert } from "@/components/ui/inventory-retry-alert";
 import { Pagination } from "@/components/ui/pagination";
 import { PageHero } from "@/components/ui/page-hero";
@@ -39,6 +41,17 @@ import { PolicyCard } from "@/pages/policies-page.card";
 import { PoliciesFilters } from "@/pages/policies-page.filters";
 
 const keywordStorageKey = "xirang.policies.keyword";
+const policyIdPattern = /^[1-9]\d*$/;
+
+function parseUniquePolicyId(values: string[]): number | null | "invalid" {
+  if (values.length === 0) return null;
+  if (values.length !== 1) return "invalid";
+  const raw = values[0];
+  if (!policyIdPattern.test(raw)) return "invalid";
+  const id = Number(raw);
+  if (!Number.isSafeInteger(id) || String(id) !== raw) return "invalid";
+  return id;
+}
 
 type PolicyConfirm = (options: {
   title: string;
@@ -84,8 +97,15 @@ function drillTone(status?: string): "success" | "destructive" | "warning" | "ne
 
 export function PoliciesPage() {
   const { t } = useTranslation();
-  const { token, role } = useAuth();
+  const { token, role, authTransitioning } = useAuth();
   const canManagePolicies = role === "admin";
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const policyIdValues = searchParams.getAll("policyId");
+  const policyIdTarget = parseUniquePolicyId(policyIdValues);
+  const targeting = policyIdTarget !== null;
+  const targetPolicyId = typeof policyIdTarget === "number" ? policyIdTarget : null;
+  const policyIdKey = policyIdValues.join("\0");
   const mountedRef = useRef(false);
   const authIdentityRef = useRef({ role, token });
   const sessionGenerationRef = useRef(0);
@@ -110,6 +130,7 @@ export function PoliciesPage() {
   } = usePoliciesContext();
   const loading = (policiesLoading || !policiesLoaded) && policies.length === 0 && !policiesError;
   const requestFailed = Boolean(policiesError) && policies.length === 0;
+  const inventoryTrustworthy = policiesLoaded && !policiesError && !authTransitioning;
 
   useEffect(() => {
     void refreshPolicies();
@@ -129,6 +150,12 @@ export function PoliciesPage() {
   const [editingPolicy, setEditingPolicy] = useState<PolicyRecord | null>(null);
   const [selectedPolicyIds, setSelectedPolicyIds] = useState<number[]>([]);
   const confirmRef = useRef<PolicyConfirm>(async () => false);
+  const targetHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const focusedTargetsRef = useRef(new Set<string>());
+  const policyIdKeyRef = useRef(policyIdKey);
+  const selectedIds = targetPolicyId === null
+    ? selectedPolicyIds
+    : selectedPolicyIds.filter((id) => id === targetPolicyId);
 
   useLayoutEffect(() => {
     const previous = authIdentityRef.current;
@@ -154,15 +181,28 @@ export function PoliciesPage() {
 
   const togglePolicySelection = (id: number, checked: boolean) => {
     if (authIdentityRef.current.role !== "admin") return;
+    if (targetPolicyId !== null && id !== targetPolicyId) return;
+    if (targetPolicyId !== null) {
+      setSelectedPolicyIds(checked ? [targetPolicyId] : []);
+      return;
+    }
     setSelectedPolicyIds((prev) =>
       checked ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((pid) => pid !== id)
     );
   };
 
+  const showAllPolicies = () => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("policyId");
+      return next;
+    });
+  };
+
   const handleBatchToggle = async (enabled: boolean) => {
     if (authIdentityRef.current.role !== "admin") return;
     const requestToken = authIdentityRef.current.token;
-    const policyIds = [...selectedPolicyIds];
+    const policyIds = [...selectedIds];
     if (!requestToken || policyIds.length === 0) return;
     const generation = sessionGenerationRef.current;
     if (!isCurrentSession(generation)) return;
@@ -183,16 +223,19 @@ export function PoliciesPage() {
   };
 
   const filteredPolicies = useMemo(() => {
-    const effectiveKeyword = deferredKeyword.trim().toLowerCase();
-    if (!effectiveKeyword) {
-      return policies;
+    if (policyIdTarget !== null) {
+      if (!inventoryTrustworthy) return [];
+      if (targetPolicyId === null) return policies;
+      return policies.filter((policy) => policy.id === targetPolicyId);
     }
+    const effectiveKeyword = deferredKeyword.trim().toLowerCase();
+    if (!effectiveKeyword) return policies;
     return policies.filter((policy) =>
       `${policy.name} ${policy.sourcePath} ${policy.targetPath} ${policy.cron}`
         .toLowerCase()
         .includes(effectiveKeyword)
     );
-  }, [deferredKeyword, policies]);
+  }, [deferredKeyword, inventoryTrustworthy, policies, policyIdTarget, targetPolicyId]);
 
   const {
     pagedItems: pagedPolicies,
@@ -203,8 +246,31 @@ export function PoliciesPage() {
     setPageSize,
   } = useClientPagination(filteredPolicies);
 
+  useLayoutEffect(() => {
+    if (policyIdKeyRef.current === policyIdKey) return;
+    policyIdKeyRef.current = policyIdKey;
+    setSelectedPolicyIds((current) => (current.length === 0 ? current : []));
+    setPage(1);
+  }, [policyIdKey, setPage]);
+
   const activeCount = policies.filter((policy) => policy.enabled).length;
   const disabledCount = policies.length - activeCount;
+  const locatedPolicy = targetPolicyId !== null && inventoryTrustworthy
+    ? policies.find((policy) => policy.id === targetPolicyId) ?? null
+    : null;
+  const showTargetHeading = locatedPolicy !== null;
+  const showMissingTarget = targetPolicyId !== null && inventoryTrustworthy && locatedPolicy === null;
+  const focusKey = showTargetHeading && locatedPolicy
+    ? `${location.pathname}${location.search}${location.hash}|${token ?? ""}|${locatedPolicy.id}`
+    : null;
+
+  useLayoutEffect(() => {
+    const heading = targetHeadingRef.current;
+    if (!focusKey || !heading) return;
+    if (focusedTargetsRef.current.has(focusKey)) return;
+    heading.focus();
+    focusedTargetsRef.current.add(focusKey);
+  }, [focusKey]);
 
   const editorOpenerRef = useRef<HTMLElement | null>(null);
   const editorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
@@ -394,13 +460,13 @@ export function PoliciesPage() {
           {canManagePolicies ? (
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-2">
-                {selectedPolicyIds.length > 0 && (
+                {selectedIds.length > 0 && (
                   <>
                     <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(true)}>
-                      {t('policies.batchEnableCount', { count: selectedPolicyIds.length })}
+                      {t('policies.batchEnableCount', { count: selectedIds.length })}
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => void handleBatchToggle(false)}>
-                      {t('policies.batchDisableCount', { count: selectedPolicyIds.length })}
+                      {t('policies.batchDisableCount', { count: selectedIds.length })}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => setSelectedPolicyIds([])}>
                       {t('policies.clearSelection')}
@@ -409,20 +475,55 @@ export function PoliciesPage() {
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Badge tone="neutral">{t('policies.selectedCount', { count: selectedPolicyIds.length })}</Badge>
+                <Badge tone="neutral">{t('policies.selectedCount', { count: selectedIds.length })}</Badge>
               </div>
             </div>
           ) : null}
-          <PoliciesFilters
-            keyword={keyword}
-            setKeyword={setKeyword}
-            activeCount={activeCount}
-            totalCount={policies.length}
-            resetFilters={resetFilters}
-          />
+          {targeting ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-secondary/40 px-3 py-2">
+              {policyIdTarget === "invalid" ? (
+                <p className="min-w-0 text-sm text-muted-foreground">{t("policies.target.invalid")}</p>
+              ) : policiesError ? null : (
+                <p className="min-w-0 text-sm text-muted-foreground">
+                  {showMissingTarget
+                    ? t("policies.target.missing")
+                    : locatedPolicy
+                      ? t("policies.target.located", { name: locatedPolicy.name, id: locatedPolicy.id })
+                      : t("policies.loadingTitle")}
+                </p>
+              )}
+              <Button size="sm" variant="outline" onClick={showAllPolicies}>
+                {t("policies.target.showAll")}
+              </Button>
+            </div>
+          ) : (
+            <PoliciesFilters
+              keyword={keyword}
+              setKeyword={setKeyword}
+              activeCount={activeCount}
+              totalCount={policies.length}
+              resetFilters={resetFilters}
+            />
+          )}
         </DataSurfaceToolbar>
 
         <DataSurfaceContent className="space-y-4">
+          {showTargetHeading && locatedPolicy ? (
+            <h2
+              ref={targetHeadingRef}
+              tabIndex={-1}
+              className="rounded-sm text-base font-semibold leading-snug text-foreground outline-none focus:ring-2 focus:ring-ring"
+            >
+              {t("policies.target.located", { name: locatedPolicy.name, id: locatedPolicy.id })}
+            </h2>
+          ) : null}
+          {showMissingTarget ? (
+            <InlineAlert tone="warning" title={t("policies.target.missing")}>
+              <Button size="sm" variant="outline" onClick={showAllPolicies}>
+                {t("policies.target.showAll")}
+              </Button>
+            </InlineAlert>
+          ) : null}
           {policiesError ? (
             <InventoryRetryAlert error={policiesError} onRetry={() => { void refreshPolicies(); }} />
           ) : null}
@@ -442,7 +543,7 @@ export function PoliciesPage() {
                 policy={policy}
                 nodes={nodes}
                 canManagePolicies={canManagePolicies}
-                selected={selectedPolicyIds.includes(policy.id)}
+                selected={selectedIds.includes(policy.id)}
                 onToggleSelect={togglePolicySelection}
                 onEdit={openEditDialog}
                 onDelete={onDelete}
@@ -451,7 +552,7 @@ export function PoliciesPage() {
               />
             ))}
 
-            {!loading && !requestFailed && !filteredPolicies.length ? (
+            {!loading && !requestFailed && policyIdTarget === null && !filteredPolicies.length ? (
               <EmptyState
                 className="md:col-span-2 lg:col-span-3"
                 title={t('policies.noMatchTitle')}
@@ -490,9 +591,17 @@ export function PoliciesPage() {
                       <input
                         type="checkbox"
                         className="size-4 accent-primary rounded-sm"
-                        checked={pagedPolicies.length > 0 && pagedPolicies.every((p) => selectedPolicyIds.includes(p.id))}
+                        checked={pagedPolicies.length > 0 && pagedPolicies.every((p) => selectedIds.includes(p.id))}
                         onChange={(e) => {
                           if (authIdentityRef.current.role !== "admin") return;
+                          if (targetPolicyId !== null) {
+                            setSelectedPolicyIds(
+                              e.target.checked && pagedPolicies.some((policy) => policy.id === targetPolicyId)
+                                ? [targetPolicyId]
+                                : [],
+                            );
+                            return;
+                          }
                           if (e.target.checked) {
                             setSelectedPolicyIds((prev) => Array.from(new Set([...prev, ...pagedPolicies.map((p) => p.id)])));
                           } else {
@@ -525,7 +634,7 @@ export function PoliciesPage() {
                           <input
                             type="checkbox"
                             className="size-4 accent-primary rounded-sm"
-                            checked={selectedPolicyIds.includes(policy.id)}
+                            checked={selectedIds.includes(policy.id)}
                             onChange={(e) => togglePolicySelection(policy.id, e.target.checked)}
                             aria-label={t('policies.selectAriaLabel', { name: policy.name })}
                           />
@@ -620,7 +729,7 @@ export function PoliciesPage() {
                       ) : null}
                     </tr>
                   ))
-                ) : !loading && !requestFailed ? (
+                ) : !loading && !requestFailed && policyIdTarget === null ? (
                   <tr>
                     <td colSpan={tableColumnCount} className="px-3 py-5">
                       <EmptyState

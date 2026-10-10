@@ -12,6 +12,8 @@ import {
 import { PageHero } from "@/components/ui/page-hero";
 import { toast } from "@/components/ui/toast-sonner";
 import { CredentialEditorDialog } from "@/components/credential-editor-dialog";
+import { CredentialReferencesDialog } from "@/components/credential-references-dialog";
+import { InventoryRetryAlert } from "@/components/ui/inventory-retry-alert";
 import {
   dialogOpenerFromTarget,
   restoreConnectedDialogOpener,
@@ -26,7 +28,8 @@ import {
 import { getErrorMessage } from "@/lib/utils";
 
 export function CredentialsPage() {
-  const { token, role } = useAuth();
+  const { token, role, authTransitioning } = useAuth();
+  if (authTransitioning) return null;
   if (role !== "admin") return <Navigate to="/app/overview" replace />;
   return <CredentialsPageContent key={token ?? ""} />;
 }
@@ -38,6 +41,7 @@ function CredentialsPageContent() {
 
   const [credentials, setCredentials] = useState<AppCredential[]>([]);
   const [loading, setLoading] = useState(Boolean(token));
+  const [listError, setListError] = useState<string | null>(null);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingCredential, setEditingCredential] =
@@ -47,9 +51,23 @@ function CredentialsPageContent() {
     restoreConnectedDialogOpener(event, editorOpenerRef.current);
   };
 
+  const referencesOpenerRef = useRef<HTMLElement | null>(null);
+  const [referencesOpen, setReferencesOpen] = useState(false);
+  const [referencesCredential, setReferencesCredential] = useState<{ id: number; name: string } | null>(null);
+  const referencesOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    const opener = referencesOpenerRef.current;
+    if (!opener?.isConnected) {
+      event.preventDefault();
+      return;
+    }
+    restoreConnectedDialogOpener(event, opener);
+  };
+
   const [requestVersion, setRequestVersion] = useState(0);
   const fetchCredentials = useCallback(() => {
     if (!token) return;
+    setCredentials([]);
+    setListError(null);
     setLoading(true);
     setRequestVersion((version) => version + 1);
   }, [token]);
@@ -57,12 +75,16 @@ function CredentialsPageContent() {
   useEffect(() => {
     if (!token) return;
     const controller = new AbortController();
-    createCredentialsApi().list(token)
+    createCredentialsApi().list(token, controller.signal)
       .then((data) => {
-        if (!controller.signal.aborted) setCredentials(data);
+        if (controller.signal.aborted) return;
+        setCredentials(data);
+        setListError(null);
       })
       .catch((error: unknown) => {
-        if (!controller.signal.aborted) toast.error(getErrorMessage(error));
+        if (controller.signal.aborted) return;
+        setCredentials([]);
+        setListError(getErrorMessage(error));
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -80,6 +102,12 @@ function CredentialsPageContent() {
     editorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingCredential(cred);
     setEditorOpen(true);
+  };
+
+  const openReferencesDialog = (cred: AppCredential, opener?: EventTarget | null) => {
+    referencesOpenerRef.current = dialogOpenerFromTarget(opener);
+    setReferencesCredential({ id: cred.id, name: cred.name });
+    setReferencesOpen(true);
   };
 
   const handleDelete = async (cred: AppCredential) => {
@@ -143,7 +171,7 @@ function CredentialsPageContent() {
         meta={
           loading ? (
             <Badge tone="neutral">{t("common.loading")}</Badge>
-          ) : (
+          ) : listError ? null : (
             <>
               <Badge tone="info">{totalMeta}</Badge>
               <Badge tone={passwordConfigured > 0 ? "success" : "neutral"}>
@@ -172,7 +200,11 @@ function CredentialsPageContent() {
           description={t("credentials.pageDesc")}
         />
         <DataSurfaceContent className="p-0">
-          {loading ? (
+          {listError ? (
+            <div className="p-4">
+              <InventoryRetryAlert error={listError} onRetry={fetchCredentials} />
+            </div>
+          ) : loading ? (
             <div
               className="flex items-center justify-center py-16"
               role="status"
@@ -197,14 +229,14 @@ function CredentialsPageContent() {
               </Button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div className="min-w-0">
+              <table className="w-full table-fixed text-sm sm:table-auto">
                 <thead>
                   <tr className="border-b border-border bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                    <th className="px-2 py-3 text-left font-medium text-muted-foreground sm:px-4">
                       {t("common.name")}
                     </th>
-                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                    <th className="hidden px-2 py-3 text-left font-medium text-muted-foreground sm:table-cell sm:px-4">
                       {t("common.type")}
                     </th>
                     <th className="hidden px-4 py-3 text-left font-medium text-muted-foreground md:table-cell">
@@ -213,10 +245,10 @@ function CredentialsPageContent() {
                     <th className="hidden px-4 py-3 text-center font-medium text-muted-foreground sm:table-cell">
                       {t("credentials.password")}
                     </th>
-                    <th className="hidden px-4 py-3 text-center font-medium text-muted-foreground sm:table-cell">
+                    <th className="w-16 px-2 py-3 text-center font-medium text-muted-foreground sm:w-auto sm:px-4">
                       {t("credentials.references")}
                     </th>
-                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">
+                    <th className="w-24 px-2 py-3 text-right font-medium text-muted-foreground sm:w-auto sm:px-4">
                       {t("common.actions")}
                     </th>
                   </tr>
@@ -227,8 +259,10 @@ function CredentialsPageContent() {
                       key={cred.id}
                       className="border-b border-border transition-colors hover:bg-muted/30"
                     >
-                      <td className="px-4 py-3 font-medium">{cred.name}</td>
-                      <td className="px-4 py-3">
+                      <td className="overflow-hidden px-2 py-2 font-medium sm:px-4 sm:py-3">
+                        <div className="truncate" title={cred.name}>{cred.name}</div>
+                      </td>
+                      <td className="hidden overflow-hidden px-2 py-3 sm:table-cell sm:px-4">
                         <Badge tone={typeBadgeTone(cred.type)}>
                           {typeLabel(cred.type)}
                         </Badge>
@@ -247,14 +281,24 @@ function CredentialsPageContent() {
                           </Badge>
                         )}
                       </td>
-                      <td className="hidden px-4 py-3 text-center sm:table-cell">
-                        {cred.referenceCount > 0 ? (
-                          <Badge tone="info">{cred.referenceCount}</Badge>
-                        ) : (
-                          <span className="text-muted-foreground">0</span>
-                        )}
+                      <td className="px-2 py-2 text-center sm:px-4 sm:py-3">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-11 min-w-11 px-2 sm:h-8 sm:min-w-8"
+                          aria-label={t("credentials.referencesOpen", {
+                            name: cred.name,
+                            count: cred.referenceCount,
+                          })}
+                          onClick={(event) => openReferencesDialog(cred, event.currentTarget)}
+                        >
+                          <Badge tone={cred.referenceCount > 0 ? "info" : "neutral"} dot={false}>
+                            {cred.referenceCount}
+                          </Badge>
+                        </Button>
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="whitespace-nowrap px-2 py-2 text-right sm:px-4 sm:py-3">
                         <div className="inline-flex items-center gap-1">
                           <Button
                             variant="ghost"
@@ -293,6 +337,13 @@ function CredentialsPageContent() {
         onCloseAutoFocus={editorOnCloseAutoFocus}
         editingCredential={editingCredential}
         onSaved={fetchCredentials}
+      />
+
+      <CredentialReferencesDialog
+        open={referencesOpen}
+        onOpenChange={setReferencesOpen}
+        credential={referencesCredential}
+        onCloseAutoFocus={referencesOnCloseAutoFocus}
       />
 
       {/* ── Delete Confirmation (from useConfirm hook) ── */}
