@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.62.0](https://github.com/xiangnan0811/xirang/compare/v0.61.1...v0.62.0) (2026-10-10)
+
+
+### ✨ Features
+
+* **credentials:** 支持应用凭据引用策略反查 ([#608](https://github.com/xiangnan0811/xirang/issues/608)) ([76592b6](https://github.com/xiangnan0811/xirang/commit/76592b68d3efa30b30dcc1d6b87680767fa8a5df))
+
 ### 行为与升级说明
 
 - 管理员可从应用凭据的引用数量（包括零）打开只读策略列表，按每页 20 条查看名称与 ID，并通过 `/app/policies?policyId=<id>` 精确定位。定位暂时旁路但保留原搜索词，退出定位后恢复；不会自动打开编辑器或执行写操作。
@@ -10,13 +17,6 @@
 - 凭据 List/Get 计数失败返回安全错误；Update 在保存和关联 hook 清理的同一事务内取得响应计数，计数失败回滚。引用是读取时观察值，不是持续快照、更新锁或删除许可；DELETE 仍重新检查已提交引用，不新增数据库外键或所有策略写入的全局并发围栏，不宣称消除既有 count/delete 微窗口。
 - 前后端应按同一发行版本切换；新接口和事务错误处理从新版 Core 启动后生效，交互与身份隔离从新版页面加载后生效。升级前保全数据库、适用密钥和配置，完成或明确退出旧页面交互并排空旧 Core 的在途凭据更新/删除请求；关闭页面或换版不撤销服务器已提交操作，旧进程中的操作不受新逻辑追溯保护。
 - 本次无新增数据库 schema migration，不改写历史引用或自动执行备份。既有迁移的使用后降级保护和恢复限制仍适用；回退旧版会移除引用反查并恢复旧计数错误、旧页结果复用和定位身份缺陷，不回滚已提交的凭据/策略修改。仅交付 R-08，不关闭其余 P2/P3；公开发布及本地/CI 验收不等于生产部署或灾备恢复验收。
-
-## [0.62.0](https://github.com/xiangnan0811/xirang/compare/v0.61.1...v0.62.0) (2026-10-10)
-
-
-### ✨ Features
-
-* **credentials:** 支持应用凭据引用策略反查 ([#608](https://github.com/xiangnan0811/xirang/issues/608)) ([76592b6](https://github.com/xiangnan0811/xirang/commit/76592b68d3efa30b30dcc1d6b87680767fa8a5df))
 
 ## [0.61.1](https://github.com/xiangnan0811/xirang/compare/v0.61.0...v0.61.1) (2026-10-10)
 
