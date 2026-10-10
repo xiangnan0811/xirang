@@ -10,6 +10,13 @@
 - 本次无新增数据库 schema migration，前后端按同一发行版本切换，保全数据库、适用密钥与配置；既有迁移的使用后降级保护与恢复限制仍适用。回退旧页面会恢复空态缺少下一步及 viewer 任务链接指向受限数据页的问题，不回滚已提交的恢复操作或改写已有 plan/job。
 - 本次仅交付 R-07。真实本地验收覆盖功能关闭环境、三角色导航与无自动恢复请求，不代表恢复执行成功、生产部署或灾备恢复已验收；其余 P2/P3 和管理员账户恢复政策不在本版本范围。
 
+## [0.61.1](https://github.com/xiangnan0811/xirang/compare/v0.61.0...v0.61.1) (2026-10-10)
+
+
+### 🐛 Bug Fixes
+
+* **web:** 为恢复空态提供安全导航入口 ([#606](https://github.com/xiangnan0811/xirang/issues/606)) ([f320141](https://github.com/xiangnan0811/xirang/commit/f320141e5fd1b1b0cdd16a05b5fe285d20982a3a))
+
 ## [0.61.0](https://github.com/xiangnan0811/xirang/compare/v0.60.0...v0.61.0) (2026-10-10)
 
 
