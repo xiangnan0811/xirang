@@ -83,6 +83,12 @@ admin/viewer 查看全部合格的现存历史，包含 `node_id_snapshot=0` 的
 - 下游任务忙时链式 effect 可重试，不确认不存在的 child；禁用/归档下游保留 skipped child，重试耗尽仍是 failed effect。重放不复制同一上下游边。
 - policy `max_concurrent` 在 DB policy lock 下跨节点/Core 统计普通 pending/running reservation，并在执行入口重核；全局 semaphore 独立。手动忙请求不生成延期 occurrence，Cron intent 不占配额但等待可用 slot；完成释放容量，禁用 policy 取消 pending 普通预约并记录 missed occurrence。旧非正限制保守按 1，API 拒绝负值；restore/drill 单独准入。
 
+## 恢复页空态与导航
+
+未选择恢复点且没有已有 plan/job 时，恢复页说明先浏览并选择可用恢复点，并提供备份概览入口。当前恢复页没有可信的功能可用性信息，默认导向无查询参数的概览；不从角色、URL 或一次 403 推测恢复已启用，也不为探测能力发送数据、恢复计划或作业请求。
+
+带合法 `taskId` 时，admin/operator 可沿既有路由构造器打开对应任务的数据工作台；viewer、未知角色及身份切换期间不提供该数据入口，改为概览及证据引导。恢复 URL 只接受现有 task/point/plan/job/inspector 字段，不增加 repository 查询参数；非法参数仍安全重置。已有恢复点元数据和 plan/job 向导保持原行为，空态导航不创建计划或启动任务，实际恢复继续要求现有权限、step-up、grant 和显式确认。
+
 ## 旧版 Rsync 恢复
 
 Legacy Rsync/Rclone 是可变当前树，不是历史恢复点；retention 拒绝破坏性的按年龄删除并记录安全理由。受管恢复点与 Restic snapshot 保留各自边界。升级或补证前先保全数据库、密钥、TaskRun 及独立备份副本；共享过的树可能已无法由任一历史 manifest 描述，不删除 dirty/失败证据或覆盖唯一可救副本来恢复资格。

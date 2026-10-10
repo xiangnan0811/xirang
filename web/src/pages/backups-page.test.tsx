@@ -87,6 +87,7 @@ const {
   resolveBackupFileSourceRecoveryPointMock,
   getRecoveryPlanMock,
   getRecoveryJobMock,
+  recoveryWriteMocks,
   verifyMountMock,
 } = vi.hoisted(() => ({
   authRef: {
@@ -116,6 +117,21 @@ const {
   resolveBackupFileSourceRecoveryPointMock: vi.fn(),
   getRecoveryPlanMock: vi.fn(),
   getRecoveryJobMock: vi.fn(),
+  recoveryWriteMocks: {
+    createPlan: vi.fn(),
+    preflight: vi.fn(),
+    overrideSecurity: vi.fn(),
+    authorizeWrite: vi.fn(),
+    execute: vi.fn(),
+    authorizeExactMirrorDelete: vi.fn(),
+    getJobItems: vi.fn(),
+    getJobResults: vi.fn(),
+    cancelPlan: vi.fn(),
+    cancelJob: vi.fn(),
+    retainResults: vi.fn(),
+    issueResultDownloadTicket: vi.fn(),
+    cleanupResults: vi.fn(),
+  },
   verifyMountMock: vi.fn(),
 }));
 
@@ -192,21 +208,9 @@ vi.mock("@/lib/api/backup-recovery-api", async (importOriginal) => {
   return {
     ...actual,
     createBackupRecoveryApi: () => ({
-      createPlan: vi.fn(),
+      ...recoveryWriteMocks,
       getPlan: getRecoveryPlanMock,
       getJob: getRecoveryJobMock,
-      preflight: vi.fn(),
-      overrideSecurity: vi.fn(),
-      authorizeWrite: vi.fn(),
-      execute: vi.fn(),
-      authorizeExactMirrorDelete: vi.fn(),
-      getJobItems: vi.fn(),
-      getJobResults: vi.fn(),
-      cancelPlan: vi.fn(),
-      cancelJob: vi.fn(),
-      retainResults: vi.fn(),
-      issueResultDownloadTicket: vi.fn(),
-      cleanupResults: vi.fn(),
     }),
   };
 });
@@ -270,6 +274,7 @@ describe("BackupsPage", () => {
     });
     getRecoveryPlanMock.mockReset();
     getRecoveryJobMock.mockReset();
+    for (const mock of Object.values(recoveryWriteMocks)) mock.mockReset();
     verifyMountMock.mockReset();
   });
 
@@ -702,7 +707,9 @@ describe("BackupsPage", () => {
       "href",
       "/app/backups/data?taskId=7",
     );
+    expect(screen.queryByRole("link", { name: /Open overview|打开概览/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Export|导出|Start recovery|开始恢复/ })).not.toBeInTheDocument();
+    expectNoRecoveryWrites();
   });
 
   it("hydrates the recovery wizard from opaque route handles without putting authority material in the route", async () => {
@@ -732,8 +739,10 @@ describe("BackupsPage", () => {
 
     expect(await screen.findByRole("heading", { name: /Run recovery preflight|运行恢复预检/ })).toBeInTheDocument();
     expect(getRecoveryPlanMock).toHaveBeenCalledWith("test-token", planId, expect.any(AbortSignal));
+    expect(screen.queryByRole("link", { name: /Open overview|打开概览/ })).not.toBeInTheDocument();
     expect(screen.getByTestId("backups-location")).toHaveTextContent(`planId=${planId}`);
     expect(screen.getByTestId("backups-location")).not.toHaveTextContent(/proof|reason|grant|secret|ticket/i);
+    expectNoRecoveryWrites();
   });
 
   it("fails closed with an explicit unavailable state when a recovery route lacks admin authority", async () => {
@@ -747,7 +756,9 @@ describe("BackupsPage", () => {
     expect(await screen.findByText(/Recovery unavailable|恢复不可用/)).toBeInTheDocument();
     expect(getRecoveryPlanMock).not.toHaveBeenCalled();
     expect(getRecoveryJobMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", { name: /Open overview|打开概览/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Create recovery plan|创建恢复计划|Start recovery|开始恢复/ })).not.toBeInTheDocument();
+    expectNoRecoveryWrites();
   });
 
   it("hides task context when recovery has no producing task", async () => {
@@ -1015,16 +1026,116 @@ describe("BackupsPage", () => {
 
     expect(await screen.findByText(/Recovery point evidence|恢复点证据/)).toBeInTheDocument();
     expect(screen.getByTitle(recoveryPoint.id)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Task context|任务上下文/ })).toHaveAttribute(
-      "href",
-      "/app/backups/data?taskId=7",
-    );
+    expect(screen.queryByRole("link", { name: /Task context|任务上下文/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open overview|打开概览/ })).toHaveAttribute("href", "/app/backups/overview");
+    expect(screen.getAllByRole("link").every((link) => !link.getAttribute("href")?.includes("/app/backups/data"))).toBe(true);
     expect(screen.queryByRole("tab", { name: /Files|文件/ })).not.toBeInTheDocument();
     expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("href"))).toEqual([
       "/app/backups/overview",
       "/app/backups/recovery",
     ]);
     expectNoBackupDataRequests();
+    expectNoRecoveryWrites();
+  });
+
+  it("opens a queryless overview from a bare recovery route without probing or writing", async () => {
+    const user = userEvent.setup();
+    getBackupConfidenceMock.mockResolvedValue(backupConfidence);
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    getStorageUsageMock.mockResolvedValue(storageUsage);
+
+    renderBackups("/app/backups/recovery");
+
+    expect(await screen.findByText(/No recovery point selected|尚未选择恢复点/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open overview|打开概览/ })).toHaveAttribute("href", "/app/backups/overview");
+    expect(screen.queryByRole("link", { name: /Task context|任务上下文/ })).not.toBeInTheDocument();
+    expectNoBackupDataRequests();
+    expectNoRecoveryWrites();
+
+    await user.click(screen.getByRole("link", { name: /Open overview|打开概览/ }));
+
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/overview");
+    expectNoBackupDataRequests();
+    expectNoRecoveryWrites();
+  });
+
+  it.each(["admin", "operator"] as const)(
+    "keeps %s task context on a task-only recovery route without writes",
+    async (role) => {
+      authRef.current = { token: `${role}-token`, role, userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
+
+      renderBackups("/app/backups/recovery?taskId=7");
+
+      expect(await screen.findByText(/No recovery point selected|尚未选择恢复点/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Open overview|打开概览/ })).toHaveAttribute("href", "/app/backups/overview");
+      expect(screen.getByRole("link", { name: /Task context|任务上下文/ })).toHaveAttribute("href", "/app/backups/data?taskId=7");
+      expectNoBackupDataRequests();
+      expectNoRecoveryWrites();
+    },
+  );
+
+  it("keeps operator task context for a selected recovery point", async () => {
+    authRef.current = { token: "operator-token", role: "operator", userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
+
+    renderBackups(`/app/backups/recovery?taskId=7&recoveryPointId=${recoveryPoint.id}`);
+
+    expect(await screen.findByText(/Recovery point evidence|恢复点证据/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open overview|打开概览/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Task context|任务上下文/ })).toHaveAttribute("href", "/app/backups/data?taskId=7");
+    expectNoBackupDataRequests();
+    expectNoRecoveryWrites();
+  });
+
+  it.each([
+    ["viewer", "viewer" as const],
+    ["missing role", null],
+  ])("gives %s only the overview action on a task-only recovery route", async (_label, role) => {
+    authRef.current = { token: "test-token", role, userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
+
+    renderBackups("/app/backups/recovery?taskId=7");
+
+    expect(await screen.findByText(/No recovery point selected|尚未选择恢复点/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Task context|任务上下文/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open overview|打开概览/ })).toHaveAttribute("href", "/app/backups/overview");
+    expect(screen.getAllByRole("link").every((link) => !link.getAttribute("href")?.includes("/app/backups/data"))).toBe(true);
+    expectNoBackupDataRequests();
+    expectNoRecoveryWrites();
+  });
+
+  it("keeps a missing role off the recovery data link when a point is selected", async () => {
+    authRef.current = { token: null, role: null, userId: 7, totpEnabled: true, authTransitioning: false, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
+
+    renderBackups(`/app/backups/recovery?taskId=7&recoveryPointId=${recoveryPoint.id}`);
+
+    expect(await screen.findByText(/Recovery point evidence|恢复点证据/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Task context|任务上下文/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open overview|打开概览/ })).toHaveAttribute("href", "/app/backups/overview");
+    expect(screen.getAllByRole("link").every((link) => !link.getAttribute("href")?.includes("/app/backups/data"))).toBe(true);
+    expectNoBackupDataRequests();
+    expectNoRecoveryWrites();
+  });
+
+  it("replaces the recovery data link with overview while auth is transitioning", async () => {
+    authRef.current = { token: "test-token", role: "admin", userId: 7, totpEnabled: true, authTransitioning: true, ensureStepUpProof: vi.fn(), clearStepUpProof: vi.fn() };
+
+    renderBackups(`/app/backups/recovery?taskId=7&recoveryPointId=${recoveryPoint.id}`);
+
+    expect(await screen.findByText(/Recovery point evidence|恢复点证据/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Task context|任务上下文/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open overview|打开概览/ })).toHaveAttribute("href", "/app/backups/overview");
+    expect(getRecoveryPlanMock).not.toHaveBeenCalled();
+    expect(getRecoveryJobMock).not.toHaveBeenCalled();
+    expectNoRecoveryWrites();
+  });
+
+  it("safe-resets an unknown recovery query without probing backup data", async () => {
+    renderBackups(`/app/backups/recovery?repositoryId=${repository.id}`);
+
+    expect(await screen.findByText(/No recovery point selected|尚未选择恢复点/)).toBeInTheDocument();
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/recovery");
+    expect(screen.getByRole("link", { name: /Open overview|打开概览/ })).toHaveAttribute("href", "/app/backups/overview");
+    expectNoBackupDataRequests();
+    expectNoRecoveryWrites();
   });
 
   it("removes backup data after the role loses access", async () => {
@@ -1212,6 +1323,12 @@ function clearBackupDataRequests() {
   getBackupAssetMock.mockClear();
   getRecoveryPlanMock.mockClear();
   getRecoveryJobMock.mockClear();
+}
+
+function expectNoRecoveryWrites() {
+  for (const mock of Object.values(recoveryWriteMocks)) {
+    expect(mock).not.toHaveBeenCalled();
+  }
 }
 
 function expectNoBackupDataRequests() {
