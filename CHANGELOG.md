@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.61.0](https://github.com/xiangnan0811/xirang/compare/v0.60.0...v0.61.0) (2026-10-10)
+
+
+### ✨ Features
+
+* **web:** 支持从告警快速创建静默规则 ([#604](https://github.com/xiangnan0811/xirang/issues/604)) ([5b57962](https://github.com/xiangnan0811/xirang/commit/5b579627256fc2011e887896d594984dccb06709))
+
 ### 行为与升级说明
 
 - 管理员可从通知页进入通知渠道、静音规则与升级策略，并从告警卡片或列表创建固定节点、固定类别的快捷静音。仅支持已核实的十类节点来源及数字实例后缀；平台、未知、退役和关联 SLO 来源只显示限制说明，不会退化为跨节点或空类别通配规则。
