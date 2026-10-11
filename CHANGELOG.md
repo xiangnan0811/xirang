@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.62.1](https://github.com/xiangnan0811/xirang/compare/v0.62.0...v0.62.1) (2026-10-11)
+
+
+### 🐛 Bug Fixes
+
+* **auth:** improve recovery code login discovery and normalization ([#610](https://github.com/xiangnan0811/xirang/issues/610)) ([87b0fa8](https://github.com/xiangnan0811/xirang/commit/87b0fa81125cc3024afd5c6955a4a843f5ce04ff))
+
 ### 行为与升级说明
 
 - 登录二次验证提供明确的验证器／恢复码切换入口和中英文说明。切换清空已输入内容与错误并恢复焦点；恢复码模式允许字母数字及完整粘贴，不对共享输入新增六位或八位硬限制。
