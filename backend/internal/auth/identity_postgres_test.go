@@ -16,6 +16,7 @@ import (
 	"github.com/pquerna/otp/totp"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func openIdentityPostgresTestDB(t *testing.T) *gorm.DB {
@@ -29,7 +30,7 @@ func openIdentityPostgresTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("parse TEST_POSTGRES_DSN: %v", err)
 	}
 	schema := fmt.Sprintf("identity_test_%d", time.Now().UnixNano())
-	root, err := gorm.Open(postgres.Open(rawDSN), &gorm.Config{})
+	root, err := gorm.Open(postgres.Open(rawDSN), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("open PostgreSQL root connection: %v", err)
 	}
@@ -45,7 +46,7 @@ func openIdentityPostgresTestDB(t *testing.T) *gorm.DB {
 	query := parsed.Query()
 	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
-	db, err := gorm.Open(postgres.Open(parsed.String()), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(parsed.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("open isolated PostgreSQL connection: %v", err)
 	}
@@ -55,7 +56,7 @@ func openIdentityPostgresTestDB(t *testing.T) *gorm.DB {
 		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
 	t.Cleanup(func() {
-		cleanup, cleanupErr := gorm.Open(postgres.Open(rawDSN), &gorm.Config{})
+		cleanup, cleanupErr := gorm.Open(postgres.Open(rawDSN), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 		if cleanupErr == nil {
 			_ = cleanup.Exec(fmt.Sprintf(`DROP SCHEMA %s CASCADE`, schema)).Error
 			if cleanupSQL, err := cleanup.DB(); err == nil {
@@ -410,5 +411,125 @@ func TestTOTPActivationLogoutBeforeCommitPostgres(t *testing.T) {
 	}
 	if !revocation.ExpiresAt.Equal(oldClaims.ExpiresAt.Time) {
 		t.Fatalf("pre-commit logout extended session expiry: got=%s want=%s", revocation.ExpiresAt, oldClaims.ExpiresAt.Time)
+	}
+}
+func TestRecoveryCodesRemainingPostgres(t *testing.T) {
+	db := openIdentityPostgresTestDB(t)
+	fx := newRecoveryCodeFixture(t, db, "operator", `["FAKE_RECOVERY_CODE_POSTGRES_FOR_TEST_ONLY"]`, true)
+	rawBefore := recoveryRawCodes(t, db, fx.user.ID)
+	remaining, err := fx.service.RecoveryCodesRemaining(context.Background(), fx.session)
+	if err != nil || remaining != 1 {
+		t.Fatalf("remaining=%d err=%v, want one code", remaining, err)
+	}
+	if rawAfter := recoveryRawCodes(t, db, fx.user.ID); rawAfter != rawBefore {
+		t.Fatal("PostgreSQL remaining query mutated encrypted inventory")
+	}
+}
+func TestRegenerateRecoveryCodesPostgresRejectsExpiryAfterRowLock(t *testing.T) {
+	db := openIdentityPostgresTestDB(t)
+	fx := newRecoveryCodeFixture(t, db, "admin", `["FAKE_RECOVERY_CODE_EXPIRY_LOCK_FOR_TEST_ONLY"]`, true)
+	rawBefore := recoveryRawCodes(t, db, fx.user.ID)
+
+	var nowMu sync.RWMutex
+	clockNow := time.Now().UTC()
+	fx.service.nowFunc = func() time.Time {
+		nowMu.RLock()
+		defer nowMu.RUnlock()
+		return clockNow
+	}
+	fx.session.ExpiresAt = clockNow.Add(time.Minute)
+	validCode := testTOTPCode(t, fx.totpSecret)
+
+	blocker := db.Begin()
+	if blocker.Error != nil {
+		t.Fatalf("begin PostgreSQL expiry blocker: %v", blocker.Error)
+	}
+	t.Cleanup(func() {
+		_ = blocker.Rollback().Error
+	})
+	var blockerPID int
+	if err := blocker.Raw("SELECT pg_backend_pid()").Scan(&blockerPID).Error; err != nil {
+		t.Fatalf("identify PostgreSQL expiry blocker: %v", err)
+	}
+	var lockedID uint
+	if err := blocker.Raw("SELECT id FROM users WHERE id = ? FOR UPDATE", fx.user.ID).Scan(&lockedID).Error; err != nil {
+		t.Fatalf("lock recovery user for expiry regression: %v", err)
+	}
+	if lockedID != fx.user.ID {
+		t.Fatalf("expiry blocker locked user %d, want %d", lockedID, fx.user.ID)
+	}
+
+	type outcome struct {
+		codes []string
+		err   error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		codes, err := fx.service.RegenerateRecoveryCodes(context.Background(), fx.session, validCode)
+		result <- outcome{codes: codes, err: err}
+	}()
+	waiterPID := waitForIdentityPostgresLock(t, db, blockerPID)
+	if waiterPID == blockerPID {
+		t.Fatalf("expiry regression waiter PID=%d is blocker PID", waiterPID)
+	}
+
+	nowMu.Lock()
+	clockNow = fx.session.ExpiresAt.Add(time.Second)
+	nowMu.Unlock()
+	if err := blocker.Rollback().Error; err != nil {
+		t.Fatalf("release PostgreSQL expiry blocker: %v", err)
+	}
+
+	select {
+	case got := <-result:
+		if got.codes != nil || !errors.Is(got.err, ErrRecoveryCodeSessionInvalid) {
+			t.Fatalf("expired-after-lock code count=%d internal=%t, want nil codes and session invalid", len(got.codes), errors.Is(got.err, ErrRecoveryCodeSessionInvalid))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for expiry-after-lock regeneration result")
+	}
+	if rawAfter := recoveryRawCodes(t, db, fx.user.ID); rawAfter != rawBefore {
+		t.Fatal("expired-after-lock regeneration changed recovery inventory")
+	}
+}
+
+func TestRegenerateRecoveryCodesPostgres(t *testing.T) {
+	db := openIdentityPostgresTestDB(t)
+	fx := newRecoveryCodeFixture(t, db, "viewer", `["FAKE_RECOVERY_CODE_POSTGRES_OLD_FOR_TEST_ONLY"]`, true)
+	codes, err := fx.service.RegenerateRecoveryCodes(context.Background(), fx.session, testTOTPCode(t, fx.totpSecret))
+	if err != nil {
+		t.Fatalf("PostgreSQL regeneration: %v", err)
+	}
+	if len(codes) != recoveryCodeCount {
+		t.Fatalf("PostgreSQL generated %d codes, want %d", len(codes), recoveryCodeCount)
+	}
+	stored := recoveryUser(t, db, fx.user.ID)
+	inventory, err := decodeRecoveryInventory(stored.RecoveryCodes)
+	if err != nil || len(inventory) != recoveryCodeCount {
+		t.Fatalf("PostgreSQL final inventory=%d err=%v", len(inventory), err)
+	}
+	if _, ok := ValidateAndConsumeRecoveryCode(stored.RecoveryCodes, "FAKE_RECOVERY_CODE_POSTGRES_OLD_FOR_TEST_ONLY"); ok {
+		t.Fatal("PostgreSQL old recovery code remained usable")
+	}
+	if _, ok := ValidateAndConsumeRecoveryCode(stored.RecoveryCodes, codes[0]); !ok {
+		t.Fatal("PostgreSQL new recovery code is not usable")
+	}
+}
+
+func TestRegenerateRecoveryCodesConcurrentPostgresBothOrders(t *testing.T) {
+	for _, first := range []string{"regenerate", "consume"} {
+		t.Run(first+"-first", func(t *testing.T) {
+			db := openIdentityPostgresTestDB(t)
+			runRecoveryRegenerateConsumeRace(t, db, nil, first)
+		})
+	}
+}
+
+func TestRegenerateRecoveryCodesConcurrentRegenerationPostgresBothOrders(t *testing.T) {
+	for _, first := range []int{0, 1} {
+		t.Run(fmt.Sprintf("call-%d-first", first), func(t *testing.T) {
+			db := openIdentityPostgresTestDB(t)
+			runRecoveryRegenerateRegenerateRace(t, db, nil, first)
+		})
 	}
 }

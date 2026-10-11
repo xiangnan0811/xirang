@@ -107,6 +107,11 @@ multi-arch manifest/tag 提升、发布凭据使用和 provenance attestation。
 恢复码登录的完整行为与升级说明归档于 CHANGELOG `0.62.1` 版本节；发行 PR 与最终
 Release 正文须保留输入归一化、一次性消费、旧认证请求排空、无新增迁移及回退不恢复
 已消费码的边界，不增加 R-19 管理或管理员账户恢复能力。
+本人恢复码管理的发行说明须保留当前 TOTP 校验、整批替换、旧码立即失效、明文仅展示
+一次及结果未知不得自动重试的边界。新版 Core 与页面同版本切换，排空旧认证请求；
+无新增 schema migration，回退不恢复旧码或已消费码，也不提供管理员账户恢复。
+发布时将 CHANGELOG 中该批完整行为与升级说明同步至目标版本、Release PR 和最终
+GitHub Release，不以剩余数量查询或本地验收替代重新生成批次及生产部署证据。
 
 
 All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录

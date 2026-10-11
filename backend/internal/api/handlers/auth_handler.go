@@ -543,6 +543,133 @@ func (h *AuthHandler) TOTPDisable(c *gin.Context) {
 	respondMessage(c, "两步验证已禁用")
 }
 
+type recoveryCodesRemainingResponse struct {
+	Remaining int `json:"remaining"`
+}
+
+type regenerateRecoveryCodesRequest struct {
+	Code string `json:"code"`
+}
+
+type regenerateRecoveryCodesResponse struct {
+	RecoveryCodes []string `json:"recovery_codes"`
+}
+
+func recoveryCodeSessionFromContext(c *gin.Context) (auth.RecoveryCodeSession, bool) {
+	binding, ok := middleware.CurrentSessionBinding(c)
+	if !ok || binding.JTI == "" || binding.UserID == 0 || binding.ExpiresAt.IsZero() {
+		return auth.RecoveryCodeSession{}, false
+	}
+	return auth.RecoveryCodeSession{
+		JTI:          binding.JTI,
+		UserID:       binding.UserID,
+		Role:         binding.Role,
+		TokenVersion: binding.TokenVersion,
+		ExpiresAt:    binding.ExpiresAt,
+	}, true
+}
+
+func respondRecoveryCodeError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, auth.ErrRecoveryCodeSessionInvalid):
+		respondUnauthorized(c, "登录会话无效或已过期")
+	case errors.Is(err, auth.ErrRecoveryCodeTOTPRequired):
+		respondBadRequest(c, "请输入当前验证码")
+	case errors.Is(err, auth.ErrRecoveryCodeTOTPInvalid):
+		respondForbiddenData(c, "当前验证码错误", gin.H{
+			"error_code": "RECOVERY_CODE_TOTP_INVALID",
+		})
+	case errors.Is(err, auth.ErrRecoveryCodeTOTPDisabled):
+		respondConflictData(c, "两步验证未启用", gin.H{
+			"error_code": "RECOVERY_CODE_TOTP_DISABLED",
+		})
+	case errors.Is(err, auth.ErrRecoveryCodeConflict):
+		respondConflictData(c, "恢复码状态已变更，请重试", gin.H{
+			"error_code": "RECOVERY_CODE_CONFLICT",
+		})
+	default:
+		respondInternalError(c, fmt.Errorf("恢复码操作失败: %w", err))
+	}
+}
+
+// RecoveryCodesRemaining godoc
+// @Summary      查询恢复码剩余数量
+// @Description  返回当前登录用户尚未使用的恢复码数量，不返回恢复码内容
+// @Tags         auth
+// @Security     Bearer
+// @Produce      json
+// @Success      200   {object} handlers.Response{data=recoveryCodesRemainingResponse}
+// @Failure      401   {object} handlers.Response
+// @Failure      409   {object} handlers.Response
+// @Failure      500   {object} handlers.Response
+// @Router       /auth/2fa/recovery-codes [get]
+func (h *AuthHandler) RecoveryCodesRemaining(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+	if h.authService == nil {
+		respondInternalError(c, fmt.Errorf("认证服务未注入"))
+		return
+	}
+	session, ok := recoveryCodeSessionFromContext(c)
+	if !ok {
+		respondUnauthorized(c, "登录会话无效或已过期")
+		return
+	}
+	remaining, err := h.authService.RecoveryCodesRemaining(c.Request.Context(), session)
+	if err != nil {
+		respondRecoveryCodeError(c, err)
+		return
+	}
+	if remaining < 0 {
+		respondInternalError(c, fmt.Errorf("恢复码剩余数量无效"))
+		return
+	}
+	respondOK(c, recoveryCodesRemainingResponse{Remaining: remaining})
+}
+
+// RegenerateRecoveryCodes godoc
+// @Summary      安全重生成恢复码
+// @Description  使用当前验证器验证码原子替换当前用户的全部恢复码；旧恢复码立即失效
+// @Tags         auth
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      regenerateRecoveryCodesRequest  true  "当前验证器验证码"
+// @Success      200   {object} handlers.Response{data=regenerateRecoveryCodesResponse}
+// @Failure      400   {object} handlers.Response
+// @Failure      401   {object} handlers.Response
+// @Failure      403   {object} handlers.Response
+// @Failure      409   {object} handlers.Response
+// @Failure      429   {object} handlers.Response
+// @Failure      500   {object} handlers.Response
+// @Router       /auth/2fa/recovery-codes/regenerate [post]
+func (h *AuthHandler) RegenerateRecoveryCodes(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+	if h.authService == nil {
+		respondInternalError(c, fmt.Errorf("认证服务未注入"))
+		return
+	}
+	var req regenerateRecoveryCodesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	session, ok := recoveryCodeSessionFromContext(c)
+	if !ok {
+		respondUnauthorized(c, "登录会话无效或已过期")
+		return
+	}
+	recoveryCodes, err := h.authService.RegenerateRecoveryCodes(c.Request.Context(), session, req.Code)
+	if err != nil {
+		respondRecoveryCodeError(c, err)
+		return
+	}
+	if len(recoveryCodes) == 0 {
+		respondInternalError(c, fmt.Errorf("恢复码生成响应无效"))
+		return
+	}
+	respondOK(c, regenerateRecoveryCodesResponse{RecoveryCodes: recoveryCodes})
+}
+
 type totpLoginRequest struct {
 	LoginToken string `json:"login_token" binding:"required"`
 	TOTPCode   string `json:"totp_code" binding:"required"`

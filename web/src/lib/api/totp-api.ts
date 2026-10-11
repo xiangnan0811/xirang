@@ -66,6 +66,15 @@ export class TOTPVerifyContractError extends Error {
   }
 }
 
+export class RecoveryCodeContractError extends Error {
+  readonly code = "RECOVERY_CODE_CONTRACT" as const;
+
+  constructor() {
+    super("Recovery code response did not match the required contract");
+    this.name = "RecoveryCodeContractError";
+  }
+}
+
 type RawTOTPLoginResponse = {
   token?: unknown;
   user?: {
@@ -104,6 +113,10 @@ function isRecoveryCodeList(value: unknown): value is string[] {
   return Array.isArray(value)
     && value.length > 0
     && value.every((code) => typeof code === "string" && code.length > 0);
+}
+
+function isNonnegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 export function mapTOTPVerifyResponse(raw: unknown): TOTPVerifyResponse {
@@ -173,6 +186,52 @@ export function classifyTOTPVerifyFailure(error: unknown): "no_commit" | "ambigu
   return "ambiguous";
 }
 
+function recoveryCodeNoCommitStatus(code: string): number | null {
+  switch (code) {
+    case "RECOVERY_CODE_TOTP_INVALID":
+      return 403;
+    case "RECOVERY_CODE_TOTP_DISABLED":
+    case "RECOVERY_CODE_CONFLICT":
+      return 409;
+    default:
+      return null;
+  }
+}
+
+// Real HTTP failures keep status and httpStatus identical. A 2xx body whose
+// envelope code merely looks like 403/409 changes status and leaves httpStatus
+// in the success range, so it must stay ambiguous.
+export function classifyRecoveryCodeRegenerationFailure(error: unknown): "no_commit" | "ambiguous" {
+  if (!(error instanceof ApiError)) {
+    return "ambiguous";
+  }
+  const httpStatus = error.httpStatus;
+  if (typeof httpStatus !== "number" || error.status !== httpStatus) {
+    return "ambiguous";
+  }
+  const code = totpVerifyErrorCode(error);
+  if (code === null || recoveryCodeNoCommitStatus(code) !== httpStatus) {
+    return "ambiguous";
+  }
+  return "no_commit";
+}
+
+function mapRecoveryCodesRemaining(raw: unknown): { remaining: number } {
+  const remaining = raw && typeof raw === "object" && "remaining" in raw ? raw.remaining : undefined;
+  if (!isNonnegativeSafeInteger(remaining)) {
+    throw new RecoveryCodeContractError();
+  }
+  return { remaining };
+}
+
+function mapRegeneratedRecoveryCodes(raw: unknown): { recoveryCodes: string[] } {
+  const recoveryCodes = raw && typeof raw === "object" && "recovery_codes" in raw ? raw.recovery_codes : undefined;
+  if (!isRecoveryCodeList(recoveryCodes)) {
+    throw new RecoveryCodeContractError();
+  }
+  return { recoveryCodes };
+}
+
 export function mapTOTPLoginResponse(raw: RawTOTPLoginResponse | null | undefined): TOTPLoginResponse {
   return {
     token: String(raw?.token ?? ""),
@@ -223,6 +282,23 @@ export function createTOTPApi() {
         token,
         body: { password, totp_code: totpCode },
       });
+    },
+
+    async recoveryCodesRemaining(token: string): Promise<{ remaining: number }> {
+      const raw = await request<unknown>("/auth/2fa/recovery-codes", {
+        method: "GET",
+        token,
+      });
+      return mapRecoveryCodesRemaining(raw);
+    },
+
+    async regenerateRecoveryCodes(token: string, code: string): Promise<{ recoveryCodes: string[] }> {
+      const raw = await request<unknown>("/auth/2fa/recovery-codes/regenerate", {
+        method: "POST",
+        token,
+        body: { code },
+      });
+      return mapRegeneratedRecoveryCodes(raw);
     },
 
     async totpLogin(loginToken: string, totpCode: string): Promise<TOTPLoginResponse> {

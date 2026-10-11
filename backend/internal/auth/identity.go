@@ -16,6 +16,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 const (
@@ -36,7 +37,19 @@ var (
 	ErrPendingLoginInvalid    = errors.New("登录令牌无效或已过期")
 	ErrRecoveryCodeInvalid    = errors.New("验证码错误")
 
-	errRecoveryCASConflict = errors.New("恢复码状态已变更")
+	// Recovery-code management errors are intentionally stable, secret-free
+	// sentinels. Handlers use them to distinguish an unauthenticated session,
+	// a rejected current OTP, a disabled TOTP account, and a compare-and-swap
+	// conflict without exposing storage or cryptographic details.
+	ErrRecoveryCodeSessionInvalid = errors.New("恢复码会话无效或已过期")
+	ErrRecoveryCodeTOTPInvalid    = errors.New("当前验证码错误")
+	ErrRecoveryCodeTOTPRequired   = errors.New("请输入当前验证码")
+	ErrRecoveryCodeTOTPDisabled   = errors.New("两步验证未启用")
+	ErrRecoveryCodeConflict       = errors.New("恢复码状态已变更，请重试")
+	ErrRecoveryCodeInternal       = errors.New("恢复码操作失败")
+
+	errRecoveryCASConflict      = errors.New("恢复码状态已变更")
+	errRecoveryInventoryInvalid = fmt.Errorf("%w: 恢复码库存损坏", ErrRecoveryCodeInternal)
 )
 
 type TOTPSetupResult struct {
@@ -48,6 +61,13 @@ type TOTPSetupResult struct {
 }
 
 type TOTPActivationSession struct {
+	JTI          string
+	UserID       uint
+	Role         string
+	TokenVersion uint
+	ExpiresAt    time.Time
+}
+type RecoveryCodeSession struct {
 	JTI          string
 	UserID       uint
 	Role         string
@@ -153,6 +173,19 @@ func identityNow(s *Service) time.Time {
 	return time.Now().UTC()
 }
 
+// recoveryCodeSafeDB scopes the recovery-code management reads and transaction
+// to a logger that never evaluates or emits SQL traces. The surrounding
+// authentication paths retain their configured logger.
+func recoveryCodeSafeDB(db *gorm.DB, ctx context.Context) *gorm.DB {
+	if db == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return db.Session(&gorm.Session{Logger: logger.Discard}).WithContext(ctx)
+}
+
 func withIdentityTransaction(ctx context.Context, db *gorm.DB, body func(*gorm.DB) error) error {
 	if db == nil {
 		return errors.New("身份数据库未初始化")
@@ -193,6 +226,235 @@ func countAdmins(tx *gorm.DB) (int64, error) {
 
 func deletePendingTokens(tx *gorm.DB, userID uint) error {
 	return tx.Where("user_id = ?", userID).Delete(&model.PendingAuthToken{}).Error
+}
+
+// decodeRecoveryInventory validates the decrypted recovery-code inventory
+// without changing its historical representation. Empty storage is the
+// legacy zero-inventory state; every non-empty value must be a JSON array of
+// non-empty strings. The returned strings are never sent to API callers.
+func decodeRecoveryInventory(value string) ([]string, error) {
+	if value == "" {
+		return []string{}, nil
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || trimmed[0] != '[' {
+		return nil, errRecoveryInventoryInvalid
+	}
+	var inventory []string
+	if err := json.Unmarshal([]byte(trimmed), &inventory); err != nil || inventory == nil {
+		return nil, errRecoveryInventoryInvalid
+	}
+	for _, code := range inventory {
+		if code == "" {
+			return nil, errRecoveryInventoryInvalid
+		}
+	}
+	return inventory, nil
+}
+
+func isKnownRecoveryCodeRole(role string) bool {
+	switch role {
+	case "admin", "operator", "viewer":
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeRecoveryCodeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, ErrRecoveryCodeSessionInvalid),
+		errors.Is(err, ErrRecoveryCodeTOTPInvalid),
+		errors.Is(err, ErrRecoveryCodeTOTPRequired),
+		errors.Is(err, ErrRecoveryCodeTOTPDisabled),
+		errors.Is(err, ErrRecoveryCodeConflict),
+		errors.Is(err, errRecoveryInventoryInvalid):
+		return err
+	default:
+		return ErrRecoveryCodeInternal
+	}
+}
+
+func validateRecoveryCodeSession(s *Service, ctx context.Context, session RecoveryCodeSession) (RecoveryCodeSession, context.Context, error) {
+	if s == nil || s.db == nil || s.jwt == nil {
+		return RecoveryCodeSession{}, ctx, ErrRecoveryCodeInternal
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	session.JTI = strings.TrimSpace(session.JTI)
+	session.ExpiresAt = session.ExpiresAt.UTC()
+	now := identityNow(s)
+	if session.UserID == 0 || !lowerHexID(session.JTI) || !isKnownRecoveryCodeRole(session.Role) ||
+		session.ExpiresAt.IsZero() || !session.ExpiresAt.After(now) {
+		return RecoveryCodeSession{}, ctx, ErrRecoveryCodeSessionInvalid
+	}
+	safeDB := recoveryCodeSafeDB(s.db, ctx)
+	revoked, err := s.jwt.isSessionRevokedContext(ctx, session.JTI, safeDB)
+	if err != nil {
+		return RecoveryCodeSession{}, ctx, ErrRecoveryCodeInternal
+	}
+	if revoked {
+		return RecoveryCodeSession{}, ctx, ErrRecoveryCodeSessionInvalid
+	}
+	return session, ctx, nil
+}
+
+// RecoveryCodesRemaining returns only the number of currently stored recovery
+// codes. It performs no write and treats malformed or undecryptable inventory
+// as an error rather than silently reporting zero.
+func (s *Service) RecoveryCodesRemaining(ctx context.Context, session RecoveryCodeSession) (int, error) {
+	session, ctx, err := validateRecoveryCodeSession(s, ctx, session)
+	if err != nil {
+		return 0, err
+	}
+	safeDB := recoveryCodeSafeDB(s.db, ctx)
+	row, err := loadStoredIdentityUser(safeDB, session.UserID, false)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, ErrRecoveryCodeSessionInvalid
+		}
+		return 0, ErrRecoveryCodeInternal
+	}
+	if row.ID != session.UserID || row.Role != session.Role || row.TokenVersion != session.TokenVersion {
+		return 0, ErrRecoveryCodeSessionInvalid
+	}
+	user, err := row.user()
+	if err != nil {
+		return 0, ErrRecoveryCodeInternal
+	}
+	if !user.TOTPEnabled || user.TOTPSecret == "" {
+		return 0, ErrRecoveryCodeTOTPDisabled
+	}
+	inventory, err := decodeRecoveryInventory(user.RecoveryCodes)
+	if err != nil {
+		return 0, err
+	}
+	return len(inventory), nil
+}
+
+// RegenerateRecoveryCodes atomically replaces the complete encrypted
+// recovery-code inventory after validating the current TOTP code. The
+// transaction deliberately has no retry: a write or commit result that cannot
+// be confirmed must not release a new secret to the caller.
+func (s *Service) RegenerateRecoveryCodes(ctx context.Context, session RecoveryCodeSession, code string) ([]string, error) {
+	session, ctx, err := validateRecoveryCodeSession(s, ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return nil, ErrRecoveryCodeTOTPRequired
+	}
+
+	// This unlocked read is an optimistic baseline only. It neither generates
+	// nor consumes recovery codes; all writes happen under the user-row lock in
+	// the single transaction below.
+	safeDB := recoveryCodeSafeDB(s.db, ctx)
+	baseline, err := loadStoredIdentityUser(safeDB, session.UserID, false)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrRecoveryCodeSessionInvalid
+		}
+		return nil, ErrRecoveryCodeInternal
+	}
+	if baseline.ID != session.UserID || baseline.Role != session.Role || baseline.TokenVersion != session.TokenVersion {
+		return nil, ErrRecoveryCodeSessionInvalid
+	}
+	baselineUser, err := baseline.user()
+	if err != nil {
+		return nil, ErrRecoveryCodeInternal
+	}
+	if !baselineUser.TOTPEnabled || baselineUser.TOTPSecret == "" {
+		return nil, ErrRecoveryCodeTOTPDisabled
+	}
+
+	var generated []string
+	err = withTOTPActivationTransaction(ctx, safeDB, func(tx *gorm.DB) error {
+		generated = nil
+		row, err := loadStoredIdentityUser(tx, session.UserID, true)
+		if err != nil {
+			return err
+		}
+		now := identityNow(s)
+		if !session.ExpiresAt.After(now) {
+			return ErrRecoveryCodeSessionInvalid
+		}
+		if row.ID != session.UserID || row.Role != session.Role || row.TokenVersion != session.TokenVersion ||
+			!row.TOTPEnabled || row.TOTPSecret == "" {
+			return ErrRecoveryCodeConflict
+		}
+		if row.Role != baseline.Role || row.TokenVersion != baseline.TokenVersion ||
+			row.TOTPEnabled != baseline.TOTPEnabled || row.TOTPSecret != baseline.TOTPSecret ||
+			row.RecoveryCodes != baseline.RecoveryCodes {
+			return ErrRecoveryCodeConflict
+		}
+
+		var revocation model.TokenRevocation
+		result := tx.WithContext(ctx).Select("token_hash").
+			Where("token_hash = ? AND expires_at > ?", "jti:"+session.JTI, now).
+			Limit(1).Find(&revocation)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 0 {
+			return ErrRecoveryCodeSessionInvalid
+		}
+
+		user, err := row.user()
+		if err != nil {
+			return err
+		}
+		if !user.TOTPEnabled || user.TOTPSecret == "" {
+			return ErrRecoveryCodeConflict
+		}
+		if _, err := decodeRecoveryInventory(user.RecoveryCodes); err != nil {
+			return err
+		}
+		if !ValidateTOTP(user.TOTPSecret, code) {
+			return ErrRecoveryCodeTOTPInvalid
+		}
+
+		recoveryCodes, err := GenerateRecoveryCodes()
+		if err != nil {
+			return err
+		}
+		hashedRecoveryCodes, err := HashRecoveryCodes(recoveryCodes)
+		if err != nil {
+			return err
+		}
+		hashedRecoveryJSON, err := json.Marshal(hashedRecoveryCodes)
+		if err != nil {
+			return err
+		}
+		encryptedRecovery, err := secure.EncryptString(string(hashedRecoveryJSON))
+		if err != nil {
+			return errors.New("加密恢复码失败")
+		}
+
+		result = tx.Table("users").Where(
+			"id = ? AND role = ? AND token_version = ? AND totp_enabled = ? AND totp_secret = ? AND recovery_codes = ?",
+			session.UserID, session.Role, row.TokenVersion, true, row.TOTPSecret, row.RecoveryCodes,
+		).Update("recovery_codes", encryptedRecovery)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrRecoveryCodeConflict
+		}
+		generated = recoveryCodes
+		return nil
+	})
+	if err != nil {
+		return nil, sanitizeRecoveryCodeError(err)
+	}
+	if len(generated) != recoveryCodeCount {
+		return nil, ErrRecoveryCodeInternal
+	}
+	return generated, nil
 }
 
 func (s *Service) SetupTOTP(ctx context.Context, userID uint, account string) (*TOTPSetupResult, error) {
