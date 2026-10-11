@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.62.1](https://github.com/xiangnan0811/xirang/compare/v0.62.0...v0.62.1) (2026-10-11)
+
+
+### 🐛 Bug Fixes
+
+* **auth:** improve recovery code login discovery and normalization ([#610](https://github.com/xiangnan0811/xirang/issues/610)) ([87b0fa8](https://github.com/xiangnan0811/xirang/commit/87b0fa81125cc3024afd5c6955a4a843f5ce04ff))
+
 ### 行为与升级说明
 
 - 登录二次验证提供明确的验证器／恢复码切换入口和中英文说明。切换清空已输入内容与错误并恢复焦点；恢复码模式允许字母数字及完整粘贴，不对共享输入新增六位或八位硬限制。
@@ -9,13 +16,6 @@
 - 验证在途禁止重复提交、模式切换及返回；卸载后的迟到结果不得安装身份。401 统一提示验证码错误或登录步骤失效，可检查后重试或返回重新登录；不自动重放请求，不保证网络失败后恢复码仍未消费，输入与 pending 不写入浏览器持久存储。
 - 前后端按同一发行版本切换；大小写容忍从新版 Core 处理恢复码请求时生效，交互保护从新版页面加载后生效。升级前保全数据库、适用密钥与配置，完成或明确退出旧登录交互并排空旧 Core 在途认证请求；旧页面不会自动获得新保护，换版不撤销已提交的恢复码消费。
 - 本次无新增数据库 schema migration，不重置或重新生成恢复码。既有迁移的降级保护与恢复限制仍适用；回退旧版会恢复大小写敏感和旧交互缺陷，不恢复已消费恢复码。仅交付 R-10，不包含 R-19 本人恢复码管理、管理员账户恢复或其余 P2/P3；公开发布及本地/CI 验收不等于生产部署或灾备恢复验收。
-
-## [0.62.1](https://github.com/xiangnan0811/xirang/compare/v0.62.0...v0.62.1) (2026-10-11)
-
-
-### 🐛 Bug Fixes
-
-* **auth:** improve recovery code login discovery and normalization ([#610](https://github.com/xiangnan0811/xirang/issues/610)) ([87b0fa8](https://github.com/xiangnan0811/xirang/commit/87b0fa81125cc3024afd5c6955a4a843f5ce04ff))
 
 ## [0.62.0](https://github.com/xiangnan0811/xirang/compare/v0.61.1...v0.62.0) (2026-10-10)
 
