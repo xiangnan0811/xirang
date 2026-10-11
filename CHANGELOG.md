@@ -12,6 +12,13 @@
 - 本次无新增数据库 schema migration，不自动重生成或恢复历史库存。回退旧版会移除本人管理入口及对应新保护，不恢复已消费或已替换的旧码，也不能重新查看未收到的新码；既有迁移降级保护和恢复限制仍适用。
 - 仅交付 R-19 本人管理，不包含管理员代办、他人账户恢复，也不解决验证器与全部恢复码同时丢失。SQLite/PostgreSQL 竞争、失败边界及真实浏览器验收不等于生产部署或灾备恢复验收。
 
+## [0.63.0](https://github.com/xiangnan0811/xirang/compare/v0.62.1...v0.63.0) (2026-10-11)
+
+
+### ✨ Features
+
+* **auth:** manage personal recovery codes ([#612](https://github.com/xiangnan0811/xirang/issues/612)) ([c02dfac](https://github.com/xiangnan0811/xirang/commit/c02dfacdeab5197dcd34b68a61d68bbc616879d1))
+
 ## [0.62.1](https://github.com/xiangnan0811/xirang/compare/v0.62.0...v0.62.1) (2026-10-11)
 
 
