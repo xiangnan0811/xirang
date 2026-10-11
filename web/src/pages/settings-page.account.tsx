@@ -8,6 +8,7 @@ import { apiClient } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { TOTPSetupDialog } from "@/components/totp-setup-dialog";
 import { TOTPDisableDialog } from "@/components/totp-disable-dialog";
+import { RecoveryCodesManager } from "@/components/recovery-codes-manager";
 import { cn } from "@/lib/utils";
 
 export function AccountTab() {
@@ -125,10 +126,10 @@ export function AccountTab() {
       </div>
 
       {/* 2FA section */}
-      <div className="rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-3">
+      <div className="min-w-0 rounded-lg border border-border bg-card shadow-sm relative overflow-hidden p-5 space-y-3">
         <div className="absolute top-0 left-0 w-1 h-full bg-primary/50" />
         <h3 className="text-sm font-medium">{t("settings.account.twoFactor")}</h3>
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           {totpEnabled ? (
             <>
               <span className="inline-flex items-center gap-1.5 rounded-md bg-success/15 px-2.5 py-1 text-sm font-medium">
@@ -160,6 +161,7 @@ export function AccountTab() {
             </>
           )}
         </div>
+        {totpEnabled && token ? <RecoveryCodesManager /> : null}
       </div>
 
       {token ? (

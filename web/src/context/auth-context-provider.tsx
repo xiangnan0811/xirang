@@ -193,11 +193,12 @@ function readStoredAuthState(): StoredAuthState {
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [{ token, username, role, userId, totpEnabled }, setAuthState] = useState<StoredAuthState>(() => {
+  const [authState, setAuthState] = useState<StoredAuthState>(() => {
     const stored = readStoredAuthState();
     rememberAuthIdentity(stored.token, stored.role);
     return stored;
   });
+  const { token, totpEnabled } = authState;
   const pendingStepUpRef = useRef<PendingStepUpRequest | null>(null);
   const stepUpSubmitAttemptRef = useRef(0);
   const activationOwnerRef = useRef<number | null>(null);
@@ -473,11 +474,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const value = useMemo<AuthContextValue>(
     () => ({
-      token,
-      username,
-      role,
-      userId,
-      totpEnabled,
+      ...authState,
       isAuthenticated: Boolean(token),
       authTransitioning,
       beginTOTPActivation,
@@ -491,6 +488,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }),
     [
       abortTOTPActivation,
+      authState,
       authTransitioning,
       beginTOTPActivation,
       clearStepUpProof,
@@ -498,12 +496,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       ensureStepUpProof,
       login,
       logout,
-      role,
       setTotpEnabled,
       token,
-      totpEnabled,
-      userId,
-      username,
     ]
   );
 

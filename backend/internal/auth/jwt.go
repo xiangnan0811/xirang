@@ -340,6 +340,17 @@ func (m *JWTManager) IsSessionRevokedContext(ctx context.Context, jti string) (b
 	if m == nil {
 		return true, fmt.Errorf("session revocation manager unavailable")
 	}
+	return m.isSessionRevokedContext(ctx, jti, m.db)
+}
+
+// isSessionRevokedContext keeps the manager's cache semantics while allowing
+// a narrowly scoped caller to provide a secret-safe database session. The
+// public method above remains the ordinary path for all other authentication
+// consumers.
+func (m *JWTManager) isSessionRevokedContext(ctx context.Context, jti string, db *gorm.DB) (bool, error) {
+	if m == nil {
+		return true, fmt.Errorf("session revocation manager unavailable")
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -358,11 +369,11 @@ func (m *JWTManager) IsSessionRevokedContext(ctx context.Context, jti string) (b
 	if revoked && expiresAt.After(now) {
 		return true, nil
 	}
-	if m.db == nil {
+	if db == nil {
 		return true, fmt.Errorf("session revocation store unavailable")
 	}
 	var row model.TokenRevocation
-	result := m.db.WithContext(ctx).Select("token_hash", "expires_at").
+	result := db.WithContext(ctx).Select("token_hash", "expires_at").
 		Where("token_hash = ? AND expires_at > ?", key, now).Limit(1).Find(&row)
 	if result.Error != nil {
 		return true, fmt.Errorf("query session revocation: %w", result.Error)

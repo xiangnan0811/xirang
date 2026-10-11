@@ -203,6 +203,20 @@ func runtimeBackupAssetHandlerConfigSource(runtime *backupruntime.Runtime) handl
 	}
 }
 
+// recoveryCodesNoStore marks every response for the recovery-code management
+// paths before secured authentication can reject the request.
+func recoveryCodesNoStore() gin.HandlerFunc {
+	const recoveryCodesPath = "/api/v1/auth/2fa/recovery-codes"
+	const regenerateRecoveryCodesPath = recoveryCodesPath + "/regenerate"
+	return func(c *gin.Context) {
+		path := strings.TrimRight(c.Request.URL.Path, "/")
+		if path == recoveryCodesPath || path == regenerateRecoveryCodesPath {
+			c.Header("Cache-Control", "private, no-store")
+		}
+		c.Next()
+	}
+}
+
 func NewRouter(dep Dependencies) *gin.Engine {
 	appCtx := dep.AppContext
 	if appCtx == nil {
@@ -225,6 +239,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	router.MaxMultipartMemory = 10 << 20 // 10 MB
 	router.Use(gin.Recovery(), middleware.RequestID(), middleware.StructuredLogger())
 	router.Use(middleware.PrometheusMetrics())
+	router.Use(recoveryCodesNoStore())
 	router.Use(func(c *gin.Context) {
 		if middleware.IsBackupContentShapedPath(c.Request.URL.Path) {
 			c.Next()
@@ -458,6 +473,11 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/auth/2fa/setup", authHandler.TOTPSetup)
 	secured.POST("/auth/2fa/verify", authHandler.TOTPVerify)
 	secured.POST("/auth/2fa/disable", authHandler.TOTPDisable)
+	secured.GET("/auth/2fa/recovery-codes", authHandler.RecoveryCodesRemaining)
+	secured.POST("/auth/2fa/recovery-codes/regenerate",
+		middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow),
+		authHandler.RegenerateRecoveryCodes,
+	)
 	secured.POST("/auth/step-up", authHandler.StepUp)
 	secured.GET("/overview", middleware.RBAC("tasks:read"), overviewHandler.Get)
 	secured.GET("/overview/traffic", middleware.RBAC("tasks:read"), overviewTrafficHandler.Get)
