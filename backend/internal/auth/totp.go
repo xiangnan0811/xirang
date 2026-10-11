@@ -80,6 +80,13 @@ func ValidateAndConsumeRecoveryCode(storedJSON, code string) ([]string, bool) {
 	if len(stored) == 0 {
 		return nil, false
 	}
+	code = strings.TrimSpace(code)
+	code = strings.Map(func(r rune) rune {
+		if 'a' <= r && r <= 'z' {
+			return r - ('a' - 'A')
+		}
+		return r
+	}, code)
 
 	remaining := make([]string, 0, len(stored))
 	found := false

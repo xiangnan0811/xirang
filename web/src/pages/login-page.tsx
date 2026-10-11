@@ -14,6 +14,8 @@ type LocationState = {
   from?: string;
 };
 
+type VerificationMode = "totp" | "recovery";
+
 export function LoginPage() {
   const { t } = useTranslation();
   useDocumentTitle(t("login.welcomeTitle"));
@@ -40,7 +42,12 @@ export function LoginPage() {
   const [requires2FA, setRequires2FA] = useState(false);
   const [loginToken, setLoginToken] = useState("");
   const [totpCode, setTotpCode] = useState("");
+  const [verificationMode, setVerificationMode] = useState<VerificationMode>("totp");
   const totpInputRef = useRef<HTMLInputElement | null>(null);
+  // 同步 single-flight：submitting 状态赶不上同一轮里的第二次提交。
+  const submittingRef = useRef(false);
+  // 卸载后忽略迟到结果。StrictMode 先 cleanup 再跑 setup，必须在 setup 里设回 true。
+  const mountedRef = useRef(false);
 
   const errorId = "login-form-error";
 
@@ -104,12 +111,19 @@ export function LoginPage() {
   }, [fetchCaptcha]);
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!requires2FA) return;
     const frame = requestAnimationFrame(() => {
       totpInputRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [requires2FA]);
+  }, [requires2FA, verificationMode]);
 
   const queryRedirect = new URLSearchParams(location.search).get("redirect");
   const redirectTo = normalizeRedirectTarget((location.state as LocationState | null)?.from ?? queryRedirect);
@@ -132,6 +146,9 @@ export function LoginPage() {
       });
 
       if (result.requires2FA && result.loginToken) {
+        setVerificationMode("totp");
+        setTotpCode("");
+        setError(null);
         setLoginToken(result.loginToken);
         setRequires2FA(true);
         return;
@@ -182,15 +199,25 @@ export function LoginPage() {
 
   const handle2FASubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
 
     try {
       const result = await apiClient.totpLogin(loginToken, totpCode);
+      if (!mountedRef.current) return;
+      setLoginToken("");
+      setTotpCode("");
       login(result.token, result.user.username, result.user.role, result.user.id, result.user.totpEnabled);
       navigate(redirectTo, { replace: true });
     } catch (error) {
+      if (!mountedRef.current) return;
       if (error instanceof ApiError) {
+        if (error.status === 401) {
+          setError(t("login.errorVerificationOrSessionInvalid"));
+          return;
+        }
         const payload =
           error.detail && typeof error.detail === "object"
             ? (error.detail as { error?: string; message?: string })
@@ -200,8 +227,28 @@ export function LoginPage() {
       }
       setError(t("login.errorVerifyNetworkFailed"));
     } finally {
-      setSubmitting(false);
+      submittingRef.current = false;
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
+  };
+
+  const handleSwitchVerificationMode = () => {
+    if (submittingRef.current) return;
+    setVerificationMode((current) => (current === "totp" ? "recovery" : "totp"));
+    setTotpCode("");
+    setError(null);
+  };
+
+  const handleBackToLogin = () => {
+    if (submittingRef.current) return;
+    setRequires2FA(false);
+    setLoginToken("");
+    setTotpCode("");
+    setError(null);
+    setVerificationMode("totp");
+    void fetchCaptcha();
   };
 
   return (
@@ -256,7 +303,9 @@ export function LoginPage() {
             {requires2FA ? (
               <>
                 <CardTitle as="h2" className="text-2xl font-bold">{t("login.twoFactorTitle")}</CardTitle>
-                <CardDescription className="text-base">{t("login.twoFactorDesc")}</CardDescription>
+                <CardDescription id="login-verification-help" className="text-base">
+                  {verificationMode === "recovery" ? t("login.recoveryCodeHelp") : t("login.twoFactorDesc")}
+                </CardDescription>
               </>
             ) : (
               <>
@@ -270,20 +319,36 @@ export function LoginPage() {
               <form className="space-y-4" onSubmit={handle2FASubmit}>
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="totp-code">
-                    {t("login.totpLabel")}
+                    {verificationMode === "recovery" ? t("login.recoveryCodeLabel") : t("login.totpLabel")}
                   </label>
                   <Input
                     ref={totpInputRef}
                     id="totp-code"
+                    type="text"
                     value={totpCode}
                     onChange={(event) => setTotpCode(event.target.value)}
-                    autoComplete="one-time-code"
-                    placeholder={t("login.totpPlaceholder")}
+                    inputMode={verificationMode === "recovery" ? "text" : "numeric"}
+                    autoComplete={verificationMode === "recovery" ? "off" : "one-time-code"}
+                    autoCapitalize={verificationMode === "recovery" ? "none" : undefined}
+                    spellCheck={verificationMode === "recovery" ? false : undefined}
+                    placeholder={verificationMode === "recovery" ? t("login.recoveryCodePlaceholder") : t("login.totpPlaceholder")}
                     aria-invalid={Boolean(error)}
                     aria-errormessage={error ? errorId : undefined}
+                    aria-describedby="login-verification-help"
+                    disabled={submitting}
                     required
                   />
                 </div>
+
+                <Button
+                  className="w-full"
+                  type="button"
+                  variant="outline"
+                  disabled={submitting}
+                  onClick={handleSwitchVerificationMode}
+                >
+                  {verificationMode === "recovery" ? t("login.useAuthenticatorCode") : t("login.useRecoveryCode")}
+                </Button>
 
                 {error ? (
                   <p
@@ -302,7 +367,8 @@ export function LoginPage() {
                   className="w-full"
                   type="button"
                   variant="ghost"
-                  onClick={() => { setRequires2FA(false); setError(null); setTotpCode(""); }}
+                  disabled={submitting}
+                  onClick={handleBackToLogin}
                 >
                   {t("login.backToLogin")}
                 </Button>
