@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.63.0](https://github.com/xiangnan0811/xirang/compare/v0.62.1...v0.63.0) (2026-10-11)
+
+
+### ✨ Features
+
+* **auth:** manage personal recovery codes ([#612](https://github.com/xiangnan0811/xirang/issues/612)) ([c02dfac](https://github.com/xiangnan0811/xirang/commit/c02dfacdeab5197dcd34b68a61d68bbc616879d1))
+
 ### 行为与升级说明
 
 - 账户安全页新增本人恢复码剩余数量、手动刷新与安全重生成。admin、operator、viewer 仅能管理自己；未启用 TOTP 不显示为零，查询失败保持错误状态，不读取或重新展示已有恢复码。
