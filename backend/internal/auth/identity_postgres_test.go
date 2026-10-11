@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +67,46 @@ func openIdentityPostgresTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("migrate isolated PostgreSQL schema: %v", err)
 	}
 	return db
+}
+
+func waitForIdentityPostgresLock(t *testing.T, db *gorm.DB, blockerPID int) int {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get PostgreSQL lock-observer database: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for {
+		var waiterPID int
+		err := sqlDB.QueryRowContext(ctx, `
+			SELECT COALESCE(MIN(pid), 0)
+			FROM pg_stat_activity
+			WHERE pid <> pg_backend_pid()
+			  AND state = 'active'
+			  AND wait_event_type = 'Lock'
+			  AND $1 = ANY(pg_blocking_pids(pid))
+			  AND query ILIKE '%users%'
+			  AND query ILIKE '%for update%'`, blockerPID).Scan(&waiterPID)
+		if err != nil {
+			t.Fatalf("inspect PostgreSQL recovery-code lock contention: %v", err)
+		}
+		if waiterPID != 0 {
+			return waiterPID
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for PostgreSQL recovery-code contender blocked by PID %d", blockerPID)
+			return 0
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
+func TestComplete2FALoginRecoveryCodeConcurrentPostgres(t *testing.T) {
+	db := openIdentityPostgresTestDB(t)
+	runConcurrentRecoveryCodeLoginTest(t, db, nil)
 }
 
 func TestLastAdminInvariantConcurrentPostgres(t *testing.T) {
