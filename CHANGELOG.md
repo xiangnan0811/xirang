@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.63.0](https://github.com/xiangnan0811/xirang/compare/v0.62.1...v0.63.0) (2026-10-11)
+
+
+### ✨ Features
+
+* **auth:** manage personal recovery codes ([#612](https://github.com/xiangnan0811/xirang/issues/612)) ([c02dfac](https://github.com/xiangnan0811/xirang/commit/c02dfacdeab5197dcd34b68a61d68bbc616879d1))
+
 ### 行为与升级说明
 
 - 账户安全页新增本人恢复码剩余数量、手动刷新与安全重生成。admin、operator、viewer 仅能管理自己；未启用 TOTP 不显示为零，查询失败保持错误状态，不读取或重新展示已有恢复码。
@@ -11,13 +18,6 @@
 - 新版 Core 与页面按同一发行版本切换；升级前保全数据库、适用加密密钥与配置，完成或退出旧登录/账户安全交互并排空旧 Core 在途认证请求。新锁边界、局部安全日志与界面保护仅约束新版操作，不追溯撤销已提交消费或替换。
 - 本次无新增数据库 schema migration，不自动重生成或恢复历史库存。回退旧版会移除本人管理入口及对应新保护，不恢复已消费或已替换的旧码，也不能重新查看未收到的新码；既有迁移降级保护和恢复限制仍适用。
 - 仅交付 R-19 本人管理，不包含管理员代办、他人账户恢复，也不解决验证器与全部恢复码同时丢失。SQLite/PostgreSQL 竞争、失败边界及真实浏览器验收不等于生产部署或灾备恢复验收。
-
-## [0.63.0](https://github.com/xiangnan0811/xirang/compare/v0.62.1...v0.63.0) (2026-10-11)
-
-
-### ✨ Features
-
-* **auth:** manage personal recovery codes ([#612](https://github.com/xiangnan0811/xirang/issues/612)) ([c02dfac](https://github.com/xiangnan0811/xirang/commit/c02dfacdeab5197dcd34b68a61d68bbc616879d1))
 
 ## [0.62.1](https://github.com/xiangnan0811/xirang/compare/v0.62.0...v0.62.1) (2026-10-11)
 
