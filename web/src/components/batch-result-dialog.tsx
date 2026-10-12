@@ -26,15 +26,15 @@ import { toast } from "@/components/ui/toast-sonner";
 import { ApiError, getAuthIdentitySnapshot, getAuthSessionGeneration, isAuthTransitionActive, isStepUpRequiredError } from "@/lib/api/core";
 import { useAuth } from "@/context/auth-context.hooks";
 import type { AuthRole } from "@/context/auth-context.shared";
-import {
-  BatchRetryContractError,
-  type BatchRetryEligibility,
-  type BatchRetryLink,
-  type BatchRetryReason,
-  type BatchRetryResult,
-  type BatchRetrySource,
-  type BatchStatus,
+import type {
+  BatchRetryEligibility,
+  BatchRetryLink,
+  BatchRetryReason,
+  BatchRetryResult,
+  BatchRetrySource,
+  BatchStatus,
 } from "@/lib/api/batch-api";
+import { BatchRetryContractError } from "@/lib/api/batch-command-response";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";

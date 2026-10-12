@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BatchRetryContractError } from "./batch-command-response";
 import {
-  BatchRetryContractError,
   createBatchApi,
   type BatchRetrySource,
   type BatchStatus,
