@@ -12,6 +12,13 @@
 - 新资格、原子运行证据及界面保护仅作用于新版处理的操作，不追溯撤销旧进程已开始的远端命令。只要存在 v1 批次或运行证据，迁移降级即被拒绝；不得删证据、改版本号或仅换旧镜像绕过。需要回退时使用升级前配套数据库、密钥与匹配旧二进制做隔离恢复，并人工核对升级后已发生的远端副作用，恢复数据库不能撤销这些副作用。
 - 本版本交付 R-13 结果复制与显式命令重试，不包含 R-15。双数据库、竞争、真实 SSH/browser 和发布检查不等于生产部署或灾备恢复已验收。
 
+## [0.64.0](https://github.com/xiangnan0811/xirang/compare/v0.63.0...v0.64.0) (2026-10-12)
+
+
+### ✨ Features
+
+* **tasks:** add verified batch command retry and loaded result copy ([#614](https://github.com/xiangnan0811/xirang/issues/614)) ([a4757d1](https://github.com/xiangnan0811/xirang/commit/a4757d113ff08837adae6517e2cd6ff9631438fc))
+
 ## [0.63.0](https://github.com/xiangnan0811/xirang/compare/v0.62.1...v0.63.0) (2026-10-11)
 
 
