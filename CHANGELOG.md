@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.64.0](https://github.com/xiangnan0811/xirang/compare/v0.63.0...v0.64.0) (2026-10-12)
+
+
+### ✨ Features
+
+* **tasks:** add verified batch command retry and loaded result copy ([#614](https://github.com/xiangnan0811/xirang/issues/614)) ([a4757d1](https://github.com/xiangnan0811/xirang/commit/a4757d113ff08837adae6517e2cd6ff9631438fc))
+
 ### 行为与升级说明
 
 - 批量命令结果支持复制当前已加载的任务状态与日志；每任务最多包含已加载的 50 条日志，不代表完整执行日志，复制不会额外读取日志或重新执行命令。
@@ -11,6 +18,7 @@
 - 本次包含 SQLite/PostgreSQL 迁移 93，保存不可变来源摘要、唯一重试边及永久运行证据，不增长期命令正文副本。升级前保全数据库、适用加密密钥与配置，停止并排空旧 Core、scheduler、executor 及相关 worker/清理操作，前后端与执行组件按同一发行版本切换；禁止混用缺少 Evidence writer 的旧二进制。SQLite 须离线备份，PostgreSQL 须手动 stop/drain 后保全一致数据。
 - 新资格、原子运行证据及界面保护仅作用于新版处理的操作，不追溯撤销旧进程已开始的远端命令。只要存在 v1 批次或运行证据，迁移降级即被拒绝；不得删证据、改版本号或仅换旧镜像绕过。需要回退时使用升级前配套数据库、密钥与匹配旧二进制做隔离恢复，并人工核对升级后已发生的远端副作用，恢复数据库不能撤销这些副作用。
 - 本版本交付 R-13 结果复制与显式命令重试，不包含 R-15。双数据库、竞争、真实 SSH/browser 和发布检查不等于生产部署或灾备恢复已验收。
+
 
 ## [0.63.0](https://github.com/xiangnan0811/xirang/compare/v0.62.1...v0.63.0) (2026-10-11)
 
