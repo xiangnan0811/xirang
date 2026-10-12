@@ -42,6 +42,7 @@ const actionOptions = [
   "task.batch_trigger",
   "snapshot.restore",
   "batch_command.create",
+  "batch_command.retry",
   "task.credential.use",
   "drill.trigger",
   "drill.phase",
@@ -309,7 +310,7 @@ export function CredentialAuditPage() {
             />
             <Select value={action} onChange={(event) => setAction(event.target.value)} aria-label={t("credentialAudit.actionFilter")}>
               <option value="all">{t("credentialAudit.allActions")}</option>
-              {actionOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+              {actionOptions.map((item) => <option key={item} value={item}>{item === "batch_command.retry" ? t("credentialAudit.actions.batchCommandRetry") : item}</option>)}
             </Select>
             <Input
               placeholder={t("credentialAudit.purposePlaceholder")}

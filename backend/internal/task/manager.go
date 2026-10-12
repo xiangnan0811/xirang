@@ -1999,6 +1999,9 @@ func (m *Manager) enterTaskExecutionForReason(
 			// This prevents a concurrent config update from pairing old values
 			// with a newly captured provenance fingerprint.
 			*taskEntity = lockedTask
+			if err := validateBatchCommandExecutionBindingTx(tx, &lockedTask, runID); err != nil {
+				return err
+			}
 			if reason == "retry" {
 				if strings.TrimSpace(lockedTask.CronSpec) == "" ||
 					cronRetryCursorMode != model.TaskRunCronCursorModeRegularV1 {
@@ -2084,6 +2087,98 @@ func (m *Manager) enterTaskExecutionForReason(
 
 var errTaskPaused = errors.New("task execution blocked because task is paused")
 var errCronTaskBlocked = errors.New("cron task execution blocked")
+var errBatchCommandBindingMismatch = errors.New("batch command execution binding mismatch")
+
+func validateBatchCommandExecutionBindingTx(tx *gorm.DB, taskEntity *model.Task, runID uint) error {
+	if tx == nil || taskEntity == nil || taskEntity.ID == 0 || runID == 0 ||
+		strings.TrimSpace(taskEntity.BatchID) == "" {
+		return nil
+	}
+	receiptClass, err := model.ClassifyBatchCommandTaskReceipt(tx, taskEntity.ID, taskEntity.BatchID)
+	if err != nil {
+		return err
+	}
+	switch receiptClass {
+	case model.BatchCommandTaskReceiptLegacy:
+		// Pre-000081 tasks may retain a BatchID without a durable receipt.
+		return nil
+	case model.BatchCommandTaskReceiptV1SourceMissing:
+		return errBatchCommandBindingMismatch
+	case model.BatchCommandTaskReceiptV1:
+		// Continue below with the authoritative v1 rows.
+	default:
+		return errBatchCommandBindingMismatch
+	}
+	var batch model.BatchCommand
+	batchResult := tx.Model(&model.BatchCommand{}).
+		Select("id", "provenance_version", "source_batch_id").
+		Where("id = ?", taskEntity.BatchID).
+		Limit(1).
+		Find(&batch)
+	if batchResult.Error != nil {
+		return batchResult.Error
+	}
+	if batchResult.RowsAffected != 1 {
+		return errBatchCommandBindingMismatch
+	}
+	if batch.ProvenanceVersion == 0 || batch.ProvenanceVersion != 1 {
+		return errBatchCommandBindingMismatch
+	}
+	var runIdentity struct {
+		TaskID         uint `gorm:"column:task_id"`
+		NodeIDSnapshot uint `gorm:"column:node_id_snapshot"`
+	}
+	runResult := tx.Model(&model.TaskRun{}).
+		Select("task_id", "node_id_snapshot").
+		Where("id = ?", runID).
+		Limit(1).
+		Find(&runIdentity)
+	if runResult.Error != nil {
+		return runResult.Error
+	}
+	if runResult.RowsAffected != 1 {
+		return errBatchCommandBindingMismatch
+	}
+	var evidence model.BatchCommandRunEvidence
+	evidenceResult := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+		Where("run_id = ?", runID).
+		Limit(1).
+		Find(&evidence)
+	if evidenceResult.Error != nil {
+		return evidenceResult.Error
+	}
+	if evidenceResult.RowsAffected != 1 ||
+		evidence.TaskID != taskEntity.ID ||
+		runIdentity.TaskID != taskEntity.ID ||
+		evidence.NodeID != runIdentity.NodeIDSnapshot ||
+		strings.TrimSpace(evidence.Outcome) != "pending" {
+		return errBatchCommandBindingMismatch
+	}
+	evidenceFingerprint := strings.TrimSpace(evidence.CommandFingerprint)
+	if evidenceFingerprint != "" {
+		currentFingerprint := model.BatchCommandTaskFingerprint(*taskEntity)
+		if currentFingerprint == "" || currentFingerprint != evidenceFingerprint {
+			return errBatchCommandBindingMismatch
+		}
+	}
+	if batch.SourceBatchID != nil {
+		var dispatch model.BatchCommandDispatch
+		dispatchResult := tx.Model(&model.BatchCommandDispatch{}).
+			Select("command_fingerprint").
+			Where("task_id = ? AND batch_id = ?", taskEntity.ID, taskEntity.BatchID).
+			Limit(1).
+			Find(&dispatch)
+		if dispatchResult.Error != nil {
+			return dispatchResult.Error
+		}
+		dispatchFingerprint := strings.TrimSpace(dispatch.CommandFingerprint)
+		if dispatchResult.RowsAffected != 1 || evidenceFingerprint == "" ||
+			dispatchFingerprint == "" || evidenceFingerprint != dispatchFingerprint {
+			return errBatchCommandBindingMismatch
+		}
+	}
+	return nil
+}
 
 func (m *Manager) cancelQueuedCronRunTx(tx *gorm.DB, runID, nodeID uint, message string) error {
 	now := time.Now().UTC()
@@ -2127,6 +2222,9 @@ func (m *Manager) cancelQueuedCronRunTx(tx *gorm.DB, runID, nodeID uint, message
 	if result.RowsAffected != 1 {
 		return ErrNodeWriteStartLost
 	}
+	if err := completeBatchCommandEvidenceTx(tx, run, StatusCanceled, taskRunTerminalOptions{}, now); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -2147,6 +2245,15 @@ func (m *Manager) cancelTaskExecutionBeforeExecutor(
 	}
 	canceledAt := time.Now().UTC()
 	return m.db.Transaction(func(tx *gorm.DB) error {
+		var taskEntity model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", taskID).Limit(1).Find(&taskEntity)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
 		var run model.TaskRun
 		loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ? AND task_id = ? AND node_id_snapshot = ?", runID, taskID, nodeID).
@@ -2194,6 +2301,9 @@ func (m *Manager) cancelTaskExecutionBeforeExecutor(
 		if runResult.RowsAffected != 1 {
 			return ErrNodeWriteStartLost
 		}
+		if err := completeBatchCommandEvidenceTx(tx, run, StatusCanceled, taskRunTerminalOptions{}, canceledAt); err != nil {
+			return err
+		}
 
 		if previous == nil {
 			return nil
@@ -2222,13 +2332,13 @@ func (m *Manager) cancelTaskExecutionBeforeExecutor(
 				taskUpdates["next_run_at"] = cronutil.Next(previous.CronSpec)
 			}
 		}
-		taskResult := tx.Model(&model.Task{}).
+		restoreResult := tx.Model(&model.Task{}).
 			Where("id = ? AND status = ?", previous.ID, string(StatusRunning)).
 			Updates(taskUpdates)
-		if taskResult.Error != nil {
-			return taskResult.Error
+		if restoreResult.Error != nil {
+			return restoreResult.Error
 		}
-		if taskResult.RowsAffected != 1 {
+		if restoreResult.RowsAffected != 1 {
 			return ErrNodeWriteStartLost
 		}
 		return nil
@@ -2730,6 +2840,9 @@ func cancelPendingPolicyRunsTx(tx *gorm.DB, policyID uint, message string) error
 		}
 		if result.RowsAffected != 1 {
 			return errTaskRunCASLost
+		}
+		if err := completeBatchCommandEvidenceTx(tx, *run, StatusCanceled, taskRunTerminalOptions{}, now); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -3407,6 +3520,10 @@ func (m *Manager) reconcileOrphanTaskRuns(taskID uint) (string, error) {
 			if updated.RowsAffected != 1 {
 				return errTaskCancelConflict
 			}
+			if err := completeBatchCommandEvidenceTx(tx, *run, StatusCanceled, taskRunTerminalOptions{}, finishedAt); err != nil {
+				logger.Module("task").Error().Err(err).Uint("task_id", taskID).Uint("task_run_id", run.ID).Msg("关闭孤立命令证据失败")
+				return errTaskCancelUnavailable
+			}
 		}
 
 		if !taskIsActive {
@@ -3471,6 +3588,15 @@ func (m *Manager) cancelPendingTaskRuns(taskID uint, message string) (int64, err
 	message = sanitizeTaskLastError(message)
 	var canceled int64
 	err := m.db.Transaction(func(tx *gorm.DB) error {
+		var taskEntity model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", taskID).Limit(1).Find(&taskEntity)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
 		var runs []model.TaskRun
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where(`task_id = ?
@@ -3507,6 +3633,9 @@ func (m *Manager) cancelPendingTaskRuns(taskID uint, message string) (int64, err
 			}
 			if result.RowsAffected != 1 {
 				return errTaskRunCASLost
+			}
+			if err := completeBatchCommandEvidenceTx(tx, *run, StatusCanceled, taskRunTerminalOptions{}, canceledAt); err != nil {
+				return err
 			}
 			canceled++
 		}

@@ -38,6 +38,7 @@ const (
 	CredentialGrantActionTaskManualTrigger = string(auth.StepUpActionTaskManualTrigger)
 	CredentialGrantActionTaskBatchTrigger  = string(auth.StepUpActionTaskBatchTrigger)
 	CredentialGrantActionBatchCommand      = string(auth.StepUpActionBatchCommandCreate)
+	CredentialGrantActionBatchCommandRetry = string(auth.StepUpActionBatchCommandRetry)
 	CredentialGrantPurposeConfigImport     = "config_import"
 	CredentialGrantPurposeConfigExport     = "config_export"
 
@@ -434,6 +435,55 @@ func (h *CredentialAccessGrantHandler) RequestBatchCommandGrant(c *gin.Context) 
 	respondCreated(c, toCredentialGrantDTOs(grants))
 }
 
+// RequestBatchCommandRetryGrant godoc
+// @Summary      申请批量命令重试凭据授权
+// @Description  要求专用 batch_command.retry 二次验证，逐节点校验权限；SSH purpose 为 batch_command
+// @Tags         credentials
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body body batchCommandCredentialGrantRequest true "节点、原因及授权有效期"
+// @Success      201 {object} handlers.Response
+// @Failure      400 {object} handlers.Response
+// @Failure      401 {object} handlers.Response
+// @Failure      403 {object} handlers.Response
+// @Router       /credential-access-grants/batch-command-retry [post]
+func (h *CredentialAccessGrantHandler) RequestBatchCommandRetryGrant(c *gin.Context) {
+	var req batchCommandCredentialGrantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	nodeIDs := normalizeCredentialGrantResourceIDs(req.NodeIDs)
+	if len(nodeIDs) == 0 {
+		respondBadRequest(c, "节点 ID 无效")
+		return
+	}
+	reason, ttl, ok := h.validateGrantRequestForRoles(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionBatchCommandRetry, CredentialGrantActionBatchCommandRetry, sshutil.PurposeBatchCommand, "batch_retry", []string{"admin", "operator"})
+	if !ok {
+		return
+	}
+	if ok := h.authorizeNodeGrantTargets(c, nodeIDs); !ok {
+		return
+	}
+
+	inputs := make([]credentialGrantCreateInput, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		inputs = append(inputs, credentialGrantCreateInput{
+			Action:              CredentialGrantActionBatchCommandRetry,
+			Purpose:             sshutil.PurposeBatchCommand,
+			NodeID:              credentialaudit.PtrUint(nodeID),
+			Reason:              reason,
+			RequestedTTLSeconds: int(ttl.Seconds()),
+		})
+	}
+	grants, ok := h.createActiveSelfGrants(c, inputs)
+	if !ok {
+		return
+	}
+	respondCreated(c, toCredentialGrantDTOs(grants))
+}
+
 func (h *CredentialAccessGrantHandler) validateTaskRestoreGrantEligibility(c *gin.Context, taskID uint) bool {
 	var task model.Task
 	if err := h.db.WithContext(c.Request.Context()).Select("id", "executor_type", "node_id").First(&task, taskID).Error; err != nil {
@@ -718,6 +768,13 @@ func EnforceBatchCommandCredentialGrants(c *gin.Context, db *gorm.DB, nodeIDs []
 	}
 	return enforceCredentialGrantMatches(c, db, matches)
 }
+func EnforceBatchCommandRetryCredentialGrants(c *gin.Context, db *gorm.DB, nodeIDs []uint) bool {
+	matches := make([]credentialGrantMatch, 0, len(nodeIDs))
+	for _, nodeID := range normalizeCredentialGrantResourceIDs(nodeIDs) {
+		matches = append(matches, credentialGrantMatch{Action: CredentialGrantActionBatchCommandRetry, Purpose: sshutil.PurposeBatchCommand, NodeID: credentialaudit.PtrUint(nodeID)})
+	}
+	return enforceCredentialGrantMatches(c, db, matches)
+}
 
 func requireSystemCredentialGrant(db *gorm.DB, match credentialGrantMatch, predicate func(*gin.Context) bool) gin.HandlerFunc {
 	return requireCredentialGrant(db, match, predicate)
@@ -863,6 +920,8 @@ func credentialGrantAllowedRolesForOperation(action, purpose string) []string {
 	case action == CredentialGrantActionTaskBatchTrigger && purpose == sshutil.PurposeTaskCommand:
 		return []string{"admin", "operator"}
 	case action == CredentialGrantActionBatchCommand && purpose == sshutil.PurposeBatchCommand:
+		return []string{"admin", "operator"}
+	case action == CredentialGrantActionBatchCommandRetry && purpose == sshutil.PurposeBatchCommand:
 		return []string{"admin", "operator"}
 	default:
 		return []string{"admin"}
@@ -1155,6 +1214,8 @@ func credentialGrantOperationLabel(action, purpose string) string {
 		return "task_bulk_run"
 	case action == CredentialGrantActionBatchCommand && purpose == sshutil.PurposeBatchCommand:
 		return "batch_run"
+	case action == CredentialGrantActionBatchCommandRetry && purpose == sshutil.PurposeBatchCommand:
+		return "batch_retry"
 	default:
 		return "grant"
 	}

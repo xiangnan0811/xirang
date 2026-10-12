@@ -857,6 +857,7 @@ func highRiskCredentialAuditActions() []string {
 		"snapshot.restore",
 		"task.credential.use",
 		"batch_command.create",
+		"batch_command.retry",
 		"drill.trigger",
 		"drill.phase",
 	}
@@ -904,6 +905,8 @@ func credentialActionLabel(action string) string {
 		return "任务运行凭据使用"
 	case "batch_command.create":
 		return "批量命令创建"
+	case "batch_command.retry":
+		return "批量命令重试"
 	case "drill.trigger":
 		return "恢复演练触发"
 	case "drill.phase":

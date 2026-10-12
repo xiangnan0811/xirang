@@ -29,17 +29,17 @@ API 以 Router 和生成的 OpenAPI 为准，本页不手工维护接口或模�
 
 ## 数据库迁移版本
 
-当前迁移版本：`000092_cron_backup_health`。
+当前迁移版本：`000093_batch_command_retry`。
 
 该迁移的 SQLite/PostgreSQL 配对文件为：
 
-- `internal/database/migrations/sqlite/000092_cron_backup_health.up.sql`
-- `internal/database/migrations/sqlite/000092_cron_backup_health.down.sql`
-- `internal/database/migrations/postgres/000092_cron_backup_health.up.sql`
-- `internal/database/migrations/postgres/000092_cron_backup_health.down.sql`
+- `internal/database/migrations/sqlite/000093_batch_command_retry.up.sql`
+- `internal/database/migrations/sqlite/000093_batch_command_retry.down.sql`
+- `internal/database/migrations/postgres/000093_batch_command_retry.up.sql`
+- `internal/database/migrations/postgres/000093_batch_command_retry.down.sql`
 
-`000092_cron_backup_health.up.sql` 新增 cron 数据库备份故障游标及固定单行使用标记。游标约束来源密钥、来源身份、revision、故障与告警关联；首次 enrollment 与业务行同事务写入使用标记。为保存 `XR-CRON-DB-BACKUP-` 加 64 位 source key 的完整告警身份，PostgreSQL 将 `alerts.error_code` 扩展为 `VARCHAR(128)`；SQLite 保留基线 `VARCHAR(64)` 声明（SQLite 不执行声明宽度），两引擎都接受完整 82 字符值。SQLite/PostgreSQL 均在 `schema_migrations` 的 INSERT/UPDATE 降级准入点拒绝已使用 schema 或已存在超过 64 字符告警编码的降级，即使游标业务行后来被清理，使用标记仍保留。
+该迁移为新批量命令保存不可变来源摘要、重试来源消费边和永久运行证据；不保存第二份命令正文，也不为历史批次补造来源。每个来源 Task/失败 Run 至多消费一次；`run_id=0` 仅代表可证未派发。根批次允许在预约前编辑，但运行记录当前输入快照，来源变化后不能获得显式重试资格；重试子批次预约和执行都须匹配自己的不可变来源。
 
-`000092_cron_backup_health.down.sql` 仅允许未写入使用标记且不存在超过 64 字符告警编码的 schema 降级；PostgreSQL 仅在该准入检查通过后将 `error_code` 安全收窄回 `VARCHAR(64)`，SQLite 不重建 alerts 表。down 文件保留独立 body guard；已使用状态拒绝后版本保持 clean，迁移表、约束、外键和保护器不被删除。启动会验证两引擎真实列、默认值、NOT NULL、主键、CHECK、FK、告警编码容量以及保护器触发器/函数体；漂移返回 `ErrMigrationSchemaDrift`，不能以同名空操作对象放行。
+SQLite 使用新增列和触发器，不重建 TaskRun 表。两引擎均校验来源关联、身份不可变、证据从 pending 单次进入真实终态及永久保留；已使用的 v1 批次或证据使降级在 dirty 元数据写入前拒绝，未使用时可退回并保留全部 v0 回执。启动检查真实列、索引、外键、约束及完整保护器定义；漂移返回 `ErrMigrationSchemaDrift`。升级必须停止并排空旧 Core/worker，不能与不写运行证据的旧二进制混用。
 
 该声明与 `internal/database/migrations/{sqlite,postgres}` 中最新的成对 up/down 文件同步，并由迁移检查脚本校验。升级前提、旧写入者排空、双引擎恢复和降级保护要求见[数据库合同](../docs/spec/backend/database-guidelines.md)、[部署指南](../docs/deployment.md#备份职责收敛升级)及[备份、恢复与快照](../docs/admin/backup-recovery.md#升级与灾难恢复)；不要通过强制修改版本或删除安全证据绕过保护。

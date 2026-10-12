@@ -60,6 +60,25 @@ describe("credential audit api mappers", () => {
     expect(mapped.outcome).toBe("blocked");
   });
 
+  it("keeps batch command retry distinct from create and rejects unrecognized actions", () => {
+    const retry = mapCredentialAuditEvent({ action: "batch_command.retry", outcome: "success" });
+    const create = mapCredentialAuditEvent({ action: "batch_command.create", outcome: "success" });
+    const batchTrigger = mapCredentialAuditEvent({ action: "task.batch_trigger", outcome: "failure" });
+    const unrecognized = mapCredentialAuditEvent({ action: "batch_command.retry.extra", outcome: "success" });
+    const purposeShaped = mapCredentialAuditEvent({ action: "batch_command", outcome: "blocked" });
+
+    expect(retry.action).toBe("batch_command.retry");
+    expect(retry.rawAction).toBe("batch_command.retry");
+    expect(create.action).toBe("batch_command.create");
+    expect(batchTrigger.action).toBe("task.batch_trigger");
+    expect(retry.action).not.toBe(create.action);
+    expect(retry.action).not.toBe(batchTrigger.action);
+    expect(unrecognized.action).toBe("other");
+    expect(unrecognized.rawAction).toBe("batch_command.retry.extra");
+    expect(purposeShaped.action).toBe("other");
+    expect(purposeShaped.rawAction).toBe("batch_command");
+  });
+
   it("redacts legacy output, endpoints, secrets and stack-like error messages at the mapper boundary", () => {
     expect(mapCredentialAuditEvent({ error_message: "failed stdout: FAKE_REMOTE_OUTPUT_FOR_TEST_ONLY" }).errorMessage).toBe("failed stdout: [REDACTED_OUTPUT]");
     expect(mapCredentialAuditEvent({ error_message: "panic: runtime error\nbackend/internal/task/executor/ssh_connect.go:101" }).errorMessage).toBe("[REDACTED_ERROR]");

@@ -108,6 +108,7 @@ func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.En
 	router.POST("/credential-access-grants/task-manual-trigger", middleware.RBAC("tasks:trigger"), handler.RequestTaskManualTriggerGrant)
 	router.POST("/credential-access-grants/task-batch-trigger", middleware.RBAC("tasks:write"), handler.RequestTaskBatchTriggerGrant)
 	router.POST("/credential-access-grants/batch-command", middleware.RBAC("tasks:write"), handler.RequestBatchCommandGrant)
+	router.POST("/credential-access-grants/batch-command-retry", middleware.RBAC("tasks:write"), handler.RequestBatchCommandRetryGrant)
 	return router
 }
 
@@ -2265,4 +2266,104 @@ func TestEnforceTerminalCredentialGrantWritesUseAndBlockedAudit(t *testing.T) {
 	if metadata["stage"] != "use" || metadata["status"] != "active" {
 		t.Fatalf("use audit metadata 不符合预期: %#v", metadata)
 	}
+}
+func TestBatchCommandRetryGrantUsesDedicatedProofAndOwnership(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := newStepUpTestJWTManager(db)
+	operator := seedStepUpUser(t, db, "grant-retry-operator", "operator")
+	viewer := seedStepUpUser(t, db, "grant-retry-viewer", "viewer")
+	operatorToken := generatePrimaryToken(t, manager, operator)
+	viewerToken := generatePrimaryToken(t, manager, viewer)
+	retryProof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionBatchCommandRetry)
+	createProof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionBatchCommandCreate)
+	viewerRetryProof := generateStepUpProofForAction(t, manager, viewer, auth.StepUpActionBatchCommandRetry)
+	ownedNode := seedCredentialGrantNode(t, db)
+	unownedNode := seedCredentialGrantNode(t, db)
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: operator.ID}).Error; err != nil {
+		t.Fatalf("创建重试授权 ownership 失败: %v", err)
+	}
+	router := newCredentialGrantTestRouter(db, manager)
+	body := func(nodeID uint) string {
+		return fmt.Sprintf(`{"node_ids":[%d],"reason":"失败后复核","requested_ttl_seconds":600}`, nodeID)
+	}
+
+	resp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/batch-command-retry", operatorToken, retryProof, body(ownedNode.ID))
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("operator owned retry grant 期望 201，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var payload struct {
+		Data []credentialGrantDTO `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析 retry grant 响应失败: %v", err)
+	}
+	if len(payload.Data) != 1 {
+		t.Fatalf("retry grant 应创建一条授权记录，实际: %+v", payload.Data)
+	}
+	grant := payload.Data[0]
+	if grant.Action != CredentialGrantActionBatchCommandRetry ||
+		grant.Purpose != sshutil.PurposeBatchCommand ||
+		grant.NodeID == nil || *grant.NodeID != ownedNode.ID ||
+		grant.RequesterRole != "operator" || grant.RequestedTTLSeconds != 600 {
+		t.Fatalf("retry grant DTO 不符合专用 action/用途/角色合同: %+v", grant)
+	}
+
+	wrongProof := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/batch-command-retry", operatorToken, createProof, body(ownedNode.ID))
+	if wrongProof.Code != http.StatusForbidden || !strings.Contains(wrongProof.Body.String(), "STEP_UP_REQUIRED") {
+		t.Fatalf("batch command create proof 不得代替 retry proof，实际: %d，响应: %s", wrongProof.Code, wrongProof.Body.String())
+	}
+	unowned := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/batch-command-retry", operatorToken, retryProof, body(unownedNode.ID))
+	if unowned.Code != http.StatusForbidden {
+		t.Fatalf("operator 不得为未拥有节点申请 retry grant，实际: %d，响应: %s", unowned.Code, unowned.Body.String())
+	}
+	viewerResp := performStepUpRequest(t, router, http.MethodPost, "/credential-access-grants/batch-command-retry", viewerToken, viewerRetryProof, body(ownedNode.ID))
+	if viewerResp.Code != http.StatusForbidden {
+		t.Fatalf("viewer 不得申请 retry grant，实际: %d，响应: %s", viewerResp.Code, viewerResp.Body.String())
+	}
+	var retryCount int64
+	if err := db.Model(&model.CredentialAccessGrant{}).Where("action = ?", CredentialGrantActionBatchCommandRetry).Count(&retryCount).Error; err != nil {
+		t.Fatalf("统计 retry grant 失败: %v", err)
+	}
+	if retryCount != 1 {
+		t.Fatalf("拒绝请求不应额外创建 retry grant，实际数量: %d", retryCount)
+	}
+}
+
+func TestBatchCommandRetryGrantEnforcementRejectsCreateAliasAndClosedRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := newStepUpTestJWTManager(db)
+	operator := seedStepUpUser(t, db, "enforce-retry-operator", "operator")
+	viewer := seedStepUpUser(t, db, "enforce-retry-viewer", "viewer")
+	operatorToken := generatePrimaryToken(t, manager, operator)
+	viewerToken := generatePrimaryToken(t, manager, viewer)
+	operatorProof := generateStepUpProofForAction(t, manager, operator, auth.StepUpActionBatchCommandRetry)
+	viewerProof := generateStepUpProofForAction(t, manager, viewer, auth.StepUpActionBatchCommandRetry)
+	node := seedCredentialGrantNode(t, db)
+	retryUse := gin.New()
+	retryUse.Use(middleware.AuthMiddleware(manager, db))
+	retryUse.POST("/retry", func(c *gin.Context) {
+		if !EnforceStepUp(c, db, manager, auth.StepUpActionBatchCommandRetry, sshutil.PurposeBatchCommand, "batch_retry") {
+			return
+		}
+		if !EnforceBatchCommandRetryCredentialGrants(c, db, []uint{node.ID}) {
+			return
+		}
+		c.Status(http.StatusNoContent)
+	})
+
+	createTaskRestoreGrantFixture(t, db, operator, CredentialGrantActionBatchCommand, sshutil.PurposeBatchCommand, CredentialGrantStatusActive, nil, credentialaudit.PtrUint(node.ID), nil, "operator")
+	missingRetry := performStepUpRequest(t, retryUse, http.MethodPost, "/retry", operatorToken, operatorProof, "")
+	assertCredentialGrantRequiredEnvelope(t, missingRetry, "required")
+
+	createTaskRestoreGrantFixture(t, db, operator, CredentialGrantActionBatchCommandRetry, sshutil.PurposeBatchCommand, CredentialGrantStatusActive, nil, credentialaudit.PtrUint(node.ID), nil, "operator")
+	granted := performStepUpRequest(t, retryUse, http.MethodPost, "/retry", operatorToken, operatorProof, "")
+	if granted.Code != http.StatusNoContent {
+		t.Fatalf("有效 retry grant 应通过专用 enforcer，实际: %d，响应: %s", granted.Code, granted.Body.String())
+	}
+
+	createTaskRestoreGrantFixture(t, db, viewer, CredentialGrantActionBatchCommandRetry, sshutil.PurposeBatchCommand, CredentialGrantStatusActive, nil, credentialaudit.PtrUint(node.ID), nil, "viewer")
+	viewerResp := performStepUpRequest(t, retryUse, http.MethodPost, "/retry", viewerToken, viewerProof, "")
+	assertCredentialGrantRequiredEnvelope(t, viewerResp, "invalid")
 }

@@ -5,13 +5,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
 
-const { authRef } = vi.hoisted(() => ({
+const { authRef, clearStepUpProofMock } = vi.hoisted(() => ({
   authRef: {
     current: {
       role: "admin" as "admin" | "operator" | "viewer",
       token: "test-token",
     },
   },
+  clearStepUpProofMock: vi.fn(),
 }));
 
 const nodesRef: { current: Record<string, unknown> } = { current: {} };
@@ -27,6 +28,7 @@ vi.mock("@/context/auth-context.hooks", () => ({
     isAuthenticated: true,
     login: vi.fn(),
     logout: vi.fn(),
+    clearStepUpProof: clearStepUpProofMock,
   }),
 }));
 
@@ -93,6 +95,7 @@ describe("NodesPage confirm lifetime", () => {
       configurable: true,
       value: createMemoryStorage(),
     });
+    clearStepUpProofMock.mockReset();
     authRef.current = { role: "admin", token: "test-token" };
     sharedRef.current = {
       globalSearch: "",

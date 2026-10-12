@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { CredentialAccessGrantsPage } from "./credential-access-grants-page";
 import type { CredentialAccessGrant } from "@/types/domain";
+import en from "@/i18n/locales/en";
+import zh from "@/i18n/locales/zh";
 
 const {
   authState,
@@ -246,5 +248,46 @@ describe("CredentialAccessGrantsPage", () => {
       expect(listCredentialAccessGrantsMock).not.toHaveBeenCalled();
     });
     expect(screen.queryByText("凭据临时授权")).not.toBeInTheDocument();
+  });
+
+  it("批量命令重试是独立筛选，未知动作不能当成创建或重试", async () => {
+    const user = userEvent.setup();
+    render(<CredentialAccessGrantsPage />);
+
+    await waitFor(() => {
+      expect(listCredentialAccessGrantsMock).toHaveBeenCalledTimes(1);
+    });
+
+    const filter = screen.getByLabelText("按授权动作过滤") as HTMLSelectElement;
+    const options = Array.from(filter.options);
+    const retry = options.find((option) => option.value === "batch_command.retry");
+    const create = options.find((option) => option.value === "batch_command.create");
+    const batchTrigger = options.find((option) => option.value === "task.batch_trigger");
+
+    expect(retry).toBeDefined();
+    expect(create).toBeDefined();
+    expect(batchTrigger).toBeDefined();
+    expect(retry?.label).toBe("批量命令重试");
+    expect(retry?.label).toBe(zh.credentialGrants.actions.batchCommandRetry);
+    expect(en.credentialGrants.actions.batchCommandRetry).toBe("Batch command retry");
+    expect(retry?.label).not.toBe(create?.label);
+    expect(retry?.value).not.toBe(create?.value);
+    expect(batchTrigger?.label).toBe("task.batch_trigger");
+    expect(batchTrigger?.label).not.toBe(retry?.label);
+    expect(options.some((option) => option.value === "batch_command")).toBe(false);
+    expect(options.some((option) => option.value === "batch_command.retry.extra")).toBe(false);
+
+    listCredentialAccessGrantsMock.mockClear();
+    await user.selectOptions(filter, "batch_command.retry");
+
+    await waitFor(() => {
+      expect(listCredentialAccessGrantsMock).toHaveBeenCalled();
+    });
+    expect(listCredentialAccessGrantsMock).toHaveBeenLastCalledWith(
+      "test-token",
+      expect.objectContaining({ action: "batch_command.retry" }),
+    );
+    const queried = listCredentialAccessGrantsMock.mock.lastCall?.[1] as { action?: string };
+    expect(queried.action).not.toBe("batch_command.create");
   });
 });

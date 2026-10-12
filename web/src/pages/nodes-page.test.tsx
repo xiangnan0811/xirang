@@ -20,9 +20,11 @@ const {
   grantMock,
   emergencyBackupMock,
   useStepUpActionMock,
+  clearStepUpProofMock,
   oneShotStepUpOptions,
   getBatchStatusMock,
 } = vi.hoisted(() => {
+  const clearStepUpProofMock = vi.fn();
   const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => async <T,>(action: (proof?: string) => Promise<T>) => {
     stepUpHookMock.lastAction = stepUpAction;
     stepUpHookMock.lastOptions = options;
@@ -39,6 +41,7 @@ const {
     grantMock: vi.fn(),
     emergencyBackupMock: vi.fn(),
     useStepUpActionMock: stepUpHookMock,
+    clearStepUpProofMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
     getBatchStatusMock: vi.fn(),
   };
@@ -206,6 +209,7 @@ vi.mock("@/context/auth-context.hooks", () => ({
     authTransitioning: false,
     login: vi.fn(),
     logout: vi.fn(),
+    clearStepUpProof: clearStepUpProofMock,
   }),
 }));
 
@@ -403,6 +407,7 @@ describe("NodesPage", () => {
     grantMock.mockReset();
     emergencyBackupMock.mockReset();
     useStepUpActionMock.mockClear();
+    clearStepUpProofMock.mockReset();
     useStepUpActionMock.lastAction = undefined;
     useStepUpActionMock.lastOptions = undefined;
     trustNodeHostKeyMock.mockResolvedValue({

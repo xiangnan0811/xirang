@@ -38,6 +38,7 @@ const actionOptions = [
   "task.manual_trigger",
   "task.batch_trigger",
   "batch_command.create",
+  "batch_command.retry",
 ];
 
 const purposeOptions = [
@@ -261,7 +262,7 @@ export function CredentialAccessGrantsPage() {
             />
             <Select value={action} onChange={(event) => setAction(event.target.value)} aria-label={t("credentialGrants.actionFilter")}>
               <option value="all">{t("credentialGrants.allActions")}</option>
-              {actionOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+              {actionOptions.map((item) => <option key={item} value={item}>{item === "batch_command.retry" ? t("credentialGrants.actions.batchCommandRetry") : item}</option>)}
             </Select>
             <Select value={purpose} onChange={(event) => setPurpose(event.target.value)} aria-label={t("credentialGrants.purposeFilter")}>
               <option value="all">{t("credentialGrants.allPurposes")}</option>

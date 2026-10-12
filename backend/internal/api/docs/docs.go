@@ -5715,6 +5715,89 @@ const docTemplate = `{
                 }
             }
         },
+        "/batch-commands/{batch_id}/retry": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "为已确认失败且来源可验证的批量命令创建全新子批次",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "batch"
+                ],
+                "summary": "显式重试批量命令",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "请求者范围的幂等键；同一请求重试必须复用",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "来源批次 ID",
+                        "name": "batch_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "仅包含来源 task/run 对",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.batchRetryRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/config/export": {
             "get": {
                 "security": [
@@ -5822,6 +5905,63 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/credential-access-grants/batch-command-retry": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "要求专用 batch_command.retry 二次验证，逐节点校验权限；SSH purpose 为 batch_command",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credentials"
+                ],
+                "summary": "申请批量命令重试凭据授权",
+                "parameters": [
+                    {
+                        "description": "节点、原因及授权有效期",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.batchCommandCredentialGrantRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -18602,6 +18742,28 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.batchCommandCredentialGrantRequest": {
+            "type": "object",
+            "required": [
+                "node_ids",
+                "reason"
+            ],
+            "properties": {
+                "node_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "requested_ttl_seconds": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_api_handlers.batchCommandRequest": {
             "type": "object",
             "required": [
@@ -18624,6 +18786,28 @@ const docTemplate = `{
                 },
                 "retain": {
                     "type": "boolean"
+                }
+            }
+        },
+        "internal_api_handlers.batchRetryRequest": {
+            "type": "object",
+            "properties": {
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.batchRetrySourceRequest"
+                    }
+                }
+            }
+        },
+        "internal_api_handlers.batchRetrySourceRequest": {
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "integer"
+                },
+                "task_id": {
+                    "type": "integer"
                 }
             }
         },

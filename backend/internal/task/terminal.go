@@ -31,6 +31,140 @@ var (
 	errTaskRunCASLost  = errors.New("task run terminal transition compare-and-swap lost")
 )
 
+type taskRunTerminalOptions struct {
+	RecordLegacyFact bool
+	CommandOutcome   *batchCommandRunOutcome
+}
+
+type batchCommandRunOutcome struct {
+	Fingerprint string
+	Outcome     string
+	ExitCode    *int
+}
+
+// completeBatchCommandEvidenceTx closes the pending command evidence after
+// the TaskRun compare-and-swap has won. It deliberately defaults every
+// non-success terminal path to unknown; only the runner's strict, immutable
+// command outcome may promote a failed run to a known result.
+func completeBatchCommandEvidenceTx(
+	tx *gorm.DB,
+	run model.TaskRun,
+	runStatus TaskStatus,
+	options taskRunTerminalOptions,
+	finishedAt time.Time,
+) error {
+	if tx == nil || run.ID == 0 || run.TaskID == 0 {
+		return nil
+	}
+	var taskIdentity struct {
+		BatchID string `gorm:"column:batch_id"`
+	}
+	taskResult := tx.Model(&model.Task{}).
+		Select("batch_id").
+		Where("id = ?", run.TaskID).
+		Limit(1).
+		Find(&taskIdentity)
+	if taskResult.Error != nil {
+		return taskResult.Error
+	}
+	if taskResult.RowsAffected != 1 || strings.TrimSpace(taskIdentity.BatchID) == "" {
+		return nil
+	}
+	receiptClass, err := model.ClassifyBatchCommandTaskReceipt(tx, run.TaskID, taskIdentity.BatchID)
+	if err != nil {
+		return err
+	}
+	switch receiptClass {
+	case model.BatchCommandTaskReceiptLegacy:
+		// A pre-000081 task may retain only its old BatchID. There is no
+		// evidence to complete in that compatibility path.
+		return nil
+	case model.BatchCommandTaskReceiptV1SourceMissing:
+		return fmt.Errorf("batch command provenance source missing for task run %d", run.ID)
+	case model.BatchCommandTaskReceiptV1:
+		// Continue below with the authoritative v1 rows.
+	default:
+		return fmt.Errorf("batch command provenance classification is unsupported for task run %d", run.ID)
+	}
+
+	var batch model.BatchCommand
+	batchResult := tx.Model(&model.BatchCommand{}).
+		Select("id", "provenance_version").
+		Where("id = ?", taskIdentity.BatchID).
+		Limit(1).
+		Find(&batch)
+	if batchResult.Error != nil {
+		return batchResult.Error
+	}
+	if batchResult.RowsAffected != 1 {
+		return fmt.Errorf("batch command provenance missing for task run %d", run.ID)
+	}
+	if batch.ProvenanceVersion == 0 {
+		return fmt.Errorf("batch command provenance has an inconsistent v1 receipt for task run %d", run.ID)
+	}
+	if batch.ProvenanceVersion != 1 {
+		return fmt.Errorf("unsupported batch command provenance version %d for task run %d", batch.ProvenanceVersion, run.ID)
+	}
+
+	var evidence model.BatchCommandRunEvidence
+	evidenceResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("run_id = ?", run.ID).
+		Limit(1).
+		Find(&evidence)
+	if evidenceResult.Error != nil {
+		return evidenceResult.Error
+	}
+	if evidenceResult.RowsAffected != 1 {
+		return fmt.Errorf("batch command run evidence missing for task run %d", run.ID)
+	}
+	if strings.TrimSpace(evidence.Outcome) != "pending" {
+		return fmt.Errorf("batch command run evidence for task run %d is already terminal", run.ID)
+	}
+	if evidence.TaskID != run.TaskID || evidence.NodeID != run.NodeIDSnapshot {
+		return fmt.Errorf("batch command run evidence identity mismatch for task run %d", run.ID)
+	}
+
+	outcome := "unknown"
+	var exitCode *int
+	if runStatus == StatusSuccess {
+		outcome = "success"
+	} else if runStatus == StatusFailed && options.CommandOutcome != nil {
+		candidate := options.CommandOutcome
+		switch candidate.Outcome {
+		case "exit_failure":
+			if candidate.ExitCode != nil && *candidate.ExitCode > 0 &&
+				strings.TrimSpace(candidate.Fingerprint) != "" &&
+				candidate.Fingerprint == evidence.CommandFingerprint {
+				code := *candidate.ExitCode
+				exitCode = &code
+				outcome = "exit_failure"
+			}
+		case "not_started":
+			if candidate.ExitCode == nil &&
+				strings.TrimSpace(candidate.Fingerprint) != "" &&
+				candidate.Fingerprint == evidence.CommandFingerprint {
+				outcome = "not_started"
+			}
+		}
+	}
+	completedAt := finishedAt.UTC()
+	updates := map[string]interface{}{
+		"outcome":     outcome,
+		"exit_code":   exitCode,
+		"finished_at": &completedAt,
+	}
+	updated := tx.Model(&model.BatchCommandRunEvidence{}).
+		Where("run_id = ? AND outcome = ?", run.ID, "pending").
+		Updates(updates)
+	if updated.Error != nil {
+		return updated.Error
+	}
+	if updated.RowsAffected != 1 {
+		return fmt.Errorf("batch command run evidence terminal transition lost for task run %d", run.ID)
+	}
+	return nil
+}
+
 func durableTaskContext(ctx context.Context) context.Context {
 	if ctx == nil {
 		return context.Background()
@@ -143,6 +277,9 @@ func (m *Manager) failTaskRunBeforeExecutor(ctx context.Context, runID uint, mes
 		}
 		if result.RowsAffected != 1 {
 			return errTaskRunCASLost
+		}
+		if err := completeBatchCommandEvidenceTx(tx, run, StatusFailed, taskRunTerminalOptions{}, now); err != nil {
+			return err
 		}
 		// A malformed run can outlive its aggregate. It is still safe to close
 		// the run after its identity was revalidated, but there is no aggregate
@@ -298,7 +435,13 @@ func (m *Manager) cancelRestoreTaskRunBeforeExecutor(ctx context.Context, taskID
 		if result.Error != nil {
 			return result.Error
 		}
-		if result.RowsAffected == 1 || model.IsTerminalTaskRunStatus(current.Status) {
+		if result.RowsAffected == 1 {
+			if err := completeBatchCommandEvidenceTx(tx, current, StatusCanceled, taskRunTerminalOptions{}, now); err != nil {
+				return err
+			}
+			return nil
+		}
+		if model.IsTerminalTaskRunStatus(current.Status) {
 			return nil
 		}
 		if strings.TrimSpace(current.ExecutionOwnerID) != "" &&
@@ -411,6 +554,9 @@ func (m *Manager) cancelOwnedRunningTask(taskID uint, message string) (bool, err
 			}
 			if updated.RowsAffected != 1 {
 				return errTaskCancelConflict
+			}
+			if err := completeBatchCommandEvidenceTx(tx, run, StatusCanceled, taskRunTerminalOptions{}, now); err != nil {
+				return err
 			}
 		}
 
@@ -696,10 +842,10 @@ func (m *Manager) terminalizeTaskRun(
 	taskUpdates map[string]interface{},
 	runStatus TaskStatus,
 	runUpdates map[string]interface{},
-	legacyFact ...bool,
+	options ...taskRunTerminalOptions,
 ) error {
 	if err := m.terminalizeTaskRunTx(ctx, taskID, runID, expectedRunStatuses,
-		taskStatus, taskUpdates, runStatus, runUpdates, terminalizeTaskRunModeNormal, legacyFact...); err != nil {
+		taskStatus, taskUpdates, runStatus, runUpdates, terminalizeTaskRunModeNormal, options...); err != nil {
 		return err
 	}
 	m.reconcileRetryCronScheduleAfterTerminal(taskID, runID)
@@ -801,9 +947,13 @@ func (m *Manager) terminalizeTaskRunTx(
 	runStatus TaskStatus,
 	runUpdates map[string]interface{},
 	mode terminalizeTaskRunMode,
-	legacyFact ...bool,
+	options ...taskRunTerminalOptions,
 ) error {
-	recordLegacyFact := len(legacyFact) > 0 && legacyFact[0]
+	terminalOptions := taskRunTerminalOptions{}
+	if len(options) > 0 {
+		terminalOptions = options[0]
+	}
+	recordLegacyFact := terminalOptions.RecordLegacyFact
 	if m == nil || m.db == nil {
 		return errors.New("task terminal persistence unavailable")
 	}
@@ -983,6 +1133,15 @@ func (m *Manager) terminalizeTaskRunTx(
 		}
 		if result.RowsAffected != 1 {
 			return errTaskRunCASLost
+		}
+		if err := completeBatchCommandEvidenceTx(
+			tx,
+			run,
+			runStatus,
+			terminalOptions,
+			terminalCompletionTime(runUpdates, finishedAt),
+		); err != nil {
+			return err
 		}
 		if recordLegacyFact && runStatus == StatusSuccess &&
 			strings.ToLower(strings.TrimSpace(run.TriggerType)) != "restore" &&
@@ -1996,6 +2155,9 @@ func (m *Manager) cancelPendingDurableRun(ctx context.Context, runID, taskID uin
 		}
 		if updated.RowsAffected != 1 {
 			return errTaskRunCASLost
+		}
+		if err := completeBatchCommandEvidenceTx(tx, run, StatusCanceled, taskRunTerminalOptions{}, now); err != nil {
+			return err
 		}
 		if taskResult.RowsAffected == 1 &&
 			strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") &&

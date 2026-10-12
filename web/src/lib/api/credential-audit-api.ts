@@ -65,6 +65,7 @@ const knownActions = new Set<string>([
   "task.batch_trigger",
   "snapshot.restore",
   "batch_command.create",
+  "batch_command.retry",
   "task.credential.use",
   "drill.trigger",
   "drill.phase",

@@ -62,10 +62,24 @@ func (e *sameTaskLongRunningCronExecutor) MaxActive() int {
 	return int(e.maxActive.Load())
 }
 
+func shortTaskFixtureDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(os.TempDir(), "xirang-task-")
+	if err != nil {
+		t.Fatalf("create short task fixture directory: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove short task fixture directory: %v", err)
+		}
+	})
+	return dir
+}
+
 func seedQuotaPolicyTask(t *testing.T, db *gorm.DB, policyID uint) model.Task {
 	t.Helper()
-	source := t.TempDir()
-	target := t.TempDir()
+	source := shortTaskFixtureDir(t)
+	target := shortTaskFixtureDir(t)
 	node := model.Node{
 		Name:      fmt.Sprintf("node-quota-%s", filepath.Base(source)),
 		Host:      "",

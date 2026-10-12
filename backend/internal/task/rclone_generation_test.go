@@ -652,7 +652,7 @@ func runSharedRcloneArmFence(t *testing.T, db *gorm.DB) {
 		Port:      22,
 		Username:  "root",
 		AuthType:  "key",
-		BackupDir: filepath.Join(t.TempDir(), "backup"),
+		BackupDir: filepath.Join(shortTaskFixtureDir(t), "backup"),
 	}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("create shared Rclone arm node: %v", err)
@@ -815,7 +815,7 @@ func runKeyedHistoricalRcloneArmFence(t *testing.T, db *gorm.DB) {
 		Port:      22,
 		Username:  "root",
 		AuthType:  "key",
-		BackupDir: filepath.Join(t.TempDir(), "backup"),
+		BackupDir: filepath.Join(shortTaskFixtureDir(t), "backup"),
 	}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("create keyed/historical Rclone node: %v", err)

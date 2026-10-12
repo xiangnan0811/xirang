@@ -2,15 +2,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLanguage } from "@/i18n";
-import type { BatchStatus } from "@/lib/api/batch-api";
-import {
-  beginAuthTransitionBarrier,
-  bumpAuthSessionGeneration,
-  clearAuthTransitionBarrier,
-  getAuthSessionGeneration,
-  rememberAuthIdentity,
-  releaseAuthTransitionBarrier,
-} from "@/lib/api/core";
+import { ApiError, beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier, getAuthSessionGeneration, rememberAuthIdentity, releaseAuthTransitionBarrier } from "@/lib/api/core";
+import { BatchRetryContractError, createBatchApi, type BatchRetryEligibility, type BatchRetryLink, type BatchRetryResult, type BatchStatus } from "@/lib/api/batch-api";
+import { STEP_UP_ACTIONS } from "@/lib/step-up-storage";
 import type { LogEvent } from "@/types/domain";
 import { BatchResultDialog } from "./batch-result-dialog";
 
@@ -30,10 +24,14 @@ type ExpectedLogs =
   | { kind: "error" }
   | { kind: "loaded"; messages: string[] };
 
-const { getBatchStatusMock, getTaskLogsMock, deleteBatchMock, onOpenChangeMock, authRef, toastSuccess, toastError } = vi.hoisted(() => ({
+const { getBatchStatusMock, getTaskLogsMock, deleteBatchMock, retryBatchCommandMock, retryGrantMock, ensureStepUpProofMock, clearStepUpProofMock, onOpenChangeMock, authRef, toastSuccess, toastError } = vi.hoisted(() => ({
   getBatchStatusMock: vi.fn(),
   getTaskLogsMock: vi.fn(),
   deleteBatchMock: vi.fn(),
+  retryBatchCommandMock: vi.fn(),
+  retryGrantMock: vi.fn(),
+  ensureStepUpProofMock: vi.fn(),
+  clearStepUpProofMock: vi.fn(),
   onOpenChangeMock: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
@@ -41,6 +39,7 @@ const { getBatchStatusMock, getTaskLogsMock, deleteBatchMock, onOpenChangeMock, 
     current: {
       role: "admin" as DialogRole,
       token: "auth-marker" as string,
+      totpEnabled: true,
     },
   },
 }));
@@ -50,6 +49,8 @@ vi.mock("@/lib/api/client", () => ({
     getBatchStatus: getBatchStatusMock,
     getTaskLogs: getTaskLogsMock,
     deleteBatch: deleteBatchMock,
+    retryBatchCommand: retryBatchCommandMock,
+    requestBatchCommandRetryCredentialGrant: retryGrantMock,
   },
 }));
 
@@ -70,9 +71,9 @@ vi.mock("@/context/auth-context.hooks", () => ({
     login: vi.fn(),
     logout: vi.fn(),
     setTotpEnabled: vi.fn(),
-    totpEnabled: false,
-    ensureStepUpProof: vi.fn(),
-    clearStepUpProof: vi.fn(),
+    totpEnabled: authRef.current.totpEnabled,
+    ensureStepUpProof: ensureStepUpProofMock,
+    clearStepUpProof: clearStepUpProofMock,
   }),
 }));
 
@@ -125,8 +126,8 @@ function logEvent(id: string, message: string): LogEvent {
   return { id, timestamp: "2026-09-08T00:00:00Z", level: "info", message };
 }
 
-function publishAuth(role: DialogRole, token = "auth-marker") {
-  authRef.current = { role, token };
+function publishAuth(role: DialogRole, token = "auth-marker", totpEnabled = true) {
+  authRef.current = { role, token, totpEnabled };
   rememberAuthIdentity(token, role);
 }
 
@@ -310,6 +311,76 @@ function installBatchPollSpy() {
   };
 }
 
+const SOURCE_BATCH_ID = "A".repeat(26);
+const CHILD_BATCH_ID = "B".repeat(26);
+
+function stepUpRequiredError() {
+  return new ApiError(403, "Additional verification required", { data: { error_code: "STEP_UP_REQUIRED" } });
+}
+
+function retrySource(overrides: Partial<BatchRetryEligibility> = {}): BatchRetryEligibility {
+  return {
+    taskId: 7,
+    nodeId: 3,
+    runId: 9,
+    eligible: true,
+    reason: "eligible",
+    failureKind: "execution",
+    retryBatchId: null,
+    ...overrides,
+  };
+}
+
+function retryBatch(options: {
+  tasks?: BatchStatus["tasks"];
+  sources?: BatchRetryEligibility[];
+  links?: BatchRetryLink[];
+  retain?: boolean;
+} = {}): BatchStatus {
+  const tasks = options.tasks ?? [
+    taskOf({ id: 7, nodeId: 3, nodeName: "node-a", status: "failed", lastError: "exit 7" }),
+  ];
+  return {
+    ...batchStatus(tasks, { failed: tasks.length }),
+    retain: options.retain ?? false,
+    sourceBatchId: null,
+    retrySources: options.sources ?? [retrySource()],
+    retryLinks: options.links ?? [],
+  };
+}
+
+function retryResult(retain = true): BatchRetryResult {
+  return {
+    batchId: CHILD_BATCH_ID,
+    sourceBatchId: SOURCE_BATCH_ID,
+    taskIds: [70],
+    runIds: [90],
+    retain,
+  };
+}
+
+function childBatch(): BatchStatus {
+  return batchStatus([
+    taskOf({ id: 70, nodeId: 3, nodeName: "child-node", status: "success" }),
+  ], { success: 1 });
+}
+
+function renderSource(retain = false) {
+  return render(resultElement(retain, "auth-marker", SOURCE_BATCH_ID));
+}
+
+function dialogFor(batchId: string) {
+  const match = screen.getAllByRole("dialog", { hidden: true }).find((dialog) => (
+    within(dialog).queryByText(batchId, { exact: false })
+  ));
+  if (!match) throw new Error(`missing dialog ${batchId}`);
+  return match;
+}
+
+async function chooseRetry(user: UserEvent, name: RegExp) {
+  await user.click(await screen.findByRole("checkbox", { name }));
+}
+
 function settledBatch() {
   return batchStatus([
     {
@@ -339,6 +410,8 @@ describe("BatchResultDialog", () => {
     clearAuthTransitionBarrier();
     getTaskLogsMock.mockResolvedValue([]);
     deleteBatchMock.mockResolvedValue({ deleted: 1 });
+    ensureStepUpProofMock.mockResolvedValue("proof-retry");
+    retryGrantMock.mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -1266,7 +1339,7 @@ describe("BatchResultDialog", () => {
     expect(screen.getByRole("button", { name: COPY_ZH })).toBeDisabled();
     nullView.unmount();
 
-    authRef.current = { role: "auditor" as "admin", token: "auth-marker" };
+    authRef.current = { role: "auditor" as "admin", token: "auth-marker", totpEnabled: true };
     rememberAuthIdentity("auth-marker", "auditor" as never);
     const unknownView = renderDialog();
     expect(await screen.findByText("node-a")).toBeInTheDocument();
@@ -1374,5 +1447,715 @@ describe("BatchResultDialog", () => {
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(EN_COPIED));
     expect(getTaskLogsMock).toHaveBeenCalledTimes(1);
     expect(deleteBatchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the retry checkbox outside the row button and allows one source per node", async () => {
+    const user = userEvent.setup();
+    publishAuth("operator");
+    getBatchStatusMock.mockResolvedValue(retryBatch({
+      tasks: [
+        taskOf({ id: 7, nodeId: 3, nodeName: "node-a", status: "failed", lastError: "exit 7" }),
+        taskOf({ id: 8, nodeId: 3, nodeName: "node-b", status: "failed", lastError: "exit 7" }),
+      ],
+      sources: [retrySource(), retrySource({ taskId: 8, runId: 11 })],
+    }));
+    renderSource();
+
+    const checkbox = await screen.findByRole("checkbox", { name: /node-a/ });
+    const other = screen.getByRole("checkbox", { name: /node-b/ });
+    const rowButton = screen.getByRole("button", { name: /node-a/ });
+    expect(rowButton.contains(checkbox)).toBe(false);
+    expect(within(rowButton).getByText("失败")).toBeInTheDocument();
+    expect(screen.getAllByText("执行失败")).toHaveLength(2);
+    await user.click(checkbox);
+    expect(checkbox).toBeChecked();
+    expect(other).toBeDisabled();
+    expect(screen.getByText("同一节点只能选择一个失败来源")).toBeInTheDocument();
+    await user.click(other);
+    expect(other).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "重试选中的失败（1）" })).toBeEnabled();
+  });
+
+  it("stops the whole retry when the fresh source review changes", async () => {
+    const user = userEvent.setup();
+    const tasks = [
+      taskOf({ id: 7, nodeId: 3, nodeName: "node-a", status: "failed", lastError: "exit 7" }),
+      taskOf({ id: 8, nodeId: 4, nodeName: "node-b", status: "failed", lastError: "exit 8" }),
+    ];
+    const sources = [retrySource(), retrySource({ taskId: 8, nodeId: 4, runId: 11 })];
+    getBatchStatusMock.mockResolvedValue(retryBatch({ tasks, sources }));
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await chooseRetry(user, /node-b/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（2）" }));
+    getBatchStatusMock.mockResolvedValue(retryBatch({
+      tasks,
+      sources: [sources[0], retrySource({ taskId: 8, nodeId: 4, runId: 11, eligible: false, reason: "source_changed" })],
+    }));
+    await user.type(screen.getByRole("textbox"), "2");
+    fireEvent.submit(screen.getByRole("button", { name: "确认重试" }).closest("form") as HTMLFormElement);
+
+    expect(await screen.findByText("来源资格已变化，本次没有提交。请重新选择并再次确认。")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /node-a/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /node-b/ })).toBeChecked();
+    expect(screen.getByText("命令来源已变化")).toBeInTheDocument();
+    expect(retryGrantMock).not.toHaveBeenCalled();
+    expect(retryBatchCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("submits one retry when confirmation is activated twice", async () => {
+    const user = userEvent.setup();
+    const review = createDeferred<BatchStatus>();
+    let reads = 0;
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => {
+      if (id === CHILD_BATCH_ID) return Promise.resolve(childBatch());
+      reads += 1;
+      return reads === 1 ? Promise.resolve(retryBatch()) : review.promise;
+    });
+    retryGrantMock.mockImplementation((_token: string, _input: unknown, proof?: string) => (
+      proof ? Promise.resolve([]) : Promise.reject(stepUpRequiredError())
+    ));
+    retryBatchCommandMock.mockResolvedValue(retryResult());
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    const form = screen.getByRole("button", { name: "确认重试" }).closest("form");
+    if (!form) throw new Error("missing confirm form");
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(reads).toBe(2);
+
+    await act(async () => { review.resolve(retryBatch()); });
+    await waitFor(() => expect(retryBatchCommandMock).toHaveBeenCalledTimes(1));
+    expect(retryGrantMock).toHaveBeenCalledTimes(2);
+    expect(ensureStepUpProofMock).toHaveBeenCalledWith(
+      STEP_UP_ACTIONS.batchCommandRetry,
+      { persist: false, reuseCached: false },
+    );
+    expect(retryBatchCommandMock).toHaveBeenCalledWith(
+      "auth-marker",
+      SOURCE_BATCH_ID,
+      [{ taskId: 7, runId: 9 }],
+      "proof-retry",
+      expect.any(String),
+    );
+    expect(await screen.findByRole("button", { name: /child-node/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /node-a/, hidden: true })).toBeInTheDocument();
+  });
+
+  it("blocks the result and confirmation dialogs from closing while a retry is submitting", async () => {
+    const user = userEvent.setup();
+    const post = createDeferred<BatchRetryResult>();
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => (
+      Promise.resolve(id === CHILD_BATCH_ID ? childBatch() : retryBatch())
+    ));
+    retryBatchCommandMock.mockReturnValue(post.promise);
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    fireEvent.submit(screen.getByRole("button", { name: "确认重试" }).closest("form") as HTMLFormElement);
+    await waitFor(() => expect(retryBatchCommandMock).toHaveBeenCalledTimes(1));
+
+    expect(screen.getAllByText("正在提交重试，请保持窗口打开。关闭不会取消已经发出的请求。").length).toBeGreaterThan(0);
+    const closeButtons = screen.getAllByRole("button", { name: "Close", hidden: true });
+    expect(closeButtons.length).toBeGreaterThan(1);
+    for (const button of closeButtons) fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(onOpenChangeMock).not.toHaveBeenCalled();
+    expect(deleteBatchMock).not.toHaveBeenCalled();
+
+    await act(async () => { post.resolve(retryResult(true)); });
+    expect(await screen.findByRole("button", { name: /child-node/ })).toBeInTheDocument();
+  });
+
+  it("does not replay an unknown retry and continues that submission with the same key", async () => {
+    const user = userEvent.setup();
+    let posts = 0;
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => (
+      Promise.resolve(id === CHILD_BATCH_ID ? childBatch() : retryBatch())
+    ));
+    retryBatchCommandMock.mockImplementation(() => {
+      posts += 1;
+      if (posts === 1) return Promise.reject(new TypeError("network down"));
+      return Promise.resolve(retryResult());
+    });
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    await user.click(screen.getByRole("button", { name: "确认重试" }));
+
+    expect(await screen.findByRole("button", { name: "继续本次提交" })).toBeEnabled();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("重试结果尚未确认。请读取原批次状态核对，不要认为命令没有执行。")).toBeInTheDocument();
+    expect(screen.getByText("原批次没有这些来源的重试记录。只有明确继续才会使用同一次提交。")).toBeInTheDocument();
+    const key = retryBatchCommandMock.mock.calls[0]?.[4];
+    await user.click(screen.getByRole("button", { name: "继续本次提交" }));
+    expect(await screen.findByRole("button", { name: /child-node/ })).toBeInTheDocument();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(2);
+    expect(retryBatchCommandMock.mock.calls[1]?.[4]).toBe(key);
+    expect(retryGrantMock).toHaveBeenCalledTimes(2);
+    expect(deleteBatchMock).not.toHaveBeenCalled();
+  });
+
+  it("stays unknown when retry links are missing and does not offer continuation", async () => {
+    const user = userEvent.setup();
+    let posted = false;
+    getBatchStatusMock.mockImplementation(() => {
+      const status = retryBatch();
+      if (!posted) return Promise.resolve(status);
+      const { retryLinks: _ignored, ...withoutLinks } = status;
+      return Promise.resolve(withoutLinks);
+    });
+    retryBatchCommandMock.mockImplementation(() => {
+      posted = true;
+      return Promise.reject(new BatchRetryContractError());
+    });
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    await user.click(screen.getByRole("button", { name: "确认重试" }));
+
+    expect(await screen.findByText("原批次没有可用的重试记录。结果仍未确认，不能继续提交。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续本次提交" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /child-node/ })).not.toBeInTheDocument();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(deleteBatchMock).not.toHaveBeenCalled();
+    expect(onOpenChangeMock).toHaveBeenCalledWith(false);
+  });
+
+  it("shows a created retry link without submitting it again", async () => {
+    const user = userEvent.setup();
+    let posted = false;
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => {
+      if (id === CHILD_BATCH_ID) return Promise.resolve(childBatch());
+      if (!posted) return Promise.resolve(retryBatch());
+      return Promise.resolve(retryBatch({
+        links: [{ taskId: 7, runId: 9, batchId: CHILD_BATCH_ID, deleted: false }],
+      }));
+    });
+    retryBatchCommandMock.mockImplementation(() => {
+      posted = true;
+      return Promise.reject(new TypeError("network down"));
+    });
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    await user.click(screen.getByRole("button", { name: "确认重试" }));
+
+    await user.click(await screen.findByRole("button", { name: "查看重试批次" }));
+    expect(await screen.findByRole("button", { name: /child-node/ })).toBeInTheDocument();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "继续本次提交" })).not.toBeInTheDocument();
+  });
+
+  it("does not submit a deleted retry link again", async () => {
+    const user = userEvent.setup();
+    let posted = false;
+    getBatchStatusMock.mockImplementation(() => {
+      if (!posted) return Promise.resolve(retryBatch());
+      return Promise.resolve(retryBatch({
+        links: [{ taskId: 7, runId: 9, batchId: CHILD_BATCH_ID, deleted: true }],
+      }));
+    });
+    retryBatchCommandMock.mockImplementation(() => {
+      posted = true;
+      return Promise.reject(new TypeError("network down"));
+    });
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    await user.click(screen.getByRole("button", { name: "确认重试" }));
+
+    expect(await screen.findByText("重试批次已创建后清理，不能再次提交。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续本次提交" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看重试批次" })).not.toBeInTheDocument();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not submit a retry after the auth generation changes during the grant", async () => {
+    const user = userEvent.setup();
+    const grant = createDeferred<never[]>();
+    getBatchStatusMock.mockResolvedValue(retryBatch());
+    retryGrantMock.mockReturnValue(grant.promise);
+    const view = renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    fireEvent.submit(screen.getByRole("button", { name: "确认重试" }).closest("form") as HTMLFormElement);
+    await waitFor(() => expect(retryGrantMock).toHaveBeenCalledTimes(1));
+
+    bumpAuthSessionGeneration();
+    view.rerender(resultElement(false, "auth-marker", SOURCE_BATCH_ID));
+    await act(async () => { grant.resolve([]); });
+    await act(async () => { await Promise.resolve(); });
+    expect(retryBatchCommandMock).not.toHaveBeenCalled();
+    expect(retryGrantMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not submit a retry after the role changes during the grant", async () => {
+    const user = userEvent.setup();
+    const grant = createDeferred<never[]>();
+    const refreshed = createDeferred<BatchStatus>();
+    let reads = 0;
+    getBatchStatusMock.mockImplementation(() => {
+      reads += 1;
+      return reads <= 2 ? Promise.resolve(retryBatch()) : refreshed.promise;
+    });
+    retryGrantMock.mockReturnValue(grant.promise);
+    const view = renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    fireEvent.submit(screen.getByRole("button", { name: "确认重试" }).closest("form") as HTMLFormElement);
+    await waitFor(() => expect(retryGrantMock).toHaveBeenCalledTimes(1));
+
+    publishAuth("viewer");
+    view.rerender(resultElement(false, "auth-marker", SOURCE_BATCH_ID));
+    expect(screen.getByRole("button", { name: /node-a/ })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /node-a/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /重试选中的失败/ })).not.toBeInTheDocument();
+    await act(async () => { grant.resolve([]); });
+    await act(async () => { refreshed.resolve(retryBatch()); });
+    expect(retryBatchCommandMock).not.toHaveBeenCalled();
+    expect(clearStepUpProofMock).toHaveBeenCalledWith(STEP_UP_ACTIONS.batchCommandRetry);
+  });
+
+  it("does not open a child or delete the source after the retry request is sent and the session changes", async () => {
+    const user = userEvent.setup();
+    const post = createDeferred<BatchRetryResult>();
+    let reads = 0;
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => {
+      reads += 1;
+      return Promise.resolve(id === CHILD_BATCH_ID ? childBatch() : retryBatch());
+    });
+    retryBatchCommandMock.mockReturnValue(post.promise);
+    const view = renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    fireEvent.submit(screen.getByRole("button", { name: "确认重试" }).closest("form") as HTMLFormElement);
+    await waitFor(() => expect(retryBatchCommandMock).toHaveBeenCalledTimes(1));
+
+    const readsAtChange = reads;
+    bumpAuthSessionGeneration();
+    view.rerender(resultElement(false, "auth-marker", SOURCE_BATCH_ID));
+    await act(async () => { post.resolve(retryResult()); });
+    expect(await screen.findByRole("button", { name: /node-a/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /child-node/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /重试选中的失败/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续本次提交" })).not.toBeInTheDocument();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+    expect(reads).toBeGreaterThan(readsAtChange);
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(deleteBatchMock).not.toHaveBeenCalled();
+  });
+
+  it("hides retry writes from a viewer and clears selection on role change without dropping loaded results", async () => {
+    const user = userEvent.setup();
+    const writeText = installResolvedClipboard();
+    const refreshed = createDeferred<BatchStatus>();
+    let reads = 0;
+    const status = retryBatch();
+    getBatchStatusMock.mockImplementation(() => {
+      reads += 1;
+      return reads === 1 ? Promise.resolve(status) : refreshed.promise;
+    });
+    getTaskLogsMock.mockResolvedValue([logEvent("1", "parent-log")]);
+    const view = renderSource();
+    await chooseRetry(user, /node-a/);
+    expect(screen.getByRole("checkbox", { name: /node-a/ })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: /node-a/ }));
+    expect(await screen.findByText("parent-log")).toBeInTheDocument();
+
+    publishAuth("viewer");
+    view.rerender(resultElement(false, "auth-marker", SOURCE_BATCH_ID));
+    expect(screen.getByRole("button", { name: /node-a/ })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /重试选中的失败/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("parent-log")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: COPY_ZH })).toBeDisabled();
+
+    await act(async () => { refreshed.resolve(status); });
+    await enabledCopyButton();
+    const text = await readCopy(user, writeText);
+    expect(text).not.toContain("parent-log");
+    expect(text).toContain("日志尚未加载");
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(deleteBatchMock).not.toHaveBeenCalled();
+  });
+
+  it("closes the child through its own retain policy and keeps parent and child copy snapshots apart", async () => {
+    const user = userEvent.setup();
+    const writeText = installResolvedClipboard();
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => (
+      Promise.resolve(id === CHILD_BATCH_ID ? childBatch() : retryBatch())
+    ));
+    getTaskLogsMock.mockImplementation((_token: string, taskId: number) => (
+      Promise.resolve([logEvent(String(taskId), taskId === 70 ? "child-log" : "parent-log")])
+    ));
+    retryBatchCommandMock.mockResolvedValue(retryResult(false));
+    renderSource(true);
+    await user.click(await screen.findByRole("button", { name: /node-a/ }));
+    expect(await screen.findByText("parent-log")).toBeInTheDocument();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    await user.click(screen.getByRole("button", { name: "确认重试" }));
+    const childDialog = await waitFor(() => dialogFor(CHILD_BATCH_ID));
+    await user.click(await within(childDialog).findByRole("button", { name: /child-node/ }));
+    expect(await within(childDialog).findByText("child-log")).toBeInTheDocument();
+
+    const parentDialog = dialogFor(SOURCE_BATCH_ID);
+    fireEvent.click(within(parentDialog).getByRole("button", { name: COPY_ZH, hidden: true }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    const parentCopy = String(writeText.mock.calls.at(-1)?.[0]);
+    expect(parentCopy).toContain("parent-log");
+    expect(parentCopy).not.toContain("child-log");
+    await user.click(within(childDialog).getByRole("button", { name: COPY_ZH }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    const childCopy = String(writeText.mock.calls.at(-1)?.[0]);
+    expect(childCopy).toContain("child-log");
+    expect(childCopy).not.toContain("parent-log");
+
+    fireEvent.click(within(parentDialog).getByRole("button", { name: "Close", hidden: true }));
+    expect(deleteBatchMock).toHaveBeenCalledTimes(1);
+    expect(deleteBatchMock).toHaveBeenCalledWith("auth-marker", CHILD_BATCH_ID);
+    expect(deleteBatchMock).not.toHaveBeenCalledWith("auth-marker", SOURCE_BATCH_ID);
+    expect(onOpenChangeMock).toHaveBeenCalledWith(false);
+  });
+
+  it("stays unknown when the source read fails and continues only the same submission after a later read", async () => {
+    const user = userEvent.setup();
+    let failRead = false;
+    let posts = 0;
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => {
+      if (id === CHILD_BATCH_ID) return Promise.resolve(childBatch());
+      if (failRead) {
+        failRead = false;
+        return Promise.reject(new Error("status unavailable"));
+      }
+      return Promise.resolve(retryBatch());
+    });
+    retryBatchCommandMock.mockImplementation(() => {
+      posts += 1;
+      if (posts === 1) {
+        failRead = true;
+        return Promise.reject(new TypeError("network down"));
+      }
+      return Promise.resolve(retryResult());
+    });
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    await user.click(screen.getByRole("button", { name: "确认重试" }));
+
+    expect(await screen.findByText("暂时无法读取原批次。结果仍未确认，不能判断为未执行。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续本次提交" })).not.toBeInTheDocument();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+    const key = retryBatchCommandMock.mock.calls[0]?.[4];
+    await user.click(screen.getByRole("button", { name: "读取原批次状态" }));
+    await user.click(await screen.findByRole("button", { name: "继续本次提交" }));
+    expect(await screen.findByRole("button", { name: /child-node/ })).toBeInTheDocument();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(2);
+    expect(retryBatchCommandMock.mock.calls[1]?.[4]).toBe(key);
+  });
+
+  it("does not continue when selected pairs point at different retry batches", async () => {
+    const user = userEvent.setup();
+    const tasks = [
+      taskOf({ id: 7, nodeId: 3, nodeName: "node-a", status: "failed", lastError: "exit 7" }),
+      taskOf({ id: 8, nodeId: 4, nodeName: "node-b", status: "failed", lastError: "exit 8" }),
+    ];
+    const sources = [retrySource(), retrySource({ taskId: 8, nodeId: 4, runId: 11 })];
+    let posted = false;
+    getBatchStatusMock.mockImplementation(() => {
+      if (!posted) return Promise.resolve(retryBatch({ tasks, sources }));
+      return Promise.resolve(retryBatch({
+        tasks,
+        sources,
+        links: [
+          { taskId: 7, runId: 9, batchId: CHILD_BATCH_ID, deleted: false },
+          { taskId: 8, runId: 11, batchId: "C".repeat(26), deleted: false },
+        ],
+      }));
+    });
+    retryBatchCommandMock.mockImplementation(() => {
+      posted = true;
+      return Promise.reject(new TypeError("network down"));
+    });
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await chooseRetry(user, /node-b/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（2）" }));
+    await user.type(screen.getByRole("textbox"), "2");
+    await user.click(screen.getByRole("button", { name: "确认重试" }));
+
+    expect(await screen.findByText("来源对应的重试批次不一致，已停止继续提交。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续本次提交" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看重试批次" })).not.toBeInTheDocument();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases a new retry after a challenged grant and a final step-up rejection", async () => {
+    const user = userEvent.setup();
+    const submitting = "正在提交重试，请保持窗口打开。关闭不会取消已经发出的请求。";
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => (
+      Promise.resolve(id === CHILD_BATCH_ID ? childBatch() : retryBatch())
+    ));
+    retryGrantMock.mockImplementation((_token: string, _input: unknown, proof?: string) => (
+      proof ? Promise.resolve([]) : Promise.reject(stepUpRequiredError())
+    ));
+    retryBatchCommandMock.mockRejectedValue(stepUpRequiredError());
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    fireEvent.submit(screen.getByRole("button", { name: "确认重试" }).closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "确认重试" })).toBeEnabled();
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+    expect(retryGrantMock).toHaveBeenCalledTimes(2);
+    expect(retryGrantMock.mock.calls[0]?.[2]).toBeUndefined();
+    expect(retryGrantMock.mock.calls[1]?.[2]).toBe("proof-retry");
+    expect(ensureStepUpProofMock).toHaveBeenCalledWith(
+      STEP_UP_ACTIONS.batchCommandRetry,
+      { persist: false, reuseCached: false },
+    );
+    expect(retryBatchCommandMock.mock.calls[0]?.[3]).toBe("proof-retry");
+    expect(screen.queryByText(submitting)).not.toBeInTheDocument();
+    expect(screen.getByText("Additional verification required")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续本次提交" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("button", { name: "确认重试" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    fireEvent.submit(screen.getByRole("button", { name: "确认重试" }).closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(retryBatchCommandMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "确认重试" })).toBeEnabled();
+    });
+    expect(retryBatchCommandMock.mock.calls[1]?.[4]).not.toBe(retryBatchCommandMock.mock.calls[0]?.[4]);
+    expect(screen.queryByText(submitting)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /child-node/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(onOpenChangeMock).toHaveBeenCalledWith(false);
+    expect(deleteBatchMock).toHaveBeenCalledWith("auth-marker", SOURCE_BATCH_ID);
+  });
+
+  it("keeps the same recoverable key when continuing an unknown retry is rejected", async () => {
+    const user = userEvent.setup();
+    const submitting = "正在提交重试，请保持窗口打开。关闭不会取消已经发出的请求。";
+    let posts = 0;
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => (
+      Promise.resolve(id === CHILD_BATCH_ID ? childBatch() : retryBatch())
+    ));
+    retryGrantMock.mockImplementation((_token: string, _input: unknown, proof?: string) => (
+      proof ? Promise.resolve([]) : Promise.reject(stepUpRequiredError())
+    ));
+    retryBatchCommandMock.mockImplementation(() => {
+      posts += 1;
+      if (posts === 1) return Promise.reject(new TypeError("network down"));
+      if (posts === 2) return Promise.reject(stepUpRequiredError());
+      return Promise.resolve(retryResult());
+    });
+    renderSource();
+    await chooseRetry(user, /node-a/);
+    await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+    await user.click(screen.getByRole("button", { name: "确认重试" }));
+
+    const continueRetry = await screen.findByRole("button", { name: "继续本次提交" });
+    expect(continueRetry).toBeEnabled();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(submitting)).not.toBeInTheDocument();
+    const key = retryBatchCommandMock.mock.calls[0]?.[4];
+
+    await user.click(continueRetry);
+    await waitFor(() => expect(retryBatchCommandMock).toHaveBeenCalledTimes(2));
+    const continued = await screen.findByRole("button", { name: "继续本次提交" });
+    expect(continued).toBeEnabled();
+    await act(async () => { await Promise.resolve(); });
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(2);
+    expect(retryBatchCommandMock.mock.calls[1]?.[4]).toBe(key);
+    expect(screen.queryByText(submitting)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试选中的失败（1）" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /child-node/ })).not.toBeInTheDocument();
+    expect(deleteBatchMock).not.toHaveBeenCalled();
+
+    await user.click(continued);
+    expect(await screen.findByRole("button", { name: /child-node/ })).toBeInTheDocument();
+    expect(retryBatchCommandMock).toHaveBeenCalledTimes(3);
+    expect(retryBatchCommandMock.mock.calls[2]?.[4]).toBe(key);
+    expect(screen.queryByText(submitting)).not.toBeInTheDocument();
+  });
+
+  function transportResponse(status: number, body: unknown): Response {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      headers: { get: () => null },
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  }
+
+  function postedRetryKey(call: unknown[] | undefined): string {
+    const init = call?.[1] as { headers?: Record<string, string>; method?: string; body?: string } | undefined;
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ sources: [{ task_id: 7, run_id: 9 }] });
+    const key = init?.headers?.["Idempotency-Key"];
+    if (!key) throw new Error("missing idempotency key");
+    return key;
+  }
+
+  async function renderRealRetryTransport(status: number, body: unknown) {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => transportResponse(status, body));
+    vi.stubGlobal("fetch", fetchMock);
+    const retry = createBatchApi().retryBatchCommand;
+    getBatchStatusMock.mockImplementation((_token: string, id: string) => (
+      Promise.resolve(id === CHILD_BATCH_ID ? childBatch() : retryBatch())
+    ));
+    retryBatchCommandMock.mockImplementation((...args: Parameters<typeof retry>) => retry(...args));
+    renderSource();
+    return fetchMock;
+  }
+
+  it.each([
+    { label: "HTTP 200 with envelope code 400", body: { code: 400, message: "bad envelope", data: null } },
+    { label: "HTTP 200 with a nonnumeric envelope code", body: { code: "400", message: "bad envelope", data: null } },
+    { label: "HTTP 200 with a null envelope code", body: { code: null, message: "bad envelope", data: null } },
+  ])("keeps a sent retry unknown for $label, retains the key, and does not clean up", async ({ body }) => {
+    const user = userEvent.setup();
+    const fetchMock = await renderRealRetryTransport(200, body);
+    try {
+      await chooseRetry(user, /node-a/);
+      await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+      await user.click(screen.getByRole("button", { name: "确认重试" }));
+
+      expect(await screen.findByRole("button", { name: "继续本次提交" })).toBeEnabled();
+      expect(screen.getByText("重试结果尚未确认。请读取原批次状态核对，不要认为命令没有执行。")).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const key = postedRetryKey(fetchMock.mock.calls[0]);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain(`/batch-commands/${SOURCE_BATCH_ID}/retry`);
+
+      await user.click(screen.getByRole("button", { name: "继续本次提交" }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      expect(postedRetryKey(fetchMock.mock.calls[1])).toBe(key);
+      expect(await screen.findByRole("button", { name: "继续本次提交" })).toBeEnabled();
+      expect(screen.queryByText("正在提交重试，请保持窗口打开。关闭不会取消已经发出的请求。")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /child-node/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "重试选中的失败（1）" })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Close" }));
+      expect(deleteBatchMock).not.toHaveBeenCalled();
+      expect(onOpenChangeMock).toHaveBeenCalledWith(false);
+    } finally {
+      vi.unstubAllGlobals();
+      retryBatchCommandMock.mockReset();
+    }
+  });
+
+  it("releases a sent retry when the real HTTP status is a client error", async () => {
+    const user = userEvent.setup();
+    const fetchMock = await renderRealRetryTransport(400, { code: 400, message: "rejected", data: null });
+    try {
+      await chooseRetry(user, /node-a/);
+      await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+      await user.click(screen.getByRole("button", { name: "确认重试" }));
+
+      await waitFor(() => {
+        expect(screen.getByText("rejected")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "确认重试" })).toBeEnabled();
+      });
+      expect(screen.queryByRole("button", { name: "继续本次提交" })).not.toBeInTheDocument();
+      expect(screen.queryByText("重试结果尚未确认。请读取原批次状态核对，不要认为命令没有执行。")).not.toBeInTheDocument();
+      const key = postedRetryKey(fetchMock.mock.calls[0]);
+
+      await user.click(screen.getByRole("button", { name: "取消" }));
+      await user.click(screen.getByRole("button", { name: "重试选中的失败（1）" }));
+      await user.click(screen.getByRole("button", { name: "确认重试" }));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(screen.getByRole("button", { name: "确认重试" })).toBeEnabled();
+      });
+      expect(postedRetryKey(fetchMock.mock.calls[1])).not.toBe(key);
+      expect(screen.queryByRole("button", { name: /child-node/ })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "取消" }));
+      await user.click(screen.getByRole("button", { name: "Close" }));
+      expect(onOpenChangeMock).toHaveBeenCalledWith(false);
+      expect(deleteBatchMock).toHaveBeenCalledWith("auth-marker", SOURCE_BATCH_ID);
+    } finally {
+      vi.unstubAllGlobals();
+      retryBatchCommandMock.mockReset();
+    }
+  });
+
+  it("keeps a successful wire row nonselectable while the failed row and retry link stay usable", async () => {
+    const user = userEvent.setup();
+    const wire = {
+      batch_id: SOURCE_BATCH_ID,
+      total: 2,
+      status_counts: { success: 1, failed: 1 },
+      retain: false,
+      source_batch_id: null,
+      tasks: [
+        { id: 11, name: "ok", status: "success", node_id: 3, node: { id: 3, name: "node-ok" } },
+        { id: 12, name: "bad", status: "failed", node_id: 4, node: { id: 4, name: "node-fail" }, last_error: "exit 7" },
+      ],
+      dispatches: [
+        { task_id: 11, status: "accepted" },
+        { task_id: 12, status: "accepted" },
+      ],
+      retry_sources: [
+        {
+          task_id: 11,
+          node_id: 3,
+          run_id: 41,
+          eligible: false,
+          reason: "not_failed",
+          failure_kind: null,
+          retry_batch_id: null,
+        },
+        {
+          task_id: 12,
+          node_id: 4,
+          run_id: 42,
+          eligible: true,
+          reason: "eligible",
+          failure_kind: "execution",
+          retry_batch_id: null,
+        },
+      ],
+      retry_links: [
+        { task_id: 11, run_id: 41, batch_id: CHILD_BATCH_ID, deleted: false },
+      ],
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => transportResponse(200, { code: 0, message: "ok", data: wire }));
+    vi.stubGlobal("fetch", fetchMock);
+    const readStatus = createBatchApi().getBatchStatus;
+    getBatchStatusMock.mockImplementation((token: string, id: string) => (
+      id === CHILD_BATCH_ID ? Promise.resolve(childBatch()) : readStatus(token, id)
+    ));
+    try {
+      renderSource();
+      const failed = await screen.findByRole("checkbox", { name: /node-fail/ });
+      expect(screen.queryByRole("checkbox", { name: /node-ok/ })).not.toBeInTheDocument();
+      expect(screen.getByText("这次运行不是明确失败")).toBeInTheDocument();
+      expect(screen.getByText("执行失败")).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalled();
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain(`/batch-commands/${SOURCE_BATCH_ID}`);
+
+      await user.click(failed);
+      expect(failed).toBeChecked();
+      expect(screen.getByRole("button", { name: "重试选中的失败（1）" })).toBeEnabled();
+
+      await user.click(screen.getByRole("button", { name: "查看任务 11 的重试批次" }));
+      expect(await screen.findByRole("button", { name: /child-node/ })).toBeInTheDocument();
+      expect(retryBatchCommandMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

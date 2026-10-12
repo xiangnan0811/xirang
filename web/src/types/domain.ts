@@ -840,6 +840,7 @@ export type CredentialAuditAction =
   | "task.batch_trigger"
   | "snapshot.restore"
   | "batch_command.create"
+  | "batch_command.retry"
   | "task.credential.use"
   | "drill.trigger"
   | "drill.phase"
@@ -857,7 +858,7 @@ export type CredentialAuditAction =
 
 export type CredentialAuditMetadataValue = string | number | boolean | string[];
 
-export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "config.export" | "snapshot.restore" | "task.restore_trigger" | "task.manual_trigger" | "task.batch_trigger" | "batch_command.create" | "unknown";
+export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "config.export" | "snapshot.restore" | "task.restore_trigger" | "task.manual_trigger" | "task.batch_trigger" | "batch_command.create" | "batch_command.retry" | "unknown";
 export type CredentialAccessGrantPurpose = "terminal" | "config_import" | "config_export" | "snapshot" | "task_restore" | "task_command" | "batch_command" | "unknown";
 export type CredentialAccessGrantStatus = "requested" | "approved" | "active" | "denied" | "expired" | "revoked";
 

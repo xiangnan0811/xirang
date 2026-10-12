@@ -142,6 +142,46 @@ describe("credential access grants api", () => {
     expect(grant.status).toBe("expired");
   });
 
+  it("keeps batch command retry distinct from create and rejects unrecognized actions", () => {
+    const retry = mapCredentialAccessGrant({
+      action: "batch_command.retry",
+      purpose: "batch_command",
+      status: "active",
+    });
+    const create = mapCredentialAccessGrant({
+      action: "batch_command.create",
+      purpose: "batch_command",
+      status: "active",
+    });
+    const batchTrigger = mapCredentialAccessGrant({
+      action: "task.batch_trigger",
+      purpose: "task_command",
+      status: "active",
+    });
+    const unrecognizedAction = mapCredentialAccessGrant({
+      action: "batch_command.retry.extra",
+      purpose: "batch_command",
+      status: "active",
+    });
+    const purposeShapedAction = mapCredentialAccessGrant({
+      action: "batch_command",
+      purpose: "batch_retry",
+      status: "active",
+    });
+
+    expect(retry.action).toBe("batch_command.retry");
+    expect(retry.purpose).toBe("batch_command");
+    expect(create.action).toBe("batch_command.create");
+    expect(create.purpose).toBe("batch_command");
+    expect(batchTrigger.action).toBe("task.batch_trigger");
+    expect(retry.action).not.toBe(create.action);
+    expect(retry.action).not.toBe(batchTrigger.action);
+    expect(unrecognizedAction.action).toBe("unknown");
+    expect(unrecognizedAction.purpose).toBe("batch_command");
+    expect(purposeShapedAction.action).toBe("unknown");
+    expect(purposeShapedAction.purpose).toBe("unknown");
+  });
+
   it("serializes list filters for credential access grants", () => {
     const query = buildCredentialAccessGrantQuery({
       requesterUserId: 7,

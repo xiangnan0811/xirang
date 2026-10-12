@@ -12,7 +12,8 @@ import { TasksPage } from "./tasks-page";
 const confirmMock = vi.fn().mockResolvedValue(true);
 const cancelPendingMock = vi.fn();
 const navigateMock = vi.fn();
-const { apiClientMock, authRef, withStepUpMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
+const { apiClientMock, authRef, withStepUpMock, useStepUpActionMock, clearStepUpProofMock, oneShotStepUpOptions } = vi.hoisted(() => {
+  const clearStepUpProofMock = vi.fn();
   const withStepUpMock = vi.fn((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
   const stepUpHookMock = vi.fn((stepUpAction?: unknown, options?: unknown) => {
     stepUpHookMock.lastAction = stepUpAction;
@@ -42,6 +43,7 @@ const { apiClientMock, authRef, withStepUpMock, useStepUpActionMock, oneShotStep
       },
     },
     withStepUpMock,
+    clearStepUpProofMock,
     useStepUpActionMock: stepUpHookMock,
     oneShotStepUpOptions: { persist: false, reuseCached: false },
   };
@@ -236,7 +238,7 @@ vi.mock("@/hooks/use-step-up-action", () => ({
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => authRef.current,
+  useAuth: () => ({ ...authRef.current, clearStepUpProof: clearStepUpProofMock }),
 }));
 
 function createContext(overrides?: Record<string, unknown>) {
@@ -370,6 +372,7 @@ describe("TasksPage", () => {
     withStepUpMock.mockClear();
     withStepUpMock.mockImplementation((action: (proof?: string) => Promise<unknown>) => action("step-up-marker"));
     useStepUpActionMock.mockClear();
+    clearStepUpProofMock.mockReset();
     useStepUpActionMock.lastAction = undefined;
     useStepUpActionMock.lastOptions = undefined;
     authRef.current = {

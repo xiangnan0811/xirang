@@ -51,7 +51,7 @@ function stringValue(value: unknown): string {
 
 function mapGrantAction(value: unknown): CredentialAccessGrantAction {
   const raw = stringValue(value);
-  return raw === "terminal.open" || raw === "config.import" || raw === "config.export" || raw === "snapshot.restore" || raw === "task.restore_trigger" || raw === "task.manual_trigger" || raw === "task.batch_trigger" || raw === "batch_command.create" ? raw : "unknown";
+  return raw === "terminal.open" || raw === "config.import" || raw === "config.export" || raw === "snapshot.restore" || raw === "task.restore_trigger" || raw === "task.manual_trigger" || raw === "task.batch_trigger" || raw === "batch_command.create" || raw === "batch_command.retry" ? raw : "unknown";
 }
 
 function mapGrantPurpose(value: unknown): CredentialAccessGrantPurpose {
@@ -294,6 +294,24 @@ export function createCredentialAccessGrantsApi() {
       stepUpProof?: string,
     ): Promise<CredentialAccessGrant[]> {
       const raw = await request<CredentialAccessGrantResponse[]>("/credential-access-grants/batch-command", {
+        method: "POST",
+        token,
+        stepUpProof,
+        body: {
+          node_ids: input.nodeIds,
+          reason: input.reason,
+          requested_ttl_seconds: input.requestedTtlSeconds,
+        },
+      });
+      return (raw ?? []).map((row) => mapCredentialAccessGrant(row));
+    },
+
+    async requestBatchCommandRetryCredentialGrant(
+      token: string,
+      input: { nodeIds: number[]; reason: string; requestedTtlSeconds?: number },
+      stepUpProof?: string,
+    ): Promise<CredentialAccessGrant[]> {
+      const raw = await request<CredentialAccessGrantResponse[]>("/credential-access-grants/batch-command-retry", {
         method: "POST",
         token,
         stepUpProof,

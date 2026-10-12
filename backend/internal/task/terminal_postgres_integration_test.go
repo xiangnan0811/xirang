@@ -162,6 +162,88 @@ func TestTaskTerminalAtomicityPostgres(t *testing.T) {
 	}
 }
 
+func TestBatchCommandRetryTerminalEvidencePostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		if strings.TrimSpace(os.Getenv(requirePostgresTaskTerminalTestEnv)) == "1" {
+			t.Fatalf("TEST_POSTGRES_DSN is required when %s=1", requirePostgresTaskTerminalTestEnv)
+		}
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	db := openTaskTerminalPostgresDB(t, dsn)
+	taskEntity, _, _, run := seedBatchCommandEvidenceTask(t, db)
+	manager := newEvidenceTerminalManager(db)
+	success := StatusSuccess
+	if err := manager.terminalizeTaskRun(context.Background(), taskEntity.ID, run.ID,
+		[]string{model.TaskRunStatusRunning}, &success, nil, StatusSuccess,
+		map[string]interface{}{"last_error": ""}); err != nil {
+		t.Fatalf("terminalize PostgreSQL batch command: %v", err)
+	}
+	evidence := readBatchCommandEvidence(t, db, run.ID)
+	if evidence.Outcome != "success" || evidence.FinishedAt == nil {
+		t.Fatalf("unexpected PostgreSQL batch evidence: %+v", evidence)
+	}
+}
+
+func TestBatchCommandRetryEvidenceWriteFailurePostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		if strings.TrimSpace(os.Getenv(requirePostgresTaskTerminalTestEnv)) == "1" {
+			t.Fatalf("TEST_POSTGRES_DSN is required when %s=1", requirePostgresTaskTerminalTestEnv)
+		}
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	db := openTaskTerminalPostgresDB(t, dsn)
+	taskEntity, _, _, run := seedBatchCommandEvidenceTask(t, db)
+	injected := errors.New("BATCH_COMMAND_POSTGRES_EVIDENCE_WRITE_FAILURE")
+	callbackName := fmt.Sprintf("test:batch-command-postgres-evidence-write-failure-%d", run.ID)
+	reached := atomic.Bool{}
+	if err := db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "batch_command_run_evidences" {
+			reached.Store(true)
+			_ = tx.AddError(injected)
+		}
+	}); err != nil {
+		t.Fatalf("register PostgreSQL evidence failure callback: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
+
+	manager := newEvidenceTerminalManager(db)
+	success := StatusSuccess
+	err := manager.terminalizeTaskRun(context.Background(), taskEntity.ID, run.ID,
+		[]string{model.TaskRunStatusRunning}, &success, nil, StatusSuccess,
+		map[string]interface{}{"last_error": "should roll back"})
+	if !reached.Load() || !errors.Is(err, injected) {
+		t.Fatalf("PostgreSQL evidence failure error=%v reached=%v, want injected error", err, reached.Load())
+	}
+	var afterTask model.Task
+	var afterRun model.TaskRun
+	if err := db.First(&afterTask, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload PostgreSQL rolled-back task: %v", err)
+	}
+	if err := db.First(&afterRun, run.ID).Error; err != nil {
+		t.Fatalf("reload PostgreSQL rolled-back run: %v", err)
+	}
+	if afterTask.Status != string(StatusRunning) || afterTask.LastError != "" {
+		t.Fatalf("PostgreSQL Task changed despite evidence rollback: status=%q last_error=%q", afterTask.Status, afterTask.LastError)
+	}
+	if afterRun.Status != model.TaskRunStatusRunning || afterRun.LastError != "" ||
+		afterRun.ExecutionOwnerID != "evidence-owner" || afterRun.FinishedAt != nil {
+		t.Fatalf("PostgreSQL TaskRun changed despite evidence rollback: %+v", afterRun)
+	}
+	var effects int64
+	if err := db.Model(&model.TaskRunEffect{}).Where("task_run_id = ?", run.ID).Count(&effects).Error; err != nil {
+		t.Fatalf("count PostgreSQL effects after evidence rollback: %v", err)
+	}
+	if effects != 0 {
+		t.Fatalf("PostgreSQL evidence rollback left %d durable effects", effects)
+	}
+	evidence := readBatchCommandEvidence(t, db, run.ID)
+	if evidence.Outcome != "pending" || evidence.FinishedAt != nil {
+		t.Fatalf("PostgreSQL evidence changed despite rollback: %+v", evidence)
+	}
+}
+
 // TestTaskTerminalRejectCancelLockOrderPostgres forces cancellation to hold
 // the Task row while rejection reaches its first row lock. The rejection
 // transaction must request Task first; the old TaskRun -> Task order forms a
@@ -387,7 +469,8 @@ func openTaskTerminalPostgresDB(t *testing.T, dsn string) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{},
 		&model.TaskCronOccurrence{}, &model.TaskRunEffect{}, &model.BackupCompletion{},
-		&model.RecoveryPoint{},
+		&model.RecoveryPoint{}, &model.BatchCommand{}, &model.BatchCommandDispatch{},
+		&model.BatchCommandRunEvidence{},
 	); err != nil {
 		t.Fatalf("migrate isolated PostgreSQL task tables: %v", err)
 	}
