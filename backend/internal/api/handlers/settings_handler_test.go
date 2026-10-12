@@ -661,3 +661,18 @@ func TestSSHAutoAcceptSettingOverridesEnvAtRuntime(t *testing.T) {
 		t.Fatalf("risk item must be clean after override removal: %+v", item)
 	}
 }
+func TestBatchCommandRetryAppearsInCredentialRiskInventory(t *testing.T) {
+	found := false
+	for _, action := range highRiskCredentialAuditActions() {
+		if action == "batch_command.retry" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("batch command retry action must be included in high-risk credential audit inventory")
+	}
+	if got := credentialActionLabel("batch_command.retry"); got != "批量命令重试" {
+		t.Fatalf("batch command retry audit label = %q, want 批量命令重试", got)
+	}
+}

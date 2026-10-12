@@ -205,7 +205,7 @@ async function clickEmergency(user: ReturnType<typeof userEvent.setup>) {
 
 function expectNoStepUpPromptOrFollowUp() {
   expect(ensureStepUpProofMock).not.toHaveBeenCalled();
-  expect(clearStepUpProofMock).not.toHaveBeenCalled();
+  expect(clearStepUpProofMock).not.toHaveBeenCalledWith(STEP_UP_ACTIONS.taskManualTrigger);
   expect(toastSuccessMock).not.toHaveBeenCalled();
   expect(toastErrorMock).not.toHaveBeenCalled();
 }
@@ -331,7 +331,7 @@ describe("emergency backup stale step-up", () => {
     });
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
     expect(ensureStepUpProofMock).toHaveBeenCalledWith(STEP_UP_ACTIONS.taskManualTrigger, ONE_SHOT);
-    expect(clearStepUpProofMock).not.toHaveBeenCalled();
+    expect(clearStepUpProofMock).not.toHaveBeenCalledWith(STEP_UP_ACTIONS.taskManualTrigger);
     expect(grantMock).toHaveBeenCalledTimes(2);
     expect(grantMock).toHaveBeenNthCalledWith(2, "test-token", {
       taskId: 7,

@@ -724,6 +724,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/credential-access-grants/task-manual-trigger", middleware.RBAC("tasks:trigger"), credentialAccessGrantHandler.RequestTaskManualTriggerGrant)
 	secured.POST("/credential-access-grants/task-batch-trigger", middleware.RBAC("tasks:write"), credentialAccessGrantHandler.RequestTaskBatchTriggerGrant)
 	secured.POST("/credential-access-grants/batch-command", middleware.RBAC("tasks:write"), credentialAccessGrantHandler.RequestBatchCommandGrant)
+	secured.POST("/credential-access-grants/batch-command-retry", middleware.RBAC("tasks:write"), credentialAccessGrantHandler.RequestBatchCommandRetryGrant)
 
 	secured.GET("/policies", middleware.RBAC("policies:read"), policyHandler.List)
 	secured.GET("/policies/:id", middleware.RBAC("policies:read"), policyHandler.Get)
@@ -770,6 +771,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/task-runs/:id/logs", middleware.RBAC("tasks:read"), taskRunHandler.Logs)
 
 	secured.POST("/batch-commands", middleware.RBAC("tasks:write"), batchHandler.Create)
+	secured.POST("/batch-commands/:batch_id/retry", middleware.RBAC("tasks:write"), batchHandler.Retry)
 	secured.GET("/batch-commands/:batch_id", middleware.RBAC("tasks:read"), batchHandler.Get)
 	secured.DELETE("/batch-commands/:batch_id", middleware.RBAC("tasks:write"), batchHandler.Delete)
 

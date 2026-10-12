@@ -86,6 +86,46 @@ var (
 	})
 )
 
+func batchCommandOutcomeForFailedRun(
+	taskEntity model.Task,
+	exitCode int,
+	err error,
+	execCtx context.Context,
+	runCtx context.Context,
+) *batchCommandRunOutcome {
+	fingerprint := model.BatchCommandTaskFingerprint(taskEntity)
+	if strings.TrimSpace(fingerprint) == "" || err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		(execCtx != nil && (errors.Is(execCtx.Err(), context.Canceled) ||
+			errors.Is(execCtx.Err(), context.DeadlineExceeded))) ||
+		(runCtx != nil && (errors.Is(runCtx.Err(), context.Canceled) ||
+			errors.Is(runCtx.Err(), context.DeadlineExceeded))) {
+		return nil
+	}
+	var exitErr *executor.CommandExitError
+	if errors.As(err, &exitErr) {
+		if exitErr == nil || exitErr.ExitCode <= 0 || exitCode != exitErr.ExitCode {
+			return nil
+		}
+		code := exitErr.ExitCode
+		return &batchCommandRunOutcome{
+			Fingerprint: fingerprint,
+			Outcome:     "exit_failure",
+			ExitCode:    &code,
+		}
+	}
+	var noStartErr *executor.NoProcessStartError
+	if errors.As(err, &noStartErr) && noStartErr != nil && exitCode == -1 {
+		return &batchCommandRunOutcome{
+			Fingerprint: fingerprint,
+			Outcome:     "not_started",
+		}
+	}
+	return nil
+}
+
 func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, upstreamRunID *uint, scheduledAt *time.Time) (uint, error) {
 	return m.triggerCoreWithExpectedCronSpec(taskID, reason, chainRunID, upstreamRunID, scheduledAt, "")
 }
@@ -1218,7 +1258,7 @@ func (m *Manager) runTaskWithContext(
 				"retry_count": 0, "next_run_at": cronutil.Next(taskEntity.CronSpec),
 				"last_error": "", "verify_status": verifyStatus,
 			},
-			StatusSuccess, successRunUpdates, !providerResult.Managed); terminalErr != nil {
+			StatusSuccess, successRunUpdates, taskRunTerminalOptions{RecordLegacyFact: !providerResult.Managed}); terminalErr != nil {
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 success 失败: %v", terminalErr), taskEntity.Status)
 			return
 		}
@@ -1302,6 +1342,7 @@ func (m *Manager) runTaskWithContext(
 			runUpdates["backup_generation_state"] = model.TaskRunGenerationStateDirty
 		}
 	}
+	batchOutcome := batchCommandOutcomeForFailedRun(taskEntity, exitCode, err, execCtx, runCtx)
 	if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &finalStatus,
 		map[string]interface{}{
 			"retry_count": retryCount,
@@ -1313,7 +1354,7 @@ func (m *Manager) runTaskWithContext(
 			}(),
 			"last_error": errorMsg,
 		},
-		StatusFailed, runUpdates); terminalErr != nil {
+		StatusFailed, runUpdates, taskRunTerminalOptions{CommandOutcome: batchOutcome}); terminalErr != nil {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("保存任务失败终态失败: %v", terminalErr), taskEntity.Status)
 		return
 	}
@@ -1781,9 +1822,9 @@ func (m *Manager) skipTask(taskEntity model.Task, chainRunID string, upstreamRun
 			}
 		}
 		run = model.TaskRun{
-			TaskID: locked.ID, TriggerType: "chain", Status: model.TaskRunStatusSkipped,
+			TaskID: locked.ID, TriggerType: "chain", Status: model.TaskRunStatusPending,
 			ChainRunID: chainRunID, UpstreamTaskRunID: upstreamRunID, SkipReason: skipReason,
-			StartedAt: &now, FinishedAt: &now,
+			StartedAt: &now,
 		}
 		if err := tx.Create(&run).Error; err != nil {
 			return err
@@ -1806,6 +1847,25 @@ func (m *Manager) skipTask(taskEntity model.Task, chainRunID string, upstreamRun
 			// skip fact and must not be rolled back merely because the
 			// aggregate cannot transition to skipped.
 		}
+		runResult := tx.Model(&model.TaskRun{}).
+			Where("id = ? AND task_id = ? AND status = ? AND finished_at IS NULL",
+				run.ID, locked.ID, model.TaskRunStatusPending).
+			Updates(map[string]interface{}{
+				"status":      model.TaskRunStatusSkipped,
+				"finished_at": &now,
+			})
+		if runResult.Error != nil {
+			return runResult.Error
+		}
+		if runResult.RowsAffected != 1 {
+			return errTaskRunCASLost
+		}
+		run.Status = model.TaskRunStatusSkipped
+		run.FinishedAt = &now
+		if err := completeBatchCommandEvidenceTx(tx, run, StatusSkipped, taskRunTerminalOptions{}, now); err != nil {
+			return err
+		}
+
 		var downstreams []model.Task
 		if err := tx.Where("depends_on_task_id = ?", locked.ID).Order("id ASC").Find(&downstreams).Error; err != nil {
 			return err
@@ -1959,6 +2019,15 @@ func (m *Manager) cancelTaskRunBeforeExecutor(taskID, runID uint, message string
 	}
 	finishedAt := time.Now().UTC()
 	return m.db.Transaction(func(tx *gorm.DB) error {
+		var taskEntity model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", taskID).Limit(1).Find(&taskEntity)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
 		var run model.TaskRun
 		loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ? AND task_id = ?", runID, taskID).Limit(1).Find(&run)
@@ -2004,6 +2073,9 @@ func (m *Manager) cancelTaskRunBeforeExecutor(taskID, runID uint, message string
 		}
 		if result.RowsAffected != 1 {
 			return errTaskRunCASLost
+		}
+		if err := completeBatchCommandEvidenceTx(tx, run, StatusCanceled, taskRunTerminalOptions{}, finishedAt); err != nil {
+			return err
 		}
 		return nil
 	})

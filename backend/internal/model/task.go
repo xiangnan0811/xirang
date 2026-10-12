@@ -84,6 +84,91 @@ func IsKnownTaskRunStatus(status string) bool {
 	return IsActiveTaskRunStatus(status) || IsTerminalTaskRunStatus(status)
 }
 
+// BatchCommandTaskReceiptClass is the conservative classification used by
+// reservation, execution binding, and terminal evidence writers. A task.BatchID
+// predating the durable batch receipt tables is ordinary legacy history only
+// when no v1 dispatch or evidence can prove otherwise.
+type BatchCommandTaskReceiptClass uint8
+
+const (
+	BatchCommandTaskReceiptLegacy BatchCommandTaskReceiptClass = iota
+	BatchCommandTaskReceiptV1
+	BatchCommandTaskReceiptV1SourceMissing
+)
+
+// ClassifyBatchCommandTaskReceipt distinguishes genuine pre-000081 task
+// history from a broken v1 chain. Old tasks may retain a BatchID after the
+// batch receipt tables were introduced; that value alone is not proof of v1.
+// Conversely, a v1 dispatch/evidence row remains a permanent proof even when
+// its referenced BatchCommand row is missing, so callers must fail closed.
+func ClassifyBatchCommandTaskReceipt(
+	tx *gorm.DB,
+	taskID uint,
+	batchID string,
+) (BatchCommandTaskReceiptClass, error) {
+	if tx == nil {
+		return BatchCommandTaskReceiptLegacy, fmt.Errorf("batch command provenance authority is unavailable")
+	}
+	batchID = strings.TrimSpace(batchID)
+	if taskID == 0 || batchID == "" {
+		return BatchCommandTaskReceiptLegacy, nil
+	}
+
+	if batchID != "" {
+		var batch struct {
+			ProvenanceVersion int `gorm:"column:provenance_version"`
+		}
+		result := tx.Model(&BatchCommand{}).
+			Select("provenance_version").
+			Where("id = ?", batchID).
+			Limit(1).
+			Find(&batch)
+		if result.Error != nil {
+			return BatchCommandTaskReceiptLegacy, result.Error
+		}
+		if result.RowsAffected == 1 && batch.ProvenanceVersion != 0 {
+			// Unsupported future versions are not legacy. The caller's
+			// version-specific validation will reject them fail-closed.
+			return BatchCommandTaskReceiptV1, nil
+		}
+	}
+
+	var dispatch struct {
+		CommandFingerprint string `gorm:"column:command_fingerprint"`
+		RetryOfTaskID      *uint  `gorm:"column:retry_of_task_id"`
+		RetryOfRunID       *uint  `gorm:"column:retry_of_run_id"`
+	}
+	dispatchResult := tx.Model(&BatchCommandDispatch{}).
+		Select("command_fingerprint, retry_of_task_id, retry_of_run_id").
+		Where("task_id = ?", taskID).
+		Limit(1).
+		Find(&dispatch)
+	if dispatchResult.Error != nil {
+		return BatchCommandTaskReceiptLegacy, dispatchResult.Error
+	}
+	if dispatchResult.RowsAffected == 1 &&
+		(strings.TrimSpace(dispatch.CommandFingerprint) != "" ||
+			dispatch.RetryOfTaskID != nil || dispatch.RetryOfRunID != nil) {
+		return BatchCommandTaskReceiptV1SourceMissing, nil
+	}
+
+	var evidence struct {
+		RunID uint `gorm:"column:run_id"`
+	}
+	evidenceResult := tx.Model(&BatchCommandRunEvidence{}).
+		Select("run_id").
+		Where("task_id = ?", taskID).
+		Limit(1).
+		Find(&evidence)
+	if evidenceResult.Error != nil {
+		return BatchCommandTaskReceiptLegacy, evidenceResult.Error
+	}
+	if evidenceResult.RowsAffected == 1 {
+		return BatchCommandTaskReceiptV1SourceMissing, nil
+	}
+	return BatchCommandTaskReceiptLegacy, nil
+}
+
 // IsTaskRunNodeSnapshotAuthoritative separates ordinary positive node identity
 // from the migration-owned legacy_unknown terminal-history sentinel.
 func IsTaskRunNodeSnapshotAuthoritative(nodeID uint) bool {
@@ -203,6 +288,11 @@ type TaskRun struct {
 	LastError               string     `gorm:"type:text" json:"last_error"`
 	CreatedAt               time.Time  `json:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
+	// BatchCommandEvidence is prepared for a v1 batch task run during
+	// BeforeCreate and persisted by AfterCreate in the same transaction. It is
+	// intentionally transient so ordinary TaskRun queries and JSON output do
+	// not expose retry provenance.
+	BatchCommandEvidence *BatchCommandRunEvidence `gorm:"-" json:"-"`
 }
 
 const (
@@ -752,16 +842,22 @@ func canonicalTaskRunExcludeRules(raw string) string {
 // every GORM TaskRun writer. Paired migration guards remain the authoritative
 // defense for raw SQL and reject explicit mismatches; this hook also records a
 // legacy Rclone resource identity before any provider arm can occur.
+//
+// Versioned batch-command provenance is intentionally resolved only for tasks
+// with a non-empty BatchID. Historical tasks from before 000081 keep ordinary
+// TaskRun behavior when neither a BatchCommand nor a v1 Dispatch/Evidence
+// receipt exists; a proven-but-incomplete v1 chain still fails closed.
 func (r *TaskRun) BeforeCreate(tx *gorm.DB) error {
 	if r == nil || tx == nil {
 		return fmt.Errorf("task run authority is unavailable")
 	}
+	r.BatchCommandEvidence = nil
 	if r.TaskID == 0 {
 		return fmt.Errorf("task run requires an authoritative task")
 	}
 	var taskSnapshot Task
 	result := tx.Model(&Task{}).
-		Select("id, node_id, executor_type, rsync_source, rsync_target, executor_config").
+		Select("id, node_id, source, command, executor_type, rsync_source, rsync_target, executor_config, batch_id, policy_id, depends_on_task_id, cron_spec").
 		Where("id = ?", r.TaskID).Limit(1).Find(&taskSnapshot)
 	if result.Error != nil {
 		return result.Error
@@ -792,6 +888,94 @@ func (r *TaskRun) BeforeCreate(tx *gorm.DB) error {
 		RsyncTarget:    taskSnapshot.RsyncTarget,
 		ExecutorConfig: taskSnapshot.ExecutorConfig,
 	})
+
+	if taskSnapshot.BatchID == "" {
+		return nil
+	}
+
+	receiptClass, err := ClassifyBatchCommandTaskReceipt(tx, taskSnapshot.ID, taskSnapshot.BatchID)
+	if err != nil {
+		return fmt.Errorf("task run batch provenance classification failed: %w", err)
+	}
+	switch receiptClass {
+	case BatchCommandTaskReceiptLegacy:
+		return nil
+	case BatchCommandTaskReceiptV1SourceMissing:
+		return fmt.Errorf("task run batch provenance source is missing")
+	case BatchCommandTaskReceiptV1:
+		// Continue below with the authoritative v1 BatchCommand row.
+	default:
+		return fmt.Errorf("task run batch provenance classification is unsupported")
+	}
+
+	var batch BatchCommand
+	batchResult := tx.Model(&BatchCommand{}).
+		Select("provenance_version, source_batch_id").
+		Where("id = ?", taskSnapshot.BatchID).Limit(1).Find(&batch)
+	if batchResult.Error != nil {
+		return fmt.Errorf("task run batch provenance lookup failed: %w", batchResult.Error)
+	}
+	if batchResult.RowsAffected == 0 {
+		return fmt.Errorf("task run batch provenance is missing")
+	}
+	switch batch.ProvenanceVersion {
+	case 0:
+		// The classifier can only return v1 for a v0 row when a permanent
+		// dispatch/evidence proof exists; do not downgrade that proof to legacy.
+		return fmt.Errorf("task run batch provenance has an inconsistent v1 receipt")
+	case 1:
+		// Continue below.
+	default:
+		return fmt.Errorf("task run batch provenance version %d is unsupported", batch.ProvenanceVersion)
+	}
+
+	var dispatch BatchCommandDispatch
+	dispatchResult := tx.Model(&BatchCommandDispatch{}).
+		Select("task_id, batch_id, node_id, command_fingerprint").
+		Where("task_id = ? AND batch_id = ?", taskSnapshot.ID, taskSnapshot.BatchID).
+		Limit(1).Find(&dispatch)
+	if dispatchResult.Error != nil {
+		return fmt.Errorf("task run batch dispatch lookup failed: %w", dispatchResult.Error)
+	}
+	if dispatchResult.RowsAffected == 0 {
+		return fmt.Errorf("task run batch dispatch is missing")
+	}
+
+	fingerprint := BatchCommandTaskFingerprint(taskSnapshot)
+	if batch.SourceBatchID != nil &&
+		(fingerprint == "" || dispatch.CommandFingerprint == "" || fingerprint != dispatch.CommandFingerprint) {
+		return fmt.Errorf("task run child batch command fingerprint does not match dispatch")
+	}
+	r.BatchCommandEvidence = &BatchCommandRunEvidence{
+		TaskID:             taskSnapshot.ID,
+		NodeID:             taskSnapshot.NodeID,
+		CommandFingerprint: fingerprint,
+		Outcome:            "pending",
+	}
+	return nil
+}
+
+// AfterCreate persists the pending v1 batch-command evidence after GORM has
+// assigned the real TaskRun ID. GORM's create callback runs inside the same
+// transaction as the TaskRun insert, so any evidence failure rolls both rows
+// back atomically.
+func (r *TaskRun) AfterCreate(tx *gorm.DB) error {
+	if r == nil || r.BatchCommandEvidence == nil {
+		return nil
+	}
+	if tx == nil || r.ID == 0 {
+		return fmt.Errorf("task run evidence authority is unavailable")
+	}
+	evidence := r.BatchCommandEvidence
+	evidence.RunID = r.ID
+	evidence.TaskID = r.TaskID
+	evidence.NodeID = r.NodeIDSnapshot
+	evidence.Outcome = "pending"
+	evidence.ExitCode = nil
+	evidence.FinishedAt = nil
+	if err := tx.Create(evidence).Error; err != nil {
+		return fmt.Errorf("create batch command run evidence: %w", err)
+	}
 	return nil
 }
 

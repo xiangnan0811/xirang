@@ -74,6 +74,12 @@ PR 打开、更新提交、重新打开及编辑时都会运行 CI；编辑事�
 Conventional Commits 标题。旧运行的重跑仍使用原始事件中的标题，应以编辑后触发的
 新运行结果为准。
 
+批量命令显式重试的 PostgreSQL 门禁分别通过 required-test runner 执行 handlers 与
+task 包的 `^TestBatchCommandRetry` 测试，覆盖事务竞争、授权、运行证据及迁移后约束；
+不依赖只匹配 `Postgres` 后缀的通用运行时选择器。数据库迁移测试仍由 migration parity
+门禁的 `Test.*Migration.*Postgres.*` 选择器覆盖。required-test runner 拒绝空匹配或缺少
+`TEST_POSTGRES_DSN`，CI 同时启用 PostgreSQL required-test 环境开关，避免缺失数据库被误报为通过。
+
 后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI action 与
 `scripts/lint-backend.sh` 同步更新。本地通过带版本的 `go run` 隔离工具依赖，
 以当前选中的 Go 工具链构建并运行，避免系统 Go 升级后继续加载由旧 Go 构建的 linter。

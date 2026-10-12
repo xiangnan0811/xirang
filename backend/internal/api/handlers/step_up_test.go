@@ -466,7 +466,7 @@ func TestStepUpProofPairwiseCrossPurposeRejection(t *testing.T) {
 			rejected++
 		}
 	}
-	const reviewedActionCount = 18
+	const reviewedActionCount = 19
 	if len(actions) != reviewedActionCount {
 		t.Fatalf("step-up registry has %d actions, want reviewed count %d", len(actions), reviewedActionCount)
 	}

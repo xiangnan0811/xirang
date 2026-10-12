@@ -27,9 +27,77 @@ type batchNode struct {
 	Name string
 }
 
+type batchRetrySource struct {
+	TaskID uint `json:"task_id"`
+	RunID  uint `json:"run_id"`
+}
+
 var errBatchIdempotencyConflict = errors.New("batch idempotency conflict")
 var errBatchDeleted = errors.New("batch already deleted")
 var errBatchActive = errors.New("batch still has active dispatch or execution effects")
+var errBatchRetryAlreadyClaimed = errors.New("batch retry source already claimed")
+
+func insertBatchCommandTasksTx(tx *gorm.DB, batch model.BatchCommand, req batchCommandRequest, nodes []batchNode, sources []batchRetrySource) ([]model.BatchCommandDispatch, error) {
+	if sources != nil && len(sources) != len(nodes) {
+		return nil, fmt.Errorf("batch retry sources cardinality mismatch: got %d sources for %d nodes", len(sources), len(nodes))
+	}
+
+	name := req.Name
+	if name == "" {
+		name = "批量命令 " + batch.ID
+	}
+	dispatches := make([]model.BatchCommandDispatch, 0, len(nodes))
+	for index, node := range nodes {
+		task := model.Task{
+			Name:         fmt.Sprintf("%s [%s]", name, node.Name),
+			NodeID:       node.ID,
+			ExecutorType: "command",
+			Command:      req.Command,
+			Source:       "batch",
+			Status:       "pending",
+			BatchID:      batch.ID,
+		}
+		if err := tx.Create(&task).Error; err != nil {
+			return nil, err
+		}
+		commandFingerprint := model.BatchCommandTaskFingerprint(task)
+		if commandFingerprint == "" {
+			return nil, errors.New("batch command task fingerprint is empty")
+		}
+		dispatch := model.BatchCommandDispatch{
+			TaskID:             task.ID,
+			BatchID:            batch.ID,
+			NodeID:             node.ID,
+			Status:             "pending",
+			CommandFingerprint: commandFingerprint,
+		}
+		if sources == nil {
+			if err := tx.Create(&dispatch).Error; err != nil {
+				return nil, err
+			}
+		} else {
+			retryOfTaskID := sources[index].TaskID
+			retryOfRunID := sources[index].RunID
+			dispatch.RetryOfTaskID = &retryOfTaskID
+			dispatch.RetryOfRunID = &retryOfRunID
+			result := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{
+					{Name: "retry_of_task_id"},
+					{Name: "retry_of_run_id"},
+				},
+				DoNothing: true,
+			}).Create(&dispatch)
+			if result.Error != nil {
+				return nil, result.Error
+			}
+			if result.RowsAffected == 0 {
+				return nil, errBatchRetryAlreadyClaimed
+			}
+		}
+		dispatches = append(dispatches, dispatch)
+	}
+	return dispatches, nil
+}
 
 func (h *BatchHandler) createBatchTasks(ctx context.Context, actorID uint, key string, req batchCommandRequest, nodes []batchNode) (model.BatchCommand, []model.BatchCommandDispatch, bool, error) {
 	payload, err := json.Marshal(req)
@@ -43,7 +111,7 @@ func (h *BatchHandler) createBatchTasks(ctx context.Context, actorID uint, key s
 	created := false
 	err = dbtx.WithSQLiteBusyRetryTx(ctx, h.db, func(tx *gorm.DB) error {
 		// A retry owns a fresh candidate and slice: rolled-back IDs are not state.
-		batch = model.BatchCommand{ID: generateBatchID(), RequesterID: actorID, IdempotencyKey: key, RequestHash: fingerprint, Retain: req.Retain}
+		batch = model.BatchCommand{ID: generateBatchID(), RequesterID: actorID, IdempotencyKey: key, RequestHash: fingerprint, ProvenanceVersion: 1, Retain: req.Retain}
 		dispatches = nil
 		created = false
 		result := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "requester_id"}, {Name: "idempotency_key"}}, DoNothing: true}).Create(&batch)
@@ -64,20 +132,10 @@ func (h *BatchHandler) createBatchTasks(ctx context.Context, actorID uint, key s
 			}
 			return tx.Where("batch_id = ?", batch.ID).Order("task_id").Find(&dispatches).Error
 		}
-		name := req.Name
-		if name == "" {
-			name = "批量命令 " + batch.ID
-		}
-		for _, node := range nodes {
-			task := model.Task{Name: fmt.Sprintf("%s [%s]", name, node.Name), NodeID: node.ID, ExecutorType: "command", Command: req.Command, Source: "batch", Status: "pending", BatchID: batch.ID}
-			if err := tx.Create(&task).Error; err != nil {
-				return err
-			}
-			dispatch := model.BatchCommandDispatch{TaskID: task.ID, BatchID: batch.ID, NodeID: node.ID, Status: "pending"}
-			if err := tx.Create(&dispatch).Error; err != nil {
-				return err
-			}
-			dispatches = append(dispatches, dispatch)
+		var err error
+		dispatches, err = insertBatchCommandTasksTx(tx, batch, req, nodes, nil)
+		if err != nil {
+			return err
 		}
 		created = true
 		return nil
@@ -86,8 +144,9 @@ func (h *BatchHandler) createBatchTasks(ctx context.Context, actorID uint, key s
 }
 
 // Each initial dispatch is claimed once before invoking the task manager. A
-// request replay never repeats accepted, failed, or uncertain dispatches. The
-// existing per-task trigger API is the explicit retry path after a known failure.
+// request replay never repeats accepted, failed, or uncertain dispatches.
+// Retry eligibility is determined by the batch retry path after refreshing its
+// status, not by this per-task trigger receipt.
 func (h *BatchHandler) dispatchBatch(ctx context.Context, batchID string, dispatches []model.BatchCommandDispatch) error {
 	for i := range dispatches {
 		dispatch := &dispatches[i]
@@ -130,7 +189,7 @@ func (h *BatchHandler) dispatchBatch(ctx context.Context, batchID string, dispat
 		}
 		status, message := "accepted", ""
 		if triggerErr != nil || runID == 0 {
-			status, message = "failed", "任务触发失败；可通过任务执行接口显式重试"
+			status, message = "failed", "任务触发失败；请刷新批次并检查显式重试资格"
 		}
 		// A failed receipt write leaves dispatching (unknown), never a forged
 		// success or an automatic second execution on request replay.

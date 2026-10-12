@@ -181,7 +181,9 @@ func (h *BatchHandler) Get(c *gin.Context) {
 	}
 
 	var tasks []model.Task
-	if err := h.db.Preload("Node").Where("batch_id = ?", batchID).Find(&tasks).Error; err != nil {
+	if err := h.db.Preload("Node", func(db *gorm.DB) *gorm.DB {
+		return db.Select("id", "name", "host", "port", "username", "auth_type", "tags", "status", "base_path", "backup_dir", "use_sudo", "connection_latency", "last_seen_at", "last_backup_at", "maintenance_start", "maintenance_end", "expiry_date", "archived", "escalation_policy_id", "created_at", "updated_at")
+	}).Select("id", "name", "node_id", "policy_id", "depends_on_task_id", "command", "rsync_source", "rsync_target", "executor_type", "executor_config", "cron_spec", "status", "batch_id", "source", "verify_status", "retry_count", "enabled", "skip_next", "last_error", "last_run_at", "next_run_at", "archived_at", "escalation_policy_id", "created_at", "updated_at").Where("batch_id = ?", batchID).Order("id").Find(&tasks).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -189,22 +191,44 @@ func (h *BatchHandler) Get(c *gin.Context) {
 		respondNotFound(c, "批次不存在")
 		return
 	}
-	nodeIDs := make([]uint, 0, len(tasks))
-	seen := make(map[uint]struct{}, len(tasks))
+
+	// Check the current task nodes before loading immutable dispatch metadata.
+	// A later union check includes both identities so a task migration cannot
+	// disclose retry state through only its new owner.
+	currentNodeIDs := make([]uint, 0, len(tasks))
 	for _, taskEntity := range tasks {
-		if _, ok := seen[taskEntity.NodeID]; ok {
-			continue
-		}
-		seen[taskEntity.NodeID] = struct{}{}
-		nodeIDs = append(nodeIDs, taskEntity.NodeID)
+		currentNodeIDs = append(currentNodeIDs, taskEntity.NodeID)
 	}
-	allowedNodes, err := authorizeNodeOwnershipSet(c, h.db, nodeIDs)
+	currentNodeIDs = uniqueSortedUint(currentNodeIDs)
+	allowedNodes, err := authorizeNodeOwnershipSet(c, h.db, currentNodeIDs)
 	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
 	for _, taskEntity := range tasks {
 		if _, ok := allowedNodes[taskEntity.NodeID]; !ok {
+			respondForbidden(c, "无权访问该节点")
+			return
+		}
+	}
+
+	var dispatches []model.BatchCommandDispatch
+	if err := h.db.WithContext(c.Request.Context()).Where("batch_id = ?", batchID).Order("task_id").Find(&dispatches).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	unionNodeIDs := append([]uint(nil), currentNodeIDs...)
+	for _, dispatch := range dispatches {
+		unionNodeIDs = append(unionNodeIDs, dispatch.NodeID)
+	}
+	unionNodeIDs = uniqueSortedUint(unionNodeIDs)
+	allowedNodes, err = authorizeNodeOwnershipSet(c, h.db, unionNodeIDs)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	for _, nodeID := range unionNodeIDs {
+		if _, ok := allowedNodes[nodeID]; !ok {
 			respondForbidden(c, "无权访问该节点")
 			return
 		}
@@ -221,18 +245,31 @@ func (h *BatchHandler) Get(c *gin.Context) {
 		tasks[i].Node = tasks[i].Node.Sanitized()
 	}
 
-	var dispatches []model.BatchCommandDispatch
-	if err := h.db.WithContext(c.Request.Context()).Where("batch_id = ?", batchID).Order("task_id").Find(&dispatches).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	respondOK(c, gin.H{
+	data := gin.H{
 		"dispatches":    dispatches,
 		"batch_id":      batchID,
 		"tasks":         tasks,
 		"total":         len(tasks),
 		"status_counts": statusCounts,
-	})
+	}
+	var batch model.BatchCommand
+	batchResult := h.db.WithContext(c.Request.Context()).Select("id", "provenance_version", "source_batch_id", "retain", "deleted_at").Where("id = ?", batchID).Limit(1).Find(&batch)
+	if batchResult.Error != nil {
+		respondInternalError(c, batchResult.Error)
+		return
+	}
+	if batchResult.RowsAffected == 1 && batch.DeletedAt == nil {
+		retrySources, retryLinks, err := h.buildBatchRetryMetadata(c, batch, tasks, dispatches)
+		if err != nil {
+			respondInternalError(c, err)
+			return
+		}
+		data["retain"] = batch.Retain
+		data["source_batch_id"] = batch.SourceBatchID
+		data["retry_sources"] = retrySources
+		data["retry_links"] = retryLinks
+	}
+	respondOK(c, data)
 }
 
 // Delete godoc

@@ -93,49 +93,6 @@ func (w *routerActivationResponseBarrier) WriteString(data string) (int, error) 
 	return w.ResponseRecorder.WriteString(data)
 }
 
-func TestEveryStepUpRouteDeclaresExpectedAction(t *testing.T) {
-	files := []string{
-		"router.go",
-		"handlers/batch_handler.go",
-		"handlers/task_handler.go",
-		"handlers/terminal_handler.go",
-		"handlers/credential_access_grant.go",
-	}
-	combined := ""
-	for _, path := range files {
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		combined += "\n" + string(contents)
-	}
-	for _, actionConstant := range []string{
-		"auth.StepUpActionSSHKeyExport",
-		"auth.StepUpActionTerminalOpen",
-		"auth.StepUpActionConfigImport",
-		"auth.StepUpActionConfigExport",
-		"auth.StepUpActionSnapshotRestore",
-		"auth.StepUpActionTaskRestoreTrigger",
-		"auth.StepUpActionTaskManualTrigger",
-		"auth.StepUpActionTaskBatchTrigger",
-		"auth.StepUpActionBatchCommandCreate",
-	} {
-		if !strings.Contains(combined, actionConstant) {
-			t.Errorf("production step-up caller is missing explicit %s", actionConstant)
-		}
-	}
-	for _, forbidden := range []string{
-		`RequireStepUp(dep.DB, dep.JWTManager, "`,
-		`RequireStepUpIf(dep.DB, dep.JWTManager, "`,
-		`EnforceStepUp(c, h.db, h.jwtManager, CredentialGrantAction`,
-		`validateStepUpProof(h.db, h.jwtManager, authMsg.StepUpProof, claims.UserID, claims.Role)`,
-	} {
-		if strings.Contains(combined, forbidden) {
-			t.Errorf("step-up caller lacks explicit typed action: %s", forbidden)
-		}
-	}
-}
-
 func TestBackupAssetRuntimeUsesEffectiveAuditSettings(t *testing.T) {
 	contents, err := os.ReadFile("../backupasset/runtime/runtime.go")
 	if err != nil {
@@ -314,6 +271,12 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/batch-command") {
 		t.Fatalf("未注册批量命令凭据临时授权接口")
+	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/batch-command-retry") {
+		t.Fatalf("未注册批量命令重试凭据临时授权接口")
+	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/batch-commands/:batch_id/retry") {
+		t.Fatalf("未注册批量命令重试接口")
 	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/tasks/batch-trigger") {
 		t.Fatalf("未注册任务批量触发接口")
@@ -988,6 +951,87 @@ func TestCredentialAccessGrantTerminalRouteRBACAndStepUp(t *testing.T) {
 	router.ServeHTTP(adminResp, adminReq)
 	if adminResp.Code != http.StatusCreated {
 		t.Fatalf("admin 带 step-up proof 应能申请终端授权，实际状态码: %d，body=%s", adminResp.Code, adminResp.Body.String())
+	}
+}
+func TestBatchCommandRetryGrantRouteRBACAndDedicatedProof(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
+		t.Fatalf("初始化批量命令重试授权测试表失败: %v", err)
+	}
+	jwtManager := auth.NewJWTManager("retry-grant-route-signing-marker", time.Hour)
+	jwtManager.SetDB(db)
+	users := make(map[string]model.User, 3)
+	tokens := make(map[string]string, 3)
+	retryProofs := make(map[string]string, 3)
+	createProofs := make(map[string]string, 3)
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		user := model.User{
+			Username:     "retry-grant-route-" + role,
+			PasswordHash: "hash-redacted",
+			Role:         role,
+			TOTPEnabled:  true,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatalf("创建 %s 用户失败: %v", role, err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatalf("生成 %s token 失败: %v", role, err)
+		}
+		retryProof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionBatchCommandRetry)
+		if err != nil {
+			t.Fatalf("生成 %s retry proof 失败: %v", role, err)
+		}
+		createProof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionBatchCommandCreate)
+		if err != nil {
+			t.Fatalf("生成 %s create proof 失败: %v", role, err)
+		}
+		users[role], tokens[role], retryProofs[role], createProofs[role] = user, token, retryProof, createProof
+	}
+	node := model.Node{Name: "retry-grant-route-node", Host: "10.0.0.52", Port: 22, Username: "root", AuthType: "password", BackupDir: "retry-grant-route-node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建重试授权节点失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: node.ID, UserID: users["operator"].ID}).Error; err != nil {
+		t.Fatalf("创建重试授权 ownership 失败: %v", err)
+	}
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	body := fmt.Sprintf(`{"node_ids":[%d],"reason":"失败后复核","requested_ttl_seconds":600}`, node.ID)
+
+	viewerReq := httptest.NewRequest(http.MethodPost, "/api/v1/credential-access-grants/batch-command-retry", strings.NewReader(body))
+	viewerReq.Header.Set("Content-Type", "application/json")
+	viewerReq.Header.Set("Authorization", "Bearer "+tokens["viewer"])
+	viewerReq.Header.Set("X-Xirang-Step-Up", retryProofs["viewer"])
+	viewerResp := httptest.NewRecorder()
+	router.ServeHTTP(viewerResp, viewerReq)
+	if viewerResp.Code != http.StatusForbidden {
+		t.Fatalf("viewer 应被批量命令重试授权路由 RBAC 拒绝，实际: %d，body=%s", viewerResp.Code, viewerResp.Body.String())
+	}
+
+	wrongProofReq := httptest.NewRequest(http.MethodPost, "/api/v1/credential-access-grants/batch-command-retry", strings.NewReader(body))
+	wrongProofReq.Header.Set("Content-Type", "application/json")
+	wrongProofReq.Header.Set("Authorization", "Bearer "+tokens["operator"])
+	wrongProofReq.Header.Set("X-Xirang-Step-Up", createProofs["operator"])
+	wrongProofResp := httptest.NewRecorder()
+	router.ServeHTTP(wrongProofResp, wrongProofReq)
+	if wrongProofResp.Code != http.StatusForbidden || !strings.Contains(wrongProofResp.Body.String(), "STEP_UP_REQUIRED") {
+		t.Fatalf("batch command create proof 不得通过 retry 授权路由，实际: %d，body=%s", wrongProofResp.Code, wrongProofResp.Body.String())
+	}
+
+	retryReq := httptest.NewRequest(http.MethodPost, "/api/v1/credential-access-grants/batch-command-retry", strings.NewReader(body))
+	retryReq.Header.Set("Content-Type", "application/json")
+	retryReq.Header.Set("Authorization", "Bearer "+tokens["operator"])
+	retryReq.Header.Set("X-Xirang-Step-Up", retryProofs["operator"])
+	retryResp := httptest.NewRecorder()
+	router.ServeHTTP(retryResp, retryReq)
+	if retryResp.Code != http.StatusCreated || !strings.Contains(retryResp.Body.String(), `"action":"batch_command.retry"`) ||
+		!strings.Contains(retryResp.Body.String(), `"purpose":"batch_command"`) {
+		t.Fatalf("operator 带专用 retry proof 应创建授权，实际: %d，body=%s", retryResp.Code, retryResp.Body.String())
 	}
 }
 

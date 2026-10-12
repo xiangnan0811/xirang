@@ -14,21 +14,50 @@ import (
 // CommandExecutor 通过 SSH 在远程节点上执行命令。
 type CommandExecutor struct{}
 
+// CommandExitError reports a remote command that completed with a known,
+// positive, non-signal exit status.
+type CommandExitError struct {
+	ExitCode int
+	Err      error
+}
+
+func (e *CommandExitError) Error() string {
+	if e == nil {
+		return "command exited with a known non-zero status"
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return fmt.Sprintf("command exited with status %d", e.ExitCode)
+}
+
+func (e *CommandExitError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, _ ProgressFunc) (int, error) {
 	command := strings.TrimSpace(task.Command)
 	if command == "" {
-		return -1, fmt.Errorf("命令不能为空")
+		return -1, markNoProcessStart(fmt.Errorf("命令不能为空"))
 	}
 
 	node := task.Node
 	if strings.TrimSpace(node.Host) == "" {
-		return -1, fmt.Errorf("节点地址不能为空")
+		return -1, markNoProcessStart(fmt.Errorf("节点地址不能为空"))
+	}
+
+	purpose := sshutil.PurposeTaskCommand
+	if strings.TrimSpace(task.Source) == "batch" {
+		purpose = sshutil.PurposeBatchCommand
 	}
 
 	// 使用共享 SSH 连接逻辑
-	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskCommand)
+	client, err := DialSSHForNodePurpose(ctx, task.Node, purpose)
 	if err != nil {
-		return -1, err
+		return -1, markNoProcessStart(err)
 	}
 	defer client.Close() //nolint:errcheck
 
@@ -36,18 +65,18 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 
 	session, err := client.NewSession()
 	if err != nil {
-		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
+		return -1, markNoProcessStart(fmt.Errorf("创建 SSH 会话失败: %w", err))
 	}
 	defer session.Close() //nolint:errcheck
 
 	// 设置标准输出和标准错误管道
 	stdout, err := session.StdoutPipe()
 	if err != nil {
-		return -1, err
+		return -1, markNoProcessStart(err)
 	}
 	stderr, err := session.StderrPipe()
 	if err != nil {
-		return -1, err
+		return -1, markNoProcessStart(err)
 	}
 
 	// sudo 包裹（用户命令可能含管道/&&，需要 sh -c 包裹）
@@ -108,8 +137,10 @@ func (e *CommandExecutor) Run(ctx context.Context, task model.Task, logf LogFunc
 		return -1, ctx.Err()
 	}
 	if waitErr != nil {
-		if exitErr, ok := waitErr.(*ssh.ExitError); ok {
-			return exitErr.ExitStatus(), waitErr
+		if exitErr, ok := waitErr.(*ssh.ExitError); ok &&
+			exitErr.Signal() == "" && exitErr.ExitStatus() > 0 {
+			exitCode := exitErr.ExitStatus()
+			return exitCode, &CommandExitError{ExitCode: exitCode, Err: waitErr}
 		}
 		return -1, waitErr
 	}

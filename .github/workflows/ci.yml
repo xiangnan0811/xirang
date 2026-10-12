@@ -215,6 +215,10 @@ jobs:
 
       - name: Run PostgreSQL batch idempotency contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch idempotency contract' ./internal/api/handlers '^TestBatchCreationRollbackAndConcurrentIdempotency$'
+      - name: Run PostgreSQL batch command retry handler contracts
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch command retry handler contracts' ./internal/api/handlers '^TestBatchCommandRetry'
+      - name: Run PostgreSQL batch command retry runtime contracts
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch command retry runtime contracts' ./internal/task '^TestBatchCommandRetry'
       - name: Run PostgreSQL policy configuration parity
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL policy configuration parity' ./internal/api/handlers '^TestR306PolicyCreateValuesAndSchedulesAcrossDatabases$'
       - name: Run PostgreSQL task failure summary

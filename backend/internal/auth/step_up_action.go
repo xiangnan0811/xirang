@@ -17,6 +17,7 @@ const (
 	StepUpActionTaskManualTrigger      StepUpAction = "task.manual_trigger"
 	StepUpActionTaskBatchTrigger       StepUpAction = "task.batch_trigger"
 	StepUpActionBatchCommandCreate     StepUpAction = "batch_command.create"
+	StepUpActionBatchCommandRetry      StepUpAction = "batch_command.retry"
 	StepUpActionAssetSecretReveal      StepUpAction = "asset.secret_reveal"
 	StepUpActionAssetDownload          StepUpAction = "asset.download"
 	StepUpActionAssetExportCreate      StepUpAction = "asset.export_create"
@@ -38,6 +39,7 @@ var stepUpActions = []StepUpAction{
 	StepUpActionTaskManualTrigger,
 	StepUpActionTaskBatchTrigger,
 	StepUpActionBatchCommandCreate,
+	StepUpActionBatchCommandRetry,
 	StepUpActionAssetSecretReveal,
 	StepUpActionAssetDownload,
 	StepUpActionAssetExportCreate,

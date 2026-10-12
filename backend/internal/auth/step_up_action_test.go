@@ -19,6 +19,7 @@ func TestStepUpActionAllowlistContainsExactContract(t *testing.T) {
 		StepUpActionTaskManualTrigger,
 		StepUpActionTaskBatchTrigger,
 		StepUpActionBatchCommandCreate,
+		StepUpActionBatchCommandRetry,
 		StepUpActionAssetSecretReveal,
 		StepUpActionAssetDownload,
 		StepUpActionAssetExportCreate,

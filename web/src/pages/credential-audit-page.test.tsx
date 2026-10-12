@@ -6,6 +6,8 @@ import { MemoryRouter } from "react-router-dom";
 import { CredentialAuditPage } from "./credential-audit-page";
 import type { CredentialAuditEventRecord } from "@/types/domain";
 import i18n from "@/i18n";
+import en from "@/i18n/locales/en";
+import zh from "@/i18n/locales/zh";
 
 const {
   authState,
@@ -300,5 +302,46 @@ describe("CredentialAuditPage", () => {
       expect(getCredentialAuditEventsMock).not.toHaveBeenCalled();
     });
     expect(screen.queryByText("凭据使用审计")).not.toBeInTheDocument();
+  });
+
+  it("批量命令重试是独立筛选，未知动作不能当成创建或重试", async () => {
+    const user = userEvent.setup();
+    render(<CredentialAuditPage />);
+
+    await waitFor(() => {
+      expect(getCredentialAuditEventsMock).toHaveBeenCalledTimes(1);
+    });
+
+    const filter = screen.getByLabelText("按凭据审计动作过滤") as HTMLSelectElement;
+    const options = Array.from(filter.options);
+    const retry = options.find((option) => option.value === "batch_command.retry");
+    const create = options.find((option) => option.value === "batch_command.create");
+    const batchTrigger = options.find((option) => option.value === "task.batch_trigger");
+
+    expect(retry).toBeDefined();
+    expect(create).toBeDefined();
+    expect(batchTrigger).toBeDefined();
+    expect(retry?.label).toBe("批量命令重试");
+    expect(retry?.label).toBe(zh.credentialAudit.actions.batchCommandRetry);
+    expect(en.credentialAudit.actions.batchCommandRetry).toBe("Batch command retry");
+    expect(retry?.label).not.toBe(create?.label);
+    expect(retry?.value).not.toBe(create?.value);
+    expect(batchTrigger?.label).toBe("task.batch_trigger");
+    expect(batchTrigger?.label).not.toBe(retry?.label);
+    expect(options.some((option) => option.value === "batch_command")).toBe(false);
+    expect(options.some((option) => option.value === "batch_command.retry.extra")).toBe(false);
+
+    getCredentialAuditEventsMock.mockClear();
+    await user.selectOptions(filter, "batch_command.retry");
+
+    await waitFor(() => {
+      expect(getCredentialAuditEventsMock).toHaveBeenCalled();
+    });
+    expect(getCredentialAuditEventsMock).toHaveBeenLastCalledWith(
+      "test-token",
+      expect.objectContaining({ action: "batch_command.retry" }),
+    );
+    const queried = getCredentialAuditEventsMock.mock.lastCall?.[1] as { action?: string };
+    expect(queried.action).not.toBe("batch_command.create");
   });
 });

@@ -100,6 +100,20 @@ pending token。恢复码模式允许完整粘贴并说明一次性及大小写�
 - JWT 每段使用严格 Base64URL 解码；解码字节相同但文本非规范的 token 仍非法。响应 `expires_at` 等于签名 exp，响应和审计 `proof_ttl_seconds` 来自同一策略，非法操作为零。
 - 响应、日志、审计不含 proof/session token、OTP、内容、locator、ticket 或原始错误。回归覆盖全操作和未来操作、跨 purpose、篡改、过期、身份/角色/TOTP/版本变更、会话不匹配及撤销、不滑动复用、确定性的非规范 Base64URL 同字节变体；相关修改运行重复与 race 测试。
 
+批量命令显式重试使用独立 action `batch_command.retry`，不接受 create、manual-trigger 或
+batch-trigger 的 proof/grant 替代。`POST /credential-access-grants/batch-command-retry`
+沿用逐节点 `node_ids/reason/requested_ttl_seconds`、默认 600 秒及既有范围，SSH purpose
+仍为 `batch_command`，不增加新的凭据 scope。仅 admin/operator 且具有 `tasks:write` 的
+当前身份可以创建；operator 必须拥有全部原节点。执行器对 batch 来源同样使用此 SSH purpose，
+普通命令仍使用 `task_command`。
+
+重试在读取原命令前先检查来源元数据、归属、专用 proof 和全部节点 grant，并在创建事务持锁后
+重核当前身份、proof 有效期及 grant 状态。已提交 key 的重放先按原子批次的不可变节点授权，
+不因原批次后来删除而重新执行；原子批次已删除则冲突，不恢复任务。GET 同时核验当前 Task
+节点与原 Dispatch 节点的归属并集，不因任务节点变更泄露旧节点的子批次身份。
+创建审计与子批次、来源消费同事务提交；拒绝沿既有 step-up/grant 机器协议返回，错误不包含
+命令、摘要、proof、SQL 或 SSH 细节。准入后的授权撤销不承诺撤回已经提交或执行的命令。
+
 敏感入口在首次请求及复用 proof 之前检查 TOTP 前置；未启用时显示账户安全链接，
 不先提交 grant、执行、下载或 socket 请求。返回操作仅使用白名单 pathname 的 router
 state，显式返回只导航，不重开表单或重放提交。普通浏览、无秘密配置导出、密钥编辑、

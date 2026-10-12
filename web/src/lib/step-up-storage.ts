@@ -11,6 +11,7 @@ export const STEP_UP_ACTIONS = {
   taskManualTrigger: "task.manual_trigger",
   taskBatchTrigger: "task.batch_trigger",
   batchCommandCreate: "batch_command.create",
+  batchCommandRetry: "batch_command.retry",
   assetSecretReveal: "asset.secret_reveal",
   assetDownload: "asset.download",
   assetExportCreate: "asset.export_create",
