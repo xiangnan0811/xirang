@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Circle,
+  Copy,
   Loader2,
   XCircle,
 } from "lucide-react";
@@ -18,6 +19,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { apiClient } from "@/lib/api/client";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast-sonner";
+import { getAuthIdentitySnapshot, getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import { useAuth } from "@/context/auth-context.hooks";
 import type { AuthRole } from "@/context/auth-context.shared";
 import type { BatchStatus } from "@/lib/api/batch-api";
@@ -33,10 +37,17 @@ type BatchResultDialogProps = {
 
 type BatchResultLifetime = {
   generation: number;
+  sessionGeneration: number;
   token: string;
   role: AuthRole | null;
   open: boolean;
 };
+
+const BATCH_LOG_LIMIT = 50;
+type TaskLogState =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "loaded"; logs: LogEvent[] };
 
 const statusIcon: Record<string, React.ReactNode> = {
   success: <CheckCircle2 className="size-4 shrink-0 text-success" />,
@@ -53,7 +64,8 @@ function isBatchTaskActive(task: BatchStatus["tasks"][number]) {
 }
 
 export function BatchResultDialog(props: BatchResultDialogProps) {
-  return <BatchResultSession key={JSON.stringify([props.open, props.batchId, props.token])} {...props} />;
+  useAuth();
+  return <BatchResultSession key={JSON.stringify([props.open, props.batchId, props.token, getAuthSessionGeneration()])} {...props} />;
 }
 
 function BatchResultSession({
@@ -63,30 +75,48 @@ function BatchResultSession({
   retain,
   token,
 }: BatchResultDialogProps) {
+  const copyHintId = useId();
   const { t } = useTranslation();
   const { role } = useAuth();
   const lifetimeRef = useRef<BatchResultLifetime>({
     generation: 0,
+    sessionGeneration: getAuthSessionGeneration(),
     token,
     role,
     open,
   });
   const statusTokenRef = useRef<string | null>(null);
+  const statusGenerationRef = useRef<number | null>(null);
   const [status, setStatus] = useState<BatchStatus | null>(null);
+  const [statusRole, setStatusRole] = useState<AuthRole | null>(null);
+  const [sessionGeneration] = useState(getAuthSessionGeneration);
   const [error, setError] = useState("");
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null);
-  const [taskLogs, setTaskLogs] = useState<Record<number, LogEvent[]>>({});
-  const [loadingLogs, setLoadingLogs] = useState<number | null>(null);
+  const [taskLogStates, setTaskLogStates] = useState<Record<number, TaskLogState>>({});
+  const taskLogStatesRef = useRef<Record<number, TaskLogState>>({});
+  const updateTaskLogStates = useCallback((states: Record<number, TaskLogState>) => {
+    taskLogStatesRef.current = states;
+    setTaskLogStates(states);
+  }, []);
+  const [copyPending, setCopyPending] = useState(false);
+  const copyPendingRef = useRef(false);
   const [appliedRole, setAppliedRole] = useState(role);
   if (appliedRole !== role) {
     setAppliedRole(role);
-    setLoadingLogs(null);
+    setStatusRole(null);
+    setExpandedTaskId(null);
+    setCopyPending(false);
   }
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const taskLogsRef = useRef<Record<number, LogEvent[]>>({});
   useLayoutEffect(() => {
+    if (lifetimeRef.current.role !== role) {
+      updateTaskLogStates({});
+      statusGenerationRef.current = null;
+      copyPendingRef.current = false;
+    }
     lifetimeRef.current = {
       generation: lifetimeRef.current.generation + 1,
+      sessionGeneration: getAuthSessionGeneration(),
       token,
       role,
       open,
@@ -97,7 +127,7 @@ function BatchResultSession({
         generation: lifetimeRef.current.generation + 1,
       };
     };
-  }, [open, role, token]);
+  }, [open, role, token, updateTaskLogStates]);
 
   const stopPolling = useCallback(() => {
     if (intervalRef.current) {
@@ -109,12 +139,15 @@ function BatchResultSession({
   const fetchStatus = useCallback(() => {
     if (!batchId) return;
     const generation = lifetimeRef.current.generation;
+    const sessionGeneration = lifetimeRef.current.sessionGeneration;
     const requestToken = lifetimeRef.current.token;
-    if (!requestToken) return;
+    if (!requestToken || sessionGeneration !== getAuthSessionGeneration()) return;
     return apiClient.getBatchStatus(requestToken, batchId).then((result) => {
-      if (lifetimeRef.current.generation !== generation) return;
+      if (lifetimeRef.current.generation !== generation || getAuthSessionGeneration() !== sessionGeneration) return;
+      statusGenerationRef.current = generation;
       statusTokenRef.current = requestToken;
       setStatus(result);
+      setStatusRole(lifetimeRef.current.role);
       setError("");
 
       const hasActive = result.tasks.some(isBatchTaskActive);
@@ -122,7 +155,7 @@ function BatchResultSession({
         stopPolling();
       }
     }).catch((err: unknown) => {
-      if (lifetimeRef.current.generation !== generation) return;
+      if (lifetimeRef.current.generation !== generation || getAuthSessionGeneration() !== sessionGeneration) return;
       setError(err instanceof Error ? err.message : t("batch.fetchStatusFailed"));
     });
   }, [batchId, stopPolling, t]);
@@ -145,28 +178,22 @@ function BatchResultSession({
   // 加载单个任务的日志输出
   const loadTaskLogs = useCallback(
     async (taskId: number) => {
-      if (taskLogsRef.current[taskId]) return;
+      if (taskLogStatesRef.current[taskId]) return;
       const generation = lifetimeRef.current.generation;
+      const sessionGeneration = lifetimeRef.current.sessionGeneration;
       const requestToken = lifetimeRef.current.token;
-      if (!requestToken) return;
-      setLoadingLogs(taskId);
+      if (!requestToken || sessionGeneration !== getAuthSessionGeneration()) return;
+      updateTaskLogStates({ ...taskLogStatesRef.current, [taskId]: { status: "loading" } });
       try {
-        const logs = await apiClient.getTaskLogs(requestToken, taskId, { limit: 50 });
-        if (lifetimeRef.current.generation !== generation) return;
-        taskLogsRef.current[taskId] = logs;
-        setTaskLogs((prev) => ({ ...prev, [taskId]: logs }));
+        const logs = await apiClient.getTaskLogs(requestToken, taskId, { limit: BATCH_LOG_LIMIT });
+        if (lifetimeRef.current.generation !== generation || getAuthSessionGeneration() !== sessionGeneration) return;
+        updateTaskLogStates({ ...taskLogStatesRef.current, [taskId]: { status: "loaded", logs } });
       } catch {
-        if (lifetimeRef.current.generation !== generation) return;
-        const fallback: LogEvent[] = [{ id: "0", level: "error", message: t("batch.logLoadFailed"), timestamp: "" }];
-        taskLogsRef.current[taskId] = fallback;
-        setTaskLogs((prev) => ({ ...prev, [taskId]: fallback }));
-      } finally {
-        if (lifetimeRef.current.generation === generation) {
-          setLoadingLogs(null);
-        }
+        if (lifetimeRef.current.generation !== generation || getAuthSessionGeneration() !== sessionGeneration) return;
+        updateTaskLogStates({ ...taskLogStatesRef.current, [taskId]: { status: "error" } });
       }
     },
-    [t]
+    [updateTaskLogStates]
   );
 
   const handleToggleExpand = useCallback(
@@ -207,11 +234,92 @@ function BatchResultSession({
           }
         }
       } finally {
+        if (!nextOpen) {
+          lifetimeRef.current = { ...lifetimeRef.current, open: false, generation: lifetimeRef.current.generation + 1 };
+        }
         onOpenChange(nextOpen);
       }
     },
     [batchId, retain, onOpenChange, status]
   );
+
+  function ownsCopyLifetime(captured: BatchResultLifetime): boolean {
+    const current = lifetimeRef.current;
+    const identity = getAuthIdentitySnapshot();
+    return current.open
+      && captured.generation === current.generation
+      && captured.sessionGeneration === getAuthSessionGeneration()
+      && !isAuthTransitionActive()
+      && identity.token === captured.token
+      && identity.role === captured.role;
+  }
+
+  const identity = getAuthIdentitySnapshot();
+  const copyAvailable = Boolean(open && batchId && token && status && !error
+    && statusRole === role
+    && sessionGeneration === getAuthSessionGeneration()
+    && !isAuthTransitionActive()
+    && identity.token === token && identity.role === role
+    && (role === "admin" || role === "operator" || role === "viewer"));
+
+  function canCopyResults(): boolean {
+    const current = lifetimeRef.current;
+    return Boolean(copyAvailable
+      && statusGenerationRef.current === current.generation
+      && current.role === role && current.token === token
+      && (role === "admin" || role === "operator" || role === "viewer")
+      && ownsCopyLifetime(current));
+  }
+
+  const copyHint = t("batch.copyLoadedHint", { limit: BATCH_LOG_LIMIT });
+
+  async function handleCopyResults(): Promise<void> {
+    if (copyPendingRef.current || !canCopyResults() || !status) return;
+    const captured = { ...lifetimeRef.current };
+    copyPendingRef.current = true;
+    setCopyPending(true);
+    try {
+      const sections = [
+        [
+          t("batch.resultTitle"),
+          t("batch.batchId", { id: batchId }),
+          copyHint,
+          t("batch.loadedResults", { loaded: status.tasks.length, total: status.total }),
+        ].join("\n"),
+        ...status.tasks.map((task) => {
+          const taskStatus = task.dispatchStatus === "failed"
+            ? t("batch.dispatchFailed")
+            : task.dispatchStatus === "pending" || task.dispatchStatus === "dispatching"
+              ? t("batch.dispatchPending")
+              : t(`status.batch.${task.status}`, task.status);
+          const lines = [
+            t("batch.copyNode", { name: JSON.stringify(task.nodeName), id: task.nodeId }),
+            t("batch.copyTask", { id: task.id }),
+            t("batch.copyStatus", { status: taskStatus }),
+          ];
+          if (task.lastError) lines.push(t("batch.copyError", { error: task.lastError }));
+          const logs = taskLogStates[task.id];
+          if (!logs) lines.push(t("batch.logsNotLoaded"));
+          else if (logs.status === "loading") lines.push(t("batch.loadingLogs"));
+          else if (logs.status === "error") lines.push(t("batch.logLoadFailed"));
+          else {
+            lines.push(t("batch.loadedLogCount", { count: logs.logs.length, limit: BATCH_LOG_LIMIT }));
+            lines.push(...logs.logs.map((log) => log.message));
+          }
+          return lines.join("\n");
+        }),
+      ];
+      await navigator.clipboard.writeText(sections.join("\n\n"));
+      if (ownsCopyLifetime(captured)) toast.success(t("common.copiedToClipboard"));
+    } catch {
+      if (ownsCopyLifetime(captured)) toast.error(t("common.copyFailed"));
+    } finally {
+      if (ownsCopyLifetime(captured)) {
+        copyPendingRef.current = false;
+        setCopyPending(false);
+      }
+    }
+  }
 
   const allDone = status
     ? status.tasks.every((task) => !isBatchTaskActive(task))
@@ -249,6 +357,20 @@ function BatchResultSession({
           <DialogCloseButton />
         </DialogHeader>
         <DialogBody>
+          <div className="min-w-0 space-y-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-auto max-w-full whitespace-normal text-left"
+              aria-describedby={copyHintId}
+              disabled={copyPending || !copyAvailable}
+              onClick={() => void handleCopyResults()}
+            >
+              <Copy className="size-4 shrink-0" aria-hidden />
+              {t("batch.copyLoadedResults")}
+            </Button>
+            <p id={copyHintId} className="text-xs text-muted-foreground break-words">{copyHint}</p>
+          </div>
           {error && (
             <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
@@ -269,7 +391,7 @@ function BatchResultSession({
                 const isDone = !isBatchTaskActive(task);
                 const dispatchFailed = task.dispatchStatus === "failed";
                 const dispatchUnconfirmed = task.dispatchStatus === "pending" || task.dispatchStatus === "dispatching";
-                const logs = taskLogs[task.id];
+                const logState = taskLogStates[task.id];
 
                 return (
                   <div key={task.id} className="rounded-md border border-border">
@@ -318,18 +440,21 @@ function BatchResultSession({
                             {task.lastError}
                           </p>
                         )}
-                        {loadingLogs === task.id && (
+                        {logState?.status === "loading" && (
                           <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
                             <Loader2 className="size-3 animate-spin" />
                             {t("batch.loadingLogs")}
                           </div>
                         )}
-                        {logs && logs.length === 0 && !task.lastError && (
+                        {logState?.status === "error" && (
+                          <p className="text-xs text-destructive">{t("batch.logLoadFailed")}</p>
+                        )}
+                        {logState?.status === "loaded" && logState.logs.length === 0 && (
                           <p className="text-xs text-muted-foreground">{t("batch.noLogOutput")}</p>
                         )}
-                        {logs && logs.length > 0 && (
+                        {logState?.status === "loaded" && logState.logs.length > 0 && (
                           <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed">
-                            {logs.map((log) => log.message).join("\n")}
+                            {logState.logs.map((log) => log.message).join("\n")}
                           </pre>
                         )}
                       </div>
