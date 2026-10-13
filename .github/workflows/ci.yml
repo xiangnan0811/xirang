@@ -223,6 +223,8 @@ jobs:
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL policy configuration parity' ./internal/api/handlers '^TestR306PolicyCreateValuesAndSchedulesAcrossDatabases$'
       - name: Run PostgreSQL task failure summary
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL task failure summary' ./internal/api/handlers '^TestTaskFailureSummaryPostgres$'
+      - name: Run PostgreSQL config import preview and apply contracts
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL config import preview and apply contracts' ./internal/api/handlers '^TestConfig(Import|Export)'
 
 
       - name: Run PostgreSQL general API surface parity

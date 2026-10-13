@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
-import { ConfigImportPreviewError } from "@/lib/api/config-api";
+import { ConfigImportPreviewError } from "@/lib/api/config-import-response";
 import {
   ApiError,
   AuthTransitionRejectedError,

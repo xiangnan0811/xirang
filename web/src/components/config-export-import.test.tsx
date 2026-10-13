@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
-import { ConfigImportPreviewError } from "@/lib/api/config-api";
+import { ConfigImportPreviewError } from "@/lib/api/config-import-response";
 import { ApiError, beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier, rememberAuthIdentity } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { ConfigImportConflict, ConfigImportPreview } from "@/types/domain";

@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ConfigImportPreviewError,
   ConfigImportResultError,
-  createConfigApi,
   mapConfigImportPreview,
   mapConfigImportResult,
-} from "./config-api";
+} from "./config-import-response";
+import { createConfigApi } from "./config-api";
 
 function createMockResponse(status = 200, body = "") {
   return {
