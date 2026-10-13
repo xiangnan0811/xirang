@@ -12,6 +12,13 @@
 - 行为从新版页面加载后生效；按同一发行版本切换 Core 与页面，完成或退出旧页面交互并刷新旧客户端，旧页面不会自动获得新保护。本次不改变后端读取、调度、执行和保留策略，无需因这些只读界面改动额外排空执行中的任务；换版、关闭页面或身份切换不撤销已提交任务、在途服务端操作或已发出的剪贴板写入。
 - 本次无新增数据库 schema migration，不回填或改写历史记录，不增加元数据或精确 Run 导航。升级前保全数据库、适用密钥与配置；回退旧页面会恢复旧筛选及错误展示缺陷，既有迁移降级保护与配套恢复要求仍适用。仅交付 R-16 第一阶段，不包含 R-15 完整计划绑定、P3 或生产部署；本地、CI、浏览器和公开发布证据不等于生产升级或灾备恢复验收。
 
+## [0.66.0](https://github.com/xiangnan0811/xirang/compare/v0.65.0...v0.66.0) (2026-10-13)
+
+
+### ✨ Features
+
+* **automation:** add safe history IDs and task log navigation ([#618](https://github.com/xiangnan0811/xirang/issues/618)) ([238ed36](https://github.com/xiangnan0811/xirang/commit/238ed3664e4e9209a67380c94e578d8dcb08cb7d))
+
 ## [0.65.0](https://github.com/xiangnan0811/xirang/compare/v0.64.0...v0.65.0) (2026-10-13)
 
 
