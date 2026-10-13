@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.65.0](https://github.com/xiangnan0811/xirang/compare/v0.64.0...v0.65.0) (2026-10-13)
+
+
+### ✨ Features
+
+* **config:** add read-only import preview ([#616](https://github.com/xiangnan0811/xirang/issues/616)) ([094ff34](https://github.com/xiangnan0811/xirang/commit/094ff346826d4953540b075c1a79614873f0589e))
+
 ### 行为与升级说明
 
 - 配置导入新增管理员只读预览：选择文件后先查看五类配置的预计新建、更新、跳过、拒绝、待执行时校验及禁用数量，明确确认后仍须 fresh TOTP 二次验证和短时导入授权。未启用 TOTP 可查看预览，但不能继续执行。
