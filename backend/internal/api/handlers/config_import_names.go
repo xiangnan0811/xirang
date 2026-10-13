@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -164,8 +166,16 @@ func importedLegacyConfigReferencePresent(data map[string]interface{}, field str
 // input group is rejected by the import phase; no first-match guessing is
 // allowed.
 func configImportDuplicateNameIndexes(records []map[string]interface{}) map[int]bool {
+	duplicates, _ := configImportDuplicateNameIndexesContext(context.Background(), records)
+	return duplicates
+}
+
+func configImportDuplicateNameIndexesContext(ctx context.Context, records []map[string]interface{}) (map[int]bool, error) {
 	groups := make(map[string][]int)
 	for index, record := range records {
+		if err := configImportContextErr(ctx); err != nil {
+			return nil, err
+		}
 		name, ok := record["name"].(string)
 		if !ok {
 			continue
@@ -178,105 +188,375 @@ func configImportDuplicateNameIndexes(records []map[string]interface{}) map[int]
 	}
 	duplicates := make(map[int]bool)
 	for _, indexes := range groups {
+		if err := configImportContextErr(ctx); err != nil {
+			return nil, err
+		}
 		if len(indexes) < 2 {
 			continue
 		}
 		for _, index := range indexes {
+			if err := configImportContextErr(ctx); err != nil {
+				return nil, err
+			}
 			duplicates[index] = true
 		}
 	}
-	return duplicates
+	return duplicates, nil
 }
 
 type configImportCredentialInventory struct {
-	nodes       []model.Node
-	keys        []model.SSHKey
-	nodesByName map[string][]model.Node
-	keysByName  map[string][]model.SSHKey
+	nodes                 []model.Node
+	keys                  []model.SSHKey
+	nodesByName           map[string][]model.Node
+	keysByName            map[string][]model.SSHKey
+	nodesByID             map[uint]int
+	keysByID              map[uint]int
+	nodeNameBucketPos     map[uint]int
+	keyNameBucketPos      map[uint]int
+	nodePasswordPresent   map[uint]bool
+	nodePrivateKeyPresent map[uint]bool
+	keyPrivateKeyPresent  map[uint]bool
+}
+
+type configImportNodeInventoryRow struct {
+	ID                uint   `gorm:"column:id"`
+	Name              string `gorm:"column:name"`
+	Host              string `gorm:"column:host"`
+	Port              int    `gorm:"column:port"`
+	Username          string `gorm:"column:username"`
+	AuthType          string `gorm:"column:auth_type"`
+	SSHKeyID          *uint  `gorm:"column:ssh_key_id"`
+	Tags              string `gorm:"column:tags"`
+	BasePath          string `gorm:"column:base_path"`
+	PasswordPresent   bool   `gorm:"column:password_present"`
+	PrivateKeyPresent bool   `gorm:"column:private_key_present"`
+}
+
+type configImportSSHKeyInventoryRow struct {
+	ID                uint       `gorm:"column:id"`
+	Name              string     `gorm:"column:name"`
+	Username          string     `gorm:"column:username"`
+	KeyType           string     `gorm:"column:key_type"`
+	Fingerprint       string     `gorm:"column:fingerprint"`
+	Disabled          bool       `gorm:"column:disabled"`
+	ExpiresAt         *time.Time `gorm:"column:expires_at"`
+	AllowedPurposes   string     `gorm:"column:allowed_purposes"`
+	AllowedNodeIDs    string     `gorm:"column:allowed_node_ids"`
+	AllowedNodeTags   string     `gorm:"column:allowed_node_tags"`
+	PrivateKeyPresent bool       `gorm:"column:private_key_present"`
+}
+
+func loadConfigImportCredentialInventory(
+	ctx context.Context,
+	db *gorm.DB,
+	data configImportData,
+	forUpdate bool,
+) (*configImportCredentialInventory, error) {
+	inventory := &configImportCredentialInventory{
+		nodesByName:           make(map[string][]model.Node),
+		keysByName:            make(map[string][]model.SSHKey),
+		nodePasswordPresent:   make(map[uint]bool),
+		nodePrivateKeyPresent: make(map[uint]bool),
+		keyPrivateKeyPresent:  make(map[uint]bool),
+	}
+	if err := configImportContextErr(ctx); err != nil {
+		return nil, err
+	}
+	if db == nil {
+		return nil, fmt.Errorf("config import credential inventory database is unavailable")
+	}
+	if len(data.Nodes) == 0 && len(data.SSHKeys) == 0 && len(data.Tasks) == 0 {
+		return inventory, nil
+	}
+	nodeQuery := db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).Model(&model.Node{})
+	keyQuery := db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).Model(&model.SSHKey{})
+	if forUpdate && !strings.EqualFold(db.Name(), "sqlite") {
+		locking := clause.Locking{Strength: "UPDATE"}
+		nodeQuery = nodeQuery.Clauses(locking)
+		keyQuery = keyQuery.Clauses(locking)
+	}
+	if len(data.Nodes) > 0 || len(data.SSHKeys) > 0 || len(data.Tasks) > 0 {
+		var nodeRows []configImportNodeInventoryRow
+		if err := nodeQuery.Select(
+			"nodes.id", "nodes.name", "nodes.host", "nodes.port", "nodes.username", "nodes.auth_type",
+			"nodes.ssh_key_id", "nodes.tags", "nodes.base_path",
+			"CASE WHEN nodes.password <> '' THEN TRUE ELSE FALSE END AS password_present",
+			"CASE WHEN nodes.private_key <> '' THEN TRUE ELSE FALSE END AS private_key_present",
+		).Order("nodes.id").Find(&nodeRows).Error; err != nil {
+			return nil, fmt.Errorf("读取导入节点库存失败: %w", err)
+		}
+		for _, row := range nodeRows {
+			if err := configImportContextErr(ctx); err != nil {
+				return nil, err
+			}
+			inventory.nodes = append(inventory.nodes, model.Node{
+				ID: row.ID, Name: row.Name, Host: row.Host, Port: row.Port,
+				Username: row.Username, AuthType: row.AuthType, SSHKeyID: row.SSHKeyID,
+				Tags: row.Tags, BasePath: row.BasePath,
+			})
+			inventory.nodePasswordPresent[row.ID] = row.PasswordPresent
+			inventory.nodePrivateKeyPresent[row.ID] = row.PrivateKeyPresent
+		}
+	}
+	if err := configImportContextErr(ctx); err != nil {
+		return nil, err
+	}
+	if len(data.SSHKeys) > 0 || len(data.Nodes) > 0 {
+		var keyRows []configImportSSHKeyInventoryRow
+		if err := keyQuery.Select(
+			"ssh_keys.id", "ssh_keys.name", "ssh_keys.username", "ssh_keys.key_type", "ssh_keys.fingerprint", "ssh_keys.disabled",
+			"ssh_keys.expires_at", "ssh_keys.allowed_purposes", "ssh_keys.allowed_node_ids", "ssh_keys.allowed_node_tags",
+			"CASE WHEN ssh_keys.private_key <> '' THEN TRUE ELSE FALSE END AS private_key_present",
+		).Order("ssh_keys.id").Find(&keyRows).Error; err != nil {
+			return nil, fmt.Errorf("读取导入 SSH 密钥库存失败: %w", err)
+		}
+		for _, row := range keyRows {
+			if err := configImportContextErr(ctx); err != nil {
+				return nil, err
+			}
+			inventory.keys = append(inventory.keys, model.SSHKey{
+				ID: row.ID, Name: row.Name, Username: row.Username, KeyType: row.KeyType,
+				Fingerprint: row.Fingerprint, Disabled: row.Disabled, ExpiresAt: row.ExpiresAt,
+				AllowedPurposes: row.AllowedPurposes, AllowedNodeIDs: row.AllowedNodeIDs,
+				AllowedNodeTags: row.AllowedNodeTags,
+			})
+			inventory.keyPrivateKeyPresent[row.ID] = row.PrivateKeyPresent
+		}
+	}
+	if err := configImportContextErr(ctx); err != nil {
+		return nil, err
+	}
+	if err := inventory.rebuildIndexesContext(ctx); err != nil {
+		return nil, err
+	}
+	return inventory, nil
 }
 
 func lockConfigImportCredentialInventory(tx *gorm.DB, data configImportData) (*configImportCredentialInventory, error) {
-	inventory := &configImportCredentialInventory{
-		nodesByName: make(map[string][]model.Node),
-		keysByName:  make(map[string][]model.SSHKey),
-	}
 	if tx == nil {
 		return nil, fmt.Errorf("config import credential inventory transaction is unavailable")
 	}
 	if len(data.Nodes) == 0 && len(data.SSHKeys) == 0 {
-		return inventory, nil
+		return loadConfigImportCredentialInventory(tx.Statement.Context, tx, data, true)
 	}
 	if strings.EqualFold(tx.Name(), "sqlite") {
 		if err := tx.Exec("UPDATE nodes SET id = id WHERE 1 = 0").Error; err != nil {
 			return nil, fmt.Errorf("保留导入节点写锁失败: %w", err)
 		}
 	}
-
-	nodeQuery := tx.Session(&gorm.Session{SkipHooks: true})
-	keyQuery := tx.Session(&gorm.Session{SkipHooks: true})
-	if !strings.EqualFold(tx.Name(), "sqlite") {
-		locking := clause.Locking{Strength: "UPDATE"}
-		nodeQuery = nodeQuery.Clauses(locking)
-		keyQuery = keyQuery.Clauses(locking)
-	}
-	if err := nodeQuery.Select("id", "name", "ssh_key_id").Order("id").Find(&inventory.nodes).Error; err != nil {
-		return nil, fmt.Errorf("读取导入节点库存失败: %w", err)
-	}
-	if err := keyQuery.Order("id").Find(&inventory.keys).Error; err != nil {
-		return nil, fmt.Errorf("读取导入 SSH 密钥库存失败: %w", err)
-	}
-	inventory.rebuildIndexes()
-	return inventory, nil
+	return loadConfigImportCredentialInventory(tx.Statement.Context, tx, data, true)
 }
 
 func (inventory *configImportCredentialInventory) rebuildIndexes() {
+	_ = inventory.rebuildIndexesContext(context.Background())
+}
+
+func (inventory *configImportCredentialInventory) rebuildIndexesContext(ctx context.Context) error {
 	if inventory == nil {
-		return
+		return nil
+	}
+	if err := configImportContextErr(ctx); err != nil {
+		return err
 	}
 	inventory.nodesByName = make(map[string][]model.Node, len(inventory.nodes))
-	for _, node := range inventory.nodes {
-		if !configExportNameRepresentable(node.Name) {
-			continue
-		}
-		inventory.nodesByName[node.Name] = append(inventory.nodesByName[node.Name], node)
-	}
 	inventory.keysByName = make(map[string][]model.SSHKey, len(inventory.keys))
-	for _, key := range inventory.keys {
-		if !configExportNameRepresentable(key.Name) {
-			continue
+	inventory.nodesByID = make(map[uint]int, len(inventory.nodes))
+	inventory.keysByID = make(map[uint]int, len(inventory.keys))
+	inventory.nodeNameBucketPos = make(map[uint]int, len(inventory.nodes))
+	inventory.keyNameBucketPos = make(map[uint]int, len(inventory.keys))
+	for index, node := range inventory.nodes {
+		if err := configImportContextErr(ctx); err != nil {
+			return err
 		}
-		inventory.keysByName[key.Name] = append(inventory.keysByName[key.Name], key)
+		inventory.nodesByID[node.ID] = index
+		inventory.addNodeName(node)
 	}
+	for index, key := range inventory.keys {
+		if err := configImportContextErr(ctx); err != nil {
+			return err
+		}
+		inventory.keysByID[key.ID] = index
+		inventory.addKeyName(key)
+	}
+	return nil
+}
+
+func (inventory *configImportCredentialInventory) addNodeName(value model.Node) {
+	if inventory == nil || !configExportNameRepresentable(value.Name) {
+		return
+	}
+	rows := append(inventory.nodesByName[value.Name], value)
+	inventory.nodesByName[value.Name] = rows
+}
+
+func (inventory *configImportCredentialInventory) removeNodeName(value model.Node) {
+	if inventory == nil || !configExportNameRepresentable(value.Name) {
+		return
+	}
+	name := value.Name
+	rows := inventory.nodesByName[name]
+	position, ok := inventory.nodeNameBucketPos[value.ID]
+	if !ok || position < 0 || position >= len(rows) || rows[position].ID != value.ID {
+		ok = false
+		for index, row := range rows {
+			if row.ID == value.ID {
+				position = index
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok || position < 0 || position >= len(rows) {
+		return
+	}
+	last := len(rows) - 1
+	if position != last {
+		moved := rows[last]
+		rows[position] = moved
+		inventory.nodeNameBucketPos[moved.ID] = position
+	}
+	rows = rows[:last]
+	if len(rows) == 0 {
+		delete(inventory.nodesByName, name)
+	} else {
+		inventory.nodesByName[name] = rows
+	}
+	delete(inventory.nodeNameBucketPos, value.ID)
+}
+
+func (inventory *configImportCredentialInventory) addKeyName(value model.SSHKey) {
+	if inventory == nil || !configExportNameRepresentable(value.Name) {
+		return
+	}
+	rows := append(inventory.keysByName[value.Name], value)
+	inventory.keysByName[value.Name] = rows
+	inventory.keyNameBucketPos[value.ID] = len(rows) - 1
+}
+
+func (inventory *configImportCredentialInventory) removeKeyName(value model.SSHKey) {
+	if inventory == nil || !configExportNameRepresentable(value.Name) {
+		return
+	}
+	name := value.Name
+	rows := inventory.keysByName[name]
+	position, ok := inventory.keyNameBucketPos[value.ID]
+	if !ok || position < 0 || position >= len(rows) || rows[position].ID != value.ID {
+		ok = false
+		for index, row := range rows {
+			if row.ID == value.ID {
+				position = index
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok || position < 0 || position >= len(rows) {
+		delete(inventory.keyNameBucketPos, value.ID)
+		return
+	}
+	last := len(rows) - 1
+	if position != last {
+		moved := rows[last]
+		rows[position] = moved
+		inventory.keyNameBucketPos[moved.ID] = position
+	}
+	rows = rows[:last]
+	if len(rows) == 0 {
+		delete(inventory.keysByName, name)
+	} else {
+		inventory.keysByName[name] = rows
+	}
+	delete(inventory.keyNameBucketPos, value.ID)
 }
 
 func (inventory *configImportCredentialInventory) replaceNode(value model.Node) {
 	if inventory == nil {
 		return
 	}
-	for index, node := range inventory.nodes {
-		if node.ID == value.ID {
-			inventory.nodes[index] = value
-			inventory.rebuildIndexes()
-			return
-		}
+	if inventory.nodesByID == nil {
+		inventory.rebuildIndexes()
 	}
+	if index, exists := inventory.nodesByID[value.ID]; exists {
+		old := inventory.nodes[index]
+		inventory.removeNodeName(old)
+		inventory.nodes[index] = value
+		inventory.addNodeName(value)
+		return
+	}
+	inventory.nodesByID[value.ID] = len(inventory.nodes)
 	inventory.nodes = append(inventory.nodes, value)
-	inventory.rebuildIndexes()
+	inventory.addNodeName(value)
 }
 
 func (inventory *configImportCredentialInventory) replaceKey(value model.SSHKey) {
 	if inventory == nil {
 		return
 	}
-	for index, key := range inventory.keys {
-		if key.ID == value.ID {
-			inventory.keys[index] = value
-			inventory.rebuildIndexes()
-			return
-		}
+	if inventory.keysByID == nil {
+		inventory.rebuildIndexes()
 	}
+	if index, exists := inventory.keysByID[value.ID]; exists {
+		old := inventory.keys[index]
+		inventory.removeKeyName(old)
+		inventory.keys[index] = value
+		inventory.addKeyName(value)
+		return
+	}
+	inventory.keysByID[value.ID] = len(inventory.keys)
 	inventory.keys = append(inventory.keys, value)
-	inventory.rebuildIndexes()
+	inventory.addKeyName(value)
+}
+
+func (inventory *configImportCredentialInventory) remapNodeIdentity(provisional uint, value model.Node) {
+	if inventory == nil {
+		return
+	}
+	if inventory.nodesByID == nil {
+		inventory.rebuildIndexes()
+	}
+	index, exists := inventory.nodesByID[provisional]
+	if !exists {
+		inventory.replaceNode(value)
+		return
+	}
+	old := inventory.nodes[index]
+	inventory.removeNodeName(old)
+	delete(inventory.nodesByID, provisional)
+	inventory.nodes[index] = value
+	inventory.nodesByID[value.ID] = index
+	inventory.addNodeName(value)
+	if present, ok := inventory.nodePasswordPresent[provisional]; ok {
+		delete(inventory.nodePasswordPresent, provisional)
+		inventory.nodePasswordPresent[value.ID] = present
+	}
+	if present, ok := inventory.nodePrivateKeyPresent[provisional]; ok {
+		delete(inventory.nodePrivateKeyPresent, provisional)
+		inventory.nodePrivateKeyPresent[value.ID] = present
+	}
+}
+
+func (inventory *configImportCredentialInventory) remapKeyIdentity(provisional uint, value model.SSHKey) {
+	if inventory == nil {
+		return
+	}
+	if inventory.keysByID == nil {
+		inventory.rebuildIndexes()
+	}
+	index, exists := inventory.keysByID[provisional]
+	if !exists {
+		inventory.replaceKey(value)
+		return
+	}
+	old := inventory.keys[index]
+	inventory.removeKeyName(old)
+	delete(inventory.keysByID, provisional)
+	inventory.keys[index] = value
+	inventory.keysByID[value.ID] = index
+	inventory.addKeyName(value)
+	if present, ok := inventory.keyPrivateKeyPresent[provisional]; ok {
+		delete(inventory.keyPrivateKeyPresent, provisional)
+		inventory.keyPrivateKeyPresent[value.ID] = present
+	}
 }
 
 func (inventory *configImportCredentialInventory) nodeByName(name string) (model.Node, bool) {
@@ -333,10 +613,16 @@ func (inventory *configImportCredentialInventory) keyByName(name string) (model.
 	return rows[0], true
 }
 
-func configImportDuplicateNameSet(records []map[string]interface{}) map[string]struct{} {
-	duplicates := configImportDuplicateNameIndexes(records)
+func configImportDuplicateNameSetContext(ctx context.Context, records []map[string]interface{}) (map[string]struct{}, error) {
+	duplicates, err := configImportDuplicateNameIndexesContext(ctx, records)
+	if err != nil {
+		return nil, err
+	}
 	names := make(map[string]struct{})
 	for index := range duplicates {
+		if err := configImportContextErr(ctx); err != nil {
+			return nil, err
+		}
 		if name, ok := records[index]["name"].(string); ok {
 			name = strings.TrimSpace(name)
 			if name != "" {
@@ -344,7 +630,7 @@ func configImportDuplicateNameSet(records []map[string]interface{}) map[string]s
 			}
 		}
 	}
-	return names
+	return names, nil
 }
 
 type configImportNodeCandidate struct {
@@ -352,9 +638,12 @@ type configImportNodeCandidate struct {
 	name          string
 	source        map[string]interface{}
 	row           model.Node
+	provisional   uint
 	existing      bool
 	baseCreated   bool
 	skipped       bool
+	action        configImportAction
+	pendingCode   string
 	reference     importedNodeSSHKeyNameCandidate
 	referenceCode string
 	rejected      bool
@@ -365,13 +654,76 @@ type configImportSSHKeyCandidate struct {
 	name              string
 	source            map[string]interface{}
 	row               model.SSHKey
+	provisional       uint
 	existing          bool
+	action            configImportAction
+	pendingCode       string
 	reference         importedSSHKeyAllowedNodeNamesCandidate
 	referenceCode     string
 	legacyScope       importedSSHKeyScopeCandidate
 	legacyCode        string
 	nameScopeResolved bool
 	rejected          bool
+}
+
+// prepareConfigImportSSHKeyCandidateRow is the single field/secret
+// preparation boundary used by preview evaluation and apply. Preview passes
+// allowRetained=false and never supplies a stored secret; apply passes true
+// only after the locked row has been read and decrypted.
+func prepareConfigImportSSHKeyCandidateRow(
+	candidate *configImportSSHKeyCandidate,
+	retainedPresent bool,
+	allowRetained bool,
+) (bool, error) {
+	if candidate == nil {
+		return false, nil
+	}
+	selectedType, err := importedSSHKeySelectedType(candidate.source, candidate.row.KeyType)
+	if err != nil {
+		return false, err
+	}
+	supplied, invalid := importedConfigSecretString(candidate.source, "private_key")
+	if invalid {
+		return false, fmt.Errorf("imported private_key must be a string")
+	}
+	if supplied == "" && candidate.existing && retainedPresent && !allowRetained {
+		return true, nil
+	}
+	base := candidate.row
+	preparedKey, storedType, err := prepareImportedSSHKeyPrivateKey(candidate.source, &base, selectedType)
+	if err != nil {
+		return false, err
+	}
+	if !candidate.existing {
+		base.Name = candidate.name
+	}
+	if username, ok := candidate.source["username"].(string); ok {
+		base.Username = strings.TrimSpace(username)
+	}
+	base.KeyType = storedType
+	base.PrivateKey = preparedKey
+	if strings.TrimSpace(preparedKey) == "" {
+		base.PrivateKey = ""
+		base.Fingerprint = ""
+		base.Disabled = true
+	} else {
+		base.Fingerprint = generateFingerprint(preparedKey)
+	}
+	applyImportedSSHKeyScopeCandidate(&base, candidate.legacyScope)
+	if candidate.reference.present && candidate.existing && candidate.row.Disabled {
+		base.Disabled = true
+	}
+	if candidate.referenceCode != "" || candidate.legacyCode != "" {
+		base.Disabled = true
+		if !candidate.nameScopeResolved {
+			base.AllowedNodeIDs = ""
+		}
+	}
+	if !candidate.existing && strings.TrimSpace(base.PrivateKey) == "" {
+		base.Disabled = true
+	}
+	candidate.row = base
+	return false, nil
 }
 
 func (a *configImportAccumulator) rejectedWithWarnings(entity string, index int, name string, codes ...string) {
@@ -392,292 +744,6 @@ func (a *configImportAccumulator) rejectedWithWarnings(entity string, index int,
 	}
 }
 
-func importConfigNodesAndSSHKeys(
-	tx *gorm.DB,
-	data configImportData,
-	conflict string,
-	preRejected map[string]map[int]bool,
-	accumulator *configImportAccumulator,
-) error {
-	if tx == nil {
-		return fmt.Errorf("config import credential transaction is unavailable")
-	}
-	if accumulator == nil {
-		return fmt.Errorf("config import accumulator is unavailable")
-	}
-	inventory := accumulator.credentialInventory
-	if inventory == nil {
-		var err error
-		inventory, err = lockConfigImportCredentialInventory(tx, data)
-		if err != nil {
-			return err
-		}
-		accumulator.credentialInventory = inventory
-	}
-
-	duplicateNodeIndexes := configImportDuplicateNameIndexes(data.Nodes)
-	duplicateKeyIndexes := configImportDuplicateNameIndexes(data.SSHKeys)
-	duplicateNodeNames := configImportDuplicateNameSet(data.Nodes)
-	duplicateKeyNames := configImportDuplicateNameSet(data.SSHKeys)
-	nodeCandidates := make([]*configImportNodeCandidate, 0, len(data.Nodes))
-
-	for nodeIndex, nodeData := range data.Nodes {
-		name, _ := nodeData["name"].(string)
-		name = strings.TrimSpace(name)
-		if name == "" {
-			accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-			continue
-		}
-		if duplicateNodeIndexes[nodeIndex] {
-			accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningDuplicateName)
-			continue
-		}
-
-		reference, referenceCode := parseImportedNodeSSHKeyName(nodeData)
-		targetRows := inventory.nodesByName[name]
-		if len(targetRows) > 1 {
-			accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningDuplicateName)
-			continue
-		}
-		if len(targetRows) == 1 && conflict != "overwrite" {
-			accumulator.skipped()
-			nodeCandidates = append(nodeCandidates, &configImportNodeCandidate{
-				index:         nodeIndex,
-				name:          name,
-				source:        nodeData,
-				row:           targetRows[0],
-				existing:      true,
-				skipped:       true,
-				reference:     reference,
-				referenceCode: referenceCode,
-			})
-			continue
-		}
-		if preRejected[configImportEntityNodes][nodeIndex] {
-			accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-			continue
-		}
-		if len(targetRows) == 1 {
-			if referenceCode != "" && referenceCode != configImportWarningUnresolvedSSHKey {
-				codes := importedNodeReferenceWarningCodes(reference, referenceCode, nodeData, false)
-				accumulator.rejectedWithWarnings(configImportEntityNodes, nodeIndex, name, codes...)
-				continue
-			}
-			if reference.explicitNull {
-				accumulator.rejectedWithWarnings(configImportEntityNodes, nodeIndex, name, configImportWarningUnresolvedSSHKey)
-				continue
-			}
-			candidate, err := loadImportedNodeForOverwrite(tx, targetRows[0].ID)
-			if err != nil {
-				return fmt.Errorf("读取导入节点失败: %w", err)
-			}
-			if err := decryptImportedNodeSecrets(&candidate); err != nil {
-				accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-				continue
-			}
-			applyImportedNodeFields(&candidate, nodeData)
-			if err := validateImportedNodeCandidate(candidate); err != nil {
-				accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-				continue
-			}
-			nodeCandidates = append(nodeCandidates, &configImportNodeCandidate{
-				index:         nodeIndex,
-				name:          name,
-				source:        nodeData,
-				row:           candidate,
-				existing:      true,
-				reference:     reference,
-				referenceCode: referenceCode,
-			})
-			continue
-		}
-
-		newNode := model.Node{
-			Name:     name,
-			Status:   "offline",
-			Port:     22,
-			AuthType: "key",
-		}
-		applyImportedNodeFields(&newNode, nodeData)
-		if strings.TrimSpace(newNode.AuthType) == "" {
-			newNode.AuthType = "key"
-		}
-		if password, ok := nodeData["password"].(string); ok {
-			newNode.Password = password
-		}
-		if privateKey, ok := nodeData["private_key"].(string); ok {
-			newNode.PrivateKey = privateKey
-		}
-		// The classic export intentionally omits backup_dir. Preserve P1's
-		// empty-value behavior when a valid name has no canonical identifier.
-		if strings.TrimSpace(newNode.BackupDir) == "" {
-			newNode.BackupDir = nodePkg.SanitizeBackupDir(name)
-		}
-		if err := validateImportedNodeCandidate(newNode); err != nil {
-			accumulator.rejected(configImportEntityNodes, nodeIndex, name, configImportWarningInvalidInput)
-			continue
-		}
-		// New nodes are staged unbound. The name reference is resolved only
-		// after all keys have been parsed and written.
-		newNode.SSHKeyID = nil
-		if err := tx.Create(&newNode).Error; err != nil {
-			return fmt.Errorf("创建导入节点失败: %w", err)
-		}
-		accumulator.recordCreatedID(configImportEntityNodes, newNode.ID)
-		inventory.replaceNode(newNode)
-		accumulator.created(configImportEntityNodes, false)
-		nodeCandidates = append(nodeCandidates, &configImportNodeCandidate{
-			index:         nodeIndex,
-			name:          name,
-			source:        nodeData,
-			row:           newNode,
-			baseCreated:   true,
-			reference:     reference,
-			referenceCode: referenceCode,
-		})
-	}
-
-	for keyIndex, keyData := range data.SSHKeys {
-		name, _ := keyData["name"].(string)
-		name = strings.TrimSpace(name)
-		if name == "" {
-			accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningInvalidInput)
-			continue
-		}
-		if duplicateKeyIndexes[keyIndex] {
-			accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningDuplicateName)
-			continue
-		}
-
-		reference, referenceCode := parseImportedSSHKeyAllowedNodeNames(keyData)
-		legacyScope, legacyCode := parseImportedSSHKeyScope(keyData)
-		if reference.present && referenceCode == "" && !reference.explicitNull && !reference.invalid {
-			if legacyCode == configImportWarningUnresolvedNodeScope {
-				legacyCode = ""
-			}
-			legacyScope.allowedNodeIDs = nil
-		}
-		targetRows := inventory.keysByName[name]
-		if len(targetRows) > 1 {
-			accumulator.rejected(configImportEntitySSHKeys, keyIndex, name, configImportWarningDuplicateName)
-			continue
-		}
-		if len(targetRows) == 1 && conflict != "overwrite" {
-			accumulator.skipped()
-			addImportedSSHKeyReferenceWarnings(accumulator, keyIndex, name, reference, referenceCode, legacyCode, inventory, duplicateNodeNames)
-			continue
-		}
-
-		keyCandidate := &configImportSSHKeyCandidate{
-			index:         keyIndex,
-			name:          name,
-			source:        keyData,
-			reference:     reference,
-			referenceCode: referenceCode,
-			legacyScope:   legacyScope,
-			legacyCode:    legacyCode,
-		}
-		if len(targetRows) == 1 {
-			keyCandidate.existing = true
-			keyCandidate.row = targetRows[0]
-		}
-		if keyCandidate.existing {
-			if referenceCode != "" || legacyCode != "" {
-				keyCandidate.rejected = true
-				accumulator.rejectedWithWarnings(
-					configImportEntitySSHKeys, keyIndex, name,
-					importedSSHKeyReferenceWarningCodes(reference, referenceCode, legacyCode)...,
-				)
-				continue
-			}
-			if reference.present && len(reference.names) > 0 {
-				ids, ok := resolveImportedNodeNameScope(reference.names, inventory, duplicateNodeNames)
-				if !ok {
-					keyCandidate.rejected = true
-					accumulator.rejectedWithWarnings(configImportEntitySSHKeys, keyIndex, name, configImportWarningUnresolvedNodeScope)
-					continue
-				}
-				keyCandidate.legacyScope.allowedNodeIDs = &ids
-				keyCandidate.nameScopeResolved = true
-			} else if reference.present && reference.explicitEmpty {
-				empty := ""
-				keyCandidate.legacyScope.allowedNodeIDs = &empty
-			}
-
-			if err := applyImportedSSHKeyCandidate(tx, inventory, keyCandidate, accumulator); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if referenceCode == "" && reference.present && len(reference.names) > 0 {
-			ids, ok := resolveImportedNodeNameScope(reference.names, inventory, duplicateNodeNames)
-			if ok {
-				keyCandidate.legacyScope.allowedNodeIDs = &ids
-				keyCandidate.nameScopeResolved = true
-			} else {
-				keyCandidate.referenceCode = configImportWarningUnresolvedNodeScope
-			}
-		}
-		if reference.present && reference.explicitEmpty && referenceCode == "" {
-			empty := ""
-			keyCandidate.legacyScope.allowedNodeIDs = &empty
-		}
-		if err := createImportedSSHKey(tx, inventory, keyCandidate, accumulator); err != nil {
-			return err
-		}
-	}
-
-	for _, candidate := range nodeCandidates {
-		if candidate == nil || candidate.rejected {
-			continue
-		}
-		if candidate.skipped {
-			_, resolved := resolveImportedNodeKeyReference(
-				candidate.reference, candidate.referenceCode,
-				inventory, duplicateKeyNames,
-			)
-			addImportedNodeReferenceWarnings(
-				accumulator, candidate.index, candidate.name, candidate.source,
-				candidate.reference, candidate.referenceCode, resolved,
-			)
-			continue
-		}
-		resolvedKey, resolved := resolveImportedNodeKeyReference(
-			candidate.reference, candidate.referenceCode,
-			inventory, duplicateKeyNames,
-		)
-		if candidate.existing && !resolved && nodeReferenceRequiresExistingResolution(candidate.reference, candidate.referenceCode) {
-			codes := importedNodeReferenceWarningCodes(candidate.reference, candidate.referenceCode, candidate.source, false)
-			candidate.rejected = true
-			accumulator.rejectedWithWarnings(configImportEntityNodes, candidate.index, candidate.name, codes...)
-			continue
-		}
-		if resolved {
-			candidate.row.SSHKeyID = &resolvedKey.ID
-		} else if candidate.reference.present && candidate.reference.explicitEmpty {
-			candidate.row.SSHKeyID = nil
-		}
-		if candidate.existing {
-			if err := tx.Save(&candidate.row).Error; err != nil {
-				return fmt.Errorf("保存导入节点失败: %w", err)
-			}
-			inventory.replaceNode(candidate.row)
-			accumulator.updated(configImportEntityNodes)
-		} else if resolved {
-			if err := tx.Model(&model.Node{}).Where("id = ?", candidate.row.ID).
-				Update("ssh_key_id", resolvedKey.ID).Error; err != nil {
-				return fmt.Errorf("回填导入节点 SSH 密钥失败: %w", err)
-			}
-			inventory.replaceNode(candidate.row)
-		}
-		addImportedNodeCredentialWarnings(accumulator, candidate.index, candidate.name, candidate.source, candidate.row)
-		if !resolved && !candidate.existing {
-			addImportedNodeReferenceWarnings(accumulator, candidate.index, candidate.name, candidate.source, candidate.reference, candidate.referenceCode, false)
-		}
-	}
-	return nil
-}
 func applyImportedNodeFields(target *model.Node, data map[string]interface{}) {
 	if target == nil {
 		return
@@ -891,51 +957,32 @@ func applyImportedSSHKeyCandidate(
 	if candidate == nil {
 		return nil
 	}
-	existing := candidate.row
-	sourcePrivateKey, sourcePrivateKeyProvided := candidate.source["private_key"].(string)
-	if (!sourcePrivateKeyProvided || strings.TrimSpace(sourcePrivateKey) == "") &&
-		strings.TrimSpace(existing.PrivateKey) != "" {
-		decrypted, err := secure.DecryptIfNeeded(existing.PrivateKey)
+	supplied, suppliedInvalid := importedConfigSecretString(candidate.source, "private_key")
+	if suppliedInvalid {
+		accumulator.rejectedWithWarnings(configImportEntitySSHKeys, candidate.index, candidate.name, configImportWarningInvalidPrivateKey)
+		candidate.rejected = true
+		candidate.action = configImportActionReject
+		return nil
+	}
+	if supplied == "" && strings.TrimSpace(candidate.row.PrivateKey) != "" {
+		decrypted, err := secure.DecryptIfNeeded(candidate.row.PrivateKey)
 		if err != nil {
 			accumulator.rejectedWithWarnings(configImportEntitySSHKeys, candidate.index, candidate.name, configImportWarningInvalidPrivateKey)
 			candidate.rejected = true
+			candidate.action = configImportActionReject
 			return nil
 		}
-		existing.PrivateKey = decrypted
+		candidate.row.PrivateKey = decrypted
 	}
-	selectedType, err := importedSSHKeySelectedType(candidate.source, existing.KeyType)
-	if err != nil {
-		accumulator.rejectedWithWarnings(configImportEntitySSHKeys, candidate.index, candidate.name, configImportWarningInvalidInput)
-		candidate.rejected = true
-		return nil
-	}
-	preparedKey, storedType, err := prepareImportedSSHKeyPrivateKey(candidate.source, &existing, selectedType)
-	if err != nil {
+	pending, err := prepareConfigImportSSHKeyCandidateRow(candidate, supplied == "" && strings.TrimSpace(candidate.row.PrivateKey) != "", true)
+	if err != nil || pending {
 		accumulator.rejectedWithWarnings(configImportEntitySSHKeys, candidate.index, candidate.name, configImportWarningInvalidPrivateKey)
 		candidate.rejected = true
+		candidate.action = configImportActionReject
 		return nil
 	}
-	candidate.row = existing
-	if username, ok := candidate.source["username"].(string); ok {
-		candidate.row.Username = strings.TrimSpace(username)
-	}
-	candidate.row.KeyType = storedType
-	candidate.row.PrivateKey = preparedKey
-	if strings.TrimSpace(preparedKey) == "" {
-		candidate.row.PrivateKey = ""
-		candidate.row.Fingerprint = ""
-		candidate.row.Disabled = true
-		accumulator.warning(configImportEntitySSHKeys, candidate.index, candidate.name, configImportWarningMissingPrivateKey)
-	} else {
-		candidate.row.Fingerprint = generateFingerprint(preparedKey)
-	}
-	applyImportedSSHKeyScopeCandidate(&candidate.row, candidate.legacyScope)
-	if candidate.reference.present && existing.Disabled {
-		candidate.row.Disabled = true
-	}
 	if strings.TrimSpace(candidate.row.PrivateKey) == "" {
-		candidate.row.Fingerprint = ""
-		candidate.row.Disabled = true
+		accumulator.warning(configImportEntitySSHKeys, candidate.index, candidate.name, configImportWarningMissingPrivateKey)
 	}
 	if err := tx.Save(&candidate.row).Error; err != nil {
 		return fmt.Errorf("保存导入 SSH 密钥失败: %w", err)
@@ -947,56 +994,31 @@ func applyImportedSSHKeyCandidate(
 
 func createImportedSSHKey(
 	tx *gorm.DB,
-	inventory *configImportCredentialInventory,
 	candidate *configImportSSHKeyCandidate,
 	accumulator *configImportAccumulator,
 ) error {
 	if candidate == nil {
 		return nil
 	}
-	selectedType, err := importedSSHKeySelectedType(candidate.source, "")
-	if err != nil {
-		accumulator.rejectedWithWarnings(configImportEntitySSHKeys, candidate.index, candidate.name, configImportWarningInvalidInput)
-		candidate.rejected = true
-		return nil
-	}
-	preparedKey, storedType, err := prepareImportedSSHKeyPrivateKey(candidate.source, nil, selectedType)
-	if err != nil {
+	candidate.existing = false
+	pending, err := prepareConfigImportSSHKeyCandidateRow(candidate, false, true)
+	if err != nil || pending {
 		accumulator.rejectedWithWarnings(configImportEntitySSHKeys, candidate.index, candidate.name, configImportWarningInvalidPrivateKey)
 		candidate.rejected = true
+		candidate.action = configImportActionReject
 		return nil
 	}
-	candidate.row = model.SSHKey{Name: candidate.name, KeyType: storedType}
-	if username, ok := candidate.source["username"].(string); ok {
-		candidate.row.Username = strings.TrimSpace(username)
-	}
-	candidate.row.PrivateKey = preparedKey
-	if strings.TrimSpace(preparedKey) != "" {
-		candidate.row.Fingerprint = generateFingerprint(preparedKey)
-	} else {
-		candidate.row.Fingerprint = ""
-		candidate.row.Disabled = true
+	if strings.TrimSpace(candidate.row.PrivateKey) == "" {
 		accumulator.warning(configImportEntitySSHKeys, candidate.index, candidate.name, configImportWarningMissingPrivateKey)
 	}
-	applyImportedSSHKeyScopeCandidate(&candidate.row, candidate.legacyScope)
-	if candidate.referenceCode != "" || candidate.legacyCode != "" {
-		for _, code := range importedSSHKeyReferenceWarningCodes(candidate.reference, candidate.referenceCode, candidate.legacyCode) {
-			accumulator.warning(configImportEntitySSHKeys, candidate.index, candidate.name, code)
-		}
-		candidate.row.Disabled = true
-		if !candidate.nameScopeResolved {
-			candidate.row.AllowedNodeIDs = ""
-		}
-	}
-	if strings.TrimSpace(candidate.row.PrivateKey) == "" {
-		candidate.row.Fingerprint = ""
-		candidate.row.Disabled = true
-	}
+	// Candidate IDs are only valid inside the in-memory decision.  Never pass
+	// one through to the database: the real identity is assigned by INSERT and
+	// is mapped back by persistConfigImportSSHKeys.
+	candidate.row.ID = 0
 	if err := tx.Create(&candidate.row).Error; err != nil {
 		return fmt.Errorf("创建导入 SSH 密钥失败: %w", err)
 	}
 	accumulator.recordCreatedID(configImportEntitySSHKeys, candidate.row.ID)
-	inventory.replaceKey(candidate.row)
 	accumulator.created(configImportEntitySSHKeys, candidate.row.Disabled)
 	return nil
 }

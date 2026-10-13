@@ -297,6 +297,50 @@ nodes→ssh_keys、ID 升序锁实际行，SQLite 先取得写保留。缺失目
 A→B→A 清除草稿，迟到结果不再请求、下载或 toast；abort 不能替代身份检查。
 已提交但结果未知时只引导核对事实，不自动重试提交。
 
+### 轻量只读导入预览
+
+`POST /api/v1/config/import/preview?conflict=skip|overwrite` 仅允许当前 admin，
+默认 skip；预览不要求 TOTP、step-up 或临时凭据 grant。该路由使用独立的认证、
+限流与请求大小中间件组，不经过写审计的 secured 组，也不另写预览审计。
+真实导入的授权、两类审计、事务锁、运行时转换和失败补偿不变；旧客户端仍可直接导入。
+
+预览完整读取最多 10 MiB（含 JSON 后空白），过限和非法输入返回安全 400；
+处理绑定请求取消和 10 秒 deadline，读取失败、取消或超时不返回半份统计。
+SQLite 使用同一连接上的 deferred 读事务，PostgreSQL 使用
+`REPEATABLE READ READ ONLY`；整条预览链不得写表、伪写取锁或改配置/凭据文件。
+预览与导入共享输入归一化、候选判断和完整依赖图规则，不以事务回滚模拟预览。
+
+响应的 `basis=current_snapshot` 表明只是当前快照：`entities` 按
+`nodes/ssh_keys/policies/tasks/system_settings` 固定顺序列出输入数及预计
+`created/updated/skipped/rejected/pending_validation/disabled_imported`。
+待提交校验的条目不重复计入确定成功或拒绝；`pending_checks` 只使用
+`retained_secret/allocated_identity/pending_reference`。待校验项、警告、秘密提示
+各最多 100 条，分别报告截断数量；警告沿用既有安全码和名称边界。
+结构、非法设置或目标归属冲突仍整体阻断；合法文件中的逐项拒绝不阻止其他有效项提交。
+重复任务覆盖仍仅以最终有效候选写入；预览按输入条目标记被后项取代的条目为跳过，
+实际结果保留既有有效写入摘要，不把预览计数当实际写入承诺。
+
+快照不加载库内秘密值，不触发模型解密 hooks；覆盖密钥但未提供新私钥时，
+不从 presence 推断旧私钥有效，而是标为 `retained_secret`，仅在受保护的真实导入
+事务内校验。默认目标路径需要新节点或策略 ID 时标为 `allocated_identity`，
+不得用临时 ID 生成或验证路径；独立可判断的输入错误仍立即拒绝。依赖待校验候选的
+条目传播 `pending_reference`，实际导入获得真实 ID 后、任何任务写入前重新完成校验。
+
+`system_settings.will_write` 表示合法设置非空，`updated` 仅表示会执行覆盖写入，
+不声称值必定变化；skip 模式仍写设置。不返回设置值或前后 diff。
+`secrets` 只描述本次输入节点的 password/private_key 和密钥的 private_key 是否非空，
+动作为 `supplied/preserved/missing/skipped/rejected`；presence 不代表目标凭据可用，
+不返回库内秘密、摘要或指纹。资产图固定列出四类真实输入数：v2 非空为 `unknown`，
+空为 `not_present`；v1 附加资产内容为 `unsupported`，不会按 v2 处理。
+v2 holds 和非法图仍按原规则拒绝，不预测资产本地身份冲突或伪报零写入。
+
+界面先显示预览，再由用户明确确认并进入 fresh step-up/grant；确认绑定本次
+File、冲突模式、请求尝试和身份代次，切换模式必须重新预览。提交重新解析同一 File，
+只发送一次真实导入，不提交预览 DTO，不自动重试或缓存秘密到浏览器存储。
+`requires_apply_validation` 始终为 true：并发变更、资产冲突、运行时和实际写入均以
+提交时检查及真实结果为准。轻量预览没有持久计划、签名、TTL 或基线冲突协议，
+不承诺精确执行此前确认的快照；不得将预计结果或“无秘密”导出称为可安全完整恢复。
+
 ## SSH 主机密钥信任
 
 `SSH_STRICT_HOST_KEY_CHECKING` 只由环境变量控制（默认 true）。首次连接是否自动接受未知主机密钥由动态设置 `ssh.auto_accept_new_hosts` 决定，优先级 DB > `SSH_AUTO_ACCEPT_NEW_HOSTS` > 默认 false，保存后无需重启即生效；`sshutil.ResolveSSHHostKeyCallback` 的 Go SSH 回调、rsync/受管 Rsync executor 与安全风险卡片 `ssh_host_key_trust_posture` 统一经 `sshutil.AutoAcceptNewHosts()`（服务启动时安装 settings 取值源）读取。Fleet Doctor 是只读诊断，自带严格 known_hosts 回调，从不自动接受或写入 known_hosts。非法值按拒绝处理；受管 Rsync 仍在非法值时失败。已知主机的密钥变化（含改用未记录的算法）无论设置如何都拒绝。

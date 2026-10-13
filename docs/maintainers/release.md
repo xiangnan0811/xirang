@@ -122,6 +122,14 @@ Release 须同步保留，不以剩余数量查询或本地验收替代重新生
 该批完整行为与升级说明归档于 CHANGELOG `0.64.0` 版本节，Release PR 与最终 GitHub
 Release 正文须保留全部七项边界，不以自动生成的功能标题替代迁移、排空与降级警告。
 
+轻量配置导入预览的发行说明须保留“当前快照预计值、非执行计划”、秘密 presence 与
+有效凭据状态分离、pending 不计确定成功、skip 仍写设置及资产未预测的边界。
+新版 Core 与页面同版本切换，升级前保全数据库、适用密钥与配置，完成或退出旧导入
+交互并排空旧 Core 在途导入及设置运行时转换；关闭页面不撤销已提交写入。
+本次无新增 schema migration，回退移除预览与对应界面保护但不撤销已导入配置，
+既有迁移降级保护和配套恢复要求仍适用。Release PR 与最终 Release 正文须完整保留
+CHANGELOG 中这批七项行为与升级说明，不将 R-15 第一阶段写成完整计划绑定或生产部署。
+
 
 All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录
 `CRON_DB_BACKUP_STATE_DIR=/backup/.cron-db-state`，共用 26 小时默认窗口。发行验收须验证

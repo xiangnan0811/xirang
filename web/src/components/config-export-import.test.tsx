@@ -1,11 +1,13 @@
 import type { ReactElement } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
+import { ConfigImportPreviewError } from "@/lib/api/config-api";
 import { ApiError, beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier, rememberAuthIdentity } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import type { ConfigImportConflict, ConfigImportPreview } from "@/types/domain";
 import { ConfigExportImport } from "./config-export-import";
 
 const {
@@ -13,6 +15,7 @@ const {
   requestConfigImportCredentialGrantMock,
   requestConfigExportCredentialGrantMock,
   importConfigMock,
+  previewConfigMock,
   exportConfigMock,
   toastSuccessMock,
   toastErrorMock,
@@ -23,6 +26,7 @@ const {
   requestConfigImportCredentialGrantMock: vi.fn(),
   requestConfigExportCredentialGrantMock: vi.fn(),
   importConfigMock: vi.fn(),
+  previewConfigMock: vi.fn(),
   exportConfigMock: vi.fn(),
   toastSuccessMock: vi.fn(),
   toastErrorMock: vi.fn(),
@@ -49,6 +53,7 @@ vi.mock("@/lib/api/client", () => ({
   apiClient: {
     exportConfig: exportConfigMock,
     importConfig: importConfigMock,
+    previewConfig: previewConfigMock,
     requestConfigImportCredentialGrant: requestConfigImportCredentialGrantMock,
     requestConfigExportCredentialGrant: requestConfigExportCredentialGrantMock,
   },
@@ -60,14 +65,6 @@ vi.mock("sonner", () => ({
     error: toastErrorMock,
     warning: toastWarningMock,
   },
-}));
-
-const confirmMock = vi.fn().mockResolvedValue(true);
-vi.mock("@/hooks/use-confirm", () => ({
-  useConfirm: () => ({
-    confirm: confirmMock,
-    dialog: null,
-  }),
 }));
 
 function panel() {
@@ -86,6 +83,43 @@ function deferred<T>() {
     reject = fail;
   });
   return { promise, resolve, reject };
+}
+
+function previewDto(conflict: ConfigImportConflict = "skip"): ConfigImportPreview {
+  const counts = {
+    input: 0,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    rejected: 0,
+    pendingValidation: 0,
+    disabledImported: 0,
+  };
+  return {
+    conflict,
+    basis: "current_snapshot",
+    entities: [
+      { entity: "nodes", ...counts },
+      { entity: "ssh_keys", ...counts },
+      { entity: "policies", ...counts },
+      { entity: "tasks", ...counts },
+      { entity: "system_settings", ...counts },
+    ],
+    warnings: [],
+    pendingChecks: [],
+    pendingChecksTruncated: 0,
+    warningsTruncated: 0,
+    systemSettings: { willWrite: false, created: 0, updated: 0, appliesInSkip: false },
+    secrets: [],
+    secretsTruncated: 0,
+    assetGraph: [
+      { entity: "backup_repositories", input: 0, status: "not_present" },
+      { entity: "task_repository_links", input: 0, status: "not_present" },
+      { entity: "backup_retention_policies", input: 0, status: "not_present" },
+      { entity: "recovery_point_holds", input: 0, status: "not_present" },
+    ],
+    requiresApplyValidation: true,
+  };
 }
 
 function createImportFile(data: Record<string, unknown>): File {
@@ -117,8 +151,22 @@ function switchAwayAndBack(rerender: (ui: ReactElement) => void) {
   rerender(panel());
 }
 
+async function continuePreview(user: UserEvent) {
+  expect(await screen.findByRole("dialog", { name: "导入预览" })).toBeInTheDocument();
+  const continueButton = screen.getByRole("button", { name: "确认并继续验证" });
+  await waitFor(() => expect(continueButton).toBeEnabled());
+  await user.click(continueButton);
+}
+
+function installPreviewMock() {
+  previewConfigMock.mockImplementation((_token: string, _data: Record<string, unknown>, conflict: ConfigImportConflict = "skip") =>
+    Promise.resolve(previewDto(conflict)),
+  );
+}
+
 async function submitImport(user: UserEvent, file: File) {
   fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [file] } });
+  await continuePreview(user);
   await user.type(await screen.findByLabelText("授权原因"), "例行恢复");
   fireEvent.click(screen.getByRole("button", { name: "申请授权并导入" }));
 }
@@ -148,7 +196,7 @@ describe("ConfigExportImport", () => {
       value: vi.fn(),
     });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
-    confirmMock.mockResolvedValue(true);
+    installPreviewMock();
   });
 
   it("opens a grant dialog, requests step-up and grant, then imports without storing grant material", async () => {
@@ -157,8 +205,15 @@ describe("ConfigExportImport", () => {
 
     const file = createImportFile({ ssh_keys: [{ name: "safe-entry" }] });
     fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [file] } });
+    await continuePreview(user);
 
     expect(await screen.findByRole("dialog", { name: "需要配置导入临时授权" })).toBeInTheDocument();
+    expect(previewConfigMock).toHaveBeenCalledWith(
+      "auth-marker",
+      { ssh_keys: [{ name: "safe-entry" }] },
+      "skip",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     await user.type(screen.getByLabelText("授权原因"), "例行恢复");
     await user.click(screen.getByRole("button", { name: "申请授权并导入" }));
 
@@ -263,6 +318,7 @@ describe("ConfigExportImport", () => {
 
     const file = createImportFile({ ssh_keys: [] });
     fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [file] } });
+    await continuePreview(user);
     await user.type(await screen.findByLabelText("授权原因"), "例行恢复");
     await user.click(screen.getByRole("button", { name: "申请授权并导入" }));
 
@@ -279,6 +335,7 @@ describe("ConfigExportImport", () => {
 
     const file = createImportFile({ ssh_keys: [] });
     fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [file] } });
+    await continuePreview(user);
     await user.click(await screen.findByRole("button", { name: "申请授权并导入" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("请填写授权原因。");
@@ -287,7 +344,6 @@ describe("ConfigExportImport", () => {
   });
 
   it("does not request step-up or grant when the selected import file is invalid", async () => {
-    const user = userEvent.setup();
     const invalidFile = new File(["[]"], "xirang-config.json", { type: "application/json" });
     Object.defineProperty(invalidFile, "text", {
       configurable: true,
@@ -296,29 +352,32 @@ describe("ConfigExportImport", () => {
     render(panel());
 
     fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [invalidFile] } });
-    await user.type(await screen.findByLabelText("授权原因"), "例行恢复");
-    await user.click(screen.getByRole("button", { name: "申请授权并导入" }));
 
+    expect(await screen.findByRole("dialog", { name: "导入预览" })).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toHaveTextContent("导入文件必须是 JSON 对象");
+    expect(screen.getByRole("button", { name: "确认并继续验证" })).toBeDisabled();
     expect(ensureStepUpProofMock).not.toHaveBeenCalled();
     expect(requestConfigImportCredentialGrantMock).not.toHaveBeenCalled();
+    expect(previewConfigMock).not.toHaveBeenCalled();
     expect(importConfigMock).not.toHaveBeenCalled();
   });
 
-  it("does not parse or retain the import payload until grant submission", async () => {
+  it("previews the selected file immediately and imports only the file confirmed afterward", async () => {
     const user = userEvent.setup();
     render(panel());
 
     const file = createImportFile({ ssh_keys: [{ name: "temporary-entry" }] });
     fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [file] } });
 
-    expect(await screen.findByRole("dialog", { name: "需要配置导入临时授权" })).toBeInTheDocument();
-    expect(file.text).not.toHaveBeenCalled();
+    expect(await screen.findByRole("dialog", { name: "导入预览" })).toBeInTheDocument();
+    await waitFor(() => expect(file.text).toHaveBeenCalledTimes(1));
+    expect(document.body).not.toHaveTextContent("temporary-entry");
     await user.click(screen.getByRole("button", { name: "取消" }));
 
-    expect(screen.queryByRole("dialog", { name: "需要配置导入临时授权" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "导入预览" })).not.toBeInTheDocument();
     const nextFile = createImportFile({ ssh_keys: [] });
     fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [nextFile] } });
+    await continuePreview(user);
     await user.type(await screen.findByLabelText("授权原因"), "例行恢复");
     await user.click(screen.getByRole("button", { name: "申请授权并导入" }));
 
@@ -329,7 +388,11 @@ describe("ConfigExportImport", () => {
       "step-up-marker",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     ));
-    expect(nextFile.text).toHaveBeenCalledTimes(2);
+    expect(nextFile.text).toHaveBeenCalledTimes(3);
+    expect(importConfigMock).toHaveBeenCalledTimes(1);
+    const stored = JSON.stringify({ ...localStorage, ...sessionStorage });
+    expect(stored).not.toContain("temporary-entry");
+    expect(stored).not.toContain("ssh_keys");
   });
 
   it("keeps ordinary config export available when two-factor authentication is disabled", async () => {
@@ -350,18 +413,31 @@ describe("ConfigExportImport", () => {
     expect(requestConfigExportCredentialGrantMock).not.toHaveBeenCalled();
   });
 
-  it("does not import or request proof when two-factor authentication is disabled", async () => {
+  it("previews without two-factor authentication and does not import or request proof", async () => {
     authState.totpEnabled = false;
+    const file = createImportFile({ ssh_keys: [{ name: "preview-only" }] });
     render(panel());
-    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ ssh_keys: [] })] } });
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [file] } });
 
-    expect(confirmMock).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog", { name: "导入预览" });
+    await waitFor(() => expect(previewConfigMock).toHaveBeenCalledWith(
+      "auth-marker",
+      { ssh_keys: [{ name: "preview-only" }] },
+      "skip",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
+    await waitFor(() => expect(dialog).toHaveTextContent("此预览不会锁定配置。最终以完成的导入结果为准；配置若发生变化，结果可能不同。"));
+    expect(dialog).toHaveTextContent("需先启用两步验证。实际执行仍需二次验证及适用的授权原因。");
+    expect(within(dialog).getByRole("link", { name: "启用两步验证" })).toHaveAttribute("href", "/app/settings?tab=account");
+    const continueButton = within(dialog).getByRole("button", { name: "确认并继续验证" });
+    expect(continueButton).toBeDisabled();
+    fireEvent.click(continueButton);
+    expect(screen.getByRole("dialog", { name: "导入预览" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "需要配置导入临时授权" })).not.toBeInTheDocument();
+    expect(file.text).toHaveBeenCalledTimes(1);
     expect(ensureStepUpProofMock).not.toHaveBeenCalled();
+    expect(requestConfigImportCredentialGrantMock).not.toHaveBeenCalled();
     expect(importConfigMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("link", { name: /stepUp.enableTOTP|启用两步验证|Enable two-factor/ })).toHaveAttribute(
-      "href",
-      "/app/settings?tab=account",
-    );
   });
 
   afterEach(() => {
@@ -389,11 +465,11 @@ describe("ConfigExportImport", () => {
     expect(text).not.toContain("也不是完整恢复包");
 
     fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ ssh_keys: [] })] } });
-    expect(confirmMock).toHaveBeenCalledWith({
-      title: "确定导入配置吗？同名实体将跳过，系统设置仍会更新。导入的节点密码和内嵌私钥不会替换已有节点凭据。",
-      description: "此操作不可撤销。",
-    });
-    await user.click(await screen.findByRole("button", { name: "取消" }));
+    expect(await screen.findByRole("dialog", { name: "导入预览" })).toBeInTheDocument();
+    expect(screen.getByLabelText("名称已存在时")).toHaveValue("skip");
+    expect(screen.getByText("同名实体会被跳过，系统设置仍会写入。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog", { name: "导入预览" })).not.toBeInTheDocument();
   });
 });
 
@@ -410,7 +486,7 @@ describe("config import outcomes", () => {
     rememberAuthIdentity("auth-marker", "admin");
     ensureStepUpProofMock.mockResolvedValue("step-up-marker");
     requestConfigImportCredentialGrantMock.mockResolvedValue({ id: 7, status: "active" });
-    confirmMock.mockResolvedValue(true);
+    installPreviewMock();
   });
 
   afterEach(() => {
@@ -682,7 +758,7 @@ describe("stale config operation boundaries", () => {
     });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
-    confirmMock.mockResolvedValue(true);
+    installPreviewMock();
   });
 
   afterEach(() => {
@@ -690,36 +766,50 @@ describe("stale config operation boundaries", () => {
     rememberAuthIdentity(null, null);
   });
 
-  it("does not open a grant or step-up challenge after confirm resolves for a replaced admin session", async () => {
-    const decision = deferred<boolean>();
-    confirmMock.mockReturnValueOnce(decision.promise);
+  it("does not open a grant or step-up challenge after preview resolves for a replaced admin session", async () => {
+    const pending = deferred<ConfigImportPreview>();
+    previewConfigMock.mockReturnValueOnce(pending.promise);
     const view = render(panel());
     fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ ssh_keys: [] })] } });
-    expect(confirmMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(previewConfigMock).toHaveBeenCalledTimes(1));
     switchAwayAndBack(view.rerender);
     await act(async () => {
-      decision.resolve(true);
+      pending.resolve(previewDto());
     });
     expect(screen.queryByRole("dialog", { name: "需要配置导入临时授权" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "导入预览" })).not.toBeInTheDocument();
     expect(ensureStepUpProofMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastWarningMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   it("does not request step-up after the import file is read for a replaced session", async () => {
     const user = userEvent.setup();
     const body = deferred<string>();
+    let reads = 0;
     const file = new File(["{}"], "xirang-config.json", { type: "application/json" });
-    Object.defineProperty(file, "text", { configurable: true, value: vi.fn(() => body.promise) });
+    Object.defineProperty(file, "text", {
+      configurable: true,
+      value: vi.fn(() => {
+        reads += 1;
+        if (reads === 1) return Promise.resolve(JSON.stringify({ ssh_keys: [] }));
+        return body.promise;
+      }),
+    });
     const view = render(panel());
     fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [file] } });
+    await continuePreview(user);
     await user.type(await screen.findByLabelText("授权原因"), "例行恢复");
     fireEvent.click(screen.getByRole("button", { name: "申请授权并导入" }));
-    await waitFor(() => expect(file.text).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(file.text).toHaveBeenCalledTimes(2));
     switchAwayAndBack(view.rerender);
     await act(async () => {
       body.resolve(JSON.stringify({ ssh_keys: [] }));
     });
     expect(ensureStepUpProofMock).not.toHaveBeenCalled();
     expect(requestConfigImportCredentialGrantMock).not.toHaveBeenCalled();
+    expect(importConfigMock).not.toHaveBeenCalled();
   });
 
   it("does not continue an import or open another challenge when step-up resolves after A-B-A", async () => {
@@ -823,5 +913,305 @@ describe("stale config operation boundaries", () => {
     expect(exportConfigMock).not.toHaveBeenCalled();
     expect(ensureStepUpProofMock).toHaveBeenCalledTimes(1);
     expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+});
+
+describe("config import preview", () => {
+  beforeEach(() => {
+    clearAuthTransitionBarrier();
+    vi.clearAllMocks();
+    localStorage.clear();
+    sessionStorage.clear();
+    authState.token = "auth-marker";
+    authState.role = "admin";
+    authState.totpEnabled = true;
+    authState.authTransitioning = false;
+    rememberAuthIdentity("auth-marker", "admin");
+    ensureStepUpProofMock.mockResolvedValue("step-up-marker");
+    requestConfigImportCredentialGrantMock.mockResolvedValue({ id: 7, status: "active" });
+    importConfigMock.mockResolvedValue({ imported: 1, skipped: 0 });
+    installPreviewMock();
+  });
+
+  afterEach(() => {
+    clearAuthTransitionBarrier();
+    rememberAuthIdentity(null, null);
+  });
+
+  it("shows every entity count, separate pending checks, settings, secrets, and asset limits", async () => {
+    const preview = previewDto("skip");
+    preview.entities = [
+      { entity: "nodes", input: 2, created: 1, updated: 1, skipped: 0, rejected: 1, pendingValidation: 1, disabledImported: 0 },
+      { entity: "ssh_keys", input: 1, created: 0, updated: 0, skipped: 1, rejected: 0, pendingValidation: 0, disabledImported: 1 },
+      { entity: "policies", input: 0, created: 0, updated: 0, skipped: 0, rejected: 0, pendingValidation: 0, disabledImported: 0 },
+      { entity: "tasks", input: 0, created: 0, updated: 0, skipped: 0, rejected: 0, pendingValidation: 0, disabledImported: 0 },
+      { entity: "system_settings", input: 1, created: 1, updated: 1, skipped: 0, rejected: 0, pendingValidation: 0, disabledImported: 0 },
+    ];
+    preview.systemSettings = { willWrite: true, created: 1, updated: 1, appliesInSkip: true };
+    preview.warnings = [{ entity: "nodes", index: 0, name: "edge-node", code: "duplicate_name" }];
+    preview.warningsTruncated = 2;
+    preview.pendingChecks = [{ entity: "nodes", index: 1, code: "retained_secret" }];
+    preview.pendingChecksTruncated = 4;
+    preview.secrets = [{ entity: "nodes", index: 1, field: "password", present: true, action: "preserved" }];
+    preview.secretsTruncated = 3;
+    preview.assetGraph = [
+      { entity: "backup_repositories", input: 2, status: "unknown" },
+      { entity: "task_repository_links", input: 0, status: "not_present" },
+      { entity: "backup_retention_policies", input: 1, status: "unsupported" },
+      { entity: "recovery_point_holds", input: 0, status: "not_present" },
+    ];
+    previewConfigMock.mockResolvedValueOnce(preview);
+    render(panel());
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ nodes: [] })] } });
+
+    expect(await screen.findByRole("dialog", { name: "导入预览" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认并继续验证" })).toBeEnabled());
+    const dialog = screen.getByRole("dialog", { name: "导入预览" });
+    expect(dialog).toHaveTextContent("节点");
+    expect(dialog).toHaveTextContent("SSH 密钥");
+    expect(dialog).toHaveTextContent("策略");
+    expect(dialog).toHaveTextContent("任务");
+    expect(dialog).toHaveTextContent("系统设置");
+    expect(dialog).toHaveTextContent("提交时校验");
+    expect(dialog).toHaveTextContent("文件中的系统设置会被写入，跳过已有实体时也一样。写入不表示每个值都会变化。");
+    expect(dialog).toHaveTextContent("将新建的设置：1。将写入的设置：1。");
+    expect(dialog).toHaveTextContent("即使跳过同名实体，系统设置仍会写入。");
+    expect(dialog).toHaveTextContent("edge-node");
+    expect(dialog).toHaveTextContent("文件内名称重复，该项已拒绝。");
+    expect(dialog).toHaveTextContent("另有 2 条警告未显示。");
+    expect(dialog).toHaveTextContent("已有秘密只在导入执行时检查。");
+    expect(dialog).toHaveTextContent("另有 4 项检查未显示。");
+    expect(dialog).toHaveTextContent("密码");
+    expect(dialog).toHaveTextContent("保留已有值");
+    expect(dialog).toHaveTextContent("另有 3 个秘密字段未显示。");
+    expect(dialog).toHaveTextContent("备份仓库");
+    expect(dialog).toHaveTextContent("未预测");
+    expect(dialog).toHaveTextContent("此预览不预测备份资产的本地身份冲突、绑定或写入计数。");
+    expect(dialog).toHaveTextContent("备份保留策略");
+    expect(dialog).toHaveTextContent("此文件版本不导入");
+    expect(dialog).toHaveTextContent("任务仓库关联");
+    expect(dialog).toHaveTextContent("文件中没有");
+    expect(dialog).toHaveTextContent("此预览不会锁定配置。最终以完成的导入结果为准；配置若发生变化，结果可能不同。");
+    expect(dialog).toHaveTextContent("计数是当前快照上的预计值。");
+    expect(dialog).not.toHaveTextContent("duplicate_name");
+    expect(dialog).not.toHaveTextContent("retained_secret");
+    const [preserved] = within(within(dialog).getByRole("list", { name: "此文件中的秘密字段" })).getAllByRole("listitem");
+    expect(preserved).toHaveTextContent("输入是否提供: 已提供");
+    expect(preserved).toHaveTextContent("凭据结果: 保留已有值");
+    expect(preserved).not.toHaveTextContent("未提供");
+    expect(preserved).not.toHaveTextContent("有效凭据缺失");
+    expect(preserved).not.toHaveTextContent("文件中没有");
+  });
+
+  it("separates provided input from preserved, missing, skipped, and rejected credential outcomes", async () => {
+    const preview = previewDto("skip");
+    preview.secrets = [
+      { entity: "nodes", index: 0, field: "password", present: true, action: "preserved" },
+      { entity: "nodes", index: 1, field: "private_key", present: true, action: "missing" },
+      { entity: "ssh_keys", index: 0, field: "private_key", present: true, action: "skipped" },
+      { entity: "nodes", index: 2, field: "password", present: true, action: "rejected" },
+      { entity: "ssh_keys", index: 1, field: "private_key", present: false, action: "missing" },
+    ];
+    previewConfigMock.mockResolvedValueOnce(preview);
+    render(panel());
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ nodes: [] })] } });
+
+    const dialog = await screen.findByRole("dialog", { name: "导入预览" });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "确认并继续验证" })).toBeEnabled());
+    const rows = within(within(dialog).getByRole("list", { name: "此文件中的秘密字段" })).getAllByRole("listitem");
+    expect(rows).toHaveLength(5);
+    expect(rows[0]).toHaveTextContent("密码");
+    expect(rows[0]).toHaveTextContent("输入是否提供: 已提供");
+    expect(rows[0]).toHaveTextContent("凭据结果: 保留已有值");
+    expect(rows[0]).not.toHaveTextContent("未提供");
+    expect(rows[0]).not.toHaveTextContent("文件中没有");
+    expect(rows[1]).toHaveTextContent("私钥");
+    expect(rows[1]).toHaveTextContent("输入是否提供: 已提供");
+    expect(rows[1]).toHaveTextContent("凭据结果: 有效凭据缺失");
+    expect(rows[1]).not.toHaveTextContent("未提供");
+    expect(rows[1]).not.toHaveTextContent("文件中没有");
+    expect(rows[1]).not.toHaveTextContent("此文件未提供");
+    expect(rows[2]).toHaveTextContent("输入是否提供: 已提供");
+    expect(rows[2]).toHaveTextContent("凭据结果: 随已有实体跳过");
+    expect(rows[2]).not.toHaveTextContent("有效凭据缺失");
+    expect(rows[3]).toHaveTextContent("输入是否提供: 已提供");
+    expect(rows[3]).toHaveTextContent("凭据结果: 随该项拒绝");
+    expect(rows[3]).not.toHaveTextContent("有效凭据缺失");
+    expect(rows[4]).toHaveTextContent("输入是否提供: 未提供");
+    expect(rows[4]).toHaveTextContent("凭据结果: 有效凭据缺失");
+    expect(rows[4]).not.toHaveTextContent("文件中没有");
+    expect(rows[4]).not.toHaveTextContent("已提供");
+  });
+
+  it("does not read or preview a file larger than 10 MiB", async () => {
+    const text = vi.fn();
+    const file = new File(["{}"], "too-big.json", { type: "application/json" });
+    Object.defineProperty(file, "size", { value: 10 * 1024 * 1024 + 1 });
+    Object.defineProperty(file, "text", { configurable: true, value: text });
+    render(panel());
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [file] } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("导入文件不能超过 10 MiB。");
+    expect(screen.getByRole("button", { name: "确认并继续验证" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "重新预览" })).not.toBeInTheDocument();
+    expect(text).not.toHaveBeenCalled();
+    expect(previewConfigMock).not.toHaveBeenCalled();
+    expect(importConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("never becomes ready when the preview response is unusable", async () => {
+    previewConfigMock.mockRejectedValueOnce(new ConfigImportPreviewError());
+    render(panel());
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ nodes: [] })] } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法显示预览响应。没有执行导入。");
+    expect(screen.getByRole("button", { name: "确认并继续验证" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "重新预览" })).toBeInTheDocument();
+    expect(screen.queryByText("此预览不会锁定配置。最终以完成的导入结果为准；配置若发生变化，结果可能不同。")).not.toBeInTheDocument();
+    expect(importConfigMock).not.toHaveBeenCalled();
+    expect(ensureStepUpProofMock).not.toHaveBeenCalled();
+  });
+
+  it("never becomes ready when the preview payload is malformed", async () => {
+    previewConfigMock.mockResolvedValueOnce({ conflict: "overwrite", basis: "stale", entities: [] });
+    render(panel());
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ nodes: [] })] } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法显示预览响应。没有执行导入。");
+    expect(screen.getByRole("button", { name: "确认并继续验证" })).toBeDisabled();
+    expect(screen.queryByText("计数是当前快照上的预计值。")).not.toBeInTheDocument();
+    expect(importConfigMock).not.toHaveBeenCalled();
+    expect(ensureStepUpProofMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a slow first file after a second file is selected", async () => {
+    const user = userEvent.setup();
+    const slow = deferred<string>();
+    const first = new File(["{}"], "first.json", { type: "application/json" });
+    Object.defineProperty(first, "text", { configurable: true, value: vi.fn(() => slow.promise) });
+    const second = createImportFile({ nodes: [{ name: "second-node" }] });
+    render(panel());
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [first] } });
+    await waitFor(() => expect(first.text).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [second] } });
+    await waitFor(() => expect(previewConfigMock).toHaveBeenCalledWith(
+      "auth-marker",
+      { nodes: [{ name: "second-node" }] },
+      "skip",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
+    const dialog = screen.getByRole("dialog", { name: "导入预览" });
+    expect(dialog).toHaveTextContent("xirang-config.json");
+    expect(dialog).not.toHaveTextContent("first.json");
+    await act(async () => {
+      slow.resolve(JSON.stringify({ nodes: [{ name: "first-node" }] }));
+    });
+    expect(previewConfigMock).toHaveBeenCalledTimes(1);
+    expect(dialog).not.toHaveTextContent("first.json");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(toastWarningMock).not.toHaveBeenCalled();
+    await continuePreview(user);
+    await user.type(await screen.findByLabelText("授权原因"), "例行恢复");
+    await user.click(screen.getByRole("button", { name: "申请授权并导入" }));
+    await waitFor(() => expect(importConfigMock).toHaveBeenCalledWith(
+      "auth-marker",
+      { nodes: [{ name: "second-node" }] },
+      "skip",
+      "step-up-marker",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
+  });
+
+  it("keeps a late skip preview from replacing the overwrite preview", async () => {
+    const user = userEvent.setup();
+    const skipPreview = deferred<ConfigImportPreview>();
+    previewConfigMock.mockImplementation((_token: string, _data: unknown, conflict: ConfigImportConflict = "skip") => {
+      if (conflict === "overwrite") return Promise.resolve(previewDto("overwrite"));
+      return skipPreview.promise;
+    });
+    render(panel());
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ nodes: [{ name: "edge" }] })] } });
+    await waitFor(() => expect(previewConfigMock).toHaveBeenCalledTimes(1));
+    await user.selectOptions(screen.getByLabelText("名称已存在时"), "overwrite");
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认并继续验证" })).toBeEnabled());
+    await act(async () => {
+      skipPreview.resolve(previewDto("skip"));
+    });
+    expect(screen.getByLabelText("名称已存在时")).toHaveValue("overwrite");
+    expect(previewConfigMock).toHaveBeenLastCalledWith(
+      "auth-marker",
+      { nodes: [{ name: "edge" }] },
+      "overwrite",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    await user.click(screen.getByRole("button", { name: "确认并继续验证" }));
+    await user.type(await screen.findByLabelText("授权原因"), "例行恢复");
+    await user.click(screen.getByRole("button", { name: "申请授权并导入" }));
+    await waitFor(() => expect(importConfigMock).toHaveBeenCalledWith(
+      "auth-marker",
+      { nodes: [{ name: "edge" }] },
+      "overwrite",
+      "step-up-marker",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
+    expect(importConfigMock).toHaveBeenCalledTimes(1);
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late preview after the dialog is closed", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<ConfigImportPreview>();
+    previewConfigMock.mockReturnValueOnce(pending.promise);
+    render(panel());
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ ssh_keys: [] })] } });
+    await waitFor(() => expect(previewConfigMock).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog", { name: "导入预览" })).not.toBeInTheDocument();
+    await act(async () => {
+      pending.resolve(previewDto());
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastWarningMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(ensureStepUpProofMock).not.toHaveBeenCalled();
+    expect(importConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("does not replace an unknown import result when a later preview succeeds", async () => {
+    const user = userEvent.setup();
+    importConfigMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    render(panel());
+    await submitImport(user, createImportFile({ ssh_keys: [] }));
+    await waitFor(() => expect(document.body).toHaveTextContent("导入结果未知"));
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ nodes: [{ name: "later" }] })] } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认并继续验证" })).toBeEnabled());
+    expect(document.body).toHaveTextContent("导入结果未知");
+    expect(document.body).toHaveTextContent("此预览不会锁定配置。最终以完成的导入结果为准；配置若发生变化，结果可能不同。");
+    expect(importConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replace the captured file or conflict while an import is in flight", async () => {
+    const pending = deferred<{ imported: number; skipped: number }>();
+    importConfigMock.mockReturnValueOnce(pending.promise);
+    const user = userEvent.setup();
+    render(panel());
+    await submitImport(user, createImportFile({ ssh_keys: [{ name: "kept" }] }));
+    await waitFor(() => expect(importConfigMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByLabelText("导入配置")).toBeDisabled();
+    expect(screen.queryByLabelText("名称已存在时")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("导入配置"), { target: { files: [createImportFile({ nodes: [{ name: "replacement" }] })] } });
+    expect(previewConfigMock).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      pending.resolve({ imported: 1, skipped: 0 });
+    });
+    expect(importConfigMock).toHaveBeenCalledTimes(1);
+    expect(importConfigMock).toHaveBeenCalledWith(
+      "auth-marker",
+      { ssh_keys: [{ name: "kept" }] },
+      "skip",
+      "step-up-marker",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 });

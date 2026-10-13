@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ConfigImportResultError, createConfigApi, mapConfigImportResult } from "./config-api";
+import {
+  ConfigImportPreviewError,
+  ConfigImportResultError,
+  createConfigApi,
+  mapConfigImportPreview,
+  mapConfigImportResult,
+} from "./config-api";
 
 function createMockResponse(status = 200, body = "") {
   return {
@@ -238,5 +244,315 @@ describe("config api", () => {
     fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: null })));
     await expect(api.importConfig("auth-marker", {})).rejects.toBeInstanceOf(ConfigImportResultError);
     expect(() => mapConfigImportResult([])).toThrow(ConfigImportResultError);
+  });
+
+  function previewEntity(
+    entity: string,
+    counts: Partial<Record<"input" | "created" | "updated" | "skipped" | "rejected" | "pending_validation" | "disabled_imported", number>> = {},
+  ) {
+    return {
+      entity,
+      input: 0,
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      rejected: 0,
+      pending_validation: 0,
+      disabled_imported: 0,
+      ...counts,
+    };
+  }
+
+  function previewAsset(entity: string, input = 0, status = input === 0 ? "not_present" : "unknown") {
+    return { entity, input, status };
+  }
+
+  function completePreviewFixture(conflict: "skip" | "overwrite" = "skip") {
+    return {
+      conflict,
+      basis: "current_snapshot",
+      entities: [
+        previewEntity("nodes", { input: 2, created: 1, skipped: 1 }),
+        previewEntity("ssh_keys", { input: 1, pending_validation: 1 }),
+        previewEntity("policies", { input: 1, rejected: 1 }),
+        previewEntity("tasks", { input: 1, updated: 1, disabled_imported: 1 }),
+        previewEntity("system_settings", { input: 1, updated: 1 }),
+      ],
+      warnings: [
+        { entity: "nodes", index: 1, name: "edge-1", code: "duplicate_name", message: "RAW_WARNING", detail: "SELECT secret" },
+      ],
+      pending_checks: [
+        { entity: "ssh_keys", index: 0, code: "retained_secret", message: "RAW_PENDING" },
+      ],
+      pending_checks_truncated: 0,
+      warnings_truncated: 0,
+      system_settings: { will_write: true, created: 0, updated: 1, applies_in_skip: true, value: "SECRET_SETTING" },
+      secrets: [
+        { entity: "nodes", index: 0, field: "password", present: true, action: "supplied", fingerprint: "SECRET_FINGERPRINT" },
+        { entity: "nodes", index: 0, field: "private_key", present: false, action: "missing" },
+        { entity: "ssh_keys", index: 0, field: "private_key", present: false, action: "preserved" },
+      ],
+      secrets_truncated: 0,
+      asset_graph: [
+        previewAsset("backup_repositories", 1, "unknown"),
+        previewAsset("task_repository_links"),
+        previewAsset("backup_retention_policies"),
+        previewAsset("recovery_point_holds"),
+      ],
+      requires_apply_validation: true,
+      proof: "GRANT_SECRET",
+      plan_token: "PLAN_SECRET",
+    };
+  }
+
+  it("maps a complete backend preview without proof, grant, or unknown fields", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: completePreviewFixture("overwrite"),
+    })));
+    const controller = new AbortController();
+
+    const result = await api.previewConfig("auth-marker", { nodes: [{ name: "edge" }] }, "overwrite", {
+      signal: controller.signal,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/config/import/preview?conflict=overwrite");
+    expect(init.method).toBe("POST");
+    expect(init.signal).toBe(controller.signal);
+    expect(init.body).toBe(JSON.stringify({ nodes: [{ name: "edge" }] }));
+    expect(init.headers).toMatchObject({ Authorization: "Bearer auth-marker" });
+    expect(init.headers).not.toHaveProperty("X-Xirang-Step-Up");
+    expect(JSON.stringify(init.headers)).not.toMatch(/grant|proof|step-up/i);
+    expect(result).toEqual({
+      conflict: "overwrite",
+      basis: "current_snapshot",
+      entities: [
+        { entity: "nodes", input: 2, created: 1, updated: 0, skipped: 1, rejected: 0, pendingValidation: 0, disabledImported: 0 },
+        { entity: "ssh_keys", input: 1, created: 0, updated: 0, skipped: 0, rejected: 0, pendingValidation: 1, disabledImported: 0 },
+        { entity: "policies", input: 1, created: 0, updated: 0, skipped: 0, rejected: 1, pendingValidation: 0, disabledImported: 0 },
+        { entity: "tasks", input: 1, created: 0, updated: 1, skipped: 0, rejected: 0, pendingValidation: 0, disabledImported: 1 },
+        { entity: "system_settings", input: 1, created: 0, updated: 1, skipped: 0, rejected: 0, pendingValidation: 0, disabledImported: 0 },
+      ],
+      warnings: [{ entity: "nodes", index: 1, name: "edge-1", code: "duplicate_name" }],
+      pendingChecks: [{ entity: "ssh_keys", index: 0, code: "retained_secret" }],
+      pendingChecksTruncated: 0,
+      warningsTruncated: 0,
+      systemSettings: { willWrite: true, created: 0, updated: 1, appliesInSkip: true },
+      secrets: [
+        { entity: "nodes", index: 0, field: "password", present: true, action: "supplied" },
+        { entity: "nodes", index: 0, field: "private_key", present: false, action: "missing" },
+        { entity: "ssh_keys", index: 0, field: "private_key", present: false, action: "preserved" },
+      ],
+      secretsTruncated: 0,
+      assetGraph: [
+        { entity: "backup_repositories", input: 1, status: "unknown" },
+        { entity: "task_repository_links", input: 0, status: "not_present" },
+        { entity: "backup_retention_policies", input: 0, status: "not_present" },
+        { entity: "recovery_point_holds", input: 0, status: "not_present" },
+      ],
+      requiresApplyValidation: true,
+    });
+    const encoded = JSON.stringify(result);
+    expect(encoded).not.toContain("RAW_WARNING");
+    expect(encoded).not.toContain("RAW_PENDING");
+    expect(encoded).not.toContain("SELECT secret");
+    expect(encoded).not.toContain("SECRET_SETTING");
+    expect(encoded).not.toContain("SECRET_FINGERPRINT");
+    expect(encoded).not.toContain("GRANT_SECRET");
+    expect(encoded).not.toContain("PLAN_SECRET");
+  });
+
+  it("defaults preview conflict to skip and never sends proof or grant", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: completePreviewFixture(),
+    })));
+
+    await api.previewConfig("auth-marker", { nodes: [] });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/config/import/preview?conflict=skip");
+    expect(init.headers).not.toHaveProperty("X-Xirang-Step-Up");
+    expect(JSON.stringify(init)).not.toMatch(/grant|proof|step-up/i);
+  });
+
+  it("rejects malformed, partial, reordered, and unsafe preview responses", () => {
+    const fixture = completePreviewFixture();
+    const reject = (payload: unknown) => {
+      let thrown: unknown;
+      try {
+        mapConfigImportPreview(payload, "skip");
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(ConfigImportPreviewError);
+      expect(thrown).toMatchObject({
+        name: "ConfigImportPreviewError",
+        message: "config import preview is unusable",
+        code: "CONFIG_IMPORT_PREVIEW_UNUSABLE",
+      });
+      expect(thrown).not.toHaveProperty("detail");
+      const message = thrown instanceof Error ? thrown.message : "";
+      expect(message).not.toMatch(/RAW|SECRET|SELECT|GRANT/);
+    };
+
+    reject(null);
+    reject([]);
+    reject({ ...fixture, conflict: "overwrite" });
+    reject({ ...fixture, basis: "planned" });
+    reject({ ...fixture, requires_apply_validation: false });
+    reject({ ...fixture, entities: fixture.entities.slice(0, 4) });
+    reject({ ...fixture, entities: [fixture.entities[1], fixture.entities[0], ...fixture.entities.slice(2)] });
+    reject({
+      ...fixture,
+      entities: fixture.entities.map((entity) => entity.entity === "nodes" ? { ...entity, created: undefined } : entity),
+    });
+    reject({
+      ...fixture,
+      entities: fixture.entities.map((entity) => entity.entity === "ssh_keys" ? { ...entity, pending_validation: -1 } : entity),
+    });
+    reject({
+      ...fixture,
+      entities: fixture.entities.map((entity) => entity.entity === "tasks" ? { ...entity, input: 1.5 } : entity),
+    });
+    reject({
+      ...fixture,
+      entities: fixture.entities.map((entity) => entity.entity === "policies" ? { ...entity, rejected: Number.MAX_SAFE_INTEGER + 1 } : entity),
+    });
+    reject({ ...fixture, pending_checks: [{ entity: "tasks", index: 0, code: "missing_private_key", detail: "RAW" }] });
+    reject({ ...fixture, pending_checks: [{ entity: "nope", index: 0, code: "retained_secret" }] });
+    reject({ ...fixture, secrets: [{ entity: "policies", index: 0, field: "private_key", present: true, action: "supplied" }] });
+    reject({ ...fixture, secrets: [{ entity: "ssh_keys", index: 0, field: "password", present: true, action: "supplied" }] });
+    reject({ ...fixture, secrets: [{ entity: "nodes", index: 0, field: "private_key", present: "yes", action: "supplied" }] });
+    reject({ ...fixture, secrets: [{ entity: "nodes", index: 0, field: "private_key", present: false, action: "created" }] });
+    reject({ ...fixture, asset_graph: fixture.asset_graph.slice(0, 3) });
+    reject({
+      ...fixture,
+      asset_graph: fixture.asset_graph.map((asset) => asset.entity === "backup_repositories" ? { ...asset, input: 1, status: "not_present" } : asset),
+    });
+    reject({
+      ...fixture,
+      asset_graph: fixture.asset_graph.map((asset) => asset.entity === "task_repository_links" ? { ...asset, input: 0, status: "unknown" } : asset),
+    });
+    reject({
+      ...fixture,
+      asset_graph: fixture.asset_graph.map((asset) => asset.entity === "recovery_point_holds" ? { ...asset, status: "ready" } : asset),
+    });
+    reject({ ...fixture, system_settings: { will_write: false, created: 0, updated: 1, applies_in_skip: true } });
+    reject({ ...fixture, system_settings: { will_write: true, created: 1, updated: 1, applies_in_skip: true } });
+    reject({ ...fixture, system_settings: { will_write: true, created: 0, updated: 1, applies_in_skip: false } });
+    reject({ ...fixture, warnings_truncated: -1 });
+    reject({ ...fixture, pending_checks: null });
+    reject({ ...fixture, secrets: { entity: "nodes" } });
+
+    const accepted = mapConfigImportPreview({
+      ...fixture,
+      warnings: [
+        { entity: "nodes", index: 0, code: "not_a_code", message: "RAW_DROPPED_WARNING" },
+        { entity: "policies", index: 2, name: "bad\nname", code: "invalid_input", detail: "SELECT secret" },
+      ],
+      asset_graph: fixture.asset_graph.map((asset) => asset.entity === "backup_repositories"
+        ? { ...asset, input: 2, status: "unsupported" }
+        : asset),
+    }, "skip");
+    expect(accepted.warnings).toEqual([{ entity: "policies", index: 2, code: "invalid_input" }]);
+    expect(accepted.warningsTruncated).toBe(0);
+    expect(accepted.assetGraph[0]).toEqual({ entity: "backup_repositories", input: 2, status: "unsupported" });
+    const acceptedEncoded = JSON.stringify(accepted);
+    expect(acceptedEncoded).not.toContain("RAW_DROPPED_WARNING");
+    expect(acceptedEncoded).not.toContain("bad\nname");
+    expect(acceptedEncoded).not.toContain("SELECT secret");
+    expect(acceptedEncoded).not.toContain("GRANT_SECRET");
+    expect(acceptedEncoded).not.toContain("SECRET_SETTING");
+  });
+
+  it("rejects a preview response that omits a required count instead of treating it as zero", () => {
+    const fixture = completePreviewFixture();
+    const entities = fixture.entities.map((entity) => {
+      if (entity.entity !== "nodes") return entity;
+      return {
+        entity: entity.entity,
+        input: entity.input,
+        created: entity.created,
+        updated: entity.updated,
+        rejected: entity.rejected,
+        pending_validation: entity.pending_validation,
+        disabled_imported: entity.disabled_imported,
+      };
+    });
+
+    expect(() => mapConfigImportPreview({ ...fixture, entities }, "skip")).toThrow(ConfigImportPreviewError);
+  });
+
+  it("caps preview lists and adds locally dropped rows to the truncated counters", () => {
+    const fixture = completePreviewFixture();
+    const warnings = Array.from({ length: 101 }, (_, index) => ({ entity: "tasks", index, code: "invalid_input" }));
+    const pendingChecks = Array.from({ length: 101 }, (_, index) => ({ entity: "tasks", index, code: "allocated_identity" }));
+    const secrets = Array.from({ length: 101 }, (_, index) => ({
+      entity: "nodes",
+      index,
+      field: "password",
+      present: false,
+      action: "missing",
+    }));
+
+    const result = mapConfigImportPreview({
+      ...fixture,
+      warnings,
+      pending_checks: pendingChecks,
+      secrets,
+      warnings_truncated: 4,
+      pending_checks_truncated: 2,
+      secrets_truncated: 3,
+    }, "skip");
+
+    expect(result.warnings).toHaveLength(100);
+    expect(result.pendingChecks).toHaveLength(100);
+    expect(result.secrets).toHaveLength(100);
+    expect(result.warningsTruncated).toBe(5);
+    expect(result.pendingChecksTruncated).toBe(3);
+    expect(result.secretsTruncated).toBe(4);
+    expect(result.pendingChecks[0]?.code).toBe("allocated_identity");
+  });
+
+  it("rejects an unusable preview payload from the request boundary", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: { conflict: "skip" } })));
+
+    await expect(api.previewConfig("auth-marker", { nodes: [] })).rejects.toBeInstanceOf(ConfigImportPreviewError);
+  });
+
+  it("leaves preview authorization failures on the request boundary", async () => {
+    fetchMock.mockResolvedValueOnce({
+      status: 403,
+      ok: false,
+      headers: { get: () => null },
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        code: 403,
+        message: "forbidden",
+        data: { error_code: "FORBIDDEN", detail: "SECRET_POLICY" },
+      })),
+    });
+
+    await expect(api.previewConfig("auth-marker", { nodes: [] }, "overwrite")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 403,
+    });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/config/import/preview?conflict=overwrite");
+    expect(init.headers).toMatchObject({ Authorization: "Bearer auth-marker" });
+    expect(init.headers).not.toHaveProperty("X-Xirang-Step-Up");
+    expect(JSON.stringify(init.headers)).not.toMatch(/grant|proof|step-up/i);
+  });
+
+  it("propagates preview request cancellation without mapping a body", async () => {
+    const controller = new AbortController();
+    const abortError = new DOMException("The operation was aborted.", "AbortError");
+    fetchMock.mockRejectedValueOnce(abortError);
+
+    await expect(api.previewConfig("auth-marker", { nodes: [] }, "skip", { signal: controller.signal })).rejects.toBe(abortError);
+    expect((fetchMock.mock.calls[0] as [string, RequestInit])[1].signal).toBe(controller.signal);
   });
 });

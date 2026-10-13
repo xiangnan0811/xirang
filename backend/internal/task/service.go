@@ -978,6 +978,17 @@ func ProjectExecutorSecretsConfigured(raw string) (ExecutorSecretsConfiguredResp
 
 // ValidateTaskInput validates all fields of a CreateTaskInput.
 func ValidateTaskInput(req CreateTaskInput) error {
+	return validateTaskInput(req, true)
+}
+
+// ValidateTaskInputWithoutTarget validates every target-independent field of a
+// CreateTaskInput. Import evaluation uses this only while a real node/policy
+// identity is not yet available; it never invents a target path.
+func ValidateTaskInputWithoutTarget(req CreateTaskInput) error {
+	return validateTaskInput(req, false)
+}
+
+func validateTaskInput(req CreateTaskInput, requireTarget bool) error {
 	if err := validateTaskIdentityAndSchedule(req); err != nil {
 		return err
 	}
@@ -994,7 +1005,9 @@ func ValidateTaskInput(req CreateTaskInput) error {
 			return newValidationError("该命令被安全策略拦截，禁止执行")
 		}
 	} else {
-		if strings.TrimSpace(req.RsyncSource) == "" || strings.TrimSpace(req.RsyncTarget) == "" {
+		source := strings.TrimSpace(req.RsyncSource)
+		target := strings.TrimSpace(req.RsyncTarget)
+		if source == "" || (requireTarget && target == "") {
 			return newValidationError("同步任务必须填写源路径和目标路径")
 		}
 		// Reject known shell injection characters (NUL/CR/LF/backtick/$(...)).
@@ -1005,7 +1018,7 @@ func ValidateTaskInput(req CreateTaskInput) error {
 				return newValidationError(err.Error())
 			}
 		}
-		if !util.IsRemotePathSpec(req.RsyncTarget) {
+		if target != "" && !util.IsRemotePathSpec(req.RsyncTarget) {
 			if err := validatePathChars(req.RsyncTarget, "rsync_target"); err != nil {
 				return newValidationError(err.Error())
 			}
@@ -1044,7 +1057,7 @@ func ValidateTaskInput(req CreateTaskInput) error {
 				return newValidationError(err.Error())
 			}
 		}
-		if !util.IsRemotePathSpec(req.RsyncTarget) {
+		if strings.TrimSpace(req.RsyncTarget) != "" && !util.IsRemotePathSpec(req.RsyncTarget) {
 			if err := pathPolicy.ValidateTarget(req.RsyncTarget, "rsync_target"); err != nil {
 				return newValidationError(err.Error())
 			}

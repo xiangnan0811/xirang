@@ -2339,3 +2339,83 @@ export interface ConfigImportResult {
   warnings: ConfigImportWarning[];
   warningsTruncated: number;
 }
+
+export type ConfigImportConflict = "skip" | "overwrite";
+
+export type ConfigImportPendingCheckCode = "retained_secret" | "allocated_identity" | "pending_reference";
+
+export interface ConfigImportPendingCheck {
+  entity: ConfigImportEntity;
+  index: number;
+  code: ConfigImportPendingCheckCode;
+}
+
+export interface ConfigImportPreviewEntityCounts {
+  entity: ConfigImportEntity;
+  input: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  rejected: number;
+  pendingValidation: number;
+  disabledImported: number;
+}
+
+export interface ConfigImportPreviewSystemSettings {
+  willWrite: boolean;
+  created: number;
+  updated: number;
+  appliesInSkip: boolean;
+}
+
+export type ConfigImportPreviewSecretEntity = "nodes" | "ssh_keys";
+export type ConfigImportPreviewSecretField = "password" | "private_key";
+export type ConfigImportPreviewSecretAction = "supplied" | "preserved" | "missing" | "skipped" | "rejected";
+
+export interface ConfigImportPreviewSecret {
+  entity: ConfigImportPreviewSecretEntity;
+  index: number;
+  field: ConfigImportPreviewSecretField;
+  present: boolean;
+  action: ConfigImportPreviewSecretAction;
+}
+
+export type ConfigImportPreviewAssetEntity =
+  | "backup_repositories"
+  | "task_repository_links"
+  | "backup_retention_policies"
+  | "recovery_point_holds";
+
+export type ConfigImportPreviewAssetStatus = "unknown" | "not_present" | "unsupported";
+
+export interface ConfigImportPreviewAsset {
+  entity: ConfigImportPreviewAssetEntity;
+  input: number;
+  status: ConfigImportPreviewAssetStatus;
+}
+
+export interface ConfigImportPreview {
+  conflict: ConfigImportConflict;
+  basis: "current_snapshot";
+  entities: [
+    ConfigImportPreviewEntityCounts & { entity: "nodes" },
+    ConfigImportPreviewEntityCounts & { entity: "ssh_keys" },
+    ConfigImportPreviewEntityCounts & { entity: "policies" },
+    ConfigImportPreviewEntityCounts & { entity: "tasks" },
+    ConfigImportPreviewEntityCounts & { entity: "system_settings" },
+  ];
+  warnings: ConfigImportWarning[];
+  pendingChecks: ConfigImportPendingCheck[];
+  pendingChecksTruncated: number;
+  warningsTruncated: number;
+  systemSettings: ConfigImportPreviewSystemSettings;
+  secrets: ConfigImportPreviewSecret[];
+  secretsTruncated: number;
+  assetGraph: [
+    ConfigImportPreviewAsset & { entity: "backup_repositories" },
+    ConfigImportPreviewAsset & { entity: "task_repository_links" },
+    ConfigImportPreviewAsset & { entity: "backup_retention_policies" },
+    ConfigImportPreviewAsset & { entity: "recovery_point_holds" },
+  ];
+  requiresApplyValidation: true;
+}

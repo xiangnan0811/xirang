@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
+import { ConfigImportPreviewError } from "@/lib/api/config-api";
 import {
   ApiError,
   AuthTransitionRejectedError,
@@ -20,19 +21,24 @@ import {
 } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { assertSensitiveStepUpReady, sensitiveStepUpBlock, StepUpPausedError } from "@/lib/sensitive-step-up";
-import { useConfirm } from "@/hooks/use-confirm";
 import { cn, getErrorMessage } from "@/lib/utils";
 import type {
+  ConfigImportConflict,
   ConfigImportEntity,
   ConfigImportResult,
   ConfigImportWarning,
   ConfigImportWarningCode,
 } from "@/types/domain";
 import { toast } from "sonner";
+import {
+  ConfigImportPreviewDialog,
+  type ConfigImportPreviewPhase,
+} from "@/components/config-import-preview-dialog";
 
 const CONFIG_GRANT_MAX_REASON_LENGTH = 240;
 const CONFIG_GRANT_TTL_SECONDS = 600;
 const MAX_VISIBLE_WARNINGS = 100;
+const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 
 const IMPORT_ENTITIES: Record<ConfigImportEntity, true> = {
   nodes: true,
@@ -82,6 +88,13 @@ type AdminOperationScope = {
   attempt: number;
   generation: number;
   token: string;
+};
+
+type PendingImport = {
+  file: File;
+  conflict: ConfigImportConflict;
+  attempt: number;
+  scope: AdminOperationScope;
 };
 
 type BoundSignal = {
@@ -433,7 +446,6 @@ function ConfigExportImportSession() {
   const { t } = useTranslation();
   const { token, role, totpEnabled, ensureStepUpProof } = useAuth();
   const { capture, current, disposed, bindSignal } = useAdminOperation(token, role);
-  const { confirm, dialog } = useConfirm();
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [sensitiveExporting, setSensitiveExporting] = useState(false);
@@ -442,7 +454,17 @@ function ConfigExportImportSession() {
   const [grantReason, setGrantReason] = useState("");
   const [grantError, setGrantError] = useState<string | null>(null);
   const [importPresentation, setImportPresentation] = useState<ImportPresentation | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewFileName, setPreviewFileName] = useState("");
+  const [previewConflict, setPreviewConflict] = useState<ConfigImportConflict>("skip");
+  const [previewPhase, setPreviewPhase] = useState<ConfigImportPreviewPhase>({ status: "loading" });
+  const [previewCanContinue, setPreviewCanContinue] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingImportRef = useRef<PendingImport | null>(null);
+  const capturedImportRef = useRef<PendingImport | null>(null);
+  const applyingRef = useRef(false);
+  const previewAttemptRef = useRef(0);
+  const previewBindingRef = useRef<BoundSignal | null>(null);
 
   const downloadConfigPayload = (data: unknown, suffix: string, scope: AdminOperationScope): boolean => {
     if (!current(scope)) return false;
@@ -494,67 +516,29 @@ function ConfigExportImportSession() {
   };
 
   const resetGrantPromptState = () => {
+    const clearImport = grantMode === "import";
     setGrantReason("");
     setGrantError(null);
     setGrantDialogOpen(false);
+    if (clearImport) clearPendingImport();
+  };
+
+  const invalidatePreview = () => {
+    previewAttemptRef.current += 1;
+    previewBindingRef.current?.abort();
+    previewBindingRef.current = null;
+  };
+
+  const clearPendingImport = () => {
+    invalidatePreview();
+    pendingImportRef.current = null;
+    capturedImportRef.current = null;
+    setPreviewOpen(false);
+    setPreviewFileName("");
+    setPreviewConflict("skip");
+    setPreviewPhase({ status: "loading" });
+    setPreviewCanContinue(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleImportClick = () => {
-    if (protectedConfigBlocked()) return;
-    fileInputRef.current?.click();
-  };
-
-  const handleSensitiveExportClick = () => {
-    if (protectedConfigBlocked()) return;
-    setGrantMode("sensitive-export");
-    setGrantReason("");
-    setGrantError(null);
-    setGrantDialogOpen(true);
-  };
-
-  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (protectedConfigBlocked()) {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
-    const scope = capture();
-    if (!scope) {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
-    const ok = await confirm({
-      title: t("configExport.importConfirm"),
-      description: t("common.irreversible"),
-    });
-    if (!ok || !current(scope)) {
-      if (!disposed(scope)) resetGrantPromptState();
-      return;
-    }
-    setImportPresentation(null);
-    setGrantMode("import");
-    setGrantReason("");
-    setGrantError(null);
-    setGrantDialogOpen(true);
-  };
-
-  const grantSubmitting = importing || sensitiveExporting;
-
-  const handleGrantDialogChange = (open: boolean) => {
-    if (grantSubmitting) return;
-    if (!open) {
-      resetGrantPromptState();
-      return;
-    }
-    setGrantDialogOpen(true);
-  };
-
-  const selectedImportFile = (): File => {
-    const file = fileInputRef.current?.files?.[0];
-    if (!file) throw new Error(t("configExport.importPayloadMissing"));
-    return file;
   };
 
   const readImportFile = async (file: File, scope: AdminOperationScope): Promise<Record<string, unknown>> => {
@@ -572,6 +556,163 @@ function ConfigExportImportSession() {
     return parsed as Record<string, unknown>;
   };
 
+  const previewStillCurrent = (pending: PendingImport) => {
+    return current(pending.scope)
+      && pending.attempt === previewAttemptRef.current
+      && pendingImportRef.current === pending;
+  };
+
+  const runPreview = async (pending: PendingImport) => {
+    if (applyingRef.current) return;
+    invalidatePreview();
+    capturedImportRef.current = null;
+    setGrantReason("");
+    setGrantError(null);
+    setGrantDialogOpen(false);
+    const attempt = previewAttemptRef.current;
+    const next: PendingImport = { ...pending, attempt };
+    pendingImportRef.current = next;
+    setPreviewConflict(next.conflict);
+    setPreviewFileName(next.file.name);
+    setPreviewPhase({ status: "loading" });
+    setPreviewCanContinue(false);
+    setPreviewOpen(true);
+
+    if (next.file.size > MAX_IMPORT_FILE_BYTES) {
+      if (!previewStillCurrent(next)) return;
+      setPreviewPhase({ status: "error", message: t("configExport.preview.fileTooLarge"), blocked: true });
+      return;
+    }
+
+    const binding = bindSignal();
+    previewBindingRef.current = binding;
+    try {
+      const data = await readImportFile(next.file, next.scope);
+      if (!previewStillCurrent(next) || binding.signal.aborted) return;
+      const preview = await apiClient.previewConfig(next.scope.token, data, next.conflict, { signal: binding.signal });
+      if (!previewStillCurrent(next) || binding.signal.aborted) return;
+      const previewReady = preview.conflict === next.conflict
+        && preview.basis === "current_snapshot"
+        && preview.requiresApplyValidation === true
+        && Array.isArray(preview.entities)
+        && preview.entities.length === 5
+        && Array.isArray(preview.assetGraph)
+        && preview.assetGraph.length === 4;
+      if (!previewReady) {
+        setPreviewPhase({ status: "error", message: t("configExport.preview.unusable"), blocked: false });
+        return;
+      }
+      setPreviewPhase({ status: "ready", preview });
+      setPreviewCanContinue(true);
+    } catch (error) {
+      if (!previewStillCurrent(next) || binding.signal.aborted || isPausedStepUp(error)) return;
+      if (error instanceof ConfigImportPreviewError) {
+        setPreviewPhase({ status: "error", message: t("configExport.preview.unusable"), blocked: false });
+        return;
+      }
+      const blocked = error instanceof ApiError && error.status === 400;
+      const fallback = blocked ? t("configExport.invalidImportFile") : t("configExport.preview.unusable");
+      setPreviewPhase({ status: "error", message: getErrorMessage(error, fallback), blocked });
+    } finally {
+      if (previewBindingRef.current === binding) previewBindingRef.current = null;
+      binding.release();
+    }
+  };
+
+  const handleImportClick = () => {
+    if (!token || role !== "admin" || isAuthTransitionActive()) return;
+    fileInputRef.current?.click();
+  };
+
+  const handleSensitiveExportClick = () => {
+    if (protectedConfigBlocked()) return;
+    setGrantMode("sensitive-export");
+    setGrantReason("");
+    setGrantError(null);
+    setGrantDialogOpen(true);
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (importing || sensitiveExporting || applyingRef.current) {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    const scope = capture();
+    if (!scope) {
+      clearPendingImport();
+      return;
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    void runPreview({ file, conflict: "skip", attempt: 0, scope });
+  };
+
+  const handlePreviewConflictChange = (conflict: ConfigImportConflict) => {
+    const pending = pendingImportRef.current;
+    if (!pending || importing || applyingRef.current || conflict === pending.conflict) return;
+    if (!current(pending.scope)) {
+      clearPendingImport();
+      return;
+    }
+    void runPreview({
+      file: pending.file,
+      conflict,
+      attempt: pending.attempt,
+      scope: pending.scope,
+    });
+  };
+
+  const handlePreviewRetry = () => {
+    const pending = pendingImportRef.current;
+    if (!pending || importing || applyingRef.current || previewPhase.status !== "error" || previewPhase.blocked) return;
+    if (!current(pending.scope)) {
+      clearPendingImport();
+      return;
+    }
+    void runPreview(pending);
+  };
+
+  const handlePreviewContinue = () => {
+    const pending = pendingImportRef.current;
+    if (applyingRef.current || !pending || !previewCanContinue || previewPhase.status !== "ready") return;
+    if (!previewStillCurrent(pending) || pending.conflict !== previewConflict) {
+      clearPendingImport();
+      return;
+    }
+    if (protectedConfigBlocked()) return;
+    capturedImportRef.current = {
+      file: pending.file,
+      conflict: pending.conflict,
+      attempt: pending.attempt,
+      scope: pending.scope,
+    };
+    setPreviewOpen(false);
+    setGrantMode("import");
+    setGrantReason("");
+    setGrantError(null);
+    setGrantDialogOpen(true);
+  };
+
+  const handlePreviewOpenChange = (open: boolean) => {
+    if (open) {
+      setPreviewOpen(true);
+      return;
+    }
+    clearPendingImport();
+  };
+
+  const grantSubmitting = importing || sensitiveExporting;
+
+  const handleGrantDialogChange = (open: boolean) => {
+    if (grantSubmitting) return;
+    if (!open) {
+      resetGrantPromptState();
+      return;
+    }
+    setGrantDialogOpen(true);
+  };
+
   const publishUncertainImport = (scope: AdminOperationScope) => {
     if (disposed(scope)) return;
     setImportPresentation({ status: "unknown" });
@@ -587,28 +728,52 @@ function ConfigExportImportSession() {
     }
     const scope = capture();
     if (!scope) return;
+    const pending = pendingImportRef.current;
+    const captured = capturedImportRef.current;
+    if (
+      !pending
+      || !captured
+      || captured.file !== pending.file
+      || captured.conflict !== pending.conflict
+      || captured.attempt !== pending.attempt
+      || captured.scope !== pending.scope
+      || captured.attempt !== previewAttemptRef.current
+      || captured.scope.attempt !== scope.attempt
+      || captured.scope.generation !== scope.generation
+      || captured.scope.token !== scope.token
+      || captured.conflict !== previewConflict
+      || !current(scope)
+    ) return;
     const binding = bindSignal();
     let importDispatched = false;
+    let applying = false;
+    applyingRef.current = true;
+    applying = true;
     setImporting(true);
     setGrantError(null);
     try {
-      const file = selectedImportFile();
-      if (!current(scope)) return;
+      const file = captured.file;
+      const conflict = captured.conflict;
+      const importStillCaptured = () => pendingImportRef.current === pending
+        && capturedImportRef.current === captured
+        && captured.file === file
+        && captured.conflict === conflict;
+      if (!current(scope) || !importStillCaptured()) return;
       await readImportFile(file, scope);
-      if (!current(scope)) return;
+      if (!current(scope) || !importStillCaptured()) return;
       assertSensitiveStepUpReady({ token: scope.token, totpEnabled });
-      if (!current(scope)) return;
+      if (!current(scope) || !importStillCaptured()) return;
       const proof = await ensureStepUpProof(STEP_UP_ACTIONS.configImport, { persist: false, reuseCached: false });
-      if (!current(scope)) return;
+      if (!current(scope) || !importStillCaptured()) return;
       await apiClient.requestConfigImportCredentialGrant(scope.token, {
         reason,
         requestedTtlSeconds: CONFIG_GRANT_TTL_SECONDS,
       }, proof);
-      if (!current(scope)) return;
+      if (!current(scope) || !importStillCaptured()) return;
       const pendingImport = await readImportFile(file, scope);
-      if (!current(scope)) return;
+      if (!current(scope) || !importStillCaptured()) return;
       importDispatched = true;
-      const result = await apiClient.importConfig(scope.token, pendingImport, "skip", proof, { signal: binding.signal });
+      const result = await apiClient.importConfig(scope.token, pendingImport, conflict, proof, { signal: binding.signal });
       if (disposed(scope)) return;
       if (!current(scope) || binding.signal.aborted) {
         publishUncertainImport(scope);
@@ -637,6 +802,7 @@ function ConfigExportImportSession() {
       }
       publishUncertainImport(scope);
     } finally {
+      if (applying) applyingRef.current = false;
       binding.release();
       if (!disposed(scope)) setImporting(false);
     }
@@ -720,11 +886,11 @@ function ConfigExportImportSession() {
               {sensitiveExporting ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <ShieldAlert className="mr-1 size-3.5" aria-hidden />}
               {t("configExport.exportSensitiveConfig")}
             </Button>
-            <Button size="sm" variant="outline" onClick={handleImportClick} disabled={grantSubmitting}>
+            <Button size="sm" variant="outline" onClick={handleImportClick} disabled={importing}>
               {importing ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <Upload className="mr-1 size-3.5" aria-hidden />}
               {t("configExport.importConfig")}
             </Button>
-            <input ref={fileInputRef} type="file" accept=".json" className="hidden" aria-label={t("configExport.importConfig")} onChange={handleFileChange} />
+            <input ref={fileInputRef} type="file" accept=".json" className="hidden" aria-label={t("configExport.importConfig")} onChange={handleFileChange} disabled={importing} />
           </div>
           {importPresentation ? <ConfigImportOutcomePanel presentation={importPresentation} /> : null}
         </CardContent>
@@ -773,7 +939,19 @@ function ConfigExportImportSession() {
           </form>
         </DialogContent>
       </Dialog>
-      {dialog}
+      <ConfigImportPreviewDialog
+        open={previewOpen}
+        fileName={previewFileName}
+        conflict={previewConflict}
+        phase={previewPhase}
+        canContinue={previewCanContinue}
+        totpUnavailable={totpEnabled === false}
+        onConflictChange={handlePreviewConflictChange}
+        onRetry={handlePreviewRetry}
+        onCancel={clearPendingImport}
+        onContinue={handlePreviewContinue}
+        onOpenChange={handlePreviewOpenChange}
+      />
     </>
   );
 }
