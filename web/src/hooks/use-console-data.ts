@@ -205,7 +205,6 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     tasks,
     setTasks,
     setAlerts,
-    setWarning,
     taskVersionRef,
     markTasksMutated,
     ensureDemoWriteAllowed,

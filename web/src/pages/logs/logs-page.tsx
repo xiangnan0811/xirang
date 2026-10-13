@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,6 +13,8 @@ import { useNodesContext } from "@/context/nodes-context.hooks";
 import { useTasksContext } from "@/context/tasks-context.hooks";
 import { useLiveLogs } from "@/hooks/use-live-logs";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { Button } from "@/components/ui/button";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import {
   DataSurface,
   DataSurfaceContent,
@@ -20,8 +23,7 @@ import {
 } from "@/components/ui/data-surface";
 import { PageHero } from "@/components/ui/page-hero";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "@/components/ui/toast-sonner";
-import { getErrorMessage } from "@/lib/utils";
+import { ApiError, getAuthSessionGeneration } from "@/lib/api/core";
 import type { LogEvent } from "@/types/domain";
 import {
   selectedNodeStorageKey,
@@ -40,16 +42,38 @@ import { LogsHistory } from "./logs-history";
 
 const RSYNC_PROGRESS_RE = /^\s*[\d,]+\s+(\d+)%\s+[\d.]+[KMGT]?i?B\/s/i;
 
+type HistoryFailure = {
+  phase: "initial" | "older";
+  kind: "forbidden" | "unavailable" | "failed";
+};
+
+function classifyHistoryFailure(error: unknown): HistoryFailure["kind"] {
+  if (error instanceof ApiError) {
+    const status = error.httpStatus ?? error.status;
+    if (status === 403) return "forbidden";
+    if (status === 404) return "unavailable";
+  }
+  return "failed";
+}
+
 export function LogsPage() {
-  const { token } = useAuth();
-  return <LogsPageSession key={token ?? ""} />;
+  const { token, role } = useAuth();
+  return <LogsPageSession key={JSON.stringify([token, role])} />;
 }
 
 function LogsPageSession() {
   const { t } = useTranslation();
-  const { token } = useAuth();
+  const { token, role } = useAuth();
   const { nodes, refreshNodes } = useNodesContext();
-  const { tasks, fetchTaskLogs, refreshTask, refreshTasks } = useTasksContext();
+  const {
+    tasks,
+    fetchTaskLogs,
+    refreshTask,
+    refreshTasks,
+    tasksLoading,
+    tasksError,
+    tasksLoaded,
+  } = useTasksContext();
 
   useEffect(() => {
     void refreshNodes();
@@ -57,80 +81,66 @@ function LogsPageSession() {
   }, [refreshNodes, refreshTasks]);
 
   const [searchParams, setSearchParams] = useSearchParams();
-
-  const initialTask = searchParams.get("task") ?? "all";
-  const initialNode = searchParams.get("node") ?? "all";
-  const initialKeyword = searchParams.get("q") ?? "";
-
-  const [selectedNode, setSelectedNode] = usePersistentState<string>(
-    selectedNodeStorageKey,
-    initialNode,
-  );
-  const [selectedTask, setSelectedTask] = usePersistentState<string>(
-    selectedTaskStorageKey,
-    initialTask,
-  );
-  const [keyword, setKeyword] = usePersistentState<string>(
-    keywordStorageKey,
-    initialKeyword,
-  );
+  const [storedSelectedNode, setSelectedNode] = usePersistentState<string>(selectedNodeStorageKey, "all");
+  const [storedSelectedTask, setSelectedTask] = usePersistentState<string>(selectedTaskStorageKey, "all");
+  const [storedKeyword, setKeyword] = usePersistentState<string>(keywordStorageKey, "");
+  const selectedTask = searchParams.get("task") ?? storedSelectedTask;
+  const selectedNode = searchParams.get("node") ?? (searchParams.has("task") ? "all" : storedSelectedNode);
+  const keyword = searchParams.get("q") ?? (searchParams.has("task") ? "" : storedKeyword);
   const [historyLogs, setHistoryLogs] = useState<LogEvent[]>([]);
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
-  const [historyLoading, setHistoryLoading] = useState(Number.isFinite(Number(selectedTask)) && Number(selectedTask) > 0);
+  const [historyLoading, setHistoryLoading] = useState(
+    selectedTask !== "all" && Number.isFinite(Number(selectedTask)) && Number(selectedTask) > 0,
+  );
   const [historyPaging, setHistoryPaging] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyFailure, setHistoryFailure] = useState<HistoryFailure | null>(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const [historyBlocked, setHistoryBlocked] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
   const [wsProgress, setWsProgress] = useState<Record<number, number>>({});
   const [progressInput, setProgressInput] = useState<{ logs: string; tasks: string; watermark: number; runs: Record<number, number>; running: Set<number> }>({ logs: "", tasks: "", watermark: 0, runs: {}, running: new Set() });
 
-  const focusedTaskID =
-    selectedTask !== "all" ? Number(selectedTask) : undefined;
-  const focusedTaskNumber =
-    focusedTaskID && Number.isFinite(focusedTaskID) && focusedTaskID > 0
-      ? focusedTaskID
-      : undefined;
+  const focusedTaskID = selectedTask !== "all" ? Number(selectedTask) : undefined;
+  const focusedTaskNumber = focusedTaskID && Number.isFinite(focusedTaskID) && focusedTaskID > 0
+    ? focusedTaskID
+    : undefined;
 
   const { connected, logs, connectionWarning } = useLiveLogs(token, {
     taskId: focusedTaskNumber,
   });
 
   const historyRequestIdRef = useRef(0);
+  const olderFlightRef = useRef(0);
+  const olderFlightSeqRef = useRef(0);
   const lastHandledTerminalLogKeyRef = useRef<string | null>(null);
   const initialAlignmentTaskIdRef = useRef<number | null>(null);
   const refreshInFlightTaskIdRef = useRef<number | null>(null);
 
-  // Sync filter state from URL search params (e.g. navigation from tasks page)
-  useEffect(() => {
-    const nextTask = searchParams.get("task");
-    const nextNode = searchParams.get("node");
-    const nextKeyword = searchParams.get("q");
-
-    if (nextTask !== null) {
-      setSelectedTask(nextTask);
-      // 从任务页跳转时只带 task 不带 node，自动匹配任务所属节点
-      if (nextNode === null) {
-        const matchedTask = tasks.find((t) => String(t.id) === nextTask);
-        setSelectedNode(matchedTask?.nodeName ?? "all");
-      }
-    }
-    if (nextNode !== null) {
-      setSelectedNode(nextNode);
-    }
-    if (nextKeyword !== null) {
-      setKeyword(nextKeyword);
-    }
-  }, [searchParams, setKeyword, setSelectedNode, setSelectedTask, tasks]);
-
-  const historyScope = `${token}:${selectedTask}`;
+  const historyScope = JSON.stringify([token, role, selectedTask]);
   const [previousHistoryScope, setPreviousHistoryScope] = useState(historyScope);
-  if (previousHistoryScope !== historyScope) {
+  const scopeChanged = previousHistoryScope !== historyScope;
+  if (scopeChanged) {
     setPreviousHistoryScope(historyScope);
     setHistoryLogs([]);
     setHistoryCursor(null);
     setHistoryLoading(Boolean(focusedTaskNumber));
     setHistoryPaging(false);
+    setHistoryLoaded(false);
+    setHistoryFailure(null);
+    setHistoryBlocked(false);
   }
+  useLayoutEffect(() => () => {
+    historyRequestIdRef.current += 1;
+    olderFlightRef.current = 0;
+  }, [historyScope]);
 
-  // Fetch initial history when a specific task is selected
+  useEffect(() => {
+    setSelectedTask(selectedTask);
+    setSelectedNode(selectedNode);
+    setKeyword(keyword);
+  }, [keyword, selectedNode, selectedTask, setKeyword, setSelectedNode, setSelectedTask]);
+
   useEffect(() => {
     const taskID = Number(selectedTask);
     if (selectedTask === "all" || !Number.isFinite(taskID) || taskID <= 0) {
@@ -139,26 +149,37 @@ function LogsPageSession() {
     }
 
     const requestId = ++historyRequestIdRef.current;
+    const sessionGeneration = getAuthSessionGeneration();
+    olderFlightRef.current = 0;
+    const isCurrent = () => requestId === historyRequestIdRef.current
+      && sessionGeneration === getAuthSessionGeneration();
+
     void fetchTaskLogs(taskID, { limit: 200 })
       .then((rows) => {
-        if (requestId !== historyRequestIdRef.current) {
-          return;
-        }
+        if (!isCurrent()) return;
+        setHistoryBlocked(false);
         setHistoryLogs(rows);
         setHistoryCursor(minLogId(rows));
+        setHistoryLoaded(true);
       })
-      .catch((err) => {
-        if (requestId === historyRequestIdRef.current) {
-          toast.error(getErrorMessage(err));
+      .catch((error: unknown) => {
+        if (!isCurrent()) return;
+        const kind = classifyHistoryFailure(error);
+        setHistoryFailure({ phase: "initial", kind });
+        if (kind !== "failed") {
+          setHistoryLogs([]);
+          setHistoryCursor(null);
+          setHistoryLoaded(false);
+          setHistoryBlocked(true);
         }
       })
       .finally(() => {
-        if (requestId === historyRequestIdRef.current) {
-          setHistoryLoading(false);
-        }
+        if (isCurrent()) setHistoryLoading(false);
       });
-    return () => { historyRequestIdRef.current += 1; };
-  }, [fetchTaskLogs, selectedTask, token]);
+    return () => {
+      historyRequestIdRef.current += 1;
+    };
+  }, [fetchTaskLogs, historyRevision, selectedTask, token]);
 
   const mergedLogs = useMemo(() => {
     const taskNodeMap = new Map(tasks.map((task) => [task.id, task.nodeName]));
@@ -209,11 +230,11 @@ function LogsPageSession() {
       return text.includes(keywordValue);
     });
   }, [keyword, mergedLogs, selectedNode, selectedTask, t]);
+  const displayLogs = historyBlocked ? [] : filteredLogs;
 
-  const focusedTask =
-    selectedTask === "all"
-      ? null
-      : tasks.find((task) => String(task.id) === selectedTask);
+  const focusedTask = selectedTask === "all"
+    ? null
+    : tasks.find((task) => String(task.id) === selectedTask) ?? null;
 
   const refreshFocusedTaskStatus = useCallback(async () => {
     if (!focusedTaskNumber) {
@@ -336,13 +357,17 @@ function LogsPageSession() {
   const focusedWsProgress = focusedTask ? wsProgress[focusedTask.id] : undefined;
   const progressValue = focusedTask
     ? (focusedWsProgress ?? focusedTask.progress)
-    : Math.round(
+    : selectedTask === "all" ? Math.round(
         runningTasks.reduce(
           (sum, task) => sum + (wsProgress[task.id] ?? task.progress),
           0,
         ) / Math.max(1, runningTasks.length),
-      );
+      ) : 0;
   const normalizedProgress = Math.min(100, Math.max(0, progressValue || 0));
+  const showAggregateProgress = selectedTask === "all" && runningTasks.length > 0;
+
+  const taskListReady = tasksLoaded && !tasksLoading && !tasksError;
+  const selectedTaskInList = tasks.some((task) => String(task.id) === selectedTask);
 
   const syncSearchParams = (patch: {
     task?: string;
@@ -365,13 +390,14 @@ function LogsPageSession() {
       }
     }
     if (patch.q !== undefined) {
-      if (!patch.q.trim()) {
+      if (patch.q.length === 0) {
         next.delete("q");
       } else {
-        next.set("q", patch.q.trim());
+        next.set("q", patch.q);
       }
     }
-    setSearchParams(next, { replace: true });
+    // The URL controls the input; commit it before another keystroke can read the old value.
+    setSearchParams(next, { replace: true, flushSync: true });
   };
 
   const resetFilters = () => {
@@ -381,8 +407,12 @@ function LogsPageSession() {
     syncSearchParams({ node: "all", task: "all", q: "" });
   };
 
+  const showViewer = !historyBlocked && (!historyFailure || displayLogs.length > 0);
+  const logActionsDisabled = !showViewer || (historyLoading && displayLogs.length === 0);
+
   const exportAsText = () => {
-    const content = filteredLogs
+    if (logActionsDisabled) return;
+    const content = displayLogs
       .map((log) => {
         const taskText = log.taskId
           ? t("logs.taskIdLabel", { id: log.taskId })
@@ -408,28 +438,63 @@ function LogsPageSession() {
     }
   };
 
-  const loadMoreHistory = async () => {
-    if (!focusedTaskNumber || !historyCursor) {
+  const loadMoreHistory = () => {
+    if (!focusedTaskNumber || historyCursor === null || historyBlocked || historyLoading || olderFlightRef.current !== 0) {
       return;
     }
     const requestId = historyRequestIdRef.current;
+    const sessionGeneration = getAuthSessionGeneration();
+    const flight = ++olderFlightSeqRef.current;
+    olderFlightRef.current = flight;
+    const taskId = focusedTaskNumber;
+    const cursor = historyCursor;
     setHistoryPaging(true);
-    try {
-      const rows = await fetchTaskLogs(focusedTaskNumber, {
-        beforeId: historyCursor,
-        limit: 120,
+    setHistoryFailure(null);
+    const ownsFlight = () => olderFlightRef.current === flight
+      && requestId === historyRequestIdRef.current
+      && sessionGeneration === getAuthSessionGeneration();
+
+    void fetchTaskLogs(taskId, { beforeId: cursor, limit: 120 })
+      .then((rows) => {
+        if (!ownsFlight()) return;
+        if (rows.length > 0) {
+          setHistoryLogs((prev) => [...prev, ...rows]);
+          setHistoryCursor(minLogId(rows));
+        } else {
+          setHistoryCursor(null);
+        }
+        setHistoryFailure(null);
+      })
+      .catch((error: unknown) => {
+        if (!ownsFlight()) return;
+        const kind = classifyHistoryFailure(error);
+        setHistoryFailure({ phase: "older", kind });
+        if (kind !== "failed") {
+          setHistoryLogs([]);
+          setHistoryCursor(null);
+          setHistoryLoaded(false);
+          setHistoryBlocked(true);
+        }
+      })
+      .finally(() => {
+        if (!ownsFlight()) return;
+        olderFlightRef.current = 0;
+        setHistoryPaging(false);
       });
-      if (requestId !== historyRequestIdRef.current) return;
-      if (rows.length > 0) {
-        setHistoryLogs((prev) => [...prev, ...rows]);
-        setHistoryCursor(minLogId(rows));
-      } else {
-        setHistoryCursor(null);
-      }
-    } finally {
-      if (requestId === historyRequestIdRef.current) setHistoryPaging(false);
-    }
   };
+
+  const retryInitialHistory = () => {
+    if (!focusedTaskNumber || historyLoading) return;
+    setFullScreen(false);
+    setHistoryLoading(true);
+    setHistoryLoaded(false);
+    setHistoryFailure(null);
+    setHistoryPaging(false);
+    setHistoryRevision((revision) => revision + 1);
+  };
+  const failureMessage = historyFailure?.kind === "forbidden" ? "logs.historyForbidden"
+    : historyFailure?.kind === "unavailable" ? "logs.historyUnavailable"
+      : historyFailure?.phase === "older" ? "logs.historyOlderFailed" : "logs.historyLoadFailed";
 
   return (
     <div className="animate-fade-in space-y-5">
@@ -467,10 +532,12 @@ function LogsPageSession() {
             connectionWarning={connectionWarning}
             progressValue={progressValue}
             normalizedProgress={normalizedProgress}
-            showProgress={focusedTask !== null || runningTasks.length > 0}
-            filteredCount={filteredLogs.length}
-            totalCount={mergedLogs.length}
+            showProgress={focusedTask !== null || showAggregateProgress}
+            filteredCount={displayLogs.length}
+            totalCount={historyBlocked ? 0 : mergedLogs.length}
             errorCode={focusedTask?.errorCode}
+            taskListReady={taskListReady}
+            logActionsDisabled={logActionsDisabled}
             onNodeChange={(value) => {
               setSelectedNode(value);
               syncSearchParams({ node: value });
@@ -485,24 +552,50 @@ function LogsPageSession() {
             }}
             onReset={resetFilters}
             onExport={exportAsText}
-            onFullscreen={() => setFullScreen(true)}
+            onFullscreen={() => {
+              if (logActionsDisabled) return;
+              setFullScreen(true);
+            }}
           />
+          {selectedTask !== "all" && tasksError ? (
+            <InlineAlert tone="warning">{t("logs.taskListUnavailable")}</InlineAlert>
+          ) : selectedTask !== "all" && taskListReady && !selectedTaskInList ? (
+            <p className="text-sm text-muted-foreground">{t("logs.historicalTaskHint")}</p>
+          ) : null}
         </DataSurfaceToolbar>
 
         <DataSurfaceContent className="space-y-3">
           <div className="space-y-3">
-            <LogsViewer
-              filteredLogs={filteredLogs}
-              historyLoading={historyLoading}
-              onReset={resetFilters}
-            />
+            {historyFailure || (historyBlocked && historyLoading) ? (
+              <div className="flex flex-wrap items-center gap-3">
+                {historyFailure && (
+                  <InlineAlert tone="critical" className="min-w-0 flex-1">
+                    {t(failureMessage)}
+                  </InlineAlert>
+                )}
+                {(historyBlocked || historyFailure?.phase === "initial") && (
+                  <Button variant="outline" size="sm" disabled={historyLoading} onClick={retryInitialHistory}>
+                    {t("common.retry")}
+                  </Button>
+                )}
+                {historyLoading && <p role="status">{t("common.loading")}</p>}
+              </div>
+            ) : null}
 
-            {focusedTaskNumber ? (
+            {showViewer ? (
+              <LogsViewer
+                filteredLogs={displayLogs}
+                historyLoading={historyLoading}
+                onReset={resetFilters}
+              />
+            ) : null}
+
+            {focusedTaskNumber && historyLoaded && !historyBlocked ? (
               <LogsHistory
                 historyCount={historyLogs.length}
                 historyCursor={historyCursor}
                 historyPaging={historyPaging}
-                onLoadMore={() => void loadMoreHistory()}
+                onLoadMore={loadMoreHistory}
               />
             ) : null}
           </div>
@@ -510,9 +603,9 @@ function LogsPageSession() {
       </DataSurface>
 
       <LogsFullscreenDialog
-        open={fullScreen}
+        open={fullScreen && !logActionsDisabled}
         onOpenChange={setFullScreen}
-        filteredLogs={filteredLogs}
+        filteredLogs={displayLogs}
       />
     </div>
   );

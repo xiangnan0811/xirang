@@ -19,7 +19,6 @@ export type UseTasksDomainParams = {
   tasks: TaskRecord[];
   setTasks: Dispatch<SetStateAction<TaskRecord[]>>;
   setAlerts: Dispatch<SetStateAction<AlertRecord[]>>;
-  setWarning: Dispatch<SetStateAction<string | null>>;
   taskVersionRef: { current: number };
   markTasksMutated: () => void;
   ensureDemoWriteAllowed: (action: string) => void;
@@ -35,7 +34,6 @@ export function useTasksDomain({
   tasks,
   setTasks,
   setAlerts,
-  setWarning,
   taskVersionRef,
   markTasksMutated,
   ensureDemoWriteAllowed,
@@ -116,7 +114,6 @@ export function useTasksDomain({
     tasks,
     setTasks,
     setAlerts,
-    setWarning,
     markTasksMutated,
     ensureDemoWriteAllowed,
     handleWriteApiError,

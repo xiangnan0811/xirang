@@ -4,7 +4,6 @@ import i18n from "@/i18n";
 import { assertSensitiveStepUpReady } from "@/lib/sensitive-step-up";
 import { apiClient } from "@/lib/api/client";
 import { formatTime, getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
-import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
@@ -30,7 +29,6 @@ type UseTaskOperationsParams = {
   tasks: TaskRecord[];
   setTasks: Dispatch<SetStateAction<TaskRecord[]>>;
   setAlerts: Dispatch<SetStateAction<AlertRecord[]>>;
-  setWarning: Dispatch<SetStateAction<string | null>>;
   markTasksMutated: () => void;
   ensureDemoWriteAllowed: (action: string) => void;
   handleWriteApiError: (action: string, error: unknown) => void;
@@ -44,7 +42,6 @@ export function useTaskOperations({
   tasks,
   setTasks,
   setAlerts,
-  setWarning,
   markTasksMutated,
   ensureDemoWriteAllowed,
   handleWriteApiError
@@ -305,12 +302,7 @@ export function useTaskOperations({
 
   const fetchTaskLogs = useCallback(async (taskID: number, options?: { beforeId?: number; limit?: number }): Promise<LogEvent[]> => {
     if (token) {
-      try {
-        return await apiClient.getTaskLogs(token, taskID, options);
-      } catch (error) {
-        setWarning(getErrorMessage(error, i18n.t("tasks.fetchLogsFailed")));
-        return [];
-      }
+      return apiClient.getTaskLogs(token, taskID, options);
     }
     if (demoModeEnabled) {
       const mocks = await import("@/data/mock");
@@ -320,7 +312,7 @@ export function useTaskOperations({
       return rows.slice(0, options?.limit ?? rows.length);
     }
     return [];
-  }, [demoModeEnabled, setWarning, token]);
+  }, [demoModeEnabled, token]);
 
   return {
     createTask,

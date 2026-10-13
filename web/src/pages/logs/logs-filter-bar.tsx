@@ -23,6 +23,8 @@ export interface LogsFilterBarProps {
   filteredCount: number;
   totalCount: number;
   errorCode: string | undefined;
+  taskListReady: boolean;
+  logActionsDisabled: boolean;
   onNodeChange: (value: string) => void;
   onTaskChange: (value: string) => void;
   onKeywordChange: (value: string) => void;
@@ -45,6 +47,8 @@ export function LogsFilterBar({
   filteredCount,
   totalCount,
   errorCode,
+  taskListReady,
+  logActionsDisabled,
   onNodeChange,
   onTaskChange,
   onKeywordChange,
@@ -81,6 +85,11 @@ export function LogsFilterBar({
           onChange={(event) => onTaskChange(event.target.value)}
         >
           <option value="all">{t("logs.allTasks")}</option>
+          {selectedTask !== "all" && !tasks.some((task) => String(task.id) === selectedTask) && (
+            <option value={selectedTask}>
+              {t(taskListReady ? "logs.unavailableTask" : "logs.taskIdLabel", { id: selectedTask })}
+            </option>
+          )}
           {tasks.map((task) => (
             <option key={task.id} value={String(task.id)}>
               #{task.id} {task.policyName}
@@ -153,6 +162,7 @@ export function LogsFilterBar({
             variant="outline"
             size="sm"
             className="w-[80px]"
+            disabled={logActionsDisabled}
             onClick={onExport}
           >
             <Download className="mr-1 size-3.5" aria-hidden="true" />
@@ -165,6 +175,7 @@ export function LogsFilterBar({
             className="size-8"
             aria-label={t("logs.fullscreen")}
             title={t("logs.fullscreenShort")}
+            disabled={logActionsDisabled}
             onClick={onFullscreen}
           >
             <Maximize2 className="size-3.5" aria-hidden="true" />
@@ -193,6 +204,7 @@ export function LogsFilterBar({
           {t("logs.errorCodeLabel", { code: errorCode })}
         </InlineAlert>
       ) : null}
+
     </>
   );
 }
