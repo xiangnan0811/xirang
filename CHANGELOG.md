@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.66.0](https://github.com/xiangnan0811/xirang/compare/v0.65.0...v0.66.0) (2026-10-13)
+
+
+### ✨ Features
+
+* **automation:** add safe history IDs and task log navigation ([#618](https://github.com/xiangnan0811/xirang/issues/618)) ([238ed36](https://github.com/xiangnan0811/xirang/commit/238ed3664e4e9209a67380c94e578d8dcb08cb7d))
+
 ### 行为与升级说明
 
 - 自动化执行历史新增管理员安全标识展示与复制，只使用既有安全 DTO。历史 Log/Rule ID 与当前规则名称分开呈现；仅接受正安全整数，trigger_task 的 Task/Run 标识必须成对有效。旧记录缺失目标时明确提示，不反推关联或暴露原始错误、Details、通知正文。
@@ -11,13 +18,6 @@
 - 历史读取失败不再伪装成功空数组。普通分页失败保留已读记录与游标，允许明确重试；403/404 清除并封锁当前结果缓存，重试等待或失败不得恢复被拒绝内容。无可读记录的失败及首次读取/重试等待期间禁止空导出和空全屏，真正成功的空结果才展示空态；身份或任务切换后的旧响应不污染当前结果。
 - 行为从新版页面加载后生效；按同一发行版本切换 Core 与页面，完成或退出旧页面交互并刷新旧客户端，旧页面不会自动获得新保护。本次不改变后端读取、调度、执行和保留策略，无需因这些只读界面改动额外排空执行中的任务；换版、关闭页面或身份切换不撤销已提交任务、在途服务端操作或已发出的剪贴板写入。
 - 本次无新增数据库 schema migration，不回填或改写历史记录，不增加元数据或精确 Run 导航。升级前保全数据库、适用密钥与配置；回退旧页面会恢复旧筛选及错误展示缺陷，既有迁移降级保护与配套恢复要求仍适用。仅交付 R-16 第一阶段，不包含 R-15 完整计划绑定、P3 或生产部署；本地、CI、浏览器和公开发布证据不等于生产升级或灾备恢复验收。
-
-## [0.66.0](https://github.com/xiangnan0811/xirang/compare/v0.65.0...v0.66.0) (2026-10-13)
-
-
-### ✨ Features
-
-* **automation:** add safe history IDs and task log navigation ([#618](https://github.com/xiangnan0811/xirang/issues/618)) ([238ed36](https://github.com/xiangnan0811/xirang/commit/238ed3664e4e9209a67380c94e578d8dcb08cb7d))
 
 ## [0.65.0](https://github.com/xiangnan0811/xirang/compare/v0.64.0...v0.65.0) (2026-10-13)
 
