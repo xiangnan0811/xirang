@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.65.0](https://github.com/xiangnan0811/xirang/compare/v0.64.0...v0.65.0) (2026-10-13)
+
+
+### ✨ Features
+
+* **config:** add read-only import preview ([#616](https://github.com/xiangnan0811/xirang/issues/616)) ([094ff34](https://github.com/xiangnan0811/xirang/commit/094ff346826d4953540b075c1a79614873f0589e))
+
 ### 行为与升级说明
 
 - 配置导入新增管理员只读预览：选择文件后先查看五类配置的预计新建、更新、跳过、拒绝、待执行时校验及禁用数量，明确确认后仍须 fresh TOTP 二次验证和短时导入授权。未启用 TOTP 可查看预览，但不能继续执行。
@@ -11,13 +18,6 @@
 - 新版 Core 与页面按同一发行版本切换，预览接口从新版 Core 启动后生效，确认及身份隔离从新版页面加载后生效。升级前保全数据库、适用加密密钥与配置，完成或退出旧导入交互，并排空旧 Core 在途配置导入及相关设置运行时转换；旧进程已开始的操作不受新逻辑追溯保护，关闭页面或换版不撤销已提交写入。
 - 本次无新增数据库 schema migration，不改写历史配置或既有导入授权、审计、事务与失败补偿合同，旧客户端仍可直接调用实际导入。回退旧版本会失去预览入口和对应界面保护，不撤销已导入配置；既有迁移降级保护、数据库与密钥配套恢复要求仍适用，不能将无新迁移解释为任意旧版本可安全回退。
 - 本版本仅交付 R-15 第一阶段轻量预览，不包含完整计划绑定、R-16 或生产部署。提交结果未知时先核对实际节点、密钥与设置，不自动重试；本地、双数据库、真实浏览器和发布验收不等于生产升级或灾备恢复验收。
-
-## [0.65.0](https://github.com/xiangnan0811/xirang/compare/v0.64.0...v0.65.0) (2026-10-13)
-
-
-### ✨ Features
-
-* **config:** add read-only import preview ([#616](https://github.com/xiangnan0811/xirang/issues/616)) ([094ff34](https://github.com/xiangnan0811/xirang/commit/094ff346826d4953540b075c1a79614873f0589e))
 
 ## [0.64.0](https://github.com/xiangnan0811/xirang/compare/v0.63.0...v0.64.0) (2026-10-12)
 
