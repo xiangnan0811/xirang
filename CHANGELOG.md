@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.66.0](https://github.com/xiangnan0811/xirang/compare/v0.65.0...v0.66.0) (2026-10-13)
+
+
+### ✨ Features
+
+* **automation:** add safe history IDs and task log navigation ([#618](https://github.com/xiangnan0811/xirang/issues/618)) ([238ed36](https://github.com/xiangnan0811/xirang/commit/238ed3664e4e9209a67380c94e578d8dcb08cb7d))
+
 ### 行为与升级说明
 
 - 自动化执行历史新增管理员安全标识展示与复制，只使用既有安全 DTO。历史 Log/Rule ID 与当前规则名称分开呈现；仅接受正安全整数，trigger_task 的 Task/Run 标识必须成对有效。旧记录缺失目标时明确提示，不反推关联或暴露原始错误、Details、通知正文。
