@@ -129,6 +129,11 @@ operator、viewer 访问此页会返回概览，且不会请求规则或执行�
 - 安全 DTO 仅包含 `id`、`rule_id`、`event_type`、`action_type`、`result`、`created_at`、`error_code`、`target_task_id`、`target_task_run_id`。事件和动作仅公开上表各四种值，其他值为 `unknown`；结果仅公开 `success`、`error`，其他值同样为 `unknown`，不能推断为成功。
 - `result=error` 时 `error_code` 固定为 `ACTION_FAILED`，其他结果为 null。原始 `Error`、`Details`、通知消息、动作配置及 effect payload 不公开；旧错误可能包含完整配置，不能只靠通用脱敏正则保证安全。页面提示“动作失败；原始诊断可能包含敏感配置，未公开”，保留日志 ID 供管理员定位后台记录。
 - 仅 `trigger_task` 可从旧 `details.task_id`、`details.task_run_id` 提取目标；两者都必须是 JSON 整数格式的正数且不超过 JavaScript 安全整数上限。任意一项缺失、字符串、非整数、超界或 JSON 损坏时两者同时为 null；其他动作始终为 null。目标是历史 ID，不保证任务仍存在，不额外查询任务状态。
+- 页面保留历史 Log/Rule ID，只把规则列表中的名称标为“当前名称”，不当作执行时名称。无效标识显示未知；旧 `trigger_task` 缺少有效 Task/Run 对时明确提示未记录，不猜测关联。
+- 每行可复制已加载的安全标识，固定顺序为 `log_id`、`rule_id`、`task_id`、`task_run_id`，每行一个 `key=value`。非法项省略，Task/Run 只在 `trigger_task` 的目标对完整有效时同时加入；没有有效标识时禁用。复制不包含名称、时间、错误、Details 或通知正文，不额外读取数据，也不触发动作。
+- 复制成功以浏览器 Clipboard API 完成为准，失败明确提示，不自动重试或使用下载等回退。筛选、分页、刷新、卸载或认证会话变化使旧复制反馈失效；身份不匹配、非管理员及认证切换期间不发起复制。已发出的系统剪贴板写入无法撤回。
+- 只有有效 `trigger_task` 目标对提供“查看任务日志”，入口为 `/app/logs?task=<历史 Task ID>`。它查看任务级日志，不定位此次历史 Run，不添加 `run` 参数或跳到最新 Run。源历史不预请求目标详情；目标不可用或无权不影响源记录读取，入口不触发写请求。
+- 任务日志页从首帧按 URL 的任务 ID 查询；仅带 `task` 时不继承旧节点和关键字筛选。列表缺项仍保留历史 ID，不能据此宣称任务已删除或无权限；200 空结果只是当前无可读日志。403、404 和普通读取失败分别提示，用户可显式重试，权限继续由目标路由/API 判定，详见[任务日志读取合同](../spec/domains/task-execution-recovery.md#任务日志读取与历史入口)。
 - `success` 只表示“动作已记录”。`trigger_task` 表示已派发，不代表任务最终成功；`send_notification` 仅记录通知动作，不代表通知已投递。
 
 Legacy 直接派发失败会保留错误日志；durable 动作、日志和 effect 确认在同一事务中提交，事务失败回滚时不会凭空生成失败日志。因此此视图不是所有事件、重试或未提交执行的完整清单，不从缺失记录推断未发生动作。

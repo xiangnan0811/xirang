@@ -1,17 +1,36 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
+import { Copy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Pagination } from "@/components/ui/pagination";
 import { Select } from "@/components/ui/select";
+import { toast } from "@/components/ui/toast-sonner";
 import { createAutomationRulesApi, type AutomationRuleLog, type AutomationRuleLogQuery, type AutomationRuleLogPage } from "@/lib/api/automation-rules";
+import { getAuthIdentitySnapshot, getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import { formatTime } from "@/lib/date-utils";
 import type { AutomationRule } from "@/types/domain";
 
 const pageSize = 30;
 type Props = { token: string; rules: AutomationRule[] };
 type LoadState = { status: "loading" } | { status: "error" } | { status: "ready"; data: AutomationRuleLogPage };
+
+function isHistoryId(value: number | null): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function historyCopyLines(row: AutomationRuleLog): string[] {
+  const lines: string[] = [];
+  if (isHistoryId(row.id)) lines.push(`log_id=${row.id}`);
+  if (isHistoryId(row.ruleId)) lines.push(`rule_id=${row.ruleId}`);
+  if (row.actionType === "trigger_task" && isHistoryId(row.targetTaskId) && isHistoryId(row.targetTaskRunId)) {
+    lines.push(`task_id=${row.targetTaskId}`);
+    lines.push(`task_run_id=${row.targetTaskRunId}`);
+  }
+  return lines;
+}
 
 export function AutomationRuleHistory({ token, rules }: Props) {
   const { t } = useTranslation();
@@ -54,6 +73,25 @@ export function AutomationRuleHistory({ token, rules }: Props) {
   );
 }
 
+function HistoryLogId({ id }: { id: number }) {
+  const { t } = useTranslation();
+  return <>{isHistoryId(id) ? t("automation.history.logId", { id }) : t("automation.history.unknown")}</>;
+}
+
+function HistoryRule({ row, rules, emphasize = false }: { row: AutomationRuleLog; rules: AutomationRule[]; emphasize?: boolean }) {
+  const { t } = useTranslation();
+  const primary = emphasize ? "break-words font-medium" : "break-words";
+  if (!isHistoryId(row.ruleId)) return <p className={primary}>{t("automation.history.unknown")}</p>;
+  const current = rules.find((item) => item.id === row.ruleId);
+  if (!current) return <p className={primary}>{t("automation.history.unavailableRule", { id: row.ruleId })}</p>;
+  return (
+    <div className="space-y-1">
+      <p className={primary}>{t("automation.history.ruleId", { id: row.ruleId })}</p>
+      <p className="break-words text-xs text-muted-foreground">{t("automation.history.currentRuleName", { name: current.name })}</p>
+    </div>
+  );
+}
+
 function HistoryOutcome({ row }: { row: AutomationRuleLog }) {
   const { t } = useTranslation();
   return (
@@ -68,13 +106,54 @@ function HistoryOutcome({ row }: { row: AutomationRuleLog }) {
 
 function HistoryAction({ row }: { row: AutomationRuleLog }) {
   const { t } = useTranslation();
+  const paired = row.actionType === "trigger_task" && isHistoryId(row.targetTaskId) && isHistoryId(row.targetTaskRunId);
   return (
     <div className="space-y-1">
       <p>{row.actionType === "unknown" ? t("automation.history.unknown") : t(`automation.actionTypes.${row.actionType}`)}</p>
       {row.result === "success" && row.actionType === "trigger_task" && <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.dispatched")}</p>}
       {row.result === "success" && row.actionType === "send_notification" && <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.notificationRecorded")}</p>}
-      {row.targetTaskId !== null && row.targetTaskRunId !== null && (
+      {paired && (
         <p className="text-xs text-muted-foreground">{t("automation.history.targets", { taskId: row.targetTaskId, runId: row.targetTaskRunId })}</p>
+      )}
+      {row.actionType === "trigger_task" && !paired && (
+        <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.missingTargets")}</p>
+      )}
+    </div>
+  );
+}
+
+function HistoryRecordActions({ row, copyDisabled, onCopy }: {
+  row: AutomationRuleLog;
+  copyDisabled: boolean;
+  onCopy: (row: AutomationRuleLog) => void;
+}) {
+  const { t } = useTranslation();
+  const hintId = useId();
+  const idLabel = isHistoryId(row.id) ? row.id : t("automation.history.unknown");
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={copyDisabled || historyCopyLines(row).length === 0}
+        aria-label={t("automation.history.copyIdsLabel", { id: idLabel })}
+        onClick={() => { onCopy(row); }}
+      >
+        <Copy className="size-3.5" aria-hidden="true" />
+        {t("automation.history.copyIds")}
+      </Button>
+      {row.actionType === "trigger_task" && isHistoryId(row.targetTaskId) && isHistoryId(row.targetTaskRunId) && (
+        <>
+          <Button asChild variant="outline" size="sm">
+            <Link to={`/app/logs?task=${row.targetTaskId}`} aria-describedby={hintId}>
+              {t("automation.history.taskLogs")}
+            </Link>
+          </Button>
+          <p id={hintId} className="max-w-56 text-xs text-muted-foreground">
+            {t("automation.history.taskLogsHint")}
+          </p>
+        </>
       )}
     </div>
   );
@@ -85,7 +164,24 @@ function HistoryResults({ token, rules, query, onPageChange, onRetry }: Props & 
 }) {
   const { t } = useTranslation();
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [copyPending, setCopyPending] = useState(false);
+  const copyPendingRef = useRef(false);
+  const epochRef = useRef(0);
+  const mountedRef = useRef(false);
+  const sessionGenerationRef = useRef(0);
   const { ruleId, result, page } = query;
+
+  useLayoutEffect(() => {
+    // Both passes move the epoch so a StrictMode remount cannot finish a discarded copy.
+    mountedRef.current = true;
+    epochRef.current += 1;
+    sessionGenerationRef.current = getAuthSessionGeneration();
+    return () => {
+      mountedRef.current = false;
+      epochRef.current += 1;
+    };
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     void createAutomationRulesApi().listLogs(token, { ruleId, result, page, pageSize }, { signal: controller.signal })
@@ -93,6 +189,38 @@ function HistoryResults({ token, rules, query, onPageChange, onRetry }: Props & 
       .catch(() => { if (!controller.signal.aborted) setState({ status: "error" }); });
     return () => controller.abort();
   }, [token, ruleId, result, page]);
+
+  function copyStillValid(epoch: number): boolean {
+    const identity = getAuthIdentitySnapshot();
+    return mountedRef.current && epochRef.current === epoch
+      && identity.token === token
+      && identity.role === "admin"
+      && getAuthSessionGeneration() === sessionGenerationRef.current
+      && !isAuthTransitionActive();
+  }
+
+  function releaseCopyPending(epoch: number) {
+    if (!mountedRef.current || epochRef.current !== epoch) return;
+    copyPendingRef.current = false;
+    setCopyPending(false);
+  }
+
+  async function copyRow(row: AutomationRuleLog): Promise<void> {
+    const epoch = epochRef.current;
+    if (copyPendingRef.current || !copyStillValid(epoch)) return;
+    const text = historyCopyLines(row).join("\n");
+    if (!text) return;
+    copyPendingRef.current = true;
+    setCopyPending(true);
+    try {
+      await navigator.clipboard.writeText(text);
+      if (copyStillValid(epoch)) toast.success(t("common.copiedToClipboard"));
+    } catch {
+      if (copyStillValid(epoch)) toast.error(t("common.copyFailed"));
+    } finally {
+      releaseCopyPending(epoch);
+    }
+  }
 
   if (state.status === "loading") return <p role="status" className="py-6 text-sm text-muted-foreground">{t("common.loading")}</p>;
   if (state.status === "error") return (
@@ -102,11 +230,8 @@ function HistoryResults({ token, rules, query, onPageChange, onRetry }: Props & 
     </div>
   );
   const { items, total } = state.data;
-  const ruleName = (row: AutomationRuleLog) => {
-    const rule = rules.find((item) => item.id === row.ruleId);
-    return rule ? `${rule.name} (#${rule.id})` : t("automation.history.unavailableRule", { id: row.ruleId });
-  };
   const eventName = (row: AutomationRuleLog) => row.eventType === "unknown" ? t("automation.history.unknown") : t(`automation.eventTypes.${row.eventType}`);
+  const copyRecord = (row: AutomationRuleLog) => { void copyRow(row); };
   return (
     <Card>
       <CardContent className="space-y-3 p-4">
@@ -116,24 +241,26 @@ function HistoryResults({ token, rules, query, onPageChange, onRetry }: Props & 
             // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
             tabIndex={0}
             className="hidden overflow-x-auto rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:block">
-            <table className="w-full min-w-[800px] text-sm">
+            <table className="w-full min-w-[960px] text-sm">
               <thead><tr className="border-b border-border text-left text-muted-foreground">
-                {["time", "rule", "event", "action", "result"].map((column) => <th key={column} scope="col" className="px-3 py-2">{t(`automation.history.${column}`)}</th>)}
+                {["time", "rule", "event", "action", "result", "details"].map((column) => <th key={column} scope="col" className="px-3 py-2">{t(`automation.history.${column}`)}</th>)}
               </tr></thead>
               <tbody>{items.map((row) => <tr key={row.id} className="border-b border-border align-top last:border-0">
-                <td className="whitespace-nowrap px-3 py-3"><time dateTime={row.createdAt}>{formatTime(row.createdAt)}</time><p className="text-xs text-muted-foreground">{t("automation.history.logId", { id: row.id })}</p></td>
-                <td className="max-w-64 break-words px-3 py-3">{ruleName(row)}</td>
+                <td className="whitespace-nowrap px-3 py-3"><time dateTime={row.createdAt}>{formatTime(row.createdAt)}</time><p className="text-xs text-muted-foreground"><HistoryLogId id={row.id} /></p></td>
+                <td className="max-w-64 px-3 py-3"><HistoryRule row={row} rules={rules} /></td>
                 <td className="px-3 py-3">{eventName(row)}</td>
                 <td className="px-3 py-3"><HistoryAction row={row} /></td>
                 <td className="px-3 py-3"><HistoryOutcome row={row} /></td>
+                <td className="px-3 py-3"><HistoryRecordActions row={row} copyDisabled={copyPending} onCopy={copyRecord} /></td>
               </tr>)}</tbody>
             </table>
           </div>
           <ul aria-label={t("automation.history.title")} className="space-y-3 md:hidden">
             {items.map((row) => <li key={row.id} className="space-y-2 rounded-lg border border-border p-3 text-sm">
-              <p className="break-words font-medium">{ruleName(row)}</p>
-              <p className="text-xs text-muted-foreground"><time dateTime={row.createdAt}>{formatTime(row.createdAt)}</time> · {t("automation.history.logId", { id: row.id })}</p>
+              <HistoryRule row={row} rules={rules} emphasize />
+              <p className="text-xs text-muted-foreground"><time dateTime={row.createdAt}>{formatTime(row.createdAt)}</time>{" · "}<HistoryLogId id={row.id} /></p>
               <p>{eventName(row)}</p><HistoryAction row={row} /><HistoryOutcome row={row} />
+              <HistoryRecordActions row={row} copyDisabled={copyPending} onCopy={copyRecord} />
             </li>)}
           </ul>
         </>}

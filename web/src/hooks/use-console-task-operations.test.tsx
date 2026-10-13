@@ -15,6 +15,7 @@ const { apiClientMock } = vi.hoisted(() => ({
     triggerTask: vi.fn(),
     getTask: vi.fn(),
     getAlerts: vi.fn(),
+    getTaskLogs: vi.fn(),
   },
 }));
 
@@ -63,7 +64,6 @@ function renderOperations(options?: { token?: string | null; demo?: boolean; str
   const tasks = [createTask(7)];
   const setTasks = vi.fn();
   const setAlerts = vi.fn();
-  const setWarning = vi.fn();
   const markTasksMutated = vi.fn();
   const ensureDemoWriteAllowed = vi.fn();
   const handleWriteApiError = vi.fn((_action: string, error: unknown) => {
@@ -96,7 +96,6 @@ function renderOperations(options?: { token?: string | null; demo?: boolean; str
     tasks,
     setTasks,
     setAlerts,
-    setWarning,
     markTasksMutated,
     ensureDemoWriteAllowed,
     handleWriteApiError,
@@ -126,6 +125,8 @@ describe("useTaskOperations trigger lifetime", () => {
     apiClientMock.triggerTask.mockReset();
     apiClientMock.getTask.mockReset();
     apiClientMock.getAlerts.mockReset();
+    apiClientMock.getTaskLogs.mockReset();
+    apiClientMock.getTaskLogs.mockResolvedValue([]);
     apiClientMock.requestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 1, status: "active" });
     apiClientMock.triggerTask.mockResolvedValue(undefined);
     apiClientMock.getTask.mockResolvedValue({ ...createTask(7), status: "running", progress: 40 });
@@ -335,5 +336,30 @@ describe("useTaskOperations trigger lifetime", () => {
     await expect(result.current.triggerTask(7, () => true)).rejects.toBeInstanceOf(StepUpPausedError);
     expect(apiClientMock.requestTaskManualTriggerCredentialGrant).not.toHaveBeenCalled();
     expect(apiClientMock.triggerTask).not.toHaveBeenCalled();
+  });
+
+  it("returns api log failures instead of an empty success", async () => {
+    const forbidden = new ApiError(403, "denied");
+    forbidden.httpStatus = 403;
+    apiClientMock.getTaskLogs.mockRejectedValueOnce(forbidden);
+    const denied = renderOperations();
+    await expect(denied.result.current.fetchTaskLogs(7)).rejects.toBe(forbidden);
+
+    const network = new Error("network down");
+    apiClientMock.getTaskLogs.mockRejectedValueOnce(network);
+    const failed = renderOperations();
+    await expect(failed.result.current.fetchTaskLogs(7)).rejects.toBe(network);
+  });
+
+  it("returns an empty log list when the api succeeds with no rows", async () => {
+    apiClientMock.getTaskLogs.mockResolvedValueOnce([]);
+    const { result } = renderOperations();
+    await expect(result.current.fetchTaskLogs(7)).resolves.toEqual([]);
+  });
+
+  it("keeps the no-token log path from calling the api", async () => {
+    const { result } = renderOperations({ token: null });
+    await expect(result.current.fetchTaskLogs(7)).resolves.toEqual([]);
+    expect(apiClientMock.getTaskLogs).not.toHaveBeenCalled();
   });
 });
