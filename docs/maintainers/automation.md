@@ -80,6 +80,11 @@ task 包的 `^TestBatchCommandRetry` 测试，覆盖事务竞争、授权、运�
 门禁的 `Test.*Migration.*Postgres.*` 选择器覆盖。required-test runner 拒绝空匹配或缺少
 `TEST_POSTGRES_DSN`，CI 同时启用 PostgreSQL required-test 环境开关，避免缺失数据库被误报为通过。
 
+配置导入预览与实际导入的 PostgreSQL 门禁通过同一 required-test runner 执行 handlers
+包的 `^TestConfig(Import|Export)` 测试，包含 `Postgres` 后缀、`BothEngines` HTTP
+契约和无数据库后缀的双引擎依赖环用例；不能以普通 backend job 中跳过 PostgreSQL
+分支的结果替代该门禁。该选择器同时保留导出再导入与原有实际导入兼容性验证。
+
 后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI action 与
 `scripts/lint-backend.sh` 同步更新。本地通过带版本的 `go run` 隔离工具依赖，
 以当前选中的 Go 工具链构建并运行，避免系统 Go 升级后继续加载由旧 Go 构建的 linter。

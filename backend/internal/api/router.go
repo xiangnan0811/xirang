@@ -794,6 +794,15 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.PUT("/settings", middleware.RequireRole("admin"), settingsHandler.BatchUpdate)
 	secured.DELETE("/settings/:key", middleware.RequireRole("admin"), settingsHandler.Delete)
 
+	// Configuration import preview is intentionally independent from secured:
+	// AuditLogger records POST request hashes after c.Next, while preview is
+	// a read-only estimate and must not create audit, step-up, or grant rows.
+	configImportPreviewRoute := v1.Group("")
+	configImportPreviewRoute.Use(middleware.AuthMiddleware(dep.JWTManager, dep.DB))
+	configImportPreviewRoute.Use(middleware.APIRateLimit(200, time.Minute))
+	configImportPreviewRoute.Use(middleware.MaxBodySize(20 << 20))
+	configImportPreviewRoute.POST("/config/import/preview", middleware.RequireRole("admin"), configHandler.PreviewImport)
+
 	secured.GET("/config/export", middleware.RequireRole("admin"), handlers.RequireStepUpIf(dep.DB, dep.JWTManager, auth.StepUpActionConfigExport, handlers.CredentialGrantPurposeConfigExport, "settings_export_sensitive", func(c *gin.Context) bool {
 		return c.Query("include_secrets") == "true"
 	}), handlers.RequireConfigExportCredentialGrantIf(dep.DB, func(c *gin.Context) bool {

@@ -728,9 +728,11 @@ async function importDownload(page: Page, secret: string, stepUps: { count: numb
     mimeType: "application/json",
     buffer: Buffer.from(contents),
   });
-  const confirm = page.getByRole("alertdialog");
-  await expect(confirm).toBeVisible();
-  await confirm.getByRole("button", { name: "Confirm", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: "Import preview" });
+  await expect(preview).toBeVisible();
+  await expect(preview.getByText("Counts are estimates from the current snapshot.", { exact: true })).toBeVisible();
+  await expect(preview.getByLabel("When a name already exists", { exact: true })).toHaveValue("skip");
+  await preview.getByRole("button", { name: "Confirm and continue verification", exact: true }).click();
   const grant = page.getByRole("dialog", { name: "Config import temporary grant required" });
   await expect(grant).toBeVisible();
   await grant.locator("#config-import-grant-reason").fill("restore configuration names after local id shift");

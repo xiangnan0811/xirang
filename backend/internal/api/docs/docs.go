@@ -5850,7 +5850,6 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "从 JSON 文件导入节点、SSH 密钥、策略、任务配置；nodes[].ssh_key_name 与 ssh_keys[].allowed_node_names 使用精确名称映射，缺失沿用旧数字字段规则，空值解除关联，null 或非法引用保留为未解析并返回 warning；名称字段优先于旧数字字段，冲突不会静默清空。支持 skip/overwrite；warning code 枚举为 invalid_input、invalid_scope、invalid_private_key、missing_private_key、missing_password、missing_inline_private_key、unresolved_ssh_key、unresolved_node_scope、duplicate_name、invalid_reference、reference_conflict，未知附加字段保持兼容",
                 "consumes": [
                     "application/json"
                 ],
@@ -5869,7 +5868,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "配置 JSON 数据；nodes[].ssh_key_name 为 string/null（空字符串解除关联），ssh_keys[].allowed_node_names 为 string[]/null（空数组清空范围）；字段缺失沿用旧数字 ID 规则",
+                        "description": "配置 JSON 数据",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -5905,6 +5904,87 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/config/import/preview": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "在当前只读数据库快照上评估配置导入候选；不执行写入、秘密解密、step-up 或凭据授权。返回值仅为提交时可能变化的预估。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "预览配置导入",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "冲突策略（skip 默认/overwrite）",
+                        "name": "conflict",
+                        "in": "query"
+                    },
+                    {
+                        "description": "配置 JSON 数据",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.configImportPreviewResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -18848,6 +18928,156 @@ const docTemplate = `{
                 },
                 "new_password": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.configImportPendingCheck": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "entity": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.configImportPreviewAsset": {
+            "type": "object",
+            "properties": {
+                "entity": {
+                    "type": "string"
+                },
+                "input": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.configImportPreviewEntity": {
+            "type": "object",
+            "properties": {
+                "created": {
+                    "type": "integer"
+                },
+                "disabled_imported": {
+                    "type": "integer"
+                },
+                "entity": {
+                    "type": "string"
+                },
+                "input": {
+                    "type": "integer"
+                },
+                "pending_validation": {
+                    "type": "integer"
+                },
+                "rejected": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "type": "integer"
+                },
+                "updated": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.configImportPreviewResult": {
+            "type": "object",
+            "properties": {
+                "asset_graph": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.configImportPreviewAsset"
+                    }
+                },
+                "basis": {
+                    "type": "string"
+                },
+                "conflict": {
+                    "type": "string"
+                },
+                "entities": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.configImportPreviewEntity"
+                    }
+                },
+                "pending_checks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.configImportPendingCheck"
+                    }
+                },
+                "pending_checks_truncated": {
+                    "type": "integer"
+                },
+                "requires_apply_validation": {
+                    "type": "boolean"
+                },
+                "secrets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.configImportPreviewSecret"
+                    }
+                },
+                "secrets_truncated": {
+                    "type": "integer"
+                },
+                "system_settings": {
+                    "$ref": "#/definitions/internal_api_handlers.configImportPreviewSystemSettings"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.configImportWarning"
+                    }
+                },
+                "warnings_truncated": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.configImportPreviewSecret": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "entity": {
+                    "type": "string"
+                },
+                "field": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "present": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_api_handlers.configImportPreviewSystemSettings": {
+            "type": "object",
+            "properties": {
+                "applies_in_skip": {
+                    "type": "boolean"
+                },
+                "created": {
+                    "type": "integer"
+                },
+                "updated": {
+                    "type": "integer"
+                },
+                "will_write": {
+                    "type": "boolean"
                 }
             }
         },

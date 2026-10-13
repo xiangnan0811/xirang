@@ -606,12 +606,7 @@ func runConfigImportCreateOrQueryRollback(t *testing.T, engine, mode string) {
 						tx.Statement.Schema.Table != testCase.table {
 						return
 					}
-					querySQL := strings.ToLower(tx.Statement.SQL.String())
-					inventoryRead := (testCase.table == "ssh_keys" || testCase.table == "nodes") &&
-						len(tx.Statement.Vars) == 0 && !strings.Contains(querySQL, "where")
-					if inventoryRead || strings.Contains(fmt.Sprint(tx.Statement.Vars), testCase.second) {
-						_ = tx.AddError(injected)
-					}
+					_ = tx.AddError(injected)
 				})
 			}
 			if registerErr != nil {
