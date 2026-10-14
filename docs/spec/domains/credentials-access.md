@@ -369,7 +369,7 @@ Doctor 继续按需验证 SSH、权限、工具、目录和备份空间，不检
 
 已打开终端不晚于 JWT 或 session 时限关闭，并定期及每次转发输入前重新核对持久化撤销和当前用户权限；无法确认即关闭。关闭使用有界 WebSocket control write，先关闭 SSH transport 再等待 worker；终端关闭审计共用有界预算，写入失败不无限延长 handler。
 
-前端通过 typed API 将 `nodeId/reason/requestedTtlSeconds` 映射为 `node_id/reason/requested_ttl_seconds`，step-up 走既有请求 header/option；默认 TTL 为 10 分钟，可请求 1–30 分钟，reason 上限为 240 个字符。DTO 全部映射 camelCase，未知 status 回退不授权状态，非法 ID/TTL 不得成为 NaN，缺审批者不得虚构。grant、reason、拒绝状态均不进入 localStorage/sessionStorage。
+前端通过 typed API 将 `nodeId/reason/requestedTtlSeconds` 映射为 `node_id/reason/requested_ttl_seconds`，step-up 走既有请求 header/option；默认 TTL 为 10 分钟，可请求 1–30 分钟，reason 上限为 240 个字符。DTO 全部映射 camelCase，未知 status 保留为 `unknown`，不视为活动或过期；非法 ID/TTL 不得成为 NaN，缺审批者不得虚构。grant、reason、拒绝状态均不进入 localStorage/sessionStorage。
 
 终端 reason dialog 状态仅保存在组件；复用 `ensureStepUpProof()`，一次性 grant/action 请求使用不持久化 proof，不复用缓存。grant-required close 不视为登录过期，不卸载父终端；脱敏且有界地展示 detail。空/超长 reason 阻止提交并有可访问提示。成功清理瞬态草稿并通过原连接流程重试一次；失败保留 dialog，取消清理状态且不重试，不改 auth session。
 
@@ -386,6 +386,24 @@ Doctor 继续按需验证 SSH、权限、工具、目录和备份空间，不检
 | `batch-command` | `batch_command.create / batch_command` | 每个去重后的 Node ID，任务写权限及 ownership |
 
 以上均叠加对应 action step-up 和主认证。管理员 grant 列表是只读筛选/查看入口，不提供批准、拒绝或撤销按钮。回归覆盖 TTL/reason/DTO、真实 RBAC 与 step-up、全部元组不匹配及到期边界、gate 早于秘密读取或执行、授权创建/使用/拒绝审计、终端撤销与关闭、grant-required dialog 重连和无浏览器持久化。
+
+只读管理页按数据库**存储状态**精确筛选，不按浏览器时钟改写状态、二次过滤分页结果，
+也不因 GET 将记录写回过期。常用筛选为全部、active、expired；requested、approved、
+denied、revoked 归入其他/历史记录状态，不表示当前存在管理员审批待办。未知 wire 状态
+在全部结果中显示为未知，不提供 `status=unknown` 查询。当前用户经对应二次验证后自批准；
+本页不新增授权能力，active/approved 徽章也不承诺操作当前可用。
+
+到期提示独立于记录状态：只使用原始带显式时区的 RFC3339 时间解析出的有限时间戳，
+与浏览器当前时间比较；等于当前时间视为已到期，缺失或不可解析时显示时间未知，
+不展示非法日期文本。桌面、移动与详情使用同一提示；前台本地时钟推进展示，隐藏暂停、
+恢复可见立即更新，不周期请求 API。未到期不代表获得授权，实际操作仍由服务器校验
+身份、角色、资源、存储状态及 expiry。
+
+“本页”仅为当前响应 items 数量，“筛选结果”为服务器 total，分页使用响应中的
+page/pageSize/total，不表示系统有效授权总数。时间范围按创建时间过滤，默认近 24 小时，
+旧记录可选择全部时间。筛选、翻页、查询或刷新会同步移除旧结果、计数及详情；
+加载、成功空结果、403 与其他失败分别显示，错误提供显式只读重试且不冒充零结果。
+结果及迟到响应绑定当前 admin 身份、认证代次与查询，身份转换期间不挂载请求或旧详情。
 
 节点紧急备份 `POST /nodes/:id/emergency-backup` 保持 `tasks:trigger` 与节点 ownership，使用普通手动任务的 `task.manual_trigger / task_command` step-up；空任务集合也须通过二次验证。服务端按 ID 升序一次性选取该节点的 policy 来源 rsync/restic/rclone 任务，先核对整组逐 Task ID 的有效 grant，再开始触发，不能把 Node ID 当作 Task ID。任一授权缺失时整组不提交；授权后的业务触发仍可部分失败，`task_ids` 仅返回成功提交的 Task ID（不是 Run ID），`triggered` 为其数量，`errors` 经共享脱敏处理。整组准入沿用批量授权的时间点语义，不承诺提交期间撤销可原子取消全部任务。
 
