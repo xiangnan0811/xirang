@@ -12,6 +12,13 @@
 - 行为从新版页面加载后生效；按同一发行版本切换 Core 与页面，完成或退出旧页面交互并刷新客户端。旧页面不会自动获得新提示及请求隔离；本次不改后端读取、调度或执行，无需因只读展示修复额外排空任务，换版、关闭页面或身份切换不撤销已提交的服务端操作。
 - 本次无新增数据库 schema migration，不清理、回填或改写历史授权。升级前保全数据库、适用密钥与配置；回退旧页面会恢复旧状态、统计与错误展示缺陷，既有迁移降级保护及配套恢复要求仍适用。仅交付 R-18，不新增审批流或全量实时有效查询，公开发布不等于生产部署或灾备恢复验收。
 
+## [0.66.1](https://github.com/xiangnan0811/xirang/compare/v0.66.0...v0.66.1) (2026-10-14)
+
+
+### 🐛 Bug Fixes
+
+* **credentials:** distinguish stored grant status from expiry ([#620](https://github.com/xiangnan0811/xirang/issues/620)) ([6816c78](https://github.com/xiangnan0811/xirang/commit/6816c7867bbe1d490769f1b6b15f060fd0c339a7))
+
 ## [0.66.0](https://github.com/xiangnan0811/xirang/compare/v0.65.0...v0.66.0) (2026-10-13)
 
 
