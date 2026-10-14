@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.66.1](https://github.com/xiangnan0811/xirang/compare/v0.66.0...v0.66.1) (2026-10-14)
+
+
+### 🐛 Bug Fixes
+
+* **credentials:** distinguish stored grant status from expiry ([#620](https://github.com/xiangnan0811/xirang/issues/620)) ([6816c78](https://github.com/xiangnan0811/xirang/commit/6816c7867bbe1d490769f1b6b15f060fd0c339a7))
+
 ### 行为与升级说明
 
 - 临时授权管理页明确为管理员只读入口，授权仍由发起操作的用户完成对应二次验证后自批准；不新增批准、拒绝或撤销操作，也不改变服务端授权 gate、资源权限或持久状态机。
@@ -11,13 +18,6 @@
 - 筛选、翻页、查询和刷新清除旧记录、计数与详情；迟到响应绑定当前查询及管理员身份。加载、成功空结果、403 和其他失败分别展示，错误支持显式只读重试，不泄露原始错误或将失败伪装为零结果。
 - 行为从新版页面加载后生效；按同一发行版本切换 Core 与页面，完成或退出旧页面交互并刷新客户端。旧页面不会自动获得新提示及请求隔离；本次不改后端读取、调度或执行，无需因只读展示修复额外排空任务，换版、关闭页面或身份切换不撤销已提交的服务端操作。
 - 本次无新增数据库 schema migration，不清理、回填或改写历史授权。升级前保全数据库、适用密钥与配置；回退旧页面会恢复旧状态、统计与错误展示缺陷，既有迁移降级保护及配套恢复要求仍适用。仅交付 R-18，不新增审批流或全量实时有效查询，公开发布不等于生产部署或灾备恢复验收。
-
-## [0.66.1](https://github.com/xiangnan0811/xirang/compare/v0.66.0...v0.66.1) (2026-10-14)
-
-
-### 🐛 Bug Fixes
-
-* **credentials:** distinguish stored grant status from expiry ([#620](https://github.com/xiangnan0811/xirang/issues/620)) ([6816c78](https://github.com/xiangnan0811/xirang/commit/6816c7867bbe1d490769f1b6b15f060fd0c339a7))
 
 ## [0.66.0](https://github.com/xiangnan0811/xirang/compare/v0.65.0...v0.66.0) (2026-10-13)
 
