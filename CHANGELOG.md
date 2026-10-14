@@ -8,6 +8,7 @@
 ### 🐛 Bug Fixes
 
 * **credentials:** distinguish stored grant status from expiry ([#620](https://github.com/xiangnan0811/xirang/issues/620)) ([6816c78](https://github.com/xiangnan0811/xirang/commit/6816c7867bbe1d490769f1b6b15f060fd0c339a7))
+* 修正 SFTP 恢复取消回归中跨 goroutine 的偶发全序断言：保留精确取消结果与返回前资源恰好关闭一次的约束，专门的传输优先关闭回归不变；不修改生产恢复或关闭逻辑。
 
 ### 行为与升级说明
 
