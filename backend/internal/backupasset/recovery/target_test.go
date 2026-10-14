@@ -19042,7 +19042,7 @@ func TestRecoverySFTPTargetReconciliationResourceErrorAndPrivacyMatrix(t *testin
 		assertCloseState(t, recorder, []string{"jobs", "sftp", "ssh"})
 	})
 
-	t.Run("concurrent cancellation wins close noise and closes transport before tracked handle", func(t *testing.T) {
+	t.Run("concurrent cancellation wins close noise and joins exactly-once cleanup", func(t *testing.T) {
 		fixture := newRecoveryLocalSFTPTargetFixture(t)
 		jobsPath := filepath.Join(fixture.root, recoveryWorkspaceLocatorDirectory)
 		if err := os.Mkdir(jobsPath, 0o700); err != nil {
@@ -19120,7 +19120,13 @@ func TestRecoverySFTPTargetReconciliationResourceErrorAndPrivacyMatrix(t *testin
 		if got.err != context.Canceled || !reflect.DeepEqual(got.page, TargetReconciliationPage{}) {
 			t.Fatalf("canceled reconciliation page=%+v error=%v, want exact context cancellation", got.page, got.err)
 		}
-		assertCloseState(t, recorder, []string{"sftp", "ssh", "jobs"})
+		// The scan can close its directory while the cancellation watcher is
+		// closing SSH. Only cleanup completion and exactly-once ownership are
+		// guaranteed across those goroutines, not their total close order.
+		_, counts := recorder.snapshot()
+		if !reflect.DeepEqual(counts, map[string]int{"sftp": 1, "ssh": 1, "jobs": 1}) {
+			t.Fatalf("resource close calls=%v, want each owned resource closed exactly once before return", counts)
+		}
 	})
 
 	t.Run("complete boundary privacy canaries and zero direct logs", func(t *testing.T) {
