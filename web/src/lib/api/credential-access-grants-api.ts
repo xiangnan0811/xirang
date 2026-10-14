@@ -70,13 +70,21 @@ function mapGrantStatus(value: unknown): CredentialAccessGrantStatus {
     case "revoked":
       return raw;
     default:
-      return "expired";
+      return "unknown";
   }
 }
 
 function displayTime(value: unknown): string {
   const raw = stringValue(value);
   return raw ? formatTime(raw) : "";
+}
+
+function expiryTimestamp(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    return undefined;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
 export function buildCredentialAccessGrantQuery(options?: CredentialAccessGrantListOptions): URLSearchParams {
@@ -136,6 +144,7 @@ export function mapCredentialAccessGrant(raw: CredentialAccessGrantResponse | nu
     approverUserId: positiveNumberOrUndefined(row.approver_user_id),
     approverUsername: stringValue(row.approver_username) || undefined,
     expiresAt: displayTime(row.expires_at),
+    expiresAtMs: expiryTimestamp(row.expires_at),
     revokedAt: displayTime(row.revoked_at) || undefined,
     revokedByUserId: positiveNumberOrUndefined(row.revoked_by_user_id),
     createdAt: displayTime(row.created_at),
@@ -148,12 +157,13 @@ export function createCredentialAccessGrantsApi() {
     async listCredentialAccessGrants(
       token: string,
       options?: CredentialAccessGrantListOptions,
+      requestOptions?: { signal?: AbortSignal },
     ): Promise<{ items: CredentialAccessGrant[]; total: number; page: number; pageSize: number }> {
       const query = buildCredentialAccessGrantQuery(options);
       const suffix = query.toString() ? `?${query.toString()}` : "";
       const payload = await request<PaginatedEnvelope<CredentialAccessGrantResponse[]>>(
         `/credential-access-grants${suffix}`,
-        { token },
+        { token, ...requestOptions },
       );
       const result = unwrapPaginated(payload);
       return {

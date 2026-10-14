@@ -139,8 +139,34 @@ describe("credential access grants api", () => {
 
     expect(grant.action).toBe("unknown");
     expect(grant.purpose).toBe("unknown");
-    expect(grant.status).toBe("expired");
+    expect(grant.status).toBe("unknown");
   });
+
+  it.each(["requested", "approved", "active", "denied", "expired", "revoked"])(
+    "preserves the stored %s status independently of expiry",
+    (status) => {
+      expect(mapCredentialAccessGrant({ status, expires_at: "2020-01-01T00:00:00Z" }).status).toBe(status);
+    },
+  );
+
+  it.each(["future_state", null, undefined])("retains unknown status for %s", (status) => {
+    expect(mapCredentialAccessGrant({ status }).status).toBe("unknown");
+  });
+
+  it("maps explicit timezone expiry independently from its display string", () => {
+    const utc = mapCredentialAccessGrant({ expires_at: "2026-05-20T00:10:00.123Z" });
+    const offset = mapCredentialAccessGrant({ expires_at: "2026-05-20T08:10:00.123+08:00" });
+    expect(utc.expiresAtMs).toBe(Date.UTC(2026, 4, 20, 0, 10, 0, 123));
+    expect(offset.expiresAtMs).toBe(utc.expiresAtMs);
+    expect(utc.expiresAt).toBe(formatTime("2026-05-20T00:10:00.123Z"));
+  });
+
+  it.each(["", null, undefined, 1780000000000, "2026-05-20T00:10:00", "invalid", "2026-99-20T00:00:00Z"])(
+    "does not infer expiry from invalid or timezone-less input %s",
+    (expires_at) => {
+      expect(mapCredentialAccessGrant({ expires_at }).expiresAtMs).toBeUndefined();
+    },
+  );
 
   it("keeps batch command retry distinct from create and rejects unrecognized actions", () => {
     const retry = mapCredentialAccessGrant({

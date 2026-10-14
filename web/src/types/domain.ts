@@ -860,7 +860,7 @@ export type CredentialAuditMetadataValue = string | number | boolean | string[];
 
 export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "config.export" | "snapshot.restore" | "task.restore_trigger" | "task.manual_trigger" | "task.batch_trigger" | "batch_command.create" | "batch_command.retry" | "unknown";
 export type CredentialAccessGrantPurpose = "terminal" | "config_import" | "config_export" | "snapshot" | "task_restore" | "task_command" | "batch_command" | "unknown";
-export type CredentialAccessGrantStatus = "requested" | "approved" | "active" | "denied" | "expired" | "revoked";
+export type CredentialAccessGrantStatus = "requested" | "approved" | "active" | "denied" | "expired" | "revoked" | "unknown";
 
 export interface CredentialAccessGrant {
   id: number;
@@ -880,6 +880,7 @@ export interface CredentialAccessGrant {
   approverUserId?: number;
   approverUsername?: string;
   expiresAt: string;
+  expiresAtMs?: number;
   revokedAt?: string;
   revokedByUserId?: number;
   createdAt: string;
