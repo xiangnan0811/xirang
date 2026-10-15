@@ -1,9 +1,18 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PolicyEditorDialog } from "@/components/policy-editor-dialog";
+import { bumpAuthSessionGeneration } from "@/lib/api/core";
+
+const authFixture = vi.hoisted(() => ({ token: "FAKE_POLICY_EDITOR_TOKEN_FOR_TEST_ONLY" }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 const apiFixture = vi.hoisted(() => {
   const deprecatedMethod = ["get", "Hook", "Templates"].join("");
@@ -75,7 +84,7 @@ vi.mock("react-i18next", () => ({
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ token: "FAKE_POLICY_EDITOR_TOKEN_FOR_TEST_ONLY" }),
+  useAuth: () => ({ token: authFixture.token }),
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -92,6 +101,7 @@ vi.mock("@/components/ui/toast-sonner", () => ({
 describe("PolicyEditorDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authFixture.token = "FAKE_POLICY_EDITOR_TOKEN_FOR_TEST_ONLY";
     apiMocks.deprecatedHookTemplates.mockResolvedValue([
       {
         id: "mysql",
@@ -117,11 +127,6 @@ describe("PolicyEditorDialog", () => {
       />
     );
 
-    await waitFor(() => {
-      expect(apiMocks.getProfiles).toHaveBeenCalledWith("FAKE_POLICY_EDITOR_TOKEN_FOR_TEST_ONLY");
-      expect(apiMocks.getCredentials).toHaveBeenCalledWith("FAKE_POLICY_EDITOR_TOKEN_FOR_TEST_ONLY");
-      expect(apiMocks.listEscalationPolicies).toHaveBeenCalledWith("FAKE_POLICY_EDITOR_TOKEN_FOR_TEST_ONLY");
-    });
     expect(apiMocks.deprecatedHookTemplates).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Advanced Settings" }));
@@ -146,5 +151,55 @@ describe("PolicyEditorDialog", () => {
     expect(screen.queryByRole("button", { name: "Trigger drill manually" })).not.toBeInTheDocument();
     expect(apiMocks.triggerDrill).not.toHaveBeenCalled();
   });
+
+  it.each(["close and reopen", "token change", "identity ABA"] as const)(
+    "keeps current selectable options after %s when old responses arrive last",
+    async (transition) => {
+      const user = userEvent.setup();
+      const oldProfiles = deferred<unknown[]>();
+      const oldCredentials = deferred<unknown[]>();
+      const oldEscalations = deferred<unknown[]>();
+      apiMocks.getProfiles.mockReturnValueOnce(oldProfiles.promise).mockResolvedValue([
+        { id: "mysql", name: "Current profile", credentialType: "mysql" },
+      ]);
+      apiMocks.getCredentials.mockReturnValueOnce(oldCredentials.promise).mockResolvedValue([
+        { id: 2, name: "Current credential", type: "mysql" },
+      ]);
+      apiMocks.listEscalationPolicies.mockReturnValueOnce(oldEscalations.promise).mockResolvedValue([
+        { id: 2, name: "Current escalation", enabled: true },
+        { id: 3, name: "Disabled escalation", enabled: false },
+      ]);
+      const props = { onOpenChange: vi.fn(), onSave: vi.fn().mockResolvedValue(undefined) };
+      const view = render(<PolicyEditorDialog {...props} open />);
+      if (transition === "close and reopen") {
+        view.rerender(<PolicyEditorDialog {...props} open={false} />);
+      } else {
+        authFixture.token = "FAKE_REPLACEMENT_TOKEN_FOR_TEST_ONLY";
+        bumpAuthSessionGeneration();
+      }
+      view.rerender(<PolicyEditorDialog {...props} open />);
+      if (transition === "identity ABA") {
+        authFixture.token = "FAKE_POLICY_EDITOR_TOKEN_FOR_TEST_ONLY";
+        bumpAuthSessionGeneration();
+        view.rerender(<PolicyEditorDialog {...props} open />);
+      }
+      await screen.findByRole("option", { name: "Current profile" });
+      await user.selectOptions(screen.getByLabelText("Select Profile"), "mysql");
+      await user.selectOptions(screen.getByLabelText("Select Credential"), "2");
+      await user.selectOptions(document.querySelector<HTMLSelectElement>("#policy-edit-escalation")!, "2");
+      await act(async () => {
+        oldProfiles.resolve([{ id: "old", name: "Old profile", credentialType: "mysql" }]);
+        oldCredentials.resolve([{ id: 1, name: "Old credential", type: "mysql" }]);
+        oldEscalations.resolve([{ id: 1, name: "Old escalation", enabled: true }]);
+      });
+      expect(screen.getByLabelText("Select Profile")).toHaveValue("mysql");
+      expect(screen.getByLabelText("Select Credential")).toHaveValue("2");
+      expect(document.querySelector("#policy-edit-escalation")).toHaveValue("2");
+      expect(screen.getByRole("option", { name: "Current profile" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Current credential (mysql)" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Current escalation" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /Old|Disabled escalation/ })).not.toBeInTheDocument();
+    },
+  );
 
 });

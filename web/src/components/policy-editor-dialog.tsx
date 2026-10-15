@@ -11,6 +11,7 @@ import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
 import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor";
 import { apiClient } from "@/lib/api/client";
+import { getAuthSessionGeneration } from "@/lib/api/core";
 import { useAuth } from "@/context/auth-context.hooks";
 import type { AppCredential, ProfileSchema } from "@/lib/api/credentials";
 import type { EscalationPolicy, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
@@ -134,11 +135,22 @@ export function PolicyEditorDialog({
 
   useEffect(() => {
     if (!open || !token) return;
-    apiClient.listEscalationPolicies(token)
-      .then((list) => setEscalationPolicies(list.filter((p) => p.enabled)))
+    const controller = new AbortController();
+    const { signal } = controller;
+    const generation = getAuthSessionGeneration();
+    const isCurrent = () => !signal.aborted && generation === getAuthSessionGeneration();
+    apiClient.listEscalationPolicies(token, { signal })
+      .then((list) => {
+        if (isCurrent()) setEscalationPolicies(list.filter((p) => p.enabled));
+      })
       .catch(() => {});
-    apiClient.getProfiles(token).then(setProfiles).catch(() => {});
-    apiClient.getCredentials(token).then(setCredentials).catch(() => {});
+    apiClient.getProfiles(token, signal).then((list) => {
+      if (isCurrent()) setProfiles(list);
+    }).catch(() => {});
+    apiClient.getCredentials(token, signal).then((list) => {
+      if (isCurrent()) setCredentials(list);
+    }).catch(() => {});
+    return () => controller.abort();
   }, [open, token]);
 
   const isEditing = Boolean(draft.id);

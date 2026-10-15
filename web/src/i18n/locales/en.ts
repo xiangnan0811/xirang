@@ -10,6 +10,8 @@ const en = {
     search: "Search",
     refresh: "Refresh",
     close: "Close",
+    toastNotifications: "Notifications (Alt+T)",
+    dismissNotification: "Dismiss notification",
     back: "Back",
     next: "Next",
     prev: "Previous",

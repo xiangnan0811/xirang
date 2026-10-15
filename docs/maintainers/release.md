@@ -147,6 +147,15 @@ CHANGELOG `0.66.0` 版本节的七项行为与升级说明；
 该版同时修正 SFTP 取消回归的跨 goroutine 全序断言；保留精确取消结果及返回前资源恰好关闭一次，
 保留独立的传输优先关闭回归，不改变生产恢复或关闭逻辑，不以重跑掩盖测试缺陷。
 
+Toast 与有界启动体积修复的发行说明须保留唯一应用播报通道、同文通知/未发布更新语义、
+可见浏览与键盘路径，以及按需凭据读取的取消、身份代次、认证屏障和不自动重试边界。
+新版页面加载后生效，旧客户端须完成或退出交互并刷新；不改后端调度/执行，
+无需额外排空任务，也不撤销已提交操作。无新增 schema migration，升级前保全数据库、
+适用密钥与配置，回退会恢复旧主题、播报及迟到选项缺陷，既有迁移降级与恢复要求不变。
+Release PR 与最终 GitHub Release 正文须完整保留该批 CHANGELOG 的五项行为与升级说明，
+不将 Orca/AT-SPI/Speech Dispatcher/eSpeak 的 libao null-sink 自动化验收写成人工耳听、
+其他读屏器或全站 WCAG 合规，不扩展为 Cron/Doctor 交付或生产部署。
+
 
 All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录
 `CRON_DB_BACKUP_STATE_DIR=/backup/.cron-db-state`，共用 26 小时默认窗口。发行验收须验证
