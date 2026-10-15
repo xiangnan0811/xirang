@@ -14,6 +14,13 @@
 - 本次无新增数据库 schema migration，不清理、回填或改写历史数据。升级前保全数据库、适用密钥与配置；回退旧页面会恢复旧主题、播报及迟到选项缺陷，既有迁移降级保护和配套恢复要求仍适用。
 - 仅交付 R-11 Toast 及有界启动体积修复，不包含 Cron、Doctor 或其他 P3。原生验收是 Orca/AT-SPI/Speech Dispatcher/eSpeak 经 libao null sink 的自动化链路，非人工耳听，不承诺其他读屏器或全站 WCAG 合规；公开发布不等于生产部署或灾备恢复验收。
 
+## [0.66.2](https://github.com/xiangnan0811/xirang/compare/v0.66.1...v0.66.2) (2026-10-15)
+
+
+### 🐛 Bug Fixes
+
+* **web:** complete toast announcements and defer credential loading ([#622](https://github.com/xiangnan0811/xirang/issues/622)) ([0341bc3](https://github.com/xiangnan0811/xirang/commit/0341bc3b6479d78a28e24383b290a110bbd3acf7))
+
 ## [0.66.1](https://github.com/xiangnan0811/xirang/compare/v0.66.0...v0.66.1) (2026-10-14)
 
 
