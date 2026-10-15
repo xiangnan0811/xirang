@@ -1,18 +1,32 @@
-import { createCredentialsApi, type AppCredential, type ProfileSchema } from "./credentials";
+import type { AppCredential, ProfileSchema } from "./credentials";
+import { AuthTransitionRejectedError, getAuthSessionGeneration, isAuthTransitionActive } from "./core";
+
+function assertCurrentRead(generation: number, signal?: AbortSignal): void {
+  if (isAuthTransitionActive()) throw new AuthTransitionRejectedError();
+  signal?.throwIfAborted();
+  if (generation !== getAuthSessionGeneration()) throw new DOMException("Aborted", "AbortError");
+}
 
 /**
- * Compatibility façade used by policy-editor and other call sites.
- * Always maps wire snake_case → camelCase domain types (via credentials API).
+ * Read-only policy-editor façade. Load the credentials API only when options
+ * are requested; a static import would include management code at app startup.
  */
 export function createAppCredentialsApi() {
-  const api = createCredentialsApi();
   return {
     async getCredentials(token: string, signal?: AbortSignal): Promise<AppCredential[]> {
-      return api.list(token, signal);
+      const generation = getAuthSessionGeneration();
+      assertCurrentRead(generation, signal);
+      const { createCredentialsApi } = await import("./credentials");
+      assertCurrentRead(generation, signal);
+      return createCredentialsApi().list(token, signal);
     },
 
     async getProfiles(token: string, signal?: AbortSignal): Promise<ProfileSchema[]> {
-      return api.listProfiles(token, signal);
+      const generation = getAuthSessionGeneration();
+      assertCurrentRead(generation, signal);
+      const { createCredentialsApi } = await import("./credentials");
+      assertCurrentRead(generation, signal);
+      return createCredentialsApi().listProfiles(token, signal);
     },
   };
 }

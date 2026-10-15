@@ -10,6 +10,8 @@ const zh = {
     search: "搜索",
     refresh: "刷新",
     close: "关闭",
+    toastNotifications: "通知（Alt+T）",
+    dismissNotification: "关闭通知",
     back: "返回",
     next: "下一步",
     prev: "上一步",
