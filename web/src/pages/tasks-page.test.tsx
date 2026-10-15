@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import i18n from "@/i18n";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import { toast } from "@/components/ui/toast-sonner";
 import { taskPreviewConnectEligibility } from "./tasks-page.utils";
@@ -643,6 +644,69 @@ describe("TasksPage", () => {
     expect(badges.length).toBeGreaterThanOrEqual(1);
     const scheduledBadges = screen.getAllByText("定时");
     expect(scheduledBadges.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each(["cards", "list"] as const)("%s 视图常显 cron 原文、保守自然语言和时间基准，并随语言切换", async (view) => {
+    window.localStorage.setItem("xirang.tasks.view", JSON.stringify(view));
+    const scheduled = (id: number, name: string, cronSpec: string) => ({
+      id,
+      name,
+      policyName: name,
+      nodeId: 1,
+      nodeName: "node-prod-1",
+      status: "success" as const,
+      progress: 100,
+      startedAt: "2026-02-24 10:00:00",
+      nextRunAt: `2026-03-0${id - 300} 02:00:00`,
+      cronSpec,
+      speedMbps: 0,
+    });
+    createContext({
+      tasks: [
+        scheduled(301, "每日任务", "0 2 * * *"),
+        scheduled(302, "月日加星期任务", "0 2 1 * 1"),
+        scheduled(303, "指定时区任务", "CRON_TZ=Asia/Shanghai 0 2 * * *"),
+        {
+          id: 304,
+          name: "手动任务",
+          policyName: "手动任务",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "pending" as const,
+          progress: 0,
+          startedAt: "-",
+          speedMbps: 0,
+        },
+      ] as unknown as Record<string, unknown>[],
+    });
+
+    try {
+      await i18n.changeLanguage("zh");
+      render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+      expect(screen.getByText("0 2 * * *")).toBeInTheDocument();
+      expect(screen.getByText("每天 02:00 执行")).toBeInTheDocument();
+      // DOM 与 DOW 同时受限：不得解释成“每周一 02:00”，只展示原表达式。
+      expect(screen.getByText("0 2 1 * 1")).toBeInTheDocument();
+      expect(screen.getByText(i18n.t("cron.byCronExpression", { cron: "0 2 1 * 1" }))).toBeInTheDocument();
+      expect(screen.queryByText(i18n.t("cron.weeklyDaysAtTime", { days: i18n.t("cron.weekdayNames.1"), time: "02:00" }))).not.toBeInTheDocument();
+      expect(screen.getAllByText("任务调度使用 UTC；以下次服务端运行时间为准。")).toHaveLength(2);
+      expect(screen.getAllByText("时区由表达式指定；以下次服务端运行时间为准。")).toHaveLength(1);
+      // 服务端 nextRunAt 原样展示，不被前端估算覆盖。
+      expect(screen.getByText(/2026-03-01 02:00:00/)).toBeInTheDocument();
+
+      await act(async () => {
+        await i18n.changeLanguage("en");
+      });
+      expect(screen.getByText("Daily at 02:00")).toBeInTheDocument();
+      expect(screen.getAllByText("Task schedules use UTC; the server-reported next run is authoritative.")).toHaveLength(2);
+      expect(screen.getAllByText("The expression specifies its timezone; the server-reported next run is authoritative.")).toHaveLength(1);
+      expect(screen.queryByText("任务调度使用 UTC；以下次服务端运行时间为准。")).not.toBeInTheDocument();
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage("zh");
+      });
+    }
   });
 
   it("点击编辑按钮打开编辑弹窗，保存成功后调用 updateTask", async () => {

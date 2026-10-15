@@ -169,6 +169,22 @@ NodeID=0、NodeName=localhost、Retryable=false、DeliveryDecision=pending 的 A
 
 前端 wrapper 私有 wire DTO → `NodeDoctorResult`，缺 checks 为 []，未知 status 为 warn，非法 ID 为有限安全值，缺文本为空。失败保留当前 dialog/node context、显示错误并清除旧结果，不补充连接信息。回归覆盖 allowlist、无 body、常见故障分类、设置派生阈值、脱敏/长度、完整权限路由及 mapper/dialog。
 
+Doctor 每次打开、换节点或重新运行均清空旧结果并建立独立操作代次；关闭、卸载、
+令牌/角色变化及认证转换开始会取消请求并作废旧完成。即使底层忽略取消，旧成功、
+错误与 finally 也不能改变新操作；响应 node ID 不匹配时显示错误且不可复制。
+取消不承诺撤销服务端已开始的只读诊断。
+
+admin/operator 可复制当前成功响应（包括结构化 fail/skip 和零检查结果）的安全文本：
+本地化标题、生成时间、检查汇总、检查名称/状态及 DTO 内 evidence/suggestion；
+不追加节点名称、地址、原始路径、命令或 SSH 输出。仅当前已确认身份、匹配节点、
+非加载/错误状态可复制；系统剪贴板成功后才提示，缺失或拒绝明确失败，不自动重试。
+关闭、重开、换节点、重新运行或身份失效后的迟到复制不提示、不改变新状态。
+
+“前往连接测试”只关闭 Doctor 并聚焦当前视图中同节点可见、可用的既有连接测试按钮，
+不打开编辑器、不自动连接或信任主机。筛选/分页移走或目标不可用时保持对话框并说明；
+关闭动画期间目标消失则回焦当前库存容器，身份变化取消意图。必须由用户随后明确
+按 Enter 或点击原按钮才执行测试；viewer 不提供 Doctor 或此导航入口。
+
 ## 节点业务摘要与备份指标
 
 `GET /api/v1/nodes/:id/summary` 要求认证、`nodes:read` 及节点 ownership，仅返回
@@ -203,6 +219,38 @@ freshness 使用 verified completion，不把 command success、可变 Node 时�
 TaskRun 关联 Task 读取任务名字/policy，节点归属使用不可变 `node_id_snapshot`，不能以可改 Task 当前 node 替代历史身份。operator 只看 owned node；无 owned node 为空，不公开 `node_id=0` 平台告警。平台资源对 admin/viewer 按现有读取权限可见。未知角色/ownership 查询错误失败关闭，任一源查询失败不返回假部分成功。
 
 前端在共享 context 前全部 camelCase 映射；groups/sourceTypes/nextActions/signals 缺失为 []，非法可选 ID 为 undefined，count 为 0；未知 severity→warning、source→alert、resource→platform。过滤空 href，不用 credentials/config/raw log 扩充信息；请求失败不展示旧 groups 为当前结果。回归覆盖聚合、排序、严重度提升、TaskRun snapshot、各种来源、双端 drill 权限关联、next action、mapper 及 loading/empty/error UI。
+
+公开 DTO 另有可选 `cause_code/cause_params`，系统摘要与动作按客户端语言显示，
+非空 `likely_cause` 始终保留为可展开的“来源诊断”，只以普通文本呈现。用户名称和
+原诊断不翻译；旧 DTO、未知 code 使用通用系统摘要，不丢原诊断。
+
+| cause_code | 来源与参数白名单 |
+|---|---|
+| `alert_triggered` | 告警，无参数 |
+| `task_execution_failed` | 任务失败，无参数 |
+| `notification_delivery_issue` | 通知投递，`status=failed\|retrying` |
+| `snapshot_churn_anomaly` | snapshot_diff / snapshot_churn，`observed_value/baseline_value` |
+| `snapshot_ransomware_pattern` | snapshot_diff / ransomware_pattern，同上 |
+| `anomaly_detected` | 其他备份异常，同上 |
+| `verified_backup_missing` | 无已验证完成，无参数 |
+| `verified_backup_stale` | 已验证完成超时，`elapsed_hours` |
+| `policy_backup_failures` | 最新三次 eligible 策略尝试均失败，无参数 |
+| `health_attention_required` | 初值或未知类别的通用摘要，无参数 |
+
+小时数为非负安全整数；观测值/基线为有限数且绝对值不超过 9007199254740991，
+合法零值保留，非法值省略而非补零。参数不得包含名称、地址、路径、命令或任意错误
+上下文；mapper 按 code 白名单裁剪，错误参数不拒绝整个事件。测量参数不完整只显示
+类别摘要，完整时显示一位小数。原因原文/code/params 按严重度优先、同严重度时间
+优先原子选择，不受最多五条 signals 截断影响；空白原文不覆盖已有原因。
+
+健康动作仅允许站内绝对只读目标：通知中心（可含 `alert=alert-<id>`）、任务日志
+（`task=<id>`）、节点告警（`nodes/<id>?tab=alerts`）、任务、策略和备份概览。
+ID 必须是正安全整数；拒绝反斜杠、控制字符、外站、退役 metrics 和未知目标。
+按原序选首个合法动作；未知 code 的合法地址仍可用，但只显示通用动作名，不信任
+服务端 label。旧 confidence `/app/backups` 规范为 `/app/backups/overview`。
+无合法动作时仅根据 resource 自身 type/id 回退：node→节点告警，task→任务日志，
+有效 policy→策略，其余→通知中心；不借关联 ID、名称或 group ID 猜目标。
+以上导航不预取或绕过后端 ownership，不新增精确 Run 查询合同。
 
 ## 服务监控退役
 

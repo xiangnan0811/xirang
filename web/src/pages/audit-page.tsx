@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, RefreshCw, Search } from "lucide-react";
 import { Navigate } from "react-router-dom";
+import { AccessDeniedRedirect } from "@/components/access-denied-navigation";
 import { useAuth } from "@/context/auth-context.hooks";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
@@ -60,8 +61,12 @@ function resolveTimeRange(range: TimeRange): { from?: string; to?: string } {
 }
 
 export function AuditPage() {
-  const { token, role } = useAuth();
-  if (role !== "admin") return <Navigate to="/app/overview" replace />;
+  const { token, role, authTransitioning } = useAuth();
+  if (authTransitioning) return null;
+  if (role !== "admin") {
+    if (token && (role === "operator" || role === "viewer")) return <AccessDeniedRedirect sourcePath="/app/audit" />;
+    return <Navigate to="/app/overview" replace />;
+  }
   return <AuditPageContent key={token ?? ""} />;
 }
 

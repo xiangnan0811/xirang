@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -219,6 +220,13 @@ func TestHealthIncidentTimelineAggregatesSortsSeverityAndTaskResource(t *testing
 	if !strings.Contains(taskGroup.LikelyCause, "rsync exited") {
 		t.Fatalf("likely_cause 应来自更高严重度的任务失败，实际: %s", taskGroup.LikelyCause)
 	}
+	if taskGroup.CauseCode != healthIncidentCauseTaskExecutionFailed || taskGroup.CauseParams != nil {
+		t.Fatalf("task failure cause metadata must match the winning diagnostic: %+v", taskGroup)
+	}
+	if data.Groups[0].CauseCode != healthIncidentCauseAnomalyDetected || data.Groups[0].CauseParams == nil ||
+		*data.Groups[0].CauseParams.ObservedValue != 96 || *data.Groups[0].CauseParams.BaselineValue != 20 {
+		t.Fatalf("anomaly cause metadata missing: %+v", data.Groups[0])
+	}
 	if !healthIncidentHasAction(taskGroup) {
 		t.Fatalf("每个事件组应至少包含一个 next action: %+v", taskGroup.NextActions)
 	}
@@ -382,5 +390,208 @@ func TestHealthIncidentTimelineExcludesRetiredDeliveriesBeforeLimit(t *testing.T
 	}
 	if !foundGenuine {
 		t.Fatalf("保留的 unknown 决策通知失败应可见，实际 groups=%+v", data.Groups)
+	}
+}
+
+func TestHealthIncidentCauseWinnerIsAtomicBeyondSignalLimit(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	acc := newHealthIncidentAccumulator(now)
+	resource := nodeHealthIncidentResource(1, "node")
+	for i := range maxHealthIncidentSignalsPerGroup {
+		acc.addSignal(resource, healthIncidentSignal{Type: "alert", Severity: "warning", OccurredAt: now.Add(time.Duration(i) * time.Minute)},
+			healthIncidentCause{Text: "健康信号需要关注", Code: healthIncidentCauseAlertTriggered}, nil)
+	}
+	zero := 0.0
+	params := &healthIncidentCauseParams{ObservedValue: &zero, BaselineValue: &zero}
+	acc.addSignal(resource, healthIncidentSignal{Type: "anomaly", Severity: "critical", OccurredAt: now.Add(-time.Hour)},
+		healthIncidentCause{Text: "sixth winner", Code: healthIncidentCauseSnapshotChurnAnomaly, Params: params}, nil)
+	group := acc.response(72).Groups[0]
+	if len(group.Signals) != 5 || group.EventCount != 6 || group.LikelyCause != "sixth winner" ||
+		group.CauseCode != healthIncidentCauseSnapshotChurnAnomaly || group.CauseParams != params {
+		t.Fatalf("sixth signal must replace all cause fields without changing signal cap: %+v", group)
+	}
+	acc.addSignal(resource, healthIncidentSignal{Type: "alert", Severity: "critical", OccurredAt: now},
+		healthIncidentCause{Text: "newer same severity", Code: healthIncidentCauseAlertTriggered}, nil)
+	acc.addSignal(resource, healthIncidentSignal{Type: "task_failure", Severity: "critical", OccurredAt: now.Add(time.Hour)},
+		healthIncidentCause{Text: " ", Code: healthIncidentCauseTaskExecutionFailed, Params: params}, nil)
+	acc.addSignal(resource, healthIncidentSignal{Type: "anomaly", Severity: "warning", OccurredAt: now.Add(2 * time.Hour)},
+		healthIncidentCause{Text: "lower severity", Code: healthIncidentCauseAnomalyDetected, Params: params}, nil)
+	group = acc.response(72).Groups[0]
+	if group.LikelyCause != "newer same severity" || group.CauseCode != healthIncidentCauseAlertTriggered || group.CauseParams != nil {
+		t.Fatalf("new winner must clear old params; empty/lower severity cannot replace it: %+v", group)
+	}
+	empty := newHealthIncidentAccumulator(now)
+	empty.addSignal(resource, healthIncidentSignal{Type: "alert"}, healthIncidentCause{}, nil)
+	if group := empty.response(72).Groups[0]; group.CauseCode != healthIncidentCauseHealthAttentionRequired || group.CauseParams != nil {
+		t.Fatalf("unselected cause must keep generic classification: %+v", group)
+	}
+}
+
+func TestHealthIncidentTimelineCauseProducers(t *testing.T) {
+	for _, diagnostic := range []string{"", "original safe diagnostic"} {
+		t.Run("alert/"+diagnostic, func(t *testing.T) {
+			db := openHealthIncidentTimelineTestDB(t)
+			migrateHealthIncidentTimelineTables(t, db)
+			alert := model.Alert{Status: "open", Severity: "critical", Message: diagnostic, TriggeredAt: time.Now().UTC()}
+			if err := db.Create(&alert).Error; err != nil {
+				t.Fatal(err)
+			}
+			resp, data := callHealthIncidentTimeline(t, db, "admin", 1)
+			if resp.Code != http.StatusOK || len(data.Groups) != 1 || data.Groups[0].CauseCode != healthIncidentCauseAlertTriggered {
+				t.Fatalf("alert classification must not depend on raw message: %s", resp.Body.String())
+			}
+			if diagnostic != "" && data.Groups[0].LikelyCause != diagnostic {
+				t.Fatal("raw diagnostic lost")
+			}
+		})
+		t.Run("task/"+diagnostic, func(t *testing.T) {
+			db := openHealthIncidentTimelineTestDB(t)
+			migrateHealthIncidentTimelineTables(t, db)
+			task := model.Task{Name: "backup", NodeID: 1, ExecutorType: "rsync"}
+			if err := db.Create(&task).Error; err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			run := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: 1, Status: "failed", LastError: diagnostic, CreatedAt: now, UpdatedAt: now}
+			if err := db.Create(&run).Error; err != nil {
+				t.Fatal(err)
+			}
+			resp, data := callHealthIncidentTimeline(t, db, "admin", 1)
+			if resp.Code != http.StatusOK || len(data.Groups) != 1 || data.Groups[0].CauseCode != healthIncidentCauseTaskExecutionFailed {
+				t.Fatalf("task classification must not depend on raw error: %s", resp.Body.String())
+			}
+			if diagnostic != "" && data.Groups[0].LikelyCause != diagnostic {
+				t.Fatal("raw diagnostic lost")
+			}
+		})
+	}
+	for _, status := range []string{"failed", "retrying"} {
+		t.Run("delivery/"+status, func(t *testing.T) {
+			db := openHealthIncidentTimelineTestDB(t)
+			migrateHealthIncidentTimelineTables(t, db)
+			now := time.Now().UTC()
+			alert := model.Alert{Status: "resolved", Severity: "warning", TriggeredAt: now}
+			if err := db.Create(&alert).Error; err != nil {
+				t.Fatal(err)
+			}
+			delivery := model.AlertDelivery{AlertID: alert.ID, IntegrationID: 1, Status: status, CreatedAt: now}
+			if err := db.Create(&delivery).Error; err != nil {
+				t.Fatal(err)
+			}
+			resp, data := callHealthIncidentTimeline(t, db, "admin", 1)
+			if resp.Code != http.StatusOK || len(data.Groups) != 1 {
+				t.Fatalf("delivery missing: %s", resp.Body.String())
+			}
+			group := data.Groups[0]
+			if group.CauseCode != healthIncidentCauseNotificationDeliveryIssue || group.CauseParams == nil || group.CauseParams.Status != status {
+				t.Fatalf("wrong delivery classification: %+v", group)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		detector string
+		metric   string
+		code     healthIncidentCauseCode
+	}{
+		{"snapshot_diff", "snapshot_churn", healthIncidentCauseSnapshotChurnAnomaly},
+		{"snapshot_diff", "ransomware_pattern", healthIncidentCauseSnapshotRansomwarePattern},
+		{"snapshot_diff", "other", healthIncidentCauseAnomalyDetected},
+		{"other", "snapshot_churn", healthIncidentCauseAnomalyDetected},
+	} {
+		t.Run(tc.detector+"/"+tc.metric, func(t *testing.T) {
+			db := openHealthIncidentTimelineTestDB(t)
+			migrateHealthIncidentTimelineTables(t, db)
+			row := model.AnomalyEvent{NodeID: 1, Detector: tc.detector, Metric: tc.metric, Severity: "critical", ObservedValue: 1.5, BaselineValue: 0, Details: "{}", FiredAt: time.Now().UTC()}
+			if err := db.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+			resp, data := callHealthIncidentTimeline(t, db, "admin", 1)
+			if resp.Code != http.StatusOK || len(data.Groups) != 1 {
+				t.Fatalf("anomaly missing: %s", resp.Body.String())
+			}
+			group := data.Groups[0]
+			if group.CauseCode != tc.code || group.CauseParams == nil || group.CauseParams.BaselineValue == nil || *group.CauseParams.BaselineValue != 0 {
+				t.Fatalf("wrong anomaly classification or lost zero baseline: %+v", group)
+			}
+		})
+	}
+}
+
+func TestHealthIncidentAnomalyOmitsInvalidMeasurements(t *testing.T) {
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), 9007199254740992, -9007199254740992} {
+		cause := anomalyHealthIncidentCause(healthIncidentAnomalyRow{ObservedValue: value, BaselineValue: value}, "original diagnostic")
+		if cause.Params != nil || cause.Text != "original diagnostic" {
+			t.Fatalf("invalid measurements must be absent without losing diagnostic: %+v", cause)
+		}
+		if _, err := json.Marshal(cause); err != nil {
+			t.Fatalf("non-finite measurements must never break JSON: %v", err)
+		}
+	}
+	for _, value := range []float64{0, -1.5, 9007199254740991, -9007199254740991} {
+		if got := healthIncidentMeasurement(value); got == nil || *got != value {
+			t.Fatalf("valid measurement lost: %v", value)
+		}
+	}
+}
+
+func TestHealthIncidentBackupCauseProducers(t *testing.T) {
+	db := openHealthIncidentTimelineTestDB(t)
+	migrateHealthIncidentTimelineTables(t, db)
+	t.Setenv("BACKUP_STALE_THRESHOLD_HOURS", "48")
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	missing := model.Node{Name: "missing", Host: "127.0.0.1", Port: 22, Username: "fixture", AuthType: "key", BackupDir: "/fixture/missing"}
+	stale := model.Node{Name: "stale", Host: "127.0.0.1", Port: 22, Username: "fixture", AuthType: "key", BackupDir: "/fixture/stale"}
+	for _, node := range []*model.Node{&missing, &stale} {
+		if err := db.Create(node).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := model.Policy{Name: "policy", Enabled: true, SourcePath: "/fixture", TargetPath: "/fixture", CronSpec: "0 * * * *"}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatal(err)
+	}
+	task := model.Task{Name: "backup", NodeID: stale.ID, PolicyID: &policy.ID, ExecutorType: "rsync"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	completed := now.Add(-72 * time.Hour)
+	run := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: stale.ID, ExecutorTypeSnapshot: "rsync", TriggerType: "cron", Status: "success", CreatedAt: completed, UpdatedAt: completed, FinishedAt: &completed}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	recordTimelineCompletion(t, db, task, run, completed)
+	for i := range 3 {
+		failedAt := now.Add(-time.Duration(i+1) * time.Hour)
+		failed := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: stale.ID, ExecutorTypeSnapshot: "rsync", TriggerType: "cron", Status: "failed", CreatedAt: failedAt, UpdatedAt: failedAt}
+		if err := db.Create(&failed).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	acc := newHealthIncidentAccumulator(now)
+	handler := NewHealthIncidentTimelineHandler(db)
+	if err := handler.addBackupStaleSignals(db, acc, now, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.addDegradedPolicySignals(db, acc, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	codes := map[healthIncidentCauseCode]healthIncidentGroup{}
+	for _, group := range acc.response(72).Groups {
+		codes[group.CauseCode] = group
+		for _, action := range group.NextActions {
+			if action.Code == "view_backup_confidence" && action.Href != "/app/backups/overview" {
+				t.Fatalf("confidence action must use read-only overview: %+v", action)
+			}
+		}
+	}
+	if _, ok := codes[healthIncidentCauseVerifiedBackupMissing]; !ok {
+		t.Fatal("missing verified backup classification absent")
+	}
+	if group, ok := codes[healthIncidentCauseVerifiedBackupStale]; !ok || group.CauseParams == nil ||
+		group.CauseParams.ElapsedHours == nil || *group.CauseParams.ElapsedHours != 72 {
+		t.Fatalf("stale backup hours missing: %+v", group)
+	}
+	if group, ok := codes[healthIncidentCausePolicyBackupFailures]; !ok || group.CauseParams != nil {
+		t.Fatalf("three eligible failures require fixed cause without failure_count: %+v", group)
 	}
 }

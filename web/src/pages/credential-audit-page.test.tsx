@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { CredentialAuditPage } from "./credential-audit-page";
 import type { CredentialAuditEventRecord } from "@/types/domain";
 import i18n from "@/i18n";
@@ -289,18 +289,21 @@ describe("CredentialAuditPage", () => {
     });
   });
 
-  it("非管理员直接访问页面时不会加载数据并跳转回概览", async () => {
-    authState.role = "operator";
+  it.each(["operator", "viewer"])("非管理员 %s 直接访问页面时不会加载数据并跳转回概览", async (role) => {
+    authState.role = role;
 
     render(
-      <MemoryRouter>
-        <CredentialAuditPage />
+      <MemoryRouter initialEntries={["/app/credential-audit"]}>
+        <Routes>
+          <Route path="/app/credential-audit" element={<CredentialAuditPage />} />
+          <Route path="/app/overview" element={<p>Overview destination</p>} />
+        </Routes>
       </MemoryRouter>,
     );
 
-    await waitFor(() => {
-      expect(getCredentialAuditEventsMock).not.toHaveBeenCalled();
-    });
+    expect(await screen.findByText("Overview destination")).toBeInTheDocument();
+    expect(getCredentialAuditEventsMock).not.toHaveBeenCalled();
+    expect(exportCredentialAuditEventsCSVMock).not.toHaveBeenCalled();
     expect(screen.queryByText("凭据使用审计")).not.toBeInTheDocument();
   });
 

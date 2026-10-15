@@ -23,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { getTaskStatusMeta } from "@/lib/status";
+import { cronTimezoneNoteKey, cronToNatural } from "@/lib/cron-utils";
 import { cn } from "@/lib/utils";
 import type { TasksViewProps } from "@/pages/tasks-page.utils";
 import { buildChainParentMap, canCancel, canTrigger, rclonePublicationStateTone, taskPreviewConnectEligibility } from "@/pages/tasks-page.utils";
@@ -213,6 +214,13 @@ export const TasksTable = React.memo(function TasksTable({
                     <Badge tone="neutral" className="text-micro">
                       {task.cronSpec ? t("tasks.typeCron") : t("tasks.typeManual")}
                     </Badge>
+                    {task.cronSpec ? (
+                      <div className="mt-1 max-w-56 space-y-0.5 text-xs text-muted-foreground">
+                        <p className="break-all font-mono">{task.cronSpec}</p>
+                        <p className="break-words">{cronToNatural(task.cronSpec)}</p>
+                        <p className="break-words">{t(cronTimezoneNoteKey(task.cronSpec))}</p>
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-3 py-2.5">
                     <div className="w-36 space-y-1">

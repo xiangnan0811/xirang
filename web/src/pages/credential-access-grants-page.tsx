@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Reac
 import { useTranslation } from "react-i18next";
 import { Navigate } from "react-router-dom";
 import { Eye, RefreshCw, Search } from "lucide-react";
+import { AccessDeniedRedirect } from "@/components/access-denied-navigation";
 import { useAuth } from "@/context/auth-context.hooks";
 import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import { ApiError, apiClient } from "@/lib/api/client";
@@ -112,6 +113,9 @@ export function CredentialAccessGrantsPage() {
     return <p role="status" className="py-6 text-sm text-muted-foreground">{t("common.loading")}</p>;
   }
   if (role !== "admin" || !token) {
+    if (token && (role === "operator" || role === "viewer")) {
+      return <AccessDeniedRedirect sourcePath="/app/credential-access-grants" />;
+    }
     return <Navigate to="/app/overview" replace />;
   }
   // A new identity or auth session owns a new page: filters, rows and details never cross it.

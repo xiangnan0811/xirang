@@ -129,7 +129,8 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
     );
   };
 
-  const naturalDescription = useMemo(() => cronToNatural(value), [value]);
+  // 直接计算（不按 value 记忆），确保同一表达式在切换语言后随之更新。
+  const naturalDescription = cronToNatural(value);
   const nextRun = useMemo(() => nextRunPreview(value), [value]);
 
   return (

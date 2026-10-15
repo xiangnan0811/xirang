@@ -81,7 +81,7 @@ function mapLatestDrillSummary(row?: LatestDrillSummaryResponse | null): PolicyL
 }
 
 function mapPolicy(row: PolicyResponse): PolicyRecord {
-  // 防御：后端任意返回路径若漏掉 cron_spec，避免污染下游 describeCron。
+  // 防御：后端任意返回路径若漏掉 cron_spec，避免污染下游 cronToNatural。
   const cron = typeof row.cron_spec === "string" ? row.cron_spec : "";
   return {
     id: row.id,

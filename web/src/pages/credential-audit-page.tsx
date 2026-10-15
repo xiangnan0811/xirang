@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate } from "react-router-dom";
 import { Download, Eye, RefreshCw, Search } from "lucide-react";
+import { AccessDeniedRedirect } from "@/components/access-denied-navigation";
 import { useAuth } from "@/context/auth-context.hooks";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
@@ -104,6 +105,17 @@ function positiveFilter(value: string): number | undefined {
 }
 
 export function CredentialAuditPage() {
+  const { token, role, authTransitioning } = useAuth();
+  if (authTransitioning) return null;
+  if (role !== "admin") {
+    if (token && (role === "operator" || role === "viewer")) return <AccessDeniedRedirect sourcePath="/app/credential-audit" />;
+    return <Navigate to="/app/overview" replace />;
+  }
+  // Restricted requests start only after the guard admits an admin identity.
+  return <CredentialAuditPageContent key={token ?? ""} />;
+}
+
+function CredentialAuditPageContent() {
   const { t } = useTranslation();
   const { token, role: authRole } = useAuth();
   const [rows, setRows] = useState<CredentialAuditEventRecord[]>([]);
@@ -250,10 +262,6 @@ export function CredentialAuditPage() {
     void load(1);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load is intentionally excluded to prevent loop
   }, [action, authRole, credentialKind, credentialSource, nodeId, outcome, policyId, purpose, role, sshKeyId, taskId, taskRunId, timeRange, token, userId, username]);
-
-  if (authRole !== "admin") {
-    return <Navigate to="/app/overview" replace />;
-  }
 
   return (
     <div className="animate-fade-in space-y-5">

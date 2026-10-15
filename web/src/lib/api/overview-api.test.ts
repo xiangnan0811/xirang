@@ -2,11 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOverviewApi } from "./overview-api";
 
 function createMockResponse(status = 200, body = "") {
-  return {
-    status,
-    ok: status >= 200 && status < 300,
-    text: vi.fn().mockResolvedValue(body)
-  } as unknown as Response;
+  return new Response(body, { status, headers: { "Content-Type": "application/json" } });
 }
 
 describe("overview api", () => {
@@ -335,6 +331,59 @@ describe("overview api", () => {
     expect(result.groups[0].sourceTypes).toEqual(["alert"]);
     expect(result.groups[0].nextActions).toEqual([]);
     expect(result.groups[0].signals[0]).toMatchObject({ type: "alert", severity: "warning", alertId: undefined, deliveryId: undefined, taskId: undefined, taskRunId: undefined, nodeId: 3, policyId: undefined });
+  });
+
+  it.each([
+    ["alert_triggered", { status: "failed", observed_value: 3 }, undefined],
+    ["task_execution_failed", { elapsed_hours: 3 }, undefined],
+    ["notification_delivery_issue", { status: "failed", private_path: "/hidden", elapsed_hours: 4 }, { status: "failed" }],
+    ["notification_delivery_issue", { status: "retrying" }, { status: "retrying" }],
+    ["notification_delivery_issue", { status: "sent" }, undefined],
+    ["snapshot_churn_anomaly", { observed_value: 1.5, baseline_value: 0, status: "failed" }, { observedValue: 1.5, baselineValue: 0 }],
+    ["snapshot_ransomware_pattern", { observed_value: -1, baseline_value: 2 }, { observedValue: -1, baselineValue: 2 }],
+    ["anomaly_detected", { observed_value: Number.MAX_SAFE_INTEGER, baseline_value: -Number.MAX_SAFE_INTEGER }, { observedValue: Number.MAX_SAFE_INTEGER, baselineValue: -Number.MAX_SAFE_INTEGER }],
+    ["anomaly_detected", { baseline_value: 0 }, { baselineValue: 0 }],
+    ["anomaly_detected", { observed_value: "2", baseline_value: false }, undefined],
+    ["anomaly_detected", { observed_value: Number.MAX_SAFE_INTEGER + 1, baseline_value: -Number.MAX_SAFE_INTEGER - 1 }, undefined],
+    ["anomaly_detected", { observed_value: NaN, baseline_value: Infinity }, undefined],
+    ["verified_backup_missing", { elapsed_hours: 3 }, undefined],
+    ["verified_backup_stale", { elapsed_hours: 0, observed_value: 5 }, { elapsedHours: 0 }],
+    ["verified_backup_stale", { elapsed_hours: Number.MAX_SAFE_INTEGER }, { elapsedHours: Number.MAX_SAFE_INTEGER }],
+    ["verified_backup_stale", { elapsed_hours: -1 }, undefined],
+    ["verified_backup_stale", { elapsed_hours: 1.5 }, undefined],
+    ["verified_backup_stale", { elapsed_hours: "72" }, undefined],
+    ["verified_backup_stale", { elapsed_hours: Number.MAX_SAFE_INTEGER + 1 }, undefined],
+    ["policy_backup_failures", { failure_count: 3 }, undefined],
+    ["health_attention_required", { status: "failed" }, undefined],
+  ])("maps cause %s with strict per-code parameter whitelist (%j)", async (code, params, expected) => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 200, data: { groups: [{ id: "cause", source_types: ["alert"], likely_cause: "<original diagnostic>", cause_code: code, cause_params: params }] },
+    })));
+    const result = await api.getHealthIncidentTimeline("FAKE_OVERVIEW_TOKEN_FOR_TEST_ONLY");
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]).toMatchObject({ causeCode: code, causeParams: expected, likelyCause: "<original diagnostic>" });
+  });
+
+  it.each([undefined, null, {}, [], "bad", 1])("keeps known cause without unusable params %j", async (params) => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 200, data: { groups: [{ source_types: ["alert"], cause_code: "verified_backup_stale", cause_params: params }] },
+    })));
+    const result = await api.getHealthIncidentTimeline("FAKE_OVERVIEW_TOKEN_FOR_TEST_ONLY");
+    expect(result.groups[0]).toMatchObject({ causeCode: "verified_backup_stale", causeParams: undefined });
+  });
+
+  it.each([undefined, "future_cause", 4, {}, null])("keeps old and unknown-cause DTO diagnostics (%j)", async (code) => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 200, data: { groups: [{ source_types: ["alert"], likely_cause: "原始 English <diagnostic>", cause_code: code, cause_params: { status: "failed" } }] },
+    })));
+    const result = await api.getHealthIncidentTimeline("FAKE_OVERVIEW_TOKEN_FOR_TEST_ONLY");
+    expect(result.groups[0]).toMatchObject({ causeCode: undefined, causeParams: undefined, likelyCause: "原始 English <diagnostic>" });
+  });
+
+  it("omits JSON numeric overflow measurements rather than fabricating zero", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, '{"code":200,"data":{"groups":[{"source_types":["anomaly"],"cause_code":"anomaly_detected","cause_params":{"observed_value":1e999,"baseline_value":-1e999}}]}}'));
+    const result = await api.getHealthIncidentTimeline("FAKE_OVERVIEW_TOKEN_FOR_TEST_ONLY");
+    expect(result.groups[0]).toMatchObject({ causeCode: "anomaly_detected", causeParams: undefined });
   });
 
   it("getOverviewTraffic 带 window 参数并映射点位", async () => {

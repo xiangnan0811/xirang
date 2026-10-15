@@ -15,6 +15,7 @@ import { PageHero } from "@/components/ui/page-hero";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast-sonner";
+import { AccessDeniedRedirect } from "@/components/access-denied-navigation";
 import { useAuth } from "@/context/auth-context.hooks";
 import { useConfirm } from "@/hooks/use-confirm";
 import { createAutomationRulesApi } from "@/lib/api/automation-rules";
@@ -71,8 +72,12 @@ function recordToKV(rec: Record<string, string> | undefined): KV[] {
 }
 
 export function AutomationRulesPage() {
-  const { token, role } = useAuth();
-  if (role !== "admin") return <Navigate to="/app/overview" replace />;
+  const { token, role, authTransitioning } = useAuth();
+  if (authTransitioning) return null;
+  if (role !== "admin") {
+    if (token && (role === "operator" || role === "viewer")) return <AccessDeniedRedirect sourcePath="/app/automation-rules" />;
+    return <Navigate to="/app/overview" replace />;
+  }
   return <AutomationRulesPageContent key={token ?? ""} />;
 }
 

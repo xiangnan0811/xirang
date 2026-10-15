@@ -93,6 +93,25 @@ export type HealthIncidentSourceType =
   | "backup_stale"
   | "backup_degraded";
 
+export type HealthIncidentCauseCode =
+  | "alert_triggered"
+  | "task_execution_failed"
+  | "notification_delivery_issue"
+  | "snapshot_churn_anomaly"
+  | "snapshot_ransomware_pattern"
+  | "anomaly_detected"
+  | "verified_backup_missing"
+  | "verified_backup_stale"
+  | "policy_backup_failures"
+  | "health_attention_required";
+
+export interface HealthIncidentCauseParams {
+  status?: "failed" | "retrying";
+  elapsedHours?: number;
+  observedValue?: number;
+  baselineValue?: number;
+}
+
 export interface HealthIncidentTimelineSummary {
   total: number;
   critical: number;
@@ -136,6 +155,8 @@ export interface HealthIncidentGroup {
   lastSeenAt: string;
   eventCount: number;
   likelyCause: string;
+  causeCode?: HealthIncidentCauseCode;
+  causeParams?: HealthIncidentCauseParams;
   sourceTypes: HealthIncidentSourceType[];
   nextActions: HealthIncidentAction[];
   signals: HealthIncidentSignal[];

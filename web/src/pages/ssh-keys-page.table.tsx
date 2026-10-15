@@ -107,10 +107,7 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colUsername")}</th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colType")}</th>
             <th scope="col" className="px-3 py-2.5">
-              <span className="block">{t("sshKeys.privateKeyDigest")}</span>
-              <span className="mt-0.5 block text-[10px] font-normal normal-case tracking-normal">
-                {t("sshKeys.privateKeyDigestHint")}
-              </span>
+              {t("sshKeys.rotationOldPublicFingerprint")}
             </th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colLastUsed")}</th>
             <th scope="col" className="px-3 py-2.5">{t("sshKeys.colScope")}</th>
@@ -181,7 +178,11 @@ export const SSHKeysTable = React.memo(function SSHKeysTable({
                     </Badge>
                   </td>
                   <td className="px-3 py-2.5">
-                    <code className="max-w-[200px] truncate block font-mono text-xs text-muted-foreground">
+                    <code className="max-w-[240px] break-all block font-mono text-xs">
+                      {key.publicKeyFingerprint?.trim() ? key.publicKeyFingerprint : t("sshKeys.publicKeyFingerprintUnknown")}
+                    </code>
+                    <p className="mt-1 text-xs text-muted-foreground">{t("sshKeys.privateKeyDigest")}</p>
+                    <code className="max-w-[240px] break-all block font-mono text-xs text-muted-foreground">
                       {key.fingerprint}
                     </code>
                   </td>

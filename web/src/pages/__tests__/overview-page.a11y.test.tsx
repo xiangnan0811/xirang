@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 
 import { runAxe } from "@/test/a11y-helpers";
 
@@ -163,11 +163,26 @@ describe("OverviewPage a11y smoke", () => {
   it("初始渲染无 axe violations（关 color-contrast）", async () => {
     const { container } = render(<OverviewPage />);
 
-    await waitFor(() => {
-      expect(fetchOverviewTrafficMock).toHaveBeenCalled();
-    });
+    await screen.findByText("近期未发现健康事件");
 
     const results = await runAxe(container);
     expect(results).toHaveNoViolations();
+  });
+
+  it("populated localized incident with native diagnostic disclosure has no axe violations", async () => {
+    fetchHealthIncidentTimelineMock.mockResolvedValue({
+      groups: [{
+        id: "task-1", severity: "critical",
+        resource: { type: "task", id: 1, name: "<用户 backup>" },
+        lastSeenAt: "2026-10-15T12:00:00Z", eventCount: 1,
+        causeCode: "task_execution_failed", likelyCause: "<原始 source diagnostic>",
+        sourceTypes: ["task_failure"], nextActions: [], signals: [],
+      }],
+    });
+    const { container } = render(<OverviewPage />);
+    await screen.findByText("任务执行失败。");
+    expect(screen.getByText("来源诊断").tagName).toBe("SUMMARY");
+    expect(screen.getByRole("link", { name: "查看任务日志" })).toHaveAttribute("href", "/app/logs?task=1");
+    expect(await runAxe(container)).toHaveNoViolations();
   });
 });

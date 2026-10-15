@@ -151,6 +151,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                       size="icon"
                       className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                       aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
+                      data-node-test-connection={node.id}
                       onClick={() => void onTestNode(node)}
                       disabled={testingNodeId === node.id}
                     >
@@ -367,6 +368,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                       size="icon"
                       className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                       aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
+                      data-node-test-connection={node.id}
                       onClick={() => void onTestNode(node)}
                       disabled={testingNodeId === node.id}
                     >

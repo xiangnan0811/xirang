@@ -935,7 +935,7 @@ func (h *SSHKeyHandler) Export(c *gin.Context) {
 		w := csv.NewWriter(c.Writer)
 		// 写入 BOM 以支持 Excel 正确识别 UTF-8
 		_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
-		_ = w.Write([]string{"id", "name", "username", "key_type", "fingerprint", "public_key", "created_at", "updated_at"})
+		_ = w.Write([]string{"id", "name", "username", "key_type", "fingerprint", "public_key", "created_at", "updated_at", "public_key_fingerprint"})
 		for _, item := range exportable {
 			pub, _ := sshutil.DerivePublicKey(item.PrivateKey)
 			_ = w.Write([]string{
@@ -947,6 +947,7 @@ func (h *SSHKeyHandler) Export(c *gin.Context) {
 				pub,
 				item.CreatedAt.Format(time.RFC3339),
 				item.UpdatedAt.Format(time.RFC3339),
+				publicKeyFingerprint(pub),
 			})
 		}
 		w.Flush()

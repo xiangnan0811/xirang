@@ -171,6 +171,7 @@ function createContext(overrides?: Record<string, unknown>) {
         keyType: "ed25519",
         publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... root@prod",
         fingerprint: "SHA256:abc123",
+        publicKeyFingerprint: "SHA256:standard-public-123",
         createdAt: "2026-01-01 00:00:00",
         lastUsedAt: "2026-03-20 10:00:00",
       },
@@ -238,6 +239,51 @@ describe("SSHKeysPage", () => {
     // 卡片视图 + 表格视图会各渲染一份，使用 getAllByText
     expect(screen.getAllByText("生产密钥").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("测试密钥").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("shows the standard fingerprint first and a separately labelled historical digest in all three layouts", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <SSHKeysPage />
+      </MemoryRouter>
+    );
+
+    // The default table view mounts the table plus both responsive card renderers.
+    const fingerprints = screen.getAllByText("SHA256:standard-public-123");
+    expect(fingerprints).toHaveLength(3);
+    expect(screen.getAllByText("SHA256:abc123")).toHaveLength(3);
+    for (const fingerprint of fingerprints) {
+      const block = fingerprint.closest("td") ?? fingerprint.parentElement;
+      expect(block).not.toBeNull();
+      expect(Array.from(block?.querySelectorAll("code") ?? [], (code) => code.textContent))
+        .toEqual(["SHA256:standard-public-123", "SHA256:abc123"]);
+      expect(block).toHaveTextContent("私钥摘要");
+    }
+
+    await user.click(screen.getByRole("radio", { name: "卡片视图" }));
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.getAllByText("SHA256:standard-public-123")).toHaveLength(2);
+    expect(screen.getAllByText("SHA256:abc123")).toHaveLength(2);
+  });
+
+  it.each([undefined, "", "   "])("does not present the legacy digest as an unknown standard fingerprint (%s)", (publicKeyFingerprint) => {
+    const key = (sshKeysRef.current.sshKeys as Record<string, unknown>[])[0];
+    createContext({ sshKeys: [{ ...key, publicKeyFingerprint }] });
+    render(
+      <MemoryRouter>
+        <SSHKeysPage />
+      </MemoryRouter>
+    );
+
+    const unknowns = screen.getAllByText("尚无标准公钥指纹");
+    expect(unknowns).toHaveLength(3);
+    for (const unknown of unknowns) {
+      const block = unknown.closest("td") ?? unknown.parentElement;
+      expect(Array.from(block?.querySelectorAll("code") ?? [], (code) => code.textContent))
+        .toEqual(["尚无标准公钥指纹", "SHA256:abc123"]);
+      expect(block).toHaveTextContent("私钥摘要");
+    }
   });
 
   it("无密钥时显示空态", () => {
