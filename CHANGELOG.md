@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.66.3](https://github.com/xiangnan0811/xirang/compare/v0.66.2...v0.66.3) (2026-10-15)
+
+
+### 🐛 Bug Fixes
+
+* **web:** complete remaining navigation and diagnostic UX repairs ([#624](https://github.com/xiangnan0811/xirang/issues/624)) ([1c44d8c](https://github.com/xiangnan0811/xirang/commit/1c44d8c4381fa500ad827c2ad57e9a2272a6c1c9))
+
 ### 修复
 
 - 完成剩余控制台 UX 修复：受限深链回退时仅提示一次原因；健康事件提供安全导航、分类原因与中英摘要并保留来源诊断；任务展示保守 Cron 解释和时间基准；节点 Doctor 隔离迟到结果、支持安全复制并导航到已有连接测试；SSH 密钥标准公钥指纹展示与实际导出保持一致。
