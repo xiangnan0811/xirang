@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.66.2](https://github.com/xiangnan0811/xirang/compare/v0.66.1...v0.66.2) (2026-10-15)
+
+
+### 🐛 Bug Fixes
+
+* **web:** complete toast announcements and defer credential loading ([#622](https://github.com/xiangnan0811/xirang/issues/622)) ([0341bc3](https://github.com/xiangnan0811/xirang/commit/0341bc3b6479d78a28e24383b290a110bbd3acf7))
+
 ### 修复
 
 - 全局 Toast 跟随应用实际明暗主题，不再被相反的系统主题覆盖；通知区域与关闭按钮名称支持中英文。应用持有唯一自动播报通道，完整输出已渲染的标题和说明，修复原生读屏漏播片段；独立同文通知分别播报，更新不重读整个可见栈，移除或卸载取消未发布内容。标题和说明使用应用前景色，修复浅色富彩色通知文字对比度不足。保留 Sonner 可见内容、现有通知时长、堆叠、关闭按钮尺寸及键盘行为，不改变业务操作或权限。策略编辑的凭据与应用类型读取改为按需加载，减少实际启动代码；关闭、卸载或身份变化阻止等待加载期间的旧请求和迟到选项回写，不撤销已发送的服务端操作，也不自动重试加载失败。
@@ -13,13 +20,6 @@
 - 行为从新版页面加载后生效；按同一发行版本切换 Core 与页面，完成或退出旧页面交互并刷新客户端。旧页面不会自动获得播报或请求隔离修复；本次不改后端读取、调度和执行，无需因这些前端修复额外排空任务，换版不撤销已提交操作。
 - 本次无新增数据库 schema migration，不清理、回填或改写历史数据。升级前保全数据库、适用密钥与配置；回退旧页面会恢复旧主题、播报及迟到选项缺陷，既有迁移降级保护和配套恢复要求仍适用。
 - 仅交付 R-11 Toast 及有界启动体积修复，不包含 Cron、Doctor 或其他 P3。原生验收是 Orca/AT-SPI/Speech Dispatcher/eSpeak 经 libao null sink 的自动化链路，非人工耳听，不承诺其他读屏器或全站 WCAG 合规；公开发布不等于生产部署或灾备恢复验收。
-
-## [0.66.2](https://github.com/xiangnan0811/xirang/compare/v0.66.1...v0.66.2) (2026-10-15)
-
-
-### 🐛 Bug Fixes
-
-* **web:** complete toast announcements and defer credential loading ([#622](https://github.com/xiangnan0811/xirang/issues/622)) ([0341bc3](https://github.com/xiangnan0811/xirang/commit/0341bc3b6479d78a28e24383b290a110bbd3acf7))
 
 ## [0.66.1](https://github.com/xiangnan0811/xirang/compare/v0.66.0...v0.66.1) (2026-10-14)
 

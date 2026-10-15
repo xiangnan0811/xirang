@@ -152,7 +152,7 @@ Toast 与有界启动体积修复的发行说明须保留唯一应用播报通�
 新版页面加载后生效，旧客户端须完成或退出交互并刷新；不改后端调度/执行，
 无需额外排空任务，也不撤销已提交操作。无新增 schema migration，升级前保全数据库、
 适用密钥与配置，回退会恢复旧主题、播报及迟到选项缺陷，既有迁移降级与恢复要求不变。
-Release PR 与最终 GitHub Release 正文须完整保留该批 CHANGELOG 的五项行为与升级说明，
+Release PR 与最终 GitHub Release 正文须完整保留 CHANGELOG `0.66.2` 版本节的五项行为与升级说明，
 不将 Orca/AT-SPI/Speech Dispatcher/eSpeak 的 libao null-sink 自动化验收写成人工耳听、
 其他读屏器或全站 WCAG 合规，不扩展为 Cron/Doctor 交付或生产部署。
 
