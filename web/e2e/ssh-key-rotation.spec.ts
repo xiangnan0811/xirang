@@ -170,7 +170,7 @@ test.describe("ssh key rotation", () => {
         await expectNodeStatus(dialog, names.up, upId, "verified");
         await expectNodeStatus(dialog, names.down, downId, "verified");
         await expect(page.locator("[data-rotation-draft]")).toHaveAttribute("data-rotation-draft", "cleared");
-        await expect(page.getByText(COPY.savedToast, { exact: true })).toBeVisible();
+        await expect(page.getByRole("region", { name: "通知（Alt+T）", exact: true }).getByText(COPY.savedToast, { exact: true })).toBeVisible();
         expect(closed.connections()).toBe(refusedBeforeRepair);
         expect(writes.snapshot()).toEqual({ put: 0, rotate: 2, test: 0 });
         assertCandidateStored(before, storedKey(fixture.sqlitePath, names.key), candidateDigest);
@@ -236,7 +236,7 @@ test.describe("ssh key rotation", () => {
       await dialog.getByRole("button", { name: COPY.updateKey, exact: true }).click();
       const response = await pending;
       expect(response.status()).toBe(200);
-      await expect(page.getByText(COPY.keyUpdated, { exact: true })).toBeVisible();
+      await expect(page.getByRole("region", { name: "通知（Alt+T）", exact: true }).getByText(COPY.keyUpdated, { exact: true })).toBeVisible();
       await expect(dialog).toBeHidden();
       expect(closed.connections()).toBe(0);
       expect(writes.snapshot()).toEqual({ put: 1, rotate: 0, test: 0 });
