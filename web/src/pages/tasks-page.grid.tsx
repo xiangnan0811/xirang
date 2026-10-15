@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { getTaskStatusMeta } from "@/lib/status";
+import { cronTimezoneNoteKey, cronToNatural } from "@/lib/cron-utils";
 import { cn } from "@/lib/utils";
 import { canCancel, canTrigger, rclonePublicationStateTone, taskPreviewConnectEligibility } from "@/pages/tasks-page.utils";
 
@@ -128,6 +129,13 @@ export const TasksGrid = React.memo(function TasksGrid({
 
             <div className="space-y-0.5 text-sm text-muted-foreground">
               <p>{t('tasks.nodeLabel', { name: task.nodeName })}</p>
+              {task.cronSpec ? (
+                <div className="space-y-0.5 text-xs">
+                  <p className="break-all font-mono">{task.cronSpec}</p>
+                  <p className="break-words">{cronToNatural(task.cronSpec)}</p>
+                  <p className="break-words">{t(cronTimezoneNoteKey(task.cronSpec))}</p>
+                </div>
+              ) : null}
               <p>{t('tasks.startedAtLabel', { time: task.startedAt })}</p>
               {task.nextRunAt ? <p>{t('tasks.nextRunAtLabel', { time: task.nextRunAt })}</p> : null}
               {task.lastError ? (

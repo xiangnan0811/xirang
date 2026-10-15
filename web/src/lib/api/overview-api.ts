@@ -1,6 +1,7 @@
-import type { BackupConfidenceData, BackupConfidenceItem, BackupConfidenceSeverity, BackupConfidenceStatus, BackupHealthData, HealthIncidentAction, HealthIncidentGroup, HealthIncidentResource, HealthIncidentResourceType, HealthIncidentSeverity, HealthIncidentSignal, HealthIncidentSourceType, HealthIncidentTimelineData, HealthTrendPoint, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
+import type { BackupConfidenceData, BackupConfidenceItem, BackupConfidenceSeverity, BackupConfidenceStatus, BackupHealthData, HealthIncidentTimelineData, HealthTrendPoint, OverviewSummary, OverviewTrafficSeries, OverviewTrafficWindow, StaleNode, StorageUsageData } from "@/types/domain";
 import { getLocale } from "@/lib/utils";
 import { request } from "./core";
+import type { HealthIncidentTimelineRaw } from "./health-incident-response";
 import { finiteNumber, positiveNumberOrUndefined } from "./number-utils";
 
 type OverviewSummaryResponse = {
@@ -63,59 +64,6 @@ function mapOverviewTraffic(payload?: OverviewTrafficSeriesResponse | null): Ove
   };
 }
 
-type HealthIncidentResourceRaw = {
-  type?: string;
-  id?: number | string;
-  name?: string;
-  node_id?: number | string;
-  node_name?: string;
-  policy_id?: number | string;
-  policy_name?: string;
-};
-
-type HealthIncidentActionRaw = {
-  code?: string;
-  label?: string;
-  href?: string;
-};
-
-type HealthIncidentSignalRaw = {
-  type?: string;
-  severity?: string;
-  occurred_at?: string;
-  message?: string;
-  alert_id?: number | string;
-  delivery_id?: number | string;
-  task_id?: number | string;
-  task_run_id?: number | string;
-  node_id?: number | string;
-  policy_id?: number | string;
-};
-
-type HealthIncidentGroupRaw = {
-  id?: string;
-  severity?: string;
-  resource?: HealthIncidentResourceRaw;
-  last_seen_at?: string;
-  event_count?: number | string;
-  likely_cause?: string;
-  source_types?: string[];
-  next_actions?: HealthIncidentActionRaw[];
-  signals?: HealthIncidentSignalRaw[];
-};
-
-type HealthIncidentTimelineRaw = {
-  generated_at?: string;
-  window_hours?: number | string;
-  summary?: {
-    total?: number | string;
-    critical?: number | string;
-    warning?: number | string;
-    info?: number | string;
-  };
-  groups?: HealthIncidentGroupRaw[];
-};
-
 type BackupHealthRaw = {
   stale_nodes?: { id: number; name: string; last_backup_at: string | null }[];
   degraded_policies?: { id: number; name: string; consecutive_failures?: number; last_failed_at?: string }[];
@@ -148,131 +96,6 @@ type BackupConfidenceItemRaw = {
   next_steps?: { code?: string; label?: string }[];
   targets?: { node_id?: number | string; node_name?: string; last_backup_at?: string | null }[];
 };
-
-function mapHealthIncidentSeverity(raw?: string): HealthIncidentSeverity {
-  switch (raw) {
-    case "critical":
-    case "warning":
-    case "info":
-      return raw;
-    default:
-      return "warning";
-  }
-}
-
-function mapHealthIncidentResourceType(raw?: string): HealthIncidentResourceType {
-  switch (raw) {
-    case "node":
-    case "task":
-    case "policy":
-    case "platform":
-      return raw;
-    default:
-      return "platform";
-  }
-}
-
-function mapHealthIncidentSourceType(raw?: string): HealthIncidentSourceType | null {
-  switch (raw) {
-    case "alert":
-    case "task_failure":
-    case "notification_failure":
-    case "anomaly":
-    case "backup_stale":
-    case "backup_degraded":
-      return raw;
-    case "probe":
-    case "metric":
-      return null;
-    default:
-      return "alert";
-  }
-}
-
-function isRetiredHealthIncidentAction(code: string, href: string): boolean {
-  return code === "view_node_metrics" || href.includes("tab=metrics");
-}
-
-function mapHealthIncidentResource(raw?: HealthIncidentResourceRaw | null): HealthIncidentResource {
-  const type = mapHealthIncidentResourceType(raw?.type);
-  const id = positiveNumberOrUndefined(raw?.id);
-  return {
-    type,
-    id,
-    name: String(raw?.name || (type === "platform" ? "platform" : "")),
-    nodeId: positiveNumberOrUndefined(raw?.node_id),
-    nodeName: raw?.node_name ? String(raw.node_name) : undefined,
-    policyId: positiveNumberOrUndefined(raw?.policy_id),
-    policyName: raw?.policy_name ? String(raw.policy_name) : undefined,
-  };
-}
-
-function mapHealthIncidentAction(raw: HealthIncidentActionRaw): HealthIncidentAction | null {
-  const href = String(raw.href || "");
-  const code = String(raw.code || "unknown");
-  if (!href || isRetiredHealthIncidentAction(code, href)) return null;
-  return {
-    code,
-    label: String(raw.label || raw.code || ""),
-    href,
-  };
-}
-
-function mapHealthIncidentSignal(raw: HealthIncidentSignalRaw): HealthIncidentSignal | null {
-  const type = mapHealthIncidentSourceType(raw.type);
-  if (!type) return null;
-  return {
-    type,
-    severity: mapHealthIncidentSeverity(raw.severity),
-    occurredAt: String(raw.occurred_at || ""),
-    message: String(raw.message || ""),
-    alertId: positiveNumberOrUndefined(raw.alert_id),
-    deliveryId: positiveNumberOrUndefined(raw.delivery_id),
-    taskId: positiveNumberOrUndefined(raw.task_id),
-    taskRunId: positiveNumberOrUndefined(raw.task_run_id),
-    nodeId: positiveNumberOrUndefined(raw.node_id),
-    policyId: positiveNumberOrUndefined(raw.policy_id),
-  };
-}
-
-function mapHealthIncidentGroup(raw: HealthIncidentGroupRaw): HealthIncidentGroup | null {
-  const sourceTypes = Array.isArray(raw.source_types)
-    ? raw.source_types.map(mapHealthIncidentSourceType).filter((source): source is HealthIncidentSourceType => source != null)
-    : [];
-  const signals = Array.isArray(raw.signals)
-    ? raw.signals.map(mapHealthIncidentSignal).filter((signal): signal is HealthIncidentSignal => signal != null)
-    : [];
-  if (sourceTypes.length === 0 && signals.length === 0) return null;
-  return {
-    id: String(raw.id || "incident-unknown"),
-    severity: mapHealthIncidentSeverity(raw.severity),
-    resource: mapHealthIncidentResource(raw.resource),
-    lastSeenAt: String(raw.last_seen_at || ""),
-    eventCount: finiteNumber(raw.event_count),
-    likelyCause: String(raw.likely_cause || ""),
-    sourceTypes,
-    nextActions: Array.isArray(raw.next_actions)
-      ? raw.next_actions.map(mapHealthIncidentAction).filter((action): action is HealthIncidentAction => action != null)
-      : [],
-    signals,
-  };
-}
-
-function mapHealthIncidentTimeline(raw: HealthIncidentTimelineRaw | null | undefined): HealthIncidentTimelineData {
-  return {
-    generatedAt: raw?.generated_at ?? "",
-    windowHours: finiteNumber(raw?.window_hours),
-    summary: {
-      total: finiteNumber(raw?.summary?.total),
-      critical: finiteNumber(raw?.summary?.critical),
-      warning: finiteNumber(raw?.summary?.warning),
-      info: finiteNumber(raw?.summary?.info),
-    },
-    groups: Array.isArray(raw?.groups)
-      ? raw.groups.map(mapHealthIncidentGroup).filter((group): group is HealthIncidentGroup => group != null)
-      : [],
-  };
-}
 
 function mapBackupHealth(raw: BackupHealthRaw | null | undefined): BackupHealthData {
   const staleNodes = Array.isArray(raw?.stale_nodes)
@@ -452,6 +275,8 @@ export function createOverviewApi() {
       }
       const suffix = query.toString() ? `?${query.toString()}` : "";
       const payload = await request<HealthIncidentTimelineRaw>(`/overview/health-incident-timeline${suffix}`, { token, signal: options?.signal });
+      // Defer this mapper out of the startup bundle without delaying request/auth handling.
+      const { mapHealthIncidentTimeline } = await import("./health-incident-response");
       return mapHealthIncidentTimeline(payload);
     },
 

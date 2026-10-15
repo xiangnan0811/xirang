@@ -1,7 +1,7 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import i18n from "@/i18n";
 import { apiClient } from "@/lib/api/client";
-import { describeCron } from "@/hooks/use-console-data.utils";
+import { cronToNatural } from "@/lib/cron-utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import type {
   AlertRecord,
@@ -51,7 +51,7 @@ export function usePolicyOperations({
         setPolicies((prev) => [{
           ...result.data,
           criticalThreshold: input.criticalThreshold,
-          naturalLanguage: describeCron(result.data.cron)
+          naturalLanguage: cronToNatural(result.data.cron)
         }, ...prev]);
         // 后端 SyncPolicyTasks 会自动创建关联任务，需刷新任务列表
         if (input.nodeIds.length > 0) {
@@ -72,7 +72,7 @@ export function usePolicyOperations({
         setPolicies((prev) => prev.map((policy) => (policy.id === policyID ? {
           ...result.data,
           criticalThreshold: input.criticalThreshold,
-          naturalLanguage: describeCron(result.data.cron)
+          naturalLanguage: cronToNatural(result.data.cron)
         } : policy)));
         // 后端 SyncPolicyTasks 会同步更新关联任务，需刷新任务列表
         void refreshTasks();
@@ -88,7 +88,7 @@ export function usePolicyOperations({
               sourcePath: input.sourcePath,
               targetPath: input.targetPath || "/backup",
               cron: input.cron,
-              naturalLanguage: describeCron(input.cron),
+              naturalLanguage: cronToNatural(input.cron),
               enabled: input.enabled,
               criticalThreshold: Math.max(1, input.criticalThreshold),
               nodeIds: input.nodeIds,

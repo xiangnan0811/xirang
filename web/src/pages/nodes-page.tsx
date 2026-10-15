@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Layers, ServerCog } from "lucide-react";
 import { NodesGrid } from "@/pages/nodes-page.grid";
@@ -16,6 +17,14 @@ import { Pagination } from "@/components/ui/pagination";
 import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { useClientPagination } from "@/hooks/use-client-pagination";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
+import { getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
+
+type ConnectionFocusIntent = {
+  nodeId: number;
+  authGeneration: number;
+  token: string | null;
+};
 
 export function NodesPage() {
   const { t } = useTranslation();
@@ -121,6 +130,87 @@ export function NodesPage() {
     canBrowseNodeFiles,
   };
 
+  // Doctor → 连接测试导航：只关闭 Doctor 并聚焦当前视图里同一节点已有的连接测试按钮，
+  // 绝不点击或执行测试。按钮可能因响应式/分组出现多次，按 data 属性选首个可见可用者。
+  const inventoryRef = useRef<HTMLDivElement | null>(null);
+  const connectionFocusIntentRef = useRef<ConnectionFocusIntent | null>(null);
+  const liveIdentityRef = useRef({ token: state.token, canOperateNodes });
+  useLayoutEffect(() => {
+    liveIdentityRef.current = { token: state.token, canOperateNodes };
+    connectionFocusIntentRef.current = null;
+  }, [state.token, canOperateNodes]);
+
+  const findConnectionTarget = (nodeId: number): HTMLButtonElement | null => {
+    const root = inventoryRef.current;
+    if (!root?.isConnected) return null;
+    const candidates = root.querySelectorAll<HTMLButtonElement>(`button[data-node-test-connection="${nodeId}"]`);
+    for (const button of candidates) {
+      if (
+        button.isConnected
+        && !button.disabled
+        && button.getClientRects().length > 0
+        && window.getComputedStyle(button).visibility !== "hidden"
+      ) {
+        return button;
+      }
+    }
+    return null;
+  };
+
+  const doctorNode = state.doctorNode;
+  const connectionNavigationAvailable = canOperateNodes
+    && doctorNode !== null
+    && testingNodeId !== doctorNode.id
+    && nodesViewProps.sortedNodes.some((node) => node.id === doctorNode.id);
+
+  const navigateDoctorToConnection = (): boolean => {
+    const live = liveIdentityRef.current;
+    if (
+      !doctorNode
+      || !connectionNavigationAvailable
+      || !live.canOperateNodes
+      || live.token !== state.token
+      || isAuthTransitionActive()
+      || !findConnectionTarget(doctorNode.id)
+    ) {
+      return false;
+    }
+    connectionFocusIntentRef.current = {
+      nodeId: doctorNode.id,
+      authGeneration: getAuthSessionGeneration(),
+      token: live.token,
+    };
+    state.handleDoctorOpenChange(false);
+    return true;
+  };
+
+  const doctorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    const intent = connectionFocusIntentRef.current;
+    if (!intent) return;
+    connectionFocusIntentRef.current = null;
+    const live = liveIdentityRef.current;
+    if (
+      intent.authGeneration !== getAuthSessionGeneration()
+      || intent.token !== live.token
+      || !live.canOperateNodes
+      || isAuthTransitionActive()
+    ) {
+      return;
+    }
+    const target = findConnectionTarget(intent.nodeId);
+    if (target) {
+      event.preventDefault();
+      target.focus();
+      target.scrollIntoView?.({ block: "nearest" });
+      return;
+    }
+    const inventory = inventoryRef.current;
+    if (inventory?.isConnected) {
+      event.preventDefault();
+      inventory.focus();
+    }
+  };
+
   return (
     <div className="animate-fade-in space-y-5">
       <PageHero
@@ -178,6 +268,7 @@ export function NodesPage() {
         ]}
       />
 
+      <div ref={inventoryRef} tabIndex={-1}>
       <DataSurface>
         <DataSurfaceToolbar className="space-y-3">
           {/* 工具栏：左侧操作按钮 + 右侧视图/批量/重置 */}
@@ -295,6 +386,7 @@ export function NodesPage() {
           )}
         </DataSurfaceContent>
       </DataSurface>
+      </div>
 
       <NodesPageDialogs
         token={state.token}
@@ -331,6 +423,9 @@ export function NodesPage() {
         doctorError={state.doctorError}
         handleDoctorOpenChange={state.handleDoctorOpenChange}
         runDoctorForNode={state.runDoctorForNode}
+        doctorConnectionNavigationAvailable={connectionNavigationAvailable}
+        onDoctorNavigateConnection={navigateDoctorToConnection}
+        doctorOnCloseAutoFocus={doctorOnCloseAutoFocus}
         isAdmin={state.isAdmin}
         canOperateNodes={state.canOperateNodes}
         hostKeyIssue={state.hostKeyIssue}

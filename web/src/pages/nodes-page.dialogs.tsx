@@ -25,6 +25,7 @@ import { NodeDoctorDialog } from "@/components/node-doctor-dialog";
 import { NodeHostKeyDialog } from "@/components/node-host-key-dialog";
 import { createFilesApi } from "@/lib/api/files-api";
 import type { NodesPageState } from "@/pages/nodes-page.state";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 
 const filesApi = createFilesApi();
 
@@ -74,7 +75,11 @@ export type NodesPageDialogsProps = Pick<
   | "trustHostKey"
   | "openHostKeySettings"
   | "handleHostKeyOpenChange"
->;
+> & {
+  doctorConnectionNavigationAvailable: boolean;
+  onDoctorNavigateConnection: () => boolean;
+  doctorOnCloseAutoFocus?: DialogCloseAutoFocus;
+};
 
 export function NodesPageDialogs({
   token,
@@ -93,6 +98,9 @@ export function NodesPageDialogs({
   doctorError,
   handleDoctorOpenChange,
   runDoctorForNode,
+  doctorConnectionNavigationAvailable,
+  onDoctorNavigateConnection,
+  doctorOnCloseAutoFocus,
   fileBrowserNode,
   setFileBrowserNode,
   fileBrowserTab,
@@ -180,6 +188,10 @@ export function NodesPageDialogs({
         error={doctorError}
         onOpenChange={handleDoctorOpenChange}
         onRun={runDoctorForNode}
+        canOperateNodes={canOperateNodes}
+        connectionNavigationAvailable={doctorConnectionNavigationAvailable}
+        onNavigateConnection={onDoctorNavigateConnection}
+        onCloseAutoFocus={doctorOnCloseAutoFocus}
       />
 
       <NodeHostKeyDialog

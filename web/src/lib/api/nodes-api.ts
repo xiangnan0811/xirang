@@ -323,10 +323,11 @@ export function createNodesApi() {
       };
     },
 
-    async runNodeDoctor(token: string, nodeId: number): Promise<NodeDoctorResult> {
+    async runNodeDoctor(token: string, nodeId: number, options?: { signal?: AbortSignal }): Promise<NodeDoctorResult> {
       const row = await request<NodeDoctorResponse>(`/nodes/${nodeId}/doctor`, {
         method: "POST",
-        token
+        token,
+        signal: options?.signal,
       });
       return mapNodeDoctorResult(row);
     },

@@ -15,6 +15,16 @@ profile 或导出。备份数据工作台仅向 admin/operator 开放；viewer �
 数据源、仓库、备份集合或版本请求。viewer 仍可读取备份信心、健康、存储与恢复证据；
 这不授予恢复 plan/job 的读取或执行权限。
 
+五个 admin 守卫（audit、automation-rules、credentials、credential-audit、
+credential-access-grants）对已确认 token 的 operator/viewer 拒绝导航时，概览显示
+一次本地化原因提示；无 token、未确定角色仅安全回退，认证转换中等待。请求内容在
+守卫通过前不挂载。单个内存 ticket 绑定来源 location key 和认证代次，history state
+只携带固定 code 和随机 ID；消费后只清除该标记，保留其他 state、search/hash。
+StrictMode、轮询、前进/后退、刷新、伪造或跨身份残留不重播；新的独立拒绝可再次提示，
+包括退出动画内同路由的新 history entry。身份失效只撤销本模块仍可见的提示，不清空
+所有 Toast。复用唯一全局播报通道，不增加 live region。settings 个人/账户/非法页签
+及 viewer 备份回退不接入本提示。
+
 节点、SSH 密钥、策略、任务、告警和报告的合法读入口对三角色保留。节点管理、CSV 导入、
 迁移、终端和主机密钥信任仅 admin；节点连接测试、Doctor、手动/紧急备份和批量命令允许
 admin/operator；节点文件浏览沿用现有权限。SSH 密钥管理、测试、导入和轮换、策略写操作
@@ -166,6 +176,18 @@ state，显式返回只导航，不重开表单或重放提交。普通浏览、
 不是 SSH 公钥指纹。安全响应新增可选 `public_key_fingerprint`，只从真实公钥按
 SSH 标准派生，未知不得回退到私钥摘要。CSV/JSON 的既有 `fingerprint` 字段及值
 保持兼容，authorized_keys 内容不插入说明行；主机信任指纹含义不变。
+
+列表及两种卡片优先展示标准公钥指纹，下一行单独展示历史私钥摘要；标准值空或未知
+明确显示未知，不以旧 digest 代替。实际 CSV 保留 UTF-8 BOM 和既有八列顺序/值，
+仅在末尾追加 `public_key_fingerprint`，完整顺序为
+`id,name,username,key_type,fingerprint,public_key,created_at,updated_at,public_key_fingerprint`。
+每条只派生一次公钥，派生失败时两个公钥字段均为空；JSON 与 GET 复用同一安全响应，
+未知标准字段省略。authorized_keys 仍仅输出真实公钥及既有名称注释，不增加说明行。
+
+导出预览只是已加载记录的有限字段样本，不代表当前服务端可导出集合的冻结快照；
+下载仍须 fresh step-up、用途/权限过滤及身份当前性检查。JSON 预览新增可选标准字段，
+CSV 在原四列末尾追加该字段，每格双引号包裹并正确转义引号，保留真实换行；
+authorized_keys 预览跳过无公钥记录，不制造示例公钥。预览不新增请求或解密秘密。
 
 轮换须显式检查当前候选后才能确认；修改草稿、返回编辑、关闭或身份失效清除预览。
 禁用键可见但不能选择或预选跳过，补救入口返回现有密钥页。轮换不自动部署远端

@@ -2,9 +2,9 @@ import {
   buildFingerprint,
   createIntegrationId,
   createKeyId,
-  describeCron,
   parseTags
 } from "@/hooks/use-console-data.utils";
+import { cronToNatural } from "@/lib/cron-utils";
 import { formatTime } from "@/lib/api/core";
 import { preserveSSHPurposeScope, sshKeyIsBroadScope } from "@/lib/ssh-purpose-scope";
 import type {
@@ -95,7 +95,7 @@ export function buildDemoPolicy(input: NewPolicyInput, policies: PolicyRecord[])
     sourcePath: input.sourcePath,
     targetPath: input.targetPath || "/backup",
     cron: input.cron,
-    naturalLanguage: describeCron(input.cron),
+    naturalLanguage: cronToNatural(input.cron),
     enabled: input.enabled,
     criticalThreshold: Math.max(1, input.criticalThreshold),
     nodeIds: input.nodeIds ?? [],

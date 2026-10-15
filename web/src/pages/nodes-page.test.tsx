@@ -1,10 +1,10 @@
 import "@testing-library/jest-dom/vitest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
-import { bumpAuthSessionGeneration } from "@/lib/api/core";
+import { beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { NewNodeInput, NodeConnectionProbeOutcome, NodeHostKeyIssueCode, TaskRecord } from "@/types/domain";
 
@@ -753,7 +753,7 @@ describe("NodesPage", () => {
     const doctorButtons = screen.getAllByRole("button", { name: /运行节点 node-prod-1 Fleet Doctor|Run Fleet Doctor for node node-prod-1/ });
     await user.click(doctorButtons[0]);
 
-    expect(runNodeDoctorMock).toHaveBeenCalledWith("test-token", 1);
+    expect(runNodeDoctorMock).toHaveBeenCalledWith("test-token", 1, { signal: expect.any(AbortSignal) });
     expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText("SSH 认证失败")).toBeInTheDocument();
@@ -883,7 +883,7 @@ describe("NodesPage", () => {
     await user.click(overflowTrigger);
     await user.click(screen.getByRole("menuitem", { name: /Fleet Doctor/ }));
 
-    expect(runNodeDoctorMock).toHaveBeenCalledWith("test-token", 1);
+    expect(runNodeDoctorMock).toHaveBeenCalledWith("test-token", 1, { signal: expect.any(AbortSignal) });
     expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
   });
 
@@ -1715,5 +1715,365 @@ describe("NodesPage", () => {
     rerenderAuth(view, { role: "viewer", token: "next-token" });
     expect(screen.queryByRole("dialog", { name: /批量执行结果/ })).not.toBeInTheDocument();
     expect(getBatchStatusMock).not.toHaveBeenCalledWith("next-token", "batch-77");
+  });
+
+  describe("Fleet Doctor 当前结果所有权", () => {
+    const doctorDialogName = /SSH Fleet Doctor/;
+    const doctorResult = (nodeId: number, evidence: string) => ({
+      nodeId,
+      nodeName: `node-${nodeId}`,
+      generatedAt: "2026-05-17T10:00:00Z",
+      checks: [{ check: "ssh", status: "pass" as const, evidence, suggestion: "" }],
+    });
+
+    function doctorSignal(callIndex: number): AbortSignal {
+      const options: unknown = runNodeDoctorMock.mock.calls[callIndex][2];
+      if (options && typeof options === "object" && "signal" in options && options.signal instanceof AbortSignal) {
+        return options.signal;
+      }
+      throw new Error("runNodeDoctor was called without an AbortSignal");
+    }
+
+    async function openDoctorFromDesktopCard(user: ReturnType<typeof userEvent.setup>, nodeName: string) {
+      const card = screen.getByLabelText(`节点卡片 ${nodeName}`);
+      await user.click(within(card).getByRole("button", { name: `运行节点 ${nodeName} Fleet Doctor` }));
+      return screen.findByRole("dialog", { name: doctorDialogName });
+    }
+
+    async function closeDoctor(user: ReturnType<typeof userEvent.setup>) {
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: doctorDialogName })).not.toBeInTheDocument());
+    }
+
+    it("A→B 换节点时旧请求即使忽略 abort 也不能提交结果、错误或结束新 loading", async () => {
+      const user = userEvent.setup();
+      const first = createDeferred<unknown>();
+      const second = createDeferred<unknown>();
+      runNodeDoctorMock
+        .mockImplementationOnce(() => first.promise)
+        .mockImplementationOnce(() => second.promise);
+      renderNodesPage();
+
+      await openDoctorFromDesktopCard(user, "node-prod-1");
+      const firstSignal = doctorSignal(0);
+      await closeDoctor(user);
+      expect(firstSignal.aborted).toBe(true);
+
+      await openDoctorFromDesktopCard(user, "node-dr-2");
+      expect(runNodeDoctorMock).toHaveBeenLastCalledWith("test-token", 2, { signal: expect.any(AbortSignal) });
+
+      // 模拟底层忽略 abort：旧请求照常完成/失败。
+      await act(async () => {
+        first.reject(new Error("旧节点诊断失败"));
+      });
+      expect(toastErrorMock).not.toHaveBeenCalled();
+      expect(screen.queryByText("旧节点诊断失败")).not.toBeInTheDocument();
+      expect(screen.getByText("正在运行只读诊断...")).toBeInTheDocument();
+
+      await act(async () => {
+        second.resolve(doctorResult(2, "B 节点证据"));
+      });
+      expect(await screen.findByText("B 节点证据")).toBeInTheDocument();
+      expect(screen.queryByText("正在运行只读诊断...")).not.toBeInTheDocument();
+    });
+
+    it("同节点关闭重开后旧请求乱序完成不覆盖新结果", async () => {
+      const user = userEvent.setup();
+      const first = createDeferred<unknown>();
+      const second = createDeferred<unknown>();
+      runNodeDoctorMock
+        .mockImplementationOnce(() => first.promise)
+        .mockImplementationOnce(() => second.promise);
+      renderNodesPage();
+
+      await openDoctorFromDesktopCard(user, "node-prod-1");
+      await closeDoctor(user);
+      await openDoctorFromDesktopCard(user, "node-prod-1");
+
+      await act(async () => {
+        second.resolve(doctorResult(1, "新一轮证据"));
+      });
+      expect(await screen.findByText("新一轮证据")).toBeInTheDocument();
+      await act(async () => {
+        first.resolve(doctorResult(1, "旧一轮证据"));
+      });
+      expect(screen.queryByText("旧一轮证据")).not.toBeInTheDocument();
+      expect(screen.getByText("新一轮证据")).toBeInTheDocument();
+    });
+
+    it("重新运行失败时清空旧结果并只显示本次错误", async () => {
+      const user = userEvent.setup();
+      renderNodesPage();
+      const dialog = await openDoctorFromDesktopCard(user, "node-prod-1");
+      expect(await within(dialog).findByText("SSH 认证失败")).toBeInTheDocument();
+
+      runNodeDoctorMock.mockRejectedValueOnce(new Error("诊断服务不可用"));
+      await user.click(within(dialog).getByRole("button", { name: "重新运行" }));
+
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("诊断服务不可用");
+      expect(within(dialog).queryByText("SSH 认证失败")).not.toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "复制诊断结果" })).toBeDisabled();
+    });
+
+    it("响应 nodeId 与请求节点不一致时显示当前错误且不可复制", async () => {
+      const user = userEvent.setup();
+      runNodeDoctorMock.mockResolvedValueOnce(doctorResult(2, "其他节点证据"));
+      renderNodesPage();
+      const dialog = await openDoctorFromDesktopCard(user, "node-prod-1");
+
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("诊断结果与当前节点不匹配，请重新运行。");
+      expect(within(dialog).queryByText("其他节点证据")).not.toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "复制诊断结果" })).toBeDisabled();
+    });
+
+    it("身份 A→B→A 后旧请求的结果与错误都不再提交", async () => {
+      const user = userEvent.setup();
+      const first = createDeferred<unknown>();
+      runNodeDoctorMock.mockImplementationOnce(() => first.promise);
+      const view = renderNodesPage();
+      await openDoctorFromDesktopCard(user, "node-prod-1");
+      const firstSignal = doctorSignal(0);
+
+      rerenderAuth(view, { role: "admin", token: "other-token" });
+      rerenderAuth(view, { role: "admin", token: "test-token" });
+      expect(firstSignal.aborted).toBe(true);
+      expect(screen.queryByRole("dialog", { name: doctorDialogName })).not.toBeInTheDocument();
+
+      await act(async () => {
+        first.reject(new Error("旧会话诊断失败"));
+      });
+      expect(toastErrorMock).not.toHaveBeenCalled();
+      expect(screen.queryByText("旧会话诊断失败")).not.toBeInTheDocument();
+    });
+
+    it("降权为 viewer 时关闭 Doctor 并丢弃迟到结果", async () => {
+      const user = userEvent.setup();
+      const first = createDeferred<unknown>();
+      runNodeDoctorMock.mockImplementationOnce(() => first.promise);
+      const view = renderNodesPage();
+      await openDoctorFromDesktopCard(user, "node-prod-1");
+
+      rerenderAuth(view, { role: "viewer", token: "test-token" });
+      await act(async () => {
+        first.resolve(doctorResult(1, "降权后迟到证据"));
+      });
+      expect(screen.queryByRole("dialog", { name: doctorDialogName })).not.toBeInTheDocument();
+      expect(screen.queryByText("降权后迟到证据")).not.toBeInTheDocument();
+    });
+
+    it("auth barrier 激活时关闭 Doctor、拒绝新运行并丢弃迟到结果", async () => {
+      const user = userEvent.setup();
+      const first = createDeferred<unknown>();
+      runNodeDoctorMock.mockImplementationOnce(() => first.promise);
+      renderNodesPage();
+      await openDoctorFromDesktopCard(user, "node-prod-1");
+
+      try {
+        act(() => {
+          beginAuthTransitionBarrier();
+        });
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: doctorDialogName })).not.toBeInTheDocument());
+        const card = screen.getByLabelText("节点卡片 node-prod-1");
+        await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+        expect(runNodeDoctorMock).toHaveBeenCalledTimes(1);
+      } finally {
+        act(() => {
+          clearAuthTransitionBarrier();
+        });
+      }
+      await act(async () => {
+        first.resolve(doctorResult(1, "barrier 后迟到证据"));
+      });
+      expect(screen.queryByText("barrier 后迟到证据")).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: doctorDialogName })).not.toBeInTheDocument();
+    });
+
+    it("会话代次变化后旧请求不再提交", async () => {
+      const user = userEvent.setup();
+      const first = createDeferred<unknown>();
+      runNodeDoctorMock.mockImplementationOnce(() => first.promise);
+      renderNodesPage();
+      await openDoctorFromDesktopCard(user, "node-prod-1");
+
+      bumpAuthSessionGeneration();
+      await act(async () => {
+        first.resolve(doctorResult(1, "旧会话代次证据"));
+      });
+      expect(screen.queryByText("旧会话代次证据")).not.toBeInTheDocument();
+    });
+
+    it("卸载后迟到失败不提示", async () => {
+      const user = userEvent.setup();
+      const first = createDeferred<unknown>();
+      runNodeDoctorMock.mockImplementationOnce(() => first.promise);
+      const view = renderNodesPage();
+      await openDoctorFromDesktopCard(user, "node-prod-1");
+      const firstSignal = doctorSignal(0);
+
+      view.unmount();
+      expect(firstSignal.aborted).toBe(true);
+      await act(async () => {
+        first.reject(new Error("卸载后失败"));
+      });
+      expect(toastErrorMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Fleet Doctor 前往连接测试", () => {
+    const doctorDialogName = /SSH Fleet Doctor/;
+    let restoreRects: (() => void) | null = null;
+    let scrollIntoViewMock: ReturnType<typeof vi.fn>;
+
+    // jsdom 无布局：按选择器声明哪些连接按钮“可见”。
+    function stubVisibleWithin(isVisible: (element: Element) => boolean) {
+      const spy = vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (this: Element) {
+        return (isVisible(this) ? [new DOMRect(0, 0, 32, 32)] : []) as unknown as DOMRectList;
+      });
+      restoreRects = () => spy.mockRestore();
+    }
+
+    beforeEach(() => {
+      scrollIntoViewMock = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoViewMock as unknown as Element["scrollIntoView"];
+    });
+
+    afterEach(() => {
+      restoreRects?.();
+      restoreRects = null;
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    });
+
+    function testNodeConnectionMock() {
+      return nodesRef.current.testNodeConnection as ReturnType<typeof vi.fn>;
+    }
+
+    it.each(["admin", "operator"] as const)("%s 在桌面卡片中聚焦同节点连接按钮且不执行测试", async (role) => {
+      authRef.current = { role, token: "test-token" };
+      stubVisibleWithin((element) => element.closest('[aria-label^="节点卡片 "]') !== null);
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
+      await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: doctorDialogName })).not.toBeInTheDocument());
+      const target = within(card).getByRole("button", { name: "测试节点 node-prod-1 连接" });
+      await waitFor(() => expect(target).toHaveFocus());
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest" });
+      expect(testNodeConnectionMock()).not.toHaveBeenCalled();
+      expect(trustNodeHostKeyMock).not.toHaveBeenCalled();
+
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(testNodeConnectionMock()).toHaveBeenCalledTimes(1));
+    });
+
+    it("移动卡片布局聚焦可见的移动端按钮", async () => {
+      stubVisibleWithin((element) => element.closest(".md\\:hidden") !== null);
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const mobileDoctor = screen.getAllByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" })[0];
+      expect(mobileDoctor.closest(".md\\:hidden")).not.toBeNull();
+      await user.click(mobileDoctor);
+      const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
+      await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
+
+      await waitFor(() => {
+        const focused = document.activeElement as HTMLElement | null;
+        expect(focused?.getAttribute("data-node-test-connection")).toBe("1");
+        expect(focused?.closest(".md\\:hidden")).not.toBeNull();
+      });
+      expect(testNodeConnectionMock()).not.toHaveBeenCalled();
+    });
+
+    it("列表视图聚焦表格行内连接按钮", async () => {
+      window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+      stubVisibleWithin((element) => element.closest("table") !== null);
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const table = screen.getByRole("table");
+      const prodRow = within(table).getByRole("link", { name: "node-prod-1" }).closest("tr") as HTMLElement;
+      await user.click(within(prodRow).getByRole("button", { name: /节点 node-prod-1 更多操作/ }));
+      await user.click(screen.getByRole("menuitem", { name: /Fleet Doctor/ }));
+      const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
+      await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
+
+      const target = within(prodRow).getByRole("button", { name: "测试节点 node-prod-1 连接" });
+      await waitFor(() => expect(target).toHaveFocus());
+      expect(testNodeConnectionMock()).not.toHaveBeenCalled();
+    });
+
+    it("当前视图没有可见目标时保持 Doctor 打开并说明不可用", async () => {
+      stubVisibleWithin(() => false);
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
+      expect(within(dialog).queryByText("当前视图中无法定位连接测试，请关闭此对话框后在节点列表中查找。")).not.toBeInTheDocument();
+      await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
+
+      expect(screen.getByRole("dialog", { name: doctorDialogName })).toBeInTheDocument();
+      expect(within(dialog).getByText("当前视图中无法定位连接测试，请关闭此对话框后在节点列表中查找。")).toBeInTheDocument();
+      expect(testNodeConnectionMock()).not.toHaveBeenCalled();
+    });
+
+    it("节点被筛选/列表移出当前视图时禁用入口并说明不可用", async () => {
+      stubVisibleWithin(() => true);
+      const user = userEvent.setup();
+      const view = renderNodesPage();
+      const allNodes = nodesRef.current.nodes as Array<{ id: number }>;
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
+
+      createContext({ nodes: allNodes.filter((node) => node.id !== 1) });
+      view.rerender(<MemoryRouter><NodesPage /></MemoryRouter>);
+
+      expect(within(dialog).getByRole("button", { name: "前往连接测试" })).toBeDisabled();
+      expect(within(dialog).getByText("当前视图中无法定位连接测试，请关闭此对话框后在节点列表中查找。")).toBeInTheDocument();
+    });
+
+    it("关闭过程中目标消失时回退聚焦节点列表区域而非误聚焦", async () => {
+      // Doctor 仍打开时目标可见；关闭回焦（对话框已卸载）时目标已消失。
+      stubVisibleWithin(() => document.querySelector('[role="dialog"]') !== null);
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
+      await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: doctorDialogName })).not.toBeInTheDocument());
+      await waitFor(() => {
+        const focused = document.activeElement as HTMLElement | null;
+        expect(focused?.getAttribute("tabindex")).toBe("-1");
+        expect(focused?.contains(card)).toBe(true);
+      });
+      expect(testNodeConnectionMock()).not.toHaveBeenCalled();
+    });
+
+    it("连接测试进行中时禁用入口", async () => {
+      stubVisibleWithin(() => true);
+      const pendingTest = createDeferred<unknown>();
+      createContext({ testNodeConnection: vi.fn(() => pendingTest.promise) });
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await user.click(within(card).getByRole("button", { name: "测试节点 node-prod-1 连接" }));
+      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
+      expect(within(dialog).getByRole("button", { name: "前往连接测试" })).toBeDisabled();
+      await act(async () => {
+        pendingTest.resolve({ ok: true, message: "连接成功" });
+      });
+    });
   });
 });

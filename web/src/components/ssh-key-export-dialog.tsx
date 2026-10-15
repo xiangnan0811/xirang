@@ -49,7 +49,8 @@ function generatePreview(
   switch (format) {
     case "authorized_keys":
       return preview
-        .map((k) => k.publicKey || `ssh-ed25519 AAAA... ${k.name}`)
+        .filter((k) => k.publicKey?.trim())
+        .map((k) => `${k.publicKey} ${k.name}`)
         .join("\n");
 
     case "json":
@@ -58,6 +59,9 @@ function generatePreview(
           name: k.name,
           fingerprint: k.fingerprint,
           public_key: k.publicKey || "",
+          ...(k.publicKeyFingerprint?.trim()
+            ? { public_key_fingerprint: k.publicKeyFingerprint }
+            : {}),
           created_at: k.createdAt,
         })),
         null,
@@ -65,10 +69,11 @@ function generatePreview(
       );
 
     case "csv": {
-      const header = "name,fingerprint,public_key,created_at";
-      const rows = preview.map(
-        (k) =>
-          `"${k.name}","${k.fingerprint}","${k.publicKey || ""}","${k.createdAt}"`,
+      const header = "name,fingerprint,public_key,created_at,public_key_fingerprint";
+      const rows = preview.map((k) =>
+        [k.name, k.fingerprint, k.publicKey || "", k.createdAt, k.publicKeyFingerprint?.trim() ? k.publicKeyFingerprint : ""]
+          .map((cell) => `"${cell.replaceAll('"', '""')}"`)
+          .join(","),
       );
       return [header, ...rows].join("\n");
     }
@@ -352,6 +357,9 @@ function SSHKeyExportSession({
               <label className="text-sm font-medium text-muted-foreground">
                 {t("sshKeys.exportPreview")}
               </label>
+              <p className="text-xs text-muted-foreground">
+                {t("sshKeys.exportPreviewHint")}
+              </p>
               <pre className="max-h-40 overflow-auto rounded-md border border-border/60 bg-muted/30 p-3 text-xs leading-relaxed thin-scrollbar">
                 {preview}
               </pre>

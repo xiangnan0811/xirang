@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/data-surface";
 import { PageHero } from "@/components/ui/page-hero";
 import { toast } from "@/components/ui/toast-sonner";
+import { AccessDeniedRedirect } from "@/components/access-denied-navigation";
 import { CredentialEditorDialog } from "@/components/credential-editor-dialog";
 import { CredentialReferencesDialog } from "@/components/credential-references-dialog";
 import { InventoryRetryAlert } from "@/components/ui/inventory-retry-alert";
@@ -30,7 +31,10 @@ import { getErrorMessage } from "@/lib/utils";
 export function CredentialsPage() {
   const { token, role, authTransitioning } = useAuth();
   if (authTransitioning) return null;
-  if (role !== "admin") return <Navigate to="/app/overview" replace />;
+  if (role !== "admin") {
+    if (token && (role === "operator" || role === "viewer")) return <AccessDeniedRedirect sourcePath="/app/credentials" />;
+    return <Navigate to="/app/overview" replace />;
+  }
   return <CredentialsPageContent key={token ?? ""} />;
 }
 

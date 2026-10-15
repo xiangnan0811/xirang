@@ -8011,7 +8011,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.healthIncidentTimelineResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "401": {
@@ -19319,6 +19331,235 @@ const docTemplate = `{
                 },
                 "node_name": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.healthIncidentAction": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "href": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.healthIncidentCauseCode": {
+            "type": "string",
+            "enum": [
+                "alert_triggered",
+                "task_execution_failed",
+                "notification_delivery_issue",
+                "snapshot_churn_anomaly",
+                "snapshot_ransomware_pattern",
+                "anomaly_detected",
+                "verified_backup_missing",
+                "verified_backup_stale",
+                "policy_backup_failures",
+                "health_attention_required"
+            ],
+            "x-enum-varnames": [
+                "healthIncidentCauseAlertTriggered",
+                "healthIncidentCauseTaskExecutionFailed",
+                "healthIncidentCauseNotificationDeliveryIssue",
+                "healthIncidentCauseSnapshotChurnAnomaly",
+                "healthIncidentCauseSnapshotRansomwarePattern",
+                "healthIncidentCauseAnomalyDetected",
+                "healthIncidentCauseVerifiedBackupMissing",
+                "healthIncidentCauseVerifiedBackupStale",
+                "healthIncidentCausePolicyBackupFailures",
+                "healthIncidentCauseHealthAttentionRequired"
+            ]
+        },
+        "internal_api_handlers.healthIncidentCauseParams": {
+            "type": "object",
+            "properties": {
+                "baseline_value": {
+                    "type": "number",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991
+                },
+                "elapsed_hours": {
+                    "type": "integer",
+                    "maximum": 9007199254740991,
+                    "minimum": 0
+                },
+                "observed_value": {
+                    "type": "number",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "failed",
+                        "retrying"
+                    ]
+                }
+            }
+        },
+        "internal_api_handlers.healthIncidentGroup": {
+            "type": "object",
+            "properties": {
+                "cause_code": {
+                    "enum": [
+                        "alert_triggered",
+                        "task_execution_failed",
+                        "notification_delivery_issue",
+                        "snapshot_churn_anomaly",
+                        "snapshot_ransomware_pattern",
+                        "anomaly_detected",
+                        "verified_backup_missing",
+                        "verified_backup_stale",
+                        "policy_backup_failures",
+                        "health_attention_required"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_api_handlers.healthIncidentCauseCode"
+                        }
+                    ]
+                },
+                "cause_params": {
+                    "$ref": "#/definitions/internal_api_handlers.healthIncidentCauseParams"
+                },
+                "event_count": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_seen_at": {
+                    "type": "string"
+                },
+                "likely_cause": {
+                    "type": "string"
+                },
+                "next_actions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.healthIncidentAction"
+                    }
+                },
+                "resource": {
+                    "$ref": "#/definitions/internal_api_handlers.healthIncidentResource"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "signals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.healthIncidentSignal"
+                    }
+                },
+                "source_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_api_handlers.healthIncidentResource": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "node_name": {
+                    "type": "string"
+                },
+                "policy_id": {
+                    "type": "integer"
+                },
+                "policy_name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.healthIncidentSignal": {
+            "type": "object",
+            "properties": {
+                "alert_id": {
+                    "type": "integer"
+                },
+                "delivery_id": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "occurred_at": {
+                    "type": "string"
+                },
+                "policy_id": {
+                    "type": "integer"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "integer"
+                },
+                "task_run_id": {
+                    "type": "integer"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.healthIncidentTimelineResponse": {
+            "type": "object",
+            "properties": {
+                "generated_at": {
+                    "type": "string"
+                },
+                "groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.healthIncidentGroup"
+                    }
+                },
+                "summary": {
+                    "$ref": "#/definitions/internal_api_handlers.healthIncidentTimelineSummary"
+                },
+                "window_hours": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.healthIncidentTimelineSummary": {
+            "type": "object",
+            "properties": {
+                "critical": {
+                    "type": "integer"
+                },
+                "info": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "warning": {
+                    "type": "integer"
                 }
             }
         },

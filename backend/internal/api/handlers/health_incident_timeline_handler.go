@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -75,20 +76,52 @@ type healthIncidentSignal struct {
 	PolicyID   uint      `json:"policy_id,omitempty"`
 }
 
+type healthIncidentCauseCode string
+
+const (
+	healthIncidentCauseAlertTriggered            healthIncidentCauseCode = "alert_triggered"
+	healthIncidentCauseTaskExecutionFailed       healthIncidentCauseCode = "task_execution_failed"
+	healthIncidentCauseNotificationDeliveryIssue healthIncidentCauseCode = "notification_delivery_issue"
+	healthIncidentCauseSnapshotChurnAnomaly      healthIncidentCauseCode = "snapshot_churn_anomaly"
+	healthIncidentCauseSnapshotRansomwarePattern healthIncidentCauseCode = "snapshot_ransomware_pattern"
+	healthIncidentCauseAnomalyDetected           healthIncidentCauseCode = "anomaly_detected"
+	healthIncidentCauseVerifiedBackupMissing     healthIncidentCauseCode = "verified_backup_missing"
+	healthIncidentCauseVerifiedBackupStale       healthIncidentCauseCode = "verified_backup_stale"
+	healthIncidentCausePolicyBackupFailures      healthIncidentCauseCode = "policy_backup_failures"
+	healthIncidentCauseHealthAttentionRequired   healthIncidentCauseCode = "health_attention_required"
+)
+
+// Cause parameters contain only bounded measurements and fixed delivery statuses.
+// Missing measurements remain unknown; pointers preserve a valid zero baseline.
+type healthIncidentCauseParams struct {
+	Status        string   `json:"status,omitempty" enums:"failed,retrying"`
+	ElapsedHours  *int     `json:"elapsed_hours,omitempty" minimum:"0" maximum:"9007199254740991"`
+	ObservedValue *float64 `json:"observed_value,omitempty" minimum:"-9007199254740991" maximum:"9007199254740991"`
+	BaselineValue *float64 `json:"baseline_value,omitempty" minimum:"-9007199254740991" maximum:"9007199254740991"`
+}
+
+type healthIncidentCause struct {
+	Text   string
+	Code   healthIncidentCauseCode
+	Params *healthIncidentCauseParams
+}
+
 type healthIncidentGroup struct {
-	ID            string                 `json:"id"`
-	Severity      string                 `json:"severity"`
-	Resource      healthIncidentResource `json:"resource"`
-	LastSeenAt    time.Time              `json:"last_seen_at"`
-	EventCount    int                    `json:"event_count"`
-	LikelyCause   string                 `json:"likely_cause"`
-	SourceTypes   []string               `json:"source_types"`
-	NextActions   []healthIncidentAction `json:"next_actions"`
-	Signals       []healthIncidentSignal `json:"signals"`
-	sourceSet     map[string]struct{}    `json:"-"`
-	actionSet     map[string]struct{}    `json:"-"`
-	causeAt       time.Time              `json:"-"`
-	causeSeverity string                 `json:"-"`
+	ID            string                     `json:"id"`
+	Severity      string                     `json:"severity"`
+	Resource      healthIncidentResource     `json:"resource"`
+	LastSeenAt    time.Time                  `json:"last_seen_at"`
+	EventCount    int                        `json:"event_count"`
+	LikelyCause   string                     `json:"likely_cause"`
+	CauseCode     healthIncidentCauseCode    `json:"cause_code,omitempty" enums:"alert_triggered,task_execution_failed,notification_delivery_issue,snapshot_churn_anomaly,snapshot_ransomware_pattern,anomaly_detected,verified_backup_missing,verified_backup_stale,policy_backup_failures,health_attention_required"`
+	CauseParams   *healthIncidentCauseParams `json:"cause_params,omitempty"`
+	SourceTypes   []string                   `json:"source_types"`
+	NextActions   []healthIncidentAction     `json:"next_actions"`
+	Signals       []healthIncidentSignal     `json:"signals"`
+	sourceSet     map[string]struct{}        `json:"-"`
+	actionSet     map[string]struct{}        `json:"-"`
+	causeAt       time.Time                  `json:"-"`
+	causeSeverity string                     `json:"-"`
 }
 
 type healthIncidentAccumulator struct {
@@ -167,7 +200,7 @@ type healthIncidentPolicyRunRow struct {
 // @Security     Bearer
 // @Produce      json
 // @Param        window_hours  query     int  false  "时间窗口小时数（默认 72，最大 168）"
-// @Success      200  {object}  handlers.Response
+// @Success      200  {object}  handlers.Response{data=healthIncidentTimelineResponse}
 // @Failure      401  {object}  handlers.Response
 // @Router       /overview/health-incident-timeline [get]
 func (h *HealthIncidentTimelineHandler) Get(c *gin.Context) {
@@ -268,7 +301,7 @@ func (h *HealthIncidentTimelineHandler) Get(c *gin.Context) {
 		if resource.PolicyID > 0 {
 			signal.PolicyID = resource.PolicyID
 		}
-		acc.addSignal(resource, signal, message, actionsForResource(resource, alert.ID, "alert"))
+		acc.addSignal(resource, signal, healthIncidentCause{Text: message, Code: healthIncidentCauseAlertTriggered}, actionsForResource(resource, alert.ID, "alert"))
 	}
 
 	for _, row := range failures {
@@ -289,7 +322,7 @@ func (h *HealthIncidentTimelineHandler) Get(c *gin.Context) {
 		if row.PolicyID != nil {
 			signal.PolicyID = *row.PolicyID
 		}
-		acc.addSignal(resource, signal, message, actionsForResource(resource, 0, "task_failure"))
+		acc.addSignal(resource, signal, healthIncidentCause{Text: message, Code: healthIncidentCauseTaskExecutionFailed}, actionsForResource(resource, 0, "task_failure"))
 	}
 
 	for _, row := range deliveries {
@@ -320,7 +353,10 @@ func (h *HealthIncidentTimelineHandler) Get(c *gin.Context) {
 		if resource.PolicyID > 0 {
 			signal.PolicyID = resource.PolicyID
 		}
-		acc.addSignal(resource, signal, message, actionsForResource(resource, row.AlertID, "notification_failure"))
+		acc.addSignal(resource, signal, healthIncidentCause{
+			Text: message, Code: healthIncidentCauseNotificationDeliveryIssue,
+			Params: &healthIncidentCauseParams{Status: row.Status},
+		}, actionsForResource(resource, row.AlertID, "notification_failure"))
 	}
 
 	if err := h.addAnomalySignals(db, acc, since, ownedIDs, needOwnerFilter); err != nil {
@@ -357,7 +393,7 @@ func newHealthIncidentAccumulator(now time.Time) *healthIncidentAccumulator {
 	return &healthIncidentAccumulator{now: now, groups: map[string]*healthIncidentGroup{}}
 }
 
-func (a *healthIncidentAccumulator) addSignal(resource healthIncidentResource, signal healthIncidentSignal, cause string, actions []healthIncidentAction) {
+func (a *healthIncidentAccumulator) addSignal(resource healthIncidentResource, signal healthIncidentSignal, cause healthIncidentCause, actions []healthIncidentAction) {
 	resource = normalizeHealthIncidentResource(resource)
 	signal.Severity = normalizeHealthIncidentSeverity(signal.Severity)
 	if signal.OccurredAt.IsZero() {
@@ -366,7 +402,7 @@ func (a *healthIncidentAccumulator) addSignal(resource healthIncidentResource, s
 	signal.OccurredAt = signal.OccurredAt.UTC()
 	signal.Message = util.SanitizeMessage(signal.Message)
 	if signal.Message == "" {
-		signal.Message = cause
+		signal.Message = util.SanitizeMessage(cause.Text)
 	}
 
 	key := healthIncidentResourceKey(resource)
@@ -378,6 +414,7 @@ func (a *healthIncidentAccumulator) addSignal(resource healthIncidentResource, s
 			Resource:    resource,
 			LastSeenAt:  signal.OccurredAt,
 			LikelyCause: "健康信号需要关注",
+			CauseCode:   healthIncidentCauseHealthAttentionRequired,
 			sourceSet:   map[string]struct{}{},
 			actionSet:   map[string]struct{}{},
 		}
@@ -395,11 +432,13 @@ func (a *healthIncidentAccumulator) addSignal(resource healthIncidentResource, s
 		group.sourceSet[signal.Type] = struct{}{}
 		group.SourceTypes = append(group.SourceTypes, signal.Type)
 	}
-	if cause = util.SanitizeMessage(cause); cause != "" {
-		if group.LikelyCause == "健康信号需要关注" ||
+	if cause.Text = util.SanitizeMessage(cause.Text); strings.TrimSpace(cause.Text) != "" {
+		if group.causeAt.IsZero() ||
 			severityPriority(signal.Severity) > severityPriority(group.causeSeverity) ||
 			(severityPriority(signal.Severity) == severityPriority(group.causeSeverity) && signal.OccurredAt.After(group.causeAt)) {
-			group.LikelyCause = cause
+			group.LikelyCause = cause.Text
+			group.CauseCode = cause.Code
+			group.CauseParams = cause.Params
 			group.causeAt = signal.OccurredAt
 			group.causeSeverity = signal.Severity
 		}
@@ -587,9 +626,35 @@ func (h *HealthIncidentTimelineHandler) addAnomalySignals(db *gorm.DB, acc *heal
 			signal.AlertID = *row.AlertID
 			alertID = *row.AlertID
 		}
-		acc.addSignal(resource, signal, message, actionsForResource(resource, alertID, "anomaly"))
+		acc.addSignal(resource, signal, anomalyHealthIncidentCause(row, message), actionsForResource(resource, alertID, "anomaly"))
 	}
 	return nil
+}
+
+func healthIncidentMeasurement(value float64) *float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > 9007199254740991 {
+		return nil
+	}
+	return &value
+}
+
+func anomalyHealthIncidentCause(row healthIncidentAnomalyRow, message string) healthIncidentCause {
+	code := healthIncidentCauseAnomalyDetected
+	if row.Detector == "snapshot_diff" {
+		switch row.Metric {
+		case "snapshot_churn":
+			code = healthIncidentCauseSnapshotChurnAnomaly
+		case "ransomware_pattern":
+			code = healthIncidentCauseSnapshotRansomwarePattern
+		}
+	}
+	observed := healthIncidentMeasurement(row.ObservedValue)
+	baseline := healthIncidentMeasurement(row.BaselineValue)
+	var params *healthIncidentCauseParams
+	if observed != nil || baseline != nil {
+		params = &healthIncidentCauseParams{ObservedValue: observed, BaselineValue: baseline}
+	}
+	return healthIncidentCause{Text: message, Code: code, Params: params}
 }
 
 func (h *HealthIncidentTimelineHandler) addBackupStaleSignals(db *gorm.DB, acc *healthIncidentAccumulator, now time.Time, ownedIDs []uint, needOwnerFilter bool) error {
@@ -623,17 +688,23 @@ func (h *HealthIncidentTimelineHandler) addBackupStaleSignals(db *gorm.DB, acc *
 		}
 		resource := nodeHealthIncidentResource(node.ID, node.Name)
 		message := "节点尚未完成已验证备份"
+		cause := healthIncidentCause{Code: healthIncidentCauseVerifiedBackupMissing}
 		if completedAt != nil {
 			hours := int(now.Sub(*completedAt).Hours())
 			message = fmt.Sprintf("节点最近一次已验证备份距今约 %d 小时，超过健康阈值", hours)
+			cause.Code = healthIncidentCauseVerifiedBackupStale
+			if hours >= 0 && uint64(hours) <= 9007199254740991 {
+				cause.Params = &healthIncidentCauseParams{ElapsedHours: &hours}
+			}
 		}
+		cause.Text = message
 		acc.addSignal(resource, healthIncidentSignal{
 			Type:       "backup_stale",
 			Severity:   "warning",
 			OccurredAt: now,
 			Message:    message,
 			NodeID:     node.ID,
-		}, message, actionsForResource(resource, 0, "backup_stale"))
+		}, cause, actionsForResource(resource, 0, "backup_stale"))
 	}
 	return nil
 }
@@ -693,7 +764,7 @@ func (h *HealthIncidentTimelineHandler) addDegradedPolicySignals(db *gorm.DB, ac
 			TaskID:     first.TaskID,
 			NodeID:     first.NodeID,
 			PolicyID:   policyID,
-		}, message, actionsForResource(resource, 0, "backup_degraded"))
+		}, healthIncidentCause{Text: message, Code: healthIncidentCausePolicyBackupFailures}, actionsForResource(resource, 0, "backup_degraded"))
 	}
 	return nil
 }
@@ -898,14 +969,14 @@ func actionsForResource(resource healthIncidentResource, alertID uint, sourceTyp
 		}
 	case "policy":
 		actions = append(actions,
-			healthIncidentAction{Code: "view_backup_confidence", Label: "查看备份可信度", Href: "/app/backups"},
+			healthIncidentAction{Code: "view_backup_confidence", Label: "查看备份可信度", Href: "/app/backups/overview"},
 			healthIncidentAction{Code: "view_policies", Label: "查看策略", Href: "/app/policies"},
 		)
 	default:
 		actions = append(actions, healthIncidentAction{Code: "view_notifications", Label: "查看告警中心", Href: "/app/notifications"})
 	}
 	if sourceType == "backup_stale" || sourceType == "backup_degraded" {
-		actions = append(actions, healthIncidentAction{Code: "view_backup_confidence", Label: "查看备份可信度", Href: "/app/backups"})
+		actions = append(actions, healthIncidentAction{Code: "view_backup_confidence", Label: "查看备份可信度", Href: "/app/backups/overview"})
 	}
 	if len(actions) == 0 {
 		actions = append(actions, healthIncidentAction{Code: "view_notifications", Label: "查看告警中心", Href: "/app/notifications"})

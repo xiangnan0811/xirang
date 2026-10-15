@@ -158,6 +158,16 @@ Release PR 与最终 GitHub Release 正文须完整保留 CHANGELOG `0.66.2` 版
 该版同时修正 SSH 轮换/普通编辑 E2E 的通知定位范围；保留真实请求与存储结果断言，
 不改变产品播报路径，也不以重跑失败场景代替选择器修复。
 
+剩余控制台 UX 的发行说明须保留一次性权限通知、健康原因与来源诊断分离、只读安全导航、
+Cron 的 UTC/表达式时区及服务端 nextRunAt 权威、Doctor 代次/剪贴板/只聚焦不执行、
+标准公钥指纹与旧私钥摘要兼容的边界。CSV 新字段仅追加到尾部；有限样本预览不代表
+服务端当前可导出集合。新版 Core 与页面同版本切换，完成或退出旧交互并刷新客户端，
+按正常换版流程排空旧 Core 在途请求，不额外排空执行中的备份任务，也不撤销已提交操作。
+无新增 schema migration，升级前保全数据库、适用密钥与配置；回退恢复旧 UX 缺陷，
+既有迁移降级保护不变。Release PR 和最终 Release 须完整保留对应 CHANGELOG 的七项
+行为与升级说明，不将 null-sink 读屏证据写成人工耳听，不把 generator-only
+nextRunPreview、生产部署或灾备恢复纳入本轮完成声明。
+
 
 All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录
 `CRON_DB_BACKUP_STATE_DIR=/backup/.cron-db-state`，共用 26 小时默认窗口。发行验收须验证

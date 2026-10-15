@@ -12,6 +12,9 @@ import { LanguageSwitcher } from "@/components/language-switcher";
 const SetupWizard = React.lazy(() =>
   import("@/components/setup-wizard").then(m => ({ default: m.SetupWizard }))
 );
+const AccessDeniedNavigationNotice = React.lazy(() =>
+  import("@/components/access-denied-navigation").then(m => ({ default: m.AccessDeniedNavigationNotice }))
+);
 import { NotificationBell } from "@/components/notification-bell";
 import { UserDropdown } from "@/components/user-dropdown";
 import { VersionBanner } from "@/components/version-banner";
@@ -335,6 +338,11 @@ function AppShellInner() {
         onLogout={handleLogout}
         onRefresh={consoleData.refresh}
       />
+
+      {/* Outside AnimatedOutlet so route transitions never remount the one-shot notice consumer. */}
+      <Suspense fallback={null}>
+        <AccessDeniedNavigationNotice />
+      </Suspense>
 
       <Suspense fallback={null}>
         <SetupWizard />

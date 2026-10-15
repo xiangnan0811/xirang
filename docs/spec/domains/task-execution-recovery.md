@@ -15,6 +15,20 @@
 - Restic `repository_version` 仅选择新仓库格式（默认/1/2），不是 append-only 或删除保护。旧 `append_only=true/false` 在加密配置边界分别幂等转为 2/默认，保留其他字段，冲突或非法值隔离诊断；旧字段只允许显式导入转换，不再作为运行时配置。删除保护须在存储后端独立验证。
 - Rsync allowlist 依赖 Linux Landlock ABI 3、匹配本地/远端 helper 及私有 user/mount namespace；运行环境不满足时失败关闭，不能移除 allowlist 或自动授予 privileged。受管 hardlink staging 要预留完整树容量和传输空间。可选 Worker 的精确系统包版本影响工具链 fingerprint，Core/Worker 必须由同一发布源码重建并匹配；细节见[处理与导出](backup-processing-export.md)。
 
+### Cron 展示与时间基准
+
+任务表格/卡片对定时任务常显原表达式、保守自然语言解释及时间基准，手动任务不添加。
+未带时区前缀的任务调度使用 UTC；`TZ=`/`CRON_TZ=` 表达式使用其指定时区。
+服务端 `nextRunAt` 是下次运行依据，不用浏览器时区或前端估算覆盖。
+
+自然语言只解释恰好五段且日/月均为 `*` 的确定模式：每分钟、1–59 分钟步长、
+每小时指定 0–59 分钟、1–23 小时步长、每日固定 0–23 时/0–59 分，以及固定时间
+或分钟步长配合 0–6 的纯数字 weekday 列表。其余日/月限制、范围、名称、分钟/小时
+列表、越界、descriptor、时区前缀、六段均原样回退表达式；空白/null/undefined 显示
+未配置。不把后端支持解析等同于前端支持解释，切换语言即时更新相同表达式。
+策略沿用原说明位置，不添加重复信息。CronGenerator 的既有浏览器本地运行预估
+`nextRunPreview` 未在本轮重写，也不作为任务调度事实。
+
 ## 历史任务统计
 
 `POST /api/v1/tasks/statistics/query` 经主认证与 `tasks:read`，请求仅接受

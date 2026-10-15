@@ -27,7 +27,7 @@ import { getErrorMessage } from "@/lib/utils";
 import type { NewNodeInput, NodeConnectionProbeOutcome, NodeDoctorResult, NodeHostKeyInfo, NodeHostKeyIssueCode, NodeRecord, TaskRecord } from "@/types/domain";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
-import { getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
+import { getAuthSessionGeneration, isAuthTransitionActive, subscribeAuthTransition } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { ViewMode } from "@/components/ui/view-mode-toggle";
 
@@ -149,6 +149,9 @@ export function useNodesPageState() {
   const [doctorResult, setDoctorResult] = useState<NodeDoctorResult | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(false);
   const [doctorError, setDoctorError] = useState<string | null>(null);
+  const doctorOperationRef = useRef(0);
+  const doctorAbortRef = useRef<AbortController | null>(null);
+  const doctorNodeIdRef = useRef<number | null>(null);
   const [hostKeyIssue, setHostKeyIssue] = useState<HostKeyIssueState | null>(null);
   const [hostKeyTrusting, setHostKeyTrusting] = useState(false);
   const [hostKeyError, setHostKeyError] = useState<string | null>(null);
@@ -209,6 +212,23 @@ export function useNodesPageState() {
       mountedRef.current = false;
       emergencyAbortRef.current?.abort();
       cancelPendingRef.current();
+    };
+  }, [effectiveRole, role, token]);
+
+  // 身份/角色变化或卸载时作废 Doctor 操作；可见状态由上面的渲染期身份重置清空。
+  useLayoutEffect(() => {
+    const operationRef = doctorOperationRef;
+    const abortRef = doctorAbortRef;
+    const nodeIdRef = doctorNodeIdRef;
+    operationRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    nodeIdRef.current = null;
+    return () => {
+      operationRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      nodeIdRef.current = null;
     };
   }, [effectiveRole, role, token]);
 
@@ -470,19 +490,39 @@ export function useNodesPageState() {
     }
   };
 
+  // Doctor 当前结果所有权：每次 open/run 递增代次并取消旧请求；只有同一代次、
+  // 同一节点、同一身份/会话、无 barrier 且仍具操作角色的完成才能提交。
+  // 即使底层请求忽略 abort，代次栅栏也独立阻止旧结果/错误/finally 覆盖新状态。
+  const invalidateDoctorOperation = () => {
+    doctorOperationRef.current += 1;
+    doctorAbortRef.current?.abort();
+    doctorAbortRef.current = null;
+    doctorNodeIdRef.current = null;
+  };
+
   const runDoctorForNode = async (node: NodeRecord) => {
-    if (roleRef.current !== "admin" && roleRef.current !== "operator") {
+    if ((roleRef.current !== "admin" && roleRef.current !== "operator") || isAuthTransitionActive()) {
       return;
     }
-    const authEpoch = authEpochRef.current;
+    invalidateDoctorOperation();
+    const operation = doctorOperationRef.current;
+    const controller = new AbortController();
+    doctorAbortRef.current = controller;
+    doctorNodeIdRef.current = node.id;
+    const authStillCurrent = captureAuthLifetime();
+    const requestToken = token;
     setDoctorNode(node);
-    setDoctorLoading(true);
+    setDoctorResult(null);
     setDoctorError(null);
-    const doctorStillCurrent = () => authEpochRef.current === authEpoch
+    setDoctorLoading(true);
+    const doctorStillCurrent = () => authStillCurrent()
+      && doctorOperationRef.current === operation
+      && doctorNodeIdRef.current === node.id
+      && !isAuthTransitionActive()
       && (roleRef.current === "admin" || roleRef.current === "operator");
     try {
-      const result = token
-        ? await apiClient.runNodeDoctor(token, node.id)
+      const result = requestToken
+        ? await apiClient.runNodeDoctor(requestToken, node.id, { signal: controller.signal })
         : import.meta.env.VITE_ENABLE_DEMO_MODE === "true"
           ? (await import("@/data/mock")).buildMockNodeDoctorResult(node)
           : null;
@@ -491,6 +531,10 @@ export function useNodesPageState() {
       }
       if (!result) {
         setDoctorError(t("console.notLoggedIn"));
+        return;
+      }
+      if (result.nodeId !== node.id) {
+        setDoctorError(t("nodes.doctorResultMismatch"));
         return;
       }
       setDoctorResult(result);
@@ -504,27 +548,38 @@ export function useNodesPageState() {
     } finally {
       if (doctorStillCurrent()) {
         setDoctorLoading(false);
+        doctorAbortRef.current = null;
       }
     }
   };
 
   const openDoctor = (node: NodeRecord) => {
-    if (roleRef.current !== "admin" && roleRef.current !== "operator") {
-      return;
-    }
+    void runDoctorForNode(node);
+  };
+
+  const closeDoctor = () => {
+    invalidateDoctorOperation();
+    setDoctorNode(null);
     setDoctorResult(null);
     setDoctorError(null);
-    void runDoctorForNode(node);
+    setDoctorLoading(false);
   };
 
   const handleDoctorOpenChange = (open: boolean) => {
     if (!open) {
-      setDoctorNode(null);
-      setDoctorResult(null);
-      setDoctorError(null);
-      setDoctorLoading(false);
+      closeDoctor();
     }
   };
+
+  const closeDoctorRef = useRef(closeDoctor);
+  useLayoutEffect(() => {
+    closeDoctorRef.current = closeDoctor;
+  });
+  useEffect(() => subscribeAuthTransition(() => {
+    if (isAuthTransitionActive()) {
+      closeDoctorRef.current();
+    }
+  }), []);
 
   const onDeleteNode = async (node: NodeRecord) => {
     if (roleRef.current !== "admin") {
