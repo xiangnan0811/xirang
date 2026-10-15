@@ -164,8 +164,8 @@ Cron 的 UTC/表达式时区及服务端 nextRunAt 权威、Doctor 代次/剪贴
 服务端当前可导出集合。新版 Core 与页面同版本切换，完成或退出旧交互并刷新客户端，
 按正常换版流程排空旧 Core 在途请求，不额外排空执行中的备份任务，也不撤销已提交操作。
 无新增 schema migration，升级前保全数据库、适用密钥与配置；回退恢复旧 UX 缺陷，
-既有迁移降级保护不变。Release PR 和最终 Release 须完整保留对应 CHANGELOG 的七项
-行为与升级说明，不将 null-sink 读屏证据写成人工耳听，不把 generator-only
+既有迁移降级保护不变。完整七项行为与升级说明归档于 CHANGELOG `0.66.3` 版本节，
+Release PR 和最终 Release 须原样保留，不将 null-sink 读屏证据写成人工耳听，不把 generator-only
 nextRunPreview、生产部署或灾备恢复纳入本轮完成声明。
 
 
