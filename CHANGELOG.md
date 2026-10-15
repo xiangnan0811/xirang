@@ -16,6 +16,13 @@
 - 按同一发行版本切换 Core 与页面；后端原因 DTO 和 CSV 增量从新版 Core 接收请求后生效，界面保护从新版页面加载后生效。升级前完成或退出旧诊断/导出/页面交互并刷新客户端，按正常换版流程排空旧 Core 在途请求；无需因只读 UX 修复额外排空执行中的备份任务，不追溯撤销已提交操作。
 - 本次无新增数据库 schema migration，不回填或改写历史数据。升级前保全数据库、适用密钥与配置；回退会恢复旧导航、解释、诊断状态或指纹展示缺陷，既有迁移降级保护和配套恢复要求仍适用。公开发布不等于生产部署、生产升级或灾备恢复验收。
 
+## [0.66.3](https://github.com/xiangnan0811/xirang/compare/v0.66.2...v0.66.3) (2026-10-15)
+
+
+### 🐛 Bug Fixes
+
+* **web:** complete remaining navigation and diagnostic UX repairs ([#624](https://github.com/xiangnan0811/xirang/issues/624)) ([1c44d8c](https://github.com/xiangnan0811/xirang/commit/1c44d8c4381fa500ad827c2ad57e9a2272a6c1c9))
+
 ## [0.66.2](https://github.com/xiangnan0811/xirang/compare/v0.66.1...v0.66.2) (2026-10-15)
 
 
