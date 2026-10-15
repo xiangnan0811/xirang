@@ -155,6 +155,8 @@ Toast 与有界启动体积修复的发行说明须保留唯一应用播报通�
 Release PR 与最终 GitHub Release 正文须完整保留 CHANGELOG `0.66.2` 版本节的五项行为与升级说明，
 不将 Orca/AT-SPI/Speech Dispatcher/eSpeak 的 libao null-sink 自动化验收写成人工耳听、
 其他读屏器或全站 WCAG 合规，不扩展为 Cron/Doctor 交付或生产部署。
+该版同时修正 SSH 轮换/普通编辑 E2E 的通知定位范围；保留真实请求与存储结果断言，
+不改变产品播报路径，也不以重跑失败场景代替选择器修复。
 
 
 All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录
