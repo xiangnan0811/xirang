@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.66.4](https://github.com/xiangnan0811/xirang/compare/v0.66.3...v0.66.4) (2026-10-16)
+
+
+### 🐛 Bug Fixes
+
+* **cron:** correct schedule estimates and add server report previews ([#626](https://github.com/xiangnan0811/xirang/issues/626)) ([93a4aa7](https://github.com/xiangnan0811/xirang/commit/93a4aa760a7abbe262ed442aea99021039b418be))
+
 ### 修复
 
 - 修正任务与策略 CronGenerator 的有限 UTC 运行预估，并为报表增加管理员只读服务端匹配窗口预览；修复步长对齐、日期限制、半小时夏令时切换及同一分钟恢复页面后的展示。
@@ -13,13 +20,6 @@
 - 报表仅在明确点击后请求；表达式、身份、会话或页面状态变化使旧预估失效，按扣除请求耗时后的服务端 TTL 过期。失败不自动重试，旧服务端 404 明确不可用、不做客户端猜测回退；预估不影响编辑或保存，不写配置、报表或业务审计，不调用生成与投递。
 - 按同一发行版本切换 Core 与页面：只读接口从新版 Core 接收请求后生效，UTC 展示和请求隔离从新版页面加载后生效。完成或退出旧编辑交互并刷新客户端，按正常换版流程排空旧 Core 在途请求；不改实际调度器或既有匹配规则，无需因预估修复额外排空执行中的备份任务，也不撤销旧进程已开始或已提交的操作。
 - 本次无新增数据库 schema migration，不回填、清理或改写历史配置。升级前保全数据库、适用密钥与配置；回退会恢复旧预估缺陷或移除报表预览，既有迁移降级保护与配套恢复要求仍适用。公开发布不代表生产部署、生产升级或灾备恢复验收。
-
-## [0.66.4](https://github.com/xiangnan0811/xirang/compare/v0.66.3...v0.66.4) (2026-10-16)
-
-
-### 🐛 Bug Fixes
-
-* **cron:** correct schedule estimates and add server report previews ([#626](https://github.com/xiangnan0811/xirang/issues/626)) ([93a4aa7](https://github.com/xiangnan0811/xirang/commit/93a4aa760a7abbe262ed442aea99021039b418be))
 
 ## [0.66.3](https://github.com/xiangnan0811/xirang/compare/v0.66.2...v0.66.3) (2026-10-15)
 
