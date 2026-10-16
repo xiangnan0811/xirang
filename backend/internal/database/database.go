@@ -165,6 +165,17 @@ func configureSQLitePool(db *gorm.DB) error {
 // appropriate connection pool settings and PRAGMAs for each driver. It also
 // registers GORM callback-driven Prometheus metrics.
 func Open(cfg config.Config) (*gorm.DB, error) {
+	return open(cfg, newCtxAwareLogger(logger.Default))
+}
+
+// OpenQuiet applies the same connection settings as Open, but discards GORM
+// output from the start of initialization. Offline recovery callers report
+// fixed safe errors themselves; initialization must not print SQL or DSNs.
+func OpenQuiet(cfg config.Config) (*gorm.DB, error) {
+	return open(cfg, logger.Discard)
+}
+
+func open(cfg config.Config, dbLogger logger.Interface) (*gorm.DB, error) {
 	// Wrap GORM's default logger so client-aborted queries (ctx canceled /
 	// deadline exceeded) don't get logged at Error level. The task statistics
 	// endpoint may cancel an in-flight query when its caller changes windows;
@@ -176,7 +187,7 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 	// time.Time.Location()==UTC. See migration 000050 for the historical
 	// data cutover and docs/deployment.md#utc-时间戳约定 for the runbook.
 	gormCfg := &gorm.Config{
-		Logger:  newCtxAwareLogger(logger.Default),
+		Logger:  dbLogger,
 		NowFunc: func() time.Time { return time.Now().UTC() },
 	}
 	switch cfg.DBType {

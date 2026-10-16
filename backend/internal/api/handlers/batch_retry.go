@@ -651,21 +651,26 @@ func (h *BatchHandler) validateBatchRetryAuthorizationTx(c *gin.Context, tx *gor
 			return errBatchRetryOwnershipDenied
 		}
 	}
-	actorID := middleware.CurrentUserID(c)
-	role := middleware.CurrentRole(c)
-	if actorID == 0 || (role != "admin" && role != "operator") {
+	// Grants belong to the primary session, not the separate purpose-bound
+	// step-up proof. Preserve the middleware's authenticated version snapshot.
+	claims := claimsFromGinContext(c)
+	if claims == nil || (claims.Role != "admin" && claims.Role != "operator") {
+		return errBatchRetryActorDenied
+	}
+	actorID, role := claims.UserID, claims.Role
+	if actorID == 0 {
 		return errBatchRetryActorDenied
 	}
 	var user model.User
-	result := tx.Select("id", "role").Where("id = ?", actorID).Limit(1).Find(&user)
+	result := tx.Select("id", "role", "token_version", "totp_reenrollment_required").Where("id = ?", actorID).Limit(1).Find(&user)
 	if result.Error != nil {
 		return fmt.Errorf("%w: actor lookup: %v", errBatchRetryAuthorizationUnavailable, result.Error)
 	}
-	if result.RowsAffected != 1 || user.Role != role {
+	if result.RowsAffected != 1 || user.Role != role || user.TokenVersion != claims.TokenVersion || user.TOTPReenrollmentRequired {
 		return errBatchRetryActorDenied
 	}
 	proof := strings.TrimSpace(c.GetHeader(StepUpHeaderName))
-	claims, err := validateStepUpProof(tx, h.jwtManager, proof, actorID, role, auth.StepUpActionBatchCommandRetry)
+	_, err = validateStepUpProof(tx, h.jwtManager, proof, actorID, role, auth.StepUpActionBatchCommandRetry)
 	if err != nil {
 		if errors.Is(err, ErrStepUpVerifierUnavailable) {
 			return fmt.Errorf("%w: %v", errBatchRetryAuthorizationUnavailable, err)

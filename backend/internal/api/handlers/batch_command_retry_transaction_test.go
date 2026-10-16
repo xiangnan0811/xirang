@@ -1460,3 +1460,77 @@ func TestBatchCommandRetryCreateConflictBarrierPostgres(t *testing.T) {
 		})
 	}
 }
+
+func TestAccountRecoveryBatchRetryPrimarySessionClaimsSQLitePostgres(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		for _, scenario := range []string{"current_nonzero_version", "missing_primary_binding", "stale_primary_fresh_proof", "reenrollment_required"} {
+			t.Run(engine+"/"+scenario, func(t *testing.T) {
+				fx := newRetryTransactionFixture(t, engine)
+				fx.admin.TokenVersion = 11
+				if err := fx.db.Model(&model.User{}).Where("id = ?", fx.admin.ID).Update("token_version", fx.admin.TokenVersion).Error; err != nil {
+					t.Fatal("set nonzero retry identity version")
+				}
+				token := generatePrimaryToken(t, fx.jwt, fx.admin)
+				proofUser := fx.admin
+				if scenario == "stale_primary_fresh_proof" {
+					proofUser.TokenVersion++
+				}
+				proof := generateStepUpProofForAction(t, fx.jwt, proofUser, auth.StepUpActionBatchCommandRetry)
+				retryTransactionSeedGrant(t, fx.db, fx.admin, fx.nodes[0].ID, CredentialGrantActionBatchCommandRetry, CredentialGrantStatusActive, time.Now().UTC().Add(time.Hour))
+
+				router := gin.New()
+				router.Use(middleware.AuthMiddleware(fx.jwt, fx.db))
+				router.POST("/retry-authorization", func(c *gin.Context) {
+					// Mutate only after authentic primary admission. A fresh proof
+					// must not upgrade an old primary-session version snapshot.
+					switch scenario {
+					case "missing_primary_binding":
+						delete(c.Keys, middleware.CtxSessionBinding)
+					case "stale_primary_fresh_proof":
+						if err := fx.db.Model(&model.User{}).Where("id = ?", fx.admin.ID).Update("token_version", proofUser.TokenVersion).Error; err != nil {
+							t.Error("advance retry identity version")
+							c.Status(http.StatusInternalServerError)
+							return
+						}
+					case "reenrollment_required":
+						if err := fx.db.Model(&model.User{}).Where("id = ?", fx.admin.ID).Update("totp_reenrollment_required", true).Error; err != nil {
+							t.Error("require retry identity reenrollment")
+							c.Status(http.StatusInternalServerError)
+							return
+						}
+					}
+					err := fx.db.Transaction(func(tx *gorm.DB) error {
+						return fx.handler.validateBatchRetryAuthorizationTx(c, tx, []uint{fx.nodes[0].ID})
+					})
+					if scenario == "current_nonzero_version" {
+						if err != nil {
+							t.Error("current primary session and independent step-up proof rejected")
+							c.Status(http.StatusForbidden)
+							return
+						}
+						c.Status(http.StatusNoContent)
+						return
+					}
+					if !errors.Is(err, errBatchRetryActorDenied) {
+						t.Error("retry did not reject the missing or changed primary identity")
+						c.Status(http.StatusInternalServerError)
+						return
+					}
+					c.Status(http.StatusForbidden)
+				})
+				req := httptest.NewRequest(http.MethodPost, "/retry-authorization", nil)
+				req.Header.Set("Authorization", "Bearer "+token)
+				req.Header.Set(StepUpHeaderName, proof)
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, req)
+				want := http.StatusForbidden
+				if scenario == "current_nonzero_version" {
+					want = http.StatusNoContent
+				}
+				if response.Code != want {
+					t.Fatalf("retry primary-session admission status=%d, want %d", response.Code, want)
+				}
+			})
+		}
+	}
+}

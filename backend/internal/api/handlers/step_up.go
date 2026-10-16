@@ -155,10 +155,13 @@ func validateStepUpProof(
 		}
 	}
 	var user model.User
-	if err := db.Select("id", "role", "token_version", "totp_enabled").First(&user, claims.UserID).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := db.Select("id", "role", "token_version", "totp_enabled", "totp_reenrollment_required").First(&user, claims.UserID).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("%w: proof user is unavailable", ErrStepUpProofInvalid)
 	} else if err != nil {
 		return nil, fmt.Errorf("%w: load proof user", ErrStepUpVerifierUnavailable)
+	}
+	if user.TOTPReenrollmentRequired {
+		return nil, fmt.Errorf("%w: proof TOTP reenrollment required", ErrStepUpProofInvalid)
 	}
 	if user.TokenVersion != claims.TokenVersion {
 		return nil, fmt.Errorf("%w: proof token version", ErrStepUpProofInvalid)

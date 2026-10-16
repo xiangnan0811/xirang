@@ -1,6 +1,9 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+export const LoginPage = lazy(() =>
+  import("@/pages/login-page").then((m) => ({ default: m.LoginPage }))
+);
 export const OverviewPage = lazy(() =>
   import("@/pages/overview-page").then((m) => ({ default: m.OverviewPage }))
 );

@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -111,7 +114,7 @@ type changePasswordRequest struct {
 
 // Login godoc
 // @Summary      用户登录
-// @Description  使用用户名和密码登录，支持验证码和 2FA 预登录流程
+// @Description  使用用户名和密码登录；离线恢复后仅返回受限 recovery_token 和 enrollment，不建立登录会话。所有响应禁止缓存。
 // @Tags         auth
 // @Accept       json
 // @Produce      json
@@ -119,8 +122,12 @@ type changePasswordRequest struct {
 // @Success      200   {object}  handlers.Response
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
+// @Failure      423   {object}  handlers.Response
+// @Failure      429   {object}  handlers.Response
+// @Failure      500   {object}  handlers.Response
 // @Router       /auth/login [post]
 func (h *AuthHandler) Login(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, "请求参数不合法")
@@ -159,6 +166,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	result, err := h.authService.Login(req.Username, req.Password, c.ClientIP())
 	if err != nil {
+		if errors.Is(err, auth.ErrRecoveryEnrollmentInternal) {
+			respondInternalError(c, auth.ErrRecoveryEnrollmentInternal)
+			return
+		}
 		if lockedErr, ok := auth.IsLoginLocked(err); ok {
 			retryAfter := lockedErr.RetryAfterSeconds(time.Now())
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
@@ -166,6 +177,20 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			return
 		}
 		respondUnauthorized(c, err.Error())
+		return
+	}
+	if enrollment := result.RecoveryEnrollment; enrollment != nil {
+		respondOK(c, gin.H{
+			"requires_reenrollment": true,
+			"recovery_token":        enrollment.Token,
+			"enrollment": gin.H{
+				"secret":        enrollment.Setup.Secret,
+				"qr_url":        enrollment.Setup.QRURL,
+				"issuer":        enrollment.Setup.Issuer,
+				"enrollment_id": enrollment.Setup.EnrollmentID,
+				"expires_at":    enrollment.Setup.ExpiresAt,
+			},
+		})
 		return
 	}
 	if result.Requires2FA {
@@ -184,6 +209,117 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			"totp_enabled": result.User.TOTPEnabled,
 		},
 	})
+}
+
+type recoveryEnrollmentVerifyRequest struct {
+	Code string `json:"code"`
+}
+
+type recoveryEnrollmentVerifyResponse struct {
+	RecoveryCodes []string `json:"recovery_codes"`
+}
+
+// decodeRecoveryEnrollmentRequest accepts precisely one object containing one
+// string field. Token-level decoding also rejects duplicate "code" fields,
+// which encoding/json's ordinary struct decoding silently overwrites.
+func decodeRecoveryEnrollmentRequest(body io.Reader) (recoveryEnrollmentVerifyRequest, error) {
+	decoder := json.NewDecoder(body)
+	first, err := decoder.Token()
+	if err != nil || first != json.Delim('{') {
+		return recoveryEnrollmentVerifyRequest{}, errors.New("invalid recovery enrollment request")
+	}
+	field, err := decoder.Token()
+	if err != nil || field != "code" {
+		return recoveryEnrollmentVerifyRequest{}, errors.New("invalid recovery enrollment request")
+	}
+	value, err := decoder.Token()
+	code, ok := value.(string)
+	if err != nil || !ok || len(code) != 6 {
+		return recoveryEnrollmentVerifyRequest{}, errors.New("invalid recovery enrollment request")
+	}
+	for _, digit := range code {
+		if digit < '0' || digit > '9' {
+			return recoveryEnrollmentVerifyRequest{}, errors.New("invalid recovery enrollment request")
+		}
+	}
+	last, err := decoder.Token()
+	if err != nil || last != json.Delim('}') {
+		return recoveryEnrollmentVerifyRequest{}, errors.New("invalid recovery enrollment request")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return recoveryEnrollmentVerifyRequest{}, errors.New("invalid recovery enrollment request")
+	}
+	return recoveryEnrollmentVerifyRequest{Code: code}, nil
+}
+
+func respondRecoveryEnrollmentError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, auth.ErrRecoveryEnrollmentInvalid):
+		c.JSON(http.StatusUnauthorized, Response{
+			Code: http.StatusUnauthorized, Message: "恢复绑定凭据无效或已过期",
+			Data: gin.H{"error_code": "RECOVERY_ENROLLMENT_INVALID"},
+		})
+	case errors.Is(err, auth.ErrTOTPCodeInvalid):
+		respondForbiddenData(c, "当前验证码错误", gin.H{"error_code": "TOTP_CODE_INVALID"})
+	default:
+		// Never log an underlying driver error, token, code or identity row.
+		respondInternalError(c, auth.ErrRecoveryEnrollmentInternal)
+	}
+}
+
+// RecoveryEnrollmentVerify godoc
+// @Summary      完成离线账户恢复后的受限 2FA 绑定
+// @Description  仅接受 recovery_enrollment Bearer 和六位新验证码；请求体最多 1 KiB，仅允许 code 字段。成功只返回本次八个恢复码，不签发登录会话；提交结果未知时不得自动重放。所有响应禁止缓存。
+// @Tags         auth
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        body  body      recoveryEnrollmentVerifyRequest  true  "新验证器验证码"
+// @Success      200   {object}  handlers.Response{data=recoveryEnrollmentVerifyResponse}
+// @Failure      400   {object}  handlers.Response
+// @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
+// @Failure      429   {object}  handlers.Response
+// @Failure      500   {object}  handlers.Response
+// @Router       /auth/recovery/enrollment/verify [post]
+func (h *AuthHandler) RecoveryEnrollmentVerify(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+	if h.authService == nil || h.jwtManager == nil {
+		respondRecoveryEnrollmentError(c, auth.ErrRecoveryEnrollmentInternal)
+		return
+	}
+	headers := c.Request.Header.Values("Authorization")
+	if len(headers) != 1 || !strings.HasPrefix(headers[0], "Bearer ") {
+		respondRecoveryEnrollmentError(c, auth.ErrRecoveryEnrollmentInvalid)
+		return
+	}
+	token := strings.TrimPrefix(headers[0], "Bearer ")
+	if token == "" || strings.ContainsAny(token, " \t\r\n,") {
+		respondRecoveryEnrollmentError(c, auth.ErrRecoveryEnrollmentInvalid)
+		return
+	}
+	// Authenticate the capability before parsing input; the service repeats
+	// stricter claim and persisted-identity checks at the transaction boundary.
+	claims, err := h.jwtManager.ParseToken(token)
+	if err != nil || claims.Purpose != auth.PurposeRecoveryEnrollment {
+		respondRecoveryEnrollmentError(c, auth.ErrRecoveryEnrollmentInvalid)
+		return
+	}
+	if c.Request.Body == nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	request, err := decodeRecoveryEnrollmentRequest(c.Request.Body)
+	if err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	codes, err := h.authService.CompleteRecoveryEnrollment(c.Request.Context(), token, request.Code)
+	if err != nil {
+		respondRecoveryEnrollmentError(c, err)
+		return
+	}
+	respondOK(c, recoveryEnrollmentVerifyResponse{RecoveryCodes: codes})
 }
 
 // Me godoc
@@ -677,7 +813,7 @@ type totpLoginRequest struct {
 
 // TOTPLogin godoc
 // @Summary      2FA 二步登录
-// @Description  使用预登录令牌和 TOTP 验证码（或恢复码）完成登录，返回完整 JWT
+// @Description  使用预登录令牌和 TOTP 验证码（或恢复码）完成登录，返回完整 JWT；所有响应禁止缓存
 // @Tags         auth
 // @Accept       json
 // @Produce      json
@@ -687,6 +823,7 @@ type totpLoginRequest struct {
 // @Failure      401   {object}  handlers.Response
 // @Router       /auth/2fa/login [post]
 func (h *AuthHandler) TOTPLogin(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	if h.authService == nil {
 		respondInternalError(c, fmt.Errorf("认证服务未注入"))
 		return

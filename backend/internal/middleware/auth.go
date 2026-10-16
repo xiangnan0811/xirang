@@ -50,7 +50,7 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if strings.TrimSpace(claims.Purpose) != "" {
+		if claims.Purpose != "" {
 			respondAPIError(c, http.StatusUnauthorized, "认证令牌用途不匹配")
 			c.Abort()
 			return
@@ -77,8 +77,13 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 		// 校验 token_version：密码修改、角色变更、2FA 禁用后旧 token 自动失效
 		if db != nil {
 			var user model.User
-			if err := db.Select("token_version", "role").First(&user, claims.UserID).Error; err != nil {
+			if err := db.Select("token_version", "role", "totp_reenrollment_required").First(&user, claims.UserID).Error; err != nil {
 				respondAPIError(c, http.StatusUnauthorized, "用户不存在或已删除")
+				c.Abort()
+				return
+			}
+			if user.TOTPReenrollmentRequired {
+				respondAPIError(c, http.StatusUnauthorized, "账户需要重新绑定二次验证")
 				c.Abort()
 				return
 			}

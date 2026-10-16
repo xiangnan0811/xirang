@@ -29,17 +29,21 @@ API 以 Router 和生成的 OpenAPI 为准，本页不手工维护接口或模�
 
 ## 数据库迁移版本
 
-当前迁移版本：`000093_batch_command_retry`。
+当前迁移版本：`000094_account_recovery`。
 
 该迁移的 SQLite/PostgreSQL 配对文件为：
 
-- `internal/database/migrations/sqlite/000093_batch_command_retry.up.sql`
-- `internal/database/migrations/sqlite/000093_batch_command_retry.down.sql`
-- `internal/database/migrations/postgres/000093_batch_command_retry.up.sql`
-- `internal/database/migrations/postgres/000093_batch_command_retry.down.sql`
+- `internal/database/migrations/sqlite/000094_account_recovery.up.sql`
+- `internal/database/migrations/sqlite/000094_account_recovery.down.sql`
+- `internal/database/migrations/postgres/000094_account_recovery.up.sql`
+- `internal/database/migrations/postgres/000094_account_recovery.down.sql`
 
-该迁移为新批量命令保存不可变来源摘要、重试来源消费边和永久运行证据；不保存第二份命令正文，也不为历史批次补造来源。每个来源 Task/失败 Run 至多消费一次；`run_id=0` 仅代表可证未派发。根批次允许在预约前编辑，但运行记录当前输入快照，来源变化后不能获得显式重试资格；重试子批次预约和执行都须匹配自己的不可变来源。
+该迁移增加账户受限重新绑定标志和独立恢复审计；默认不改变现有用户的密码、角色、
+TOTP 或业务关联。恢复审计不含凭据，也不随用户删除级联清除。
 
-SQLite 使用新增列和触发器，不重建 TaskRun 表。两引擎均校验来源关联、身份不可变、证据从 pending 单次进入真实终态及永久保留；已使用的 v1 批次或证据使降级在 dirty 元数据写入前拒绝，未使用时可退回并保留全部 v0 回执。启动检查真实列、索引、外键、约束及完整保护器定义；漂移返回 `ErrMigrationSchemaDrift`。升级必须停止并排空旧 Core/worker，不能与不写运行证据的旧二进制混用。
+两引擎均在存在恢复审计或待重新绑定账户时拒绝降到此迁移以下，拒绝发生在写入 dirty
+元数据之前；仅未使用时允许降级。启动检查真实字段、约束、索引及保护器定义，漂移返回
+`ErrMigrationSchemaDrift`。离线恢复工具只验证当前编译版本的完整、干净 schema，不执行
+迁移或修复。使用前须升级并停止全部 Core/worker，不能混跑不认识受限标志的旧二进制。
 
 该声明与 `internal/database/migrations/{sqlite,postgres}` 中最新的成对 up/down 文件同步，并由迁移检查脚本校验。升级前提、旧写入者排空、双引擎恢复和降级保护要求见[数据库合同](../docs/spec/backend/database-guidelines.md)、[部署指南](../docs/deployment.md#备份职责收敛升级)及[备份、恢复与快照](../docs/admin/backup-recovery.md#升级与灾难恢复)；不要通过强制修改版本或删除安全证据绕过保护。

@@ -25,6 +25,11 @@ Overview 流量窗口查询依赖 `task_runs` 上的两个物理索引：`idx_ta
 
 干净版本先执行适用版本的最小 schema 验证，再进行前置检查/修复和 `Up`，随后再次验证。必须检查列、约束、索引、触发器/函数的真实语义；同名空操作对象是 `ErrMigrationSchemaDrift`，不是写入许可。Recovery、TaskRun、grant、drill 以及后续领域版本的具体检查和升级数据条件见[领域合同](../domains/README.md)。
 
+离线 `recover-account` 使用只读 `VerifyCurrentSchema`：要求迁移元数据恰有一条、
+clean 且等于当前内嵌迁移头，再验证适用 schema 与降级保护；不执行任何迁移或修复。
+其 `OpenQuiet` 在建立 GORM 连接之前启用 discard logger，避免初始化或失败 SQL
+泄露 DSN、密文或凭据；普通服务 `Open` 的日志行为不变。
+
 不能安全表示的旧数据应在写 dirty 元数据前返回 `ErrMigrationPrecondition`；离线核对真实事实后允许重试。升级前备份数据库、密钥和备份数据，并按领域合同停止、排空旧写入者。不能猜测历史身份、补造证据或混跑不兼容的旧写入进程。
 
 ## 已使用 schema 的降级保护

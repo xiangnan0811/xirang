@@ -6,6 +6,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const AUTH_TOKEN_KEY = "xirang-auth-token";
 
 let authSessionGeneration = 0;
+const authSessionGenerationListeners = new Set<() => void>();
 
 export function getAuthSessionGeneration(): number {
   return authSessionGeneration;
@@ -13,7 +14,22 @@ export function getAuthSessionGeneration(): number {
 
 export function bumpAuthSessionGeneration(): number {
   authSessionGeneration += 1;
+  for (const listener of authSessionGenerationListeners) {
+    listener();
+  }
   return authSessionGeneration;
+}
+
+/**
+ * Notifies on every identity generation bump (login, logout, activation, invalidation), including
+ * A→B→A changes a snapshot comparison would miss. Distinct from subscribeAuthTransition, which only
+ * reports activation barrier changes.
+ */
+export function subscribeAuthSessionGeneration(listener: () => void): () => void {
+  authSessionGenerationListeners.add(listener);
+  return () => {
+    authSessionGenerationListeners.delete(listener);
+  };
 }
 
 export type AuthIdentitySnapshot = {
@@ -422,7 +438,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     }
   }
 
-  const AUTH_PUBLIC_PATHS = ["/auth/login", "/auth/captcha", "/auth/2fa/login"];
+  // Recovery verify carries its own restricted Bearer, never the stored session: its 401 is a
+  // classified RECOVERY_ENROLLMENT_INVALID result, not an ordinary session expiry.
+  const AUTH_PUBLIC_PATHS = ["/auth/login", "/auth/captcha", "/auth/2fa/login", "/auth/recovery/enrollment/verify"];
   if (response.status === 401 && !AUTH_PUBLIC_PATHS.includes(path)) {
     if (isCurrentAuthSession(requestToken, requestGeneration)) {
       invalidateCurrentAuthSession();

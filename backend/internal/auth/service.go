@@ -87,10 +87,11 @@ func NewService(db *gorm.DB, jwt *JWTManager, settingsSvc *settings.Service, cfg
 
 // LoginResult 封装登录结果，区分完整登录和需要 2FA 的中间状态。
 type LoginResult struct {
-	Token       string
-	User        *model.User
-	Requires2FA bool
-	LoginToken  string // 仅在 Requires2FA=true 时有效
+	Token              string
+	User               *model.User
+	Requires2FA        bool
+	LoginToken         string // 仅在 Requires2FA=true 时有效
+	RecoveryEnrollment *RecoveryEnrollmentResult
 }
 
 func (s *Service) Login(username, password, clientIP string) (*LoginResult, error) {
@@ -100,9 +101,10 @@ func (s *Service) Login(username, password, clientIP string) (*LoginResult, erro
 	}
 
 	var user model.User
-	result := s.db.Where("username = ?", username).Limit(1).Find(&user)
+	// Identity rows contain encrypted credentials; never evaluate SQL traces.
+	result := recoveryCodeSafeDB(s.db, context.Background()).Where("username = ?", username).Limit(1).Find(&user)
 	if result.Error != nil {
-		return nil, result.Error
+		return nil, ErrRecoveryEnrollmentInternal
 	}
 	if result.RowsAffected == 0 {
 		// 执行一次等价的 bcrypt 比对以消除时序差异，防止通过响应时间枚举有效用户名
@@ -115,6 +117,14 @@ func (s *Service) Login(username, password, clientIP string) (*LoginResult, erro
 		return nil, errInvalidCredentials
 	}
 	s.failureLocker.RegisterSuccess(username, clientIP)
+
+	if user.TOTPReenrollmentRequired {
+		enrollment, err := s.beginRecoveryEnrollment(context.Background(), user)
+		if err != nil {
+			return nil, err
+		}
+		return &LoginResult{RecoveryEnrollment: enrollment}, nil
+	}
 
 	if user.TOTPEnabled {
 		loginToken, err := s.jwt.Generate2FAPendingToken(user)

@@ -14,7 +14,8 @@
 ## 真实浏览器与 SSH 生命周期
 
 `web/` 下的 `npm run e2e` 使用模拟 API，不选择 `real-backend-smoke.spec.ts`、
-`lifecycle-p1.spec.ts`、`config-name-mapping.spec.ts` 或 `ssh-key-rotation.spec.ts`。真实验收使用：
+`lifecycle-p1.spec.ts`、`config-name-mapping.spec.ts`、`ssh-key-rotation.spec.ts`
+或 `account-recovery.spec.ts`。真实验收使用：
 
 ```bash
 env -u NODE_ENV npx playwright test --config=playwright.real-backend.config.ts --project=chromium
@@ -36,6 +37,30 @@ known_hosts、SQLite 与 cron 产物均位于本次唯一 `.tmp/agent/lifecycle-
 可以用 `E2E_BACKEND_PORT`、`E2E_VITE_PORT` 调整本地端口；更改端口不允许复用其他
 运行实例。真实 SSH 的父级关闭场景必须先重新准入并证明 shell 仍连接，再关闭弹窗，
 不能用已退出或已断开的 socket 代替活动连接清理证据。
+
+### 离线账户恢复
+
+账户恢复使用独立入口，不复用运行中的后端：
+
+```bash
+env -u NODE_ENV npx playwright test --config=playwright.account-recovery.config.ts --project=chromium
+```
+
+夹具编译 server 与 recover-account，以随机 loopback 端口和独占
+`.tmp/agent/r19-browser-*` 目录承载合成账户、密钥及 SQLite；每次重置前停服并回收
+进程，通过真实控制终端无回显输入后重启同库。需 Go、Node、Chromium 和 Python 3，
+不连接真实节点或使用生产数据。退出只清理其自有进程及目录。
+
+覆盖三种重置范围、旧凭据及授权失效、身份与资源关联保留、受限响应不安装会话、
+真实 TOTP 绑定与正常重新登录，以及错误 purpose/过期/替换、未知提交不重放、
+复制失败、刷新和本地到期。中英文桌面与移动尺寸均验收；日志只保留安全阶段、
+状态码和允许的源码位置，截图在捕获时遮盖秘密，禁用 trace、录像及自动 DOM 快照。
+Playwright 输出另用独占 `.tmp/agent/r19-playwright-*/results`，worker 只采用所属
+runner 的目录，不使用共享 `web/test-results`。成功退出清理自有输出；失败保留
+失败用例的脱敏截图及安全错误摘要并打印安全路径；仅有 `.last-run.json` 时清理
+运行目录。强制杀死进程可能留下本次目录，须确认无活动使用者后再按所有权清理。
+事务、迁移及 race 回归另用独占 `TEST_POSTGRES_DSN` 验证真实 PostgreSQL，
+该浏览器 SQLite 场景不替代双引擎证据。
 
 ## 候选和环境
 

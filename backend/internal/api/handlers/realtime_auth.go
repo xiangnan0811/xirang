@@ -32,7 +32,7 @@ func authorizeRealtimeToken(ctx context.Context, token string, jwtManager *auth.
 	if claims.ID == "" || claims.ExpiresAt == nil || claims.UserID == 0 {
 		return nil, fmt.Errorf("token 会话绑定无效")
 	}
-	if strings.TrimSpace(claims.Purpose) != "" {
+	if claims.Purpose != "" {
 		return nil, fmt.Errorf("认证令牌用途不匹配")
 	}
 	// Keep realtime authentication aligned with HTTP authentication: a valid
@@ -54,8 +54,11 @@ func authorizeRealtimeToken(ctx context.Context, token string, jwtManager *auth.
 
 	if db != nil {
 		var user model.User
-		if err := db.Select("token_version", "role").First(&user, claims.UserID).Error; err != nil {
+		if err := db.Select("token_version", "role", "totp_reenrollment_required").First(&user, claims.UserID).Error; err != nil {
 			return nil, fmt.Errorf("用户不存在或已删除")
+		}
+		if user.TOTPReenrollmentRequired {
+			return nil, fmt.Errorf("账户需要重新绑定二次验证")
 		}
 		if user.TokenVersion != claims.TokenVersion {
 			return nil, fmt.Errorf("token 已失效，请重新登录")
