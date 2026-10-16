@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.66.4](https://github.com/xiangnan0811/xirang/compare/v0.66.3...v0.66.4) (2026-10-16)
+
+
+### 🐛 Bug Fixes
+
+* **cron:** correct schedule estimates and add server report previews ([#626](https://github.com/xiangnan0811/xirang/issues/626)) ([93a4aa7](https://github.com/xiangnan0811/xirang/commit/93a4aa760a7abbe262ed442aea99021039b418be))
+
 ### 修复
 
 - 修正任务与策略 CronGenerator 的有限 UTC 运行预估，并为报表增加管理员只读服务端匹配窗口预览；修复步长对齐、日期限制、半小时夏令时切换及同一分钟恢复页面后的展示。
