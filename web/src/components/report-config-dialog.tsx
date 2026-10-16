@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast-sonner";
 import { CronGenerator } from "@/components/cron-generator";
+import { ReportSchedulePreview } from "@/components/report-schedule-preview";
 
 const reportsApi = createReportsApi();
 const integrationsApi = createIntegrationsApi();
@@ -267,8 +268,11 @@ function ReportConfigSession({
           </LabelRow>
         )}
 
-        <LabelRow label={t("reportConfig.cronLabel")} error={cronError}>
+        <LabelRow label={t("reportConfig.cronLabel")} error={cronError} htmlFor="report-config-cron">
           <CronGenerator
+            id="report-config-cron"
+            consumer="report"
+            preview={<ReportSchedulePreview cron={draft.cron} token={token} active={open} disabled={saving} />}
             value={draft.cron}
             onChange={(val) => {
               set({ cron: val });

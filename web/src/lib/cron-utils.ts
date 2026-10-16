@@ -4,11 +4,6 @@ function getWeekdayName(d: string): string {
   return i18n.t(`cron.weekdayNames.${d}`, { defaultValue: d });
 }
 
-function getLocaleString(date: Date): string {
-  const p = (n: number) => n.toString().padStart(2, "0");
-  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
-}
-
 const ANY = "*";
 
 // 仅接受完整十进制数字 token，并限制在 [min, max] 闭区间内；
@@ -92,62 +87,87 @@ export function cronTimezoneNoteKey(cron: string): "cron.taskTimezoneExplicit" |
     : "cron.taskTimezoneUTC";
 }
 
-export function nextRunPreview(cron: string) {
-  if (!cron) return i18n.t("cron.notConfiguredCron");
-  const parts = cron.trim().split(/\s+/);
-  if (parts.length < 5) {
-    return i18n.t("cron.cannotEstimate");
-  }
-  const now = new Date();
-  const minute = parts[0];
-  const hour = parts[1];
-  const weekday = parts[4];
+export type CronPreviewResult =
+  | { status: "estimated"; nextAt: number }
+  | { status: "empty" | "unsupported" | "no_match" };
 
-  if (minute.startsWith("*/") && hour === "*") {
-    const interval = Number(minute.replace("*/", ""));
-    if (Number.isFinite(interval) && interval > 0) {
-      const next = new Date(now.getTime() + interval * 60 * 1000);
-      return i18n.t("cron.estimatedNext", { time: getLocaleString(next) });
+const MINUTE_MS = 60_000;
+const DAY_MS = 86_400_000;
+const PREVIEW_HORIZON_YEARS = 5;
+
+function range(min: number, max: number, step = 1): number[] {
+  const values: number[] = [];
+  for (let value = min; value <= max; value += step) values.push(value);
+  return values;
+}
+
+// minute/hour：`*`、单个整数或从字段 0 开始对齐的 `*/N`。
+function parseTimeField(token: string, max: number): number[] | null {
+  if (token === ANY) return range(0, max);
+  const step = parseStep(token, 1, max);
+  if (step !== null) return range(0, max, step);
+  const value = parseBoundedInt(token, 0, max);
+  return value === null ? null : [value];
+}
+
+// DOM/month：`*`（返回 null 表示不限制）或单个整数；undefined 表示不支持。
+function parseDateField(token: string, min: number, max: number): number | null | undefined {
+  if (token === ANY) return null;
+  const value = parseBoundedInt(token, min, max);
+  return value === null ? undefined : value;
+}
+
+/**
+ * 任务/策略编辑用的浏览器时钟 UTC 预估，只覆盖有限五段语法：
+ * minute/hour 为 `*`、整数或步长 `*&#47;N`（从字段 0 对齐），DOM 与 month 为 `*` 或整数，DOW 为 `*` 或 0–6 列表。
+ * descriptor、TZ=/CRON_TZ=、范围、名称、六段、越界一律 unsupported（不代表后端拒绝）。
+ * 日/周都受限时按标准 cron 取 OR；仅搜索 now 起五年（不含上界），找不到返回 no_match。
+ * 结果不是调度事实，服务端 nextRunAt 为准。
+ */
+export function nextRunPreview(cron: string, now: Date): CronPreviewResult {
+  const trimmed = cron.trim();
+  if (trimmed === "") return { status: "empty" };
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) return { status: "unsupported" };
+
+  const parts = trimmed.split(/\s+/);
+  if (parts.length !== 5) return { status: "unsupported" };
+  const [minuteToken, hourToken, domToken, monthToken, dowToken] = parts;
+  const minutes = parseTimeField(minuteToken, 59);
+  const hours = parseTimeField(hourToken, 23);
+  const dayOfMonth = parseDateField(domToken, 1, 31);
+  const month = parseDateField(monthToken, 1, 12);
+  const weekdays = dowToken === ANY ? null : parseWeekdayList(dowToken)?.map(Number);
+  if (minutes === null || hours === null || dayOfMonth === undefined || month === undefined || weekdays === undefined) {
+    return { status: "unsupported" };
+  }
+  const weekdaySet = weekdays === null ? null : new Set(weekdays);
+
+  // 用克隆 + setUTC* 而非 Date.UTC：Date.UTC 会把 0–99 年映射到 1900–1999。
+  // setUTCFullYear 保留日期归一化（2 月 29 日 + 5 年 → 3 月 1 日），上界不含。
+  const horizon = new Date(nowMs);
+  horizon.setUTCFullYear(horizon.getUTCFullYear() + PREVIEW_HORIZON_YEARS);
+  const horizonMs = horizon.getTime();
+  const dayStart = new Date(nowMs);
+  dayStart.setUTCHours(0, 0, 0, 0);
+
+  // 逐个真实存在的 UTC 日历日筛选日期，再按升序枚举日内 hour/minute。
+  for (let dayMs = dayStart.getTime(); dayMs < horizonMs; dayMs += DAY_MS) {
+    const day = new Date(dayMs);
+    if (month !== null && day.getUTCMonth() + 1 !== month) continue;
+    const domMatches = dayOfMonth === null || day.getUTCDate() === dayOfMonth;
+    const dowMatches = weekdaySet === null || weekdaySet.has(day.getUTCDay());
+    const dateMatches =
+      dayOfMonth !== null && weekdaySet !== null ? domMatches || dowMatches : domMatches && dowMatches;
+    if (!dateMatches) continue;
+    for (const hour of hours) {
+      for (const minute of minutes) {
+        const candidate = dayMs + hour * 60 * MINUTE_MS + minute * MINUTE_MS;
+        if (candidate <= nowMs) continue;
+        if (candidate >= horizonMs) return { status: "no_match" };
+        return { status: "estimated", nextAt: candidate };
+      }
     }
   }
-  if (hour.startsWith("*/")) {
-    const interval = Number(hour.replace("*/", ""));
-    const minuteValue = Number(minute);
-    if (
-      Number.isFinite(interval) &&
-      interval > 0 &&
-      Number.isFinite(minuteValue)
-    ) {
-      const next = new Date(now);
-      next.setMinutes(minuteValue, 0, 0);
-      while (next <= now) {
-        next.setHours(next.getHours() + interval);
-      }
-      return i18n.t("cron.estimatedNext", { time: getLocaleString(next) });
-    }
-  }
-  const minuteValue = Number(minute);
-  const hourValue = Number(hour);
-  if (Number.isFinite(minuteValue) && Number.isFinite(hourValue)) {
-    const next = new Date(now);
-    next.setHours(hourValue, minuteValue, 0, 0);
-    if (weekday === "*") {
-      if (next <= now) {
-        next.setDate(next.getDate() + 1);
-      }
-      return i18n.t("cron.estimatedNext", { time: getLocaleString(next) });
-    }
-    const targetWeekday = Number(weekday);
-    if (Number.isFinite(targetWeekday)) {
-      const normalizedWeekday = ((targetWeekday % 7) + 7) % 7;
-      let dayOffset = normalizedWeekday - next.getDay();
-      if (dayOffset < 0 || (dayOffset === 0 && next <= now)) {
-        dayOffset += 7;
-      }
-      next.setDate(next.getDate() + dayOffset);
-      const weekdayName = getWeekdayName(weekday);
-      return i18n.t("cron.estimatedNextWithWeekday", { time: getLocaleString(next), weekday: weekdayName });
-    }
-  }
-  return i18n.t("cron.cannotEstimate");
+  return { status: "no_match" };
 }

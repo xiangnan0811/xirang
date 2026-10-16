@@ -17,6 +17,7 @@ export function TaskSchedule({ draft, setDraft, saving }: TaskScheduleProps) {
         {t("taskCreate.cronOptional")}
       </label>
       <CronGenerator
+        consumer="task"
         id="task-editor-cron"
         value={draft.cronSpec}
         onChange={(val) =>

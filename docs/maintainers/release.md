@@ -168,6 +168,15 @@ Cron 的 UTC/表达式时区及服务端 nextRunAt 权威、Doctor 代次/剪贴
 Release PR 和最终 Release 须原样保留，不将 null-sink 读屏证据写成人工耳听，不把 generator-only
 nextRunPreview、生产部署或灾备恢复纳入本轮完成声明。
 
+CronGenerator 运行预估修复的发行说明须保留任务/策略有限 UTC 预估与服务端 nextRunAt
+权威、报表管理员只读接口与既有简化 matcher/日周 AND、分钟窗口非执行或投递保证、
+显式请求及身份/过期失效边界。新版 Core 与页面同版本切换，完成或退出旧编辑交互并
+刷新客户端，按正常换版流程排空旧 Core 在途请求；不改真实调度，不额外排空执行中的
+备份任务，也不撤销已开始或已提交操作。无新增 schema migration，升级前保全数据库、
+适用密钥与配置；回退恢复旧预估缺陷或移除报表预览，既有迁移降级与恢复要求不变。
+Release PR 与最终 GitHub Release 正文须完整保留该版本的五项行为与升级说明；
+不得将 v0.66.3 未重写 generator-only 预估的历史范围改写为本次修复已在旧版生效。
+
 
 All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录
 `CRON_DB_BACKUP_STATE_DIR=/backup/.cron-db-state`，共用 26 小时默认窗口。发行验收须验证

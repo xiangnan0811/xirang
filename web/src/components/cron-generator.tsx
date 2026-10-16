@@ -1,18 +1,24 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { Clock, CalendarDays, Settings2, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { cronToNatural, nextRunPreview } from "@/lib/cron-utils";
+import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 
-type CronGeneratorProps = {
+type BaseProps = {
   id?: string;
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   placeholder?: string;
 };
+
+type CronGeneratorProps = BaseProps & (
+  | { consumer: "task" | "policy" }
+  | { consumer: "report"; preview: ReactNode }
+);
 
 type ScheduleType = "minutes" | "hours" | "daily" | "weekly" | "monthly" | "custom";
 
@@ -24,11 +30,34 @@ const CRON_PRESET_KEYS = [
   { key: "monthly1st", value: "0 2 1 * *" },
 ];
 
-export function CronGenerator({ id, value, onChange, disabled, placeholder }: CronGeneratorProps) {
+export function CronGenerator(props: CronGeneratorProps) {
+  const { id, value, onChange, disabled, placeholder, consumer } = props;
   const { t } = useTranslation();
   const resolvedPlaceholder = placeholder ?? t('cron.placeholder');
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
   const [scheduleType, setScheduleType] = useState<ScheduleType>("daily");
+  const [, setClock] = useState(() => ({ minute: Math.floor(Date.now() / 60000) }));
+  const localPreviewEnabled = consumer !== "report" && Boolean(value.trim());
+  const sampleClock = useCallback(() => {
+    if (document.hidden) return;
+    const minute = Math.floor(Date.now() / 60000);
+    setClock((previous) => previous.minute === minute ? previous : { minute });
+  }, []);
+  useVisibilityPolling(sampleClock, 1000, { enabled: localPreviewEnabled, immediate: false });
+  useEffect(() => {
+    if (!localPreviewEnabled) return;
+    // A hidden parent render may omit the estimate. Restore it even if the
+    // minute has not changed; ordinary polling still only updates each minute.
+    const restoreVisiblePreview = () => {
+      if (!document.hidden) setClock({ minute: Math.floor(Date.now() / 60000) });
+    };
+    window.addEventListener("focus", restoreVisiblePreview);
+    document.addEventListener("visibilitychange", restoreVisiblePreview);
+    return () => {
+      window.removeEventListener("focus", restoreVisiblePreview);
+      document.removeEventListener("visibilitychange", restoreVisiblePreview);
+    };
+  }, [localPreviewEnabled]);
 
   // Builder states
   const [minutesInterval, setMinutesInterval] = useState("30");
@@ -129,9 +158,16 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
     );
   };
 
-  // 直接计算（不按 value 记忆），确保同一表达式在切换语言后随之更新。
-  const naturalDescription = cronToNatural(value);
-  const nextRun = useMemo(() => nextRunPreview(value), [value]);
+  // Translation and clock are render inputs, never cached translated results.
+  const naturalDescription = consumer === "report"
+    ? t("cron.byCronExpression", { cron: value.trim() })
+    : cronToNatural(value);
+  const nextRun = localPreviewEnabled && !document.hidden ? nextRunPreview(value, new Date()) : null;
+  const nextRunText = nextRun?.status === "estimated"
+    ? t("cron.estimatedNext", { time: `${new Date(nextRun.nextAt).toISOString().slice(0, 19).replace("T", " ")} UTC` })
+    : nextRun?.status === "no_match"
+      ? t("cron.previewNoMatch")
+      : nextRun?.status === "unsupported" ? t("cron.cannotEstimate") : null;
 
   return (
     <div className="space-y-3">
@@ -155,7 +191,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
       </div>
 
       <div className="flex gap-2">
-        <div className="relative flex-1">
+        <div className="relative min-w-0 flex-1">
           <Input
             id={id}
             value={value}
@@ -188,6 +224,7 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
             <Select
               value={scheduleType}
               onChange={(e) => setScheduleType(e.target.value as ScheduleType)}
+              aria-label={t('cron.executionFrequency')}
               className="w-[180px] h-8 text-sm"
               disabled={disabled}
             >
@@ -341,13 +378,18 @@ export function CronGenerator({ id, value, onChange, disabled, placeholder }: Cr
 
       {/* Preview Section */}
       {value.trim() && (
-        <div className="rounded-md border bg-muted/30 p-3 text-sm">
+        <div className="rounded-md border bg-muted/30 p-3 text-sm break-words">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
             <CalendarDays className="size-3.5" />
             {t('cron.parseResult')}
           </div>
           <p className="font-medium">{naturalDescription}</p>
-          <p className="mt-1 text-xs text-[hsl(var(--info-text))]">{nextRun}</p>
+          {props.consumer === "report" ? props.preview : (
+            <>
+              <p className="mt-1 text-xs text-[hsl(var(--info-text))]">{nextRunText}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("cron.previewAuthority")}</p>
+            </>
+          )}
         </div>
       )}
     </div>

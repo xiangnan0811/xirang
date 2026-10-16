@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +59,47 @@ type reportConfigRequest struct {
 	Cron           string `json:"cron" binding:"required"`
 	IntegrationIDs []uint `json:"integration_ids"`
 	Enabled        *bool  `json:"enabled"`
+}
+
+// PreviewSchedule godoc
+// @Summary      预估报表匹配窗口
+// @Description  只读查询，要求主会话及 reports:write 权限；不读取或写入配置，不生成报告，也不投递通知。
+// @Description  cron 是唯一查询参数，须恰好出现一次，解码后不超过 512 字节，且为非空五段表达式；未知、重复或无效编码的参数返回 400。
+// @Description  使用服务端当前时间、本地时区及现有简化匹配规则（日与周为 AND），搜索未来五个日历年（不含上界）。
+// @Description  match 返回当前或下一分钟的 [window_start, window_end) 匹配窗口及空 reason，不保证执行、生成或投递；no_match 返回空窗口和 unsupported_month、unmatchable_field 或 horizon_exhausted 原因。
+// @Description  时间保留 RFC3339Nano 偏移，timezone 为服务端 Location 标识（可能是 Local）；expires_at 为评估分钟的结束时刻。Handler 的成功和错误响应均为 no-store，认证、权限及限流前置拒绝沿用中间件合同。
+// @Tags         reports
+// @Security     Bearer
+// @Produce      json
+// @Param        cron  query     string  true  "唯一的五段报表表达式；解码后最多 512 字节"  maxLength(512)
+// @Success      200   {object}  handlers.Response{data=reporting.SchedulePreview}
+// @Failure      400   {object}  handlers.Response  "无效的报表预估表达式"
+// @Failure      401   {object}  handlers.Response  "主会话缺失、过期或撤销"
+// @Failure      403   {object}  handlers.Response  "缺少 reports:write 权限"
+// @Failure      429   {object}  handlers.Response  "请求限流；不自动重试"
+// @Failure      500   {object}  handlers.Response  "安全的通用内部错误"
+// @Failure      503   {object}  handlers.Response  "请求取消、超时或认证依赖暂不可用"
+// @Router       /report-configs/schedule-preview [get]
+func (h *ReportHandler) PreviewSchedule(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	values := query["cron"]
+	if err != nil || len(query) != 1 || len(values) != 1 || len(values[0]) > 512 || len(strings.Fields(values[0])) != 5 {
+		respondBadRequest(c, "无效的报表预估表达式")
+		return
+	}
+
+	preview, err := reporting.PreviewSchedule(c.Request.Context(), values[0], time.Now().In(time.Local))
+	switch {
+	case errors.Is(err, reporting.ErrInvalidSchedulePreview):
+		respondBadRequest(c, "无效的报表预估表达式")
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		respondServiceUnavailable(c, "报表预估暂不可用")
+	case err != nil:
+		respondInternalError(c, err)
+	default:
+		respondOK(c, preview)
+	}
 }
 
 // ListConfigs godoc

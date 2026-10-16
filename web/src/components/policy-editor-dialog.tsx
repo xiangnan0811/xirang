@@ -207,6 +207,7 @@ export function PolicyEditorDialog({
           {t('policyEditor.cronExpression')}
         </label>
         <CronGenerator
+          consumer="policy"
           id="policy-edit-cron"
           value={draft.cron}
           onChange={(val) => setDraft((prev) => ({ ...prev, cron: val }))}
