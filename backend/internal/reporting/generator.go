@@ -491,12 +491,19 @@ func shouldGenerate(cfg model.ReportConfig, now time.Time) bool {
 }
 
 func matchField(expr string, value int) bool {
+	n, wildcard, ok := parseReportField(expr)
+	return wildcard || (ok && n == value)
+}
+
+// parseReportField preserves the scheduler's numeric-prefix parsing, including
+// tokens that are not valid standard cron fields.
+func parseReportField(expr string) (value int, wildcard bool, ok bool) {
 	if expr == "*" {
-		return true
+		return 0, true, true
 	}
 	var n int
 	_, err := fmt.Sscanf(expr, "%d", &n)
-	return err == nil && n == value
+	return n, false, err == nil
 }
 
 // reportDispatcher 跟踪所有 sendReport goroutine 的生命周期。

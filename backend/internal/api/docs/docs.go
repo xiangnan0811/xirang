@@ -12309,6 +12309,89 @@ const docTemplate = `{
                 }
             }
         },
+        "/report-configs/schedule-preview": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "只读查询，要求主会话及 reports:write 权限；不读取或写入配置，不生成报告，也不投递通知。\ncron 是唯一查询参数，须恰好出现一次，解码后不超过 512 字节，且为非空五段表达式；未知、重复或无效编码的参数返回 400。\n使用服务端当前时间、本地时区及现有简化匹配规则（日与周为 AND），搜索未来五个日历年（不含上界）。\nmatch 返回当前或下一分钟的 [window_start, window_end) 匹配窗口及空 reason，不保证执行、生成或投递；no_match 返回空窗口和 unsupported_month、unmatchable_field 或 horizon_exhausted 原因。\n时间保留 RFC3339Nano 偏移，timezone 为服务端 Location 标识（可能是 Local）；expires_at 为评估分钟的结束时刻。Handler 的成功和错误响应均为 no-store，认证、权限及限流前置拒绝沿用中间件合同。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "reports"
+                ],
+                "summary": "预估报表匹配窗口",
+                "parameters": [
+                    {
+                        "maxLength": 512,
+                        "type": "string",
+                        "description": "唯一的五段报表表达式；解码后最多 512 字节",
+                        "name": "cron",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_reporting.SchedulePreview"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "无效的报表预估表达式",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "主会话缺失、过期或撤销",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "缺少 reports:write 权限",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "请求限流；不自动重试",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "安全的通用内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "请求取消、超时或认证依赖暂不可用",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/report-configs/{id}": {
             "put": {
                 "security": [
@@ -26157,6 +26240,37 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_reporting.SchedulePreview": {
+            "type": "object",
+            "properties": {
+                "evaluated_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "search_until": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timezone": {
+                    "type": "string"
+                },
+                "window_end": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "window_start": {
+                    "type": "string",
+                    "x-nullable": true
                 }
             }
         },

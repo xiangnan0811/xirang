@@ -776,6 +776,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/batch-commands/:batch_id", middleware.RBAC("tasks:write"), batchHandler.Delete)
 
 	secured.GET("/report-configs", middleware.RBAC("reports:read"), reportHandler.ListConfigs)
+	secured.GET("/report-configs/schedule-preview", middleware.RBAC("reports:write"), reportHandler.PreviewSchedule)
 	secured.POST("/report-configs", middleware.RBAC("reports:write"), reportHandler.CreateConfig)
 	secured.PUT("/report-configs/:id", middleware.RBAC("reports:write"), reportHandler.UpdateConfig)
 	secured.DELETE("/report-configs/:id", middleware.RBAC("reports:write"), reportHandler.DeleteConfig)

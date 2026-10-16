@@ -54,6 +54,28 @@ export type NewReportConfigInput = {
   enabled: boolean;
 };
 
+export type ReportSchedulePreviewNoMatchReason =
+  | "unsupported_month"
+  | "unmatchable_field"
+  | "horizon_exhausted";
+
+// Times keep the server's RFC3339 strings with their offsets; they are never
+// converted to the browser time zone. Validation parses them only to epochs.
+export type ReportSchedulePreview = {
+  evaluatedAt: string;
+  expiresAt: string;
+  timezone: string;
+  searchUntil: string;
+} & (
+  | { status: "match"; reason: ""; windowStart: string; windowEnd: string }
+  | {
+      status: "no_match";
+      reason: ReportSchedulePreviewNoMatchReason;
+      windowStart: null;
+      windowEnd: null;
+    }
+);
+
 type RawReportConfig = {
   id?: unknown;
   name?: unknown;
@@ -172,6 +194,118 @@ function toReportConfigWire(input: NewReportConfigInput | Partial<NewReportConfi
   return body;
 }
 
+const INVALID_SCHEDULE_PREVIEW_MESSAGE = "Invalid report schedule preview response";
+const PREVIEW_MAX_TTL_MS = 60_000;
+const PREVIEW_WINDOW_MS = 60_000;
+const NO_MATCH_REASONS: Record<ReportSchedulePreviewNoMatchReason, true> = {
+  unsupported_month: true,
+  unmatchable_field: true,
+  horizon_exhausted: true,
+};
+const RFC3339_WITH_OFFSET =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+
+function invalidSchedulePreview(): Error {
+  return new Error(INVALID_SCHEDULE_PREVIEW_MESSAGE);
+}
+
+// Returns epoch milliseconds for an RFC3339 timestamp with an explicit offset,
+// rejecting impossible calendar/clock fields instead of letting Date normalize them.
+function parseRfc3339Instant(value: unknown): number {
+  if (typeof value !== "string") throw invalidSchedulePreview();
+  const match = RFC3339_WITH_OFFSET.exec(value);
+  if (!match) throw invalidSchedulePreview();
+  const [, y, mo, d, h, mi, s, fraction, sign, offH, offM] = match;
+  const year = Number(y);
+  const month = Number(mo);
+  const day = Number(d);
+  const hour = Number(h);
+  const minute = Number(mi);
+  const second = Number(s);
+  const millis = fraction ? Number(fraction.slice(0, 3).padEnd(3, "0")) : 0;
+  if (hour > 23 || minute > 59 || second > 59) throw invalidSchedulePreview();
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, millis);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw invalidSchedulePreview();
+  }
+  let offsetMinutes = 0;
+  if (sign) {
+    const offsetHours = Number(offH);
+    const offsetMins = Number(offM);
+    if (offsetHours > 23 || offsetMins > 59) throw invalidSchedulePreview();
+    offsetMinutes = (sign === "-" ? -1 : 1) * (offsetHours * 60 + offsetMins);
+  }
+  const epoch = date.getTime() - offsetMinutes * 60_000;
+  if (!Number.isFinite(epoch)) throw invalidSchedulePreview();
+  return epoch;
+}
+
+function mapReportSchedulePreview(raw: unknown): ReportSchedulePreview {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw invalidSchedulePreview();
+  const row = raw as Record<string, unknown>;
+
+  const evaluatedAt = row.evaluated_at;
+  const expiresAt = row.expires_at;
+  const searchUntil = row.search_until;
+  const timezone = row.timezone;
+  const evaluatedMs = parseRfc3339Instant(evaluatedAt);
+  const expiresMs = parseRfc3339Instant(expiresAt);
+  const searchUntilMs = parseRfc3339Instant(searchUntil);
+  if (typeof timezone !== "string" || timezone.trim() === "") throw invalidSchedulePreview();
+  if (!(evaluatedMs < expiresMs && expiresMs <= evaluatedMs + PREVIEW_MAX_TTL_MS)) {
+    throw invalidSchedulePreview();
+  }
+  if (!(searchUntilMs > evaluatedMs)) throw invalidSchedulePreview();
+
+  const base = {
+    evaluatedAt: evaluatedAt as string,
+    expiresAt: expiresAt as string,
+    timezone,
+    searchUntil: searchUntil as string,
+  };
+
+  if (row.status === "match") {
+    if (row.reason !== "") throw invalidSchedulePreview();
+    const windowStart = row.window_start;
+    const windowEnd = row.window_end;
+    const startMs = parseRfc3339Instant(windowStart);
+    const endMs = parseRfc3339Instant(windowEnd);
+    if (endMs - startMs !== PREVIEW_WINDOW_MS || !(endMs > evaluatedMs) || !(startMs < searchUntilMs)) {
+      throw invalidSchedulePreview();
+    }
+    return {
+      ...base,
+      status: "match",
+      reason: "",
+      windowStart: windowStart as string,
+      windowEnd: windowEnd as string,
+    };
+  }
+
+  if (row.status === "no_match") {
+    const reason = row.reason;
+    if (typeof reason !== "string" || !Object.prototype.hasOwnProperty.call(NO_MATCH_REASONS, reason)) {
+      throw invalidSchedulePreview();
+    }
+    if (row.window_start !== null || row.window_end !== null) throw invalidSchedulePreview();
+    return {
+      ...base,
+      status: "no_match",
+      reason: reason as ReportSchedulePreviewNoMatchReason,
+      windowStart: null,
+      windowEnd: null,
+    };
+  }
+
+  throw invalidSchedulePreview();
+}
+
 export function createReportsApi() {
   return {
     listConfigs: async (token: string): Promise<ReportConfig[]> => {
@@ -217,6 +351,22 @@ export function createReportsApi() {
     getReport: async (token: string, id: number): Promise<Report> => {
       const row = await request<RawReport>(`/reports/${id}`, { method: "GET", token });
       return mapReport(row);
+    },
+
+    previewSchedule: async (
+      token: string,
+      cron: string,
+      options: { signal?: AbortSignal } = {},
+    ): Promise<ReportSchedulePreview> => {
+      const query = new URLSearchParams({ cron });
+      const raw = await request<unknown>(`/report-configs/schedule-preview?${query.toString()}`, {
+        method: "GET",
+        token,
+        signal: options.signal,
+      });
+      // A response that arrives after cancellation must not reach the caller.
+      options.signal?.throwIfAborted();
+      return mapReportSchedulePreview(raw);
     },
   };
 }
