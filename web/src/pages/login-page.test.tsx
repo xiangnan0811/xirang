@@ -782,7 +782,7 @@ describe("LoginPage offline-recovery enrollment", () => {
     await reachRecoveryEnrollment(user);
 
     expect(screen.getByRole("heading", { level: 2, name: "绑定新的验证器" })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "绑定新验证器的二维码" })).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: "绑定新验证器的二维码" })).toBeInTheDocument();
     expect(screen.getByTestId("recovery-enrollment-secret")).toHaveTextContent(RECOVERY_SECRET);
     expect(screen.getByLabelText("新验证器上的验证码")).toHaveValue("");
     expect(screen.queryByLabelText("密码")).not.toBeInTheDocument();
