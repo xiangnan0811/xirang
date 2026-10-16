@@ -14,6 +14,13 @@
 - 按同一发行版本切换 Core 与页面：只读接口从新版 Core 接收请求后生效，UTC 展示和请求隔离从新版页面加载后生效。完成或退出旧编辑交互并刷新客户端，按正常换版流程排空旧 Core 在途请求；不改实际调度器或既有匹配规则，无需因预估修复额外排空执行中的备份任务，也不撤销旧进程已开始或已提交的操作。
 - 本次无新增数据库 schema migration，不回填、清理或改写历史配置。升级前保全数据库、适用密钥与配置；回退会恢复旧预估缺陷或移除报表预览，既有迁移降级保护与配套恢复要求仍适用。公开发布不代表生产部署、生产升级或灾备恢复验收。
 
+## [0.66.4](https://github.com/xiangnan0811/xirang/compare/v0.66.3...v0.66.4) (2026-10-16)
+
+
+### 🐛 Bug Fixes
+
+* **cron:** correct schedule estimates and add server report previews ([#626](https://github.com/xiangnan0811/xirang/issues/626)) ([93a4aa7](https://github.com/xiangnan0811/xirang/commit/93a4aa760a7abbe262ed442aea99021039b418be))
+
 ## [0.66.3](https://github.com/xiangnan0811/xirang/compare/v0.66.2...v0.66.3) (2026-10-15)
 
 
