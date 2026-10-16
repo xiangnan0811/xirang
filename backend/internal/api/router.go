@@ -203,14 +203,16 @@ func runtimeBackupAssetHandlerConfigSource(runtime *backupruntime.Runtime) handl
 	}
 }
 
-// recoveryCodesNoStore marks every response for the recovery-code management
-// paths before secured authentication can reject the request.
+// recoveryCodesNoStore marks identity-secret responses before CORS,
+// authentication or rate limiting can reject the request.
 func recoveryCodesNoStore() gin.HandlerFunc {
 	const recoveryCodesPath = "/api/v1/auth/2fa/recovery-codes"
 	const regenerateRecoveryCodesPath = recoveryCodesPath + "/regenerate"
 	return func(c *gin.Context) {
 		path := strings.TrimRight(c.Request.URL.Path, "/")
-		if path == recoveryCodesPath || path == regenerateRecoveryCodesPath {
+		if path == recoveryCodesPath || path == regenerateRecoveryCodesPath ||
+			path == "/api/v1/auth/login" || path == "/api/v1/auth/2fa/login" ||
+			path == "/api/v1/auth/recovery/enrollment/verify" {
 			c.Header("Cache-Control", "private, no-store")
 		}
 		c.Next()
@@ -439,6 +441,11 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	v1.GET("/auth/captcha", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), captchaHandler.GenerateCaptcha)
 	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
 	v1.POST("/auth/2fa/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.TOTPLogin)
+	v1.POST("/auth/recovery/enrollment/verify",
+		middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow),
+		middleware.MaxBodySize(1<<10),
+		authHandler.RecoveryEnrollmentVerify,
+	)
 	v1.GET("/version", versionHandler.Info)
 	contentRouteHandlers := []gin.HandlerFunc{middleware.ContentSafeRecovery(), backupContentHandler.Serve}
 	v1.GET("/asset-content/:deliveryId", contentRouteHandlers...)

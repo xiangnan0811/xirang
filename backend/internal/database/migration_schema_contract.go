@@ -830,6 +830,11 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 	if err := validateLifecycleEffectClaimAuditSlotSchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
+	if version >= 78 {
+		if err := validateIdentitySecurityColumns(db, dbType, version); err != nil {
+			return migrationSchemaDriftError(version, err.Error())
+		}
+	}
 	if version < taskRunCronProvenanceSchemaVersion {
 		return nil
 	}
@@ -894,6 +899,12 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 		return nil
 	}
 	if err := validateBatchCommandRetrySchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < accountRecoverySchemaVersion {
+		return nil
+	}
+	if err := validateAccountRecoverySchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
 

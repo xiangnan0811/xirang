@@ -53,8 +53,81 @@ step-up、grant 与会话撤销始终是最终授权边界。
 
 pending login token 绑定当前账户版本和 TOTP 状态，完成后只能消费一次；恢复码用并发安全事务消费，正常登录不撤销其他合法会话。初始化返回 `enrollment_id/expires_at`，验证必须提交同一未过期标识；再次初始化使旧标识失效，已启用账户不能覆盖密钥。角色变更及删除用户必须在并发下仍保留至少一个管理员；启动不自动提升现有账户。离线 `recover-admin` 只在已迁移数据库且零管理员时提升一个已有账户，不执行迁移、不创建用户、不改密码/TOTP；明确本地确认后原子撤销旧版本会话/待登录并保存原因及哈希链审计，任一失败不提升权限。操作前必须停机并保存数据库和匹配密钥，不能删除审计绕过保护。
 
+### 受控离线原账户恢复
+
+独立 `recover-account` 允许受控宿主机操作者选择重置原账户密码、第二因子或两者，
+不受管理员数量限制，不改变 ID、角色或业务关联，不提供在线管理员代办接口。
+前提是全部 Core 已升级且 Core/worker 均停机；工具不会检测远端实例或强制停机。
+它只打开已存在的数据库并验证本二进制对应的完整、干净 schema，不迁移、不 seed；
+SQLite 必须为普通非符号链接文件。配置密钥验证及目标加密字段解密失败时拒绝，
+不能因本次将清除秘密就忽略错误密钥；空加密字段不能证明整个数据库密钥匹配。
+
+重置密码仅替换原始字节的新密码哈希；password-only 保留已启用验证器、恢复码及原受限标志。
+重置因子清空旧密钥与恢复码、关闭 TOTP，并设置 JSON 隐藏的
+`totp_reenrollment_required=true`。两种模式均清理未完成 enrollment 与全部 pending login、
+递增 token version，并显式撤销目标所有非 denied/revoked/expired 的临时授权，包括未知历史
+状态；保留历史、不虚构 Web revoker。离线事务取得既有身份写锁，重读原始密文及身份，
+CAS、专用审计和通用哈希链审计与凭据更新原子提交；不使用 busy/commit 自动重试。
+
+专用 `account_recovery_audits` 保存唯一随机 operation ID、目标身份、事件、重置范围、
+原因、前后版本和撤销数量，不含密码、密钥、恢复码或令牌，也不随用户删除级联清除。
+通用审计的 `CLI`/`break-glass/account-recover`/`local` 标识本地操作，不声称目标本人执行，
+也不声称原因已纳入既有通用哈希载荷；操作者归属由受控运维会话提供。
+存在恢复审计或任意受限标志时，两引擎均在迁移元数据变脏之前拒绝降到此 schema 以下；
+仅未使用时可降级，缺列或损坏保护器不得自动修复。
+
+确认值沿用 `XIRANG_BREAK_GLASS_CONFIRMATION`，仅为本地显式确认，不是登录凭据。
+确认值及新密码从控制终端无回显读取，密码不经 argv/env/file/stdin；新密码两次按原字节比较。
+原因 trim 后为 8–512 字节且拒绝控制字符。提交错误按结果未知处理，保留安全 operation ID；
+只读 `-status` 返回 committed/not-found，后者不证明仍在途的原事务未提交，也不是自动重放许可。
+具体使用与停机核验见[安全加固](../../admin/security.md#原账户密码或第二因子丢失)。
+
+受限用户通过正确密码后只取得十分钟 recovery enrollment：独立随机 JTI、精确
+`recovery_enrollment` purpose、原身份版本及 enrollment ID，签名到期时间与持久状态一致，
+不建立普通 session 或 pending login。签发事务重查密码验证时的 hash/version/role 快照，
+不能将旧密码验证升级为恢复后的新版本令牌；后一登录替换 enrollment，使前一令牌失效。
+required=true 与已启用 TOTP 的矛盾状态失败关闭。
+
+完成必须提交同一未过期 enrollment 的新验证器六位 TOTP，恢复码不能替代。单次事务启用新
+因子、清除受限标志和 enrollment、递增版本、清除 pending，并写独立 completion 审计；
+并发验证最多一个提交，只在确认提交后返回本次八个恢复码，不签发主令牌，不继承恢复
+令牌 JTI/TTL。提交结果未知时不重放、不重新显示未收到的码，应回正常密码＋新 TOTP 登录
+核验；若已完成，可通过既有本人恢复码重生成流程明确生成另一批。
+普通 setup/verify/disable、恢复码管理、pending login 及普通令牌签发不能绕过受限标志。
+
+密码登录的受限响应只含 `requires_reenrollment:true`、`recovery_token` 与
+`enrollment{secret,qr_url,issuer,enrollment_id,expires_at}`，不含主会话、用户或 pending 字段。
+`POST /auth/recovery/enrollment/verify` 位于普通 secured group 外，沿用登录限流，
+只接受 recovery-purpose Bearer 和 1 KiB 内的单个 `{code}` JSON；拒绝未知/重复字段、
+非法结构及尾随文档。成功仅返回 `recovery_codes`，不设置 Cookie 或 SessionBinding。
+旧版本、替换、过期、已消费及错误 purpose 统一为
+401 `RECOVERY_ENROLLMENT_INVALID`，错误验证码为 403 `TOTP_CODE_INVALID`，
+格式错误为 400，内部或未知提交为安全 500。所有登录与受限验证响应均为
+`Cache-Control: private, no-store`，包括限流和拒绝响应。
+
+主认证、realtime 与 step-up 还须读取并拒绝受限标志，不能只依赖 token version。
+临时授权创建事务持身份写锁并重查 requester 的角色、版本和受限标志；HTTP claims
+从可信 SessionBinding 传递版本，缺失或不匹配的绑定失败关闭。授权消费同样重查当前
+身份版本及受限标志，旧请求不能将 revoked 记录重新激活。不新增 grant epoch、
+后台审批者或在线全局撤销机制；已提交任务与外部效果不在此撤销保证内。
+
+浏览器将恢复响应作为独立分支严格校验，不允许与主会话或 pending 字段混合；
+恢复 token、二维码、密钥、验证码只存登录页私有内存，不进入 AuthProvider、URL、
+storage 或业务请求。二维码本地生成。密码与验证提交同步防重入；所有迟到响应检查
+挂载、请求归属和单调身份代次，身份 A→B→A 也不能恢复旧秘密。
+到期按服务器时间扣除请求耗时建立最长十分钟的单调截止时间；计时器只清理，
+不提交。返回、卸载、身份变化及到期清除本地秘密；验证在途到期按结果未知处理。
+
+验证成功后立即清除 token、二维码及验证码，仅显示本次八个恢复码；复制失败保留
+列表，明确勾选已保存后才能返回密码登录，并刷新 captcha、保留安全 redirect。
+刷新或退出会丢失未保存的码，不能从存储恢复；此过程始终不自动登录。
+只有真实 HTTP 状态和机器码一致的确定拒绝允许修正验证码；网络、5xx 或不可用
+成功响应清除秘密并提示可能已经绑定，不自动重试。中英文提示须表达相同边界。
+
+### 恢复码登录
+
 恢复码登录与验证器验证码共用 pending login token 和 `/api/v1/auth/2fa/login`，
-不增加恢复或管理员接管接口。仅在恢复码比较边界对输入去除首尾空白，再将 ASCII
+该登录方式不增加管理员接管接口，与离线重置后的受限 enrollment 分开。仅在恢复码比较边界对输入去除首尾空白，再将 ASCII
 小写字母转换为大写；不替换 Unicode 相似字，不移除内部空白，不修改已存 bcrypt
 哈希或历史明文。当前生成格式仍为 8 位字母数字，不以新增长度限制拒绝历史恢复码；
 TOTP 优先验证、加密库存 CAS、pending 一次性消费、事务回滚及限流保持不变。

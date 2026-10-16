@@ -1,12 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { StrictMode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { RecoveryEnrollmentError } from "@/lib/api/auth-api";
+import { bumpAuthSessionGeneration } from "@/lib/api/core";
 import { LoginPage } from "./login-page";
 
-const { navigateMock, loginMock, apiLoginMock, apiTotpLoginMock, getCaptchaMock, ApiErrorClass } = vi.hoisted(() => {
+const { navigateMock, loginMock, apiLoginMock, apiTotpLoginMock, apiCompleteRecoveryMock, getCaptchaMock, ApiErrorClass } = vi.hoisted(() => {
   class ApiError extends Error {
     status: number;
     detail?: unknown;
@@ -22,6 +24,7 @@ const { navigateMock, loginMock, apiLoginMock, apiTotpLoginMock, getCaptchaMock,
     loginMock: vi.fn(),
     apiLoginMock: vi.fn(),
     apiTotpLoginMock: vi.fn(),
+    apiCompleteRecoveryMock: vi.fn(),
     getCaptchaMock: vi.fn(),
     ApiErrorClass: ApiError,
   };
@@ -42,6 +45,7 @@ vi.mock("@/lib/api/client", () => ({
   apiClient: {
     login: apiLoginMock,
     totpLogin: apiTotpLoginMock,
+    completeRecoveryEnrollment: apiCompleteRecoveryMock,
     getCaptcha: getCaptchaMock,
   },
 }));
@@ -120,6 +124,7 @@ describe("LoginPage", () => {
     loginMock.mockReset();
     apiLoginMock.mockReset();
     apiTotpLoginMock.mockReset();
+    apiCompleteRecoveryMock.mockReset();
     getCaptchaMock.mockReset();
     // Default: captcha channels off — no UI fields.
     getCaptchaMock.mockResolvedValue({
@@ -679,5 +684,447 @@ describe("LoginPage", () => {
     });
     expect(navigateMock).toHaveBeenCalledWith("/app/overview", { replace: true });
     expect(screen.getByLabelText("验证码")).toHaveValue("");
+  });
+});
+
+const RECOVERY_SECRET = "JBSWY3DPEHPK3PXP";
+const RECOVERY_TOKEN = "recovery.token.value";
+const NEW_RECOVERY_CODES = ["AAAA1111", "BBBB2222", "CCCC3333", "DDDD4444", "EEEE5555", "FFFF6666", "GGGG7777", "HHHH8888"];
+
+function recoveryChallenge(expiresInMs = 10 * 60_000) {
+  const expiresAtMs = Date.now() + expiresInMs;
+  return {
+    recoveryEnrollment: {
+      recoveryToken: RECOVERY_TOKEN,
+      secret: RECOVERY_SECRET,
+      qrUrl: `otpauth://totp/XiRang:admin?issuer=XiRang&secret=${RECOVERY_SECRET}`,
+      issuer: "XiRang",
+      enrollmentId: "enrollment-1",
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      expiresAtMs,
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  let reject: (reason: unknown) => void = () => {};
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function storageDump(): string {
+  const entries: string[] = [];
+  for (const storage of [sessionStorage, localStorage]) {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index) ?? "";
+      entries.push(`${key}=${storage.getItem(key) ?? ""}`);
+    }
+  }
+  return entries.join("\n");
+}
+
+function passwordForm() {
+  const form = screen.getByRole("button", { name: "登录控制台" }).closest("form");
+  if (!(form instanceof HTMLFormElement)) throw new Error("missing password form");
+  return form;
+}
+
+function recoveryForm() {
+  const form = screen.getByTestId("recovery-enrollment-panel");
+  if (!(form instanceof HTMLFormElement)) throw new Error("missing recovery form");
+  return form;
+}
+
+async function typeCredentials(user: UserEvent) {
+  await user.type(screen.getByLabelText("用户名"), "admin");
+  await user.type(screen.getByLabelText("密码"), "secret");
+}
+
+async function reachRecoveryEnrollment(user: UserEvent, expiresInMs?: number) {
+  apiLoginMock.mockImplementationOnce(() => Promise.resolve(recoveryChallenge(expiresInMs)));
+  await typeCredentials(user);
+  await user.click(screen.getByRole("button", { name: "登录控制台" }));
+  await screen.findByTestId("recovery-enrollment-panel");
+}
+
+function notice() {
+  return screen.getByTestId("recovery-enrollment-notice");
+}
+
+describe("LoginPage offline-recovery enrollment", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+    sessionStorage.clear();
+    navigateMock.mockReset();
+    loginMock.mockReset();
+    apiLoginMock.mockReset();
+    apiTotpLoginMock.mockReset();
+    apiCompleteRecoveryMock.mockReset();
+    getCaptchaMock.mockReset();
+    getCaptchaMock.mockResolvedValue({ enabled: false, secondRequired: false });
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows only a page-local QR and secret without installing any identity or touching storage", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user);
+
+    expect(screen.getByRole("heading", { level: 2, name: "绑定新的验证器" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "绑定新验证器的二维码" })).toBeInTheDocument();
+    expect(screen.getByTestId("recovery-enrollment-secret")).toHaveTextContent(RECOVERY_SECRET);
+    expect(screen.getByLabelText("新验证器上的验证码")).toHaveValue("");
+    expect(screen.queryByLabelText("密码")).not.toBeInTheDocument();
+    expect(loginMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(apiTotpLoginMock).not.toHaveBeenCalled();
+    expect(apiCompleteRecoveryMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(storageDump()).not.toContain(RECOVERY_TOKEN);
+    expect(storageDump()).not.toContain(RECOVERY_SECRET);
+    expect(sessionStorage.length).toBe(0);
+    await waitFor(() => {
+      expect(screen.getByLabelText("新验证器上的验证码")).toHaveFocus();
+    });
+  });
+
+  it("completes binding, shows only this response's codes, gates return on saving, then requires a normal login", async () => {
+    const user = userEvent.setup();
+    renderLoginPageWithEntries(["/login?redirect=%2Fapp%2Fnodes"]);
+    await waitFor(() => expect(getCaptchaMock).toHaveBeenCalledTimes(1));
+    await reachRecoveryEnrollment(user);
+    apiCompleteRecoveryMock.mockResolvedValueOnce({ recoveryCodes: NEW_RECOVERY_CODES });
+
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "123 456");
+    await user.click(screen.getByRole("button", { name: "验证并完成绑定" }));
+
+    await screen.findByTestId("recovery-codes-panel");
+    expect(apiCompleteRecoveryMock).toHaveBeenCalledTimes(1);
+    expect(apiCompleteRecoveryMock).toHaveBeenCalledWith(RECOVERY_TOKEN, "123456");
+    const items = screen.getAllByTestId("recovery-enrollment-code-item");
+    expect(items.map((item) => item.textContent)).toEqual(NEW_RECOVERY_CODES);
+    expect(screen.queryByTestId("recovery-enrollment-secret")).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "绑定新验证器的二维码" })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(RECOVERY_SECRET);
+    expect(loginMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(storageDump()).not.toContain(NEW_RECOVERY_CODES[0]);
+
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValueOnce(new Error("denied"));
+    await user.click(screen.getByTestId("recovery-enrollment-copy"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("复制失败");
+    expect(screen.getAllByTestId("recovery-enrollment-code-item")).toHaveLength(8);
+
+    const returnButton = screen.getByTestId("recovery-enrollment-return");
+    expect(returnButton).toBeDisabled();
+    await user.click(returnButton);
+    expect(screen.getByTestId("recovery-codes-panel")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("我已将这些恢复码妥善保存"));
+    expect(returnButton).toBeEnabled();
+    await user.click(returnButton);
+
+    expect(screen.queryByTestId("recovery-codes-panel")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(NEW_RECOVERY_CODES[0]);
+    expect(notice()).toHaveTextContent("绑定已完成");
+    expect(screen.getByLabelText("用户名")).toHaveValue("admin");
+    expect(screen.getByLabelText("密码")).toHaveValue("");
+    await waitFor(() => expect(getCaptchaMock).toHaveBeenCalledTimes(2));
+    expect(apiLoginMock).toHaveBeenCalledTimes(1);
+    expect(loginMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+
+    apiLoginMock.mockResolvedValueOnce({ token: "jwt-new", user: { id: 7, username: "admin", role: "admin", totpEnabled: true } });
+    await user.type(screen.getByLabelText("密码"), "secret");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    await waitFor(() => {
+      expect(loginMock).toHaveBeenCalledWith("jwt-new", "admin", "admin", 7, true);
+    });
+    expect(navigateMock).toHaveBeenCalledWith("/app/nodes", { replace: true });
+  });
+
+  it("lets a wrong code be retried explicitly without leaving the enrollment", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user);
+    apiCompleteRecoveryMock
+      .mockRejectedValueOnce(new RecoveryEnrollmentError("code-invalid"))
+      .mockResolvedValueOnce({ recoveryCodes: NEW_RECOVERY_CODES });
+
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "111111");
+    await user.click(screen.getByRole("button", { name: "验证并完成绑定" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("验证码不正确");
+    expect(screen.getByTestId("recovery-enrollment-secret")).toHaveTextContent(RECOVERY_SECRET);
+    expect(screen.getByLabelText("新验证器上的验证码")).toHaveValue("");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(apiCompleteRecoveryMock).toHaveBeenCalledTimes(1);
+
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "222222");
+    await user.click(screen.getByRole("button", { name: "验证并完成绑定" }));
+    await screen.findByTestId("recovery-codes-panel");
+    expect(apiCompleteRecoveryMock).toHaveBeenNthCalledWith(2, RECOVERY_TOKEN, "222222");
+  });
+
+  it("rejects a malformed code locally without sending", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user);
+
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "12a");
+    await user.click(screen.getByRole("button", { name: "验证并完成绑定" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("6 位验证码");
+    expect(apiCompleteRecoveryMock).not.toHaveBeenCalled();
+  });
+
+  it("treats an unknown verification outcome as unknown, clears the secret and never replays", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user);
+    apiCompleteRecoveryMock.mockRejectedValueOnce(new RecoveryEnrollmentError("unknown"));
+
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "验证并完成绑定" }));
+
+    expect(await screen.findByTestId("recovery-enrollment-notice")).toHaveTextContent("绑定结果未知");
+    expect(screen.queryByTestId("recovery-enrollment-panel")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(RECOVERY_SECRET);
+    expect(screen.getByLabelText("密码")).toHaveValue("");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(apiCompleteRecoveryMock).toHaveBeenCalledTimes(1);
+    expect(loginMock).not.toHaveBeenCalled();
+  });
+
+  it("returns to password login when the enrollment is no longer valid", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user);
+    apiCompleteRecoveryMock.mockRejectedValueOnce(new RecoveryEnrollmentError("enrollment-invalid"));
+
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "验证并完成绑定" }));
+
+    expect(await screen.findByTestId("recovery-enrollment-notice")).toHaveTextContent("本次绑定已失效");
+    expect(document.body.textContent).not.toContain(RECOVERY_SECRET);
+  });
+
+  it("blocks duplicate verification and back while a verification is pending", async () => {
+    const pending = deferred<{ recoveryCodes: string[] }>();
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user);
+    apiCompleteRecoveryMock.mockReturnValueOnce(pending.promise);
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "123456");
+
+    fireEvent.submit(recoveryForm());
+    fireEvent.submit(recoveryForm());
+
+    expect(apiCompleteRecoveryMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("recovery-enrollment-back")).toBeDisabled();
+    expect(screen.getByTestId("recovery-enrollment-verify")).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("正在验证");
+    fireEvent.click(screen.getByTestId("recovery-enrollment-back"));
+    expect(screen.getByTestId("recovery-enrollment-panel")).toBeInTheDocument();
+
+    await act(async () => {
+      pending.resolve({ recoveryCodes: NEW_RECOVERY_CODES });
+    });
+    await screen.findByTestId("recovery-codes-panel");
+    expect(apiCompleteRecoveryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("back clears the enrollment and refreshes captcha without a notice", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    await waitFor(() => expect(getCaptchaMock).toHaveBeenCalledTimes(1));
+    await reachRecoveryEnrollment(user);
+
+    await user.click(screen.getByTestId("recovery-enrollment-back"));
+
+    expect(screen.queryByTestId("recovery-enrollment-panel")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("recovery-enrollment-notice")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(RECOVERY_SECRET);
+    expect(screen.getByLabelText("密码")).toHaveValue("");
+    await waitFor(() => expect(getCaptchaMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("expires on the conservative local deadline and clears the secret without any request", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user, 400);
+
+    await waitFor(() => {
+      expect(notice()).toHaveTextContent("已过期");
+    }, { timeout: 3000 });
+    expect(screen.queryByTestId("recovery-enrollment-panel")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(RECOVERY_SECRET);
+    expect(apiCompleteRecoveryMock).not.toHaveBeenCalled();
+  });
+
+  it("does not show an already-expired enrollment", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    apiLoginMock.mockResolvedValueOnce(recoveryChallenge(-1000));
+    await typeCredentials(user);
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+
+    expect(await screen.findByTestId("recovery-enrollment-notice")).toHaveTextContent("已过期");
+    expect(screen.queryByTestId("recovery-enrollment-panel")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(RECOVERY_SECRET);
+  });
+
+  it("expiry during a pending verification clears the secret and reports an unknown result, not a rollback", async () => {
+    const pending = deferred<{ recoveryCodes: string[] }>();
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user, 1500);
+    apiCompleteRecoveryMock.mockReturnValueOnce(pending.promise);
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "123456");
+    fireEvent.submit(recoveryForm());
+
+    await waitFor(() => {
+      expect(notice()).toHaveTextContent("绑定结果未知");
+    }, { timeout: 4000 });
+    expect(notice()).not.toHaveTextContent("已过期");
+    expect(screen.queryByTestId("recovery-enrollment-panel")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(RECOVERY_SECRET);
+    expect(screen.getByRole("button", { name: "登录控制台" })).toBeEnabled();
+
+    await act(async () => {
+      pending.resolve({ recoveryCodes: NEW_RECOVERY_CODES });
+    });
+    expect(screen.queryByTestId("recovery-codes-panel")).not.toBeInTheDocument();
+    expect(apiCompleteRecoveryMock).toHaveBeenCalledTimes(1);
+  }, 10_000);
+
+  it("clears the enrollment immediately on an identity change, even A→B→A", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user);
+
+    act(() => {
+      bumpAuthSessionGeneration();
+      bumpAuthSessionGeneration();
+    });
+
+    expect(screen.queryByTestId("recovery-enrollment-panel")).not.toBeInTheDocument();
+    expect(notice()).toHaveTextContent("绑定二维码已清除");
+    expect(document.body.textContent).not.toContain(RECOVERY_SECRET);
+  });
+
+  it("drops a verification result that arrives after an identity change and reports it as unknown", async () => {
+    const pending = deferred<{ recoveryCodes: string[] }>();
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user);
+    apiCompleteRecoveryMock.mockReturnValueOnce(pending.promise);
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "123456");
+    fireEvent.submit(recoveryForm());
+
+    act(() => {
+      bumpAuthSessionGeneration();
+    });
+    expect(notice()).toHaveTextContent("绑定结果未知");
+
+    await act(async () => {
+      pending.resolve({ recoveryCodes: NEW_RECOVERY_CODES });
+    });
+    expect(screen.queryByTestId("recovery-codes-panel")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(NEW_RECOVERY_CODES[0]);
+  });
+
+  it("clears displayed recovery codes on an identity change", async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+    await reachRecoveryEnrollment(user);
+    apiCompleteRecoveryMock.mockResolvedValueOnce({ recoveryCodes: NEW_RECOVERY_CODES });
+    await user.type(screen.getByLabelText("新验证器上的验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "验证并完成绑定" }));
+    await screen.findByTestId("recovery-codes-panel");
+
+    act(() => {
+      bumpAuthSessionGeneration();
+    });
+
+    expect(screen.queryByTestId("recovery-codes-panel")).not.toBeInTheDocument();
+    expect(notice()).toHaveTextContent("恢复码已从屏幕清除");
+    expect(document.body.textContent).not.toContain(NEW_RECOVERY_CODES[0]);
+  });
+
+  it("password submit is single-flight and ignores a response that lands after an identity change", async () => {
+    const pending = deferred<unknown>();
+    apiLoginMock.mockReturnValueOnce(pending.promise);
+    const user = userEvent.setup();
+    renderLoginPage();
+    await typeCredentials(user);
+
+    fireEvent.submit(passwordForm());
+    fireEvent.submit(passwordForm());
+    expect(apiLoginMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      bumpAuthSessionGeneration();
+    });
+    await act(async () => {
+      pending.resolve(recoveryChallenge());
+    });
+
+    expect(screen.queryByTestId("recovery-enrollment-panel")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(RECOVERY_SECRET);
+    expect(screen.getByRole("button", { name: "登录控制台" })).toBeEnabled();
+  });
+
+  it("does not install a stale ordinary session that lands after an identity change", async () => {
+    const pending = deferred<unknown>();
+    apiLoginMock.mockReturnValueOnce(pending.promise);
+    const user = userEvent.setup();
+    renderLoginPage();
+    await typeCredentials(user);
+    fireEvent.submit(passwordForm());
+
+    act(() => {
+      bumpAuthSessionGeneration();
+    });
+    await act(async () => {
+      pending.resolve({ token: "jwt-stale", user: { id: 1, username: "admin", role: "admin" } });
+    });
+
+    expect(loginMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a recovery response that lands after unmount", async () => {
+    const pending = deferred<unknown>();
+    apiLoginMock.mockReturnValueOnce(pending.promise);
+    const user = userEvent.setup();
+    const { unmount } = renderLoginPageStrict();
+    await typeCredentials(user);
+    fireEvent.submit(passwordForm());
+    unmount();
+
+    await act(async () => {
+      pending.resolve(recoveryChallenge());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(loginMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(storageDump()).not.toContain(RECOVERY_SECRET);
   });
 });

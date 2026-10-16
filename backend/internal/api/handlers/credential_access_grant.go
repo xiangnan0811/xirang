@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -567,6 +568,11 @@ func (h *CredentialAccessGrantHandler) createActiveSelfGrants(c *gin.Context, in
 		respondBadRequest(c, "授权资源不能为空")
 		return nil, false
 	}
+	claims := claimsFromGinContext(c)
+	if claims == nil {
+		respondForbidden(c, "认证状态已变化，请重新登录")
+		return nil, false
+	}
 	now := time.Now().UTC()
 	userID := middleware.CurrentUserID(c)
 	username := normalizeCredentialGrantIdentity(c.GetString(middleware.CtxUsername), 64)
@@ -593,8 +599,34 @@ func (h *CredentialAccessGrantHandler) createActiveSelfGrants(c *gin.Context, in
 		})
 	}
 	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		// Share the identity mutation lock with recovery before checking the
+		// authenticated snapshot. A request admitted before a reset must not
+		// create a new active grant after that reset commits.
+		if err := auth.SerializeIdentityMutationLock(tx); err != nil {
+			return err
+		}
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id", "role", "token_version", "totp_reenrollment_required").
+			First(&user, claims.UserID).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrCredentialGrantInvalid
+		} else if err != nil {
+			return err
+		}
+		if user.Role != claims.Role || user.TokenVersion != claims.TokenVersion || user.TOTPReenrollmentRequired {
+			return ErrCredentialGrantInvalid
+		}
+		for _, input := range inputs {
+			if !credentialGrantRoleAllowed(user.Role, credentialGrantAllowedRolesForOperation(input.Action, input.Purpose)) {
+				return ErrCredentialGrantInvalid
+			}
+		}
 		return tx.Create(&grants).Error
 	}); err != nil {
+		if errors.Is(err, ErrCredentialGrantInvalid) {
+			respondForbidden(c, "认证状态已变化，请重新登录")
+			return nil, false
+		}
 		respondInternalError(c, err)
 		return nil, false
 	}
@@ -867,17 +899,17 @@ type credentialGrantMatch struct {
 }
 
 func findActiveCredentialGrant(ctx context.Context, db *gorm.DB, claims *auth.Claims, match credentialGrantMatch) (*model.CredentialAccessGrant, error) {
-	if db == nil || claims == nil || claims.UserID == 0 || strings.TrimSpace(match.Action) == "" || strings.TrimSpace(match.Purpose) == "" {
+	if db == nil || claims == nil || claims.UserID == 0 || claims.Purpose != "" || strings.TrimSpace(match.Action) == "" || strings.TrimSpace(match.Purpose) == "" {
 		return nil, ErrCredentialGrantRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	var user model.User
-	if err := db.WithContext(ctx).Select("id", "role").First(&user, claims.UserID).Error; err != nil {
+	if err := db.WithContext(ctx).Select("id", "role", "token_version", "totp_reenrollment_required").First(&user, claims.UserID).Error; err != nil {
 		return nil, err
 	}
-	if user.Role != claims.Role || !credentialGrantRoleAllowed(user.Role, credentialGrantAllowedRolesForOperation(match.Action, match.Purpose)) {
+	if user.TOTPReenrollmentRequired || user.TokenVersion != claims.TokenVersion || user.Role != claims.Role || !credentialGrantRoleAllowed(user.Role, credentialGrantAllowedRolesForOperation(match.Action, match.Purpose)) {
 		return nil, ErrCredentialGrantInvalid
 	}
 	now := time.Now().UTC()
@@ -1189,10 +1221,17 @@ func claimsFromGinContext(c *gin.Context) *auth.Claims {
 	if c == nil {
 		return nil
 	}
+	session, ok := middleware.CurrentSessionBinding(c)
+	if !ok || session.UserID == 0 || session.UserID != middleware.CurrentUserID(c) ||
+		session.Role == "" || session.Role != middleware.CurrentRole(c) ||
+		session.JTI == "" || !session.ExpiresAt.After(time.Now().UTC()) {
+		return nil
+	}
 	return &auth.Claims{
-		UserID:   middleware.CurrentUserID(c),
-		Username: c.GetString(middleware.CtxUsername),
-		Role:     middleware.CurrentRole(c),
+		UserID:       session.UserID,
+		Username:     c.GetString(middleware.CtxUsername),
+		Role:         session.Role,
+		TokenVersion: session.TokenVersion,
 	}
 }
 

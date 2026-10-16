@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	Purpose2FAPending = "2fa_pending"
-	PurposeStepUp     = "step_up"
-	StepUpProofTTL    = 5 * time.Minute
+	Purpose2FAPending         = "2fa_pending"
+	PurposeStepUp             = "step_up"
+	StepUpProofTTL            = 5 * time.Minute
+	PurposeRecoveryEnrollment = "recovery_enrollment"
 )
 
 type Claims struct {
@@ -32,6 +33,7 @@ type Claims struct {
 	SessionID    string       `json:"sid,omitempty"`
 	TOTPBinding  string       `json:"totp_binding,omitempty"`
 	TokenVersion uint         `json:"ver"`
+	EnrollmentID string       `json:"enrollment_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -93,6 +95,9 @@ func (m *JWTManager) loadRevokedFromDB() {
 // token is returned. Completion must consume that row in the same transaction
 // as any recovery-code mutation.
 func (m *JWTManager) Generate2FAPendingToken(user model.User) (string, error) {
+	if user.TOTPReenrollmentRequired {
+		return "", ErrRecoveryEnrollmentInvalid
+	}
 	bindingSecret, err := secure.DecryptIfNeeded(user.TOTPSecret)
 	if err != nil {
 		return "", fmt.Errorf("解密 2FA 绑定密钥失败: %w", err)
@@ -191,6 +196,9 @@ func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction, s
 }
 
 func (m *JWTManager) GenerateToken(user model.User) (string, error) {
+	if user.TOTPReenrollmentRequired {
+		return "", ErrRecoveryEnrollmentInvalid
+	}
 	now := time.Now()
 	tokenID, err := generateTokenID()
 	if err != nil {
@@ -217,6 +225,9 @@ func (m *JWTManager) GenerateToken(user model.User) (string, error) {
 // user token version; the session JTI and expiry are deliberately preserved so
 // logout and the original session lifetime continue to apply.
 func (m *JWTManager) generateActivationToken(user model.User, session TOTPActivationSession) (string, error) {
+	if user.TOTPReenrollmentRequired {
+		return "", ErrRecoveryEnrollmentInvalid
+	}
 	if m == nil {
 		return "", fmt.Errorf("JWT 管理器未初始化")
 	}

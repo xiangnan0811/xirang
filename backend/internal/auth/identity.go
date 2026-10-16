@@ -111,16 +111,17 @@ type TOTPLoginResult struct {
 }
 
 type storedIdentityUser struct {
-	ID                      uint         `gorm:"column:id"`
-	Username                string       `gorm:"column:username"`
-	PasswordHash            string       `gorm:"column:password_hash"`
-	Role                    string       `gorm:"column:role"`
-	TOTPSecret              string       `gorm:"column:totp_secret"`
-	TOTPEnabled             bool         `gorm:"column:totp_enabled"`
-	RecoveryCodes           string       `gorm:"column:recovery_codes"`
-	TokenVersion            uint         `gorm:"column:token_version"`
-	TOTPEnrollmentID        string       `gorm:"column:totp_enrollment_id"`
-	TOTPEnrollmentExpiresAt sql.NullTime `gorm:"column:totp_enrollment_expires_at"`
+	ID                       uint         `gorm:"column:id"`
+	Username                 string       `gorm:"column:username"`
+	PasswordHash             string       `gorm:"column:password_hash"`
+	Role                     string       `gorm:"column:role"`
+	TOTPSecret               string       `gorm:"column:totp_secret"`
+	TOTPEnabled              bool         `gorm:"column:totp_enabled"`
+	TOTPReenrollmentRequired bool         `gorm:"column:totp_reenrollment_required"`
+	RecoveryCodes            string       `gorm:"column:recovery_codes"`
+	TokenVersion             uint         `gorm:"column:token_version"`
+	TOTPEnrollmentID         string       `gorm:"column:totp_enrollment_id"`
+	TOTPEnrollmentExpiresAt  sql.NullTime `gorm:"column:totp_enrollment_expires_at"`
 }
 
 func (row storedIdentityUser) user() (model.User, error) {
@@ -133,15 +134,16 @@ func (row storedIdentityUser) user() (model.User, error) {
 		return model.User{}, fmt.Errorf("解密恢复码失败: %w", err)
 	}
 	user := model.User{
-		ID:               row.ID,
-		Username:         row.Username,
-		PasswordHash:     row.PasswordHash,
-		Role:             row.Role,
-		TOTPSecret:       secret,
-		TOTPEnabled:      row.TOTPEnabled,
-		RecoveryCodes:    recoveryCodes,
-		TokenVersion:     row.TokenVersion,
-		TOTPEnrollmentID: row.TOTPEnrollmentID,
+		ID:                       row.ID,
+		Username:                 row.Username,
+		PasswordHash:             row.PasswordHash,
+		Role:                     row.Role,
+		TOTPSecret:               secret,
+		TOTPEnabled:              row.TOTPEnabled,
+		TOTPReenrollmentRequired: row.TOTPReenrollmentRequired,
+		RecoveryCodes:            recoveryCodes,
+		TokenVersion:             row.TokenVersion,
+		TOTPEnrollmentID:         row.TOTPEnrollmentID,
 	}
 	if row.TOTPEnrollmentExpiresAt.Valid {
 		expiresAt := row.TOTPEnrollmentExpiresAt.Time
@@ -158,7 +160,7 @@ func loadStoredIdentityUser(tx *gorm.DB, userID uint, lock bool) (storedIdentity
 	var row storedIdentityUser
 	result := query.Select(
 		"id", "username", "password_hash", "role", "totp_secret", "totp_enabled",
-		"recovery_codes", "token_version", "totp_enrollment_id", "totp_enrollment_expires_at",
+		"recovery_codes", "token_version", "totp_enrollment_id", "totp_enrollment_expires_at", "totp_reenrollment_required",
 	).Where("id = ?", userID).Take(&row)
 	if result.Error != nil {
 		return storedIdentityUser{}, result.Error
@@ -319,7 +321,7 @@ func (s *Service) RecoveryCodesRemaining(ctx context.Context, session RecoveryCo
 		}
 		return 0, ErrRecoveryCodeInternal
 	}
-	if row.ID != session.UserID || row.Role != session.Role || row.TokenVersion != session.TokenVersion {
+	if row.TOTPReenrollmentRequired || row.ID != session.UserID || row.Role != session.Role || row.TokenVersion != session.TokenVersion {
 		return 0, ErrRecoveryCodeSessionInvalid
 	}
 	user, err := row.user()
@@ -361,7 +363,7 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, session RecoveryC
 		}
 		return nil, ErrRecoveryCodeInternal
 	}
-	if baseline.ID != session.UserID || baseline.Role != session.Role || baseline.TokenVersion != session.TokenVersion {
+	if baseline.TOTPReenrollmentRequired || baseline.ID != session.UserID || baseline.Role != session.Role || baseline.TokenVersion != session.TokenVersion {
 		return nil, ErrRecoveryCodeSessionInvalid
 	}
 	baselineUser, err := baseline.user()
@@ -378,6 +380,9 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, session RecoveryC
 		row, err := loadStoredIdentityUser(tx, session.UserID, true)
 		if err != nil {
 			return err
+		}
+		if row.TOTPReenrollmentRequired {
+			return ErrRecoveryCodeSessionInvalid
 		}
 		now := identityNow(s)
 		if !session.ExpiresAt.After(now) {
@@ -436,8 +441,8 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, session RecoveryC
 		}
 
 		result = tx.Table("users").Where(
-			"id = ? AND role = ? AND token_version = ? AND totp_enabled = ? AND totp_secret = ? AND recovery_codes = ?",
-			session.UserID, session.Role, row.TokenVersion, true, row.TOTPSecret, row.RecoveryCodes,
+			"id = ? AND role = ? AND token_version = ? AND totp_reenrollment_required = ? AND totp_enabled = ? AND totp_secret = ? AND recovery_codes = ?",
+			session.UserID, session.Role, row.TokenVersion, false, true, row.TOTPSecret, row.RecoveryCodes,
 		).Update("recovery_codes", encryptedRecovery)
 		if result.Error != nil {
 			return result.Error
@@ -485,6 +490,9 @@ func (s *Service) SetupTOTP(ctx context.Context, userID uint, account string) (*
 		row, err := loadStoredIdentityUser(tx, userID, true)
 		if err != nil {
 			return err
+		}
+		if row.TOTPReenrollmentRequired {
+			return ErrRecoveryEnrollmentInvalid
 		}
 		if row.TOTPEnabled {
 			return ErrTOTPAlreadyEnabled
@@ -550,7 +558,7 @@ func (s *Service) VerifyTOTP(ctx context.Context, session TOTPActivationSession,
 		if err != nil {
 			return err
 		}
-		if row.ID != session.UserID || row.Role != session.Role || row.TokenVersion != session.TokenVersion {
+		if row.TOTPReenrollmentRequired || row.ID != session.UserID || row.Role != session.Role || row.TokenVersion != session.TokenVersion {
 			return ErrSecurityConflict
 		}
 		user, err := row.user()
@@ -678,6 +686,9 @@ func (s *Service) DisableTOTP(ctx context.Context, userID uint, password, code s
 		if err != nil {
 			return err
 		}
+		if row.TOTPReenrollmentRequired {
+			return ErrRecoveryEnrollmentInvalid
+		}
 		user, err := row.user()
 		if err != nil {
 			return err
@@ -737,6 +748,9 @@ func (s *Service) Complete2FALogin(ctx context.Context, loginToken, code string)
 			row, err := loadStoredIdentityUser(tx, claims.UserID, true)
 			if err != nil {
 				return err
+			}
+			if row.TOTPReenrollmentRequired {
+				return ErrPendingLoginInvalid
 			}
 			user, err = row.user()
 			if err != nil {

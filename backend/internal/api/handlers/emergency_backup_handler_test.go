@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/auth"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	nodePkg "xirang/backend/internal/node"
 	gormrepo "xirang/backend/internal/repository/gorm"
@@ -39,7 +41,7 @@ func TestEmergencyBackupHandlerReturnsTaskIDsAndSanitizesPartialErrors(t *testin
 	gin.SetMode(gin.TestMode)
 	db := openNodeHandlerTestDB(t)
 	if err := db.AutoMigrate(
-		&model.User{}, &model.Node{}, &model.Task{}, &model.CredentialAccessGrant{},
+		&model.User{}, &model.TokenRevocation{}, &model.Node{}, &model.Task{}, &model.CredentialAccessGrant{},
 		&model.CredentialAuditEvent{}, &model.AuditLog{},
 	); err != nil {
 		t.Fatalf("初始化紧急备份 handler 测试表失败: %v", err)
@@ -87,14 +89,14 @@ func TestEmergencyBackupHandlerReturnsTaskIDsAndSanitizesPartialErrors(t *testin
 	}
 	handler := NewNodeHandler(db, spy, nodePkg.NewNodeService(gormrepo.NewNodeRepository(db)))
 	router := gin.New()
-	router.POST("/nodes/:id/emergency-backup", func(c *gin.Context) {
-		c.Set("userID", user.ID)
-		c.Set("username", user.Username)
-		c.Set("role", user.Role)
-		c.Next()
-	}, handler.EmergencyBackup)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager.SetDB(db)
+	token := generatePrimaryToken(t, manager, user)
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.POST("/nodes/:id/emergency-backup", handler.EmergencyBackup)
 
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/emergency-backup", node.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK {

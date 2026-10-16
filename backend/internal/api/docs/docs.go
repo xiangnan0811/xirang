@@ -2826,7 +2826,7 @@ const docTemplate = `{
         },
         "/auth/2fa/login": {
             "post": {
-                "description": "使用预登录令牌和 TOTP 验证码（或恢复码）完成登录，返回完整 JWT",
+                "description": "使用预登录令牌和 TOTP 验证码（或恢复码）完成登录，返回完整 JWT；所有响应禁止缓存",
                 "consumes": [
                     "application/json"
                 ],
@@ -3179,7 +3179,7 @@ const docTemplate = `{
         },
         "/auth/login": {
             "post": {
-                "description": "使用用户名和密码登录，支持验证码和 2FA 预登录流程",
+                "description": "使用用户名和密码登录；离线恢复后仅返回受限 recovery_token 和 enrollment，不建立登录会话。所有响应禁止缓存。",
                 "consumes": [
                     "application/json"
                 ],
@@ -3216,6 +3216,24 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "423": {
+                        "description": "Locked",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -3284,6 +3302,87 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/recovery/enrollment/verify": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "仅接受 recovery_enrollment Bearer 和六位新验证码；请求体最多 1 KiB，仅允许 code 字段。成功只返回本次八个恢复码，不签发登录会话；提交结果未知时不得自动重放。所有响应禁止缓存。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "完成离线账户恢复后的受限 2FA 绑定",
+                "parameters": [
+                    {
+                        "description": "新验证器验证码",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.recoveryEnrollmentVerifyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.recoveryEnrollmentVerifyResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -20056,6 +20155,25 @@ const docTemplate = `{
             "properties": {
                 "remaining": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.recoveryEnrollmentVerifyRequest": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.recoveryEnrollmentVerifyResponse": {
+            "type": "object",
+            "properties": {
+                "recovery_codes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

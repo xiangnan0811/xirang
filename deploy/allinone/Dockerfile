@@ -26,6 +26,7 @@ RUN set -eux; \
     target_arch="${TARGETARCH:-$(go env GOARCH)}"; \
     CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server; \
     CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-recover-admin ./cmd/recover-admin; \
+    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-recover-account ./cmd/recover-account; \
     CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-rsync-confined ./cmd/rsync-confined; \
     CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-cron-db-backup ./cmd/cron-db-backup
 
@@ -85,6 +86,7 @@ RUN sed -i -e 's|/var/run/nginx.pid|/tmp/nginx.pid|g' -e 's| /run/nginx.pid| /tm
 COPY --from=web-builder /app/web/dist /usr/share/nginx/html
 COPY --from=backend-builder /out/xirang /usr/local/bin/xirang
 COPY --from=backend-builder /out/xirang-recover-admin /usr/local/bin/xirang-recover-admin
+COPY --from=backend-builder /out/xirang-recover-account /usr/local/bin/xirang-recover-account
 COPY --from=backend-builder /out/xirang-rsync-confined /usr/local/bin/xirang-rsync-confined
 COPY --from=backend-builder /out/xirang-cron-db-backup /usr/local/bin/xirang-cron-db-backup
 COPY deploy/nginx/templates/default.conf.template /etc/nginx/templates/default.conf.template

@@ -56,7 +56,7 @@
 | `LOGIN_SECOND_CAPTCHA_ENABLED` | bool | `false` | 否 | 启用二次验证码（settings 键 `login.second_captcha_enabled`，可通过设置 API 实时调整） |
 | `ADMIN_INITIAL_PASSWORD` | string | — | 尚无用户名为 `admin` 的用户时 | 初始 `admin` 密码；仅用户名为 `admin` 的记录不存在时创建，不是按管理员角色数量判断；已有该用户后不必填，也不会覆盖其密码 |
 | `DATA_ENCRYPTION_KEY` | string | 开发环境自动生成随机密钥（重启后失效） | 生产必填 | 敏感字段（密码、私钥）加密密钥，推荐 32 字节随机密钥的 base64；其他字符串经 Argon2id 派生。生产输入至少 16 字符且不能为已知占位符 |
-| `XIRANG_BREAK_GLASS_CONFIRMATION` | string | 空 | 管理员应急恢复时 | 仅 `xirang-recover-admin` 显式调用使用，须与交互确认一致；不是自动启动恢复开关，流程见[安全加固](admin/security.md) |
+| `XIRANG_BREAK_GLASS_CONFIRMATION` | string | 空 | 离线应急恢复时 | `xirang-recover-admin` 和 `xirang-recover-account` 显式调用使用，须与交互确认一致；不是登录凭据或自动启动恢复开关，流程见[安全加固](admin/security.md) |
 | `DATA_ENCRYPTION_LEGACY_KEY` | string | — | 否 | 密钥轮替期间用于解密历史 v1 字段，并作为上一把 v2 KEK rewrap 小型 domain-key envelope；两类迁移均验证完成后再清理 |
 
 **读取位置**：`JWT_SECRET` / `JWT_TTL` / 登录限流与锁定 → `backend/internal/config/config.go`，部分登录安全项同时注册到 settings 服务；登录验证码 → settings 服务 `login.captcha_enabled` / `login.second_captcha_enabled`；`ADMIN_INITIAL_PASSWORD` → `backend/internal/bootstrap/bootstrap.go`；`DATA_ENCRYPTION_KEY` → `backend/internal/secure/crypto.go`、`backend/internal/secure/keyring.go` 和 `backend/internal/config/config.go`；`DATA_ENCRYPTION_LEGACY_KEY` → `backend/internal/secure/crypto.go` 与 `backend/internal/secure/keyring.go`。

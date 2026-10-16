@@ -24,6 +24,9 @@ web/src/
 ## 模块归属
 
 - 路由页面放在 `pages/`。`router.tsx` 只构造路由对象；组件导出、懒加载声明与共用回退界面放在 `router-pages.tsx`，遵守[组件导出边界](component-guidelines.md#组件与导出边界)。
+- 登录页同样使用 `LazyPage` 的本地化加载回退，避免受限恢复界面进入首屏主包；
+  enrollment 二维码另按需加载本地编码器，验证码输入不放入二维码的 Suspense 边界，
+  保持输入焦点与秘密清理独立于二维码加载。
 - 大页面拆为同级 `*-page.<part>.tsx`，例如 `tasks-page.dialogs.tsx`，不要为一次性片段创建多层目录。
 - 拥有独立 Hook、分页签、图表和测试的内聚功能放在 `features/<feature>/`，例如 `features/nodes-detail/`。
 - 共用视觉原语放在 `components/ui/`；跨页面业务对话框和面板放在 `components/`，单路由内容就近存放。

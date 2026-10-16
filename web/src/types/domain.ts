@@ -814,7 +814,8 @@ export interface NewNodeInput {
   useSudo?: boolean;
 }
 
-export interface LoginResponse {
+/** Ordinary password login: a main session or a pending second-factor step. */
+export interface StandardLoginResponse {
   token?: string;
   user?: {
     id: number;
@@ -824,7 +825,34 @@ export interface LoginResponse {
   };
   requires2FA?: boolean;
   loginToken?: string;
+  recoveryEnrollment?: undefined;
 }
+
+/**
+ * Restricted enrollment issued after an offline second-factor reset. The token only
+ * authorizes the recovery verify endpoint; it is never an ordinary session token.
+ */
+export interface RecoveryEnrollmentChallenge {
+  recoveryToken: string;
+  secret: string;
+  qrUrl: string;
+  issuer: string;
+  enrollmentId: string;
+  /** Server RFC3339 expiry as received. */
+  expiresAt: string;
+  /** Parsed finite epoch milliseconds of expiresAt. */
+  expiresAtMs: number;
+}
+
+export interface RecoveryEnrollmentLoginResponse {
+  token?: undefined;
+  user?: undefined;
+  requires2FA?: undefined;
+  loginToken?: undefined;
+  recoveryEnrollment: RecoveryEnrollmentChallenge;
+}
+
+export type LoginResponse = StandardLoginResponse | RecoveryEnrollmentLoginResponse;
 
 export interface UserRecord {
   id: number;

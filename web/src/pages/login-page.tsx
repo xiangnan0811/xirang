@@ -2,19 +2,41 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck } from "lucide-react";
+import { RecoveryCodesPanel, RecoveryEnrollmentPanel, type RecoveryCodesCopyState } from "@/components/recovery-enrollment-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/auth-context.hooks";
 import { useDocumentTitle } from "@/hooks/use-document-title";
+import { classifyRecoveryEnrollmentFailure } from "@/lib/api/auth-api";
 import { ApiError, apiClient } from "@/lib/api/client";
-import { normalizeRedirectTarget } from "@/lib/api/core";
+import { getAuthSessionGeneration, normalizeRedirectTarget, subscribeAuthSessionGeneration } from "@/lib/api/core";
+import type { RecoveryEnrollmentChallenge } from "@/types/domain";
 
 type LocationState = {
   from?: string;
 };
 
 type VerificationMode = "totp" | "recovery";
+
+type LoginMode = "password" | "two-factor" | "recovery-enrollment" | "recovery-codes";
+
+type RecoveryEnrollmentSession = {
+  challenge: RecoveryEnrollmentChallenge;
+  /** performance.now() instant after which the page treats the enrollment as expired. */
+  deadline: number;
+  expiresInMinutes: number;
+};
+
+type RecoveryNotice = {
+  tone: "info" | "warning";
+  message: string;
+};
+
+// Server enrollment TTL. The client never trusts a longer window than this even if its clock lags.
+const RECOVERY_ENROLLMENT_MAX_TTL_MS = 10 * 60_000;
+const RECOVERY_VERIFY_CODE_PATTERN = /^\d{6}$/;
 
 export function LoginPage() {
   const { t } = useTranslation();
@@ -38,16 +60,38 @@ export function LoginPage() {
   const [secondCaptchaQuestion, setSecondCaptchaQuestion] = useState<string | null>(null);
   const [secondCaptchaAnswer, setSecondCaptchaAnswer] = useState("");
 
+  const [mode, setModeState] = useState<LoginMode>("password");
+  // Mirrors mode for the identity-change listener, which runs outside render.
+  const modeRef = useRef<LoginMode>("password");
+
   // 2FA 步骤状态
-  const [requires2FA, setRequires2FA] = useState(false);
   const [loginToken, setLoginToken] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [verificationMode, setVerificationMode] = useState<VerificationMode>("totp");
   const totpInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Offline-recovery state. The restricted token, secret and new codes live only in this page's
+  // memory: never AuthProvider, storage, URL or cache.
+  const [recovery, setRecovery] = useState<RecoveryEnrollmentSession | null>(null);
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [recoveryCodesSaved, setRecoveryCodesSaved] = useState(false);
+  const [copyState, setCopyState] = useState<RecoveryCodesCopyState>("idle");
+  const [recoveryNotice, setRecoveryNotice] = useState<RecoveryNotice | null>(null);
+  const recoveryCodeInputRef = useRef<HTMLInputElement | null>(null);
+  const codesHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const recoveryCodesRef = useRef<string[]>([]);
+  const verifyPendingRef = useRef(false);
+
   // 同步 single-flight：submitting 状态赶不上同一轮里的第二次提交。
   const submittingRef = useRef(false);
+  // Request ownership: any back, expiry, identity change or unmount bumps it so late results drop.
+  const requestSeqRef = useRef(0);
   // 卸载后忽略迟到结果。StrictMode 先 cleanup 再跑 setup，必须在 setup 里设回 true。
   const mountedRef = useRef(false);
+  const identityChangedRef = useRef<() => void>(() => {});
+  const recoveryExpiredRef = useRef<() => void>(() => {});
 
   const errorId = "login-form-error";
 
@@ -114,16 +158,104 @@ export function LoginPage() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      requestSeqRef.current += 1;
+      submittingRef.current = false;
+      verifyPendingRef.current = false;
+      recoveryCodesRef.current = [];
     };
   }, []);
 
+  // Every identity generation bump (including A→B→A) drops in-flight ownership and clears any
+  // pending login token or recovery secret immediately.
+  useEffect(() => subscribeAuthSessionGeneration(() => identityChangedRef.current()), []);
+
   useEffect(() => {
-    if (!requires2FA) return;
+    if (!recovery) return;
+    const timer = window.setTimeout(
+      () => recoveryExpiredRef.current(),
+      Math.max(0, recovery.deadline - performance.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [recovery]);
+
+  useEffect(() => {
+    if (mode === "password") return;
     const frame = requestAnimationFrame(() => {
-      totpInputRef.current?.focus({ preventScroll: true });
+      const target = mode === "two-factor"
+        ? totpInputRef.current
+        : mode === "recovery-enrollment"
+          ? recoveryCodeInputRef.current
+          : codesHeadingRef.current;
+      target?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [requires2FA, verificationMode]);
+  }, [mode, verificationMode]);
+
+  const setMode = (next: LoginMode) => {
+    modeRef.current = next;
+    setModeState(next);
+  };
+
+  /** Releases the single-flight lock and orphans any in-flight request's result. */
+  const abandonInFlight = () => {
+    requestSeqRef.current += 1;
+    submittingRef.current = false;
+    verifyPendingRef.current = false;
+    setSubmitting(false);
+  };
+
+  /** Clears every recovery secret and returns to the password form. */
+  const leaveRecovery = (notice: RecoveryNotice | null) => {
+    recoveryCodesRef.current = [];
+    setRecovery(null);
+    setRecoveryCode("");
+    setRecoveryError(null);
+    setRecoveryCodes([]);
+    setRecoveryCodesSaved(false);
+    setCopyState("idle");
+    setPassword("");
+    setError(null);
+    setRecoveryNotice(notice);
+    setMode("password");
+    void fetchCaptcha();
+  };
+
+  useEffect(() => {
+    identityChangedRef.current = () => {
+      const current = modeRef.current;
+      const wasVerifying = verifyPendingRef.current;
+      abandonInFlight();
+      if (current === "password") return;
+      if (current === "two-factor") {
+        setLoginToken("");
+        setTotpCode("");
+        setVerificationMode("totp");
+        setError(null);
+        setMode("password");
+        void fetchCaptcha();
+        return;
+      }
+      leaveRecovery({
+        tone: "warning",
+        message: current === "recovery-codes"
+          ? t("login.recoveryEnrollmentCodesCleared")
+          : wasVerifying
+            ? t("login.recoveryEnrollmentUnknown")
+            : t("login.recoveryEnrollmentCleared"),
+      });
+    };
+    recoveryExpiredRef.current = () => {
+      if (modeRef.current !== "recovery-enrollment") return;
+      // The secret's lifetime is bounded by the deadline even mid-verification. A request already
+      // sent may still have committed, so that case is reported as unknown, never as expired.
+      const wasVerifying = verifyPendingRef.current;
+      abandonInFlight();
+      leaveRecovery({
+        tone: "warning",
+        message: wasVerifying ? t("login.recoveryEnrollmentUnknown") : t("login.recoveryEnrollmentExpired"),
+      });
+    };
+  });
 
   const queryRedirect = new URLSearchParams(location.search).get("redirect");
   const redirectTo = normalizeRedirectTarget((location.state as LocationState | null)?.from ?? queryRedirect);
@@ -132,10 +264,41 @@ export function LoginPage() {
     return <Navigate to={redirectTo} replace />;
   }
 
+  const enterRecoveryEnrollment = (challenge: RecoveryEnrollmentChallenge, requestStartedAt: number) => {
+    const receivedAt = performance.now();
+    // Conservative window: never longer than the server TTL, and the whole request RTT is
+    // charged because the server may have started the clock as soon as it received the request.
+    const remaining = Math.min(challenge.expiresAtMs - Date.now(), RECOVERY_ENROLLMENT_MAX_TTL_MS)
+      - (receivedAt - requestStartedAt);
+    setPassword("");
+    setCaptchaAnswer("");
+    setSecondCaptchaAnswer("");
+    if (remaining <= 0) {
+      setRecoveryNotice({ tone: "warning", message: t("login.recoveryEnrollmentExpired") });
+      void fetchCaptcha();
+      return;
+    }
+    setRecoveryCode("");
+    setRecoveryError(null);
+    setRecovery({
+      challenge,
+      deadline: receivedAt + remaining,
+      expiresInMinutes: Math.max(1, Math.floor(remaining / 60_000)),
+    });
+    setMode("recovery-enrollment");
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    const seq = ++requestSeqRef.current;
+    const generation = getAuthSessionGeneration();
+    const owns = () => mountedRef.current && requestSeqRef.current === seq && getAuthSessionGeneration() === generation;
     setSubmitting(true);
     setError(null);
+    setRecoveryNotice(null);
+    const requestStartedAt = performance.now();
 
     try {
       const result = await apiClient.login(username, password, {
@@ -144,13 +307,20 @@ export function LoginPage() {
         secondCaptchaId: secondCaptchaId ?? undefined,
         secondCaptchaAnswer: secondCaptchaQuestion ? secondCaptchaAnswer : undefined,
       });
+      if (!owns()) return;
+
+      // Recovery first: its token is restricted and must never reach the session install below.
+      if (result.recoveryEnrollment) {
+        enterRecoveryEnrollment(result.recoveryEnrollment, requestStartedAt);
+        return;
+      }
 
       if (result.requires2FA && result.loginToken) {
         setVerificationMode("totp");
         setTotpCode("");
         setError(null);
         setLoginToken(result.loginToken);
-        setRequires2FA(true);
+        setMode("two-factor");
         return;
       }
 
@@ -160,6 +330,7 @@ export function LoginPage() {
       }
       return;
     } catch (error) {
+      if (!owns()) return;
       void fetchCaptcha();
       if (error instanceof ApiError) {
         const payload =
@@ -193,7 +364,12 @@ export function LoginPage() {
       }
       setError(t("login.errorNetworkFailed"));
     } finally {
-      setSubmitting(false);
+      if (requestSeqRef.current === seq) {
+        submittingRef.current = false;
+        if (mountedRef.current) {
+          setSubmitting(false);
+        }
+      }
     }
   };
 
@@ -201,18 +377,21 @@ export function LoginPage() {
     event.preventDefault();
     if (submittingRef.current) return;
     submittingRef.current = true;
+    const seq = ++requestSeqRef.current;
+    const generation = getAuthSessionGeneration();
+    const owns = () => mountedRef.current && requestSeqRef.current === seq && getAuthSessionGeneration() === generation;
     setSubmitting(true);
     setError(null);
 
     try {
       const result = await apiClient.totpLogin(loginToken, totpCode);
-      if (!mountedRef.current) return;
+      if (!owns()) return;
       setLoginToken("");
       setTotpCode("");
       login(result.token, result.user.username, result.user.role, result.user.id, result.user.totpEnabled);
       navigate(redirectTo, { replace: true });
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!owns()) return;
       if (error instanceof ApiError) {
         if (error.status === 401) {
           setError(t("login.errorVerificationOrSessionInvalid"));
@@ -227,9 +406,11 @@ export function LoginPage() {
       }
       setError(t("login.errorVerifyNetworkFailed"));
     } finally {
-      submittingRef.current = false;
-      if (mountedRef.current) {
-        setSubmitting(false);
+      if (requestSeqRef.current === seq) {
+        submittingRef.current = false;
+        if (mountedRef.current) {
+          setSubmitting(false);
+        }
       }
     }
   };
@@ -243,12 +424,109 @@ export function LoginPage() {
 
   const handleBackToLogin = () => {
     if (submittingRef.current) return;
-    setRequires2FA(false);
+    setMode("password");
     setLoginToken("");
     setTotpCode("");
     setError(null);
     setVerificationMode("totp");
     void fetchCaptcha();
+  };
+
+  const handleRecoveryVerify = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const session = recovery;
+    if (submittingRef.current || !session) return;
+    const code = recoveryCode.replace(/\s+/g, "");
+    if (!RECOVERY_VERIFY_CODE_PATTERN.test(code)) {
+      setRecoveryError(t("login.recoveryEnrollmentCodeFormat"));
+      return;
+    }
+    if (performance.now() >= session.deadline) {
+      requestSeqRef.current += 1;
+      leaveRecovery({ tone: "warning", message: t("login.recoveryEnrollmentExpired") });
+      return;
+    }
+    submittingRef.current = true;
+    verifyPendingRef.current = true;
+    const seq = ++requestSeqRef.current;
+    const generation = getAuthSessionGeneration();
+    const owns = () => mountedRef.current && requestSeqRef.current === seq && getAuthSessionGeneration() === generation;
+    setSubmitting(true);
+    setRecoveryError(null);
+
+    try {
+      const { recoveryCodes: codes } = await apiClient.completeRecoveryEnrollment(session.challenge.recoveryToken, code);
+      if (!owns()) return;
+      // The enrollment is consumed: drop token, QR and secret before showing this one-time list.
+      setRecovery(null);
+      setRecoveryCode("");
+      recoveryCodesRef.current = codes;
+      setRecoveryCodes(codes);
+      setRecoveryCodesSaved(false);
+      setCopyState("idle");
+      setMode("recovery-codes");
+    } catch (failure) {
+      if (!owns()) return;
+      const { kind } = classifyRecoveryEnrollmentFailure(failure);
+      if (kind === "unknown") {
+        // Never replay: the server may have committed and the codes are not recoverable here.
+        leaveRecovery({ tone: "warning", message: t("login.recoveryEnrollmentUnknown") });
+        return;
+      }
+      if (kind === "enrollment-invalid") {
+        leaveRecovery({ tone: "warning", message: t("login.recoveryEnrollmentInvalid") });
+        return;
+      }
+      // Definitely not committed. Retrying is allowed only while the window is still open.
+      if (performance.now() >= session.deadline) {
+        leaveRecovery({ tone: "warning", message: t("login.recoveryEnrollmentExpired") });
+        return;
+      }
+      setRecoveryCode("");
+      setRecoveryError(
+        kind === "code-invalid"
+          ? t("login.recoveryEnrollmentCodeInvalid")
+          : kind === "rate-limited"
+            ? t("login.recoveryEnrollmentRateLimited")
+            : kind === "not-sent"
+              ? t("login.recoveryEnrollmentNotSent")
+              : t("login.recoveryEnrollmentCodeFormat"),
+      );
+      requestAnimationFrame(() => recoveryCodeInputRef.current?.focus({ preventScroll: true }));
+    } finally {
+      if (requestSeqRef.current === seq) {
+        submittingRef.current = false;
+        verifyPendingRef.current = false;
+        if (mountedRef.current) {
+          setSubmitting(false);
+        }
+      }
+    }
+  };
+
+  const handleRecoveryBack = () => {
+    // A sent verification may commit; leaving now would hide its one-time codes.
+    if (submittingRef.current) return;
+    requestSeqRef.current += 1;
+    leaveRecovery(null);
+  };
+
+  const handleCopyRecoveryCodes = async () => {
+    const codes = recoveryCodesRef.current;
+    if (codes.length === 0) return;
+    const stillShown = () => mountedRef.current && recoveryCodesRef.current === codes;
+    try {
+      await navigator.clipboard.writeText(codes.join("\n"));
+      if (stillShown()) setCopyState("copied");
+    } catch {
+      if (stillShown()) setCopyState("failed");
+    }
+  };
+
+  const handleRecoveryReturn = () => {
+    if (!recoveryCodesSaved) return;
+    requestSeqRef.current += 1;
+    leaveRecovery({ tone: "info", message: t("login.recoveryEnrollmentCompleted") });
   };
 
   return (
@@ -300,12 +578,24 @@ export function LoginPage() {
               <ShieldCheck className="size-6" aria-hidden />
             </div>
             <p className="text-center text-3xl font-bold tracking-tight md:hidden">{t("login.consoleName")}</p>
-            {requires2FA ? (
+            {mode === "two-factor" ? (
               <>
                 <CardTitle as="h2" className="text-2xl font-bold">{t("login.twoFactorTitle")}</CardTitle>
                 <CardDescription id="login-verification-help" className="text-base">
                   {verificationMode === "recovery" ? t("login.recoveryCodeHelp") : t("login.twoFactorDesc")}
                 </CardDescription>
+              </>
+            ) : mode === "recovery-enrollment" ? (
+              <>
+                <CardTitle as="h2" className="text-2xl font-bold">{t("login.recoveryEnrollmentTitle")}</CardTitle>
+                <CardDescription className="text-base">{t("login.recoveryEnrollmentDesc")}</CardDescription>
+              </>
+            ) : mode === "recovery-codes" ? (
+              <>
+                <CardTitle as="h2" ref={codesHeadingRef} tabIndex={-1} className="text-2xl font-bold focus:outline-none">
+                  {t("login.recoveryEnrollmentCodesTitle")}
+                </CardTitle>
+                <CardDescription className="text-base">{t("login.recoveryEnrollmentCodesDesc")}</CardDescription>
               </>
             ) : (
               <>
@@ -315,7 +605,7 @@ export function LoginPage() {
             )}
           </CardHeader>
           <CardContent className="animate-slide-up [animation-delay:300ms]">
-            {requires2FA ? (
+            {mode === "two-factor" ? (
               <form className="space-y-4" onSubmit={handle2FASubmit}>
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="totp-code">
@@ -373,6 +663,28 @@ export function LoginPage() {
                   {t("login.backToLogin")}
                 </Button>
               </form>
+            ) : mode === "recovery-enrollment" && recovery ? (
+              <RecoveryEnrollmentPanel
+                qrUrl={recovery.challenge.qrUrl}
+                secret={recovery.challenge.secret}
+                expiresInMinutes={recovery.expiresInMinutes}
+                code={recoveryCode}
+                onCodeChange={setRecoveryCode}
+                onSubmit={handleRecoveryVerify}
+                onBack={handleRecoveryBack}
+                submitting={submitting}
+                error={recoveryError}
+                codeInputRef={recoveryCodeInputRef}
+              />
+            ) : mode === "recovery-codes" ? (
+              <RecoveryCodesPanel
+                codes={recoveryCodes}
+                copyState={copyState}
+                onCopy={() => { void handleCopyRecoveryCodes(); }}
+                saved={recoveryCodesSaved}
+                onSavedChange={setRecoveryCodesSaved}
+                onReturn={handleRecoveryReturn}
+              />
             ) : (
               <div className="space-y-4">
                 {demoModeEnabled ? (
@@ -382,6 +694,11 @@ export function LoginPage() {
                     <Button className="mt-3 w-full" type="button" variant="secondary" onClick={() => navigate("/app/overview", { replace: true })}>
                       {t("login.demoEnter")}
                     </Button>
+                  </div>
+                ) : null}
+                {recoveryNotice ? (
+                  <div data-testid="recovery-enrollment-notice">
+                    <InlineAlert tone={recoveryNotice.tone}>{recoveryNotice.message}</InlineAlert>
                   </div>
                 ) : null}
                 <form className="space-y-4" onSubmit={handleSubmit}>

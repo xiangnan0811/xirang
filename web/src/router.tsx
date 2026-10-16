@@ -2,7 +2,6 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 import { canonicalizeBackupLocation } from "@/lib/backup-navigation";
 import { AppShell } from "@/components/layout/app-shell";
 import { ProtectedRoute } from "@/components/protected-route";
-import { LoginPage } from "@/pages/login-page";
 import {
   AuditPage,
   AutomationRulesPage,
@@ -13,6 +12,7 @@ import {
   BackupsOverviewPage,
   BackupsRecoveryPage,
   CredentialsPage,
+  LoginPage,
   LazyPage,
   LogsPage,
   MorePage,
@@ -35,7 +35,7 @@ export const AppRouter = createBrowserRouter([
   },
   {
     path: "/login",
-    element: <LoginPage />
+    element: <LazyPage><LoginPage /></LazyPage>
   },
   {
     path: "/app",
