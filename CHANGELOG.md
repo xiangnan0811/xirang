@@ -17,6 +17,13 @@
 - 所有恢复操作前必须确认全部已升级 Core/worker 停机；`-offline-confirmed` 是操作者声明，工具不会检测或强制远端停机。新版登录页采用既有懒加载边界，二维码本地按需编码，不访问外部二维码服务。公开发布、本地双引擎及浏览器验收不代表生产部署或真实账户恢复已执行。
 
 
+## [0.67.0](https://github.com/xiangnan0811/xirang/compare/v0.66.4...v0.67.0) (2026-10-16)
+
+
+### ✨ Features
+
+* **auth:** add controlled offline account recovery ([#628](https://github.com/xiangnan0811/xirang/issues/628)) ([73a2721](https://github.com/xiangnan0811/xirang/commit/73a27215f642771f7d132cbc8c220b1a93f8cc4f))
+
 ## [0.66.4](https://github.com/xiangnan0811/xirang/compare/v0.66.3...v0.66.4) (2026-10-16)
 
 
