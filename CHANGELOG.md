@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+
+## [0.67.0](https://github.com/xiangnan0811/xirang/compare/v0.66.4...v0.67.0) (2026-10-16)
+
+
+### ✨ Features
+
+* **auth:** add controlled offline account recovery ([#628](https://github.com/xiangnan0811/xirang/issues/628)) ([73a2721](https://github.com/xiangnan0811/xirang/commit/73a27215f642771f7d132cbc8c220b1a93f8cc4f))
+
 ### 新增
 
 - 新增受控离线原账户恢复工具 `xirang-recover-account`，支持仅重置密码、仅重置第二因子或同时重置；第二因子重置后通过浏览器受限流程重新绑定验证器，保留原用户 ID、角色和业务关联。
