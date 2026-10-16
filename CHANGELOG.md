@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+
+## [0.67.0](https://github.com/xiangnan0811/xirang/compare/v0.66.4...v0.67.0) (2026-10-16)
+
+
+### ✨ Features
+
+* **auth:** add controlled offline account recovery ([#628](https://github.com/xiangnan0811/xirang/issues/628)) ([73a2721](https://github.com/xiangnan0811/xirang/commit/73a27215f642771f7d132cbc8c220b1a93f8cc4f))
+
 ### 新增
 
 - 新增受控离线原账户恢复工具 `xirang-recover-account`，支持仅重置密码、仅重置第二因子或同时重置；第二因子重置后通过浏览器受限流程重新绑定验证器，保留原用户 ID、角色和业务关联。
@@ -16,13 +24,6 @@
 - 任意恢复审计或受限用户存在后禁止降到迁移 94 以下；不得删除审计、修改迁移元数据或换旧二进制绕过。仅未使用数据库可执行对应 down；需要回退时使用升级前数据库副本及其匹配配置、密钥和旧二进制进行隔离恢复核验，不将恢复旧库解释为撤销外部效果。
 - 所有恢复操作前必须确认全部已升级 Core/worker 停机；`-offline-confirmed` 是操作者声明，工具不会检测或强制远端停机。新版登录页采用既有懒加载边界，二维码本地按需编码，不访问外部二维码服务。公开发布、本地双引擎及浏览器验收不代表生产部署或真实账户恢复已执行。
 
-
-## [0.67.0](https://github.com/xiangnan0811/xirang/compare/v0.66.4...v0.67.0) (2026-10-16)
-
-
-### ✨ Features
-
-* **auth:** add controlled offline account recovery ([#628](https://github.com/xiangnan0811/xirang/issues/628)) ([73a2721](https://github.com/xiangnan0811/xirang/commit/73a27215f642771f7d132cbc8c220b1a93f8cc4f))
 
 ## [0.66.4](https://github.com/xiangnan0811/xirang/compare/v0.66.3...v0.66.4) (2026-10-16)
 
