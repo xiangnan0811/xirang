@@ -1,11 +1,22 @@
 import "@testing-library/jest-dom/vitest";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useEffect } from "react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
+import type { NavigateFunction } from "react-router-dom";
 import { LogsPage } from "./logs-page";
-import type { LogEvent } from "@/types/domain";
-import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
+import type { LogEvent, TaskRunRecord } from "@/types/domain";
+import type * as ApiClientModule from "@/lib/api/client";
+import {
+  ApiError,
+  beginAuthTransitionBarrier,
+  bumpAuthSessionGeneration,
+  clearAuthTransitionBarrier,
+  getAuthIdentitySnapshot,
+  rememberAuthIdentity,
+  releaseAuthTransitionBarrier,
+} from "@/lib/api/core";
 import i18n from "@/i18n";
 import {
   keywordStorageKey,
@@ -60,6 +71,11 @@ const refreshTaskMock = vi.fn().mockResolvedValue(undefined);
 const nodesRef: { current: Record<string, unknown> } = { current: {} };
 const tasksRef: { current: Record<string, unknown> } = { current: {} };
 const liveTaskIds: Array<number | undefined> = [];
+const liveOptions: Array<{ taskId?: number; enabled?: boolean }> = [];
+const { getTaskRunMock, getTaskRunLogsMock } = vi.hoisted(() => ({
+  getTaskRunMock: vi.fn(),
+  getTaskRunLogsMock: vi.fn(),
+}));
 const authRef: {
   current: { token: string | null; role: "admin" | "operator" | "viewer" | null };
 } = { current: { token: "test-token", role: "admin" } };
@@ -85,11 +101,24 @@ vi.mock("@/context/auth-context.hooks", () => ({
 }));
 
 vi.mock("@/hooks/use-live-logs", () => ({
-  useLiveLogs: (_token: string | null, options?: { taskId?: number }) => {
+  useLiveLogs: (_token: string | null, options?: { taskId?: number; enabled?: boolean }) => {
     liveTaskIds.push(options?.taskId);
+    liveOptions.push({ ...options });
     return liveLogsRef.current;
   },
 }));
+
+vi.mock("@/lib/api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof ApiClientModule>();
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      getTaskRun: getTaskRunMock,
+      getTaskRunLogs: getTaskRunLogsMock,
+    },
+  };
+});
 
 vi.mock("@/context/nodes-context.hooks", () => ({
   useNodesContext: () => nodesRef.current,
@@ -1130,5 +1159,1028 @@ describe("LogsPage", () => {
     });
     expect(screen.queryByText("stale-generation-log")).not.toBeInTheDocument();
     expect(fetchTaskLogs).toHaveBeenCalledTimes(1);
+  });
+});
+
+const TASK_ID = 1001;
+const RUN_A = 77;
+const RUN_B = 78;
+const RUN_URL = `/app/logs?task=${TASK_ID}&run=${RUN_A}`;
+const navigateRef: { current: NavigateFunction | null } = { current: null };
+
+type TestIdentity = typeof authRef.current;
+
+function NavigationProbe() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigateRef.current = navigate;
+    return () => { navigateRef.current = null; };
+  }, [navigate]);
+  return null;
+}
+
+function renderRunLogs(initialEntry = RUN_URL) {
+  const tree = () => (
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <LogsPage />
+      <LocationSearch />
+      <NavigationProbe />
+    </MemoryRouter>
+  );
+  const view = render(tree());
+  return Object.assign(view, {
+    rerenderLogs() {
+      view.rerender(tree());
+    },
+  });
+}
+
+async function navigateLogs(to: string | number) {
+  const navigate = navigateRef.current;
+  if (!navigate) throw new Error("navigation probe is not mounted");
+  await act(async () => {
+    if (typeof to === "number") {
+      await navigate(to);
+    } else {
+      await navigate(to);
+    }
+  });
+}
+
+function switchIdentity(view: { rerenderLogs(): void }, next: TestIdentity) {
+  // Mirrors the provider order (bump generation, install the identity snapshot, publish useAuth)
+  // inside one batch, as the context-driven provider re-renders the whole page together.
+  act(() => {
+    authRef.current = next;
+    bumpAuthSessionGeneration();
+    rememberAuthIdentity(next.token, next.role);
+    view.rerenderLogs();
+  });
+}
+
+function runRecord(overrides: Partial<TaskRunRecord> = {}): TaskRunRecord {
+  return {
+    id: RUN_A,
+    taskId: TASK_ID,
+    triggerType: "manual",
+    status: "failed",
+    durationMs: 1000,
+    verifyStatus: "none",
+    throughputMbps: 0,
+    progress: 37,
+    lastError: "R16_RUN_DETAIL_ERROR_SECRET",
+    createdAt: "2026-02-24 10:00:00",
+    ...overrides,
+  };
+}
+
+function runLog(logId: number, message: string, overrides: Partial<LogEvent> = {}): LogEvent {
+  return {
+    id: `run-log-${logId}`,
+    logId,
+    timestamp: "2026-02-24 10:10:00",
+    level: "info",
+    message,
+    nodeName: "node-1",
+    taskId: TASK_ID,
+    taskRunId: RUN_A,
+    ...overrides,
+  };
+}
+
+function detailRequests() {
+  return getTaskRunMock.mock.calls.map(([token, runId]) => ({ token, runId }));
+}
+
+function runLogRequests() {
+  return getTaskRunLogsMock.mock.calls.map(([token, runId, options]) => {
+    const typed = options as { beforeId?: number; limit?: number } | undefined;
+    return { token, runId, beforeId: typed?.beforeId, limit: typed?.limit };
+  });
+}
+
+function runIdentity(runId = RUN_A, taskId = TASK_ID) {
+  return i18n.t("logs.runIdentity", { taskId, runId });
+}
+
+function pageText() {
+  const probe = screen.queryByTestId("logs-location-search")?.textContent ?? "";
+  return (document.body.textContent ?? "").replace(probe, "");
+}
+
+function exportButton() {
+  return screen.getByRole("button", { name: i18n.t("common.export") });
+}
+
+function fullscreenButton() {
+  return screen.getByRole("button", { name: i18n.t("logs.fullscreen") });
+}
+
+function olderButton() {
+  return screen.queryByRole("button", { name: i18n.t("logs.loadOlderLogs") })
+    ?? screen.getByRole("button", { name: i18n.t("logs.loadingOlder") });
+}
+
+function expectNoUsableOlderPage() {
+  const older = screen.queryByRole("button", { name: i18n.t("logs.loadOlderLogs") });
+  if (older) expect(older).toBeDisabled();
+  expect(screen.queryByText(/已到最早/)).not.toBeInTheDocument();
+}
+
+function retryControl() {
+  return screen.queryByRole("button", { name: i18n.t("common.retry") })
+    ?? screen.getByRole("button", { name: i18n.t("common.refresh") });
+}
+
+function navControl(name: string) {
+  return screen.queryByRole("link", { name }) ?? screen.getByRole("button", { name });
+}
+
+async function flushEffects() {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+function readBlobText(blob: Blob): Promise<string> {
+  // jsdom 的 Blob 不实现 text()，经 FileReader 读取导出内容。
+  const read = createDeferred<string>();
+  const reader = new FileReader();
+  reader.onload = () => read.resolve(String(reader.result));
+  reader.onerror = () => read.reject(reader.error);
+  reader.readAsText(blob);
+  return read.promise;
+}
+
+async function captureExport(trigger: () => Promise<void>) {
+  const blobs: Blob[] = [];
+  const names: string[] = [];
+  const create = vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+    blobs.push(blob as Blob);
+    return "blob:r16-run-export";
+  });
+  const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+    names.push(this.download);
+  });
+  try {
+    await trigger();
+  } finally {
+    create.mockRestore();
+    revoke.mockRestore();
+    click.mockRestore();
+  }
+  return { blobs, names };
+}
+
+function expectStoredPreferencesUntouched() {
+  expect(localStorage.getItem(selectedTaskStorageKey)).toBe(JSON.stringify("1002"));
+  expect(localStorage.getItem(selectedNodeStorageKey)).toBe(JSON.stringify("other"));
+  expect(localStorage.getItem(keywordStorageKey)).toBe(JSON.stringify("secret-filter"));
+}
+
+describe("LogsPage exact run", () => {
+  let originalIdentity = getAuthIdentitySnapshot();
+
+  beforeEach(() => {
+    localStorage.clear();
+    localStorage.setItem("xirang.language", "zh");
+    refreshTaskMock.mockReset();
+    refreshTaskMock.mockResolvedValue(undefined);
+    liveTaskIds.length = 0;
+    liveOptions.length = 0;
+    authRef.current = { token: "test-token", role: "admin" };
+    liveLogsRef.current = {
+      connected: true,
+      logs: [runLog(900, "R16 LIVE RUN B", { taskRunId: RUN_B, status: "running" })],
+      connectionWarning: "R16_LIVE_CONNECTION_WARNING",
+      cursorLogId: 900,
+    };
+    createContext([
+      { id: TASK_ID, progress: 20, status: "running" },
+      { id: 1002, progress: 0, status: "failed" },
+    ]);
+    const tasks = tasksRef.current.tasks as Array<{ id: number; errorCode?: string }>;
+    tasks[0].errorCode = "XR-EXEC-4242";
+    getTaskRunMock.mockReset();
+    getTaskRunMock.mockImplementation((_token: string, runId: number) =>
+      Promise.resolve(runRecord({ id: runId })));
+    getTaskRunLogsMock.mockReset();
+    getTaskRunLogsMock.mockResolvedValue([]);
+    originalIdentity = getAuthIdentitySnapshot();
+    rememberAuthIdentity("test-token", "admin");
+  });
+
+  afterEach(() => {
+    clearAuthTransitionBarrier();
+    rememberAuthIdentity(originalIdentity.token, originalIdentity.role);
+  });
+
+  it.each([
+    { label: "missing task", search: "run=77" },
+    { label: "empty run", search: "task=1001&run=" },
+    { label: "duplicate run", search: "task=1001&run=77&run=78" },
+    { label: "duplicate task", search: "task=1001&task=1001&run=77" },
+    { label: "zero run", search: "task=1001&run=0" },
+    { label: "negative run", search: "task=1001&run=-77" },
+    { label: "zero task", search: "task=0&run=77" },
+    { label: "whitespace", search: "task=1001&run=%2077" },
+    { label: "leading zero", search: "task=1001&run=077" },
+    { label: "exponent", search: "task=1001&run=7e1", raw: "7e1" },
+    { label: "decimal", search: "task=1001&run=77.0", raw: "77.0" },
+    { label: "all task", search: "task=all&run=77" },
+    { label: "non numeric", search: "task=1001&run=R16_RAW_RUN_INPUT", raw: "R16_RAW_RUN_INPUT" },
+    { label: "unsafe integer", search: "task=1001&run=9007199254740993", raw: "9007199254740993" },
+  ])("非法 Run 链接（$label）不读取、不回退、不显示实时或成功空态", async ({ search, raw }) => {
+    seedStaleLogFilters();
+    renderRunLogs(`/app/logs?${search}&panel=kept`);
+
+    expect(await screen.findByText(i18n.t("logs.runInvalidLink"))).toBeInTheDocument();
+    await flushEffects();
+    expect(getTaskRunMock).not.toHaveBeenCalled();
+    expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+    expect(taskLogsMock()).not.toHaveBeenCalled();
+    expect(refreshTaskMock).not.toHaveBeenCalled();
+    expect(liveOptions.length).toBeGreaterThan(0);
+    expect(liveOptions.every((options) => options.enabled === false)).toBe(true);
+    expect(screen.queryByText("R16 LIVE RUN B")).not.toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: i18n.t("common.export") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: i18n.t("logs.fullscreen") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    if (raw) expect(pageText()).not.toContain(raw);
+    expectStoredPreferencesUntouched();
+    expect(currentSearch().get("panel")).toBe("kept");
+  });
+
+  it("非法链接返回任务日志时清除 task/run/node/q 并保留无关参数", async () => {
+    const user = userEvent.setup();
+    renderRunLogs("/app/logs?task=1001&run=abc&node=node-1&q=secret&panel=kept");
+
+    await screen.findByText(i18n.t("logs.runInvalidLink"));
+    await user.click(navControl(i18n.t("logs.backToTaskLogs")));
+
+    await waitFor(() => {
+      expect(currentSearch().get("run")).toBeNull();
+    });
+    const search = currentSearch();
+    expect(search.get("task")).toBeNull();
+    expect(search.get("node")).toBeNull();
+    expect(search.get("q")).toBeNull();
+    expect(search.get("panel")).toBe("kept");
+    expect(screen.queryByText(i18n.t("logs.runInvalidLink"))).not.toBeInTheDocument();
+    expect(getTaskRunMock).not.toHaveBeenCalled();
+    expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+  });
+
+  it("先核对 detail 配对再读取精确日志，实时 B、任务状态、节点补全和偏好均不泄漏", async () => {
+    seedStaleLogFilters();
+    const detail = createDeferred<TaskRunRecord>();
+    const logs = createDeferred<LogEvent[]>();
+    getTaskRunMock.mockImplementationOnce(() => observeRejection(detail.promise));
+    getTaskRunLogsMock.mockImplementationOnce(() => observeRejection(logs.promise));
+    renderRunLogs(`${RUN_URL}&node=other&panel=kept`);
+
+    await waitFor(() => {
+      expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    });
+    expect(detailRequests()).toEqual([{ token: "test-token", runId: RUN_A }]);
+    expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+    expect(exportButton()).toBeDisabled();
+    expect(fullscreenButton()).toBeDisabled();
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+
+    await act(async () => {
+      detail.resolve(runRecord());
+    });
+    await waitFor(() => {
+      expect(getTaskRunLogsMock).toHaveBeenCalledTimes(1);
+    });
+    expect(runLogRequests()).toEqual([
+      { token: "test-token", runId: RUN_A, beforeId: undefined, limit: 200 },
+    ]);
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+    expect(exportButton()).toBeDisabled();
+
+    await act(async () => {
+      logs.resolve([
+        runLog(12, "R16 ONLY HISTORICAL RUN A", { nodeName: undefined }),
+        runLog(11, "R16 RUN A WITHOUT RUN ID", { nodeName: undefined, taskRunId: undefined }),
+      ]);
+    });
+    const region = await screen.findByRole("log", {
+      name: i18n.t("logs.terminalAriaLabel", { count: 2 }),
+    });
+    expect(within(region).getByText("R16 ONLY HISTORICAL RUN A")).toBeInTheDocument();
+    expect(within(region).getByText("R16 RUN A WITHOUT RUN ID")).toBeInTheDocument();
+    expect(within(region).queryByText(/node-1/)).not.toBeInTheDocument();
+    expect(screen.queryByText("R16 LIVE RUN B")).not.toBeInTheDocument();
+    expect(pageText()).toContain(runIdentity());
+    expect(pageText()).toContain(i18n.t("logs.runSnapshot"));
+    expect(exportButton()).toBeEnabled();
+    expect(fullscreenButton()).toBeEnabled();
+
+    expect(screen.queryByText(i18n.t("logs.connected"))).not.toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("logs.disconnected"))).not.toBeInTheDocument();
+    expect(pageText()).not.toContain("R16_LIVE_CONNECTION_WARNING");
+    expect(pageText()).not.toContain(i18n.t("logs.runningTasksMeta", { count: 1 }));
+    expect(pageText()).not.toContain(i18n.t("logs.failedTasksMeta", { count: 1 }));
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(pageText()).not.toContain("XR-EXEC-4242");
+    expect(pageText()).not.toContain("R16_RUN_DETAIL_ERROR_SECRET");
+    expect(screen.queryByRole("combobox", { name: i18n.t("logs.nodeFilter") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: i18n.t("logs.taskFilter") })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: i18n.t("logs.keywordFilter") })).toHaveValue("");
+
+    expect(refreshTaskMock).not.toHaveBeenCalled();
+    expect(taskLogsMock()).not.toHaveBeenCalled();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    expect(liveOptions.every((options) => options.enabled === false)).toBe(true);
+    expectStoredPreferencesUntouched();
+    expect(currentSearch().get("task")).toBe(String(TASK_ID));
+    expect(currentSearch().get("run")).toBe(String(RUN_A));
+    expect(currentSearch().get("panel")).toBe("kept");
+  });
+
+  it("导出与全屏只使用已加载且关键词筛选后的精确行，并标明 Task/Run 快照", async () => {
+    const user = userEvent.setup();
+    getTaskRunLogsMock.mockResolvedValueOnce([
+      runLog(22, "R16 A alpha row"),
+      runLog(21, "R16 A beta row"),
+    ]);
+    renderRunLogs(`${RUN_URL}&q=alpha`);
+
+    expect(await screen.findByText("R16 A alpha row")).toBeInTheDocument();
+    expect(screen.queryByText("R16 A beta row")).not.toBeInTheDocument();
+
+    const { blobs, names } = await captureExport(() => user.click(exportButton()));
+    expect(blobs).toHaveLength(1);
+    expect(names).toHaveLength(1);
+    expect(names[0]).toMatch(/^xirang-task-1001-run-77-.+\.txt$/);
+    const text = await readBlobText(blobs[0]);
+    const header = text.split("\n").slice(0, 2).join("\n");
+    expect(header).toContain(String(TASK_ID));
+    expect(header).toContain(String(RUN_A));
+    expect(text).toContain("R16 A alpha row");
+    expect(text).not.toContain("R16 A beta row");
+    expect(text).not.toContain("R16 LIVE RUN B");
+
+    await user.click(fullscreenButton());
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(runIdentity());
+    expect(within(dialog).getByText("R16 A alpha row")).toBeInTheDocument();
+    expect(within(dialog).queryByText("R16 A beta row")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("R16 LIVE RUN B")).not.toBeInTheDocument();
+    expect(getTaskRunLogsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "task", record: { id: RUN_A, taskId: 1002 } },
+    { label: "run", record: { id: RUN_B, taskId: TASK_ID } },
+  ])("detail 的 $label 与链接不匹配时显示配对错误，不读取 Run 日志也不回退任务日志", async ({ record }) => {
+    getTaskRunMock.mockImplementationOnce(() => Promise.resolve(runRecord(record)));
+    renderRunLogs();
+
+    expect(await screen.findByText(i18n.t("logs.runMismatch"))).toBeInTheDocument();
+    await flushEffects();
+    expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+    expect(taskLogsMock()).not.toHaveBeenCalled();
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+    expect(screen.queryByText("R16 LIVE RUN B")).not.toBeInTheDocument();
+    expectNoUsableOlderPage();
+    expect(exportButton()).toBeDisabled();
+    expect(fullscreenButton()).toBeDisabled();
+    expect(pageText()).toContain(runIdentity());
+  });
+
+  it.each(
+    (["detail", "logs"] as const).flatMap((phase) => [
+      { phase, label: "403", error: () => apiFailure(403), key: "logs.runForbidden" },
+      { phase, label: "404", error: () => apiFailure(404), key: "logs.runUnavailable" },
+      { phase, label: "500", error: () => apiFailure(500), key: "logs.runLoadFailed" },
+      { phase, label: "network", error: () => new Error("RAW_NETWORK_SECRET"), key: "logs.runLoadFailed" },
+    ]),
+  )("$phase 首批 $label 失败显示安全错误，而不是成功空态", async ({ phase, error, key }) => {
+    if (phase === "detail") {
+      getTaskRunMock.mockImplementationOnce(() => asRejected(error()));
+    } else {
+      getTaskRunLogsMock.mockImplementationOnce(() => asRejected(error()));
+    }
+    renderRunLogs();
+
+    expect(await screen.findByText(i18n.t(key))).toBeInTheDocument();
+    await flushEffects();
+    if (phase === "detail") {
+      expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+    }
+    expect(pageText()).not.toMatch(/RAW_|DETAIL_SECRET/);
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+    expectNoUsableOlderPage();
+    expect(exportButton()).toBeDisabled();
+    expect(fullscreenButton()).toBeDisabled();
+    expect(taskLogsMock()).not.toHaveBeenCalled();
+    expect(screen.queryByText("R16 LIVE RUN B")).not.toBeInTheDocument();
+    expect(pageText()).toContain(runIdentity());
+  });
+
+  it("普通首批失败经显式重试重新核对 detail，成功空页才显示 Run 空态", async () => {
+    const user = userEvent.setup();
+    getTaskRunMock.mockImplementationOnce(() => asRejected(new Error("RAW_NETWORK_SECRET")));
+    renderRunLogs();
+
+    expect(await screen.findByText(i18n.t("logs.runLoadFailed"))).toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+    expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+
+    const retryDetail = createDeferred<TaskRunRecord>();
+    getTaskRunMock.mockImplementationOnce(() => observeRejection(retryDetail.promise));
+    await user.click(retryControl());
+    await waitFor(() => {
+      expect(getTaskRunMock).toHaveBeenCalledTimes(2);
+    });
+    expect(exportButton()).toBeDisabled();
+    expect(fullscreenButton()).toBeDisabled();
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+    expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      retryDetail.resolve(runRecord());
+    });
+    expect(await screen.findByText(i18n.t("logs.emptyTitle"))).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("logs.runEmptyDesc"))).toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("logs.runLoadFailed"))).not.toBeInTheDocument();
+    expect(screen.getByText(/已到最早/)).toBeInTheDocument();
+    expect(exportButton()).toBeEnabled();
+    expect(getTaskRunLogsMock).toHaveBeenCalledTimes(1);
+    expect(taskLogsMock()).not.toHaveBeenCalled();
+  });
+
+  it("卸载后迟到的 detail 不再发起 Run 日志读取", async () => {
+    const pending = createDeferred<TaskRunRecord>();
+    getTaskRunMock.mockImplementationOnce(() => observeRejection(pending.promise));
+    const view = renderRunLogs();
+    await waitFor(() => {
+      expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    });
+
+    view.unmount();
+    await act(async () => {
+      pending.resolve(runRecord());
+    });
+    expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["detail", "logs"] as const)("同一任务 Run A→B 后，A 迟到的 %s 不进入 B", async (stage) => {
+    const staleDetail = createDeferred<TaskRunRecord>();
+    const staleLogs = createDeferred<LogEvent[]>();
+    getTaskRunMock.mockImplementation((_token: string, runId: number) =>
+      runId === RUN_A && stage === "detail"
+        ? observeRejection(staleDetail.promise)
+        : Promise.resolve(runRecord({ id: runId })));
+    getTaskRunLogsMock.mockImplementation((_token: string, runId: number) =>
+      runId === RUN_A
+        ? observeRejection(staleLogs.promise)
+        : Promise.resolve([runLog(70, "R16 RUN B ROW", { taskRunId: RUN_B })]));
+    renderRunLogs();
+    await waitFor(() => {
+      expect(stage === "detail" ? getTaskRunMock : getTaskRunLogsMock).toHaveBeenCalledTimes(1);
+    });
+
+    await navigateLogs(`/app/logs?task=${TASK_ID}&run=${RUN_B}`);
+    expect(await screen.findByText("R16 RUN B ROW")).toBeInTheDocument();
+    await act(async () => {
+      staleDetail.resolve(runRecord());
+      staleLogs.resolve([runLog(40, "R16 STALE RUN A ROW")]);
+    });
+
+    expect(screen.queryByText("R16 STALE RUN A ROW")).not.toBeInTheDocument();
+    expect(screen.getByText("R16 RUN B ROW")).toBeInTheDocument();
+    expect(runLogRequests().filter((request) => request.runId === RUN_A))
+      .toHaveLength(stage === "detail" ? 0 : 1);
+    expect(pageText()).toContain(runIdentity(RUN_B));
+    expect(pageText()).not.toContain(runIdentity(RUN_A));
+    expect(pageText()).not.toContain(i18n.t("logs.runLoadFailed"));
+    expect(pageText()).not.toContain(i18n.t("logs.runMismatch"));
+    expect(exportButton()).toBeEnabled();
+  });
+
+  it("Run→任务范围后旧 detail 不再读取 Run 日志，任务模式恢复实时与任务日志", async () => {
+    const staleDetail = createDeferred<TaskRunRecord>();
+    getTaskRunMock.mockImplementationOnce(() => observeRejection(staleDetail.promise));
+    renderRunLogs(`${RUN_URL}&panel=kept`);
+    await waitFor(() => {
+      expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    });
+
+    await navigateLogs(`/app/logs?task=${TASK_ID}&panel=kept`);
+    await waitFor(() => {
+      expect(taskLogsMock()).toHaveBeenCalledWith(TASK_ID, { limit: 200 });
+    });
+    await act(async () => {
+      staleDetail.resolve(runRecord());
+    });
+
+    expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: i18n.t("logs.taskFilter") })).toHaveValue(String(TASK_ID));
+    expect(liveOptions.at(-1)?.enabled).not.toBe(false);
+    expect(screen.getByText("R16 LIVE RUN B")).toBeInTheDocument();
+    expect(pageText()).not.toContain(runIdentity());
+  });
+
+  it("有效 Run→非法链接立即移除已加载行且不再发请求", async () => {
+    getTaskRunLogsMock.mockResolvedValueOnce([runLog(40, "R16 LOADED RUN A")]);
+    renderRunLogs();
+    expect(await screen.findByText("R16 LOADED RUN A")).toBeInTheDocument();
+
+    await navigateLogs(`/app/logs?task=${TASK_ID}&run=abc`);
+    expect(await screen.findByText(i18n.t("logs.runInvalidLink"))).toBeInTheDocument();
+    expect(screen.queryByText("R16 LOADED RUN A")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: i18n.t("common.export") })).not.toBeInTheDocument();
+    await flushEffects();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    expect(getTaskRunLogsMock).toHaveBeenCalledTimes(1);
+    expect(taskLogsMock()).not.toHaveBeenCalled();
+  });
+
+  it.each(["token", "role"] as const)("%s 变化后旧 detail 不继续读取日志，只采用新身份的读取", async (change) => {
+    const staleDetail = createDeferred<TaskRunRecord>();
+    getTaskRunMock.mockImplementationOnce(() => observeRejection(staleDetail.promise));
+    const view = renderRunLogs();
+    await waitFor(() => {
+      expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    });
+
+    const next: TestIdentity = change === "token"
+      ? { token: "next-token", role: "admin" }
+      : { token: "test-token", role: "viewer" };
+    getTaskRunLogsMock.mockResolvedValue([runLog(60, "R16 NEXT IDENTITY ROW")]);
+    switchIdentity(view, next);
+    await waitFor(() => {
+      expect(getTaskRunMock).toHaveBeenCalledTimes(2);
+    });
+    expect(detailRequests()[1]).toEqual({ token: next.token, runId: RUN_A });
+    expect(await screen.findByText("R16 NEXT IDENTITY ROW")).toBeInTheDocument();
+
+    await act(async () => {
+      staleDetail.resolve(runRecord());
+    });
+    expect(runLogRequests().map((request) => request.token)).toEqual([next.token]);
+    expect(screen.getByText("R16 NEXT IDENTITY ROW")).toBeInTheDocument();
+  });
+
+  it("认证身份 A→B→A 后旧结果不复活，只显示回到 A 后新代次的首批读取", async () => {
+    getTaskRunLogsMock.mockResolvedValueOnce([runLog(40, "R16 GENERATION ONE ROW")]);
+    const view = renderRunLogs();
+    expect(await screen.findByText("R16 GENERATION ONE ROW")).toBeInTheDocument();
+
+    const pendingB = createDeferred<TaskRunRecord>();
+    const pendingA = createDeferred<TaskRunRecord>();
+    getTaskRunMock.mockImplementation((token: string) =>
+      observeRejection((token === "other-token" ? pendingB : pendingA).promise));
+
+    switchIdentity(view, { token: "other-token", role: "operator" });
+    expect(screen.queryByText("R16 GENERATION ONE ROW")).not.toBeInTheDocument();
+    switchIdentity(view, { token: "test-token", role: "admin" });
+    expect(screen.queryByText("R16 GENERATION ONE ROW")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(detailRequests().at(-1)).toEqual({ token: "test-token", runId: RUN_A });
+    });
+    expect(detailRequests().filter((request) => request.token === "test-token")).toHaveLength(2);
+    expect(exportButton()).toBeDisabled();
+
+    getTaskRunLogsMock.mockResolvedValueOnce([runLog(41, "R16 GENERATION THREE ROW")]);
+    await act(async () => {
+      pendingB.resolve(runRecord());
+    });
+    expect(getTaskRunLogsMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("R16 GENERATION ONE ROW")).not.toBeInTheDocument();
+    expect(exportButton()).toBeDisabled();
+
+    await act(async () => {
+      pendingA.resolve(runRecord());
+    });
+    expect(await screen.findByText("R16 GENERATION THREE ROW")).toBeInTheDocument();
+    expect(screen.queryByText("R16 GENERATION ONE ROW")).not.toBeInTheDocument();
+    expect(runLogRequests().map((request) => request.token)).toEqual(["test-token", "test-token"]);
+  });
+
+  it("同一身份认证代次变化后迟到的日志不写入，并只发起一次新范围首批读取", async () => {
+    const staleLogs = createDeferred<LogEvent[]>();
+    getTaskRunLogsMock.mockImplementationOnce(() => observeRejection(staleLogs.promise));
+    renderRunLogs();
+    await waitFor(() => {
+      expect(getTaskRunLogsMock).toHaveBeenCalledTimes(1);
+    });
+
+    const fresh = createDeferred<LogEvent[]>();
+    getTaskRunLogsMock.mockImplementationOnce(() => observeRejection(fresh.promise));
+    act(() => {
+      bumpAuthSessionGeneration();
+    });
+    await waitFor(() => {
+      expect(getTaskRunLogsMock).toHaveBeenCalledTimes(2);
+    });
+    expect(getTaskRunMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      staleLogs.resolve([runLog(40, "R16 STALE GENERATION ROW")]);
+    });
+    expect(screen.queryByText("R16 STALE GENERATION ROW")).not.toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+    expect(exportButton()).toBeDisabled();
+
+    await act(async () => {
+      fresh.resolve([runLog(41, "R16 FRESH GENERATION ROW")]);
+    });
+    expect(await screen.findByText("R16 FRESH GENERATION ROW")).toBeInTheDocument();
+    expect(screen.queryByText("R16 STALE GENERATION ROW")).not.toBeInTheDocument();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("认证过渡期间隐藏旧行且不读取；释放后只发起一次新首批读取，不重放被打断的分页", async () => {
+    const user = userEvent.setup();
+    const staleOlder = createDeferred<LogEvent[]>();
+    let firstBatches = 0;
+    getTaskRunLogsMock.mockImplementation((_token: string, _runId: number, options?: { beforeId?: number }) => {
+      if (options?.beforeId) return observeRejection(staleOlder.promise);
+      firstBatches += 1;
+      return Promise.resolve([
+        runLog(40, firstBatches === 1 ? "R16 BEFORE BARRIER ROW" : "R16 AFTER BARRIER ROW"),
+      ]);
+    });
+    renderRunLogs();
+    expect(await screen.findByText("R16 BEFORE BARRIER ROW")).toBeInTheDocument();
+    await user.click(olderButton());
+
+    let barrier = 0;
+    act(() => {
+      barrier = beginAuthTransitionBarrier();
+    });
+    expect(screen.queryByText("R16 BEFORE BARRIER ROW")).not.toBeInTheDocument();
+    await flushEffects();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    expect(firstBatches).toBe(1);
+    expect(exportButton()).toBeDisabled();
+
+    act(() => {
+      releaseAuthTransitionBarrier(barrier);
+    });
+    await waitFor(() => expect(getTaskRunMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(firstBatches).toBe(2));
+    expect(await screen.findByText("R16 AFTER BARRIER ROW")).toBeInTheDocument();
+
+    await act(async () => {
+      staleOlder.resolve([runLog(10, "R16 STALE OLDER ROW")]);
+    });
+    expect(screen.queryByText("R16 STALE OLDER ROW")).not.toBeInTheDocument();
+    expect(runLogRequests().filter((request) => request.beforeId !== undefined)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: i18n.t("logs.loadOlderLogs") })).toBeEnabled();
+  });
+
+  it("身份快照未吻合或过渡中不发 Run 请求，过渡释放且安装吻合身份后只读取一次", async () => {
+    rememberAuthIdentity("test-token", "viewer");
+    const barrier = beginAuthTransitionBarrier();
+    getTaskRunLogsMock.mockResolvedValue([runLog(40, "R16 GATED ROW")]);
+    const view = renderRunLogs();
+    await flushEffects();
+    expect(getTaskRunMock).not.toHaveBeenCalled();
+    expect(getTaskRunLogsMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+    expect(exportButton()).toBeDisabled();
+
+    act(() => {
+      releaseAuthTransitionBarrier(barrier);
+    });
+    await flushEffects();
+    expect(getTaskRunMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+
+    rememberAuthIdentity("test-token", "admin");
+    view.rerenderLogs();
+    expect(await screen.findByText("R16 GATED ROW")).toBeInTheDocument();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    expect(getTaskRunLogsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["resolve", "reject"] as const)("切换 Run 后旧分页 %s 和 finally 不污染新 Run 或解锁新分页", async (outcome) => {
+    const user = userEvent.setup();
+    const staleOlder = createDeferred<LogEvent[]>();
+    const currentOlder = createDeferred<LogEvent[]>();
+    let currentOlderCalls = 0;
+    getTaskRunLogsMock.mockImplementation((_token: string, runId: number, options?: { beforeId?: number }) => {
+      if (options?.beforeId) {
+        if (runId === RUN_A) return observeRejection(staleOlder.promise);
+        currentOlderCalls += 1;
+        return observeRejection(currentOlder.promise);
+      }
+      return Promise.resolve(runId === RUN_A
+        ? [runLog(40, "R16 OLD RUN ROW")]
+        : [runLog(70, "R16 CURRENT RUN ROW", { taskRunId: RUN_B })]);
+    });
+    renderRunLogs();
+    expect(await screen.findByText("R16 OLD RUN ROW")).toBeInTheDocument();
+    await user.click(olderButton());
+
+    await navigateLogs(`/app/logs?task=${TASK_ID}&run=${RUN_B}`);
+    expect(await screen.findByText("R16 CURRENT RUN ROW")).toBeInTheDocument();
+    await user.click(olderButton());
+    await act(async () => {
+      if (outcome === "resolve") {
+        staleOlder.resolve([runLog(10, "R16 STALE PAGE ROW")]);
+      } else {
+        staleOlder.reject(apiFailure(403));
+      }
+    });
+
+    expect(screen.queryByText("R16 STALE PAGE ROW")).not.toBeInTheDocument();
+    expect(screen.queryByText("R16 OLD RUN ROW")).not.toBeInTheDocument();
+    expect(screen.getByText("R16 CURRENT RUN ROW")).toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("logs.runForbidden"))).not.toBeInTheDocument();
+    expect(exportButton()).toBeEnabled();
+    const busy = screen.getByRole("button", { name: i18n.t("logs.loadingOlder") });
+    expect(busy).toBeDisabled();
+    await user.click(busy);
+    expect(currentOlderCalls).toBe(1);
+
+    await act(async () => {
+      currentOlder.resolve([runLog(60, "R16 CURRENT OLDER ROW", { taskRunId: RUN_B })]);
+    });
+    expect(await screen.findByText("R16 CURRENT OLDER ROW")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("logs.loadOlderLogs") })).toBeEnabled();
+    expect(runLogRequests().filter((request) => request.runId === RUN_B && request.beforeId !== undefined))
+      .toEqual([{ token: "test-token", runId: RUN_B, beforeId: 70, limit: 120 }]);
+  });
+
+  it("刷新为显式单飞动作：清除旧行与旧分页，从 detail 重新核对，实时变化不触发自动刷新", async () => {
+    const user = userEvent.setup();
+    const staleOlder = createDeferred<LogEvent[]>();
+    const refreshDetail = createDeferred<TaskRunRecord>();
+    getTaskRunMock
+      .mockImplementationOnce(() => Promise.resolve(runRecord()))
+      .mockImplementationOnce(() => observeRejection(refreshDetail.promise));
+    getTaskRunLogsMock
+      .mockImplementationOnce(() => Promise.resolve([runLog(50, "R16 BEFORE REFRESH ROW")]))
+      .mockImplementationOnce(() => observeRejection(staleOlder.promise))
+      .mockImplementationOnce(() => Promise.resolve([runLog(51, "R16 AFTER REFRESH ROW")]));
+    const view = renderRunLogs();
+    expect(await screen.findByText("R16 BEFORE REFRESH ROW")).toBeInTheDocument();
+    await user.click(olderButton());
+
+    await user.click(screen.getByRole("button", { name: i18n.t("common.refresh") }));
+    await waitFor(() => {
+      expect(getTaskRunMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByText("R16 BEFORE REFRESH ROW")).not.toBeInTheDocument();
+    expect(exportButton()).toBeDisabled();
+    expect(fullscreenButton()).toBeDisabled();
+    const refreshAgain = screen.queryByRole("button", { name: i18n.t("common.refresh") });
+    if (refreshAgain) await user.click(refreshAgain);
+    await flushEffects();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      staleOlder.resolve([runLog(10, "R16 STALE OLDER ROW")]);
+    });
+    expect(screen.queryByText("R16 STALE OLDER ROW")).not.toBeInTheDocument();
+    expect(getTaskRunLogsMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      refreshDetail.resolve(runRecord());
+    });
+    expect(await screen.findByText("R16 AFTER REFRESH ROW")).toBeInTheDocument();
+    expect(screen.queryByText("R16 BEFORE REFRESH ROW")).not.toBeInTheDocument();
+    expect(screen.queryByText("R16 STALE OLDER ROW")).not.toBeInTheDocument();
+    expect(runLogRequests()).toEqual([
+      { token: "test-token", runId: RUN_A, beforeId: undefined, limit: 200 },
+      { token: "test-token", runId: RUN_A, beforeId: 50, limit: 120 },
+      { token: "test-token", runId: RUN_A, beforeId: undefined, limit: 200 },
+    ]);
+    expect(screen.getByRole("button", { name: i18n.t("logs.loadOlderLogs") })).toBeEnabled();
+
+    liveLogsRef.current = {
+      ...liveLogsRef.current,
+      logs: [runLog(901, "R16 LIVE AFTER REFRESH", { taskRunId: RUN_B, status: "running" })],
+      cursorLogId: 901,
+    };
+    view.rerenderLogs();
+    await flushEffects();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(2);
+    expect(getTaskRunLogsMock).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText("R16 LIVE AFTER REFRESH")).not.toBeInTheDocument();
+  });
+
+  it("Run 分页使用同一 Run 与最小 logId 游标，非空短页不提前结束，成功空页才到最早", async () => {
+    const user = userEvent.setup();
+    const firstOlder = createDeferred<LogEvent[]>();
+    getTaskRunLogsMock
+      .mockResolvedValueOnce([runLog(50, "R16 RUN NEWEST"), runLog(40, "R16 RUN OLDER")])
+      .mockImplementationOnce(() => observeRejection(firstOlder.promise))
+      .mockResolvedValueOnce([]);
+    renderRunLogs();
+    expect(await screen.findByText("R16 RUN NEWEST")).toBeInTheDocument();
+    expect(screen.getByText(/最早游标 #40/)).toBeInTheDocument();
+
+    await user.click(olderButton());
+    await user.click(olderButton());
+    expect(getTaskRunLogsMock).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      firstOlder.resolve([runLog(30, "R16 SHORT PAGE ROW")]);
+    });
+    expect(await screen.findByText("R16 SHORT PAGE ROW")).toBeInTheDocument();
+    expect(screen.getByText(/最早游标 #30/)).toBeInTheDocument();
+    expect(screen.queryByText(/已到最早/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("logs.loadOlderLogs") })).toBeEnabled();
+
+    await user.click(olderButton());
+    expect(await screen.findByText(/已到最早/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("logs.loadOlderLogs") })).toBeDisabled();
+    expect(screen.getByText("R16 RUN NEWEST")).toBeInTheDocument();
+    expect(screen.getByText("R16 RUN OLDER")).toBeInTheDocument();
+    expect(screen.getByText("R16 SHORT PAGE ROW")).toBeInTheDocument();
+    expect(runLogRequests()).toEqual([
+      { token: "test-token", runId: RUN_A, beforeId: undefined, limit: 200 },
+      { token: "test-token", runId: RUN_A, beforeId: 40, limit: 120 },
+      { token: "test-token", runId: RUN_A, beforeId: 30, limit: 120 },
+    ]);
+    expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    expect(taskLogsMock()).not.toHaveBeenCalled();
+  });
+
+  it("Run 普通分页失败保留已加载行与游标，可显式重试同一页", async () => {
+    const user = userEvent.setup();
+    getTaskRunLogsMock
+      .mockResolvedValueOnce([runLog(50, "R16 KEPT NEWER"), runLog(40, "R16 KEPT OLDER")])
+      .mockImplementationOnce(() => asRejected(new Error("RAW_OLDER_SECRET")))
+      .mockResolvedValueOnce([runLog(30, "R16 RETRIED OLDER")]);
+    renderRunLogs();
+    expect(await screen.findByText("R16 KEPT NEWER")).toBeInTheDocument();
+
+    await user.click(olderButton());
+    expect(await screen.findByText(i18n.t("logs.historyOlderFailed"))).toBeInTheDocument();
+    expect(screen.getByText("R16 KEPT NEWER")).toBeInTheDocument();
+    expect(screen.getByText("R16 KEPT OLDER")).toBeInTheDocument();
+    expect(screen.getByText(/最早游标 #40/)).toBeInTheDocument();
+    expect(screen.queryByText(/已到最早/)).not.toBeInTheDocument();
+    expect(pageText()).not.toContain("RAW_OLDER_SECRET");
+    expect(exportButton()).toBeEnabled();
+    expect(screen.getByRole("button", { name: i18n.t("logs.loadOlderLogs") })).toBeEnabled();
+
+    await user.click(olderButton());
+    expect(await screen.findByText("R16 RETRIED OLDER")).toBeInTheDocument();
+    expect(screen.getByText("R16 KEPT NEWER")).toBeInTheDocument();
+    expect(runLogRequests().slice(1)).toEqual([
+      { token: "test-token", runId: RUN_A, beforeId: 40, limit: 120 },
+      { token: "test-token", runId: RUN_A, beforeId: 40, limit: 120 },
+    ]);
+    expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { status: 403, key: "logs.runForbidden" },
+    { status: 404, key: "logs.runUnavailable" },
+  ])("Run 分页 $status 清除精确行、关闭全屏并禁用动作，重试等待或失败不复活缓存", async ({ status, key }) => {
+    const user = userEvent.setup();
+    const deniedPage = createDeferred<LogEvent[]>();
+    const retryDetail = createDeferred<TaskRunRecord>();
+    getTaskRunLogsMock
+      .mockResolvedValueOnce([runLog(40, "R16 DENIED RUN CACHE")])
+      .mockImplementationOnce(() => observeRejection(deniedPage.promise));
+    renderRunLogs();
+    expect(await screen.findByText("R16 DENIED RUN CACHE")).toBeInTheDocument();
+
+    await user.click(olderButton());
+    await user.click(fullscreenButton());
+    expect(await screen.findByRole("dialog")).toHaveTextContent("R16 DENIED RUN CACHE");
+    await act(async () => {
+      deniedPage.reject(apiFailure(status));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("R16 DENIED RUN CACHE")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText(i18n.t(key))).toBeInTheDocument();
+    expect(pageText()).not.toMatch(/RAW_|DETAIL_SECRET/);
+    expect(screen.queryByText(i18n.t("logs.emptyTitle"))).not.toBeInTheDocument();
+    expectNoUsableOlderPage();
+    expect(exportButton()).toBeDisabled();
+    expect(fullscreenButton()).toBeDisabled();
+    const createObjectURL = vi.spyOn(URL, "createObjectURL");
+    try {
+      await user.click(exportButton());
+      expect(createObjectURL).not.toHaveBeenCalled();
+    } finally {
+      createObjectURL.mockRestore();
+    }
+
+    getTaskRunMock.mockImplementationOnce(() => observeRejection(retryDetail.promise));
+    await user.click(retryControl());
+    await waitFor(() => {
+      expect(getTaskRunMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByText("R16 DENIED RUN CACHE")).not.toBeInTheDocument();
+    expect(exportButton()).toBeDisabled();
+    expect(fullscreenButton()).toBeDisabled();
+
+    await act(async () => {
+      retryDetail.reject(new Error("RAW_RETRY_SECRET"));
+    });
+    expect(await screen.findByText(i18n.t("logs.runLoadFailed"))).toBeInTheDocument();
+    expect(screen.queryByText("R16 DENIED RUN CACHE")).not.toBeInTheDocument();
+    expect(pageText()).not.toContain("RAW_RETRY_SECRET");
+    expect(exportButton()).toBeDisabled();
+
+    getTaskRunLogsMock.mockResolvedValueOnce([runLog(41, "R16 RECOVERED RUN ROW")]);
+    await user.click(retryControl());
+    expect(await screen.findByText("R16 RECOVERED RUN ROW")).toBeInTheDocument();
+    expect(screen.queryByText("R16 DENIED RUN CACHE")).not.toBeInTheDocument();
+    expect(screen.queryByText(i18n.t("logs.runLoadFailed"))).not.toBeInTheDocument();
+    expect(exportButton()).toBeEnabled();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("关键词连续输入保留 Run 与无关参数，Reset 只清 q，任务入口 push 后前进后退恢复范围", async () => {
+    const user = userEvent.setup();
+    seedStaleLogFilters();
+    getTaskRunLogsMock.mockResolvedValue([
+      runLog(42, "R16 alpha beta row"),
+      runLog(41, "R16 gamma row"),
+    ]);
+    renderRunLogs(`${RUN_URL}&panel=kept`);
+    expect(await screen.findByText("R16 gamma row")).toBeInTheDocument();
+    const input = screen.getByRole("textbox", { name: i18n.t("logs.keywordFilter") });
+
+    await user.type(input, "alpha ");
+    await waitFor(() => {
+      expect(input).toHaveValue("alpha ");
+    });
+    expect(currentSearch().get("q")).toBe("alpha ");
+    await user.type(input, "beta");
+    await waitFor(() => {
+      expect(input).toHaveValue("alpha beta");
+    });
+    expect(input).toHaveFocus();
+    let search = currentSearch();
+    expect(search.get("q")).toBe("alpha beta");
+    expect(search.get("task")).toBe(String(TASK_ID));
+    expect(search.get("run")).toBe(String(RUN_A));
+    expect(search.get("panel")).toBe("kept");
+    expect(screen.getByText("R16 alpha beta row")).toBeInTheDocument();
+    expect(screen.queryByText("R16 gamma row")).not.toBeInTheDocument();
+
+    await user.clear(input);
+    await user.type(input, "zzz");
+    expect(await screen.findByText(i18n.t("logs.emptyTitle"))).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("logs.runEmptyDesc"))).toBeInTheDocument();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    expect(getTaskRunLogsMock).toHaveBeenCalledTimes(1);
+    expectStoredPreferencesUntouched();
+
+    await user.click(screen.getAllByRole("button", { name: i18n.t("logs.resetFilter") })[0]);
+    await waitFor(() => {
+      expect(currentSearch().get("q")).toBeNull();
+    });
+    search = currentSearch();
+    expect(search.get("task")).toBe(String(TASK_ID));
+    expect(search.get("run")).toBe(String(RUN_A));
+    expect(search.get("node")).toBeNull();
+    expect(search.get("panel")).toBe("kept");
+    expect(await screen.findByText("R16 gamma row")).toBeInTheDocument();
+    expect(screen.getByText("R16 alpha beta row")).toBeInTheDocument();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("combobox", { name: i18n.t("logs.taskFilter") })).not.toBeInTheDocument();
+    expectStoredPreferencesUntouched();
+
+    await user.click(navControl(i18n.t("logs.viewTaskLogs")));
+    await waitFor(() => {
+      expect(currentSearch().get("run")).toBeNull();
+    });
+    search = currentSearch();
+    expect(search.get("task")).toBe(String(TASK_ID));
+    expect(search.get("node")).toBeNull();
+    expect(search.get("q")).toBeNull();
+    expect(search.get("panel")).toBe("kept");
+    await waitFor(() => {
+      expect(taskLogsMock()).toHaveBeenCalledWith(TASK_ID, { limit: 200 });
+    });
+    expect(screen.getByRole("combobox", { name: i18n.t("logs.taskFilter") })).toHaveValue(String(TASK_ID));
+
+    await navigateLogs(-1);
+    await waitFor(() => {
+      expect(currentSearch().get("run")).toBe(String(RUN_A));
+    });
+    expect(currentSearch().get("panel")).toBe("kept");
+    expect(await screen.findByText("R16 gamma row")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: i18n.t("logs.taskFilter") })).not.toBeInTheDocument();
+    expect(screen.queryByText("R16 LIVE RUN B")).not.toBeInTheDocument();
+    expect(getTaskRunMock).toHaveBeenCalledTimes(2);
+
+    await navigateLogs(1);
+    await waitFor(() => {
+      expect(currentSearch().get("run")).toBeNull();
+    });
+    expect(currentSearch().get("task")).toBe(String(TASK_ID));
+    expect(screen.getByRole("combobox", { name: i18n.t("logs.taskFilter") })).toHaveValue(String(TASK_ID));
   });
 });

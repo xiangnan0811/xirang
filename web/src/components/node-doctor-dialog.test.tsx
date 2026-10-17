@@ -5,7 +5,8 @@ import userEvent from "@testing-library/user-event";
 import i18n from "@/i18n";
 import { beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
 import type { NodeDoctorResult, NodeRecord } from "@/types/domain";
-import { NodeDoctorDialog, formatNodeDoctorCopyText } from "./node-doctor-dialog";
+import { NodeDoctorDialog } from "./node-doctor-dialog";
+import { formatNodeDoctorCopyText } from "./node-doctor-dialog.utils";
 import type { NodeDoctorDialogProps } from "./node-doctor-dialog";
 
 const { toastSuccess, toastError } = vi.hoisted(() => ({

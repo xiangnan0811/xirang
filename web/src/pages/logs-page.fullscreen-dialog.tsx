@@ -14,12 +14,21 @@ interface LogsFullscreenDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   filteredLogs: LogEvent[];
+  /** run = exact-run manual snapshot; empty copy must not mention live streams or selectors. */
+  mode?: "task" | "run";
+  /** Optional scope identity (e.g. "Task #T / Run #R") prefixed to the dialog title. */
+  scopeLabel?: string;
+  /** Optional close focus handler; omitted keeps Radix's default focus restoration. */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 export function LogsFullscreenDialog({
   open,
   onOpenChange,
   filteredLogs,
+  mode = "task",
+  scopeLabel,
+  onCloseAutoFocus,
 }: LogsFullscreenDialogProps) {
   const { t } = useTranslation();
 
@@ -28,9 +37,16 @@ export function LogsFullscreenDialog({
       <DialogContent
         size="lg"
         className="flex max-h-[90vh] flex-col md:max-w-[calc(100vw-64px)]"
+        onCloseAutoFocus={onCloseAutoFocus}
       >
         <DialogHeader>
-          <DialogTitle>
+          <DialogTitle className="min-w-0 pr-8 break-words [overflow-wrap:anywhere]">
+            {scopeLabel ? (
+              <>
+                <span>{scopeLabel}</span>
+                <span aria-hidden="true"> · </span>
+              </>
+            ) : null}
             {t("logs.fullscreenTitle", { count: filteredLogs.length })}
           </DialogTitle>
           <DialogCloseButton />
@@ -60,7 +76,7 @@ export function LogsFullscreenDialog({
                 <EmptyState
                   className="terminal-empty"
                   title={t("logs.emptyTitle")}
-                  description={t("logs.emptyDesc")}
+                  description={t(mode === "run" ? "logs.runEmptyDesc" : "logs.emptyDesc")}
                 />
               </div>
             )}

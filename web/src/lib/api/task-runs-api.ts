@@ -230,15 +230,27 @@ export function createTaskRunsApi() {
       };
     },
 
-    async getTaskRun(token: string, runId: number): Promise<TaskRunRecord> {
-      const payload = await request<TaskRunResponse>(`/task-runs/${runId}`, { token });
+    async getTaskRun(
+      token: string,
+      runId: number,
+      options?: { signal?: AbortSignal }
+    ): Promise<TaskRunRecord> {
+      const payload = await request<TaskRunResponse>(`/task-runs/${runId}`, {
+        token,
+        signal: options?.signal,
+      });
       return mapTaskRun(payload);
     },
 
     async getTaskRunLogs(
       token: string,
       runId: number,
-      options?: { beforeId?: number; limit?: number; level?: "info" | "warn" | "error" }
+      options?: {
+        beforeId?: number;
+        limit?: number;
+        level?: "info" | "warn" | "error";
+        signal?: AbortSignal;
+      }
     ): Promise<LogEvent[]> {
       const query = new URLSearchParams();
       if (options?.beforeId && Number.isFinite(options.beforeId) && options.beforeId > 0) {
@@ -253,7 +265,7 @@ export function createTaskRunsApi() {
       const suffix = query.toString() ? `?${query.toString()}` : "";
       const rows = (await request<TaskRunLogResponse[]>(
         `/task-runs/${runId}/logs${suffix}`,
-        { token }
+        { token, signal: options?.signal }
       )) ?? [];
       return rows.map(mapTaskRunLog);
     },

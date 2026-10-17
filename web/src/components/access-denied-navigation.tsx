@@ -10,53 +10,19 @@ import {
   isAuthTransitionActive,
   subscribeAuthTransition,
 } from "@/lib/api/core";
+import {
+  issueTicket,
+  replaceVisibleNotice,
+  revokeStaleNotices,
+  takeTicket,
+} from "@/components/access-denied-navigation.state";
 
 const OVERVIEW_PATH = "/app/overview";
 const ACCESS_DENIED_CODE = "access_denied";
 const MAX_NOTICE_ID_LENGTH = 64;
 
-type PendingTicket = { id: string; sourceLocationKey: string; authGeneration: number };
-type VisibleNotice = { toastId: string; authGeneration: number; token: string; role: AuthRole };
-
-// Only one denied navigation can be in flight; nothing here is persisted or listed.
-let pendingTicket: PendingTicket | null = null;
-let visibleNotice: VisibleNotice | null = null;
-
 function isDeniedRole(role: AuthRole | null | undefined): role is "operator" | "viewer" {
   return role === "operator" || role === "viewer";
-}
-
-/** Drops this module's pending ticket and visible toast once their auth identity no longer holds. */
-function revokeStaleNotices(): void {
-  const generation = getAuthSessionGeneration();
-  const barrier = isAuthTransitionActive();
-  if (pendingTicket && (barrier || pendingTicket.authGeneration !== generation)) {
-    pendingTicket = null;
-  }
-  if (!visibleNotice) return;
-  const identity = getAuthIdentitySnapshot();
-  if (
-    barrier
-    || visibleNotice.authGeneration !== generation
-    || identity.token !== visibleNotice.token
-    || identity.role !== visibleNotice.role
-  ) {
-    toast.dismiss(visibleNotice.toastId);
-    visibleNotice = null;
-  }
-}
-
-function takeTicket(id: string): PendingTicket | null {
-  const ticket = pendingTicket;
-  if (!ticket || ticket.id !== id) return null;
-  pendingTicket = null;
-  return ticket;
-}
-
-/** Test-only reset of module state between isolated cases. */
-export function resetAccessDeniedNavigationForTests(): void {
-  pendingTicket = null;
-  visibleNotice = null;
 }
 
 function AccessDeniedRedirectNavigation({ sourcePath, locationKey }: { sourcePath: string; locationKey: string }) {
@@ -80,7 +46,7 @@ function AccessDeniedRedirectNavigation({ sourcePath, locationKey }: { sourcePat
       return;
     }
     const id = crypto.randomUUID();
-    pendingTicket = { id, sourceLocationKey: locationKey, authGeneration: generation };
+    issueTicket({ id, sourceLocationKey: locationKey, authGeneration: generation });
     navigate(OVERVIEW_PATH, { replace: true, state: { navigationNotice: { code: ACCESS_DENIED_CODE, id } } });
   }, [authTransitioning, location.key, location.pathname, locationKey, navigate, role, sourcePath, token]);
 
@@ -146,8 +112,7 @@ export function AccessDeniedNavigationNotice(): JSX.Element | null {
       && identity.role === role
     ) {
       const toastId = `access-denied:${ticket.id}`;
-      if (visibleNotice && visibleNotice.toastId !== toastId) toast.dismiss(visibleNotice.toastId);
-      visibleNotice = { toastId, authGeneration: ticket.authGeneration, token, role };
+      replaceVisibleNotice({ toastId, authGeneration: ticket.authGeneration, token, role });
       toast.info(t("navigation.accessDenied"), { id: toastId });
     }
 
