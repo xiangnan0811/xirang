@@ -3,6 +3,13 @@
 ## Unreleased
 
 
+## [0.68.0](https://github.com/xiangnan0811/xirang/compare/v0.67.0...v0.68.0) (2026-10-17)
+
+
+### ✨ Features
+
+* **web:** add exact task-run log navigation ([#630](https://github.com/xiangnan0811/xirang/issues/630)) ([4b696f4](https://github.com/xiangnan0811/xirang/commit/4b696f4ecbcd44b67085cac5c742239082f6559a))
+
 ## [0.67.0](https://github.com/xiangnan0811/xirang/compare/v0.66.4...v0.67.0) (2026-10-16)
 
 
