@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import type { LogEvent } from "@/types/domain";
+import type * as ApiClientModule from "@/lib/api/client";
+import { getAuthIdentitySnapshot, rememberAuthIdentity } from "@/lib/api/core";
+import i18n from "@/i18n";
 
 import { runAxe } from "@/test/a11y-helpers";
 
@@ -73,8 +77,25 @@ const liveLogsRef: {
 };
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ token: "test-token" }),
+  useAuth: () => ({ token: "test-token", role: "admin" }),
 }));
+
+const { getTaskRunMock, getTaskRunLogsMock } = vi.hoisted(() => ({
+  getTaskRunMock: vi.fn(),
+  getTaskRunLogsMock: vi.fn(),
+}));
+
+vi.mock("@/lib/api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof ApiClientModule>();
+  return {
+    ...actual,
+    apiClient: {
+      ...actual.apiClient,
+      getTaskRun: getTaskRunMock,
+      getTaskRunLogs: getTaskRunLogsMock,
+    },
+  };
+});
 
 vi.mock("@/hooks/use-live-logs", () => ({
   useLiveLogs: () => liveLogsRef.current,
@@ -190,9 +211,77 @@ describe("LogsPage a11y smoke", () => {
   });
 
   it("初始渲染无 axe violations（关 color-contrast）", async () => {
-    const { container } = render(<LogsPage />);
+    const { container } = render(
+      <MemoryRouter>
+        <LogsPage />
+      </MemoryRouter>,
+    );
 
     const results = await runAxe(container);
     expect(results).toHaveNoViolations();
+  });
+
+  describe("exact run", () => {
+    let originalIdentity = getAuthIdentitySnapshot();
+
+    beforeEach(() => {
+      originalIdentity = getAuthIdentitySnapshot();
+      rememberAuthIdentity("test-token", "admin");
+      getTaskRunMock.mockReset();
+      getTaskRunMock.mockResolvedValue({
+        id: 77,
+        taskId: 1001,
+        triggerType: "manual",
+        status: "success",
+        durationMs: 1000,
+        verifyStatus: "none",
+        throughputMbps: 0,
+        progress: 100,
+        createdAt: "2026-02-24 10:00:00",
+      });
+      getTaskRunLogsMock.mockReset();
+      getTaskRunLogsMock.mockResolvedValue([
+        {
+          id: "run-log-12",
+          logId: 12,
+          timestamp: "2026-02-24 10:10:00",
+          level: "info",
+          message: "exact run snapshot row",
+          taskId: 1001,
+          taskRunId: 77,
+        },
+      ]);
+    });
+
+    afterEach(() => {
+      rememberAuthIdentity(originalIdentity.token, originalIdentity.role);
+    });
+
+    it("已加载的精确 Run 快照无 axe violations", async () => {
+      searchParamsRef.current = new URLSearchParams("task=1001&run=77");
+      const { container } = render(
+        <MemoryRouter>
+          <LogsPage />
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText("exact run snapshot row")).toBeInTheDocument();
+      const results = await runAxe(container);
+      expect(results).toHaveNoViolations();
+    });
+
+    it("非法 Run 链接提示无 axe violations", async () => {
+      searchParamsRef.current = new URLSearchParams("task=1001&run=abc");
+      const { container } = render(
+        <MemoryRouter>
+          <LogsPage />
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText(i18n.t("logs.runInvalidLink"))).toBeInTheDocument();
+      expect(getTaskRunMock).not.toHaveBeenCalled();
+      const results = await runAxe(container);
+      expect(results).toHaveNoViolations();
+    });
   });
 });

@@ -146,12 +146,12 @@ function HistoryRecordActions({ row, copyDisabled, onCopy }: {
       {row.actionType === "trigger_task" && isHistoryId(row.targetTaskId) && isHistoryId(row.targetTaskRunId) && (
         <>
           <Button asChild variant="outline" size="sm">
-            <Link to={`/app/logs?task=${row.targetTaskId}`} aria-describedby={hintId}>
-              {t("automation.history.taskLogs")}
+            <Link to={`/app/logs?task=${row.targetTaskId}&run=${row.targetTaskRunId}`} aria-describedby={hintId}>
+              {t("automation.history.runLogs")}
             </Link>
           </Button>
           <p id={hintId} className="max-w-56 text-xs text-muted-foreground">
-            {t("automation.history.taskLogsHint")}
+            {t("automation.history.runLogsHint")}
           </p>
         </>
       )}

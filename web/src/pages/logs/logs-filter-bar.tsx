@@ -9,6 +9,11 @@ import { SearchInput } from "@/components/ui/search-input";
 import { cn } from "@/lib/utils";
 
 export interface LogsFilterBarProps {
+  /**
+   * task: live task workbench (node/task selectors, live connection, progress, task error).
+   * run: exact-run manual snapshot; only keyword, reset, export, fullscreen and summary render.
+   */
+  mode: "task" | "run";
   nodes: NodeRecord[];
   tasks: TaskRecord[];
   selectedNode: string;
@@ -34,6 +39,7 @@ export interface LogsFilterBarProps {
 }
 
 export function LogsFilterBar({
+  mode,
   nodes,
   tasks,
   selectedNode,
@@ -57,6 +63,7 @@ export function LogsFilterBar({
   onFullscreen,
 }: LogsFilterBarProps) {
   const { t } = useTranslation();
+  const isTaskMode = mode === "task";
 
   return (
     <>
@@ -64,81 +71,85 @@ export function LogsFilterBar({
         sticky={false}
         className="flex flex-wrap items-center gap-3"
       >
-        <Select
-          containerClassName="w-[140px]"
-          aria-label={t("logs.nodeFilter")}
-          value={selectedNode}
-          onChange={(event) => onNodeChange(event.target.value)}
-        >
-          <option value="all">{t("logs.allNodes")}</option>
-          {nodes.map((node) => (
-            <option key={node.id} value={node.name}>
-              {node.name}
-            </option>
-          ))}
-        </Select>
-
-        <Select
-          containerClassName="w-[160px]"
-          aria-label={t("logs.taskFilter")}
-          value={selectedTask}
-          onChange={(event) => onTaskChange(event.target.value)}
-        >
-          <option value="all">{t("logs.allTasks")}</option>
-          {selectedTask !== "all" && !tasks.some((task) => String(task.id) === selectedTask) && (
-            <option value={selectedTask}>
-              {t(taskListReady ? "logs.unavailableTask" : "logs.taskIdLabel", { id: selectedTask })}
-            </option>
-          )}
-          {tasks.map((task) => (
-            <option key={task.id} value={String(task.id)}>
-              #{task.id} {task.policyName}
-            </option>
-          ))}
-        </Select>
-
-        <div className="hidden items-center gap-3 border-r border-border/50 pr-2 sm:flex">
-          <div
-            className={cn(
-              "size-2.5 rounded-full shadow-sm",
-              connected ? "bg-success" : "bg-muted",
-            )}
-            title={connected ? t("logs.connected") : t("logs.disconnected")}
-          />
-
-          {showProgress ? (
-            <div
-              className="flex items-center gap-2"
-              title={t("logs.taskProgress")}
+        {isTaskMode ? (
+          <>
+            <Select
+              containerClassName="w-[140px]"
+              aria-label={t("logs.nodeFilter")}
+              value={selectedNode}
+              onChange={(event) => onNodeChange(event.target.value)}
             >
-              <span className="text-mini font-medium text-foreground/80">
-                {t("logs.progress", {
-                  value: Number.isFinite(progressValue) ? progressValue : 0,
-                })}
-              </span>
+              <option value="all">{t("logs.allNodes")}</option>
+              {nodes.map((node) => (
+                <option key={node.id} value={node.name}>
+                  {node.name}
+                </option>
+              ))}
+            </Select>
+
+            <Select
+              containerClassName="w-[160px]"
+              aria-label={t("logs.taskFilter")}
+              value={selectedTask}
+              onChange={(event) => onTaskChange(event.target.value)}
+            >
+              <option value="all">{t("logs.allTasks")}</option>
+              {selectedTask !== "all" && !tasks.some((task) => String(task.id) === selectedTask) && (
+                <option value={selectedTask}>
+                  {t(taskListReady ? "logs.unavailableTask" : "logs.taskIdLabel", { id: selectedTask })}
+                </option>
+              )}
+              {tasks.map((task) => (
+                <option key={task.id} value={String(task.id)}>
+                  #{task.id} {task.policyName}
+                </option>
+              ))}
+            </Select>
+
+            <div className="hidden items-center gap-3 border-r border-border/50 pr-2 sm:flex">
               <div
-                className="h-1.5 w-16 overflow-hidden rounded-full bg-muted"
-                role="progressbar"
-                aria-label={t("logs.taskProgressAriaLabel")}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={normalizedProgress}
-              >
+                className={cn(
+                  "size-2.5 rounded-full shadow-sm",
+                  connected ? "bg-success" : "bg-muted",
+                )}
+                title={connected ? t("logs.connected") : t("logs.disconnected")}
+              />
+
+              {showProgress ? (
                 <div
-                  className={cn(
-                    "h-full transition-[width] duration-500",
-                    normalizedProgress < 40
-                      ? "bg-destructive"
-                      : normalizedProgress < 70
-                        ? "bg-warning"
-                        : "bg-success",
-                  )}
-                  style={{ width: `${normalizedProgress}%` }}
-                />
-              </div>
+                  className="flex items-center gap-2"
+                  title={t("logs.taskProgress")}
+                >
+                  <span className="text-mini font-medium text-foreground/80">
+                    {t("logs.progress", {
+                      value: Number.isFinite(progressValue) ? progressValue : 0,
+                    })}
+                  </span>
+                  <div
+                    className="h-1.5 w-16 overflow-hidden rounded-full bg-muted"
+                    role="progressbar"
+                    aria-label={t("logs.taskProgressAriaLabel")}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={normalizedProgress}
+                  >
+                    <div
+                      className={cn(
+                        "h-full transition-[width] duration-500",
+                        normalizedProgress < 40
+                          ? "bg-destructive"
+                          : normalizedProgress < 70
+                            ? "bg-warning"
+                            : "bg-success",
+                      )}
+                      style={{ width: `${normalizedProgress}%` }}
+                    />
+                  </div>
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
+          </>
+        ) : null}
 
         <div className="flex flex-wrap items-center gap-2">
           <SearchInput
@@ -189,17 +200,19 @@ export function LogsFilterBar({
         unit={t("logs.logUnit")}
       />
 
-      <div
-        className={cn(
-          "overflow-hidden transition-[opacity,max-height] duration-300 ease-in-out",
-          connectionWarning ? "max-h-24 opacity-100" : "max-h-0 opacity-0",
-        )}
-        aria-hidden={!connectionWarning}
-      >
-        <InlineAlert tone="warning">{connectionWarning ?? ""}</InlineAlert>
-      </div>
+      {isTaskMode ? (
+        <div
+          className={cn(
+            "overflow-hidden transition-[opacity,max-height] duration-300 ease-in-out",
+            connectionWarning ? "max-h-24 opacity-100" : "max-h-0 opacity-0",
+          )}
+          aria-hidden={!connectionWarning}
+        >
+          <InlineAlert tone="warning">{connectionWarning ?? ""}</InlineAlert>
+        </div>
+      ) : null}
 
-      {errorCode ? (
+      {isTaskMode && errorCode ? (
         <InlineAlert tone="critical">
           {t("logs.errorCodeLabel", { code: errorCode })}
         </InlineAlert>

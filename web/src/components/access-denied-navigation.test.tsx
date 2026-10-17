@@ -26,7 +26,7 @@ import { AutomationRulesPage } from "@/pages/automation-rules-page";
 import { CredentialsPage } from "@/pages/credentials-page";
 import { CredentialAuditPage } from "@/pages/credential-audit-page";
 import { CredentialAccessGrantsPage } from "@/pages/credential-access-grants-page";
-import { resetAccessDeniedNavigationForTests } from "./access-denied-navigation";
+import { resetAccessDeniedNavigationForTests } from "./access-denied-navigation.state";
 
 type AuthState = {
   username: string;

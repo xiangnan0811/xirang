@@ -12,6 +12,8 @@ export interface LogsViewerProps {
   filteredLogs: LogEvent[];
   historyLoading: boolean;
   onReset: () => void;
+  /** run = exact-run manual snapshot; loading/empty copy must not mention live streams or selectors. */
+  mode?: "task" | "run";
 }
 
 /**
@@ -29,6 +31,7 @@ export function LogsViewer({
   filteredLogs,
   historyLoading,
   onReset,
+  mode = "task",
 }: LogsViewerProps) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
@@ -72,7 +75,7 @@ export function LogsViewer({
     return (
       <LoadingState
         title={t("logs.loadingTitle")}
-        description={t("logs.loadingDesc")}
+        description={t(mode === "run" ? "logs.runLoadingDesc" : "logs.loadingDesc")}
         rows={4}
       />
     );
@@ -131,7 +134,7 @@ export function LogsViewer({
           <EmptyState
             className="terminal-empty"
             title={t("logs.emptyTitle")}
-            description={t("logs.emptyDesc")}
+            description={t(mode === "run" ? "logs.runEmptyDesc" : "logs.emptyDesc")}
             action={
               <Button size="sm" variant="outline" onClick={onReset}>
                 {t("logs.resetFilter")}

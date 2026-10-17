@@ -10,6 +10,8 @@
 
 修改导出位置时更新使用方与 mock，运行 lint 验证 Fast Refresh 警告消失，不能只禁用规则。ESLint 当前允许常量导出的配置不改变共享模块的职责划分。
 
+测试复位函数也遵守此边界：与其操作的模块状态一起放入同级 `.state.ts`，组件和测试共享同一份状态，不能为测试另建副本或从组件模块兼容转出。纯格式化函数放入 `.utils.ts`；例如 `access-denied-navigation.state.ts` 和 `node-doctor-dialog.utils.ts`。
+
 ## Radix 单元素组合
 
 使用 Radix `Slot` 或 `asChild` 必须只传入一个 React 元素。共用原语把插槽分支单独处理，不能把条件 loader/icon（即使分支为 `null`）和调用方元素作为多个兄弟子项传给 Slot。

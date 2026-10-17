@@ -294,9 +294,9 @@ describe("automation execution history", () => {
       }
       expect(historyRow(logText(61)).li.querySelector("[aria-hidden='true']")).not.toBeNull();
       for (const region of Object.values(historyRow(logText(61)))) {
-        const link = within(region).getByRole("link", { name: i18n.t("automation.history.taskLogs") });
-        expect(link).toHaveAttribute("href", "/app/logs?task=12");
-        expect(link).toHaveAccessibleDescription(i18n.t("automation.history.taskLogsHint"));
+        const link = within(region).getByRole("link", { name: i18n.t("automation.history.runLogs") });
+        expect(link).toHaveAttribute("href", "/app/logs?task=12&run=34");
+        expect(link).toHaveAccessibleDescription(i18n.t("automation.history.runLogsHint"));
       }
       await user.click(buttons[0]);
       expect(clipboard.writeText).toHaveBeenCalledTimes(1);

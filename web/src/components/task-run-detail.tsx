@@ -79,7 +79,7 @@ function TaskRunDetailContent({ run, token, onBack }: Props) {
   }
 
   const fetchDetail = useCallback((signal?: AbortSignal) => {
-    return apiClient.getTaskRun(token, run.id).then((result) => {
+    return apiClient.getTaskRun(token, run.id, { signal }).then((result) => {
       if (!signal?.aborted) setDetailRun(result);
     }).catch(() => {
       // 执行历史列表可作为降级数据；详情接口失败时仍展示基础记录与日志。
@@ -87,7 +87,7 @@ function TaskRunDetailContent({ run, token, onBack }: Props) {
   }, [token, run.id]);
 
   const fetchLogs = useCallback((signal?: AbortSignal) => {
-    return apiClient.getTaskRunLogs(token, run.id, { limit: 500 }).then((result) => {
+    return apiClient.getTaskRunLogs(token, run.id, { limit: 500, signal }).then((result) => {
       if (!signal?.aborted) setLogs(result);
     }).catch((err) => {
       if (!signal?.aborted) setLogsError(err instanceof Error ? err.message : t('tasks.fetchLogsFailed'));

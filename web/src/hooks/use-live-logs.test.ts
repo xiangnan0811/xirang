@@ -82,6 +82,81 @@ describe("useLiveLogs", () => {
     unmount();
   });
 
+  it("isolates disabled scope from late callbacks, queued frames and cursor across enable-disable-enable", () => {
+    const { result, rerender, unmount } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useLiveLogs("token-1", { taskId: 7, enabled }),
+      { initialProps: { enabled: true } },
+    );
+    expect(socket.connect).toHaveBeenCalledTimes(1);
+    act(() => {
+      socket.statuses.forEach((listener) => listener(true));
+      emit(10);
+      flush();
+    });
+    expect(result.current.connected).toBe(true);
+    expect(result.current.cursorLogId).toBe(10);
+    expect(result.current.logs.map((row) => row.logId)).toEqual([10]);
+
+    // Queue a frame and keep references to the first effect's listeners and frame.
+    act(() => emit(11));
+    const staleMessages = [...socket.messages];
+    const staleStatuses = [...socket.statuses];
+    const staleFrames = [...frames.values()];
+    expect(staleFrames).toHaveLength(1);
+    const disconnectsBefore = socket.disconnect.mock.calls.length;
+
+    rerender({ enabled: false });
+    expect(socket.disconnect.mock.calls.length).toBe(disconnectsBefore + 1);
+    expect(socket.messages.size).toBe(0);
+    expect(socket.statuses.size).toBe(0);
+    expect(frames.size).toBe(0);
+    expect(socket.connect).toHaveBeenCalledTimes(1);
+    expect(result.current).toEqual({ logs: [], connected: false, connectionWarning: null, cursorLogId: 0 });
+
+    // Late callbacks from the disabled owner are ignored even when fired directly.
+    act(() => {
+      staleMessages.forEach((listener) => listener({ id: "12", logId: 12, level: "info", message: "late", timestamp: "" }));
+      staleStatuses.forEach((listener) => listener(false));
+      staleFrames.forEach((callback) => callback(0));
+    });
+    expect(frames.size).toBe(0);
+    expect(socket.updateSinceId).not.toHaveBeenCalledWith(11);
+    expect(socket.updateSinceId).not.toHaveBeenCalledWith(12);
+    expect(result.current).toEqual({ logs: [], connected: false, connectionWarning: null, cursorLogId: 0 });
+
+    rerender({ enabled: true });
+    expect(socket.connect).toHaveBeenCalledTimes(2);
+    expect(socket.connect).toHaveBeenLastCalledWith("token-1", expect.objectContaining({ taskId: 7, sinceId: undefined }));
+    expect(result.current.logs).toEqual([]);
+    expect(result.current.cursorLogId).toBe(0);
+    expect(result.current.connected).toBe(false);
+
+    // Stale first-owner callbacks still cannot inject into the re-enabled scope.
+    act(() => {
+      staleMessages.forEach((listener) => listener({ id: "13", logId: 13, level: "info", message: "late", timestamp: "" }));
+      staleStatuses.forEach((listener) => listener(true));
+      staleFrames.forEach((callback) => callback(0));
+    });
+    expect(frames.size).toBe(0);
+    expect(result.current.logs).toEqual([]);
+    expect(result.current.cursorLogId).toBe(0);
+    expect(result.current.connected).toBe(false);
+
+    act(() => { emit(3); flush(); });
+    expect(result.current.logs.map((row) => row.logId)).toEqual([3]);
+    expect(result.current.cursorLogId).toBe(3);
+    expect(socket.updateSinceId).toHaveBeenLastCalledWith(3);
+    unmount();
+  });
+
+  it("never subscribes or connects when initially disabled", () => {
+    const { result } = renderHook(() => useLiveLogs(null, { enabled: false }));
+    expect(socket.connect).not.toHaveBeenCalled();
+    expect(socket.messages.size).toBe(0);
+    expect(socket.statuses.size).toBe(0);
+    expect(result.current).toEqual({ logs: [], connected: false, connectionWarning: null, cursorLogId: 0 });
+  });
+
   it("closes the log socket during an auth transition and reconnects after it ends", () => {
     renderHook(() => useLiveLogs("token-1"));
     expect(socket.connect).toHaveBeenCalledTimes(1);

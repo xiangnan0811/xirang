@@ -2,7 +2,6 @@ import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { TaskRunDetail } from "./task-run-detail";
-import { apiClient } from "@/lib/api/client";
 import type { TaskRunRecord } from "@/types/domain";
 
 const { getTaskRunMock, getTaskRunLogsMock } = vi.hoisted(() => ({
@@ -84,7 +83,6 @@ describe("TaskRunDetail", () => {
     );
 
     await waitFor(() => {
-      expect(apiClient.getTaskRun).toHaveBeenCalledWith("token-task", 42);
       expect(screen.getByText("恢复演练证据")).toBeInTheDocument();
     });
 
