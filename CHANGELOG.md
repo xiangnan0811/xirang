@@ -17,6 +17,13 @@
 - 以上为未发布候选，不代表已提交、合并、发布、生产部署或生产灾备验收。
 
 
+## [0.69.0](https://github.com/xiangnan0811/xirang/compare/v0.68.0...v0.69.0) (2026-10-18)
+
+
+### ✨ Features
+
+* **backup:** add secure system database downloads ([#632](https://github.com/xiangnan0811/xirang/issues/632)) ([2ea3444](https://github.com/xiangnan0811/xirang/commit/2ea34446bf27e1ab654f73dcfc1a067b154aca94))
+
 ## [0.68.0](https://github.com/xiangnan0811/xirang/compare/v0.67.0...v0.68.0) (2026-10-17)
 
 
