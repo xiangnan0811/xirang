@@ -243,13 +243,13 @@ for output_case in default relative noncanonical trailing_slash; do
       echo "FAIL: $output_case backup did not publish one basename checksum record" >&2
       exit 1
     }
-    (cd -- "$output_dir"; sha256sum --strict --check -- "$product_name.sha256") >/dev/null
+    (cd -- "$output_dir"; sha256sum -c -- "$product_name.sha256") >/dev/null
     mkdir -p -- relocated-mount
     cp -- "$product_file" "$product_file.sha256" relocated-mount/
     # Removing the producer root prevents a path-labelled checksum from passing
     # by accidentally following the original artifact instead of the copy.
     rm -rf -- "$output_dir"
-    (cd -- relocated-mount; sha256sum --strict --check -- "$product_name.sha256") >/dev/null
+    (cd -- relocated-mount; sha256sum -c -- "$product_name.sha256") >/dev/null
     PATH="$STUB_BIN:$PATH" XIRANG_RESTORE_OFFLINE=1 DB_TYPE=sqlite \
       SQLITE_PATH="$case_root/restored/live.db" \
       bash "$RESTORE_SCRIPT" "relocated-mount/$product_name" >/dev/null

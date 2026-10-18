@@ -87,11 +87,11 @@ for output_case in absolute default relative noncanonical trailing_slash; do
       echo "FAIL: $output_case PostgreSQL backup did not publish one basename checksum record" >&2
       exit 1
     }
-    (cd -- "$output_dir"; sha256sum --strict --check -- "$backup_name.sha256") >/dev/null
+    (cd -- "$output_dir"; sha256sum -c -- "$backup_name.sha256") >/dev/null
     mkdir -p -- relocated-mount
     cp -- "$backup_file" "$backup_file.sha256" relocated-mount/
     rm -rf -- "$output_dir"
-    (cd -- relocated-mount; sha256sum --strict --check -- "$backup_name.sha256") >/dev/null
+    (cd -- relocated-mount; sha256sum -c -- "$backup_name.sha256") >/dev/null
     pg_restore --list "relocated-mount/$backup_name" >/dev/null
 
     psql --set ON_ERROR_STOP=on --dbname "${dsn}" \

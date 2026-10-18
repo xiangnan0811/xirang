@@ -123,7 +123,7 @@ check_checksum_file() {
   (
     cd -- "${directory}"
     if [[ "${CHECKSUM_TOOL}" == "sha256sum" ]]; then
-      sha256sum --strict --check -- "${filename}.sha256"
+      sha256sum -c -- "${filename}.sha256"
     else
       shasum -a 256 --strict --check -- "${filename}.sha256"
     fi

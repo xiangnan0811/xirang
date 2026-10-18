@@ -203,6 +203,9 @@ SQLite/PostgreSQL 双来源、两成员有界 USTAR，以及目录保存拒绝�
 外部配置、known_hosts 或远端数据，仍须独立校验并在隔离目标执行既有离线恢复。
 无新增 schema migration、不改写历史记录；回退移除新下载及保存保护，
 不撤销已交付文件或外部效果，不将公开发布写成生产部署或生产灾备验收。
+下载验收用例归属真实后端 Playwright 配置，不由普通 mock 矩阵收集；
+脚本回归须在 Alpine/BusyBox 环境验证校验文件可消费及迁移目录后的真实恢复，
+不能仅用已额外安装 GNU coreutils 的本地容器替代默认 CI 镜像证据。
 
 
 All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录

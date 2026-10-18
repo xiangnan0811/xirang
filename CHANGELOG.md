@@ -7,6 +7,7 @@
 - 新增管理员系统数据库双来源下载：Web SQLite 快照与 cron SQLite/PostgreSQL 受管产物，返回仅数据库与 SHA256 sidecar 两成员的有界 USTAR。使用专用 fresh `system.backup_download` proof 及 `system_backup_download` 临时授权，固定文件描述符双遍校验，4 GiB 数据上限、120 秒准备和十分钟总预算、单 Core 两个活动下载。
 - 原生保存改为选择目录并按确切归档名创建新文件，拒绝已有文件、空文件或目录。同源 Web Lock 覆盖准入、授权、读取及原生写入收尾；不覆盖、不自动删除、编号或重放。缺目录选择或锁能力时只允许最多 64 MiB payload 的兼容下载，不宣称同等峰值内存。
 - 认证 generation 与过渡 barrier 主动取消旧 proof/POST、读取与保存目标，同批身份往返也清空旧列表、观察结果及草稿。修正下载准入基础设施 503 和准备超时 504 的 failure 审计分类；短预算回归覆盖真实 HTTP/1.1 与 HTTP/2 的 proof/grant consumer 超时。
+- 修正下载验收的 CI 集成：真实后端下载用例只由真实后端 Playwright 配置运行，普通 mock 矩阵不重复收集；备份脚本回归使用 GNU/BusyBox 均支持的 SHA256 校验参数，同时保留单条 basename 格式、实际摘要与迁移后恢复断言，不改变生产下载或恢复逻辑。
 
 ### 行为与升级说明
 
