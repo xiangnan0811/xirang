@@ -192,8 +192,8 @@ GitHub Release 正文须保留该节七项行为与升级边界：成对标识�
 不得改写 `0.66.0` 仅任务级导航的历史范围，不将精确 Run 日志解释为完整执行证据、
 新增历史元数据、生产部署或灾备恢复验收；两条 lint warning 修复保持原通知与诊断行为。
 
-系统数据库下载的 Release PR 与最终 GitHub Release 正文须完整保留本次 CHANGELOG
-的功能与升级说明：管理员专用 fresh proof 和临时授权、Web SQLite 与 cron
+系统数据库下载的完整说明归档于 CHANGELOG `0.69.0` 版本节；
+Release PR 与最终 GitHub Release 正文须完整保留其功能与升级说明：管理员专用 fresh proof 和临时授权、Web SQLite 与 cron
 SQLite/PostgreSQL 双来源、两成员有界 USTAR，以及目录保存拒绝同名目标和同源锁的边界。
 目录须由操作者独占使用；锁不保护其他 origin/profile、旧页面或外部程序，
 取消、close 失败及文档丢失不保证撤销，不能将服务端发送完成解释为客户端落盘或恢复成功。
