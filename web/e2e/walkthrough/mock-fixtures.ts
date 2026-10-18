@@ -9,7 +9,7 @@ export const ANOMALY_METRIC = "WALKTHROUGH_ANOMALY_METRIC";
 export const SILENCE_NAME = "WALKTHROUGH_SILENCE";
 export const CREDENTIAL_AUDIT_PURPOSE = "WALKTHROUGH_CREDENTIAL_AUDIT";
 export const FAILURE_SUMMARY_COUNT = 86421;
-export const SELF_BACKUP_FILENAME = "walkthrough-self-backup.tar.gz";
+export const SELF_BACKUP_FILENAME = "xirang-20261007-000000-walkthrough.db";
 export const LONG_NODE_MARKER = "超长命名字段测试";
 export const LONG_TASK_MARKER = "名称超长文本折行测试";
 
@@ -638,12 +638,43 @@ export const gaReadiness = {
   conflicts: [],
 };
 
+// Packaged size is the exact two-member USTAR length: 2560 + ceil(size / 512) * 512.
 export const systemBackups = [
   {
+    source: "web",
+    engine: "sqlite",
     filename: SELF_BACKUP_FILENAME,
     size: 4096,
     created_at: AT,
     sha256: "ab".repeat(32),
+    downloadable: true,
+    unavailable_reason: "",
+    packaged_size: 6656,
+  },
+  {
+    source: "web",
+    engine: "sqlite",
+    filename: "manual-copy.db",
+    size: 2048,
+    created_at: AT,
+    sha256: "",
+    downloadable: false,
+    unavailable_reason: "unmanaged",
+    packaged_size: 0,
+  },
+];
+
+export const cronSystemBackups = [
+  {
+    source: "cron",
+    engine: "sqlite",
+    filename: "xirang-sqlite-20261007-013000.db",
+    size: 3072,
+    created_at: AT,
+    sha256: "cd".repeat(32),
+    downloadable: true,
+    unavailable_reason: "",
+    packaged_size: 5632,
   },
 ];
 

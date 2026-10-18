@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "./client";
-import { ApiError, AuthTransitionRejectedError, beginAuthTransitionBarrier, buildLoginRedirectPath, bumpAuthSessionGeneration, clearAuthTransitionBarrier, dismissTOTPActivationFailure, fetchWithFallback, isCredentialGrantRequiredError, isStepUpRequiredError, normalizeRedirectTarget, releaseAuthTransitionBarrier, request } from "./core";
+import { ApiError, AuthTransitionRejectedError, beginAuthTransitionBarrier, buildLoginRedirectPath, bumpAuthSessionGeneration, clearAuthTransitionBarrier, dismissTOTPActivationFailure, fetchWithFallback, isCredentialGrantRequiredError, isStepUpRequiredError, normalizeRedirectTarget, releaseAuthTransitionBarrier, request, requestStream } from "./core";
 import { saveStepUpProof, STEP_UP_ACTIONS } from "@/lib/step-up-storage";
 
 function createMockResponse(status = 200, body = "") {
@@ -981,5 +981,196 @@ describe("auth transition barrier", () => {
     })).rejects.toMatchObject({ status: 401 });
     expect(sessionStorage.getItem("xirang-auth-token")).toBeNull();
     expect(location.href).toContain("/login?redirect=");
+  });
+});
+
+describe("requestStream", () => {
+  const fetchMock = vi.fn();
+  const streamPath = "/system/backups/web/xirang-20261017-010203.db/download";
+  const digest = "a".repeat(64);
+
+  function countingBody(totalBytes: number, chunkBytes: number) {
+    const state = { pulled: 0, cancelled: false };
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (state.pulled >= totalBytes) {
+          controller.close();
+          return;
+        }
+        const size = Math.min(chunkBytes, totalBytes - state.pulled);
+        state.pulled += size;
+        controller.enqueue(new Uint8Array(size).fill(0x61));
+      },
+      cancel() {
+        state.cancelled = true;
+      },
+    }, { highWaterMark: 0 });
+    return { stream, state };
+  }
+
+  function stubLocation() {
+    const location = {
+      href: "http://localhost/app/settings?tab=maintenance",
+      hostname: "localhost",
+      pathname: "/app/settings",
+      search: "?tab=maintenance",
+      hash: "",
+    };
+    vi.stubGlobal("window", { location, sessionStorage });
+    return location;
+  }
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.unstubAllEnvs();
+    sessionStorage.clear();
+    clearAuthTransitionBarrier();
+  });
+
+  afterEach(() => {
+    clearAuthTransitionBarrier();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    sessionStorage.clear();
+  });
+
+  it("sends auth, proof and strong If-Match without caching or redirects and leaves a tar body unread", async () => {
+    const { stream, state } = countingBody(4096, 512);
+    const tar = new Response(stream, { status: 200, headers: { "Content-Type": "application/x-tar" } });
+    fetchMock.mockResolvedValueOnce(tar);
+
+    const response = await requestStream(streamPath, { token: "token-1", stepUpProof: "proof-1", ifMatch: `"${digest}"` });
+
+    expect(response).toBe(tar);
+    expect(response.bodyUsed).toBe(false);
+    expect(state.pulled).toBe(0);
+    expect(state.cancelled).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`/api/v1${streamPath}`);
+    expect(init).toMatchObject({ method: "GET", cache: "no-store", redirect: "error", body: undefined });
+    expect(init.headers).toEqual({
+      Authorization: "Bearer token-1",
+      "X-Xirang-Step-Up": "proof-1",
+      "If-Match": `"${digest}"`,
+    });
+  });
+
+  it("never retries or falls back to the dev direct API", async () => {
+    vi.stubEnv("VITE_DEV_API_DIRECT_URL", "http://127.0.0.1:8080/api/v1");
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(requestStream(streamPath, { token: "token-1" })).rejects.toThrow("Failed to fetch");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code: 404, message: "missing", data: { error_code: "BACKUP_NOT_FOUND" } }), { status: 404 }));
+    await expect(requestStream(streamPath)).rejects.toMatchObject({ status: 404, httpStatus: 404 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(`/api/v1${streamPath}`);
+  });
+
+  it("rejects before fetching while an unrelated auth transition is active", async () => {
+    const id = beginAuthTransitionBarrier();
+    await expect(requestStream(streamPath, { token: "token-1" })).rejects.toBeInstanceOf(AuthTransitionRejectedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    releaseAuthTransitionBarrier(id);
+  });
+
+  it("reads at most 64 KiB of an error body and cancels the rest", async () => {
+    const { stream, state } = countingBody(1024 * 1024, 16 * 1024);
+    fetchMock.mockResolvedValueOnce(new Response(stream, { status: 503, headers: { "Content-Type": "text/plain" } }));
+
+    const error = await requestStream(streamPath, { token: "token-1" }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 503, httpStatus: 503 });
+    expect((error as ApiError).detail).toHaveLength(64 * 1024);
+    expect(state.pulled).toBeLessThanOrEqual(64 * 1024 + 16 * 1024);
+    expect(state.cancelled).toBe(true);
+  });
+
+  it("treats an unbounded non-tar 200 as a protocol error without buffering it", async () => {
+    const { stream, state } = countingBody(8 * 1024 * 1024, 32 * 1024);
+    fetchMock.mockResolvedValueOnce(new Response(stream, { status: 200, headers: { "Content-Type": "application/octet-stream" } }));
+
+    await expect(requestStream(streamPath, { token: "token-1" })).rejects.toMatchObject({ status: 502, httpStatus: 200, detail: undefined });
+    expect(state.pulled).toBeLessThanOrEqual(64 * 1024 + 32 * 1024);
+    expect(state.cancelled).toBe(true);
+  });
+
+  it("raises a 200 JSON error envelope by its code and a 200 success envelope as a protocol error", async () => {
+    const changed = { code: 412, message: "备份已变化", data: { error_code: "BACKUP_CHANGED" } };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(changed), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await expect(requestStream(streamPath, { token: "token-1" })).rejects.toMatchObject({
+      status: 412,
+      httpStatus: 200,
+      message: "备份已变化",
+      detail: changed,
+    });
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, message: "ok", data: {} }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await expect(requestStream(streamPath, { token: "token-1" })).rejects.toMatchObject({ status: 502, httpStatus: 200 });
+  });
+
+  it("keeps the request error envelope, detail and Retry-After for stream errors", async () => {
+    const busy = { code: 429, message: "下载繁忙", data: { error_code: "BACKUP_DOWNLOAD_BUSY" } };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(busy), { status: 429, headers: { "Retry-After": "5" } }));
+    await expect(requestStream(streamPath, { token: "token-1" })).rejects.toMatchObject({
+      status: 429,
+      httpStatus: 429,
+      message: "下载繁忙",
+      detail: busy,
+      retryAfter: 5,
+    });
+
+    const grant = { code: 403, message: "需要授权", data: { error_code: "CREDENTIAL_GRANT_REQUIRED" } };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(grant), { status: 403 }));
+    const denied = await requestStream(streamPath, { token: "token-1" }).catch((caught: unknown) => caught);
+    expect(isCredentialGrantRequiredError(denied)).toBe(true);
+  });
+
+  it("invalidates the current session on its own 401", async () => {
+    const location = stubLocation();
+    sessionStorage.setItem("xirang-auth-token", "token-1");
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "proof-before-401", Date.now() + 60_000);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code: 401, message: "expired", data: null }), { status: 401 }));
+
+    await expect(requestStream(streamPath, { token: "token-1" })).rejects.toMatchObject({ status: 401 });
+
+    expect(sessionStorage.getItem("xirang-auth-token")).toBeNull();
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
+    expect(location.href).toContain("/login?redirect=");
+  });
+
+  it("does not clear a newer session when a stale 401 body finishes after A→B→A", async () => {
+    const location = stubLocation();
+    sessionStorage.setItem("xirang-auth-token", "token-a");
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(streamController) {
+        controller = streamController;
+      },
+    });
+    fetchMock.mockResolvedValueOnce(new Response(body, { status: 401 }));
+
+    const pending = requestStream(streamPath, { token: "token-a" });
+    await Promise.resolve();
+
+    sessionStorage.removeItem("xirang-auth-token");
+    bumpAuthSessionGeneration();
+    sessionStorage.setItem("xirang-auth-token", "token-b");
+    bumpAuthSessionGeneration();
+    sessionStorage.setItem("xirang-auth-token", "token-a");
+    saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "relogin-proof", Date.now() + 60_000);
+    bumpAuthSessionGeneration();
+
+    controller.enqueue(new TextEncoder().encode(JSON.stringify({ code: 401, message: "expired" })));
+    controller.close();
+    await expect(pending).rejects.toMatchObject({ status: 401 });
+
+    expect(sessionStorage.getItem("xirang-auth-token")).toBe("token-a");
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toContain("relogin-proof");
+    expect(location.href).toBe("http://localhost/app/settings?tab=maintenance");
   });
 });

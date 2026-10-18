@@ -50,6 +50,114 @@ Web `POST /api/v1/system/backup-db` 仅以 SQLite `VACUUM INTO` 生成数据库�
 混为同一状态。创建成功后的列表刷新失败不撤销已创建事实。外部配置、当前与历史
 加密密钥、known_hosts 及远端数据必须另行保全，恢复只走现有离线运维流程。
 
+### 数据库文件来源与下载列表
+
+`GET /api/v1/system/backups?source=web|cron` 保持 admin-only，省略 `source`
+仍为 `web`；显式空值、重复或未知来源返回 400 `BACKUP_REQUEST_INVALID`。
+Web 来源沿用 `DB_BACKUP_DIR`，未配置时取 `SQLITE_PATH`（默认
+`./xirang.db`）同目录的 `backups`，同时要求现有 SQLite 运行时开关和实际
+GORM dialect 都为 SQLite。cron 来源只取 trim 后的 `CRON_DB_BACKUP_DIR`，
+以实际 dialect 选择 SQLite 或 PostgreSQL，不搜索备用目录、不接受客户端路径或引擎。
+同一可信目录可以容纳两个命名空间，但二者的列表不混用。
+
+Web 下载准入只接受 `xirang-YYYYMMDD-HHMMSS.db` 或带 1–64 位 ASCII
+字母、数字、下划线、短横线后缀的同名格式，时间戳必须可解析；原 Web 保留清理
+规则不变。普通非空 `.db` 的旧可见性保留，非受管名称只显示为 `unmanaged`，
+不能据此读取内容。cron 只列当前引擎严格受管命名的普通文件，不依赖 job receipt，
+不混入另一引擎、临时文件、符号链接或特殊文件。
+
+响应仍为 `data` 数组，保留 `filename,size,created_at,sha256`，增加
+`source,engine,downloadable,unavailable_reason,packaged_size`。
+`created_at` 仍是文件 mtime，并非创建时间。不可用原因闭合为
+`""|unmanaged|incomplete|unsafe|too_large`；缺少或非法 sidecar、空受管数据
+为 `incomplete`。`packaged_size` 是可计算的 tar 字节数，否则为 0。
+`downloadable=true` 仅表示可尝试下载，不证明内容校验、文件保留或恢复成功；
+数据上限为 4 GiB，超限行仍可见但不可下载。两来源按文件名降序排列。
+
+配置根固定为规范绝对路径，拒绝最终根符号链接并核对打开前、打开后及当前身份。
+受信任配置的祖先目录沿用 cron 语义，不承诺抵御能任意修改部署目录的本机主体。
+文件对通过 rooted、非阻塞、禁止跟随链接的打开及描述符身份/大小/mtime 核对固定；
+成功固定后保留原数据描述符，不按路径寻找替代物，清理 unlink 不改变所读对象。
+每批扫描 256 项，最多 4096 个原始目录项、每个 sidecar 4096 字节、累计 sidecar
+读取 4 MiB（非法候选也计预算）。全局预算耗尽返回 503
+`BACKUP_SCAN_LIMIT_EXCEEDED`，不返回伪完整部分列表；消失项可略过，读取目录失败
+不能当空列表。已配置目录不存在时返回空数组，其他目录错误为 503
+`BACKUP_DIRECTORY_UNAVAILABLE`。Web 不支持或未知 dialect 为 501
+`BACKUP_SOURCE_UNSUPPORTED`，cron 未配置为 409 `BACKUP_SOURCE_NOT_CONFIGURED`。
+安全错误码位于 `data.error_code`，消息不包含路径或原始异常。
+
+新 `backup-db.sh` checksum 记录使用产物 basename，数据库文件和
+`BACKUP_FILE`/receipt 路径保持原义。下载专用 parser 对 cron 旧记录容忍相对、
+非规范或其他挂载位置标签，但要求单记录、无 NUL/反斜线/尾随分隔符且清理后的
+basename 精确相等；标签只用于比较，绝不作为访问路径。Web 只接受 basename
+或固定根下规范绝对路径。下载必须另做真实内容 hash；既有 cron 观察器不扩大
+旧格式准入，下载校验不回写 job、新鲜度或 `content_verified` 事实。
+
+### 经校验的有界 tar 下载
+
+`GET /api/v1/system/backups/:source/:filename/download` 先通过主认证、admin、
+专用 step-up 和系统 grant，再打开备份内容。授权合同见
+[凭据与访问](../domains/credentials-access.md#临时凭据授权与终端)。
+请求必须携带单个强 `If-Match: "<64 位小写 hex digest>"`，缺少为 428
+`BACKUP_PRECONDITION_REQUIRED`，非法为 400 `BACKUP_REQUEST_INVALID`，
+与重新固定的 sidecar 不同为 412 `BACKUP_CHANGED`。路径段不二次解码，
+不接受路径分隔符、点段、NUL、百分号或编码残留；不接受 Range/续传
+（400 `BACKUP_RANGE_UNSUPPORTED`）。令牌、proof、grant 不进入 URL/query。
+
+单 Core 的两个来源共享两个非排队下载许可，容量满立即 429
+`BACKUP_DOWNLOAD_BUSY`、`Retry-After: 5`。数据最多 4 GiB，超限为 413
+`BACKUP_TOO_LARGE`。总预算从认证前开始计十分钟，准备阶段最多 120 秒，
+最终期限取总预算、原主会话及最初所选 grant 到期中的最早值。
+准备超时但总预算有余额时以最多五秒错误写窗口返回 504
+`BACKUP_PREPARE_TIMEOUT`；总期限已尽或响应已提交只能中止，不补 JSON。
+原客户端取消不再写错误响应。无法设置底层 transport deadline 时返回 503，
+不进入认证或文件处理；保持 server 全局 30 秒 WriteTimeout 不变。
+
+准备阶段按初始大小，以最多 32 KiB 的取消感知读取做第一遍 SHA256、额外尾字节及
+描述符 Stat 校验，再 rewind 同一 FD。不存在为 404 `BACKUP_NOT_FOUND`；
+不完整/不安全为 409 `BACKUP_NOT_READY`，内容不符为 409
+`BACKUP_INTEGRITY_FAILED`，存储或无法确认授权为安全 503。
+发头前、传输中距离上次校验至少五秒及 tar 结束前重新核对原主会话和固定 grant ID，
+每次最多 500ms；不以后来新 grant 替换，不写回过期状态。proof 新鲜度是准入条件，
+不是传输租约，不在发送前重新要求它仍剩 300 秒。
+
+响应为不压缩 `application/x-tar`，attachment 名为 `<source>-<原文件名>.tar`，
+携带精确 `Content-Length`、强 digest `ETag`、`Cache-Control: private, no-store`、
+`X-Content-Type-Options: nosniff`、`X-Accel-Buffering: no`。
+CORS 允许 `If-Match`，暴露 `Content-Disposition` 和 `ETag`。
+USTAR 只含原 basename 数据与 `<basename>.sha256`，普通文件 mode 0600、
+uid/gid 0、空 uname/gname、Unix epoch mtime，无路径和扩展元数据。
+checksum 文本为 `<lowercase digest>  <basename>\n`；
+tar 总长度为 `2560 + ceil(dataSize/512)*512`。
+
+第二遍仍从原 FD 读取固定大小并 hash，每次至多 32 KiB 写刷新
+`min(now+30秒,绝对期限)`。只有流出 hash、Stat、context、session 和原 grant
+均有效才发送 checksum 与 tar 结尾；不 defer tar.Close。结束后显式剥离 Gin
+writer，再执行可观察错误的底层 Flush，全部描述符关闭及 flush 完成后才释放许可。
+失败或取消记录一次结果，metadata 仅为来源、引擎、受管 basename、size、
+sent_bytes、固定 stage/reason_code 与 grant_id，不含原始错误、路径、请求头或草稿。
+服务端成功仅证明写入及可观察 flush 成功，不证明客户端收到、落盘或恢复成功；
+已发字节不能撤回，结尾后的 flush 失败也不承诺撤回。
+
+准入真正拒绝记录 `blocked`；基础设施不可用记录 `failure/admission`：
+proof 存储故障与缺 session binding 使用 `authorization_unavailable`，
+缺下载预算使用 `budget_unavailable`。准备预算耗尽仍由预算层返回可写的
+504 `BACKUP_PREPARE_TIMEOUT` 并记录 failure，不误分类成 proof 无效或成功。
+
+R14 备份列表/子路径及精确 grant 创建路径使用局部 recovery：入口即禁止缓存，
+`http.ErrAbortHandler` 原样传至 net/http，其他已提交响应的 panic 也转换为流中止；
+不调用 Gin request dump、不记录 panic 内容或 proof。普通路由仍使用原 Gin recovery。
+本路径不套 ETag/gzip 或整包缓冲中间件。
+
+官方 Nginx 仅为 `^/api/v1/system/backups/(web|cron)/[^/]+/download$`
+配置独立 location，沿用普通 API 的 Host/真实 IP/转发 IP/协议策略，
+使用 HTTP/1.1 上游，禁用 response/request buffering、proxy cache、临时文件和 gzip；
+`proxy_read_timeout 660s`、`proxy_send_timeout 30s`、`send_timeout 30s`。
+660 秒只容纳准备期无响应字节，不延长后端总预算；直连 Core 成功不能替代
+真实代理长下载与取消验收。
+
+### cron 产物观察
+
 独立 admin-only `GET /api/v1/system/cron-backup-status` 不继承 Web 的 SQLite 限制。
 以实际 DB dialect 选择 `xirang-sqlite-*.db` 或 `xirang-postgres-*.dump`；
 `CRON_DB_BACKUP_DIR` 默认空，All-in-One 显式 `/backup/db`，目录是容器内路径。

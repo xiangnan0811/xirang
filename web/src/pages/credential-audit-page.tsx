@@ -52,12 +52,18 @@ const actionOptions = [
   "docker_volumes.discover",
   "config.export",
   "config.import",
+  "system.backup_download",
   "node.doctor.run",
   "node_migration.preflight",
   "probe.ssh",
   "probe.metrics",
   "node_logs.collect",
 ];
+
+const actionLabelKeys: Partial<Record<string, string>> = {
+  "batch_command.retry": "credentialAudit.actions.batchCommandRetry",
+  "system.backup_download": "credentialAudit.actions.systemBackupDownload",
+};
 
 function resolveTimeRange(range: TimeRange): { from?: string; to?: string } {
   if (range === "all") {
@@ -318,7 +324,10 @@ function CredentialAuditPageContent() {
             />
             <Select value={action} onChange={(event) => setAction(event.target.value)} aria-label={t("credentialAudit.actionFilter")}>
               <option value="all">{t("credentialAudit.allActions")}</option>
-              {actionOptions.map((item) => <option key={item} value={item}>{item === "batch_command.retry" ? t("credentialAudit.actions.batchCommandRetry") : item}</option>)}
+              {actionOptions.map((item) => {
+                const labelKey = actionLabelKeys[item];
+                return <option key={item} value={item}>{labelKey ? t(labelKey) : item}</option>;
+              })}
             </Select>
             <Input
               placeholder={t("credentialAudit.purposePlaceholder")}

@@ -309,11 +309,17 @@ export function createTOTPApi() {
       return mapTOTPLoginResponse(raw);
     },
 
-    async requestStepUpProof(token: string, code: string, action: StepUpAction): Promise<StepUpProofResponse> {
+    async requestStepUpProof(
+      token: string,
+      code: string,
+      action: StepUpAction,
+      options: { signal?: AbortSignal } = {},
+    ): Promise<StepUpProofResponse> {
       const raw = await request<RawStepUpProofResponse>("/auth/step-up", {
         method: "POST",
         token,
         body: { code, step_up_action: action },
+        signal: options.signal,
       });
       return mapStepUpProofResponse(raw);
     },

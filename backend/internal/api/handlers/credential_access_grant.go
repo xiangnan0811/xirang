@@ -31,17 +31,19 @@ const (
 	CredentialGrantStatusExpired   = "expired"
 	CredentialGrantStatusRevoked   = "revoked"
 
-	CredentialGrantActionTerminalOpen      = string(auth.StepUpActionTerminalOpen)
-	CredentialGrantActionConfigImport      = string(auth.StepUpActionConfigImport)
-	CredentialGrantActionConfigExport      = string(auth.StepUpActionConfigExport)
-	CredentialGrantActionSnapshotRestore   = string(auth.StepUpActionSnapshotRestore)
-	CredentialGrantActionTaskRestore       = string(auth.StepUpActionTaskRestoreTrigger)
-	CredentialGrantActionTaskManualTrigger = string(auth.StepUpActionTaskManualTrigger)
-	CredentialGrantActionTaskBatchTrigger  = string(auth.StepUpActionTaskBatchTrigger)
-	CredentialGrantActionBatchCommand      = string(auth.StepUpActionBatchCommandCreate)
-	CredentialGrantActionBatchCommandRetry = string(auth.StepUpActionBatchCommandRetry)
-	CredentialGrantPurposeConfigImport     = "config_import"
-	CredentialGrantPurposeConfigExport     = "config_export"
+	CredentialGrantActionTerminalOpen          = string(auth.StepUpActionTerminalOpen)
+	CredentialGrantActionConfigImport          = string(auth.StepUpActionConfigImport)
+	CredentialGrantActionConfigExport          = string(auth.StepUpActionConfigExport)
+	CredentialGrantActionSystemBackupDownload  = string(auth.StepUpActionSystemBackupDownload)
+	CredentialGrantActionSnapshotRestore       = string(auth.StepUpActionSnapshotRestore)
+	CredentialGrantActionTaskRestore           = string(auth.StepUpActionTaskRestoreTrigger)
+	CredentialGrantActionTaskManualTrigger     = string(auth.StepUpActionTaskManualTrigger)
+	CredentialGrantActionTaskBatchTrigger      = string(auth.StepUpActionTaskBatchTrigger)
+	CredentialGrantActionBatchCommand          = string(auth.StepUpActionBatchCommandCreate)
+	CredentialGrantActionBatchCommandRetry     = string(auth.StepUpActionBatchCommandRetry)
+	CredentialGrantPurposeConfigImport         = "config_import"
+	CredentialGrantPurposeConfigExport         = "config_export"
+	CredentialGrantPurposeSystemBackupDownload = "system_backup_download"
 
 	credentialGrantKind   = "jit_grant"
 	credentialGrantSource = "credential_access_grant"
@@ -91,6 +93,11 @@ type configImportCredentialGrantRequest struct {
 }
 
 type configExportCredentialGrantRequest struct {
+	Reason              string `json:"reason" binding:"required"`
+	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
+}
+
+type systemBackupDownloadCredentialGrantRequest struct {
 	Reason              string `json:"reason" binding:"required"`
 	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
 }
@@ -250,6 +257,43 @@ func (h *CredentialAccessGrantHandler) RequestConfigExportGrant(c *gin.Context) 
 	grant, ok := h.createActiveSelfGrant(c, credentialGrantCreateInput{
 		Action:              CredentialGrantActionConfigExport,
 		Purpose:             CredentialGrantPurposeConfigExport,
+		Reason:              reason,
+		RequestedTTLSeconds: int(ttl.Seconds()),
+	})
+	if !ok {
+		return
+	}
+	respondCreated(c, toCredentialGrantDTO(grant))
+}
+
+// RequestSystemBackupDownloadGrant godoc
+// @Summary      申请系统数据库备份下载授权
+// @Description  管理员本人使用 system.backup_download proof 申请 system_backup_download 授权，三个资源 ID 均为 NULL；原因 1–240 Unicode 字符，默认 600 秒，允许 60–1800 秒。授权覆盖两个受信任来源，不是单文件 ticket。
+// @Tags         credentials
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        X-Xirang-Step-Up header string true "system.backup_download proof"
+// @Param        body body systemBackupDownloadCredentialGrantRequest true "原因及授权有效期"
+// @Success      201 {object} handlers.Response
+// @Failure      400 {object} handlers.Response
+// @Failure      401 {object} handlers.Response
+// @Failure      403 {object} handlers.Response
+// @Failure      503 {object} handlers.Response
+// @Router       /credential-access-grants/system-backup-download [post]
+func (h *CredentialAccessGrantHandler) RequestSystemBackupDownloadGrant(c *gin.Context) {
+	var req systemBackupDownloadCredentialGrantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	reason, ttl, ok := h.validateGrantRequest(c, req.Reason, req.RequestedTTLSeconds, auth.StepUpActionSystemBackupDownload, CredentialGrantActionSystemBackupDownload, CredentialGrantPurposeSystemBackupDownload, "system_backup_download")
+	if !ok {
+		return
+	}
+	grant, ok := h.createActiveSelfGrant(c, credentialGrantCreateInput{
+		Action:              CredentialGrantActionSystemBackupDownload,
+		Purpose:             CredentialGrantPurposeSystemBackupDownload,
 		Reason:              reason,
 		RequestedTTLSeconds: int(ttl.Seconds()),
 	})
@@ -1243,6 +1287,8 @@ func credentialGrantOperationLabel(action, purpose string) string {
 		return "settings_import"
 	case action == CredentialGrantActionConfigExport && purpose == CredentialGrantPurposeConfigExport:
 		return "settings_export_sensitive"
+	case action == CredentialGrantActionSystemBackupDownload && purpose == CredentialGrantPurposeSystemBackupDownload:
+		return "system_backup_download"
 	case action == CredentialGrantActionSnapshotRestore && purpose == sshutil.PurposeSnapshot:
 		return "snapshot_restore"
 	case action == CredentialGrantActionTaskRestore && purpose == sshutil.PurposeTaskRestore:

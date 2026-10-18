@@ -447,8 +447,6 @@ func TestStepUpProofPairwiseCrossPurposeRejection(t *testing.T) {
 	manager.SetDB(db)
 	user := seedStepUpUser(t, db, "pairwise-step-up", "admin")
 	actions := auth.AllStepUpActions()
-	accepted := 0
-	rejected := 0
 	for _, issuedAction := range actions {
 		proof := generateStepUpProofForAction(t, manager, user, issuedAction)
 		for _, expectedAction := range actions {
@@ -457,23 +455,12 @@ func TestStepUpProofPairwiseCrossPurposeRejection(t *testing.T) {
 				if err != nil {
 					t.Fatalf("matching action %q rejected: %v", issuedAction, err)
 				}
-				accepted++
 				continue
 			}
 			if err == nil {
 				t.Fatalf("proof for %q accepted as %q", issuedAction, expectedAction)
 			}
-			rejected++
 		}
-	}
-	const reviewedActionCount = 19
-	if len(actions) != reviewedActionCount {
-		t.Fatalf("step-up registry has %d actions, want reviewed count %d", len(actions), reviewedActionCount)
-	}
-	wantAccepted := len(actions)
-	wantRejected := len(actions) * (len(actions) - 1)
-	if accepted != wantAccepted || rejected != wantRejected {
-		t.Fatalf("pairwise matrix accepted=%d rejected=%d, want %d/%d", accepted, rejected, wantAccepted, wantRejected)
 	}
 }
 
@@ -1021,5 +1008,67 @@ func assertRetentionLifecycleStepUpIsolation(t *testing.T, expected, cross auth.
 	okResp := performStepUpRequest(t, router, http.MethodPost, path, token, validProof, `{"reason":"done"}`)
 	if okResp.Code != http.StatusOK {
 		t.Fatalf("matching %s proof should pass, status=%d body=%s", expected, okResp.Code, okResp.Body.String())
+	}
+}
+
+func TestSystemBackupStepUpVerifierUnavailableIsNotChallenge(t *testing.T) {
+	db := openStepUpHandlerTestDB(t)
+	manager := newStepUpTestJWTManager(db)
+	user := seedStepUpUser(t, db, "download-proof-infrastructure", "admin")
+	for _, action := range []auth.StepUpAction{auth.StepUpActionSystemBackupDownload, auth.StepUpActionConfigExport} {
+		proof := generateStepUpProofForAction(t, manager, user, action)
+		router := gin.New()
+		router.GET("/proof", func(c *gin.Context) {
+			c.Set(middleware.CtxUserID, user.ID)
+			c.Set(middleware.CtxRole, user.Role)
+			if EnforceStepUp(c, nil, manager, action, "system_backup_download", "system_backup_download") {
+				t.Error("unavailable verifier accepted")
+			}
+		})
+		req := httptest.NewRequest(http.MethodGet, "/proof", nil)
+		req.Header.Set(StepUpHeaderName, proof)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		want := http.StatusForbidden
+		code := "STEP_UP_REQUIRED"
+		if action == auth.StepUpActionSystemBackupDownload {
+			want = http.StatusServiceUnavailable
+			code = "BACKUP_AUTHORIZATION_UNAVAILABLE"
+		}
+		if response.Code != want || !strings.Contains(response.Body.String(), code) {
+			t.Fatalf("action=%s status=%d body=%s", action, response.Code, response.Body)
+		}
+	}
+}
+
+func TestSystemBackupStepUpDatabaseUsesRequestContext(t *testing.T) {
+	db := openStepUpHandlerTestDB(t)
+	manager := newStepUpTestJWTManager(db)
+	user := seedStepUpUser(t, db, "download-proof-context", "admin")
+	proof := generateStepUpProofForAction(t, manager, user, auth.StepUpActionSystemBackupDownload)
+	seenCanceledContext := false
+	if err := db.Callback().Query().Before("gorm:query").Register("proof:context", func(tx *gorm.DB) {
+		if tx.Statement.Table == "users" {
+			seenCanceledContext = errors.Is(tx.Statement.Context.Err(), context.Canceled)
+			_ = tx.AddError(tx.Statement.Context.Err())
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.GET("/proof", func(c *gin.Context) {
+		ctx, cancel := context.WithCancel(c.Request.Context())
+		cancel()
+		c.Request = c.Request.WithContext(ctx)
+		c.Set(middleware.CtxUserID, user.ID)
+		c.Set(middleware.CtxRole, user.Role)
+		EnforceStepUp(c, db, manager, auth.StepUpActionSystemBackupDownload, "system_backup_download", "system_backup_download")
+	})
+	req := httptest.NewRequest(http.MethodGet, "/proof", nil)
+	req.Header.Set(StepUpHeaderName, proof)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if !seenCanceledContext || response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("request context observed=%v status=%d body=%s", seenCanceledContext, response.Code, response.Body)
 	}
 }

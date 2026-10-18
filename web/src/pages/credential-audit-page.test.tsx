@@ -347,4 +347,30 @@ describe("CredentialAuditPage", () => {
     const queried = getCredentialAuditEventsMock.mock.lastCall?.[1] as { action?: string };
     expect(queried.action).not.toBe("batch_command.create");
   });
+
+  it("系统数据库备份下载动作以精确值筛选并显示本地化名称", async () => {
+    const user = userEvent.setup();
+    render(<CredentialAuditPage />);
+
+    await waitFor(() => {
+      expect(getCredentialAuditEventsMock).toHaveBeenCalledTimes(1);
+    });
+
+    const filter = screen.getByLabelText("按凭据审计动作过滤") as HTMLSelectElement;
+    const download = Array.from(filter.options).find((option) => option.value === "system.backup_download");
+    expect(download?.label).toBe(zh.credentialAudit.actions.systemBackupDownload);
+    expect(download?.label).toBe("系统数据库备份下载");
+    expect(en.credentialAudit.actions.systemBackupDownload).toBe("System database backup download");
+
+    getCredentialAuditEventsMock.mockClear();
+    await user.selectOptions(filter, "system.backup_download");
+
+    await waitFor(() => {
+      expect(getCredentialAuditEventsMock).toHaveBeenCalled();
+    });
+    expect(getCredentialAuditEventsMock).toHaveBeenLastCalledWith(
+      "test-token",
+      expect.objectContaining({ action: "system.backup_download" }),
+    );
+  });
 });

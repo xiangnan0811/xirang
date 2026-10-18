@@ -239,7 +239,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		panic(fmt.Sprintf("TRUSTED_PROXIES invalid for backup content scheme policy: %v", err))
 	}
 	router.MaxMultipartMemory = 10 << 20 // 10 MB
-	router.Use(gin.Recovery(), middleware.RequestID(), middleware.StructuredLogger())
+	router.Use(systemBackupDownloadRecovery(), middleware.SystemBackupDownloadBudget(), middleware.RequestID(), middleware.StructuredLogger())
 	router.Use(middleware.PrometheusMetrics())
 	router.Use(recoveryCodesNoStore())
 	router.Use(func(c *gin.Context) {
@@ -260,7 +260,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Xirang-Step-Up")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Xirang-Step-Up, If-Match")
+		c.Writer.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, ETag")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
@@ -381,6 +382,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	settingsHandler := handlers.NewSettingsHandler(dep.DB, dep.SettingsService).WithBackupAssetTransitioner(featureTransitioner)
 	versionHandler := handlers.NewVersionHandler()
 	systemHandler := handlers.NewSystemHandler(dep.DB)
+	systemBackupDownloadHandler := handlers.NewSystemBackupDownloadHandler(dep.DB, dep.JWTManager)
 	storageGuideHandler := handlers.NewStorageGuideHandler()
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager, dep.DB)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
@@ -726,6 +728,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/credential-access-grants/terminal", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestTerminalGrant)
 	secured.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigImportGrant)
 	secured.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestConfigExportGrant)
+	secured.POST("/credential-access-grants/system-backup-download", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestSystemBackupDownloadGrant)
 	secured.POST("/credential-access-grants/snapshot-restore", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestSnapshotRestoreGrant)
 	secured.POST("/credential-access-grants/task-restore", middleware.RequireRole("admin"), credentialAccessGrantHandler.RequestTaskRestoreGrant)
 	secured.POST("/credential-access-grants/task-manual-trigger", middleware.RBAC("tasks:trigger"), credentialAccessGrantHandler.RequestTaskManualTriggerGrant)
@@ -845,6 +848,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/version/check", middleware.RequireRole("admin"), versionHandler.Check)
 	secured.POST("/system/backup-db", middleware.RequireRole("admin"), systemHandler.BackupDB)
 	secured.GET("/system/backups", middleware.RequireRole("admin"), systemHandler.ListBackups)
+	secured.GET("/system/backups/:source/:filename/download", middleware.RequireRole("admin"), systemBackupDownloadHandler.Download)
 	secured.GET("/system/cron-backup-status", middleware.RequireRole("admin"), systemHandler.CronBackupStatus)
 	secured.GET("/system/encryption-status", middleware.RequireRole("admin"), systemHandler.EncryptionStatus)
 	secured.POST("/system/verify-mount", middleware.RequireRole("admin"), storageGuideHandler.VerifyMount)

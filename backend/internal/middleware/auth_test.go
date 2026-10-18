@@ -523,3 +523,29 @@ func TestAuthMiddlewareDurableLogoutIsSharedAndDatabaseFailureFailsClosed(t *tes
 		t.Fatalf("revocation DB failure status=%d want=%d body=%s", failureResp.Code, http.StatusServiceUnavailable, failureResp.Body.String())
 	}
 }
+
+func TestAuthMiddlewareUserLookupDistinguishesMissingFromInfrastructure(t *testing.T) {
+	manager := newTestJWTManager()
+	user := model.User{ID: 100, Username: "missing-user", Role: "admin"}
+	token := generateTestToken(manager, user)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatal(err)
+	}
+	if response := authPerformRequest(setupAuthHandler(manager, db), token); response.Code != http.StatusUnauthorized {
+		t.Fatalf("missing user status=%d body=%s", response.Code, response.Body)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if response := authPerformRequest(setupAuthHandler(manager, db), token); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavailable user store status=%d body=%s", response.Code, response.Body)
+	}
+}

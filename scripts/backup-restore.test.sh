@@ -204,6 +204,63 @@ assert_logged_mode ".sha256.tmp." 600
   exit 1
 }
 
+# Exercise the actual producer with deployment-style directory spellings, then
+# move each untouched pair to a different root before checking and restoring it.
+# Only Docker state and mode observation use the existing stubs; SQLite backup,
+# SHA-256 verification and restoration all consume the real database product.
+for output_case in default relative noncanonical trailing_slash; do
+  (
+    case_root="$WORK/checksum-$output_case"
+    mkdir -p -- "$case_root"
+    cd -- "$case_root"
+    case "$output_case" in
+      default) output_dir="./backups" ;;
+      relative) output_dir="relative-backups" ;;
+      noncanonical)
+        mkdir -p -- path-parent
+        output_dir="path-parent/../noncanonical-backups"
+        ;;
+      trailing_slash) output_dir="trailing-backups/" ;;
+    esac
+    backup_args=()
+    [[ "$output_case" == default ]] || backup_args+=("$output_dir")
+    product_output="$(PATH="$STUB_BIN:$PATH" DB_TYPE=sqlite SQLITE_PATH="$source_db" \
+      XIRANG_BACKUP_RECEIPT_FD=3 bash "$BACKUP_SCRIPT" "${backup_args[@]}" 3>receipt)"
+    product_file="$(printf '%s\n' "$product_output" | awk -F= '$1 == "BACKUP_FILE" {value=substr($0, index($0, "=") + 1)} END {print value}')"
+    product_name="${product_file##*/}"
+    [[ "$product_name" =~ ^xirang-sqlite-[0-9]{8}-[0-9]{6}\.db$ && \
+      "$product_file" == "$output_dir/$product_name" ]] || {
+      echo "FAIL: $output_case backup changed its BACKUP_FILE path contract" >&2
+      exit 1
+    }
+    cmp -s receipt <(printf '%s\n' "$product_name") || {
+      echo "FAIL: $output_case backup changed its basename receipt contract" >&2
+      exit 1
+    }
+    read -r product_digest product_label <"$product_file.sha256"
+    [[ "$product_digest" =~ ^[0-9a-f]{64}$ && "$product_label" == "$product_name" && \
+      "$(wc -l <"$product_file.sha256")" -eq 1 ]] || {
+      echo "FAIL: $output_case backup did not publish one basename checksum record" >&2
+      exit 1
+    }
+    (cd -- "$output_dir"; sha256sum -c -- "$product_name.sha256") >/dev/null
+    mkdir -p -- relocated-mount
+    cp -- "$product_file" "$product_file.sha256" relocated-mount/
+    # Removing the producer root prevents a path-labelled checksum from passing
+    # by accidentally following the original artifact instead of the copy.
+    rm -rf -- "$output_dir"
+    (cd -- relocated-mount; sha256sum -c -- "$product_name.sha256") >/dev/null
+    PATH="$STUB_BIN:$PATH" XIRANG_RESTORE_OFFLINE=1 DB_TYPE=sqlite \
+      SQLITE_PATH="$case_root/restored/live.db" \
+      bash "$RESTORE_SCRIPT" "relocated-mount/$product_name" >/dev/null
+    [[ "$(sqlite3 "$case_root/restored/live.db" 'SELECT value FROM values_table;')" == new && \
+      "$(sqlite3 "$case_root/restored/live.db" 'PRAGMA integrity_check;')" == ok ]] || {
+      echo "FAIL: $output_case real backup did not survive relocation and restore" >&2
+      exit 1
+    }
+  )
+done
+
 sqlite_zero_dir="$WORK/sqlite-backups-000"
 : >"$MODE_LOG"
 sqlite_zero_output="$(umask 000; PATH="$STUB_BIN:$PATH" DB_TYPE=sqlite SQLITE_PATH="$source_db" \

@@ -381,6 +381,32 @@ describe("CredentialAccessGrantsPage", () => {
     expect(lastOptions().action).not.toBe("batch_command.create");
   });
 
+  it("系统数据库备份下载动作和用途以精确值筛选且动作显示本地化名称", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText("本页 1 条");
+
+    const actionFilter = screen.getByLabelText("按授权动作过滤") as HTMLSelectElement;
+    const download = Array.from(actionFilter.options).find((option) => option.value === "system.backup_download");
+    expect(download?.label).toBe("系统数据库备份下载");
+    const purposeFilter = screen.getByLabelText("按授权用途过滤") as HTMLSelectElement;
+    expect(Array.from(purposeFilter.options).some((option) => option.value === "system_backup_download")).toBe(true);
+
+    mocks.list.mockClear();
+    await user.selectOptions(actionFilter, "system.backup_download");
+    await screen.findByText("本页 1 条");
+    await user.selectOptions(purposeFilter, "system_backup_download");
+    await screen.findByText("本页 1 条");
+
+    expect(mocks.list).toHaveBeenLastCalledWith(
+      "test-token",
+      expect.objectContaining({ action: "system.backup_download", purpose: "system_backup_download" }),
+      expect.anything(),
+    );
+    expect(lastOptions().action).not.toBe("config.export");
+    expect(lastOptions().purpose).not.toBe("config_export");
+  });
+
   describe("状态保真", () => {
     it("六种存储状态原样显示，未知、空、缺失状态显示为未知且不冒充过期或有效", async () => {
       mocks.list.mockResolvedValue(page([

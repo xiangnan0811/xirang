@@ -186,7 +186,7 @@ finish_backup() {
     echo "❌ 无法生成有效 SHA-256 校验值：${artifact_tmp}" >&2
     return 1
   fi
-  printf '%s  %s\n' "${digest}" "${backup_file}" > "${checksum_tmp}"
+  printf '%s  %s\n' "${digest}" "${backup_file##*/}" > "${checksum_tmp}"
   if [[ ! -s "${checksum_tmp}" ]]; then
     echo "❌ 校验文件为空：${checksum_tmp}" >&2
     return 1

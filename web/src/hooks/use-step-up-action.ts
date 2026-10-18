@@ -8,7 +8,8 @@ import {
 } from "@/lib/sensitive-step-up";
 import type { StepUpAction } from "@/lib/api/totp-api";
 
-export function useStepUpAction(stepUpAction: StepUpAction, options?: StepUpProofOptions) {
+// Retrying hook calls stay unowned: an attempt-scoped signal belongs to direct ensureStepUpProof callers.
+export function useStepUpAction(stepUpAction: StepUpAction, options?: Omit<StepUpProofOptions, "signal">) {
   const {
     ensureStepUpProof,
     clearStepUpProof,

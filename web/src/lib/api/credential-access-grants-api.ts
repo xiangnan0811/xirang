@@ -51,12 +51,16 @@ function stringValue(value: unknown): string {
 
 function mapGrantAction(value: unknown): CredentialAccessGrantAction {
   const raw = stringValue(value);
-  return raw === "terminal.open" || raw === "config.import" || raw === "config.export" || raw === "snapshot.restore" || raw === "task.restore_trigger" || raw === "task.manual_trigger" || raw === "task.batch_trigger" || raw === "batch_command.create" || raw === "batch_command.retry" ? raw : "unknown";
+  return raw === "terminal.open" || raw === "config.import" || raw === "config.export" || raw === "system.backup_download" || raw === "snapshot.restore" || raw === "task.restore_trigger" || raw === "task.manual_trigger" || raw === "task.batch_trigger" || raw === "batch_command.create" || raw === "batch_command.retry" ? raw : "unknown";
 }
 
 function mapGrantPurpose(value: unknown): CredentialAccessGrantPurpose {
   const raw = stringValue(value);
-  return raw === "terminal" || raw === "config_import" || raw === "config_export" || raw === "snapshot" || raw === "task_restore" || raw === "task_command" || raw === "batch_command" ? raw : "unknown";
+  return raw === "terminal" || raw === "config_import" || raw === "config_export" || raw === "system_backup_download" || raw === "snapshot" || raw === "task_restore" || raw === "task_command" || raw === "batch_command" ? raw : "unknown";
+}
+
+function assertCurrentOwner(options: { signal: AbortSignal; isCurrent: () => boolean }): void {
+  if (options.signal.aborted || !options.isCurrent()) throw new DOMException("Aborted", "AbortError");
 }
 
 function mapGrantStatus(value: unknown): CredentialAccessGrantStatus {
@@ -223,6 +227,27 @@ export function createCredentialAccessGrantsApi() {
           requested_ttl_seconds: input.requestedTtlSeconds,
         },
       });
+      return mapCredentialAccessGrant(raw);
+    },
+
+    async requestSystemBackupDownloadCredentialGrant(
+      token: string,
+      input: { reason: string; requestedTtlSeconds?: number },
+      stepUpProof: string,
+      options: { signal: AbortSignal; isCurrent: () => boolean },
+    ): Promise<CredentialAccessGrant> {
+      assertCurrentOwner(options);
+      const raw = await request<CredentialAccessGrantResponse>("/credential-access-grants/system-backup-download", {
+        method: "POST",
+        token,
+        stepUpProof,
+        signal: options.signal,
+        body: {
+          reason: input.reason,
+          requested_ttl_seconds: input.requestedTtlSeconds,
+        },
+      });
+      assertCurrentOwner(options);
       return mapCredentialAccessGrant(raw);
     },
 

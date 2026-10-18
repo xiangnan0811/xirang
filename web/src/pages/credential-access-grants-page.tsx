@@ -41,6 +41,7 @@ const actionOptions = [
   "terminal.open",
   "config.import",
   "config.export",
+  "system.backup_download",
   "snapshot.restore",
   "task.restore_trigger",
   "task.manual_trigger",
@@ -53,11 +54,17 @@ const purposeOptions = [
   "terminal",
   "config_import",
   "config_export",
+  "system_backup_download",
   "snapshot",
   "task_restore",
   "task_command",
   "batch_command",
 ];
+
+const actionLabelKeys: Partial<Record<string, string>> = {
+  "batch_command.retry": "credentialGrants.actions.batchCommandRetry",
+  "system.backup_download": "credentialGrants.actions.systemBackupDownload",
+};
 
 // Filters send exact stored states; "unknown" stands for any unrecognized wire value and is never a query.
 const primaryStatusOptions: CredentialAccessGrantStatus[] = ["active", "expired"];
@@ -207,7 +214,10 @@ function GrantPageSession({ token }: { token: string }) {
             />
             <Select value={action} onChange={filterChange(setAction)} aria-label={t("credentialGrants.actionFilter")}>
               <option value="all">{t("credentialGrants.allActions")}</option>
-              {actionOptions.map((item) => <option key={item} value={item}>{item === "batch_command.retry" ? t("credentialGrants.actions.batchCommandRetry") : item}</option>)}
+              {actionOptions.map((item) => {
+                const labelKey = actionLabelKeys[item];
+                return <option key={item} value={item}>{labelKey ? t(labelKey) : item}</option>;
+              })}
             </Select>
             <Select value={purpose} onChange={filterChange(setPurpose)} aria-label={t("credentialGrants.purposeFilter")}>
               <option value="all">{t("credentialGrants.allPurposes")}</option>

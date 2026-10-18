@@ -77,8 +77,8 @@ func TestSystemHandlerListBackupsRejectsNonSQLite(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&resp); err != nil {
 		t.Fatalf("解析响应失败: %v", err)
 	}
-	if resp.Code != http.StatusNotImplemented || resp.Message != "当前仅支持 SQLite 数据库备份" {
-		t.Fatalf("期望标准 501 响应，实际: %+v", resp)
+	if resp.Code != http.StatusNotImplemented || resp.Message != "当前不支持此备份来源" {
+		t.Fatalf("期望标准来源不支持响应，实际: %+v", resp)
 	}
 }
 

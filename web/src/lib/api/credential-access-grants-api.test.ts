@@ -102,6 +102,20 @@ describe("credential access grants api", () => {
     expect(grant.status).toBe("active");
   });
 
+  it("recognizes the dedicated system backup download tuple instead of mapping it to unknown", () => {
+    const grant = mapCredentialAccessGrant({
+      action: "system.backup_download",
+      purpose: "system_backup_download",
+      status: "active",
+    });
+    const purposeShaped = mapCredentialAccessGrant({ action: "system_backup_download", purpose: "system.backup_download" });
+
+    expect(grant.action).toBe("system.backup_download");
+    expect(grant.purpose).toBe("system_backup_download");
+    expect(purposeShaped.action).toBe("unknown");
+    expect(purposeShaped.purpose).toBe("unknown");
+  });
+
   it("preserves snapshot restore grant tuple and task binding", () => {
     const grant = mapCredentialAccessGrant({
       action: "snapshot.restore",
@@ -356,6 +370,100 @@ describe("credential access grants api", () => {
       },
     });
     expect(grant).toMatchObject({ id: 23, nodeId: undefined, action: "config.export", purpose: "config_export", status: "active" });
+  });
+
+  describe("system backup download grant ownership", () => {
+    const grantPayload = {
+      id: 41,
+      requester_user_id: 7,
+      requester_username: "admin",
+      requester_role: "admin",
+      action: "system.backup_download",
+      purpose: "system_backup_download",
+      reason: "Offline restore rehearsal",
+      status: "active",
+      requested_ttl_seconds: 600,
+      requested_at: "2026-05-20T00:00:00Z",
+      expires_at: "2026-05-20T00:10:00Z",
+      created_at: "2026-05-20T00:00:00Z",
+      updated_at: "2026-05-20T00:00:00Z",
+    };
+
+    it("returns the system-scoped grant only while the owner stays current", async () => {
+      requestMock.mockResolvedValueOnce(grantPayload);
+      const controller = new AbortController();
+
+      const grant = await createCredentialAccessGrantsApi().requestSystemBackupDownloadCredentialGrant(
+        "auth-marker",
+        { reason: "Offline restore rehearsal", requestedTtlSeconds: 600 },
+        "step-up-marker",
+        { signal: controller.signal, isCurrent: () => true },
+      );
+
+      expect(requestMock).toHaveBeenCalledTimes(1);
+      expect(requestMock).toHaveBeenCalledWith("/credential-access-grants/system-backup-download", {
+        method: "POST",
+        token: "auth-marker",
+        stepUpProof: "step-up-marker",
+        signal: controller.signal,
+        body: { reason: "Offline restore rehearsal", requested_ttl_seconds: 600 },
+      });
+      expect(grant).toMatchObject({
+        id: 41,
+        action: "system.backup_download",
+        purpose: "system_backup_download",
+        nodeId: undefined,
+        taskId: undefined,
+        policyId: undefined,
+      });
+    });
+
+    it.each([
+      ["aborted", () => { const c = new AbortController(); c.abort(); return { signal: c.signal, isCurrent: () => true }; }],
+      ["stale", () => ({ signal: new AbortController().signal, isCurrent: () => false })],
+    ])("does not send a grant request for an already %s owner", async (_label, makeOptions) => {
+      await expect(createCredentialAccessGrantsApi().requestSystemBackupDownloadCredentialGrant(
+        "auth-marker",
+        { reason: "Offline restore rehearsal" },
+        "step-up-marker",
+        makeOptions(),
+      )).rejects.toMatchObject({ name: "AbortError" });
+      expect(requestMock).not.toHaveBeenCalled();
+    });
+
+    it("withholds a grant that resolves after the owner became stale", async () => {
+      let current = true;
+      let resolveRequest: (value: unknown) => void = () => undefined;
+      requestMock.mockImplementationOnce(() => new Promise((resolve) => { resolveRequest = resolve; }));
+
+      const pending = createCredentialAccessGrantsApi().requestSystemBackupDownloadCredentialGrant(
+        "auth-marker",
+        { reason: "Offline restore rehearsal" },
+        "step-up-marker",
+        { signal: new AbortController().signal, isCurrent: () => current },
+      );
+      current = false;
+      resolveRequest(grantPayload);
+
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    });
+
+    it("withholds a grant when the owner signal aborts while the request is in flight", async () => {
+      const controller = new AbortController();
+      let resolveRequest: (value: unknown) => void = () => undefined;
+      requestMock.mockImplementationOnce(() => new Promise((resolve) => { resolveRequest = resolve; }));
+
+      const pending = createCredentialAccessGrantsApi().requestSystemBackupDownloadCredentialGrant(
+        "auth-marker",
+        { reason: "Offline restore rehearsal" },
+        "step-up-marker",
+        { signal: controller.signal, isCurrent: () => true },
+      );
+      controller.abort();
+      resolveRequest(grantPayload);
+
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    });
   });
 
   it("requests a snapshot restore grant with task, reason, ttl, bearer token, and step-up proof", async () => {

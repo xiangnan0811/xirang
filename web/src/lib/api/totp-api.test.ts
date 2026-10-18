@@ -67,6 +67,24 @@ describe("totp-api step-up", () => {
       proofTtlSeconds: 300,
     });
   });
+
+  it("forwards the owner signal so an aborted proof POST rejects without mapping a late body", async () => {
+    fetchMock.mockReset();
+    fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    }));
+    const controller = new AbortController();
+    const api = createTOTPApi();
+
+    const pending = api.requestStepUpProof("token", "123456", STEP_UP_ACTIONS.systemBackupDownload, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect((fetchMock.mock.calls[0] as [string, RequestInit])[1].signal).toBe(controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
 });
 
 describe("totp-api enrollment", () => {

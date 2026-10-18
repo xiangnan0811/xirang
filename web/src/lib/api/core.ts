@@ -278,9 +278,8 @@ function invalidateCurrentAuthSession(): void {
   }
 }
 
-async function doFetch(baseUrl: string, path: string, options: RequestOptions): Promise<Response> {
+function requestHeaders(options: RequestOptions): Record<string, string> {
   const headers: Record<string, string> = {};
-  const method = options.method ?? "GET";
   if (options.body) {
     headers["Content-Type"] = "application/json";
   }
@@ -293,9 +292,14 @@ async function doFetch(baseUrl: string, path: string, options: RequestOptions): 
   if (options.idempotencyKey) {
     headers["Idempotency-Key"] = options.idempotencyKey;
   }
+  return headers;
+}
+
+async function doFetch(baseUrl: string, path: string, options: RequestOptions): Promise<Response> {
+  const method = options.method ?? "GET";
   return fetch(`${baseUrl}${path}`, {
     method,
-    headers,
+    headers: requestHeaders(options),
     body: options.body ? JSON.stringify(options.body) : undefined,
     signal: options.signal,
     cache: method === "GET" ? "no-cache" : undefined
@@ -399,12 +403,75 @@ function requestError(
   return error;
 }
 
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+// Recovery verify carries its own restricted Bearer, never the stored session: its 401 is a
+// classified RECOVERY_ENROLLMENT_INVALID result, not an ordinary session expiry.
+const AUTH_PUBLIC_PATHS = ["/auth/login", "/auth/captcha", "/auth/2fa/login", "/auth/recovery/enrollment/verify"];
+
+type RequestSession = {
+  token: string | undefined;
+  generation: number;
+};
+
+function beginRequestSession(options: RequestOptions): RequestSession {
   assertAuthTransitionAllowed(options.authTransitionId);
+  return { token: options.token, generation: getAuthSessionGeneration() };
+}
+
+function parseResponsePayload(text: string): unknown {
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+/** Throws for 401 (invalidating only the still-current originating session) and any non-2xx status. */
+function assertResponseStatus(path: string, response: Response, payload: unknown, session: RequestSession): void {
+  if (response.status === 401 && !AUTH_PUBLIC_PATHS.includes(path)) {
+    if (isCurrentAuthSession(session.token, session.generation)) {
+      invalidateCurrentAuthSession();
+    }
+    throw requestError(401, "session expired", payload, response.status);
+  }
+
+  if (!response.ok) {
+    const retryAfter = parseRetryAfter(response, payload);
+    const fallback = i18n.t("common.requestFailed", { status: response.status });
+    let message: unknown = fallback;
+    if (payload && typeof payload === "object" && "code" in payload && "message" in payload) {
+      const envelopeMessage = payload.message;
+      if (typeof envelopeMessage === "string") {
+        message = envelopeMessage || fallback;
+      } else if (envelopeMessage != null) {
+        message = String(envelopeMessage) || fallback;
+      }
+    }
+    throw requestError(response.status, message, payload, response.status, retryAfter);
+  }
+}
+
+function isEnvelopePayload(payload: unknown): payload is { code: unknown; message?: unknown; data?: unknown; total?: unknown } {
+  return Boolean(payload && typeof payload === "object" && "code" in payload);
+}
+
+function assertEnvelopeSuccess(payload: unknown, responseStatus: number): void {
+  if (!isEnvelopePayload(payload)) {
+    return;
+  }
+  const code = payload.code;
+  if (typeof code === "number" && isSuccessEnvelopeCode(code, responseStatus)) {
+    return;
+  }
+  throw requestError(code, "message" in payload ? payload.message : undefined, payload, responseStatus);
+}
+
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const session = beginRequestSession(options);
   const method = options.method ?? "GET";
   const isWriteOperation = method !== "GET";
-  const requestToken = options.token;
-  const requestGeneration = getAuthSessionGeneration();
   const directApiBaseUrl = !isWriteOperation && !options.token && !options.stepUpProof && canUseDevDirectFallback(API_BASE_URL)
     ? configuredDevDirectApiUrl()
     : null;
@@ -427,57 +494,88 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     }
   }
 
-  const text = await response.text();
-  let payload: unknown = null;
-
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = text;
-    }
-  }
-
-  // Recovery verify carries its own restricted Bearer, never the stored session: its 401 is a
-  // classified RECOVERY_ENROLLMENT_INVALID result, not an ordinary session expiry.
-  const AUTH_PUBLIC_PATHS = ["/auth/login", "/auth/captcha", "/auth/2fa/login", "/auth/recovery/enrollment/verify"];
-  if (response.status === 401 && !AUTH_PUBLIC_PATHS.includes(path)) {
-    if (isCurrentAuthSession(requestToken, requestGeneration)) {
-      invalidateCurrentAuthSession();
-    }
-    throw requestError(401, "session expired", payload, response.status);
-  }
-
-  if (!response.ok) {
-    const retryAfter = parseRetryAfter(response, payload);
-    const fallback = i18n.t("common.requestFailed", { status: response.status });
-    let message: unknown = fallback;
-    if (payload && typeof payload === "object" && "code" in payload && "message" in payload) {
-      const envelopeMessage = payload.message;
-      if (typeof envelopeMessage === "string") {
-        message = envelopeMessage || fallback;
-      } else if (envelopeMessage != null) {
-        message = String(envelopeMessage) || fallback;
-      }
-    }
-    throw requestError(response.status, message, payload, response.status, retryAfter);
-  }
+  const payload = parseResponsePayload(await response.text());
+  assertResponseStatus(path, response, payload, session);
 
   // Auto-unwrap unified {code, message, data} envelope
-  if (payload && typeof payload === "object" && "code" in payload) {
-    const code = payload.code;
-    const envelopeMessage = "message" in payload ? payload.message : undefined;
-    if (typeof code === "number" && isSuccessEnvelopeCode(code, response.status)) {
-      // For paginated responses, return the full envelope (unwrapPaginated needs total/page/page_size)
-      if ("total" in payload) {
-        return payload as T;
-      }
-      return ("data" in payload ? payload.data : undefined) as T;
+  assertEnvelopeSuccess(payload, response.status);
+  if (isEnvelopePayload(payload)) {
+    // For paginated responses, return the full envelope (unwrapPaginated needs total/page/page_size)
+    if ("total" in payload) {
+      return payload as T;
     }
-    throw requestError(code, envelopeMessage, payload, response.status);
+    return ("data" in payload ? payload.data : undefined) as T;
   }
 
   return payload as T;
+}
+
+export type StreamRequestOptions = RequestOptions & { ifMatch?: string };
+
+const STREAM_MEDIA_TYPE = "application/x-tar";
+const STREAM_ERROR_BODY_LIMIT = 64 * 1024;
+
+/** Reads at most `limit` bytes of an error/non-stream body, then cancels the remainder. */
+async function readBoundedText(response: Response, limit: number): Promise<string> {
+  const body = response.body;
+  if (!body) {
+    return "";
+  }
+  const reader = body.getReader();
+  const bytes = new Uint8Array(limit);
+  let received = 0;
+  let finished = false;
+  try {
+    while (received < limit) {
+      const { done, value } = await reader.read();
+      if (done) {
+        finished = true;
+        break;
+      }
+      const take = Math.min(value.byteLength, limit - received);
+      bytes.set(value.subarray(0, take), received);
+      received += take;
+    }
+  } finally {
+    if (!finished) {
+      // Drop the unread remainder (or a failed body) instead of buffering it.
+      void reader.cancel().catch(() => undefined);
+    }
+  }
+  return new TextDecoder().decode(bytes.subarray(0, received));
+}
+
+/**
+ * Authenticated binary GET for the backup tar stream. Never retried, never sent to the dev direct
+ * fallback, never cached and never redirected. A 200 `application/x-tar` response is returned with its
+ * body unread; the caller owns reading or cancelling it. Every other response is read for at most
+ * 64 KiB and raised as ApiError with the same 401/status/envelope rules as `request`.
+ */
+export async function requestStream(path: string, options: StreamRequestOptions = {}): Promise<Response> {
+  const session = beginRequestSession(options);
+  const headers = requestHeaders(options);
+  if (options.ifMatch !== undefined) {
+    headers["If-Match"] = options.ifMatch;
+  }
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    signal: options.signal,
+    cache: "no-store",
+    redirect: "error",
+  });
+
+  const mediaType = (response.headers.get("Content-Type") ?? "").split(";", 1)[0].trim().toLowerCase();
+  if (response.status === 200 && mediaType === STREAM_MEDIA_TYPE) {
+    return response;
+  }
+
+  const payload = parseResponsePayload(await readBoundedText(response, STREAM_ERROR_BODY_LIMIT));
+  assertResponseStatus(path, response, payload, session);
+  assertEnvelopeSuccess(payload, response.status);
+  // A successful status that is neither the expected stream nor an error envelope is a protocol error.
+  throw requestError(502, i18n.t("common.requestFailed", { status: 502 }), undefined, response.status);
 }
 
 function hasEnvelopeErrorCode(error: unknown, code: string): error is ApiError {

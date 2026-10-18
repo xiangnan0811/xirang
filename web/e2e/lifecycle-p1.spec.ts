@@ -355,7 +355,9 @@ function expectCronEvidence(cron: CronStatus, status: CronStatusName, maxAgeSeco
 }
 
 function waitForMaintenanceReads(page: Page): Promise<{ backups: ListedBackup[]; cron: CronStatus }> {
-  const backups = page.waitForResponse((response) => isApi(response, "GET", "/api/v1/system/backups"))
+  // The panel also reads `?source=cron` from this pathname; only the query-free request is the Web list.
+  const backups = page.waitForResponse((response) =>
+    isApi(response, "GET", "/api/v1/system/backups") && new URL(response.url()).search === "")
     .then((response) => readEnvelope(response, "backup list").then(parseBackupList));
   const cron = page.waitForResponse((response) => isApi(response, "GET", "/api/v1/system/cron-backup-status"))
     .then((response) => readEnvelope(response, "cron backup status").then(parseCronStatus));
@@ -428,9 +430,10 @@ async function maintenancePanels(page: Page): Promise<{ web: Locator; observer: 
     if (child.tagName === "H2") return "heading";
     if (child.querySelector("h3")?.textContent?.trim() === "Self Backup") return "self";
     if (child.getAttribute("data-panel") === "cron-backup-status") return "cron";
+    if (child.getAttribute("data-panel") === "cron-backup-files") return "cron-files";
     if (child.querySelector("h3")?.textContent?.trim() === "Config Import / Export") return "config";
     return child.tagName.toLowerCase();
-  }))).toEqual(["heading", "self", "cron", "config"]);
+  }))).toEqual(["heading", "self", "cron", "cron-files", "config"]);
   return { web, observer };
 }
 
@@ -478,7 +481,7 @@ test("creates a Web SQLite snapshot and observes cron artifacts without content 
       .then((response) => readEnvelope(response, "backup create").then(parseCreatedBackup));
     let refreshed: ListedBackup[] | null = null;
     const listed = page.waitForResponse(async (response) => {
-      if (!isApi(response, "GET", "/api/v1/system/backups")) return false;
+      if (!isApi(response, "GET", "/api/v1/system/backups") || new URL(response.url()).search !== "") return false;
       const body = await response.text();
       expect(response.status(), body).toBe(200);
       const parsed = JSON.parse(body) as { code?: unknown; data?: unknown };
