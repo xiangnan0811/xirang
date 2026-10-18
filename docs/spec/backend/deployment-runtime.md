@@ -246,3 +246,8 @@ Worker 保持可选、本地构建且不发布公共镜像。启用能力与安�
 Core 的 `tzdata` 锁定更新仅影响 All-in-One 时区数据库；Worker 未安装独立
 tzdata 包，不因此改变工具链 inventory。更新后须重新构建 Core，并复核受规则
 变化地区的本地调度时间；既有 UTC 时刻不做数据迁移。
+
+Core 的 Expat 直接锁定为 `libexpat=2.9.0-r0`，替代软件源已移除的
+`2.8.5-r0`；基础镜像 digest 和其他包锁定保持不变。此包不在 Worker 的显式
+包清单或生产工具链 inventory 中，不因此新增 Worker pin 或修改指纹合同。
+更新须重新构建并验证 Core 的双架构镜像与实际就绪路径；不新增配置或数据迁移。
