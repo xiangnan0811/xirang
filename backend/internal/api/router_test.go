@@ -257,6 +257,9 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/config-export") {
 		t.Fatalf("未注册配置导出凭据临时授权接口")
 	}
+	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/system-backup-download") {
+		t.Fatalf("未注册系统数据库备份下载临时授权接口")
+	}
 	if !hasRoute(routes, http.MethodPost, "/api/v1/credential-access-grants/snapshot-restore") {
 		t.Fatalf("未注册快照恢复凭据临时授权接口")
 	}
@@ -1925,4 +1928,174 @@ func TestSwaggerUIEnabledDefaultsAndOverride(t *testing.T) {
 			t.Fatal("APP_ENV=staging 即使 GIN_MODE=debug 也应关闭 Swagger 默认开启")
 		}
 	})
+}
+
+func TestSystemBackupDownloadCredentialGrantRouteUsesDedicatedProofAndAdminGate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("APP_ENV", "development")
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.TokenRevocation{}, &model.AuditLog{}, &model.CredentialAuditEvent{}, &model.CredentialAccessGrant{}); err != nil {
+		t.Fatal(err)
+	}
+	manager := auth.NewJWTManager("FAKE_BACKUP_GRANT_ROUTE_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	manager.SetDB(db)
+	users := map[string]model.User{}
+	tokens := map[string]string{}
+	proofs := map[string]string{}
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		user := model.User{
+			Username: "backup-grant-route-" + role, PasswordHash: "FAKE_HASH_FOR_TEST_ONLY",
+			Role: role, TokenVersion: 1, TOTPEnabled: true,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatal(err)
+		}
+		users[role] = user
+		token, err := manager.GenerateToken(user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens[role] = token
+		proof, _, err := manager.GenerateStepUpToken(user, auth.StepUpActionSystemBackupDownload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proofs[role] = proof
+	}
+	configProof, _, err := manager.GenerateStepUpToken(users["admin"], auth.StepUpActionConfigExport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(Dependencies{DB: db, JWTManager: manager})
+	for _, testCase := range []struct {
+		name  string
+		token string
+		proof string
+		want  int
+		code  string
+	}{
+		{name: "unauthenticated", proof: proofs["admin"], want: http.StatusUnauthorized},
+		{name: "operator", token: tokens["operator"], proof: proofs["operator"], want: http.StatusForbidden},
+		{name: "viewer", token: tokens["viewer"], proof: proofs["viewer"], want: http.StatusForbidden},
+		{name: "missing_proof", token: tokens["admin"], want: http.StatusForbidden, code: "STEP_UP_REQUIRED"},
+		{name: "config_export_proof", token: tokens["admin"], proof: configProof, want: http.StatusForbidden, code: "STEP_UP_REQUIRED"},
+		{name: "dedicated_proof", token: tokens["admin"], proof: proofs["admin"], want: http.StatusCreated},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/credential-access-grants/system-backup-download",
+				strings.NewReader(`{"reason":"离线恢复演练"}`))
+			request.Header.Set("Content-Type", "application/json")
+			if testCase.token != "" {
+				request.Header.Set("Authorization", "Bearer "+testCase.token)
+			}
+			if testCase.proof != "" {
+				request.Header.Set(handlers.StepUpHeaderName, testCase.proof)
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, testCase.want, response.Body.String())
+			}
+			var payload struct {
+				Code int `json:"code"`
+				Data struct {
+					ErrorCode string `json:"error_code"`
+					ID        uint   `json:"id"`
+					Action    string `json:"action"`
+					Purpose   string `json:"purpose"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Code != testCase.want || payload.Data.ErrorCode != testCase.code {
+				t.Fatalf("unexpected response envelope: %+v", payload)
+			}
+			if testCase.want == http.StatusCreated {
+				var grant model.CredentialAccessGrant
+				if err := db.First(&grant, payload.Data.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if payload.Data.Action != "system.backup_download" || payload.Data.Purpose != "system_backup_download" ||
+					grant.RequesterUserID != users["admin"].ID || grant.RequesterRole != "admin" ||
+					grant.NodeID != nil || grant.TaskID != nil || grant.PolicyID != nil || grant.RequestedTTLSeconds != 600 {
+					t.Fatalf("route created incorrect grant: %+v", grant)
+				}
+			}
+		})
+	}
+	var count int64
+	if err := db.Model(&model.CredentialAccessGrant{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("only the dedicated admin request may create a grant: %d", count)
+	}
+}
+
+func TestSystemBackupDownloadRouterRecoverySetsNoStoreBeforeRejection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(Dependencies{})
+	for _, testCase := range []struct {
+		method string
+		path   string
+		status int
+	}{
+		{http.MethodGet, "/api/v1/system/backups", http.StatusUnauthorized},
+		{http.MethodGet, "/api/v1/system/backups/web/xirang-20261017-120000.db/download", http.StatusUnauthorized},
+		{http.MethodPost, "/api/v1/credential-access-grants/system-backup-download", http.StatusUnauthorized},
+		{http.MethodOptions, "/api/v1/system/backups", http.StatusNoContent},
+		{http.MethodGet, "/api/v1/system/backups/unknown/shape", http.StatusNotFound},
+	} {
+		t.Run(testCase.method+testCase.path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(testCase.method, testCase.path, nil)
+			router.ServeHTTP(response, request)
+			// A recorder cannot accept transport deadlines, so the actual
+			// download-shaped route fails closed even before authentication.
+			wantStatus := testCase.status
+			if strings.HasSuffix(testCase.path, "/download") {
+				wantStatus = http.StatusServiceUnavailable
+			}
+			if response.Code != wantStatus || response.Header().Get("Cache-Control") != "private, no-store" {
+				t.Fatalf("status=%d headers=%v, want status=%d and no-store", response.Code, response.Header(), wantStatus)
+			}
+		})
+	}
+}
+
+func TestSystemBackupDownloadRouterRecoveryProtectsRealAuthFailures(t *testing.T) {
+	output := captureSystemBackupRecoveryLogs(t)
+	manager := auth.NewJWTManager("FAKE_R14_RECOVERY_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	router := NewRouter(Dependencies{JWTManager: manager})
+	for _, h2 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("h2=%t", h2), func(t *testing.T) {
+			server := systemBackupRecoveryServer(t, router, h2, output)
+			for _, path := range []string{
+				"/api/v1/system/backups",
+				"/api/v1/system/backups/web/xirang-20261017-120000.db/download",
+				"/api/v1/credential-access-grants/system-backup-download",
+			} {
+				method := http.MethodGet
+				if strings.Contains(path, "credential-access-grants") {
+					method = http.MethodPost
+				}
+				response, err := systemBackupRecoveryRequest(t, server, method, path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := response.Body.Close(); err != nil {
+					t.Error(err)
+				}
+				if response.StatusCode != http.StatusUnauthorized || response.Header.Get("Cache-Control") != "private, no-store" {
+					t.Fatalf("%s: status=%d headers=%v", path, response.StatusCode, response.Header)
+				}
+			}
+		})
+	}
+	assertSystemBackupRecoverySecretsAbsent(t, output.String())
 }

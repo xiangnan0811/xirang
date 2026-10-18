@@ -74,6 +74,7 @@ const knownActions = new Set<string>([
   "docker_volumes.discover",
   "config.export",
   "config.import",
+  "system.backup_download",
   "node.doctor.run",
   "node_migration.preflight",
   "probe.ssh",

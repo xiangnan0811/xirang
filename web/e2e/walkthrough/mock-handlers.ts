@@ -43,6 +43,7 @@ import {
   standardTasks,
   standardUsers,
   systemBackups,
+  cronSystemBackups,
   taskRuns,
   taskStatistics,
   unreadCount,
@@ -309,7 +310,13 @@ async function replyFor(
   if (method === "GET" && apiPath === "/settings/backup-assets/ga/readiness") return ok(gaReadiness);
   if (method === "GET" && apiPath === "/settings/security-risk-summary") return ok(securityRiskSummary);
   if (method === "GET" && apiPath === "/settings") return ok(settingsPayload);
-  if (method === "GET" && apiPath === "/system/backups") return ok(systemBackups);
+  if (method === "GET" && apiPath === "/system/backups") {
+    const source = url.searchParams.getAll("source");
+    if (source.length === 0) return ok(systemBackups);
+    if (source.length === 1 && source[0] === "cron") return ok(cronSystemBackups);
+    if (source.length === 1 && source[0] === "web") return ok(systemBackups);
+    return { status: 400, body: errorBody(400, "BACKUP_REQUEST_INVALID") };
+  }
   if (method === "GET" && apiPath === "/system/cron-backup-status") return ok({
     status: "not_configured", engine: "sqlite", checked_at: "2026-10-07T00:00:00Z",
     max_age_seconds: 93600, evidence: "artifact_pair", time_source: "mtime", content_verified: false,

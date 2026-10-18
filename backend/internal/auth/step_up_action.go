@@ -12,6 +12,7 @@ const (
 	StepUpActionTerminalOpen           StepUpAction = "terminal.open"
 	StepUpActionConfigImport           StepUpAction = "config.import"
 	StepUpActionConfigExport           StepUpAction = "config.export"
+	StepUpActionSystemBackupDownload   StepUpAction = "system.backup_download"
 	StepUpActionSnapshotRestore        StepUpAction = "snapshot.restore"
 	StepUpActionTaskRestoreTrigger     StepUpAction = "task.restore_trigger"
 	StepUpActionTaskManualTrigger      StepUpAction = "task.manual_trigger"
@@ -34,6 +35,7 @@ var stepUpActions = []StepUpAction{
 	StepUpActionTerminalOpen,
 	StepUpActionConfigImport,
 	StepUpActionConfigExport,
+	StepUpActionSystemBackupDownload,
 	StepUpActionSnapshotRestore,
 	StepUpActionTaskRestoreTrigger,
 	StepUpActionTaskManualTrigger,

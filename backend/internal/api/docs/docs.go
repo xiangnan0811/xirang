@@ -6148,6 +6148,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/credential-access-grants/system-backup-download": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "管理员本人使用 system.backup_download proof 申请 system_backup_download 授权，三个资源 ID 均为 NULL；原因 1–240 Unicode 字符，默认 600 秒，允许 60–1800 秒。授权覆盖两个受信任来源，不是单文件 ticket。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credentials"
+                ],
+                "summary": "申请系统数据库备份下载授权",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "system.backup_download proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "原因及授权有效期",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.systemBackupDownloadCredentialGrantRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/credential-audit-events": {
             "get": {
                 "security": [
@@ -14253,7 +14323,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "列出已有的 SQLite 数据库备份文件（仅 SQLite）",
+                "description": "按来源列出受限备份元数据；downloadable 不代表内容已校验或文件已保留。",
                 "produces": [
                     "application/json"
                 ],
@@ -14261,9 +14331,42 @@ const docTemplate = `{
                     "system"
                 ],
                 "summary": "列出数据库备份",
+                "parameters": [
+                    {
+                        "enum": [
+                            "web",
+                            "cron"
+                        ],
+                        "type": "string",
+                        "description": "备份来源（默认 web）",
+                        "name": "source",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/internal_api_handlers.SystemBackupEntry"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -14274,8 +14377,151 @@ const docTemplate = `{
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
                     },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
                     "501": {
                         "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/backups/{source}/{filename}/download": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "仅管理员；要求 system.backup_download proof 与 system_backup_download 授权。固定所选摘要，同一文件描述符双遍校验后输出数据库和 basename SHA256 文件；不含加密密钥。最大 4 GiB，准备 120 秒、总计 10 分钟且受原会话与授权有效期限制；传输中错误会中止，不补 JSON 或 tar 尾部。",
+                "produces": [
+                    "application/x-tar"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "下载已校验的系统数据库备份",
+                "parameters": [
+                    {
+                        "enum": [
+                            "web",
+                            "cron"
+                        ],
+                        "type": "string",
+                        "description": "备份来源",
+                        "name": "source",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "受管备份 basename",
+                        "name": "filename",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "带双引号的 64 位小写 SHA256 强 ETag",
+                        "name": "If-Match",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "system.backup_download proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "USTAR 数据库及 SHA256 文件",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "非法请求或不支持 Range",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "来源未配置、文件未就绪或完整性校验失败",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "412": {
+                        "description": "所选摘要已变化",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "428": {
+                        "description": "缺少 If-Match",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "下载容量已满；Retry-After: 5",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "504": {
+                        "description": "准备超时且仍可写入错误",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -17619,6 +17865,38 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.SystemBackupEntry": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "downloadable": {
+                    "type": "boolean"
+                },
+                "engine": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
+                },
+                "packaged_size": {
+                    "type": "integer"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "source": {
+                    "$ref": "#/definitions/internal_api_handlers.systemBackupSource"
+                },
+                "unavailable_reason": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.TaskUpdateExecutorSecretsSchema": {
             "type": "object",
             "properties": {
@@ -20451,6 +20729,31 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "internal_api_handlers.systemBackupDownloadCredentialGrantRequest": {
+            "type": "object",
+            "required": [
+                "reason"
+            ],
+            "properties": {
+                "reason": {
+                    "type": "string"
+                },
+                "requested_ttl_seconds": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.systemBackupSource": {
+            "type": "string",
+            "enum": [
+                "web",
+                "cron"
+            ],
+            "x-enum-varnames": [
+                "systemBackupSourceWeb",
+                "systemBackupSourceCron"
+            ]
         },
         "internal_api_handlers.taskFailureSummaryResponse": {
             "type": "object",

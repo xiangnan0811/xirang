@@ -65,6 +65,9 @@ func EnforceStepUp(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTManager, exp
 }
 
 func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTManager, op stepUpAuditOperation) bool {
+	if middleware.HandleSystemBackupDownloadBudgetFailure(c) {
+		return false
+	}
 	if !auth.IsValidStepUpAction(op.ExpectedAction) {
 		writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "invalid_action")
 		respondStepUpRequired(c, op.ExpectedAction)
@@ -88,8 +91,21 @@ func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTMa
 		}
 		sessionID = session.JTI
 	}
+	if db != nil {
+		db = db.WithContext(c.Request.Context())
+	}
 	claims, err := validateStepUpProof(db, jwtManager, proof, userID, role, op.ExpectedAction, sessionID)
+	if middleware.HandleSystemBackupDownloadBudgetFailure(c) {
+		return false
+	}
 	if err != nil {
+		if op.ExpectedAction == auth.StepUpActionSystemBackupDownload && errors.Is(err, ErrStepUpVerifierUnavailable) {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, Response{
+				Code: http.StatusServiceUnavailable, Message: "备份下载授权服务不可用",
+				Data: gin.H{"error_code": "BACKUP_AUTHORIZATION_UNAVAILABLE"},
+			})
+			return false
+		}
 		writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "failed")
 		respondStepUpRequired(c, op.ExpectedAction)
 		return false

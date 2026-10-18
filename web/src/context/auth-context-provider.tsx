@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -14,6 +15,7 @@ import {
   AuthContext,
   type AuthContextValue,
   type AuthRole,
+  type StepUpProofOptions,
   type TOTPActivationUser,
 } from "@/context/auth-context.shared";
 import i18n from "@/i18n";
@@ -59,7 +61,17 @@ type PendingStepUpRequest = {
   persist: boolean;
   action: StepUpAction;
   authGeneration: number;
+  /** Attempt owner; null keeps the historical shared, non-cancellable-while-submitting semantics. */
+  ownerSignal: AbortSignal | null;
+  /** Aborts this pending request's proof POST; only owned requests pass it to the transport. */
+  submitController: AbortController | null;
+  /** Detaches the owner abort listener; idempotent. */
+  releaseOwner: () => void;
 };
+
+function stepUpAbortError(): DOMException {
+  return new DOMException("Step-up proof aborted", "AbortError");
+}
 
 function getSessionStorage() {
   if (typeof window === "undefined") {
@@ -206,8 +218,29 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [stepUpCode, setStepUpCode] = useState("");
   const [stepUpError, setStepUpError] = useState<string | null>(null);
   const [stepUpSubmitting, setStepUpSubmitting] = useState(false);
+  const [stepUpOwned, setStepUpOwned] = useState(false);
   const authTransitioning = useSyncExternalStore(subscribeAuthTransition, isAuthTransitionActive, () => false);
   const activationFailure = useSyncExternalStore(subscribeTOTPActivationFailure, readTOTPActivationFailure, () => null);
+
+  // Single cleanup for every pending exit except success: detach the owner, abort its in-flight POST,
+  // invalidate the submit attempt so a stale finally cannot touch a successor, then reset the dialog.
+  const dropPendingStepUp = useCallback((error: Error) => {
+    const pending = pendingStepUpRef.current;
+    pendingStepUpRef.current = null;
+    stepUpSubmitAttemptRef.current += 1;
+    if (pending) {
+      pending.releaseOwner();
+      pending.submitController?.abort();
+      pending.reject(error);
+    }
+    setStepUpDialogOpen(false);
+    setStepUpCode("");
+    setStepUpError(null);
+    setStepUpSubmitting(false);
+    setStepUpOwned(false);
+  }, []);
+
+  useEffect(() => () => dropPendingStepUp(stepUpAbortError()), [dropPendingStepUp]);
 
   const login = useCallback((
     nextToken: string,
@@ -221,12 +254,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const sessionStorageRef = getSessionStorage();
     const localStorageRef = getLocalStorage();
     bumpAuthSessionGeneration();
-    pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.loginRequired")));
-    pendingStepUpRef.current = null;
-    setStepUpDialogOpen(false);
-    setStepUpCode("");
-    setStepUpError(null);
-    setStepUpSubmitting(false);
+    dropPendingStepUp(new Error(i18n.t("stepUp.loginRequired")));
     clearStoredStepUpProof();
     const validUserId = typeof nextUserID === "number" && Number.isFinite(nextUserID) && nextUserID > 0
       ? nextUserID
@@ -260,7 +288,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       userId: validUserId,
       totpEnabled: totpEnabledValue
     });
-  }, []);
+  }, [dropPendingStepUp]);
 
   const logout = useCallback(() => {
     const sessionStorageRef = getSessionStorage();
@@ -269,12 +297,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     clearAuthTransitionBarrier();
 
     bumpAuthSessionGeneration();
-    pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.loginRequired")));
-    pendingStepUpRef.current = null;
-    setStepUpDialogOpen(false);
-    setStepUpCode("");
-    setStepUpError(null);
-    setStepUpSubmitting(false);
+    dropPendingStepUp(new Error(i18n.t("stepUp.loginRequired")));
     safeRemoveItem(sessionStorageRef, AUTH_TOKEN_KEY);
     safeRemoveItem(sessionStorageRef, AUTH_USERNAME_KEY);
     safeRemoveItem(sessionStorageRef, AUTH_ROLE_KEY);
@@ -288,7 +311,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     rememberAuthIdentity(null, null);
     setAuthState({ token: null, username: null, role: null, userId: null, totpEnabled: false });
-  }, []);
+  }, [dropPendingStepUp]);
 
   const beginTOTPActivation = useCallback((): number => {
     if (activationOwnerRef.current !== null || isAuthTransitionActive()) {
@@ -297,15 +320,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const id = beginAuthTransitionBarrier();
     activationOwnerRef.current = id;
     bumpAuthSessionGeneration();
-    pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.loginRequired")));
-    pendingStepUpRef.current = null;
-    setStepUpDialogOpen(false);
-    setStepUpCode("");
-    setStepUpError(null);
-    setStepUpSubmitting(false);
+    dropPendingStepUp(new Error(i18n.t("stepUp.loginRequired")));
     clearStoredStepUpProof();
     return id;
-  }, []);
+  }, [dropPendingStepUp]);
 
   const abortTOTPActivation = useCallback((id: number) => {
     if (activationOwnerRef.current !== id) {
@@ -338,25 +356,24 @@ export function AuthProvider({ children }: PropsWithChildren) {
       activationOwnerRef.current = null;
       clearAuthTransitionBarrier();
       bumpAuthSessionGeneration();
-      pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.totpRequired")));
-      pendingStepUpRef.current = null;
-      setStepUpDialogOpen(false);
-      setStepUpCode("");
-      setStepUpError(null);
-      setStepUpSubmitting(false);
+      dropPendingStepUp(new Error(i18n.t("stepUp.totpRequired")));
       clearStoredStepUpProof();
     }
     setAuthState((prev) => ({ ...prev, totpEnabled: enabled }));
-  }, []);
+  }, [dropPendingStepUp]);
 
   const clearStepUpProof = useCallback((action?: StepUpAction) => {
     clearStoredStepUpProof(action);
   }, []);
 
-  const ensureStepUpProof = useCallback(async (action: StepUpAction, options: { persist?: boolean; reuseCached?: boolean } = {}): Promise<string> => {
+  const ensureStepUpProof = useCallback(async (action: StepUpAction, options: StepUpProofOptions = {}): Promise<string> => {
     assertStepUpPrerequisite(token, totpEnabled);
     if (isAuthTransitionActive()) {
       throw new AuthTransitionRejectedError();
+    }
+    const ownerSignal = options.signal ?? null;
+    if (ownerSignal?.aborted) {
+      throw stepUpAbortError();
     }
     const persist = options.persist ?? true;
     const reuseCached = options.reuseCached ?? persist;
@@ -369,15 +386,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (!reuseCached) {
       clearStoredStepUpProof(action);
     }
-    if (pendingStepUpRef.current) {
-      if (pendingStepUpRef.current.action === action && pendingStepUpRef.current.persist === persist) {
-        return pendingStepUpRef.current.promise;
+    const existing = pendingStepUpRef.current;
+    if (existing) {
+      if (existing.action === action && existing.persist === persist && existing.ownerSignal === ownerSignal) {
+        return existing.promise;
       }
       throw new Error(i18n.t("stepUp.alreadyOpen"));
     }
     setStepUpCode("");
     setStepUpError(null);
     setStepUpSubmitting(false);
+    setStepUpOwned(ownerSignal !== null);
     setStepUpDialogOpen(true);
     let resolveRequest!: (proof: string) => void;
     let rejectRequest!: (error: Error) => void;
@@ -385,27 +404,37 @@ export function AuthProvider({ children }: PropsWithChildren) {
       resolveRequest = resolve;
       rejectRequest = reject;
     });
-    pendingStepUpRef.current = {
+    const pendingRequest: PendingStepUpRequest = {
       resolve: resolveRequest,
       reject: rejectRequest,
       promise,
       persist,
       action,
       authGeneration: getAuthSessionGeneration(),
+      ownerSignal,
+      submitController: ownerSignal ? new AbortController() : null,
+      releaseOwner: () => undefined,
     };
+    if (ownerSignal) {
+      const onOwnerAbort = () => {
+        if (pendingStepUpRef.current === pendingRequest) {
+          dropPendingStepUp(stepUpAbortError());
+        }
+      };
+      ownerSignal.addEventListener("abort", onOwnerAbort, { once: true });
+      pendingRequest.releaseOwner = () => ownerSignal.removeEventListener("abort", onOwnerAbort);
+    }
+    pendingStepUpRef.current = pendingRequest;
     return promise;
-  }, [token, totpEnabled]);
+  }, [dropPendingStepUp, token, totpEnabled]);
 
   const closeStepUpDialog = useCallback(() => {
-    if (stepUpSubmitting) {
+    // Unowned submits stay non-cancellable; an owned attempt may always be cancelled by its own dialog.
+    if (stepUpSubmitting && !pendingStepUpRef.current?.ownerSignal) {
       return;
     }
-    pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.cancelled")));
-    pendingStepUpRef.current = null;
-    setStepUpDialogOpen(false);
-    setStepUpCode("");
-    setStepUpError(null);
-  }, [stepUpSubmitting]);
+    dropPendingStepUp(new Error(i18n.t("stepUp.cancelled")));
+  }, [dropPendingStepUp, stepUpSubmitting]);
 
   const handleStepUpSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -429,18 +458,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setStepUpSubmitting(true);
     setStepUpError(null);
     try {
-      const response = await apiClient.requestStepUpProof(token, code, pendingRequest.action);
+      const response = pendingRequest.submitController
+        ? await apiClient.requestStepUpProof(token, code, pendingRequest.action, {
+          signal: pendingRequest.submitController.signal,
+        })
+        : await apiClient.requestStepUpProof(token, code, pendingRequest.action);
       const stillCurrent = pendingStepUpRef.current === pendingRequest
+        && !pendingRequest.ownerSignal?.aborted
         && pendingRequest.authGeneration === getAuthSessionGeneration()
         && safeGetItem(getSessionStorage(), AUTH_TOKEN_KEY) === token
         && !isAuthTransitionActive();
       if (!stillCurrent) {
-        pendingRequest.reject(new Error(i18n.t("stepUp.loginRequired")));
         if (pendingStepUpRef.current === pendingRequest) {
-          pendingStepUpRef.current = null;
-          setStepUpDialogOpen(false);
-          setStepUpCode("");
-          setStepUpError(null);
+          dropPendingStepUp(new Error(i18n.t("stepUp.loginRequired")));
+        } else {
+          pendingRequest.reject(new Error(i18n.t("stepUp.loginRequired")));
         }
         return;
       }
@@ -451,10 +483,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
           saveStepUpProof(pendingRequest.action, response.proof, expiresAt);
         }
       }
+      pendingRequest.releaseOwner();
       pendingRequest.resolve(response.proof);
       pendingStepUpRef.current = null;
       setStepUpDialogOpen(false);
       setStepUpCode("");
+      setStepUpOwned(false);
     } catch (error) {
       if (
         pendingStepUpRef.current !== pendingRequest ||
@@ -470,7 +504,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         setStepUpSubmitting(false);
       }
     }
-  }, [stepUpCode, token]);
+  }, [dropPendingStepUp, stepUpCode, token]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -557,7 +591,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
               ) : null}
             </DialogBody>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={closeStepUpDialog} disabled={stepUpSubmitting}>
+              <Button type="button" variant="outline" onClick={closeStepUpDialog} disabled={stepUpSubmitting && !stepUpOwned}>
                 {i18n.t("common.cancel")}
               </Button>
               <Button type="submit" loading={stepUpSubmitting}>

@@ -69,16 +69,36 @@ describe("system api", () => {
       releaseUrl: "https://example.com",
     });
 
+    const digest = "0123456789abcdef".repeat(4);
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
         code: 0,
         message: "ok",
-        data: [{ filename: "a.db", size: 12, created_at: "2026-01-01T00:00:00Z", sha256: "abc" }],
+        data: [{
+          filename: "xirang-20260101-000000.db",
+          size: 12,
+          created_at: "2026-01-01T00:00:00Z",
+          sha256: digest,
+          source: "web",
+          engine: "sqlite",
+          downloadable: true,
+          unavailable_reason: "",
+          packaged_size: 3072,
+        }],
       })),
     );
-    await expect(api.listBackups("token-1")).resolves.toEqual([
-      { filename: "a.db", size: 12, createdAt: "2026-01-01T00:00:00Z", sha256: "abc" },
-    ]);
+    await expect(api.listBackups("token-1")).resolves.toEqual([{
+      source: "web",
+      engine: "sqlite",
+      filename: "xirang-20260101-000000.db",
+      size: 12,
+      createdAt: "2026-01-01T00:00:00Z",
+      sha256: digest,
+      downloadable: true,
+      unavailableReason: "",
+      packagedSize: 3072,
+    }]);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/system/backups");
   });
 
   it("backupDB surfaces backend envelope messages for unsupported databases", async () => {
@@ -107,6 +127,197 @@ describe("system api", () => {
     fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: [] })));
     await api.listBackups("token-1", { signal: listController.signal });
     expect((fetchMock.mock.calls[1] as [string, RequestInit])[1].signal).toBe(listController.signal);
+  });
+
+  describe("backup list and download", () => {
+    const DIGEST = "ab".repeat(32);
+
+    function wireEntry(overrides: Record<string, unknown> = {}) {
+      return {
+        filename: "xirang-sqlite-20261007-013000.db",
+        size: 1024,
+        created_at: "2026-10-07T01:30:00Z",
+        sha256: DIGEST,
+        source: "cron",
+        engine: "sqlite",
+        downloadable: true,
+        unavailable_reason: "",
+        packaged_size: 3584,
+        ...overrides,
+      };
+    }
+
+    function listResponse(rows: unknown) {
+      return createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: rows }));
+    }
+
+    function tarResponse(stream: ReadableStream<Uint8Array>) {
+      return new Response(stream, { status: 200, headers: { "Content-Type": "application/x-tar" } });
+    }
+
+    it("queries the cron source only when explicitly requested", async () => {
+      fetchMock.mockResolvedValueOnce(listResponse([wireEntry()]));
+      await expect(api.listBackups("token-1", { source: "cron" })).resolves.toMatchObject([
+        { source: "cron", engine: "sqlite", downloadable: true, unavailableReason: "", packagedSize: 3584 },
+      ]);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/system/backups?source=cron");
+
+      fetchMock.mockResolvedValueOnce(listResponse([]));
+      await api.listBackups("token-1", { source: "web" });
+      expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/system/backups");
+    });
+
+    it.each([
+      ["missing downloadable", { downloadable: undefined }, "unsafe"],
+      ["non-boolean downloadable", { downloadable: "true" }, "unsafe"],
+      ["missing reason", { unavailable_reason: undefined }, "unsafe"],
+      ["unknown reason", { unavailable_reason: "quarantined" }, "unsafe"],
+      ["reason beside downloadable", { unavailable_reason: "too_large" }, "too_large"],
+      ["uppercase digest", { sha256: DIGEST.toUpperCase() }, "unsafe"],
+      ["short digest", { sha256: "abc" }, "unsafe"],
+      ["missing packaged size", { packaged_size: undefined }, "unsafe"],
+      ["zero packaged size", { packaged_size: 0 }, "unsafe"],
+      ["unsafe packaged size", { packaged_size: Number.MAX_SAFE_INTEGER + 1 }, "unsafe"],
+      ["empty data file", { size: 0 }, "unsafe"],
+      ["percent in name", { filename: "xirang-sqlite-%2e%2e.db" }, "unsafe"],
+      ["backslash in name", { filename: "xirang\\sqlite.db" }, "unsafe"],
+      ["explicit incomplete", { downloadable: false, unavailable_reason: "incomplete", sha256: "" }, "incomplete"],
+    ])("never offers a download for %s", async (_label, overrides, reason) => {
+      fetchMock.mockResolvedValueOnce(listResponse([wireEntry(overrides)]));
+      const [entry] = await api.listBackups("token-1", { source: "cron" });
+      expect(entry.downloadable).toBe(false);
+      expect(entry.unavailableReason).toBe(reason);
+    });
+
+    it("keeps an unavailable row visible without a digest", async () => {
+      fetchMock.mockResolvedValueOnce(listResponse([wireEntry({
+        source: "web",
+        filename: "manual copy.db",
+        sha256: "",
+        downloadable: false,
+        unavailable_reason: "unmanaged",
+        packaged_size: 0,
+      })]));
+      await expect(api.listBackups("token-1")).resolves.toEqual([expect.objectContaining({
+        filename: "manual copy.db",
+        sha256: "",
+        downloadable: false,
+        unavailableReason: "unmanaged",
+        packagedSize: 0,
+      })]);
+    });
+
+    it.each([
+      ["a row from the other source", wireEntry({ source: "web" }), "cron"],
+      ["a missing source", wireEntry({ source: undefined }), "cron"],
+      ["an unknown source", wireEntry({ source: "host" }), "cron"],
+      ["a cron row in the web list", wireEntry(), "web"],
+      ["a postgres web row", wireEntry({ source: "web", engine: "postgres" }), "web"],
+      ["a missing engine", wireEntry({ engine: undefined }), "cron"],
+      ["an unknown engine", wireEntry({ engine: "mysql" }), "cron"],
+      ["a path-like name", wireEntry({ filename: "../xirang-sqlite.db" }), "cron"],
+      ["an empty name", wireEntry({ filename: "" }), "cron"],
+      ["a negative size", wireEntry({ size: -1 }), "cron"],
+      ["a fractional size", wireEntry({ size: 1.5 }), "cron"],
+      ["a non-string time", wireEntry({ created_at: 0 }), "cron"],
+      ["a null row", null, "cron"],
+    ] as const)("rejects the whole list for %s", async (_label, row, source) => {
+      fetchMock.mockResolvedValueOnce(listResponse([row]));
+      await expect(api.listBackups("token-1", { source })).rejects.toThrow("invalid backup list");
+    });
+
+    it("rejects a non-array list instead of returning an empty one", async () => {
+      fetchMock.mockResolvedValueOnce(listResponse(null));
+      await expect(api.listBackups("token-1")).rejects.toThrow("invalid backup list");
+    });
+
+    it("downloads the selected source and filename with a strong If-Match, leaving the body unread", async () => {
+      const tar = tarResponse(new ReadableStream<Uint8Array>({}, { highWaterMark: 0 }));
+      fetchMock.mockResolvedValueOnce(tar);
+      const controller = new AbortController();
+
+      const response = await api.downloadBackup(
+        "token-1",
+        { source: "cron", filename: "xirang-sqlite-20261007-013000.db", sha256: DIGEST },
+        "proof-1",
+        { signal: controller.signal, isCurrent: () => true },
+      );
+
+      expect(response).toBe(tar);
+      expect(response.bodyUsed).toBe(false);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("/api/v1/system/backups/cron/xirang-sqlite-20261007-013000.db/download");
+      expect(init).toMatchObject({ method: "GET", cache: "no-store", redirect: "error", signal: controller.signal });
+      expect(init.headers).toEqual({
+        Authorization: "Bearer token-1",
+        "X-Xirang-Step-Up": "proof-1",
+        "If-Match": `"${DIGEST}"`,
+      });
+    });
+
+    it("refuses invalid download targets before any request", async () => {
+      const options = { signal: new AbortController().signal, isCurrent: () => true };
+      await expect(api.downloadBackup("token-1", { source: "cron", filename: "a/b.db", sha256: DIGEST }, "proof", options))
+        .rejects.toThrow("invalid backup download target");
+      await expect(api.downloadBackup("token-1", { source: "cron", filename: "a.db", sha256: "" }, "proof", options))
+        .rejects.toThrow("invalid backup download target");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not start a download for an aborted or stale owner", async () => {
+      const entry = { source: "web" as const, filename: "xirang-20261007-013000.db", sha256: DIGEST };
+      const aborted = new AbortController();
+      aborted.abort();
+      await expect(api.downloadBackup("token-1", entry, "proof", { signal: aborted.signal, isCurrent: () => true }))
+        .rejects.toMatchObject({ name: "AbortError" });
+      await expect(api.downloadBackup("token-1", entry, "proof", { signal: new AbortController().signal, isCurrent: () => false }))
+        .rejects.toMatchObject({ name: "AbortError" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("cancels the unread body when the owner changed A→B→A before headers arrived", async () => {
+      let cancelled = false;
+      let resolveFetch!: (response: Response) => void;
+      fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { resolveFetch = resolve; }));
+      let identity = "A";
+      let generation = 0;
+      const owner = { identity, generation };
+      const switchIdentity = (next: string) => {
+        identity = next;
+        generation += 1;
+      };
+      const pending = api.downloadBackup(
+        "token-a",
+        { source: "web", filename: "xirang-20261007-013000.db", sha256: DIGEST },
+        "proof-a",
+        { signal: new AbortController().signal, isCurrent: () => identity === owner.identity && generation === owner.generation },
+      );
+      await Promise.resolve();
+      switchIdentity("B");
+      switchIdentity("A");
+      resolveFetch(tarResponse(new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } }, { highWaterMark: 0 })));
+
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      await Promise.resolve();
+      expect(cancelled).toBe(true);
+    });
+
+    it("hides a stale owner's server error behind AbortError but keeps a current owner's error", async () => {
+      const entry = { source: "web" as const, filename: "xirang-20261007-013000.db", sha256: DIGEST };
+      const changed = JSON.stringify({ code: 412, message: "changed", data: { error_code: "BACKUP_CHANGED" } });
+      let current = true;
+      let resolveFetch!: (response: Response) => void;
+      fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { resolveFetch = resolve; }));
+      const stale = api.downloadBackup("token-1", entry, "proof", { signal: new AbortController().signal, isCurrent: () => current });
+      await Promise.resolve();
+      current = false;
+      resolveFetch(new Response(changed, { status: 412 }));
+      await expect(stale).rejects.toMatchObject({ name: "AbortError" });
+
+      fetchMock.mockResolvedValueOnce(new Response(changed, { status: 412 }));
+      await expect(api.downloadBackup("token-1", entry, "proof", { signal: new AbortController().signal, isCurrent: () => true }))
+        .rejects.toMatchObject({ status: 412, detail: { data: { error_code: "BACKUP_CHANGED" } } });
+    });
   });
 
   const SUCCESS_RUN = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

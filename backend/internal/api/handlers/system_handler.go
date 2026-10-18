@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -234,74 +235,44 @@ func removeBackupArtifacts(backupPath string) {
 
 // ListBackups godoc
 // @Summary      列出数据库备份
-// @Description  列出已有的 SQLite 数据库备份文件（仅 SQLite）
+// @Description  按来源列出受限备份元数据；downloadable 不代表内容已校验或文件已保留。
 // @Tags         system
 // @Security     Bearer
 // @Produce      json
-// @Success      200  {object}  handlers.Response
+// @Param        source query string false "备份来源（默认 web）" Enums(web,cron)
+// @Success      200  {object}  handlers.Response{data=[]handlers.SystemBackupEntry}
 // @Failure      401  {object}  handlers.Response
+// @Failure      400  {object}  handlers.Response
+// @Failure      409  {object}  handlers.Response
 // @Failure      501  {object}  handlers.Response
+// @Failure      503  {object}  handlers.Response
 // @Router       /system/backups [get]
 func (h *SystemHandler) ListBackups(c *gin.Context) {
-	if !isSQLiteRuntime() {
-		respondNotImplemented(c, "当前仅支持 SQLite 数据库备份")
+	// ParseQuery also rejects malformed escaping instead of silently treating
+	// an invalid source query as an omitted one.
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		respondSystemBackupError(c, errSystemBackupRequestInvalid)
 		return
 	}
-
-	dbPath := os.Getenv("SQLITE_PATH")
-	if dbPath == "" {
-		dbPath = "./xirang.db"
-	}
-
-	backupDir := os.Getenv("DB_BACKUP_DIR")
-	if backupDir == "" {
-		backupDir = filepath.Join(filepath.Dir(dbPath), "backups")
-	}
-
-	entries, err := os.ReadDir(backupDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			respondOK(c, []gin.H{})
+	source := systemBackupSourceWeb
+	if values, explicit := query["source"]; explicit {
+		if len(values) != 1 || (values[0] != string(systemBackupSourceWeb) && values[0] != string(systemBackupSourceCron)) {
+			respondSystemBackupError(c, errSystemBackupRequestInvalid)
 			return
 		}
-		logger.Log.Error().Err(err).Msg("读取备份目录失败")
-		respondInternalError(c, err)
+		source = systemBackupSource(values[0])
+	}
+	directory, engine, err := resolveSystemBackupSource(h.db, source)
+	if err != nil {
+		respondSystemBackupError(c, err)
 		return
 	}
-
-	backups := make([]gin.H, 0)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".db") {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		item := gin.H{
-			"filename":   entry.Name(),
-			"size":       info.Size(),
-			"created_at": info.ModTime().Format(time.RFC3339),
-		}
-
-		// 尝试读取对应的 .sha256 文件
-		checksumPath := filepath.Join(backupDir, entry.Name()+".sha256")
-		if data, err := os.ReadFile(checksumPath); err == nil {
-			parts := strings.Fields(string(data))
-			if len(parts) > 0 {
-				item["sha256"] = parts[0]
-			}
-		}
-
-		backups = append(backups, item)
+	backups, err := listSystemBackupFiles(directory, source, engine)
+	if err != nil {
+		respondSystemBackupError(c, err)
+		return
 	}
-
-	// 按文件名降序排列（最新的在前）
-	sort.Slice(backups, func(i, j int) bool {
-		return backups[i]["filename"].(string) > backups[j]["filename"].(string)
-	})
-
 	respondOK(c, backups)
 }
 

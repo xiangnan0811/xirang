@@ -200,7 +200,8 @@ batch-trigger 的 proof/grant 替代。`POST /credential-access-grants/batch-com
 敏感入口在首次请求及复用 proof 之前检查 TOTP 前置；未启用时显示账户安全链接，
 不先提交 grant、执行、下载或 socket 请求。返回操作仅使用白名单 pathname 的 router
 state，显式返回只导航，不重开表单或重放提交。普通浏览、无秘密配置导出、密钥编辑、
-轮换、静音及 Web 自备份不因此新增 TOTP 要求；前端提示不替代服务端授权。
+轮换、静音及 Web 自备份创建/列表不因此新增 TOTP 要求；整库备份下载另需专用
+proof/grant，前端提示不替代服务端授权。
 
 启用 TOTP 成功响应包含替换主令牌、安全用户信息及本次恢复码，并禁止缓存。
 替换令牌保留原会话 JTI 和到期时间，不授予 step-up；版本变更使旧令牌和旧 proof
@@ -474,6 +475,7 @@ Doctor 继续按需验证 SSH、权限、工具、目录和备份空间，不检
 |---|---|---|
 | `config-import` | `config.import / config_import` | admin 系统级，任何导入写入前 |
 | `config-export` | `config.export / config_export` | admin 系统级，仅 `include_secrets=true`，读取/序列化秘密前 |
+| `system-backup-download` | `system.backup_download / system_backup_download` | admin 系统级，Node/Task/Policy ID 均 NULL；打开数据库备份内容前 |
 | `snapshot-restore` | `snapshot.restore / snapshot` | admin，当前 Task ID，远端恢复前；列表/浏览/搜索/diff 无此要求 |
 | `task-restore` | `task.restore_trigger / task_restore` | admin，当前 Task ID；创建仅验证存在性和当前恢复资格，不保存目标路径/payload |
 | `task-manual-trigger` | `task.manual_trigger / task_command` | 当前 Task ID，任务触发权限及 ownership |
@@ -481,6 +483,25 @@ Doctor 继续按需验证 SSH、权限、工具、目录和备份空间，不检
 | `batch-command` | `batch_command.create / batch_command` | 每个去重后的 Node ID，任务写权限及 ownership |
 
 以上均叠加对应 action step-up 和主认证。管理员 grant 列表是只读筛选/查看入口，不提供批准、拒绝或撤销按钮。回归覆盖 TTL/reason/DTO、真实 RBAC 与 step-up、全部元组不匹配及到期边界、gate 早于秘密读取或执行、授权创建/使用/拒绝审计、终端撤销与关闭、grant-required dialog 重连和无浏览器持久化。
+
+数据库备份下载的系统级授权允许该管理员在 TTL 内导出 Web、cron 两个受信任来源的
+受管数据库备份，不是单文件 ticket，也不能用配置导出的 proof/grant 替代。
+`POST /api/v1/credential-access-grants/system-backup-download` 接受
+`{reason,requested_ttl_seconds?}`：reason 沿现有脱敏校验，1–240 Unicode 字符；
+TTL 缺省 600 秒、范围 60–1800 秒。专用 proof 有效期为 300 秒。
+grant 沿既有非一次性事实，界面每次明确下载仍申请 fresh、不持久化、不复用缓存的
+proof 和新 grant，不自动重放失败请求。digest 条件只防止所选产物漂移，不定义授权范围。
+数据库副本可能包含全库身份、凭据密文和业务信息，不能按普通配置导出的敏感性处理；
+不导出外部加密密钥，不新增在线恢复，创建及列表不新增二次验证要求。
+
+面板订阅认证 generation 与过渡 barrier：失效同步中止旧 bound signal，撤销 owned
+proof 及其在途 POST、reader 和已准备的保存目标。即使 token/role 同批 A→B→A，
+或 barrier 同批开始/结束，也清空旧内容与草稿；只由新挂载内容重读列表和观察信息，
+不自动恢复写操作或挑战。原生保存目标的准入和取消限制见[备份恢复](../../admin/backup-recovery.md#系统数据库备份下载)。
+下载准入的 proof 存储故障及缺 session binding 返回安全 503，并记录
+`failure/admission/authorization_unavailable`；缺预算 503 为
+`failure/admission/budget_unavailable`，真正的 proof/grant 拒绝仍为 `blocked`。
+proof 事件与下载结果事件由 metadata 区分，不能以同 action 的总条数代替结果审计。
 
 只读管理页按数据库**存储状态**精确筛选，不按浏览器时钟改写状态、二次过滤分页结果，
 也不因 GET 将记录写回过期。常用筛选为全部、active、expired；requested、approved、

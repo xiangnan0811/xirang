@@ -103,6 +103,7 @@ func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.En
 	router.POST("/credential-access-grants/terminal", middleware.RequireRole("admin"), handler.RequestTerminalGrant)
 	router.POST("/credential-access-grants/config-import", middleware.RequireRole("admin"), handler.RequestConfigImportGrant)
 	router.POST("/credential-access-grants/config-export", middleware.RequireRole("admin"), handler.RequestConfigExportGrant)
+	router.POST("/credential-access-grants/system-backup-download", middleware.RequireRole("admin"), handler.RequestSystemBackupDownloadGrant)
 	router.POST("/credential-access-grants/snapshot-restore", middleware.RequireRole("admin"), handler.RequestSnapshotRestoreGrant)
 	router.POST("/credential-access-grants/task-restore", middleware.RequireRole("admin"), handler.RequestTaskRestoreGrant)
 	router.POST("/credential-access-grants/task-manual-trigger", middleware.RBAC("tasks:trigger"), handler.RequestTaskManualTriggerGrant)
@@ -2366,4 +2367,279 @@ func TestBatchCommandRetryGrantEnforcementRejectsCreateAliasAndClosedRole(t *tes
 	createTaskRestoreGrantFixture(t, db, viewer, CredentialGrantActionBatchCommandRetry, sshutil.PurposeBatchCommand, CredentialGrantStatusActive, nil, credentialaudit.PtrUint(node.ID), nil, "viewer")
 	viewerResp := performStepUpRequest(t, retryUse, http.MethodPost, "/retry", viewerToken, viewerProof, "")
 	assertCredentialGrantRequiredEnvelope(t, viewerResp, "invalid")
+}
+
+func TestSystemBackupDownloadCredentialGrantRequestValidationAndSafeAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := newStepUpTestJWTManager(db)
+	admin := seedStepUpUser(t, db, "backup-grant-admin", "admin")
+	other := seedStepUpUser(t, db, "backup-grant-other", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSystemBackupDownload)
+	router := newCredentialGrantTestRouter(db, manager)
+	const endpoint = "/credential-access-grants/system-backup-download"
+	const reason = "独立离线恢复演练"
+
+	stale := admin
+	stale.TokenVersion++
+	for _, testCase := range []struct {
+		name  string
+		proof string
+	}{
+		{name: "missing"},
+		{name: "config_export", proof: generateStepUpProofForAction(t, manager, admin, auth.StepUpActionConfigExport)},
+		{name: "other_requester", proof: generateStepUpProofForAction(t, manager, other, auth.StepUpActionSystemBackupDownload)},
+		{name: "stale_version", proof: generateStepUpProofForAction(t, manager, stale, auth.StepUpActionSystemBackupDownload)},
+		{name: "primary_token", proof: token},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			resp := performStepUpRequest(t, router, http.MethodPost, endpoint, token, testCase.proof, `{"reason":"独立离线恢复演练"}`)
+			assertStepUpRequiredEnvelopeForAction(t, resp, auth.StepUpActionSystemBackupDownload)
+		})
+	}
+	for _, role := range []string{"operator", "viewer"} {
+		user := seedStepUpUser(t, db, "backup-grant-"+role, role)
+		resp := performStepUpRequest(t, router, http.MethodPost, endpoint, generatePrimaryToken(t, manager, user),
+			generateStepUpProofForAction(t, manager, user, auth.StepUpActionSystemBackupDownload), `{"reason":"独立离线恢复演练"}`)
+		if resp.Code != http.StatusForbidden {
+			t.Fatalf("%s grant request status=%d body=%s", role, resp.Code, resp.Body.String())
+		}
+	}
+	unauthenticated := performStepUpRequest(t, router, http.MethodPost, endpoint, "", proof, `{"reason":"独立离线恢复演练"}`)
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated grant request status=%d body=%s", unauthenticated.Code, unauthenticated.Body.String())
+	}
+	for _, testCase := range []struct {
+		name string
+		body string
+	}{
+		{name: "missing_reason", body: `{}`},
+		{name: "blank_reason", body: `{"reason":"   "}`},
+		{name: "long_unicode_reason", body: fmt.Sprintf(`{"reason":%q}`, strings.Repeat("演", 241))},
+		{name: "sensitive_reason", body: `{"reason":"password=FAKE_BACKUP_PASSWORD_FOR_TEST_ONLY"}`},
+		{name: "ttl_too_short", body: `{"reason":"演练","requested_ttl_seconds":59}`},
+		{name: "ttl_too_long", body: `{"reason":"演练","requested_ttl_seconds":1801}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			resp := performStepUpRequest(t, router, http.MethodPost, endpoint, token, proof, testCase.body)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("invalid request status=%d body=%s", resp.Code, resp.Body.String())
+			}
+		})
+	}
+	var rejectedCount int64
+	if err := db.Model(&model.CredentialAccessGrant{}).Count(&rejectedCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rejectedCount != 0 {
+		t.Fatalf("rejected requests created %d grants", rejectedCount)
+	}
+
+	created := 0
+	for _, testCase := range []struct {
+		name   string
+		reason string
+		ttl    int
+		want   int
+	}{
+		{name: "default", reason: reason, want: 600},
+		{name: "minimum", reason: "演", ttl: 60, want: 60},
+		{name: "maximum_unicode_reason_and_ttl", reason: strings.Repeat("演", 240), ttl: 1800, want: 1800},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"reason":%q,"node_id":11,"task_id":22,"policy_id":33,"requester_user_id":%d,"requester_role":"operator"}`, testCase.reason, other.ID)
+			if testCase.ttl != 0 {
+				body = fmt.Sprintf(`{"reason":%q,"requested_ttl_seconds":%d}`, testCase.reason, testCase.ttl)
+			}
+			before := time.Now().UTC()
+			resp := performStepUpRequest(t, router, http.MethodPost, endpoint, token, proof, body)
+			if resp.Code != http.StatusCreated {
+				t.Fatalf("grant request status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			var payload struct {
+				Code int                `json:"code"`
+				Data credentialGrantDTO `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			dto := payload.Data
+			if payload.Code != http.StatusCreated || dto.ID == 0 || dto.RequesterUserID != admin.ID || dto.RequesterRole != "admin" ||
+				dto.Action != CredentialGrantActionSystemBackupDownload || dto.Purpose != CredentialGrantPurposeSystemBackupDownload ||
+				dto.NodeID != nil || dto.TaskID != nil || dto.PolicyID != nil || dto.RequestedTTLSeconds != testCase.want ||
+				dto.Reason != testCase.reason || dto.Status != CredentialGrantStatusActive {
+				t.Fatalf("invalid system backup grant DTO: %+v", payload)
+			}
+			var grant model.CredentialAccessGrant
+			if err := db.First(&grant, dto.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if grant.NodeID != nil || grant.TaskID != nil || grant.PolicyID != nil || grant.ApproverUserID == nil ||
+				*grant.ApproverUserID != admin.ID || grant.ApprovedAt == nil || grant.RequestedAt.Before(before) ||
+				grant.ExpiresAt.Sub(grant.RequestedAt) != time.Duration(testCase.want)*time.Second {
+				t.Fatalf("grant must be NULL-scoped, self-approved and TTL-bound: %+v", grant)
+			}
+			created++
+		})
+	}
+	events := loadCredentialAuditEvents(t, db, CredentialGrantActionSystemBackupDownload)
+	stages := map[string]int{}
+	blocked := 0
+	for _, event := range events {
+		metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+		if event.Purpose != CredentialGrantPurposeSystemBackupDownload || metadata["operation"] != "system_backup_download" ||
+			event.NodeID != nil || event.TaskID != nil || event.PolicyID != nil {
+			t.Fatalf("backup grant audit must have dedicated operation and system scope: %+v metadata=%v", event, metadata)
+		}
+		for _, forbidden := range []string{reason, proof, token, "FAKE_BACKUP_PASSWORD_FOR_TEST_ONLY", `"reason"`, `"node_id"`, `"task_id"`, `"policy_id"`} {
+			if strings.Contains(event.Metadata, forbidden) {
+				t.Fatalf("audit leaked request material %q: %s", forbidden, event.Metadata)
+			}
+		}
+		if event.Outcome == credentialaudit.OutcomeBlocked {
+			blocked++
+		}
+		if event.CredentialKind == credentialGrantKind {
+			stage, _ := metadata["stage"].(string)
+			stages[stage]++
+			if event.UserID != admin.ID || event.Outcome != credentialaudit.OutcomeSuccess || metadata["self_grant"] != true {
+				t.Fatalf("grant audit must identify the authenticated self-grant: %+v metadata=%v", event, metadata)
+			}
+		}
+	}
+	if blocked != 5 || stages["request"] != created || stages["activate"] != created {
+		t.Fatalf("expected proof denials and one request/activate per grant: blocked=%d stages=%v created=%d", blocked, stages, created)
+	}
+}
+
+func TestSystemBackupDownloadCredentialGrantRechecksIdentityBeforeCreate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		name   string
+		column string
+		value  any
+	}{
+		{name: "version", column: "token_version", value: 1},
+		{name: "role", column: "role", value: "operator"},
+		{name: "reenrollment", column: "totp_reenrollment_required", value: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openStepUpHandlerTestDB(t)
+			manager := newStepUpTestJWTManager(db)
+			admin := seedStepUpUser(t, db, "backup-identity-admin", "admin")
+			token := generatePrimaryToken(t, manager, admin)
+			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSystemBackupDownload)
+			mutated := false
+			// This query is the requester check after proof validation and before
+			// the creation transaction takes the identity-mutation lock.
+			const callback = "test:backup_grant_identity_change"
+			if err := db.Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
+				if mutated || tx.Statement.Table != "users" || len(tx.Statement.Selects) != 2 ||
+					tx.Statement.Selects[0] != "id" || tx.Statement.Selects[1] != "role" {
+					return
+				}
+				mutated = true
+				if err := db.Model(&model.User{}).Where("id = ?", admin.ID).UpdateColumn(testCase.column, testCase.value).Error; err != nil {
+					_ = tx.AddError(err)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := db.Callback().Query().Remove(callback); err != nil {
+					t.Errorf("remove identity callback: %v", err)
+				}
+			})
+			resp := performStepUpRequest(t, newCredentialGrantTestRouter(db, manager), http.MethodPost,
+				"/credential-access-grants/system-backup-download", token, proof, `{"reason":"离线演练"}`)
+			if !mutated || resp.Code != http.StatusForbidden {
+				t.Fatalf("identity changed before create: mutated=%v status=%d body=%s", mutated, resp.Code, resp.Body.String())
+			}
+			var count int64
+			if err := db.Model(&model.CredentialAccessGrant{}).Count(&count).Error; err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 {
+				t.Fatalf("identity change must not create a grant: %d", count)
+			}
+			for _, event := range loadCredentialAuditEvents(t, db, CredentialGrantActionSystemBackupDownload) {
+				if event.CredentialKind == credentialGrantKind {
+					t.Fatalf("rejected creation must not emit successful grant lifecycle audit: %+v", event)
+				}
+			}
+		})
+	}
+}
+
+func TestSystemBackupDownloadCredentialGrantMatchingThroughMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*model.CredentialAccessGrant, model.User)
+	}{
+		{name: "dedicated_system_grant"},
+		{name: "config_export", mutate: func(g *model.CredentialAccessGrant, _ model.User) {
+			g.Action, g.Purpose = CredentialGrantActionConfigExport, CredentialGrantPurposeConfigExport
+		}},
+		{name: "wrong_action", mutate: func(g *model.CredentialAccessGrant, _ model.User) { g.Action = CredentialGrantActionConfigExport }},
+		{name: "wrong_purpose", mutate: func(g *model.CredentialAccessGrant, _ model.User) { g.Purpose = CredentialGrantPurposeConfigExport }},
+		{name: "other_requester", mutate: func(g *model.CredentialAccessGrant, other model.User) { g.RequesterUserID = other.ID }},
+		{name: "wrong_role", mutate: func(g *model.CredentialAccessGrant, _ model.User) { g.RequesterRole = "operator" }},
+		{name: "node_scope", mutate: func(g *model.CredentialAccessGrant, _ model.User) { g.NodeID = credentialaudit.PtrUint(11) }},
+		{name: "task_scope", mutate: func(g *model.CredentialAccessGrant, _ model.User) { g.TaskID = credentialaudit.PtrUint(22) }},
+		{name: "policy_scope", mutate: func(g *model.CredentialAccessGrant, _ model.User) { g.PolicyID = credentialaudit.PtrUint(33) }},
+		{name: "expired", mutate: func(g *model.CredentialAccessGrant, _ model.User) { g.ExpiresAt = time.Now().UTC().Add(-time.Minute) }},
+		{name: "revoked", mutate: func(g *model.CredentialAccessGrant, _ model.User) { g.Status = CredentialGrantStatusRevoked }},
+		{name: "denied", mutate: func(g *model.CredentialAccessGrant, _ model.User) { g.Status = CredentialGrantStatusDenied }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openStepUpHandlerTestDB(t)
+			manager := newStepUpTestJWTManager(db)
+			admin := seedStepUpUser(t, db, "backup-match-admin", "admin")
+			other := seedStepUpUser(t, db, "backup-match-other", "admin")
+			now := time.Now().UTC()
+			grant := model.CredentialAccessGrant{
+				RequesterUserID: admin.ID, RequesterUsername: admin.Username, RequesterRole: admin.Role,
+				Action: CredentialGrantActionSystemBackupDownload, Purpose: CredentialGrantPurposeSystemBackupDownload,
+				Status: CredentialGrantStatusActive, Reason: "离线演练", RequestedTTLSeconds: 600,
+				RequestedAt: now, ExpiresAt: now.Add(10 * time.Minute),
+			}
+			if testCase.mutate != nil {
+				testCase.mutate(&grant, other)
+			}
+			if err := db.Create(&grant).Error; err != nil {
+				t.Fatal(err)
+			}
+			called := 0
+			router := gin.New()
+			router.Use(middleware.AuthMiddleware(manager, db))
+			router.POST("/grant-check", middleware.RequireRole("admin"),
+				RequireStepUp(db, manager, auth.StepUpActionSystemBackupDownload, CredentialGrantPurposeSystemBackupDownload, "system_backup_download"),
+				requireSystemCredentialGrant(db, credentialGrantMatch{Action: CredentialGrantActionSystemBackupDownload, Purpose: CredentialGrantPurposeSystemBackupDownload}, nil),
+				func(c *gin.Context) { called++; c.Status(http.StatusNoContent) })
+			token := generatePrimaryToken(t, manager, admin)
+			proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionSystemBackupDownload)
+			attempts := 1
+			if testCase.mutate == nil {
+				attempts = 2 // Existing self-grants are not consumed by use.
+			}
+			for i := range attempts {
+				resp := performStepUpRequest(t, router, http.MethodPost, "/grant-check", token, proof, "")
+				if testCase.mutate == nil {
+					if resp.Code != http.StatusNoContent || called != i+1 {
+						t.Fatalf("dedicated grant rejected: status=%d called=%d body=%s", resp.Code, called, resp.Body.String())
+					}
+				} else if resp.Code != http.StatusForbidden || called != 0 || !strings.Contains(resp.Body.String(), credentialGrantRequiredCode) {
+					t.Fatalf("invalid grant admitted: status=%d called=%d body=%s", resp.Code, called, resp.Body.String())
+				}
+			}
+			for _, event := range loadCredentialAuditEvents(t, db, CredentialGrantActionSystemBackupDownload) {
+				metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
+				if metadata["operation"] != "system_backup_download" {
+					t.Fatalf("grant use/denial audit lost operation label: %v", metadata)
+				}
+			}
+		})
+	}
 }

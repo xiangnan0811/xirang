@@ -1,4 +1,4 @@
-import { request } from "./core";
+import { request, requestStream } from "./core";
 import { finiteNumber } from "./number-utils";
 import type { CronBackupStatus } from "./cron-backup-status";
 
@@ -22,11 +22,24 @@ export type BackupResult = {
   sha256: string;
 };
 
+export type BackupSource = "web" | "cron";
+export type BackupEngine = "sqlite" | "postgres";
+export type BackupUnavailableReason = "" | "unmanaged" | "incomplete" | "unsafe" | "too_large";
+
+/**
+ * One row of a single backup source. `downloadable` only means a download may be attempted; it does not
+ * attest content integrity or retention. It is true only when every identity field validated.
+ */
 export type BackupEntry = {
+  source: BackupSource;
+  engine: BackupEngine;
   filename: string;
   size: number;
   createdAt: string;
   sha256: string;
+  downloadable: boolean;
+  unavailableReason: BackupUnavailableReason;
+  packagedSize: number;
 };
 
 type RawVersionInfo = {
@@ -50,11 +63,28 @@ type RawBackupResult = {
 };
 
 type RawBackupEntry = {
+  source?: unknown;
+  engine?: unknown;
   filename?: unknown;
   size?: unknown;
   created_at?: unknown;
   sha256?: unknown;
+  downloadable?: unknown;
+  unavailable_reason?: unknown;
+  packaged_size?: unknown;
 };
+
+const BACKUP_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+// Managed web/cron names only use this charset; anything else is never offered for download.
+const DOWNLOADABLE_FILENAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
+
+function invalidBackupList(): Error {
+  return new Error("invalid backup list");
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
 
 export function mapVersionInfo(row: RawVersionInfo | null | undefined): VersionInfo {
   return {
@@ -82,12 +112,55 @@ export function mapBackupResult(row: RawBackupResult | null | undefined): Backup
   };
 }
 
-export function mapBackupEntry(row: RawBackupEntry | null | undefined): BackupEntry {
+/**
+ * Maps one list row of `expectedSource`. Structural identity (source, engine, filename, size, time) must be
+ * valid or the whole list is rejected; download eligibility fails closed to an unavailable reason.
+ */
+export function mapBackupEntry(row: RawBackupEntry | null | undefined, expectedSource: BackupSource): BackupEntry {
+  if (!row || typeof row !== "object") {
+    throw invalidBackupList();
+  }
+  const { source, engine, filename, size, created_at: createdAt } = row;
+  if ((source !== "web" && source !== "cron") || source !== expectedSource) {
+    throw invalidBackupList();
+  }
+  if (engine !== "sqlite" && engine !== "postgres") {
+    throw invalidBackupList();
+  }
+  if (source === "web" && engine !== "sqlite") {
+    throw invalidBackupList();
+  }
+  if (typeof filename !== "string" || filename === "" || filename.includes("/") || filename.includes("\0")) {
+    throw invalidBackupList();
+  }
+  if (!isNonNegativeSafeInteger(size) || typeof createdAt !== "string") {
+    throw invalidBackupList();
+  }
+
+  const sha256 = typeof row.sha256 === "string" && BACKUP_DIGEST_PATTERN.test(row.sha256) ? row.sha256 : "";
+  const packagedSize = isNonNegativeSafeInteger(row.packaged_size) ? row.packaged_size : 0;
+  const rawReason = row.unavailable_reason;
+  // Unknown or missing reasons fail closed as "unsafe" and never imply availability.
+  const reason: BackupUnavailableReason = rawReason === "" || rawReason === "unmanaged" || rawReason === "incomplete" || rawReason === "too_large"
+    ? rawReason
+    : "unsafe";
+  const downloadable = row.downloadable === true
+    && reason === ""
+    && sha256 !== ""
+    && size > 0
+    && packagedSize > 0
+    && DOWNLOADABLE_FILENAME_PATTERN.test(filename);
   return {
-    filename: String(row?.filename ?? ""),
-    size: finiteNumber(row?.size),
-    createdAt: String(row?.created_at ?? ""),
-    sha256: String(row?.sha256 ?? ""),
+    source,
+    engine,
+    filename,
+    size,
+    createdAt,
+    sha256,
+    downloadable,
+    // A row that is not downloadable always carries a visible reason, never "".
+    unavailableReason: downloadable ? "" : reason === "" ? "unsafe" : reason,
+    packagedSize,
   };
 }
 
@@ -112,9 +185,52 @@ export function createSystemApi() {
       return mapBackupResult(raw);
     },
 
-    async listBackups(token: string, options?: { signal?: AbortSignal }): Promise<BackupEntry[]> {
-      const raw = await request<RawBackupEntry[]>("/system/backups", { token, signal: options?.signal });
-      return Array.isArray(raw) ? raw.map(mapBackupEntry) : [];
+    async listBackups(token: string, options?: { signal?: AbortSignal; source?: BackupSource }): Promise<BackupEntry[]> {
+      const source = options?.source ?? "web";
+      const path = source === "cron" ? "/system/backups?source=cron" : "/system/backups";
+      const raw = await request<unknown>(path, { token, signal: options?.signal });
+      if (!Array.isArray(raw)) {
+        throw invalidBackupList();
+      }
+      return raw.map((row: RawBackupEntry | null | undefined) => mapBackupEntry(row, source));
+    },
+
+    /**
+     * Starts the tar download of one listed entry. Ownership is checked before the request and again when
+     * headers arrive: a stale owner gets an AbortError and the unread body is cancelled. The returned body
+     * is unread; the caller owns consuming or cancelling it.
+     */
+    async downloadBackup(
+      token: string,
+      entry: Pick<BackupEntry, "source" | "filename" | "sha256">,
+      stepUpProof: string,
+      options: { signal: AbortSignal; isCurrent: () => boolean },
+    ): Promise<Response> {
+      if (options.signal.aborted || !options.isCurrent()) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      if ((entry.source !== "web" && entry.source !== "cron")
+        || !DOWNLOADABLE_FILENAME_PATTERN.test(entry.filename)
+        || !BACKUP_DIGEST_PATTERN.test(entry.sha256)) {
+        throw new Error("invalid backup download target");
+      }
+      let response: Response;
+      try {
+        response = await requestStream(
+          `/system/backups/${encodeURIComponent(entry.source)}/${encodeURIComponent(entry.filename)}/download`,
+          { token, stepUpProof, signal: options.signal, ifMatch: `"${entry.sha256}"` },
+        );
+      } catch (error) {
+        if (options.signal.aborted || !options.isCurrent()) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        throw error;
+      }
+      if (options.signal.aborted || !options.isCurrent()) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new DOMException("Aborted", "AbortError");
+      }
+      return response;
     },
 
     async getCronBackupStatus(token: string, options?: { signal?: AbortSignal }): Promise<CronBackupStatus> {

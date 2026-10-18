@@ -117,6 +117,19 @@ checksum_for() {
   fi
 }
 
+check_checksum_file() {
+  local directory="$1"
+  local filename="$2"
+  (
+    cd -- "${directory}"
+    if [[ "${CHECKSUM_TOOL}" == "sha256sum" ]]; then
+      sha256sum --strict --check -- "${filename}.sha256"
+    else
+      shasum -a 256 --strict --check -- "${filename}.sha256"
+    fi
+  ) >/dev/null || fail "published checksum cannot be consumed from its artifact directory"
+}
+
 json_string() {
   local path="$1"
   local key="$2"
@@ -256,7 +269,7 @@ assert_success_artifact() {
   local state_dir="$2"
   local output_dir="$3"
   local state_file="${state_dir}/${engine}/state.json"
-  local result artifact_name artifact checksum_expected checksum_actual artifact_count artifact_pattern
+  local result artifact_name artifact checksum_expected checksum_actual checksum_label artifact_count artifact_pattern
 
   result="$(json_string "${state_file}" result)" || fail "${engine} state has no latest result after success"
   [[ "${result}" == "success" ]] || fail "${engine} state did not record a successful receipt"
@@ -281,11 +294,13 @@ assert_success_artifact() {
   artifact_count="$(find "${output_dir}" -maxdepth 1 -type f -name "${artifact_pattern}" -printf '%f\n' | awk 'END { print NR + 0 }')"
   [[ "${artifact_count}" == "1" ]] || fail "${engine} success produced an unexpected artifact count"
 
-  checksum_expected="$(awk 'NF {print $1; exit}' "${checksum}")"
+  read -r checksum_expected checksum_label <"${checksum}"
   checksum_actual="$(checksum_for "${artifact}")"
-  [[ "${checksum_expected}" =~ ^[[:xdigit:]]{64}$ && "${checksum_actual}" == "${checksum_expected}" ]] || {
-    fail "${engine} artifact SHA-256 does not match its published checksum"
+  [[ "${checksum_expected}" =~ ^[0-9a-f]{64}$ && "${checksum_actual}" == "${checksum_expected}" && \
+    "${checksum_label}" == "${artifact_name}" && "$(wc -l <"${checksum}")" -eq 1 ]] || {
+    fail "${engine} artifact does not have a matching single basename SHA-256 record"
   }
+  check_checksum_file "${output_dir}" "${artifact_name}"
 
   if [[ "${engine}" == "sqlite" ]]; then
     [[ "$(sqlite3 "${artifact}" 'PRAGMA integrity_check;' 2>/dev/null)" == "ok" ]] || fail "SQLite artifact failed integrity_check"
@@ -366,12 +381,20 @@ assert_empty_dir "${RECEIPT_CLOSED_FD}"
 
 
 initialize_engine sqlite "${SQLITE_STATE}"
-run_success sqlite "${SQLITE_STATE}" "${SQLITE_OUTPUT}" "${SQLITE_SOURCE}"
+# The runner must preserve its basename receipt when the real script receives
+# a relative, noncanonical output root with a trailing slash.
+(cd -- "${WORK}"; run_success sqlite "${SQLITE_STATE}" "sqlite/../sqlite/backups/" "${SQLITE_SOURCE}")
 SQLITE_ARTIFACT="$(assert_success_artifact sqlite "${SQLITE_STATE}" "${SQLITE_OUTPUT}")"
+
+SQLITE_RESTORE_DIR="${SQLITE_ROOT}/relocated-mount"
+mkdir -m 0700 -- "${SQLITE_RESTORE_DIR}" || fail "cannot create SQLite relocation directory"
+cp -- "${SQLITE_ARTIFACT}" "${SQLITE_ARTIFACT}.sha256" "${SQLITE_RESTORE_DIR}/"
+SQLITE_RESTORE_ARTIFACT="${SQLITE_RESTORE_DIR}/${SQLITE_ARTIFACT##*/}"
+check_checksum_file "${SQLITE_RESTORE_DIR}" "${SQLITE_ARTIFACT##*/}"
 
 sqlite3 "${SQLITE_LIVE}" "UPDATE cron_roundtrip SET value = 'after-backup' WHERE id = 1;" >/dev/null
 if ! XIRANG_RESTORE_OFFLINE=1 DB_TYPE=sqlite SQLITE_PATH="${SQLITE_LIVE}" \
-  TZ=UTC bash "${RESTORE_SCRIPT}" "${SQLITE_ARTIFACT}" >/dev/null 2>&1; then
+  TZ=UTC bash "${RESTORE_SCRIPT}" "${SQLITE_RESTORE_ARTIFACT}" >/dev/null 2>&1; then
   fail "SQLite offline restore failed"
 fi
 [[ "$(sqlite3 "${SQLITE_LIVE}" 'SELECT value FROM cron_roundtrip WHERE id = 1;' 2>/dev/null)" == "before-backup" ]] || fail "SQLite offline restore did not recover the known value"
@@ -394,15 +417,21 @@ then
 fi
 
 initialize_engine postgres "${PG_STATE}"
-run_success postgres "${PG_STATE}" "${PG_OUTPUT}"
+(cd -- "${WORK}"; run_success postgres "${PG_STATE}" "postgres/backups/")
 POSTGRES_ARTIFACT="$(assert_success_artifact postgres "${PG_STATE}" "${PG_OUTPUT}")"
+
+PG_RESTORE_DIR="${PG_ROOT}/relocated-mount"
+mkdir -m 0700 -- "${PG_RESTORE_DIR}" || fail "cannot create PostgreSQL relocation directory"
+cp -- "${POSTGRES_ARTIFACT}" "${POSTGRES_ARTIFACT}.sha256" "${PG_RESTORE_DIR}/"
+POSTGRES_RESTORE_ARTIFACT="${PG_RESTORE_DIR}/${POSTGRES_ARTIFACT##*/}"
+check_checksum_file "${PG_RESTORE_DIR}" "${POSTGRES_ARTIFACT##*/}"
 
 if ! psql --set ON_ERROR_STOP=on --dbname "${POSTGRES_DSN}" \
   --command "UPDATE public.${PG_TABLE} SET value = 'after-backup' WHERE id = 1" >/dev/null 2>&1; then
   fail "cannot mutate the PostgreSQL fixture before restore"
 fi
 if ! DB_TYPE=postgres DB_DSN="${POSTGRES_DSN}" \
-  bash "${RESTORE_SCRIPT}" "${POSTGRES_ARTIFACT}" >/dev/null 2>&1; then
+  bash "${RESTORE_SCRIPT}" "${POSTGRES_RESTORE_ARTIFACT}" >/dev/null 2>&1; then
   fail "PostgreSQL offline restore failed"
 fi
 POSTGRES_VALUE="$(psql --set ON_ERROR_STOP=on --tuples-only --no-align \

@@ -192,6 +192,18 @@ GitHub Release 正文须保留该节七项行为与升级边界：成对标识�
 不得改写 `0.66.0` 仅任务级导航的历史范围，不将精确 Run 日志解释为完整执行证据、
 新增历史元数据、生产部署或灾备恢复验收；两条 lint warning 修复保持原通知与诊断行为。
 
+系统数据库下载的 Release PR 与最终 GitHub Release 正文须完整保留本次 CHANGELOG
+的功能与升级说明：管理员专用 fresh proof 和临时授权、Web SQLite 与 cron
+SQLite/PostgreSQL 双来源、两成员有界 USTAR，以及目录保存拒绝同名目标和同源锁的边界。
+目录须由操作者独占使用；锁不保护其他 origin/profile、旧页面或外部程序，
+取消、close 失败及文档丢失不保证撤销，不能将服务端发送完成解释为客户端落盘或恢复成功。
+兼容路径只允许最多 64 MiB payload，不宣称与原生路径具有相同峰值内存。
+按同一版本切换 Core、页面、备份脚本与 Nginx，结束旧下载和页面交互、排空旧 Core
+在途请求后刷新页面；升级前保全数据库、匹配密钥与配置。tar 不包含密钥、
+外部配置、known_hosts 或远端数据，仍须独立校验并在隔离目标执行既有离线恢复。
+无新增 schema migration、不改写历史记录；回退移除新下载及保存保护，
+不撤销已交付文件或外部效果，不将公开发布写成生产部署或生产灾备验收。
+
 
 All-in-One 同时设置产物观测目录 `CRON_DB_BACKUP_DIR=/backup/db` 和独立私有作业目录
 `CRON_DB_BACKUP_STATE_DIR=/backup/.cron-db-state`，共用 26 小时默认窗口。发行验收须验证

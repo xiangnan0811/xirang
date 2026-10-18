@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -32,6 +33,9 @@ type SessionBinding struct {
 
 func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if HandleSystemBackupDownloadBudgetFailure(c) {
+			return
+		}
 		header := c.GetHeader("Authorization")
 		if header == "" {
 			respondAPIError(c, http.StatusUnauthorized, "缺少 Authorization 头")
@@ -64,6 +68,9 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 		checkCtx, cancel := context.WithTimeout(c.Request.Context(), sessionRevocationValidationTimeout)
 		revoked, revokeErr := jwtManager.IsSessionRevokedContext(checkCtx, claims.ID)
 		cancel()
+		if HandleSystemBackupDownloadBudgetFailure(c) {
+			return
+		}
 		if revokeErr != nil {
 			respondAPIError(c, http.StatusServiceUnavailable, "认证服务不可用")
 			c.Abort()
@@ -77,8 +84,16 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 		// 校验 token_version：密码修改、角色变更、2FA 禁用后旧 token 自动失效
 		if db != nil {
 			var user model.User
-			if err := db.Select("token_version", "role", "totp_reenrollment_required").First(&user, claims.UserID).Error; err != nil {
-				respondAPIError(c, http.StatusUnauthorized, "用户不存在或已删除")
+			err := db.WithContext(c.Request.Context()).Select("token_version", "role", "totp_reenrollment_required").First(&user, claims.UserID).Error
+			if HandleSystemBackupDownloadBudgetFailure(c) {
+				return
+			}
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					respondAPIError(c, http.StatusUnauthorized, "用户不存在或已删除")
+				} else {
+					respondAPIError(c, http.StatusServiceUnavailable, "认证服务不可用")
+				}
 				c.Abort()
 				return
 			}

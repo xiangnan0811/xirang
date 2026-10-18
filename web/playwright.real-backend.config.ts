@@ -89,10 +89,13 @@ const frontendPort = process.env.E2E_VITE_PORT ?? "4178";
 const backendURL = `http://127.0.0.1:${backendPort}`;
 const frontendURL = `http://127.0.0.1:${frontendPort}`;
 const chromium = { ...devices["Desktop Chrome"] };
+// The download acceptance spec also runs in real Firefox and WebKit. Those
+// projects match only that spec so the Chromium-only lifecycle suites stay put.
+const systemBackupDownloadSpec = /system-backup-download\.spec\.ts/;
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: /(real-backend-smoke|lifecycle-p1|config-name-mapping|ssh-key-rotation)\.spec\.ts/,
+  testMatch: /(real-backend-smoke|lifecycle-p1|config-name-mapping|ssh-key-rotation|system-backup-download)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
@@ -140,9 +143,21 @@ export default defineConfig({
     },
     {
       name: "chromium",
-      testMatch: /(lifecycle-p1|config-name-mapping|ssh-key-rotation)\.spec\.ts/,
+      testMatch: /(lifecycle-p1|config-name-mapping|ssh-key-rotation|system-backup-download)\.spec\.ts/,
       dependencies: ["chromium-smoke"],
       use: chromium,
+    },
+    {
+      name: "firefox-system-backup-download",
+      testMatch: systemBackupDownloadSpec,
+      dependencies: ["chromium-smoke"],
+      use: { ...devices["Desktop Firefox"] },
+    },
+    {
+      name: "webkit-system-backup-download",
+      testMatch: systemBackupDownloadSpec,
+      dependencies: ["chromium-smoke"],
+      use: { ...devices["Desktop Safari"] },
     },
   ],
 });

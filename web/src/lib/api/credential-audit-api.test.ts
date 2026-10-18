@@ -79,6 +79,15 @@ describe("credential audit api mappers", () => {
     expect(purposeShaped.rawAction).toBe("batch_command");
   });
 
+  it("recognizes system backup download audit events instead of classifying them as other", () => {
+    const download = mapCredentialAuditEvent({ action: "system.backup_download", outcome: "blocked" });
+    const purposeShaped = mapCredentialAuditEvent({ action: "system_backup_download", outcome: "blocked" });
+
+    expect(download.action).toBe("system.backup_download");
+    expect(download.rawAction).toBe("system.backup_download");
+    expect(purposeShaped.action).toBe("other");
+  });
+
   it("redacts legacy output, endpoints, secrets and stack-like error messages at the mapper boundary", () => {
     expect(mapCredentialAuditEvent({ error_message: "failed stdout: FAKE_REMOTE_OUTPUT_FOR_TEST_ONLY" }).errorMessage).toBe("failed stdout: [REDACTED_OUTPUT]");
     expect(mapCredentialAuditEvent({ error_message: "panic: runtime error\nbackend/internal/task/executor/ssh_connect.go:101" }).errorMessage).toBe("[REDACTED_ERROR]");

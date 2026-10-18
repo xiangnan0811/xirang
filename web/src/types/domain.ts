@@ -898,6 +898,7 @@ export type CredentialAuditAction =
   | "docker_volumes.discover"
   | "config.export"
   | "config.import"
+  | "system.backup_download"
   | "node.doctor.run"
   | "node_migration.preflight"
   | "probe.ssh"
@@ -907,8 +908,8 @@ export type CredentialAuditAction =
 
 export type CredentialAuditMetadataValue = string | number | boolean | string[];
 
-export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "config.export" | "snapshot.restore" | "task.restore_trigger" | "task.manual_trigger" | "task.batch_trigger" | "batch_command.create" | "batch_command.retry" | "unknown";
-export type CredentialAccessGrantPurpose = "terminal" | "config_import" | "config_export" | "snapshot" | "task_restore" | "task_command" | "batch_command" | "unknown";
+export type CredentialAccessGrantAction = "terminal.open" | "config.import" | "config.export" | "system.backup_download" | "snapshot.restore" | "task.restore_trigger" | "task.manual_trigger" | "task.batch_trigger" | "batch_command.create" | "batch_command.retry" | "unknown";
+export type CredentialAccessGrantPurpose = "terminal" | "config_import" | "config_export" | "system_backup_download" | "snapshot" | "task_restore" | "task_command" | "batch_command" | "unknown";
 export type CredentialAccessGrantStatus = "requested" | "approved" | "active" | "denied" | "expired" | "revoked" | "unknown";
 
 export interface CredentialAccessGrant {

@@ -676,3 +676,25 @@ func TestBatchCommandRetryAppearsInCredentialRiskInventory(t *testing.T) {
 		t.Fatalf("batch command retry audit label = %q, want 批量命令重试", got)
 	}
 }
+
+func TestSystemBackupDownloadAuditContributesToCredentialRiskStatistics(t *testing.T) {
+	db := openStepUpHandlerTestDB(t)
+	now := time.Now().UTC()
+	for _, event := range []model.CredentialAuditEvent{
+		{Action: CredentialGrantActionSystemBackupDownload, Purpose: CredentialGrantPurposeSystemBackupDownload, Outcome: "success", CreatedAt: now},
+		{Action: CredentialGrantActionSystemBackupDownload, Purpose: CredentialGrantPurposeSystemBackupDownload, Outcome: "blocked", CreatedAt: now},
+		{Action: CredentialGrantActionSystemBackupDownload, Purpose: CredentialGrantPurposeSystemBackupDownload, Outcome: "success", CreatedAt: now.Add(-8 * 24 * time.Hour)},
+		{Action: "future.action", Outcome: "success", CreatedAt: now},
+	} {
+		if err := db.Create(&event).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	item, err := NewSettingsHandler(db, nil).recentCredentialOperationRiskItem()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Count != 2 || item.Severity != "warning" || len(item.Examples) != 1 || item.Examples[0] != "系统数据库备份下载（2 次）" {
+		t.Fatalf("backup download must contribute labeled recent audit facts, not old/unknown events: %+v", item)
+	}
+}

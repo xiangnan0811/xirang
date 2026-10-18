@@ -21,6 +21,11 @@ export type StoredAuthState = {
 export type StepUpProofOptions = {
   persist?: boolean;
   reuseCached?: boolean;
+  /**
+   * Owner of this proof attempt. A signalled request only shares a pending dialog with the same
+   * signal/action/persist; aborting it cancels the dialog and any in-flight proof POST it owns.
+   */
+  signal?: AbortSignal;
 };
 
 export type AuthContextValue = {
