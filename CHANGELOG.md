@@ -13,6 +13,13 @@
 - 升级前保全数据库、匹配密钥和配置；结束旧下载及页面交互，排空旧 Core 在途请求，按同一发行版本切换 Core、页面、备份脚本与 Nginx 后刷新客户端。v0.69.0 的目录独占、外部 namespace 竞争、取消/close 不保证撤销、64 MiB 兼容路径及隔离离线恢复边界全部仍适用。
 - 回退旧镜像会恢复旧库版本；旧 Dockerfile 也可能无法从当前软件源重建。回退不撤销已交付文件或外部效果，公开发布不代表生产部署、升级或灾备验收。
 
+## [0.69.1](https://github.com/xiangnan0811/xirang/compare/v0.69.0...v0.69.1) (2026-10-18)
+
+
+### 🐛 Bug Fixes
+
+* **build:** refresh unavailable Core Expat package pin ([#634](https://github.com/xiangnan0811/xirang/issues/634)) ([d7de369](https://github.com/xiangnan0811/xirang/commit/d7de369ac7ccd4e9bfcec805cb31f95fdaa10e97))
+
 ## [0.69.0](https://github.com/xiangnan0811/xirang/compare/v0.68.0...v0.69.0) (2026-10-18)
 
 
