@@ -207,8 +207,8 @@ SQLite/PostgreSQL 双来源、两成员有界 USTAR，以及目录保存拒绝�
 脚本回归须在 Alpine/BusyBox 环境验证校验文件可消费及迁移目录后的真实恢复，
 不能仅用已额外安装 GNU coreutils 的本地容器替代默认 CI 镜像证据。
 v0.69.0 的发行源码因 Alpine 3.23 移除 `libexpat=2.8.5-r0` 而未通过镜像准入；
-后续补丁将 Core 固定为 `2.9.0-r0`，不得移动旧 tag 或将旧 GitHub Release
-解释为镜像发布成功。补丁的版本说明须保留旧包不可重建、回退恢复旧库、
+v0.69.1 补丁将 Core 固定为 `2.9.0-r0`，不得移动旧 tag 或将旧 GitHub Release
+解释为镜像发布成功。Release PR 与最终 GitHub Release 正文须完整保留 CHANGELOG `0.69.1` 版本节：旧包不可重建、回退恢复旧库、
 同版本切换与旧操作排空、无新增迁移，以及 v0.69.0 全部下载/恢复边界。
 按新补丁源码重新取得主干 CI、双架构镜像扫描、正式标签与 provenance。
 
