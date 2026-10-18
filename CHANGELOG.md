@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.69.1](https://github.com/xiangnan0811/xirang/compare/v0.69.0...v0.69.1) (2026-10-18)
+
+
+### 🐛 Bug Fixes
+
+* **build:** refresh unavailable Core Expat package pin ([#634](https://github.com/xiangnan0811/xirang/issues/634)) ([d7de369](https://github.com/xiangnan0811/xirang/commit/d7de369ac7ccd4e9bfcec805cb31f95fdaa10e97))
+
 ### 修复
 
 - 将 Core 的 `libexpat` 精确锁定从已被 Alpine 3.23 软件源移除的 `2.8.5-r0` 更新为 `2.9.0-r0`，同步镜像合同检查；保持基础镜像 digest、其他包锁定及漏洞扫描门槛不变。
