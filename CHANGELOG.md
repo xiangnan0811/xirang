@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.69.0](https://github.com/xiangnan0811/xirang/compare/v0.68.0...v0.69.0) (2026-10-18)
+
+
+### ✨ Features
+
+* **backup:** add secure system database downloads ([#632](https://github.com/xiangnan0811/xirang/issues/632)) ([2ea3444](https://github.com/xiangnan0811/xirang/commit/2ea34446bf27e1ab654f73dcfc1a067b154aca94))
+
 ### 新增与修复
 
 - 新增管理员系统数据库双来源下载：Web SQLite 快照与 cron SQLite/PostgreSQL 受管产物，返回仅数据库与 SHA256 sidecar 两成员的有界 USTAR。使用专用 fresh `system.backup_download` proof 及 `system_backup_download` 临时授权，固定文件描述符双遍校验，4 GiB 数据上限、120 秒准备和十分钟总预算、单 Core 两个活动下载。
@@ -14,15 +21,8 @@
 - 目录须由本次操作者独占使用；协作锁不约束其他 origin/profile、旧页面或外部程序，不承诺外部 namespace 竞争及崩溃保护。close 前取消可能留下空条目，后续同名尝试拒绝；close 开始、失败或文档丢失后状态须人工检查，不承诺撤销。兼容下载已发起、服务端 flush 成功均不等于客户端落盘或恢复成功。
 - tar 不包含加密密钥、外部配置、known_hosts 或远端数据；密钥须另行保全。下载后仍需独立校验并在隔离目标按既有离线恢复流程验证，不提供在线恢复。
 - 按同一发行版本切换 Core、页面、备份脚本与 Nginx 配置；升级前保全数据库、匹配密钥与配置，结束旧下载及页面交互、排空旧 Core 在途请求后刷新页面。旧页面不采用本次目录锁协议，不能与新页面共同获得排他保证。无新增 schema migration，不改写历史记录；回退会移除新下载及保存保护，不撤销已交付文件或外部效果。
-- 以上为未发布候选，不代表已提交、合并、发布、生产部署或生产灾备验收。
+- 公开发布不代表生产已部署、升级或完成生产灾备验收。
 
-
-## [0.69.0](https://github.com/xiangnan0811/xirang/compare/v0.68.0...v0.69.0) (2026-10-18)
-
-
-### ✨ Features
-
-* **backup:** add secure system database downloads ([#632](https://github.com/xiangnan0811/xirang/issues/632)) ([2ea3444](https://github.com/xiangnan0811/xirang/commit/2ea34446bf27e1ab654f73dcfc1a067b154aca94))
 
 ## [0.68.0](https://github.com/xiangnan0811/xirang/compare/v0.67.0...v0.68.0) (2026-10-17)
 
