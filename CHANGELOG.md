@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.72.0](https://github.com/xiangnan0811/xirang/compare/v0.71.0...v0.72.0) (2026-10-19)
+
+
+### ✨ Features
+
+* **notifications:** preserve configuration context and exact alert returns ([#640](https://github.com/xiangnan0811/xirang/issues/640)) ([b48634c](https://github.com/xiangnan0811/xirang/commit/b48634cd0a69b620521b6036e901ea315f611e5a))
+
 ### 新增与修复
 
 - 通知列表和具体告警可进入既有通知渠道、静音规则、升级策略配置，并手动返回列表或同一安全告警 ID；保存成功或取消编辑均留在设置页。
@@ -14,13 +21,6 @@
 - 具体来源只返回同一经校验的告警；普通分页或筛选不移除已核实目标。目标不存在、无权限或读取失败时保留真实状态及同 ID 手动重试，只有人工返回列表才清除目标，不以旧列表副本或其他告警冒充成功。
 - 新页面加载后启用来源、焦点与异步身份保护；完成或退出旧页面编辑后刷新客户端，并按同一发行版本交付 Core 与页面。不改变后端调度、通知投递或任务执行，不因本次前端改动额外排空备份任务。关闭编辑器、离开页面或切换身份不撤销服务端已提交配置，也不自动重发。
 - 本次无新增 schema migration、历史回填或保留策略变更。升级前保全数据库、匹配密钥与配置，既有迁移降级保护及配套恢复要求仍适用；回退旧页面会移除上下文与迟到响应保护，但不删除已保存配置、静音规则或既有投递。公开发布不代表生产部署、升级或灾备恢复验收。
-
-## [0.72.0](https://github.com/xiangnan0811/xirang/compare/v0.71.0...v0.72.0) (2026-10-19)
-
-
-### ✨ Features
-
-* **notifications:** preserve configuration context and exact alert returns ([#640](https://github.com/xiangnan0811/xirang/issues/640)) ([b48634c](https://github.com/xiangnan0811/xirang/commit/b48634cd0a69b620521b6036e901ea315f611e5a))
 
 ## [0.71.0](https://github.com/xiangnan0811/xirang/compare/v0.70.0...v0.71.0) (2026-10-19)
 
