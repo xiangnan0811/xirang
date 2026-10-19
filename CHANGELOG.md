@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.71.0](https://github.com/xiangnan0811/xirang/compare/v0.70.0...v0.71.0) (2026-10-19)
+
+
+### ✨ Features
+
+* **automation:** add safe execution details and source tracking ([#638](https://github.com/xiangnan0811/xirang/issues/638)) ([b6be13a](https://github.com/xiangnan0811/xirang/commit/b6be13a57d6eed9eed43286eb8fa1faf0b286d0e))
+
 ### 新增与修复
 
 - 自动化执行历史新增版本化安全阶段、稳定失败原因和来源／动作目标关联；在现有桌面表格与移动卡片中分别展示历史节点、策略及精确 Task/Run，并支持只复制允许的标识。
