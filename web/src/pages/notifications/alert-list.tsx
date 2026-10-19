@@ -9,6 +9,8 @@ import { getSeverityMeta } from "@/lib/status";
 import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import { AlertBulkActions } from "./alert-bulk-actions";
 import { AlertEscalationTimeline, AnomalyAlertContext } from "./alert-detail";
+import { AlertEscalationPreview } from "@/components/escalation-preview";
+import { parseNumericId } from "@/lib/api/core";
 type SortField = "triggered_at" | "severity" | "status" | "node_name";
 
 export type AlertListProps = {
@@ -210,6 +212,24 @@ export function AlertList({
           <p className="text-xs text-muted-foreground">{t("notifications.noDeliveryRecords")}</p>
         )}
         <AlertEscalationTimeline token={token} alertId={Number(alert.id)} />
+        {(() => {
+          const parsedAlertId = (() => {
+            try {
+              const parsed = parseNumericId(alert.id, "alert");
+              return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+            } catch {
+              return null;
+            }
+          })();
+          return (
+            <AlertEscalationPreview
+              token={token}
+              alertId={parsedAlertId}
+              active={isOpen}
+              revisionKey={JSON.stringify(alert)}
+            />
+          );
+        })()}
         <AnomalyAlertContext token={token} errorCode={alert.errorCode} nodeId={alert.nodeId} />
       </div>
     );

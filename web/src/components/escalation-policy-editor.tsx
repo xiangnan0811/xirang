@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { Loader2, Plus, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -18,8 +18,16 @@ import {
 import { toast } from "@/components/ui/toast-sonner";
 import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { EscalationLevelRow, type EscalationLevelRowErrors } from "./escalation-level-row";
+import { EscalationDraftPreview } from "./escalation-preview";
 import { createIntegrationsApi } from "@/lib/api/integrations-api";
 import { apiClient } from "@/lib/api/client";
+import {
+  getAuthIdentitySnapshot,
+  getAuthSessionGeneration,
+  isAuthTransitionActive,
+  subscribeAuthSessionGeneration,
+  subscribeAuthTransition,
+} from "@/lib/api/core";
 import type { EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
 import { useAuth } from "@/context/auth-context.hooks";
@@ -98,39 +106,162 @@ type Props = {
 };
 
 export function EscalationPolicyEditor(props: Props) {
-  return <EscalationPolicySession key={`${props.open}:${props.policy?.id}`} {...props} />;
+  const { token, role } = useAuth();
+  const generation = useSyncExternalStore(
+    subscribeAuthSessionGeneration,
+    getAuthSessionGeneration,
+    () => 0
+  );
+  const sessionKey = `${props.open}:${props.policy?.id ?? "new"}:${token ?? ""}:${role ?? ""}:${generation}`;
+
+  return (
+    <EscalationPolicySession
+      key={sessionKey}
+      {...props}
+      token={token}
+      role={role}
+      generation={generation}
+    />
+  );
 }
 
-function EscalationPolicySession({ open, onOpenChange, policy, onSaved, onCloseAutoFocus }: Props) {
+function EscalationPolicySession({
+  open,
+  onOpenChange,
+  policy,
+  onSaved,
+  onCloseAutoFocus,
+  token,
+  role,
+  generation,
+}: Props & {
+  token: string | null;
+  role: string | null;
+  generation: number;
+}) {
   const { t } = useTranslation();
-  const { token } = useAuth();
 
   const isEdit = Boolean(policy);
 
   const [name, setName] = useState(policy?.name ?? "");
   const [description, setDescription] = useState(policy?.description ?? "");
-  const [minSeverity, setMinSeverity] = useState<"info" | "warning" | "critical">(policy?.minSeverity ?? "warning");
+  const [minSeverity, setMinSeverity] = useState<"info" | "warning" | "critical">(
+    policy?.minSeverity ?? "warning"
+  );
   const [enabled, setEnabled] = useState(policy?.enabled ?? true);
-  const [levels, setLevels] = useState<EscalationLevel[]>(() => policy?.levels.length ? policy.levels : [defaultLevel()]);
+  const [levels, setLevels] = useState<EscalationLevel[]>(() =>
+    policy?.levels.length ? policy.levels : [defaultLevel()]
+  );
   const [integrations, setIntegrations] = useState<IntegrationChannel[]>([]);
+  const [integrationsLoading, setIntegrationsLoading] = useState(false);
+  const [integrationsError, setIntegrationsError] = useState(false);
+  const [integrationsReady, setIntegrationsReady] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveStarted, setSaveStarted] = useState(false);
   const [nameConflict, setNameConflict] = useState(false);
+
+  const mountedRef = useRef(true);
+  const intAttemptRef = useRef(0);
+  const intPendingRef = useRef(false);
+  const intControllerRef = useRef<AbortController | null>(null);
+
+  const saveAttemptRef = useRef(0);
+  const savePendingRef = useRef(false);
 
   // Compute errors on every render (controlled validation)
   const errors = validateForm(name, levels, t);
   const isValid = !hasErrors(errors) && !nameConflict;
 
-  // Reset & load when dialog opens
-  useEffect(() => {
-    if (!open) return;
+  const allowed = useCallback(() => {
+    if (!mountedRef.current || !open || !token || role !== "admin") return false;
+    if (isAuthTransitionActive() || getAuthSessionGeneration() !== generation) return false;
+    const snapshot = getAuthIdentitySnapshot();
+    return snapshot.token === token && snapshot.role === "admin";
+  }, [open, token, role, generation]);
 
-    // Fetch integrations
-    if (token) {
-      intApi.getIntegrations(token).then(setIntegrations).catch(() => {
-        /* ignore — gracefully degraded */
-      });
+  // Parent callbacks may change identity on every parent render; reading them through a ref keeps the
+  // fence subscriptions below mounted for the whole session instead of re-running (and retiring every
+  // in-flight request) on unrelated parent renders.
+  const onOpenChangeRef = useRef(onOpenChange);
+  useLayoutEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
+
+  // Synchronous layout cleanup and barrier/generation subscriptions
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+
+    const handleAuthRevocation = () => {
+      intAttemptRef.current += 1;
+      saveAttemptRef.current += 1;
+      intPendingRef.current = false;
+      savePendingRef.current = false;
+      intControllerRef.current?.abort();
+      intControllerRef.current = null;
+      onOpenChangeRef.current(false);
+    };
+
+    const unsubscribeTransition = subscribeAuthTransition(() => {
+      if (isAuthTransitionActive()) {
+        handleAuthRevocation();
+      }
+    });
+
+    const unsubscribeGeneration = subscribeAuthSessionGeneration(() => {
+      handleAuthRevocation();
+    });
+
+    return () => {
+      mountedRef.current = false;
+      intAttemptRef.current += 1;
+      saveAttemptRef.current += 1;
+      intPendingRef.current = false;
+      savePendingRef.current = false;
+      intControllerRef.current?.abort();
+      intControllerRef.current = null;
+      unsubscribeTransition();
+      unsubscribeGeneration();
+    };
+  }, []);
+
+  // Load integrations with single-flight pendingRef, attempt fence, and retry support
+  const loadIntegrations = useCallback(() => {
+    if (!allowed() || intPendingRef.current) return;
+    intAttemptRef.current += 1;
+    const attempt = intAttemptRef.current;
+    intControllerRef.current?.abort();
+    const controller = new AbortController();
+    intControllerRef.current = controller;
+    intPendingRef.current = true;
+    setIntegrationsLoading(true);
+    setIntegrationsError(false);
+
+    intApi.getIntegrations(token!, { signal: controller.signal }).then(
+      (data) => {
+        if (!mountedRef.current || intAttemptRef.current !== attempt) return;
+        intPendingRef.current = false;
+        intControllerRef.current = null;
+        if (!allowed()) return;
+        setIntegrations(data);
+        setIntegrationsReady(true);
+        setIntegrationsLoading(false);
+      },
+      () => {
+        if (!mountedRef.current || intAttemptRef.current !== attempt) return;
+        intPendingRef.current = false;
+        intControllerRef.current = null;
+        if (!allowed()) return;
+        setIntegrationsError(true);
+        setIntegrationsLoading(false);
+      }
+    );
+  }, [allowed, token]);
+
+  useEffect(() => {
+    if (open) {
+      loadIntegrations();
     }
-  }, [open, token]);
+  }, [open, loadIntegrations]);
 
   const updateLevel = (index: number, next: EscalationLevel) => {
     setLevels((prev) => prev.map((lv, i) => (i === index ? next : lv)));
@@ -150,7 +281,14 @@ function EscalationPolicySession({ open, onOpenChange, policy, onSaved, onCloseA
   };
 
   const handleSave = async () => {
-    if (!token || !isValid) return;
+    if (!token || !isValid || saving || saveStarted || savePendingRef.current || !allowed()) return;
+
+    savePendingRef.current = true;
+    setSaveStarted(true);
+    setSaving(true);
+    setNameConflict(false);
+    saveAttemptRef.current += 1;
+    const attempt = saveAttemptRef.current;
 
     // Force first-level delay to 0
     const safeLevels: EscalationLevel[] = levels.map((lv, i) =>
@@ -165,15 +303,23 @@ function EscalationPolicySession({ open, onOpenChange, policy, onSaved, onCloseA
       levels: safeLevels,
     };
 
-    setSaving(true);
-    setNameConflict(false);
     try {
-      const saved = isEdit && policy
-        ? await apiClient.updateEscalationPolicy(token, policy.id, input)
-        : await apiClient.createEscalationPolicy(token, input);
+      const saved =
+        isEdit && policy
+          ? await apiClient.updateEscalationPolicy(token, policy.id, input)
+          : await apiClient.createEscalationPolicy(token, input);
+
+      if (!mountedRef.current || saveAttemptRef.current !== attempt) return;
+      savePendingRef.current = false;
+      if (!allowed()) return;
+
       onSaved(saved);
       onOpenChange(false);
     } catch (err) {
+      if (!mountedRef.current || saveAttemptRef.current !== attempt) return;
+      savePendingRef.current = false;
+      if (!allowed()) return;
+
       const msg = getErrorMessage(err);
       if (msg.includes("409") || msg.toLowerCase().includes("conflict")) {
         setNameConflict(true);
@@ -181,8 +327,20 @@ function EscalationPolicySession({ open, onOpenChange, policy, onSaved, onCloseA
         toast.error(msg);
       }
     } finally {
-      setSaving(false);
+      if (mountedRef.current && saveAttemptRef.current === attempt) {
+        setSaving(false);
+        setSaveStarted(false);
+        savePendingRef.current = false;
+      }
     }
+  };
+
+  const draftPolicyForPreview: EscalationPolicyInput = {
+    name: name.trim(),
+    description: description.trim(),
+    minSeverity,
+    enabled,
+    levels: levels.map((lv, i) => (i === 0 ? { ...lv, delaySeconds: 0 } : lv)),
   };
 
   return (
@@ -262,6 +420,29 @@ function EscalationPolicySession({ open, onOpenChange, policy, onSaved, onCloseA
             </label>
           </div>
 
+          {/* Integrations loading / error banner */}
+          {integrationsLoading && (
+            <div role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <span>{t("escalation.preview.integrationsLoading")}</span>
+            </div>
+          )}
+          {integrationsError && (
+            <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-destructive">
+              <span>{t("escalation.preview.integrationsFailed")}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs"
+                onClick={() => void loadIntegrations()}
+              >
+                <RotateCcw className="size-3 mr-1" aria-hidden="true" />
+                {t("escalation.preview.retryAction")}
+              </Button>
+            </div>
+          )}
+
           {/* Levels */}
           <div className="space-y-3">
             <p className="text-sm font-medium">{t("escalation.fields.levels")}</p>
@@ -272,6 +453,7 @@ function EscalationPolicySession({ open, onOpenChange, policy, onSaved, onCloseA
                 index={i}
                 isFirst={i === 0}
                 integrations={integrations}
+                integrationsReady={integrationsReady}
                 onChange={(next) => updateLevel(i, next)}
                 onRemove={i > 0 ? () => removeLevel(i) : undefined}
                 errors={errors.levels?.[i]}
@@ -288,13 +470,22 @@ function EscalationPolicySession({ open, onOpenChange, policy, onSaved, onCloseA
               {t("escalation.levels.addLevel")}
             </Button>
           </div>
+
+          {/* Escalation Draft Preview */}
+          <EscalationDraftPreview
+            policy={draftPolicyForPreview}
+            token={token ?? ""}
+            active={open && !saving && !saveStarted}
+            disabled={saving || saveStarted || integrationsLoading || integrationsError}
+            integrationsFailed={integrationsError}
+          />
         </DialogBody>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("escalation.actions.cancel")}
           </Button>
-          <Button onClick={() => void handleSave()} disabled={!isValid || saving}>
+          <Button onClick={() => void handleSave()} disabled={!isValid || saving || saveStarted}>
             {saving ? t("escalation.actions.saving") : t("escalation.actions.save")}
           </Button>
         </DialogFooter>

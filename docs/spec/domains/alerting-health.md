@@ -21,6 +21,77 @@ API/前端区分 pending、sending、retrying、sent、failed 和兼容 unknown�
 
 回归覆盖 intent 先于网络、commit/receipt 失败重放、restart、historical NULL、全部终态 decision、resolved pending、sent 不重发、自动/手动并发 claim、stale/expired result、legacy blank key 与 escalation ambiguity、channel business ack、success-time cooldown、未知页不阻塞后续 retry，以及 SQLite/真实 PostgreSQL 竞争。`durable_delivery_test.go`、`dispatcher_test.go` 是当前关键证据入口。
 
+### 升级策略只读预演
+
+管理员可在升级策略编辑器展开“预演（不保存）”，提交当前完整草稿及节点、错误码、
+初始严重度、告警标签、UTC 触发时间与假设首次扫描时间；不需要先保存，同名草稿也可
+预演。首次展开同时捕获两个 UTC 时间，此后编辑其他字段或等待不会推进场景时间。
+已有告警在卡片和列表共用的投递面板提供“诊断升级（只读）”，必须显式点击，只提交
+告警 ID；服务端按本次生成时刻读取当前状态、级别游标和绑定。
+
+- `POST /api/v1/escalation-policies/preview` 接受严格单一 JSON 对象
+  `{policy,scenario:{node_id,error_code,severity,tags,triggered_at,evaluation_at}}`。
+  所有字段必需，拒绝 null、未知字段、尾随对象；不检查策略名称唯一性。
+- `GET /api/v1/alerts/:id/escalation-preview` 仅接受正的 JavaScript 安全整数 ID，
+  拒绝 query 和非空正文。两端要求 admin 和 `escalation:read`，已有告警另要求
+  `alerts:read`，不要求 step-up/grant，不经过审计写入中间件。
+- 两端使用 `Cache-Control: no-store`、64 KiB 正文限制、10 秒上下文预算及每分钟
+  200 次限流。无效请求 400、超限正文 413、缺失资源 404、快照容量超限或取消/超时
+  503，实际数据库错误安全返回 500；未登录/无权限分别 401/403。
+
+所有查询在一个专用连接的只读快照内完成：SQLite 显式 `BEGIN`，不受
+`_txlock=immediate` 升格为写锁；PostgreSQL 使用 `REPEATABLE READ READ ONLY`。
+预演不保存策略、不更新告警、不创建事件、投递、授权或审计，不解密 integration，
+也不调用发送、重试或真实升级引擎。渠道仅投影 ID、名称、类型和 enabled；
+enabled 不表示可达。数据库错误不能伪装无策略或部分结果。
+
+绑定沿真实 Task → Task.Policy → SLO → Node 惰性链解析；缺失关联资源继续回退，
+真正查询错误失败。选中策略缺失返回 404，禁用策略不回退。已有 durable
+`delivery_decision` 保留，不重算初始派发；open 告警即使原决定为 direct/suppressed，
+仍按当前引擎扫描规则解释。历史策略不同仅给 warning，不重置游标或倒推历史事件。
+若待推进级别已有提交事件，返回 `unsupported_state`，不预测唯一键不可能提交的事件。
+
+结果基于 `current_snapshot`，分别包含 `generated_at`、60 秒后的 `expires_at`、
+`evaluation_at`、固定 `tick_seconds=30`、请求告警 ID、绑定来源、原始下一等级条件、
+安全策略/告警摘要、已有投递状态计数、固定 warning codes 和最多五个尚未推进等级。
+`due_at` 始终为触发时刻加绝对延迟；`projected_at` 是从 evaluation_at 开始的最小
+30 秒扫描网格点，每次最多推进一级，下一等级最早再隔 30 秒，**不是发送或送达时间**。
+假设期间配置、告警状态与节点标签不变且每次提交成功，不包含重启、处理耗时、
+数据库故障、Provider 网络与渠道重试。
+
+投射复用引擎的严重度门槛、override、标签合并和真实 `MatchSilence`。
+静默在每级 projected_at 按已保存的 `[starts_at,ends_at)` 窗口判断，标签匹配节点，
+类别匹配精确值或 `类别-ASCII数字`；所有重叠命中 ID 排序展示，不赋予规则优先级。
+规则读取最多 1000 条，超限失败，不能截断后声称完整。静默和无启用渠道仍假设推进
+严重度、标签与游标，分别显示 `silenced`、`no_enabled_channels`，不等于 sent。
+降级 override 使严重度低于策略门槛时，后续行分别为 `blocked_minimum/blocked_prior`，
+不再推进或匹配静默。
+
+顶层状态为 `projected|not_open|no_policy|disabled|below_minimum|complete|unsupported_state`。
+已确认/解决告警不投射新等级，保留已有投递计数并说明既有意图不会被撤销。
+无策略、禁用或低于门槛只说明当前不进入升级，直接通知由另一条链路决定，不能宣称
+“不会通知”。预演不模拟直接通知的 grouping、threshold、cooldown 或 receipt/retry。
+损坏持久状态、不安全数字/时间、退役来源返回 unsupported_state，无部分 policy、
+alert、steps、next 或 delivery 数据；仍保留已验证的 requested_alert_id。
+已完成且可安全表示的游标大于当前末级仍为 complete，不当作越界错误。
+
+草稿每级最多 100 个渠道引用，标签每组最多 10 个、每项 32 UTF-8 字节，错误码
+1–128 UTF-8 字节且无控制字符。延迟、时间差、网格和年份均显式检查溢出；
+这些限制只用于预演，不更改现有保存/执行合同。持久标签的空字符串、空白、
+SQL NULL 和 JSON null 兼容为空数组，非字符串元素及损坏 JSON 拒绝；
+policy levels 的空/null 不代表有效配置。引擎仍使用原 elapsed-duration 判断。
+
+客户端严格验证 DTO、请求模式与请求告警 ID，不以默认值修复坏响应。
+快照新鲜度按服务端 lifetime 减往返耗时后以单调时钟计算；过期只提示重新预演，
+不自动刷新，不是执行授权或配置锁。编辑、保存开始、折叠、刷新卸载、身份代次或
+认证转换立即取消并清除旧结果；迟到成功、失败及 finally 不得写入新身份/草稿。
+策略编辑器的渠道读取和保存也遵循同一所有权围栏，读取失败可显式重试，不伪装空列表。
+
+回归覆盖纯计算与真实 durable intent 入队的引擎一致性、严格请求与权限、全表零写入、
+SQLite WAL/真实 PostgreSQL 快照和取消清理、前端乱序身份隔离及真实后端 Chromium
+两种入口。PostgreSQL 必须用独占测试库的 `TestEscalationPreviewPostgres` 验证，
+无 DSN 的 skip 不是双引擎通过；浏览器夹具不创建 pending 告警/可重试投递。
+
 ### 外部 cron 数据库备份健康
 
 外部数据库自备份不伪造 TaskRun。启用 `CRON_DB_BACKUP_STATE_DIR` 后，Core 的

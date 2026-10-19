@@ -160,48 +160,72 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 // chain: Task → Policy → SLODefinition → Node, then fetches the policy.
 // Returns (nil, nil) when no link exists (alert should use legacy immediate dispatch).
 func (s *Service) ResolvePolicyForAlert(ctx context.Context, alert model.Alert) (*model.EscalationPolicy, error) {
-	var pid *uint
+	ref, err := s.resolvePolicyReference(ctx, alert, false)
+	if err != nil || ref.ID == nil {
+		return nil, err
+	}
+	return s.Get(ctx, *ref.ID)
+}
 
-	// Task first (covers RaiseTaskFailure / RaiseVerificationFailure)
+type policyReference struct {
+	ID         *uint
+	Source     string
+	ResourceID *uint
+}
+
+// ResolvePolicyForPreview uses the runtime precedence but does not hide database
+// failures. A missing selected policy is an error, not permission to fall back.
+func (s *Service) ResolvePolicyForPreview(ctx context.Context, alert model.Alert) (*model.EscalationPolicy, policyReference, error) {
+	ref, err := s.resolvePolicyReference(ctx, alert, true)
+	if err != nil || ref.ID == nil {
+		return nil, ref, err
+	}
+	policy, err := s.Get(ctx, *ref.ID)
+	return policy, ref, err
+}
+
+func (s *Service) resolvePolicyReference(ctx context.Context, alert model.Alert, strict bool) (policyReference, error) {
+	none := policyReference{Source: "none"}
 	if alert.TaskID != nil && *alert.TaskID > 0 {
-		var t model.Task
-		if err := s.db.WithContext(ctx).Select("id, escalation_policy_id, policy_id").First(&t, *alert.TaskID).Error; err == nil {
-			if t.EscalationPolicyID != nil {
-				pid = t.EscalationPolicyID
-			} else if t.PolicyID != nil && *t.PolicyID > 0 {
-				var pol model.Policy
-				if err := s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&pol, *t.PolicyID).Error; err == nil {
-					pid = pol.EscalationPolicyID
+		var task model.Task
+		err := s.db.WithContext(ctx).Select("id, escalation_policy_id, policy_id").First(&task, *alert.TaskID).Error
+		if err == nil {
+			if task.EscalationPolicyID != nil {
+				return policyReference{task.EscalationPolicyID, "task", &task.ID}, nil
+			}
+			if task.PolicyID != nil && *task.PolicyID > 0 {
+				var policy model.Policy
+				err = s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&policy, *task.PolicyID).Error
+				if err == nil && policy.EscalationPolicyID != nil {
+					return policyReference{policy.EscalationPolicyID, "policy", &policy.ID}, nil
 				}
 			}
 		}
-	}
-
-	// SLO (RaiseSLOBreach): resolve the policy via alert.SLOID, populated
-	// directly by RaiseSLOBreach. Migration 000045 added the column and
-	// backfilled historical XR-SLO-<id> rows, so this single read replaces
-	// the previous ErrorCode string-parse heuristic.
-	if pid == nil && alert.SLOID != nil && *alert.SLOID > 0 {
-		var sloDef model.SLODefinition
-		if err := s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&sloDef, *alert.SLOID).Error; err == nil {
-			pid = sloDef.EscalationPolicyID
+		if strict && err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return none, err
 		}
 	}
-
-	// Node fallback — only when alert carries a NodeID. Platform-level alerts
-	// (RaiseStorageSpaceAlert with NodeID=0) skip this branch and return nil,
-	// correctly causing them to use legacy immediate-dispatch.
-	if pid == nil && alert.NodeID > 0 {
-		var n model.Node
-		if err := s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&n, alert.NodeID).Error; err == nil {
-			pid = n.EscalationPolicyID
+	if alert.SLOID != nil && *alert.SLOID > 0 {
+		var slo model.SLODefinition
+		err := s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&slo, *alert.SLOID).Error
+		if err == nil && slo.EscalationPolicyID != nil {
+			return policyReference{slo.EscalationPolicyID, "slo", &slo.ID}, nil
+		}
+		if strict && err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return none, err
 		}
 	}
-
-	if pid == nil {
-		return nil, nil
+	if alert.NodeID > 0 {
+		var node model.Node
+		err := s.db.WithContext(ctx).Select("id, escalation_policy_id").First(&node, alert.NodeID).Error
+		if err == nil && node.EscalationPolicyID != nil {
+			return policyReference{node.EscalationPolicyID, "node", &node.ID}, nil
+		}
+		if strict && err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return none, err
+		}
 	}
-	return s.Get(ctx, *pid)
+	return none, nil
 }
 
 func isUniqueConstraintErr(err error) bool {

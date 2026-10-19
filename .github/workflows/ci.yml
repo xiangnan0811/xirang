@@ -131,6 +131,7 @@ jobs:
       REQUIRE_POSTGRES_EXPORT_TEST: "1"
       REQUIRE_POSTGRES_GENERAL_TEST: "1"
       REQUIRE_POSTGRES_TASK_TERMINAL_TEST: "1"
+      REQUIRE_POSTGRES_ESCALATION_PREVIEW_TEST: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -206,6 +207,8 @@ jobs:
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alerting durable delivery' ./internal/alerting '^Test(Alerting(DurableDeliveryPostgres|DeliveryConcurrencyPostgres|DeliveryClaimLoadFencePostgres|DeliveryLegacyBlankAutoManualConcurrencyPostgres)|RetryTickSkipsUnknownPagePostgres|MigrationRetiredDeliveryFencePostgres)$'
       - name: Run PostgreSQL escalation delivery contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL escalation delivery contract' ./internal/escalation '^Test(EngineEscalationDeliveryConcurrencyPostgres|MigrationEscalationDeliveryFencePostgres)$'
+      - name: Run PostgreSQL escalation preview contract
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL escalation preview' ./internal/api '^TestEscalationPreviewPostgres$'
 
       - name: Run PostgreSQL alert delivery migration contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alert delivery migration contract' ./internal/database '^TestAlertDeliveryMigration.*Postgres$'

@@ -72,6 +72,11 @@ multi-arch manifest/tag 提升、发布凭据使用和 provenance attestation。
 分别列出持续 CI 的 no-push 结果与正式发布的 digest、凭据使用范围及 attestation
 结果；不得用 CI 的本地 tag 或绿色 Compose smoke 替代任一正式发布证据。
 
+告警升级只读预演的发行候选还须通过 PostgreSQL parity 中必选的
+`TestEscalationPreviewPostgres`，核对两种模式的只读一致性快照与连接取消清理；
+该门禁与 SQLite、真实后端 Chromium 验收互补，不能用无 DSN 的跳过结果代替。
+发行说明须保留手动快照、非发送证明、同版本 Core／页面切换、无新增迁移及回退边界。
+
 持续监控发布直至结束。标签推送发生在 attestation 之前，因此后置证明失败时可能已有公开镜像；核对失败步骤及 digest，不能把 workflow 失败等同于完全未发布。交付声明区分 GitHub Release、镜像、证明与实际部署结果。
 
 ## 升级说明必须覆盖的风险
