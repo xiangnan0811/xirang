@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.70.0](https://github.com/xiangnan0811/xirang/compare/v0.69.1...v0.70.0) (2026-10-19)
+
+
+### ✨ Features
+
+* **alerts:** add read-only escalation previews ([#636](https://github.com/xiangnan0811/xirang/issues/636)) ([3d70469](https://github.com/xiangnan0811/xirang/commit/3d704690c08fdf139ded11ffc4f8d1d2c1cb5538))
+
 ### 新增与修复
 
 - 新增管理员告警升级策略只读预演：在编辑器使用未保存草稿和 UTC 场景计算，或从已有告警投递面板显式诊断当前策略绑定与后续升级条件；支持同名草稿，不保存配置、不写告警／事件／投递／审计、不发送外部消息。
