@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.70.0](https://github.com/xiangnan0811/xirang/compare/v0.69.1...v0.70.0) (2026-10-19)
+
+
+### ✨ Features
+
+* **alerts:** add read-only escalation previews ([#636](https://github.com/xiangnan0811/xirang/issues/636)) ([3d70469](https://github.com/xiangnan0811/xirang/commit/3d704690c08fdf139ded11ffc4f8d1d2c1cb5538))
+
 ### 新增与修复
 
 - 新增管理员告警升级策略只读预演：在编辑器使用未保存草稿和 UTC 场景计算，或从已有告警投递面板显式诊断当前策略绑定与后续升级条件；支持同名草稿，不保存配置、不写告警／事件／投递／审计、不发送外部消息。
@@ -14,13 +21,6 @@
 - 每次结果是 60 秒手动快照，不自动刷新。草稿编辑、保存开始、折叠、页面离开及身份失效清空旧结果；请求取消不代表撤销服务端操作。未知或不安全的历史配置显示不可解释状态，不修复记录或给出部分成功时间线。
 - 新接口与界面分别在新版 Core 和页面加载后生效，按同一发行版本切换并刷新客户端；旧服务端缺少接口时显示不可用，不在浏览器本地猜测。升级前保全数据库、匹配密钥与配置，完成或退出旧编辑交互并按正常换版流程排空旧 Core 在途请求；不因只读预演额外排空执行中的备份任务，也不撤销已提交告警操作或投递。
 - 本次无新增 schema migration，不回填或改写历史记录，生产升级调度及事务／提交后发送语义保持不变。回退移除预演与对应编辑器保护，不撤销已保存策略或已有投递；既有迁移降级保护及配套恢复要求仍适用。公开发布不代表生产部署、升级或灾备恢复验收。
-
-## [0.70.0](https://github.com/xiangnan0811/xirang/compare/v0.69.1...v0.70.0) (2026-10-19)
-
-
-### ✨ Features
-
-* **alerts:** add read-only escalation previews ([#636](https://github.com/xiangnan0811/xirang/issues/636)) ([3d70469](https://github.com/xiangnan0811/xirang/commit/3d704690c08fdf139ded11ffc4f8d1d2c1cb5538))
 
 ## [0.69.1](https://github.com/xiangnan0811/xirang/compare/v0.69.0...v0.69.1) (2026-10-18)
 
