@@ -718,8 +718,20 @@ func runDurableAutomationTriggerRecovery(t *testing.T, db *gorm.DB) {
 	if err := db.Model(&model.Task{}).Where("id = ?", task.ID).Update("executor_type", "local").Error; err != nil {
 		t.Fatal(err)
 	}
+	sourcePolicy := model.Policy{Name: "trigger-recovery-source-policy", Enabled: true}
+	if err := db.Create(&sourcePolicy).Error; err != nil {
+		t.Fatal(err)
+	}
+	sourceTask := model.Task{
+		Name: "trigger-recovery-source-task", NodeID: task.NodeID, PolicyID: &sourcePolicy.ID,
+		ExecutorType: "local", Status: string(StatusFailed), Enabled: true,
+		RsyncSource: t.TempDir() + "/", RsyncTarget: t.TempDir(),
+	}
+	if err := db.Create(&sourceTask).Error; err != nil {
+		t.Fatal(err)
+	}
 	source := model.TaskRun{
-		TaskID: task.ID, NodeIDSnapshot: task.NodeID, TriggerType: "manual", Status: model.TaskRunStatusSuccess,
+		TaskID: sourceTask.ID, NodeIDSnapshot: sourceTask.NodeID, TriggerType: "manual", Status: model.TaskRunStatusFailed,
 	}
 	if err := db.Create(&source).Error; err != nil {
 		t.Fatal(err)
@@ -733,7 +745,9 @@ func runDurableAutomationTriggerRecovery(t *testing.T, db *gorm.DB) {
 		t.Fatal(err)
 	}
 	payload, err := json.Marshal(policyActionEffectPayload{
-		Rule: rule, Event: automation.Event{Type: automation.EventBackupFailed, Context: map[string]interface{}{}},
+		Rule: rule, Event: automation.Event{Type: automation.EventBackupFailed, Context: map[string]interface{}{
+			"node_id": sourceTask.NodeID, "policy_id": sourcePolicy.ID, "task_id": sourceTask.ID, "task_run_id": source.ID,
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -766,13 +780,41 @@ func runDurableAutomationTriggerRecovery(t *testing.T, db *gorm.DB) {
 	if pending.Status != model.TaskRunStatusPending {
 		t.Fatalf("reserved automation run status=%q, want pending before restart", pending.Status)
 	}
-	var logs []model.AutomationRuleLog
-	if err := db.Find(&logs).Error; err != nil {
-		t.Fatal(err)
+	assertHistory := func() {
+		t.Helper()
+		var logs []model.AutomationRuleLog
+		if err := db.Find(&logs).Error; err != nil {
+			t.Fatal(err)
+		}
+		if len(logs) != 1 || logs[0].RuleID != rule.ID || logs[0].Result != automation.ResultSuccess {
+			t.Fatalf("trigger action logs=%+v, want one success", logs)
+		}
+		meta := automation.ReadSafeExecutionMetadata(logs[0].Details, logs[0].EventType, logs[0].ActionType, logs[0].Result)
+		if meta == nil || meta.Version != automation.SafeExecutionMetadataVersion || meta.Stage != automation.ExecutionStageTaskRunReserved ||
+			meta.ReasonCode != "" || meta.SourceNodeID != sourceTask.NodeID || meta.SourcePolicyID != sourcePolicy.ID ||
+			meta.SourceTaskID != sourceTask.ID || meta.SourceTaskRunID != source.ID || meta.TargetPolicyID != 0 {
+			t.Fatalf("reserved run lost source boundary/associations: %+v", meta)
+		}
+		var targets struct {
+			TaskID    uint `json:"task_id"`
+			TaskRunID uint `json:"task_run_id"`
+		}
+		if err := json.Unmarshal([]byte(logs[0].Details), &targets); err != nil {
+			t.Fatal(err)
+		}
+		if targets.TaskID != task.ID || targets.TaskRunID != pending.ID ||
+			targets.TaskID == meta.SourceTaskID || targets.TaskRunID == meta.SourceTaskRunID {
+			t.Fatalf("target/source run associations crossed: targets=%+v source=%+v", targets, meta)
+		}
+		var count int64
+		if err := db.Model(&model.TaskRun{}).Where("task_id = ? AND trigger_type = ?", task.ID, "auto").Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("automation reservations=%d, want exactly one before and after recovery", count)
+		}
 	}
-	if len(logs) != 1 || logs[0].Result != automation.ResultSuccess {
-		t.Fatalf("trigger action logs=%+v, want one success", logs)
-	}
+	assertHistory()
 
 	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
 	shutdownManagerOnCleanup(t, restarted)
@@ -785,13 +827,19 @@ func runDurableAutomationTriggerRecovery(t *testing.T, db *gorm.DB) {
 			t.Fatal(err)
 		}
 		if pending.Status == model.TaskRunStatusSuccess {
-			return
+			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("restarted manager left triggered run status=%q", pending.Status)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	// Completion/restart cannot turn the historical reservation boundary into
+	// executor success, or replace its original source with the target Run.
+	if err := dispatcher.DispatchTaskRunEffect(context.Background(), automation.Event{}, effect); err != nil {
+		t.Fatalf("replay committed trigger after restart: %v", err)
+	}
+	assertHistory()
 }
 
 func TestDurableAutomationTriggerReservationRecoversSQLite(t *testing.T) {
@@ -898,6 +946,19 @@ func seedScheduledPolicyEffect(t *testing.T, db *gorm.DB, owner string) (model.P
 	return policy, task, source, effect
 }
 
+type committedPolicyReconciliationFailure struct {
+	*Manager
+	calls int
+}
+
+func (c *committedPolicyReconciliationFailure) ReconcilePolicySchedules(policyID uint, taskIDs []uint) error {
+	c.calls++
+	if err := c.Manager.ReconcilePolicySchedules(policyID, taskIDs); err != nil {
+		return err
+	}
+	return errors.New("injected post-commit schedule reconciliation failure")
+}
+
 func runPolicyDisableActionCommit(t *testing.T, db *gorm.DB) {
 	sched := taskscheduler.NewCronScheduler()
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, sched, nil, nil, 8, 90)
@@ -911,9 +972,13 @@ func runPolicyDisableActionCommit(t *testing.T, db *gorm.DB) {
 		t.Fatal("policy task was not registered before disable")
 	}
 	dispatcher := automation.NewDispatcher(db)
-	dispatcher.SetPolicyController(manager)
+	controller := &committedPolicyReconciliationFailure{Manager: manager}
+	dispatcher.SetPolicyController(controller)
 	if err := dispatcher.DispatchTaskRunEffect(context.Background(), automation.Event{}, effect); err != nil {
 		t.Fatalf("disable policy action: %v", err)
+	}
+	if controller.calls != 1 {
+		t.Fatalf("post-commit reconciliation calls=%d, want one", controller.calls)
 	}
 	var currentPolicy model.Policy
 	if err := db.First(&currentPolicy, policy.ID).Error; err != nil {
@@ -942,6 +1007,24 @@ func runPolicyDisableActionCommit(t *testing.T, db *gorm.DB) {
 	}
 	if logs != 1 {
 		t.Fatalf("automation logs=%d, want one success log", logs)
+	}
+	var log model.AutomationRuleLog
+	if err := db.First(&log).Error; err != nil {
+		t.Fatal(err)
+	}
+	meta := automation.ReadSafeExecutionMetadata(log.Details, log.EventType, log.ActionType, log.Result)
+	if log.Result != automation.ResultSuccess || meta == nil || meta.Stage != automation.ExecutionStagePolicyUpdated ||
+		meta.TargetPolicyID != policy.ID || meta.ReasonCode != "" {
+		t.Fatalf("post-commit reconciliation failure rewrote committed fact: log=%+v metadata=%+v", log, meta)
+	}
+	if err := dispatcher.DispatchTaskRunEffect(context.Background(), automation.Event{}, effect); err != nil {
+		t.Fatalf("replay committed policy effect: %v", err)
+	}
+	if err := db.Model(&model.AutomationRuleLog{}).Count(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if logs != 1 || controller.calls != 1 {
+		t.Fatalf("replay duplicated committed policy action: logs=%d reconciliation=%d", logs, controller.calls)
 	}
 }
 

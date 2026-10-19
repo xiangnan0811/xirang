@@ -18069,13 +18069,37 @@ const docTemplate = `{
                 "event_type": {
                     "type": "string"
                 },
+                "execution_stage": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "integer"
+                },
+                "metadata_version": {
+                    "type": "integer"
+                },
+                "reason_code": {
+                    "type": "string"
                 },
                 "result": {
                     "type": "string"
                 },
                 "rule_id": {
+                    "type": "integer"
+                },
+                "source_node_id": {
+                    "type": "integer"
+                },
+                "source_policy_id": {
+                    "type": "integer"
+                },
+                "source_task_id": {
+                    "type": "integer"
+                },
+                "source_task_run_id": {
+                    "type": "integer"
+                },
+                "target_policy_id": {
                     "type": "integer"
                 },
                 "target_task_id": {

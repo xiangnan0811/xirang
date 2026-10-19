@@ -29,6 +29,13 @@ function historyCopyLines(row: AutomationRuleLog): string[] {
     lines.push(`task_id=${row.targetTaskId}`);
     lines.push(`task_run_id=${row.targetTaskRunId}`);
   }
+  if (isHistoryId(row.targetPolicyId)) lines.push(`target_policy_id=${row.targetPolicyId}`);
+  if (isHistoryId(row.sourceNodeId)) lines.push(`source_node_id=${row.sourceNodeId}`);
+  if (isHistoryId(row.sourcePolicyId)) lines.push(`source_policy_id=${row.sourcePolicyId}`);
+  if (isHistoryId(row.sourceTaskId) && isHistoryId(row.sourceTaskRunId)) {
+    lines.push(`source_task_id=${row.sourceTaskId}`);
+    lines.push(`source_task_run_id=${row.sourceTaskRunId}`);
+  }
   return lines;
 }
 
@@ -92,6 +99,39 @@ function HistoryRule({ row, rules, emphasize = false }: { row: AutomationRuleLog
   );
 }
 
+function HistoryEvent({ row }: { row: AutomationRuleLog }) {
+  const { t } = useTranslation();
+  const eventName = row.eventType === "unknown" ? t("automation.history.unknown") : t(`automation.eventTypes.${row.eventType}`);
+  const hasNode = isHistoryId(row.sourceNodeId);
+  const hasPolicy = isHistoryId(row.sourcePolicyId);
+  const hasTaskRun = isHistoryId(row.sourceTaskId) && isHistoryId(row.sourceTaskRunId);
+  const hasAny = hasNode || hasPolicy || hasTaskRun;
+
+  return (
+    <div className="space-y-1">
+      <p>{eventName}</p>
+      {row.eventType !== "unknown" && (
+        <div className="space-y-0.5 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground/80">{t("automation.history.sourceResources")}</p>
+          {!hasAny ? (
+            <p>{t("automation.history.missingAssociations")}</p>
+          ) : (
+            <>
+              {hasNode && <p>{t("automation.history.sourceNode", { id: row.sourceNodeId })}</p>}
+              {hasPolicy && (
+                <p>{t("automation.history.sourcePolicyId", { id: row.sourcePolicyId })}</p>
+              )}
+              {hasTaskRun && (
+                <p>{t("automation.history.sourceTaskRun", { taskId: row.sourceTaskId, runId: row.sourceTaskRunId })}</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HistoryOutcome({ row }: { row: AutomationRuleLog }) {
   const { t } = useTranslation();
   return (
@@ -99,7 +139,27 @@ function HistoryOutcome({ row }: { row: AutomationRuleLog }) {
       <Badge dot={false} tone={row.result === "success" ? "success" : row.result === "error" ? "destructive" : "neutral"}>
         {t(`automation.history.${row.result === "success" ? "recorded" : row.result === "error" ? "failed" : "unknown"}`)}
       </Badge>
-      {row.result === "error" && <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.safeError")}</p>}
+      <p className="text-xs text-muted-foreground">
+        <span className="font-medium">{t("automation.history.stageLabel")}: </span>
+        {row.executionStage === "unknown"
+          ? t("automation.history.stageUnknown")
+          : t(`automation.history.stages.${row.executionStage}`)}
+      </p>
+      {row.result === "error" && (
+        <>
+          {row.reasonCode && (
+            <p className="text-xs text-muted-foreground">
+              {t(`automation.history.reasons.${row.reasonCode}`)}
+            </p>
+          )}
+          {row.executionStage === "action_execution" && (
+            <p className="text-xs text-[hsl(var(--warning-text))]">
+              {t("automation.history.partialEffectHint")}
+            </p>
+          )}
+          <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.safeError")}</p>
+        </>
+      )}
     </div>
   );
 }
@@ -107,16 +167,37 @@ function HistoryOutcome({ row }: { row: AutomationRuleLog }) {
 function HistoryAction({ row }: { row: AutomationRuleLog }) {
   const { t } = useTranslation();
   const paired = row.actionType === "trigger_task" && isHistoryId(row.targetTaskId) && isHistoryId(row.targetTaskRunId);
+  const isPolicyAction = row.actionType === "pause_policy" || row.actionType === "disable_policy";
+  const hasTargetPolicy = isHistoryId(row.targetPolicyId);
+
   return (
     <div className="space-y-1">
       <p>{row.actionType === "unknown" ? t("automation.history.unknown") : t(`automation.actionTypes.${row.actionType}`)}</p>
-      {row.result === "success" && row.actionType === "trigger_task" && <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.dispatched")}</p>}
-      {row.result === "success" && row.actionType === "send_notification" && <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.notificationRecorded")}</p>}
-      {paired && (
-        <p className="text-xs text-muted-foreground">{t("automation.history.targets", { taskId: row.targetTaskId, runId: row.targetTaskRunId })}</p>
+      {row.result === "success" && row.actionType === "trigger_task" && (
+        <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.dispatched")}</p>
       )}
-      {row.actionType === "trigger_task" && !paired && (
-        <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.missingTargets")}</p>
+      {row.result === "success" && row.actionType === "send_notification" && (
+        <p className="max-w-sm text-xs text-muted-foreground">{t("automation.history.notificationRecorded")}</p>
+      )}
+      {row.actionType === "trigger_task" && (
+        <div className="space-y-0.5 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground/80">{t("automation.history.actionTargets")}</p>
+          {paired ? (
+            <p>{t("automation.history.targets", { taskId: row.targetTaskId, runId: row.targetTaskRunId })}</p>
+          ) : (
+            <p className="max-w-sm">{t("automation.history.missingTargets")}</p>
+          )}
+        </div>
+      )}
+      {isPolicyAction && (
+        <div className="space-y-0.5 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground/80">{t("automation.history.actionTargets")}</p>
+          {hasTargetPolicy ? (
+            <p>{t("automation.history.targetPolicyId", { id: row.targetPolicyId })}</p>
+          ) : (
+            <p>{t("automation.history.missingAssociations")}</p>
+          )}
+        </div>
       )}
     </div>
   );
@@ -128,8 +209,18 @@ function HistoryRecordActions({ row, copyDisabled, onCopy }: {
   onCopy: (row: AutomationRuleLog) => void;
 }) {
   const { t } = useTranslation();
-  const hintId = useId();
+  const targetHintId = useId();
+  const sourceHintId = useId();
   const idLabel = isHistoryId(row.id) ? row.id : t("automation.history.unknown");
+
+  const hasSourcePolicy = isHistoryId(row.sourcePolicyId);
+  const hasSourceRun = isHistoryId(row.sourceTaskId) && isHistoryId(row.sourceTaskRunId);
+  const hasSourceLinks = hasSourcePolicy || hasSourceRun;
+
+  const hasTargetPolicy = isHistoryId(row.targetPolicyId);
+  const hasTargetRun = row.actionType === "trigger_task" && isHistoryId(row.targetTaskId) && isHistoryId(row.targetTaskRunId);
+  const hasTargetLinks = hasTargetPolicy || hasTargetRun;
+
   return (
     <div className="flex flex-col items-start gap-2">
       <Button
@@ -143,17 +234,51 @@ function HistoryRecordActions({ row, copyDisabled, onCopy }: {
         <Copy className="size-3.5" aria-hidden="true" />
         {t("automation.history.copyIds")}
       </Button>
-      {row.actionType === "trigger_task" && isHistoryId(row.targetTaskId) && isHistoryId(row.targetTaskRunId) && (
-        <>
-          <Button asChild variant="outline" size="sm">
-            <Link to={`/app/logs?task=${row.targetTaskId}&run=${row.targetTaskRunId}`} aria-describedby={hintId}>
-              {t("automation.history.runLogs")}
-            </Link>
-          </Button>
-          <p id={hintId} className="max-w-56 text-xs text-muted-foreground">
-            {t("automation.history.runLogsHint")}
-          </p>
-        </>
+      {hasSourceLinks && (
+        <div className="flex flex-col items-start gap-1">
+          {hasSourcePolicy && (
+            <Button asChild variant="outline" size="sm">
+              <Link to={`/app/policies?policyId=${row.sourcePolicyId}`}>
+                {t("automation.history.sourcePolicy")}
+              </Link>
+            </Button>
+          )}
+          {hasSourceRun && (
+            <>
+              <Button asChild variant="outline" size="sm">
+                <Link to={`/app/logs?task=${row.sourceTaskId}&run=${row.sourceTaskRunId}`} aria-describedby={sourceHintId}>
+                  {t("automation.history.sourceRunLogs")}
+                </Link>
+              </Button>
+              <p id={sourceHintId} className="max-w-56 text-xs text-muted-foreground">
+                {t("automation.history.runLogsHint")}
+              </p>
+            </>
+          )}
+        </div>
+      )}
+      {hasTargetLinks && (
+        <div className="flex flex-col items-start gap-1">
+          {hasTargetPolicy && (
+            <Button asChild variant="outline" size="sm">
+              <Link to={`/app/policies?policyId=${row.targetPolicyId}`}>
+                {t("automation.history.targetPolicy")}
+              </Link>
+            </Button>
+          )}
+          {hasTargetRun && (
+            <>
+              <Button asChild variant="outline" size="sm">
+                <Link to={`/app/logs?task=${row.targetTaskId}&run=${row.targetTaskRunId}`} aria-describedby={targetHintId}>
+                  {t("automation.history.runLogs")}
+                </Link>
+              </Button>
+              <p id={targetHintId} className="max-w-56 text-xs text-muted-foreground">
+                {t("automation.history.runLogsHint")}
+              </p>
+            </>
+          )}
+        </div>
       )}
     </div>
   );
@@ -230,7 +355,6 @@ function HistoryResults({ token, rules, query, onPageChange, onRetry }: Props & 
     </div>
   );
   const { items, total } = state.data;
-  const eventName = (row: AutomationRuleLog) => row.eventType === "unknown" ? t("automation.history.unknown") : t(`automation.eventTypes.${row.eventType}`);
   const copyRecord = (row: AutomationRuleLog) => { void copyRow(row); };
   return (
     <Card>
@@ -248,7 +372,7 @@ function HistoryResults({ token, rules, query, onPageChange, onRetry }: Props & 
               <tbody>{items.map((row) => <tr key={row.id} className="border-b border-border align-top last:border-0">
                 <td className="whitespace-nowrap px-3 py-3"><time dateTime={row.createdAt}>{formatTime(row.createdAt)}</time><p className="text-xs text-muted-foreground"><HistoryLogId id={row.id} /></p></td>
                 <td className="max-w-64 px-3 py-3"><HistoryRule row={row} rules={rules} /></td>
-                <td className="px-3 py-3">{eventName(row)}</td>
+                <td className="px-3 py-3"><HistoryEvent row={row} /></td>
                 <td className="px-3 py-3"><HistoryAction row={row} /></td>
                 <td className="px-3 py-3"><HistoryOutcome row={row} /></td>
                 <td className="px-3 py-3"><HistoryRecordActions row={row} copyDisabled={copyPending} onCopy={copyRecord} /></td>
@@ -259,7 +383,7 @@ function HistoryResults({ token, rules, query, onPageChange, onRetry }: Props & 
             {items.map((row) => <li key={row.id} className="space-y-2 rounded-lg border border-border p-3 text-sm">
               <HistoryRule row={row} rules={rules} emphasize />
               <p className="text-xs text-muted-foreground"><time dateTime={row.createdAt}>{formatTime(row.createdAt)}</time>{" · "}<HistoryLogId id={row.id} /></p>
-              <p>{eventName(row)}</p><HistoryAction row={row} /><HistoryOutcome row={row} />
+              <HistoryEvent row={row} /><HistoryAction row={row} /><HistoryOutcome row={row} />
               <HistoryRecordActions row={row} copyDisabled={copyPending} onCopy={copyRecord} />
             </li>)}
           </ul>

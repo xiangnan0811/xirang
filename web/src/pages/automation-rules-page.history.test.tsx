@@ -44,7 +44,26 @@ type PendingWrite = { text: string; resolve: () => void; reject: (error: unknown
 type ClipboardOutcome = "resolve" | "reject";
 
 function row(id: number, overrides: Partial<AutomationRuleLog> = {}): AutomationRuleLog {
-  return { id, ruleId: 4, eventType: "backup_failed", actionType: "pause_policy", result: "success", createdAt: "2026-04-01T12:00:00Z", errorCode: null, targetTaskId: null, targetTaskRunId: null, ...overrides };
+  return {
+    id,
+    ruleId: 4,
+    eventType: "backup_failed",
+    actionType: "pause_policy",
+    result: "success",
+    createdAt: "2026-04-01T12:00:00Z",
+    errorCode: null,
+    targetTaskId: null,
+    targetTaskRunId: null,
+    metadataVersion: null,
+    executionStage: "unknown",
+    reasonCode: null,
+    sourceNodeId: null,
+    sourcePolicyId: null,
+    sourceTaskId: null,
+    sourceTaskRunId: null,
+    targetPolicyId: null,
+    ...overrides,
+  };
 }
 function paired(id = 61, overrides: Partial<AutomationRuleLog> = {}) {
   return row(id, { actionType: "trigger_task", targetTaskId: 12, targetTaskRunId: 34, ...overrides });
@@ -633,5 +652,265 @@ describe("automation execution history", () => {
     await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledTimes(1));
     expect(mocks.toastError).not.toHaveBeenCalled();
     expect(writeText).toHaveBeenCalledTimes(1);
+  });
+
+  describe("R16 safe execution history UI semantics and navigation", () => {
+    it("renders distinct source vs target policy and run links and copies exactly 9 allowlisted IDs", async () => {
+      const user = userEvent.setup();
+      const writeText = installResolvedClipboard();
+      const richRow = row(81, {
+        eventType: "backup_failed",
+        actionType: "trigger_task",
+        result: "success",
+        targetTaskId: 10,
+        targetTaskRunId: 20,
+        metadataVersion: 1,
+        executionStage: "task_run_reserved",
+        sourceNodeId: 30,
+        sourcePolicyId: 40,
+        sourceTaskId: 50,
+        sourceTaskRunId: 60,
+      });
+      const policyRow = row(82, {
+        eventType: "backup_failed",
+        actionType: "pause_policy",
+        result: "success",
+        metadataVersion: 1,
+        executionStage: "policy_updated",
+        sourceNodeId: 30,
+        sourcePolicyId: 40,
+        targetPolicyId: 70,
+      });
+      mocks.listLogs.mockResolvedValueOnce(page([richRow, policyRow]));
+      render(historySurface(mocks.auth.token));
+      await screen.findAllByText(logText(81));
+      await screen.findAllByText(logText(82));
+
+      // Row 81: source policy, source run logs, target run logs
+      const r81 = historyRow(logText(81));
+      for (const region of [r81.tr, r81.li]) {
+        const srcPolicyLink = within(region).getByRole("link", { name: i18n.t("automation.history.sourcePolicy") });
+        expect(srcPolicyLink).toHaveAttribute("href", "/app/policies?policyId=40");
+
+        const srcRunLink = within(region).getByRole("link", { name: i18n.t("automation.history.sourceRunLogs") });
+        expect(srcRunLink).toHaveAttribute("href", "/app/logs?task=50&run=60");
+
+        const targetRunLink = within(region).getByRole("link", { name: i18n.t("automation.history.runLogs") });
+        expect(targetRunLink).toHaveAttribute("href", "/app/logs?task=10&run=20");
+
+        // No node link
+        expect(within(region).queryByRole("link", { name: /node/i })).not.toBeInTheDocument();
+      }
+
+      // Row 82: source policy, target policy
+      const r82 = historyRow(logText(82));
+      for (const region of [r82.tr, r82.li]) {
+        const srcPolicyLink = within(region).getByRole("link", { name: i18n.t("automation.history.sourcePolicy") });
+        expect(srcPolicyLink).toHaveAttribute("href", "/app/policies?policyId=40");
+
+        const targetPolicyLink = within(region).getByRole("link", { name: i18n.t("automation.history.targetPolicy") });
+        expect(targetPolicyLink).toHaveAttribute("href", "/app/policies?policyId=70");
+      }
+
+      // Copy for row 81: ordered allowlist
+      const copy81 = await readCopy(user, 81, writeText);
+      expect(copy81).toBe(
+        "log_id=81\nrule_id=4\ntask_id=10\ntask_run_id=20\nsource_node_id=30\nsource_policy_id=40\nsource_task_id=50\nsource_task_run_id=60"
+      );
+
+      // Copy for row 82:
+      const copy82 = await readCopy(user, 82, writeText);
+      expect(copy82).toBe(
+        "log_id=82\nrule_id=4\ntarget_policy_id=70\nsource_node_id=30\nsource_policy_id=40"
+      );
+    });
+
+    it("preserves original source and target IDs even when equal, without deduplication", async () => {
+      const user = userEvent.setup();
+      const writeText = installResolvedClipboard();
+      const equalRow = row(83, {
+        eventType: "backup_failed",
+        actionType: "trigger_task",
+        result: "success",
+        targetTaskId: 10,
+        targetTaskRunId: 20,
+        metadataVersion: 1,
+        executionStage: "task_run_reserved",
+        sourceTaskId: 10,
+        sourceTaskRunId: 20,
+      });
+      mocks.listLogs.mockResolvedValueOnce(page([equalRow]));
+      render(historySurface(mocks.auth.token));
+      await screen.findAllByText(logText(83));
+
+      const r = historyRow(logText(83));
+      const srcRun = within(r.tr).getByRole("link", { name: i18n.t("automation.history.sourceRunLogs") });
+      const targetRun = within(r.tr).getByRole("link", { name: i18n.t("automation.history.runLogs") });
+      expect(srcRun).toHaveAttribute("href", "/app/logs?task=10&run=20");
+      expect(targetRun).toHaveAttribute("href", "/app/logs?task=10&run=20");
+
+      const text = await readCopy(user, 83, writeText);
+      expect(text).toBe(
+        "log_id=83\nrule_id=4\ntask_id=10\ntask_run_id=20\nsource_task_id=10\nsource_task_run_id=20"
+      );
+    });
+
+    it("does not render links for source node, notifications, or invalid/hidden targets", async () => {
+      const user = userEvent.setup();
+      const writeText = installResolvedClipboard();
+      const hiddenRow = row(84, {
+        eventType: "anomaly_detected",
+        actionType: "send_notification",
+        result: "success",
+        metadataVersion: 1,
+        executionStage: "notification_recorded",
+        sourceNodeId: 99,
+        sourceTaskId: 10,
+        sourceTaskRunId: null,
+        targetPolicyId: null,
+      });
+      mocks.listLogs.mockResolvedValueOnce(page([hiddenRow]));
+      render(historySurface(mocks.auth.token));
+      await screen.findAllByText(logText(84));
+
+      const r = historyRow(logText(84));
+      expect(within(r.tr).queryByRole("link")).not.toBeInTheDocument();
+      expect(within(r.li).queryByRole("link")).not.toBeInTheDocument();
+
+      expect(r.tr).toHaveTextContent(i18n.t("automation.history.sourceNode", { id: 99 }));
+      const copyText = await readCopy(user, 84, writeText);
+      expect(copyText).toBe("log_id=84\nrule_id=4\nsource_node_id=99");
+      expect(copyText).not.toContain("source_task_id");
+    });
+
+    it("renders translated execution stage semantics, validated failure reason, and partialEffectHint on action_execution failure", async () => {
+      mocks.listLogs.mockResolvedValueOnce(page([
+        row(91, {
+          actionType: "pause_policy",
+          result: "error",
+          metadataVersion: 1,
+          executionStage: "action_execution",
+          reasonCode: "ACTION_FAILED",
+          errorCode: "ACTION_FAILED",
+        }),
+        row(92, {
+          actionType: "trigger_task",
+          result: "error",
+          metadataVersion: 1,
+          executionStage: "action_validation",
+          reasonCode: "INVALID_TARGET",
+          errorCode: "ACTION_FAILED",
+        }),
+        row(93, {
+          actionType: "trigger_task",
+          result: "success",
+          metadataVersion: 1,
+          executionStage: "task_run_reserved",
+          targetTaskId: 10,
+          targetTaskRunId: 20,
+        }),
+        row(94, {
+          actionType: "pause_policy",
+          result: "success",
+          metadataVersion: null,
+          executionStage: "unknown",
+        }),
+      ]));
+      render(historySurface(mocks.auth.token));
+      await screen.findAllByText(logText(91));
+
+      const r91 = historyRow(logText(91)).tr;
+      expect(r91).toHaveTextContent(i18n.t("automation.history.stages.action_execution"));
+      expect(r91).toHaveTextContent(i18n.t("automation.history.reasons.ACTION_FAILED"));
+      expect(r91).toHaveTextContent(i18n.t("automation.history.partialEffectHint"));
+      expect(r91).toHaveTextContent(i18n.t("automation.history.safeError"));
+
+      const r92 = historyRow(logText(92)).tr;
+      expect(r92).toHaveTextContent(i18n.t("automation.history.stages.action_validation"));
+      expect(r92).toHaveTextContent(i18n.t("automation.history.reasons.INVALID_TARGET"));
+      expect(r92).not.toHaveTextContent(i18n.t("automation.history.partialEffectHint"));
+      expect(r92).toHaveTextContent(i18n.t("automation.history.safeError"));
+
+      const r93 = historyRow(logText(93)).tr;
+      expect(r93).toHaveTextContent(i18n.t("automation.history.stages.task_run_reserved"));
+      expect(r93).not.toHaveTextContent(i18n.t("automation.history.safeError"));
+
+      const r94 = historyRow(logText(94)).tr;
+      expect(r94).toHaveTextContent(i18n.t("automation.history.stageUnknown"));
+    });
+
+    it("renders Source event resources group and missing associations correctly", async () => {
+      mocks.listLogs.mockResolvedValueOnce(page([
+        row(95, {
+          eventType: "anomaly_detected",
+          metadataVersion: 1,
+          sourceNodeId: 44,
+        }),
+        row(96, {
+          eventType: "drill_failed",
+          metadataVersion: 1,
+          sourcePolicyId: null,
+        }),
+        row(97, {
+          eventType: "unknown",
+          metadataVersion: 1,
+        }),
+      ]));
+      render(historySurface(mocks.auth.token));
+      await screen.findAllByText(logText(95));
+
+      const r95 = historyRow(logText(95)).tr;
+      expect(r95).toHaveTextContent(i18n.t("automation.history.sourceResources"));
+      expect(r95).toHaveTextContent(i18n.t("automation.history.sourceNode", { id: 44 }));
+
+      const r96 = historyRow(logText(96)).tr;
+      expect(r96).toHaveTextContent(i18n.t("automation.history.sourceResources"));
+      expect(r96).toHaveTextContent(i18n.t("automation.history.missingAssociations"));
+
+      const r97 = historyRow(logText(97)).tr;
+      expect(r97).not.toHaveTextContent(i18n.t("automation.history.sourceResources"));
+    });
+
+    it("maintains late-copy isolation across refresh and filter transitions with the 9-ID allowlist", async () => {
+      const user = userEvent.setup();
+      const fullRow = row(98, {
+        eventType: "backup_failed",
+        actionType: "trigger_task",
+        result: "success",
+        targetTaskId: 10,
+        targetTaskRunId: 20,
+        metadataVersion: 1,
+        executionStage: "task_run_reserved",
+        sourceNodeId: 30,
+        sourcePolicyId: 40,
+        sourceTaskId: 50,
+        sourceTaskRunId: 60,
+      });
+      const simpleRow = row(99);
+      mocks.listLogs.mockResolvedValueOnce(page([fullRow])).mockResolvedValueOnce(page([simpleRow]));
+      render(historySurface(mocks.auth.token));
+      await screen.findAllByText(logText(98));
+
+      const clipboard = installDeferredClipboard();
+      await clickCopy(user, 98);
+      expect(clipboard.writes[0]?.text).toBe(
+        "log_id=98\nrule_id=4\ntask_id=10\ntask_run_id=20\nsource_node_id=30\nsource_policy_id=40\nsource_task_id=50\nsource_task_run_id=60"
+      );
+
+      // Trigger refresh before clipboard settles
+      await user.click(screen.getByRole("button", { name: i18n.t("common.refresh") }));
+      await screen.findAllByText(logText(99));
+      expect(screen.queryByText(logText(98))).not.toBeInTheDocument();
+
+      // Old write settles late; should not toast
+      await settleWrite(clipboard.writes[0]!, "resolve");
+      expectNoToast();
+
+      // Now copy on new row works
+      await clickCopy(user, 99);
+      expect(clipboard.writes[1]?.text).toBe("log_id=99\nrule_id=4");
+      await settleWrite(clipboard.writes[1]!, "resolve");
+      await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledTimes(1));
+    });
   });
 });
