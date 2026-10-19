@@ -52,6 +52,8 @@ func (h *AutomationRuleHandler) List(c *gin.Context) {
 }
 
 // automationRuleLogResponse deliberately excludes free-form diagnostics and configuration.
+// Nullable v1 metadata is read only from the validated safe_execution object;
+// stage boundaries never imply final task success or notification delivery.
 type automationRuleLogResponse struct {
 	ID              uint      `json:"id"`
 	RuleID          uint      `json:"rule_id"`
@@ -62,6 +64,14 @@ type automationRuleLogResponse struct {
 	ErrorCode       *string   `json:"error_code"`
 	TargetTaskID    *int64    `json:"target_task_id"`
 	TargetTaskRunID *int64    `json:"target_task_run_id"`
+	MetadataVersion *int      `json:"metadata_version"`
+	ExecutionStage  string    `json:"execution_stage"`
+	ReasonCode      *string   `json:"reason_code"`
+	SourceNodeID    *int64    `json:"source_node_id"`
+	SourcePolicyID  *int64    `json:"source_policy_id"`
+	SourceTaskID    *int64    `json:"source_task_id"`
+	SourceTaskRunID *int64    `json:"source_task_run_id"`
+	TargetPolicyID  *int64    `json:"target_policy_id"`
 }
 
 func automationLogTargetID(raw json.RawMessage) *int64 {
@@ -79,6 +89,7 @@ func mapAutomationRuleLog(item model.AutomationRuleLog) automationRuleLogRespons
 	out := automationRuleLogResponse{
 		ID: item.ID, RuleID: item.RuleID, CreatedAt: item.CreatedAt,
 		EventType: "unknown", ActionType: "unknown", Result: "unknown",
+		ExecutionStage: automation.ExecutionStageUnknown,
 	}
 	if automation.ValidEventTypes[item.EventType] {
 		out.EventType = item.EventType
@@ -105,6 +116,26 @@ func mapAutomationRuleLog(item model.AutomationRuleLog) automationRuleLogRespons
 				out.TargetTaskID, out.TargetTaskRunID = taskID, runID
 			}
 		}
+	}
+	if meta := automation.ReadSafeExecutionMetadata(item.Details, item.EventType, item.ActionType, item.Result); meta != nil {
+		out.MetadataVersion, out.ExecutionStage = &meta.Version, meta.Stage
+		if meta.ReasonCode != "" {
+			out.ReasonCode = &meta.ReasonCode
+		}
+		// The reader has already bounded each positive ID to the safe integer
+		// range; nil keeps absent associations distinct from historical zeroes.
+		association := func(id uint) *int64 {
+			if id == 0 {
+				return nil
+			}
+			value := int64(id)
+			return &value
+		}
+		out.SourceNodeID = association(meta.SourceNodeID)
+		out.SourcePolicyID = association(meta.SourcePolicyID)
+		out.SourceTaskID = association(meta.SourceTaskID)
+		out.SourceTaskRunID = association(meta.SourceTaskRunID)
+		out.TargetPolicyID = association(meta.TargetPolicyID)
 	}
 	return out
 }

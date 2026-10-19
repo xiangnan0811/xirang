@@ -334,6 +334,15 @@ func toFloat64(v interface{}) (float64, bool) {
 	}
 }
 
+// actionDetails preserves private notification text and the legacy trigger pair
+// while adding only the fixed safe execution object. Encode once per action.
+type actionDetails struct {
+	TaskID        uint                   `json:"task_id,omitempty"`
+	TaskRunID     uint                   `json:"task_run_id,omitempty"`
+	Message       *string                `json:"message,omitempty"`
+	SafeExecution *SafeExecutionMetadata `json:"safe_execution"`
+}
+
 // executeAction runs the action specified by the rule and returns a log entry.
 func (d *Dispatcher) executeAction(ctx context.Context, rule model.AutomationRule, event Event) model.AutomationRuleLog {
 	logEntry := model.AutomationRuleLog{
@@ -341,41 +350,34 @@ func (d *Dispatcher) executeAction(ctx context.Context, rule model.AutomationRul
 		EventType:  event.Type,
 		ActionType: rule.ActionType,
 	}
-
+	meta := newSafeExecutionMetadata(event)
+	var details actionDetails
+	var err error
 	switch rule.ActionType {
 	case ActionPausePolicy:
-		err := d.execPausePolicy(ctx, rule.ActionConfig, event.Context)
-		logEntry.Result = resultFrom(err)
-		if err != nil {
-			logEntry.Error = err.Error()
-		}
-
+		err = d.execPausePolicy(ctx, rule.ActionConfig, event.Context, meta)
 	case ActionDisablePolicy:
-		err := d.execDisablePolicy(ctx, rule.ActionConfig, event.Context)
-		logEntry.Result = resultFrom(err)
-		if err != nil {
-			logEntry.Error = err.Error()
-		}
-
+		err = d.execDisablePolicy(ctx, rule.ActionConfig, event.Context, meta)
 	case ActionTriggerTask:
-		details, err := d.execTriggerTask(ctx, rule.ActionConfig, event.Context)
-		logEntry.Result = resultFrom(err)
-		if err != nil {
-			logEntry.Error = err.Error()
-		} else if details != "" {
-			logEntry.Details = details
-		}
-
+		details, err = d.execTriggerTask(ctx, rule.ActionConfig, event.Context, meta)
 	case ActionSendNotification:
-		details := d.execSendNotification(rule.ActionConfig, event.Context)
-		logEntry.Result = ResultSuccess
-		logEntry.Details = details
-
+		details = d.execSendNotification(rule.ActionConfig, event.Context)
+		meta.Stage = ExecutionStageNotificationRecorded
 	default:
-		logEntry.Result = ResultError
-		logEntry.Error = fmt.Sprintf("未知动作类型: %s", rule.ActionType)
+		setSafeExecutionValidation(meta, ReasonUnsupportedAction)
+		err = fmt.Errorf("未知动作类型: %s", rule.ActionType)
 	}
-
+	details.SafeExecution = meta
+	encoded, encodeErr := json.Marshal(details)
+	if encodeErr != nil {
+		err = fmt.Errorf("automation action: encode details: %w", encodeErr)
+	} else {
+		logEntry.Details = string(encoded)
+	}
+	logEntry.Result = resultFrom(err)
+	if err != nil {
+		logEntry.Error = err.Error()
+	}
 	return logEntry
 }
 
@@ -395,47 +397,45 @@ func (d *Dispatcher) executeActionTx(
 		EventType:  event.Type,
 		ActionType: rule.ActionType,
 	}}
+	meta := newSafeExecutionMetadata(event)
+	var details actionDetails
+	var err error
 	switch rule.ActionType {
 	case ActionPausePolicy:
-		if err := d.execPausePolicyTx(ctx, tx, rule.ActionConfig, event.Context); err != nil {
-			action.log.Result = ResultError
-			action.log.Error = err.Error()
-			return action, err
-		}
-		action.log.Result = ResultSuccess
+		err = d.execPausePolicyTx(ctx, tx, rule.ActionConfig, event.Context, meta)
 	case ActionDisablePolicy:
-		policyID, taskIDs, err := d.execDisablePolicyTx(ctx, tx, rule.ActionConfig, event.Context)
-		if err != nil {
-			action.log.Result = ResultError
-			action.log.Error = err.Error()
-			return action, err
-		}
-		action.log.Result = ResultSuccess
-		if reconciler, ok := d.policyController.(PolicyScheduleReconciler); ok && len(taskIDs) > 0 {
-			reconcileIDs := append([]uint(nil), taskIDs...)
-			action.postCommit = append(action.postCommit, func() error {
-				return reconciler.ReconcilePolicySchedules(policyID, reconcileIDs)
-			})
+		var policyID uint
+		var taskIDs []uint
+		policyID, taskIDs, err = d.execDisablePolicyTx(ctx, tx, rule.ActionConfig, event.Context, meta)
+		if err == nil {
+			if reconciler, ok := d.policyController.(PolicyScheduleReconciler); ok && len(taskIDs) > 0 {
+				reconcileIDs := append([]uint(nil), taskIDs...)
+				action.postCommit = append(action.postCommit, func() error {
+					return reconciler.ReconcilePolicySchedules(policyID, reconcileIDs)
+				})
+			}
 		}
 	case ActionTriggerTask:
-		details, err := d.execTriggerTaskTx(ctx, tx, rule.ActionConfig, event.Context)
-		if err != nil {
-			action.log.Result = ResultError
-			action.log.Error = err.Error()
-			return action, err
-		}
-		action.log.Result = ResultSuccess
-		action.log.Details = details
+		details, err = d.execTriggerTaskTx(ctx, tx, rule.ActionConfig, event.Context, meta)
 	case ActionSendNotification:
-		action.log.Result = ResultSuccess
-		action.log.Details = d.execSendNotification(rule.ActionConfig, event.Context)
+		details = d.execSendNotification(rule.ActionConfig, event.Context)
+		meta.Stage = ExecutionStageNotificationRecorded
 	default:
-		err := fmt.Errorf("未知动作类型: %s", rule.ActionType)
-		action.log.Result = ResultError
-		action.log.Error = err.Error()
-		return action, err
+		setSafeExecutionValidation(meta, ReasonUnsupportedAction)
+		err = fmt.Errorf("未知动作类型: %s", rule.ActionType)
 	}
-	return action, nil
+	details.SafeExecution = meta
+	encoded, encodeErr := json.Marshal(details)
+	if encodeErr != nil {
+		err = fmt.Errorf("automation action: encode details: %w", encodeErr)
+	} else {
+		action.log.Details = string(encoded)
+	}
+	action.log.Result = resultFrom(err)
+	if err != nil {
+		action.log.Error = err.Error()
+	}
+	return action, err
 }
 
 func resultFrom(err error) string {
@@ -450,23 +450,34 @@ func (d *Dispatcher) execPausePolicyTx(
 	tx *gorm.DB,
 	actionConfig string,
 	evtCtx map[string]interface{},
+	meta *SafeExecutionMetadata,
 ) error {
 	cfg := renderConfig(actionConfig, evtCtx)
 	policyID := parseConfigUint(cfg, "policy_id")
 	if policyID == 0 {
+		setSafeExecutionValidation(meta, ReasonInvalidTarget)
 		return fmt.Errorf("pause_policy: policy_id 缺失或解析失败 (config=%s)", actionConfig)
+	}
+	if err := ctx.Err(); err != nil {
+		setSafeExecutionFailure(meta, err)
+		return err
 	}
 	if d.policyController != nil {
 		controller, ok := d.policyController.(TransactionalPolicyController)
 		if !ok {
+			setSafeExecutionValidation(meta, ReasonPolicyControllerUnavailable)
 			return fmt.Errorf("pause_policy: policy controller lacks transactional control")
 		}
 		if err := controller.PausePolicyNextTx(ctx, tx, policyID); err != nil {
+			setSafeExecutionFailure(meta, err)
 			return fmt.Errorf("pause_policy: %w", err)
 		}
 	} else if err := policy.NewControlService(d.db, nil).PauseNextTx(ctx, tx, policyID); err != nil {
+		setSafeExecutionFailure(meta, err)
 		return fmt.Errorf("pause_policy: %w", err)
 	}
+	meta.Stage = ExecutionStagePolicyUpdated
+	meta.TargetPolicyID = safeExecutionConfigTarget(cfg, "policy_id", policyID)
 	return nil
 }
 
@@ -475,27 +486,36 @@ func (d *Dispatcher) execDisablePolicyTx(
 	tx *gorm.DB,
 	actionConfig string,
 	evtCtx map[string]interface{},
+	meta *SafeExecutionMetadata,
 ) (uint, []uint, error) {
 	cfg := renderConfig(actionConfig, evtCtx)
 	policyID := parseConfigUint(cfg, "policy_id")
 	if policyID == 0 {
+		setSafeExecutionValidation(meta, ReasonInvalidTarget)
 		return 0, nil, fmt.Errorf("disable_policy: policy_id 缺失或解析失败 (config=%s)", actionConfig)
 	}
+	if err := ctx.Err(); err != nil {
+		setSafeExecutionFailure(meta, err)
+		return 0, nil, err
+	}
+	var taskIDs []uint
+	var err error
 	if d.policyController != nil {
 		controller, ok := d.policyController.(TransactionalPolicyController)
 		if !ok {
+			setSafeExecutionValidation(meta, ReasonPolicyControllerUnavailable)
 			return 0, nil, fmt.Errorf("disable_policy: policy controller lacks transactional control")
 		}
-		taskIDs, err := controller.DisablePolicyTx(ctx, tx, policyID)
-		if err != nil {
-			return 0, nil, fmt.Errorf("disable_policy: %w", err)
-		}
-		return policyID, taskIDs, nil
+		taskIDs, err = controller.DisablePolicyTx(ctx, tx, policyID)
+	} else {
+		taskIDs, err = policy.NewControlService(d.db, nil).DisableTx(ctx, tx, policyID)
 	}
-	taskIDs, err := policy.NewControlService(d.db, nil).DisableTx(ctx, tx, policyID)
 	if err != nil {
+		setSafeExecutionFailure(meta, err)
 		return 0, nil, fmt.Errorf("disable_policy: %w", err)
 	}
+	meta.Stage = ExecutionStagePolicyUpdated
+	meta.TargetPolicyID = safeExecutionConfigTarget(cfg, "policy_id", policyID)
 	return policyID, taskIDs, nil
 }
 
@@ -504,125 +524,137 @@ func (d *Dispatcher) execTriggerTaskTx(
 	tx *gorm.DB,
 	actionConfig string,
 	evtCtx map[string]interface{},
-) (detailsJSON string, err error) {
+	meta *SafeExecutionMetadata,
+) (actionDetails, error) {
 	cfg := renderConfig(actionConfig, evtCtx)
 	taskID := parseConfigUint(cfg, "task_id")
 	if taskID == 0 {
-		return "", fmt.Errorf("trigger_task: task_id 缺失或解析失败 (config=%s)", actionConfig)
+		setSafeExecutionValidation(meta, ReasonInvalidTarget)
+		return actionDetails{}, fmt.Errorf("trigger_task: task_id 缺失或解析失败 (config=%s)", actionConfig)
 	}
 	if d.triggerer == nil {
-		return "", fmt.Errorf("trigger_task: 任务执行器未初始化")
+		setSafeExecutionValidation(meta, ReasonExecutorUnavailable)
+		return actionDetails{}, fmt.Errorf("trigger_task: 任务执行器未初始化")
 	}
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		setSafeExecutionFailure(meta, err)
+		return actionDetails{}, err
 	}
 	triggerer, ok := d.triggerer.(TransactionalTaskTriggerer)
 	if !ok {
-		return "", fmt.Errorf("trigger_task: 任务执行器不支持事务幂等触发")
+		setSafeExecutionValidation(meta, ReasonTransactionalExecutorUnavailable)
+		return actionDetails{}, fmt.Errorf("trigger_task: 任务执行器不支持事务幂等触发")
 	}
 	runID, err := triggerer.ReserveAutomationRunTx(ctx, tx, taskID)
 	if err != nil {
-		return "", fmt.Errorf("trigger_task: 触发 Task id=%d 失败: %w", taskID, err)
+		setSafeExecutionFailure(meta, err)
+		return actionDetails{}, fmt.Errorf("trigger_task: 触发 Task id=%d 失败: %w", taskID, err)
 	}
-	detailsBytes, err := json.Marshal(map[string]interface{}{
-		"task_run_id": runID,
-		"task_id":     taskID,
-	})
-	if err != nil {
-		return "", fmt.Errorf("trigger_task: encode details: %w", err)
+	meta.Stage = ExecutionStageTaskRunReserved
+	details := actionDetails{}
+	if safeExecutionConfigTarget(cfg, "task_id", taskID) != 0 && safeExecutionContextID(runID) != 0 {
+		details.TaskID, details.TaskRunID = taskID, runID
 	}
-	return string(detailsBytes), nil
+	return details, nil
 }
 
 // execPausePolicy sets policy.SkipNext = true for the policy_id in config.
-func (d *Dispatcher) execPausePolicy(ctx context.Context, actionConfig string, evtCtx map[string]interface{}) error {
+func (d *Dispatcher) execPausePolicy(ctx context.Context, actionConfig string, evtCtx map[string]interface{}, meta *SafeExecutionMetadata) error {
 	log := logger.Module("automation")
 	cfg := renderConfig(actionConfig, evtCtx)
 	policyID := parseConfigUint(cfg, "policy_id")
 	if policyID == 0 {
+		setSafeExecutionValidation(meta, ReasonInvalidTarget)
 		return fmt.Errorf("pause_policy: policy_id 缺失或解析失败 (config=%s)", actionConfig)
+	}
+	if err := ctx.Err(); err != nil {
+		setSafeExecutionFailure(meta, err)
+		return err
 	}
 	if d.policyController != nil {
 		if err := d.policyController.PausePolicyNext(ctx, policyID); err != nil {
+			setSafeExecutionFailure(meta, err)
 			return fmt.Errorf("pause_policy: %w", err)
 		}
 	} else if err := policy.NewControlService(d.db, nil).PauseNext(ctx, policyID); err != nil {
+		setSafeExecutionFailure(meta, err)
 		return fmt.Errorf("pause_policy: %w", err)
 	}
+	meta.Stage = ExecutionStagePolicyUpdated
+	meta.TargetPolicyID = safeExecutionConfigTarget(cfg, "policy_id", policyID)
 	log.Info().Uint("policy_id", policyID).Msg("automation: policy paused (skip_next=true)")
 	return nil
 }
 
 // execDisablePolicy disables a policy and durably clears generated cron specs.
-func (d *Dispatcher) execDisablePolicy(ctx context.Context, actionConfig string, evtCtx map[string]interface{}) error {
+func (d *Dispatcher) execDisablePolicy(ctx context.Context, actionConfig string, evtCtx map[string]interface{}, meta *SafeExecutionMetadata) error {
 	log := logger.Module("automation")
 	cfg := renderConfig(actionConfig, evtCtx)
 	policyID := parseConfigUint(cfg, "policy_id")
 	if policyID == 0 {
+		setSafeExecutionValidation(meta, ReasonInvalidTarget)
 		return fmt.Errorf("disable_policy: policy_id 缺失或解析失败 (config=%s)", actionConfig)
+	}
+	if err := ctx.Err(); err != nil {
+		setSafeExecutionFailure(meta, err)
+		return err
 	}
 	if d.policyController != nil {
 		if err := d.policyController.DisablePolicy(ctx, policyID); err != nil {
+			setSafeExecutionFailure(meta, err)
 			return fmt.Errorf("disable_policy: %w", err)
 		}
 	} else if err := policy.NewControlService(d.db, nil).Disable(ctx, policyID); err != nil {
+		setSafeExecutionFailure(meta, err)
 		return fmt.Errorf("disable_policy: %w", err)
 	}
+	meta.Stage = ExecutionStagePolicyUpdated
+	meta.TargetPolicyID = safeExecutionConfigTarget(cfg, "policy_id", policyID)
 	log.Info().Uint("policy_id", policyID).Msg("automation: policy disabled")
 	return nil
 }
 
-// execTriggerTask triggers a task through the runtime manager so the run enters
-// the same execution path as manual/cron triggers instead of leaving a pending
-// TaskRun row behind.
-func (d *Dispatcher) execTriggerTask(ctx context.Context, actionConfig string, evtCtx map[string]interface{}) (detailsJSON string, err error) {
+// execTriggerTask triggers through the runtime manager, not an orphan pending row.
+func (d *Dispatcher) execTriggerTask(ctx context.Context, actionConfig string, evtCtx map[string]interface{}, meta *SafeExecutionMetadata) (actionDetails, error) {
 	log := logger.Module("automation")
 	cfg := renderConfig(actionConfig, evtCtx)
 	taskID := parseConfigUint(cfg, "task_id")
 	if taskID == 0 {
-		return "", fmt.Errorf("trigger_task: task_id 缺失或解析失败 (config=%s)", actionConfig)
+		setSafeExecutionValidation(meta, ReasonInvalidTarget)
+		return actionDetails{}, fmt.Errorf("trigger_task: task_id 缺失或解析失败 (config=%s)", actionConfig)
 	}
 	if d.triggerer == nil {
-		return "", fmt.Errorf("trigger_task: 任务执行器未初始化")
+		setSafeExecutionValidation(meta, ReasonExecutorUnavailable)
+		return actionDetails{}, fmt.Errorf("trigger_task: 任务执行器未初始化")
 	}
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		setSafeExecutionFailure(meta, err)
+		return actionDetails{}, err
 	}
 	runID, err := d.triggerer.TriggerAutomation(taskID)
 	if err != nil {
-		return "", fmt.Errorf("trigger_task: 触发 Task id=%d 失败: %w", taskID, err)
+		setSafeExecutionFailure(meta, err)
+		return actionDetails{}, fmt.Errorf("trigger_task: 触发 Task id=%d 失败: %w", taskID, err)
 	}
-	detailsBytes, err := json.Marshal(map[string]interface{}{
-		"task_run_id": runID,
-		"task_id":     taskID,
-	})
-	if err != nil {
-		return "", fmt.Errorf("trigger_task: encode details: %w", err)
+	meta.Stage = ExecutionStageTaskTriggerAccepted
+	details := actionDetails{}
+	if safeExecutionConfigTarget(cfg, "task_id", taskID) != 0 && safeExecutionContextID(runID) != 0 {
+		details.TaskID, details.TaskRunID = taskID, runID
 	}
 	log.Info().Uint("task_id", taskID).Uint("task_run_id", runID).Msg("automation: task triggered")
-	return string(detailsBytes), nil
+	return details, nil
 }
 
-// execSendNotification builds a log details entry. Actual notification
-// delivery will be handled in PR2 via the alerting package.
-func (d *Dispatcher) execSendNotification(actionConfig string, evtCtx map[string]interface{}) (detailsJSON string) {
+// execSendNotification records rendered text privately; it does not send it.
+func (d *Dispatcher) execSendNotification(actionConfig string, evtCtx map[string]interface{}) actionDetails {
 	log := logger.Module("automation")
-	// Parse message template from action_config, render it with event context.
 	msgTmpl := parseConfigString(actionConfig, "message")
 	if msgTmpl == "" {
-		// Fallback: use the entire actionConfig as the message.
 		msgTmpl = actionConfig
 	}
 	message := renderTemplate(msgTmpl, evtCtx)
 	log.Info().Str("message", message).Msg("automation: notification action logged")
-	b, _ := json.Marshal(map[string]interface{}{
-		"message": message,
-	})
-	return string(b)
+	return actionDetails{Message: &message}
 }
 
 // renderTemplate replaces {{.VarName}} placeholders with values from ctx.
