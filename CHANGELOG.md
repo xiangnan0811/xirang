@@ -17,6 +17,13 @@
 - 本次无新增 schema migration、索引、历史回填或保留策略变更。回退旧 Core／页面会停止生成或展示新安全元数据，但不撤销已提交动作或已有历史；既有迁移降级保护及配套恢复要求仍适用。
 - 双引擎迁移库验收证明真实 Dispatcher、Manager 事务预留及安全 HTTP 读取；合成来源日志仅用于导航，不代表实际备份成功。公开发布不等于生产部署、生产升级或灾备恢复验收。
 
+## [0.71.0](https://github.com/xiangnan0811/xirang/compare/v0.70.0...v0.71.0) (2026-10-19)
+
+
+### ✨ Features
+
+* **automation:** add safe execution details and source tracking ([#638](https://github.com/xiangnan0811/xirang/issues/638)) ([b6be13a](https://github.com/xiangnan0811/xirang/commit/b6be13a57d6eed9eed43286eb8fa1faf0b286d0e))
+
 ## [0.70.0](https://github.com/xiangnan0811/xirang/compare/v0.69.1...v0.70.0) (2026-10-19)
 
 
