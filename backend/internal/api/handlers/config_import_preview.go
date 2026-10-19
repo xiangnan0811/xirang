@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"context"
-	"database/sql/driver"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -16,10 +14,9 @@ import (
 )
 
 const (
-	configImportPreviewMaxBodyBytes   = 10 << 20
-	configImportPreviewTimeout        = 10 * time.Second
-	configImportPreviewCleanupTimeout = 2 * time.Second
-	configImportPreviewMaxItems       = 100
+	configImportPreviewMaxBodyBytes = 10 << 20
+	configImportPreviewTimeout      = 10 * time.Second
+	configImportPreviewMaxItems     = 100
 )
 
 type configImportPreviewEntity struct {
@@ -77,8 +74,6 @@ type configImportPreviewBodyReadResult struct {
 	body []byte
 	err  error
 }
-
-var errConfigImportPreviewUnsupportedDatabase = errors.New("config import preview database dialect is unsupported")
 
 // PreviewImport godoc
 // @Summary      预览配置导入
@@ -147,7 +142,7 @@ func (h *ConfigHandler) PreviewImport(c *gin.Context) {
 	}
 
 	var decision configImportDecision
-	err = withConfigImportPreviewReadonly(ctx, h.db, func(readDB *gorm.DB) error {
+	err = withReadonlySnapshot(ctx, h.db, func(readDB *gorm.DB) error {
 		snapshot, snapshotErr := loadConfigImportSnapshot(ctx, readDB, input)
 		if snapshotErr != nil {
 			return snapshotErr
@@ -254,96 +249,6 @@ func respondConfigImportPreviewValidationError(c *gin.Context, err error) {
 		return
 	}
 	respondBadRequest(c, "无效的导入数据")
-}
-
-// withConfigImportPreviewReadonly binds GORM to one dedicated connection and
-// issues the transaction controls explicitly. This is important for the
-// production SQLite DSN, whose default _txlock=immediate would otherwise turn
-// a normal GORM Transaction into a writer reservation. PostgreSQL gets a
-// repeatable-read, read-only snapshot. The callback is only given SELECT-safe
-// shared decision functions; no import persistence path is reachable here.
-func withConfigImportPreviewReadonly(ctx context.Context, db *gorm.DB, fn func(*gorm.DB) error) (retErr error) {
-	if db == nil || fn == nil {
-		return errors.New("config import preview database is unavailable")
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return fmt.Errorf("config import preview database is unavailable: %w", err)
-	}
-	conn, err := sqlDB.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("config import preview database connection is unavailable: %w", err)
-	}
-	defer func() { retErr = errors.Join(retErr, conn.Close()) }()
-
-	dialect := strings.ToLower(strings.TrimSpace(db.Name()))
-	beginSQL := "BEGIN"
-	switch dialect {
-	case "sqlite", "sqlite3":
-		// Explicit BEGIN, rather than database/sql BeginTx, is deliberate:
-		// go-sqlite3's _txlock=immediate driver setting must not promote this
-		// read transaction to a writer reservation.
-	case "postgres", "postgresql":
-		beginSQL = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
-	default:
-		return errConfigImportPreviewUnsupportedDatabase
-	}
-
-	transactionOpen := false
-	rollback := func() error {
-		if !transactionOpen {
-			return nil
-		}
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), configImportPreviewCleanupTimeout)
-		_, rollbackErr := conn.ExecContext(cleanupCtx, "ROLLBACK")
-		cancel()
-		transactionOpen = false
-		if rollbackErr == nil {
-			return nil
-		}
-
-		// A failed rollback may leave the raw transaction open. Mark the
-		// database/sql connection bad so it cannot return to the pool carrying
-		// that transaction state.
-		discardErr := conn.Raw(func(any) error {
-			return driver.ErrBadConn
-		})
-		rollbackFailure := fmt.Errorf("config import preview rollback failed: %w", rollbackErr)
-		if discardErr == nil {
-			return errors.Join(rollbackFailure, errors.New("config import preview connection discard was not confirmed"))
-		}
-		if !errors.Is(discardErr, driver.ErrBadConn) {
-			return errors.Join(rollbackFailure, fmt.Errorf("config import preview connection discard failed: %w", discardErr))
-		}
-		return rollbackFailure
-	}
-	defer func() {
-		if cleanupErr := rollback(); cleanupErr != nil {
-			retErr = errors.Join(retErr, cleanupErr)
-		}
-	}()
-
-	// A canceled BEGIN may have reached the server even when Exec reports an
-	// error. Always clean up that ambiguous outcome before returning the pool
-	// connection.
-	transactionOpen = true
-	if _, err := conn.ExecContext(ctx, beginSQL); err != nil {
-		return fmt.Errorf("config import preview transaction is unavailable: %w", err)
-	}
-
-	readDB := db.Session(&gorm.Session{NewDB: true, Context: ctx})
-	readDB.Statement.ConnPool = conn
-	if err := fn(readDB); err != nil {
-		return errors.Join(err, rollback())
-	}
-	if err := ctx.Err(); err != nil {
-		return errors.Join(err, rollback())
-	}
-	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-		return errors.Join(fmt.Errorf("config import preview transaction commit failed: %w", err), rollback())
-	}
-	transactionOpen = false
-	return nil
 }
 
 var configImportPreviewEntityOrder = [...]string{

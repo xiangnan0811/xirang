@@ -660,6 +660,19 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/nodes/:id/owners/:user_id", middleware.RBAC("nodes:owners"), nodeHandler.RemoveOwner)
 	secured.POST("/nodes/:id/emergency-backup", middleware.RBAC("tasks:trigger"), middleware.OwnershipNodeCheck(dep.DB), handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionTaskManualTrigger, sshutil.PurposeTaskCommand, "task_run"), nodeHandler.EmergencyBackup)
 
+	// Preview reads do not pass through AuditLogger or any execution service.
+	escalationPreviewHandler := handlers.NewEscalationPreviewHandler(dep.DB)
+	escalationPreviewRoute := v1.Group("")
+	escalationPreviewRoute.Use(func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Next()
+	})
+	escalationPreviewRoute.Use(middleware.AuthMiddleware(dep.JWTManager, dep.DB))
+	escalationPreviewRoute.Use(middleware.APIRateLimit(200, time.Minute))
+	escalationPreviewRoute.Use(middleware.MaxBodySize(64 << 10))
+	escalationPreviewRoute.POST("/escalation-policies/preview", middleware.RequireRole("admin"), middleware.RBAC("escalation:read"), escalationPreviewHandler.PreviewDraft)
+	escalationPreviewRoute.GET("/alerts/:id/escalation-preview", middleware.RequireRole("admin"), middleware.RBAC("escalation:read"), middleware.RBAC("alerts:read"), escalationPreviewHandler.PreviewAlert)
+
 	escalationHandler := handlers.NewEscalationHandler(dep.DB)
 	secured.GET("/escalation-policies", middleware.RBAC("escalation:read"), escalationHandler.List)
 	secured.POST("/escalation-policies", middleware.RBAC("escalation:write"), escalationHandler.Create)

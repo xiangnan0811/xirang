@@ -137,22 +137,10 @@ func (e *Engine) evaluate(ctx context.Context, alert *model.Alert, now time.Time
 		logger.Module("escalation").Warn().Err(err).Uint("alert_id", alert.ID).Msg("resolve policy failed")
 		return
 	}
-	if policy == nil || !policy.Enabled {
-		return
+	evaluation := evaluateNextLevel(*alert, policy, now)
+	if evaluation.Reason == "ready" {
+		e.fire(ctx, alert, policy, evaluation.Index, evaluation.Level, now)
 	}
-	if !SeverityAtLeast(alert.Severity, policy.MinSeverity) {
-		return
-	}
-	levels := policy.DecodedLevels()
-	nextIdx := alert.LastLevelFired + 1
-	if nextIdx < 0 || nextIdx >= len(levels) {
-		return
-	}
-	level := levels[nextIdx]
-	if now.Sub(alert.TriggeredAt) < time.Duration(level.DelaySeconds)*time.Second {
-		return
-	}
-	e.fire(ctx, alert, policy, nextIdx, level, now)
 }
 
 // fire atomically advances last_level_fired, records the event, and enqueues
@@ -177,13 +165,9 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 	defer releaseAlertFireLock(alert.ID, lock)
 
 	severityBefore := alert.Severity
-	severityAfter := severityBefore
-	if level.SeverityOverride != "" {
-		severityAfter = level.SeverityOverride
-	}
-
-	existingTags := alert.DecodedTags()
-	tagsAfter := appendUniqueTags(existingTags, level.Tags)
+	projection := projectLevel(*alert, level)
+	severityAfter := projection.Severity
+	tagsAfter := projection.Tags
 	tagsJSON, _ := json.Marshal(tagsAfter)
 	tagsAddedJSON, _ := json.Marshal(level.Tags)
 
@@ -311,23 +295,4 @@ func releaseAlertFireLock(alertID uint, lock *alertFireLockRef) {
 		delete(alertFireLocks, alertID)
 	}
 	alertFireLocksMu.Unlock()
-}
-
-// appendUniqueTags returns existing ∪ add, preserving order of first appearance.
-func appendUniqueTags(existing, add []string) []string {
-	seen := make(map[string]bool, len(existing))
-	out := make([]string, 0, len(existing)+len(add))
-	for _, t := range existing {
-		if !seen[t] {
-			seen[t] = true
-			out = append(out, t)
-		}
-	}
-	for _, t := range add {
-		if !seen[t] {
-			seen[t] = true
-			out = append(out, t)
-		}
-	}
-	return out
 }

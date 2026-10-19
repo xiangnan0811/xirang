@@ -95,7 +95,7 @@ const systemBackupDownloadSpec = /system-backup-download\.spec\.ts/;
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: /(real-backend-smoke|lifecycle-p1|config-name-mapping|ssh-key-rotation|system-backup-download)\.spec\.ts/,
+  testMatch: /(real-backend-smoke|lifecycle-p1|config-name-mapping|ssh-key-rotation|system-backup-download|escalation-preview)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
@@ -143,7 +143,7 @@ export default defineConfig({
     },
     {
       name: "chromium",
-      testMatch: /(lifecycle-p1|config-name-mapping|ssh-key-rotation|system-backup-download)\.spec\.ts/,
+      testMatch: /(lifecycle-p1|config-name-mapping|ssh-key-rotation|system-backup-download|escalation-preview)\.spec\.ts/,
       dependencies: ["chromium-smoke"],
       use: chromium,
     },

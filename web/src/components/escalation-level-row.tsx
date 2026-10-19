@@ -17,12 +17,14 @@ type Props = {
   index: number;
   isFirst: boolean;
   integrations: IntegrationChannel[];
+  /** False while the channel inventory is loading or failed; the owner shows that state instead. */
+  integrationsReady?: boolean;
   onChange: (next: EscalationLevel) => void;
   onRemove?: () => void;
   errors?: EscalationLevelRowErrors;
 };
 
-export function EscalationLevelRow({ level, index, isFirst, integrations, onChange, onRemove, errors }: Props) {
+export function EscalationLevelRow({ level, index, isFirst, integrations, integrationsReady = true, onChange, onRemove, errors }: Props) {
   const { t } = useTranslation();
 
   const toggleIntegration = (intId: number) => {
@@ -82,7 +84,9 @@ export function EscalationLevelRow({ level, index, isFirst, integrations, onChan
       <div className="space-y-1">
         <label className="text-sm font-medium">{t("escalation.levels.integrations")}</label>
         {integrations.length === 0 ? (
-          <p className="text-xs text-muted-foreground">{t("escalation.levels.noIntegrations")}</p>
+          integrationsReady ? (
+            <p className="text-xs text-muted-foreground">{t("escalation.levels.noIntegrations")}</p>
+          ) : null
         ) : (
           <div className="flex flex-wrap gap-2">
             {integrations.map((intg) => {

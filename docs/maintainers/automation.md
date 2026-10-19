@@ -89,6 +89,13 @@ task 包的 `^TestBatchCommandRetry` 测试，覆盖事务竞争、授权、运�
 契约和无数据库后缀的双引擎依赖环用例；不能以普通 backend job 中跳过 PostgreSQL
 分支的结果替代该门禁。该选择器同时保留导出再导入与原有实际导入兼容性验证。
 
+升级策略只读预演在 PostgreSQL job 通过 required-test runner 执行 `./internal/api`
+的 `^TestEscalationPreviewPostgres$`，使用随机隔离 schema 验证两种预演、真实路由权限、
+`REPEATABLE READ READ ONLY`、并发快照、全表零写入和取消清理。缺少 DSN 或空选择器
+不是通过。Chromium 真实后端配置单独选择 `escalation-preview.spec.ts`；普通 mock
+配置排除它，Firefox/WebKit 的下载验收项目不扩大。业务边界见
+[升级预演合同](../spec/domains/alerting-health.md#升级策略只读预演)。
+
 后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI action 与
 `scripts/lint-backend.sh` 同步更新。本地通过带版本的 `go run` 隔离工具依赖，
 以当前选中的 Go 工具链构建并运行，避免系统 Go 升级后继续加载由旧 Go 构建的 linter。
