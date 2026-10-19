@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast-sonner";
 import { useConfirm } from "@/hooks/use-confirm";
+import { useNotificationContextOwner } from "@/hooks/use-notification-context-owner";
 import { getErrorMessage } from "@/lib/utils";
 import type { IntegrationChannel } from "@/types/domain";
 
@@ -34,6 +35,7 @@ export function IntegrationManager({
   onOpenEdit,
 }: IntegrationManagerProps) {
   const { t } = useTranslation();
+  const owner = useNotificationContextOwner();
   const { confirm, dialog } = useConfirm();
   const [testingIntegrationMap, setTestingIntegrationMap] = useState<Record<string, number>>({});
   const [updatingIntegrationMap, setUpdatingIntegrationMap] = useState<Record<string, number>>({});
@@ -55,20 +57,83 @@ export function IntegrationManager({
   }, []);
 
   const handleDelete = async (integration: IntegrationChannel) => {
+    if (!owner.active || owner.role !== "admin") return;
+    const owns = owner.capture();
+    if (!owns()) return;
+
     const ok = await confirm({
       title: t("notifications.deleteIntegration"),
       description: t("notifications.deleteIntegrationDesc", { name: integration.name }),
     });
-    if (!ok) return;
+    if (!ok || !owns()) return;
 
     beginOp(integration.id, "update");
     try {
       await removeIntegration(integration.id);
+      if (!owns()) return;
       toast.success(t("notifications.deletedIntegration", { name: integration.name }));
     } catch (error) {
+      if (!owns()) return;
       toast.error(getErrorMessage(error));
     } finally {
-      endOp(integration.id, "update");
+      if (owns()) {
+        endOp(integration.id, "update");
+      }
+    }
+  };
+
+  const handleToggle = async (integration: IntegrationChannel) => {
+    if (!owner.active || owner.role !== "admin") return;
+    const owns = owner.capture();
+    if (!owns()) return;
+
+    beginOp(integration.id, "update");
+    try {
+      await toggleIntegration(integration.id);
+      if (!owns()) return;
+      toast.success(
+        t("notifications.toggledSuccess", {
+          name: integration.name,
+          action: integration.enabled ? t("common.disabled") : t("common.enabled"),
+        })
+      );
+    } catch (error) {
+      if (!owns()) return;
+      toast.error(getErrorMessage(error));
+    } finally {
+      if (owns()) {
+        endOp(integration.id, "update");
+      }
+    }
+  };
+
+  const handleTest = async (integration: IntegrationChannel) => {
+    if (!owner.active || owner.role !== "admin") return;
+    const owns = owner.capture();
+    if (!owns()) return;
+
+    beginOp(integration.id, "test");
+    try {
+      const result = await testIntegration(integration.id);
+      if (!owns()) return;
+      if (result.ok) {
+        toast.success(
+          t("notifications.testResultSuccess", {
+            name: integration.name,
+            message: result.message,
+            latency: result.latencyMs,
+          })
+        );
+      } else {
+        toast.error(result.message);
+      }
+    } catch (error) {
+      if (!owns()) return;
+      toast.error(getErrorMessage(error));
+    } finally {
+      if (owns()) {
+        endOp(integration.id, "test");
+      }
     }
   };
 
@@ -80,7 +145,11 @@ export function IntegrationManager({
             <div className="flex items-center gap-2 font-medium">
               {t("notifications.integrationSettingsTitle")}
             </div>
-            <Button size="sm" onClick={onOpenCreate}>
+            <Button
+              size="sm"
+              disabled={!owner.active || owner.role !== "admin"}
+              onClick={onOpenCreate}
+            >
               <Plus className="mr-1 size-3.5" />
               {t("notifications.addIntegration")}
             </Button>
@@ -110,38 +179,14 @@ export function IntegrationManager({
                       <Switch
                         checked={integration.enabled}
                         aria-label={t("notifications.toggleEnabled", { action: integration.enabled ? t("common.disable") : t("common.enable"), name: integration.name })}
-                        disabled={busy}
-                        onCheckedChange={() =>
-                          void (async () => {
-                            beginOp(integration.id, "update");
-                            try {
-                              await toggleIntegration(integration.id);
-                              toast.success(t("notifications.toggledSuccess", { name: integration.name, action: integration.enabled ? t("common.disabled") : t("common.enabled") }));
-                            } catch (error) {
-                              toast.error(getErrorMessage(error));
-                            } finally {
-                              endOp(integration.id, "update");
-                            }
-                          })()
-                        }
+                        disabled={busy || !owner.active || owner.role !== "admin"}
+                        onCheckedChange={() => void handleToggle(integration)}
                       />
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={busy}
-                        onClick={() => {
-                          beginOp(integration.id, "test");
-                          void testIntegration(integration.id)
-                            .then((result) => {
-                              if (result.ok) {
-                                toast.success(t("notifications.testResultSuccess", { name: integration.name, message: result.message, latency: result.latencyMs }));
-                              } else {
-                                toast.error(result.message);
-                              }
-                            })
-                            .catch((error) => toast.error(getErrorMessage(error)))
-                            .finally(() => endOp(integration.id, "test"));
-                        }}
+                        disabled={busy || !owner.active || owner.role !== "admin"}
+                        onClick={() => void handleTest(integration)}
                       >
                         {isTesting && <Loader2 className="mr-1 size-4 animate-spin" />}
                         {t("notifications.testSend")}
@@ -149,7 +194,7 @@ export function IntegrationManager({
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={busy}
+                        disabled={busy || !owner.active || owner.role !== "admin"}
                         onClick={() => onOpenEdit(integration)}
                       >
                         <Wrench className="mr-1 size-4" />
@@ -159,7 +204,7 @@ export function IntegrationManager({
                         variant="destructive"
                         size="icon"
                         aria-label={t("notifications.deleteIntegrationAriaLabel", { name: integration.name })}
-                        disabled={busy}
+                        disabled={busy || !owner.active || owner.role !== "admin"}
                         onClick={() => void handleDelete(integration)}
                       >
                         <Trash2 className="size-4" />

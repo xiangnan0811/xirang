@@ -1,9 +1,15 @@
-import { useRef, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/auth-context.hooks";
+import { useNotificationContextOwner } from "@/hooks/use-notification-context-owner";
+import {
+  readNotificationConfigReturn,
+  withoutNotificationConfigReturn,
+} from "@/lib/notification-config-context";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { PageHero } from "@/components/ui/page-hero";
 
 import { PersonalTab } from "./settings-page.personal";
@@ -21,18 +27,69 @@ type TabId = (typeof TABS)[number];
 export function SettingsPage() {
   const { t } = useTranslation();
   const { role } = useAuth();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const owner = useNotificationContextOwner();
+  const [searchParams] = useSearchParams();
   const isAdmin = role === "admin";
+  const isActiveAdmin = owner.active && isAdmin;
   const tabRefs = useRef<Partial<Record<TabId, HTMLButtonElement | null>>>({});
+
+  const navigationState: unknown = location.state;
+  const hasReturn =
+    navigationState !== null &&
+    typeof navigationState === "object" &&
+    Object.hasOwn(navigationState, "notificationConfigReturn");
+
+  const source =
+    hasReturn && "notificationConfigReturn" in navigationState
+      ? readNotificationConfigReturn(navigationState.notificationConfigReturn)
+      : null;
+
+  const validSource = isActiveAdmin ? source : null;
+
+  useLayoutEffect(() => {
+    if (location.pathname !== "/app/settings") return;
+    if (hasReturn && !validSource) {
+      void navigate(
+        {
+          pathname: location.pathname,
+          search: location.search,
+          hash: location.hash,
+        },
+        {
+          replace: true,
+          state: withoutNotificationConfigReturn(navigationState),
+        }
+      );
+    }
+  }, [hasReturn, validSource, navigate, location.pathname, location.search, location.hash, navigationState]);
 
   const visibleTabs: readonly TabId[] = isAdmin ? TABS : ["personal", "account"];
   const paramTab = searchParams.get("tab") as TabId | null;
   const activeTab: TabId = paramTab && visibleTabs.includes(paramTab as never) ? paramTab : "personal";
 
+  const contextFocusAppliedRef = useRef(false);
+  useEffect(() => {
+    if (contextFocusAppliedRef.current || !validSource) {
+      return;
+    }
+    contextFocusAppliedRef.current = true;
+    tabRefs.current[activeTab]?.focus();
+  }, [validSource, activeTab]);
+
   const handleTabChange = (tab: TabId) => {
     const next = new URLSearchParams(searchParams);
     next.set("tab", tab);
-    setSearchParams(next, { replace: true });
+    const searchString = next.toString();
+    void navigate(
+      {
+        pathname: location.pathname,
+        search: searchString ? `?${searchString}` : "",
+        hash: location.hash,
+      },
+      { replace: true, state: location.state }
+    );
   };
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: TabId) => {
@@ -67,6 +124,15 @@ export function SettingsPage() {
     tabRefs.current[nextTab]?.focus();
   };
 
+  const isConfigTab = activeTab === "channels" || activeTab === "silences" || activeTab === "escalation";
+  const showReturnRegion = isActiveAdmin && validSource !== null && isConfigTab;
+
+  const handleReturnClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!owner.capture()() || !readNotificationConfigReturn(validSource)) {
+      event.preventDefault();
+    }
+  };
+
   const tabLabels: Record<TabId, string> = {
     personal: t("settings.tabs.personal"),
     account: t("settings.tabs.account"),
@@ -79,6 +145,7 @@ export function SettingsPage() {
   };
   const scopeLabel = isAdmin ? t("users.roles.admin") : t("settings.tabs.personal");
   const visibleTabsLabel = `${visibleTabs.length} · ${t("settings.tabListLabel")}`;
+  const adminContentKey = JSON.stringify([owner.epoch, owner.token, owner.role]);
 
   return (
     <div className="animate-fade-in space-y-5">
@@ -94,6 +161,43 @@ export function SettingsPage() {
           </>
         }
       />
+
+      {showReturnRegion && validSource ? (
+        <section
+          aria-label={
+            validSource.alertId !== null
+              ? t("notifications.configContext.fromAlert", { id: validSource.alertId })
+              : t("notifications.configContext.fromList")
+          }
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3 text-sm"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-foreground">
+              {validSource.alertId !== null
+                ? t("notifications.configContext.fromAlert", { id: validSource.alertId })
+                : t("notifications.configContext.fromList")}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {t("notifications.configContext.manualReturnHint")}
+            </span>
+          </div>
+          <Button asChild variant="outline" size="sm">
+            <Link
+              to={
+                validSource.alertId !== null
+                  ? `/app/notifications?alert=${validSource.alertId}`
+                  : "/app/notifications"
+              }
+              state={{ notificationConfigReturn: validSource }}
+              onClick={handleReturnClick}
+            >
+              {validSource.alertId !== null
+                ? t("notifications.configContext.returnAlert")
+                : t("notifications.configContext.returnList")}
+            </Link>
+          </Button>
+        </section>
+      ) : null}
 
       <div className="overflow-x-auto pb-1">
         <div
@@ -132,9 +236,9 @@ export function SettingsPage() {
         {activeTab === "personal" && <PersonalTab />}
         {activeTab === "account" && <AccountTab />}
         {activeTab === "users" && isAdmin && <UsersTab />}
-        {activeTab === "channels" && isAdmin && <ChannelsTab />}
-        {activeTab === "silences" && isAdmin && <SilencesPanel />}
-        {activeTab === "escalation" && isAdmin && <SettingsPageEscalation />}
+        {activeTab === "channels" && isActiveAdmin && <ChannelsTab key={adminContentKey} />}
+        {activeTab === "silences" && isActiveAdmin && <SilencesPanel key={adminContentKey} />}
+        {activeTab === "escalation" && isActiveAdmin && <SettingsPageEscalation key={adminContentKey} />}
         {activeTab === "system" && isAdmin && <SystemTab />}
         {activeTab === "maintenance" && isAdmin && <MaintenanceTab />}
       </div>

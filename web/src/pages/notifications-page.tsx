@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useAlertsContext } from "@/context/alerts-context.hooks";
 import { useIntegrationsContext } from "@/context/integrations-context.hooks";
@@ -13,12 +13,21 @@ import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import type { TaskFailureSummary } from "@/lib/api/tasks-api";
+import { useNotificationContextOwner } from "@/hooks/use-notification-context-owner";
+import { parseNotificationAlertTarget, readNotificationConfigReturn, withoutNotificationConfigReturn } from "@/lib/notification-config-context";
+import { NotificationConfigLinks } from "@/components/notification-config-links";
 
 type AlertUnreadStats = { total: number; critical: number; warning: number };
 
 export function NotificationsPage() {
   const { t } = useTranslation();
   const { token, role } = useAuth();
+  const owner = useNotificationContextOwner();
+  const location = useLocation();
+  const ownsRoute = location.pathname === "/app/notifications";
+  const navigate = useNavigate();
+  const pageRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef(false);
   const canWriteAlerts = role === "admin" || role === "operator";
   const canTriggerTasks = role === "admin" || role === "operator";
   const canRetryDelivery = role === "admin";
@@ -30,14 +39,50 @@ export function NotificationsPage() {
     void refreshIntegrations();
   }, [refreshIntegrations]);
 
-  const [searchParams, setSearchParams] = useSearchParams();
-  const highlightAlertId = searchParams.get("alert");
-  const clearHighlightAlert = useCallback(() => {
-    if (searchParams.has("alert")) {
-      searchParams.delete("alert");
-      setSearchParams(searchParams, { replace: true });
+  const [searchParams] = useSearchParams();
+  const parsedTarget = parseNotificationAlertTarget(searchParams.getAll("alert"));
+  const navigationState: unknown = location.state;
+  const hasReturn = navigationState !== null && typeof navigationState === "object"
+    && Object.hasOwn(navigationState, "notificationConfigReturn");
+  const source = hasReturn && "notificationConfigReturn" in navigationState
+    ? readNotificationConfigReturn(navigationState.notificationConfigReturn) : null;
+  const invalidReturn = hasReturn && (!source || source.alertId !== parsedTarget);
+  const identity = JSON.stringify([owner.epoch, token, role]);
+  const [appliedIdentity, setAppliedIdentity] = useState(identity);
+  const identityChanged = appliedIdentity !== identity;
+  const alertTarget = ownsRoute && owner.active && !identityChanged && !invalidReturn ? parsedTarget : null;
+  useLayoutEffect(() => {
+    // AnimatePresence may retain this page while its router context already belongs to settings.
+    if (!ownsRoute) return;
+    if (!identityChanged && !invalidReturn && owner.active) return;
+    if (searchParams.has("alert") || hasReturn) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("alert");
+      void navigate({ pathname: location.pathname, search: next.toString(), hash: location.hash }, {
+        replace: true, state: withoutNotificationConfigReturn(navigationState),
+      });
+      return;
     }
-  }, [searchParams, setSearchParams]);
+    // Router navigation may commit later; keep the identity fence until the old URL is actually gone.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (identityChanged) setAppliedIdentity(identity);
+  }, [ownsRoute, identityChanged, invalidReturn, owner.active, searchParams, hasReturn, navigate, location.pathname, location.hash, navigationState, identity]);
+  const clearAlertTarget = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("alert");
+    returnFocusRef.current = true;
+    void navigate({ pathname: location.pathname, search: next.toString(), hash: location.hash }, {
+      state: withoutNotificationConfigReturn(navigationState),
+    });
+  }, [searchParams, navigate, location.pathname, location.hash, navigationState]);
+  useEffect(() => {
+    if (!returnFocusRef.current || parsedTarget !== null || !owner.active) return;
+    returnFocusRef.current = false;
+    const frame = requestAnimationFrame(() => {
+      pageRef.current?.querySelector<HTMLInputElement>("[data-silence-focus-fallback] input:not(:disabled)")?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [location.key, parsedTarget, owner.active]);
 
   // 未读统计绑定当前请求代次。确认、解决、刷新、换身份或卸载都会让旧响应失效。
   const [alertStatsVersion, setAlertStatsVersion] = useState(0);
@@ -246,7 +291,7 @@ export function NotificationsPage() {
   const activeIntegrations = integrations.filter((item) => item.enabled).length;
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div ref={pageRef} className="space-y-5 animate-fade-in">
       <PageHero
         title={t("notifications.pageTitle")}
         subtitle={t("notifications.pageDesc")}
@@ -292,19 +337,7 @@ export function NotificationsPage() {
         }
       />
 
-      {role === "admin" ? (
-        <nav aria-label={t("notifications.configNavLabel")} className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link to="/app/settings?tab=channels">{t("notifications.configChannels")}</Link>
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/app/settings?tab=silences">{t("notifications.configSilences")}</Link>
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/app/settings?tab=escalation">{t("notifications.configEscalation")}</Link>
-          </Button>
-        </nav>
-      ) : null}
+      <NotificationConfigLinks alertId={null} />
 
       <StatCardsSection
         className="animate-slide-up [animation-delay:150ms]"
@@ -361,8 +394,9 @@ export function NotificationsPage() {
 
       <DeliveryStatsCard fetchAlertDeliveryStats={fetchAlertDeliveryStats} />
 
-      {token ? (
+      {token && owner.active ? (
         <AlertCenter
+          key={JSON.stringify([location.key, alertTarget, owner.epoch, token, role])}
           token={token}
           canWriteAlerts={canWriteAlerts}
           canTriggerTasks={canTriggerTasks}
@@ -370,8 +404,8 @@ export function NotificationsPage() {
           integrations={integrations}
           globalSearch={globalSearch}
           setGlobalSearch={setGlobalSearch}
-          initialAlertId={highlightAlertId}
-          onAlertHighlighted={clearHighlightAlert}
+          alertTarget={alertTarget}
+          onClearAlertTarget={clearAlertTarget}
           onAlertMutated={refreshAlertStats}
           refreshVersion={refreshVersion}
         />

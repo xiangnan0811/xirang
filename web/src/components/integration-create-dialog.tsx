@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Bell, Building2, Mail, MessageSquare, Send, Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { InlineAlert } from "@/components/ui/inline-alert";
 import { toast } from "@/components/ui/toast-sonner";
 import { getErrorMessage } from "@/lib/utils";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
+import { useNotificationContextOwner } from "@/hooks/use-notification-context-owner";
 import { EndpointHintWarning } from "@/lib/api/integrations-api";
 import type { IntegrationType, NewIntegrationInput } from "@/types/domain";
 
@@ -150,9 +151,19 @@ export function IntegrationCreateDialog({
   onCloseAutoFocus,
 }: IntegrationCreateDialogProps) {
   const { t } = useTranslation();
+  const owner = useNotificationContextOwner();
+  const attemptRef = useRef(0);
   const [draft, setDraft] = useDialogDraft<NewIntegrationInput>(open, defaultDraft);
   const [saving, setSaving] = useState(false);
   const [pendingHint, setPendingHint] = useState<string | null>(null);
+
+  const [appliedOpen, setAppliedOpen] = useState(open);
+  if (appliedOpen !== open) {
+    setAppliedOpen(open);
+    setPendingHint(null);
+    setSaving(false);
+  }
+  useLayoutEffect(() => () => { attemptRef.current += 1; }, [open]);
 
   const guide = integrationGuideMap[draft.type];
   const TypeIcon = typeIconMap[draft.type];
@@ -160,6 +171,11 @@ export function IntegrationCreateDialog({
   const isStructured = STRUCTURED_TYPES.has(draft.type);
 
   const handleSave = async (skipHint = false) => {
+    if (!owner.active || owner.role !== "admin") return;
+    const owns = owner.capture();
+    if (!open || !owns()) return;
+    const currentAttempt = ++attemptRef.current;
+
     if (!draft.name.trim()) {
       toast.error(t("integration.errorCreateNameRequired"));
       return;
@@ -174,6 +190,9 @@ export function IntegrationCreateDialog({
       }
     }
 
+    const isMatching = () => open && owns() && currentAttempt === attemptRef.current;
+
+    if (!isMatching()) return;
     setSaving(true);
     try {
       await onSave({
@@ -185,15 +204,19 @@ export function IntegrationCreateDialog({
         cooldownMinutes: toBoundedInt(String(draft.cooldownMinutes), 5, 1, 120),
         skipEndpointHint: skipHint,
       });
+      if (!isMatching()) return;
       setPendingHint(null);
     } catch (error) {
+      if (!isMatching()) return;
       if (error instanceof EndpointHintWarning) {
         setPendingHint(error.hint);
       } else {
         toast.error(getErrorMessage(error, t("integration.errorCreateFailed")));
       }
     } finally {
-      setSaving(false);
+      if (isMatching()) {
+        setSaving(false);
+      }
     }
   };
 

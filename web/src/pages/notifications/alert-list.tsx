@@ -10,7 +10,8 @@ import type { AlertDeliveryRecord, AlertRecord } from "@/types/domain";
 import { AlertBulkActions } from "./alert-bulk-actions";
 import { AlertEscalationTimeline, AnomalyAlertContext } from "./alert-detail";
 import { AlertEscalationPreview } from "@/components/escalation-preview";
-import { parseNumericId } from "@/lib/api/core";
+import { parseNotificationAlertId } from "@/lib/notification-config-context";
+import { NotificationConfigLinks } from "@/components/notification-config-links";
 type SortField = "triggered_at" | "severity" | "status" | "node_name";
 
 export type AlertListProps = {
@@ -137,6 +138,8 @@ export function AlertList({
     const isOpen = deliveryOpenAlertId === alert.id;
     if (!isOpen) return null;
     const deliveryPanelId = `alert-delivery-panel-${alert.id}`;
+    const canonicalId = parseNotificationAlertId(alert.id);
+    const numericId = canonicalId === null ? null : Number(canonicalId);
     return (
       <div
         id={deliveryPanelId}
@@ -211,25 +214,14 @@ export function AlertList({
         ) : (
           <p className="text-xs text-muted-foreground">{t("notifications.noDeliveryRecords")}</p>
         )}
-        <AlertEscalationTimeline token={token} alertId={Number(alert.id)} />
-        {(() => {
-          const parsedAlertId = (() => {
-            try {
-              const parsed = parseNumericId(alert.id, "alert");
-              return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-            } catch {
-              return null;
-            }
-          })();
-          return (
-            <AlertEscalationPreview
-              token={token}
-              alertId={parsedAlertId}
-              active={isOpen}
-              revisionKey={JSON.stringify(alert)}
-            />
-          );
-        })()}
+        {numericId !== null ? <AlertEscalationTimeline token={token} alertId={numericId} /> : null}
+        <NotificationConfigLinks alertId={alert.id} />
+        <AlertEscalationPreview
+          token={token}
+          alertId={numericId}
+          active={isOpen}
+          revisionKey={JSON.stringify(alert)}
+        />
         <AnomalyAlertContext token={token} errorCode={alert.errorCode} nodeId={alert.nodeId} />
       </div>
     );
@@ -252,7 +244,7 @@ export function AlertList({
             <div className={`absolute top-0 left-0 w-1.5 h-full ${toneClass} opacity-60 group-hover:opacity-100 transition-opacity`} />
             <div className="flex flex-wrap items-start justify-between gap-2 pl-2">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {canWriteAlerts ? (
                     <Checkbox
                       checked={selectedSet.has(alert.id)}
