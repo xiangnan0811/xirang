@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.71.0](https://github.com/xiangnan0811/xirang/compare/v0.70.0...v0.71.0) (2026-10-19)
+
+
+### ✨ Features
+
+* **automation:** add safe execution details and source tracking ([#638](https://github.com/xiangnan0811/xirang/issues/638)) ([b6be13a](https://github.com/xiangnan0811/xirang/commit/b6be13a57d6eed9eed43286eb8fa1faf0b286d0e))
+
 ### 新增与修复
 
 - 自动化执行历史新增版本化安全阶段、稳定失败原因和来源／动作目标关联；在现有桌面表格与移动卡片中分别展示历史节点、策略及精确 Task/Run，并支持只复制允许的标识。
@@ -16,13 +23,6 @@
 - 按同一发行版本切换 Core 与页面，升级前保全数据库、匹配密钥与配置，完成或退出旧页面交互并按正常换版流程排空旧 Core 在途请求，然后刷新客户端。不改变任务调度、claim 或重试政策，不因历史展示额外停止备份任务，也不撤销已开始或已提交的操作。
 - 本次无新增 schema migration、索引、历史回填或保留策略变更。回退旧 Core／页面会停止生成或展示新安全元数据，但不撤销已提交动作或已有历史；既有迁移降级保护及配套恢复要求仍适用。
 - 双引擎迁移库验收证明真实 Dispatcher、Manager 事务预留及安全 HTTP 读取；合成来源日志仅用于导航，不代表实际备份成功。公开发布不等于生产部署、生产升级或灾备恢复验收。
-
-## [0.71.0](https://github.com/xiangnan0811/xirang/compare/v0.70.0...v0.71.0) (2026-10-19)
-
-
-### ✨ Features
-
-* **automation:** add safe execution details and source tracking ([#638](https://github.com/xiangnan0811/xirang/issues/638)) ([b6be13a](https://github.com/xiangnan0811/xirang/commit/b6be13a57d6eed9eed43286eb8fa1faf0b286d0e))
 
 ## [0.70.0](https://github.com/xiangnan0811/xirang/compare/v0.69.1...v0.70.0) (2026-10-19)
 
