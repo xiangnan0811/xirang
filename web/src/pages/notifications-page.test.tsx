@@ -106,17 +106,6 @@ function createMemoryStorage() {
 
 /* ---------- module mocks ---------- */
 
-vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-router-dom")>(
-    "react-router-dom"
-  );
-  const searchParams = new URLSearchParams();
-  return {
-    ...actual,
-    useSearchParams: () => [searchParams, vi.fn()] as const,
-  };
-});
-
 vi.mock("@/context/shared-context.hooks", () => ({
   useSharedContext: () => sharedRef.current,
 }));
@@ -582,9 +571,15 @@ async function chooseSilence(user: { click: (target: Element) => Promise<void> }
   await user.click(await screen.findByRole("menuitem", { name: "静音此类告警" }));
 }
 
-function setAuth(next: { token: string | null; role: "admin" | "operator" | "viewer" | null }) {
-  authRef.current = { ...authRef.current, token: next.token, role: next.role };
+// The provider updates Context identity and the core snapshot together; owner guards compare both.
+function syncAuth(next: typeof authRef.current) {
+  authRef.current = next;
   rememberAuthIdentity(next.token, next.role);
+}
+
+// A real login also advances the session generation.
+function setAuth(next: { token: string | null; role: "admin" | "operator" | "viewer" | null }) {
+  syncAuth({ ...authRef.current, token: next.token, role: next.role });
   bumpAuthSessionGeneration();
 }
 
@@ -596,8 +591,7 @@ describe("NotificationsPage", () => {
       value: createMemoryStorage(),
     });
     window.localStorage.clear();
-    authRef.current = { token: "test-token", role: "admin" };
-    rememberAuthIdentity("test-token", "admin");
+    syncAuth({ token: "test-token", role: "admin" });
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     mockGetAlertsPaginated.mockReset();
@@ -642,7 +636,9 @@ describe("NotificationsPage", () => {
     mockGetAlertsPaginated.mockResolvedValueOnce({ items: [defaultAlerts[1]], total: 1 });
     const setGlobalSearch = vi.fn();
     const center = (token: string) => <MemoryRouter><AlertCenter token={token} canWriteAlerts canTriggerTasks canRetryDelivery integrations={[]} globalSearch="" setGlobalSearch={setGlobalSearch} /></MemoryRouter>;
+    syncAuth({ token: "old-token", role: "admin" });
     const view = rtlRender(center("old-token"));
+    syncAuth({ token: "new-token", role: "admin" });
     view.rerender(center("new-token"));
     expect((await screen.findAllByRole("checkbox", { name: "选择节点 node-2 的告警 E_WARN" }))[0]).toBeInTheDocument();
     await act(async () => { resolveOld({ items: [defaultAlerts[0]], total: 1 }); });
@@ -814,10 +810,10 @@ describe("NotificationsPage", () => {
     await user.click(await screen.findByRole("menuitem", { name: "投递记录" }));
     await waitFor(() => expect(mockGetAlertDeliveries).toHaveBeenCalledWith("test-token", "alert-open"));
 
-    authRef.current = { token: "other-token", role: "admin" };
+    syncAuth({ token: "other-token", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(screen.queryByRole("region", { name: "告警 E_CONN 的投递记录" })).not.toBeInTheDocument();
-    authRef.current = { token: "test-token", role: "admin" };
+    syncAuth({ token: "test-token", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
     await act(async () => oldDelivery.reject(new Error("old principal delivery")));
@@ -1007,7 +1003,7 @@ describe("NotificationsPage", () => {
       calls.push(deferred);
       return deferred.promise;
     });
-    authRef.current = { token: "user-a", role: "admin" };
+    syncAuth({ token: "user-a", role: "admin" });
     createContext({ fetchAlertDeliveryStats });
     const view = render(<NotificationsPage />);
 
@@ -1016,7 +1012,7 @@ describe("NotificationsPage", () => {
     });
     const firstGeneration = calls.length;
 
-    authRef.current = { token: "user-b", role: "admin" };
+    syncAuth({ token: "user-b", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await waitFor(() => {
       expect(calls.length).toBeGreaterThan(firstGeneration);
@@ -1032,7 +1028,7 @@ describe("NotificationsPage", () => {
     expect(deliveryStatParts().card).toHaveTextContent("加载中...");
     expect(deliveryHero()).not.toHaveTextContent("7 条投递失败");
 
-    authRef.current = { token: "user-c", role: "admin" };
+    syncAuth({ token: "user-c", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await waitFor(() => {
       expect(calls.length).toBeGreaterThan(secondGeneration);
@@ -1073,7 +1069,7 @@ describe("NotificationsPage", () => {
     });
     const beforeLogout = calls.length;
 
-    authRef.current = { token: null, role: null };
+    syncAuth({ token: null, role: null });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await waitFor(() => {
       expect(deliveryStatParts().value.textContent).toBe("—");
@@ -1207,21 +1203,21 @@ describe("NotificationsPage", () => {
 
   it("失败任务摘要在 token A→B→A 与迟到结果下不提交旧值", async () => {
     const calls = deferredFailureSummaries();
-    authRef.current = { token: "token-a", role: "admin" };
+    syncAuth({ token: "token-a", role: "admin" });
     createContext();
     const view = render(<NotificationsPage />);
     await waitFor(() => {
       expect(calls.length).toBe(1);
     });
 
-    authRef.current = { token: "token-b", role: "admin" };
+    syncAuth({ token: "token-b", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(failureStatParts().value.textContent).toBe("—");
     await waitFor(() => {
       expect(calls.length).toBe(2);
     });
 
-    authRef.current = { token: "token-a", role: "admin" };
+    syncAuth({ token: "token-a", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(failureStatParts().value.textContent).toBe("—");
     await waitFor(() => {
@@ -1271,7 +1267,7 @@ describe("NotificationsPage", () => {
       expect(calls.length).toBe(2);
     });
 
-    authRef.current = { token: null, role: null };
+    syncAuth({ token: null, role: null });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(failureStatParts().value.textContent).toBe("—");
     expect(failureStatParts().card).toHaveTextContent("暂无可用的执行历史统计");
@@ -1287,7 +1283,7 @@ describe("NotificationsPage", () => {
   });
 
   it("无 token 时不请求失败任务摘要并显示不可用", () => {
-    authRef.current = { token: null, role: null };
+    syncAuth({ token: null, role: null });
     createContext();
     render(<NotificationsPage />);
 
@@ -1528,21 +1524,21 @@ describe("NotificationsPage", () => {
 
   it("未读统计在 token A→B→A 下忽略旧成功和旧失败", async () => {
     const calls = deferredUnreadCounts();
-    authRef.current = { token: "token-a", role: "admin" };
+    syncAuth({ token: "token-a", role: "admin" });
     createContext();
     const view = render(<NotificationsPage />);
     await waitFor(() => {
       expect(calls.length).toBe(1);
     });
 
-    authRef.current = { token: "token-b", role: "admin" };
+    syncAuth({ token: "token-b", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
     await waitFor(() => {
       expect(calls.length).toBe(2);
     });
 
-    authRef.current = { token: "token-a", role: "admin" };
+    syncAuth({ token: "token-a", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
     await waitFor(() => {
@@ -1594,7 +1590,7 @@ describe("NotificationsPage", () => {
       expect(calls.length).toBe(2);
     });
 
-    authRef.current = { token: null, role: null };
+    syncAuth({ token: null, role: null });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(alertStatCard("待处理告警").value).toHaveTextContent("—");
     expect(alertStatCard("严重告警").value).toHaveTextContent("—");
@@ -1611,7 +1607,7 @@ describe("NotificationsPage", () => {
   });
 
   it("无 token 时不请求未读统计并显示不可用", () => {
-    authRef.current = { token: null, role: null };
+    syncAuth({ token: null, role: null });
     createContext();
     render(<NotificationsPage />);
 
@@ -1884,7 +1880,7 @@ describe("NotificationsPage", () => {
 
   it("lets an operator ack and retry a task from both mobile cards and the desktop table", async () => {
     const user = userEvent.setup();
-    authRef.current = { token: "test-token", role: "operator" };
+    syncAuth({ token: "test-token", role: "operator" });
     render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
     const { mobile, desktop } = alertSurfaces();
@@ -1935,7 +1931,7 @@ describe("NotificationsPage", () => {
 
   it("hides delivery resend from an operator and does not call retryDelivery", async () => {
     const user = userEvent.setup();
-    authRef.current = { token: "test-token", role: "operator" };
+    syncAuth({ token: "test-token", role: "operator" });
     render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
     const { mobile, desktop } = alertSurfaces();
@@ -1953,7 +1949,7 @@ describe("NotificationsPage", () => {
 
   it("keeps alert reads for a viewer and issues no mutation, step-up, or grant", async () => {
     const user = userEvent.setup();
-    authRef.current = { token: "test-token", role: "viewer" };
+    syncAuth({ token: "test-token", role: "viewer" });
     render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
     expect(mockGetAlertsPaginated).toHaveBeenCalled();
@@ -1995,7 +1991,7 @@ describe("NotificationsPage", () => {
   });
 
   it("treats a null role as read-only", async () => {
-    authRef.current = { token: "test-token", role: null };
+    syncAuth({ token: "test-token", role: null });
     render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
     expect(mockGetAlertsPaginated).toHaveBeenCalled();
@@ -2019,17 +2015,19 @@ describe("NotificationsPage", () => {
     await user.click(screen.getAllByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" })[0]);
     expect(screen.getByText("已选择 1 条未恢复告警")).toBeInTheDocument();
 
-    authRef.current = { token: "test-token", role: "viewer" };
+    syncAuth({ token: "test-token", role: "viewer" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(screen.queryByText("已选择 1 条未恢复告警")).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
 
-    authRef.current = { token: "test-token", role: "admin" };
+    syncAuth({ token: "test-token", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(screen.queryByText("已选择 1 条未恢复告警")).not.toBeInTheDocument();
-    for (const box of screen.getAllByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" })) {
+    // A role change remounts the alert session, so wait for its fresh list.
+    for (const box of await screen.findAllByRole("checkbox", { name: "选择节点 node-1 的告警 E_CONN" })) {
       expect(box).not.toBeChecked();
     }
+    expect(screen.queryByText("已选择 1 条未恢复告警")).not.toBeInTheDocument();
   });
 
   it("drops a pending ack when the role leaves admin and returns", async () => {
@@ -2044,9 +2042,9 @@ describe("NotificationsPage", () => {
       expect(mockAckAlert).toHaveBeenCalledWith("test-token", "alert-open");
     });
 
-    authRef.current = { token: "test-token", role: "viewer" };
+    syncAuth({ token: "test-token", role: "viewer" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
-    authRef.current = { token: "test-token", role: "admin" };
+    syncAuth({ token: "test-token", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await act(async () => {
       ack.resolve({ id: "alert-open", status: "acked" });
@@ -2065,14 +2063,14 @@ describe("NotificationsPage", () => {
     await user.click(await screen.findByRole("menuitem", { name: "解决此节点未处理告警" }));
     expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
 
-    authRef.current = { token: "test-token", role };
+    syncAuth({ token: "test-token", role });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await waitFor(() => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
     expect(mockResolveAlertsBulk).not.toHaveBeenCalled();
 
-    authRef.current = { token: "test-token", role: "admin" };
+    syncAuth({ token: "test-token", role: "admin" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(mockResolveAlertsBulk).not.toHaveBeenCalled();
@@ -2103,7 +2101,7 @@ describe("NotificationsPage", () => {
       expect(mockRequestTaskManualTriggerCredentialGrant).toHaveBeenCalledTimes(1);
     });
 
-    authRef.current = { token: "test-token", role: "viewer" };
+    syncAuth({ token: "test-token", role: "viewer" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await act(async () => {
       grant.resolve({ id: 1, status: "active" });
@@ -2128,7 +2126,7 @@ describe("NotificationsPage", () => {
       expect(mockRetryDelivery).toHaveBeenCalledWith("test-token", "delivery-1");
     });
 
-    authRef.current = { token: "test-token", role: "operator" };
+    syncAuth({ token: "test-token", role: "operator" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await act(async () => {
       pending.resolve(undefined);
@@ -2138,7 +2136,10 @@ describe("NotificationsPage", () => {
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "重发通知" })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("region", { name: "告警 E_CONN 的投递记录" }).length).toBeGreaterThan(0);
+    // The downgraded session remounts without the old panel and does not reopen or re-read it.
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    expect(screen.queryAllByRole("region", { name: "告警 E_CONN 的投递记录" })).toHaveLength(0);
+    expect(mockGetAlertDeliveries).toHaveBeenCalledTimes(1);
   });
 
   it("stops later delivery retries when admin access is lost during the batch", async () => {
@@ -2175,7 +2176,7 @@ describe("NotificationsPage", () => {
       expect(mockRetryDelivery).toHaveBeenCalledWith("test-token", "delivery-a");
     });
 
-    authRef.current = { token: "test-token", role: "operator" };
+    syncAuth({ token: "test-token", role: "operator" });
     view.rerender(<MemoryRouter><NotificationsPage /></MemoryRouter>);
     await act(async () => {
       first.resolve(undefined);
@@ -2186,11 +2187,14 @@ describe("NotificationsPage", () => {
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "重发全部失败投递" })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("region", { name: "告警 E_CONN 的投递记录" }).length).toBeGreaterThan(0);
+    // The downgraded session remounts without the old panel and does not reopen or re-read it.
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
+    expect(screen.queryAllByRole("region", { name: "告警 E_CONN 的投递记录" })).toHaveLength(0);
+    expect(mockGetAlertDeliveries).toHaveBeenCalledTimes(1);
   });
 
   it("does not grant a task retry when two-factor authentication is disabled", async () => {
-    authRef.current = { token: "test-token", role: "operator", totpEnabled: false };
+    syncAuth({ token: "test-token", role: "operator", totpEnabled: false });
     const user = userEvent.setup();
     render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
@@ -2216,7 +2220,7 @@ describe("NotificationsPage", () => {
   });
 
   it.each(["operator", "viewer"] as const)("hides silence settings and the silence action from %s", async (role) => {
-    authRef.current = { token: "test-token", role };
+    syncAuth({ token: "test-token", role });
     const user = userEvent.setup();
     render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
@@ -2245,30 +2249,29 @@ describe("NotificationsPage", () => {
     expect(mockCreateSilence).not.toHaveBeenCalled();
   });
 
-  it("does not open quick silence during an auth transition", async () => {
-    const user = userEvent.setup();
+  it("unmounts alert actions during an auth transition and does not resume a quick silence after release", async () => {
     render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
     let barrier = 0;
     act(() => {
       barrier = beginAuthTransitionBarrier();
     });
-    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]);
-    await user.click(await screen.findByRole("menuitem", { name: "静音此类告警" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(mockGetNode).not.toHaveBeenCalled();
-    expect(mockCreateSilence).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "告警中心" })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: "更多操作" })).toHaveLength(0);
     act(() => {
       releaseAuthTransitionBarrier(barrier);
     });
+    expect(await screen.findByText("共 2 条")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockGetNode).not.toHaveBeenCalled();
+    expect(mockCreateSilence).not.toHaveBeenCalled();
   });
 
   it("creates one fixed silence from the table and replaces the draft from the card", async () => {
     const user = userEvent.setup();
     showAlerts([
-      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
-      quickAlert({ id: "alert-vrfy", nodeId: 7, errorCode: "XR-VRFY-9", message: "校验失败" }),
+      quickAlert({ id: "alert-101", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-102", nodeId: 7, errorCode: "XR-VRFY-9", message: "校验失败" }),
     ]);
     render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
@@ -2334,11 +2337,11 @@ describe("NotificationsPage", () => {
   it("explains unsupported sources without reading a node or creating a rule", async () => {
     const user = userEvent.setup();
     showAlerts([
-      quickAlert({ id: "alert-platform", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
-      quickAlert({ id: "alert-retired", nodeId: 42, errorCode: "XR-NODE-1", message: "退役节点" }),
-      quickAlert({ id: "alert-unknown", nodeId: 42, errorCode: "XR-SERVICE-DOWN-123", message: "未知来源" }),
-      quickAlert({ id: "alert-slo", nodeId: 42, errorCode: "XR-EXEC-17", message: "SLO 来源", sloId: 4 }),
-      quickAlert({ id: "alert-bad-node", nodeId: -1, errorCode: "XR-EXEC-17", message: "坏节点" }),
+      quickAlert({ id: "alert-103", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
+      quickAlert({ id: "alert-104", nodeId: 42, errorCode: "XR-NODE-1", message: "退役节点" }),
+      quickAlert({ id: "alert-105", nodeId: 42, errorCode: "XR-SERVICE-DOWN-123", message: "未知来源" }),
+      quickAlert({ id: "alert-106", nodeId: 42, errorCode: "XR-EXEC-17", message: "SLO 来源", sloId: 4 }),
+      quickAlert({ id: "alert-107", nodeId: -1, errorCode: "XR-EXEC-17", message: "坏节点" }),
     ]);
     render(<NotificationsPage />);
     expect(await screen.findByText("共 5 条")).toBeInTheDocument();
@@ -2379,12 +2382,12 @@ describe("NotificationsPage", () => {
     expect(mockResolveAlert).not.toHaveBeenCalled();
   });
 
-  it("keeps the quick draft when a late create arrives after the auth generation changes", async () => {
+  it("discards the quick draft and ignores a late create after the auth generation changes", async () => {
     const user = userEvent.setup();
     const pending = createDeferred<Silence>();
     mockCreateSilence.mockReturnValueOnce(pending.promise);
     showAlerts([
-      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-101", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
     ]);
     render(<NotificationsPage />);
     expect(await screen.findByText("共 1 条")).toBeInTheDocument();
@@ -2395,15 +2398,19 @@ describe("NotificationsPage", () => {
     await user.click(within(dialog).getByRole("button", { name: "创建" }));
     await waitFor(() => expect(mockCreateSilence).toHaveBeenCalledTimes(1));
 
-    bumpAuthSessionGeneration();
+    act(() => {
+      bumpAuthSessionGeneration();
+    });
+    // The alert center belongs to the old session epoch and remounts without the draft.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByText("共 1 条")).toBeInTheDocument();
     await act(async () => {
       pending.resolve(createdSilence);
     });
 
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(screen.queryByText(/已创建静音规则/)).not.toBeInTheDocument();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByLabelText("名称")).toHaveValue("kept");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(mockCreateSilence).toHaveBeenCalledTimes(1);
     expect(mockAckAlert).not.toHaveBeenCalled();
     expect(mockResolveAlert).not.toHaveBeenCalled();
@@ -2415,7 +2422,7 @@ describe("NotificationsPage", () => {
     const pending = createDeferred<Silence>();
     mockCreateSilence.mockReturnValueOnce(pending.promise);
     showAlerts([
-      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-101", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
     ]);
     const view = render(<NotificationsPage />);
     expect(await screen.findByText("共 1 条")).toBeInTheDocument();
@@ -2464,7 +2471,7 @@ describe("NotificationsPage", () => {
     const pending = createDeferred<Silence>();
     mockCreateSilence.mockReturnValueOnce(pending.promise);
     showAlerts([
-      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-101", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
     ]);
     const view = render(<NotificationsPage />);
     expect(await screen.findByText("共 1 条")).toBeInTheDocument();
@@ -2502,8 +2509,8 @@ describe("NotificationsPage", () => {
   it("restores silence focus onto the replaced row for both dialogs", async () => {
     const user = userEvent.setup();
     showAlerts([
-      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
-      quickAlert({ id: "alert-platform", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
+      quickAlert({ id: "alert-101", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-103", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
     ]);
     const view = render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
@@ -2514,11 +2521,11 @@ describe("NotificationsPage", () => {
     bumpAlertRefresh(view, 1);
     await waitFor(() => {
       expect(supported.isConnected).toBe(false);
-      expect(document.querySelector('[data-silence-focus-scope] button[data-silence-alert="alert-exec"]')).toBeInstanceOf(HTMLButtonElement);
+      expect(document.querySelector('[data-silence-focus-scope] button[data-silence-alert="alert-101"]')).toBeInstanceOf(HTMLButtonElement);
     });
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
-    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-silence-alert", "alert-exec"));
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-silence-alert", "alert-101"));
     expect(supported.isConnected).toBe(false);
     expect(document.activeElement).not.toBe(supported);
 
@@ -2528,10 +2535,10 @@ describe("NotificationsPage", () => {
     bumpAlertRefresh(view, 2);
     await waitFor(() => {
       expect(explanation.isConnected).toBe(false);
-      expect(document.querySelector('[data-silence-focus-scope] button[data-silence-alert="alert-platform"]')).toBeInstanceOf(HTMLButtonElement);
+      expect(document.querySelector('[data-silence-focus-scope] button[data-silence-alert="alert-103"]')).toBeInstanceOf(HTMLButtonElement);
     });
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "关闭" }));
-    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-silence-alert", "alert-platform"));
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-silence-alert", "alert-103"));
     expect(explanation.isConnected).toBe(false);
     expect(document.activeElement).not.toBe(explanation);
     expect(mockCreateSilence).not.toHaveBeenCalled();
@@ -2541,8 +2548,8 @@ describe("NotificationsPage", () => {
   it("restores silence focus to the visible trigger when the saved surface is hidden", async () => {
     const user = userEvent.setup();
     showAlerts([
-      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
-      quickAlert({ id: "alert-platform", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
+      quickAlert({ id: "alert-101", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-103", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
     ]);
     render(<NotificationsPage />);
     expect(await screen.findByText("共 2 条")).toBeInTheDocument();
@@ -2572,7 +2579,7 @@ describe("NotificationsPage", () => {
   it("restores silence focus to the toolbar when the alert row is gone", async () => {
     const user = userEvent.setup();
     showAlerts([
-      quickAlert({ id: "alert-exec", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
+      quickAlert({ id: "alert-101", nodeId: 42, errorCode: "XR-EXEC-17", message: "执行失败" }),
     ]);
     const view = render(<NotificationsPage />);
     expect(await screen.findByText("共 1 条")).toBeInTheDocument();
@@ -2591,7 +2598,7 @@ describe("NotificationsPage", () => {
   it("does not restore silence focus for an identity that no longer owns the dialog", async () => {
     const user = userEvent.setup();
     showAlerts([
-      quickAlert({ id: "alert-platform", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
+      quickAlert({ id: "alert-103", nodeId: 0, errorCode: "XR-EXEC-17", message: "平台定时" }),
     ]);
     const view = render(<NotificationsPage />);
     expect(await screen.findByText("共 1 条")).toBeInTheDocument();

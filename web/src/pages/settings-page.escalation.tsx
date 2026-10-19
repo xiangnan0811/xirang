@@ -17,6 +17,7 @@ import type { EscalationPolicyInput } from "@/lib/api/escalation";
 import { getErrorMessage } from "@/lib/utils";
 import { useAuth } from "@/context/auth-context.hooks";
 import { useConfirm } from "@/hooks/use-confirm";
+import { useNotificationContextOwner } from "@/hooks/use-notification-context-owner";
 import type { EscalationPolicy } from "@/types/domain";
 
 function formatDate(iso: string): string {
@@ -32,18 +33,22 @@ function severityBadgeTone(sev: string): "destructive" | "warning" | "neutral" {
 }
 
 export function SettingsPageEscalation() {
-  const { token } = useAuth();
-  return <SettingsPageEscalationContent key={token ?? ""} />;
+  const owner = useNotificationContextOwner();
+  return owner.active && owner.role === "admin"
+    ? <SettingsPageEscalationContent key={JSON.stringify([owner.epoch, owner.token, owner.role])} /> : null;
 }
 
 function SettingsPageEscalationContent() {
   const { t } = useTranslation();
   const { token } = useAuth();
+  const { capture } = useNotificationContextOwner();
   const { confirm, dialog } = useConfirm();
 
   const [policies, setPolicies] = useState<EscalationPolicy[]>([]);
   const [loading, setLoading] = useState(Boolean(token));
   const [editorOpen, setEditorOpen] = useState(false);
+  const editorAttemptRef = useRef(0);
+  const [editorOwner, setEditorOwner] = useState<(() => boolean) | null>(null);
   const editorOpenerRef = useRef<HTMLElement | null>(null);
   const editorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
     restoreConnectedDialogOpener(event, editorOpenerRef.current);
@@ -55,33 +60,44 @@ function SettingsPageEscalationContent() {
   useEffect(() => {
     if (!token) return;
     const controller = new AbortController();
+    const owns = capture();
     apiClient.listEscalationPolicies(token, { signal: controller.signal })
       .then((data) => {
-        if (!controller.signal.aborted) setPolicies(data);
+        if (!controller.signal.aborted && owns()) setPolicies(data);
       })
       .catch((error: unknown) => {
-        if (!controller.signal.aborted) toast.error(getErrorMessage(error));
+        if (!controller.signal.aborted && owns()) toast.error(getErrorMessage(error));
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted && owns()) setLoading(false);
       });
     return () => controller.abort();
-  }, [token]);
+  }, [token, capture]);
 
   const handleOpenNew = (event?: { currentTarget: EventTarget | null }) => {
+    const owns = capture();
+    if (!owns()) return;
+    const attempt = ++editorAttemptRef.current;
+    setEditorOwner(() => () => owns() && editorAttemptRef.current === attempt);
     editorOpenerRef.current = dialogOpenerFromTarget(event?.currentTarget);
     setEditingPolicy(undefined);
     setEditorOpen(true);
   };
 
   const handleOpenEdit = (policy: EscalationPolicy, opener?: EventTarget | null) => {
+    const owns = capture();
+    if (!owns()) return;
+    const attempt = ++editorAttemptRef.current;
+    setEditorOwner(() => () => owns() && editorAttemptRef.current === attempt);
     editorOpenerRef.current = dialogOpenerFromTarget(opener);
     setEditingPolicy(policy);
     setEditorOpen(true);
   };
 
   const handleSaved = (saved: EscalationPolicy) => {
+    if (!editorOwner?.()) return;
     setPolicies((prev) => {
+      if (!editorOwner()) return prev;
       const idx = prev.findIndex((p) => p.id === saved.id);
       if (idx >= 0) {
         const next = [...prev];
@@ -93,7 +109,8 @@ function SettingsPageEscalationContent() {
   };
 
   const handleToggle = async (policy: EscalationPolicy, checked: boolean) => {
-    if (!token) return;
+    const owns = capture();
+    if (!token || !owns()) return;
     // Optimistic update
     setPolicies((prev) =>
       prev.map((p) => (p.id === policy.id ? { ...p, enabled: checked } : p))
@@ -108,35 +125,40 @@ function SettingsPageEscalationContent() {
         levels: policy.levels,
       };
       const updated = await apiClient.updateEscalationPolicy(token, policy.id, input);
+      if (!owns()) return;
       setPolicies((prev) =>
         prev.map((p) => (p.id === updated.id ? updated : p))
       );
     } catch (err) {
+      if (!owns()) return;
       // Revert
       setPolicies((prev) =>
         prev.map((p) => (p.id === policy.id ? { ...p, enabled: !checked } : p))
       );
       toast.error(getErrorMessage(err));
     } finally {
-      setTogglingId(null);
+      if (owns()) setTogglingId(null);
     }
   };
 
   const handleDelete = async (policy: EscalationPolicy) => {
-    if (!token) return;
+    const owns = capture();
+    if (!token || !owns()) return;
     const confirmed = await confirm({
       title: t("escalation.deleteConfirm", { name: policy.name }),
       description: t("common.irreversible"),
     });
-    if (!confirmed) return;
+    if (!confirmed || !owns()) return;
     setDeletingId(policy.id);
     try {
       await apiClient.deleteEscalationPolicy(token, policy.id);
+      if (!owns()) return;
       setPolicies((prev) => prev.filter((p) => p.id !== policy.id));
     } catch (err) {
+      if (!owns()) return;
       toast.error(getErrorMessage(err));
     } finally {
-      setDeletingId(null);
+      if (owns()) setDeletingId(null);
     }
   };
 
@@ -227,7 +249,10 @@ function SettingsPageEscalationContent() {
 
       <EscalationPolicyEditor
         open={editorOpen}
-        onOpenChange={setEditorOpen}
+        onOpenChange={(open) => {
+          if (!open) editorAttemptRef.current += 1;
+          setEditorOpen(open);
+        }}
         onCloseAutoFocus={editorOnCloseAutoFocus}
         policy={editingPolicy}
         onSaved={handleSaved}

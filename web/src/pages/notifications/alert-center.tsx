@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { NotificationConfigLink } from "@/components/notification-config-links";
 import { BellRing, Loader2 } from "lucide-react";
 import { CreateSilenceDialog } from "@/components/create-silence-dialog";
 import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { useAuth } from "@/context/auth-context.hooks";
+import { useNotificationContextOwner } from "@/hooks/use-notification-context-owner";
+import { parseNotificationAlertId } from "@/lib/notification-config-context";
+import type { AlertNavigationTarget } from "@/lib/notification-config-context";
 import { sensitiveStepUpBlock } from "@/lib/sensitive-step-up";
 import { useConfirm } from "@/hooks/use-confirm";
 import {
@@ -33,6 +36,7 @@ import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { selectQuickSilenceMatch, type QuickSilenceMatch, type QuickSilenceSelection } from "@/lib/alert-silence-match";
 import { apiClient } from "@/lib/api/client";
 import {
+  ApiError,
   getAuthIdentitySnapshot,
   getAuthSessionGeneration,
   isAuthTransitionActive,
@@ -142,8 +146,8 @@ type AlertCenterProps = {
   integrations: { id: string; name: string }[];
   globalSearch: string;
   setGlobalSearch: (value: string) => void;
-  initialAlertId?: string | null;
-  onAlertHighlighted?: () => void;
+  alertTarget?: AlertNavigationTarget;
+  onClearAlertTarget?: () => void;
   onAlertMutated?: () => void;
   refreshVersion?: number;
 };
@@ -162,7 +166,8 @@ function AlertWriteConfirm({ confirmRef }: { confirmRef: { current: AlertConfirm
 }
 
 export function AlertCenter(props: AlertCenterProps) {
-  return <AlertCenterSession key={props.token} {...props} />;
+  const { epoch, token, role, active } = useNotificationContextOwner();
+  return active && props.token === token ? <AlertCenterSession key={JSON.stringify([props.token, role, epoch])} {...props} /> : null;
 }
 
 function AlertCenterSession({
@@ -173,13 +178,14 @@ function AlertCenterSession({
   integrations,
   globalSearch,
   setGlobalSearch,
-  initialAlertId,
-  onAlertHighlighted,
+  alertTarget = null,
+  onClearAlertTarget,
   onAlertMutated,
   refreshVersion,
 }: AlertCenterProps) {
   const { t } = useTranslation();
   const { role, totpEnabled } = useAuth();
+  const { capture } = useNotificationContextOwner();
   const authRole = role ?? null;
   const canManageSilences = authRole === "admin";
   const withStepUp = useStepUpAction(
@@ -246,7 +252,7 @@ function AlertCenterSession({
     alertId: string;
     reason: UnsupportedSilenceReason;
   } | null>(null);
-  const [silenceNotice, setSilenceNotice] = useState(false);
+  const [silenceNotice, setSilenceNotice] = useState<string | null>(null);
 
   const isCurrentSession = (generation: number) =>
     mountedRef.current
@@ -259,20 +265,28 @@ function AlertCenterSession({
   // "+N 条同类" is useful). Keyed by alertId.
   const [groupInfoMap, setGroupInfoMap] = useState<Record<string, { count: number }>>({});
 
-  // --- 深链接高亮 ---
-  const [highlightedAlert, setHighlightedAlert] = useState<AlertRecord | null>(null);
-  const highlightClearTimerRef = useRef<number | null>(null);
-  const highlightRef = useCallback((alertId: string, el: HTMLElement | null) => {
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      if (highlightClearTimerRef.current !== null) {
-        window.clearTimeout(highlightClearTimerRef.current);
-      }
-      highlightClearTimerRef.current = window.setTimeout(() => {
-        setHighlightedAlert((current) => (current?.id === alertId ? null : current));
-        highlightClearTimerRef.current = null;
-      }, 600);
-    }
+  // URL targets are verified independently of the ordinary paginated list.
+  type TargetState =
+    | { status: "idle" | "invalid" | "loading" | "missing" | "forbidden" | "error" }
+    | { status: "ready"; alert: AlertRecord };
+  const [reload, setReload] = useState(0);
+  const [targetRetry, setTargetRetry] = useState(0);
+  const targetKey = useMemo(() => ({ alertTarget, targetRetry, refreshVersion, reload }), [alertTarget, targetRetry, refreshVersion, reload]);
+  const [targetResult, setTargetResult] = useState<{ key: typeof targetKey; state: TargetState } | null>(null);
+  const targetState: TargetState = targetResult?.key === targetKey ? targetResult.state
+    : { status: alertTarget === null ? "idle" : alertTarget === "invalid" ? "invalid" : "loading" };
+  if (alertTarget && targetState.status !== "ready" && selectedAlertIds.some((id) => parseNotificationAlertId(id) === alertTarget)) {
+    setSelectedAlertIds((ids) => ids.filter((id) => parseNotificationAlertId(id) !== alertTarget));
+  }
+  const targetAttemptRef = useRef(0);
+  const targetExpandedRef = useRef(false);
+  const targetFocusedRef = useRef(false);
+  const targetScrolledRef = useRef(false);
+  const targetHeadingRef = useRef<HTMLHeadingElement>(null);
+  const highlightRef = useCallback((_alertId: string, el: HTMLElement | null) => {
+    if (!el || targetScrolledRef.current || !isUsableSilenceTarget(el)) return;
+    targetScrolledRef.current = true;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
   const integrationNameMap = useMemo(
@@ -280,13 +294,11 @@ function AlertCenterSession({
     [integrations],
   );
 
-  const [reload, setReload] = useState(0);
   const filterScope = JSON.stringify([token, pageSize, sortBy, sortOrder, statusFilter, severityFilter, deferredKeyword]);
   const [requestScope, setRequestScope] = useState({ filters: filterScope, page, refreshVersion, reload });
   if (requestScope.filters !== filterScope || requestScope.page !== page || requestScope.refreshVersion !== refreshVersion || requestScope.reload !== reload) {
     if (requestScope.filters !== filterScope) setPage(1);
     setRequestScope({ filters: filterScope, page: requestScope.filters !== filterScope ? 1 : page, refreshVersion, reload });
-    setHighlightedAlert(null);
     if (requestScope.filters !== filterScope || requestScope.page !== page) setSelectedAlertIds([]);
     setAlerts([]);
     setLoading(true);
@@ -309,7 +321,7 @@ function AlertCenterSession({
   ) {
     if (supportedSilence) setSupportedSilence(null);
     if (unsupportedSilence) setUnsupportedSilence(null);
-    if (silenceNotice) setSilenceNotice(false);
+    if (silenceNotice) setSilenceNotice(null);
   }
   if (!canWriteAlerts && selectedAlertIds.length > 0) setSelectedAlertIds([]);
   if (!canWriteAlerts && bulkResolving) setBulkResolving(false);
@@ -349,7 +361,7 @@ function AlertCenterSession({
       silenceAttemptRef.current += 1;
       setSupportedSilence((current) => (current === null ? current : null));
       setUnsupportedSilence((current) => (current === null ? current : null));
-      setSilenceNotice((current) => (current ? false : current));
+      setSilenceNotice(null);
     });
   }, []);
 
@@ -396,16 +408,11 @@ function AlertCenterSession({
       bulkAttemptRef.current += 1;
       deliveryAttemptRef.current += 1;
       retryAllAttemptRef.current += 1;
-      const highlightTimer = highlightClearTimerRef.current;
-      highlightClearTimerRef.current = null;
-      if (highlightTimer !== null) window.clearTimeout(highlightTimer);
     };
   }, [token, authRole, canWriteAlerts, canTriggerTasks, canRetryDelivery]);
 
   const handlePageChange = (p: number) => {
     setPage(p);
-    setHighlightedAlert(null);
-
   };
 
   const handlePageSizeChange = (size: number) => {
@@ -423,47 +430,71 @@ function AlertCenterSession({
     setPage(1);
   };
 
-  // --- 深链接：initialAlertId 处理 ---
   useEffect(() => {
-    if (!initialAlertId || !token) return;
-    let active = true;
-    resetFilters();
-    void apiClient.getAlert(token, initialAlertId).then((target) => {
-      if (!active) return;
-      setHighlightedAlert(target);
-      setDeliveryOpenAlertId(target.id);
-      void apiClient.getAlertDeliveries(token, target.id)
-        .then((rows) => { if (active) setDeliveryMap((prev) => ({ ...prev, [target.id]: rows })); })
-        .catch(() => {});
-      onAlertHighlighted?.();
-    }).catch(() => {
-      if (active) onAlertHighlighted?.();
+    if (!alertTarget || alertTarget === "invalid") return;
+    const controller = new AbortController();
+    const attempt = ++targetAttemptRef.current;
+    const owns = capture();
+    const current = () => !controller.signal.aborted && attempt === targetAttemptRef.current && owns();
+    void apiClient.getAlert(token, alertTarget, { signal: controller.signal }).then((target) => {
+      if (!current()) return;
+      if (parseNotificationAlertId(target.id) !== alertTarget) {
+        setTargetResult({ key: targetKey, state: { status: "error" } });
+        return;
+      }
+      setTargetResult({ key: targetKey, state: { status: "ready", alert: target } });
+      if (!targetExpandedRef.current) {
+        targetExpandedRef.current = true;
+        setDeliveryOpenAlertId(target.id);
+      }
+      setDeliveryLoadingAlertId(target.id);
+      void apiClient.getAlertDeliveries(token, target.id).then((rows) => {
+        if (current()) setDeliveryMap((previous) => ({ ...previous, [target.id]: rows }));
+      }).catch((error) => {
+        if (current()) toast.error(getErrorMessage(error));
+      }).finally(() => {
+        if (current()) setDeliveryLoadingAlertId(null);
+      });
+      void apiClient.getAlertGroupInfo(token, target.id).then((group) => {
+        if (current()) setGroupInfoMap((previous) => ({ ...previous, [target.id]: { count: group.count } }));
+      }).catch(() => { /* Group count is optional, not proof of target existence. */ });
+    }).catch((error: unknown) => {
+      if (!current()) return;
+      const status = error instanceof ApiError ? error.httpStatus ?? error.status : null;
+      setTargetResult({ key: targetKey, state: { status: status === 404 ? "missing" : status === 403 ? "forbidden" : "error" } });
     });
-    return () => { active = false; };
-  }, [initialAlertId, token, resetFilters, onAlertHighlighted]);
+    return () => { controller.abort(); };
+  }, [alertTarget, token, capture, targetKey]);
+
+  useLayoutEffect(() => {
+    if (targetFocusedRef.current || targetState.status === "idle" || targetState.status === "loading") return;
+    targetFocusedRef.current = true;
+    targetHeadingRef.current?.focus({ preventScroll: true });
+  }, [targetState.status]);
 
   // --- 投递记录操作 ---
   const refreshDeliveries = (alertId: string) => {
     const attempt = ++deliveryLoadAttemptRef.current;
+    const owns = capture();
     setDeliveryLoadingAlertId(alertId);
     void apiClient.getAlertDeliveries(token, alertId)
       .then((rows) => {
-        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current) return;
+        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current || !owns()) return;
         setDeliveryMap((prev) => ({ ...prev, [alertId]: rows }));
       })
       .catch((error) => {
-        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current) return;
+        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current || !owns()) return;
         toast.error(getErrorMessage(error));
       })
       .finally(() => {
-        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current) return;
+        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current || !owns()) return;
         setDeliveryLoadingAlertId(null);
       });
     // Fetch group count in parallel. Best-effort: a failure here must not
     // block delivery rendering, so the error is logged at debug only.
     void apiClient.getAlertGroupInfo(token, alertId)
       .then((gi) => {
-        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current) return;
+        if (deliveryLoadAttemptRef.current !== attempt || !mountedRef.current || !owns()) return;
         setGroupInfoMap((prev) => ({ ...prev, [alertId]: { count: gi.count } }));
       })
       .catch(() => { /* non-critical; badge simply doesn't render */ });
@@ -733,7 +764,7 @@ function AlertCenterSession({
     if (authRole !== "admin" || token !== opened.token) return;
     const snapshot = getAuthIdentitySnapshot();
     if (snapshot.role !== "admin" || snapshot.token !== opened.token) return;
-    setSilenceNotice(true);
+    setSilenceNotice(opened.alertId);
   };
 
   const unsupportedCopy = (reason: UnsupportedSilenceReason) => {
@@ -742,10 +773,10 @@ function AlertCenterSession({
     return t("notifications.silenceUnsupportedSource");
   };
 
-  // --- 合并高亮告警和普通列表 ---
-  const displayAlerts = highlightedAlert && !alerts.some((alert) => alert.id === highlightedAlert.id)
-    ? [highlightedAlert, ...alerts]
+  const ordinaryAlerts = alertTarget && alertTarget !== "invalid"
+    ? alerts.filter((alert) => parseNotificationAlertId(alert.id) !== alertTarget)
     : alerts;
+  const displayAlerts = targetState.status === "ready" ? [targetState.alert, ...ordinaryAlerts] : ordinaryAlerts;
   const silenceDialogMounted = canManageSilences && token.length > 0;
 
   return (
@@ -754,15 +785,32 @@ function AlertCenterSession({
       {silenceNotice ? (
         <div role="status" className="mb-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-card px-3 py-2 text-sm">
           <span className="min-w-0 break-words">{t("notifications.silenceCreated")}</span>
-          <Button asChild variant="link" size="sm" className="h-auto px-0">
-            <Link to="/app/settings?tab=silences">{t("notifications.silenceRulesLink")}</Link>
-          </Button>
+          <NotificationConfigLink tab="silences" alertId={silenceNotice}>
+            {t("notifications.silenceRulesLink")}
+          </NotificationConfigLink>
         </div>
       ) : null}
       <DataSurfaceHeader
         title={t("notifications.alertCenterTitle")}
         description={t("notifications.alertCenterDesc", { total })}
       />
+      {alertTarget !== null ? (
+        <section className="min-w-0 space-y-2 border-b border-border px-4 py-3" aria-live="polite">
+          <h2 ref={targetHeadingRef} tabIndex={-1} className="break-words text-sm font-semibold">
+            {alertTarget === "invalid" ? t("notifications.configContext.targetInvalid") : t("notifications.configContext.targetTitle", { id: alertTarget })}
+          </h2>
+          {targetState.status === "loading" ? <p className="text-sm text-muted-foreground">{t("notifications.configContext.targetLoading")}</p> : null}
+          {targetState.status === "missing" ? <p className="text-sm text-muted-foreground">{t("notifications.configContext.targetMissing")}</p> : null}
+          {targetState.status === "forbidden" ? <p className="text-sm text-muted-foreground">{t("notifications.configContext.targetForbidden")}</p> : null}
+          {targetState.status === "error" ? <p className="text-sm text-muted-foreground">{t("notifications.configContext.targetError")}</p> : null}
+          <div className="flex flex-wrap gap-2">
+            {targetState.status === "missing" || targetState.status === "forbidden" || targetState.status === "error" ? (
+              <Button variant="outline" size="sm" onClick={() => setTargetRetry((value) => value + 1)}>{t("common.retry")}</Button>
+            ) : null}
+            <Button variant="outline" size="sm" onClick={onClearAlertTarget}>{t("notifications.configContext.returnList")}</Button>
+          </div>
+        </section>
+      ) : null}
       <DataSurfaceToolbar>
         <div ref={silenceToolbarRef} data-silence-focus-fallback="" className="space-y-4">
         <AlertFilters
@@ -807,7 +855,7 @@ function AlertCenterSession({
       </DataSurfaceToolbar>
 
       <DataSurfaceContent className="space-y-4">
-        {loading && !alerts.length ? (
+        {loading && !displayAlerts.length ? (
           <div className="flex items-center justify-center py-12 text-muted-foreground">
             <Loader2 className="mr-2 size-5 animate-spin" aria-hidden="true" />
             {t("common.loading")}
@@ -816,7 +864,7 @@ function AlertCenterSession({
           <AlertList
             token={token}
             alerts={displayAlerts}
-            highlightedAlertId={highlightedAlert?.id ?? null}
+            highlightedAlertId={targetState.status === "ready" ? targetState.alert.id : null}
             highlightRef={highlightRef}
             viewMode={viewMode}
             sortBy={sortBy}
@@ -902,9 +950,9 @@ function AlertCenterSession({
               <DialogCloseButton />
             </DialogHeader>
             <DialogFooter className="flex-wrap">
-              <Button asChild variant="outline" size="sm">
-                <Link to="/app/settings?tab=silences">{t("notifications.silenceRulesLink")}</Link>
-              </Button>
+              <NotificationConfigLink tab="silences" alertId={unsupportedSilence.alertId}>
+                {t("notifications.silenceRulesLink")}
+              </NotificationConfigLink>
               <Button type="button" variant="secondary" size="sm" onClick={() => setUnsupportedSilence(null)}>
                 {t("common.close")}
               </Button>

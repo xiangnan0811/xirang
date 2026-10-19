@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@/i18n";
 import {
@@ -49,6 +50,9 @@ function envelope(data: unknown): Response {
 }
 
 const previewCalls = () => calls.filter((call) => call.url.includes("/escalation-preview"));
+const timelineCalls = () => calls.filter((call) => call.url.includes("/escalation-events"));
+const configNavs = () => screen.queryAllByRole("navigation", { name: /^(告警配置|Alert configuration)$/ });
+const CONFIG_HINT = /配置后可返回此告警|return to this alert/i;
 
 const alertRow = {
   id: 123,
@@ -161,7 +165,8 @@ function listUi(alerts: AlertRecord[], overrides: Partial<AlertListProps> = {}) 
     silenceFocusScopeRef: { current: null },
     ...overrides,
   };
-  return <AlertList {...props} />;
+  // Config links inside the delivery panel are router links.
+  return <MemoryRouter><AlertList {...props} /></MemoryRouter>;
 }
 
 describe("AlertList delivery panel escalation diagnosis", () => {
@@ -240,5 +245,79 @@ describe("AlertList delivery panel escalation diagnosis", () => {
     await flush();
     expect(screen.queryByRole("button", { name: DIAGNOSE })).not.toBeInTheDocument();
     expect(previewCalls()).toHaveLength(0);
+  });
+});
+
+describe("AlertList delivery panel config links and timeline", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    calls = [];
+    authState.token = "tok-admin";
+    authState.role = "admin";
+    rememberAuthIdentity("tok-admin", "admin");
+    clearAuthTransitionBarrier();
+    bumpAuthSessionGeneration();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("links a safe alert-123 to the three config tabs and reads its timeline as 123", async () => {
+    const alert = await loadMappedAlert();
+    render(listUi([alert]));
+    await flush();
+
+    // Mobile card and desktop table share one panel renderer.
+    const navs = configNavs();
+    expect(navs).toHaveLength(2);
+    for (const nav of navs) {
+      expect(within(nav).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+        "/app/settings?tab=channels",
+        "/app/settings?tab=silences",
+        "/app/settings?tab=escalation",
+      ]);
+      expect(within(nav).getByText(CONFIG_HINT)).toBeInTheDocument();
+      expect(within(nav).queryByText("Task execution timeout")).not.toBeInTheDocument();
+    }
+    expect(timelineCalls().length).toBeGreaterThan(0);
+    for (const call of timelineCalls()) expect(call.url).toMatch(/\/api\/v1\/alerts\/123\/escalation-events$/);
+    expect(calls.some((call) => call.url.includes("NaN"))).toBe(false);
+    expect(previewCalls()).toHaveLength(0);
+  });
+
+  it.each(["invalid-alert-id", "alert-9007199254740993", "alert-0", "alert-042", "123abc"])(
+    "hides config links and the timeline for unsafe id %s",
+    async (id) => {
+      const alert: AlertRecord = { ...(await loadMappedAlert()), id };
+      render(listUi([alert]));
+      await flush();
+      expect(configNavs()).toHaveLength(0);
+      expect(screen.queryByText(CONFIG_HINT)).not.toBeInTheDocument();
+      expect(screen.queryAllByRole("link").filter((link) => link.getAttribute("href")?.startsWith("/app/settings"))).toHaveLength(0);
+      expect(timelineCalls()).toHaveLength(0);
+      expect(calls.some((call) => call.url.includes("NaN"))).toBe(false);
+      expect(screen.getAllByRole("button", { name: DIAGNOSE }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    },
+  );
+
+  it.each(["operator", "viewer"] as const)("renders no config links for %s", async (role) => {
+    const alert = await loadMappedAlert();
+    authState.role = role;
+    rememberAuthIdentity("tok-admin", role);
+    render(listUi([alert]));
+    await flush();
+    expect(configNavs()).toHaveLength(0);
+    expect(screen.queryByText(CONFIG_HINT)).not.toBeInTheDocument();
+  });
+
+  it("renders no config links while Context and the core identity disagree", async () => {
+    const alert = await loadMappedAlert();
+    rememberAuthIdentity("tok-other", "admin");
+    render(listUi([alert]));
+    await flush();
+    expect(configNavs()).toHaveLength(0);
   });
 });

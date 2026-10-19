@@ -1,4 +1,4 @@
-import { createElement, useState } from "react";
+import { createElement, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Bell, Building2, Mail, MessageSquare, Save, Send, Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { InlineAlert } from "@/components/ui/inline-alert";
 import { toast } from "@/components/ui/toast-sonner";
 import { getErrorMessage } from "@/lib/utils";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
+import { useNotificationContextOwner } from "@/hooks/use-notification-context-owner";
 import { EndpointHintWarning } from "@/lib/api/integrations-api";
 import type { IntegrationChannel, IntegrationType } from "@/types/domain";
 
@@ -186,13 +187,28 @@ export function IntegrationEditorDialog({
   onSave,
 }: IntegrationEditorDialogProps) {
   const { t } = useTranslation();
+  const owner = useNotificationContextOwner();
+  const attemptRef = useRef(0);
   const [draft, setDraft] = useDialogDraft<IntegrationEditorDraft, IntegrationChannel>(open, emptyDraft, integration, toDraft);
   const [saving, setSaving] = useState(false);
   const [pendingHint, setPendingHint] = useState<string | null>(null);
 
+  const [appliedScope, setAppliedScope] = useState({ open, integration });
+  if (appliedScope.open !== open || appliedScope.integration !== integration) {
+    setAppliedScope({ open, integration });
+    setPendingHint(null);
+    setSaving(false);
+  }
+  useLayoutEffect(() => () => { attemptRef.current += 1; }, [open, integration]);
+
   const isStructured = STRUCTURED_TYPES.has(draft.type);
 
   const handleSave = async (skipHint: boolean) => {
+    if (!owner.active || owner.role !== "admin") return;
+    const owns = owner.capture();
+    if (!open || !owns()) return;
+    const currentAttempt = ++attemptRef.current;
+
     if (!draft.name.trim()) {
       toast.error(t('integration.errorNameRequired'), { id: "integration-edit-name-required" });
       return;
@@ -207,6 +223,9 @@ export function IntegrationEditorDialog({
       }
     }
 
+    const isMatching = () => open && owns() && currentAttempt === attemptRef.current;
+
+    if (!isMatching()) return;
     setSaving(true);
     try {
       await onSave({
@@ -217,15 +236,19 @@ export function IntegrationEditorDialog({
         cooldownMinutes: toBoundedInt(String(draft.cooldownMinutes), 5, 1, 120),
         skipEndpointHint: skipHint,
       });
+      if (!isMatching()) return;
       setPendingHint(null);
     } catch (error) {
+      if (!isMatching()) return;
       if (error instanceof EndpointHintWarning) {
         setPendingHint(error.hint);
       } else {
         toast.error(getErrorMessage(error, t('integration.errorSaveFailed')));
       }
     } finally {
-      setSaving(false);
+      if (isMatching()) {
+        setSaving(false);
+      }
     }
   };
 

@@ -27,6 +27,8 @@ type UseIntegrationAlertOperationsParams = {
   ensureDemoWriteAllowed: (action: string) => void;
   handleWriteApiError: (action: string, error: unknown) => void;
   retryTask: (taskID: number, isCurrent?: () => boolean) => Promise<void>;
+  /** 渠道配置操作所属身份仍有效（真实 token 还要求 admin）；告警操作不使用此判定。 */
+  isCurrentIntegrationOwner: () => boolean;
 };
 
 export function useIntegrationAlertOperations({
@@ -38,13 +40,29 @@ export function useIntegrationAlertOperations({
   setWarning,
   ensureDemoWriteAllowed,
   handleWriteApiError,
-  retryTask
+  retryTask,
+  isCurrentIntegrationOwner
 }: UseIntegrationAlertOperationsParams) {
   const { totpEnabled } = useAuth();
   const exec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError });
 
+  const assertIntegrationOwner = useCallback(() => {
+    if (!isCurrentIntegrationOwner()) {
+      throw new DOMException("Operation belongs to an inactive session", "AbortError");
+    }
+  }, [isCurrentIntegrationOwner]);
+
+  // 渠道写失败只在所属身份仍有效时进入共享 warning；迟到失败直接中止。
+  const handleIntegrationWriteError = useCallback((action: string, error: unknown) => {
+    assertIntegrationOwner();
+    handleWriteApiError(action, error);
+  }, [assertIntegrationOwner, handleWriteApiError]);
+  const channelExec = useApiAction({ token, ensureDemoWriteAllowed, handleWriteApiError: handleIntegrationWriteError });
+
   const addIntegration = useCallback(async (input: NewIntegrationInput) => {
-    const result = await exec(i18n.t("notifications.actions.addIntegration"), (t) => apiClient.createIntegration(t, input));
+    assertIntegrationOwner();
+    const result = await channelExec(i18n.t("notifications.actions.addIntegration"), (t) => apiClient.createIntegration(t, input));
+    assertIntegrationOwner();
     if (result) {
       if (result.ok) {
         setIntegrations((prev) => [result.data, ...prev]);
@@ -53,15 +71,24 @@ export function useIntegrationAlertOperations({
     }
     // Demo builders must not enter the production startup chunk (same as mock.ts).
     const { buildDemoIntegration } = await import("@/hooks/use-console-data.demo");
+    assertIntegrationOwner();
     setIntegrations((prev) => [buildDemoIntegration(input), ...prev]);
-  }, [exec, setIntegrations]);
+  }, [assertIntegrationOwner, channelExec, setIntegrations]);
 
   const removeIntegration = useCallback(async (integrationID: string) => {
-    await exec(i18n.t("notifications.actions.removeIntegration"), (t) => apiClient.deleteIntegration(t, integrationID));
+    assertIntegrationOwner();
+    const label = i18n.t("notifications.actions.removeIntegration");
+    const result = await channelExec(label, (t) => apiClient.deleteIntegration(t, integrationID));
+    assertIntegrationOwner();
+    if (result && !result.ok) {
+      // 失败已由 warning 处理；不能把失败当作已删除。
+      throw new Error(i18n.t("console.actionRequestFailed", { action: label }));
+    }
     setIntegrations((prev) => prev.filter((integration) => integration.id !== integrationID));
-  }, [exec, setIntegrations]);
+  }, [assertIntegrationOwner, channelExec, setIntegrations]);
 
   const updateIntegration = useCallback(async (integrationID: string, patch: Partial<IntegrationChannel> & { secret?: string; skipEndpointHint?: boolean }) => {
+    assertIntegrationOwner();
     const current = integrations.find((item) => item.id === integrationID);
     if (!current) {
       throw new Error(i18n.t("notifications.actions.integrationNotFound"));
@@ -73,19 +100,29 @@ export function useIntegrationAlertOperations({
       setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? merged : item)));
       return;
     }
-    const updated = await apiClient.updateIntegration(token, integrationID, { ...merged, skipEndpointHint: patch.skipEndpointHint });
+    let updated: IntegrationChannel;
+    try {
+      updated = await apiClient.updateIntegration(token, integrationID, { ...merged, skipEndpointHint: patch.skipEndpointHint });
+    } catch (error) {
+      assertIntegrationOwner();
+      throw error;
+    }
+    assertIntegrationOwner();
     setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? updated : item)));
-  }, [token, ensureDemoWriteAllowed, integrations, setIntegrations]);
+  }, [assertIntegrationOwner, token, ensureDemoWriteAllowed, integrations, setIntegrations]);
 
   const testIntegration = useCallback(async (integrationID: string): Promise<IntegrationProbeResult> => {
-    const result = await exec(i18n.t("notifications.actions.testIntegration"), (t) => apiClient.testIntegration(t, integrationID));
+    assertIntegrationOwner();
+    const result = await channelExec(i18n.t("notifications.actions.testIntegration"), (t) => apiClient.testIntegration(t, integrationID));
+    assertIntegrationOwner();
     if (result) {
       return result.ok ? result.data : { ok: false, message: i18n.t("notifications.testFailed"), latencyMs: 0 };
     }
     return { ok: true, message: i18n.t("notifications.actions.testNoticeSent"), latencyMs: 0 };
-  }, [exec]);
+  }, [assertIntegrationOwner, channelExec]);
 
   const patchIntegration = useCallback(async (integrationID: string, patch: Record<string, unknown>) => {
+    assertIntegrationOwner();
     if (!token) {
       ensureDemoWriteAllowed(i18n.t("notifications.actions.updateIntegration"));
       // demo 模式：将 snake_case API 字段映射为 camelCase 前端字段
@@ -98,17 +135,26 @@ export function useIntegrationAlertOperations({
       setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? { ...item, ...mapped } : item)));
       return;
     }
-    const updated = await apiClient.patchIntegration(token, integrationID, patch);
+    let updated: IntegrationChannel;
+    try {
+      updated = await apiClient.patchIntegration(token, integrationID, patch);
+    } catch (error) {
+      assertIntegrationOwner();
+      throw error;
+    }
+    assertIntegrationOwner();
     setIntegrations((prev) => prev.map((item) => (item.id === integrationID ? updated : item)));
-  }, [token, ensureDemoWriteAllowed, setIntegrations]);
+  }, [assertIntegrationOwner, token, ensureDemoWriteAllowed, setIntegrations]);
 
   const toggleIntegration = useCallback(async (integrationID: string) => {
+    assertIntegrationOwner();
     const current = integrations.find((item) => item.id === integrationID);
     if (!current) {
       return;
     }
     await patchIntegration(integrationID, { enabled: !current.enabled });
-  }, [integrations, patchIntegration]);
+    assertIntegrationOwner();
+  }, [assertIntegrationOwner, integrations, patchIntegration]);
 
   const retryAlert = useCallback(
     async (alertID: string) => {

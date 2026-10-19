@@ -1,26 +1,48 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
+import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes, type InitialEntry } from "react-router-dom";
+import {
+  bumpAuthSessionGeneration,
+  clearAuthTransitionBarrier,
+  isAuthTransitionActive,
+  rememberAuthIdentity,
+} from "@/lib/api/core";
+import { createNotificationConfigReturn } from "@/lib/notification-config-context";
+import { NotificationConfigLink, NotificationConfigLinks } from "@/components/notification-config-links";
 import { apiClient } from "@/lib/api/client";
 import type { UserRecord } from "@/types/domain";
 import { SettingsPage } from "./settings-page";
 
+type Role = "admin" | "operator" | "viewer";
+
 const authState = vi.hoisted(() => ({
   current: {
-    token: "test-token",
+    token: "test-token" as string | null,
     username: "admin",
-    role: "admin",
+    role: "admin" as Role | null,
   },
 }));
+
+function setAuthIdentity(token: string | null, role: Role | null, username = role ?? "anonymous") {
+  rememberAuthIdentity(token, role);
+  authState.current = {
+    token,
+    username,
+    role,
+  };
+}
 
 vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => authState.current,
 }));
 
 vi.mock("react-i18next", () => {
-  const t = (key: string, options?: Record<string, unknown>) =>
-    typeof options?.count === "number" ? `${key}:${options.count}` : key;
+  const t = (key: string, options?: Record<string, unknown>) => {
+    if (typeof options?.count === "number") return `${key}:${options.count}`;
+    if (typeof options?.id === "string" || typeof options?.id === "number") return `${key}:${options.id}`;
+    return key;
+  };
   const i18n = { language: "zh", changeLanguage: vi.fn() };
   return {
     useTranslation: () => ({ t, i18n }),
@@ -65,6 +87,10 @@ vi.mock("./settings-page.channels", () => ({
   ChannelsTab: () => <div>settings.channels.title</div>,
 }));
 
+vi.mock("./settings-page.silences", () => ({
+  SilencesPanel: () => <div>settings.silences.title</div>,
+}));
+
 vi.mock("./settings-page.system", () => ({
   SystemTab: () => <div>settings.system.title</div>,
 }));
@@ -87,25 +113,26 @@ function usersSettingsSurface() {
   );
 }
 
-function renderSettingsPage(initialEntries: string[] = ["/app/settings"]) {
+function renderSettingsPage(initialEntries: InitialEntry[] = ["/app/settings"]) {
   const router = createMemoryRouter(
-    [{ path: "/app/settings", element: <SettingsPage /> }],
+    [
+      { path: "/app/settings", element: <SettingsPage /> },
+      { path: "/app/notifications", element: <div>notifications-page</div> },
+    ],
     { initialEntries }
   );
   return {
     router,
-    ...render(<RouterProvider router={router} />)
+    ...render(<RouterProvider router={router} />),
   };
 }
 
 describe("SettingsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    authState.current = {
-      token: "test-token",
-      username: "admin",
-      role: "admin",
-    };
+    if (isAuthTransitionActive()) clearAuthTransitionBarrier();
+    bumpAuthSessionGeneration();
+    setAuthIdentity("test-token", "admin");
     vi.mocked(apiClient.getUsers).mockReset();
     vi.mocked(apiClient.getUsers).mockResolvedValue([]);
     vi.mocked(apiClient.createUser).mockReset();
@@ -200,11 +227,7 @@ describe("SettingsPage", () => {
   });
 
   it("limits non-admin users to personal settings and account security", () => {
-    authState.current = {
-      token: "test-token",
-      username: "viewer",
-      role: "viewer",
-    };
+    setAuthIdentity("test-token", "viewer");
 
     renderSettingsPage(["/app/settings?tab=system"]);
 
@@ -232,15 +255,11 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("combobox", { name: "users.role" })).toHaveValue("admin");
   });
 
-  it.each(["operator", "viewer"])(
+  it.each(["operator", "viewer"] as const)(
     "returns %s from the users settings URL to personal settings and still opens account without loading users",
     async (role) => {
       const user = userEvent.setup();
-      authState.current = {
-        token: "test-token",
-        username: role,
-        role,
-      };
+      setAuthIdentity("test-token", role);
 
       renderSettingsPage(["/app/settings?tab=users"]);
 
@@ -265,11 +284,7 @@ describe("SettingsPage", () => {
     const { rerender } = render(usersSettingsSurface());
     await waitFor(() => expect(apiClient.getUsers).toHaveBeenCalledTimes(1));
 
-    authState.current = {
-      token: "test-token",
-      username: "viewer",
-      role: "viewer",
-    };
+    setAuthIdentity("test-token", "viewer");
     rerender(usersSettingsSurface());
 
     await act(async () => {
@@ -283,11 +298,7 @@ describe("SettingsPage", () => {
     vi.mocked(apiClient.getUsers).mockResolvedValueOnce([
       { id: 3, username: "fresh-user", role: "viewer" },
     ]);
-    authState.current = {
-      token: "test-token",
-      username: "admin",
-      role: "admin",
-    };
+    setAuthIdentity("test-token", "admin");
     rerender(usersSettingsSurface());
 
     expect(await screen.findByText("fresh-user")).toBeInTheDocument();
@@ -340,5 +351,194 @@ describe("SettingsPage", () => {
       expect(screen.queryByText("ada")).not.toBeInTheDocument();
     });
     expect(screen.getByText("users.emptyTitle")).toBeInTheDocument();
+  });
+
+  describe("notification config context", () => {
+    it("renders wrap-return region for an alert target, focuses the active tab once, and preserves state across tabs", async () => {
+      const user = userEvent.setup();
+      const payload = createNotificationConfigReturn("42");
+      expect(payload).not.toBeNull();
+
+      const { router } = renderSettingsPage([
+        {
+          pathname: "/app/settings",
+          search: "?tab=channels&securityReturnTo=/app/notifications",
+          hash: "#config",
+          state: { notificationConfigReturn: payload },
+        },
+      ]);
+
+      const channelsTab = screen.getByRole("tab", { name: "settings.tabs.channels" });
+      expect(channelsTab).toHaveAttribute("aria-selected", "true");
+      expect(channelsTab).toHaveFocus();
+
+      expect(screen.getByText("notifications.configContext.fromAlert:42")).toBeInTheDocument();
+      expect(screen.getByText("notifications.configContext.manualReturnHint")).toBeInTheDocument();
+
+      const returnLink = screen.getByRole("link", { name: "notifications.configContext.returnAlert" });
+      expect(returnLink).toHaveAttribute("href", "/app/notifications?alert=42");
+
+      // Switch to personal tab: region is hidden, but valid state is preserved
+      await user.click(screen.getByRole("tab", { name: "settings.tabs.personal" }));
+      expect(screen.queryByText("notifications.configContext.fromAlert:42")).not.toBeInTheDocument();
+      expect(router.state.location.search).toBe("?tab=personal&securityReturnTo=%2Fapp%2Fnotifications");
+      expect(router.state.location.hash).toBe("#config");
+      expect(router.state.location.state).toEqual({ notificationConfigReturn: payload });
+
+      // Switch back to silences tab: region reappears, focus is not stolen back to channels
+      await user.click(screen.getByRole("tab", { name: "settings.tabs.silences" }));
+      expect(screen.getByText("notifications.configContext.fromAlert:42")).toBeInTheDocument();
+      const silencesTab = screen.getByRole("tab", { name: "settings.tabs.silences" });
+      expect(silencesTab).toHaveFocus();
+
+      // Return navigation carries only the notificationConfigReturn key
+      await user.click(screen.getByRole("link", { name: "notifications.configContext.returnAlert" }));
+      expect(router.state.location.pathname).toBe("/app/notifications");
+      expect(router.state.location.search).toBe("?alert=42");
+      expect(router.state.location.state).toEqual({ notificationConfigReturn: payload });
+    });
+
+    it("renders return link for list context without alert ID", () => {
+      const payload = createNotificationConfigReturn(null);
+      expect(payload).not.toBeNull();
+
+      renderSettingsPage([
+        {
+          pathname: "/app/settings",
+          search: "?tab=escalation",
+          state: { notificationConfigReturn: payload },
+        },
+      ]);
+
+      expect(screen.getByText("notifications.configContext.fromList")).toBeInTheDocument();
+      const returnLink = screen.getByRole("link", { name: "notifications.configContext.returnList" });
+      expect(returnLink).toHaveAttribute("href", "/app/notifications");
+    });
+
+    it("cleans up invalid or expired notification context while preserving query params, hash and other state", async () => {
+      const invalidPayload = { version: 1, source: "notifications", alertId: "42", owner: "expired-epoch:0" };
+      const { router } = renderSettingsPage([
+        {
+          pathname: "/app/settings",
+          search: "?tab=channels&mode=compact",
+          hash: "#details",
+          state: { keep: "yes", notificationConfigReturn: invalidPayload },
+        },
+      ]);
+
+      await waitFor(() => {
+        expect(router.state.location.state).toEqual({ keep: "yes" });
+      });
+      expect(router.state.location.search).toBe("?tab=channels&mode=compact");
+      expect(router.state.location.hash).toBe("#details");
+      expect(screen.queryByText("notifications.configContext.manualReturnHint")).not.toBeInTheDocument();
+    });
+
+    it("synchronously hides return region and prevents stale navigation after session generation advances", async () => {
+      const user = userEvent.setup();
+      const payload = createNotificationConfigReturn("42");
+      expect(payload).not.toBeNull();
+
+      renderSettingsPage([
+        {
+          pathname: "/app/settings",
+          search: "?tab=channels",
+          state: { notificationConfigReturn: payload },
+        },
+      ]);
+
+      const returnLink = screen.getByRole("link", { name: "notifications.configContext.returnAlert" });
+      act(() => {
+        bumpAuthSessionGeneration();
+      });
+      await user.click(returnLink);
+
+      expect(screen.queryByText("notifications.configContext.returnAlert")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("NotificationConfigLinks and NotificationConfigLink", () => {
+    it("renders channels, silences, and escalation links with description for valid alert target", () => {
+      render(
+        <MemoryRouter>
+          <NotificationConfigLinks alertId="alert-42" />
+        </MemoryRouter>
+      );
+
+      const nav = screen.getByRole("navigation", { name: "notifications.configNavLabel" });
+      expect(nav).toBeInTheDocument();
+      expect(within(nav).getByRole("link", { name: "notifications.configChannels" })).toHaveAttribute(
+        "href",
+        "/app/settings?tab=channels"
+      );
+      expect(within(nav).getByRole("link", { name: "notifications.configSilences" })).toHaveAttribute(
+        "href",
+        "/app/settings?tab=silences"
+      );
+      expect(within(nav).getByRole("link", { name: "notifications.configEscalation" })).toHaveAttribute(
+        "href",
+        "/app/settings?tab=escalation"
+      );
+      expect(within(nav).getByText("notifications.configContext.forAlert")).toBeInTheDocument();
+    });
+
+    it("renders links without description for list target (alertId null)", () => {
+      render(
+        <MemoryRouter>
+          <NotificationConfigLinks alertId={null} />
+        </MemoryRouter>
+      );
+
+      const nav = screen.getByRole("navigation", { name: "notifications.configNavLabel" });
+      expect(nav).toBeInTheDocument();
+      expect(screen.queryByText("notifications.configContext.forAlert")).not.toBeInTheDocument();
+    });
+
+    it("hides entire group for invalid non-null alert ID without downgrading to list", () => {
+      const { container } = render(
+        <MemoryRouter>
+          <NotificationConfigLinks alertId="invalid-id" />
+        </MemoryRouter>
+      );
+
+      expect(container).toBeEmptyDOMElement();
+    });
+
+    it("hides for non-admin user", () => {
+      setAuthIdentity("test-token", "viewer");
+      const { container } = render(
+        <MemoryRouter>
+          <NotificationConfigLinks alertId="42" />
+        </MemoryRouter>
+      );
+
+      expect(container).toBeEmptyDOMElement();
+    });
+
+    it("prevents stale navigation when session is invalidated before click", async () => {
+      const user = userEvent.setup();
+      const router = createMemoryRouter([
+        {
+          path: "/",
+          element: (
+            <NotificationConfigLink tab="channels" alertId="42">
+              Go to channels
+            </NotificationConfigLink>
+          ),
+        },
+        {
+          path: "/app/settings",
+          element: <div>settings-page</div>,
+        },
+      ]);
+      render(<RouterProvider router={router} />);
+
+      const link = screen.getByRole("link", { name: "Go to channels" });
+      // Change core ownership without notifying React: the rendered click handler itself must reject it.
+      rememberAuthIdentity("other-session", "admin");
+      await user.click(link);
+
+      expect(router.state.location.pathname).toBe("/");
+    });
   });
 });
