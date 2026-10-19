@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.72.0](https://github.com/xiangnan0811/xirang/compare/v0.71.0...v0.72.0) (2026-10-19)
+
+
+### ✨ Features
+
+* **notifications:** preserve configuration context and exact alert returns ([#640](https://github.com/xiangnan0811/xirang/issues/640)) ([b48634c](https://github.com/xiangnan0811/xirang/commit/b48634cd0a69b620521b6036e901ea315f611e5a))
+
 ### 新增与修复
 
 - 通知列表和具体告警可进入既有通知渠道、静音规则、升级策略配置，并手动返回列表或同一安全告警 ID；保存成功或取消编辑均留在设置页。
