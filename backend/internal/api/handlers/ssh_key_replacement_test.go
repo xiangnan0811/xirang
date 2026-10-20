@@ -874,11 +874,12 @@ func TestSSHKeyReplacementSQLiteConcurrentOrderings(t *testing.T) {
 			firstBody := replacementUpdateBody(t, "first-secret", &candidate)
 			secondBody := replacementUpdateBody(t, "last-metadata", nil)
 			firstProof, secondProof := proof, ""
-			if ordering == "metadata_first" {
+			switch ordering {
+			case "metadata_first":
 				firstBody = []byte(`{"name":"first-metadata","username":"root","key_type":"auto","allowed_node_tags":"concurrent-metadata"}`)
 				secondBody = replacementUpdateBody(t, "last-secret", &candidate)
 				firstProof, secondProof = "", proof
-			} else if ordering == "same_candidate_becomes_replacement" {
+			case "same_candidate_becomes_replacement":
 				secondBody = replacementUpdateBody(t, "must-not-revert", &f.old)
 			}
 			updateReached := newSSHKeyRotationSQLiteGate()

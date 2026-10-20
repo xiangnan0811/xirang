@@ -1,7 +1,6 @@
 package sshutil
 
 import (
-	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -261,18 +260,13 @@ func TestSamePrivateKeyMaterialComparesPrivateComponentsNotPublicFingerprint(t *
 }
 
 func TestSamePrivateKeyMaterialRejectsUnsupportedDSA(t *testing.T) {
-	var key dsa.PrivateKey
-	if err := dsa.GenerateParameters(&key.Parameters, rand.Reader, dsa.L1024N160); err != nil {
-		t.Fatal(err)
-	}
-	if err := dsa.GenerateKey(&key, rand.Reader); err != nil {
-		t.Fatal(err)
-	}
+	// A parse-only toy DSA group exercises unsupported-key rejection without
+	// generating or using deprecated DSA signing keys: 2^3 mod 23 = 8.
 	der, err := asn1.Marshal(struct {
 		Version int
 		P, Q, G *big.Int
 		Y, X    *big.Int
-	}{0, key.P, key.Q, key.G, key.Y, key.X})
+	}{0, big.NewInt(23), big.NewInt(11), big.NewInt(2), big.NewInt(8), big.NewInt(3)})
 	if err != nil {
 		t.Fatal(err)
 	}

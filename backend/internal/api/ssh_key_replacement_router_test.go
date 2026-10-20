@@ -450,9 +450,10 @@ func TestSSHKeyReplacementMetadataWithoutTOTP(t *testing.T) {
 			t.Run(mode+"/"+proofName, func(t *testing.T) {
 				before := f.key(t, original)
 				body := map[string]any{"name": before.Name + "-edited", "username": "edited-user", "key_type": "auto"}
-				if mode == "null" {
+				switch mode {
+				case "null":
 					body["private_key"] = nil
-				} else if mode == "empty" {
+				case "empty":
 					body["private_key"] = ""
 				}
 				response := f.request(t, route, before.ID, f.actors["no-totp"].token, proof, body)
