@@ -8,7 +8,7 @@ export const badgeVariants = cva(
         success:
           "bg-[hsl(var(--success)/0.14)] text-[hsl(var(--success-text))] dark:bg-[hsl(var(--success)/0.20)]",
         warning:
-          "bg-[hsl(var(--warning)/0.18)] text-[hsl(var(--warning-text))] dark:bg-[hsl(var(--warning)/0.25)]",
+          "bg-[hsl(var(--warning)/0.10)] text-[hsl(var(--warning-text))] dark:bg-[hsl(var(--warning)/0.25)]",
         destructive:
           "bg-[hsl(var(--destructive)/0.14)] text-[hsl(var(--destructive-text))] dark:bg-[hsl(var(--destructive)/0.20)]",
         info:

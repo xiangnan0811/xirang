@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 修复
+
+- 修复浅色 warning Badge 在卡片悬停背景上的文字对比度不足；减轻浅色背景着色，保留深色主题、文字颜色和其他语义状态样式。
+
+### 行为与升级说明
+
+- 对比度修复从加载新版前端资源后生效；不改变后端 API、数据库 schema 或已开始的服务端操作，无新增 schema migration。回退旧版前端会恢复原有浅色 warning Badge 悬停对比度缺陷。
+
 ## [0.73.0](https://github.com/xiangnan0811/xirang/compare/v0.72.0...v0.73.0) (2026-10-20)
 
 
