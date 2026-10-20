@@ -5,6 +5,7 @@ import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import { formatTimeOnly, getAuthSessionGeneration, isAuthTransitionActive, subscribeAuthTransition } from "@/lib/api/core";
+import type { SSHKeyReplacementOptions } from "@/lib/ssh-key-replacement";
 
 // mock 数据仅在 demo 模式下动态导入，避免生产包包含 mock 代码
 const loadMocks = () => import("@/data/mock");
@@ -102,8 +103,8 @@ export interface ConsoleDataState {
   updateIntegration: (integrationId: string, patch: Partial<IntegrationChannel> & { secret?: string; skipEndpointHint?: boolean }) => Promise<void>;
   patchIntegration: (integrationId: string, patch: Record<string, unknown>) => Promise<void>;
 
-  createSSHKey: (input: NewSSHKeyInput) => Promise<string>;
-  updateSSHKey: (keyId: string, input: NewSSHKeyInput) => Promise<void>;
+  createSSHKey: (input: NewSSHKeyInput, isCurrent?: () => boolean) => Promise<string>;
+  updateSSHKey: (keyId: string, input: NewSSHKeyInput, options: SSHKeyReplacementOptions) => Promise<void>;
   deleteSSHKey: (keyId: string) => Promise<boolean>;
 
   retryAlert: (alertId: string) => Promise<void>;

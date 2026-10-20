@@ -4,7 +4,7 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, bumpAuthSessionGeneration } from "@/lib/api/core";
-import { SSHKeyRotationDecodeError, type SSHKeyRotationResult } from "@/lib/api/ssh-keys-api";
+import { SSHKeyRotationDecodeError, type SSHKeyRotationResult } from "@/lib/api/ssh-key-rotation-api";
 import type { NodeRecord, SSHKeyPreview, SSHKeyRecord } from "@/types/domain";
 import { SSHKeyRotationWizard } from "./ssh-key-rotation-wizard";
 
@@ -24,6 +24,13 @@ vi.mock("@/lib/api/ssh-keys-api", async () => {
       testConnection,
       previewSSHKey,
     }),
+  };
+});
+
+vi.mock("@/lib/api/ssh-key-rotation-api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/ssh-key-rotation-api")>("@/lib/api/ssh-key-rotation-api");
+  return {
+    ...actual,
     rotateSSHKey,
   };
 });
@@ -33,8 +40,38 @@ const { toastSuccess, toastError } = vi.hoisted(() => ({
   toastError: vi.fn(),
 }));
 
-const authRef: { current: { role: "admin" | "operator" | "viewer" | null; token: string | null } } = {
-  current: { role: "admin", token: "token" },
+const ensureStepUpProof = vi.fn<(...args: unknown[]) => Promise<string>>();
+
+function adminAuth(overrides: Partial<typeof authRef.current> = {}) {
+  return { role: "admin" as const, token: "token", authTransitioning: false, totpEnabled: true, ensureStepUpProof, ...overrides };
+}
+
+function stepUpRequiredError() {
+  const error = new ApiError(403, "需要二次验证", {
+    code: 403,
+    message: "需要二次验证",
+    data: { error_code: "STEP_UP_REQUIRED", proof_ttl_seconds: 300 },
+  });
+  error.httpStatus = 403;
+  return error;
+}
+
+const authRef: {
+  current: {
+    role: "admin" | "operator" | "viewer" | null;
+    token: string | null;
+    authTransitioning?: boolean;
+    totpEnabled?: boolean;
+    ensureStepUpProof?: (...args: unknown[]) => Promise<string>;
+  };
+} = {
+  current: {
+    role: "admin",
+    token: "token",
+    authTransitioning: false,
+    totpEnabled: true,
+    ensureStepUpProof,
+  },
 };
 
 vi.mock("@/context/auth-context.hooks", () => ({
@@ -154,19 +191,21 @@ function DisabledKeyOnKeyPage({
 
 function wizardElement(token = "token", open = true, onComplete = vi.fn()) {
   return (
-    <SSHKeyRotationWizard
-      open={open}
-      onOpenChange={vi.fn()}
-      sshKeys={[selectedKey]}
-      keyUsageMap={new Map([[selectedKey.id, affected]])}
-      preselectedKey={selectedKey}
-      token={token}
-      onComplete={onComplete}
-    />
+    <MemoryRouter>
+      <SSHKeyRotationWizard
+        open={open}
+        onOpenChange={vi.fn()}
+        sshKeys={[selectedKey]}
+        keyUsageMap={new Map([[selectedKey.id, affected]])}
+        preselectedKey={selectedKey}
+        token={token}
+        onComplete={onComplete}
+      />
+    </MemoryRouter>
   );
 }
 
-async function confirmRotation(user: UserEvent, acknowledgement = "2") {
+async function confirmRotation(user: UserEvent, acknowledgement = "2", expectedRequests = 1) {
   await user.type(screen.getByLabelText("私钥内容"), "FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
   await user.click(screen.getByRole("button", { name: textChoice("sshKeys.rotationCheckCandidate", "检查候选密钥") }));
   await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled());
@@ -174,7 +213,7 @@ async function confirmRotation(user: UserEvent, acknowledgement = "2") {
   await user.type(screen.getByLabelText(`输入 ${acknowledgement} 以确认预估节点数`), acknowledgement);
   const callsBefore = rotateSSHKey.mock.calls.length;
   await user.click(screen.getByRole("button", { name: "确认轮换" }));
-  await waitFor(() => expect(rotateSSHKey.mock.calls.length).toBe(callsBefore + 1));
+  await waitFor(() => expect(rotateSSHKey.mock.calls.length).toBe(callsBefore + expectedRequests));
 }
 
 type DeferredRead = {
@@ -235,7 +274,8 @@ function changeKeyFile(name = "id_ed25519") {
 
 describe("SSHKeyRotationWizard", () => {
   beforeEach(() => {
-    authRef.current = { role: "admin", token: "token" };
+    authRef.current = adminAuth();
+    ensureStepUpProof.mockReset().mockResolvedValue("proof-ok");
     toastSuccess.mockReset();
     toastError.mockReset();
     updateSSHKey.mockReset();
@@ -306,7 +346,7 @@ describe("SSHKeyRotationWizard", () => {
     expect(rotateSSHKey).toHaveBeenCalledTimes(1);
     expect(screen.getByText("正在验证候选连接，通过后保存")).toBeInTheDocument();
 
-    authRef.current = { role: "viewer", token: "token" };
+    authRef.current = adminAuth({ role: "viewer" });
     view.rerender(wizardElement());
     await act(async () => {
       pending.resolve(savedRotation);
@@ -379,7 +419,7 @@ describe("SSHKeyRotationWizard", () => {
     const view = render(wizardElement());
     await confirmRotation(user);
 
-    authRef.current = { role: "operator", token: "token" };
+    authRef.current = adminAuth({ role: "operator" });
     view.rerender(wizardElement());
     await act(async () => {
       pending.reject(new Error("rotation failed late"));
@@ -397,15 +437,17 @@ describe("SSHKeyRotationWizard", () => {
     const onComplete = vi.fn();
     rotateSSHKey.mockReturnValue(pending.promise);
     render(
-      <SSHKeyRotationWizard
-        open
-        onOpenChange={onOpenChange}
-        sshKeys={[selectedKey]}
-        keyUsageMap={new Map([[selectedKey.id, affected]])}
-        preselectedKey={selectedKey}
-        token="token"
-        onComplete={onComplete}
-      />,
+      <MemoryRouter>
+        <SSHKeyRotationWizard
+          open
+          onOpenChange={onOpenChange}
+          sshKeys={[selectedKey]}
+          keyUsageMap={new Map([[selectedKey.id, affected]])}
+          preselectedKey={selectedKey}
+          token="token"
+          onComplete={onComplete}
+        />
+      </MemoryRouter>,
     );
     await confirmRotation(user);
     expect(screen.getByText("正在验证候选连接，通过后保存")).toBeInTheDocument();
@@ -503,9 +545,9 @@ describe("SSHKeyRotationWizard", () => {
     const view = render(wizardElement());
     changeKeyFile("late.pem");
 
-    authRef.current = { role: "viewer", token: "token" };
+    authRef.current = adminAuth({ role: "viewer" });
     view.rerender(wizardElement());
-    authRef.current = { role: "admin", token: "token" };
+    authRef.current = adminAuth();
     view.rerender(wizardElement());
 
     expect(pending[0].aborted).toBe(true);
@@ -622,7 +664,7 @@ describe("SSHKeyRotationWizard", () => {
 
   it("明确失败保留草稿并使用固定文案，解码失败和传输失败进入未知且不能成功", async () => {
     const user = userEvent.setup();
-    const renderInRouter = () => render(<MemoryRouter>{wizardElement()}</MemoryRouter>);
+    const renderInRouter = () => render(wizardElement());
     rotateSSHKey.mockRejectedValueOnce(new ApiError(404, "raw missing"));
     const missing = renderInRouter();
     await confirmRotation(user);
@@ -741,11 +783,7 @@ describe("SSHKeyRotationWizard", () => {
           { nodeId: "node-2", name: "edge", status: reason === "scope_blocked" ? "failed" : "unknown", errorCode: reason === "scope_blocked" ? "scope_denied" : reason === "validation_timeout" ? "timeout" : "not_checked" },
         ],
       });
-      const view = render(
-        <MemoryRouter>
-          {wizardElement()}
-        </MemoryRouter>,
-      );
+      const view = render(wizardElement());
       await confirmRotation(user);
       expect(screen.getByText("未替换，原密钥保持不变。")).toBeInTheDocument();
       expect(screen.getByText(detail)).toBeInTheDocument();
@@ -780,15 +818,17 @@ describe("SSHKeyRotationWizard", () => {
       results: [],
     });
     render(
-      <SSHKeyRotationWizard
-        open
-        onOpenChange={vi.fn()}
-        sshKeys={[selectedKey]}
-        keyUsageMap={new Map([[selectedKey.id, []]])}
-        preselectedKey={selectedKey}
-        token="token"
-        onComplete={vi.fn()}
-      />,
+      <MemoryRouter>
+        <SSHKeyRotationWizard
+          open
+          onOpenChange={vi.fn()}
+          sshKeys={[selectedKey]}
+          keyUsageMap={new Map([[selectedKey.id, []]])}
+          preselectedKey={selectedKey}
+          token="token"
+          onComplete={vi.fn()}
+        />
+      </MemoryRouter>,
     );
     await confirmRotation(user, "0");
     expect(await screen.findByText("没有关联节点，无需连接验证。")).toBeInTheDocument();
@@ -823,4 +863,82 @@ describe("SSHKeyRotationWizard", () => {
     expect(toastSuccess).not.toHaveBeenCalled();
   });
 
+
+  it("真实 403 触发一次 fresh proof，等待期间显示'等待二次验证'，重试成功后保存", async () => {
+    const user = userEvent.setup();
+    const deferredProof = createDeferred<string>();
+    ensureStepUpProof.mockImplementationOnce(() => deferredProof.promise);
+
+    const stepUpError = stepUpRequiredError();
+    rotateSSHKey.mockRejectedValueOnce(stepUpError);
+    rotateSSHKey.mockResolvedValueOnce({
+      status: "saved",
+      reason: "",
+      publicKeyFingerprint: "SHA256:saved-public",
+      results: [
+        { nodeId: "node-1", name: "node-online", status: "verified" },
+        { nodeId: "node-2", name: "node-offline", status: "verified" },
+      ],
+    });
+
+    render(wizardElement());
+    await confirmRotation(user);
+
+    expect(await screen.findByText("等待二次验证")).toBeInTheDocument();
+    expect(screen.getByTestId("rotation-summary")).toHaveAttribute("data-rotation-status", "waiting_step_up");
+
+    await act(async () => {
+      deferredProof.resolve("fresh-proof-1");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("rotation-summary")).toHaveAttribute("data-rotation-status", "saved");
+    });
+    expect(ensureStepUpProof).toHaveBeenCalledWith(
+      "ssh_key.replace",
+      expect.objectContaining({ persist: false, reuseCached: false, signal: expect.any(AbortSignal) }),
+    );
+    expect(rotateSSHKey).toHaveBeenCalledTimes(2);
+    expect(rotateSSHKey).toHaveBeenNthCalledWith(
+      2,
+      "token",
+      "key-1",
+      expect.any(Object),
+      expect.objectContaining({ stepUpProof: "fresh-proof-1" }),
+    );
+  });
+
+  it("二次验证取消进入 did_not_continue 状态，保留草稿且不假装为 SSH 失败", async () => {
+    const user = userEvent.setup();
+    const stepUpError = stepUpRequiredError();
+    rotateSSHKey.mockRejectedValueOnce(stepUpError);
+    ensureStepUpProof.mockRejectedValueOnce(new Error("已取消二次验证。"));
+
+    render(wizardElement());
+    await confirmRotation(user);
+
+    expect(await screen.findByText("已取消二次验证。")).toBeInTheDocument();
+    expect(screen.getByTestId("rotation-summary")).toHaveAttribute("data-rotation-status", "did_not_continue");
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-rotation-draft", "present");
+    expect(screen.queryByText("连接失败")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "返回修改并重新检查" }));
+    expect(screen.getByLabelText("私钥内容")).toHaveValue("FAKE_PRIVATE_KEY_FOR_TEST_ONLY");
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-rotation-draft", "present");
+  });
+
+  it("第二次 403 安全终止并展示失效提示，不发起第三次调用", async () => {
+    const user = userEvent.setup();
+    const stepUpError = stepUpRequiredError();
+    rotateSSHKey.mockRejectedValueOnce(stepUpError);
+    ensureStepUpProof.mockResolvedValueOnce("proof-1");
+    rotateSSHKey.mockRejectedValueOnce(stepUpError);
+
+    render(wizardElement());
+    await confirmRotation(user, "2", 2);
+
+    expect(await screen.findByText("二次验证已失效，请重新确认")).toBeInTheDocument();
+    expect(screen.getByTestId("rotation-summary")).toHaveAttribute("data-rotation-status", "failed");
+    expect(rotateSSHKey).toHaveBeenCalledTimes(2);
+  });
 });

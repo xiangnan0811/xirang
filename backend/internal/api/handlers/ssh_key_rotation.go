@@ -3,8 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
@@ -23,8 +22,6 @@ import (
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -64,12 +61,10 @@ const (
 )
 
 var (
-	errSSHKeyRotationConflict       = errors.New("ssh key rotation conflict")
-	errSSHKeyRotationSessionInvalid = errors.New("ssh key rotation session invalid")
-	errSSHKeyRotationBusy           = errors.New("ssh key rotation lock busy")
-	errSSHKeyRotationInternal       = errors.New("ssh key rotation internal error")
-	errSSHKeyRotationScopeBlocked   = errors.New("ssh key rotation scope blocked")
-	errSSHKeyRotationBodyDeadline   = errors.New("ssh key rotation request body deadline")
+	errSSHKeyRotationConflict     = errors.New("ssh key rotation conflict")
+	errSSHKeyRotationInternal     = errors.New("ssh key rotation internal error")
+	errSSHKeyRotationScopeBlocked = errors.New("ssh key rotation scope blocked")
+	errSSHKeyRotationBodyDeadline = errors.New("ssh key rotation request body deadline")
 )
 
 type sshKeyRotationRequest struct {
@@ -169,6 +164,11 @@ type sshKeyRotationSnapshot struct {
 	Nodes []sshKeyRotationNodeSnapshot
 }
 
+type sshKeyReplacementAuthorization struct {
+	Manager *auth.JWTManager
+	Proof   string
+}
+
 type sshKeyRotationAuditState struct {
 	nodeCount    int
 	successCount int
@@ -249,40 +249,6 @@ func decodeSSHKeyRotationRequest(body []byte) (sshKeyRotationRequest, error) {
 		return sshKeyRotationRequest{}, err
 	}
 	return request, nil
-}
-
-func validateSSHKeyRotationSession(ctx context.Context, db *gorm.DB, binding middleware.SessionBinding) error {
-	if db == nil {
-		return fmt.Errorf("rotation database unavailable")
-	}
-	if binding.UserID == 0 || strings.TrimSpace(binding.JTI) == "" || binding.Role != "admin" || !binding.ExpiresAt.After(time.Now().UTC()) {
-		return errSSHKeyRotationSessionInvalid
-	}
-	var user struct {
-		Role         string `gorm:"column:role"`
-		TokenVersion uint   `gorm:"column:token_version"`
-	}
-	result := db.WithContext(ctx).Table("users").Select("role", "token_version").Where("id = ?", binding.UserID).Take(&user)
-	if result.Error != nil {
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return errSSHKeyRotationSessionInvalid
-		}
-		return fmt.Errorf("validate rotation session user: %w", result.Error)
-	}
-	if user.Role != "admin" || user.Role != binding.Role || user.TokenVersion != binding.TokenVersion {
-		return errSSHKeyRotationSessionInvalid
-	}
-	var revocation model.TokenRevocation
-	result = db.WithContext(ctx).Select("id").Where(
-		"token_hash = ? AND expires_at > ?", "jti:"+binding.JTI, time.Now().UTC(),
-	).Limit(1).Find(&revocation)
-	if result.Error != nil {
-		return fmt.Errorf("validate rotation session revocation: %w", result.Error)
-	}
-	if result.RowsAffected != 0 {
-		return errSSHKeyRotationSessionInvalid
-	}
-	return nil
 }
 
 func cloneRotationTime(value *time.Time) *time.Time {
@@ -589,95 +555,9 @@ func sameSSHKeyRotationNodes(snapshot []sshKeyRotationNodeSnapshot, current []mo
 	return true
 }
 
-func isSSHKeyRotationLockError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var postgresErr *pgconn.PgError
-	if errors.As(err, &postgresErr) {
-		return postgresErr.Code == "55P03" || postgresErr.Code == "40P01"
-	}
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) {
-		return sqliteErr.Code == sqlite3.ErrBusy || sqliteErr.Code == sqlite3.ErrLocked
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked")
-}
-
-func isSSHKeyRotationLockErrorForTx(tx *gorm.DB, err error) bool {
-	if isSSHKeyRotationLockError(err) {
-		return true
-	}
-	return tx != nil && tx.Name() == "sqlite" &&
-		(errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled))
-}
-
 func lockSSHKeyRotationInventory(tx *gorm.DB) error {
-	switch tx.Name() {
-	case "postgres":
-		if err := tx.Exec("SET LOCAL lock_timeout = '1500ms'").Error; err != nil {
-			return err
-		}
-		if err := tx.Exec("LOCK TABLE nodes IN SHARE ROW EXCLUSIVE MODE").Error; err != nil {
-			if isSSHKeyRotationLockErrorForTx(tx, err) {
-				return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, err)
-			}
-			return err
-		}
-	case "sqlite":
-		if err := tx.Exec("UPDATE nodes SET id = id WHERE 1 = 0").Error; err != nil {
-			if isSSHKeyRotationLockErrorForTx(tx, err) {
-				return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, err)
-			}
-			return err
-		}
-	}
-	return nil
-}
-
-func lockAndValidateSSHKeyRotationSession(ctx context.Context, tx *gorm.DB, binding middleware.SessionBinding) error {
-	if binding.UserID == 0 || strings.TrimSpace(binding.JTI) == "" || binding.Role != "admin" || !binding.ExpiresAt.After(time.Now().UTC()) {
-		return errSSHKeyRotationSessionInvalid
-	}
-	var user struct {
-		Role         string `gorm:"column:role"`
-		TokenVersion uint   `gorm:"column:token_version"`
-	}
-	result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "SHARE"}).Table("users").
-		Select("role", "token_version").Where("id = ?", binding.UserID).Take(&user)
-	if result.Error != nil {
-		if isSSHKeyRotationLockErrorForTx(tx, result.Error) {
-			return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, result.Error)
-		}
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return errSSHKeyRotationSessionInvalid
-		}
-		return result.Error
-	}
-	if user.Role != "admin" || user.Role != binding.Role || user.TokenVersion != binding.TokenVersion {
-		return errSSHKeyRotationSessionInvalid
-	}
 	if tx.Name() == "postgres" {
-		if err := tx.Exec("LOCK TABLE token_revocations IN SHARE MODE").Error; err != nil {
-			if isSSHKeyRotationLockErrorForTx(tx, err) {
-				return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, err)
-			}
-			return err
-		}
-	}
-	var revocation model.TokenRevocation
-	result = tx.WithContext(ctx).Select("id").Where(
-		"token_hash = ? AND expires_at > ?", "jti:"+binding.JTI, time.Now().UTC(),
-	).Limit(1).Find(&revocation)
-	if result.Error != nil {
-		if isSSHKeyRotationLockErrorForTx(tx, result.Error) {
-			return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, result.Error)
-		}
-		return result.Error
-	}
-	if result.RowsAffected != 0 {
-		return errSSHKeyRotationSessionInvalid
+		return tx.Exec("LOCK TABLE nodes IN SHARE ROW EXCLUSIVE MODE").Error
 	}
 	return nil
 }
@@ -699,7 +579,7 @@ func commitSSHKeyRotationTx(
 	binding middleware.SessionBinding,
 	snapshot sshKeyRotationSnapshot,
 	candidate model.SSHKey,
-	encryptedPrivateKey string,
+	authorization sshKeyReplacementAuthorization,
 ) error {
 	if err := lockSSHKeyRotationInventory(tx); err != nil {
 		return err
@@ -707,8 +587,8 @@ func commitSSHKeyRotationTx(
 	var currentKey model.SSHKey
 	keyResult := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", snapshot.Key.ID).First(&currentKey)
 	if keyResult.Error != nil {
-		if isSSHKeyRotationLockErrorForTx(tx, keyResult.Error) {
-			return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, keyResult.Error)
+		if isSSHKeyMutationLockErrorForTx(tx, keyResult.Error) {
+			return fmt.Errorf("%w: %v", errSSHKeyMutationBusy, keyResult.Error)
 		}
 		if errors.Is(keyResult.Error, gorm.ErrRecordNotFound) {
 			return errSSHKeyRotationConflict
@@ -717,15 +597,15 @@ func commitSSHKeyRotationTx(
 	}
 	currentNodes, err := loadSSHKeyRotationNodesForCommit(ctx, tx, snapshot.Key.ID)
 	if err != nil {
-		if isSSHKeyRotationLockErrorForTx(tx, err) {
-			return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, err)
+		if isSSHKeyMutationLockErrorForTx(tx, err) {
+			return fmt.Errorf("%w: %v", errSSHKeyMutationBusy, err)
 		}
 		return err
 	}
 	if !sameSSHKeyRotationKey(snapshot.Key, currentKey) || !sameSSHKeyRotationNodes(snapshot.Nodes, currentNodes) {
 		return errSSHKeyRotationConflict
 	}
-	if err := lockAndValidateSSHKeyRotationSession(ctx, tx, binding); err != nil {
+	if err := lockAndValidateSSHKeyMutationSession(ctx, tx, authorization.Manager, binding); err != nil {
 		return err
 	}
 	if err := sshutil.ValidateSSHKeyPurpose(candidate, sshutil.PurposeSSHKeyTest); err != nil {
@@ -740,22 +620,32 @@ func commitSSHKeyRotationTx(
 		return errSSHKeyRotationConflict
 	}
 	if !binding.ExpiresAt.After(time.Now().UTC()) {
-		return errSSHKeyRotationSessionInvalid
+		return errSSHKeyMutationSessionInvalid
 	}
 	updates := map[string]any{
-		"name":        candidate.Name,
-		"key_type":    candidate.KeyType,
-		"private_key": encryptedPrivateKey,
-		"fingerprint": candidate.Fingerprint,
-		"updated_at":  time.Now().UTC(),
+		"name":       candidate.Name,
+		"key_type":   candidate.KeyType,
+		"updated_at": time.Now().UTC(),
+	}
+	if !sshutil.SamePrivateKeyMaterial(currentKey.PrivateKey, candidate.PrivateKey) {
+		encryptedPrivateKey, err := secure.EncryptIfNeeded(candidate.PrivateKey)
+		if err != nil {
+			return err
+		}
+		updates["private_key"] = encryptedPrivateKey
+		updates["fingerprint"] = candidate.Fingerprint
+		// Admission is not authority to save after SSH or lock waits.
+		if _, err := validateStepUpProof(tx, authorization.Manager, authorization.Proof, binding.UserID, binding.Role, auth.StepUpActionSSHKeyReplace, binding.JTI); err != nil {
+			return err
+		}
 	}
 	updateResult := tx.Model(&model.SSHKey{}).Where("id = ?", snapshot.Key.ID).Updates(updates)
 	if updateResult.Error != nil {
 		if isSSHKeyDuplicateError(updateResult.Error) {
 			return fmt.Errorf("%w: duplicate key name", errSSHKeyRotationConflict)
 		}
-		if isSSHKeyRotationLockErrorForTx(tx, updateResult.Error) {
-			return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, updateResult.Error)
+		if isSSHKeyMutationLockErrorForTx(tx, updateResult.Error) {
+			return fmt.Errorf("%w: %v", errSSHKeyMutationBusy, updateResult.Error)
 		}
 		return updateResult.Error
 	}
@@ -768,96 +658,13 @@ func commitSSHKeyRotationTx(
 	return nil
 }
 
-// commitSSHKeyRotationSQLiteOneShot intentionally performs no retry. BEGIN
-// errors and callback errors followed by a successful rollback are known not
-// to have committed and may be classified as busy. A Commit error is
-// deliberately returned unchanged because its outcome is ambiguous.
-func commitSSHKeyRotationSQLiteOneShot(
-	ctx context.Context,
-	db *gorm.DB,
-	binding middleware.SessionBinding,
-	snapshot sshKeyRotationSnapshot,
-	candidate model.SSHKey,
-	encryptedPrivateKey string,
-) error {
-	tx := db.WithContext(ctx).Begin()
-	if tx.Error != nil {
-		if isSSHKeyRotationLockError(tx.Error) || errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
-			return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, tx.Error)
-		}
-		return tx.Error
-	}
-	bodyErr := commitSSHKeyRotationTx(ctx, tx, binding, snapshot, candidate, encryptedPrivateKey)
-	if bodyErr != nil {
-		rollbackErr := tx.Rollback().Error
-		if rollbackErr != nil {
-			return fmt.Errorf("SQLite rotation rollback failed after body error: %v; rollback: %v", bodyErr, rollbackErr)
-		}
-		if isSSHKeyRotationLockErrorForTx(tx, bodyErr) {
-			return fmt.Errorf("%w: %v", errSSHKeyRotationBusy, bodyErr)
-		}
-		return bodyErr
-	}
-	// Never classify Commit as busy: SQLite may have committed before the
-	// driver reported an error.
-	return tx.Commit().Error
-}
-
-func discardSSHKeyRotationSQLiteConnection(conn *sql.Conn) {
-	if conn == nil {
-		return
-	}
-	_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-}
-
-// commitSSHKeyRotationSQLite pins one SQL connection, disables only that
-// connection's busy wait for the one-shot transaction, and restores the
-// production PRAGMA before the connection returns to the pool.
-func commitSSHKeyRotationSQLite(
-	ctx context.Context,
-	db *gorm.DB,
-	binding middleware.SessionBinding,
-	snapshot sshKeyRotationSnapshot,
-	candidate model.SSHKey,
-	encryptedPrivateKey string,
-) (resultErr error) {
-	return db.WithContext(ctx).Connection(func(connDB *gorm.DB) (resultErr error) {
-		conn, ok := connDB.Statement.ConnPool.(*sql.Conn)
-		if !ok || conn == nil {
-			return errors.New("sqlite rotation did not receive a pinned SQL connection")
-		}
-		var originalBusyTimeout int64
-		if err := connDB.WithContext(ctx).Raw("PRAGMA busy_timeout").Scan(&originalBusyTimeout).Error; err != nil {
-			return err
-		}
-		defer func() {
-			restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
-			defer cancel()
-			restoreErr := connDB.WithContext(restoreCtx).Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", originalBusyTimeout)).Error
-			if restoreErr == nil {
-				return
-			}
-			discardSSHKeyRotationSQLiteConnection(conn)
-			restoreErr = fmt.Errorf("restore SQLite busy timeout: %w", restoreErr)
-			if resultErr == nil {
-				resultErr = restoreErr
-				return
-			}
-			resultErr = errors.Join(resultErr, restoreErr)
-		}()
-		if err := connDB.WithContext(ctx).Exec("PRAGMA busy_timeout = 0").Error; err != nil {
-			return err
-		}
-		return commitSSHKeyRotationSQLiteOneShot(ctx, connDB, binding, snapshot, candidate, encryptedPrivateKey)
-	})
-}
-
 func commitSSHKeyRotation(
 	ctx context.Context,
 	db *gorm.DB,
 	binding middleware.SessionBinding,
 	snapshot sshKeyRotationSnapshot,
 	candidate model.SSHKey,
+	authorization sshKeyReplacementAuthorization,
 ) error {
 	if db == nil {
 		return errors.New("rotation database unavailable")
@@ -865,15 +672,8 @@ func commitSSHKeyRotation(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	encryptedPrivateKey, err := secure.EncryptIfNeeded(candidate.PrivateKey)
-	if err != nil {
-		return fmt.Errorf("encrypt rotated SSH key: %w", err)
-	}
-	if db.Name() == "sqlite" {
-		return commitSSHKeyRotationSQLite(ctx, db, binding, snapshot, candidate, encryptedPrivateKey)
-	}
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return commitSSHKeyRotationTx(ctx, tx, binding, snapshot, candidate, encryptedPrivateKey)
+	return withSSHKeyMutationTx(ctx, db, func(tx *gorm.DB) error {
+		return commitSSHKeyRotationTx(ctx, tx, binding, snapshot, candidate, authorization)
 	})
 }
 
@@ -973,8 +773,8 @@ func (h *SSHKeyHandler) Rotate(c *gin.Context) {
 
 	auditState := sshKeyRotationAuditState{}
 	defer func() { h.writeSSHKeyRotationAudit(c, id, auditState) }()
-	if err := validateSSHKeyRotationSession(totalCtx, h.db, binding); err != nil {
-		if errors.Is(err, errSSHKeyRotationSessionInvalid) {
+	if err := validateSSHKeyMutationSession(totalCtx, h.db, h.jwtManager, binding); err != nil {
+		if errors.Is(err, errSSHKeyMutationSessionInvalid) {
 			respondUnauthorized(c, "会话无效")
 			return
 		}
@@ -1034,6 +834,44 @@ func (h *SSHKeyHandler) Rotate(c *gin.Context) {
 		auditState.reason = sshKeyRotationReasonValidationFailed
 		respondBadRequest(c, "候选密钥无效")
 		return
+	}
+
+	authorization := sshKeyReplacementAuthorization{Manager: h.jwtManager, Proof: strings.TrimSpace(c.GetHeader(StepUpHeaderName))}
+	replacement := !sshutil.SamePrivateKeyMaterial(currentKey.PrivateKey, candidate.PrivateKey)
+	var proofClaims *auth.Claims
+	var proofErr error
+	if replacement {
+		// One proof audit per request, after any mutation/cleanup has finished.
+		defer func() {
+			auditCtx, cancelAudit := context.WithTimeout(context.Background(), time.Second)
+			defer cancelAudit()
+			outcome, state := credentialaudit.OutcomeSuccess, "satisfied"
+			if proofErr != nil {
+				outcome, state = credentialaudit.OutcomeFailure, "failed"
+				if errors.Is(proofErr, ErrStepUpProofInvalid) {
+					outcome = credentialaudit.OutcomeBlocked
+					if authorization.Proof == "" {
+						state = "required"
+					}
+				}
+			}
+			writeStepUpCredentialAudit(c, h.db.WithContext(auditCtx), proofClaims, stepUpAuditOperation{
+				ExpectedAction: auth.StepUpActionSSHKeyReplace,
+				Action:         string(auth.StepUpActionSSHKeyReplace),
+				Purpose:        string(auth.StepUpActionSSHKeyReplace),
+				Operation:      "ssh_key_rotate",
+			}, outcome, state)
+		}()
+		proofClaims, proofErr = validateStepUpProof(h.db.WithContext(totalCtx), h.jwtManager, authorization.Proof, binding.UserID, binding.Role, auth.StepUpActionSSHKeyReplace, binding.JTI)
+		if proofErr != nil {
+			auditState.reason = "request_rejected"
+			if errors.Is(proofErr, ErrStepUpProofInvalid) {
+				respondStepUpRequired(c, auth.StepUpActionSSHKeyReplace)
+			} else {
+				respondInternalError(c, errSSHKeyRotationInternal)
+			}
+			return
+		}
 	}
 
 	nodes, err := loadSSHKeyRotationNodes(h.db, totalCtx, id, sshKeyRotationMaxNodes+1)
@@ -1160,11 +998,21 @@ func (h *SSHKeyHandler) Rotate(c *gin.Context) {
 	}
 
 	commitCtx, cancelCommit := context.WithTimeout(totalCtx, 2*time.Second)
-	commitErr := commitSSHKeyRotation(commitCtx, h.db, binding, snapshot, candidate)
+	commitErr := commitSSHKeyRotation(commitCtx, h.db, binding, snapshot, candidate, authorization)
 	cancelCommit()
 	if commitErr != nil {
 		switch {
-		case errors.Is(commitErr, errSSHKeyRotationSessionInvalid):
+		case errors.Is(commitErr, ErrStepUpProofInvalid):
+			proofClaims, proofErr = nil, commitErr
+			auditState.reason = "request_rejected"
+			respondStepUpRequired(c, auth.StepUpActionSSHKeyReplace)
+			return
+		case errors.Is(commitErr, ErrStepUpVerifierUnavailable), errors.Is(commitErr, errSSHKeyMutationUncertain):
+			proofErr = commitErr
+			auditState.reason = "request_rejected"
+			respondInternalError(c, errSSHKeyRotationInternal)
+			return
+		case errors.Is(commitErr, errSSHKeyMutationSessionInvalid):
 			auditState.reason = "request_rejected"
 			respondUnauthorized(c, "会话无效")
 			return
@@ -1172,7 +1020,7 @@ func (h *SSHKeyHandler) Rotate(c *gin.Context) {
 			auditState.reason = sshKeyRotationReasonScopeBlocked
 		case errors.Is(commitErr, errSSHKeyRotationConflict):
 			auditState.reason = sshKeyRotationReasonConflict
-		case errors.Is(commitErr, errSSHKeyRotationBusy):
+		case errors.Is(commitErr, errSSHKeyMutationBusy):
 			auditState.reason = sshKeyRotationReasonBusy
 		default:
 			respondInternalError(c, errSSHKeyRotationInternal)

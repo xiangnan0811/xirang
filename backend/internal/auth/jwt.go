@@ -161,7 +161,8 @@ func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction, s
 	if len(sessionIDs) == 1 {
 		sessionID = sessionIDs[0]
 	}
-	if action == StepUpActionAssetSecretReveal && !lowerHexID(sessionID) || sessionID != "" && !lowerHexID(sessionID) {
+	requiresSession := action == StepUpActionAssetSecretReveal || action == StepUpActionSSHKeyReplace
+	if (requiresSession || sessionID != "") && !lowerHexID(sessionID) {
 		return "", time.Time{}, fmt.Errorf("step-up session binding 无效")
 	}
 	// NumericDate is serialized at whole-second precision. Return the same exact
@@ -352,6 +353,16 @@ func (m *JWTManager) IsSessionRevokedContext(ctx context.Context, jti string) (b
 		return true, fmt.Errorf("session revocation manager unavailable")
 	}
 	return m.isSessionRevokedContext(ctx, jti, m.db)
+}
+
+// IsSessionRevokedWithDB checks durable revocations through the supplied database
+// session, including an existing transaction, while retaining cached revocations.
+// A prior non-revoked lookup never replaces a new durable read.
+func (m *JWTManager) IsSessionRevokedWithDB(ctx context.Context, db *gorm.DB, jti string) (bool, error) {
+	if db == nil {
+		return true, fmt.Errorf("session revocation store unavailable")
+	}
+	return m.isSessionRevokedContext(ctx, jti, db)
 }
 
 // isSessionRevokedContext keeps the manager's cache semantics while allowing

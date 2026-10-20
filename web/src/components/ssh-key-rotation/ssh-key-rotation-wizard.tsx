@@ -13,13 +13,16 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast-sonner";
 import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
+import { createSSHKeysApi } from "@/lib/api/ssh-keys-api";
 import {
-  createSSHKeysApi,
   rotateSSHKey,
   SSHKeyRotationDecodeError,
   type SSHKeyRotationReason,
-} from "@/lib/api/ssh-keys-api";
-import { ApiError, getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
+} from "@/lib/api/ssh-key-rotation-api";
+import { ApiError, getAuthSessionGeneration, isAuthTransitionActive, isStepUpRequiredError } from "@/lib/api/core";
+import { runSSHKeyReplacement, SSHKeyReplacementProofError, type SSHKeyReplacementOptions } from "@/lib/ssh-key-replacement";
+import { STEP_UP_ACTIONS } from "@/lib/step-up-storage";
+import { StepUpPrerequisiteError } from "@/lib/step-up-prerequisite";
 import { getErrorMessage } from "@/lib/utils";
 import { type NodeRecord, type SSHKeyPreview, type SSHKeyRecord, type SSHKeyType } from "@/types/domain";
 import { RotationPreview, RotationUpload } from "./rotation-preview";
@@ -134,7 +137,7 @@ function SSHKeyRotationSession({
   onCloseAutoFocus,
 }: SSHKeyRotationWizardProps) {
   const { t } = useTranslation();
-  const { role, authTransitioning = false } = useAuth();
+  const { role, authTransitioning = false, ensureStepUpProof } = useAuth();
   const authGeneration = getAuthSessionGeneration();
   const { generationRef, isCurrent } = useCommittedDialogScope(
     role,
@@ -160,6 +163,7 @@ function SSHKeyRotationSession({
   const [results, setResults] = useState<NodeVerifyResult[]>([]);
   const [savedPublicFingerprint, setSavedPublicFingerprint] = useState("");
   const [rotationError, setRotationError] = useState<string | null>(null);
+  const [stepUpPrerequisite, setStepUpPrerequisite] = useState(false);
   const [rotationAcknowledgement, setRotationAcknowledgement] = useState("");
 
   const draftGenerationRef = useRef(0);
@@ -279,6 +283,7 @@ function SSHKeyRotationSession({
     setSaveStatus("validating");
     setRotationReason(null);
     setRotationError(null);
+    setStepUpPrerequisite(false);
     setResults([]);
     setSavedPublicFingerprint("");
     setStep(4);
@@ -287,12 +292,38 @@ function SSHKeyRotationSession({
       && !controller.signal.aborted
       && draftGenerationRef.current === draftGeneration
       && rotationAbortRef.current === controller;
+
+    const replacementOptions: SSHKeyReplacementOptions = {
+      signal: controller.signal,
+      isCurrent: still,
+      requestProof: async () => {
+        if (!still()) {
+          throw new DOMException("SSH key replacement no longer belongs to its owner", "AbortError");
+        }
+        setSaveStatus("waiting_step_up");
+        try {
+          return await ensureStepUpProof(STEP_UP_ACTIONS.sshKeyReplace, {
+            persist: false,
+            reuseCached: false,
+            signal: controller.signal,
+          });
+        } finally {
+          if (still()) {
+            setSaveStatus("validating");
+          }
+        }
+      },
+    };
+
     try {
-      const outcome = await rotateSSHKey(token, keyId, {
-        privateKey,
-        keyType,
-        name: keyName,
-      }, { signal: controller.signal });
+      const outcome = await runSSHKeyReplacement(
+        (proof) => rotateSSHKey(token, keyId, {
+          privateKey,
+          keyType,
+          name: keyName,
+        }, { stepUpProof: proof, signal: controller.signal }),
+        replacementOptions,
+      );
       if (!still()) return;
       if (outcome.status === "saved") {
         setSaveStatus("saved");
@@ -311,6 +342,35 @@ function SSHKeyRotationSession({
       setSavedPublicFingerprint("");
     } catch (error) {
       if (!still() || isAbortError(error)) return;
+      if (error instanceof SSHKeyReplacementProofError) {
+        const cause = error.cause;
+        const isCancelled = cause instanceof Error && cause.message === t("stepUp.cancelled");
+        const isPrereq =
+          cause instanceof StepUpPrerequisiteError ||
+          (cause instanceof Error && (cause as { code?: string }).code === "TOTP_REQUIRED");
+
+        setSaveStatus("did_not_continue");
+        setRotationReason(null);
+        setResults([]);
+        setSavedPublicFingerprint("");
+        if (isCancelled) {
+          setRotationError(t("stepUp.cancelled"));
+        } else if (isPrereq) {
+          setStepUpPrerequisite(true);
+          setRotationError(t("stepUp.totpRequired"));
+        } else {
+          setRotationError(t("sshKeys.stepUpIncomplete"));
+        }
+        return;
+      }
+      if (isStepUpRequiredError(error) && error.httpStatus === 403) {
+        setSaveStatus("failed");
+        setRotationReason(null);
+        setResults([]);
+        setSavedPublicFingerprint("");
+        setRotationError(t("sshKeys.stepUpExpired"));
+        return;
+      }
       if (isUncertainRotation(error)) {
         clearDraft();
         setSaveStatus("unknown");
@@ -333,6 +393,7 @@ function SSHKeyRotationSession({
   }, [
     checkedCandidate,
     clearDraft,
+    ensureStepUpProof,
     generationRef,
     isCurrent,
     newKeyName,
@@ -389,10 +450,11 @@ function SSHKeyRotationSession({
   };
 
   const handleEditAgain = () => {
-    if (saveStatus !== "failed" && saveStatus !== "not_saved") return;
+    if (saveStatus !== "failed" && saveStatus !== "not_saved" && saveStatus !== "did_not_continue") return;
     setSaveStatus("not_submitted");
     setRotationReason(null);
     setRotationError(null);
+    setStepUpPrerequisite(false);
     setResults([]);
     setSavedPublicFingerprint("");
     invalidateDraft();
@@ -488,6 +550,7 @@ function SSHKeyRotationSession({
           rotationError={rotationError}
           results={results}
           newPublicKeyFingerprint={savedPublicFingerprint}
+          stepUpPrerequisite={stepUpPrerequisite}
           onEditAgain={handleEditAgain}
           onDone={handleDone}
         />
@@ -501,7 +564,7 @@ function SSHKeyRotationSession({
       open={open}
       onOpenChange={(nextOpen) => {
         if (nextOpen) return;
-        if (saveStatus === "validating") {
+        if (saveStatus === "validating" || saveStatus === "waiting_step_up") {
           // Drop the draft and ignore a late result. Closing does not claim a finished server commit was rolled back.
           rotationAbortRef.current?.abort();
           clearDraft();

@@ -99,10 +99,12 @@ func assertSSHKeyRotationSQLiteBusinessError(t *testing.T, err error) {
 		t.Fatal("rotation helper unexpectedly succeeded")
 	}
 	for _, businessErr := range []error{
-		errSSHKeyRotationBusy,
+		errSSHKeyMutationBusy,
 		errSSHKeyRotationConflict,
 		errSSHKeyRotationScopeBlocked,
-		errSSHKeyRotationSessionInvalid,
+		errSSHKeyMutationSessionInvalid,
+		ErrStepUpProofInvalid,
+		ErrStepUpVerifierUnavailable,
 	} {
 		if errors.Is(err, businessErr) {
 			t.Fatalf("rotation helper classified cleanup failure as %v: %v", businessErr, err)
@@ -177,21 +179,19 @@ func TestSSHKeyRotationSQLiteCleanupCancellationAfterUpdate(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- commitSSHKeyRotation(ctx, db, session.Binding, snapshot, candidate)
+		resultCh <- commitSSHKeyRotation(ctx, db, session.Binding, snapshot, candidate, sshKeyReplacementAuthorization{Manager: newSSHKeyMutationTestManager(db), Proof: session.Proof})
 	}()
 	waitSSHKeyRotationSQLiteGate(t, updateReached, "real update")
-	waitSSHKeyRotationSQLiteGate(t, rollbackReached, "driver rollback")
-
-	// The async database/sql rollback has claimed the transaction while its
-	// driver hook is gated. Let the scoped callback return so the helper's
-	// explicit Rollback sees sql.ErrTxDone, then release the driver hook.
 	callbackRelease.release()
 	waitSSHKeyRotationSQLiteGate(t, callbackReturned, "after-update callback")
+	waitSSHKeyRotationSQLiteGate(t, rollbackReached, "independent driver rollback")
 	rollbackRelease.release()
 	commitErr := <-resultCh
-	assertSSHKeyRotationSQLiteBusinessError(t, commitErr)
+	if !errors.Is(commitErr, errSSHKeyMutationBusy) {
+		t.Fatalf("confirmed rollback after cancellation error=%v want busy", commitErr)
+	}
 	if rollbackCalls.Load() != 1 {
-		t.Fatalf("SQLite rollback hook calls=%d want exactly one async rollback", rollbackCalls.Load())
+		t.Fatalf("SQLite rollback hook calls=%d want exactly one owned rollback", rollbackCalls.Load())
 	}
 	assertRotationNotSaved(t, db, key.ID, oldPrivate, key.Name)
 
@@ -220,7 +220,7 @@ func TestSSHKeyRotationSQLiteCleanupSuccessfulRestoration(t *testing.T) {
 		t.Fatalf("production SQLite busy timeout=%d want 5000", originalBusyTimeout)
 	}
 
-	if err := commitSSHKeyRotation(context.Background(), db, session.Binding, snapshot, candidate); err != nil {
+	if err := commitSSHKeyRotation(context.Background(), db, session.Binding, snapshot, candidate, sshKeyReplacementAuthorization{Manager: newSSHKeyMutationTestManager(db), Proof: session.Proof}); err != nil {
 		t.Fatalf("successful SQLite rotation: %v", err)
 	}
 	if got := readRotationKey(t, db, key.ID); got.PrivateKey != candidate.PrivateKey || got.Fingerprint != candidate.Fingerprint {
@@ -286,7 +286,7 @@ func TestSSHKeyRotationSQLiteCleanupRestorationFailureDiscardsConnection(t *test
 		}
 	}()
 
-	commitErr := commitSSHKeyRotation(context.Background(), db, session.Binding, snapshot, candidate)
+	commitErr := commitSSHKeyRotation(context.Background(), db, session.Binding, snapshot, candidate, sshKeyReplacementAuthorization{Manager: newSSHKeyMutationTestManager(db), Proof: session.Proof})
 	assertSSHKeyRotationSQLiteBusinessError(t, commitErr)
 	if !armed.Load() {
 		t.Fatal("restoration-denial callback did not observe the real key update")

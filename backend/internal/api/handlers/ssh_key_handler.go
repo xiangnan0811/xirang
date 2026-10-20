@@ -15,10 +15,12 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
@@ -26,14 +28,16 @@ import (
 	"github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type SSHKeyHandler struct {
-	db *gorm.DB
+	db         *gorm.DB
+	jwtManager *auth.JWTManager
 }
 
-func NewSSHKeyHandler(db *gorm.DB) *SSHKeyHandler {
-	return &SSHKeyHandler{db: db}
+func NewSSHKeyHandler(db *gorm.DB, jwtManager *auth.JWTManager) *SSHKeyHandler {
+	return &SSHKeyHandler{db: db, jwtManager: jwtManager}
 }
 
 // isSSHKeyDuplicateError classifies driver-level unique violations without
@@ -70,6 +74,11 @@ const (
 	sshKeyPreviewInvalidMessage  = "候选密钥无效"
 	sshKeyPreviewTooLargeMessage = "候选密钥请求超过 1 MiB 限制"
 	sshKeyTestAuthFailureMessage = "SSH 认证配置无效，请检查 SSH Key 与节点配置"
+)
+
+var (
+	errSSHKeyUpdateInvalidInput = errors.New("invalid SSH key update")
+	errSSHKeyUpdateInternal     = errors.New(sshKeyPersistenceMessage)
 )
 
 type sshKeyScopeRequest struct {
@@ -467,81 +476,165 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 // @Failure      404  {object}  handlers.Response
 // @Router       /ssh-keys/{id} [put]
 func (h *SSHKeyHandler) Update(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
-
 	var req sshKeyUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-
-	var item model.SSHKey
-	if err := h.db.First(&item, id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			respondNotFound(c, "ssh key 不存在")
-			return
-		}
-		logSSHKeyPersistenceError("load", strconv.FormatUint(uint64(id), 10), err)
-		respondInternalError(c, err)
+	binding, bindingOK := middleware.CurrentSessionBinding(c)
+	if !bindingOK || binding.UserID == 0 || !validStepUpProofID(binding.JTI) || !binding.ExpiresAt.After(time.Now().UTC()) ||
+		binding.UserID != middleware.CurrentUserID(c) || binding.Role != middleware.CurrentRole(c) {
+		respondUnauthorized(c, "会话无效")
+		return
+	}
+	if binding.Role != "admin" {
+		respondForbidden(c, "权限不足")
 		return
 	}
 
-	normalizedName := strings.TrimSpace(req.Name)
-	normalizedUsername := strings.TrimSpace(req.Username)
-	normalizedType := sshutil.NormalizeKeyType(req.KeyType)
-	if normalizedType == sshutil.SSHKeyTypeAuto {
-		normalizedType = sshutil.NormalizeKeyType(item.KeyType)
-	}
-
-	item.Name = normalizedName
-	item.Username = normalizedUsername
-
-	if req.PrivateKey != "" {
-		_, _, storedType, preparedKey, err := normalizeSSHKeyInput(
-			normalizedName,
-			normalizedUsername,
-			normalizedType,
-			req.PrivateKey,
-		)
-		if err != nil {
-			respondBadRequest(c, err.Error())
-			return
+	ctx, cancel := context.WithTimeout(rotationRequestContext(c), 2*time.Second)
+	defer cancel()
+	var result model.SSHKey
+	var proofClaims *auth.Claims
+	var proofErr error
+	replacement := false
+	proof := strings.TrimSpace(c.GetHeader(StepUpHeaderName))
+	err := withSSHKeyMutationTx(ctx, h.db, func(tx *gorm.DB) error {
+		var item model.SSHKey
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&item, id).Error; err != nil {
+			return err
 		}
-		item.KeyType = storedType
-		item.PrivateKey = preparedKey
-		item.Fingerprint = generateFingerprint(preparedKey)
-	} else {
-		if item.KeyType == "" {
+		item.Name = strings.TrimSpace(req.Name)
+		item.Username = strings.TrimSpace(req.Username)
+		if item.Name == "" || item.Username == "" {
+			return errSSHKeyUpdateInvalidInput
+		}
+		selectedType := sshutil.NormalizeKeyType(req.KeyType)
+		if req.PrivateKey != "" {
+			if selectedType == sshutil.SSHKeyTypeAuto {
+				selectedType = sshutil.NormalizeKeyType(item.KeyType)
+			}
+			prepared, detectedType, err := sshutil.ValidateAndPreparePrivateKey(req.PrivateKey, selectedType)
+			if err != nil {
+				return errSSHKeyUpdateInvalidInput
+			}
+			replacement = !sshutil.SamePrivateKeyMaterial(item.PrivateKey, prepared)
+			item.KeyType = detectedType
+			if replacement {
+				item.PrivateKey = prepared
+				item.Fingerprint = generateFingerprint(prepared)
+			}
+		} else if selectedType != sshutil.SSHKeyTypeAuto && selectedType != sshutil.NormalizeKeyType(item.KeyType) {
+			// An explicit type change must agree with the current material,
+			// but ordinary metadata edits must not parse or recode old secrets.
+			_, detectedType, err := sshutil.ValidateAndPreparePrivateKey(item.PrivateKey, selectedType)
+			if err != nil {
+				return errSSHKeyUpdateInvalidInput
+			}
+			item.KeyType = detectedType
+		} else if item.KeyType == "" {
 			item.KeyType = sshutil.SSHKeyTypeAuto
 		}
-		if normalizedType != sshutil.SSHKeyTypeAuto {
-			preparedKey, storedType, err := sshutil.ValidateAndPreparePrivateKey(item.PrivateKey, normalizedType)
+		if err := applySSHKeyScopePatch(&item, req.sshKeyScopePatchRequest); err != nil {
+			return errSSHKeyUpdateInvalidInput
+		}
+		if err := lockAndValidateSSHKeyMutationSession(ctx, tx, h.jwtManager, binding); err != nil {
+			return err
+		}
+
+		updates := map[string]any{
+			"name":       item.Name,
+			"username":   item.Username,
+			"key_type":   item.KeyType,
+			"updated_at": time.Now().UTC(),
+		}
+		if req.Disabled != nil {
+			updates["disabled"] = item.Disabled
+		}
+		if req.ExpiresAtSet {
+			updates["expires_at"] = item.ExpiresAt
+		}
+		if req.AllowedPurposes != nil {
+			updates["allowed_purposes"] = item.AllowedPurposes
+		}
+		if req.AllowedNodeIDs != nil {
+			updates["allowed_node_ids"] = item.AllowedNodeIDs
+		}
+		if req.AllowedNodeTags != nil {
+			updates["allowed_node_tags"] = item.AllowedNodeTags
+		}
+		if replacement {
+			encrypted, err := secure.EncryptIfNeeded(item.PrivateKey)
 			if err != nil {
-				respondBadRequest(c, err.Error())
-				return
+				return err
 			}
-			item.KeyType = storedType
-			item.PrivateKey = preparedKey
-			item.Fingerprint = generateFingerprint(preparedKey)
+			updates["private_key"] = encrypted
+			updates["fingerprint"] = item.Fingerprint
+			// Reparse only after all lock waits and immediately before the
+			// one write; admission-time validity cannot authorize a late save.
+			proofClaims, proofErr = validateStepUpProof(tx, h.jwtManager, proof, binding.UserID, binding.Role, auth.StepUpActionSSHKeyReplace, binding.JTI)
+			if proofErr != nil {
+				return proofErr
+			}
 		}
-	}
-	if err := applySSHKeyScopePatch(&item, req.sshKeyScopePatchRequest); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	if err := h.db.Save(&item).Error; err != nil {
-		if isSSHKeyDuplicateError(err) {
-			respondConflict(c, sshKeyDuplicateMessage)
-			return
+		updateResult := tx.Model(&model.SSHKey{}).Where("id = ?", id).Updates(updates)
+		if updateResult.Error != nil {
+			return updateResult.Error
 		}
-		logSSHKeyPersistenceError("update", normalizedName, err)
-		respondInternalError(c, err)
-		return
+		if updateResult.RowsAffected != 1 {
+			return errSSHKeyUpdateInternal
+		}
+		item.UpdatedAt = updates["updated_at"].(time.Time)
+		result = item
+		return nil
+	})
+	if replacement {
+		// Auditing is outside the mutation and uses its own bounded context:
+		// neither cancellation nor rollback should hide the proof decision.
+		auditCtx, cancelAudit := context.WithTimeout(context.Background(), time.Second)
+		outcome, state := credentialaudit.OutcomeFailure, "failed"
+		if err == nil {
+			outcome, state = credentialaudit.OutcomeSuccess, "satisfied"
+		} else if errors.Is(proofErr, ErrStepUpProofInvalid) {
+			outcome = credentialaudit.OutcomeBlocked
+			if proof == "" {
+				state = "required"
+			}
+		} else if proofClaims != nil {
+			state = "satisfied"
+		}
+		writeStepUpCredentialAudit(c, h.db.WithContext(auditCtx), proofClaims, stepUpAuditOperation{
+			ExpectedAction: auth.StepUpActionSSHKeyReplace,
+			Action:         string(auth.StepUpActionSSHKeyReplace),
+			Purpose:        string(auth.StepUpActionSSHKeyReplace),
+			Operation:      "ssh_key_update",
+		}, outcome, state)
+		cancelAudit()
 	}
-	respondOK(c, toSSHKeyResponse(item))
+	switch {
+	case err == nil:
+		respondOK(c, toSSHKeyResponse(result))
+	case errors.Is(err, ErrStepUpProofInvalid):
+		respondStepUpRequired(c, auth.StepUpActionSSHKeyReplace)
+	case errors.Is(err, errSSHKeyMutationSessionInvalid):
+		respondUnauthorized(c, "会话无效")
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		respondNotFound(c, "ssh key 不存在")
+	case errors.Is(err, errSSHKeyUpdateInvalidInput):
+		respondBadRequest(c, "请求参数或候选密钥无效")
+	case isSSHKeyDuplicateError(err):
+		respondConflict(c, sshKeyDuplicateMessage)
+	case errors.Is(err, errSSHKeyMutationBusy):
+		respondConflict(c, "密钥正在更新，请稍后重试")
+	default:
+		logSSHKeyPersistenceError("update", strconv.FormatUint(uint64(id), 10), err)
+		respondInternalError(c, errSSHKeyUpdateInternal)
+	}
 }
 
 // Delete godoc

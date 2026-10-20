@@ -17,6 +17,8 @@ import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { getErrorMessage } from "@/lib/utils";
 import type { NewSSHKeyInput, NodeRecord, SSHKeyRecord } from "@/types/domain";
+import type { SSHKeyReplacementOptions } from "@/lib/ssh-key-replacement";
+import { getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,7 +52,8 @@ export function useSSHKeysPageState() {
     deleteSSHKey,
     refreshSSHKeys,
   } = useSSHKeysContext();
-  const { role, token } = useAuth();
+  const { role, token, authTransitioning = false } = useAuth();
+  const authGeneration = getAuthSessionGeneration();
   const demoRole: AuthRole | null = !token && import.meta.env.VITE_ENABLE_DEMO_MODE === "true" ? "viewer" : null;
   const effectiveRole = role ?? demoRole;
   const canManageSSHKeys = effectiveRole === "admin";
@@ -68,15 +71,17 @@ export function useSSHKeysPageState() {
       sessionGenerationRef.current += 1;
       cancelPending();
     };
-  }, [cancelPending, effectiveRole, token]);
+  }, [cancelPending, effectiveRole, token, authGeneration, authTransitioning]);
 
   const captureSessionGeneration = useCallback(() => sessionGenerationRef.current, []);
   const isCurrentSession = useCallback(
     (generation: number) =>
       mountedRef.current &&
       sessionGenerationRef.current === generation &&
-      authIdentityRef.current.role === "admin",
-    [],
+      authIdentityRef.current.role === "admin" &&
+      !isAuthTransitionActive() &&
+      getAuthSessionGeneration() === authGeneration,
+    [authGeneration],
   );
 
   // 首次挂载时刷新数据
@@ -278,10 +283,25 @@ export function useSSHKeysPageState() {
   const [batchImportOpen, setBatchImportOpenState] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
-  const [previousAuth, setPreviousAuth] = useState({ role: effectiveRole, token });
-  if (previousAuth.role !== effectiveRole || previousAuth.token !== token) {
-    setPreviousAuth({ role: effectiveRole, token });
-    if (effectiveRole !== "admin" || previousAuth.token !== token) {
+  const [previousAuth, setPreviousAuth] = useState({
+    role: effectiveRole,
+    token,
+    authGeneration,
+    authTransitioning,
+  });
+  if (
+    previousAuth.role !== effectiveRole ||
+    previousAuth.token !== token ||
+    previousAuth.authGeneration !== authGeneration ||
+    previousAuth.authTransitioning !== authTransitioning
+  ) {
+    setPreviousAuth({ role: effectiveRole, token, authGeneration, authTransitioning });
+    if (
+      effectiveRole !== "admin" ||
+      previousAuth.token !== token ||
+      authTransitioning ||
+      previousAuth.authGeneration !== authGeneration
+    ) {
       setEditorOpen(false);
       setEditingKey(null);
       setTestConnectionKeyState(null);
@@ -333,23 +353,22 @@ export function useSSHKeysPageState() {
   }, [canManageSSHKeys]);
 
   const handleSave = useCallback(
-    async (draft: NewSSHKeyInput, keyId?: string) => {
+    async (
+      draft: NewSSHKeyInput,
+      keyId: string | undefined,
+      options: SSHKeyReplacementOptions,
+    ) => {
       if (!canManageSSHKeys) return;
       const generation = sessionGenerationRef.current;
-      try {
-        if (keyId) {
-          await updateSSHKey(keyId, draft);
-        } else {
-          await createSSHKey(draft);
-        }
-        if (!isCurrentSession(generation)) return;
-        toast.success(t(keyId ? "sshKeys.keyUpdated" : "sshKeys.keyCreated", { name: draft.name }));
-        setEditorOpen(false);
-        setEditingKey(null);
-      } catch (error) {
-        if (!isCurrentSession(generation)) return;
-        toast.error(getErrorMessage(error));
+      if (keyId) {
+        await updateSSHKey(keyId, draft, options);
+      } else {
+        await createSSHKey(draft, options.isCurrent);
       }
+      if (!options.isCurrent() || !isCurrentSession(generation)) return;
+      toast.success(t(keyId ? "sshKeys.keyUpdated" : "sshKeys.keyCreated", { name: draft.name }));
+      setEditorOpen(false);
+      setEditingKey(null);
     },
     [canManageSSHKeys, createSSHKey, isCurrentSession, updateSSHKey, t],
   );

@@ -1,11 +1,20 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, Loader2, XCircle } from "lucide-react";
-import type { SSHKeyRotationErrorCode, SSHKeyRotationReason } from "@/lib/api/ssh-keys-api";
+import type { SSHKeyRotationErrorCode, SSHKeyRotationReason } from "@/lib/api/ssh-key-rotation-api";
 import { Button } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 
-export type RotationSaveStatus = "not_submitted" | "validating" | "saved" | "not_saved" | "unknown" | "failed";
+export type RotationSaveStatus =
+  | "not_submitted"
+  | "waiting_step_up"
+  | "validating"
+  | "saved"
+  | "not_saved"
+  | "unknown"
+  | "failed"
+  | "did_not_continue";
 
 export interface NodeVerifyResult {
   nodeId: string;
@@ -20,6 +29,7 @@ interface RotationSummaryProps {
   rotationError: string | null;
   results: NodeVerifyResult[];
   newPublicKeyFingerprint: string;
+  stepUpPrerequisite?: boolean;
   onEditAgain: () => void;
   onDone: () => void;
 }
@@ -78,15 +88,16 @@ export function RotationSummary({
   rotationError,
   results,
   newPublicKeyFingerprint,
+  stepUpPrerequisite = false,
   onEditAgain,
   onDone,
 }: RotationSummaryProps) {
   const { t } = useTranslation();
-  const busy = saveStatus === "validating";
+  const busy = saveStatus === "validating" || saveStatus === "waiting_step_up";
   const showResults = (saveStatus === "saved" || saveStatus === "not_saved") && results.length > 0;
   const showNeutral = saveStatus === "saved" && results.length === 0;
   const allVerified = showResults && results.every((result) => result.status === "verified");
-  const showEdit = saveStatus === "failed" || saveStatus === "not_saved";
+  const showEdit = saveStatus === "failed" || saveStatus === "not_saved" || saveStatus === "did_not_continue";
   const showInventoryLinks = saveStatus === "not_saved" && reason !== null && LINK_REASONS.has(reason);
   const detail = reasonText(reason, t);
 
@@ -98,6 +109,17 @@ export function RotationSummary({
       data-rotation-status={saveStatus}
       data-rotation-reason={reason ?? ""}
     >
+      {saveStatus === "waiting_step_up" && (
+        <div
+          role="status"
+          id="ssh-key-rotation-status"
+          className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"
+        >
+          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          {t("sshKeys.rotationWaitingStepUp")}
+        </div>
+      )}
+
       {saveStatus === "validating" && (
         <div
           role="status"
@@ -107,6 +129,16 @@ export function RotationSummary({
           <Loader2 className="size-4 animate-spin" aria-hidden="true" />
           {t("sshKeys.rotationValidating")}
         </div>
+      )}
+
+      {saveStatus === "did_not_continue" && (
+        stepUpPrerequisite ? (
+          <StepUpPrerequisiteNotice />
+        ) : (
+          <InlineAlert tone="info">
+            {rotationError ?? t("stepUp.cancelled")}
+          </InlineAlert>
+        )
       )}
 
       {saveStatus === "unknown" && (

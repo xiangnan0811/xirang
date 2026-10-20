@@ -89,6 +89,12 @@ task 包的 `^TestBatchCommandRetry` 测试，覆盖事务竞争、授权、运�
 契约和无数据库后缀的双引擎依赖环用例；不能以普通 backend job 中跳过 PostgreSQL
 分支的结果替代该门禁。该选择器同时保留导出再导入与原有实际导入兼容性验证。
 
+受管 SSH 私钥替换与轮换通过 handlers 的
+`^TestSSHKey(ReplacementPostgres|RotationPostgres)$` required-test runner 门禁，
+覆盖非空真实节点库存、SSH 验证、锁后材料重分类、身份与撤销围栏、proof 到期、
+并发导入冲突及结果未知清理。普通编辑与轮换共用单次事务，不以 SQLite 或缺 DSN
+时的 skip 代替 PostgreSQL 验收；新增 suite 必须实际列出，空选择器失败关闭。
+
 升级策略只读预演在 PostgreSQL job 通过 required-test runner 执行 `./internal/api`
 的 `^TestEscalationPreviewPostgres$`，使用随机隔离 schema 验证两种预演、真实路由权限、
 `REPEATABLE READ READ ONLY`、并发快照、全表零写入和取消清理。缺少 DSN 或空选择器

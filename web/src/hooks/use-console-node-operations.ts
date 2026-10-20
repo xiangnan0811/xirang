@@ -4,6 +4,7 @@ import { ApiError, apiClient } from "@/lib/api/client";
 import { toast } from "@/components/ui/toast-sonner";
 import { formatTime } from "@/lib/api/core";
 import { preserveSSHPurposeScope, sshKeyIsBroadScope } from "@/lib/ssh-purpose-scope";
+import { runSSHKeyReplacement, type SSHKeyReplacementOptions } from "@/lib/ssh-key-replacement";
 import { parseTags } from "@/hooks/use-console-data.utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import type {
@@ -91,16 +92,41 @@ export function useNodeOperations({
     return item.id;
   }, [exec, markInventoryMutated, setSSHKeys]);
 
-  const updateSSHKey = useCallback(async (keyId: string, input: NewSSHKeyInput) => {
-    const result = await exec(i18n.t("nodes.actions.updateSSHKey"), (t) => apiClient.updateSSHKey(t, keyId, input));
+  // The editor owns challenge and failure feedback for this write, so errors bypass the shared warning.
+  const updateSSHKey = useCallback(async (keyId: string, input: NewSSHKeyInput, options: SSHKeyReplacementOptions) => {
+    const assertCurrent = () => {
+      if (options.signal.aborted || !options.isCurrent()) {
+        throw new DOMException("SSH key update no longer belongs to its owner", "AbortError");
+      }
+    };
+    assertCurrent();
+    const failure: { error?: unknown; failed: boolean } = { failed: false };
+    const result = await exec<SSHKeyRecord | null>(i18n.t("nodes.actions.updateSSHKey"), async (t) => {
+      try {
+        return await runSSHKeyReplacement(
+          (proof) => apiClient.updateSSHKey(t, keyId, input, { stepUpProof: proof, signal: options.signal }),
+          options,
+        );
+      } catch (error) {
+        failure.failed = true;
+        failure.error = error;
+        return null;
+      }
+    });
+    if (failure.failed) {
+      throw failure.error;
+    }
+    assertCurrent();
     if (result) {
-      if (result.ok) {
+      if (result.ok && result.data) {
+        const updated = result.data;
         markInventoryMutated();
-        setSSHKeys((prev) => prev.map((item) => (item.id === keyId ? result.data : item)));
+        setSSHKeys((prev) => prev.map((item) => (item.id === keyId ? updated : item)));
       }
       return;
     }
     const { buildDemoSSHKey } = await loadDemoBuilders();
+    assertCurrent();
     markInventoryMutated();
     setSSHKeys((prev) =>
       prev.map((item) =>

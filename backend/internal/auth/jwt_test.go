@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -364,5 +365,50 @@ func TestJWTManagerRevokeTokenReturnsPersistenceError(t *testing.T) {
 
 	if err := manager.RevokeToken(token); err == nil {
 		t.Fatalf("撤销表缺失时应返回持久化错误")
+	}
+}
+
+func TestStepUpReplacementSessionRevocationUsesSuppliedDB(t *testing.T) {
+	db := openIdentitySQLiteTestDB(t)
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	ctx := context.Background()
+	if revoked, err := manager.IsSessionRevokedWithDB(ctx, db, testStepUpSessionID); err != nil || revoked {
+		t.Fatalf("initial durable lookup: revoked=%v err=%v", revoked, err)
+	}
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	defer func() { _ = tx.Rollback().Error }()
+	if err := tx.Create(&model.TokenRevocation{
+		TokenHash: "jti:" + testStepUpSessionID, UserID: 9, ExpiresAt: time.Now().Add(time.Hour),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := manager.IsSessionRevokedWithDB(ctx, tx, testStepUpSessionID); err != nil || !revoked {
+		t.Fatalf("must see uncommitted revocation on supplied transaction after an earlier valid lookup: revoked=%v err=%v", revoked, err)
+	}
+	if err := tx.Rollback().Error; err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := manager.IsSessionRevokedWithDB(ctx, db, testStepUpSessionID); err != nil || !revoked {
+		t.Fatalf("process revoked cache must still reject: revoked=%v err=%v", revoked, err)
+	}
+	if revoked, err := manager.IsSessionRevokedWithDB(ctx, nil, testStepUpSessionID); err == nil || !revoked {
+		t.Fatalf("nil supplied DB must fail even for cached revocation: revoked=%v err=%v", revoked, err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if revoked, err := manager.IsSessionRevokedWithDB(cancelled, db, strings.Repeat("b", 32)); err == nil || !revoked {
+		t.Fatalf("cancelled lookup must fail closed: revoked=%v err=%v", revoked, err)
+	}
+	for _, jti := range []string{"", "invalid", strings.Repeat("A", 32)} {
+		if revoked, err := manager.IsSessionRevokedWithDB(ctx, db, jti); err == nil || !revoked {
+			t.Fatal("invalid JTI must fail closed")
+		}
+	}
+	var nilManager *JWTManager
+	if revoked, err := nilManager.IsSessionRevokedWithDB(ctx, db, testStepUpSessionID); err == nil || !revoked {
+		t.Fatal("nil manager must fail closed")
 	}
 }

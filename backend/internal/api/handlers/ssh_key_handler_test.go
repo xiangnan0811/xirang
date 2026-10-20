@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -49,7 +50,7 @@ func openSSHKeyHandlerTestDB(t *testing.T) *gorm.DB {
 	sqlDB.SetMaxOpenConns(10)
 	sqlDB.SetMaxIdleConns(5)
 	sqlDB.SetConnMaxLifetime(5 * time.Minute)
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.NodeOwner{}, &model.CredentialAuditEvent{}); err != nil {
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.NodeOwner{}, &model.CredentialAuditEvent{}, &model.User{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 	return db
@@ -106,12 +107,26 @@ func seedNodeWithSSHKey(t *testing.T, db *gorm.DB, name string, keyID uint) mode
 func newSSHKeyHandlerRouter(db *gorm.DB, role string, userID uint) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	var binding middleware.SessionBinding
+	var manager *auth.JWTManager
+	if db != nil {
+		// Mutations require a real durable user and a trusted primary binding.
+		user := model.User{ID: userID, Username: fmt.Sprintf("handler-user-%d", userID), Role: role, TokenVersion: 1}
+		if err := db.Where("id = ?", userID).FirstOrCreate(&user).Error; err != nil {
+			panic(err)
+		}
+		manager = newSSHKeyMutationTestManager(db)
+		binding = middleware.SessionBinding{UserID: user.ID, Role: user.Role, TokenVersion: user.TokenVersion, JTI: strings.Repeat("a", 32), ExpiresAt: time.Now().UTC().Add(time.Hour)}
+	}
 	r.Use(func(c *gin.Context) {
 		c.Set(middleware.CtxRole, role)
 		c.Set(middleware.CtxUserID, userID)
+		if manager != nil {
+			c.Set(middleware.CtxSessionBinding, binding)
+		}
 		c.Next()
 	})
-	handler := NewSSHKeyHandler(db)
+	handler := NewSSHKeyHandler(db, manager)
 	r.POST("/ssh-keys/preview", handler.Preview)
 	r.GET("/ssh-keys", handler.List)
 	r.POST("/ssh-keys", handler.Create)
@@ -130,7 +145,7 @@ func newSSHKeyVisibilityRouter(db *gorm.DB, role string, userID uint) *gin.Engin
 		c.Set(middleware.CtxUserID, userID)
 		c.Next()
 	})
-	handler := NewSSHKeyHandler(db)
+	handler := NewSSHKeyHandler(db, nil)
 	r.GET("/ssh-keys", handler.List)
 	r.GET("/ssh-keys/export", handler.Export)
 	r.GET("/ssh-keys/:id", handler.Get)
@@ -654,7 +669,7 @@ func TestSSHKeyBatchCreateEncryptionFailureIsSanitized(t *testing.T) {
 	t.Cleanup(secure.ResetForTesting)
 
 	gin.SetMode(gin.TestMode)
-	handler := NewSSHKeyHandler(db)
+	handler := NewSSHKeyHandler(db, nil)
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Set("role", "admin")

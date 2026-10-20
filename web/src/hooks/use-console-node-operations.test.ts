@@ -1,12 +1,14 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NewNodeInput, NodeRecord, SSHKeyRecord } from "@/types/domain";
+import type { NewNodeInput, NewSSHKeyInput, NodeRecord, SSHKeyRecord } from "@/types/domain";
+import { ApiError } from "@/lib/api/core";
 import { useNodeOperations } from "./use-console-node-operations";
 import { toast } from "@/components/ui/toast-sonner";
 
 const { apiClientMock } = vi.hoisted(() => ({
   apiClientMock: {
     createSSHKey: vi.fn(),
+    updateSSHKey: vi.fn(),
     deleteSSHKey: vi.fn(),
     createNode: vi.fn(),
     updateNode: vi.fn(),
@@ -393,6 +395,288 @@ describe("useNodeOperations inline key lifetime", () => {
     expect(setNodes).toHaveBeenCalledTimes(1);
     expect(setWarning).toHaveBeenCalledWith("disk is low");
     expect(toast.warning).toHaveBeenCalledWith("disk is low");
+  });
+});
+
+// Spies rendered by renderOperations; expect() only needs the mock values themselves.
+type SharedSideEffectSpies = {
+  handleWriteApiError: unknown;
+  setWarning: unknown;
+  setSSHKeys: unknown;
+  markInventoryMutated: unknown;
+};
+
+describe("useNodeOperations SSH key replacement update", () => {
+  const keyId = "key-21";
+  const replacementInput: NewSSHKeyInput = {
+    name: "ops-key",
+    username: "deploy",
+    keyType: "ed25519",
+    privateKey: "FAKE_REPLACEMENT_PRIVATE_KEY_FOR_TEST_ONLY",
+    disabled: false,
+    expiresAt: "",
+    allowedPurposes: "",
+    allowedNodeIds: "",
+    allowedNodeTags: "",
+  };
+  const updatedKey: SSHKeyRecord = { ...createdKey, id: keyId, name: "ops-key", username: "deploy" };
+
+  function stepUpError(httpStatus: number, errorCode = "STEP_UP_REQUIRED"): ApiError {
+    const error = new ApiError(403, "step-up required", {
+      code: 403,
+      message: "step-up required",
+      data: { error_code: errorCode, ttl_seconds: 300 },
+    });
+    error.httpStatus = httpStatus;
+    return error;
+  }
+
+  function replacementOptions(overrides: { isCurrent?: () => boolean; requestProof?: () => Promise<string> } = {}) {
+    const controller = new AbortController();
+    const requestProof = vi.fn(overrides.requestProof ?? (async () => "FAKE_FRESH_PROOF_FOR_TEST_ONLY"));
+    return {
+      controller,
+      requestProof,
+      options: {
+        signal: controller.signal,
+        isCurrent: overrides.isCurrent ?? (() => true),
+        requestProof,
+      },
+    };
+  }
+
+  function expectNoSharedSideEffects(spies: SharedSideEffectSpies) {
+    expect(spies.handleWriteApiError).not.toHaveBeenCalled();
+    expect(spies.setWarning).not.toHaveBeenCalled();
+    expect(spies.setSSHKeys).not.toHaveBeenCalled();
+    expect(spies.markInventoryMutated).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
+  }
+
+  beforeEach(() => {
+    apiClientMock.createSSHKey.mockReset();
+    apiClientMock.updateSSHKey.mockReset();
+    vi.mocked(toast.warning).mockReset();
+  });
+
+  it("saves metadata or same material on the first request without asking for a proof", async () => {
+    apiClientMock.updateSSHKey.mockResolvedValueOnce(updatedKey);
+    const rendered = renderOperations();
+    const { options, requestProof } = replacementOptions();
+
+    await act(async () => {
+      await rendered.result.current.updateSSHKey(keyId, replacementInput, options);
+    });
+
+    expect(apiClientMock.updateSSHKey).toHaveBeenCalledTimes(1);
+    expect(apiClientMock.updateSSHKey).toHaveBeenCalledWith("token-1", keyId, replacementInput, {
+      stepUpProof: undefined,
+      signal: options.signal,
+    });
+    expect(requestProof).not.toHaveBeenCalled();
+    expect(rendered.markInventoryMutated).toHaveBeenCalledTimes(1);
+    expect(rendered.setSSHKeys).toHaveBeenCalledTimes(1);
+    const updater = rendered.setSSHKeys.mock.calls[0]?.[0] as (prev: SSHKeyRecord[]) => SSHKeyRecord[];
+    expect(updater([createdKey, { ...createdKey, id: keyId }])).toEqual([createdKey, updatedKey]);
+    expect(rendered.handleWriteApiError).not.toHaveBeenCalled();
+    expect(rendered.setWarning).not.toHaveBeenCalled();
+  });
+
+  it("answers one real HTTP 403 challenge with one fresh proof and one resubmission, without a global warning", async () => {
+    apiClientMock.updateSSHKey
+      .mockRejectedValueOnce(stepUpError(403))
+      .mockResolvedValueOnce(updatedKey);
+    const rendered = renderOperations();
+    const { options, requestProof } = replacementOptions();
+
+    await act(async () => {
+      await rendered.result.current.updateSSHKey(keyId, replacementInput, options);
+    });
+
+    expect(requestProof).toHaveBeenCalledTimes(1);
+    expect(apiClientMock.updateSSHKey).toHaveBeenCalledTimes(2);
+    expect(apiClientMock.updateSSHKey.mock.calls[0]?.[3]).toEqual({ stepUpProof: undefined, signal: options.signal });
+    expect(apiClientMock.updateSSHKey.mock.calls[1]?.[3]).toEqual({
+      stepUpProof: "FAKE_FRESH_PROOF_FOR_TEST_ONLY",
+      signal: options.signal,
+    });
+    expect(rendered.setSSHKeys).toHaveBeenCalledTimes(1);
+    expect(rendered.markInventoryMutated).toHaveBeenCalledTimes(1);
+    expect(rendered.handleWriteApiError).not.toHaveBeenCalled();
+    expect(rendered.setWarning).not.toHaveBeenCalled();
+  });
+
+  it("never replays an HTTP 200 failure envelope that carries a step-up code", async () => {
+    const envelope = stepUpError(200);
+    apiClientMock.updateSSHKey.mockRejectedValueOnce(envelope);
+    const rendered = renderOperations();
+    const { options, requestProof } = replacementOptions();
+
+    await act(async () => {
+      await expect(rendered.result.current.updateSSHKey(keyId, replacementInput, options)).rejects.toBe(envelope);
+    });
+
+    expect(apiClientMock.updateSSHKey).toHaveBeenCalledTimes(1);
+    expect(requestProof).not.toHaveBeenCalled();
+    expectNoSharedSideEffects(rendered);
+  });
+
+  it("returns an ordinary 403 and a network failure to the caller without a challenge or replay", async () => {
+    const forbidden = stepUpError(403, "FORBIDDEN");
+    const network = new TypeError("Failed to fetch");
+    apiClientMock.updateSSHKey.mockRejectedValueOnce(forbidden).mockRejectedValueOnce(network);
+    const rendered = renderOperations();
+    const { options, requestProof } = replacementOptions();
+
+    await act(async () => {
+      await expect(rendered.result.current.updateSSHKey(keyId, replacementInput, options)).rejects.toBe(forbidden);
+      await expect(rendered.result.current.updateSSHKey(keyId, replacementInput, options)).rejects.toBe(network);
+    });
+
+    expect(apiClientMock.updateSSHKey).toHaveBeenCalledTimes(2);
+    expect(requestProof).not.toHaveBeenCalled();
+    expectNoSharedSideEffects(rendered);
+  });
+
+  it("returns a second challenge without a third request or a second proof", async () => {
+    const second = stepUpError(403);
+    apiClientMock.updateSSHKey.mockRejectedValueOnce(stepUpError(403)).mockRejectedValueOnce(second);
+    const rendered = renderOperations();
+    const { options, requestProof } = replacementOptions();
+
+    await act(async () => {
+      await expect(rendered.result.current.updateSSHKey(keyId, replacementInput, options)).rejects.toBe(second);
+    });
+
+    expect(apiClientMock.updateSSHKey).toHaveBeenCalledTimes(2);
+    expect(requestProof).toHaveBeenCalledTimes(1);
+    expectNoSharedSideEffects(rendered);
+  });
+
+  it("wraps a failed or cancelled proof acquisition and never resubmits", async () => {
+    const cancelled = new DOMException("cancelled", "AbortError");
+    apiClientMock.updateSSHKey.mockRejectedValueOnce(stepUpError(403));
+    const rendered = renderOperations();
+    const { options } = replacementOptions({ requestProof: async () => { throw cancelled; } });
+
+    let failure: unknown;
+    await act(async () => {
+      failure = await rendered.result.current.updateSSHKey(keyId, replacementInput, options).catch((error: unknown) => error);
+    });
+
+    expect(failure).toMatchObject({ name: "SSHKeyReplacementProofError", cause: cancelled });
+    expect(String((failure as Error).message)).not.toContain("FAKE_REPLACEMENT_PRIVATE_KEY_FOR_TEST_ONLY");
+    expect(apiClientMock.updateSSHKey).toHaveBeenCalledTimes(1);
+    expectNoSharedSideEffects(rendered);
+  });
+
+  it("does not start when the operation is already stale or aborted", async () => {
+    const rendered = renderOperations();
+    const stale = replacementOptions({ isCurrent: () => false });
+    const aborted = replacementOptions();
+    aborted.controller.abort();
+
+    await act(async () => {
+      await expect(rendered.result.current.updateSSHKey(keyId, replacementInput, stale.options))
+        .rejects.toMatchObject({ name: "AbortError" });
+      await expect(rendered.result.current.updateSSHKey(keyId, replacementInput, aborted.options))
+        .rejects.toMatchObject({ name: "AbortError" });
+    });
+
+    expect(apiClientMock.updateSSHKey).not.toHaveBeenCalled();
+    expectNoSharedSideEffects(rendered);
+  });
+
+  it("stops before requesting a proof when the challenge returns to a stale owner", async () => {
+    const first = createDeferred<SSHKeyRecord>();
+    apiClientMock.updateSSHKey.mockReturnValueOnce(first.promise);
+    const rendered = renderOperations();
+    let current = true;
+    const { options, requestProof } = replacementOptions({ isCurrent: () => current });
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = rendered.result.current.updateSSHKey(keyId, replacementInput, options);
+    });
+    current = false;
+    await act(async () => {
+      first.reject(stepUpError(403));
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    });
+
+    expect(requestProof).not.toHaveBeenCalled();
+    expect(apiClientMock.updateSSHKey).toHaveBeenCalledTimes(1);
+    expectNoSharedSideEffects(rendered);
+  });
+
+  it("does not resubmit when ownership ends while the proof is pending", async () => {
+    const proof = createDeferred<string>();
+    apiClientMock.updateSSHKey.mockRejectedValueOnce(stepUpError(403));
+    const rendered = renderOperations();
+    let current = true;
+    const { options, requestProof } = replacementOptions({ isCurrent: () => current, requestProof: () => proof.promise });
+
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = rendered.result.current.updateSSHKey(keyId, replacementInput, options);
+      pending.catch(() => undefined);
+      await vi.waitFor(() => expect(requestProof).toHaveBeenCalledTimes(1));
+    });
+    current = false;
+    await act(async () => {
+      proof.resolve("FAKE_LATE_PROOF_FOR_TEST_ONLY");
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    });
+
+    expect(apiClientMock.updateSSHKey).toHaveBeenCalledTimes(1);
+    expectNoSharedSideEffects(rendered);
+  });
+
+  it("does not publish a late resubmission result or failure for a stale owner", async () => {
+    for (const settle of ["resolve", "reject"] as const) {
+      apiClientMock.updateSSHKey.mockReset();
+      const second = createDeferred<SSHKeyRecord>();
+      apiClientMock.updateSSHKey.mockRejectedValueOnce(stepUpError(403)).mockReturnValueOnce(second.promise);
+      const rendered = renderOperations();
+      let current = true;
+      const { options } = replacementOptions({ isCurrent: () => current });
+
+      let pending!: Promise<void>;
+      await act(async () => {
+        pending = rendered.result.current.updateSSHKey(keyId, replacementInput, options);
+        pending.catch(() => undefined);
+        await vi.waitFor(() => expect(apiClientMock.updateSSHKey).toHaveBeenCalledTimes(2));
+      });
+      current = false;
+      await act(async () => {
+        if (settle === "resolve") second.resolve(updatedKey);
+        else second.reject(new TypeError("Failed to fetch"));
+        await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      });
+
+      expectNoSharedSideEffects(rendered);
+      rendered.unmount();
+    }
+  });
+
+  it("keeps the create completion predicate for the editor's new-key path", async () => {
+    const pendingKey = createDeferred<SSHKeyRecord>();
+    apiClientMock.createSSHKey.mockReturnValueOnce(pendingKey.promise);
+    const rendered = renderOperations();
+    let current = true;
+
+    let created!: Promise<string>;
+    act(() => {
+      created = rendered.result.current.createSSHKey(directKeyInput, () => current);
+    });
+    current = false;
+    await act(async () => {
+      pendingKey.resolve(createdKey);
+      await expect(created).resolves.toBe("");
+    });
+
+    expect(apiClientMock.createSSHKey).toHaveBeenCalledWith("token-1", directKeyInput);
+    expectNoSharedSideEffects(rendered);
   });
 });
 
