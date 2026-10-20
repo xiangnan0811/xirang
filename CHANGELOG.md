@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.0](https://github.com/xiangnan0811/xirang/compare/v0.72.0...v0.73.0) (2026-10-20)
+
+
+### ✨ Features
+
+* **ssh:** require fresh step-up for private key replacement ([#642](https://github.com/xiangnan0811/xirang/issues/642)) ([6fb39fc](https://github.com/xiangnan0811/xirang/commit/6fb39fcf1724af72bc0ded273f7beac9c02d22d8))
+
 ### 新增与修复
 
 - 现存受管 SSHKey 的普通编辑补入／替换私钥及轮换提交新增服务端 `ssh_key.replace` 二次验证；元数据编辑、相同私钥材料的不同编码不增加挑战，也不重写原密文和指纹。
@@ -17,13 +24,6 @@
 - 锁内重新判断当前材料及授权；拒绝时不先保存附带元数据。提交、回滚或连接恢复无法确认、网络丢失或成功响应无法解码时均按结果未知处理，不自动重试，也不保证原密钥未变。关闭页面、取消等待或身份变化不撤销服务端已经提交的写入；须人工刷新记录并核对公钥指纹。
 - 按同一发行版本切换 Core 与页面；升级前保全数据库、匹配加密密钥、配置及主机信任文件，完成或退出旧密钥编辑／轮换交互，排空旧 Core 在途请求后切换并刷新客户端。新门禁仅约束新版 Core 处理的请求，不追溯撤销旧版已提交操作；不因本项额外停止执行中的备份任务。
 - 本次无新增 schema migration、历史回填或远端公钥变更。回退旧 Core／页面会移除新增替换门禁与界面保护，并恢复旧并发回写风险，但不会还原已经替换的私钥或撤销外部效果；既有迁移降级保护与配套恢复要求仍适用。公开发布及本地验收不代表生产部署、升级或灾备恢复验收。
-
-## [0.73.0](https://github.com/xiangnan0811/xirang/compare/v0.72.0...v0.73.0) (2026-10-20)
-
-
-### ✨ Features
-
-* **ssh:** require fresh step-up for private key replacement ([#642](https://github.com/xiangnan0811/xirang/issues/642)) ([6fb39fc](https://github.com/xiangnan0811/xirang/commit/6fb39fcf1724af72bc0ded273f7beac9c02d22d8))
 
 ## [0.72.0](https://github.com/xiangnan0811/xirang/compare/v0.71.0...v0.72.0) (2026-10-19)
 
