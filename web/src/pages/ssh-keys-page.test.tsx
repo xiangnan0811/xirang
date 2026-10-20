@@ -80,9 +80,15 @@ vi.mock("@/context/ssh-keys-context.hooks", () => ({
   useSSHKeysContext: () => sshKeysRef.current,
 }));
 
+const editorPropsRef: { current: { open?: boolean; editingKey?: unknown; onSave?: (draft: unknown, options: unknown) => Promise<void> } } = {
+  current: {},
+};
+
 vi.mock("@/components/ssh-key-editor-dialog", () => ({
-  SSHKeyEditorDialog: (props: { open?: boolean; editingKey?: unknown; onSave?: unknown }) =>
-    props.open ? <div role="dialog" aria-label="SSHKeyEditorDialog" /> : null,
+  SSHKeyEditorDialog: (props: { open?: boolean; editingKey?: unknown; onSave?: (draft: unknown, options: unknown) => Promise<void> }) => {
+    editorPropsRef.current = props;
+    return props.open ? <div role="dialog" aria-label="SSHKeyEditorDialog" /> : null;
+  },
 }));
 
 vi.mock("@/components/ssh-key-test-connection-dialog", () => ({
@@ -576,5 +582,69 @@ describe("SSHKeysPage", () => {
     expect(screen.getAllByRole("button", { name: "重置筛选" }).length).toBeGreaterThan(0);
     // 新增按钮不应出现在空态中
     expect(screen.queryByRole("button", { name: "新增 SSH Key" })).not.toBeInTheDocument();
+  });
+
+  it("handleSave 向 updateSSHKey 传递 replacement options 且不吞掉错误，仅在 isCurrent 时弹成功与关闭", async () => {
+    const user = userEvent.setup();
+    authRef.current = { token: "test-token", role: "admin" };
+    createContext();
+    const updateSSHKeyMock = vi.fn();
+    sshKeysRef.current.updateSSHKey = updateSSHKeyMock;
+
+    render(
+      <MemoryRouter>
+        <SSHKeysPage />
+      </MemoryRouter>
+    );
+
+    // 打开编辑弹窗
+    const moreBtns = screen.getAllByRole("button", { name: "操作" });
+    await user.click(moreBtns[0]);
+    await user.click(screen.getByRole("menuitem", { name: "编辑" }));
+
+    expect(editorPropsRef.current.open).toBe(true);
+    expect(editorPropsRef.current.onSave).toBeDefined();
+
+    const mockDraft = {
+      id: "key-1",
+      name: "新密钥名",
+      username: "root",
+      keyType: "ed25519" as const,
+      privateKey: "",
+      disabled: false,
+      expiresAt: "",
+      allowedPurposes: "",
+      allowedNodeIds: "",
+      allowedNodeTags: "",
+    };
+
+    // 1. updateSSHKey 抛出错误时，handleSave 不吞错，直接向外抛出
+    const expectedError = new Error("update failed");
+    updateSSHKeyMock.mockRejectedValueOnce(expectedError);
+
+    let isCurrentFlag = true;
+    const options = {
+      signal: new AbortController().signal,
+      isCurrent: () => isCurrentFlag,
+      requestProof: vi.fn(),
+    };
+
+    await expect(editorPropsRef.current.onSave!(mockDraft, options)).rejects.toThrow("update failed");
+    expect(updateSSHKeyMock).toHaveBeenCalledWith("key-1", expect.objectContaining({ name: "新密钥名" }), options);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+
+    // 2. updateSSHKey 成功但在 isCurrent=false 时，不弹成功提示也不关闭弹窗
+    updateSSHKeyMock.mockResolvedValueOnce(undefined);
+    isCurrentFlag = false;
+
+    await editorPropsRef.current.onSave!(mockDraft, options);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+
+    // 3. updateSSHKey 成功且 isCurrent=true 时，弹成功提示并关闭弹窗
+    isCurrentFlag = true;
+    updateSSHKeyMock.mockResolvedValueOnce(undefined);
+
+    await editorPropsRef.current.onSave!(mockDraft, options);
+    expect(toastSuccessMock).toHaveBeenCalledWith("SSH Key 已更新。");
   });
 });

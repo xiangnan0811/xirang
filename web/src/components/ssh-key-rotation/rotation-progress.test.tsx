@@ -1,8 +1,26 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RotationProgress } from "./rotation-progress";
 import type { NodeRecord, SSHKeyRecord } from "@/types/domain";
+
+const { authState } = vi.hoisted(() => ({
+  authState: { totpEnabled: false as boolean, authTransitioning: false },
+}));
+
+vi.mock("@/context/auth-context.hooks", () => ({
+  useAuth: () => ({
+    token: "auth-marker",
+    totpEnabled: authState.totpEnabled,
+    authTransitioning: authState.authTransitioning,
+  }),
+}));
+
+function withRouter(element: ReactElement) {
+  return <MemoryRouter initialEntries={["/app/ssh-keys"]}>{element}</MemoryRouter>;
+}
 
 const selectedKey: SSHKeyRecord = {
   id: "key-1",
@@ -56,11 +74,16 @@ const affectedNodes: NodeRecord[] = [
 ];
 
 describe("RotationProgress", () => {
+  beforeEach(() => {
+    authState.totpEnabled = false;
+    authState.authTransitioning = false;
+  });
+
   it("requires affected-node count acknowledgement before confirming rotation", async () => {
     const user = userEvent.setup();
     const onAcknowledgementChange = vi.fn();
     const onNext = vi.fn();
-    const { rerender } = render(
+    const { rerender } = render(withRouter(
       <RotationProgress
         affectedNodes={affectedNodes}
         candidatePublicKey="ssh-ed25519 AAAA"
@@ -72,7 +95,7 @@ describe("RotationProgress", () => {
         onBack={vi.fn()}
         onNext={onNext}
       />,
-    );
+    ));
 
     const confirmButton = screen.getByRole("button", { name: "确认轮换" });
     expect(confirmButton).toBeDisabled();
@@ -84,12 +107,17 @@ describe("RotationProgress", () => {
     expect(screen.getByText("SHA256:public-old")).toBeInTheDocument();
     expect(screen.getByText("SHA256:public-new")).toBeInTheDocument();
     expect(screen.queryByText(selectedKey.fingerprint)).not.toBeInTheDocument();
+    expect(screen.getByText("需先启用两步验证。实际执行仍需二次验证及适用的授权原因。")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "启用两步验证" })).toHaveAttribute(
+      "href",
+      "/app/settings?tab=account",
+    );
 
     await user.type(screen.getByLabelText("输入 2 以确认预估节点数"), "1");
     expect(onAcknowledgementChange).toHaveBeenLastCalledWith("1");
     expect(onNext).not.toHaveBeenCalled();
 
-    rerender(
+    rerender(withRouter(
       <RotationProgress
         affectedNodes={affectedNodes}
         candidatePublicKey="ssh-ed25519 AAAA"
@@ -101,7 +129,7 @@ describe("RotationProgress", () => {
         onBack={vi.fn()}
         onNext={onNext}
       />,
-    );
+    ));
     expect(screen.getByText("请输入 2 以确认预估节点数。")).toBeInTheDocument();
     expect(screen.getByLabelText("输入 2 以确认预估节点数")).toHaveAttribute("aria-invalid", "true");
     await user.click(screen.getByRole("button", { name: "确认轮换" }));
@@ -109,9 +137,10 @@ describe("RotationProgress", () => {
   });
 
   it("allows confirmation when affected-node count acknowledgement matches", async () => {
+    authState.totpEnabled = true;
     const user = userEvent.setup();
     const onNext = vi.fn();
-    render(
+    render(withRouter(
       <RotationProgress
         affectedNodes={affectedNodes}
         candidatePublicKey="ssh-ed25519 AAAA"
@@ -123,8 +152,9 @@ describe("RotationProgress", () => {
         onBack={vi.fn()}
         onNext={onNext}
       />,
-    );
+    ));
 
+    expect(screen.queryByRole("link", { name: "启用两步验证" })).not.toBeInTheDocument();
     const confirmButton = screen.getByRole("button", { name: "确认轮换" });
     expect(confirmButton).toBeEnabled();
     await user.click(confirmButton);

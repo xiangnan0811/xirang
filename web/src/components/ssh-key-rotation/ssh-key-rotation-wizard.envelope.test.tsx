@@ -11,7 +11,13 @@ const { toastSuccess, toastError } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ role: "admin" as const, token: "token", authTransitioning: false }),
+  useAuth: () => ({
+    role: "admin" as const,
+    token: "token",
+    authTransitioning: false,
+    totpEnabled: true,
+    ensureStepUpProof: vi.fn().mockResolvedValue("proof-ok"),
+  }),
 }));
 
 vi.mock("@/components/ui/toast-sonner", () => ({

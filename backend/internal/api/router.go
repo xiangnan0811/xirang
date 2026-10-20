@@ -330,7 +330,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	taskSvc := task.NewTaskApiService(taskRepo, nodeRepo, policyRepo, dep.TaskManager)
 	taskHandler := handlers.NewTaskHandler(dep.DB, dep.TaskManager).WithTaskApiService(taskSvc).WithJWTManager(dep.JWTManager)
 	taskRunHandler := handlers.NewTaskRunHandler(dep.DB)
-	sshKeyHandler := handlers.NewSSHKeyHandler(dep.DB)
+	sshKeyHandler := handlers.NewSSHKeyHandler(dep.DB, dep.JWTManager)
 	integrationSvc := integration.NewIntegrationService(dep.DB).WithAlertDispatcher(dep.AlertDispatcher)
 	integrationHandler := handlers.NewIntegrationHandler(dep.DB, integrationSvc)
 	alertHandler := handlers.NewAlertHandler(dep.DB).WithAlertDispatcher(dep.AlertDispatcher)

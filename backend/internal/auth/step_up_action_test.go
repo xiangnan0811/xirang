@@ -105,3 +105,34 @@ func TestSystemBackupDownloadProofIsActionBoundAndShortLived(t *testing.T) {
 		t.Fatalf("backup download proof must be isolated and expire after 300 seconds: %+v", claims)
 	}
 }
+
+func TestStepUpActionSSHKeyReplacement(t *testing.T) {
+	action, err := ParseStepUpAction("ssh_key.replace")
+	if err != nil || action != StepUpActionSSHKeyReplace || StepUpActionSSHKeyReplace != StepUpAction("ssh_key.replace") {
+		t.Fatalf("replacement action not registered: action=%q err=%v", action, err)
+	}
+	if StepUpProofTTLForAction(action) != 300*time.Second {
+		t.Fatal("replacement proof must retain the exact five-minute policy")
+	}
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	user := model.User{ID: 9, Username: "alice", Role: "admin", TokenVersion: 3}
+	for _, sessions := range [][]string{nil, {""}, {"not-a-session"}, {"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, {testStepUpSessionID, testStepUpSessionID}} {
+		if _, _, err := manager.GenerateStepUpToken(user, action, sessions...); err == nil {
+			t.Fatal("replacement proof accepted missing or invalid session binding")
+		}
+	}
+	proof, expiry, err := manager.GenerateStepUpToken(user, action, testStepUpSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := manager.ParseToken(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.StepUpAction != action || claims.Purpose != PurposeStepUp || claims.SessionID != testStepUpSessionID ||
+		claims.UserID != user.ID || claims.Role != user.Role || claims.TokenVersion != user.TokenVersion ||
+		!lowerHexID(claims.ID) || claims.IssuedAt == nil || claims.ExpiresAt == nil ||
+		claims.ExpiresAt.Sub(claims.IssuedAt.Time) != 300*time.Second || !claims.ExpiresAt.Equal(expiry) {
+		t.Fatal("replacement proof lost its exact action, identity, session or lifetime")
+	}
+}

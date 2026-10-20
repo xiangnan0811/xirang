@@ -6,6 +6,7 @@ import { SSHKeysToolbar } from "@/pages/ssh-keys-page.toolbar";
 import { SSHKeysTable } from "@/pages/ssh-keys-page.table";
 import { SSHKeysGrid } from "@/pages/ssh-keys-page.grid";
 import { SSHKeyEditorDialog, type SSHKeyDraft } from "@/components/ssh-key-editor-dialog";
+import type { SSHKeyReplacementOptions } from "@/lib/ssh-key-replacement";
 import { SSHKeyTestConnectionDialog } from "@/components/ssh-key-test-connection-dialog";
 import { SSHKeyAssociatedNodesSheet } from "@/components/ssh-key-associated-nodes-sheet";
 import { SSHKeyExportDialog } from "@/components/ssh-key-export-dialog";
@@ -110,10 +111,10 @@ export function SSHKeysPage() {
     }
   };
 
-  // 编辑器保存适配：SSHKeyDraft → handleSave(draft, keyId?)
-  const handleEditorSave = async (draft: SSHKeyDraft) => {
+  // 编辑器保存适配：(draft: SSHKeyDraft, options: SSHKeyReplacementOptions) => handleSave(input, id, options)
+  const handleEditorSave = async (draft: SSHKeyDraft, options: SSHKeyReplacementOptions) => {
     const { id, ...input } = draft;
-    await handleSave(input, id);
+    await handleSave(input, id, options);
   };
 
   // 批量删除

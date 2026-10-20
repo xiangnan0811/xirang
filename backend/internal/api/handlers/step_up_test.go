@@ -595,6 +595,7 @@ func TestAuthHandlerStepUpReportsExactActionPolicyTTL(t *testing.T) {
 		seconds int
 	}{
 		{action: auth.StepUpActionTaskManualTrigger, seconds: 300},
+		{action: auth.StepUpAction("ssh_key.replace"), seconds: 300},
 		{action: auth.StepUpActionAssetSecretReveal, seconds: 45 * 60},
 	} {
 		t.Run(string(tc.action), func(t *testing.T) {
@@ -625,6 +626,12 @@ func TestAuthHandlerStepUpReportsExactActionPolicyTTL(t *testing.T) {
 			}
 			if got := int(claims.ExpiresAt.Sub(claims.IssuedAt.Time).Seconds()); got != tc.seconds {
 				t.Fatalf("claim TTL for %q = %d, want %d", tc.action, got, tc.seconds)
+			}
+			if tc.action == auth.StepUpAction("ssh_key.replace") {
+				primaryClaims, err := manager.ParseToken(primaryToken)
+				if err != nil || claims.SessionID != primaryClaims.ID || claims.StepUpAction != tc.action {
+					t.Fatal("issued replacement proof must bind the current primary session and exact action")
+				}
 			}
 
 			events := loadCredentialAuditEvents(t, db, string(tc.action))
@@ -1070,5 +1077,184 @@ func TestSystemBackupStepUpDatabaseUsesRequestContext(t *testing.T) {
 	router.ServeHTTP(response, req)
 	if !seenCanceledContext || response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("request context observed=%v status=%d body=%s", seenCanceledContext, response.Code, response.Body)
+	}
+}
+
+func TestStepUpSSHKeyReplacementValidatesExactProofAndCurrentIdentity(t *testing.T) {
+	db := openStepUpHandlerTestDB(t)
+	manager := newStepUpTestJWTManager(db)
+	user := seedStepUpUser(t, db, "replacement-proof", "admin")
+	action := auth.StepUpAction("ssh_key.replace")
+	now := time.Now().UTC().Truncate(time.Second)
+	base := auth.Claims{
+		UserID: user.ID, Username: user.Username, Role: user.Role,
+		Purpose: auth.PurposeStepUp, StepUpAction: action, SessionID: stepUpTestSessionID,
+		TokenVersion: user.TokenVersion,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID: "dddddddddddddddddddddddddddddddd", Subject: fmt.Sprint(user.ID),
+			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(300 * time.Second)),
+		},
+	}
+	proof := signStepUpClaimsForTest(t, base)
+	for range 2 {
+		claims, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, action, stepUpTestSessionID)
+		if err != nil || claims == nil || !claims.ExpiresAt.Equal(base.ExpiresAt.Time) {
+			t.Fatalf("same-session reuse must preserve exact expiry: err=%v", err)
+		}
+	}
+	invalid := map[string]func(*auth.Claims){
+		"wrong action":    func(c *auth.Claims) { c.StepUpAction = auth.StepUpActionSSHKeyExport },
+		"config import":   func(c *auth.Claims) { c.StepUpAction = auth.StepUpActionConfigImport },
+		"wrong purpose":   func(c *auth.Claims) { c.Purpose = "" },
+		"missing jti":     func(c *auth.Claims) { c.ID = "" },
+		"invalid jti":     func(c *auth.Claims) { c.ID = "not-a-jti" },
+		"wrong user":      func(c *auth.Claims) { c.UserID++ },
+		"wrong subject":   func(c *auth.Claims) { c.Subject = "999999" },
+		"wrong role":      func(c *auth.Claims) { c.Role = "operator" },
+		"wrong version":   func(c *auth.Claims) { c.TokenVersion++ },
+		"missing session": func(c *auth.Claims) { c.SessionID = "" },
+		"another login":   func(c *auth.Claims) { c.SessionID = "cccccccccccccccccccccccccccccccc" },
+		"missing iat":     func(c *auth.Claims) { c.IssuedAt = nil },
+		"missing exp":     func(c *auth.Claims) { c.ExpiresAt = nil },
+		"long ttl":        func(c *auth.Claims) { c.ExpiresAt = jwt.NewNumericDate(now.Add(301 * time.Second)) },
+		"short ttl":       func(c *auth.Claims) { c.ExpiresAt = jwt.NewNumericDate(now.Add(299 * time.Second)) },
+		"future iat": func(c *auth.Claims) {
+			c.IssuedAt = jwt.NewNumericDate(now.Add(time.Minute))
+			c.ExpiresAt = jwt.NewNumericDate(now.Add(6 * time.Minute))
+		},
+		"expired": func(c *auth.Claims) {
+			c.IssuedAt = jwt.NewNumericDate(now.Add(-6 * time.Minute))
+			c.ExpiresAt = jwt.NewNumericDate(now.Add(-time.Minute))
+		},
+	}
+	for name, mutate := range invalid {
+		t.Run(name, func(t *testing.T) {
+			claims := base
+			mutate(&claims)
+			if _, err := validateStepUpProof(db, manager, signStepUpClaimsForTest(t, claims), user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpProofInvalid) {
+				t.Fatalf("invalid replacement proof must be rejected: %v", err)
+			}
+		})
+	}
+	for _, proof := range []string{"", "not-a-proof", proof + "x"} {
+		if _, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpProofInvalid) {
+			t.Fatalf("missing/malformed/tampered proof must be invalid: %v", err)
+		}
+	}
+	for _, sessions := range [][]string{nil, {""}, {stepUpTestSessionID, stepUpTestSessionID}} {
+		if _, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, action, sessions...); !errors.Is(err, ErrStepUpProofInvalid) {
+			t.Fatalf("missing/ambiguous trusted session must be invalid: %v", err)
+		}
+	}
+	for _, change := range []map[string]any{
+		{"totp_enabled": false}, {"totp_reenrollment_required": true},
+		{"token_version": user.TokenVersion + 1}, {"role": "operator"},
+	} {
+		if err := db.Model(&model.User{}).Where("id = ?", user.ID).Updates(change).Error; err != nil {
+			t.Fatal(err)
+		}
+		if _, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpProofInvalid) {
+			t.Fatalf("changed current identity must reject replacement proof: %v", err)
+		}
+		if err := db.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+			"totp_enabled": true, "totp_reenrollment_required": false, "token_version": user.TokenVersion, "role": user.Role,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := validateStepUpProof(nil, manager, proof, user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpVerifierUnavailable) {
+		t.Fatalf("missing DB must not be a proof rejection: %v", err)
+	}
+	if _, err := validateStepUpProof(db, nil, proof, user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpVerifierUnavailable) {
+		t.Fatalf("missing manager must not be a proof rejection: %v", err)
+	}
+}
+
+func TestStepUpSSHKeyReplacementRevocationUsesTransactionAndContext(t *testing.T) {
+	db := openStepUpHandlerTestDB(t)
+	user := seedStepUpUser(t, db, "replacement-transaction", "admin")
+	// No root DB: all durable revocation reads must use the supplied transaction.
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	action := auth.StepUpAction("ssh_key.replace")
+	proof := generateStepUpProofForAction(t, manager, user, action)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	tx := db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	defer func() { _ = tx.Rollback().Error }()
+	if _, err := validateStepUpProof(tx, manager, proof, user.ID, user.Role, action, stepUpTestSessionID); err != nil {
+		t.Fatalf("transaction-local verifier must not require manager root DB: %v", err)
+	}
+	if err := tx.Create(&model.TokenRevocation{
+		TokenHash: "jti:" + stepUpTestSessionID, UserID: user.ID, ExpiresAt: time.Now().Add(time.Hour),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateStepUpProof(tx, manager, proof, user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpProofInvalid) {
+		t.Fatalf("transaction-local revocation must reject previously accepted proof: %v", err)
+	}
+	if err := tx.Rollback().Error; err != nil {
+		t.Fatal(err)
+	}
+	uncached := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	cancelled, stop := context.WithCancel(context.Background())
+	stop()
+	if _, err := validateStepUpProof(db.WithContext(cancelled), uncached, proof, user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpVerifierUnavailable) || errors.Is(err, ErrStepUpProofInvalid) {
+		t.Fatalf("cancelled durable lookup is verifier failure, not proof rejection: %v", err)
+	}
+	if err := db.Migrator().DropTable(&model.TokenRevocation{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateStepUpProof(db, uncached, proof, user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpVerifierUnavailable) || errors.Is(err, ErrStepUpProofInvalid) {
+		t.Fatalf("broken durable revocation store is verifier failure, not proof rejection: %v", err)
+	}
+}
+
+func TestStepUpSSHKeyReplacementEnforcementUsesTrustedSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := newStepUpTestJWTManager(db)
+	user := seedStepUpUser(t, db, "replacement-enforcement", "admin")
+	token := generatePrimaryToken(t, manager, user)
+	session, err := manager.ParseToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := auth.StepUpAction("ssh_key.replace")
+	proof := generateStepUpProofForAction(t, manager, user, action, session.ID)
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.GET("/replace", RequireStepUp(db, manager, action, string(action), "ssh_key_update"), func(c *gin.Context) {
+		respondOK(c, nil)
+	})
+	if response := performStepUpRequest(t, router, http.MethodGet, "/replace", token, proof, ""); response.Code != http.StatusOK {
+		t.Fatalf("trusted same-session proof rejected: status=%d", response.Code)
+	}
+	for _, rejected := range []string{"", generateStepUpProofForAction(t, manager, user, action)} {
+		assertStepUpRequiredEnvelopeForAction(t, performStepUpRequest(t, router, http.MethodGet, "/replace", token, rejected, ""), action)
+	}
+	unbound := gin.New()
+	unbound.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, user.ID)
+		c.Set(middleware.CtxRole, user.Role)
+	})
+	unbound.GET("/replace", RequireStepUp(db, manager, action, string(action), "ssh_key_update"), func(c *gin.Context) {
+		t.Error("untrusted identity reached protected operation")
+	})
+	assertStepUpRequiredEnvelopeForAction(t, performStepUpRequest(t, unbound, http.MethodGet, "/replace", "", proof, ""), action)
+	unavailable := gin.New()
+	unavailable.Use(middleware.AuthMiddleware(manager, db))
+	unavailable.GET("/replace", RequireStepUp(db, nil, action, string(action), "ssh_key_update"), func(c *gin.Context) {
+		t.Error("unavailable verifier reached protected operation")
+	})
+	if response := performStepUpRequest(t, unavailable, http.MethodGet, "/replace", token, proof, ""); response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), stepUpRequiredCode) {
+		t.Fatalf("verifier outage must not become a proof challenge: status=%d", response.Code)
 	}
 }

@@ -9,6 +9,7 @@ type StepUpAction string
 
 const (
 	StepUpActionSSHKeyExport           StepUpAction = "ssh_key.export"
+	StepUpActionSSHKeyReplace          StepUpAction = "ssh_key.replace"
 	StepUpActionTerminalOpen           StepUpAction = "terminal.open"
 	StepUpActionConfigImport           StepUpAction = "config.import"
 	StepUpActionConfigExport           StepUpAction = "config.export"
@@ -32,6 +33,7 @@ const (
 
 var stepUpActions = []StepUpAction{
 	StepUpActionSSHKeyExport,
+	StepUpActionSSHKeyReplace,
 	StepUpActionTerminalOpen,
 	StepUpActionConfigImport,
 	StepUpActionConfigExport,

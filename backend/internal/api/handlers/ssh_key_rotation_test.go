@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -64,6 +67,7 @@ type rotationTestEnvelope struct {
 type rotationTestSession struct {
 	User    model.User
 	Binding middleware.SessionBinding
+	Proof   string
 }
 
 type rotationSSHServer struct {
@@ -301,6 +305,12 @@ func configureRotationKnownHosts(t *testing.T, servers ...*rotationSSHServer) st
 	return path
 }
 
+func newSSHKeyMutationTestManager(db *gorm.DB) *auth.JWTManager {
+	manager := auth.NewJWTManager("FAKE_SSH_KEY_MUTATION_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	manager.SetDB(db)
+	return manager
+}
+
 func seedRotationSession(t *testing.T, db *gorm.DB) rotationTestSession {
 	t.Helper()
 	user := model.User{
@@ -308,11 +318,12 @@ func seedRotationSession(t *testing.T, db *gorm.DB) rotationTestSession {
 		PasswordHash: "FAKE_ROTATION_PASSWORD_HASH_FOR_TEST_ONLY",
 		Role:         "admin",
 		TokenVersion: 7,
+		TOTPEnabled:  true,
 	}
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatalf("create rotation session user: %v", err)
 	}
-	return rotationTestSession{
+	session := rotationTestSession{
 		User: user,
 		Binding: middleware.SessionBinding{
 			JTI:          strings.Repeat("a", 32),
@@ -322,6 +333,12 @@ func seedRotationSession(t *testing.T, db *gorm.DB) rotationTestSession {
 			ExpiresAt:    time.Now().UTC().Add(time.Hour),
 		},
 	}
+	proof, _, err := newSSHKeyMutationTestManager(db).GenerateStepUpToken(user, auth.StepUpActionSSHKeyReplace, session.Binding.JTI)
+	if err != nil {
+		t.Fatalf("generate rotation replacement proof: %v", err)
+	}
+	session.Proof = proof
+	return session
 }
 
 func newSSHKeyRotationTestRouter(db *gorm.DB, session rotationTestSession, role string, withBinding bool) *gin.Engine {
@@ -335,7 +352,7 @@ func newSSHKeyRotationTestRouter(db *gorm.DB, session rotationTestSession, role 
 		}
 		c.Next()
 	})
-	handler := NewSSHKeyHandler(db)
+	handler := NewSSHKeyHandler(db, newSSHKeyMutationTestManager(db))
 	secured := r.Group("")
 	secured.Use(middleware.RequireRole("admin"), middleware.RBAC("ssh_keys:write"))
 	secured.POST("/ssh-keys/:id/rotate", handler.Rotate)
@@ -351,22 +368,25 @@ func newSSHKeyRotationUpdateRouter(db *gorm.DB, session rotationTestSession) *gi
 		c.Set(middleware.CtxSessionBinding, session.Binding)
 		c.Next()
 	})
-	handler := NewSSHKeyHandler(db)
+	handler := NewSSHKeyHandler(db, newSSHKeyMutationTestManager(db))
 	r.PUT("/ssh-keys/:id", handler.Update)
 	return r
 }
 
-func rotationJSONRequest(t *testing.T, method, path string, body []byte) *http.Request {
+func rotationJSONRequest(t *testing.T, method, path string, body []byte, proof string) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	if proof != "" {
+		req.Header.Set(StepUpHeaderName, proof)
+	}
 	return req
 }
 
-func serveRotationJSON(t *testing.T, router *gin.Engine, method, path string, body []byte) *httptest.ResponseRecorder {
+func serveRotationJSON(t *testing.T, router *gin.Engine, method, path string, body []byte, proof string) *httptest.ResponseRecorder {
 	t.Helper()
 	resp := httptest.NewRecorder()
-	router.ServeHTTP(resp, rotationJSONRequest(t, method, path, body))
+	router.ServeHTTP(resp, rotationJSONRequest(t, method, path, body, proof))
 	return resp
 }
 
@@ -561,7 +581,7 @@ func TestSSHKeyRotationSavesOnlyAfterAllNodesVerified(t *testing.T) {
 	body := rotationRequestBody(t, candidatePrivate, "auto", "rotated-key")
 	respCh := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), body)
+		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), body, session.Proof)
 	}()
 	waitRotationSSHAuth(t, first, 1)
 	waitRotationSSHAuth(t, second, 1)
@@ -626,7 +646,7 @@ func TestSSHKeyRotationZeroNodeIsNeutralSuccess(t *testing.T) {
 	session := seedRotationSession(t, db)
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
 
-	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "zero-node-rotated"))
+	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "zero-node-rotated"), session.Proof)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("zero-node rotation status=%d", resp.Code)
 	}
@@ -637,6 +657,143 @@ func TestSSHKeyRotationZeroNodeIsNeutralSuccess(t *testing.T) {
 	stored := readRotationKey(t, db, key.ID)
 	if stored.PrivateKey != candidatePrivate || stored.Name != "zero-node-rotated" {
 		t.Fatalf("zero-node candidate not saved")
+	}
+}
+
+func TestSSHKeyRotationSameMaterialPreservesSecretAndStillValidatesInventory(t *testing.T) {
+	for _, mode := range []string{"verified", "connection rejected", "untrusted", "scope blocked"} {
+		t.Run(mode, func(t *testing.T) {
+			db := openSSHKeyRotationTestDB(t, "sqlite")
+			original := buildSSHKeyPrivateKeyForHandlerTest(t)
+			raw, err := ssh.ParseRawPrivateKey([]byte(original))
+			if err != nil {
+				t.Fatal("parse same-material fixture")
+			}
+			der, err := x509.MarshalPKCS8PrivateKey(raw)
+			if err != nil {
+				t.Fatal("encode same-material fixture")
+			}
+			candidate := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+			server := startRotationSSHServer(t, candidate, mode != "connection rejected", false)
+			if mode == "untrusted" {
+				other := startRotationSSHServer(t, candidate, true, false)
+				configureRotationKnownHosts(t, other)
+			} else {
+				configureRotationKnownHosts(t, server)
+			}
+			key := seedRotationKey(t, db, original)
+			host, portText, _ := net.SplitHostPort(server.address)
+			port, _ := strconv.Atoi(portText)
+			node := seedRotationNode(t, db, key.ID, "same-material-node", host, port, true)
+			setRotationKeyScope(t, db, key.ID, []uint{node.ID}, mode == "scope blocked", key.ExpiresAt)
+			session := seedRotationSession(t, db)
+			if err := db.Model(&model.User{}).Where("id = ?", session.User.ID).Update("totp_enabled", false).Error; err != nil {
+				t.Fatal("disable TOTP for unchanged material")
+			}
+			var ciphertextBefore string
+			if err := db.Table("ssh_keys").Select("private_key").Where("id = ?", key.ID).Scan(&ciphertextBefore).Error; err != nil {
+				t.Fatal("read original ciphertext")
+			}
+			router := newSSHKeyRotationTestRouter(db, session, "admin", true)
+			// Even an invalid header cannot turn unchanged material into a challenge.
+			resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidate, "auto", "same-material-renamed"), "invalid-proof")
+			if resp.Code != http.StatusOK {
+				t.Fatalf("unchanged material status=%d", resp.Code)
+			}
+			result := decodeRotationResponse(t, resp)
+			if len(result.Results) != 1 || result.Results[0].NodeID != node.ID {
+				t.Fatal("same-material rotation omitted archived inventory")
+			}
+			expectedStatus, expectedReason := "not_saved", "validation_failed"
+			switch mode {
+			case "verified":
+				expectedStatus, expectedReason = "saved", ""
+			case "scope blocked":
+				expectedReason = "scope_blocked"
+			}
+			if result.Status != expectedStatus || result.Reason != expectedReason {
+				t.Fatalf("same-material rotation status=%s reason=%s", result.Status, result.Reason)
+			}
+			if mode == "verified" && (result.Results[0].Status != "verified" || server.authAttempts.Load() == 0) {
+				t.Fatal("same-material rotation skipped SSH")
+			}
+			if mode == "untrusted" && result.Results[0].ErrorCode != sshKeyRotationErrorHostKeyUnknown {
+				t.Fatal("same-material rotation skipped strict trust")
+			}
+			if mode == "scope blocked" && server.authAttempts.Load() != 0 {
+				t.Fatal("scope rejection attempted SSH")
+			}
+			stored := readRotationKey(t, db, key.ID)
+			var ciphertextAfter string
+			if err := db.Table("ssh_keys").Select("private_key").Where("id = ?", key.ID).Scan(&ciphertextAfter).Error; err != nil {
+				t.Fatal("read final ciphertext")
+			}
+			if ciphertextAfter != ciphertextBefore || stored.PrivateKey != original || stored.Fingerprint != key.Fingerprint {
+				t.Fatal("same material rewrote secret encoding, ciphertext, or fingerprint")
+			}
+			var proofAudits int64
+			if err := db.Model(&model.CredentialAuditEvent{}).Where("action = ?", string(auth.StepUpActionSSHKeyReplace)).Count(&proofAudits).Error; err != nil || proofAudits != 0 {
+				t.Fatal("same-material rotation unexpectedly required proof")
+			}
+		})
+	}
+}
+
+func TestSSHKeyRotationProofAdmissionPrecedesInventoryAndSSH(t *testing.T) {
+	for _, proof := range []string{"", "invalid-proof"} {
+		t.Run(fmt.Sprintf("proof-present-%t", proof != ""), func(t *testing.T) {
+			db := openSSHKeyRotationTestDB(t, "sqlite")
+			oldPrivate := buildSSHKeyPrivateKeyForHandlerTest(t)
+			candidate := buildSSHKeyPrivateKeyForHandlerTest(t)
+			key := seedRotationKey(t, db, oldPrivate)
+			server := startRotationSSHServer(t, candidate, true, false)
+			configureRotationKnownHosts(t, server)
+			host, portText, _ := net.SplitHostPort(server.address)
+			port, _ := strconv.Atoi(portText)
+			seedRotationNode(t, db, key.ID, "proof-admission-node", host, port, false)
+			session := seedRotationSession(t, db)
+			var inventoryQueries atomic.Int32
+			const callbackName = "test:rotation-proof-before-inventory"
+			if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+				if tx.Statement != nil && tx.Statement.Schema != nil && tx.Statement.Schema.Table == "nodes" {
+					inventoryQueries.Add(1)
+				}
+			}); err != nil {
+				t.Fatal("register inventory observer")
+			}
+			t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+			router := newSSHKeyRotationTestRouter(db, session, "admin", true)
+			resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidate, "auto", "must-not-save"), proof)
+			var challenge struct {
+				Data struct {
+					ErrorCode string `json:"error_code"`
+					TTL       int    `json:"proof_ttl_seconds"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &challenge); err != nil || resp.Code != http.StatusForbidden || challenge.Data.ErrorCode != "STEP_UP_REQUIRED" || challenge.Data.TTL != 300 {
+				t.Fatalf("rotation did not return the standard proof challenge: status=%d", resp.Code)
+			}
+			if inventoryQueries.Load() != 0 || server.authAttempts.Load() != 0 {
+				t.Fatal("denied proof reached inventory or SSH")
+			}
+			assertRotationNotSaved(t, db, key.ID, oldPrivate, key.Name)
+			var rotationAudits, proofAudits int64
+			if err := db.Model(&model.CredentialAuditEvent{}).Where("action = ?", "ssh_key.rotate").Count(&rotationAudits).Error; err != nil || rotationAudits != 1 {
+				t.Fatal("rotation rejection must audit exactly once")
+			}
+			if err := db.Model(&model.CredentialAuditEvent{}).Where("action = ?", string(auth.StepUpActionSSHKeyReplace)).Count(&proofAudits).Error; err != nil || proofAudits != 1 {
+				t.Fatal("proof admission must audit exactly once")
+			}
+			assertRotationAuditReason(t, db, key.ID, "request_rejected")
+			var proofAudit model.CredentialAuditEvent
+			if err := db.Where("action = ?", string(auth.StepUpActionSSHKeyReplace)).First(&proofAudit).Error; err != nil {
+				t.Fatal("read replacement audit")
+			}
+			var metadata map[string]any
+			if err := json.Unmarshal([]byte(proofAudit.Metadata), &metadata); err != nil || metadata["operation"] != "ssh_key_rotate" {
+				t.Fatal("proof audit omitted rotation operation")
+			}
+		})
 	}
 }
 
@@ -657,7 +814,7 @@ func TestSSHKeyRotationFailureReturnsEveryNodeAndOrdinaryPutStillWorksOffline(t 
 	setRotationKeyScope(t, db, key.ID, []uint{node1.ID, node2.ID}, false, key.ExpiresAt)
 	session := seedRotationSession(t, db)
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
-	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "should-not-save"))
+	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "should-not-save"), session.Proof)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("failed rotation status=%d", resp.Code)
 	}
@@ -676,7 +833,7 @@ func TestSSHKeyRotationFailureReturnsEveryNodeAndOrdinaryPutStillWorksOffline(t 
 
 	updateRouter := newSSHKeyRotationUpdateRouter(db, session)
 	updateBody := []byte(fmt.Sprintf(`{"name":"offline-edited","username":"root","key_type":"auto","private_key":%q}`, oldPrivate))
-	updateResp := serveRotationJSON(t, updateRouter, http.MethodPut, fmt.Sprintf("/ssh-keys/%d", key.ID), updateBody)
+	updateResp := serveRotationJSON(t, updateRouter, http.MethodPut, fmt.Sprintf("/ssh-keys/%d", key.ID), updateBody, "")
 	if updateResp.Code != http.StatusOK {
 		t.Fatalf("ordinary offline PUT should remain available: status=%d", updateResp.Code)
 	}
@@ -725,7 +882,7 @@ func TestSSHKeyRotationRejectsDisabledExpiredAndOutOfScopeBeforeDial(t *testing.
 			}
 			session := seedRotationSession(t, db)
 			router := newSSHKeyRotationTestRouter(db, session, "admin", true)
-			resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "scope-rejected"))
+			resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "scope-rejected"), session.Proof)
 			if resp.Code != http.StatusOK {
 				t.Fatalf("scope rejection status=%d", resp.Code)
 			}
@@ -785,7 +942,7 @@ func TestSSHKeyRotationRejectsUnknownAndMismatchedHostsWithoutAuthentication(t *
 			setRotationKeyScope(t, db, key.ID, []uint{node.ID}, false, key.ExpiresAt)
 			session := seedRotationSession(t, db)
 			router := newSSHKeyRotationTestRouter(db, session, "admin", true)
-			resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "host-trust"))
+			resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "host-trust"), session.Proof)
 			if resp.Code != http.StatusOK {
 				t.Fatalf("host trust failure status=%d", resp.Code)
 			}
@@ -823,7 +980,7 @@ func TestSSHKeyRotationTrustUnavailableDoesNotSave(t *testing.T) {
 	setRotationKeyScope(t, db, key.ID, []uint{node.ID}, false, key.ExpiresAt)
 	session := seedRotationSession(t, db)
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
-	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "trust-unavailable"))
+	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "trust-unavailable"), session.Proof)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("trust unavailable status=%d", resp.Code)
 	}
@@ -857,7 +1014,7 @@ func runRotationExpiryCase(t *testing.T, engine string) {
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
 	respCh := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "expiring"))
+		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "expiring"), session.Proof)
 	}()
 	waitRotationSSHAuth(t, server, 1)
 	timer := time.NewTimer(time.Until(expiration) + 100*time.Millisecond)
@@ -891,7 +1048,7 @@ func runRotationConflictCase(t *testing.T, engine string, mutate func(*gorm.DB, 
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
 	respCh := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "conflict-candidate"))
+		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "conflict-candidate"), session.Proof)
 	}()
 	waitRotationSSHAuth(t, server, 1)
 	mutate(db, key, node)
@@ -987,7 +1144,7 @@ func TestSSHKeyRotationIgnoresUsageAndHealthDrift(t *testing.T) {
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
 	respCh := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "usage-health-rotated"))
+		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "usage-health-rotated"), session.Proof)
 	}()
 	waitRotationSSHAuth(t, server, 1)
 	usedAt := time.Now().UTC().Add(-30 * time.Second)
@@ -1031,24 +1188,24 @@ func TestSSHKeyRotationRejectsMissingOrInvalidSession(t *testing.T) {
 	session := seedRotationSession(t, db)
 
 	missingBindingRouter := newSSHKeyRotationTestRouter(db, session, "admin", false)
-	missingResp := serveRotationJSON(t, missingBindingRouter, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "missing-binding"))
+	missingResp := serveRotationJSON(t, missingBindingRouter, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "missing-binding"), session.Proof)
 	if missingResp.Code != http.StatusUnauthorized {
 		t.Fatalf("missing binding must be unauthorized, got %d", missingResp.Code)
 	}
 	expiredSession := session
 	expiredSession.Binding.ExpiresAt = time.Now().UTC().Add(-time.Minute)
 	expiredRouter := newSSHKeyRotationTestRouter(db, expiredSession, "admin", true)
-	expiredResp := serveRotationJSON(t, expiredRouter, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "expired-session"))
+	expiredResp := serveRotationJSON(t, expiredRouter, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "expired-session"), session.Proof)
 	if expiredResp.Code != http.StatusUnauthorized {
 		t.Fatalf("expired binding must be unauthorized, got %d", expiredResp.Code)
 	}
 	operatorRouter := newSSHKeyRotationTestRouter(db, session, "operator", true)
-	operatorResp := serveRotationJSON(t, operatorRouter, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "operator"))
+	operatorResp := serveRotationJSON(t, operatorRouter, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "operator"), session.Proof)
 	if operatorResp.Code != http.StatusForbidden {
 		t.Fatalf("operator rotation must be forbidden, got %d", operatorResp.Code)
 	}
 	notFoundRouter := newSSHKeyRotationTestRouter(db, session, "admin", true)
-	notFoundResp := serveRotationJSON(t, notFoundRouter, http.MethodPost, "/ssh-keys/999999/rotate", rotationRequestBody(t, candidatePrivate, "auto", "missing-key"))
+	notFoundResp := serveRotationJSON(t, notFoundRouter, http.MethodPost, "/ssh-keys/999999/rotate", rotationRequestBody(t, candidatePrivate, "auto", "missing-key"), session.Proof)
 	if notFoundResp.Code != http.StatusNotFound {
 		t.Fatalf("missing key must be 404, got %d", notFoundResp.Code)
 	}
@@ -1079,7 +1236,7 @@ func TestSSHKeyRotationRejectsMalformedBoundedBodies(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), tc.body)
+			resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), tc.body, session.Proof)
 			if resp.Code != tc.wantStatus {
 				t.Fatalf("status=%d want=%d", resp.Code, tc.wantStatus)
 			}
@@ -1089,7 +1246,7 @@ func TestSSHKeyRotationRejectsMalformedBoundedBodies(t *testing.T) {
 		})
 	}
 	oversizeBody := append(rotationRequestBody(t, candidatePrivate, "auto", ""), bytes.Repeat([]byte(" "), 1<<20)...)
-	unknownLengthReq := rotationJSONRequest(t, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), oversizeBody)
+	unknownLengthReq := rotationJSONRequest(t, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), oversizeBody, session.Proof)
 	unknownLengthReq.ContentLength = -1
 	unknownLengthResp := httptest.NewRecorder()
 	router.ServeHTTP(unknownLengthResp, unknownLengthReq)
@@ -1197,7 +1354,7 @@ func TestSSHKeyRotationRejectsInventoryOverLimit(t *testing.T) {
 	setRotationKeyScope(t, db, key.ID, ids, false, key.ExpiresAt)
 	session := seedRotationSession(t, db)
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
-	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "too-many"))
+	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "too-many"), session.Proof)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("inventory-limit status=%d", resp.Code)
 	}
@@ -1255,7 +1412,7 @@ func TestSSHKeyRotationRejectsSessionInvalidationDuringValidation(t *testing.T) 
 			router := newSSHKeyRotationTestRouter(db, session, "admin", true)
 			respCh := make(chan *httptest.ResponseRecorder, 1)
 			go func() {
-				respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "session-invalidated"))
+				respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "session-invalidated"), session.Proof)
 			}()
 			waitRotationSSHAuth(t, server, 1)
 			tc.mutate(t, db, session)
@@ -1286,7 +1443,7 @@ func TestSSHKeyRotationCancellationStopsWorkersAndDoesNotSave(t *testing.T) {
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	req := rotationJSONRequest(t, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "cancelled"))
+	req := rotationJSONRequest(t, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "cancelled"), session.Proof)
 	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 	respCh := make(chan struct{})
@@ -1326,7 +1483,7 @@ func TestSSHKeyRotationDeadlineStopsHandshake(t *testing.T) {
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	req := rotationJSONRequest(t, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "deadline"))
+	req := rotationJSONRequest(t, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "deadline"), session.Proof)
 	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 	respCh := make(chan struct{})
@@ -1375,11 +1532,11 @@ func TestSSHKeyRotationSQLiteWriterLockReturnsBusyAndRestoresTimeout(t *testing.
 	}
 
 	started := time.Now()
-	commitErr := commitSSHKeyRotation(context.Background(), db, session.Binding, snapshot, candidate)
+	commitErr := commitSSHKeyRotation(context.Background(), db, session.Binding, snapshot, candidate, sshKeyReplacementAuthorization{Manager: newSSHKeyMutationTestManager(db), Proof: session.Proof})
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("SQLite writer lock was not bounded: %s", elapsed)
 	}
-	if !errors.Is(commitErr, errSSHKeyRotationBusy) {
+	if !errors.Is(commitErr, errSSHKeyMutationBusy) {
 		t.Fatalf("SQLite writer lock error=%v want busy", commitErr)
 	}
 	assertRotationNotSaved(t, db, key.ID, oldPrivate, key.Name)
@@ -1405,7 +1562,7 @@ func TestSSHKeyRotationAuditDoesNotExposeRemoteFailure(t *testing.T) {
 	setRotationKeyScope(t, db, key.ID, []uint{node.ID}, false, key.ExpiresAt)
 	session := seedRotationSession(t, db)
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
-	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "audit-failure"))
+	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "audit-failure"), session.Proof)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("audit failure status=%d", resp.Code)
 	}
@@ -1516,7 +1673,7 @@ func runSSHKeyRotationPostgresCommitLockBarrier(t *testing.T) {
 
 	respCh := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "postgres-commit-barrier"))
+		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "postgres-commit-barrier"), session.Proof)
 	}()
 	waitRotationSSHAuth(t, server, 1)
 	releaseRotationSSHServer(server)
@@ -1603,7 +1760,7 @@ func TestSSHKeyRotationPostgres(t *testing.T) {
 
 	respCh := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "postgres-rotated"))
+		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "postgres-rotated"), session.Proof)
 	}()
 	waitRotationSSHAuth(t, server, 1)
 
@@ -1686,7 +1843,7 @@ func TestSSHKeyRotationPostgres(t *testing.T) {
 		router := newSSHKeyRotationTestRouter(busyDB, session, "admin", true)
 		respCh := make(chan *httptest.ResponseRecorder, 1)
 		go func() {
-			respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "postgres-busy"))
+			respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "postgres-busy"), session.Proof)
 		}()
 		waitRotationSSHAuth(t, server, 1)
 
@@ -1750,7 +1907,7 @@ func TestSSHKeyRotationResponseResultsAreSorted(t *testing.T) {
 	setRotationKeyScope(t, db, key.ID, []uint{nodes[0].ID, nodes[1].ID}, false, key.ExpiresAt)
 	session := seedRotationSession(t, db)
 	router := newSSHKeyRotationTestRouter(db, session, "admin", true)
-	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "sorted"))
+	resp := serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "sorted"), session.Proof)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("sorted results status=%d", resp.Code)
 	}

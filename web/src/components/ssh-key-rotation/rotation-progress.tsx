@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { StepUpPrerequisiteNotice } from "@/components/step-up-prerequisite-notice";
 import { type NodeRecord } from "@/types/domain";
 
 interface RotationProgressProps {
@@ -46,8 +47,12 @@ export function RotationProgress({
 
   return (
     <>
+      <StepUpPrerequisiteNotice className="mb-1" />
       <InlineAlert tone="warning">
         {t("sshKeys.rotationWarning", { count: affectedNodes.length })}
+      </InlineAlert>
+      <InlineAlert tone="info">
+        <span data-testid="ssh-key-replacement-policy">{t("sshKeys.rotationPolicyNotice")}</span>
       </InlineAlert>
       <InlineAlert tone="info">{t("sshKeys.rotationAdminDeployNotice")}</InlineAlert>
 

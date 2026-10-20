@@ -229,6 +229,9 @@ jobs:
       - name: Run PostgreSQL config import preview and apply contracts
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL config import preview and apply contracts' ./internal/api/handlers '^TestConfig(Import|Export)'
 
+      - name: Run PostgreSQL SSH key replacement and rotation contracts
+        run: bash ../scripts/run-required-postgres-tests.sh 'SSH key replacement and rotation' ./internal/api/handlers '^TestSSHKey(ReplacementPostgres|RotationPostgres)$'
+
 
       - name: Run PostgreSQL general API surface parity
         run: go test ./internal/api -run '^TestGeneralSurfacePostgres$' -count=1

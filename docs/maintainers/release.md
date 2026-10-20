@@ -264,6 +264,14 @@ SSH 候选连接预验证的发行说明须明确：新版 Core 与向导同版�
 关闭不撤销已提交替换、结果未知不重放及回退旧版恢复旧风险的边界；具体行为见
 [凭据与访问](../spec/domains/credentials-access.md#受管-ssh-key-scope)。
 
+真实私钥替换 step-up 的发行说明须保留条件材料比较、主会话绑定及 300 秒可复用
+proof、普通编辑离线能力、轮换完整库存验证和配置导入独立授权链。Core 与页面同版本
+切换，完成或退出旧密钥交互、排空旧 Core 在途请求并刷新客户端；新门禁不追溯撤销
+旧版已提交操作。无新增 schema migration，升级前保全数据库、匹配密钥、配置及主机
+信任文件；回退旧版会移除门禁与身份保护、恢复旧并发回写风险，但不还原已替换私钥。
+Release PR 与最终 GitHub Release 须完整保留本批 CHANGELOG 的七项行为与升级说明，
+不把结果未知写成确定未保存，也不宣称一次性 proof、远端公钥部署或生产恢复验收。
+
 ## Docker Hub 描述同步
 
 [Sync Docker Hub Description](../../.github/workflows/dockerhub-description.yml)在 `README.md` 或该工作流文件变更并 push 到 `main` 时运行，也支持手动触发。短描述取 GitHub 仓库 description（为空时使用工作流默认文本），长描述取根 README。

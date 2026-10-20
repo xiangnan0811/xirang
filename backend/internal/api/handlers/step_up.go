@@ -82,7 +82,7 @@ func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTMa
 		return false
 	}
 	sessionID := ""
-	if op.ExpectedAction == auth.StepUpActionAssetSecretReveal {
+	if op.ExpectedAction == auth.StepUpActionAssetSecretReveal || op.ExpectedAction == auth.StepUpActionSSHKeyReplace {
 		session, ok := middleware.CurrentSessionBinding(c)
 		if !ok || session.UserID != userID || session.Role != role {
 			writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "failed")
@@ -107,6 +107,10 @@ func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTMa
 			return false
 		}
 		writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "failed")
+		if op.ExpectedAction == auth.StepUpActionSSHKeyReplace && errors.Is(err, ErrStepUpVerifierUnavailable) {
+			respondInternalError(c, ErrStepUpVerifierUnavailable)
+			return false
+		}
 		respondStepUpRequired(c, op.ExpectedAction)
 		return false
 	}
@@ -158,11 +162,20 @@ func validateStepUpProof(
 	if claims.IssuedAt == nil || claims.ExpiresAt == nil || claims.ExpiresAt.Sub(claims.IssuedAt.Time) != auth.StepUpProofTTLForAction(expectedAction) || claims.IssuedAt.After(time.Now().UTC()) {
 		return nil, fmt.Errorf("%w: proof lifetime", ErrStepUpProofInvalid)
 	}
-	if expectedAction == auth.StepUpActionAssetSecretReveal {
+	if expectedAction == auth.StepUpActionAssetSecretReveal || expectedAction == auth.StepUpActionSSHKeyReplace {
 		if len(sessionIDs) != 1 || strings.TrimSpace(sessionIDs[0]) == "" || claims.SessionID != sessionIDs[0] {
 			return nil, fmt.Errorf("%w: proof session", ErrStepUpProofInvalid)
 		}
-		revoked, revokeErr := jwtManager.IsSessionRevoked(claims.SessionID)
+		if expectedAction == auth.StepUpActionSSHKeyReplace && !validStepUpProofID(claims.SessionID) {
+			return nil, fmt.Errorf("%w: proof session jti", ErrStepUpProofInvalid)
+		}
+		var revoked bool
+		var revokeErr error
+		if expectedAction == auth.StepUpActionSSHKeyReplace {
+			revoked, revokeErr = jwtManager.IsSessionRevokedWithDB(db.Statement.Context, db, claims.SessionID)
+		} else {
+			revoked, revokeErr = jwtManager.IsSessionRevoked(claims.SessionID)
+		}
 		if revokeErr != nil {
 			return nil, fmt.Errorf("%w: verify proof session", ErrStepUpVerifierUnavailable)
 		}

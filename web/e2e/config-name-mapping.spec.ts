@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test, type APIRequestContext, type APIResponse, type Page } from "@playwright/test";
@@ -11,6 +11,7 @@ const STEP_UP_HEADER = "X-Xirang-Step-Up";
 type Warning = { entity: string; index: number; code: string; name?: string };
 type ImportBody = {
   created: number;
+  updated: number;
   rejected: number;
   skipped: number;
   disabledImported: number;
@@ -110,7 +111,10 @@ test.describe("config name mapping", () => {
     await deletePair(page, source.nodeId, source.keyId);
     const distractor = await createBoundPair(page, distractorNames(token), privateKey, "10.251.2.11", `e2emap${token}x`);
     const before = relationSnapshot(runtime.sqlitePath);
+    const stepUpsBeforeImport = session.stepUps.actions.length;
     const imported = await importDownload(page, session.secret, session.stepUps, downloaded, names.node);
+    // A secret-bearing import stays on its own config.import proof/grant; it never asks for an SSH key replacement proof.
+    expect(session.stepUps.actions.slice(stepUpsBeforeImport)).toEqual(["config.import"]);
     expect(imported.created).toBeGreaterThanOrEqual(2);
     const live = await listedPair(page, names);
     expect(live.node.id).not.toBe(source.nodeId);
@@ -130,6 +134,70 @@ test.describe("config name mapping", () => {
     expect(distractorStored.sshKeyId).toBe(distractor.keyId);
     assertPriorRowsUnchanged(before, relationSnapshot(runtime.sqlitePath));
     await expect(page.locator("#settings-panel-maintenance").getByText("Created", { exact: true })).toBeVisible();
+  });
+
+  test("overwrites an existing key's private material through config.import proof and grant only", async ({ page }, testInfo) => {
+    test.setTimeout(240_000);
+    const session = await beginAdmin(page, `${testInfo.testId}:overwrite`);
+    const token = scenarioToken(`${testInfo.testId}:overwrite`);
+    const names = { node: `e2e-map,ow-node-${token}`, key: `e2e-map,ow-key-${token}` };
+    const runtime = runtimeFiles();
+    const keyDir = mkdtempSync(path.join(runtimeRoot(), "map-overwrite-"));
+    try {
+      chmodSync(keyDir, 0o700);
+      const original = keyMaterial(runtime.privateKeyPath);
+      const candidate = generateCandidateKey(keyDir);
+      expect(candidate.publicFingerprint).not.toBe(original.publicFingerprint);
+      const source = await createBoundPair(page, names, original.privateKey, "10.251.7.10", `e2eow${token}`);
+      const storedBefore = storedSecret(runtime.sqlitePath, names.key);
+      expect(storedBefore.id).toBe(source.keyId);
+      expect(storedBefore.encrypted).toBe(true);
+      expect(await savedPublicFingerprint(page, source.keyId)).toBe(original.publicFingerprint);
+      const before = relationSnapshot(runtime.sqlitePath);
+      const keyWrites = watchKeyWrites(page);
+      const stepUpsBeforeImport = session.stepUps.actions.length;
+      await openMaintenance(page);
+      const imported = await importDownload(page, session.secret, session.stepUps, JSON.stringify({
+        version: "1.0",
+        data: {
+          nodes: [],
+          ssh_keys: [{
+            name: names.key,
+            username: "e2e-map",
+            key_type: "auto",
+            private_key: candidate.privateKey,
+            allowed_node_names: [names.node],
+          }],
+        },
+      }), names.key, "overwrite");
+      // Overwriting a stored secret stays on the import's own proof/grant chain; ssh_key.replace is never requested.
+      expect(session.stepUps.actions.slice(stepUpsBeforeImport)).toEqual(["config.import"]);
+      await expect(page.getByRole("dialog", { name: "Additional verification required" })).toHaveCount(0);
+      expect(keyWrites.count).toBe(0);
+      expect(imported.updated).toBe(1);
+      expect(imported.created).toBe(0);
+      expect(imported.rejected).toBe(0);
+      expect(imported.skipped).toBe(0);
+      expectWarningIds(imported.warnings, []);
+      const storedAfter = storedSecret(runtime.sqlitePath, names.key);
+      expect(storedAfter.id).toBe(source.keyId);
+      expect(storedAfter.encrypted).toBe(true);
+      expect(storedAfter.ciphertextDigest).not.toBe(storedBefore.ciphertextDigest);
+      expect(storedAfter.fingerprint).not.toBe(storedBefore.fingerprint);
+      expect(await savedPublicFingerprint(page, source.keyId)).toBe(candidate.publicFingerprint);
+      const stored = storedPair(runtime.sqlitePath, names);
+      expect(stored.nodeId).toBe(source.nodeId);
+      expect(stored.sshKeyId).toBe(source.keyId);
+      expect(stored.allowedNodeIds).toBe(String(source.nodeId));
+      expect(stored.disabled).toBe(false);
+      assertPriorRowsUnchanged(before, relationSnapshot(runtime.sqlitePath));
+      expect(proofTrail(runtime.sqlitePath, session.username)).toEqual({ importGrants: 1, otherGrants: 0, replaceAudits: 0 });
+      await deletePair(page, source.nodeId, source.keyId);
+      expect(countNamed(runtime.sqlitePath, "nodes", names.node)).toBe(0);
+      expect(countNamed(runtime.sqlitePath, "ssh_keys", names.key)).toBe(0);
+    } finally {
+      rmSync(keyDir, { recursive: true, force: true });
+    }
   });
 
   test("shows disabled-key remediation for a secret-free export", async ({ page }, testInfo) => {
@@ -633,14 +701,14 @@ test.describe("config name mapping", () => {
   });
 });
 
-async function beginAdmin(page: Page, seed: string): Promise<{ secret: string; stepUps: { count: number } }> {
+async function beginAdmin(page: Page, seed: string): Promise<{ username: string; secret: string; stepUps: { count: number; actions: string[] } }> {
   await isolateClient(page, seed);
   const stepUps = watchStepUps(page);
   const username = `e2e-map-admin-${scenarioToken(seed)}`;
   insertIndependentUser(runtimeFiles().sqlitePath, username, "admin");
   await loginAs(page, username, e2eAdminPassword());
   const secret = await activateTotp(page);
-  return { secret, stepUps };
+  return { username, secret, stepUps };
 }
 
 async function isolateClient(page: Page, seed: string): Promise<void> {
@@ -652,12 +720,31 @@ function clientAddress(seed: string): string {
   return `2001:db8:${client.slice(0, 4)}:${client.slice(4, 8)}::1`;
 }
 
-function watchStepUps(page: Page): { count: number } {
-  const stepUps = { count: 0 };
+function watchStepUps(page: Page): { count: number; actions: string[] } {
+  const stepUps = { count: 0, actions: [] as string[] };
   page.on("response", (response) => {
-    if (new URL(response.url()).pathname === "/api/v1/auth/step-up") stepUps.count += 1;
+    if (new URL(response.url()).pathname !== "/api/v1/auth/step-up") return;
+    stepUps.count += 1;
+    let body: unknown = null;
+    try {
+      body = JSON.parse(response.request().postData() ?? "");
+    } catch {
+      body = null;
+    }
+    // Only the action is kept; the request body (with its code) is never echoed.
+    stepUps.actions.push(body && typeof body === "object" && "step_up_action" in body && typeof body.step_up_action === "string" ? body.step_up_action : "unknown");
   });
   return stepUps;
+}
+
+// Counts browser-issued SSH key mutations; an import overwrite must not route through PUT or rotate.
+function watchKeyWrites(page: Page): { count: number } {
+  const writes = { count: 0 };
+  page.on("request", (request) => {
+    if (request.method() === "GET") return;
+    if (new URL(request.url()).pathname.startsWith("/api/v1/ssh-keys")) writes.count += 1;
+  });
+  return writes;
 }
 
 function scenarioToken(seed: string): string {
@@ -720,7 +807,14 @@ async function downloadConfig(page: Page, secret: string, stepUps: { count: numb
   return readFileSync(filePath, "utf8");
 }
 
-async function importDownload(page: Page, secret: string, stepUps: { count: number }, contents: string, marker: string): Promise<ImportBody> {
+async function importDownload(
+  page: Page,
+  secret: string,
+  stepUps: { count: number },
+  contents: string,
+  marker: string,
+  conflict: "skip" | "overwrite" = "skip",
+): Promise<ImportBody> {
   const responsePromise = page.waitForResponse((response) =>
     new URL(response.url()).pathname === "/api/v1/config/import" && response.request().method() === "POST", { timeout: 60_000 });
   await page.locator("#settings-panel-maintenance input[type=file]").setInputFiles({
@@ -731,7 +825,18 @@ async function importDownload(page: Page, secret: string, stepUps: { count: numb
   const preview = page.getByRole("dialog", { name: "Import preview" });
   await expect(preview).toBeVisible();
   await expect(preview.getByText("Counts are estimates from the current snapshot.", { exact: true })).toBeVisible();
-  await expect(preview.getByLabel("When a name already exists", { exact: true })).toHaveValue("skip");
+  const conflictSelect = preview.getByLabel("When a name already exists", { exact: true });
+  await expect(conflictSelect).toHaveValue("skip");
+  if (conflict === "overwrite") {
+    const overwritePreview = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/v1/config/import/preview" && url.searchParams.get("conflict") === "overwrite";
+    }, { timeout: 60_000 });
+    await conflictSelect.selectOption("overwrite");
+    expect((await overwritePreview).ok()).toBe(true);
+    await expect(conflictSelect).toHaveValue("overwrite");
+    await expect(preview.getByText("Counts are estimates from the current snapshot.", { exact: true })).toBeVisible();
+  }
   await preview.getByRole("button", { name: "Confirm and continue verification", exact: true }).click();
   const grant = page.getByRole("dialog", { name: "Config import temporary grant required" });
   await expect(grant).toBeVisible();
@@ -740,6 +845,7 @@ async function importDownload(page: Page, secret: string, stepUps: { count: numb
   await submitFreshProof(page, secret, stepUps);
   const response = await responsePromise;
   expect(response.ok()).toBe(true);
+  expect(new URL(response.url()).searchParams.get("conflict")).toBe(conflict);
   const posted = response.request().postData() ?? "";
   expect(posted.includes(marker)).toBe(true);
   expect(posted.includes("\"ssh_key_name\"") || posted.includes("\"allowed_node_names\"")).toBe(true);
@@ -1048,6 +1154,7 @@ function importBody(payload: unknown): ImportBody {
   const warnings = Array.isArray(body.warnings) ? body.warnings : [];
   return {
     created: count(body.created),
+    updated: count(body.updated),
     rejected: count(body.rejected),
     skipped: count(body.skipped),
     disabledImported: count(body.disabled_imported),
@@ -1160,10 +1267,14 @@ async function apiData(request: APIRequestContext, apiPath: string, token: strin
   return record(await response.json(), apiPath).data;
 }
 
-function runtimeFiles(): RuntimeFiles {
+function runtimeRoot(): string {
   const runtimeDir = (process.env.E2E_RUNTIME_DIR ?? "").trim();
   if (!path.isAbsolute(runtimeDir)) throw new Error("E2E_RUNTIME_DIR must be absolute");
-  const runtimeReal = realpathSync(runtimeDir);
+  return realpathSync(runtimeDir);
+}
+
+function runtimeFiles(): RuntimeFiles {
+  const runtimeReal = runtimeRoot();
   const fixtureInfo = lstatSync(path.join(runtimeReal, "fixture.json"));
   if (fixtureInfo.isSymbolicLink() || !fixtureInfo.isFile()) throw new Error("isolated runtime fixture must be a regular file");
   const parsed: unknown = JSON.parse(readFileSync(path.join(runtimeReal, "fixture.json"), "utf8"));
@@ -1192,6 +1303,74 @@ function readRuntimePrivateKey(filePath: string): string {
     throw new Error("isolated SSH private key is not an unencrypted private key");
   }
   return key.endsWith("\n") ? key : `${key}\n`;
+}
+
+type KeyMaterial = { privateKey: string; publicFingerprint: string };
+
+function keyMaterial(filePath: string): KeyMaterial {
+  const privateKey = readRuntimePrivateKey(filePath);
+  const output = execFileSync("ssh-keygen", ["-lf", filePath], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] });
+  const match = output.match(/SHA256:[A-Za-z0-9+/]+/);
+  if (!match) throw new Error("public fingerprint was not produced");
+  return { privateKey, publicFingerprint: match[0] };
+}
+
+// A distinct, valid candidate generated inside the exclusive runtime; the caller removes its directory.
+function generateCandidateKey(directory: string): KeyMaterial {
+  const filePath = path.join(directory, "candidate");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "xirang-e2e-map-overwrite", "-f", filePath], {
+    timeout: 15_000,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  chmodSync(filePath, 0o600);
+  return keyMaterial(filePath);
+}
+
+async function savedPublicFingerprint(page: Page, keyId: number): Promise<string> {
+  const data = record(await browserApi(page, "GET", `/api/v1/ssh-keys/${keyId}`), "ssh key");
+  if (data.id !== keyId) throw new Error("ssh key response is for another key");
+  if (JSON.stringify(data).includes("PRIVATE KEY")) throw new Error("ssh key response echoed private key material");
+  const fingerprint = data.public_key_fingerprint;
+  if (typeof fingerprint !== "string" || !fingerprint.startsWith("SHA256:")) {
+    throw new Error("ssh key response has no public fingerprint");
+  }
+  return fingerprint;
+}
+
+type StoredSecret = { id: number; encrypted: boolean; ciphertextDigest: string; fingerprint: string };
+
+// Only a digest of the stored ciphertext leaves this function; the stored value itself is never returned or printed.
+function storedSecret(dbPath: string, name: string): StoredSecret {
+  const rows = sqliteRows(dbPath, `SELECT id, private_key, fingerprint FROM ssh_keys WHERE name = '${sqlText(name)}';`);
+  const row = rows[0];
+  if (rows.length !== 1 || row === undefined) throw new Error("stored ssh key secret row is invalid");
+  const id = requireInt(row.id, "stored ssh key id");
+  if (typeof row.private_key !== "string" || row.private_key === "" || typeof row.fingerprint !== "string" || row.fingerprint === "") {
+    throw new Error("stored ssh key secret is missing");
+  }
+  return {
+    id,
+    encrypted: row.private_key.startsWith("enc:v2:") && !row.private_key.includes("PRIVATE KEY"),
+    ciphertextDigest: createHash("sha256").update(row.private_key).digest("hex"),
+    fingerprint: row.fingerprint,
+  };
+}
+
+function proofTrail(dbPath: string, username: string): { importGrants: number; otherGrants: number; replaceAudits: number } {
+  const user = sqlText(username);
+  const rows = sqliteRows(dbPath, [
+    "SELECT",
+    `(SELECT COUNT(*) FROM credential_access_grants WHERE requester_username = '${user}' AND action = 'config.import' AND purpose = 'config_import') AS import_grants,`,
+    `(SELECT COUNT(*) FROM credential_access_grants WHERE requester_username = '${user}' AND NOT (action = 'config.import' AND purpose = 'config_import')) AS other_grants,`,
+    `(SELECT COUNT(*) FROM credential_audit_events WHERE username = '${user}' AND (action = 'ssh_key.replace' OR purpose = 'ssh_key.replace')) AS replace_audits;`,
+  ].join("\n"));
+  const row = rows[0];
+  if (rows.length !== 1 || row === undefined) throw new Error("proof trail is invalid");
+  return {
+    importGrants: requireInt(row.import_grants, "import grants"),
+    otherGrants: requireInt(row.other_grants, "other grants"),
+    replaceAudits: requireInt(row.replace_audits, "replace audits"),
+  };
 }
 
 function sqlite(dbPath: string, sql: string): string {

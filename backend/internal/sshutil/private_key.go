@@ -63,6 +63,42 @@ func NormalizePrivateKeyMaterial(raw string) string {
 	return normalized
 }
 
+// SamePrivateKeyMaterial compares supported private components rather than their
+// encoding or public fingerprint. Empty, malformed and unsupported keys differ.
+func SamePrivateKeyMaterial(left, right string) bool {
+	left = NormalizePrivateKeyMaterial(left)
+	right = NormalizePrivateKeyMaterial(right)
+	if left == "" || right == "" {
+		return false
+	}
+	leftKey, err := ssh.ParseRawPrivateKey([]byte(left))
+	if err != nil {
+		return false
+	}
+	rightKey, err := ssh.ParseRawPrivateKey([]byte(right))
+	if err != nil {
+		return false
+	}
+	// OpenSSH parsing returns a pointer; PKCS8 parsing returns the slice value.
+	// ed25519.PrivateKey.Equal accepts only the value form.
+	if key, ok := leftKey.(*ed25519.PrivateKey); ok {
+		leftKey = *key
+	}
+	if key, ok := rightKey.(*ed25519.PrivateKey); ok {
+		rightKey = *key
+	}
+	switch key := leftKey.(type) {
+	case *rsa.PrivateKey:
+		return key.Equal(rightKey)
+	case *ecdsa.PrivateKey:
+		return key.Equal(rightKey)
+	case ed25519.PrivateKey:
+		return key.Equal(rightKey)
+	default:
+		return false
+	}
+}
+
 func NormalizeKeyType(input string) string {
 	switch strings.ToLower(strings.TrimSpace(input)) {
 	case SSHKeyTypeRSA:

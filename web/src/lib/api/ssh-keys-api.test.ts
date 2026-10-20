@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NewSSHKeyInput } from "@/types/domain";
-import { createSSHKeysApi, decodeSSHKeyRotationResult, rotateSSHKey, SSHKeyRotationDecodeError } from "./ssh-keys-api";
+import { decodeSSHKeyRotationResult, rotateSSHKey, SSHKeyRotationDecodeError } from "./ssh-key-rotation-api";
+import { createSSHKeysApi } from "./ssh-keys-api";
 import { ApiError, request } from "./core";
 
 vi.mock("./core", async () => {
@@ -419,6 +420,56 @@ describe("ssh keys api mapper", () => {
       allowedNodeTags: "prod",
     });
     expect(putBody().expires_at).toBe(new Date(localExpiry).toISOString());
+  });
+});
+
+describe("ssh key update response decoding", () => {
+  beforeEach(() => {
+    requestMock.mockReset();
+  });
+
+  const updateInput: NewSSHKeyInput = {
+    name: "ops-key",
+    username: "deploy",
+    keyType: "ed25519",
+    privateKey: "  FAKE_PRIVATE_KEY_FOR_TEST_ONLY  ",
+    disabled: false,
+    allowedPurposes: "terminal",
+    allowedNodeIds: "1",
+    allowedNodeTags: "prod",
+  };
+
+  function updateRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 21,
+      name: "ops-key",
+      username: "deploy",
+      key_type: "ed25519",
+      fingerprint: "SHA256:test",
+      created_at: "2026-05-18T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  it("rejects an update success body that is not a safe record for this exact key", async () => {
+    const cases: unknown[] = [
+      null,
+      "ok",
+      [updateRow()],
+      updateRow({ id: undefined }),
+      updateRow({ id: 22 }),
+      updateRow({ id: "21" }),
+      updateRow({ id: 21.5 }),
+      updateRow({ name: 7 }),
+      updateRow({ username: null }),
+      updateRow({ fingerprint: undefined }),
+    ];
+    for (const body of cases) {
+      requestMock.mockResolvedValueOnce(body);
+      await expect(createSSHKeysApi().updateSSHKey("FAKE_TOKEN_FOR_TEST_ONLY", "key-21", updateInput))
+        .rejects.toMatchObject({ name: "SSHKeyUpdateDecodeError" });
+    }
+    expect(requestMock).toHaveBeenCalledTimes(cases.length);
   });
 });
 

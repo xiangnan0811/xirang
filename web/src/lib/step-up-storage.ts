@@ -3,6 +3,7 @@
 // Importing the TOTP client here would create core -> storage -> TOTP -> core.
 export const STEP_UP_ACTIONS = {
   sshKeyExport: "ssh_key.export",
+  sshKeyReplace: "ssh_key.replace",
   terminalOpen: "terminal.open",
   configImport: "config.import",
   configExport: "config.export",

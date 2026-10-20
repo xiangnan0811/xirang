@@ -1,11 +1,15 @@
 package sshutil
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -142,4 +146,135 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func TestSamePrivateKeyMaterialAcrossContainersAndNormalization(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ed25519Key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, key := range map[string]any{"rsa": rsaKey, "ecdsa": ecdsaKey, "ed25519": ed25519Key} {
+		t.Run(name, func(t *testing.T) {
+			der, err := x509.MarshalPKCS8PrivateKey(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkcs8 := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+			block, err := ssh.MarshalPrivateKey(key, "first comment")
+			if err != nil {
+				t.Fatal(err)
+			}
+			openSSH := string(pem.EncodeToMemory(block))
+			otherBlock, err := ssh.MarshalPrivateKey(key, "different comment")
+			if err != nil {
+				t.Fatal(err)
+			}
+			variants := []string{
+				pkcs8, openSSH, string(pem.EncodeToMemory(otherBlock)),
+				strings.ReplaceAll(openSSH, "\n", "\r\n"),
+				strings.ReplaceAll(openSSH, "\n", "\\n"),
+				" \n" + pkcs8 + "\t",
+			}
+			switch typed := key.(type) {
+			case *rsa.PrivateKey:
+				variants = append(variants, string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(typed)})))
+			case *ecdsa.PrivateKey:
+				ecDER, err := x509.MarshalECPrivateKey(typed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				variants = append(variants, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecDER})))
+			}
+			for index, variant := range variants {
+				if !SamePrivateKeyMaterial(pkcs8, variant) || !SamePrivateKeyMaterial(variant, pkcs8) || !SamePrivateKeyMaterial(openSSH, variant) {
+					t.Fatalf("same private material rejected for container/normalization variant %d", index)
+				}
+			}
+			if name == "ed25519" {
+				pemKey, err := ssh.ParseRawPrivateKey([]byte(pkcs8))
+				if err != nil {
+					t.Fatal(err)
+				}
+				openSSHKey, err := ssh.ParseRawPrivateKey([]byte(openSSH))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := pemKey.(ed25519.PrivateKey); !ok {
+					t.Fatal("PKCS8 fixture must exercise ED25519 value")
+				}
+				if _, ok := openSSHKey.(*ed25519.PrivateKey); !ok {
+					t.Fatal("OpenSSH fixture must exercise ED25519 pointer")
+				}
+			}
+		})
+	}
+}
+
+func TestSamePrivateKeyMaterialRejectsDifferentOrInvalidMaterial(t *testing.T) {
+	first, second := buildRSAPrivateKeyForTest(t), buildRSAPrivateKeyForTest(t)
+	ed25519Key := buildED25519OpenSSHPrivateKeyForTest(t)
+	for _, pair := range [][2]string{
+		{first, second}, {first, ed25519Key}, {"", first}, {first, " \t\n"},
+		{"broken", first}, {first, "broken"}, {"", ""}, {"broken", "broken"},
+		{"enc:v1:invalid", first},
+	} {
+		if SamePrivateKeyMaterial(pair[0], pair[1]) {
+			t.Fatal("different, empty, encrypted or invalid material must not compare equal")
+		}
+	}
+}
+
+func TestSamePrivateKeyMaterialComparesPrivateComponentsNotPublicFingerprint(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	swapped := &rsa.PrivateKey{
+		PublicKey: key.PublicKey, D: new(big.Int).Set(key.D),
+		Primes: []*big.Int{new(big.Int).Set(key.Primes[1]), new(big.Int).Set(key.Primes[0])},
+	}
+	reordered := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(swapped)}))
+	left, err := ssh.ParsePrivateKey([]byte(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := ssh.ParsePrivateKey([]byte(reordered))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ssh.FingerprintSHA256(left.PublicKey()) != ssh.FingerprintSHA256(right.PublicKey()) {
+		t.Fatal("fixture must retain the public key")
+	}
+	if key.Equal(swapped) || SamePrivateKeyMaterial(original, reordered) {
+		t.Fatal("private comparison must follow standard-library equality, including RSA prime order")
+	}
+}
+
+func TestSamePrivateKeyMaterialRejectsUnsupportedDSA(t *testing.T) {
+	// A parse-only toy DSA group exercises unsupported-key rejection without
+	// generating or using deprecated DSA signing keys: 2^3 mod 23 = 8.
+	der, err := asn1.Marshal(struct {
+		Version int
+		P, Q, G *big.Int
+		Y, X    *big.Int
+	}{0, big.NewInt(23), big.NewInt(11), big.NewInt(2), big.NewInt(8), big.NewInt(3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	material := string(pem.EncodeToMemory(&pem.Block{Type: "DSA PRIVATE KEY", Bytes: der}))
+	if _, err := ssh.ParseRawPrivateKey([]byte(material)); err != nil {
+		t.Fatal("DSA fixture must be parseable")
+	}
+	if SamePrivateKeyMaterial(material, material) {
+		t.Fatal("parseable but unsupported DSA must not compare equal")
+	}
 }

@@ -27,7 +27,9 @@ import (
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
+	"xirang/backend/internal/sshutil"
 )
 
 const configImportPreviewRouterPath = "/api/v1/config/import/preview?conflict=skip"
@@ -419,9 +421,21 @@ func TestConfigImportPreviewRouterRolesAndInvalidSessions(t *testing.T) {
 
 func TestConfigImportStillRequiresStepUpAndGrant(t *testing.T) {
 	fixture := setupConfigImportPreviewRouterFixture(t)
+	oldMaterial, _ := sshKeyReplacementRouterMaterial(t)
+	candidateMaterial, _ := sshKeyReplacementRouterMaterial(t)
+	key := model.SSHKey{Name: "router-import-replacement-key", Username: "root", KeyType: "ed25519", PrivateKey: oldMaterial, Fingerprint: "old-import-fingerprint"}
+	if err := fixture.db.Create(&key).Error; err != nil {
+		t.Fatal("seed existing import key")
+	}
 	before := configImportPreviewRouterDatabaseSnapshot(t, fixture.db)
-	body := []byte(`{"nodes":[{"name":"router-apply-protected-node","host":"10.102.0.1","port":22,"username":"root","auth_type":"key"}]}`)
-	response := configImportPreviewRouterRequest(t, fixture.router, http.MethodPost, "/api/v1/config/import?conflict=skip", fixture.tokens["admin"], body, nil)
+	body, err := json.Marshal(map[string]any{
+		"nodes":    []map[string]any{{"name": "router-apply-protected-node", "host": "10.102.0.1", "port": 22, "username": "root", "auth_type": "key"}},
+		"ssh_keys": []map[string]any{{"name": key.Name, "username": "root", "key_type": "ed25519", "private_key": candidateMaterial}},
+	})
+	if err != nil {
+		t.Fatal("encode secret import")
+	}
+	response := configImportPreviewRouterRequest(t, fixture.router, http.MethodPost, "/api/v1/config/import?conflict=overwrite", fixture.tokens["admin"], body, nil)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("unprotected apply status=%d body=%s, want 403", response.Code, response.Body.String())
 	}
@@ -439,6 +453,61 @@ func TestConfigImportStillRequiresStepUpAndGrant(t *testing.T) {
 		if before[table] != after[table] {
 			t.Fatalf("protected apply changed config table %s", table)
 		}
+	}
+
+	var admin model.User
+	if err := fixture.db.Where("username = ?", "config-preview-admin").First(&admin).Error; err != nil {
+		t.Fatal("load import admin")
+	}
+	if err := fixture.db.Model(&admin).Update("totp_enabled", true).Error; err != nil {
+		t.Fatal("enable import admin TOTP")
+	}
+	admin.TOTPEnabled = true
+	importProof, _, err := fixture.jwt.GenerateStepUpToken(admin, auth.StepUpActionConfigImport)
+	if err != nil {
+		t.Fatal("generate import proof")
+	}
+	noGrant := configImportPreviewRouterRequestWithProof(t, fixture.router, http.MethodPost, "/api/v1/config/import?conflict=overwrite", fixture.tokens["admin"], importProof, body, nil)
+	if noGrant.Code != http.StatusForbidden {
+		t.Fatalf("secret overwrite without grant status=%d, want 403", noGrant.Code)
+	}
+	claims, err := fixture.jwt.ParseToken(fixture.tokens["admin"])
+	if err != nil {
+		t.Fatal("parse real import admin session")
+	}
+	replacementProof, _, err := fixture.jwt.GenerateStepUpToken(admin, auth.StepUpActionSSHKeyReplace, claims.ID)
+	if err != nil {
+		t.Fatal("generate wrong-action import proof")
+	}
+	// Grant reasons reject sensitive markers such as "secret"; keep the reason
+	// descriptive without including credential-related text.
+	grant := configImportPreviewRouterRequestWithProof(t, fixture.router, http.MethodPost, "/api/v1/credential-access-grants/config-import", fixture.tokens["admin"], importProof, []byte(`{"reason":"authorized import overwrite","requested_ttl_seconds":600}`), nil)
+	if grant.Code != http.StatusCreated {
+		t.Fatalf("config import grant status=%d, want 201", grant.Code)
+	}
+	wrongAction := configImportPreviewRouterRequestWithProof(t, fixture.router, http.MethodPost, "/api/v1/config/import?conflict=overwrite", fixture.tokens["admin"], replacementProof, body, nil)
+	if wrongAction.Code != http.StatusForbidden {
+		t.Fatalf("replacement proof cannot authorize import: status=%d", wrongAction.Code)
+	}
+	var unchanged model.SSHKey
+	if err := fixture.db.First(&unchanged, key.ID).Error; err != nil || !sshutil.SamePrivateKeyMaterial(unchanged.PrivateKey, oldMaterial) || unchanged.Fingerprint != "old-import-fingerprint" {
+		t.Fatal("rejected import changed stored secret")
+	}
+	applied := configImportPreviewRouterRequestWithProof(t, fixture.router, http.MethodPost, "/api/v1/config/import?conflict=overwrite", fixture.tokens["admin"], importProof, body, nil)
+	if applied.Code != http.StatusOK {
+		t.Fatalf("config.import proof and grant must authorize overwrite without replacement proof: status=%d", applied.Code)
+	}
+	var saved model.SSHKey
+	if err := fixture.db.First(&saved, key.ID).Error; err != nil || !sshutil.SamePrivateKeyMaterial(saved.PrivateKey, candidateMaterial) || saved.Fingerprint == "old-import-fingerprint" {
+		t.Fatal("authorized import did not replace the secret and fingerprint")
+	}
+	var ciphertext string
+	if err := fixture.db.Table("ssh_keys").Select("private_key").Where("id = ?", key.ID).Scan(&ciphertext).Error; err != nil || !secure.IsEncrypted(ciphertext) {
+		t.Fatal("import overwrite did not preserve encrypted storage")
+	}
+	var replacementAudits int64
+	if err := fixture.db.Model(&model.CredentialAuditEvent{}).Where("action = ?", string(auth.StepUpActionSSHKeyReplace)).Count(&replacementAudits).Error; err != nil || replacementAudits != 0 {
+		t.Fatal("config import unexpectedly invoked the replacement gate")
 	}
 }
 

@@ -179,7 +179,7 @@ pending token。恢复码模式允许完整粘贴并说明一次性及大小写�
 客户端现有兼容边界：HTTP 失败响应使用真实 HTTP 状态作为 `ApiError.status`，所以非 403 的失败响应即使携带上述码也不识别；但 HTTP 成功响应若携带失败信封 `code=403`，`request()` 会以该信封 code 构造 `ApiError.status`，仍识别匹配的挑战。这不是仅允许真实 HTTP 403 的保证，也不授权服务端生成这种非标准响应；本兼容行为不改变服务端 HTTP 状态与 code 一致的要求。
 
 - `asset.secret_reveal` 的签名有效期严格为 2700 秒且不滑动；其他已注册操作维持 300 秒及原有复用规则。未知/未来操作无默认 TTL，失败关闭。
-- 校验签名 purpose、精确 action、proof JTI、user ID/subject、role、token version、TOTP 启用状态、iat、exp、精确操作 TTL；`asset.secret_reveal` 还校验当前登录 session JTI 及撤销状态。复用不改变 iat/exp。
+- 校验签名 purpose、精确 action、proof JTI、user ID/subject、role、token version、当前 TOTP 启用及非 reenrollment 状态、iat、exp、精确操作 TTL；`asset.secret_reveal` 和 `ssh_key.replace` 还校验签发时的主登录 session JTI 及当前撤销状态。复用不改变 iat/exp。
 - JWT 每段使用严格 Base64URL 解码；解码字节相同但文本非规范的 token 仍非法。响应 `expires_at` 等于签名 exp，响应和审计 `proof_ttl_seconds` 来自同一策略，非法操作为零。
 - 响应、日志、审计不含 proof/session token、OTP、内容、locator、ticket 或原始错误。回归覆盖全操作和未来操作、跨 purpose、篡改、过期、身份/角色/TOTP/版本变更、会话不匹配及撤销、不滑动复用、确定性的非规范 Base64URL 同字节变体；相关修改运行重复与 race 测试。
 
@@ -199,9 +199,9 @@ batch-trigger 的 proof/grant 替代。`POST /credential-access-grants/batch-com
 
 敏感入口在首次请求及复用 proof 之前检查 TOTP 前置；未启用时显示账户安全链接，
 不先提交 grant、执行、下载或 socket 请求。返回操作仅使用白名单 pathname 的 router
-state，显式返回只导航，不重开表单或重放提交。普通浏览、无秘密配置导出、密钥编辑、
-轮换、静音及 Web 自备份创建/列表不因此新增 TOTP 要求；整库备份下载另需专用
-proof/grant，前端提示不替代服务端授权。
+state，显式返回只导航，不重开表单或重放提交。普通浏览、无秘密配置导出、静音及
+Web 自备份创建/列表不因此新增 TOTP 要求；整库备份下载另需专用 proof/grant。
+现存受管 SSH 密钥的编辑和轮换采用下述服务端条件挑战例外；前端提示不替代服务端授权。
 
 启用 TOTP 成功响应包含替换主令牌、安全用户信息及本次恢复码，并禁止缓存。
 替换令牌保留原会话 JTI 和到期时间，不授予 step-up；版本变更使旧令牌和旧 proof
@@ -268,11 +268,32 @@ authorized_keys 预览跳过无公钥记录，不制造示例公钥。预览不�
 公钥，也不以轮换启用禁用键。所有异步响应、复制和 finally 绑定本地操作及全局
 认证代次，A→B→A 不恢复旧草稿。
 
-`POST /api/v1/ssh-keys/:id/rotate` 仅 admin 且保留 `ssh_keys:write`，不新增 step-up。
+`POST /api/v1/ssh-keys/:id/rotate` 仅 admin 且保留 `ssh_keys:write`；真实材料变更
+要求专用 `ssh_key.replace` proof，元数据或相同材料不要求 proof。
 请求仅接受 `{private_key,key_type?,name?}`；私钥必须非空，名称缺省保留、显式空白
 拒绝。整个 body 上限 1 MiB，只接受一个 JSON，拒绝未知字段、null 和类型错误。
 响应 `private, no-store`，不回显私钥。普通 `PUT /ssh-keys/:id` 保留离线修复能力，
 不要求连接验证；轮换不能降级为 PUT 或忽略失败后替换。
+
+普通编辑补入或替换私钥与轮换共用 `ssh_key.replace`，不接受导出、配置导入或其他
+action 替代。服务端以锁定后的当前私钥与合法候选的实际私有分量比较；同键不同
+OpenSSH/PEM/PKCS8 编码、换行及注释不构成替换，并保留原存储材料与历史摘要。
+缺失、null 或空字符串不清除原私钥；非空纯空白仍是非法候选。合法候选可修复空或
+不可解析的历史明文，但读取或解密故障不能当作空值放行。配置导入仍只使用原
+`config.import` proof/grant，不重复要求 replacement proof。
+
+fresh 指每次明确提交在真实 HTTP 403 条件挑战后，以
+`persist:false,reuseCached:false` 获取本次界面操作拥有的证明；不复用客户端缓存。
+服务端 proof 有效期严格为 300 秒，绑定签发主会话，但不绑定 key ID、候选摘要或
+单次消费状态：同一主会话在有效期内仍可将其用于其他合法替换，不承诺不可重放。
+普通编辑及轮换提交均持身份和撤销围栏，在同一事务内重读持久撤销事实并重新验证
+proof，等待锁或 SSH 期间过期也拒绝。无 TOTP 的元数据或同材料操作仍可成功，
+客户端不凭公钥指纹判断豁免；缺第二因子只能使用既有账户安全或受控离线恢复。
+
+PUT 仅更新本次允许的字段，不回写并发私钥、LastUsedAt、创建时间或关联；
+缺失/无效 proof 时附带元数据也不提交。两引擎事务均单次执行且不自动重试。
+只有确定未开始或确认回滚成功的锁冲突/授权拒绝才返回确定拒绝；提交、回滚或
+连接恢复无法确认时返回安全 500，不能宣称未保存，也不能据此自动续交。
 
 服务端读取所有绑定该键的节点，包括 offline、archived 及历史 password-auth 绑定，
 不依赖前端缓存或客户端节点列表。超过 256 个节点直接 `inventory_limit`，不联网、
@@ -294,8 +315,8 @@ LastUsedAt、节点健康或 known_hosts。连接只握手后关闭，不运行�
 身份、名称、端点、用户名、认证类型、绑定、tags、archived 和集合，不把
 last_used_at/updated_at 或健康漂移误判冲突。联网前及提交事务内均重查当前 admin、
 token_version、会话到期和持久撤销；事务持有用户及撤销写入围栏。提交前再查
-purpose/scope/expiry，仅定点加密更新 name/key_type/private_key/fingerprint/updated_at，
-保留其余元数据及并发 LastUsedAt。锁失败不重试；提交成功才返回 saved。
+purpose/scope/expiry，仅定点更新 name/key_type/updated_at；真实材料变更才加密更新
+private_key/fingerprint。保留其余元数据及并发 LastUsedAt。锁失败不重试；提交成功才返回 saved。
 这是提交瞬间的数据库一致性保证，不承诺之后远端状态不变或阻止独立授权的离线编辑。
 
 业务结果使用 200 envelope：`status=saved|not_saved`、`reason`、
@@ -307,13 +328,33 @@ purpose/scope/expiry，仅定点加密更新 name/key_type/private_key/fingerpri
 原始 SSH/SQL 错误或 payload。审计成功标记 reason 为 `saved`，其他没有业务原因的
 请求拒绝标记为 `request_rejected`。
 
-向导确认页标注缓存数量仅为预估，服务端检查完整库存；进行中只显示“正在验证候选
-连接，通过后保存”，不虚构精确保存阶段。saved 才显示成功、新公钥指纹并刷新数据。
+向导确认页标注缓存数量仅为预估，服务端检查完整库存；proof 等待期间显示“等待
+二次验证”，通过后才显示“正在验证候选连接，通过后保存”，不虚构精确保存阶段。
+saved 才显示成功、新公钥指纹并刷新数据。
 not_saved 显示“未替换，原密钥保持不变”及真实节点结果；只能返回修改并重新检查
 完整库存或关闭，不保留子集成功作为授权。冲突须重新检查，其他固定原因指向现有
 节点/密钥补救入口。网络中断、5xx 或非法响应均视为结果未知：清除草稿，提示核对
 当前已保存公钥指纹，不保证原键仍在，不提供一键重放。成功后不追加第二轮连接测试。
 独立的已保存密钥测试接口保留，节点失败说明仍使用固定安全分类，不返回远端任意文本。
+
+编辑器与轮换各自拥有一次提交、验证码挑战和取消信号，关闭、换键、卸载、认证转换
+或身份代次变化使旧操作失效；即使 token 恢复原值，旧文件读取、proof、写入结果也
+不能恢复草稿、续交、更新缓存或发布提示。提交同步防重入，在途禁用可编辑字段，
+关闭仍可取消挑战；关闭已发出的写入不承诺服务端回滚。首次真实 403 标准挑战最多
+获取一次 proof 并续交一次，第二次拒绝需重新明确提交；HTTP 200 失败信封、普通
+403 或网络失败不触发挑战续交，不改变通用 request 的历史兼容边界。
+
+现存密钥编辑及轮换确认页说明真实替换需要二次验证、验证不会部署远端公钥；
+普通编辑不要求 SSH 连通。未启用 TOTP 时输入候选可显示账户安全入口，但不阻止
+首次条件准入；只有实际挑战才要求启用，不发送 proof 请求或第二次写入。安全页
+只允许人工返回密钥列表，不恢复草稿或重放。取消验证码保持当前编辑草稿且无成功
+反馈；proof 获取失败与提交结果未知分开说明，不伪装为 SSH 连通性失败。
+
+普通编辑的确定 400/403/404/409/413 拒绝保留草稿并允许明确重试。网络错误、
+408/429/5xx、无法确认目标 ID 的成功记录或 2xx 失败信封均按结果未知处理：清除
+私钥输入、禁用本次表单继续保存，提示关闭后人工刷新并核对已保存公钥指纹，再
+新开编辑。不得自动 GET→PUT、重试或显示“原密钥未变”。中英文采用相同安全语义，
+不展示原始解析、SQL、SSH、proof 或敏感字段。
 
 ## 配置导入的安全结果
 
