@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.0](https://github.com/xiangnan0811/xirang/compare/v0.72.0...v0.73.0) (2026-10-20)
+
+
+### ✨ Features
+
+* **ssh:** require fresh step-up for private key replacement ([#642](https://github.com/xiangnan0811/xirang/issues/642)) ([6fb39fc](https://github.com/xiangnan0811/xirang/commit/6fb39fcf1724af72bc0ded273f7beac9c02d22d8))
+
 ### 新增与修复
 
 - 现存受管 SSHKey 的普通编辑补入／替换私钥及轮换提交新增服务端 `ssh_key.replace` 二次验证；元数据编辑、相同私钥材料的不同编码不增加挑战，也不重写原密文和指纹。
