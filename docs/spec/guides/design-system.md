@@ -43,6 +43,8 @@
 
 普通状态文字使用对应 `text-[hsl(var(--状态-text))]`，与图标、背景、边框和图表颜色分开。四个 `*-text` 变量只用于文字，不替换原状态色。Badge 保留语义背景；四种语义状态文字不要叠加透明度来弱化。中性 Badge 沿用 `bg-muted text-foreground/85`，明暗主题均不退回更弱的文字色。深色错误文字需同时在卡片、悬停和弱化表面验证，不能仅凭普通卡片上的正文对比度推断 Badge 合格。
 
+半透明 Badge 的文字对比度按与实际父背景合成后的颜色验收，包含明暗主题的普通卡片、弱化表面和 `hover:bg-accent` 悬停状态。尤其浅色 warning Badge，不能为了加深色块而使悬停后的普通文字低于 4.5:1；降低背景透明度不应同时弱化文字色或改变深色变体。
+
 ### 字体与字号
 
 无衬线字体依次为 `Inter Variable`、`Inter`、`PingFang SC`、`Microsoft YaHei`、系统字体；Inter 由 [main.tsx](../../../web/src/main.tsx) 导入。等宽字体配置为 `JetBrains Mono`、`monospace`。
