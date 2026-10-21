@@ -10,6 +10,13 @@
 - 将 Go 工具链和 Core／Worker／supercronic 构建镜像从 1.27.2 同步更新为 1.27.3，修复 GO-2026-6809（CVE-2026-111943）中已不可信中间证书的验证风险，保留 Alpine、CGO 和模块依赖版本。
 - Go 修复需重新构建并替换相关二进制／镜像后生效；Worker 工具链指纹随 BuilderBase 更新，按同一源码及目标架构重新生成闭包、签名 bundle 和 proof。无新增数据库迁移；回退旧镜像会恢复漏洞，不得关闭证书验证绕过拒绝。合并不代表发布或生产升级已完成。
 
+## [0.73.2](https://github.com/xiangnan0811/xirang/compare/v0.73.1...v0.73.2) (2026-10-21)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** patch build toolchains and finalize UX audit documentation ([#646](https://github.com/xiangnan0811/xirang/issues/646)) ([1e0b0cb](https://github.com/xiangnan0811/xirang/commit/1e0b0cb2c37a28fbddf003f8e317c8bf5c98e2ca))
+
 ## [0.73.1](https://github.com/xiangnan0811/xirang/compare/v0.73.0...v0.73.1) (2026-10-20)
 
 
