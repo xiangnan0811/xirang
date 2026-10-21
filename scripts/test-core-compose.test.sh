@@ -34,7 +34,7 @@ if [[ -z "$runtime_packages" ]]; then
   fail "all-in-one runtime package install block not found"
 fi
 for package in \
-  'c-ares=1.34.8-r0' \
+  'c-ares=1.34.9-r0' \
   'libcrypto3=3.5.9-r0' \
   'libssl3=3.5.9-r0' \
   'libexpat=2.9.0-r0' \
@@ -74,7 +74,7 @@ assert_runtime_pin_mutation_rejected() {
   cp "$0" "$mutation_test"
   cp "$SMOKE" "$mutation_root/scripts/test-core-compose.sh"
   cp "$ROOT_DIR/docker-compose.yml" "$mutation_root/docker-compose.yml"
-  sed "s|c-ares=1\.34\.8-r0|$replacement|" "$DOCKERFILE" \
+  sed "s|c-ares=1\.34\.9-r0|$replacement|" "$DOCKERFILE" \
     >"$mutation_root/deploy/allinone/Dockerfile"
   if CORE_COMPOSE_RUNTIME_PIN_MUTATION_CHILD=1 bash "$mutation_test" >"$mutation_log" 2>&1; then
     fail "$failure_message"
@@ -84,11 +84,11 @@ assert_runtime_pin_mutation_rejected() {
 if [[ "${CORE_COMPOSE_RUNTIME_PIN_MUTATION_CHILD:-0}" != "1" ]]; then
   assert_runtime_pin_mutation_rejected \
     runtime-pin-substring-mutation \
-    not-c-ares=1.34.8-r0 \
+    not-c-ares=1.34.9-r0 \
     "runtime package guard accepted a longer token containing the expected pin"
   assert_runtime_pin_mutation_rejected \
     runtime-pin-comment-mutation \
-    '# c-ares=1.34.8-r0' \
+    '# c-ares=1.34.9-r0' \
     "runtime package guard accepted an expected pin from a comment"
 fi
 
