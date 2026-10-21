@@ -14,8 +14,8 @@
 
 ### Go 工具链升级
 
-项目使用 Go 1.27.2；CI 从 `backend/go.mod` 读取版本。Core、Worker 和
-supercronic 的构建镜像同步固定到 Go 1.27.2 / Alpine 3.24 的多架构摘要，
+项目使用 Go 1.27.3；CI 从 `backend/go.mod` 读取版本。Core、Worker 和
+supercronic 的构建镜像同步固定到 Go 1.27.3 / Alpine 3.24 的多架构摘要，
 Worker 的 `BuilderBase` 运行环境指纹和镜像检查脚本须随之更新。
 保留 SQLite 所需的 CGO，以及与运行镜像兼容的 musl；升级 Go 不自动升级 Alpine 主线。
 
@@ -27,12 +27,19 @@ Go 升级不要求所有模块跟随更新。先核对上游兼容说明、构�
 SSH 轮换预验证候选将 `golang.org/x/net` 从 v0.59.0 定向更新到 v0.60.0，
 修复 HTTP/2 安全公告；未升级其他模块。验收继续使用固定版本 govulncheck
 及完整本地 CI 门禁，不以依赖升级代替业务验证。
-远端标准库扫描要求 Go 1.27.2 安全补丁；本地验证须显式使用
-`GOTOOLCHAIN=go1.27.2`，避免宿主工具链与 CI 不同导致错误复用证据。
+远端标准库扫描要求 Go 1.27.3 安全补丁；本地验证须显式使用
+`GOTOOLCHAIN=go1.27.3`，避免宿主工具链与 CI 不同导致错误复用证据。
 
 验收包括模块完整性、完整后端测试与构建、lint、漏洞扫描、并发敏感路径的 race、
 SQLite / PostgreSQL 行为，以及目标镜像的启动和 `/readyz`。
 amd64 验证不能替代 arm64 原生 Worker 沙箱验收；本地通过也不代表线上已部署。
+
+Go 1.27.2 → 1.27.3 修复 [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)
+（CVE-2026-111943）：`crypto/x509` 拒绝已不可信的中间证书。须重新构建并替换
+Core、Worker 与 supercronic；只更新宿主 Go 或运行时环境变量不会修补已有二进制。
+BuilderBase 变化会推进 Worker 工具链指纹，闭包、签名 bundle 与 proof 必须按
+同一源码和目标架构重新生成，不能沿用旧制品。无新增 schema migration；回退旧镜像
+会恢复旧标准库风险，不得通过关闭证书校验恢复连接。
 
 Go minor/patch 依赖更新也须沿生产者与消费者验证兼容性：STS 的可选 token
 指标按[仓库准入合同](../spec/domains/backup-repository.md)解释，不能沿用已取消的
@@ -65,6 +72,16 @@ env -u NODE_ENV npm --prefix web audit --audit-level=moderate
 `source-map-js` 的锁定补丁从 1.2.1 更新为 1.2.2；按上述规则保留父依赖范围与
 平台元数据，并使用包含开发依赖的完整审计及前端门禁验证。正式交付仍须重新构建镜像，
 回退旧镜像会恢复旧依赖，不能仅凭应用回归结果判断安全性。
+
+Vite 的锁定补丁从 7.3.6 更新为 7.3.7，修复其内嵌 launch-editor 的
+[Windows 转义](https://github.com/advisories/GHSA-698v-4r3x-3vcv)、
+[编辑器参数解释](https://github.com/advisories/GHSA-r825-w8mm-5pxw)及
+[Windows 路径检查](https://github.com/advisories/GHSA-587h-7wmj-h5pm)公告。
+保持 `package.json` 的既有范围、其他锁定包和平台元数据不变；不要通过新增
+顶层 launch-editor override 代替升级 Vite 内嵌代码。重新按锁文件安装并重启开发
+服务后生效；正式构建仍验证入口资源与体积预算。该修复不改变 Core API 或数据库，
+也不表示既有部署受到了攻击；回退锁文件会重新引入旧工具链漏洞。
+
 
 ### jsdom 选择器兼容性
 

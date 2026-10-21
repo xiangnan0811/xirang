@@ -1,5 +1,5 @@
-# golang:1.27.2-alpine3.24 multi-architecture manifest, resolved from Docker Hub on 2026-10-09.
-FROM golang:1.27.2-alpine3.24@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS worker-builder
+# golang:1.27.3-alpine3.24 multi-architecture manifest, resolved from Docker Hub on 2026-10-21.
+FROM golang:1.27.3-alpine3.24@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd AS worker-builder
 
 WORKDIR /src/backend
 ARG TARGETOS

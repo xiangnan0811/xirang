@@ -12,6 +12,7 @@
 - `VITE_*` 在开发服务器或前端构建时读取；修改已经构建好的容器运行时环境不会重写前端静态资源。`CSP_CONNECT_SRC_EXTRA` 则由容器启动时的 Nginx 模板读取。
 - 镜像内 Alpine 依赖（包括 Nginx 使用的 PCRE2）的精确版本由 Dockerfile 固定，不由 `.env` 或系统设置覆盖。共享加密库补丁同样需要重建 Core 与可选 Worker，不能在运行中用环境变量切换版本；构建时包版本不可用的处理见[镜像构建依赖](maintainers/automation.md#镜像构建依赖)。
 - 官方镜像的 Go 工具链由 Dockerfile 构建阶段固定；容器启动时设置 `GOTOOLCHAIN` 不会替换已经编译的程序。源码开发的工具链选择与 linter 入口见[贡献指南](../CONTRIBUTING.md#开发环境)，版本同步要求见[Go 工具链升级](maintainers/automation.md#go-工具链升级)。
+- Go 1.27.3 的证书验证安全补丁须重新构建并替换 Core、Worker 与 supercronic 后生效；没有关闭证书拒绝的受支持环境变量，遇到不可信证书须修复证书链。具体漏洞与 Worker 制品重建要求见[Go 工具链升级](maintainers/automation.md#go-工具链升级)。
 - Core 的 TIFF 安全补丁通过 Dockerfile 直接锁定 `tiff=4.7.2-r0`；它替换基础镜像携带的旧库，需要重建镜像和容器，不增加运行时配置项。
 - Core 的 Expat 版本固定为 `libexpat=2.9.0-r0`，替代软件源已移除的旧锁定；同样须重建镜像和容器，不提供环境变量覆盖，也不改变 Worker 的配置或工具链 inventory。
 
