@@ -463,16 +463,21 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 
 // Update godoc
 // @Summary      更新 SSH Key
-// @Description  更新指定 SSH Key 的名称、用户名或私钥
+// @Description  更新指定 SSH Key 的名称、用户名或私钥；普通编辑允许离线修复，不要求 SSH 连接验证。
+// @Description  仅实际补入或替换私钥材料时要求 ssh_key.replace proof；元数据更新或同一私钥材料的不同编码免 proof，由服务端按锁定后的当前材料判断。
+// @Description  HTTP 403 且 data.error_code=STEP_UP_REQUIRED 时，使用当前主会话向 POST /api/v1/auth/step-up 提交 code 和 step_up_action=ssh_key.replace，取得 proof 后通过 X-Xirang-Step-Up 续交；普通 403 不是验证挑战。
+// @Description  proof 绑定主会话、有效期 300 秒，同会话有效期内可复用，不是一次性或候选绑定证明。缺失或无效 proof 时附带元数据也不保存；网络错误或提交结果未知不得自动重试，应重新读取并核对已保存公钥指纹。
 // @Tags         ssh-keys
 // @Security     Bearer
 // @Accept       json
 // @Produce      json
 // @Param        id    path      int                           true  "SSH Key ID"
 // @Param        body  body      handlers.sshKeyUpdateRequest  true  "更新信息"
+// @Param        X-Xirang-Step-Up header string false "实际私钥材料变更时必需的 ssh_key.replace proof；元数据或同材料更新不要求"
 // @Success      200  {object}  handlers.Response{data=handlers.sshKeyResponseItem}
 // @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response  "权限拒绝，或 data.error_code=STEP_UP_REQUIRED 的条件验证挑战"
 // @Failure      404  {object}  handlers.Response
 // @Router       /ssh-keys/{id} [put]
 func (h *SSHKeyHandler) Update(c *gin.Context) {

@@ -737,17 +737,21 @@ func readSSHKeyRotationBody(c *gin.Context, ctx context.Context) ([]byte, error)
 
 // Rotate godoc
 // @Summary      预验证并轮换 SSH Key
-// @Description  在保存前使用候选私钥验证完整关联节点库存，并以短事务重新核对后原子保存
+// @Description  在保存前使用候选私钥验证完整关联节点库存，并以短事务重新核对后原子保存；不能降级为普通 PUT 或忽略验证失败。
+// @Description  实际私钥材料变更要求 ssh_key.replace proof；同材料提交免 proof，但不免除轮换的完整库存验证。
+// @Description  HTTP 403 且 data.error_code=STEP_UP_REQUIRED 时，使用当前主会话向 POST /api/v1/auth/step-up 提交 code 和 step_up_action=ssh_key.replace，取得 proof 后通过 X-Xirang-Step-Up 续交；普通 403 不是验证挑战。
+// @Description  proof 绑定主会话、有效期 300 秒，同会话有效期内可复用，不是一次性或候选绑定证明。网络错误或保存结果未知不得自动重试，应重新读取并核对已保存公钥指纹；验证不部署远端公钥。
 // @Tags         ssh-keys
 // @Security     Bearer
 // @Accept       json
 // @Produce      json
 // @Param        id    path      int                           true  "SSH Key ID"
 // @Param        body  body      handlers.sshKeyRotationRequest  true  "候选 SSH Key"
+// @Param        X-Xirang-Step-Up header string false "实际私钥材料变更时必需的 ssh_key.replace proof；同材料提交不要求"
 // @Success      200  {object}  handlers.Response{data=handlers.sshKeyRotationResponse}
 // @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
-// @Failure      403  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response  "权限拒绝，或 data.error_code=STEP_UP_REQUIRED 的条件验证挑战"
 // @Failure      404  {object}  handlers.Response
 // @Failure      413  {object}  handlers.Response
 // @Failure      500  {object}  handlers.Response
