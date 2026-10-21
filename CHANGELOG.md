@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Core 构建依赖修复
+
+- 将 Core 镜像的 c-ares 精确锁定从软件源已不可安装的 `1.34.8-r0` 更新为 `1.34.9-r0`，恢复镜像构建并纳入[上游 DNS 应答校验与内存安全修复](https://github.com/c-ares/c-ares/releases/tag/v1.34.9)；保留基础镜像 digest、其他依赖锁定和漏洞扫描门禁。
+- 需重新构建并替换 Core 镜像后生效；无新增环境变量或 schema migration，不修改 Worker 的显式依赖清单或生产工具链 inventory。回退旧镜像会恢复旧依赖风险，旧锁定源码可能仍无法重新构建；合并不代表镜像已发布或生产已升级。此修复独立于 v0.73.2 的发布说明勘误，不改写旧 tag 或重发旧镜像。
+
 ## [0.73.2](https://github.com/xiangnan0811/xirang/compare/v0.73.1...v0.73.2) (2026-10-21)
 
 
