@@ -66,6 +66,16 @@ env -u NODE_ENV npm --prefix web audit --audit-level=moderate
 平台元数据，并使用包含开发依赖的完整审计及前端门禁验证。正式交付仍须重新构建镜像，
 回退旧镜像会恢复旧依赖，不能仅凭应用回归结果判断安全性。
 
+Vite 的锁定补丁从 7.3.6 更新为 7.3.7，修复其内嵌 launch-editor 的
+[Windows 转义](https://github.com/advisories/GHSA-698v-4r3x-3vcv)、
+[编辑器参数解释](https://github.com/advisories/GHSA-r825-w8mm-5pxw)及
+[Windows 路径检查](https://github.com/advisories/GHSA-587h-7wmj-h5pm)公告。
+保持 `package.json` 的既有范围、其他锁定包和平台元数据不变；不要通过新增
+顶层 launch-editor override 代替升级 Vite 内嵌代码。重新按锁文件安装并重启开发
+服务后生效；正式构建仍验证入口资源与体积预算。该修复不改变 Core API 或数据库，
+也不表示既有部署受到了攻击；回退锁文件会重新引入旧工具链漏洞。
+
+
 ### jsdom 选择器兼容性
 
 [package.json](../../web/package.json)中的 jsdom 专属 override 将 `nwsapi` 固定为已验证的 2.2.25。既有回归记录表明 jsdom 26 下 2.2.26/2.2.27 的 `:modal` 匹配会递归进入原生匹配适配器，导致下拉交互超时。调整 override 前，在 CI Node 版本下同时验证独立选择器匹配、节点和通知下拉确认测试，保留完整审计及前端门禁；不得通过增加超时或修改产品交互掩盖问题。
