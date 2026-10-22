@@ -38,6 +38,7 @@ Catalog 是可浏览事实的数据库投影，Provider 观察由有界后台协
 - 其余 inactive complete/superseded/failed/partial 可回收。查询排除 RESTRICT 引用，旧引用不能阻塞新可回收代次。按 bounded `document_id IN (?)` 删 Search postings，再 Search generations，再分批 Catalog entries，最后 generation；不靠整代 CASCADE 或 OR 链。预算耗尽/取消保留 generation 供续扫，只剩引用时计数并报告，不以 FK 错误终止。
 - 回收在 worker 的 feature-disabled 短路前执行，关闭时仍清理/采集指标但不排 build；它不属于 recovery-point retention purge。指标仅 closed state/outcome：代次数、单点最大代次数、entry/posting 行数、SQLite 大小和回收结果，不把 point/path/document/locator 作标签。
 - storage gauges 在完成的 scan 上采集，负数归零，generation state 仅闭合枚举。只有 RESTRICT 引用候选的 pass 必须零删除且计数解释跳过原因；全被保护不是扫描错误，也不能阻止其他可回收代次继续。
+- Catalog/Search 代次 GC 只删除逻辑行，不负责缩小现有 SQLite 数据库文件。物理文件收缩属于独立的离线运维维护，不由 GC 自动执行；Web 数据库备份的 `VACUUM INTO` 仅生成快照，不会缩小或替换正在使用的源数据库。
 - 控制面备份脚本清理 owner PID 不存在或超过一天的 `*.tmp.*` 及 SQLite journal/wal/shm sidecar；目标空间不足以容纳源与安全余量时拒绝开始。
 
 ## 目录 API 与前端
