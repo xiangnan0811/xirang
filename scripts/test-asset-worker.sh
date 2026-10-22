@@ -92,7 +92,7 @@ for contract in \
 done
 for package in \
   'gcc=15.2.0-r5' \
-  'musl-dev=1.2.6-r2' \
+  'musl-dev=1.2.6-r3' \
   'bash=5.3.3-r1' \
   'clamav=1.4.4-r0' \
   'ffmpeg=8.0.1-r1' \

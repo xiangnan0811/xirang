@@ -903,7 +903,7 @@ func productionToolchainInventory() toolchainInventory {
 			{Name: "libcrypto3", Version: "3.5.9-r0", Runtime: true},
 			{Name: "libreoffice", Version: "25.8.1.1-r5", Runtime: true},
 			{Name: "libssl3", Version: "3.5.9-r0", Runtime: true},
-			{Name: "musl-dev", Version: "1.2.6-r2"},
+			{Name: "musl-dev", Version: "1.2.6-r3"},
 			{Name: "poppler-utils", Version: "25.12.0-r0", Runtime: true},
 			{Name: "tesseract-ocr", Version: "5.5.1-r0", Runtime: true},
 			{Name: "tesseract-ocr-data-chi_sim", Version: "5.5.1-r0", Runtime: true},
