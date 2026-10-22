@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.73.3](https://github.com/xiangnan0811/xirang/compare/v0.73.2...v0.73.3) (2026-10-22)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** refresh Core c-ares package pin ([#649](https://github.com/xiangnan0811/xirang/issues/649)) ([f3aa7b9](https://github.com/xiangnan0811/xirang/commit/f3aa7b9423f22c5b110032e2293ed5f13e32bac5))
+* **deps:** refresh shared musl pin and patch Vitest security ([#651](https://github.com/xiangnan0811/xirang/issues/651)) ([fefc00d](https://github.com/xiangnan0811/xirang/commit/fefc00d14d3b69976d6f615ca2574f7143386931))
+
 ### Core 构建依赖修复
 
 - 将 Core 镜像的 c-ares 精确锁定从软件源已不可安装的 `1.34.8-r0` 更新为 `1.34.9-r0`，恢复镜像构建并纳入[上游 DNS 应答校验与内存安全修复](https://github.com/c-ares/c-ares/releases/tag/v1.34.9)；保留基础镜像 digest、其他依赖锁定和漏洞扫描门禁。
