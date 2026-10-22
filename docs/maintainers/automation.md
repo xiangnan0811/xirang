@@ -82,6 +82,13 @@ Vite 的锁定补丁从 7.3.6 更新为 7.3.7，修复其内嵌 launch-editor �
 服务后生效；正式构建仍验证入口资源与体积预算。该修复不改变 Core API 或数据库，
 也不表示既有部署受到了攻击；回退锁文件会重新引入旧工具链漏洞。
 
+Vitest 与 coverage-v8 配套锁定从 4.1.11 更新为 4.1.12，修复 `@vitest/mocker`
+的[手动 mock 代码注入](https://github.com/advisories/GHSA-qxg6-89mg-rqv8)及
+[Windows 路径检查绕过](https://github.com/advisories/GHSA-xp26-3454-mjgp)。
+保留现有声明范围、其他依赖与平台元数据；按新锁文件重新安装并重启相关开发／测试
+进程后生效。上游公告涉及可访问的 mocker 插件开发服务，不等于生产服务受攻击；
+无新增配置或数据库迁移，回退旧锁文件会恢复旧工具链风险。
+
 
 ### jsdom 选择器兼容性
 
