@@ -43,6 +43,8 @@ Core 专属依赖修复应明确其范围，不能套用共享依赖的 Worker �
 
 人工补齐 Release PR 时，先核对 manifest 的目标版本与 CHANGELOG 版本标题一致，再原样迁移已审阅的升级警告；不要为了移动章节改写上一发行版的保留/删除边界。编辑 PR 正文必须保留 Release Please 生成的首尾标识及分隔符，只更新中间版本说明，否则合并后可能无法识别发布。该补充提交仍走提交钩子与 PR required checks，不直接修改正式 tag。已合并 PR 的正文编辑也可能触发 CI 并取消同 ref 的运行；如需恢复，应重跑原 `push` CI 并核对同 SHA 的完整结果，不能用 PR CI 代替发布准入。
 
+已发布版本若遗漏上述说明，通过文档 PR 将已审阅条目归入对应历史版本，并同步现有 GitHub Release 正文后重新读取核对；这是发布说明勘误，不修改版本号、移动或重打 tag，也不重新发布镜像。
+
 [Publish Docker Images](../../.github/workflows/publish-images.yml)监听 `release.published`，按以下顺序发布：
 
 1. 从发布工作流自身的不可变提交加载验证策略，一次解析并冻结源码 SHA。
