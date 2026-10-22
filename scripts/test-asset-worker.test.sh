@@ -413,7 +413,6 @@ done
 
 for contract in \
   'gcc=15.2.0-r5' \
-  'musl-dev=1.2.6-r2' \
   'bash=5.3.3-r1' \
   'tesseract-ocr-data-eng=5.5.1-r0' \
 	  'font-noto=2025.12.01-r0' \

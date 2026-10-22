@@ -257,3 +257,10 @@ Core 的 c-ares 直接锁定从软件源已不可安装的 `1.34.8-r0` 更新为
 不以基础镜像已安装的旧版本替代安全锁定。此修复不新增 Worker 显式依赖或修改
 其生产工具链 inventory；须验证 Core 双架构构建、扫描和就绪路径，以及 Worker
 配置下的配套 Core。修复从重建并替换 Core 镜像后生效，不新增配置或 schema migration。
+
+Core 与 Worker 的 CGO 构建阶段将 `musl-dev` 从已不可安装的 `1.2.6-r2`
+锁定到 `1.2.6-r3`，共享生产 inventory 同步更新；Go 与基础镜像 digest 不变，
+不扩大为运行镜像 libc 升级。构建包也参与工具链及 pipeline 指纹，须按同一源码
+重建 Core/Worker 并重新生成各目标架构的闭包、签名运行包及 proof，保留 CGO
+产物在实际运行镜像中的加载与就绪验收。无新增配置或 schema migration；
+切换前排空旧 Worker 在途处理，回退使用配套旧镜像及制品，不手改指纹或沿用旧证明。

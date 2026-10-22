@@ -8,7 +8,7 @@ ARG TARGETARCH
 COPY backend/go.mod backend/go.sum ./
 RUN apk add --no-cache \
       gcc=15.2.0-r5 \
-      musl-dev=1.2.6-r2
+      musl-dev=1.2.6-r3
 RUN go mod download
 
 COPY backend/ ./
