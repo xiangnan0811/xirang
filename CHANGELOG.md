@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.73.3](https://github.com/xiangnan0811/xirang/compare/v0.73.2...v0.73.3) (2026-10-22)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** refresh Core c-ares package pin ([#649](https://github.com/xiangnan0811/xirang/issues/649)) ([f3aa7b9](https://github.com/xiangnan0811/xirang/commit/f3aa7b9423f22c5b110032e2293ed5f13e32bac5))
+* **deps:** refresh shared musl pin and patch Vitest security ([#651](https://github.com/xiangnan0811/xirang/issues/651)) ([fefc00d](https://github.com/xiangnan0811/xirang/commit/fefc00d14d3b69976d6f615ca2574f7143386931))
+
 ### Core 构建依赖修复
 
 - 将 Core 镜像的 c-ares 精确锁定从软件源已不可安装的 `1.34.8-r0` 更新为 `1.34.9-r0`，恢复镜像构建并纳入[上游 DNS 应答校验与内存安全修复](https://github.com/c-ares/c-ares/releases/tag/v1.34.9)；保留基础镜像 digest、其他依赖锁定和漏洞扫描门禁。
@@ -17,14 +25,6 @@
 
 - 将 Vitest、`@vitest/coverage-v8` 及配套 `@vitest/*` 锁定从 4.1.11 更新为 4.1.12，修复 `@vitest/mocker` 的 GHSA-qxg6-89mg-rqv8（手动 mock 代码注入）及 GHSA-xp26-3454-mjgp（Windows 路径检查绕过）；保留依赖声明范围、其他包版本和平台元数据。
 - 开发与测试环境须按新锁文件重新安装，并重启相关开发／测试进程后生效。公告涉及可访问的 mocker 插件开发服务，不据此声称生产服务受攻击或运行逻辑已改变；无新增配置或数据库迁移。回退旧锁文件会恢复旧测试工具链风险。
-
-## [0.73.3](https://github.com/xiangnan0811/xirang/compare/v0.73.2...v0.73.3) (2026-10-22)
-
-
-### 🐛 Bug Fixes
-
-* **deps:** refresh Core c-ares package pin ([#649](https://github.com/xiangnan0811/xirang/issues/649)) ([f3aa7b9](https://github.com/xiangnan0811/xirang/commit/f3aa7b9423f22c5b110032e2293ed5f13e32bac5))
-* **deps:** refresh shared musl pin and patch Vitest security ([#651](https://github.com/xiangnan0811/xirang/issues/651)) ([fefc00d](https://github.com/xiangnan0811/xirang/commit/fefc00d14d3b69976d6f615ca2574f7143386931))
 
 ## [0.73.2](https://github.com/xiangnan0811/xirang/compare/v0.73.1...v0.73.2) (2026-10-21)
 
