@@ -53,7 +53,7 @@ FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e591939
 # PostgreSQL client utilities provide pg_dump/pg_restore for DB_TYPE=postgres.
 RUN apk add --no-cache \
       c-ares=1.34.9-r0 \
-      curl=8.22.0-r0 \
+      curl=8.23.0-r0 \
       libcrypto3=3.5.9-r0 \
       libexpat=2.9.0-r0 \
       libssl3=3.5.9-r0 \

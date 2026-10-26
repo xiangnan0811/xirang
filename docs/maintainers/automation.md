@@ -216,6 +216,11 @@ worktree，不按工具名称维护清单；Docker 自身所需的构建控制�
 
 基础镜像以 digest 固定，显式安装的 Alpine 包使用精确版本。软件源可能移除旧包：安装失败时在锁定基础镜像中复现，分别核对该 Alpine 分支的 amd64 与 arm64 软件源，再更新必要锁定。`apk` 显示的已安装版本不代表软件源仍可安装。
 
+Core 的 curl 锁定从已不可安装的 `8.22.0-r0` 更新为 Alpine 3.23 的
+`8.23.0-r0`，其包依赖要求 libcurl 同版本升级；保留 Nginx 基础镜像 digest。
+这是 Core 专属运行依赖更新，不改变 Worker inventory；须验证 Core readiness
+和 Worker 组合启动，并按 CHANGELOG 的重建、替换及回退边界交付。
+
 共享运行时加密库的补丁须同步 Core/Worker Dockerfile、生产工具链 inventory 和对应安装合同检查；指纹由 inventory 派生，不手工伪造摘要。按新源码重新生成两架构运行时闭包及证明，不能沿用旧包版本的已签名运行包。跨架构查询软件源时使用基础镜像内该架构的可信 Alpine 密钥，不能关闭签名验证，也不能以滞后的网页列表替代实际已验证索引。
 
 共享 CGO 构建包同样属于工具链身份：Core/Worker 的 `musl-dev=1.2.6-r3`
