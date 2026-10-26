@@ -22,8 +22,9 @@ Core/worker 停止后选择重置原账户密码和/或第二因子；均不执�
 
 Compose 与 Dockerfile 的健康检查均访问 `http://127.0.0.1:10761/readyz`，间隔 30 秒、timeout 5 秒、start period 15 秒、3 次重试。入口脚本先启动后端和 supercronic，最多尝试约 30 次、每次间隔 1 秒等待内部 `:3000/readyz`，成功后启动 Nginx。curl 自身耗时可使总等待超过 30 秒，不把提示文字当严格总 deadline。
 
-Core 的 curl/libcurl `8.23.0-r0` 替换已不可安装的旧锁定后，仍须验证上述内部启动
-等待和公开 readiness 路径，以及可选 Worker 组合启动。升级通过重建并替换整个
+Core 的 curl/libcurl `8.23.0-r0` 替换已不可安装的旧锁定，并显式更新
+`brotli-libs=1.2.1-r0` 后，仍须验证上述内部启动等待、公开 readiness 路径及可选
+Worker 组合启动。升级通过重建并替换整个
 Core 镜像生效，不改变探针参数、Worker inventory 或数据库；回退旧镜像恢复旧依赖，
 旧锁定源码可能无法重建，不能用修改探针或跳过扫描代替依赖修复。
 

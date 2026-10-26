@@ -218,6 +218,8 @@ worktree，不按工具名称维护清单；Docker 自身所需的构建控制�
 
 Core 的 curl 锁定从已不可安装的 `8.22.0-r0` 更新为 Alpine 3.23 的
 `8.23.0-r0`，其包依赖要求 libcurl 同版本升级；保留 Nginx 基础镜像 digest。
+同时显式锁定 `brotli-libs=1.2.1-r0` 修复 CVE-2026-111497：基础镜像中的
+`1.2.0-r0` 仍满足 libcurl 的 SONAME 依赖，单独更新 curl 不会保证该库升级。
 这是 Core 专属运行依赖更新，不改变 Worker inventory；须验证 Core readiness
 和 Worker 组合启动，并按 CHANGELOG 的重建、替换及回退边界交付。
 
