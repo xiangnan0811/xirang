@@ -22,6 +22,12 @@ Core/worker 停止后选择重置原账户密码和/或第二因子；均不执�
 
 Compose 与 Dockerfile 的健康检查均访问 `http://127.0.0.1:10761/readyz`，间隔 30 秒、timeout 5 秒、start period 15 秒、3 次重试。入口脚本先启动后端和 supercronic，最多尝试约 30 次、每次间隔 1 秒等待内部 `:3000/readyz`，成功后启动 Nginx。curl 自身耗时可使总等待超过 30 秒，不把提示文字当严格总 deadline。
 
+Core 的 curl/libcurl `8.23.0-r0` 替换已不可安装的旧锁定，并显式更新
+`brotli-libs=1.2.1-r0` 后，仍须验证上述内部启动等待、公开 readiness 路径及可选
+Worker 组合启动。升级通过重建并替换整个
+Core 镜像生效，不改变探针参数、Worker inventory 或数据库；回退旧镜像恢复旧依赖，
+旧锁定源码可能无法重建，不能用修改探针或跳过扫描代替依赖修复。
+
 后端、supercronic、Nginx 任一关键子进程退出，容器退出并向其他子进程发 TERM 后等待，避免只剩 Nginx 对外提供 502。默认运行用户为 UID/GID 10000；entrypoint 可先以 root 修复 bind mount 权限再切换后端与定时器用户，挂载权限仍应在部署验证中实际检查。
 
 回归入口为 `scripts/test-core-compose.sh` 及其自测、入口脚本相关测试、`internal/api/router_test.go` 中 readyz 的健康/数据库关闭/nil DB 案例。Compose 渲染在临时环境使用示例 env，不能覆盖操作者现有 `.env`。

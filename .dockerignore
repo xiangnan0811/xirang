@@ -1,20 +1,11 @@
-.git
-/.github
-/.githooks
-/.agents
+# Root-local metadata is not a build input, regardless of the tool that owns it.
+.*
 /docs/spec
-/.omp
 node_modules
 web/node_modules
 web/.vite
 web/dist
 web/coverage
-.env
-.env.*
-.claude
-.codex
-.grok
-.gemini
 backend/*.db
 backend/*.db-shm
 backend/*.db-wal
@@ -29,4 +20,3 @@ backend/tmp
 /logs
 /deploy-kit
 /tmp
-/.tmp
