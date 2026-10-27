@@ -1,0 +1,103 @@
+name: Audit Preserved Build Inputs
+
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: audit-build-inputs-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Replay and scan retained inputs (${{ matrix.arch }})
+    if: github.repository == 'xiangnan0811/xirang'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout locked inputs
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify committed input contract
+        run: python3 scripts/build-inputs.py verify --lock deploy/build-inputs/lock.json
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Anonymous pulls check that a clean checkout can still retrieve retained
+      # inputs. This workflow never changes pins or publishes registry objects.
+      - name: Replay retained APK transactions without package network access
+        run: |
+          python3 scripts/build-inputs.py audit \
+            --arch '${{ matrix.arch }}' \
+            --output '${{ runner.temp }}/build-input-audit-${{ matrix.arch }}'
+
+      - name: Scan shared CGO builder inputs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: xirang-build-inputs:cgo-builder-${{ matrix.arch }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Scan supercronic builder inputs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: xirang-build-inputs:supercronic-builder-${{ matrix.arch }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Scan Core runtime inputs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: xirang-build-inputs:core-runtime-${{ matrix.arch }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Scan Worker runtime inputs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: xirang-build-inputs:worker-runtime-${{ matrix.arch }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Record successful retention and vulnerability audit
+        run: |
+          {
+            echo '### Preserved input audit: linux/${{ matrix.arch }}'
+            echo '- Committed source: `${{ github.sha }}`'
+            echo '- Public retained bases and complete APK inputs were retrieved successfully.'
+            echo '- All four APK transactions replayed with package network access disabled.'
+            echo '- Current HIGH/CRITICAL vulnerability gates passed for installed dependency images.'
+            echo '- A new vulnerability requires a reviewed input refresh and full product CI.'
+          } >> "$GITHUB_STEP_SUMMARY"

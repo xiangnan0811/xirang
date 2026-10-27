@@ -1,0 +1,358 @@
+{
+  "alpine_arch": "x86_64",
+  "apk_tools": "apk-tools 3.0.8-r0, compiled for x86_64.",
+  "apks": [
+    {
+      "arch": "x86_64",
+      "file": "brotli-libs-1.2.1-r0.apk",
+      "name": "brotli-libs",
+      "sha256": "62a7e37e43bbfc1f8525a00ad2125fd5897135dc93b849733884cb78ffd8e26c",
+      "size": 429435,
+      "version": "1.2.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "c-ares-1.34.9-r0.apk",
+      "name": "c-ares",
+      "sha256": "3539a3e11c1ef1516117d8179a546ac882086e94e0d78ad51d687b3fa2b3b5f2",
+      "size": 113179,
+      "version": "1.34.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "git-2.54.0-r0.apk",
+      "name": "git",
+      "sha256": "5a2c6782774d2e891fc2fc3fdc50c3c2743b8eb2dc7cda69b6b723af2eedcf78",
+      "size": 3546724,
+      "version": "2.54.0-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "git-init-template-2.54.0-r0.apk",
+      "name": "git-init-template",
+      "sha256": "e8094a47bfa6e66b7d550ae12a7a8bcab0bc4af502aacd5d2a6fc62d2c5e488d",
+      "size": 10825,
+      "version": "2.54.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libcurl-8.23.0-r0.apk",
+      "name": "libcurl",
+      "sha256": "1f70ca404818805a6465b615bbfe84ef861488a963d7e630108ebd7fbaa51665",
+      "size": 364567,
+      "version": "8.23.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libexpat-2.9.0-r0.apk",
+      "name": "libexpat",
+      "sha256": "32b127f31e0a919110a18a7f0bb3780d8fb66ba4d8d61b2d301d633f0e319d0e",
+      "size": 62175,
+      "version": "2.9.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libidn2-2.3.8-r0.apk",
+      "name": "libidn2",
+      "sha256": "7d038ac558dde464964b033ce5126dd2eaf84cc414dc15e77c5424a321d0ebee",
+      "size": 104623,
+      "version": "2.3.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libpsl-0.21.5-r3.apk",
+      "name": "libpsl",
+      "sha256": "ec665a344b6e887f00f0a47015cc732c3a281b69e84641dc8662ea234fde6cdb",
+      "size": 54692,
+      "version": "0.21.5-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libunistring-1.4.2-r0.apk",
+      "name": "libunistring",
+      "sha256": "3aa6030e603e34d96192742f327c0509f409c6769ce2e7b1463685dede38d714",
+      "size": 743597,
+      "version": "1.4.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "nghttp2-libs-1.70.0-r0.apk",
+      "name": "nghttp2-libs",
+      "sha256": "f0c4014eb2f10308dcdfd84cd49c121673c7b78cb8182b6e7a1388d8ae112a3b",
+      "size": 63259,
+      "version": "1.70.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "pcre2-10.49-r0.apk",
+      "name": "pcre2",
+      "sha256": "2919897914820f42a17a8d7d37df310d2dfad1c82ebe5f539cc5c765f916752a",
+      "size": 323099,
+      "version": "10.49-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "zstd-libs-1.5.7-r2.apk",
+      "name": "zstd-libs",
+      "sha256": "23c6065b0049b2406441564bcf0032515a43f78e80d76fcb85535a3803ef5d4e",
+      "size": 376646,
+      "version": "1.5.7-r2"
+    }
+  ],
+  "base_source_digest": "sha256:cd410a5c6686417875bc4815688e96ae9769f8562debc545d29fe58e73d174f0",
+  "before": [
+    {
+      "arch": "x86_64",
+      "name": "alpine-baselayout",
+      "version": "3.7.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-baselayout-data",
+      "version": "3.7.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-keys",
+      "version": "2.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-release",
+      "version": "3.24.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "apk-tools",
+      "version": "3.0.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "busybox",
+      "version": "1.37.0-r31"
+    },
+    {
+      "arch": "x86_64",
+      "name": "busybox-binsh",
+      "version": "1.37.0-r31"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ca-certificates",
+      "version": "20260909-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ca-certificates-bundle",
+      "version": "20260909-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libapk",
+      "version": "3.0.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libcrypto3",
+      "version": "3.5.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libssl3",
+      "version": "3.5.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "musl",
+      "version": "1.2.6-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "musl-utils",
+      "version": "1.2.6-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "scanelf",
+      "version": "1.3.9-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ssl_client",
+      "version": "1.37.0-r31"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zlib",
+      "version": "1.3.2-r0"
+    }
+  ],
+  "installed": [
+    {
+      "arch": "x86_64",
+      "name": "alpine-baselayout",
+      "version": "3.7.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-baselayout-data",
+      "version": "3.7.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-keys",
+      "version": "2.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-release",
+      "version": "3.24.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "apk-tools",
+      "version": "3.0.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "brotli-libs",
+      "version": "1.2.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "busybox",
+      "version": "1.37.0-r31"
+    },
+    {
+      "arch": "x86_64",
+      "name": "busybox-binsh",
+      "version": "1.37.0-r31"
+    },
+    {
+      "arch": "x86_64",
+      "name": "c-ares",
+      "version": "1.34.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ca-certificates",
+      "version": "20260909-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ca-certificates-bundle",
+      "version": "20260909-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "git",
+      "version": "2.54.0-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "git-init-template",
+      "version": "2.54.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libapk",
+      "version": "3.0.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libcrypto3",
+      "version": "3.5.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libcurl",
+      "version": "8.23.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libexpat",
+      "version": "2.9.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libidn2",
+      "version": "2.3.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libpsl",
+      "version": "0.21.5-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libssl3",
+      "version": "3.5.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libunistring",
+      "version": "1.4.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "musl",
+      "version": "1.2.6-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "musl-utils",
+      "version": "1.2.6-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "nghttp2-libs",
+      "version": "1.70.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "pcre2",
+      "version": "10.49-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "scanelf",
+      "version": "1.3.9-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ssl_client",
+      "version": "1.37.0-r31"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zlib",
+      "version": "1.3.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zstd-libs",
+      "version": "1.5.7-r2"
+    }
+  ],
+  "installer_sha256": "3dd03b3e5dfd6be3fd09ae0ba9b091626aa7c7cf20e0c853607716a135e444f5",
+  "platform": "linux/amd64",
+  "role": "supercronic-builder",
+  "roots": [
+    "git=2.54.0-r0"
+  ],
+  "schema_version": 1,
+  "trusted_keys": [
+    {
+      "name": "alpine-devel@lists.alpinelinux.org-4a6a0840.rsa.pub",
+      "sha256": "9c102bcc376af1498d549b77bdbfa815ae86faa1d2d82f040e616b18ef2df2d4"
+    },
+    {
+      "name": "alpine-devel@lists.alpinelinux.org-5261cecb.rsa.pub",
+      "sha256": "12f899e55a7691225603d6fb3324940fc51cd7f133e7ead788663c2b7eecb00c"
+    },
+    {
+      "name": "alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub",
+      "sha256": "207e4696d3c05f7cb05966aee557307151f1f00217af4143c1bcaf33b8df733f"
+    }
+  ]
+}

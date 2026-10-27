@@ -1,4 +1,9 @@
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS web-builder
+# Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
+FROM docker.io/linnea7171/xirang@sha256:9d1c2af88e090059ff4f673562458e8688c22295642385f683ca48e6ce004883 AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:7faf14ea59f1b95f9d110331b1113c08100e7d7223788aeebd9e827f9b9ca0f4 AS supercronic-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:0a03e3bb2e17b34882289052725ef34158edef774460be64e26f56790fb599ed AS core-runtime-inputs
+
+FROM docker.io/linnea7171/xirang@sha256:3e4c9ad8b3fd601ce93e5a8f7a77a639efe8d7d36846846c5179f89175f89d86 AS web-builder
 
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
@@ -7,14 +12,15 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.27.3-alpine3.24@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd AS backend-builder
+FROM docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5 AS backend-builder
 
 WORKDIR /app/backend
 ARG TARGETOS
 ARG TARGETARCH
 
 COPY backend/go.mod backend/go.sum ./
-RUN apk add --no-cache \
+RUN --network=none --mount=from=cgo-builder-inputs,source=/inputs,target=/build-inputs \
+    sh /build-inputs/install.sh cgo-builder "$TARGETARCH" -- \
       gcc=15.2.0-r5 \
       musl-dev=1.2.6-r3
 
@@ -32,11 +38,13 @@ RUN set -eux; \
 
 # 自行使用与后端一致的 Go 工具链编译 supercronic，避免官方预编译二进制带入过期 stdlib 的 HIGH CVE，
 # 并支持 linux/amd64 与 linux/arm64 交叉编译。
-FROM golang:1.27.3-alpine3.24@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd AS supercronic-builder
+FROM docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5 AS supercronic-builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG SUPERCRONIC_COMMIT=c14d35dd8bb0d34e984097d5613cef2eea4a675f
-RUN apk add --no-cache git=2.54.0-r0
+RUN --network=none --mount=from=supercronic-builder-inputs,source=/inputs,target=/build-inputs \
+    sh /build-inputs/install.sh supercronic-builder "$TARGETARCH" -- \
+      git=2.54.0-r0
 RUN set -eux; \
     git init /src; \
     git -C /src remote add origin https://github.com/aptible/supercronic.git; \
@@ -45,13 +53,16 @@ RUN set -eux; \
     CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}" \
         go -C /src build -trimpath -ldflags='-s -w' -o /out/supercronic
 
-FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+FROM docker.io/linnea7171/xirang@sha256:c8faeaa02d9794e17ce55d4fd646b89614c71cc1eafb4e187dc3d3ce8dd759e9
+ARG TARGETARCH
 
-# Keep the release image reproducible: base images and every explicitly
-# installed Alpine package are pinned. Security-fixed transitive libraries are
-# direct pins so the digest-pinned Nginx base cannot retain vulnerable builds.
+# Replay the complete verified APK transaction from retained build inputs.
+# The explicit roots must match deploy/build-inputs/lock.json exactly.
+# Security-fixed transitive libraries remain direct pins.
 # PostgreSQL client utilities provide pg_dump/pg_restore for DB_TYPE=postgres.
-RUN apk add --no-cache \
+RUN --network=none --mount=from=core-runtime-inputs,source=/inputs,target=/build-inputs \
+    sh /build-inputs/install.sh core-runtime "$TARGETARCH" -- \
+      bash=5.3.3-r1 \
       brotli-libs=1.2.1-r0 \
       c-ares=1.34.9-r0 \
       curl=8.23.0-r0 \
@@ -59,18 +70,17 @@ RUN apk add --no-cache \
       libexpat=2.9.0-r0 \
       libssl3=3.5.9-r0 \
       libuuid=2.41.6-r1 \
-      mount=2.41.6-r1 \
-      util-linux-misc=2.41.6-r1 \
       libxml2=2.13.9-r1 \
+      mount=2.41.6-r1 \
       nghttp2-libs=1.69.0-r0 \
+      openssh-client-default=10.2_p1-r0 \
       pcre2=10.49-r0 \
+      postgresql18-client=18.6-r0 \
       rsync=3.5.0-r0 \
-      openssh-client=10.2_p1-r0 \
       sqlite=3.53.4-r0 \
-      bash=5.3.3-r1 \
       tiff=4.7.2-r0 \
       tzdata=2026e-r0 \
-      postgresql18-client=18.6-r0
+      util-linux-misc=2.41.6-r1
 
 COPY --from=supercronic-builder /out/supercronic /usr/local/bin/supercronic
 RUN chmod +x /usr/local/bin/supercronic

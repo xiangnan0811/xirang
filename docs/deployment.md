@@ -120,6 +120,14 @@ curl -fsS http://127.0.0.1:10761/healthz
 
 共享运行时包补丁会改变 Core/Worker 的生产工具链指纹。升级此类补丁时同时重建同源 Core 与可选 Worker，并重新生成匹配当前源码和架构的运行时闭包及签名运行包；不得复用旧指纹的运行包或绕过就绪检查。包版本不通过 `.env` 覆盖，维护步骤见[镜像构建依赖](maintainers/automation.md#镜像构建依赖)。
 
+源码构建从固定 digest 的保留基础镜像与完整 APK 输入安装依赖，APK 安装步骤禁网，
+不需要部署者维护 Alpine 软件源。首次接入使 Worker 工具链身份推进到 v3：升级时
+暂停 backfill、排空旧 Worker 在途处理，再配套切换同源 Core、Worker 与新签名
+bundle；旧 v2 bundle 无法满足新身份。runtime closure 与 bundle 格式仍为 v1，
+最终闭包须在新镜像安装完成并复制新二进制后生成。回退时恢复匹配的整套产物；
+历史上未采集 APK 输入的旧源码仍可能无法重建。归档位于现有公开镜像仓库的
+`base-*`、`inputs-*` 标签下，这些标签不是可部署的 Worker 产品镜像。
+
 受管 Recovery 不属于上述无 Worker 可用承诺：当前实现启用它时要求 Processing 已就绪且具备恶意软件证据服务，本机与远程 Worker 均关闭时不满足准入。旧版普通任务恢复仍按各执行器的证据和授权要求处理，不能代替受管恢复的安全检查。部署前须按[处理与导出合同](spec/domains/backup-processing-export.md)核验实际需要的恢复路径。
 
 Profile 固定使用以下本地身份和权限合同：

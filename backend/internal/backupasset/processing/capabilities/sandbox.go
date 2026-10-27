@@ -872,6 +872,7 @@ type toolchainInventory struct {
 	SchemaVersion string               `json:"schema_version"`
 	BuilderBase   string               `json:"builder_base"`
 	RuntimeBase   string               `json:"runtime_base"`
+	APKInputs     []toolchainAPKInput  `json:"apk_inputs"`
 	Packages      []toolchainPackage   `json:"packages"`
 	Components    []toolchainComponent `json:"components"`
 	Profiles      []toolchainProfile   `json:"profiles"`
@@ -889,9 +890,10 @@ type toolchainInspection struct {
 // Dockerfile; data/font/codec identities are checked again at Worker startup.
 func productionToolchainInventory() toolchainInventory {
 	return toolchainInventory{
-		SchemaVersion: "xirang.asset.toolchain.v2",
+		SchemaVersion: productionToolchainSchemaVersion,
 		BuilderBase:   "golang:1.27.3-alpine3.24@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd",
 		RuntimeBase:   "alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
+		APKInputs:     productionAPKInputs(),
 		Packages: []toolchainPackage{
 			{Name: "bash", Version: "5.3.3-r1", Runtime: true},
 			{Name: "clamav", Version: "1.4.4-r0", Runtime: true},
@@ -976,8 +978,14 @@ func ProductionToolchainFingerprint() string {
 // only removes the profiles that depend on it; no profile is advertised with a
 // partially verified runtime.
 func PreflightProductionToolchain(ctx context.Context, activeBundleRoot, expectedAttestationSHA256 string) ToolchainPreflight {
-	inventory := productionToolchainInventory()
-	fingerprint, _ := toolchainFingerprint(inventory)
+	return preflightProductionToolchain(ctx, productionToolchainInventory(), activeBundleRoot, expectedAttestationSHA256)
+}
+
+func preflightProductionToolchain(ctx context.Context, inventory toolchainInventory, activeBundleRoot, expectedAttestationSHA256 string) ToolchainPreflight {
+	fingerprint, err := toolchainFingerprint(inventory)
+	if err != nil {
+		return newToolchainPreflight("", nil, ErrInvalidInvocation)
+	}
 	inspection := inspectProductionToolchain(ctx, inventory)
 	ready := evaluateToolchainPreflight(ctx, inventory, inspection)
 	closureErr := VerifyProductionRuntimeClosure(
@@ -1006,6 +1014,7 @@ func newToolchainPreflight(fingerprint string, ready map[string]bool, closureErr
 
 func cloneToolchainInventory(value toolchainInventory) toolchainInventory {
 	result := value
+	result.APKInputs = append([]toolchainAPKInput(nil), value.APKInputs...)
 	result.Packages = append([]toolchainPackage(nil), value.Packages...)
 	result.Components = append([]toolchainComponent(nil), value.Components...)
 	for index := range result.Components {
@@ -1035,16 +1044,21 @@ func toolchainFingerprint(value toolchainInventory) (string, error) {
 		return "", err
 	}
 	digest := sha256.New()
-	_, _ = digest.Write([]byte("xirang.asset.toolchain.v2\x00"))
+	_, _ = digest.Write([]byte(productionToolchainSchemaVersion + "\x00"))
 	_, _ = digest.Write(payload)
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func canonicalToolchainInventory(value toolchainInventory) (toolchainInventory, error) {
 	result := cloneToolchainInventory(value)
-	if result.SchemaVersion == "" || result.BuilderBase == "" || result.RuntimeBase == "" || len(result.Components) == 0 || len(result.Profiles) == 0 {
+	if result.SchemaVersion != productionToolchainSchemaVersion || result.BuilderBase == "" || result.RuntimeBase == "" || len(result.Components) == 0 || len(result.Profiles) == 0 {
 		return toolchainInventory{}, ErrInvalidInvocation
 	}
+	inputs, err := canonicalToolchainAPKInputs(result.APKInputs)
+	if err != nil {
+		return toolchainInventory{}, err
+	}
+	result.APKInputs = inputs
 	for index := range result.Packages {
 		if result.Packages[index].Name == "" || result.Packages[index].Version == "" {
 			return toolchainInventory{}, ErrInvalidInvocation

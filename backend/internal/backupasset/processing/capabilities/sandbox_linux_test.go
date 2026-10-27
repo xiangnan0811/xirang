@@ -406,7 +406,7 @@ func TestProductionRuntimeClosureExcludesOnlyReviewedSystemMetadata(t *testing.T
 			t.Fatalf("production runtime exclusion %d=%q, want %q", index, got[index], want[index])
 		}
 	}
-	for _, forbidden := range []string{"/etc/crontabs/root", "/etc/shadow-", "/lib/apk/db/lock"} {
+	for _, forbidden := range []string{"/etc/crontabs/root", "/etc/shadow-", "/lib/apk/db/lock", "/etc/apk/world", "/etc/apk/repositories", productionAPKDatabase} {
 		if runtimeClosurePathExcluded(forbidden, got) {
 			t.Fatalf("removable runtime file %q was hidden from the signed closure", forbidden)
 		}
@@ -478,19 +478,31 @@ func TestProductionToolchainInventoryFingerprintAndPartialPreflight(t *testing.T
 	}
 }
 
-func TestProductionToolchainRuntimePackagePinsMatchWorkerDockerfile(t *testing.T) {
-	dockerfilePath := filepath.Join("..", "..", "..", "..", "..", "deploy", "worker", "Dockerfile")
-	dockerfile, err := os.ReadFile(dockerfilePath)
-	if err != nil {
-		t.Fatal(err)
+func TestProductionToolchainPackagePinsMatchAPKInputLock(t *testing.T) {
+	lock := readProductionAPKInputLock(t)
+	expected := map[string]map[string]bool{
+		"cgo-builder":    {},
+		"worker-runtime": {},
 	}
 	for _, packageValue := range productionToolchainInventory().Packages {
-		if !packageValue.Runtime {
-			continue
+		role := "cgo-builder"
+		if packageValue.Runtime {
+			role = "worker-runtime"
 		}
 		pin := packageValue.Name + "=" + packageValue.Version
-		if !bytes.Contains(dockerfile, []byte(pin)) {
-			t.Errorf("runtime inventory pin %q is absent from Worker Dockerfile", pin)
+		expected[role][pin] = true
+	}
+	for role, pins := range expected {
+		roots := lock.Profiles[role].Roots
+		if len(roots) != len(pins) {
+			t.Errorf("%s input lock has %d roots, want %d inventory pins", role, len(roots), len(pins))
+		}
+		seen := make(map[string]bool, len(roots))
+		for _, pin := range roots {
+			if !pins[pin] || seen[pin] {
+				t.Errorf("%s input lock has unknown or duplicate inventory pin %q", role, pin)
+			}
+			seen[pin] = true
 		}
 	}
 }
@@ -511,6 +523,11 @@ func TestProductionGoBuildersMatchModuleAndToolchainInventory(t *testing.T) {
 	if goVersion == "" || !strings.HasPrefix(builder, "golang:"+goVersion+"-alpine") {
 		t.Fatalf("builder %q does not match module Go version %q", builder, goVersion)
 	}
+	lock := readProductionAPKInputLock(t)
+	retainedBuilder := lock.Bases["go"].Ref
+	if lock.Bases["go"].Source != builder || !strings.Contains(retainedBuilder, "@sha256:") {
+		t.Fatalf("retained Go base %q does not bind the inventory builder %q", retainedBuilder, builder)
+	}
 	for file, stages := range map[string][]string{
 		"allinone": {"backend-builder", "supercronic-builder"},
 		"worker":   {"worker-builder"},
@@ -520,10 +537,13 @@ func TestProductionGoBuildersMatchModuleAndToolchainInventory(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, stage := range stages {
-			want := "FROM " + builder + " AS " + stage + "\n"
+			want := "FROM " + retainedBuilder + " AS " + stage + "\n"
 			if !strings.Contains(string(dockerfile), want) {
-				t.Errorf("%s Dockerfile must use inventory builder for %s: %s", file, stage, builder)
+				t.Errorf("%s Dockerfile must use retained inventory builder for %s: %s", file, stage, retainedBuilder)
 			}
+		}
+		if file == "worker" && !strings.Contains(string(dockerfile), "FROM "+lock.Bases["alpine"].Ref+"\n") {
+			t.Error("Worker Dockerfile does not use the retained runtime base from its input lock")
 		}
 	}
 }

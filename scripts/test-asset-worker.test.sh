@@ -8,6 +8,7 @@ BASE_DOCKERFILE="$ROOT_DIR/deploy/worker/Dockerfile"
 BASE_ENTRYPOINT="$ROOT_DIR/deploy/worker/entrypoint.sh"
 BASE_SECCOMP="$ROOT_DIR/deploy/worker/seccomp.json"
 BASE_CI="$ROOT_DIR/.github/workflows/ci.yml"
+BASE_INPUTS_LOCK="$ROOT_DIR/deploy/build-inputs/lock.json"
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf -- "$TMP_DIR"' EXIT
 
@@ -162,7 +163,8 @@ fake_runtime_repository_override_contract() {
     'WORKER_DOCKERFILE_PATH="$BASE_DOCKERFILE"' \
     'WORKER_ENTRYPOINT_PATH="$BASE_ENTRYPOINT"' \
     'WORKER_SECCOMP_PATH="$BASE_SECCOMP"' \
-    'CI_WORKFLOW_PATH="$BASE_CI"'; do
+    'CI_WORKFLOW_PATH="$BASE_CI"' \
+    'BUILD_INPUTS_LOCK_PATH="$BASE_INPUTS_LOCK"'; do
     grep -Fq -- "$contract" <<<"$section" || return 1
   done
 }
@@ -313,7 +315,7 @@ esac
 SH
 chmod 0755 "$FAKE_DOCKER"
 
-for path in "$SMOKE" "$BASE_DOCKERFILE" "$BASE_ENTRYPOINT" "$BASE_SECCOMP"; do
+for path in "$SMOKE" "$BASE_DOCKERFILE" "$BASE_ENTRYPOINT" "$BASE_SECCOMP" "$BASE_INPUTS_LOCK"; do
   if [[ ! -f "$path" ]]; then
     fail "required fixture not found: $path"
   fi
@@ -412,10 +414,8 @@ for contract in \
 done
 
 for contract in \
-  'gcc=15.2.0-r5' \
-  'bash=5.3.3-r1' \
-  'tesseract-ocr-data-eng=5.5.1-r0' \
-	  'font-noto=2025.12.01-r0' \
+  'sh /build-inputs/install.sh cgo-builder "$TARGETARCH" --' \
+  'sh /build-inputs/install.sh worker-runtime "$TARGETARCH" --' \
 	  'chmod 0755 /etc/network/if-up.d/dad' \
 	  "sed -i -E 's/^(clamav|asset-worker|asset-updater):([^:]*):[^:]*/\\1:\\2:/' /etc/shadow" \
 	  'test "$(stat -c '\''%a:%u:%g'\'' /etc/shadow)" = "640:0:42"' \
@@ -593,6 +593,7 @@ run_fake_runtime() {
   WORKER_ENTRYPOINT_PATH="$BASE_ENTRYPOINT" \
   WORKER_SECCOMP_PATH="$BASE_SECCOMP" \
   CI_WORKFLOW_PATH="$BASE_CI" \
+  BUILD_INPUTS_LOCK_PATH="$BASE_INPUTS_LOCK" \
   bash "$smoke"; then
     return 1
   fi
@@ -645,6 +646,7 @@ run_static() {
   WORKER_ENTRYPOINT_PATH="$entrypoint" \
   WORKER_SECCOMP_PATH="$seccomp" \
   CI_WORKFLOW_PATH="$workflow" \
+  BUILD_INPUTS_LOCK_PATH="$BASE_INPUTS_LOCK" \
   bash "$smoke"
 }
 
@@ -713,9 +715,21 @@ expect_runtime_smoke_mutation_failure drifted-clamav-database-tmp-create \
   '/--tmpfs \/var\/lib\/xirang\/asset-worker-bundles\/active\/clamav:/s/mode=0700/mode=0750/' \
   'runtime smoke did not capture the exact ClamAV database tmpfs contract'
 
-expect_mutation_failure unpinned-runtime dockerfile 's/@sha256:[0-9a-f]\{64\}//'
-expect_mutation_failure unpinned-builder dockerfile '0,/@sha256:[0-9a-f]\{64\}/s///'
+expect_mutation_failure unpinned-runtime dockerfile '/^FROM [^[:space:]]*$/s/@sha256:[0-9a-f]\{64\}//'
+expect_mutation_failure unpinned-builder dockerfile '/^FROM .* AS worker-builder$/s/@sha256:[0-9a-f]\{64\}//'
+expect_mutation_failure unpinned-apk-archive dockerfile '/^FROM .* AS cgo-builder-inputs$/s/@sha256:[0-9a-f]\{64\}//'
 expect_mutation_failure unpinned-tool-package dockerfile 's/ffmpeg=[^[:space:]\\]*/ffmpeg/'
+expect_mutation_failure commented-tool-package dockerfile 's/ffmpeg=[^[:space:]\\]*/# &/'
+expect_mutation_failure substring-tool-package dockerfile 's/ffmpeg=/not-ffmpeg=/'
+expect_mutation_failure networked-apk-install dockerfile 's/RUN --network=none --mount=from=worker-runtime-inputs/RUN --network=default --mount=from=worker-runtime-inputs/'
+expect_mutation_failure wrong-apk-profile dockerfile 's/install.sh worker-runtime /install.sh cgo-builder /'
+expect_mutation_failure unbound-apk-architecture dockerfile 's/install.sh worker-runtime "$TARGETARCH"/install.sh worker-runtime amd64/'
+expect_mutation_failure missing-target-architecture dockerfile '/^ARG TARGETARCH$/d'
+expect_mutation_failure online-apk-fallback dockerfile '/^USER 10000:10000/i\RUN apk add --no-cache ffmpeg'
+expect_mutation_failure global-options-apk-fallback dockerfile '/^USER 10000:10000/i\RUN apk --no-cache add ffmpeg'
+expect_mutation_failure update-cache-apk-fallback dockerfile '/^USER 10000:10000/i\RUN apk --update-cache add ffmpeg'
+expect_mutation_failure absolute-apk-fallback dockerfile '/^USER 10000:10000/i\RUN /sbin/apk --no-cache add ffmpeg'
+expect_mutation_failure exec-form-apk-fallback dockerfile '/^USER 10000:10000/i\RUN ["/sbin/apk", "--no-cache", "add", "ffmpeg"]'
 expect_mutation_failure root-user dockerfile 's/USER 10000:10000/USER 0:0/'
 expect_mutation_failure embedded-updater-group dockerfile 's/addgroup -S -g 10002 asset-updater/addgroup -S -g 10002 asset-updater \&\& addgroup asset-worker asset-updater/'
 expect_mutation_failure public-port dockerfile '/USER 10000:10000/a\EXPOSE 9443'

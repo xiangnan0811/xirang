@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SMOKE="$ROOT_DIR/scripts/test-core-compose.sh"
 DOCKERFILE="$ROOT_DIR/deploy/allinone/Dockerfile"
+BUILD_INPUTS_LOCK="$ROOT_DIR/deploy/build-inputs/lock.json"
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf -- "$TMP_DIR"' EXIT
 
@@ -22,59 +23,89 @@ if ! grep -Fq -- 'ADMIN_INITIAL_PASSWORD=CoreSmokeAdmin1!' "$SMOKE"; then
   fail "smoke fixture is missing the required initial admin password"
 fi
 
-runtime_packages=$(
-  awk '
-    /^FROM nginx:[^[:space:]]+@sha256:/ { in_runtime = 1; next }
-    in_runtime && /^RUN apk add --no-cache / { in_packages = 1 }
-    in_packages { print }
-    in_packages && $0 !~ /\\$/ { exit }
-  ' "$DOCKERFILE"
-)
-if [[ -z "$runtime_packages" ]]; then
-  fail "all-in-one runtime package install block not found"
-fi
-for package in \
-  'c-ares=1.34.9-r0' \
-  'libcrypto3=3.5.9-r0' \
-  'libssl3=3.5.9-r0' \
-  'libexpat=2.9.0-r0' \
-  'libuuid=2.41.6-r1' \
-  'libxml2=2.13.9-r1' \
-  'nghttp2-libs=1.69.0-r0'
-do
-  if ! awk -v expected="$package" '
-    {
-      for (field = 1; field <= NF; field++) {
-        if ($field ~ /^#/) {
-          break
-        }
-        if ($field == expected) {
-          found = 1
-        }
+[[ -f "$BUILD_INPUTS_LOCK" ]] || fail "preserved build input lock not found"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+locked_ref() {
+  jq -er --arg kind "$1" --arg name "$2" '
+    .registry as $registry | .[$kind][$name].ref |
+    select(type == "string" and startswith($registry + "@sha256:") and
+      test("^[^[:space:]]+@sha256:[0-9a-f]{64}$"))
+  ' "$BUILD_INPUTS_LOCK" || fail "invalid retained input reference: $1/$2"
+}
+
+grep -Fqx -- "FROM $(locked_ref bases nginx)" "$DOCKERFILE" || fail "Core runtime base differs from the retained lock"
+
+check_offline_apk_profile() {
+  local role=$1
+  local expected_packages
+  local actual_packages
+  grep -Fqx -- "FROM $(locked_ref profiles "$role") AS $role-inputs" "$DOCKERFILE" ||
+    fail "Core APK archive differs from the retained lock: $role"
+  expected_packages=$(jq -er --arg role "$role" '
+    .profiles[$role].roots |
+    select(type == "array" and length > 0 and
+      all(.[]; type == "string" and test("^[A-Za-z0-9][A-Za-z0-9+_.-]*=[^[:space:]=]+$"))) |
+    .[]
+  ' "$BUILD_INPUTS_LOCK") || fail "Core exact package roots are invalid: $role"
+  actual_packages=$(awk -v role="$role" '
+    $0 == "RUN --network=none --mount=from=" role "-inputs,source=/inputs,target=/build-inputs \\" {
+      blocks++
+      state = 1
+      next
+    }
+    state == 1 {
+      if ($0 != "    sh /build-inputs/install.sh " role " \"$TARGETARCH\" -- \\") invalid = 1
+      state = 2
+      next
+    }
+    state == 2 {
+      line = $0
+      sub(/[[:space:]]+\\$/, "", line)
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line !~ /^[A-Za-z0-9][A-Za-z0-9+_.-]*=[^[:space:]=]+$/) invalid = 1
+      print line
+      if ($0 !~ /\\$/) {
+        state = 0
+        completed++
       }
     }
-    END { exit(found ? 0 : 1) }
-  ' <<<"$runtime_packages"; then
-    fail "all-in-one runtime package is not fixed-version pinned: $package"
-  fi
-done
-if grep -Eq '^[[:space:]]*RUN[[:space:]].*apk[[:space:]]+upgrade|apk[[:space:]]+upgrade' "$DOCKERFILE"; then
-  fail "all-in-one Dockerfile uses nondeterministic apk upgrade"
+    END { exit invalid || blocks != 1 || completed != 1 || state != 0 ? 1 : 0 }
+  ' "$DOCKERFILE") || fail "Core APK installation is not a single closed offline transaction: $role"
+  [[ "$actual_packages" == "$expected_packages" ]] || fail "Core package roots differ from the preserved transaction: $role"
+}
+
+check_offline_apk_profile cgo-builder
+check_offline_apk_profile supercronic-builder
+check_offline_apk_profile core-runtime
+awk '
+  /^FROM / { target_arch = 0 }
+  /^ARG TARGETARCH$/ { target_arch = 1 }
+  /^RUN --network=none --mount=from=/ {
+    installs++
+    if (!target_arch) invalid = 1
+  }
+  END { exit invalid || installs != 3 ? 1 : 0 }
+' "$DOCKERFILE" || fail "Core offline APK installation does not bind the target architecture"
+if sed '/^[[:space:]]*#/d' "$DOCKERFILE" |
+  grep -Eq '(^|[^[:alnum:]_.-])apk(\.static)?([^[:alnum:]_./-]|$)'; then
+  fail "all-in-one Dockerfile bypasses its closed offline APK inputs"
 fi
 
 assert_runtime_pin_mutation_rejected() {
   local fixture_name=$1
-  local replacement=$2
+  local expression=$2
   local failure_message=$3
   local mutation_root="$TMP_DIR/$fixture_name"
   local mutation_test="$mutation_root/scripts/test-core-compose.test.sh"
   local mutation_log="$TMP_DIR/$fixture_name.log"
 
-  mkdir -p "$mutation_root/scripts" "$mutation_root/deploy/allinone"
+  mkdir -p "$mutation_root/scripts" "$mutation_root/deploy/allinone" "$mutation_root/deploy/build-inputs"
   cp "$0" "$mutation_test"
   cp "$SMOKE" "$mutation_root/scripts/test-core-compose.sh"
   cp "$ROOT_DIR/docker-compose.yml" "$mutation_root/docker-compose.yml"
-  sed "s|c-ares=1\.34\.9-r0|$replacement|" "$DOCKERFILE" \
+  cp "$BUILD_INPUTS_LOCK" "$mutation_root/deploy/build-inputs/lock.json"
+  sed "$expression" "$DOCKERFILE" \
     >"$mutation_root/deploy/allinone/Dockerfile"
   if CORE_COMPOSE_RUNTIME_PIN_MUTATION_CHILD=1 bash "$mutation_test" >"$mutation_log" 2>&1; then
     fail "$failure_message"
@@ -84,12 +115,52 @@ assert_runtime_pin_mutation_rejected() {
 if [[ "${CORE_COMPOSE_RUNTIME_PIN_MUTATION_CHILD:-0}" != "1" ]]; then
   assert_runtime_pin_mutation_rejected \
     runtime-pin-substring-mutation \
-    not-c-ares=1.34.9-r0 \
+    's/c-ares=/not-c-ares=/' \
     "runtime package guard accepted a longer token containing the expected pin"
   assert_runtime_pin_mutation_rejected \
     runtime-pin-comment-mutation \
-    '# c-ares=1.34.9-r0' \
+    's/c-ares=/# c-ares=/' \
     "runtime package guard accepted an expected pin from a comment"
+  assert_runtime_pin_mutation_rejected \
+    networked-apk-install \
+    's/RUN --network=none --mount=from=core-runtime-inputs/RUN --network=default --mount=from=core-runtime-inputs/' \
+    "runtime package guard accepted package network access"
+  assert_runtime_pin_mutation_rejected \
+    networked-cgo-apk-install \
+    's/RUN --network=none --mount=from=cgo-builder-inputs/RUN --network=default --mount=from=cgo-builder-inputs/' \
+    "CGO package guard accepted package network access"
+  assert_runtime_pin_mutation_rejected \
+    networked-supercronic-apk-install \
+    's/RUN --network=none --mount=from=supercronic-builder-inputs/RUN --network=default --mount=from=supercronic-builder-inputs/' \
+    "supercronic package guard accepted package network access"
+  assert_runtime_pin_mutation_rejected \
+    wrong-supercronic-apk-profile \
+    's/install.sh supercronic-builder /install.sh cgo-builder /' \
+    "supercronic package guard accepted a different installation profile"
+  assert_runtime_pin_mutation_rejected \
+    missing-target-architecture \
+    '/^ARG TARGETARCH$/d' \
+    "package guard accepted an unbound installation architecture"
+  assert_runtime_pin_mutation_rejected \
+    online-apk-fallback \
+    '/^FROM .* AS web-builder$/a\RUN apk add --no-cache curl' \
+    "runtime package guard accepted an online APK fallback"
+  assert_runtime_pin_mutation_rejected \
+    global-options-apk-fallback \
+    '/^FROM .* AS web-builder$/a\RUN apk --no-cache add curl' \
+    "runtime package guard accepted APK global options before its command"
+  assert_runtime_pin_mutation_rejected \
+    update-cache-apk-fallback \
+    '/^FROM .* AS web-builder$/a\RUN apk --update-cache add curl' \
+    "runtime package guard accepted an APK cache refresh and online install"
+  assert_runtime_pin_mutation_rejected \
+    absolute-apk-fallback \
+    '/^FROM .* AS web-builder$/a\RUN /sbin/apk --no-cache add curl' \
+    "runtime package guard accepted an absolute APK command path"
+  assert_runtime_pin_mutation_rejected \
+    exec-form-apk-fallback \
+    '/^FROM .* AS web-builder$/a\RUN ["/sbin/apk", "--no-cache", "add", "curl"]' \
+    "runtime package guard accepted an exec-form APK command"
 fi
 
 DOCKER_LOG="$TMP_DIR/docker.log"

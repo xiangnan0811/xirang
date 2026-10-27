@@ -17,6 +17,27 @@ Parser 使用 `network_mode: none` 且不配置 DNS。它只读挂载 worker run
 
 所有 parser/tool 调用来自服务端闭合 capability/profile，不经过 shell，禁止调用方提供 executable、argv、环境变量、codec、字体、模型、路径、URL 或工具配置。源输入只来自一次性 attempt-bound grant；输出必须在 Core 重新校验 MIME、数量、大小、digest、coverage 和安全策略后才可发布。取消、超时或 fence 丢失必须终止整个进程组并清理私有 workspace，不能只杀父进程。缺少可验证 tmpfs、Landlock 或 seccomp 合同时，不得 advertise 对应 capability。
 
+### 工具链身份与构建输入
+
+Core 与 Worker 共用 `capabilities` 中的生产工具链 inventory，schema 与摘要域均为 `xirang.asset.toolchain.v3`。除精确包版本、组件、profile 和策略外，inventory 必须绑定完整 APK 输入集的内容摘要。`deploy/build-inputs/lock.json` 是构建输入锁；生成的 `backend/internal/backupasset/processing/capabilities/production_apk_inputs.json` 仅嵌入 Worker 所需投影，不能把整个根 lock 编入二进制。
+
+投影 schema 为 1，顶层仅有 `schema_version` 和 `inputs`；每项仅含 `role`、`platform`、`manifest_sha256`。固定包含以下四项，按 role/platform 排序：
+
+| 输入角色 | 平台 | 约束范围 |
+| --- | --- | --- |
+| `cgo-builder` | `linux/amd64`、`linux/arm64` | Core/Worker 共用的 CGO 构建依赖 |
+| `worker-runtime` | `linux/amd64`、`linux/arm64` | Worker 运行依赖 |
+
+两种架构的 Core 和 Worker 均使用完整四项计算同一个 toolchain fingerprint，不能按运行平台只取其中一半。摘要必须是非零、64 位小写十六进制 SHA-256；缺项、重复项、未知 role/platform/字段、非规范 JSON 或不支持的 schema 均失败关闭，不能以空指纹继续开放能力。投影必须由真实归档 manifest 生成并与根 lock 校验一致，不能手填摘要或只校验字符串格式。
+
+输入 manifest 的稳定内容身份覆盖相应 base 平台摘要、完整 APK 字节及安装语义；存储地址、tag、采集时间和 workflow provenance 不进入该内容身份。`core-runtime` 和 `supercronic-builder` 不进入 Worker 投影；只改这两组或归档位置元数据，不得改变 Worker 投影字节或 toolchain fingerprint。共用 `cgo-builder` 或 `worker-runtime` 任一架构的输入内容变化，则推进 toolchain 及依赖它的 pipeline 指纹。
+
+inventory 的 `BuilderBase`、`RuntimeBase` 保留原始上游的版本与 digest 身份，对应根 lock 的 `bases.go.source`、`bases.alpine.source`；Docker `FROM` 使用各自 `ref` 中按 digest 固定的保留镜像。来源身份与实际取得位置必须校验对应，不能因移动归档地址改变工具链语义，也不能用地址相同替代内容相同的验证。输入归档按精确 root pins 保存完整安装事务，构建时离线验证并安装；这使已归档输入不再依赖上游保留旧 APK，但不补回归档机制引入前缺失的历史输入。归档、更新、安全扫描与保留流程见[发布手册](../../maintainers/release.md)。
+
+APK 输入锁负责重新取得构建依赖；runtime closure 负责验证最终安装结果。后者仍须在 APK 安装、用户与文件权限规范化、Worker 二进制及入口文件复制完成后生成，且继续覆盖 `/etc/apk/world`、`/etc/apk/repositories` 和 `/lib/apk/db/installed`。不得以输入摘要替代安装后闭包，也不得把最终镜像或闭包摘要写回输入 manifest 形成循环。
+
+runtime closure、双架构 attestations 与签名 bundle manifest 的 schema 保持 1。v3 输入绑定会改变 Worker 二进制；必须从两种架构的新最终镜像重新取得 closure，再生成同时绑定两者的 `toolchain/attestations.v1.json` 并重新签名 bundle。旧 bundle 中的闭包证据不能沿用到新二进制；Core/Worker 也必须共享相同的工具链合同与输入投影，不能混用 v2/v3 身份。输入留存不改变 Worker 的非 GA 状态、默认关闭和既有签名、运行时校验及漏洞扫描门槛。
+
 ### Updater 身份、签名与原子激活
 
 Updater 使用独立进程、UID/GID `10002:10002`、PID namespace、socket 和可写 bundle volume。它只读挂载独立 updater runtime 到 `/run/xirang`，不挂 worker runtime，parser 也不可反向观察 updater socket。Core 在 setgid mode `2770`、owner/group `10000:10002` 的 updater runtime 中创建 `/run/xirang/asset-worker-updater.sock`，socket mode `0660`、owner/group `10000:10002`，并在解码 receipt 前验证 socket 和 Linux peer credential。跨 PID namespace 的 `SO_PEERCRED` PID 可以为 0；PID 仅供诊断，不是认证主体，认证由受保护 UDS、精确 UID/GID 和 socket owner/mode 共同完成。
@@ -81,6 +102,8 @@ Derived named volume `asset-worker-derived-store`、Export `asset-worker-export-
 ## 回归证据
 
 沙箱回归逐项破坏 rootfs、capabilities、NNP、seccomp、tmpfs flags、Landlock、进程/资源/网络边界，证明缺能力时不 advertise、不执行；拒绝 caller executable/argv/env/codec/font/model/path/URL/config，验证源只能通过 grant。使用确实有子进程的 fixture 验证 cancel/timeout/fence-loss 终止整个进程组且清 workspace，不能仅断言父进程退出。
+
+构建输入回归逐项改变 `cgo-builder`、`worker-runtime` 的 amd64/arm64 manifest 摘要，证明 toolchain/pipeline 指纹均推进；只改 Core runtime、supercronic 或存储/provenance 元数据时，证明 Worker 投影字节和指纹保持不变。覆盖投影与真实根 lock 漂移、缺失架构、重复/未知字段、非法摘要、v2 schema 以及无效输入在工具探测前失败关闭；保留安装后 APK 数据库和 world 文件的闭包覆盖、错误架构/旧 attestations/文件内容或权限漂移的拒绝证据。APK 离线取得与安装验证的成功，不能替代最终 Worker 的双架构运行时和签名闭包验证。
 
 Updater 回归覆盖双向 socket/mount 隔离、精确 UID/GID/owner/mode、跨 PID namespace PID=0 的合法情况和错误身份在 receipt 解码前拒绝；覆盖 inbox/trust owner/mode、symlink/no-follow、非 canonical manifest、错误 Ed25519 签名、tar/file digest/大小/时间/路径/类型越界、stale expected fingerprint，以及 fsync/journal/pointer rename 各边界的中断与恢复。任何失败都不得激活未验证 bundle，parser 只读挂载不能改 store。API 测试拒绝 bundle/multipart/URL/path/raw manifest，privacy canary 覆盖全部禁止字段；Compose static/runtime gate 验 offline-only、无 DNS/egress、无 swap、各 volume 权限，不能以配置文本检查代替进程和文件系统行为证据。
 

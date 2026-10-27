@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Alpine 构建输入保留
+
+- Core 与可选 Worker 改用固定 digest 的保留基础镜像，以及经过 Alpine 签名、完整包清单和原生双架构断网安装验证的 APK 输入。覆盖共享 CGO、supercronic 构建阶段和两种运行时的直接及传递依赖，防止已采集的版本因在线软件源移除旧包而再次中断构建。保留沿用 Docker Hub 仓库，不新增自建软件源，也不降低漏洞扫描门槛。
+- Worker 生产工具链推进到 v3，绑定共享 CGO 和 Worker runtime 的 amd64/arm64 四份输入内容摘要。首次迁移以及任一 Worker 输入变化，都须同源重建 Core/Worker，重新生成两个架构的最终 runtime closure、签名 bundle 和 proof；runtime closure 与 bundle 格式保持 v1。Core 专属输入更新不改变 Worker 投影，旧 v2 bundle 不得与新 Core/Worker 混用。
+- 换版前暂停 backfill、排空旧 Worker 在途处理，保全已验签 bundle、私有数据、数据库、匹配密钥与配置，再按匹配源码和架构切换；回退须恢复相配的 Core、Worker 与 bundle。无新增 API、运行时配置或数据库 schema migration，合并和归档成功不表示生产已部署。
+- 新保留能力从采用真实输入 lock 的源码开始生效，不追溯修复没有归档输入的旧 tag。历史源码、旧镜像及其漏洞风险仍按对应版本说明处理；可重建不等于可重新发布，旧输入须通过当前扫描门槛。`base-*`、`inputs-*` 仅为构建输入标签，不移动产品标签或重做既有补丁发行。
+
 ## [0.73.4](https://github.com/xiangnan0811/xirang/compare/v0.73.3...v0.73.4) (2026-10-27)
 
 

@@ -6,6 +6,7 @@ DOCKERFILE=${WORKER_DOCKERFILE_PATH:-"$ROOT_DIR/deploy/worker/Dockerfile"}
 ENTRYPOINT=${WORKER_ENTRYPOINT_PATH:-"$ROOT_DIR/deploy/worker/entrypoint.sh"}
 SECCOMP=${WORKER_SECCOMP_PATH:-"$ROOT_DIR/deploy/worker/seccomp.json"}
 WORKFLOW=${CI_WORKFLOW_PATH:-"$ROOT_DIR/.github/workflows/ci.yml"}
+BUILD_INPUTS_LOCK=${BUILD_INPUTS_LOCK_PATH:-"$ROOT_DIR/deploy/build-inputs/lock.json"}
 DOCKER=${ASSET_WORKER_DOCKER:-docker}
 IMAGE=${ASSET_WORKER_IMAGE:-}
 EXPECTED_ARCH=${EXPECTED_WORKER_ARCH:-}
@@ -53,7 +54,7 @@ validate_runtime_closure() {
   ' "$manifest" >/dev/null || fail "runtime closure artifact is invalid: $platform"
 }
 
-for path in "$DOCKERFILE" "$ENTRYPOINT" "$SECCOMP" "$WORKFLOW"; do
+for path in "$DOCKERFILE" "$ENTRYPOINT" "$SECCOMP" "$WORKFLOW" "$BUILD_INPUTS_LOCK"; do
   [[ -f "$path" ]] || fail "required contract file not found: $path"
 done
 command -v jq >/dev/null 2>&1 || fail "jq is required"
@@ -67,8 +68,70 @@ if [[ -n "$VALIDATE_RUNTIME_CLOSURE_ONLY" ]]; then
   exit 0
 fi
 
-grep -Eq '^FROM golang:1\.27\.3-alpine3\.24@sha256:[0-9a-f]{64} AS worker-builder$' "$DOCKERFILE" || fail "builder base is not digest pinned"
-grep -Eq '^FROM alpine:3\.23@sha256:[0-9a-f]{64}$' "$DOCKERFILE" || fail "runtime base is not digest pinned"
+locked_ref() {
+  jq -er --arg kind "$1" --arg name "$2" '
+    .registry as $registry | .[$kind][$name].ref |
+    select(type == "string" and startswith($registry + "@sha256:") and
+      test("^[^[:space:]]+@sha256:[0-9a-f]{64}$"))
+  ' "$BUILD_INPUTS_LOCK" || fail "invalid retained input reference: $1/$2"
+}
+
+grep -Fqx -- "FROM $(locked_ref bases go) AS worker-builder" "$DOCKERFILE" ||
+  fail "builder base does not match the retained digest in the input lock"
+grep -Fqx -- "FROM $(locked_ref bases alpine)" "$DOCKERFILE" ||
+  fail "runtime base does not match the retained digest in the input lock"
+
+check_offline_apk_profile() {
+  local role=$1
+  local expected_roots
+  local actual_roots
+  grep -Fqx -- "FROM $(locked_ref profiles "$role") AS $role-inputs" "$DOCKERFILE" ||
+    fail "APK archive does not match the retained digest: $role"
+  expected_roots=$(jq -er --arg role "$role" '
+    .profiles[$role].roots |
+    select(type == "array" and length > 0 and
+      all(.[]; type == "string" and test("^[A-Za-z0-9][A-Za-z0-9+_.-]*=[^[:space:]=]+$"))) |
+    .[]
+  ' "$BUILD_INPUTS_LOCK") || fail "invalid exact package roots: $role"
+  actual_roots=$(awk -v role="$role" '
+    $0 == "RUN --network=none --mount=from=" role "-inputs,source=/inputs,target=/build-inputs \\" {
+      blocks++
+      state = 1
+      next
+    }
+    state == 1 {
+      if ($0 != "    sh /build-inputs/install.sh " role " \"$TARGETARCH\" -- \\") invalid = 1
+      state = 2
+      next
+    }
+    state == 2 {
+      line = $0
+      sub(/[[:space:]]+\\$/, "", line)
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line !~ /^[A-Za-z0-9][A-Za-z0-9+_.-]*=[^[:space:]=]+$/) invalid = 1
+      print line
+      if ($0 !~ /\\$/) {
+        state = 0
+        completed++
+      }
+    }
+    END { exit invalid || blocks != 1 || completed != 1 || state != 0 ? 1 : 0 }
+  ' "$DOCKERFILE") || fail "APK installation is not a single closed offline transaction: $role"
+  [[ "$actual_roots" == "$expected_roots" ]] || fail "APK roots differ from the preserved transaction: $role"
+}
+
+check_offline_apk_profile cgo-builder
+check_offline_apk_profile worker-runtime
+awk '
+  /^FROM / { target_arch = 0 }
+  /^ARG TARGETARCH$/ { target_arch = 1 }
+  /^RUN --network=none --mount=from=/ {
+    installs++
+    if (!target_arch) invalid = 1
+  }
+  END { exit invalid || installs != 2 ? 1 : 0 }
+' "$DOCKERFILE" || fail "offline APK installation does not bind the target architecture"
 grep -Fqx -- 'USER 10000:10000' "$DOCKERFILE" || fail "image metadata user is not fixed non-root"
 if grep -Eq 'addgroup[[:space:]]+asset-worker[[:space:]]+asset-updater' "$DOCKERFILE"; then
   fail "parser image identity includes updater supplementary group"
@@ -90,29 +153,9 @@ for contract in \
   "444:0:0"; do
   grep -Fq -- "$contract" "$DOCKERFILE" || fail "runtime closure build contract missing: $contract"
 done
-for package in \
-  'gcc=15.2.0-r5' \
-  'musl-dev=1.2.6-r3' \
-  'bash=5.3.3-r1' \
-  'clamav=1.4.4-r0' \
-  'ffmpeg=8.0.1-r1' \
-  'font-noto=2025.12.01-r0' \
-  'font-noto-cjk=0_git20220127-r1' \
-  'libcrypto3=3.5.9-r0' \
-  'libreoffice=25.8.1.1-r5' \
-  'libssl3=3.5.9-r0' \
-  'poppler-utils=25.12.0-r0' \
-  'tesseract-ocr=5.5.1-r0' \
-  'tesseract-ocr-data-chi_sim=5.5.1-r0' \
-  'tesseract-ocr-data-eng=5.5.1-r0' \
-  'vips-tools=8.17.3-r1' \
-  'gzip=1.14-r3' \
-  'xz=5.8.4-r0' \
-  'zstd=1.5.7-r2'; do
-  grep -Eq "^[[:space:]]*$package([[:space:]\\]|]|$)" "$DOCKERFILE" || fail "missing pinned closed toolchain package: $package"
-done
-if grep -Fq -- 'apk upgrade' "$DOCKERFILE"; then
-  fail "Worker image performs nondeterministic apk upgrade"
+if sed '/^[[:space:]]*#/d' "$DOCKERFILE" |
+  grep -Eq '(^|[^[:alnum:]_.-])apk(\.static)?([^[:alnum:]_./-]|$)'; then
+  fail "Worker image bypasses its closed offline APK inputs"
 fi
 if grep -Eq '^[[:space:]]*(EXPOSE|HEALTHCHECK)[[:space:]]' "$DOCKERFILE"; then
   fail "Worker image declared a public/runtime endpoint"
@@ -366,7 +409,7 @@ func main() {
 		sort.Strings(profiles)
 		manifestCapabilities = append(manifestCapabilities, updater.ManifestCapability{
 			Capability: capability, Schema: schemas[capability], Profiles: profiles,
-			ToolRevision: "profile-smoke-toolchain-v2", ModelRevision: "profile-smoke-model-v1", DataRevision: "none",
+			ToolRevision: "profile-smoke-toolchain-v3", ModelRevision: "profile-smoke-model-v1", DataRevision: "none",
 		})
 	}
 	now := time.Now().UTC().Truncate(time.Second)

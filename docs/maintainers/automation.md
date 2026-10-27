@@ -214,11 +214,26 @@ worktree，不按工具名称维护清单；Docker 自身所需的构建控制�
 保护，并验证 Core/Worker 的 `COPY` 输入仍可用；模块内的必要隐藏构建文件不应被
 根目录规则误排除。
 
-基础镜像以 digest 固定，显式安装的 Alpine 包使用精确版本。软件源可能移除旧包：安装失败时在锁定基础镜像中复现，分别核对该 Alpine 分支的 amd64 与 arm64 软件源，再更新必要锁定。`apk` 显示的已安装版本不代表软件源仍可安装。
+基础镜像、完整 APK 事务和显式精确版本由输入 lock 绑定。Core/Worker 的 APK 安装
+使用 `RUN --network=none`，只读取固定 digest carrier 的 `/inputs`；禁用软件源
+解析与在线回退。软件源仍可能移除旧包，因此新输入的采集必须分别在该 Alpine
+分支的 amd64 与 arm64 原生环境完成。`apk` 显示的已安装版本不代表软件源仍可安装。
 
 ### 构建输入保留与更新
 
 精确版本更新仍负责安全维护；历史可重建性还需要保存原始输入。
+本仓库采用完整 APK 输入归档，并保留它们安装所依赖的原始基础镜像：
+
+| 路径 | 能保证的范围 | 维护与存储取舍 |
+| --- | --- | --- |
+| 持续更新精确版本 | 及时修复当前分支的兼容性与安全问题 | 仍需双架构验证；不保留已消失的旧版本，单独采用无法保证历史构建 |
+| 完整 APK 集合＋基础镜像保留（采用） | 保存过的精确安装事务可验签、核对内容并断网重放 | 四种事务各两份清单；保存原始压缩 APK 和必要的基础层，复用共享 CGO 输入 |
+| 另外保留已安装的工具链／运行依赖镜像 | 可直接复用安装结果，减少重复安装时间 | 仍需双架构构建、扫描、来源证明和保留策略；若还保留 APK，会增加安装结果层的存储与维护对象 |
+
+已安装依赖镜像目前只用于采集验收与扫描，不另外长期发布。后续若安装时间成为
+瓶颈，可把它们作为由现有归档重建的缓存；原始 APK 与基础镜像仍是重建输入。
+不把普通构建缓存、短期 Actions artifact 或仅固定上游 digest 当作长期留存。
+
 [输入规格](../../deploy/build-inputs/spec.json)按四种安装事务管理依赖：
 
 | 输入角色 | 安装起点 | 使用者 |
@@ -228,12 +243,21 @@ worktree，不按工具名称维护清单；Docker 自身所需的构建控制�
 | `core-runtime` | Nginx / Alpine | Core 运行时直接及传递依赖 |
 | `worker-runtime` | Alpine | Worker 解析器、语言、字体及传递依赖 |
 
+roots 固定具体包名和版本，不使用可由多个包满足的虚拟名称。Core 的 SSH 客户端
+明确为 `openssh-client-default=10.2_p1-r0`，与迁移前实际选中的包及版本相同，
+避免 `openssh-client` 在 default 与 krb5 provider 之间重新选择。
+
 [Preserve Build Inputs](../../.github/workflows/build-inputs.yml)在 `build-inputs/**`
 维护分支的相关文件 push 或手动执行时，分别使用原生 amd64 与 arm64 runner。
 采集保留一次真实安装事务下载的全部原始 APK、包名/版本/架构/大小/SHA-256、
 安装前后完整 inventory、原始可信密钥和已验证索引证据。基础镜像已提供且未改变的
 包由该镜像承载；新增或升级的每个传递包必须有归档 APK。两个架构独立解析、验证、
 断网重放和扫描，不能把 amd64 包清单复制成 arm64 输入。
+零安装大小的元包可能只凭索引进入安装数据库而不产生下载缓存；采集器对照完整
+安装差异，按精确版本补取缺失 APK，再统一验签，不能只复制缓存目录作为完整集合。
+Alpine 索引可能将 `noarch` 改写成仓库架构；归档保留在线安装清单作为证据，
+离线目标清单采用已验签 APK 自身的 `noarch` 声明，仍逐项精确比较包名、版本和
+安装后架构，不能因此接受来自另一原生架构的包。
 
 归档复用 `docker.io/linnea7171/xirang` 与已有镜像推送凭据。四种输入各保存两份
 平台 carrier；Go、Node、Nginx、Alpine 的原始平台 manifest 和 blob 同时保留。
@@ -251,21 +275,59 @@ carrier 扫描替代安装后扫描。最终 Core/Worker 的漏洞与运行时�
 
 candidate artifact 仅传递 lock、完整包 manifest 和 Worker 投影，Actions artifact
 保留期不承担长期 APK 保存。维护者下载同一成功 run 的 `build-input-candidate`，
-先核对来源 SHA 与 attestation，再执行 `python3 scripts/build-inputs.py verify
---candidate --lock <目录>/lock.json`，经审查后用 `adopt --candidate <目录>` 生成消费
-锁定。首次接入还须完成 Dockerfile 的离线安装入口，不能只提交一个尚未使用的 lock。
+先核对来源 SHA 与 attestation，再验证和采用真实消费锁定：
+
+```bash
+gh attestation verify <目录>/lock.json \
+  --repo xiangnan0811/xirang \
+  --signer-workflow xiangnan0811/xirang/.github/workflows/build-inputs.yml \
+  --source-digest <成功采集运行的完整提交SHA> \
+  --deny-self-hosted-runners
+python3 scripts/build-inputs.py verify --candidate --lock <目录>/lock.json
+python3 scripts/build-inputs.py adopt --candidate <目录>
+python3 scripts/build-inputs.py verify
+```
+
+包版本更新时同步 Dockerfile 的显式 roots；涉及 Worker 时同步生产 inventory。
+新输入不会在采集后自动成为产品构建输入，lock 的变更仍需 PR 审查和完整 CI。
 安装器或需求变更必须重新采集、验证和审查，不能手工伪造真实制品 digest。
 
 安全更新以规格中的必要版本或基础镜像变更开始，在维护分支重新生成候选。
-共享输入变更要验证两种使用者，Core 专属输入变更不扩大为 Worker 工具链变更。
+共享输入变更要验证两种使用者，Core 专属输入本身不进入 Worker 工具链投影。
+当前采集一次重建四种事务；即使起因是 Core 修复，重新解析时若 Worker 或共享
+CGO 的传递依赖也发生变化，仍须按实际内容差异处理 Worker 身份与制品更新。
 禁止通过放宽版本、关闭签名、临时漏洞豁免或回退在线安装使候选通过。
 保留旧输入只提供重建能力；旧版本仍须通过当时执行的漏洞门槛才能重新发布。
 
+[Audit Preserved Build Inputs](../../.github/workflows/audit-build-inputs.yml)每周及手动
+执行匿名冷读取、双原生架构断网重放和当前漏洞扫描。它不使用推送凭据、不更新
+锁定、不删除输入；失败须检查归档可用性、数据完整性或新增漏洞，再通过维护 PR
+处理。普通产品 CI 继续生成最终 Worker closure、验证签名 bundle、执行 Compose
+smoke 和两架构镜像扫描；保留输入检查不能替代这些运行时证据。
+
 存储按 registry 中实际引用 blob 的压缩大小、跨 manifest 去重后计量，不能用
-容器内 installed size 估算账单。`python3 scripts/build-inputs.py report --lock
-<路径>/lock.json` 输出该 lock 的引用与去重大小。初期不自动删除 `inputs-*`、
+容器内 installed size 估算账单。`python3 scripts/build-inputs.py report` 输出当前
+lock 的引用与去重大小；`--lock <路径>/lock.json` 可指定待审查候选。不自动删除 `inputs-*`、
 `base-*`；所有仍保留的 release、支持分支及回退窗口引用都须纳入保护集合。
 定期盘点只报告，不删除；实际费用按仓库账单、流量与保留代数计算。
+当前报告只统计给定 lock 可达的 blob，不代表整个仓库历史总量。多代留存成本为
+全部受保护 lock 的 blob digest 并集；相同基础层或完全相同的 APK 层只计一次。
+每个角色的 APK 单独组成一层，避免索引证据变化重复保存 APK；任一 APK 内容变化
+会产生该角色该架构的新 APK 层，不能假设 registry 会在层内部按包去重。
+因此每次更新须比较新增 blob 字节数，再结合保留窗口和实际下载流量评估增量费用。
+每次完整采集包含八次在线安装、八次原生断网重放、十个拒绝边界，以及八个 carrier
+各两次无缓存构建；每周审计包含八次断网安装。两种流程各扫描八个依赖镜像，
+最终产品 CI 的构建、扫描与运行验证费用另计。
+
+Worker 的 v3 工具链只嵌入共享 CGO 与 Worker runtime 的两架构内容摘要。
+Core runtime、supercronic、存储位置、抓取时间和原始索引审计证据不进入该投影；
+同一 APK 内容重新归档不应仅因位置变化重签 Worker。输入或生产二进制变化后，
+仍须重新生成最终闭包并按[工具链身份合同](../spec/domains/backup-processing-export.md#工具链身份与构建输入)
+提供新的签名制品。闭包是在安装完成后生成，不能代替原始 APK 与基础镜像留存。
+
+该保证限定为保存过的 APK 事务和基础镜像可重新取得与安装，不承诺所有历史 tag
+都可重建，也不宣称 npm、Go modules、supercronic 源码获取和最终产品已全流程离线。
+没有采用归档 lock 的旧源码仍须保留原发布说明中的不可重建警告。
 
 ### 已合入的包版本修复
 

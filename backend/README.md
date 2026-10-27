@@ -24,8 +24,12 @@
 | [internal/task/manager.go](internal/task/manager.go) | 任务执行与生命周期 |
 | [internal/taskstats/taskstats.go](internal/taskstats/taskstats.go) | 历史任务统计查询与聚合 |
 | [internal/backupasset/runtime/runtime.go](internal/backupasset/runtime/runtime.go) | 备份资产组合根 |
+| [internal/backupasset/processing/capabilities/apk_inputs.go](internal/backupasset/processing/capabilities/apk_inputs.go) | Worker 构建输入投影、双架构内容摘要与严格校验 |
+| [internal/backupasset/processing/capabilities/sandbox.go](internal/backupasset/processing/capabilities/sandbox.go) | Core/Worker 共用工具链指纹、运行时闭包及能力就绪校验 |
 
 API 以 Router 和生成的 OpenAPI 为准，本页不手工维护接口或模型全集。备份资产默认关闭，是否能够启用遵循领域就绪合同；可选 Worker 的缺席不等同于 Core 故障。
+
+Worker 工具链 v3 的输入身份、保留镜像引用及 v1 签名闭包的兼容边界见[工具链身份与构建输入](../docs/spec/domains/backup-processing-export.md#工具链身份与构建输入)；归档与更新操作见[发布手册](../docs/maintainers/release.md)。
 
 ## 数据库迁移版本
 
