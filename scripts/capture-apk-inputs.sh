@@ -58,7 +58,9 @@ package_metadata
 # the original verified indices are still present; do not refresh the indices.
 missing_packages /output/before.tsv /output/installed.tsv /output/downloaded.tsv > /tmp/missing-input-packages
 while IFS= read -r pin; do
-    apk --cache-dir /output/apks fetch --output /output/apks "$pin"
+    # apk-tools v3's nonrecursive query matches the full package field exactly;
+    # the default name field does not correctly match name=version constraints.
+    apk --cache-dir /output/apks fetch --match package --output /output/apks "${pin%%=*}-${pin#*=}"
 done < /tmp/missing-input-packages
 rm /tmp/missing-input-packages
 apk --keys-dir /output/evidence/trusted-keys verify /output/apks/*.apk
