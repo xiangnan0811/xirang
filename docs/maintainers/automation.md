@@ -216,6 +216,59 @@ worktree，不按工具名称维护清单；Docker 自身所需的构建控制�
 
 基础镜像以 digest 固定，显式安装的 Alpine 包使用精确版本。软件源可能移除旧包：安装失败时在锁定基础镜像中复现，分别核对该 Alpine 分支的 amd64 与 arm64 软件源，再更新必要锁定。`apk` 显示的已安装版本不代表软件源仍可安装。
 
+### 构建输入保留与更新
+
+精确版本更新仍负责安全维护；历史可重建性还需要保存原始输入。
+[输入规格](../../deploy/build-inputs/spec.json)按四种安装事务管理依赖：
+
+| 输入角色 | 安装起点 | 使用者 |
+| --- | --- | --- |
+| `cgo-builder` | Go / Alpine | Core 与 Worker 共用 GCC、musl 开发工具链 |
+| `supercronic-builder` | Go / Alpine | supercronic 构建阶段的 Git 依赖 |
+| `core-runtime` | Nginx / Alpine | Core 运行时直接及传递依赖 |
+| `worker-runtime` | Alpine | Worker 解析器、语言、字体及传递依赖 |
+
+[Preserve Build Inputs](../../.github/workflows/build-inputs.yml)在 `build-inputs/**`
+维护分支的相关文件 push 或手动执行时，分别使用原生 amd64 与 arm64 runner。
+采集保留一次真实安装事务下载的全部原始 APK、包名/版本/架构/大小/SHA-256、
+安装前后完整 inventory、原始可信密钥和已验证索引证据。基础镜像已提供且未改变的
+包由该镜像承载；新增或升级的每个传递包必须有归档 APK。两个架构独立解析、验证、
+断网重放和扫描，不能把 amd64 包清单复制成 arm64 输入。
+
+归档复用 `docker.io/linnea7171/xirang` 与已有镜像推送凭据。四种输入各保存两份
+平台 carrier；Go、Node、Nginx、Alpine 的原始平台 manifest 和 blob 同时保留。
+上游多架构 index 原始字节作为证据保存，保留仓库另建只含这两个平台的 index，
+不宣称它与上游包含其他架构和证明的 index 具有相同 digest。
+`inputs-*`、`base-*` 标签包含内容标识且不允许覆盖冲突；消费引用固定 digest。
+这些标签只承载构建输入，不是可部署的产品版本，不触发正式镜像发布。
+
+流程先在原始基础镜像中安装，并在禁网的新构建中重放，验证缺包、字节篡改、
+无可信签名、错架构及额外包都会失败。APK 签名使用安装起点内的可信密钥；归档
+附带密钥仅供审计，不能成为独立信任根。四种安装后的镜像均按现有 Trivy
+`HIGH,CRITICAL`、`exit-code: 1`、`ignore-unfixed: true` 扫描，成功后才推送输入。
+两平台全部成功才生成和 attest candidate lock；不能用存放压缩 APK 的 scratch
+carrier 扫描替代安装后扫描。最终 Core/Worker 的漏洞与运行时检查仍独立执行。
+
+candidate artifact 仅传递 lock、完整包 manifest 和 Worker 投影，Actions artifact
+保留期不承担长期 APK 保存。维护者下载同一成功 run 的 `build-input-candidate`，
+先核对来源 SHA 与 attestation，再执行 `python3 scripts/build-inputs.py verify
+--candidate --lock <目录>/lock.json`，经审查后用 `adopt --candidate <目录>` 生成消费
+锁定。首次接入还须完成 Dockerfile 的离线安装入口，不能只提交一个尚未使用的 lock。
+安装器或需求变更必须重新采集、验证和审查，不能手工伪造真实制品 digest。
+
+安全更新以规格中的必要版本或基础镜像变更开始，在维护分支重新生成候选。
+共享输入变更要验证两种使用者，Core 专属输入变更不扩大为 Worker 工具链变更。
+禁止通过放宽版本、关闭签名、临时漏洞豁免或回退在线安装使候选通过。
+保留旧输入只提供重建能力；旧版本仍须通过当时执行的漏洞门槛才能重新发布。
+
+存储按 registry 中实际引用 blob 的压缩大小、跨 manifest 去重后计量，不能用
+容器内 installed size 估算账单。`python3 scripts/build-inputs.py report --lock
+<路径>/lock.json` 输出该 lock 的引用与去重大小。初期不自动删除 `inputs-*`、
+`base-*`；所有仍保留的 release、支持分支及回退窗口引用都须纳入保护集合。
+定期盘点只报告，不删除；实际费用按仓库账单、流量与保留代数计算。
+
+### 已合入的包版本修复
+
 Core 的 curl 锁定从已不可安装的 `8.22.0-r0` 更新为 Alpine 3.23 的
 `8.23.0-r0`，其包依赖要求 libcurl 同版本升级；保留 Nginx 基础镜像 digest。
 同时显式锁定 `brotli-libs=1.2.1-r0` 修复 CVE-2026-111497：基础镜像中的

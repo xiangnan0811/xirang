@@ -1,0 +1,195 @@
+name: Preserve Build Inputs
+
+on:
+  push:
+    branches:
+      - 'build-inputs/**'
+    paths:
+      - 'deploy/build-inputs/spec.json'
+      - 'scripts/build-inputs.py'
+      - 'scripts/capture-apk-inputs.sh'
+      - 'scripts/install-apk-inputs.sh'
+      - 'scripts/test-build-inputs.py'
+      - '.github/workflows/build-inputs.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: build-inputs-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Preserve and scan inputs (${{ matrix.arch }})
+    if: github.repository == 'xiangnan0811/xirang'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout exact input recipe
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Test input capture and lock policy
+        run: python3 scripts/test-build-inputs.py
+
+      - name: Install registry copy client
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y skopeo
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Capture signed APK inputs and verify offline replay
+        run: |
+          python3 scripts/build-inputs.py capture \
+            --arch '${{ matrix.arch }}' \
+            --output '${{ runner.temp }}/build-inputs-${{ matrix.arch }}'
+
+      # Scan installed files, not the scratch image carrying compressed APKs.
+      # These gates are additional to all final Core/Worker image scans.
+      - name: Scan shared CGO builder inputs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: xirang-build-inputs:cgo-builder-${{ matrix.arch }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Scan supercronic builder inputs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: xirang-build-inputs:supercronic-builder-${{ matrix.arch }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Scan Core runtime inputs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: xirang-build-inputs:core-runtime-${{ matrix.arch }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Scan Worker runtime inputs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: xirang-build-inputs:worker-runtime-${{ matrix.arch }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: DockerHub login for preserved inputs
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Preserve platform inputs and original base manifests
+        run: |
+          python3 scripts/build-inputs.py publish-platform \
+            --output '${{ runner.temp }}/build-inputs-${{ matrix.arch }}'
+
+      - name: Export platform evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: preserved-build-inputs-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/build-inputs-${{ matrix.arch }}/platform.json
+            ${{ runner.temp }}/build-inputs-${{ matrix.arch }}/manifests/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble:
+    name: Assemble verified dual-architecture input lock
+    needs: capture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Checkout exact input recipe
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Download amd64 evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: preserved-build-inputs-amd64
+          path: ${{ runner.temp }}/build-input-evidence/amd64
+
+      - name: Download arm64 evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: preserved-build-inputs-arm64
+          path: ${{ runner.temp }}/build-input-evidence/arm64
+
+      - name: DockerHub login for immutable input indexes
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Assemble matching platforms and verify retained public inputs
+        run: |
+          python3 scripts/build-inputs.py assemble \
+            --input-dir '${{ runner.temp }}/build-input-evidence' \
+            --output '${{ runner.temp }}/build-input-candidate'
+
+      - name: Attest immutable input lock
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/build-input-candidate/lock.json
+
+      # This is the small review handoff. The referenced APKs/base blobs live in
+      # content-addressed registry tags; Actions retention is not their storage.
+      - name: Upload reviewable input lock
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-input-candidate
+          path: ${{ runner.temp }}/build-input-candidate/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Explain candidate adoption boundary
+        run: |
+          {
+            echo '### Preserved build input candidate'
+            echo '- Source recipe: `${{ github.sha }}`'
+            echo '- Native amd64 and arm64 capture, offline replay and dependency scans passed.'
+            echo '- Download build-input-candidate and apply its lock through a reviewed PR.'
+            echo '- Final Core/Worker builds, scans, runtime closures and signed bundle checks remain required.'
+            echo '- No product version, stable image tag or latest tag was changed.'
+          } >> "$GITHUB_STEP_SUMMARY"
