@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TEMPLATE=${ASSET_CONTENT_NGINX_TEMPLATE:-"$ROOT_DIR/deploy/nginx/templates/default.conf.template"}
-NGINX_IMAGE=${ASSET_CONTENT_NGINX_IMAGE:-"nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"}
+NGINX_IMAGE=${ASSET_CONTENT_NGINX_IMAGE:-}
 TMP_DIR=$(mktemp -d)
 CONTAINER_ID=
 
@@ -22,6 +22,14 @@ fail() {
 
 if [[ ! -f "$TEMPLATE" ]]; then
   fail "template not found"
+fi
+if [[ -z "$NGINX_IMAGE" ]]; then
+  command -v jq >/dev/null 2>&1 || fail "jq is required to read the retained Nginx base"
+  NGINX_IMAGE=$(jq -er '
+    .registry as $registry | .bases.nginx.ref |
+    select(type == "string" and startswith($registry + "@sha256:") and
+      test("^[^[:space:]]+@sha256:[0-9a-f]{64}$"))
+  ' "$ROOT_DIR/deploy/build-inputs/lock.json") || fail "retained Nginx base is missing or invalid"
 fi
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   fail "docker daemon is required"

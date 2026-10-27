@@ -4,6 +4,19 @@
 
 GitHub Release 是公开版本和变更说明的权威来源，Docker Hub 的 `docker.io/linnea7171/xirang` 是唯一官方公开镜像源。仅发布稳定 semver `vX.Y.Z`；正式镜像包含 `vX.Y.Z`、`X.Y.Z` 和 `latest`，后者表示最近正式发布的稳定版。手动重发不得移动 `latest`。
 
+同仓库的 `inputs-*` 和 `base-*` 标签用于保留构建输入，包含内容标识，不属于正式
+产品标签。其采集流程只生成待审查的依赖 lock，不创建 GitHub Release、不移动
+`latest`，也不替代当前补丁发版。保存范围、签名检查和安全更新见
+[构建输入保留与更新](automation.md#构建输入保留与更新)。
+
+采用归档 lock 的版本才具备对应 APK 与基础镜像的留存证据。发布前核对所引用
+两架构输入仍可读取、产品构建使用禁网 APK 安装，并继续执行当前漏洞扫描与
+同 SHA CI 准入。首次迁移使 Worker 工具链从 v2 推进到 v3；须配套更新 Core、
+Worker、两架构最终闭包、签名 bundle 和 proof，排空旧 Worker 在途处理后切换。
+闭包和 bundle 格式仍为 v1；回退时整套恢复匹配版本，不能混用 v2 与 v3 身份。
+无新增运行时配置或 schema migration。旧 tag 未采集过的输入不因此次迁移自动
+恢复，保留原有不可重建与漏洞回退警告；已有 #649、#651、#653 的修复状态不变。
+
 版本基线见 [.release-please-manifest.json](../../.release-please-manifest.json)，版本历史见 [CHANGELOG](../../CHANGELOG.md)。不要在多个维护文档中复制当前版本。需要调整下一版本时使用 Release Please 的 `Release-As:`，或经明确的基线重置修改 manifest；不要手动打正式 tag 绕过发布链路。
 
 仅在重建发布链路、迁移仓库或重置首发版本时重新检查 bootstrap：manifest 起始版本、CHANGELOG 接管、README/部署/环境变量文档默认使用 Docker Hub 预构建镜像，以及 GitHub 仓库和 Docker Hub 命名空间已确定后再公布 `VERSION_CHECK_URL` 示例。
@@ -293,6 +306,12 @@ Release PR 与最终 GitHub Release 须完整保留 CHANGELOG `0.73.0` 的七项
 ## 手动重发与私有部署
 
 `publish-images.yml` 的 `workflow_dispatch` 仅用于已有稳定版本的推送故障恢复、重建或补发证明。填写 `version` 和 `source_ref`，人工确认二者对应同一正式代码；脚本验证来源 SHA 的主干 CI，但不会替代版本与源码对应关系的审阅。手动重发仅写版本标签，不移动 `latest`，也不替代 GitHub Release。
+
+当前工作流兼容完全未采用构建输入归档合同的旧源码，只跳过该新增输入锁检查。
+源码中只要出现归档脚本、输入目录、Worker 投影或 Dockerfile 归档消费痕迹，就必须
+通过完整校验，缺少部分文件不能退回旧模式。两种来源均继续使用当前工作流的
+同 SHA 主干 CI 准入、双架构构建及漏洞门槛；旧源码未归档的 APK 仍可能已下架，
+保留这个入口不保证旧版本能成功重建，也不自动触发任何已有版本的补发。
 
 [Manual Deploy](../../.github/workflows/deploy.yml)只由手动触发，选择 `staging` 或 `production` 并填写 `image_tag`；优先使用具体稳定 tag。`latest` 仅适合临时试用。工作流等待官方镜像、执行部署前数据库备份、通过 SSH 更新 Compose，并等待容器健康检查，最多约 90 秒。部署目标必须已有正确 Compose 和环境配置；操作与恢复以[部署指南](../deployment.md)为准。
 

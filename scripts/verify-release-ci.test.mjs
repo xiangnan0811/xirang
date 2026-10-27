@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { appendFileSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { DEFAULT_CI_WAIT_SECONDS, selectReleaseCI, verifyReleaseCI } from './verify-release-ci.mjs';
 
 const repository = 'owner/project';
@@ -77,3 +83,130 @@ test('invalid wait bounds are rejected before querying CI', async () => {
       request: async () => { assert.fail('invalid wait must not query CI'); } }), /Invalid CI wait bound/);
   }
 });
+
+const sourceRoot = fileURLToPath(new URL('../', import.meta.url));
+const workerProjection = 'backend/internal/backupasset/processing/capabilities/production_apk_inputs.json';
+
+function publishInputGate() {
+  const workflow = readFileSync(join(sourceRoot, '.github/workflows/publish-images.yml'), 'utf8');
+  const marker = '      - name: Verify preserved build input contract\n';
+  assert.equal(workflow.split(marker).length, 2, 'publish workflow must have one preserved-input gate');
+  const lines = workflow.split(marker)[1].split('\n      - name:')[0].split('\n');
+  const start = lines.indexOf('        run: |');
+  assert.notEqual(start, -1, 'input adoption policy must live in the current workflow');
+  return lines.slice(start + 1).map(line => {
+    assert.ok(line === '' || line.startsWith('          '), 'unexpected workflow script indentation');
+    return line.slice(10);
+  }).join('\n');
+}
+
+function inputSourceFixture(t, adopted = false) {
+  const root = mkdtempSync(join(tmpdir(), 'xirang-publish-inputs-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  if (adopted) {
+    // Exercise the real verifier and committed lock, without registry/network access.
+    for (const relative of ['scripts/build-inputs.py', 'scripts/capture-apk-inputs.sh',
+      'scripts/install-apk-inputs.sh', 'scripts/test-build-inputs.py', 'deploy/build-inputs',
+      workerProjection, 'deploy/allinone/Dockerfile', 'deploy/worker/Dockerfile']) {
+      const target = join(root, relative);
+      mkdirSync(dirname(target), { recursive: true });
+      cpSync(join(sourceRoot, relative), target, { recursive: true });
+    }
+  } else {
+    // Exact v0.73.4 Dockerfiles from 6f3de179da6b6aae4671ef2ef4830e7c3b27b526.
+    const originalDigests = {
+      allinone: 'a2642bbb8600c1c170403ef89c899961ee0347c1463171ec5fd2d403be917bd1',
+      worker: 'b7e510dd9019494ad5fda48f8ea1080964119b73148af52ba10964e2debe19f3',
+    };
+    for (const [role, digest] of Object.entries(originalDigests)) {
+      const original = join(sourceRoot, `scripts/testdata/publish-legacy-0.73.4/${role}.Dockerfile`);
+      assert.equal(createHash('sha256').update(readFileSync(original)).digest('hex'), digest);
+      const target = join(root, `deploy/${role}/Dockerfile`);
+      mkdirSync(dirname(target), { recursive: true });
+      copyFileSync(original, target);
+    }
+  }
+  return root;
+}
+
+function runPublishInputGate(root) {
+  const result = spawnSync('bash', ['-c', publishInputGate()], { cwd: root, encoding: 'utf8', timeout: 30_000 });
+  assert.ifError(result.error);
+  return result;
+}
+
+test('real v0.73.4 source may reach the original build path without an input contract', t => {
+  const result = runPublishInputGate(inputSourceFixture(t));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Legacy source predates the preserved build-input contract/);
+});
+
+test('legacy source does not need the later Worker Dockerfile', t => {
+  const root = inputSourceFixture(t);
+  rmSync(join(root, 'deploy/worker/Dockerfile'));
+  const result = runPublishInputGate(root);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Legacy source predates/);
+});
+
+test('complete adopted source must pass the real input verifier', t => {
+  const result = runPublishInputGate(inputSourceFixture(t, true));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Build input lock, full transaction manifests and consumer identities verified/);
+  assert.doesNotMatch(result.stdout, /Legacy source predates/);
+});
+
+for (const [name, relative] of [
+  ['verifier', 'scripts/build-inputs.py'],
+  ['lock', 'deploy/build-inputs/lock.json'],
+  ['installer', 'scripts/install-apk-inputs.sh'],
+  ['platform manifests', 'deploy/build-inputs/manifests'],
+  ['Worker projection', workerProjection],
+]) {
+  test(`adopted source with missing ${name} fails closed`, t => {
+    const root = inputSourceFixture(t, true);
+    rmSync(join(root, relative), { recursive: true, force: true });
+    const result = runPublishInputGate(root);
+    assert.notEqual(result.status, 0, 'partial adoption was accepted');
+    assert.doesNotMatch(result.stdout, /Legacy source predates/);
+  });
+}
+
+for (const relative of ['scripts/build-inputs.py', 'scripts/capture-apk-inputs.sh',
+  'scripts/install-apk-inputs.sh', 'scripts/test-build-inputs.py', workerProjection]) {
+  test(`an isolated ${relative} is not classified as legacy`, t => {
+    const root = inputSourceFixture(t);
+    const target = join(root, relative);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, 'INVALID_PARTIAL_INPUT_CONTRACT_FOR_TEST_ONLY\n');
+    const result = runPublishInputGate(root);
+    assert.notEqual(result.status, 0, 'isolated contract file was accepted');
+    assert.doesNotMatch(result.stdout, /Legacy source predates/);
+  });
+}
+
+for (const [name, instruction] of [
+  ['input stage', 'FROM scratch AS worker-runtime-inputs'],
+  ['input mount', 'RUN --mount=type=bind,source=/inputs,target=/retained true'],
+  ['installer call', 'RUN sh /build-inputs/install.sh worker-runtime "$TARGETARCH" --'],
+]) {
+  test(`a residual Dockerfile ${name} requires the full input contract`, t => {
+    const root = inputSourceFixture(t);
+    appendFileSync(join(root, 'deploy/worker/Dockerfile'), `\n${instruction}\n`);
+    const result = runPublishInputGate(root);
+    assert.notEqual(result.status, 0, 'residual Dockerfile input contract was accepted');
+    assert.doesNotMatch(result.stdout, /Legacy source predates/);
+  });
+}
+
+for (const dangling of [false, true]) {
+  test(`${dangling ? 'dangling' : 'empty'} input directory cannot bypass input verification`, t => {
+    const root = inputSourceFixture(t);
+    const target = join(root, 'deploy/build-inputs');
+    if (dangling) symlinkSync('missing-input-directory', target);
+    else mkdirSync(target);
+    const result = runPublishInputGate(root);
+    assert.notEqual(result.status, 0, 'partial input directory was classified as legacy');
+    assert.doesNotMatch(result.stdout, /Legacy source predates/);
+  });
+}

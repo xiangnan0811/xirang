@@ -1,0 +1,4916 @@
+{
+  "alpine_arch": "x86_64",
+  "apk_tools": "apk-tools 3.0.6-r0, compiled for x86_64.",
+  "apks": [
+    {
+      "arch": "x86_64",
+      "file": "acl-libs-2.3.2-r1.apk",
+      "name": "acl-libs",
+      "sha256": "05e45f947328d5cfcf7f18ecd9abc30dfe562c6b69909732375d063875c10a35",
+      "size": 14337,
+      "version": "2.3.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "alsa-lib-1.2.14-r2.apk",
+      "name": "alsa-lib",
+      "sha256": "f27ba453e88d62cb40240216490403ce7f6c00b705f006583d94fe691606ce21",
+      "size": 466931,
+      "version": "1.2.14-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "aom-libs-3.14.1-r0.apk",
+      "name": "aom-libs",
+      "sha256": "45f4daa9624509fd2f94c2ca044870933bf0289d7e0417a5a3c07d8ca51d87cc",
+      "size": 3213944,
+      "version": "3.14.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "argon2-libs-20190702-r5.apk",
+      "name": "argon2-libs",
+      "sha256": "9f8d7ac45772ff89a93867bfec0853ee3c01b973e16690b0ff5c4bec552b7c0d",
+      "size": 20053,
+      "version": "20190702-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "at-spi2-core-2.58.3-r0.apk",
+      "name": "at-spi2-core",
+      "sha256": "39532e316bdf696be8322a497c0c8084284ab5db3a919dacf3b5b168a1578035",
+      "size": 61596,
+      "version": "2.58.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "at-spi2-core-libs-2.58.3-r0.apk",
+      "name": "at-spi2-core-libs",
+      "sha256": "5f82db2783453089cb53a2a59272b3b97ddb3c0e86b4f1ab35336ecc83180af7",
+      "size": 80864,
+      "version": "2.58.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "avahi-libs-0.8-r23.apk",
+      "name": "avahi-libs",
+      "sha256": "efeca3363d97b2d4043a4ea21261a76c2e43bdc6ddd986dbfc5c2878447a964c",
+      "size": 42191,
+      "version": "0.8-r23"
+    },
+    {
+      "arch": "x86_64",
+      "file": "bash-5.3.3-r1.apk",
+      "name": "bash",
+      "sha256": "c52a2b6997567830d573160c2c0cad665473320f08862133aaf4c1e96864fc48",
+      "size": 480971,
+      "version": "5.3.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "boost1.84-iostreams-1.84.0-r3.apk",
+      "name": "boost1.84-iostreams",
+      "sha256": "8560cb2f884f47ebe61fa0e0b5a6717528717bb84689eb9b443e6deac2998068",
+      "size": 32520,
+      "version": "1.84.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "boost1.84-locale-1.84.0-r3.apk",
+      "name": "boost1.84-locale",
+      "sha256": "c093d9d3f33825560bf65806abfb8ce08f83c4251c3686dc37027713d5be2eae",
+      "size": 326078,
+      "version": "1.84.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "boost1.84-program_options-1.84.0-r3.apk",
+      "name": "boost1.84-program_options",
+      "sha256": "0c411bfef8da8533f48a40ce291cd920cca101d85e453e9d17b04c29a12e3ed2",
+      "size": 162509,
+      "version": "1.84.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "boost1.84-thread-1.84.0-r3.apk",
+      "name": "boost1.84-thread",
+      "sha256": "dbde980d684cd21cffb62460e76d5b714254e903e1bba6428066d7d947aedf91",
+      "size": 45050,
+      "version": "1.84.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "box2d-2.4.1-r2.apk",
+      "name": "box2d",
+      "sha256": "c30e2ebd77a4662352ffa0a712d2edd2cd785158e752b6b5a96a77a0b5997a6f",
+      "size": 90177,
+      "version": "2.4.1-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "brotli-libs-1.2.1-r0.apk",
+      "name": "brotli-libs",
+      "sha256": "cf3dc08928958bb42fe71c07a179ca33adb9e2c341daa29d88777061956d84f5",
+      "size": 429434,
+      "version": "1.2.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "c-ares-1.34.9-r0.apk",
+      "name": "c-ares",
+      "sha256": "90a5da68630b32cddbd5e5fd68f0f244f065f812f97fded3252800dbe6c6c85c",
+      "size": 113079,
+      "version": "1.34.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "ca-certificates-20261020-r0.apk",
+      "name": "ca-certificates",
+      "sha256": "0ff2550833ee3e5ace48fab67147b49f80b77dfe34ab85e5a3ba63b178710d53",
+      "size": 129340,
+      "version": "20261020-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "cairo-1.18.4-r0.apk",
+      "name": "cairo",
+      "sha256": "8960842220db0372986732e10018fc19f34780459c4420a4b149d5eb9981fe9a",
+      "size": 514703,
+      "version": "1.18.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "cairo-gobject-1.18.4-r0.apk",
+      "name": "cairo-gobject",
+      "sha256": "5613a370cda8be36a95347fe561954822e8c64ec72b6ec000e8bb9ea19fb9f85",
+      "size": 9392,
+      "version": "1.18.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "cdparanoia-libs-10.2-r14.apk",
+      "name": "cdparanoia-libs",
+      "sha256": "3ed36679df61907814e7382601314ac65c12154913a8eafefdcf97ddfe8fdab0",
+      "size": 40624,
+      "version": "10.2-r14"
+    },
+    {
+      "arch": "x86_64",
+      "file": "cfitsio-4.6.3-r0.apk",
+      "name": "cfitsio",
+      "sha256": "4e83eba7948b8c8b861650a4ec231a7dcb79f92fc816cecd803318d24b6a2c1e",
+      "size": 584262,
+      "version": "4.6.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "cgif-0.5.4-r0.apk",
+      "name": "cgif",
+      "sha256": "16646142eda4bdbeca4f806d14c415ebe17c95e5690e6635ca385ca7989537f3",
+      "size": 8431,
+      "version": "0.5.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "cjson-1.7.19-r1.apk",
+      "name": "cjson",
+      "sha256": "db0af6e9ce56c48cd0f377a0d8830183864a60c46c6693567042731d1e077278",
+      "size": 12869,
+      "version": "1.7.19-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "clamav-1.4.4-r0.apk",
+      "name": "clamav",
+      "sha256": "b6680123ca9d11bc9635c621ee5f2a3529ae0b9ed72a42c90db583cc95c1b2a0",
+      "size": 103186,
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "clamav-clamdscan-1.4.4-r0.apk",
+      "name": "clamav-clamdscan",
+      "sha256": "1bea81223502026386169983733983729890b43c35c1290f1786de004fbae6bf",
+      "size": 42597,
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "clamav-daemon-1.4.4-r0.apk",
+      "name": "clamav-daemon",
+      "sha256": "fbdf73ed48d2147b97fc9b6c6d473e76deb355f8a0fe276ad7adc1e811ef2f7d",
+      "size": 148908,
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "clamav-libs-1.4.4-r0.apk",
+      "name": "clamav-libs",
+      "sha256": "746510edbc7a91b7bf1054e8669a71a994f24f9118356fcb0d06521de733298b",
+      "size": 14278700,
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "clamav-scanner-1.4.4-r0.apk",
+      "name": "clamav-scanner",
+      "sha256": "93c5eab306012118e614f43dc10677e8e55d1db708d98aa7710d79c32496a9b1",
+      "size": 13693995,
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "clucene-2.3.3.4-r22.apk",
+      "name": "clucene",
+      "sha256": "fb8e9dffb1ac1bd03f0c0f6f760032961314d9d7974f3b4d6f917206c7397d4d",
+      "size": 482664,
+      "version": "2.3.3.4-r22"
+    },
+    {
+      "arch": "x86_64",
+      "file": "clucene-contribs-2.3.3.4-r22.apk",
+      "name": "clucene-contribs",
+      "sha256": "59209f1d1c33d3cc128c755cbdf5f708741d14d28b836a68f82260d1cd3e23fd",
+      "size": 85998,
+      "version": "2.3.3.4-r22"
+    },
+    {
+      "arch": "x86_64",
+      "file": "cups-libs-2.4.18-r0.apk",
+      "name": "cups-libs",
+      "sha256": "e60a03f4d65895c64595d01e98e24be95b239ff445cb4f0cd8f1186ebf882e73",
+      "size": 236047,
+      "version": "2.4.18-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "dbus-libs-1.16.2-r1.apk",
+      "name": "dbus-libs",
+      "sha256": "03db1045a6983f8fa7638eed2327d3b149355aab1080875f230f2bd7e8f9596f",
+      "size": 130204,
+      "version": "1.16.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "directfb-1.7.7-r8.apk",
+      "name": "directfb",
+      "sha256": "69212d0dec95b2ce0e5149ccb437b367bb602181639eb8527951a25b586d1364",
+      "size": 1092620,
+      "version": "1.7.7-r8"
+    },
+    {
+      "arch": "x86_64",
+      "file": "double-conversion-3.3.1-r0.apk",
+      "name": "double-conversion",
+      "sha256": "d2990da6b2826d5228a7fabd802770e9d94af9769e05ec186b1f0abb57ad62cf",
+      "size": 39583,
+      "version": "3.3.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "duktape-libs-2.7.0-r2.apk",
+      "name": "duktape-libs",
+      "sha256": "91dbad69afa122cb788bbbf009643eef61ab899b8eaadd5286b847a969f54efc",
+      "size": 151890,
+      "version": "2.7.0-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "eudev-libs-3.2.14-r6.apk",
+      "name": "eudev-libs",
+      "sha256": "24bd3fe5ec985b0b8412f1df3685cfb145968b336f00949c44060ffdea2ce0c4",
+      "size": 26138,
+      "version": "3.2.14-r6"
+    },
+    {
+      "arch": "x86_64",
+      "file": "faac-1.31.1-r0.apk",
+      "name": "faac",
+      "sha256": "3e8d51c40d9adff2a89ca740dc3ac8ed37c8e26ddbf98927f87b7e9e3922cea9",
+      "size": 70054,
+      "version": "1.31.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "fdk-aac-2.0.2-r4.apk",
+      "name": "fdk-aac",
+      "sha256": "f4bb6d06c38a28bbdc33b41322b2cc538bbc945717fc8177cedf19509cfd9bd1",
+      "size": 331729,
+      "version": "2.0.2-r4"
+    },
+    {
+      "arch": "x86_64",
+      "file": "ffmpeg-8.0.1-r1.apk",
+      "name": "ffmpeg",
+      "sha256": "8d53f6915d1ed63657dee1baacc5e4224ec06b6adf71c987cdc23238e3940445",
+      "size": 268711,
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "ffmpeg-libavcodec-8.0.1-r1.apk",
+      "name": "ffmpeg-libavcodec",
+      "sha256": "f42859652a7dafcc1ce9d83acbe1a263564fa181ddcbc457588d37d05da0e1e3",
+      "size": 8913934,
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "ffmpeg-libavdevice-8.0.1-r1.apk",
+      "name": "ffmpeg-libavdevice",
+      "sha256": "14475295f5ac21b519385d0868730ea58c1a9a5a80bfdef65e39c9bb60a6e64e",
+      "size": 47178,
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "ffmpeg-libavfilter-8.0.1-r1.apk",
+      "name": "ffmpeg-libavfilter",
+      "sha256": "50b5f9948a03f5046af82f10a3632415cefeb695a3ccb7839f957bc925f01832",
+      "size": 2604915,
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "ffmpeg-libavformat-8.0.1-r1.apk",
+      "name": "ffmpeg-libavformat",
+      "sha256": "36c1af09cbc8933396160ad85fa3bd80fe4b573eb71670c332cb20fafa08b7de",
+      "size": 1475552,
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "ffmpeg-libavutil-8.0.1-r1.apk",
+      "name": "ffmpeg-libavutil",
+      "sha256": "ef394e33927f6c4aa1d98668295b3df5050d1443fc1fafb88adaa4c8a08e37a4",
+      "size": 449657,
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "ffmpeg-libswresample-8.0.1-r1.apk",
+      "name": "ffmpeg-libswresample",
+      "sha256": "07095b89d399f4a4cd942817b25b0891abc943e7638c79c2c28e014a6d9ca5be",
+      "size": 66148,
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "ffmpeg-libswscale-8.0.1-r1.apk",
+      "name": "ffmpeg-libswscale",
+      "sha256": "dae43b8d23917649972c07024d19a400e25b4e013f88af1ae01ef18fd87f56db",
+      "size": 628122,
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "fftw-double-libs-3.3.10-r7.apk",
+      "name": "fftw-double-libs",
+      "sha256": "9c28a315555ddde6cca8c27d23c5c27b3435ca975743701fea20089617b03cff",
+      "size": 852589,
+      "version": "3.3.10-r7"
+    },
+    {
+      "arch": "x86_64",
+      "file": "file-5.46-r2.apk",
+      "name": "file",
+      "sha256": "634b19688837316f83b440c0f3ba6f35c90c308cdb9163fb8acd7e8b41b154d1",
+      "size": 9709,
+      "version": "5.46-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "flite-2.2-r5.apk",
+      "name": "flite",
+      "sha256": "37f2858a5f69f8227c03b4da31ec8eee7a743d426cc74f20e7b7ddda81218460",
+      "size": 13747693,
+      "version": "2.2-r5"
+    },
+    {
+      "arch": "noarch",
+      "file": "font-noto-2025.12.01-r0.apk",
+      "name": "font-noto",
+      "sha256": "621b37b98c147c5828faee326102ed79ee490f47fa2a964592bdaf8a6fb02796",
+      "size": 4690657,
+      "version": "2025.12.01-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "font-noto-cjk-0_git20220127-r1.apk",
+      "name": "font-noto-cjk",
+      "sha256": "e38da160e55653a90b22aaa3b30fc6ea6de327ee5eb0ee1e44c87b7c2adef6a0",
+      "size": 75053190,
+      "version": "0_git20220127-r1"
+    },
+    {
+      "arch": "noarch",
+      "file": "font-noto-common-2025.12.01-r0.apk",
+      "name": "font-noto-common",
+      "sha256": "574dde4eed25f3a68f0cd8b701f046cf999f2d7476e4d44c200b33745f055bca",
+      "size": 3551,
+      "version": "2025.12.01-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "font-noto-math-2025.12.01-r0.apk",
+      "name": "font-noto-math",
+      "sha256": "4c8fc9b1e66769194e99a6ed438387a2043e84e7c91a82f43a03615cdc194fce",
+      "size": 467152,
+      "version": "2025.12.01-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "font-noto-symbols-2025.12.01-r0.apk",
+      "name": "font-noto-symbols",
+      "sha256": "89127395d7460ed03153be0b59512f0ce16a2ea11b4d241bdff86e3492317321",
+      "size": 1382089,
+      "version": "2025.12.01-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "fontconfig-2.17.1-r0.apk",
+      "name": "fontconfig",
+      "sha256": "f44cea53076f18428dad0c27c75ca717ebfc3d2f0f4c8d4428ce70b62e25adf1",
+      "size": 163063,
+      "version": "2.17.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "freetype-2.14.3-r0.apk",
+      "name": "freetype",
+      "sha256": "670c9922ab4eb9df65c0e4ad7839bbe3f486016fc1fb637c46d657b74d99a24f",
+      "size": 354363,
+      "version": "2.14.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "freshclam-1.4.4-r0.apk",
+      "name": "freshclam",
+      "sha256": "c89a98ea965b04c8125d5c1e299b9e49c1452bba4c4345aee760cd502b19a308",
+      "size": 27514,
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "fribidi-1.0.16-r2.apk",
+      "name": "fribidi",
+      "sha256": "e29ec555a07dc274d2fc93cb204f8fc0b65a0d6ce14d94a5e54dc59a1252e08e",
+      "size": 31218,
+      "version": "1.0.16-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gdbm-1.26-r0.apk",
+      "name": "gdbm",
+      "sha256": "1a99c3ca2fbd96030a93325d50d04390e353f12584999276bdd3abcc6ab997da",
+      "size": 31906,
+      "version": "1.26-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gdk-pixbuf-2.44.4-r0.apk",
+      "name": "gdk-pixbuf",
+      "sha256": "29e9630f0827212567210fe94514b711ddf0d65275e2a355c16b371caa4ccf57",
+      "size": 147623,
+      "version": "2.44.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "giflib-5.2.2-r2.apk",
+      "name": "giflib",
+      "sha256": "ca4a84649331bf97de00810fe21ae9c17378744c48c3f7423cbab0a2838d05c0",
+      "size": 15595,
+      "version": "5.2.2-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "glib-2.86.3-r0.apk",
+      "name": "glib",
+      "sha256": "d45402c45c44943840aaaacec4c836adf6bdde8a48aef1eeb867822ef959baf1",
+      "size": 2057083,
+      "version": "2.86.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "glslang-libs-1.4.321.0-r0.apk",
+      "name": "glslang-libs",
+      "sha256": "7330d2c10e5d4ab8ebbfbcd48973f259163a16095e048d14b35298a09a8a84c5",
+      "size": 805369,
+      "version": "1.4.321.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gmp-6.3.0-r4.apk",
+      "name": "gmp",
+      "sha256": "5aa4a73a11126f2bc757ef1fee1eddb70105bd38f2659ae93aae1fafa02a0359",
+      "size": 220080,
+      "version": "6.3.0-r4"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gnupg-dirmngr-2.4.9-r0.apk",
+      "name": "gnupg-dirmngr",
+      "sha256": "beed96f0d38952999dc9b0a5b4c8b2f2318c97e5d6116b172c1ad88420bce09e",
+      "size": 307948,
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gnupg-gpgconf-2.4.9-r0.apk",
+      "name": "gnupg-gpgconf",
+      "sha256": "6beb01d1fbbe8f88c9cb8674c99e8db38de03360ca79d27367cea7422fb8ad76",
+      "size": 113446,
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gnupg-keyboxd-2.4.9-r0.apk",
+      "name": "gnupg-keyboxd",
+      "sha256": "e9e863a69e07b1ceb01aea8c62fe221091f10926a700bd4ed31d2bc36c359eb4",
+      "size": 110429,
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gnutls-3.8.13-r0.apk",
+      "name": "gnutls",
+      "sha256": "dab71bdfb0b974ddd93ba29efbd759c8dc263638b49b6be7ed9a3749fffe59f8",
+      "size": 969347,
+      "version": "3.8.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gobject-introspection-1.86.0-r0.apk",
+      "name": "gobject-introspection",
+      "sha256": "674ee2b100225e75fd74dde21577bf19bc0e37d12299346eac0885c9e4e8735d",
+      "size": 94556,
+      "version": "1.86.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gpg-2.4.9-r0.apk",
+      "name": "gpg",
+      "sha256": "932611033d47eae328990b8caa7d348c67dbb6dda8e46aba28e5228de4699673",
+      "size": 478566,
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gpg-agent-2.4.9-r0.apk",
+      "name": "gpg-agent",
+      "sha256": "0cf024bc07230d6e80f3bec3521a6b080e41bf19751eee28c3a2d340593425b4",
+      "size": 309231,
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gpgme-1.24.2-r3.apk",
+      "name": "gpgme",
+      "sha256": "65ab0e5ed6a0b3b21cbbc60edc9c67b21faf29cd3b1c1d16bb26205efbf084ce",
+      "size": 177843,
+      "version": "1.24.2-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gpgmepp-1.24.2-r3.apk",
+      "name": "gpgmepp",
+      "sha256": "ee26f1265612f578050bce686353d219db72f036213fa14911162f70e70ad56c",
+      "size": 120492,
+      "version": "1.24.2-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gpgsm-2.4.9-r0.apk",
+      "name": "gpgsm",
+      "sha256": "1032759a744d198f45d52cea42ec40f18aec8b6e7ac8fad6405983bfc519771c",
+      "size": 233674,
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "graphene-1.10.8-r5.apk",
+      "name": "graphene",
+      "sha256": "79c56a834a8a89572af7184bdcc5239a6496b0d7fd18873721da2c6b828cddd1",
+      "size": 50471,
+      "version": "1.10.8-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "graphite2-1.3.14-r6.apk",
+      "name": "graphite2",
+      "sha256": "026c5bc18bfa9d41155838b4f2b60c82553d65ad10af652ec5135818ba825c25",
+      "size": 64767,
+      "version": "1.3.14-r6"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gsm-1.0.23-r0.apk",
+      "name": "gsm",
+      "sha256": "6bef140d054e9f6b4a5ae166b2bfcb8d987301f6c57a2f573d3ef3ee3b905167",
+      "size": 20063,
+      "version": "1.0.23-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gst-plugins-bad-1.26.9-r0.apk",
+      "name": "gst-plugins-bad",
+      "sha256": "11058ef0f599ee73c3ad9589ad5647b789dc2be5383c11b79eccbccf93272895",
+      "size": 5018719,
+      "version": "1.26.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gst-plugins-base-1.26.9-r0.apk",
+      "name": "gst-plugins-base",
+      "sha256": "ce70b29a865b2bf6e8fc37b4c63d0b93032be2eba6149df3244120a38d07272b",
+      "size": 2651623,
+      "version": "1.26.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gstreamer-1.26.9-r0.apk",
+      "name": "gstreamer",
+      "sha256": "d9265c42520f28e33e4f1920e325112cd50e507df9ee9d6e652e7af37c125261",
+      "size": 1263676,
+      "version": "1.26.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gstreamer-ptp-helper-1.26.9-r0.apk",
+      "name": "gstreamer-ptp-helper",
+      "sha256": "4db6bbeb618b9790de3b8f0d3fabf1b3f1f05cf20daa0625815fef0446d2c71c",
+      "size": 217501,
+      "version": "1.26.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gtk+3.0-3.24.51-r0.apk",
+      "name": "gtk+3.0",
+      "sha256": "02510b467ccdba83df38937455d4f683d9799a087af2dcce4c8f59b9705ed80f",
+      "size": 3988629,
+      "version": "3.24.51-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gtk-update-icon-cache-3.24.51-r0.apk",
+      "name": "gtk-update-icon-cache",
+      "sha256": "c4ba8f623dc294c4e8b0269c61f253bc5080ce3abe423be747441aeceef5602c",
+      "size": 14524,
+      "version": "3.24.51-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gtk4.0-4.20.3-r0.apk",
+      "name": "gtk4.0",
+      "sha256": "c31ca13abd50a3e60d6b95fa6c4861ddd1e7bfab2600631dfd24eb30edc41740",
+      "size": 4699621,
+      "version": "4.20.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "gzip-1.14-r3.apk",
+      "name": "gzip",
+      "sha256": "2a757fd871e5fa5c6a1f79fe2ba1c956d14cc7ecae97fa44a1fbcccf27bc3ba1",
+      "size": 66228,
+      "version": "1.14-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "harfbuzz-12.2.0-r0.apk",
+      "name": "harfbuzz",
+      "sha256": "41cf5b63874df71de5434e11844ba59b9c2145c86d16788669f2c4d4822f2986",
+      "size": 642521,
+      "version": "12.2.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "harfbuzz-icu-12.2.0-r0.apk",
+      "name": "harfbuzz-icu",
+      "sha256": "8d5769f5b288201be7254be98df1a018399aaf9dd3315426d3fa322d9ed7b52d",
+      "size": 4611,
+      "version": "12.2.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "harfbuzz-subset-12.2.0-r0.apk",
+      "name": "harfbuzz-subset",
+      "sha256": "31d312e92bb33a5ae875dc1935558efc6d83c53ed0507089f02ee625d2cb93db",
+      "size": 588097,
+      "version": "12.2.0-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "hicolor-icon-theme-0.18-r0.apk",
+      "name": "hicolor-icon-theme",
+      "sha256": "66019259f0999bbf58d72287b971213bda5d92a7ecdfe6403fad7ecfb2fb1be3",
+      "size": 27641,
+      "version": "0.18-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "hwdata-pci-0.401-r0.apk",
+      "name": "hwdata-pci",
+      "sha256": "fe96c2e53bb36b39b3956fa57bccacd575316c7479815a3958a94b180ddd03e4",
+      "size": 355359,
+      "version": "0.401-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "hyphen-2.8.8-r3.apk",
+      "name": "hyphen",
+      "sha256": "9fed9c152b32581b19dbfa3c8f9450b4e3c6415fbc60036bb144652370faeb11",
+      "size": 10140,
+      "version": "2.8.8-r3"
+    },
+    {
+      "arch": "noarch",
+      "file": "icu-data-en-76.1-r1.apk",
+      "name": "icu-data-en",
+      "sha256": "82d55e064ca2ff15e6ef6c3b7009eb2e869469f56f36c0d84411b265825a3251",
+      "size": 1016029,
+      "version": "76.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "icu-libs-76.1-r1.apk",
+      "name": "icu-libs",
+      "sha256": "c6b53c168bb1af380fcbc305ff9e25c30e3cab756165fd7b8f77d4dac132aa4d",
+      "size": 1920286,
+      "version": "76.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "imath-3.1.12-r0.apk",
+      "name": "imath",
+      "sha256": "92519b83798f9884b11c57ccb394e5a760f5313b26cc6a20b4021f5f9c81aa74",
+      "size": 90696,
+      "version": "3.1.12-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "iso-codes-4.19.0-r0.apk",
+      "name": "iso-codes",
+      "sha256": "b6e4a73df32307c9796e3d8234af40859daa80b0e6cad7e1b543d637f772a95d",
+      "size": 360360,
+      "version": "4.19.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "json-c-0.18-r1.apk",
+      "name": "json-c",
+      "sha256": "b82b644f1a77d9d2699a8e17eccf779184e8db9075dd09f59a060731306c9a81",
+      "size": 27825,
+      "version": "0.18-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "lame-libs-3.100-r5.apk",
+      "name": "lame-libs",
+      "sha256": "ce8d4d094bff06047b026df6d9774f14a6e53b40720f22e134b877d526dcb679",
+      "size": 124665,
+      "version": "3.100-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "lcms2-2.19-r0.apk",
+      "name": "lcms2",
+      "sha256": "30e81bbfe580677d9d8f56301dab0dcc64da5d91b71031d340fb72092f77699c",
+      "size": 153300,
+      "version": "2.19-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "leptonica-1.86.0-r0.apk",
+      "name": "leptonica",
+      "sha256": "10a6599664e285cbf91e66d4495eee1655acc8a2c7aede94105565242afdb544",
+      "size": 1108357,
+      "version": "1.86.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "less-685-r0.apk",
+      "name": "less",
+      "sha256": "b7a451c8671ac6b659fa45e0f2b6bb4d18a416f72c8443af459a6928e56ed605",
+      "size": 102892,
+      "version": "685-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libSvtAv1Enc-3.1.2-r0.apk",
+      "name": "libSvtAv1Enc",
+      "sha256": "b1cc3f149a19e69aab72e865923c6554cd37250316d1026eb263649efcddd469",
+      "size": 3207214,
+      "version": "3.1.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libabw-0.1.3-r3.apk",
+      "name": "libabw",
+      "sha256": "9c326c274aa85708479ad0258a3112d80a8672d641cf1484082889f17f2d72a8",
+      "size": 86149,
+      "version": "0.1.3-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libarchive-3.8.10-r0.apk",
+      "name": "libarchive",
+      "sha256": "a843ce8e9ae02c5aca350ce8f7d38ca4f1a5de01720ff78357ca7fad74c6d9c4",
+      "size": 325244,
+      "version": "3.8.10-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libass-0.17.4-r0.apk",
+      "name": "libass",
+      "sha256": "ac484ea874599801972979a5ed693d4b3883001a90365e586db863304f66a473",
+      "size": 91669,
+      "version": "0.17.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libassuan-3.0.2-r0.apk",
+      "name": "libassuan",
+      "sha256": "3eb011283c2254bad4dea00eae80a22d5eb90b6f655513a9c66f918c438895b3",
+      "size": 34069,
+      "version": "3.0.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libasyncns-0.8-r4.apk",
+      "name": "libasyncns",
+      "sha256": "d03323a57ba9e69b7ff2382b5943c0f18101d64a8bd78edbf13576e4ee3ffd3a",
+      "size": 9858,
+      "version": "0.8-r4"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libatk-1.0-2.58.3-r0.apk",
+      "name": "libatk-1.0",
+      "sha256": "94967f2d6e1e273c1e87e73b8c3af8c40b9b9cc416e5fa397fd8ccd648eceab8",
+      "size": 71185,
+      "version": "2.58.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libatk-bridge-2.0-2.58.3-r0.apk",
+      "name": "libatk-bridge-2.0",
+      "sha256": "7bebe326c45f9f0f9488e4f1633dbf9dd9f4632c434fa23b41830c484d87b43a",
+      "size": 67830,
+      "version": "2.58.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libb2-0.98.1-r3.apk",
+      "name": "libb2",
+      "sha256": "a6bca29255fa4dfc41a67d61476dce8c40e81e23a4f0176e1e022881437a7102",
+      "size": 49887,
+      "version": "0.98.1-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libblkid-2.41.6-r1.apk",
+      "name": "libblkid",
+      "sha256": "e8c829016f4b82f34500b05023060d5f1eb8f06e5affadb0a4427cc26dbb58df",
+      "size": 95032,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libbluray-1.4.0-r0.apk",
+      "name": "libbluray",
+      "sha256": "05951f9f48b6e7b58044edf330be3be4374af225adaf88a69a7447475258b4e3",
+      "size": 111658,
+      "version": "1.4.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libbsd-0.12.2-r0.apk",
+      "name": "libbsd",
+      "sha256": "1252092dea853063252bbdaf9fa604819055b004ba3114b88b842fbfe44659e9",
+      "size": 30410,
+      "version": "0.12.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libbz2-1.0.8-r6.apk",
+      "name": "libbz2",
+      "sha256": "9995840a76ac97ec006259391b7a81b73b73c5cf2f462bf12bb2250afbf665b9",
+      "size": 35471,
+      "version": "1.0.8-r6"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libcap2-2.78-r0.apk",
+      "name": "libcap2",
+      "sha256": "d81631e1a710f3851246516e37aeeaa875b3c921a130c1210e3643a7e24e3b2d",
+      "size": 21581,
+      "version": "2.78-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libcdr-0.1.8-r2.apk",
+      "name": "libcdr",
+      "sha256": "0f6ec7e6a5dc4b9e17b2d9a5565e000f1ecfeaee9ffed5aec8711ffb1f684fd8",
+      "size": 361876,
+      "version": "0.1.8-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libcmis-0.6.2-r0.apk",
+      "name": "libcmis",
+      "sha256": "26632fbbf0c0dd2ebf765cf2801c09676b1ce7db40c25cffd27b8d851e1d5452",
+      "size": 368939,
+      "version": "0.6.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libcrypto3-3.5.9-r0.apk",
+      "name": "libcrypto3",
+      "sha256": "9c82c86f051f3372445ecdbae5068ccc39dbc423ba8f779eaa84549fef1cfc77",
+      "size": 1980193,
+      "version": "3.5.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libcurl-8.23.0-r0.apk",
+      "name": "libcurl",
+      "sha256": "d35e08ce3bafbcaf1a68512ac31483bd93e795ad5e8d8bfd76ada3106d81b569",
+      "size": 364575,
+      "version": "8.23.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libdav1d-1.5.2-r0.apk",
+      "name": "libdav1d",
+      "sha256": "b4cb4564cc13b2cf68a35d6f4bfe66848a675446438de6975d75354ca383f3aa",
+      "size": 727613,
+      "version": "1.5.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libdc1394-2.2.7-r0.apk",
+      "name": "libdc1394",
+      "sha256": "ae7eacb0c496bbb9c047346423491aa25e0d404640c18c32da1f46abae3505a6",
+      "size": 85373,
+      "version": "2.2.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libde265-1.0.16-r0.apk",
+      "name": "libde265",
+      "sha256": "965f518024255124b2357147a9ca0f57ef90a35d9731eb11679fccd5f09031a4",
+      "size": 225340,
+      "version": "1.0.16-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libdeflate-1.25-r0.apk",
+      "name": "libdeflate",
+      "sha256": "9fd803c7760f553a346922361f6ee0bd0efac9d3dd80e7e13ff5426a40c50658",
+      "size": 63756,
+      "version": "1.25-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libdovi-3.3.2-r0.apk",
+      "name": "libdovi",
+      "sha256": "1224a99bd69823a71f785dd77e82dcd04a6a007bc43388b6b690c1d04b7600d8",
+      "size": 220628,
+      "version": "3.3.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libdrm-2.4.131-r0.apk",
+      "name": "libdrm",
+      "sha256": "cbea643e98433761927a85854645eafb951c3d245dc0441d341566702a1daa73",
+      "size": 201094,
+      "version": "2.4.131-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libe-book-0.1.3-r25.apk",
+      "name": "libe-book",
+      "sha256": "1222e3f6d5eaf4883386e445dd2efa79ce1e736f68f501f705489ad495072eed",
+      "size": 146413,
+      "version": "0.1.3-r25"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libeconf-0.8.3-r0.apk",
+      "name": "libeconf",
+      "sha256": "9a6c216b9c2bf4077bfc1ffe6986e3e69df301594b23764ed55f8003b89d2784",
+      "size": 26053,
+      "version": "0.8.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libelf-0.194-r0.apk",
+      "name": "libelf",
+      "sha256": "5dffa764cff5a2858ec3279174e467fba2b2011dc3550e934a15e72e5ee01d19",
+      "size": 43420,
+      "version": "0.194-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libepoxy-1.5.10-r1.apk",
+      "name": "libepoxy",
+      "sha256": "cd3f961a6a0d266ad9c3bd987552425731625e9aecd8200305c7e206045c7a83",
+      "size": 235203,
+      "version": "1.5.10-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libepubgen-0.1.1-r2.apk",
+      "name": "libepubgen",
+      "sha256": "8303fb6c18b124bd3cdfb583f6e2b56b1d7b12ba951b3d101ca44609cec74c82",
+      "size": 110661,
+      "version": "0.1.1-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libetonyek-0.1.12-r1.apk",
+      "name": "libetonyek",
+      "sha256": "bb18a402d3238cfb995ce00f04ee85462b40f81f730f7351bea4b556f46dacfc",
+      "size": 667327,
+      "version": "0.1.12-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libevdev-1.13.6-r0.apk",
+      "name": "libevdev",
+      "sha256": "14c33361b177d1bf51389bb8bdf73e577aaa655bf0ab7c61a85effa9130d75d9",
+      "size": 27363,
+      "version": "1.13.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libexif-0.6.26-r0.apk",
+      "name": "libexif",
+      "sha256": "0d813eff150b79e9751de002ada4cc1e233bac32165b309b267b40c0d0321b78",
+      "size": 69607,
+      "version": "0.6.26-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libexpat-2.9.0-r0.apk",
+      "name": "libexpat",
+      "sha256": "42a1cb48e3ef0b5d1744f2b341120369d0c045038cdb6c9d5a6dd5ba7d421910",
+      "size": 62181,
+      "version": "2.9.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libexttextcat-3.4.6-r0.apk",
+      "name": "libexttextcat",
+      "sha256": "b3e2048055e401f5b90181f94029951c8f96137c200d1c40e877d3d93c3d8537",
+      "size": 224099,
+      "version": "3.4.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libffi-3.5.2-r0.apk",
+      "name": "libffi",
+      "sha256": "0b3473a1468bed5fbb913a1ffa121e253080b21b013fe47e0300bd7e85224e76",
+      "size": 18342,
+      "version": "3.5.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libflac-1.4.3-r2.apk",
+      "name": "libflac",
+      "sha256": "352a9d4ee46becf7bdd382a49fdb75f415f62340e458771f0201fec0f7ff6e53",
+      "size": 205365,
+      "version": "1.4.3-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libfreeaptx-0.2.2-r0.apk",
+      "name": "libfreeaptx",
+      "sha256": "96626f50b71f9ad827804800f31430b213bd8d6efebcbfcaaef313b79b83940f",
+      "size": 11692,
+      "version": "0.2.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libfreehand-0.1.2-r12.apk",
+      "name": "libfreehand",
+      "sha256": "46aa884e27764ac28f1132353c3e8f6c48d38e9b2784c9b327217157d11bdf7a",
+      "size": 247230,
+      "version": "0.1.2-r12"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libgcc-15.2.0-r2.apk",
+      "name": "libgcc",
+      "sha256": "4279d14cbf43311312d3a7d43619f4c15ede2e46d5608ba421ed157ded57c700",
+      "size": 80358,
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libgcrypt-1.11.2-r0.apk",
+      "name": "libgcrypt",
+      "sha256": "2fefae36bdc39a3c03c9a2fc137933785d9b24eb714aa58507acc6f0fa7856d5",
+      "size": 581210,
+      "version": "1.11.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libgomp-15.2.0-r2.apk",
+      "name": "libgomp",
+      "sha256": "7eda0581da0d10365e9ebd62f9b4e3a973cd2b791d6a174d2f7a1150c2753d64",
+      "size": 153736,
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libgpg-error-1.55-r0.apk",
+      "name": "libgpg-error",
+      "sha256": "3495a2bb074eced300fd722945009504aacc8167c3064685d4643c0ce817cee0",
+      "size": 76613,
+      "version": "1.55-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libgudev-238-r1.apk",
+      "name": "libgudev",
+      "sha256": "8b2f8f90bb8bcfa535746fd93046723685e3411a0b48b0f3d93e9e5a862e765a",
+      "size": 15567,
+      "version": "238-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libhunspell-1.7.2-r4.apk",
+      "name": "libhunspell",
+      "sha256": "086a41a6045962e07a30f82a97d5cda670854e05d8dd8c23ed8bae443d61f5de",
+      "size": 348181,
+      "version": "1.7.2-r4"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libhwy-1.3.0-r0.apk",
+      "name": "libhwy",
+      "sha256": "0dffa69b43908dd0cea3c89c8ff4036d34fd47c03d0eb0139f2122144fb5b574",
+      "size": 25653,
+      "version": "1.3.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libice-1.1.2-r0.apk",
+      "name": "libice",
+      "sha256": "75aa3f8eea355a39245e01162d5bb9e9d972b5e92c19864ee5b85c3c7887ad69",
+      "size": 39266,
+      "version": "1.1.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libidn2-2.3.8-r0.apk",
+      "name": "libidn2",
+      "sha256": "526275e11e449b99e5264e0ba32625fa12a78c426de61378f8b5cc0af5fc7014",
+      "size": 104625,
+      "version": "2.3.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libimagequant-4.2.2-r0.apk",
+      "name": "libimagequant",
+      "sha256": "bb6dddc667c19542e3fcd0c817a8fffc8a43d8c1758046efbd3e23e5853bf8f7",
+      "size": 237048,
+      "version": "4.2.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libinput-libs-1.30.3-r0.apk",
+      "name": "libinput-libs",
+      "sha256": "b2a0f07d09d0abd5c379734b57268a6085ca4788122ca10512f92017856595fe",
+      "size": 144333,
+      "version": "1.30.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libintl-0.24.1-r1.apk",
+      "name": "libintl",
+      "sha256": "03ca057fee8d344f55ff739b9f12beef8986f84a6dae36c08d7789c4f3a3b3e2",
+      "size": 39495,
+      "version": "0.24.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libixion-0.20.0-r0.apk",
+      "name": "libixion",
+      "sha256": "9ffb434718074bf0f101ec06b7c214f4394529394be6e35e817e1656dc1eb480",
+      "size": 393839,
+      "version": "0.20.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libjpeg-turbo-3.1.2-r0.apk",
+      "name": "libjpeg-turbo",
+      "sha256": "7cd59be23cfb2400fd4d666cb4d3f70e3f7845caee3200565a403f9375ba6e88",
+      "size": 203545,
+      "version": "3.1.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libjxl-0.11.2-r0.apk",
+      "name": "libjxl",
+      "sha256": "69c7637a43c42a720c6fc98a5051e21ba6348da154ad5fb30f196c0e85a6a908",
+      "size": 1624457,
+      "version": "0.11.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libksba-1.6.7-r0.apk",
+      "name": "libksba",
+      "sha256": "d2b77c37df4fee19df47ccf3c5e76d59c81607e1ebb65ffa2344feddae6f74e5",
+      "size": 93534,
+      "version": "1.6.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "liblangtag-0.6.7-r0.apk",
+      "name": "liblangtag",
+      "sha256": "49d1f2ef199f7514142045c5d1ae5223b8503a53a5a96b166d14b4e19d462aa0",
+      "size": 307536,
+      "version": "0.6.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libldac-2.0.2.3-r1.apk",
+      "name": "libldac",
+      "sha256": "868f582de83777dde4245d076655e72aeaebb21e63f1fed17574ba8f349675e1",
+      "size": 25214,
+      "version": "2.0.2.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libldap-2.6.13-r0.apk",
+      "name": "libldap",
+      "sha256": "fbada5b9a78fc54b7b82c353cdbf897d67e45eb706239517616d75120663075d",
+      "size": 163855,
+      "version": "2.6.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libltdl-2.5.4-r2.apk",
+      "name": "libltdl",
+      "sha256": "703ee75c99f6848a04883692186e90334c16d56bf764157da0a969cd399d639a",
+      "size": 16498,
+      "version": "2.5.4-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libmagic-5.46-r2.apk",
+      "name": "libmagic",
+      "sha256": "b23d3cffbba8b1d0c1aeb36d4b44bd549f69bd0ef4fd37422c7dc165954902e0",
+      "size": 512250,
+      "version": "5.46-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libmd-1.1.0-r0.apk",
+      "name": "libmd",
+      "sha256": "704446100fb39f2699d848d97f09463dd6fdd35f3a1acb038483712e1e37f766",
+      "size": 22963,
+      "version": "1.1.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libmodplug-0.8.9.0-r3.apk",
+      "name": "libmodplug",
+      "sha256": "be735c8ce62ef103c3f85b8e530363a5d7e73c3fa73f69968ac0a9748899a626",
+      "size": 139138,
+      "version": "0.8.9.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libmount-2.41.6-r1.apk",
+      "name": "libmount",
+      "sha256": "0f498b874fd1ce3a0a54c39829a4f33081358a7e6fed4c3710ebbcc4da0a5d62",
+      "size": 127345,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libmspack-0.11_alpha-r1.apk",
+      "name": "libmspack",
+      "sha256": "9f78b1f42e1f40440153d3b8ecae84d0af454bcc06196633da63b56f98f9994c",
+      "size": 32452,
+      "version": "0.11_alpha-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libmspub-0.1.4-r23.apk",
+      "name": "libmspub",
+      "sha256": "e5482b33d1e4db90f47c6f06ffcf45b735f0a41f604ca189853bacc67d514c9e",
+      "size": 132246,
+      "version": "0.1.4-r23"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libmwaw-0.3.22-r0.apk",
+      "name": "libmwaw",
+      "sha256": "dbef051dd99d0db1e8a52cb73e11fa2f7204158d4245a55feed1bb89e8a25648",
+      "size": 1996832,
+      "version": "0.3.22-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libncursesw-6.5_p20251123-r0.apk",
+      "name": "libncursesw",
+      "sha256": "233f20a6d64d87afbc4b03ad3e7508f5d56af747508c395ba7a6c5f1033b15f0",
+      "size": 158748,
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libnice-0.1.22-r0.apk",
+      "name": "libnice",
+      "sha256": "ee17dabf5141acd5b88d698a4773f4885a9a699030e9cc0e8df631b5a4412119",
+      "size": 159949,
+      "version": "0.1.22-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libnumbertext-1.0.11-r1.apk",
+      "name": "libnumbertext",
+      "sha256": "e42fcf6409d3dff25b5b568df855440530082f9584c4e97d98c538fcd35756a0",
+      "size": 220839,
+      "version": "1.0.11-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libodfgen-0.1.8-r9.apk",
+      "name": "libodfgen",
+      "sha256": "bc5f659ab3bef7a784b37eaf786921b3c62d32f1247d4dd798f42b21b2d4bbf1",
+      "size": 260768,
+      "version": "0.1.8-r9"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libogg-1.3.6-r0.apk",
+      "name": "libogg",
+      "sha256": "e0d196fa09a289e2bd9b31a44bb40028d9217f3bff23dbfd04c5bfee188f1f9e",
+      "size": 20889,
+      "version": "1.3.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libopenmpt-0.8.6-r0.apk",
+      "name": "libopenmpt",
+      "sha256": "56fb23c5e419c92d57bdc1eb4b6fc9486f1bc94b2f1d1af83afa635159017930",
+      "size": 658029,
+      "version": "0.8.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "liborcus-0.20.2-r0.apk",
+      "name": "liborcus",
+      "sha256": "ace0a6362a0f7001d0078b101b1093af4095620ec39968ff94ba92746f655d7e",
+      "size": 1283976,
+      "version": "0.20.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libpagemaker-0.0.4-r9.apk",
+      "name": "libpagemaker",
+      "sha256": "aa6f05136e90f9ce5533db2c3c745b445f506ad97b13a0ad94e6ae3effd7ceb2",
+      "size": 52045,
+      "version": "0.0.4-r9"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libpanelw-6.5_p20251123-r0.apk",
+      "name": "libpanelw",
+      "sha256": "43b7346857c51ef2426fc4953177d4fa0ef4703d412215744fcd4bc96e6facfd",
+      "size": 5556,
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libpciaccess-0.18.1-r1.apk",
+      "name": "libpciaccess",
+      "sha256": "2a3c8bd394ed45bf0f54909be534f4a01a87c3d3892969e776368373543d1208",
+      "size": 14486,
+      "version": "0.18.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libpcre2-16-10.49-r0.apk",
+      "name": "libpcre2-16",
+      "sha256": "457ebb634b0471c96f720921d9c23fbe3df459010bcee4120900de45538445bf",
+      "size": 297655,
+      "version": "10.49-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libplacebo-7.351.0-r0.apk",
+      "name": "libplacebo",
+      "sha256": "b1048a2f8d727e6f56726469c3109bd3fbdeb44ecd1ab2cba57b3f06580132d8",
+      "size": 452251,
+      "version": "7.351.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libpng-1.6.59-r0.apk",
+      "name": "libpng",
+      "sha256": "148a10e3d6419f787b16edbc2d0bb19d12a2a078225baaa416c895c14f47fc1e",
+      "size": 95875,
+      "version": "1.6.59-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libpq-18.6-r0.apk",
+      "name": "libpq",
+      "sha256": "770d92f5134d2ee59182eeb3f3b95356c37886fa5ff796c50d8ba515a6b3c6d3",
+      "size": 160318,
+      "version": "18.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libproxy-0.5.12-r0.apk",
+      "name": "libproxy",
+      "sha256": "25f3972ac7eb43316944ccd4784a214674262b39d7f2875078756019cea5ce89",
+      "size": 20756,
+      "version": "0.5.12-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libpsl-0.21.5-r3.apk",
+      "name": "libpsl",
+      "sha256": "86ada309d460ea8768b340cbf83c7234a1564f8fea9c370fb19f028a2a165891",
+      "size": 54695,
+      "version": "0.21.5-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libpulse-17.0-r5.apk",
+      "name": "libpulse",
+      "sha256": "bdcfc48227c7c733f1bbc2a16127ff830dc048b3f0d22f02ecb89d1bdceed6ad",
+      "size": 567619,
+      "version": "17.0-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libqxp-0.0.2-r11.apk",
+      "name": "libqxp",
+      "sha256": "23d8a7b1ef8abae6e8ef019418b4708f7c0181d145cdbd8e42917f5342a93c52",
+      "size": 96604,
+      "version": "0.0.2-r11"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libraw1394-2.1.2-r5.apk",
+      "name": "libraw1394",
+      "sha256": "a1b64ac4a0689cd6389ac0072297efdf961634795913b939d916706a8c30a8dd",
+      "size": 24424,
+      "version": "2.1.2-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-25.8.1.1-r5.apk",
+      "name": "libreoffice",
+      "sha256": "da1df2ee9e7b632974df4d9866ee2a56bd63b5d408e9d80a1100abdaba81c371",
+      "size": 1350,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-base-25.8.1.1-r5.apk",
+      "name": "libreoffice-base",
+      "sha256": "5240d0b83d97fbcde9a6e59313d9642dd5bb8bc553433734d03c36352d23f57f",
+      "size": 4811245,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-calc-25.8.1.1-r5.apk",
+      "name": "libreoffice-calc",
+      "sha256": "9fcc87631691c7c5d9f1f66e1108fa1957eeee43c3ab1e10d406e690feda007b",
+      "size": 10526100,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-common-25.8.1.1-r5.apk",
+      "name": "libreoffice-common",
+      "sha256": "ac58fa7b723fb157318d77dc02844592337c72c64a796396cb9f4964d8ed43ea",
+      "size": 154143190,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-connector-postgres-25.8.1.1-r5.apk",
+      "name": "libreoffice-connector-postgres",
+      "sha256": "d03b124b307471ebe3ebc77089a2685cf457297fe0517939f3a1dd94475f5f80",
+      "size": 298078,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-draw-25.8.1.1-r5.apk",
+      "name": "libreoffice-draw",
+      "sha256": "c0e41b8653ee8fad8f4c1433eb1c76f314c4572bb904711245fef1c54c205b12",
+      "size": 251118,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-gtk-25.8.1.1-r5.apk",
+      "name": "libreoffice-gtk",
+      "sha256": "5bb1d1d06d85dc62c5169e71f77513ec44c2f3089fe10465b20f941455fe474a",
+      "size": 1146564,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-impress-25.8.1.1-r5.apk",
+      "name": "libreoffice-impress",
+      "sha256": "13eaea5ef129663f157f16b4b97e96b904e03e7a0a5b57662ed815be44d7d468",
+      "size": 375552,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-lang-en_us-25.8.1.1-r5.apk",
+      "name": "libreoffice-lang-en_us",
+      "sha256": "60db7bd4374f2b7c8c0153eb3de3712a23a3fa55cc4023a1760a90a54314f2f7",
+      "size": 89463,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-math-25.8.1.1-r5.apk",
+      "name": "libreoffice-math",
+      "sha256": "88a68a01831f4a179c8b18c23255cdbcf892c299ec976047d41ae3f857952cd3",
+      "size": 634621,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libreoffice-writer-25.8.1.1-r5.apk",
+      "name": "libreoffice-writer",
+      "sha256": "cece894b1612d90aa1da4ca35fcd34b19721faf027b2e9b79bfb7bb6a67741c3",
+      "size": 4744256,
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "librevenge-0.0.5-r2.apk",
+      "name": "librevenge",
+      "sha256": "cd0a3a9dd64b6f3d4aa32c95e696a03ace2d55a5b8d6cdefc80117a0f7081cce",
+      "size": 195668,
+      "version": "0.0.5-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "librist-0.2.10-r1.apk",
+      "name": "librist",
+      "sha256": "4efdf95a121b18ceb4ece118bff643c4fa3d8d93d03e438c86cb357d44845d7c",
+      "size": 67913,
+      "version": "0.2.10-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "librsvg-2.61.2-r0.apk",
+      "name": "librsvg",
+      "sha256": "2bcc4d2d3e7f964cde0c560cb7982173e5d8093a3d1d589c492cc31559154d1d",
+      "size": 1767328,
+      "version": "2.61.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "librtmp-2.4_git20190330-r5.apk",
+      "name": "librtmp",
+      "sha256": "2dd9a9a6de55770584204341dcec993c672a7f2f74e4e581f77a5dc668b01f2a",
+      "size": 63521,
+      "version": "2.4_git20190330-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libsasl-2.1.28-r9.apk",
+      "name": "libsasl",
+      "sha256": "5e24e660e819b49cffd176980da76410bf8f94349b9e942e482dd2b7b9c9312f",
+      "size": 65864,
+      "version": "2.1.28-r9"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libsharpyuv-1.6.0-r0.apk",
+      "name": "libsharpyuv",
+      "sha256": "68b1787f41c36e7b6d9def855c5663f2f1ab62fbcc599d38ce3487e75fc883ec",
+      "size": 11999,
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libsm-1.2.6-r0.apk",
+      "name": "libsm",
+      "sha256": "03c1c774883b2521e97b9fb64ce9b418fb65f54556df5e343a5891aaef5ad64e",
+      "size": 14373,
+      "version": "1.2.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libsndfile-1.2.2-r2.apk",
+      "name": "libsndfile",
+      "sha256": "0d6d5bb88c6c0900ccbb2cbd346119bcae1586321bf69a500b30f93a7676cd70",
+      "size": 217711,
+      "version": "1.2.2-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libsodium-1.0.20-r1.apk",
+      "name": "libsodium",
+      "sha256": "3f8a2ce46418f0d498b3beffce8be6b5626fc80fb16317de0cfcedbe4db165d6",
+      "size": 168198,
+      "version": "1.0.20-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libspng-0.7.4-r1.apk",
+      "name": "libspng",
+      "sha256": "173b229e4f9c98f8193e724cb9672ac4bf0ec9bedc5c8d7257ed17ff7d0f8a8f",
+      "size": 31589,
+      "version": "0.7.4-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libsrt-1.5.3-r1.apk",
+      "name": "libsrt",
+      "sha256": "b9bcf0b27116778bc3453c3e9b6175170882cf014a8e683ef1203415f84fcb95",
+      "size": 416301,
+      "version": "1.5.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libsrtp-2.7.0-r0.apk",
+      "name": "libsrtp",
+      "sha256": "a89b71eeb16fd380e7aef10944115e85ead4a33f6b05786cfbfa2fd2a9d84200",
+      "size": 31286,
+      "version": "2.7.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libssh-0.11.4-r0.apk",
+      "name": "libssh",
+      "sha256": "0a3be8612d0e08324c39b80da7a96bd6fc2e9361f90054a0effc75c2e3a7bc1e",
+      "size": 185792,
+      "version": "0.11.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libssl3-3.5.9-r0.apk",
+      "name": "libssl3",
+      "sha256": "b5ad11f5955b3b7ddfd8c32e8c1fdd79878d208bb4dfa9bbd8f35ddc59187242",
+      "size": 381864,
+      "version": "3.5.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libstaroffice-0.0.7-r8.apk",
+      "name": "libstaroffice",
+      "sha256": "8e673de3455645e6436ee97fdd5896223d9854ee3d4d1e404f1d923fbca12c85",
+      "size": 780188,
+      "version": "0.0.7-r8"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libstdc++-15.2.0-r2.apk",
+      "name": "libstdc++",
+      "sha256": "d4be2967a06d78b499f5e136323f4ebe51ad367b381933b3369539499c4f5752",
+      "size": 961296,
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libtasn1-4.21.0-r0.apk",
+      "name": "libtasn1",
+      "sha256": "701cfbeed52e513c22bb4533273b5d736410b945a3f7f1b2afc41b30162205cf",
+      "size": 33224,
+      "version": "4.21.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libtheora-1.2.0-r0.apk",
+      "name": "libtheora",
+      "sha256": "9fb060fa99080720f5996ff9af2a184fd6de2a2fc2fca6416207c6270fc7725b",
+      "size": 371060,
+      "version": "1.2.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libudfread-1.2.0-r0.apk",
+      "name": "libudfread",
+      "sha256": "244ec3c8129a2a8ad9ad7fa086797db55ba6e59bc948e499761648a28a7e7b07",
+      "size": 13558,
+      "version": "1.2.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libunibreak-6.1-r0.apk",
+      "name": "libunibreak",
+      "sha256": "9ba4de1c5eff20e38e4008e3bb7f645fe8a53479385293bdfc7376997589f49e",
+      "size": 27985,
+      "version": "6.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libunistring-1.4.1-r0.apk",
+      "name": "libunistring",
+      "sha256": "eca5eb66c8ac64cca7160fb766b15e885f75d18c15d0919d0adee987a53b9473",
+      "size": 743482,
+      "version": "1.4.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libusb-1.0.29-r0.apk",
+      "name": "libusb",
+      "sha256": "ebf8454ce461042c72a207f3fe9f2c4297b5100e65557e811c5d02ecaf4027a3",
+      "size": 47998,
+      "version": "1.0.29-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libuuid-2.41.6-r1.apk",
+      "name": "libuuid",
+      "sha256": "e428f43397e863243f17aa85c5b1c3a99adfcb9277d2300b1df7759502db4b6c",
+      "size": 14259,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libva-2.22.0-r1.apk",
+      "name": "libva",
+      "sha256": "4d5200777f65d547b4114d0f6ad8b76db6a027aa00e03e7b0e2d55f914acabfe",
+      "size": 80715,
+      "version": "2.22.0-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libvdpau-1.5-r4.apk",
+      "name": "libvdpau",
+      "sha256": "852ffc4e208b12cc54765b6ee4de0ecd3421de05a2839beb98cb532a65f6a06c",
+      "size": 25936,
+      "version": "1.5-r4"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libvisio-0.1.8-r1.apk",
+      "name": "libvisio",
+      "sha256": "df89fbd9fa38c4373f118d52c6f0f4383abd05e71f05628830203ff22851bf40",
+      "size": 213018,
+      "version": "0.1.8-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libvorbis-1.3.7-r2.apk",
+      "name": "libvorbis",
+      "sha256": "e5b4dfb974396d10b82e97dcfb941827fbe8752075d12350b9aea658ea48a46a",
+      "size": 183899,
+      "version": "1.3.7-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libvpl-2.15.0-r1.apk",
+      "name": "libvpl",
+      "sha256": "c0bde5d3dc2a44bf33fa6ccfacb766956ce32f681a8e7c755ba6f846accfd893",
+      "size": 172957,
+      "version": "2.15.0-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libvpx-1.15.2-r1.apk",
+      "name": "libvpx",
+      "sha256": "2a3110cd646e9b3f236dcf857a5e648ebaf344e1e1ab744a341f5438df0d184e",
+      "size": 1332904,
+      "version": "1.15.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libwebp-1.6.0-r0.apk",
+      "name": "libwebp",
+      "sha256": "4d5303958ee38a978501c330c23b62ef98993ae3c30afcd62444723f33da2477",
+      "size": 276584,
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libwebpdemux-1.6.0-r0.apk",
+      "name": "libwebpdemux",
+      "sha256": "260f497683c456d0739b0320dbcd5ea3fccc1839eb8b2a444a9a6925b76a5b6b",
+      "size": 9618,
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libwebpmux-1.6.0-r0.apk",
+      "name": "libwebpmux",
+      "sha256": "ac19a7d33d4e7d4e14a6d6ca9481d3291eb7ef37759d9dc9226ccb47d3c752eb",
+      "size": 21182,
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libwpd-0.10.3-r1.apk",
+      "name": "libwpd",
+      "sha256": "b56957a5d425ed5af5d9179c10be484e62cd8c7aa286a821ab8903dda5cf8a6c",
+      "size": 200758,
+      "version": "0.10.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libwpg-0.3.4-r0.apk",
+      "name": "libwpg",
+      "sha256": "d3a1129179250d203f04ed1312ee812371fca78dadb1eb2e0ad1a70f0b4fc11d",
+      "size": 44093,
+      "version": "0.3.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libwps-0.4.14-r0.apk",
+      "name": "libwps",
+      "sha256": "3ba16c4e484ea98e25809441ce5ac946323505131b96fe28cd529f40e512a855",
+      "size": 785234,
+      "version": "0.4.14-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libx11-1.8.12-r1.apk",
+      "name": "libx11",
+      "sha256": "cbc478a642226812ab13688bfe9ec69c86cf0e8e037dba7cfd055e8d7741f30c",
+      "size": 867087,
+      "version": "1.8.12-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxau-1.0.12-r0.apk",
+      "name": "libxau",
+      "sha256": "61ee983ec9d47821cae9b3e1c8245a5b0b228361839be9b596a42c817b691a9f",
+      "size": 5613,
+      "version": "1.0.12-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxcb-1.17.0-r1.apk",
+      "name": "libxcb",
+      "sha256": "f73934506edfdcb6895f04e313481ca48592ac4cec59cdb8fc073a7681bfbd31",
+      "size": 236109,
+      "version": "1.17.0-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxcomposite-0.4.6-r5.apk",
+      "name": "libxcomposite",
+      "sha256": "76ec767a2d0e409123e2a49b3be8ac9fe3805b84a249f1efa0d77e7ce2bea756",
+      "size": 4785,
+      "version": "0.4.6-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxcursor-1.2.3-r0.apk",
+      "name": "libxcursor",
+      "sha256": "9c27a96a5a919f636ecb184aedb8b256c1f2da26b900147b6a57b18a584bd85d",
+      "size": 18661,
+      "version": "1.2.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxdamage-1.1.6-r5.apk",
+      "name": "libxdamage",
+      "sha256": "f14020063a3d3d409e4d5328ab7e1e55e1aee572f29adeefb9ae95f901a3f4de",
+      "size": 4895,
+      "version": "1.1.6-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxdmcp-1.1.5-r1.apk",
+      "name": "libxdmcp",
+      "sha256": "f134d28babb070834066aa716c303768ed0ede32ac086f3dfbd8cbbac62380ee",
+      "size": 9364,
+      "version": "1.1.5-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxext-1.3.6-r2.apk",
+      "name": "libxext",
+      "sha256": "404beb855daf09fdb8d15f177a3608da62825a44497a805675a186171c04eb6c",
+      "size": 25286,
+      "version": "1.3.6-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxfixes-6.0.2-r0.apk",
+      "name": "libxfixes",
+      "sha256": "e1ca88834295d32b1f108377c3bdc78fed924bd4e46d207369a08a245f2bb33f",
+      "size": 8577,
+      "version": "6.0.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxft-2.3.9-r0.apk",
+      "name": "libxft",
+      "sha256": "435fdc2934b9777fc7e5846fd8ea6da50d59dae358cca8306e691e9974963607",
+      "size": 38059,
+      "version": "2.3.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxi-1.8.2-r0.apk",
+      "name": "libxi",
+      "sha256": "9e9f1c6418837ba6aa137c3374a8d64eb9c2654cf6f6cf415afdd629cf3f78bb",
+      "size": 27283,
+      "version": "1.8.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxinerama-1.1.5-r4.apk",
+      "name": "libxinerama",
+      "sha256": "bce660c0211758adc2d337540dd431e030d7b15b10990035ada7fbc34e40ffd0",
+      "size": 4544,
+      "version": "1.1.5-r4"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxkbcommon-1.12.2-r0.apk",
+      "name": "libxkbcommon",
+      "sha256": "787a1f64c5c1337f3ec6320ef322f550c12566bf0c1ed8055c7acdcfba4a8eb2",
+      "size": 160518,
+      "version": "1.12.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxkbcommon-x11-1.12.2-r0.apk",
+      "name": "libxkbcommon-x11",
+      "sha256": "6ecfb671534ab6db92c7fe7ae35b77ecdb0ffc6678ff9ac14a9834b51691bd7c",
+      "size": 13979,
+      "version": "1.12.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxml2-2.13.9-r1.apk",
+      "name": "libxml2",
+      "sha256": "1af363248efb54914993bbd516c89878c2b5b0c53be0c78bb43d5a3e9a8ceda6",
+      "size": 495335,
+      "version": "2.13.9-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxmu-1.2.1-r0.apk",
+      "name": "libxmu",
+      "sha256": "775116647bff79a6ff855f20053374899ed3049a808a45758513bea78f019a84",
+      "size": 47330,
+      "version": "1.2.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxrandr-1.5.4-r1.apk",
+      "name": "libxrandr",
+      "sha256": "f4c460ed1515d4326cf2b22e2887e5fcdcf6c755d7925bc2a5d61a6581d06f7c",
+      "size": 16054,
+      "version": "1.5.4-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxrender-0.9.12-r0.apk",
+      "name": "libxrender",
+      "sha256": "1db190111ef622222deec4d184a2607cefdd08f277960b6ff9f639534e671860",
+      "size": 16238,
+      "version": "0.9.12-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxshmfence-1.3.3-r0.apk",
+      "name": "libxshmfence",
+      "sha256": "d34f962e03df0b8a5abb0d853a26ce83da6b8bac83a89bc5e84da9672453253e",
+      "size": 3896,
+      "version": "1.3.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxslt-1.1.43-r3.apk",
+      "name": "libxslt",
+      "sha256": "1ed655b4ab7164d4627a0dca94a51483227a5ac737724fd5b7d2939b23ca2e8d",
+      "size": 129634,
+      "version": "1.1.43-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxt-1.3.1-r0.apk",
+      "name": "libxt",
+      "sha256": "d069e485994b65b05550758c2c57fe4952140d4da4bc64368292509165e6cab2",
+      "size": 153504,
+      "version": "1.3.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxtst-1.2.5-r0.apk",
+      "name": "libxtst",
+      "sha256": "aefecc111d66f1eeac7b5685260b22b339ff42b61965d0f9b98f1d23fd7ae491",
+      "size": 9795,
+      "version": "1.2.5-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxv-1.0.13-r0.apk",
+      "name": "libxv",
+      "sha256": "fa4a128a5dacd4e9df56b5a74bcedf3a458a058e300cd3ba5748057f61146bbb",
+      "size": 8161,
+      "version": "1.0.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libxxf86vm-1.1.7-r0.apk",
+      "name": "libxxf86vm",
+      "sha256": "27f4ca91723d65fd3a0ac37e370d2e840f8251e84503a33ea597db5c3609cfe2",
+      "size": 7652,
+      "version": "1.1.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libzbar-0.23.93-r1.apk",
+      "name": "libzbar",
+      "sha256": "2ae9dcefe5bf7f5a5ddb2b3fbf31fbed1985104b3a9b6d6d978aea86f2a9a2e5",
+      "size": 100408,
+      "version": "0.23.93-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libzmf-0.0.2-r20.apk",
+      "name": "libzmf",
+      "sha256": "78c6db13b6e5643ce3cba3e50d40b8aa025a3bdadfc0a814d5e53f258ad02edc",
+      "size": 61269,
+      "version": "0.0.2-r20"
+    },
+    {
+      "arch": "x86_64",
+      "file": "libzmq-4.3.5-r2.apk",
+      "name": "libzmq",
+      "sha256": "4331b37df35395e1ee2f759e6f56f7e91f554833f0ca888051a8fc90c2d5bc13",
+      "size": 261410,
+      "version": "4.3.5-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "lilv-libs-0.24.26-r0.apk",
+      "name": "lilv-libs",
+      "sha256": "388204ab6cfd16d7052114b911dbb78c54cc970304112007b2e13cb4360f20d8",
+      "size": 35857,
+      "version": "0.24.26-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "llvm21-libs-21.1.2-r1.apk",
+      "name": "llvm21-libs",
+      "sha256": "a77fe85f4deb73621739a04918badeeee85b1b6e4963186a9bdacde4a46e7db8",
+      "size": 64546232,
+      "version": "21.1.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "lz4-libs-1.10.0-r0.apk",
+      "name": "lz4-libs",
+      "sha256": "85766b2ab3e9fdb975e437368af06b22278fbcb1ce935f07cca07fd6611f4c62",
+      "size": 79082,
+      "version": "1.10.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mariadb-connector-c-3.4.6-r0.apk",
+      "name": "mariadb-connector-c",
+      "sha256": "c6322b9af00d527cf4942e530ecd131689a1dcc6650962af0478d3150cd74200",
+      "size": 168334,
+      "version": "3.4.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mbedtls-3.6.7-r0.apk",
+      "name": "mbedtls",
+      "sha256": "f5fdffab99d2db6f2035df533614d0aabf3004615bf8397b4bb34fcaccf87aa8",
+      "size": 413082,
+      "version": "3.6.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mesa-25.2.7-r1.apk",
+      "name": "mesa",
+      "sha256": "4a69cfeaa15d9a2f7c4646a8dc4a9b0e6d6b72d87a4ab7fb5e41be51e6d71ed6",
+      "size": 13493228,
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mesa-egl-25.2.7-r1.apk",
+      "name": "mesa-egl",
+      "sha256": "5c3afa0c1ee03c53022160d39ec2c699070e8ff3685084eaba63ef250fbb267c",
+      "size": 118263,
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mesa-gbm-25.2.7-r1.apk",
+      "name": "mesa-gbm",
+      "sha256": "4ab9115ea7d19cc4bc7fa4556533c8e52297731a1b4b2ddef9df080bd0ae60c5",
+      "size": 6904,
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mesa-gl-25.2.7-r1.apk",
+      "name": "mesa-gl",
+      "sha256": "5f4147c5077d681c836cb1607f78ac79aba841bc263dee45cfbfb4d72ec0a321",
+      "size": 179404,
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mesa-gles-25.2.7-r1.apk",
+      "name": "mesa-gles",
+      "sha256": "2a54c9c50997bf091d2b796b14b0b411ccdb24d686ecb9ea9457a32a982cc744",
+      "size": 21755,
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mpdecimal-4.0.1-r0.apk",
+      "name": "mpdecimal",
+      "sha256": "51554fc6064cc7e595c9f331e6ea4ca87b62aad0d08b9bb9b441655a994a92e1",
+      "size": 78811,
+      "version": "4.0.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mpg123-libs-1.33.3-r0.apk",
+      "name": "mpg123-libs",
+      "sha256": "44115023fb233551b0e098e707142bf7cfe14ffd7110872e3d8111557e2c38fb",
+      "size": 171637,
+      "version": "1.33.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mtdev-1.1.7-r0.apk",
+      "name": "mtdev",
+      "sha256": "60f9740548c92e8e516e14aeb869e26f433e7837002a8b5040cefd1cf8d4244f",
+      "size": 9480,
+      "version": "1.1.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "musl-fts-1.2.7-r7.apk",
+      "name": "musl-fts",
+      "sha256": "ea60d2b50a019d1d2001acdd8466566bb164335cba60924c2d12820c7540b2d1",
+      "size": 7578,
+      "version": "1.2.7-r7"
+    },
+    {
+      "arch": "x86_64",
+      "file": "mythes-1.2.4-r3.apk",
+      "name": "mythes",
+      "sha256": "6e4fd4a842dedab293ee8f1e4df5dbe0f9abf6d6482cc27d6c0ea8eb6e663cf6",
+      "size": 6691,
+      "version": "1.2.4-r3"
+    },
+    {
+      "arch": "noarch",
+      "file": "ncurses-terminfo-base-6.5_p20251123-r0.apk",
+      "name": "ncurses-terminfo-base",
+      "sha256": "9392f4d87fd9446c7c35dd1a29abe8e3566174e03bd75c848028e46829403f1f",
+      "size": 21855,
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "neon-0.35.0-r0.apk",
+      "name": "neon",
+      "sha256": "7bb63e8a4c9305f19dd1ad0434700c67ae71c3efb9d28583d06e5fdfcd2bcc83",
+      "size": 69977,
+      "version": "0.35.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "nettle-3.10.2-r0.apk",
+      "name": "nettle",
+      "sha256": "3fb159ab1ad9688f76519b913e93de8c73a00784a9a21d7c75e633c6854f67bd",
+      "size": 343066,
+      "version": "3.10.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "nghttp2-libs-1.69.0-r0.apk",
+      "name": "nghttp2-libs",
+      "sha256": "e52a5325b8720449ed4f123a33202794361b6b164c127abdb4b3c057467e7a41",
+      "size": 63226,
+      "version": "1.69.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "npth-1.8-r0.apk",
+      "name": "npth",
+      "sha256": "fc6670339a985b1e60eb5919457fefa4b1da1838a7a3ca6ff18950e57de0dd02",
+      "size": 6489,
+      "version": "1.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "nspr-4.36-r0.apk",
+      "name": "nspr",
+      "sha256": "473d26dd8bb110c718cc4fb22cecac299984b3a409e7c018629160d1a929ae28",
+      "size": 126468,
+      "version": "4.36-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "nss-3.123.1-r0.apk",
+      "name": "nss",
+      "sha256": "d4f1f0e49c05d4dd6c2e21da860a526ee3c381cfa532946d7dbdf806da4e8662",
+      "size": 1720975,
+      "version": "3.123.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "numactl-2.0.18-r0.apk",
+      "name": "numactl",
+      "sha256": "097079d7f1ff861c54ed230069e3f6537b09943fdfdaeabdf18014092e1e2eca",
+      "size": 19900,
+      "version": "2.0.18-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "openal-soft-libs-1.24.3-r0.apk",
+      "name": "openal-soft-libs",
+      "sha256": "384047a43812b6a7109ed6b38488c19eed04d4fa82633bf60a2dfbff6841cd50",
+      "size": 557959,
+      "version": "1.24.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "openexr-libiex-3.4.13-r0.apk",
+      "name": "openexr-libiex",
+      "sha256": "c2ef3835d6621bdd5acc2c1ab74a9d3bf4e45943af2e376d56f202be61766d8d",
+      "size": 110801,
+      "version": "3.4.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "openexr-libilmthread-3.4.13-r0.apk",
+      "name": "openexr-libilmthread",
+      "sha256": "509aab1687517c6a8d66d6338fde61aa9a8a748f1b07ee2fd23a7d461658adb1",
+      "size": 14538,
+      "version": "3.4.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "openexr-libopenexr-3.4.13-r0.apk",
+      "name": "openexr-libopenexr",
+      "sha256": "d1bc65cd2f9485003ef098227623c53f5cf5b5285e24e5ba5b62f6d7b9cb35ce",
+      "size": 453324,
+      "version": "3.4.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "openexr-libopenexrcore-3.4.13-r0.apk",
+      "name": "openexr-libopenexrcore",
+      "sha256": "fc20510b56e6b5bb2f269d543d80fbb161b66fdb02ec3b5436cbe56a36a20edf",
+      "size": 309716,
+      "version": "3.4.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "openh264-2.6.0-r0.apk",
+      "name": "openh264",
+      "sha256": "9f14d8ce9fc1d6c6af3bfdf4fa89f60339a35ca242bdb3b5e492bcb532b82f7c",
+      "size": 627804,
+      "version": "2.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "openjpeg-2.5.4-r2.apk",
+      "name": "openjpeg",
+      "sha256": "19dfdffce11b5d0f4e849cb019187c2adb7fef63494eacb409ed66838781c85b",
+      "size": 135570,
+      "version": "2.5.4-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "opus-1.5.2-r1.apk",
+      "name": "opus",
+      "sha256": "ff98e0f815f0f671a620c5601390516173af3c6b56ee11a0e800b3dfed139825",
+      "size": 260287,
+      "version": "1.5.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "orc-0.4.41-r0.apk",
+      "name": "orc",
+      "sha256": "971a9e9e31397a63c07686749d0d8f2fa17732299645e31f44a4bdbb35790155",
+      "size": 194884,
+      "version": "0.4.41-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "p11-kit-0.26.2-r0.apk",
+      "name": "p11-kit",
+      "sha256": "d757635fc2aab4a29abf16e770f1165b70abf65cca9a1175f67957917100712b",
+      "size": 399730,
+      "version": "0.26.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "pango-1.56.4-r0.apk",
+      "name": "pango",
+      "sha256": "9f68b81651661a921c6005ccd0babd85336aacc08f255bd0fed783edba0d3eb0",
+      "size": 260895,
+      "version": "1.56.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "pcre2-10.49-r0.apk",
+      "name": "pcre2",
+      "sha256": "d8057917531ed5eead1d4ccc8dd3ef630e4d90c0587e9b9feafe56c4f954265f",
+      "size": 323103,
+      "version": "10.49-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "pinentry-1.3.2-r0.apk",
+      "name": "pinentry",
+      "sha256": "4306613e9a2f1636c3ffd51caa027e0bebf71224043a26335a27dd364217b7ae",
+      "size": 31236,
+      "version": "1.3.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "pixman-0.46.4-r0.apk",
+      "name": "pixman",
+      "sha256": "6108e456e5b7f7ca3f6eb528f9372de3c1ecbdff738282135ee2aa616b07d9ad",
+      "size": 240295,
+      "version": "0.46.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "pkgconf-2.5.1-r0.apk",
+      "name": "pkgconf",
+      "sha256": "01244a680c1db46539f7e6160ba56476a18f53aefb86cc18354c8d283b6dda71",
+      "size": 53899,
+      "version": "2.5.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "poppler-25.12.0-r0.apk",
+      "name": "poppler",
+      "sha256": "76e7ec16ae8ef7661914ff962166396ef3136536cbed36afb0b33803293bd770",
+      "size": 1050110,
+      "version": "25.12.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "poppler-utils-25.12.0-r0.apk",
+      "name": "poppler-utils",
+      "sha256": "73f12d2034af326626cb44dbebc58ac77fdea10214cf086ba1eb7f9b1eba3896",
+      "size": 211518,
+      "version": "25.12.0-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "pyc-3.12.15-r0.apk",
+      "name": "pyc",
+      "sha256": "76a0004553e020d26aa0311d0540ef7a7ff28640febb7bd2c9ca6f897ee9bae2",
+      "size": 1272,
+      "version": "3.12.15-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "python3-3.12.15-r0.apk",
+      "name": "python3",
+      "sha256": "29694494393f3cd4b19297504baafdea612d9b8144bf9bb8fbac0c15dd5e7baf",
+      "size": 8109912,
+      "version": "3.12.15-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "python3-pyc-3.12.15-r0.apk",
+      "name": "python3-pyc",
+      "sha256": "f967a8a607319cfe050e6c4985e9850ced00659b39d46a48fe02c75292150c68",
+      "size": 1315,
+      "version": "3.12.15-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "python3-pycache-pyc0-3.12.15-r0.apk",
+      "name": "python3-pycache-pyc0",
+      "sha256": "bd7f9461fe2f44891e64994f2c02de134bfe79fec0df7ba836959a64a162a09b",
+      "size": 4180933,
+      "version": "3.12.15-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "qt6-qtbase-6.10.3-r0.apk",
+      "name": "qt6-qtbase",
+      "sha256": "2d41e120f4b23a2bc489781ff98d57e5d99bf99570d7c568f25d43684f4652be",
+      "size": 6531836,
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "qt6-qtbase-x11-6.10.3-r0.apk",
+      "name": "qt6-qtbase-x11",
+      "sha256": "d7be0899614840b773b6c857d952dc645cfdc884b396d5cb7d4cca836b690620",
+      "size": 9013046,
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "qt6-qtdeclarative-6.10.3-r0.apk",
+      "name": "qt6-qtdeclarative",
+      "sha256": "762629859624990990fe99b95d9fd20bd004ff64129f748c40f0cb7c5203185b",
+      "size": 17004488,
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "qt6-qtmultimedia-6.10.3-r0.apk",
+      "name": "qt6-qtmultimedia",
+      "sha256": "9d60ef04e0511cb640cf3496452f4c66a6afc7d017abb06ecdade6887dde4095",
+      "size": 966711,
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "qt6-qtmultimedia-ffmpeg-6.10.3-r0.apk",
+      "name": "qt6-qtmultimedia-ffmpeg",
+      "sha256": "afddfb127c099764ac1678d89b7a9469dd30fddbbee73e2e9a709f8d3ea36d56",
+      "size": 269567,
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "raptor2-2.0.16-r1.apk",
+      "name": "raptor2",
+      "sha256": "f8dcb61fdbadab747051bdbf3cd057e324ce4a1df784a31a02d4e93c02b11b80",
+      "size": 160993,
+      "version": "2.0.16-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "rasqal-0.9.33-r3.apk",
+      "name": "rasqal",
+      "sha256": "dfbc8d5b2d13d35f9f6924ce42c0bf536c7e2d97e2644beab3a2ce7d64b268ed",
+      "size": 188373,
+      "version": "0.9.33-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "rav1e-libs-0.8.1-r0.apk",
+      "name": "rav1e-libs",
+      "sha256": "def38a5bcd9d41c76d8cb275bd14144e76b560b8e29c9a666c1b785f56644c28",
+      "size": 934138,
+      "version": "0.8.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "readline-8.3.1-r0.apk",
+      "name": "readline",
+      "sha256": "6d29b98eafff4aebaed4e61fca8329fbf7b26489a29fefc1d4462610d687303b",
+      "size": 127218,
+      "version": "8.3.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "redland-1.0.17-r3.apk",
+      "name": "redland",
+      "sha256": "d18d62ae6c9454bf79d29af8bac93aed0013b034d5d192cba1fa04f516c23115",
+      "size": 118974,
+      "version": "1.0.17-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "sbc-2.1-r0.apk",
+      "name": "sbc",
+      "sha256": "e4d263b83ce2df80758d5e4a461d54ce14560d2d34ead806f944d6f525961124",
+      "size": 20814,
+      "version": "2.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "serd-libs-0.32.4-r0.apk",
+      "name": "serd-libs",
+      "sha256": "13d29347349c57e165b820c3fd4886ad982522365b13c0e4c7524e11411079ef",
+      "size": 29466,
+      "version": "0.32.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "shaderc-2025.3-r0.apk",
+      "name": "shaderc",
+      "sha256": "22c0fcd166ec6c112e849144bcd0d4bfd41057c3082d3919148575ab919a0753",
+      "size": 90461,
+      "version": "2025.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "shared-mime-info-2.4-r6.apk",
+      "name": "shared-mime-info",
+      "sha256": "a138d764684eae1b342073c28b7379bfea88b892d505cfb1f032f1a00c0e722b",
+      "size": 370494,
+      "version": "2.4-r6"
+    },
+    {
+      "arch": "x86_64",
+      "file": "sord-libs-0.16.18-r0.apk",
+      "name": "sord-libs",
+      "sha256": "5431391b048e268312d1bdced021abadfaf0d93dae3ab97f7af6a8ae213badd0",
+      "size": 11939,
+      "version": "0.16.18-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "soundtouch-2.3.3-r0.apk",
+      "name": "soundtouch",
+      "sha256": "1aa53635c34d466b48621c3d0b5c1a73d240adcdc5aec166549f14ddf7a381ca",
+      "size": 58799,
+      "version": "2.3.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "soxr-0.1.3-r7.apk",
+      "name": "soxr",
+      "sha256": "b583188dec0c115e7a228ee13d67c2b5407513625950876320ce153a5d3c7f79",
+      "size": 74087,
+      "version": "0.1.3-r7"
+    },
+    {
+      "arch": "x86_64",
+      "file": "spandsp-0.0.6-r5.apk",
+      "name": "spandsp",
+      "sha256": "3adce2469fbb46c15c754a0af0461fecbf2b728280569b7371f9ac5846722e9c",
+      "size": 287618,
+      "version": "0.0.6-r5"
+    },
+    {
+      "arch": "x86_64",
+      "file": "speexdsp-1.2.1-r2.apk",
+      "name": "speexdsp",
+      "sha256": "841f9e2d16b2410624771790f304a8ee3cbb38608e37dd603b7b26bee50e982c",
+      "size": 34804,
+      "version": "1.2.1-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "spirv-tools-1.4.321.0-r1.apk",
+      "name": "spirv-tools",
+      "sha256": "e94576860fe49a9f7b45d10e02885713dc7bafa958cdd24b462990e703c6b00b",
+      "size": 1736161,
+      "version": "1.4.321.0-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "sqlite-libs-3.53.4-r0.apk",
+      "name": "sqlite-libs",
+      "sha256": "414be12c879052f4614a42a10fc12af67a88ba49e8e1e33f78cd9ddbbdb13fee",
+      "size": 877766,
+      "version": "3.53.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "sratom-0.6.18-r0.apk",
+      "name": "sratom",
+      "sha256": "9f02e3b6279fcf0596e686556e5c7528557316f4ec5791df3a00fdb8fb22e5f6",
+      "size": 11482,
+      "version": "0.6.18-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "tdb-libs-1.4.14-r0.apk",
+      "name": "tdb-libs",
+      "sha256": "1cfa65ced65857b09c5459a531a475a1806452e50238a75ffefb69bc67c53709",
+      "size": 41008,
+      "version": "1.4.14-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "tesseract-ocr-5.5.1-r0.apk",
+      "name": "tesseract-ocr",
+      "sha256": "b190d44f2b320d0c330e6fc91aab75d0488bbae5511c29ce887c1a8d8d60f789",
+      "size": 1993646,
+      "version": "5.5.1-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "tesseract-ocr-data-chi_sim-5.5.1-r0.apk",
+      "name": "tesseract-ocr-data-chi_sim",
+      "sha256": "a7769db527fd27c42bd37dae50b1936ed2d0f4c9aacbc5ed856f9ad11a823572",
+      "size": 19905829,
+      "version": "5.5.1-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "tesseract-ocr-data-eng-5.5.1-r0.apk",
+      "name": "tesseract-ocr-data-eng",
+      "sha256": "e9d9c0d5fabb773591bb0dd56d0166a61dc9fb7422b86f17ae2726af141d5464",
+      "size": 10845911,
+      "version": "5.5.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "tiff-4.7.2-r0.apk",
+      "name": "tiff",
+      "sha256": "21c72f925da3d73fc3035136cf8d99518d3e0629a2221017f081bb4781dd5934",
+      "size": 170645,
+      "version": "4.7.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "tslib-1.23-r0.apk",
+      "name": "tslib",
+      "sha256": "b69d1f577fedcff9908a6834cba40f111932cd2be8eb1ff4e0cfe6a812c24d3b",
+      "size": 88214,
+      "version": "1.23-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "tzdata-2026e-r0.apk",
+      "name": "tzdata",
+      "sha256": "b317a4fa0a6ce0bc9f2a62349e205ed9faf5c89cb80c817fdc9cedca53e78da1",
+      "size": 190919,
+      "version": "2026e-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "v4l-utils-libs-1.32.0-r0.apk",
+      "name": "v4l-utils-libs",
+      "sha256": "dfdadab664e16b91a34f6f37125741c07757dead78bb9aed0c931a18aa629bdb",
+      "size": 200101,
+      "version": "1.32.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "vidstab-1.1.1-r0.apk",
+      "name": "vidstab",
+      "sha256": "817da1709654705b5e73391b769490173ca2268d436a9a12271c3bbbee8e6be0",
+      "size": 33373,
+      "version": "1.1.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "vips-8.17.3-r1.apk",
+      "name": "vips",
+      "sha256": "4c95a98c14ad366fc9507cbe2f2ba3f3ee05d8932b009960813e09ff64be48ec",
+      "size": 1330470,
+      "version": "8.17.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "vips-jxl-8.17.3-r1.apk",
+      "name": "vips-jxl",
+      "sha256": "b0b6eb62cf651075794d8c3514cd6f444ef96167b963082ebc8e138d08376127",
+      "size": 15512,
+      "version": "8.17.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "vips-tools-8.17.3-r1.apk",
+      "name": "vips-tools",
+      "sha256": "58c817843ed4907866f57741a6a146bebbf0561d9088f08701e0d6201f2fab83",
+      "size": 17878,
+      "version": "8.17.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "vo-aacenc-0.1.3-r3.apk",
+      "name": "vo-aacenc",
+      "sha256": "04bb4596a3da6bd3e194645eb381b93861bf2fcb5ee85b549dfb86cfd04c7b5a",
+      "size": 57391,
+      "version": "0.1.3-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "vo-amrwbenc-0.1.3-r3.apk",
+      "name": "vo-amrwbenc",
+      "sha256": "fb3b7e79c03c8d20e98c30c7eb0d2667d6ebfbca098234fdd25cee3e10a41e6c",
+      "size": 56419,
+      "version": "0.1.3-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "vulkan-loader-1.4.321.0-r0.apk",
+      "name": "vulkan-loader",
+      "sha256": "2e8b4656df44062b61b890fdfdd49f86fb0f990306b486fa335ac3a874c30039",
+      "size": 173324,
+      "version": "1.4.321.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "wayland-libs-client-1.24.0-r0.apk",
+      "name": "wayland-libs-client",
+      "sha256": "020313c601f85a9e91d1ae0d01e9f1e9905d1127b78dce9c278a75cfd52416d2",
+      "size": 22034,
+      "version": "1.24.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "wayland-libs-cursor-1.24.0-r0.apk",
+      "name": "wayland-libs-cursor",
+      "sha256": "e87fb03656132b550182b019b7f3218f336ff9637dc574ef0f22a0ad148f8577",
+      "size": 9082,
+      "version": "1.24.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "wayland-libs-egl-1.24.0-r0.apk",
+      "name": "wayland-libs-egl",
+      "sha256": "2d9165a79e7e779b52dd203959f64eb8f7caad460f3e6d76097efc432e115936",
+      "size": 3328,
+      "version": "1.24.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "x264-libs-0.164.3108-r1.apk",
+      "name": "x264-libs",
+      "sha256": "e34e8beb78e2785e5bf7e20e4ad293cbd6912c60da8ff9d2c5f05ada15ab59dc",
+      "size": 968169,
+      "version": "0.164.3108-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "x265-libs-4.1-r0.apk",
+      "name": "x265-libs",
+      "sha256": "201effd22785e467f17a7cad11fa26d4018dae29aa9f4774dd58a3fcefc8badb",
+      "size": 4040605,
+      "version": "4.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xcb-util-0.4.1-r3.apk",
+      "name": "xcb-util",
+      "sha256": "778a60a1efa77ea8d949a5277824ea6228ee9303f8de7f24a928b5163a0c2880",
+      "size": 7368,
+      "version": "0.4.1-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xcb-util-cursor-0.1.5-r0.apk",
+      "name": "xcb-util-cursor",
+      "sha256": "5638f76e8f910ec6f6cf75ef1c598cf32b98dcfe443efa4e58b23f64b00a18f8",
+      "size": 8348,
+      "version": "0.1.5-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xcb-util-image-0.4.1-r0.apk",
+      "name": "xcb-util-image",
+      "sha256": "46a440774838b4d3a2a6f6f37bd09d2a7129e7bf31fe4778678b538fe5e0632d",
+      "size": 8172,
+      "version": "0.4.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xcb-util-keysyms-0.4.1-r0.apk",
+      "name": "xcb-util-keysyms",
+      "sha256": "b7e053db938ab6901ce01986ad08d29854970d4154e4bdbce45344c1efa1ffd1",
+      "size": 4974,
+      "version": "0.4.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xcb-util-renderutil-0.3.10-r0.apk",
+      "name": "xcb-util-renderutil",
+      "sha256": "ca6e36557ddd5cf9d5a1df6ca99aaa2533f7b3625c1ba438a1977345cadcda59",
+      "size": 6231,
+      "version": "0.3.10-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xcb-util-wm-0.4.2-r0.apk",
+      "name": "xcb-util-wm",
+      "sha256": "d70e2d30aa6ea215b8af253070639584c935f0d812eded2e8feeaf2555607ab1",
+      "size": 20883,
+      "version": "0.4.2-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "xdg-utils-1.2.1-r1.apk",
+      "name": "xdg-utils",
+      "sha256": "5e590df1461bcc7707b26085b798ab37c05037e7f8668a9ed9fdb3cbc6f00c5e",
+      "size": 72593,
+      "version": "1.2.1-r1"
+    },
+    {
+      "arch": "noarch",
+      "file": "xkeyboard-config-2.46-r0.apk",
+      "name": "xkeyboard-config",
+      "sha256": "f4a9c0c83826fa2019ab6c175a81c7276b474a2ef447d8c1fb0bf5a5bbc6bd81",
+      "size": 562906,
+      "version": "2.46-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xmlsec-1.3.9-r0.apk",
+      "name": "xmlsec",
+      "sha256": "6a93a9b265847c71a594216be5eccc591d69f58e96454e7b07055f5ebca5e90c",
+      "size": 359025,
+      "version": "1.3.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xmlsec-nss-1.3.9-r0.apk",
+      "name": "xmlsec-nss",
+      "sha256": "74bef7ad1a1a35f2f3448e43abe7204bf75984d11e319591257fee3da39fcfb4",
+      "size": 92974,
+      "version": "1.3.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xprop-1.2.8-r0.apk",
+      "name": "xprop",
+      "sha256": "93d77200a13406bbcb6ba8cde3ac3fa12514113f273c3778d17405e04f29aeb5",
+      "size": 17124,
+      "version": "1.2.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xset-1.2.5-r1.apk",
+      "name": "xset",
+      "sha256": "b4b8893ed8e60aa1c76b2e12c182d47a81c69bff03821a1af758dbbc725106a5",
+      "size": 12007,
+      "version": "1.2.5-r1"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xvidcore-1.3.7-r2.apk",
+      "name": "xvidcore",
+      "sha256": "b0512b5beae5afa7ad0669e30f264063100ebdcde75a9e85773c929a8c9a9600",
+      "size": 147711,
+      "version": "1.3.7-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xz-5.8.4-r0.apk",
+      "name": "xz",
+      "sha256": "a8bac22fbca6e15f5275e9f33178dac573893f6e1280e9164ad7e7203c7abc0e",
+      "size": 64568,
+      "version": "5.8.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "xz-libs-5.8.4-r0.apk",
+      "name": "xz-libs",
+      "sha256": "3c8cc415e88c2a097543d9ee828081ec1905e7d0f57a319c8896269b0e00a672",
+      "size": 118501,
+      "version": "5.8.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "yajl-2.1.0-r9.apk",
+      "name": "yajl",
+      "sha256": "10a8b7bdf0594b2cb864e85d50f8acf99c19090223621a1aec38ad5387f01c3e",
+      "size": 14481,
+      "version": "2.1.0-r9"
+    },
+    {
+      "arch": "x86_64",
+      "file": "zimg-3.0.6-r0.apk",
+      "name": "zimg",
+      "sha256": "8c0c85f4421babc44b626fe316b6dadec9e9a8c0b929bcb3d9b4a972291bd52a",
+      "size": 225719,
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "zix-libs-0.6.2-r0.apk",
+      "name": "zix-libs",
+      "sha256": "716d89dd7c2b55768b4033ce0c4772ed12665eaf1e35a457ceb86342dc3a2cbb",
+      "size": 20893,
+      "version": "0.6.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "zstd-1.5.7-r2.apk",
+      "name": "zstd",
+      "sha256": "ab338dd697633382d1232c7077e137e6f966e074102f2f195adb492b34243fe6",
+      "size": 129692,
+      "version": "1.5.7-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "zstd-libs-1.5.7-r2.apk",
+      "name": "zstd-libs",
+      "sha256": "d5fcc58f7f071a5658d97b09838668e4443203217631992915b8e60656904104",
+      "size": 373813,
+      "version": "1.5.7-r2"
+    },
+    {
+      "arch": "x86_64",
+      "file": "zxing-cpp-2.3.0-r1.apk",
+      "name": "zxing-cpp",
+      "sha256": "7bbdc71080721f33bfd424e9d0e0e0271150c27013c6a650f7cfc38149103a99",
+      "size": 569064,
+      "version": "2.3.0-r1"
+    }
+  ],
+  "base_source_digest": "sha256:1beb0dc0a51de7ff38e3b5274078a2e0b81113ba5c7535e1a03d5913a5edbda3",
+  "before": [
+    {
+      "arch": "x86_64",
+      "name": "alpine-baselayout",
+      "version": "3.7.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-baselayout-data",
+      "version": "3.7.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-keys",
+      "version": "2.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-release",
+      "version": "3.23.5-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "apk-tools",
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "busybox",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "x86_64",
+      "name": "busybox-binsh",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ca-certificates-bundle",
+      "version": "20260611-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libapk",
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libcrypto3",
+      "version": "3.5.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libssl3",
+      "version": "3.5.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "musl",
+      "version": "1.2.5-r23"
+    },
+    {
+      "arch": "x86_64",
+      "name": "musl-utils",
+      "version": "1.2.5-r23"
+    },
+    {
+      "arch": "x86_64",
+      "name": "scanelf",
+      "version": "1.3.8-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ssl_client",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zlib",
+      "version": "1.3.2-r0"
+    }
+  ],
+  "installed": [
+    {
+      "arch": "x86_64",
+      "name": "acl-libs",
+      "version": "2.3.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-baselayout",
+      "version": "3.7.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-baselayout-data",
+      "version": "3.7.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-keys",
+      "version": "2.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alpine-release",
+      "version": "3.23.5-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "alsa-lib",
+      "version": "1.2.14-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "aom-libs",
+      "version": "3.14.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "apk-tools",
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "argon2-libs",
+      "version": "20190702-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "at-spi2-core",
+      "version": "2.58.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "at-spi2-core-libs",
+      "version": "2.58.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "avahi-libs",
+      "version": "0.8-r23"
+    },
+    {
+      "arch": "x86_64",
+      "name": "bash",
+      "version": "5.3.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "boost1.84-iostreams",
+      "version": "1.84.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "boost1.84-locale",
+      "version": "1.84.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "boost1.84-program_options",
+      "version": "1.84.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "boost1.84-thread",
+      "version": "1.84.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "box2d",
+      "version": "2.4.1-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "brotli-libs",
+      "version": "1.2.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "busybox",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "x86_64",
+      "name": "busybox-binsh",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "x86_64",
+      "name": "c-ares",
+      "version": "1.34.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ca-certificates",
+      "version": "20261020-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ca-certificates-bundle",
+      "version": "20260611-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "cairo",
+      "version": "1.18.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "cairo-gobject",
+      "version": "1.18.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "cdparanoia-libs",
+      "version": "10.2-r14"
+    },
+    {
+      "arch": "x86_64",
+      "name": "cfitsio",
+      "version": "4.6.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "cgif",
+      "version": "0.5.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "cjson",
+      "version": "1.7.19-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "clamav",
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "clamav-clamdscan",
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "clamav-daemon",
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "clamav-libs",
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "clamav-scanner",
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "clucene",
+      "version": "2.3.3.4-r22"
+    },
+    {
+      "arch": "x86_64",
+      "name": "clucene-contribs",
+      "version": "2.3.3.4-r22"
+    },
+    {
+      "arch": "x86_64",
+      "name": "cups-libs",
+      "version": "2.4.18-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "dbus-libs",
+      "version": "1.16.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "directfb",
+      "version": "1.7.7-r8"
+    },
+    {
+      "arch": "x86_64",
+      "name": "double-conversion",
+      "version": "3.3.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "duktape-libs",
+      "version": "2.7.0-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "eudev-libs",
+      "version": "3.2.14-r6"
+    },
+    {
+      "arch": "x86_64",
+      "name": "faac",
+      "version": "1.31.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "fdk-aac",
+      "version": "2.0.2-r4"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ffmpeg",
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ffmpeg-libavcodec",
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ffmpeg-libavdevice",
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ffmpeg-libavfilter",
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ffmpeg-libavformat",
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ffmpeg-libavutil",
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ffmpeg-libswresample",
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ffmpeg-libswscale",
+      "version": "8.0.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "fftw-double-libs",
+      "version": "3.3.10-r7"
+    },
+    {
+      "arch": "x86_64",
+      "name": "file",
+      "version": "5.46-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "flite",
+      "version": "2.2-r5"
+    },
+    {
+      "arch": "noarch",
+      "name": "font-noto",
+      "version": "2025.12.01-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "font-noto-cjk",
+      "version": "0_git20220127-r1"
+    },
+    {
+      "arch": "noarch",
+      "name": "font-noto-common",
+      "version": "2025.12.01-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "font-noto-math",
+      "version": "2025.12.01-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "font-noto-symbols",
+      "version": "2025.12.01-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "fontconfig",
+      "version": "2.17.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "freetype",
+      "version": "2.14.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "freshclam",
+      "version": "1.4.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "fribidi",
+      "version": "1.0.16-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gdbm",
+      "version": "1.26-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gdk-pixbuf",
+      "version": "2.44.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "giflib",
+      "version": "5.2.2-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "glib",
+      "version": "2.86.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "glslang-libs",
+      "version": "1.4.321.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gmp",
+      "version": "6.3.0-r4"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gnupg-dirmngr",
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gnupg-gpgconf",
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gnupg-keyboxd",
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gnutls",
+      "version": "3.8.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gobject-introspection",
+      "version": "1.86.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gpg",
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gpg-agent",
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gpgme",
+      "version": "1.24.2-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gpgmepp",
+      "version": "1.24.2-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gpgsm",
+      "version": "2.4.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "graphene",
+      "version": "1.10.8-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "graphite2",
+      "version": "1.3.14-r6"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gsm",
+      "version": "1.0.23-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gst-plugins-bad",
+      "version": "1.26.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gst-plugins-base",
+      "version": "1.26.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gstreamer",
+      "version": "1.26.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gstreamer-ptp-helper",
+      "version": "1.26.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gtk+3.0",
+      "version": "3.24.51-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gtk-update-icon-cache",
+      "version": "3.24.51-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gtk4.0",
+      "version": "4.20.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "gzip",
+      "version": "1.14-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "harfbuzz",
+      "version": "12.2.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "harfbuzz-icu",
+      "version": "12.2.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "harfbuzz-subset",
+      "version": "12.2.0-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "hicolor-icon-theme",
+      "version": "0.18-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "hwdata-pci",
+      "version": "0.401-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "hyphen",
+      "version": "2.8.8-r3"
+    },
+    {
+      "arch": "noarch",
+      "name": "icu-data-en",
+      "version": "76.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "icu-libs",
+      "version": "76.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "imath",
+      "version": "3.1.12-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "iso-codes",
+      "version": "4.19.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "json-c",
+      "version": "0.18-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "lame-libs",
+      "version": "3.100-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "lcms2",
+      "version": "2.19-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "leptonica",
+      "version": "1.86.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "less",
+      "version": "685-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libSvtAv1Enc",
+      "version": "3.1.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libabw",
+      "version": "0.1.3-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libapk",
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libarchive",
+      "version": "3.8.10-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libass",
+      "version": "0.17.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libassuan",
+      "version": "3.0.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libasyncns",
+      "version": "0.8-r4"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libatk-1.0",
+      "version": "2.58.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libatk-bridge-2.0",
+      "version": "2.58.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libb2",
+      "version": "0.98.1-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libblkid",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libbluray",
+      "version": "1.4.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libbsd",
+      "version": "0.12.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libbz2",
+      "version": "1.0.8-r6"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libcap2",
+      "version": "2.78-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libcdr",
+      "version": "0.1.8-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libcmis",
+      "version": "0.6.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libcrypto3",
+      "version": "3.5.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libcurl",
+      "version": "8.23.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libdav1d",
+      "version": "1.5.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libdc1394",
+      "version": "2.2.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libde265",
+      "version": "1.0.16-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libdeflate",
+      "version": "1.25-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libdovi",
+      "version": "3.3.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libdrm",
+      "version": "2.4.131-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libe-book",
+      "version": "0.1.3-r25"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libeconf",
+      "version": "0.8.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libelf",
+      "version": "0.194-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libepoxy",
+      "version": "1.5.10-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libepubgen",
+      "version": "0.1.1-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libetonyek",
+      "version": "0.1.12-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libevdev",
+      "version": "1.13.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libexif",
+      "version": "0.6.26-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libexpat",
+      "version": "2.9.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libexttextcat",
+      "version": "3.4.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libffi",
+      "version": "3.5.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libflac",
+      "version": "1.4.3-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libfreeaptx",
+      "version": "0.2.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libfreehand",
+      "version": "0.1.2-r12"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libgcc",
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libgcrypt",
+      "version": "1.11.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libgomp",
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libgpg-error",
+      "version": "1.55-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libgudev",
+      "version": "238-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libhunspell",
+      "version": "1.7.2-r4"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libhwy",
+      "version": "1.3.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libice",
+      "version": "1.1.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libidn2",
+      "version": "2.3.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libimagequant",
+      "version": "4.2.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libinput-libs",
+      "version": "1.30.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libintl",
+      "version": "0.24.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libixion",
+      "version": "0.20.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libjpeg-turbo",
+      "version": "3.1.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libjxl",
+      "version": "0.11.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libksba",
+      "version": "1.6.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "liblangtag",
+      "version": "0.6.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libldac",
+      "version": "2.0.2.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libldap",
+      "version": "2.6.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libltdl",
+      "version": "2.5.4-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libmagic",
+      "version": "5.46-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libmd",
+      "version": "1.1.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libmodplug",
+      "version": "0.8.9.0-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libmount",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libmspack",
+      "version": "0.11_alpha-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libmspub",
+      "version": "0.1.4-r23"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libmwaw",
+      "version": "0.3.22-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libncursesw",
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libnice",
+      "version": "0.1.22-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libnumbertext",
+      "version": "1.0.11-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libodfgen",
+      "version": "0.1.8-r9"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libogg",
+      "version": "1.3.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libopenmpt",
+      "version": "0.8.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "liborcus",
+      "version": "0.20.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libpagemaker",
+      "version": "0.0.4-r9"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libpanelw",
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libpciaccess",
+      "version": "0.18.1-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libpcre2-16",
+      "version": "10.49-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libplacebo",
+      "version": "7.351.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libpng",
+      "version": "1.6.59-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libpq",
+      "version": "18.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libproxy",
+      "version": "0.5.12-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libpsl",
+      "version": "0.21.5-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libpulse",
+      "version": "17.0-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libqxp",
+      "version": "0.0.2-r11"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libraw1394",
+      "version": "2.1.2-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-base",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-calc",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-common",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-connector-postgres",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-draw",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-gtk",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-impress",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-lang-en_us",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-math",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libreoffice-writer",
+      "version": "25.8.1.1-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "librevenge",
+      "version": "0.0.5-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "librist",
+      "version": "0.2.10-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "librsvg",
+      "version": "2.61.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "librtmp",
+      "version": "2.4_git20190330-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libsasl",
+      "version": "2.1.28-r9"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libsharpyuv",
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libsm",
+      "version": "1.2.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libsndfile",
+      "version": "1.2.2-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libsodium",
+      "version": "1.0.20-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libspng",
+      "version": "0.7.4-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libsrt",
+      "version": "1.5.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libsrtp",
+      "version": "2.7.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libssh",
+      "version": "0.11.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libssl3",
+      "version": "3.5.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libstaroffice",
+      "version": "0.0.7-r8"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libstdc++",
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libtasn1",
+      "version": "4.21.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libtheora",
+      "version": "1.2.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libudfread",
+      "version": "1.2.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libunibreak",
+      "version": "6.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libunistring",
+      "version": "1.4.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libusb",
+      "version": "1.0.29-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libuuid",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libva",
+      "version": "2.22.0-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libvdpau",
+      "version": "1.5-r4"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libvisio",
+      "version": "0.1.8-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libvorbis",
+      "version": "1.3.7-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libvpl",
+      "version": "2.15.0-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libvpx",
+      "version": "1.15.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libwebp",
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libwebpdemux",
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libwebpmux",
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libwpd",
+      "version": "0.10.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libwpg",
+      "version": "0.3.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libwps",
+      "version": "0.4.14-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libx11",
+      "version": "1.8.12-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxau",
+      "version": "1.0.12-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxcb",
+      "version": "1.17.0-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxcomposite",
+      "version": "0.4.6-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxcursor",
+      "version": "1.2.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxdamage",
+      "version": "1.1.6-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxdmcp",
+      "version": "1.1.5-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxext",
+      "version": "1.3.6-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxfixes",
+      "version": "6.0.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxft",
+      "version": "2.3.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxi",
+      "version": "1.8.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxinerama",
+      "version": "1.1.5-r4"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxkbcommon",
+      "version": "1.12.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxkbcommon-x11",
+      "version": "1.12.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxml2",
+      "version": "2.13.9-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxmu",
+      "version": "1.2.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxrandr",
+      "version": "1.5.4-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxrender",
+      "version": "0.9.12-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxshmfence",
+      "version": "1.3.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxslt",
+      "version": "1.1.43-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxt",
+      "version": "1.3.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxtst",
+      "version": "1.2.5-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxv",
+      "version": "1.0.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libxxf86vm",
+      "version": "1.1.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libzbar",
+      "version": "0.23.93-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libzmf",
+      "version": "0.0.2-r20"
+    },
+    {
+      "arch": "x86_64",
+      "name": "libzmq",
+      "version": "4.3.5-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "lilv-libs",
+      "version": "0.24.26-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "llvm21-libs",
+      "version": "21.1.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "lz4-libs",
+      "version": "1.10.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mariadb-connector-c",
+      "version": "3.4.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mbedtls",
+      "version": "3.6.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mesa",
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mesa-egl",
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mesa-gbm",
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mesa-gl",
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mesa-gles",
+      "version": "25.2.7-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mpdecimal",
+      "version": "4.0.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mpg123-libs",
+      "version": "1.33.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mtdev",
+      "version": "1.1.7-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "musl",
+      "version": "1.2.5-r23"
+    },
+    {
+      "arch": "x86_64",
+      "name": "musl-fts",
+      "version": "1.2.7-r7"
+    },
+    {
+      "arch": "x86_64",
+      "name": "musl-utils",
+      "version": "1.2.5-r23"
+    },
+    {
+      "arch": "x86_64",
+      "name": "mythes",
+      "version": "1.2.4-r3"
+    },
+    {
+      "arch": "noarch",
+      "name": "ncurses-terminfo-base",
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "neon",
+      "version": "0.35.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "nettle",
+      "version": "3.10.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "nghttp2-libs",
+      "version": "1.69.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "npth",
+      "version": "1.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "nspr",
+      "version": "4.36-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "nss",
+      "version": "3.123.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "numactl",
+      "version": "2.0.18-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "openal-soft-libs",
+      "version": "1.24.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "openexr-libiex",
+      "version": "3.4.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "openexr-libilmthread",
+      "version": "3.4.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "openexr-libopenexr",
+      "version": "3.4.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "openexr-libopenexrcore",
+      "version": "3.4.13-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "openh264",
+      "version": "2.6.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "openjpeg",
+      "version": "2.5.4-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "opus",
+      "version": "1.5.2-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "orc",
+      "version": "0.4.41-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "p11-kit",
+      "version": "0.26.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "pango",
+      "version": "1.56.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "pcre2",
+      "version": "10.49-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "pinentry",
+      "version": "1.3.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "pixman",
+      "version": "0.46.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "pkgconf",
+      "version": "2.5.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "poppler",
+      "version": "25.12.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "poppler-utils",
+      "version": "25.12.0-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "pyc",
+      "version": "3.12.15-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "python3",
+      "version": "3.12.15-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "python3-pyc",
+      "version": "3.12.15-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "python3-pycache-pyc0",
+      "version": "3.12.15-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "qt6-qtbase",
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "qt6-qtbase-x11",
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "qt6-qtdeclarative",
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "qt6-qtmultimedia",
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "qt6-qtmultimedia-ffmpeg",
+      "version": "6.10.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "raptor2",
+      "version": "2.0.16-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "rasqal",
+      "version": "0.9.33-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "rav1e-libs",
+      "version": "0.8.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "readline",
+      "version": "8.3.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "redland",
+      "version": "1.0.17-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "sbc",
+      "version": "2.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "scanelf",
+      "version": "1.3.8-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "serd-libs",
+      "version": "0.32.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "shaderc",
+      "version": "2025.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "shared-mime-info",
+      "version": "2.4-r6"
+    },
+    {
+      "arch": "x86_64",
+      "name": "sord-libs",
+      "version": "0.16.18-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "soundtouch",
+      "version": "2.3.3-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "soxr",
+      "version": "0.1.3-r7"
+    },
+    {
+      "arch": "x86_64",
+      "name": "spandsp",
+      "version": "0.0.6-r5"
+    },
+    {
+      "arch": "x86_64",
+      "name": "speexdsp",
+      "version": "1.2.1-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "spirv-tools",
+      "version": "1.4.321.0-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "sqlite-libs",
+      "version": "3.53.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "sratom",
+      "version": "0.6.18-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "ssl_client",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "x86_64",
+      "name": "tdb-libs",
+      "version": "1.4.14-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "tesseract-ocr",
+      "version": "5.5.1-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "tesseract-ocr-data-chi_sim",
+      "version": "5.5.1-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "tesseract-ocr-data-eng",
+      "version": "5.5.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "tiff",
+      "version": "4.7.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "tslib",
+      "version": "1.23-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "tzdata",
+      "version": "2026e-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "v4l-utils-libs",
+      "version": "1.32.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "vidstab",
+      "version": "1.1.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "vips",
+      "version": "8.17.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "vips-jxl",
+      "version": "8.17.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "vips-tools",
+      "version": "8.17.3-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "vo-aacenc",
+      "version": "0.1.3-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "vo-amrwbenc",
+      "version": "0.1.3-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "vulkan-loader",
+      "version": "1.4.321.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "wayland-libs-client",
+      "version": "1.24.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "wayland-libs-cursor",
+      "version": "1.24.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "wayland-libs-egl",
+      "version": "1.24.0-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "x264-libs",
+      "version": "0.164.3108-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "x265-libs",
+      "version": "4.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xcb-util",
+      "version": "0.4.1-r3"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xcb-util-cursor",
+      "version": "0.1.5-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xcb-util-image",
+      "version": "0.4.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xcb-util-keysyms",
+      "version": "0.4.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xcb-util-renderutil",
+      "version": "0.3.10-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xcb-util-wm",
+      "version": "0.4.2-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "xdg-utils",
+      "version": "1.2.1-r1"
+    },
+    {
+      "arch": "noarch",
+      "name": "xkeyboard-config",
+      "version": "2.46-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xmlsec",
+      "version": "1.3.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xmlsec-nss",
+      "version": "1.3.9-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xprop",
+      "version": "1.2.8-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xset",
+      "version": "1.2.5-r1"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xvidcore",
+      "version": "1.3.7-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xz",
+      "version": "5.8.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "xz-libs",
+      "version": "5.8.4-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "yajl",
+      "version": "2.1.0-r9"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zimg",
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zix-libs",
+      "version": "0.6.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zlib",
+      "version": "1.3.2-r0"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zstd",
+      "version": "1.5.7-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zstd-libs",
+      "version": "1.5.7-r2"
+    },
+    {
+      "arch": "x86_64",
+      "name": "zxing-cpp",
+      "version": "2.3.0-r1"
+    }
+  ],
+  "installer_sha256": "3dd03b3e5dfd6be3fd09ae0ba9b091626aa7c7cf20e0c853607716a135e444f5",
+  "platform": "linux/amd64",
+  "role": "worker-runtime",
+  "roots": [
+    "bash=5.3.3-r1",
+    "clamav=1.4.4-r0",
+    "ffmpeg=8.0.1-r1",
+    "font-noto-cjk=0_git20220127-r1",
+    "font-noto=2025.12.01-r0",
+    "gzip=1.14-r3",
+    "libcrypto3=3.5.9-r0",
+    "libreoffice=25.8.1.1-r5",
+    "libssl3=3.5.9-r0",
+    "poppler-utils=25.12.0-r0",
+    "tesseract-ocr-data-chi_sim=5.5.1-r0",
+    "tesseract-ocr-data-eng=5.5.1-r0",
+    "tesseract-ocr=5.5.1-r0",
+    "vips-tools=8.17.3-r1",
+    "xz=5.8.4-r0",
+    "zstd=1.5.7-r2"
+  ],
+  "schema_version": 1,
+  "trusted_keys": [
+    {
+      "name": "alpine-devel@lists.alpinelinux.org-4a6a0840.rsa.pub",
+      "sha256": "9c102bcc376af1498d549b77bdbfa815ae86faa1d2d82f040e616b18ef2df2d4"
+    },
+    {
+      "name": "alpine-devel@lists.alpinelinux.org-5261cecb.rsa.pub",
+      "sha256": "12f899e55a7691225603d6fb3324940fc51cd7f133e7ead788663c2b7eecb00c"
+    },
+    {
+      "name": "alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub",
+      "sha256": "207e4696d3c05f7cb05966aee557307151f1f00217af4143c1bcaf33b8df733f"
+    }
+  ]
+}

@@ -1,0 +1,1181 @@
+{
+  "alpine_arch": "aarch64",
+  "apk_tools": "apk-tools 3.0.6-r0, compiled for aarch64.",
+  "apks": [
+    {
+      "arch": "aarch64",
+      "file": "acl-libs-2.3.2-r1.apk",
+      "name": "acl-libs",
+      "sha256": "6b056aaabe34eac2f86e4f4e86a47e6580b8e521e56e39c9ff0e69e44906c9ca",
+      "size": 15296,
+      "version": "2.3.2-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "bash-5.3.3-r1.apk",
+      "name": "bash",
+      "sha256": "5557dc5d3dbf3bb3e64f7aad4cfe535a6bffe4c2c13b81d527ef25dd6c438652",
+      "size": 542149,
+      "version": "5.3.3-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "brotli-libs-1.2.1-r0.apk",
+      "name": "brotli-libs",
+      "sha256": "bec9ee522095e9fd01113d8732119847944e3152f228034246a33e2ab82e4195",
+      "size": 424994,
+      "version": "1.2.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "c-ares-1.34.9-r0.apk",
+      "name": "c-ares",
+      "sha256": "2af302c4a232fff2abeb56ec9f16edabdb06f0e5f8d040d6e466e91f1c473d00",
+      "size": 110972,
+      "version": "1.34.9-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "curl-8.23.0-r0.apk",
+      "name": "curl",
+      "sha256": "0cfccc09e110f49c6008f1969e0d203023934157ca62282fdb8752ea16eb2a66",
+      "size": 180135,
+      "version": "8.23.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libblkid-2.41.6-r1.apk",
+      "name": "libblkid",
+      "sha256": "0372923ddcaa28ec8f97992d2a03338ab6dde89686727c6ee54c210725e84724",
+      "size": 93551,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libcrypto3-3.5.9-r0.apk",
+      "name": "libcrypto3",
+      "sha256": "3b0bd7aaac36d49216f47d025f303dafb6da8d05bd258f71900d3b6156d36012",
+      "size": 2286808,
+      "version": "3.5.9-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libcurl-8.23.0-r0.apk",
+      "name": "libcurl",
+      "sha256": "a7cf7d0813d3a96f2cb65fbf873e8a8661866a843f2b7769b629024d9e5809bc",
+      "size": 365710,
+      "version": "8.23.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libeconf-0.8.3-r0.apk",
+      "name": "libeconf",
+      "sha256": "d450d85a7ee3b9940639c0f6ea2f8b7feea821bbc3828256ec784437082aefde",
+      "size": 27249,
+      "version": "0.8.3-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libexpat-2.9.0-r0.apk",
+      "name": "libexpat",
+      "sha256": "a9d67ab6d0cd53c7695cfadb7dfbc8c805d341246284b6562432fc08e380547a",
+      "size": 61877,
+      "version": "2.9.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libfdisk-2.41.6-r1.apk",
+      "name": "libfdisk",
+      "sha256": "4fae8b4fa35e4b79889cb8cbe678bad94fa62b98d1642f071e47eafd05836126",
+      "size": 120728,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libmount-2.41.6-r1.apk",
+      "name": "libmount",
+      "sha256": "81aa5a35ec63c681f2b4d585f66d8fc5f9c531711f2c3daadb9d7a8c58d086c8",
+      "size": 121945,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libpq-18.6-r0.apk",
+      "name": "libpq",
+      "sha256": "4562deb80f6638ae7c5d10e786c39e82ebebebce5e66e19da84eb74b6c531519",
+      "size": 158065,
+      "version": "18.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libsmartcols-2.41.6-r1.apk",
+      "name": "libsmartcols",
+      "sha256": "b9dc7207a94ecfe960c43e3a2447712b78da7a188647c57b2286f4cb57bf3267",
+      "size": 55571,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libssl3-3.5.9-r0.apk",
+      "name": "libssl3",
+      "sha256": "cdb3762116994f767cd1da423fa8004bd36b2e3802e3a1343786a40f00a5030e",
+      "size": 373026,
+      "version": "3.5.9-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libuuid-2.41.6-r1.apk",
+      "name": "libuuid",
+      "sha256": "4dd5ed2791104a0043c4f27e433200117a36421a9bcd65906ce4b5c79284e478",
+      "size": 15375,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libxml2-2.13.9-r1.apk",
+      "name": "libxml2",
+      "sha256": "91d3e730edbd5214c501696725e7af9a93e12a9dd6a296e719dca2f3de0697d5",
+      "size": 496744,
+      "version": "2.13.9-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "libxxhash-0.8.3-r0.apk",
+      "name": "libxxhash",
+      "sha256": "e386829780b1bb7a28c88de94ecae56ca261fff88f10d6f845c0a7355f795a99",
+      "size": 21040,
+      "version": "0.8.3-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "lz4-libs-1.10.0-r0.apk",
+      "name": "lz4-libs",
+      "sha256": "5e03989d703634faa3222ec1e2a634393fd28a1114cf6d14eaf64a6d4b0354bd",
+      "size": 82504,
+      "version": "1.10.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "mount-2.41.6-r1.apk",
+      "name": "mount",
+      "sha256": "4fd7a1d357af90849446b8c5f8d5ca9ae0e2d20eb42deaa95b3baa33a2e944c2",
+      "size": 15151,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "nghttp2-libs-1.69.0-r0.apk",
+      "name": "nghttp2-libs",
+      "sha256": "2e17aa1d7d4a37b2d029210d239b8b2e4ac40748d9a8c8912a6b607011034fd1",
+      "size": 63628,
+      "version": "1.69.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "openssh-client-common-10.2_p1-r0.apk",
+      "name": "openssh-client-common",
+      "sha256": "6cdaff1e0ef45f60f3ee9cbecc8c24fa57bb9f3442f2548272fb3273d3bb2f5c",
+      "size": 860013,
+      "version": "10.2_p1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "openssh-client-default-10.2_p1-r0.apk",
+      "name": "openssh-client-default",
+      "sha256": "c221efc67cae60fc325ebce7cea2de68dbcc159478e668aa5c7074c13ae6d520",
+      "size": 363840,
+      "version": "10.2_p1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "openssh-keygen-10.2_p1-r0.apk",
+      "name": "openssh-keygen",
+      "sha256": "bed00eeec4f8aa00328cd023ff4a6df4e60cac0b65253328532d74b96097d5dc",
+      "size": 202155,
+      "version": "10.2_p1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "pcre2-10.49-r0.apk",
+      "name": "pcre2",
+      "sha256": "a0af38fe98cb22c358aca1e1e504141c6673efef7635c539a914b83fb5c13b58",
+      "size": 320292,
+      "version": "10.49-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "popt-1.19-r4.apk",
+      "name": "popt",
+      "sha256": "858fae68445547f092e361925cedb344b7a0fd27eec1f652e5ba29a72f796942",
+      "size": 22016,
+      "version": "1.19-r4"
+    },
+    {
+      "arch": "noarch",
+      "file": "postgresql-common-1.2-r2.apk",
+      "name": "postgresql-common",
+      "sha256": "8c27827ea79b2b131508d70efea4076efac5f88291b25175bbd923f42c1d57f1",
+      "size": 4614,
+      "version": "1.2-r2"
+    },
+    {
+      "arch": "aarch64",
+      "file": "postgresql18-client-18.6-r0.apk",
+      "name": "postgresql18-client",
+      "sha256": "0886214f8ec4191e684f1ea37f92a911acc2d9b2ac145057b036565fe296f656",
+      "size": 1388093,
+      "version": "18.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "readline-8.3.1-r0.apk",
+      "name": "readline",
+      "sha256": "70d288a6c3d8daf19b10fb220120d2ebd6f154011c96ca5bc84923b658cb21f7",
+      "size": 129698,
+      "version": "8.3.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "rsync-3.5.0-r0.apk",
+      "name": "rsync",
+      "sha256": "b5c8f9508dc652cfe39f60ee1a3ab645d61ce5ed694d7813b093512080a4996c",
+      "size": 233842,
+      "version": "3.5.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "setarch-2.41.6-r1.apk",
+      "name": "setarch",
+      "sha256": "e8391acdfecd99b1369bcad1ba85d241b7b56f50e4f1b667dcff4c3b54950357",
+      "size": 8403,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "skalibs-libs-2.14.4.0-r0.apk",
+      "name": "skalibs-libs",
+      "sha256": "f1c33c73d842c98d99033833eaf681819b0f5b51310a6e286c2eb88b9a88ed97",
+      "size": 83952,
+      "version": "2.14.4.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "sqlite-3.53.4-r0.apk",
+      "name": "sqlite",
+      "sha256": "55c5f9d617818f75d0cdfafdc8054629988e5a39422f19357e6f7d82ae429502",
+      "size": 1062415,
+      "version": "3.53.4-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "tiff-4.7.2-r0.apk",
+      "name": "tiff",
+      "sha256": "e034c81b17144ebbc4f8ec50e2b73ac60eb8ffbf16ee25d07f7ea8cd2180d20e",
+      "size": 167276,
+      "version": "4.7.2-r0"
+    },
+    {
+      "arch": "noarch",
+      "file": "tzdata-2026e-r0.apk",
+      "name": "tzdata",
+      "sha256": "011514b53806fd660507958aaa28af8b896060bc10c4c4507fab1a13fff37da0",
+      "size": 190905,
+      "version": "2026e-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "util-linux-misc-2.41.6-r1.apk",
+      "name": "util-linux-misc",
+      "sha256": "51a9583816edcbacf8d584f253f924404317dd2da38ad750405f35148bdb870e",
+      "size": 855268,
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "file": "utmps-libs-0.1.3.1-r0.apk",
+      "name": "utmps-libs",
+      "sha256": "dbaa260e4328738d51b2ec77fdda9037cdbd67047465de5b2a30dce9a66f8fff",
+      "size": 5759,
+      "version": "0.1.3.1-r0"
+    }
+  ],
+  "base_source_digest": "sha256:7dd09a6c4f8cab9a2d2cb98fb39790f220e8bc2ea106b2cebde64b90405e0be8",
+  "before": [
+    {
+      "arch": "aarch64",
+      "name": "alpine-baselayout",
+      "version": "3.7.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "alpine-baselayout-data",
+      "version": "3.7.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "alpine-keys",
+      "version": "2.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "alpine-release",
+      "version": "3.23.4-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "aom-libs",
+      "version": "3.13.1-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "apk-tools",
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "brotli-libs",
+      "version": "1.2.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "busybox",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "aarch64",
+      "name": "busybox-binsh",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "aarch64",
+      "name": "c-ares",
+      "version": "1.34.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "ca-certificates",
+      "version": "20260413-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "ca-certificates-bundle",
+      "version": "20260413-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "curl",
+      "version": "8.17.0-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "fontconfig",
+      "version": "2.17.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "freetype",
+      "version": "2.14.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "geoip",
+      "version": "1.6.12-r6"
+    },
+    {
+      "arch": "aarch64",
+      "name": "gettext-envsubst",
+      "version": "0.24.1-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libapk",
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libavif",
+      "version": "1.3.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libbsd",
+      "version": "0.12.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libbz2",
+      "version": "1.0.8-r6"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libcrypto3",
+      "version": "3.5.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libcurl",
+      "version": "8.17.0-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libdav1d",
+      "version": "1.5.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libedit",
+      "version": "20251016.3.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libexpat",
+      "version": "2.7.5-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libgcc",
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libgd",
+      "version": "2.3.3-r10"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libice",
+      "version": "1.1.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libidn2",
+      "version": "2.3.8-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libintl",
+      "version": "0.24.1-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libjpeg-turbo",
+      "version": "3.1.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libmd",
+      "version": "1.1.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libncursesw",
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libpng",
+      "version": "1.6.57-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libpsl",
+      "version": "0.21.5-r3"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libsharpyuv",
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libsm",
+      "version": "1.2.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libssl3",
+      "version": "3.5.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libstdc++",
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libunistring",
+      "version": "1.4.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libuuid",
+      "version": "2.41.4-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libwebp",
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libx11",
+      "version": "1.8.12-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxau",
+      "version": "1.0.12-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxcb",
+      "version": "1.17.0-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxdmcp",
+      "version": "1.1.5-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxext",
+      "version": "1.3.6-r2"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxml2",
+      "version": "2.13.9-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxpm",
+      "version": "3.5.17-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxslt",
+      "version": "1.1.43-r3"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxt",
+      "version": "1.3.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libyuv",
+      "version": "0.0.1887.20251502-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "musl",
+      "version": "1.2.5-r23"
+    },
+    {
+      "arch": "aarch64",
+      "name": "musl-utils",
+      "version": "1.2.5-r23"
+    },
+    {
+      "arch": "aarch64",
+      "name": "ncurses-terminfo-base",
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nghttp2-libs",
+      "version": "1.68.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nghttp3",
+      "version": "1.13.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx",
+      "version": "1.29.8-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-acme",
+      "version": "1.29.8.0.3.1-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-geoip",
+      "version": "1.29.8-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-image-filter",
+      "version": "1.29.8-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-njs",
+      "version": "1.29.8.0.9.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-xslt",
+      "version": "1.29.8-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "pcre2",
+      "version": "10.47-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "scanelf",
+      "version": "1.3.8-r2"
+    },
+    {
+      "arch": "aarch64",
+      "name": "ssl_client",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "aarch64",
+      "name": "tiff",
+      "version": "4.7.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "tzdata",
+      "version": "2026a-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "xz-libs",
+      "version": "5.8.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "zlib",
+      "version": "1.3.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "zstd-libs",
+      "version": "1.5.7-r2"
+    }
+  ],
+  "installed": [
+    {
+      "arch": "aarch64",
+      "name": "acl-libs",
+      "version": "2.3.2-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "alpine-baselayout",
+      "version": "3.7.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "alpine-baselayout-data",
+      "version": "3.7.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "alpine-keys",
+      "version": "2.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "alpine-release",
+      "version": "3.23.4-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "aom-libs",
+      "version": "3.13.1-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "apk-tools",
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "bash",
+      "version": "5.3.3-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "brotli-libs",
+      "version": "1.2.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "busybox",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "aarch64",
+      "name": "busybox-binsh",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "aarch64",
+      "name": "c-ares",
+      "version": "1.34.9-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "ca-certificates",
+      "version": "20260413-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "ca-certificates-bundle",
+      "version": "20260413-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "curl",
+      "version": "8.23.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "fontconfig",
+      "version": "2.17.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "freetype",
+      "version": "2.14.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "geoip",
+      "version": "1.6.12-r6"
+    },
+    {
+      "arch": "aarch64",
+      "name": "gettext-envsubst",
+      "version": "0.24.1-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libapk",
+      "version": "3.0.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libavif",
+      "version": "1.3.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libblkid",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libbsd",
+      "version": "0.12.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libbz2",
+      "version": "1.0.8-r6"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libcrypto3",
+      "version": "3.5.9-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libcurl",
+      "version": "8.23.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libdav1d",
+      "version": "1.5.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libeconf",
+      "version": "0.8.3-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libedit",
+      "version": "20251016.3.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libexpat",
+      "version": "2.9.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libfdisk",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libgcc",
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libgd",
+      "version": "2.3.3-r10"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libice",
+      "version": "1.1.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libidn2",
+      "version": "2.3.8-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libintl",
+      "version": "0.24.1-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libjpeg-turbo",
+      "version": "3.1.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libmd",
+      "version": "1.1.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libmount",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libncursesw",
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libpng",
+      "version": "1.6.57-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libpq",
+      "version": "18.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libpsl",
+      "version": "0.21.5-r3"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libsharpyuv",
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libsm",
+      "version": "1.2.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libsmartcols",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libssl3",
+      "version": "3.5.9-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libstdc++",
+      "version": "15.2.0-r2"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libunistring",
+      "version": "1.4.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libuuid",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libwebp",
+      "version": "1.6.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libx11",
+      "version": "1.8.12-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxau",
+      "version": "1.0.12-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxcb",
+      "version": "1.17.0-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxdmcp",
+      "version": "1.1.5-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxext",
+      "version": "1.3.6-r2"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxml2",
+      "version": "2.13.9-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxpm",
+      "version": "3.5.17-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxslt",
+      "version": "1.1.43-r3"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxt",
+      "version": "1.3.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libxxhash",
+      "version": "0.8.3-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "libyuv",
+      "version": "0.0.1887.20251502-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "lz4-libs",
+      "version": "1.10.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "mount",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "musl",
+      "version": "1.2.5-r23"
+    },
+    {
+      "arch": "aarch64",
+      "name": "musl-utils",
+      "version": "1.2.5-r23"
+    },
+    {
+      "arch": "aarch64",
+      "name": "ncurses-terminfo-base",
+      "version": "6.5_p20251123-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nghttp2-libs",
+      "version": "1.69.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx",
+      "version": "1.29.8-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-acme",
+      "version": "1.29.8.0.3.1-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-geoip",
+      "version": "1.29.8-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-image-filter",
+      "version": "1.29.8-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-njs",
+      "version": "1.29.8.0.9.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "nginx-module-xslt",
+      "version": "1.29.8-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "openssh-client-common",
+      "version": "10.2_p1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "openssh-client-default",
+      "version": "10.2_p1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "openssh-keygen",
+      "version": "10.2_p1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "pcre2",
+      "version": "10.49-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "popt",
+      "version": "1.19-r4"
+    },
+    {
+      "arch": "noarch",
+      "name": "postgresql-common",
+      "version": "1.2-r2"
+    },
+    {
+      "arch": "aarch64",
+      "name": "postgresql18-client",
+      "version": "18.6-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "readline",
+      "version": "8.3.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "rsync",
+      "version": "3.5.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "scanelf",
+      "version": "1.3.8-r2"
+    },
+    {
+      "arch": "aarch64",
+      "name": "setarch",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "skalibs-libs",
+      "version": "2.14.4.0-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "sqlite",
+      "version": "3.53.4-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "ssl_client",
+      "version": "1.37.0-r30"
+    },
+    {
+      "arch": "aarch64",
+      "name": "tiff",
+      "version": "4.7.2-r0"
+    },
+    {
+      "arch": "noarch",
+      "name": "tzdata",
+      "version": "2026e-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "util-linux-misc",
+      "version": "2.41.6-r1"
+    },
+    {
+      "arch": "aarch64",
+      "name": "utmps-libs",
+      "version": "0.1.3.1-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "xz-libs",
+      "version": "5.8.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "zlib",
+      "version": "1.3.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "name": "zstd-libs",
+      "version": "1.5.7-r2"
+    }
+  ],
+  "installer_sha256": "3dd03b3e5dfd6be3fd09ae0ba9b091626aa7c7cf20e0c853607716a135e444f5",
+  "platform": "linux/arm64",
+  "role": "core-runtime",
+  "roots": [
+    "bash=5.3.3-r1",
+    "brotli-libs=1.2.1-r0",
+    "c-ares=1.34.9-r0",
+    "curl=8.23.0-r0",
+    "libcrypto3=3.5.9-r0",
+    "libexpat=2.9.0-r0",
+    "libssl3=3.5.9-r0",
+    "libuuid=2.41.6-r1",
+    "libxml2=2.13.9-r1",
+    "mount=2.41.6-r1",
+    "nghttp2-libs=1.69.0-r0",
+    "openssh-client-default=10.2_p1-r0",
+    "pcre2=10.49-r0",
+    "postgresql18-client=18.6-r0",
+    "rsync=3.5.0-r0",
+    "sqlite=3.53.4-r0",
+    "tiff=4.7.2-r0",
+    "tzdata=2026e-r0",
+    "util-linux-misc=2.41.6-r1"
+  ],
+  "schema_version": 1,
+  "trusted_keys": [
+    {
+      "name": "alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub",
+      "sha256": "73867d92083f2f8ab899a26ccda7ef63dfaa0032a938620eda605558958a8041"
+    },
+    {
+      "name": "alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub",
+      "sha256": "d11f6b21c61b4274e182eb888883a8ba8acdbf820dcc7a6d82a7d9fc2fd2836d"
+    },
+    {
+      "name": "nginx_signing.rsa.pub",
+      "sha256": "ff7cf138acc09f2a5029300ab713fe6a1440605fca72e2bab76a4da9206fec87"
+    }
+  ]
+}

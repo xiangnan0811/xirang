@@ -340,6 +340,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
 
+      - name: Test preserved build input policy
+        run: python3 scripts/test-build-inputs.py
+
+      - name: Verify preserved build input contract
+        run: python3 scripts/build-inputs.py verify --lock deploy/build-inputs/lock.json
+
       - name: Check asset-content Nginx policy
         run: bash scripts/check-asset-content-nginx.sh
 
@@ -431,6 +437,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Verify preserved build input contract
+        run: python3 scripts/build-inputs.py verify --lock deploy/build-inputs/lock.json
 
       - name: Build native Worker closure image
         env:
