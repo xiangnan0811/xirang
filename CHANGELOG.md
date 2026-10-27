@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.73.4](https://github.com/xiangnan0811/xirang/compare/v0.73.3...v0.73.4) (2026-10-27)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** 更新 Core curl/libcurl 并修复 Brotli 解码器漏洞 ([141c631](https://github.com/xiangnan0811/xirang/commit/141c6312a1b761b1d5e1e3010130917edc1bbf18))
+* **dev-deps:** 修复 lint 工具链 zod 集合校验资源耗尽 ([141c631](https://github.com/xiangnan0811/xirang/commit/141c6312a1b761b1d5e1e3010130917edc1bbf18))
+
 ### Core 构建依赖修复
 
 - 将 Core 镜像的 curl 精确锁定从软件源已不可安装的 `8.22.0-r0` 更新为 `8.23.0-r0`，由 Alpine 的同版本依赖约束同步更新 libcurl，恢复镜像构建；保留基础镜像 digest、其他显式包锁定及双架构构建、漏洞扫描和 readiness 门禁。
