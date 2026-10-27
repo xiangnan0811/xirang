@@ -111,6 +111,17 @@ class InputManifestTests(unittest.TestCase):
             with self.assertRaises(bi.InvalidInput):
                 bi.inventory(path)
 
+    def test_real_alpine_mixed_case_package_name_is_preserved_exactly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "installed.tsv"
+            path.write_text("libX11\t1.8.12-r1\tx86_64\n")
+            self.assertEqual(bi.inventory(path), [package("libX11", "1.8.12-r1")])
+        value = example_manifest()
+        value["roots"] = ["libX11=1.0-r0"]
+        value["installed"][1]["name"] = "libX11"
+        value["apks"][0].update(name="libX11", file="libX11-1.0-r0.apk")
+        bi.validate_manifest(value)
+
 
 class ProjectionTests(unittest.TestCase):
     def setUp(self):

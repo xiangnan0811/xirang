@@ -33,8 +33,8 @@ ROLES = ("cgo-builder", "supercronic-builder", "core-runtime", "worker-runtime")
 BASES = {"cgo-builder": "go", "supercronic-builder": "go", "core-runtime": "nginx", "worker-runtime": "alpine"}
 WORKER_ROLES = ("cgo-builder", "worker-runtime")
 HEX = re.compile(r"[a-f0-9]{64}\Z")
-PIN = re.compile(r"([a-z0-9][a-z0-9+_.-]*)=([A-Za-z0-9][A-Za-z0-9+_.~-]*)\Z")
-PACKAGE_NAME = re.compile(r"[a-z0-9][a-z0-9+_.-]*\Z")
+PIN = re.compile(r"([A-Za-z0-9][A-Za-z0-9+_.-]*)=([A-Za-z0-9][A-Za-z0-9+_.~-]*)\Z")
+PACKAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9+_.-]*\Z")
 ACCEPT = ", ".join(("application/vnd.oci.image.index.v1+json", "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json", "application/vnd.docker.distribution.manifest.v2+json"))
 MAX_JSON = 16 * 1024 * 1024
 
@@ -137,7 +137,7 @@ def inventory(path):
     rows = []
     for line in path.read_text().splitlines():
         fields = line.split("\t")
-        require(len(fields) == 3 and PACKAGE_NAME.fullmatch(fields[0]) and PIN.fullmatch(fields[0] + "=" + fields[1]), "invalid APK inventory row")
+        require(len(fields) == 3 and PACKAGE_NAME.fullmatch(fields[0]) and PIN.fullmatch(fields[0] + "=" + fields[1]), f"invalid APK inventory row: {line!r}")
         require(fields[2] in ("x86_64", "aarch64", "noarch"), "invalid package architecture")
         rows.append(dict(zip(("name", "version", "arch"), fields)))
     require(rows and len({x["name"] for x in rows}) == len(rows), "empty or duplicate package inventory")
