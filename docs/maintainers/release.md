@@ -28,6 +28,8 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 普通 PR 的提交语义和合并前门禁由贡献指南规定。合并后检查 [Release Please](../../.github/workflows/release-please.yml) 是否成功创建或更新 Release PR；没有生成正式 release 时，交付说明明确记录没有预期的 GitHub Release 或 Docker Hub 发布，仍需处理自动化失败。
 
+已 squash 合并的 PR 若包含需要发布、但未被提交语义识别的修复，可按 [Release Please 官方说明](https://github.com/googleapis/release-please#how-can-i-fix-release-notes)，在原 PR 正文追加带日期的发布决定和 `BEGIN_COMMIT_OVERRIDE` / `END_COMMIT_OVERRIDE` 区块；保留原始变更与验证事实，在块内补齐真实的 `fix` 条目并按需添加 `Release-As:`。重新运行 Release Please 后核对实际生成的 Release PR，仍须完成下述说明审阅、检查与镜像门禁。该方式不改写 Git 提交或旧 tag；仅改已合并 PR 标题不会更新提交语义，普通 merge 不适用此 override 路径。
+
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
 
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
