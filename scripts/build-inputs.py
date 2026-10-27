@@ -454,9 +454,16 @@ def publish_platform(args):
         with tempfile.TemporaryDirectory(prefix="xirang-input-carrier-") as temp:
             dockerfile = Path(temp) / "Dockerfile"
             labels = {"role": role, "manifest-sha256": profile["manifest_sha256"], "payload-sha256": profile["payload_sha256"]}
-            dockerfile.write_text("FROM scratch\nLABEL org.opencontainers.image.source=\"https://github.com/xiangnan0811/xirang\"\n" + "".join(f'LABEL io.xirang.build-inputs.{key}="{value}"\n' for key, value in labels.items()) + "COPY . /inputs/\n")
-            run(["docker", "build", "--platform", f"linux/{arch}", "--build-arg", "SOURCE_DATE_EPOCH=0", "-f", dockerfile, "-t", tag, directory])
-        image_id = run(["docker", "image", "inspect", "--format", "{{.Id}}", tag], capture=True)
+            require({p.name for p in directory.iterdir() if p.is_dir()} == {"apks", "evidence"}, "unexpected archive directory")
+            metadata_files = sorted(p.name for p in directory.iterdir() if p.is_file())
+            # Keep large APK bytes in their own layer. Fresh signed repository
+            # indices and review metadata then reuse unchanged package blobs.
+            dockerfile.write_text("FROM scratch\nCOPY apks/ /inputs/apks/\nCOPY evidence/ /inputs/evidence/\nCOPY " + json.dumps(metadata_files + ["/inputs/"]) + "\nLABEL org.opencontainers.image.source=\"https://github.com/xiangnan0811/xirang\"\n" + "".join(f'LABEL io.xirang.build-inputs.{key}="{value}"\n' for key, value in labels.items()))
+            build = ["docker", "buildx", "build", "--no-cache", "--platform", f"linux/{arch}", "--output", "type=docker,rewrite-timestamp=true", "--provenance=false", "--build-arg", "SOURCE_DATE_EPOCH=0", "-f", dockerfile, "-t", tag, directory]
+            run(build)
+            image_id = run(["docker", "image", "inspect", "--format", "{{.Id}}", tag], capture=True)
+            run(build)
+            require(run(["docker", "image", "inspect", "--format", "{{.Id}}", tag], capture=True) == image_id, "uncached carrier builds produced different layer/config identities")
         existing = transport.get(tag, missing=True)
         require(existing is None or existing["value"].get("config", {}).get("digest") == image_id, "immutable input tag collision")
         if existing is None:
@@ -561,6 +568,13 @@ def validate_lock(lock, manifests, spec=None):
     return lock
 
 
+def reject_direct_apk_commands(text):
+    instructions = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    # Global apk options may precede the subcommand. All package operations
+    # belong inside the verified installer, so consumers need no apk executable.
+    require(not re.search(r"(?<![A-Za-z0-9_.-])apk(?:\.static)?(?=$|[^A-Za-z0-9_./-])", instructions), "Dockerfile contains a direct APK command outside the offline installer")
+
+
 def verify(args):
     lock_path = args.lock.resolve()
     lock = validate_lock(read_json(lock_path), lock_path.parent / "manifests", load_spec())
@@ -573,7 +587,7 @@ def verify(args):
                 require(re.search(r"^FROM " + re.escape(lock["bases"][key]["ref"]) + r"(?:\s|$)", text, re.M), f"Dockerfile does not consume retained {key} base")
             for role in required_roles:
                 require(re.search(r"^FROM " + re.escape(lock["profiles"][role]["ref"]) + r" AS " + re.escape(role + "-inputs") + r"$", text, re.M), f"Dockerfile does not consume locked {role} input")
-            require(not re.search(r"\bapk\s+(?:add|fetch|update|upgrade)\b", text), "Dockerfile contains an online APK resolution path")
+            reject_direct_apk_commands(text)
     print("Build input lock, full transaction manifests and consumer identities verified")
 
 

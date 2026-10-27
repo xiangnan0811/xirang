@@ -149,6 +149,12 @@ class ProjectionTests(unittest.TestCase):
 
 
 class ArchiveBoundaryTests(unittest.TestCase):
+    def test_consumer_cannot_add_online_apk_fallback_with_global_options(self):
+        for instruction in ("RUN apk add foo", "RUN apk --no-cache add foo", "RUN apk --update-cache add foo", "RUN /sbin/apk --no-cache add foo", "RUN sh -c 'apk update'", "RUN set -eu;apk fetch foo", 'RUN ["apk", "--no-cache", "add", "foo"]', "RUN /tmp/apk.static --update-cache add foo"):
+            with self.subTest(instruction=instruction), self.assertRaises(bi.InvalidInput):
+                bi.reject_direct_apk_commands(instruction)
+        bi.reject_direct_apk_commands("# apk add appears only in historical commentary\nRUN rm -rf /var/cache/apk/*\nRUN sh /build-inputs/install.sh cgo-builder amd64 -- gcc=1-r0")
+
     def test_cache_name_is_normalized_from_native_apk_metadata_without_changing_bytes(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
