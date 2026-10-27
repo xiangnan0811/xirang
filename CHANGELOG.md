@@ -9,6 +9,13 @@
 - 换版前暂停 backfill、排空旧 Worker 在途处理，保全已验签 bundle、私有数据、数据库、匹配密钥与配置，再按匹配源码和架构切换；回退须恢复相配的 Core、Worker 与 bundle。无新增 API、运行时配置或数据库 schema migration，合并和归档成功不表示生产已部署。
 - 新保留能力从采用真实输入 lock 的源码开始生效，不追溯修复没有归档输入的旧 tag。历史源码、旧镜像及其漏洞风险仍按对应版本说明处理；可重建不等于可重新发布，旧输入须通过当前扫描门槛。`base-*`、`inputs-*` 仅为构建输入标签，不移动产品标签或重做既有补丁发行。
 
+## [0.73.5](https://github.com/xiangnan0811/xirang/compare/v0.73.4...v0.73.5) (2026-10-27)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** preserve complete Alpine inputs for Core and Worker ([#655](https://github.com/xiangnan0811/xirang/issues/655)) ([af7ea3a](https://github.com/xiangnan0811/xirang/commit/af7ea3ae16b9a61f00e22dff1f6e35626a2e83cc))
+
 ## [0.73.4](https://github.com/xiangnan0811/xirang/compare/v0.73.3...v0.73.4) (2026-10-27)
 
 
