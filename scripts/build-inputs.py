@@ -244,8 +244,10 @@ def manifest_name(role, arch):
     return f"{role}-{arch}.json"
 
 
-def normalize_cached_apks(directory, installed):
+def normalize_cached_apks(directory, installed, native_arch):
+    require(native_arch in ARCHES.values() and all(x["arch"] in (native_arch, "noarch") for x in installed), "online inventory contains a different native architecture")
     filenames = {x["name"] + "-" + x["version"] + ".apk": x for x in installed}
+    offline = {x["name"]: dict(x) for x in installed}
     # apk cache names contain a hash suffix. Read metadata with the same native
     # apk-tools that verified the signed bytes; never infer package identity by
     # removing a filename suffix (package names/versions can contain dots).
@@ -256,7 +258,11 @@ def normalize_cached_apks(directory, installed):
         filename, name, version, package_arch = fields
         require(re.fullmatch(r"[A-Za-z0-9+_.-]+\.apk", filename) and not filename.startswith(".") and filename not in downloaded, "invalid or duplicate cache filename")
         target = name + "-" + version + ".apk"
-        require(target in filenames and filenames[target] == {"name": name, "version": version, "arch": package_arch}, "downloaded APK metadata differs from installed inventory")
+        require(target in filenames and filenames[target]["name"] == name and filenames[target]["version"] == version and package_arch in (filenames[target]["arch"], "noarch"), f"downloaded APK metadata differs from installed inventory: {filename}, APK={name}/{version}/{package_arch}, installed={filenames.get(target)}")
+        # Alpine's repository index may rewrite noarch to the repository's
+        # native architecture. A local APK install uses its own signed metadata.
+        # Preserve the online evidence and require the exact offline inventory.
+        offline[name]["arch"] = package_arch
         require(target not in downloaded.values(), "duplicate downloaded APK identity")
         downloaded[filename] = target
     require(set(downloaded) == {p.name for p in (directory / "apks").iterdir()}, "downloaded APK metadata is incomplete")
@@ -267,11 +273,14 @@ def normalize_cached_apks(directory, installed):
             destination = directory / "apks" / target
             require(not destination.exists(), "normalized APK filename collision")
             source.rename(destination)
+    return sorted(offline.values(), key=lambda x: x["name"])
 
 
 def snapshot_manifest(directory, role, arch, source_digest):
-    installed = inventory(directory / "installed.tsv")
-    normalize_cached_apks(directory, installed)
+    online = (directory / "installed.tsv").read_bytes()
+    installed = normalize_cached_apks(directory, inventory(directory / "installed.tsv"), ARCHES[arch])
+    (directory / "evidence/online-installed.tsv").write_bytes(online)
+    (directory / "installed.tsv").write_text("".join("\t".join(x[k] for k in ("name", "version", "arch")) + "\n" for x in installed))
     filenames = {x["name"] + "-" + x["version"] + ".apk": x for x in installed}
     apks = []
     for path in sorted((directory / "apks").iterdir()):

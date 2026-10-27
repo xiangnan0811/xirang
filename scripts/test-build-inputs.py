@@ -161,7 +161,7 @@ class ArchiveBoundaryTests(unittest.TestCase):
             (directory / "apks").mkdir()
             (directory / "apks/pkg.with.dots-1.2-r0.aabbccdd.apk").write_bytes(b"signed original")
             (directory / "downloaded.tsv").write_text("pkg.with.dots-1.2-r0.aabbccdd.apk\tpkg.with.dots\t1.2-r0\tx86_64\n")
-            bi.normalize_cached_apks(directory, [package("pkg.with.dots", "1.2-r0")])
+            bi.normalize_cached_apks(directory, [package("pkg.with.dots", "1.2-r0")], "x86_64")
             self.assertEqual((directory / "apks/pkg.with.dots-1.2-r0.apk").read_bytes(), b"signed original")
             self.assertEqual(len(list((directory / "apks").iterdir())), 1)
 
@@ -174,7 +174,28 @@ class ArchiveBoundaryTests(unittest.TestCase):
                 (directory / "apks/pkg.hash.apk").write_bytes(b"original")
                 (directory / "downloaded.tsv").write_text(row)
                 with self.assertRaises(bi.InvalidInput):
-                    bi.normalize_cached_apks(directory, [package("pkg")])
+                    bi.normalize_cached_apks(directory, [package("pkg")], "x86_64")
+
+    def test_signed_noarch_identity_is_preserved_for_local_replay(self):
+        for arch in ("x86_64", "aarch64"):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as temp:
+                directory = Path(temp)
+                (directory / "apks").mkdir()
+                (directory / "apks/git-init-template-2.54.0-r0.aabbccdd.apk").write_bytes(b"signed noarch package")
+                (directory / "downloaded.tsv").write_text("git-init-template-2.54.0-r0.aabbccdd.apk\tgit-init-template\t2.54.0-r0\tnoarch\n")
+                online = [package("base", arch=arch), package("git-init-template", "2.54.0-r0", arch)]
+                offline = bi.normalize_cached_apks(directory, online, arch)
+                self.assertEqual(online[1]["arch"], arch)
+                self.assertEqual(offline, [package("base", arch=arch), package("git-init-template", "2.54.0-r0", "noarch")])
+
+    def test_noarch_cannot_hide_foreign_native_online_inventory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / "apks").mkdir()
+            (directory / "apks/pkg.hash.apk").write_bytes(b"signed noarch")
+            (directory / "downloaded.tsv").write_text("pkg.hash.apk\tpkg\t1.0-r0\tnoarch\n")
+            with self.assertRaisesRegex(bi.InvalidInput, "different native architecture"):
+                bi.normalize_cached_apks(directory, [package("pkg", arch="aarch64")], "x86_64")
 
     def test_payload_identity_detects_byte_replacement_and_additional_files(self):
         with tempfile.TemporaryDirectory() as temp:
