@@ -176,7 +176,8 @@ def validate_manifest(value, role=None, arch=None):
     require(apks == sorted(apks, key=lambda x: x["file"]) and len({x["file"] for x in apks}) == len(apks), "APK ordering or duplicate file")
     before = {x["name"]: x for x in value["before"]}
     provided = {x["name"] for x in apks}
-    require(all(name in provided or entry == before.get(name) for name, entry in installed.items()), "new or upgraded package missing from APK transaction")
+    missing = [name + "=" + entry["version"] for name, entry in installed.items() if name not in provided and entry != before.get(name)]
+    require(not missing, f"new or upgraded package missing from APK transaction: {missing}")
     keys = value["trusted_keys"]
     require(isinstance(keys, list) and keys and all(set(x) == {"name", "sha256"} and re.fullmatch(r"[A-Za-z0-9@+_.-]+\.pub", x["name"]) and digest(x["sha256"]) for x in keys), "invalid trusted key evidence")
     require(keys == sorted(keys, key=lambda x: x["name"]) and len({x["name"] for x in keys}) == len(keys), "duplicate or unsorted trusted key")

@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest import mock
 import urllib.error
@@ -160,6 +161,22 @@ class ProjectionTests(unittest.TestCase):
 
 
 class ArchiveBoundaryTests(unittest.TestCase):
+    def test_capture_fetches_missing_metadata_packages_and_upgrades_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            before = directory / "before.tsv"
+            installed = directory / "installed.tsv"
+            downloaded = directory / "downloaded.tsv"
+            before.write_text("base\t1-r0\tx86_64\nlibrary\t1-r0\tx86_64\n")
+            installed.write_text("base\t1-r0\tx86_64\nlibrary\t2-r0\tx86_64\nlibreoffice\t25.8.1.1-r5\tx86_64\n")
+            downloaded.write_text("library-2-r0.hash.apk\tlibrary\t2-r0\tx86_64\n")
+            command = ["sh", str(bi.CAPTURE), "--missing-packages", str(before), str(installed), str(downloaded)]
+            self.assertEqual(subprocess.check_output(command, text=True).splitlines(), ["libreoffice=25.8.1.1-r5"])
+            downloaded.write_text("library-1-r0.hash.apk\tlibrary\t1-r0\tx86_64\n")
+            self.assertEqual(subprocess.check_output(command, text=True).splitlines(), ["library=2-r0", "libreoffice=25.8.1.1-r5"])
+            downloaded.write_text("")
+            self.assertEqual(subprocess.check_output(command, text=True).splitlines(), ["library=2-r0", "libreoffice=25.8.1.1-r5"])
+
     def test_consumer_cannot_add_online_apk_fallback_with_global_options(self):
         for instruction in ("RUN apk add foo", "RUN apk --no-cache add foo", "RUN apk --update-cache add foo", "RUN /sbin/apk --no-cache add foo", "RUN sh -c 'apk update'", "RUN set -eu;apk fetch foo", 'RUN ["apk", "--no-cache", "add", "foo"]', "RUN /tmp/apk.static --update-cache add foo"):
             with self.subTest(instruction=instruction), self.assertRaises(bi.InvalidInput):
