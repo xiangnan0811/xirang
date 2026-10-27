@@ -164,7 +164,7 @@ def validate_manifest(value, role=None, arch=None):
     installed = {x["name"]: x for x in value["installed"]}
     for root in value["roots"]:
         name, version = root.split("=")
-        require(name in installed and installed[name]["version"] == version, "installed inventory does not satisfy roots")
+        require(name in installed and installed[name]["version"] == version, f"root must pin a concrete installed package with its exact version: {root}")
     apks = value["apks"]
     require(isinstance(apks, list) and 0 < len(apks) <= 4096, "empty or oversized APK transaction")
     for package in apks:
