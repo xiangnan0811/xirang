@@ -6,14 +6,28 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/sshutil"
 )
 
 const rclonePreflightCanaryBytes = 64
+
+type rclonePreflightCleanupError struct {
+	cause error
+}
+
+func (err *rclonePreflightCleanupError) Error() string {
+	return "Rclone preflight staging cleanup failed"
+}
+
+func (err *rclonePreflightCleanupError) Unwrap() error {
+	return err.cause
+}
 
 type RclonePortableCommandPreflightRequest struct {
 	PreflightID            string
@@ -92,7 +106,7 @@ func NewCommandRclonePreflightPlane(
 func (plane *CommandRclonePreflightPlane) PreflightPortable(
 	ctx context.Context,
 	request RclonePortableCommandPreflightRequest,
-) (RclonePortableCommandPreflightResult, error) {
+) (result RclonePortableCommandPreflightResult, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -133,7 +147,14 @@ func (plane *CommandRclonePreflightPlane) PreflightPortable(
 	if err != nil {
 		return RclonePortableCommandPreflightResult{}, err
 	}
-	defer plane.staging.Cleanup(context.Background(), request.Runtime, ref) //nolint:errcheck // remote evidence is independent of local hygiene
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sshutil.CommandExecutionJoinTimeout)
+		defer cancel()
+		if err := plane.staging.Cleanup(cleanupCtx, request.Runtime, ref); err != nil {
+			result = RclonePortableCommandPreflightResult{}
+			resultErr = errors.Join(resultErr, &rclonePreflightCleanupError{cause: err})
+		}
+	}()
 
 	limits, err := plane.limits()
 	if err != nil {
@@ -202,7 +223,7 @@ func (plane *CommandRclonePreflightPlane) PreflightPortable(
 func (plane *CommandRclonePreflightPlane) WriteNativeCanary(
 	ctx context.Context,
 	request RcloneNativeCommandPreflightRequest,
-) (RcloneNativeCommandPreflightResult, error) {
+) (result RcloneNativeCommandPreflightResult, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -217,7 +238,14 @@ func (plane *CommandRclonePreflightPlane) WriteNativeCanary(
 	if err != nil {
 		return RcloneNativeCommandPreflightResult{}, err
 	}
-	defer plane.staging.Cleanup(context.Background(), request.Runtime, ref) //nolint:errcheck // remote evidence is independent of local hygiene
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sshutil.CommandExecutionJoinTimeout)
+		defer cancel()
+		if err := plane.staging.Cleanup(cleanupCtx, request.Runtime, ref); err != nil {
+			result = RcloneNativeCommandPreflightResult{}
+			resultErr = errors.Join(resultErr, &rclonePreflightCleanupError{cause: err})
+		}
+	}()
 	limits, err := plane.limits()
 	if err != nil {
 		return RcloneNativeCommandPreflightResult{}, err

@@ -132,6 +132,9 @@ jobs:
       REQUIRE_POSTGRES_GENERAL_TEST: "1"
       REQUIRE_POSTGRES_TASK_TERMINAL_TEST: "1"
       REQUIRE_POSTGRES_ESCALATION_PREVIEW_TEST: "1"
+      REQUIRE_POSTGRES_LEASE_TEST: "1"
+      REQUIRE_POSTGRES_REPOSITORY_TEST: "1"
+      REQUIRE_POSTGRES_PRODUCER_RETENTION_TEST: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -149,96 +152,19 @@ jobs:
       - name: Download modules
         run: go mod download
 
-      - name: Run PostgreSQL migration parity
-        # The full historical migration slice exceeds 20m on hosted runners.
-        env:
-          POSTGRES_TEST_TIMEOUT: 30m
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/database '^(Test.*Migration.*Postgres.*|TestPostgresTimestamptzScanUsesConfiguredUTC)$'
-      - name: Run PostgreSQL lifecycle migration contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL lifecycle migration contract' ./internal/database '^TestLifecycleEffectClaimAuditSlotMigrationPostgres(PristineDown|ClaimUsedDown|SlotUsedDown|Constraints|ClaimTransitionRebinding|UpgradeCutover)$'
+      - name: Test required PostgreSQL runner protocol
+        run: bash ../scripts/run-required-postgres-tests.test.sh
 
-      - name: Run PostgreSQL lifecycle retention contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL lifecycle retention contract' ./internal/backupasset/retention '^TestLifecycle(EffectClaimDualAdvancePostgres|EffectClaimLateLoserCannotMutatePostgres|EffectClaimProofFirstRecoveryPostgres|EffectClaimSameExecutorConcurrentPostgres|EffectClaimRenewsAcrossMultipleDeadlinesPostgres|EffectClaimCrashTakeoverPostgres|EffectClaimStaleFencePostgres|EffectClaimReceiptDeadlineRacePostgres|EffectClaimProvenDeadlineFenceRacePostgres|EffectClaimPartialWORMPostgres|EffectClaimInFlightDoesNotBlockPostgres|EffectClaimAbsoluteDeadlineAfterClaimPostgres|EffectClaimObserverHoldResumePostgres|EffectClaimIdentityConflictResumePostgres|EffectClaimNativeVersionReferencedResumePostgres|RcloneNativePrepareRenewExecutePostgres|LateHoldReceiptSettledAuditUsesRegistryPointDeletionPostgres|SettledAuditConcurrentBlockedTicksPostgres|SettledAuditSuccessAndBlockedShareSlotWriterPostgres|SettledAuditWriteTxRollbackPostgres|SettledAuditAttemptIsolationPostgres|SettledAuditStatusMatrixPostgres|SettledAuditStaleBlockedCallerReDerivesReceiptPostgres)$'
-      - name: Run PostgreSQL lifecycle runtime contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL lifecycle runtime contract' ./internal/backupasset/runtime '^TestLifecycleSettledAuditDetailPurgePostgres$'
+      - name: Run required PostgreSQL inventory
+        run: bash ../scripts/run-required-postgres-tests.sh --evidence-dir "${{ runner.temp }}/required-postgres-evidence"
 
-      - name: Run PostgreSQL Recovery behavior parity
-        run: go test ./internal/backupasset/recovery -run '^TestRecoveryBehaviorPostgres$' -count=1
-
-      - name: Run PostgreSQL Recovery authorization receipt contracts
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL Recovery authorization receipts' ./internal/backupasset/recovery '^TestRecoveryAuthorizationReceipt(RollbackBeforeCommit|ReaperHandlesAllEffectKinds)Postgres$'
-
-      - name: Run PostgreSQL Catalog behavior parity
-        run: go test ./internal/backupasset/catalog -run '^TestCatalogBehaviorPostgres$' -count=1
-
-      - name: Run PostgreSQL index lease recovery
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL index lease recovery' ./internal/backupasset '^TestIndexLeaseReclamationPostgres$'
-
-      - name: Run PostgreSQL Search behavior parity
-        run: go test ./internal/backupasset/search -run '^TestSearchBehaviorPostgres$' -count=1
-
-      - name: Run PostgreSQL Overlay behavior parity
-        run: go test ./internal/backupasset/overlay -run '^TestOverlayBehaviorPostgres$' -count=1
-
-      - name: Run PostgreSQL Content behavior parity
-        run: go test ./internal/backupasset/content -run '^TestContentBehaviorPostgres$' -count=1
-
-      - name: Run PostgreSQL Processing behavior parity
-        run: go test ./internal/backupasset/processing -run '^(TestProcessingBehaviorPostgres|TestArchiveMemberBehaviorPostgres)$' -count=1
-
-      - name: Run PostgreSQL Export behavior parity
-        run: go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1
-      - name: Run PostgreSQL audit identity concurrency
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL audit identity concurrency' ./internal/auth '^TestLastAdminInvariantConcurrentPostgres$'
-
-      - name: Run PostgreSQL offline recovery race
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL offline recovery race' ./internal/bootstrap '^TestBreakGlassOnlyOneConcurrentZeroAdminPromotionPostgres$'
-
-
-      - name: Run PostgreSQL durable task runtime contracts
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable task runtime contracts' ./internal/task '^Test.*Postgres$'
-
-      - name: Run PostgreSQL producer retention consumers
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL producer retention consumers' ./internal/backupasset/repository '^TestRecoveryPointProducerRetention(Consumers|Publication)Postgres$'
-
-      - name: Run PostgreSQL durable automation contracts
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable automation contracts' ./internal/automation '^Test.*Postgres$'
-      - name: Run PostgreSQL alerting durable delivery
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alerting durable delivery' ./internal/alerting '^Test(Alerting(DurableDeliveryPostgres|DeliveryConcurrencyPostgres|DeliveryClaimLoadFencePostgres|DeliveryLegacyBlankAutoManualConcurrencyPostgres)|RetryTickSkipsUnknownPagePostgres|MigrationRetiredDeliveryFencePostgres)$'
-      - name: Run PostgreSQL escalation delivery contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL escalation delivery contract' ./internal/escalation '^Test(EngineEscalationDeliveryConcurrencyPostgres|MigrationEscalationDeliveryFencePostgres)$'
-      - name: Run PostgreSQL escalation preview contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL escalation preview' ./internal/api '^TestEscalationPreviewPostgres$'
-
-      - name: Run PostgreSQL alert delivery migration contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alert delivery migration contract' ./internal/database '^TestAlertDeliveryMigration.*Postgres$'
-
-      - name: Run PostgreSQL alert delivery stats
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alert delivery stats' ./internal/api/handlers '^TestAlertDeliveryStatsPostgres$'
-
-      - name: Run PostgreSQL batch idempotency contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch idempotency contract' ./internal/api/handlers '^TestBatchCreationRollbackAndConcurrentIdempotency$'
-      - name: Run PostgreSQL batch command retry handler contracts
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch command retry handler contracts' ./internal/api/handlers '^TestBatchCommandRetry'
-      - name: Run PostgreSQL batch command retry runtime contracts
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch command retry runtime contracts' ./internal/task '^TestBatchCommandRetry'
-      - name: Run PostgreSQL policy configuration parity
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL policy configuration parity' ./internal/api/handlers '^TestR306PolicyCreateValuesAndSchedulesAcrossDatabases$'
-      - name: Run PostgreSQL task failure summary
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL task failure summary' ./internal/api/handlers '^TestTaskFailureSummaryPostgres$'
-      - name: Run PostgreSQL config import preview and apply contracts
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL config import preview and apply contracts' ./internal/api/handlers '^TestConfig(Import|Export)'
-
-      - name: Run PostgreSQL SSH key replacement and rotation contracts
-        run: bash ../scripts/run-required-postgres-tests.sh 'SSH key replacement and rotation' ./internal/api/handlers '^TestSSHKey(ReplacementPostgres|RotationPostgres)$'
-
-
-      - name: Run PostgreSQL general API surface parity
-        run: go test ./internal/api -run '^TestGeneralSurfacePostgres$' -count=1
-      - name: Run PostgreSQL automation history query contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL automation history queries' ./internal/api/handlers '^TestAutomationRuleLogsPostgres$'
-      - name: Run PostgreSQL automation history dispatcher contract
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL automation history dispatcher' ./internal/api '^TestAutomationRuleLogsDispatcherPostgres$'
+      - name: Upload required PostgreSQL evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: required-postgres-evidence
+          path: ${{ runner.temp }}/required-postgres-evidence
+          if-no-files-found: error
 
       - name: Run PostgreSQL backup and restore round-trip
         working-directory: .

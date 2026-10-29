@@ -77,8 +77,8 @@ func (h *SnapshotHandler) WithFeatureLive(featureLive func() (bool, error)) *Sna
 }
 
 // ListSnapshots godoc
-// @Summary      列出快照
-// @Description  列出 restic 类型任务的所有备份快照
+// @Summary      已退役的快照列表入口
+// @Description  此兼容入口始终返回 410，不再列出快照。请使用备份资产 Catalog 浏览恢复点。
 // @Tags         snapshots
 // @Security     Bearer
 // @Produce      json
@@ -91,8 +91,8 @@ func (h *SnapshotHandler) ListSnapshots(c *gin.Context) {
 }
 
 // ListFiles godoc
-// @Summary      列出快照文件
-// @Description  列出指定 restic 快照中的文件和目录
+// @Summary      已退役的快照文件列表入口
+// @Description  此兼容入口始终返回 410，不再列出文件。请使用备份资产 Catalog 浏览恢复点目录，或使用 Search 搜索文件。
 // @Tags         snapshots
 // @Security     Bearer
 // @Produce      json

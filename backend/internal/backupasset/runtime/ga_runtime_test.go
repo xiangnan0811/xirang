@@ -13,6 +13,7 @@ import (
 	"xirang/backend/internal/backupasset/ga"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -199,6 +200,7 @@ func TestFeatureLiveRequestedFalseStaysClosed(t *testing.T) {
 
 func TestStartupRequestedEnablementWithoutReadinessDoesNotBecomeManaged(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(
 		&model.Node{}, &model.Task{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{},
 		&model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointLease{},
@@ -405,8 +407,13 @@ func TestComposeGAReadinessRejectsUnsafeExportRootAndMissingKeyDomains(t *testin
 
 func TestInventoryRuntimeComposesWithoutDetachedGoroutine(t *testing.T) {
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_GA_RUNTIME_INVENTORY_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
 	now := time.Date(2026, 8, 20, 10, 20, 0, 0, time.UTC)
 	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.WrappedDomainKey{}); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.AutoMigrate(
 		&model.Node{}, &model.Task{}, &model.SnapshotFileIndex{},
 		&model.BackupRepository{}, &model.TaskRepositoryLink{},

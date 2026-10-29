@@ -40,6 +40,15 @@ func (stub *rcloneVersioningPreflighterStub) PreflightNative(_ context.Context, 
 	return stub.evidence, stub.err
 }
 
+func rcloneSetupBaseRevision(t *testing.T, setup backupasset.RcloneBindingSetupResult) uint64 {
+	t.Helper()
+	revision, err := strconv.ParseUint(setup.BaseBindingRevision, 10, 64)
+	if err != nil {
+		t.Fatalf("invalid setup base binding revision %q: %v", setup.BaseBindingRevision, err)
+	}
+	return revision
+}
+
 func TestRcloneVersioningSetupStoreExpiresAndConsumesExactIdentityOnce(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	clock := now
@@ -49,11 +58,11 @@ func TestRcloneVersioningSetupStoreExpiresAndConsumesExactIdentityOnce(t *testin
 	}
 
 	request := backupasset.RcloneBindingSetupRequest{TaskID: 7, ExpectedTaskRevision: 9}
-	portable, err := store.create(request, rcloneBindingSetupPortable)
+	portable, err := store.create(request, rcloneBindingSetupPortable, 9007199254740993)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := portable.Validate(false); err != nil {
+	if err := portable.Validate(false); err != nil || portable.BaseBindingRevision != "9007199254740993" {
 		t.Fatalf("portable setup result invalid: %v", err)
 	}
 	if _, ok := store.consume(portable.SetupID, request.TaskID+1, request.ExpectedTaskRevision, rcloneBindingSetupPortable); ok {
@@ -66,18 +75,18 @@ func TestRcloneVersioningSetupStoreExpiresAndConsumesExactIdentityOnce(t *testin
 		t.Fatal("portable setup consumed as native")
 	}
 	record, ok := store.consume(portable.SetupID, request.TaskID, request.ExpectedTaskRevision, rcloneBindingSetupPortable)
-	if !ok || record.externalID != "" {
+	if !ok || record.externalID != "" || record.baseBindingRevision != 9007199254740993 {
 		t.Fatalf("portable setup record=%+v ok=%v", record, ok)
 	}
 	if _, ok := store.consume(portable.SetupID, request.TaskID, request.ExpectedTaskRevision, rcloneBindingSetupPortable); ok {
 		t.Fatal("one-time setup was replayed")
 	}
 
-	native, err := store.create(request, rcloneBindingSetupNative)
+	native, err := store.create(request, rcloneBindingSetupNative, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := native.Validate(true); err != nil {
+	if err := native.Validate(true); err != nil || native.BaseBindingRevision != "0" {
 		t.Fatalf("native setup result invalid: %v", err)
 	}
 	if native.ExternalID == "" || native.ExternalID == native.SetupID {
@@ -96,7 +105,7 @@ func TestRcloneVersioningSetupStoreLinearizesConcurrentConsumption(t *testing.T)
 		t.Fatal(err)
 	}
 	request := backupasset.RcloneBindingSetupRequest{TaskID: 7, ExpectedTaskRevision: 9}
-	result, err := store.create(request, rcloneBindingSetupNative)
+	result, err := store.create(request, rcloneBindingSetupNative, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,14 +149,14 @@ func TestCreateRcloneBindingSetupsRequireExactLegacyTaskAndDoNotMutate(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := portable.Validate(false); err != nil {
+	if err := portable.Validate(false); err != nil || portable.BaseBindingRevision != "0" {
 		t.Fatalf("portable setup result invalid: %v", err)
 	}
 	native, err := service.CreateRcloneNativeBindingSetup(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := native.Validate(true); err != nil {
+	if err := native.Validate(true); err != nil || native.BaseBindingRevision != "0" {
 		t.Fatalf("native setup result invalid: %v", err)
 	}
 	if native.ExternalID == "" {
@@ -204,7 +213,7 @@ func TestSetRclonePortableBindingConsumesSetupAndKeepsSecretsProcessLocal(t *tes
 	}
 	config := "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n"
 	request := backupasset.RclonePortableBindingRequest{
-		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: 0, SetupID: setup.SetupID,
+		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
 		TargetRemote: "backup", ManagedRootLocator: "backup:managed/v1", BoundConfig: config,
 	}
 	summary, err := service.SetRclonePortableBinding(context.Background(), request)
@@ -272,7 +281,7 @@ func TestSetRcloneNativeBindingUsesSetupExternalIDAndReturnsOnlySafeKMSFacts(t *
 		t.Fatal(err)
 	}
 	request := backupasset.RcloneNativeBindingRequest{
-		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: 0, SetupID: setup.SetupID,
+		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
 		Region: "us-east-1", Bucket: "xirang-managed-test", ManagedPrefix: "managed/v1/",
 		RoleARN: "arn:aws:iam::123456789012:role/xirang-backup-test",
 		Bootstrap: backupasset.RcloneNativeBootstrapInput{
@@ -315,10 +324,363 @@ func TestSetRcloneNativeBindingUsesSetupExternalIDAndReturnsOnlySafeKMSFacts(t *
 	}
 }
 
+func TestRcloneBindingSetupBaseControlsReplacementAndReplay(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		name := "portable"
+		if native {
+			name = "native"
+		}
+		t.Run(name, func(t *testing.T) {
+			var service *Service
+			var taskID uint
+			var revision uint64
+			var ready backupasset.RcloneVersioningPreflightResult
+			mode := backupasset.PublicationVersionedPrefix
+			if native {
+				fixture := newRcloneNativeVersioningWorkflowFixture(t)
+				service, taskID, revision, ready = fixture.service, fixture.task.ID, fixture.revision, fixture.preflight
+				mode = backupasset.PublicationNativeObjectVersions
+			} else {
+				fixture := newRclonePortableVersioningWorkflowFixture(t)
+				service, taskID, revision, ready = fixture.service, fixture.task.ID, fixture.revision, fixture.preflight
+			}
+			if ready.Summary.State != backupasset.RcloneStateReady || ready.Summary.BindingRevision != "1" {
+				t.Fatal("fixture did not produce a ready candidate at proposed revision 1")
+			}
+			setupRequest := backupasset.RcloneBindingSetupRequest{TaskID: taskID, ExpectedTaskRevision: revision}
+			create := func() backupasset.RcloneBindingSetupResult {
+				t.Helper()
+				var setup backupasset.RcloneBindingSetupResult
+				var err error
+				if native {
+					setup, err = service.CreateRcloneNativeBindingSetup(context.Background(), setupRequest)
+				} else {
+					setup, err = service.CreateRclonePortableBindingSetup(context.Background(), setupRequest)
+				}
+				if err != nil || setup.Validate(native) != nil || setup.BaseBindingRevision != "0" {
+					t.Fatalf("replacement setup base=%q err=%v", setup.BaseBindingRevision, err)
+				}
+				return setup
+			}
+			submit := func(setup backupasset.RcloneBindingSetupResult, expected uint64) (backupasset.RclonePublicationSummary, error) {
+				if native {
+					return service.SetRcloneNativeBinding(context.Background(), backupasset.RcloneNativeBindingRequest{
+						TaskID: taskID, ExpectedTaskRevision: revision, ExpectedBindingRevision: expected, SetupID: setup.SetupID,
+						Region: "us-east-1", Bucket: "xirang-managed-test", ManagedPrefix: "managed/" + setup.SetupID + "/",
+						RoleARN:           "arn:aws:iam::123456789012:role/xirang-backup-test",
+						Bootstrap:         backupasset.RcloneNativeBootstrapInput{Mode: backupasset.RcloneBootstrapWorkloadChain},
+						EncryptionProfile: backupasset.RcloneEncryptionSSES3,
+					})
+				}
+				return service.SetRclonePortableBinding(context.Background(), backupasset.RclonePortableBindingRequest{
+					TaskID: taskID, ExpectedTaskRevision: revision, ExpectedBindingRevision: expected, SetupID: setup.SetupID,
+					TargetRemote: "backup", ManagedRootLocator: "backup:managed/" + setup.SetupID,
+					BoundConfig: "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n",
+				})
+			}
+
+			wrong := create()
+			earlier := create()
+			later := create()
+			if _, err := submit(wrong, 1); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("proposed revision used as base: %v", err)
+			}
+			if _, err := submit(wrong, rcloneSetupBaseRevision(t, wrong)); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("rejected setup replay: %v", err)
+			}
+			// Managed bindings are rejected before their nonzero revision can be
+			// used by this setup API. Seed inconsistent process-local setup records
+			// to independently exercise both sides of the three-way revision guard.
+			kind := rcloneBindingSetupPortable
+			if native {
+				kind = rcloneBindingSetupNative
+			}
+			inconsistent, err := service.rcloneSetups.create(setupRequest, kind, 1)
+			if err != nil || inconsistent.BaseBindingRevision != "1" {
+				t.Fatalf("inconsistent setup fixture base=%q err=%v", inconsistent.BaseBindingRevision, err)
+			}
+			if _, err := submit(inconsistent, 0); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("request matching only the fresh binding was accepted: %v", err)
+			}
+			if _, err := submit(inconsistent, 1); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("inconsistent setup was revived: %v", err)
+			}
+			inconsistent, err = service.rcloneSetups.create(setupRequest, kind, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := submit(inconsistent, 1); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("setup and request matching a stale base were accepted: %v", err)
+			}
+			summary, err := service.RcloneVersioningSummary(context.Background(), taskID)
+			if err != nil || summary.State != backupasset.RcloneStateReady || summary.BindingRevision != "1" {
+				t.Fatalf("setup creation or rejected submission changed the ready candidate: %+v %v", summary, err)
+			}
+			for _, setup := range []backupasset.RcloneBindingSetupResult{later, earlier} {
+				summary, err = submit(setup, rcloneSetupBaseRevision(t, setup))
+				if err != nil || summary.State != backupasset.RcloneStatePreflightRequired || summary.BindingRevision != "1" {
+					t.Fatalf("replacement summary=%+v err=%v", summary, err)
+				}
+			}
+			if _, err := service.ActivateRcloneVersioning(context.Background(), backupasset.RcloneVersioningActivationRequest{
+				TaskID: taskID, ExpectedTaskRevision: revision, PreflightID: ready.PreflightID, MigrationChoice: backupasset.RcloneFirstNewPoint,
+			}); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("replaced ready proof remained activatable: %v", err)
+			}
+			if _, err := service.CreateRcloneVersioningPreflight(context.Background(), backupasset.RcloneVersioningPreflightRequest{
+				TaskID: taskID, ExpectedTaskRevision: revision, RequestedMode: mode,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			stub := service.rclonePreflighter.(*rcloneVersioningPreflighterStub)
+			if native && stub.nativeInput.CandidateID != earlier.SetupID || !native && stub.portableInput.CandidateID != earlier.SetupID {
+				t.Fatal("last successful setter did not own the replacement generation")
+			}
+		})
+	}
+}
+
+func TestRcloneBindingSetupRejectsStaleAndManagedReplacement(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		name := "portable"
+		if native {
+			name = "native"
+		}
+		t.Run(name, func(t *testing.T) {
+			var service *Service
+			var taskID uint
+			var revision uint64
+			var ready backupasset.RcloneVersioningPreflightResult
+			if native {
+				fixture := newRcloneNativeVersioningWorkflowFixture(t)
+				service, taskID, revision, ready = fixture.service, fixture.task.ID, fixture.revision, fixture.preflight
+			} else {
+				fixture := newRclonePortableVersioningWorkflowFixture(t)
+				service, taskID, revision, ready = fixture.service, fixture.task.ID, fixture.revision, fixture.preflight
+			}
+			setupRequest := backupasset.RcloneBindingSetupRequest{TaskID: taskID, ExpectedTaskRevision: revision}
+			var setup backupasset.RcloneBindingSetupResult
+			var err error
+			if native {
+				setup, err = service.CreateRcloneNativeBindingSetup(context.Background(), setupRequest)
+			} else {
+				setup, err = service.CreateRclonePortableBindingSetup(context.Background(), setupRequest)
+			}
+			if err != nil || setup.BaseBindingRevision != "0" {
+				t.Fatalf("legacy setup base=%q err=%v", setup.BaseBindingRevision, err)
+			}
+			activated, err := service.ActivateRcloneVersioning(context.Background(), backupasset.RcloneVersioningActivationRequest{
+				TaskID: taskID, ExpectedTaskRevision: revision, PreflightID: ready.PreflightID, MigrationChoice: backupasset.RcloneFirstNewPoint,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			submit := func() error {
+				if native {
+					_, err := service.SetRcloneNativeBinding(context.Background(), backupasset.RcloneNativeBindingRequest{
+						TaskID: taskID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
+						Region: "us-east-1", Bucket: "xirang-managed-test", ManagedPrefix: "managed/replacement/",
+						RoleARN:           "arn:aws:iam::123456789012:role/xirang-backup-test",
+						Bootstrap:         backupasset.RcloneNativeBootstrapInput{Mode: backupasset.RcloneBootstrapWorkloadChain},
+						EncryptionProfile: backupasset.RcloneEncryptionSSES3,
+					})
+					return err
+				}
+				_, err := service.SetRclonePortableBinding(context.Background(), backupasset.RclonePortableBindingRequest{
+					TaskID: taskID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
+					TargetRemote: "backup", ManagedRootLocator: "backup:managed/replacement",
+					BoundConfig: "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n",
+				})
+				return err
+			}
+			if err := submit(); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("setup survived activation and persisted revision drift: %v", err)
+			}
+			if err := submit(); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("stale setup survived rejection: %v", err)
+			}
+			currentRevision, err := strconv.ParseUint(activated.Summary.TaskRevision, 10, 64)
+			if err != nil || currentRevision == revision {
+				t.Fatalf("activation did not advance the task revision: %q (%v)", activated.Summary.TaskRevision, err)
+			}
+			setupRequest.ExpectedTaskRevision = currentRevision
+			if native {
+				_, err = service.CreateRcloneNativeBindingSetup(context.Background(), setupRequest)
+			} else {
+				_, err = service.CreateRclonePortableBindingSetup(context.Background(), setupRequest)
+			}
+			if !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("managed binding allowed a replacement setup: %v", err)
+			}
+		})
+	}
+}
+
+func TestRcloneBindingSetupRejectsTaskAndBindingDrift(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		for _, drift := range []string{"task", "binding"} {
+			name := "portable"
+			if native {
+				name = "native"
+			}
+			t.Run(name+"/"+drift, func(t *testing.T) {
+				var service *Service
+				var db *gorm.DB
+				var task model.Task
+				var revision uint64
+				kind := rcloneBindingSetupPortable
+				if native {
+					fixture := newRcloneNativeVersioningWorkflowFixture(t)
+					service, db, task, revision = fixture.service, fixture.db, fixture.task, fixture.revision
+					kind = rcloneBindingSetupNative
+				} else {
+					fixture := newRclonePortableVersioningWorkflowFixture(t)
+					service, db, task, revision = fixture.service, fixture.db, fixture.task, fixture.revision
+				}
+				setupRequest := backupasset.RcloneBindingSetupRequest{TaskID: task.ID, ExpectedTaskRevision: revision}
+				var setup backupasset.RcloneBindingSetupResult
+				var err error
+				if native {
+					setup, err = service.CreateRcloneNativeBindingSetup(context.Background(), setupRequest)
+				} else {
+					setup, err = service.CreateRclonePortableBindingSetup(context.Background(), setupRequest)
+				}
+				if err != nil || setup.BaseBindingRevision != "0" {
+					t.Fatalf("setup base=%q err=%v", setup.BaseBindingRevision, err)
+				}
+				plan, err := service.loadRcloneBindingWorkflowPlan(context.Background(), task.ID, revision, kind)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if drift == "task" {
+					if err := db.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumn("updated_at", task.UpdatedAt.Add(time.Second)).Error; err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					changed := plan.legacyBinding
+					changed.Locator = "backup:changed-binding"
+					payload, err := encodeBindingDocument(changed)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := db.Model(&model.RepositoryAccessBinding{}).Where("id = ?", plan.binding.ID).Update("encrypted_config", payload).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+				submit := func() error {
+					if native {
+						_, err := service.SetRcloneNativeBinding(context.Background(), backupasset.RcloneNativeBindingRequest{
+							TaskID: task.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
+							Region: "us-east-1", Bucket: "xirang-managed-test", ManagedPrefix: "managed/replacement/",
+							RoleARN:           "arn:aws:iam::123456789012:role/xirang-backup-test",
+							Bootstrap:         backupasset.RcloneNativeBootstrapInput{Mode: backupasset.RcloneBootstrapWorkloadChain},
+							EncryptionProfile: backupasset.RcloneEncryptionSSES3,
+						})
+						return err
+					}
+					_, err := service.SetRclonePortableBinding(context.Background(), backupasset.RclonePortableBindingRequest{
+						TaskID: task.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
+						TargetRemote: "backup", ManagedRootLocator: "backup:managed/replacement",
+						BoundConfig: "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n",
+					})
+					return err
+				}
+				if err := submit(); !errors.Is(err, backupasset.ErrConflict) {
+					t.Fatalf("%s drift accepted: %v", drift, err)
+				}
+				if drift == "task" {
+					err = db.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumn("updated_at", task.UpdatedAt).Error
+				} else {
+					err = db.Exec("UPDATE repository_access_bindings SET encrypted_config = ? WHERE id = ?", plan.bindingCiphertext, plan.binding.ID).Error
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := submit(); !errors.Is(err, backupasset.ErrConflict) {
+					t.Fatalf("setup rejected for %s drift was revived: %v", drift, err)
+				}
+				summary, err := service.RcloneVersioningSummary(context.Background(), task.ID)
+				if err != nil || summary.State != backupasset.RcloneStateReady || summary.BindingRevision != "1" {
+					t.Fatalf("rejected setup changed the ready candidate: %+v %v", summary, err)
+				}
+			})
+		}
+	}
+}
+
+func TestRcloneBindingSetupServiceEnforcesIdentityAndExpiry(t *testing.T) {
+	fixture := newRclonePortableVersioningWorkflowFixture(t)
+	service := fixture.service
+	setupRequest := backupasset.RcloneBindingSetupRequest{TaskID: fixture.task.ID, ExpectedTaskRevision: fixture.revision}
+	setup, err := service.CreateRclonePortableBindingSetup(context.Background(), setupRequest)
+	if err != nil || setup.BaseBindingRevision != "0" {
+		t.Fatalf("portable setup base=%q err=%v", setup.BaseBindingRevision, err)
+	}
+	portable := backupasset.RclonePortableBindingRequest{
+		TaskID: fixture.task.ID, ExpectedTaskRevision: fixture.revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup),
+		SetupID: setup.SetupID, TargetRemote: "backup", ManagedRootLocator: "backup:managed/replacement",
+		BoundConfig: "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n",
+	}
+	wrongTask := portable
+	wrongTask.TaskID++
+	if _, err := service.SetRclonePortableBinding(context.Background(), wrongTask); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("wrong task consumed a setup: %v", err)
+	}
+	wrongRevision := portable
+	wrongRevision.ExpectedTaskRevision++
+	if _, err := service.SetRclonePortableBinding(context.Background(), wrongRevision); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("wrong task revision consumed a setup: %v", err)
+	}
+	native := backupasset.RcloneNativeBindingRequest{
+		TaskID: fixture.task.ID, ExpectedTaskRevision: fixture.revision, ExpectedBindingRevision: portable.ExpectedBindingRevision, SetupID: setup.SetupID,
+		Region: "us-east-1", Bucket: "xirang-managed-test", ManagedPrefix: "managed/replacement/",
+		RoleARN:           "arn:aws:iam::123456789012:role/xirang-backup-test",
+		Bootstrap:         backupasset.RcloneNativeBootstrapInput{Mode: backupasset.RcloneBootstrapWorkloadChain},
+		EncryptionProfile: backupasset.RcloneEncryptionSSES3,
+	}
+	if _, err := service.SetRcloneNativeBinding(context.Background(), native); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("wrong binding kind consumed a setup: %v", err)
+	}
+	if summary, err := service.SetRclonePortableBinding(context.Background(), portable); err != nil || summary.BindingRevision != "1" {
+		t.Fatalf("correct setup after wrong identity: summary=%+v err=%v", summary, err)
+	}
+
+	store := service.rcloneSetups
+	originalNow := store.now
+	defer func() { store.now = originalNow }()
+	for _, nativeKind := range []bool{false, true} {
+		store.now = originalNow
+		if nativeKind {
+			setup, err = service.CreateRcloneNativeBindingSetup(context.Background(), setupRequest)
+		} else {
+			setup, err = service.CreateRclonePortableBindingSetup(context.Background(), setupRequest)
+		}
+		if err != nil || setup.BaseBindingRevision != "0" {
+			t.Fatalf("expiry setup base=%q err=%v", setup.BaseBindingRevision, err)
+		}
+		store.now = func() time.Time { return setup.ExpiresAt }
+		if nativeKind {
+			native.SetupID, native.ExpectedBindingRevision = setup.SetupID, rcloneSetupBaseRevision(t, setup)
+			_, err = service.SetRcloneNativeBinding(context.Background(), native)
+		} else {
+			portable.SetupID, portable.ExpectedBindingRevision = setup.SetupID, rcloneSetupBaseRevision(t, setup)
+			_, err = service.SetRclonePortableBinding(context.Background(), portable)
+		}
+		if !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("expired setup accepted for native=%t: %v", nativeKind, err)
+		}
+	}
+	summary, err := service.RcloneVersioningSummary(context.Background(), fixture.task.ID)
+	if err != nil || summary.State != backupasset.RcloneStatePreflightRequired || summary.BindingRevision != "1" {
+		t.Fatalf("expired setup changed the candidate: %+v %v", summary, err)
+	}
+}
+
 func TestCreateRclonePortablePreflightBindsExactCandidateAndLeavesDatabaseLegacy(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	taskEntity := seedTask(t, db, "rclone", "backup:legacy", `{"bandwidth_limit":"10M","transfers":4}`)
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRclone, scopedObservationProber(backupasset.ProviderRclone))
+	service.now = func() time.Time { return time.Now().UTC() }
 	service.keyring = backupasset.NewKeyring(db, nil)
 	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); err != nil {
 		t.Fatal(err)
@@ -339,7 +701,7 @@ func TestCreateRclonePortablePreflightBindsExactCandidateAndLeavesDatabaseLegacy
 	}
 	config := "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n"
 	if _, err := service.SetRclonePortableBinding(context.Background(), backupasset.RclonePortableBindingRequest{
-		TaskID: current.ID, ExpectedTaskRevision: revision, SetupID: setup.SetupID,
+		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
 		TargetRemote: "backup", ManagedRootLocator: "backup:managed/v1", BoundConfig: config,
 	}); err != nil {
 		t.Fatal(err)
@@ -365,8 +727,13 @@ func TestCreateRclonePortablePreflightBindsExactCandidateAndLeavesDatabaseLegacy
 		t.Fatalf("portable preflight result invalid: %v", err)
 	}
 	if stub.portableCalls != 1 || stub.portableInput.TaskID != current.ID || stub.portableInput.BindingRevision != 1 ||
+		stub.portableInput.PreflightID != result.PreflightID || stub.portableInput.CandidateID != setup.SetupID ||
+		stub.portableInput.TaskRevision != revision || stub.portableInput.ConfigRevision != 1 ||
+		stub.portableInput.CredentialRevision != 1 || stub.portableInput.CapabilityRevision != 2 ||
+		stub.portableInput.ControlPayloadMaxBytes <= 0 || stub.portableInput.FullVerifyMaxBytes <= 0 ||
+		stub.portableInput.ManifestOptions.SpoolMaxBytes <= 0 ||
 		stub.portableInput.BoundConfig.KeyedDigest() == "" || stub.portableInput.ManagedRootLocator != "backup:managed/v1" {
-		t.Fatalf("portable preflight input=%+v calls=%d", stub.portableInput, stub.portableCalls)
+		t.Fatal("portable preflight did not bind exact identity, revisions, and limits")
 	}
 	if result.Summary.State != backupasset.RcloneStateReady || result.Summary.ReasonCode != backupasset.RcloneReasonReady ||
 		result.Summary.CapabilityRevision != "2" || result.Summary.EstimatedReadBytes != "4096" ||
@@ -403,6 +770,7 @@ func TestCreateRcloneNativePreflightRequiresCompleteExactAdmissionEvidence(t *te
 	db := newRepositoryTestDB(t)
 	taskEntity := seedTask(t, db, "rclone", "backup:legacy", `{"bandwidth_limit":"10M","transfers":4}`)
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRclone, scopedObservationProber(backupasset.ProviderRclone))
+	service.now = func() time.Time { return time.Now().UTC() }
 	service.keyring = backupasset.NewKeyring(db, nil)
 	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); err != nil {
 		t.Fatal(err)
@@ -422,7 +790,7 @@ func TestCreateRcloneNativePreflightRequiresCompleteExactAdmissionEvidence(t *te
 		t.Fatal(err)
 	}
 	bindingRequest := backupasset.RcloneNativeBindingRequest{
-		TaskID: current.ID, ExpectedTaskRevision: revision, SetupID: setup.SetupID,
+		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
 		Region: "us-east-1", Bucket: "xirang-managed-test", ManagedPrefix: "managed/v1/",
 		RoleARN: "arn:aws:iam::123456789012:role/xirang-backup-test",
 		Bootstrap: backupasset.RcloneNativeBootstrapInput{
@@ -434,7 +802,7 @@ func TestCreateRcloneNativePreflightRequiresCompleteExactAdmissionEvidence(t *te
 	if _, err := service.SetRcloneNativeBinding(context.Background(), bindingRequest); err != nil {
 		t.Fatal(err)
 	}
-	expiresAt := time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC)
+	expiresAt := service.utcNow().Add(time.Hour)
 	stub := &rcloneVersioningPreflighterStub{evidence: RcloneVersioningPreflightEvidence{
 		Mode: backupasset.PublicationNativeObjectVersions, CapabilityRevision: 2,
 		ConsistencyClass: backupasset.RcloneConsistencyProviderStrong,
@@ -446,7 +814,7 @@ func TestCreateRcloneNativePreflightRequiresCompleteExactAdmissionEvidence(t *te
 		EvidenceDigest: strings.Repeat("c", 64),
 		Native: &rcloneNativePreflightEvidence{
 			VersioningDigest: strings.Repeat("d", 64), LifecycleDigest: strings.Repeat("e", 64),
-			CapabilityStableObservedAt: time.Date(2026, 7, 16, 11, 30, 0, 0, time.UTC),
+			CapabilityStableObservedAt: service.utcNow().Add(-20 * time.Minute),
 			BucketEncryptionDigest:     strings.Repeat("f", 64), CanaryEncryptionEvidenceDigest: strings.Repeat("1", 64),
 			ActiveKMSKeyDigest: strings.Repeat("2", 64), KMSCapabilityRevision: 3,
 		},
@@ -490,7 +858,13 @@ func TestActivateRcloneVersioningFirstNewPointAtomicallyInstallsV3WithoutHistory
 	db := newRepositoryTestDB(t)
 	taskEntity := seedTask(t, db, "rclone", "backup:legacy", `{"bandwidth_limit":"10M","transfers":4}`)
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRclone, scopedObservationProber(backupasset.ProviderRclone))
+	service.now = func() time.Time { return time.Now().UTC() }
 	service.keyring = backupasset.NewKeyring(db, nil)
+	history, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.history = history
 	service.admission = &rsyncVersioningTransitioner{}
 	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); err != nil {
 		t.Fatal(err)
@@ -511,7 +885,7 @@ func TestActivateRcloneVersioningFirstNewPointAtomicallyInstallsV3WithoutHistory
 	}
 	config := "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n"
 	if _, err := service.SetRclonePortableBinding(context.Background(), backupasset.RclonePortableBindingRequest{
-		TaskID: current.ID, ExpectedTaskRevision: revision, SetupID: setup.SetupID,
+		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
 		TargetRemote: "backup", ManagedRootLocator: "backup:managed/v1", BoundConfig: config,
 	}); err != nil {
 		t.Fatal(err)
@@ -632,7 +1006,11 @@ type rcloneNativeVersioningWorkflowFixture struct {
 
 func newRclonePortableVersioningWorkflowFixture(t *testing.T) *rclonePortableVersioningWorkflowFixture {
 	t.Helper()
-	db := newRepositoryTestDB(t)
+	return newRclonePortableVersioningWorkflowFixtureWithDB(t, newRepositoryTestDB(t))
+}
+
+func newRclonePortableVersioningWorkflowFixtureWithDB(t *testing.T, db *gorm.DB) *rclonePortableVersioningWorkflowFixture {
+	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	taskEntity := seedTask(t, db, "rclone", "backup:legacy", `{"bandwidth_limit":"10M","transfers":4}`)
 	foundation := backupasset.NewFoundationService(completeRepositoryFoundationSettings(true))
@@ -691,7 +1069,7 @@ func newRclonePortableVersioningWorkflowFixture(t *testing.T) *rclonePortableVer
 	}
 	config := "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n"
 	if _, err := service.SetRclonePortableBinding(context.Background(), backupasset.RclonePortableBindingRequest{
-		TaskID: current.ID, ExpectedTaskRevision: revision, SetupID: setup.SetupID,
+		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
 		TargetRemote: "backup", ManagedRootLocator: "backup:managed/v1", BoundConfig: config,
 	}); err != nil {
 		t.Fatal(err)
@@ -807,7 +1185,7 @@ func newRcloneNativeVersioningWorkflowFixture(t *testing.T) *rcloneNativeVersion
 	}
 	nativeFactory.expectedExternalID = setup.ExternalID
 	if _, err := service.SetRcloneNativeBinding(context.Background(), backupasset.RcloneNativeBindingRequest{
-		TaskID: current.ID, ExpectedTaskRevision: revision, SetupID: setup.SetupID,
+		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID,
 		Region: "us-east-1", Bucket: "xirang-managed-test", ManagedPrefix: "managed/v1/",
 		RoleARN:           "arn:aws:iam::123456789012:role/xirang-backup-test",
 		Bootstrap:         backupasset.RcloneNativeBootstrapInput{Mode: backupasset.RcloneBootstrapWorkloadChain},
@@ -1094,6 +1472,64 @@ func TestActivateRcloneVersioningImportedBaselineNativeCommitsAndReleasesSourceK
 		stored.ManagedRcloneV3.Native.ActiveKMSKeyARN != "" || len(stored.ManagedRcloneV3.Native.RetainedReadKeys) != 0 {
 		t.Fatalf("native imported baseline retained source key binding=%+v err=%v", stored, err)
 	}
+	var task model.Task
+	if err := fixture.db.First(&task, fixture.task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	revision, err := managedRsyncTaskRevision(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := stored.ManagedRcloneV3.PreflightExpiresAt.Add(time.Second)
+	fixture.service.now = func() time.Time { return now }
+	expired, err := fixture.service.RcloneVersioningSummary(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRcloneRollbackSummary(t, expired, backupasset.RcloneStatePreflightRequired, backupasset.RcloneReasonPreflightExpired, backupasset.RcloneRollbackPreparationOnly)
+	stub := fixture.service.rclonePreflighter.(*rcloneVersioningPreflighterStub)
+	readyEvidence := stub.evidence
+	credentialExpiry := now.Add(time.Hour)
+	stub.evidence = RcloneVersioningPreflightEvidence{
+		Settling: true, SettlingObservedAt: now, Mode: backupasset.PublicationNativeObjectVersions,
+		CredentialExpiresAt: &credentialExpiry, EncryptionProfile: backupasset.RcloneEncryptionSSES3, KMSKeyStatus: backupasset.RcloneKMSNotApplicable,
+	}
+	request := backupasset.RcloneVersioningPreflightRequest{TaskID: task.ID, ExpectedTaskRevision: revision, RequestedMode: backupasset.PublicationNativeObjectVersions}
+	settling, err := fixture.service.CreateRcloneVersioningPreflight(context.Background(), request)
+	if err != nil || settling.Purpose != backupasset.RclonePreflightPurposeRenewal {
+		t.Fatalf("native imported baseline settling=%+v err=%v", settling, err)
+	}
+	assertRcloneRollbackSummary(t, settling.Summary, backupasset.RcloneStateCapabilitySettling, backupasset.RcloneReasonCapabilitySettling, backupasset.RcloneRollbackPreparationOnly)
+	progress, err := fixture.service.RcloneVersioningSummary(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRcloneRollbackSummary(t, progress, backupasset.RcloneStateCapabilitySettling, backupasset.RcloneReasonCapabilitySettling, backupasset.RcloneRollbackPreparationOnly)
+	now = now.Add(15 * time.Minute)
+	stub.evidence = readyEvidence
+	stub.evidence.CredentialExpiresAt = &credentialExpiry
+	ticket, err := fixture.service.CreateRcloneVersioningPreflight(context.Background(), request)
+	if err != nil || ticket.Purpose != backupasset.RclonePreflightPurposeRenewal {
+		t.Fatalf("native imported baseline ready ticket=%+v err=%v", ticket, err)
+	}
+	assertRcloneRollbackSummary(t, ticket.Summary, backupasset.RcloneStateReady, backupasset.RcloneReasonReady, backupasset.RcloneRollbackPreparationOnly)
+	ready, err := fixture.service.RcloneVersioningSummary(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRcloneRollbackSummary(t, ready, backupasset.RcloneStateReady, backupasset.RcloneReasonReady, backupasset.RcloneRollbackPreparationOnly)
+	renewed, err := fixture.service.ActivateRcloneVersioning(context.Background(), backupasset.RcloneVersioningActivationRequest{
+		TaskID: task.ID, ExpectedTaskRevision: revision, PreflightID: ticket.PreflightID, MigrationChoice: backupasset.RcloneFirstNewPoint,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRcloneRollbackSummary(t, renewed.Summary, backupasset.RcloneStateCommitted, backupasset.RcloneReasonReady, backupasset.RcloneRollbackPreparationOnly)
+	persisted, err := fixture.service.RcloneVersioningSummary(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRcloneRollbackSummary(t, persisted, backupasset.RcloneStateCommitted, backupasset.RcloneReasonReady, backupasset.RcloneRollbackPreparationOnly)
 }
 
 func TestActivateRcloneVersioningImportedBaselinePortableCommitsMigrationRunAndClosesCleanRollback(t *testing.T) {
@@ -1188,12 +1624,48 @@ func TestActivateRcloneVersioningImportedBaselinePortableCommitsMigrationRunAndC
 	}); !errors.Is(err, backupasset.ErrConflict) {
 		t.Fatalf("portable imported baseline clean rollback error=%v, want conflict", err)
 	}
+	plan, err := fixture.service.loadRcloneBindingWorkflowPlan(context.Background(), activated.ID, activatedRevision, rcloneBindingSetupPortable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := plan.managedBinding.PreflightExpiresAt.Add(time.Second)
+	fixture.service.now = func() time.Time { return now }
+	expired, err := fixture.service.RcloneVersioningSummary(context.Background(), activated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRcloneRollbackSummary(t, expired, backupasset.RcloneStatePreflightRequired, backupasset.RcloneReasonPreflightExpired, backupasset.RcloneRollbackPreparationOnly)
+	ticket, err := fixture.service.CreateRcloneVersioningPreflight(context.Background(), backupasset.RcloneVersioningPreflightRequest{
+		TaskID: activated.ID, ExpectedTaskRevision: activatedRevision, RequestedMode: backupasset.PublicationVersionedPrefix,
+	})
+	if err != nil || ticket.Purpose != backupasset.RclonePreflightPurposeRenewal {
+		t.Fatalf("imported baseline renewal ticket=%+v err=%v", ticket, err)
+	}
+	assertRcloneRollbackSummary(t, ticket.Summary, backupasset.RcloneStateReady, backupasset.RcloneReasonReady, backupasset.RcloneRollbackPreparationOnly)
+	ready, err := fixture.service.RcloneVersioningSummary(context.Background(), activated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRcloneRollbackSummary(t, ready, backupasset.RcloneStateReady, backupasset.RcloneReasonReady, backupasset.RcloneRollbackPreparationOnly)
+	renewed, err := fixture.service.ActivateRcloneVersioning(context.Background(), backupasset.RcloneVersioningActivationRequest{
+		TaskID: activated.ID, ExpectedTaskRevision: activatedRevision, PreflightID: ticket.PreflightID, MigrationChoice: backupasset.RcloneFirstNewPoint,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRcloneRollbackSummary(t, renewed.Summary, backupasset.RcloneStateCommitted, backupasset.RcloneReasonReady, backupasset.RcloneRollbackPreparationOnly)
+	persisted, err := fixture.service.RcloneVersioningSummary(context.Background(), activated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRcloneRollbackSummary(t, persisted, backupasset.RcloneStateCommitted, backupasset.RcloneReasonReady, backupasset.RcloneRollbackPreparationOnly)
 }
 
 func TestCleanRollbackRestoresExactLegacyStateOnlyBeforeFirstReservation(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	taskEntity := seedTask(t, db, "rclone", "backup:legacy", `{"bandwidth_limit":"10M","transfers":4}`)
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRclone, scopedObservationProber(backupasset.ProviderRclone))
+	service.now = func() time.Time { return time.Now().UTC() }
 	service.keyring = backupasset.NewKeyring(db, nil)
 	service.history, _ = NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
 	service.admission = &rsyncVersioningTransitioner{}
@@ -1213,7 +1685,7 @@ func TestCleanRollbackRestoresExactLegacyStateOnlyBeforeFirstReservation(t *test
 		t.Fatal(err)
 	}
 	if _, err := service.SetRclonePortableBinding(context.Background(), backupasset.RclonePortableBindingRequest{
-		TaskID: current.ID, ExpectedTaskRevision: revision, SetupID: setup.SetupID, TargetRemote: "backup",
+		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID, TargetRemote: "backup",
 		ManagedRootLocator: "backup:managed/v1",
 		BoundConfig:        "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n",
 	}); err != nil {
@@ -1288,6 +1760,7 @@ func TestFirstReservationBlocksCleanRollbackAndPreparationPreservesEvidence(t *t
 	db := newRepositoryTestDB(t)
 	taskEntity := seedTask(t, db, "rclone", "backup:legacy", `{"bandwidth_limit":"10M","transfers":4}`)
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRclone, scopedObservationProber(backupasset.ProviderRclone))
+	service.now = func() time.Time { return time.Now().UTC() }
 	service.keyring = backupasset.NewKeyring(db, nil)
 	service.history, _ = NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db})
 	service.admission = &rsyncVersioningTransitioner{}
@@ -1311,7 +1784,7 @@ func TestFirstReservationBlocksCleanRollbackAndPreparationPreservesEvidence(t *t
 		t.Fatal(err)
 	}
 	if _, err := service.SetRclonePortableBinding(context.Background(), backupasset.RclonePortableBindingRequest{
-		TaskID: current.ID, ExpectedTaskRevision: revision, SetupID: setup.SetupID, TargetRemote: "backup",
+		TaskID: current.ID, ExpectedTaskRevision: revision, ExpectedBindingRevision: rcloneSetupBaseRevision(t, setup), SetupID: setup.SetupID, TargetRemote: "backup",
 		ManagedRootLocator: "backup:managed/v1",
 		BoundConfig:        "[backup]\ntype = b2\naccount = FAKE_B2_ACCOUNT_FOR_TEST_ONLY\nkey = FAKE_B2_KEY_FOR_TEST_ONLY\n",
 	}); err != nil {
@@ -1425,7 +1898,8 @@ func TestRcloneVersioningSummaryProjectsReadyAndFailsClosedForStoredModeDrift(t 
 		t.Fatalf("activated summary: %v", err)
 	}
 	if activated.State != activation.Summary.State || activated.Mode != backupasset.PublicationVersionedPrefix ||
-		activated.BindingRevision != "1" || activated.CapabilityRevision != "2" {
+		activated.BindingRevision != "1" || activated.CapabilityRevision != "2" ||
+		activated.RollbackCapability != backupasset.RcloneRollbackCleanAvailable || activation.Summary.RollbackCapability != backupasset.RcloneRollbackCleanAvailable {
 		t.Fatalf("activated summary=%+v activation=%+v", activated, activation.Summary)
 	}
 

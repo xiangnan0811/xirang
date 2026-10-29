@@ -65,6 +65,7 @@ type Service struct {
 	preflights  *rsyncVersioningPreflightStore
 
 	rcloneWorkflowMu        sync.Mutex
+	rcloneActivations       map[uint]string
 	rcloneSetups            *rcloneVersioningSetupStore
 	rcloneCandidates        *rcloneBindingCandidateStore
 	rclonePreflights        *rcloneVersioningPreflightStore

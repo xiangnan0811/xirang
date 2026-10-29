@@ -54,23 +54,25 @@ const (
 // only one transport facet, or two different instances, would split command
 // admission/concurrency evidence and is rejected.
 type Dependencies struct {
-	DB                 *gorm.DB
-	Settings           *settings.Service
-	Now                func() time.Time
-	Transport          provider.CommandTransport
-	StreamTransport    provider.CommandStreamTransport
-	StagedPayload      provider.StagedPayloadTransport
-	ToolBinaries       provider.ToolBinaries
-	Metrics            publication.Metrics
-	RecoveryMetrics    recovery.Metrics
-	ProcessingMetrics  processing.Metrics
-	CatalogMetrics     catalog.Metrics
-	SearchMetrics      search.Metrics
-	GAMetrics          ga.Metrics
-	ContentMetrics     content.Metrics
-	SessionRevocations ContentSessionRevocationSource
-	Tombstones         repository.ManagedHistoryTombstoneSource
-	AlertDispatcher    *alerting.Dispatcher
+	DB                           *gorm.DB
+	Settings                     *settings.Service
+	Now                          func() time.Time
+	Transport                    provider.CommandTransport
+	StreamTransport              provider.CommandStreamTransport
+	StagedPayload                provider.StagedPayloadTransport
+	RcloneNativePreflightFactory repository.RcloneNativePreflightFactoryBuilder
+	RcloneNativeFactoryBuilder   repository.RcloneNativeFactoryBuilder
+	ToolBinaries                 provider.ToolBinaries
+	Metrics                      publication.Metrics
+	RecoveryMetrics              recovery.Metrics
+	ProcessingMetrics            processing.Metrics
+	CatalogMetrics               catalog.Metrics
+	SearchMetrics                search.Metrics
+	GAMetrics                    ga.Metrics
+	ContentMetrics               content.Metrics
+	SessionRevocations           ContentSessionRevocationSource
+	Tombstones                   repository.ManagedHistoryTombstoneSource
+	AlertDispatcher              *alerting.Dispatcher
 }
 
 type ContentSessionRevocationSource interface {
@@ -607,6 +609,24 @@ func New(dependencies Dependencies) (*Runtime, error) {
 			return nil, err
 		}
 	}
+	if _, err := keyring.RewrapDomains(context.Background(), backupasset.KeyDomainRclonePreflightIdentity); err != nil {
+		return nil, fmt.Errorf("rewrap Rclone preflight identity key: %w", err)
+	}
+	preflightIdentity, err := keyring.Ensure(context.Background(), backupasset.KeyDomainRclonePreflightIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("ensure Rclone preflight identity key: %w", err)
+	}
+	preflightCommands, err := provider.NewCommandRclonePreflightPlane(transport, streamTransport, stagedPayload, limitsSource, nil)
+	if err != nil {
+		return nil, err
+	}
+	rclonePreflight, err := repository.NewProductionRcloneVersioningPreflighter(repository.RcloneProductionPreflightDependencies{
+		CommandPlane: preflightCommands, IdentityKey: preflightIdentity.Key, Now: dependencies.Now,
+		NativeFactory: dependencies.RcloneNativePreflightFactory,
+	})
+	if err != nil {
+		return nil, err
+	}
 	portableRemote, err := provider.NewCommandRclonePortableRemote(transport, stagedPayload, limitsSource)
 	if err != nil {
 		return nil, err
@@ -784,6 +804,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	publicationService, err := repository.NewPublicationService(repository.PublicationDependencies{
 		DB: dependencies.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Lease: lease, Admission: admission, Metrics: metricsSink,
 		Audit: auditSink, History: history, Now: dependencies.Now,
+		RcloneNativeFactoryBuilder: dependencies.RcloneNativeFactoryBuilder,
 		TryWake: func(pointID string) bool {
 			if worker == nil {
 				return false
@@ -818,6 +839,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		DB: dependencies.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Now: dependencies.Now,
 		Audit: auditSink, Admission: admission, History: history, Metrics: metricsSink, Publication: publicationService,
 		CatalogOwnership: catalogOwnership, CatalogSummary: catalogService,
+		RclonePreflight:         rclonePreflight,
 		RecoverySourceNamespace: recoverySourceNamespaceAdapter,
 	})
 	if err != nil {

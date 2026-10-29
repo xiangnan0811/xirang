@@ -148,6 +148,104 @@ func openRuntimeTestDB(t *testing.T) *gorm.DB {
 	}
 	return db
 }
+func prepareRuntimeIdentityFixture(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_PREFLIGHT_IDENTITY_KEY_FOR_TEST_ONLY")
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	if err := db.AutoMigrate(&model.WrappedDomainKey{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRclonePreflightIdentityRuntimeRewrapAndRestart(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
+	ring := backupasset.NewKeyring(db, func() time.Time { return now })
+	before, err := ring.Ensure(ctx, backupasset.KeyDomainRclonePreflightIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_PREFLIGHT_NEW_KEY_FOR_TEST_ONLY")
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "FAKE_RUNTIME_PREFLIGHT_IDENTITY_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	transport := &runtimeTransportFake{}
+	dependencies := Dependencies{
+		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return now },
+	}
+	if _, err := New(dependencies); err != nil {
+		t.Fatalf("runtime startup with legacy envelope: %v", err)
+	}
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "")
+	secure.ResetForTesting()
+	if _, err := New(dependencies); err != nil {
+		t.Fatalf("runtime restart after rewrap: %v", err)
+	}
+	after, err := ring.Active(ctx, backupasset.KeyDomainRclonePreflightIdentity)
+	if err != nil || before.ID != after.ID || before.Version != after.Version || !reflect.DeepEqual(before.Key, after.Key) {
+		t.Fatalf("rewrap changed preflight identity: %v", err)
+	}
+	var searchKeys int64
+	if err := db.Model(&model.WrappedDomainKey{}).Where("domain = ?", backupasset.KeyDomainSearchToken).Count(&searchKeys).Error; err != nil || searchKeys != 0 {
+		t.Fatalf("disabled Search unexpectedly initialized: count=%d error=%v", searchKeys, err)
+	}
+}
+
+func TestRclonePreflightIdentityRuntimeFailsClosed(t *testing.T) {
+	for _, state := range []string{"lost", "retired", "wrong-kek", "missing-table"} {
+		t.Run(state, func(t *testing.T) {
+			db := openRuntimeTestDB(t)
+			prepareRuntimeIdentityFixture(t, db)
+			ring := backupasset.NewKeyring(db, nil)
+			material, err := ring.Ensure(context.Background(), backupasset.KeyDomainRclonePreflightIdentity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch state {
+			case "lost":
+				if err := ring.MarkLost(context.Background(), material.Domain, material.Version); err != nil {
+					t.Fatal(err)
+				}
+			case "retired":
+				if err := db.Model(&model.WrappedDomainKey{}).Where("id = ?", material.ID).Update("state", backupasset.DomainKeyRetired).Error; err != nil {
+					t.Fatal(err)
+				}
+			case "wrong-kek":
+				t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_WRONG_KEY_FOR_TEST_ONLY")
+				secure.ResetForTesting()
+			case "missing-table":
+				if err := db.Migrator().DropTable(&model.WrappedDomainKey{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			transport := &runtimeTransportFake{}
+			_, err = New(Dependencies{
+				DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
+				StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+				ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+			})
+			if err == nil {
+				t.Fatal("runtime accepted unavailable identity key")
+			}
+			if state == "lost" && !errors.Is(err, backupasset.ErrKeyLost) {
+				t.Fatalf("lost key error: %v", err)
+			}
+			if state != "missing-table" {
+				var count int64
+				if err := db.Model(&model.WrappedDomainKey{}).Where("domain = ?", material.Domain).Count(&count).Error; err != nil || count != 1 {
+					t.Fatalf("failed startup replaced key: count=%d error=%v", count, err)
+				}
+			}
+		})
+	}
+}
 
 func TestRuntimeNewAcceptsCompleteShortDeadlineSettings(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
@@ -636,6 +734,7 @@ func TestManagedRecoverySourceNamespaceAdapterTranslatesRepositoryHandoffExactly
 
 func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	transport := &runtimeTransportFake{}
 	runtime, err := New(Dependencies{
 		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
@@ -683,6 +782,9 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 		t.Fatal("runtime omitted the shared Processing manager")
 	}
 	repositoryService := reflect.ValueOf(runtime.RepositoryService()).Elem()
+	if repositoryService.FieldByName("rclonePreflighter").IsNil() {
+		t.Fatal("production runtime omitted the Rclone preflighter")
+	}
 	if repositoryService.FieldByName("catalogRebuild").IsNil() || repositoryService.FieldByName("derivedBackfill").IsNil() {
 		t.Fatal("production runtime omitted CatalogRebuild / DerivedBackfill ports")
 	}
@@ -733,6 +835,7 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 
 func TestRecoveryProductionAuthorityCompositionOwnsTargetRootFacade(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	transport := &runtimeTransportFake{}
 	runtime, err := New(Dependencies{
 		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
@@ -1475,6 +1578,7 @@ func TestRuntimeDerivedSourceAssetResolverRequiresCurrentBoundSource(t *testing.
 
 func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(
 		&model.Node{}, &model.Task{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{},
 		&model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointLease{},
@@ -1518,6 +1622,7 @@ func (installer *runtimeReadinessRetentionInstaller) SetManagedRecoveryPointRete
 
 func TestRuntimeInterruptedRunReadinessInstallsManagedTaskRetention(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(
 		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.TaskRepositoryLink{},
 		&model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
@@ -1559,6 +1664,7 @@ func TestRuntimeContentConstructionRequiresSessionRevocationSource(t *testing.T)
 
 func TestRuntimeAuthenticatedCacheUsesSharedContentMetrics(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{}); err != nil {
 		t.Fatal(err)
 	}
@@ -1615,6 +1721,7 @@ func (probe *runtimeManagedContentPrepareFailureProbe) PrepareDisable(ctx contex
 
 func TestFeatureEnableContentPrepareFailureRunsBoundedCleanupAndFencesFailedCompensation(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{}); err != nil {
 		t.Fatal(err)
 	}
@@ -2350,6 +2457,7 @@ func TestRuntimeRecoveryLifecycleAndProspectiveSettingsAreCoordinated(t *testing
 
 func TestRecoveryTransitionRestoresPriorPersistedSettingsThroughRuntimeOwner(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	settingsService := settings.NewService(db)
 	transport := &runtimeTransportFake{}
 	runtime, err := New(Dependencies{
@@ -2394,7 +2502,7 @@ func TestRuntimeNewOwnsDefaultDisabledRecoveryReceiptMaintenance(t *testing.T) {
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
 	db := openRuntimeTestDB(t)
-	if err := db.AutoMigrate(&model.BackupAssetRecoveryEvidence{}); err != nil {
+	if err := db.AutoMigrate(&model.BackupAssetRecoveryEvidence{}, &model.WrappedDomainKey{}); err != nil {
 		t.Fatal(err)
 	}
 	transport := &runtimeTransportFake{}
@@ -3280,6 +3388,7 @@ func (*shutdownOrderReconciler) HasUnresolvedPublication(context.Context) (bool,
 
 func TestRuntimeConstructsAndJoinsRetentionWorker(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(
 		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.TaskRepositoryLink{},
 		&model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
@@ -3332,6 +3441,7 @@ func TestRuntimeConstructsAndJoinsRetentionWorker(t *testing.T) {
 
 func TestRuntimeRetentionStartupPassUsesConstructedWorker(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(
 		&model.User{}, &model.BackupRepository{}, &model.RecoveryPoint{},
 		&model.TaskRepositoryLink{}, &model.BackupAssetManagedHistoryLatch{},
@@ -3368,6 +3478,7 @@ func TestRuntimeRetentionStartupPassUsesConstructedWorker(t *testing.T) {
 
 func TestRuntimeRetentionInjectsTombstoneSourceBeforeAdmission(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(
 		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.TaskRepositoryLink{},
 		&model.RecoveryPointLifecycleTombstone{}, &model.BackupAssetManagedHistoryLatch{},
@@ -3412,6 +3523,7 @@ func TestRuntimeRetentionInjectsTombstoneSourceBeforeAdmission(t *testing.T) {
 
 func TestRuntimeRetentionShutdownKeepsOwnersUpUntilWorkerReturns(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(
 		&model.User{}, &model.BackupRepository{}, &model.RecoveryPoint{},
 		&model.TaskRepositoryLink{}, &model.BackupAssetManagedHistoryLatch{},

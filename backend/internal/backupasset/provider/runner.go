@@ -173,13 +173,6 @@ func validCommandInvocation(invocation CommandInvocation) bool {
 		if invocation.Operation == OperationRcloneVersion {
 			return len(invocation.SecretStdin) == 0 && equalArguments(arguments, "version")
 		}
-		boundConfig := len(arguments) >= 2 && arguments[0] == "--config" && arguments[1] == "/dev/stdin"
-		if boundConfig {
-			arguments = arguments[2:]
-		}
-		if boundConfig != (len(invocation.SecretStdin) > 0) {
-			return false
-		}
 		switch invocation.Operation {
 		case OperationRcloneVersion:
 			return false
@@ -253,7 +246,7 @@ func managedRcloneArguments(invocation CommandInvocation) ([]string, error) {
 		return nil, fmt.Errorf("%w: invalid managed Rclone invocation", ErrUnsafeInvocation)
 	}
 	arguments := []string{
-		"--config", "/dev/stdin", "--retries", "1", "--low-level-retries", strconv.Itoa(invocation.RcloneLowLevelRetries), "--links",
+		"--retries", "1", "--low-level-retries", strconv.Itoa(invocation.RcloneLowLevelRetries), "--links",
 	}
 	source := func() string {
 		if invocation.RcloneSource != nil {
@@ -426,9 +419,11 @@ type ConcurrencyLimitSource func() (int, error)
 const maximumProviderConcurrency = 32
 
 type SSHCommandTransport struct {
-	factory  remoteCommandRunnerFactory
-	gate     *concurrencyGate
-	binaries ToolBinaries
+	factory             remoteCommandRunnerFactory
+	gate                *concurrencyGate
+	binaries            ToolBinaries
+	configStore         *rcloneCommandConfigStore
+	configRunnerFactory remoteCommandRunnerFactory
 }
 
 type concurrencyGate struct {
@@ -517,13 +512,25 @@ func NewSSHCommandTransportWithConcurrencySource(dialer *sshutil.NodeDialer, sou
 	if dialer == nil {
 		return nil, fmt.Errorf("%w: repository Node dialer unavailable", backupasset.ErrInvalidState)
 	}
-	return newSSHCommandTransportWithConcurrencySource(func(ctx context.Context, access RemoteCommandAccess, purpose string) (remoteCommandRunner, io.Closer, error) {
+	factory := func(ctx context.Context, access RemoteCommandAccess, purpose string) (remoteCommandRunner, io.Closer, error) {
 		client, err := dialer.Dial(ctx, access.Node, purpose, access.Audit)
 		if err != nil {
 			return nil, nil, err
 		}
 		return sshutil.NewSSHCommandRunner(client, 1), client, nil
-	}, source, binaries)
+	}
+	transport, err := newSSHCommandTransportWithConfig(factory, newRcloneConfigSessionFactory(dialer), source, binaries)
+	if err != nil {
+		return nil, err
+	}
+	transport.configRunnerFactory = func(ctx context.Context, access RemoteCommandAccess, purpose string) (remoteCommandRunner, io.Closer, error) {
+		client, err := dialer.Dial(ctx, access.Node, purpose, access.Audit)
+		if err != nil {
+			return nil, nil, err
+		}
+		return sshutil.NewSSHCommandRunnerWithGracefulJoinedTransportClose(client, 1), client, nil
+	}
+	return transport, nil
 }
 
 func newSSHCommandTransport(factory remoteCommandRunnerFactory, maxConcurrency int, binaries ToolBinaries) (*SSHCommandTransport, error) {
@@ -551,6 +558,9 @@ func newSSHCommandTransportWithConcurrencySource(factory remoteCommandRunnerFact
 }
 
 func (transport *SSHCommandTransport) Run(ctx context.Context, invocation CommandInvocation, limits OperationLimits) (CommandOutput, error) {
+	if hasRcloneCommandConfig(invocation) {
+		return transport.runConfigured(ctx, invocation, limits)
+	}
 	ctx, cancel, err := commandInvocationContext(ctx, invocation)
 	if err != nil {
 		return CommandOutput{}, err
@@ -591,6 +601,13 @@ func (transport *SSHCommandTransport) Run(ctx context.Context, invocation Comman
 }
 
 func (transport *SSHCommandTransport) Open(ctx context.Context, invocation CommandInvocation, limits OperationLimits, maxBytes int64) (ReadHandle, error) {
+	if hasRcloneCommandConfig(invocation) {
+		execution, err := transport.openConfiguredExecution(ctx, invocation, limits, maxBytes)
+		if err != nil {
+			return nil, err
+		}
+		return &rcloneConfigReadHandle{execution: execution}, nil
+	}
 	ctx, cancel, err := commandInvocationContext(ctx, invocation)
 	if err != nil {
 		return nil, err
@@ -646,6 +663,9 @@ func (transport *SSHCommandTransport) Open(ctx context.Context, invocation Comma
 }
 
 func (transport *SSHCommandTransport) OpenExecution(ctx context.Context, invocation CommandInvocation, limits OperationLimits, maxBytes int64) (CommandExecution, error) {
+	if hasRcloneCommandConfig(invocation) {
+		return transport.openConfiguredExecution(ctx, invocation, limits, maxBytes)
+	}
 	ctx, cancel, err := commandInvocationContext(ctx, invocation)
 	if err != nil {
 		return nil, err
@@ -780,6 +800,7 @@ func (transport *SSHCommandTransport) commandSpec(invocation CommandInvocation, 
 		}
 	case ToolRclone:
 		binary = transport.binaries.Rclone
+		secret = nil
 		if isManagedRcloneOperation(invocation.Operation) {
 			managedArguments, managedErr := managedRcloneArguments(invocation)
 			if managedErr != nil {

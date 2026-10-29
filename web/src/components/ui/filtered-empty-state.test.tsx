@@ -1,11 +1,16 @@
 import "@testing-library/jest-dom/vitest";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Plus } from "lucide-react";
+import i18n, { setLanguage } from "@/i18n";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 
 describe("FilteredEmptyState", () => {
+  afterEach(async () => {
+    await setLanguage("zh");
+  });
+
   it("默认动作支持重置与新建", async () => {
     const user = userEvent.setup();
     const onReset = vi.fn();
@@ -40,5 +45,17 @@ describe("FilteredEmptyState", () => {
 
     expect(screen.getByRole("button", { name: "自定义动作" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重置筛选" })).not.toBeInTheDocument();
+  });
+
+  it.each(["zh", "en"] as const)("默认标题与描述使用 %s 真实译文", async (lng) => {
+    await setLanguage(lng);
+    render(<FilteredEmptyState onReset={() => undefined} />);
+
+    for (const key of ["filteredEmpty.defaultTitle", "filteredEmpty.defaultDescription"]) {
+      const text = i18n.getResource(lng, "translation", key);
+      expect(text).toEqual(expect.any(String));
+      expect(screen.getByText(text)).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/^filteredEmpty\./)).not.toBeInTheDocument();
   });
 });

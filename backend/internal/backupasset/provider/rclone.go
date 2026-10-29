@@ -47,12 +47,13 @@ type RcloneRuntimeAccess struct {
 }
 
 type RcloneManagedPointAccess struct {
-	RecoveryPointID string `json:"-"`
-	AttemptID       string `json:"-"`
-	DataLocator     string `json:"-"`
-	ManifestDigest  string `json:"-"`
-	SourceRevision  string `json:"-"`
-	Committed       bool   `json:"-"`
+	RecoveryPointID  string                      `json:"-"`
+	AttemptID        string                      `json:"-"`
+	DataLocator      string                      `json:"-"`
+	ManifestDigest   string                      `json:"-"`
+	SourceRevision   string                      `json:"-"`
+	Committed        bool                        `json:"-"`
+	ValidateSnapshot func(context.Context) error `json:"-"`
 }
 
 type RcloneAdapter struct {
@@ -181,19 +182,15 @@ func (adapter *RcloneAdapter) ListEntries(ctx context.Context, snapshot ReadSnap
 		return EntryPage{}, err
 	}
 	entries := rootEntries
-	if parentPath != "" {
+	if parentPath != "" || snapshot.Access.AdapterData.(RcloneRuntimeAccess).ManagedPoint != nil {
 		entries, err = adapter.loadList(ctx, snapshot.Access, parentPath, limits, CommandPurposeList)
 		if err != nil {
 			return EntryPage{}, err
 		}
 	}
 	entries = rebaseRcloneEntries(parentPath, entries)
-	rootAfter, err := adapter.loadList(ctx, snapshot.Access, "", limits, CommandPurposeList)
-	if err != nil {
+	if _, err := adapter.validateSnapshot(ctx, snapshot, CommandPurposeList, limits); err != nil {
 		return EntryPage{}, err
-	}
-	if rcloneListFingerprint(rootAfter) != snapshot.SourceRevision {
-		return EntryPage{}, newCapabilityError(backupasset.CapabilityMutableSourceChanged)
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Name == entries[j].Name {
@@ -224,12 +221,8 @@ func (adapter *RcloneAdapter) statEntry(ctx context.Context, snapshot ReadSnapsh
 	if err != nil {
 		return Entry{}, err
 	}
-	rootAfter, err := adapter.loadList(ctx, snapshot.Access, "", limits, purpose)
-	if err != nil {
+	if _, err := adapter.validateSnapshot(ctx, snapshot, purpose, limits); err != nil {
 		return Entry{}, err
-	}
-	if rcloneListFingerprint(rootAfter) != snapshot.SourceRevision {
-		return Entry{}, newCapabilityError(backupasset.CapabilityMutableSourceChanged)
 	}
 	return entry, nil
 }
@@ -337,9 +330,9 @@ func (adapter *RcloneAdapter) runtimeAccess(binding AccessBinding) (RcloneRuntim
 	runtimeAccess.ConfigSource = rcloneConfigSource(binding)
 	if runtimeAccess.ManagedPoint != nil {
 		managed := runtimeAccess.ManagedPoint
-		if runtimeAccess.ConfigSource != RcloneConfigBound || !managed.Committed || backupasset.ValidateOpaqueID(managed.RecoveryPointID) != nil ||
-			backupasset.ValidateOpaqueID(managed.AttemptID) != nil || !validTaggedDigest(managed.ManifestDigest) ||
-			!validTaggedDigest(managed.SourceRevision) || managed.DataLocator != binding.Locator {
+		if runtimeAccess.ConfigSource != RcloneConfigBound || !managed.Committed || managed.ValidateSnapshot == nil ||
+			backupasset.ValidateOpaqueID(managed.RecoveryPointID) != nil || backupasset.ValidateOpaqueID(managed.AttemptID) != nil ||
+			!validTaggedDigest(managed.ManifestDigest) || !validTaggedDigest(managed.SourceRevision) || managed.DataLocator != binding.Locator {
 			return RcloneRuntimeAccess{}, fmt.Errorf("%w: managed Rclone point facts unavailable", backupasset.ErrInvalidState)
 		}
 		if _, err := NewRclonePrivateLocator(managed.DataLocator); err != nil {
@@ -363,6 +356,20 @@ func (adapter *RcloneAdapter) validateOperation(ctx context.Context, snapshot Re
 	}
 	if backupasset.ValidateOpaqueID(snapshot.RepositoryID) != nil || snapshot.RepositoryID != snapshot.Access.RepositoryID || snapshot.CapabilityRevision <= 0 || snapshot.SourceRevision == "" || point.Native != expectedPoint.Native {
 		return nil, fmt.Errorf("%w: invalid Rclone read snapshot", backupasset.ErrInvalidState)
+	}
+	return adapter.validateSnapshot(ctx, snapshot, purpose, limits)
+}
+
+func (adapter *RcloneAdapter) validateSnapshot(ctx context.Context, snapshot ReadSnapshot, purpose CommandPurpose, limits OperationLimits) ([]Entry, error) {
+	runtimeAccess, err := adapter.runtimeAccess(snapshot.Access)
+	if err != nil {
+		return nil, err
+	}
+	if runtimeAccess.ManagedPoint != nil {
+		if err := runtimeAccess.ManagedPoint.ValidateSnapshot(ctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
 	entries, err := adapter.loadList(ctx, snapshot.Access, "", limits, purpose)
 	if err != nil {
@@ -407,11 +414,8 @@ func (adapter *RcloneAdapter) verifyObjectAndRoot(ctx context.Context, snapshot 
 	if err != nil || current.SourceRevision != expected.SourceRevision {
 		return newCapabilityError(backupasset.CapabilityMutableSourceChanged)
 	}
-	root, err := adapter.loadList(ctx, snapshot.Access, "", limits, purpose)
-	if err != nil || rcloneListFingerprint(root) != snapshot.SourceRevision {
-		return newCapabilityError(backupasset.CapabilityMutableSourceChanged)
-	}
-	return nil
+	_, err = adapter.validateSnapshot(ctx, snapshot, purpose, limits)
+	return err
 }
 
 func (adapter *RcloneAdapter) operationLimits() (OperationLimits, error) {
@@ -448,7 +452,6 @@ func (adapter *RcloneAdapter) proveRange(ctx context.Context, binding AccessBind
 func (adapter *RcloneAdapter) invocation(binding AccessBinding, operation CommandOperation, arguments []string, privateLocator string, purpose CommandPurpose) CommandInvocation {
 	invocation := CommandInvocation{Tool: ToolRclone, Operation: operation, Purpose: purpose, Args: append([]string(nil), arguments...), PrivateLocator: privateLocator}
 	if operation != OperationRcloneVersion && rcloneConfigSource(binding) == RcloneConfigBound {
-		invocation.Args = append([]string{"--config", "/dev/stdin"}, invocation.Args...)
 		invocation.SecretStdin = append([]byte(nil), binding.Secret...)
 	}
 	if runtimeAccess, ok := binding.AdapterData.(RcloneRuntimeAccess); ok {
@@ -580,17 +583,13 @@ func normalizeRclonePath(value string, allowRoot bool) (string, error) {
 }
 
 func rcloneObjectLocator(root, relative string) string {
-	colon := strings.Index(root, ":")
-	if colon < 0 {
-		return ""
+	if relative == "" {
+		return root
 	}
-	prefix := root[:colon+1]
-	base := strings.Trim(root[colon+1:], "/")
-	joined := path.Join(base, relative)
-	if joined == "." {
-		joined = ""
+	if strings.HasSuffix(root, ":") || strings.HasSuffix(root, "/") {
+		return root + relative
 	}
-	return prefix + joined
+	return root + "/" + relative
 }
 
 func rebaseRcloneEntries(parent string, entries []Entry) []Entry {

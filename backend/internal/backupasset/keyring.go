@@ -24,6 +24,7 @@ const (
 	KeyDomainCursorSigning            KeyDomain = "cursor_signing"
 	KeyDomainAuditFingerprint         KeyDomain = "audit_fingerprint"
 	KeyDomainRecoveryCleanupOwnership KeyDomain = "recovery_cleanup_ownership"
+	KeyDomainRclonePreflightIdentity  KeyDomain = "rclone_preflight_identity"
 	KeyDomainSearchToken              KeyDomain = "search_token"
 	KeyDomainDerivedStore             KeyDomain = "derived_store"
 	KeyDomainExportStore              KeyDomain = "export_store"
@@ -34,6 +35,7 @@ var RequiredKeyDomains = []KeyDomain{
 	KeyDomainCursorSigning,
 	KeyDomainAuditFingerprint,
 	KeyDomainRecoveryCleanupOwnership,
+	KeyDomainRclonePreflightIdentity,
 }
 
 type DomainKeyState string
@@ -269,7 +271,7 @@ func (keyring *Keyring) Rotate(ctx context.Context, domain KeyDomain, verifyFor 
 	if err := keyring.validate(domain); err != nil {
 		return DomainKeyMaterial{}, err
 	}
-	if domain == KeyDomainEntryIdentity || domain == KeyDomainRecoveryCleanupOwnership || domain == KeyDomainSearchToken {
+	if domain == KeyDomainEntryIdentity || domain == KeyDomainRecoveryCleanupOwnership || domain == KeyDomainRclonePreflightIdentity || domain == KeyDomainSearchToken {
 		return DomainKeyMaterial{}, fmt.Errorf("%w: domain %s is installation-stable", ErrKeyRotationProhibited, domain)
 	}
 	if domain == KeyDomainCursorSigning && (verifyFor <= 0 || verifyFor > 7*24*time.Hour) {
@@ -704,7 +706,7 @@ var (
 	validKeyDomains = setOf(
 		KeyDomainEntryIdentity, KeyDomainCursorSigning, KeyDomainAuditFingerprint,
 		KeyDomainRecoveryCleanupOwnership, KeyDomainSearchToken, KeyDomainDerivedStore,
-		KeyDomainExportStore,
+		KeyDomainExportStore, KeyDomainRclonePreflightIdentity,
 	)
 	validDomainKeyStates = setOf(DomainKeyActive, DomainKeyVerifyOnly, DomainKeyRetired, DomainKeyLost)
 )

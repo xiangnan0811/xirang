@@ -1,0 +1,5 @@
+[
+  {"Path":"z-empty","Name":"z-empty","Size":0,"MimeType":"inode/directory","ModTime":"2026-07-16T01:00:00Z","IsDir":true,"Metadata":{"mode":"40700","uid":"1000","gid":"1000","mtime":"2026-07-16T01:00:00Z"}},
+  {"Path":"dir/file.txt","Name":"file.txt","Size":5,"MimeType":"text/plain","ModTime":"2026-07-16T01:00:01Z","IsDir":false,"Hashes":{"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"},"Metadata":{"mode":"100640","uid":"1000","gid":"1000","mtime":"2026-07-16T01:00:01Z"}},
+  {"Path":"dir","Name":"dir","Size":0,"MimeType":"inode/directory","ModTime":"2026-07-16T01:00:00Z","IsDir":true,"Metadata":{"mode":"40750","uid":"1000","gid":"1000","mtime":"2026-07-16T01:00:00Z"}}
+]

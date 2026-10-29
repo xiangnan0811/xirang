@@ -9,12 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"sync"
 	"time"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/provider"
+	"xirang/backend/internal/sshutil"
 )
 
 const (
@@ -50,6 +50,7 @@ type rcloneNativeSettleObservation struct {
 	lifecycleDigest  string
 	encryptionDigest string
 	firstObservedAt  time.Time
+	expiresAt        time.Time
 }
 
 type productionRcloneVersioningPreflighter struct {
@@ -61,6 +62,7 @@ type productionRcloneVersioningPreflighter struct {
 
 	mu           sync.Mutex
 	observations map[string]rcloneNativeSettleObservation
+	inflight     map[string]struct{}
 }
 
 func NewProductionRcloneVersioningPreflighter(
@@ -89,17 +91,35 @@ func NewProductionRcloneVersioningPreflighter(
 		commands: dependencies.CommandPlane, identityKey: append([]byte(nil), dependencies.IdentityKey...),
 		now: dependencies.Now, random: dependencies.Random, nativeFactory: dependencies.NativeFactory,
 		observations: make(map[string]rcloneNativeSettleObservation),
+		inflight:     make(map[string]struct{}),
 	}, nil
 }
+
+// Provider errors can contain private locations, credentials, or command
+// output. Keep their identity for classification without exposing their text.
+type rclonePreflightBoundaryError struct {
+	cause error
+}
+
+func (*rclonePreflightBoundaryError) Error() string     { return "Rclone preflight failed" }
+func (err *rclonePreflightBoundaryError) Unwrap() error { return err.cause }
 
 func (preflight *productionRcloneVersioningPreflighter) PreflightPortable(
 	ctx context.Context,
 	input RclonePortablePreflightInput,
-) (RcloneVersioningPreflightEvidence, error) {
+) (_ RcloneVersioningPreflightEvidence, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			resultErr = &rclonePreflightBoundaryError{cause: resultErr}
+		}
+	}()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if preflight == nil || backupasset.ValidateOpaqueID(input.PreflightID) != nil || input.BindingRevision == math.MaxUint64 {
+	if preflight == nil || backupasset.ValidateOpaqueID(input.PreflightID) != nil ||
+		backupasset.ValidateOpaqueID(input.CandidateID) != nil || input.TaskID == 0 || input.NodeID == 0 ||
+		input.TaskRevision == 0 || input.BindingRevision == 0 || input.ConfigRevision == 0 || input.CredentialRevision == 0 ||
+		input.CapabilityRevision == 0 || !input.CandidateExpiresAt.After(preflight.now().UTC()) {
 		return RcloneVersioningPreflightEvidence{}, fmt.Errorf("%w: invalid portable Rclone preflight input", backupasset.ErrInvalidState)
 	}
 	root, err := provider.NewRclonePrivateLocator(input.ManagedRootLocator)
@@ -116,7 +136,7 @@ func (preflight *productionRcloneVersioningPreflighter) PreflightPortable(
 		return RcloneVersioningPreflightEvidence{}, err
 	}
 	evidence := RcloneVersioningPreflightEvidence{
-		Mode: backupasset.PublicationVersionedPrefix, CapabilityRevision: input.BindingRevision + 1,
+		Mode: backupasset.PublicationVersionedPrefix, CapabilityRevision: input.CapabilityRevision,
 		ConsistencyClass: backupasset.RcloneConsistencyObservationallyStable,
 		HashFidelity:     backupasset.RcloneHashDownloadVerifiedBytes, EstimatedReadBytes: result.VerifiedBytes,
 		APICostClass: backupasset.RcloneCostLow, StorageCostClass: backupasset.RcloneCostLow, EgressCostClass: backupasset.RcloneCostLow,
@@ -133,7 +153,12 @@ func (preflight *productionRcloneVersioningPreflighter) PreflightPortable(
 func (preflight *productionRcloneVersioningPreflighter) PreflightNative(
 	ctx context.Context,
 	input RcloneNativePreflightInput,
-) (RcloneVersioningPreflightEvidence, error) {
+) (_ RcloneVersioningPreflightEvidence, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			resultErr = &rclonePreflightBoundaryError{cause: resultErr}
+		}
+	}()
 	if preflight == nil || preflight.now == nil {
 		return RcloneVersioningPreflightEvidence{}, fmt.Errorf("%w: invalid native Rclone preflight input", backupasset.ErrInvalidState)
 	}
@@ -141,11 +166,29 @@ func (preflight *productionRcloneVersioningPreflighter) PreflightNative(
 		ctx = context.Background()
 	}
 	now := preflight.now().UTC()
-	if backupasset.ValidateOpaqueID(input.PreflightID) != nil || input.BindingRevision == math.MaxUint64 ||
+	if backupasset.ValidateOpaqueID(input.PreflightID) != nil || backupasset.ValidateOpaqueID(input.CandidateID) != nil ||
+		input.TaskID == 0 || input.NodeID == 0 || input.BindingRevision == 0 || input.CapabilityRevision == 0 ||
+		input.TaskRevision == 0 || input.ConfigRevision == 0 || input.CredentialRevision == 0 ||
+		!input.CandidateExpiresAt.After(now) ||
 		input.Request.Validate() != nil || !input.AbsoluteDeadline.After(now) || input.KMSReadKeyMaxCount <= 0 ||
 		input.ObservationLimits.PageSize <= 0 || input.ObservationLimits.MaxPages <= 0 || input.ObservationLimits.MaxRecords <= 0 {
 		return RcloneVersioningPreflightEvidence{}, fmt.Errorf("%w: invalid native Rclone preflight input", backupasset.ErrInvalidState)
 	}
+	if !input.CandidateExpiresAt.After(now.Add(sshutil.CommandExecutionJoinTimeout)) {
+		return RcloneVersioningPreflightEvidence{}, fmt.Errorf("%w: Rclone candidate has insufficient completion time", backupasset.ErrConflict)
+	}
+	preflight.mu.Lock()
+	if _, busy := preflight.inflight[input.CandidateID]; busy {
+		preflight.mu.Unlock()
+		return RcloneVersioningPreflightEvidence{}, fmt.Errorf("%w: Rclone preflight already in progress", backupasset.ErrConflict)
+	}
+	preflight.inflight[input.CandidateID] = struct{}{}
+	preflight.mu.Unlock()
+	defer func() {
+		preflight.mu.Lock()
+		delete(preflight.inflight, input.CandidateID)
+		preflight.mu.Unlock()
+	}()
 	profile := provider.RcloneNativeProfile{
 		Code: provider.RcloneNativeAWSS3GeneralPurposeV1, Region: input.Request.Region, Bucket: input.Request.Bucket,
 		ManagedPrefix: input.Request.ManagedPrefix, EndpointMode: provider.RcloneNativeEndpointAWSRegional,
@@ -202,21 +245,31 @@ func (preflight *productionRcloneVersioningPreflighter) PreflightNative(
 	if err != nil {
 		return RcloneVersioningPreflightEvidence{}, err
 	}
-	encryptionDigest, err := preflight.digest("bucket-encryption-v1", bucketEncryption)
+	encryptionDigest, err := provider.CanonicalRcloneNativeBucketEncryptionDigest(bucketEncryption)
 	if err != nil {
 		return RcloneVersioningPreflightEvidence{}, err
 	}
 	observationKey, err := preflight.digest("settle-key-v1", struct {
-		TaskID          uint
-		BindingRevision uint64
-		Profile         provider.RcloneNativeProfile
-	}{input.TaskID, input.BindingRevision, profile})
+		CandidateID                                                       string
+		TaskID                                                            uint
+		NodeID                                                            uint
+		TaskRevision, BindingRevision, ConfigRevision, CredentialRevision uint64
+		Profile                                                           provider.RcloneNativeProfile
+		RoleARN, ExternalID, AccountID                                    string
+		Encryption                                                        provider.RcloneNativeEncryptionSelection
+		PublicationConfig                                                 backupasset.PublicationConfig
+	}{input.CandidateID, input.TaskID, input.NodeID, input.TaskRevision, input.BindingRevision,
+		input.ConfigRevision, input.CredentialRevision, profile, input.Request.RoleARN, input.ExternalID, identity.AccountID, selection, input.PublicationConfig})
 	if err != nil {
 		return RcloneVersioningPreflightEvidence{}, err
 	}
-	firstObservedAt, settled := preflight.observeNativeSettle(
-		observationKey, versioningDigest, lifecycleDigest, encryptionDigest, now,
+	now = preflight.now().UTC()
+	firstObservedAt, settled, err := preflight.observeNativeSettle(
+		observationKey, versioningDigest, lifecycleDigest, encryptionDigest, now, input.CandidateExpiresAt,
 	)
+	if err != nil {
+		return RcloneVersioningPreflightEvidence{}, err
+	}
 	if !settled {
 		return rcloneNativeSettlingEvidence(input, initialSession.Session.ExpiresAt(), firstObservedAt), nil
 	}
@@ -310,11 +363,21 @@ func (preflight *productionRcloneVersioningPreflighter) PreflightNative(
 	if err != nil {
 		return RcloneVersioningPreflightEvidence{}, err
 	}
-	postVersioningDigest, _ := provider.CanonicalRcloneNativeVersioningDigest(postVersioning)
-	postLifecycleDigest, _ := provider.CanonicalRcloneNativeLifecycleDigest(postLifecycle)
-	postEncryptionDigest, _ := preflight.digest("bucket-encryption-v1", postEncryption)
+	postVersioningDigest, err := provider.CanonicalRcloneNativeVersioningDigest(postVersioning)
+	if err != nil {
+		return RcloneVersioningPreflightEvidence{}, err
+	}
+	postLifecycleDigest, err := provider.CanonicalRcloneNativeLifecycleDigest(postLifecycle)
+	if err != nil {
+		return RcloneVersioningPreflightEvidence{}, err
+	}
+	postEncryptionDigest, err := provider.CanonicalRcloneNativeBucketEncryptionDigest(postEncryption)
+	if err != nil {
+		return RcloneVersioningPreflightEvidence{}, err
+	}
 	if postVersioningDigest != versioningDigest || postLifecycleDigest != lifecycleDigest || postEncryptionDigest != encryptionDigest {
-		preflight.resetNativeSettle(observationKey, postVersioningDigest, postLifecycleDigest, postEncryptionDigest, now)
+		now = preflight.now().UTC()
+		preflight.resetNativeSettle(observationKey, postVersioningDigest, postLifecycleDigest, postEncryptionDigest, now, input.CandidateExpiresAt)
 		return rcloneNativeSettlingEvidence(input, finalSession.Session.ExpiresAt(), now), nil
 	}
 
@@ -347,7 +410,7 @@ func (preflight *productionRcloneVersioningPreflighter) PreflightNative(
 	}
 	expiresAt := finalSession.Session.ExpiresAt()
 	evidence := RcloneVersioningPreflightEvidence{
-		Mode: backupasset.PublicationNativeObjectVersions, CapabilityRevision: input.BindingRevision + 1,
+		Mode: backupasset.PublicationNativeObjectVersions, CapabilityRevision: input.CapabilityRevision,
 		ConsistencyClass: backupasset.RcloneConsistencyProviderStrong, HashFidelity: backupasset.RcloneHashDownloadVerifiedBytes,
 		EstimatedReadBytes: commandEvidence.PayloadBytes + commandEvidence.RangeBytes,
 		APICostClass:       backupasset.RcloneCostModerate, StorageCostClass: backupasset.RcloneCostLow, EgressCostClass: backupasset.RcloneCostLow,
@@ -361,7 +424,7 @@ func (preflight *productionRcloneVersioningPreflighter) PreflightNative(
 			ActiveKMSKeyDigest: encryptionEvidence.ActiveKeyDigest,
 			KMSCapabilityRevision: func() uint64 {
 				if selection.Profile == provider.RcloneNativeSSEKMSV1 {
-					return input.BindingRevision + 1
+					return input.CapabilityRevision
 				}
 				return 0
 			}(),
@@ -516,30 +579,43 @@ func rcloneNativeSettlingEvidence(input RcloneNativePreflightInput, expiresAt, o
 
 func (preflight *productionRcloneVersioningPreflighter) observeNativeSettle(
 	key, versioningDigest, lifecycleDigest, encryptionDigest string,
-	now time.Time,
-) (time.Time, bool) {
+	now, expiresAt time.Time,
+) (time.Time, bool, error) {
 	preflight.mu.Lock()
 	defer preflight.mu.Unlock()
+	for observationKey, observation := range preflight.observations {
+		if !observation.expiresAt.After(now) {
+			delete(preflight.observations, observationKey)
+		}
+	}
 	record, exists := preflight.observations[key]
 	if !exists || record.versioningDigest != versioningDigest || record.lifecycleDigest != lifecycleDigest || record.encryptionDigest != encryptionDigest {
+		if !expiresAt.After(now.Add(rcloneNativePreflightSettleWindow + sshutil.CommandExecutionJoinTimeout)) {
+			return time.Time{}, false, fmt.Errorf("%w: Rclone candidate has insufficient observation time", backupasset.ErrConflict)
+		}
 		record = rcloneNativeSettleObservation{
 			versioningDigest: versioningDigest, lifecycleDigest: lifecycleDigest,
-			encryptionDigest: encryptionDigest, firstObservedAt: now,
+			encryptionDigest: encryptionDigest, firstObservedAt: now, expiresAt: expiresAt,
 		}
 		preflight.observations[key] = record
-		return now, false
+		return now, false, nil
 	}
-	return record.firstObservedAt, !now.Before(record.firstObservedAt.Add(rcloneNativePreflightSettleWindow))
+	return record.firstObservedAt, !now.Before(record.firstObservedAt.Add(rcloneNativePreflightSettleWindow)), nil
 }
 
 func (preflight *productionRcloneVersioningPreflighter) resetNativeSettle(
 	key, versioningDigest, lifecycleDigest, encryptionDigest string,
-	now time.Time,
+	now, expiresAt time.Time,
 ) {
 	preflight.mu.Lock()
+	for observationKey, observation := range preflight.observations {
+		if !observation.expiresAt.After(now) {
+			delete(preflight.observations, observationKey)
+		}
+	}
 	preflight.observations[key] = rcloneNativeSettleObservation{
 		versioningDigest: versioningDigest, lifecycleDigest: lifecycleDigest,
-		encryptionDigest: encryptionDigest, firstObservedAt: now,
+		encryptionDigest: encryptionDigest, firstObservedAt: now, expiresAt: expiresAt,
 	}
 	preflight.mu.Unlock()
 }

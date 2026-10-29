@@ -268,7 +268,8 @@ func (deleter *RclonePrefixPointDeleter) verifyLivePrefixMarker(
 	if err != nil {
 		return ErrDeletePointIdentityConflict
 	}
-	if !rcloneCommitDeletionAuthorityMatches(commit, access.Commit) ||
+	if ValidateRcloneRuntimeCompatibility(attempt, commit) != nil ||
+		!rcloneCommitDeletionAuthorityMatches(commit, access.Commit) ||
 		commit.Portable == nil ||
 		commit.Portable.AttemptIdentityDigest != attemptIdentity ||
 		commit.Portable.AttemptMarkerDigest != attempt.Portable.AttemptMarkerDigest ||
@@ -480,7 +481,7 @@ func rclonePrefixDeletionAccess(request DeletePointRequest) (RclonePrefixDeletio
 		access.Command == nil || access.Command.Node.ID == 0 {
 		return RclonePrefixDeletionAccess{}, invalidDeletePointRequest("invalid Rclone prefix deletion access")
 	}
-	if access.Attempt.Validate() != nil || access.Commit.Validate() != nil {
+	if ValidateRcloneRuntimeCompatibility(access.Attempt, access.Commit) != nil {
 		return RclonePrefixDeletionAccess{}, ErrDeletePointIdentityConflict
 	}
 	if access.Attempt.PublicationMode != backupasset.PublicationVersionedPrefix ||

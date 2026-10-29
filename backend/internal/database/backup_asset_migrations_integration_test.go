@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,7 +56,7 @@ const (
 	backupAssetPlainTextContentVersion          = 73
 	drillDurableRecoveryVersion                 = 74
 	rcloneNativeVersionEvidenceMigrationVersion = 75
-	latestMigrationVersion                      = 94
+	latestMigrationVersion                      = 95
 	recoveryEmptyDeleteSetDigest                = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID                 = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID              = "0000000000000000000000000000006b"
@@ -4061,11 +4060,11 @@ func (fixture migrationFixture) test077ForeignKeyContractDrift(t *testing.T) {
 		{name: "PostgresCrossSchema", engine: "postgres", missing: "attempt_fk_cross_schema"},
 		{name: "PostgresNotValid", engine: "postgres", missing: "attempt_fk_not_valid"},
 	} {
+		if fixture.engine != testCase.engine {
+			continue
+		}
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			if fixture.engine != testCase.engine {
-				t.Skip("foreign-key catalog drift is engine-specific")
-			}
 			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
 			if testCase.missing == "attempt_fk_cross_schema" {
 				fixture.mustExec(t, db, `CREATE SCHEMA lifecycle_fk_cross_schema`)
@@ -4240,133 +4239,29 @@ func lifecycleAuditSlotTableDDL(engine, missing string) string {
 }
 
 func TestBackupAssetMigration073ReleasePropagation(t *testing.T) {
-	testCases := []struct {
-		name      string
-		path      string
-		fragments []string
-	}{
-		{
-			name: "MigrationChecker",
-			path: filepath.Join("..", "..", "..", "scripts", "check-backup-asset-migration.sh"),
-			fragments: []string{
-				"PLAIN_TEXT_VERSION=000073",
-				"PLAIN_TEXT_NAME=backup_asset_plain_text_content",
-				"trg_backup_asset_plain_text_content_downgrade_admission",
-				"TestBackupAssetMigration073SQLite",
-				"TestBackupAssetMigration073PairedFiles",
-			},
-		},
-		{
-			name: "PostgresCI",
-			path: filepath.Join("..", "..", "..", ".github", "workflows", "ci.yml"),
-			fragments: []string{
-				"run-required-postgres-tests.sh",
-				"Test.*Migration.*Postgres.*",
-			},
-		},
+	path := filepath.Join("..", "..", "..", "scripts", "check-backup-asset-migration.sh")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migration checker %s: %v", path, err)
 	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			contents, err := os.ReadFile(testCase.path)
-			if err != nil {
-				t.Fatalf("read release propagation owner %s: %v", testCase.path, err)
-			}
-			for _, fragment := range testCase.fragments {
-				if !strings.Contains(string(contents), fragment) {
-					t.Fatalf("%s is missing 000073 release propagation %q", testCase.path, fragment)
-				}
-			}
-			if testCase.name == "PostgresCI" && !activeGoTestSelectorMatches(string(contents), "TestBackupAssetMigration073Postgres") {
-				t.Fatalf("%s has no active Go test selector matching TestBackupAssetMigration073Postgres", testCase.path)
-			}
-		})
-	}
-}
-
-func activeGoTestSelectorMatches(workflow, testName string) bool {
-	if selector, ok := activeRequiredPostgresSelector(workflow, "./internal/database"); ok {
-		compiled, err := regexp.Compile(selector)
-		if err == nil && compiled.MatchString(testName) {
-			return true
+	for _, fragment := range []string{
+		"PLAIN_TEXT_VERSION=000073",
+		"PLAIN_TEXT_NAME=backup_asset_plain_text_content",
+		"trg_backup_asset_plain_text_content_downgrade_admission",
+		"TestBackupAssetMigration073SQLite",
+		"TestBackupAssetMigration073PairedFiles",
+	} {
+		if !strings.Contains(string(contents), fragment) {
+			t.Fatalf("%s is missing 000073 release propagation %q", path, fragment)
 		}
 	}
-	for _, rawLine := range strings.Split(workflow, "\n") {
-		line := strings.TrimSpace(rawLine)
-		if !strings.HasPrefix(line, "run:") {
-			continue
-		}
-		command := strings.TrimSpace(strings.TrimPrefix(line, "run:"))
-		if !strings.Contains(command, "go test ./internal/database") {
-			continue
-		}
-		selectorAt := strings.Index(command, "-run ")
-		if selectorAt == -1 {
-			continue
-		}
-		tail := strings.TrimSpace(command[selectorAt+len("-run "):])
-		if tail == "" {
-			continue
-		}
-		var selector string
-		if tail[0] == '\'' || tail[0] == '"' {
-			if closingAt := strings.IndexByte(tail[1:], tail[0]); closingAt >= 0 {
-				selector = tail[1 : closingAt+1]
-			}
-		} else if fields := strings.Fields(tail); len(fields) > 0 {
-			selector = fields[0]
-		}
-		compiled, err := regexp.Compile(selector)
-		if err == nil && compiled.MatchString(testName) {
-			return true
-		}
-	}
-	return false
 }
 
 func TestBackupAssetMigration073CISelectorRecognition(t *testing.T) {
-	const testName = "TestBackupAssetMigration073Postgres"
-	for _, testCase := range []struct {
-		name     string
-		workflow string
-		want     bool
-	}{
-		{
-			name:     "CommentOnlyCannotPass",
-			workflow: "# run: go test ./internal/database -run '^TestBackupAssetMigration0(72|73)Postgres$' -count=1",
-			want:     false,
-		},
-		{
-			name:     "ActiveMatchingSelectorPasses",
-			workflow: "run: go test ./internal/database -run '^TestBackupAssetMigration0(72|73)Postgres$' -count=1",
-			want:     true,
-		},
-		{
-			name:     "ActiveNonMatchingSelectorFails",
-			workflow: "run: go test ./internal/database -run '^TestBackupAssetMigration072Postgres$' -count=1",
-			want:     false,
-		},
-		{
-			name:     "ActiveReusableRunnerPasses",
-			workflow: "run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/database '^(Test.*Migration.*Postgres.*)$'",
-			want:     true,
-		},
-		{
-			name:     "CommentedReusableRunnerCannotPass",
-			workflow: "# run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/database '^(Test.*Migration.*Postgres.*)$'",
-			want:     false,
-		},
-		{
-			name:     "ReusableRunnerForAnotherPackageFails",
-			workflow: "run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/task '^(Test.*Migration.*Postgres.*)$'",
-			want:     false,
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := activeGoTestSelectorMatches(testCase.workflow, testName); got != testCase.want {
-				t.Fatalf("active selector match = %t, want %t", got, testCase.want)
-			}
-		})
+	if err := validateRequiredPostgresWorkflow(loadPostgresWorkflowJob(t)); err != nil {
+		t.Fatal(err)
 	}
+	assertRequiredInventoryTests(t, "./internal/database", "TestBackupAssetMigration073Postgres")
 }
 
 func runBackupAssetMigration073Contract(t *testing.T, fixture migrationFixture) {

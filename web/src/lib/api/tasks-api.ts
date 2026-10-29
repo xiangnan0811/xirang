@@ -19,6 +19,7 @@ import type {
   RclonePublicationSummary,
   RcloneRollbackCapability,
   RcloneConsistencyClass,
+  RclonePreflightPurpose,
   RcloneVersionedPublicationMode,
   RcloneVersioningActivationResult,
   RcloneVersioningMigrationChoice,
@@ -133,9 +134,11 @@ type RawRcloneBindingSetupResult = {
   setup_id?: unknown;
   expires_at?: unknown;
   external_id?: unknown;
+  base_binding_revision?: unknown;
 };
 
-type RawRcloneVersioningPreflightResult = {
+export type RawRcloneVersioningPreflightResult = {
+  purpose?: unknown;
   preflight_id?: unknown;
   expires_at?: unknown;
   summary?: RawRclonePublicationSummary;
@@ -673,7 +676,24 @@ function mapRclonePublicationSummary(raw: unknown, fallbackToLegacy = false): Rc
   };
 }
 
+const UINT64_MAX_DECIMAL = "18446744073709551615";
+
+/** Accepts only a canonical uint64 decimal string; never coerces numbers or substitutes zero. */
+function parseRcloneSetupBaseRevision(raw: unknown): string | null {
+  if (typeof raw !== "string" || !/^(0|[1-9]\d{0,19})$/.test(raw)) {
+    return null;
+  }
+  if (raw.length === UINT64_MAX_DECIMAL.length && raw > UINT64_MAX_DECIMAL) {
+    return null;
+  }
+  return raw;
+}
+
 function mapRcloneBindingSetupResult(raw: RawRcloneBindingSetupResult): RcloneBindingSetupResult {
+  const baseBindingRevision = parseRcloneSetupBaseRevision(raw.base_binding_revision);
+  if (baseBindingRevision === null) {
+    return { setupId: "", expiresAt: "", externalId: undefined, baseBindingRevision: null };
+  }
   const setupId = typeof raw.setup_id === "string" && /^[a-f0-9]{32}$/.test(raw.setup_id) ? raw.setup_id : "";
   const externalId = typeof raw.external_id === "string" && /^xirang-[a-f0-9]{32}$/.test(raw.external_id)
     ? raw.external_id
@@ -682,14 +702,45 @@ function mapRcloneBindingSetupResult(raw: RawRcloneBindingSetupResult): RcloneBi
     setupId,
     expiresAt: safeOptionalTimestamp(raw.expires_at) ?? "",
     externalId,
+    baseBindingRevision,
   };
 }
 
-function mapRclonePreflightResult(raw: RawRcloneVersioningPreflightResult): RcloneVersioningPreflightResult {
+function mapRclonePreflightPurpose(raw: unknown): RclonePreflightPurpose | null {
+  if (raw === "activation" || raw === "renewal") {
+    return raw;
+  }
+  return null;
+}
+
+/** @internal 仅导出用于测试 */
+export function mapRclonePreflightResult(raw?: unknown): RcloneVersioningPreflightResult {
+  const source = typeof raw === "object" && raw !== null
+    ? (raw as RawRcloneVersioningPreflightResult)
+    : {};
+  const purpose = mapRclonePreflightPurpose(source.purpose);
+  if (!purpose) {
+    return {
+      purpose: null,
+      preflightId: "",
+      expiresAt: safeOptionalTimestamp(source.expires_at) ?? "",
+      summary: blockedRclonePublicationSummary(
+        typeof source.summary === "object" && source.summary !== null
+          ? (source.summary as RawRclonePublicationSummary)
+          : undefined,
+      ),
+    };
+  }
+
+  const preflightId = typeof source.preflight_id === "string" && /^[a-f0-9]{32}$/.test(source.preflight_id)
+    ? source.preflight_id
+    : "";
+
   return {
-    preflightId: typeof raw.preflight_id === "string" && /^[a-f0-9]{32}$/.test(raw.preflight_id) ? raw.preflight_id : "",
-    expiresAt: safeOptionalTimestamp(raw.expires_at) ?? "",
-    summary: mapRclonePublicationSummary(raw.summary),
+    purpose,
+    preflightId,
+    expiresAt: safeOptionalTimestamp(source.expires_at) ?? "",
+    summary: mapRclonePublicationSummary(source.summary),
   };
 }
 

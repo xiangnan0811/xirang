@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "@/i18n";
+import i18n, { setLanguage } from "@/i18n";
 import {
   bumpAuthSessionGeneration,
   clearAuthTransitionBarrier,
@@ -320,4 +320,46 @@ describe("AlertList delivery panel config links and timeline", () => {
     await flush();
     expect(configNavs()).toHaveLength(0);
   });
+});
+
+describe("AlertList grouped alert badge", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    calls = [];
+    authState.token = "tok-admin";
+    authState.role = "admin";
+    rememberAuthIdentity("tok-admin", "admin");
+    clearAuthTransitionBarrier();
+    bumpAuthSessionGeneration();
+  });
+
+  afterEach(async () => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    await setLanguage("zh");
+  });
+
+  it.each(["zh", "en"] as const)(
+    "labels similar alerts (total - 1) with a total-count tooltip in %s on card and table layouts",
+    async (lng) => {
+      const alert = await loadMappedAlert();
+      await setLanguage(lng);
+      for (const key of ["notifications.groupBadge", "notifications.groupBadgeTooltip"]) {
+        expect(i18n.getResource(lng, "translation", key)).toEqual(expect.any(String));
+      }
+      const t = i18n.getFixedT(lng);
+      const badgeText = t("notifications.groupBadge", { count: 2 });
+      const tooltip = t("notifications.groupBadgeTooltip", { count: 3 });
+      if (lng === "en") {
+        expect(`${badgeText} ${tooltip}`).not.toMatch(/\p{Script=Han}/u);
+      }
+
+      render(listUi([alert], { deliveryOpenAlertId: null, groupInfoMap: { [alert.id]: { count: 3 } } }));
+
+      const badges = screen.getAllByTitle(tooltip);
+      expect(badges).toHaveLength(2);
+      for (const badge of badges) expect(badge).toHaveTextContent(badgeText);
+    },
+  );
 });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SCENARIOS } from "../e2e/walkthrough/scenarios.mjs";
 import { compileEvidence, compileRun } from "./compile-walkthrough-evidence.mjs";
 import { captureCandidate, lockfileSummary } from "./walkthrough-candidate.mjs";
@@ -393,5 +393,122 @@ describe("walkthrough output containment", () => {
       randomUUID(),
     )).toThrow(/run output parent escapes/);
     expect(fs.existsSync(path.join(repositoryRoot, "web", "src", "new-run"))).toBe(false);
+  });
+});
+
+describe("walkthrough candidate fingerprint", () => {
+  // `git rev-parse --local-env-vars`: an inherited value (for example from a Git hook)
+  // would redirect fixture init/add and captureCandidate into the host repository.
+  const GIT_REPOSITORY_ENV = [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+  ];
+
+  function isolateGitEnvironment() {
+    for (const name of GIT_REPOSITORY_ENV) vi.stubEnv(name, undefined);
+  }
+
+  beforeEach(() => {
+    isolateGitEnvironment();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function makeCandidateFixture() {
+    const repositoryRoot = fs.realpathSync(makeScratchDirectory("candidate-fixture-"));
+    execFileSync("git", ["init", "--quiet", repositoryRoot], { stdio: "ignore" });
+    fs.mkdirSync(path.join(repositoryRoot, "src"));
+    fs.writeFileSync(path.join(repositoryRoot, "src", "kept.ts"), "export const kept = 1;\n", "utf8");
+    fs.writeFileSync(path.join(repositoryRoot, "src", "retired.ts"), "export const retired = 1;\n", "utf8");
+    return repositoryRoot;
+  }
+
+  function track(repositoryRoot, ...paths) {
+    execFileSync("git", ["add", "--", ...paths], { cwd: repositoryRoot, stdio: "ignore" });
+  }
+
+  it("omits a tracked file deleted from the working tree and reports the deletion as a candidate change", () => {
+    const repositoryRoot = makeCandidateFixture();
+    track(repositoryRoot, "src");
+    const before = captureCandidate(repositoryRoot);
+    expect(before.files.map(({ path: relativePath }) => relativePath)).toEqual(["src/kept.ts", "src/retired.ts"]);
+
+    fs.rmSync(path.join(repositoryRoot, "src", "retired.ts"));
+    const afterDeletion = captureCandidate(repositoryRoot);
+    expect(afterDeletion.files).toEqual(before.files.filter(({ path: relativePath }) => relativePath !== "src/retired.ts"));
+    expect(afterDeletion.sha256).not.toBe(before.sha256);
+    expect(captureCandidate(repositoryRoot)).toEqual(afterDeletion);
+
+    fs.writeFileSync(path.join(repositoryRoot, "src", "retired.ts"), "export const retired = 2;\n", "utf8");
+    const recreated = captureCandidate(repositoryRoot);
+    expect(recreated.sha256).not.toBe(afterDeletion.sha256);
+    expect(recreated.sha256).not.toBe(before.sha256);
+  });
+
+  it("still rejects a tracked symlink that dangles inside the checkout", () => {
+    const repositoryRoot = makeCandidateFixture();
+    fs.symlinkSync("missing.ts", path.join(repositoryRoot, "src", "dangling.ts"));
+    track(repositoryRoot, "src");
+    expect(() => captureCandidate(repositoryRoot)).toThrow(/ENOENT/);
+  });
+
+  it("still rejects a tracked symlink that escapes the checkout", () => {
+    const repositoryRoot = makeCandidateFixture();
+    const outside = fs.realpathSync(makeScratchDirectory("candidate-outside-"));
+    fs.writeFileSync(path.join(outside, "outside.ts"), "export const outside = 1;\n", "utf8");
+    fs.symlinkSync(path.join(outside, "outside.ts"), path.join(repositoryRoot, "src", "escape.ts"));
+    track(repositoryRoot, "src");
+    expect(() => captureCandidate(repositoryRoot)).toThrow(/escapes the checkout/);
+  });
+
+  it("keeps fixture Git work out of an inherited host repository and index", () => {
+    const hostRoot = fs.realpathSync(makeScratchDirectory("candidate-host-"));
+    execFileSync("git", ["init", "--quiet", hostRoot], { stdio: "ignore" });
+    fs.writeFileSync(path.join(hostRoot, "host.txt"), "host\n", "utf8");
+    track(hostRoot, "host.txt");
+    const hostGitDirectory = path.join(hostRoot, ".git");
+    const hostIndex = path.join(hostGitDirectory, "index");
+    const hostObjects = path.join(hostGitDirectory, "objects");
+    const hostEnv = {
+      GIT_DIR: hostGitDirectory,
+      GIT_COMMON_DIR: hostGitDirectory,
+      GIT_WORK_TREE: hostRoot,
+      GIT_INDEX_FILE: hostIndex,
+      GIT_OBJECT_DIRECTORY: hostObjects,
+    };
+    const hostIndexBefore = fs.readFileSync(hostIndex);
+    const hostObjectsBefore = fs.readdirSync(hostObjects, { recursive: true }).sort();
+    const probe = makeScratchDirectory("candidate-probe-");
+    const hostListing = () => execFileSync("git", ["ls-files"], { cwd: probe, env: { ...process.env, ...hostEnv }, encoding: "utf8" });
+    expect(hostListing()).toBe("host.txt\n");
+
+    // Simulate a hook-inherited environment, then isolate exactly as every test does.
+    for (const [name, value] of Object.entries(hostEnv)) vi.stubEnv(name, value);
+    expect(execFileSync("git", ["ls-files"], { cwd: probe, encoding: "utf8" })).toBe("host.txt\n");
+    isolateGitEnvironment();
+
+    const repositoryRoot = makeCandidateFixture();
+    track(repositoryRoot, "src");
+    expect(captureCandidate(repositoryRoot).files.map(({ path: relativePath }) => relativePath))
+      .toEqual(["src/kept.ts", "src/retired.ts"]);
+
+    expect(fs.readFileSync(hostIndex).equals(hostIndexBefore)).toBe(true);
+    expect(fs.readdirSync(hostObjects, { recursive: true }).sort()).toEqual(hostObjectsBefore);
+    expect(hostListing()).toBe("host.txt\n");
   });
 });

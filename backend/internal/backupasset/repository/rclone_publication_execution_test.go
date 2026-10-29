@@ -33,7 +33,8 @@ func TestRclonePreparePersistsStablePointFreshAttemptAndKeepsTaskRunTruthSeparat
 	attempt, err := execution.Attempt().RcloneAttempt()
 	if err != nil || attempt.Portable == nil || attempt.Native != nil || attempt.TaskRunID != fixture.taskRun.ID ||
 		attempt.PointDeadlineAt != fixture.binding.PreflightExpiresAt || attempt.ConfigDigest != fixture.binding.Portable.ConfigDigest ||
-		attempt.BindingRevision != fixture.binding.BindingRevision || attempt.CapabilityRevision != fixture.binding.CapabilityRevision {
+		attempt.BindingRevision != fixture.binding.BindingRevision || attempt.CapabilityRevision != fixture.binding.CapabilityRevision ||
+		attempt.MinimumRuntimeRevision != 2 || attempt.ManifestSchemaRevision != 2 || fixture.binding.MinimumRuntimeRevision != 1 {
 		t.Fatalf("managed Rclone attempt=%+v err=%v", attempt, err)
 	}
 	inputProvider, ok := execution.(interface {
@@ -223,6 +224,40 @@ func TestRcloneNativeProviderCommitRejectsCapabilityRevisionDrift(t *testing.T) 
 	}
 }
 
+func TestRcloneProviderCommitRejectsMismatchedRuntimeRevision(t *testing.T) {
+	fixture := newRclonePublicationFixture(t, backupasset.PublicationVersionedPrefix)
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) }()
+	attempt, err := execution.Attempt().RcloneAttempt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := execution.(interface {
+		RclonePublicationInput() (provider.RclonePublicationInput, error)
+	}).RclonePublicationInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := validRcloneRepositoryCommit(attempt, input.PortableRequest.CostEvidenceDigest, fixture.now.Add(time.Minute))
+	commit.MinimumRuntimeRevision = 1
+	if _, err := execution.RecordProviderCommit(context.Background(), provider.NewRcloneProviderCommit(commit)); err == nil {
+		t.Fatal("V2 attempt accepted a V1 commit")
+	}
+	if err := validateReconciledRcloneCommitEvidence(attempt, fixture.binding, commit); err == nil {
+		t.Fatal("reconciliation accepted mismatched attempt and commit versions")
+	}
+	var point model.RecoveryPoint
+	if err := fixture.db.First(&point, "id = ?", attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if point.State != string(backupasset.RecoveryPointPreparing) || point.SourceFingerprint != "" {
+		t.Fatalf("mismatched commit changed point: %+v", point)
+	}
+}
+
 func TestRcloneProviderCommitAdvancesOnlyToVerifyingAndIsExactReplay(t *testing.T) {
 	fixture := newRclonePublicationFixture(t, backupasset.PublicationVersionedPrefix)
 	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
@@ -366,7 +401,11 @@ func validRcloneRepositoryCommit(attempt provider.RcloneAttemptV1, costDigest st
 
 func newRclonePublicationFixture(t *testing.T, mode backupasset.TaskPublicationMode) *rclonePublicationFixture {
 	t.Helper()
-	db := newRepositoryTestDB(t)
+	return newRclonePublicationFixtureWithDB(t, mode, newRepositoryTestDB(t))
+}
+
+func newRclonePublicationFixtureWithDB(t *testing.T, mode backupasset.TaskPublicationMode, db *gorm.DB) *rclonePublicationFixture {
+	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	legacyPolicy := `{"version":1,"publication_mode":"legacy_mutable","bandwidth_limit":"10M","transfers":4}`
 	taskEntity := seedTask(t, db, "rclone", "backup:legacy", legacyPolicy)
@@ -461,7 +500,7 @@ func newRclonePublicationFixture(t *testing.T, mode backupasset.TaskPublicationM
 	}
 	access := model.RepositoryAccessBinding{
 		ID: strings.Repeat("3", 32), RepositoryID: repository.ID, BindingKind: "managed_rclone_v3",
-		EncryptedConfig: payload, ConfigFingerprint: strings.Repeat("f", 64), Status: bindingStatusActive,
+		EncryptedConfig: payload, ConfigFingerprint: managedRcloneBindingDigest(salt, "active-binding", payload), Status: bindingStatusActive,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(&access).Error; err != nil {

@@ -26,8 +26,8 @@ func NewSnapshotDiffHandler(db *gorm.DB, guard publication.LineageGuard, runner 
 }
 
 // Diff godoc
-// @Summary      比较快照差异
-// @Description  比较两个 restic 快照之间的文件变更差异
+// @Summary      已退役的快照比较入口
+// @Description  此兼容入口始终返回 410，不再比较快照。请使用备份资产 Catalog 或 Search 浏览、查找恢复点内容；它们不提供此旧比较接口的等价替代。
 // @Tags         snapshots
 // @Security     Bearer
 // @Produce      json

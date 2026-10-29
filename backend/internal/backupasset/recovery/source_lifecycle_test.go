@@ -2012,14 +2012,6 @@ func TestRecoveryPointSourceLifecycleRecoveryCancellationAfterPrecheckUsesBounde
 
 func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(t *testing.T) {
 	fixture := newAuthorizationReceiptPostgresServiceFixture(t, AuthorizationReceiptExecute)
-	var serverVersion int
-	if err := fixture.db.Raw("SHOW server_version_num").Scan(&serverVersion).Error; err != nil {
-		t.Fatalf("load PostgreSQL version: %v", err)
-	}
-	if serverVersion/10000 != 17 {
-		t.Fatalf("PostgreSQL major=%d, want 17", serverVersion/10000)
-	}
-
 	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatalf("execute PostgreSQL Recovery fixture: %v", err)

@@ -1465,6 +1465,35 @@ func (s *Service) BackupAssetSettingsSnapshot() (map[string]string, error) {
 	return copyStringMap(values), nil
 }
 
+// BackupAssetSettingsSnapshotTx resolves one database snapshot using the
+// caller's transaction. It deliberately does not acquire the mutation gate:
+// callers may already hold domain row locks when checking their commit fence.
+func (s *Service) BackupAssetSettingsSnapshotTx(ctx context.Context, tx *gorm.DB) (map[string]string, error) {
+	if s == nil || tx == nil || ctx == nil {
+		return nil, fmt.Errorf("transactional settings snapshot is unavailable")
+	}
+	keys := BackupAssetFoundationSettingKeys()
+	var rows []model.SystemSetting
+	if err := tx.WithContext(ctx).Where("key IN ?", keys).Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("read transactional backup asset settings: %w", err)
+	}
+	values := make(map[string]string, len(keys))
+	for _, key := range keys {
+		value, err := s.GetFallback(key)
+		if err != nil {
+			return nil, err
+		}
+		values[key] = value
+	}
+	for _, row := range rows {
+		values[row.Key] = decryptSettingValue(row.Key, row.Value)
+	}
+	if err := validateBackupAssetFoundationConfig(values, true); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
 func (s *Service) backupAssetFoundationSnapshot() (map[string]string, error) {
 	values := make(map[string]string, len(backupAssetFoundationSettingKeys))
 	for _, key := range backupAssetFoundationSettingKeys {

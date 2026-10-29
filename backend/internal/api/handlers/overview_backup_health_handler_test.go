@@ -393,7 +393,7 @@ func TestBackupHealth_TrendSeparatesFactAndUnprovenSameDayRunsPostgres(t *testin
 		t.Fatalf("expected PostgreSQL 200, got %d body=%s", resp.Code, resp.Body.String())
 	}
 	var todayTotal, todaySuccess int
-	today := now.Format("2006-01-02")
+	today := now.In(time.Local).Format("2006-01-02")
 	for _, point := range result.Data.Trend {
 		if point.Date == today {
 			todayTotal = point.Total

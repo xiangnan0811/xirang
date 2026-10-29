@@ -150,7 +150,6 @@ export function TasksPage() {
   const [pendingAction, setPendingAction] = useState<PendingActionType>(null);
   const [historyTask, setHistoryTask] = useState<TaskRecord | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRunRecord | null>(null);
-  const [showDiff, setShowDiff] = useState(false);
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [batchDefaultNodeIds, setBatchDefaultNodeIds] = useState<number[] | undefined>(undefined);
   const [batchResultId, setBatchResultId] = useState<string | null>(null);
@@ -804,8 +803,6 @@ export function TasksPage() {
         setHistoryTask={setHistoryTask}
         selectedRun={selectedRun}
         setSelectedRun={setSelectedRun}
-        showDiff={showDiff}
-        setShowDiff={setShowDiff}
         batchDialogOpen={batchDialogOpen}
         setBatchDialogOpen={setBatchDialogOpen}
         batchDefaultNodeIds={batchDefaultNodeIds}

@@ -22,8 +22,8 @@ import (
 )
 
 // StartRsyncSSHServer starts an isolated local sshd suitable for real Rsync
-// integration tests. The returned node carries the generated private key and
-// all files/processes are cleaned up through the test lifecycle.
+// and SFTP integration tests. The returned node carries the generated private
+// key and all files/processes are cleaned up through the test lifecycle.
 func StartRsyncSSHServer(t testing.TB, sshdBinary string) model.Node {
 	t.Helper()
 	currentUser, err := user.Current()
@@ -73,7 +73,7 @@ func StartRsyncSSHServer(t testing.TB, sshdBinary string) model.Node {
 	if currentUser.Username == "root" {
 		permitRoot = "yes"
 	}
-	config := fmt.Sprintf("Port %d\nListenAddress 127.0.0.1\nHostKey %s\nAuthorizedKeysFile %s\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nChallengeResponseAuthentication no\nUsePAM no\nPermitRootLogin %s\nPubkeyAuthentication yes\nStrictModes no\nUseDNS no\nPrintMotd no\nPidFile %s\nLogLevel ERROR\nAllowUsers %s\n", port, hostPrivatePath, authorizedKeysPath, permitRoot, pidPath, currentUser.Username)
+	config := fmt.Sprintf("Port %d\nListenAddress 127.0.0.1\nHostKey %s\nAuthorizedKeysFile %s\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nChallengeResponseAuthentication no\nUsePAM no\nPermitRootLogin %s\nPubkeyAuthentication yes\nStrictModes no\nUseDNS no\nPrintMotd no\nSubsystem sftp internal-sftp -d %s\nPidFile %s\nLogLevel ERROR\nAllowUsers %s\n", port, hostPrivatePath, authorizedKeysPath, permitRoot, workDir, pidPath, currentUser.Username)
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatalf("write sshd config: %v", err)
 	}

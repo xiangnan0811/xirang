@@ -1,12 +1,11 @@
 import React, { Suspense, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { RotateCcw, GitCompareArrows, SearchCode } from "lucide-react";
+import { RotateCcw, SearchCode } from "lucide-react";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { TaskRcloneVersioningDialog } from "@/components/task-rclone-versioning-dialog";
 import { TaskRsyncVersioningDialog } from "@/components/task-rsync-versioning-dialog";
 import { TaskPreviewConnectDialog } from "@/components/task-preview-connect-dialog";
-import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { BackupAssetsTaskContextLink } from "@/features/backup-assets/backup-assets-task-context-link";
 import {
@@ -52,8 +51,6 @@ export interface TasksPageDialogsProps {
   setHistoryTask: (task: TaskRecord | null) => void;
   selectedRun: TaskRunRecord | null;
   setSelectedRun: (run: TaskRunRecord | null) => void;
-  showDiff: boolean;
-  setShowDiff: (show: boolean | ((prev: boolean) => boolean)) => void;
   batchDialogOpen: boolean;
   setBatchDialogOpen: (open: boolean) => void;
   batchDefaultNodeIds: number[] | undefined;
@@ -99,8 +96,6 @@ export function TasksPageDialogs({
   setHistoryTask,
   selectedRun,
   setSelectedRun,
-  showDiff,
-  setShowDiff,
   batchDialogOpen,
   setBatchDialogOpen,
   batchDefaultNodeIds,
@@ -213,7 +208,6 @@ export function TasksPageDialogs({
           if (!open) {
             setHistoryTask(null);
             setSelectedRun(null);
-            setShowDiff(false);
           }
         }}
       >
@@ -225,7 +219,7 @@ export function TasksPageDialogs({
             <DialogDescription>
               {t("tasks.executionRecord", { id: historyTask?.id })}
             </DialogDescription>
-            <div className="ml-auto mr-8 flex gap-2 shrink-0">
+            <div className="mr-8 flex flex-wrap gap-2">
               {historyTask?.executorType === "restic" && (
                 <>
                   <BackupAssetsTaskContextLink taskId={historyTask.id} />
@@ -241,14 +235,6 @@ export function TasksPageDialogs({
                       {t("tasks.restoreFromBackup")}
                     </a>
                   </Button>
-                  <Button
-                    size="sm"
-                    variant={showDiff ? "default" : "outline"}
-                    onClick={() => { setShowDiff((v: boolean) => !v); }}
-                  >
-                    <GitCompareArrows className="mr-1 size-3.5" aria-hidden="true" />
-                    {t("tasks.compareSnapshots")}
-                  </Button>
                 </>
               )}
               {historyTask?.executorType === "rsync" && historyTask.rsyncPublication?.mode === "legacy_mutable" && (
@@ -263,11 +249,7 @@ export function TasksPageDialogs({
             <DialogCloseButton />
           </DialogHeader>
           <DialogBody>
-            {historyTask && authToken && showDiff ? (
-              <ErrorBoundary>
-                <SnapshotDiffViewer taskId={historyTask.id} token={authToken} />
-              </ErrorBoundary>
-            ) : historyTask && authToken && (
+            {historyTask && authToken && (
               selectedRun ? (
                 <ErrorBoundary>
                   <TaskRunDetail

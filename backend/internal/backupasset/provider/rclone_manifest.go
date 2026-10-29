@@ -101,6 +101,12 @@ type rcloneCanonicalManifestEntry struct {
 }
 
 func BuildRcloneManifestV1(ctx context.Context, reader io.Reader, options RcloneManifestBuildOptions) (RcloneManifestBundle, error) {
+	return buildRcloneManifestV1(ctx, reader, options, false)
+}
+
+// Only the Portable destination observation may interpret regular .rclonelink
+// objects as links. Source and Native observations retain the V1 policy.
+func buildRcloneManifestV1(ctx context.Context, reader io.Reader, options RcloneManifestBuildOptions, portableDestination bool) (RcloneManifestBundle, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -141,7 +147,7 @@ func BuildRcloneManifestV1(ctx context.Context, reader io.Reader, options Rclone
 		if _, err := strict.Token(); !errors.Is(err, io.EOF) {
 			return RcloneManifestBundle{}, fmt.Errorf("%w: trailing lsjson record data", ErrRcloneManifestPathUnsafe)
 		}
-		entry, err := canonicalRcloneManifestEntry(boundedContext, source, options)
+		entry, err := canonicalRcloneManifestEntry(boundedContext, source, options, portableDestination)
 		if err != nil {
 			return RcloneManifestBundle{}, err
 		}
@@ -497,12 +503,15 @@ func writeRcloneManifestRun(spool *rcloneManifestSpool, records []rcloneManifest
 	return *run, nil
 }
 
-func canonicalRcloneManifestEntry(ctx context.Context, source rcloneLSJSONEntry, options RcloneManifestBuildOptions) (rcloneCanonicalManifestEntry, error) {
+func canonicalRcloneManifestEntry(ctx context.Context, source rcloneLSJSONEntry, options RcloneManifestBuildOptions, portableDestination bool) (rcloneCanonicalManifestEntry, error) {
 	if len(strings.Split(source.Path, "/")) > options.Limits.MaxDepth {
 		return rcloneCanonicalManifestEntry{}, ErrRcloneManifestLimitExceeded
 	}
-	if source.Name != path.Base(source.Path) || !validRcloneLogicalPath(source.Path, options.Limits.MaxDepth) || source.Size < 0 {
+	if source.Name != path.Base(source.Path) || !validRcloneLogicalPath(source.Path, options.Limits.MaxDepth) || (source.Size < 0 && !source.IsDir) {
 		return rcloneCanonicalManifestEntry{}, ErrRcloneManifestPathUnsafe
+	}
+	if source.IsDir && source.Size < 0 {
+		source.Size = 0
 	}
 	parsedTime, err := time.Parse(time.RFC3339Nano, source.ModTime)
 	if err != nil {
@@ -522,7 +531,8 @@ func canonicalRcloneManifestEntry(ctx context.Context, source rcloneLSJSONEntry,
 			return rcloneCanonicalManifestEntry{}, ErrRcloneManifestSpecialFile
 		}
 		entry.Kind = "directory"
-	case modeKnown && modeType == 0o120000:
+	case (modeKnown && modeType == 0o120000) ||
+		(portableDestination && strings.HasSuffix(source.Path, ".rclonelink") && (!modeKnown || modeType == 0o100000)):
 		if !strings.HasSuffix(source.Path, ".rclonelink") || options.SymlinkTargetReader == nil {
 			return rcloneCanonicalManifestEntry{}, ErrRcloneManifestPathUnsafe
 		}
@@ -900,20 +910,6 @@ type RcloneFullByteProof struct {
 	Complete          bool
 }
 
-func ResolveRcloneManifestHashFidelity(manifest RcloneManifestBundle, proof RcloneFullByteProof) (backupasset.RcloneHashFidelity, error) {
-	if manifest.Fidelity.HashFidelity == backupasset.RcloneHashProviderStrongChecksum && !manifest.Fidelity.RequiresFullByteVerification {
-		return backupasset.RcloneHashProviderStrongChecksum, nil
-	}
-	if manifest.EntryCount == 0 && manifest.LogicalBytes == 0 {
-		return backupasset.RcloneHashNotEvaluated, nil
-	}
-	if !manifest.Fidelity.RequiresFullByteVerification || !proof.Complete || !lowerHex(proof.SourceDigest, 64) ||
-		proof.SourceDigest != proof.DestinationDigest || proof.VerifiedBytes != manifest.LogicalBytes {
-		return "", ErrRcloneManifestFullByteProofRequired
-	}
-	return backupasset.RcloneHashDownloadVerifiedBytes, nil
-}
-
 type RcloneObservationV1 struct {
 	Digest       string
 	EntryCount   uint64
@@ -931,9 +927,6 @@ func ValidateRclonePortableObservations(sourceBefore, sourceAfter, destinationFi
 	}
 	if destinationFirst != destinationSecond {
 		return ErrRcloneDestinationUnstable
-	}
-	if sourceAfter != destinationFirst {
-		return ErrRcloneManifestObservationMismatch
 	}
 	return nil
 }

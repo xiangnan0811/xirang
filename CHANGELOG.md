@@ -2,12 +2,27 @@
 
 ## Unreleased
 
-### Alpine 构建输入保留
+### 控制台与接口说明修复
 
-- Core 与可选 Worker 改用固定 digest 的保留基础镜像，以及经过 Alpine 签名、完整包清单和原生双架构断网安装验证的 APK 输入。覆盖共享 CGO、supercronic 构建阶段和两种运行时的直接及传递依赖，防止已采集的版本因在线软件源移除旧包而再次中断构建。保留沿用 Docker Hub 仓库，不新增自建软件源，也不降低漏洞扫描门槛。
-- Worker 生产工具链推进到 v3，绑定共享 CGO 和 Worker runtime 的 amd64/arm64 四份输入内容摘要。首次迁移以及任一 Worker 输入变化，都须同源重建 Core/Worker，重新生成两个架构的最终 runtime closure、签名 bundle 和 proof；runtime closure 与 bundle 格式保持 v1。Core 专属输入更新不改变 Worker 投影，旧 v2 bundle 不得与新 Core/Worker 混用。
-- 换版前暂停 backfill、排空旧 Worker 在途处理，保全已验签 bundle、私有数据、数据库、匹配密钥与配置，再按匹配源码和架构切换；回退须恢复相配的 Core、Worker 与 bundle。无新增 API、运行时配置或数据库 schema migration，合并和归档成功不表示生产已部署。
-- 新保留能力从采用真实输入 lock 的源码开始生效，不追溯修复没有归档输入的旧 tag。历史源码、旧镜像及其漏洞风险仍按对应版本说明处理；可重建不等于可重新发布，旧输入须通过当前扫描门槛。`base-*`、`inputs-*` 仅为构建输入标签，不移动产品标签或重做既有补丁发行。
+- 修复个人偏好中“关闭自动刷新”被解释为 60 秒的问题；关闭状态在刷新页面后保留，共享控制台停止周期刷新，选择非零间隔后恢复。不影响首次加载、手动刷新或独立的任务与告警轮询。
+- 补齐中英文移动导航、默认筛选空态及告警分组计数文案；移除调用已退役 API 的快照比较入口，保留任务运行历史和备份资产浏览、搜索、恢复入口。修复移动端历史弹窗中资产入口超出可视范围的问题，不新增快照比较能力。
+- 修正 Swagger 当前用户路径为 `/me`，明确四个遗留快照读取接口返回 410 及 Catalog/Search 替代入口；保留 live restore 的启用、角色和二次验证边界。
+- 控制台修复在更新并重新加载前端后生效，无新增运行时配置或数据库迁移；回退旧前端会重现上述缺陷。另将已交付的 Alpine 输入升级与回退说明归入历史 0.73.5；历史说明勘误不修改 tag、不重发镜像，也不表示生产已升级。
+
+### Rclone 预检、续期与 PostgreSQL 验证门禁
+
+- 为生产 Runtime 装配真实 Rclone 预检，使用独立稳定的 `rclone_preflight_identity` 密钥域；新增 SQLite/PostgreSQL 000095 迁移。该身份不可轮换或作为可重建缓存替换，启动显式校验并重包裹已有密钥；使用后拒绝直接向下迁移，升级和恢复须保全匹配的数据库、密钥与配置。
+- 将候选代际、预检完成和激活保留分别协调，外部 I/O 后复验绑定及配置；Native 候选必须完成独立的 15 分钟稳定观察。SSH/SFTP 取消关闭自有连接并有界等待，失败清理仅处理已确认属于本次操作的精确暂存文件；预检错误日志不回显私有 provider/命令内容。
+- 支持暂停任务的同绑定显式续期，保留原身份与历史恢复点/在途 attempt 的截止时间；前后端须配套更新以识别必填 `purpose`。双语界面区分等待、就绪和待确认续期，未知目的失败关闭，移动端完整显示安全原因。
+- required-PostgreSQL CI 改为单一库存驱动，结合 AST census、原生测试列举与实际 JSON 事件验证父子测试闭包；缺失、失败或 required skip 均阻断，失败也保留脱敏证据。修复相关测试的 PostgreSQL 主版本钉死和固定 ID 共享库污染，不放宽数据库行为断言。
+- Portable 新点采用 V2 双侧保真清单，允许 local→SFTP 的时间精度、hash 与 metadata 差异，但仍严格证明路径集合、内容和每侧稳定性；Catalog 保留源逻辑时间，内容读取核对目标物理时间及递归快照。修复绝对本地/远端 locator 拼接和完整关闭验证误用五秒 cleanup 限额的问题。历史 V1 继续严格读取、调和与删除，历史读取使用新的有界只读期限，不延长原 publication deadline。
+- 修复 Rclone 新恢复点在提交证明与完整清单验证成功后仍保留 unknown 可用性、被真实内容入口提前拒绝的问题；仅在验证提交事务内标记 online，不提前放行未验证点，也不覆盖旧点后续健康状态。
+- Rclone bound config 改为经认证 SFTP 交付每命令独占的 0600 可写临时配置，保留精确原始字节及 rclone 正常保存语义，消除 stdin 配置写回重试。普通 bound 读取也要求节点提供 SFTP 与私有可写 home；Restic stdin 与 node-default 合同保持。共享入口截止时间及并发许可覆盖暂存、命令与清理；仅远端退出已确认或尚未尝试启动时清理，退出未知或清理失败保留安全错误与必要残留。默认内容 ticket 时限不扩大，异常人工处置边界见部署指南。
+- Portable/Native setup 明确返回持久 `base_binding_revision`；重复保存使用 setup 基准，而非候选摘要的下一修订号。前端拒绝缺失或非法基准，保留同任务身份下已接受的最新激活 CAS，隔离过期票据和旧身份响应。
+- 写入 Portable V2 后不支持直接降级旧运行时；回退须恢复写 V2 前匹配的数据库、密钥和数据快照，或保留支持 V2 的运行时。此补充不新增数据库迁移、不重写历史 controls，也不代表官方 AWS live 认证、发布或部署。
+- 升级前暂停相关任务并排空旧 Core、scheduler、executor 及资产处理/清理的在途操作，保全数据库、匹配密钥、配置及远端备份数据；按同一发行版本切换 Core、页面和启用的 Worker。新行为从新版组件接管后生效，不撤销旧版已提交的远端副作用；回退仍受稳定身份密钥和 Portable V2 的恢复限制约束。
+
+
 
 ## [0.73.5](https://github.com/xiangnan0811/xirang/compare/v0.73.4...v0.73.5) (2026-10-27)
 
@@ -15,6 +30,13 @@
 ### 🐛 Bug Fixes
 
 * **deploy:** preserve complete Alpine inputs for Core and Worker ([#655](https://github.com/xiangnan0811/xirang/issues/655)) ([af7ea3a](https://github.com/xiangnan0811/xirang/commit/af7ea3ae16b9a61f00e22dff1f6e35626a2e83cc))
+
+### Alpine 构建输入保留
+
+- Core 与可选 Worker 改用固定 digest 的保留基础镜像，以及经过 Alpine 签名、完整包清单和原生双架构断网安装验证的 APK 输入。覆盖共享 CGO、supercronic 构建阶段和两种运行时的直接及传递依赖，防止已采集的版本因在线软件源移除旧包而再次中断构建。保留沿用 Docker Hub 仓库，不新增自建软件源，也不降低漏洞扫描门槛。
+- Worker 生产工具链推进到 v3，绑定共享 CGO 和 Worker runtime 的 amd64/arm64 四份输入内容摘要。首次迁移以及任一 Worker 输入变化，都须同源重建 Core/Worker，重新生成两个架构的最终 runtime closure、签名 bundle 和 proof；runtime closure 与 bundle 格式保持 v1。Core 专属输入更新不改变 Worker 投影，旧 v2 bundle 不得与新 Core/Worker 混用。
+- 换版前暂停 backfill、排空旧 Worker 在途处理，保全已验签 bundle、私有数据、数据库、匹配密钥与配置，再按匹配源码和架构切换；回退须恢复相配的 Core、Worker 与 bundle。无新增 API、运行时配置或数据库 schema migration，合并和归档成功不表示生产已部署。
+- 新保留能力从采用真实输入 lock 的源码开始生效，不追溯修复没有归档输入的旧 tag。历史源码、旧镜像及其漏洞风险仍按对应版本说明处理；可重建不等于可重新发布，旧输入须通过当前扫描门槛。`base-*`、`inputs-*` 仅为构建输入标签，不移动产品标签或重做既有补丁发行。
 
 ## [0.73.4](https://github.com/xiangnan0811/xirang/compare/v0.73.3...v0.73.4) (2026-10-27)
 

@@ -69,6 +69,37 @@ type contentSourceProviderSpy struct {
 	sequential     int
 	ranges         []provider.ByteRange
 	handles        []*contentReadHandleSpy
+	onStat         func(context.Context) error
+}
+
+// This fixture supplies an explicit sealed-manifest result at the provider
+// boundary; integration tests exercise the real Portable strategy and decoder.
+type portableContentProofSpy struct {
+	provider.PublicationStrategy
+	attempt   string
+	commit    string
+	path      string
+	binding   provider.RclonePortableContentBinding
+	calls     int
+	onResolve func(context.Context) error
+}
+
+func (spy *portableContentProofSpy) ResolvePortableContent(ctx context.Context, request provider.RclonePortablePublicationRequest, commit provider.RcloneCommitV1, path string) (provider.RclonePortableContentBinding, error) {
+	attempt, attemptErr := provider.EncodePublicationAttempt(provider.NewRclonePublicationAttempt(request.Attempt))
+	encodedCommit, commitErr := provider.EncodeProviderCommit(provider.NewRcloneProviderCommit(commit))
+	if err := ctx.Err(); err != nil {
+		return provider.RclonePortableContentBinding{}, err
+	}
+	if attemptErr != nil || commitErr != nil || attempt != spy.attempt || encodedCommit != spy.commit || path != spy.path || !request.ReadDeadline.IsZero() {
+		return provider.RclonePortableContentBinding{}, fmt.Errorf("unexpected portable proof identity")
+	}
+	spy.calls++
+	if spy.onResolve != nil {
+		if err := spy.onResolve(ctx); err != nil {
+			return provider.RclonePortableContentBinding{}, err
+		}
+	}
+	return spy.binding, nil
 }
 
 func (spy *contentSourceProviderSpy) ListPoints(_ context.Context, snapshot provider.ReadSnapshot, _ provider.PageRequest) (provider.NativePointPage, error) {
@@ -85,10 +116,15 @@ func (spy *contentSourceProviderSpy) ListPoints(_ context.Context, snapshot prov
 	}}}, nil
 }
 
-func (spy *contentSourceProviderSpy) StatEntry(_ context.Context, snapshot provider.ReadSnapshot, point provider.PointLocator, locator provider.EntryLocator) (provider.Entry, error) {
+func (spy *contentSourceProviderSpy) StatEntry(ctx context.Context, snapshot provider.ReadSnapshot, point provider.PointLocator, locator provider.EntryLocator) (provider.Entry, error) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 	spy.statCalls++
+	if spy.onStat != nil {
+		if err := spy.onStat(ctx); err != nil {
+			return provider.Entry{}, err
+		}
+	}
 	if point != spy.pointLocator || locator != spy.entryLocator || snapshot.SourceRevision != spy.sourceRevision {
 		return provider.Entry{}, fmt.Errorf("unexpected private source identity")
 	}
@@ -834,6 +870,36 @@ func TestContentSourceCloseKeepsEarlierRequestDeadline(t *testing.T) {
 	}
 	if !observedDeadline.Equal(requestDeadline) {
 		t.Fatalf("cleanup deadline=%s want request deadline=%s", observedDeadline, requestDeadline)
+	}
+}
+
+func TestContentSourceMutableCloseKeepsDefaultCleanupDeadline(t *testing.T) {
+	fixture := newMutableContentFixture(t)
+	session, err := fixture.service.OpenContentSource(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(session.Reader()); err != nil {
+		t.Fatal(err)
+	}
+	var observedDeadline time.Time
+	fixture.provider.mu.Lock()
+	fixture.provider.onStat = func(ctx context.Context) error {
+		var ok bool
+		observedDeadline, ok = ctx.Deadline()
+		if !ok {
+			return errors.New("mutable close stat has no deadline")
+		}
+		return ctx.Err()
+	}
+	fixture.provider.mu.Unlock()
+	started := time.Now()
+	if err := session.Close(); err != nil {
+		t.Fatalf("close mutable source: %v", err)
+	}
+	if observedDeadline.IsZero() || observedDeadline.Before(started.Add(4*time.Second)) ||
+		observedDeadline.After(time.Now().Add(5*time.Second)) {
+		t.Fatalf("mutable cleanup deadline=%s start=%s", observedDeadline, started)
 	}
 }
 
@@ -1714,7 +1780,8 @@ func TestContentSourceReconstructsManagedRclonePortableRuntime(t *testing.T) {
 	if err := fixture.db.Create(&generation).Error; err != nil {
 		t.Fatal(err)
 	}
-	modified := fixture.now.Add(-time.Minute)
+	modified := fixture.now.Add(-time.Minute).Add(123456789 * time.Nanosecond)
+	physicalModified := modified.Truncate(time.Second)
 	entry := model.CatalogEntry{
 		GenerationID: generation.ID, EntryID: strings.Repeat("b", 64), RecoveryPointID: point.ID,
 		NormalizedPath: "docs/portable.txt", Name: "portable.txt", EntryType: string(backupasset.CatalogEntryFile),
@@ -1734,12 +1801,32 @@ func TestContentSourceReconstructsManagedRclonePortableRuntime(t *testing.T) {
 		entryLocator: provider.EntryLocator{Native: "docs/portable.txt"},
 		body:         []byte("rclone-portable"),
 		stat: provider.ContentStat{
-			Size: entry.Size, ModTime: modified, SourceRevision: strings.Repeat("7", 64), MediaType: "text/plain",
+			Size: entry.Size, ModTime: physicalModified, SourceRevision: strings.Repeat("7", 64), MediaType: "text/plain",
+		},
+	}
+	attemptWire, err := provider.EncodePublicationAttempt(provider.NewRclonePublicationAttempt(attempt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitWire, err := provider.EncodeProviderCommit(provider.NewRcloneProviderCommit(commit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := &portableContentProofSpy{
+		PublicationStrategy: fixture.strategy, attempt: attemptWire, commit: commitWire, path: "docs/portable.txt",
+		binding: provider.RclonePortableContentBinding{
+			ManifestVersion: 2, PhysicalModTime: physicalModified, ValidateSnapshot: func(ctx context.Context) error { return ctx.Err() },
+			Record: provider.CatalogRecord{
+				NormalizedPath: entry.NormalizedPath, ParentNormalizedPath: "docs", Name: entry.Name,
+				Type: backupasset.CatalogEntryFile, Size: entry.Size, ModifiedAt: &modified,
+				Mode: entry.Mode, Owner: entry.Owner, Fingerprint: entry.Fingerprint, FingerprintStrength: entry.FingerprintStrength,
+				ProviderLocator: provider.EntryLocator{Native: "portable:docs/portable.txt"},
+			},
 		},
 	}
 	registry := provider.NewRegistry()
 	if err := registry.Register(backupasset.ProviderRclone, provider.Registration{
-		Prober: &scriptedProber{}, EntryStatter: reader, SequentialReader: reader, RangeReader: reader,
+		Prober: &scriptedProber{}, EntryStatter: reader, SequentialReader: reader, RangeReader: reader, PublicationStrategy: proof,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1755,6 +1842,22 @@ func TestContentSourceReconstructsManagedRclonePortableRuntime(t *testing.T) {
 		ExpectedSource: point.SourceFingerprint, ExpectedEntry: entry.Fingerprint,
 		Mode: content.SourceModeSequential, MaxBytes: entry.Size,
 	}
+	missingRegistry := provider.NewRegistry()
+	if err := missingRegistry.Register(backupasset.ProviderRclone, provider.Registration{
+		Prober: &scriptedProber{}, EntryStatter: reader, SequentialReader: reader, RangeReader: reader,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	missingService, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: missingRegistry, Keyring: fixture.service.keyring,
+		Now: func() time.Time { return fixture.now }, Admission: fixture.service.admission, Publication: fixture.service,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing, err := missingService.OpenContentSource(context.Background(), request); missing != nil || !errors.Is(err, backupasset.ErrCapabilityUnavailable) || reader.statCalls != 0 {
+		t.Fatalf("missing portable resolver reached content provider: session=%v stat calls=%d err=%v", missing, reader.statCalls, err)
+	}
 	session, err := service.OpenContentSource(context.Background(), request)
 	if err != nil {
 		t.Fatalf("open portable Rclone content: %v", err)
@@ -1762,6 +1865,26 @@ func TestContentSourceReconstructsManagedRclonePortableRuntime(t *testing.T) {
 	payload, err := io.ReadAll(session.Reader())
 	if err != nil || string(payload) != "rclone-portable" {
 		t.Fatalf("portable Rclone payload=%q err=%v", payload, err)
+	}
+	if session.Stat().ModifiedAt == nil || !session.Stat().ModifiedAt.Equal(modified) {
+		t.Fatalf("portable logical source time=%v want %v", session.Stat().ModifiedAt, modified)
+	}
+	proof.binding.PhysicalModTime = physicalModified.Add(time.Second)
+	if err := session.Revalidate(context.Background()); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("revalidated physical time drift error=%v", err)
+	}
+	proof.binding.PhysicalModTime = physicalModified
+	reader.mu.Lock()
+	reader.stat.ModTime = physicalModified.Add(time.Second)
+	reader.mu.Unlock()
+	if err := session.Revalidate(context.Background()); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("same-size destination stat time drift error=%v", err)
+	}
+	reader.mu.Lock()
+	reader.stat.ModTime = physicalModified
+	reader.mu.Unlock()
+	if err := session.Revalidate(context.Background()); err != nil || proof.calls < 4 {
+		t.Fatalf("portable proof was not reacquired: calls=%d err=%v", proof.calls, err)
 	}
 	if capabilities := session.Capabilities(); !capabilities.Sequential || !capabilities.Range || capabilities.Provider != backupasset.ProviderRclone || capabilities.Reason != nil {
 		t.Fatalf("portable Rclone capabilities=%+v", capabilities)
@@ -1772,6 +1895,99 @@ func TestContentSourceReconstructsManagedRclonePortableRuntime(t *testing.T) {
 	operations := fixture.service.admission.(*publicationAdmission).operations()
 	if len(operations) == 0 || operations[len(operations)-1] != publication.OperationContentRead || reader.closedHandles() != 1 {
 		t.Fatalf("portable Rclone lifecycle operations=%v closes=%d", operations, reader.closedHandles())
+	}
+	publicationConfig, err := service.foundation.PublicationConfig()
+	if err != nil || publicationConfig.ManifestTimeout <= contentSourceCleanupTimeout {
+		t.Fatalf("fixture manifest timeout=%s err=%v", publicationConfig.ManifestTimeout, err)
+	}
+	for _, test := range []struct {
+		name    string
+		bounded bool
+		expired bool
+	}{
+		{name: "detached_cancellation_uses_manifest_timeout"},
+		{name: "earlier_caller_deadline", bounded: true},
+		{name: "expired_caller_deadline", expired: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var (
+				parent         context.Context
+				cancel         context.CancelFunc
+				parentDeadline time.Time
+			)
+			if test.bounded {
+				parentDeadline = time.Now().Add(30 * time.Second)
+				parent, cancel = context.WithDeadline(context.Background(), parentDeadline)
+			} else {
+				parent, cancel = context.WithCancel(context.Background())
+			}
+			defer cancel()
+			beforeHandles := reader.closedHandles()
+			current, err := service.OpenContentSource(parent, request)
+			if err != nil {
+				t.Fatalf("open portable source: %v", err)
+			}
+			defer current.Close()
+			if got, err := io.ReadAll(current.Reader()); err != nil || string(got) != "rclone-portable" {
+				t.Fatalf("read portable source=%q err=%v", got, err)
+			}
+			admission := fixture.service.admission.(*publicationAdmission)
+			admission.mu.Lock()
+			token := admission.tokens[len(admission.tokens)-1]
+			admission.mu.Unlock()
+			if token.closed.Load() != 0 {
+				t.Fatal("portable admission token closed before source join")
+			}
+			var observedDeadline time.Time
+			proofSeen := false
+			proof.onResolve = func(ctx context.Context) error {
+				proofSeen = true
+				if token.closed.Load() != 0 || reader.closedHandles() != beforeHandles+1 {
+					return errors.New("portable close proof ran outside the reader/token lifetime")
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				var ok bool
+				observedDeadline, ok = ctx.Deadline()
+				if !ok {
+					return errors.New("portable close proof has no deadline")
+				}
+				return nil
+			}
+			defer func() { proof.onResolve = nil }()
+			cancel()
+			if test.expired {
+				// Simulate the originally captured caller deadline passing after
+				// open without waiting for a real timer in this unit test.
+				expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				defer stop()
+				current.(*sealedContentSourceSession).cleanupParent = expired
+			}
+			started := time.Now()
+			closeErr := current.Close()
+			finished := time.Now()
+			if test.expired {
+				if !errors.Is(closeErr, backupasset.ErrConflict) || proofSeen {
+					t.Fatalf("expired caller deadline was not rejected: proof=%t err=%v", proofSeen, closeErr)
+				}
+			} else if closeErr != nil || !proofSeen {
+				t.Fatalf("portable close proof=%t err=%v", proofSeen, closeErr)
+			}
+			if token.closed.Load() != 1 || reader.closedHandles() != beforeHandles+1 {
+				t.Fatalf("portable close did not release joined source and token: handles=%d token=%d",
+					reader.closedHandles()-beforeHandles, token.closed.Load())
+			}
+			if test.bounded && !observedDeadline.Equal(parentDeadline) {
+				t.Fatalf("portable cleanup deadline=%s want caller deadline=%s", observedDeadline, parentDeadline)
+			}
+			if !test.bounded && !test.expired &&
+				(observedDeadline.Before(started.Add(publicationConfig.ManifestTimeout)) ||
+					observedDeadline.After(finished.Add(publicationConfig.ManifestTimeout))) {
+				t.Fatalf("portable cleanup deadline=%s start=%s manifest timeout=%s",
+					observedDeadline, started, publicationConfig.ManifestTimeout)
+			}
+		})
 	}
 	var changedPoint model.RecoveryPoint
 	if err := fixture.db.First(&changedPoint, "id = ?", point.ID).Error; err != nil {

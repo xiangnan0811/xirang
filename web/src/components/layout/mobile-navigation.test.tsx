@@ -110,4 +110,14 @@ describe("MobileNavigation", () => {
       `/app/backups/data${filesSavedSearch}`,
     );
   });
+
+  it.each(["zh", "en"] as const)("names the bottom navigation landmark with %s translated copy", async (lng) => {
+    await setLanguage(lng);
+    renderWithProviders();
+
+    const name = i18n.getResource(lng, "translation", "appShell.mobileNav");
+    expect(name).toEqual(expect.any(String));
+    expect(screen.getByRole("navigation", { name })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "appShell.mobileNav" })).not.toBeInTheDocument();
+  });
 });

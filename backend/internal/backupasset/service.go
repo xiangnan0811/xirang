@@ -1,6 +1,7 @@
 package backupasset
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -9,6 +10,8 @@ import (
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
+
+	"gorm.io/gorm"
 )
 
 type SettingsReader interface {
@@ -17,6 +20,10 @@ type SettingsReader interface {
 
 type BackupAssetSettingsSnapshotReader interface {
 	BackupAssetSettingsSnapshot() (map[string]string, error)
+}
+
+type BackupAssetSettingsTransactionSnapshotReader interface {
+	BackupAssetSettingsSnapshotTx(context.Context, *gorm.DB) (map[string]string, error)
 }
 
 type FoundationService struct {
@@ -1132,6 +1139,18 @@ func (service *FoundationService) PublicationConfig() (PublicationConfig, error)
 	if err != nil {
 		return PublicationConfig{}, err
 	}
+	return publicationConfigFromValidatedValues(values)
+}
+
+// PublicationConfigFromValues parses one complete, validated Foundation snapshot.
+func PublicationConfigFromValues(values map[string]string) (PublicationConfig, error) {
+	if err := validateCompleteFoundationValues(values); err != nil {
+		return PublicationConfig{}, err
+	}
+	return publicationConfigFromValidatedValues(values)
+}
+
+func publicationConfigFromValidatedValues(values map[string]string) (PublicationConfig, error) {
 	reconcileInterval, err := parseFoundationDuration(values, "backup_assets.publication_reconcile_interval")
 	if err != nil {
 		return PublicationConfig{}, err
@@ -1189,6 +1208,23 @@ func (service *FoundationService) PublicationConfig() (PublicationConfig, error)
 		ManifestMaxDepth:       manifestMaxDepth,
 		Rclone:                 rcloneConfig,
 	}, nil
+}
+
+// PublicationConfigTx reads through the caller-owned transaction without
+// acquiring the settings mutation gate or opening a second DB connection.
+func (service *FoundationService) PublicationConfigTx(ctx context.Context, tx *gorm.DB) (PublicationConfig, error) {
+	if service == nil || service.settings == nil || tx == nil {
+		return PublicationConfig{}, fmt.Errorf("%w: transactional publication settings unavailable", ErrInvalidState)
+	}
+	reader, ok := service.settings.(BackupAssetSettingsTransactionSnapshotReader)
+	if !ok {
+		return PublicationConfig{}, fmt.Errorf("%w: transactional publication settings unavailable", ErrInvalidState)
+	}
+	values, err := reader.BackupAssetSettingsSnapshotTx(ctx, tx)
+	if err != nil {
+		return PublicationConfig{}, err
+	}
+	return PublicationConfigFromValues(values)
 }
 
 func parseRclonePublicationConfig(values map[string]string) (RclonePublicationConfig, error) {

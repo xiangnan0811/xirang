@@ -934,7 +934,7 @@ func TestRcloneManagedCommandAllowlistBuildsOnlyFixedArguments(t *testing.T) {
 	destination := mustRclonePrivateLocatorForTest(t, "s3:bucket/managed/prefix")
 	staged := stagedPayloadRefForCommandTest("/home/operator/.xirang/rclone-publication/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/commit.json")
 	copyDest := mustRclonePrivateLocatorForTest(t, "s3:bucket/managed/parent/data")
-	base := []string{"--config", "/dev/stdin", "--retries", "1", "--low-level-retries", "3", "--links"}
+	base := []string{"--retries", "1", "--low-level-retries", "3", "--links"}
 	tests := []struct {
 		name        string
 		operation   CommandOperation
@@ -974,8 +974,8 @@ func TestRcloneManagedCommandAllowlistBuildsOnlyFixedArguments(t *testing.T) {
 			if strings.Join(specification.Args, "\x00") != strings.Join(want, "\x00") {
 				t.Fatalf("managed args=%q want=%q", specification.Args, want)
 			}
-			if specification.SecretStdin == nil || string(specification.SecretStdin.Value) != "FAKE_BOUND_RCLONE_CONFIG_FOR_TEST_ONLY" {
-				t.Fatalf("managed config did not use SecretStdin: %+v", specification.SecretStdin)
+			if specification.SecretStdin != nil {
+				t.Fatal("Rclone config reached SSH stdin")
 			}
 		})
 	}
@@ -1027,12 +1027,12 @@ func TestRcloneManagedVersionIsPinnedExactly(t *testing.T) {
 }
 
 func TestRcloneManagedTransportPropagatesAbsoluteContextDeadline(t *testing.T) {
-	deadline := time.Now().UTC().Add(time.Hour)
+	deadline := time.Now().UTC().Add(2 * time.Second)
 	var observed time.Time
-	transport, err := newSSHCommandTransport(func(ctx context.Context, _ RemoteCommandAccess, _ string) (remoteCommandRunner, io.Closer, error) {
+	transport, err := newSSHCommandTransportWithConfig(func(ctx context.Context, _ RemoteCommandAccess, _ string) (remoteCommandRunner, io.Closer, error) {
 		observed, _ = ctx.Deadline()
-		return &fakeRemoteCommandRunner{}, &trackingCloser{}, nil
-	}, 1, ToolBinaries{Rclone: "rclone"})
+		return &fakeRemoteCommandRunner{execution: &fakeSSHExecution{Reader: strings.NewReader(""), completion: sshutil.CommandCompletion{ExitCodeKnown: true, RemoteExited: true}}}, &trackingCloser{}, nil
+	}, configStoreForTest(t, t.TempDir(), nil).factory, func() (int, error) { return 1, nil }, ToolBinaries{Rclone: "rclone"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1124,6 +1124,10 @@ func (execution *fakeSSHExecution) Join() (sshutil.CommandCompletion, error) {
 }
 
 func (execution *fakeSSHExecution) Cancel() error { return execution.cancelErr }
+
+func (execution *fakeSSHExecution) JoinPrefix() (sshutil.CommandCompletion, error) {
+	return execution.Join()
+}
 
 type trackingProviderReadHandle struct {
 	io.Reader

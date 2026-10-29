@@ -28,8 +28,8 @@ type SearchResult struct {
 }
 
 // Search godoc
-// @Summary      搜索快照文件
-// @Description  在 restic 快照的文件索引中搜索匹配路径的文件。首次搜索会触发后台索引构建。
+// @Summary      已退役的快照搜索入口
+// @Description  此兼容入口始终返回 410，不搜索文件或触发旧索引构建。请使用备份资产 Search 搜索文件，或使用 Catalog 浏览恢复点。
 // @Tags         snapshots
 // @Security     Bearer
 // @Produce      json

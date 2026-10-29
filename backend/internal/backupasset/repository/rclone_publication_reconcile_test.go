@@ -10,6 +10,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/provider"
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 )
 
@@ -182,8 +183,9 @@ func TestRcloneReconcileRejectsRepositoryCapabilityRevisionDriftBeforeMutation(t
 				if err := fixture.db.First(&callbackPoint, "id = ?", attempt.RecoveryPointID).Error; err != nil {
 					t.Fatal(err)
 				}
-				if callbackPoint.State != string(backupasset.RecoveryPointPreparing) {
-					t.Fatalf("claimed Rclone point state=%q, want preparing", callbackPoint.State)
+				if callbackPoint.State != string(backupasset.RecoveryPointPreparing) || callbackPoint.PhysicalAvailability != string(backupasset.PhysicalUnknown) ||
+					callbackPoint.CommittedAt != nil || callbackPoint.ObservedAt != nil {
+					t.Fatalf("claimed Rclone point before capability drift=%+v", callbackPoint)
 				}
 				if err := fixture.db.Where(
 					"recovery_point_id = ? AND holder_type = ? AND owner_id = ? AND status = ?",
@@ -302,6 +304,13 @@ func completeRcloneTestPoint(
 	if err := fixture.db.Where("recovery_point_id = ? AND is_active = ?", point.ID, true).First(&manifest).Error; err != nil {
 		t.Fatal(err)
 	}
+	wantGeneratorVersion := "1"
+	if attempt.PublicationMode == backupasset.PublicationVersionedPrefix {
+		wantGeneratorVersion = "2"
+	}
+	if manifest.GeneratorVersion != wantGeneratorVersion {
+		t.Fatalf("manifest generator version=%q want=%q", manifest.GeneratorVersion, wantGeneratorVersion)
+	}
 	return attempt, point, manifest
 }
 
@@ -334,7 +343,16 @@ func TestPublicationReconciliationFactsClassifiesBothManagedRcloneModes(t *testi
 }
 
 func TestRcloneRestartReconciliationMovesPreparingToVerifyingThenCommitted(t *testing.T) {
-	fixture := newRclonePublicationFixture(t, backupasset.PublicationVersionedPrefix)
+	runRcloneRestartReconciliation(t, newRclonePublicationFixture(t, backupasset.PublicationVersionedPrefix))
+}
+
+func TestRcloneRestartReconciliationMovesPreparingToVerifyingThenCommittedPostgres(t *testing.T) {
+	db := openProducerRetentionIntegrationDB(t, "postgres")
+	runRcloneRestartReconciliation(t, newRclonePublicationFixtureWithDB(t, backupasset.PublicationVersionedPrefix, db))
+}
+
+func runRcloneRestartReconciliation(t *testing.T, fixture *rclonePublicationFixture) {
+	t.Helper()
 	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
 	if err != nil {
 		t.Fatal(err)
@@ -367,28 +385,40 @@ func TestRcloneRestartReconciliationMovesPreparingToVerifyingThenCommitted(t *te
 		Updates(map[string]any{"status": backupasset.LeaseExpired, "lease_expires_at": fixture.now.Add(-time.Second)}).Error; err != nil {
 		t.Fatal(err)
 	}
+	reconciledAt := commit.ProviderCommittedAt.Add(time.Minute)
+	setRcloneReconciliationTime(t, fixture, reconciledAt)
 
 	verifying, err := fixture.service.ProcessPoint(context.Background(), attempt.RecoveryPointID)
 	if err != nil || verifying.State != backupasset.RecoveryPointVerifying || !verifying.ProviderCommitRecorded {
 		t.Fatalf("preparing reconciliation outcome=%+v err=%v", verifying, err)
 	}
-	committed, err := fixture.service.ProcessPoint(context.Background(), attempt.RecoveryPointID)
-	if err != nil || committed.State != backupasset.RecoveryPointCommitted || !committed.ProviderCommitRecorded {
-		t.Fatalf("verifying reconciliation outcome=%+v err=%v", committed, err)
-	}
 	var point model.RecoveryPoint
 	if err := fixture.db.First(&point, "id = ?", attempt.RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
+	if point.State != string(backupasset.RecoveryPointVerifying) || point.PhysicalAvailability != string(backupasset.PhysicalUnknown) ||
+		point.CommittedAt != nil || point.ObservedAt != nil {
+		t.Fatalf("unverified Rclone point=%+v", point)
+	}
+	committed, err := fixture.service.ProcessPoint(context.Background(), attempt.RecoveryPointID)
+	if err != nil || committed.State != backupasset.RecoveryPointCommitted || !committed.ProviderCommitRecorded {
+		t.Fatalf("verifying reconciliation outcome=%+v err=%v", committed, err)
+	}
+	if err := fixture.db.First(&point, "id = ?", attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
 	if point.State != string(backupasset.RecoveryPointCommitted) || point.ManifestDigest != commit.ManifestIndexDigest ||
-		point.EntryCount != int64(commit.ManifestEntryCount) || point.LogicalBytes != int64(commit.LogicalBytes) || point.CommittedAt == nil {
+		point.EntryCount != int64(commit.ManifestEntryCount) || point.LogicalBytes != int64(commit.LogicalBytes) ||
+		point.PhysicalAvailability != string(backupasset.PhysicalOnline) || point.ObservedAt != nil ||
+		point.CapturedAt == nil || !point.CapturedAt.Equal(commit.ProviderCommittedAt) ||
+		point.CommittedAt == nil || !point.CommittedAt.Equal(reconciledAt) {
 		t.Fatalf("committed Rclone point=%+v", point)
 	}
 	var manifests []model.RecoveryPointManifest
 	if err := fixture.db.Where("recovery_point_id = ?", point.ID).Find(&manifests).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(manifests) != 1 || !manifests[0].IsActive || manifests[0].Generator != "xirang-rclone" ||
+	if len(manifests) != 1 || !manifests[0].IsActive || manifests[0].Generator != "xirang-rclone" || manifests[0].GeneratorVersion != "2" ||
 		!strings.Contains(manifests[0].EncryptedCommitEvidence, `"provider":"rclone"`) {
 		t.Fatalf("Rclone manifests=%+v", manifests)
 	}
@@ -399,10 +429,20 @@ func TestRcloneRestartReconciliationMovesPreparingToVerifyingThenCommitted(t *te
 	if taskRun.Status != "running" || taskRun.FinishedAt != nil || taskRun.LastError != "" {
 		t.Fatalf("Rclone reconciliation rewrote TaskRun truth: %+v", taskRun)
 	}
+	assertCommittedRcloneReplay(t, fixture, execution, commit, point)
 }
 
 func TestRcloneNativeRestartReconciliationPersistsExactCommitVersion(t *testing.T) {
-	fixture := newRclonePublicationFixture(t, backupasset.PublicationNativeObjectVersions)
+	runRcloneNativeRestartReconciliation(t, newRclonePublicationFixture(t, backupasset.PublicationNativeObjectVersions))
+}
+
+func TestRcloneNativeRestartReconciliationPersistsExactCommitVersionPostgres(t *testing.T) {
+	db := openProducerRetentionIntegrationDB(t, "postgres")
+	runRcloneNativeRestartReconciliation(t, newRclonePublicationFixtureWithDB(t, backupasset.PublicationNativeObjectVersions, db))
+}
+
+func runRcloneNativeRestartReconciliation(t *testing.T, fixture *rclonePublicationFixture) {
+	t.Helper()
 	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
 	if err != nil {
 		t.Fatal(err)
@@ -434,12 +474,18 @@ func TestRcloneNativeRestartReconciliationPersistsExactCommitVersion(t *testing.
 		Updates(map[string]any{"status": backupasset.LeaseExpired, "lease_expires_at": fixture.now.Add(-time.Second)}).Error; err != nil {
 		t.Fatal(err)
 	}
+	reconciledAt := commit.ProviderCommittedAt.Add(time.Minute)
+	setRcloneReconciliationTime(t, fixture, reconciledAt)
 	if outcome, err := fixture.service.ProcessPoint(context.Background(), attempt.RecoveryPointID); err != nil || outcome.State != backupasset.RecoveryPointVerifying {
 		t.Fatalf("native preparing reconciliation outcome=%+v err=%v", outcome, err)
 	}
 	var verifying model.RecoveryPoint
 	if err := fixture.db.First(&verifying, "id = ?", attempt.RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
+	}
+	if verifying.State != string(backupasset.RecoveryPointVerifying) || verifying.PhysicalAvailability != string(backupasset.PhysicalUnknown) ||
+		verifying.CommittedAt != nil || verifying.ObservedAt != nil {
+		t.Fatalf("unverified native Rclone point=%+v", verifying)
 	}
 	locator, err := decodeManagedRclonePointLocator(verifying.EncryptedProviderLocator)
 	if err != nil || locator.FrozenNativeVersionCount == 0 || !isLowerHex64(locator.FrozenNativeVersionsDigest) ||
@@ -448,6 +494,15 @@ func TestRcloneNativeRestartReconciliationPersistsExactCommitVersion(t *testing.
 	}
 	if outcome, err := fixture.service.ProcessPoint(context.Background(), attempt.RecoveryPointID); err != nil || outcome.State != backupasset.RecoveryPointCommitted {
 		t.Fatalf("native verifying reconciliation outcome=%+v err=%v", outcome, err)
+	}
+	var point model.RecoveryPoint
+	if err := fixture.db.First(&point, "id = ?", attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if point.State != string(backupasset.RecoveryPointCommitted) || point.PhysicalAvailability != string(backupasset.PhysicalOnline) ||
+		point.ObservedAt != nil || point.CapturedAt == nil || !point.CapturedAt.Equal(commit.ProviderCommittedAt) ||
+		point.CommittedAt == nil || !point.CommittedAt.Equal(reconciledAt) {
+		t.Fatalf("committed native Rclone point=%+v", point)
 	}
 	if fixture.strategy.reconcileInput == nil || fixture.strategy.reconcileInput.NativeRequest == nil ||
 		fixture.strategy.reconcileInput.NativeRequest.ExactCommitKey != commit.Native.CommitKey ||
@@ -459,6 +514,130 @@ func TestRcloneNativeRestartReconciliationPersistsExactCommitVersion(t *testing.
 	}
 	if fixture.nativeFactory.assumeCalls != 9 {
 		t.Fatalf("native sessions assume calls=%d want=9 (prepare + two restart sessions)", fixture.nativeFactory.assumeCalls)
+	}
+	assertCommittedRcloneReplay(t, fixture, execution, commit, point)
+}
+
+func setRcloneReconciliationTime(t *testing.T, fixture *rclonePublicationFixture, now time.Time) {
+	t.Helper()
+	lease, err := backupasset.NewLeaseService(fixture.db, func() time.Time { return now }, backupasset.LeaseConfig{
+		Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: 168 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.service.now = func() time.Time { return now }
+	fixture.service.lease = lease
+}
+
+func assertCommittedRcloneReplay(t *testing.T, fixture *rclonePublicationFixture, execution publication.Execution, commit provider.RcloneCommitV1, point model.RecoveryPoint) {
+	t.Helper()
+	assertReplay := func(before model.RecoveryPoint) {
+		t.Helper()
+		outcome, err := execution.RecordProviderCommit(context.Background(), provider.NewRcloneProviderCommit(commit))
+		if err != nil || outcome.State != backupasset.RecoveryPointCommitted || !outcome.ProviderCommitRecorded {
+			t.Fatalf("committed Rclone replay outcome=%+v err=%v", outcome, err)
+		}
+		if _, err := fixture.service.ProcessPoint(context.Background(), before.ID); !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("committed Rclone reconciliation error=%v, want conflict", err)
+		}
+		var after model.RecoveryPoint
+		if err := fixture.db.First(&after, "id = ?", before.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(after, before) {
+			t.Fatalf("committed Rclone replay changed point: before=%+v after=%+v", before, after)
+		}
+	}
+	assertReplay(point)
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).
+		UpdateColumn("physical_availability", string(backupasset.PhysicalOffline)).Error; err != nil {
+		t.Fatal(err)
+	}
+	var offline model.RecoveryPoint
+	if err := fixture.db.First(&offline, "id = ?", point.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	assertReplay(offline)
+	var manifestCount int64
+	if err := fixture.db.Model(&model.RecoveryPointManifest{}).Where("recovery_point_id = ?", point.ID).Count(&manifestCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if manifestCount != 1 {
+		t.Fatalf("committed Rclone replay created %d manifests, want 1", manifestCount)
+	}
+}
+
+func TestRcloneIncompleteManifestReconciliationDoesNotPromote(t *testing.T) {
+	runRcloneIncompleteManifestReconciliation(t, false)
+}
+
+func TestRcloneIncompleteManifestReconciliationDoesNotPromotePostgres(t *testing.T) {
+	runRcloneIncompleteManifestReconciliation(t, true)
+}
+
+func runRcloneIncompleteManifestReconciliation(t *testing.T, postgres bool) {
+	t.Helper()
+	for _, mode := range []backupasset.TaskPublicationMode{
+		backupasset.PublicationVersionedPrefix,
+		backupasset.PublicationNativeObjectVersions,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			var fixture *rclonePublicationFixture
+			if postgres {
+				db := openProducerRetentionIntegrationDB(t, "postgres")
+				fixture = newRclonePublicationFixtureWithDB(t, mode, db)
+			} else {
+				fixture = newRclonePublicationFixture(t, mode)
+			}
+			execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) }()
+			attempt, err := execution.Attempt().RcloneAttempt()
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, err := execution.(interface {
+				RclonePublicationInput() (provider.RclonePublicationInput, error)
+			}).RclonePublicationInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var commit provider.RcloneCommitV1
+			switch mode {
+			case backupasset.PublicationVersionedPrefix:
+				commit = validRcloneRepositoryCommit(attempt, input.PortableRequest.CostEvidenceDigest, fixture.now)
+			case backupasset.PublicationNativeObjectVersions:
+				commit = validRcloneNativeRepositoryCommit(attempt, input.NativeRequest.CostEvidenceDigest, fixture.now)
+			}
+			if outcome, err := execution.RecordProviderCommit(context.Background(), provider.NewRcloneProviderCommit(commit)); err != nil ||
+				outcome.State != backupasset.RecoveryPointVerifying {
+				t.Fatalf("record Rclone provider commit outcome=%+v err=%v", outcome, err)
+			}
+			fixture.strategy.reconcile = provider.RcloneReconcileV1{State: provider.RcloneReconcileIncomplete}
+			outcome, err := fixture.service.ProcessPoint(context.Background(), attempt.RecoveryPointID)
+			if err != nil || outcome.State != backupasset.RecoveryPointFailed || outcome.Code != backupasset.FailureManifestUnavailable ||
+				!outcome.ProviderCommitRecorded {
+				t.Fatalf("incomplete Rclone verification outcome=%+v err=%v", outcome, err)
+			}
+			var point model.RecoveryPoint
+			if err := fixture.db.First(&point, "id = ?", attempt.RecoveryPointID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if point.State != string(backupasset.RecoveryPointFailed) || point.PhysicalAvailability != string(backupasset.PhysicalUnknown) ||
+				point.CommittedAt != nil || point.ObservedAt != nil {
+				t.Fatalf("incomplete verification promoted Rclone point=%+v", point)
+			}
+			var manifestCount int64
+			if err := fixture.db.Model(&model.RecoveryPointManifest{}).Where("recovery_point_id = ?", point.ID).Count(&manifestCount).Error; err != nil {
+				t.Fatal(err)
+			}
+			if manifestCount != 0 {
+				t.Fatalf("incomplete verification created %d manifests, want 0", manifestCount)
+			}
+		})
 	}
 }
 

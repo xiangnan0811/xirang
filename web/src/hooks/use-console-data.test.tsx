@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
@@ -6,6 +6,7 @@ import type { AlertRecord, NewTaskInput, NodeRecord, OverviewTrafficSeries, Task
 import { beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
 import { AuthProvider } from "@/context/auth-context";
 import { useConsoleData } from "./use-console-data";
+import { useRefreshInterval } from "./use-user-preferences";
 
 function ConsoleAuth({ children }: { children: ReactNode }) {
   return <AuthProvider>{children}</AuthProvider>;
@@ -847,5 +848,109 @@ describe("useConsoleData", () => {
 
     expect(result.current.alerts).toEqual([]);
     expect(result.current.overview.activePolicies).not.toBe(9);
+  });
+
+  describe("auto refresh preference", () => {
+    const REFRESH_INTERVAL_KEY = "xirang.settings.refresh-interval";
+
+    function setHidden(hidden: boolean) {
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        get: () => hidden,
+      });
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => (hidden ? "hidden" : "visible"),
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+
+    async function changeVisibility(hidden: boolean) {
+      await act(async () => {
+        setHidden(hidden);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    async function advance(ms: number) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    }
+
+    /** Stores the preference through the same store the settings page writes, then mounts the console. */
+    async function renderConsoleWithRefreshPreference(value: string) {
+      const preference = renderHook(() => useRefreshInterval());
+      act(() => {
+        preference.result.current[1](value);
+      });
+      renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
+      await advance(0);
+      return (next: string) => {
+        act(() => {
+          preference.result.current[1](next);
+        });
+      };
+    }
+
+    const overviewLoads = () => apiClientMock.getOverviewSummary.mock.calls.length;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      setHidden(false);
+      apiClientMock.getNodes.mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+      cleanup();
+      const preference = renderHook(() => useRefreshInterval());
+      act(() => {
+        preference.result.current[1]("60");
+      });
+      preference.unmount();
+      localStorage.removeItem(REFRESH_INTERVAL_KEY);
+      vi.useRealTimers();
+      setHidden(false);
+    });
+
+    it("persisted Off schedules no console polling until a non-zero interval is chosen", async () => {
+      const setPreference = await renderConsoleWithRefreshPreference("0");
+      expect(localStorage.getItem(REFRESH_INTERVAL_KEY)).toBe("0");
+      expect(overviewLoads()).toBe(1);
+
+      await advance(10 * 60_000);
+      expect(overviewLoads()).toBe(1);
+      await changeVisibility(true);
+      await changeVisibility(false);
+      expect(overviewLoads()).toBe(1);
+
+      setPreference("30");
+      await advance(29_999);
+      expect(overviewLoads()).toBe(1);
+      await advance(1);
+      expect(overviewLoads()).toBe(2);
+
+      await changeVisibility(true);
+      await advance(60_000);
+      expect(overviewLoads()).toBe(2);
+      await changeVisibility(false);
+      expect(overviewLoads()).toBe(3);
+
+      setPreference("0");
+      await advance(10 * 60_000);
+      await changeVisibility(true);
+      await changeVisibility(false);
+      expect(overviewLoads()).toBe(3);
+    });
+
+    it.each(["abc", "-30", "0abc", "0.5", "-0.5", "-0", " 0", "1e3", "2147484"])("invalid stored interval %j falls back to the 60s default", async (stored) => {
+      await renderConsoleWithRefreshPreference(stored);
+      expect(overviewLoads()).toBe(1);
+
+      await advance(59_999);
+      expect(overviewLoads()).toBe(1);
+      await advance(1);
+      expect(overviewLoads()).toBe(2);
+    });
   });
 });

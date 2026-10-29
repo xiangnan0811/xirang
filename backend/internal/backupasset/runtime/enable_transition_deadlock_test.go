@@ -154,6 +154,7 @@ func TestEnableTransitionHelperAllowsSlowStartupBeforeStageDeadline(t *testing.T
 func runContentConfigDeadlockHelper(t *testing.T) {
 	t.Helper()
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(
 		&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{},
 		&model.BackupAssetAuditCheckpoint{}, &model.BackupAssetAuditEvent{},

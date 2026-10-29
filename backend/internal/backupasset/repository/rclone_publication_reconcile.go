@@ -397,6 +397,9 @@ func validateRcloneDurableCapabilityEvidence(
 	attempt provider.RcloneAttemptV1,
 	commit provider.RcloneCommitV1,
 ) error {
+	if err := provider.ValidateRcloneRuntimeCompatibility(attempt, commit); err != nil {
+		return fmt.Errorf("%w: incompatible managed Rclone durable versions", backupasset.ErrConflict)
+	}
 	if point.CapabilityRevision <= 0 ||
 		attempt.CapabilityRevision == 0 ||
 		uint64(point.CapabilityRevision) != attempt.CapabilityRevision ||
@@ -612,6 +615,9 @@ func validateReconciledRcloneCommitEvidence(
 	if err := evidence.Validate(); err != nil {
 		return err
 	}
+	if err := provider.ValidateRcloneRuntimeCompatibility(attempt, evidence); err != nil {
+		return err
+	}
 	if binding.RepositoryID != attempt.RepositoryID || binding.TaskRepositoryLinkID != attempt.TaskRepositoryLinkID ||
 		binding.TaskID != attempt.TaskID || binding.PublicationMode != attempt.PublicationMode ||
 		evidence.RepositoryID != attempt.RepositoryID || evidence.TaskRepositoryLinkID != attempt.TaskRepositoryLinkID ||
@@ -675,10 +681,14 @@ func (service *PublicationService) commitReconciledRcloneManifest(
 		if existing.ID != "" {
 			return fmt.Errorf("%w: managed Rclone manifest already exists", backupasset.ErrConflict)
 		}
+		generatorVersion := "1"
+		if claim.attempt.PublicationMode == backupasset.PublicationVersionedPrefix && claim.attempt.ManifestSchemaRevision == 2 {
+			generatorVersion = "2"
+		}
 		now := service.now().UTC()
 		manifest := model.RecoveryPointManifest{
 			ID: manifestID, RecoveryPointID: point.ID, Revision: 1, DigestAlgorithm: "sha256", Digest: fact.Manifest.ManifestIndexDigest,
-			Generator: "xirang-rclone", GeneratorVersion: "1", Completeness: string(backupasset.ManifestComplete),
+			Generator: "xirang-rclone", GeneratorVersion: generatorVersion, Completeness: string(backupasset.ManifestComplete),
 			EntryCount: int64(fact.Manifest.EntryCount), LogicalBytes: int64(fact.Manifest.LogicalBytes),
 			FidelityJSON: point.FidelityJSON, EncryptedCommitEvidence: encodedCommit, IsActive: true, CreatedAt: now, UpdatedAt: now,
 		}
@@ -688,6 +698,9 @@ func (service *PublicationService) commitReconciledRcloneManifest(
 		capturedAt := fact.Commit.ProviderCommittedAt.UTC()
 		point.CapturedAt = &capturedAt
 		point.CommittedAt = &now
+		// Immutable points record the verified publication time in CommittedAt;
+		// ObservedAt is reserved for mutable heads.
+		point.PhysicalAvailability = string(backupasset.PhysicalOnline)
 		point.State = string(backupasset.RecoveryPointCommitted)
 		point.UpdatedAt = now
 		if err := tx.Save(&point).Error; err != nil {

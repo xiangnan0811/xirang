@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import i18n from "@/i18n";
@@ -962,6 +962,9 @@ describe("TasksPage", () => {
     expect(screen.getByRole("link", { name: "从此备份恢复" }))
       .toHaveAttribute("href", "/app/backups/recovery?taskId=401");
     expect(screen.queryByRole("button", { name: "浏览快照" })).not.toBeInTheDocument();
+    // Snapshot comparison is retired: the history dialog offers no compare toggle.
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /对比|比较|compare/i }))
+      .not.toBeInTheDocument();
     expect(screen.queryByTestId("legacy-snapshot-browser")).not.toBeInTheDocument();
     expect(screen.queryByTestId("legacy-snapshot-search")).not.toBeInTheDocument();
     expect(screen.queryByTestId("restore-dialog")).not.toBeInTheDocument();

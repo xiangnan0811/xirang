@@ -247,11 +247,14 @@ func (value RcloneAttemptV1) Validate() error {
 	}
 	switch value.PublicationMode {
 	case backupasset.PublicationVersionedPrefix:
-		if value.Portable == nil || value.Native != nil || value.Portable.Validate(value.RecoveryPointID, value.AttemptID) != nil {
+		if (value.MinimumRuntimeRevision != 1 || value.ManifestSchemaRevision != 1) &&
+			(value.MinimumRuntimeRevision != 2 || value.ManifestSchemaRevision != 2) ||
+			value.Portable == nil || value.Native != nil || value.Portable.Validate(value.RecoveryPointID, value.AttemptID) != nil {
 			return fmt.Errorf("%w: invalid portable Rclone publication attempt", backupasset.ErrInvalidState)
 		}
 	case backupasset.PublicationNativeObjectVersions:
-		if value.Native == nil || value.Portable != nil || value.Native.Validate(value.PointDeadlineAt) != nil {
+		if value.MinimumRuntimeRevision != 1 || value.ManifestSchemaRevision != 1 ||
+			value.Native == nil || value.Portable != nil || value.Native.Validate(value.PointDeadlineAt) != nil {
 			return fmt.Errorf("%w: invalid native Rclone publication attempt", backupasset.ErrInvalidState)
 		}
 	default:
@@ -326,15 +329,26 @@ func (value RcloneCommitV1) Validate() error {
 	}
 	switch value.PublicationMode {
 	case backupasset.PublicationVersionedPrefix:
-		if value.Portable == nil || value.Native != nil || value.Portable.Validate() != nil {
+		if (value.MinimumRuntimeRevision != 1 && value.MinimumRuntimeRevision != 2) ||
+			value.Portable == nil || value.Native != nil || value.Portable.Validate() != nil {
 			return fmt.Errorf("%w: invalid portable Rclone provider commit", backupasset.ErrInvalidState)
 		}
 	case backupasset.PublicationNativeObjectVersions:
-		if value.Native == nil || value.Portable != nil || value.Native.Validate(value.PointDeadlineAt) != nil {
+		if value.MinimumRuntimeRevision != 1 || value.Native == nil || value.Portable != nil || value.Native.Validate(value.PointDeadlineAt) != nil {
 			return fmt.Errorf("%w: invalid native Rclone provider commit", backupasset.ErrInvalidState)
 		}
 	default:
 		return fmt.Errorf("%w: invalid Rclone provider commit mode", backupasset.ErrInvalidState)
+	}
+	return nil
+}
+
+// ValidateRcloneRuntimeCompatibility closes the supported attempt/commit
+// version pairs. It supplements, rather than replaces, identity checks.
+func ValidateRcloneRuntimeCompatibility(attempt RcloneAttemptV1, commit RcloneCommitV1) error {
+	if attempt.Validate() != nil || commit.Validate() != nil ||
+		attempt.PublicationMode != commit.PublicationMode || attempt.MinimumRuntimeRevision != commit.MinimumRuntimeRevision {
+		return fmt.Errorf("%w: incompatible Rclone attempt and commit versions", backupasset.ErrInvalidState)
 	}
 	return nil
 }

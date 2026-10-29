@@ -16,6 +16,7 @@ import (
 
 func TestRuntimeRegistersRcloneDeletionMuxForNativeAccess(t *testing.T) {
 	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
 	transport := &runtimeTransportFake{}
 	runtime, err := New(Dependencies{
 		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,

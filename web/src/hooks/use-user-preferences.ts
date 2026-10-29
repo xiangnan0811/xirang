@@ -40,9 +40,20 @@ const refreshIntervalStore = createStorageHook(REFRESH_INTERVAL_KEY, "60");
 const defaultPageSizeStore = createStorageHook(DEFAULT_PAGE_SIZE_KEY, "50");
 const datetimeFormatStore = createStorageHook(DATETIME_FORMAT_KEY, "locale");
 
+const DEFAULT_REFRESH_INTERVAL_SECONDS = 60;
+// setInterval clamps delays above 2^31-1 ms to 1 ms, so longer intervals are invalid.
+const MAX_REFRESH_INTERVAL_SECONDS = Math.floor((2 ** 31 - 1) / 1000);
+
+/** Only a whole non-negative decimal integer is a valid interval; 0 disables refresh. */
+function parseRefreshInterval(raw: string): number {
+  if (!/^\d+$/.test(raw)) return DEFAULT_REFRESH_INTERVAL_SECONDS;
+  const seconds = Number(raw);
+  return seconds <= MAX_REFRESH_INTERVAL_SECONDS ? seconds : DEFAULT_REFRESH_INTERVAL_SECONDS;
+}
+
 export function useRefreshInterval(): [number, (v: string) => void] {
   const raw = useSyncExternalStore(refreshIntervalStore.subscribe, refreshIntervalStore.getSnapshot);
-  return [parseInt(raw, 10) || 60, refreshIntervalStore.setValue];
+  return [parseRefreshInterval(raw), refreshIntervalStore.setValue];
 }
 
 export function useDefaultPageSize(): [number, (v: string) => void] {
