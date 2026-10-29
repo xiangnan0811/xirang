@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.6](https://github.com/xiangnan0811/xirang/compare/v0.73.5...v0.73.6) (2026-10-29)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** complete preflight and verified historical content delivery ([#657](https://github.com/xiangnan0811/xirang/issues/657)) ([1dae86a](https://github.com/xiangnan0811/xirang/commit/1dae86a546351652568d3866e67b9a238d5cb372))
+
 ### 控制台与接口说明修复
 
 - 修复个人偏好中“关闭自动刷新”被解释为 60 秒的问题；关闭状态在刷新页面后保留，共享控制台停止周期刷新，选择非零间隔后恢复。不影响首次加载、手动刷新或独立的任务与告警轮询。
