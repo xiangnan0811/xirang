@@ -520,7 +520,18 @@ func (adapter *rcloneNativeS3SDK) OpenBaselineVersion(ctx context.Context, reque
 	return adapter.openVersion(ctx, request, "", true)
 }
 
-func (adapter *rcloneNativeS3SDK) PutControlVersion(ctx context.Context, request RcloneNativeControlWriteRequest) (RcloneNativeControlWriteResult, error) {
+func (adapter *rcloneNativeS3SDK) PutControlVersion(ctx context.Context, request RcloneNativeControlWriteRequest) (result RcloneNativeControlWriteResult, resultErr error) {
+	called := false
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		if !called {
+			resultErr = rcloneCommandNotAttempted(resultErr)
+		} else {
+			resultErr = &rcloneMutationCommandError{attempted: true, cause: resultErr}
+		}
+	}()
 	if err := adapter.validateBoundRequest(ctx); err != nil {
 		return RcloneNativeControlWriteResult{}, err
 	}
@@ -553,6 +564,7 @@ func (adapter *rcloneNativeS3SDK) PutControlVersion(ctx context.Context, request
 	default:
 		return RcloneNativeControlWriteResult{}, rcloneNativeError(backupasset.RcloneReasonEncryptionUnsupported, nil)
 	}
+	called = true
 	output, err := adapter.client.PutObject(ctx, input)
 	if err != nil || output == nil || !validRcloneNativeVersionID(aws.ToString(output.VersionId)) {
 		if err == nil {

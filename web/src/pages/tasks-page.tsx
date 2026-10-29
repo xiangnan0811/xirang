@@ -120,6 +120,7 @@ export function TasksPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const createTaskOpenerRef = useRef<HTMLElement | null>(null);
   const editTaskOpenerRef = useRef<HTMLElement | null>(null);
+  const historyTaskOpenerRef = useRef<HTMLElement | null>(null);
   const tokenRef = useRef<string | null>(null);
   const roleRef = useRef<AuthRole | null>(null);
   const mountedRef = useRef(false);
@@ -129,6 +130,9 @@ export function TasksPage() {
   };
   const restoreEditTaskOpener: DialogCloseAutoFocus = (event) => {
     restoreConnectedDialogOpener(event, editTaskOpenerRef.current);
+  };
+  const restoreHistoryTaskOpener: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, historyTaskOpenerRef.current);
   };
   const openTaskCreateFromInventory = (open: boolean, opener?: EventTarget | null) => {
     if (open && !isTaskWriteRole(roleRef.current)) return;
@@ -343,7 +347,8 @@ export function TasksPage() {
     setEditDialogOpen(true);
   };
 
-  const handleViewHistory = (task: TaskRecord) => {
+  const handleViewHistory = (task: TaskRecord, opener?: EventTarget | null) => {
+    historyTaskOpenerRef.current = dialogOpenerFromTarget(opener);
     setSelectedRun(null);
     setHistoryTask(task);
   };
@@ -801,6 +806,7 @@ export function TasksPage() {
         setEditingTask={setEditingTask}
         historyTask={historyTask}
         setHistoryTask={setHistoryTask}
+        historyOnCloseAutoFocus={restoreHistoryTaskOpener}
         selectedRun={selectedRun}
         setSelectedRun={setSelectedRun}
         batchDialogOpen={batchDialogOpen}

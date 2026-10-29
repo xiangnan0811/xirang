@@ -161,6 +161,9 @@ func (m *Manager) executeProviderWithCapture(
 		result.ExecutorNotInvoked = true
 		cleanupCtx, cleanupCancel := newPublicationCleanupContext(ctx)
 		finalization := rejectPublicationPrecondition(cleanupCtx, session, result)
+		if providerKind == "rclone" && !finalization.finalized {
+			finalization.result.SuppressRetry = true
+		}
 		cleanupCancel()
 		publicationFinalized = finalization.finalized
 		return finalization.result
@@ -294,6 +297,10 @@ func (m *Manager) finishPublicationExecutionState(ctx context.Context, session p
 		ctx = context.Background()
 	}
 	managed := true
+	if attempt := session.Attempt(); attempt != nil && attempt.Provider == backupasset.ProviderRclone &&
+		(runErr != nil || result.Completion != backupasset.CompletionKnownExitZero || result.ExitCode != 0 || result.ProviderCommit == nil || result.EvidenceCode != "") {
+		return finishRclonePublicationFailure(ctx, session, result, runErr)
+	}
 	switch result.Completion {
 	case backupasset.CompletionKnownExitZero:
 		if result.ExitCode != 0 {
@@ -338,6 +345,49 @@ func (m *Manager) finishPublicationExecutionState(ctx context.Context, session p
 	default:
 		return rejectPublicationPrecondition(ctx, session, providerRunResult{ExitCode: result.ExitCode, Err: fmt.Errorf("%w: invalid evidence completion", backupasset.ErrInvalidState), Managed: managed})
 	}
+}
+
+func finishRclonePublicationFailure(ctx context.Context, session publication.Execution, result executor.PublicationExecutionResult, runErr error) publicationFinalization {
+	if runErr == nil {
+		runErr = fmt.Errorf("%w: managed Rclone publication completion is unproven", backupasset.ErrInvalidState)
+	}
+	fact := provider.ClassifyRclonePublicationFailure(runErr)
+	// A contradictory generic result cannot strengthen a typed fact.
+	if result.ProviderCommit != nil || result.EvidenceCode != "" ||
+		fact.KnownNonzero && (result.Completion != backupasset.CompletionKnownNonzero || result.ExitCode != fact.ExitCode) ||
+		(fact.Unattempted || fact.CompletionUnproven) && (result.Completion != "" || result.ExitCode != provider.UnknownProviderExitCode) {
+		fact = provider.RclonePublicationFailure{ExitCode: provider.UnknownProviderExitCode}
+	}
+	base := providerRunResult{ExitCode: provider.UnknownProviderExitCode, Err: runErr, Managed: true}
+	if fact.Unattempted {
+		finalization := rejectPublicationPrecondition(ctx, session, base)
+		if !finalization.finalized {
+			finalization.result.SuppressRetry = true
+		}
+		return finalization
+	}
+	if fact.KnownNonzero || fact.CompletionUnproven {
+		code := backupasset.FailureProviderCompletionUnproven
+		if fact.KnownNonzero {
+			code = backupasset.FailureProviderNonzeroExit
+			base.ExitCode = fact.ExitCode
+		}
+		if err := session.Fail(ctx, code); err != nil {
+			base.Err = errors.Join(runErr, err)
+			base.SuppressRetry = true
+			return publicationFinalization{result: base}
+		}
+		return publicationFinalization{result: base, finalized: true}
+	}
+	code := publicationUnknownOutcomeCode(runErr)
+	base.SuppressRetry = true
+	base.WarningCode = code
+	if err := session.Defer(ctx, publication.Deferral{Completion: backupasset.CompletionOutcomeUnknown, Code: code, RcloneWriterQuiesced: fact.WriterQuiesced}); err != nil {
+		base.Err = errors.Join(runErr, err)
+		base.WarningCode = backupasset.FailurePublicationSessionAbandoned
+		return publicationFinalization{result: base}
+	}
+	return publicationFinalization{result: base, finalized: true}
 }
 
 func recordPublicationCommit(ctx context.Context, session publication.Execution, evidence provider.ProviderCommit) error {

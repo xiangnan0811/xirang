@@ -230,7 +230,7 @@ export const NodesTable = React.memo(function NodesTable({
                             </DropdownMenuItem>
                           )}
                           {canBrowseNodeFiles && (
-                            <DropdownMenuItem onClick={() => onOpenFileBrowser?.(node)}>
+                            <DropdownMenuItem onClick={() => onOpenFileBrowser?.(node, editTrigger.current)}>
                               <FolderOpen className="mr-2 size-4" aria-hidden />
                               {t("nodes.fileBrowser")}
                             </DropdownMenuItem>

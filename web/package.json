@@ -6,13 +6,14 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "typecheck": "tsc -b --noEmit",
+    "typecheck": "tsc -b --noEmit && tsc -p tsconfig.e2e.json",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build",
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "NODE_ENV=test vitest run --coverage",
     "e2e": "playwright test",
+    "e2e:evidence": "node scripts/run-e2e-evidence.mjs",
     "walkthrough": "node scripts/run-walkthrough.mjs"
   },
   "dependencies": {

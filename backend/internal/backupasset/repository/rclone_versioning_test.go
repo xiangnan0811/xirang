@@ -1309,9 +1309,7 @@ func TestActivateRcloneVersioningImportedBaselineReservesBeforePortableProviderM
 	if err := db.Where("producing_task_run_id = ?", migrationRun.ID).First(&point).Error; err != nil {
 		t.Fatal(err)
 	}
-	if point.Semantics != string(backupasset.PointImportedBaseline) || point.State != string(backupasset.RecoveryPointFailed) || point.EncryptedProviderLocator == "" {
-		t.Fatalf("failed imported baseline evidence=%+v activationErr=%v", point, err)
-	}
+	requireImportedRcloneUnknownWriter(t, db, service.publication, point, migrationRun)
 }
 
 func TestActivateRcloneVersioningImportedBaselineNativeUsesExactTemporarySourceAdmission(t *testing.T) {
@@ -1360,10 +1358,10 @@ func TestActivateRcloneVersioningImportedBaselineNativeUsesExactTemporarySourceA
 	if err := fixture.db.Where("producing_task_run_id = ?", migrationRun.ID).First(&point).Error; err != nil {
 		t.Fatal(err)
 	}
-	if migrationRun.Status != "failed" || point.Semantics != string(backupasset.PointImportedBaseline) ||
-		point.State != string(backupasset.RecoveryPointFailed) || preparedAttempt.RecoveryPointID != point.ID {
-		t.Fatalf("native imported baseline reservation run=%+v point=%+v attempt=%+v", migrationRun, point, preparedAttempt)
+	if preparedAttempt.RecoveryPointID != point.ID {
+		t.Fatal("native imported reservation changed recovery point identity")
 	}
+	requireImportedRcloneUnknownWriter(t, fixture.db, fixture.service.publication, point, migrationRun)
 	var access model.RepositoryAccessBinding
 	if err := fixture.db.Where("repository_id = ? AND status = ?", point.RepositoryID, bindingStatusActive).First(&access).Error; err != nil {
 		t.Fatal(err)
@@ -1395,6 +1393,160 @@ func TestActivateRcloneVersioningImportedBaselineNativeUsesExactTemporarySourceA
 		!strings.Contains(correctPolicies[1], "legacy/current/") || !strings.Contains(correctPolicies[1], fixture.sourceKeyARN) ||
 		!strings.Contains(correctPolicies[1], "kms:Decrypt") {
 		t.Fatalf("native baseline two-stage policies=%v", correctPolicies)
+	}
+}
+
+func requireImportedRcloneUnknownWriter(t *testing.T, db *gorm.DB, publicationService *PublicationService, point model.RecoveryPoint, run model.TaskRun) {
+	t.Helper()
+	if run.Status != model.TaskRunStatusFailed || run.FinishedAt == nil || run.LastError != string(backupasset.FailureProviderOutcomeUnknown) ||
+		point.Semantics != string(backupasset.PointImportedBaseline) || point.State != string(backupasset.RecoveryPointPreparing) ||
+		point.ProducingTaskRunID == nil || *point.ProducingTaskRunID != run.ID || point.EncryptedProviderLocator == "" {
+		t.Fatal("unmarked imported failure lost its durable task or point identity")
+	}
+	consistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
+	if err != nil || consistency.Completion != backupasset.CompletionOutcomeUnknown || consistency.Code != backupasset.FailureProviderOutcomeUnknown || consistency.RcloneWriterQuiesced != nil {
+		t.Fatalf("unmarked imported failure lost unknown writer evidence: %+v %v", consistency, err)
+	}
+	var activeLeases int64
+	if err := db.Model(&model.RecoveryPointLease{}).Where("recovery_point_id = ? AND holder_type = ? AND status = ?", point.ID, backupasset.LeaseHolderPointPublication, backupasset.LeaseActive).Count(&activeLeases).Error; err != nil || activeLeases != 1 {
+		t.Fatalf("unmarked imported failure lost its publication lease: count=%d err=%v", activeLeases, err)
+	}
+	if err := publicationService.ensureNoUnresolvedRcloneWriter(context.Background(), point.RepositoryID); !errors.Is(err, backupasset.ErrPublicationInProgress) {
+		t.Fatalf("unmarked imported failure admitted another writer: %v", err)
+	}
+}
+
+func TestActivateRcloneImportedBaselineUnattemptedFailureClosesWriter(t *testing.T) {
+	for _, mode := range []backupasset.TaskPublicationMode{backupasset.PublicationVersionedPrefix, backupasset.PublicationNativeObjectVersions} {
+		t.Run(string(mode), func(t *testing.T) {
+			var db *gorm.DB
+			var service *Service
+			var strategy *rcloneRepositoryStrategyStub
+			var taskID uint
+			var revision uint64
+			var preflight backupasset.RcloneVersioningPreflightResult
+			if mode == backupasset.PublicationVersionedPrefix {
+				fixture := newRclonePortableVersioningWorkflowFixture(t)
+				db, service, strategy, taskID, revision, preflight = fixture.db, fixture.service, fixture.strategy, fixture.task.ID, fixture.revision, fixture.preflight
+			} else {
+				fixture := newRcloneNativeVersioningWorkflowFixture(t)
+				db, service, strategy, taskID, revision, preflight = fixture.db, fixture.service, fixture.strategy, fixture.task.ID, fixture.revision, fixture.preflight
+			}
+			cause := errors.New("controlled read-only preparation failure")
+			strategy.prepare = func(context.Context, provider.PublicationPrepareRequest) (provider.PreparedPublication, error) {
+				return provider.PreparedPublication{}, provider.RcloneUnattemptedPublicationError(cause)
+			}
+			_, err := service.ActivateRcloneVersioning(context.Background(), backupasset.RcloneVersioningActivationRequest{
+				TaskID: taskID, ExpectedTaskRevision: revision, PreflightID: preflight.PreflightID, MigrationChoice: backupasset.RcloneImportedBaseline,
+			})
+			if !errors.Is(err, cause) {
+				t.Fatalf("unattempted imported failure lost its cause: %v", err)
+			}
+			var run model.TaskRun
+			if err := db.Where("task_id = ? AND trigger_type = ?", taskID, "migration").First(&run).Error; err != nil {
+				t.Fatal(err)
+			}
+			var point model.RecoveryPoint
+			if err := db.Where("producing_task_run_id = ?", run.ID).First(&point).Error; err != nil {
+				t.Fatal(err)
+			}
+			consistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
+			if err != nil || run.Status != model.TaskRunStatusFailed || run.FinishedAt == nil || run.LastError != string(backupasset.FailurePublicationPreconditionMissing) ||
+				point.Semantics != string(backupasset.PointImportedBaseline) || point.State != string(backupasset.RecoveryPointFailed) ||
+				consistency.Provider != backupasset.ProviderRclone || consistency.RcloneWriterQuiesced == nil || !*consistency.RcloneWriterQuiesced {
+				t.Fatalf("unattempted imported failure lacks terminal writer evidence: %+v %v", consistency, err)
+			}
+			var activeLeases int64
+			if err := db.Model(&model.RecoveryPointLease{}).Where("recovery_point_id = ? AND status = ?", point.ID, backupasset.LeaseActive).Count(&activeLeases).Error; err != nil || activeLeases != 0 {
+				t.Fatalf("unattempted failure retained a publication lease: %d %v", activeLeases, err)
+			}
+			if err := service.publication.ensureNoUnresolvedRcloneWriter(context.Background(), point.RepositoryID); err != nil {
+				t.Fatalf("stopped writer remained protected: %v", err)
+			}
+		})
+	}
+}
+
+func TestActivateRcloneImportedBaselineStoppedFailurePreservesTaskOutcome(t *testing.T) {
+	for _, mode := range []backupasset.TaskPublicationMode{backupasset.PublicationVersionedPrefix, backupasset.PublicationNativeObjectVersions} {
+		for _, test := range []struct {
+			name   string
+			cause  error
+			status string
+			code   backupasset.PublicationFailureCode
+		}{
+			{"canceled", context.Canceled, model.TaskRunStatusCanceled, backupasset.FailureProviderCanceled},
+			{"deadline", context.DeadlineExceeded, model.TaskRunStatusFailed, backupasset.FailureProviderTimeout},
+			{"canceled_and_deadline", errors.Join(context.Canceled, context.DeadlineExceeded), model.TaskRunStatusCanceled, backupasset.FailureProviderCanceled},
+			{"semantic", errors.New("controlled semantic failure"), model.TaskRunStatusFailed, backupasset.FailureProviderCompletionUnproven},
+		} {
+			t.Run(string(mode)+"/"+test.name, func(t *testing.T) {
+				var db *gorm.DB
+				var service *Service
+				var strategy *rcloneRepositoryStrategyStub
+				var taskID uint
+				var revision uint64
+				var preflight backupasset.RcloneVersioningPreflightResult
+				if mode == backupasset.PublicationVersionedPrefix {
+					fixture := newRclonePortableVersioningWorkflowFixture(t)
+					db, service, strategy, taskID, revision, preflight = fixture.db, fixture.service, fixture.strategy, fixture.task.ID, fixture.revision, fixture.preflight
+				} else {
+					fixture := newRcloneNativeVersioningWorkflowFixture(t)
+					db, service, strategy, taskID, revision, preflight = fixture.db, fixture.service, fixture.strategy, fixture.task.ID, fixture.revision, fixture.preflight
+				}
+				var attempt provider.RcloneAttemptV1
+				strategy.prepare = func(_ context.Context, request provider.PublicationPrepareRequest) (provider.PreparedPublication, error) {
+					var err error
+					attempt, err = request.Attempt.RcloneAttempt()
+					if err != nil || !attempt.ImportedBaseline || attempt.PublicationMode != mode {
+						t.Fatal("provider did not receive the reserved imported attempt")
+					}
+					return provider.PreparedPublication{Attempt: request.Attempt, RcloneInput: request.RcloneInput}, nil
+				}
+				called := false
+				strategy.execute = func(_ context.Context, _ provider.PreparedPublication, _ provider.PublicationProgress) (provider.ProviderExecutionResult, error) {
+					called = true
+					cause := errors.Join(test.cause, errors.New("controlled cleanup failure"))
+					return provider.ProviderExecutionResult{ExitCode: provider.UnknownProviderExitCode}, &provider.RclonePublicationError{
+						MutationAttempted: true, WritersQuiesced: true, Cause: cause,
+					}
+				}
+				_, err := service.ActivateRcloneVersioning(context.Background(), backupasset.RcloneVersioningActivationRequest{
+					TaskID: taskID, ExpectedTaskRevision: revision, PreflightID: preflight.PreflightID, MigrationChoice: backupasset.RcloneImportedBaseline,
+				})
+				if !called || !errors.Is(err, test.cause) {
+					t.Fatalf("imported stopped-writer failure lost its cause: %v", err)
+				}
+				var run model.TaskRun
+				if err := db.Where("task_id = ? AND trigger_type = ?", taskID, "migration").First(&run).Error; err != nil {
+					t.Fatal(err)
+				}
+				if run.ID != attempt.TaskRunID || run.Status != test.status || run.LastError != string(test.code) || run.FinishedAt == nil {
+					t.Fatalf("imported TaskRun outcome status=%s code=%s finished=%t", run.Status, run.LastError, run.FinishedAt != nil)
+				}
+				var point model.RecoveryPoint
+				if err := db.First(&point, "id = ?", attempt.RecoveryPointID).Error; err != nil {
+					t.Fatal(err)
+				}
+				consistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
+				if err != nil || point.ProducingTaskRunID == nil || *point.ProducingTaskRunID != run.ID ||
+					point.Semantics != string(backupasset.PointImportedBaseline) || point.State != string(backupasset.RecoveryPointFailed) ||
+					consistency.Provider != backupasset.ProviderRclone || consistency.Completion != "" || consistency.Code != backupasset.FailureProviderCompletionUnproven ||
+					consistency.RcloneWriterQuiesced == nil || !*consistency.RcloneWriterQuiesced {
+					t.Fatalf("imported point did not retain stopped-writer completion evidence: %+v %v", consistency, err)
+				}
+				var active, released int64
+				if err := db.Model(&model.RecoveryPointLease{}).Where("recovery_point_id = ? AND status = ?", point.ID, backupasset.LeaseActive).Count(&active).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := db.Model(&model.RecoveryPointLease{}).Where("recovery_point_id = ? AND status = ?", point.ID, backupasset.LeaseReleased).Count(&released).Error; err != nil || active != 0 || released != 1 {
+					t.Fatalf("stopped imported writer leases active=%d released=%d err=%v", active, released, err)
+				}
+				if err := service.publication.ensureNoUnresolvedRcloneWriter(context.Background(), point.RepositoryID); err != nil {
+					t.Fatalf("stopped imported writer remained unresolved: %v", err)
+				}
+			})
+		}
 	}
 }
 

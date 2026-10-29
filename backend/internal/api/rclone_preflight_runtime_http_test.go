@@ -49,18 +49,32 @@ import (
 type rcloneHTTPClock struct {
 	mu     sync.RWMutex
 	offset time.Duration
+	fixed  *time.Time
 }
 
 func (clock *rcloneHTTPClock) Now() time.Time {
 	clock.mu.RLock()
 	defer clock.mu.RUnlock()
+	if clock.fixed != nil {
+		return *clock.fixed
+	}
 	return time.Now().UTC().Add(clock.offset)
 }
 
 func (clock *rcloneHTTPClock) Advance(delta time.Duration) {
 	clock.mu.Lock()
-	clock.offset += delta
+	if clock.fixed != nil {
+		clock.fixed = new(clock.fixed.Add(delta))
+	} else {
+		clock.offset += delta
+	}
 	clock.mu.Unlock()
+}
+
+func (clock *rcloneHTTPClock) Set(value time.Time) {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.fixed = new(value.UTC())
 }
 
 type rcloneHTTPReadiness struct{}
@@ -88,6 +102,10 @@ type rcloneHTTPFixture struct {
 }
 
 func newRcloneHTTPFixture(t *testing.T, binary string, external rcloneHTTPDependencies) *rcloneHTTPFixture {
+	return newRcloneHTTPFixtureWithRuntimeSetup(t, binary, external, nil)
+}
+
+func newRcloneHTTPFixtureWithRuntimeSetup(t *testing.T, binary string, external rcloneHTTPDependencies, setup func(*backupruntime.Runtime, *gorm.DB, *settings.Service)) *rcloneHTTPFixture {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RCLONE_RUNTIME_HTTP_KEY_FOR_TEST_ONLY")
@@ -152,7 +170,9 @@ func newRcloneHTTPFixture(t *testing.T, binary string, external rcloneHTTPDepend
 	if err != nil {
 		t.Fatalf("construct production runtime: %v", err)
 	}
-	if err := runtime.SetInterruptedRunReadiness(rcloneHTTPReadiness{}); err != nil {
+	if setup != nil {
+		setup(runtime, db, setting)
+	} else if err := runtime.SetInterruptedRunReadiness(rcloneHTTPReadiness{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.RunInventory(context.Background()); err != nil {
@@ -332,7 +352,8 @@ func requireRealRclone(t *testing.T) string {
 	if binary == "" {
 		run := flag.Lookup("test.run")
 		if run != nil && (strings.Contains(run.Value.String(), "TestRclonePreflightRealSSHPortable") ||
-			strings.Contains(run.Value.String(), "TestRclonePortableHistoricalV1RealCommand")) {
+			strings.Contains(run.Value.String(), "TestRclonePortableHistoricalV1RealCommand") ||
+			strings.Contains(run.Value.String(), "TestRcloneTaskPublicationRealSSHFailures")) {
 			t.Fatal("RCLONE_TEST_BINARY is required for the explicitly selected real SSH test")
 		}
 		t.Skip("RCLONE_TEST_BINARY is required for real SSH acceptance")

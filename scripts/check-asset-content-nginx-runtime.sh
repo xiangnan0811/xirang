@@ -6,14 +6,57 @@ TEMPLATE=${ASSET_CONTENT_NGINX_TEMPLATE:-"$ROOT_DIR/deploy/nginx/templates/defau
 NGINX_IMAGE=${ASSET_CONTENT_NGINX_IMAGE:-}
 TMP_DIR=$(mktemp -d)
 CONTAINER_ID=
+CONTAINER_START_PID=
+LAUNCHING=0
+SIGNAL_STATUS=0
+CHECK_PASSED=0
 
 cleanup() {
-  if [[ -n "$CONTAINER_ID" ]]; then
-    docker rm -f "$CONTAINER_ID" >/dev/null 2>&1 || true
+  local status=$?
+  trap - EXIT
+  trap '' INT TERM HUP
+  # A failed or interrupted start may already have created the container.
+  if [[ -n "$CONTAINER_START_PID" ]]; then
+    wait "$CONTAINER_START_PID" 2>/dev/null || true
   fi
-  rm -rf -- "$TMP_DIR"
+  if [[ -z "$CONTAINER_ID" && -s "$TMP_DIR/container.id" ]]; then
+    CONTAINER_ID=$(<"$TMP_DIR/container.id")
+  elif [[ -z "$CONTAINER_ID" && -s "$TMP_DIR/start.stdout" ]]; then
+    CONTAINER_ID=$(<"$TMP_DIR/start.stdout")
+  fi
+  if [[ -n "$CONTAINER_ID" && ! "$CONTAINER_ID" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "asset-content nginx runtime check: invalid container ID in start output" >&2
+    status=1
+    CONTAINER_ID=
+  fi
+
+  if [[ -n "$CONTAINER_ID" ]]; then
+    if docker rm -f "$CONTAINER_ID" >/dev/null; then
+      echo "asset-content nginx runtime check: removed container $CONTAINER_ID"
+    else
+      echo "asset-content nginx runtime check: failed to remove container $CONTAINER_ID" >&2
+      status=1
+    fi
+  fi
+  if ! rm -rf -- "$TMP_DIR"; then
+    echo "asset-content nginx runtime check: failed to remove temporary directory $TMP_DIR" >&2
+    status=1
+  fi
+  if [[ "$status" -eq 0 && "$CHECK_PASSED" -eq 1 ]]; then
+    echo "asset-content nginx runtime check: PASS"
+  fi
+  exit "$status"
 }
 trap cleanup EXIT
+signal_received() {
+  SIGNAL_STATUS=$1
+  if [[ "$LAUNCHING" -ne 1 ]]; then
+    exit "$SIGNAL_STATUS"
+  fi
+}
+trap 'signal_received 130' INT
+trap 'signal_received 143' TERM
+trap 'signal_received 129' HUP
 
 fail() {
   echo "asset-content nginx runtime check: $*" >&2
@@ -96,13 +139,27 @@ server {
 }
 NGINX
 
-CONTAINER_ID=$(docker run -d \
+LAUNCHING=1
+docker run -d --cidfile "$TMP_DIR/container.id" \
   -e CSP_CONNECT_SRC_EXTRA= \
   -p 127.0.0.1::10761 \
   --mount "type=bind,src=$TEMPLATE,dst=/etc/nginx/templates/default.conf.template,readonly" \
   --mount "type=bind,src=$TMP_DIR/probe.conf,dst=/etc/nginx/conf.d/probe.conf,readonly" \
   --mount "type=bind,src=$TMP_DIR/logs,dst=/logs" \
-  "$NGINX_IMAGE")
+  "$NGINX_IMAGE" >"$TMP_DIR/start.stdout" &
+CONTAINER_START_PID=$!
+LAUNCHING=0
+[[ "$SIGNAL_STATUS" -eq 0 ]] || exit "$SIGNAL_STATUS"
+start_status=0
+wait "$CONTAINER_START_PID" || start_status=$?
+CONTAINER_START_PID=
+[[ "$start_status" -eq 0 ]] || fail "could not start nginx container"
+[[ -s "$TMP_DIR/container.id" ]] || fail "Docker did not record the nginx container ID"
+CONTAINER_ID=$(<"$TMP_DIR/container.id")
+[[ "$CONTAINER_ID" =~ ^[0-9a-f]{64}$ ]] || fail "Docker returned an invalid nginx container ID"
+NGINX_IMAGE_ID=$(docker inspect --format '{{.Image}}' "$CONTAINER_ID") || fail "cannot inspect nginx image identity"
+[[ "$NGINX_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Docker returned an invalid nginx image identity"
+echo "asset-content nginx runtime check: image $NGINX_IMAGE ($NGINX_IMAGE_ID), container $CONTAINER_ID"
 
 endpoint=$(docker port "$CONTAINER_ID" 10761/tcp | head -n 1)
 PORT=${endpoint##*:}
@@ -244,4 +301,4 @@ if (( ${#failures[@]} > 0 )); then
   exit 1
 fi
 
-echo "asset-content nginx runtime check: PASS"
+CHECK_PASSED=1

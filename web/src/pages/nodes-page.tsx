@@ -401,6 +401,7 @@ export function NodesPage() {
         terminalKey={state.terminalKey}
         fileBrowserNode={state.fileBrowserNode}
         setFileBrowserNode={state.setFileBrowserNode}
+        fileBrowserOnCloseAutoFocus={state.fileBrowserOnCloseAutoFocus}
         fileBrowserTab={state.fileBrowserTab}
         canBrowseNodeFiles={state.canBrowseNodeFiles}
         setFileBrowserTab={state.setFileBrowserTab}

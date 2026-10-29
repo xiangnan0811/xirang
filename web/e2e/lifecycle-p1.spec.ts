@@ -364,18 +364,9 @@ function waitForMaintenanceReads(page: Page): Promise<{ backups: ListedBackup[];
   return Promise.all([backups, cron]).then(([backupList, cronStatus]) => ({ backups: backupList, cron: cronStatus }));
 }
 
-function padTime(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-function formatLocalInstant(iso: string): string {
-  const date = new Date(iso);
-  return `${date.getFullYear()}-${padTime(date.getMonth() + 1)}-${padTime(date.getDate())} ${padTime(date.getHours())}:${padTime(date.getMinutes())}:${padTime(date.getSeconds())}`;
-}
 
 async function expectSeparateClock(observer: Locator, iso: string) {
-  const local = formatLocalInstant(iso);
-  const found = await observer.evaluate((root) => {
+  const found = await observer.evaluate((root, instant) => {
     const times = [...root.querySelectorAll("time.font-mono")].map((node) => ({
       datetime: node.getAttribute("datetime"),
       text: node.textContent?.trim() ?? "",
@@ -383,8 +374,9 @@ async function expectSeparateClock(observer: Locator, iso: string) {
     const localClocks = [...root.querySelectorAll("span")]
       .filter((node) => !node.classList.contains("font-mono"))
       .map((node) => node.textContent?.trim() ?? "");
-    return { times, localClocks };
-  });
+    return { times, localClocks, offsetMinutes: new Date(instant).getTimezoneOffset() };
+  }, iso);
+  const local = new Date(Date.parse(iso) - found.offsetMinutes * 60_000).toISOString().slice(0, 19).replace("T", " ");
   expect(found.times).toContainEqual({ datetime: iso, text: iso });
   expect(found.localClocks).toContain(local);
 }
@@ -479,22 +471,23 @@ test("creates a Web SQLite snapshot and observes cron artifacts without content 
     }
     const posted = page.waitForResponse((response) => isApi(response, "POST", "/api/v1/system/backup-db"))
       .then((response) => readEnvelope(response, "backup create").then(parseCreatedBackup));
-    let refreshed: ListedBackup[] | null = null;
-    const listed = page.waitForResponse(async (response) => {
-      if (!isApi(response, "GET", "/api/v1/system/backups") || new URL(response.url()).search !== "") return false;
+    const readRefreshedList = async (response: Response): Promise<ListedBackup[]> => {
       const body = await response.text();
       expect(response.status(), body).toBe(200);
       const parsed = JSON.parse(body) as { code?: unknown; data?: unknown };
       expect(parsed.code, body).toBe(200);
-      const rows = parseBackupList(parsed.data);
-      if (rows.length === 0) return false;
-      refreshed = rows;
-      return true;
-    });
+      return parseBackupList(parsed.data);
+    };
+    // The first non-empty plain list after create is the refreshed result; the
+    // await chain returns it instead of leaking it through a captured variable.
+    const listed = page.waitForResponse(async (response) => (
+      isApi(response, "GET", "/api/v1/system/backups")
+      && new URL(response.url()).search === ""
+      && (await readRefreshedList(response)).length > 0
+    )).then(readRefreshedList);
     await panels.web.getByRole("button", { name: "Backup Now", exact: true }).click();
     const created = await posted;
-    await listed;
-    if (!refreshed) throw new Error("backup list did not refresh after create");
+    const refreshed = await listed;
     expect(created.filename).toMatch(/^xirang-\d{8}-\d{6}-[A-Za-z0-9_-]+\.db$/);
     expect(created.filename).not.toBe(OWN_CRON_ARTIFACT);
     expect(path.isAbsolute(created.path)).toBe(true);
@@ -641,6 +634,8 @@ test("activates TOTP with a replacement session before displaying recovery codes
 type TerminalClose = { code: number; reason: string };
 type TerminalSmokeConfig = { keyPath: string; dbPath: string; port: number; username: string };
 type TerminalSmoke = TerminalSmokeConfig & { secret: string; jti: string; userId: number };
+// The browser keeps every terminal socket URL; tests only read back the count.
+type TerminalCapture = { opens: string[]; closes: TerminalClose[] };
 type TerminalFacts = { opens: number; closes: TerminalClose[] };
 
 function fixtureFileInside(value: unknown, field: string, runtimeReal: string): string {
@@ -927,7 +922,7 @@ function terminalDialog(page: Page, nodeName: string): Locator {
 
 async function installTerminalCloseCapture(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const view = window as Window & { __xirangTerminalCloseCapture?: TerminalFacts };
+    const view = window as Window & { __xirangTerminalCloseCapture?: TerminalCapture };
     if (view.__xirangTerminalCloseCapture) return;
     const opens: string[] = [];
     const closes: TerminalClose[] = [];
@@ -960,7 +955,7 @@ async function installTerminalCloseCapture(page: Page): Promise<void> {
 
 async function terminalSocketFacts(page: Page): Promise<TerminalFacts> {
   return page.evaluate(() => {
-    const capture = (window as Window & { __xirangTerminalCloseCapture?: TerminalFacts }).__xirangTerminalCloseCapture;
+    const capture = (window as Window & { __xirangTerminalCloseCapture?: TerminalCapture }).__xirangTerminalCloseCapture;
     return { opens: capture?.opens.length ?? 0, closes: capture?.closes ?? [] };
   });
 }

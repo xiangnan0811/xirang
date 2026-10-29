@@ -3,6 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
+import { evidenceFileVariable } from "./e2e/run-evidence-reporter";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(configDir, "..");
@@ -65,6 +66,8 @@ assertNoSymlinkThrough(lifecycleRoot, scratchBoundary);
 
 // A fresh empty directory is created once per invocation. Workers reuse it only
 // when this process already marked that same run; nothing is written inside it.
+// Native --list loads never start the web servers, so they create no runtime.
+const listOnly = process.argv.includes("--list");
 const sameRunMark = (process.env.E2E_RUNTIME_SAME_RUN ?? "").trim();
 const inheritedRuntime = (process.env.E2E_RUNTIME_DIR ?? "").trim();
 const sameRun = /^[0-9a-f]{32}$/.test(sameRunMark);
@@ -74,7 +77,7 @@ if (sameRun) {
   runtimeDir = assertRuntimeDirectory(inheritedRuntime);
 } else if (sameRunMark !== "") {
   throw new Error("refusing an inherited runtime that is not marked for this run");
-} else {
+} else if (!listOnly) {
   runtimeDir = assertRuntimeDirectory(mkdtempSync(path.join(lifecycleRoot, "runtime.")));
 }
 const sameRunToken = sameRun ? sameRunMark : randomBytes(16).toString("hex");
@@ -100,7 +103,9 @@ export default defineConfig({
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? "github" : "list",
+  // Evidence runs (scripts/run-e2e-evidence.mjs) keep only safe identity and
+  // status output; human reporters print raw errors and stay for direct runs.
+  reporter: process.env[evidenceFileVariable] ? "./e2e/run-evidence-reporter.ts" : process.env.CI ? "github" : "list",
   use: {
     baseURL: frontendURL,
     trace: "on-first-retry",

@@ -51,6 +51,7 @@ export type NodesPageDialogsProps = Pick<
   | "runDoctorForNode"
   | "fileBrowserNode"
   | "setFileBrowserNode"
+  | "fileBrowserOnCloseAutoFocus"
   | "fileBrowserTab"
   | "canBrowseNodeFiles"
   | "setFileBrowserTab"
@@ -103,6 +104,7 @@ export function NodesPageDialogs({
   doctorOnCloseAutoFocus,
   fileBrowserNode,
   setFileBrowserNode,
+  fileBrowserOnCloseAutoFocus,
   fileBrowserTab,
   canBrowseNodeFiles,
   setFileBrowserTab,
@@ -210,7 +212,11 @@ export function NodesPageDialogs({
           open={fileBrowserNode !== null}
           onOpenChange={(open) => { if (!open) { setFileBrowserNode(null); setFileBrowserTab("files"); } }}
         >
-          <DialogContent className="flex w-full max-w-[95vw] flex-col md:max-w-[80vw]" size="lg">
+          <DialogContent
+            className="flex w-full max-w-[95vw] flex-col md:max-w-[80vw]"
+            size="lg"
+            onCloseAutoFocus={fileBrowserOnCloseAutoFocus}
+          >
             <DialogHeader>
               <DialogTitle>{t("nodes.fileBrowserTitle", { name: fileBrowserNode.name })}</DialogTitle>
               <DialogDescription className="sr-only">

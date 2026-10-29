@@ -157,6 +157,7 @@ func runContentConfigDeadlockHelper(t *testing.T) {
 	prepareRuntimeIdentityFixture(t, db)
 	if err := db.AutoMigrate(
 		&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{},
+		&model.BackupRepository{}, &model.RecoveryPoint{},
 		&model.BackupAssetAuditCheckpoint{}, &model.BackupAssetAuditEvent{},
 	); err != nil {
 		t.Fatalf("migrate production Content fixture: %v", err)
@@ -238,7 +239,7 @@ func runSearchConfigDeadlockHelper(t *testing.T) {
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
 	db := openRuntimeTestDB(t)
-	if err := db.AutoMigrate(&model.WrappedDomainKey{}); err != nil {
+	if err := db.AutoMigrate(&model.WrappedDomainKey{}, &model.BackupRepository{}, &model.RecoveryPoint{}); err != nil {
 		t.Fatalf("migrate Search key fixture: %v", err)
 	}
 	settingsService := settings.NewService(db)

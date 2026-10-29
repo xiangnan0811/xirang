@@ -1498,6 +1498,13 @@
           ]
         },
         {
+          "name": "TestRcloneReconciledCommitDoesNotProveWriterExit",
+          "required_paths": [
+            "TestRcloneReconciledCommitDoesNotProveWriterExit",
+            "TestRcloneReconciledCommitDoesNotProveWriterExit/postgres"
+          ]
+        },
+        {
           "name": "TestRcloneRestartReconciliationMovesPreparingToVerifyingThenCommittedPostgres",
           "required_paths": [
             "TestRcloneRestartReconciliationMovesPreparingToVerifyingThenCommittedPostgres"
@@ -1509,6 +1516,20 @@
             "TestRcloneVersioningRenewalRetainedLifecycleLockOrderPostgres",
             "TestRcloneVersioningRenewalRetainedLifecycleLockOrderPostgres/renewal_first",
             "TestRcloneVersioningRenewalRetainedLifecycleLockOrderPostgres/lifecycle_first"
+          ]
+        },
+        {
+          "name": "TestRcloneWriterFactsFinalizeAtomically",
+          "required_paths": [
+            "TestRcloneWriterFactsFinalizeAtomically",
+            "TestRcloneWriterFactsFinalizeAtomically/postgres"
+          ]
+        },
+        {
+          "name": "TestRcloneWriterGuard",
+          "required_paths": [
+            "TestRcloneWriterGuard",
+            "TestRcloneWriterGuard/postgres"
           ]
         }
       ]
@@ -1698,6 +1719,13 @@
           ]
         },
         {
+          "name": "TestRcloneExpiredWriterCannotBeExplicitlyPurged",
+          "required_paths": [
+            "TestRcloneExpiredWriterCannotBeExplicitlyPurged",
+            "TestRcloneExpiredWriterCannotBeExplicitlyPurged/postgres"
+          ]
+        },
+        {
           "name": "TestRetentionBehaviorPostgres",
           "required_paths": [
             "TestRetentionBehaviorPostgres"
@@ -1719,6 +1747,13 @@
           "name": "TestLifecycleSettledAuditDetailPurgePostgres",
           "required_paths": [
             "TestLifecycleSettledAuditDetailPurgePostgres"
+          ]
+        },
+        {
+          "name": "TestRcloneHistoricalWriterBlocksStartupAndReenable",
+          "required_paths": [
+            "TestRcloneHistoricalWriterBlocksStartupAndReenable",
+            "TestRcloneHistoricalWriterBlocksStartupAndReenable/postgres"
           ]
         }
       ]

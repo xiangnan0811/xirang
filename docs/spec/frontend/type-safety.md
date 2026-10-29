@@ -15,6 +15,11 @@ TypeScript 静态检查不能证明网络数据可信。跨模块领域类型放
 - 路由敏感字符串显式验证，例如 `normalizeRedirectTarget`；存储遵守[状态管理](state-management.md#浏览器存储与认证所有权)。
 - 禁止使用 `any`、`as any`、`@ts-ignore`、`@ts-expect-error` 或宽泛的不安全类型断言；不能靠屏蔽诊断代替修正类型。不得用 `unknown as T` 绕过可执行的 mapper，也不在组件内为 raw snake_case 做兼容读取。仅允许职责明确且有说明的窄断言边界。
 
+正常 `npm run typecheck` 同时检查 app 与 `tsconfig.e2e.json`。后者严格 no-emit，覆盖全部
+e2e specs、fixtures、reporters 和 Playwright configs，使用 ES2023、DOM 与 Node 类型并
+保留应用 aliases；测试不进入生产 bundle。运行环境仍须兼容 CI Node20，不能以提高 lib
+到 ES2024 让 Promise.withResolvers 等不可用 API 静态通过。
+
 ## 响应信封与限流
 
 服务端标准信封为 `{ code: <HTTP 状态码>, message: string, data: T }`；错误信封为 `{ code: number, message: string, data?: unknown }`，生产者要求见[后端错误处理](../backend/error-handling.md#响应与错误归属)。普通 JSON 包装不可绕过中心请求边界。

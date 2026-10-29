@@ -20,6 +20,8 @@ var (
 	ErrCommandOutputLimit = errors.New("command output limit exceeded")
 	ErrCommandTimeout     = errors.New("command timed out")
 	ErrCommandFailed      = errors.New("command failed")
+	// ErrCommandNotStarted is emitted only before the SSH Start call.
+	ErrCommandNotStarted = errors.New("command was not started")
 	// ErrCommandStart marks an SSH command request that was rejected or whose
 	// transport failed while starting. Callers must not treat it as proof that
 	// the remote command never ran.
@@ -442,7 +444,7 @@ func (runner *CommandRunner) Open(ctx context.Context, specification CommandSpec
 func (runner *CommandRunner) OpenExecution(ctx context.Context, specification CommandSpec) (CommandExecutionStream, error) {
 	specification, command, err := normalizeCommandSpec(specification)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrCommandNotStarted, err)
 	}
 	return runner.openExecution(ctx, specification, command)
 }
@@ -479,7 +481,13 @@ func (runner *CommandRunner) OpenRawExecution(ctx context.Context, specification
 		SecretStdin:    specification.SecretStdin,
 	}, command)
 }
-func (runner *CommandRunner) openExecution(ctx context.Context, specification CommandSpec, command string) (CommandExecutionStream, error) {
+func (runner *CommandRunner) openExecution(ctx context.Context, specification CommandSpec, command string) (result CommandExecutionStream, resultErr error) {
+	startAttempted := false
+	defer func() {
+		if resultErr != nil && !startAttempted {
+			resultErr = fmt.Errorf("%w: %w", ErrCommandNotStarted, resultErr)
+		}
+	}()
 	if runner == nil || runner.factory == nil || runner.semaphore == nil {
 		return nil, fmt.Errorf("%w: runner unavailable", ErrCommandFailed)
 	}
@@ -568,6 +576,7 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 			return fail(fmt.Errorf("%w: secret stdin unavailable", ErrCommandFailed))
 		}
 	}
+	startAttempted = true
 	if err := session.Start(command); err != nil {
 		if stdin != nil {
 			_ = stdin.Close()

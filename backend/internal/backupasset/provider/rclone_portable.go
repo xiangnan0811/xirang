@@ -170,7 +170,13 @@ func (remote *CommandRclonePortableRemote) Observe(ctx context.Context, request 
 	return manifest, nil
 }
 
-func (remote *CommandRclonePortableRemote) PutControl(ctx context.Context, request RclonePortablePublicationRequest, name string, payload []byte) error {
+func (remote *CommandRclonePortableRemote) PutControl(ctx context.Context, request RclonePortablePublicationRequest, name string, payload []byte) (resultErr error) {
+	commandInvoked := false
+	defer func() {
+		if resultErr != nil && !commandInvoked {
+			resultErr = rcloneCommandNotAttempted(resultErr)
+		}
+	}()
 	if !request.ReadDeadline.IsZero() {
 		return fmt.Errorf("%w: portable read request cannot write controls", backupasset.ErrInvalidState)
 	}
@@ -192,6 +198,7 @@ func (remote *CommandRclonePortableRemote) PutControl(ctx context.Context, reque
 	if err != nil {
 		return err
 	}
+	commandInvoked = true
 	_, err = remote.commands.Run(ctx, remote.invocation(request, OperationRcloneManagedCopyTo, nil, &destination, &ref, nil), limits)
 	return err
 }
@@ -207,7 +214,13 @@ func (remote *CommandRclonePortableRemote) ReadControl(ctx context.Context, requ
 	return remote.readObject(ctx, request, locator, maxBytes)
 }
 
-func (remote *CommandRclonePortableRemote) TransferData(ctx context.Context, request RclonePortablePublicationRequest, copyDest *RclonePrivateLocator) error {
+func (remote *CommandRclonePortableRemote) TransferData(ctx context.Context, request RclonePortablePublicationRequest, copyDest *RclonePrivateLocator) (resultErr error) {
+	commandInvoked := false
+	defer func() {
+		if resultErr != nil && !commandInvoked {
+			resultErr = rcloneCommandNotAttempted(resultErr)
+		}
+	}()
 	if !request.ReadDeadline.IsZero() {
 		return fmt.Errorf("%w: portable read request cannot transfer data", backupasset.ErrInvalidState)
 	}
@@ -217,6 +230,7 @@ func (remote *CommandRclonePortableRemote) TransferData(ctx context.Context, req
 	}
 	invocation := remote.invocation(request, OperationRcloneManagedCopy, &request.Source, &request.DataRoot, nil, nil)
 	invocation.RcloneCopyDest = copyDest
+	commandInvoked = true
 	_, err = remote.commands.Run(ctx, invocation, limits)
 	return err
 }
@@ -319,7 +333,8 @@ func NewRclonePublicationStrategy(portable *RclonePortablePublisher, native *Rcl
 
 func (*RclonePublicationStrategy) Kind() backupasset.ProviderKind { return backupasset.ProviderRclone }
 
-func (strategy *RclonePublicationStrategy) Prepare(ctx context.Context, request PublicationPrepareRequest) (PreparedPublication, error) {
+func (strategy *RclonePublicationStrategy) Prepare(ctx context.Context, request PublicationPrepareRequest) (prepared PreparedPublication, resultErr error) {
+	defer func() { resultErr = RcloneUnattemptedPublicationError(resultErr) }()
 	if request.RcloneInput != nil && request.RcloneInput.PortableRequest != nil &&
 		!request.RcloneInput.PortableRequest.ReadDeadline.IsZero() {
 		return PreparedPublication{}, fmt.Errorf("%w: portable read request cannot prepare a publication", backupasset.ErrInvalidState)
@@ -327,12 +342,15 @@ func (strategy *RclonePublicationStrategy) Prepare(ctx context.Context, request 
 	if strategy == nil || strategy.portable == nil || strategy.native == nil {
 		return PreparedPublication{}, fmt.Errorf("%w: Rclone publication strategy unavailable", backupasset.ErrInvalidState)
 	}
-	if err := request.Validate(); err != nil || request.Attempt.Provider != backupasset.ProviderRclone || request.RcloneInput == nil {
+	if err := request.Validate(); err != nil {
+		return PreparedPublication{}, errors.Join(fmt.Errorf("%w: invalid Rclone publication prepare request", backupasset.ErrInvalidState), err)
+	}
+	if request.Attempt.Provider != backupasset.ProviderRclone || request.RcloneInput == nil {
 		return PreparedPublication{}, fmt.Errorf("%w: invalid Rclone publication prepare request", backupasset.ErrInvalidState)
 	}
 	attempt, err := request.Attempt.RcloneAttempt()
 	if err != nil {
-		return PreparedPublication{}, fmt.Errorf("%w: unsupported Rclone publication variant", backupasset.ErrInvalidState)
+		return PreparedPublication{}, errors.Join(fmt.Errorf("%w: unsupported Rclone publication variant", backupasset.ErrInvalidState), err)
 	}
 	encodedAttempt, err := EncodePublicationAttempt(NewRclonePublicationAttempt(attempt))
 	if err != nil {
@@ -347,7 +365,7 @@ func (strategy *RclonePublicationStrategy) Prepare(ctx context.Context, request 
 		portableRequest := cloneRclonePortablePublicationRequest(*request.RcloneInput.PortableRequest)
 		encodedVariant, encodeErr := EncodePublicationAttempt(NewRclonePublicationAttempt(portableRequest.Attempt))
 		if encodeErr != nil || encodedVariant != encodedAttempt {
-			return PreparedPublication{}, fmt.Errorf("%w: Rclone portable attempt mismatch", backupasset.ErrInvalidState)
+			return PreparedPublication{}, errors.Join(fmt.Errorf("%w: Rclone portable attempt mismatch", backupasset.ErrInvalidState), encodeErr)
 		}
 		if portableRequest.Manifest.Version == 0 && portableRequest.Source.valid() {
 			if !emptyRcloneManifestBundle(portableRequest.Manifest) {
@@ -364,7 +382,7 @@ func (strategy *RclonePublicationStrategy) Prepare(ctx context.Context, request 
 		nativeRequest := cloneRcloneNativePublicationRequest(*request.RcloneInput.NativeRequest)
 		encodedVariant, encodeErr := EncodePublicationAttempt(NewRclonePublicationAttempt(nativeRequest.Attempt))
 		if encodeErr != nil || encodedVariant != encodedAttempt {
-			return PreparedPublication{}, fmt.Errorf("%w: Rclone native attempt mismatch", backupasset.ErrInvalidState)
+			return PreparedPublication{}, errors.Join(fmt.Errorf("%w: Rclone native attempt mismatch", backupasset.ErrInvalidState), encodeErr)
 		}
 		if nativeRequest.Manifest.Version == 0 && nativeRequest.Source.valid() {
 			if !emptyRcloneManifestBundle(nativeRequest.Manifest) {
@@ -410,7 +428,15 @@ func (strategy *RclonePublicationStrategy) Execute(ctx context.Context, prepared
 		err = fmt.Errorf("%w: unsupported Rclone publication variant", backupasset.ErrInvalidState)
 	}
 	if err != nil {
-		return ProviderExecutionResult{}, err
+		fact := ClassifyRclonePublicationFailure(err)
+		result := ProviderExecutionResult{ExitCode: UnknownProviderExitCode}
+		if fact.KnownNonzero {
+			result.ExitCode = fact.ExitCode
+			result.Completion = backupasset.CompletionKnownNonzero
+		} else if !fact.Unattempted && !fact.CompletionUnproven {
+			result.Completion = backupasset.CompletionOutcomeUnknown
+		}
+		return result, err
 	}
 	tagged := NewRcloneProviderCommit(commit)
 	return ProviderExecutionResult{ExitCode: 0, Completion: backupasset.CompletionKnownExitZero, ProviderCommit: &tagged}, nil
@@ -578,7 +604,9 @@ func NewRclonePortablePublisher(remote RclonePortableRemote, sleep func(time.Dur
 	return &RclonePortablePublisher{remote: remote, sleep: sleep, now: now}
 }
 
-func (publisher *RclonePortablePublisher) Publish(ctx context.Context, request RclonePortablePublicationRequest) (RcloneCommitV1, error) {
+func (publisher *RclonePortablePublisher) Publish(ctx context.Context, request RclonePortablePublicationRequest) (result RcloneCommitV1, resultErr error) {
+	tracker := newRclonePublicationTracker()
+	defer func() { resultErr = tracker.failure(resultErr) }()
 	if !request.ReadDeadline.IsZero() {
 		return RcloneCommitV1{}, fmt.Errorf("%w: portable read request cannot publish", backupasset.ErrInvalidState)
 	}
@@ -593,7 +621,7 @@ func (publisher *RclonePortablePublisher) Publish(ctx context.Context, request R
 	}
 	presence, err := publisher.remote.ProbeAttempt(ctx, request)
 	if err != nil {
-		return RcloneCommitV1{}, fmt.Errorf("%w: probe portable attempt", ErrRcloneAttemptPresenceUnknown)
+		return RcloneCommitV1{}, errors.Join(ErrRcloneAttemptPresenceUnknown, err)
 	}
 	switch presence {
 	case RcloneAttemptAbsent:
@@ -618,7 +646,7 @@ func (publisher *RclonePortablePublisher) Publish(ctx context.Context, request R
 	if err != nil {
 		return RcloneCommitV1{}, err
 	}
-	if err := publisher.putAndReadback(ctx, request, "attempt.json", attemptPayload, false); err != nil {
+	if err := publisher.putAndReadback(ctx, request, "attempt.json", attemptPayload, false, tracker); err != nil {
 		return RcloneCommitV1{}, err
 	}
 
@@ -628,8 +656,10 @@ func (publisher *RclonePortablePublisher) Publish(ctx context.Context, request R
 		copyDest = &copy
 	}
 	if err := publisher.remote.TransferData(ctx, request, copyDest); err != nil {
+		tracker.mutation(err, false)
 		return RcloneCommitV1{}, err
 	}
+	tracker.mutation(nil, false)
 	sourceAfter, err := publisher.remote.Observe(ctx, request, request.Source)
 	if err != nil {
 		return RcloneCommitV1{}, err
@@ -695,12 +725,12 @@ func (publisher *RclonePortablePublisher) Publish(ctx context.Context, request R
 	chunkDigests := make([]string, len(manifest.Chunks))
 	for index, chunk := range manifest.Chunks {
 		name := fmt.Sprintf("manifest-%06d.jsonl", index)
-		if err := publisher.putAndReadback(ctx, request, name, chunk.Encoded, false); err != nil {
+		if err := publisher.putAndReadback(ctx, request, name, chunk.Encoded, false, tracker); err != nil {
 			return RcloneCommitV1{}, err
 		}
 		chunkDigests[index] = chunk.Digest
 	}
-	if err := publisher.putAndReadback(ctx, request, "manifest-index.json", manifest.IndexEncoded, false); err != nil {
+	if err := publisher.putAndReadback(ctx, request, "manifest-index.json", manifest.IndexEncoded, false, tracker); err != nil {
 		return RcloneCommitV1{}, err
 	}
 
@@ -717,25 +747,27 @@ func (publisher *RclonePortablePublisher) Publish(ctx context.Context, request R
 	if err := ValidateRcloneRuntimeCompatibility(request.Attempt, commit); err != nil {
 		return RcloneCommitV1{}, err
 	}
-	if err := publisher.putAndReadback(ctx, request, "commit.json", markerPayload, true); err != nil {
+	if err := publisher.putAndReadback(ctx, request, "commit.json", markerPayload, true, tracker); err != nil {
 		return RcloneCommitV1{}, err
 	}
 	return commit, nil
 }
 
-func (publisher *RclonePortablePublisher) putAndReadback(ctx context.Context, request RclonePortablePublicationRequest, name string, payload []byte, commit bool) error {
+func (publisher *RclonePortablePublisher) putAndReadback(ctx context.Context, request RclonePortablePublicationRequest, name string, payload []byte, commit bool, tracker *rclonePublicationTracker) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := publisher.remote.PutControl(ctx, request, name, payload); err != nil {
+	err := publisher.remote.PutControl(ctx, request, name, payload)
+	tracker.mutation(err, commit)
+	if err != nil {
 		return err
 	}
 	readback, err := publisher.remote.ReadControl(ctx, request, name, int64(len(payload)))
 	if err != nil || !bytes.Equal(readback, payload) {
 		if commit {
-			return ErrRcloneCommitOutcomeUnknown
+			return errors.Join(ErrRcloneCommitOutcomeUnknown, err)
 		}
-		return ErrRcloneMarkerMismatch
+		return errors.Join(ErrRcloneMarkerMismatch, err)
 	}
 	return nil
 }

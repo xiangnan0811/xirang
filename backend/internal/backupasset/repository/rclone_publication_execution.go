@@ -315,9 +315,7 @@ func (service *PublicationService) PublishImportedRcloneBaseline(
 	)
 	input, err := execution.RclonePublicationInput()
 	if err != nil {
-		rejectErr := execution.Reject(context.WithoutCancel(ctx), backupasset.FailurePublicationPreconditionMissing)
-		runErr := service.recordImportedRcloneBaselineTaskRun(context.WithoutCancel(ctx), activation.taskID, activation.taskRunID, provider.ProviderExecutionResult{}, err)
-		return publication.Outcome{}, errors.Join(err, rejectErr, runErr)
+		return publication.Outcome{}, service.finalizeImportedRcloneFailure(ctx, execution, activation, provider.ProviderExecutionResult{ExitCode: provider.UnknownProviderExitCode}, provider.RcloneUnattemptedPublicationError(err))
 	}
 	switch activation.attempt.PublicationMode {
 	case backupasset.PublicationVersionedPrefix:
@@ -342,53 +340,32 @@ func (service *PublicationService) PublishImportedRcloneBaseline(
 		err = fmt.Errorf("%w: imported Rclone baseline mode is unsupported", backupasset.ErrCapabilityUnavailable)
 	}
 	if err != nil {
-		rejectErr := execution.Reject(context.WithoutCancel(ctx), backupasset.FailurePublicationPreconditionMissing)
-		runErr := service.recordImportedRcloneBaselineTaskRun(context.WithoutCancel(ctx), activation.taskID, activation.taskRunID, provider.ProviderExecutionResult{}, err)
-		return publication.Outcome{}, errors.Join(err, rejectErr, runErr)
+		return publication.Outcome{}, service.finalizeImportedRcloneFailure(ctx, execution, activation, provider.ProviderExecutionResult{ExitCode: provider.UnknownProviderExitCode}, provider.RcloneUnattemptedPublicationError(err))
 	}
 	strategy, err := service.registry.PublicationStrategy(backupasset.ProviderRclone)
 	if err != nil {
-		rejectErr := execution.Reject(context.WithoutCancel(ctx), backupasset.FailurePublicationPreconditionMissing)
-		runErr := service.recordImportedRcloneBaselineTaskRun(context.WithoutCancel(ctx), activation.taskID, activation.taskRunID, provider.ProviderExecutionResult{}, err)
-		return publication.Outcome{}, errors.Join(err, rejectErr, runErr)
+		return publication.Outcome{}, service.finalizeImportedRcloneFailure(ctx, execution, activation, provider.ProviderExecutionResult{ExitCode: provider.UnknownProviderExitCode}, provider.RcloneUnattemptedPublicationError(err))
 	}
 	prepared, err := strategy.Prepare(execution.Context(), provider.PublicationPrepareRequest{
 		Attempt: provider.NewRclonePublicationAttempt(activation.attempt), RcloneInput: &input,
 	})
 	if err != nil {
-		rejectErr := execution.Reject(context.WithoutCancel(ctx), backupasset.FailurePublicationPreconditionMissing)
-		runErr := service.recordImportedRcloneBaselineTaskRun(context.WithoutCancel(ctx), activation.taskID, activation.taskRunID, provider.ProviderExecutionResult{}, err)
-		return publication.Outcome{}, errors.Join(err, rejectErr, runErr)
+		return publication.Outcome{}, service.finalizeImportedRcloneFailure(ctx, execution, activation, provider.ProviderExecutionResult{ExitCode: provider.UnknownProviderExitCode}, err)
 	}
 	result, executeErr := strategy.Execute(execution.Context(), prepared, provider.PublicationProgress{})
-	if runErr := service.recordImportedRcloneBaselineTaskRun(
-		context.WithoutCancel(ctx), activation.taskID, activation.taskRunID, result, executeErr,
-	); runErr != nil {
-		_ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned)
-		return publication.Outcome{}, runErr
-	}
 	if executeErr != nil || result.Completion != backupasset.CompletionKnownExitZero || result.ExitCode != 0 ||
 		result.EvidenceCode != "" || result.ProviderCommit == nil {
-		var resolutionErr error
-		switch result.Completion {
-		case backupasset.CompletionKnownNonzero:
-			resolutionErr = execution.Fail(context.WithoutCancel(ctx), backupasset.FailureProviderNonzeroExit)
-		case backupasset.CompletionOutcomeUnknown:
-			resolutionErr = execution.Defer(context.WithoutCancel(ctx), publication.Deferral{
-				Completion: backupasset.CompletionOutcomeUnknown, Code: backupasset.FailureProviderOutcomeUnknown,
-			})
-		default:
-			resolutionErr = execution.Fail(context.WithoutCancel(ctx), backupasset.FailureManifestUnavailable)
-		}
-		return publication.Outcome{}, errors.Join(
-			fmt.Errorf("%w: imported Rclone baseline provider completion is not proven", backupasset.ErrConflict),
-			executeErr, resolutionErr,
-		)
+		return publication.Outcome{}, service.finalizeImportedRcloneFailure(ctx, execution, activation, result, executeErr)
 	}
 	commit, err := strategy.RecordCommit(execution.Context(), prepared, result)
 	if err != nil {
+		failure := &provider.RclonePublicationError{MutationAttempted: true, CommitAttempted: true, WritersQuiesced: true, Cause: err}
+		return publication.Outcome{}, service.finalizeImportedRcloneFailure(ctx, execution, activation,
+			provider.ProviderExecutionResult{ExitCode: provider.UnknownProviderExitCode, Completion: backupasset.CompletionOutcomeUnknown}, failure)
+	}
+	if runErr := service.recordImportedRcloneBaselineTaskRun(context.WithoutCancel(ctx), activation.taskID, activation.taskRunID, result, nil); runErr != nil {
 		_ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned)
-		return publication.Outcome{}, err
+		return publication.Outcome{}, runErr
 	}
 	outcome, err := execution.RecordProviderCommit(context.WithoutCancel(ctx), commit)
 	if err != nil {
@@ -408,6 +385,41 @@ func (service *PublicationService) PublishImportedRcloneBaseline(
 	return outcome, nil
 }
 
+func (service *PublicationService) finalizeImportedRcloneFailure(ctx context.Context, execution *rclonePublicationExecution, activation rcloneImportedBaselineActivation, result provider.ProviderExecutionResult, runErr error) error {
+	ctx = context.WithoutCancel(ctx)
+	if runErr == nil {
+		runErr = fmt.Errorf("%w: imported Rclone baseline completion is unproven", backupasset.ErrInvalidState)
+	}
+	fact := provider.ClassifyRclonePublicationFailure(runErr)
+	if result.ProviderCommit != nil || result.EvidenceCode != "" ||
+		fact.KnownNonzero && (result.Completion != backupasset.CompletionKnownNonzero || result.ExitCode != fact.ExitCode) ||
+		(fact.Unattempted || fact.CompletionUnproven) && (result.Completion != "" || result.ExitCode != provider.UnknownProviderExitCode) {
+		fact = provider.RclonePublicationFailure{ExitCode: provider.UnknownProviderExitCode}
+	}
+	if !fact.Unattempted && !fact.KnownNonzero && !fact.CompletionUnproven {
+		result = provider.ProviderExecutionResult{ExitCode: provider.UnknownProviderExitCode, Completion: backupasset.CompletionOutcomeUnknown}
+	}
+	if err := service.recordImportedRcloneBaselineTaskRun(ctx, activation.taskID, activation.taskRunID, result, runErr); err != nil {
+		return errors.Join(runErr, err, execution.Abandon(backupasset.ErrPublicationSessionAbandoned))
+	}
+	var resolutionErr error
+	switch {
+	case fact.Unattempted:
+		resolutionErr = execution.Reject(ctx, backupasset.FailurePublicationPreconditionMissing)
+	case fact.KnownNonzero:
+		resolutionErr = execution.Fail(ctx, backupasset.FailureProviderNonzeroExit)
+	case fact.CompletionUnproven:
+		resolutionErr = execution.Fail(ctx, backupasset.FailureProviderCompletionUnproven)
+	default:
+		resolutionErr = execution.Defer(ctx, publication.Deferral{Completion: backupasset.CompletionOutcomeUnknown,
+			Code: backupasset.FailureProviderOutcomeUnknown, RcloneWriterQuiesced: fact.WriterQuiesced})
+	}
+	if resolutionErr != nil {
+		return errors.Join(runErr, resolutionErr, execution.Abandon(backupasset.ErrPublicationSessionAbandoned))
+	}
+	return runErr
+}
+
 func (service *PublicationService) recordImportedRcloneBaselineTaskRun(
 	ctx context.Context,
 	taskID, taskRunID uint,
@@ -418,6 +430,10 @@ func (service *PublicationService) recordImportedRcloneBaselineTaskRun(
 		return fmt.Errorf("%w: imported Rclone baseline TaskRun dependencies are unavailable", backupasset.ErrInvalidState)
 	}
 	status, failureCode := importedRsyncBaselineTaskRunOutcome(result, runErr)
+	if fact := provider.ClassifyRclonePublicationFailure(runErr); fact.CompletionUnproven &&
+		!errors.Is(runErr, context.Canceled) && !errors.Is(runErr, context.DeadlineExceeded) {
+		status, failureCode = "failed", string(backupasset.FailureProviderCompletionUnproven)
+	}
 	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var taskRun model.TaskRun
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&taskRun, taskRunID).Error; err != nil {
@@ -1328,6 +1344,15 @@ func (service *PublicationService) recordRcloneProviderCommit(
 			Version: 1, Provider: backupasset.ProviderRclone, RepositoryIdentityDigest: attempt.RepositoryIdentityDigest,
 			ProviderCommitDigest: locator.ProviderCommitDigest, CapabilityRevision: point.CapabilityRevision,
 		}
+		priorConsistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
+		if err != nil {
+			return err
+		}
+		if priorConsistency.RcloneWriterQuiesced != nil || priorConsistency.Completion == backupasset.CompletionOutcomeUnknown {
+			consistency.RcloneWriterQuiesced = priorConsistency.RcloneWriterQuiesced
+		} else {
+			consistency.RcloneWriterQuiesced = new(true) // The live publisher confirmed all writes stopped.
+		}
 		if err := validateRcloneDurableCapabilityEvidence(point, consistency, attempt, evidence); err != nil {
 			return err
 		}
@@ -2053,7 +2078,9 @@ func (execution *rclonePublicationExecution) Defer(ctx context.Context, deferral
 			return err
 		}
 		deferredState = backupasset.RecoveryPointState(point.State)
-		if consistency.Completion == deferral.Completion && consistency.Code == deferral.Code {
+		if consistency.Completion == deferral.Completion && consistency.Code == deferral.Code &&
+			reflect.DeepEqual(consistency.RcloneWriterQuiesced, deferral.RcloneWriterQuiesced) &&
+			(deferral.RcloneWriterQuiesced == nil || consistency.Provider == backupasset.ProviderRclone) {
 			return nil
 		}
 		now := execution.service.now().UTC()
@@ -2061,6 +2088,11 @@ func (execution *rclonePublicationExecution) Defer(ctx context.Context, deferral
 		consistency.AttemptCount++
 		consistency.Completion = deferral.Completion
 		consistency.Code = deferral.Code
+		consistency.RcloneWriterQuiesced = nil
+		if deferral.RcloneWriterQuiesced != nil {
+			consistency.Provider = backupasset.ProviderRclone
+			consistency.RcloneWriterQuiesced = new(*deferral.RcloneWriterQuiesced)
+		}
 		consistency.LastAttemptAt = &now
 		encoded, err := backupasset.EncodePublicationConsistency(consistency)
 		if err != nil {
@@ -2098,7 +2130,7 @@ func (execution *rclonePublicationExecution) Reject(ctx context.Context, code ba
 }
 
 func (execution *rclonePublicationExecution) Fail(ctx context.Context, code backupasset.PublicationFailureCode) error {
-	if !rsyncPostCommandPublicationFailure(code) {
+	if !rsyncPostCommandPublicationFailure(code) && code != backupasset.FailureProviderCompletionUnproven {
 		return fmt.Errorf("%w: invalid managed Rclone post-command failure", backupasset.ErrInvalidState)
 	}
 	return execution.finishFailed(ctx, code)
@@ -2126,9 +2158,19 @@ func (execution *rclonePublicationExecution) finishFailed(ctx context.Context, c
 		if err != nil {
 			return err
 		}
+		if consistency.Completion == backupasset.CompletionOutcomeUnknown &&
+			(consistency.RcloneWriterQuiesced == nil || !*consistency.RcloneWriterQuiesced) {
+			return fmt.Errorf("%w: managed Rclone writer completion remains unproven", backupasset.ErrConflict)
+		}
 		now := execution.service.now().UTC()
 		consistency.PublicationRevision++
 		consistency.AttemptCount++
+		consistency.Provider = backupasset.ProviderRclone
+		consistency.RcloneWriterQuiesced = new(true)
+		consistency.Completion = ""
+		if code == backupasset.FailureProviderNonzeroExit {
+			consistency.Completion = backupasset.CompletionKnownNonzero
+		}
 		consistency.Code = code
 		consistency.LastAttemptAt = &now
 		encoded, err := backupasset.EncodePublicationConsistency(consistency)

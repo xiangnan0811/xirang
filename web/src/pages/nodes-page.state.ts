@@ -142,6 +142,12 @@ export function useNodesPageState() {
   const [terminalNode, setTerminalNode] = useState<NodeRecord | null>(null);
   const [terminalKey, setTerminalKey] = useState(0);
   const [fileBrowserNode, setFileBrowserNode] = useState<NodeRecord | null>(null);
+  // The file browser has no Radix trigger, so remember the card button or the
+  // list row's More menu button that opened it.
+  const fileBrowserOpenerRef = useRef<HTMLElement | null>(null);
+  const fileBrowserOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, fileBrowserOpenerRef.current);
+  };
   const [fileBrowserTab, setFileBrowserTab] = useState<"files" | "docker">("files");
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
@@ -922,10 +928,11 @@ export function useNodesPageState() {
     setTerminalKey((key) => key + 1);
   };
 
-  const openFileBrowser = (node: NodeRecord) => {
+  const openFileBrowser = (node: NodeRecord, opener?: EventTarget | null) => {
     if (roleRef.current !== "admin" && roleRef.current !== "operator") {
       return;
     }
+    fileBrowserOpenerRef.current = dialogOpenerFromTarget(opener);
     setFileBrowserNode(node);
   };
 
@@ -1103,6 +1110,7 @@ export function useNodesPageState() {
     fileBrowserNode,
     setFileBrowserNode,
     openFileBrowser,
+    fileBrowserOnCloseAutoFocus,
     fileBrowserTab,
     setFileBrowserTab,
     // batch

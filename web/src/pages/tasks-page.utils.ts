@@ -81,7 +81,7 @@ export type TasksViewProps = {
   handlePause: (taskId: number, cancelRunning?: boolean) => Promise<void>;
   handleResume: (taskId: number) => Promise<void>;
   onEdit: (task: TaskRecord, opener?: EventTarget | null) => void;
-  onViewHistory: (task: TaskRecord) => void;
+  onViewHistory: (task: TaskRecord, opener?: EventTarget | null) => void;
   canConnectTaskPreview: boolean;
   onConnectTaskPreview: (task: TaskRecord) => void;
   canManageRsyncVersioning: boolean;

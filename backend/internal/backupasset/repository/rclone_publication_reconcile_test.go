@@ -280,9 +280,7 @@ func completeRcloneTestPoint(
 			FidelityEvidenceDigest: commit.FidelityEvidenceDigest,
 		},
 	}
-	if err := execution.Abandon(backupasset.ErrPublicationSessionAbandoned); err != nil {
-		t.Fatal(err)
-	}
+	deferStoppedRcloneTestPublication(t, execution)
 	if err := fixture.db.Model(&model.RecoveryPointLease{}).
 		Where("recovery_point_id = ? AND status = ?", attempt.RecoveryPointID, backupasset.LeaseActive).
 		Updates(map[string]any{"status": backupasset.LeaseExpired, "lease_expires_at": fixture.now.Add(-time.Second)}).Error; err != nil {
@@ -377,9 +375,7 @@ func runRcloneRestartReconciliation(t *testing.T, fixture *rclonePublicationFixt
 			FidelityEvidenceDigest: commit.FidelityEvidenceDigest,
 		},
 	}
-	if err := execution.Abandon(backupasset.ErrPublicationSessionAbandoned); err != nil {
-		t.Fatal(err)
-	}
+	deferStoppedRcloneTestPublication(t, execution)
 	if err := fixture.db.Model(&model.RecoveryPointLease{}).
 		Where("recovery_point_id = ? AND status = ?", attempt.RecoveryPointID, backupasset.LeaseActive).
 		Updates(map[string]any{"status": backupasset.LeaseExpired, "lease_expires_at": fixture.now.Add(-time.Second)}).Error; err != nil {
@@ -466,9 +462,7 @@ func runRcloneNativeRestartReconciliation(t *testing.T, fixture *rclonePublicati
 			FidelityEvidenceDigest: commit.FidelityEvidenceDigest,
 		},
 	}
-	if err := execution.Abandon(backupasset.ErrPublicationSessionAbandoned); err != nil {
-		t.Fatal(err)
-	}
+	deferStoppedRcloneTestPublication(t, execution)
 	if err := fixture.db.Model(&model.RecoveryPointLease{}).
 		Where("recovery_point_id = ? AND status = ?", attempt.RecoveryPointID, backupasset.LeaseActive).
 		Updates(map[string]any{"status": backupasset.LeaseExpired, "lease_expires_at": fixture.now.Add(-time.Second)}).Error; err != nil {
@@ -516,6 +510,18 @@ func runRcloneNativeRestartReconciliation(t *testing.T, fixture *rclonePublicati
 		t.Fatalf("native sessions assume calls=%d want=9 (prepare + two restart sessions)", fixture.nativeFactory.assumeCalls)
 	}
 	assertCommittedRcloneReplay(t, fixture, execution, commit, point)
+}
+
+// These success fixtures model a publisher that independently confirmed all
+// writers stopped before losing the database commit handoff.
+func deferStoppedRcloneTestPublication(t *testing.T, execution publication.Execution) {
+	t.Helper()
+	if err := execution.Defer(context.Background(), publication.Deferral{
+		Completion: backupasset.CompletionOutcomeUnknown, Code: backupasset.FailureProviderOutcomeUnknown,
+		RcloneWriterQuiesced: new(true),
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func setRcloneReconciliationTime(t *testing.T, fixture *rclonePublicationFixture, now time.Time) {

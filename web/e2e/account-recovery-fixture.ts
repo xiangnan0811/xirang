@@ -12,11 +12,7 @@ const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = path.dirname(web);
 const helper = path.join(web, "e2e/account-recovery-process.py");
 const scratch = path.join(repository, ".tmp/agent");
-const delay = (milliseconds: number) => {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, milliseconds);
-  return promise;
-};
+const delay = (milliseconds: number) => new Promise<void>(resolve => { setTimeout(resolve, milliseconds); });
 export const syntheticPassword = () => `Synthetic!R19-${randomBytes(20).toString("hex")}`;
 export type Enrollment = { requires_reenrollment: true; recovery_token: string; enrollment: { secret: string; qr_url: string; enrollment_id: string; expires_at: string; issuer: string } };
 export type Login = { token: string; user: { id: number; username: string; role: string }; requires_2fa?: boolean; login_token: string };
@@ -37,38 +33,38 @@ function freshDirectory(): string {
 
 async function port(): Promise<number> {
   const socket = createServer();
-  const listening = Promise.withResolvers<void>();
-  socket.once("error", listening.reject);
-  socket.listen(0, "127.0.0.1", listening.resolve);
-  await listening.promise;
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.listen(0, "127.0.0.1", resolve);
+  });
   const address = socket.address();
   if (!address || typeof address === "string") throw new Error("No isolated port");
-  const closed = Promise.withResolvers<void>();
-  socket.close(error => error ? closed.reject(error) : closed.resolve());
-  await closed.promise;
+  await new Promise<void>((resolve, reject) => {
+    socket.close(error => error ? reject(error) : resolve());
+  });
   return address.port;
 }
 
 async function command(binary: string, args: string[], cwd: string): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
-  const child = spawn(binary, args, { cwd, stdio: "ignore" });
-  const timer = setTimeout(() => { child.kill("SIGKILL"); }, 180_000);
-  child.once("error", () => { clearTimeout(timer); reject(new Error("Recovery fixture build could not start")); });
-  child.once("exit", code => {
-    clearTimeout(timer);
-    if (code === 0) resolve();
-    else reject(new Error("Recovery fixture build failed; private output suppressed"));
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(binary, args, { cwd, stdio: "ignore" });
+    const timer = setTimeout(() => { child.kill("SIGKILL"); }, 180_000);
+    child.once("error", () => { clearTimeout(timer); reject(new Error("Recovery fixture build could not start")); });
+    child.once("exit", code => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error("Recovery fixture build failed; private output suppressed"));
+    });
   });
-  await promise;
 }
 
 async function terminate(child: ChildProcess | undefined): Promise<void> {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  const { promise, resolve } = Promise.withResolvers<void>();
-  const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
-  child.once("exit", () => { clearTimeout(timer); resolve(); });
-  child.kill("SIGTERM");
-  await promise;
+  await new Promise<void>(resolve => {
+    const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    child.once("exit", () => { clearTimeout(timer); resolve(); });
+    child.kill("SIGTERM");
+  });
 }
 
 export class RecoveryRuntime {

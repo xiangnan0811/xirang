@@ -5,6 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { captureCandidate, lockfileSummary } from "./walkthrough-candidate.mjs";
+import { readEvidence, summarizeEvidence } from "./e2e-execution-evidence.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_WEB_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -316,7 +317,7 @@ function terminateProcessTree(child, signal) {
   }
 }
 
-function runPlaywright(repositoryRoot, runDirectory, runId, signalState) {
+function runPlaywright(repositoryRoot, runDirectory, runId, signalState, list = false) {
   return new Promise((resolve) => {
     const npx = process.platform === "win32" ? "npx.cmd" : "npx";
     const outputDirectory = path.join(runDirectory, "output");
@@ -326,6 +327,7 @@ function runPlaywright(repositoryRoot, runDirectory, runId, signalState) {
       "test",
       `--config=${PLAYWRIGHT_CONFIG}`,
       "--project=chromium",
+      ...(list ? ["--list"] : []),
       "--output",
       outputDirectory,
     ], {
@@ -334,6 +336,7 @@ function runPlaywright(repositoryRoot, runDirectory, runId, signalState) {
         ...process.env,
         UX_WALKTHROUGH_RUN_ID: runId,
         UX_WALKTHROUGH_RUN_DIR: runDirectory,
+        XIRANG_E2E_EVIDENCE_FILE: path.join(runDirectory, list ? "collected.jsonl" : "run.jsonl"),
       },
       stdio: "inherit",
       detached: process.platform !== "win32",
@@ -431,7 +434,13 @@ async function run(options) {
       if (!fs.existsSync(path.join(repositoryRoot, "web", PLAYWRIGHT_CONFIG))) {
         preflightError = new Error(`missing Playwright config: web/${PLAYWRIGHT_CONFIG}`);
       } else {
-        childResult = await runPlaywright(repositoryRoot, runDirectory, runId, signalState);
+        const listResult = await runPlaywright(repositoryRoot, runDirectory, runId, signalState, true);
+        if (listResult.code === 0 && !listResult.signal && !signalState.received) {
+          childResult = await runPlaywright(repositoryRoot, runDirectory, runId, signalState);
+        } else {
+          childResult = listResult;
+          preflightError = new Error("walkthrough native inventory did not complete");
+        }
       }
     }
 
@@ -446,6 +455,15 @@ async function run(options) {
       manifest.invalidCandidate = true;
       console.error(`Unable to capture final candidate: ${error?.message ?? String(error)}`);
     }
+
+    const collected = readEvidence(path.join(runDirectory, "collected.jsonl"));
+    const execution = readEvidence(path.join(runDirectory, "run.jsonl"));
+    const executionSummary = summarizeEvidence({ collected, selected: collected, run: execution });
+    if (executionSummary.collected?.total !== EXPECTED_SCENARIO_COUNT) {
+      executionSummary.issues.push("native walkthrough inventory does not match the declared scenario count");
+    }
+    writeJsonAtomic(path.join(runDirectory, "execution-summary.json"), executionSummary);
+    if (executionSummary.issues.length > 0) preflightError ??= new Error("walkthrough execution evidence gate failed");
 
     let exitCode = childResult.code ?? signalExitCode(childResult.signal);
     if (signalState.received) exitCode = signalExitCode(signalState.received);

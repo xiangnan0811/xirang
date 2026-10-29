@@ -139,6 +139,17 @@ Playwright 系统依赖、OpenSSH server 与 sqlite3，由脚本生成独占 SSH
 fixture 并清理；不接受共享手工 fixture 作为自动化通过证据。命令、严格主机密钥
 校验与清理边界见[测试指南](../spec/guides/testing.md)。
 
+默认 mock 和真实后端均经安全事件 runner 执行，真实后端不再以 Chromium-only 选择
+遗漏已声明的 Firefox/WebKit 项目。账户恢复与完整 walkthrough 各有独立无条件 CI job；
+账户恢复保持安全 reporter 和零重试，walkthrough 独占4177，失败也汇编并上传证据。
+原464场景不缩减，Docker/history新增状态由独立显式配置执行。正常 typecheck/check
+包含严格 ES2023/DOM/Node 的全部 e2e 与 Playwright 配置，不把测试加入生产 bundle。
+这些 job 均属于发布所要求的整轮 main CI；skip/list/重试后的成功不能替代首次实际通过。
+
+cron job 使用本地同一隔离入口，PG18与工具容器每次独占，不复用 parity DSN。
+Core双架构原生job保留静态及mutation检查，并运行locked Nginx live probe；资源清理失败
+也使job失败。各入口与证据边界见[测试约定](../spec/guides/testing.md)。
+
 更新工作流 action 时：
 
 - GitHub 官方和第三方 action 均固定完整 commit SHA，并保留版本 tag 旁注。

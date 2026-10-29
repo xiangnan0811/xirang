@@ -175,6 +175,35 @@ func (service *PublicationService) expireAtDeadline(ctx context.Context, pointID
 		if err != nil {
 			return err
 		}
+		providerKind, _, _, err := publicationReconciliationFacts(point)
+		if err != nil {
+			return err
+		}
+		if providerKind == backupasset.ProviderRclone && (consistency.RcloneWriterQuiesced == nil || !*consistency.RcloneWriterQuiesced) {
+			if consistency.Provider != backupasset.ProviderRclone || consistency.Completion != backupasset.CompletionOutcomeUnknown || consistency.Code != backupasset.FailurePublicationDeadlineExceeded {
+				prior := point.ConsistencyJSON
+				consistency.Provider = backupasset.ProviderRclone
+				consistency.Completion = backupasset.CompletionOutcomeUnknown
+				consistency.Code = backupasset.FailurePublicationDeadlineExceeded
+				consistency.PublicationRevision++
+				encoded, encodeErr := backupasset.EncodePublicationConsistency(consistency)
+				if encodeErr != nil {
+					return encodeErr
+				}
+				result := tx.Model(&model.RecoveryPoint{}).Where("id = ? AND state = ? AND consistency_json = ?", point.ID, point.State, prior).
+					Updates(map[string]any{"consistency_json": encoded, "updated_at": now})
+				if result.Error != nil {
+					return fmt.Errorf("hold expired Rclone publication: %w", result.Error)
+				}
+				if result.RowsAffected != 1 {
+					return fmt.Errorf("%w: expired Rclone hold changed", backupasset.ErrConflict)
+				}
+			}
+			outcome = publication.Outcome{RepositoryID: point.RepositoryID, RecoveryPointID: point.ID,
+				TaskID: lineage.TaskID, TaskRunID: lineage.TaskRunID, State: state, Code: backupasset.FailurePublicationDeadlineExceeded}
+			expired = true
+			return nil
+		}
 		code := backupasset.FailurePublicationDeadlineExceeded
 		if consistency.FirstMissingObservedAt != nil {
 			code = backupasset.FailureSnapshotMissingAtDeadline
@@ -226,8 +255,29 @@ func (service *PublicationService) ListCandidates(ctx context.Context, limit int
 		scanLimit = limit
 	}
 	query := service.db.WithContext(ctx).
-		Where("semantics IN ? AND state IN ?", []backupasset.PointVersionSemantics{backupasset.PointNativeSnapshot, backupasset.PointXirangManifest, backupasset.PointImportedBaseline}, []string{string(backupasset.RecoveryPointPreparing), string(backupasset.RecoveryPointVerifying)}).
-		Order("updated_at ASC").Order("id ASC").Limit(scanLimit)
+		Where("semantics IN ? AND state IN ?", []backupasset.PointVersionSemantics{backupasset.PointNativeSnapshot, backupasset.PointXirangManifest, backupasset.PointImportedBaseline}, []string{string(backupasset.RecoveryPointPreparing), string(backupasset.RecoveryPointVerifying)})
+	// Exclude already-persisted expired Rclone holds in SQL before LIMIT; a
+	// prefix of holds must never starve later publications.
+	switch service.db.Name() {
+	case "sqlite":
+		query = query.Where(`COALESCE((json_valid(consistency_json) AND json_valid(lineage_json)
+			AND json_extract(consistency_json, '$.completion') = ? AND json_extract(consistency_json, '$.code') = ?
+			AND json_extract(lineage_json, '$.publication_mode') IN (?, ?)
+			AND (json_type(consistency_json, '$.rclone_writer_quiesced') IS NULL OR json_type(consistency_json, '$.rclone_writer_quiesced') IN ('null', 'false'))
+			AND julianday(json_extract(lineage_json, '$.point_deadline_at')) <= julianday(?)), 0) = 0`,
+			backupasset.CompletionOutcomeUnknown, backupasset.FailurePublicationDeadlineExceeded,
+			backupasset.PublicationVersionedPrefix, backupasset.PublicationNativeObjectVersions, now.Format(time.RFC3339Nano))
+	case "postgres":
+		query = query.Where(`COALESCE(((consistency_json::jsonb ->> 'completion') = ? AND (consistency_json::jsonb ->> 'code') = ?
+			AND (lineage_json::jsonb ->> 'publication_mode') IN (?, ?)
+			AND COALESCE(consistency_json::jsonb -> 'rclone_writer_quiesced', 'null'::jsonb) IN ('null'::jsonb, 'false'::jsonb)
+			AND (lineage_json::jsonb ->> 'point_deadline_at')::timestamptz <= ?), false) = false`,
+			backupasset.CompletionOutcomeUnknown, backupasset.FailurePublicationDeadlineExceeded,
+			backupasset.PublicationVersionedPrefix, backupasset.PublicationNativeObjectVersions, now)
+	default:
+		return nil, fmt.Errorf("%w: unsupported publication database", backupasset.ErrInvalidState)
+	}
+	query = query.Order("updated_at ASC").Order("id ASC").Limit(scanLimit)
 	if err := query.Find(&points).Error; err != nil {
 		return nil, fmt.Errorf("list publication candidates: %w", err)
 	}

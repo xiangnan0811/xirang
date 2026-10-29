@@ -276,6 +276,30 @@ Xirang 不会创建、修改或删除 KMS key，也不会自动修改 bucket lif
 
 Clean rollback 只适用于 `first_new_point` 激活后且从未出现任何受管 reservation、恢复点、history latch 或活动 lease 的短暂窗口；它会恢复原 legacy 配置，不删除 Remote 数据。窗口关闭后只能使用“准备回退”：系统停止新的受管准入、排空并调和未决工作、重新连接隔离保存的 legacy locator，同时让任务保持暂停。该操作保留所有 committed point、失败尝试、orphan、清单、审计证据和 managed-history latch，也不会自动启用旧的 mutable runtime。
 
+### 未知发布结果与升级保护
+
+受管 Rclone 发布失败时，只有明确未尝试发布变更，或 commit 前全部变更 writer 已停止，
+才可终止并按原策略重新运行。真实非零退出与语义校验失败分开记录。允许的重试使用新的
+TaskRun、恢复点、attempt 和独占前缀；未知 transport/SDK 结果或 commit 回读未确认会保留
+preparing/verifying 并抑制自动重试。认证 commit、租约到期、本地 SSH 关闭、TERM 成功和
+后来成功点均不能代替全部 writer 停止证据。
+
+到达原 publication deadline 后，缺少正面停止证据的点继续保留原状态及 locator，标记
+outcome_unknown/publication_deadline_exceeded，不续期、不重新执行 provider、不激活清单。
+这些点继续阻止竞争写入、准备回退和不满足非终态保护的删除，并可能通过全局 readiness
+阻止 server 重启。当前没有为此增加自动恢复或人工解锁入口；不要删除点、lease 或事实字段，
+也不要把 Legacy Rclone 的人工协调入口用于受管发布。
+
+升级前暂停任务，停止并排空旧 Core、scheduler、executor 与相关处理/清理 owner，保全数据库、
+匹配密钥、配置和远端数据。新版在启动（包括功能关闭时）及重新启用前检查全部历史 failed
+受管/导入 Rclone 点；缺少版本化正面 writer 停止事实时拒绝就绪，历史点保持原样。这意味着
+有此类历史点的安装可能无法启动；失败码、年龄或已释放 lease 不能豁免。应在切换前评估此
+可用性影响，不能以手改事实绕过。
+
+新增可选 rclone_writer_quiesced 是持久 JSON 格式变化，无新增 SQL 列迁移。禁止新旧 writer
+混跑；写入新字段后不能直接回退旧二进制。恢复旧数据库快照也不能证明远端 writer 停止，
+既有稳定身份密钥和 Portable V2 降级限制继续适用；新版不撤销旧版已提交的副作用。
+
 ### 明确不提供的保证
 
 - Portable 前缀和 AWS 原生对象版本都不是 WORM。Native 的 `backend_versioned` 只说明 Xirang 能按精确 `VersionId` 证明和读取版本；拥有底层删除权限的外部主体仍可能破坏数据，也不代表启用了 Object Lock、合规保留或不可删除介质。

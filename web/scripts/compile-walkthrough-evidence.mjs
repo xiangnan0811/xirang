@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { captureCandidate, lockfileSummary, validateCandidateSnapshot } from "./walkthrough-candidate.mjs";
+import { readEvidence, summarizeEvidence } from "./e2e-execution-evidence.mjs";
+import { SURFACE_SCENARIOS, surfaceScenarioId } from "../e2e/surface-states/scenarios.mjs";
 
 // Recount one explicitly selected snapshot; never merge ambient chunk directories
 // or overwrite source evidence. Missing historical dimensions remain unknown.
@@ -104,6 +106,9 @@ export function compileEvidence(inputFile) {
     overflowObservations,
     missingOverflowObservations,
     missingAxeObservations,
+    contrast: summarizeContrast(records.map((record, index) => ({
+      id: String(index), label: "historical", axe: record.axe, contrast: record.contrast,
+    }))),
     telemetryEntries,
   };
 }
@@ -116,6 +121,16 @@ const EXPECTED_CATEGORY_COUNTS = {
   edge_state: 30,
   auth_flow: 2,
 };
+const SURFACE_EXPECTED_COUNTS = {
+  docker_state: 48,
+  docker_role: 6,
+  docker_isolation: 6,
+  history_state: 24,
+  history_isolation: 10,
+};
+const SURFACE_EXPECTED_TOTAL = 94;
+const SURFACE_CONFIG = "playwright.surface-states.config.ts";
+const SURFACE_FILE = "e2e/surface-states/surface-states.browser.ts";
 const EVIDENCE_SAMPLE_LIMIT = 3;
 const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TELEMETRY_FIELDS = [
@@ -290,6 +305,73 @@ function validateAxe(axe, label, allowMissing) {
   }
 }
 
+// Older walkthrough records may lack this inventory; those remain unknown.
+function validateRichAxe(axe, label) {
+  if (!axe || !Array.isArray(axe.passes) || !Array.isArray(axe.incomplete) || axe.colorContrastExecuted !== true) {
+    runFailure(`${label} lacks an enabled color-contrast audit`);
+  }
+  for (const pass of axe.passes) {
+    if (!pass || typeof pass.id !== "string" || !pass.id || !Number.isInteger(pass.nodesCount) || pass.nodesCount < 0) {
+      runFailure(`${label} contains an invalid axe pass`);
+    }
+  }
+  for (const rule of axe.incomplete) {
+    if (!rule || typeof rule.id !== "string" || !rule.id || !Number.isInteger(rule.nodesCount)
+      || !Array.isArray(rule.nodes) || rule.nodesCount !== rule.nodes.length) {
+      runFailure(`${label} has missing axe incomplete locations`);
+    }
+    for (const node of rule.nodes) {
+      if (!node || !Array.isArray(node.target) || node.target.length === 0
+        || !node.target.every((part) => typeof part === "string" && part.length > 0)
+        || !Array.isArray(node.reasons)
+        || (!(typeof node.failureSummary === "string" && node.failureSummary.length > 0)
+          && !node.reasons.some((reason) => typeof reason?.message === "string" && reason.message.length > 0))) {
+        runFailure(`${label} has an incomplete node without its location or reason`);
+      }
+    }
+  }
+}
+
+function validateContrast(contrast, axe, label, requireSurface) {
+  if (!Array.isArray(contrast)) runFailure(`${label}.contrast must be an array`);
+  const actualIncomplete = [];
+  let surfaceCount = 0;
+  for (const item of contrast) {
+    if (!item || !["surface", "axe-incomplete"].includes(item.source)
+      || !Array.isArray(item.target) || item.target.length === 0
+      || !item.target.every((part) => typeof part === "string" && part.length > 0)
+      || (item.measuredTarget !== undefined && (typeof item.measuredTarget !== "string" || !item.measuredTarget))
+      || typeof item.text !== "string" || !["pass", "fail", "unknown", "exempt"].includes(item.outcome)) {
+      runFailure(`${label} contains an invalid contrast measurement`);
+    }
+    if (item.source === "surface") surfaceCount += 1;
+    else actualIncomplete.push(stableJson(item.target));
+    if (item.outcome === "pass" || item.outcome === "fail") {
+      const validFont = typeof item.fontSizePx === "number" && Number.isFinite(item.fontSizePx) && item.fontSizePx > 0
+        && typeof item.fontWeight === "number" && Number.isFinite(item.fontWeight) && item.fontWeight > 0;
+      const large = validFont && (item.fontSizePx >= 24 || (item.fontSizePx >= 56 / 3 && item.fontWeight >= 700));
+      if (!validFont || item.largeText !== large || item.required !== (large ? 3 : 4.5)
+        || typeof item.foreground !== "string" || !item.foreground || typeof item.background !== "string" || !item.background
+        || typeof item.ratio !== "number" || !Number.isFinite(item.ratio) || item.ratio < 1 || item.ratio > 21
+        || (item.outcome === "pass" ? item.ratio < item.required : item.ratio >= item.required)) {
+        runFailure(`${label} has an inconsistent measured contrast result`);
+      }
+    } else if (typeof item.reason !== "string" || !item.reason) {
+      runFailure(`${label} has an unresolved contrast result without a reason`);
+    }
+  }
+  if (requireSurface && surfaceCount === 0) runFailure(`${label} has no surface text measurements`);
+  const expectedIncomplete = (axe?.incomplete ?? []).filter((rule) => rule.id === "color-contrast")
+    .flatMap((rule) => rule.nodes.map((node) => stableJson(node.target)));
+  const countTargets = (targets) => targets.reduce((counts, target) => counts.set(target, (counts.get(target) ?? 0) + 1), new Map());
+  const expectedCounts = countTargets(expectedIncomplete);
+  const actualCounts = countTargets(actualIncomplete);
+  if ([...expectedCounts].some(([target, count]) => (actualCounts.get(target) ?? 0) < count)
+    || [...actualCounts.keys()].some((target) => !expectedCounts.has(target))) {
+    runFailure(`${label} has missing or extra axe incomplete contrast measurements`);
+  }
+}
+
 function validateOverflow(overflow, label, allowMissing) {
   if (overflow === null && allowMissing) return;
   if (!overflow || typeof overflow !== "object" || Array.isArray(overflow) || typeof overflow.isOverflow !== "boolean") {
@@ -320,6 +402,12 @@ function validateEvidence(raw, filePath, manifest, expectedById) {
   if (typeof raw.testedAt !== "string" || !raw.testedAt) runFailure(`${label}.testedAt is required`);
   const allowMissingMeasurements = raw.status !== "passed";
   validateAxe(raw.axe, label, allowMissingMeasurements);
+  if (raw.axe && ("incomplete" in raw.axe || "passes" in raw.axe || "colorContrastExecuted" in raw.axe)) {
+    validateRichAxe(raw.axe, label);
+    if (!(raw.contrast === null && allowMissingMeasurements)) validateContrast(raw.contrast, raw.axe, label, false);
+  } else if (raw.contrast !== undefined && raw.contrast !== null) {
+    runFailure(`${label} has contrast measurements without a complete axe audit`);
+  }
   validateOverflow(raw.overflow, label, allowMissingMeasurements);
   validateTelemetry(raw.telemetry, label);
   validateHttpErrors(raw.expectedHttpErrors, `${label}.expectedHttpErrors`);
@@ -331,6 +419,7 @@ function validateEvidence(raw, filePath, manifest, expectedById) {
     status: raw.status,
     error: raw.error,
     axe: raw.axe,
+    contrast: raw.contrast ?? null,
     overflow: raw.overflow,
     telemetry: raw.telemetry,
   };
@@ -341,11 +430,34 @@ function failureReasons(record) {
   if (record.status !== "passed") reasons.push(`status=${record.status}`);
   if (record.error) reasons.push("error");
   if (record.axe?.violations.length) reasons.push("axe");
+  if (record.contrast?.some((measurement) => measurement.outcome === "fail")) reasons.push("contrast");
   if (record.overflow?.isOverflow === true) reasons.push("overflow");
   for (const field of TELEMETRY_FIELDS) {
     if (record.telemetry[field].length) reasons.push(field);
   }
   return reasons;
+}
+
+function summarizeContrast(captures) {
+  const outcomes = { pass: 0, fail: 0, unknown: 0, exempt: 0 };
+  const incomplete = [];
+  const unresolved = [];
+  let missing = 0;
+  for (const capture of captures) {
+    if (!Array.isArray(capture.contrast)) missing += 1;
+    else for (const measurement of capture.contrast) {
+      if (Object.hasOwn(outcomes, measurement.outcome)) outcomes[measurement.outcome] += 1;
+      if (measurement.outcome === "unknown") {
+        unresolved.push({ scenarioId: capture.id, capture: capture.label, target: measurement.target, measuredTarget: measurement.measuredTarget ?? null, reason: measurement.reason });
+      }
+    }
+    for (const rule of capture.axe?.incomplete ?? []) {
+      for (const node of rule.nodes ?? []) {
+        incomplete.push({ scenarioId: capture.id, capture: capture.label, rule: rule.id, target: node.target, failureSummary: node.failureSummary, reasons: node.reasons });
+      }
+    }
+  }
+  return { captures: captures.length, missing, outcomes, unresolved, incomplete };
 }
 
 function summarizeRun(manifest, records, expectedScenarios) {
@@ -423,6 +535,9 @@ function summarizeRun(manifest, records, expectedScenarios) {
       reasons,
     })),
     measurementAvailability,
+    contrast: summarizeContrast(records.map((record) => ({
+      id: record.scenario.id, label: "walkthrough", axe: record.axe, contrast: record.contrast,
+    }))),
     axe: {
       ruleCount: axeRules.size,
       nodeCount: axeNodeTotal,
@@ -596,12 +711,369 @@ export async function compileRun(runDirectoryInput) {
   return summary;
 }
 
+const SURFACE_CAPTURES = {
+  docker_state: {
+    loading_rows: ["loading", "rows"],
+    empty: ["empty"],
+    partial_rows: ["partial-rows"],
+    partial_empty: ["partial-empty"],
+    error: ["error"],
+    long_values: ["long-values"],
+  },
+  history_state: {
+    paginated: ["loading", "page-1", "page-2", "detail"],
+    empty: ["empty"],
+    error_retry: ["error", "recovered"],
+  },
+};
+const LATE_OBSERVATIONS = {
+  docker_isolation: { late_close: ["stale"], node_switch: ["stale"], token_aba: ["alphaLate", "bravoLate"] },
+  history_isolation: {
+    late_page_close: ["stalePage"], task_switch: ["staleTask"], language_switch: ["staleLanguage"],
+    token_aba: ["alphaLate", "bravoLate"], late_retry: ["staleRetry"],
+  },
+};
+
+function surfaceInventory() {
+  if (!Array.isArray(SURFACE_SCENARIOS) || SURFACE_SCENARIOS.length !== SURFACE_EXPECTED_TOTAL) {
+    runFailure(`surface inventory must contain ${SURFACE_EXPECTED_TOTAL} scenarios`);
+  }
+  const ids = new Set();
+  for (const scenario of SURFACE_SCENARIOS) {
+    if (!scenario || scenario.id !== surfaceScenarioId(scenario) || ids.has(scenario.id)
+      || !Object.hasOwn(SURFACE_EXPECTED_COUNTS, scenario.category)
+      || !["zh", "en"].includes(scenario.language) || !["light", "dark"].includes(scenario.theme)
+      || !["admin", "operator", "viewer"].includes(scenario.role)
+      || !["1440x900", "390x844"].includes(`${scenario.viewport?.width}x${scenario.viewport?.height}`)) {
+      runFailure("surface inventory has a duplicate or invalid scenario");
+    }
+    ids.add(scenario.id);
+  }
+  for (const [category, count] of Object.entries(SURFACE_EXPECTED_COUNTS)) {
+    if (SURFACE_SCENARIOS.filter((scenario) => scenario.category === category).length !== count) {
+      runFailure(`surface inventory category ${category} does not contain ${count} scenarios`);
+    }
+  }
+  return new Map(SURFACE_SCENARIOS.map((scenario) => [scenario.id, scenario]));
+}
+
+function readOwnedEvents(runDirectory, name) {
+  const file = path.join(runDirectory, name);
+  if (!fs.existsSync(file)) return null;
+  assertOwnedFile(file, runDirectory, name);
+  return readEvidence(file);
+}
+
+function validateSurfaceEvidence(raw, filePath, runId, expectedById, selectedByScenario, ends) {
+  const label = path.relative(PROJECT_ROOT, filePath);
+  if (!raw || raw.schemaVersion !== RUN_SCHEMA_VERSION || raw.suite !== "surface-states" || raw.runId !== runId) {
+    runFailure(`${label} has an invalid surface schema or run ID`);
+  }
+  const scenario = expectedById.get(raw.scenario?.id);
+  if (!scenario || stableJson(raw.scenario) !== stableJson(scenario)) runFailure(`${label} has an unknown or non-canonical scenario`);
+  const test = selectedByScenario.get(scenario.id);
+  const attempt = raw.attempt;
+  if (!test || !attempt || attempt.testId !== test.id || !Number.isInteger(attempt.retry) || attempt.retry < 0
+    || !Number.isInteger(attempt.workerIndex) || attempt.workerIndex < 0) {
+    runFailure(`${label} attempt does not match the selected test`);
+  }
+  if (!PLAYWRIGHT_STATUSES.has(raw.status) || !(raw.error === null || typeof raw.error === "string")
+    || typeof raw.testedAt !== "string" || !raw.testedAt) runFailure(`${label} has an invalid attempt result`);
+  const end = ends.get(stableJson([attempt.testId, attempt.retry]));
+  if (!end || end.status !== raw.status || end.expectedStatus !== "passed") {
+    runFailure(`${label} attempt does not match the execution event`);
+  }
+  validateTelemetry(raw.telemetry, label);
+  validateHttpErrors(raw.expectedHttpErrors, `${label}.expectedHttpErrors`);
+  if (!Array.isArray(raw.captures) || !Array.isArray(raw.observations) || !Array.isArray(raw.exchanges) || !Array.isArray(raw.authMeCalls)) {
+    runFailure(`${label} lacks surface capture, observation, exchange or identity evidence`);
+  }
+  for (const exchange of raw.exchanges) {
+    if (!exchange || typeof exchange.label !== "string" || !["docker", "runs"].includes(exchange.kind)
+      || typeof exchange.pathname !== "string" || typeof exchange.search !== "string" || typeof exchange.identity !== "string"
+      || typeof exchange.superseded !== "boolean" || !["none", "fulfilled", "rejected-by-browser"].includes(exchange.replied)
+      || !["pending", "finished", "failed"].includes(exchange.transport)
+      || !["yes", "not-checked"].includes(exchange.bodyConsumed)
+      || !(exchange.failure === null || typeof exchange.failure === "string")) {
+      runFailure(`${label} has an invalid intercepted exchange`);
+    }
+  }
+  if (raw.authMeCalls.some((call) => !call || typeof call.identity !== "string")) runFailure(`${label} has an invalid auth identity`);
+  for (const observation of raw.observations) {
+    if (!observation || typeof observation.name !== "string" || !observation.name
+      || !["string", "number", "boolean"].includes(typeof observation.value) && observation.value !== null) {
+      runFailure(`${label} has an invalid observation`);
+    }
+  }
+  const captures = [];
+  for (const capture of raw.captures) {
+    if (!capture || typeof capture.label !== "string" || !capture.label) runFailure(`${label} has an invalid capture label`);
+    validateAxe(capture.axe, label, false);
+    validateRichAxe(capture.axe, label);
+    validateContrast(capture.contrast, capture.axe, label, true);
+    validateOverflow(capture.overflow, label, false);
+    captures.push(capture);
+  }
+  const expectedCaptures = scenario.category === "docker_role"
+    ? [scenario.role === "viewer" ? "viewer-nodes" : `${scenario.role}-rows`]
+    : SURFACE_CAPTURES[scenario.category]?.[scenario.scenario] ?? [];
+  if (raw.status === "passed" && stableJson(captures.map((capture) => capture.label)) !== stableJson(expectedCaptures)) {
+    runFailure(`${label} has missing, duplicate or unexpected surface captures`);
+  }
+  if (raw.status === "passed") {
+    const observation = (name) => raw.observations.find((entry) => entry.name === name)?.value;
+    if (scenario.viewport.width === 1440 && scenario.category === "docker_state" && scenario.scenario === "loading_rows"
+      && observation("nodesList.menuFocusReturned") !== true) runFailure(`${label} lacks node list menu focus evidence`);
+    if (scenario.viewport.width === 1440 && scenario.category === "history_state" && scenario.scenario === "paginated"
+      && observation("tasksList.historyFocusReturned") !== true) runFailure(`${label} lacks task list history focus evidence`);
+    if (scenario.category === "docker_role") {
+      const username = `surface-${scenario.role}`;
+      if (observation("session.role") !== scenario.role || observation("authMe.role") !== scenario.role
+        || raw.authMeCalls.length === 0 || raw.authMeCalls.some((call) => call.identity !== username)
+        || (scenario.role === "viewer" && (observation("fileBrowser.entries") !== 0 || raw.exchanges.some((exchange) => exchange.kind === "docker")))) {
+        runFailure(`${label} has inconsistent session and role evidence`);
+      }
+    }
+    if (scenario.category === "docker_state" || (scenario.category === "docker_role" && scenario.role !== "viewer")) {
+      if (!raw.exchanges.some((exchange) => exchange.kind === "docker" && exchange.pathname === "/api/v1/nodes/1/docker-volumes"
+        && exchange.identity === `surface-${scenario.role}`)) runFailure(`${label} has no matching Docker request`);
+    }
+    if (scenario.category === "history_state") {
+      const hasPage = (page) => raw.exchanges.some((exchange) => {
+        const query = new URLSearchParams(exchange.search);
+        return exchange.kind === "runs" && exchange.pathname === "/api/v1/tasks/1/runs"
+          && query.get("page") === String(page) && query.get("page_size") === "10";
+      });
+      if (!hasPage(1) || (scenario.scenario === "paginated" && !hasPage(2))) runFailure(`${label} has no matching history pagination requests`);
+    }
+    for (const prefix of LATE_OBSERVATIONS[scenario.category]?.[scenario.scenario] ?? []) {
+      const classification = observation(`${prefix}.classification`);
+      const transport = observation(`${prefix}.transport`);
+      const replied = observation(`${prefix}.replied`);
+      if (!(classification === "delivered" && transport === "finished" && replied === "fulfilled" && observation(`${prefix}.bodyConsumed`) === "yes")
+        && !(classification === "aborted" && transport === "failed" && observation(`${prefix}.failure`) === "net::ERR_ABORTED")) {
+        runFailure(`${label} has an unproven late-response transport outcome`);
+      }
+      const identity = observation(`${prefix}.identity`);
+      if (!raw.exchanges.some((exchange) => exchange.identity === identity && exchange.transport === transport
+        && exchange.replied === replied && exchange.failure === observation(`${prefix}.failure`)
+        && exchange.bodyConsumed === observation(`${prefix}.bodyConsumed`))) {
+        runFailure(`${label} late-response observation does not match an intercepted exchange`);
+      }
+    }
+  }
+  return { label, scenario, attempt, status: raw.status, error: raw.error, captures, telemetry: raw.telemetry, observations: raw.observations };
+}
+
+function writeSurfaceSummary(runDirectory, summary) {
+  const destination = path.join(runDirectory, "execution-summary.json");
+  if (fs.existsSync(destination)) assertOwnedFile(destination, runDirectory, "execution-summary.json");
+  const temporary = path.join(runDirectory, `.execution-summary.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`);
+  fs.writeFileSync(temporary, `${JSON.stringify(summary, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  fs.renameSync(temporary, destination);
+}
+
+function compileSurfaceDirectory(runDirectory) {
+  const expectedById = surfaceInventory();
+  const manifestPath = path.join(runDirectory, "summary.json");
+  assertOwnedFile(manifestPath, runDirectory, "summary.json");
+  const manifest = readJson(manifestPath, "summary.json");
+  if (!manifest || manifest.schemaVersion !== RUN_SCHEMA_VERSION || !RUN_ID_PATTERN.test(manifest.runId ?? "")
+    || manifest.config !== SURFACE_CONFIG || !Array.isArray(manifest.projects)
+    || !(manifest.projects.length === 0 || stableJson(manifest.projects) === stableJson(["chromium"]))) {
+    runFailure("surface execution manifest has an invalid identity, config or project selection");
+  }
+  const issues = [];
+  if (typeof manifest.startedAt !== "string" || typeof manifest.endedAt !== "string"
+    || typeof manifest.head !== "string" || !manifest.head || manifest.invalidCandidate !== false) {
+    issues.push("surface run did not complete with a valid candidate");
+  }
+  if (manifest.exitCode !== 0) issues.push(`surface runner exitCode=${manifest.exitCode}`);
+  for (const step of ["collectedList", ...(manifest.projects.length ? ["selectedList"] : []), "run"]) {
+    const result = manifest.playwright?.[step];
+    if (!result || result.code !== 0 || result.signal !== null) issues.push(`${step} did not complete successfully`);
+  }
+  let candidate = null;
+  try {
+    const before = validateCandidateSnapshot(manifest.candidateBefore, "surface candidateBefore");
+    const after = validateCandidateSnapshot(manifest.candidateAfter, "surface candidateAfter");
+    if (stableJson(before) !== stableJson(after)) runFailure("surface candidate changed during the run");
+    const currentHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: PROJECT_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    if (currentHead !== manifest.head || stableJson(captureCandidate(PROJECT_ROOT)) !== stableJson(after)) {
+      runFailure("surface candidate no longer matches the run");
+    }
+    candidate = after;
+  } catch (error) {
+    issues.push(error?.message ?? String(error));
+  }
+
+  const collected = readOwnedEvents(runDirectory, "collected.jsonl");
+  const selected = manifest.projects.length ? readOwnedEvents(runDirectory, "selected.jsonl") : collected;
+  const execution = readOwnedEvents(runDirectory, "run.jsonl");
+  const eventSummary = summarizeEvidence({ collected, selected, run: execution });
+  issues.push(...eventSummary.issues);
+  const inventories = [];
+  for (const [label, evidence] of [["collected", collected], ["selected", selected], ["run", execution]]) {
+    const mapping = new Map();
+    if (evidence?.begin) {
+      if (evidence.begin.config !== SURFACE_CONFIG || stableJson(evidence.begin.projects) !== stableJson([{ name: "chromium", retries: 0 }])) {
+        issues.push(`${label} uses an unexpected config or retry policy`);
+      }
+      for (const test of evidence.begin.tests) {
+        const scenarioId = test.title.length === 1 ? test.title[0] : null;
+        if (test.file !== SURFACE_FILE || test.project !== "chromium" || !expectedById.has(scenarioId) || mapping.has(scenarioId)) {
+          issues.push(`${label} contains an unknown or duplicate surface test`);
+          continue;
+        }
+        mapping.set(scenarioId, test);
+      }
+    }
+    if (mapping.size !== SURFACE_EXPECTED_TOTAL) issues.push(`${label} does not contain all ${SURFACE_EXPECTED_TOTAL} surface scenarios`);
+    inventories.push(mapping);
+  }
+  const [collectedByScenario, selectedByScenario, runByScenario] = inventories;
+  for (const scenarioId of expectedById.keys()) {
+    const declared = collectedByScenario.get(scenarioId);
+    const chosen = selectedByScenario.get(scenarioId);
+    const executed = runByScenario.get(scenarioId);
+    if (declared && chosen && executed && (stableJson(declared) !== stableJson(chosen) || stableJson(chosen) !== stableJson(executed))) {
+      issues.push(`test identity differs across inventories: ${scenarioId}`);
+    }
+  }
+  if (eventSummary.notSelected.total !== 0) issues.push("surface run excluded declared scenarios");
+
+  const selectedTestIds = new Set([...selectedByScenario.values()].map((test) => test.id));
+  const beginnings = new Map();
+  const ends = new Map();
+  for (const begin of execution?.begins ?? []) {
+    const key = stableJson([begin.id, begin.retry]);
+    if (!selectedTestIds.has(begin.id) || beginnings.has(key)) issues.push("unknown or duplicate surface attempt begin event");
+    if (begin.retry !== 0) issues.push("surface retry occurred despite the zero-retry policy");
+    beginnings.set(key, begin);
+  }
+  for (const end of execution?.ends ?? []) {
+    const key = stableJson([end.id, end.retry]);
+    if (ends.has(key) || !beginnings.has(key) || !selectedTestIds.has(end.id)) issues.push("surface attempt result has no unique begin event");
+    if (end.retry !== 0) issues.push("surface retry occurred despite the zero-retry policy");
+    ends.set(key, end);
+  }
+  for (const key of beginnings.keys()) if (!ends.has(key)) issues.push("surface attempt began without an end event");
+
+  const output = path.join(runDirectory, "output");
+  let evidenceFiles = [];
+  if (fs.existsSync(output)) {
+    const stats = fs.lstatSync(output);
+    if (stats.isSymbolicLink() || !stats.isDirectory() || !pathInside(runDirectory, fs.realpathSync(output))) {
+      runFailure("surface output is not an owned directory");
+    }
+    evidenceFiles = collectEvidenceFiles(output);
+  } else issues.push("surface output directory is missing");
+  const records = [];
+  const validationErrors = [];
+  const attempts = new Set();
+  for (const file of evidenceFiles) {
+    try {
+      const record = validateSurfaceEvidence(readJson(file, "surface evidence"), file, manifest.runId, expectedById, selectedByScenario, ends);
+      const key = stableJson([record.scenario.id, record.attempt.retry]);
+      if (attempts.has(key)) runFailure(`${record.label} duplicates a logical surface attempt`);
+      attempts.add(key);
+      records.push(record);
+    } catch (error) {
+      validationErrors.push({ file: path.relative(PROJECT_ROOT, file), message: error?.message ?? String(error) });
+    }
+  }
+  const observed = new Set(records.filter((record) => record.attempt.retry === 0).map((record) => record.scenario.id));
+  const missingScenarioIds = [...expectedById.keys()].filter((id) => !observed.has(id));
+  if (missingScenarioIds.length) issues.push(`missing surface attempt evidence (${missingScenarioIds.length})`);
+  if (validationErrors.length) issues.push(`invalid surface evidence (${validationErrors.length})`);
+  if (records.length !== ends.size) issues.push("surface attempt evidence does not cover all execution events");
+  const failures = [];
+  for (const record of records) {
+    const reasons = [];
+    if (record.status !== "passed") reasons.push(`status=${record.status}`);
+    if (record.error) reasons.push("error");
+    for (const field of TELEMETRY_FIELDS) if (record.telemetry[field].length) reasons.push(field);
+    if (record.captures.some((capture) => capture.axe.violations.length)) reasons.push("axe");
+    if (record.captures.some((capture) => capture.contrast.some((measurement) => measurement.outcome === "fail"))) reasons.push("contrast");
+    if (record.captures.some((capture) => capture.overflow.isOverflow)) reasons.push("overflow");
+    if (reasons.length) failures.push({ scenarioId: record.scenario.id, attempt: record.attempt, reasons });
+  }
+  if (failures.length) issues.push(`failed surface attempts (${failures.length})`);
+  const contrast = summarizeContrast(records.flatMap((record) => record.captures.map((capture) => ({
+    id: record.scenario.id, label: capture.label, axe: capture.axe, contrast: capture.contrast,
+  }))));
+  const axePasses = new Map();
+  const axeViolations = [];
+  for (const record of records) {
+    for (const capture of record.captures) {
+      for (const pass of capture.axe.passes) {
+        const current = axePasses.get(pass.id) ?? { id: pass.id, ruleOccurrences: 0, nodeOccurrences: 0 };
+        current.ruleOccurrences += 1;
+        current.nodeOccurrences += pass.nodesCount;
+        axePasses.set(pass.id, current);
+      }
+      for (const violation of capture.axe.violations) {
+        axeViolations.push({ scenarioId: record.scenario.id, capture: capture.label, ...violation });
+      }
+    }
+  }
+  const telemetryEntries = Object.fromEntries(TELEMETRY_FIELDS.map((field) => [
+    field, records.reduce((total, record) => total + record.telemetry[field].length, 0),
+  ]));
+  const lateResponses = records.flatMap((record) => (LATE_OBSERVATIONS[record.scenario.category]?.[record.scenario.scenario] ?? []).flatMap((prefix) => {
+    const value = (name) => record.observations.find((entry) => entry.name === `${prefix}.${name}`)?.value;
+    const classification = value("classification");
+    return classification === undefined ? [] : [{ scenarioId: record.scenario.id, prefix, classification, identity: value("identity"), transport: value("transport"), replied: value("replied"), bodyConsumed: value("bodyConsumed"), failure: value("failure") }];
+  }));
+  const categoryCounts = Object.fromEntries(Object.keys(SURFACE_EXPECTED_COUNTS).map((category) => [
+    category, records.filter((record) => record.scenario.category === category && record.attempt.retry === 0).length,
+  ]));
+  return {
+    ...eventSummary,
+    schemaVersion: RUN_SCHEMA_VERSION,
+    suite: "surface-states",
+    runId: manifest.runId,
+    head: manifest.head,
+    candidateFingerprint: candidate?.sha256 ?? null,
+    coverage: { declared: SURFACE_EXPECTED_TOTAL, categoryCounts, missingScenarioIds, evidenceFiles: evidenceFiles.length, validEvidence: records.length },
+    failures,
+    validationErrors,
+    axe: { passes: [...axePasses.values()].sort((left, right) => left.id.localeCompare(right.id)), violations: axeViolations, incomplete: contrast.incomplete },
+    telemetryEntries,
+    contrast,
+    lateResponses,
+    issues,
+    valid: issues.length === 0,
+  };
+}
+
+export async function compileSurfaceRun(runDirectoryInput) {
+  const runDirectory = assertRunDirectory(runDirectoryInput);
+  let summary;
+  try {
+    summary = compileSurfaceDirectory(runDirectory);
+  } catch (error) {
+    summary = { schemaVersion: RUN_SCHEMA_VERSION, suite: "surface-states", valid: false, issues: [error?.message ?? String(error)] };
+    writeSurfaceSummary(runDirectory, summary);
+    error.summary = summary;
+    throw error;
+  }
+  writeSurfaceSummary(runDirectory, summary);
+  if (!summary.valid) {
+    const error = new Error(summary.issues.join("; "));
+    error.summary = summary;
+    throw error;
+  }
+  return summary;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv.length === 3) {
     console.log(JSON.stringify(compileEvidence(process.argv[2]), null, 2));
-  } else if (process.argv.length === 4 && process.argv[2] === "--run") {
+  } else if (process.argv.length === 4 && ["--run", "--surface-run"].includes(process.argv[2])) {
     try {
-      console.log(JSON.stringify(await compileRun(process.argv[3]), null, 2));
+      const summary = process.argv[2] === "--run" ? await compileRun(process.argv[3]) : await compileSurfaceRun(process.argv[3]);
+      console.log(JSON.stringify(summary, null, 2));
     } catch (error) {
       if (error?.summary) {
         console.log(JSON.stringify(error.summary, null, 2));
@@ -612,7 +1084,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.exitCode = 1;
     }
   } else {
-    console.error("Usage: node web/scripts/compile-walkthrough-evidence.mjs <evidence-snapshot.json>\n   or: node web/scripts/compile-walkthrough-evidence.mjs --run <run-directory>");
+    console.error("Usage: node web/scripts/compile-walkthrough-evidence.mjs <evidence-snapshot.json>\n   or: node web/scripts/compile-walkthrough-evidence.mjs --run <run-directory>\n   or: node web/scripts/compile-walkthrough-evidence.mjs --surface-run <run-directory>");
     process.exitCode = 1;
   }
 }

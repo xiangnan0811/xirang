@@ -220,9 +220,7 @@ for (const { role, language, viewport } of [
     if (inspectMilliseconds > 0 && role === "admin" && language === "en") {
       if (!Number.isInteger(inspectMilliseconds) || inspectMilliseconds > 300_000) throw new Error("Inspection duration must be 1..300000 milliseconds");
       test.setTimeout(180_000 + inspectMilliseconds);
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, inspectMilliseconds);
-      await promise;
+      await new Promise<void>(resolve => { setTimeout(resolve, inspectMilliseconds); });
     }
     const codes = await submitRecovery(page, enrollment.enrollment.secret);
     expect(traffic.verifyCount()).toBe(1);
@@ -474,13 +472,13 @@ test("live ordinary, pending and step-up tokens cannot complete another account'
     expect((response.headers.get("cache-control") ?? "").includes("no-store")).toBe(true);
   }
   const closeCode = await page.evaluate(async ({ origin, token }) => {
-    const { promise, resolve } = Promise.withResolvers<number>();
-    const socket = new WebSocket(origin.replace("http:", "ws:") + "/api/v1/ws/logs");
-    const timer = setTimeout(() => { socket.close(); resolve(0); }, 10_000);
-    socket.onopen = () => socket.send(JSON.stringify({ type: "auth", token }));
-    socket.onclose = event => { clearTimeout(timer); resolve(event.code); };
-    socket.onerror = () => { clearTimeout(timer); resolve(0); };
-    return promise;
+    return new Promise<number>(resolve => {
+      const socket = new WebSocket(origin.replace("http:", "ws:") + "/api/v1/ws/logs");
+      const timer = setTimeout(() => { socket.close(); resolve(0); }, 10_000);
+      socket.onopen = () => socket.send(JSON.stringify({ type: "auth", token }));
+      socket.onclose = event => { clearTimeout(timer); resolve(event.code); };
+      socket.onerror = () => { clearTimeout(timer); resolve(0); };
+    });
   }, { origin: recovery.backendURL, token: enrollment.recovery_token });
   expect(closeCode).toBe(1008);
   expect(state(recovery, identity.username).totp_reenrollment_required).toBe(1);

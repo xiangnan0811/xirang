@@ -83,6 +83,7 @@ type PublicationConsistencyV1 struct {
 	CaptureFinishedAt           *time.Time              `json:"capture_finished_at,omitempty"`
 	FilesProcessed              uint64                  `json:"files_processed,omitempty"`
 	LogicalBytes                uint64                  `json:"logical_bytes,omitempty"`
+	RcloneWriterQuiesced        *bool                   `json:"rclone_writer_quiesced,omitempty"`
 	Provider                    ProviderKind            `json:"provider,omitempty"`
 	RepositoryIdentityDigest    string                  `json:"repository_identity_digest,omitempty"`
 	RequestedTagDigest          string                  `json:"requested_tag_digest,omitempty"`
@@ -367,6 +368,9 @@ func validatePublicationConsistency(value PublicationConsistencyV1) error {
 	}
 	if value.Provider != "" && !validRepositoryProviderKinds[value.Provider] {
 		return fmt.Errorf("%w: invalid publication provider", ErrInvalidState)
+	}
+	if value.RcloneWriterQuiesced != nil && value.Provider != "" && value.Provider != ProviderRclone {
+		return fmt.Errorf("%w: Rclone writer evidence has invalid provider", ErrInvalidState)
 	}
 	if value.Completion != "" {
 		if value.Code == "" {

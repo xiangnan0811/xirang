@@ -1748,9 +1748,7 @@ func TestContentSourceReconstructsManagedRclonePortableRuntime(t *testing.T) {
 			EntryCount: commit.ManifestEntryCount, LogicalBytes: commit.LogicalBytes, FidelityEvidenceDigest: commit.FidelityEvidenceDigest,
 		},
 	}
-	if err := execution.Abandon(backupasset.ErrPublicationSessionAbandoned); err != nil {
-		t.Fatal(err)
-	}
+	deferStoppedRcloneTestPublication(t, execution)
 	if err := fixture.db.Model(&model.RecoveryPointLease{}).
 		Where("recovery_point_id = ? AND status = ?", attempt.RecoveryPointID, backupasset.LeaseActive).
 		Updates(map[string]any{"status": backupasset.LeaseExpired, "lease_expires_at": fixture.now.Add(-time.Second)}).Error; err != nil {

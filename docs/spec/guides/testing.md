@@ -18,7 +18,7 @@
 或 `account-recovery.spec.ts`。真实验收使用：
 
 ```bash
-env -u NODE_ENV npx playwright test --config=playwright.real-backend.config.ts --project=chromium
+env -u NODE_ENV npm run e2e:evidence -- --config=playwright.real-backend.config.ts
 ```
 
 该入口先完成密码登录 smoke，再执行生命周期及配置名称关联场景，自动启动隔离
@@ -38,12 +38,21 @@ known_hosts、SQLite 与 cron 产物均位于本次唯一 `.tmp/agent/lifecycle-
 运行实例。真实 SSH 的父级关闭场景必须先重新准入并证明 shell 仍连接，再关闭弹窗，
 不能用已退出或已断开的 socket 代替活动连接清理证据。
 
+该持续入口执行配置中全部已声明项目及依赖：chromium-smoke、Chromium 生命周期及
+Firefox/WebKit 下载项目。默认 mock 三浏览器同样通过 `npm run e2e:evidence --
+--config=playwright.config.ts` 执行。原生 list 与执行事件绑定相同候选、配置和选择，
+分别记录 collected、selected、not-selected、首次 pass/fail/timeout/skip/interrupted/missing、
+retry 和最终结果。缺事件、setup 失败、首次失败后重试成功均不能作为通过。
+证据模式仅使用安全 reporter，记录稳定 test/project 身份、retry、status/expectedStatus
+和完成信息；不输出原始错误或 annotations。每次独占 `.tmp/agent/e2e-*`，失败也保留 summary。
+list 是库存，不能代替执行。
+
 ### 离线账户恢复
 
 账户恢复使用独立入口，不复用运行中的后端：
 
 ```bash
-env -u NODE_ENV npx playwright test --config=playwright.account-recovery.config.ts --project=chromium
+env -u NODE_ENV -u DEBUG -u PWDEBUG npm run e2e:evidence -- --config=playwright.account-recovery.config.ts --project=chromium
 ```
 
 夹具编译 server 与 recover-account，以随机 loopback 端口和独占
@@ -61,6 +70,25 @@ runner 的目录，不使用共享 `web/test-results`。成功退出清理自有
 运行目录。强制杀死进程可能留下本次目录，须确认无活动使用者后再按所有权清理。
 事务、迁移及 race 回归另用独占 `TEST_POSTGRES_DSN` 验证真实 PostgreSQL，
 该浏览器 SQLite 场景不替代双引擎证据。
+
+CI 账户恢复使用独立无条件 job、Node20/Go/Python3/Chromium 和零重试。RecoveryReporter
+仅增加结构化计数、允许的阶段、HTTP 状态及脱敏源码位置；不使用通用 JSON reporter、
+原始错误/annotations、请求、DOM、trace 或附件。安全执行汇总位于 fixture 清理范围外，
+成功或失败均保留；已有捕获时遮盖秘密的失败截图不混入通用执行事件。
+
+## 隔离 cron 与真实网关
+
+`bash scripts/cron-backup-isolated.integration.test.sh` 是本地和 CI 共用入口，不接受业务
+DSN。每次使用随机独占 Docker network、PG18 容器及保留的 Go1.27.3 Alpine 工具镜像；
+PG 数据为专用 tmpfs，不发布数据库宿主端口、不挂持久业务卷或 Docker socket。
+客户端与服务端主版本核对后运行原完整 SQLite/PG cron roundtrip，恢复已知内容并核对
+私有状态、回执与失败后的成功回执保留；源码只读，构建 scratch 私有可执行。
+成功、失败和中断均只清理本次资源，清理失败必须非零。直接调用 runner 不证明
+supercronic 时钟调度、All-in-One 非 root 启动或告警投递。
+
+原生 amd64/arm64 Docker CI 在静态 checker 和 mutation 自测外实际执行
+`scripts/check-asset-content-nginx-runtime.sh`，使用 retained lock。合成 upstream 只证明
+gateway 行为，不证明 Broker 授权或生产部署；清理失败不能输出成功结论。
 
 ## 候选和环境
 

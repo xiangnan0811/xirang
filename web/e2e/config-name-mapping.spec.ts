@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
+import { text as streamText } from "node:stream/consumers";
 import { pathToFileURL } from "node:url";
 import { expect, test, type APIRequestContext, type APIResponse, type Page } from "@playwright/test";
 import { e2eAdminPassword, freshAuthenticatorCode, loginAs, submitFreshProof } from "./real-backend-session";
@@ -802,9 +803,7 @@ async function downloadConfig(page: Page, secret: string, stepUps: { count: numb
     await submitFreshProof(page, secret, stepUps);
   }
   const download = await downloadPromise;
-  const filePath = await download.path();
-  if (!filePath) throw new Error("config download was not captured");
-  return readFileSync(filePath, "utf8");
+  return streamText(await download.createReadStream());
 }
 
 async function importDownload(

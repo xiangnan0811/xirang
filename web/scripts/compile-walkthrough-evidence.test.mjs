@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SCENARIOS } from "../e2e/walkthrough/scenarios.mjs";
-import { compileEvidence, compileRun } from "./compile-walkthrough-evidence.mjs";
+import { SURFACE_SCENARIOS } from "../e2e/surface-states/scenarios.mjs";
+import { compileEvidence, compileRun, compileSurfaceRun } from "./compile-walkthrough-evidence.mjs";
 import { captureCandidate, lockfileSummary } from "./walkthrough-candidate.mjs";
 import { reserveRunDirectory } from "./run-walkthrough.mjs";
 import { publishEvidence, rememberDraft } from "../e2e/walkthrough/helpers.ts";
@@ -161,11 +162,311 @@ async function expectCompileFailure(runDirectory) {
   }
 }
 
+const SURFACE_LABELS = {
+  docker_state: { loading_rows: ["loading", "rows"], empty: ["empty"], partial_rows: ["partial-rows"], partial_empty: ["partial-empty"], error: ["error"], long_values: ["long-values"] },
+  history_state: { paginated: ["loading", "page-1", "page-2", "detail"], empty: ["empty"], error_retry: ["error", "recovered"] },
+};
+const SURFACE_LATE_PREFIXES = {
+  docker_isolation: { late_close: ["stale"], node_switch: ["stale"], token_aba: ["alphaLate", "bravoLate"] },
+  history_isolation: { late_page_close: ["stalePage"], task_switch: ["staleTask"], language_switch: ["staleLanguage"], token_aba: ["alphaLate", "bravoLate"], late_retry: ["staleRetry"] },
+};
+
+function surfaceFixture(runId, scenario) {
+  const labels = scenario.category === "docker_role"
+    ? [scenario.role === "viewer" ? "viewer-nodes" : `${scenario.role}-rows`]
+    : SURFACE_LABELS[scenario.category]?.[scenario.scenario] ?? [];
+  const observations = [];
+  if (scenario.viewport.width === 1440 && scenario.category === "docker_state" && scenario.scenario === "loading_rows") {
+    observations.push({ name: "nodesList.menuFocusReturned", value: true });
+  }
+  if (scenario.viewport.width === 1440 && scenario.category === "history_state" && scenario.scenario === "paginated") {
+    observations.push({ name: "tasksList.historyFocusReturned", value: true });
+  }
+  const exchanges = [];
+  const authMeCalls = [];
+  const exchange = (kind, search = "", identity = `surface-${scenario.role}`) => ({
+    label: `${kind}-fixture`, kind, search, identity,
+    pathname: kind === "docker" ? "/api/v1/nodes/1/docker-volumes" : "/api/v1/tasks/1/runs",
+    superseded: false, replied: "fulfilled", transport: "finished", failure: null, bodyConsumed: "yes",
+  });
+  if (scenario.category === "docker_state" || (scenario.category === "docker_role" && scenario.role !== "viewer")) exchanges.push(exchange("docker"));
+  if (scenario.category === "history_state") {
+    exchanges.push(exchange("runs", "page=1&page_size=10"));
+    if (scenario.scenario === "paginated") exchanges.push(exchange("runs", "page=2&page_size=10"));
+  }
+  if (scenario.category === "docker_role") {
+    authMeCalls.push({ identity: `surface-${scenario.role}` });
+    observations.push({ name: "session.role", value: scenario.role }, { name: "authMe.role", value: scenario.role });
+    if (scenario.role === "viewer") observations.push({ name: "fileBrowser.entries", value: 0 });
+  }
+  for (const prefix of SURFACE_LATE_PREFIXES[scenario.category]?.[scenario.scenario] ?? []) {
+    exchanges.push(exchange(scenario.category === "docker_isolation" ? "docker" : "runs"));
+    observations.push(
+      { name: `${prefix}.classification`, value: "delivered" },
+      { name: `${prefix}.transport`, value: "finished" },
+      { name: `${prefix}.replied`, value: "fulfilled" },
+      { name: `${prefix}.bodyConsumed`, value: "yes" },
+      { name: `${prefix}.identity`, value: `surface-${scenario.role}` },
+      { name: `${prefix}.failure`, value: null },
+    );
+  }
+  return {
+    schemaVersion: 1, suite: "surface-states", runId, scenario,
+    attempt: { testId: `test-${scenario.id}`, retry: 0, workerIndex: 0 },
+    status: "passed", error: null,
+    captures: labels.map((label) => ({
+      label,
+      axe: { violations: [], passes: [{ id: "color-contrast", nodesCount: 1 }], incomplete: [], colorContrastExecuted: true },
+      contrast: [{ source: "surface", target: ["#fixture"], text: "fixture", foreground: "rgb(0, 0, 0)", background: "rgb(255, 255, 255)", fontSizePx: 16, fontWeight: 400, largeText: false, ratio: 21, required: 4.5, outcome: "pass", reason: null }],
+      overflow: FIXTURE_OVERFLOW,
+    })),
+    observations, exchanges, authMeCalls,
+    telemetry: { consoleErrors: [], pageErrors: [], requestFailures: [], unexpectedHttpErrors: [], unknownRequests: [] },
+    expectedHttpErrors: [], testedAt: "2026-10-04T00:00:00.000Z",
+  };
+}
+
+function writeSurfaceRun(records, runId) {
+  const runDirectory = makeScratchDirectory("surface-evidence-");
+  const candidate = captureCandidate(PROJECT_ROOT);
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: PROJECT_ROOT, encoding: "utf8" }).trim();
+  const successful = { code: 0, signal: null };
+  fs.writeFileSync(path.join(runDirectory, "summary.json"), JSON.stringify({
+    schemaVersion: 1, runId, config: "playwright.surface-states.config.ts", projects: [], head,
+    startedAt: "2026-10-04T00:00:00.000Z", endedAt: "2026-10-04T00:01:00.000Z",
+    candidateBefore: candidate, candidateAfter: candidate, invalidCandidate: false,
+    playwright: { collectedList: successful, run: successful }, exitCode: 0,
+  }));
+  const tests = SURFACE_SCENARIOS.map((scenario) => ({ id: `test-${scenario.id}`, project: "chromium", file: "e2e/surface-states/surface-states.browser.ts", title: [scenario.id] }));
+  const begin = (list) => ({ type: "begin", schemaVersion: 1, config: "playwright.surface-states.config.ts", list, playwright: "fixture", projects: [{ name: "chromium", retries: 0 }], tests });
+  const writeEvents = (name, events) => fs.writeFileSync(path.join(runDirectory, name), `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+  writeEvents("collected.jsonl", [begin(true), { type: "end", status: "passed" }]);
+  writeEvents("run.jsonl", [begin(false), ...tests.flatMap(({ id }) => [
+    { type: "testBegin", id, retry: 0 },
+    { type: "testEnd", id, retry: 0, status: "passed", expectedStatus: "passed" },
+  ]), { type: "end", status: "passed" }]);
+  records.forEach((record, index) => {
+    const directory = path.join(runDirectory, "output", String(index).padStart(4, "0"));
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "evidence.json"), JSON.stringify(record));
+  });
+  return { runDirectory, writeEvents, begin, tests };
+}
+
+async function expectSurfaceFailure(runDirectory) {
+  try {
+    await compileSurfaceRun(runDirectory);
+    throw new Error("compileSurfaceRun unexpectedly accepted the fixture");
+  } catch (error) {
+    if (!error?.summary) throw error;
+    return error.summary;
+  }
+}
+
 afterEach(() => {
   for (const directory of scratchDirectories) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
   scratchDirectories.clear();
+});
+
+describe("surface evidence compilation", () => {
+  it("binds all 94 scenarios to the candidate, execution events and root summary", async () => {
+    const runId = randomUUID();
+    const { runDirectory } = writeSurfaceRun(SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario)), runId);
+    const summary = await compileSurfaceRun(runDirectory);
+    expect(summary.valid).toBe(true);
+    expect(summary.coverage).toMatchObject({ declared: 94, validEvidence: 94, missingScenarioIds: [], categoryCounts: {
+      docker_state: 48, docker_role: 6, docker_isolation: 6, history_state: 24, history_isolation: 10,
+    } });
+    expect(summary.first.passed).toBe(94);
+    expect(summary.lateResponses).toHaveLength(20);
+    expect(JSON.parse(fs.readFileSync(path.join(runDirectory, "execution-summary.json"), "utf8"))).toEqual(summary);
+  });
+
+  it("retains every incomplete location and reports unmeasurable contrast as unknown", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const capture = records[0].captures[0];
+    const nodes = Array.from({ length: 4 }, (_, index) => ({
+      target: [`#incomplete-${index}`], failureSummary: "background gradient", reasons: [{ message: "background gradient" }],
+    }));
+    capture.axe.incomplete.push({ id: "color-contrast", nodesCount: nodes.length, nodes });
+    for (const node of nodes) capture.contrast.push({
+      source: "axe-incomplete", target: node.target, text: "fixture", foreground: null, background: null,
+      fontSizePx: null, fontWeight: null, largeText: null, ratio: null, required: null,
+      outcome: "unknown", reason: "background-image",
+    });
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await compileSurfaceRun(runDirectory);
+    expect(summary.contrast.incomplete).toHaveLength(4);
+    expect(summary.contrast.unresolved.map((entry) => entry.target)).toEqual(nodes.map((node) => node.target));
+    expect(summary.contrast.outcomes.unknown).toBe(4);
+  });
+
+  it.each(["missing", "fake-pass", "truncated"])("rejects %s supplementary contrast evidence", async (kind) => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const capture = records[0].captures[0];
+    if (kind === "missing") {
+      capture.axe.incomplete.push({ id: "color-contrast", nodesCount: 1, nodes: [{ target: ["#missing"], failureSummary: "unknown background", reasons: [] }] });
+    } else if (kind === "truncated") {
+      capture.axe.incomplete.push({ id: "color-contrast", nodesCount: 4, nodes: [0, 1, 2].map((index) => ({ target: [`#truncated-${index}`], failureSummary: "unknown background", reasons: [] })) });
+    } else {
+      capture.contrast[0].ratio = 2;
+    }
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.validationErrors).toHaveLength(1);
+    expect(summary.coverage.missingScenarioIds).toContain(records[0].scenario.id);
+  });
+
+  it("fails mixed passing and failing measured text instead of averaging it", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const capture = records[0].captures[0];
+    capture.contrast.push({ ...capture.contrast[0], target: ["#failing"], ratio: 2.8, outcome: "fail" });
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.contrast.outcomes.fail).toBe(1);
+    expect(summary.failures).toEqual(expect.arrayContaining([expect.objectContaining({ reasons: expect.arrayContaining(["contrast"]) })]));
+  });
+
+  it("keeps multiple text measurements under one incomplete target", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const capture = records[0].captures[0];
+    capture.axe.incomplete.push({ id: "color-contrast", nodesCount: 1, nodes: [{ target: ["#container"], failureSummary: "gradient", reasons: [] }] });
+    capture.contrast.push(
+      { ...capture.contrast[0], source: "axe-incomplete", target: ["#container"], measuredTarget: "#first" },
+      { ...capture.contrast[0], source: "axe-incomplete", target: ["#container"], measuredTarget: "#second", ratio: 2, outcome: "fail" },
+    );
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.validationErrors).toEqual([]);
+    expect(summary.contrast.outcomes.fail).toBe(1);
+    expect(summary.failures).toEqual(expect.arrayContaining([expect.objectContaining({ reasons: expect.arrayContaining(["contrast"]) })]));
+  });
+
+  it("does not hide unexpected console or request telemetry behind a passing event", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    records[0].telemetry.consoleErrors.push({ text: "fixture console error" });
+    records[0].telemetry.unknownRequests.push({ pathname: "/api/v1/unexpected", method: "GET" });
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.failures).toEqual(expect.arrayContaining([expect.objectContaining({ reasons: expect.arrayContaining(["consoleErrors", "unknownRequests"]) })]));
+  });
+
+  it("rejects an unproven stale-response observation", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const record = records.find((entry) => entry.scenario.category === "docker_isolation");
+    record.observations.find((entry) => entry.name === "stale.classification").value = "unproven";
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.validationErrors).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("unproven late-response") })]));
+  });
+
+  it("does not treat a network completion as proof the application read the response", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const record = records.find((entry) => entry.scenario.category === "docker_isolation");
+    record.observations.find((entry) => entry.name === "stale.bodyConsumed").value = "not-checked";
+    record.exchanges[0].bodyConsumed = "not-checked";
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.validationErrors).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("unproven late-response") })]));
+  });
+
+  it("records an abort separately from a consumed delivered response", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const record = records.find((entry) => entry.scenario.category === "docker_isolation");
+    const changes = { classification: "aborted", transport: "failed", replied: "rejected-by-browser", bodyConsumed: "not-checked", failure: "net::ERR_ABORTED" };
+    for (const [key, value] of Object.entries(changes)) record.observations.find((entry) => entry.name === `stale.${key}`).value = value;
+    Object.assign(record.exchanges[0], { transport: changes.transport, replied: changes.replied, bodyConsumed: changes.bodyConsumed, failure: changes.failure });
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await compileSurfaceRun(runDirectory);
+    expect(summary.lateResponses).toEqual(expect.arrayContaining([expect.objectContaining({ classification: "aborted", bodyConsumed: "not-checked" })]));
+    expect(summary.lateResponses).toEqual(expect.arrayContaining([expect.objectContaining({ classification: "delivered", bodyConsumed: "yes" })]));
+  });
+
+  it("rejects a session role that disagrees with the authenticated identity", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const record = records.find((entry) => entry.scenario.category === "docker_role" && entry.scenario.role === "operator");
+    record.authMeCalls[0].identity = "surface-viewer";
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.validationErrors).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("session and role") })]));
+  });
+
+  it("requires a real second-page history request", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const record = records.find((entry) => entry.scenario.category === "history_state" && entry.scenario.scenario === "paginated");
+    record.exchanges = record.exchanges.filter((entry) => !entry.search.includes("page=2"));
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.validationErrors).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("history pagination") })]));
+  });
+
+  it.each([
+    ["docker_state", "loading_rows", "nodesList.menuFocusReturned"],
+    ["history_state", "paginated", "tasksList.historyFocusReturned"],
+  ])("requires desktop list focus return for %s", async (category, name, observation) => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const record = records.find((entry) => entry.scenario.category === category && entry.scenario.scenario === name && entry.scenario.viewport.width === 1440);
+    record.observations = record.observations.filter((entry) => entry.name !== observation);
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.validationErrors).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("list") })]));
+  });
+
+  it("rejects missing and duplicate attempt files and preserves failure summary", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const missing = records.pop();
+    records.push(structuredClone(records[0]));
+    const { runDirectory } = writeSurfaceRun(records, runId);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.coverage.missingScenarioIds).toContain(missing.scenario.id);
+    expect(summary.validationErrors).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("duplicates") })]));
+    expect(JSON.parse(fs.readFileSync(path.join(runDirectory, "execution-summary.json"), "utf8")).valid).toBe(false);
+  });
+
+  it("rejects a first failure followed by an unapproved successful retry", async () => {
+    const runId = randomUUID();
+    const records = SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario));
+    const retried = structuredClone(records[0]);
+    records[0].status = "failed";
+    records[0].error = "fixture failure";
+    retried.attempt.retry = 1;
+    records.push(retried);
+    const { runDirectory, writeEvents, begin, tests } = writeSurfaceRun(records, runId);
+    writeEvents("run.jsonl", [begin(false), ...tests.flatMap(({ id }, index) => [
+      { type: "testBegin", id, retry: 0 },
+      { type: "testEnd", id, retry: 0, status: index === 0 ? "failed" : "passed", expectedStatus: "passed" },
+      ...(index === 0 ? [{ type: "testBegin", id, retry: 1 }, { type: "testEnd", id, retry: 1, status: "passed", expectedStatus: "passed" }] : []),
+    ]), { type: "end", status: "passed" }]);
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.first.failed).toBe(1);
+    expect(summary.issues).toEqual(expect.arrayContaining([expect.stringContaining("zero-retry policy")]));
+  });
+
+  it("rejects results without begin events and a changed candidate", async () => {
+    const runId = randomUUID();
+    const { runDirectory, writeEvents, begin, tests } = writeSurfaceRun(SURFACE_SCENARIOS.map((scenario) => surfaceFixture(runId, scenario)), runId);
+    writeEvents("run.jsonl", [begin(false), ...tests.map(({ id }) => ({ type: "testEnd", id, retry: 0, status: "passed", expectedStatus: "passed" })), { type: "end", status: "passed" }]);
+    const manifestPath = path.join(runDirectory, "summary.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.head = "0".repeat(40);
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const summary = await expectSurfaceFailure(runDirectory);
+    expect(summary.issues).toEqual(expect.arrayContaining([expect.stringContaining("candidate no longer matches"), expect.stringContaining("no unique begin")]));
+  });
 });
 
 describe("walkthrough evidence attempt integrity", () => {
@@ -354,6 +655,30 @@ describe("walkthrough evidence measurements", () => {
     expect(error.summary.coverage.missingScenarioIds).toContain(missingScenario.id);
   });
 
+  it("rejects new walkthrough audits missing an incomplete-node measurement", async () => {
+    const runId = randomUUID();
+    const records = makeBaseRecords(runId);
+    records[0].axe = {
+      violations: [], passes: [], colorContrastExecuted: true,
+      incomplete: [{ id: "color-contrast", nodesCount: 1, nodes: [{ target: ["#text"], failureSummary: "background image", reasons: [] }] }],
+    };
+    records[0].contrast = [];
+    const { runDirectory } = writeRun(records);
+    const error = await expectCompileFailure(runDirectory);
+    expect(error.summary.validationErrors).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("missing or extra axe incomplete") })]));
+    expect(error.summary.coverage.missingScenarioIds).toContain(records[0].scenario.id);
+  });
+
+  it("fails a walkthrough attempt when one measured text result fails", async () => {
+    const runId = randomUUID();
+    const records = makeBaseRecords(runId);
+    records[0].axe = { violations: [], passes: [], incomplete: [], colorContrastExecuted: true };
+    records[0].contrast = [{ source: "surface", target: ["#text"], text: "fixture", foreground: "rgb(0,0,0)", background: "rgb(20,20,20)", fontSizePx: 16, fontWeight: 400, largeText: false, ratio: 1.2, required: 4.5, outcome: "fail", reason: null }];
+    const { runDirectory } = writeRun(records);
+    const error = await expectCompileFailure(runDirectory);
+    expect(error.summary.failures).toEqual(expect.arrayContaining([expect.objectContaining({ reasons: expect.arrayContaining(["contrast"]) })]));
+  });
+
   it("retains historical recount behavior for records without run measurements", () => {
     const directory = makeScratchDirectory("historical-evidence-");
     const inputFile = path.join(directory, "walkthrough_evidence.json");
@@ -372,6 +697,8 @@ describe("walkthrough evidence measurements", () => {
     expect(summary.categories.routes.missingLanguage).toBe(1);
     expect(summary.missingAxeObservations).toBe(1);
     expect(summary.missingOverflowObservations).toBe(1);
+    expect(summary.contrast.missing).toBe(1);
+    expect(summary.contrast.outcomes.pass).toBe(0);
   });
 });
 

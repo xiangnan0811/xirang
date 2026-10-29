@@ -6,7 +6,9 @@ export default defineConfig({
   workers: 4,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? "github" : "list",
+  reporter: process.env.XIRANG_E2E_EVIDENCE_FILE
+    ? [["./e2e/run-evidence-reporter.ts"]]
+    : [[process.env.CI ? "github" : "list"]],
   expect: { timeout: 20_000 },
   use: {
     baseURL: "http://127.0.0.1:4177",

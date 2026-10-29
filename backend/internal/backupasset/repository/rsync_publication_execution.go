@@ -257,11 +257,11 @@ func importedRsyncBaselineTaskRunOutcome(result provider.ProviderExecutionResult
 	if errors.Is(runErr, context.DeadlineExceeded) {
 		return "failed", string(backupasset.FailureProviderTimeout)
 	}
-	if result.Completion == backupasset.CompletionKnownNonzero || result.ExitCode != 0 {
-		return "failed", string(backupasset.FailureProviderNonzeroExit)
-	}
 	if result.Completion == backupasset.CompletionOutcomeUnknown {
 		return "failed", string(backupasset.FailureProviderOutcomeUnknown)
+	}
+	if result.Completion == backupasset.CompletionKnownNonzero || result.ExitCode > 0 {
+		return "failed", string(backupasset.FailureProviderNonzeroExit)
 	}
 	return "failed", string(backupasset.FailurePublicationPreconditionMissing)
 }

@@ -30,7 +30,15 @@ func newSSHCommandTransportWithConfig(factory remoteCommandRunnerFactory, config
 	return transport, nil
 }
 
-func (transport *SSHCommandTransport) openConfiguredExecution(ctx context.Context, invocation CommandInvocation, limits OperationLimits, maxBytes int64) (*rcloneConfigExecution, error) {
+func (transport *SSHCommandTransport) openConfiguredExecution(ctx context.Context, invocation CommandInvocation, limits OperationLimits, maxBytes int64) (result *rcloneConfigExecution, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			var fact *rcloneMutationCommandError
+			if !errors.As(resultErr, &fact) {
+				resultErr = rcloneCommandNotAttempted(resultErr)
+			}
+		}
+	}()
 	// Validate every caller-controlled operand before acquiring or staging anything.
 	specification, access, purpose, err := transport.commandSpec(invocation, limits, maxBytes)
 	if err != nil {
@@ -88,7 +96,9 @@ func (transport *SSHCommandTransport) openConfiguredExecution(ctx context.Contex
 	}
 	execution, err := executionRunner.OpenExecution(ctx, specification)
 	if err != nil {
-		owner.startUncertain = errors.Is(err, sshutil.ErrCommandStart)
+		// Only the runner's explicit pre-Start marker permits cleanup and
+		// classification as unattempted; all other open failures are unknown.
+		owner.startUncertain = !errors.Is(err, sshutil.ErrCommandNotStarted)
 		return fail(err)
 	}
 	// A nil stream after a successful OpenExecution has no trustworthy start state.
@@ -170,6 +180,14 @@ func (execution *rcloneConfigExecution) finish(cancel, prefix bool) {
 			}
 		}
 		execution.err = configSafeError(errors.Join(execution.err, execution.ctx.Err()))
+		if execution.err != nil {
+			exit := 0
+			if execution.completion.RemoteExited && execution.completion.ExitCodeKnown && execution.completion.ExitCode > 0 {
+				exit = execution.completion.ExitCode
+			}
+			execution.err = &rcloneMutationCommandError{attempted: execution.startUncertain,
+				quiesced: !execution.startUncertain || execution.completion.RemoteExited, positiveExit: exit, cause: execution.err}
+		}
 	})
 }
 
@@ -198,11 +216,16 @@ func (transport *SSHCommandTransport) runConfigured(ctx context.Context, invocat
 	output, readErr := io.ReadAll(execution)
 	completion, joinErr := execution.Join()
 	err = errors.Join(readErr, joinErr)
-	if err == nil && (!completion.ExitCodeKnown || completion.ExitCode != 0) {
+	if err == nil && (!completion.ExitCodeKnown || completion.ExitCode != 0 || !execution.completion.RemoteExited) {
 		err = sshutil.ErrCommandFailed
 	}
 	if err != nil {
-		return CommandOutput{}, configSafeError(err)
+		exit := 0
+		if execution.completion.RemoteExited && completion.ExitCodeKnown && completion.ExitCode > 0 {
+			exit = completion.ExitCode
+		}
+		return CommandOutput{}, &rcloneMutationCommandError{attempted: true,
+			quiesced: execution.completion.RemoteExited, positiveExit: exit, cause: configSafeError(err)}
 	}
 	return CommandOutput{Stdout: output, Stderr: completion.Stderr}, nil
 }
