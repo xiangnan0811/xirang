@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.7](https://github.com/xiangnan0811/xirang/compare/v0.73.6...v0.73.7) (2026-10-29)
+
+
+### 🐛 Bug Fixes
+
+* preserve Rclone writer safety and complete acceptance gates ([#659](https://github.com/xiangnan0811/xirang/issues/659)) ([3dbd336](https://github.com/xiangnan0811/xirang/commit/3dbd336ef1c80756496c73b87eeed90a3fb6a4c5))
+
 ### Rclone 发布结果与持久写入保护
 
 - 区分明确未尝试发布变更、真实非零退出、停止后的语义失败和未知结果；普通任务与导入 baseline 共用分类并保留原始 cause。未知 transport/SDK 或 commit 回读结果保留非终态并抑制自动重试，允许重试时创建全新运行、恢复点、attempt 和前缀。
@@ -15,13 +22,6 @@
 - e2e 与 Playwright 配置纳入严格类型门禁并保持 Node20 兼容；持续执行默认三浏览器、真实后端全部项目、独立账户恢复和原 464 场景 walkthrough。安全事件区分首次结果、重试、缺失和未选择，不能以 list 库存代替执行；共享汇编逻辑与 CLI 入口分离，避免循环导入使 walkthrough 执行后无法完成证据记录。AWS live 继续搁置，不作支持或生产部署声明。
 - 节点文件浏览与任务执行历史弹窗关闭后恢复到实际触发控件；Docker 卷表格限制在可命名、可聚焦的局部滚动区域，移动端长卷名和挂载路径可换行并用方向键浏览。完整及空 partial 结果的警告使用现有可读警告文字颜色，任务日志时间戳移除降低可读性的透明度。更新并重新加载前端后生效，无新增 API、运行时配置或 SQL 迁移；旧前端仍有原焦点、溢出及对比度问题。
 - 独立 Docker/history 状态矩阵保留加载、失败、空态、分页、身份变化和迟到响应证据；真实浏览器记录 axe 与 computed 对比度，未测量及无法判定项保持未知，不以零违规或截图宣称全站 WCAG 符合。
-
-## [0.73.7](https://github.com/xiangnan0811/xirang/compare/v0.73.6...v0.73.7) (2026-10-29)
-
-
-### 🐛 Bug Fixes
-
-* preserve Rclone writer safety and complete acceptance gates ([#659](https://github.com/xiangnan0811/xirang/issues/659)) ([3dbd336](https://github.com/xiangnan0811/xirang/commit/3dbd336ef1c80756496c73b87eeed90a3fb6a4c5))
 
 ## [0.73.6](https://github.com/xiangnan0811/xirang/compare/v0.73.5...v0.73.6) (2026-10-29)
 

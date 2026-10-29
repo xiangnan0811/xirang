@@ -138,7 +138,7 @@ bound config 改为执行节点私有可写配置后，普通 bound 读取也要
 Release PR 与最终 Release 正文须完整保留这些边界，真实本地 ticket/Serve 和受控 Native 验收
 不等同于 AWS live 认证或生产部署；内容 ticket 仍使用原默认时限。
 
-Rclone 发布结果保护的发行说明须完整保留[未知发布结果与升级保护](../admin/backup-recovery.md#未知发布结果与升级保护)：
+0.73.7 的 Rclone 发布结果保护发行说明须完整保留[未知发布结果与升级保护](../admin/backup-recovery.md#未知发布结果与升级保护)：
 历史 failed 受管点缺少正面停止事实可阻止启动，未知 writer 到期后仍持续保护且没有自动解锁；
 可选 JSON 字段虽无 SQL 列迁移，写入后旧 binary 严格解码不兼容。升级前停止旧 owners，
 禁止新旧 writer 混跑；不得把删除事实或恢复 DB 快照写成 writer 已停止。Release PR 与公开
