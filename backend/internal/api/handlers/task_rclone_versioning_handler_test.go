@@ -23,15 +23,15 @@ func TestTaskRcloneVersioningHandlerBindsAllEightClosedRequestsWithoutEchoingSec
 	gin.SetMode(gin.TestMode)
 	service := &taskRcloneVersioningServiceStub{
 		portableSetupResult: backupasset.RcloneBindingSetupResult{
-			SetupID: strings.Repeat("a", 32), ExpiresAt: time.Date(2026, 7, 17, 1, 0, 0, 0, time.UTC),
+			SetupID: strings.Repeat("a", 32), ExpiresAt: time.Date(2026, 7, 17, 1, 0, 0, 0, time.UTC), BaseBindingRevision: "0",
 		},
 		nativeSetupResult: backupasset.RcloneBindingSetupResult{
-			SetupID: strings.Repeat("b", 32), ExpiresAt: time.Date(2026, 7, 17, 1, 0, 0, 0, time.UTC),
+			SetupID: strings.Repeat("b", 32), ExpiresAt: time.Date(2026, 7, 17, 1, 0, 0, 0, time.UTC), BaseBindingRevision: "0",
 			ExternalID: "xirang-" + strings.Repeat("c", 32),
 		},
 		summaryResult: validRcloneHandlerSummary(),
 		preflightResult: backupasset.RcloneVersioningPreflightResult{
-			PreflightID: strings.Repeat("d", 32), ExpiresAt: time.Date(2026, 7, 17, 1, 0, 0, 0, time.UTC),
+			Purpose: backupasset.RclonePreflightPurposeActivation, PreflightID: strings.Repeat("d", 32), ExpiresAt: time.Date(2026, 7, 17, 1, 0, 0, 0, time.UTC),
 			Summary: validRcloneHandlerSummary(),
 		},
 		activateResult: backupasset.RcloneVersioningActivationResult{
@@ -55,17 +55,22 @@ func TestTaskRcloneVersioningHandlerBindsAllEightClosedRequestsWithoutEchoingSec
 		return recorder
 	}
 
-	invoke(http.MethodPost, "/api/v1/tasks/42/rclone-versioning/portable-binding-setups",
+	portableSetup := invoke(http.MethodPost, "/api/v1/tasks/42/rclone-versioning/portable-binding-setups",
 		`{"expected_task_revision":"9007199254740993"}`, handler.CreatePortableBindingSetup)
-	if service.portableSetupRequest.TaskID != 42 || service.portableSetupRequest.ExpectedTaskRevision != 9007199254740993 {
-		t.Fatalf("portable setup request=%+v", service.portableSetupRequest)
+	var portableSetupData struct {
+		Data backupasset.RcloneBindingSetupResult `json:"data"`
+	}
+	if err := json.Unmarshal(portableSetup.Body.Bytes(), &portableSetupData); err != nil ||
+		portableSetupData.Data.Validate(false) != nil || portableSetupData.Data.BaseBindingRevision != "0" ||
+		service.portableSetupRequest.TaskID != 42 || service.portableSetupRequest.ExpectedTaskRevision != 9007199254740993 {
+		t.Fatalf("portable setup request=%+v response=%s", service.portableSetupRequest, portableSetup.Body.String())
 	}
 
 	portableSecret := "FAKE_RCLONE_PORTABLE_BOUND_CONFIG_FOR_TEST_ONLY"
 	portable := invoke(http.MethodPut, "/api/v1/tasks/42/rclone-versioning/portable-binding",
-		`{"expected_task_revision":"9007199254740993","expected_binding_revision":"2","setup_id":"`+strings.Repeat("a", 32)+`","target_remote":"archive","managed_root_locator":"archive:managed/v1","bound_config":"`+portableSecret+`"}`,
+		`{"expected_task_revision":"9007199254740993","expected_binding_revision":"`+portableSetupData.Data.BaseBindingRevision+`","setup_id":"`+portableSetupData.Data.SetupID+`","target_remote":"archive","managed_root_locator":"archive:managed/v1","bound_config":"`+portableSecret+`"}`,
 		handler.SetPortableBinding)
-	if service.portableBindingRequest.TaskID != 42 || service.portableBindingRequest.ExpectedBindingRevision != 2 ||
+	if service.portableBindingRequest.TaskID != 42 || service.portableBindingRequest.ExpectedBindingRevision != 0 ||
 		service.portableBindingRequest.TargetRemote != "archive" || service.portableBindingRequest.ManagedRootLocator != "archive:managed/v1" ||
 		service.portableBindingRequest.BoundConfig != portableSecret || strings.Contains(portable.Body.String(), portableSecret) ||
 		strings.Contains(portable.Body.String(), "archive:managed/v1") {
@@ -74,7 +79,12 @@ func TestTaskRcloneVersioningHandlerBindsAllEightClosedRequestsWithoutEchoingSec
 
 	nativeSetup := invoke(http.MethodPost, "/api/v1/tasks/42/rclone-versioning/native-binding-setups",
 		`{"expected_task_revision":"9007199254740993"}`, handler.CreateNativeBindingSetup)
-	if service.nativeSetupRequest.TaskID != 42 || !strings.Contains(nativeSetup.Body.String(), service.nativeSetupResult.ExternalID) {
+	var nativeSetupData struct {
+		Data backupasset.RcloneBindingSetupResult `json:"data"`
+	}
+	if err := json.Unmarshal(nativeSetup.Body.Bytes(), &nativeSetupData); err != nil ||
+		nativeSetupData.Data.Validate(true) != nil || nativeSetupData.Data.BaseBindingRevision != "0" ||
+		service.nativeSetupRequest.TaskID != 42 || nativeSetupData.Data.ExternalID != service.nativeSetupResult.ExternalID {
 		t.Fatalf("native setup request=%+v response=%s", service.nativeSetupRequest, nativeSetup.Body.String())
 	}
 
@@ -82,9 +92,9 @@ func TestTaskRcloneVersioningHandlerBindsAllEightClosedRequestsWithoutEchoingSec
 	secretKey := "FAKE_AWS_SECRET_ACCESS_KEY_FOR_TEST_ONLY"
 	keyARN := "arn:aws:kms:us-east-1:123456789012:key/FAKE-RCLONE-KMS-KEY-FOR-TEST-ONLY"
 	native := invoke(http.MethodPut, "/api/v1/tasks/42/rclone-versioning/native-binding",
-		`{"expected_task_revision":"9007199254740993","expected_binding_revision":"3","setup_id":"`+strings.Repeat("b", 32)+`","region":"us-east-1","bucket":"xirang-private-bucket","managed_prefix":"managed/v1/","role_arn":"arn:aws:iam::123456789012:role/xirang-rclone","bootstrap":{"mode":"static_sts_bootstrap","access_key_id":"`+accessKey+`","secret_access_key":"`+secretKey+`"},"encryption_profile":"sse_kms_cmk","kms_key_arn":"`+keyARN+`"}`,
+		`{"expected_task_revision":"9007199254740993","expected_binding_revision":`+nativeSetupData.Data.BaseBindingRevision+`,"setup_id":"`+nativeSetupData.Data.SetupID+`","region":"us-east-1","bucket":"xirang-private-bucket","managed_prefix":"managed/v1/","role_arn":"arn:aws:iam::123456789012:role/xirang-rclone","bootstrap":{"mode":"static_sts_bootstrap","access_key_id":"`+accessKey+`","secret_access_key":"`+secretKey+`"},"encryption_profile":"sse_kms_cmk","kms_key_arn":"`+keyARN+`"}`,
 		handler.SetNativeBinding)
-	if service.nativeBindingRequest.TaskID != 42 || service.nativeBindingRequest.ExpectedBindingRevision != 3 ||
+	if service.nativeBindingRequest.TaskID != 42 || service.nativeBindingRequest.ExpectedBindingRevision != 0 ||
 		service.nativeBindingRequest.Bootstrap.Mode != backupasset.RcloneBootstrapStaticSTS ||
 		service.nativeBindingRequest.Bootstrap.AccessKeyID != accessKey || service.nativeBindingRequest.Bootstrap.SecretAccessKey != secretKey ||
 		service.nativeBindingRequest.KMSKeyARN != keyARN {
@@ -118,6 +128,59 @@ func TestTaskRcloneVersioningHandlerBindsAllEightClosedRequestsWithoutEchoingSec
 		`{"expected_task_revision":"9007199254740993","expected_binding_revision":"5"}`, handler.PrepareRollback)
 	if service.rollbackPreparationRequest.TaskID != 42 || service.rollbackPreparationRequest.ExpectedBindingRevision != 5 {
 		t.Fatalf("rollback preparation request=%+v", service.rollbackPreparationRequest)
+	}
+}
+
+func TestTaskRcloneVersioningHandlerValidatesSetupBaseRevision(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name string
+		base string
+		want int
+	}{
+		{name: "zero", base: "0", want: http.StatusOK},
+		{name: "above javascript safe integer", base: "9007199254740993", want: http.StatusOK},
+		{name: "uint64 max", base: "18446744073709551615", want: http.StatusOK},
+		{name: "missing or empty", base: "", want: http.StatusInternalServerError},
+		{name: "negative", base: "-1", want: http.StatusInternalServerError},
+		{name: "leading zero", base: "01", want: http.StatusInternalServerError},
+		{name: "overflow", base: "18446744073709551616", want: http.StatusInternalServerError},
+	}
+	for _, native := range []bool{false, true} {
+		for _, test := range tests {
+			name := "portable"
+			if native {
+				name = "native"
+			}
+			t.Run(name+"/"+test.name, func(t *testing.T) {
+				result := backupasset.RcloneBindingSetupResult{
+					SetupID: strings.Repeat("a", 32), ExpiresAt: time.Date(2026, 7, 17, 1, 0, 0, 0, time.UTC),
+					BaseBindingRevision: test.base,
+				}
+				service := &taskRcloneVersioningServiceStub{portableSetupResult: result}
+				if native {
+					result.ExternalID = "FAKE_EXTERNAL_ID_FOR_TEST_ONLY"
+					service.nativeSetupResult = result
+				}
+				handler := NewTaskRcloneVersioningHandler(service)
+				recorder := httptest.NewRecorder()
+				ctx, _ := gin.CreateTestContext(recorder)
+				ctx.Params = gin.Params{{Key: "id", Value: "7"}}
+				ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/tasks/7/rclone-versioning/"+name+"-binding-setups", strings.NewReader(`{"expected_task_revision":"9"}`))
+				ctx.Request.Header.Set("Content-Type", "application/json")
+				if native {
+					handler.CreateNativeBindingSetup(ctx)
+				} else {
+					handler.CreatePortableBindingSetup(ctx)
+				}
+				if recorder.Code != test.want {
+					t.Fatalf("status=%d want=%d body=%s", recorder.Code, test.want, recorder.Body.String())
+				}
+				if test.want == http.StatusOK && !strings.Contains(recorder.Body.String(), `"base_binding_revision":"`+test.base+`"`) {
+					t.Fatalf("setup response lost its exact decimal string: %s", recorder.Body.String())
+				}
+			})
+		}
 	}
 }
 

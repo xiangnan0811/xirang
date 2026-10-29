@@ -565,7 +565,7 @@ func TestSearchTokenReplacementRekeysTagsBeforeTagAvailability(t *testing.T) {
 func TestStableDomainsAllowRewrapButRejectRotate(t *testing.T) {
 	ring, _ := newKeyringTestHarness(t)
 	ctx := context.Background()
-	for _, domain := range []KeyDomain{KeyDomainEntryIdentity, KeyDomainRecoveryCleanupOwnership} {
+	for _, domain := range []KeyDomain{KeyDomainEntryIdentity, KeyDomainRecoveryCleanupOwnership, KeyDomainRclonePreflightIdentity} {
 		before, err := ring.Ensure(ctx, domain)
 		if err != nil {
 			t.Fatalf("Ensure(%s): %v", domain, err)
@@ -798,6 +798,82 @@ func TestConcurrentEnsureCreatesOneActiveKeyPerDomain(t *testing.T) {
 	}
 	if activeCount != 1 {
 		t.Fatalf("active cursor key count=%d, want 1", activeCount)
+	}
+}
+
+func TestRclonePreflightIdentityKeyLifecycle(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	domain := KeyDomainRclonePreflightIdentity
+	before, err := ring.Ensure(ctx, domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidate := func(context.Context, *gorm.DB, RebuildableKeyTransition) error {
+		t.Fatal("stable key invoked rebuildable invalidation")
+		return nil
+	}
+	if _, err := ring.ReplaceRebuildable(ctx, domain, invalidate); !errors.Is(err, ErrKeyRotationProhibited) {
+		t.Fatalf("ReplaceRebuildable: %v", err)
+	}
+	if err := ring.MarkRebuildableLost(ctx, domain, before.Version, invalidate); !errors.Is(err, ErrKeyRotationProhibited) {
+		t.Fatalf("MarkRebuildableLost: %v", err)
+	}
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RCLONE_PREFLIGHT_NEW_KEK_FOR_TEST_ONLY")
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "FAKE_KEYRING_OLD_KEK_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	if _, err := ring.RewrapDomains(ctx, domain); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "")
+	secure.ResetForTesting()
+	after, err := NewKeyring(ring.db, ring.now).Ensure(ctx, domain)
+	if err != nil || before.ID != after.ID || before.Version != after.Version || !bytes.Equal(before.Key, after.Key) {
+		t.Fatalf("restart after rewrap changed stable identity: %v", err)
+	}
+	if err := ring.MarkLost(ctx, domain, before.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ring.Ensure(ctx, domain); !errors.Is(err, ErrKeyLost) {
+		t.Fatalf("lost key was regenerated: %v", err)
+	}
+}
+
+func TestRclonePreflightIdentityConcurrentEnsure(t *testing.T) {
+	ring, _ := newKeyringConcurrentTestHarness(t)
+	const workers = 12
+	results := make(chan DomainKeyMaterial, workers)
+	errorsCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			material, err := ring.Ensure(context.Background(), KeyDomainRclonePreflightIdentity)
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			results <- material
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errorsCh)
+	for err := range errorsCh {
+		t.Fatalf("concurrent Ensure: %v", err)
+	}
+	var first DomainKeyMaterial
+	for result := range results {
+		if first.ID == "" {
+			first = result
+		} else if result.ID != first.ID || result.Version != first.Version || !bytes.Equal(result.Key, first.Key) {
+			t.Fatal("concurrent Ensure returned different identity material")
+		}
+	}
+	var count int64
+	if err := ring.db.Model(&model.WrappedDomainKey{}).Where("domain = ? AND state = ?", KeyDomainRclonePreflightIdentity, DomainKeyActive).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("active key count=%d error=%v", count, err)
 	}
 }
 

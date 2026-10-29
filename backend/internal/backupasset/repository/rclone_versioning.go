@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -33,6 +36,7 @@ type rcloneVersioningSetupRecord struct {
 	kind                 rcloneBindingSetupKind
 	taskID               uint
 	expectedTaskRevision uint64
+	baseBindingRevision  uint64
 	externalID           string
 	expiresAt            time.Time
 }
@@ -60,6 +64,7 @@ type rcloneNativeBindingCandidate struct {
 
 type rcloneBindingCandidate struct {
 	kind                 rcloneBindingSetupKind
+	purpose              backupasset.RclonePreflightPurpose
 	taskID               uint
 	expectedTaskRevision uint64
 	bindingRevision      uint64
@@ -67,6 +72,11 @@ type rcloneBindingCandidate struct {
 	credentialRevision   uint64
 	setupID              string
 	expiresAt            time.Time
+	latestPreflightID    string
+	preflighting         bool
+	nativeObserved       bool
+	settling             *RcloneVersioningPreflightEvidence
+	settlingConfig       *backupasset.PublicationConfig
 	plan                 rcloneBindingWorkflowPlan
 	portable             *rclonePortableBindingCandidate
 	native               *rcloneNativeBindingCandidate
@@ -80,6 +90,12 @@ type rcloneBindingCandidateStore struct {
 
 type RclonePortablePreflightInput struct {
 	PreflightID            string
+	CandidateID            string
+	CandidateExpiresAt     time.Time
+	TaskRevision           uint64
+	ConfigRevision         uint64
+	CredentialRevision     uint64
+	CapabilityRevision     uint64
 	TaskID                 uint
 	NodeID                 uint
 	BindingRevision        uint64
@@ -97,6 +113,13 @@ type RclonePortablePreflightInput struct {
 
 type RcloneNativePreflightInput struct {
 	PreflightID            string
+	CandidateID            string
+	CandidateExpiresAt     time.Time
+	TaskRevision           uint64
+	ConfigRevision         uint64
+	CredentialRevision     uint64
+	CapabilityRevision     uint64
+	PublicationConfig      backupasset.PublicationConfig
 	TaskID                 uint
 	NodeID                 uint
 	BindingRevision        uint64
@@ -153,10 +176,11 @@ type RcloneVersioningPreflighter interface {
 }
 
 type rcloneVersioningPreflightRecord struct {
-	id        string
-	candidate rcloneBindingCandidate
-	evidence  RcloneVersioningPreflightEvidence
-	expiresAt time.Time
+	id                string
+	candidate         rcloneBindingCandidate
+	evidence          RcloneVersioningPreflightEvidence
+	expiresAt         time.Time
+	publicationConfig backupasset.PublicationConfig
 }
 
 type rcloneImportedBaselinePreparation struct {
@@ -219,28 +243,6 @@ func (store *rcloneVersioningPreflightStore) get(id string) (rcloneVersioningPre
 	store.purgeExpiredLocked(store.now().UTC())
 	record, ok := store.records[id]
 	return record, ok
-}
-
-func (store *rcloneVersioningPreflightStore) getForTask(taskID uint) (rcloneVersioningPreflightRecord, bool) {
-	if store == nil || taskID == 0 {
-		return rcloneVersioningPreflightRecord{}, false
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	store.purgeExpiredLocked(store.now().UTC())
-	var selected rcloneVersioningPreflightRecord
-	found := false
-	for _, record := range store.records {
-		if record.candidate.taskID != taskID {
-			continue
-		}
-		if !found || record.expiresAt.After(selected.expiresAt) ||
-			record.expiresAt.Equal(selected.expiresAt) && record.id < selected.id {
-			selected = record
-			found = true
-		}
-	}
-	return selected, found
 }
 
 func (store *rcloneVersioningPreflightStore) consume(id string, taskID uint, expectedTaskRevision uint64) (rcloneVersioningPreflightRecord, bool) {
@@ -318,7 +320,7 @@ func newRcloneVersioningSetupStore(now func() time.Time, ttl time.Duration) (*rc
 	return &rcloneVersioningSetupStore{now: now, ttl: ttl, records: make(map[string]rcloneVersioningSetupRecord)}, nil
 }
 
-func (store *rcloneVersioningSetupStore) create(request backupasset.RcloneBindingSetupRequest, kind rcloneBindingSetupKind) (backupasset.RcloneBindingSetupResult, error) {
+func (store *rcloneVersioningSetupStore) create(request backupasset.RcloneBindingSetupRequest, kind rcloneBindingSetupKind, baseBindingRevision uint64) (backupasset.RcloneBindingSetupResult, error) {
 	if store == nil || request.Validate() != nil || (kind != rcloneBindingSetupPortable && kind != rcloneBindingSetupNative) {
 		return backupasset.RcloneBindingSetupResult{}, fmt.Errorf("%w: invalid Rclone binding setup", backupasset.ErrInvalidState)
 	}
@@ -336,13 +338,15 @@ func (store *rcloneVersioningSetupStore) create(request backupasset.RcloneBindin
 	}
 	record := rcloneVersioningSetupRecord{
 		id: setupID, kind: kind, taskID: request.TaskID, expectedTaskRevision: request.ExpectedTaskRevision,
-		externalID: externalID, expiresAt: store.now().UTC().Add(store.ttl),
+		baseBindingRevision: baseBindingRevision, externalID: externalID, expiresAt: store.now().UTC().Add(store.ttl),
 	}
 	store.mu.Lock()
 	store.purgeExpiredLocked(store.now().UTC())
 	store.records[setupID] = record
 	store.mu.Unlock()
-	result := backupasset.RcloneBindingSetupResult{SetupID: setupID, ExpiresAt: record.expiresAt, ExternalID: externalID}
+	result := backupasset.RcloneBindingSetupResult{
+		SetupID: setupID, ExpiresAt: record.expiresAt, BaseBindingRevision: strconv.FormatUint(record.baseBindingRevision, 10), ExternalID: externalID,
+	}
 	if err := result.Validate(kind == rcloneBindingSetupNative); err != nil {
 		return backupasset.RcloneBindingSetupResult{}, err
 	}
@@ -415,26 +419,27 @@ func (service *Service) createRcloneBindingSetup(ctx context.Context, request ba
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := service.validateRcloneBindingSetupTask(ctx, request, kind); err != nil {
+	plan, err := service.validateRcloneBindingSetupTask(ctx, request, kind)
+	if err != nil {
 		return backupasset.RcloneBindingSetupResult{}, err
 	}
 	store, err := service.rcloneSetupStore()
 	if err != nil {
 		return backupasset.RcloneBindingSetupResult{}, err
 	}
-	return store.create(request, kind)
+	return store.create(request, kind, plan.bindingRevision)
 }
 
 func (service *Service) rcloneSetupStore() (*rcloneVersioningSetupStore, error) {
 	if service == nil || service.foundation == nil {
 		return nil, fmt.Errorf("%w: Rclone setup store dependencies are unavailable", backupasset.ErrInvalidState)
 	}
-	service.rcloneWorkflowMu.Lock()
-	defer service.rcloneWorkflowMu.Unlock()
 	publicationConfig, err := service.foundation.PublicationConfig()
 	if err != nil {
 		return nil, err
 	}
+	service.rcloneWorkflowMu.Lock()
+	defer service.rcloneWorkflowMu.Unlock()
 	if service.rcloneSetups == nil {
 		store, err := newRcloneVersioningSetupStore(service.now, publicationConfig.Rclone.PreflightTTL)
 		if err != nil {
@@ -459,25 +464,33 @@ func (service *Service) rcloneSetupStore() (*rcloneVersioningSetupStore, error) 
 	return service.rcloneSetups, nil
 }
 
-func (service *Service) validateRcloneBindingSetupTask(ctx context.Context, request backupasset.RcloneBindingSetupRequest, kind rcloneBindingSetupKind) error {
-	_, err := service.loadRcloneBindingWorkflowPlan(ctx, request.TaskID, request.ExpectedTaskRevision, kind)
-	return err
+func (service *Service) validateRcloneBindingSetupTask(ctx context.Context, request backupasset.RcloneBindingSetupRequest, kind rcloneBindingSetupKind) (rcloneBindingWorkflowPlan, error) {
+	plan, err := service.loadRcloneBindingWorkflowPlan(ctx, request.TaskID, request.ExpectedTaskRevision, kind)
+	if err != nil {
+		return rcloneBindingWorkflowPlan{}, err
+	}
+	if plan.managedBinding != nil {
+		return rcloneBindingWorkflowPlan{}, fmt.Errorf("%w: managed Rclone binding cannot be replaced", backupasset.ErrConflict)
+	}
+	return plan, nil
 }
 
 type rcloneBindingWorkflowPlan struct {
-	task            model.Task
-	link            model.TaskRepositoryLink
-	repository      model.BackupRepository
-	legacyBinding   bindingDocument
-	managedBinding  *managedRcloneBindingDocumentV3
-	bindingRevision uint64
+	task              model.Task
+	link              model.TaskRepositoryLink
+	repository        model.BackupRepository
+	legacyBinding     bindingDocument
+	managedBinding    *managedRcloneBindingDocumentV3
+	binding           model.RepositoryAccessBinding
+	bindingCiphertext string
+	bindingRevision   uint64
 }
 
 func (service *Service) loadRcloneBindingWorkflowPlan(ctx context.Context, taskID uint, expectedTaskRevision uint64, kind rcloneBindingSetupKind) (rcloneBindingWorkflowPlan, error) {
 	var plan rcloneBindingWorkflowPlan
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var taskEntity model.Task
-		if err := tx.Preload("Node").Where("id = ? AND archived_at IS NULL", taskID).First(&taskEntity).Error; err != nil {
+		if err := tx.Preload("Node.SSHKey").Where("id = ? AND archived_at IS NULL", taskID).First(&taskEntity).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("%w: Rclone versioning Task", backupasset.ErrNotFound)
 			}
@@ -509,6 +522,10 @@ func (service *Service) loadRcloneBindingWorkflowPlan(ctx context.Context, taskI
 		if err := tx.Where("repository_id = ? AND status = ?", repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
 			return fmt.Errorf("load Rclone versioning binding: %w", err)
 		}
+		var bindingCiphertext string
+		if err := tx.Raw("SELECT encrypted_config FROM repository_access_bindings WHERE id = ?", binding.ID).Scan(&bindingCiphertext).Error; err != nil {
+			return fmt.Errorf("load Rclone binding envelope: %w", err)
+		}
 		stored, err := decodeStoredBindingDocument(binding.EncryptedConfig)
 		if err != nil {
 			return err
@@ -523,7 +540,7 @@ func (service *Service) loadRcloneBindingWorkflowPlan(ctx context.Context, taskI
 				stored.V1.Locator != link.EncryptedLegacyLocator || stored.V1.ConfigSource != provider.RcloneConfigNodeDefault {
 				return fmt.Errorf("%w: Rclone binding setup requires exact legacy state", backupasset.ErrConflict)
 			}
-			plan = rcloneBindingWorkflowPlan{task: taskEntity, link: link, repository: repository, legacyBinding: *stored.V1}
+			plan = rcloneBindingWorkflowPlan{task: taskEntity, link: link, repository: repository, binding: binding, legacyBinding: *stored.V1}
 		case backupasset.PublicationVersionedPrefix, backupasset.PublicationNativeObjectVersions:
 			if stored.ManagedRcloneV3 == nil || stored.V1 != nil || stored.ManagedRsyncV2 != nil ||
 				validateManagedRcloneBindingAssociation(*stored.ManagedRcloneV3, managedRcloneBindingAssociation{
@@ -537,12 +554,13 @@ func (service *Service) loadRcloneBindingWorkflowPlan(ctx context.Context, taskI
 			}
 			document := *stored.ManagedRcloneV3
 			plan = rcloneBindingWorkflowPlan{
-				task: taskEntity, link: link, repository: repository, legacyBinding: legacy,
+				task: taskEntity, link: link, repository: repository, binding: binding, legacyBinding: legacy,
 				managedBinding: &document, bindingRevision: document.BindingRevision,
 			}
 		default:
 			return fmt.Errorf("%w: unsupported Rclone binding setup mode", backupasset.ErrCapabilityUnavailable)
 		}
+		plan.bindingCiphertext = bindingCiphertext
 		return nil
 	})
 	if err != nil {
@@ -573,7 +591,10 @@ func (service *Service) SetRclonePortableBinding(ctx context.Context, request ba
 	if err != nil {
 		return backupasset.RclonePublicationSummary{}, err
 	}
-	if request.ExpectedBindingRevision != plan.bindingRevision {
+	if plan.managedBinding != nil {
+		return backupasset.RclonePublicationSummary{}, fmt.Errorf("%w: managed Rclone binding cannot be replaced", backupasset.ErrConflict)
+	}
+	if request.ExpectedBindingRevision != setup.baseBindingRevision || setup.baseBindingRevision != plan.bindingRevision {
 		return backupasset.RclonePublicationSummary{}, fmt.Errorf("%w: Rclone binding revision changed", backupasset.ErrConflict)
 	}
 	salt, err := hexDecodeSalt(plan.legacyBinding.IdentitySalt)
@@ -606,7 +627,7 @@ func (service *Service) SetRclonePortableBinding(ctx context.Context, request ba
 	if service.rcloneCandidates == nil {
 		return backupasset.RclonePublicationSummary{}, fmt.Errorf("%w: Rclone binding candidate store unavailable", backupasset.ErrInvalidState)
 	}
-	if err := service.rcloneCandidates.put(candidate); err != nil {
+	if err := service.replaceRcloneCandidate(candidate); err != nil {
 		return backupasset.RclonePublicationSummary{}, err
 	}
 	return rcloneBindingCandidateSummary(candidate), nil
@@ -644,7 +665,10 @@ func (service *Service) SetRcloneNativeBinding(ctx context.Context, request back
 	if err != nil {
 		return backupasset.RclonePublicationSummary{}, err
 	}
-	if request.ExpectedBindingRevision != plan.bindingRevision {
+	if plan.managedBinding != nil {
+		return backupasset.RclonePublicationSummary{}, fmt.Errorf("%w: managed Rclone binding cannot be replaced", backupasset.ErrConflict)
+	}
+	if request.ExpectedBindingRevision != setup.baseBindingRevision || setup.baseBindingRevision != plan.bindingRevision {
 		return backupasset.RclonePublicationSummary{}, fmt.Errorf("%w: Rclone binding revision changed", backupasset.ErrConflict)
 	}
 	profile := provider.RcloneNativeProfile{
@@ -672,7 +696,7 @@ func (service *Service) SetRcloneNativeBinding(ctx context.Context, request back
 	if service.rcloneCandidates == nil {
 		return backupasset.RclonePublicationSummary{}, fmt.Errorf("%w: Rclone binding candidate store unavailable", backupasset.ErrInvalidState)
 	}
-	if err := service.rcloneCandidates.put(candidate); err != nil {
+	if err := service.replaceRcloneCandidate(candidate); err != nil {
 		return backupasset.RclonePublicationSummary{}, err
 	}
 	return rcloneBindingCandidateSummary(candidate), nil
@@ -738,65 +762,201 @@ func (service *Service) CreateRcloneVersioningPreflight(ctx context.Context, req
 	if _, err := service.rcloneSetupStore(); err != nil {
 		return backupasset.RcloneVersioningPreflightResult{}, err
 	}
-	if service.rcloneCandidates == nil || service.rclonePreflights == nil || service.rclonePreflighter == nil {
+	if service.rcloneCandidates == nil || service.rclonePreflights == nil || service.db == nil {
 		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: Rclone preflight dependencies are unavailable", backupasset.ErrInvalidState)
 	}
-	candidate, ok := service.rcloneCandidates.get(request.TaskID)
-	if !ok || candidate.expectedTaskRevision != request.ExpectedTaskRevision ||
-		(candidate.kind == rcloneBindingSetupPortable) != (request.RequestedMode == backupasset.PublicationVersionedPrefix) {
-		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: Rclone binding candidate is unavailable", backupasset.ErrConflict)
-	}
-	plan, err := service.loadRcloneBindingWorkflowPlan(ctx, request.TaskID, request.ExpectedTaskRevision, candidate.kind)
-	if err != nil {
-		return backupasset.RcloneVersioningPreflightResult{}, err
-	}
-	if plan.bindingRevision != candidate.plan.bindingRevision || plan.link.ID != candidate.plan.link.ID ||
-		plan.repository.ID != candidate.plan.repository.ID || plan.task.NodeID != candidate.plan.task.NodeID {
-		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: Rclone binding candidate state changed", backupasset.ErrConflict)
-	}
-	publicationConfig, err := service.foundation.PublicationConfig()
-	if err != nil {
-		return backupasset.RcloneVersioningPreflightResult{}, err
-	}
-	runtime := provider.RemoteCommandAccess{Node: plan.task.Node}
-	var evidence RcloneVersioningPreflightEvidence
-	switch candidate.kind {
-	case rcloneBindingSetupPortable:
-		evidence, err = service.rclonePreflighter.PreflightPortable(ctx, RclonePortablePreflightInput{
-			TaskID: request.TaskID, NodeID: plan.task.NodeID, BindingRevision: candidate.bindingRevision,
-			BoundConfig: candidate.portable.boundConfig, TargetRemote: candidate.portable.targetRemote,
-			ManagedRootLocator: candidate.portable.managedRootLocator, LegacyLocator: plan.legacyBinding.Locator,
-			Runtime: runtime, AbsoluteDeadline: service.utcNow().Add(publicationConfig.Rclone.PortableDeadline),
-			LowLevelRetries: publicationConfig.Rclone.LowLevelRetries,
-		})
-	case rcloneBindingSetupNative:
-		evidence, err = service.rclonePreflighter.PreflightNative(ctx, RcloneNativePreflightInput{
-			TaskID: request.TaskID, NodeID: plan.task.NodeID, BindingRevision: candidate.bindingRevision,
-			Request: candidate.native.request, ExternalID: candidate.native.externalID, LegacyLocator: plan.legacyBinding.Locator,
-			Runtime: runtime, AbsoluteDeadline: service.utcNow().Add(publicationConfig.Rclone.NativeDeadline),
-			AWSSDKMaxAttempts: publicationConfig.Rclone.AWSSDKMaxAttempts,
-		})
-	default:
-		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: invalid Rclone binding candidate", backupasset.ErrInvalidState)
-	}
-	if err != nil {
-		return backupasset.RcloneVersioningPreflightResult{}, err
-	}
-	if evidence.Mode != request.RequestedMode || validateRcloneVersioningPreflightEvidence(evidence) != nil {
-		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: invalid Rclone preflight evidence", backupasset.ErrInvalidState)
+	if service.rclonePreflighter == nil {
+		return backupasset.RcloneVersioningPreflightResult{}, &provider.CapabilityError{Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityProviderUnavailable}}
 	}
 	preflightID, err := backupasset.NewOpaqueID()
 	if err != nil {
 		return backupasset.RcloneVersioningPreflightResult{}, err
 	}
-	expiresAt := service.utcNow().Add(publicationConfig.Rclone.PreflightTTL)
-	record := rcloneVersioningPreflightRecord{id: preflightID, candidate: candidate, evidence: evidence, expiresAt: expiresAt}
-	if err := service.rclonePreflights.put(record); err != nil {
+	if err := service.prepareRcloneRenewalCandidate(ctx, request); err != nil {
 		return backupasset.RcloneVersioningPreflightResult{}, err
 	}
+	candidate, err := service.beginRclonePreflight(request.TaskID, request.ExpectedTaskRevision, request.RequestedMode, preflightID)
+	if err != nil {
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	defer service.endRclonePreflight(candidate)
+	if err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockRcloneWorkflowPlanTx(ctx, tx, candidate.plan, candidate.purpose == backupasset.RclonePreflightPurposeRenewal)
+		if err == nil && candidate.purpose == backupasset.RclonePreflightPurposeRenewal && locked.task.Enabled {
+			return fmt.Errorf("%w: Rclone renewal requires a paused Task", backupasset.ErrConflict)
+		}
+		return err
+	}); err != nil {
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	plan := candidate.plan
+	if plan.repository.CapabilityRevision <= 0 || (candidate.purpose != backupasset.RclonePreflightPurposeRenewal && plan.repository.CapabilityRevision >= math.MaxInt32) {
+		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: Rclone capability revision overflow", backupasset.ErrConflict)
+	}
+	capabilityRevision := uint64(plan.repository.CapabilityRevision)
+	if candidate.purpose != backupasset.RclonePreflightPurposeRenewal {
+		capabilityRevision++
+	}
+	publicationConfig, err := service.foundation.PublicationConfig()
+	if err != nil {
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	manifestOptions, err := rcloneManifestOptions(publicationConfig)
+	if err != nil {
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	observationLimits, err := managedRcloneNativeObservationLimits(publicationConfig.ManifestMaxEntries)
+	if err != nil {
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	now := service.utcNow()
+	if candidate.kind == rcloneBindingSetupNative && !candidate.nativeObserved &&
+		!candidate.expiresAt.After(now.Add(rcloneNativePreflightSettleWindow+sshutil.CommandExecutionJoinTimeout)) {
+		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: Rclone candidate has insufficient observation time", backupasset.ErrConflict)
+	}
+	deadline := now.Add(publicationConfig.Rclone.PortableDeadline)
+	if candidate.kind == rcloneBindingSetupNative {
+		deadline = now.Add(publicationConfig.Rclone.NativeDeadline)
+	}
+	if candidate.expiresAt.Before(deadline) {
+		deadline = candidate.expiresAt
+	}
+	if !deadline.After(now.Add(sshutil.CommandExecutionJoinTimeout)) {
+		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: Rclone preflight deadline is too short", backupasset.ErrConflict)
+	}
+	operationCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	runtime := provider.RemoteCommandAccess{Node: plan.task.Node}
+	var evidence RcloneVersioningPreflightEvidence
+	switch candidate.kind {
+	case rcloneBindingSetupPortable:
+		evidence, err = service.rclonePreflighter.PreflightPortable(operationCtx, RclonePortablePreflightInput{
+			PreflightID: preflightID, CandidateID: candidate.setupID, CandidateExpiresAt: candidate.expiresAt,
+			TaskID: request.TaskID, NodeID: plan.task.NodeID, TaskRevision: request.ExpectedTaskRevision,
+			BindingRevision: candidate.bindingRevision, ConfigRevision: candidate.configRevision,
+			CredentialRevision: candidate.credentialRevision, CapabilityRevision: capabilityRevision,
+			BoundConfig: candidate.portable.boundConfig, TargetRemote: candidate.portable.targetRemote,
+			ManagedRootLocator: candidate.portable.managedRootLocator, LegacyLocator: plan.legacyBinding.Locator,
+			Runtime: runtime, AbsoluteDeadline: deadline, LowLevelRetries: publicationConfig.Rclone.LowLevelRetries,
+			ControlPayloadMaxBytes: publicationConfig.Rclone.ControlPayloadMaxBytes,
+			FullVerifyMaxBytes:     publicationConfig.Rclone.FullVerifyMaxBytes, ManifestOptions: manifestOptions,
+		})
+	case rcloneBindingSetupNative:
+		var retainedReadKeys []managedRcloneKMSReadKeyV3
+		if plan.managedBinding != nil && plan.managedBinding.Native != nil {
+			retainedReadKeys = append(retainedReadKeys, plan.managedBinding.Native.RetainedReadKeys...)
+		}
+		evidence, err = service.rclonePreflighter.PreflightNative(operationCtx, RcloneNativePreflightInput{
+			PreflightID: preflightID, CandidateID: candidate.setupID, CandidateExpiresAt: candidate.expiresAt,
+			TaskID: request.TaskID, NodeID: plan.task.NodeID, TaskRevision: request.ExpectedTaskRevision,
+			BindingRevision: candidate.bindingRevision, ConfigRevision: candidate.configRevision,
+			CredentialRevision: candidate.credentialRevision, CapabilityRevision: capabilityRevision,
+			PublicationConfig: publicationConfig,
+			Request:           candidate.native.request, ExternalID: candidate.native.externalID, LegacyLocator: plan.legacyBinding.Locator,
+			Runtime: runtime, AbsoluteDeadline: deadline, AWSSDKMaxAttempts: publicationConfig.Rclone.AWSSDKMaxAttempts,
+			LowLevelRetries: publicationConfig.Rclone.LowLevelRetries, ControlPayloadMaxBytes: publicationConfig.Rclone.ControlPayloadMaxBytes,
+			FullVerifyMaxBytes: uint64(publicationConfig.Rclone.FullVerifyMaxBytes),
+			KMSReadKeyMaxCount: publicationConfig.Rclone.KMSReadKeyMaxCount, ObservationLimits: observationLimits,
+			RetainedReadKeys: retainedReadKeys,
+		})
+	default:
+		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: invalid Rclone binding candidate", backupasset.ErrInvalidState)
+	}
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && !candidate.expiresAt.After(service.utcNow()) {
+			return backupasset.RcloneVersioningPreflightResult{}, errors.Join(fmt.Errorf("%w: Rclone candidate expired", backupasset.ErrConflict), err)
+		}
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	if err := operationCtx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && !candidate.expiresAt.After(service.utcNow()) {
+			return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: Rclone candidate expired", backupasset.ErrConflict)
+		}
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	if !deadline.After(service.utcNow()) {
+		if !candidate.expiresAt.After(service.utcNow()) {
+			return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: Rclone candidate expired", backupasset.ErrConflict)
+		}
+		return backupasset.RcloneVersioningPreflightResult{}, context.DeadlineExceeded
+	}
+	if evidence.Mode != request.RequestedMode {
+		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: invalid Rclone preflight evidence", backupasset.ErrInvalidState)
+	}
+	if candidate.native != nil && (evidence.EncryptionProfile != candidate.native.request.EncryptionProfile ||
+		uint64(evidence.KMSReadKeyCount) > uint64(publicationConfig.Rclone.KMSReadKeyMaxCount)) {
+		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: inconsistent native Rclone encryption evidence", backupasset.ErrInvalidState)
+	}
+	if evidence.Settling {
+		err = validateRcloneSettlingEvidence(evidence, service.utcNow())
+	} else {
+		err = validateRcloneVersioningPreflightEvidence(evidence)
+		if err == nil && evidence.CapabilityRevision != capabilityRevision {
+			err = fmt.Errorf("%w: Rclone capability revision changed", backupasset.ErrInvalidState)
+		}
+	}
+	if err != nil {
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	if !evidence.Settling && candidate.purpose == backupasset.RclonePreflightPurposeRenewal {
+		if err := validateRcloneRenewalEvidence(candidate.plan.managedBinding, evidence); err != nil {
+			return backupasset.RcloneVersioningPreflightResult{}, err
+		}
+	}
+	currentConfig, err := service.foundation.PublicationConfig()
+	if err != nil {
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	if !reflect.DeepEqual(publicationConfig, currentConfig) {
+		return backupasset.RcloneVersioningPreflightResult{}, fmt.Errorf("%w: Rclone publication configuration changed", backupasset.ErrConflict)
+	}
+	expiresAt := candidate.expiresAt
+	if !evidence.Settling {
+		if ttlExpiry := service.utcNow().Add(publicationConfig.Rclone.PreflightTTL); ttlExpiry.Before(expiresAt) {
+			expiresAt = ttlExpiry
+		}
+		if evidence.CredentialExpiresAt != nil {
+			if credentialExpiry := evidence.CredentialExpiresAt.Add(-rcloneNativePreflightSessionMargin); credentialExpiry.Before(expiresAt) {
+				expiresAt = credentialExpiry
+			}
+		}
+	}
+	record := rcloneVersioningPreflightRecord{id: preflightID, candidate: candidate, evidence: evidence, expiresAt: expiresAt, publicationConfig: publicationConfig}
 	summary := rclonePreflightSummary(candidate, evidence)
-	result := backupasset.RcloneVersioningPreflightResult{PreflightID: preflightID, ExpiresAt: expiresAt, Summary: summary}
+	purpose := candidate.purpose
+	if purpose == "" {
+		purpose = backupasset.RclonePreflightPurposeActivation
+	}
+	result := backupasset.RcloneVersioningPreflightResult{Purpose: purpose, PreflightID: preflightID, ExpiresAt: expiresAt, Summary: summary}
+	if err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockRcloneWorkflowPlanTx(ctx, tx, candidate.plan, candidate.purpose == backupasset.RclonePreflightPurposeRenewal)
+		if err != nil {
+			return err
+		}
+		if candidate.purpose == backupasset.RclonePreflightPurposeRenewal && locked.task.Enabled {
+			return fmt.Errorf("%w: Rclone renewal requires a paused Task", backupasset.ErrConflict)
+		}
+		current, err := service.foundation.PublicationConfigTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(current, publicationConfig) {
+			return fmt.Errorf("%w: Rclone publication configuration changed", backupasset.ErrConflict)
+		}
+		return nil
+	}); err != nil {
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	if purpose == backupasset.RclonePreflightPurposeRenewal {
+		result.Summary.RollbackCapability, err = service.rcloneManagedRollbackCapability(ctx, plan.repository.ID)
+		if err != nil {
+			return backupasset.RcloneVersioningPreflightResult{}, err
+		}
+	}
 	if err := result.Validate(); err != nil {
+		return backupasset.RcloneVersioningPreflightResult{}, err
+	}
+	if err := service.finalizeRclonePreflight(candidate, record); err != nil {
 		return backupasset.RcloneVersioningPreflightResult{}, err
 	}
 	return result, nil
@@ -812,8 +972,33 @@ func (service *Service) CreateRcloneVersioningPreflightForRequest(ctx context.Co
 	return result, err
 }
 
+func validateRcloneSettlingEvidence(evidence RcloneVersioningPreflightEvidence, now time.Time) error {
+	if !evidence.Settling || evidence.Mode != backupasset.PublicationNativeObjectVersions ||
+		!isUTCTime(evidence.SettlingObservedAt) || evidence.SettlingObservedAt.After(now) ||
+		evidence.CredentialExpiresAt == nil || !isUTCTime(*evidence.CredentialExpiresAt) || !evidence.CredentialExpiresAt.After(now) ||
+		evidence.CapabilityRevision != 0 || evidence.Native != nil || evidence.ManagedRootIdentityDigest != "" ||
+		evidence.RepositoryMarkerDigest != "" || evidence.EvidenceDigest != "" || evidence.EstimatedReadBytes != 0 ||
+		evidence.ConsistencyClass != "" || evidence.HashFidelity != "" || evidence.APICostClass != "" ||
+		evidence.StorageCostClass != "" || evidence.EgressCostClass != "" {
+		return fmt.Errorf("%w: invalid settling Rclone evidence", backupasset.ErrInvalidState)
+	}
+	switch evidence.EncryptionProfile {
+	case backupasset.RcloneEncryptionSSES3:
+		if evidence.KMSKeyStatus != backupasset.RcloneKMSNotApplicable || evidence.KMSReadKeyCount != 0 {
+			return fmt.Errorf("%w: invalid settling Rclone encryption", backupasset.ErrInvalidState)
+		}
+	case backupasset.RcloneEncryptionSSEKMS:
+		if evidence.KMSKeyStatus != backupasset.RcloneKMSReady {
+			return fmt.Errorf("%w: invalid settling Rclone KMS", backupasset.ErrInvalidState)
+		}
+	default:
+		return fmt.Errorf("%w: invalid settling Rclone encryption", backupasset.ErrInvalidState)
+	}
+	return nil
+}
+
 func validateRcloneVersioningPreflightEvidence(evidence RcloneVersioningPreflightEvidence) error {
-	if (evidence.Mode != backupasset.PublicationVersionedPrefix && evidence.Mode != backupasset.PublicationNativeObjectVersions) ||
+	if evidence.Settling || (evidence.Mode != backupasset.PublicationVersionedPrefix && evidence.Mode != backupasset.PublicationNativeObjectVersions) ||
 		evidence.CapabilityRevision == 0 || !isLowerHex64(evidence.ManagedRootIdentityDigest) ||
 		!isLowerHex64(evidence.RepositoryMarkerDigest) || !isLowerHex64(evidence.EvidenceDigest) {
 		return fmt.Errorf("%w: invalid Rclone preflight evidence", backupasset.ErrInvalidState)
@@ -875,22 +1060,50 @@ func (service *Service) ActivateRcloneVersioning(ctx context.Context, request ba
 	if _, err := service.rcloneSetupStore(); err != nil {
 		return backupasset.RcloneVersioningActivationResult{}, err
 	}
-	if service.rclonePreflights == nil || service.db == nil {
+	if service.rclonePreflights == nil || service.db == nil || service.history == nil {
 		return backupasset.RcloneVersioningActivationResult{}, fmt.Errorf("%w: Rclone activation dependencies are unavailable", backupasset.ErrInvalidState)
 	}
 	transitioner, ok := service.admission.(publication.FeatureTransitioner)
 	if !ok || transitioner == nil {
 		return backupasset.RcloneVersioningActivationResult{}, fmt.Errorf("%w: Rclone activation admission transition is unavailable", backupasset.ErrInvalidState)
 	}
-	if request.MigrationChoice == backupasset.RcloneImportedBaseline && service.publication == nil {
-		return backupasset.RcloneVersioningActivationResult{}, fmt.Errorf("%w: imported Rclone baseline publication is unavailable", backupasset.ErrInvalidState)
+	record, err := service.reserveRcloneActivation(request)
+	if err != nil {
+		return backupasset.RcloneVersioningActivationResult{}, err
 	}
-	record, ok := service.rclonePreflights.consume(request.PreflightID, request.TaskID, request.ExpectedTaskRevision)
-	if !ok {
-		return backupasset.RcloneVersioningActivationResult{}, fmt.Errorf("%w: Rclone preflight expired or unavailable", backupasset.ErrConflict)
-	}
+	committed := false
+	defer func() { service.releaseRcloneActivation(request.TaskID, record.candidate.setupID, committed) }()
 	if request.MigrationChoice != backupasset.RcloneFirstNewPoint && request.MigrationChoice != backupasset.RcloneImportedBaseline {
 		return backupasset.RcloneVersioningActivationResult{}, fmt.Errorf("%w: unsupported Rclone migration choice", backupasset.ErrCapabilityUnavailable)
+	}
+	if record.candidate.purpose == backupasset.RclonePreflightPurposeRenewal {
+		if request.MigrationChoice != backupasset.RcloneFirstNewPoint {
+			return backupasset.RcloneVersioningActivationResult{}, fmt.Errorf("%w: Rclone renewal does not import a baseline", backupasset.ErrConflict)
+		}
+		if err := transitioner.TransitionFeature(ctx, true, func() error {
+			current, err := service.foundation.PublicationConfig()
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(current, record.publicationConfig) {
+				return fmt.Errorf("%w: Rclone publication configuration changed", backupasset.ErrConflict)
+			}
+			return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				return service.renewRcloneBindingTx(ctx, tx, record)
+			})
+		}); err != nil {
+			return backupasset.RcloneVersioningActivationResult{}, err
+		}
+		committed = true
+		summary, err := service.RcloneVersioningSummary(ctx, request.TaskID)
+		if err != nil {
+			return backupasset.RcloneVersioningActivationResult{}, err
+		}
+		result := backupasset.RcloneVersioningActivationResult{Summary: summary, MigrationChoice: request.MigrationChoice}
+		return result, result.Validate()
+	}
+	if request.MigrationChoice == backupasset.RcloneImportedBaseline && service.publication == nil {
+		return backupasset.RcloneVersioningActivationResult{}, fmt.Errorf("%w: imported Rclone baseline publication is unavailable", backupasset.ErrInvalidState)
 	}
 	document, encodedBinding, managedIdentity, taskConfig, err := buildManagedRcloneActivation(record)
 	if err != nil {
@@ -906,6 +1119,13 @@ func (service *Service) ActivateRcloneVersioning(ctx context.Context, request ba
 	}
 	var activation rcloneVersioningActivationState
 	if err := transitioner.TransitionFeature(ctx, true, func() error {
+		currentConfig, configErr := service.foundation.PublicationConfig()
+		if configErr != nil {
+			return configErr
+		}
+		if !reflect.DeepEqual(record.publicationConfig, currentConfig) {
+			return fmt.Errorf("%w: Rclone publication configuration changed", backupasset.ErrConflict)
+		}
 		state, err := service.activateRcloneVersioning(
 			ctx, request, record, document, encodedBinding, managedIdentity, taskConfig, baselinePreparation,
 		)
@@ -917,7 +1137,7 @@ func (service *Service) ActivateRcloneVersioning(ctx context.Context, request ba
 	}); err != nil {
 		return backupasset.RcloneVersioningActivationResult{}, err
 	}
-	service.rcloneCandidates.delete(request.TaskID)
+	committed = true
 	if activation.importedBaseline != nil {
 		if _, err := service.publication.PublishImportedRcloneBaseline(ctx, *activation.importedBaseline); err != nil {
 			return backupasset.RcloneVersioningActivationResult{}, fmt.Errorf("publish imported Rclone baseline: %w", err)
@@ -1156,53 +1376,18 @@ func (service *Service) activateRcloneVersioning(
 ) (rcloneVersioningActivationState, error) {
 	var activation rcloneVersioningActivationState
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var taskEntity model.Task
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND archived_at IS NULL", request.TaskID).First(&taskEntity).Error; err != nil {
-			return fmt.Errorf("lock Rclone activation Task: %w", err)
-		}
-		revision, err := managedRsyncTaskRevision(taskEntity)
+		locked, err := lockRcloneWorkflowPlanTx(ctx, tx, record.candidate.plan, true)
 		if err != nil {
 			return err
 		}
-		if revision != request.ExpectedTaskRevision || bindingProviderForTask(taskEntity) != backupasset.ProviderRclone {
-			return fmt.Errorf("%w: Rclone activation Task revision changed", backupasset.ErrConflict)
+		if !record.expiresAt.After(service.utcNow()) || !record.candidate.expiresAt.After(service.utcNow()) {
+			return fmt.Errorf("%w: Rclone preflight expired during activation", backupasset.ErrConflict)
 		}
-		activeRuns, err := countAuthoritativeActiveTaskRuns(tx, taskEntity)
-		if err != nil {
-			return fmt.Errorf("count active Rclone TaskRuns: %w", err)
-		}
-		if activeRuns != 0 {
-			return fmt.Errorf("%w: Rclone Task has an active run", backupasset.ErrConflict)
-		}
-		var link model.TaskRepositoryLink
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND task_id = ? AND unlinked_at IS NULL", record.candidate.plan.link.ID, taskEntity.ID).First(&link).Error; err != nil {
-			return fmt.Errorf("lock Rclone activation link: %w", err)
-		}
-		if link.RepositoryID != record.candidate.plan.repository.ID || link.PublicationMode != string(backupasset.PublicationLegacyMutable) ||
-			link.EncryptedLegacyLocator != record.candidate.plan.legacyBinding.Locator {
+		taskEntity, link, repository, binding := locked.task, locked.link, locked.repository, locked.binding
+		if link.PublicationMode != string(backupasset.PublicationLegacyMutable) {
 			return fmt.Errorf("%w: Rclone legacy link changed", backupasset.ErrConflict)
 		}
 		legacyLocator := link.EncryptedLegacyLocator
-		var repository model.BackupRepository
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", link.RepositoryID).Error; err != nil {
-			return fmt.Errorf("lock Rclone activation repository: %w", err)
-		}
-		if repository.ProviderKind != string(backupasset.ProviderRclone) || repository.VersionMode != string(backupasset.VersionMutableHead) ||
-			repository.ImmutabilityLevel != string(backupasset.ImmutabilityMutable) || repository.CapabilityRevision != record.candidate.plan.repository.CapabilityRevision {
-			return fmt.Errorf("%w: Rclone repository changed", backupasset.ErrConflict)
-		}
-		var binding model.RepositoryAccessBinding
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("repository_id = ? AND status = ?", repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
-			return fmt.Errorf("lock Rclone activation binding: %w", err)
-		}
-		stored, err := decodeStoredBindingDocument(binding.EncryptedConfig)
-		if err != nil || stored.V1 == nil || stored.ManagedRsyncV2 != nil || stored.ManagedRcloneV3 != nil ||
-			!sameRsyncVersioningBinding(*stored.V1, record.candidate.plan.legacyBinding) {
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("%w: Rclone legacy binding changed", backupasset.ErrConflict)
-		}
 		var mutablePoints []model.RecoveryPoint
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("repository_id = ? AND semantics = ?", repository.ID, backupasset.PointMutableHead).Find(&mutablePoints).Error; err != nil {
 			return fmt.Errorf("load Rclone mutable-head observations: %w", err)
@@ -1290,6 +1475,16 @@ func (service *Service) activateRcloneVersioning(
 				nativeInput: baseline.nativeInput,
 			}
 		}
+		currentConfig, configErr := service.foundation.PublicationConfigTx(ctx, tx)
+		if configErr != nil {
+			return configErr
+		}
+		if !reflect.DeepEqual(currentConfig, record.publicationConfig) {
+			return fmt.Errorf("%w: Rclone publication configuration changed", backupasset.ErrConflict)
+		}
+		if !record.expiresAt.After(service.utcNow()) || !record.candidate.expiresAt.After(service.utcNow()) {
+			return fmt.Errorf("%w: Rclone preflight expired during activation", backupasset.ErrConflict)
+		}
 		return nil
 	})
 	if err != nil {
@@ -1309,6 +1504,10 @@ func (service *Service) rcloneActivatedSummary(ctx context.Context, taskID uint,
 	}
 	summary := rclonePreflightSummary(record.candidate, record.evidence)
 	summary.TaskRevision = strconv.FormatUint(revision, 10)
+	summary.RollbackCapability, err = service.rcloneManagedRollbackCapability(ctx, record.candidate.plan.repository.ID)
+	if err != nil {
+		return backupasset.RclonePublicationSummary{}, err
+	}
 	var point model.RecoveryPoint
 	result := service.db.WithContext(ctx).
 		Where("repository_id = ? AND producing_task_id = ? AND semantics IN ?", record.candidate.plan.repository.ID, taskID, []string{
@@ -1380,9 +1579,16 @@ func (service *Service) CleanRollbackRcloneVersioning(ctx context.Context, reque
 	}); err != nil {
 		return backupasset.RcloneVersioningRollbackResult{}, err
 	}
-	if service.rcloneCandidates != nil {
-		service.rcloneCandidates.delete(request.TaskID)
+	service.rcloneWorkflowMu.Lock()
+	if service.rcloneCandidates != nil && service.rcloneActivations[request.TaskID] == "" {
+		if candidate, ok := service.rcloneCandidates.get(request.TaskID); ok && candidate.expectedTaskRevision == request.ExpectedTaskRevision {
+			service.rcloneCandidates.delete(request.TaskID)
+			if service.rclonePreflights != nil {
+				service.rclonePreflights.removeForTask(request.TaskID)
+			}
+		}
 	}
+	service.rcloneWorkflowMu.Unlock()
 	summary, err := service.rcloneLegacySummary(ctx, request.TaskID)
 	if err != nil {
 		return backupasset.RcloneVersioningRollbackResult{}, err
@@ -1790,6 +1996,14 @@ func (service *Service) rclonePreparedRollbackSummary(ctx context.Context, taskI
 
 func rclonePreflightSummary(candidate rcloneBindingCandidate, evidence RcloneVersioningPreflightEvidence) backupasset.RclonePublicationSummary {
 	summary := rcloneBindingCandidateSummary(candidate)
+	if evidence.Settling {
+		summary.State = backupasset.RcloneStateCapabilitySettling
+		summary.ReasonCode = backupasset.RcloneReasonCapabilitySettling
+		summary.CredentialExpiresAt = evidence.CredentialExpiresAt
+		summary.KMSKeyStatus = evidence.KMSKeyStatus
+		summary.KMSReadKeyCount = evidence.KMSReadKeyCount
+		return summary
+	}
 	summary.State = backupasset.RcloneStateReady
 	summary.ReasonCode = backupasset.RcloneReasonReady
 	summary.CapabilityRevision = strconv.FormatUint(evidence.CapabilityRevision, 10)
@@ -1806,6 +2020,19 @@ func rclonePreflightSummary(candidate rcloneBindingCandidate, evidence RcloneVer
 		summary.KMSKeyStatus = evidence.KMSKeyStatus
 	}
 	return summary
+}
+
+// Managed rollback availability is a durable repository fact, independent of
+// whether a binding is expired or a renewal preflight is in progress.
+func (service *Service) rcloneManagedRollbackCapability(ctx context.Context, repositoryID string) (backupasset.RcloneRollbackCapability, error) {
+	available, err := service.history.rcloneCleanRollbackAvailable(ctx, repositoryID)
+	if err != nil {
+		return "", err
+	}
+	if available {
+		return backupasset.RcloneRollbackCleanAvailable, nil
+	}
+	return backupasset.RcloneRollbackPreparationOnly, nil
 }
 
 // RcloneVersioningSummary projects only closed, task-facing facts. Any stored
@@ -1831,27 +2058,29 @@ func (service *Service) RcloneVersioningSummary(ctx context.Context, taskID uint
 	if err != nil {
 		return backupasset.RclonePublicationSummary{}, err
 	}
-	if service.rcloneCandidates != nil {
-		if candidate, ok := service.rcloneCandidates.get(taskID); ok {
-			if service.rclonePreflights != nil {
-				if record, ready := service.rclonePreflights.getForTask(taskID); ready && record.candidate.setupID == candidate.setupID {
-					summary := rclonePreflightSummary(record.candidate, record.evidence)
-					summary.TaskRevision = strconv.FormatUint(taskRevision, 10)
-					return backupasset.SafeRclonePublicationSummary(summary), nil
-				}
-			}
-			summary := rcloneBindingCandidateSummary(candidate)
-			summary.TaskRevision = strconv.FormatUint(taskRevision, 10)
-			return backupasset.SafeRclonePublicationSummary(summary), nil
-		}
-	}
 
 	var link model.TaskRepositoryLink
 	result := service.db.WithContext(ctx).Where("task_id = ? AND unlinked_at IS NULL", taskID).Limit(1).Find(&link)
 	if result.Error != nil {
 		return backupasset.RclonePublicationSummary{}, fmt.Errorf("load Rclone versioning summary link: %w", result.Error)
 	}
-	if result.RowsAffected == 0 || backupasset.TaskPublicationMode(link.PublicationMode) == backupasset.PublicationLegacyMutable {
+	if result.RowsAffected == 0 {
+		return service.rcloneLegacySummary(ctx, taskID)
+	}
+	if backupasset.TaskPublicationMode(link.PublicationMode) == backupasset.PublicationLegacyMutable {
+		if _, err := service.loadRcloneBindingWorkflowPlan(ctx, taskID, taskRevision, rcloneBindingSetupPortable); err != nil {
+			if errors.Is(err, backupasset.ErrConflict) || errors.Is(err, backupasset.ErrNotFound) {
+				return blockedRcloneVersioningSummary(taskRevision), nil
+			}
+			return backupasset.RclonePublicationSummary{}, err
+		}
+		summary, ok, err := service.rcloneCandidateProgress(ctx, taskID, taskRevision)
+		if err != nil {
+			return backupasset.RclonePublicationSummary{}, err
+		}
+		if ok {
+			return summary, nil
+		}
 		return service.rcloneLegacySummary(ctx, taskID)
 	}
 	mode := backupasset.TaskPublicationMode(link.PublicationMode)
@@ -1876,7 +2105,7 @@ func (service *Service) RcloneVersioningSummary(ctx context.Context, taskID uint
 	document := *stored.ManagedRcloneV3
 	if document.PublicationMode != mode || validateManagedRcloneBindingAssociation(document, managedRcloneBindingAssociation{
 		Task: taskEntity, Link: link, Repository: repository,
-	}) != nil {
+	}) != nil || !validRcloneRenewalAssociation(rcloneBindingWorkflowPlan{repository: repository, binding: access, managedBinding: &document}) {
 		return blockedRcloneVersioningSummary(taskRevision), nil
 	}
 	summary := persistedRcloneVersioningSummary(taskRevision, document)
@@ -1884,6 +2113,28 @@ func (service *Service) RcloneVersioningSummary(ctx context.Context, taskID uint
 		summary.State = backupasset.RcloneStateRollbackPrepared
 		summary.ReasonCode = backupasset.RcloneReasonRollbackPrepared
 		summary.RollbackCapability = backupasset.RcloneRollbackPrepared
+		return backupasset.SafeRclonePublicationSummary(summary), nil
+	}
+	candidateSummary, candidateOK, err := service.rcloneCandidateProgress(ctx, taskID, taskRevision)
+	if err != nil {
+		return backupasset.RclonePublicationSummary{}, err
+	}
+	rollbackCapability, err := service.rcloneManagedRollbackCapability(ctx, repository.ID)
+	if err != nil {
+		return backupasset.RclonePublicationSummary{}, err
+	}
+	if summary.RollbackCapability == backupasset.RcloneRollbackCleanAvailable {
+		summary.RollbackCapability = rollbackCapability
+	}
+	if candidateOK {
+		if candidateSummary.RollbackCapability == backupasset.RcloneRollbackCleanAvailable {
+			candidateSummary.RollbackCapability = summary.RollbackCapability
+		}
+		return candidateSummary, nil
+	}
+	if !document.PreflightExpiresAt.After(service.utcNow()) {
+		summary.State = backupasset.RcloneStatePreflightRequired
+		summary.ReasonCode = backupasset.RcloneReasonPreflightExpired
 		return backupasset.SafeRclonePublicationSummary(summary), nil
 	}
 	var point model.RecoveryPoint

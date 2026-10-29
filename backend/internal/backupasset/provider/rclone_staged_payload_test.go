@@ -266,7 +266,7 @@ func (file *faultingStagedFile) Close() error {
 
 func newPipeSFTPFactoryForTest(t *testing.T, home string, fault *stagedFileFault) stagedPayloadSessionFactory {
 	t.Helper()
-	return func(context.Context, RemoteCommandAccess) (stagedPayloadSession, error) {
+	return func(ctx context.Context, _ RemoteCommandAccess) (stagedPayloadSession, error) {
 		clientConnection, serverConnection := net.Pipe()
 		server, err := sftp.NewServer(serverConnection, sftp.WithServerWorkingDirectory(home))
 		if err != nil {
@@ -277,12 +277,15 @@ func newPipeSFTPFactoryForTest(t *testing.T, home string, fault *stagedFileFault
 			_ = server.Serve()
 			close(serveDone)
 		}()
-		client, err := sftp.NewClientPipe(clientConnection, clientConnection)
+		client, err := newSFTPStagedPayloadSession(ctx, clientConnection, func() (*sftp.Client, error) {
+			return sftp.NewClientPipe(clientConnection, clientConnection)
+		})
 		if err != nil {
 			_ = server.Close()
+			<-serveDone
 			return nil, err
 		}
-		session := stagedPayloadSession(&pipeSFTPSessionForTest{stagedPayloadSession: &sftpStagedPayloadSession{client: client}, server: server, done: serveDone})
+		session := stagedPayloadSession(&pipeSFTPSessionForTest{stagedPayloadSession: client, server: server, done: serveDone})
 		if fault != nil {
 			session = &faultingStagedSession{stagedPayloadSession: session, fault: fault}
 		}
@@ -299,12 +302,6 @@ type pipeSFTPSessionForTest struct {
 func (session *pipeSFTPSessionForTest) Close() error {
 	clientErr := session.stagedPayloadSession.Close()
 	serverErr := session.server.Close()
-	select {
-	case <-session.done:
-	case <-time.After(time.Second):
-	}
-	if clientErr != nil {
-		return clientErr
-	}
-	return serverErr
+	<-session.done
+	return errors.Join(clientErr, serverErr)
 }

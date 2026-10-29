@@ -19,6 +19,7 @@
 - 公共 JSON 仅 schema 1、counts、closed kinds、opaque IDs/digests，不含 locator/proof/ticket/identity key/SnapshotFileIndex。前端未知字段丢弃，未知 schema/class/status 拒绝，坏 Repository ID 变空安全值；渲染 counts/i18n，不显示 raw candidate。Viewer/Operator 无 Admin CTA。
 - GA 不加入通用 Settings `CATEGORY_ORDER`（security、node_monitor、retention、storage、alert、anomaly）；Admin readiness 面板单独拥有流程。Worker optional 是布尔事实，不是公共镜像承诺。
 - 已认证遗留 snapshot list/files/search/diff HTTP 始终 410，替代为 Catalog/Search；legacy restore 保留注册但要求 FeatureLive + Admin + step-up。关闭 feature 不使退役读 API 复活。
+- 任务历史不提供调用退役 snapshot list/diff 的比较入口，仍保留运行历史、备份资产工作区、Search 与恢复深链。Catalog/Search 不承诺旧比较接口的等价替代；快照异常检测的后台能力不因移除该入口而退役。
 - GA composition 在 `backupasset/runtime`，不向 server main 复制编排。官方镜像仍 `linnea7171/xirang`；Worker 本地可选且未发布，不因 GA 增加 Worker 公共发布。
 
 ## 设置锁序、前瞻配置与工作所有权

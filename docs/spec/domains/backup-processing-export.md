@@ -34,6 +34,8 @@ Core 与 Worker 共用 `capabilities` 中的生产工具链 inventory，schema �
 
 inventory 的 `BuilderBase`、`RuntimeBase` 保留原始上游的版本与 digest 身份，对应根 lock 的 `bases.go.source`、`bases.alpine.source`；Docker `FROM` 使用各自 `ref` 中按 digest 固定的保留镜像。来源身份与实际取得位置必须校验对应，不能因移动归档地址改变工具链语义，也不能用地址相同替代内容相同的验证。输入归档按精确 root pins 保存完整安装事务，构建时离线验证并安装；这使已归档输入不再依赖上游保留旧 APK，但不补回归档机制引入前缺失的历史输入。归档、更新、安全扫描与保留流程见[发布手册](../../maintainers/release.md)。
 
+安全更新若将传递包提升为显式 root，输入规格、Dockerfile 与生产 inventory 必须同步。完整事务中同源子包的修复须由各架构的真实 APK、安装清单及最终镜像扫描证明；仅更新 root 版本不足以证明全部子包修复。Worker Python 更新与对应四个包的验收要求见[自动化维护](../../maintainers/automation.md#worker-python-传递依赖安全更新)。
+
 APK 输入锁负责重新取得构建依赖；runtime closure 负责验证最终安装结果。后者仍须在 APK 安装、用户与文件权限规范化、Worker 二进制及入口文件复制完成后生成，且继续覆盖 `/etc/apk/world`、`/etc/apk/repositories` 和 `/lib/apk/db/installed`。不得以输入摘要替代安装后闭包，也不得把最终镜像或闭包摘要写回输入 manifest 形成循环。
 
 runtime closure、双架构 attestations 与签名 bundle manifest 的 schema 保持 1。v3 输入绑定会改变 Worker 二进制；必须从两种架构的新最终镜像重新取得 closure，再生成同时绑定两者的 `toolchain/attestations.v1.json` 并重新签名 bundle。旧 bundle 中的闭包证据不能沿用到新二进制；Core/Worker 也必须共享相同的工具链合同与输入投影，不能混用 v2/v3 身份。输入留存不改变 Worker 的非 GA 状态、默认关闭和既有签名、运行时校验及漏洞扫描门槛。

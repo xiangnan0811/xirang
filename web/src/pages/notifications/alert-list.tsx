@@ -262,12 +262,10 @@ export function AlertList({
                     <Badge
                       tone="neutral"
                       title={t("notifications.groupBadgeTooltip", {
-                        defaultValue: "同类告警在当前分组窗口内累计 {{count}} 条",
                         count: groupInfoMap[alert.id].count,
                       })}
                     >
                       {t("notifications.groupBadge", {
-                        defaultValue: "+{{count}} 条同类",
                         count: groupInfoMap[alert.id].count - 1,
                       })}
                     </Badge>
@@ -375,12 +373,10 @@ export function AlertList({
                       <Badge
                         tone="neutral"
                         title={t("notifications.groupBadgeTooltip", {
-                          defaultValue: "同类告警在当前分组窗口内累计 {{count}} 条",
                           count: groupInfoMap[alert.id].count,
                         })}
                       >
                         {t("notifications.groupBadge", {
-                          defaultValue: "+{{count}} 条同类",
                           count: groupInfoMap[alert.id].count - 1,
                         })}
                       </Badge>

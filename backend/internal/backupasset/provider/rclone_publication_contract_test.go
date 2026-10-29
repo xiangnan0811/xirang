@@ -279,3 +279,60 @@ func withoutPrivateRcloneNativeLocator(value *RcloneNativeCommitV1) *RcloneNativ
 }
 
 func ptrRcloneCommitForTest(value RcloneCommitV1) *RcloneCommitV1 { return &value }
+
+func TestRcloneRuntimeCompatibilityClosesAttemptCommitVersions(t *testing.T) {
+	portableV1 := validRcloneAttemptForTest(backupasset.PublicationVersionedPrefix)
+	portableV2 := portableV1
+	portableV2.MinimumRuntimeRevision = 2
+	portableV2.ManifestSchemaRevision = 2
+	portableCommitV1 := validRcloneCommitForTest(backupasset.PublicationVersionedPrefix)
+	portableCommitV2 := portableCommitV1
+	portableCommitV2.MinimumRuntimeRevision = 2
+	nativeV1 := validRcloneAttemptForTest(backupasset.PublicationNativeObjectVersions)
+	nativeCommitV1 := validRcloneCommitForTest(backupasset.PublicationNativeObjectVersions)
+	for _, test := range []struct {
+		name    string
+		attempt RcloneAttemptV1
+		commit  RcloneCommitV1
+		valid   bool
+	}{
+		{"portable_v1", portableV1, portableCommitV1, true},
+		{"portable_v2", portableV2, portableCommitV2, true},
+		{"native_v1", nativeV1, nativeCommitV1, true},
+		{"portable_commit_minimum_mismatch", portableV2, portableCommitV1, false},
+		{"portable_old_attempt_new_commit", portableV1, portableCommitV2, false},
+		{"mode_mismatch", portableV1, nativeCommitV1, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateRcloneRuntimeCompatibility(test.attempt, test.commit)
+			if (err == nil) != test.valid {
+				t.Fatalf("compatibility error=%v valid=%v", err, test.valid)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*RcloneAttemptV1)
+	}{
+		{"minimum_1_schema_2", func(value *RcloneAttemptV1) { value.ManifestSchemaRevision = 2 }},
+		{"minimum_2_schema_1", func(value *RcloneAttemptV1) { value.MinimumRuntimeRevision = 2 }},
+		{"future_minimum", func(value *RcloneAttemptV1) { value.MinimumRuntimeRevision = 3; value.ManifestSchemaRevision = 3 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := portableV1
+			test.mutate(&value)
+			if value.Validate() == nil {
+				t.Fatal("unsupported portable attempt accepted")
+			}
+		})
+	}
+	nativeV1.ManifestSchemaRevision = 2
+	if nativeV1.Validate() == nil {
+		t.Fatal("native attempt accepted V2 schema")
+	}
+	portableCommitV1.MinimumRuntimeRevision = 3
+	nativeCommitV1.MinimumRuntimeRevision = 2
+	if portableCommitV1.Validate() == nil || nativeCommitV1.Validate() == nil {
+		t.Fatal("unsupported commit minimum accepted")
+	}
+}

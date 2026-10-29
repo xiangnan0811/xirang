@@ -108,28 +108,23 @@ PR 打开、更新提交、重新打开及编辑时都会运行 CI；编辑事�
 Conventional Commits 标题。旧运行的重跑仍使用原始事件中的标题，应以编辑后触发的
 新运行结果为准。
 
-批量命令显式重试的 PostgreSQL 门禁分别通过 required-test runner 执行 handlers 与
-task 包的 `^TestBatchCommandRetry` 测试，覆盖事务竞争、授权、运行证据及迁移后约束；
-不依赖只匹配 `Postgres` 后缀的通用运行时选择器。数据库迁移测试仍由 migration parity
-门禁的 `Test.*Migration.*Postgres.*` 选择器覆盖。required-test runner 拒绝空匹配或缺少
-`TEST_POSTGRES_DSN`，CI 同时启用 PostgreSQL required-test 环境开关，避免缺失数据库被误报为通过。
+PostgreSQL job 只通过 `bash ../scripts/run-required-postgres-tests.sh --evidence-dir ...`
+执行 `scripts/required-postgres-tests.json` 的统一库存，工作目录为backend；不再维护多个
+宽regex、位置参数suite或直接Go测试旁路。独立backup/restore步骤保留。库存/原生声明/
+AST候选校验、默认及覆盖timeout、14个required环境开关和逐测试事件失败规则见
+[数据库合同](../spec/backend/database-guidelines.md#双引擎回归证据)。CI还运行隔离fake-process
+协议自测，并在成功或失败时上传逐组JSON事件、脱敏stderr及summary；fake协议通过不代表真实PG通过。
+证据文件写入、输出句柄关闭或读取句柄关闭失败也使 runner 失败；测试进程成功不能覆盖证据落盘或读取收尾错误。
 
-配置导入预览与实际导入的 PostgreSQL 门禁通过同一 required-test runner 执行 handlers
-包的 `^TestConfig(Import|Export)` 测试，包含 `Postgres` 后缀、`BothEngines` HTTP
-契约和无数据库后缀的双引擎依赖环用例；不能以普通 backend job 中跳过 PostgreSQL
-分支的结果替代该门禁。该选择器同时保留导出再导入与原有实际导入兼容性验证。
+库存保留批量重试的事务竞争、授权、执行证据和迁移约束，配置导入/导出的BothEngines、
+混合依赖环及HTTP静态场景，以及SSH替换/轮换的真实节点库存、锁后材料重分类、撤销、
+proof到期、并发导入与结果未知清理。每个必需PG子路径均须实际run/pass，不能以SQLite、
+父测试通过或空选择器掩盖缺失分支；新增PG声明与场景必须同步库存并通过独立census。
 
-受管 SSH 私钥替换与轮换通过 handlers 的
-`^TestSSHKey(ReplacementPostgres|RotationPostgres)$` required-test runner 门禁，
-覆盖非空真实节点库存、SSH 验证、锁后材料重分类、身份与撤销围栏、proof 到期、
-并发导入冲突及结果未知清理。普通编辑与轮换共用单次事务，不以 SQLite 或缺 DSN
-时的 skip 代替 PostgreSQL 验收；新增 suite 必须实际列出，空选择器失败关闭。
-
-升级策略只读预演在 PostgreSQL job 通过 required-test runner 执行 `./internal/api`
-的 `^TestEscalationPreviewPostgres$`，使用随机隔离 schema 验证两种预演、真实路由权限、
-`REPEATABLE READ READ ONLY`、并发快照、全表零写入和取消清理。缺少 DSN 或空选择器
-不是通过。Chromium 真实后端配置单独选择 `escalation-preview.spec.ts`；普通 mock
-配置排除它，Firefox/WebKit 的下载验收项目不扩大。业务边界见
+升级策略只读预演的 `TestEscalationPreviewPostgres` 仍在库存中，使用随机隔离schema
+验证真实路由权限、`REPEATABLE READ READ ONLY`、并发快照、零写入及取消清理。
+Chromium真实后端单独选择 `escalation-preview.spec.ts`；普通mock配置排除它，
+Firefox/WebKit下载项目不扩大。业务边界见
 [升级预演合同](../spec/domains/alerting-health.md#升级策略只读预演)。
 
 后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI action 与
@@ -173,30 +168,24 @@ smoke。因而该作业证明候选源码在两种原生平台上的构建、扫
 
 仓库不依赖 Codecov 账户或上传令牌。覆盖率由 CI 自行阻断：后端总覆盖率和备份资产专项阈值、前端非空 LCOV；竞态、漏洞、PostgreSQL、浏览器和容器验收各自保留。
 
-备份职责收敛后，CI 的 race 列表不再引用已删除的节点 probe、metrics、系统日志或服务 uptime 包，也不运行服务监控配置的专属 race 步骤；按需 SSH、任务、备份资产及投递并发检查保留。创建默认值的双引擎 parity 仅保留策略创建与调度行为。PostgreSQL 的 alerting/escalation 必需选择器包含节点及服务来源退役迁移后的直接投递与升级投递围栏测试，数据库选择器同时覆盖退役 schema 和启动保护器漂移。删除看板只移除其专用网格布局依赖，任务图表仍使用 Recharts；锁文件和 bundle budget 继续按上述门禁验证。
+备份职责收敛后，CI race列表不再引用已删除的节点probe、metrics、系统日志或服务
+uptime包，也不运行服务监控配置专属race；按需SSH、任务、备份资产及投递并发检查保留。
+统一PG库存包含退役后的直接/升级投递围栏、退役schema与启动保护器漂移、策略创建及调度双引擎parity。
+删除看板只移除其专用网格依赖，任务图表仍使用Recharts；锁文件和bundle budget门禁不变。
 
-通知投递统计的 SQLite／PostgreSQL 回归共用退役分类和权限夹具；PostgreSQL job 通过 `run-required-postgres-tests.sh` 必跑 `TestAlertDeliveryStatsPostgres`，防止缺少 DSN 或空选择器伪装通过。该入口与 alert delivery migration contract 相邻，但验证实际 handler 聚合，不替代迁移围栏测试；统计口径见[告警合同](../spec/domains/alerting-health.md#投递统计与窗口状态)。
-
-自动化执行历史在 PostgreSQL job 中通过同一 required runner 分别执行 `TestAutomationRuleLogsPostgres`（过滤、分页、安全 DTO、数据库故障）和 `TestAutomationRuleLogsDispatcherPostgres`（真实 Dispatcher 的 legacy 错误、durable 提交/回滚到认证路由的读取）。两者使用隔离 schema，缺少 DSN 或空选择器不构成通过；不以 SQLite 结果代替 PostgreSQL，也不修改持久模型或执行引擎。行为合同见[自动化规则](../admin/automation.md#执行记录)。
-
-通知页失败任务摘要的 PostgreSQL handler parity 通过同一 runner 必跑
-`TestTaskFailureSummaryPostgres`，与 SQLite 共用时间窗口、任务去重、运行时节点快照
-授权、历史删除及错误处理矩阵。缺少 DSN 或空选择器不得视为通过；该独立摘要不改变
-旧 POST 任务统计的当前节点授权，具体合同见[任务执行与恢复](../spec/domains/task-execution-recovery.md#通知页失败任务摘要)。
-
-RecoveryPoint 生产者历史保全由双引擎回归覆盖。PostgreSQL durable task runtime
-选择器包含 TaskRun retention 回归；其后的 producer retention consumers 步骤通过
-`run-required-postgres-tests.sh` 必跑
+通知投递统计、自动化执行历史、失败任务摘要及生产者历史保全仍由各自领域测试证明；
+它们现在由统一库存串行选择，而非相邻独立selector步骤。库存包含
+`TestAlertDeliveryStatsPostgres`、`TestAutomationRuleLogsPostgres`、
+`TestAutomationRuleLogsDispatcherPostgres`、`TestTaskFailureSummaryPostgres`、
 `TestRecoveryPointProducerRetentionConsumersPostgres` 和
-`TestRecoveryPointProducerRetentionPublicationPostgres`，验证完整迁移库上的真实
-Manager 清理、搜索及生命周期解析消费者和 Prepare 并发边界。缺少 DSN、空选择器或
-跳过 PostgreSQL 不构成通过；保留规则归属[任务执行与恢复合同](../spec/domains/task-execution-recovery.md)。
+`TestRecoveryPointProducerRetentionPublicationPostgres`，保留原授权、真实Dispatcher、
+迁移库Manager清理、搜索/生命周期解析及Prepare并发语义，不以optional skip代替PG。
 
-Recovery 授权收据的 PostgreSQL 必需步骤使用同一 runner 执行
+Recovery授权收据库存保留
 `TestRecoveryAuthorizationReceiptRollbackBeforeCommitPostgres` 和
 `TestRecoveryAuthorizationReceiptReaperHandlesAllEffectKindsPostgres`：
-exact-mirror 删除授权必须基于真实已暂停的执行证据验证事务回滚；清理用例通过真实
-授权生成短有效期收据，等待数据库时钟确认到期，不修改不可变收据或绕过数据库约束。
+exact-mirror删除授权基于真实已暂停执行证据验证事务回滚；清理用例通过真实授权生成
+短有效期收据并等待数据库时钟，不修改不可变收据或绕过数据库约束。
 
 真实后端 Playwright smoke 在独立 CI 步骤先编译服务以准备 Go 构建缓存，避免冷缓存依赖下载和首次编译消耗浏览器 webServer 的就绪窗口。smoke 仍由隔离脚本构建并启动临时二进制与数据库，保留原有就绪超时及真实浏览器断言，不复用外部运行中的服务。
 
@@ -347,3 +336,18 @@ Core 的 curl 锁定从已不可安装的 `8.22.0-r0` 更新为 Alpine 3.23 的
 兼容性验证。这不等于升级运行镜像的 libc，也不自动构成安全漏洞修复声明。
 
 保留完整 Compose smoke、Worker 对应检查和漏洞扫描，不能用单一架构成功替代另一个架构。维护性依赖更新也应按发布手册检查合并后自动化，不手动提升版本或重发镜像。
+
+### Worker Python 传递依赖安全更新
+
+Worker 显式锁定 `python3=3.12.16-r0`，替换受 CVE-2026-115557 影响的
+`3.12.15-r0`。按原生双架构采集流程重新生成完整输入事务；分别核对 `pyc`、
+`python3`、`python3-pyc`、`python3-pycache-pyc0` 的已验签 APK 与安装清单，
+并通过输入镜像及最终 Worker 镜像扫描，不能仅凭一个 root 的版本证明全部子包修复。
+输入规格、Worker Dockerfile 与生产 inventory 的显式 pin 保持一致；新 lock、
+八份 manifest 和 Worker 投影须来自同一成功采集 run，并验证其 source SHA 与 attestation。
+重新解析引起的其他传递包变化也须纳入审查，不能手工拼接旧、新 manifest。
+
+Worker 输入内容变化后，Core 与启用的 Worker 均须同源重建，并更新双架构最终闭包、
+签名 bundle 和 proof。CI 临时密钥签出的 fixture 只用于验收验证路径，不可当作生产运行包；
+实际切换仍须使用授权的签名与信任材料，先排空旧 Worker 在途处理，回退时恢复整套匹配制品。
+本补丁不新增配置或数据库迁移，回退旧 Python 仍会恢复该漏洞风险。

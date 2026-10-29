@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,65 @@ func (fake *productionRcloneCommandPreflightFake) WriteNativeCanary(
 	return fake.nativeResult, nil
 }
 
+type privateFailureRcloneCommand struct {
+	err error
+}
+
+func (command *privateFailureRcloneCommand) PreflightPortable(context.Context, provider.RclonePortableCommandPreflightRequest) (provider.RclonePortableCommandPreflightResult, error) {
+	return provider.RclonePortableCommandPreflightResult{}, command.err
+}
+
+func (command *privateFailureRcloneCommand) WriteNativeCanary(context.Context, provider.RcloneNativeCommandPreflightRequest) (provider.RcloneNativeCommandPreflightResult, error) {
+	return provider.RcloneNativeCommandPreflightResult{}, command.err
+}
+
+func TestProductionRclonePreflighterMasksPrivateBoundaryErrors(t *testing.T) {
+	now := time.Now().UTC()
+	private := errors.New("FAKE_PRIVATE_BUCKET_PATH_ARN_COMMAND_OUTPUT_FOR_TEST_ONLY")
+	cleanup := errors.New("FAKE_PRIVATE_STAGING_CLEANUP_FOR_TEST_ONLY")
+	underlying := errors.Join(private, cleanup, backupasset.ErrConflict)
+	command := &privateFailureRcloneCommand{err: underlying}
+	preflighter, err := NewProductionRcloneVersioningPreflighter(RcloneProductionPreflightDependencies{
+		CommandPlane: command, IdentityKey: []byte("FAKE_RCLONE_PREFLIGHT_IDENTITY_KEY_FOR_TEST_ONLY"),
+		Now: func() time.Time { return now },
+		NativeFactory: func(context.Context, provider.RcloneNativeBootstrap, string, int) (RcloneNativePreflightFactory, error) {
+			return nil, underlying
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := RcloneNativePreflightInput{
+		PreflightID: strings.Repeat("a", 32), CandidateID: strings.Repeat("b", 32), CandidateExpiresAt: now.Add(time.Hour),
+		TaskRevision: 1, ConfigRevision: 1, CredentialRevision: 1, CapabilityRevision: 1, TaskID: 1, NodeID: 2, BindingRevision: 1,
+		Request: backupasset.RcloneNativeBindingRequest{TaskID: 1, ExpectedTaskRevision: 1, SetupID: strings.Repeat("b", 32),
+			Region: "us-east-1", Bucket: "fake-private-bucket", ManagedPrefix: "managed/", RoleARN: "arn:aws:iam::123456789012:role/test",
+			Bootstrap: backupasset.RcloneNativeBootstrapInput{Mode: backupasset.RcloneBootstrapWorkloadChain}, EncryptionProfile: backupasset.RcloneEncryptionSSES3},
+		AbsoluteDeadline: now.Add(30 * time.Minute), KMSReadKeyMaxCount: 8,
+		ObservationLimits: provider.RcloneNativeObservationLimits{PageSize: 10, MaxPages: 10, MaxRecords: 100},
+	}
+	portable := RclonePortablePreflightInput{PreflightID: strings.Repeat("c", 32), CandidateID: strings.Repeat("d", 32),
+		CandidateExpiresAt: now.Add(time.Hour), TaskRevision: 1, ConfigRevision: 1, CredentialRevision: 1,
+		CapabilityRevision: 1, TaskID: 1, NodeID: 2, BindingRevision: 1, ManagedRootLocator: "archive:managed"}
+	for _, test := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "native-factory", run: func() error { _, err := preflighter.PreflightNative(context.Background(), native); return err }},
+		{name: "portable-command-and-cleanup", run: func() error { _, err := preflighter.PreflightPortable(context.Background(), portable); return err }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.run()
+			if !errors.Is(err, private) || !errors.Is(err, cleanup) || !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("boundary lost causes or classification: %v", err)
+			}
+			if strings.Contains(err.Error(), private.Error()) || strings.Contains(err.Error(), cleanup.Error()) {
+				t.Fatal("private provider failure or cleanup detail leaked from preflight")
+			}
+		})
+	}
+}
+
 func TestProductionRclonePreflighterRejectsNilNativeReceiver(t *testing.T) {
 	var preflighter *productionRcloneVersioningPreflighter
 	_, err := preflighter.PreflightNative(context.Background(), RcloneNativePreflightInput{})
@@ -70,7 +130,10 @@ func TestProductionRclonePreflighterMapsPortableCommandEvidence(t *testing.T) {
 	}
 	evidence, err := preflighter.PreflightPortable(context.Background(), RclonePortablePreflightInput{
 		PreflightID: strings.Repeat("d", 32), TaskID: 7, NodeID: 8, BindingRevision: 3,
-		BoundConfig: bound, TargetRemote: "archive", ManagedRootLocator: "archive:managed", LegacyLocator: "archive:legacy",
+		CandidateID: strings.Repeat("e", 32), CandidateExpiresAt: now.Add(time.Hour),
+		TaskRevision: 9, ConfigRevision: 3, CredentialRevision: 3,
+		CapabilityRevision: 4,
+		BoundConfig:        bound, TargetRemote: "archive", ManagedRootLocator: "archive:managed", LegacyLocator: "archive:legacy",
 		AbsoluteDeadline: now.Add(time.Hour), LowLevelRetries: 3, ControlPayloadMaxBytes: 1 << 20,
 		FullVerifyMaxBytes: 1 << 20, ManifestOptions: testRclonePreflightManifestOptions(),
 	})
@@ -88,6 +151,7 @@ func TestProductionRclonePreflighterMapsPortableCommandEvidence(t *testing.T) {
 
 func TestProductionRclonePreflighterRequiresStableNativeWindowAndExactCanary(t *testing.T) {
 	clock := time.Date(2026, 7, 16, 9, 0, 0, 0, time.UTC)
+	originalClock := clock
 	preflightID := strings.Repeat("e", 32)
 	payload := bytes.Repeat([]byte{0x42}, 64)
 	payloadDigest := sha256.Sum256(payload)
@@ -102,6 +166,10 @@ func TestProductionRclonePreflighterRequiresStableNativeWindowAndExactCanary(t *
 		versioning: provider.RcloneNativeVersioningObservation{Status: "Enabled", MFADelete: "Disabled"},
 		lifecycle:  provider.RcloneNativeLifecycleObservation{Rules: []provider.RcloneNativeLifecycleRule{}},
 		encryption: provider.RcloneNativeBucketEncryption{Algorithm: "AES256", BlockedEncryptionTypesKnown: true},
+	}
+	s3.onEncryption = func() {
+		s3.onEncryption = nil
+		clock = clock.Add(time.Minute)
 	}
 	command := &productionRcloneCommandPreflightFake{nativeResult: provider.RcloneNativeCommandPreflightResult{
 		PayloadDigest: hex.EncodeToString(payloadDigest[:]), PayloadBytes: 64,
@@ -130,6 +198,8 @@ func TestProductionRclonePreflighterRequiresStableNativeWindowAndExactCanary(t *
 	}
 	input := RcloneNativePreflightInput{
 		PreflightID: preflightID, TaskID: 7, NodeID: 8, BindingRevision: 3,
+		CandidateID: strings.Repeat("f", 32), CandidateExpiresAt: clock.Add(time.Hour),
+		TaskRevision: 9, ConfigRevision: 3, CredentialRevision: 3, CapabilityRevision: 4,
 		Request: backupasset.RcloneNativeBindingRequest{
 			TaskID: 7, ExpectedTaskRevision: 9, ExpectedBindingRevision: 2, SetupID: strings.Repeat("f", 32),
 			Region: profile.Region, Bucket: profile.Bucket, ManagedPrefix: profile.ManagedPrefix,
@@ -143,11 +213,31 @@ func TestProductionRclonePreflighterRequiresStableNativeWindowAndExactCanary(t *
 		ObservationLimits: provider.RcloneNativeObservationLimits{PageSize: 100, MaxPages: 10, MaxRecords: 1000},
 	}
 
-	settling, err := preflighter.PreflightNative(context.Background(), input)
+	started, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	factory.onBootstrap = func() { close(started); <-release }
+	type nativeResult struct {
+		evidence RcloneVersioningPreflightEvidence
+		err      error
+	}
+	first := make(chan nativeResult, 1)
+	go func() {
+		value, err := preflighter.PreflightNative(context.Background(), input)
+		first <- nativeResult{evidence: value, err: err}
+	}()
+	<-started
+	if _, err := preflighter.PreflightNative(context.Background(), input); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("direct concurrent native preflight error=%v", err)
+	}
+	releaseOnce.Do(func() { close(release) })
+	initial := <-first
+	factory.onBootstrap = nil
+	settling, err := initial.evidence, initial.err
 	if err != nil {
 		t.Fatalf("first native observation: %v", err)
 	}
-	if !settling.Settling || settling.SettlingObservedAt != clock || command.nativeCalls != 0 {
+	if !settling.Settling || settling.SettlingObservedAt != clock || !clock.After(originalClock) || command.nativeCalls != 0 {
 		t.Fatalf("first native evidence=%+v nativeCalls=%d", settling, command.nativeCalls)
 	}
 	clock = clock.Add(14 * time.Minute)
@@ -169,15 +259,54 @@ func TestProductionRclonePreflighterRequiresStableNativeWindowAndExactCanary(t *
 		!isLowerHex64(ready.Native.CanaryEncryptionEvidenceDigest) {
 		t.Fatalf("ready native evidence=%+v calls=%d deletes=%d", ready, command.nativeCalls, s3.deleteCalls)
 	}
+	canonical, err := provider.CanonicalRcloneNativeBucketEncryptionDigest(s3.encryption)
+	if err != nil || ready.Native.BucketEncryptionDigest != canonical {
+		t.Fatal("native preflight encryption digest differs from health canonical digest")
+	}
+	input.PublicationConfig.Rclone.LowLevelRetries++
+	settling, err = preflighter.PreflightNative(context.Background(), input)
+	if err != nil || !settling.Settling || settling.SettlingObservedAt != clock || command.nativeCalls != 1 {
+		t.Fatalf("changed publication settings reused prior observation: %+v %v", settling, err)
+	}
+	input.CandidateID = strings.Repeat("c", 32)
+	input.PreflightID = strings.Repeat("d", 32)
+	input.CandidateExpiresAt = clock.Add(15 * time.Minute)
+	if _, err := preflighter.PreflightNative(context.Background(), input); !errors.Is(err, backupasset.ErrConflict) || command.nativeCalls != 1 {
+		t.Fatalf("short native candidate error=%v calls=%d", err, command.nativeCalls)
+	}
+	input.CandidateID = strings.Repeat("a", 32)
+	input.PreflightID = strings.Repeat("b", 32)
+	input.CandidateExpiresAt = clock.Add(time.Hour)
+	input.AbsoluteDeadline = clock.Add(45 * time.Minute)
+	settling, err = preflighter.PreflightNative(context.Background(), input)
+	if err != nil || !settling.Settling || command.nativeCalls != 1 {
+		t.Fatalf("new generation reused prior observation: %+v %v", settling, err)
+	}
+	clock = clock.Add(15 * time.Minute)
+	previousWrite := command.onNativeWrite
+	command.onNativeWrite = func(request provider.RcloneNativeCommandPreflightRequest) {
+		previousWrite(request)
+		clock = clock.Add(time.Minute)
+		s3.versioning.MFADelete = "Enabled"
+	}
+	input.AbsoluteDeadline = clock.Add(45 * time.Minute)
+	settling, err = preflighter.PreflightNative(context.Background(), input)
+	if err != nil || !settling.Settling || settling.SettlingObservedAt != clock || command.nativeCalls != 2 {
+		t.Fatalf("post-canary drift did not reset at observation completion: %+v %v", settling, err)
+	}
 }
 
 type productionRclonePreflightAWSFactoryFake struct {
-	now        func() time.Time
-	externalID string
-	s3         provider.RcloneNativeCanaryS3
+	now         func() time.Time
+	externalID  string
+	s3          provider.RcloneNativeCanaryS3
+	onBootstrap func()
 }
 
-func (*productionRclonePreflightAWSFactoryFake) BootstrapCredentialsExpire(context.Context) (bool, error) {
+func (fake *productionRclonePreflightAWSFactoryFake) BootstrapCredentialsExpire(context.Context) (bool, error) {
+	if fake.onBootstrap != nil {
+		fake.onBootstrap()
+	}
 	return false, nil
 }
 
@@ -214,14 +343,15 @@ func (*productionRclonePreflightKMSFake) DescribeKey(context.Context, string) (p
 }
 
 type productionRclonePreflightS3Fake struct {
-	profile     provider.RcloneNativeProfile
-	now         func() time.Time
-	payload     []byte
-	versioning  provider.RcloneNativeVersioningObservation
-	lifecycle   provider.RcloneNativeLifecycleObservation
-	encryption  provider.RcloneNativeBucketEncryption
-	records     []provider.RcloneNativeVersionRecord
-	deleteCalls int
+	profile      provider.RcloneNativeProfile
+	now          func() time.Time
+	payload      []byte
+	versioning   provider.RcloneNativeVersioningObservation
+	lifecycle    provider.RcloneNativeLifecycleObservation
+	encryption   provider.RcloneNativeBucketEncryption
+	records      []provider.RcloneNativeVersionRecord
+	deleteCalls  int
+	onEncryption func()
 }
 
 func (fake *productionRclonePreflightS3Fake) BucketIdentity(context.Context, provider.RcloneNativeProfile) (provider.RcloneNativeBucketIdentity, error) {
@@ -234,6 +364,9 @@ func (fake *productionRclonePreflightS3Fake) GetLifecycle(context.Context, provi
 	return fake.lifecycle, nil
 }
 func (fake *productionRclonePreflightS3Fake) GetEncryption(context.Context, provider.RcloneNativeProfile) (provider.RcloneNativeBucketEncryption, error) {
+	if fake.onEncryption != nil {
+		fake.onEncryption()
+	}
 	return fake.encryption, nil
 }
 func (fake *productionRclonePreflightS3Fake) ListVersionPage(_ context.Context, request provider.RcloneNativeVersionPageRequest) (provider.RcloneNativeVersionPage, error) {

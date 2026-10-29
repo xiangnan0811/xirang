@@ -274,6 +274,7 @@ func (handler *TaskRcloneVersioningHandler) SetNativeBinding(c *gin.Context) {
 
 // CreatePreflight godoc
 // @Summary      执行 Rclone 版本化预检
+// @Description  响应 purpose 为 activation 或 renewal；renewal 仅延长当前绑定授权。
 // @Tags         tasks
 // @Security     Bearer
 // @Accept       json
@@ -302,6 +303,10 @@ func (handler *TaskRcloneVersioningHandler) CreatePreflight(c *gin.Context) {
 	}
 	result, err := handler.service.CreateRcloneVersioningPreflightForRequest(c.Request.Context(), request, backupRepositoryRequestContext(c))
 	if err != nil {
+		respondTaskRcloneVersioningError(c, err)
+		return
+	}
+	if err := result.Validate(); err != nil {
 		respondTaskRcloneVersioningError(c, err)
 		return
 	}

@@ -55,6 +55,9 @@ func testAccountRecoveryMigration(t *testing.T, fixture migrationFixture) {
 		if err := db.QueryRow(`SELECT totp_reenrollment_required FROM users WHERE id = 41`).Scan(&required); err != nil || required {
 			t.Fatalf("existing identity must default to unrestricted: required=%v error=%v", required, err)
 		}
+		if err := migrator.Up(); err != nil {
+			t.Fatalf("upgrade preserved identity to current schema: %v", err)
+		}
 		if err := VerifyCurrentSchema(fixture.recoveryWorkerGorm(t, db), fixture.engine); err != nil {
 			t.Fatalf("read-only current schema check on %s: %v", fixture.engine, err)
 		}
@@ -114,8 +117,8 @@ func testAccountRecoveryMigration(t *testing.T, fixture migrationFixture) {
 			if err != nil || beforeGuard != afterGuard {
 				t.Fatal("rejected downgrade changed guard definition")
 			}
-			if err := VerifyCurrentSchema(fixture.recoveryWorkerGorm(t, db), fixture.engine); err != nil {
-				t.Fatalf("rejected downgrade damaged clean schema: %v", err)
+			if err := validateMinimumRecoverySchema(db, fixture.engine, accountRecoverySchemaVersion); err != nil {
+				t.Fatalf("rejected downgrade damaged recovery schema: %v", err)
 			}
 			// Admission allows future versions and a return to the protected floor.
 			fixture.mustExec(t, db, `UPDATE schema_migrations SET version = ?`, accountRecoverySchemaVersion+1)
@@ -233,7 +236,7 @@ func testAccountRecoveryMigration(t *testing.T, fixture migrationFixture) {
 		if err != nil || !dirty || version != accountRecoverySchemaVersion {
 			t.Fatal("verifier or startup repaired dirty metadata")
 		}
-		fixture.mustExec(t, db, `UPDATE schema_migrations SET dirty = ?, version = ?`, false, accountRecoverySchemaVersion+1)
+		fixture.mustExec(t, db, `UPDATE schema_migrations SET dirty = ?, version = ?`, false, latestMigrationVersion+1)
 		if err := VerifyCurrentSchema(gormDB, fixture.engine); !errors.Is(err, ErrMigrationSchemaDrift) {
 			t.Fatalf("future schema accepted: %v", err)
 		}
@@ -357,7 +360,7 @@ func testAccountRecoveryMigrationSchemaDrift(t *testing.T, fixture migrationFixt
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, uint(accountRecoverySchemaVersion))
+			migrator, db := fixture.openAt(t, uint(latestMigrationVersion))
 			tc.mutate(t, db)
 			gormDB := fixture.recoveryWorkerGorm(t, db)
 			if err := VerifyCurrentSchema(gormDB, fixture.engine); !errors.Is(err, ErrMigrationSchemaDrift) {
@@ -366,7 +369,7 @@ func testAccountRecoveryMigrationSchemaDrift(t *testing.T, fixture migrationFixt
 			if err := RunMigrations(gormDB, fixture.engine); !errors.Is(err, ErrMigrationSchemaDrift) {
 				t.Fatalf("startup accepted schema drift: %v", err)
 			}
-			assertMigrationVersion(t, migrator, uint(accountRecoverySchemaVersion))
+			assertMigrationVersion(t, migrator, uint(latestMigrationVersion))
 		})
 	}
 }

@@ -21,10 +21,13 @@ type fakeRclonePortableRemote struct {
 	observations   []RcloneManifestBundle
 	observationAt  int
 	controls       map[string][]byte
+	reads          map[string]int
 	mutations      []string
 	failMutation   string
 	tamperReadback string
-	fullByteProof  RcloneFullByteProof
+	fullByteProof  RclonePortableByteVerification
+	fullByteError  error
+	fullByteCalls  int
 	copyDestSeen   *RclonePrivateLocator
 	copyDestError  error
 }
@@ -101,6 +104,10 @@ func (remote *fakeRclonePortableRemote) PutControl(_ context.Context, _ RclonePo
 }
 
 func (remote *fakeRclonePortableRemote) ReadControl(_ context.Context, _ RclonePortablePublicationRequest, name string, _ int64) ([]byte, error) {
+	if remote.reads == nil {
+		remote.reads = make(map[string]int)
+	}
+	remote.reads[name]++
 	payload := append([]byte(nil), remote.controls[name]...)
 	if remote.tamperReadback == name && len(payload) > 0 {
 		payload[len(payload)-1] ^= 1
@@ -117,8 +124,9 @@ func (remote *fakeRclonePortableRemote) TransferData(_ context.Context, _ Rclone
 	return remote.copyDestError
 }
 
-func (remote *fakeRclonePortableRemote) VerifyFullBytes(context.Context, RclonePortablePublicationRequest, uint64) (RcloneFullByteProof, error) {
-	return remote.fullByteProof, nil
+func (remote *fakeRclonePortableRemote) VerifyFullBytes(context.Context, RclonePortablePublicationRequest, uint64) (RclonePortableByteVerification, error) {
+	remote.fullByteCalls++
+	return remote.fullByteProof, remote.fullByteError
 }
 
 func portablePublicationRequestForTest(t *testing.T, weak bool) RclonePortablePublicationRequest {
@@ -144,6 +152,8 @@ func portablePublicationRequestForTest(t *testing.T, weak bool) RclonePortablePu
 		t.Fatal(err)
 	}
 	attempt := validRcloneAttemptForTest(backupasset.PublicationVersionedPrefix)
+	attempt.MinimumRuntimeRevision = 2
+	attempt.ManifestSchemaRevision = 2
 	source := mustRclonePrivateLocatorForTest(t, "/srv/source")
 	attemptRoot := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+attempt.RecoveryPointID+"/attempts/"+attempt.AttemptID)
 	dataRoot := mustRclonePrivateLocatorForTest(t, attemptRoot.value+"/data")
@@ -175,7 +185,7 @@ func TestRclonePortablePublishesAttemptDataManifestIndexAndCommitLast(t *testing
 	if !reflect.DeepEqual(remote.mutations, wantMutations) {
 		t.Fatalf("mutations=%v want=%v", remote.mutations, wantMutations)
 	}
-	if err := commit.Validate(); err != nil || commit.Portable == nil || commit.ManifestIndexDigest != request.Manifest.IndexDigest ||
+	if err := commit.Validate(); err != nil || commit.Portable == nil || commit.ManifestIndexDigest == request.Manifest.IndexDigest ||
 		commit.SourceObservationDigest != observation.Digest || commit.DestinationObservationDigest != observation.Digest ||
 		commit.Portable.CommitComponent != "commit.json" || commit.Portable.CommitAuthenticationDigest == "" {
 		t.Fatalf("provider commit=%+v err=%v", commit, err)
@@ -293,12 +303,9 @@ func TestRclonePortableWeakHashCannotCommitWithoutExactFullByteProof(t *testing.
 	}
 
 	remote = &fakeRclonePortableRemote{
-		presence:     RcloneAttemptAbsent,
-		observations: []RcloneManifestBundle{request.Manifest, request.Manifest, request.Manifest, request.Manifest},
-		fullByteProof: RcloneFullByteProof{
-			SourceDigest: strings.Repeat("1", 64), DestinationDigest: strings.Repeat("1", 64),
-			VerifiedBytes: request.Manifest.LogicalBytes, Complete: true,
-		},
+		presence:      RcloneAttemptAbsent,
+		observations:  []RcloneManifestBundle{request.Manifest, request.Manifest, request.Manifest, request.Manifest, request.Manifest, request.Manifest},
+		fullByteProof: RclonePortableByteVerification{VerifiedBytes: request.Manifest.LogicalBytes, Complete: true},
 	}
 	publisher = NewRclonePortablePublisher(remote, func(time.Duration) {}, portableNowForTest)
 	commit, err := publisher.Publish(context.Background(), request)
@@ -465,6 +472,11 @@ func TestRclonePortableReconcileAcceptsOnlyExactAuthenticatedCommit(t *testing.T
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("restart reconcile got=%+v err=%v want=%+v", got, err, want)
 	}
+	withDifferentSourceIndex := request
+	withDifferentSourceIndex.Manifest.IndexDigest = strings.Repeat("f", 64)
+	if _, err := publisher.Reconcile(context.Background(), withDifferentSourceIndex); err != nil {
+		t.Fatalf("reconcile incorrectly required prepared source index: %v", err)
+	}
 	remote.controls["commit.json"][0] ^= 1
 	if _, err := publisher.Reconcile(context.Background(), request); !errors.Is(err, ErrRcloneMarkerMismatch) {
 		t.Fatalf("tampered reconcile error=%v", err)
@@ -505,8 +517,12 @@ func TestRclonePublicationStrategyRegistersOneClosedPortableLane(t *testing.T) {
 		t.Fatalf("record commit=%+v err=%v", commit, err)
 	}
 	manifest, err := gotStrategy.VerifyOrBuildManifest(context.Background(), prepared, commit, request.ManifestOptions.Limits)
-	if err != nil || manifest.Rclone == nil || manifest.Rclone.ManifestIndexDigest != request.Manifest.IndexDigest {
+	if err != nil || manifest.Rclone == nil || manifest.Rclone.ManifestIndexDigest == request.Manifest.IndexDigest {
 		t.Fatalf("manifest=%+v err=%v", manifest, err)
+	}
+	remote.controls["manifest-index.json"][0] ^= 1
+	if _, err := gotStrategy.VerifyOrBuildManifest(context.Background(), prepared, commit, request.ManifestOptions.Limits); err == nil {
+		t.Fatal("manifest verification accepted changed published controls")
 	}
 	if _, err := gotStrategy.Prepare(context.Background(), PublicationPrepareRequest{Attempt: NewResticPublicationAttempt(ResticAttemptV1{})}); err == nil {
 		t.Fatal("Rclone strategy accepted a Restic attempt")

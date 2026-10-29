@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-// Candidate identity is the sorted tracked/non-ignored file path and content
-// fingerprint shared by the runner and run-mode compiler.
+// Candidate identity is the sorted tracked/non-ignored working-tree file path and
+// content fingerprint shared by the runner and run-mode compiler. Tracked files
+// deleted from the working tree are absent from the candidate, so their removal
+// changes the file list and digest; every listed path must still hash cleanly.
 
 const DEPENDENCY_DIRECTORIES = new Set([".git", ".pnpm", "node_modules", "vendor", "bower_components", "Pods"]);
 const IGNORED_OUTPUT_PREFIXES = [
@@ -77,10 +79,14 @@ function isLockfile(relativePath) {
   return LOCKFILE_NAMES.has(path.posix.basename(relativePath));
 }
 
+function listGitPaths(repositoryRoot, options) {
+  return runGit(repositoryRoot, ["ls-files", ...options, "-z"]).toString("utf8").split("\0").filter(Boolean);
+}
+
 export function captureCandidate(repositoryRoot) {
-  const listed = runGit(repositoryRoot, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]);
-  const paths = listed.toString("utf8").split("\0").filter(Boolean)
-    .filter((relativePath) => !ignoredCandidatePath(relativePath))
+  const deleted = new Set(listGitPaths(repositoryRoot, ["--deleted"]));
+  const paths = listGitPaths(repositoryRoot, ["--cached", "--others", "--exclude-standard"])
+    .filter((relativePath) => !deleted.has(relativePath) && !ignoredCandidatePath(relativePath))
     .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   const files = [];
   const seen = new Set();

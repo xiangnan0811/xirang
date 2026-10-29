@@ -276,8 +276,8 @@ func TestRcloneManifestFidelityRequiresFullBytesForWeakHashes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := ResolveRcloneManifestHashFidelity(strong, RcloneFullByteProof{}); err != nil || got != backupasset.RcloneHashProviderStrongChecksum {
-		t.Fatalf("strong fidelity=%q err=%v", got, err)
+	if strong.Fidelity.HashFidelity != backupasset.RcloneHashProviderStrongChecksum || strong.Fidelity.RequiresFullByteVerification {
+		t.Fatalf("strong observation fidelity=%+v", strong.Fidelity)
 	}
 
 	weakPayload, err := os.ReadFile("testdata/rclone/lsjson-weak-hash.json")
@@ -288,16 +288,8 @@ func TestRcloneManifestFidelityRequiresFullBytesForWeakHashes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveRcloneManifestHashFidelity(weak, RcloneFullByteProof{}); !errors.Is(err, ErrRcloneManifestFullByteProofRequired) {
-		t.Fatalf("weak manifest committed without full-byte proof: %v", err)
-	}
-	proof := RcloneFullByteProof{SourceDigest: strings.Repeat("1", 64), DestinationDigest: strings.Repeat("1", 64), VerifiedBytes: 1048576, Complete: true}
-	if got, err := ResolveRcloneManifestHashFidelity(weak, proof); err != nil || got != backupasset.RcloneHashDownloadVerifiedBytes {
-		t.Fatalf("download fidelity=%q err=%v", got, err)
-	}
-	proof.VerifiedBytes--
-	if _, err := ResolveRcloneManifestHashFidelity(weak, proof); !errors.Is(err, ErrRcloneManifestFullByteProofRequired) {
-		t.Fatalf("partial full-byte proof accepted: %v", err)
+	if weak.Fidelity.HashFidelity != backupasset.RcloneHashNotEvaluated || !weak.Fidelity.RequiresFullByteVerification {
+		t.Fatalf("weak observation fidelity=%+v", weak.Fidelity)
 	}
 }
 
@@ -305,6 +297,11 @@ func TestRclonePortableObservationsRequireStableSourceAndDestination(t *testing.
 	base := RcloneObservationV1{Digest: strings.Repeat("a", 64), EntryCount: 3, LogicalBytes: 5}
 	if err := ValidateRclonePortableObservations(base, base, base, base); err != nil {
 		t.Fatalf("stable observations rejected: %v", err)
+	}
+	other := base
+	other.Digest = strings.Repeat("c", 64)
+	if err := ValidateRclonePortableObservations(base, base, other, other); err != nil {
+		t.Fatalf("independently stable observations rejected: %v", err)
 	}
 	changed := base
 	changed.Digest = strings.Repeat("b", 64)

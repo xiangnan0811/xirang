@@ -1,0 +1,2 @@
+{"version":1,"path":"dir","physical_path":"dir","kind":"directory","size":0,"mod_time":"2026-07-16T01:00:00Z","metadata":{"gid":"1000","mode":"40750","mtime":"2026-07-16T01:00:00Z","uid":"1000"}}
+{"version":1,"path":"dir/file.txt","physical_path":"dir/file.txt","kind":"file","size":5,"mod_time":"2026-07-16T01:00:01Z","sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824","metadata":{"gid":"1000","mode":"100640","mtime":"2026-07-16T01:00:01Z","uid":"1000"}}

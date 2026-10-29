@@ -309,6 +309,51 @@ func TestBuildRcloneNativeEncryptionEvidenceUsesExactFrozenBindings(t *testing.T
 	}
 }
 
+func TestRcloneNativeEncryptionEvidenceAgreesForRetainedKeySets(t *testing.T) {
+	active := "arn:aws:kms:us-east-1:123456789012:key/FAKE-ACTIVE-AGREEMENT-KEY"
+	first := "arn:aws:kms:us-east-1:123456789012:key/FAKE-FIRST-AGREEMENT-KEY"
+	second := "arn:aws:kms:us-east-1:123456789012:key/FAKE-SECOND-AGREEMENT-KEY"
+	setDigests := make(map[int]string)
+	for _, test := range []struct {
+		name     string
+		retained []string
+	}{
+		{name: "no-retained-nil", retained: nil},
+		{name: "no-retained-empty", retained: []string{}},
+		{name: "two-retained-forward", retained: []string{first, second}},
+		{name: "two-retained-reverse", retained: []string{second, first}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			selection := RcloneNativeEncryptionSelection{Profile: RcloneNativeSSEKMSV1, ActiveKeyARN: active, RetainedReadKeyARNs: test.retained}
+			arns := append([]string{active}, test.retained...)
+			keys := make([]RcloneNativeKMSKey, len(arns))
+			bindings := make([]RcloneNativeKMSKeyDigestBinding, len(arns))
+			for index, arn := range arns {
+				keys[index] = validRcloneNativeKMSKeyForTest(arn)
+				bindings[len(arns)-1-index] = RcloneNativeKMSKeyDigestBinding{KeyARN: arn, Digest: rcloneNativeKMSKeyDigest(keys[index])}
+			}
+			for _, bucketKey := range []bool{false, true} {
+				bucket := RcloneNativeBucketEncryption{Algorithm: "aws:kms", KMSKeyARN: active, BucketKeyEnabled: bucketKey, BlockedEncryptionTypesKnown: true}
+				observed, err := ValidateRcloneNativeEncryption(selection, bucket, keys, RcloneNativeKMSLimits{MaxReadKeys: 8, MaxSerializedBytes: 4096})
+				if err != nil {
+					t.Fatal(err)
+				}
+				frozen, err := BuildRcloneNativeEncryptionEvidence(selection, bindings, bucketKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if observed != frozen {
+					t.Fatalf("observed and frozen encryption evidence disagree: observed=%+v frozen=%+v", observed, frozen)
+				}
+				if previous, ok := setDigests[len(test.retained)]; ok && previous != observed.ReadKeySetDigest {
+					t.Fatal("equivalent retained key sets changed identity across permutations")
+				}
+				setDigests[len(test.retained)] = observed.ReadKeySetDigest
+			}
+		})
+	}
+}
+
 func TestRcloneNativeSessionPolicyAndGeneratedConfigStayExactAndPrivate(t *testing.T) {
 	profile := validRcloneNativeProfileForTest()
 	activeARN := "arn:aws:kms:us-east-1:123456789012:key/FAKE-ACTIVE-KMS-KEY-FOR-TEST-ONLY"

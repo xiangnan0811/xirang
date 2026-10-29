@@ -73,14 +73,15 @@ type CommandResult struct {
 	Stderr []byte
 }
 
-// CommandCompletion records the joined remote-command outcome. Stderr is
-// intentionally excluded from JSON because callers must keep provider output
-// out of normal logs and serialized state.
+// CommandCompletion records the joined remote-command outcome. Stderr and
+// remote exit evidence are excluded from JSON because they are transport data.
 type CommandCompletion struct {
 	ExitCode        int
 	ExitCodeKnown   bool
 	Stderr          []byte `json:"-"`
 	StderrTruncated bool
+	// RemoteExited is true only when Wait observed an SSH exit status or signal.
+	RemoteExited bool `json:"-"`
 }
 
 type CommandReadHandle interface {
@@ -98,6 +99,14 @@ type CommandExecutionStream interface {
 	Cancel() error
 }
 
+// CommandPrefixExecutionStream permits intentional termination after the
+// caller has consumed its complete requested prefix. A successful prefix join
+// requires a confirmed remote exit and retains all other lifecycle failures.
+type CommandPrefixExecutionStream interface {
+	CommandExecutionStream
+	JoinPrefix() (CommandCompletion, error)
+}
+
 type CommandSession interface {
 	StdinPipe() (io.WriteCloser, error)
 	StdoutPipe() (io.Reader, error)
@@ -111,11 +120,12 @@ type CommandSession interface {
 type CommandSessionFactory func(context.Context) (CommandSession, error)
 
 type CommandRunner struct {
-	factory            CommandSessionFactory
-	semaphore          chan struct{}
-	terminationGrace   time.Duration
-	transportClose     func()
-	joinOwnedTransport bool
+	factory                 CommandSessionFactory
+	semaphore               chan struct{}
+	terminationGrace        time.Duration
+	transportClose          func()
+	joinOwnedTransport      bool
+	gracefulJoinedTransport bool
 }
 
 func NewCommandRunner(factory CommandSessionFactory, maxConcurrency int) *CommandRunner {
@@ -149,6 +159,16 @@ func NewSSHCommandRunnerWithTransportClose(client *ssh.Client, maxConcurrency in
 func NewSSHCommandRunnerWithJoinedTransportClose(client *ssh.Client, maxConcurrency int) *CommandRunner {
 	runner := NewSSHCommandRunnerWithTransportClose(client, maxConcurrency)
 	runner.joinOwnedTransport = true
+	return runner
+}
+
+// NewSSHCommandRunnerWithGracefulJoinedTransportClose owns a dedicated client.
+// Once a command starts, it requests TERM and allows the termination grace for
+// a real remote exit before closing the transport and joining all local owners.
+// Its ownership contract applies to OpenExecution/OpenRawExecution only.
+func NewSSHCommandRunnerWithGracefulJoinedTransportClose(client *ssh.Client, maxConcurrency int) *CommandRunner {
+	runner := NewSSHCommandRunnerWithJoinedTransportClose(client, maxConcurrency)
+	runner.gracefulJoinedTransport = true
 	return runner
 }
 
@@ -480,13 +500,13 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 		runContext, cancel = context.WithCancel(ctx)
 	}
 	var transportClose func()
-	var transportWatchDone chan struct{}
+	var stopTransportWatch func()
 	if runner.transportClose != nil {
 		var transportOnce sync.Once
 		transportClose = func() {
 			transportOnce.Do(runner.transportClose)
 		}
-		transportWatchDone = make(chan struct{})
+		transportWatchDone := make(chan struct{})
 		watchExited := make(chan struct{})
 		go func() {
 			defer close(watchExited)
@@ -496,12 +516,16 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 			case <-transportWatchDone:
 			}
 		}()
-		defer func() {
-			close(transportWatchDone)
-			if runner.joinOwnedTransport {
-				<-watchExited
-			}
-		}()
+		var stopOnce sync.Once
+		stopTransportWatch = func() {
+			stopOnce.Do(func() {
+				close(transportWatchDone)
+				if runner.joinOwnedTransport {
+					<-watchExited
+				}
+			})
+		}
+		defer stopTransportWatch()
 	}
 	session, err := runner.factory(runContext)
 	if err != nil {
@@ -551,29 +575,36 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 		startErr := fmt.Errorf("%w: %w", ErrCommandStart, err)
 		return fail(fmt.Errorf("%w: %w", ErrCommandFailed, startErr))
 	}
+	// Once Start returns, the execution watcher owns cancellation. Stop and
+	// join the setup watchdog before starting that watcher so it cannot close
+	// the transport during the graceful termination interval.
+	if runner.gracefulJoinedTransport && stopTransportWatch != nil {
+		stopTransportWatch()
+	}
 
 	stream := &commandExecution{
-		session:            session,
-		stdout:             stdout,
-		stderr:             stderr,
-		stdin:              stdin,
-		secretStdin:        specification.SecretStdin,
-		parentContext:      ctx,
-		runContext:         runContext,
-		cancel:             cancel,
-		remaining:          specification.MaxStdoutBytes,
-		maxRecordBytes:     specification.MaxRecordBytes,
-		maxStderrBytes:     specification.MaxStderrBytes,
-		release:            release,
-		terminationGrace:   runner.terminationGrace,
-		transportClose:     transportClose,
-		joinOwnedTransport: runner.joinOwnedTransport,
-		watchDone:          make(chan struct{}),
-		stdinDone:          make(chan struct{}),
-		stderrDone:         make(chan struct{}),
-		waitDone:           make(chan struct{}),
-		allDone:            make(chan struct{}),
-		finished:           make(chan struct{}),
+		session:                 session,
+		stdout:                  stdout,
+		stderr:                  stderr,
+		stdin:                   stdin,
+		secretStdin:             specification.SecretStdin,
+		parentContext:           ctx,
+		runContext:              runContext,
+		cancel:                  cancel,
+		remaining:               specification.MaxStdoutBytes,
+		maxRecordBytes:          specification.MaxRecordBytes,
+		maxStderrBytes:          specification.MaxStderrBytes,
+		release:                 release,
+		terminationGrace:        runner.terminationGrace,
+		transportClose:          transportClose,
+		joinOwnedTransport:      runner.joinOwnedTransport,
+		gracefulJoinedTransport: runner.gracefulJoinedTransport,
+		watchDone:               make(chan struct{}),
+		stdinDone:               make(chan struct{}),
+		stderrDone:              make(chan struct{}),
+		waitDone:                make(chan struct{}),
+		allDone:                 make(chan struct{}),
+		finished:                make(chan struct{}),
 	}
 	if closer, ok := stdout.(io.Closer); ok {
 		stream.stdoutCloser = closer
@@ -598,13 +629,14 @@ type commandExecution struct {
 	cancel        context.CancelFunc
 	release       func()
 
-	remaining          int64
-	maxRecordBytes     int
-	maxStderrBytes     int64
-	terminationGrace   time.Duration
-	transportClose     func()
-	joinOwnedTransport bool
-	watchDone          chan struct{}
+	remaining               int64
+	maxRecordBytes          int
+	maxStderrBytes          int64
+	terminationGrace        time.Duration
+	transportClose          func()
+	joinOwnedTransport      bool
+	gracefulJoinedTransport bool
+	watchDone               chan struct{}
 
 	stdinDone  chan struct{}
 	stderrDone chan struct{}
@@ -620,22 +652,27 @@ type commandExecution struct {
 
 	mu sync.Mutex
 
-	stdoutLineBytes int
-	stdoutEOF       bool
-	abandoned       bool
-	remainingLimit  error
-	stdoutReadErr   error
-	stderrReadErr   error
-	stdinWriteErr   error
-	stdinCloseErr   error
-	stdoutCloseErr  error
-	stderrCloseErr  error
-	connectionErr   error
-	signalErr       error
-	cleanupErr      error
-	waitErr         error
-	stderrBytes     []byte
-	stderrTruncated bool
+	stdoutLineBytes    int
+	stdoutEOF          bool
+	abandoned          bool
+	prefixRequested    bool
+	prefixInterruption bool
+	terminationStarted bool
+	signalSent         bool
+	waitCompleted      bool
+	remainingLimit     error
+	stdoutReadErr      error
+	stderrReadErr      error
+	stdinWriteErr      error
+	stdinCloseErr      error
+	stdoutCloseErr     error
+	stderrCloseErr     error
+	connectionErr      error
+	signalErr          error
+	cleanupErr         error
+	waitErr            error
+	stderrBytes        []byte
+	stderrTruncated    bool
 
 	completion CommandCompletion
 	resultErr  error
@@ -729,23 +766,36 @@ func (stream *commandExecution) Read(buffer []byte) (int, error) {
 }
 
 func (stream *commandExecution) Join() (CommandCompletion, error) {
-	stream.finalize(false)
+	stream.finalize(false, false)
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	return copyCommandCompletion(stream.completion), stream.resultErr
 }
 
+func (stream *commandExecution) JoinPrefix() (CommandCompletion, error) {
+	stream.finalize(false, true)
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	completion := copyCommandCompletion(stream.completion)
+	if stream.resultErr == nil && completion.ExitCodeKnown && completion.ExitCode != 0 {
+		return CommandCompletion{RemoteExited: completion.RemoteExited}, ErrCommandFailed
+	}
+	return completion, stream.resultErr
+}
+
 func (stream *commandExecution) Cancel() error {
-	stream.finalize(true)
+	stream.finalize(true, false)
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	return stream.resultErr
 }
 
-func (stream *commandExecution) finalize(cancelRequested bool) {
+func (stream *commandExecution) finalize(cancelRequested, prefixRequested bool) {
 	stream.finalizeOnce.Do(func() {
 		stream.mu.Lock()
 		naturalEOF := stream.stdoutEOF
+		stream.prefixRequested = prefixRequested
+		stream.prefixInterruption = prefixRequested && !naturalEOF && !stream.waitCompleted && !stream.terminationStarted
 		if cancelRequested || !naturalEOF {
 			stream.abandoned = true
 		}
@@ -805,7 +855,14 @@ func (stream *commandExecution) waitAfterTermination() {
 
 func (stream *commandExecution) terminate() {
 	stream.terminateOnce.Do(func() {
+		stream.mu.Lock()
+		stream.terminationStarted = true
+		stream.mu.Unlock()
 		stream.cancel()
+		if stream.gracefulJoinedTransport {
+			stream.terminateGracefully()
+			return
+		}
 		if stream.joinOwnedTransport {
 			stream.closeTransport()
 			stream.closeConnection()
@@ -813,11 +870,7 @@ func (stream *commandExecution) terminate() {
 		}
 		if stream.transportClose != nil {
 			go func() {
-				if err := stream.session.Signal(ssh.SIGTERM); err != nil {
-					stream.mu.Lock()
-					stream.signalErr = err
-					stream.mu.Unlock()
-				}
+				stream.setSignalResult(stream.session.Signal(ssh.SIGTERM))
 			}()
 			grace := stream.terminationGrace
 			if grace <= 0 {
@@ -833,11 +886,7 @@ func (stream *commandExecution) terminate() {
 			}
 			return
 		}
-		if err := stream.session.Signal(ssh.SIGTERM); err != nil {
-			stream.mu.Lock()
-			stream.signalErr = err
-			stream.mu.Unlock()
-		}
+		stream.setSignalResult(stream.session.Signal(ssh.SIGTERM))
 		grace := stream.terminationGrace
 		if grace <= 0 {
 			grace = defaultTerminationGrace
@@ -850,6 +899,49 @@ func (stream *commandExecution) terminate() {
 			stream.closeConnection()
 		}
 	})
+}
+
+func (stream *commandExecution) terminateGracefully() {
+	select {
+	case <-stream.waitDone:
+		return
+	default:
+	}
+	signalDone := make(chan struct{})
+	go func() {
+		defer close(signalDone)
+		stream.setSignalResult(stream.session.Signal(ssh.SIGTERM))
+	}()
+	grace := stream.terminationGrace
+	if grace <= 0 {
+		grace = defaultTerminationGrace
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	// Both the remote Wait and the signal writer get the same grace period.
+	// Closing the dedicated transport unblocks a stalled signal writer; join it
+	// before finalization can release the command's resources.
+	select {
+	case <-stream.waitDone:
+		select {
+		case <-signalDone:
+		case <-timer.C:
+			stream.closeTransport()
+			<-signalDone
+		}
+	case <-timer.C:
+		stream.closeTransport()
+		<-signalDone
+	}
+}
+
+func (stream *commandExecution) setSignalResult(err error) {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	stream.signalSent = err == nil
+	if err != nil {
+		stream.signalErr = err
+	}
 }
 
 func (stream *commandExecution) requestTermination() {
@@ -970,6 +1062,7 @@ func (stream *commandExecution) closeTransport() {
 func (stream *commandExecution) setWaitError(err error) {
 	stream.mu.Lock()
 	stream.waitErr = err
+	stream.waitCompleted = true
 	stream.mu.Unlock()
 }
 
@@ -1020,19 +1113,35 @@ func (stream *commandExecution) advanceStdout(count int, value []byte) bool {
 }
 
 func (stream *commandExecution) classifyLocked() (CommandCompletion, error) {
+	completion := CommandCompletion{RemoteExited: stream.remoteExitedLocked()}
 	switch {
 	case stream.parentContext.Err() != nil:
-		return CommandCompletion{}, fmt.Errorf("command canceled: %w", stream.parentContext.Err())
+		return completion, fmt.Errorf("command canceled: %w", stream.parentContext.Err())
 	case stream.runContext.Err() == context.DeadlineExceeded:
-		return CommandCompletion{}, ErrCommandTimeout
+		return completion, ErrCommandTimeout
 	case stream.remainingLimit != nil:
-		return CommandCompletion{}, ErrCommandOutputLimit
-	case stream.abandoned || stream.cleanupErr != nil || stream.stdoutReadErr != nil || stream.stderrReadErr != nil ||
+		return completion, ErrCommandOutputLimit
+	case stream.cleanupErr != nil || stream.stdoutReadErr != nil || stream.stderrReadErr != nil ||
 		stream.stdinWriteErr != nil || stream.stdinCloseErr != nil || stream.stdoutCloseErr != nil ||
 		stream.stderrCloseErr != nil || stream.connectionErr != nil || stream.signalErr != nil:
-		return CommandCompletion{}, ErrCommandFailed
+		return completion, ErrCommandFailed
 	}
-	completion := CommandCompletion{Stderr: append([]byte(nil), stream.stderrBytes...), StderrTruncated: stream.stderrTruncated}
+	if stream.abandoned {
+		if !stream.prefixRequested || !completion.RemoteExited {
+			return completion, ErrCommandFailed
+		}
+		if stream.waitErr == nil {
+			completion.ExitCodeKnown = true
+			return completion, nil
+		}
+		var exitErr *ssh.ExitError
+		if stream.prefixInterruption && stream.signalSent && errors.As(stream.waitErr, &exitErr) && exitErr.Signal() == string(ssh.SIGTERM) {
+			return completion, nil
+		}
+		return completion, ErrCommandFailed
+	}
+	completion.Stderr = append([]byte(nil), stream.stderrBytes...)
+	completion.StderrTruncated = stream.stderrTruncated
 	if stream.waitErr == nil {
 		completion.ExitCodeKnown = true
 		return completion, nil
@@ -1041,9 +1150,23 @@ func (stream *commandExecution) classifyLocked() (CommandCompletion, error) {
 	if errors.As(stream.waitErr, &exitStatusError) {
 		completion.ExitCode = exitStatusError.ExitStatus()
 		completion.ExitCodeKnown = true
+		if stream.prefixRequested && completion.ExitCode != 0 {
+			return CommandCompletion{RemoteExited: completion.RemoteExited}, ErrCommandFailed
+		}
 		return completion, nil
 	}
-	return CommandCompletion{}, ErrCommandFailed
+	return CommandCompletion{RemoteExited: completion.RemoteExited}, ErrCommandFailed
+}
+
+func (stream *commandExecution) remoteExitedLocked() bool {
+	if !stream.waitCompleted {
+		return false
+	}
+	if stream.waitErr == nil {
+		return true
+	}
+	var exitErr *ssh.ExitError
+	return errors.As(stream.waitErr, &exitErr) && (exitErr.ExitStatus() >= 0 || exitErr.Signal() != "")
 }
 
 func copyCommandCompletion(value CommandCompletion) CommandCompletion {

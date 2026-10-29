@@ -3,8 +3,6 @@ package provider
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -674,15 +672,26 @@ func (strategy *RclonePublicationStrategy) OpenCatalogRead(ctx context.Context, 
 	switch attempt {
 	case backupasset.PublicationVersionedPrefix:
 		portable := *input.Reconcile.PortableRequest
-		actual, err = strategy.portable.Reconcile(ctx, portable)
-		if err == nil {
-			var manifest RcloneManifestBundle
-			manifest, err = readRclonePortableCatalogManifest(ctx, strategy.portable.remote, portable, actual)
-			if err == nil {
-				entries, err = decodeRcloneNativeSourceManifest(manifest)
-			}
+		if !portable.ReadDeadline.IsZero() || validatePortableExpectedIdentity(portable, input.Commit) != nil {
+			return nil, fmt.Errorf("%w: incompatible portable Catalog evidence", ErrCatalogProofMismatch)
 		}
+		readRequest, readErr := portableReadRequest(ctx, portable)
+		if readErr != nil {
+			return nil, readErr
+		}
+		readCtx, cancel := context.WithDeadline(ctx, readRequest.ReadDeadline)
+		actual, err = strategy.portable.readPublished(readCtx, readRequest, &input.Commit, func(source, _ rcloneCanonicalManifestEntry) error {
+			entries = append(entries, source)
+			return nil
+		})
+		if err == nil {
+			err = readCtx.Err()
+		}
+		cancel()
 	case backupasset.PublicationNativeObjectVersions:
+		if ValidateRcloneRuntimeCompatibility(input.Reconcile.NativeRequest.Attempt, input.Commit) != nil {
+			return nil, fmt.Errorf("%w: incompatible native Catalog evidence", ErrCatalogProofMismatch)
+		}
 		native := *input.Reconcile.NativeRequest
 		actual, entries, nativeStates, err = strategy.readRcloneNativeCatalog(ctx, native)
 	default:
@@ -890,66 +899,6 @@ type rcloneCatalogChunkV1 struct {
 	EntryCount uint64 `json:"entry_count"`
 }
 
-func readRclonePortableCatalogManifest(
-	ctx context.Context,
-	remote RclonePortableRemote,
-	request RclonePortablePublicationRequest,
-	commit RcloneCommitV1,
-) (RcloneManifestBundle, error) {
-	if remote == nil || commit.Portable == nil || commit.PublicationMode != backupasset.PublicationVersionedPrefix ||
-		request.ControlPayloadMaxBytes <= 0 {
-		return RcloneManifestBundle{}, fmt.Errorf("%w: portable Catalog proof unavailable", ErrCatalogProtocol)
-	}
-	indexPayload, err := remote.ReadControl(ctx, request, "manifest-index.json", request.ControlPayloadMaxBytes)
-	if err != nil {
-		return RcloneManifestBundle{}, err
-	}
-	if sha256Hex(indexPayload) != commit.ManifestIndexDigest || rejectDuplicateJSONMembers(string(indexPayload)) != nil {
-		return RcloneManifestBundle{}, fmt.Errorf("%w: portable Catalog manifest index changed", ErrCatalogProofMismatch)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(indexPayload))
-	decoder.DisallowUnknownFields()
-	var index rcloneCatalogManifestIndexV1
-	if err := decoder.Decode(&index); err != nil || !errors.Is(decoder.Decode(&struct{}{}), io.EOF) || index.Version != 1 ||
-		index.Generator != "xirang-rclone-manifest" || index.GeneratorVersion != "v1" ||
-		index.EntryCount != commit.ManifestEntryCount || index.LogicalBytes != commit.LogicalBytes ||
-		len(index.Chunks) != len(commit.ManifestChunkDigests) {
-		return RcloneManifestBundle{}, fmt.Errorf("%w: invalid portable Catalog manifest index", ErrCatalogProofMismatch)
-	}
-	bundle := RcloneManifestBundle{
-		Version: 1, Chunks: make([]RcloneManifestChunk, len(index.Chunks)), IndexEncoded: append([]byte(nil), indexPayload...),
-		IndexDigest: commit.ManifestIndexDigest, EntryCount: index.EntryCount, LogicalBytes: index.LogicalBytes, Fidelity: index.Fidelity,
-	}
-	hash := sha256.New()
-	var count uint64
-	for position, reference := range index.Chunks {
-		if reference.Ordinal != position || reference.Size <= 0 || reference.EntryCount == 0 ||
-			reference.Digest != commit.ManifestChunkDigests[position] {
-			return RcloneManifestBundle{}, fmt.Errorf("%w: invalid portable Catalog manifest chunk", ErrCatalogProofMismatch)
-		}
-		name := fmt.Sprintf("manifest-%06d.jsonl", position)
-		payload, err := remote.ReadControl(ctx, request, name, request.ControlPayloadMaxBytes)
-		if err != nil {
-			return RcloneManifestBundle{}, err
-		}
-		if int64(len(payload)) != reference.Size || sha256Hex(payload) != reference.Digest {
-			return RcloneManifestBundle{}, fmt.Errorf("%w: portable Catalog manifest chunk changed", ErrCatalogProofMismatch)
-		}
-		_, _ = hash.Write(payload)
-		count += reference.EntryCount
-		bundle.Chunks[position] = RcloneManifestChunk{
-			Ordinal: position, Encoded: append([]byte(nil), payload...), Digest: reference.Digest,
-			Size: reference.Size, EntryCount: reference.EntryCount,
-		}
-	}
-	if count != index.EntryCount {
-		return RcloneManifestBundle{}, fmt.Errorf("%w: portable Catalog manifest count changed", ErrCatalogProofMismatch)
-	}
-	_, _ = io.WriteString(hash, fmt.Sprintf("entries:%d\nbytes:%d\n", index.EntryCount, index.LogicalBytes))
-	bundle.ObservationDigest = hex.EncodeToString(hash.Sum(nil))
-	return bundle, nil
-}
-
 func equalRcloneCatalogCommit(left, right RcloneCommitV1) bool {
 	leftEncoded, leftErr := EncodeProviderCommit(NewRcloneProviderCommit(left))
 	rightEncoded, rightErr := EncodeProviderCommit(NewRcloneProviderCommit(right))
@@ -970,50 +919,62 @@ func rcloneCatalogRecords(
 	records := make([]CatalogRecord, 0, len(entries))
 	directories := make(map[string]struct{})
 	for _, entry := range entries {
-		if entry.Version != 1 || !validRcloneLogicalPath(entry.Path, 4096) || !validRcloneLogicalPath(entry.PhysicalPath, 4096) || entry.Size > uint64(^uint64(0)>>1) {
-			return nil, fmt.Errorf("%w: invalid Rclone Catalog manifest record", ErrCatalogProtocol)
+		record, err := rcloneCatalogRecord(entry, nativeStates)
+		if err != nil {
+			return nil, err
 		}
-		parent := path.Dir(entry.Path)
-		if parent == "." {
-			parent = ""
-		}
-		if parent != "" {
-			if _, ok := directories[parent]; !ok {
+		if record.ParentNormalizedPath != "" {
+			if _, ok := directories[record.ParentNormalizedPath]; !ok {
 				return nil, fmt.Errorf("%w: Rclone Catalog parent is missing", ErrCatalogProtocol)
 			}
 		}
-		var entryType backupasset.CatalogEntryType
-		switch entry.Kind {
-		case "file":
-			entryType = backupasset.CatalogEntryFile
-		case "directory":
-			entryType = backupasset.CatalogEntryDirectory
+		if record.Type == backupasset.CatalogEntryDirectory {
 			directories[entry.Path] = struct{}{}
-		case "symlink":
-			entryType = backupasset.CatalogEntrySymlink
-		default:
-			return nil, fmt.Errorf("%w: invalid Rclone Catalog entry kind", ErrCatalogProtocol)
 		}
-		modifiedAt, err := time.Parse(time.RFC3339Nano, entry.ModTime)
-		if err != nil {
-			return nil, fmt.Errorf("%w: invalid Rclone Catalog modification time", ErrCatalogProtocol)
-		}
-		locator := "portable:" + entry.PhysicalPath
-		if state, ok := nativeStates[entry.Path]; ok {
-			locator = "native:" + state.PhysicalKey + "\x00" + state.VersionID
-		}
-		strength := "none"
-		if entry.SHA256 != "" {
-			strength = "strong"
-		}
-		records = append(records, CatalogRecord{
-			NormalizedPath: entry.Path, ParentNormalizedPath: parent, Name: path.Base(entry.Path), Type: entryType,
-			Size: int64(entry.Size), ModifiedAt: timePointerUTC(modifiedAt), Mode: entry.Metadata["mode"],
-			Owner: strings.Trim(entry.Metadata["uid"]+":"+entry.Metadata["gid"], ":"), Fingerprint: entry.SHA256,
-			FingerprintStrength: strength, ProviderLocator: EntryLocator{Native: locator},
-		})
+		records = append(records, record)
 	}
 	return records, nil
+}
+
+// rcloneCatalogRecord projects one entry after its complete manifest's path
+// graph has been authenticated and checked by the caller.
+func rcloneCatalogRecord(entry rcloneCanonicalManifestEntry, nativeStates map[string]rcloneNativeManifestVersionStateV1) (CatalogRecord, error) {
+	if entry.Version != 1 || !validRcloneLogicalPath(entry.Path, 4096) || !validRcloneLogicalPath(entry.PhysicalPath, 4096) || entry.Size > uint64(^uint64(0)>>1) {
+		return CatalogRecord{}, fmt.Errorf("%w: invalid Rclone Catalog manifest record", ErrCatalogProtocol)
+	}
+	parent := path.Dir(entry.Path)
+	if parent == "." {
+		parent = ""
+	}
+	var entryType backupasset.CatalogEntryType
+	switch entry.Kind {
+	case "file":
+		entryType = backupasset.CatalogEntryFile
+	case "directory":
+		entryType = backupasset.CatalogEntryDirectory
+	case "symlink":
+		entryType = backupasset.CatalogEntrySymlink
+	default:
+		return CatalogRecord{}, fmt.Errorf("%w: invalid Rclone Catalog entry kind", ErrCatalogProtocol)
+	}
+	modifiedAt, err := time.Parse(time.RFC3339Nano, entry.ModTime)
+	if err != nil {
+		return CatalogRecord{}, fmt.Errorf("%w: invalid Rclone Catalog modification time", ErrCatalogProtocol)
+	}
+	locator := "portable:" + entry.PhysicalPath
+	if state, ok := nativeStates[entry.Path]; ok {
+		locator = "native:" + state.PhysicalKey + "\x00" + state.VersionID
+	}
+	strength := "none"
+	if entry.SHA256 != "" {
+		strength = "strong"
+	}
+	return CatalogRecord{
+		NormalizedPath: entry.Path, ParentNormalizedPath: parent, Name: path.Base(entry.Path), Type: entryType,
+		Size: int64(entry.Size), ModifiedAt: timePointerUTC(modifiedAt), Mode: entry.Metadata["mode"],
+		Owner: strings.Trim(entry.Metadata["uid"]+":"+entry.Metadata["gid"], ":"), Fingerprint: entry.SHA256,
+		FingerprintStrength: strength, ProviderLocator: EntryLocator{Native: locator},
+	}, nil
 }
 
 func timePointerUTC(value time.Time) *time.Time {

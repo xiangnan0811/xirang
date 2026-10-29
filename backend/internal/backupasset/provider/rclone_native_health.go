@@ -72,7 +72,7 @@ func LoadRcloneNativeHealthReferences(
 		request.Attempt.PublicationMode != backupasset.PublicationNativeObjectVersions || commit.Native == nil || commit.Portable != nil ||
 		commit.PublicationMode != backupasset.PublicationNativeObjectVersions || len(request.MarkerKey) < 32 ||
 		request.ControlPayloadMaxBytes == 0 || request.ControlPayloadMaxBytes > math.MaxInt64 ||
-		request.Attempt.Validate() != nil || commit.Validate() != nil || ValidateRcloneNativeProfile(request.Profile) != nil {
+		ValidateRcloneRuntimeCompatibility(request.Attempt, commit) != nil || ValidateRcloneNativeProfile(request.Profile) != nil {
 		return nil, rcloneNativeError(backupasset.RcloneReasonAdmissionBlocked, nil)
 	}
 	controlPrefix := rcloneNativeAttemptControlPrefix(request)

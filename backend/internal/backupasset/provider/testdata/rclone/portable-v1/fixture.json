@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "description": "Synthetic historical Portable V1; all keys and configuration are for tests only.",
+  "identity_salt_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "synthetic_recovery_cleanup_domain_key": "FAKE_RCLONE_DOMAIN_FOR_TEST_ONLY",
+  "synthetic_marker_key_base64": "I/nUvYOeuA2nbhYkKrrJJ355mng6Sk1tA3lT+l7BP6U=",
+  "repository_identity": "rclone-task-endpoint:v1:f9eb17083792810ad74901f809a8c61ac65049b8e42a825d6c3649ef19adace2",
+  "managed_endpoint_facts": [
+    "identity_class:xirang_managed_repository",
+    "layout:rclone-publication:v1",
+    "managed_root_identity:c4d90fb1e95cf5a6850625b1bbb4e458f9ab374f816c903bce9301f58dd616af",
+    "repository:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "publication_mode:versioned_prefix"
+  ],
+  "legacy_binding": "{\"version\":1,\"provider\":\"rclone\",\"identity_class\":\"task_scoped_endpoint\",\"task_id\":7,\"node_id\":9,\"identity_salt\":\"4242424242424242424242424242424242424242424242424242424242424242\",\"locator\":\"backup:legacy\",\"endpoint_facts\":[\"task:7\",\"node:9\",\"remote:backup:legacy\"],\"range_proven\":false,\"config_source\":\"node_default\"}",
+  "fence": {
+    "LeaseID": "77777777777777777777777777777777",
+    "RecoveryPointID": "cccccccccccccccccccccccccccccccc",
+    "HolderType": "point_publication",
+    "OwnerID": "point-publication",
+    "AttemptID": "88888888888888888888888888888888",
+    "FenceToken": "9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "source": "/srv/source",
+  "managed_root": "backup:managed/v1",
+  "attempt_root": "backup:managed/v1/points/cccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddd",
+  "data_root": "backup:managed/v1/points/cccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddd/data",
+  "control_root": "backup:managed/v1/points/cccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddd/control",
+  "target_remote": "backup",
+  "backend": "b2",
+  "source_fingerprint": "d366f6a333721d971b2b9ea2e54c824615da91556e7d8067dad19937fd5775cf",
+  "tagged_attempt": "{\"provider\":\"rclone\",\"version\":1,\"rclone\":{\"schema_version\":1,\"layout_version\":1,\"minimum_runtime_revision\":1,\"provider\":\"rclone\",\"repository_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"task_repository_link_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"recovery_point_id\":\"cccccccccccccccccccccccccccccccc\",\"attempt_id\":\"dddddddddddddddddddddddddddddddd\",\"task_id\":7,\"task_run_id\":8,\"trigger\":\"manual\",\"publication_mode\":\"versioned_prefix\",\"imported_baseline\":false,\"capture_started_at\":\"2026-07-16T01:00:00Z\",\"prepared_at\":\"2026-07-16T01:00:01Z\",\"point_deadline_at\":\"2026-07-16T02:00:00Z\",\"expected_task_revision\":1,\"binding_revision\":2,\"config_revision\":3,\"config_digest\":\"6dbd613bdec9e59eb20abf80efd2b93bce02efa726453173b1f33d2ae482876b\",\"capability_revision\":4,\"credential_revision\":5,\"preflight_id\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"preflight_revision\":6,\"preflight_digest\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"manifest_schema_revision\":1,\"manifest_limits_revision\":1,\"manifest_limits_digest\":\"23b98193e8ee15e252b0528a2a1445ba8a1b62bd1ba8753a7dc380e2025cb15d\",\"repository_identity_digest\":\"7644135336c01ce623fcb387133bcf13224d03433eed1616823c2b691411c65b\",\"managed_root_identity_digest\":\"c4d90fb1e95cf5a6850625b1bbb4e458f9ab374f816c903bce9301f58dd616af\",\"child_fence_digest\":\"b9bb94cf2a1d8eb7f4b507d4b8968a9a5dff55055e8d00d9a005f36d10331d6c\",\"legacy_origin_evidence_digest\":\"b574626ab528754e200e2c9740aed1781cc3c4e62e9fd64519930f462c2a3aa0\",\"portable\":{\"attempt_component\":\"cccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddd\",\"data_component\":\"data\",\"control_component\":\"control\",\"attempt_marker_digest\":\"c4a151b94f75ee3d4489b690c8a7fce252d6fb2ba61c90bb3877c3285ba664aa\",\"expected_consistency_class\":\"observationally_stable\",\"expected_hash_fidelity\":\"download_verified_bytes\"}}}",
+  "tagged_commit": "{\"provider\":\"rclone\",\"version\":1,\"rclone\":{\"schema_version\":1,\"layout_version\":1,\"minimum_runtime_revision\":1,\"repository_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"task_repository_link_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"recovery_point_id\":\"cccccccccccccccccccccccccccccccc\",\"attempt_id\":\"dddddddddddddddddddddddddddddddd\",\"publication_mode\":\"versioned_prefix\",\"point_deadline_at\":\"2026-07-16T02:00:00Z\",\"provider_committed_at\":\"2026-07-16T01:30:00Z\",\"manifest_index_digest\":\"c4f5248c188eae6186949636b9a4f244cf0b57556b6085cc3e9e58ec015b504d\",\"manifest_chunk_digests\":[\"bbb7314644cf8f3d1bbfad76b0b08efc3b193367e32c0b1df3df4f0df19356f1\",\"e5ac550bc8d1c175b9e363755f2f02ec9196574928a9fe83063846b1478672fd\"],\"manifest_entry_count\":3,\"logical_bytes\":5,\"source_observation_digest\":\"98e2f08631870cd7ca018da195b24308bf3cb52d11bfb4d4793fdbcdaa3d3724\",\"destination_observation_digest\":\"98e2f08631870cd7ca018da195b24308bf3cb52d11bfb4d4793fdbcdaa3d3724\",\"content_proof_digest\":\"91d3e260c4ff274bee7c836ef445fadbf60d1ebeff4a38013dff057761607b9c\",\"fidelity_evidence_digest\":\"4346742c20f8e607c25075e7137f20ad3a5f59a852d52fa05a7c80e72f26d155\",\"cost_evidence_digest\":\"9075194dd408c22adb2cbcd4594618cc1a8c599d06c3885eff8b9e1af94d918c\",\"capability_evidence_digest\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"child_fence_digest\":\"b9bb94cf2a1d8eb7f4b507d4b8968a9a5dff55055e8d00d9a005f36d10331d6c\",\"portable\":{\"attempt_identity_digest\":\"1acabb27d8f13840d0941c07382655082fcbe455af41ab483e630bbd82e1cb40\",\"control_identity_digest\":\"bc592c37c1a837a602540a0bd4e7d4470b416270f871b879ab590e64a8913017\",\"data_identity_digest\":\"5bb9ce315a45dc3506db1be76e62ee859543e6840c5225b103d6a1bb6b2bf903\",\"attempt_marker_digest\":\"c4a151b94f75ee3d4489b690c8a7fce252d6fb2ba61c90bb3877c3285ba664aa\",\"commit_component\":\"commit.json\",\"commit_payload_digest\":\"f2fcc528b16d0cbdfcd3789f1bbe2ffe80b00aef3a9befc28660cd957f4587a4\",\"commit_authentication_digest\":\"b8e19b588d8c89c9ac8fb66459d089a85d35fd07f6f3439c6b6bb0e160c9d3ff\",\"consistency_evidence_digest\":\"a52b20b8f03f2f2542c290b89f469b79c4153bd7a7ee532a8bb88c032dd512fc\",\"hash_evidence_digest\":\"91d3e260c4ff274bee7c836ef445fadbf60d1ebeff4a38013dff057761607b9c\",\"download_verified_bytes\":0}}}",
+  "manifest_limits": {
+    "Timeout": 60000000000,
+    "MaxBytes": 1048576,
+    "MaxEntries": 100,
+    "MaxRecordBytes": 65536,
+    "MaxDepth": 32
+  },
+  "chunk_max_bytes": 65536,
+  "chunk_max_entries": 2,
+  "spool_max_bytes": 2097152,
+  "full_verify_max_bytes": 2147483648,
+  "control_payload_max_bytes": 8388608,
+  "low_level_retries": 3,
+  "data_directories": [
+    "dir",
+    "z-empty"
+  ],
+  "catalog_file": {
+    "NormalizedPath": "dir/file.txt",
+    "ParentNormalizedPath": "dir",
+    "Name": "file.txt",
+    "Type": "file",
+    "Size": 5,
+    "ModifiedAt": "2026-07-16T01:00:01Z",
+    "Mode": "100640",
+    "Owner": "1000:1000",
+    "MIMEType": "",
+    "Fingerprint": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "FingerprintStrength": "strong"
+  }
+}

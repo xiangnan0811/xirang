@@ -110,10 +110,12 @@ func TestRcloneManagedReaderRequiresExactCommittedPointAndNeverFallsBackToMutabl
 	adapter := newRcloneAdapterForTest(t, transport)
 	binding := rcloneBindingForTest()
 	binding.Locator = "remote-name:managed/v1/points/point/attempts/attempt/data"
-	sourceRevision := rcloneListFingerprintForTest(t, listJSON)
+	sourceRevision := strings.Repeat("d", 64) // Recursive committed digest, not the root-list fingerprint.
+	proofs := 0
 	managed := RcloneManagedPointAccess{
 		RecoveryPointID: strings.Repeat("a", 32), AttemptID: strings.Repeat("b", 32), DataLocator: binding.Locator,
 		ManifestDigest: strings.Repeat("c", 64), SourceRevision: sourceRevision, Committed: true,
+		ValidateSnapshot: func(context.Context) error { proofs++; return nil },
 	}
 	binding.AdapterData = RcloneRuntimeAccess{Backend: "s3", ConfigSource: RcloneConfigBound, ManagedPoint: &managed}
 	snapshot := ReadSnapshot{RepositoryID: binding.RepositoryID, CapabilityRevision: 1, SourceRevision: sourceRevision, Access: binding}
@@ -124,6 +126,9 @@ func TestRcloneManagedReaderRequiresExactCommittedPointAndNeverFallsBackToMutabl
 	page, err := adapter.ListEntries(context.Background(), snapshot, points.Items[0].Locator, EntryLocator{}, PageRequest{Limit: 10})
 	if err != nil || len(page.Items) != 1 {
 		t.Fatalf("managed page=%+v err=%v", page, err)
+	}
+	if proofs != 3 || len(transport.requests) != 1 || transport.requests[0].Operation != OperationRcloneList {
+		t.Fatalf("managed proof calls=%d commands=%+v", proofs, transport.requests)
 	}
 	if _, err := adapter.ListEntries(context.Background(), snapshot, rclonePointLocator(sourceRevision), EntryLocator{}, PageRequest{Limit: 10}); err == nil {
 		t.Fatal("managed reader accepted mutable-head point fallback")
@@ -137,6 +142,14 @@ func TestRcloneManagedReaderRequiresExactCommittedPointAndNeverFallsBackToMutabl
 	unsafeSnapshot.Access = unsafeBinding
 	if _, err := adapter.ListPoints(context.Background(), unsafeSnapshot, PageRequest{Limit: 10}); err == nil {
 		t.Fatal("preparing managed point was readable")
+	}
+	missingProof := managed
+	missingProof.ValidateSnapshot = nil
+	unsafeBinding = binding
+	unsafeBinding.AdapterData = RcloneRuntimeAccess{Backend: "s3", ConfigSource: RcloneConfigBound, ManagedPoint: &missingProof}
+	unsafeSnapshot.Access = unsafeBinding
+	if _, err := adapter.ListPoints(context.Background(), unsafeSnapshot, PageRequest{Limit: 10}); err == nil {
+		t.Fatal("managed point without recursive proof was readable")
 	}
 	unsafeBinding = binding
 	unsafeBinding.Secret = nil
@@ -248,6 +261,110 @@ func TestRcloneListStatAndSequentialRead(t *testing.T) {
 		if request.Purpose != CommandPurposeRead {
 			t.Fatalf("content-open request used purpose %q: %+v", request.Purpose, request)
 		}
+	}
+}
+
+func TestRcloneManagedStatAndOpenPreserveExactLocatorRoots(t *testing.T) {
+	tests := []struct {
+		name   string
+		root   string
+		object string
+	}{
+		{"absolute_local", "/root", "/root/dir/file.txt"},
+		{"local_filesystem_root", "/", "/dir/file.txt"},
+		{"absolute_remote", "archive:/root", "archive:/root/dir/file.txt"},
+		{"remote_filesystem_root", "archive:/", "archive:/dir/file.txt"},
+		{"remote_default_root", "archive:", "archive:dir/file.txt"},
+		{"relative_remote", "archive:root", "archive:root/dir/file.txt"},
+		{"relative_remote_trailing_slash", "archive:root/", "archive:root/dir/file.txt"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const targetStat = `{"Path":"file.txt","Name":"file.txt","Size":4,"ModTime":"2026-07-16T01:00:00Z","IsDir":false}`
+			const changedStat = `{"Path":"file.txt","Name":"file.txt","Size":4,"ModTime":"2026-07-16T01:00:01Z","IsDir":false}`
+			const otherStat = `{"Path":"file.txt","Name":"file.txt","Size":3,"ModTime":"2026-07-16T01:00:00Z","IsDir":false}`
+			statCalls, proofCalls := 0, 0
+			changed := false
+			transport := &fakeCommandTransport{
+				runFunc: func(invocation CommandInvocation) (CommandOutput, error) {
+					if invocation.Operation != OperationRcloneStat {
+						return CommandOutput{}, errors.New("unexpected command")
+					}
+					statCalls++
+					payload := otherStat
+					if invocation.PrivateLocator == test.object {
+						payload = targetStat
+						if changed {
+							payload = changedStat
+						}
+					}
+					return CommandOutput{Stdout: []byte(payload)}, nil
+				},
+				openFunc: func(invocation CommandInvocation, _ int64) (ReadHandle, error) {
+					if invocation.Operation != OperationRcloneCat {
+						return nil, errors.New("unexpected stream command")
+					}
+					value := "evil"
+					if invocation.PrivateLocator == test.object {
+						value = "data"
+					}
+					if strings.Contains(strings.Join(invocation.Args, " "), "--offset") {
+						value = value[1:3]
+					}
+					return io.NopCloser(strings.NewReader(value)), nil
+				},
+			}
+			adapter := newRcloneAdapterForTest(t, transport)
+			binding := rcloneBindingForTest()
+			binding.Locator = test.root
+			managed := &RcloneManagedPointAccess{
+				RecoveryPointID: strings.Repeat("a", 32), AttemptID: strings.Repeat("b", 32),
+				DataLocator: test.root, ManifestDigest: strings.Repeat("c", 64), SourceRevision: strings.Repeat("d", 64), Committed: true,
+				ValidateSnapshot: func(ctx context.Context) error { proofCalls++; return ctx.Err() },
+			}
+			binding.AdapterData = RcloneRuntimeAccess{Backend: "local", ConfigSource: RcloneConfigBound, RangeProven: true, ManagedPoint: managed}
+			snapshot := ReadSnapshot{RepositoryID: binding.RepositoryID, CapabilityRevision: 1, SourceRevision: managed.SourceRevision, Access: binding}
+			point := rcloneManagedPointLocator(*managed)
+			locator := EntryLocator{Native: "dir/file.txt"}
+			ctx := context.Background()
+			wantTime := time.Date(2026, 7, 16, 1, 0, 0, 0, time.UTC)
+			stat, err := adapter.StatEntry(ctx, snapshot, point, locator)
+			if err != nil || stat.Size != 4 || !stat.ModTime.Equal(wantTime) || stat.Locator != locator {
+				t.Fatalf("stat selected wrong object: stat=%+v err=%v", stat, err)
+			}
+			handle, opened, err := adapter.OpenSequential(ctx, snapshot, point, locator, ReadRequest{MaxBytes: 4})
+			if err != nil {
+				t.Fatalf("open selected object: %v", err)
+			}
+			payload, readErr := io.ReadAll(handle)
+			closeErr := handle.Close()
+			if readErr != nil || closeErr != nil || string(payload) != "data" || opened.Size != 4 || !opened.ModTime.Equal(wantTime) {
+				t.Fatalf("sequential read selected wrong object: payload=%q stat=%+v read=%v close=%v", payload, opened, readErr, closeErr)
+			}
+			handle, opened, err = adapter.OpenRange(ctx, snapshot, point, locator, ByteRange{Offset: 1, Length: 2})
+			if err != nil {
+				t.Fatalf("open selected range: %v", err)
+			}
+			payload, readErr = io.ReadAll(handle)
+			closeErr = handle.Close()
+			if readErr != nil || closeErr != nil || string(payload) != "at" || opened.Size != 4 || !opened.ModTime.Equal(wantTime) {
+				t.Fatalf("range read selected wrong object: payload=%q stat=%+v read=%v close=%v", payload, opened, readErr, closeErr)
+			}
+			if statCalls != 5 || proofCalls != 6 {
+				t.Fatalf("stat and close verification calls: stat=%d proof=%d", statCalls, proofCalls)
+			}
+			handle, _, err = adapter.OpenSequential(ctx, snapshot, point, locator, ReadRequest{MaxBytes: 4})
+			if err != nil {
+				t.Fatalf("open before object drift: %v", err)
+			}
+			if _, err := io.ReadAll(handle); err != nil {
+				t.Fatal(err)
+			}
+			changed = true
+			if err := handle.Close(); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+				t.Fatalf("close accepted same-size object time drift: %v", err)
+			}
+		})
 	}
 }
 

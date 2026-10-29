@@ -40,6 +40,10 @@ func (settings repositorySettings) BackupAssetSettingsSnapshot() (map[string]str
 	return values, nil
 }
 
+func (settings repositorySettings) BackupAssetSettingsSnapshotTx(_ context.Context, _ *gorm.DB) (map[string]string, error) {
+	return settings.BackupAssetSettingsSnapshot()
+}
+
 type scriptedProber struct {
 	observation provider.RepositoryObservation
 	err         error

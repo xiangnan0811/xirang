@@ -19,6 +19,7 @@
 - Core 的 curl 锁定为 `8.23.0-r0`，由 Alpine 包依赖同步升级 libcurl，并显式锁定 `brotli-libs=1.2.1-r0` 替换基础镜像中的旧库；这些镜像内依赖更新无新增配置或环境变量覆盖，须重建并替换 Core 镜像，不改变 Worker inventory。
 - Core/Worker 的 `musl-dev=1.2.6-r3` 是 CGO 构建阶段锁定，不提供运行时环境变量覆盖；须重建配套镜像，并按新 inventory 更新闭包及签名制品，不代表运行镜像 libc 版本发生相同变化。
 - Worker 工具链 v3 还绑定已归档的两架构 CGO 与 Worker runtime 内容摘要；投影编译进程序，不由配置注入。首次接入及相关输入变化须更新同源 Core/Worker、最终闭包与签名运行包；Core 专属依赖变化不改变 Worker 投影。
+- Worker 的 `python3=3.12.16-r0` 安全补丁由构建输入、Dockerfile 与生产 inventory 固定，没有 `.env` 或 Settings 覆盖项。替换四个 Python 子包的完整输入事务会改变工具链指纹，须配套重建 Core/Worker、闭包和签名制品；仅修改配置或重启旧镜像不会修补旧 Python。详见[Worker Python 依赖维护](maintainers/automation.md#worker-python-传递依赖安全更新)。
 
 任务流量与执行记录的保留期限在每轮实际清理开始时按 DB → 环境变量 → 注册默认值读取一次，整轮固定 cutoff；成功清理的一小时节流不变，设置保存不打断正在运行的轮次，从下一轮生效。查询失败、非整数、负数、溢出或超出注册范围时跳过删除，不回退到更短窗口；`0` 禁用清理。Settings API 的正数范围不变；扩大窗口只保护尚未删除的数据，不恢复已删除历史。
 
@@ -116,6 +117,8 @@
 下面每行列出对应 Settings 键，便于区分 `backup_assets.export.root` 等包含多层名称的映射。范围只是单项边界；租约、心跳、总量/单项配额、票据期限和存储根仍须满足关联校验。启用远程 Worker 时必须提供专用监听地址、服务端证书和私钥、客户端 CA 与信任域；启用 updater 在线模式时必须提供精确 HTTPS 来源白名单。
 
 关联校验使用全部注册 Foundation 键的实际有效值，包括 Search／Processing 设置；缩短租约绝对截止时间时，应一并核对相关超时，不能假定未展示在同一表节的键会被忽略。Foundation legacy getter 保留上述来源优先级和缓存语义，不提供跨并发更新的原子快照；锁序及原子配置消费者的边界见[启用合同](spec/domains/backup-enablement.md#设置锁序前瞻配置与工作所有权)。本次读取完整性修复不新增环境变量，也不改变下表默认值或范围。
+
+Rclone 预检在提交复验时通过调用者事务读取有效的 Foundation 设置，并重新执行关联校验；数据库覆盖及环境回退的优先级不变，不新增环境变量或修改默认值。稳定的 `rclone_preflight_identity` 由数据库密钥域维护，不能通过更换环境变量重新生成。bound config 的每命令临时文件由 Provider 管理，要求执行节点提供 SFTP 和私有可写 home，不提供调用者指定配置路径或自动清理未知残留的开关；部署及恢复边界见[部署指南](deployment.md)。
 
 ### 基础、目录与发布
 

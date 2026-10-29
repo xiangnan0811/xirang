@@ -382,22 +382,33 @@ func TestRcloneVersioningWorkflowRequestsAndResultsValidateSafeFacts(t *testing.
 
 	setupResult := RcloneBindingSetupResult{
 		SetupID: "0123456789abcdef0123456789abcdef", ExpiresAt: now.Add(30 * time.Minute),
-		ExternalID: "FAKE_EXTERNAL_ID_FOR_TEST_ONLY",
+		BaseBindingRevision: "0", ExternalID: "FAKE_EXTERNAL_ID_FOR_TEST_ONLY",
 	}
 	if err := setupResult.Validate(true); err != nil {
 		t.Fatalf("valid native setup result rejected: %v", err)
 	}
-	if err := (RcloneBindingSetupResult{SetupID: setupResult.SetupID, ExpiresAt: setupResult.ExpiresAt}).Validate(false); err != nil {
+	if err := (RcloneBindingSetupResult{SetupID: setupResult.SetupID, ExpiresAt: setupResult.ExpiresAt, BaseBindingRevision: "0"}).Validate(false); err != nil {
 		t.Fatalf("valid portable setup result rejected: %v", err)
 	}
 
 	summary := validRclonePublicationSummaryForTest()
 	preflight := RcloneVersioningPreflightResult{
-		PreflightID: setupResult.SetupID, ExpiresAt: setupResult.ExpiresAt, Summary: summary,
+		Purpose: RclonePreflightPurposeActivation, PreflightID: setupResult.SetupID, ExpiresAt: setupResult.ExpiresAt, Summary: summary,
 	}
 	if err := preflight.Validate(); err != nil {
 		t.Fatalf("valid preflight result rejected: %v", err)
 	}
+	preflight.Purpose = RclonePreflightPurposeRenewal
+	if err := preflight.Validate(); err != nil {
+		t.Fatalf("valid renewal purpose rejected: %v", err)
+	}
+	for _, purpose := range []RclonePreflightPurpose{"", "unknown"} {
+		preflight.Purpose = purpose
+		if err := preflight.Validate(); err == nil {
+			t.Fatalf("invalid preflight purpose %q accepted", purpose)
+		}
+	}
+	preflight.Purpose = RclonePreflightPurposeActivation
 	activation := RcloneVersioningActivationResult{Summary: summary, MigrationChoice: RcloneFirstNewPoint}
 	if err := activation.Validate(); err != nil {
 		t.Fatalf("valid activation result rejected: %v", err)
@@ -418,5 +429,61 @@ func TestRcloneVersioningWorkflowRequestsAndResultsValidateSafeFacts(t *testing.
 	preflight.ExpiresAt = preflight.ExpiresAt.In(time.FixedZone("not-utc", 3600))
 	if err := preflight.Validate(); err == nil {
 		t.Fatal("non-UTC preflight expiry accepted")
+	}
+}
+
+func TestRcloneBindingSetupResultRequiresCanonicalBaseRevision(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		want  string
+		valid bool
+	}{
+		{name: "zero", field: `"base_binding_revision":"0"`, want: "0", valid: true},
+		{name: "above javascript safe integer", field: `"base_binding_revision":"9007199254740993"`, want: "9007199254740993", valid: true},
+		{name: "uint64 max", field: `"base_binding_revision":"18446744073709551615"`, want: "18446744073709551615", valid: true},
+		{name: "missing"},
+		{name: "empty", field: `"base_binding_revision":""`},
+		{name: "null", field: `"base_binding_revision":null`},
+		{name: "number", field: `"base_binding_revision":0`},
+		{name: "negative", field: `"base_binding_revision":"-1"`},
+		{name: "plus", field: `"base_binding_revision":"+1"`},
+		{name: "leading zero", field: `"base_binding_revision":"01"`},
+		{name: "overflow", field: `"base_binding_revision":"18446744073709551616"`},
+	}
+	for _, native := range []bool{false, true} {
+		for _, test := range tests {
+			name := "portable"
+			externalID := ""
+			if native {
+				name = "native"
+				externalID = `,"external_id":"FAKE_EXTERNAL_ID_FOR_TEST_ONLY"`
+			}
+			t.Run(name+"/"+test.name, func(t *testing.T) {
+				field := ""
+				if test.field != "" {
+					field = "," + test.field
+				}
+				payload := `{"setup_id":"0123456789abcdef0123456789abcdef","expires_at":"2026-07-16T12:30:00Z"` + externalID + field + `}`
+				var result RcloneBindingSetupResult
+				err := json.Unmarshal([]byte(payload), &result)
+				if err == nil {
+					err = result.Validate(native)
+				}
+				if !test.valid {
+					if err == nil {
+						t.Fatalf("accepted invalid setup result: %s", payload)
+					}
+					return
+				}
+				if err != nil || result.BaseBindingRevision != test.want {
+					t.Fatalf("valid setup revision=%q error=%v, want %q", result.BaseBindingRevision, err, test.want)
+				}
+				encoded, err := json.Marshal(result)
+				if err != nil || !strings.Contains(string(encoded), `"base_binding_revision":"`+test.want+`"`) {
+					t.Fatalf("setup revision missing or not a JSON string: %s (%v)", encoded, err)
+				}
+			})
+		}
 	}
 }

@@ -3,10 +3,6 @@ package database
 import (
 	"database/sql"
 	"errors"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -294,69 +290,14 @@ func TestRunMigrations074SchemaContractPostgres(t *testing.T) {
 }
 
 func TestPostgresMigrationCISelectorIncludesDrillRecovery074(t *testing.T) {
-	workflowPath := filepath.Join("..", "..", "..", ".github", "workflows", "ci.yml")
-	workflow, err := os.ReadFile(workflowPath)
-	if err != nil {
-		t.Fatalf("read CI workflow: %v", err)
+	if err := validateRequiredPostgresWorkflow(loadPostgresWorkflowJob(t)); err != nil {
+		t.Fatal(err)
 	}
-	selector, ok := activeRequiredPostgresSelector(string(workflow), "./internal/database")
-	if !ok {
-		t.Fatal("CI workflow has no active reusable required-PostgreSQL runner for ./internal/database")
-	}
-	compiled, err := regexp.Compile(selector)
-	if err != nil {
-		t.Fatalf("compile PostgreSQL migration CI selector %q: %v", selector, err)
-	}
-	requiredTests := []string{
+	assertRequiredInventoryTests(t, "./internal/database",
 		"TestRunMigrations074DuplicateActiveDrillFailsCleanAndRetriesPostgres",
 		"TestMigration074StepsDownAdmissionPreservesCleanVersionPostgres",
 		"TestRunMigrations074SchemaContractPostgres",
-	}
-	for _, testName := range requiredTests {
-		if !compiled.MatchString(testName) {
-			t.Errorf("PostgreSQL migration CI selector %q omits %s", selector, testName)
-		}
-	}
-
-	// Use Go's own listing boundary so this freshness check proves that the
-	// checked-in workflow selector resolves to real tests, not only strings that
-	// happen to satisfy a separately compiled regexp.
-	cmd := exec.Command("go", "test", "./internal/database", "-list", selector, "-count=1") //nolint:gosec // fixed tool/package; selector is a checked-in workflow argument, never shell-expanded
-	cmd.Dir = filepath.Join("..", "..")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("list required PostgreSQL migration tests with selector %q: %v\n%s", selector, err, output)
-	}
-	listedTests := make(map[string]struct{})
-	for _, line := range strings.Split(string(output), "\n") {
-		name := strings.TrimSpace(line)
-		if strings.HasPrefix(name, "Test") {
-			listedTests[name] = struct{}{}
-		}
-	}
-	for _, testName := range requiredTests {
-		if _, ok := listedTests[testName]; !ok {
-			t.Errorf("go test -list with PostgreSQL migration CI selector %q omitted %s", selector, testName)
-		}
-	}
-}
-
-func activeRequiredPostgresSelector(workflow, packagePath string) (string, bool) {
-	commandPattern := regexp.MustCompile(
-		`^bash \.\./scripts/run-required-postgres-tests\.sh '[^']+' ` +
-			regexp.QuoteMeta(packagePath) + ` '([^']+)'$`,
 	)
-	for _, line := range strings.Split(workflow, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "run:") {
-			continue
-		}
-		matches := commandPattern.FindStringSubmatch(strings.TrimSpace(strings.TrimPrefix(trimmed, "run:")))
-		if len(matches) == 2 {
-			return matches[1], true
-		}
-	}
-	return "", false
 }
 
 func TestNormalizeMigrationPredicatePostgresActiveDrill(t *testing.T) {

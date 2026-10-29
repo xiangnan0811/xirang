@@ -907,6 +907,7 @@ func productionToolchainInventory() toolchainInventory {
 			{Name: "libssl3", Version: "3.5.9-r0", Runtime: true},
 			{Name: "musl-dev", Version: "1.2.6-r3"},
 			{Name: "poppler-utils", Version: "25.12.0-r0", Runtime: true},
+			{Name: "python3", Version: "3.12.16-r0", Runtime: true},
 			{Name: "tesseract-ocr", Version: "5.5.1-r0", Runtime: true},
 			{Name: "tesseract-ocr-data-chi_sim", Version: "5.5.1-r0", Runtime: true},
 			{Name: "tesseract-ocr-data-eng", Version: "5.5.1-r0", Runtime: true},

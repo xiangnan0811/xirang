@@ -1,0 +1,3387 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "package": "./internal/alerting",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestAlertingDeliveryClaimLoadFencePostgres",
+          "required_paths": [
+            "TestAlertingDeliveryClaimLoadFencePostgres"
+          ]
+        },
+        {
+          "name": "TestAlertingDeliveryConcurrencyPostgres",
+          "required_paths": [
+            "TestAlertingDeliveryConcurrencyPostgres"
+          ]
+        },
+        {
+          "name": "TestAlertingDeliveryLegacyBlankAutoManualConcurrencyPostgres",
+          "required_paths": [
+            "TestAlertingDeliveryLegacyBlankAutoManualConcurrencyPostgres"
+          ]
+        },
+        {
+          "name": "TestAlertingDurableDeliveryPostgres",
+          "required_paths": [
+            "TestAlertingDurableDeliveryPostgres"
+          ]
+        },
+        {
+          "name": "TestCausalRestoreAlertsPostgres",
+          "required_paths": [
+            "TestCausalRestoreAlertsPostgres"
+          ]
+        },
+        {
+          "name": "TestCausalTaskAlertsPostgres",
+          "required_paths": [
+            "TestCausalTaskAlertsPostgres"
+          ]
+        },
+        {
+          "name": "TestCronBackupWorkerPostgres",
+          "required_paths": [
+            "TestCronBackupWorkerPostgres"
+          ]
+        },
+        {
+          "name": "TestCronBackupWorkerPostgresCompetingWorkersAndRecovery",
+          "required_paths": [
+            "TestCronBackupWorkerPostgresCompetingWorkersAndRecovery"
+          ]
+        },
+        {
+          "name": "TestCronBackupWorkerPostgresRollsBackAlertAfterInsertion",
+          "required_paths": [
+            "TestCronBackupWorkerPostgresRollsBackAlertAfterInsertion"
+          ]
+        },
+        {
+          "name": "TestMigrationRetiredDeliveryFencePostgres",
+          "required_paths": [
+            "TestMigrationRetiredDeliveryFencePostgres"
+          ]
+        },
+        {
+          "name": "TestRetryTickSkipsUnknownPagePostgres",
+          "required_paths": [
+            "TestRetryTickSkipsUnknownPagePostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/api",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestAutomationRuleLogsDispatcherPostgres",
+          "required_paths": [
+            "TestAutomationRuleLogsDispatcherPostgres"
+          ]
+        },
+        {
+          "name": "TestEscalationPreviewPostgres",
+          "required_paths": [
+            "TestEscalationPreviewPostgres"
+          ]
+        },
+        {
+          "name": "TestGeneralSurfacePostgres",
+          "required_paths": [
+            "TestGeneralSurfacePostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/api/handlers",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestAccountRecoveryBatchRetryPrimarySessionClaimsSQLitePostgres",
+          "required_paths": [
+            "TestAccountRecoveryBatchRetryPrimarySessionClaimsSQLitePostgres/postgres/current_nonzero_version",
+            "TestAccountRecoveryBatchRetryPrimarySessionClaimsSQLitePostgres/postgres/missing_primary_binding",
+            "TestAccountRecoveryBatchRetryPrimarySessionClaimsSQLitePostgres/postgres/stale_primary_fresh_proof",
+            "TestAccountRecoveryBatchRetryPrimarySessionClaimsSQLitePostgres/postgres/reenrollment_required"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryGrantCreationRechecksAdmittedSnapshot",
+          "required_paths": [
+            "TestAccountRecoveryGrantCreationRechecksAdmittedSnapshot/postgres/version",
+            "TestAccountRecoveryGrantCreationRechecksAdmittedSnapshot/postgres/required",
+            "TestAccountRecoveryGrantCreationRechecksAdmittedSnapshot/postgres/role",
+            "TestAccountRecoveryGrantCreationRechecksAdmittedSnapshot/postgres/deleted"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryGrantCreationSerializesBeforeRecoveryRevocation",
+          "required_paths": [
+            "TestAccountRecoveryGrantCreationSerializesBeforeRecoveryRevocation/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryGrantUsesAuthoritativeSessionVersion",
+          "required_paths": [
+            "TestAccountRecoveryGrantUsesAuthoritativeSessionVersion/postgres",
+            "TestAccountRecoveryGrantUsesAuthoritativeSessionVersion/postgres/stale_version",
+            "TestAccountRecoveryGrantUsesAuthoritativeSessionVersion/postgres/required_current_version",
+            "TestAccountRecoveryGrantUsesAuthoritativeSessionVersion/postgres/changed_role",
+            "TestAccountRecoveryGrantUsesAuthoritativeSessionVersion/postgres/missing_binding",
+            "TestAccountRecoveryGrantUsesAuthoritativeSessionVersion/postgres/wrong_binding_type",
+            "TestAccountRecoveryGrantUsesAuthoritativeSessionVersion/postgres/wrong_user",
+            "TestAccountRecoveryGrantUsesAuthoritativeSessionVersion/postgres/wrong_role"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryHTTPCompletionAndNormalLogin",
+          "required_paths": [
+            "TestAccountRecoveryHTTPCompletionAndNormalLogin/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryHTTPResponseLossCannotRedisplayCodes",
+          "required_paths": [
+            "TestAccountRecoveryHTTPResponseLossCannotRedisplayCodes/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryRealtimeAndStepUpRejectRequiredCurrentIdentity",
+          "required_paths": [
+            "TestAccountRecoveryRealtimeAndStepUpRejectRequiredCurrentIdentity/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryRevokedGrantHistoryCannotReactivate",
+          "required_paths": [
+            "TestAccountRecoveryRevokedGrantHistoryCannotReactivate/postgres"
+          ]
+        },
+        {
+          "name": "TestAlertDeliveryStatsPostgres",
+          "required_paths": [
+            "TestAlertDeliveryStatsPostgres"
+          ]
+        },
+        {
+          "name": "TestAutomationRuleLogsPostgres",
+          "required_paths": [
+            "TestAutomationRuleLogsPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupHealth_TrendSeparatesFactAndUnprovenSameDayRunsPostgres",
+          "required_paths": [
+            "TestBackupHealth_TrendSeparatesFactAndUnprovenSameDayRunsPostgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryActualBatchDeleteContentionSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryActualBatchDeleteContentionSQLitePostgres/postgres",
+            "TestBatchCommandRetryActualBatchDeleteContentionSQLitePostgres/postgres/delete_first",
+            "TestBatchCommandRetryActualBatchDeleteContentionSQLitePostgres/postgres/retry_first"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryAppearsInCredentialRiskInventory",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres/archive/postgres",
+            "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres/archive/postgres/before_retry",
+            "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres/archive/postgres/after_retry",
+            "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres/edit/postgres",
+            "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres/edit/postgres/before_retry",
+            "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres/edit/postgres/after_retry",
+            "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres/manual_reservation/postgres",
+            "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres/manual_reservation/postgres/before_retry",
+            "TestBatchCommandRetryArchiveEditManualRacesSQLitePostgres/manual_reservation/postgres/after_retry"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryAuditTaskDispatchRollbackSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryAuditTaskDispatchRollbackSQLitePostgres/task/postgres",
+            "TestBatchCommandRetryAuditTaskDispatchRollbackSQLitePostgres/dispatch/postgres",
+            "TestBatchCommandRetryAuditTaskDispatchRollbackSQLitePostgres/audit/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryAuthDenialsSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryAuthDenialsSQLitePostgres/wrong_action_proof/postgres",
+            "TestBatchCommandRetryAuthDenialsSQLitePostgres/wrong_action_grant/postgres",
+            "TestBatchCommandRetryAuthDenialsSQLitePostgres/viewer_rbac/postgres",
+            "TestBatchCommandRetryAuthDenialsSQLitePostgres/cross_owner_operator/postgres",
+            "TestBatchCommandRetryAuthDenialsSQLitePostgres/expired_grant/postgres",
+            "TestBatchCommandRetryAuthDenialsSQLitePostgres/revoked_grant/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryChildInsertPersistsDistinctSource",
+          "required_paths": [
+            "TestBatchCommandRetryChildInsertPersistsDistinctSource/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryCleanedNewestRunCannotFallBackSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryCleanedNewestRunCannotFallBackSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryCompetingActorsConsumeSourceOnceSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryCompetingActorsConsumeSourceOnceSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryCompetingSourceRollsBackGroup",
+          "required_paths": [
+            "TestBatchCommandRetryCompetingSourceRollsBackGroup/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryCreateConflictBarrierPostgres",
+          "required_paths": [
+            "TestBatchCommandRetryCreateConflictBarrierPostgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryCreationPersistsFingerprint",
+          "required_paths": [
+            "TestBatchCommandRetryCreationPersistsFingerprint/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryCrossSourceSameActorKeyBarrierPostgres",
+          "required_paths": [
+            "TestBatchCommandRetryCrossSourceSameActorKeyBarrierPostgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryDispatchFailureEligibilityAndChangedRoot",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryDuplicateSelectedNodeRefusedSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryDuplicateSelectedNodeRefusedSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryEvidenceHistoryFailsClosedAfterRunCleanupSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryEvidenceHistoryFailsClosedAfterRunCleanupSQLitePostgres/unknown/postgres",
+            "TestBatchCommandRetryEvidenceHistoryFailsClosedAfterRunCleanupSQLitePostgres/pending/postgres",
+            "TestBatchCommandRetryEvidenceHistoryFailsClosedAfterRunCleanupSQLitePostgres/success/postgres",
+            "TestBatchCommandRetryEvidenceHistoryFailsClosedAfterRunCleanupSQLitePostgres/empty_fingerprint/postgres",
+            "TestBatchCommandRetryEvidenceHistoryFailsClosedAfterRunCleanupSQLitePostgres/mismatched_fingerprint/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryExecutionSourceRequiresPositiveLatestRunSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryExecutionSourceRequiresPositiveLatestRunSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryExecutorConfigSourceParitySQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryExecutorConfigSourceParitySQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryFullAuthTransactionSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryFullAuthTransactionSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryFullFlowUnderMigratedSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryFullFlowUnderMigratedSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryGetIncludesDeletedChildLink",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryGrantEnforcementRejectsCreateAliasAndClosedRole",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryGrantUsesDedicatedProofAndOwnership",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryIneligibleGroupRollsBackAllRowsSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryIneligibleGroupRollsBackAllRowsSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryKnownFailureAdmissionSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryKnownFailureAdmissionSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryLatestCleanedRunFailsClosed",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryLockWaitProofAndRoleInvalidationSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryLockWaitProofAndRoleInvalidationSQLitePostgres/proof_expiry/postgres",
+            "TestBatchCommandRetryLockWaitProofAndRoleInvalidationSQLitePostgres/role_transition/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryProductionEffectConsumerContentionSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryProductionEffectConsumerContentionSQLitePostgres/postgres",
+            "TestBatchCommandRetryProductionEffectConsumerContentionSQLitePostgres/postgres/effect_consumer_first",
+            "TestBatchCommandRetryProductionEffectConsumerContentionSQLitePostgres/postgres/retry_first_pending_effect_consumer"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryRootCreationRollsBackOnDispatchInsertFailure",
+          "required_paths": [
+            "TestBatchCommandRetryRootCreationRollsBackOnDispatchInsertFailure/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetrySourceAndChildDeletionReplaySemanticsSQLitePostgres",
+          "required_paths": [
+            "TestBatchCommandRetrySourceAndChildDeletionReplaySemanticsSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetrySQLiteBeginProbeAttribution",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryStrictSourcesRequest",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetrySuccessfulCurrentRunIsNotFailed",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCreationRollbackAndConcurrentIdempotency",
+          "required_paths": [
+            "TestBatchCreationRollbackAndConcurrentIdempotency/postgres"
+          ]
+        },
+        {
+          "name": "TestCloneFromTemplatePreservesFieldsAndEncryptsHooks",
+          "required_paths": [
+            "TestCloneFromTemplatePreservesFieldsAndEncryptsHooks/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigExportAlwaysOmitsInternalPipelineRevisions",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportAndImportExcludeRecoveryTargetRootRegistry",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportCredentialGrantRequestCreatesSystemScopedGrantWithValidationAndSafeAudit",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportedDataCanBeImportedBackAsDownloadedFile",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportImportPreservesSSHKeyScopeMetadata",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportIncludeSecretsAsAdminAuditsWithoutPayload",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportIncludeSecretsRequiresAdminAndAuditsBlockedAttempt",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportNameReferenceBoundaries",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportOmitsSecretsByDefaultAndWritesSafeAudit",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportRouteRejectsInactiveWrongTupleAndOtherOperationGrants",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportRouteRequiresGrantBeforeHandlerExecution",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportRouteUsesActiveSystemGrantAndKeepsSafeExportUnchanged",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportStepUpOnlyWhenIncludingSensitiveValues",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportV2AuditRecordsCountsWithoutEnvelope",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportV2DefaultDocumentAndSafeStableRefs",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportV2OmitsSecretsNumericIDsAndPrivateMaterial",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportV2OmitsUnlinkedAndArchivedTaskLinks",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigExportV2SensitiveBindingOnlyWithIncludeSecrets",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportAcceptsWrappedExportEnvelope",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportBlockedBackupAssetsEnabledDoesNotPersist",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportCreateFailureRollsBackEarlierRowsPostgres",
+          "required_paths": [
+            "TestConfigImportCreateFailureRollsBackEarlierRowsPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportCreateFailureRollsBackEarlierRowsSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportCredentialGrantRequestCreatesSystemScopedGrantWithSafeAudit",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportDoesNotFallbackToSourceNumericNodeIDs",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportDynamicExportMutationUsesRuntimeSettingsTransition",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportFailedBackupAssetTransitionDoesNotPersistSettings",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportManagedRcloneTasksPauseAndDisconnectForeignPublicationConfig",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportManagedRsyncTaskDiscardsForeignPathsBeforeValidation",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportManagedRsyncTaskPausesAndDisconnectsForeignPublicationConfig",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportNameMappingPostgres",
+          "required_paths": [
+            "TestConfigImportNameMappingPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportNameMappingSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportNameReferenceProtocol",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportNameWarningDeduplication",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportP1SafetyPostgres",
+          "required_paths": [
+            "TestConfigImportP1SafetyPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportP1SafetySQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPersistenceHonorsRuntimeOperationCancellationWithoutPartialImport",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPostPersistRuntimeFailureRestoresEntireImport",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPostPersistRuntimeFailureRestoresOverwritesAndCompleteAssetGraph",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewAllocatedIdentityStillRejectsInvalidCronPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewAllocatedIdentityStillRejectsInvalidCronPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewAllocatedIdentityStillRejectsInvalidCronSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewCancellationDuringEvaluationPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewCancellationDuringEvaluationPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewCancellationDuringEvaluationSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewCorruptRetainedKeyReferenceOutcomesPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewCorruptRetainedKeyReferenceOutcomesPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewCorruptRetainedKeyReferenceOutcomesSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewCrossExecutorTargetConflictParityPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewCrossExecutorTargetConflictParityPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewCrossExecutorTargetConflictParitySQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewDependencyRejectionClosurePostgres",
+          "required_paths": [
+            "TestConfigImportPreviewDependencyRejectionClosurePostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewDependencyRejectionClosureSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewExistingTaskTargetCompatibilityPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewExistingTaskTargetCompatibilityPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewExistingTaskTargetCompatibilitySQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewForwardDependencyPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewForwardDependencyPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewForwardDependencySQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewHTTPBodyValidationBothEngines",
+          "required_paths": [
+            "TestConfigImportPreviewHTTPBodyValidationBothEngines/postgres",
+            "TestConfigImportPreviewHTTPBodyValidationBothEngines/postgres/empty",
+            "TestConfigImportPreviewHTTPBodyValidationBothEngines/postgres/malformed",
+            "TestConfigImportPreviewHTTPBodyValidationBothEngines/postgres/trailing-json"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewHTTPChangedBaselineReevaluatesBothEngines",
+          "required_paths": [
+            "TestConfigImportPreviewHTTPChangedBaselineReevaluatesBothEngines/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewHTTPEmptyDTOAndSettingsSkipBothEngines",
+          "required_paths": [
+            "TestConfigImportPreviewHTTPEmptyDTOAndSettingsSkipBothEngines/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewHTTPPendingDTOAndSecretsBothEngines",
+          "required_paths": [
+            "TestConfigImportPreviewHTTPPendingDTOAndSecretsBothEngines/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewHTTPQueryFailureIsSafeBothEngines",
+          "required_paths": [
+            "TestConfigImportPreviewHTTPQueryFailureIsSafeBothEngines/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewHTTPRejectsInvalidV2AssetsBothEngines",
+          "required_paths": [
+            "TestConfigImportPreviewHTTPRejectsInvalidV2AssetsBothEngines/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewHTTPRequestCancellationIsSafeBothEngines",
+          "required_paths": [
+            "TestConfigImportPreviewHTTPRequestCancellationIsSafeBothEngines/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewHTTPV1AndV2AssetsBothEngines",
+          "required_paths": [
+            "TestConfigImportPreviewHTTPV1AndV2AssetsBothEngines/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewHTTPWarningsTruncatedBothEngines",
+          "required_paths": [
+            "TestConfigImportPreviewHTTPWarningsTruncatedBothEngines/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewIgnoredSuppliedNodeSecretsRemainMissingPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewIgnoredSuppliedNodeSecretsRemainMissingPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewIgnoredSuppliedNodeSecretsRemainMissingSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewInvalidSuppliedPrivateKeyRejectsPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewInvalidSuppliedPrivateKeyRejectsPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewInvalidSuppliedPrivateKeyRejectsSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewNewNodeDefaultTaskTargetPendingPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewNewNodeDefaultTaskTargetPendingPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewNewNodeDefaultTaskTargetPendingSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewPendingChecksReconciledPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewPendingChecksReconciledPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewPendingChecksReconciledSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewQueryFailureNeverUsesEmptyInventoryPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewQueryFailureNeverUsesEmptyInventoryPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewQueryFailureNeverUsesEmptyInventorySQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewRealIdentityTargetConflictRollsBackBeforeTaskWritesPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewRealIdentityTargetConflictRollsBackBeforeTaskWritesPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewRealIdentityTargetConflictRollsBackBeforeTaskWritesSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewRejectsLongDependencyCyclePostgres",
+          "required_paths": [
+            "TestConfigImportPreviewRejectsLongDependencyCyclePostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewRejectsLongDependencyCycleSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewRepeatedNewPolicyPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewRepeatedNewPolicyPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewRepeatedNewPolicySQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewRetainedSecretPendingWithoutSecretReadPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewRetainedSecretPendingWithoutSecretReadPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewRetainedSecretPendingWithoutSecretReadSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewRetainedValidKeyReferencesAndDefaultTargetsPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewRetainedValidKeyReferencesAndDefaultTargetsPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewRetainedValidKeyReferencesAndDefaultTargetsSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewSkipAndReplacementDoNotReadRetainedSecretPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewSkipAndReplacementDoNotReadRetainedSecretPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewSkipAndReplacementDoNotReadRetainedSecretSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportPreviewStandaloneExportRoundTripNilPolicyPostgres",
+          "required_paths": [
+            "TestConfigImportPreviewStandaloneExportRoundTripNilPolicyPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportPreviewStandaloneExportRoundTripNilPolicySQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportQueryFailureRollsBackEarlierRowsPostgres",
+          "required_paths": [
+            "TestConfigImportQueryFailureRollsBackEarlierRowsPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportQueryFailureRollsBackEarlierRowsSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportRejectsInternalPipelineRevisions",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportRejectsInvalidDependencyGraphWithoutRowsOrOverwriteMutation",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportRejectsLongDependencyCycles",
+          "required_paths": [
+            "TestConfigImportRejectsLongDependencyCycles/postgres/overwrite=false",
+            "TestConfigImportRejectsLongDependencyCycles/postgres/overwrite=true"
+          ]
+        },
+        {
+          "name": "TestConfigImportRetryCronCursorModesPostgres",
+          "required_paths": [
+            "TestConfigImportRetryCronCursorModesPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportRetryCronCursorModesSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportRollbackKeepsCurrentTargetClaimAcrossConnections",
+          "required_paths": [
+            "TestConfigImportRollbackKeepsCurrentTargetClaimAcrossConnections/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportRouteRejectsInactiveAndWrongCredentialGrantTuples",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportRouteRequiresStepUpAndCredentialGrantBeforeMutation",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportRouteUsesActiveSystemGrantAndAuditsSafely",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportSaveFailureRollsBackEarlierRowsPostgres",
+          "required_paths": [
+            "TestConfigImportSaveFailureRollsBackEarlierRowsPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportSaveFailureRollsBackEarlierRowsSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportSharedIdempotencySettingsUsesRuntimeSettingsTransition",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportTaskCreateFailureReturnsGenericInternalErrorAndRollsBack",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportTransitionsBackupAssetEnableBeforePersistingSettings",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportUnexpectedEntityQueryErrorAbortsTransaction",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportUnexpectedEntityWriteErrorsAbortTransaction",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportUpdatesFailureRollsBackEarlierRowsPostgres",
+          "required_paths": [
+            "TestConfigImportUpdatesFailureRollsBackEarlierRowsPostgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportUpdatesFailureRollsBackEarlierRowsSQLite",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportUsesOneProspectiveContentSearchPersistenceBoundary",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV1Compatibility",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2BoundIdentityRematchAndConflict",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2DisconnectedBindingsZeroProviderCalls",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2DuplicateActiveLinkConflicts",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2RejectsArchivedTaskActiveLinkAndProviderDrift",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2RejectsIllegalRetentionPolicyRevisionAndStatus",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2RejectsOpenEnumsAndBindingFingerprintMismatch",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2RejectsUnrestorableHolds",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2RepeatSensitiveAddsBinding",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2ReplayChecksMappedEntityLifecycle",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2SharedRepositoryRemapAndRepeatIdempotency",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportV2WholeGraphConflictRollback",
+          "required_paths": []
+        },
+        {
+          "name": "TestConfigImportWarningCapAndNameSanitizer",
+          "required_paths": []
+        },
+        {
+          "name": "TestCronBackupStatusUsesPostgresDialectNamespace",
+          "required_paths": [
+            "TestCronBackupStatusUsesPostgresDialectNamespace"
+          ]
+        },
+        {
+          "name": "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases",
+          "required_paths": [
+            "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres",
+            "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres/omitted",
+            "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres/enabled_false",
+            "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres/enabled_true",
+            "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres/verify_false",
+            "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres/verify_true",
+            "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres/max_retries_zero",
+            "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres/max_retries_nonzero"
+          ]
+        },
+        {
+          "name": "TestSSHKeyReplacementPostgres",
+          "required_paths": [
+            "TestSSHKeyReplacementPostgres"
+          ]
+        },
+        {
+          "name": "TestSSHKeyRotationPostgres",
+          "required_paths": [
+            "TestSSHKeyRotationPostgres"
+          ]
+        },
+        {
+          "name": "TestSystemBackupDownloadPostgres",
+          "required_paths": [
+            "TestSystemBackupDownloadPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskFailureSummaryPostgres",
+          "required_paths": [
+            "TestTaskFailureSummaryPostgres"
+          ]
+        },
+        {
+          "name": "TestTOTPActivationLogoutBeforeCommitHTTPPostgres",
+          "required_paths": [
+            "TestTOTPActivationLogoutBeforeCommitHTTPPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/auth",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestAccountRecoveryClaimsAndCurrentIdentity",
+          "required_paths": [
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/ordinary",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/pending",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/step-up",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/subject",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/other-account",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/zero-id",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/jti",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/enrollment",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/version",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/role",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/unknown-role",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/missing-iat",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/missing-exp",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/future-iat",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/expired",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/wrong-ttl",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/session",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/binding",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/action",
+            "TestAccountRecoveryClaimsAndCurrentIdentity/postgres/nbf"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryCompletionNeverSignsSession",
+          "required_paths": [
+            "TestAccountRecoveryCompletionNeverSignsSession/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryConcurrentEnrollment",
+          "required_paths": [
+            "TestAccountRecoveryConcurrentEnrollment/login-login/postgres",
+            "TestAccountRecoveryConcurrentEnrollment/verify-verify/postgres",
+            "TestAccountRecoveryConcurrentEnrollment/login-verify/postgres",
+            "TestAccountRecoveryConcurrentEnrollment/verify-login/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryCorruptCiphertextFailsWithoutDisclosure",
+          "required_paths": [
+            "TestAccountRecoveryCorruptCiphertextFailsWithoutDisclosure/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryEnrollmentLifecycle",
+          "required_paths": [
+            "TestAccountRecoveryEnrollmentLifecycle/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryExpiryRecheckedInsideTransaction",
+          "required_paths": [
+            "TestAccountRecoveryExpiryRecheckedInsideTransaction/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryFailuresPublishNothing",
+          "required_paths": [
+            "TestAccountRecoveryFailuresPublishNothing/sign/postgres",
+            "TestAccountRecoveryFailuresPublishNothing/cas/postgres",
+            "TestAccountRecoveryFailuresPublishNothing/write/postgres",
+            "TestAccountRecoveryFailuresPublishNothing/audit/postgres",
+            "TestAccountRecoveryFailuresPublishNothing/commit-rollback/postgres",
+            "TestAccountRecoveryFailuresPublishNothing/commit-lost-ack/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryLoginCommitAndWriteFailures",
+          "required_paths": [
+            "TestAccountRecoveryLoginCommitAndWriteFailures/cas/postgres",
+            "TestAccountRecoveryLoginCommitAndWriteFailures/write/postgres",
+            "TestAccountRecoveryLoginCommitAndWriteFailures/commit-rollback/postgres",
+            "TestAccountRecoveryLoginCommitAndWriteFailures/commit-lost-ack/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryOldPasswordSnapshotCannotUpgrade",
+          "required_paths": [
+            "TestAccountRecoveryOldPasswordSnapshotCannotUpgrade/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryOrdinaryBypassGuards",
+          "required_paths": [
+            "TestAccountRecoveryOrdinaryBypassGuards/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryOrdinarySnapshotRetainsOriginalVersion",
+          "required_paths": [
+            "TestAccountRecoveryOrdinarySnapshotRetainsOriginalVersion/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryPasswordFailureCreatesNoEnrollment",
+          "required_paths": [
+            "TestAccountRecoveryPasswordFailureCreatesNoEnrollment/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryRegenerateRechecksRestrictedCurrentSession",
+          "required_paths": [
+            "TestAccountRecoveryRegenerateRechecksRestrictedCurrentSession/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoverySecretSafeLogging",
+          "required_paths": [
+            "TestAccountRecoverySecretSafeLogging/postgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryWrongCodeCanRetryExplicitly",
+          "required_paths": [
+            "TestAccountRecoveryWrongCodeCanRetryExplicitly/postgres"
+          ]
+        },
+        {
+          "name": "TestComplete2FALoginRecoveryCodeConcurrentPostgres",
+          "required_paths": [
+            "TestComplete2FALoginRecoveryCodeConcurrentPostgres"
+          ]
+        },
+        {
+          "name": "TestLastAdminInvariantConcurrentPostgres",
+          "required_paths": [
+            "TestLastAdminInvariantConcurrentPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryCodesRemainingPostgres",
+          "required_paths": [
+            "TestRecoveryCodesRemainingPostgres"
+          ]
+        },
+        {
+          "name": "TestRegenerateRecoveryCodesConcurrentPostgresBothOrders",
+          "required_paths": [
+            "TestRegenerateRecoveryCodesConcurrentPostgresBothOrders"
+          ]
+        },
+        {
+          "name": "TestRegenerateRecoveryCodesConcurrentRegenerationPostgresBothOrders",
+          "required_paths": [
+            "TestRegenerateRecoveryCodesConcurrentRegenerationPostgresBothOrders"
+          ]
+        },
+        {
+          "name": "TestRegenerateRecoveryCodesPostgres",
+          "required_paths": [
+            "TestRegenerateRecoveryCodesPostgres"
+          ]
+        },
+        {
+          "name": "TestRegenerateRecoveryCodesPostgresRejectsExpiryAfterRowLock",
+          "required_paths": [
+            "TestRegenerateRecoveryCodesPostgresRejectsExpiryAfterRowLock"
+          ]
+        },
+        {
+          "name": "TestTOTPActivationLogoutBeforeCommitPostgres",
+          "required_paths": [
+            "TestTOTPActivationLogoutBeforeCommitPostgres"
+          ]
+        },
+        {
+          "name": "TestTOTPActivationSessionPostgres",
+          "required_paths": [
+            "TestTOTPActivationSessionPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/automation",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestDurableAutomationActionLogAckAtomicAndReplayPostgres",
+          "required_paths": [
+            "TestDurableAutomationActionLogAckAtomicAndReplayPostgres"
+          ]
+        },
+        {
+          "name": "TestDurableAutomationParentFanoutAndReplayPostgres",
+          "required_paths": [
+            "TestDurableAutomationParentFanoutAndReplayPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestIndexLeaseReclamationPostgres",
+          "required_paths": [
+            "TestIndexLeaseReclamationPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/catalog",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestCatalogBehaviorPostgres",
+          "required_paths": [
+            "TestCatalogBehaviorPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/content",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestContentBehaviorPostgres",
+          "required_paths": [
+            "TestContentBehaviorPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/export",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestExportBehaviorPostgres",
+          "required_paths": [
+            "TestExportBehaviorPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/overlay",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestLifecycleOverlayPostgresCleanupExpiredRecentUsesCanonicalLockOrderWithoutRetry",
+          "required_paths": [
+            "TestLifecycleOverlayPostgresCleanupExpiredRecentUsesCanonicalLockOrderWithoutRetry"
+          ]
+        },
+        {
+          "name": "TestLifecycleOverlayPostgresClearRecentUsesCanonicalLockOrderWithoutRetry",
+          "required_paths": [
+            "TestLifecycleOverlayPostgresClearRecentUsesCanonicalLockOrderWithoutRetry"
+          ]
+        },
+        {
+          "name": "TestLifecycleOverlayPostgresLockedRecentCannotFalseZero",
+          "required_paths": [
+            "TestLifecycleOverlayPostgresLockedRecentCannotFalseZero"
+          ]
+        },
+        {
+          "name": "TestOverlayBehaviorPostgres",
+          "required_paths": [
+            "TestOverlayBehaviorPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/processing",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestArchiveMemberBehaviorPostgres",
+          "required_paths": [
+            "TestArchiveMemberBehaviorPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleLateOutputProcessingRequestWorkPullPostgresLockOrder",
+          "required_paths": [
+            "TestLifecycleLateOutputProcessingRequestWorkPullPostgresLockOrder"
+          ]
+        },
+        {
+          "name": "TestProcessingBehaviorPostgres",
+          "required_paths": [
+            "TestProcessingBehaviorPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryPointSourceLifecycleProcessingSettlesNonCurrentLiveAuthorityPostgres",
+          "required_paths": [
+            "TestRecoveryPointSourceLifecycleProcessingSettlesNonCurrentLiveAuthorityPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestRecoveryAuthorizationReceiptAuthorityTimeSourceRevalidationPostgres",
+          "required_paths": [
+            "TestRecoveryAuthorizationReceiptAuthorityTimeSourceRevalidationPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryAuthorizationReceiptConcurrentPostgresWinner",
+          "required_paths": [
+            "TestRecoveryAuthorizationReceiptConcurrentPostgresWinner"
+          ]
+        },
+        {
+          "name": "TestRecoveryAuthorizationReceiptReaperHandlesAllEffectKindsPostgres",
+          "required_paths": [
+            "TestRecoveryAuthorizationReceiptReaperHandlesAllEffectKindsPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryAuthorizationReceiptReaperSkipsLiveGrantBeforeLimitPostgres",
+          "required_paths": [
+            "TestRecoveryAuthorizationReceiptReaperSkipsLiveGrantBeforeLimitPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryAuthorizationReceiptRollbackBeforeCommitPostgres",
+          "required_paths": [
+            "TestRecoveryAuthorizationReceiptRollbackBeforeCommitPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryBehaviorPostgres",
+          "required_paths": [
+            "TestRecoveryBehaviorPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryEligibilityAuthorityPostgres",
+          "required_paths": [
+            "TestRecoveryEligibilityAuthorityPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryOverwriteCheckpointPrecedesPublishedMarkerFinalizePostgres069",
+          "required_paths": [
+            "TestRecoveryOverwriteCheckpointPrecedesPublishedMarkerFinalizePostgres069"
+          ]
+        },
+        {
+          "name": "TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder",
+          "required_paths": [
+            "TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder"
+          ]
+        },
+        {
+          "name": "TestRecoveryReconcileDowngradeReadinessPostgresRequiresFreshAllRootsClear",
+          "required_paths": [
+            "TestRecoveryReconcileDowngradeReadinessPostgresRequiresFreshAllRootsClear"
+          ]
+        },
+        {
+          "name": "TestRecoveryReconciliationExpectedSetConcurrentPostgres",
+          "required_paths": [
+            "TestRecoveryReconciliationExpectedSetConcurrentPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryReconciliationExpectedSetPostgresUsesStableSnapshot",
+          "required_paths": [
+            "TestRecoveryReconciliationExpectedSetPostgresUsesStableSnapshot"
+          ]
+        },
+        {
+          "name": "TestRecoveryReviewF3PreWriteDriftTransactionPostgres",
+          "required_paths": [
+            "TestRecoveryReviewF3PreWriteDriftTransactionPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryReviewF4RevokingCrashTakeoverPostgres",
+          "required_paths": [
+            "TestRecoveryReviewF4RevokingCrashTakeoverPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryReviewF5CleanupNodeLeaseRacesPostgres",
+          "required_paths": [
+            "TestRecoveryReviewF5CleanupNodeLeaseRacesPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryTargetRootAuthorityPostgres",
+          "required_paths": [
+            "TestRecoveryTargetRootAuthorityPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryVerifyOperationProductMatrix",
+          "required_paths": [
+            "TestRecoveryVerifyOperationProductMatrix/exact-mirror_multi-delete_honors_production_PostgreSQL_000069"
+          ]
+        },
+        {
+          "name": "TestResultLifecycleAdvanceCleanupPostgres",
+          "required_paths": [
+            "TestResultLifecycleAdvanceCleanupPostgres"
+          ]
+        },
+        {
+          "name": "TestResultLifecycleAdvanceCleanupR58Postgres",
+          "required_paths": [
+            "TestResultLifecycleAdvanceCleanupR58Postgres"
+          ]
+        },
+        {
+          "name": "TestResultLifecycleAdvanceCleanupR59Postgres",
+          "required_paths": [
+            "TestResultLifecycleAdvanceCleanupR59Postgres"
+          ]
+        },
+        {
+          "name": "TestWorkerAtomicAdoptionProjectionPostgres",
+          "required_paths": [
+            "TestWorkerAtomicAdoptionProjectionPostgres"
+          ]
+        },
+        {
+          "name": "TestWorkerCancelExpiredQueuedJobPostgresReleasesStaleOwnership",
+          "required_paths": [
+            "TestWorkerCancelExpiredQueuedJobPostgresReleasesStaleOwnership"
+          ]
+        },
+        {
+          "name": "TestWorkerConcurrentCancelersPostgresConvergeOnOneCleanupHandoff",
+          "required_paths": [
+            "TestWorkerConcurrentCancelersPostgresConvergeOnOneCleanupHandoff"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/repository",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestImportConcurrentDiscoveryUniqueCollisionPostgres",
+          "required_paths": [
+            "TestImportConcurrentDiscoveryUniqueCollisionPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryPointProducerRetentionConsumersPostgres",
+          "required_paths": [
+            "TestRecoveryPointProducerRetentionConsumersPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryPointProducerRetentionPublicationPostgres",
+          "required_paths": [
+            "TestRecoveryPointProducerRetentionPublicationPostgres"
+          ]
+        },
+        {
+          "name": "TestRcloneIncompleteManifestReconciliationDoesNotPromotePostgres",
+          "required_paths": [
+            "TestRcloneIncompleteManifestReconciliationDoesNotPromotePostgres",
+            "TestRcloneIncompleteManifestReconciliationDoesNotPromotePostgres/versioned_prefix",
+            "TestRcloneIncompleteManifestReconciliationDoesNotPromotePostgres/native_object_versions"
+          ]
+        },
+        {
+          "name": "TestRcloneNativeRestartReconciliationPersistsExactCommitVersionPostgres",
+          "required_paths": [
+            "TestRcloneNativeRestartReconciliationPersistsExactCommitVersionPostgres"
+          ]
+        },
+        {
+          "name": "TestRclonePortableManifestV2Persistence",
+          "required_paths": [
+            "TestRclonePortableManifestV2Persistence",
+            "TestRclonePortableManifestV2Persistence/postgres"
+          ]
+        },
+        {
+          "name": "TestRclonePreflightFinalizeRetainedLifecycleLockOrderPostgres",
+          "required_paths": [
+            "TestRclonePreflightFinalizeRetainedLifecycleLockOrderPostgres",
+            "TestRclonePreflightFinalizeRetainedLifecycleLockOrderPostgres/finalize_first",
+            "TestRclonePreflightFinalizeRetainedLifecycleLockOrderPostgres/lifecycle_first"
+          ]
+        },
+        {
+          "name": "TestRcloneRestartReconciliationMovesPreparingToVerifyingThenCommittedPostgres",
+          "required_paths": [
+            "TestRcloneRestartReconciliationMovesPreparingToVerifyingThenCommittedPostgres"
+          ]
+        },
+        {
+          "name": "TestRcloneVersioningRenewalRetainedLifecycleLockOrderPostgres",
+          "required_paths": [
+            "TestRcloneVersioningRenewalRetainedLifecycleLockOrderPostgres",
+            "TestRcloneVersioningRenewalRetainedLifecycleLockOrderPostgres/renewal_first",
+            "TestRcloneVersioningRenewalRetainedLifecycleLockOrderPostgres/lifecycle_first"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/retention",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestLifecycleBlockedAttemptHasExactlyOnePostgresFenceAdopter",
+          "required_paths": [
+            "TestLifecycleBlockedAttemptHasExactlyOnePostgresFenceAdopter"
+          ]
+        },
+        {
+          "name": "TestLifecycleClaimAndAdvanceUseOnePostgresLockOrder",
+          "required_paths": [
+            "TestLifecycleClaimAndAdvanceUseOnePostgresLockOrder"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimAbsoluteDeadlineAfterClaimPostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimAbsoluteDeadlineAfterClaimPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimCrashTakeoverPostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimCrashTakeoverPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimDualAdvancePostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimDualAdvancePostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimIdentityConflictResumePostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimIdentityConflictResumePostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimInFlightDoesNotBlockPostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimInFlightDoesNotBlockPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimLateLoserCannotMutatePostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimLateLoserCannotMutatePostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimNativeVersionReferencedResumePostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimNativeVersionReferencedResumePostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimObserverHoldResumePostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimObserverHoldResumePostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimPartialWORMPostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimPartialWORMPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimProofFirstRecoveryPostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimProofFirstRecoveryPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimProvenDeadlineFenceRacePostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimProvenDeadlineFenceRacePostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimReceiptDeadlineRacePostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimReceiptDeadlineRacePostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimRenewsAcrossMultipleDeadlinesPostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimRenewsAcrossMultipleDeadlinesPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimSameExecutorConcurrentPostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimSameExecutorConcurrentPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimStaleFencePostgres",
+          "required_paths": [
+            "TestLifecycleEffectClaimStaleFencePostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleLateHoldReceiptSettledAuditUsesRegistryPointDeletionPostgres",
+          "required_paths": [
+            "TestLifecycleLateHoldReceiptSettledAuditUsesRegistryPointDeletionPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleNativeReservationLinearizesPublicationAtRepositoryLock",
+          "required_paths": [
+            "TestLifecycleNativeReservationLinearizesPublicationAtRepositoryLock"
+          ]
+        },
+        {
+          "name": "TestLifecycleRcloneNativePrepareRenewExecutePostgres",
+          "required_paths": [
+            "TestLifecycleRcloneNativePrepareRenewExecutePostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleSettledAuditAttemptIsolationPostgres",
+          "required_paths": [
+            "TestLifecycleSettledAuditAttemptIsolationPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleSettledAuditConcurrentBlockedTicksPostgres",
+          "required_paths": [
+            "TestLifecycleSettledAuditConcurrentBlockedTicksPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleSettledAuditStaleBlockedCallerReDerivesReceiptPostgres",
+          "required_paths": [
+            "TestLifecycleSettledAuditStaleBlockedCallerReDerivesReceiptPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleSettledAuditStatusMatrixPostgres",
+          "required_paths": [
+            "TestLifecycleSettledAuditStatusMatrixPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleSettledAuditSuccessAndBlockedShareSlotWriterPostgres",
+          "required_paths": [
+            "TestLifecycleSettledAuditSuccessAndBlockedShareSlotWriterPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleSettledAuditWriteTxRollbackPostgres",
+          "required_paths": [
+            "TestLifecycleSettledAuditWriteTxRollbackPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleTerminalEventRestartPostgresSkipsEffects",
+          "required_paths": [
+            "TestLifecycleTerminalEventRestartPostgresSkipsEffects"
+          ]
+        },
+        {
+          "name": "TestPolicyConcurrentCreatePostgresMapsActiveScopeConflict",
+          "required_paths": [
+            "TestPolicyConcurrentCreatePostgresMapsActiveScopeConflict"
+          ]
+        },
+        {
+          "name": "TestPolicySelectionPostgresLocksPointStateAndHoldDrift",
+          "required_paths": [
+            "TestPolicySelectionPostgresLocksPointStateAndHoldDrift"
+          ]
+        },
+        {
+          "name": "TestPolicySelectionPostgresLocksTaskLinkDrift",
+          "required_paths": [
+            "TestPolicySelectionPostgresLocksTaskLinkDrift"
+          ]
+        },
+        {
+          "name": "TestRetentionBehaviorPostgres",
+          "required_paths": [
+            "TestRetentionBehaviorPostgres"
+          ]
+        },
+        {
+          "name": "TestSelectedAbsoluteDeadlineHasExactlyOnePostgresFenceAdopter",
+          "required_paths": [
+            "TestSelectedAbsoluteDeadlineHasExactlyOnePostgresFenceAdopter"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/runtime",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestLifecycleSettledAuditDetailPurgePostgres",
+          "required_paths": [
+            "TestLifecycleSettledAuditDetailPurgePostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backupasset/search",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestSearchBehaviorPostgres",
+          "required_paths": [
+            "TestSearchBehaviorPostgres"
+          ]
+        },
+        {
+          "name": "TestSearchSourceLifecycleMigratedSchemaPostgres",
+          "required_paths": [
+            "TestSearchSourceLifecycleMigratedSchemaPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/backuphealth",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestBackupCompletionCollectorPostgresScrape",
+          "required_paths": [
+            "TestBackupCompletionCollectorPostgresScrape"
+          ]
+        },
+        {
+          "name": "TestLatestVerifiedForNodesPushesTopOneToDatabase",
+          "required_paths": [
+            "TestLatestVerifiedForNodesPushesTopOneToDatabase/postgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/bootstrap",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestAccountRecoveryPostgres",
+          "required_paths": [
+            "TestAccountRecoveryPostgres"
+          ]
+        },
+        {
+          "name": "TestBreakGlassOnlyOneConcurrentZeroAdminPromotionPostgres",
+          "required_paths": [
+            "TestBreakGlassOnlyOneConcurrentZeroAdminPromotionPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/database",
+      "timeout": "30m",
+      "tests": [
+        {
+          "name": "TestAccountRecoveryMigrationPostgres",
+          "required_paths": [
+            "TestAccountRecoveryMigrationPostgres"
+          ]
+        },
+        {
+          "name": "TestAccountRecoveryMigrationSchemaDriftPostgres",
+          "required_paths": [
+            "TestAccountRecoveryMigrationSchemaDriftPostgres"
+          ]
+        },
+        {
+          "name": "TestAlertDeliveryMigrationApplyDownPostgres",
+          "required_paths": [
+            "TestAlertDeliveryMigrationApplyDownPostgres"
+          ]
+        },
+        {
+          "name": "TestAlertDeliveryMigrationUsedDownRejectedPostgres",
+          "required_paths": [
+            "TestAlertDeliveryMigrationUsedDownRejectedPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration062PostgresApplyDown",
+          "required_paths": [
+            "TestBackupAssetMigration062PostgresApplyDown"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration063Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration063Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration064Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration064Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration065Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration065Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration066Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration066Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration067Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration067Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration068Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration068Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069ActiveGrantBindingImmutabilityPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069ActiveGrantBindingImmutabilityPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069AdmissionExpiryEqualityPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069AdmissionExpiryEqualityPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069CleanedResultSetTombstonePostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069CleanedResultSetTombstonePostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069FrozenAuthorityBindingsPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069FrozenAuthorityBindingsPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069InitialWorkerClaimHandoffPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069InitialWorkerClaimHandoffPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069JobItemOperationAndLocatorBindingsPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069JobItemOperationAndLocatorBindingsPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069NodeLeaseMatchesJobTargetPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069NodeLeaseMatchesJobTargetPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069PlanJobItemOrdinalParityPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069PlanJobItemOrdinalParityPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069PlanRecoveryPointOwnershipPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069PlanRecoveryPointOwnershipPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069PlanTargetNodeForeignKeyPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069PlanTargetNodeForeignKeyPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration069Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069PostgresOperationSnapshot",
+          "required_paths": [
+            "TestBackupAssetMigration069PostgresOperationSnapshot"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069PublicationAndDeadlineIntegrityPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069PublicationAndDeadlineIntegrityPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069RecoveryLocatorProductPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069RecoveryLocatorProductPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069RecoveryResultContentAuthorizationPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069RecoveryResultContentAuthorizationPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069ResultClassificationPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069ResultClassificationPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069SecurityOverrideBindingFreezePostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069SecurityOverrideBindingFreezePostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069SecurityOverrideCandidatePostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069SecurityOverrideCandidatePostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069StrictOpaqueDigestAndTemporalContractsPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069StrictOpaqueDigestAndTemporalContractsPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069TargetBindingCopiesPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069TargetBindingCopiesPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069TaskRunNodeSnapshotPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069TaskRunNodeSnapshotPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069TerminalAttemptIntegrityPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069TerminalAttemptIntegrityPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069TerminalWorkspacePhasesPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069TerminalWorkspacePhasesPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069UnresolvedOperationOutcomePostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069UnresolvedOperationOutcomePostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069WholeTask6ClosurePostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069WholeTask6ClosurePostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069WorkerCancelQueuedPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069WorkerCancelQueuedPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069WorkerEvidenceBindingsPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069WorkerEvidenceBindingsPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069WorkerPreWriteSourceDriftPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069WorkerPreWriteSourceDriftPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration069WorkspaceCleanupOwnershipPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration069WorkspaceCleanupOwnershipPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration070Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration070Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration070TombstoneCompositeHistoryPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration070TombstoneCompositeHistoryPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration070UsedDownAdmissionPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration070UsedDownAdmissionPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration071Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration071Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration071UsedDownAdmissionPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration071UsedDownAdmissionPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration072Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration072Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration073Postgres",
+          "required_paths": [
+            "TestBackupAssetMigration073Postgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration077GuardSchemaDriftPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration077GuardSchemaDriftPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration077NonPartialUniqueIndexDriftPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration077NonPartialUniqueIndexDriftPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration077PrimaryKeyDriftPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration077PrimaryKeyDriftPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration077TableCheckDriftPostgres",
+          "required_paths": [
+            "TestBackupAssetMigration077TableCheckDriftPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetMigration077TerminalIndexPredicatePostgres",
+          "required_paths": [
+            "TestBackupAssetMigration077TerminalIndexPredicatePostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetRecoveryWorkerBehaviorPostgres",
+          "required_paths": [
+            "TestBackupAssetRecoveryWorkerBehaviorPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupAssetRecoveryWorkerFirstWritePostgres",
+          "required_paths": [
+            "TestBackupAssetRecoveryWorkerFirstWritePostgres"
+          ]
+        },
+        {
+          "name": "TestBackupCompletionFactsConcurrentExactReplayPostgres",
+          "required_paths": [
+            "TestBackupCompletionFactsConcurrentExactReplayPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupCompletionFactsMigrationPostgres",
+          "required_paths": [
+            "TestBackupCompletionFactsMigrationPostgres"
+          ]
+        },
+        {
+          "name": "TestBackupFocusRetirementMigrationPostgres",
+          "required_paths": [
+            "TestBackupFocusRetirementMigrationPostgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryMigrationPostgres",
+          "required_paths": [
+            "TestBatchCommandRetryMigrationPostgres"
+          ]
+        },
+        {
+          "name": "TestCronBackupHealthMigrationPostgres",
+          "required_paths": [
+            "TestCronBackupHealthMigrationPostgres"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimAuditSlotMigrationPostgresClaimTransitionRebinding",
+          "required_paths": [
+            "TestLifecycleEffectClaimAuditSlotMigrationPostgresClaimTransitionRebinding"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimAuditSlotMigrationPostgresClaimUsedDown",
+          "required_paths": [
+            "TestLifecycleEffectClaimAuditSlotMigrationPostgresClaimUsedDown"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimAuditSlotMigrationPostgresConstraints",
+          "required_paths": [
+            "TestLifecycleEffectClaimAuditSlotMigrationPostgresConstraints"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimAuditSlotMigrationPostgresPristineDown",
+          "required_paths": [
+            "TestLifecycleEffectClaimAuditSlotMigrationPostgresPristineDown"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimAuditSlotMigrationPostgresSlotUsedDown",
+          "required_paths": [
+            "TestLifecycleEffectClaimAuditSlotMigrationPostgresSlotUsedDown"
+          ]
+        },
+        {
+          "name": "TestLifecycleEffectClaimAuditSlotMigrationPostgresUpgradeCutover",
+          "required_paths": [
+            "TestLifecycleEffectClaimAuditSlotMigrationPostgresUpgradeCutover"
+          ]
+        },
+        {
+          "name": "TestMigration074StepsDownAdmissionPreservesCleanVersionPostgres",
+          "required_paths": [
+            "TestMigration074StepsDownAdmissionPreservesCleanVersionPostgres"
+          ]
+        },
+        {
+          "name": "TestNormalizeMigrationPredicatePostgresActiveDrill",
+          "required_paths": []
+        },
+        {
+          "name": "TestPostgresTimestamptzScanUsesConfiguredUTC",
+          "required_paths": [
+            "TestPostgresTimestamptzScanUsesConfiguredUTC"
+          ]
+        },
+        {
+          "name": "TestProviderNativeVersionReferenceReasonMigrationPostgresLifecycle",
+          "required_paths": [
+            "TestProviderNativeVersionReferenceReasonMigrationPostgresLifecycle"
+          ]
+        },
+        {
+          "name": "TestProviderNativeVersionReferenceReasonV77PreservesAdmission",
+          "required_paths": [
+            "TestProviderNativeVersionReferenceReasonV77PreservesAdmission/postgres"
+          ]
+        },
+        {
+          "name": "TestRcloneNativeVersionEvidenceMigrationPostgresLifecycle",
+          "required_paths": [
+            "TestRcloneNativeVersionEvidenceMigrationPostgresLifecycle"
+          ]
+        },
+        {
+          "name": "TestRclonePreflightIdentityMigrationPostgres",
+          "required_paths": [
+            "TestRclonePreflightIdentityMigrationPostgres",
+            "TestRclonePreflightIdentityMigrationPostgres/upgrade_preserves_old_keys_and_indexes",
+            "TestRclonePreflightIdentityMigrationPostgres/upgrade_initializes_stable_key_and_rewraps_it",
+            "TestRclonePreflightIdentityMigrationPostgres/pristine_down_and_reapply",
+            "TestRclonePreflightIdentityMigrationPostgres/active_blocks_down_before_metadata_becomes_dirty",
+            "TestRclonePreflightIdentityMigrationPostgres/active_independently_blocks_direct_down",
+            "TestRclonePreflightIdentityMigrationPostgres/retired_blocks_down_before_metadata_becomes_dirty",
+            "TestRclonePreflightIdentityMigrationPostgres/retired_independently_blocks_direct_down",
+            "TestRclonePreflightIdentityMigrationPostgres/lost_blocks_down_before_metadata_becomes_dirty",
+            "TestRclonePreflightIdentityMigrationPostgres/lost_independently_blocks_direct_down"
+          ]
+        },
+        {
+          "name": "TestRecoveryAuthorizationReceiptDirectSQLPostgres",
+          "required_paths": [
+            "TestRecoveryAuthorizationReceiptDirectSQLPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryGrantTerminalTransitionBindingsPostgres",
+          "required_paths": [
+            "TestRecoveryGrantTerminalTransitionBindingsPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryReviewF3PreWriteDriftTransactionPostgres",
+          "required_paths": [
+            "TestRecoveryReviewF3PreWriteDriftTransactionPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryReviewF6UseLatchPostgres",
+          "required_paths": [
+            "TestRecoveryReviewF6UseLatchPostgres"
+          ]
+        },
+        {
+          "name": "TestRunMigrations074DuplicateActiveDrillFailsCleanAndRetriesPostgres",
+          "required_paths": [
+            "TestRunMigrations074DuplicateActiveDrillFailsCleanAndRetriesPostgres"
+          ]
+        },
+        {
+          "name": "TestRunMigrations074SchemaContractPostgres",
+          "required_paths": [
+            "TestRunMigrations074SchemaContractPostgres"
+          ]
+        },
+        {
+          "name": "TestRunMigrations082SchemaContractPostgres",
+          "required_paths": [
+            "TestRunMigrations082SchemaContractPostgres"
+          ]
+        },
+        {
+          "name": "TestRunMigrations083And084SchemaContractPostgres",
+          "required_paths": [
+            "TestRunMigrations083And084SchemaContractPostgres"
+          ]
+        },
+        {
+          "name": "TestRunMigrations090SchemaContractPostgres",
+          "required_paths": [
+            "TestRunMigrations090SchemaContractPostgres"
+          ]
+        },
+        {
+          "name": "TestRunMigrations091SchemaContractPostgres",
+          "required_paths": [
+            "TestRunMigrations091SchemaContractPostgres"
+          ]
+        },
+        {
+          "name": "TestRunMigrationsPostgresDirtyCheckUsesSearchPath",
+          "required_paths": [
+            "TestRunMigrationsPostgresDirtyCheckUsesSearchPath"
+          ]
+        },
+        {
+          "name": "TestRunMigrationsPostgresSchemaDriftCheckUsesSearchPath",
+          "required_paths": [
+            "TestRunMigrationsPostgresSchemaDriftCheckUsesSearchPath"
+          ]
+        },
+        {
+          "name": "TestServiceMonitorRetirementMigrationPostgres",
+          "required_paths": [
+            "TestServiceMonitorRetirementMigrationPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskCronOverrideMigrationBackfillsConservativelyPostgres",
+          "required_paths": [
+            "TestTaskCronOverrideMigrationBackfillsConservativelyPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskCronOverrideMigrationDowngradeGuardPostgres",
+          "required_paths": [
+            "TestTaskCronOverrideMigrationDowngradeGuardPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunCronProvenanceMigrationPostgres",
+          "required_paths": [
+            "TestTaskRunCronProvenanceMigrationPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunEffectsMigrationDuplicateHistoryPostgres",
+          "required_paths": [
+            "TestTaskRunEffectsMigrationDuplicateHistoryPostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/escalation",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestEngineEscalationDeliveryConcurrencyPostgres",
+          "required_paths": [
+            "TestEngineEscalationDeliveryConcurrencyPostgres"
+          ]
+        },
+        {
+          "name": "TestMigrationEscalationDeliveryFencePostgres",
+          "required_paths": [
+            "TestMigrationEscalationDeliveryFencePostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/policy",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestLockTargetOwnershipSpacePostgresSerializesTransactions",
+          "required_paths": [
+            "TestLockTargetOwnershipSpacePostgresSerializesTransactions"
+          ]
+        },
+        {
+          "name": "TestPolicyScheduleModesPostgres",
+          "required_paths": [
+            "TestPolicyScheduleModesPostgres"
+          ]
+        },
+        {
+          "name": "TestPolicyTaskCronOverrideLifecyclePostgres",
+          "required_paths": [
+            "TestPolicyTaskCronOverrideLifecyclePostgres"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "./internal/task",
+      "timeout": "20m",
+      "tests": [
+        {
+          "name": "TestBatchCommandRetryDirectCancellationCompletesUnknownEvidence",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryEvidenceWriteFailurePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryEvidenceWriteFailurePostgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryEvidenceWriteFailureRollsBackTerminalState",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryExecutionBindingRejectsChangedCommandBeforeRunStart",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryOutcomeClassificationIsStrict",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetrySkipDisabledAndArchivedChildKeepValidFingerprint",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetrySkipEvidenceFailureRollsBackRunAggregateAndEffects",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetrySkipEvidenceUnderMigratedPostgresGuards",
+          "required_paths": [
+            "TestBatchCommandRetrySkipEvidenceUnderMigratedPostgresGuards"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetrySkipEvidenceUnderMigratedSQLiteGuards",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetrySkipLegacyAndV0RemainEvidenceFree",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetrySkipPersistsSkippedRunAndUnknownEvidenceUnderGuard",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetrySkipRootDependencyShapeRecordsUnknownWithEmptyFingerprint",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryTerminalCASCompetitionCompletesOneEvidence",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryTerminalEvidencePostgres",
+          "required_paths": [
+            "TestBatchCommandRetryTerminalEvidencePostgres"
+          ]
+        },
+        {
+          "name": "TestBatchCommandRetryTerminalWritesSuccessEvidence",
+          "required_paths": []
+        },
+        {
+          "name": "TestBatchCommandRetryUnknownEvidenceCannotBePromotedByLaterKnownFailure",
+          "required_paths": []
+        },
+        {
+          "name": "TestCancellationOwnerFenceAndLeaseClearPostgres",
+          "required_paths": [
+            "TestCancellationOwnerFenceAndLeaseClearPostgres"
+          ]
+        },
+        {
+          "name": "TestCronClaimCompetitionPostgres",
+          "required_paths": [
+            "TestCronClaimCompetitionPostgres"
+          ]
+        },
+        {
+          "name": "TestCronOccurrenceDeduplicatesAcrossManagersAndRestartPostgres",
+          "required_paths": [
+            "TestCronOccurrenceDeduplicatesAcrossManagersAndRestartPostgres"
+          ]
+        },
+        {
+          "name": "TestCronRetryKeepsEveryPhasePostgres",
+          "required_paths": [
+            "TestCronRetryKeepsEveryPhasePostgres"
+          ]
+        },
+        {
+          "name": "TestCronTerminalizationPreservesFutureCursorPostgres",
+          "required_paths": [
+            "TestCronTerminalizationPreservesFutureCursorPostgres"
+          ]
+        },
+        {
+          "name": "TestDistinctDownstreamEffectsDurablyReserveOneChildPostgres",
+          "required_paths": [
+            "TestDistinctDownstreamEffectsDurablyReserveOneChildPostgres"
+          ]
+        },
+        {
+          "name": "TestDurableAutomationTriggerReservationRecoversPostgres",
+          "required_paths": [
+            "TestDurableAutomationTriggerReservationRecoversPostgres"
+          ]
+        },
+        {
+          "name": "TestExhaustedSupersededRetryEffectDoesNotFailNewCyclePostgres",
+          "required_paths": [
+            "TestExhaustedSupersededRetryEffectDoesNotFailNewCyclePostgres"
+          ]
+        },
+        {
+          "name": "TestExpiredCronRecoveryNeverReplaysRunningOrUnknownPostgres",
+          "required_paths": [
+            "TestExpiredCronRecoveryNeverReplaysRunningOrUnknownPostgres"
+          ]
+        },
+        {
+          "name": "TestExplicitCancelLegacyPendingRetryPostgres",
+          "required_paths": [
+            "TestExplicitCancelLegacyPendingRetryPostgres"
+          ]
+        },
+        {
+          "name": "TestExplicitCancelMarkedPendingRetryPostgres",
+          "required_paths": [
+            "TestExplicitCancelMarkedPendingRetryPostgres"
+          ]
+        },
+        {
+          "name": "TestExplicitCancelWinsShutdownRaceLegacyPostgres",
+          "required_paths": [
+            "TestExplicitCancelWinsShutdownRaceLegacyPostgres"
+          ]
+        },
+        {
+          "name": "TestExplicitCancelWinsShutdownRaceMarkedPostgres",
+          "required_paths": [
+            "TestExplicitCancelWinsShutdownRaceMarkedPostgres"
+          ]
+        },
+        {
+          "name": "TestGracefulShutdownPreservesLegacyPendingRetryPostgres",
+          "required_paths": [
+            "TestGracefulShutdownPreservesLegacyPendingRetryPostgres"
+          ]
+        },
+        {
+          "name": "TestGracefulShutdownPreservesMarkedPendingRetryPostgres",
+          "required_paths": [
+            "TestGracefulShutdownPreservesMarkedPendingRetryPostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyCronRetryReanchorsLiveSchedulePostgres",
+          "required_paths": [
+            "TestLegacyCronRetryReanchorsLiveSchedulePostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRcloneCancellationBeforeProviderAfterDurableEntryPreservesVerifiedGenerationPostgres",
+          "required_paths": [
+            "TestLegacyRcloneCancellationBeforeProviderAfterDurableEntryPreservesVerifiedGenerationPostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRcloneKeyedHistoricalArmFencePostgres",
+          "required_paths": [
+            "TestLegacyRcloneKeyedHistoricalArmFencePostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRcloneQueuedCancellationPersistsNoStartPostgres",
+          "required_paths": [
+            "TestLegacyRcloneQueuedCancellationPersistsNoStartPostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRcloneSharedResourceArmFencePostgres",
+          "required_paths": [
+            "TestLegacyRcloneSharedResourceArmFencePostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRetryWithoutEffectRecoversOnStartupPostgres",
+          "required_paths": [
+            "TestLegacyRetryWithoutEffectRecoversOnStartupPostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRsyncCancellationAfterCaptureBeforeStartPreservesVerifiedGenerationPostgres",
+          "required_paths": [
+            "TestLegacyRsyncCancellationAfterCaptureBeforeStartPreservesVerifiedGenerationPostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRsyncCancellationAfterWriteStartedLeavesGenerationDirtyPostgres",
+          "required_paths": [
+            "TestLegacyRsyncCancellationAfterWriteStartedLeavesGenerationDirtyPostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRsyncGenerationLineageRequiresVerifiedWriteAfterPartialFailurePostgres",
+          "required_paths": [
+            "TestLegacyRsyncGenerationLineageRequiresVerifiedWriteAfterPartialFailurePostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRsyncNoStartFailurePreservesVerifiedGenerationPostgres",
+          "required_paths": [
+            "TestLegacyRsyncNoStartFailurePreservesVerifiedGenerationPostgres"
+          ]
+        },
+        {
+          "name": "TestLegacyRsyncPublicationPrepareCancellationPreservesVerifiedGenerationPostgres",
+          "required_paths": [
+            "TestLegacyRsyncPublicationPrepareCancellationPreservesVerifiedGenerationPostgres"
+          ]
+        },
+        {
+          "name": "TestLosingPendingRecoveryPreservesLiveTaskAggregatePostgres",
+          "required_paths": [
+            "TestLosingPendingRecoveryPreservesLiveTaskAggregatePostgres"
+          ]
+        },
+        {
+          "name": "TestManagerRsyncStableCapturePostgres",
+          "required_paths": [
+            "TestManagerRsyncStableCapturePostgres"
+          ]
+        },
+        {
+          "name": "TestOrdinaryHeartbeatLossCancelsExecutorAndFencesTerminalWritePostgres",
+          "required_paths": [
+            "TestOrdinaryHeartbeatLossCancelsExecutorAndFencesTerminalWritePostgres"
+          ]
+        },
+        {
+          "name": "TestPendingAutomationReservationRecoversAfterManagerRestartPostgres",
+          "required_paths": [
+            "TestPendingAutomationReservationRecoversAfterManagerRestartPostgres"
+          ]
+        },
+        {
+          "name": "TestPendingCronCrashRecoveryPostgres",
+          "required_paths": [
+            "TestPendingCronCrashRecoveryPostgres"
+          ]
+        },
+        {
+          "name": "TestPendingDurableBatchBoundariesPostgres",
+          "required_paths": [
+            "TestPendingDurableBatchBoundariesPostgres"
+          ]
+        },
+        {
+          "name": "TestPendingRetryReservationRecoversAfterManagerRestartPostgres",
+          "required_paths": [
+            "TestPendingRetryReservationRecoversAfterManagerRestartPostgres"
+          ]
+        },
+        {
+          "name": "TestPolicyDisableActionRemovesCommittedSchedulePostgres",
+          "required_paths": [
+            "TestPolicyDisableActionRemovesCommittedSchedulePostgres"
+          ]
+        },
+        {
+          "name": "TestPolicyDisableActionRollbackPreservesSchedulePostgres",
+          "required_paths": [
+            "TestPolicyDisableActionRollbackPreservesSchedulePostgres"
+          ]
+        },
+        {
+          "name": "TestPolicyMaxConcurrentCapsActualExecutorEntriesPostgres",
+          "required_paths": [
+            "TestPolicyMaxConcurrentCapsActualExecutorEntriesPostgres"
+          ]
+        },
+        {
+          "name": "TestReadyEffectBatchBoundariesPostgres",
+          "required_paths": [
+            "TestReadyEffectBatchBoundariesPostgres"
+          ]
+        },
+        {
+          "name": "TestReconcileLegacyRcloneWriteRequiresNewGenerationBeforeRestorePostgres",
+          "required_paths": [
+            "TestReconcileLegacyRcloneWriteRequiresNewGenerationBeforeRestorePostgres"
+          ]
+        },
+        {
+          "name": "TestRejectedRetryRunPreservesExactProvenancePostgres",
+          "required_paths": [
+            "TestRejectedRetryRunPreservesExactProvenancePostgres"
+          ]
+        },
+        {
+          "name": "TestRetryEffectCompetingManagersPostgres",
+          "required_paths": [
+            "TestRetryEffectCompetingManagersPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryEffectExhaustionSettlesAggregatePostgres",
+          "required_paths": [
+            "TestRetryEffectExhaustionSettlesAggregatePostgres"
+          ]
+        },
+        {
+          "name": "TestRetryEffectSupersededAttemptDoesNotReviveOldChainPostgres",
+          "required_paths": [
+            "TestRetryEffectSupersededAttemptDoesNotReviveOldChainPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryEffectUnknownCursorExhaustionPostgres",
+          "required_paths": [
+            "TestRetryEffectUnknownCursorExhaustionPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryEffectUnknownModeFailsClosedPostgres",
+          "required_paths": [
+            "TestRetryEffectUnknownModeFailsClosedPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryEffectUsesCommittedNextRunAtAndPreservesLineagePostgres",
+          "required_paths": [
+            "TestRetryEffectUsesCommittedNextRunAtAndPreservesLineagePostgres"
+          ]
+        },
+        {
+          "name": "TestRetryEntryCancelBoundaryLegacyPostgres",
+          "required_paths": [
+            "TestRetryEntryCancelBoundaryLegacyPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryEntryCancelBoundaryMarkedPostgres",
+          "required_paths": [
+            "TestRetryEntryCancelBoundaryMarkedPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryRecoveryBatchBoundariesPostgres",
+          "required_paths": [
+            "TestRetryRecoveryBatchBoundariesPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryRejectionAtLimitDoesNotRetryPostgres",
+          "required_paths": [
+            "TestRetryRejectionAtLimitDoesNotRetryPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryRejectionMaxRetriesZeroDoesNotRetryPostgres",
+          "required_paths": [
+            "TestRetryRejectionMaxRetriesZeroDoesNotRetryPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryRejectionRepeatedPreEntryIncrementsPostgres",
+          "required_paths": [
+            "TestRetryRejectionRepeatedPreEntryIncrementsPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryRejectionSchedulesNextAttemptLegacyPostgres",
+          "required_paths": [
+            "TestRetryRejectionSchedulesNextAttemptLegacyPostgres"
+          ]
+        },
+        {
+          "name": "TestRetryRejectionSchedulesNextAttemptMarkedPostgres",
+          "required_paths": [
+            "TestRetryRejectionSchedulesNextAttemptMarkedPostgres"
+          ]
+        },
+        {
+          "name": "TestSampleWriterRetentionFixesCutoffPerRoundPostgres",
+          "required_paths": [
+            "TestSampleWriterRetentionFixesCutoffPerRoundPostgres"
+          ]
+        },
+        {
+          "name": "TestSampleWriterRetentionSkipsInvalidSettingsValuesPostgres",
+          "required_paths": [
+            "TestSampleWriterRetentionSkipsInvalidSettingsValuesPostgres"
+          ]
+        },
+        {
+          "name": "TestSampleWriterRetentionSkipsSettingsReadFailurePostgres",
+          "required_paths": [
+            "TestSampleWriterRetentionSkipsSettingsReadFailurePostgres"
+          ]
+        },
+        {
+          "name": "TestSampleWriterRetentionUsesLiveSettingsPostgres",
+          "required_paths": [
+            "TestSampleWriterRetentionUsesLiveSettingsPostgres"
+          ]
+        },
+        {
+          "name": "TestShutdownSealsPendingAdmissionPostgres",
+          "required_paths": [
+            "TestShutdownSealsPendingAdmissionPostgres"
+          ]
+        },
+        {
+          "name": "TestSyncSchedulePreservesFutureCursorPostgres",
+          "required_paths": [
+            "TestSyncSchedulePreservesFutureCursorPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunCaptureSidecarPersistencePreservesRawBytesPostgres",
+          "required_paths": [
+            "TestTaskRunCaptureSidecarPersistencePreservesRawBytesPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionCleanupAndDrillReservationSerializePostgres",
+          "required_paths": [
+            "TestTaskRunRetentionCleanupAndDrillReservationSerializePostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionCleanupAndRestoreReservationSerializePostgres",
+          "required_paths": [
+            "TestTaskRunRetentionCleanupAndRestoreReservationSerializePostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionCleanupIsAtomicPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionCleanupIsAtomicPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionFixesCutoffPerRoundPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionFixesCutoffPerRoundPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsActiveDrillSourceReferencePostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsActiveDrillSourceReferencePostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsCurrentDirtyGenerationAndBlocksFallbackPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsCurrentDirtyGenerationAndBlocksFallbackPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsLastValidGenerationAcrossRetentionPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsLastValidGenerationAcrossRetentionPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsLoneRcloneVerifiedHeadPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsLoneRcloneVerifiedHeadPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsOlderUnresolvedGenerationPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsOlderUnresolvedGenerationPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsPendingRestoreSourceReferencePostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsPendingRestoreSourceReferencePostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsRcloneAmbiguousEmptyHeadPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsRcloneAmbiguousEmptyHeadPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsRcloneVerifiedHeadAfterNoStartPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsRcloneVerifiedHeadAfterNoStartPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsRcloneVerifiedReferenceAndDirtyHeadPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsRcloneVerifiedReferenceAndDirtyHeadPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionKeepsRecoveryPointProducerPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionKeepsRecoveryPointProducerPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionPreservesPredecessorDuringActiveDirtyNoStartPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionPreservesPredecessorDuringActiveDirtyNoStartPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionRecoveryPointBatchProgressPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionRecoveryPointBatchProgressPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionRecoveryPointLockedRecheckPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionRecoveryPointLockedRecheckPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionSkipsInvalidSettingsValuesPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionSkipsInvalidSettingsValuesPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionSkipsSettingsReadFailurePostgres",
+          "required_paths": [
+            "TestTaskRunRetentionSkipsSettingsReadFailurePostgres"
+          ]
+        },
+        {
+          "name": "TestTaskRunRetentionUsesLiveSettingsPostgres",
+          "required_paths": [
+            "TestTaskRunRetentionUsesLiveSettingsPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskTargetOwnershipConcurrencyPostgres",
+          "required_paths": [
+            "TestTaskTargetOwnershipConcurrencyPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskTerminalAtomicityPostgres",
+          "required_paths": [
+            "TestTaskTerminalAtomicityPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskTerminalRejectCancelLockOrderPostgres",
+          "required_paths": [
+            "TestTaskTerminalRejectCancelLockOrderPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskUpdateCronChangeWhilePausedKeepsCursorEmptyPostgres",
+          "required_paths": [
+            "TestTaskUpdateCronChangeWhilePausedKeepsCursorEmptyPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskUpdateLegacyRetryCronChangePreservesRetryDeadlinePostgres",
+          "required_paths": [
+            "TestTaskUpdateLegacyRetryCronChangePreservesRetryDeadlinePostgres"
+          ]
+        },
+        {
+          "name": "TestTaskUpdateMarkedRetryCronChangeReanchorsRegularCursorPostgres",
+          "required_paths": [
+            "TestTaskUpdateMarkedRetryCronChangeReanchorsRegularCursorPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskUpdateRejectsCorruptRetryCronProvenancePostgres",
+          "required_paths": [
+            "TestTaskUpdateRejectsCorruptRetryCronProvenancePostgres"
+          ]
+        },
+        {
+          "name": "TestTaskUpdateScheduleFailurePreservesConcurrentStatePostgres",
+          "required_paths": [
+            "TestTaskUpdateScheduleFailurePreservesConcurrentStatePostgres"
+          ]
+        },
+        {
+          "name": "TestTransientDownstreamEffectRetriesAfterAdmissionRecoveryPostgres",
+          "required_paths": [
+            "TestTransientDownstreamEffectRetriesAfterAdmissionRecoveryPostgres"
+          ]
+        }
+      ]
+    }
+  ],
+  "exclusions": [
+    {
+      "package": "./internal/backuphealth",
+      "name": "TestLatestVerifiedForNodesLargeHistoryEvidence",
+      "reason": "facts_test.go:179-187 requires RUN_R7_04_SCALE_TEST and performs the separately scoped 100,000-row scale evidence."
+    },
+    {
+      "package": "./internal/alerting",
+      "name": "TestMigrationRetiredDeliveryFenceSQLite",
+      "reason": "backend/internal/alerting/migration_delivery_test.go:359 calls newAlertingMigrationRuntimeFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/alerting",
+      "name": "TestCronBackupWorkerFailureRecoveryAndDurableDelivery",
+      "reason": "backend/internal/alerting/cron_backup_test.go:113 calls newCronBackupWorkerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/alerting",
+      "name": "TestCronBackupWorkerSamplesClockAfterLockedPublication",
+      "reason": "backend/internal/alerting/cron_backup_test.go:218 calls newCronBackupWorkerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/alerting",
+      "name": "TestCronBackupWorkerStateLockUnavailablePreservesCursor",
+      "reason": "backend/internal/alerting/cron_backup_test.go:258 calls newCronBackupWorkerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/alerting",
+      "name": "TestCronBackupWorkerDatabaseFailureAfterAlertInsertionRollsBack",
+      "reason": "backend/internal/alerting/cron_backup_test.go:286 calls newCronBackupWorkerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/alerting",
+      "name": "TestCronBackupWorkerSourceIdentityAndRevisionFence",
+      "reason": "backend/internal/alerting/cron_backup_test.go:313 calls newCronBackupWorkerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/alerting",
+      "name": "TestCronBackupWorkerConcurrentTicksCreateOneCycle",
+      "reason": "backend/internal/alerting/cron_backup_test.go:367 calls newCronBackupWorkerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/alerting",
+      "name": "TestCronBackupWorkerRunAndShutdownLifecycle",
+      "reason": "backend/internal/alerting/cron_backup_test.go:386 calls newCronBackupWorkerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestBatchDispatchFailureIsQueryableAndReplayDoesNotRetrigger",
+      "reason": "backend/internal/api/handlers/batch_persistence_test.go:409 calls batchPersistenceDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestAccountRecoveryHTTPStrictJSONAndStreamingLimit",
+      "reason": "backend/internal/api/handlers/account_recovery_test.go:195 calls newAccountRecoveryHandlerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestAccountRecoveryHTTPBearerAndStaleCapabilities",
+      "reason": "backend/internal/api/handlers/account_recovery_test.go:229 calls newAccountRecoveryHandlerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestAccountRecoveryHTTPRejectedLoginDoesNotGenerateEnrollment",
+      "reason": "backend/internal/api/handlers/account_recovery_test.go:256 calls newAccountRecoveryHandlerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestAccountRecoveryHTTPInternalErrorsAndLogsAreSecretSafe",
+      "reason": "backend/internal/api/handlers/account_recovery_test.go:296 calls newAccountRecoveryHandlerFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadCanonicalArchiveHTTP1AndHTTP2",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:174 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadCronSQLite",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:201 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadAdmissionAndPreconditions",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:233 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadDedicatedProofAndExactGrantScope",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:246 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadAdmissionInfrastructureAndProofAudit",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:351 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadTimeoutAuditBeforeContextCancellation",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:431 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadFileFailures",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:463 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadPinnedObjectAndTransferAbortHTTP1AndHTTP2",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:541 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadTwoPermitsAndCancellation",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:648 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadFixedGrantRevalidationAndQueryFailures",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:708 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadAuthorizationCheckBoundAndInterval",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:738 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadGrantAbsoluteDeadlineAbortsHTTP1AndHTTP2",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:770 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadGrantStorageFailureIsSafe503",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:803 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadSessionRevalidatedBeforeHeaders",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:819 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupDownloadReadPassDetectsChangesAndCancellation",
+      "reason": "backend/internal/api/handlers/system_backup_download_handler_test.go:849 calls newSystemBackupDownloadFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestAutomationRuleLogsSQLite",
+      "reason": "backend/internal/api/handlers/automation_rule_handler_test.go:239 calls openR306DB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyReplacementMetadataSecretOrderings",
+      "reason": "backend/internal/api/handlers/ssh_key_replacement_test.go:199 calls runReplacementMetadataSecretOrderings with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyReplacementUpdateReturnsCurrentIdentity",
+      "reason": "backend/internal/api/handlers/ssh_key_replacement_test.go:518 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyReplacementRotationIdentityDuringSSH",
+      "reason": "backend/internal/api/handlers/ssh_key_replacement_test.go:589 calls runReplacementRotationIdentityWait with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyReplacementRotationProofExpiresDuringSSH",
+      "reason": "backend/internal/api/handlers/ssh_key_replacement_test.go:613 calls runReplacementRotationProofExpiry with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyReplacementRotationImportDrift",
+      "reason": "backend/internal/api/handlers/ssh_key_replacement_test.go:653 calls runReplacementRotationImportDrift with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationSavesOnlyAfterAllNodesVerified",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:561 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationZeroNodeIsNeutralSuccess",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:641 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationSameMaterialPreservesSecretAndStillValidatesInventory",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:666 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationProofAdmissionPrecedesInventoryAndSSH",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:745 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationFailureReturnsEveryNodeAndOrdinaryPutStillWorksOffline",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:801 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationRejectsDisabledExpiredAndOutOfScopeBeforeDial",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:862 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationRejectsUnknownAndMismatchedHostsWithoutAuthentication",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:911 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationTrustUnavailableDoesNotSave",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:969 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationRejectsKeyNodeAndInventoryDrift",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1070 calls runRotationConflictCase with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationRejectsPhantomNodeInsert",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1115 calls runRotationConflictCase with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationIgnoresUsageAndHealthDrift",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1133 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationRejectsMissingOrInvalidSession",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1183 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationRejectsMalformedBoundedBodies",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1215 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationStalledBodyReadHonorsRequestDeadline",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1282 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationRejectsInventoryOverLimit",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1345 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationRejectsSessionInvalidationDuringValidation",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1401 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationCancellationStopsWorkersAndDoesNotSave",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1432 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationDeadlineStopsHandshake",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1472 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationAuditDoesNotExposeRemoteFailure",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1553 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSSHKeyRotationResponseResultsAreSorted",
+      "reason": "backend/internal/api/handlers/ssh_key_rotation_test.go:1892 calls openSSHKeyRotationTestDB with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestTaskFailureSummarySQLite",
+      "reason": "backend/internal/api/handlers/task_failure_summary_handler_test.go:178 calls testTaskFailureSummaryBehavior with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/escalation",
+      "name": "TestMigrationEscalationDeliveryFenceSQLite",
+      "reason": "backend/internal/escalation/migration_delivery_test.go:258 calls newEscalationMigrationRuntimeFixture with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/backupasset/repository",
+      "name": "TestRecoveryPointProducerRetentionConsumersSQLite",
+      "reason": "backend/internal/backupasset/repository/producer_retention_integration_test.go:31 calls runRecoveryPointProducerRetentionConsumers with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/backupasset/repository",
+      "name": "TestRecoveryPointProducerRetentionPublicationSQLite",
+      "reason": "backend/internal/backupasset/repository/producer_retention_integration_test.go:361 calls runRecoveryPointProducerRetentionPublication with the literal SQLite engine; no PostgreSQL engine is selected in this test."
+    },
+    {
+      "package": "./internal/backupasset/repository",
+      "name": "TestRcloneIncompleteManifestReconciliationDoesNotPromote",
+      "reason": "backend/internal/backupasset/repository/rclone_publication_reconcile_test.go:571 calls runRcloneIncompleteManifestReconciliation with literal false, selecting only SQLite; the Postgres sibling passes true and is required."
+    },
+    {
+      "package": "./internal/database",
+      "name": "TestRclonePreflightIdentityMigrationSQLite",
+      "reason": "backend/internal/database/rclone_preflight_identity_migration_test.go:18-19 calls newSQLiteMigrationFixture; PostgreSQL is exercised by the separate Postgres sibling."
+    },
+    {
+      "package": "./internal/api/handlers",
+      "name": "TestSystemBackupPostgresDialectNamespace",
+      "reason": "backend/internal/api/handlers/system_backup_files_test.go:128-131 uses the PostgreSQL dialector with DisableAutomaticPing; no live SQL connection is made."
+    },
+    {
+      "package": "./internal/backupasset/runtime",
+      "name": "TestNodeWriteCoordinatorPostgresLocksSharedNodeRowForUpdate",
+      "reason": "backend/internal/backupasset/runtime/admission_test.go:1431-1434 uses a DryRun PostgreSQL dialector with DisableAutomaticPing; it inspects generated SQL without a live database."
+    },
+    {
+      "package": "./internal/database",
+      "name": "TestBuildPostgresDSN",
+      "reason": "backend/internal/database/utc_cutover_test.go:261-302 verifies DSN string construction; it never connects to PostgreSQL."
+    },
+    {
+      "package": "./internal/database",
+      "name": "TestPostgresMigrationCISelectorIncludesDrillRecovery074",
+      "reason": "backend/internal/database/drill_recovery_migration_test.go:296 checks CI inventory configuration rather than executing PostgreSQL."
+    },
+    {
+      "package": "./internal/database",
+      "name": "TestPostgresMigrationCIHasRequiredLifecycleSlices",
+      "reason": "backend/internal/database/ci_workflow_test.go:112 checks CI inventory configuration rather than executing PostgreSQL."
+    },
+    {
+      "package": "./internal/profile",
+      "name": "TestRenderHooksPostgres",
+      "reason": "backend/internal/profile/profile_test.go:111-135 verifies rendered hook strings only, without connecting to PostgreSQL."
+    },
+    {
+      "package": "./internal/profile",
+      "name": "TestRenderHooksDockerPostgres",
+      "reason": "backend/internal/profile/profile_test.go:225-245 verifies rendered hook strings only, without connecting to PostgreSQL."
+    },
+    {
+      "package": "./internal/requiredpostgres",
+      "name": "TestRunnerFakeProcess",
+      "reason": "backend/internal/requiredpostgres/runner_test.go:11-26 uses an isolated fake go process and a fake DSN only to test runner protocol; no PostgreSQL server is contacted."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryAuthorizationReceiptExecuteReplayAndConflict",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:1498-1499 calls replay helper, which passes false at 2526-2528; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryAuthorizationReceiptSecurityOverrideReplayAndConflict",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:1334-1335 calls replay helper, which passes false at 2526-2528; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryAuthorizationReceiptWriteAuthorizeReplayAndConflict",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:1338-1339 calls replay helper, which passes false at 2526-2528; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryReviewF1WriteAuthorityOneUse",
+      "reason": "backend/internal/backupasset/recovery/review_closure_test.go:19-20 calls the SQLite replay test; service_test.go:2526-2528 passes false; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryAuthorizationReceiptReaperHandlesAllEffectKinds",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:3291-3292 passes false to the reaper fixture; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryAuthorizationReceiptReturnsStableSafeGrantMetadata",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:1502-1516 passes false to the authorization fixture; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryAuthorizationReceiptRevalidatesLiveAuthorityBeforeWriteOrExecute",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:1752-1758 passes false to the authorization fixture; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryAuthorizationReceiptRollbackBeforeCommit",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:2826-2839 passes false to both fixture branches; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryWriteGrantSecretLostResponseReplay",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:2778-2779 calls the lost-response helper, which passes false at 2787-2788; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryDeleteGrantSecretLostResponseReplay",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:2782-2783 calls the lost-response helper, which passes false at 2787-2788; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."
+    },
+    {
+      "package": "./internal/cronbackup",
+      "name": "TestReceiptValidationIsEngineSpecific",
+      "reason": "backend/internal/cronbackup/cronbackup_test.go:79-95 tests receipt strings for both engine labels; it does not connect to a database."
+    },
+    {
+      "package": "./internal/database",
+      "name": "TestRequiredPostgresWorkflowRejectsBypasses",
+      "reason": "backend/internal/database/ci_workflow_test.go:217-239 mutates parsed CI workflow data and validates its configuration; it does not connect to PostgreSQL."
+    }
+  ]
+}

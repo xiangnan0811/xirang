@@ -232,6 +232,8 @@ func TestRcloneV1744PortableConformance(t *testing.T) {
 	if binary == "" {
 		t.Skip("RCLONE_TEST_BINARY is required only for the final conformance gate")
 	}
+	server := newRcloneConfigLoopbackSSH(t, "")
+	transport := server.transport(t, ToolBinaries{Rclone: binary})
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "source")
 	destinationPath := filepath.Join(root, "destination")
@@ -256,22 +258,24 @@ func TestRcloneV1744PortableConformance(t *testing.T) {
 	boundConfig := []byte("[xirang-local-conformance]\ntype = local\n")
 	run := func(operation CommandOperation, source, destination *RclonePrivateLocator, stagedSource *StagedPayloadRef) []byte {
 		t.Helper()
-		invocation := CommandInvocation{
-			Tool: ToolRclone, Operation: operation, Purpose: CommandPurposePublish,
-			SecretStdin: boundConfig, RcloneSource: source, RcloneDestination: destination,
-			RcloneStagedSource: stagedSource, RcloneLowLevelRetries: 1, AbsoluteDeadline: deadline,
+		invocation := rcloneSSHInvocationForTest()
+		invocation.Tool, invocation.Operation, invocation.Purpose = ToolRclone, operation, CommandPurposePublish
+		if operation == OperationRcloneManagedVersion {
+			invocation.Purpose = CommandPurposeProbe
 		}
-		arguments, err := managedRcloneArguments(invocation)
+		invocation.SecretStdin = boundConfig
+		invocation.RcloneSource, invocation.RcloneDestination = source, destination
+		invocation.RcloneStagedSource = stagedSource
+		invocation.RcloneLowLevelRetries, invocation.AbsoluteDeadline = 1, deadline
+		output, err := transport.Run(context.Background(), invocation, testOperationLimits())
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("rclone %s through SSH: %v", operation, err)
 		}
-		command := exec.Command(binary, arguments...)
-		command.Stdin = bytes.NewReader(invocation.SecretStdin)
-		output, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("rclone %s: %v\n%s", operation, err, output)
-		}
-		return output
+		server.assertConfigClean(t, true)
+		return output.Stdout
+	}
+	if err := ValidateManagedRcloneVersion(run(OperationRcloneManagedVersion, nil, nil, nil)); err != nil {
+		t.Fatalf("RCLONE_TEST_BINARY is not exact v1.74.4: %v", err)
 	}
 	run(OperationRcloneManagedCopy, &source, &destination, nil)
 	if payload, err := os.ReadFile(filepath.Join(destinationPath, "file.txt")); err != nil || string(payload) != "portable bytes" {

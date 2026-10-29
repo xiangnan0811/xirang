@@ -109,13 +109,112 @@ function useAdminDialogAttempt(open: boolean, token: string | null) {
   return { beginAttempt, roleRef, openRef };
 }
 
+/** Orders canonical unsigned decimal revisions without converting them to Number. */
+function compareCanonicalRevision(left: string, right: string): number {
+  if (left.length !== right.length) return left.length < right.length ? -1 : 1;
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+/** Returns the setup's durable base revision only while the ticket can still be sent with secrets. */
+function usableSetupBase(setup: RcloneBindingSetupResult | null, nowMs: number): string | null {
+  if (!setup || !/^[a-f0-9]{32}$/.test(setup.setupId) || setup.baseBindingRevision === null) return null;
+  if (!(Date.parse(setup.expiresAt) > nowMs)) return null;
+  return setup.baseBindingRevision;
+}
+
 export function TaskRcloneVersioningDialog(props: TaskRcloneVersioningDialogProps) {
   const { role, token: authToken } = useAuth();
-  const summary = props.task?.rclonePublication;
-  return <TaskRcloneVersioningDialogContent key={JSON.stringify([
-    props.open, props.task?.id, props.token, authToken, role, summary?.mode, summary?.taskRevision, summary?.bindingRevision,
+  return <TaskRcloneVersioningSummaryHost key={JSON.stringify([
+    props.open, props.task?.id, props.token, authToken, role,
   ])} {...props} />;
 }
+
+type SummaryOverride = {
+  summary: RclonePublicationSummary;
+  /** Full-value identity of the parent summary that was on screen when this record was taken. */
+  parentSnapshot: string;
+  contentKey: string;
+};
+
+/** Every summary field in a fixed order, so a snapshot identity covers the whole safe DTO value. */
+const summarySnapshotFields = Object.keys({
+  mode: true,
+  state: true,
+  reasonCode: true,
+  taskRevision: true,
+  bindingRevision: true,
+  capabilityRevision: true,
+  consistencyClass: true,
+  hashFidelity: true,
+  estimatedReadBytes: true,
+  apiCostClass: true,
+  storageCostClass: true,
+  egressCostClass: true,
+  credentialExpiresAt: true,
+  encryptionProfile: true,
+  kmsKeyStatus: true,
+  kmsReadKeyCount: true,
+  rollbackLocatorPresent: true,
+  rollbackCapability: true,
+} satisfies Record<keyof RclonePublicationSummary, true>) as Array<keyof RclonePublicationSummary>;
+
+/** Form state belongs to one mode, Task CAS, and binding; other fact changes keep it. */
+function summaryContentKey(summary: RclonePublicationSummary): string {
+  return JSON.stringify([summary.mode, summary.taskRevision, summary.bindingRevision]);
+}
+
+/**
+ * Keeps the latest accepted summary (and its Task CAS) as a high-water mark. A successful
+ * write's response stays while the parent still shows the exact pre-operation snapshot or
+ * any lower task revision; a parent summary whose full value changed at an equal or later
+ * task revision is authoritative and becomes the new mark. Identity changes remount this
+ * host via its key.
+ */
+function TaskRcloneVersioningSummaryHost(props: TaskRcloneVersioningDialogProps) {
+  const parentSummary = props.task?.rclonePublication;
+  const parentSnapshot = parentSummary
+    ? JSON.stringify(summarySnapshotFields.map((field) => parentSummary[field] ?? null))
+    : "";
+  const [override, setOverride] = useState<SummaryOverride | null>(null);
+  let accepted = override;
+  if (
+    override !== null
+    && parentSummary
+    && override.parentSnapshot !== parentSnapshot
+    && compareCanonicalRevision(parentSummary.taskRevision, override.summary.taskRevision) >= 0
+  ) {
+    const parentContentKey = summaryContentKey(parentSummary);
+    accepted = {
+      summary: parentSummary,
+      parentSnapshot,
+      // Same mode/CAS/binding as the shown summary: refresh facts without discarding form state.
+      contentKey: parentContentKey === summaryContentKey(override.summary) ? override.contentKey : parentContentKey,
+    };
+    // Derived-state update: the next render keeps this record, so it settles immediately.
+    setOverride(accepted);
+  }
+  const contentKey = accepted ? accepted.contentKey : parentSummary ? summaryContentKey(parentSummary) : "";
+  const summary = accepted ? accepted.summary : parentSummary;
+
+  const parentSnapshotRef = useRef(parentSnapshot);
+  const contentKeyRef = useRef(contentKey);
+  useLayoutEffect(() => {
+    parentSnapshotRef.current = parentSnapshot;
+    contentKeyRef.current = contentKey;
+  }, [parentSnapshot, contentKey]);
+
+  const applySummary = (next: RclonePublicationSummary) => {
+    setOverride({ summary: next, parentSnapshot: parentSnapshotRef.current, contentKey: contentKeyRef.current });
+  };
+
+  return <TaskRcloneVersioningDialogContent key={contentKey} {...props} summary={summary} onSummary={applySummary} />;
+}
+
+type TaskRcloneVersioningDialogContentProps = TaskRcloneVersioningDialogProps & {
+  summary: RclonePublicationSummary | undefined;
+  onSummary: (summary: RclonePublicationSummary) => void;
+};
 
 function TaskRcloneVersioningDialogContent({
   open,
@@ -123,13 +222,14 @@ function TaskRcloneVersioningDialogContent({
   task,
   token,
   onUpdated,
-}: TaskRcloneVersioningDialogProps) {
+  summary,
+  onSummary,
+}: TaskRcloneVersioningDialogContentProps) {
   const { t } = useTranslation();
   const { beginAttempt, roleRef, openRef } = useAdminDialogAttempt(open, token);
   const [selectedMode, setSelectedMode] = useState<RcloneVersionedPublicationMode>(
-    task?.rclonePublication?.mode === "native_object_versions" ? "native_object_versions" : "versioned_prefix",
+    summary?.mode === "native_object_versions" ? "native_object_versions" : "versioned_prefix",
   );
-  const [summaryOverride, setSummaryOverride] = useState<RclonePublicationSummary | null>(null);
   const [preflight, setPreflight] = useState<RcloneVersioningPreflightResult | null>(null);
   const [migrationChoice, setMigrationChoice] = useState<RcloneVersioningMigrationChoice>("first_new_point");
   const [confirmImportedBaseline, setConfirmImportedBaseline] = useState(false);
@@ -141,6 +241,7 @@ function TaskRcloneVersioningDialogContent({
   const [boundConfig, setBoundConfig] = useState("");
 
   const [nativeSetup, setNativeSetup] = useState<RcloneBindingSetupResult | null>(null);
+  const [nativeSetupTaskRevision, setNativeSetupTaskRevision] = useState("");
   const [region, setRegion] = useState("");
   const [bucket, setBucket] = useState("");
   const [managedPrefix, setManagedPrefix] = useState("");
@@ -151,8 +252,6 @@ function TaskRcloneVersioningDialogContent({
   const [encryptionProfile, setEncryptionProfile] = useState<Exclude<RcloneEncryptionProfile, "none">>("sse_s3");
   const [kmsKeyArn, setKmsKeyArn] = useState("");
 
-  const initialSummary = task?.rclonePublication;
-  const summary = summaryOverride ?? initialSummary;
   const taskRevision = summary?.taskRevision ?? "";
   const bindingRevision = summary?.bindingRevision ?? "0";
 
@@ -178,10 +277,17 @@ function TaskRcloneVersioningDialogContent({
   const canRunPreflight = Boolean(
     token && taskRevision && summary.mode === selectedMode && bindingRevision !== "0" && !isBusy,
   );
+  const isRenewal = preflight?.purpose === "renewal";
   const canActivate = Boolean(
-    token && preflight && !preflightExpired && preflight.summary.state === "ready" &&
+    token &&
+      preflight &&
+      (preflight.purpose === "activation" || preflight.purpose === "renewal") &&
+      Boolean(preflight.preflightId) &&
+      !preflightExpired &&
+      preflight.summary.state === "ready" &&
       preflight.summary.mode === selectedMode &&
-      (migrationChoice === "first_new_point" || confirmImportedBaseline) && !isBusy,
+      (isRenewal ? true : (migrationChoice === "first_new_point" || confirmImportedBaseline)) &&
+      !isBusy,
   );
 
   const changeMode = (mode: RcloneVersionedPublicationMode) => {
@@ -218,16 +324,21 @@ function TaskRcloneVersioningDialogContent({
         expectedTaskRevision: taskRevision,
       });
       if (!isCurrent()) return;
+      const setupBase = usableSetupBase(setup, Date.now());
+      if (setupBase === null) {
+        setNotice("admission_blocked");
+        return;
+      }
       const next = await apiClient.setRclonePortableBinding(token, task.id, {
         expectedTaskRevision: taskRevision,
-        expectedBindingRevision: bindingRevision,
+        expectedBindingRevision: setupBase,
         setupId: setup.setupId,
         targetRemote: targetRemote.trim(),
         managedRootLocator: managedRootLocator.trim(),
         boundConfig,
       });
       if (!isCurrent()) return;
-      setSummaryOverride(next);
+      onSummary(next);
       setPreflight(null);
       await onUpdated();
     } catch (error) {
@@ -245,14 +356,22 @@ function TaskRcloneVersioningDialogContent({
     if (roleRef.current !== "admin" || !openRef.current || !token || !taskRevision) return;
     const { isCurrent } = beginAttempt();
     if (!isCurrent()) return;
+    const setupTaskRevision = taskRevision;
     setBusy("native-setup");
     setNotice(null);
+    setNativeSetup(null);
+    setNativeSetupTaskRevision("");
     try {
       const setup = await apiClient.createRcloneNativeBindingSetup(token, task.id, {
-        expectedTaskRevision: taskRevision,
+        expectedTaskRevision: setupTaskRevision,
       });
       if (!isCurrent()) return;
+      if (usableSetupBase(setup, Date.now()) === null) {
+        setNotice("admission_blocked");
+        return;
+      }
       setNativeSetup(setup);
+      setNativeSetupTaskRevision(setupTaskRevision);
     } catch (error) {
       if (!isCurrent()) return;
       setNotice(getRcloneVersioningErrorCode(error));
@@ -271,14 +390,22 @@ function TaskRcloneVersioningDialogContent({
       setNotice("admission_blocked");
       return;
     }
+    // The setup ticket is bound to the Task CAS and binding revision it was issued against.
+    const setupBase = usableSetupBase(nativeSetup, Date.now());
+    if (setupBase === null || nativeSetupTaskRevision !== taskRevision) {
+      setNativeSetup(null);
+      setNativeSetupTaskRevision("");
+      setNotice("admission_blocked");
+      return;
+    }
     const { isCurrent } = beginAttempt();
     if (!isCurrent()) return;
     setBusy("native");
     setNotice(null);
     try {
       const next = await apiClient.setRcloneNativeBinding(token, task.id, {
-        expectedTaskRevision: taskRevision,
-        expectedBindingRevision: bindingRevision,
+        expectedTaskRevision: nativeSetupTaskRevision,
+        expectedBindingRevision: setupBase,
         setupId: nativeSetup.setupId,
         region: region.trim(),
         bucket: bucket.trim(),
@@ -291,8 +418,9 @@ function TaskRcloneVersioningDialogContent({
         kmsKeyArn: encryptionProfile === "sse_kms_cmk" ? kmsKeyArn.trim() : undefined,
       });
       if (!isCurrent()) return;
-      setSummaryOverride(next);
+      onSummary(next);
       setNativeSetup(null);
+      setNativeSetupTaskRevision("");
       setPreflight(null);
       await onUpdated();
     } catch (error) {
@@ -321,7 +449,7 @@ function TaskRcloneVersioningDialogContent({
         requestedMode: selectedMode,
       });
       if (!isCurrent()) return;
-      setSummaryOverride(result.summary);
+      onSummary(result.summary);
       setNow(Date.now());
       setPreflight(result);
       if (result.summary.state !== "ready") setNotice(result.summary.reasonCode);
@@ -342,6 +470,15 @@ function TaskRcloneVersioningDialogContent({
       setNow(Date.now());
       return;
     }
+    if (preflight.purpose !== "activation" && preflight.purpose !== "renewal") {
+      return;
+    }
+    if (!preflight.preflightId) {
+      return;
+    }
+    if (preflight.summary.state !== "ready") {
+      return;
+    }
     const { isCurrent } = beginAttempt();
     if (!isCurrent()) return;
     setBusy("activate");
@@ -350,10 +487,10 @@ function TaskRcloneVersioningDialogContent({
       const result = await apiClient.activateRcloneVersioning(token, task.id, {
         expectedTaskRevision: taskRevision,
         preflightId: preflight.preflightId,
-        migrationChoice,
+        migrationChoice: preflight.purpose === "renewal" ? "first_new_point" : migrationChoice,
       });
       if (!isCurrent()) return;
-      setSummaryOverride(result.summary);
+      onSummary(result.summary);
       setPreflight(null);
       setConfirmImportedBaseline(false);
       await onUpdated();
@@ -384,7 +521,7 @@ function TaskRcloneVersioningDialogContent({
             expectedBindingRevision: bindingRevision,
           });
       if (!isCurrent()) return;
-      setSummaryOverride(result.summary);
+      onSummary(result.summary);
       await onUpdated();
     } catch (error) {
       if (!isCurrent()) return;
@@ -425,7 +562,9 @@ function TaskRcloneVersioningDialogContent({
           {summary.state === "blocked" ? (
             <InlineAlert tone="critical">{t("rcloneVersioning.blockedMessage")}</InlineAlert>
           ) : null}
-          {noticeText ? <InlineAlert tone="critical">{noticeText}</InlineAlert> : null}
+          {noticeText ? (
+            <InlineAlert tone={notice === "capability_settling" ? "info" : "critical"}>{noticeText}</InlineAlert>
+          ) : null}
 
           <section className="space-y-3" aria-labelledby={`rclone-mode-${task.id}`}>
             <div>
@@ -558,26 +697,36 @@ function TaskRcloneVersioningDialogContent({
             {preflight ? (
               <p className="text-xs text-muted-foreground">{t("rcloneVersioning.preflightExpires", { time: formatTime(preflight.expiresAt) })}</p>
             ) : null}
+            {preflight?.purpose === "renewal" ? (
+              <InlineAlert tone="info">{t("rcloneVersioning.renewalPendingNotice")}</InlineAlert>
+            ) : null}
           </section>
 
-          {preflight?.summary.state === "ready" ? (
-            <section className="space-y-3 border-t border-border/60 pt-4" aria-labelledby={`rclone-migration-${task.id}`}>
-              <h3 id={`rclone-migration-${task.id}`} className="text-sm font-semibold">{t("rcloneVersioning.migrationChoice")}</h3>
-              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby={`rclone-migration-${task.id}`}>
-                <ChoiceRadio taskId={task.id} value="first_new_point" current={migrationChoice} disabled={isBusy} label={t("rcloneVersioning.firstNewPoint")} onChange={setMigrationChoice} />
-                <ChoiceRadio taskId={task.id} value="imported_baseline" current={migrationChoice} disabled={isBusy} label={t("rcloneVersioning.importedBaseline")} onChange={setMigrationChoice} />
-              </div>
-              {migrationChoice === "imported_baseline" ? (
-                <label className="flex items-start gap-2 border-l-2 border-warning pl-3 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={confirmImportedBaseline} disabled={isBusy} onChange={(event) => setConfirmImportedBaseline(event.target.checked)} />
-                  <span>{t("rcloneVersioning.importedBaselineConfirm")}</span>
-                </label>
-              ) : null}
-            </section>
+          {preflight?.summary.state === "ready" && (preflight.purpose === "activation" || preflight.purpose === "renewal") ? (
+            preflight.purpose === "renewal" ? (
+              <section className="space-y-2 border-t border-border/60 pt-4" aria-labelledby={`rclone-renewal-${task.id}`}>
+                <h3 id={`rclone-renewal-${task.id}`} className="text-sm font-semibold">{t("rcloneVersioning.renewalTitle")}</h3>
+                <p className="text-xs text-muted-foreground">{t("rcloneVersioning.renewalExplanation")}</p>
+              </section>
+            ) : (
+              <section className="space-y-3 border-t border-border/60 pt-4" aria-labelledby={`rclone-migration-${task.id}`}>
+                <h3 id={`rclone-migration-${task.id}`} className="text-sm font-semibold">{t("rcloneVersioning.migrationChoice")}</h3>
+                <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby={`rclone-migration-${task.id}`}>
+                  <ChoiceRadio taskId={task.id} value="first_new_point" current={migrationChoice} disabled={isBusy} label={t("rcloneVersioning.firstNewPoint")} onChange={setMigrationChoice} />
+                  <ChoiceRadio taskId={task.id} value="imported_baseline" current={migrationChoice} disabled={isBusy} label={t("rcloneVersioning.importedBaseline")} onChange={setMigrationChoice} />
+                </div>
+                {migrationChoice === "imported_baseline" ? (
+                  <label className="flex items-start gap-2 border-l-2 border-warning pl-3 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={confirmImportedBaseline} disabled={isBusy} onChange={(event) => setConfirmImportedBaseline(event.target.checked)} />
+                    <span>{t("rcloneVersioning.importedBaselineConfirm")}</span>
+                  </label>
+                ) : null}
+              </section>
+            )
           ) : null}
         </DialogBody>
 
-        <DialogFooter className="justify-between">
+        <DialogFooter className="flex-wrap justify-between">
           <div>
             {summary.mode !== "legacy_mutable" && summary.rollbackCapability === "clean_available" ? (
               <Button type="button" variant="outline" disabled={isBusy} onClick={() => void rollback(true)}>
@@ -593,7 +742,7 @@ function TaskRcloneVersioningDialogContent({
           </div>
           <Button type="button" disabled={!canActivate} onClick={() => void activate()}>
             {busy === "activate" ? <Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden /> : <ShieldCheck className="mr-1.5 size-4" aria-hidden />}
-            {t("rcloneVersioning.activate")}
+            {preflight?.purpose === "renewal" ? t("rcloneVersioning.confirmRenewal") : t("rcloneVersioning.activate")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -658,8 +807,8 @@ function ChoiceRadio({
 
 function SummaryFacts({ summary }: { summary: RclonePublicationSummary }) {
   const { t } = useTranslation();
+  const reason = t(`rcloneVersioning.reason.${summary.reasonCode}`);
   const facts = [
-    [t("rcloneVersioning.reasonLabel"), t(`rcloneVersioning.reason.${summary.reasonCode}`)],
     [t("rcloneVersioning.consistency"), t(`rcloneVersioning.consistencyValue.${summary.consistencyClass}`)],
     [t("rcloneVersioning.fidelity"), t(`rcloneVersioning.fidelityValue.${summary.hashFidelity}`)],
     [t("rcloneVersioning.readBytes"), `${summary.estimatedReadBytes} B`],
@@ -675,6 +824,10 @@ function SummaryFacts({ summary }: { summary: RclonePublicationSummary }) {
   ];
   return (
     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-y border-border/50 py-3 sm:grid-cols-4">
+      <div className="col-span-2 min-w-0 sm:col-span-4">
+        <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("rcloneVersioning.reasonLabel")}</dt>
+        <dd className="mt-0.5 break-words text-xs font-medium">{reason}</dd>
+      </div>
       {facts.map(([label, value]) => (
         <div key={label} className="min-w-0">
           <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</dt>

@@ -33,21 +33,17 @@ Worker 工具链 v3 的输入身份、保留镜像引用及 v1 签名闭包的�
 
 ## 数据库迁移版本
 
-当前迁移版本：`000094_account_recovery`。
+当前迁移版本：`000095_rclone_preflight_identity`。
 
 该迁移的 SQLite/PostgreSQL 配对文件为：
 
-- `internal/database/migrations/sqlite/000094_account_recovery.up.sql`
-- `internal/database/migrations/sqlite/000094_account_recovery.down.sql`
-- `internal/database/migrations/postgres/000094_account_recovery.up.sql`
-- `internal/database/migrations/postgres/000094_account_recovery.down.sql`
+- `internal/database/migrations/sqlite/000095_rclone_preflight_identity.up.sql`
+- `internal/database/migrations/sqlite/000095_rclone_preflight_identity.down.sql`
+- `internal/database/migrations/postgres/000095_rclone_preflight_identity.up.sql`
+- `internal/database/migrations/postgres/000095_rclone_preflight_identity.down.sql`
 
-该迁移增加账户受限重新绑定标志和独立恢复审计；默认不改变现有用户的密码、角色、
-TOTP 或业务关联。恢复审计不含凭据，也不随用户删除级联清除。
-
-两引擎均在存在恢复审计或待重新绑定账户时拒绝降到此迁移以下，拒绝发生在写入 dirty
-元数据之前；仅未使用时允许降级。启动检查真实字段、约束、索引及保护器定义，漂移返回
-`ErrMigrationSchemaDrift`。离线恢复工具只验证当前编译版本的完整、干净 schema，不执行
-迁移或修复。使用前须升级并停止全部 Core/worker，不能混跑不认识受限标志的旧二进制。
+该迁移为 Rclone 预检身份引入独立稳定的密钥域，保留原有密钥及索引。
+任何该域密钥行存在时（包括已丢失或退役行），两引擎在写入 dirty 元数据之前
+拒绝降级；只有未使用时允许降级。须保留匹配的数据库和加密密钥备份。
 
 该声明与 `internal/database/migrations/{sqlite,postgres}` 中最新的成对 up/down 文件同步，并由迁移检查脚本校验。升级前提、旧写入者排空、双引擎恢复和降级保护要求见[数据库合同](../docs/spec/backend/database-guidelines.md)、[部署指南](../docs/deployment.md#备份职责收敛升级)及[备份、恢复与快照](../docs/admin/backup-recovery.md#升级与灾难恢复)；不要通过强制修改版本或删除安全证据绕过保护。

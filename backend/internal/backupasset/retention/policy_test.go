@@ -389,25 +389,7 @@ func TestPolicySelectionLocksRowsAndBindsIndependentRevision(t *testing.T) {
 }
 
 func TestPolicySelectionPostgresLocksPointStateAndHoldDrift(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
-	if dsn == "" {
-		t.Skip("TEST_POSTGRES_DSN is required for the focused PostgreSQL point-lock regression")
-	}
-	db, err := gorm.Open(postgresgorm.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open PostgreSQL retention test database: %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("PostgreSQL retention sql database: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(
-		&model.User{}, &model.BackupRepository{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{},
-		&model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
-	); err != nil {
-		t.Fatalf("migrate PostgreSQL retention test database: %v", err)
-	}
+	db := newIsolatedRetentionPostgresTestDB(t)
 
 	evaluatedAt := time.Date(2026, 8, 17, 8, 45, 0, 0, time.UTC)
 	repositoryID := testOpaqueID(450)

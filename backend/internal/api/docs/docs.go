@@ -3278,37 +3278,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/auth/me": {
-            "get": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "返回当前已认证用户的基本信息",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "auth"
-                ],
-                "summary": "获取当前用户信息",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    }
-                }
-            }
-        },
         "/auth/recovery/enrollment/verify": {
             "post": {
                 "security": [
@@ -6854,6 +6823,37 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/me": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回当前已认证用户的基本信息",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "获取当前用户信息",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -16005,6 +16005,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
+                "description": "响应 purpose 为 activation 或 renewal；renewal 仅延长当前绑定授权。",
                 "consumes": [
                     "application/json"
                 ],
@@ -16735,14 +16736,14 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "列出 restic 类型任务的所有备份快照",
+                "description": "此兼容入口始终返回 410，不再列出快照。请使用备份资产 Catalog 浏览恢复点。",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "snapshots"
                 ],
-                "summary": "列出快照",
+                "summary": "已退役的快照列表入口",
                 "parameters": [
                     {
                         "type": "integer",
@@ -16775,14 +16776,14 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "比较两个 restic 快照之间的文件变更差异",
+                "description": "此兼容入口始终返回 410，不再比较快照。请使用备份资产 Catalog 或 Search 浏览、查找恢复点内容；它们不提供此旧比较接口的等价替代。",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "snapshots"
                 ],
-                "summary": "比较快照差异",
+                "summary": "已退役的快照比较入口",
                 "parameters": [
                     {
                         "type": "integer",
@@ -16829,14 +16830,14 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "在 restic 快照的文件索引中搜索匹配路径的文件。首次搜索会触发后台索引构建。",
+                "description": "此兼容入口始终返回 410，不搜索文件或触发旧索引构建。请使用备份资产 Search 搜索文件，或使用 Catalog 浏览恢复点。",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "snapshots"
                 ],
-                "summary": "搜索快照文件",
+                "summary": "已退役的快照搜索入口",
                 "parameters": [
                     {
                         "type": "integer",
@@ -16876,14 +16877,14 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "列出指定 restic 快照中的文件和目录",
+                "description": "此兼容入口始终返回 410，不再列出文件。请使用备份资产 Catalog 浏览恢复点目录，或使用 Search 搜索文件。",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "snapshots"
                 ],
-                "summary": "列出快照文件",
+                "summary": "已退役的快照文件列表入口",
                 "parameters": [
                     {
                         "type": "integer",
@@ -21606,7 +21607,13 @@ const docTemplate = `{
         },
         "xirang_backend_internal_backupasset.RcloneBindingSetupResult": {
             "type": "object",
+            "required": [
+                "base_binding_revision"
+            ],
             "properties": {
+                "base_binding_revision": {
+                    "type": "string"
+                },
                 "expires_at": {
                     "type": "string"
                 },
@@ -21701,6 +21708,17 @@ const docTemplate = `{
             "x-enum-varnames": [
                 "RcloneBootstrapWorkloadChain",
                 "RcloneBootstrapStaticSTS"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RclonePreflightPurpose": {
+            "type": "string",
+            "enum": [
+                "activation",
+                "renewal"
+            ],
+            "x-enum-varnames": [
+                "RclonePreflightPurposeActivation",
+                "RclonePreflightPurposeRenewal"
             ]
         },
         "xirang_backend_internal_backupasset.RclonePublicationSummary": {
@@ -21799,12 +21817,26 @@ const docTemplate = `{
         },
         "xirang_backend_internal_backupasset.RcloneVersioningPreflightResult": {
             "type": "object",
+            "required": [
+                "purpose"
+            ],
             "properties": {
                 "expires_at": {
                     "type": "string"
                 },
                 "preflight_id": {
                     "type": "string"
+                },
+                "purpose": {
+                    "enum": [
+                        "activation",
+                        "renewal"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset.RclonePreflightPurpose"
+                        }
+                    ]
                 },
                 "summary": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset.RclonePublicationSummary"

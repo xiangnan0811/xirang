@@ -287,8 +287,9 @@ func (value RcloneBindingSetupRequest) Validate() error {
 }
 
 type RcloneBindingSetupResult struct {
-	SetupID   string    `json:"setup_id"`
-	ExpiresAt time.Time `json:"expires_at"`
+	SetupID             string    `json:"setup_id"`
+	ExpiresAt           time.Time `json:"expires_at"`
+	BaseBindingRevision string    `json:"base_binding_revision" validate:"required"`
 	// ExternalID is returned only by the native setup endpoint. It is not
 	// included in ordinary Task or Repository projections.
 	ExternalID string `json:"external_id,omitempty"`
@@ -296,6 +297,7 @@ type RcloneBindingSetupResult struct {
 
 func (value RcloneBindingSetupResult) Validate(native bool) error {
 	if ValidateOpaqueID(value.SetupID) != nil || !isUTCPublicationTime(value.ExpiresAt) ||
+		!canonicalUnsignedDecimal(value.BaseBindingRevision) ||
 		(native && !validRclonePrivateInput(value.ExternalID, 1024, true)) || (!native && value.ExternalID != "") {
 		return fmt.Errorf("%w: invalid Rclone binding setup result", ErrInvalidState)
 	}
@@ -397,14 +399,22 @@ func (value RcloneNativeBindingRequest) Validate() error {
 	return nil
 }
 
+type RclonePreflightPurpose string
+
+const (
+	RclonePreflightPurposeActivation RclonePreflightPurpose = "activation"
+	RclonePreflightPurposeRenewal    RclonePreflightPurpose = "renewal"
+)
+
 type RcloneVersioningPreflightResult struct {
+	Purpose     RclonePreflightPurpose   `json:"purpose" validate:"required" enums:"activation,renewal"`
 	PreflightID string                   `json:"preflight_id"`
 	ExpiresAt   time.Time                `json:"expires_at"`
 	Summary     RclonePublicationSummary `json:"summary"`
 }
 
 func (value RcloneVersioningPreflightResult) Validate() error {
-	if ValidateOpaqueID(value.PreflightID) != nil || !isUTCPublicationTime(value.ExpiresAt) || value.Summary.Validate() != nil {
+	if (value.Purpose != RclonePreflightPurposeActivation && value.Purpose != RclonePreflightPurposeRenewal) || ValidateOpaqueID(value.PreflightID) != nil || !isUTCPublicationTime(value.ExpiresAt) || value.Summary.Validate() != nil {
 		return fmt.Errorf("%w: invalid Rclone versioning preflight result", ErrInvalidState)
 	}
 	return nil

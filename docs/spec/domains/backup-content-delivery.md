@@ -18,6 +18,10 @@ Issue 分类阶段恰一次源 open/read，Serve 自己恰一次授权 bounded/e
 
 `ClosePrefix` 只忽略成功取得 prefix 后人为终止仍运行命令诱发的 wait 错误；已自然结束的失败以及 read/cancel/timeout/byte-limit/background/invariant/ordinary-close 错误必须保留。失败 prefix 不进入 intentional-success cleanup。真正 Core source 失败给本地化源读取指导，Worker 文案仅用于真实 ZIP/Office/OCR 增强状态。
 
+managed Portable 在 Repository source 关闭时还须重新认证清单、核对 sealed Catalog 与递归目标快照，使用 manifest timeout 与 caller deadline 的较早者；这不同于下文 cache/grant/audit 的五秒 detached cleanup，不能用后者截断完整 provider 验证，也不能提前释放 admission token。V2 源逻辑时间与目标物理时间、V1 严格历史语义及只读期限见 [Portable 历史内容验证](backup-repository.md#portable-历史内容验证)。
+
+Rclone bound-config 内容命令的临时配置、远端退出证明和清理遵循[命令配置所有权](backup-repository.md#rclone-命令配置所有权)。默认 ticket 预算仍为 20 秒，配置暂存与命令共享同一截止时间；清理失败或退出未知不能被 prefix close 吞掉，也不能把已写出的响应当作持久成功。历史内容使用新的只读期限，不延长原 publication deadline。
+
 ## 持久化账本与预算
 
 - 配对 `000066_backup_asset_content` 的该账本仅 `resource_kind=backup_asset`；point/generation/entry 非空，RecoveryResult 字段 null，不混资源。Catalog FK 为 `(catalog_generation_id,entry_id,recovery_point_id)` RESTRICT，lease FK 指一个 `content_session` RESTRICT。

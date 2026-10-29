@@ -42,11 +42,13 @@ type contentEntryLocatorV1 struct {
 }
 
 type exactContentRecord struct {
-	repository model.BackupRepository
-	point      model.RecoveryPoint
-	generation model.CatalogGeneration
-	entry      model.CatalogEntry
-	locator    provider.EntryLocator
+	repository      model.BackupRepository
+	point           model.RecoveryPoint
+	generation      model.CatalogGeneration
+	entry           model.CatalogEntry
+	locator         provider.EntryLocator
+	physicalModTime *time.Time
+	exactModTime    bool
 }
 
 type contentAdmissionToken struct {
@@ -248,8 +250,11 @@ func (service *Service) openMutableContentSource(
 		func(resolveCtx context.Context) (provider.PointLocator, error) {
 			return resolveMutableContentPoint(resolveCtx, pointLister, snapshot)
 		},
-		func(validateCtx context.Context) error {
-			return service.revalidateMutableContentSource(validateCtx, request, record.repository.ID, kind)
+		func(validateCtx context.Context) (provider.ReadSnapshot, error) {
+			if err := service.revalidateMutableContentSource(validateCtx, request, record.repository.ID, kind); err != nil {
+				return provider.ReadSnapshot{}, err
+			}
+			return snapshot, nil
 		},
 	)
 }
@@ -270,17 +275,17 @@ func (service *Service) openImmutableContentSource(
 		return service.openResolvedProviderContentSource(
 			ctx, request, record, kind, snapshot, false, false, token,
 			func(context.Context) (provider.PointLocator, error) { return point, nil },
-			func(validateCtx context.Context) error {
+			func(validateCtx context.Context) (provider.ReadSnapshot, error) {
 				current, err := service.loadExactContentRecord(validateCtx, request)
 				if err != nil || current.point.State != string(backupasset.RecoveryPointCommitted) && current.point.State != string(backupasset.RecoveryPointDegraded) {
-					return fmt.Errorf("%w: immutable content source changed", backupasset.ErrConflict)
+					return provider.ReadSnapshot{}, fmt.Errorf("%w: immutable content source changed", backupasset.ErrConflict)
 				}
 				currentSnapshot, currentPoint, err := service.resolveResticContentBinding(validateCtx, current)
 				if err != nil || currentPoint != point || currentSnapshot.RepositoryID != snapshot.RepositoryID ||
 					currentSnapshot.CapabilityRevision != snapshot.CapabilityRevision || currentSnapshot.SourceRevision != snapshot.SourceRevision {
-					return fmt.Errorf("%w: immutable content source changed", backupasset.ErrConflict)
+					return provider.ReadSnapshot{}, fmt.Errorf("%w: immutable content source changed", backupasset.ErrConflict)
 				}
-				return nil
+				return currentSnapshot, nil
 			},
 		)
 	case backupasset.ProviderRsync:
@@ -312,18 +317,24 @@ func (service *Service) openManagedRcloneContentSource(
 	return service.openResolvedProviderContentSource(
 		ctx, request, resolved, backupasset.ProviderRclone, snapshot, false, rangeProven, token,
 		func(context.Context) (provider.PointLocator, error) { return point, nil },
-		func(validateCtx context.Context) error {
+		func(validateCtx context.Context) (provider.ReadSnapshot, error) {
 			current, loadErr := service.loadExactContentRecord(validateCtx, request)
 			if loadErr != nil || current.point.State != string(backupasset.RecoveryPointCommitted) && current.point.State != string(backupasset.RecoveryPointDegraded) {
-				return fmt.Errorf("%w: immutable Rclone content source changed", backupasset.ErrConflict)
+				return provider.ReadSnapshot{}, fmt.Errorf("%w: immutable Rclone content source changed", backupasset.ErrConflict)
 			}
 			currentSnapshot, currentPoint, currentRecord, currentRange, resolveErr := service.resolveManagedRclonePortableContentBinding(validateCtx, current)
 			if resolveErr != nil || currentPoint != point || currentRecord.locator != resolved.locator || currentRange != rangeProven ||
+				!sameContentPhysicalModTime(currentRecord.physicalModTime, resolved.physicalModTime) ||
+				currentRecord.entry.NormalizedPath != resolved.entry.NormalizedPath ||
+				currentRecord.point.EncryptedProviderLocator != resolved.point.EncryptedProviderLocator ||
+				currentRecord.point.ManifestDigest != resolved.point.ManifestDigest ||
+				currentRecord.generation.ManifestID == nil || resolved.generation.ManifestID == nil ||
+				*currentRecord.generation.ManifestID != *resolved.generation.ManifestID ||
 				currentSnapshot.RepositoryID != snapshot.RepositoryID || currentSnapshot.CapabilityRevision != snapshot.CapabilityRevision ||
 				currentSnapshot.SourceRevision != snapshot.SourceRevision {
-				return fmt.Errorf("%w: immutable Rclone content source changed", backupasset.ErrConflict)
+				return provider.ReadSnapshot{}, fmt.Errorf("%w: immutable Rclone content source changed", backupasset.ErrConflict)
 			}
-			return nil
+			return currentSnapshot, nil
 		},
 	)
 }
@@ -623,7 +634,8 @@ func (service *Service) resolveManagedRclonePortableContentBinding(
 		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false, err
 	}
 	if runtime.repository.ID != record.repository.ID || runtime.binding.Portable == nil ||
-		runtime.binding.Portable.ConfigDigest != attempt.ConfigDigest {
+		runtime.binding.Portable.ConfigDigest != attempt.ConfigDigest ||
+		locator.PortableAttemptRoot != managedRclonePortableAttemptRoot(runtime.binding, attempt) {
 		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false,
 			fmt.Errorf("%w: immutable Rclone portable binding changed", backupasset.ErrConflict)
 	}
@@ -643,9 +655,51 @@ func (service *Service) resolveManagedRclonePortableContentBinding(
 	if err != nil {
 		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false, err
 	}
+	physicalPath := strings.TrimPrefix(record.locator.Native, "portable:")
+	if physicalPath == "" || strings.HasPrefix(physicalPath, "/") || strings.ContainsRune(physicalPath, '\x00') {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false,
+			fmt.Errorf("%w: invalid immutable Rclone portable entry locator", backupasset.ErrConflict)
+	}
+	markerKey, err := service.publication.rcloneMarkerKey(ctx, record.repository.ID)
+	if err != nil {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false, err
+	}
+	leaseConfig, err := service.foundation.LeaseConfig()
+	if err != nil {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false, err
+	}
+	reconcile, err := service.publication.rcloneReconcileInput(ctx, runtime, attempt, markerKey, leaseConfig, "", "")
+	if err != nil {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false, err
+	}
+	strategy, err := service.registry.PublicationStrategy(backupasset.ProviderRclone)
+	if err != nil {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false, err
+	}
+	resolver, ok := strategy.(provider.RclonePortableContentResolver)
+	if !ok || reconcile.PortableRequest == nil {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false,
+			capabilityError(backupasset.CapabilityProviderUnavailable, "")
+	}
+	binding, err := resolver.ResolvePortableContent(ctx, *reconcile.PortableRequest, commit, physicalPath)
+	if err != nil {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false, err
+	}
+	if binding.ManifestVersion != int(attempt.ManifestSchemaRevision) || binding.ValidateSnapshot == nil ||
+		!portableContentRecordMatchesCatalog(binding.Record, record) ||
+		(binding.ManifestVersion == 1 && (binding.Record.ModifiedAt == nil || !binding.PhysicalModTime.Equal(*binding.Record.ModifiedAt))) {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false,
+			fmt.Errorf("%w: immutable Rclone Catalog entry changed", backupasset.ErrConflict)
+	}
+	record.exactModTime = true
+	if binding.ManifestVersion == 2 {
+		physicalModTime := binding.PhysicalModTime.UTC()
+		record.physicalModTime = &physicalModTime
+	}
 	managed := &provider.RcloneManagedPointAccess{
 		RecoveryPointID: record.point.ID, AttemptID: attempt.AttemptID, DataLocator: dataLocator,
 		ManifestDigest: record.point.ManifestDigest, SourceRevision: commit.DestinationObservationDigest, Committed: true,
+		ValidateSnapshot: binding.ValidateSnapshot,
 	}
 	access := provider.AccessBinding{
 		Provider: backupasset.ProviderRclone, RepositoryID: record.repository.ID, TaskID: runtime.task.ID, NodeID: runtime.task.NodeID,
@@ -656,11 +710,6 @@ func (service *Service) resolveManagedRclonePortableContentBinding(
 			ConfigSource: provider.RcloneConfigBound, Command: &provider.RemoteCommandAccess{Node: runtime.task.Node}, ManagedPoint: managed,
 		},
 	}
-	physicalPath := strings.TrimPrefix(record.locator.Native, "portable:")
-	if physicalPath == "" || strings.HasPrefix(physicalPath, "/") || strings.ContainsRune(physicalPath, '\x00') {
-		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false,
-			fmt.Errorf("%w: invalid immutable Rclone portable entry locator", backupasset.ErrConflict)
-	}
 	record.locator = provider.EntryLocator{Native: physicalPath}
 	return provider.ReadSnapshot{
 		RepositoryID: record.repository.ID, CapabilityRevision: record.point.CapabilityRevision,
@@ -668,6 +717,19 @@ func (service *Service) resolveManagedRclonePortableContentBinding(
 	}, provider.PointLocator{
 		Native: "managed:" + record.point.ID + ":" + attempt.AttemptID + ":" + record.point.ManifestDigest,
 	}, record, capabilities.OpenRange, nil
+}
+
+func portableContentRecordMatchesCatalog(proof provider.CatalogRecord, record exactContentRecord) bool {
+	entry := record.entry
+	parent := ""
+	if index := strings.LastIndexByte(entry.NormalizedPath, '/'); index >= 0 {
+		parent = entry.NormalizedPath[:index]
+	}
+	return proof.NormalizedPath == entry.NormalizedPath && proof.ParentNormalizedPath == parent &&
+		proof.Name == entry.Name && string(proof.Type) == entry.EntryType && proof.Size == entry.Size &&
+		proof.ModifiedAt != nil && entry.ModifiedAt != nil && proof.ModifiedAt.Equal(*entry.ModifiedAt) &&
+		proof.Mode == entry.Mode && proof.Owner == entry.Owner && proof.Fingerprint == entry.Fingerprint &&
+		proof.FingerprintStrength == entry.FingerprintStrength && proof.ProviderLocator == record.locator
 }
 
 func (service *Service) openManagedRsyncContentSource(
@@ -834,7 +896,7 @@ func (service *Service) openResolvedProviderContentSource(
 	rangeAllowed bool,
 	token publication.AdmissionToken,
 	resolvePoint contentPointResolver,
-	revalidate func(context.Context) error,
+	revalidate func(context.Context) (provider.ReadSnapshot, error),
 ) (content.SourceSession, error) {
 	statter, err := service.registry.EntryStatter(kind)
 	if err != nil {
@@ -851,6 +913,14 @@ func (service *Service) openResolvedProviderContentSource(
 	}
 	if request.Mode == content.SourceModeRange && rangeErr != nil {
 		return nil, rangeErr
+	}
+	cleanupTimeout := contentSourceCleanupTimeout
+	if kind == backupasset.ProviderRclone && !mutable {
+		config, err := service.foundation.PublicationConfig()
+		if err != nil {
+			return nil, err
+		}
+		cleanupTimeout = config.ManifestTimeout
 	}
 	point, err := resolvePoint(ctx)
 	if err != nil {
@@ -888,7 +958,9 @@ func (service *Service) openResolvedProviderContentSource(
 		return nil, err
 	}
 	modifiedAt := contentStat.ModTime.UTC()
-	if contentStat.ModTime.IsZero() {
+	if record.physicalModTime != nil && record.entry.ModifiedAt != nil {
+		modifiedAt = record.entry.ModifiedAt.UTC()
+	} else if contentStat.ModTime.IsZero() {
 		modifiedAt = time.Time{}
 	}
 	stat := content.SourceStat{
@@ -896,7 +968,7 @@ func (service *Service) openResolvedProviderContentSource(
 		SourceFingerprint: request.ExpectedSource, EntryFingerprint: request.ExpectedEntry,
 		FingerprintStrong: record.entry.FingerprintStrength == string(catalog.FingerprintStrong),
 	}
-	if !modifiedAt.IsZero() {
+	if record.exactModTime && record.entry.ModifiedAt != nil || !modifiedAt.IsZero() {
 		stat.ModifiedAt = &modifiedAt
 	}
 	capabilities := content.SourceCapabilities{Provider: kind, Sequential: sequentialErr == nil, Range: rangeErr == nil}
@@ -908,8 +980,11 @@ func (service *Service) openResolvedProviderContentSource(
 		capabilities.Reason = &reason
 	}
 	providerRevalidate := func(validateCtx context.Context) error {
+		currentSnapshot := snapshot
 		if revalidate != nil {
-			if err := revalidate(validateCtx); err != nil {
+			var err error
+			currentSnapshot, err = revalidate(validateCtx)
+			if err != nil {
 				return err
 			}
 		}
@@ -917,7 +992,7 @@ func (service *Service) openResolvedProviderContentSource(
 		if err != nil {
 			return err
 		}
-		current, err := statter.StatEntry(validateCtx, snapshot, currentPoint, record.locator)
+		current, err := statter.StatEntry(validateCtx, currentSnapshot, currentPoint, record.locator)
 		if err != nil {
 			return contentSourceChangedError(mutable)
 		}
@@ -926,7 +1001,7 @@ func (service *Service) openResolvedProviderContentSource(
 	session := &sealedContentSourceSession{
 		stat: stat, capabilities: capabilities,
 		reader: newOnceReadCloser(reader, requiresProviderByteReporter(kind, request.Mode)), token: token,
-		cleanupParent: ctx, cleanupTimeout: contentSourceCleanupTimeout,
+		cleanupParent: ctx, cleanupTimeout: cleanupTimeout,
 		revalidate: providerRevalidate,
 	}
 	return session, nil
@@ -948,7 +1023,11 @@ func validateContentEntryStat(record exactContentRecord, stat provider.Entry, mu
 	if stat.Type != backupasset.CatalogEntryFile || stat.Size != record.entry.Size || strings.TrimSpace(stat.SourceRevision) == "" {
 		return contentSourceChangedError(mutable)
 	}
-	if record.entry.ModifiedAt != nil && !record.entry.ModifiedAt.IsZero() && !stat.ModTime.UTC().Equal(record.entry.ModifiedAt.UTC()) {
+	modifiedAt := record.entry.ModifiedAt
+	if record.physicalModTime != nil {
+		modifiedAt = record.physicalModTime
+	}
+	if modifiedAt != nil && (record.exactModTime || !modifiedAt.IsZero()) && !stat.ModTime.UTC().Equal(modifiedAt.UTC()) {
 		return contentSourceChangedError(mutable)
 	}
 	return nil
@@ -958,10 +1037,21 @@ func validateContentOpenStat(record exactContentRecord, expected provider.Entry,
 	if stat.Size != record.entry.Size || stat.SourceRevision != expected.SourceRevision {
 		return contentSourceChangedError(mutable)
 	}
-	if record.entry.ModifiedAt != nil && !record.entry.ModifiedAt.IsZero() && !stat.ModTime.UTC().Equal(record.entry.ModifiedAt.UTC()) {
+	modifiedAt := record.entry.ModifiedAt
+	if record.physicalModTime != nil {
+		modifiedAt = record.physicalModTime
+	}
+	if modifiedAt != nil && (record.exactModTime || !modifiedAt.IsZero()) && !stat.ModTime.UTC().Equal(modifiedAt.UTC()) {
 		return contentSourceChangedError(mutable)
 	}
 	return nil
+}
+
+func sameContentPhysicalModTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
 }
 
 func validateProviderEntryStable(expected, current provider.Entry, mutable bool) error {
@@ -1186,7 +1276,7 @@ func (session *sealedContentSourceSession) cleanupContext() (context.Context, co
 		parent = context.Background()
 	}
 	timeout := session.cleanupTimeout
-	if timeout <= 0 || timeout > contentSourceCleanupTimeout {
+	if timeout <= 0 {
 		timeout = contentSourceCleanupTimeout
 	}
 	deadline := time.Now().Add(timeout)

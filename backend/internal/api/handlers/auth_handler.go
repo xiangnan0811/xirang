@@ -330,7 +330,7 @@ func (h *AuthHandler) RecoveryEnrollmentVerify(c *gin.Context) {
 // @Produce      json
 // @Success      200  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
-// @Router       /auth/me [get]
+// @Router       /me [get]
 func (h *AuthHandler) Me(c *gin.Context) {
 	userID := c.GetUint(middleware.CtxUserID)
 	totpEnabled := false

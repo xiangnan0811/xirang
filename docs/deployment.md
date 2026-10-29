@@ -39,6 +39,15 @@ All-in-One 镜像内置 `/usr/local/bin/xirang-rsync-confined`。SSH 备份节�
 
 部署后先使用一次性目录验证正常传输、内部链接、越界链接拒绝及缺失 helper 拒绝，再恢复备份调度。配置隔离时 SSH 不读取用户自定义配置文件，只使用 Core 生成的连接参数与精确凭据文件；需要的连接配置应在节点配置中显式提供。
 
+### Rclone bound-config 节点前提与异常处置
+
+使用 Rclone bound config 的普通仓库读取、预检、受管发布与历史内容交付，都要求执行 Node 的 SSH 账号可使用 SFTP，并拥有可写、权限可验证的规范 home。受管路径继续固定使用 `rclone v1.74.4`。升级前须用该账号验证 SFTP 与 home 权限；原先只允许 exec 的 bound-config 节点需补齐前提，否则操作返回安全的 provider-unavailable，不自动改用 stdin 或节点默认配置。`node_default` 和 Restic 不新增这项要求。
+
+每条携带配置的命令会在规范 home 的 `.xirang/rclone-command-config/<随机操作ID>/` 中短期保存明文 `rclone.conf`；父目录和操作目录为 0700，配置及 owner 标记为 0600。配置允许固定版本 rclone 在独占目录内改写和生成备份，正常结束或确认远端终止后清理整个已验证操作目录。此过程不修改数据库绑定配置，不安装额外节点 agent、脚本或系统工具，也不要求 tmpfs。
+
+进程强杀、SSH 失联或退出状态未知时可能遗留配置；系统不会按目录年龄或本地 PID 自动删除，不承诺磁盘安全擦除。遇到清理失败，先暂停相关任务与内容访问，并在执行节点停止或确认相关远端命令已经结束；然后使用受信运维访问核对规范 home、精确操作目录、权限、文件类型和所有权。只处置已确认无使用者的该目录内配置、固定 rclone 临时备份与 owner 标记，最后移除空目录；未知文件、symlink、身份漂移或其他命令目录必须保留调查。不要对整个配置 root 使用通配或递归删除。恢复后重新完成失败的预检或内容请求，不能将此前失败视为成功。
+
+
 ## Docker Compose 部署（推荐）
 
 ### 1. 获取部署文件
@@ -127,6 +136,14 @@ bundle；旧 v2 bundle 无法满足新身份。runtime closure 与 bundle 格式
 最终闭包须在新镜像安装完成并复制新二进制后生成。回退时恢复匹配的整套产物；
 历史上未采集 APK 输入的旧源码仍可能无法重建。归档位于现有公开镜像仓库的
 `base-*`、`inputs-*` 标签下，这些标签不是可部署的 Worker 产品镜像。
+
+Python 安全补丁将 Worker 的 `pyc`、`python3`、`python3-pyc` 与
+`python3-pycache-pyc0` 从 `3.12.15-r0` 更新至 `3.12.16-r0`，修复 CVE-2026-115557。
+启用此 profile 的部署须暂停 backfill、排空旧 Worker 在途处理，按同一源码重建 Core
+与 Worker，并从双架构的新最终镜像取得闭包，更新授权签名的 bundle、attestations
+和 proof 后再切换。CI 临时签名 fixture 不可作为生产运行包。该依赖补丁不新增配置
+或迁移；配套回退会恢复旧 Python 漏洞风险，且仍受同版本稳定身份密钥和 Portable V2
+的恢复限制约束。
 
 受管 Recovery 不属于上述无 Worker 可用承诺：当前实现启用它时要求 Processing 已就绪且具备恶意软件证据服务，本机与远程 Worker 均关闭时不满足准入。旧版普通任务恢复仍按各执行器的证据和授权要求处理，不能代替受管恢复的安全检查。部署前须按[处理与导出合同](spec/domains/backup-processing-export.md)核验实际需要的恢复路径。
 

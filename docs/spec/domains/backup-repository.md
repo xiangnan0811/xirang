@@ -20,14 +20,14 @@ Task executor 到 Provider 的映射只能在 `backupasset/repository/binding.go
 
 ## 身份、密钥与读取边界
 
-- `entry_identity`、`recovery_cleanup_ownership`、`search_token` 是安装稳定密钥域，`Keyring.Rotate` 必须拒绝。KEK 轮换只能重新包裹，不能改变密钥材料。丢失时不得静默生成替代；Entry ID 支撑深链接与用户引用，更换需要明确兼容方案。Search、Entry、Cursor、Audit、Derived、Export 域不复用。
+- `entry_identity`、`recovery_cleanup_ownership`、`rclone_preflight_identity`、`search_token` 是安装稳定密钥域，`Keyring.Rotate` 必须拒绝。KEK 轮换只能重新包裹，不能改变密钥材料。丢失时不得静默生成替代；Entry ID 支撑深链接与用户引用，更换需要明确兼容方案。Rclone 预检身份独立于可重建的 Search 域，用于持久 binding/历史 attempt 的私有身份摘要，不允许 rebuildable 替换或 lost 转换。Runtime 无论 Search 是否启用，均先重新包裹再初始化该域；缺表、lost、历史无 active 或解包失败拒绝启动。完全删除某域全部历史无法与首次安装区分，恢复仍要求匹配数据库与 KEK。Search、Entry、Cursor、Audit、Derived、Export 和预检身份域不复用。
 - Provider locator 和 access binding 只在进程内部使用并保持 `json:"-"`。HTTP 只接受不透明 Xirang ID，不接受路径、remote、仓库字符串、shell 片段或凭据。
 - Restic 使用完整原生仓库/快照身份。可变 Rsync/Rclone 使用 Task 范围、带盐且域隔离的 HMAC 身份，不能跨 Task 自动合并。共享 Restic 仓库也不合并所有权。
 - 保留的 active binding 必须仍指向未归档 Task，当前 Provider/Node 血缘须匹配加密绑定。漂移在 probe 前拒绝，保留原 Repository/link/binding；替换必须指定精确 Repository 并显式 `replace_access=true`。
 - 窄端口为 `RepositoryProber`、`PointLister`、`EntryLister`、`EntryStatter`、`SequentialReader`、可选 `RangeReader`。每次读取携带绑定 Repository、capability revision、source revision 和私有访问的 `ReadSnapshot`。分页有界并签名；顺序读取要求 `MaxBytes>0`，Range 要求非负 offset 和正 length。
 - 本地严格读取使用 `fileaccess.Tree.List/Lstat/OpenRegular/OpenRange` 的句柄相对约束，不跟随 symlink，不得先验路径后自行打开。SFTP 采用严格相对 locator，在打开前、打开时、结束后验证 containment/type/source；已验证 SSH/SFTP 服务端仍是基础设施信任边界。
 - 绝对路径、NUL、dot-dot、歧义 locator 在 I/O 前拒绝；特殊文件只可按类型列出，不能读取。源/根/对象在读取期间改变返回 `mutable_source_changed`，不能把部分内容作为成功。
-- Provider 命令仅使用服务端固定工具/操作枚举、独立引用的参数、有界输出/记录/条目/时间/并发和一次性秘密 stdin。流持有许可直到 close，并传播 wait/cancel/limit/invariant 错误。取消必须关闭自有句柄/会话并 join goroutine。
+- Provider 命令仅使用服务端固定工具/操作枚举、独立引用的参数和有界输出/记录/条目/时间/并发。Restic 密码使用一次性秘密 stdin；Rclone bound config 使用下述命令独占临时文件。流持有许可直到进程 join、配置清理及 close 完成，并传播 wait/cancel/limit/invariant/cleanup 错误。取消必须关闭自有句柄/会话并 join goroutine；本地 join 不等于远端已退出。
 - Restic 密码只通过一次写入 `/dev/stdin` 传递，不能进入 argv、环境变量或临时文件。Restic snapshot `latest` 或前缀在命令执行前拒绝；Rclone Range 语义未证明时保持 `OpenRange=false` 并返回 `range_unavailable`，不能由通用 reader 猜测支持。
 - `provider_operation_timeout`、`provider_max_concurrency`、`provider_metadata_limit_bytes` 从 `backup_assets` 动态配置读取；`RESTIC_BINARY`、`RCLONE_BINARY` 是重启生效的可执行文件选择。SSH purpose 为 `repository_probe|repository_list|repository_read`。
 - 注册读适配器不赋予写权限。发布与 `PointDeleter` 必须单独注册并经过各自准入；远端 Rsync 目标没有独立目标凭据合同时保持 unsupported，不能假设可复用源 Node 凭据。
@@ -71,9 +71,73 @@ legacy mutable 不自动升级；管理员暂停任务后显式选择 `versioned
 - Native 使用同账户专用 IAM Role、信任策略强制 external ID 和覆盖单次操作时限的 STS 会话，不能用节点静态身份替代绑定。external ID 只在短期 setup 显示一次。两次 versioning/lifecycle/身份/capability 稳定观察至少间隔 15 分钟，并通过精确版本 canary。
 - Native STS `AssumeRole` 的 `SessionTokenSize` 与 `SessionTokenUtilization` 都是可选指标；存在时前者必须为正且精确等于会话 token 的字节长度，后者必须落在含端点的 `[0,100]`。任一指标缺失不阻止准入；异常指标按 `credential_invalid` 拒绝，并在 external ID 否定探针与 bootstrap deny probe 之前检查。不得由 size 推算 utilization、另加固定 4096 字节限制或恢复已移除的 packed-policy 准入条件；会话 token 仍遵守既有有效性边界。
 - 预检绑定 Task/binding/credential/capability/lifecycle/encryption revisions 和有效期。任一漂移必须重做，不静默降级 Portable/mutable。
+- 候选 generation、预检票据和 activation reservation 分别管理：同候选并发预检直接冲突，新候选可替换仍在观察的旧候选，但迟到结果不可安装。reservation 在候选到期后仍保留到 owner 退出；consume 的票据失败也不复活。provider I/O 不持协调锁或数据库锁，提交按 Repository→Task→TaskRun→link→binding→Node→SSHKey 重验持久快照及事务内 publication 配置。
+- Native 稳定窗口属于同候选和完整身份/revisions，首次及漂移重置时间取外部观察完成之后。未满15分钟仅投影 `capability_settling`，不产生可激活证明；重新打开摘要保留当前临时进度，进程重启后票据/窗口全部失效。候选 TTL 不延长，operation deadline受候选expiry限制，ready票据还受STS有效期减2分钟限制；初次剩余时间不足完整窗口与收尾余量直接拒绝。
 - Native 仅支持 `sse_s3` 或同账户 customer-managed `sse_kms_cmk`。后者有一个 active write key 和有界 decrypt-only read key ring；先保留旧读 key 再切写 key。任何 committed VersionId 仍引用旧 key 时必须保留可解密性。校验账户、区域、状态、用途、来源和权限，DTO/日志/审计不公开 ARN。Xirang 不创建、修改或删除 KMS key。
 - 与 namespace 重叠的 current/noncurrent expiration、delete-marker cleanup、未知 lifecycle 动作或未认证离线转换都阻止准入；不自动修改 bucket lifecycle。Native `backend_versioned` 不等于 Object Lock/WORM。
+- 预检命令的本地/SSH staging 与远端 proof 是不同的所有权。取消会关闭并 join 自有 SSH/SFTP 会话，包括握手、写入和 Remove 停答；清理使用脱离 caller cancel、至多 command join timeout 的独立期限，主错误与清理错误均保留，清理失败不得返回成功证据。Stage 未返回 ref 时，只能在新有界会话重验 home/root/owner 后删除本次 O_EXCL 确认创建的精确 regular payload；碰撞、symlink、身份不明和同 attempt 其他文件保留。Portable proof 与 Native canary/version/delete marker仍按独占ID保留，不借 staging 清理广泛删除远端历史。
 - `first_new_point` 不改变旧目标，在任何 managed reservation/history/point/lease 之前可 clean rollback；`imported_baseline` 完整复制稳定旧 current head，并立即建立 durable reservation，不伪造历史，因此没有 clean rollback 窗口。窗口关闭后仅准备回退，保留 committed/failed/orphan/manifest/audit/latch，不删除远端字节、不自动恢复旧执行。
+
+### Rclone 命令配置所有权
+
+所有携带 bound config 的普通读取与受管命令，经执行 Node 的同一认证与审计上下文使用 SFTP，将不超过 64 KiB 的原始字节写入规范 home 下 `.xirang/rclone-command-config/<随机操作ID>/rclone.conf`。每命令独占目录和父目录为 0700，配置与随机 owner 标记为 0600；成功写入、关闭并重读校验大小与 SHA256 后才启动命令，不追加末尾换行。操作目录由原子创建取得，不复用 publication attempt 或长期节点配置。Rclone 可在该目录正常改写、备份及原子替换配置；数据库 bound bytes/revision 不回写，也不跨命令缓存探测结果。
+
+执行 Node 必须提供 SFTP 和可写、可验证权限的私有 home；只有 exec 的节点不能执行 bound-config 操作，缺失前提时安全返回 provider-unavailable，不回退 stdin 或节点默认配置。`node_default`、不携带配置的普通 version 和 Restic 不新增这一前提。秘密不进入 argv、环境变量、shell 脚本或命令替换，命令路径仅由当前配置 owner 装配，调用者不能提供 `--config`。暂存、SSH dial 与命令执行共享入口的绝对期限，取 caller、operation timeout 与 invocation deadline 的最早者，不在暂存后重置预算。
+
+携带配置的 Run/Open/OpenExecution 统一使用专有 SSH client 的 joined execution。取消先请求 TERM，等待既有 100ms grace，再按需关闭 transport 并 join 所有本地 owner。只有尚未尝试 Start，或 Wait 已实际返回正常 exit-status/exit-signal，才允许清理；Start 结果不确定、EOF、断线、发送 TERM 成功或本地 goroutine join 都不能作为远端停止证明。prefix 主动终止仅在已观察到相应远端退出且无其他权威错误时接受，普通取消、超时、限额和已有失败仍为失败。
+
+收尾在命令和 transport join 后重建 SFTP，使用脱离 caller cancel、至多 10 秒的清理期限；许可与原 staged operand pin 保留到收尾结束。每次重验规范 home、真实目录、0700 及 owner 标记，至多读取 128 项并取得 EOF，全部验证通过才删除。仅允许 0600 普通非 symlink 的 `.owner-v1`、`rclone.conf`、`rclone.conf<十进制后缀>` 与 `rclone.conf.old<十进制后缀>`，后缀长 1..20；不比较已改写配置的原始摘要，不递归、不跟随 symlink。先删配置和临时备份，再删 marker 与空操作目录；删除中途失败保留错误，不能声称原子全清理。
+
+清理失败使 Run/Close/Join 失败，不能产生成功内容请求或可激活预检证据。退出未知、owner/root 无法重验时保留目录并返回安全失败；不按年龄或 PID 自动清扫。正常执行期间节点有短期明文配置，崩溃、强杀或失联可能遗留，不承诺崩溃后零残留或磁盘安全擦除。人工处置须先停止并确认相关远端执行已无使用者，再核对精确目录；操作边界见[部署指南](../../deployment.md#rclone-bound-config-节点前提与异常处置)。
+
+
+### Portable 清单与跨后端保真
+
+Portable V2 清单将逻辑 path、物理 path、类型、大小及 symlink 目标保存一次，将源与目标的规范 UTC RFC3339Nano 时间、可用 SHA256 和实际 metadata 分别保存。源时间不截断为目标精度。两侧观察摘要分别由原 V1 canonical 投影及原 count/bytes framing 计算，可以不同；chunk/index 摘要仍认证实际持久字节。Native 源清单与已发布 Portable V1 的字段顺序、编码和摘要不变。
+
+生成和读取均有界逐行处理，严格拒绝缺失、额外或重复路径、物理路径/类型/大小/链接目标差异，以及未知、重复、缺失、null、错版本或非规范记录。每侧前后观察必须稳定，跨侧内容证明不能替代单侧稳定性。两侧都有 SHA256 时不一致直接拒绝；symlink 的任一 SHA256 还必须匹配实际目标字节。任一内容项任一侧缺 SHA256 时，整点在预算内完成 `check --download --one-way`，之后重新观察两侧；路径集合精确匹配防止 one-way 漏掉额外目标对象。弱 hash 不作为强证明，部分验证、漂移、取消或超预算不得提交。
+
+V2 内容证明绑定两个观察摘要，不把它们冒称两个独立计算的内容 hash。强 SHA256 为 complete 且 verified_bytes=0；download 为 complete 且 verified_bytes=logical_bytes；无 file/symlink 时为 not_evaluated、complete、0。保真分别声明两侧实际出现的 `gid,mode,mtime,uid`，保留集合仅包含全树存在性和值都相同的源字段；集合排序且空值为 `[]`。只有实际存在且证明通过的目录和链接才声明保留，空树不声明时间保留，硬链接拓扑不声明保留。V2 整条记录与 index 都占用原有预算，不扩大限额容纳新格式。
+
+目标 `.rclonelink` 的特殊投影只用于 Portable DataRoot 的已认证 `--links` 观察：读取并验证目标字节后，允许缺 mode 或 regular mode 的目标编码投影为 symlink，随后仍须与源精确对应。源保留后缀碰撞、特殊文件拒绝及 Native 语义不放宽；目录负 Size 规范为0，非目录负 Size 仍拒绝。
+
+版本准入是闭合组合：历史 Portable attempt 仅 runtime minimum/schema `1/1`，新 Portable 为 `2/2`；Native 仍仅 `1/1`。attempt 与 commit 的 mode 和 minimum 必须一致，未知未来版本失败关闭；这些检查不能替代原身份、HMAC、fence 和摘要验证。外层 commit、authenticated-control 与 layout 仍为 V1，持久 binding 不因新 manifest 升版。新 Portable manifest 的持久 generator version 为 `"2"`，历史和 Native 为 `"1"`。
+
+发布、重启调和与 Catalog 复用同一严格认证的版本分派读取器，核对实际提交的 index/chunks；准备阶段的源 index 不能冒充发布后的双侧 index。源仍存在时核对源观察/count/bytes，重启后源消失时只依赖认证的 committed controls。旧 preparing attempt 不得重新写 V2 覆盖其 namespace；有效 V1 历史继续支持读取、调和和精确删除，不重写远端 controls 或数据库历史。
+
+Rclone 的 Portable 与 Native 点仅在 authenticated commit 与完整 manifest 校验成功、激活 manifest 的同一事务中从 verifying 进入 committed，并将 physical availability 标为 online；准备中、验证中或验证失败不得提前变为 online。CapturedAt 保留 provider commit 时间，CommittedAt 为本地验证提交时间，immutable 点的 ObservedAt 仍为空。已提交点的重放不覆盖后续健康状态，不批量改写旧点的 availability；内容入口仍须检查当前可用性并执行实时对象验证。
+
+写入 V2 后不支持直接降级旧运行时：旧二进制对 minimum 的检查不足以可靠拒绝新格式。回退必须恢复写 V2 前匹配的数据库、密钥和数据快照，或继续使用支持 V2 的版本读取；不得自动重编码历史或将新格式伪装成 V1。
+
+### Portable 历史内容验证
+
+Catalog 和内容准入复用同一已认证 V1/V2 清单。Catalog 仅投影源侧逻辑 metadata；内容读取逐项比对 sealed Catalog 的路径、类型、大小、时间、mode/owner 和 fingerprint，再使用已证明的目标物理时间执行 Stat/Open/close。只有 V2 可以区分逻辑与物理时间；返回调用者的时间仍是源时间，V1 继续精确相等规则，不全局忽略 mtime。
+
+managed snapshot 的前后验使用 commit marker 身份及同一递归目标观察摘要，不与 mutable 的单层目录 fingerprint 混用；mutable 算法保持不变。精确对象比较和关闭后验不能省略。对象 locator 拼接保留根路径语义，区分 `remote:path`、`remote:/path` 和绝对本地路径，不剥离绝对路径的前导斜线。
+
+历史只读操作不复用已过期的 publication deadline，也不改写 signed attempt。每次 Catalog/content 验证建立瞬态只读请求，期限取真实墙钟加 manifest timeout 与 caller deadline 的较早者；只允许读取认证 controls 和 DataRoot 观察，携带只读期限的写入、传输、字节核对和发布调和入口在副作用前拒绝。内容关闭时仍须重新加载数据库、认证清单并验证对象；managed Portable 使用已验证配置中的 manifest timeout，并受更早 caller deadline 约束，而非普通 cleanup 的五秒限额。取消后清理保持有界，admission token 在流 join 和验证完成前不释放；其他 provider 与 mutable 的五秒清理默认不变。
+
+### 绑定 setup 与候选替换
+
+Portable 和 Native setup 响应必须包含 `base_binding_revision`，表示生成 setup 时的持久绑定基准修订号。它是 `0..18446744073709551615` 的规范无符号十进制字符串，`"0"` 合法；缺失、空串、数字 JSON、符号、前导零和溢出均无效。前端不得转为 JavaScript number 或由候选摘要猜测基准；坏响应清空可用 setup，禁止继续发送配置或秘密。
+
+setter 一次性消费 setup 后，要求请求基准、setup 保存的基准与重新加载的持久基准相等，并重验 Task CAS、完整快照和非 managed 状态。不匹配返回安全 409，既有 candidate/ready 不被替换，已消费 setup 不复活。候选摘要仍显示拟议 `base + 1`，不能作为下一次 setter 的基准。多个未消费 setup 可共存，创建 setup 不替换候选；成功 setter 在短协调锁内替换，清除旧票据与 Native 窗口，旧 I/O 不能回写，activation reservation 期间仍拒绝替换。
+
+Native 保存 setup 时同时保存当时的 Task CAS；提交前验证 setup 有效期及当前 Task CAS，不能把旧 setup 套用到新修订号。Portable 连续 setup→setter 在首次等待后仍须验证当前任务和认证身份。关闭、身份变化、新 setup 和成功保存清除旧 setup；只有 setter 成功后才开始新候选预检。managed 绑定不通过 setup 轮换，同绑定续期入口不变。
+
+激活响应中的持久 summary 和 Task CAS 优先于同任务、同身份下的滞后父级刷新；父级带来相同或更新修订号后可接管，但随后更旧响应不得退回已接受的 CAS。`first_new_point` 成功后仍可按最新摘要再次预检，并在真实 clean rollback 窗口内显示清理回退；`imported_baseline` 的 `preparation_only` 不显示该按钮。权限、任务、会话或关闭变化仍清空整个临时流程，不以强制显示按钮或放宽摘要解析补救坏响应。
+
+CAS 高水位与父摘要快照身份分别判断：未变化的操作前父快照不能抹去成功响应，较低修订号不能回退；相同 CAS 下真正变化的 state、reason 或 rollback capability 仍须采纳，不能仅用 mode/Task revision/binding revision 判断摘要相同。同 CAS 的事实更新不应无故重挂表单或重发秘密。
+
+### 同绑定显式续期
+
+已激活 V3 任务继续受预检到期门控。管理员暂停任务且无 active TaskRun/rollback preparation 时，通过现有 preflights→activate 流程从持久绑定重新执行完整预检；不重新输入秘密、不换模式、仓库、配置或 KMS key，Native仍须新15分钟稳定窗口。响应必填闭合 `purpose=activation|renewal`；未知/缺失 purpose 在前端清空可用票据并阻断，不猜测激活意图。
+
+续期只接受 `first_new_point`。事务从原V3文档复制，只延长 `PreflightExpiresAt` 并更新加密binding指纹/时间及 Task CAS；原proof、binding/config/credential/capability/KMS revisions、稳定能力观察时间、read-key ring、legacy policy和仓库身份不变。确定性能力漂移拒绝，随机canary不要求重复；expiry没有前进、票据过期/重放或提交失败均不得延长授权。旧point/attempt绝对deadline不延长，已过期attempt不复活，新publication受新expiry约束。
+
+摘要先验证持久关联和rollback状态，再显示当前未过期且快照匹配的候选进度；临时ready只是待确认票据，不表示原授权已延长。没有有效候选时，持久expiry已到必须显示 `preflight_required/preflight_expired`，优先于已有committed点。UI续期隐藏迁移选项、固定提交策略并明确待确认；持久授权已到期但新票据有效时允许确认，settling/票据过期/未知purpose禁止确认，不自动轮询15分钟窗口。
+
+rollback capability 独立于临时 publication state 和 expiry 投影，GET 摘要与续期预检票据均复用持久 clean-window 权威。已有 managed point、reservation、history 等关闭窗口的事实不能因过期、Native settling、renewal ready 或续期完成重新变成 `clean_available`；已关闭窗口保持 `preparation_only`，已准备回退保持 prepared。尚未产生上述事实的 pristine `first_new_point` 仍可清理回退。
 
 ### 安全摘要的闭合组合
 

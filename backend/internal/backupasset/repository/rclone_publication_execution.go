@@ -32,7 +32,6 @@ const (
 	managedRclonePointLocatorVersion           = 2
 	managedRcloneCommitEvidenceVersion         = 1
 	maxManagedRclonePreparedAttemptRecordBytes = 64 << 10
-	managedRcloneManifestSchemaRevision        = 1
 	managedRcloneManifestLimitsRevision        = 1
 	managedRclonePortableSettleInterval        = 2 * time.Second
 	managedRcloneNativeSessionMargin           = 5 * time.Minute
@@ -1046,8 +1045,12 @@ func (service *PublicationService) prepareRclonePointTx(
 	if run.ImportedBaseline && nativeInput != nil && nativeInput.legacyOriginDigest != "" {
 		legacyOriginDigest = nativeInput.legacyOriginDigest
 	}
+	minimumRuntimeRevision, manifestSchemaRevision, err := managedRcloneManifestRevisions(runtime.binding.PublicationMode)
+	if err != nil {
+		return provider.RcloneAttemptV1{}, backupasset.Lease{}, err
+	}
 	attempt := provider.RcloneAttemptV1{
-		SchemaVersion: 1, LayoutVersion: 1, MinimumRuntimeRevision: runtime.binding.MinimumRuntimeRevision,
+		SchemaVersion: 1, LayoutVersion: 1, MinimumRuntimeRevision: minimumRuntimeRevision,
 		Provider: backupasset.ProviderRclone, RepositoryID: repository.ID, TaskRepositoryLinkID: link.ID,
 		RecoveryPointID: point.ID, AttemptID: attemptID, TaskID: taskEntity.ID, TaskRunID: taskRun.ID,
 		Trigger: trigger, PublicationMode: runtime.binding.PublicationMode, ImportedBaseline: run.ImportedBaseline,
@@ -1056,7 +1059,7 @@ func (service *PublicationService) prepareRclonePointTx(
 		ConfigRevision: runtime.binding.ConfigRevision, ConfigDigest: configDigest,
 		CapabilityRevision: runtime.binding.CapabilityRevision, CredentialRevision: runtime.binding.CredentialRevision,
 		PreflightID: runtime.binding.PreflightID, PreflightRevision: runtime.binding.PreflightRevision,
-		PreflightDigest: runtime.binding.PreflightDigest, ManifestSchemaRevision: managedRcloneManifestSchemaRevision,
+		PreflightDigest: runtime.binding.PreflightDigest, ManifestSchemaRevision: manifestSchemaRevision,
 		ManifestLimitsRevision: managedRcloneManifestLimitsRevision, ManifestLimitsDigest: limitsDigest,
 		RepositoryIdentityDigest:   digestText(*repository.RepositoryIdentity),
 		ManagedRootIdentityDigest:  runtime.binding.ManagedRootIdentityDigest,
@@ -1145,6 +1148,17 @@ func rcloneImmutability(mode backupasset.TaskPublicationMode) backupasset.Immuta
 		return backupasset.ImmutabilityBackendVersioned
 	}
 	return backupasset.ImmutabilityXirangManaged
+}
+
+func managedRcloneManifestRevisions(mode backupasset.TaskPublicationMode) (int, uint64, error) {
+	switch mode {
+	case backupasset.PublicationVersionedPrefix:
+		return 2, 2, nil
+	case backupasset.PublicationNativeObjectVersions:
+		return 1, 1, nil
+	default:
+		return 0, 0, fmt.Errorf("%w: unsupported managed Rclone publication mode", backupasset.ErrInvalidState)
+	}
 }
 
 func managedRcloneTaskRevision(taskEntity model.Task) (uint64, error) {
@@ -1396,6 +1410,9 @@ func validateRcloneCommitEvidence(
 	if err := evidence.Validate(); err != nil {
 		return err
 	}
+	if err := provider.ValidateRcloneRuntimeCompatibility(attempt, evidence); err != nil {
+		return err
+	}
 	if binding.RepositoryID != attempt.RepositoryID || binding.TaskRepositoryLinkID != attempt.TaskRepositoryLinkID ||
 		binding.TaskID != attempt.TaskID || binding.PublicationMode != attempt.PublicationMode ||
 		evidence.RepositoryID != attempt.RepositoryID || evidence.TaskRepositoryLinkID != attempt.TaskRepositoryLinkID ||
@@ -1599,6 +1616,9 @@ func validateManagedRclonePointLocator(locator managedRclonePointLocatorV1) erro
 		commit.AttemptID != locator.AttemptID || commit.PublicationMode != locator.PublicationMode ||
 		commit.ChildFenceDigest != locator.ChildFenceDigest {
 		return fmt.Errorf("%w: managed Rclone point locator commit mismatch", backupasset.ErrInvalidState)
+	}
+	if err := provider.ValidateRcloneRuntimeCompatibility(attempt, commit); err != nil {
+		return fmt.Errorf("%w: incompatible managed Rclone point versions", backupasset.ErrInvalidState)
 	}
 	switch locator.PublicationMode {
 	case backupasset.PublicationVersionedPrefix:
@@ -1846,23 +1866,11 @@ func (execution *rclonePublicationExecution) RclonePublicationInput() (provider.
 	if err != nil {
 		return provider.RclonePublicationInput{}, err
 	}
-	limits := rcloneManifestLimits(config)
-	input := provider.RclonePublicationInput{ManifestLimits: limits}
-	if config.Rclone.ManifestChunkMaxBytes <= 0 || config.Rclone.ManifestChunkMaxBytes > math.MaxInt ||
-		config.Rclone.ControlPayloadMaxBytes <= 0 || config.Rclone.FullVerifyMaxBytes <= 0 {
-		return provider.RclonePublicationInput{}, fmt.Errorf("%w: managed Rclone limits are invalid", backupasset.ErrInvalidState)
+	manifestOptions, err := rcloneManifestOptions(config)
+	if err != nil {
+		return provider.RclonePublicationInput{}, err
 	}
-	chunkMaxEntries := int64(10000)
-	if limits.MaxEntries < chunkMaxEntries {
-		chunkMaxEntries = limits.MaxEntries
-	}
-	if chunkMaxEntries <= 0 {
-		return provider.RclonePublicationInput{}, fmt.Errorf("%w: managed Rclone manifest entry limit is invalid", backupasset.ErrInvalidState)
-	}
-	manifestOptions := provider.RcloneManifestBuildOptions{
-		Limits: limits, ChunkMaxBytes: int(config.Rclone.ManifestChunkMaxBytes), ChunkMaxEntries: int(chunkMaxEntries),
-		SpoolMaxBytes: limits.MaxBytes,
-	}
+	input := provider.RclonePublicationInput{ManifestLimits: manifestOptions.Limits}
 	if execution.attempt.PublicationMode == backupasset.PublicationNativeObjectVersions {
 		if execution.binding.Native == nil || execution.nativeInput == nil ||
 			execution.nativeInput.factory == nil || len(execution.nativeInput.rcloneConfig) == 0 {
@@ -1918,6 +1926,22 @@ func (execution *rclonePublicationExecution) RclonePublicationInput() (provider.
 	}
 	input.PortableRequest = request
 	return input, nil
+}
+
+func rcloneManifestOptions(config backupasset.PublicationConfig) (provider.RcloneManifestBuildOptions, error) {
+	limits := rcloneManifestLimits(config)
+	if config.Rclone.ManifestChunkMaxBytes <= 0 || config.Rclone.ManifestChunkMaxBytes > math.MaxInt ||
+		config.Rclone.ControlPayloadMaxBytes <= 0 || config.Rclone.FullVerifyMaxBytes <= 0 {
+		return provider.RcloneManifestBuildOptions{}, fmt.Errorf("%w: managed Rclone limits are invalid", backupasset.ErrInvalidState)
+	}
+	chunkMaxEntries := min(limits.MaxEntries, int64(10000))
+	if chunkMaxEntries <= 0 {
+		return provider.RcloneManifestBuildOptions{}, fmt.Errorf("%w: managed Rclone manifest entry limit is invalid", backupasset.ErrInvalidState)
+	}
+	return provider.RcloneManifestBuildOptions{
+		Limits: limits, ChunkMaxBytes: int(config.Rclone.ManifestChunkMaxBytes),
+		ChunkMaxEntries: int(chunkMaxEntries), SpoolMaxBytes: limits.MaxBytes,
+	}, nil
 }
 
 func digestRclonePublicationCost(config backupasset.RclonePublicationConfig) string {

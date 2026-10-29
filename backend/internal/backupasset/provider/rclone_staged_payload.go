@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
 	"sort"
@@ -137,12 +138,9 @@ func NewRcloneStagedPayloadTransport(dialer *sshutil.NodeDialer, ownershipKey []
 		if err != nil {
 			return nil, err
 		}
-		sftpClient, err := sftp.NewClient(client)
-		if err != nil {
-			_ = client.Close()
-			return nil, fmt.Errorf("%w: open staged payload SFTP session", backupasset.ErrProviderUnavailable)
-		}
-		return &sftpStagedPayloadSession{client: sftpClient, connection: client}, nil
+		return newSFTPStagedPayloadSession(ctx, client, func() (*sftp.Client, error) {
+			return sftp.NewClient(client)
+		})
 	}
 	return newRcloneStagedPayloadTransport(factory, ownershipKey, now)
 }
@@ -167,7 +165,7 @@ func newRcloneStagedPayloadTransport(factory stagedPayloadSessionFactory, owners
 	}, nil
 }
 
-func (transport *RcloneStagedPayloadTransport) Stage(ctx context.Context, access RemoteCommandAccess, request StagedPayloadRequest) (StagedPayloadRef, error) {
+func (transport *RcloneStagedPayloadTransport) Stage(ctx context.Context, access RemoteCommandAccess, request StagedPayloadRequest) (ref StagedPayloadRef, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -181,30 +179,43 @@ func (transport *RcloneStagedPayloadTransport) Stage(ctx context.Context, access
 	if err != nil {
 		return StagedPayloadRef{}, err
 	}
-	root, err := ensureStagedPayloadRoot(ctx, session)
+	var root stagedPayloadRoot
+	var payloadPath, ownerMarkerPath, ownerDigest string
+	created := false
+	defer func() {
+		resultErr = errors.Join(resultErr, stagedPayloadCloseError(session.Close()), ctx.Err())
+		if resultErr != nil {
+			ref = StagedPayloadRef{}
+			if created {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sshutil.CommandExecutionJoinTimeout)
+				defer cancel()
+				resultErr = errors.Join(resultErr, transport.cleanupFailedStage(cleanupCtx, access, root, payloadPath, ownerMarkerPath, ownerDigest))
+			}
+		}
+	}()
+	root, err = ensureStagedPayloadRoot(ctx, session)
 	if err != nil {
-		_ = session.Close()
 		return StagedPayloadRef{}, err
 	}
-	ownerDigest := transport.ownerDigest(root.home, request.AttemptID)
+	ownerDigest = transport.ownerDigest(root.home, request.AttemptID)
 	attemptDirectory := path.Join(root.root, request.AttemptID)
-	ownerMarkerPath := path.Join(attemptDirectory, stagedPayloadOwnerMarkerName)
+	ownerMarkerPath = path.Join(attemptDirectory, stagedPayloadOwnerMarkerName)
 	if err := ensureStagedAttemptDirectory(ctx, session, attemptDirectory, ownerMarkerPath, ownerDigest); err != nil {
-		_ = session.Close()
 		return StagedPayloadRef{}, err
 	}
-	payloadPath := path.Join(attemptDirectory, request.Name)
-	if err := writeAndVerifyStagedPayload(ctx, session, payloadPath, request.Payload, request.MaxBytes); err != nil {
-		_ = session.Close()
+	payloadPath = path.Join(attemptDirectory, request.Name)
+	created, err = writeExclusiveStagedFile(session, payloadPath, request.Payload)
+	if err != nil {
+		return StagedPayloadRef{}, err
+	}
+	if err := verifyStagedPayload(ctx, session, payloadPath, int64(len(request.Payload)), sha256Hex(request.Payload), request.MaxBytes); err != nil {
 		return StagedPayloadRef{}, err
 	}
 	if err := verifyStableStagedRoot(session, root); err != nil {
-		_ = session.Remove(payloadPath)
-		_ = session.Close()
 		return StagedPayloadRef{}, err
 	}
-	if err := session.Close(); err != nil {
-		return StagedPayloadRef{}, fmt.Errorf("%w: close staged payload session", backupasset.ErrProviderUnavailable)
+	if err := ctx.Err(); err != nil {
+		return StagedPayloadRef{}, err
 	}
 	lease := transport.leaseFor(request.AttemptID)
 	return StagedPayloadRef{
@@ -213,7 +224,83 @@ func (transport *RcloneStagedPayloadTransport) Stage(ctx context.Context, access
 	}, nil
 }
 
-func (transport *RcloneStagedPayloadTransport) Cleanup(ctx context.Context, access RemoteCommandAccess, ref StagedPayloadRef) error {
+// Failed writes have no usable ref or digest. Reopen under a separate bounded
+// context and remove only the exact file whose exclusive creation succeeded.
+func (transport *RcloneStagedPayloadTransport) cleanupFailedStage(ctx context.Context, access RemoteCommandAccess, root stagedPayloadRoot, payloadPath, markerPath, ownerDigest string) (resultErr error) {
+	session, err := transport.factory(ctx, access)
+	if err != nil {
+		return stagedPayloadCleanupError(err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, stagedPayloadCloseError(session.Close()), ctx.Err()) }()
+	workingDirectory, err := session.Getwd()
+	if err != nil {
+		return stagedPayloadCleanupError(err)
+	}
+	workingRealPath, err := session.RealPath(workingDirectory)
+	if err != nil || workingRealPath != root.home {
+		return stagedPayloadCleanupError(backupasset.ErrInvalidState)
+	}
+	if err := verifyStableStagedRoot(session, root); err != nil {
+		return stagedPayloadCleanupError(err)
+	}
+	directory := path.Dir(payloadPath)
+	for _, candidate := range []string{path.Join(root.home, ".xirang"), root.root, directory} {
+		info, statErr := session.Lstat(candidate)
+		realPath, realErr := session.RealPath(candidate)
+		if statErr != nil || realErr != nil || info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || realPath != candidate {
+			return stagedPayloadCleanupError(backupasset.ErrInvalidState)
+		}
+	}
+	if markerPath != path.Join(directory, stagedPayloadOwnerMarkerName) ||
+		ownerDigest != transport.ownerDigest(root.home, path.Base(directory)) {
+		return stagedPayloadCleanupError(backupasset.ErrInvalidState)
+	}
+	if err := verifyStagedOwnerMarker(ctx, session, markerPath, ownerDigest); err != nil {
+		return stagedPayloadCleanupError(err)
+	}
+	info, err := session.Lstat(payloadPath)
+	if err != nil || info == nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return stagedPayloadCleanupError(backupasset.ErrInvalidState)
+	}
+	if err := verifyStableStagedRoot(session, root); err != nil {
+		return stagedPayloadCleanupError(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return stagedPayloadCleanupError(err)
+	}
+	if err := session.Remove(payloadPath); err != nil {
+		return stagedPayloadCleanupError(err)
+	}
+	if err := cleanupEmptyStagedAttempt(session, directory, markerPath); err != nil {
+		return stagedPayloadCleanupError(err)
+	}
+	if err := verifyStableStagedRoot(session, root); err != nil {
+		return stagedPayloadCleanupError(err)
+	}
+	return nil
+}
+
+// Preserve error identity without exposing private remote paths or diagnostics.
+type stagedPayloadSafeError struct {
+	message string
+	cause   error
+}
+
+func (err stagedPayloadSafeError) Error() string { return err.message }
+func (err stagedPayloadSafeError) Unwrap() error { return err.cause }
+
+func stagedPayloadCloseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return stagedPayloadSafeError{message: "close staged payload session", cause: err}
+}
+
+func stagedPayloadCleanupError(err error) error {
+	return stagedPayloadSafeError{message: "failed staged payload cleanup", cause: err}
+}
+
+func (transport *RcloneStagedPayloadTransport) Cleanup(ctx context.Context, access RemoteCommandAccess, ref StagedPayloadRef) (resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -233,7 +320,7 @@ func (transport *RcloneStagedPayloadTransport) Cleanup(ctx context.Context, acce
 	if err != nil {
 		return err
 	}
-	defer session.Close() //nolint:errcheck // primary cleanup error wins
+	defer func() { resultErr = errors.Join(resultErr, stagedPayloadCloseError(session.Close()), ctx.Err()) }()
 	root, err := ensureStagedPayloadRoot(ctx, session)
 	if err != nil {
 		return err
@@ -262,7 +349,7 @@ func (transport *RcloneStagedPayloadTransport) Cleanup(ctx context.Context, acce
 	return nil
 }
 
-func (transport *RcloneStagedPayloadTransport) CleanupAged(ctx context.Context, access RemoteCommandAccess, age time.Duration, limit int) error {
+func (transport *RcloneStagedPayloadTransport) CleanupAged(ctx context.Context, access RemoteCommandAccess, age time.Duration, limit int) (resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -276,7 +363,7 @@ func (transport *RcloneStagedPayloadTransport) CleanupAged(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	defer session.Close() //nolint:errcheck // primary scan error wins
+	defer func() { resultErr = errors.Join(resultErr, stagedPayloadCloseError(session.Close()), ctx.Err()) }()
 	root, err := ensureStagedPayloadRoot(ctx, session)
 	if err != nil {
 		return err
@@ -324,6 +411,11 @@ type stagedPayloadRoot struct {
 }
 
 func ensureStagedPayloadRoot(ctx context.Context, session stagedPayloadSession) (stagedPayloadRoot, error) {
+	return ensurePrivateSFTPRoot(ctx, session, stagedPayloadRootDirectory)
+}
+
+// rootDirectory is always a code-owned constant, never a caller operand.
+func ensurePrivateSFTPRoot(ctx context.Context, session stagedPayloadSession, rootDirectory string) (stagedPayloadRoot, error) {
 	if err := ctx.Err(); err != nil {
 		return stagedPayloadRoot{}, err
 	}
@@ -340,7 +432,7 @@ func ensureStagedPayloadRoot(ctx context.Context, session stagedPayloadSession) 
 		return stagedPayloadRoot{}, fmt.Errorf("%w: SFTP home identity mismatch", backupasset.ErrInvalidState)
 	}
 	xirangDirectory := path.Join(home, ".xirang")
-	root := path.Join(home, stagedPayloadRootDirectory)
+	root := path.Join(home, rootDirectory)
 	for _, directory := range []string{xirangDirectory, root} {
 		if err := ensureStrictStagedDirectory(session, directory); err != nil {
 			return stagedPayloadRoot{}, err
@@ -400,38 +492,28 @@ func ensureStagedAttemptDirectory(ctx context.Context, session stagedPayloadSess
 		return fmt.Errorf("%w: secure staged attempt directory", backupasset.ErrProviderUnavailable)
 	}
 	if created {
-		if err := writeExclusiveStagedFile(session, markerPath, []byte(stagedPayloadOwnerPrefix+ownerDigest+"\n")); err != nil {
-			_ = session.RemoveDirectory(directory)
+		if _, err := writeExclusiveStagedFile(session, markerPath, []byte(stagedPayloadOwnerPrefix+ownerDigest+"\n")); err != nil {
 			return err
 		}
 	}
 	return verifyStagedOwnerMarker(ctx, session, markerPath, ownerDigest)
 }
 
-func writeAndVerifyStagedPayload(ctx context.Context, session stagedPayloadSession, filePath string, payload []byte, maxBytes int64) error {
-	if err := writeExclusiveStagedFile(session, filePath, payload); err != nil {
-		return err
-	}
-	return verifyStagedPayload(ctx, session, filePath, int64(len(payload)), sha256Hex(payload), maxBytes)
-}
-
-func writeExclusiveStagedFile(session stagedPayloadSession, filePath string, payload []byte) error {
+func writeExclusiveStagedFile(session stagedPayloadSession, filePath string, payload []byte) (bool, error) {
 	file, err := session.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 	if err != nil {
-		return fmt.Errorf("%w: create exclusive staged payload", backupasset.ErrInvalidState)
+		return false, fmt.Errorf("%w: create exclusive staged payload", backupasset.ErrInvalidState)
 	}
 	if err := session.Chmod(filePath, 0o600); err != nil {
-		_ = file.Close()
-		_ = session.Remove(filePath)
-		return fmt.Errorf("%w: secure staged payload", backupasset.ErrProviderUnavailable)
+		closeErr := file.Close()
+		return true, errors.Join(stagedPayloadSafeError{message: "secure staged payload", cause: err}, stagedPayloadCloseError(closeErr))
 	}
 	written, writeErr := writeAllStagedPayload(file, payload)
 	closeErr := file.Close()
 	if writeErr != nil || written != len(payload) || closeErr != nil {
-		_ = session.Remove(filePath)
-		return fmt.Errorf("%w: incomplete staged payload write", backupasset.ErrProviderUnavailable)
+		return true, errors.Join(stagedPayloadSafeError{message: "incomplete staged payload write", cause: writeErr}, stagedPayloadCloseError(closeErr))
 	}
-	return nil
+	return true, nil
 }
 
 func writeAllStagedPayload(writer io.Writer, payload []byte) (int, error) {
@@ -530,6 +612,12 @@ func verifyStableStagedRoot(session stagedPayloadSession, root stagedPayloadRoot
 	if err != nil || realRoot != root.root {
 		return fmt.Errorf("%w: staged payload root changed during operation", backupasset.ErrInvalidState)
 	}
+	for _, directory := range []string{path.Dir(root.root), root.root} {
+		info, err := session.Lstat(directory)
+		if err != nil || info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: staged payload root changed during operation", backupasset.ErrInvalidState)
+		}
+	}
 	return nil
 }
 
@@ -607,8 +695,41 @@ func isSFTPNotExist(err error) bool {
 }
 
 type sftpStagedPayloadSession struct {
-	client     *sftp.Client
-	connection io.Closer
+	client         *sftp.Client
+	connection     io.Closer
+	connectionOnce sync.Once
+	connectionErr  error
+	stopCancel     func() bool
+	cancelDone     chan struct{}
+	closeOnce      sync.Once
+	closeErr       error
+}
+
+// Install cancellation before opening the subsystem, and join it on close.
+func newSFTPStagedPayloadSession(ctx context.Context, connection io.Closer, open func() (*sftp.Client, error)) (*sftpStagedPayloadSession, error) {
+	session := &sftpStagedPayloadSession{connection: connection, cancelDone: make(chan struct{})}
+	session.stopCancel = context.AfterFunc(ctx, func() {
+		defer close(session.cancelDone)
+		session.closeConnection()
+	})
+	client, err := open()
+	if err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("%w: open staged payload SFTP session", backupasset.ErrProviderUnavailable),
+			stagedPayloadSafeError{message: "SFTP session opening failed", cause: err},
+			ctx.Err(), stagedPayloadCloseError(session.Close()),
+		)
+	}
+	session.client = client
+	return session, nil
+}
+
+func (session *sftpStagedPayloadSession) closeConnection() {
+	session.connectionOnce.Do(func() {
+		if session.connection != nil {
+			session.connectionErr = session.connection.Close()
+		}
+	})
 }
 
 func (session *sftpStagedPayloadSession) Getwd() (string, error) { return session.client.Getwd() }
@@ -643,12 +764,20 @@ func (session *sftpStagedPayloadSession) RemoveDirectory(value string) error {
 	return session.client.RemoveDirectory(value)
 }
 func (session *sftpStagedPayloadSession) Close() error {
-	clientErr := session.client.Close()
-	if session.connection != nil {
-		connectionErr := session.connection.Close()
-		if clientErr == nil {
-			clientErr = connectionErr
+	session.closeOnce.Do(func() {
+		session.closeConnection()
+		var clientErr error
+		if session.client != nil {
+			clientErr = session.client.Close()
+			// The underlying connection was deliberately closed first.
+			if errors.Is(clientErr, io.EOF) || errors.Is(clientErr, os.ErrClosed) || errors.Is(clientErr, net.ErrClosed) {
+				clientErr = nil
+			}
 		}
-	}
-	return clientErr
+		if session.stopCancel != nil && !session.stopCancel() {
+			<-session.cancelDone
+		}
+		session.closeErr = errors.Join(session.connectionErr, clientErr)
+	})
+	return session.closeErr
 }

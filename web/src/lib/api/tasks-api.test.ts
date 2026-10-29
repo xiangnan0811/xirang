@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTasksApi, deriveTaskProgress } from "./tasks-api";
+import { createTasksApi, deriveTaskProgress, mapRclonePreflightResult } from "./tasks-api";
 
 function createMockResponse(status = 200, body = "") {
   return {
@@ -425,15 +425,16 @@ describe("Rclone versioning task API", () => {
     const summaryEnvelope = (summary = rawReadySummary) => createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: summary }));
     fetchMock
       .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {
-        setup_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expires_at: "2026-07-17T10:00:00Z",
+        setup_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expires_at: "2026-07-17T10:00:00Z", base_binding_revision: "0",
       } })))
       .mockResolvedValueOnce(summaryEnvelope())
       .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {
         setup_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", expires_at: "2026-07-17T10:00:00Z",
-        external_id: "xirang-cccccccccccccccccccccccccccccccc",
+        external_id: "xirang-cccccccccccccccccccccccccccccccc", base_binding_revision: "0",
       } })))
       .mockResolvedValueOnce(summaryEnvelope())
       .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {
+        purpose: "activation",
         preflight_id: "dddddddddddddddddddddddddddddddd", expires_at: "2026-07-17T10:00:00Z", summary: rawReadySummary,
       } })))
       .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {
@@ -447,9 +448,15 @@ describe("Rclone versioning task API", () => {
     const secretAccessKey = "FAKE_AWS_SECRET_ACCESS_KEY_FOR_TEST_ONLY";
     const kmsKeyArn = "arn:aws:kms:us-east-1:123456789012:key/FAKE-KMS-KEY-FOR-TEST-ONLY";
     const setupPortable = await api.createRclonePortableBindingSetup("token", 7, { expectedTaskRevision: "9007199254740993" });
+    expect(setupPortable).toEqual({
+      setupId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      expiresAt: "2026-07-17T10:00:00Z",
+      externalId: undefined,
+      baseBindingRevision: "0",
+    });
     const portable = await api.setRclonePortableBinding("token", 7, {
       expectedTaskRevision: "9007199254740993",
-      expectedBindingRevision: "0",
+      expectedBindingRevision: setupPortable.baseBindingRevision ?? "",
       setupId: setupPortable.setupId,
       targetRemote: "archive",
       managedRootLocator: "archive:managed/v1",
@@ -458,7 +465,7 @@ describe("Rclone versioning task API", () => {
     const setupNative = await api.createRcloneNativeBindingSetup("token", 7, { expectedTaskRevision: "9007199254740993" });
     const native = await api.setRcloneNativeBinding("token", 7, {
       expectedTaskRevision: "9007199254740993",
-      expectedBindingRevision: "0",
+      expectedBindingRevision: setupNative.baseBindingRevision ?? "",
       setupId: setupNative.setupId,
       region: "us-east-1",
       bucket: "private-bucket",
@@ -515,6 +522,159 @@ describe("Rclone versioning task API", () => {
     for (const secret of [portableConfig, accessKeyId, secretAccessKey, kmsKeyArn, "private-bucket", "managed/v1/"]) {
       expect(returned).not.toContain(secret);
     }
+  });
+
+  function setupEnvelope(data: Record<string, unknown>) {
+    return createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data }));
+  }
+
+  it.each(["0", "9007199254740993", "18446744073709551615"])(
+    "keeps the exact canonical setup base revision %s",
+    async (base) => {
+      fetchMock.mockResolvedValueOnce(setupEnvelope({
+        setup_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        expires_at: "2026-07-17T10:00:00Z",
+        external_id: "xirang-cccccccccccccccccccccccccccccccc",
+        base_binding_revision: base,
+      }));
+      await expect(api.createRcloneNativeBindingSetup("token", 7, { expectedTaskRevision: "9" })).resolves.toEqual({
+        setupId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        expiresAt: "2026-07-17T10:00:00Z",
+        externalId: "xirang-cccccccccccccccccccccccccccccccc",
+        baseBindingRevision: base,
+      });
+    },
+  );
+
+  it.each<[string, Record<string, unknown>]>([
+    ["missing", {}],
+    ["null", { base_binding_revision: null }],
+    ["empty", { base_binding_revision: "" }],
+    ["a JSON number", { base_binding_revision: 0 }],
+    ["negative", { base_binding_revision: "-1" }],
+    ["leading zero", { base_binding_revision: "01" }],
+    ["padded", { base_binding_revision: " 1" }],
+    ["fractional", { base_binding_revision: "1.0" }],
+    ["uint64 overflow", { base_binding_revision: "18446744073709551616" }],
+    ["twenty nines", { base_binding_revision: "99999999999999999999" }],
+    ["twenty-one digits", { base_binding_revision: "100000000000000000000" }],
+  ])("clears every usable setup field when the base revision is %s", async (_label, base) => {
+    fetchMock
+      .mockResolvedValueOnce(setupEnvelope({
+        setup_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        expires_at: "2026-07-17T10:00:00Z",
+        ...base,
+      }))
+      .mockResolvedValueOnce(setupEnvelope({
+        setup_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        expires_at: "2026-07-17T10:00:00Z",
+        external_id: "xirang-cccccccccccccccccccccccccccccccc",
+        ...base,
+      }));
+    const cleared = { setupId: "", expiresAt: "", externalId: undefined, baseBindingRevision: null };
+    await expect(api.createRclonePortableBindingSetup("token", 7, { expectedTaskRevision: "9" })).resolves.toEqual(cleared);
+    await expect(api.createRcloneNativeBindingSetup("token", 7, { expectedTaskRevision: "9" })).resolves.toEqual(cleared);
+  });
+
+  it("maps valid preflight purpose activation and renewal without type assertions", () => {
+    const activation = mapRclonePreflightResult({
+      purpose: "activation",
+      preflight_id: "dddddddddddddddddddddddddddddddd",
+      expires_at: "2026-07-17T10:00:00Z",
+      summary: rawReadySummary,
+    });
+    expect(activation.purpose).toBe("activation");
+    expect(activation.preflightId).toBe("dddddddddddddddddddddddddddddddd");
+    expect(activation.summary.state).toBe("ready");
+
+    const renewal = mapRclonePreflightResult({
+      purpose: "renewal",
+      preflight_id: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      expires_at: "2026-07-17T10:00:00Z",
+      summary: rawReadySummary,
+    });
+    expect(renewal.purpose).toBe("renewal");
+    expect(renewal.preflightId).toBe("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    expect(renewal.summary.state).toBe("ready");
+  });
+
+  it("fails closed on missing, unknown, or non-object preflight purpose and clears token", () => {
+    const missing = mapRclonePreflightResult({
+      preflight_id: "dddddddddddddddddddddddddddddddd",
+      expires_at: "2026-07-17T10:00:00Z",
+      summary: rawReadySummary,
+    });
+    expect(missing.purpose).toBeNull();
+    expect(missing.preflightId).toBe("");
+    expect(missing.summary.state).toBe("blocked");
+
+    const unknown = mapRclonePreflightResult({
+      purpose: "unexpected_purpose",
+      preflight_id: "dddddddddddddddddddddddddddddddd",
+      expires_at: "2026-07-17T10:00:00Z",
+      summary: rawReadySummary,
+    });
+    expect(unknown.purpose).toBeNull();
+    expect(unknown.preflightId).toBe("");
+    expect(unknown.summary.state).toBe("blocked");
+
+    const invalidType = mapRclonePreflightResult({
+      purpose: 12345,
+      preflight_id: "dddddddddddddddddddddddddddddddd",
+      expires_at: "2026-07-17T10:00:00Z",
+      summary: rawReadySummary,
+    });
+    expect(invalidType.purpose).toBeNull();
+    expect(invalidType.preflightId).toBe("");
+    expect(invalidType.summary.state).toBe("blocked");
+
+    const emptyRaw = mapRclonePreflightResult(null);
+    expect(emptyRaw.purpose).toBeNull();
+    expect(emptyRaw.preflightId).toBe("");
+    expect(emptyRaw.summary.state).toBe("blocked");
+  });
+
+  it("maps renewal purpose correctly from createRcloneVersioningPreflight", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: {
+        purpose: "renewal",
+        preflight_id: "ffffffffffffffffffffffffffffffff",
+        expires_at: "2026-07-17T10:00:00Z",
+        summary: rawReadySummary,
+      },
+    })));
+
+    const result = await api.createRcloneVersioningPreflight("token", 7, {
+      expectedTaskRevision: "9007199254740993",
+      requestedMode: "native_object_versions",
+    });
+
+    expect(result.purpose).toBe("renewal");
+    expect(result.preflightId).toBe("ffffffffffffffffffffffffffffffff");
+    expect(result.summary.state).toBe("ready");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/tasks/7/rclone-versioning/preflights", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        expected_task_revision: "9007199254740993",
+        requested_mode: "native_object_versions",
+      }),
+    }));
+  });
+
+  it("keeps a settling renewal ticket identity without projecting it as ready", () => {
+    const settling = mapRclonePreflightResult({
+      purpose: "renewal",
+      preflight_id: "abababababababababababababababab",
+      expires_at: "2026-07-17T10:00:00Z",
+      summary: { ...rawReadySummary, state: "capability_settling", reason_code: "capability_settling" },
+    });
+    expect(settling.purpose).toBe("renewal");
+    expect(settling.preflightId).toBe("abababababababababababababababab");
+    expect(settling.expiresAt).toBe("2026-07-17T10:00:00Z");
+    expect(settling.summary.state).toBe("capability_settling");
+    expect(settling.summary.reasonCode).toBe("capability_settling");
   });
 });
 

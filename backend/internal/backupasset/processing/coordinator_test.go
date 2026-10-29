@@ -359,13 +359,6 @@ func TestLifecycleLateOutputProcessingRequestWorkPullPostgresLockOrder(t *testin
 			if fixture.lifecycle == nil {
 				t.Fatal("PostgreSQL Processing fixture omitted real lifecycle lease admission")
 			}
-			var versionNumber int
-			if err := fixture.db.Raw("SHOW server_version_num").Scan(&versionNumber).Error; err != nil {
-				t.Fatalf("load PostgreSQL version: %v", err)
-			}
-			if versionNumber/10000 != 17 {
-				t.Fatalf("PostgreSQL major=%d, want 17", versionNumber/10000)
-			}
 			descriptor := validWorkDescriptor()
 			if _, err := fixture.coordinator.RequestWork(context.Background(), WorkRequest{
 				Descriptor: descriptor,

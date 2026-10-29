@@ -401,7 +401,7 @@ func ValidateRcloneNativeEncryption(selection RcloneNativeEncryptionSelection, b
 	if serializedBytes > limits.MaxSerializedBytes {
 		return RcloneNativeEncryptionEvidence{}, rcloneNativeError(backupasset.RcloneReasonKMSKeyRingLimit, nil)
 	}
-	readDigests := append([]string(nil), keyDigests[1:]...)
+	readDigests := keyDigests[1:]
 	sort.Strings(readDigests)
 	readSetDigest, err := canonicalRcloneNativeDigest("kms-read-key-set-v1", readDigests)
 	if err != nil {

@@ -19,7 +19,6 @@ import { createSystemApi } from "./system-api";
 import { createDockerApi } from "./docker-api";
 import { createStorageGuideApi } from "./storage-guide-api";
 import { createSettingsApi } from "./settings-api";
-import { createSnapshotDiffApi } from "./snapshot-diff-api";
 import { createSilencesApi } from "./silences";
 import { createSLOApi } from "./slo";
 import { createAnomalyApi } from "./anomaly";
@@ -313,7 +312,6 @@ export const apiClient = {
   ...createDockerApi(),
   ...createStorageGuideApi(),
   ...createSettingsApi(),
-  ...createSnapshotDiffApi(),
   ...createSilencesApi(),
   ...createSLOApi(),
   ...createAnomalyApi(),

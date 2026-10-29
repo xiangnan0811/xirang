@@ -475,6 +475,8 @@ export interface RcloneBindingSetupResult {
   setupId: string;
   expiresAt: string;
   externalId?: string;
+  /** Durable binding revision the setup was issued against; null when the response is unusable. */
+  baseBindingRevision: string | null;
 }
 
 export type RcloneNativeBootstrapInput =
@@ -503,7 +505,10 @@ export interface RcloneNativeBindingInput {
   kmsKeyArn?: string;
 }
 
+export type RclonePreflightPurpose = "activation" | "renewal";
+
 export interface RcloneVersioningPreflightResult {
+  purpose: RclonePreflightPurpose | null;
   preflightId: string;
   expiresAt: string;
   summary: RclonePublicationSummary;
