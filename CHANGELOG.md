@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.6](https://github.com/xiangnan0811/xirang/compare/v0.73.5...v0.73.6) (2026-10-29)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** complete preflight and verified historical content delivery ([#657](https://github.com/xiangnan0811/xirang/issues/657)) ([1dae86a](https://github.com/xiangnan0811/xirang/commit/1dae86a546351652568d3866e67b9a238d5cb372))
+
 ### 控制台与接口说明修复
 
 - 修复个人偏好中“关闭自动刷新”被解释为 60 秒的问题；关闭状态在刷新页面后保留，共享控制台停止周期刷新，选择非零间隔后恢复。不影响首次加载、手动刷新或独立的任务与告警轮询。
@@ -29,13 +36,6 @@
 - 本依赖补丁无新增配置或数据库迁移；替换相应镜像与配套制品后生效。回退须整套恢复匹配版本并接受旧 Python 漏洞风险；不撤销同版本 Rclone 稳定身份密钥及 Portable V2 的降级限制，也不代表生产已升级。
 
 
-
-## [0.73.6](https://github.com/xiangnan0811/xirang/compare/v0.73.5...v0.73.6) (2026-10-29)
-
-
-### 🐛 Bug Fixes
-
-* **backup:** complete preflight and verified historical content delivery ([#657](https://github.com/xiangnan0811/xirang/issues/657)) ([1dae86a](https://github.com/xiangnan0811/xirang/commit/1dae86a546351652568d3866e67b9a238d5cb372))
 
 ## [0.73.5](https://github.com/xiangnan0811/xirang/compare/v0.73.4...v0.73.5) (2026-10-27)
 
