@@ -30,6 +30,13 @@
 
 
 
+## [0.73.6](https://github.com/xiangnan0811/xirang/compare/v0.73.5...v0.73.6) (2026-10-29)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** complete preflight and verified historical content delivery ([#657](https://github.com/xiangnan0811/xirang/issues/657)) ([1dae86a](https://github.com/xiangnan0811/xirang/commit/1dae86a546351652568d3866e67b9a238d5cb372))
+
 ## [0.73.5](https://github.com/xiangnan0811/xirang/compare/v0.73.4...v0.73.5) (2026-10-27)
 
 
