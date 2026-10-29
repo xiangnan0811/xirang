@@ -532,17 +532,18 @@ func TestRcloneCommandTransportExitEvidenceControlsCleanup(t *testing.T) {
 					t.Fatal("error disclosed config, path or remote stderr")
 				}
 			}
-			if scenario == "pre-start" {
+			switch scenario {
+			case "pre-start":
 				entries, readErr := os.ReadDir(filepath.Join(home, ".xirang", "rclone-command-config"))
 				if readErr != nil || len(entries) != 0 || sessions.Load() != 2 {
 					t.Fatalf("pre-start failure did not clean owned config: sessions=%d entries=%d error=%v", sessions.Load(), len(entries), readErr)
 				}
-			} else if scenario == "confirmed-failed-exit" || scenario == "setup-failure" {
+			case "confirmed-failed-exit", "setup-failure":
 				expectConfigRemoved(t, configPath)
 				if sessions.Load() != 2 {
 					t.Fatalf("safe cleanup did not run: sessions=%d", sessions.Load())
 				}
-			} else {
+			default:
 				expectConfigRetained(t, configPath, config)
 				if sessions.Load() != 1 {
 					t.Fatalf("uncertain execution attempted cleanup: sessions=%d", sessions.Load())

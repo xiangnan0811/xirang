@@ -47,7 +47,7 @@ func awaitStagingSignal(t *testing.T, signal <-chan struct{}) {
 
 func TestRcloneStagedPayloadSFTPCancellationInterruptsHandshake(t *testing.T) {
 	client, server := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -83,7 +83,7 @@ func (conn *stagingCloseFaultConn) Close() error {
 
 func TestRcloneStagedPayloadSFTPOpenFailurePreservesErrorsSafely(t *testing.T) {
 	client, server := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	privatePath := filepath.Join(t.TempDir(), "private")
 	openErr := errors.New("open failed at " + privatePath)
 	closeErr := errors.New("close failed at " + privatePath)

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -398,8 +399,7 @@ func Run(inv Inventory, evidenceDir string) error {
 		}
 		stderr, err := os.OpenFile(prefix+".stderr", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
-			out.Close()
-			return err
+			return errors.Join(err, out.Close())
 		}
 		timeout := g.Timeout
 		if override != "" {
@@ -427,7 +427,9 @@ func Run(inv Inventory, evidenceDir string) error {
 			return err
 		}
 		result := parseEvents(f, g)
-		f.Close()
+		if err := f.Close(); err != nil {
+			result.Errors = append(result.Errors, "closing evidence reader failed")
+		}
 		result.Exit = 0
 		if runErr != nil {
 			result.Exit = -1

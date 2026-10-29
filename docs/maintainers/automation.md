@@ -114,6 +114,7 @@ PostgreSQL job 只通过 `bash ../scripts/run-required-postgres-tests.sh --evide
 AST候选校验、默认及覆盖timeout、14个required环境开关和逐测试事件失败规则见
 [数据库合同](../spec/backend/database-guidelines.md#双引擎回归证据)。CI还运行隔离fake-process
 协议自测，并在成功或失败时上传逐组JSON事件、脱敏stderr及summary；fake协议通过不代表真实PG通过。
+证据文件写入、输出句柄关闭或读取句柄关闭失败也使 runner 失败；测试进程成功不能覆盖证据落盘或读取收尾错误。
 
 库存保留批量重试的事务竞争、授权、执行证据和迁移约束，配置导入/导出的BothEngines、
 混合依赖环及HTTP静态场景，以及SSH替换/轮换的真实节点库存、锁后材料重分类、撤销、

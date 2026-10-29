@@ -13,8 +13,6 @@ import (
 	"xirang/backend/internal/secure"
 )
 
-const rclonePreflightIdentityMigrationVersion = 95
-
 func TestRclonePreflightIdentityMigrationSQLite(t *testing.T) {
 	testRclonePreflightIdentityMigration(t, newSQLiteMigrationFixture(t))
 }

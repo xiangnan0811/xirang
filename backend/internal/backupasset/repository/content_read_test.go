@@ -1927,7 +1927,7 @@ func TestContentSourceReconstructsManagedRclonePortableRuntime(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open portable source: %v", err)
 			}
-			defer current.Close()
+			defer func() { _ = current.Close() }()
 			if got, err := io.ReadAll(current.Reader()); err != nil || string(got) != "rclone-portable" {
 				t.Fatalf("read portable source=%q err=%v", got, err)
 			}

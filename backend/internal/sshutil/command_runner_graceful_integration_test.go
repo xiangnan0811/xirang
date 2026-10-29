@@ -293,17 +293,18 @@ func TestGracefulJoinedTransportRealSSHFailuresRetainExitEvidence(t *testing.T) 
 				}
 			} else {
 				lifecycleReadPrefix(t, stream)
-				if tc.name == "explicit_cancel" {
+				switch tc.name {
+				case "explicit_cancel":
 					if err := stream.Cancel(); !errors.Is(err, ErrCommandFailed) {
 						t.Fatalf("cancel error=%v", err)
 					}
-				} else if tc.name == "operation_timeout" {
+				case "operation_timeout":
 					select {
 					case <-stream.(*commandExecution).runContext.Done():
 					case <-time.After(8 * time.Second):
 						t.Fatal("operation deadline did not expire")
 					}
-				} else {
+				default:
 					cancel()
 				}
 			}

@@ -37,7 +37,7 @@ type rcloneTransactionalDriftSettings struct {
 }
 
 func (settings rcloneTransactionalDriftSettings) BackupAssetSettingsSnapshotTx(context.Context, *gorm.DB) (map[string]string, error) {
-	values, err := settings.repositorySettings.BackupAssetSettingsSnapshot()
+	values, err := settings.BackupAssetSettingsSnapshot()
 	if err == nil {
 		values["backup_assets.rclone_low_level_retries"] = "4"
 	}
