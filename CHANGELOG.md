@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.7](https://github.com/xiangnan0811/xirang/compare/v0.73.6...v0.73.7) (2026-10-29)
+
+
+### 🐛 Bug Fixes
+
+* preserve Rclone writer safety and complete acceptance gates ([#659](https://github.com/xiangnan0811/xirang/issues/659)) ([3dbd336](https://github.com/xiangnan0811/xirang/commit/3dbd336ef1c80756496c73b87eeed90a3fb6a4c5))
+
 ### Rclone 发布结果与持久写入保护
 
 - 区分明确未尝试发布变更、真实非零退出、停止后的语义失败和未知结果；普通任务与导入 baseline 共用分类并保留原始 cause。未知 transport/SDK 或 commit 回读结果保留非终态并抑制自动重试，允许重试时创建全新运行、恢复点、attempt 和前缀。
