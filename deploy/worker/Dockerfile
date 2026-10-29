@@ -1,6 +1,6 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:9d1c2af88e090059ff4f673562458e8688c22295642385f683ca48e6ce004883 AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:20abdfea5e6bfba595df4177d2a93438d4fd9bc3fac565ad0a13c26976778d8c AS worker-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:19dd108ef4110db4d82c2ed6c811cae976c8ee4769615f05792a658c1fabc996 AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:df147a41893bb4343663dc90417d68d3a9a8ad4991da441403eee8cce067e21e AS worker-runtime-inputs
 
 # Retained golang:1.27.3-alpine3.24 platform images; upstream identities are in the lock.
 FROM docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5 AS worker-builder
@@ -45,6 +45,7 @@ RUN --network=none --mount=from=worker-runtime-inputs,source=/inputs,target=/bui
       libreoffice=25.8.1.1-r5 \
       libssl3=3.5.9-r0 \
       poppler-utils=25.12.0-r0 \
+      python3=3.12.16-r0 \
       tesseract-ocr-data-chi_sim=5.5.1-r0 \
       tesseract-ocr-data-eng=5.5.1-r0 \
       tesseract-ocr=5.5.1-r0 \

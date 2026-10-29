@@ -137,6 +137,14 @@ bundle；旧 v2 bundle 无法满足新身份。runtime closure 与 bundle 格式
 历史上未采集 APK 输入的旧源码仍可能无法重建。归档位于现有公开镜像仓库的
 `base-*`、`inputs-*` 标签下，这些标签不是可部署的 Worker 产品镜像。
 
+Python 安全补丁将 Worker 的 `pyc`、`python3`、`python3-pyc` 与
+`python3-pycache-pyc0` 从 `3.12.15-r0` 更新至 `3.12.16-r0`，修复 CVE-2026-115557。
+启用此 profile 的部署须暂停 backfill、排空旧 Worker 在途处理，按同一源码重建 Core
+与 Worker，并从双架构的新最终镜像取得闭包，更新授权签名的 bundle、attestations
+和 proof 后再切换。CI 临时签名 fixture 不可作为生产运行包。该依赖补丁不新增配置
+或迁移；配套回退会恢复旧 Python 漏洞风险，且仍受同版本稳定身份密钥和 Portable V2
+的恢复限制约束。
+
 受管 Recovery 不属于上述无 Worker 可用承诺：当前实现启用它时要求 Processing 已就绪且具备恶意软件证据服务，本机与远程 Worker 均关闭时不满足准入。旧版普通任务恢复仍按各执行器的证据和授权要求处理，不能代替受管恢复的安全检查。部署前须按[处理与导出合同](spec/domains/backup-processing-export.md)核验实际需要的恢复路径。
 
 Profile 固定使用以下本地身份和权限合同：

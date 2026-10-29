@@ -22,6 +22,12 @@
 - 写入 Portable V2 后不支持直接降级旧运行时；回退须恢复写 V2 前匹配的数据库、密钥和数据快照，或保留支持 V2 的运行时。此补充不新增数据库迁移、不重写历史 controls，也不代表官方 AWS live 认证、发布或部署。
 - 升级前暂停相关任务并排空旧 Core、scheduler、executor 及资产处理/清理的在途操作，保全数据库、匹配密钥、配置及远端备份数据；按同一发行版本切换 Core、页面和启用的 Worker。新行为从新版组件接管后生效，不撤销旧版已提交的远端副作用；回退仍受稳定身份密钥和 Portable V2 的恢复限制约束。
 
+### Worker Python 依赖安全修复
+
+- 将 Worker 的 Python 从传递依赖提升为显式 `python3=3.12.16-r0` 锁定；双架构完整输入事务同步升级 `pyc`、`python3`、`python3-pyc` 和 `python3-pycache-pyc0`，替换 `3.12.15-r0` 并修复 CVE-2026-115557。保留原基础镜像身份、APK 签名校验、断网重放与当前漏洞扫描门槛。
+- 新输入推进 Worker 工具链及相关 pipeline 指纹。须按同一源码重建 Core 与启用的 Worker，从两种架构的新最终镜像生成闭包并更新匹配的签名 bundle、attestations 和 proof；升级前排空旧 Worker 在途处理，不能混用旧闭包或旧运行包。CI 的临时签名 fixture 只证明验证路径，不是可部署的生产签名制品。
+- 本依赖补丁无新增配置或数据库迁移；替换相应镜像与配套制品后生效。回退须整套恢复匹配版本并接受旧 Python 漏洞风险；不撤销同版本 Rclone 稳定身份密钥及 Portable V2 的降级限制，也不代表生产已升级。
+
 
 
 ## [0.73.5](https://github.com/xiangnan0811/xirang/compare/v0.73.4...v0.73.5) (2026-10-27)

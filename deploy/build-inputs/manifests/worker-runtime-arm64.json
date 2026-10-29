@@ -2364,35 +2364,35 @@
     },
     {
       "arch": "noarch",
-      "file": "pyc-3.12.15-r0.apk",
+      "file": "pyc-3.12.16-r0.apk",
       "name": "pyc",
-      "sha256": "864c2b1abddcea1df94db00b5977ed37ff34ca63e399db63fe19d83acf7c6ca0",
-      "size": 1255,
-      "version": "3.12.15-r0"
+      "sha256": "b56b8c18175463031bb613f72f35ed85dcd6a74f6277f5d7dbcc03db9aa998f9",
+      "size": 1251,
+      "version": "3.12.16-r0"
     },
     {
       "arch": "aarch64",
-      "file": "python3-3.12.15-r0.apk",
+      "file": "python3-3.12.16-r0.apk",
       "name": "python3",
-      "sha256": "dabc892646c32cc6619afadd30256d1845b1ef34a3f5bebff84895813b55b95b",
-      "size": 8078255,
-      "version": "3.12.15-r0"
+      "sha256": "a4ea335bd189fca31e002e63cb2b9a11679b302934d4c326aa0433948fb65af9",
+      "size": 8080069,
+      "version": "3.12.16-r0"
     },
     {
       "arch": "noarch",
-      "file": "python3-pyc-3.12.15-r0.apk",
+      "file": "python3-pyc-3.12.16-r0.apk",
       "name": "python3-pyc",
-      "sha256": "15382195d229840ee74e6e64f04ee65b93c24bc1817b1a3203ffed0ae02433ac",
-      "size": 1302,
-      "version": "3.12.15-r0"
+      "sha256": "3a92011d53912d8a6ff6c9ab20dbdcba06ffb70f7adb840c298873ab93ccc0da",
+      "size": 1298,
+      "version": "3.12.16-r0"
     },
     {
       "arch": "aarch64",
-      "file": "python3-pycache-pyc0-3.12.15-r0.apk",
+      "file": "python3-pycache-pyc0-3.12.16-r0.apk",
       "name": "python3-pycache-pyc0",
-      "sha256": "c7fd197ffd37a95172e6fdcee188b146b76bd5b15b71ed8222ac8347cdfdd632",
-      "size": 4180915,
-      "version": "3.12.15-r0"
+      "sha256": "a32ea76b5dcd8245b40d45773296b6d2f5c00bc223f2ea468ca6e4fdd03351d8",
+      "size": 4182747,
+      "version": "3.12.16-r0"
     },
     {
       "arch": "aarch64",
@@ -4516,22 +4516,22 @@
     {
       "arch": "noarch",
       "name": "pyc",
-      "version": "3.12.15-r0"
+      "version": "3.12.16-r0"
     },
     {
       "arch": "aarch64",
       "name": "python3",
-      "version": "3.12.15-r0"
+      "version": "3.12.16-r0"
     },
     {
       "arch": "noarch",
       "name": "python3-pyc",
-      "version": "3.12.15-r0"
+      "version": "3.12.16-r0"
     },
     {
       "arch": "aarch64",
       "name": "python3-pycache-pyc0",
-      "version": "3.12.15-r0"
+      "version": "3.12.16-r0"
     },
     {
       "arch": "aarch64",
@@ -4878,6 +4878,7 @@
     "libreoffice=25.8.1.1-r5",
     "libssl3=3.5.9-r0",
     "poppler-utils=25.12.0-r0",
+    "python3=3.12.16-r0",
     "tesseract-ocr-data-chi_sim=5.5.1-r0",
     "tesseract-ocr-data-eng=5.5.1-r0",
     "tesseract-ocr=5.5.1-r0",

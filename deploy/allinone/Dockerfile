@@ -1,7 +1,7 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:9d1c2af88e090059ff4f673562458e8688c22295642385f683ca48e6ce004883 AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:7faf14ea59f1b95f9d110331b1113c08100e7d7223788aeebd9e827f9b9ca0f4 AS supercronic-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:0a03e3bb2e17b34882289052725ef34158edef774460be64e26f56790fb599ed AS core-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:19dd108ef4110db4d82c2ed6c811cae976c8ee4769615f05792a658c1fabc996 AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:9ad69af2963b57f42e2ce371e243739d3f4d90d64458ce4a77bd35123d7d4de4 AS supercronic-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:117ea1705452f9626d349bff0e392134502afa2c14cb03673091643ab668c099 AS core-runtime-inputs
 
 FROM docker.io/linnea7171/xirang@sha256:3e4c9ad8b3fd601ce93e5a8f7a77a639efe8d7d36846846c5179f89175f89d86 AS web-builder
 

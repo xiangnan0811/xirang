@@ -336,3 +336,18 @@ Core 的 curl 锁定从已不可安装的 `8.22.0-r0` 更新为 Alpine 3.23 的
 兼容性验证。这不等于升级运行镜像的 libc，也不自动构成安全漏洞修复声明。
 
 保留完整 Compose smoke、Worker 对应检查和漏洞扫描，不能用单一架构成功替代另一个架构。维护性依赖更新也应按发布手册检查合并后自动化，不手动提升版本或重发镜像。
+
+### Worker Python 传递依赖安全更新
+
+Worker 显式锁定 `python3=3.12.16-r0`，替换受 CVE-2026-115557 影响的
+`3.12.15-r0`。按原生双架构采集流程重新生成完整输入事务；分别核对 `pyc`、
+`python3`、`python3-pyc`、`python3-pycache-pyc0` 的已验签 APK 与安装清单，
+并通过输入镜像及最终 Worker 镜像扫描，不能仅凭一个 root 的版本证明全部子包修复。
+输入规格、Worker Dockerfile 与生产 inventory 的显式 pin 保持一致；新 lock、
+八份 manifest 和 Worker 投影须来自同一成功采集 run，并验证其 source SHA 与 attestation。
+重新解析引起的其他传递包变化也须纳入审查，不能手工拼接旧、新 manifest。
+
+Worker 输入内容变化后，Core 与启用的 Worker 均须同源重建，并更新双架构最终闭包、
+签名 bundle 和 proof。CI 临时密钥签出的 fixture 只用于验收验证路径，不可当作生产运行包；
+实际切换仍须使用授权的签名与信任材料，先排空旧 Worker 在途处理，回退时恢复整套匹配制品。
+本补丁不新增配置或数据库迁移，回退旧 Python 仍会恢复该漏洞风险。
