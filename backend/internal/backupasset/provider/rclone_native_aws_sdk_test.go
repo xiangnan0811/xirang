@@ -49,6 +49,7 @@ type rcloneNativeS3ClientFake struct {
 	getOutput        *s3.GetObjectOutput
 	putInput         *s3.PutObjectInput
 	putOutput        *s3.PutObjectOutput
+	putError         error
 	deleteInput      *s3.DeleteObjectInput
 	deleteOutput     *s3.DeleteObjectOutput
 	deleteError      error
@@ -80,7 +81,7 @@ func (fake *rcloneNativeS3ClientFake) GetObject(_ context.Context, input *s3.Get
 }
 func (fake *rcloneNativeS3ClientFake) PutObject(_ context.Context, input *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	fake.putInput = input
-	return fake.putOutput, nil
+	return fake.putOutput, fake.putError
 }
 func (fake *rcloneNativeS3ClientFake) DeleteObject(_ context.Context, input *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	fake.deleteInput = input

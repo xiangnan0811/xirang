@@ -49,6 +49,7 @@ export interface TasksPageDialogsProps {
   setEditingTask: (task: TaskRecord | null) => void;
   historyTask: TaskRecord | null;
   setHistoryTask: (task: TaskRecord | null) => void;
+  historyOnCloseAutoFocus?: DialogCloseAutoFocus;
   selectedRun: TaskRunRecord | null;
   setSelectedRun: (run: TaskRunRecord | null) => void;
   batchDialogOpen: boolean;
@@ -94,6 +95,7 @@ export function TasksPageDialogs({
   setEditingTask,
   historyTask,
   setHistoryTask,
+  historyOnCloseAutoFocus,
   selectedRun,
   setSelectedRun,
   batchDialogOpen,
@@ -211,7 +213,7 @@ export function TasksPageDialogs({
           }
         }}
       >
-        <DialogContent size="lg">
+        <DialogContent size="lg" onCloseAutoFocus={historyOnCloseAutoFocus}>
           <DialogHeader>
             <DialogTitle>
               {t("tasks.executionHistory", { name: historyTask?.name || historyTask?.policyName })}

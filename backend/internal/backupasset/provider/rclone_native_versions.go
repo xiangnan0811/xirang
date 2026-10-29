@@ -680,7 +680,13 @@ func (dataPlane *CommandRcloneNativeDataPlane) ObserveSource(ctx context.Context
 	return manifest, nil
 }
 
-func (dataPlane *CommandRcloneNativeDataPlane) Sync(ctx context.Context, request RcloneNativePublicationRequest) error {
+func (dataPlane *CommandRcloneNativeDataPlane) Sync(ctx context.Context, request RcloneNativePublicationRequest) (resultErr error) {
+	commandInvoked := false
+	defer func() {
+		if resultErr != nil && !commandInvoked {
+			resultErr = rcloneCommandNotAttempted(resultErr)
+		}
+	}()
 	if dataPlane == nil || dataPlane.commands == nil {
 		return fmt.Errorf("%w: native Rclone data plane unavailable", backupasset.ErrInvalidState)
 	}
@@ -692,6 +698,7 @@ func (dataPlane *CommandRcloneNativeDataPlane) Sync(ctx context.Context, request
 	if err != nil {
 		return err
 	}
+	commandInvoked = true
 	_, err = dataPlane.commands.Run(ctx, dataPlane.invocation(request, OperationRcloneManagedNativeSync, &request.Source, &destination), limits)
 	return err
 }
@@ -808,7 +815,24 @@ func NewRcloneNativePublisher(dataPlane RcloneNativeDataPlane, now func() time.T
 	return &RcloneNativePublisher{dataPlane: dataPlane, now: now}
 }
 
-func (publisher *RcloneNativePublisher) Publish(ctx context.Context, request RcloneNativePublicationRequest) (RcloneCommitV1, error) {
+type trackedRcloneNativeS3 struct {
+	S3Native
+	tracker   *rclonePublicationTracker
+	commitKey string
+}
+
+func (store *trackedRcloneNativeS3) PutControlVersion(ctx context.Context, request RcloneNativeControlWriteRequest) (RcloneNativeControlWriteResult, error) {
+	result, err := store.S3Native.PutControlVersion(ctx, request)
+	if err == nil && !validRcloneNativeVersionID(result.VersionID) {
+		err = &rcloneMutationCommandError{attempted: true, cause: backupasset.ErrInvalidState}
+	}
+	store.tracker.mutation(err, request.PhysicalKey == store.commitKey)
+	return result, err
+}
+
+func (publisher *RcloneNativePublisher) Publish(ctx context.Context, request RcloneNativePublicationRequest) (result RcloneCommitV1, resultErr error) {
+	tracker := newRclonePublicationTracker()
+	defer func() { resultErr = tracker.failure(resultErr) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -823,7 +847,7 @@ func (publisher *RcloneNativePublisher) Publish(ctx context.Context, request Rcl
 	if err != nil || s3 == nil {
 		return RcloneCommitV1{}, rcloneNativeError(backupasset.RcloneReasonAdmissionBlocked, err)
 	}
-	request.s3 = s3
+	request.s3 = &trackedRcloneNativeS3{S3Native: s3, tracker: tracker, commitKey: rcloneNativeAttemptControlPrefix(request) + "commit.json"}
 
 	sourceBefore, err := publisher.dataPlane.ObserveSource(ctx, request)
 	if err != nil {
@@ -846,8 +870,10 @@ func (publisher *RcloneNativePublisher) Publish(ctx context.Context, request Rcl
 		return RcloneCommitV1{}, err
 	}
 	if err := publisher.dataPlane.Sync(ctx, request); err != nil {
+		tracker.mutation(err, false)
 		return RcloneCommitV1{}, rcloneNativeDataPlaneError(ctx, err)
 	}
+	tracker.mutation(nil, false)
 	sourceAfter, err := publisher.dataPlane.ObserveSource(ctx, request)
 	if err != nil {
 		return RcloneCommitV1{}, rcloneNativeDataPlaneError(ctx, err)

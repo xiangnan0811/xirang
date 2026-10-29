@@ -58,6 +58,18 @@ axe 或溢出测量保存为 `null`，单独统计可用与缺失测量，不能
 选择的历史快照，缺失维度保持未知。Mock 走查证明界面在这些数据与环境下的行为，
 不证明真实后端、完整业务生命周期或全面 WCAG 合规。
 
+DockerVolumesPanel 与 TaskRunHistory 的额外状态通过独立
+`playwright.surface-states.config.ts` 显式选择，不混入或减少上述464个场景。
+经 Nodes 文件浏览与 Tasks 历史真实入口覆盖中英、明暗、桌面/移动，保留 loading、完整空、
+partial+warning、错误重试、长文本、真实分页、键盘/Escape/焦点及身份变化的迟到响应证据。
+transport abort 与应用 stale guard 分开记录；受控 HTTP 场景不替代 backend→严格 SSH→
+真实 Docker CLI→独占 daemon 的成功/empty 验收。viewer 无 UI 入口不意味着 API 必然拒绝。
+
+walkthrough 同候选原生 list 与安全实际事件一并保存，执行失败也汇编并收集现有证据。
+axe 与 computed contrast 的完整测量要求见[可访问性](a11y-guidelines.md#颜色与真实布局)，
+历史缺测保持 unknown。旧退役比较及无生产 importer 的 legacy SnapshotSearch/SnapshotBrowser
+不为覆盖率复活；现有初始dialog渲染不证明迁移、告警投递或其他未执行的业务流程。
+
 ## 语言资源
 
 用户可见文案使用现有 i18n。显式切换语言只能走 `setLanguage()`，启动等待 `i18nReady`，详见[可访问性语言规则](a11y-guidelines.md#语言与语义)。

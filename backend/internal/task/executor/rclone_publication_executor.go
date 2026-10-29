@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -43,30 +44,30 @@ func (executor *RclonePublicationExecutor) RunWithPublication(
 		err != nil || request.Task.ID == 0 || request.TaskRunID == 0 || request.RcloneInput == nil ||
 		request.Task.ID != attempt.TaskID || request.TaskRunID != attempt.TaskRunID ||
 		strings.ToLower(strings.TrimSpace(request.Task.ExecutorType)) != string(backupasset.ProviderRclone) {
-		return PublicationExecutionResult{}, fmt.Errorf("%w: managed Rclone publication executor unavailable", backupasset.ErrInvalidState)
+		return PublicationExecutionResult{ExitCode: provider.UnknownProviderExitCode}, provider.RcloneUnattemptedPublicationError(errors.Join(fmt.Errorf("%w: managed Rclone publication executor unavailable", backupasset.ErrInvalidState), err))
 	}
 	input := cloneRclonePublicationInput(*request.RcloneInput)
 	source, err := provider.NewRclonePrivateLocator(strings.TrimSpace(request.Task.RsyncSource))
 	if err != nil {
-		return PublicationExecutionResult{}, fmt.Errorf("%w: managed Rclone source is unavailable", backupasset.ErrInvalidState)
+		return PublicationExecutionResult{ExitCode: provider.UnknownProviderExitCode}, provider.RcloneUnattemptedPublicationError(errors.Join(fmt.Errorf("%w: managed Rclone source is unavailable", backupasset.ErrInvalidState), err))
 	}
 	switch attempt.PublicationMode {
 	case backupasset.PublicationVersionedPrefix:
 		if input.PortableRequest == nil || input.NativeRequest != nil || input.PortableRequest.Source != (provider.RclonePrivateLocator{}) {
-			return PublicationExecutionResult{}, fmt.Errorf("%w: managed Rclone portable source must be executor-derived", backupasset.ErrInvalidState)
+			return PublicationExecutionResult{ExitCode: provider.UnknownProviderExitCode}, provider.RcloneUnattemptedPublicationError(fmt.Errorf("%w: managed Rclone portable source must be executor-derived", backupasset.ErrInvalidState))
 		}
 		input.PortableRequest.Source = source
 	case backupasset.PublicationNativeObjectVersions:
 		if input.NativeRequest == nil || input.PortableRequest != nil || input.NativeRequest.Source != (provider.RclonePrivateLocator{}) {
-			return PublicationExecutionResult{}, fmt.Errorf("%w: managed Rclone native source must be executor-derived", backupasset.ErrInvalidState)
+			return PublicationExecutionResult{ExitCode: provider.UnknownProviderExitCode}, provider.RcloneUnattemptedPublicationError(fmt.Errorf("%w: managed Rclone native source must be executor-derived", backupasset.ErrInvalidState))
 		}
 		input.NativeRequest.Source = source
 	default:
-		return PublicationExecutionResult{}, fmt.Errorf("%w: unsupported managed Rclone publication mode", backupasset.ErrInvalidState)
+		return PublicationExecutionResult{ExitCode: provider.UnknownProviderExitCode}, provider.RcloneUnattemptedPublicationError(fmt.Errorf("%w: unsupported managed Rclone publication mode", backupasset.ErrInvalidState))
 	}
 	prepared, err := executor.strategy.Prepare(ctx, provider.PublicationPrepareRequest{Attempt: request.Attempt, RcloneInput: &input})
 	if err != nil {
-		return PublicationExecutionResult{}, err
+		return PublicationExecutionResult{ExitCode: provider.UnknownProviderExitCode}, err
 	}
 	if logf != nil {
 		logf("info", "开始受管 Rclone 恢复点发布")
@@ -91,7 +92,8 @@ func (executor *RclonePublicationExecutor) RunWithPublication(
 	}
 	commit, err := executor.strategy.RecordCommit(ctx, prepared, result)
 	if err != nil {
-		return output, err
+		return PublicationExecutionResult{ExitCode: provider.UnknownProviderExitCode, Completion: backupasset.CompletionOutcomeUnknown},
+			&provider.RclonePublicationError{MutationAttempted: true, CommitAttempted: true, WritersQuiesced: true, Cause: err}
 	}
 	output.ProviderCommit = &commit
 	return output, nil

@@ -198,7 +198,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                       size="icon"
                       className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                       aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
-                      onClick={() => onOpenFileBrowser?.(node)}
+                      onClick={(event) => onOpenFileBrowser?.(node, event.currentTarget)}
                     >
                       <FolderOpen className="size-4" aria-hidden />
                     </Button>
@@ -415,7 +415,7 @@ export const NodesGrid = React.memo(function NodesGrid({
                       size="icon"
                       className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                       aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
-                      onClick={() => onOpenFileBrowser?.(node)}
+                      onClick={(event) => onOpenFileBrowser?.(node, event.currentTarget)}
                     >
                       <FolderOpen className="size-4" aria-hidden />
                     </Button>

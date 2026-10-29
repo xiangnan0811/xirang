@@ -4,6 +4,7 @@ import {
   checkHorizontalOverflow,
   createTelemetry,
   installWalkthroughEnvironment,
+  measureIncompleteContrast,
   publishEvidence,
   rememberDraft,
   runAxeAudit,
@@ -94,6 +95,17 @@ function visibleText(page: Page, text: string, exact = true): Locator {
   return page.getByText(text, { exact }).filter({ visible: true });
 }
 
+async function openIncidentDiagnostic(page: Page, language: WalkthroughScenario["language"]): Promise<void> {
+  const disclosure = page.locator("details").filter({ has: page.getByText(INCIDENT_CAUSE, { exact: true }) });
+  await expect(disclosure).toHaveCount(1);
+  const summary = disclosure.locator("summary");
+  await expect(summary).toHaveText(copy(language, "来源诊断", "Source diagnostic"));
+  await expect(disclosure).not.toHaveAttribute("open", "");
+  await summary.click();
+  await expect(disclosure).toHaveAttribute("open", "");
+  await expect(disclosure.getByText(INCIDENT_CAUSE, { exact: true })).toBeVisible();
+}
+
 function tabLocator(page: Page, path: string): Locator | null {
   const tab = new URL(path, "http://127.0.0.1").searchParams.get("tab");
   if (path.startsWith("/app/nodes/") && tab) {
@@ -130,7 +142,7 @@ async function waitForStandardData(page: Page, scenario: WalkthroughScenario): P
     return;
   }
   if (path === "/app/overview") {
-    await expect(page.getByText(INCIDENT_CAUSE, { exact: true })).toBeVisible();
+    await openIncidentDiagnostic(page, language);
     return;
   }
   if (path === "/app/nodes") {
@@ -233,6 +245,8 @@ async function waitForStandardData(page: Page, scenario: WalkthroughScenario): P
   }
   if (path === "/app/settings?tab=account") {
     await expect(page.getByRole("heading", { name: copy(language, "账户安全", "Account Security"), exact: true })).toBeVisible();
+    const recovery = page.locator('section[aria-labelledby="recovery-codes-heading"]');
+    await expect(recovery.getByText(copy(language, "剩余 8 个恢复码", "8 recovery codes remaining"), { exact: true })).toBeVisible();
     return;
   }
   if (path === "/app/settings?tab=users") {
@@ -317,9 +331,10 @@ async function clickErrorRetry(page: Page, path: string): Promise<void> {
   await page.getByRole("alert").filter({ hasText: HTTP_ERROR_TEXT }).getByRole("button", { name: "重试", exact: true }).click();
 }
 
-async function waitForRecoveredData(page: Page, path: string): Promise<void> {
+async function waitForRecoveredData(page: Page, scenario: WalkthroughScenario): Promise<void> {
+  const { path, language } = scenario;
   if (path === "/app/overview") {
-    await expect(page.getByText(INCIDENT_CAUSE, { exact: true })).toBeVisible();
+    await openIncidentDiagnostic(page, language);
     return;
   }
   if (path === "/app/notifications") {
@@ -344,11 +359,13 @@ async function waitForRecoveredData(page: Page, path: string): Promise<void> {
 async function captureSurface(page: Page, draft: EvidenceDraft): Promise<void> {
   await waitForFontsAndFiniteTransitions(page, draft.scenario.theme);
   draft.axe = await runAxeAudit(page);
+  draft.contrast = await measureIncompleteContrast(page, draft.axe);
   draft.overflow = await checkHorizontalOverflow(page);
 }
 
 function assertSurface(draft: EvidenceDraft): void {
   expect(draft.axe?.violations ?? []).toEqual([]);
+  expect(draft.contrast?.filter((measurement) => measurement.outcome === "fail") ?? []).toEqual([]);
   expect(draft.overflow?.isOverflow ?? false).toBe(false);
   const telemetry = summarizeTelemetry(draft);
   expect(telemetry.consoleErrors).toEqual([]);
@@ -391,6 +408,7 @@ for (const scenario of SCENARIOS) {
     const draft: EvidenceDraft = {
       scenario,
       axe: null,
+      contrast: null,
       overflow: null,
       telemetry: createTelemetry(),
       expectedHttpErrors: [],
@@ -440,7 +458,7 @@ for (const scenario of SCENARIOS) {
       await captureSurface(page, draft);
       session.recover();
       await clickErrorRetry(page, scenario.path);
-      await waitForRecoveredData(page, scenario.path);
+      await waitForRecoveredData(page, scenario);
       assertSurface(draft);
       return;
     }

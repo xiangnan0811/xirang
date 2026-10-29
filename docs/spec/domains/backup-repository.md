@@ -78,6 +78,45 @@ legacy mutable 不自动升级；管理员暂停任务后显式选择 `versioned
 - 预检命令的本地/SSH staging 与远端 proof 是不同的所有权。取消会关闭并 join 自有 SSH/SFTP 会话，包括握手、写入和 Remove 停答；清理使用脱离 caller cancel、至多 command join timeout 的独立期限，主错误与清理错误均保留，清理失败不得返回成功证据。Stage 未返回 ref 时，只能在新有界会话重验 home/root/owner 后删除本次 O_EXCL 确认创建的精确 regular payload；碰撞、symlink、身份不明和同 attempt 其他文件保留。Portable proof 与 Native canary/version/delete marker仍按独占ID保留，不借 staging 清理广泛删除远端历史。
 - `first_new_point` 不改变旧目标，在任何 managed reservation/history/point/lease 之前可 clean rollback；`imported_baseline` 完整复制稳定旧 current head，并立即建立 durable reservation，不伪造历史，因此没有 clean rollback 窗口。窗口关闭后仅准备回退，保留 committed/failed/orphan/manifest/audit/latch，不删除远端字节、不自动恢复旧执行。
 
+### 发布结果与未知 writer 保护
+
+Rclone publisher 以专用类型化错误向 strategy、executor 和持久化 owner 传递发布事实，
+错误文本固定且安全，原 cause 可通过 `Unwrap` 保留。事实区分 publication mutation
+是否尝试、commit mutation 是否尝试，以及全部已尝试 writer 是否停止且不会再启动后续变更。
+未标记、缺失或矛盾事实按 unknown 处理；只读预检失败可以明确属于未尝试发布变更。
+不能从任意 error、本地 join、EOF、TERM 成功、lease 到期或认证 commit 推导 writer 已停止。
+SSH 的 RemoteExited 独立于真实正数 exit-status；Start 报错可能已发请求。
+Native SDK 在实际 PutObject 调用边界区分本地拒绝，成功且有效 VersionID 才证明该次写入完成。
+
+明确从未尝试发布变更时 Reject 并保留原错；commit 前全部 writer 停止且真实正数退出时
+按 provider_nonzero_exit Fail。全部停止但仅有语义/验证错误时，Rclone 专用
+provider_completion_unproven Fail，exit=-1，不伪造非零退出或放宽 Rsync。
+transport/SDK 变更结果未知，或 commit mutation 已尝试但提交/回读未确认时 Defer，
+SuppressRetry；停止事实独立保存，未知提交不能重放旧 attempt。普通任务和导入 baseline
+共用此分类。允许的重试必须创建新 TaskRun、point、attempt 和 root，旧数据不变。
+
+PublicationConsistencyV1 的可选 `rclone_writer_quiesced` 由 publication.Deferral 传递；
+nil/false 均不授权解除 writer 保护。写该事实时同事务设置 provider=rclone，旧合法
+provider 空行仍可解码。Reject/Fail 的终态与正面停止事实同事务持久化，Defer 幂等比较
+包含该事实；提交与 reconcile 不能丢弃尚未证实的 writer 约束。
+
+绝对 deadline 到达（含相等）时，未证实停止的 Rclone 点保持 preparing/verifying、locator、
+signed attempt 和原期限，持久 outcome_unknown/publication_deadline_exceeded；不续租、
+不调用 provider、不激活 manifest、不复活 attempt。重复处理无 I/O、revision/attempt 增量
+或新 lease。SQL LIMIT 前排除精确过期 hold，避免后续候选饥饿。已证实停止才可沿原期限
+规则终止；提前终止还需权威 incomplete 证据。此保护不使用具有独立语义的 Retention HoldState。
+
+Runtime 在任何 admission/worker 和 disabled early return 前，以及运行中重新启用时，
+有界 keyset 检查 repository.provider_kind=rclone、failed、semantics 为 xirang_manifest
+或 imported_baseline 的全部历史点。没有版本化正面 writer 停止事实，或 DB/codec 错误，
+均拒绝就绪；保持原 failed 和数据，不回填停止证据。失败码、TaskRun 终态、年龄、释放 lease
+及后来成功均不是停止证明。这可能使有历史 failed 点的安装无法启动；未知非终态 writer
+到期后持续阻写，也可能按全局 readiness 阻止重启。本轮没有自动恢复或解锁能力。
+
+该可选 JSON 字段是持久格式兼容变化：升级前必须停止旧 owners，禁止新旧 writer 混跑；
+写入后不能直接用旧 binary 读取。删除字段或恢复数据库快照不能证明远端 writer 已停止。
+历史 committed 点不因上述 failed 库存而被宣称已恢复所有丢失的退出证据。
+
 ### Rclone 命令配置所有权
 
 所有携带 bound config 的普通读取与受管命令，经执行 Node 的同一认证与审计上下文使用 SFTP，将不超过 64 KiB 的原始字节写入规范 home 下 `.xirang/rclone-command-config/<随机操作ID>/rclone.conf`。每命令独占目录和父目录为 0700，配置与随机 owner 标记为 0600；成功写入、关闭并重读校验大小与 SHA256 后才启动命令，不追加末尾换行。操作目录由原子创建取得，不复用 publication attempt 或长期节点配置。Rclone 可在该目录正常改写、备份及原子替换配置；数据库 bound bytes/revision 不回写，也不跨命令缓存探测结果。

@@ -180,6 +180,19 @@ jobs:
             "${POSTGRES_SERVICE_CONTAINER}" \
             bash /tmp/xirang-contract/scripts/postgres-backup-restore.integration.test.sh
 
+  cron-backup:
+    name: Isolated Cron Backup Roundtrip
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Test isolated cron cleanup protocol
+        run: bash scripts/cron-backup-isolated.test.sh
+
+      - name: Run isolated SQLite and PostgreSQL cron roundtrip
+        run: bash scripts/cron-backup-isolated.integration.test.sh
+
   frontend:
     name: Frontend Test & Build
     runs-on: ubuntu-latest
@@ -222,7 +235,7 @@ jobs:
         run: env -u NODE_ENV npx playwright install --with-deps chromium firefox webkit
 
       - name: Run backup-asset Playwright matrix
-        run: env -u NODE_ENV npm run e2e
+        run: env -u NODE_ENV npm run e2e:evidence -- --config=playwright.config.ts --output=.tmp/agent/e2e-default
       - name: Prepare real-backend smoke build cache
         working-directory: backend
         run: go build -o /dev/null ./cmd/server
@@ -231,7 +244,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y openssh-server sqlite3
 
       - name: Run real-backend Playwright lifecycle
-        run: env -u NODE_ENV npx playwright test --config=playwright.real-backend.config.ts --project=chromium
+        run: env -u NODE_ENV npm run e2e:evidence -- --config=playwright.real-backend.config.ts --output=.tmp/agent/e2e-real-backend
+
+      - name: Upload browser execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-execution-evidence
+          path: |
+            .tmp/agent/e2e-default
+            .tmp/agent/e2e-real-backend
+          include-hidden-files: true
+          if-no-files-found: error
 
       - name: Check frontend bundle budget
         # Requires dist/ produced by 'npm run check' (which includes build)
@@ -249,6 +273,101 @@ jobs:
           COVERED=$(grep -c "^DA:" coverage/lcov.info || echo 0)
           echo "Frontend source files: ${LINES}"
           echo "Frontend covered lines entries: ${COVERED}"
+
+  account-recovery:
+    name: Account Recovery Browser Acceptance
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: env -u NODE_ENV npm ci
+
+      - name: Verify Python fixture prerequisite
+        run: python3 --version
+
+      - name: Install Chromium
+        run: env -u NODE_ENV npx playwright install --with-deps chromium
+
+      - name: Run safe account recovery acceptance
+        run: env -u NODE_ENV -u DEBUG -u PWDEBUG npm run e2e:evidence -- --config=playwright.account-recovery.config.ts --project=chromium --output=.tmp/agent/e2e-account-recovery
+
+      - name: Upload safe account recovery counts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: account-recovery-execution-evidence
+          path: .tmp/agent/e2e-account-recovery
+          include-hidden-files: true
+          if-no-files-found: error
+
+  walkthrough:
+    name: Complete Browser Walkthrough
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: env -u NODE_ENV npm ci
+
+      - name: Install Chromium
+        run: env -u NODE_ENV npx playwright install --with-deps chromium
+
+      - name: Execute all walkthrough scenarios
+        run: env -u NODE_ENV npm run walkthrough -- --output .tmp/agent/walkthrough-ci
+
+      - name: Compile walkthrough evidence
+        if: always()
+        working-directory: .
+        run: node web/scripts/compile-walkthrough-evidence.mjs --run .tmp/agent/walkthrough-ci
+
+      - name: Execute Docker and history state scenarios
+        if: always()
+        run: env -u NODE_ENV npm run e2e:evidence -- --config=playwright.surface-states.config.ts --output=.tmp/agent/e2e-surface-states
+
+      - name: Compile Docker and history state evidence
+        if: always()
+        working-directory: .
+        run: node web/scripts/compile-walkthrough-evidence.mjs --surface-run .tmp/agent/e2e-surface-states
+
+      - name: Upload walkthrough and state evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: walkthrough-execution-evidence
+          path: |
+            .tmp/agent/walkthrough-ci
+            .tmp/agent/e2e-surface-states
+          include-hidden-files: true
+          if-no-files-found: error
 
   docker-build:
     name: Docker Build (${{ matrix.arch }})
@@ -277,6 +396,9 @@ jobs:
 
       - name: Self-test asset-content Nginx checker
         run: bash scripts/check-asset-content-nginx.test.sh
+
+      - name: Run asset-content Nginx live gateway probe
+        run: bash scripts/check-asset-content-nginx-runtime.sh
 
       - name: Check Compose configuration
         run: bash scripts/check-compose-config.sh

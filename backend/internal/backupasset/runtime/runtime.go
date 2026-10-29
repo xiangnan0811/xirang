@@ -182,59 +182,62 @@ func terminalizeExportRuntimeLifecycle(
 // admission, and guarded legacy Restic callers. It does not own Task Manager;
 // callback ports are set explicitly before StartupPass.
 type Runtime struct {
-	foundation              *backupasset.FoundationService
-	settings                *settings.Service
-	repository              *repository.Service
-	publication             *repository.PublicationService
-	resticStrategy          provider.PublicationStrategy
-	rsyncStrategy           provider.PublicationStrategy
-	rcloneStrategy          provider.PublicationStrategy
-	admission               *AdmissionController
-	worker                  *PublicationWorker
-	healthWorker            *RcloneHealthWorker
-	catalogService          *catalog.Service
-	catalogIndexer          *catalog.Indexer
-	catalogWorker           *CatalogWorker
-	catalogAudit            repository.AssetAuditSink
-	keyring                 *backupasset.Keyring
-	searchService           *search.Service
-	searchIndexer           *search.Indexer
-	searchIngest            *search.ContentIngestService
-	searchWorker            *SearchWorker
-	overlayService          *overlay.Service
-	searchReady             *atomic.Bool
-	contentBroker           *content.Broker
-	contentAuthorizer       *runtimeContentAuthorizer
-	contentService          *contentDeliveryMux
-	exportDelivery          *managedExportDeliveryFacade
-	contentBudget           *content.BudgetService
-	contentAudit            *content.ContentAuditService
-	contentReconciler       *content.Reconciler
-	contentReady            *atomic.Bool
-	contentManager          contentRuntimeManager
-	exportManager           exportRuntimeManager
-	recoveryManager         recoveryRuntimeManager
-	recoverySourceNamespace recovery.RecoverySourceNamespaceAuthority
-	recoveryTargetRoots     *managedRecoveryTargetRootFacade
-	recoveryDowngrade       *managedRecoveryDowngradeFacade
-	nodeWriteCoordinator    *NodeWriteCoordinator
-	recoveryAuthorization   *managedRecoveryAuthorizationFacade
-	recoveryAPI             *recovery.APIService
-	recoveryOperations      *managedRecoveryAPIFacade
-	recoveryResults         *managedRecoveryResultFacade
-	processingManager       *managedProcessingRuntime
-	archiveMemberService    *managedArchiveMemberFacade
-	retentionWorker         *retention.Worker
-	retentionPolicies       *retention.PolicyService
-	retentionHolds          *retention.HoldService
-	retentionPurge          *retention.PurgeService
-	managedTaskRetention    task.ManagedRecoveryPointRetention
-	inventory               *ga.InventoryService
-	enablement              ga.ReadinessSource
-	transitioner            publication.FeatureTransitioner
-	metrics                 publication.Metrics
-	gaMetrics               ga.Metrics
-	featureTransitionFenced atomic.Bool
+	foundation  *backupasset.FoundationService
+	settings    *settings.Service
+	repository  *repository.Service
+	publication *repository.PublicationService
+	// Production runtimes require the durable inventory before enabling writes.
+	// Lightweight enablement-only fixtures have no publication owner.
+	rcloneWriterInventoryRequired bool
+	resticStrategy                provider.PublicationStrategy
+	rsyncStrategy                 provider.PublicationStrategy
+	rcloneStrategy                provider.PublicationStrategy
+	admission                     *AdmissionController
+	worker                        *PublicationWorker
+	healthWorker                  *RcloneHealthWorker
+	catalogService                *catalog.Service
+	catalogIndexer                *catalog.Indexer
+	catalogWorker                 *CatalogWorker
+	catalogAudit                  repository.AssetAuditSink
+	keyring                       *backupasset.Keyring
+	searchService                 *search.Service
+	searchIndexer                 *search.Indexer
+	searchIngest                  *search.ContentIngestService
+	searchWorker                  *SearchWorker
+	overlayService                *overlay.Service
+	searchReady                   *atomic.Bool
+	contentBroker                 *content.Broker
+	contentAuthorizer             *runtimeContentAuthorizer
+	contentService                *contentDeliveryMux
+	exportDelivery                *managedExportDeliveryFacade
+	contentBudget                 *content.BudgetService
+	contentAudit                  *content.ContentAuditService
+	contentReconciler             *content.Reconciler
+	contentReady                  *atomic.Bool
+	contentManager                contentRuntimeManager
+	exportManager                 exportRuntimeManager
+	recoveryManager               recoveryRuntimeManager
+	recoverySourceNamespace       recovery.RecoverySourceNamespaceAuthority
+	recoveryTargetRoots           *managedRecoveryTargetRootFacade
+	recoveryDowngrade             *managedRecoveryDowngradeFacade
+	nodeWriteCoordinator          *NodeWriteCoordinator
+	recoveryAuthorization         *managedRecoveryAuthorizationFacade
+	recoveryAPI                   *recovery.APIService
+	recoveryOperations            *managedRecoveryAPIFacade
+	recoveryResults               *managedRecoveryResultFacade
+	processingManager             *managedProcessingRuntime
+	archiveMemberService          *managedArchiveMemberFacade
+	retentionWorker               *retention.Worker
+	retentionPolicies             *retention.PolicyService
+	retentionHolds                *retention.HoldService
+	retentionPurge                *retention.PurgeService
+	managedTaskRetention          task.ManagedRecoveryPointRetention
+	inventory                     *ga.InventoryService
+	enablement                    ga.ReadinessSource
+	transitioner                  publication.FeatureTransitioner
+	metrics                       publication.Metrics
+	gaMetrics                     ga.Metrics
+	featureTransitionFenced       atomic.Bool
 
 	mu          sync.Mutex
 	searchKeyMu sync.Mutex
@@ -1274,7 +1277,8 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	return &Runtime{
 		foundation: foundation, settings: dependencies.Settings,
 		repository: repositoryService, publication: publicationService,
-		resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, rcloneStrategy: rcloneStrategy,
+		rcloneWriterInventoryRequired: true,
+		resticStrategy:                resticStrategy, rsyncStrategy: rsyncStrategy, rcloneStrategy: rcloneStrategy,
 		admission: admission, worker: worker, healthWorker: healthWorker,
 		catalogService: catalogService, catalogIndexer: catalogIndexer, catalogWorker: catalogWorker, catalogAudit: auditSink,
 		keyring: keyring, searchService: searchService, searchIndexer: searchIndexer, searchIngest: searchIngest,
@@ -2071,6 +2075,13 @@ func (runtime *Runtime) transitionFeatureWithOperationContextAndRestore(
 		}
 	}
 	if configs.Prospective.Enabled {
+		if runtime.publication != nil {
+			if err := runtime.publication.CheckFailedRcloneWriters(ctx); err != nil {
+				return err
+			}
+		} else if runtime.rcloneWriterInventoryRequired {
+			return fmt.Errorf("%w: Rclone writer inventory unavailable", backupasset.ErrInvalidState)
+		}
 		if err := runtime.authorizeEnablement(ctx); err != nil {
 			return err
 		}
@@ -2502,6 +2513,9 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 	runtime.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := runtime.publication.CheckFailedRcloneWriters(ctx); err != nil {
+		return err
 	}
 	if err := runtime.authorizeRequestedStartupEnablement(ctx); err != nil {
 		if !startupEnablementBlocked(err) {

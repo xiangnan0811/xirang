@@ -275,7 +275,7 @@ function TaskRunDetailContent({ run, token, onBack }: Props) {
           <div className="max-h-80 overflow-y-auto rounded-lg border border-border/60 bg-card/30 p-3 thin-scrollbar">
             {logs.map((log) => (
               <div key={log.id} className="flex gap-2 py-0.5 text-xs font-mono">
-                <span className="shrink-0 text-muted-foreground/60">{log.timestamp}</span>
+                <span className="shrink-0 text-muted-foreground">{log.timestamp}</span>
                 <span className={logLevelClass(log.level)}>{log.message}</span>
               </div>
             ))}

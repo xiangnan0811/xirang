@@ -1722,7 +1722,7 @@ func (probe *runtimeManagedContentPrepareFailureProbe) PrepareDisable(ctx contex
 func TestFeatureEnableContentPrepareFailureRunsBoundedCleanupAndFencesFailedCompensation(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	prepareRuntimeIdentityFixture(t, db)
-	if err := db.AutoMigrate(&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{}); err != nil {
+	if err := db.AutoMigrate(&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{}, &model.BackupRepository{}, &model.RecoveryPoint{}); err != nil {
 		t.Fatal(err)
 	}
 	settingsService := settings.NewService(db)

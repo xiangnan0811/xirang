@@ -481,7 +481,7 @@ func TestRcloneCommandTransportDeadlineExpiresDuringStaging(t *testing.T) {
 }
 
 func TestRcloneCommandTransportExitEvidenceControlsCleanup(t *testing.T) {
-	for _, scenario := range []string{"pre-start", "setup-failure", "ambiguous-start", "unknown-exit", "confirmed-failed-exit"} {
+	for _, scenario := range []string{"pre-start", "setup-failure", "unmarked-open-failure", "ambiguous-start", "unknown-exit", "confirmed-failed-exit"} {
 		t.Run(scenario, func(t *testing.T) {
 			home := configTransportHome(t)
 			config := []byte("[remote]\ntype = local\n# " + configTransportCanary)
@@ -503,7 +503,10 @@ func TestRcloneCommandTransportExitEvidenceControlsCleanup(t *testing.T) {
 					return nil, errors.Join(sshutil.ErrCommandStart, cause)
 				}
 				if scenario == "setup-failure" {
-					return nil, errors.Join(sshutil.ErrCommandFailed, cause)
+					return nil, errors.Join(sshutil.ErrCommandNotStarted, sshutil.ErrCommandFailed, cause)
+				}
+				if scenario == "unmarked-open-failure" {
+					return nil, cause
 				}
 				execution := newConfigTransportExecution()
 				execution.joinErr = errors.Join(sshutil.ErrCommandFailed, cause)

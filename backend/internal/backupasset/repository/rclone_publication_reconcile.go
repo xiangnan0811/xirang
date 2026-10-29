@@ -666,6 +666,15 @@ func (service *PublicationService) commitReconciledRcloneManifest(
 		if err := service.lease.ValidateFenceTx(ctx, tx, claim.lease.Fence); err != nil {
 			return err
 		}
+		if claim.consistency.RcloneWriterQuiesced == nil || !*claim.consistency.RcloneWriterQuiesced {
+			if err := service.lease.ReleaseTx(ctx, tx, claim.lease.Fence); err != nil {
+				return err
+			}
+			outcome = publication.Outcome{RepositoryID: point.RepositoryID, RecoveryPointID: point.ID,
+				TaskID: claim.attempt.TaskID, TaskRunID: claim.attempt.TaskRunID,
+				State: backupasset.RecoveryPointVerifying, ProviderCommitRecorded: true, Code: backupasset.FailureProviderOutcomeUnknown}
+			return nil
+		}
 		locator, err := decodeManagedRclonePointLocator(point.EncryptedProviderLocator)
 		if err != nil || !reflect.DeepEqual(locator, claim.locator) || point.ManifestDigest != fact.Commit.ManifestIndexDigest ||
 			point.EntryCount != int64(fact.Commit.ManifestEntryCount) || point.LogicalBytes != int64(fact.Commit.LogicalBytes) {
@@ -740,7 +749,17 @@ func (service *PublicationService) failRcloneReconciliation(
 		if err := service.lease.ValidateFenceTx(ctx, tx, fence); err != nil {
 			return err
 		}
+		if claimConsistency.RcloneWriterQuiesced == nil || !*claimConsistency.RcloneWriterQuiesced {
+			if err := service.lease.ReleaseTx(ctx, tx, fence); err != nil {
+				return err
+			}
+			outcome = publication.Outcome{RepositoryID: point.RepositoryID, RecoveryPointID: point.ID,
+				TaskID: attempt.TaskID, TaskRunID: attempt.TaskRunID, State: expectedState,
+				ProviderCommitRecorded: expectedState == backupasset.RecoveryPointVerifying, Code: backupasset.FailureProviderOutcomeUnknown}
+			return nil
+		}
 		consistency := claimConsistency
+		consistency.Completion = ""
 		consistency.Code = code
 		encoded, err := backupasset.EncodePublicationConsistency(consistency)
 		if err != nil {

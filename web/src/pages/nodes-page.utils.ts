@@ -90,7 +90,7 @@ export type NodesViewProps = {
   onDeleteNode: (node: NodeRecord) => void;
   handleTriggerBackup: (id: number, name: string) => void;
   onOpenTerminal?: (node: NodeRecord) => void;
-  onOpenFileBrowser?: (node: NodeRecord) => void;
+  onOpenFileBrowser?: (node: NodeRecord, opener?: EventTarget | null) => void;
   onEmergencyBackup?: (nodeId: number, nodeName: string) => void;
   onMigrate?: (node: NodeRecord) => void;
   emergencyNodeId?: number | null;

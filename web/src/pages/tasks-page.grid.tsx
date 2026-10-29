@@ -246,7 +246,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                   size="icon"
                   className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                   aria-label={t('tasks.viewHistoryAriaLabel', { id: task.id })}
-                  onClick={() => onViewHistory(task)}
+                  onClick={(event) => onViewHistory(task, event.currentTarget)}
                 >
                   <History className="size-4" />
                 </Button>

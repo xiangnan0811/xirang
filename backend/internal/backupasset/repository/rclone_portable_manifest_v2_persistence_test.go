@@ -438,9 +438,7 @@ func runPortableManifestV2Persistence(t *testing.T, engine string) {
 	if len(writes) < 3 || writes[0] != "attempt.json" || writes[len(writes)-1] != "commit.json" {
 		t.Fatalf("portable control writes were not commit-last: %v", writes)
 	}
-	if err := execution.Abandon(backupasset.ErrPublicationSessionAbandoned); err != nil {
-		t.Fatal(err)
-	}
+	deferStoppedRcloneTestPublication(t, execution)
 	expirePortablePersistencePublicationLease(t, db, attempt.RecoveryPointID, clock)
 	// Reconstruct the publication service before either durable transition: no
 	// prepared source bundle survives the restart.

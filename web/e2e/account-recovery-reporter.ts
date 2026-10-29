@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { FullResult, Reporter, TestCase, TestError, TestResult } from "@playwright/test/reporter";
+import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestError, TestResult } from "@playwright/test/reporter";
+import { RunEvidence } from "./run-evidence-reporter";
 
 export const recoveryStages = [
   "runtime-start", "runtime-ready", "identity-password", "identity-setup",
@@ -57,21 +58,50 @@ export function redactRecoveryError(error: TestError): string[] {
 
 // Playwright call logs include fill() values. Output only fixed stages, numeric
 // HTTP status and allowlisted source locations, including for runner failures.
+// Structured evidence and counts carry that same allowlist and nothing more;
+// the runner keeps them outside the fixture-owned output that success removes.
 export default class RecoveryReporter implements Reporter {
+  private readonly evidence = new RunEvidence();
+  private readonly finalStatuses = new Map<string, TestResult["status"]>();
+  private selected = 0;
+  private runnerErrors = 0;
+  onBegin(config: FullConfig, suite: Suite): void {
+    this.selected = suite.allTests().length;
+    this.evidence.onBegin(config, suite);
+  }
+  onTestBegin(test: TestCase, result: TestResult): void { this.evidence.onTestBegin(test, result); }
   onTestEnd(test: TestCase, result: TestResult): void {
     console.log(`${result.status}: ${test.title}`);
     const stage = test.annotations.findLast(annotation => annotation.type === "recovery-stage")?.description;
     const status = test.annotations.findLast(annotation => annotation.type === "recovery-http")?.description;
-    if (stage && recoveryStages.includes(stage as RecoveryStage)) console.log(`  stage=${stage}`);
-    if (status && /^[1-5]\d{2}$/.test(status)) console.log(`  http=${status}`);
+    const safeStage = stage && recoveryStages.includes(stage as RecoveryStage) ? stage : undefined;
+    const safeStatus = status && /^[1-5]\d{2}$/.test(status) ? Number(status) : undefined;
+    if (safeStage) console.log(`  stage=${safeStage}`);
+    if (safeStatus) console.log(`  http=${safeStatus}`);
+    const source: string[] = [];
     for (const error of result.errors) {
       const frames = redactRecoveryError(error);
-      console.log(frames.length > 0 ? `  source=${frames.join(",")}` : "  source=unavailable");
+      const location = frames.length > 0 ? frames.join(",") : "unavailable";
+      source.push(location);
+      console.log(`  source=${location}`);
     }
+    this.finalStatuses.set(test.id, result.status);
+    this.evidence.onTestEnd(test, result, { ...(safeStage ? { stage: safeStage } : {}), ...(safeStatus ? { http: safeStatus } : {}), source });
   }
   onError(error: TestError): void {
     const frames = redactRecoveryError(error);
     console.error(`Recovery runner failed; source=${frames.length > 0 ? frames.join(",") : "unavailable"}`);
+    this.runnerErrors += 1;
+    this.evidence.onError();
   }
-  onEnd(result: FullResult): void { console.log(`Recovery browser suite: ${result.status}`); }
+  onEnd(result: FullResult): void {
+    const counts: Record<TestResult["status"], number> = { passed: 0, failed: 0, timedOut: 0, skipped: 0, interrupted: 0 };
+    for (const status of this.finalStatuses.values()) counts[status] += 1;
+    // A native --list load executes nothing, so only real runs report counts.
+    if (!process.argv.includes("--list")) {
+      console.log(`Recovery counts: selected=${this.selected} ended=${this.finalStatuses.size} missing=${this.selected - this.finalStatuses.size} passed=${counts.passed} failed=${counts.failed} timedOut=${counts.timedOut} skipped=${counts.skipped} interrupted=${counts.interrupted} runnerErrors=${this.runnerErrors}`);
+    }
+    console.log(`Recovery browser suite: ${result.status}`);
+    this.evidence.onEnd(result);
+  }
 }

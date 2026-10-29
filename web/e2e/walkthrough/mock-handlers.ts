@@ -198,6 +198,7 @@ async function replyFor(
   if (method === "GET" && apiPath === "/auth/me") {
     return ok({ id: 1, username: "admin", role: "admin", totp_enabled: true, onboarded: true });
   }
+  if (method === "GET" && apiPath === "/auth/2fa/recovery-codes") return ok({ remaining: 8 });
   if (method === "POST" && (apiPath === "/auth/logout" || apiPath === "/me/onboarded")) {
     return ok({ ok: true });
   }

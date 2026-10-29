@@ -38,7 +38,12 @@ func TestRcloneVersioningRenewalPreservesRealHistoryAndDeadlines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := oldExecution.Abandon(backupasset.ErrPublicationSessionAbandoned); err != nil {
+	// This fixture never started a provider writer. Persist that positive fact
+	// while keeping the point nonterminal until its immutable deadline.
+	if err := oldExecution.Defer(ctx, publication.Deferral{
+		Completion: backupasset.CompletionOutcomeUnknown, Code: backupasset.FailureProviderOutcomeUnknown,
+		RcloneWriterQuiesced: new(true),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := fixture.db.Model(&model.TaskRun{}).Where("id = ?", secondRun.ID).Updates(map[string]any{"status": "success", "finished_at": fixture.now}).Error; err != nil {

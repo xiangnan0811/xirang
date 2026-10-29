@@ -348,6 +348,12 @@ func TestRcloneDeferralPersistsTypedOutcomeWithoutRewritingTaskRun(t *testing.T)
 	if err := execution.Defer(context.Background(), deferral); err != nil {
 		t.Fatal(err)
 	}
+	if err := execution.Fail(context.Background(), backupasset.FailureProviderNonzeroExit); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("unknown writer was terminalized by a later failure call: %v", err)
+	}
+	if err := execution.Reject(context.Background(), backupasset.FailurePublicationPreconditionMissing); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("unknown writer was terminalized by a later rejection: %v", err)
+	}
 	var replayed model.RecoveryPoint
 	if err := fixture.db.First(&replayed, "id = ?", point.ID).Error; err != nil {
 		t.Fatal(err)

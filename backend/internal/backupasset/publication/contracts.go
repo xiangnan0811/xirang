@@ -319,8 +319,9 @@ type Run struct {
 }
 
 type Deferral struct {
-	Completion backupasset.ProviderCompletionClass
-	Code       backupasset.PublicationFailureCode
+	Completion           backupasset.ProviderCompletionClass
+	Code                 backupasset.PublicationFailureCode
+	RcloneWriterQuiesced *bool
 }
 
 type Outcome struct {

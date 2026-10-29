@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Rclone 发布结果与持久写入保护
+
+- 区分明确未尝试发布变更、真实非零退出、停止后的语义失败和未知结果；普通任务与导入 baseline 共用分类并保留原始 cause。未知 transport/SDK 或 commit 回读结果保留非终态并抑制自动重试，允许重试时创建全新运行、恢复点、attempt 和前缀。
+- 持久保存全部 publication writer 的停止事实。期限到达后没有正面证据的点继续保持 preparing/verifying 和原 locator，不续租、不调用 provider、不激活清单；认证 commit、本地 join、TERM、lease 到期或后来成功均不能单独解除保护。持续 hold 可能阻止新写入及 server 重启，当前没有自动恢复或解锁能力。
+- 启动（包括功能关闭时）和重新启用前检查全部历史 failed 受管/导入 Rclone 点；缺少版本化正面 writer 停止事实或数据库/解码失败即拒绝就绪，保留历史数据。这会使有此类历史点的安装可能无法启动，升级前必须评估可用性影响。
+- 新增可选持久 JSON 字段 rclone_writer_quiesced，无新增 SQL 列迁移，但旧 binary 严格解码不兼容。升级前暂停相关任务，停止并排空旧 Core、scheduler、executor 和相关处理/清理 owners，保全数据库、匹配密钥、配置及远端数据；禁止新旧 writer 混跑，写入新字段后不能直接回退旧 binary。删除字段、手改事实或恢复数据库快照均不能证明远端 writer 已停止。既有稳定身份密钥与 Portable V2 降级限制继续适用；新版不撤销旧版已发生的远端副作用。
+
+### 持续验证范围
+
+- cron 双引擎完整 roundtrip 通过独占 Docker 网络、PG18 tmpfs 和保留的 Go 工具镜像持续执行；原生 amd64/arm64 CI 增加真实 Nginx gateway probe，清理失败使验收失败。直接 runner 与合成 upstream 不证明时钟调度、Broker 授权或生产部署。
+- e2e 与 Playwright 配置纳入严格类型门禁并保持 Node20 兼容；持续执行默认三浏览器、真实后端全部项目、独立账户恢复和原 464 场景 walkthrough。安全事件区分首次结果、重试、缺失和未选择，不能以 list 库存代替执行；共享汇编逻辑与 CLI 入口分离，避免循环导入使 walkthrough 执行后无法完成证据记录。AWS live 继续搁置，不作支持或生产部署声明。
+- 节点文件浏览与任务执行历史弹窗关闭后恢复到实际触发控件；Docker 卷表格限制在可命名、可聚焦的局部滚动区域，移动端长卷名和挂载路径可换行并用方向键浏览。完整及空 partial 结果的警告使用现有可读警告文字颜色，任务日志时间戳移除降低可读性的透明度。更新并重新加载前端后生效，无新增 API、运行时配置或 SQL 迁移；旧前端仍有原焦点、溢出及对比度问题。
+- 独立 Docker/history 状态矩阵保留加载、失败、空态、分页、身份变化和迟到响应证据；真实浏览器记录 axe 与 computed 对比度，未测量及无法判定项保持未知，不以零违规或截图宣称全站 WCAG 符合。
+
 ## [0.73.6](https://github.com/xiangnan0811/xirang/compare/v0.73.5...v0.73.6) (2026-10-29)
 
 
