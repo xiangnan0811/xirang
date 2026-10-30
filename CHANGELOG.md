@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.8](https://github.com/xiangnan0811/xirang/compare/v0.73.7...v0.73.8) (2026-10-30)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** record recent assets after successful content access ([#663](https://github.com/xiangnan0811/xirang/issues/663)) ([98b2396](https://github.com/xiangnan0811/xirang/commit/98b2396bc823e285df367d32febc8bbcc4eea782))
+
 ### 成功内容访问后的最近记录
 
 - 修复真实内容访问未触发 Recent 的缺口：同一 delivery grant 首个完整完成并持久 finalize 的成功 GET（200/206）最多尝试记录一次，覆盖普通、有限、派生预览及资产下载；空文件计入，HEAD、列表、元数据、只发票、拒绝、中断及其他专属交付不计入。有限预览或 Range 完成不代表下载了整个文件，新 grant（含自动续票）是新的记录机会。
@@ -19,13 +26,6 @@
 - 移除不可达的旧快照浏览、搜索和恢复弹窗、专属 API wrapper 与中英文文案，以及旧快照文件索引器和无用依赖注入。任务运行历史、资产工作区/Search/恢复深链、四条兼容读取接口的 410、live restore 授权和后台快照异常检测保持现状。
 - 清理五个无消费者的 UI 模块、废弃凭据类型别名、多余错误类型导出、零消费者告警包装及 handler 路径副本；保留任务状态动画、活的告警方法和路径隔离实现，不宣称未测量的性能或安全收益。
 - 无新增 API、配置或数据库迁移，不删除历史索引表、差异历史或已发布迁移；旧 `SNAPSHOT_INDEX_MAX_SECONDS` 不再有消费者。清理随新版 Core 和页面加载生效，不改变在途备份/恢复或现行保留策略；既有版本的密钥、持久格式和降级限制继续适用。
-
-## [0.73.8](https://github.com/xiangnan0811/xirang/compare/v0.73.7...v0.73.8) (2026-10-30)
-
-
-### 🐛 Bug Fixes
-
-* **backend:** record recent assets after successful content access ([#663](https://github.com/xiangnan0811/xirang/issues/663)) ([98b2396](https://github.com/xiangnan0811/xirang/commit/98b2396bc823e285df367d32febc8bbcc4eea782))
 
 ## [0.73.7](https://github.com/xiangnan0811/xirang/compare/v0.73.6...v0.73.7) (2026-10-29)
 
