@@ -115,10 +115,11 @@ type FinalizeIntent struct {
 }
 
 type Finalization struct {
-	RequestID        string
-	State            RequestState
-	ChargedBytes     int64
-	AlreadyFinalized bool
+	RequestID          string
+	State              RequestState
+	ChargedBytes       int64
+	AlreadyFinalized   bool
+	FirstSuccessfulGET bool
 }
 
 type reservationSpec struct {
@@ -274,6 +275,7 @@ func (service *BudgetService) Finalize(ctx context.Context, intent FinalizeInten
 	now := service.now().UTC()
 	var finalization Finalization
 	err = service.transactionWithRetry(ctx, func(tx *gorm.DB) error {
+		finalization = Finalization{}
 		scopes := make([]model.BackupAssetDeliveryUsage, 0, len(keys))
 		for _, key := range keys {
 			usage, lockErr := service.lockExistingUsage(tx, key)
@@ -305,6 +307,18 @@ func (service *BudgetService) Finalize(ctx context.Context, intent FinalizeInten
 		}
 		if request.Version != intent.ExpectedRequestVersion {
 			return ErrReservationStale
+		}
+
+		firstSuccessfulGET := false
+		if grant.ResourceKind == string(DeliveryResourceBackupAsset) && request.Method == http.MethodGet &&
+			intent.State == RequestSucceeded && (intent.HTTPStatus == http.StatusOK || intent.HTTPStatus == http.StatusPartialContent) {
+			var previous model.BackupAssetDeliveryRequest
+			result := tx.Select("id").Where("grant_id = ? AND method = ? AND state = ?", grant.ID, http.MethodGet, RequestSucceeded).
+				Limit(1).Find(&previous)
+			if result.Error != nil {
+				return result.Error
+			}
+			firstSuccessfulGET = result.RowsAffected == 0
 		}
 
 		charged, evidenceValid := finalCharge(request.ReservedBytes, intent)
@@ -361,10 +375,15 @@ func (service *BudgetService) Finalize(ctx context.Context, intent FinalizeInten
 		if err := service.updateRequest(tx, request); err != nil {
 			return err
 		}
-		finalization = Finalization{RequestID: request.ID, State: intent.State, ChargedBytes: charged}
+		finalization = Finalization{
+			RequestID: request.ID, State: intent.State, ChargedBytes: charged, FirstSuccessfulGET: firstSuccessfulGET,
+		}
 		return nil
 	})
-	return finalization, err
+	if err != nil {
+		return Finalization{}, err
+	}
+	return finalization, nil
 }
 
 func ComputeReservationBytes(responseBytes, providerLimit int64, probePossible bool) (int64, error) {

@@ -34,6 +34,9 @@ Catalog `security_state=sealed` 证明 locator 已认证加密，不是非秘密
 - 成功查询后的必要 Search audit 写失败必须使 HTTP 请求失败，不能返回 hits。503 也可由其他 unavailable 原因产生，不能仅凭状态码宣称审计故障。
 - 收藏、批量收藏、标签 assignment、recent mutation 必须在同一事务中先 `AuthorizeAsset(ctx, tx, actor, ref)`，然后 idempotency replay/write；事务外授权不够。overlay 不创建 hold、不改 retention、不复制 source metadata、不写 Provider bytes。
 - 所有 saved search/favorite/tag/recent 是 owner-scoped；quota race、幂等、tombstone/broken/recent cleanup 都保持用户隔离。原数据库丢失不能从 Provider 重建 overlay。
+- Recent 只由同一 delivery grant 的首个持久成功 GET 尝试记录一次：响应为 200/206、当前表示完整传输、源关闭与 heartbeat 成功且内容账本 finalize 已提交。普通、有限及派生预览和资产下载适用；有限预览或 Range 完成不表示整文件下载完成，空文件成功 GET 也计入。HEAD、只发票、列表/元数据、拒绝、中断以及 RecoveryResult、archive/export 专属交付不计入；同 grant 并发 Range/重试不重复，新 grant（包括自动续票）是新的计入机会。
+- Recent 是有界尽力的用户状态：配额、限流、授权变化、数据库故障或内容终态提交后的崩溃窗口允许漏记，不将合法内容交付改判失败，不后台补录，也不对同 grant 重试。既有事务内授权、owner 隔离、quota/rate、TTL 和成功审计保持；必要内容审计和预算终态不降级。
+- 清空与正在完成的首次访问按 owner 事务提交顺序线性化，清空不取消在途内容访问。清空只删除 Recent，不删除内容请求账本；已记录旧 grant 的重读不复活条目，清空同 key 重放也不能删除随后新 grant 写入的条目。现有 opaque-ID 分页与 UI 保持。
 
 ## 前端闭合映射与隐私
 

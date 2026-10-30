@@ -1225,7 +1225,10 @@
         {
           "name": "TestContentBehaviorPostgres",
           "required_paths": [
-            "TestContentBehaviorPostgres"
+            "TestContentBehaviorPostgres",
+            "TestContentBehaviorPostgres/FirstSuccessfulGETPerGrant",
+            "TestContentBehaviorPostgres/ConcurrentSuccessfulGETFinalization",
+            "TestContentBehaviorPostgres/FirstSuccessfulGETRollbackDoesNotLeak"
           ]
         }
       ]

@@ -18,6 +18,7 @@ import (
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -177,6 +178,7 @@ type BrokerDependencies struct {
 	SecurityPolicyRevision func(context.Context) (string, error)
 	Audit                  BrokerAudit
 	Budget                 BrokerBudget
+	RecordRecent           func(context.Context, DeliveryActor, backupasset.AssetRef) error
 	Metrics                Metrics
 	TicketMaterial         func() (TicketMaterial, error)
 	RequestID              func() (string, error)
@@ -255,6 +257,7 @@ type Broker struct {
 	securityPolicyRevision func(context.Context) (string, error)
 	audit                  BrokerAudit
 	budget                 BrokerBudget
+	recordRecent           func(context.Context, DeliveryActor, backupasset.AssetRef) error
 	metrics                Metrics
 	ticketMaterial         func() (TicketMaterial, error)
 	requestID              func() (string, error)
@@ -279,7 +282,7 @@ func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
 	if dependencies.DB == nil || dependencies.Now == nil || dependencies.FeatureEnabled == nil ||
 		dependencies.Authorize == nil || dependencies.Session == nil || dependencies.Lease == nil ||
 		dependencies.Source == nil || dependencies.Audit == nil ||
-		dependencies.Budget == nil || dependencies.Config == nil {
+		dependencies.Budget == nil || dependencies.RecordRecent == nil || dependencies.Config == nil {
 		return nil, ErrInvalidBrokerRequest
 	}
 	if (dependencies.RecoveryAuthorize == nil) != (dependencies.RecoverySource == nil) {
@@ -310,7 +313,7 @@ func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
 		session: dependencies.Session, lease: dependencies.Lease,
 		source: dependencies.Source, recoverySource: dependencies.RecoverySource, derived: dependencies.Derived,
 		securityPolicyRevision: dependencies.SecurityPolicyRevision, audit: dependencies.Audit,
-		budget: dependencies.Budget, metrics: dependencies.Metrics,
+		budget: dependencies.Budget, recordRecent: dependencies.RecordRecent, metrics: dependencies.Metrics,
 		ticketMaterial: dependencies.TicketMaterial, requestID: dependencies.RequestID, config: dependencies.Config,
 		assetIssues: make(map[string]*recoveryPointIssueState),
 		leases:      make(map[string]*ContentLeaseSession), assets: make(map[string]AuthorizedAsset),
@@ -829,7 +832,7 @@ func (broker *Broker) Serve(ctx context.Context, request GatewayRequest, writer 
 	)
 	if !registered {
 		cancel()
-		_ = broker.finalizeGatewayRequest(ctx, reservation, RequestFailed, http.StatusServiceUnavailable, RequestFailureInternal, -1, 0, false)
+		_, _ = broker.finalizeGatewayRequest(ctx, reservation, RequestFailed, http.StatusServiceUnavailable, RequestFailureInternal, -1, 0, false)
 		return ErrContentNotFound
 	}
 	defer func() {
@@ -869,13 +872,20 @@ func (broker *Broker) Serve(ctx context.Context, request GatewayRequest, writer 
 			status = 499
 		}
 	}
-	finalizationErr := broker.finalizeGatewayRequest(
+	finalization, finalizationErr := broker.finalizeGatewayRequest(
 		cleanupCtx, reservation, state, status, failure,
 		providerBytes, responseBytes, evidenceKnown,
 	)
 	broker.metrics.ObserveRead(DeliveryAction(grant.Action), metricOutcome)
 	if finalizationErr != nil {
 		return ErrContentUnavailable
+	}
+	if serveErr == nil && finalization.FirstSuccessfulGET && !finalization.AlreadyFinalized &&
+		request.Method == http.MethodGet && (status == http.StatusOK || status == http.StatusPartialContent) &&
+		grant.ResourceKind == string(DeliveryResourceBackupAsset) {
+		if err := broker.recordRecent(cleanupCtx, actor, asset.Ref); err != nil {
+			logger.Module("backup_asset_content").Warn().Str("action", "recent_record").Msg("备份资产最近访问记录失败")
+		}
 	}
 	return serveErr
 }
@@ -1331,7 +1341,7 @@ func (broker *Broker) finalizeGatewayRequest(
 	providerBytes int64,
 	responseBytes int64,
 	evidenceKnown bool,
-) error {
+) (Finalization, error) {
 	finalization, err := broker.budget.Finalize(nonNilContext(ctx), FinalizeIntent{
 		RequestID: reservation.RequestID, ExpectedRequestVersion: reservation.RequestVersion,
 		State: state, HTTPStatus: status, FailureCode: failure,
@@ -1340,7 +1350,7 @@ func (broker *Broker) finalizeGatewayRequest(
 	if err == nil {
 		broker.metrics.AddBytes(MetricBytesCharged, finalization.ChargedBytes)
 	}
-	return err
+	return finalization, err
 }
 
 func (broker *Broker) beginIssue() error {

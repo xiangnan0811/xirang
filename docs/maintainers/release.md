@@ -49,6 +49,8 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 保留策略与删除安全的入口回归迁移按 `test` 语义处理：真实 Coordinator、注册删除 adapter 与分页选择验收替换旧 helper 覆盖，不代表新增保留规则、删除权限或远端 Provider 能力。无 API、配置或 schema migration；保留既有版本的密钥、持久格式及降级限制。未生成正式 release 时，说明保留在 `Unreleased`，并核对同 SHA CI 与 Release Please；不要求为测试迁移单独生成镜像，也不将受控本地烟测记为 AWS live 或生产部署。
 
+Recent 内容访问修复的发布验收须覆盖同 grant 首个持久成功 GET、并发 Range 去重、失败不补录、owner 隔离及 clear/replay，并实际运行 required-PostgreSQL 库存中对应的三个 content 子路径。发布说明保留有限预览/Range 不代表整文件下载完成、有界尽力漏记和必需内容审计不降级的边界；新逻辑仅在新版 Core 后续成功请求生效，不回填历史，已有成功 GET 的 grant 不重新记录。无新增 API、配置或 schema migration，保全数据库、匹配密钥与配置，正常换版前排空旧 Core 在途内容请求；回退会恢复缺触发的问题，不删除已有 Recent 或解除既有迁移/恢复限制。真实本地 HTTP、双引擎与浏览器验收不代表 AWS live、生产升级或远端恢复。
+
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
 
 Release Please 自动插入版本标题时可能将原有升级说明留在 `Unreleased`，生成的 PR 正文也可能只有提交摘要。此时原样移动 CHANGELOG 中已审阅的说明，并同步 PR 正文的目标版本节；两处都保留完整风险边界，再提交补充变更。
