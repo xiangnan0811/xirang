@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.8](https://github.com/xiangnan0811/xirang/compare/v0.73.7...v0.73.8) (2026-10-30)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** record recent assets after successful content access ([#663](https://github.com/xiangnan0811/xirang/issues/663)) ([98b2396](https://github.com/xiangnan0811/xirang/commit/98b2396bc823e285df367d32febc8bbcc4eea782))
+
 ### 成功内容访问后的最近记录
 
 - 修复真实内容访问未触发 Recent 的缺口：同一 delivery grant 首个完整完成并持久 finalize 的成功 GET（200/206）最多尝试记录一次，覆盖普通、有限、派生预览及资产下载；空文件计入，HEAD、列表、元数据、只发票、拒绝、中断及其他专属交付不计入。有限预览或 Range 完成不代表下载了整个文件，新 grant（含自动续票）是新的记录机会。
