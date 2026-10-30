@@ -107,49 +107,14 @@ func RaiseTaskFailure(db *gorm.DB, task model.Task, taskRunID *uint, message str
 	return ensureDispatcher(db).RaiseTaskFailure(task, taskRunID, message)
 }
 
-// RaiseTaskFailureForRun emits a causally bounded task failure alert.
-func RaiseTaskFailureForRun(db *gorm.DB, task model.Task, runID uint, message string) error {
-	return ensureDispatcher(db).RaiseTaskFailureForRun(task, runID, message)
-}
-
-// RaiseTaskFailureForRestoreRun emits a causally bounded restore failure alert.
-func RaiseTaskFailureForRestoreRun(db *gorm.DB, task model.Task, runID uint, message string) error {
-	return ensureDispatcher(db).RaiseTaskFailureForRestoreRun(task, runID, message)
-}
-
 // RaiseVerificationFailure emits a warning alert for a backup verification failure.
 func RaiseVerificationFailure(db *gorm.DB, task model.Task, taskRunID *uint, message string) error {
 	return ensureDispatcher(db).RaiseVerificationFailure(task, taskRunID, message)
 }
 
-// RaiseVerificationFailureForRun emits a causally bounded verification warning.
-func RaiseVerificationFailureForRun(db *gorm.DB, task model.Task, runID uint, message string) error {
-	return ensureDispatcher(db).RaiseVerificationFailureForRun(task, runID, message)
-}
-
-// RaiseVerificationFailureForRestoreRun emits a causally bounded restore verification warning.
-func RaiseVerificationFailureForRestoreRun(db *gorm.DB, task model.Task, runID uint, message string) error {
-	return ensureDispatcher(db).RaiseVerificationFailureForRestoreRun(task, runID, message)
-}
-
 // ResolveTaskAlerts resolves all open/acked alerts for the given task.
 func ResolveTaskAlerts(db *gorm.DB, taskID uint, note string) error {
 	return ensureDispatcher(db).ResolveTaskAlerts(taskID, note)
-}
-
-// ResolveTaskAlertsForRun is the causally bounded resolution shim.
-func ResolveTaskAlertsForRun(db *gorm.DB, taskID, runID uint, note string) error {
-	return ensureDispatcher(db).ResolveTaskAlertsForRun(taskID, runID, note)
-}
-
-// ResolveTaskAlertsForRestoreRun is the causally bounded restore resolution shim.
-func ResolveTaskAlertsForRestoreRun(db *gorm.DB, taskID, runID uint, note string) error {
-	return ensureDispatcher(db).ResolveTaskAlertsForRestoreRun(taskID, runID, note)
-}
-
-// RaiseNodeExpiryWarning emits a warning when a node is past or near its expiry date.
-func RaiseNodeExpiryWarning(db *gorm.DB, node model.Node, message string) error {
-	return ensureDispatcher(db).RaiseNodeExpiryWarning(node, message)
 }
 
 // RaiseRetentionFailure emits a warning alert for backup retention failures.
@@ -160,25 +125,6 @@ func RaiseRetentionFailure(db *gorm.DB, policyID uint, policyName string, nodeNa
 // RaiseIntegrityCheckFailure emits a warning alert for backup integrity check failures.
 func RaiseIntegrityCheckFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
 	return ensureDispatcher(db).RaiseIntegrityCheckFailure(policyID, policyName, nodeName, nodeID, message)
-}
-
-// RaiseDrillFailure 触发恢复演练相关的告警。
-// errorCode 必须是以下之一：
-//   - "drill_sandbox_unreachable" (severity=warning) — 沙箱节点离线
-//   - "drill_verify_failed" (severity=critical) — 校验脚本失败
-//   - "drill_restore_failed" (severity=critical) — 恢复本身失败
-func RaiseDrillFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, errorCode string, message string) error {
-	return ensureDispatcher(db).RaiseDrillFailure(policyID, policyName, nodeName, nodeID, errorCode, message)
-}
-
-// ResolveAlertsByErrorCode resolves all open/acked alerts matching the given error code.
-func ResolveAlertsByErrorCode(db *gorm.DB, errorCode string, note string) error {
-	return ensureDispatcher(db).ResolveAlertsByErrorCode(errorCode, note)
-}
-
-// RaiseStorageSpaceAlert emits an alert when local backup storage is low.
-func RaiseStorageSpaceAlert(db *gorm.DB, targetPath string, freeGB float64, totalGB float64, usagePct float64) error {
-	return ensureDispatcher(db).RaiseStorageSpaceAlert(targetPath, freeGB, totalGB, usagePct)
 }
 
 // SendProbe sends a connectivity test message through the given integration channel.

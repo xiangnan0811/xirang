@@ -57,10 +57,6 @@ vi.mock("@/components/task-run-history", () => ({
   TaskRunHistory: () => null,
 }));
 
-vi.mock("@/components/restore-confirm-dialog", () => ({
-  RestoreConfirmDialog: () => null,
-}));
-
 vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: vi.fn(),

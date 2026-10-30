@@ -5,6 +5,7 @@
 ## 告警身份与持久投递
 
 运行时注入 `*alerting.Dispatcher`，使用 `SendAlert/SendProbe/RaiseTaskFailure/ResolveTaskAlerts` 等方法；包级 shim 仅兼容旧调用，不能扩散。构造 fallback 可供尚未注入的现有调用；消除 shim 的改动须有针对改动文件的边界回归，避免测试修改全局告警状态。
+只保留仍有调用方的包级兼容入口；零消费者包装的删除不退役同名 `Dispatcher` 方法，也不改变普通运行与恢复运行的告警因果范围、投递或解决语义。边界回归以真实 Dispatcher 行为为准，不为保留包装层新增全局调用。
 
 自动告警 replay 按 task/run/action 幂等，独立于通知 dedup window，已确认/手动解决的告警也不能重建。自动恢复仅对引发它的普通运行范围有效：迟到成功不解决较新失败，迟到失败不重开已被后来恢复覆盖的故障；restore 故障只被后续成功 restore 解决，与普通 backup 故障互不混解。手动解决是独立操作。
 

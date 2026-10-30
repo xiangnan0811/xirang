@@ -924,7 +924,6 @@ const en = {
     retriedMessage: "Retry triggered, waiting for result...",
     refreshStatus: "Refresh task status",
     fetchLogsFailed: "Failed to fetch task logs",
-    browseSnapshots: "Browse Snapshots",
     searchSnapshots: "Search Files",
     batchExecute: "Batch Execute",
     batchTrigger: "Batch Trigger",
@@ -992,7 +991,6 @@ const en = {
     executionHistory: "Execution History — {{name}}",
     executionRecord: "Execution records for task #{{id}}",
     restoreFromBackup: "Restore from this backup",
-    restoreSuccess: "Restore task triggered, execution ID: #{{runId}}",
     batchTriggerTitle: "Batch Trigger Tasks",
     batchTriggerDesc: "Select tasks to trigger, they will be executed sequentially",
     noTriggerable: "No tasks available to trigger",
@@ -2596,38 +2594,6 @@ const en = {
     minuteExec: "minutes",
   },
 
-  // ── snapshot browser / diff ──
-  snapshots: {
-    loadingList: "Loading snapshots...",
-    loadingFiles: "Loading files...",
-    loadFailed: "Failed to load snapshots",
-    fileLoadFailed: "Failed to load file list",
-    restoreFailed: "Restore failed",
-    restoreTargetPlaceholder: "Restore target path",
-    backToList: "Back to snapshot list",
-    snapshotLabel: "Snapshot {{id}}",
-    restoreCount: "Restore {{count}} items",
-    restoreSuccess: "Restore successful",
-    grantTitle: "Snapshot restore temporary authorization required",
-    grantDescription: "Snapshot restore writes to the restore target. Enter a reason for this restore; after step-up, Xirang creates a short-lived task-scoped grant.",
-    grantReasonLabel: "Authorization reason",
-    grantReasonPlaceholder: "Example: recover removed files",
-    grantReasonHint: "Used only for this grant, up to {{max}} characters. Do not enter file contents, target paths, host details, or keys.",
-    grantReasonRequired: "Please enter an authorization reason.",
-    grantReasonTooLong: "Authorization reason must be {{max}} characters or fewer.",
-    grantSubmit: "Authorize and restore",
-  },
-
-  // ── snapshot search ──
-  snapshotSearch: {
-    placeholder: "Search backup files...",
-    indexing: "Building index, please retry...",
-    searching: "Searching...",
-    noResults: "No matching files",
-    resultCount: "Found {{count}} files",
-    searchHint: "Enter filename to search across snapshots",
-  },
-
   // ── backups page ──
   backups: {
     title: "Backup Management",
@@ -4010,27 +3976,6 @@ const en = {
   // ── storage guide card ──
   storageGuide: {
     title: "Storage Guide",
-  },
-
-  // ── restore confirm dialog ──
-  restore: {
-    confirmTitle: "Confirm Restore",
-    confirmDesc: "This will execute a backup restore. Files at the target path may be overwritten.",
-    title: "Restore Backup",
-    description: "Restore backup data to the specified target path.",
-    sourcePathLabel: "Source Path",
-    backupTargetLabel: "Backup Target",
-    restoreTargetLabel: "Restore Target Path",
-    restoreTargetPlaceholder: "e.g. /tmp/restore",
-    restoreTargetHint: "Files at this path may be overwritten. Choose carefully.",
-    grantReasonLabel: "Authorization reason",
-    grantReasonPlaceholder: "Example: recover removed directories",
-    grantReasonHint: "Used only for this grant, up to {{max}} characters. Do not enter file contents, target paths, host details, or keys.",
-    grantReasonRequired: "Please enter an authorization reason.",
-    grantReasonTooLong: "Authorization reason must be {{max}} characters or fewer.",
-    submit: "Authorize and restore",
-    saving: "Restoring...",
-    failed: "Restore failed",
   },
 
   // ── expiry countdown badge ──

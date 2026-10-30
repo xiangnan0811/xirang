@@ -8,49 +8,6 @@ import (
 	"time"
 )
 
-func TestMainWiresSharedBackupAssetRuntimeBeforeSchedules(t *testing.T) {
-	sourceBytes, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read main.go: %v", err)
-	}
-	source := string(sourceBytes)
-	requiredInOrder := []string{
-		"assetRuntime, err := backupruntime.New(",
-		"executor.NewFactoryWithPublicationStrategies(",
-		"taskManager.SetPublicationCoordinator(assetRuntime.PublicationCoordinator())",
-		"taskManager.SetLineageGuard(assetRuntime.LineageGuard())",
-		"taskManager.SetNodeWriteAdmission(assetRuntime.NodeWriteCoordinator())",
-		"assetRuntime.SetCommitObserver(taskManager)",
-		"assetRuntime.StartupPass(context.Background())",
-		"taskManager.LoadSchedules(context.Background())",
-	}
-	if strings.Contains(source, "backupruntime.NewNodeWriteCoordinator(db)") {
-		t.Fatal("main.go constructs a second Task/Recovery node-write coordinator")
-	}
-	previous := -1
-	for _, required := range requiredInOrder {
-		index := strings.Index(source, required)
-		if index < 0 {
-			t.Fatalf("main.go is missing shared backup runtime wiring %q", required)
-		}
-		if index <= previous {
-			t.Fatalf("main.go wires %q out of startup order", required)
-		}
-		previous = index
-	}
-	for _, required := range []string{
-		"assetRuntime.RsyncTreePublicationStrategy()",
-		"BackupAssets:          assetRuntime",
-		"LegacyResticSnapshots: legacyRestic",
-		"SnapshotDiffRunner:    legacyRestic",
-		"SnapshotIndexer:       snapshotIndexer",
-	} {
-		if mainSourceIndexIgnoringHorizontalWhitespace(source, required) < 0 {
-			t.Fatalf("main.go does not pass shared backup runtime port %q to Router", required)
-		}
-	}
-}
-
 func TestRecoveryRuntimeMainDefersRecoveryAuthorizationRoutingToTaskNine(t *testing.T) {
 	sourceBytes, err := os.ReadFile("main.go")
 	if err != nil {

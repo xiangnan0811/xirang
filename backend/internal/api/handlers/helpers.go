@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -312,47 +311,6 @@ func validateCronSpec(raw string) error {
 		return fmt.Errorf("cron 表达式不合法")
 	}
 	return nil
-}
-
-//nolint:unused // kept for future use in PR5
-func parseCSVEnvList(key string) []string {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	result := make([]string, 0, len(parts))
-	for _, one := range parts {
-		value := strings.TrimSpace(one)
-		if value == "" {
-			continue
-		}
-		result = append(result, filepath.Clean(value))
-	}
-	return result
-}
-
-//nolint:unused // kept for future use in PR5
-func validatePathByPrefix(path string, prefixes []string, label string) error {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return fmt.Errorf("%s 不能为空", label)
-	}
-	if len(prefixes) == 0 {
-		return nil
-	}
-
-	normalizedPath := filepath.Clean(trimmed)
-	for _, prefix := range prefixes {
-		normalizedPrefix := filepath.Clean(strings.TrimSpace(prefix))
-		if normalizedPrefix == "." || normalizedPrefix == "" {
-			continue
-		}
-		if normalizedPath == normalizedPrefix || strings.HasPrefix(normalizedPath, normalizedPrefix+string(filepath.Separator)) {
-			return nil
-		}
-	}
-	return fmt.Errorf("%s 不在允许路径范围内", label)
 }
 
 // validatePathChars 是 defense-in-depth：拒绝路径中的控制字符 (\x00 \r \n)

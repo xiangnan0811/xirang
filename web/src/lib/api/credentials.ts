@@ -10,9 +10,6 @@ import type {
 
 export type { AppCredential, AppCredentialInput, ConfigField, ProfileSchema };
 
-/** @deprecated Use AppCredential (single domain type). */
-export type AppCredentialResponse = AppCredential;
-
 export type AppCredentialReference = {
   id: number;
   name: string;

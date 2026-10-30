@@ -924,7 +924,6 @@ const zh = {
     retriedMessage: "已触发重试，等待任务结果回传",
     refreshStatus: "刷新任务状态",
     fetchLogsFailed: "获取任务日志失败",
-    browseSnapshots: "浏览快照",
     searchSnapshots: "搜索文件",
     batchExecute: "批量执行",
     batchTrigger: "批量触发",
@@ -992,7 +991,6 @@ const zh = {
     executionHistory: "执行历史 — {{name}}",
     executionRecord: "任务 #{{id}} 的执行记录",
     restoreFromBackup: "从此备份恢复",
-    restoreSuccess: "恢复任务已触发，执行 ID: #{{runId}}",
     batchTriggerTitle: "批量触发任务",
     batchTriggerDesc: "选择要触发的任务，系统将依次执行",
     noTriggerable: "暂无可触发的任务",
@@ -2596,38 +2594,6 @@ const zh = {
     minuteExec: "第 {{minute}} 分钟执行",
   },
 
-  // ── snapshot browser / diff ──
-  snapshots: {
-    loadingList: "加载快照列表...",
-    loadingFiles: "加载文件列表...",
-    loadFailed: "加载快照列表失败",
-    fileLoadFailed: "加载文件列表失败",
-    restoreFailed: "恢复失败",
-    restoreTargetPlaceholder: "恢复目标路径",
-    backToList: "返回快照列表",
-    snapshotLabel: "快照 {{id}}",
-    restoreCount: "恢复 {{count}} 项",
-    restoreSuccess: "恢复成功",
-    grantTitle: "需要快照恢复临时授权",
-    grantDescription: "快照恢复会写入恢复目标。请填写本次恢复原因，通过二次验证后系统会创建任务级短时授权。",
-    grantReasonLabel: "授权原因",
-    grantReasonPlaceholder: "例如：恢复误删文件",
-    grantReasonHint: "仅用于本次授权，最多 {{max}} 个字符；请勿填写文件内容、目标路径、主机信息或密钥。",
-    grantReasonRequired: "请填写授权原因。",
-    grantReasonTooLong: "授权原因不能超过 {{max}} 个字符。",
-    grantSubmit: "申请授权并恢复",
-  },
-
-  // ── snapshot search ──
-  snapshotSearch: {
-    placeholder: "搜索备份文件...",
-    indexing: "索引构建中，请稍后重试...",
-    searching: "搜索中...",
-    noResults: "未找到匹配文件",
-    resultCount: "找到 {{count}} 个文件",
-    searchHint: "输入文件名关键词搜索历史快照",
-  },
-
   // ── backups page ──
   backups: {
     title: "备份管理",
@@ -4010,27 +3976,6 @@ const zh = {
   // ── storage guide card ──
   storageGuide: {
     title: "存储引导",
-  },
-
-  // ── restore confirm dialog ──
-  restore: {
-    confirmTitle: "确认恢复",
-    confirmDesc: "将执行备份恢复操作，目标路径上的文件可能被覆盖。",
-    title: "备份恢复",
-    description: "从备份中恢复数据到指定路径。",
-    sourcePathLabel: "备份源路径",
-    backupTargetLabel: "备份目标（已备份的路径）",
-    restoreTargetLabel: "恢复目标路径",
-    restoreTargetPlaceholder: "输入恢复目标路径",
-    restoreTargetHint: "数据将被恢复到此路径，请确保目标路径可写。",
-    grantReasonLabel: "授权原因",
-    grantReasonPlaceholder: "例如：恢复误删目录",
-    grantReasonHint: "仅用于本次授权，最多 {{max}} 个字符；请勿填写文件内容、目标路径、主机信息或密钥。",
-    grantReasonRequired: "请填写授权原因。",
-    grantReasonTooLong: "授权原因不能超过 {{max}} 个字符。",
-    submit: "申请授权并恢复",
-    saving: "恢复中...",
-    failed: "恢复失败",
   },
 
   // ── expiry countdown badge ──

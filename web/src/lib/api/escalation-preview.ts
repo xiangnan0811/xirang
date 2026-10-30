@@ -182,7 +182,7 @@ function compareInstants(a: UtcInstant, b: UtcInstant): number {
 
 // ---- response readers ----
 
-export class EscalationPreviewContractError extends Error {
+class EscalationPreviewContractError extends Error {
   constructor(path: string, expectation: string) {
     super(`Invalid escalation preview response: ${path} ${expectation}`);
     this.name = "EscalationPreviewContractError";

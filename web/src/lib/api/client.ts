@@ -13,7 +13,6 @@ import { createTaskRunsApi } from "./task-runs-api";
 import { createTasksApi } from "./tasks-api";
 import { createTOTPApi } from "./totp-api";
 import { createUsersApi } from "./users-api";
-import { createSnapshotsApi } from "./snapshots-api";
 import { createConfigApi } from "./config-api";
 import { createSystemApi } from "./system-api";
 import { createDockerApi } from "./docker-api";
@@ -306,7 +305,6 @@ export const apiClient = {
   ...createCredentialAccessGrantsApi(),
   ...createUsersApi(),
   ...createTOTPApi(),
-  ...createSnapshotsApi(),
   ...createConfigApi(),
   ...createSystemApi(),
   ...createDockerApi(),

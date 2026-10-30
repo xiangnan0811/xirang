@@ -38,7 +38,6 @@ import (
 	"xirang/backend/internal/reporting"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/slo"
-	"xirang/backend/internal/snapshot"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/task/executor"
@@ -282,7 +281,6 @@ func main() {
 		GlobalFailLockThreshold: cfg.LoginGlobalFailLockThreshold,
 		GlobalFailLockDuration:  cfg.LoginGlobalFailLockDuration,
 	})
-	snapshotIndexer := snapshot.NewIndexer(db, assetRuntime.LineageGuard(), assetRuntime.FoundationService())
 
 	router := api.NewRouter(api.Dependencies{
 		AppContext:        hubCtx,
@@ -315,7 +313,6 @@ func main() {
 		},
 		LegacyResticSnapshots: legacyRestic,
 		SnapshotDiffRunner:    legacyRestic,
-		SnapshotIndexer:       snapshotIndexer,
 	})
 
 	server := &http.Server{

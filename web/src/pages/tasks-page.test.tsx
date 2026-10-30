@@ -196,33 +196,6 @@ vi.mock("@/components/task-run-history", () => ({
   TaskRunHistory: () => <div data-testid="task-run-history">历史记录</div>,
 }));
 
-vi.mock("@/components/restore-confirm-dialog", () => ({
-  RestoreConfirmDialog: ({ open, onSuccess }: {
-    open: boolean;
-    onSuccess?: (runId: number) => void;
-  }) => {
-    if (!open) return null;
-    return (
-      <div data-testid="restore-dialog">
-        <button
-          data-testid="restore-confirm-btn"
-          onClick={() => onSuccess?.(999)}
->
-          确认恢复
-        </button>
-      </div>
-    );
-  },
-}));
-
-vi.mock("@/components/snapshot-browser", () => ({
-  SnapshotBrowser: () => <div data-testid="legacy-snapshot-browser" />,
-}));
-
-vi.mock("@/components/snapshot-search", () => ({
-  SnapshotSearch: () => <div data-testid="legacy-snapshot-search" />,
-}));
-
 vi.mock("@/components/ui/toast-sonner", () => ({
   toast: {
     success: vi.fn(),
@@ -965,9 +938,6 @@ describe("TasksPage", () => {
     // Snapshot comparison is retired: the history dialog offers no compare toggle.
     expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /对比|比较|compare/i }))
       .not.toBeInTheDocument();
-    expect(screen.queryByTestId("legacy-snapshot-browser")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("legacy-snapshot-search")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("restore-dialog")).not.toBeInTheDocument();
     expect(screen.getByTestId("task-run-history")).toBeInTheDocument();
   });
 
@@ -1019,8 +989,6 @@ describe("TasksPage", () => {
     expect(restoreLink).toHaveAttribute("href", "/app/backups/recovery?taskId=501");
     expect(restoreLink.getAttribute("href")).not.toMatch(/snapshot|path|query/);
     expect(screen.queryByRole("button", { name: "从此备份恢复" })).not.toBeInTheDocument();
-    expect(screen.queryByTestId("restore-dialog")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("restore-confirm-btn")).not.toBeInTheDocument();
     expect(refreshTasksMock).not.toHaveBeenCalled();
   });
 
