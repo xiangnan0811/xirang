@@ -956,6 +956,10 @@ func New(dependencies Dependencies) (*Runtime, error) {
 			return processingSecurityPolicyRevision, nil
 		},
 		Audit: contentAudit, Budget: contentBudget, Metrics: contentMetrics,
+		RecordRecent: func(ctx context.Context, actor content.DeliveryActor, ref backupasset.AssetRef) error {
+			_, recordErr := overlayService.RecordRecent(ctx, overlay.Actor{UserID: actor.UserID, Role: actor.Role}, ref)
+			return recordErr
+		},
 		Config: func(context.Context) (content.BrokerConfig, error) {
 			config, configErr := foundation.ContentConfig()
 			if configErr != nil {

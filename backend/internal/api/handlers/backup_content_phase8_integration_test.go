@@ -147,12 +147,20 @@ func TestBackupContentSafePreviewCrossesActualRepositoryRsyncBrokerAndLiveIssueH
 	if err != nil {
 		t.Fatal(err)
 	}
+	var recentActor content.DeliveryActor
+	var recentRef backupasset.AssetRef
+	var recentCount int
 	broker, err := content.NewBroker(content.BrokerDependencies{
 		DB: db, Now: func() time.Time { return now },
 		FeatureEnabled: func(context.Context) (bool, error) { return true, nil },
 		Authorize:      phase8AssetAuthorizer{asset: asset}, Session: phase8SessionValidator{},
 		Lease: &phase8LeaseController{now: now}, Source: repositoryService,
 		Audit: phase8BrokerAudit{}, Budget: budget,
+		RecordRecent: func(_ context.Context, actor content.DeliveryActor, ref backupasset.AssetRef) error {
+			recentActor, recentRef = actor, ref
+			recentCount++
+			return nil
+		},
 		Config: func(context.Context) (content.BrokerConfig, error) {
 			return content.BrokerConfig{
 				TicketTimeout: 5 * time.Second, PreviewTTL: 2 * time.Minute, MediaTTL: 15 * time.Minute,
@@ -227,6 +235,17 @@ func TestBackupContentSafePreviewCrossesActualRepositoryRsyncBrokerAndLiveIssueH
 	}
 	if serveResponse.Code != http.StatusOK || serveResponse.Body.String() != string(payload[:512]) {
 		t.Fatalf("Serve status=%d bytes=%d", serveResponse.Code, serveResponse.Body.Len())
+	}
+	if recentCount != 1 || recentActor.UserID != 42 || recentActor.Role != "operator" || recentRef != asset.Ref {
+		t.Fatalf("actual Rsync Recent calls=%d actor=%+v ref=%+v", recentCount, recentActor, recentRef)
+	}
+	var deliveryRequest model.BackupAssetDeliveryRequest
+	if err := db.Where("grant_id = ?", grant.ID).Take(&deliveryRequest).Error; err != nil {
+		t.Fatal(err)
+	}
+	if deliveryRequest.Method != http.MethodGet || deliveryRequest.State != string(content.RequestSucceeded) ||
+		deliveryRequest.HTTPStatus != http.StatusOK || deliveryRequest.ResponseBytes != 512 {
+		t.Fatalf("actual Rsync persisted request=%+v", deliveryRequest)
 	}
 	if adapter.sequentialOpens != 2 {
 		t.Fatalf("actual Rsync opens=%d, want one bounded read for Issue and one for Serve", adapter.sequentialOpens)

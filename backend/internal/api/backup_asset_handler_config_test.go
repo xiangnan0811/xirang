@@ -225,6 +225,10 @@ func newProductionContentBroker(t *testing.T, db *gorm.DB, runtime *backupruntim
 		Source:         featureLiveHTTPSource{},
 		Audit:          featureLiveHTTPAudit{},
 		Budget:         featureLiveHTTPBudget{},
+		RecordRecent: func(context.Context, content.DeliveryActor, backupasset.AssetRef) error {
+			t.Fatal("feature-live router unexpectedly recorded Recent")
+			return nil
+		},
 		Config: func(context.Context) (content.BrokerConfig, error) {
 			return content.BrokerConfig{
 				TicketTimeout: 5 * time.Second, PreviewTTL: 2 * time.Minute, MediaTTL: 15 * time.Minute,

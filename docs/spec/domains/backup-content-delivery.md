@@ -30,6 +30,7 @@ Rclone bound-config 内容命令的临时配置、远端退出证明和清理遵
 - SQL CHECK 验证完整 action/renderer/profile/range/classification/proof 产品。`000073` 只增加 safe-preview 的 `plain_text/text_v2/range_policy=none`，不放宽其他耦合、truncation/step-up/audit/budget。SQLite rebuild 保留所有行/FK/index/trigger/无关约束，PostgreSQL 只事务替换四个命名产品约束；出现新增值即拒 used-down/metadata downgrade。
 - request reservation 与 global/provider/user usage 在 source I/O 前同事务提交，所有 request/累计 bytes/count/in-flight 上限一致且非负。不能读后才扣费。
 - `BudgetService.RecordBlocked` 插 request 同事务计 blocked audit；`Finalize` terminal transition、释放 reservation、success/failure safe audit counters 同事务。Broker 不能另写第二次 counter；duplicate finalize 不重复计数。
+- backup_asset grant 的首个持久成功 GET（200/206）在现有 usage→grant→request 锁序内，根据同 grant 的持久成功 GET 请求判定；HEAD 不消耗机会，终态重放不再发出事件。判断与当前 request 终态在同一事务，查询或提交失败不能猜成首次成功；事务重试不得泄漏已回滚的结果。活 grant 生命周期内必须保留其 request 账本，只有满足既有完整 schema drain 条件后才可整体排空；不新增历史回填，升级前已有成功 GET 的 grant 不重新记录。
 - final read/download audit 仅 grant `revoked|expired|closed`、in-flight 0 且 retry due 后发出。`byte_count` 是 persisted `response_bytes` 总和；Range count/bytes 仅 effective/blocked Range 子集，request rows count 必须等于 audit count，不能写不完整 append-only event。
 - audit SQL state 闭合：none counters 为 0 且无 retry/failure；pending/emitted/retry_wait/failed 有非零且 outcome 平衡 summary，不超 grant request count；Range count≤audit count、0 count→0 bytes、Range bytes≤charged delivered bytes；仅 retry/failed 有 failure code、正 attempt、next-at。retry CAS 绑定已读 version/state，旧失败不能重开 emitted 或覆盖更新 retry。
 - crash reconcile 先 revoke old grants。短 live content fence 可 defer，不让 startup 整体失败；terminal active lease takeover/release 失败保留并下轮重试或 absolute-deadline fencing。feature disabled/not-ready 仍维护 terminal state/lease/audit；shutdown/schema-drain fence 必须 cancel/join loop，未 join 成功不得 down。
@@ -55,7 +56,7 @@ Rclone bound-config 内容命令的临时配置、远端退出证明和清理遵
 - 应用 exact/坏形状 content path 都用常量 `/api/v1/asset-content/:deliveryId`，仅 method/status/latency/可选 request ID。无 raw delivery/internal ID、RequestURI/query/Cookie/Auth/session/secret/Catalog name/path/locator/content，也无 client_ip/user_id/XFF/X-Real-IP。
 - `ContentSafeRecovery` 在外层 Gin recovery 前拦 panic，日志仅 module/fixed category/request ID，不含 panic 值/请求。诊断可用进程密钥 delivery fingerprint 和闭合 action/outcome/reason/renderer/provider；任意 MIME/ID 不作 label。audit 用 internal grant ID/keyed asset fingerprint，不用 public delivery ID，Range 汇总。
 - 未知或高基数 metric 输入必须降为闭合 `unknown` 类，不能原样作标签；常规 API 路由的身份日志行为保持其自身合同，不因内容路径脱敏而一并改变。
-- cancel 先到 Provider reader 并 join；cache revoke、reservation finalize、aggregate audit 共用 `WithoutCancel(requestCtx)` 的单个 5 秒 deadline。无法证明最终态则 conservative reconcile 按 full reservation 计费并补 audit。ticket 获取 provisional lease 后失败也用有界 detached 5 秒 release，失败加入安全 unavailable 并保留 fence，不能 Background 无限等。
+- cancel 先到 Provider reader 并 join；cache revoke、reservation finalize、aggregate audit 和首次成功 GET 的 Recent 记录共用 `WithoutCancel(requestCtx)` 的单个 5 秒 deadline。无法证明最终态则 conservative reconcile 按 full reservation 计费并补 audit。Recent 必须在传输、源关闭/heartbeat 与持久 finalize 均成功后同步尝试，复用已认证 actor 和精确 AssetRef；其失败只发固定安全警告，不附原始错误、身份、ref、grant、delivery、session、路径、query 或 proof，不改变成功内容结果、必要审计或预算，不另开 goroutine/期限或同 grant 重试。详细计入及清空语义见[用户状态合同](backup-search.md#api审计与-overlay)。ticket 获取 provisional lease 后失败也用有界 detached 5 秒 release，失败加入安全 unavailable 并保留 fence，不能 Background 无限等。
 
 ## 前端激活、proof 与布局
 

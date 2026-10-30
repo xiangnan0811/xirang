@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,8 +22,10 @@ import (
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset"
+	applogger "xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 
+	"github.com/rs/zerolog"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -42,6 +45,10 @@ func TestBrokerIssueClosedWhenFeatureLiveFalse(t *testing.T) {
 		FeatureEnabled: func(context.Context) (bool, error) { return false, nil },
 		Authorize:      harness.authorizer, Session: brokerSessionValidatorFake{}, Lease: harness.lease, Source: harness.source,
 		Audit: harness.audit, Budget: budget, Metrics: harness.metrics,
+		RecordRecent: func(context.Context, DeliveryActor, backupasset.AssetRef) error {
+			t.Fatal("disabled broker recorded Recent")
+			return nil
+		},
 		TicketMaterial: func() (TicketMaterial, error) { return harness.material, nil },
 		Config:         func(context.Context) (BrokerConfig, error) { return testBrokerConfig(), nil },
 	})
@@ -51,9 +58,608 @@ func TestBrokerIssueClosedWhenFeatureLiveFalse(t *testing.T) {
 	if _, issueErr := closed.Issue(context.Background(), harness.issueRequest()); !errors.Is(issueErr, ErrContentFeatureDisabled) {
 		t.Fatalf("FeatureLive=false issue err=%v", issueErr)
 	}
+	if serveErr := closed.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet, RawCookie: "ignored=ignored",
+	}, httptest.NewRecorder()); !errors.Is(serveErr, ErrContentNotFound) {
+		t.Fatalf("FeatureLive=false Serve err=%v", serveErr)
+	}
 	if len(harness.authorizer.reauthorized) != 0 {
 		t.Fatalf("disabled issue reached authorizer: %+v", harness.authorizer.reauthorized)
 	}
+}
+
+func TestBrokerRecentRequiresRecorder(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	_, err := NewBroker(BrokerDependencies{
+		DB: harness.db, Now: func() time.Time { return harness.now },
+		FeatureEnabled: func(context.Context) (bool, error) { return true, nil },
+		Authorize:      harness.authorizer, Session: brokerSessionValidatorFake{}, Lease: harness.lease, Source: harness.source,
+		Audit: harness.audit, Budget: harness.broker.budget,
+		Config: func(context.Context) (BrokerConfig, error) { return testBrokerConfig(), nil },
+	})
+	if !errors.Is(err, ErrInvalidBrokerRequest) {
+		t.Fatalf("missing Recent recorder error=%v", err)
+	}
+}
+
+func TestBrokerRecentHeadRangesAndRepeatedGET(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawCookie := ticket.Cookie.Name + "=" + ticket.Cookie.Value
+	head := serveBrokerRecentRequest(t, harness, rawCookie, http.MethodHead, nil)
+	if head.Code != http.StatusOK || head.Body.Len() != 0 {
+		t.Fatalf("HEAD status=%d body=%x", head.Code, head.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 0)
+	assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodHead, state: RequestSucceeded, status: http.StatusOK})
+
+	blocked := serveBrokerRecentRequest(t, harness, rawCookie, http.MethodGet, []string{"bytes=0-1,3-4"})
+	if blocked.Code != http.StatusRequestedRangeNotSatisfiable || blocked.Body.Len() != 0 {
+		t.Fatalf("blocked range status=%d body=%x", blocked.Code, blocked.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 0)
+
+	first := serveBrokerRecentRequest(t, harness, rawCookie, http.MethodGet, []string{"bytes=1-3"})
+	if first.Code != http.StatusPartialContent || !bytes.Equal(first.Body.Bytes(), harness.source.payload[1:4]) {
+		t.Fatalf("first range status=%d body=%x", first.Code, first.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 1)
+
+	second := serveBrokerRecentRequest(t, harness, rawCookie, http.MethodGet, []string{"bytes=2-4"})
+	if second.Code != http.StatusPartialContent || !bytes.Equal(second.Body.Bytes(), harness.source.payload[2:5]) {
+		t.Fatalf("second range status=%d body=%x", second.Code, second.Body.Bytes())
+	}
+	full := serveBrokerRecentRequest(t, harness, rawCookie, http.MethodGet, nil)
+	if full.Code != http.StatusOK || !bytes.Equal(full.Body.Bytes(), harness.source.payload) {
+		t.Fatalf("repeated GET status=%d body=%x", full.Code, full.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 1)
+	assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodHead, state: RequestSucceeded, status: http.StatusOK},
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestBlocked, status: http.StatusRequestedRangeNotSatisfiable},
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusPartialContent, bytes: 3},
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusPartialContent, bytes: 3},
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(len(harness.source.payload))},
+	)
+}
+
+func TestBrokerRecentConcurrentRanges(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	barrier := &brokerRecentBarrierSource{SourceResolver: harness.source, opened: make(chan chan struct{}, 2)}
+	harness.broker.source = barrier
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+	rawCookie := ticket.Cookie.Name + "=" + ticket.Cookie.Value
+	type outcome struct {
+		response *brokerDeadlineRecorder
+		err      error
+	}
+	start := func(value string) <-chan outcome {
+		done := make(chan outcome, 1)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			response := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+			err := harness.broker.Serve(ctx, GatewayRequest{
+				DeliveryID: harness.material.DeliveryID, Method: http.MethodGet, RawCookie: rawCookie,
+				RangeHeaders: []string{value},
+			}, response)
+			done <- outcome{response: response, err: err}
+		}()
+		return done
+	}
+	firstDone := start("bytes=1-3")
+	var firstGate chan struct{}
+	select {
+	case firstGate = <-barrier.opened:
+	case result := <-firstDone:
+		t.Fatalf("first range ended before source barrier: %v", result.err)
+	case <-ctx.Done():
+		t.Fatalf("first range did not reach source barrier: %v", ctx.Err())
+	}
+	secondDone := start("bytes=2-4")
+	var secondGate chan struct{}
+	select {
+	case secondGate = <-barrier.opened:
+	case result := <-secondDone:
+		t.Fatalf("second range ended before source barrier: %v", result.err)
+	case <-ctx.Done():
+		t.Fatalf("second range did not reach source barrier: %v", ctx.Err())
+	}
+	close(firstGate)
+	var first outcome
+	select {
+	case first = <-firstDone:
+	case <-ctx.Done():
+		t.Fatalf("first range did not finish: %v", ctx.Err())
+	}
+	close(secondGate)
+	var second outcome
+	select {
+	case second = <-secondDone:
+	case <-ctx.Done():
+		t.Fatalf("second range did not finish: %v", ctx.Err())
+	}
+	if first.err != nil || first.response.Code != http.StatusPartialContent || !bytes.Equal(first.response.Body.Bytes(), harness.source.payload[1:4]) ||
+		second.err != nil || second.response.Code != http.StatusPartialContent || !bytes.Equal(second.response.Body.Bytes(), harness.source.payload[2:5]) {
+		t.Fatalf("concurrent range results first=%v/%d/%x second=%v/%d/%x", first.err, first.response.Code, first.response.Body.Bytes(), second.err, second.response.Code, second.response.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 1)
+	assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusPartialContent, bytes: 3},
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusPartialContent, bytes: 3},
+	)
+}
+
+func TestBrokerRecentEmptyAndLimitedPreview(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		payload   []byte
+		limit     int64
+		want      string
+		truncated bool
+	}{
+		{name: "empty", payload: []byte{}, limit: 8, want: ""},
+		{name: "limited", payload: []byte("abcdefghijkl"), limit: 8, want: "abcdefgh", truncated: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newBrokerTestHarness(t)
+			harness.source.payload = test.payload
+			harness.asset.Size = int64(len(test.payload))
+			harness.asset.MediaType = "application/octet-stream"
+			harness.asset.Path = "/configs/service.conf"
+			harness.asset.Name = "service.conf"
+			harness.asset.RangeProven = false
+			config := testBrokerConfig()
+			config.Renderer.TextBytes = test.limit
+			harness.broker.config = func(context.Context) (BrokerConfig, error) { return config, nil }
+			ticket, err := harness.broker.Issue(context.Background(), harness.safePreviewRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ticket.Descriptor.Truncated != test.truncated || ticket.Descriptor.ContentLength != int64(len(test.want)) {
+				t.Fatalf("preview descriptor=%+v", ticket.Descriptor)
+			}
+			response := serveBrokerRecentRequest(t, harness, ticket.Cookie.Name+"="+ticket.Cookie.Value, http.MethodGet, nil)
+			if response.Code != http.StatusOK || response.Body.String() != test.want {
+				t.Fatalf("preview status=%d body=%q", response.Code, response.Body.String())
+			}
+			assertBrokerRecentCalls(t, harness, 1)
+			assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+				brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(len(test.want))})
+		})
+	}
+}
+
+func TestBrokerRecentStreamFailures(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		mutate     func(*brokerTestHarness)
+		wantStatus int
+		wantBytes  bool
+	}{
+		{name: "open", mutate: func(h *brokerTestHarness) { h.source.openErr = errors.New("FAKE_SOURCE_OPEN_FAILURE_FOR_TEST_ONLY") }, wantStatus: http.StatusBadGateway},
+		{name: "read", mutate: func(h *brokerTestHarness) { h.source.readErr = errors.New("FAKE_SOURCE_READ_FAILURE_FOR_TEST_ONLY") }, wantStatus: http.StatusInternalServerError},
+		{name: "close", mutate: func(h *brokerTestHarness) { h.source.closeErr = errors.New("FAKE_SOURCE_CLOSE_FAILURE_FOR_TEST_ONLY") }, wantStatus: http.StatusBadGateway, wantBytes: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newBrokerTestHarness(t)
+			ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(harness)
+			response := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+			err = harness.broker.Serve(context.Background(), GatewayRequest{
+				DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+				RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+			}, response)
+			if err == nil {
+				t.Fatal("source failure unexpectedly succeeded")
+			}
+			wantBytes := int64(0)
+			if test.wantBytes {
+				wantBytes = int64(len(harness.source.payload))
+				if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), harness.source.payload) {
+					t.Fatalf("close failure response status=%d body=%x", response.Code, response.Body.Bytes())
+				}
+			} else if response.Body.Len() != 0 {
+				t.Fatalf("failed source returned bytes=%x", response.Body.Bytes())
+			}
+			assertBrokerRecentCalls(t, harness, 0)
+			assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+				brokerRecentLedgerRow{method: http.MethodGet, state: RequestFailed, status: test.wantStatus, bytes: wantBytes})
+		})
+	}
+}
+
+func TestBrokerRecentCanceledRead(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.source.blockReads = true
+	harness.source.readStarted = make(chan struct{})
+	harness.source.readCanceled = make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	var worker sync.WaitGroup
+	worker.Add(1)
+	defer func() {
+		cancel()
+		worker.Wait()
+	}()
+	response := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	done := make(chan error, 1)
+	go func() {
+		defer worker.Done()
+		done <- harness.broker.Serve(ctx, GatewayRequest{
+			DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+			RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+		}, response)
+	}()
+	select {
+	case <-harness.source.readStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("source read did not begin")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled read error=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled read did not finish")
+	}
+	if response.Code != http.StatusOK || response.Body.Len() != 0 {
+		t.Fatalf("canceled response status=%d body=%x", response.Code, response.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 0)
+	assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestCanceled, status: 499})
+}
+
+func TestBrokerRecentHeartbeatFailure(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.broker.session = &brokerRecentFailingSession{}
+	response := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	err = harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+		RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+	}, response)
+	if !errors.Is(err, ErrContentNotFound) || response.Body.Len() != 0 {
+		t.Fatalf("heartbeat failure err=%v body=%x", err, response.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 0)
+	assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestFailed, status: http.StatusNotFound})
+}
+
+func TestBrokerRecentFinalizationFailure(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Exec(`CREATE TRIGGER test_broker_recent_finalize_failure
+		BEFORE UPDATE OF state ON backup_asset_delivery_requests
+		WHEN NEW.state = 'succeeded' BEGIN SELECT RAISE(ABORT, 'injected finalization failure'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = harness.db.Exec("DROP TRIGGER IF EXISTS test_broker_recent_finalize_failure").Error })
+	response := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	err = harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+		RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+	}, response)
+	if !errors.Is(err, ErrContentUnavailable) || response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), harness.source.payload) {
+		t.Fatalf("finalization failure err=%v status=%d body=%x", err, response.Code, response.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 0)
+	assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestReserved})
+}
+
+func TestBrokerRecentCleanupUsesFinalizationDeadline(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgetCapture := &brokerBudgetContextCapture{BrokerBudget: harness.broker.budget}
+	harness.broker.budget = budgetCapture
+	response := serveBrokerRecentRequest(t, harness, ticket.Cookie.Name+"="+ticket.Cookie.Value, http.MethodGet, nil)
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), harness.source.payload) {
+		t.Fatalf("response status=%d body=%x", response.Code, response.Body.Bytes())
+	}
+	calls := assertBrokerRecentCalls(t, harness, 1)
+	finalizeCtx, recentCtx := budgetCapture.snapshot(), calls[0].context
+	if !finalizeCtx.hasDeadline || !recentCtx.hasDeadline || finalizeCtx.err != nil || recentCtx.err != nil ||
+		!finalizeCtx.deadline.Equal(recentCtx.deadline) || !recentCtx.deadline.After(time.Now()) ||
+		recentCtx.deadline.After(time.Now().Add(gatewayCleanupTimeout)) {
+		t.Fatalf("cleanup contexts finalize=%+v recent=%+v", finalizeCtx, recentCtx)
+	}
+	assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(len(harness.source.payload))})
+}
+
+func TestBrokerRecentExpiredCleanupDoesNotFailDelivery(t *testing.T) {
+	var logOutput bytes.Buffer
+	previousLog := applogger.Log
+	applogger.Log = zerolog.New(&logOutput)
+	t.Cleanup(func() { applogger.Log = previousLog })
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := harness.broker.budget
+	harness.broker.budget = brokerRecentWaitForExpiryBudget{BrokerBudget: budget}
+	harness.recent.setError(context.DeadlineExceeded)
+	rawCookie := ticket.Cookie.Name + "=" + ticket.Cookie.Value
+	response := serveBrokerRecentRequest(t, harness, rawCookie, http.MethodGet, nil)
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), harness.source.payload) {
+		t.Fatalf("expired cleanup response status=%d body=%x", response.Code, response.Body.Bytes())
+	}
+	calls := assertBrokerRecentCalls(t, harness, 1)
+	if !calls[0].context.hasDeadline || !errors.Is(calls[0].context.err, context.DeadlineExceeded) {
+		t.Fatalf("Recent did not receive expired cleanup context: %+v", calls[0].context)
+	}
+	if !strings.Contains(logOutput.String(), `"action":"recent_record"`) ||
+		!strings.Contains(logOutput.String(), "备份资产最近访问记录失败") {
+		t.Fatalf("missing expired cleanup warning: %s", logOutput.String())
+	}
+	harness.broker.budget = budget
+	response = serveBrokerRecentRequest(t, harness, rawCookie, http.MethodGet, nil)
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), harness.source.payload) {
+		t.Fatalf("replayed grant response status=%d body=%x", response.Code, response.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 1)
+	assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(len(harness.source.payload))},
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(len(harness.source.payload))},
+	)
+}
+
+func TestBrokerRecentRecorderFailureDoesNotFailDelivery(t *testing.T) {
+	var logOutput bytes.Buffer
+	previousLog := applogger.Log
+	applogger.Log = zerolog.New(&logOutput)
+	t.Cleanup(func() { applogger.Log = previousLog })
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstGrant := harness.material.GrantID
+	privateFailure := errors.New("FAKE_RECENT_PRIVATE_DATABASE_FAILURE_FOR_TEST_ONLY")
+	harness.recent.setError(privateFailure)
+	rawCookie := ticket.Cookie.Name + "=" + ticket.Cookie.Value
+	for range 2 {
+		response := serveBrokerRecentRequest(t, harness, rawCookie, http.MethodGet, nil)
+		if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), harness.source.payload) {
+			t.Fatalf("Recent failure response status=%d body=%x", response.Code, response.Body.Bytes())
+		}
+	}
+	assertBrokerRecentCalls(t, harness, 1)
+	assertBrokerRecentLedger(t, harness, firstGrant,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(len(harness.source.payload))},
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(len(harness.source.payload))},
+	)
+	var grant model.BackupAssetDeliveryGrant
+	if err := harness.db.First(&grant, "id = ?", firstGrant).Error; err != nil {
+		t.Fatal(err)
+	}
+	if grant.AuditRequestCount != 2 || grant.AuditSuccessCount != 2 || grant.InFlight != 0 {
+		t.Fatalf("Recent failure changed required audit or budget: %+v", grant)
+	}
+
+	var warning map[string]any
+	if err := json.Unmarshal(logOutput.Bytes(), &warning); err != nil {
+		t.Fatalf("decode Recent failure warning: %v", err)
+	}
+	if len(warning) != 4 || warning["level"] != "warn" || warning["module"] != "backup_asset_content" ||
+		warning["action"] != "recent_record" || warning["message"] != "备份资产最近访问记录失败" {
+		t.Fatalf("unsafe Recent failure warning=%v", warning)
+	}
+	for _, private := range []string{privateFailure.Error(), harness.asset.Ref.RecoveryPointID, harness.asset.Ref.EntryID,
+		firstGrant, harness.material.DeliveryID, ticket.Cookie.Value, harness.asset.Path} {
+		if strings.Contains(logOutput.String(), private) {
+			t.Fatalf("Recent failure warning leaked private evidence")
+		}
+	}
+
+	harness.recent.setError(nil)
+	secondMaterial := newBrokerTestTicketMaterial(t, 0x44)
+	harness.material = secondMaterial
+	harness.broker.ticketMaterial = func() (TicketMaterial, error) { return secondMaterial, nil }
+	secondTicket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := serveBrokerRecentRequest(t, harness, secondTicket.Cookie.Name+"="+secondTicket.Cookie.Value, http.MethodGet, nil)
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), harness.source.payload) {
+		t.Fatalf("new grant response status=%d body=%x", response.Code, response.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness, 2)
+	assertBrokerRecentLedger(t, harness, secondMaterial.GrantID,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(len(harness.source.payload))})
+}
+
+func TestBrokerRecentDerivedPreview(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	harness.asset.MediaType = "text/plain"
+	harness.asset.Path = "/documents/source.txt"
+	harness.asset.Name = "source.txt"
+	payload := []byte("<derived> searchable text\n")
+	modified := harness.now.Add(-time.Minute)
+	derived := &brokerDerivedResolverFake{
+		payload: payload,
+		binding: DerivedRepresentation{
+			artifactID: strings.Repeat("1", 32), artifactSetID: strings.Repeat("2", 32), blobID: strings.Repeat("3", 32),
+			setCompleteness: "complete", Ref: harness.asset.Ref, CatalogGenerationID: harness.asset.CatalogGenerationID,
+			SourceFingerprint: harness.asset.SourceFingerprint, SecurityPolicyRevision: "security-policy-v1",
+			Provider: harness.asset.Provider, Renderer: RendererEscapedText, Profile: ProfileTextV1,
+			Role: "content", MediaType: "text/plain", Size: int64(len(payload)),
+			EntryFingerprint: strings.Repeat("4", 64), Completeness: "complete", ModifiedAt: &modified,
+		},
+	}
+	bindBrokerDerivedTestSourceIdentity(&derived.binding, *harness.asset)
+	harness.broker.derived = derived
+	harness.broker.securityPolicyRevision = func(context.Context) (string, error) { return "security-policy-v1", nil }
+	request := harness.issueRequest()
+	request.Renderer, request.Profile = RendererEscapedText, ProfileTextV1
+	ticket, err := harness.broker.Issue(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := serveBrokerRecentRequest(t, harness, ticket.Cookie.Name+"="+ticket.Cookie.Value, http.MethodGet, nil)
+	if response.Code != http.StatusOK || response.Body.String() != "&lt;derived&gt; searchable text\n" || harness.source.openCalls != 0 {
+		t.Fatalf("derived response status=%d body=%q source opens=%d", response.Code, response.Body.String(), harness.source.openCalls)
+	}
+	assertBrokerRecentCalls(t, harness, 1)
+	assertBrokerRecentLedger(t, harness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(response.Body.Len())})
+}
+
+func TestBrokerRecentRecoveryResultDoesNotRecord(t *testing.T) {
+	harness := newRecoveryBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.recoveryIssueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := serveBrokerRecentRequest(t, harness.brokerTestHarness, ticket.Cookie.Name+"="+ticket.Cookie.Value, http.MethodGet, nil)
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), harness.recoverySource.payload) {
+		t.Fatalf("recovery response status=%d body=%q", response.Code, response.Body.Bytes())
+	}
+	assertBrokerRecentCalls(t, harness.brokerTestHarness, 0)
+	assertBrokerRecentLedger(t, harness.brokerTestHarness, harness.material.GrantID,
+		brokerRecentLedgerRow{method: http.MethodGet, state: RequestSucceeded, status: http.StatusOK, bytes: int64(len(harness.recoverySource.payload))})
+}
+
+type brokerRecentLedgerRow struct {
+	method string
+	state  RequestState
+	status int
+	bytes  int64
+}
+
+func assertBrokerRecentLedger(t *testing.T, harness *brokerTestHarness, grantID string, want ...brokerRecentLedgerRow) {
+	t.Helper()
+	var requests []model.BackupAssetDeliveryRequest
+	if err := harness.db.Where("grant_id = ?", grantID).Find(&requests).Error; err != nil {
+		t.Fatal(err)
+	}
+	gotCounts := make(map[brokerRecentLedgerRow]int, len(requests))
+	for _, request := range requests {
+		if (request.FinishedAt == nil) != (RequestState(request.State) == RequestReserved) {
+			t.Fatalf("persisted request has inconsistent terminal time: %+v", request)
+		}
+		gotCounts[brokerRecentLedgerRow{
+			method: request.Method, state: RequestState(request.State), status: request.HTTPStatus, bytes: request.ResponseBytes,
+		}]++
+	}
+	wantCounts := make(map[brokerRecentLedgerRow]int, len(want))
+	for _, row := range want {
+		wantCounts[row]++
+	}
+	if !maps.Equal(gotCounts, wantCounts) {
+		t.Fatalf("persisted request ledger got=%v want=%v", gotCounts, wantCounts)
+	}
+}
+
+func assertBrokerRecentCalls(t *testing.T, harness *brokerTestHarness, want int) []brokerRecentCall {
+	t.Helper()
+	calls := harness.recent.snapshot()
+	if len(calls) != want {
+		t.Fatalf("Recent calls=%d want=%d", len(calls), want)
+	}
+	for _, call := range calls {
+		if call.actor != (DeliveryActor{UserID: harness.session.UserID, Role: harness.session.Role}) || call.ref != harness.asset.Ref {
+			t.Fatalf("Recent actor/ref=%+v/%+v", call.actor, call.ref)
+		}
+	}
+	return calls
+}
+
+func serveBrokerRecentRequest(t *testing.T, harness *brokerTestHarness, cookie, method string, ranges []string) *brokerDeadlineRecorder {
+	t.Helper()
+	response := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	if err := harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: method, RawCookie: cookie, RangeHeaders: ranges,
+	}, response); err != nil {
+		t.Fatalf("Serve %s failed: %v", method, err)
+	}
+	return response
+}
+
+type brokerRecentBarrierSource struct {
+	SourceResolver
+	opened chan chan struct{}
+}
+
+func (source *brokerRecentBarrierSource) OpenContentSource(ctx context.Context, request SourceRequest) (SourceSession, error) {
+	session, err := source.SourceResolver.OpenContentSource(ctx, request)
+	if err != nil || request.Mode != SourceModeRange {
+		return session, err
+	}
+	gate := make(chan struct{})
+	select {
+	case source.opened <- gate:
+	case <-ctx.Done():
+		_ = session.Close()
+		return nil, ctx.Err()
+	}
+	select {
+	case <-gate:
+		return session, nil
+	case <-ctx.Done():
+		_ = session.Close()
+		return nil, ctx.Err()
+	}
+}
+
+type brokerRecentFailingSession struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (session *brokerRecentFailingSession) Validate(context.Context, DeliverySession) error {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	session.calls++
+	if session.calls >= 2 {
+		return errors.New("FAKE_SESSION_REVALIDATION_FAILURE_FOR_TEST_ONLY")
+	}
+	return nil
+}
+
+type brokerRecentWaitForExpiryBudget struct{ BrokerBudget }
+
+func (budget brokerRecentWaitForExpiryBudget) Finalize(ctx context.Context, intent FinalizeIntent) (Finalization, error) {
+	result, err := budget.BrokerBudget.Finalize(ctx, intent)
+	if err != nil {
+		return result, err
+	}
+	<-ctx.Done()
+	return result, nil
 }
 
 func TestBrokerIssueOrdersAuthorizationLeaseSourceAuditBeforeCookieActivation(t *testing.T) {
@@ -2194,6 +2800,7 @@ type brokerTestHarness struct {
 	source     *brokerSourceResolverFake
 	audit      *brokerAuditFake
 	authorizer *brokerAssetAuthorizerFake
+	recent     *brokerRecentRecorder
 	metrics    *brokerMetricsFake
 }
 
@@ -2236,6 +2843,7 @@ func newRecoveryBrokerTestHarness(t *testing.T) *recoveryBrokerTestHarness {
 		Session: brokerSessionValidatorFake{}, Lease: base.lease,
 		Source: base.source, RecoverySource: recoverySource,
 		Audit: base.audit, Budget: budget, Metrics: base.metrics,
+		RecordRecent:   base.recent.record,
 		TicketMaterial: func() (TicketMaterial, error) { return base.material, nil },
 		Config:         func(context.Context) (BrokerConfig, error) { return testBrokerConfig(), nil },
 	})
@@ -2342,6 +2950,7 @@ func newBrokerTestHarness(t *testing.T) *brokerTestHarness {
 	source := &brokerSourceResolverFake{payload: pngPayload, asset: &asset, order: &order}
 	audit := &brokerAuditFake{order: &order}
 	metrics := newBrokerMetricsFake()
+	recent := &brokerRecentRecorder{}
 	budget, err := NewBudgetService(BudgetDependencies{
 		DB: db, Now: func() time.Time { return now },
 		Limits: func(context.Context) (BudgetLimits, error) { return testBudgetLimits(), nil },
@@ -2353,6 +2962,7 @@ func newBrokerTestHarness(t *testing.T) *brokerTestHarness {
 		DB: db, Now: func() time.Time { return now }, FeatureEnabled: func(context.Context) (bool, error) { return true, nil },
 		Authorize: authorizer, Session: brokerSessionValidatorFake{}, Lease: lease, Source: source,
 		Audit: audit, Budget: budget, Metrics: metrics,
+		RecordRecent:   recent.record,
 		TicketMaterial: func() (TicketMaterial, error) { return material, nil },
 		Config:         func(context.Context) (BrokerConfig, error) { return testBrokerConfig(), nil },
 	})
@@ -2362,7 +2972,7 @@ func newBrokerTestHarness(t *testing.T) *brokerTestHarness {
 	return &brokerTestHarness{
 		db: db, broker: broker, now: now, asset: &asset, authorizer: authorizer,
 		session:  DeliverySession{JTI: strings.Repeat("f", 32), UserID: 42, Role: "operator", TokenVersion: 1, ExpiresAt: now.Add(time.Hour)},
-		material: material, order: &order, lease: lease, source: source, audit: audit, metrics: metrics,
+		material: material, order: &order, lease: lease, source: source, audit: audit, metrics: metrics, recent: recent,
 	}
 }
 
@@ -2667,6 +3277,7 @@ func (*brokerLeaseControllerFake) Takeover(context.Context, backupasset.Takeover
 }
 
 type brokerSourceResolverFake struct {
+	mu                    sync.Mutex
 	payload               []byte
 	asset                 *AuthorizedAsset
 	order                 *[]string
@@ -2762,6 +3373,8 @@ func (*brokerDerivedSourceReader) Close() error         { return nil }
 func (*brokerDerivedSourceReader) ProviderBytes() int64 { return 0 }
 
 func (fake *brokerSourceResolverFake) OpenContentSource(ctx context.Context, request SourceRequest) (SourceSession, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
 	fake.openCalls++
 	fake.requests = append(fake.requests, request)
 	*fake.order = append(*fake.order, "source")
@@ -2922,6 +3535,41 @@ type brokerAuditFake struct {
 	inputs []backupasset.AuditEventInput
 	err    error
 	order  *[]string
+}
+
+type brokerRecentCall struct {
+	actor   DeliveryActor
+	ref     backupasset.AssetRef
+	context brokerCleanupContextSnapshot
+}
+
+type brokerRecentRecorder struct {
+	mu    sync.Mutex
+	calls []brokerRecentCall
+	err   error
+}
+
+func (recorder *brokerRecentRecorder) record(ctx context.Context, actor DeliveryActor, ref backupasset.AssetRef) error {
+	deadline, hasDeadline := ctx.Deadline()
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.calls = append(recorder.calls, brokerRecentCall{
+		actor: actor, ref: ref,
+		context: brokerCleanupContextSnapshot{hasDeadline: hasDeadline, deadline: deadline, err: ctx.Err()},
+	})
+	return recorder.err
+}
+
+func (recorder *brokerRecentRecorder) snapshot() []brokerRecentCall {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return append([]brokerRecentCall(nil), recorder.calls...)
+}
+
+func (recorder *brokerRecentRecorder) setError(err error) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.err = err
 }
 
 type brokerCleanupContextSnapshot struct {
