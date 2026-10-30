@@ -1707,6 +1707,20 @@
           ]
         },
         {
+          "name": "TestPolicySelectionCalendarKeepsOneRepresentativePerUTCPeriodPostgres",
+          "required_paths": [
+            "TestPolicySelectionCalendarKeepsOneRepresentativePerUTCPeriodPostgres"
+          ]
+        },
+        {
+          "name": "TestPolicySelectionMigratedSchemaRejectsZeroRevisionsPostgres",
+          "required_paths": [
+            "TestPolicySelectionMigratedSchemaRejectsZeroRevisionsPostgres",
+            "TestPolicySelectionMigratedSchemaRejectsZeroRevisionsPostgres/point_revision",
+            "TestPolicySelectionMigratedSchemaRejectsZeroRevisionsPostgres/capability_revision"
+          ]
+        },
+        {
           "name": "TestPolicySelectionPostgresLocksPointStateAndHoldDrift",
           "required_paths": [
             "TestPolicySelectionPostgresLocksPointStateAndHoldDrift"
@@ -1719,10 +1733,44 @@
           ]
         },
         {
+          "name": "TestPolicySelectionTiesCountCalendarAndCursorsPostgres",
+          "required_paths": [
+            "TestPolicySelectionTiesCountCalendarAndCursorsPostgres"
+          ]
+        },
+        {
           "name": "TestRcloneExpiredWriterCannotBeExplicitlyPurged",
           "required_paths": [
             "TestRcloneExpiredWriterCannotBeExplicitlyPurged",
             "TestRcloneExpiredWriterCannotBeExplicitlyPurged/postgres"
+          ]
+        },
+        {
+          "name": "TestRegistryEntrypointPostgres",
+          "required_paths": [
+            "TestRegistryEntrypointPostgres",
+            "TestRegistryEntrypointPostgres/hold_before_effect",
+            "TestRegistryEntrypointPostgres/resolver_mutation",
+            "TestRegistryEntrypointPostgres/resolver_mutation/point",
+            "TestRegistryEntrypointPostgres/resolver_mutation/repository",
+            "TestRegistryEntrypointPostgres/post_effect_drift",
+            "TestRegistryEntrypointPostgres/post_effect_drift/restic_native_repository",
+            "TestRegistryEntrypointPostgres/post_effect_drift/resolved_access",
+            "TestRegistryEntrypointPostgres/post_effect_drift/native_authority_digest",
+            "TestRegistryEntrypointPostgres/post_effect_drift/point_source",
+            "TestRegistryEntrypointPostgres/post_effect_drift/point_locator",
+            "TestRegistryEntrypointPostgres/post_effect_drift/repository_capability",
+            "TestRegistryEntrypointPostgres/post_effect_drift/attempt_authority",
+            "TestRegistryEntrypointPostgres/invalid_receipts",
+            "TestRegistryEntrypointPostgres/invalid_receipts/deleted_missing",
+            "TestRegistryEntrypointPostgres/invalid_receipts/already_absent_malformed",
+            "TestRegistryEntrypointPostgres/invalid_receipts/unknown_outcome",
+            "TestRegistryEntrypointPostgres/provider_errors",
+            "TestRegistryEntrypointPostgres/provider_errors/ordinary",
+            "TestRegistryEntrypointPostgres/provider_errors/native_version_referenced",
+            "TestRegistryEntrypointPostgres/independent_repository_write",
+            "TestRegistryEntrypointPostgres/cancel_during_resolution",
+            "TestRegistryEntrypointPostgres/cancel_before_registered_provider"
           ]
         },
         {

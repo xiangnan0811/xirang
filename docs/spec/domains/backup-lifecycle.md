@@ -56,6 +56,10 @@ archive 无 policy table 200、同 TX settle/audit、audit failure 原子 rollba
 
 真实 runtime+Coordinator+owner ports 覆盖 revoke→drain→cleanup→Provider effect 的所有失败/取消/crash/resume，hold/WORM/identity/capability、frozen names 与 unlinked TaskID、各 Provider 精确删除 receipt。Native 组合必测 B preparing→delete A referenced 且不 reservation→B commit verifying，identity conflict 则占 reservation；坏/混合/HMAC evidence 拒绝。
 
+删除安全断言经真实 Coordinator 与注册删除 adapter 验证，覆盖调用前 hold、resolver 身份/能力漂移、调用后 authority 漂移、非法 receipt、外部调用取消及独立仓库写入；断言 Provider 调用次数和持久 claim、tombstone、终态，而非复刻旧 helper 协议。生产 resolver 只读重建授权材料；测试替身自行写入后的回滚输出不构成生产合同。
+
+保留策略断言经 `PolicyService.Select` 验证精确过期 ID、point/capability revision、UTC 日历代表点及同时间戳排序，并贯穿内部批次与跨请求 cursor 直到耗尽；SQLite 与 PostgreSQL 使用同一行为场景。
+
 000075/76/77 双引擎 direct down 和 `Steps(-1)` 证明 clean version/schema/rows 不变，quiesced upgrade unresolved/near miss/duplicates/observational order/terminal mutually-exclusive matrix，proof-first owner rebind 不再执行副作用且不改新 lease、corrupt proof 拒绝；审计 detail purge 不破幂等。
 
 必需 PostgreSQL CI 选择器必须比对真实 acceptance test inventory 并执行，复制两份相同 selector 不证明全覆盖。运行 SQLite、真实 PostgreSQL、race/repetition 和源生命周期各 owner suites；缺 DSN/环境阻塞如实记未执行，不当成功。

@@ -16,14 +16,16 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/provider"
+	"xirang/backend/internal/config"
+	appdatabase "xirang/backend/internal/database"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/mattn/go-sqlite3"
 	postgresgorm "gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 func TestPolicyRulesCanonicalizationAndDigest(t *testing.T) {
@@ -294,33 +296,261 @@ func TestPolicySelectionDeterministicExactScopesAndExclusions(t *testing.T) {
 }
 
 func TestPolicySelectionCalendarKeepsOneRepresentativePerUTCPeriod(t *testing.T) {
-	evaluatedAt := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
-	points := []model.RecoveryPoint{
-		newSelectionPoint(testOpaqueID(1), testOpaqueID(100), nil, evaluatedAt.Add(-time.Hour), 1),
-		newSelectionPoint(testOpaqueID(2), testOpaqueID(100), nil, evaluatedAt.Add(-2*time.Hour), 2),
-		newSelectionPoint(testOpaqueID(3), testOpaqueID(100), nil, evaluatedAt.Add(-25*time.Hour), 3),
-		newSelectionPoint(testOpaqueID(4), testOpaqueID(100), nil, evaluatedAt.Add(-49*time.Hour), 4),
-	}
+	runPolicySelectionCalendarUTC(t, newMigratedPolicySelectionSQLiteDB(t))
+}
 
-	selected, err := selectRecoveryPoints(selectionFacts(points...), PolicyRules{
-		Version: PolicyRulesVersion1,
-		Calendar: []CalendarRule{
-			{Unit: CalendarDay, Keep: 2},
-		},
-	}, evaluatedAt)
+func TestPolicySelectionCalendarKeepsOneRepresentativePerUTCPeriodPostgres(t *testing.T) {
+	runPolicySelectionCalendarUTC(t, newLifecycleAcceptancePostgresDB(t))
+}
+
+func runPolicySelectionCalendarUTC(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	evaluatedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	repositoryID := testOpaqueID(100)
+	seedRetentionUsersAndRepository(t, db, repositoryID)
+	points := []model.RecoveryPoint{
+		newSelectionPoint(testOpaqueID(1), repositoryID, nil, time.Date(2026, 8, 17, 0, 30, 0, 0, time.UTC), 1),
+		newSelectionPoint(testOpaqueID(2), repositoryID, nil, time.Date(2026, 8, 17, 0, 10, 0, 0, time.UTC), 2),
+		newSelectionPoint(testOpaqueID(3), repositoryID, nil, time.Date(2026, 8, 16, 23, 59, 0, 0, time.UTC), 3),
+		newSelectionPoint(testOpaqueID(4), repositoryID, nil, time.Date(2026, 8, 15, 23, 59, 0, 0, time.UTC), 4),
+	}
+	points[0].PointRevision = 11
+	points[1].PointRevision = 22
+	points[2].PointRevision = 33
+	points[3].PointRevision = 44
+	if err := db.Create(&points).Error; err != nil {
+		t.Fatalf("seed calendar selection points: %v", err)
+	}
+	service, err := NewPolicyService(PolicyServiceDependencies{
+		DB: db, Now: func() time.Time { return evaluatedAt }, NewID: func() (string, error) { return testOpaqueID(110), nil },
+	})
 	if err != nil {
-		t.Fatalf("selectRecoveryPoints: %v", err)
+		t.Fatalf("NewPolicyService: %v", err)
+	}
+	policy, err := service.Create(context.Background(), CreatePolicyRequest{
+		Actor:     backupasset.AuditActor{UserID: 1, Username: "admin", Role: "admin"},
+		ScopeKind: backupasset.RetentionPolicyScopeRepository, ScopeID: repositoryID,
+		Rules: PolicyRules{Version: PolicyRulesVersion1, Calendar: []CalendarRule{{Unit: CalendarDay, Keep: 2}}},
+	})
+	if err != nil {
+		t.Fatalf("create calendar policy: %v", err)
+	}
+	selection, err := service.Select(context.Background(), SelectionRequest{
+		PolicyID: policy.ID, ExpectedRevision: policy.Revision, EvaluatedAt: evaluatedAt,
+	})
+	if err != nil {
+		t.Fatalf("select calendar policy: %v", err)
 	}
 	want := []SelectedPoint{
-		{RecoveryPointID: testOpaqueID(2), PointRevision: 1, CapabilityRevision: 2},
-		{RecoveryPointID: testOpaqueID(4), PointRevision: 1, CapabilityRevision: 4},
+		{RecoveryPointID: testOpaqueID(2), PointRevision: 22, CapabilityRevision: 2},
+		{RecoveryPointID: testOpaqueID(4), PointRevision: 44, CapabilityRevision: 4},
 	}
-	if !reflect.DeepEqual(selected, want) {
-		t.Fatalf("calendar selection=%+v, want %+v", selected, want)
+	if !reflect.DeepEqual(selection.Points, want) || selection.Inspected != 4 || selection.NextCursor != "" {
+		t.Fatalf("calendar selection=%+v inspected=%d cursor=%q, want %+v inspected=4 without continuation",
+			selection.Points, selection.Inspected, selection.NextCursor, want)
 	}
 }
 
-func TestPolicySelectionLocksRowsAndBindsIndependentRevision(t *testing.T) {
+func TestPolicySelectionTiesCountCalendarAndCursors(t *testing.T) {
+	runPolicySelectionTiesCountCalendarAndCursors(t, newMigratedPolicySelectionSQLiteDB(t))
+}
+
+func TestPolicySelectionTiesCountCalendarAndCursorsPostgres(t *testing.T) {
+	runPolicySelectionTiesCountCalendarAndCursors(t, newLifecycleAcceptancePostgresDB(t))
+}
+
+func runPolicySelectionTiesCountCalendarAndCursors(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	evaluatedAt := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
+	repositoryID := testOpaqueID(200)
+	seedRetentionUsersAndRepository(t, db, repositoryID)
+	day17 := time.Date(2026, 8, 17, 7, 0, 0, 0, time.UTC)
+	day16 := time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC)
+	day15 := time.Date(2026, 8, 15, 7, 0, 0, 0, time.UTC)
+	day14 := time.Date(2026, 8, 14, 7, 0, 0, 0, time.UTC)
+	point := func(id uint64, revision int64, capability int, capturedAt time.Time) model.RecoveryPoint {
+		result := newSelectionPoint(testOpaqueID(id), repositoryID, nil, capturedAt, capability)
+		result.PointRevision = revision
+		return result
+	}
+	// Deliberately insert out of order. The first three IDs on August 17 are
+	// retained by count, while the greatest IDs on August 16 and 15 are
+	// retained by calendar. All other IDs are expired in descending order.
+	points := []model.RecoveryPoint{
+		point(14, 214, 114, day16), point(18, 218, 118, day17),
+		point(11, 211, 111, day15), point(16, 216, 116, day17),
+		point(10, 210, 110, day14), point(19, 219, 119, day17),
+		point(13, 213, 113, day16), point(17, 217, 117, day17),
+		point(12, 212, 112, day15), point(15, 215, 115, day16),
+	}
+	if err := db.Create(&points).Error; err != nil {
+		t.Fatalf("seed tied selection points: %v", err)
+	}
+	service, err := NewPolicyService(PolicyServiceDependencies{
+		DB: db, Now: func() time.Time { return evaluatedAt }, NewID: func() (string, error) { return testOpaqueID(210), nil },
+	})
+	if err != nil {
+		t.Fatalf("NewPolicyService: %v", err)
+	}
+	service.selectionPageSize = 2
+	policy, err := service.Create(context.Background(), CreatePolicyRequest{
+		Actor:     backupasset.AuditActor{UserID: 1, Username: "admin", Role: "admin"},
+		ScopeKind: backupasset.RetentionPolicyScopeRepository, ScopeID: repositoryID,
+		Rules: PolicyRules{
+			Version: PolicyRulesVersion1, Count: &CountRule{KeepLatest: 3},
+			Calendar: []CalendarRule{{Unit: CalendarDay, Keep: 3}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create tied selection policy: %v", err)
+	}
+	selection, err := service.Select(context.Background(), SelectionRequest{
+		PolicyID: policy.ID, ExpectedRevision: policy.Revision, EvaluatedAt: evaluatedAt,
+	})
+	if err != nil {
+		t.Fatalf("select tied points across internal pages: %v", err)
+	}
+	want := []SelectedPoint{
+		{RecoveryPointID: testOpaqueID(16), PointRevision: 216, CapabilityRevision: 116},
+		{RecoveryPointID: testOpaqueID(14), PointRevision: 214, CapabilityRevision: 114},
+		{RecoveryPointID: testOpaqueID(13), PointRevision: 213, CapabilityRevision: 113},
+		{RecoveryPointID: testOpaqueID(11), PointRevision: 211, CapabilityRevision: 111},
+		{RecoveryPointID: testOpaqueID(10), PointRevision: 210, CapabilityRevision: 110},
+	}
+	if !reflect.DeepEqual(selection.Points, want) || selection.Inspected != 10 || selection.NextCursor != "" {
+		t.Fatalf("internal-page selection=%+v inspected=%d cursor=%q, want %+v inspected=10 without continuation",
+			selection.Points, selection.Inspected, selection.NextCursor, want)
+	}
+
+	// The first cursor splits the count-kept tie, and a later cursor splits
+	// the August 16 calendar bucket. The final empty request proves exhaustion.
+	wantCursorPages := []struct {
+		points    []SelectedPoint
+		inspected int
+		continued bool
+	}{
+		{[]SelectedPoint{}, 2, true},
+		{[]SelectedPoint{{RecoveryPointID: testOpaqueID(16), PointRevision: 216, CapabilityRevision: 116}}, 2, true},
+		{[]SelectedPoint{{RecoveryPointID: testOpaqueID(14), PointRevision: 214, CapabilityRevision: 114}}, 2, true},
+		{[]SelectedPoint{{RecoveryPointID: testOpaqueID(13), PointRevision: 213, CapabilityRevision: 113}}, 2, true},
+		{[]SelectedPoint{
+			{RecoveryPointID: testOpaqueID(11), PointRevision: 211, CapabilityRevision: 111},
+			{RecoveryPointID: testOpaqueID(10), PointRevision: 210, CapabilityRevision: 110},
+		}, 2, true},
+		{[]SelectedPoint{}, 0, false},
+	}
+	request := SelectionRequest{
+		PolicyID: policy.ID, ExpectedRevision: policy.Revision, EvaluatedAt: evaluatedAt,
+		Limit: 50, InspectedLimit: 2,
+	}
+	for index, expected := range wantCursorPages {
+		page, err := service.Select(context.Background(), request)
+		if err != nil {
+			t.Fatalf("select cursor page %d: %v", index+1, err)
+		}
+		if !reflect.DeepEqual(page.Points, expected.points) || page.Inspected != expected.inspected ||
+			(page.NextCursor != "") != expected.continued {
+			t.Fatalf("cursor page %d points=%+v inspected=%d continued=%t, want %+v inspected=%d continued=%t",
+				index+1, page.Points, page.Inspected, page.NextCursor != "", expected.points, expected.inspected, expected.continued)
+		}
+		if page.PolicyID != policy.ID || page.PolicyRevision != policy.Revision || page.RuleDigest != policy.RuleDigest ||
+			page.RulesJSON != policy.RulesJSON || !page.EvaluatedAt.Equal(evaluatedAt) {
+			t.Fatalf("cursor page %d changed policy snapshot: %+v", index+1, page)
+		}
+		request.Cursor = page.NextCursor
+		request.EvaluatedAt = time.Time{}
+	}
+}
+
+func TestPolicySelectionMigratedSchemaRejectsZeroRevisions(t *testing.T) {
+	runPolicySelectionMigratedSchemaRejectsZeroRevisions(t, newMigratedPolicySelectionSQLiteDB(t))
+}
+
+func TestPolicySelectionMigratedSchemaRejectsZeroRevisionsPostgres(t *testing.T) {
+	runPolicySelectionMigratedSchemaRejectsZeroRevisions(t, newLifecycleAcceptancePostgresDB(t))
+}
+
+func runPolicySelectionMigratedSchemaRejectsZeroRevisions(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	evaluatedAt := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
+	capturedAt := evaluatedAt.Add(-48 * time.Hour)
+	repositoryID := testOpaqueID(300)
+	seedRetentionUsersAndRepository(t, db, repositoryID)
+	insertPoint := func(id string, pointRevision int64, capabilityRevision int) error {
+		return db.Exec(`INSERT INTO recovery_points
+			(id, repository_id, semantics, state, captured_at, committed_at, point_revision, capability_revision,
+			 immutability_level, physical_availability, hold_state, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, repositoryID, backupasset.PointNativeSnapshot, backupasset.RecoveryPointCommitted,
+			capturedAt, capturedAt, pointRevision, capabilityRevision, backupasset.ImmutabilityBackendVersioned,
+			backupasset.PhysicalOnline, backupasset.HoldNone, evaluatedAt, evaluatedAt).Error
+	}
+	if err := insertPoint(testOpaqueID(301), 41, 7); err != nil {
+		t.Fatalf("insert valid revision control: %v", err)
+	}
+	service, err := NewPolicyService(PolicyServiceDependencies{
+		DB: db, Now: func() time.Time { return evaluatedAt }, NewID: func() (string, error) { return testOpaqueID(310), nil },
+	})
+	if err != nil {
+		t.Fatalf("NewPolicyService: %v", err)
+	}
+	policy, err := service.Create(context.Background(), CreatePolicyRequest{
+		Actor:     backupasset.AuditActor{UserID: 1, Username: "admin", Role: "admin"},
+		ScopeKind: backupasset.RetentionPolicyScopeRepository, ScopeID: repositoryID,
+		Rules: PolicyRules{Version: PolicyRulesVersion1, Age: &AgeRule{KeepDays: 1}},
+	})
+	if err != nil {
+		t.Fatalf("create revision constraint policy: %v", err)
+	}
+	for _, testCase := range []struct {
+		name               string
+		id                 string
+		pointRevision      int64
+		capabilityRevision int
+		postgresConstraint string
+	}{
+		{"point_revision", testOpaqueID(302), 0, 7, "recovery_points_point_revision_check"},
+		{"capability_revision", testOpaqueID(303), 41, 0, "recovery_points_capability_revision_check"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := insertPoint(testCase.id, testCase.pointRevision, testCase.capabilityRevision)
+			switch db.Name() {
+			case "sqlite":
+				var constraint sqlite3.Error
+				if !errors.As(err, &constraint) || constraint.ExtendedCode != sqlite3.ErrConstraintCheck {
+					t.Fatalf("insert zero %s error=%v, want SQLite CHECK rejection", testCase.name, err)
+				}
+			case "postgres":
+				var constraint *pgconn.PgError
+				if !errors.As(err, &constraint) || constraint.Code != "23514" || constraint.ConstraintName != testCase.postgresConstraint {
+					t.Fatalf("insert zero %s error=%v, want PostgreSQL CHECK %s", testCase.name, err, testCase.postgresConstraint)
+				}
+			default:
+				t.Fatalf("unexpected policy selection database %q", db.Name())
+			}
+			var inserted int64
+			if err := db.Model(&model.RecoveryPoint{}).Where("id = ?", testCase.id).Count(&inserted).Error; err != nil {
+				t.Fatalf("count rejected point: %v", err)
+			}
+			if inserted != 0 {
+				t.Fatalf("zero %s point persisted: count=%d", testCase.name, inserted)
+			}
+			selection, err := service.Select(context.Background(), SelectionRequest{
+				PolicyID: policy.ID, ExpectedRevision: policy.Revision, EvaluatedAt: evaluatedAt,
+			})
+			if err != nil {
+				t.Fatalf("select after rejecting zero %s: %v", testCase.name, err)
+			}
+			want := []SelectedPoint{{RecoveryPointID: testOpaqueID(301), PointRevision: 41, CapabilityRevision: 7}}
+			if !reflect.DeepEqual(selection.Points, want) || selection.Inspected != 1 || selection.NextCursor != "" {
+				t.Fatalf("selection after rejecting zero %s=%+v inspected=%d cursor=%q, want %+v inspected=1 without continuation",
+					testCase.name, selection.Points, selection.Inspected, selection.NextCursor, want)
+			}
+		})
+	}
+}
+
+func TestPolicySelectionBindsIndependentPointAndCapabilityRevisions(t *testing.T) {
 	db := newRetentionTestDB(t)
 	evaluatedAt := time.Date(2026, 8, 17, 8, 30, 0, 0, time.UTC)
 	service, err := NewPolicyService(PolicyServiceDependencies{
@@ -344,47 +574,18 @@ func TestPolicySelectionLocksRowsAndBindsIndependentRevision(t *testing.T) {
 		Rules: PolicyRules{Version: PolicyRulesVersion1, Count: &CountRule{KeepLatest: 1}},
 	})
 	if err != nil {
-		t.Fatalf("create locking policy: %v", err)
+		t.Fatalf("create revision projection policy: %v", err)
 	}
 
-	pointQueryLocked := false
-	if err := db.Callback().Query().Before("gorm:query").Register("retention:test_point_lock", func(tx *gorm.DB) {
-		if tx.Statement.Table != "recovery_points" {
-			return
-		}
-		lockingClause, ok := tx.Statement.Clauses["FOR"]
-		locking, isLocking := lockingClause.Expression.(clause.Locking)
-		pointQueryLocked = ok && isLocking && locking.Strength == "UPDATE"
-	}); err != nil {
-		t.Fatalf("register point lock observer: %v", err)
-	}
 	selection, err := service.Select(context.Background(), SelectionRequest{
 		PolicyID: policy.ID, ExpectedRevision: policy.Revision, EvaluatedAt: evaluatedAt,
 	})
 	if err != nil {
 		t.Fatalf("select independently revisioned point: %v", err)
 	}
-	if !pointQueryLocked {
-		t.Fatal("retention point selection did not request a FOR UPDATE row lock")
-	}
-	want := []SelectedPoint{{RecoveryPointID: oldPoint.ID, PointRevision: 41, CapabilityRevision: 7}}
+	want := []SelectedPoint{{RecoveryPointID: testOpaqueID(401), PointRevision: 41, CapabilityRevision: 7}}
 	if !reflect.DeepEqual(selection.Points, want) {
 		t.Fatalf("revision-bound selection=%+v, want %+v", selection.Points, want)
-	}
-
-	invalidPointRevision := oldPoint
-	invalidPointRevision.PointRevision = 0
-	if _, err := selectRecoveryPoints(selectionFacts(invalidPointRevision), PolicyRules{
-		Version: PolicyRulesVersion1, Age: &AgeRule{KeepDays: 1},
-	}, evaluatedAt); !errors.Is(err, backupasset.ErrInvalidState) {
-		t.Fatalf("zero point revision error=%v, want ErrInvalidState", err)
-	}
-	invalidCapabilityRevision := oldPoint
-	invalidCapabilityRevision.CapabilityRevision = 0
-	if _, err := selectRecoveryPoints(selectionFacts(invalidCapabilityRevision), PolicyRules{
-		Version: PolicyRulesVersion1, Age: &AgeRule{KeepDays: 1},
-	}, evaluatedAt); !errors.Is(err, backupasset.ErrInvalidState) {
-		t.Fatalf("zero capability revision error=%v, want ErrInvalidState", err)
 	}
 }
 
@@ -712,17 +913,6 @@ func TestPolicyConcurrentCreatePostgresMapsActiveScopeConflict(t *testing.T) {
 	}
 }
 
-func selectionFacts(points ...model.RecoveryPoint) []selectionFact {
-	facts := make([]selectionFact, 0, len(points))
-	for _, point := range points {
-		facts = append(facts, selectionFact{
-			id: point.ID, pointRevision: point.PointRevision,
-			capabilityRevision: point.CapabilityRevision, capturedAt: point.CapturedAt,
-		})
-	}
-	return facts
-}
-
 func newSelectionPoint(id, repositoryID string, taskID *uint, capturedAt time.Time, capabilityRevision int) model.RecoveryPoint {
 	return model.RecoveryPoint{
 		ID: id, RepositoryID: repositoryID, ProducingTaskID: taskID,
@@ -750,6 +940,24 @@ func enableRetentionTestEncryption(t *testing.T) {
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
+}
+
+func newMigratedPolicySelectionSQLiteDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	enableRetentionTestEncryption(t)
+	db, err := appdatabase.Open(config.Config{DBType: "sqlite", SQLitePath: filepath.Join(t.TempDir(), "policy-selection.db")})
+	if err != nil {
+		t.Fatalf("open policy selection SQLite database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("policy selection SQLite handle: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := appdatabase.RunMigrations(db, "sqlite"); err != nil {
+		t.Fatalf("migrate policy selection SQLite database: %v", err)
+	}
+	return db
 }
 
 func newRetentionTestDB(t *testing.T) *gorm.DB {

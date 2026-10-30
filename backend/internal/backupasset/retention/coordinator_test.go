@@ -5166,64 +5166,12 @@ func (resolver registryDeletePointResolver) ResolveDeletePoint(
 	}, nil
 }
 
-type sequencedDeletePointResolver struct {
-	calls  int
-	native bool
-}
-
-func (resolver *sequencedDeletePointResolver) ResolveDeletePoint(
-	_ context.Context,
-	_ *gorm.DB,
-	request LifecyclePointRequest,
-	point model.RecoveryPoint,
-	repository model.BackupRepository,
-) (provider.DeletePointRequest, error) {
-	resolver.calls++
-	repositoryIdentity := ""
-	if repository.RepositoryIdentity != nil {
-		repositoryIdentity = *repository.RepositoryIdentity
-	}
-	snapshot := provider.ReadSnapshot{
-		RepositoryID: repository.ID, RepositoryIdentity: repositoryIdentity,
-		CapabilityRevision: repository.CapabilityRevision, SourceRevision: point.SourceFingerprint,
-		Access: provider.AccessBinding{
-			Provider:      backupasset.ProviderKind(repository.ProviderKind),
-			RepositoryID:  repository.ID,
-			TaskID:        1,
-			NodeID:        1,
-			IdentitySalt:  []byte(strings.Repeat("s", provider.IdentitySaltBytes)),
-			EndpointFacts: []string{"test-endpoint"},
-		},
-	}
-	command := &provider.RemoteCommandAccess{Node: model.Node{
-		ID: 1, Host: "localhost", Port: 22, Username: "root", AuthType: "password",
-		BasePath: "/", BackupDir: "/backup", Password: "FAKE_TEST_PASSWORD",
-	}}
-	nativeRepositoryID := strings.Repeat("0", 64)
-	if resolver.calls > 1 && resolver.native {
-		nativeRepositoryID = strings.Repeat("1", 64)
-	}
-	snapshot.Access.AdapterData = provider.ResticRuntimeAccess{
-		NativeRepositoryID: nativeRepositoryID,
-		Command:            command,
-	}
-	if !resolver.native && resolver.calls > 1 {
-		snapshot.Access.Secret = []byte("post-effect binding authority drift")
-	}
-	return provider.DeletePointRequest{
-		Snapshot: snapshot, Point: provider.PointLocator{Native: point.EncryptedProviderLocator},
-		ExpectedSourceRevision: point.SourceFingerprint, OperationID: request.AttemptID,
-	}, nil
-}
-
 type registryPointDeleterFake struct {
 	kind    backupasset.ProviderKind
 	result  provider.DeletePointResult
 	err     error
 	calls   int
 	request provider.DeletePointRequest
-	entered chan struct{}
-	release chan struct{}
 }
 
 func (fake *registryPointDeleterFake) ProviderKind() backupasset.ProviderKind {
@@ -5233,10 +5181,6 @@ func (fake *registryPointDeleterFake) ProviderKind() backupasset.ProviderKind {
 func (fake *registryPointDeleterFake) DeletePoint(_ context.Context, request provider.DeletePointRequest) (provider.DeletePointResult, error) {
 	fake.calls++
 	fake.request = request
-	if fake.entered != nil {
-		close(fake.entered)
-		<-fake.release
-	}
 	return fake.result, fake.err
 }
 
@@ -5354,55 +5298,6 @@ func (tx *ambiguousCommitTx) Commit() error {
 		return errors.New("ambiguous transaction commit")
 	}
 	return err
-}
-
-func runRegistryPointDeletionProtocol(ctx context.Context, adapter *RegistryPointDeletion, request LifecyclePointRequest) (PointDeletionResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var prepared preparedPointDeletion
-	err := adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		rows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, false)
-		if err != nil {
-			return err
-		}
-		if err := validateLifecycleDeleteRows(request, rows.attempt, rows.point, rows.lease, rows.repository); err != nil {
-			return err
-		}
-		held, err := lifecycleDeleteHasActiveHoldTx(ctx, tx, rows.point)
-		if err != nil {
-			return err
-		}
-		if held {
-			return lifecycleDeleteIdentityConflict("lifecycle deletion is blocked by an active hold")
-		}
-		prepared, err = adapter.Prepare(ctx, tx, providerDeletePrepareObserver, request, rows)
-		return err
-	})
-	if err != nil {
-		return PointDeletionResult{}, mapProviderDeletionError(err)
-	}
-	execution, err := adapter.Execute(ctx, prepared)
-	if err != nil {
-		return PointDeletionResult{}, mapProviderDeletionError(err)
-	}
-	if !execution.ProviderCalled || !validPointDeletionResult(execution.Result) {
-		return PointDeletionResult{}, fmt.Errorf("%w: provider deletion result is unproven", backupasset.ErrInvalidState)
-	}
-	err = adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		rows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, true)
-		if err != nil {
-			return err
-		}
-		if err := adapter.Verify(ctx, tx, request, prepared, rows); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return PointDeletionResult{}, mapProviderDeletionError(err)
-	}
-	return execution.Result, nil
 }
 
 func mustNewLifecycleHoldService(t *testing.T, db *gorm.DB, now func() time.Time) *HoldService {
@@ -6145,358 +6040,6 @@ func TestLifecycleBlockedAuditRetriesAfterReasonChangesToHold(t *testing.T) {
 	}
 	if len(audit.events) == 0 || audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
 		t.Fatalf("blocked audit=%+v, want settled blocked status", audit.events)
-	}
-}
-
-func TestRegistryPointDeletionRejectsActiveHoldCommittedAfterPreparedAuthority(t *testing.T) {
-	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
-	_, authority, blocked, err := fixture.coordinator.prepareExternalEffect(
-		context.Background(), fixture.attemptID, backupasset.LifecyclePhaseProviderDelete,
-	)
-	if err != nil || blocked {
-		t.Fatalf("prepareExternalEffect authority=%+v blocked=%t error=%v", authority, blocked, err)
-	}
-	if err := fixture.db.Create(&model.RecoveryPointHold{
-		ID: testOpaqueID(1704), RecoveryPointID: fixture.pointID,
-		HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
-		EncryptedReason: "active hold after prepared authority", CreatedBy: 1,
-		CreatedAt: fixture.now, UpdatedAt: fixture.now,
-	}).Error; err != nil {
-		t.Fatalf("commit active hold after prepared authority: %v", err)
-	}
-	request := LifecyclePointRequest{
-		RecoveryPointID: fixture.pointID, AttemptID: fixture.attemptID,
-		Operation: backupasset.LifecycleRetentionExpire, authority: authority,
-	}
-	_, err = runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, request)
-	if !errors.Is(err, ErrPointDeletionIdentityConflict) {
-		t.Fatalf("active hold error=%v, want ErrPointDeletionIdentityConflict", err)
-	}
-	if fixture.deleter.calls != 0 {
-		t.Fatalf("active hold invoked provider deleter %d times", fixture.deleter.calls)
-	}
-}
-
-func TestRegistryPointDeletionRevalidatesResolverMutationsInsideTransaction(t *testing.T) {
-	for _, mutation := range []struct {
-		name  string
-		point bool
-		repo  bool
-	}{
-		{name: "point", point: true},
-		{name: "repository", repo: true},
-	} {
-		t.Run(mutation.name, func(t *testing.T) {
-			fixture := newDirectRegistryDeletionFixture(t, transactionalMutationDeleteResolver{
-				mutatePoint: mutation.point, mutateRepository: mutation.repo,
-			}, provider.DeletePointDeleted, nil)
-			_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
-			if !errors.Is(err, ErrPointDeletionIdentityConflict) {
-				t.Fatalf("resolver %s mutation error=%v, want identity conflict", mutation.name, err)
-			}
-			if fixture.deleter.calls != 0 {
-				t.Fatalf("resolver %s mutation invoked provider deleter %d times", mutation.name, fixture.deleter.calls)
-			}
-			var point model.RecoveryPoint
-			if err := fixture.db.First(&point, "id = ?", fixture.pointID).Error; err != nil {
-				t.Fatalf("reload point after rollback: %v", err)
-			}
-			if point.SourceFingerprint != strings.Repeat("c", 64) {
-				t.Fatalf("resolver %s mutation committed point source=%q", mutation.name, point.SourceFingerprint)
-			}
-		})
-	}
-}
-
-func TestRegistryPointDeletionPreservesProviderErrorMappings(t *testing.T) {
-	providerError := errors.New("provider temporarily unavailable")
-	for _, test := range []struct {
-		name string
-		err  error
-		want error
-	}{
-		{name: "ordinary provider error", err: providerError, want: providerError},
-		{name: "worm", err: provider.ErrDeletePointWORM, want: ErrPointDeletionWORM},
-		{name: "native version referenced", err: provider.ErrDeletePointNativeVersionReferenced, want: provider.ErrDeletePointNativeVersionReferenced},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, test.err)
-			_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
-			if !errors.Is(err, test.want) {
-				t.Fatalf("provider error=%v, want errors.Is(%v)", err, test.want)
-			}
-			if fixture.deleter.calls != 1 {
-				t.Fatalf("provider error deleter calls=%d, want 1", fixture.deleter.calls)
-			}
-		})
-	}
-}
-
-func TestRegistryPointDeletionSucceedsWithPreparedTransactionAuthority(t *testing.T) {
-	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
-	result, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
-	if err != nil {
-		t.Fatalf("registry point deletion: %v", err)
-	}
-	if result.Outcome != PointDeletionDeleted || result.ReceiptDigest != strings.Repeat("d", 64) {
-		t.Fatalf("registry point deletion result=%+v", result)
-	}
-	if fixture.deleter.calls != 1 {
-		t.Fatalf("successful registry deleter calls=%d, want 1", fixture.deleter.calls)
-	}
-}
-
-func TestRegistryPointDeletionRejectsPostEffectResolvedAccessDrift(t *testing.T) {
-	resolver := &sequencedDeletePointResolver{}
-	fixture := newDirectRegistryDeletionFixture(t, resolver, provider.DeletePointDeleted, nil)
-	_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
-	if !errors.Is(err, ErrPointDeletionIdentityConflict) {
-		t.Fatalf("post-effect resolved access drift error=%v, want ErrPointDeletionIdentityConflict", err)
-	}
-	if resolver.calls != 2 {
-		t.Fatalf("resolver calls=%d, want pre-effect and post-effect resolution", resolver.calls)
-	}
-	if fixture.deleter.calls != 1 {
-		t.Fatalf("provider calls=%d, want one completed effect before drift rejection", fixture.deleter.calls)
-	}
-}
-
-func TestRegistryPointDeletionRejectsPostEffectNativeAuthorityDigestDrift(t *testing.T) {
-	resolver := &sequencedDeletePointResolver{native: true}
-	fixture := newDirectRegistryDeletionFixture(t, resolver, provider.DeletePointDeleted, nil)
-	_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
-	if !errors.Is(err, ErrPointDeletionIdentityConflict) {
-		t.Fatalf("post-effect native authority drift error=%v, want ErrPointDeletionIdentityConflict", err)
-	}
-	if resolver.calls != 2 {
-		t.Fatalf("native resolver calls=%d, want pre-effect and post-effect resolution", resolver.calls)
-	}
-	if fixture.deleter.calls != 1 {
-		t.Fatalf("native provider calls=%d, want one completed effect before drift rejection", fixture.deleter.calls)
-	}
-}
-
-func TestRegistryPointDeletionAllowsIndependentRepositoryWriteDuringProviderDelete(t *testing.T) {
-	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
-	var point model.RecoveryPoint
-	if err := fixture.db.Select("repository_id").First(&point, "id = ?", fixture.pointID).Error; err != nil {
-		t.Fatal(err)
-	}
-	fixture.deleter.entered = make(chan struct{})
-	fixture.deleter.release = make(chan struct{})
-	deleteDone := make(chan error, 1)
-	go func() {
-		_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
-		deleteDone <- err
-	}()
-	<-fixture.deleter.entered
-
-	writerDone := make(chan error, 1)
-	go func() {
-		writerDone <- fixture.db.Model(&model.BackupRepository{}).Where("id = ?", point.RepositoryID).
-			Update("description", "independent writer completed").Error
-	}()
-	select {
-	case writerErr := <-writerDone:
-		if writerErr != nil {
-			close(fixture.deleter.release)
-			<-deleteDone
-			t.Fatalf("repository writer failed while provider deletion was paused: %v", writerErr)
-		}
-	case <-time.After(time.Second):
-		close(fixture.deleter.release)
-		<-deleteDone
-		t.Fatal("repository writer did not complete while provider deletion was paused")
-	}
-
-	close(fixture.deleter.release)
-	if err := <-deleteDone; err != nil {
-		t.Fatalf("provider deletion after independent repository write: %v", err)
-	}
-	var repository model.BackupRepository
-	if err := fixture.db.First(&repository, "id = ?", point.RepositoryID).Error; err != nil {
-		t.Fatalf("reload repository after provider deletion: %v", err)
-	}
-	if repository.Description != "independent writer completed" {
-		t.Fatalf("repository description=%q, want independent writer update", repository.Description)
-	}
-}
-
-func TestRegistryPointDeletionReturnsReceiptWhenHoldAppearsAfterProviderEffect(t *testing.T) {
-	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
-	fixture.deleter.entered = make(chan struct{})
-	fixture.deleter.release = make(chan struct{})
-	type deletionOutcome struct {
-		result PointDeletionResult
-		err    error
-	}
-	deleteDone := make(chan deletionOutcome, 1)
-	go func() {
-		result, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
-		deleteDone <- deletionOutcome{result: result, err: err}
-	}()
-	<-fixture.deleter.entered
-
-	if err := fixture.db.Create(&model.RecoveryPointHold{
-		ID: testOpaqueID(1710), RecoveryPointID: fixture.pointID,
-		HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
-		EncryptedReason: "active hold after provider effect", CreatedBy: 1,
-		CreatedAt: fixture.now, UpdatedAt: fixture.now,
-	}).Error; err != nil {
-		close(fixture.deleter.release)
-		<-deleteDone
-		t.Fatalf("commit post-effect active hold: %v", err)
-	}
-	close(fixture.deleter.release)
-	outcome := <-deleteDone
-	if outcome.err != nil {
-		t.Fatalf("post-effect active hold discarded provider receipt: %v", outcome.err)
-	}
-	if outcome.result.Outcome != PointDeletionDeleted ||
-		outcome.result.ReceiptDigest != strings.Repeat("d", 64) {
-		t.Fatalf("post-effect active hold result=%+v, want settled deletion receipt", outcome.result)
-	}
-	if fixture.deleter.calls != 1 {
-		t.Fatalf("post-effect active hold provider calls=%d, want 1", fixture.deleter.calls)
-	}
-}
-
-func TestRegistryPointDeletionRejectsPostEffectDrift(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		mutate func(*directRegistryDeletionFixture) error
-	}{
-		{
-			name: "authority",
-			mutate: func(fixture *directRegistryDeletionFixture) error {
-				return fixture.db.Model(&model.RecoveryPointLifecycleAttempt{}).
-					Where("id = ?", fixture.attemptID).
-					Update("transition_revision", 2).Error
-			},
-		},
-		{
-			name: "request",
-			mutate: func(fixture *directRegistryDeletionFixture) error {
-				return fixture.db.Model(&model.RecoveryPoint{}).
-					Where("id = ?", fixture.pointID).
-					Update("source_fingerprint", strings.Repeat("e", 64)).Error
-			},
-		},
-		{
-			name: "repository fence",
-			mutate: func(fixture *directRegistryDeletionFixture) error {
-				var point model.RecoveryPoint
-				if err := fixture.db.Select("repository_id").First(&point, "id = ?", fixture.pointID).Error; err != nil {
-					return err
-				}
-				return fixture.db.Model(&model.BackupRepository{}).
-					Where("id = ?", point.RepositoryID).
-					Update("capability_revision", 2).Error
-			},
-		},
-		{
-			name: "provider locator",
-			mutate: func(fixture *directRegistryDeletionFixture) error {
-				return fixture.db.Model(&model.RecoveryPoint{}).
-					Where("id = ?", fixture.pointID).
-					Update("encrypted_provider_locator", `{"snapshot":"drifted-private-locator"}`).Error
-			},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
-			fixture.deleter.entered = make(chan struct{})
-			fixture.deleter.release = make(chan struct{})
-			deleteDone := make(chan error, 1)
-			go func() {
-				_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
-				deleteDone <- err
-			}()
-			<-fixture.deleter.entered
-
-			if err := test.mutate(&fixture); err != nil {
-				close(fixture.deleter.release)
-				<-deleteDone
-				t.Fatalf("post-effect %s mutation: %v", test.name, err)
-			}
-			close(fixture.deleter.release)
-			if err := <-deleteDone; !errors.Is(err, ErrPointDeletionIdentityConflict) {
-				t.Fatalf("post-effect %s drift error=%v, want ErrPointDeletionIdentityConflict", test.name, err)
-			}
-			if fixture.deleter.calls != 1 {
-				t.Fatalf("post-effect %s drift provider calls=%d, want 1", test.name, fixture.deleter.calls)
-			}
-		})
-	}
-}
-
-func TestRegistryPointDeletionRejectsInvalidProviderReceipts(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		result provider.DeletePointResult
-	}{
-		{
-			name:   "deleted missing receipt",
-			result: provider.DeletePointResult{Outcome: provider.DeletePointDeleted},
-		},
-		{
-			name: "already absent malformed receipt",
-			result: provider.DeletePointResult{
-				Outcome: provider.DeletePointAlreadyAbsent, ReceiptDigest: strings.Repeat("A", 64),
-			},
-		},
-		{
-			name: "unknown outcome",
-			result: provider.DeletePointResult{
-				Outcome: provider.DeletePointOutcome("unknown"), ReceiptDigest: strings.Repeat("a", 64),
-			},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
-			fixture.deleter.result = test.result
-			_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
-			if !errors.Is(err, backupasset.ErrInvalidState) {
-				t.Fatalf("invalid provider result=%+v error=%v, want ErrInvalidState", test.result, err)
-			}
-			if fixture.deleter.calls != 1 {
-				t.Fatalf("invalid provider result deleter calls=%d, want 1", fixture.deleter.calls)
-			}
-		})
-	}
-}
-
-func TestRegistryPointDeletionExecuteStopsBeforeCanceledRegisteredProvider(t *testing.T) {
-	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
-	var prepared preparedPointDeletion
-	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
-		rows, err := lockLifecycleDeleteRowsTx(context.Background(), tx, fixture.request, false)
-		if err != nil {
-			return err
-		}
-		prepared, err = fixture.adapter.Prepare(
-			context.Background(), tx, providerDeletePrepareObserver, fixture.request, rows,
-		)
-		return err
-	}); err != nil {
-		t.Fatalf("prepare direct registry deletion: %v", err)
-	}
-	bounded, cancel, err := fixture.coordinator.providerDeleteBoundContext(
-		context.Background(), fixture.now.Add(time.Hour),
-	)
-	if err != nil {
-		t.Fatalf("bound provider context: %v", err)
-	}
-	cancel()
-	execution, err := fixture.adapter.Execute(bounded, prepared)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled registered provider error=%v, want context.Canceled", err)
-	}
-	if execution.Stage != providerDeleteStageProvider || execution.ProviderCalled {
-		t.Fatalf("canceled registered provider execution=%+v, want provider_invoke/false", execution)
-	}
-	if fixture.deleter.calls != 0 {
-		t.Fatalf("canceled registered provider calls=%d, want zero", fixture.deleter.calls)
 	}
 }
 
@@ -8111,105 +7654,10 @@ func TestLifecycleClaimedBlockedProviderDeleteRetryAtIsDueGated(t *testing.T) {
 	}
 }
 
-type directRegistryDeletionFixture struct {
-	db          *gorm.DB
-	adapter     *RegistryPointDeletion
-	coordinator *Coordinator
-	holds       *HoldService
-	deleter     *registryPointDeleterFake
-	request     LifecyclePointRequest
-	pointID     string
-	attemptID   string
-	now         time.Time
-}
-
-func newDirectRegistryDeletionFixture(
-	t *testing.T,
-	resolver PointDeletionAccessResolver,
-	outcome provider.DeletePointOutcome,
-	deleterErr error,
-) directRegistryDeletionFixture {
-	t.Helper()
-	db := newLifecycleCoordinatorTestDB(t)
-	now := time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC)
-	repositoryID, pointID, leaseID, attemptID := testOpaqueID(1700), testOpaqueID(1701), testOpaqueID(1702), testOpaqueID(1703)
-	seedRetentionUsersAndRepository(t, db, repositoryID)
-	point := newSelectionPoint(pointID, repositoryID, nil, now.Add(-time.Hour), 1)
-	point.State = string(backupasset.RecoveryPointExpiring)
-	point.SourceFingerprint = strings.Repeat("c", 64)
-	point.EncryptedProviderLocator = `{"snapshot":"direct-registry-private-locator"}`
-	if err := db.Create(&point).Error; err != nil {
-		t.Fatalf("seed direct registry point: %v", err)
-	}
-	owner := "retention-worker-direct-registry"
-	fenceToken := strings.Repeat("a", 64)
-	fenceHash := hashFenceToken(fenceToken)
-	lease := model.RecoveryPointLease{
-		ID: leaseID, RecoveryPointID: pointID, HolderType: string(backupasset.LeaseHolderRetentionWorker),
-		OwnerID: owner, AttemptID: attemptID, FenceToken: fenceToken, Status: string(backupasset.LeaseActive),
-		LeaseExpiresAt: now.Add(5 * time.Minute), AbsoluteDeadline: now.Add(time.Hour), LastHeartbeatAt: now,
-		CreatedAt: now, UpdatedAt: now,
-	}
-	if err := db.Create(&lease).Error; err != nil {
-		t.Fatalf("seed direct registry lease: %v", err)
-	}
-	attempt := model.RecoveryPointLifecycleAttempt{
-		ID: attemptID, RecoveryPointID: pointID, Operation: string(backupasset.LifecycleRetentionExpire),
-		Phase: string(backupasset.LifecyclePhaseProviderDelete), TransitionRevision: 1,
-		LeaseID: &leaseID, LeaseAttemptID: &attemptID, LeaseFenceTokenHash: &fenceHash,
-		ClaimedAt: &now, HeartbeatAt: &now, CreatedAt: now, UpdatedAt: now,
-	}
-	if err := db.Create(&attempt).Error; err != nil {
-		t.Fatalf("seed direct registry attempt: %v", err)
-	}
-	leaseService, err := backupasset.NewLeaseService(db, func() time.Time { return now }, backupasset.LeaseConfig{
-		Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour,
-	})
-	if err != nil {
-		t.Fatalf("NewLeaseService: %v", err)
-	}
-	coordinator := &Coordinator{db: db, leases: leaseService, now: func() time.Time { return now }, leaseOwnerID: owner}
-	_, authority, blocked, err := coordinator.prepareExternalEffect(context.Background(), attemptID, backupasset.LifecyclePhaseProviderDelete)
-	if err != nil || blocked {
-		t.Fatalf("prepare direct registry authority=%+v blocked=%t error=%v", authority, blocked, err)
-	}
-	snapshot := provider.ReadSnapshot{
-		RepositoryID: repositoryID, CapabilityRevision: 1, SourceRevision: strings.Repeat("c", 64),
-		Access: provider.AccessBinding{Provider: backupasset.ProviderRestic, RepositoryID: repositoryID},
-	}
-	if _, ok := resolver.(registryDeletePointResolver); ok {
-		resolver = registryDeletePointResolver{snapshot: snapshot}
-	}
-	deleter := &registryPointDeleterFake{
-		kind:   backupasset.ProviderRestic,
-		result: provider.DeletePointResult{Outcome: outcome, ReceiptDigest: strings.Repeat("d", 64)},
-		err:    deleterErr,
-	}
-	registry := provider.NewRegistry()
-	if err := registry.Register(backupasset.ProviderRestic, provider.Registration{Prober: &retentionProviderProberFake{}, PointDeleter: deleter}); err != nil {
-		t.Fatalf("register direct registry deleter: %v", err)
-	}
-	adapter, err := NewRegistryPointDeletion(db, registry, resolver)
-	if err != nil {
-		t.Fatalf("NewRegistryPointDeletion: %v", err)
-	}
-	holds, err := NewHoldService(HoldServiceDependencies{DB: db, Now: func() time.Time { return now }})
-	if err != nil {
-		t.Fatalf("NewHoldService: %v", err)
-	}
-	return directRegistryDeletionFixture{
-		db: db, adapter: adapter, coordinator: coordinator, holds: holds, deleter: deleter,
-		request: LifecyclePointRequest{
-			RecoveryPointID: pointID, AttemptID: attemptID,
-			Operation: backupasset.LifecycleRetentionExpire, authority: authority,
-		},
-		pointID: pointID, attemptID: attemptID, now: now,
-	}
-}
-
 type transactionalMutationDeleteResolver struct {
 	mutatePoint      bool
 	mutateRepository bool
+	mutationObserved *bool
 }
 
 func (resolver transactionalMutationDeleteResolver) ResolveDeletePoint(
@@ -8220,16 +7668,20 @@ func (resolver transactionalMutationDeleteResolver) ResolveDeletePoint(
 	repository model.BackupRepository,
 ) (provider.DeletePointRequest, error) {
 	if resolver.mutatePoint {
-		if err := tx.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).
-			Update("source_fingerprint", strings.Repeat("e", 64)).Error; err != nil {
+		result := tx.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).
+			Update("source_fingerprint", strings.Repeat("e", 64))
+		if err := registryEntrypointUpdate(result); err != nil {
 			return provider.DeletePointRequest{}, err
 		}
+		*resolver.mutationObserved = true
 	}
 	if resolver.mutateRepository {
-		if err := tx.Model(&model.BackupRepository{}).Where("id = ?", repository.ID).
-			Update("capability_revision", 2).Error; err != nil {
+		result := tx.Model(&model.BackupRepository{}).Where("id = ?", repository.ID).
+			Update("capability_revision", 2)
+		if err := registryEntrypointUpdate(result); err != nil {
 			return provider.DeletePointRequest{}, err
 		}
+		*resolver.mutationObserved = true
 	}
 	return registryDeletePointResolver{
 		snapshot: provider.ReadSnapshot{
