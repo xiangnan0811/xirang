@@ -67,8 +67,8 @@ transport abort 与应用 stale guard 分开记录；受控 HTTP 场景不替代
 
 walkthrough 同候选原生 list 与安全实际事件一并保存，执行失败也汇编并收集现有证据。
 axe 与 computed contrast 的完整测量要求见[可访问性](a11y-guidelines.md#颜色与真实布局)，
-历史缺测保持 unknown。旧退役比较及无生产 importer 的 legacy SnapshotSearch/SnapshotBrowser
-不为覆盖率复活；现有初始dialog渲染不证明迁移、告警投递或其他未执行的业务流程。
+历史缺测保持 unknown。已退役的 snapshot 组件、wrapper 及其专属文案不为覆盖率复活；
+历史与资产入口回归覆盖当前真实页面，服务端 410 和 live restore 门控由实际路由回归保护。
 
 ## 语言资源
 

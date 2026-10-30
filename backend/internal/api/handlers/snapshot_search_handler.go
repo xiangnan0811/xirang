@@ -1,30 +1,12 @@
 package handlers
 
-import (
-	"xirang/backend/internal/backupasset/publication"
-	"xirang/backend/internal/snapshot"
+import "github.com/gin-gonic/gin"
 
-	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
-)
+// SnapshotSearchHandler 处理已退役的跨快照文件搜索入口。
+type SnapshotSearchHandler struct{}
 
-// SnapshotSearchHandler 处理跨快照文件搜索请求。
-type SnapshotSearchHandler struct {
-	db      *gorm.DB
-	guard   publication.LineageGuard
-	indexer *snapshot.Indexer
-}
-
-func NewSnapshotSearchHandler(db *gorm.DB, guard publication.LineageGuard, indexer *snapshot.Indexer) *SnapshotSearchHandler {
-	return &SnapshotSearchHandler{db: db, guard: guard, indexer: indexer}
-}
-
-// SearchResult 搜索结果条目。
-type SearchResult struct {
-	SnapshotID string `json:"snapshot_id"`
-	Path       string `json:"path"`
-	Size       int64  `json:"size"`
-	Mtime      string `json:"mtime"`
+func NewSnapshotSearchHandler() *SnapshotSearchHandler {
+	return &SnapshotSearchHandler{}
 }
 
 // Search godoc

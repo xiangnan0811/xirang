@@ -20,6 +20,7 @@
 - GA 不加入通用 Settings `CATEGORY_ORDER`（security、node_monitor、retention、storage、alert、anomaly）；Admin readiness 面板单独拥有流程。Worker optional 是布尔事实，不是公共镜像承诺。
 - 已认证遗留 snapshot list/files/search/diff HTTP 始终 410，替代为 Catalog/Search；legacy restore 保留注册但要求 FeatureLive + Admin + step-up。关闭 feature 不使退役读 API 复活。
 - 任务历史不提供调用退役 snapshot list/diff 的比较入口，仍保留运行历史、备份资产工作区、Search 与恢复深链。Catalog/Search 不承诺旧比较接口的等价替代；快照异常检测的后台能力不因移除该入口而退役。
+- 退役 snapshot 读取不构造旧文件索引器，也不提供旧浏览/搜索/恢复弹窗或其专属前端 wrapper、文案；后端兼容 restore 仍按上述门禁保留。旧索引历史表、model 和已发布迁移保留，不因移除实现删除历史记录；后台 snapshot 差异历史与资产 Catalog/Search 不属于旧索引器的清理范围。
 - GA composition 在 `backupasset/runtime`，不向 server main 复制编排。官方镜像仍 `linnea7171/xirang`；Worker 本地可选且未发布，不因 GA 增加 Worker 公共发布。
 
 ## 设置锁序、前瞻配置与工作所有权

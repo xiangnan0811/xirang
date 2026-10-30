@@ -23,7 +23,6 @@ import (
 	"xirang/backend/internal/policy"
 	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/settings"
-	"xirang/backend/internal/snapshot"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/util"
@@ -59,7 +58,6 @@ type Dependencies struct {
 	BackupContentConfig   handlers.BackupContentHandlerConfigSource
 	LegacyResticSnapshots handlers.LegacyResticSnapshots
 	SnapshotDiffRunner    handlers.SnapshotDiffRunner
-	SnapshotIndexer       *snapshot.Indexer
 	// TrustedProxies limits which reverse proxies may set X-Forwarded-For.
 	// Empty = trust none (ClientIP uses RemoteAddr only).
 	TrustedProxies []string
@@ -376,7 +374,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		snapshotHandler = snapshotHandler.WithFeatureLive(dep.BackupAssets.FeatureLive)
 	}
 	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB, lineageGuard, dep.SnapshotDiffRunner)
-	snapshotSearchHandler := handlers.NewSnapshotSearchHandler(dep.DB, lineageGuard, dep.SnapshotIndexer)
+	snapshotSearchHandler := handlers.NewSnapshotSearchHandler()
 	configHandler := handlers.NewConfigHandler(dep.DB, dep.SettingsService).WithBackupAssetTransitioner(featureTransitioner)
 	appCredentialHandler := handlers.NewAppCredentialHandler(dep.DB)
 	settingsHandler := handlers.NewSettingsHandler(dep.DB, dep.SettingsService).WithBackupAssetTransitioner(featureTransitioner)

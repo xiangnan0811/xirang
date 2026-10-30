@@ -104,9 +104,8 @@
 | `BATCH_COMMAND_BLACKLIST` | string | 空（使用内置规则） | 否 | 批量命令黑名单（逗号分隔正则） |
 | `FILE_BROWSER_ALLOW_ALL` | string | 空（禁用） | 否 | 仅显式开发环境中，精确值 `true` 允许任意路径；生产设置该值会拒绝文件访问。默认范围为节点 BasePath 和该节点任务的 RsyncSource |
 | `BACKUP_PATH_ALLOW_SHELL_META` | bool | `false` | 否 | 仅历史数据救援用；设为 `true` 会跳过备份路径 shell 元字符防御校验 |
-| `SNAPSHOT_INDEX_MAX_SECONDS` | int | `1800` | 否 | 旧版 Restic 快照兼容缓存单次最长构建秒数；无效或非正值回退默认值，不控制资产 Search 索引 |
 
-工具读取位置：[Rsync 执行器](../backend/internal/task/executor/executor.go)、[隔离 helper](../backend/internal/rsyncconfinement/command.go)、[文件访问](../backend/internal/api/handlers/file_handler.go)、[快照兼容索引](../backend/internal/snapshot/indexer.go)。
+工具读取位置：[Rsync 执行器](../backend/internal/task/executor/executor.go)、[隔离 helper](../backend/internal/rsyncconfinement/command.go)、[文件访问](../backend/internal/api/handlers/file_handler.go)。
 
 ## 备份资产设置
 
