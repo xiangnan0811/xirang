@@ -47,6 +47,8 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 退役 snapshot 消费者与旧 indexer 的清理说明须区分代码删除和数据处置：兼容读取仍返回 410，live restore 门控、历史表及已发布迁移保留，旧 `SNAPSHOT_INDEX_MAX_SECONDS` 不再有消费者；不得把清理写成新增恢复能力、历史数据销毁或撤销既有迁移限制。纯 `refactor` 按现行提交语义处理，没有正式 release 时将说明留在 `Unreleased`，待实际发行再归入目标版本。
 
+保留策略与删除安全的入口回归迁移按 `test` 语义处理：真实 Coordinator、注册删除 adapter 与分页选择验收替换旧 helper 覆盖，不代表新增保留规则、删除权限或远端 Provider 能力。无 API、配置或 schema migration；保留既有版本的密钥、持久格式及降级限制。未生成正式 release 时，说明保留在 `Unreleased`，并核对同 SHA CI 与 Release Please；不要求为测试迁移单独生成镜像，也不将受控本地烟测记为 AWS live 或生产部署。
+
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
 
 Release Please 自动插入版本标题时可能将原有升级说明留在 `Unreleased`，生成的 PR 正文也可能只有提交摘要。此时原样移动 CHANGELOG 中已审阅的说明，并同步 PR 正文的目标版本节；两处都保留完整风险边界，再提交补充变更。

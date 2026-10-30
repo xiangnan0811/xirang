@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -579,82 +578,6 @@ func resolveSelectionScope(tx *gorm.DB, policy model.BackupRetentionPolicy) (str
 	default:
 		return "", nil, fmt.Errorf("%w: invalid retention policy scope", backupasset.ErrInvalidState)
 	}
-}
-
-type pointCandidate struct {
-	point      selectionFact
-	capturedAt time.Time
-}
-
-type selectionFact struct {
-	id                 string
-	pointRevision      int64
-	capabilityRevision int
-	capturedAt         *time.Time
-}
-
-func selectRecoveryPoints(points []selectionFact, rules PolicyRules, evaluatedAt time.Time) ([]SelectedPoint, error) {
-	candidates := make([]pointCandidate, 0, len(points))
-	for _, point := range points {
-		if backupasset.ValidateOpaqueID(point.id) != nil || point.pointRevision < 1 || point.capabilityRevision < 1 ||
-			point.capturedAt == nil || point.capturedAt.IsZero() {
-			return nil, fmt.Errorf("%w: incomplete immutable recovery point selection facts", backupasset.ErrInvalidState)
-		}
-		candidates = append(candidates, pointCandidate{point: point, capturedAt: point.capturedAt.UTC()})
-	}
-	sort.Slice(candidates, func(left, right int) bool {
-		if candidates[left].capturedAt.Equal(candidates[right].capturedAt) {
-			return candidates[left].point.id < candidates[right].point.id
-		}
-		return candidates[left].capturedAt.After(candidates[right].capturedAt)
-	})
-
-	kept := make(map[string]bool, len(candidates))
-	if rules.Age != nil {
-		cutoff := evaluatedAt.AddDate(0, 0, -rules.Age.KeepDays)
-		for _, candidate := range candidates {
-			if !candidate.capturedAt.Before(cutoff) {
-				kept[candidate.point.id] = true
-			}
-		}
-	}
-	if rules.Count != nil {
-		limit := rules.Count.KeepLatest
-		if limit > len(candidates) {
-			limit = len(candidates)
-		}
-		for index := 0; index < limit; index++ {
-			kept[candidates[index].point.id] = true
-		}
-	}
-	for _, calendarRule := range rules.Calendar {
-		buckets := make(map[string]bool, calendarRule.Keep)
-		for _, candidate := range candidates {
-			bucket := calendarBucket(candidate.capturedAt, calendarRule.Unit)
-			if buckets[bucket] {
-				continue
-			}
-			if len(buckets) >= calendarRule.Keep {
-				break
-			}
-			buckets[bucket] = true
-			kept[candidate.point.id] = true
-		}
-	}
-	selected := make([]SelectedPoint, 0, len(candidates))
-	for _, candidate := range candidates {
-		if kept[candidate.point.id] {
-			continue
-		}
-		selected = append(selected, SelectedPoint{
-			RecoveryPointID: candidate.point.id, PointRevision: candidate.point.pointRevision,
-			CapabilityRevision: candidate.point.capabilityRevision,
-		})
-	}
-	sort.Slice(selected, func(left, right int) bool {
-		return selected[left].RecoveryPointID < selected[right].RecoveryPointID
-	})
-	return selected, nil
 }
 
 type selectionResume struct {
