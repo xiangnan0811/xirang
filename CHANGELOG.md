@@ -20,6 +20,13 @@
 - 清理五个无消费者的 UI 模块、废弃凭据类型别名、多余错误类型导出、零消费者告警包装及 handler 路径副本；保留任务状态动画、活的告警方法和路径隔离实现，不宣称未测量的性能或安全收益。
 - 无新增 API、配置或数据库迁移，不删除历史索引表、差异历史或已发布迁移；旧 `SNAPSHOT_INDEX_MAX_SECONDS` 不再有消费者。清理随新版 Core 和页面加载生效，不改变在途备份/恢复或现行保留策略；既有版本的密钥、持久格式和降级限制继续适用。
 
+## [0.73.8](https://github.com/xiangnan0811/xirang/compare/v0.73.7...v0.73.8) (2026-10-30)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** record recent assets after successful content access ([#663](https://github.com/xiangnan0811/xirang/issues/663)) ([98b2396](https://github.com/xiangnan0811/xirang/commit/98b2396bc823e285df367d32febc8bbcc4eea782))
+
 ## [0.73.7](https://github.com/xiangnan0811/xirang/compare/v0.73.6...v0.73.7) (2026-10-29)
 
 
