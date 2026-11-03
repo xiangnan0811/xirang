@@ -61,6 +61,38 @@ func TestValidateFrozenItemRejectsInvalidCompositeAndLinkMetadata(t *testing.T) 
 	}
 }
 
+func TestFrozenSelectionPreservesRawNonfileFingerprint(t *testing.T) {
+	limits := SelectionLimits{MaxItems: 2, MaxSourcePoints: 1, MaxLogicalBytes: 100}
+	for _, entryType := range []backupasset.CatalogEntryType{
+		backupasset.CatalogEntryDirectory, backupasset.CatalogEntrySymlink, backupasset.CatalogEntryHardlink,
+		backupasset.CatalogEntrySpecial, backupasset.CatalogEntryUnknown, backupasset.CatalogEntryFile,
+	} {
+		for _, strength := range []string{"none", "weak", "strong"} {
+			t.Run(string(entryType)+"/"+strength, func(t *testing.T) {
+				item := frozenItemFixture()
+				item.EntryType, item.FingerprintStrength, item.EntryFingerprint = entryType, strength, ""
+				item.LogicalSize = 0
+				selection, err := FreezeSelection([]FrozenItem{item}, nil, limits)
+				allowed := entryType != backupasset.CatalogEntryFile && strength == "none"
+				if !allowed {
+					if !errors.Is(err, ErrInvalidSelection) {
+						t.Fatalf("empty fingerprint accepted: %v", err)
+					}
+					return
+				}
+				if err != nil || len(selection.Items) != 1 || selection.Items[0].EntryFingerprint != "" {
+					t.Fatalf("raw fingerprint not preserved: %+v, %v", selection, err)
+				}
+				item.EntryFingerprint = "later-fingerprint"
+				changed, err := FreezeSelection([]FrozenItem{item}, nil, limits)
+				if err != nil || changed.Digest == selection.Digest {
+					t.Fatalf("fingerprint drift did not change digest: %+v, %v", changed, err)
+				}
+			})
+		}
+	}
+}
+
 func frozenItemFixture() FrozenItem {
 	retention := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
 	return FrozenItem{

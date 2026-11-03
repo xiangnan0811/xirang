@@ -46,6 +46,80 @@ import (
 	"gorm.io/gorm"
 )
 
+func (publication *managedExportPublication) current() *managedExportGraph {
+	if publication == nil {
+		return nil
+	}
+	publication.mu.Lock()
+	defer publication.mu.Unlock()
+	return publication.graph
+}
+
+type optionalTypedDeliveryBranch struct {
+	mu     sync.RWMutex
+	branch typedContentDeliveryBranch
+}
+
+func newOptionalTypedDeliveryBranch() *optionalTypedDeliveryBranch {
+	return &optionalTypedDeliveryBranch{}
+}
+
+func (branch *optionalTypedDeliveryBranch) Install(value typedContentDeliveryBranch) error {
+	if branch == nil || value == nil {
+		return content.ErrInvalidBrokerRequest
+	}
+	branch.mu.Lock()
+	defer branch.mu.Unlock()
+	branch.branch = value
+	return nil
+}
+
+func (branch *optionalTypedDeliveryBranch) Unpublish() {
+	if branch == nil {
+		return
+	}
+	branch.mu.Lock()
+	branch.branch = nil
+	branch.mu.Unlock()
+}
+
+func (branch *optionalTypedDeliveryBranch) current() typedContentDeliveryBranch {
+	if branch == nil {
+		return nil
+	}
+	branch.mu.RLock()
+	defer branch.mu.RUnlock()
+	return branch.branch
+}
+
+func (branch *optionalTypedDeliveryBranch) MatchesDelivery(ctx context.Context, deliveryID string) (bool, error) {
+	current := branch.current()
+	if current == nil {
+		return false, nil
+	}
+	return current.MatchesDelivery(ctx, deliveryID)
+}
+
+func (branch *optionalTypedDeliveryBranch) Serve(
+	ctx context.Context,
+	request content.GatewayRequest,
+	writer http.ResponseWriter,
+) error {
+	current := branch.current()
+	if current == nil {
+		return content.ErrContentNotFound
+	}
+	return current.Serve(ctx, request, writer)
+}
+
+func (branch *optionalTypedDeliveryBranch) RevokeSession(ctx context.Context, sessionJTI, reason string) error {
+	current := branch.current()
+	if current == nil {
+		return nil
+	}
+	return current.RevokeSession(ctx, sessionJTI, reason)
+}
+
 func TestManagedExportRuntimeIsLazyWhenFoundationOrExportIsDisabled(t *testing.T) {
 	for _, test := range []struct {
 		name         string
@@ -4058,7 +4132,7 @@ func TestManagedExportWorkerClaimsSpoolsSealsAndPublishesQueuedJob(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.reconcile(context.Background()); err != nil {
+	if err := runner.reconcileRestart(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -4818,7 +4892,7 @@ func TestManagedExportWorkerReclaimsExpiredRunningJobAfterRestart(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.reconcile(context.Background()); err != nil {
+	if err := runner.reconcileRestart(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -5091,7 +5165,7 @@ func TestManagedExportWorkerHeartbeatsWhileItemSpoolIsBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- runner.executeJob(context.Background(), jobID) }()
+	go func() { done <- runner.executeJobWithClaimNotification(context.Background(), jobID, nil) }()
 	var release sync.Once
 	unblock := func() { release.Do(func() { close(backend.release) }) }
 	finished := false
@@ -5138,7 +5212,7 @@ func TestManagedExportWorkerHeartbeatsWhileReadyPublicationIsBlocked(t *testing.
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- runner.executeJob(context.Background(), jobID) }()
+	go func() { done <- runner.executeJobWithClaimNotification(context.Background(), jobID, nil) }()
 	var release sync.Once
 	unblock := func() { release.Do(func() { close(backend.release) }) }
 	finished := false
@@ -5194,7 +5268,7 @@ func TestManagedExportWorkerPersistsFailureAndDiscardsAttemptBeforeRetry(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.executeJob(context.Background(), jobID); err == nil || !strings.Contains(err.Error(), "injected spool failure") {
+	if err := runner.executeJobWithClaimNotification(context.Background(), jobID, nil); err == nil || !strings.Contains(err.Error(), "injected spool failure") {
 		t.Fatalf("execute failure=%v", err)
 	}
 	want := []string{"claim:" + jobID, "spool:" + jobID, "fail:" + jobID, "discard:" + jobID}
@@ -5237,7 +5311,7 @@ func TestManagedExportWorkerContinuesAfterRecoverablePreHeaderSpoolFailure(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.executeJob(context.Background(), jobID); err != nil {
+	if err := runner.executeJobWithClaimNotification(context.Background(), jobID, nil); err != nil {
 		t.Fatalf("execute failure=%v", err)
 	}
 	want := []string{"claim:" + jobID, "spool:" + jobID, "checkpoint:" + itemID, "seal:" + jobID, "publish:" + jobID}
@@ -5289,7 +5363,7 @@ func TestManagedExportWorkerContinuesAfterRecoverablePreHeaderSealFailure(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.executeJob(context.Background(), jobID); err != nil {
+	if err := runner.executeJobWithClaimNotification(context.Background(), jobID, nil); err != nil {
 		t.Fatalf("execute failure=%v", err)
 	}
 	want := []string{
@@ -5339,7 +5413,7 @@ func TestManagedExportWorkerRecoversTamperedPersistedSpoolBeforeHeader(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- runner.executeJob(ctx, fixture.jobID) }()
+	go func() { done <- runner.executeJobWithClaimNotification(ctx, fixture.jobID, nil) }()
 	var release sync.Once
 	unblock := func() { release.Do(func() { close(backend.release) }) }
 	completed := false
@@ -5500,7 +5574,7 @@ func TestManagedExportWorkerRecoversAbsentPersistedSpoolBeforeHeader(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- runner.executeJob(ctx, fixture.jobID) }()
+	go func() { done <- runner.executeJobWithClaimNotification(ctx, fixture.jobID, nil) }()
 	var release sync.Once
 	unblock := func() { release.Do(func() { close(backend.release) }) }
 	completed := false
@@ -5864,7 +5938,7 @@ func TestManagedExportWorkerDoesNotRecoverAttemptFatalPreHeaderMarkers(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := runner.executeJob(context.Background(), jobID); err == nil || !errors.Is(err, test.cause) {
+			if err := runner.executeJobWithClaimNotification(context.Background(), jobID, nil); err == nil || !errors.Is(err, test.cause) {
 				t.Fatalf("execute error=%v, want cause=%v", err, test.cause)
 			}
 			want := []string{"claim:" + jobID, "spool:" + jobID, "fail:" + jobID, "discard:" + jobID}
@@ -6338,7 +6412,7 @@ func TestManagedExportWorkerHandsOffReadySourceLeaseImmediatelyAfterPublication(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.executeJob(context.Background(), jobID); err != nil {
+	if err := runner.executeJobWithClaimNotification(context.Background(), jobID, nil); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"claim:" + jobID, "seal:" + jobID, "publish:" + jobID, "verify:" + jobID, "maintain:" + jobID}
@@ -6538,7 +6612,7 @@ func TestManagedExportWorkerReadyMaintenanceUsesExpiredAndCorruptLifecycleOutcom
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := runner.reconcile(context.Background()); err != nil {
+			if err := runner.reconcileRestart(context.Background(), true); err != nil {
 				t.Fatalf("ready maintenance reconciliation: %v", err)
 			}
 			var job model.BackupAssetExportJob
@@ -6596,7 +6670,7 @@ func TestManagedExportWorkerRoutesTypedHeartbeatDeadlines(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = runner.executeJob(context.Background(), jobID)
+			err = runner.executeJobWithClaimNotification(context.Background(), jobID, nil)
 			if !errors.Is(err, test.heartbeatErr) {
 				t.Fatalf("execute typed heartbeat error=%v want=%v", err, test.heartbeatErr)
 			}
@@ -8040,6 +8114,7 @@ func TestRuntimeExportSelectionResolverFreezesDirectoryAndRejectsCommitDrift(t *
 	generationID := strings.Repeat("c", 32)
 	rootID := strings.Repeat("d", 64)
 	childID := strings.Repeat("e", 64)
+	linkID := strings.Repeat("f", 64)
 	sourceFingerprint := strings.Repeat("1", 64)
 	retentionUntil := now.Add(6 * time.Hour)
 	if err := db.Create(&model.BackupRepository{
@@ -8062,15 +8137,15 @@ func TestRuntimeExportSelectionResolverFreezesDirectoryAndRejectsCommitDrift(t *
 	finishedAt := now
 	if err := db.Create(&model.CatalogGeneration{
 		ID: generationID, RecoveryPointID: pointID, Generation: 1, State: string(catalog.GenerationComplete),
-		IsActive: true, SourceFingerprint: sourceFingerprint, ExpectedEntryCount: 2, WrittenEntryCount: 2,
+		IsActive: true, SourceFingerprint: sourceFingerprint, ExpectedEntryCount: 3, WrittenEntryCount: 3,
 		StartedAt: now.Add(-time.Minute), FinishedAt: &finishedAt, CreatedAt: now, UpdatedAt: now,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	root := model.CatalogEntry{
 		GenerationID: generationID, EntryID: rootID, RecoveryPointID: pointID, NormalizedPath: "root",
-		Name: "root", EntryType: string(backupasset.CatalogEntryDirectory), Fingerprint: strings.Repeat("2", 64),
-		FingerprintStrength: string(catalog.FingerprintStrong), SecurityState: "sealed", CreatedAt: now,
+		Name: "root", EntryType: string(backupasset.CatalogEntryDirectory), Fingerprint: "",
+		FingerprintStrength: string(catalog.FingerprintNone), SecurityState: "sealed", CreatedAt: now,
 	}
 	child := model.CatalogEntry{
 		GenerationID: generationID, EntryID: childID, RecoveryPointID: pointID, ParentEntryID: &rootID,
@@ -8078,10 +8153,18 @@ func TestRuntimeExportSelectionResolverFreezesDirectoryAndRejectsCommitDrift(t *
 		Size: 4096, MimeType: "text/plain", Fingerprint: strings.Repeat("3", 64),
 		FingerprintStrength: string(catalog.FingerprintStrong), SecurityState: "sealed", CreatedAt: now,
 	}
+	link := model.CatalogEntry{
+		GenerationID: generationID, EntryID: linkID, RecoveryPointID: pointID, ParentEntryID: &rootID,
+		NormalizedPath: "root/link", Name: "link", EntryType: string(backupasset.CatalogEntrySymlink),
+		Fingerprint: "", FingerprintStrength: string(catalog.FingerprintNone), SecurityState: "sealed", CreatedAt: now,
+	}
 	if err := db.Create(&root).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&child).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&link).Error; err != nil {
 		t.Fatal(err)
 	}
 	ownership, err := catalog.NewOwnership(db)
@@ -8097,9 +8180,13 @@ func TestRuntimeExportSelectionResolverFreezesDirectoryAndRejectsCommitDrift(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(frozen.Items) != 2 || frozen.Items[0].Ref.EntryID != rootID || frozen.Items[1].Ref.EntryID != childID ||
+	if len(frozen.Items) != 3 || frozen.Items[0].Ref.EntryID != rootID || frozen.Items[1].Ref.EntryID != childID ||
+		frozen.Items[2].Ref.EntryID != linkID || frozen.Items[0].EntryFingerprint != "" ||
+		frozen.Items[2].EntryFingerprint != "" || frozen.Items[0].FingerprintStrength != "none" ||
+		frozen.Items[2].FingerprintStrength != "none" ||
 		!reflect.DeepEqual(frozen.Items[0].ArchiveComponents, []string{"root"}) ||
 		!reflect.DeepEqual(frozen.Items[1].ArchiveComponents, []string{"root", "report.txt"}) ||
+		!reflect.DeepEqual(frozen.Items[2].ArchiveComponents, []string{"root", "link"}) ||
 		frozen.Items[1].CatalogGenerationID != generationID || frozen.Items[1].SourceFingerprint != sourceFingerprint ||
 		frozen.Items[1].ProviderCapabilityRevision != 7 || frozen.Items[1].RetentionUntil == nil ||
 		!frozen.Items[1].RetentionUntil.Equal(retentionUntil) {
@@ -8111,7 +8198,7 @@ func TestRuntimeExportSelectionResolverFreezesDirectoryAndRejectsCommitDrift(t *
 		t.Fatalf("revalidate unchanged selection: %v", err)
 	}
 	if err := db.Model(&model.CatalogEntry{}).
-		Where("generation_id = ? AND entry_id = ?", generationID, childID).
+		Where("generation_id = ? AND entry_id = ?", generationID, rootID).
 		Update("fingerprint", strings.Repeat("4", 64)).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -8119,6 +8206,16 @@ func TestRuntimeExportSelectionResolverFreezesDirectoryAndRejectsCommitDrift(t *
 		return resolver.RevalidateFrozenTx(context.Background(), tx, actor, frozen)
 	}); !errors.Is(err, assetexport.ErrArchiveSource) {
 		t.Fatalf("drift revalidation error=%v want archive source", err)
+	}
+	if err := db.Model(&model.CatalogEntry{}).
+		Where("generation_id = ? AND entry_id = ?", generationID, linkID).
+		Update("fingerprint", "link-now-has-fingerprint").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return resolver.RevalidateMetadataTx(context.Background(), tx, frozen.Items[2])
+	}); !errors.Is(err, assetexport.ErrArchiveSource) {
+		t.Fatalf("symlink fingerprint drift revalidation error=%v want archive source", err)
 	}
 }
 

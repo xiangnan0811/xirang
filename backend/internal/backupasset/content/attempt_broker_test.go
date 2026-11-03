@@ -70,6 +70,77 @@ func TestAttemptBrokerProvidesBoundedSequentialAndMultipleRangeReads(t *testing.
 	}
 }
 
+func TestAttemptBrokerAcceptsEmptySourceMediaTypeAndRejectsFingerprintDrift(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 19, 6, 7, 8, 0, time.UTC)
+	payload := []byte("payload")
+	stat := SourceStat{
+		Size: 7, MediaType: "", SourceFingerprint: "source-v1",
+		EntryFingerprint: "entry-v1", FingerprintStrong: true,
+	}
+	budget := &attemptBudgetFake{}
+	resolver := &attemptResolverFake{payload: payload, budget: budget, stat: &stat}
+	broker, err := NewAttemptBroker(resolver, budget, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := validAttemptBinding(now.Add(time.Minute))
+	session, info, err := broker.OpenSession(ctx, binding)
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := session.Close(); err != nil {
+			t.Errorf("close input session: %v", err)
+		}
+	})
+	if info.Size != 7 || info.MediaType != "" || !info.FingerprintStrong || !info.Sequential || !info.Range || session.Info() != info {
+		t.Fatalf("source info=%+v session info=%+v", info, session.Info())
+	}
+	read, err := session.OpenSequential(ctx, 7)
+	if err != nil {
+		t.Fatalf("OpenSequential: %v", err)
+	}
+	got, readErr := io.ReadAll(read)
+	closeErr := read.Close()
+	if readErr != nil || closeErr != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("sequential read=%q readErr=%v closeErr=%v", got, readErr, closeErr)
+	}
+	if err := session.Revalidate(ctx); err != nil {
+		t.Fatalf("Revalidate: %v", err)
+	}
+	stat.SourceFingerprint = "source-v2"
+	if _, err := session.OpenSequential(ctx, 7); !errors.Is(err, ErrAttemptSourceChanged) {
+		t.Fatalf("changed source fingerprint: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close session: %v", err)
+	}
+	if got := budget.snapshot(); got.reservations != 4 || got.finalizations != 4 || got.unknown != 1 || got.charged != 14 {
+		t.Fatalf("attempt accounting=%+v", got)
+	}
+	wantIntents := []AttemptReadIntent{
+		{SessionID: binding.SessionID, Mode: SourceModeStat},
+		{SessionID: binding.SessionID, Mode: SourceModeSequential, Bytes: 7},
+		{SessionID: binding.SessionID, Mode: SourceModeStat},
+		{SessionID: binding.SessionID, Mode: SourceModeSequential, Bytes: 7},
+	}
+	wantFinalizations := []AttemptReadFinalization{
+		{ReservationID: strings.Repeat("b", 32), EvidenceKnown: true, Succeeded: true},
+		{ReservationID: strings.Repeat("c", 32), ReservedBytes: 7, ProviderBytes: 7, EvidenceKnown: true, Succeeded: true},
+		{ReservationID: strings.Repeat("d", 32), EvidenceKnown: true, Succeeded: true},
+		{ReservationID: strings.Repeat("e", 32), ReservedBytes: 7},
+	}
+	if len(budget.intents) != len(wantIntents) || len(budget.results) != len(wantFinalizations) {
+		t.Fatalf("intents=%+v finalizations=%+v", budget.intents, budget.results)
+	}
+	for index := range wantIntents {
+		if budget.intents[index] != wantIntents[index] || budget.results[index] != wantFinalizations[index] {
+			t.Fatalf("accounting[%d]: intent=%+v finalization=%+v", index, budget.intents[index], budget.results[index])
+		}
+	}
+}
+
 func TestAttemptBrokerRejectsSourceDriftAndChargesUnknownConservatively(t *testing.T) {
 	clock := func() time.Time { return time.Date(2026, 7, 19, 6, 7, 8, 0, time.UTC) }
 	budget := &attemptBudgetFake{}
@@ -151,12 +222,15 @@ type attemptBudgetFake struct {
 	finalizations int
 	unknown       int
 	charged       int64
+	intents       []AttemptReadIntent
+	results       []AttemptReadFinalization
 }
 
 func (budget *attemptBudgetFake) ReserveAttemptRead(_ context.Context, intent AttemptReadIntent) (AttemptReadReservation, error) {
 	budget.mu.Lock()
 	defer budget.mu.Unlock()
 	budget.reservations++
+	budget.intents = append(budget.intents, intent)
 	return AttemptReadReservation{ID: strings.Repeat(string(rune('a'+budget.reservations)), 32), ReservedBytes: intent.Bytes}, nil
 }
 
@@ -164,6 +238,7 @@ func (budget *attemptBudgetFake) FinalizeAttemptRead(_ context.Context, finaliza
 	budget.mu.Lock()
 	defer budget.mu.Unlock()
 	budget.finalizations++
+	budget.results = append(budget.results, finalization)
 	if !finalization.EvidenceKnown {
 		budget.unknown++
 		budget.charged += finalization.ReservedBytes
@@ -184,6 +259,7 @@ type attemptResolverFake struct {
 	budget            *attemptBudgetFake
 	openBeforeReserve bool
 	driftAfterOpen    bool
+	stat              *SourceStat
 }
 
 func (resolver *attemptResolverFake) OpenContentSource(_ context.Context, request SourceRequest) (SourceSession, error) {
@@ -207,7 +283,7 @@ func (resolver *attemptResolverFake) OpenContentSource(_ context.Context, reques
 		end = int64(len(resolver.payload))
 	}
 	reader := &attemptSourceReaderFake{Reader: bytes.NewReader(resolver.payload[start:end]), providerBytes: end - start}
-	return &attemptSourceSessionFake{request: request, reader: reader, drift: resolver.driftAfterOpen}, nil
+	return &attemptSourceSessionFake{request: request, reader: reader, drift: resolver.driftAfterOpen, stat: resolver.stat}, nil
 }
 
 func (*attemptResolverFake) ValidateContentCacheRoot(context.Context, string) error { return nil }
@@ -217,9 +293,13 @@ type attemptSourceSessionFake struct {
 	reader  *attemptSourceReaderFake
 	drift   bool
 	closed  bool
+	stat    *SourceStat
 }
 
 func (session *attemptSourceSessionFake) Stat() SourceStat {
+	if session.stat != nil {
+		return *session.stat
+	}
 	source := session.request.ExpectedSource
 	if session.drift {
 		source = "changed"

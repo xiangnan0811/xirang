@@ -267,7 +267,7 @@ func (session *attemptInputSession) sourceRequest(mode SourceMode, offset, lengt
 }
 
 func (session *attemptInputSession) sourceMatches(stat SourceStat, capabilities SourceCapabilities, mode SourceMode) bool {
-	if stat.Size < 0 || strings.TrimSpace(stat.MediaType) == "" || stat.SourceFingerprint != session.binding.SourceFingerprint ||
+	if stat.Size < 0 || stat.SourceFingerprint != session.binding.SourceFingerprint ||
 		stat.EntryFingerprint != session.binding.EntryFingerprint {
 		return false
 	}

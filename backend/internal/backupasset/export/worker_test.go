@@ -1855,7 +1855,7 @@ func TestPersistentWorkerSealArchiveRegistersAttemptWork(t *testing.T) {
 	work := NewAttemptWorkRegistry()
 	worker, err := NewPersistentWorker(PersistentWorkerDependencies{
 		DB: harness.db, Keys: backupasset.NewKeyring(harness.db, func() time.Time { return clock }),
-		Broker: &workerBrokerFake{}, Metadata: metadata, Store: store, AttemptWork: work,
+		Broker: rejectingAttemptBroker{}, Metadata: metadata, Store: store, AttemptWork: work,
 		Now: func() time.Time { return clock },
 	})
 	if err != nil {
@@ -1949,7 +1949,7 @@ func TestPersistentWorkerRequiresAttemptWorkRegistry(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			worker, err := NewPersistentWorker(PersistentWorkerDependencies{
 				DB: harness.db, Keys: backupasset.NewKeyring(harness.db, harness.service.now),
-				Broker: &workerBrokerFake{}, Metadata: &metadataValidatorFake{}, Store: store,
+				Broker: rejectingAttemptBroker{}, Metadata: &metadataValidatorFake{}, Store: store,
 				WorkerCapacity: test.capacity, Now: harness.service.now,
 			})
 			if !errors.Is(err, ErrUnavailable) || worker != nil {
@@ -1993,7 +1993,7 @@ func TestPersistentWorkerRequiresSharedAttemptWorkRegistryWithPersistentLifecycl
 		t.Run(test.name, func(t *testing.T) {
 			worker, workerErr := NewPersistentWorker(PersistentWorkerDependencies{
 				DB: harness.db, Keys: backupasset.NewKeyring(harness.db, harness.service.now),
-				Broker: &workerBrokerFake{}, Metadata: &metadataValidatorFake{}, Store: store,
+				Broker: rejectingAttemptBroker{}, Metadata: &metadataValidatorFake{}, Store: store,
 				Lifecycle: lifecycle, AttemptWork: test.attemptWork, Now: harness.service.now,
 			})
 			if test.wantErr {
@@ -2246,7 +2246,7 @@ func TestPersistentWorkerDiscardsFailedAttemptCiphertextBeforeRetry(t *testing.T
 	}
 	worker, err := NewPersistentWorker(PersistentWorkerDependencies{
 		DB: harness.db, Keys: backupasset.NewKeyring(harness.db, func() time.Time { return clock }),
-		Broker: &workerBrokerFake{}, Metadata: &metadataValidatorFake{}, Store: store, AttemptWork: NewAttemptWorkRegistry(), Now: func() time.Time { return clock },
+		Broker: rejectingAttemptBroker{}, Metadata: &metadataValidatorFake{}, Store: store, AttemptWork: NewAttemptWorkRegistry(), Now: func() time.Time { return clock },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -5083,7 +5083,7 @@ func TestPersistentWorkerRejectsSecurityTupleDriftBeforeSpoolPersistence(t *test
 			keys := &barrierByVersionKeySource{
 				Keyring: ring, lookupStarted: lookupStarted, releaseLookup: releaseLookup,
 			}
-			broker := &workerBrokerFake{data: bytes.Repeat([]byte("s"), int(item.LogicalSize))}
+			broker := &recordingAttemptBroker{inner: rejectingAttemptBroker{}}
 			store, err := OpenStore(StoreConfig{Root: filepath.Join(t.TempDir(), "exports")})
 			if err != nil {
 				t.Fatal(err)
@@ -5120,8 +5120,8 @@ func TestPersistentWorkerRejectsSecurityTupleDriftBeforeSpoolPersistence(t *test
 			if !errors.Is(spooled.err, ErrUnavailable) {
 				t.Fatalf("security tuple drift result=%+v err=%v, want ErrUnavailable", spooled.result, spooled.err)
 			}
-			if broker.opens != 0 {
-				t.Fatalf("security tuple drift opened source %d times", broker.opens)
+			if len(broker.bindings) != 0 {
+				t.Fatalf("security tuple drift opened source %d times", len(broker.bindings))
 			}
 			assertExportStoreTreeUnchanged(t, store.root, beforeStore)
 			if err := harness.db.First(&itemAttempt, "id = ?", itemAttempt.ID).Error; err != nil {
@@ -5207,6 +5207,12 @@ func TestPersistentWorkerSpoolsEncryptedBeforeArchiveHeaderWithDurableItemSessio
 	if len(source.requests) != 3 || source.requests[0].Mode != content.SourceModeStat ||
 		source.requests[1].Mode != content.SourceModeSequential || source.requests[2].Mode != content.SourceModeStat {
 		t.Fatalf("source requests=%+v", source.requests)
+	}
+	if len(recordingBroker.sessions) != 1 {
+		t.Fatalf("content sessions=%d", len(recordingBroker.sessions))
+	}
+	if _, err := recordingBroker.sessions[0].OpenSequential(context.Background(), item.LogicalSize); !errors.Is(err, content.ErrAttemptSessionDenied) {
+		t.Fatalf("closed file session accepted read: %v", err)
 	}
 	if len(metadata.items) != 1 || metadata.items[0].Ref != item.Ref {
 		t.Fatalf("metadata revalidation=%+v", metadata.items)
@@ -5368,6 +5374,22 @@ func TestPersistentWorkerClassifiesReadSpoolPersistenceDatabaseFailureAsPreHeade
 }
 
 func TestPersistentWorkerSpoolsZeroByteFileWithStatOnlyAccountingAndPublishesReady(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		format  ArchiveFormat
+		profile string
+	}{
+		{name: "zip", format: ArchiveZIP, profile: ArchiveProfileZIPDeflateV1},
+		{name: "tar", format: ArchiveTAR, profile: ArchiveProfileTARNoneV1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testPersistentWorkerSpoolsZeroByteFile(t, test.format, test.profile)
+		})
+	}
+}
+
+func testPersistentWorkerSpoolsZeroByteFile(t *testing.T, format ArchiveFormat, profile string) {
+	t.Helper()
 	harness := newWorkerServiceHarness(t)
 	item := frozenItemFixture()
 	item.LogicalSize = 0
@@ -5378,7 +5400,7 @@ func TestPersistentWorkerSpoolsZeroByteFileWithStatOnlyAccountingAndPublishesRea
 	}
 	created, err := harness.service.CommitCreate(context.Background(), CommitCreateRequest{
 		Actor: SelectionActor{UserID: 97, Role: "admin"}, Selection: selection,
-		IdempotencyKey: "persistent-worker-zero-byte", ArchiveFormat: ArchiveZIP, ArchiveProfile: ArchiveProfileZIPDeflateV1,
+		IdempotencyKey: "persistent-worker-zero-byte", ArchiveFormat: format, ArchiveProfile: profile,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -5452,6 +5474,12 @@ func TestPersistentWorkerSpoolsZeroByteFileWithStatOnlyAccountingAndPublishesRea
 		source.requests[1].Mode != content.SourceModeStat {
 		t.Fatalf("zero-byte source requests=%+v", source.requests)
 	}
+	if len(recordingBroker.sessions) != 1 {
+		t.Fatalf("zero-byte sessions=%d", len(recordingBroker.sessions))
+	}
+	if err := recordingBroker.sessions[0].Revalidate(context.Background()); !errors.Is(err, content.ErrAttemptSessionDenied) {
+		t.Fatalf("closed zero-byte session accepted stat: %v", err)
+	}
 	if err := harness.db.First(&itemAttempt, "id = ?", itemAttempt.ID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -5476,7 +5504,7 @@ func TestPersistentWorkerSpoolsZeroByteFileWithStatOnlyAccountingAndPublishesRea
 	}
 	var plaintext bytes.Buffer
 	_, decryptErr := DecryptStream(context.Background(), &plaintext, reader, snapshot.DEK, CipherBinding{
-		ExportID: created.JobID, SelectionDigest: selection.Digest, ArchiveProfile: ArchiveProfileZIPDeflateV1,
+		ExportID: created.JobID, SelectionDigest: selection.Digest, ArchiveProfile: profile,
 		FormatVersion: 1, AttemptFenceDigest: claim.FenceDigest, Purpose: CipherPurposeItemSpool, ObjectID: itemAttempt.ID,
 	})
 	closeErr := reader.Close()
@@ -5492,6 +5520,33 @@ func TestPersistentWorkerSpoolsZeroByteFileWithStatOnlyAccountingAndPublishesRea
 	}
 	if sealed.Report.Packed != 1 || sealed.Report.LogicalBytes != 0 || sealed.Report.ProviderBytes != 0 {
 		t.Fatalf("zero-byte sealed report=%+v", sealed.Report)
+	}
+	artifact, err := store.OpenSealed(sealed.Locator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	_, decryptErr = DecryptStream(context.Background(), &archive, artifact, snapshot.DEK, CipherBinding{
+		ExportID: created.JobID, SelectionDigest: selection.Digest, ArchiveProfile: profile,
+		FormatVersion: 1, AttemptFenceDigest: claim.FenceDigest, Purpose: CipherPurposeFinalArchive,
+	})
+	if closeErr = artifact.Close(); decryptErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(decryptErr, closeErr))
+	}
+	names, embedded := readArchivePathMembers(t, format, archive.Bytes())
+	if !slices.Equal(names, []string{"root/empty.txt", archiveReportName}) || !reflect.DeepEqual(embedded, sealed.Report) {
+		t.Fatalf("zero-byte archive members=%v report=%+v sealed=%+v", names, embedded, sealed.Report)
+	}
+	if format == ArchiveZIP {
+		reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
+		if err != nil || reader.File[0].UncompressedSize64 != 0 || reader.File[0].FileInfo().IsDir() {
+			t.Fatalf("zero-byte ZIP member invalid: reader=%v err=%v", reader, err)
+		}
+	} else {
+		header, err := tar.NewReader(bytes.NewReader(archive.Bytes())).Next()
+		if err != nil || header.Name != "root/empty.txt" || header.Size != 0 || header.Typeflag != tar.TypeReg {
+			t.Fatalf("zero-byte TAR member invalid: header=%v err=%v", header, err)
+		}
 	}
 	published, err := worker.PublishReady(context.Background(), PersistentPublishRequest{
 		JobID: created.JobID, AttemptID: claim.AttemptID, FenceToken: claim.FenceToken, ArtifactID: sealed.ArtifactID,
@@ -7971,7 +8026,7 @@ func TestPersistentWorkerReconcileOrphansPurgesOnlyPublishedSpoolAndArtifact(t *
 	clock := time.Now().UTC().Truncate(time.Second)
 	worker, err := NewPersistentWorker(PersistentWorkerDependencies{
 		DB: harness.db, Keys: backupasset.NewKeyring(harness.db, func() time.Time { return clock }),
-		Broker: &workerBrokerFake{}, Metadata: &metadataValidatorFake{}, Store: store,
+		Broker: rejectingAttemptBroker{}, Metadata: &metadataValidatorFake{}, Store: store,
 		AttemptWork: NewAttemptWorkRegistry(),
 		Now:         func() time.Time { return clock },
 	})
@@ -10828,7 +10883,7 @@ func createPersistentReadSpoolFixtureWithSelection(
 		t.Fatal(err)
 	}
 	var fileRow model.BackupAssetExportItem
-	if err := harness.db.Where("job_id = ? AND entry_type = ?", created.JobID, backupasset.CatalogEntryFile).Take(&fileRow).Error; err != nil {
+	if err := harness.db.Where("job_id = ? AND recovery_point_id = ? AND entry_id = ?", created.JobID, file.Ref.RecoveryPointID, file.Ref.EntryID).Take(&fileRow).Error; err != nil {
 		t.Fatal(err)
 	}
 	budget, err := NewAttemptBudgetService(harness.db, func() time.Time { return clock })
@@ -11753,244 +11808,6 @@ func TestPersistentWorkerUsesPersistedTARGzipProfileForDeterministicArchiveBytes
 	}
 }
 
-func TestWorkerUsesAttemptBrokerOnlyForRegularFiles(t *testing.T) {
-	item := frozenItemFixture()
-	item.LogicalSize = 5
-	broker := &workerBrokerFake{data: []byte("hello")}
-	metadata := &metadataValidatorFake{}
-	worker, err := NewWorker(broker, metadata)
-	if err != nil {
-		t.Fatal(err)
-	}
-	link := item
-	link.Ref.EntryID = strings.Repeat("b", 64)
-	link.EntryType = backupasset.CatalogEntrySymlink
-	link.LogicalSize = 0
-	link.ArchiveComponents = []string{"link"}
-	var output bytes.Buffer
-	report, err := worker.WriteArchive(context.Background(), &output, WorkerArchiveRequest{
-		AttemptID: "33333333333333333333333333333333", SelectionDigest: strings.Repeat("a", 64),
-		Deadline: time.Now().UTC().Add(time.Hour),
-		Format:   ArchiveZIP, ArchiveProfile: ArchiveProfileZIPDeflateV1,
-		Limits: ArchiveLimits{MaxItems: 10, MaxLogicalBytes: 100, MaxProviderBytes: 100},
-		Items: []WorkerItem{
-			{ItemID: "11111111111111111111111111111111", Frozen: item},
-			{ItemID: "22222222222222222222222222222222", Frozen: link},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if broker.opens != 1 || broker.session.revalidations != 1 || broker.session.closes != 1 {
-		t.Fatalf("broker opens=%d session=%+v", broker.opens, broker.session)
-	}
-	if len(metadata.items) != 1 || metadata.items[0].EntryType != backupasset.CatalogEntrySymlink {
-		t.Fatalf("metadata validations=%+v", metadata.items)
-	}
-	if report.ResultKind != ResultPartial || report.Skipped != 1 {
-		t.Fatalf("report=%+v", report)
-	}
-	if _, err := zip.NewReader(bytes.NewReader(output.Bytes()), int64(output.Len())); err != nil {
-		t.Fatalf("worker output is not a valid zip: %v", err)
-	}
-}
-
-func TestWorkerWritesZeroByteRegularFilesWithoutSequentialProviderRead(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		format  ArchiveFormat
-		profile string
-	}{
-		{name: "zip", format: ArchiveZIP, profile: ArchiveProfileZIPDeflateV1},
-		{name: "tar", format: ArchiveTAR, profile: ArchiveProfileTARNoneV1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			item := frozenItemFixture()
-			item.LogicalSize = 0
-			item.ArchiveComponents = []string{"empty.txt"}
-			broker := &workerBrokerFake{}
-			worker, err := NewWorker(broker, &metadataValidatorFake{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var output bytes.Buffer
-			report, err := worker.WriteArchive(context.Background(), &output, WorkerArchiveRequest{
-				AttemptID: strings.Repeat("3", 32), SelectionDigest: strings.Repeat("a", 64),
-				Deadline: time.Now().UTC().Add(time.Hour), Format: test.format, ArchiveProfile: test.profile,
-				Limits: ArchiveLimits{MaxItems: 1, MaxLogicalBytes: 1, MaxProviderBytes: 1},
-				Items:  []WorkerItem{{ItemID: strings.Repeat("1", 32), Frozen: item}},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if broker.opens != 1 || broker.session == nil || broker.session.sequentialCalls != 0 ||
-				broker.session.revalidations != 1 || broker.session.closes != 1 {
-				t.Fatalf("zero-byte broker opens=%d session=%+v", broker.opens, broker.session)
-			}
-			if len(broker.bindings) != 1 || !slices.Equal(broker.bindings[0].AllowedModes, []content.SourceMode{content.SourceModeStat}) ||
-				broker.bindings[0].Limits.MaxBytesPerRequest != 1 || broker.bindings[0].Limits.MaxCumulativeBytes != 1 {
-				t.Fatalf("zero-byte direct binding=%+v", broker.bindings)
-			}
-			if report.Packed != 1 || report.LogicalBytes != 0 || report.ProviderBytes != 0 || len(report.Items) != 1 ||
-				report.Items[0].LogicalBytes != 0 || report.Items[0].ProviderBytes != 0 {
-				t.Fatalf("zero-byte direct report=%+v", report)
-			}
-			if test.format == ArchiveZIP {
-				if _, err := zip.NewReader(bytes.NewReader(output.Bytes()), int64(output.Len())); err != nil {
-					t.Fatalf("zero-byte ZIP invalid: %v", err)
-				}
-			} else if _, err := tar.NewReader(bytes.NewReader(output.Bytes())).Next(); err != nil {
-				t.Fatalf("zero-byte TAR invalid: %v", err)
-			}
-		})
-	}
-}
-
-func TestWorkerPreservesCompositeRootForArchivePathDisambiguation(t *testing.T) {
-	first := frozenItemFixture()
-	first.LogicalSize = 5
-	first.ArchiveComponents = []string{"Readme.txt"}
-	first.SelectionRootOrdinal = 0
-	second := first
-	second.Ref.RecoveryPointID = strings.Repeat("d", 32)
-	second.Ref.EntryID = strings.Repeat("e", 64)
-	second.CatalogGenerationID = strings.Repeat("f", 32)
-	second.SourceFingerprint = "second-source-fingerprint-v1"
-	second.EntryFingerprint = "second-entry-fingerprint-v1"
-	second.ArchiveComponents = []string{"README.TXT"}
-	second.SelectionRootOrdinal = 1
-	worker, err := NewWorker(&workerBrokerFake{data: []byte("hello")}, &metadataValidatorFake{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	if _, err := worker.WriteArchive(context.Background(), &output, WorkerArchiveRequest{
-		AttemptID: "33333333333333333333333333333333", SelectionDigest: strings.Repeat("a", 64), Deadline: time.Now().UTC().Add(time.Hour),
-		Format: ArchiveZIP, ArchiveProfile: ArchiveProfileZIPDeflateV1,
-		Limits: ArchiveLimits{MaxItems: 4, MaxLogicalBytes: 16, MaxProviderBytes: 16},
-		Items: []WorkerItem{
-			{ItemID: "11111111111111111111111111111111", Frozen: first},
-			{ItemID: "22222222222222222222222222222222", Frozen: second},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	reader, err := zip.NewReader(bytes.NewReader(output.Bytes()), int64(output.Len()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := make([]string, 0, len(reader.File))
-	for _, file := range reader.File {
-		names = append(names, file.Name)
-	}
-	if got, want := strings.Join(names, ","), "rp-11111111/root-0/Readme.txt,rp-dddddddd/root-1/README.TXT,xirang-export-report.v1.json"; got != want {
-		t.Fatalf("cross-root collision names=%q want %q", got, want)
-	}
-}
-
-func TestWorkerFailsAttemptWhenPostReadRevalidationDrifts(t *testing.T) {
-	broker := &workerBrokerFake{data: []byte("hello"), revalidateErr: content.ErrAttemptSourceChanged}
-	worker, err := NewWorker(broker, &metadataValidatorFake{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	item := frozenItemFixture()
-	item.LogicalSize = 5
-	_, err = worker.WriteArchive(context.Background(), &output, WorkerArchiveRequest{
-		AttemptID: "33333333333333333333333333333333", SelectionDigest: strings.Repeat("a", 64), Deadline: time.Now().UTC().Add(time.Hour),
-		Format: ArchiveZIP, ArchiveProfile: ArchiveProfileZIPDeflateV1,
-		Limits: ArchiveLimits{MaxItems: 2, MaxLogicalBytes: 100, MaxProviderBytes: 100},
-		Items:  []WorkerItem{{ItemID: "11111111111111111111111111111111", Frozen: item}},
-	})
-	if !errors.Is(err, content.ErrAttemptSourceChanged) {
-		t.Fatalf("post-read drift error=%v", err)
-	}
-}
-
-func TestWorkerUsesInjectedClockToRejectExpiredDeadline(t *testing.T) {
-	start := time.Now().UTC().Add(time.Hour)
-	item := frozenItemFixture()
-	item.LogicalSize = 5
-	worker, err := NewWorker(
-		&workerBrokerFake{data: []byte("hello")},
-		&metadataValidatorFake{},
-		func() time.Time { return start },
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var output bytes.Buffer
-	_, err = worker.WriteArchive(context.Background(), &output, WorkerArchiveRequest{
-		AttemptID: "33333333333333333333333333333333", SelectionDigest: strings.Repeat("a", 64),
-		Deadline:       start.Add(-time.Second),
-		Format:         ArchiveZIP,
-		ArchiveProfile: ArchiveProfileZIPDeflateV1,
-		Limits:         ArchiveLimits{MaxItems: 1, MaxLogicalBytes: 16, MaxProviderBytes: 16},
-		Items: []WorkerItem{{
-			ItemID: "44444444444444444444444444444444",
-			Frozen: item,
-		}},
-	})
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("WriteArchive error = %v, want injected-clock deadline rejection", err)
-	}
-}
-
-type workerBrokerFake struct {
-	data          []byte
-	opens         int
-	revalidateErr error
-	session       *workerInputSessionFake
-	bindings      []content.AttemptSourceBinding
-}
-
-func (fake *workerBrokerFake) OpenSession(_ context.Context, binding content.AttemptSourceBinding) (content.AttemptInputSession, content.AttemptSourceInfo, error) {
-	fake.opens++
-	copyBinding := binding
-	copyBinding.AllowedModes = append([]content.SourceMode(nil), binding.AllowedModes...)
-	fake.bindings = append(fake.bindings, copyBinding)
-	fake.session = &workerInputSessionFake{data: fake.data, revalidateErr: fake.revalidateErr}
-	return fake.session, content.AttemptSourceInfo{
-		Size: int64(len(fake.data)), MediaType: "text/plain", FingerprintStrong: true, Sequential: true,
-	}, nil
-}
-
-type workerInputSessionFake struct {
-	data            []byte
-	revalidations   int
-	closes          int
-	sequentialCalls int
-	revalidateErr   error
-}
-
-func (session *workerInputSessionFake) Info() content.AttemptSourceInfo {
-	return content.AttemptSourceInfo{Size: int64(len(session.data)), MediaType: "text/plain", FingerprintStrong: true, Sequential: true}
-}
-func (session *workerInputSessionFake) OpenSequential(_ context.Context, maxBytes int64) (content.AttemptReadHandle, error) {
-	session.sequentialCalls++
-	if maxBytes != int64(len(session.data)) {
-		return nil, errors.New("unexpected max bytes")
-	}
-	return &workerReadHandle{Reader: bytes.NewReader(session.data)}, nil
-}
-func (*workerInputSessionFake) OpenRange(context.Context, int64, int64) (content.AttemptReadHandle, error) {
-	return nil, errors.New("range not supported")
-}
-func (session *workerInputSessionFake) Revalidate(context.Context) error {
-	session.revalidations++
-	return session.revalidateErr
-}
-func (session *workerInputSessionFake) Close() error {
-	session.closes++
-	return nil
-}
-
-type workerReadHandle struct{ *bytes.Reader }
-
-func (*workerReadHandle) Close() error { return nil }
-
 type metadataValidatorFake struct {
 	items    []FrozenItem
 	txItems  []FrozenItem
@@ -12052,8 +11869,6 @@ func (validator *attemptWorkBlockingMetadataValidator) RevalidateMetadataTx(
 func (validator *attemptWorkBlockingMetadataValidator) release() {
 	validator.releaseOnce.Do(func() { close(validator.releaseWait) })
 }
-
-var _ io.ReadCloser = (*workerReadHandle)(nil)
 
 type byVersionKeySpy struct {
 	*backupasset.Keyring
@@ -12242,9 +12057,16 @@ func rewrapPersistedJobKeyForTest(
 	return rotated, dek
 }
 
+type rejectingAttemptBroker struct{}
+
+func (rejectingAttemptBroker) OpenSession(context.Context, content.AttemptSourceBinding) (content.AttemptInputSession, content.AttemptSourceInfo, error) {
+	return nil, content.AttemptSourceInfo{}, errors.New("unexpected attempt source open")
+}
+
 type recordingAttemptBroker struct {
 	inner    AttemptSourceBroker
 	bindings []content.AttemptSourceBinding
+	sessions []content.AttemptInputSession
 }
 
 func (broker *recordingAttemptBroker) OpenSession(
@@ -12253,7 +12075,11 @@ func (broker *recordingAttemptBroker) OpenSession(
 	copyBinding := binding
 	copyBinding.AllowedModes = append([]content.SourceMode(nil), binding.AllowedModes...)
 	broker.bindings = append(broker.bindings, copyBinding)
-	return broker.inner.OpenSession(ctx, binding)
+	session, info, err := broker.inner.OpenSession(ctx, binding)
+	if err == nil {
+		broker.sessions = append(broker.sessions, session)
+	}
+	return session, info, err
 }
 
 type persistentSourceResolverFake struct {

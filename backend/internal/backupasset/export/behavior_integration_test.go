@@ -644,6 +644,15 @@ func runExportBehaviorContract(t *testing.T, open func(*testing.T) exportBehavio
 	t.Run("ReaderSweep/PersistentFailuresProgressAcrossRestart", func(t *testing.T) {
 		runReaderSweepRestartBehaviorContract(t, open(t))
 	})
+	t.Run("ReaderSweep/RenewedOwnerAndFairness", func(t *testing.T) {
+		runRenewedReaderSweepContract(t, open(t))
+	})
+	t.Run("Spool/RenewedAttemptAndExpiredAdmission", func(t *testing.T) {
+		runRenewedSpoolContract(t, open)
+	})
+	t.Run("Lifecycle/PublishedWorkerCapacity", func(t *testing.T) {
+		runPublishedWorkerCapacityContract(t, open, selection, actor, item)
+	})
 	if fixture.engine == "postgres" {
 		t.Run("CancellationSerialization/HeartbeatHoldingJobRowPrecedesCancel", func(t *testing.T) {
 			runPostgresHeartbeatVersusCancelBarrier(t, open(t))
@@ -956,6 +965,10 @@ func runExportBehaviorContract(t *testing.T, open func(*testing.T) exportBehavio
 		})
 	})
 
+	t.Run("ExpiredWorkerReservations", func(t *testing.T) {
+		runExpiredWorkerReservationBehavior(t, open)
+	})
+
 	if _, err := fixture.service.Cancel(context.Background(), SelectionActor{UserID: 99, Role: "admin"}, created.Job.ID); err == nil {
 		t.Fatalf("%s foreign owner canceled Export", fixture.engine)
 	}
@@ -1193,7 +1206,7 @@ func createPublishedExportBehaviorReadyFixture(
 	selection FrozenSelection,
 	actor SelectionActor,
 	item FrozenItem,
-	idempotencyKey string,
+	idempotencyKey string, capacity ...WorkerCapacityLimits,
 ) publishedExportBehaviorReadyFixture {
 	t.Helper()
 	fixture := open(t)
@@ -1259,6 +1272,26 @@ func createPublishedExportBehaviorReadyFixture(
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(capacity) != 0 {
+		worker.workerCapacity = &capacity[0]
+		if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+			var job model.BackupAssetExportJob
+			var attempt model.BackupAssetExportAttempt
+			if err := tx.Where("id = ?", created.Job.ID).Take(&job).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("id = ?", claim.AttemptID).Take(&attempt).Error; err != nil {
+				return err
+			}
+			buckets, err := ensureAndLockQuotaBucketPairTx(tx, job.OwnerUserID, clock)
+			if err != nil {
+				return err
+			}
+			return reserveAttemptWorkerCapacityTx(tx, buckets, job, attempt, capacity[0], clock)
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := worker.PublishReady(context.Background(), PersistentPublishRequest{
 		JobID: created.Job.ID, AttemptID: claim.AttemptID, FenceToken: claim.FenceToken, ArtifactID: sealed.ArtifactID,

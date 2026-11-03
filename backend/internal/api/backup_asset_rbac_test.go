@@ -66,6 +66,10 @@ func setupBackupAssetRBACFixture(t *testing.T) backupAssetRBACTestFixture {
 			t.Fatalf("generate %s backup asset RBAC token: %v", role, err)
 		}
 		tokens[role] = token
+		claims, err := jwtManager.ParseToken(token)
+		if err != nil {
+			t.Fatalf("parse %s backup asset RBAC token: %v", role, err)
+		}
 		actions := []auth.StepUpAction(nil)
 		switch role {
 		case "admin":
@@ -78,7 +82,11 @@ func setupBackupAssetRBACFixture(t *testing.T) backupAssetRBACTestFixture {
 			actions = []auth.StepUpAction{auth.StepUpActionAssetDownload}
 		}
 		for _, action := range actions {
-			proof, _, proofErr := jwtManager.GenerateStepUpToken(user, action)
+			var sessions []string
+			if auth.StepUpActionRequiresSession(action) {
+				sessions = append(sessions, claims.ID)
+			}
+			proof, _, proofErr := jwtManager.GenerateStepUpToken(user, action, sessions...)
 			if proofErr != nil {
 				t.Fatalf("generate %s %s backup asset proof: %v", role, action, proofErr)
 			}

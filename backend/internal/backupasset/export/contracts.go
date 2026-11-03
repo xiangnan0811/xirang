@@ -126,7 +126,8 @@ func ValidateFrozenItem(item FrozenItem) error {
 	if item.SchemaVersion != 1 || backupasset.ValidateAssetRef(item.Ref) != nil ||
 		backupasset.ValidateOpaqueID(item.CatalogGenerationID) != nil ||
 		len(item.SourceFingerprint) == 0 || len(item.SourceFingerprint) > 128 ||
-		len(item.EntryFingerprint) == 0 || len(item.EntryFingerprint) > 128 ||
+		len(item.EntryFingerprint) > 128 ||
+		(item.EntryFingerprint == "" && (item.FingerprintStrength != "none" || item.EntryType == backupasset.CatalogEntryFile)) ||
 		(item.FingerprintStrength != "strong" && item.FingerprintStrength != "weak" && item.FingerprintStrength != "none") ||
 		item.ProviderCapabilityRevision <= 0 || !validEntryType(item.EntryType) || item.LogicalSize < 0 ||
 		len(item.MediaType) > 255 || item.SelectionRootOrdinal < 0 || len(item.ArchiveComponents) == 0 {

@@ -33,19 +33,15 @@ Worker 工具链 v3 的输入身份、保留镜像引用及 v1 签名闭包的�
 
 ## 数据库迁移版本
 
-当前迁移版本：`000096_catalog_candidate_sweeps`。
+当前迁移版本：`000097_export_raw_fingerprint`。
 
 该迁移的 SQLite/PostgreSQL 配对文件为：
 
-- `internal/database/migrations/sqlite/000096_catalog_candidate_sweeps.up.sql`
-- `internal/database/migrations/sqlite/000096_catalog_candidate_sweeps.down.sql`
-- `internal/database/migrations/postgres/000096_catalog_candidate_sweeps.up.sql`
-- `internal/database/migrations/postgres/000096_catalog_candidate_sweeps.down.sql`
+- `internal/database/migrations/sqlite/000097_export_raw_fingerprint.up.sql`
+- `internal/database/migrations/sqlite/000097_export_raw_fingerprint.down.sql`
+- `internal/database/migrations/postgres/000097_export_raw_fingerprint.up.sql`
+- `internal/database/migrations/postgres/000097_export_raw_fingerprint.down.sql`
 
-该迁移添加 Catalog 候选扫描的独立 singleton 进度及 RecoveryPoint 的创建时间／ID 索引。
-启动只读验证真实结构和当前进度，缺失或漂移拒绝启动，不自动补种子。
-使用后仍可回退该迁移，仅丢失可重扫进度，不删除 Catalog 代次、备份或授权证据；
-再次升级重建空闲种子。回退旧 selector 会恢复固定前缀饥饿缺陷。
-既有备份、Recovery 和 Rclone 稳定身份迁移的使用后降级保护不变，须保留匹配的数据库和加密密钥备份。
+该迁移允许 Export 保留非文件 Catalog 条目的空原始 fingerprint，仅限 `none` 强度；普通文件和 strong/weak 仍要求非空。存在使用该能力的行时降级被拒绝并保留干净版本和数据；启动验证约束和降级保护。SQLite 重建涉及的两表若有额外索引、触发器或指向它们的额外外键，升级在写 dirty 元数据前拒绝，需离线核对后处理。
 
 该声明与 `internal/database/migrations/{sqlite,postgres}` 中最新的成对 up/down 文件同步，并由迁移检查脚本校验。升级前提、旧写入者排空、双引擎恢复和降级保护要求见[数据库合同](../docs/spec/backend/database-guidelines.md)、[部署指南](../docs/deployment.md#备份职责收敛升级)及[备份、恢复与快照](../docs/admin/backup-recovery.md#升级与灾难恢复)；不要通过强制修改版本或删除安全证据绕过保护。

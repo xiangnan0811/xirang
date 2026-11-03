@@ -324,6 +324,83 @@ func TestStepUpProofValidationBindsSessionAndExactIssuedLifetime(t *testing.T) {
 	}
 }
 
+func TestExportStepUpProofSessionValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, action := range []auth.StepUpAction{auth.StepUpActionAssetExportCreate, auth.StepUpActionAssetExportDownload} {
+		t.Run(string(action), func(t *testing.T) {
+			db := openStepUpHandlerTestDB(t)
+			manager := newStepUpTestJWTManager(db)
+			user := seedStepUpUser(t, db, "export-session-proof", "admin")
+			proof := generateStepUpProofForAction(t, manager, user, action, stepUpTestSessionID)
+			claims, err := manager.ParseToken(proof)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claims.SessionID = ""
+			unbound := signStepUpClaimsForTest(t, *claims)
+			for _, testCase := range []struct {
+				name     string
+				proof    string
+				sessions []string
+			}{
+				{name: "missing claim", proof: unbound, sessions: []string{stepUpTestSessionID}},
+				{name: "missing caller session", proof: proof},
+				{name: "different caller session", proof: proof, sessions: []string{strings.Repeat("c", 32)}},
+				{name: "multiple caller sessions", proof: proof, sessions: []string{stepUpTestSessionID, stepUpTestSessionID}},
+			} {
+				t.Run(testCase.name, func(t *testing.T) {
+					if _, err := validateStepUpProof(db, manager, testCase.proof, user.ID, user.Role, action, testCase.sessions...); !errors.Is(err, ErrStepUpProofInvalid) {
+						t.Fatalf("session proof error=%v, want invalid", err)
+					}
+				})
+			}
+			if _, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, action, stepUpTestSessionID); err != nil {
+				t.Fatalf("matching session rejected: %v", err)
+			}
+			unavailable := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+			if _, err := validateStepUpProof(db, unavailable, proof, user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpVerifierUnavailable) {
+				t.Fatalf("missing revocation store error=%v, want verifier unavailable", err)
+			}
+			for _, scenario := range []struct {
+				name       string
+				session    string
+				wantStatus int
+			}{
+				{name: "matching", session: stepUpTestSessionID, wantStatus: http.StatusNoContent},
+				{name: "different", session: strings.Repeat("c", 32), wantStatus: http.StatusForbidden},
+				{name: "missing", wantStatus: http.StatusForbidden},
+			} {
+				t.Run("generic/"+scenario.name, func(t *testing.T) {
+					router := gin.New()
+					router.GET("/", func(c *gin.Context) {
+						c.Set(middleware.CtxUserID, user.ID)
+						c.Set(middleware.CtxRole, user.Role)
+						if scenario.session != "" {
+							c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{JTI: scenario.session, UserID: user.ID, Role: user.Role, ExpiresAt: time.Now().Add(time.Hour)})
+						}
+						if EnforceStepUp(c, db, manager, action, "export", "test") {
+							c.Status(http.StatusNoContent)
+						}
+					})
+					request := httptest.NewRequest(http.MethodGet, "/", nil)
+					request.Header.Set(StepUpHeaderName, proof)
+					response := httptest.NewRecorder()
+					router.ServeHTTP(response, request)
+					if response.Code != scenario.wantStatus {
+						t.Fatalf("status=%d want=%d body=%s", response.Code, scenario.wantStatus, response.Body.String())
+					}
+				})
+			}
+			if err := manager.RevokeSession(stepUpTestSessionID, user.ID, time.Now().Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, action, stepUpTestSessionID); !errors.Is(err, ErrStepUpProofInvalid) {
+				t.Fatalf("revoked session error=%v, want invalid", err)
+			}
+		})
+	}
+}
+
 func TestStepUpRequiredEnvelopeReportsExactActionPolicyTTL(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)

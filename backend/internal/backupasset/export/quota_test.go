@@ -1474,6 +1474,10 @@ func TestAttemptBudgetExpiredReaderSweepPersistsProgressAcrossRestartPastFailure
 			UpdateColumn("lease_expires_at", expiresAt).Error; err != nil {
 			t.Fatal(err)
 		}
+		if err := harness.db.Model(&model.BackupAssetExportAttempt{}).
+			Where("id = ?", itemAttempt.AttemptID).UpdateColumn("lease_expires_at", expiresAt).Error; err != nil {
+			t.Fatal(err)
+		}
 		readers = append(readers, expiredReader{
 			reservation: reservation, leaseOwner: anchor.LeaseOwner,
 		})
@@ -2500,6 +2504,10 @@ func createExpiredAttemptReadForSweep(
 	if err := harness.db.Model(&model.BackupAssetExportReservation{}).
 		Where("lease_owner = ? AND kind = ?", anchor.LeaseOwner, "reader").
 		UpdateColumn("lease_expires_at", expiresAt.UTC()).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetExportAttempt{}).
+		Where("id = ?", itemAttempt.AttemptID).UpdateColumn("lease_expires_at", expiresAt.UTC()).Error; err != nil {
 		t.Fatal(err)
 	}
 	return attemptReadSweepFixture{

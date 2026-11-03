@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Export 真实归档、授权与生命周期修复
+
+- 已认证 Catalog 中目录及 symlink 的原始空 fingerprint 可进入 Export 冻结快照；普通文件仍必须具备非空 fingerprint，strong/weak 空值仍拒绝。真实文件可在 MIME 未知时读取，source／entry 指纹、逻辑大小和重验保持严格。ZIP/TAR 沿用既有归档 profile、成员消歧和 partial report 策略，不新增 Provider 能力。
+- Export 创建和下载 step-up proof 绑定当前登录 session，跨 session 不可复用；既有 300 秒 TTL 与其他 action 保持不变。换版后重新取得对应 action 的 session-bound proof，旧的无 session proof 不再用于这两个 action。
+- 长读取在同一 attempt 合法续租后可继续完成；input session 保留原 job/source 绝对期限，启动及每次读取准入仍核对当前 attempt、fence 和预算。过期 reader 调和在事务内辨认仍活跃的 owner，不提前释放读取容量；真实 close 继续保守结算未知证据，不延长 job、source 或 retention 期限。
+- ready 取消清理核验发布时已释放的 worker reservation 配对，避免重复释放或卡在 fence lost。过期 worker 调和只处理其拥有的 running/sealing 状态，事务内辨认合法取消、结算和续租竞争，取消仍由 lifecycle 排空与清理；损坏或失去一致性的配对保持拒绝。
+- 删除无生产消费者的旧 Export Worker／DTO／专属 fake，将有效断言迁至 PersistentWorker／真实 broker；Runtime 的测试专用 delivery 分支和观察方法移入测试。活归档、delivery mux 的唯一匹配与撤销 fan-out、身份隔离和必需审计保持。
+- 新增 SQLite／PostgreSQL 迁移 97，仅调整 Export entry fingerprint 合同，不改写已发布迁移或历史指纹。SQLite 会重建 Export items／item attempts 两表；若存在额外索引、触发器或指向两表的额外外键，升级在写入 dirty 元数据前拒绝，降级也受对应保护。仅当保留行均满足旧 fingerprint 约束且相关结构保护允许时，迁移 97 本身可回退；其他既有迁移的降级限制仍独立适用。只要 Export items 中仍有空 fingerprint，down 及旧版本迁移准入会原子拒绝；不得通过删历史行、改指纹或绕过保护降级。升级前保全数据库、匹配密钥、配置和备份副本，停止并排空旧 Core 的 Export／下载操作后配套换版；新逻辑仅在新版进程后续操作生效，不承诺解开旧进程中的阻塞读取。回退恢复旧缺陷，且必须满足全部既有迁移和未知写入保护。
+- 真实本地认证 HTTP、Rsync、ZIP/TAR、SQLite／PostgreSQL、取消及原五分钟期限验收均已完成；这些证据不代表其他 Provider、AWS live 或生产部署。无新增公开 API 或运行时配置，既有 Core／Worker 配套和历史恢复／备份降级限制继续适用。
+
 ## [0.73.9](https://github.com/xiangnan0811/xirang/compare/v0.73.8...v0.73.9) (2026-11-03)
 
 

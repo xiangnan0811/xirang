@@ -25,7 +25,7 @@ import (
 func TestBackupAssetExportHandlerCreateStatusAndCancel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, jwtManager, user := backupAssetExportHandlerProofFixture(t)
-	createProof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionAssetExportCreate)
+	createProof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionAssetExportCreate, strings.Repeat("f", 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +47,10 @@ func TestBackupAssetExportHandlerCreateStatusAndCancel(t *testing.T) {
 		c.Set(middleware.CtxUserID, user.ID)
 		c.Set(middleware.CtxUsername, "export-admin")
 		c.Set(middleware.CtxRole, "admin")
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: user.ID, Role: user.Role,
+			TokenVersion: user.TokenVersion, ExpiresAt: time.Now().UTC().Add(time.Hour),
+		})
 		c.Next()
 	})
 	router.POST("/api/v1/asset-exports", handler.Create)
@@ -140,7 +144,11 @@ func TestBackupAssetExportHandlerCreateRequiresExactExportCreatePurpose(t *testi
 		auth.StepUpActionAssetExportCreate,
 		auth.StepUpActionAssetExportDownload,
 	} {
-		proof, _, err := jwtManager.GenerateStepUpToken(user, action)
+		var sessions []string
+		if auth.StepUpActionRequiresSession(action) {
+			sessions = append(sessions, strings.Repeat("f", 32))
+		}
+		proof, _, err := jwtManager.GenerateStepUpToken(user, action, sessions...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,6 +184,10 @@ func TestBackupAssetExportHandlerCreateRequiresExactExportCreatePurpose(t *testi
 				c.Set(middleware.CtxUserID, user.ID)
 				c.Set(middleware.CtxUsername, user.Username)
 				c.Set(middleware.CtxRole, user.Role)
+				c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+					JTI: strings.Repeat("f", 32), UserID: user.ID, Role: user.Role,
+					TokenVersion: user.TokenVersion, ExpiresAt: time.Now().UTC().Add(time.Hour),
+				})
 				c.Next()
 			}, handler.Create)
 			request := httptest.NewRequest(http.MethodPost, "https://xirang.example/api/v1/asset-exports", strings.NewReader(body))
@@ -200,7 +212,7 @@ func TestBackupAssetExportHandlerCreateRequiresExactExportCreatePurpose(t *testi
 func TestBackupAssetExportHandlerRejectsInvalidArchivePairBeforeService(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, jwtManager, user := backupAssetExportHandlerProofFixture(t)
-	proof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionAssetExportCreate)
+	proof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionAssetExportCreate, strings.Repeat("f", 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +240,10 @@ func TestBackupAssetExportHandlerRejectsInvalidArchivePairBeforeService(t *testi
 				c.Set(middleware.CtxUserID, user.ID)
 				c.Set(middleware.CtxUsername, user.Username)
 				c.Set(middleware.CtxRole, user.Role)
+				c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+					JTI: strings.Repeat("f", 32), UserID: user.ID, Role: user.Role,
+					TokenVersion: user.TokenVersion, ExpiresAt: time.Now().UTC().Add(time.Hour),
+				})
 				c.Next()
 			}, handler.Create)
 
@@ -249,7 +265,7 @@ func TestBackupAssetExportHandlerRejectsInvalidArchivePairBeforeService(t *testi
 func TestBackupAssetExportHandlerRejectsEmptyExplicitSelectionBeforeService(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, jwtManager, user := backupAssetExportHandlerProofFixture(t)
-	proof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionAssetExportCreate)
+	proof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionAssetExportCreate, strings.Repeat("f", 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +276,10 @@ func TestBackupAssetExportHandlerRejectsEmptyExplicitSelectionBeforeService(t *t
 		c.Set(middleware.CtxUserID, user.ID)
 		c.Set(middleware.CtxUsername, user.Username)
 		c.Set(middleware.CtxRole, user.Role)
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: user.ID, Role: user.Role,
+			TokenVersion: user.TokenVersion, ExpiresAt: time.Now().UTC().Add(time.Hour),
+		})
 		c.Next()
 	}, handler.Create)
 	request := httptest.NewRequest(http.MethodPost, "https://xirang.example/api/v1/asset-exports", strings.NewReader(
@@ -288,7 +308,11 @@ func TestBackupAssetExportHandlerPrivateNetworkHTTPDownloadTicketRequiresExactEx
 		auth.StepUpActionAssetExportCreate,
 		auth.StepUpActionAssetExportDownload,
 	} {
-		proof, _, err := jwtManager.GenerateStepUpToken(user, action)
+		var sessions []string
+		if auth.StepUpActionRequiresSession(action) {
+			sessions = append(sessions, strings.Repeat("f", 32))
+		}
+		proof, _, err := jwtManager.GenerateStepUpToken(user, action, sessions...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -385,7 +409,7 @@ func TestBackupAssetExportHandlerPrivateNetworkHTTPDownloadTicketRequiresExactEx
 func TestBackupAssetExportHandlerDownloadTicketRejectsUnsafeIssuedTicket(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, jwtManager, user := backupAssetExportHandlerProofFixture(t)
-	proof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionAssetExportDownload)
+	proof, _, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionAssetExportDownload, strings.Repeat("f", 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,6 +486,95 @@ func TestBackupAssetExportHandlerDownloadTicketRejectsUnsafeIssuedTicket(t *test
 					response.Header().Values("Set-Cookie"), response.Body.String())
 			}
 		})
+	}
+}
+
+func TestBackupAssetExportHandlerRequiresProofFromCurrentSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, action := range []auth.StepUpAction{auth.StepUpActionAssetExportCreate, auth.StepUpActionAssetExportDownload} {
+		for _, scenario := range []struct {
+			name       string
+			binding    string
+			revoked    bool
+			wantStatus int
+			wantCalls  int
+		}{
+			{name: "matching session", binding: strings.Repeat("f", 32), wantCalls: 1},
+			{name: "different session", binding: strings.Repeat("a", 32), wantStatus: http.StatusForbidden},
+			{name: "missing session", wantStatus: http.StatusUnauthorized},
+			{name: "revoked session", binding: strings.Repeat("f", 32), revoked: true, wantStatus: http.StatusForbidden},
+		} {
+			t.Run(string(action)+"/"+scenario.name, func(t *testing.T) {
+				db, manager, user := backupAssetExportHandlerProofFixture(t)
+				proof, _, err := manager.GenerateStepUpToken(user, action, strings.Repeat("f", 32))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if scenario.revoked {
+					if err := db.Create(&model.TokenRevocation{
+						TokenHash: "jti:" + scenario.binding, UserID: user.ID, ExpiresAt: time.Now().UTC().Add(time.Hour),
+					}).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+				now := time.Now().UTC().Truncate(time.Second)
+				jobID := strings.Repeat("d", 32)
+				service := &backupAssetExportServiceFake{created: assetexport.CreateResult{Job: assetexport.JobStatus{
+					SchemaVersion: 1, ID: jobID, SelectionDigest: strings.Repeat("e", 64),
+					ArchiveFormat: assetexport.ArchiveZIP, ArchiveProfile: "zip_deflate_v1",
+					ExecutionState: assetexport.ExecutionQueued, CleanupState: assetexport.CleanupNone,
+					ItemCount: 1, CreatedAt: now, AbsoluteDeadline: now.Add(time.Hour),
+					Items: []assetexport.JobItemStatus{}, PollAfterSeconds: 2,
+				}}}
+				delivery := &backupAssetExportDeliveryFake{ticket: backupAssetExportHandlerTicket(t)}
+				handler := NewBackupAssetExportHandler(service, delivery, db, manager, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+					return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+				})
+				router := gin.New()
+				router.Use(func(c *gin.Context) {
+					c.Set(middleware.CtxUserID, user.ID)
+					c.Set(middleware.CtxUsername, user.Username)
+					c.Set(middleware.CtxRole, user.Role)
+					if scenario.binding != "" {
+						c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+							JTI: scenario.binding, UserID: user.ID, Role: user.Role,
+							TokenVersion: user.TokenVersion, ExpiresAt: now.Add(time.Hour),
+						})
+					}
+					c.Next()
+				})
+				path := "/api/v1/asset-exports"
+				body := `{"schema_version":1,"selection":{"schema_version":1,"kind":"explicit","refs":[{"recovery_point_id":"` +
+					strings.Repeat("a", 32) + `","entry_id":"` + strings.Repeat("b", 64) + `"}]},"archive_format":"zip","archive_profile":"zip_deflate_v1"}`
+				wantStatus := scenario.wantStatus
+				if action == auth.StepUpActionAssetExportDownload {
+					path += "/" + jobID + "/download-ticket"
+					body = `{"schema_version":1}`
+					router.POST("/api/v1/asset-exports/:id/download-ticket", handler.DownloadTicket)
+					if scenario.wantCalls == 1 {
+						wantStatus = http.StatusOK
+					}
+				} else {
+					router.POST(path, handler.Create)
+					if scenario.wantCalls == 1 {
+						wantStatus = http.StatusAccepted
+					}
+				}
+				request := httptest.NewRequest(http.MethodPost, "https://xirang.example"+path, strings.NewReader(body))
+				request.Header.Set("Content-Type", "application/json")
+				request.Header.Set("Idempotency-Key", "0123456789abcdef")
+				request.Header.Set(StepUpHeaderName, proof)
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				if response.Code != wantStatus || len(service.createRequests)+len(delivery.requests) != scenario.wantCalls {
+					t.Fatalf("status=%d want=%d create_calls=%d delivery_calls=%d body=%s", response.Code, wantStatus,
+						len(service.createRequests), len(delivery.requests), response.Body.String())
+				}
+				if len(delivery.requests) == 1 && delivery.requests[0].Session.JTI != scenario.binding {
+					t.Fatalf("ticket session=%q want=%q", delivery.requests[0].Session.JTI, scenario.binding)
+				}
+			})
+		}
 	}
 }
 
@@ -571,7 +684,7 @@ func backupAssetExportHandlerProofFixture(t *testing.T) (*gorm.DB, *auth.JWTMana
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.TokenRevocation{}); err != nil {
 		t.Fatal(err)
 	}
 	user := model.User{
@@ -581,5 +694,7 @@ func backupAssetExportHandlerProofFixture(t *testing.T) (*gorm.DB, *auth.JWTMana
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	return db, auth.NewJWTManager("FAKE_EXPORT_PROOF_JWT_SECRET_FOR_TEST_ONLY", time.Hour), user
+	manager := auth.NewJWTManager("FAKE_EXPORT_PROOF_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	manager.SetDB(db)
+	return db, manager, user
 }

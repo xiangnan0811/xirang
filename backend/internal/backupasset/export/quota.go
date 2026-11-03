@@ -266,6 +266,17 @@ func (service *AttemptBudgetService) FinalizeAttemptRead(
 	ctx context.Context,
 	finalization content.AttemptReadFinalization,
 ) error {
+	return service.finalizeAttemptRead(ctx, finalization, false, nil)
+}
+
+// Expiration reconciliation uses the same locks as finalization, but may defer
+// an active owner. A real reader close always finalizes immediately.
+func (service *AttemptBudgetService) finalizeAttemptRead(
+	ctx context.Context,
+	finalization content.AttemptReadFinalization,
+	expirationOnly bool,
+	processed *bool,
+) error {
 	if service == nil || backupasset.ValidateOpaqueID(finalization.ReservationID) != nil ||
 		finalization.ReservedBytes < 0 || finalization.ProviderBytes < 0 ||
 		(finalization.EvidenceKnown && finalization.ProviderBytes > finalization.ReservedBytes) {
@@ -289,7 +300,7 @@ func (service *AttemptBudgetService) FinalizeAttemptRead(
 		if !validReaderQuotaBucketPair(bucketPair) {
 			return content.ErrAttemptBudgetExceeded
 		}
-		itemAttempt, _, _, job, tupleErr := loadAttemptBudgetTupleTx(tx, hint.identity)
+		itemAttempt, _, attempt, job, tupleErr := loadAttemptBudgetTupleTx(tx, hint.identity)
 		if tupleErr != nil && !errors.Is(tupleErr, content.ErrAttemptBudgetExceeded) {
 			return tupleErr
 		}
@@ -330,6 +341,18 @@ func (service *AttemptBudgetService) FinalizeAttemptRead(
 		}
 		if terminalRows != 0 {
 			return content.ErrAttemptBudgetExceeded
+		}
+		if expirationOnly {
+			// Candidate discovery is only a hint; both expiry and ownership are
+			// checked again after locking the complete reservation pair.
+			now = service.now().UTC()
+			if !rows[0].LeaseExpiresAt.Equal(rows[1].LeaseExpiresAt) {
+				return content.ErrAttemptBudgetExceeded
+			}
+			if now.Before(rows[0].LeaseExpiresAt.UTC()) ||
+				(tupleErr == nil && now.Before(attempt.LeaseExpiresAt.UTC()) && now.Before(job.AbsoluteDeadline.UTC())) {
+				return nil
+			}
 		}
 		releaseRows := func() error {
 			for _, row := range rows {
@@ -380,6 +403,9 @@ func (service *AttemptBudgetService) FinalizeAttemptRead(
 		}
 		if result.RowsAffected != 1 {
 			return content.ErrAttemptBudgetExceeded
+		}
+		if processed != nil {
+			*processed = true
 		}
 		return nil
 	})
@@ -482,12 +508,13 @@ func (service *AttemptBudgetService) ReconcileExpiredAttemptReads(ctx context.Co
 	attempted := 0
 	var reconcileErr error
 	for _, candidate := range candidates {
-		if err := service.FinalizeAttemptRead(ctx, content.AttemptReadFinalization{
+		settled := false
+		if err := service.finalizeAttemptRead(ctx, content.AttemptReadFinalization{
 			ReservationID: candidate.ID, ReservedBytes: candidate.ReservedProviderBytes,
 			EvidenceKnown: false, Succeeded: false,
-		}); err != nil {
+		}, true, &settled); err != nil {
 			reconcileErr = errors.Join(reconcileErr, err)
-		} else {
+		} else if settled {
 			processed++
 		}
 		attempted++
@@ -1484,6 +1511,16 @@ func lockAttemptWorkerReservationPairTx(
 	job model.BackupAssetExportJob,
 	attempt model.BackupAssetExportAttempt,
 ) ([]model.BackupAssetExportReservation, error) {
+	return lockAttemptWorkerReservationPairStateTx(tx, buckets, job, attempt, false)
+}
+
+func lockAttemptWorkerReservationPairStateTx(
+	tx *gorm.DB,
+	buckets quotaBucketPair,
+	job model.BackupAssetExportJob,
+	attempt model.BackupAssetExportAttempt,
+	released bool,
+) ([]model.BackupAssetExportReservation, error) {
 	if tx == nil || job.ID == "" || attempt.ID == "" || attempt.JobID != job.ID || attempt.LeaseExpiresAt.IsZero() {
 		return nil, ErrAttemptFenceLost
 	}
@@ -1500,9 +1537,14 @@ func lockAttemptWorkerReservationPairTx(
 			return nil, ErrAttemptFenceLost
 		}
 		row := matches[0]
-		if row.State != "active" || row.LeaseOwner != attempt.ID || row.ReservedSlots != 1 ||
+		state := "active"
+		if released {
+			state = "released"
+		}
+		if row.State != state || row.LeaseOwner != attempt.ID || row.ReservedSlots != 1 ||
 			row.ReservedLogicalBytes != 0 || row.ReservedProviderBytes != 0 || row.ReservedCipherBytes != 0 ||
-			row.ReservedStoreBytes != 0 || !row.LeaseExpiresAt.UTC().Equal(attempt.LeaseExpiresAt.UTC()) {
+			row.ReservedStoreBytes != 0 || !row.LeaseExpiresAt.UTC().Equal(attempt.LeaseExpiresAt.UTC()) ||
+			(released && (row.ReleasedAt == nil || attempt.FinishedAt == nil || !row.ReleasedAt.Equal(*attempt.FinishedAt))) {
 			return nil, ErrAttemptFenceLost
 		}
 		rows = append(rows, row)

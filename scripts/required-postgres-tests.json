@@ -2095,6 +2095,17 @@
       "timeout": "30m",
       "tests": [
         {
+          "name": "TestExportRawFingerprintMigrationPostgres",
+          "required_paths": [
+            "TestExportRawFingerprintMigrationPostgres",
+            "TestExportRawFingerprintMigrationPostgres/upgrade_and_pristine_downgrade_preserve_rows",
+            "TestExportRawFingerprintMigrationPostgres/admission_and_used_downgrade",
+            "TestExportRawFingerprintMigrationPostgres/direct_down_guard",
+            "TestExportRawFingerprintMigrationPostgres/schema_drift",
+            "TestExportRawFingerprintMigrationPostgres/fingerprint_check_drift"
+          ]
+        },
+        {
           "name": "TestCatalogCandidateSweepMigrationPostgres",
           "required_paths": [
             "TestCatalogCandidateSweepMigrationPostgres",
@@ -3324,6 +3335,11 @@
     }
   ],
   "exclusions": [
+    {
+      "package": "./internal/database",
+      "name": "TestExportRawFingerprintMigrationSQLite",
+      "reason": "The SQLite root uses newSQLiteMigrationFixture; the PostgreSQL sibling is separately registered."
+    },
     {
       "package": "./internal/backupasset/catalog",
       "name": "TestCatalogCandidateSweepSQLite",
