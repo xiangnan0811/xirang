@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.73.10](https://github.com/xiangnan0811/xirang/compare/v0.73.9...v0.73.10) (2026-11-03)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复 Export 归档授权与生命周期 ([#672](https://github.com/xiangnan0811/xirang/issues/672)) ([9721606](https://github.com/xiangnan0811/xirang/commit/9721606424fed5f9ffc5cd66675737f8b2ef1bfa))
+* **deps:** 修复 Core 与 Worker 的 Expat 漏洞 ([#674](https://github.com/xiangnan0811/xirang/issues/674)) ([65b77fa](https://github.com/xiangnan0811/xirang/commit/65b77facc06a1c4ecf910c9d7ce97aa07e36cb72))
+
 ### Export 真实归档、授权与生命周期修复
 
 - 已认证 Catalog 中目录及 symlink 的原始空 fingerprint 可进入 Export 冻结快照；普通文件仍必须具备非空 fingerprint，strong/weak 空值仍拒绝。真实文件可在 MIME 未知时读取，source／entry 指纹、逻辑大小和重验保持严格。ZIP/TAR 沿用既有归档 profile、成员消歧和 partial report 策略，不新增 Provider 能力。
@@ -23,13 +31,6 @@
 - 全局与 Policy 期限测试改用标准虚拟时间，仍触发真实 `context.WithTimeout` 并验证执行器启动及失败终态，避免宿主机耗时抢占短测试预算。生产预算、优先级和截止期限保持不变。
 - CI 并发敏感包的 race 验证显式使用每包 20 分钟上限，避免 Recovery 完整集成套件累计耗时触及 Go 默认 10 分钟上限；保留全部测试和竞态检查，不改变产品运行期限。
 
-## [0.73.10](https://github.com/xiangnan0811/xirang/compare/v0.73.9...v0.73.10) (2026-11-03)
-
-
-### 🐛 Bug Fixes
-
-* **backend:** 修复 Export 归档授权与生命周期 ([#672](https://github.com/xiangnan0811/xirang/issues/672)) ([9721606](https://github.com/xiangnan0811/xirang/commit/9721606424fed5f9ffc5cd66675737f8b2ef1bfa))
-* **deps:** 修复 Core 与 Worker 的 Expat 漏洞 ([#674](https://github.com/xiangnan0811/xirang/issues/674)) ([65b77fa](https://github.com/xiangnan0811/xirang/commit/65b77facc06a1c4ecf910c9d7ce97aa07e36cb72))
 
 ## [0.73.9](https://github.com/xiangnan0811/xirang/compare/v0.73.8...v0.73.9) (2026-11-03)
 
