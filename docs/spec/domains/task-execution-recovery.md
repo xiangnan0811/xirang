@@ -240,6 +240,8 @@ admin/viewer 查看全部合格的现存历史，包含 `node_id_snapshot=0` 的
 
 带合法 `taskId` 时，admin/operator 可沿既有路由构造器打开对应任务的数据工作台；viewer、未知角色及身份切换期间不提供该数据入口，改为概览及证据引导。恢复 URL 只接受现有 task/point/plan/job/inspector 字段，不增加 repository 查询参数；非法参数仍安全重置。已有恢复点元数据和 plan/job 向导保持原行为，空态导航不创建计划或启动任务，实际恢复继续要求现有权限、step-up、grant 和显式确认。
 
+受控恢复作业的 `pre_write_failed` 表示服务端在尚未派发写入、未 armed 的边界确认失败；页面显示“开始写入前失败”，逐项仍为 pending、已写入字节为零，不提供结果下载或把它解释为可自动重放。未知 failure category 整体拒绝映射，不展示底层路径、凭据或执行错误。isolated 的 job 完成与 ResultSet 发布、交付、到期清理分别按各自持久状态呈现；完整权威及生命周期见[受控恢复合同](backup-repository.md#受控恢复权威与运行时发布)。
+
 ## 旧版 Rsync 恢复
 
 Legacy Rsync/Rclone 是可变当前树，不是历史恢复点；retention 拒绝破坏性的按年龄删除并记录安全理由。受管恢复点与 Restic snapshot 保留各自边界。升级或补证前先保全数据库、密钥、TaskRun 及独立备份副本；共享过的树可能已无法由任一历史 manifest 描述，不删除 dirty/失败证据或覆盖唯一可救副本来恢复资格。

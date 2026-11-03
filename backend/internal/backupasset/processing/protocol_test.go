@@ -748,10 +748,10 @@ func TestWorkerProtocolServiceActivatesOneUseInputAndOwnsBoundedSession(t *testi
 	if err != nil {
 		t.Fatalf("ActivateInput: %v", err)
 	}
-	if activated.SchemaVersion != 1 || activated.SessionID != request.GrantID ||
+	if activated.SchemaVersion != 2 || activated.SessionID != request.GrantID ||
 		activated.TransitionRevision != envelope.TransitionRevision+1 || activated.Source.Size != 36 ||
 		activated.Source.MediaType != "application/octet-stream" || !activated.Source.FingerprintStrong ||
-		!activated.Source.Sequential || !activated.Source.Range || input.calls != 1 {
+		activated.Source.MaxBytesPerRequest != 64 || !activated.Source.Sequential || !activated.Source.Range || input.calls != 1 {
 		t.Fatalf("input activation response invalid: response=%+v calls=%d", activated, input.calls)
 	}
 	var job model.BackupAssetProcessingJob

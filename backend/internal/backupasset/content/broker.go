@@ -36,9 +36,10 @@ var (
 )
 
 const (
-	ticketFailureAuditTimeout   = 5 * time.Second
-	gatewayCleanupTimeout       = 5 * time.Second
-	RecoveryResultCleanupReason = "recovery_cleanup"
+	ticketFailureAuditTimeout    = 5 * time.Second
+	gatewayCleanupTimeout        = 5 * time.Second
+	RecoveryResultCleanupReason  = "source_changed"
+	RecoveryResultShutdownReason = "shutdown"
 )
 
 type DeliveryActor struct {
@@ -1590,8 +1591,8 @@ func (broker *Broker) RevokeSession(ctx context.Context, sessionJTI, reason stri
 	return errors.Join(revokeErrors...)
 }
 
-// RevokeRecoveryResultGrantsTx is the durable half of Recovery cleanup. The
-// caller owns the transaction and must commit before canceling in-memory reads.
+// RevokeRecoveryResultGrantsTx is the durable half of Recovery cleanup or
+// shutdown. The caller must commit before canceling in-memory reads.
 func (broker *Broker) RevokeRecoveryResultGrantsTx(
 	ctx context.Context,
 	tx *gorm.DB,
@@ -1600,7 +1601,7 @@ func (broker *Broker) RevokeRecoveryResultGrantsTx(
 	revokedAt time.Time,
 ) error {
 	if broker == nil || tx == nil || backupasset.ValidateOpaqueID(recoveryJobID) != nil ||
-		reason != RecoveryResultCleanupReason || revokedAt.IsZero() {
+		(reason != RecoveryResultCleanupReason && reason != RecoveryResultShutdownReason) || revokedAt.IsZero() {
 		return ErrInvalidBrokerRequest
 	}
 	revokedAt = revokedAt.UTC()

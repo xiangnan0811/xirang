@@ -535,6 +535,9 @@ func TestRecoveryEligibilityAuthorityLockedRevalidationRejectsUnsafeOrDriftedPro
 		{name: "durable security drift", mutate: func(h *recoveryEligibilityHarness, _ *RecoveryAuthorityObservation) {
 			h.security.current.FindingSetDigest = strings.Repeat("4", 64)
 		}},
+		{name: "durable policy revision drift", mutate: func(h *recoveryEligibilityHarness, _ *RecoveryAuthorityObservation) {
+			h.security.current.PolicyRevision = "post-observation-policy-drift"
+		}},
 		{name: "durable root drift", mutate: func(h *recoveryEligibilityHarness, _ *RecoveryAuthorityObservation) {
 			h.root.current.AuthorityRevision = "post-observation-root-drift"
 		}},
@@ -631,13 +634,66 @@ func TestRecoveryEligibilityAuthorityPreflightProjectionUsesSameSealedProduct(t 
 		projected.TargetRootRevision != request.TargetRootRevision ||
 		projected.ReservedBytes != harness.root.current.Policy.ReserveBytes ||
 		projected.ReservedInodes != harness.root.current.Policy.ReserveInodes ||
-		!projected.SourceAccessible || projected.FindingDisposition != SecurityFindingDispositionClean {
+		!projected.SourceAccessible || projected.FindingDisposition != SecurityFindingDispositionClean ||
+		!projected.ObservationExpiresAt.Equal(sealed.expiresAt) || projected.authority.proof != sealed.proof {
 		t.Fatalf("incorrect preflight projection: %#v", projected)
 	}
 	substituted := request
 	substituted.CapabilityRevision = "caller-substituted-capability"
 	if _, err := recoveryEligibilityPreflightProjection(substituted, sealed); !errors.Is(err, ErrRecoveryPreflightConflict) {
 		t.Fatalf("substituted request error=%v, want conflict", err)
+	}
+}
+
+func TestRecoveryEligibilityAuthorityRejectsRetimedAndSubstitutedSeals(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*recoveryEligibilityHarness, *RecoveryAuthorityBinding, *RecoveryAuthorityObservation)
+	}{
+		{"foreign_proof", func(_ *recoveryEligibilityHarness, _ *RecoveryAuthorityBinding, observation *RecoveryAuthorityObservation) {
+			observation.proof.bindingDigest = framedDigest("xirang/recovery/eligibility-authority/v1", observation.proof.bindingDigest)
+		}},
+		{"substituted_binding", func(_ *recoveryEligibilityHarness, binding *RecoveryAuthorityBinding, _ *RecoveryAuthorityObservation) {
+			binding.PathDigest = strings.Repeat("1", 64)
+		}},
+		{"outer_observed_at", func(_ *recoveryEligibilityHarness, _ *RecoveryAuthorityBinding, observation *RecoveryAuthorityObservation) {
+			observation.observedAt = observation.observedAt.Add(time.Second)
+		}},
+		{"outer_expiry", func(_ *recoveryEligibilityHarness, _ *RecoveryAuthorityBinding, observation *RecoveryAuthorityObservation) {
+			observation.expiresAt = observation.expiresAt.Add(time.Minute)
+		}},
+		{"target_observed_at_resealed", func(_ *recoveryEligibilityHarness, _ *RecoveryAuthorityBinding, observation *RecoveryAuthorityObservation) {
+			observation.binding.target.ObservedAt = observation.binding.target.ObservedAt.Add(-time.Second)
+			observation.proof.bindingDigest = recoveryEligibilityBindingDigest(observation.binding)
+		}},
+		{"target_expiry_resealed", func(_ *recoveryEligibilityHarness, _ *RecoveryAuthorityBinding, observation *RecoveryAuthorityObservation) {
+			observation.binding.target.ExpiresAt = observation.binding.target.ExpiresAt.Add(time.Minute)
+			observation.proof.bindingDigest = recoveryEligibilityBindingDigest(observation.binding)
+		}},
+		{"expiry_equality", func(h *recoveryEligibilityHarness, _ *RecoveryAuthorityBinding, observation *RecoveryAuthorityObservation) {
+			h.authority.now = func() time.Time { return observation.expiresAt }
+		}},
+		{"clock_rollback", func(h *recoveryEligibilityHarness, _ *RecoveryAuthorityBinding, observation *RecoveryAuthorityObservation) {
+			h.authority.now = func() time.Time { return observation.observedAt.Add(-time.Nanosecond) }
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newRecoveryEligibilityHarness(t)
+			observation, err := harness.authority.ObserveRecoveryAuthority(context.Background(), harness.binding)
+			if err != nil {
+				t.Fatalf("observe sealed authority: %v", err)
+			}
+			binding := harness.binding
+			proof := *observation.proof
+			observation.proof = &proof
+			test.mutate(harness, &binding, &observation)
+			err = harness.authority.db.Transaction(func(tx *gorm.DB) error {
+				return harness.authority.RevalidateRecoveryAuthorityTx(context.Background(), tx, binding, observation)
+			})
+			if !errors.Is(err, ErrRecoveryTargetChanged) {
+				t.Fatalf("tampered or expired authority error=%v", err)
+			}
+		})
 	}
 }
 

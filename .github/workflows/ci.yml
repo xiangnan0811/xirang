@@ -225,8 +225,11 @@ jobs:
       - name: Install dependencies
         run: env -u NODE_ENV npm ci
 
+      - name: Verify lint dependency patches
+        run: npm run check:dependency-patches
+
       - name: Check npm vulnerabilities
-        run: bash ../scripts/check-npm-audit.sh
+        run: env -u NODE_ENV npm audit --audit-level=moderate
 
       - name: Run frontend check
         run: env -u NODE_ENV npm run check
@@ -300,6 +303,9 @@ jobs:
       - name: Install dependencies
         run: env -u NODE_ENV npm ci
 
+      - name: Verify lint dependency patches
+        run: npm run check:dependency-patches
+
       - name: Verify Python fixture prerequisite
         run: python3 --version
 
@@ -337,6 +343,9 @@ jobs:
 
       - name: Install dependencies
         run: env -u NODE_ENV npm ci
+
+      - name: Verify lint dependency patches
+        run: npm run check:dependency-patches
 
       - name: Install Chromium
         run: env -u NODE_ENV npx playwright install --with-deps chromium

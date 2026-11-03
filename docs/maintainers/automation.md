@@ -59,7 +59,7 @@ env -u NODE_ENV npm --prefix web ci
 env -u NODE_ENV npm --prefix web audit --audit-level=moderate
 ```
 
-现有合同仍要求 moderate 级完整审计。当前 CI 调用 [check-npm-audit.sh](../../scripts/check-npm-audit.sh)，实际只阻断未列入 GHSA allowlist 的 high/critical，不能单独证明满足上述要求。脚本还忽略 npm 本身的退出码，未验证 JSON 是否为有效审计结果；排障时必须确认获取到完整漏洞报告，不能把错误响应或缺失结果当作通过。这是实现与有效合同的差异，不能通过降低文档要求消除。
+CI frontend 和本地 parity 直接执行 `env -u NODE_ENV npm audit --audit-level=moderate`，包含开发依赖并保留 npm 的失败状态。历史 `check-npm-audit.sh` wrapper 仍只阻断未列入 allowlist 的 high/critical，不能作为完整 moderate 审计证据；本次不扩大修改该共享 wrapper。
 
 优先在现有 semver 范围内修复锁文件，不用 `--force` 或未经审查的 major 升级压制审计。锁文件变更后执行贡献指南的前端完整门禁，并完成以下核对：
 
@@ -95,6 +95,43 @@ ESLint React Hooks 插件的开发依赖 `zod` 从 4.6.5 锁定升级至 4.6.6�
 按新锁文件重新安装后对后续 lint 进程生效。该包属于开发工具链，不据此声称
 生产应用存在可利用路径；无 API 或数据库迁移，回退旧锁文件会恢复旧依赖风险。
 
+
+### lint 依赖的本地可重复修补
+
+针对 [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)，
+五个固定父包通过根 `devDependencies` 的本地 tarball 声明使用官方 minimatch 11.0.1：
+ESLint 9.39.4、config-array 0.21.2、eslintrc 3.3.7、jsx-a11y 6.10.2 和
+typescript-estree 8.70.1。三个 scoped 父包的 override 引用同名根声明；保留真实
+上游 name/version、许可证和其他包语义，不依赖安装后修改器或 matcher 兼容层。
+
+可信输入及逐文件配方位于 [dependency-patches](../../web/dependency-patches/sources.json)
+及同目录 `recipes.json`。Python 3.9+ 标准库生成器先核固定官方 SHA-512 SRI，拒绝
+非规范路径、重复成员及链接，再执行精确替换。生成物包含五个 tarball、可读 patch、
+完整文件哈希和工具链记录；同一 Python/zlib 工具链的独立构建必须逐字节相同。
+可读 patch 的空白上下文行使用无空格前缀的空行表示，避免产物触发暂存区行尾空白检查；仍须能以零 fuzz 应用到已核上游，并逐文件还原相同包内容，不修改 tarball 或放宽提交门禁。
+每个包保留原许可证并附 `XIRANG-MODIFICATIONS.txt`；eslintrc 仅修补独立 ESM 源，
+原 CJS bundle 及准确描述该构建的 source map 保持原字节。
+
+在 checkout 根运行生成器，`--work-dir` 必须为空且位于本 checkout 的 `.tmp/` 内，
+`--out-dir` 必须位于同一 checkout，路径不能含 symlink。保留独占工作目录作为证据：
+
+```bash
+python3 scripts/build-lint-dependency-patches.py --work-dir "$PATCH_WORK/build" --out-dir web/dependency-patches
+```
+
+`PATCH_WORK` 指向预先独占创建的项目 scratch 目录；已有不同产物默认拒绝覆盖，
+只有复核来源和配方后才使用 `--replace`。不运行 npm pack 或第三方生命周期代码。
+父包或其固定 requester 版本改变时必须重新核来源、配方及真实消费者，不能自动沿用旧补丁。
+config-array 的 matcher 类型采用 v11 公开接口；匹配语义也按 v11，不模拟完整 v3 行为。
+
+`npm run check:dependency-patches` 只读核对来源、配方、产物、锁文件、已安装完整文件集、
+全部 matcher 副本及固定 requester 的真实解析。普通 `check`、三个前端 CI 安装入口、
+本地 parity 和 active Docker web-builder 都调用它；Docker 在 npm ci 前复制产物。
+`node scripts/check-lint-dependency-patches.mjs --archives-only` 可在无 node_modules 时核验
+必需清单、锁文件和归档，不是完整安装验收。完整门禁仍包含 Node20 干净安装、所有开发依赖
+moderate 审计、原 lint 文件集合、ESM/CJS、类型声明、可访问性及 project service 消费者回归。
+上游完整修复可用后，通过同样审计与消费者验收移除本地包和已无调用方的专用生成／校验逻辑。
+本修复不改变运行时配置或数据库；回退旧依赖图会恢复工具链漏洞风险。
 
 ### jsdom 选择器兼容性
 

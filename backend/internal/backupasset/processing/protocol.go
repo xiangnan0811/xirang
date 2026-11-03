@@ -160,11 +160,12 @@ type WorkerInputActivateRequest struct {
 }
 
 type WorkerInputSourceInfo struct {
-	Size              int64  `json:"size"`
-	MediaType         string `json:"media_type"`
-	FingerprintStrong bool   `json:"fingerprint_strong"`
-	Sequential        bool   `json:"sequential"`
-	Range             bool   `json:"range"`
+	Size               int64  `json:"size"`
+	MediaType          string `json:"media_type"`
+	FingerprintStrong  bool   `json:"fingerprint_strong"`
+	MaxBytesPerRequest int64  `json:"max_bytes_per_request"`
+	Sequential         bool   `json:"sequential"`
+	Range              bool   `json:"range"`
 }
 
 type WorkerInputActivation struct {
@@ -592,11 +593,11 @@ func (service *WorkerProtocolService) ActivateInput(ctx context.Context, identit
 	service.inputSessions[activated.SessionID] = owned
 	service.inputMu.Unlock()
 	return WorkerInputActivation{
-		SchemaVersion: 1, SessionID: activated.SessionID, TransitionRevision: transitionRevision,
+		SchemaVersion: 2, SessionID: activated.SessionID, TransitionRevision: transitionRevision,
 		ExpiresAt: activated.ExpiresAt.UTC(),
 		Source: WorkerInputSourceInfo{
 			Size: info.Size, MediaType: info.MediaType, FingerprintStrong: info.FingerprintStrong,
-			Sequential: info.Sequential, Range: info.Range,
+			Sequential: info.Sequential, Range: info.Range, MaxBytesPerRequest: activated.Limits.MaxBytesPerRequest,
 		},
 	}, nil
 }

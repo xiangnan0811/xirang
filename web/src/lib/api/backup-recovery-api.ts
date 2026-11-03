@@ -128,6 +128,7 @@ export type RecoveryJobOutcome =
   | "canceled";
 export type RecoveryFailureCategory =
   | "source_drift"
+  | "pre_write_failed"
   | "verification_mismatch"
   | "remote_outcome_unresolved"
   | "partial_write"
@@ -548,6 +549,7 @@ const jobRequiredKeys = [
 ] as const;
 const failureCategories = [
   "source_drift", "verification_mismatch", "remote_outcome_unresolved", "partial_write", "cleanup_unavailable",
+  "pre_write_failed",
 ] as const;
 
 export function mapRecoveryJobProduct(value: unknown): RecoveryProduct<RecoveryJob> {
@@ -602,7 +604,8 @@ export function mapRecoveryJobProduct(value: unknown): RecoveryProduct<RecoveryJ
       break;
     case "needs_attention":
     case "failed":
-      if (failureCategory === null) return unavailable();
+      if (failureCategory === null || (failureCategory === "pre_write_failed" &&
+        (outcome !== "failed" || completedItems !== 0 || bytesWritten !== 0))) return unavailable();
       break;
   }
 

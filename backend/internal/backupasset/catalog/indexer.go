@@ -3,9 +3,11 @@ package catalog
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -28,6 +30,9 @@ const maxCatalogBuildTeardown = 30 * time.Second
 // A CatalogEntry currently binds 17 columns, so 1,000 rows use about 17,000
 // variables and retain roughly 48% headroom below SQLite's 32,766 default cap.
 const catalogEntryPersistenceBatchSize = 1000
+
+// MaxCandidatePageSize bounds the number of recovery points inspected per pass.
+const MaxCandidatePageSize = 1000
 
 type PointReadRequest struct {
 	RepositoryID    string
@@ -1090,43 +1095,20 @@ func (indexer *Indexer) RevokeActiveBuilds(ctx context.Context) error {
 	return nil
 }
 
-// ListCandidates derives retry eligibility from durable point/generation facts.
-// It returns only opaque Repository/RecoveryPoint IDs; the worker applies the
-// process-local per-repository lane.
-func (indexer *Indexer) ListCandidates(
-	ctx context.Context,
-	limit int,
-	now time.Time,
-	config backupasset.CatalogConfig,
-) ([]BuildCandidate, error) {
-	if indexer == nil || indexer.db == nil || limit <= 0 || limit > 10000 || now.IsZero() ||
-		config.ReconcileInterval <= 0 || config.BuildTimeout <= 0 {
-		return nil, fmt.Errorf("%w: invalid Catalog candidate request", backupasset.ErrInvalidState)
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	type pointControl struct {
-		ID                string
-		RepositoryID      string
-		Semantics         string
-		State             string
-		SourceFingerprint string
-		ManifestDigest    string
-		EntryCount        int64
-		ProviderKind      string
-	}
-	scanLimit := limit * 20
-	if scanLimit < 200 {
-		scanLimit = 200
-	}
-	if scanLimit > 20000 {
-		scanLimit = 20000
-	}
-	var points []pointControl
-	if err := indexer.db.WithContext(ctx).Table("recovery_points AS points").
-		Select(`points.id, points.repository_id, points.semantics, points.state, points.source_fingerprint,
-			points.manifest_digest, points.entry_count, repositories.provider_kind`).
+type catalogCandidatePoint struct {
+	ID                     string
+	RepositoryID           string
+	Semantics              string
+	SourceFingerprint      string
+	ManifestDigest         string
+	EntryCount             int64
+	NeedsStrongFingerprint bool
+}
+
+// catalogCandidateBaseQuery includes every point whose eligibility must be
+// examined, including points currently blocked by a generation or backoff.
+func catalogCandidateBaseQuery(tx *gorm.DB) *gorm.DB {
+	return tx.Session(&gorm.Session{NewDB: true}).Table("recovery_points AS points").
 		Joins("JOIN backup_repositories AS repositories ON repositories.id = points.repository_id").
 		Where("repositories.provider_kind <> ?", backupasset.ProviderCommand).
 		Where(`points.semantics <> ? OR repositories.status IN ?`,
@@ -1136,44 +1118,187 @@ func (indexer *Indexer) ListCandidates(
 			(points.semantics IN ? AND points.state IN ?)`,
 			backupasset.PointMutableHead, backupasset.RecoveryPointObserved,
 			[]string{string(backupasset.PointNativeSnapshot), string(backupasset.PointXirangManifest), string(backupasset.PointImportedBaseline)},
-			[]string{string(backupasset.RecoveryPointCommitted), string(backupasset.RecoveryPointDegraded)}).
-		Order("points.created_at ASC, points.id ASC").Limit(scanLimit).Scan(&points).Error; err != nil {
-		return nil, fmt.Errorf("list Catalog candidate points: %w", err)
-	}
-	result := make([]BuildCandidate, 0, min(limit, len(points)))
-	for _, point := range points {
-		eligible, err := indexer.catalogPointEligibleAt(ctx, point.ID, point.Semantics, point.SourceFingerprint, point.ManifestDigest,
-			point.EntryCount, now.UTC(), config)
-		if err != nil {
-			return nil, err
-		}
-		if eligible {
-			result = append(result, BuildCandidate{RepositoryID: point.RepositoryID, RecoveryPointID: point.ID})
-			if len(result) == limit {
-				break
-			}
-		}
-	}
-	return result, nil
+			[]string{string(backupasset.RecoveryPointCommitted), string(backupasset.RecoveryPointDegraded)})
 }
 
-// catalogPointEligibleAt answers "is another Catalog build due?" from durable
-// point/generation facts. An aged observation clock is not source drift: a
-// mutable head's observed_at is rewritten by every refresh and an in-place child
-// change leaves the root fingerprint unchanged, so only a superseded projection,
-// a fingerprint change, or a due retry makes a replacement genuine.
-func (indexer *Indexer) catalogPointEligibleAt(
+// catalogCandidatePageQuery uses database tuples on both sides of each
+// comparison. SQLite's existing DATETIME text representations must not make a
+// round trip through time.Time before they become a boundary.
+func catalogCandidatePageQuery(tx *gorm.DB, initialHighWaterID string, limit int) *gorm.DB {
+	query := catalogCandidateBaseQuery(tx)
+	if initialHighWaterID != "" {
+		query = query.Where(`(points.created_at, points.id) <=
+			(SELECT created_at, id FROM recovery_points WHERE id = ?)`, initialHighWaterID)
+	} else {
+		query = query.Where(`(points.created_at, points.id) >
+			(SELECT after_created_at, after_point_id FROM catalog_candidate_sweeps WHERE id = 1)`).
+			Where(`(points.created_at, points.id) <=
+			(SELECT high_water_created_at, high_water_point_id FROM catalog_candidate_sweeps WHERE id = 1)`)
+	}
+	return query.Order("points.created_at ASC, points.id ASC").Limit(limit)
+}
+
+// ListCandidates inspects one durable sweep page and returns every eligible
+// point on that page. The transaction protects scan progress, not delivery:
+// a committed page can be revisited on a later sweep after a lost response.
+func (indexer *Indexer) ListCandidates(
 	ctx context.Context,
-	pointID, semantics, sourceFingerprint, manifestDigest string,
-	entryCount int64,
+	limit int,
 	now time.Time,
 	config backupasset.CatalogConfig,
-) (bool, error) {
-	var generations []model.CatalogGeneration
-	if err := indexer.db.WithContext(ctx).Where("recovery_point_id = ?", pointID).
-		Order("generation DESC").Limit(12).Find(&generations).Error; err != nil {
-		return false, fmt.Errorf("load Catalog candidate history: %w", err)
+) ([]BuildCandidate, error) {
+	if indexer == nil || indexer.db == nil || limit <= 0 || limit > MaxCandidatePageSize || now.IsZero() ||
+		config.ReconcileInterval <= 0 || config.BuildTimeout <= 0 {
+		return nil, fmt.Errorf("%w: invalid Catalog candidate request", backupasset.ErrInvalidState)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	now = now.UTC()
+
+	// Validate the stored tuple in the database's own ordering. The two ID
+	// checks match the migration, including SQLite's text type and NUL guard.
+	revisionCheck := "revision >= 1 AND revision <= 9223372036854775807"
+	var idChecks string
+	var options []*sql.TxOptions
+	switch indexer.db.Name() {
+	case "sqlite":
+		revisionCheck = "typeof(revision) = 'integer' AND " + revisionCheck
+		idChecks = `(after_point_id IS NULL OR (typeof(after_point_id) = 'text' AND length(after_point_id) = 32 AND length(CAST(after_point_id AS BLOB)) = 32 AND after_point_id NOT GLOB '*[^0-9a-f]*')) AND
+			(high_water_point_id IS NULL OR (typeof(high_water_point_id) = 'text' AND length(high_water_point_id) = 32 AND length(CAST(high_water_point_id AS BLOB)) = 32 AND high_water_point_id NOT GLOB '*[^0-9a-f]*'))`
+	case "postgres":
+		idChecks = `(after_point_id IS NULL OR after_point_id ~ '^[0-9a-f]{32}$') AND
+			(high_water_point_id IS NULL OR high_water_point_id ~ '^[0-9a-f]{32}$')`
+		options = append(options, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	default:
+		return nil, fmt.Errorf("%w: unsupported Catalog candidate database", backupasset.ErrInvalidState)
+	}
+	boundaryCheck := `((after_created_at IS NULL AND after_point_id IS NULL AND high_water_created_at IS NULL AND high_water_point_id IS NULL) OR
+		(after_created_at IS NOT NULL AND after_point_id IS NOT NULL AND high_water_created_at IS NOT NULL AND high_water_point_id IS NOT NULL AND
+		(after_created_at < high_water_created_at OR (after_created_at = high_water_created_at AND after_point_id <= high_water_point_id))))`
+	validCheck := "(" + revisionCheck + ") AND (" + idChecks + ") AND " + boundaryCheck
+	projection := "CASE WHEN " + revisionCheck + " THEN revision ELSE 0 END AS revision, high_water_point_id, CASE WHEN " + validCheck + " THEN TRUE ELSE FALSE END AS valid"
+	var candidates []BuildCandidate
+	err := indexer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var sweep struct {
+			Revision         int64
+			HighWaterPointID *string
+			Valid            bool
+		}
+		locked := tx.Session(&gorm.Session{NewDB: true}).Table("catalog_candidate_sweeps").
+			Select(projection).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", 1).Limit(1).Find(&sweep)
+		if locked.Error != nil {
+			return fmt.Errorf("lock Catalog candidate sweep: %w", locked.Error)
+		}
+		if locked.RowsAffected != 1 || !sweep.Valid || sweep.Revision == math.MaxInt64 {
+			return fmt.Errorf("%w: invalid Catalog candidate sweep", backupasset.ErrInvalidState)
+		}
+
+		initialHighWaterID := ""
+		highWaterID := ""
+		if sweep.HighWaterPointID == nil {
+			var high struct{ ID string }
+			result := catalogCandidateBaseQuery(tx).Select("points.id").
+				Order("points.created_at DESC, points.id DESC").Limit(1).Find(&high)
+			if result.Error != nil {
+				return fmt.Errorf("find Catalog candidate high water: %w", result.Error)
+			}
+			if result.RowsAffected == 0 {
+				return nil
+			}
+			if high.ID == "" {
+				return fmt.Errorf("%w: invalid Catalog candidate high water", backupasset.ErrInvalidState)
+			}
+			initialHighWaterID, highWaterID = high.ID, high.ID
+		} else {
+			highWaterID = *sweep.HighWaterPointID
+		}
+
+		var points []catalogCandidatePoint
+		page := catalogCandidatePageQuery(tx, initialHighWaterID, limit).Select(`points.id, points.repository_id, points.semantics, points.source_fingerprint,
+			points.manifest_digest, points.entry_count,
+			(repositories.provider_kind = ? AND points.semantics IN ? AND EXISTS (
+				SELECT 1 FROM catalog_generations AS generations
+				JOIN catalog_entries AS entries ON entries.generation_id = generations.id
+					AND entries.recovery_point_id = points.id
+				WHERE generations.recovery_point_id = points.id AND generations.is_active = ?
+					AND generations.state = ? AND entries.entry_type = ? AND entries.fingerprint_strength <> ?
+			)) AS needs_strong_fingerprint`,
+			backupasset.ProviderRsync, []string{string(backupasset.PointXirangManifest), string(backupasset.PointImportedBaseline)},
+			true, string(GenerationComplete), string(backupasset.CatalogEntryFile), string(FingerprintStrong)).Find(&points)
+		if page.Error != nil {
+			return fmt.Errorf("list Catalog candidate points: %w", page.Error)
+		}
+
+		if len(points) != 0 {
+			pageIDs := catalogCandidatePageQuery(tx, initialHighWaterID, limit).Select("points.id")
+			ranked := tx.Session(&gorm.Session{NewDB: true}).Table("catalog_generations AS generations").
+				Select(`generations.*, ROW_NUMBER() OVER (PARTITION BY generations.recovery_point_id ORDER BY generations.generation DESC) AS catalog_history_rank`).
+				Joins("JOIN (?) AS candidate_page ON candidate_page.id = generations.recovery_point_id", pageIDs)
+			var generations []model.CatalogGeneration
+			if err := tx.Session(&gorm.Session{NewDB: true}).Table("(?) AS ranked_catalog", ranked).
+				Where("ranked_catalog.catalog_history_rank <= ?", 12).
+				Order("ranked_catalog.recovery_point_id ASC, ranked_catalog.generation DESC").Find(&generations).Error; err != nil {
+				return fmt.Errorf("load Catalog candidate history: %w", err)
+			}
+			histories := make(map[string][]model.CatalogGeneration, len(points))
+			for start := 0; start < len(generations); {
+				end := start + 1
+				for end < len(generations) && generations[end].RecoveryPointID == generations[start].RecoveryPointID {
+					end++
+				}
+				histories[generations[start].RecoveryPointID] = generations[start:end]
+				start = end
+			}
+			candidates = make([]BuildCandidate, 0, len(points))
+			for _, point := range points {
+				if catalogCandidateEligibleAt(point, histories[point.ID], now, config) {
+					candidates = append(candidates, BuildCandidate{RepositoryID: point.RepositoryID, RecoveryPointID: point.ID})
+				}
+			}
+		}
+
+		updates := map[string]any{"revision": gorm.Expr("revision + 1")}
+		cas := tx.Session(&gorm.Session{NewDB: true}).Table("catalog_candidate_sweeps").
+			Where("id = ? AND revision = ?", 1, sweep.Revision)
+		if len(points) < limit || points[len(points)-1].ID == highWaterID {
+			updates["after_created_at"], updates["after_point_id"] = nil, nil
+			updates["high_water_created_at"], updates["high_water_point_id"] = nil, nil
+		} else {
+			lastID := points[len(points)-1].ID
+			updates["after_created_at"] = gorm.Expr("(SELECT created_at FROM recovery_points WHERE id = ?)", lastID)
+			updates["after_point_id"] = lastID
+			cas = cas.Where("EXISTS (SELECT 1 FROM recovery_points WHERE id = ?)", lastID)
+			if initialHighWaterID != "" {
+				updates["high_water_created_at"] = gorm.Expr("(SELECT created_at FROM recovery_points WHERE id = ?)", initialHighWaterID)
+				updates["high_water_point_id"] = initialHighWaterID
+				cas = cas.Where("EXISTS (SELECT 1 FROM recovery_points WHERE id = ?)", initialHighWaterID)
+			}
+		}
+		updated := cas.UpdateColumns(updates)
+		if updated.Error != nil {
+			return fmt.Errorf("advance Catalog candidate sweep: %w", updated.Error)
+		}
+		if updated.RowsAffected != 1 {
+			return fmt.Errorf("%w: Catalog candidate sweep lost compare-and-swap", backupasset.ErrConflict)
+		}
+		return nil
+	}, options...)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, fmt.Errorf("list Catalog candidate sweep: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+// catalogCandidateEligibleAt preserves the retry and active-projection policy
+// over the latest twelve durable generations, newest first.
+func catalogCandidateEligibleAt(point catalogCandidatePoint, generations []model.CatalogGeneration, now time.Time, config backupasset.CatalogConfig) bool {
 	var active *model.CatalogGeneration
 	for index := range generations {
 		if generations[index].IsActive {
@@ -1181,62 +1306,64 @@ func (indexer *Indexer) catalogPointEligibleAt(
 			break
 		}
 	}
-	if active != nil && active.State == string(GenerationComplete) && active.SourceFingerprint == sourceFingerprint {
-		if backupasset.PointVersionSemantics(semantics) != backupasset.PointMutableHead {
-			return active.ExpectedDigest != manifestDigest || active.ExpectedEntryCount != entryCount, nil
+	if active != nil && active.State == string(GenerationComplete) && active.SourceFingerprint == point.SourceFingerprint {
+		if backupasset.PointVersionSemantics(point.Semantics) != backupasset.PointMutableHead {
+			if active.ExpectedDigest != point.ManifestDigest || active.ExpectedEntryCount != point.EntryCount {
+				return true
+			}
+			if !point.NeedsStrongFingerprint {
+				return false
+			}
 		}
-		if len(generations) > 0 && generations[0].ID != active.ID && generations[0].SourceFingerprint == sourceFingerprint {
+		if len(generations) > 0 && generations[0].ID != active.ID && generations[0].SourceFingerprint == point.SourceFingerprint {
 			latest := generations[0]
 			if latest.State == string(GenerationBuilding) {
-				return false, nil
+				return false
 			}
 			if latest.State == string(GenerationPartial) || latest.State == string(GenerationFailed) {
-				if nonRetryableCatalogFailure(latest.ErrorCode, backupasset.PointVersionSemantics(semantics)) || latest.FinishedAt == nil {
-					return false, nil
+				if nonRetryableCatalogFailure(latest.ErrorCode, backupasset.PointVersionSemantics(point.Semantics)) || latest.FinishedAt == nil {
+					return false
 				}
 				failureCount := 0
 				for _, generation := range generations {
-					if generation.SourceFingerprint != sourceFingerprint ||
+					if generation.SourceFingerprint != point.SourceFingerprint ||
 						(generation.State != string(GenerationPartial) && generation.State != string(GenerationFailed)) {
 						break
 					}
 					failureCount++
 				}
-				nextAt := latest.FinishedAt.UTC().Add(RetryDelay(config, failureCount, pointID, latest.ID))
-				return !now.Before(nextAt), nil
+				nextAt := latest.FinishedAt.UTC().Add(RetryDelay(config, failureCount, point.ID, latest.ID))
+				return !now.Before(nextAt)
 			}
 		}
-		// The active complete generation already matches the point fingerprint
-		// and the latest generation is not a different due retry, so the
-		// projection is current. Clock expiry alone never makes it due.
-		return false, nil
+		return point.NeedsStrongFingerprint
 	}
 	if len(generations) == 0 {
-		return true, nil
+		return true
 	}
 	latest := generations[0]
 	if latest.State == string(GenerationBuilding) {
-		return false, nil
+		return false
 	}
-	if latest.SourceFingerprint != sourceFingerprint {
-		return true, nil
+	if latest.SourceFingerprint != point.SourceFingerprint {
+		return true
 	}
 	if latest.State != string(GenerationPartial) && latest.State != string(GenerationFailed) {
-		return true, nil
+		return true
 	}
-	if nonRetryableCatalogFailure(latest.ErrorCode, backupasset.PointVersionSemantics(semantics)) || latest.FinishedAt == nil {
-		return false, nil
+	if nonRetryableCatalogFailure(latest.ErrorCode, backupasset.PointVersionSemantics(point.Semantics)) || latest.FinishedAt == nil {
+		return false
 	}
 	failureCount := 0
 	for _, generation := range generations {
-		if generation.SourceFingerprint != sourceFingerprint ||
+		if generation.SourceFingerprint != point.SourceFingerprint ||
 			(generation.State != string(GenerationPartial) && generation.State != string(GenerationFailed)) {
 			break
 		}
 		failureCount++
 	}
-	nextAt := latest.FinishedAt.UTC().Add(RetryDelay(config, failureCount, pointID, latest.ID))
-	return !now.Before(nextAt), nil
+	nextAt := latest.FinishedAt.UTC().Add(RetryDelay(config, failureCount, point.ID, latest.ID))
+	return !now.Before(nextAt)
 }
 
 func nonRetryableCatalogFailure(code string, semantics backupasset.PointVersionSemantics) bool {

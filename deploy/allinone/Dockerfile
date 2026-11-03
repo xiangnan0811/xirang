@@ -7,9 +7,11 @@ FROM docker.io/linnea7171/xirang@sha256:3e4c9ad8b3fd601ce93e5a8f7a77a639efe8d7d3
 
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
+COPY web/dependency-patches/ ./dependency-patches/
 RUN npm ci
 
 COPY web/ ./
+RUN npm run check:dependency-patches
 RUN npm run build
 
 FROM docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5 AS backend-builder

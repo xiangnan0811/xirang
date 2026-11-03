@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -205,16 +206,151 @@ func NewResultLifecycleService(dependencies ResultLifecycleDependencies) (*Resul
 	}, nil
 }
 
+// RecoverySealedResultCursor is an opaque, process-local position in one bounded
+// scan. A zero value starts a new scan; callers must keep separate cursors for
+// publication and expiry.
+type RecoverySealedResultCursor struct {
+	afterCreatedAt     time.Time
+	afterJobID         string
+	highWaterCreatedAt time.Time
+	highWaterJobID     string
+}
+
+type recoverySealedResultCandidate struct {
+	ID                 string
+	CreatedAt          time.Time
+	TransitionRevision uint64
+}
+
+type recoveryPublicationItem struct {
+	item    model.BackupAssetRecoveryJobItem
+	locator string
+}
+
+// PublishSealedBatch attempts each eligible job once within a fixed window.
+func (service *ResultLifecycleService) PublishSealedBatch(
+	ctx context.Context, cursor RecoverySealedResultCursor, limit int,
+) (RecoverySealedResultCursor, error) {
+	return service.processSealedBatch(ctx, cursor, limit, false)
+}
+
+// ExpireSealedBatch makes expired sealed workspaces available to the existing
+// fenced cleanup owner without publishing them.
+func (service *ResultLifecycleService) ExpireSealedBatch(
+	ctx context.Context, cursor RecoverySealedResultCursor, limit int,
+) (RecoverySealedResultCursor, error) {
+	return service.processSealedBatch(ctx, cursor, limit, true)
+}
+
+func (service *ResultLifecycleService) processSealedBatch(
+	ctx context.Context, cursor RecoverySealedResultCursor, limit int, expired bool,
+) (RecoverySealedResultCursor, error) {
+	if service == nil || service.db == nil || service.now == nil || limit < 1 || limit > 1000 ||
+		!validRecoverySealedCursor(cursor) {
+		return cursor, ErrInvalidResultLifecycle
+	}
+	ctx = nonNilRecoveryContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return cursor, err
+	}
+	now := service.now().UTC()
+	if now.IsZero() {
+		return cursor, ErrInvalidResultLifecycle
+	}
+	candidates, window, err := service.loadSealedCandidates(ctx, cursor, limit, expired, now)
+	if err != nil {
+		return cursor, err
+	}
+	var failures error
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return window, errors.Join(failures, err)
+		}
+		if expired {
+			err = service.expireTerminalSealed(ctx, candidate.ID, candidate.TransitionRevision)
+		} else {
+			_, err = service.publishTerminalSealed(ctx, candidate.ID, candidate.TransitionRevision)
+		}
+		window.afterCreatedAt, window.afterJobID = candidate.CreatedAt, candidate.ID
+		if err != nil {
+			failures = errors.Join(failures, fmt.Errorf("sealed recovery job %s: %w", candidate.ID, err))
+		}
+		if err := ctx.Err(); err != nil {
+			return window, errors.Join(failures, err)
+		}
+	}
+	if len(candidates) < limit || (window.afterCreatedAt.Equal(window.highWaterCreatedAt) &&
+		window.afterJobID == window.highWaterJobID) {
+		window = RecoverySealedResultCursor{}
+	}
+	return window, failures
+}
+
+func validRecoverySealedCursor(cursor RecoverySealedResultCursor) bool {
+	if cursor.highWaterCreatedAt.IsZero() {
+		return cursor.highWaterJobID == "" && cursor.afterCreatedAt.IsZero() && cursor.afterJobID == ""
+	}
+	if !validOpaqueID(cursor.highWaterJobID) || cursor.afterCreatedAt.IsZero() != (cursor.afterJobID == "") {
+		return false
+	}
+	if cursor.afterCreatedAt.IsZero() {
+		return true
+	}
+	return validOpaqueID(cursor.afterJobID) &&
+		(cursor.afterCreatedAt.Before(cursor.highWaterCreatedAt) ||
+			(cursor.afterCreatedAt.Equal(cursor.highWaterCreatedAt) && cursor.afterJobID <= cursor.highWaterJobID))
+}
+
+func (service *ResultLifecycleService) loadSealedCandidates(
+	ctx context.Context, cursor RecoverySealedResultCursor, limit int, expired bool, now time.Time,
+) ([]recoverySealedResultCandidate, RecoverySealedResultCursor, error) {
+	window := cursor
+	var candidates []recoverySealedResultCandidate
+	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		base := func() *gorm.DB {
+			query := tx.WithContext(ctx).Model(&model.BackupAssetRecoveryJob{}).
+				Select("id", "created_at", "transition_revision").
+				Where("target_mode = ? AND state IN ? AND workspace_phase = ? AND plaintext_deadline IS NOT NULL",
+					TargetModeIsolated, []string{string(JobStateSucceeded), string(JobStateDegraded)}, WorkspacePhaseSealed)
+			if expired {
+				return query.Where("plaintext_deadline <= ?", now)
+			}
+			return query.Where("plaintext_deadline > ?", now)
+		}
+		if window.highWaterCreatedAt.IsZero() {
+			var high recoverySealedResultCandidate
+			loaded := base().Order("created_at DESC").Order("id DESC").Limit(1).Find(&high)
+			if loaded.Error != nil {
+				return loaded.Error
+			}
+			if loaded.RowsAffected == 0 {
+				return nil
+			}
+			if high.CreatedAt.IsZero() || !validOpaqueID(high.ID) {
+				return ErrInvalidResultLifecycle
+			}
+			window.highWaterCreatedAt, window.highWaterJobID = high.CreatedAt, high.ID
+		}
+		query := base().Where("(created_at < ? OR (created_at = ? AND id <= ?))",
+			window.highWaterCreatedAt, window.highWaterCreatedAt, window.highWaterJobID)
+		if !window.afterCreatedAt.IsZero() {
+			query = query.Where("(created_at > ? OR (created_at = ? AND id > ?))",
+				window.afterCreatedAt, window.afterCreatedAt, window.afterJobID)
+		}
+		return query.Order("created_at ASC").Order("id ASC").Limit(limit).Find(&candidates).Error
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return candidates, window, err
+}
+
 func (service *ResultLifecycleService) Publish(
-	ctx context.Context,
-	request PublishRecoveryResultsRequest,
+	ctx context.Context, request PublishRecoveryResultsRequest,
 ) (PublishedRecoveryResultSet, error) {
 	if service == nil || service.db == nil || service.now == nil || service.workspaceKeys == nil ||
-		!validOpaqueID(request.JobID) || request.ExpectedJobRevision == 0 ||
+		service.newID == nil || !validOpaqueID(request.JobID) || request.ExpectedJobRevision == 0 ||
 		len(request.Results) == 0 || len(request.Results) > exactSelectionMaxItems {
 		return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
 	}
-	requested := make(map[string]PublishRecoveryResultInput, len(request.Results))
+	requested := make(map[string]RecoveryResultClassificationBinding, len(request.Results))
 	for _, input := range request.Results {
 		if !validOpaqueID(input.JobItemID) || !input.Classification.valid() {
 			return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
@@ -222,208 +358,503 @@ func (service *ResultLifecycleService) Publish(
 		if _, duplicate := requested[input.JobItemID]; duplicate {
 			return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
 		}
-		requested[input.JobItemID] = input
+		requested[input.JobItemID] = input.Classification
 	}
+	return service.publishRecoveryResults(ctx, request.JobID, request.ExpectedJobRevision, requested)
+}
 
-	resultSetID, err := service.newID()
-	if err != nil || !validOpaqueID(resultSetID) {
+func (service *ResultLifecycleService) publishTerminalSealed(
+	ctx context.Context, jobID string, expectedRevision uint64,
+) (PublishedRecoveryResultSet, error) {
+	if service == nil || service.db == nil || service.now == nil || service.workspaceKeys == nil ||
+		service.newID == nil || !validOpaqueID(jobID) || expectedRevision == 0 {
 		return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
 	}
-	resultIDs := make(map[string]string, len(request.Results))
-	for _, input := range request.Results {
-		resultID, idErr := service.newID()
-		if idErr != nil || !validOpaqueID(resultID) {
-			return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
-		}
-		resultIDs[input.JobItemID] = resultID
-	}
+	return service.publishRecoveryResults(ctx, jobID, expectedRevision, nil)
+}
 
-	now := service.now().UTC()
-	if now.IsZero() {
-		return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (service *ResultLifecycleService) publishRecoveryResults(
+	ctx context.Context, jobID string, expectedRevision uint64,
+	requested map[string]RecoveryResultClassificationBinding,
+) (PublishedRecoveryResultSet, error) {
+	ctx = nonNilRecoveryContext(ctx)
 	var published PublishedRecoveryResultSet
-	err = service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	mayHaveCommitted := false
+	lostCAS := false
+	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var job model.BackupAssetRecoveryJob
 		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
-			Where("id = ?", request.JobID).Limit(1).Find(&job)
-		if loaded.Error != nil {
-			return loaded.Error
-		}
-		if loaded.RowsAffected != 1 || job.TransitionRevision != request.ExpectedJobRevision ||
-			TargetMode(job.TargetMode) != TargetModeIsolated ||
-			(JobState(job.State) != JobStateSucceeded && JobState(job.State) != JobStateDegraded) ||
-			WorkspacePhase(job.WorkspacePhase) != WorkspacePhaseSealed ||
-			job.PlaintextDeadline == nil || !job.PlaintextDeadline.UTC().After(now) ||
-			job.WorkspaceOwner == "" || job.WorkspaceFence == 0 ||
-			!validDigest(job.WorkspaceMarkerBindingDigest) || !validRecoveryMarkerValidation(job) {
-			return ErrInvalidResultPublication
-		}
-
-		var activeAttempts int64
-		if err := tx.WithContext(ctx).Model(&model.BackupAssetRecoveryAttempt{}).
-			Where("job_id = ? AND state IN ?", job.ID, []string{string(AttemptStateClaimed), string(AttemptStateRunning)}).
-			Count(&activeAttempts).Error; err != nil {
-			return err
-		}
-		if activeAttempts != 0 {
-			return ErrInvalidResultPublication
-		}
-
-		var plan model.BackupAssetRecoveryPlan
-		loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
-			Where("id = ?", job.PlanID).Limit(1).Find(&plan)
-		if loaded.Error != nil {
-			return loaded.Error
-		}
-		workspaceLocator := recoveryWorkspaceLocatorDirectory + "/" + job.ID
-		if loaded.RowsAffected != 1 || plan.ID != job.PlanID || plan.RequesterID == 0 ||
-			job.EncryptedWorkspaceRelativeLocator != workspaceLocator ||
-			job.WorkspaceBindingDigest != recoveryWorkspaceBindingDigest(plan, job.ID, workspaceLocator) {
-			return ErrInvalidResultPublication
-		}
-
-		var preflight model.BackupAssetRecoveryPreflight
-		loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
-			Where("id = ? AND plan_id = ?", job.PreflightID, plan.ID).Limit(1).Find(&preflight)
+			Where("id = ?", jobID).Limit(1).Find(&job)
 		if loaded.Error != nil {
 			return loaded.Error
 		}
 		if loaded.RowsAffected != 1 {
 			return ErrInvalidResultPublication
 		}
-		operationRows, err := rebuildExecuteOperationRows(plan, preflight, tx.WithContext(ctx))
+		now := service.now().UTC()
+		if !validRecoveryPublicationClock(job, now) {
+			return ErrInvalidResultPublication
+		}
+		if WorkspacePhase(job.WorkspacePhase) == WorkspacePhasePublished {
+			if expectedRevision >= math.MaxInt64 || job.TransitionRevision != expectedRevision+1 {
+				return ErrInvalidResultPublication
+			}
+			var err error
+			if requested == nil {
+				published, err = service.verifyPublishedRecoveryResultsTx(ctx, tx, job)
+			} else {
+				published, err = service.verifyPublishedRecoveryResultsForRequestTx(ctx, tx, job, requested, true)
+			}
+			if err == nil {
+				final := service.now().UTC()
+				if !validRecoveryPublicationClock(job, final) || final.Before(now) {
+					return ErrInvalidResultPublication
+				}
+				mayHaveCommitted = true
+			}
+			return err
+		}
+		if job.TransitionRevision != expectedRevision || job.TransitionRevision >= math.MaxInt64 ||
+			WorkspacePhase(job.WorkspacePhase) != WorkspacePhaseSealed || job.PlaintextDeadline == nil ||
+			!job.PlaintextDeadline.UTC().After(now) {
+			return ErrInvalidResultPublication
+		}
+		items, err := service.loadRecoveryPublicationItemsTx(ctx, tx, job, true)
 		if err != nil {
+			return err
+		}
+		if len(items) == 0 || (requested != nil && len(requested) != len(items)) {
 			return ErrInvalidResultPublication
 		}
-
-		var items []model.BackupAssetRecoveryJobItem
-		loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
-			Where("job_id = ?", job.ID).Order("ordinal ASC").Find(&items)
-		if loaded.Error != nil {
-			return loaded.Error
+		var existing int64
+		if err := tx.WithContext(ctx).Model(&model.BackupAssetRecoveryResultSet{}).
+			Where("job_id = ?", job.ID).Count(&existing).Error; err != nil {
+			return err
 		}
-		if len(items) != len(operationRows) {
+		if existing != 0 {
 			return ErrInvalidResultPublication
 		}
-
-		materials := make(map[int]backupasset.DomainKeyMaterial)
-		rows := make([]model.BackupAssetRecoveryResult, 0, len(request.Results))
-		publicRows := make([]PublishedRecoveryResult, 0, len(request.Results))
-		for index := range items {
-			item := items[index]
-			operationRow := operationRows[index]
-			if !ordinarySourceJobItemMatchesOperation(plan, job, item, operationRow, index) {
-				return ErrInvalidResultPublication
-			}
-			input, selected := requested[item.ID]
-			publishable := item.Outcome == "succeeded" && item.FailureCategory == "" &&
-				item.DisplayClass == string(RecoveryDisplayClassRegular) &&
-				(RecoveryOperationKind(item.OperationKind) == RecoveryOperationCreate ||
-					RecoveryOperationKind(item.OperationKind) == RecoveryOperationOverwrite) &&
-				item.VerifiedSize >= 0 && validDigest(item.VerifiedDigest)
-			if selected != publishable {
-				return ErrInvalidResultPublication
-			}
-			if !selected {
-				if item.Outcome != "skipped" && item.Outcome != "failed" {
+		resultSetID, err := service.newID()
+		if err != nil || !validOpaqueID(resultSetID) {
+			return ErrInvalidResultPublication
+		}
+		rows := make([]model.BackupAssetRecoveryResult, 0, len(items))
+		publicRows := make([]PublishedRecoveryResult, 0, len(items))
+		for _, entry := range items {
+			classification := RecoveryResultClassificationBinding{Kind: RecoveryResultClassificationUnknown, Revision: 1, SourceRevision: 1}
+			if requested != nil {
+				var found bool
+				classification, found = requested[entry.item.ID]
+				if !found || !classification.valid() {
 					return ErrInvalidResultPublication
 				}
-				continue
 			}
-
-			material, found := materials[item.TargetLocatorKeyVersion]
-			if !found {
-				material, err = service.workspaceKeys.ByVersion(
-					ctx, backupasset.KeyDomainRecoveryCleanupOwnership, item.TargetLocatorKeyVersion,
-				)
-				if err != nil || !validTargetLocatorKey(material, item.TargetLocatorKeyVersion) {
-					return ErrInvalidResultPublication
-				}
-				materials[item.TargetLocatorKeyVersion] = material
-			}
-			binding := targetLocatorBindingForExecute(
-				plan, job.ID, item.ID, operationRow, workspaceLocator, job.WorkspaceBindingDigest,
-				item.TargetObjectDigest, item.TargetLocatorKeyVersion,
-			)
-			locator, openErr := OpenTargetLocatorEnvelope(material, binding, item.EncryptedTargetRelativeLocator)
-			if openErr != nil || locator != operationRow.operation.TargetRelativeLocator ||
-				!validTargetRelativeLocator(locator) {
+			id, idErr := service.newID()
+			if idErr != nil || !validOpaqueID(id) {
 				return ErrInvalidResultPublication
 			}
-
-			resultID := resultIDs[item.ID]
-			locatorDigest := recoveryResultLocatorDigest(job.ID, resultSetID, resultID, locator)
 			rows = append(rows, model.BackupAssetRecoveryResult{
-				ID: resultID, ResultSetID: resultSetID, JobID: job.ID,
-				ResultKind:                   string(RecoveryResultKindRegularFile),
-				Classification:               string(input.Classification.Kind),
-				ClassificationRevision:       int(input.Classification.Revision),
-				ClassificationSourceRevision: input.Classification.SourceRevision,
-				EncryptedRelativeLocator:     locator, LocatorDigest: locatorDigest,
-				Size: item.VerifiedSize, ContentDigest: item.VerifiedDigest, CreatedAt: now,
+				ID: id, ResultSetID: resultSetID, JobID: job.ID, ResultKind: string(RecoveryResultKindRegularFile),
+				Classification: string(classification.Kind), ClassificationRevision: int(classification.Revision),
+				ClassificationSourceRevision: classification.SourceRevision, EncryptedRelativeLocator: entry.locator,
+				LocatorDigest: recoveryResultLocatorDigest(job.ID, resultSetID, id, entry.locator),
+				Size:          entry.item.VerifiedSize, ContentDigest: entry.item.VerifiedDigest,
 			})
 			publicRows = append(publicRows, PublishedRecoveryResult{
-				ID: resultID, Kind: RecoveryResultKindRegularFile, Size: item.VerifiedSize,
-				ContentDigest: item.VerifiedDigest, Classification: input.Classification,
+				ID: id, Kind: RecoveryResultKindRegularFile, Size: entry.item.VerifiedSize,
+				ContentDigest: entry.item.VerifiedDigest, Classification: classification,
 			})
 		}
-		if len(rows) != len(request.Results) {
+		previous := now
+		now = service.now().UTC()
+		if !validRecoveryPublicationClock(job, now) || now.Before(previous) || !job.PlaintextDeadline.UTC().After(now) {
 			return ErrInvalidResultPublication
 		}
-
 		plaintextDeadline := job.PlaintextDeadline.UTC()
 		hardDeadline := plaintextDeadline.Add(service.retainHardCap - service.defaultPlaintextTTL).UTC()
 		publication := ResultPublicationBinding{
 			TargetMode: TargetModeIsolated, JobState: JobState(job.State), WorkspacePhase: WorkspacePhasePublished,
-			HasActiveAttempt: false, WorkspaceMarkerBindingDigest: job.WorkspaceMarkerBindingDigest,
-			ResultSetMarkerBindingDigest: job.WorkspaceMarkerBindingDigest,
-			WorkspacePlaintextDeadline:   plaintextDeadline, InitialResultPlaintextDeadline: plaintextDeadline,
+			WorkspaceMarkerBindingDigest: job.WorkspaceMarkerBindingDigest, ResultSetMarkerBindingDigest: job.WorkspaceMarkerBindingDigest,
+			WorkspacePlaintextDeadline: plaintextDeadline, InitialResultPlaintextDeadline: plaintextDeadline,
 			ResultPlaintextRetentionHardLimit: hardDeadline,
 		}
 		if publication.ValidateAt(now) != nil {
 			return ErrInvalidResultPublication
 		}
-
 		updated := tx.WithContext(ctx).Model(&model.BackupAssetRecoveryJob{}).
-			Where(`id = ? AND transition_revision = ? AND workspace_phase = ? AND state IN ?`,
-				job.ID, job.TransitionRevision, WorkspacePhaseSealed,
-				[]string{string(JobStateSucceeded), string(JobStateDegraded)}).
-			Updates(map[string]any{
-				"workspace_phase":     string(WorkspacePhasePublished),
-				"transition_revision": job.TransitionRevision + 1, "updated_at": now,
-			})
+			Where("id = ? AND transition_revision = ? AND workspace_phase = ? AND state = ?",
+				job.ID, job.TransitionRevision, WorkspacePhaseSealed, job.State).
+			Updates(map[string]any{"workspace_phase": string(WorkspacePhasePublished),
+				"transition_revision": job.TransitionRevision + 1, "updated_at": now})
 		if updated.Error != nil {
 			return updated.Error
 		}
 		if updated.RowsAffected != 1 {
+			lostCAS = true
 			return ErrInvalidResultPublication
 		}
 		resultSet := model.BackupAssetRecoveryResultSet{
-			ID: resultSetID, JobID: job.ID, State: string(ResultSetStateReady),
-			MarkerBindingDigest: job.WorkspaceMarkerBindingDigest,
-			PlaintextDeadline:   plaintextDeadline, HardDeadline: hardDeadline,
+			ID: resultSetID, JobID: job.ID, State: string(ResultSetStateReady), MarkerBindingDigest: job.WorkspaceMarkerBindingDigest,
+			PlaintextDeadline: plaintextDeadline, HardDeadline: hardDeadline,
 			CleanupPhase: string(CleanupPhaseClaimed), CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.WithContext(ctx).Create(&resultSet).Error; err != nil {
 			return err
 		}
+		for index := range rows {
+			rows[index].CreatedAt = now
+		}
 		if err := tx.WithContext(ctx).Create(&rows).Error; err != nil {
 			return err
 		}
-		published = PublishedRecoveryResultSet{
-			ResultSetID: resultSetID, JobID: job.ID, JobRevision: job.TransitionRevision + 1,
-			PlaintextDeadline: plaintextDeadline, HardDeadline: hardDeadline, Results: publicRows,
+		final := service.now().UTC()
+		if !validRecoveryPublicationClock(job, final) || final.Before(now) || !plaintextDeadline.After(final) {
+			return ErrInvalidResultPublication
+		}
+		published = PublishedRecoveryResultSet{ResultSetID: resultSetID, JobID: job.ID,
+			JobRevision: job.TransitionRevision + 1, PlaintextDeadline: plaintextDeadline, HardDeadline: hardDeadline, Results: publicRows}
+		mayHaveCommitted = true
+		return nil
+	})
+	if err == nil {
+		return published, nil
+	}
+	// A commit error or a lost CAS can mean another publisher committed. Never
+	// write again here; reconcile only through a new transaction on this context.
+	if (mayHaveCommitted || lostCAS) && ctx.Err() == nil {
+		var confirmed PublishedRecoveryResultSet
+		readErr := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var job model.BackupAssetRecoveryJob
+			loaded := tx.WithContext(ctx).Where("id = ?", jobID).Limit(1).Find(&job)
+			if loaded.Error != nil {
+				return loaded.Error
+			}
+			checkedAt := service.now().UTC()
+			if loaded.RowsAffected != 1 || WorkspacePhase(job.WorkspacePhase) != WorkspacePhasePublished ||
+				expectedRevision >= math.MaxInt64 || job.TransitionRevision != expectedRevision+1 ||
+				!validRecoveryPublicationClock(job, checkedAt) {
+				return ErrInvalidResultPublication
+			}
+			var verifyErr error
+			confirmed, verifyErr = service.verifyPublishedRecoveryResultsForRequestTx(ctx, tx, job, requested, false)
+			if verifyErr == nil {
+				final := service.now().UTC()
+				if !validRecoveryPublicationClock(job, final) || final.Before(checkedAt) {
+					return ErrInvalidResultPublication
+				}
+			}
+			return verifyErr
+		}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		if readErr == nil {
+			return confirmed, nil
+		}
+		if !errors.Is(readErr, ErrInvalidResultPublication) {
+			return PublishedRecoveryResultSet{}, errors.Join(err, readErr)
+		}
+	}
+	return PublishedRecoveryResultSet{}, err
+}
+
+func validRecoveryPublicationClock(job model.BackupAssetRecoveryJob, now time.Time) bool {
+	return !now.IsZero() && !job.CreatedAt.IsZero() && !job.UpdatedAt.IsZero() &&
+		!job.UpdatedAt.Before(job.CreatedAt) && !now.Before(job.UpdatedAt.UTC())
+}
+
+// loadRecoveryPublicationItemsTx reconstructs the canonical frozen operations,
+// checks the complete public terminal product, and authenticates every locator.
+func (service *ResultLifecycleService) loadRecoveryPublicationItemsTx(
+	ctx context.Context, tx *gorm.DB, job model.BackupAssetRecoveryJob, lock bool,
+) ([]recoveryPublicationItem, error) {
+	if !validOpaqueID(job.ID) || job.TransitionRevision == 0 ||
+		TargetMode(job.TargetMode) != TargetModeIsolated ||
+		(JobState(job.State) != JobStateSucceeded && JobState(job.State) != JobStateDegraded) ||
+		job.PlaintextDeadline == nil || job.PlaintextDeadline.IsZero() ||
+		!validRecoveryWorkerID(job.WorkspaceOwner) || job.WorkspaceFence == 0 ||
+		!validDigest(job.WorkspaceMarkerBindingDigest) || !validRecoveryMarkerValidation(job) ||
+		!validRecoveryReconciliationNeutralWorkspaceCleanup(job) {
+		return nil, ErrInvalidResultPublication
+	}
+	var active int64
+	if err := tx.WithContext(ctx).Model(&model.BackupAssetRecoveryAttempt{}).
+		Where("job_id = ? AND state IN ?", job.ID, []string{string(AttemptStateClaimed), string(AttemptStateRunning)}).
+		Count(&active).Error; err != nil {
+		return nil, err
+	}
+	if active != 0 {
+		return nil, ErrInvalidResultPublication
+	}
+	var plan model.BackupAssetRecoveryPlan
+	loaded := recoveryPublicationQuery(tx.WithContext(ctx), lock).Where("id = ?", job.PlanID).Limit(1).Find(&plan)
+	if loaded.Error != nil {
+		return nil, loaded.Error
+	}
+	workspaceLocator := recoveryWorkspaceLocatorDirectory + "/" + job.ID
+	if loaded.RowsAffected != 1 || PlanState(plan.State) != PlanStateExecuted || plan.RequesterID == 0 ||
+		plan.ID != job.PlanID || job.PlanBindingDigest != plan.BindingDigest || job.SelectionDigest != plan.SelectionDigest ||
+		job.SourceRevisionDigest != plan.SourceRevisionDigest || job.TargetMode != plan.TargetMode ||
+		job.TargetNodeID != plan.TargetNodeID || job.TargetRootID != plan.TargetRootID ||
+		job.RootLocatorDigest != plan.RootLocatorDigest || job.PathDigest != plan.PathDigest ||
+		job.SecurityDecision != plan.SecurityDecision || job.SecurityDecisionDigest != plan.SecurityDecisionDigest ||
+		job.SecurityFindingSetDigest != plan.SecurityFindingSetDigest || job.SecurityPolicyRevision != plan.SecurityPolicyRevision ||
+		job.SecurityOverrideBindingDigest != plan.SecurityOverrideBindingDigest ||
+		job.EstimatedItems != plan.EstimatedItems || job.EstimatedBytes != plan.EstimatedBytes ||
+		plan.CreatedAt.IsZero() || plan.UpdatedAt.IsZero() || plan.UpdatedAt.Before(plan.CreatedAt) ||
+		plan.UpdatedAt.After(job.UpdatedAt) ||
+		job.EncryptedWorkspaceRelativeLocator != workspaceLocator ||
+		job.WorkspaceBindingDigest != recoveryWorkspaceBindingDigest(plan, job.ID, workspaceLocator) {
+		return nil, ErrInvalidResultPublication
+	}
+	var preflight model.BackupAssetRecoveryPreflight
+	loaded = recoveryPublicationQuery(tx.WithContext(ctx), lock).
+		Where("id = ? AND plan_id = ?", job.PreflightID, plan.ID).Limit(1).Find(&preflight)
+	if loaded.Error != nil {
+		return nil, loaded.Error
+	}
+	if loaded.RowsAffected != 1 || job.PreflightRevision != preflight.Revision ||
+		!job.PreflightExpiresAt.Equal(preflight.ExpiresAt) || job.PreflightTargetRevision != preflight.TargetRevision ||
+		job.PreflightNodeRevision != preflight.NodeRevision || job.CapabilityRevision != preflight.CapabilityRevision ||
+		job.OperationSetDigest != preflight.OperationSetDigest || job.DeleteSetDigest != preflight.DeleteSetDigest ||
+		preflight.SourceRevisionDigest != plan.SourceRevisionDigest || preflight.TargetNodeID != plan.TargetNodeID ||
+		preflight.TargetRootID != plan.TargetRootID || preflight.RootLocatorDigest != plan.RootLocatorDigest ||
+		preflight.PathDigest != plan.PathDigest || preflight.Revision != plan.PreflightRevision ||
+		!preflight.ExpiresAt.Equal(plan.PreflightExpiresAt) || preflight.NodeRevision != plan.TargetBaseRevision ||
+		preflight.CapabilityRevision != plan.CapabilityRevision || preflight.PolicyRevision != plan.SecurityPolicyRevision ||
+		preflight.FindingSetDigest != plan.SecurityFindingSetDigest || preflight.CreatedAt.IsZero() ||
+		!preflight.ExpiresAt.After(preflight.CreatedAt) || preflight.CreatedAt.After(job.UpdatedAt) {
+		return nil, ErrInvalidResultPublication
+	}
+	operationRows, err := rebuildExecuteOperationRows(plan, preflight, tx.WithContext(ctx))
+	if err != nil {
+		return nil, errors.Join(ErrInvalidResultPublication, err)
+	}
+	var items []model.BackupAssetRecoveryJobItem
+	loaded = recoveryPublicationQuery(tx.WithContext(ctx), lock).
+		Where("job_id = ?", job.ID).Order("ordinal ASC").Find(&items)
+	if loaded.Error != nil {
+		return nil, loaded.Error
+	}
+	if len(items) != len(operationRows) {
+		return nil, ErrInvalidResultPublication
+	}
+	apiRows := make([]recoveryAPIJobItemRow, len(items))
+	for index, item := range items {
+		apiRows[index] = recoveryAPIJobItemRow{ID: item.ID, Ordinal: item.Ordinal, OperationKind: item.OperationKind,
+			Outcome: item.Outcome, EstimatedBytes: item.EstimatedBytes, BytesWritten: item.BytesWritten,
+			VerifiedSize: item.VerifiedSize, FailureCategory: item.FailureCategory, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
+	}
+	if _, err := validateRecoveryAPIJobProduct(recoveryAPIJobRow{State: job.State, FailureCategory: job.FailureCategory,
+		EstimatedItems: job.EstimatedItems, EstimatedBytes: job.EstimatedBytes}, apiRows); err != nil {
+		return nil, ErrInvalidResultPublication
+	}
+	materials := make(map[int]backupasset.DomainKeyMaterial)
+	result := make([]recoveryPublicationItem, 0, len(items))
+	markerAuthenticated := false
+	markerClaim := RecoveryWorkerClaim{WorkerID: job.WorkspaceOwner, AttemptFence: job.WorkspaceFence}
+	for index, item := range items {
+		if item.UpdatedAt.After(job.UpdatedAt) {
+			return nil, ErrInvalidResultPublication
+		}
+		operationRow := operationRows[index]
+		if !ordinarySourceJobItemMatchesOperation(plan, job, item, operationRow, index) {
+			return nil, ErrInvalidResultPublication
+		}
+		material, found := materials[item.TargetLocatorKeyVersion]
+		if !found {
+			material, err = service.workspaceKeys.ByVersion(ctx, backupasset.KeyDomainRecoveryCleanupOwnership, item.TargetLocatorKeyVersion)
+			if err != nil || !validTargetLocatorKey(material, item.TargetLocatorKeyVersion) {
+				return nil, ErrInvalidResultPublication
+			}
+			materials[item.TargetLocatorKeyVersion] = material
+			if !markerAuthenticated && job.WorkspaceMarkerBindingDigest == recoveryWorkspaceMarkerBindingDigest(
+				material, job.ID, job.TargetRootID, plan.RootRevision, workspaceLocator, markerClaim,
+			) {
+				markerAuthenticated = true
+			}
+		}
+		binding := targetLocatorBindingForExecute(plan, job.ID, item.ID, operationRow, workspaceLocator,
+			job.WorkspaceBindingDigest, item.TargetObjectDigest, item.TargetLocatorKeyVersion)
+		locator, openErr := OpenTargetLocatorEnvelope(material, binding, item.EncryptedTargetRelativeLocator)
+		if openErr != nil || locator != operationRow.operation.TargetRelativeLocator || !validTargetRelativeLocator(locator) {
+			return nil, ErrInvalidResultPublication
+		}
+		switch RecoveryOperationKind(item.OperationKind) {
+		case RecoveryOperationCreate, RecoveryOperationOverwrite:
+			if item.Outcome != "succeeded" || item.FailureCategory != "" ||
+				item.VerifiedSize != item.ExpectedPostBytes || item.BytesWritten != item.ExpectedPostBytes ||
+				item.VerifiedDigest != item.ExpectedPostIdentityDigest || !validDigest(item.VerifiedDigest) ||
+				item.DisplayClass != string(RecoveryDisplayClassRegular) {
+				return nil, ErrInvalidResultPublication
+			}
+			result = append(result, recoveryPublicationItem{item: item, locator: locator})
+		case RecoveryOperationSkip:
+			if item.Outcome != "skipped" || item.FailureCategory != "" || item.BytesWritten != 0 ||
+				item.VerifiedSize != item.ExpectedPriorBytes || item.VerifiedDigest != item.ExpectedPriorDigest {
+				return nil, ErrInvalidResultPublication
+			}
+		default:
+			return nil, ErrInvalidResultPublication
+		}
+	}
+	if !markerAuthenticated {
+		return nil, ErrInvalidResultPublication
+	}
+	return result, nil
+}
+
+func recoveryPublicationQuery(tx *gorm.DB, lock bool) *gorm.DB {
+	if lock {
+		return tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate})
+	}
+	return tx
+}
+
+func (service *ResultLifecycleService) verifyPublishedRecoveryResultsTx(
+	ctx context.Context, tx *gorm.DB, job model.BackupAssetRecoveryJob,
+) (PublishedRecoveryResultSet, error) {
+	return service.verifyPublishedRecoveryResultsForRequestTx(ctx, tx, job, nil, true)
+}
+
+func (service *ResultLifecycleService) verifyPublishedRecoveryResultsForRequestTx(
+	ctx context.Context, tx *gorm.DB, job model.BackupAssetRecoveryJob,
+	requested map[string]RecoveryResultClassificationBinding, lock bool,
+) (PublishedRecoveryResultSet, error) {
+	if WorkspacePhase(job.WorkspacePhase) != WorkspacePhasePublished {
+		return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
+	}
+	items, err := service.loadRecoveryPublicationItemsTx(ctx, tx, job, lock)
+	if err != nil || len(items) == 0 || (requested != nil && len(requested) != len(items)) {
+		return PublishedRecoveryResultSet{}, errors.Join(ErrInvalidResultPublication, err)
+	}
+	var sets []model.BackupAssetRecoveryResultSet
+	if err := tx.WithContext(ctx).Where("job_id = ?", job.ID).Limit(2).Find(&sets).Error; err != nil {
+		return PublishedRecoveryResultSet{}, err
+	}
+	if len(sets) != 1 {
+		return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
+	}
+	set := sets[0]
+	setView := recoveryAPIResultSetRow{ID: set.ID, State: set.State, PlaintextDeadline: set.PlaintextDeadline,
+		HardDeadline: set.HardDeadline, CleanupPhase: set.CleanupPhase, CleanupOwner: set.CleanupOwner,
+		CleanupLeaseExpiresAt: set.CleanupLeaseExpiresAt, CleanupFence: set.CleanupFence, NodeLeaseID: set.NodeLeaseID,
+		NodeFence: set.NodeFence, CleanupAttempt: set.CleanupAttempt, CreatedAt: set.CreatedAt, UpdatedAt: set.UpdatedAt}
+	checkedAt := service.now().UTC()
+	if !setView.valid() || ResultSetState(set.State) == ResultSetStateCleaned ||
+		checkedAt.IsZero() || checkedAt.Before(set.UpdatedAt) ||
+		set.MarkerBindingDigest != job.WorkspaceMarkerBindingDigest ||
+		!job.PlaintextDeadline.After(set.CreatedAt) || set.PlaintextDeadline.Before(job.PlaintextDeadline.UTC()) ||
+		set.HardDeadline.Before(job.PlaintextDeadline.UTC()) {
+		return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
+	}
+	type resultTuple struct {
+		locator string
+		size    int64
+		digest  string
+	}
+	expected := make(map[resultTuple]recoveryPublicationItem, len(items))
+	for _, item := range items {
+		tuple := resultTuple{item.locator, item.item.VerifiedSize, item.item.VerifiedDigest}
+		if _, duplicate := expected[tuple]; duplicate {
+			return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
+		}
+		expected[tuple] = item
+	}
+	var rows []model.BackupAssetRecoveryResult
+	if err := tx.WithContext(ctx).Where("job_id = ? OR result_set_id = ?", job.ID, set.ID).
+		Order("id ASC").Find(&rows).Error; err != nil {
+		return PublishedRecoveryResultSet{}, err
+	}
+	if len(rows) != len(expected) {
+		return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
+	}
+	publicRows := make([]PublishedRecoveryResult, 0, len(rows))
+	for _, row := range rows {
+		tuple := resultTuple{row.EncryptedRelativeLocator, row.Size, row.ContentDigest}
+		item, found := expected[tuple]
+		classification := RecoveryResultClassificationBinding{Kind: RecoveryResultClassification(row.Classification),
+			Revision: int64(row.ClassificationRevision), SourceRevision: row.ClassificationSourceRevision}
+		if !found || !validOpaqueID(row.ID) || row.JobID != job.ID || row.ResultSetID != set.ID ||
+			RecoveryResultKind(row.ResultKind) != RecoveryResultKindRegularFile || !classification.valid() ||
+			row.LocatorDigest != recoveryResultLocatorDigest(job.ID, set.ID, row.ID, row.EncryptedRelativeLocator) ||
+			row.ModifiedAt != nil || !row.CreatedAt.Equal(set.CreatedAt) ||
+			(requested != nil && requested[item.item.ID] != classification) {
+			return PublishedRecoveryResultSet{}, ErrInvalidResultPublication
+		}
+		delete(expected, tuple)
+		publicRows = append(publicRows, PublishedRecoveryResult{ID: row.ID, Kind: RecoveryResultKindRegularFile,
+			Size: row.Size, ContentDigest: row.ContentDigest, Classification: classification})
+	}
+	return PublishedRecoveryResultSet{ResultSetID: set.ID, JobID: job.ID, JobRevision: job.TransitionRevision,
+		PlaintextDeadline: set.PlaintextDeadline.UTC(), HardDeadline: set.HardDeadline.UTC(), Results: publicRows}, nil
+}
+
+func (service *ResultLifecycleService) expireTerminalSealed(ctx context.Context, jobID string, revision uint64) error {
+	if service == nil || service.db == nil || service.now == nil || service.workspaceKeys == nil || !validOpaqueID(jobID) || revision == 0 {
+		return ErrInvalidResultLifecycle
+	}
+	ctx = nonNilRecoveryContext(ctx)
+	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var job model.BackupAssetRecoveryJob
+		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+			Where("id = ?", jobID).Limit(1).Find(&job)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		now := service.now().UTC()
+		if loaded.RowsAffected != 1 || !validRecoveryPublicationClock(job, now) || job.TransitionRevision != revision ||
+			job.TransitionRevision >= math.MaxInt64 || TargetMode(job.TargetMode) != TargetModeIsolated ||
+			(JobState(job.State) != JobStateSucceeded && JobState(job.State) != JobStateDegraded) ||
+			WorkspacePhase(job.WorkspacePhase) != WorkspacePhaseSealed || job.PlaintextDeadline == nil ||
+			job.PlaintextDeadline.IsZero() || job.PlaintextDeadline.UTC().After(now) ||
+			!validRecoveryMarkerValidation(job) || !validRecoveryReconciliationNeutralWorkspaceCleanup(job) {
+			return ErrRecoveryResultCleanupConflict
+		}
+		var active, resultSets int64
+		if err := tx.WithContext(ctx).Model(&model.BackupAssetRecoveryAttempt{}).
+			Where("job_id = ? AND state IN ?", job.ID, []string{string(AttemptStateClaimed), string(AttemptStateRunning)}).
+			Count(&active).Error; err != nil {
+			return err
+		}
+		if err := tx.WithContext(ctx).Model(&model.BackupAssetRecoveryResultSet{}).
+			Where("job_id = ?", job.ID).Count(&resultSets).Error; err != nil {
+			return err
+		}
+		if active != 0 || resultSets != 0 {
+			return ErrRecoveryResultCleanupConflict
+		}
+		binding, err := loadRecoveryCleanupTargetBindingTx(ctx, tx, job, true)
+		if err != nil {
+			return err
+		}
+		key, err := service.workspaceKeys.Active(ctx, backupasset.KeyDomainRecoveryCleanupOwnership)
+		markerClaim := RecoveryWorkerClaim{WorkerID: job.WorkspaceOwner, AttemptFence: job.WorkspaceFence}
+		if err != nil || !validRecoveryWorkspaceKey(key) || job.WorkspaceMarkerBindingDigest !=
+			recoveryWorkspaceMarkerBindingDigest(key, job.ID, job.TargetRootID, binding.RootRevision,
+				job.EncryptedWorkspaceRelativeLocator, markerClaim) {
+			return ErrRecoveryResultCleanupValidationFailed
+		}
+		candidate := job
+		candidate.WorkspacePhase = string(WorkspacePhaseCleanupDue)
+		final := service.now().UTC()
+		if !validRecoveryPublicationClock(job, final) || final.Before(now) {
+			return ErrRecoveryResultCleanupConflict
+		}
+		candidate.UpdatedAt = final
+		if !validRecoveryWorkspaceCleanupCandidate(candidate, final) {
+			return ErrRecoveryResultCleanupConflict
+		}
+		updated := tx.WithContext(ctx).Model(&model.BackupAssetRecoveryJob{}).
+			Where("id = ? AND transition_revision = ? AND state = ? AND workspace_phase = ?",
+				job.ID, revision, job.State, WorkspacePhaseSealed).
+			Updates(map[string]any{"workspace_phase": string(WorkspacePhaseCleanupDue),
+				"transition_revision": revision + 1, "updated_at": final})
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return ErrRecoveryResultCleanupConflict
 		}
 		return nil
 	})
-	if err != nil {
-		return PublishedRecoveryResultSet{}, err
-	}
-	return published, nil
 }
 
 func (service *ResultLifecycleService) Retain(
@@ -2745,7 +3176,7 @@ func (service *ResultLifecycleService) renewRecoveryCleanupNodeLeaseTx(
 	if err != nil {
 		return time.Time{}, err
 	}
-	leaseExpiresAt := nextRecoveryCleanupLeaseExpiry(currentExpiry, now, service.cleanupLeaseTTL)
+	leaseExpiresAt := nextRecoveryCleanupLeaseExpiry(tx, currentExpiry, now, service.cleanupLeaseTTL)
 	if leaseExpiresAt.IsZero() {
 		return time.Time{}, ErrRecoveryResultCleanupConflict
 	}
@@ -2797,11 +3228,14 @@ func lockRecoveryCleanupNodeLeaseTx(
 	return nodeLease, nil
 }
 
-func nextRecoveryCleanupLeaseExpiry(current, now time.Time, ttl time.Duration) time.Time {
+func nextRecoveryCleanupLeaseExpiry(db *gorm.DB, current, now time.Time, ttl time.Duration) time.Time {
 	if current.IsZero() || now.IsZero() || ttl <= 0 {
 		return time.Time{}
 	}
 	next := now.Add(ttl).UTC()
+	if db.Name() == "postgres" {
+		next = next.Truncate(time.Microsecond)
+	}
 	if !next.After(current.UTC()) {
 		next = current.UTC().Add(time.Second)
 	}
@@ -2907,6 +3341,14 @@ func (service *ResultLifecycleService) createRecoveryCleanupNodeLeaseTx(
 		return model.BackupAssetRecoveryNodeLease{}, ErrRecoveryResultCleanupConflict
 	}
 	leaseExpiresAt := now.Add(service.cleanupLeaseTTL).UTC()
+	// Issue exactly the expiry that the database will persist; received claims
+	// still require exact equality and are never rounded during validation.
+	if tx.Name() == "postgres" {
+		leaseExpiresAt = leaseExpiresAt.Truncate(time.Microsecond)
+	}
+	if !leaseExpiresAt.After(now) {
+		return model.BackupAssetRecoveryNodeLease{}, ErrRecoveryResultCleanupConflict
+	}
 	nodeLease := model.BackupAssetRecoveryNodeLease{
 		ID: nodeLeaseID, NodeID: nodeID, HolderKind: "recovery_cleanup", JobID: jobID,
 		OwnerID: workerID, Fence: uint64(maxFence + 1), State: "active", LeaseExpiresAt: leaseExpiresAt,

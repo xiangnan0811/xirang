@@ -590,23 +590,34 @@ func (port *managedRecoveryRestorePortExecutionFake) Execute(
 }
 
 type managedRecoveryRestoreRequestBuilderFake struct {
-	claim    recovery.RecoveryWorkerClaim
-	request  provider.RestoreRequest
-	buildErr error
-	pause    *managedRecoveryDeleteAuthorizationPause
+	claim               recovery.RecoveryWorkerClaim
+	request             provider.RestoreRequest
+	buildErr            error
+	pause               *managedRecoveryDeleteAuthorizationPause
+	released            []recovery.RecoveryWorkerClaim
+	buildStarted        chan struct{}
+	waitForCancellation bool
 }
 
 func (builder *managedRecoveryRestoreRequestBuilderFake) BuildRsyncRestoreRequest(
-	_ context.Context,
+	ctx context.Context,
 	claim recovery.RecoveryWorkerClaim,
 ) (provider.RestoreRequest, error) {
 	builder.claim = claim
+	if builder.buildStarted != nil {
+		close(builder.buildStarted)
+	}
+	if builder.waitForCancellation {
+		<-ctx.Done()
+		return provider.RestoreRequest{}, ctx.Err()
+	}
 	return builder.request, builder.buildErr
 }
 
-func (*managedRecoveryRestoreRequestBuilderFake) ReleaseRsyncRestoreRequest(
-	recovery.RecoveryWorkerClaim,
+func (builder *managedRecoveryRestoreRequestBuilderFake) ReleaseRsyncRestoreRequest(
+	claim recovery.RecoveryWorkerClaim,
 ) {
+	builder.released = append(builder.released, claim)
 }
 
 func (builder *managedRecoveryRestoreRequestBuilderFake) TakeDeleteAuthorizationPause(
@@ -620,38 +631,317 @@ func (builder *managedRecoveryRestoreRequestBuilderFake) TakeDeleteAuthorization
 	return pause, true
 }
 
-func TestManagedRecoveryClaimExecutorUsesRepositoryRestorePort(t *testing.T) {
-	claim := recovery.RecoveryWorkerClaim{JobID: strings.Repeat("1", 32)}
-	request := provider.RestoreRequest{
-		Version:  provider.RestoreRequestSchemaV1,
-		Provider: backupasset.ProviderRsync,
-		Rsync: &provider.RsyncRestoreRequest{SourceRef: provider.RsyncRestoreSourceRef{
-			PlanID: strings.Repeat("2", 32),
-		}},
+type managedRecoveryPrewriteFailureFake struct {
+	claim   recovery.RecoveryWorkerClaim
+	ctx     context.Context
+	err     error
+	calls   int
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (closer *managedRecoveryPrewriteFailureFake) FailPristinePrewrite(
+	ctx context.Context,
+	claim recovery.RecoveryWorkerClaim,
+) error {
+	closer.ctx = ctx
+	closer.claim = claim
+	closer.calls++
+	if closer.entered != nil {
+		close(closer.entered)
 	}
+	if closer.release != nil {
+		<-closer.release
+	}
+	return closer.err
+}
+
+func managedRecoveryClaimAndRequestForTest(t *testing.T) (recovery.RecoveryWorkerClaim, provider.RestoreRequest) {
+	t.Helper()
+	now := time.Now().UTC()
+	ref := provider.RsyncRestoreSourceRef{
+		PlanID: strings.Repeat("1", 32), PlanBindingDigest: strings.Repeat("2", 64),
+		RepositoryID: strings.Repeat("3", 32), RecoveryPointID: strings.Repeat("4", 32),
+		CatalogGenerationID: strings.Repeat("5", 32), SelectionDigest: strings.Repeat("6", 64),
+		SourceRevisionDigest: strings.Repeat("7", 64), ManifestDigest: strings.Repeat("8", 64),
+	}
+	claim := recovery.RecoveryWorkerClaim{
+		JobID: strings.Repeat("9", 32), AttemptID: strings.Repeat("a", 32),
+		NodeLeaseID: strings.Repeat("b", 32), WorkerID: "recovery-worker-test",
+		AttemptFence: 11, NodeFence: 13, TransitionRevision: 3,
+		LeaseExpiresAt: now.Add(time.Minute), AbsoluteDeadline: now.Add(time.Hour),
+	}
+	claim.SourceFence = backupasset.LeaseFence{
+		LeaseID: strings.Repeat("c", 32), RecoveryPointID: ref.RecoveryPointID,
+		HolderType: backupasset.LeaseHolderRecoveryJob, OwnerID: claim.JobID,
+		AttemptID: claim.AttemptID, FenceToken: strings.Repeat("d", 64),
+	}
+	target, err := provider.NewRestoreTarget(
+		7, "approved-root", strings.Repeat("3", 64), strings.Repeat("4", 64), "root-revision-1", "target-revision-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence := provider.RestoreFence{
+		JobID: claim.JobID, AttemptID: claim.AttemptID, NodeLeaseID: claim.NodeLeaseID,
+		AttemptFence: claim.AttemptFence, NodeFence: claim.NodeFence, ExpectedTargetRevision: target.TargetRevision,
+	}
+	checkpoint := provider.RestoreCheckpoint{
+		ID: claim.AttemptID, OperationDigest: strings.Repeat("d", 64),
+		PriorTargetRevision: target.TargetRevision, VerifiedTargetIdentityDigest: target.TargetPathDigest,
+		VerifiedTargetRevision: target.TargetRevision, AttemptFence: fence.AttemptFence, NodeFence: fence.NodeFence,
+	}
+	request := provider.RestoreRequest{
+		Version: provider.RestoreRequestSchemaV1, Provider: backupasset.ProviderRsync,
+		Entries: []provider.RestoreEntry{{
+			AssetRef: backupasset.AssetRef{RecoveryPointID: ref.RecoveryPointID, EntryID: strings.Repeat("f", 64)},
+			Type:     backupasset.CatalogEntryFile, ExpectedSize: 7, TargetObjectDigest: strings.Repeat("b", 64),
+		}},
+		Target: target, Limits: provider.RestoreLimits{MaxEntries: 1, MaxBytes: 7, MaxEntryBytes: 7},
+		ConflictPolicy: provider.RestoreConflictFailOnConflict, Fence: fence, Checkpoint: checkpoint,
+		MutationPermit: provider.TargetMutationPermit{
+			TargetBindingDigest: target.BindingDigest, UseLatchID: provider.RestoreSchemaUseLatchID,
+			JobID: claim.JobID, AttemptID: claim.AttemptID, NodeLeaseID: claim.NodeLeaseID,
+			AttemptFence: claim.AttemptFence, NodeFence: claim.NodeFence, ExpectedTargetRevision: target.TargetRevision,
+			Session: provider.TargetSession{
+				ID: claim.AttemptID, Purpose: provider.TargetPurposeWrite,
+				CredentialRevision: "credential-revision-1", ExpiresAt: claim.AbsoluteDeadline,
+			},
+		},
+		Rsync: &provider.RsyncRestoreRequest{ManifestDigest: ref.ManifestDigest, SourceRef: ref},
+	}
+	if err := request.ValidateRsyncResolutionIntent(); err != nil {
+		t.Fatalf("invalid test resolution intent: %v", err)
+	}
+	if err := request.MutationPermit.ValidateAt(now, request.Target, request.Fence); err != nil {
+		t.Fatalf("invalid test schema permit: %v", err)
+	}
+	return claim, request
+}
+
+func TestManagedRecoveryClaimExecutorUsesRepositoryRestorePort(t *testing.T) {
+	claim, request := managedRecoveryClaimAndRequestForTest(t)
 	builder := &managedRecoveryRestoreRequestBuilderFake{request: request}
 	port := &managedRecoveryRestorePortExecutionFake{}
-	executor := &managedRecoveryResolvedClaimExecutor{builder: builder, restorePort: port}
+	closer := &managedRecoveryPrewriteFailureFake{}
+	executor := &managedRecoveryResolvedClaimExecutor{builder: builder, restorePort: port, prewriteFailure: closer}
 
 	if err := executor.ExecuteResolvedClaim(context.Background(), claim); err != nil {
 		t.Fatalf("execute managed Recovery claim: %v", err)
 	}
-	if builder.claim.JobID != claim.JobID {
-		t.Fatalf("request builder claim=%q, want %q", builder.claim.JobID, claim.JobID)
+	if builder.claim != claim {
+		t.Fatalf("request builder claim=%+v, want %+v", builder.claim, claim)
 	}
 	if len(port.requests) != 1 || port.requests[0].Rsync == nil ||
 		port.requests[0].Rsync.SourceRef.PlanID != request.Rsync.SourceRef.PlanID {
 		t.Fatalf("restore port requests=%+v, want one closed Rsync request", port.requests)
 	}
 	pause := managedRecoveryDeleteAuthorizationPause{
-		JobID: strings.Repeat("1", 32), PlanID: strings.Repeat("2", 32),
-		CheckpointID: strings.Repeat("3", 32), AttemptID: strings.Repeat("4", 32), ExpectedPlanRevision: 5,
+		JobID: claim.JobID, PlanID: request.Rsync.SourceRef.PlanID,
+		CheckpointID: strings.Repeat("e", 32), AttemptID: claim.AttemptID, ExpectedPlanRevision: 5,
 	}
 	builder.pause = &pause
 	var pauseErr *managedRecoveryDeleteAuthorizationPause
 	if err := executor.ExecuteResolvedClaim(context.Background(), claim); !errors.As(err, &pauseErr) ||
 		pauseErr == nil || *pauseErr != pause {
 		t.Fatalf("actual claim executor side-channel pause=%+v err=%v", pauseErr, err)
+	}
+	if closer.calls != 0 || len(builder.released) != 2 || builder.released[0] != claim || builder.released[1] != claim {
+		t.Fatalf("prewrite calls=%d releases=%+v, want no prewrite closure and one release per execution", closer.calls, builder.released)
+	}
+}
+
+func TestManagedRecoveryClaimExecutorClosesOnlyBuilderFailures(t *testing.T) {
+	claim, request := managedRecoveryClaimAndRequestForTest(t)
+	for _, test := range []struct {
+		name     string
+		buildErr error
+		closeErr error
+		canceled bool
+	}{
+		{name: "closed", buildErr: recovery.ErrRecoverySourceChanged},
+		{name: "closure conflict", buildErr: recovery.ErrRecoverySourceChanged, closeErr: recovery.ErrRecoveryWorkerFenceLost},
+		{name: "canceled context", buildErr: context.Canceled, closeErr: recovery.ErrRecoveryWorkerFenceLost, canceled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			if test.canceled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			builder := &managedRecoveryRestoreRequestBuilderFake{request: request, buildErr: test.buildErr}
+			port := &managedRecoveryRestorePortExecutionFake{}
+			closer := &managedRecoveryPrewriteFailureFake{err: test.closeErr}
+			executor := &managedRecoveryResolvedClaimExecutor{builder: builder, restorePort: port, prewriteFailure: closer}
+			err := executor.ExecuteResolvedClaim(ctx, claim)
+			if !errors.Is(err, test.buildErr) || (test.closeErr != nil && !errors.Is(err, test.closeErr)) {
+				t.Fatalf("build/closure error=%v, want %v and %v", err, test.buildErr, test.closeErr)
+			}
+			if test.closeErr == nil && err != test.buildErr {
+				t.Fatalf("build error=%v, want original error %v", err, test.buildErr)
+			}
+			if closer.calls != 1 || closer.claim != claim || closer.ctx != ctx {
+				t.Fatalf("prewrite closure calls=%d claim=%+v context=%v", closer.calls, closer.claim, closer.ctx)
+			}
+			if len(port.requests) != 0 || len(builder.released) != 0 {
+				t.Fatalf("builder failure dispatched %d requests and released %d registrations", len(port.requests), len(builder.released))
+			}
+		})
+	}
+	t.Run("missing closer", func(t *testing.T) {
+		builder := &managedRecoveryRestoreRequestBuilderFake{request: request}
+		port := &managedRecoveryRestorePortExecutionFake{}
+		var closer *managedRecoveryPrewriteFailureFake
+		executor := &managedRecoveryResolvedClaimExecutor{builder: builder, restorePort: port, prewriteFailure: closer}
+		if err := executor.ExecuteResolvedClaim(context.Background(), claim); !errors.Is(err, recovery.ErrInvalidRecoveryWorker) {
+			t.Fatalf("missing prewrite closure error=%v", err)
+		}
+		if builder.claim != (recovery.RecoveryWorkerClaim{}) || len(port.requests) != 0 {
+			t.Fatal("missing prewrite closure reached the builder or restore port")
+		}
+	})
+}
+
+func TestManagedRecoveryWorkerJoinsCanceledPrewriteClosure(t *testing.T) {
+	claim, request := managedRecoveryClaimAndRequestForTest(t)
+	started, closing, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	builder := &managedRecoveryRestoreRequestBuilderFake{request: request, buildStarted: started, waitForCancellation: true}
+	port := &managedRecoveryRestorePortExecutionFake{}
+	closer := &managedRecoveryPrewriteFailureFake{entered: closing, release: release}
+	executor := &managedRecoveryResolvedClaimExecutor{builder: builder, restorePort: port, prewriteFailure: closer}
+	coordinator := &managedRecoveryWorkerCoordinatorFake{claim: claim, claimFound: true}
+	worker, err := newManagedRecoveryWorker(managedRecoveryWorkerDependencies{
+		Coordinator: coordinator, Executor: executor, WorkerID: claim.WorkerID, WorkerConcurrency: 1,
+		TakeoverCadence: time.Hour, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+		Policy: managedRecoveryWorkerPolicyForTest(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() { worker.Run(runCtx); close(runDone) }()
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		cancelRun()
+		<-runDone
+	}()
+	if !worker.TryWake(claim.JobID) {
+		t.Fatal("worker rejected prewrite claim")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("request builder did not start")
+	}
+	joinCtx, cancelJoin := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelJoin()
+	joined := make(chan error, 1)
+	go func() { joined <- worker.CancelAndJoin(joinCtx) }()
+	select {
+	case <-closing:
+	case <-time.After(time.Second):
+		t.Fatal("canceled builder did not enter prewrite closure")
+	}
+	select {
+	case err := <-joined:
+		t.Fatalf("worker joined before prewrite closure finished: %v", err)
+	default:
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-joined:
+		if err != nil {
+			t.Fatalf("join worker after prewrite closure: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not join after prewrite closure completed")
+	}
+	if closer.calls != 1 || closer.claim != claim || !errors.Is(closer.ctx.Err(), context.Canceled) ||
+		len(port.requests) != 0 || len(builder.released) != 0 {
+		t.Fatalf("canceled prewrite calls=%d claim=%+v requests=%d releases=%d", closer.calls, closer.claim, len(port.requests), len(builder.released))
+	}
+}
+
+type managedRecoveryClaimRestoreCoordinatorFake struct {
+	request provider.RestoreRequest
+	claim   recovery.RecoveryWorkerClaim
+	ctx     context.Context
+	err     error
+	calls   int
+}
+
+func (coordinator *managedRecoveryClaimRestoreCoordinatorFake) BuildRsyncRestoreRequest(
+	ctx context.Context, claim recovery.RecoveryWorkerClaim,
+) (provider.RestoreRequest, error) {
+	coordinator.ctx, coordinator.claim = ctx, claim
+	coordinator.calls++
+	return coordinator.request, coordinator.err
+}
+
+func (*managedRecoveryClaimRestoreCoordinatorFake) ExecuteClaimWithRsyncTargetWriter(
+	context.Context, recovery.RecoveryWorkerClaim, provider.RsyncRestoreSource,
+	provider.RsyncTargetWriter, provider.RsyncBoundRemoteTarget,
+) error {
+	return recovery.ErrInvalidRecoveryWorker
+}
+
+func (*managedRecoveryClaimRestoreCoordinatorFake) ExecuteClaimWithRsyncTargetWriterAndDeleteGrant(
+	context.Context, recovery.RecoveryWorkerClaim, provider.RsyncRestoreSource,
+	provider.RsyncTargetWriter, provider.RsyncBoundRemoteTarget, string,
+) error {
+	return recovery.ErrInvalidRecoveryWorker
+}
+
+func TestManagedRecoveryClaimRestoreBridgeRegistersOnlySuccessfulBuild(t *testing.T) {
+	claim, request := managedRecoveryClaimAndRequestForTest(t)
+	buildErr := recovery.ErrRecoveryWorkerFenceLost
+	coordinator := &managedRecoveryClaimRestoreCoordinatorFake{request: request, err: buildErr}
+	bridge, err := newManagedRecoveryClaimRestoreBridge(&gorm.DB{}, coordinator, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nilCoordinator *managedRecoveryClaimRestoreCoordinatorFake
+	if _, err := newManagedRecoveryClaimRestoreBridge(&gorm.DB{}, nilCoordinator, time.Now); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("typed nil coordinator error=%v", err)
+	}
+	ctx := context.Background()
+	if _, err := bridge.BuildRsyncRestoreRequest(ctx, claim); !errors.Is(err, buildErr) {
+		t.Fatalf("bridge build failure=%v, want %v", err, buildErr)
+	}
+	if coordinator.calls != 1 || coordinator.ctx != ctx || coordinator.claim != claim || len(bridge.claims) != 0 {
+		t.Fatalf("failed build calls=%d claim=%+v registered=%d", coordinator.calls, coordinator.claim, len(bridge.claims))
+	}
+	coordinator.err = nil
+	got, err := bridge.BuildRsyncRestoreRequest(ctx, claim)
+	if err != nil || !reflect.DeepEqual(got, request) || coordinator.calls != 2 {
+		t.Fatalf("successful build request=%+v calls=%d err=%v", got, coordinator.calls, err)
+	}
+	call := provider.RsyncRestoreExecuteCall{RsyncRestoreIntent: provider.RsyncRestoreIntent{Fence: request.Fence}}
+	if registered, found := bridge.claimForExecute(call); !found || registered != claim {
+		t.Fatalf("registered claim=%+v found=%t, want exact claim", registered, found)
+	}
+	call.Fence.NodeFence++
+	if _, found := bridge.claimForExecute(call); found {
+		t.Fatal("bridge accepted a different node fence")
+	}
+	pause := managedRecoveryDeleteAuthorizationPause{
+		JobID: claim.JobID, PlanID: request.Rsync.SourceRef.PlanID, CheckpointID: strings.Repeat("e", 32),
+		AttemptID: claim.AttemptID, ExpectedPlanRevision: 1,
+	}
+	bridge.pauses[managedRecoveryClaimKey(claim)] = pause
+	if gotPause, found := bridge.TakeDeleteAuthorizationPause(claim); !found || gotPause != pause {
+		t.Fatalf("delete pause=%+v found=%t, want exact pause", gotPause, found)
+	}
+	if _, found := bridge.TakeDeleteAuthorizationPause(claim); found {
+		t.Fatal("delete pause was returned twice")
+	}
+	bridge.pauses[managedRecoveryClaimKey(claim)] = pause
+	bridge.ReleaseRsyncRestoreRequest(claim)
+	if len(bridge.claims) != 0 || len(bridge.pauses) != 0 {
+		t.Fatalf("release retained claims=%d pauses=%d", len(bridge.claims), len(bridge.pauses))
 	}
 }
 
@@ -694,6 +984,75 @@ func (writer *managedRecoveryDeclaredTargetWriterFake) WriteDeclaredRegular(
 	}
 	writer.payload = string(payload)
 	return nil
+}
+
+type managedRecoveryCloseFailureSourceFake struct {
+	managedRecoveryDeclaredSourceFake
+	closeErr error
+	closes   int
+}
+
+func (source *managedRecoveryCloseFailureSourceFake) MaterializeDeclaredEntries(
+	_ context.Context, entries []provider.RestoreEntry,
+) ([]provider.RestoreEntry, error) {
+	materialized := append([]provider.RestoreEntry(nil), entries...)
+	digest := sha256.Sum256([]byte(source.payload))
+	for index := range materialized {
+		materialized[index].ExpectedDigest = fmt.Sprintf("%x", digest)
+	}
+	return materialized, nil
+}
+
+func (source *managedRecoveryCloseFailureSourceFake) Close() error {
+	source.closes++
+	return source.closeErr
+}
+
+type managedRecoveryRestoreSourceResolverFake struct {
+	source provider.RsyncRestoreSource
+	refs   []provider.RsyncRestoreSourceRef
+}
+
+func (resolver *managedRecoveryRestoreSourceResolverFake) ResolveRsyncRestoreSource(
+	_ context.Context, ref provider.RsyncRestoreSourceRef,
+) (provider.RsyncRestoreSource, error) {
+	resolver.refs = append(resolver.refs, ref)
+	return resolver.source, nil
+}
+
+func TestManagedRecoveryClaimExecutorDoesNotCloseAfterPortSourceCloseFailure(t *testing.T) {
+	claim, request := managedRecoveryClaimAndRequestForTest(t)
+	source := &managedRecoveryCloseFailureSourceFake{
+		managedRecoveryDeclaredSourceFake: managedRecoveryDeclaredSourceFake{payload: "payload"},
+		closeErr:                          errors.New("source close failed"),
+	}
+	resolver := &managedRecoveryRestoreSourceResolverFake{source: source}
+	writer := &managedRecoveryDeclaredTargetWriterFake{}
+	// This controlled bridge exercises port forwarding only; it does not
+	// authenticate a persisted Recovery claim or prove mutation authority.
+	bridge := &managedRecoveryClaimRestoreBridge{
+		claims: map[string]recovery.RecoveryWorkerClaim{managedRecoveryClaimKey(claim): claim},
+	}
+	port, err := newManagedRecoveryRsyncRestorePort(managedRecoveryRsyncRestoreDependencies{
+		Resolver: resolver, Writer: writer, Runner: bridge,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := &managedRecoveryRestoreRequestBuilderFake{request: request}
+	closer := &managedRecoveryPrewriteFailureFake{}
+	executor := &managedRecoveryResolvedClaimExecutor{builder: builder, restorePort: port, prewriteFailure: closer}
+	err = executor.ExecuteResolvedClaim(context.Background(), claim)
+	if !errors.Is(err, provider.ErrRsyncRestoreUnavailable) {
+		t.Fatalf("source close error=%v, want sanitized restore unavailable", err)
+	}
+	if len(resolver.refs) != 1 || resolver.refs[0] != request.Rsync.SourceRef ||
+		len(writer.calls) != 1 || writer.payload != source.payload || source.closes != 1 {
+		t.Fatalf("refs=%+v writes=%d payload=%q closes=%d", resolver.refs, len(writer.calls), writer.payload, source.closes)
+	}
+	if closer.calls != 0 || len(builder.released) != 1 || builder.released[0] != claim {
+		t.Fatalf("post-dispatch prewrite calls=%d releases=%+v", closer.calls, builder.released)
+	}
 }
 
 func TestManagedRecoveryClaimRestoreBridgeRoutesPinnedStreamThroughInjectedTargetWriter(t *testing.T) {
@@ -757,21 +1116,6 @@ func TestManagedRecoveryClaimRestoreBridgeRoutesPinnedStreamThroughInjectedTarge
 	}
 }
 
-func TestRecoveryHeartbeatProviderSessionFreezesAbsoluteDeadline(t *testing.T) {
-	now := time.Date(2026, 8, 15, 1, 2, 3, 0, time.UTC)
-	claim := recovery.RecoveryWorkerClaim{
-		LeaseExpiresAt: now.Add(time.Minute), AbsoluteDeadline: now.Add(time.Hour),
-	}
-	if got := managedRecoveryProviderSessionExpiry(claim); !got.Equal(claim.AbsoluteDeadline) {
-		t.Fatalf("provider session expiry=%s, want immutable absolute deadline %s", got, claim.AbsoluteDeadline)
-	}
-	renewed := claim
-	renewed.LeaseExpiresAt = now.Add(10 * time.Minute)
-	if got := managedRecoveryProviderSessionExpiry(renewed); !got.Equal(claim.AbsoluteDeadline) {
-		t.Fatalf("renewed provider session expiry=%s, want unchanged absolute deadline %s", got, claim.AbsoluteDeadline)
-	}
-}
-
 func TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	if err := db.AutoMigrate(
@@ -827,9 +1171,16 @@ func TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices(t *
 	}
 	if graph == nil || !graph.admissionEnabled || graph.application == nil || graph.plan == nil || graph.preflight == nil ||
 		graph.authorization == nil || graph.target == nil || graph.workerCoordinator == nil || graph.worker == nil ||
-		graph.resultLifecycle == nil || graph.resultDelivery == nil || graph.reconciliation == nil ||
+		graph.resultLifecycle == nil || graph.resultPublicationOwner == nil || graph.resultDelivery == nil || graph.reconciliation == nil ||
 		graph.rsyncRestorePort == nil || graph.revokeDrainDelivery == nil || graph.shutdownLifecycle == nil {
 		t.Fatalf("incomplete enabled Recovery graph: %+v", graph)
+	}
+	if graph.resultPublicationOwner.lifecycle != graph.resultLifecycle ||
+		graph.resultPublicationOwner.cadence != config.CleanupCadence ||
+		graph.resultPublicationOwner.batchSize != config.CleanupBatchSize ||
+		graph.resultPublicationOwner.retryBase != config.CleanupRetryBase ||
+		graph.resultPublicationOwner.retryMaxDelay != config.CleanupRetryMaxDelay {
+		t.Fatalf("enabled publication owner=%+v config=%+v", graph.resultPublicationOwner, config)
 	}
 	if _, err := graph.application.CreatePlan(context.Background(), recovery.CreatePlanIntentRequest{
 		RequesterID: 7, Endpoint: "/api/v1/recovery-plans", IdempotencyKey: "recovery-production-gap-key",
@@ -846,15 +1197,21 @@ func TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices(t *
 		t.Fatalf("production preflight materialization error=%v, want owner-scoped hidden not found", err)
 	}
 	claimExecutor, ok := graph.worker.executor.(*managedRecoveryResolvedClaimExecutor)
-	if !ok || claimExecutor.restorePort != graph.rsyncRestorePort {
-		t.Fatalf("worker executor=%T restore port=%T, want graph Repository restore port",
-			graph.worker.executor, claimExecutor.restorePort)
+	if !ok {
+		t.Fatalf("worker executor=%T, want resolved claim executor", graph.worker.executor)
+	}
+	if claimExecutor.restorePort != graph.rsyncRestorePort || claimExecutor.prewriteFailure != graph.workerCoordinator {
+		t.Fatalf("worker restore port=%T prewrite closer=%T, want graph Repository port and coordinator",
+			claimExecutor.restorePort, claimExecutor.prewriteFailure)
 	}
 	runnerBridge, runnerOK := graph.rsyncRestorePort.runner.(*managedRecoveryClaimRestoreBridge)
 	if !runnerOK || runnerBridge == nil || graph.rsyncRestorePort.writer == nil ||
 		any(graph.rsyncRestorePort.writer) == any(runnerBridge) {
 		t.Fatalf("Repository restore runner=%T writer=%T, want a claim bridge and separate Recovery writer adapter",
 			graph.rsyncRestorePort.runner, graph.rsyncRestorePort.writer)
+	}
+	if claimExecutor.builder != runnerBridge || runnerBridge.coordinator != graph.workerCoordinator {
+		t.Fatal("worker builder and Repository runner must share the graph coordinator bridge")
 	}
 	if graph.workerCoordinatorSourceResolver != repositoryResolver {
 		t.Fatalf("worker source resolver=%T, want exact Repository service", graph.workerCoordinatorSourceResolver)
@@ -864,6 +1221,7 @@ func TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices(t *
 	}
 
 	for name, clear := range map[string]func(*managedRecoveryGraphBuildDependencies){
+		"clock":                       func(value *managedRecoveryGraphBuildDependencies) { value.Now = nil },
 		"node revisions":              func(value *managedRecoveryGraphBuildDependencies) { value.NodeRevisions = nil },
 		"preflight evidence":          func(value *managedRecoveryGraphBuildDependencies) { value.PreflightEvidence = nil },
 		"authority revalidator":       func(value *managedRecoveryGraphBuildDependencies) { value.AuthorityRevalidator = nil },
@@ -921,7 +1279,7 @@ func TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices(t *
 	if err != nil || disabledGraph == nil || disabledGraph.admissionEnabled ||
 		disabledGraph.reconcileMetadata == nil || disabledGraph.resultLifecycle == nil || disabledGraph.cleanup == nil ||
 		disabledGraph.reconciliation == nil || disabledGraph.downgradeReconciler == nil ||
-		disabledGraph.revokeDrainDelivery == nil || disabledGraph.shutdownLifecycle == nil {
+		disabledGraph.resultPublicationOwner != nil || disabledGraph.revokeDrainDelivery == nil || disabledGraph.shutdownLifecycle == nil {
 		graph = disabledGraph
 		t.Fatalf("default-disabled maintenance graph=%+v err=%v", graph, err)
 	}
@@ -1087,19 +1445,60 @@ func TestManagedRecoveryDisabledGraphRunsLogicalReconciliationImmediatelyAndOnCa
 	reconciler := &managedRecoveryDowngradeReconcilerFake{err: recovery.ErrRecoveryReconciliationUnavailable}
 	graph.downgradeReconciler = reconciler
 	graph.reconciliationOwner.reconciler = reconciler
+	expiryCalls := make(chan int, 2)
+	cleanupLists := make(chan int, 2)
+	cleanup := &managedRecoveryCleanupLifecycleFake{
+		expire: func(_ context.Context, cursor recovery.RecoverySealedResultCursor, limit int) (recovery.RecoverySealedResultCursor, error) {
+			expiryCalls <- limit
+			return cursor, nil
+		},
+		list: func(limit int) { cleanupLists <- limit },
+	}
+	graph.cleanup.lifecycle = cleanup
 	firstDone := graph.startRun(context.Background())
+	defer func() {
+		if err := graph.stopRun(context.Background()); err != nil {
+			t.Errorf("stop disabled graph: %v", err)
+		}
+	}()
 	secondDone := graph.startRun(context.Background())
 	if firstDone != secondDone {
 		t.Fatal("disabled graph started duplicate maintenance owner loops")
 	}
 	waitManagedRecoveryReconciliationCalls(t, reconciler, 1)
+	select {
+	case limit := <-expiryCalls:
+		if limit != config.CleanupBatchSize {
+			t.Fatalf("disabled expiry limit=%d, want %d", limit, config.CleanupBatchSize)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("disabled graph did not run sealed expiry immediately")
+	}
 	ownedTimers := timers.waitForCount(t, 2)
 	for _, timer := range ownedTimers {
 		timer.ticks <- now
 	}
 	waitManagedRecoveryReconciliationCalls(t, reconciler, 2)
+	select {
+	case <-expiryCalls:
+	case <-time.After(time.Second):
+		t.Fatal("disabled graph did not run sealed expiry on cadence")
+	}
+	for range 2 {
+		select {
+		case limit := <-cleanupLists:
+			if limit != config.CleanupBatchSize {
+				t.Fatalf("disabled scheduled cleanup limit=%d", limit)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("disabled graph did not list scheduled cleanup")
+		}
+	}
 	if err := graph.stopRun(context.Background()); err != nil {
 		t.Fatalf("join disabled Recovery graph: %v", err)
+	}
+	if len(cleanup.expireCalls) != 2 || len(cleanup.listLimits) != 2 {
+		t.Fatalf("disabled expiry calls=%v cleanup limits=%v, want two independent batches", cleanup.expireCalls, cleanup.listLimits)
 	}
 	if graph.currentReconciliationState() != recovery.RecoveryReconciliationBlocked {
 		t.Fatalf("unavailable cadence reconciliation state=%q, want blocked", graph.currentReconciliationState())
@@ -1157,8 +1556,8 @@ func TestManagedRecoveryEnabledGraphRunsLogicalReconciliationImmediatelyAndOnCad
 	if err != nil {
 		t.Fatalf("build enabled Recovery graph: %v", err)
 	}
-	if graph.reconciliationOwner == nil {
-		t.Fatal("enabled Recovery graph omitted the managed reconciliation owner")
+	if graph.reconciliationOwner == nil || graph.resultPublicationOwner == nil {
+		t.Fatal("enabled Recovery graph omitted a managed owner")
 	}
 	reconciler := &managedRecoveryDowngradeReconcilerFake{result: recovery.RecoveryReconciliationResult{
 		State: recovery.RecoveryReconciliationClear, Complete: true,
@@ -1174,16 +1573,106 @@ func TestManagedRecoveryEnabledGraphRunsLogicalReconciliationImmediatelyAndOnCad
 	if graph.currentReconciliationState() != recovery.RecoveryReconciliationClear {
 		t.Fatalf("enabled startup reconciliation state=%q, want clear", graph.currentReconciliationState())
 	}
+	publicationCalls := make(chan managedRecoverySealedBatchCall, 2)
+	publicationCanceled := make(chan struct{})
+	publicationRelease := make(chan struct{})
+	var releasePublication sync.Once
+	defer releasePublication.Do(func() { close(publicationRelease) })
+	publicationPasses := 0
+	graph.resultPublicationOwner.lifecycle = managedRecoverySealedPublicationFunc(func(
+		ctx context.Context, cursor recovery.RecoverySealedResultCursor, limit int,
+	) (recovery.RecoverySealedResultCursor, error) {
+		publicationPasses++
+		publicationCalls <- managedRecoverySealedBatchCall{cursor: cursor, limit: limit}
+		if publicationPasses == 2 {
+			<-ctx.Done()
+			close(publicationCanceled)
+			<-publicationRelease
+			return cursor, ctx.Err()
+		}
+		return cursor, nil
+	})
+	expiryCalls := make(chan int, 2)
+	cleanupLists := make(chan int, 2)
+	cleanup := &managedRecoveryCleanupLifecycleFake{
+		expire: func(_ context.Context, cursor recovery.RecoverySealedResultCursor, limit int) (recovery.RecoverySealedResultCursor, error) {
+			expiryCalls <- limit
+			return cursor, nil
+		},
+		list: func(limit int) { cleanupLists <- limit },
+	}
+	graph.cleanup.lifecycle = cleanup
 
 	done := graph.startRun(context.Background())
+	defer func() {
+		releasePublication.Do(func() { close(publicationRelease) })
+		_ = graph.stopRun(context.Background())
+	}()
 	waitManagedRecoveryReconciliationCalls(t, reconciler, 2)
-	ownedTimers := timers.waitForCount(t, 2)
+	select {
+	case call := <-publicationCalls:
+		if call.limit != config.CleanupBatchSize || call.cursor != (recovery.RecoverySealedResultCursor{}) {
+			t.Fatalf("initial publication call=%+v", call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enabled graph did not publish immediately")
+	}
+	select {
+	case limit := <-expiryCalls:
+		if limit != config.CleanupBatchSize {
+			t.Fatalf("enabled expiry limit=%d, want %d", limit, config.CleanupBatchSize)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enabled graph did not run sealed expiry immediately")
+	}
+	ownedTimers := timers.waitForCount(t, 3)
 	for _, timer := range ownedTimers {
 		timer.ticks <- now
 	}
 	waitManagedRecoveryReconciliationCalls(t, reconciler, 3)
-	if err := graph.stopRun(context.Background()); err != nil {
-		t.Fatalf("join enabled Recovery graph: %v", err)
+	select {
+	case <-publicationCalls:
+	case <-time.After(time.Second):
+		t.Fatal("enabled graph did not publish on cadence")
+	}
+	select {
+	case <-expiryCalls:
+	case <-time.After(time.Second):
+		t.Fatal("enabled graph did not expire sealed work on cadence")
+	}
+	for range 2 {
+		select {
+		case limit := <-cleanupLists:
+			if limit != config.CleanupBatchSize {
+				t.Fatalf("enabled scheduled cleanup limit=%d", limit)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("enabled graph did not list scheduled cleanup")
+		}
+	}
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- graph.stopRun(context.Background()) }()
+	select {
+	case <-publicationCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("publication owner did not receive graph cancellation")
+	}
+	select {
+	case err := <-stopDone:
+		t.Fatalf("graph stopped before publication returned: %v", err)
+	default:
+	}
+	releasePublication.Do(func() { close(publicationRelease) })
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("join enabled Recovery graph: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enabled graph did not join the publication owner")
+	}
+	if len(cleanup.expireCalls) != 2 || len(cleanup.listLimits) != 2 {
+		t.Fatalf("enabled expiry calls=%v cleanup limits=%v, want two independent batches", cleanup.expireCalls, cleanup.listLimits)
 	}
 	select {
 	case <-done:
@@ -1218,19 +1707,56 @@ func TestManagedRecoveryReconciliationOwnerStopsOnContextError(t *testing.T) {
 	}
 }
 
+type managedRecoverySealedBatchCall struct {
+	cursor recovery.RecoverySealedResultCursor
+	limit  int
+}
+
+type managedRecoverySealedPublicationFunc func(
+	context.Context, recovery.RecoverySealedResultCursor, int,
+) (recovery.RecoverySealedResultCursor, error)
+
+func (publish managedRecoverySealedPublicationFunc) PublishSealedBatch(
+	ctx context.Context, cursor recovery.RecoverySealedResultCursor, limit int,
+) (recovery.RecoverySealedResultCursor, error) {
+	return publish(ctx, cursor, limit)
+}
+
 type managedRecoveryCleanupLifecycleFake struct {
 	events            []string
 	claimResultErrors []error
 	resultProgress    recovery.RecoveryCleanupProgress
 	candidates        []recovery.ScheduledCleanupCandidate
+	expireCalls       []managedRecoverySealedBatchCall
+	expire            func(context.Context, recovery.RecoverySealedResultCursor, int) (recovery.RecoverySealedResultCursor, error)
+	listErr           error
+	list              func(int)
 	listLimits        []int
+}
+
+func (fake *managedRecoveryCleanupLifecycleFake) ExpireSealedBatch(
+	ctx context.Context, cursor recovery.RecoverySealedResultCursor, limit int,
+) (recovery.RecoverySealedResultCursor, error) {
+	fake.events = append(fake.events, "expire")
+	fake.expireCalls = append(fake.expireCalls, managedRecoverySealedBatchCall{cursor: cursor, limit: limit})
+	if fake.expire != nil {
+		return fake.expire(ctx, cursor, limit)
+	}
+	return cursor, nil
 }
 
 func (fake *managedRecoveryCleanupLifecycleFake) ListScheduledCleanupCandidates(
 	_ context.Context,
 	limit int,
 ) ([]recovery.ScheduledCleanupCandidate, error) {
+	fake.events = append(fake.events, "list")
 	fake.listLimits = append(fake.listLimits, limit)
+	if fake.list != nil {
+		fake.list(limit)
+	}
+	if fake.listErr != nil {
+		return nil, fake.listErr
+	}
 	if limit > len(fake.candidates) {
 		limit = len(fake.candidates)
 	}
@@ -1341,6 +1867,369 @@ func (fake *managedRecoveryCleanupLifecycleFake) AdvanceRecoveryWorkspaceCleanup
 	return recovery.RecoveryCleanupProgress{Phase: recovery.CleanupPhaseTombstoned, Complete: true}, nil
 }
 
+// The rows are deliberately incomplete: the real lifecycle rejects their
+// publication and expiry, but still returns the opaque scan positions that
+// runtime must preserve after a failed candidate.
+func managedRecoverySealedCursorsForTest(t *testing.T) (recovery.RecoverySealedResultCursor, recovery.RecoverySealedResultCursor) {
+	t.Helper()
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.BackupAssetRecoveryJob{}, &model.BackupAssetRecoveryAttempt{},
+		&model.BackupAssetRecoveryResultSet{}, &model.BackupAssetRecoveryPlan{},
+		&model.BackupAssetRecoveryPlanItem{}, &model.BackupAssetRecoveryPreflight{},
+		&model.BackupAssetRecoveryJobItem{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 13, 1, 2, 3, 0, time.UTC)
+	clock := func() time.Time { return now }
+	keys := backupasset.NewKeyring(db, clock)
+	target, err := recovery.NewProductionTarget(recovery.ProductionTargetDependencies{
+		DB: db, Revisions: managedRecoveryNodeRevisionSourceFake{}, Dialer: sshutil.NewNodeDialer(db),
+		WorkspaceKeys: keys, Now: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle, err := recovery.NewResultLifecycleService(recovery.ResultLifecycleDependencies{
+		DB: db, Now: clock, WorkspaceKeys: keys, DefaultPlaintextTTL: time.Hour, RetainHardCap: 24 * time.Hour,
+		NodeAdmission: managedRecoveryNodeAdmissionFake{}, ContentLifecycle: managedRecoveryContentLifecycleFake{},
+		Target: target, CleanupLeaseTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, id := range []string{"a", "b", "c", "d"} {
+		deadline := now.Add(time.Hour)
+		if index >= 2 {
+			deadline = now.Add(-time.Hour)
+		}
+		createdAt := now.Add(-2*time.Hour + time.Duration(index)*time.Minute)
+		job := model.BackupAssetRecoveryJob{
+			ID: strings.Repeat(id, 32), PlanID: strings.Repeat(fmt.Sprint(index+1), 32),
+			State: string(recovery.JobStateSucceeded), TransitionRevision: 1,
+			WorkspacePhase: string(recovery.WorkspacePhaseSealed), PlaintextDeadline: &deadline,
+			TargetMode: string(recovery.TargetModeIsolated), TargetNodeID: 1,
+			CreatedAt: createdAt, UpdatedAt: createdAt,
+		}
+		if err := db.Create(&job).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var zero recovery.RecoverySealedResultCursor
+	publishedCursor, publishErr := lifecycle.PublishSealedBatch(context.Background(), zero, 1)
+	expiredCursor, expireErr := lifecycle.ExpireSealedBatch(context.Background(), zero, 1)
+	if publishErr == nil || expireErr == nil || publishedCursor == zero || expiredCursor == zero || publishedCursor == expiredCursor {
+		t.Fatalf("expected distinct failed-page cursors: publication=%+v err=%v expiry=%+v err=%v",
+			publishedCursor, publishErr, expiredCursor, expireErr)
+	}
+	return publishedCursor, expiredCursor
+}
+
+func TestManagedRecoverySealedOwnersKeepIndependentCursorsAndBudgets(t *testing.T) {
+	publishedCursor, expiredCursor := managedRecoverySealedCursorsForTest(t)
+	var zero recovery.RecoverySealedResultCursor
+	publishErr := errors.New("publication candidate failed")
+	expireErr := errors.New("expiry candidate failed")
+	cleanupErr := errors.New("scheduled cleanup failed")
+	var publicationCalls []managedRecoverySealedBatchCall
+	publisher, err := newManagedRecoveryResultPublicationOwner(managedRecoveryResultPublicationOwnerDependencies{
+		Lifecycle: managedRecoverySealedPublicationFunc(func(_ context.Context, cursor recovery.RecoverySealedResultCursor, limit int) (recovery.RecoverySealedResultCursor, error) {
+			publicationCalls = append(publicationCalls, managedRecoverySealedBatchCall{cursor: cursor, limit: limit})
+			if len(publicationCalls) == 1 {
+				return publishedCursor, publishErr
+			}
+			return zero, nil
+		}),
+		Cadence: time.Minute, BatchSize: 2, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultID := strings.Repeat("1", 32)
+	workspaceID := strings.Repeat("2", 32)
+	expiryPasses := 0
+	lifecycle := &managedRecoveryCleanupLifecycleFake{
+		claimResultErrors: []error{cleanupErr},
+		candidates: []recovery.ScheduledCleanupCandidate{
+			{Kind: recovery.ScheduledCleanupResultSet, ID: resultID},
+			{Kind: recovery.ScheduledCleanupWorkspace, ID: workspaceID},
+		},
+		expire: func(_ context.Context, _ recovery.RecoverySealedResultCursor, _ int) (recovery.RecoverySealedResultCursor, error) {
+			expiryPasses++
+			if expiryPasses == 1 {
+				return expiredCursor, expireErr
+			}
+			return zero, nil
+		},
+	}
+	cleanup, err := newManagedRecoveryCleanupOwner(managedRecoveryCleanupOwnerDependencies{
+		Lifecycle: lifecycle, WorkerID: "recovery-cleanup-test",
+		Cadence: time.Minute, BatchSize: 2, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.runPass(context.Background()); !errors.Is(err, publishErr) {
+		t.Fatalf("publication error=%v, want candidate failure", err)
+	}
+	processed, err := cleanup.runPass(context.Background())
+	if processed != 2 || !errors.Is(err, expireErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("cleanup processed=%d error=%v, want both independent failures", processed, err)
+	}
+	if !containsManagedRecoveryOrderedEvents(lifecycle.events, []string{
+		"expire", "list", "result:claim:" + resultID + ":recovery-cleanup-test",
+		"workspace:claim:" + workspaceID + ":recovery-cleanup-test",
+		"workspace:revoke:" + workspaceID, "workspace:drain:" + workspaceID,
+		"workspace:validate:" + workspaceID, "workspace:advance:" + workspaceID,
+	}) {
+		t.Fatalf("expiry failure skipped or reordered scheduled cleanup: %v", lifecycle.events)
+	}
+	if publisher.cursor != publishedCursor || cleanup.cursor != expiredCursor {
+		t.Fatalf("owner cursors publication=%+v expiry=%+v", publisher.cursor, cleanup.cursor)
+	}
+	var restartCall managedRecoverySealedBatchCall
+	restarted, err := newManagedRecoveryResultPublicationOwner(managedRecoveryResultPublicationOwnerDependencies{
+		Lifecycle: managedRecoverySealedPublicationFunc(func(_ context.Context, cursor recovery.RecoverySealedResultCursor, limit int) (recovery.RecoverySealedResultCursor, error) {
+			restartCall = managedRecoverySealedBatchCall{cursor: cursor, limit: limit}
+			return cursor, nil
+		}),
+		Cadence: time.Minute, BatchSize: 2, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.runPass(context.Background()); err != nil || restartCall.cursor != zero || restartCall.limit != 2 {
+		t.Fatalf("restarted publication call=%+v error=%v", restartCall, err)
+	}
+	if err := publisher.runPass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cleanup.runPass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantPublication := []managedRecoverySealedBatchCall{{cursor: zero, limit: 2}, {cursor: publishedCursor, limit: 2}}
+	wantExpiry := []managedRecoverySealedBatchCall{{cursor: zero, limit: 2}, {cursor: expiredCursor, limit: 2}}
+	if !reflect.DeepEqual(publicationCalls, wantPublication) || !reflect.DeepEqual(lifecycle.expireCalls, wantExpiry) ||
+		!reflect.DeepEqual(lifecycle.listLimits, []int{2, 2}) || publisher.cursor != zero || cleanup.cursor != zero {
+		t.Fatalf("publication=%v expiry=%v cleanup limits=%v", publicationCalls, lifecycle.expireCalls, lifecycle.listLimits)
+	}
+
+	listErr := errors.New("scheduled cleanup listing failed")
+	lifecycle.listErr = listErr
+	lifecycle.expire = func(context.Context, recovery.RecoverySealedResultCursor, int) (recovery.RecoverySealedResultCursor, error) {
+		return expiredCursor, expireErr
+	}
+	processed, err = cleanup.runPass(context.Background())
+	if processed != 0 || !errors.Is(err, expireErr) || !errors.Is(err, listErr) || cleanup.cursor != expiredCursor {
+		t.Fatalf("expiry/list failure processed=%d error=%v cursor=%+v", processed, err, cleanup.cursor)
+	}
+
+	t.Run("cancellation keeps last attempted positions", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		var calls []managedRecoverySealedBatchCall
+		owner, err := newManagedRecoveryResultPublicationOwner(managedRecoveryResultPublicationOwnerDependencies{
+			Lifecycle: managedRecoverySealedPublicationFunc(func(ctx context.Context, cursor recovery.RecoverySealedResultCursor, limit int) (recovery.RecoverySealedResultCursor, error) {
+				calls = append(calls, managedRecoverySealedBatchCall{cursor: cursor, limit: limit})
+				if len(calls) == 1 {
+					cancel()
+					return publishedCursor, ctx.Err()
+				}
+				return zero, nil
+			}),
+			Cadence: time.Minute, BatchSize: 1, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := owner.runPass(ctx); !errors.Is(err, context.Canceled) || owner.cursor != publishedCursor {
+			t.Fatalf("canceled publication error=%v cursor=%+v", err, owner.cursor)
+		}
+		if err := owner.runPass(context.Background()); err != nil || len(calls) != 2 || calls[1].cursor != publishedCursor {
+			t.Fatalf("resumed publication calls=%v error=%v", calls, err)
+		}
+
+		expiryCtx, cancelExpiry := context.WithCancel(context.Background())
+		expiryLifecycle := &managedRecoveryCleanupLifecycleFake{
+			expire: func(ctx context.Context, _ recovery.RecoverySealedResultCursor, _ int) (recovery.RecoverySealedResultCursor, error) {
+				cancelExpiry()
+				return expiredCursor, ctx.Err()
+			},
+		}
+		expiryOwner, err := newManagedRecoveryCleanupOwner(managedRecoveryCleanupOwnerDependencies{
+			Lifecycle: expiryLifecycle, WorkerID: "recovery-cleanup-test",
+			Cadence: time.Minute, BatchSize: 1, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := expiryOwner.runPass(expiryCtx); !errors.Is(err, context.Canceled) ||
+			expiryOwner.cursor != expiredCursor || len(expiryLifecycle.listLimits) != 0 {
+			t.Fatalf("canceled expiry error=%v cursor=%+v list limits=%v", err, expiryOwner.cursor, expiryLifecycle.listLimits)
+		}
+		expiryLifecycle.expire = nil
+		if _, err := expiryOwner.runPass(context.Background()); err != nil ||
+			len(expiryLifecycle.expireCalls) != 2 || expiryLifecycle.expireCalls[1].cursor != expiredCursor {
+			t.Fatalf("resumed expiry calls=%v error=%v", expiryLifecycle.expireCalls, err)
+		}
+	})
+}
+
+func TestManagedRecoveryPublicationOwnerRetriesWithBoundedBackoffAndResets(t *testing.T) {
+	timer := newManagedRecoveryTimerFake()
+	var calls int
+	owner, err := newManagedRecoveryResultPublicationOwner(managedRecoveryResultPublicationOwnerDependencies{
+		Lifecycle: managedRecoverySealedPublicationFunc(func(_ context.Context, cursor recovery.RecoverySealedResultCursor, limit int) (recovery.RecoverySealedResultCursor, error) {
+			calls++
+			if limit != 3 {
+				return cursor, fmt.Errorf("unexpected publication limit %d", limit)
+			}
+			if calls <= 3 || calls == 5 {
+				return cursor, errors.New("publication temporarily unavailable")
+			}
+			return cursor, nil
+		}),
+		Cadence: time.Minute, BatchSize: 3, RetryBase: time.Second, RetryMaxDelay: 4 * time.Second,
+		NewTimer: func(time.Duration) managedRecoveryTimer { return timer },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { owner.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, time.Minute, time.Second, time.Minute}
+	for index, delay := range want {
+		waitManagedRecoveryTimerResets(t, timer, index+1)
+		if got := timer.resetsSnapshot(); got[index] != delay {
+			t.Fatalf("publication timer resets=%v, want %v", got, want[:index+1])
+		}
+		if index+1 < len(want) {
+			timer.ticks <- time.Date(2026, 8, 13, 1, 2, 3, 0, time.UTC)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("publication owner did not stop on cancellation")
+	}
+	if calls != len(want) || timer.stopCallsSnapshot() != 1 {
+		t.Fatalf("publication calls=%d timer stops=%d", calls, timer.stopCallsSnapshot())
+	}
+}
+
+func TestManagedRecoveryTransitionJoinsInFlightResultPublication(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	released := make(chan struct{})
+	finished := make(chan struct{})
+	var releaseOnce sync.Once
+	owner, err := newManagedRecoveryResultPublicationOwner(managedRecoveryResultPublicationOwnerDependencies{
+		Lifecycle: managedRecoverySealedPublicationFunc(func(ctx context.Context, cursor recovery.RecoverySealedResultCursor, _ int) (recovery.RecoverySealedResultCursor, error) {
+			close(started)
+			<-ctx.Done()
+			close(canceled)
+			<-released
+			close(finished)
+			return cursor, ctx.Err()
+		}),
+		Cadence: time.Minute, BatchSize: 1, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drained := make(chan struct{})
+	graph := &managedRecoveryGraph{
+		admissionEnabled:  true,
+		reconcileMetadata: func(context.Context) error { return nil },
+		run:               owner.Run,
+		revokeDrainDelivery: func(context.Context) error {
+			select {
+			case <-canceled:
+				return errors.New("publication canceled before delivery drain")
+			default:
+				close(drained)
+				return nil
+			}
+		},
+	}
+	graph.shutdownLifecycle = graph.stopRun
+	manager, err := newManagedRecoveryRuntime(managedRecoveryRuntimeDependencies{
+		Build: func(_ context.Context, config backupasset.RecoveryConfig) (*managedRecoveryGraph, error) {
+			if config.Enabled {
+				return graph, nil
+			}
+			return &managedRecoveryGraph{reconcileMetadata: func(context.Context) error { return nil }}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.StartupWithConfig(context.Background(), backupasset.RecoveryConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() { manager.Run(runCtx); close(runDone) }()
+	defer func() {
+		releaseOnce.Do(func() { close(released) })
+		cancelRun()
+		_ = manager.Shutdown(context.Background())
+		<-runDone
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("publication owner did not start")
+	}
+	persisted := make(chan struct{}, 1)
+	transitionDone := make(chan error, 1)
+	go func() {
+		transitionDone <- manager.TransitionSettings(context.Background(), backupasset.RecoveryConfig{Enabled: false}, func() error {
+			select {
+			case <-finished:
+				persisted <- struct{}{}
+				return nil
+			default:
+				return errors.New("settings persisted before publication joined")
+			}
+		})
+	}()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("transition did not cancel publication")
+	}
+	select {
+	case <-drained:
+	default:
+		t.Fatal("delivery drain did not precede publication cancellation")
+	}
+	select {
+	case err := <-transitionDone:
+		t.Fatalf("transition returned before publication finished: %v", err)
+	case <-persisted:
+		t.Fatal("transition persisted before publication finished")
+	default:
+	}
+	releaseOnce.Do(func() { close(released) })
+	select {
+	case err := <-transitionDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transition did not join publication after release")
+	}
+	select {
+	case <-persisted:
+	default:
+		t.Fatal("transition did not persist the disabled setting")
+	}
+}
+
 func TestManagedRecoveryCleanupOwnerProcessesOnlyBoundedDueLifecycleCandidates(t *testing.T) {
 	dueResultID := strings.Repeat("1", 32)
 	dueWorkspaceID := strings.Repeat("3", 32)
@@ -1367,6 +2256,8 @@ func TestManagedRecoveryCleanupOwnerProcessesOnlyBoundedDueLifecycleCandidates(t
 		t.Fatalf("cleanup candidate limits=%v, want configured batch 2", lifecycle.listLimits)
 	}
 	want := []string{
+		"expire",
+		"list",
 		"result:claim:" + dueResultID + ":recovery-cleanup-test",
 		"result:revoke:" + dueResultID,
 		"result:drain:" + dueResultID,
@@ -1469,6 +2360,53 @@ func TestManagedRecoveryCleanupOwnerRunsImmediateCadenceAndBoundedRetry(t *testi
 	}
 	if timer.stopCallsSnapshot() != 1 {
 		t.Fatalf("cleanup timer Stop calls=%d, want 1", timer.stopCallsSnapshot())
+	}
+}
+
+func TestManagedRecoveryCleanupOwnerRetriesExpiryWithoutSkippingScheduledCleanup(t *testing.T) {
+	workspaceID := strings.Repeat("3", 32)
+	var expiryPasses int
+	lifecycle := &managedRecoveryCleanupLifecycleFake{
+		candidates: []recovery.ScheduledCleanupCandidate{{Kind: recovery.ScheduledCleanupWorkspace, ID: workspaceID}},
+		expire: func(_ context.Context, cursor recovery.RecoverySealedResultCursor, _ int) (recovery.RecoverySealedResultCursor, error) {
+			expiryPasses++
+			if expiryPasses == 1 {
+				return cursor, errors.New("expiry temporarily unavailable")
+			}
+			return cursor, nil
+		},
+	}
+	timer := newManagedRecoveryTimerFake()
+	owner, err := newManagedRecoveryCleanupOwner(managedRecoveryCleanupOwnerDependencies{
+		Lifecycle: lifecycle, WorkerID: "recovery-cleanup-test", Cadence: time.Minute,
+		BatchSize: 1, RetryBase: time.Second, RetryMaxDelay: 4 * time.Second,
+		NewTimer: func(time.Duration) managedRecoveryTimer { return timer },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { owner.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	waitManagedRecoveryTimerResets(t, timer, 1)
+	timer.ticks <- time.Date(2026, 8, 13, 1, 2, 3, 0, time.UTC)
+	waitManagedRecoveryTimerResets(t, timer, 2)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup owner did not stop after expiry retry")
+	}
+	if got := timer.resetsSnapshot(); !reflect.DeepEqual(got, []time.Duration{time.Second, time.Minute}) {
+		t.Fatalf("expiry retry delays=%v, want retry followed by cadence", got)
+	}
+	if expiryPasses != 2 || !reflect.DeepEqual(lifecycle.listLimits, []int{1, 1}) ||
+		!containsManagedRecoveryOrderedEvents(lifecycle.events, []string{
+			"expire", "list", "workspace:advance:" + workspaceID,
+			"expire", "list", "workspace:advance:" + workspaceID,
+		}) {
+		t.Fatalf("expiry passes=%d cleanup limits=%v events=%v", expiryPasses, lifecycle.listLimits, lifecycle.events)
 	}
 }
 
@@ -2029,6 +2967,31 @@ func (managedRecoveryPreflightEvidenceAuthorityFake) ObserveRecoveryPreflightEvi
 	return recovery.PreflightExternalEvidenceObservation{}, nil
 }
 
+func (managedRecoveryPreflightEvidenceAuthorityFake) RevalidateRecoveryPreflightEvidenceTx(
+	context.Context,
+	*gorm.DB,
+	recovery.PreflightExternalEvidenceRequest,
+	recovery.RecoveryAuthorityObservation,
+) error {
+	return recovery.ErrTargetPreflightUnavailable
+}
+
+func TestManagedRecoveryUnavailablePreflightAuthorityRevalidationFailsClosed(t *testing.T) {
+	authority := managedRecoveryUnavailablePreflightEvidenceAuthority{}
+	if err := authority.RevalidateRecoveryPreflightEvidenceTx(
+		context.Background(), nil, recovery.PreflightExternalEvidenceRequest{}, recovery.RecoveryAuthorityObservation{},
+	); !errors.Is(err, recovery.ErrTargetPreflightUnavailable) {
+		t.Fatalf("unavailable authority error=%v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := authority.RevalidateRecoveryPreflightEvidenceTx(
+		ctx, nil, recovery.PreflightExternalEvidenceRequest{}, recovery.RecoveryAuthorityObservation{},
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled authority error=%v", err)
+	}
+}
+
 type managedRecoveryPlanSecurityAuthorityFake struct{}
 
 func (managedRecoveryPlanSecurityAuthorityFake) ObserveRecoveryPlanSecurity(
@@ -2120,7 +3083,7 @@ func (recorder *managedRecoveryDeliveryLifecycleRecorder) RevokeRecoveryResultGr
 	reason string,
 	_ time.Time,
 ) error {
-	if reason != content.RecoveryResultCleanupReason {
+	if reason != "shutdown" {
 		return errors.New("unexpected Recovery delivery revocation reason")
 	}
 	recorder.mu.Lock()

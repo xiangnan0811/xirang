@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -52,7 +54,7 @@ func TestRecoveryEligibilityTargetDraftPreflightDoesNotRequirePersistedPreflight
 	}
 	plan := model.BackupAssetRecoveryPlan{
 		ID: planID, BindingDigest: strings.Repeat("a", 64), TransitionRevision: 1,
-		TargetNodeID: 41, TargetRootID: "root-a", EncryptedTargetRootLocator: rootLocator,
+		TargetMode: string(TargetModeInPlace), TargetNodeID: 41, TargetRootID: "root-a", EncryptedTargetRootLocator: rootLocator,
 		EncryptedTargetRelativePath: relativeLocator, RootLocatorDigest: rootDigest, PathDigest: pathDigest,
 		TargetBaseRevision: "node-v1", CredentialScopeRevision: "credential-v1",
 		RootRevision: "sftpr1:root-v1", FilesystemRevision: "sftpf1:filesystem-v1",
@@ -64,7 +66,7 @@ func TestRecoveryEligibilityTargetDraftPreflightDoesNotRequirePersistedPreflight
 	request := RecoveryEligibilityTargetObservationRequest{
 		Binding: RecoveryAuthorityBinding{
 			PlanID: planID, PlanBindingDigest: plan.BindingDigest, PlanTransitionRevision: 1,
-			TargetNodeID: 41, TargetRootID: "root-a", RootLocatorDigest: rootDigest, PathDigest: pathDigest,
+			TargetMode: TargetModeInPlace, TargetNodeID: 41, TargetRootID: "root-a", RootLocatorDigest: rootDigest, PathDigest: pathDigest,
 			TargetBaseRevision: "node-v1", CredentialScopeRevision: "credential-v1",
 			RootRevision: plan.RootRevision, FilesystemRevision: plan.FilesystemRevision,
 			PreflightID: planID, PreflightRevision: plan.PreflightRevision,
@@ -86,6 +88,13 @@ func TestRecoveryEligibilityTargetDraftPreflightDoesNotRequirePersistedPreflight
 	if snapshot.privateRelativeLocator != relativeLocator || !snapshot.expiresAt.Equal(plan.PreflightExpiresAt) {
 		t.Fatalf("draft target snapshot=%#v", snapshot)
 	}
+	request.Binding.TargetMode = TargetModeIsolated
+	if _, err := (&recoveryEligibilityTargetGORMPlanSource{db: db}).ResolveRecoveryEligibilityTargetPlan(
+		context.Background(), request,
+	); !errors.Is(err, ErrRecoveryTargetChanged) {
+		t.Fatalf("substituted target mode error=%v, want changed", err)
+	}
+	request.Binding.TargetMode = TargetModeInPlace
 	request.Binding.draftPreflight = false
 	if _, err := (&recoveryEligibilityTargetGORMPlanSource{db: db}).ResolveRecoveryEligibilityTargetPlan(
 		context.Background(), request,
@@ -199,8 +208,27 @@ func TestRecoveryPlanTargetEnumerationIsBoundedReadOnlyAndCompleteForEveryMode(t
 		wantWrite  int64
 		wantSkip   int64
 		wantDelete int64
+		mutate     func(*recoveryEligibilityTargetSFTPFake)
 	}{
 		{name: "isolated", mode: TargetModeIsolated, policy: ConflictFailOnConflict, wantCreate: 1},
+		{name: "isolated unrelated symlink parent", mode: TargetModeIsolated, policy: ConflictFailOnConflict, wantCreate: 1,
+			mutate: func(client *recoveryEligibilityTargetSFTPFake) {
+				client.infos[root+"/docs"] = recoveryEligibilityTargetFileInfo{name: "docs", mode: os.ModeSymlink | 0o777}
+			}},
+		{name: "isolated unrelated non-directory parent", mode: TargetModeIsolated, policy: ConflictFailOnConflict, wantCreate: 1,
+			mutate: func(client *recoveryEligibilityTargetSFTPFake) {
+				client.infos[root+"/docs"] = fileInfo.withName("docs")
+			}},
+		{name: "isolated unrelated missing parent", mode: TargetModeIsolated, policy: ConflictFailOnConflict, wantCreate: 1,
+			mutate: func(client *recoveryEligibilityTargetSFTPFake) { delete(client.infos, root+"/docs") }},
+		{name: "isolated unrelated symlink leaf", mode: TargetModeIsolated, policy: ConflictFailOnConflict, wantCreate: 1,
+			mutate: func(client *recoveryEligibilityTargetSFTPFake) {
+				client.infos[root+"/docs/report.txt"] = recoveryEligibilityTargetFileInfo{name: "report.txt", mode: os.ModeSymlink | 0o777}
+			}},
+		{name: "isolated unrelated leaf metadata", mode: TargetModeIsolated, policy: ConflictFailOnConflict, wantCreate: 1,
+			mutate: func(client *recoveryEligibilityTargetSFTPFake) {
+				client.infos[root+"/docs/report.txt"] = recoveryEligibilityTargetFileInfo{name: "report.txt", mode: 0o777, size: 999, modTime: now.Add(time.Second)}
+			}},
 		{name: "in place overwrite", mode: TargetModeInPlace, policy: ConflictOverwriteSelected, wantWrite: 1},
 		{name: "in place skip", mode: TargetModeInPlace, policy: ConflictSkipExisting, wantSkip: 1},
 		{name: "exact mirror", mode: TargetModeInPlace, policy: ConflictExactMirror, wantWrite: 1, wantDelete: 1},
@@ -214,6 +242,9 @@ func TestRecoveryPlanTargetEnumerationIsBoundedReadOnlyAndCompleteForEveryMode(t
 					root + "/obsolete.txt": fileInfo.withName("obsolete.txt"),
 				},
 				realPaths: map[string]string{}, vfs: vfs,
+			}
+			if testCase.mutate != nil {
+				testCase.mutate(base)
 			}
 			for value := range base.infos {
 				base.realPaths[value] = value
@@ -248,6 +279,16 @@ func TestRecoveryPlanTargetEnumerationIsBoundedReadOnlyAndCompleteForEveryMode(t
 				result.Target.Mode != testCase.mode || result.Target.RootLocatorDigest != rootDigest ||
 				sessions.calls != 1 || reader.readDirCalls > 4 || reader.openCalls > 4 {
 				t.Fatalf("enumeration=%#v calls session/read/open=%d/%d/%d", result, sessions.calls, reader.readDirCalls, reader.openCalls)
+			}
+			if testCase.mode == TargetModeIsolated {
+				if result.TargetRevision != result.Target.RootRevision || reader.openCalls != 0 || reader.readDirCalls != 0 {
+					t.Fatalf("isolated enumeration inspected target contents or lost root identity: %#v", result)
+				}
+				for _, observedPath := range base.lstatPaths {
+					if strings.HasPrefix(observedPath, root+"/") {
+						t.Fatalf("isolated enumeration inspected unrelated lexical path %q", observedPath)
+					}
+				}
 			}
 			if testCase.policy == ConflictExactMirror {
 				observation, observationErr := recoveryDeleteEntryMetadata(fileInfo.withName("obsolete.txt"))
@@ -491,7 +532,7 @@ func TestRecoveryEligibilityTargetObservationRequiresStrictStableReadOnlyEvidenc
 	}
 	binding := RecoveryAuthorityBinding{
 		PlanID: "plan-target-observation", PlanBindingDigest: strings.Repeat("d", 64), PlanTransitionRevision: 3,
-		TargetNodeID: 71, TargetRootID: "root-c", RootLocatorDigest: rootDigest, PathDigest: pathDigest,
+		TargetMode: TargetModeInPlace, TargetNodeID: 71, TargetRootID: "root-c", RootLocatorDigest: rootDigest, PathDigest: pathDigest,
 		PreflightNodeRevision: "node-v1", CredentialScopeRevision: "credential-v1",
 		RootRevision: rootRevision, FilesystemRevision: filesystemRevision,
 		PreflightTargetRevision: targetRevision, RequiredBytes: 100, RequiredInodes: 1,
@@ -521,6 +562,485 @@ func TestRecoveryEligibilityTargetObservationRequiresStrictStableReadOnlyEvidenc
 	if client.closeCalls != 1 || opener.calls != 1 || client.lstatCalls == 0 || client.realPathCalls == 0 || client.statVFSCalls == 0 {
 		t.Fatalf("target observation resource/access counts: opener=%d close=%d lstat=%d realpath=%d statvfs=%d",
 			opener.calls, client.closeCalls, client.lstatCalls, client.realPathCalls, client.statVFSCalls)
+	}
+}
+
+type recoveryTargetContentReadCloserForTest struct {
+	reader     io.Reader
+	closeErr   error
+	onClose    func()
+	bytesRead  int64
+	closeCalls int
+}
+
+func (reader *recoveryTargetContentReadCloserForTest) Read(value []byte) (int, error) {
+	n, err := reader.reader.Read(value)
+	reader.bytesRead += int64(n)
+	return n, err
+}
+
+func (reader *recoveryTargetContentReadCloserForTest) Close() error {
+	reader.closeCalls++
+	if reader.onClose != nil {
+		reader.onClose()
+	}
+	return reader.closeErr
+}
+
+type recoveryTargetFailedReaderForTest struct{}
+
+func (recoveryTargetFailedReaderForTest) Read([]byte) (int, error) {
+	return 0, errors.New("target read failed")
+}
+
+type recoveryTargetBytesWithErrorReaderForTest struct{ value []byte }
+
+func (reader *recoveryTargetBytesWithErrorReaderForTest) Read(value []byte) (int, error) {
+	if len(reader.value) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(value, reader.value)
+	reader.value = reader.value[n:]
+	if len(reader.value) == 0 {
+		return n, errors.New("target terminal read failed")
+	}
+	return n, nil
+}
+
+type recoveryTargetEOFWithBytesReaderForTest struct{ value []byte }
+
+func (reader *recoveryTargetEOFWithBytesReaderForTest) Read(value []byte) (int, error) {
+	n := copy(value, reader.value)
+	reader.value = reader.value[n:]
+	if len(reader.value) == 0 {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+type recoveryTargetNoProgressAtEndForTest struct{ value *strings.Reader }
+
+func (reader recoveryTargetNoProgressAtEndForTest) Read(value []byte) (int, error) {
+	if reader.value.Len() == 0 {
+		return 0, nil
+	}
+	return reader.value.Read(value)
+}
+
+type recoveryTargetNoOwnerInfoForTest struct{ os.FileInfo }
+
+func (recoveryTargetNoOwnerInfoForTest) Sys() any { return nil }
+
+type recoveryTargetContentFixtureForTest struct {
+	root     string
+	parent   string
+	leaf     string
+	request  RecoveryEligibilityTargetObservationRequest
+	client   *recoveryEligibilityTargetSFTPFake
+	reader   *recoveryPlanTargetReaderFake
+	handle   *recoveryTargetContentReadCloserForTest
+	observer *recoveryEligibilityTargetObserver
+}
+
+func newRecoveryTargetContentFixtureForTest(t *testing.T, payload string) *recoveryTargetContentFixtureForTest {
+	t.Helper()
+	now := time.Date(2026, 8, 15, 11, 0, 0, 0, time.UTC)
+	root, relative := "/srv/recovery", "docs/item.bin"
+	parent, leaf := path.Join(root, "docs"), path.Join(root, relative)
+	rootInfo := recoveryEligibilityTargetFileInfo{name: "recovery", mode: os.ModeDir | 0o750, uid: 1000, gid: 1000, modTime: now}
+	fileInfo := recoveryEligibilityTargetFileInfo{name: "item.bin", mode: 0o640, uid: 1001, gid: 1000, size: int64(len(payload)), modTime: now}
+	vfs := &sftp.StatVFS{Fsid: 17, Bsize: 4096, Frsize: 4096, Blocks: 2000, Bavail: 1000, Files: 500, Favail: 300, Namemax: 255}
+	request := recoveryEligibilityTargetObservationRequestForFailureTest(t, now, 81, root, relative)
+	rootRevision, err := recoverySFTPRootObservationRevision(recoveryTargetPreflightSessionBinding{
+		nodeID: request.TargetRoot.NodeID, rootID: request.TargetRoot.RootID,
+		rootLocator: root, rootLocatorDigest: request.TargetRoot.LocatorDigest,
+	}, rootInfo.Mode(), rootInfo.uid, rootInfo.gid, vfs.Fsid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filesystemRevision, err := recoverySFTPFilesystemObservationRevision(vfs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldTargetRevision, err := recoverySFTPTargetAbsentRevision(rootRevision, relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(payload))
+	request.Binding.RootRevision = rootRevision
+	request.Binding.FilesystemRevision = filesystemRevision
+	request.Binding.PreflightTargetRevision = oldTargetRevision
+	request.TargetRoot.RootObservationRevision = rootRevision
+	request.Binding.targetExpectation = recoveryAuthorityTargetExpectation{
+		phase: recoveryAuthorityTargetCheckpointed, jobID: strings.Repeat("1", 32), jobTransitionRevision: 2,
+		chainRevision: "chain-v1", historyDigest: strings.Repeat("a", 64), workerID: "worker-1",
+		attemptID: strings.Repeat("2", 32), attemptFence: 1, nodeLeaseID: strings.Repeat("3", 32), nodeFence: 1,
+		sourceLeaseID: strings.Repeat("4", 32), sourceFenceDigest: strings.Repeat("b", 64),
+		anchorItemID: strings.Repeat("5", 32), anchorOperationDigest: strings.Repeat("c", 64),
+		anchorCheckpointID: strings.Repeat("6", 32), expectedDigest: hex.EncodeToString(digest[:]), expectedBytes: int64(len(payload)),
+	}
+	client := &recoveryEligibilityTargetSFTPFake{
+		infos: map[string]os.FileInfo{
+			"/": rootInfo.withName("/"), "/srv": rootInfo.withName("srv"), root: rootInfo,
+			parent: rootInfo.withName("docs"), leaf: fileInfo,
+		},
+		realPaths: map[string]string{"/": "/", "/srv": "/srv", root: root, parent: parent, leaf: leaf},
+		vfs:       vfs, vfsByPath: map[string]*sftp.StatVFS{},
+	}
+	handle := &recoveryTargetContentReadCloserForTest{reader: strings.NewReader(payload)}
+	reader := &recoveryPlanTargetReaderFake{openRead: func(value string) (io.ReadCloser, error) {
+		if value != leaf {
+			t.Fatalf("opened unexpected target %q", value)
+		}
+		return handle, nil
+	}}
+	proof := issueRecoverySourceHostIdentityProof(recoverySourceHostIdentityStrictKnown, "SHA256:strict-target", "known-host-entry")
+	identity, ok := recoverySourceAuthenticatedNodeIdentity(proof, 81, "target.invalid:22")
+	if !ok {
+		t.Fatal("construct strict target host identity")
+	}
+	session := &recoveryEligibilityTargetSession{
+		nodeID: 81, nodeRevision: "node-v1", credentialRevision: "credential-v1",
+		registeredNodeEndpoint: "target.invalid:22", authenticatedNodeIdentity: identity,
+		hostIdentityProof: proof, sftp: client, planReader: reader,
+	}
+	observer := newRecoveryEligibilityTargetObserverForTest(recoveryEligibilityTargetObserverDependencies{
+		Now: func() time.Time { return now },
+		Plans: &recoveryEligibilityTargetPlanSourceFake{snapshot: recoveryEligibilityTargetPlanSnapshot{
+			privateRelativeLocator: relative, expiresAt: now.Add(time.Minute),
+		}},
+		Sessions: &recoveryEligibilityTargetSessionOpenerFake{session: session},
+	})
+	return &recoveryTargetContentFixtureForTest{
+		root: root, parent: parent, leaf: leaf, request: request, client: client, reader: reader,
+		handle: handle, observer: observer,
+	}
+}
+
+func TestRecoveryEligibilityTargetCurrentAnchorContentProof(t *testing.T) {
+	tests := []struct {
+		name      string
+		empty     bool
+		wantError bool
+		wantOpen  int
+		mutate    func(*recoveryTargetContentFixtureForTest)
+	}{
+		{name: "checkpointed content", wantOpen: 1},
+		{name: "empty content", empty: true, wantOpen: 1},
+		{name: "bytes with EOF", wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.reader = &recoveryTargetEOFWithBytesReaderForTest{value: []byte("restored")}
+		}},
+		{name: "current post", wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			expectation := &f.request.Binding.targetExpectation
+			expectation.phase, expectation.anchorCheckpointID = recoveryAuthorityTargetCurrentPost, ""
+			expectation.currentItemID, expectation.currentOperationDigest = expectation.anchorItemID, expectation.anchorOperationDigest
+		}},
+		{name: "same-size different content", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.reader = strings.NewReader("RESTORED")
+		}},
+		{name: "short stream", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.reader = strings.NewReader("short")
+		}},
+		{name: "long stream", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.reader = strings.NewReader("restored-extra")
+		}},
+		{name: "nonterminal extra probe", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.reader = recoveryTargetNoProgressAtEndForTest{value: strings.NewReader("restored")}
+		}},
+		{name: "metadata exceeds frozen size", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			info := f.client.infos[f.leaf].(recoveryEligibilityTargetFileInfo)
+			info.size++
+			f.client.infos[f.leaf] = info
+		}},
+		{name: "maximum size cannot overflow", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			info := f.client.infos[f.leaf].(recoveryEligibilityTargetFileInfo)
+			info.size = math.MaxInt64
+			f.client.infos[f.leaf] = info
+			f.request.Binding.targetExpectation.expectedBytes = math.MaxInt64
+		}},
+		{name: "failed open closes returned handle", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.reader.openRead = func(string) (io.ReadCloser, error) { return f.handle, errors.New("open failed") }
+		}},
+		{name: "read failure", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.reader = recoveryTargetFailedReaderForTest{}
+		}},
+		{name: "exact bytes with read failure", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.reader = &recoveryTargetBytesWithErrorReaderForTest{value: []byte("restored")}
+		}},
+		{name: "close failure", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.closeErr = errors.New("target close failed")
+		}},
+		{name: "session close failure", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.closeErr = errors.New("target session close failed")
+		}},
+		{name: "missing parent", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) { delete(f.client.infos, f.parent) }},
+		{name: "missing leaf", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) { delete(f.client.infos, f.leaf) }},
+		{name: "symlink parent", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.infos[f.parent] = recoveryEligibilityTargetFileInfo{name: "docs", mode: os.ModeSymlink | 0o777}
+		}},
+		{name: "aliased parent", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.realPaths[f.parent] = f.parent + "-alias"
+		}},
+		{name: "unsafe parent mode", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			info := f.client.infos[f.parent].(recoveryEligibilityTargetFileInfo)
+			info.mode |= 0o002
+			f.client.infos[f.parent] = info
+		}},
+		{name: "parent owner unavailable", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.infos[f.parent] = recoveryTargetNoOwnerInfoForTest{f.client.infos[f.parent]}
+		}},
+		{name: "symlink leaf", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.infos[f.leaf] = recoveryEligibilityTargetFileInfo{name: "item.bin", mode: os.ModeSymlink | 0o777}
+		}},
+		{name: "aliased leaf", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.realPaths[f.leaf] = f.leaf + "-alias"
+		}},
+		{name: "directory leaf", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			info := f.client.infos[f.leaf].(recoveryEligibilityTargetFileInfo)
+			info.mode = os.ModeDir | 0o750
+			f.client.infos[f.leaf] = info
+		}},
+		{name: "unsafe leaf mode", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			info := f.client.infos[f.leaf].(recoveryEligibilityTargetFileInfo)
+			info.mode |= 0o002
+			f.client.infos[f.leaf] = info
+		}},
+		{name: "different filesystem", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			other := *f.client.vfs
+			other.Fsid++
+			f.client.vfsByPath[f.parent] = &other
+		}},
+		{name: "frozen root changed", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.request.Binding.RootRevision = "different-root-revision"
+		}},
+		{name: "leaf owner changes during read", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.onClose = func() {
+				info := f.client.infos[f.leaf].(recoveryEligibilityTargetFileInfo)
+				info.uid++
+				f.client.infos[f.leaf] = info
+			}
+		}},
+		{name: "leaf nanosecond metadata drift", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.onClose = func() {
+				info := f.client.infos[f.leaf].(recoveryEligibilityTargetFileInfo)
+				info.modTime = info.modTime.Add(time.Nanosecond)
+				f.client.infos[f.leaf] = info
+			}
+		}},
+		{name: "leaf mode changes during read", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.onClose = func() {
+				info := f.client.infos[f.leaf].(recoveryEligibilityTargetFileInfo)
+				info.mode = 0o600
+				f.client.infos[f.leaf] = info
+			}
+		}},
+		{name: "leaf becomes symlink during read", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.onClose = func() {
+				f.client.infos[f.leaf] = recoveryEligibilityTargetFileInfo{name: "item.bin", mode: os.ModeSymlink | 0o777}
+			}
+		}},
+		{name: "parent owner changes during read", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.onClose = func() {
+				info := f.client.infos[f.parent].(recoveryEligibilityTargetFileInfo)
+				info.uid++
+				f.client.infos[f.parent] = info
+			}
+		}},
+		{name: "parent mode changes during read", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.onClose = func() {
+				info := f.client.infos[f.parent].(recoveryEligibilityTargetFileInfo)
+				info.mode = os.ModeDir | 0o700
+				f.client.infos[f.parent] = info
+			}
+		}},
+		{name: "parent becomes symlink during read", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.onClose = func() {
+				f.client.infos[f.parent] = recoveryEligibilityTargetFileInfo{name: "docs", mode: os.ModeSymlink | 0o777}
+			}
+		}},
+		{name: "parent filesystem changes during read", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.onClose = func() {
+				other := *f.client.vfs
+				other.Fsid++
+				f.client.vfsByPath[f.parent] = &other
+			}
+		}},
+		{name: "root owner changes during read", wantError: true, wantOpen: 1, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.handle.onClose = func() {
+				info := f.client.infos[f.root].(recoveryEligibilityTargetFileInfo)
+				info.uid++
+				f.client.infos[f.root] = info
+			}
+		}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload := "restored"
+			if testCase.empty {
+				payload = ""
+			}
+			fixture := newRecoveryTargetContentFixtureForTest(t, payload)
+			if testCase.mutate != nil {
+				testCase.mutate(fixture)
+			}
+			observed, err := fixture.observer.ObserveRecoveryEligibilityTarget(context.Background(), fixture.request)
+			if testCase.wantError {
+				if err == nil || observed != (RecoveryEligibilityTargetObservation{}) {
+					t.Fatalf("unsafe observation=%#v error=%v", observed, err)
+				}
+			} else if err != nil || !observed.targetContentVerified ||
+				observed.verifiedTargetDigest != fixture.request.Binding.targetExpectation.expectedDigest ||
+				observed.verifiedTargetBytes != int64(len(payload)) ||
+				observed.TargetRevision == fixture.request.Binding.PreflightTargetRevision {
+				t.Fatalf("verified observation=%#v error=%v", observed, err)
+			}
+			if !testCase.wantError {
+				wantRevision, revisionErr := recoverySFTPTargetPresentRevision(fixture.request.Binding.RootRevision,
+					"docs/item.bin", fixture.client.infos[fixture.leaf])
+				if revisionErr != nil || observed.TargetRevision != wantRevision || fixture.handle.bytesRead != int64(len(payload)) ||
+					!validRecoveryEligibilityTarget(fixture.request.Binding, fixture.request.TargetRoot, observed, observed.ObservedAt) {
+					t.Fatalf("verified current revision=%q want=%q bytes=%d error=%v", observed.TargetRevision,
+						wantRevision, fixture.handle.bytesRead, revisionErr)
+				}
+			}
+			if fixture.reader.openCalls != testCase.wantOpen || fixture.handle.closeCalls != testCase.wantOpen ||
+				fixture.client.closeCalls != 1 || fixture.handle.bytesRead > int64(len(payload))+1 {
+				t.Fatalf("open/close/session close/bytes=%d/%d/%d/%d", fixture.reader.openCalls,
+					fixture.handle.closeCalls, fixture.client.closeCalls, fixture.handle.bytesRead)
+			}
+		})
+	}
+}
+
+func TestRecoveryEligibilityTargetCurrentAnchorCancellation(t *testing.T) {
+	fixture := newRecoveryTargetContentFixtureForTest(t, "restored")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fixture.handle.onClose = cancel
+	observed, err := fixture.observer.ObserveRecoveryEligibilityTarget(ctx, fixture.request)
+	if !errors.Is(err, context.Canceled) || observed != (RecoveryEligibilityTargetObservation{}) {
+		t.Fatalf("canceled observation=%#v error=%v", observed, err)
+	}
+	if fixture.reader.openCalls != 1 || fixture.handle.closeCalls != 1 || fixture.client.closeCalls != 1 {
+		t.Fatalf("canceled read resource counts=%d/%d/%d", fixture.reader.openCalls,
+			fixture.handle.closeCalls, fixture.client.closeCalls)
+	}
+}
+
+func TestRecoveryEligibilityTargetUnchangedAnchorUsesFrozenMetadata(t *testing.T) {
+	for _, phase := range []recoveryAuthorityTargetPhase{
+		recoveryAuthorityTargetFreshFirstWrite, recoveryAuthorityTargetCheckpointed,
+	} {
+		for _, matches := range []bool{true, false} {
+			t.Run(fmt.Sprintf("phase-%d-matches-%t", phase, matches), func(t *testing.T) {
+				fixture := newRecoveryTargetContentFixtureForTest(t, "restored")
+				expectation := &fixture.request.Binding.targetExpectation
+				expectation.phase, expectation.anchorCheckpointID = phase, ""
+				expectation.expectedDigest, expectation.expectedBytes = "", 0
+				if matches {
+					revision, err := recoverySFTPTargetPresentRevision(fixture.request.Binding.RootRevision,
+						"docs/item.bin", fixture.client.infos[fixture.leaf])
+					if err != nil {
+						t.Fatal(err)
+					}
+					fixture.request.Binding.PreflightTargetRevision = revision
+				}
+				observed, err := fixture.observer.ObserveRecoveryEligibilityTarget(context.Background(), fixture.request)
+				if matches {
+					if err != nil || observed.TargetRevision != fixture.request.Binding.PreflightTargetRevision ||
+						observed.targetContentVerified || observed.verifiedTargetDigest != "" || observed.verifiedTargetBytes != 0 {
+						t.Fatalf("frozen observation=%#v error=%v", observed, err)
+					}
+				} else if !errors.Is(err, ErrRecoveryTargetChanged) || observed != (RecoveryEligibilityTargetObservation{}) {
+					t.Fatalf("changed frozen target observation=%#v error=%v", observed, err)
+				}
+				if fixture.reader.openCalls != 0 || fixture.handle.closeCalls != 0 || fixture.client.closeCalls != 1 {
+					t.Fatalf("frozen observation read content or leaked session: opens=%d closes=%d session=%d",
+						fixture.reader.openCalls, fixture.handle.closeCalls, fixture.client.closeCalls)
+				}
+			})
+		}
+	}
+}
+
+func TestRecoveryEligibilityTargetIsolatedIgnoresLexicalPaths(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		mutate    func(*recoveryTargetContentFixtureForTest)
+		wantError bool
+	}{
+		{name: "unrelated regular file"},
+		{name: "unrelated symlink parent", mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.infos[f.parent] = recoveryEligibilityTargetFileInfo{name: "docs", mode: os.ModeSymlink | 0o777}
+		}},
+		{name: "unrelated missing parent", mutate: func(f *recoveryTargetContentFixtureForTest) { delete(f.client.infos, f.parent) }},
+		{name: "unrelated non-directory parent", mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.infos[f.parent] = recoveryEligibilityTargetFileInfo{name: "docs", mode: 0o600}
+		}},
+		{name: "unrelated symlink leaf", mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.infos[f.leaf] = recoveryEligibilityTargetFileInfo{name: "item.bin", mode: os.ModeSymlink | 0o777}
+		}},
+		{name: "unsafe root", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			info := f.client.infos[f.root].(recoveryEligibilityTargetFileInfo)
+			info.mode |= 0o002
+			f.client.infos[f.root] = info
+		}},
+		{name: "root symlink", wantError: true, mutate: func(f *recoveryTargetContentFixtureForTest) {
+			f.client.infos[f.root] = recoveryEligibilityTargetFileInfo{name: "recovery", mode: os.ModeSymlink | 0o777}
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newRecoveryTargetContentFixtureForTest(t, "restored")
+			fixture.request.Binding.TargetMode = TargetModeIsolated
+			fixture.request.Binding.targetExpectation = recoveryAuthorityTargetExpectation{}
+			fixture.request.Binding.PreflightTargetRevision = fixture.request.Binding.RootRevision
+			if testCase.mutate != nil {
+				testCase.mutate(fixture)
+			}
+			observed, err := fixture.observer.ObserveRecoveryEligibilityTarget(context.Background(), fixture.request)
+			if testCase.wantError {
+				if err == nil || observed != (RecoveryEligibilityTargetObservation{}) {
+					t.Fatalf("unsafe isolated root observation=%#v error=%v", observed, err)
+				}
+			} else if err != nil || observed.TargetRevision != observed.RootRevision ||
+				observed.targetContentVerified || observed.verifiedTargetDigest != "" || observed.verifiedTargetBytes != 0 {
+				t.Fatalf("isolated observation=%#v error=%v", observed, err)
+			}
+			if fixture.reader.openCalls != 0 || fixture.client.closeCalls != 1 {
+				t.Fatalf("isolated observation read content or leaked session: opens=%d session=%d",
+					fixture.reader.openCalls, fixture.client.closeCalls)
+			}
+			for _, value := range fixture.client.lstatPaths {
+				if strings.HasPrefix(value, fixture.root+"/") {
+					t.Fatalf("isolated observation inspected unrelated lexical path %q", value)
+				}
+			}
+		})
+	}
+}
+
+func TestRecoveryEligibilityTargetRejectsInvalidModeAndExpectationBeforeDial(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*RecoveryAuthorityBinding)
+	}{
+		{name: "missing mode", mutate: func(binding *RecoveryAuthorityBinding) { binding.TargetMode = "" }},
+		{name: "unknown mode", mutate: func(binding *RecoveryAuthorityBinding) { binding.TargetMode = "other" }},
+		{name: "isolated content expectation", mutate: func(binding *RecoveryAuthorityBinding) { binding.TargetMode = TargetModeIsolated }},
+		{name: "invalid current post", mutate: func(binding *RecoveryAuthorityBinding) {
+			binding.targetExpectation.phase = recoveryAuthorityTargetCurrentPost
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newRecoveryTargetContentFixtureForTest(t, "restored")
+			testCase.mutate(&fixture.request.Binding)
+			observed, err := fixture.observer.ObserveRecoveryEligibilityTarget(context.Background(), fixture.request)
+			if !errors.Is(err, ErrRecoveryTargetUnavailable) || observed != (RecoveryEligibilityTargetObservation{}) ||
+				fixture.client.lstatCalls != 0 || fixture.client.closeCalls != 0 || fixture.reader.openCalls != 0 {
+				t.Fatalf("invalid target observation=%#v error=%v lstat/close/open=%d/%d/%d", observed, err,
+					fixture.client.lstatCalls, fixture.client.closeCalls, fixture.reader.openCalls)
+			}
+		})
 	}
 }
 
@@ -588,7 +1108,7 @@ func TestRecoveryEligibilityTargetObservationClosesOverlapAndSymlinkFacts(t *tes
 	}
 	request := RecoveryEligibilityTargetObservationRequest{
 		Binding: RecoveryAuthorityBinding{
-			TargetNodeID: 91, TargetRootID: rootID, RootLocatorDigest: rootDigest, PathDigest: pathDigest,
+			TargetMode: TargetModeInPlace, TargetNodeID: 91, TargetRootID: rootID, RootLocatorDigest: rootDigest, PathDigest: pathDigest,
 		},
 		TargetRoot: RecoveryEligibilityTargetRootSnapshot{
 			NodeID: 91, RootID: rootID, Locator: root, LocatorDigest: rootDigest,
@@ -705,7 +1225,7 @@ func recoveryEligibilityTargetObservationRequestForFailureTest(
 	return RecoveryEligibilityTargetObservationRequest{
 		Binding: RecoveryAuthorityBinding{
 			PlanID: "plan-target-failure", PlanBindingDigest: strings.Repeat("e", 64), PlanTransitionRevision: 1,
-			TargetNodeID: nodeID, TargetRootID: rootID, RootLocatorDigest: rootDigest, PathDigest: pathDigest,
+			TargetMode: TargetModeInPlace, TargetNodeID: nodeID, TargetRootID: rootID, RootLocatorDigest: rootDigest, PathDigest: pathDigest,
 			PreflightNodeRevision: "node-v1", CredentialScopeRevision: "credential-v1",
 			RootRevision: "root-v1", FilesystemRevision: "filesystem-v1", PreflightTargetRevision: "target-v1",
 		},
@@ -743,18 +1263,22 @@ func (info recoveryEligibilityTargetFileInfo) withName(name string) recoveryElig
 
 type recoveryEligibilityTargetSFTPFake struct {
 	infos         map[string]os.FileInfo
+	lstatPaths    []string
+	vfsByPath     map[string]*sftp.StatVFS
 	realPaths     map[string]string
 	vfs           *sftp.StatVFS
 	lstatCalls    int
 	realPathCalls int
 	statVFSCalls  int
 	closeCalls    int
+	closeErr      error
 }
 
 type recoveryPlanTargetReaderFake struct {
 	directories  map[string][]os.FileInfo
 	files        map[string]string
 	links        map[string]string
+	openRead     func(string) (io.ReadCloser, error)
 	readDirCalls int
 	openCalls    int
 }
@@ -791,6 +1315,9 @@ func (fake *recoveryPlanTargetReaderFake) ReadDir(ctx context.Context, value str
 
 func (fake *recoveryPlanTargetReaderFake) OpenRead(value string) (io.ReadCloser, error) {
 	fake.openCalls++
+	if fake.openRead != nil {
+		return fake.openRead(value)
+	}
 	contents, ok := fake.files[value]
 	if !ok {
 		return nil, fs.ErrNotExist
@@ -808,6 +1335,7 @@ func (fake *recoveryPlanTargetReaderFake) ReadLink(value string) (string, error)
 
 func (fake *recoveryEligibilityTargetSFTPFake) Lstat(value string) (os.FileInfo, error) {
 	fake.lstatCalls++
+	fake.lstatPaths = append(fake.lstatPaths, value)
 	info, ok := fake.infos[value]
 	if !ok {
 		return nil, fs.ErrNotExist
@@ -824,8 +1352,12 @@ func (fake *recoveryEligibilityTargetSFTPFake) RealPath(value string) (string, e
 	return resolved, nil
 }
 
-func (fake *recoveryEligibilityTargetSFTPFake) StatVFS(string) (*sftp.StatVFS, error) {
+func (fake *recoveryEligibilityTargetSFTPFake) StatVFS(value string) (*sftp.StatVFS, error) {
 	fake.statVFSCalls++
+	if vfs, ok := fake.vfsByPath[value]; ok {
+		copy := *vfs
+		return &copy, nil
+	}
 	if fake.vfs == nil {
 		return nil, errors.New("statvfs unavailable")
 	}
@@ -835,7 +1367,7 @@ func (fake *recoveryEligibilityTargetSFTPFake) StatVFS(string) (*sftp.StatVFS, e
 
 func (fake *recoveryEligibilityTargetSFTPFake) Close() error {
 	fake.closeCalls++
-	return nil
+	return fake.closeErr
 }
 
 type recoveryEligibilityTargetSessionOpenerFake struct {

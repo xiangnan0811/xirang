@@ -1,0 +1,137 @@
+--- package/XIRANG-MODIFICATIONS.txt
++++ package/XIRANG-MODIFICATIONS.txt
+@@ -0,0 +1,19 @@
++Xirang local dependency modification, revision 1
++Advisory: GHSA-g3hv-75wg-m249
++Upstream package: @eslint/config-array@0.21.2
++Upstream URL: https://registry.npmjs.org/@eslint/config-array/-/config-array-0.21.2.tgz
++Upstream integrity: sha512-nJl2KGTlrf9GjLimgIru+V/mzgSK0ABCDQRvxw5BjURL7WfH5uoWmizbH7QB6MmnMBd8cIC9uceWnezL1VZWWw==
++Upstream license: Apache-2.0 (original license and notice files retained)
++Source inventory and requester list: web/dependency-patches/sources.json
++Modified or added files relative to the package root:
++  XIRANG-MODIFICATIONS.txt
++  dist/cjs/index.cjs
++  dist/cjs/index.d.cts
++  dist/esm/index.d.ts
++  dist/esm/index.js
++  package.json
++
++The declared minimatch dependency is 11.0.1. Changed imports and types use
++its public API and types; matching follows minimatch 11.0.1 semantics.
++Older minimatch APIs and matching behavior are not emulated. Compatibility
++is assessed against this repository's actual consumers and configurations.
+--- package/dist/cjs/index.cjs
++++ package/dist/cjs/index.cjs
+@@ -1,3 +1,4 @@
++/* Xirang local modification: minimatch 11.0.1 migration; see XIRANG-MODIFICATIONS.txt. */
+ 'use strict';
+
+ var posixPath = require('./std__path/posix.cjs');
+@@ -203,9 +204,8 @@
+
+ /** @import * as $typests from "./types.ts"; */
+ /** @typedef {$typests.ConfigObject} ConfigObject */
+-/** @import * as $minimatch from "minimatch"; */
+-/** @typedef {$minimatch.IMinimatchStatic} IMinimatchStatic */
+-/** @typedef {$minimatch.IMinimatch} IMinimatch */
++/** @typedef {typeof import("minimatch").Minimatch} IMinimatchStatic */
++/** @typedef {import("minimatch").Minimatch} IMinimatch */
+ /** @import * as PathImpl from "@jsr/std__path" */
+
+ /*
+--- package/dist/cjs/index.d.cts
++++ package/dist/cjs/index.d.cts
+@@ -1,9 +1,10 @@
++/* Xirang local modification: minimatch 11.0.1 migration; see XIRANG-MODIFICATIONS.txt. */
+ export { ObjectSchema } from "@eslint/object-schema";
+ export type PropertyDefinition = $eslintobjectschema.PropertyDefinition;
+ export type ObjectDefinition = $eslintobjectschema.ObjectDefinition;
+ export type ConfigObject = $typests.ConfigObject;
+-export type IMinimatchStatic = minimatch.IMinimatchStatic;
+-export type IMinimatch = minimatch.IMinimatch;
++export type IMinimatchStatic = typeof import("minimatch").Minimatch;
++export type IMinimatch = import("minimatch").Minimatch;
+ export type ObjectSchemaInstance = ObjectSchema;
+ /**
+  * Represents an array of config objects and provides method for working with
+@@ -141,5 +142,4 @@
+ }
+ import type * as $eslintobjectschema from "@eslint/object-schema";
+ import type * as $typests from "./types.cts";
+-import minimatch from 'minimatch';
+ import { ObjectSchema } from '@eslint/object-schema';
+--- package/dist/esm/index.d.ts
++++ package/dist/esm/index.d.ts
+@@ -1,9 +1,10 @@
++/* Xirang local modification: minimatch 11.0.1 migration; see XIRANG-MODIFICATIONS.txt. */
+ export { ObjectSchema } from "@eslint/object-schema";
+ export type PropertyDefinition = $eslintobjectschema.PropertyDefinition;
+ export type ObjectDefinition = $eslintobjectschema.ObjectDefinition;
+ export type ConfigObject = $typests.ConfigObject;
+-export type IMinimatchStatic = minimatch.IMinimatchStatic;
+-export type IMinimatch = minimatch.IMinimatch;
++export type IMinimatchStatic = typeof import("minimatch").Minimatch;
++export type IMinimatch = import("minimatch").Minimatch;
+ export type ObjectSchemaInstance = ObjectSchema;
+ /**
+  * Represents an array of config objects and provides method for working with
+@@ -141,5 +142,4 @@
+ }
+ import type * as $eslintobjectschema from "@eslint/object-schema";
+ import type * as $typests from "./types.ts";
+-import minimatch from 'minimatch';
+ import { ObjectSchema } from '@eslint/object-schema';
+--- package/dist/esm/index.js
++++ package/dist/esm/index.js
+@@ -1,7 +1,8 @@
++/* Xirang local modification: minimatch 11.0.1 migration; see XIRANG-MODIFICATIONS.txt. */
+ // @ts-self-types="./index.d.ts"
+ import * as posixPath from './std__path/posix.js';
+ import * as windowsPath from './std__path/windows.js';
+-import minimatch from 'minimatch';
++import { Minimatch } from 'minimatch';
+ import createDebug from 'debug';
+ import { ObjectSchema } from '@eslint/object-schema';
+ export { ObjectSchema } from '@eslint/object-schema';
+@@ -183,9 +184,8 @@
+
+ /** @import * as $typests from "./types.ts"; */
+ /** @typedef {$typests.ConfigObject} ConfigObject */
+-/** @import * as $minimatch from "minimatch"; */
+-/** @typedef {$minimatch.IMinimatchStatic} IMinimatchStatic */
+-/** @typedef {$minimatch.IMinimatch} IMinimatch */
++/** @typedef {typeof import("minimatch").Minimatch} IMinimatchStatic */
++/** @typedef {import("minimatch").Minimatch} IMinimatch */
+ /** @import * as PathImpl from "@jsr/std__path" */
+
+ /*
+@@ -201,7 +201,6 @@
+ // Helpers
+ //------------------------------------------------------------------------------
+
+-const Minimatch = minimatch.Minimatch;
+ const debug = createDebug("@eslint/config-array");
+
+ /**
+--- package/package.json
++++ package/package.json
+@@ -51,7 +51,7 @@
+   "dependencies": {
+     "@eslint/object-schema": "^2.1.7",
+     "debug": "^4.3.1",
+-    "minimatch": "^3.1.5"
++    "minimatch": "11.0.1"
+   },
+   "devDependencies": {
+     "@jsr/std__path": "^1.0.4",
+@@ -60,5 +60,10 @@
+   },
+   "engines": {
+     "node": "^18.18.0 || ^20.9.0 || >=21.1.0"
++  },
++  "x-xirang-patch": {
++    "revision": 1,
++    "advisory": "GHSA-g3hv-75wg-m249",
++    "upstreamVersion": "0.21.2"
+   }
+ }

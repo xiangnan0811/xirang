@@ -152,7 +152,7 @@ func (authority *recoveryPlanTargetEnumerationAuthority) EnumerateRecoveryPlanTa
 	}
 	observationRequest := RecoveryEligibilityTargetObservationRequest{
 		Binding: RecoveryAuthorityBinding{
-			TargetNodeID: request.TargetNodeID, TargetRootID: request.TargetRootID,
+			TargetMode: request.TargetMode, TargetNodeID: request.TargetNodeID, TargetRootID: request.TargetRootID,
 			RootLocatorDigest: captured.LocatorDigest, PathDigest: pathDigest,
 			PreflightNodeRevision: captured.NodeRevision, CredentialScopeRevision: captured.CredentialRevision,
 			RequiredBytes: requiredBytes, RequiredInodes: requiredInodes,
@@ -444,25 +444,44 @@ func readRecoveryPlanTargetRegular(
 	before os.FileInfo,
 	budget *int64,
 ) (string, error) {
+	if ctx == nil || session == nil || session.sftp == nil || session.planReader == nil ||
+		before == nil || !before.Mode().IsRegular() || before.Size() < 0 || budget == nil || *budget < 0 {
+		return "", ErrRecoveryTargetUnavailable
+	}
 	if before.Size() > *budget {
 		return "", ErrRecoveryOperationLimit
 	}
+	beforeUID, beforeGID, ok := recoverySFTPFileOwner(before)
+	if !ok {
+		return "", ErrRecoveryTargetUnavailable
+	}
 	reader, err := session.planReader.OpenRead(full)
 	if err != nil || reader == nil {
+		if reader != nil {
+			_ = reader.Close()
+		}
 		return "", ErrRecoveryTargetUnavailable
 	}
 	hasher := sha256.New()
-	written, copyErr := io.CopyN(hasher, reader, before.Size()+1)
+	written, copyErr := io.Copy(hasher, io.LimitReader(reader, before.Size()))
+	var extra [1]byte
+	var extraCount int
+	var extraErr error
+	if copyErr == nil {
+		extraCount, extraErr = reader.Read(extra[:])
+	}
 	closeErr := reader.Close()
-	if copyErr != nil && !errors.Is(copyErr, io.EOF) || closeErr != nil || written != before.Size() {
+	if copyErr != nil || written != before.Size() || extraCount != 0 ||
+		!errors.Is(extraErr, io.EOF) || closeErr != nil {
 		return "", ErrRecoveryTargetChanged
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	after, err := session.sftp.Lstat(full)
-	if err != nil || after == nil || after.Size() != before.Size() || after.Mode() != before.Mode() ||
-		!after.ModTime().Equal(before.ModTime()) {
+	afterUID, afterGID, ownerOK := recoverySFTPFileOwner(after)
+	if err != nil || after == nil || !ownerOK || afterUID != beforeUID || afterGID != beforeGID ||
+		after.Size() != before.Size() || after.Mode() != before.Mode() || !after.ModTime().Equal(before.ModTime()) {
 		return "", ErrRecoveryTargetChanged
 	}
 	*budget -= written

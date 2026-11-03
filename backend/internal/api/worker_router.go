@@ -288,12 +288,18 @@ func (router *workerRouter) openInput(response http.ResponseWriter, request *htt
 		writeMappedWorkerError(response, err)
 		return
 	}
-	defer func() { _ = reader.Close() }()
 	response.Header().Set("Content-Type", "application/octet-stream")
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
+	response.Header().Add("Trailer", "X-Xirang-Input-Status")
 	response.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(response, reader)
+	_, copyErr := io.Copy(response, reader)
+	closeErr := reader.Close()
+	status := "ok"
+	if copyErr != nil || closeErr != nil {
+		status = "failed"
+	}
+	response.Header().Set("X-Xirang-Input-Status", status)
 }
 
 func (router *workerRouter) activateSink(response http.ResponseWriter, request *http.Request) {

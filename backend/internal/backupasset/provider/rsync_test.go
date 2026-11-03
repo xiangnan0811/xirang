@@ -3,6 +3,8 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -230,6 +232,84 @@ func TestRsyncCommittedPointReaderRejectsSourceFingerprintSubstitution(t *testin
 	}
 }
 
+func TestRsyncCommittedSourceCapturedAtPrecision(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	unsigned := fixture.commit
+	unsigned.ProviderCommittedAt = unsigned.ProviderCommittedAt.Add(999999876 * time.Nanosecond)
+	unsigned.CommitMarkerDigest = ""
+	signed, marker, err := encodeRsyncTreeCommitMarkerV1(unsigned, fixture.input.MarkerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.commit = signed
+	markerPath := filepath.Join(fixture.root, "points", fixture.attempt.RecoveryPointID, "commit.json")
+	if err := os.WriteFile(markerPath, marker, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		capture   time.Time
+		precision time.Duration
+		want      error
+	}{
+		{name: "exact", capture: signed.ProviderCommittedAt},
+		{name: "exact one nanosecond drift", capture: signed.ProviderCommittedAt.Add(-time.Nanosecond), want: backupasset.ErrConflict},
+		{name: "postgres projection", capture: signed.ProviderCommittedAt.Truncate(time.Microsecond), precision: time.Microsecond},
+		{name: "postgres stored microsecond drift", capture: signed.ProviderCommittedAt.Truncate(time.Microsecond).Add(time.Microsecond), precision: time.Microsecond, want: backupasset.ErrConflict},
+		{name: "postgres unaligned expected", capture: signed.ProviderCommittedAt, precision: time.Microsecond, want: backupasset.ErrInvalidState},
+		{name: "unsupported precision", capture: signed.ProviderCommittedAt, precision: time.Millisecond, want: backupasset.ErrInvalidState},
+		{name: "nanosecond precision is unsupported", capture: signed.ProviderCommittedAt, precision: time.Nanosecond, want: backupasset.ErrInvalidState},
+		{name: "negative precision is unsupported", capture: signed.ProviderCommittedAt, precision: -time.Microsecond, want: backupasset.ErrInvalidState},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := rsyncCommittedPointRequestForTest(fixture)
+			request.CapturedAt, request.CapturedAtPrecision = test.capture, test.precision
+			access, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), request)
+			if test.want == nil {
+				if err != nil || !access.request.Attempt.PointDeadlineAt.Equal(fixture.attempt.PointDeadlineAt) {
+					t.Fatalf("capture request error=%v or signed deadline changed", err)
+				}
+			} else if !errors.Is(err, test.want) {
+				t.Fatalf("capture request error=%v, want %v", err, test.want)
+			}
+		})
+	}
+	t.Run("different authenticated marker", func(t *testing.T) {
+		other := signed
+		other.ProviderCommittedAt = other.ProviderCommittedAt.Add(time.Nanosecond)
+		other.CommitMarkerDigest = ""
+		_, replacement, err := encodeRsyncTreeCommitMarkerV1(other, fixture.input.MarkerKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(markerPath, replacement, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		request := rsyncCommittedPointRequestForTest(fixture)
+		request.CapturedAt, request.CapturedAtPrecision = signed.ProviderCommittedAt.Truncate(time.Microsecond), time.Microsecond
+		if _, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), request); !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("different signed marker error=%v, want conflict", err)
+		}
+	})
+	t.Run("altered signed bytes", func(t *testing.T) {
+		tampered := bytes.Replace(marker, []byte(signed.SourceFingerprint), []byte(strings.Repeat("9", 64)), 1)
+		if bytes.Equal(tampered, marker) {
+			t.Fatal("marker fixture did not change")
+		}
+		if err := os.WriteFile(markerPath, tampered, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		request := rsyncCommittedPointRequestForTest(fixture)
+		request.CapturedAt, request.CapturedAtPrecision = signed.ProviderCommittedAt.Truncate(time.Microsecond), time.Microsecond
+		if _, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), request); !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("tampered signed marker error=%v, want conflict", err)
+		}
+	})
+}
+
 func TestRsyncCommittedPointReaderRejectsMutatedRuntimeSourceRevision(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("strict local provider access is Linux-only")
@@ -291,13 +371,15 @@ func TestRsyncCommittedCatalogRevalidatesExactManifestAtFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open committed Catalog: %v", err)
 	}
+	defer func() { _ = session.Close() }()
 	page, err := session.ListCanonical(context.Background(), PageRequest{Limit: 100})
 	if err != nil || len(page.Items) != int(fixture.commit.ManifestEntryCount) || page.NextCursor != "" {
 		t.Fatalf("Catalog page=%+v err=%v", page, err)
 	}
+	sum := sha256.Sum256([]byte("versioned payload"))
 	for _, record := range page.Items {
-		if record.Fingerprint != "" || record.FingerprintStrength != "none" {
-			t.Fatalf("generic committed-tree record=%+v, want empty fingerprint with none strength", record)
+		if record.Fingerprint != hex.EncodeToString(sum[:]) || record.FingerprintStrength != "strong" {
+			t.Fatalf("committed-tree record=%+v, want payload SHA-256 with strong strength", record)
 		}
 	}
 	proof, err := session.Finalize(context.Background())
@@ -313,6 +395,7 @@ func TestRsyncCommittedCatalogRevalidatesExactManifestAtFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open Catalog before source mutation: %v", err)
 	}
+	defer func() { _ = changedSession.Close() }()
 	if _, err := changedSession.ListCanonical(context.Background(), PageRequest{Limit: 100}); err != nil {
 		t.Fatalf("enumerate Catalog before source mutation: %v", err)
 	}
@@ -321,6 +404,281 @@ func TestRsyncCommittedCatalogRevalidatesExactManifestAtFinalize(t *testing.T) {
 	}
 	if _, err := changedSession.Finalize(context.Background()); !errors.Is(err, backupasset.ErrConflict) {
 		t.Fatalf("mutated committed Catalog proof error=%v", err)
+	}
+}
+
+func TestRsyncCommittedSourceRangeUsesPublishedTree(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	adapter, snapshot, point := rsyncCommittedPointReaderForTest(t)
+	for _, test := range []struct {
+		name       string
+		rangeValue ByteRange
+		want       string
+	}{
+		{name: "middle", rangeValue: ByteRange{Offset: 3, Length: 5}, want: "sione"},
+		{name: "end", rangeValue: ByteRange{Offset: 13, Length: 4}, want: "load"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handle, _, err := adapter.OpenRange(context.Background(), snapshot, point, EntryLocator{Native: "file"}, test.rangeValue)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, readErr := io.ReadAll(handle)
+			closeErr := handle.Close()
+			if readErr != nil || closeErr != nil || string(got) != test.want {
+				t.Fatalf("range bytes=%q read=%v close=%v, want %q", got, readErr, closeErr, test.want)
+			}
+		})
+	}
+}
+
+func TestRsyncCommittedCatalogDigestProjectionAndDrift(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	source := t.TempDir()
+	if err := os.Mkdir(filepath.Join(source, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"ordinary": "ordinary contents", "empty": "", "nested/child": "nested contents"} {
+		if err := os.WriteFile(filepath.Join(source, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("ordinary", filepath.Join(source, "link")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.attempt.RecoveryPointID = strings.Repeat("e", 32)
+	fixture.attempt.AttemptID = strings.Repeat("f", 32)
+	fixture.attempt.StagingComponent = fixture.attempt.RecoveryPointID + "." + fixture.attempt.AttemptID
+	fixture.attempt.FinalComponent = fixture.attempt.RecoveryPointID
+	fixture.input.Source = RsyncTreeCommandSource{LocalPath: source}
+	fixture.commit = runRsyncTreePublicationForTest(t, fixture.strategy, fixture.attempt, fixture.input)
+	adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+	request := rsyncCatalogRequestForTest(fixture, snapshot, point)
+	readPages := func(limit int) ([]CatalogRecord, CatalogReadProof) {
+		t.Helper()
+		session, err := adapter.OpenCatalogRead(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = session.Close() }()
+		var records []CatalogRecord
+		cursor := ""
+		for {
+			page, err := session.ListCanonical(context.Background(), PageRequest{Limit: limit, Cursor: cursor})
+			if err != nil {
+				t.Fatal(err)
+			}
+			records = append(records, page.Items...)
+			if page.NextCursor == "" {
+				break
+			}
+			cursor = page.NextCursor
+		}
+		proof, err := session.Finalize(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return records, proof
+	}
+	records, pagedProof := readPages(1)
+	_, wholeProof := readPages(100)
+	if pagedProof != wholeProof || pagedProof.Catalog.EntryCount != 5 || !pagedProof.Catalog.Complete {
+		t.Fatalf("paged proof=%+v whole proof=%+v", pagedProof, wholeProof)
+	}
+	wantFiles := map[string]string{"ordinary": "ordinary contents", "empty": "", "nested/child": "nested contents"}
+	for _, record := range records {
+		body, isFile := wantFiles[record.NormalizedPath]
+		if isFile {
+			sum := sha256.Sum256([]byte(body))
+			if record.Type != backupasset.CatalogEntryFile || record.FingerprintStrength != "strong" || record.Fingerprint != hex.EncodeToString(sum[:]) {
+				t.Fatalf("file record=%+v", record)
+			}
+			delete(wantFiles, record.NormalizedPath)
+		} else if record.FingerprintStrength != "none" || record.Fingerprint != "" ||
+			(record.Type != backupasset.CatalogEntryDirectory && record.Type != backupasset.CatalogEntrySymlink) {
+			t.Fatalf("non-file record=%+v", record)
+		}
+	}
+	if len(wantFiles) != 0 {
+		t.Fatalf("missing file records: %v", wantFiles)
+	}
+	session, err := adapter.OpenCatalogRead(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close() }()
+	if _, err := session.ListCanonical(context.Background(), PageRequest{Limit: 100}); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(snapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess).Root.Path, "ordinary")
+	stat, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("different content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file, stat.ModTime(), stat.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Finalize(context.Background()); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("same-size content mutation Finalize error=%v, want conflict", err)
+	}
+	if _, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), rsyncCommittedPointRequestForTest(fixture)); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("same-size content mutation open error=%v, want conflict", err)
+	}
+}
+
+func TestRsyncCommittedCatalogRejectsManifestAndMarkerDrift(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	t.Run("manifest", func(t *testing.T) {
+		fixture := newPublishedRsyncTreeReconcileFixture(t)
+		adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+		request := rsyncCatalogRequestForTest(fixture, snapshot, point)
+		request.Manifest.Digest = strings.Repeat("0", 64)
+		session, err := adapter.OpenCatalogRead(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = session.Close() }()
+		if _, err := session.ListCanonical(context.Background(), PageRequest{Limit: 100}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := session.Finalize(context.Background()); !errors.Is(err, ErrCatalogProofMismatch) {
+			t.Fatalf("substituted manifest error=%v, want proof mismatch", err)
+		}
+	})
+	t.Run("marker", func(t *testing.T) {
+		fixture := newPublishedRsyncTreeReconcileFixture(t)
+		adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+		session, err := adapter.OpenCatalogRead(context.Background(), rsyncCatalogRequestForTest(fixture, snapshot, point))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = session.Close() }()
+		if _, err := session.ListCanonical(context.Background(), PageRequest{Limit: 100}); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(fixture.root, "points", fixture.attempt.RecoveryPointID, "commit.json")
+		if err := os.WriteFile(marker, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := session.Finalize(context.Background()); err == nil {
+			t.Fatal("Catalog finalized after its authenticated commit marker changed")
+		}
+	})
+}
+
+func TestRsyncCommittedCatalogRejectsUnboundManifestEntries(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	for _, test := range []struct {
+		name   string
+		mutate func(*rsyncTreeManifestEntry)
+	}{
+		{name: "path", mutate: func(entry *rsyncTreeManifestEntry) { entry.RelativePath = "other" }},
+		{name: "kind", mutate: func(entry *rsyncTreeManifestEntry) { entry.Kind = rsyncTreeManifestDirectory }},
+		{name: "size", mutate: func(entry *rsyncTreeManifestEntry) { entry.Size++ }},
+		{name: "overflow", mutate: func(entry *rsyncTreeManifestEntry) { entry.Size = ^uint64(0) }},
+		{name: "mtime", mutate: func(entry *rsyncTreeManifestEntry) { entry.ModTimeNS++ }},
+		{name: "digest", mutate: func(entry *rsyncTreeManifestEntry) { entry.ContentDigest = strings.Repeat("A", 64) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+			access := snapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess)
+			access.manifestEntries = append([]rsyncTreeManifestEntry(nil), access.manifestEntries...)
+			test.mutate(&access.manifestEntries[0])
+			snapshot.Access.AdapterData = access
+			session, err := adapter.OpenCatalogRead(context.Background(), rsyncCatalogRequestForTest(fixture, snapshot, point))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = session.Close() }()
+			if _, err := session.ListCanonical(context.Background(), PageRequest{Limit: 100}); !errors.Is(err, ErrCatalogProofMismatch) {
+				t.Fatalf("unbound manifest entry error=%v, want proof mismatch", err)
+			}
+		})
+	}
+}
+
+func TestRsyncCommittedCatalogRejectsBindingSubstitution(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	for _, test := range []struct {
+		name   string
+		mutate func(*CatalogReadRequest)
+		want   error
+	}{
+		{name: "point", mutate: func(request *CatalogReadRequest) { request.RecoveryPointID = strings.Repeat("e", 32) }, want: ErrCatalogProtocol},
+		{name: "locator", mutate: func(request *CatalogReadRequest) { request.Point.Native = "committed:other" }, want: ErrCatalogProtocol},
+		{name: "capability revision", mutate: func(request *CatalogReadRequest) { request.Snapshot.CapabilityRevision = 0 }, want: ErrCatalogProtocol},
+		{name: "manifest count", mutate: func(request *CatalogReadRequest) { request.Manifest.EntryCount++ }, want: ErrCatalogProofMismatch},
+		{name: "root", mutate: func(request *CatalogReadRequest) {
+			access := request.Snapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess)
+			access.Root.Path = t.TempDir()
+			request.Snapshot.Access.AdapterData = access
+		}, want: ErrCatalogProtocol},
+		{name: "tree", mutate: func(request *CatalogReadRequest) {
+			access := request.Snapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess)
+			access.Tree = fileaccess.NewLocalTree()
+			request.Snapshot.Access.AdapterData = access
+		}, want: ErrCatalogProtocol},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+			request := rsyncCatalogRequestForTest(fixture, snapshot, point)
+			test.mutate(&request)
+			session, err := adapter.OpenCatalogRead(context.Background(), request)
+			if session != nil {
+				_ = session.Close()
+			}
+			if !errors.Is(err, test.want) {
+				t.Fatalf("substituted %s error=%v, want %v", test.name, err, test.want)
+			}
+		})
+	}
+}
+
+func TestRsyncCommittedSourceRangeRejectsCloseTimeDrift(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	adapter, snapshot, point := rsyncCommittedPointReaderForTest(t)
+	handle, _, err := adapter.OpenRange(context.Background(), snapshot, point, EntryLocator{Native: "file"}, ByteRange{Offset: 3, Length: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(handle); err != nil {
+		t.Fatal(err)
+	}
+	root := snapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess).Root.Path
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("changed payload!!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Close(); err == nil {
+		t.Fatal("range close accepted drift in the authenticated tree")
+	}
+}
+
+func rsyncCatalogRequestForTest(fixture rsyncTreeReconcileFixture, snapshot ReadSnapshot, point PointLocator) CatalogReadRequest {
+	return CatalogReadRequest{
+		Provider: backupasset.ProviderRsync, RecoveryPointID: fixture.attempt.RecoveryPointID,
+		Snapshot: snapshot, Point: point, Mode: CatalogProofPublicationManifest,
+		Manifest: CatalogManifestProof{
+			ManifestID: strings.Repeat("d", 32), Revision: 1, DigestAlgorithm: "sha256", Digest: fixture.commit.ManifestDigest,
+			EntryCount: int64(fixture.commit.ManifestEntryCount), Completeness: backupasset.ManifestComplete, SourceRevision: snapshot.SourceRevision,
+		}, MaxItems: 100,
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	workerCapabilities "xirang/backend/internal/backupasset/processing/capabilities"
@@ -142,13 +143,15 @@ func TestWorkerClientCoversFixedInputSinkAndControlRoutes(t *testing.T) {
 			writeWorkerClientTestResponse(t, response, WorkerTransitionResult{SchemaVersion: 1, State: ProcessingProcessing, Revision: 3})
 		case "/internal/v1/asset-worker/jobs/" + jobID + "/input/activate":
 			writeWorkerClientTestResponse(t, response, WorkerInputActivation{
-				SchemaVersion: 1, SessionID: inputSessionID, TransitionRevision: 2,
-				ExpiresAt: time.Now().Add(time.Minute).UTC(), Source: WorkerInputSourceInfo{Size: 5, Sequential: true, Range: true},
+				SchemaVersion: 2, SessionID: inputSessionID, TransitionRevision: 2,
+				ExpiresAt: time.Now().Add(time.Minute).UTC(), Source: WorkerInputSourceInfo{Size: 5, Sequential: true, Range: true, MaxBytesPerRequest: 16 << 20},
 			})
 		case "/internal/v1/asset-worker/input-sessions/" + inputSessionID + "/ranges":
 			response.Header().Set("Content-Type", "application/octet-stream")
 			response.Header().Set("Cache-Control", "no-store")
+			response.Header().Add("Trailer", "X-Xirang-Input-Status")
 			_, _ = response.Write([]byte("input"))
+			response.Header().Set("X-Xirang-Input-Status", "ok")
 		case "/internal/v1/asset-worker/jobs/" + jobID + "/sink/activate":
 			writeWorkerClientTestResponse(t, response, WorkerSinkActivation{
 				SchemaVersion: 1, SessionID: sinkSessionID, ExpiresAt: time.Now().Add(time.Minute).UTC(),
@@ -308,8 +311,8 @@ func TestWorkerRunnerAdvertisesClosedProductionSetAndExecutesInjectedNoopLifecyc
 	if calls := client.callSnapshot(); strings.Join(calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("Worker lifecycle calls=%v want=%v", calls, wantCalls)
 	}
-	if !capability.executed || capability.input != "input" {
-		t.Fatalf("fake/no-op capability executed=%t input=%q", capability.executed, capability.input)
+	if !capability.executed || capability.input != "input" || capability.fingerprint != validWorkDescriptor().EntryFingerprint {
+		t.Fatalf("fake/no-op capability executed=%t input=%q fingerprint=%q", capability.executed, capability.input, capability.fingerprint)
 	}
 	if client.handshake.Capabilities[0].Capability != "noop" || client.upload.Artifact.Role != ArtifactRoleNoop ||
 		client.manifest.SecurityPolicyRevision != "policy-v1" {
@@ -390,7 +393,8 @@ func TestProductionTextCapabilityReadsBoundedInputAndEmitsVerifiedArtifacts(t *t
 	input := &workerCapabilityMemoryInput{
 		content: source,
 		info: WorkerInputSourceInfo{
-			Size: int64(len(source)), MediaType: "text/plain", FingerprintStrong: true, Sequential: true, Range: true,
+			MaxBytesPerRequest: 16 << 20,
+			Size:               int64(len(source)), MediaType: "text/plain", FingerprintStrong: true, Sequential: true, Range: true,
 		},
 	}
 	artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
@@ -426,7 +430,8 @@ func TestProductionSecretClassificationExecutesPhysicalOptionalProfileWithoutPla
 	artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 		Parameters: validWorkDescriptor().Parameters,
 		Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-			Size: int64(len(source)), MediaType: "text/plain", FingerprintStrong: true, Sequential: true, Range: false,
+			MaxBytesPerRequest: 16 << 20,
+			Size:               int64(len(source)), MediaType: "text/plain", FingerprintStrong: true, Sequential: true, Range: false,
 		}},
 	})
 	if err != nil {
@@ -466,7 +471,8 @@ func TestProductionSecretClassificationNeverTurnsPartialOrInvalidInputNonSecret(
 			artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: validWorkDescriptor().Parameters,
 				Input: &workerCapabilityMemoryInput{content: testCase.source, info: WorkerInputSourceInfo{
-					Size: int64(len(testCase.source)), MediaType: "text/plain", FingerprintStrong: testCase.strong, Sequential: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(testCase.source)), MediaType: "text/plain", FingerprintStrong: testCase.strong, Sequential: true,
 				}},
 			})
 			if err != nil {
@@ -497,7 +503,8 @@ func TestProductionImageCapabilityReencodesStaticThumbnail(t *testing.T) {
 	artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 		Parameters: validWorkDescriptor().Parameters,
 		Input: &workerCapabilityMemoryInput{content: source.Bytes(), info: WorkerInputSourceInfo{
-			Size: int64(source.Len()), MediaType: "image/png", FingerprintStrong: true, Sequential: true, Range: true,
+			MaxBytesPerRequest: 16 << 20,
+			Size:               int64(source.Len()), MediaType: "image/png", FingerprintStrong: true, Sequential: true, Range: true,
 		}},
 	})
 	if err != nil {
@@ -538,7 +545,8 @@ func TestAdvertisedImageMIMEsHaveClosedExecutablePaths(t *testing.T) {
 			artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: parameters,
 				Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-					Size: int64(len(source)), MediaType: mediaType, FingerprintStrong: true, Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(source)), MediaType: mediaType, FingerprintStrong: true, Sequential: true, Range: true,
 				}},
 			})
 			if err != nil {
@@ -574,7 +582,8 @@ func TestOCRNormalizesAdvertisedWebPAndTIFFBeforeTesseract(t *testing.T) {
 			artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: parameters,
 				Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-					Size: int64(len(source)), MediaType: mediaType, FingerprintStrong: true, Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(source)), MediaType: mediaType, FingerprintStrong: true, Sequential: true, Range: true,
 				}},
 			})
 			if err != nil {
@@ -610,7 +619,8 @@ func TestOCRRejectsNormalizedRasterAboveOutputBudgetBeforeTesseract(t *testing.T
 	_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 		Parameters: parameters,
 		Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-			Size: int64(len(source)), MediaType: "image/webp", FingerprintStrong: true, Sequential: true, Range: true,
+			MaxBytesPerRequest: 16 << 20,
+			Size:               int64(len(source)), MediaType: "image/webp", FingerprintStrong: true, Sequential: true, Range: true,
 		}},
 	})
 	if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) {
@@ -641,7 +651,8 @@ func TestImageCapabilitiesRejectMIMEMismatchActivePolyglotAndInvalidToolOutput(t
 			_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: parameters,
 				Input: &workerCapabilityMemoryInput{content: testCase.source, info: WorkerInputSourceInfo{
-					Size: int64(len(testCase.source)), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(testCase.source)), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
 				}},
 			})
 			if err == nil || len(runner.invocations) != 0 {
@@ -660,7 +671,8 @@ func TestImageCapabilitiesRejectMIMEMismatchActivePolyglotAndInvalidToolOutput(t
 	_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 		Parameters: parameters,
 		Input: &workerCapabilityMemoryInput{content: pngSource, info: WorkerInputSourceInfo{
-			Size: int64(len(pngSource)), MediaType: "image/png", FingerprintStrong: true, Sequential: true, Range: true,
+			MaxBytesPerRequest: 16 << 20,
+			Size:               int64(len(pngSource)), MediaType: "image/png", FingerprintStrong: true, Sequential: true, Range: true,
 		}},
 	})
 	if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) {
@@ -754,7 +766,8 @@ func TestProductionCompressedTARInspectAndExtractStreamThroughClosedRunner(t *te
 			artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: validWorkDescriptor().Parameters,
 				Input: &workerCapabilityMemoryInput{content: testCase.source, info: WorkerInputSourceInfo{
-					Size: int64(len(testCase.source)), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(testCase.source)), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
 				}},
 			})
 			if err != nil {
@@ -773,7 +786,8 @@ func TestProductionCompressedTARInspectAndExtractStreamThroughClosedRunner(t *te
 			artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: parameters,
 				Input: &workerCapabilityMemoryInput{content: testCase.source, info: WorkerInputSourceInfo{
-					Size: int64(len(testCase.source)), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(testCase.source)), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
 				}},
 			})
 			if err != nil {
@@ -803,7 +817,8 @@ func TestProductionCompressedTARRejectsDeclaredMIMEMagicMismatchBeforeRunner(t *
 			_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: validWorkDescriptor().Parameters,
 				Input: &workerCapabilityMemoryInput{content: testCase.source, info: WorkerInputSourceInfo{
-					Size: int64(len(testCase.source)), MediaType: testCase.declaredMediaType,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(testCase.source)), MediaType: testCase.declaredMediaType,
 					FingerprintStrong: true, Sequential: true, Range: true,
 				}},
 			})
@@ -819,11 +834,12 @@ func TestProductionCompressedTARRejectsMalformedStreamsBombsAndCancellation(t *t
 	t.Run("ratio bomb", func(t *testing.T) {
 		runner := &productionToolRunnerFake{stream: tarBomb}
 		capability := productionCapabilityWithRunnerForTest(t, capabilityspec.CapabilityArchiveInspect, runner)
-		source := append([]byte{0x28, 0xb5, 0x2f, 0xfd}, []byte("tiny")...)
+		source := makeWorkerZstdRatioFixture(t, tarBomb)
 		_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 			Parameters: validWorkDescriptor().Parameters,
 			Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-				Size: int64(len(source)), MediaType: "application/zstd", FingerprintStrong: true, Sequential: true, Range: true,
+				MaxBytesPerRequest: 16 << 20,
+				Size:               int64(len(source)), MediaType: "application/zstd", FingerprintStrong: true, Sequential: true, Range: true,
 			}},
 		})
 		if !errors.Is(err, workerCapabilities.ErrInputLimit) || runner.streamCalls != 1 || !runner.streamJoined {
@@ -853,7 +869,8 @@ func TestProductionCompressedTARRejectsMalformedStreamsBombsAndCancellation(t *t
 				_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 					Parameters: validWorkDescriptor().Parameters,
 					Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-						Size: int64(len(source)), MediaType: format.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
+						MaxBytesPerRequest: 16 << 20,
+						Size:               int64(len(source)), MediaType: format.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
 					}},
 				})
 				if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) || runner.streamCalls != 1 || !runner.streamJoined {
@@ -869,7 +886,8 @@ func TestProductionCompressedTARRejectsMalformedStreamsBombsAndCancellation(t *t
 		_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 			Parameters: validWorkDescriptor().Parameters,
 			Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-				Size: int64(len(source)), MediaType: "application/gzip", FingerprintStrong: true, Sequential: true, Range: true,
+				MaxBytesPerRequest: 16 << 20,
+				Size:               int64(len(source)), MediaType: "application/gzip", FingerprintStrong: true, Sequential: true, Range: true,
 			}},
 		})
 		if !errors.Is(err, context.Canceled) || runner.streamCalls != 1 || !runner.streamJoined {
@@ -908,7 +926,8 @@ func TestProductionCompressedTARRejectsEmptySecondCompressedStream(t *testing.T)
 			_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: validWorkDescriptor().Parameters,
 				Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-					Size: int64(len(source)), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(source)), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
 				}},
 			})
 			if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) || runner.streamCalls != 1 || !runner.streamJoined {
@@ -932,6 +951,36 @@ func makeWorkerTAR(t *testing.T, name string, content []byte) []byte {
 		t.Fatal(err)
 	}
 	return payload.Bytes()
+}
+
+func makeWorkerZstdRatioFixture(t *testing.T, tarPayload []byte) []byte {
+	t.Helper()
+	const headerSize = 512
+	const memberSize = 64 << 10
+	const trailerSize = 1024
+	if len(tarPayload) != headerSize+memberSize+trailerSize ||
+		!bytes.Equal(tarPayload[headerSize:headerSize+memberSize], bytes.Repeat([]byte{'x'}, memberSize)) ||
+		!bytes.Equal(tarPayload[headerSize+memberSize:], make([]byte, trailerSize)) {
+		t.Fatal("unexpected ratio-bomb TAR layout")
+	}
+	// One raw block carries the TAR header; RLE blocks carry the member and terminator.
+	frame := []byte{0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0, 0, 0, 0}
+	binary.LittleEndian.PutUint32(frame[5:9], uint32(len(tarPayload)))
+	appendBlock := func(size uint32, blockType uint32, last bool, data []byte) {
+		header := size<<3 | blockType<<1
+		if last {
+			header |= 1
+		}
+		frame = append(frame, byte(header), byte(header>>8), byte(header>>16))
+		frame = append(frame, data...)
+	}
+	appendBlock(headerSize, 0, false, tarPayload[:headerSize])
+	appendBlock(memberSize, 1, false, []byte{'x'})
+	appendBlock(trailerSize, 1, true, []byte{0})
+	if len(frame)*100 >= memberSize {
+		t.Fatal("ratio-bomb fixture does not exceed the compression ratio limit")
+	}
+	return frame
 }
 
 func makeWorkerGzip(t *testing.T, content []byte) []byte {
@@ -1013,7 +1062,8 @@ func TestProductionExternalCapabilityExecutesOnlyThroughInjectedToolRunner(t *te
 		Input: &workerCapabilityMemoryInput{
 			content: source,
 			info: WorkerInputSourceInfo{
-				Size: int64(len(source)), MediaType: "image/png", Sequential: true, Range: true,
+				MaxBytesPerRequest: 16 << 20,
+				Size:               int64(len(source)), MediaType: "image/png", Sequential: true, Range: true,
 			},
 		},
 	})
@@ -1037,7 +1087,7 @@ func TestProductionExternalCapabilityRejectsMalformedInputBeforeToolRunner(t *te
 		Parameters: validWorkDescriptor().Parameters,
 		Input: &workerCapabilityMemoryInput{
 			content: source,
-			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "video/mp4", Sequential: true, Range: true},
+			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "video/mp4", Sequential: true, Range: true, MaxBytesPerRequest: 16 << 20},
 		},
 	})
 	if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) {
@@ -1094,7 +1144,8 @@ func TestProductionDocumentPreflightBlocksActivePackagesBeforeLibreOffice(t *tes
 			_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: validWorkDescriptor().Parameters,
 				Input: &workerCapabilityMemoryInput{content: source.Bytes(), info: WorkerInputSourceInfo{
-					Size: int64(source.Len()), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(source.Len()), MediaType: testCase.mediaType, FingerprintStrong: true, Sequential: true, Range: true,
 				}},
 			})
 			if err == nil || len(runner.invocations) != 0 {
@@ -1118,7 +1169,8 @@ func TestProductionDocumentPreflightScansLargePDFFullyBeforeToolRunner(t *testin
 	_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 		Parameters: validWorkDescriptor().Parameters,
 		Input: &workerCapabilityMemoryInput{content: payload, info: WorkerInputSourceInfo{
-			Size: int64(len(payload)), MediaType: "application/pdf", FingerprintStrong: true, Sequential: true, Range: true,
+			MaxBytesPerRequest: 16 << 20,
+			Size:               int64(len(payload)), MediaType: "application/pdf", FingerprintStrong: true, Sequential: true, Range: true,
 		}},
 	})
 	if !errors.Is(err, capabilityspec.ErrUnsupportedMedia) {
@@ -1138,7 +1190,8 @@ func TestProductionPDFPreflightBlocksClosedUnsupportedSurfacesBeforePoppler(t *t
 			_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: validWorkDescriptor().Parameters,
 				Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-					Size: int64(len(source)), MediaType: "application/pdf", FingerprintStrong: true, Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(source)), MediaType: "application/pdf", FingerprintStrong: true, Sequential: true, Range: true,
 				}},
 			})
 			if !errors.Is(err, capabilityspec.ErrUnsupportedMedia) ||
@@ -1179,7 +1232,7 @@ func TestProductionMalwarePositiveIsSuccessfulSanitizedFinding(t *testing.T) {
 		Parameters: validWorkDescriptor().Parameters,
 		Input: &workerCapabilityMemoryInput{
 			content: source,
-			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "application/octet-stream", Sequential: true, Range: true},
+			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "application/octet-stream", Sequential: true, Range: true, MaxBytesPerRequest: 16 << 20},
 		},
 	})
 	if err != nil {
@@ -1257,7 +1310,8 @@ func TestProductionMalwareResultParserIsClosedAndFailSafe(t *testing.T) {
 			artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: validWorkDescriptor().Parameters,
 				Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-					Size: int64(len(source)), MediaType: "application/octet-stream", Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(source)), MediaType: "application/octet-stream", Sequential: true, Range: true,
 				}},
 			})
 			if testCase.wantError != nil {
@@ -1316,7 +1370,7 @@ func TestProductionPDFCapabilityRunsBoundedPageAndTextToolsWithFreshImmutableInp
 		Parameters: validWorkDescriptor().Parameters,
 		Input: &workerCapabilityMemoryInput{
 			content: source,
-			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "application/pdf", Sequential: true, Range: true},
+			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "application/pdf", Sequential: true, Range: true, MaxBytesPerRequest: 16 << 20},
 		},
 	})
 	if err != nil {
@@ -1468,7 +1522,8 @@ func executePDFCapabilityForTest(
 	return capability.Execute(context.Background(), WorkerCapabilityJob{
 		Parameters: parameters,
 		Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
-			Size: int64(len(source)), MediaType: "application/pdf", Sequential: true, Range: true,
+			MaxBytesPerRequest: 16 << 20,
+			Size:               int64(len(source)), MediaType: "application/pdf", Sequential: true, Range: true,
 		}},
 	})
 }
@@ -1497,7 +1552,7 @@ func TestProductionMediaProbeCanonicalizesBoundedToolOutput(t *testing.T) {
 		Parameters: validWorkDescriptor().Parameters,
 		Input: &workerCapabilityMemoryInput{
 			content: source,
-			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "video/mp4", Sequential: true, Range: true},
+			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "video/mp4", Sequential: true, Range: true, MaxBytesPerRequest: 16 << 20},
 		},
 	})
 	if err != nil {
@@ -1550,7 +1605,7 @@ func executeMediaProbeForTest(
 		Parameters: validWorkDescriptor().Parameters,
 		Input: &workerCapabilityMemoryInput{
 			content: source,
-			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "video/mp4", Sequential: true, Range: true},
+			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "video/mp4", Sequential: true, Range: true, MaxBytesPerRequest: 16 << 20},
 		},
 	})
 }
@@ -1568,7 +1623,7 @@ func TestProductionMediaTranscodeRevalidatesClosedPreviewOutput(t *testing.T) {
 		Parameters: parameters,
 		Input: &workerCapabilityMemoryInput{
 			content: source,
-			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "video/mp4", Sequential: true, Range: true},
+			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "video/mp4", Sequential: true, Range: true, MaxBytesPerRequest: 16 << 20},
 		},
 	})
 	if err != nil {
@@ -1661,6 +1716,7 @@ func advertisedRasterFixture(t *testing.T, mediaType string) []byte {
 type productionToolRunnerFake struct {
 	invocation   workerCapabilities.ToolInvocation
 	input        []byte
+	runCalls     int
 	result       workerCapabilities.ToolResult
 	err          error
 	invocations  []workerCapabilities.ToolInvocation
@@ -1678,7 +1734,12 @@ func (runner *productionToolRunnerFake) RunInput(
 	input io.Reader,
 ) (workerCapabilities.ToolResult, error) {
 	runner.invocation = invocation
-	runner.input, _ = io.ReadAll(input)
+	runner.runCalls++
+	var readErr error
+	runner.input, readErr = io.ReadAll(input)
+	if readErr != nil {
+		return workerCapabilities.ToolResult{}, readErr
+	}
 	runner.invocations = append(runner.invocations, invocation)
 	runner.inputs = append(runner.inputs, append([]byte(nil), runner.input...))
 	if len(runner.results) > 0 {
@@ -1696,11 +1757,15 @@ func (runner *productionToolRunnerFake) RunInputStream(
 	consume func(io.Reader) error,
 ) (workerCapabilities.ToolResult, error) {
 	runner.streamCalls++
+	defer func() { runner.streamJoined = true }()
 	runner.invocation = invocation
-	runner.input, _ = io.ReadAll(input)
+	var readErr error
+	runner.input, readErr = io.ReadAll(input)
+	if readErr != nil {
+		return workerCapabilities.ToolResult{}, readErr
+	}
 	runner.invocations = append(runner.invocations, invocation)
 	runner.inputs = append(runner.inputs, append([]byte(nil), runner.input...))
-	defer func() { runner.streamJoined = true }()
 	if runner.streamErr != nil {
 		return workerCapabilities.ToolResult{}, runner.streamErr
 	}
@@ -1714,6 +1779,19 @@ func (runner *productionToolRunnerFake) RunInputStream(
 		return workerCapabilities.ToolResult{}, err
 	}
 	return runner.result, nil
+}
+
+func TestProductionStreamRunnerFakeJoinsOnInputFailure(t *testing.T) {
+	expected := errors.New("input validation failed")
+	runner := &productionToolRunnerFake{}
+	consumed := false
+	_, err := runner.RunInputStream(context.Background(), workerCapabilities.ToolInvocation{}, iotest.ErrReader(expected), func(io.Reader) error {
+		consumed = true
+		return nil
+	})
+	if !errors.Is(err, expected) || runner.streamCalls != 1 || !runner.streamJoined || consumed {
+		t.Fatalf("input error=%v calls=%d joined=%t consumed=%t", err, runner.streamCalls, runner.streamJoined, consumed)
+	}
 }
 
 func executeProductionCapabilityForTest(t *testing.T, capabilityName, mediaType string, source []byte) ([]WorkerCapabilityArtifact, error) {
@@ -1740,7 +1818,8 @@ func executeProductionCapabilityForTest(t *testing.T, capabilityName, mediaType 
 			Input: &workerCapabilityMemoryInput{
 				content: append([]byte(nil), source...),
 				info: WorkerInputSourceInfo{
-					Size: int64(len(source)), MediaType: mediaType, FingerprintStrong: true, Sequential: true, Range: true,
+					MaxBytesPerRequest: 16 << 20,
+					Size:               int64(len(source)), MediaType: mediaType, FingerprintStrong: true, Sequential: true, Range: true,
 				},
 			},
 		})
@@ -1750,21 +1829,19 @@ func executeProductionCapabilityForTest(t *testing.T, capabilityName, mediaType 
 }
 
 type workerCapabilityMemoryInput struct {
-	content []byte
-	info    WorkerInputSourceInfo
-	offset  int64
+	content         []byte
+	info            WorkerInputSourceInfo
+	sequentialCalls int
 }
 
 func (input *workerCapabilityMemoryInput) Info() WorkerInputSourceInfo { return input.info }
 
 func (input *workerCapabilityMemoryInput) ReadSequential(_ context.Context, length int64) ([]byte, error) {
-	if length <= 0 || input.offset >= int64(len(input.content)) {
+	input.sequentialCalls++
+	if length <= 0 {
 		return nil, nil
 	}
-	end := min(int64(len(input.content)), input.offset+length)
-	result := append([]byte(nil), input.content[input.offset:end]...)
-	input.offset = end
-	return result, nil
+	return append([]byte(nil), input.content[:min(int64(len(input.content)), length)]...), nil
 }
 
 func (input *workerCapabilityMemoryInput) ReadRange(_ context.Context, offset, length int64) ([]byte, error) {
@@ -1840,8 +1917,9 @@ func TestWorkerRunnerHeartbeatCancellationUsesCurrentRevisionAndClosedReason(t *
 }
 
 type workerNoopCapabilityFake struct {
-	executed bool
-	input    string
+	executed    bool
+	input       string
+	fingerprint string
 }
 
 type workerBlockingCapabilityFake struct{ started chan struct{} }
@@ -1875,6 +1953,7 @@ func (capability *workerNoopCapabilityFake) Execute(ctx context.Context, job Wor
 	}
 	capability.executed = true
 	capability.input = string(payload)
+	capability.fingerprint = job.EntryFingerprint
 	content := []byte("passive-noop-artifact")
 	return []WorkerCapabilityArtifact{{
 		Declaration: ArtifactDeclaration{
@@ -1992,8 +2071,8 @@ func (client *workerRunnerClientFake) Transition(_ context.Context, request Work
 func (client *workerRunnerClientFake) ActivateInput(context.Context, WorkerInputActivateRequest) (WorkerInputActivation, error) {
 	client.record("activate_input")
 	return WorkerInputActivation{
-		SchemaVersion: 1, SessionID: strings.Repeat("5", 32), TransitionRevision: 2,
-		ExpiresAt: time.Now().Add(time.Minute), Source: WorkerInputSourceInfo{Size: 5, Range: true},
+		SchemaVersion: 2, SessionID: strings.Repeat("5", 32), TransitionRevision: 2,
+		ExpiresAt: time.Now().Add(time.Minute), Source: WorkerInputSourceInfo{Size: 5, Range: true, MaxBytesPerRequest: 16 << 20},
 	}, nil
 }
 

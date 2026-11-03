@@ -405,6 +405,7 @@ func (observer *recoveryEligibilityTargetObserver) ObserveRecoveryEligibilityTar
 	}
 	if observer == nil || observer.now == nil || observer.plans == nil || observer.sessions == nil ||
 		request.Purpose != TargetPurposePreflight || request.RequiredBytes < 0 || request.RequiredInodes < 0 ||
+		request.Binding.TargetMode.Validate() != nil || !request.Binding.targetExpectation.valid(request.Binding.TargetMode) ||
 		request.RequiredBytes != request.Binding.RequiredBytes || request.RequiredInodes != request.Binding.RequiredInodes ||
 		!recoveryEligibilityTargetRootSnapshotValid(request.TargetRoot) ||
 		!recoveryEligibilityTargetRootMatchesBinding(request.Binding, request.TargetRoot) {
@@ -457,6 +458,32 @@ func (observer *recoveryEligibilityTargetObserver) ObserveRecoveryEligibilityTar
 	if err != nil {
 		return RecoveryEligibilityTargetObservation{}, recoveryEligibilityTargetObservationError(ctx, err)
 	}
+	var verifiedDigest string
+	var verifiedBytes int64
+	verifyContent := request.Binding.targetExpectation.verifiesContent(request.Binding.TargetMode)
+	if first.rootRevision != request.Binding.RootRevision ||
+		first.rootRevision != request.TargetRoot.RootObservationRevision ||
+		first.filesystemRevision != request.Binding.FilesystemRevision ||
+		(!verifyContent && first.targetRevision != request.Binding.PreflightTargetRevision) {
+		return RecoveryEligibilityTargetObservation{}, ErrRecoveryTargetChanged
+	}
+	if verifyContent {
+		budget := request.Binding.targetExpectation.expectedBytes
+		digest, bytesRead, present, readErr := observeRecoveryPlanTargetFile(
+			ctx, session, request.TargetRoot.Locator, plan.privateRelativeLocator, &budget,
+		)
+		if errors.Is(readErr, ErrRecoveryOperationLimit) {
+			return RecoveryEligibilityTargetObservation{}, ErrRecoveryTargetChanged
+		}
+		if readErr != nil {
+			return RecoveryEligibilityTargetObservation{}, recoveryEligibilityTargetObservationError(ctx, readErr)
+		}
+		if !present || bytesRead != request.Binding.targetExpectation.expectedBytes ||
+			digest != request.Binding.targetExpectation.expectedDigest {
+			return RecoveryEligibilityTargetObservation{}, ErrRecoveryTargetChanged
+		}
+		verifiedDigest, verifiedBytes = digest, bytesRead
+	}
 	second, err := observeRecoveryEligibilityTargetState(
 		ctx, session.sftp, request, plan.privateRelativeLocator, session.protectedRoots,
 	)
@@ -464,12 +491,6 @@ func (observer *recoveryEligibilityTargetObserver) ObserveRecoveryEligibilityTar
 		return RecoveryEligibilityTargetObservation{}, recoveryEligibilityTargetObservationError(ctx, err)
 	}
 	if !first.sameStableIdentity(second) {
-		return RecoveryEligibilityTargetObservation{}, ErrRecoveryTargetChanged
-	}
-	if first.rootRevision != request.Binding.RootRevision ||
-		first.rootRevision != request.TargetRoot.RootObservationRevision ||
-		first.filesystemRevision != request.Binding.FilesystemRevision ||
-		first.targetRevision != request.Binding.PreflightTargetRevision {
 		return RecoveryEligibilityTargetObservation{}, ErrRecoveryTargetChanged
 	}
 	if closeErr := session.close(); closeErr != nil {
@@ -492,7 +513,8 @@ func (observer *recoveryEligibilityTargetObserver) ObserveRecoveryEligibilityTar
 		FilesystemRevision: second.filesystemRevision, TargetRevision: second.targetRevision,
 		FreeBytes: second.freeBytes, FreeInodes: second.freeInodes,
 		OverlapsXirangRoot: second.overlapsXirangRoot, ReadOnly: true, Complete: true,
-		ObservedAt: now, ExpiresAt: expiresAt,
+		ObservedAt: now, ExpiresAt: expiresAt, targetContentVerified: verifyContent,
+		verifiedTargetDigest: verifiedDigest, verifiedTargetBytes: verifiedBytes,
 	}, nil
 }
 
@@ -540,7 +562,7 @@ func (source *recoveryEligibilityTargetGORMPlanSource) ResolveRecoveryEligibilit
 	pathDigest, pathErr := TargetPathDigest(root.RootID, root.LocatorDigest, plan.EncryptedTargetRelativePath)
 	if pathErr != nil || pathDigest != binding.PathDigest ||
 		plan.BindingDigest != binding.PlanBindingDigest || plan.TransitionRevision != binding.PlanTransitionRevision ||
-		plan.TargetNodeID != root.NodeID || plan.TargetRootID != root.RootID ||
+		TargetMode(plan.TargetMode) != binding.TargetMode || plan.TargetNodeID != root.NodeID || plan.TargetRootID != root.RootID ||
 		plan.EncryptedTargetRootLocator != root.Locator || plan.RootLocatorDigest != root.LocatorDigest ||
 		plan.PathDigest != binding.PathDigest || plan.TargetBaseRevision != binding.TargetBaseRevision ||
 		plan.CredentialScopeRevision != binding.CredentialScopeRevision ||
@@ -979,6 +1001,7 @@ type recoveryEligibilityTargetState struct {
 	rootRevision       string
 	filesystemRevision string
 	targetRevision     string
+	targetPathIdentity string
 	freeBytes          int64
 	freeInodes         int64
 	overlapsXirangRoot bool
@@ -987,7 +1010,7 @@ type recoveryEligibilityTargetState struct {
 func (state recoveryEligibilityTargetState) sameStableIdentity(other recoveryEligibilityTargetState) bool {
 	return state.canonicalRoot == other.canonicalRoot && state.rootRevision == other.rootRevision &&
 		state.filesystemRevision == other.filesystemRevision && state.targetRevision == other.targetRevision &&
-		state.overlapsXirangRoot == other.overlapsXirangRoot
+		state.targetPathIdentity == other.targetPathIdentity && state.overlapsXirangRoot == other.overlapsXirangRoot
 }
 
 func observeRecoveryEligibilityTargetState(
@@ -998,6 +1021,7 @@ func observeRecoveryEligibilityTargetState(
 	protectedRoots []string,
 ) (recoveryEligibilityTargetState, error) {
 	if client == nil || ctx == nil || request.TargetRoot.Locator == "" ||
+		request.Binding.TargetMode.Validate() != nil || !request.Binding.targetExpectation.valid(request.Binding.TargetMode) ||
 		!validTargetRelativeLocator(privateRelativeLocator) {
 		return recoveryEligibilityTargetState{}, ErrRecoveryTargetUnavailable
 	}
@@ -1038,11 +1062,16 @@ func observeRecoveryEligibilityTargetState(
 	if err != nil {
 		return recoveryEligibilityTargetState{}, ErrRecoveryTargetUnavailable
 	}
-	targetRevision, err := observeRecoveryEligibilityTargetPath(
-		ctx, client, canonicalRoot, privateRelativeLocator, rootRevision, rootVFS.Fsid,
-	)
-	if err != nil {
-		return recoveryEligibilityTargetState{}, err
+	targetRevision := rootRevision
+	var targetPathIdentity string
+	if request.Binding.TargetMode == TargetModeInPlace {
+		targetRevision, targetPathIdentity, err = observeRecoveryEligibilityTargetPath(
+			ctx, client, canonicalRoot, privateRelativeLocator, rootRevision, rootVFS.Fsid,
+			request.Binding.targetExpectation.verifiesContent(request.Binding.TargetMode),
+		)
+		if err != nil {
+			return recoveryEligibilityTargetState{}, err
+		}
 	}
 	overlaps := false
 	for _, protectedRoot := range protectedRoots {
@@ -1058,7 +1087,7 @@ func observeRecoveryEligibilityTargetState(
 	}
 	return recoveryEligibilityTargetState{
 		canonicalRoot: canonicalRoot, rootRevision: rootRevision,
-		filesystemRevision: filesystemRevision, targetRevision: targetRevision,
+		filesystemRevision: filesystemRevision, targetRevision: targetRevision, targetPathIdentity: targetPathIdentity,
 		freeBytes: freeBytes, freeInodes: int64(rootVFS.Favail), overlapsXirangRoot: overlaps,
 	}, nil
 }
@@ -1100,41 +1129,61 @@ func observeRecoveryEligibilityTargetPath(
 	privateRelativeLocator string,
 	rootRevision string,
 	rootFilesystemID uint64,
-) (string, error) {
+	verifyContent bool,
+) (string, string, error) {
 	components := strings.Split(privateRelativeLocator, "/")
 	current := root
+	var pathIdentity string
 	for index, component := range components {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return "", "", err
 		}
 		current = path.Join(current, component)
 		info, err := client.Lstat(current)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return recoverySFTPTargetAbsentRevision(rootRevision, privateRelativeLocator)
+				if verifyContent {
+					return "", "", ErrRecoveryTargetChanged
+				}
+				revision, revisionErr := recoverySFTPTargetAbsentRevision(rootRevision, privateRelativeLocator)
+				return revision, "", revisionErr
 			}
-			return "", recoveryEligibilityTargetObservationError(ctx, err)
+			return "", "", recoveryEligibilityTargetObservationError(ctx, err)
 		}
 		if info == nil || info.Mode()&os.ModeSymlink != 0 {
-			return "", ErrRecoveryTargetChanged
+			return "", "", ErrRecoveryTargetChanged
 		}
 		canonical, err := client.RealPath(current)
 		if err != nil || canonical != current {
-			return "", recoveryEligibilityTargetObservationError(ctx, err)
+			return "", "", recoveryEligibilityTargetObservationError(ctx, err)
 		}
 		filesystem, err := client.StatVFS(current)
 		if err != nil || filesystem == nil || filesystem.Fsid != rootFilesystemID {
-			return "", recoveryEligibilityTargetObservationError(ctx, err)
+			return "", "", recoveryEligibilityTargetObservationError(ctx, err)
+		}
+		if verifyContent {
+			uid, gid, ownerOK := recoverySFTPFileOwner(info)
+			if !ownerOK || info.Size() < 0 || info.Mode().Perm()&0o002 != 0 {
+				return "", "", ErrRecoveryTargetChanged
+			}
+			pathIdentity = framedDigest("xirang/recovery/target-observed-path/v1", pathIdentity,
+				current, strconv.FormatInt(info.Size(), 10), strconv.FormatUint(uint64(info.Mode()), 10),
+				strconv.FormatUint(uint64(uid), 10), strconv.FormatUint(uint64(gid), 10),
+				strconv.FormatInt(info.ModTime().UnixNano(), 10))
 		}
 		if index != len(components)-1 {
 			if !info.IsDir() {
-				return "", ErrRecoveryTargetChanged
+				return "", "", ErrRecoveryTargetChanged
 			}
 			continue
 		}
-		return recoverySFTPTargetPresentRevision(rootRevision, privateRelativeLocator, info)
+		if verifyContent && !info.Mode().IsRegular() {
+			return "", "", ErrRecoveryTargetChanged
+		}
+		revision, revisionErr := recoverySFTPTargetPresentRevision(rootRevision, privateRelativeLocator, info)
+		return revision, pathIdentity, revisionErr
 	}
-	return "", ErrRecoveryTargetUnavailable
+	return "", "", ErrRecoveryTargetUnavailable
 }
 
 func watchRecoveryEligibilityTargetContext(

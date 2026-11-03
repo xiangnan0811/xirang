@@ -1499,7 +1499,24 @@ func TestBrokerRecoveryResultLogoutRevokesBindingAndLease(t *testing.T) {
 }
 
 func TestBrokerRecoveryResultCleanupRevokesDrainsOnlySelectedJob(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		reason     string
+		wantReason string
+	}{
+		{name: "cleanup", reason: RecoveryResultCleanupReason, wantReason: "source_changed"},
+		{name: "shutdown", reason: RecoveryResultShutdownReason, wantReason: "shutdown"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			testBrokerRecoveryResultRevokesDrainsOnlySelectedJob(t, scenario.reason, scenario.wantReason)
+		})
+	}
+}
+
+func testBrokerRecoveryResultRevokesDrainsOnlySelectedJob(t *testing.T, reason, wantReason string) {
+	t.Helper()
 	harness := newRecoveryBrokerTestHarness(t)
+	installProductionContentRevocationReasonConstraint(t, harness.db)
 	selectedTicket, err := harness.broker.Issue(context.Background(), harness.recoveryIssueRequest())
 	if err != nil {
 		t.Fatalf("issue selected recovery result ticket: %v", err)
@@ -1519,7 +1536,8 @@ func TestBrokerRecoveryResultCleanupRevokesDrainsOnlySelectedJob(t *testing.T) {
 	otherRequest := harness.recoveryIssueRequest()
 	otherRef := otherResult.Ref
 	otherRequest.Resource.RecoveryResult = &otherRef
-	if _, err := harness.broker.Issue(context.Background(), otherRequest); err != nil {
+	otherTicket, err := harness.broker.Issue(context.Background(), otherRequest)
+	if err != nil {
 		t.Fatalf("issue unrelated recovery result ticket: %v", err)
 	}
 	harness.recoveryAuthorizer.setResult(harness.recoveryResult)
@@ -1529,16 +1547,25 @@ func TestBrokerRecoveryResultCleanupRevokesDrainsOnlySelectedJob(t *testing.T) {
 	assetRequest := harness.issueRequest()
 	assetRequest.Actor = DeliveryActor{UserID: harness.session.UserID, Username: "admin", Role: "admin"}
 	assetRequest.Session = harness.session
-	if _, err := harness.broker.Issue(context.Background(), assetRequest); err != nil {
+	assetTicket, err := harness.broker.Issue(context.Background(), assetRequest)
+	if err != nil {
 		t.Fatalf("issue unrelated backup-asset ticket: %v", err)
 	}
 
 	harness.recoverySource.blockReads = true
 	harness.recoverySource.readStarted = make(chan struct{})
 	harness.recoverySource.readCanceled = make(chan struct{})
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	var serveWorker sync.WaitGroup
+	serveWorker.Add(1)
+	defer func() {
+		cancelServe()
+		serveWorker.Wait()
+	}()
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- harness.broker.Serve(context.Background(), GatewayRequest{
+		defer serveWorker.Done()
+		serveDone <- harness.broker.Serve(serveCtx, GatewayRequest{
 			DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
 			RawCookie: selectedTicket.Cookie.Name + "=" + selectedTicket.Cookie.Value,
 		}, &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()})
@@ -1553,13 +1580,14 @@ func TestBrokerRecoveryResultCleanupRevokesDrainsOnlySelectedJob(t *testing.T) {
 	if tx.Error != nil {
 		t.Fatalf("begin recovery cleanup revoke: %v", tx.Error)
 	}
+	defer tx.Rollback()
 	if err := harness.broker.RevokeRecoveryResultGrantsTx(
-		context.Background(), tx, selectedJobID, "recovery_cleanup", harness.now,
+		context.Background(), tx, selectedJobID, reason, harness.now,
 	); err != nil {
 		_ = tx.Rollback().Error
 		t.Fatalf("revoke selected recovery result grants: %v", err)
 	}
-	assertBrokerGrantState(t, tx, selectedGrantID, DeliveryRevoked, "recovery_cleanup", 1)
+	assertBrokerGrantState(t, tx, selectedGrantID, DeliveryRevoked, wantReason, 1)
 	assertBrokerGrantState(t, tx, otherMaterial.GrantID, DeliveryActive, "", 0)
 	assertBrokerGrantState(t, tx, assetMaterial.GrantID, DeliveryActive, "", 0)
 	select {
@@ -1608,7 +1636,7 @@ func TestBrokerRecoveryResultCleanupRevokesDrainsOnlySelectedJob(t *testing.T) {
 		t.Fatal("cleanup drain returned before selected read exited")
 	}
 
-	assertBrokerGrantState(t, harness.db, selectedGrantID, DeliveryRevoked, "recovery_cleanup", 0)
+	assertBrokerGrantState(t, harness.db, selectedGrantID, DeliveryRevoked, wantReason, 0)
 	assertBrokerGrantState(t, harness.db, otherMaterial.GrantID, DeliveryActive, "", 0)
 	assertBrokerGrantState(t, harness.db, assetMaterial.GrantID, DeliveryActive, "", 0)
 	harness.broker.mu.Lock()
@@ -1629,48 +1657,124 @@ func TestBrokerRecoveryResultCleanupRevokesDrainsOnlySelectedJob(t *testing.T) {
 	if len(releases) != 1 || releases[0].OwnerID != selectedGrantID {
 		t.Fatalf("cleanup lease releases=%+v want only owner=%s", releases, selectedGrantID)
 	}
+
+	revokedResponse := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	if err := harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+		RawCookie: selectedTicket.Cookie.Name + "=" + selectedTicket.Cookie.Value,
+	}, revokedResponse); !errors.Is(err, ErrContentNotFound) || revokedResponse.Body.Len() != 0 {
+		t.Fatalf("revoked recovery result serve error=%v body=%q", err, revokedResponse.Body.Bytes())
+	}
+
+	harness.recoveryAuthorizer.setResult(otherResult)
+	harness.recoverySource.result = otherResult
+	harness.recoverySource.blockReads = false
+	otherResponse := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	if err := harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: otherMaterial.DeliveryID, Method: http.MethodGet,
+		RawCookie: otherTicket.Cookie.Name + "=" + otherTicket.Cookie.Value,
+	}, otherResponse); err != nil {
+		t.Fatalf("serve unrelated recovery result after revocation: %v", err)
+	}
+	if otherResponse.Code != http.StatusOK || !bytes.Equal(otherResponse.Body.Bytes(), []byte("hello result")) {
+		t.Fatalf("unrelated recovery result status=%d body=%q", otherResponse.Code, otherResponse.Body.Bytes())
+	}
+
+	assetResponse := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	if err := harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: assetMaterial.DeliveryID, Method: http.MethodGet,
+		RawCookie: assetTicket.Cookie.Name + "=" + assetTicket.Cookie.Value,
+	}, assetResponse); err != nil {
+		t.Fatalf("serve unrelated backup asset after revocation: %v", err)
+	}
+	if assetResponse.Code != http.StatusOK || assetResponse.Body.Len() == 0 {
+		t.Fatalf("unrelated backup asset status=%d body length=%d", assetResponse.Code, assetResponse.Body.Len())
+	}
 }
 
 func TestBrokerRecoveryResultCleanupRevokeIsCallerTransactionalAndRejectsInvalidInput(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		reason     string
+		wantReason string
+	}{
+		{name: "cleanup", reason: RecoveryResultCleanupReason, wantReason: "source_changed"},
+		{name: "shutdown", reason: RecoveryResultShutdownReason, wantReason: "shutdown"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			testBrokerRecoveryResultRevokeRollbackAndInvalidInput(t, scenario.reason, scenario.wantReason)
+		})
+	}
+}
+
+func testBrokerRecoveryResultRevokeRollbackAndInvalidInput(t *testing.T, reason, wantReason string) {
+	t.Helper()
 	harness := newRecoveryBrokerTestHarness(t)
-	if _, err := harness.broker.Issue(context.Background(), harness.recoveryIssueRequest()); err != nil {
+	installProductionContentRevocationReasonConstraint(t, harness.db)
+	ticket, err := harness.broker.Issue(context.Background(), harness.recoveryIssueRequest())
+	if err != nil {
 		t.Fatalf("issue recovery result ticket: %v", err)
+	}
+	var originalGrant model.BackupAssetDeliveryGrant
+	if err := harness.db.First(&originalGrant, "id = ?", harness.material.GrantID).Error; err != nil {
+		t.Fatalf("load original recovery grant: %v", err)
 	}
 
 	tx := harness.db.Begin()
 	if tx.Error != nil {
 		t.Fatalf("begin rollback revoke: %v", tx.Error)
 	}
+	defer tx.Rollback()
 	if err := harness.broker.RevokeRecoveryResultGrantsTx(
-		context.Background(), tx, harness.recoveryResult.Ref.RecoveryJobID, "recovery_cleanup", harness.now,
+		context.Background(), tx, harness.recoveryResult.Ref.RecoveryJobID, reason, harness.now,
 	); err != nil {
 		_ = tx.Rollback().Error
 		t.Fatalf("transactional revoke: %v", err)
 	}
-	assertBrokerGrantState(t, tx, harness.material.GrantID, DeliveryRevoked, "recovery_cleanup", 0)
+	assertBrokerGrantState(t, tx, harness.material.GrantID, DeliveryRevoked, wantReason, 0)
 	if err := tx.Rollback().Error; err != nil {
 		t.Fatalf("rollback recovery cleanup revoke: %v", err)
 	}
 	assertBrokerGrantState(t, harness.db, harness.material.GrantID, DeliveryActive, "", 0)
+	var restoredGrant model.BackupAssetDeliveryGrant
+	if err := harness.db.First(&restoredGrant, "id = ?", harness.material.GrantID).Error; err != nil {
+		t.Fatalf("load recovery grant after rollback: %v", err)
+	}
+	if restoredGrant.Version != originalGrant.Version || restoredGrant.RevokedAt != nil ||
+		!restoredGrant.UpdatedAt.Equal(originalGrant.UpdatedAt) {
+		t.Fatalf("rollback changed grant version=%d revoked_at=%v updated_at=%v", restoredGrant.Version,
+			restoredGrant.RevokedAt, restoredGrant.UpdatedAt)
+	}
+	if err := harness.broker.RevokeRecoveryResultGrantsTx(
+		context.Background(), tx, harness.recoveryResult.Ref.RecoveryJobID, reason, harness.now,
+	); err == nil || errors.Is(err, ErrInvalidBrokerRequest) {
+		t.Fatalf("revoke on rolled-back transaction error=%v, want database error", err)
+	}
 
 	invalidJobID := "invalid"
 	if err := harness.broker.RevokeRecoveryResultGrantsTx(
-		context.Background(), nil, harness.recoveryResult.Ref.RecoveryJobID, "recovery_cleanup", harness.now,
+		context.Background(), nil, harness.recoveryResult.Ref.RecoveryJobID, reason, harness.now,
 	); !errors.Is(err, ErrInvalidBrokerRequest) {
 		t.Fatalf("nil revoke transaction error=%v", err)
 	}
 	if err := harness.broker.RevokeRecoveryResultGrantsTx(
-		context.Background(), harness.db, invalidJobID, "recovery_cleanup", harness.now,
+		context.Background(), harness.db, invalidJobID, reason, harness.now,
 	); !errors.Is(err, ErrInvalidBrokerRequest) {
 		t.Fatalf("invalid revoke job error=%v", err)
 	}
-	if err := harness.broker.RevokeRecoveryResultGrantsTx(
-		context.Background(), harness.db, harness.recoveryResult.Ref.RecoveryJobID, "logout", harness.now,
-	); !errors.Is(err, ErrInvalidBrokerRequest) {
-		t.Fatalf("invalid cleanup reason error=%v", err)
+	for _, invalidReason := range []string{
+		"", "recovery_cleanup", "logout", "expired", "process_restarted",
+		" source_changed", "source_changed ", "SHUTDOWN", "shutdown\x00",
+	} {
+		if err := harness.broker.RevokeRecoveryResultGrantsTx(
+			context.Background(), harness.db, harness.recoveryResult.Ref.RecoveryJobID, invalidReason, harness.now,
+		); !errors.Is(err, ErrInvalidBrokerRequest) {
+			t.Fatalf("invalid recovery result revocation reason %q error=%v", invalidReason, err)
+		}
 	}
+	assertBrokerGrantState(t, harness.db, harness.material.GrantID, DeliveryActive, "", 0)
 	if err := harness.broker.RevokeRecoveryResultGrantsTx(
-		context.Background(), harness.db, harness.recoveryResult.Ref.RecoveryJobID, "recovery_cleanup", time.Time{},
+		context.Background(), harness.db, harness.recoveryResult.Ref.RecoveryJobID, reason, time.Time{},
 	); !errors.Is(err, ErrInvalidBrokerRequest) {
 		t.Fatalf("invalid revoke timestamp error=%v", err)
 	}
@@ -1682,14 +1786,26 @@ func TestBrokerRecoveryResultCleanupRevokeIsCallerTransactionalAndRejectsInvalid
 	}
 	var nilBroker *Broker
 	if err := nilBroker.RevokeRecoveryResultGrantsTx(
-		context.Background(), harness.db, harness.recoveryResult.Ref.RecoveryJobID, "recovery_cleanup", harness.now,
+		context.Background(), harness.db, harness.recoveryResult.Ref.RecoveryJobID, reason, harness.now,
 	); !errors.Is(err, ErrInvalidBrokerRequest) {
 		t.Fatalf("nil broker revoke error=%v", err)
+	}
+
+	recorder := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	if err := harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+		RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+	}, recorder); err != nil {
+		t.Fatalf("serve recovery result after rollback and rejected reasons: %v", err)
+	}
+	if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), []byte("hello result")) {
+		t.Fatalf("recovery result after rollback status=%d body=%q", recorder.Code, recorder.Body.Bytes())
 	}
 }
 
 func TestBrokerRecoveryResultCleanupCanceledDrainKeepsLeaseForRetry(t *testing.T) {
 	harness := newRecoveryBrokerTestHarness(t)
+	installProductionContentRevocationReasonConstraint(t, harness.db)
 	if _, err := harness.broker.Issue(context.Background(), harness.recoveryIssueRequest()); err != nil {
 		t.Fatalf("issue recovery result ticket: %v", err)
 	}
@@ -1708,7 +1824,7 @@ func TestBrokerRecoveryResultCleanupCanceledDrainKeepsLeaseForRetry(t *testing.T
 		t.Fatalf("begin cleanup timeout revoke: %v", tx.Error)
 	}
 	if err := harness.broker.RevokeRecoveryResultGrantsTx(
-		context.Background(), tx, jobID, "recovery_cleanup", harness.now,
+		context.Background(), tx, jobID, RecoveryResultCleanupReason, harness.now,
 	); err != nil {
 		_ = tx.Rollback().Error
 		t.Fatalf("revoke cleanup timeout grant: %v", err)

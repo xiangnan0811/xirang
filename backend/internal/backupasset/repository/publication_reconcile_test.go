@@ -992,3 +992,266 @@ func TestProcessVerifyingPointFailsDeterministicManifestRewrite(t *testing.T) {
 		t.Fatalf("manifest rewrite active lease=%d err=%v", active, err)
 	}
 }
+
+func TestPublicationLeaseDeadlinePrecisionSQLite(t *testing.T) {
+	runPublicationLeaseDeadlinePrecision(t, "sqlite")
+}
+
+func TestPublicationLeaseDeadlinePrecisionPostgres(t *testing.T) {
+	runPublicationLeaseDeadlinePrecision(t, "postgres")
+}
+
+func runPublicationLeaseDeadlinePrecision(t *testing.T, engine string) {
+	t.Helper()
+	ctx := context.Background()
+
+	t.Run("fresh_stage", func(t *testing.T) {
+		fixture := newPublicationDeadlinePrecisionFixture(t, engine)
+		commit := fixture.publication.commitEvidence()
+		if _, err := fixture.execution.RecordProviderCommit(ctx, resticProviderCommit(commit)); err != nil {
+			t.Fatalf("record provider commit: %v", err)
+		}
+		if previous := fixture.loadLease(t, fixture.initialLease.ID); previous.Status != string(backupasset.LeaseReleased) {
+			t.Fatalf("execution lease was not released: %+v", previous)
+		}
+		var nextLeaseID string
+		fixture.publication.manifest.build = func(_ context.Context, attempt provider.ResticAttemptV1, evidence provider.ResticCommitV1, _ provider.ManifestLimits) (provider.ResticManifestV1, error) {
+			if evidence != commit || attempt.Fence.LeaseID == fixture.initialLease.ID || !attempt.PointDeadlineAt.Equal(fixture.rawDeadline) {
+				t.Fatalf("new stage changed its source or deadline: attempt=%+v evidence=%+v", attempt, evidence)
+			}
+			nextLeaseID = attempt.Fence.LeaseID
+			return provider.ResticManifestV1{
+				DigestAlgorithm: "sha256", Digest: strings.Repeat("d", 64), Generator: "xirang-restic-ls", GeneratorVersion: "1",
+				Completeness: backupasset.ManifestComplete, EntryCount: 1, LogicalBytes: 1, Fidelity: provider.ResticManifestFidelityV1(),
+				HeaderCapturedAt: commit.CaptureStartedAt, ObservedTagDigest: publicationTagDigest(attempt.RequiredTags),
+			}, nil
+		}
+		outcome, err := fixture.publication.service.ProcessPoint(ctx, fixture.attempt.RecoveryPointID)
+		if err != nil || outcome.State != backupasset.RecoveryPointCommitted || nextLeaseID == "" {
+			t.Fatalf("fresh reconciliation outcome=%+v lease=%q err=%v", outcome, nextLeaseID, err)
+		}
+		next := fixture.loadLease(t, nextLeaseID)
+		if next.Status != string(backupasset.LeaseReleased) || !next.AbsoluteDeadline.Equal(fixture.storedDeadline) {
+			t.Fatalf("new stage lease changed deadline or was not released: %+v, want %v", next, fixture.storedDeadline)
+		}
+		fixture.requireLineage(t, backupasset.RecoveryPointCommitted)
+	})
+
+	t.Run("active_live", func(t *testing.T) {
+		fixture := newPublicationDeadlinePrecisionFixture(t, engine)
+		if _, err := fixture.publication.service.claimPreparingPoint(ctx, fixture.attempt.RecoveryPointID); !errors.Is(err, backupasset.ErrPublicationInProgress) {
+			t.Fatalf("live publication lease error=%v, want publication in progress", err)
+		}
+		fixture.requireOriginalLease(t)
+		fixture.requireLineage(t, backupasset.RecoveryPointPreparing)
+	})
+
+	t.Run("takeover", func(t *testing.T) {
+		fixture := newPublicationDeadlinePrecisionFixture(t, engine)
+		fixture.clock = fixture.initialLease.LeaseExpiresAt.Add(time.Second)
+		claim, err := fixture.publication.service.claimPreparingPoint(ctx, fixture.attempt.RecoveryPointID)
+		if err != nil {
+			t.Fatalf("claim expired short lease: %v", err)
+		}
+		current := fixture.loadLease(t, fixture.initialLease.ID)
+		if claim.lease.ID != fixture.initialLease.ID || current.Status != string(backupasset.LeaseActive) ||
+			current.AttemptID == fixture.initialLease.AttemptID || current.FenceToken == fixture.initialLease.FenceToken ||
+			!claim.lease.AbsoluteDeadline.Equal(fixture.storedDeadline) || !current.AbsoluteDeadline.Equal(fixture.storedDeadline) {
+			t.Fatalf("takeover failed to rotate the fence while retaining deadline: before=%+v after=%+v claim=%+v", fixture.initialLease, current, claim.lease)
+		}
+		fixture.requireLineage(t, backupasset.RecoveryPointPreparing)
+	})
+
+	t.Run("point_expiry", func(t *testing.T) {
+		fixture := newPublicationDeadlinePrecisionFixture(t, engine)
+		fixture.clock = fixture.rawDeadline.Add(-time.Nanosecond)
+		if _, expired, err := fixture.publication.service.expireAtDeadline(ctx, fixture.attempt.RecoveryPointID); err != nil || expired {
+			t.Fatalf("point expired before its signed deadline: expired=%v err=%v", expired, err)
+		}
+		fixture.clock = fixture.rawDeadline
+		outcome, expired, err := fixture.publication.service.expireAtDeadline(ctx, fixture.attempt.RecoveryPointID)
+		if err != nil || !expired || outcome.State != backupasset.RecoveryPointFailed || outcome.Code != backupasset.FailurePublicationDeadlineExceeded {
+			t.Fatalf("point deadline outcome=%+v expired=%v err=%v", outcome, expired, err)
+		}
+		fixture.requireOriginalLease(t)
+		fixture.requireLineage(t, backupasset.RecoveryPointFailed)
+	})
+
+	t.Run("deadline_drift", func(t *testing.T) {
+		fixture := newPublicationDeadlinePrecisionFixture(t, engine)
+		drift := time.Nanosecond
+		if engine == "postgres" {
+			drift = time.Microsecond
+		}
+		changedDeadline := fixture.storedDeadline.Add(drift)
+		if err := fixture.publication.db.Model(&model.RecoveryPointLease{}).Where("id = ?", fixture.initialLease.ID).
+			UpdateColumn("absolute_deadline", changedDeadline).Error; err != nil {
+			t.Fatalf("introduce persisted deadline drift: %v", err)
+		}
+		if actual := fixture.loadLease(t, fixture.initialLease.ID); !actual.AbsoluteDeadline.Equal(changedDeadline) {
+			t.Fatalf("deadline drift did not persist: got %v want %v", actual.AbsoluteDeadline, changedDeadline)
+		}
+		if _, err := fixture.publication.service.claimPreparingPoint(ctx, fixture.attempt.RecoveryPointID); !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("live lease deadline drift error=%v, want conflict", err)
+		}
+		if err := fixture.publication.service.lease.Release(ctx, fixture.attempt.Fence); err != nil {
+			t.Fatalf("release drifted lease: %v", err)
+		}
+		if _, err := fixture.publication.service.claimPreparingPoint(ctx, fixture.attempt.RecoveryPointID); !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("fresh stage deadline drift error=%v, want conflict", err)
+		}
+		fixture.clock = fixture.rawDeadline
+		if _, expired, err := fixture.publication.service.expireAtDeadline(ctx, fixture.attempt.RecoveryPointID); !errors.Is(err, backupasset.ErrConflict) || expired {
+			t.Fatalf("expiry deadline drift expired=%v err=%v, want conflict", expired, err)
+		}
+		var count int64
+		if err := fixture.publication.db.Model(&model.RecoveryPointLease{}).Where("recovery_point_id = ?", fixture.attempt.RecoveryPointID).Count(&count).Error; err != nil || count != 1 {
+			t.Fatalf("deadline drift changed lease history: count=%d err=%v", count, err)
+		}
+		fixture.requireLineage(t, backupasset.RecoveryPointPreparing)
+	})
+
+	t.Run("submicro_expiry_window", func(t *testing.T) {
+		exercisePublicationDeadlineWindow(t, engine, false)
+		exercisePublicationDeadlineWindow(t, engine, true)
+	})
+}
+
+type publicationDeadlinePrecisionFixture struct {
+	publication    *publicationFixture
+	execution      publication.Execution
+	attempt        provider.ResticAttemptV1
+	clock          time.Time
+	rawDeadline    time.Time
+	storedDeadline time.Time
+	initialLease   model.RecoveryPointLease
+	lineageJSON    string
+}
+
+func newPublicationDeadlinePrecisionFixture(t *testing.T, engine string) *publicationDeadlinePrecisionFixture {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 14, 11, 0, 0, 123456876, time.UTC)
+	db := openProducerRetentionIntegrationDB(t, engine)
+	publicationFixture := newPublicationFixtureWithDB(t, db, true, publication.AdmissionManaged, now)
+	publicationFixture.connectExactResticBinding(t)
+	fixture := &publicationDeadlinePrecisionFixture{publication: publicationFixture, clock: now}
+	clock := func() time.Time { return fixture.clock }
+	leaseConfig, err := publicationFixture.service.foundation.LeaseConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := backupasset.NewLeaseService(db, clock, leaseConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicationFixture.service.now = clock
+	publicationFixture.service.lease = lease
+	fixture.execution, err = publicationFixture.service.Prepare(ctx, publicationFixture.run())
+	if err != nil {
+		t.Fatalf("prepare publication: %v", err)
+	}
+	t.Cleanup(func() { _ = fixture.execution.Abandon(backupasset.ErrPublicationSessionAbandoned) })
+	if err := fixture.execution.Cancel(nil); err != nil {
+		t.Fatalf("stop publication heartbeat: %v", err)
+	}
+	fixture.attempt = resticAttemptForExecution(t, fixture.execution)
+	fixture.rawDeadline = time.Date(2026, 7, 21, 11, 0, 0, 123456876, time.UTC)
+	if !fixture.attempt.PointDeadlineAt.Equal(fixture.rawDeadline) {
+		t.Fatalf("signed attempt deadline=%v want %v", fixture.attempt.PointDeadlineAt, fixture.rawDeadline)
+	}
+	fixture.storedDeadline = fixture.rawDeadline
+	if engine == "postgres" {
+		fixture.storedDeadline = time.Date(2026, 7, 21, 11, 0, 0, 123456000, time.UTC)
+	}
+	fixture.initialLease = fixture.loadLease(t, fixture.attempt.Fence.LeaseID)
+	if fixture.initialLease.Status != string(backupasset.LeaseActive) || !fixture.initialLease.AbsoluteDeadline.Equal(fixture.storedDeadline) {
+		t.Fatalf("initial persisted lease=%+v want active deadline %v", fixture.initialLease, fixture.storedDeadline)
+	}
+	var point model.RecoveryPoint
+	if err := db.First(&point, "id = ?", fixture.attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	lineage, err := backupasset.DecodePublicationLineage(point.LineageJSON)
+	if err != nil || !lineage.PointDeadlineAt.Equal(fixture.rawDeadline) {
+		t.Fatalf("stored lineage deadline=%v want %v err=%v", lineage.PointDeadlineAt, fixture.rawDeadline, err)
+	}
+	fixture.lineageJSON = point.LineageJSON
+	return fixture
+}
+
+func (fixture *publicationDeadlinePrecisionFixture) loadLease(t *testing.T, leaseID string) model.RecoveryPointLease {
+	t.Helper()
+	var lease model.RecoveryPointLease
+	if err := fixture.publication.db.First(&lease, "id = ?", leaseID).Error; err != nil {
+		t.Fatalf("reload lease %s: %v", leaseID, err)
+	}
+	return lease
+}
+
+func (fixture *publicationDeadlinePrecisionFixture) requireOriginalLease(t *testing.T) {
+	t.Helper()
+	current := fixture.loadLease(t, fixture.initialLease.ID)
+	if current.Status != fixture.initialLease.Status || current.AttemptID != fixture.initialLease.AttemptID ||
+		current.FenceToken != fixture.initialLease.FenceToken || !current.LeaseExpiresAt.Equal(fixture.initialLease.LeaseExpiresAt) ||
+		!current.AbsoluteDeadline.Equal(fixture.storedDeadline) {
+		t.Fatalf("original lease changed: before=%+v after=%+v", fixture.initialLease, current)
+	}
+}
+
+func (fixture *publicationDeadlinePrecisionFixture) requireLineage(t *testing.T, state backupasset.RecoveryPointState) {
+	t.Helper()
+	var point model.RecoveryPoint
+	if err := fixture.publication.db.First(&point, "id = ?", fixture.attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if point.State != string(state) || point.LineageJSON != fixture.lineageJSON {
+		t.Fatalf("point state or signed lineage changed: state=%q lineage=%q", point.State, point.LineageJSON)
+	}
+}
+
+func exercisePublicationDeadlineWindow(t *testing.T, engine string, fresh bool) {
+	t.Helper()
+	ctx := context.Background()
+	fixture := newPublicationDeadlinePrecisionFixture(t, engine)
+	if fresh {
+		if err := fixture.publication.service.lease.Release(ctx, fixture.attempt.Fence); err != nil {
+			t.Fatalf("release original lease for fresh stage: %v", err)
+		}
+	}
+	fixture.clock = fixture.rawDeadline.Add(-time.Nanosecond)
+	if engine == "postgres" {
+		fixture.clock = fixture.storedDeadline.Add(time.Nanosecond)
+		if !fixture.clock.Before(fixture.rawDeadline) {
+			t.Fatal("PostgreSQL test clock is not inside the submicrosecond window")
+		}
+	}
+	if _, expired, err := fixture.publication.service.expireAtDeadline(ctx, fixture.attempt.RecoveryPointID); err != nil || expired {
+		t.Fatalf("point expired before signed deadline: fresh=%v expired=%v err=%v", fresh, expired, err)
+	}
+	claim, err := fixture.publication.service.claimPreparingPoint(ctx, fixture.attempt.RecoveryPointID)
+	if engine == "postgres" {
+		if !errors.Is(err, backupasset.ErrLeaseDeadlineExceeded) {
+			t.Fatalf("expired PostgreSQL lease was extended: fresh=%v claim=%+v err=%v", fresh, claim.lease, err)
+		}
+		current := fixture.loadLease(t, fixture.initialLease.ID)
+		if !current.AbsoluteDeadline.Equal(fixture.storedDeadline) || current.AttemptID != fixture.initialLease.AttemptID || current.FenceToken != fixture.initialLease.FenceToken {
+			t.Fatalf("expired PostgreSQL lease changed: before=%+v after=%+v", fixture.initialLease, current)
+		}
+	} else {
+		if err != nil || !claim.lease.AbsoluteDeadline.Equal(fixture.storedDeadline) || !claim.lease.LeaseExpiresAt.Equal(fixture.storedDeadline) {
+			t.Fatalf("SQLite lease before its deadline: fresh=%v claim=%+v err=%v", fresh, claim.lease, err)
+		}
+		current := fixture.loadLease(t, claim.lease.ID)
+		if !current.AbsoluteDeadline.Equal(fixture.storedDeadline) || !current.LeaseExpiresAt.Equal(fixture.storedDeadline) {
+			t.Fatalf("SQLite lease extended beyond deadline: %+v", current)
+		}
+	}
+	fixture.requireLineage(t, backupasset.RecoveryPointPreparing)
+	fixture.clock = fixture.rawDeadline
+	outcome, expired, err := fixture.publication.service.expireAtDeadline(ctx, fixture.attempt.RecoveryPointID)
+	if err != nil || !expired || outcome.State != backupasset.RecoveryPointFailed || outcome.Code != backupasset.FailurePublicationDeadlineExceeded {
+		t.Fatalf("point did not expire at signed deadline: fresh=%v outcome=%+v expired=%v err=%v", fresh, outcome, expired, err)
+	}
+	fixture.requireLineage(t, backupasset.RecoveryPointFailed)
+}

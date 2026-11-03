@@ -199,6 +199,18 @@ func (managedRecoveryUnavailablePreflightEvidenceAuthority) ObserveRecoveryPrefl
 	return recovery.PreflightExternalEvidenceObservation{}, recovery.ErrTargetPreflightUnavailable
 }
 
+func (managedRecoveryUnavailablePreflightEvidenceAuthority) RevalidateRecoveryPreflightEvidenceTx(
+	ctx context.Context,
+	_ *gorm.DB,
+	_ recovery.PreflightExternalEvidenceRequest,
+	_ recovery.RecoveryAuthorityObservation,
+) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return recovery.ErrTargetPreflightUnavailable
+}
+
 type managedRecoveryUnavailableAuthorityRevalidator struct{}
 
 func (managedRecoveryUnavailableAuthorityRevalidator) ObserveRecoveryAuthority(
@@ -603,6 +615,7 @@ type managedRecoveryGraph struct {
 	deleteHandoffValidator managedRecoveryDeleteHandoffValidator
 	worker                 *managedRecoveryWorker
 	resultLifecycle        *recovery.ResultLifecycleService
+	resultPublicationOwner *managedRecoveryResultPublicationOwner
 	cleanup                *managedRecoveryCleanupOwner
 	resultDelivery         managedRecoveryResultBackend
 	reconciliation         *recovery.RecoveryReconciliationService
@@ -835,8 +848,99 @@ func (graph *managedRecoveryGraph) currentReconciliationState() recovery.Recover
 	return graph.reconciliationState
 }
 
+type managedRecoverySealedResultPublisher interface {
+	PublishSealedBatch(context.Context, recovery.RecoverySealedResultCursor, int) (recovery.RecoverySealedResultCursor, error)
+}
+
+type managedRecoveryResultPublicationOwner struct {
+	lifecycle     managedRecoverySealedResultPublisher
+	cursor        recovery.RecoverySealedResultCursor
+	cadence       time.Duration
+	batchSize     int
+	retryBase     time.Duration
+	retryMaxDelay time.Duration
+	newTimer      func(time.Duration) managedRecoveryTimer
+}
+
+type managedRecoveryResultPublicationOwnerDependencies struct {
+	Lifecycle     managedRecoverySealedResultPublisher
+	Cadence       time.Duration
+	BatchSize     int
+	RetryBase     time.Duration
+	RetryMaxDelay time.Duration
+	NewTimer      func(time.Duration) managedRecoveryTimer
+}
+
+func newManagedRecoveryResultPublicationOwner(
+	dependencies managedRecoveryResultPublicationOwnerDependencies,
+) (*managedRecoveryResultPublicationOwner, error) {
+	if nilManagedRecoveryDependency(dependencies.Lifecycle) ||
+		dependencies.Cadence <= 0 || dependencies.BatchSize <= 0 || dependencies.BatchSize > 1000 ||
+		dependencies.RetryBase <= 0 || dependencies.RetryMaxDelay < dependencies.RetryBase {
+		return nil, fmt.Errorf("%w: Recovery result publication owner dependencies unavailable", backupasset.ErrInvalidState)
+	}
+	if dependencies.NewTimer == nil {
+		dependencies.NewTimer = func(duration time.Duration) managedRecoveryTimer {
+			return managedRecoveryStdTimer{timer: time.NewTimer(duration)}
+		}
+	}
+	return &managedRecoveryResultPublicationOwner{
+		lifecycle: dependencies.Lifecycle, cadence: dependencies.Cadence, batchSize: dependencies.BatchSize,
+		retryBase: dependencies.RetryBase, retryMaxDelay: dependencies.RetryMaxDelay, newTimer: dependencies.NewTimer,
+	}, nil
+}
+
+func (owner *managedRecoveryResultPublicationOwner) Run(ctx context.Context) {
+	if owner == nil || owner.newTimer == nil {
+		return
+	}
+	ctx = nonNilRecoveryRuntimeContext(ctx)
+	timer := owner.newTimer(owner.cadence)
+	if timer == nil {
+		return
+	}
+	defer timer.Stop()
+	retryDelay := owner.retryBase
+	for {
+		err := owner.runPass(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		nextDelay := owner.cadence
+		if err != nil {
+			nextDelay = retryDelay
+			retryDelay = nextManagedRecoveryRetryDelay(retryDelay, owner.retryMaxDelay)
+		} else {
+			retryDelay = owner.retryBase
+		}
+		timer.Reset(nextDelay)
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.Chan():
+		}
+	}
+}
+
+func (owner *managedRecoveryResultPublicationOwner) runPass(ctx context.Context) error {
+	if owner == nil || nilManagedRecoveryDependency(owner.lifecycle) || owner.batchSize <= 0 || owner.batchSize > 1000 {
+		return fmt.Errorf("%w: Recovery result publication owner unavailable", backupasset.ErrInvalidState)
+	}
+	ctx = nonNilRecoveryRuntimeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cursor, err := owner.lifecycle.PublishSealedBatch(ctx, owner.cursor, owner.batchSize)
+	owner.cursor = cursor
+	if err != nil {
+		return fmt.Errorf("publish sealed Recovery results: %w", err)
+	}
+	return nil
+}
+
 type managedRecoveryCleanupOwner struct {
 	lifecycle     managedRecoveryCleanupLifecycle
+	cursor        recovery.RecoverySealedResultCursor
 	workerID      string
 	cadence       time.Duration
 	batchSize     int
@@ -846,6 +950,7 @@ type managedRecoveryCleanupOwner struct {
 }
 
 type managedRecoveryCleanupLifecycle interface {
+	ExpireSealedBatch(context.Context, recovery.RecoverySealedResultCursor, int) (recovery.RecoverySealedResultCursor, error)
 	ListScheduledCleanupCandidates(context.Context, int) ([]recovery.ScheduledCleanupCandidate, error)
 	ClaimScheduledCleanup(context.Context, recovery.ClaimRecoveryResultCleanupRequest) (recovery.RecoveryResultCleanupClaim, error)
 	RevokeRecoveryResultCleanup(context.Context, recovery.RecoveryResultCleanupClaim) (recovery.RecoveryResultCleanupClaim, error)
@@ -934,11 +1039,19 @@ func (owner *managedRecoveryCleanupOwner) runPass(ctx context.Context) (int, err
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
+	cursor, expireErr := owner.lifecycle.ExpireSealedBatch(ctx, owner.cursor, owner.batchSize)
+	owner.cursor = cursor
+	var passErr error
+	if expireErr != nil {
+		passErr = fmt.Errorf("expire sealed Recovery results: %w", expireErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, errors.Join(passErr, err)
+	}
 	candidates, err := owner.lifecycle.ListScheduledCleanupCandidates(ctx, owner.batchSize)
 	if err != nil {
-		return 0, fmt.Errorf("load Recovery cleanup candidates: %w", err)
+		return 0, errors.Join(passErr, fmt.Errorf("load Recovery cleanup candidates: %w", err))
 	}
-	var passErr error
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return len(candidates), errors.Join(passErr, err)
@@ -1031,7 +1144,7 @@ func buildManagedRecoveryGraph(
 
 	target, err := recovery.NewProductionTarget(recovery.ProductionTargetDependencies{
 		DB: dependencies.DB, Revisions: dependencies.NodeRevisions,
-		Dialer: dependencies.Dialer, WorkspaceKeys: dependencies.WorkspaceKeys,
+		Dialer: dependencies.Dialer, WorkspaceKeys: dependencies.WorkspaceKeys, Now: dependencies.Now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build Recovery target: %w", err)
@@ -1160,6 +1273,14 @@ func buildManagedRecoveryGraph(
 	if managedRecoveryKnownUnavailableProductionAuthorities(dependencies) {
 		return nil, fmt.Errorf("%w: Recovery production authorities unavailable", backupasset.ErrInvalidState)
 	}
+	resultPublicationOwner, err := newManagedRecoveryResultPublicationOwner(managedRecoveryResultPublicationOwnerDependencies{
+		Lifecycle: resultLifecycle, Cadence: config.CleanupCadence, BatchSize: config.CleanupBatchSize,
+		RetryBase: config.CleanupRetryBase, RetryMaxDelay: config.CleanupRetryMaxDelay,
+		NewTimer: dependencies.CleanupNewTimer,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build Recovery result publication owner: %w", err)
+	}
 	plan, err := recovery.NewPlanService(recovery.PlanServiceDependencies{
 		DB: dependencies.DB, Now: dependencies.Now, Audit: dependencies.Audit,
 		TargetRootResolver: dependencies.Settings,
@@ -1172,7 +1293,7 @@ func buildManagedRecoveryGraph(
 	if err != nil {
 		return nil, fmt.Errorf("build Recovery preflight evidence adapter: %w", err)
 	}
-	evaluator, err := recovery.NewTargetPreflightEvaluator(target, externalEvidence)
+	evaluator, err := recovery.NewTargetPreflightEvaluator(target, externalEvidence, dependencies.Now)
 	if err != nil {
 		return nil, fmt.Errorf("build Recovery preflight evaluator: %w", err)
 	}
@@ -1258,7 +1379,9 @@ func buildManagedRecoveryGraph(
 	if err != nil {
 		return nil, fmt.Errorf("build Recovery worker identity: %w", err)
 	}
-	claimExecutor := &managedRecoveryResolvedClaimExecutor{builder: restoreBridge, restorePort: restorePort}
+	claimExecutor := &managedRecoveryResolvedClaimExecutor{
+		builder: restoreBridge, restorePort: restorePort, prewriteFailure: workerCoordinator,
+	}
 	worker, err := newManagedRecoveryWorker(managedRecoveryWorkerDependencies{
 		Coordinator: workerCoordinator, Executor: claimExecutor, WorkerID: "recovery-worker-" + workerID,
 		WorkerConcurrency: config.WorkerConcurrency, TakeoverCadence: config.TakeoverCadence,
@@ -1277,8 +1400,9 @@ func buildManagedRecoveryGraph(
 		application:      application, plan: plan, preflight: preflight, authorization: authorization, target: target,
 		workerCoordinator: workerCoordinator, deleteHandoffValidator: workerCoordinator, worker: worker,
 		resultLifecycle: resultLifecycle, cleanup: cleanup, resultDelivery: resultDelivery, reconciliation: reconciliation,
-		downgradeReconciler: reconciliation,
-		rsyncRestorePort:    restorePort, workerCoordinatorSourceResolver: dependencies.SourceResolver,
+		resultPublicationOwner: resultPublicationOwner,
+		downgradeReconciler:    reconciliation,
+		rsyncRestorePort:       restorePort, workerCoordinatorSourceResolver: dependencies.SourceResolver,
 		reconciliationState: recovery.RecoveryReconciliationBlocked,
 		stopClaims:          worker.StopAccepting,
 		cancelJoinAttempts:  worker.CancelAndJoin,
@@ -1314,7 +1438,7 @@ func buildManagedRecoveryGraph(
 	graph.run = func(ctx context.Context) {
 		ctx = nonNilRecoveryRuntimeContext(ctx)
 		var owners sync.WaitGroup
-		owners.Add(3)
+		owners.Add(4)
 		go func() {
 			defer owners.Done()
 			worker.Run(ctx)
@@ -1322,6 +1446,10 @@ func buildManagedRecoveryGraph(
 		go func() {
 			defer owners.Done()
 			cleanup.Run(ctx)
+		}()
+		go func() {
+			defer owners.Done()
+			resultPublicationOwner.Run(ctx)
 		}()
 		go func() {
 			defer owners.Done()
@@ -2180,7 +2308,7 @@ func managedRecoveryDeliveryShutdown(
 						return backupasset.ErrInvalidState
 					}
 					if err := lifecycle.RevokeRecoveryResultGrantsTx(
-						ctx, tx, jobID, content.RecoveryResultCleanupReason, at,
+						ctx, tx, jobID, content.RecoveryResultShutdownReason, at,
 					); err != nil {
 						return err
 					}
@@ -2408,13 +2536,18 @@ type managedRecoveryRestoreRequestBuilder interface {
 	ReleaseRsyncRestoreRequest(recovery.RecoveryWorkerClaim)
 }
 
+type managedRecoveryPrewriteFailureCloser interface {
+	FailPristinePrewrite(context.Context, recovery.RecoveryWorkerClaim) error
+}
+
 type managedRecoveryRestoreExecutionPort interface {
 	Execute(context.Context, provider.RestoreRequest, provider.RestoreProgress) (provider.RestoreResult, error)
 }
 
 type managedRecoveryResolvedClaimExecutor struct {
-	builder     managedRecoveryRestoreRequestBuilder
-	restorePort managedRecoveryRestoreExecutionPort
+	builder         managedRecoveryRestoreRequestBuilder
+	restorePort     managedRecoveryRestoreExecutionPort
+	prewriteFailure managedRecoveryPrewriteFailureCloser
 }
 
 type managedRecoveryDeletePauseTaker interface {
@@ -2426,12 +2559,16 @@ func (executor *managedRecoveryResolvedClaimExecutor) ExecuteResolvedClaim(
 	claim recovery.RecoveryWorkerClaim,
 ) error {
 	if executor == nil || nilManagedRecoveryDependency(executor.builder) ||
-		nilManagedRecoveryDependency(executor.restorePort) || backupasset.ValidateOpaqueID(claim.JobID) != nil {
+		nilManagedRecoveryDependency(executor.restorePort) || nilManagedRecoveryDependency(executor.prewriteFailure) ||
+		backupasset.ValidateOpaqueID(claim.JobID) != nil {
 		return recovery.ErrInvalidRecoveryWorker
 	}
 	ctx = nonNilRecoveryRuntimeContext(ctx)
 	request, err := executor.builder.BuildRsyncRestoreRequest(ctx, claim)
 	if err != nil {
+		if closeErr := executor.prewriteFailure.FailPristinePrewrite(ctx, claim); closeErr != nil {
+			return errors.Join(err, closeErr)
+		}
 		return err
 	}
 	defer executor.builder.ReleaseRsyncRestoreRequest(claim)
@@ -2447,9 +2584,21 @@ func (executor *managedRecoveryResolvedClaimExecutor) ExecuteResolvedClaim(
 	return nil
 }
 
+type managedRecoveryClaimRestoreCoordinator interface {
+	BuildRsyncRestoreRequest(context.Context, recovery.RecoveryWorkerClaim) (provider.RestoreRequest, error)
+	ExecuteClaimWithRsyncTargetWriter(
+		context.Context, recovery.RecoveryWorkerClaim, provider.RsyncRestoreSource,
+		provider.RsyncTargetWriter, provider.RsyncBoundRemoteTarget,
+	) error
+	ExecuteClaimWithRsyncTargetWriterAndDeleteGrant(
+		context.Context, recovery.RecoveryWorkerClaim, provider.RsyncRestoreSource,
+		provider.RsyncTargetWriter, provider.RsyncBoundRemoteTarget, string,
+	) error
+}
+
 type managedRecoveryClaimRestoreBridge struct {
 	db          *gorm.DB
-	coordinator *recovery.WorkerCoordinator
+	coordinator managedRecoveryClaimRestoreCoordinator
 	now         func() time.Time
 
 	mu     sync.Mutex
@@ -2459,10 +2608,10 @@ type managedRecoveryClaimRestoreBridge struct {
 
 func newManagedRecoveryClaimRestoreBridge(
 	db *gorm.DB,
-	coordinator *recovery.WorkerCoordinator,
+	coordinator managedRecoveryClaimRestoreCoordinator,
 	now func() time.Time,
 ) (*managedRecoveryClaimRestoreBridge, error) {
-	if db == nil || coordinator == nil || now == nil {
+	if db == nil || nilManagedRecoveryDependency(coordinator) || now == nil {
 		return nil, fmt.Errorf("%w: Recovery restore bridge unavailable", backupasset.ErrInvalidState)
 	}
 	return &managedRecoveryClaimRestoreBridge{
@@ -2476,130 +2625,16 @@ func managedRecoveryClaimKey(claim recovery.RecoveryWorkerClaim) string {
 	return claim.JobID + "\x00" + claim.AttemptID + "\x00" + claim.NodeLeaseID
 }
 
-func managedRecoveryProviderSessionExpiry(claim recovery.RecoveryWorkerClaim) time.Time {
-	return claim.AbsoluteDeadline.UTC()
-}
-
 func (bridge *managedRecoveryClaimRestoreBridge) BuildRsyncRestoreRequest(
 	ctx context.Context,
 	claim recovery.RecoveryWorkerClaim,
 ) (provider.RestoreRequest, error) {
-	if bridge == nil || bridge.db == nil || bridge.coordinator == nil || bridge.now == nil ||
-		backupasset.ValidateOpaqueID(claim.JobID) != nil || backupasset.ValidateOpaqueID(claim.AttemptID) != nil ||
-		backupasset.ValidateOpaqueID(claim.NodeLeaseID) != nil || !claim.LeaseExpiresAt.After(bridge.now().UTC()) {
+	if bridge == nil || nilManagedRecoveryDependency(bridge.coordinator) {
 		return provider.RestoreRequest{}, recovery.ErrInvalidRecoveryWorker
 	}
-	ctx = nonNilRecoveryRuntimeContext(ctx)
-	var job model.BackupAssetRecoveryJob
-	var plan model.BackupAssetRecoveryPlan
-	var preflight model.BackupAssetRecoveryPreflight
-	var planItems []model.BackupAssetRecoveryPlanItem
-	var catalogEntries []model.CatalogEntry
-	err := bridge.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		loaded := tx.WithContext(ctx).Where("id = ?", claim.JobID).Limit(1).Find(&job)
-		if loaded.Error != nil || loaded.RowsAffected != 1 || job.PlanID == "" ||
-			job.State != string(recovery.JobStateRunning) || job.TransitionRevision != claim.TransitionRevision {
-			return recovery.ErrRecoveryWorkerFenceLost
-		}
-		loaded = tx.WithContext(ctx).Where("id = ?", job.PlanID).Limit(1).Find(&plan)
-		if loaded.Error != nil || loaded.RowsAffected != 1 || plan.State != string(recovery.PlanStateExecuted) {
-			return recovery.ErrRecoveryWorkerFenceLost
-		}
-		loaded = tx.WithContext(ctx).Where("id = ? AND plan_id = ?", job.PreflightID, plan.ID).Limit(1).Find(&preflight)
-		if loaded.Error != nil || loaded.RowsAffected != 1 || preflight.Revision != job.PreflightRevision ||
-			preflight.TargetRevision != job.TargetChainRevision {
-			return recovery.ErrRecoveryWorkerFenceLost
-		}
-		loaded = tx.WithContext(ctx).Where("plan_id = ?", plan.ID).Order("ordinal ASC, id ASC").Find(&planItems)
-		if loaded.Error != nil || len(planItems) == 0 {
-			return recovery.ErrRecoveryWorkerFenceLost
-		}
-		entryIDs := make([]string, len(planItems))
-		for index := range planItems {
-			entryIDs[index] = planItems[index].EntryID
-		}
-		loaded = tx.WithContext(ctx).Where(
-			"generation_id = ? AND recovery_point_id = ? AND entry_id IN ?",
-			plan.CatalogGenerationID, plan.RecoveryPointID, entryIDs,
-		).Find(&catalogEntries)
-		if loaded.Error != nil || len(catalogEntries) != len(planItems) {
-			return recovery.ErrRecoverySourceChanged
-		}
-		return nil
-	})
+	request, err := bridge.coordinator.BuildRsyncRestoreRequest(nonNilRecoveryRuntimeContext(ctx), claim)
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return provider.RestoreRequest{}, contextErr
-		}
 		return provider.RestoreRequest{}, err
-	}
-	ref, err := recovery.NewRsyncRestoreSourceRef(plan)
-	if err != nil {
-		return provider.RestoreRequest{}, recovery.ErrRecoverySourceChanged
-	}
-	target, err := provider.NewRestoreTarget(
-		plan.TargetNodeID, plan.TargetRootID, plan.RootLocatorDigest, plan.PathDigest,
-		plan.RootRevision, job.TargetChainRevision,
-	)
-	if err != nil {
-		return provider.RestoreRequest{}, recovery.ErrRecoveryWorkerFenceLost
-	}
-	entryByID := make(map[string]model.CatalogEntry, len(catalogEntries))
-	for _, entry := range catalogEntries {
-		entryByID[entry.EntryID] = entry
-	}
-	entries := make([]provider.RestoreEntry, len(planItems))
-	var totalBytes int64
-	var maxEntryBytes int64
-	for index, item := range planItems {
-		entry, exists := entryByID[item.EntryID]
-		assetRef := backupasset.AssetRef{RecoveryPointID: item.RecoveryPointID, EntryID: item.EntryID}
-		if !exists || item.Ordinal != index || item.RecoveryPointID != plan.RecoveryPointID ||
-			item.CatalogGenerationID != plan.CatalogGenerationID ||
-			entry.EntryType != string(backupasset.CatalogEntryFile) || entry.Size < 0 {
-			return provider.RestoreRequest{}, recovery.ErrRecoverySourceChanged
-		}
-		entries[index] = provider.RestoreEntry{
-			AssetRef: assetRef, Type: backupasset.CatalogEntryFile, ExpectedSize: entry.Size,
-			TargetObjectDigest: item.RelativePathDigest,
-		}
-		totalBytes += entry.Size
-		maxEntryBytes = max(maxEntryBytes, entry.Size)
-	}
-	maxBytes := max(totalBytes, int64(1))
-	maxEntryBytes = max(maxEntryBytes, int64(1))
-	fence := provider.RestoreFence{
-		JobID: claim.JobID, AttemptID: claim.AttemptID, NodeLeaseID: claim.NodeLeaseID,
-		AttemptFence: claim.AttemptFence, NodeFence: claim.NodeFence,
-		ExpectedTargetRevision: job.TargetChainRevision,
-	}
-	checkpoint := provider.RestoreCheckpoint{
-		ID: claim.AttemptID, OperationDigest: plan.OperationSetDigest,
-		PriorTargetRevision: job.TargetChainRevision, VerifiedTargetIdentityDigest: plan.PathDigest,
-		VerifiedTargetRevision: job.TargetChainRevision, VerifiedBytes: 0,
-		AttemptFence: claim.AttemptFence, NodeFence: claim.NodeFence,
-	}
-	request := provider.RestoreRequest{
-		Version: provider.RestoreRequestSchemaV1, Provider: backupasset.ProviderRsync,
-		Entries: entries, Target: target,
-		Limits:         provider.RestoreLimits{MaxEntries: len(entries), MaxBytes: maxBytes, MaxEntryBytes: maxEntryBytes},
-		ConflictPolicy: provider.RestoreConflictPolicy(plan.ConflictPolicy), Fence: fence, Checkpoint: checkpoint,
-		MutationPermit: provider.TargetMutationPermit{
-			TargetBindingDigest: target.BindingDigest, UseLatchID: provider.RestoreSchemaUseLatchID,
-			JobID: claim.JobID, AttemptID: claim.AttemptID, NodeLeaseID: claim.NodeLeaseID,
-			AttemptFence: claim.AttemptFence, NodeFence: claim.NodeFence,
-			ExpectedTargetRevision: job.TargetChainRevision,
-			Session: provider.TargetSession{
-				ID: claim.AttemptID, Purpose: provider.TargetPurposeWrite,
-				CredentialRevision: plan.CredentialScopeRevision,
-				ExpiresAt:          managedRecoveryProviderSessionExpiry(claim),
-			},
-		},
-		Rsync: &provider.RsyncRestoreRequest{ManifestDigest: ref.ManifestDigest, SourceRef: ref},
-	}
-	if request.ValidateRsyncResolutionIntent() != nil ||
-		request.MutationPermit.ValidateAt(bridge.now().UTC(), request.Target, request.Fence) != nil {
-		return provider.RestoreRequest{}, recovery.ErrRecoveryWorkerFenceLost
 	}
 	bridge.mu.Lock()
 	bridge.claims[managedRecoveryClaimKey(claim)] = claim

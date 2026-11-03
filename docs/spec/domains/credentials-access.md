@@ -228,6 +228,7 @@ Web 自备份创建/列表不因此新增 TOTP 要求；整库备份下载另需
 
 - 禁用或 `expires_at <= now` 的密钥在使用私钥之前拒绝，包括测试和导出。purpose 非空时必须包含当前用途；节点 ID 非空须精确匹配；标签非空须有一个精确匹配；ID 和标签同时设置时都须满足。
 - 新调用点必须用 `BuildSSHAuthForPurpose`、`BuildSSHAuthWithKeyForPurpose` 或 `DialSSHForNodePurpose` 等共享 purpose helper。兼容的无用途 helper 不可复制到新边界。
+- 成功使用受管密钥时只记录 `last_used_at`，不得因此推进 `updated_at` 或使 Recovery 已冻结的凭据 revision 失效；密钥材料和权限策略的真实修改仍更新 revision 并按原边界失效。
 - 闭合用途包括 `ssh_key_test`、`ssh_key_export`、`node_test`、`terminal`、`task_command`、`batch_command`、`drill`、`probe`、`file_browser`、`docker_volumes`、`node_logs`、`task_backup`、`task_restore`、`task_hook`、`snapshot`、`snapshot_diff`、`integrity_check`、`retention`、`node_migration`。新增值同步归一化、调用方和回归；创建/更新拒绝未知值。
 - `probe`、`node_logs` 是历史受限 scope 的保留 token，仅继续解析、展示和保留限制，不再有执行生产者或新用途建议。不得过滤它们导致“空=全部”；仅含退役用途的凭据对 `node_test/task_backup/task_restore` 等现存用途仍拒绝。
 - scope 只约束受管 `ssh_keys`。节点内联密码/私钥仍须凭据审计，但不伪称受 SSHKey scope 控制。拒绝信息不得泄露密钥、密码、用户名加主机、endpoint、执行配置或原始 SSH/SQL/加密错误。

@@ -260,7 +260,7 @@ func (service *Service) openRsyncCatalogRead(
 	if runtime.repository.ID != repository.ID {
 		return nil, fmt.Errorf("%w: immutable Rsync Catalog binding changed", backupasset.ErrConflict)
 	}
-	readRequest, access, err := service.managedRsyncCommittedPointReadRequest(ctx, runtime, point)
+	readRequest, access, err := service.managedRsyncCommittedPointReadRequest(ctx, service.db, runtime, point)
 	if err != nil {
 		return nil, err
 	}

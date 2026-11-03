@@ -74,7 +74,7 @@ func markSSHKeyLastUsed(db *gorm.DB, credential ResolvedCredential) {
 		return
 	}
 	now := time.Now().UTC()
-	_ = db.Model(&model.SSHKey{}).Where("id = ?", *credential.KeyID).Update("last_used_at", now).Error
+	_ = db.Model(&model.SSHKey{}).Where("id = ?", *credential.KeyID).UpdateColumn("last_used_at", now).Error
 }
 
 func credentialFromSSHKey(nodeSSHKeyID *uint, keyID uint) ResolvedCredential {

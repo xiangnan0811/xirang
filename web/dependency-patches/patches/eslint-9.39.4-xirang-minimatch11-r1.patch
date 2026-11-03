@@ -1,0 +1,40 @@
+--- package/XIRANG-MODIFICATIONS.txt
++++ package/XIRANG-MODIFICATIONS.txt
+@@ -0,0 +1,15 @@
++Xirang local dependency modification, revision 1
++Advisory: GHSA-g3hv-75wg-m249
++Upstream package: eslint@9.39.4
++Upstream URL: https://registry.npmjs.org/eslint/-/eslint-9.39.4.tgz
++Upstream integrity: sha512-XoMjdBOwe/esVgEvLmNsD3IRHkm7fbKIUGvrleloJXUZgDHig2IPWNniv+GwjyJXzuNqVjlr5+4yVUZjycJwfQ==
++Upstream license: MIT (original license and notice files retained)
++Source inventory and requester list: web/dependency-patches/sources.json
++Modified or added files relative to the package root:
++  XIRANG-MODIFICATIONS.txt
++  package.json
++
++The declared minimatch dependency is 11.0.1. Changed imports and types use
++its public API and types; matching follows minimatch 11.0.1 semantics.
++Older minimatch APIs and matching behavior are not emulated. Compatibility
++is assessed against this repository's actual consumers and configurations.
+--- package/package.json
++++ package/package.json
+@@ -137,7 +137,7 @@
+     "is-glob": "^4.0.0",
+     "json-stable-stringify-without-jsonify": "^1.0.1",
+     "lodash.merge": "^4.6.2",
+-    "minimatch": "^3.1.5",
++    "minimatch": "11.0.1",
+     "natural-compare": "^1.4.0",
+     "optionator": "^0.9.3"
+   },
+@@ -222,5 +222,10 @@
+   "license": "MIT",
+   "engines": {
+     "node": "^18.18.0 || ^20.9.0 || >=21.1.0"
++  },
++  "x-xirang-patch": {
++    "revision": 1,
++    "advisory": "GHSA-g3hv-75wg-m249",
++    "upstreamVersion": "9.39.4"
+   }
+ }

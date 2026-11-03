@@ -204,7 +204,7 @@ func TestWorkerRouterStreamsBoundedInputArtifactAndOneManifest(t *testing.T) {
 	sinkSessionID := strings.Repeat("6", 32)
 	service := &workerProtocolAPIFake{
 		inputActivationResult: processing.WorkerInputActivation{
-			SchemaVersion: 1, SessionID: inputSessionID,
+			SchemaVersion: 2, SessionID: inputSessionID, Source: processing.WorkerInputSourceInfo{MaxBytesPerRequest: 1024},
 		},
 		inputPayload: []byte("bounded-range"),
 		sinkActivationResult: processing.WorkerSinkActivation{

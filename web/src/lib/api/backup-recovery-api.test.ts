@@ -401,6 +401,26 @@ describe("backup recovery API boundary", () => {
       delete_checkpoint: undefined,
       failure_category: "source_drift",
     }))).toMatchObject({ status: "available", value: { outcome: "failed", failureCategory: "source_drift" } });
+    expect(mapRecoveryJobProduct(rawJob({
+      state: "failed",
+      delete_checkpoint: undefined,
+      failure_category: "pre_write_failed",
+      progress: {
+        total_items: 5, completed_items: 0, succeeded_items: 0,
+        skipped_items: 0, failed_items: 0, bytes_written: 0,
+      },
+    }))).toMatchObject({
+      status: "available",
+      value: {
+        outcome: "failed", failureCategory: "pre_write_failed",
+        progress: { completedItems: 0, failedItems: 0, bytesWritten: 0 },
+      },
+    });
+    expect(mapRecoveryJobProduct(rawJob({
+      state: "failed",
+      delete_checkpoint: undefined,
+      failure_category: "unknown_failure",
+    }))).toEqual({ status: "unavailable", reason: "invalid_product" });
 
     const itemPage = (item: Record<string, unknown>) => ({
       schema_version: 1,
@@ -433,6 +453,22 @@ describe("backup recovery API boundary", () => {
     expect(mapRecoveryJobItemPageProduct({ ...itemPage({}), total: 2 })).toEqual({
       status: "unavailable", reason: "invalid_product",
     });
+  });
+
+  it.each([
+    { scenario: "attention state", state: "needs_attention", completed: 0, skipped: 0, bytes: 0 },
+    { scenario: "completed operation", state: "failed", completed: 1, skipped: 1, bytes: 0 },
+    { scenario: "written bytes", state: "failed", completed: 0, skipped: 0, bytes: 1 },
+  ])("rejects a contradictory prewrite failure with $scenario", ({ state, completed, skipped, bytes }) => {
+    expect(mapRecoveryJobProduct(rawJob({
+      state,
+      delete_checkpoint: undefined,
+      failure_category: "pre_write_failed",
+      progress: {
+        total_items: 5, completed_items: completed, succeeded_items: 0,
+        skipped_items: skipped, failed_items: 0, bytes_written: bytes,
+      },
+    }))).toEqual({ status: "unavailable", reason: "invalid_product" });
   });
 
   it("RecoveryReviewF7 propagates an old-backend 404 without attempting a legacy fallback", async () => {

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -56,7 +57,7 @@ const (
 	backupAssetPlainTextContentVersion          = 73
 	drillDurableRecoveryVersion                 = 74
 	rcloneNativeVersionEvidenceMigrationVersion = 75
-	latestMigrationVersion                      = 95
+	latestMigrationVersion                      = 96
 	recoveryEmptyDeleteSetDigest                = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID                 = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID              = "0000000000000000000000000000006b"
@@ -3186,6 +3187,10 @@ func TestBackupAssetMigration069WorkerPreWriteSourceDriftSQLite(t *testing.T) {
 
 func TestBackupAssetMigration069WorkerPreWriteSourceDriftPostgres(t *testing.T) {
 	newRequiredPostgresRecoveryMigrationFixture(t).test069WorkerPreWriteSourceDrift(t)
+}
+
+func TestRecoveryReviewF3PreWriteDriftTransactionSQLite(t *testing.T) {
+	newSQLiteMigrationFixture(t).test069WorkerPreWriteAuthorityDrift(t)
 }
 
 func TestRecoveryReviewF3PreWriteDriftTransactionPostgres(t *testing.T) {
@@ -8073,40 +8078,46 @@ func (fixture migrationFixture) recoveryWorkerGorm(t *testing.T, sqlDB *sql.DB) 
 	return db
 }
 
-type recoveryMigrationFirstWriteLiveRevalidator struct{}
+// This controlled authority isolates the database transaction tests from remote
+// target observation while checking that the observed binding is revalidated.
+type recoveryMigrationFirstWriteLiveRevalidator struct {
+	planID          string
+	preflightID     string
+	observedBinding recovery.RecoveryAuthorityBinding
+	observeCalls    int
+	revalidateCalls int
+	deniedCalls     int
+	deny            bool
+}
 
-func (recoveryMigrationFirstWriteLiveRevalidator) ObserveRecoveryAuthority(
-	context.Context,
-	recovery.RecoveryAuthorityBinding,
+func (revalidator *recoveryMigrationFirstWriteLiveRevalidator) ObserveRecoveryAuthority(
+	_ context.Context,
+	binding recovery.RecoveryAuthorityBinding,
 ) (recovery.RecoveryAuthorityObservation, error) {
+	if binding.Operation != recovery.AuthorizationReceiptExecute || binding.TargetMode != recovery.TargetModeIsolated ||
+		binding.PlanID != revalidator.planID || binding.PreflightID != revalidator.preflightID {
+		return recovery.RecoveryAuthorityObservation{}, recovery.ErrRecoveryTargetChanged
+	}
+	revalidator.observedBinding = binding
+	revalidator.observeCalls++
 	return recovery.RecoveryAuthorityObservation{}, nil
 }
 
-func (recoveryMigrationFirstWriteLiveRevalidator) RevalidateRecoveryAuthorityTx(
-	context.Context,
-	*gorm.DB,
-	recovery.RecoveryAuthorityBinding,
-	recovery.RecoveryAuthorityObservation,
+func (revalidator *recoveryMigrationFirstWriteLiveRevalidator) RevalidateRecoveryAuthorityTx(
+	_ context.Context,
+	tx *gorm.DB,
+	binding recovery.RecoveryAuthorityBinding,
+	_ recovery.RecoveryAuthorityObservation,
 ) error {
+	if tx == nil || revalidator.observeCalls == 0 || binding != revalidator.observedBinding {
+		return recovery.ErrRecoveryTargetChanged
+	}
+	revalidator.revalidateCalls++
+	if revalidator.deny {
+		revalidator.deniedCalls++
+		return recovery.ErrAuthorizationDenied
+	}
 	return nil
-}
-
-type recoveryMigrationFirstWriteAuthorityDriftRevalidator struct{}
-
-func (recoveryMigrationFirstWriteAuthorityDriftRevalidator) ObserveRecoveryAuthority(
-	context.Context,
-	recovery.RecoveryAuthorityBinding,
-) (recovery.RecoveryAuthorityObservation, error) {
-	return recovery.RecoveryAuthorityObservation{}, nil
-}
-
-func (recoveryMigrationFirstWriteAuthorityDriftRevalidator) RevalidateRecoveryAuthorityTx(
-	context.Context,
-	*gorm.DB,
-	recovery.RecoveryAuthorityBinding,
-	recovery.RecoveryAuthorityObservation,
-) error {
-	return recovery.ErrAuthorizationDenied
 }
 
 type recoveryMigrationFirstWriteWorkspaceKeySource struct{}
@@ -8180,10 +8191,11 @@ func (fixture migrationFixture) test069WorkerFirstWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create %s first-write source lease service: %v", fixture.engine, err)
 	}
+	liveRevalidator := &recoveryMigrationFirstWriteLiveRevalidator{planID: aggregate.PlanID, preflightID: aggregate.PreflightID}
 	coordinator, err := recovery.NewWorkerCoordinator(recovery.WorkerCoordinatorDependencies{
 		DB:              db,
 		SourceLeases:    sourceLeases,
-		LiveRevalidator: recoveryMigrationFirstWriteLiveRevalidator{},
+		LiveRevalidator: liveRevalidator,
 		WorkspaceKeys:   recoveryMigrationFirstWriteWorkspaceKeySource{},
 		SourceResolver:  recoveryMigrationSourceResolver{},
 		Now:             func() time.Time { return clock },
@@ -8211,6 +8223,10 @@ func (fixture migrationFixture) test069WorkerFirstWrite(t *testing.T) {
 	}
 	if err := replay.ValidateAt(clock); err != nil {
 		t.Fatalf("validate replayed %s first-write permit: %v", fixture.engine, err)
+	}
+	if liveRevalidator.observeCalls != 2 || liveRevalidator.revalidateCalls != 2 || liveRevalidator.deniedCalls != 0 {
+		t.Fatalf("%s first-write authority observations/revalidations/denials=%d/%d/%d, want 2/2/0",
+			fixture.engine, liveRevalidator.observeCalls, liveRevalidator.revalidateCalls, liveRevalidator.deniedCalls)
 	}
 
 	const latchID = "00000000000000000000000000000069"
@@ -8630,10 +8646,11 @@ func (fixture migrationFixture) test069WorkerPreWriteSourceDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create %s source-drift source lease service: %v", fixture.engine, err)
 	}
+	liveRevalidator := &recoveryMigrationFirstWriteLiveRevalidator{planID: aggregate.PlanID, preflightID: aggregate.PreflightID}
 	coordinator, err := recovery.NewWorkerCoordinator(recovery.WorkerCoordinatorDependencies{
 		DB:              db,
 		SourceLeases:    sourceLeases,
-		LiveRevalidator: recoveryMigrationFirstWriteLiveRevalidator{},
+		LiveRevalidator: liveRevalidator,
 		WorkspaceKeys:   recoveryMigrationFirstWriteWorkspaceKeySource{},
 		SourceResolver:  recoveryMigrationSourceResolver{},
 		Now:             func() time.Time { return clock },
@@ -8660,6 +8677,10 @@ func (fixture migrationFixture) test069WorkerPreWriteSourceDrift(t *testing.T) {
 
 	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, recovery.ErrRecoverySourceChanged) {
 		t.Fatalf("prepare %s first write after source drift error=%v, want ErrRecoverySourceChanged", fixture.engine, err)
+	}
+	if liveRevalidator.observeCalls != 1 || liveRevalidator.revalidateCalls != 1 || liveRevalidator.deniedCalls != 0 {
+		t.Fatalf("%s source-drift authority observations/revalidations/denials=%d/%d/%d, want 1/1/0",
+			fixture.engine, liveRevalidator.observeCalls, liveRevalidator.revalidateCalls, liveRevalidator.deniedCalls)
 	}
 
 	var plan model.BackupAssetRecoveryPlan
@@ -8746,10 +8767,13 @@ func (fixture migrationFixture) test069WorkerPreWriteAuthorityDrift(t *testing.T
 	if err != nil {
 		t.Fatalf("create %s authority-drift source lease service: %v", fixture.engine, err)
 	}
+	liveRevalidator := &recoveryMigrationFirstWriteLiveRevalidator{
+		planID: aggregate.PlanID, preflightID: aggregate.PreflightID, deny: true,
+	}
 	coordinator, err := recovery.NewWorkerCoordinator(recovery.WorkerCoordinatorDependencies{
 		DB:              db,
 		SourceLeases:    sourceLeases,
-		LiveRevalidator: recoveryMigrationFirstWriteAuthorityDriftRevalidator{},
+		LiveRevalidator: liveRevalidator,
 		WorkspaceKeys:   recoveryMigrationFirstWriteWorkspaceKeySource{},
 		SourceResolver:  recoveryMigrationSourceResolver{},
 		Now:             func() time.Time { return clock },
@@ -8759,12 +8783,16 @@ func (fixture migrationFixture) test069WorkerPreWriteAuthorityDrift(t *testing.T
 	if err != nil {
 		t.Fatalf("create %s authority-drift worker coordinator: %v", fixture.engine, err)
 	}
-	claim, found, err := coordinator.ClaimNext(context.Background(), "recovery-f3-postgres-worker")
+	claim, found, err := coordinator.ClaimNext(context.Background(), "recovery-f3-worker")
 	if err != nil || !found {
 		t.Fatalf("claim %s authority-drift recovery job: found=%t err=%v", fixture.engine, found, err)
 	}
 	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, recovery.ErrRecoverySourceChanged) {
 		t.Fatalf("prepare %s first write after authority drift error=%v, want ErrRecoverySourceChanged", fixture.engine, err)
+	}
+	if liveRevalidator.observeCalls != 1 || liveRevalidator.revalidateCalls != 1 || liveRevalidator.deniedCalls != 1 {
+		t.Fatalf("%s authority-drift observations/revalidations/denials=%d/%d/%d, want 1/1/1",
+			fixture.engine, liveRevalidator.observeCalls, liveRevalidator.revalidateCalls, liveRevalidator.deniedCalls)
 	}
 
 	var plan model.BackupAssetRecoveryPlan
@@ -11582,7 +11610,7 @@ func (fixture migrationFixture) seedRecoveryMigrationAggregateWithOptions(
 		"/var/lib/xirang/recovery-"+marker, now, now)
 	firstWriteSeed := recoveryMigrationFirstWriteSeed{}
 	if options.firstWrite {
-		firstWriteSeed = fixture.prepareRecoveryMigrationFirstWriteSeed(t, db, aggregate, base, now)
+		firstWriteSeed = fixture.prepareRecoveryMigrationFirstWriteSeed(t, db, aggregate, marker, base, now)
 	}
 
 	preflightExpiry := now.Add(time.Hour)
@@ -11630,20 +11658,22 @@ func (fixture migrationFixture) seedRecoveryMigrationAggregateWithOptions(
 	findingSetDigest := recoveryMigrationDigest(base + 16)
 	operationSetDigest := recoveryMigrationDigest(base + 17)
 	deleteSetDigest := recoveryEmptyDeleteSetDigest
+	if options.firstWrite {
+		operationSetDigest = firstWriteSeed.Operations.OperationSetDigest
+		deleteSetDigest = firstWriteSeed.Operations.DeleteSetDigest
+	}
 	securityDecisionDigest := recoveryMigrationDigest(base + 19)
 	workspaceMarkerBindingDigest := recoveryMigrationDigest(base + 20)
 	writeAuthorityBindingDigest := recoveryMigrationDigest(base + 29)
 	targetRootID := "root-" + marker
 	rootLocatorDigest := recoveryMigrationDigest(base + 4)
 	if options.firstWrite {
-		rootLocator := "/var/lib/xirang/test-recovery-root/" + aggregate.JobID
-		digest, digestErr := settings.RecoveryTargetRootLocatorDigest(uint(aggregate.NodeID), targetRootID, rootLocator)
-		if digestErr != nil {
-			t.Fatalf("derive %s first-write target root locator digest: %v", fixture.engine, digestErr)
-		}
-		rootLocatorDigest = digest
+		rootLocatorDigest = firstWriteSeed.RootLocatorDigest
 	}
 	pathDigest := recoveryMigrationDigest(base + 5)
+	if options.firstWrite {
+		pathDigest = firstWriteSeed.TargetPathDigest
+	}
 	writeAuthorityExpiresAt := now.Add(30 * time.Minute)
 	targetMode := "isolated"
 	conflictPolicy := "fail_on_conflict"
@@ -11736,6 +11766,35 @@ func (fixture migrationFixture) seedRecoveryMigrationAggregateWithOptions(
 	if err != nil {
 		t.Fatalf("derive %s recovery target object digest: %v", fixture.engine, err)
 	}
+	itemTargetPathDigest := recoveryMigrationDigest(base + 31)
+	itemTargetLocator := "enc:v2:item-target-locator-" + marker
+	if options.firstWrite {
+		operation := firstWriteSeed.Operations.Rows[0]
+		itemTargetPathDigest = operation.TargetPathDigest
+		material, keyErr := (recoveryMigrationFirstWriteWorkspaceKeySource{}).Active(
+			context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership,
+		)
+		if keyErr != nil {
+			t.Fatalf("load %s first-write locator key: %v", fixture.engine, keyErr)
+		}
+		itemTargetLocator, err = recovery.SealTargetLocatorEnvelope(material, recovery.TargetLocatorEnvelopeBinding{
+			CodecVersion: 1, JobID: aggregate.JobID, JobItemID: aggregate.JobItemID,
+			PlanDigest: planBindingDigest, PlanItemID: aggregate.PlanItemID,
+			SourceRecoveryPointID: aggregate.PointID, SourceEntryID: aggregate.EntryID,
+			TargetMode: recovery.TargetModeIsolated, NodeID: uint(aggregate.NodeID),
+			RootID: targetRootID, RootLocatorDigest: rootLocatorDigest,
+			SemanticTargetDigest: semanticTargetDigest, TargetObjectDigest: targetObjectDigest,
+			Operation: operation.Kind, WorkspaceBindingDigest: workspaceBindingDigest,
+			WorkspaceRelativeLocator: workspaceRelativeLocator,
+			ExpectedPriorKind:        operation.ExpectedPrior.Kind, ExpectedPriorDigest: operation.ExpectedPrior.Digest,
+			ExpectedPostIdentityDigest: operation.ExpectedPostIdentityDigest,
+			ExpectedPostBytes:          operation.ExpectedPostBytes, ExpectedPriorBytes: operation.ExpectedPriorBytes,
+			TargetLocatorKeyVersion: material.Version, TargetLocatorCipherVersion: 1,
+		}, operation.TargetRelativeLocator)
+		if err != nil {
+			t.Fatalf("seal %s first-write target locator: %v", fixture.engine, err)
+		}
+	}
 	fixture.mustExec(t, db, `INSERT INTO backup_asset_recovery_plans
 		(id, requester_id, endpoint, idempotency_key_digest, repository_id, recovery_point_id,
 		 source_revision_digest, source_revision_kind, immutable_locator_digest, immutable_manifest_digest,
@@ -11824,9 +11883,8 @@ func (fixture migrationFixture) seedRecoveryMigrationAggregateWithOptions(
 		 display_class, estimated_bytes, created_at, updated_at)
 		VALUES (?, ?, ?, ?, 0, 'create', ?, ?, ?, 'absent', '', ?, 1, -1, ?, 1, 1, 'regular', 1, ?, ?)`,
 		aggregate.JobItemID, aggregate.PlanID, aggregate.JobID, aggregate.PlanItemID,
-		recoveryMigrationDigest(base+31), semanticTargetDigest, targetObjectDigest,
-		recoveryMigrationDigest(base+32),
-		"enc:v2:item-target-locator-"+marker, now, now)
+		itemTargetPathDigest, semanticTargetDigest, targetObjectDigest,
+		recoveryMigrationDigest(base+32), itemTargetLocator, now, now)
 	if options.claimableAttempt {
 		fixture.mustExec(t, db, `INSERT INTO backup_asset_recovery_attempts
 			(id, job_id, owner_id, fence, state, mutation_armed, lease_expires_at, heartbeat_at,
@@ -11947,6 +12005,9 @@ func (fixture migrationFixture) seedRecoveryMigrationAggregateWithOptions(
 
 type recoveryMigrationFirstWriteSeed struct {
 	Selection                   recovery.ExactSelection
+	Operations                  recovery.RecoveryOperationProducts
+	RootLocatorDigest           string
+	TargetPathDigest            string
 	EncryptedSourceLocator      string
 	EncryptedTargetRootLocator  string
 	EncryptedTargetRelativePath string
@@ -11959,6 +12020,7 @@ func (fixture migrationFixture) prepareRecoveryMigrationFirstWriteSeed(
 	t *testing.T,
 	db *sql.DB,
 	aggregate recoveryMigrationAggregate,
+	marker string,
 	base int,
 	now time.Time,
 ) recoveryMigrationFirstWriteSeed {
@@ -11967,6 +12029,44 @@ func (fixture migrationFixture) prepareRecoveryMigrationFirstWriteSeed(
 	targetRootLocator := "/var/lib/xirang/test-recovery-root/" + aggregate.JobID
 	targetRelativePath := "plans/" + aggregate.PlanID
 	sourceFingerprint := recoveryMigrationDigest(base + 90)
+	targetRootID := "root-" + marker
+	rootLocatorDigest, err := settings.RecoveryTargetRootLocatorDigest(uint(aggregate.NodeID), targetRootID, targetRootLocator)
+	if err != nil {
+		t.Fatalf("derive %s first-write target root locator digest: %v", fixture.engine, err)
+	}
+	targetPathDigest, err := recovery.TargetPathDigest(targetRootID, rootLocatorDigest, targetRelativePath)
+	if err != nil {
+		t.Fatalf("derive %s first-write target path digest: %v", fixture.engine, err)
+	}
+	itemLocator := "items/item-0000"
+	itemPathDigest, err := recovery.TargetPathDigest(targetRootID, rootLocatorDigest, itemLocator)
+	if err != nil {
+		t.Fatalf("derive %s first-write item path digest: %v", fixture.engine, err)
+	}
+	semanticTargetDigest, err := recovery.SemanticTargetDigest(
+		recovery.TargetModeIsolated, targetRootID, rootLocatorDigest, itemLocator,
+	)
+	if err != nil {
+		t.Fatalf("derive %s first-write semantic target digest: %v", fixture.engine, err)
+	}
+	assetRef := backupasset.AssetRef{RecoveryPointID: aggregate.PointID, EntryID: aggregate.EntryID}
+	operations, err := recovery.NewOperationProducts(recovery.RecoveryOperationProductsInput{
+		TargetMode: recovery.TargetModeIsolated, ConflictPolicy: recovery.ConflictFailOnConflict,
+		Operations: []recovery.RecoveryOperation{{
+			Kind: recovery.RecoveryOperationCreate, TargetPathDigest: itemPathDigest,
+			TargetRelativeLocator: itemLocator, SemanticTargetDigest: semanticTargetDigest,
+			ExpectedPrior:              recovery.ExpectedTargetIdentity{Kind: recovery.ExpectedTargetAbsent},
+			ExpectedPostIdentityDigest: recoveryMigrationDigest(base + 32),
+			ExpectedPostBytes:          1, ExpectedPriorBytes: -1,
+			Source:       recovery.RecoveryOperationSource{Kind: recovery.RecoveryOperationSourceAssetRef, AssetRef: &assetRef},
+			DisplayClass: recovery.RecoveryDisplayClassRegular, EstimatedBytes: 1,
+		}},
+		Limits: recovery.RecoveryOperationLimits{MaxRows: 1, MaxItems: 1, MaxBytes: 1, MaxImpactRows: 1},
+	})
+	if err != nil {
+		t.Fatalf("build %s first-write operation products: %v", fixture.engine, err)
+	}
+	encodedOperations := encodeRecoveryMigrationFirstWriteOperations(t, operations)
 
 	encrypt := func(label, value string) string {
 		t.Helper()
@@ -11979,7 +12079,7 @@ func (fixture migrationFixture) prepareRecoveryMigrationFirstWriteSeed(
 	encryptedSourceLocator := encrypt("source locator", sourceLocator)
 	encryptedTargetRootLocator := encrypt("target root locator", targetRootLocator)
 	encryptedTargetRelativePath := encrypt("target relative path", targetRelativePath)
-	encryptedOperationRows := encrypt("operation rows", `{"schema_version":1}`)
+	encodedOperationRows := encrypt("operation rows", encodedOperations)
 	encryptedWriteReason := encrypt("write reason", "migration first-write test")
 
 	fixture.mustExec(t, db, `UPDATE backup_repositories
@@ -12018,15 +12118,69 @@ func (fixture migrationFixture) prepareRecoveryMigrationFirstWriteSeed(
 	}
 	return recoveryMigrationFirstWriteSeed{
 		Selection:                   selection,
+		Operations:                  operations,
+		RootLocatorDigest:           rootLocatorDigest,
+		TargetPathDigest:            targetPathDigest,
 		EncryptedSourceLocator:      encryptedSourceLocator,
 		EncryptedTargetRootLocator:  encryptedTargetRootLocator,
 		EncryptedTargetRelativePath: encryptedTargetRelativePath,
-		EncryptedOperationRows:      encryptedOperationRows,
+		EncryptedOperationRows:      encodedOperationRows,
 		EncryptedWriteReason:        encryptedWriteReason,
 		PlanItemPathDigest: publication.RecoveryPlanItemPathDigest(
 			aggregate.RepositoryID, aggregate.PointID, aggregate.CatalogID, aggregate.EntryID, normalizedPath,
 		),
 	}
+}
+
+// This fixture stores the canonical private preflight wire shape; the product
+// digests and operation fields themselves come from the production builder.
+func encodeRecoveryMigrationFirstWriteOperations(t *testing.T, products recovery.RecoveryOperationProducts) string {
+	t.Helper()
+	if len(products.Rows) != 1 || products.Rows[0].Source.AssetRef == nil {
+		t.Fatal("first-write fixture requires exactly one asset-backed operation")
+	}
+	type snapshotRow struct {
+		Kind                       string `json:"kind"`
+		TargetPathDigest           string `json:"target_path_digest"`
+		TargetRelativeLocator      string `json:"target_relative_locator"`
+		SemanticTargetDigest       string `json:"semantic_target_digest"`
+		ExpectedPriorKind          string `json:"expected_prior_kind"`
+		ExpectedPriorDigest        string `json:"expected_prior_digest"`
+		ExpectedPostIdentityDigest string `json:"expected_post_identity_digest"`
+		ExpectedPostBytes          int64  `json:"expected_post_bytes"`
+		ExpectedPriorBytes         int64  `json:"expected_prior_bytes"`
+		SourceKind                 string `json:"source_kind"`
+		SourceRecoveryPointID      string `json:"source_recovery_point_id"`
+		SourceEntryID              string `json:"source_entry_id"`
+		DisplayClass               string `json:"display_class"`
+		EstimatedBytes             int64  `json:"estimated_bytes"`
+	}
+	operation := products.Rows[0]
+	encoded, err := json.Marshal(struct {
+		SchemaVersion      int                     `json:"schema_version"`
+		TargetMode         recovery.TargetMode     `json:"target_mode"`
+		ConflictPolicy     recovery.ConflictPolicy `json:"conflict_policy"`
+		OperationSetDigest string                  `json:"operation_set_digest"`
+		DeleteSetDigest    string                  `json:"delete_set_digest"`
+		Rows               []snapshotRow           `json:"rows"`
+	}{
+		SchemaVersion: 2, TargetMode: recovery.TargetModeIsolated, ConflictPolicy: recovery.ConflictFailOnConflict,
+		OperationSetDigest: products.OperationSetDigest, DeleteSetDigest: products.DeleteSetDigest,
+		Rows: []snapshotRow{{
+			Kind: string(operation.Kind), TargetPathDigest: operation.TargetPathDigest,
+			TargetRelativeLocator: operation.TargetRelativeLocator, SemanticTargetDigest: operation.SemanticTargetDigest,
+			ExpectedPriorKind: string(operation.ExpectedPrior.Kind), ExpectedPriorDigest: operation.ExpectedPrior.Digest,
+			ExpectedPostIdentityDigest: operation.ExpectedPostIdentityDigest,
+			ExpectedPostBytes:          operation.ExpectedPostBytes, ExpectedPriorBytes: operation.ExpectedPriorBytes,
+			SourceKind: string(operation.Source.Kind), SourceRecoveryPointID: operation.Source.AssetRef.RecoveryPointID,
+			SourceEntryID: operation.Source.AssetRef.EntryID, DisplayClass: string(operation.DisplayClass),
+			EstimatedBytes: operation.EstimatedBytes,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode first-write operation snapshot: %v", err)
+	}
+	return string(encoded)
 }
 
 func runBackupAssetMigration068Contract(t *testing.T, fixture migrationFixture) {

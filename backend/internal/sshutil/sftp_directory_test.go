@@ -128,7 +128,10 @@ func TestRecoveryBoundedSFTPDirectoryNamePacketMatrix(t *testing.T) {
 type recoverySFTPDirectoryTransportForTest struct {
 	reader     *bytes.Reader
 	writes     bytes.Buffer
+	closeErr   error
 	closeCalls int
+	writeCalls int
+	writeErrAt int
 }
 
 func (transport *recoverySFTPDirectoryTransportForTest) Read(value []byte) (int, error) {
@@ -136,12 +139,16 @@ func (transport *recoverySFTPDirectoryTransportForTest) Read(value []byte) (int,
 }
 
 func (transport *recoverySFTPDirectoryTransportForTest) Write(value []byte) (int, error) {
+	transport.writeCalls++
+	if transport.writeCalls == transport.writeErrAt {
+		return 0, io.ErrClosedPipe
+	}
 	return transport.writes.Write(value)
 }
 
 func (transport *recoverySFTPDirectoryTransportForTest) Close() error {
 	transport.closeCalls++
-	return nil
+	return transport.closeErr
 }
 
 func recoverySFTPTestPacket(packetType byte, payload []byte) []byte {
@@ -432,6 +439,338 @@ func boundedDirectoryTestNames(start, count int) []string {
 		names[index] = fmt.Sprintf("entry-%03d", start+index)
 	}
 	return names
+}
+
+func TestBoundedSFTPDirectoryDotOnlyPagesReachEOF(t *testing.T) {
+	tests := []struct {
+		name     string
+		dotPages [][]string
+	}{
+		{name: "both dots", dotPages: [][]string{{".", ".."}}},
+		{name: "split dots", dotPages: [][]string{{"."}, {".."}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			responses := boundedDirectoryTestOpenResponses()
+			for index, names := range test.dotPages {
+				responses = append(responses, boundedDirectoryTestNamePacket(uint32(index+2), names)...)
+			}
+			eofID := uint32(len(test.dotPages) + 2)
+			responses = append(responses, recoverySFTPTestStatusPacket(eofID, sftpDirectoryStatusEOF, "eof")...)
+			responses = append(responses, recoverySFTPTestStatusPacket(eofID+1, sftpDirectoryStatusOK, "ok")...)
+			transport := &recoverySFTPDirectoryTransportForTest{reader: bytes.NewReader(responses)}
+			directory, session, err := openRecoveryBoundedTestDirectory(transport, "/owned/directory")
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, readErr := directory.ReadDir(recoveryCleanupReadBatch)
+			if entries != nil || !errors.Is(readErr, io.EOF) {
+				t.Fatalf("dot-only pages entries=%v error=%v, want protocol EOF", entries, readErr)
+			}
+			written := transport.writes.Len()
+			entries, readErr = directory.ReadDir(recoveryCleanupReadBatch)
+			if entries != nil || !errors.Is(readErr, io.EOF) || transport.writes.Len() != written {
+				t.Fatalf("cached EOF entries=%v error=%v additional writes=%d", entries, readErr, transport.writes.Len()-written)
+			}
+			if err := directory.Close(); err != nil {
+				t.Fatalf("close directory: %v", err)
+			}
+			if err := session.Close(); err != nil || transport.closeCalls != 1 {
+				t.Fatalf("close session error=%v transport closes=%d", err, transport.closeCalls)
+			}
+			want := []byte{sftpDirectoryPacketInit, sftpDirectoryPacketOpenDir}
+			for range len(test.dotPages) + 1 {
+				want = append(want, sftpDirectoryPacketReadDir)
+			}
+			want = append(want, sftpDirectoryPacketClose)
+			if got := recoverySFTPTestPacketTypes(t, transport.writes.Bytes()); !reflect.DeepEqual(got, want) {
+				t.Fatalf("wire packet types=%v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestBoundedSFTPDirectoryDotOnlyPageBeforeChildren(t *testing.T) {
+	responses := boundedDirectoryTestOpenResponses()
+	responses = append(responses, boundedDirectoryTestNamePacket(2, []string{".", ".."})...)
+	payload := appendRecoverySFTPTestUint32(nil, 3)
+	payload = appendRecoverySFTPTestUint32(payload, 2)
+	payload = appendRecoverySFTPTestName(payload, "report.txt", syscall.S_IFREG|0o600, 17)
+	payload = appendRecoverySFTPTestName(payload, ".owner-v1", syscall.S_IFLNK|0o777, 9)
+	responses = append(responses, recoverySFTPTestPacket(sftpDirectoryPacketName, payload)...)
+	responses = append(responses, recoverySFTPTestStatusPacket(4, sftpDirectoryStatusEOF, "eof")...)
+	responses = append(responses, recoverySFTPTestStatusPacket(5, sftpDirectoryStatusOK, "ok")...)
+	transport := &recoverySFTPDirectoryTransportForTest{reader: bytes.NewReader(responses)}
+	directory, session, err := openRecoveryBoundedTestDirectory(transport, "/owned/directory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, readErr := directory.ReadDir(1)
+	if readErr != nil || len(first) != 1 || first[0].Name() != "report.txt" ||
+		!first[0].Mode().IsRegular() || first[0].Size() != 17 || first[0].ModTime().Unix() != 1_700_000_001 {
+		t.Fatalf("first child entries=%v error=%v", first, readErr)
+	}
+	// A caller appending to a returned page must not overwrite unread entries.
+	first = append(first, nil)
+	if len(first) != 2 || first[1] != nil {
+		t.Fatalf("appended first page=%v", first)
+	}
+	second, readErr := directory.ReadDir(1)
+	if readErr != nil || len(second) != 1 || second[0].Name() != ".owner-v1" ||
+		second[0].Mode()&os.ModeSymlink == 0 || second[0].Size() != 9 {
+		t.Fatalf("second child entries=%v error=%v", second, readErr)
+	}
+	entries, readErr := directory.ReadDir(1)
+	if entries != nil || !errors.Is(readErr, io.EOF) {
+		t.Fatalf("after children entries=%v error=%v, want protocol EOF", entries, readErr)
+	}
+	if err := directory.Close(); err != nil {
+		t.Fatalf("close directory: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("close session: %v", err)
+	}
+	if got, want := recoverySFTPTestPacketTypes(t, transport.writes.Bytes()), []byte{1, 11, 12, 12, 12, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wire packet types=%v, want %v", got, want)
+	}
+}
+
+func TestBoundedSFTPDirectoryNoProgressResetsAfterEntries(t *testing.T) {
+	responses := boundedDirectoryTestOpenResponses()
+	for index, names := range [][]string{{"."}, {".."}, {"first"}, {"."}, {".."}, {"second"}} {
+		responses = append(responses, boundedDirectoryTestNamePacket(uint32(index+2), names)...)
+	}
+	responses = append(responses, recoverySFTPTestStatusPacket(8, sftpDirectoryStatusEOF, "eof")...)
+	responses = append(responses, recoverySFTPTestStatusPacket(9, sftpDirectoryStatusOK, "ok")...)
+	transport := &recoverySFTPDirectoryTransportForTest{reader: bytes.NewReader(responses)}
+	directory, session, err := openRecoveryBoundedTestDirectory(transport, "/owned/directory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first", "second"} {
+		entries, readErr := directory.ReadDir(recoveryCleanupReadBatch)
+		if readErr != nil || len(entries) != 1 || entries[0].Name() != want {
+			t.Fatalf("entries=%v error=%v, want %q", entries, readErr, want)
+		}
+	}
+	entries, readErr := directory.ReadDir(recoveryCleanupReadBatch)
+	if entries != nil || !errors.Is(readErr, io.EOF) {
+		t.Fatalf("after entries=%v error=%v, want protocol EOF", entries, readErr)
+	}
+	if err := directory.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBoundedSFTPDirectoryRejectsNoProgressAndInvalidPackets(t *testing.T) {
+	malformed := appendRecoverySFTPTestUint32(nil, 3)
+	malformed = appendRecoverySFTPTestUint32(malformed, 1)
+	malformed = appendRecoverySFTPTestString(malformed, ".")
+	malformed = appendRecoverySFTPTestString(malformed, ".")
+	malformed = appendRecoverySFTPTestUint32(malformed, sftpDirectoryAttributeSize)
+	truncated := appendRecoverySFTPTestUint32(nil, 8)
+	truncated = append(truncated, sftpDirectoryPacketName, 0)
+	tests := []struct {
+		name          string
+		responses     []byte
+		reads         int
+		writeErrAt    int
+		wantRemaining bool
+	}{
+		{
+			name: "third dot-only page",
+			responses: append(append(boundedDirectoryTestNamePacket(3, []string{".."}),
+				boundedDirectoryTestNamePacket(4, []string{"."})...), recoverySFTPTestStatusPacket(5, sftpDirectoryStatusEOF, "eof")...),
+			reads: 3, wantRemaining: true,
+		},
+		{
+			name: "zero-entry NAME",
+			responses: append(boundedDirectoryTestNamePacket(3, nil),
+				recoverySFTPTestStatusPacket(4, sftpDirectoryStatusEOF, "eof")...),
+			reads: 2, wantRemaining: true,
+		},
+		{
+			name: "malformed dot attributes",
+			responses: append(recoverySFTPTestPacket(sftpDirectoryPacketName, malformed),
+				recoverySFTPTestStatusPacket(4, sftpDirectoryStatusEOF, "eof")...),
+			reads: 2, wantRemaining: true,
+		},
+		{
+			name: "wrong NAME id",
+			responses: append(boundedDirectoryTestNamePacket(99, []string{"child"}),
+				recoverySFTPTestStatusPacket(4, sftpDirectoryStatusEOF, "eof")...),
+			reads: 2, wantRemaining: true,
+		},
+		{
+			name: "wrong EOF id",
+			responses: append(recoverySFTPTestStatusPacket(99, sftpDirectoryStatusEOF, "eof"),
+				recoverySFTPTestStatusPacket(4, sftpDirectoryStatusEOF, "eof")...),
+			reads: 2, wantRemaining: true,
+		},
+		{
+			name: "unexpected OK status",
+			responses: append(recoverySFTPTestStatusPacket(3, sftpDirectoryStatusOK, "ok"),
+				recoverySFTPTestStatusPacket(4, sftpDirectoryStatusEOF, "eof")...),
+			reads: 2, wantRemaining: true,
+		},
+		{
+			name: "unknown status",
+			responses: append(recoverySFTPTestStatusPacket(3, 77, "RAW_SFTP_DIRECTORY_STATUS_FOR_TEST_ONLY"),
+				recoverySFTPTestStatusPacket(4, sftpDirectoryStatusEOF, "eof")...),
+			reads: 2, wantRemaining: true,
+		},
+		{
+			name: "unexpected packet type",
+			responses: append(recoverySFTPTestPacket(sftpDirectoryPacketHandle, nil),
+				recoverySFTPTestStatusPacket(4, sftpDirectoryStatusEOF, "eof")...),
+			reads: 2, wantRemaining: true,
+		},
+		{
+			name: "READDIR write failure", responses: recoverySFTPTestStatusPacket(3, sftpDirectoryStatusEOF, "eof"),
+			reads: 1, writeErrAt: 4, wantRemaining: true,
+		},
+		{name: "transport EOF", reads: 2},
+		{name: "truncated packet", responses: truncated, reads: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			responses := boundedDirectoryTestOpenResponses()
+			responses = append(responses, boundedDirectoryTestNamePacket(2, []string{"."})...)
+			responses = append(responses, test.responses...)
+			transport := &recoverySFTPDirectoryTransportForTest{reader: bytes.NewReader(responses), writeErrAt: test.writeErrAt}
+			directory, session, err := openRecoveryBoundedTestDirectory(transport, "/owned/directory")
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, readErr := directory.ReadDir(recoveryCleanupReadBatch)
+			if entries != nil || !errors.Is(readErr, ErrSFTPDirectoryUnavailable) || errors.Is(readErr, io.EOF) ||
+				strings.Contains(readErr.Error(), "RAW_SFTP_DIRECTORY_STATUS_FOR_TEST_ONLY") {
+				t.Fatalf("invalid listing entries=%v error=%v, want sanitized unavailable", entries, readErr)
+			}
+			if test.wantRemaining && transport.reader.Len() == 0 {
+				t.Fatal("subsequent protocol EOF was consumed after the failure")
+			}
+			if err := directory.Close(); !errors.Is(err, ErrSFTPDirectoryUnavailable) {
+				t.Fatalf("close broken directory error=%v", err)
+			}
+			if err := session.Close(); !errors.Is(err, ErrSFTPDirectoryUnavailable) || transport.closeCalls != 1 {
+				t.Fatalf("close broken session error=%v transport closes=%d", err, transport.closeCalls)
+			}
+			want := []byte{sftpDirectoryPacketInit, sftpDirectoryPacketOpenDir}
+			for range test.reads {
+				want = append(want, sftpDirectoryPacketReadDir)
+			}
+			if got := recoverySFTPTestPacketTypes(t, transport.writes.Bytes()); !reflect.DeepEqual(got, want) {
+				t.Fatalf("wire packet types=%v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestBoundedSFTPDirectoryDotOnlyPagePreservesOverflow(t *testing.T) {
+	responses := boundedDirectoryTestOpenResponses()
+	responses = append(responses, boundedDirectoryTestNamePacket(2, []string{".", ".."})...)
+	responses = append(responses, boundedDirectoryTestNamePacket(3, []string{"first", "second", "third"})...)
+	responses = append(responses, recoverySFTPTestStatusPacket(4, sftpDirectoryStatusOK, "ok")...)
+	transport := &recoverySFTPDirectoryTransportForTest{reader: bytes.NewReader(responses)}
+	session, err := NewBoundedSFTPDirectorySession(transport, 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := session.OpenDirectory("/owned/directory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first", "second"} {
+		entries, readErr := directory.ReadDir(1)
+		if readErr != nil || len(entries) != 1 || entries[0].Name() != want {
+			t.Fatalf("entries=%v error=%v, want %q", entries, readErr, want)
+		}
+	}
+	entries, readErr := directory.ReadDir(1)
+	if entries != nil || !errors.Is(readErr, ErrSFTPDirectoryOverflow) || errors.Is(readErr, io.EOF) {
+		t.Fatalf("overflow entries=%v error=%v", entries, readErr)
+	}
+	if err := directory.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := recoverySFTPTestPacketTypes(t, transport.writes.Bytes()), []byte{1, 11, 12, 12, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wire packet types=%v, want %v", got, want)
+	}
+}
+
+func TestBoundedSFTPDirectoryDotOnlyPagePreservesCloseFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		response   []byte
+		writeErrAt int
+	}{
+		{name: "server rejection", response: recoverySFTPTestStatusPacket(4, 4, "failed")},
+		{name: "wrong status id", response: recoverySFTPTestStatusPacket(99, sftpDirectoryStatusOK, "ok")},
+		{name: "missing response"},
+		{name: "CLOSE write failure", writeErrAt: 5},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			responses := boundedDirectoryTestOpenResponses()
+			responses = append(responses, boundedDirectoryTestNamePacket(2, []string{".", ".."})...)
+			responses = append(responses, recoverySFTPTestStatusPacket(3, sftpDirectoryStatusEOF, "eof")...)
+			responses = append(responses, test.response...)
+			transport := &recoverySFTPDirectoryTransportForTest{reader: bytes.NewReader(responses), writeErrAt: test.writeErrAt}
+			directory, session, err := openRecoveryBoundedTestDirectory(transport, "/owned/directory")
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, readErr := directory.ReadDir(recoveryCleanupReadBatch)
+			if entries != nil || !errors.Is(readErr, io.EOF) {
+				t.Fatalf("directory entries=%v error=%v, want protocol EOF", entries, readErr)
+			}
+			if err := directory.Close(); !errors.Is(err, ErrSFTPDirectoryUnavailable) {
+				t.Fatalf("directory close error=%v, want unavailable", err)
+			}
+			if err := directory.Close(); !errors.Is(err, ErrSFTPDirectoryUnavailable) {
+				t.Fatalf("repeated directory close error=%v, want unavailable", err)
+			}
+			if err := session.Close(); !errors.Is(err, ErrSFTPDirectoryUnavailable) || transport.closeCalls != 1 {
+				t.Fatalf("session close error=%v transport closes=%d", err, transport.closeCalls)
+			}
+			want := []byte{1, 11, 12, 12}
+			if test.writeErrAt == 0 {
+				want = append(want, 4)
+			}
+			if got := recoverySFTPTestPacketTypes(t, transport.writes.Bytes()); !reflect.DeepEqual(got, want) {
+				t.Fatalf("wire packet types=%v, want %v", got, want)
+			}
+		})
+	}
+
+	t.Run("transport close failure", func(t *testing.T) {
+		responses := boundedDirectoryTestOpenResponses()
+		responses = append(responses, boundedDirectoryTestNamePacket(2, []string{".", ".."})...)
+		responses = append(responses, recoverySFTPTestStatusPacket(3, sftpDirectoryStatusEOF, "eof")...)
+		responses = append(responses, recoverySFTPTestStatusPacket(4, sftpDirectoryStatusOK, "ok")...)
+		transport := &recoverySFTPDirectoryTransportForTest{reader: bytes.NewReader(responses), closeErr: io.ErrClosedPipe}
+		directory, session, err := openRecoveryBoundedTestDirectory(transport, "/owned/directory")
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries, readErr := directory.ReadDir(recoveryCleanupReadBatch)
+		if entries != nil || !errors.Is(readErr, io.EOF) {
+			t.Fatalf("directory entries=%v error=%v, want protocol EOF", entries, readErr)
+		}
+		if err := directory.Close(); err != nil {
+			t.Fatalf("directory close: %v", err)
+		}
+		if err := session.Close(); !errors.Is(err, ErrSFTPDirectoryUnavailable) || transport.closeCalls != 1 {
+			t.Fatalf("session close error=%v transport closes=%d", err, transport.closeCalls)
+		}
+	})
 }
 
 func TestBoundedSFTPDirectoryConfigLimitAndEOF(t *testing.T) {

@@ -72,96 +72,59 @@ func TestRsyncResolutionIntentAcceptsOnlyDigestlessDurableEntryFacts(t *testing.
 	}
 }
 
-func TestRestoreRequestRejectsClosedUnionBeforeExecute(t *testing.T) {
-	valid := validResticRestoreRequest(t)
-	cases := []struct {
-		name    string
-		mutate  func(*RestoreRequest)
-		request RestoreRequest
-	}{
-		{name: "empty", request: RestoreRequest{}},
-		{
-			name: "dual provider arms",
-			mutate: func(request *RestoreRequest) {
-				request.Rsync = &RsyncRestoreRequest{ManifestDigest: strings.Repeat("a", 64)}
-			},
-		},
-		{
-			name: "unknown provider",
-			mutate: func(request *RestoreRequest) {
-				request.Provider = backupasset.ProviderCommand
-			},
-		},
-		{
-			name: "latest snapshot",
-			mutate: func(request *RestoreRequest) {
-				request.Restic.SnapshotID = "latest"
-			},
-		},
-		{
-			name: "shell fragment include",
-			mutate: func(request *RestoreRequest) {
-				request.Restic.Includes = []string{"/var/lib/xirang; rm -rf /"}
-			},
-		},
-		{
-			name: "swapped source locator",
-			mutate: func(request *RestoreRequest) {
-				request.Source.Locator = "FAKE_SWAPPED_SOURCE_LOCATOR"
-			},
-		},
-		{
-			name: "swapped recovery point binding",
-			mutate: func(request *RestoreRequest) {
-				request.Source.RecoveryPointID = strings.Repeat("f", 32)
-			},
-		},
-		{
-			name: "swapped target root binding",
-			mutate: func(request *RestoreRequest) {
-				request.Target.RootID = "other-approved-root"
-			},
-		},
-		{
-			name: "swapped target root digest",
-			mutate: func(request *RestoreRequest) {
-				request.Target.RootLocatorDigest = strings.Repeat("f", 64)
-			},
-		},
-		{
-			name: "missing permanent use latch",
-			mutate: func(request *RestoreRequest) {
-				request.MutationPermit.UseLatchID = ""
-			},
-		},
-		{
-			name: "stale credential session",
-			mutate: func(request *RestoreRequest) {
-				request.MutationPermit.Session.ExpiresAt = time.Now().UTC().Add(-time.Second)
-			},
-		},
-		{
-			name: "mismatched target chain revision",
-			mutate: func(request *RestoreRequest) {
-				request.MutationPermit.ExpectedTargetRevision = "target-revision-other"
-			},
-		},
+func TestResticRestoreRequestValidatesExactSnapshotAndIncludes(t *testing.T) {
+	valid := validResticRestoreRequest(t).Restic
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid Restic restore request: %v", err)
 	}
-
-	for _, test := range cases {
+	for _, test := range []struct {
+		name   string
+		mutate func(*ResticRestoreRequest)
+	}{
+		{name: "latest snapshot", mutate: func(request *ResticRestoreRequest) { request.SnapshotID = "latest" }},
+		{name: "abbreviated snapshot", mutate: func(request *ResticRestoreRequest) { request.SnapshotID = "abcdef" }},
+		{name: "missing include", mutate: func(request *ResticRestoreRequest) { request.Includes = nil }},
+		{name: "relative include", mutate: func(request *ResticRestoreRequest) { request.Includes = []string{"var/lib/xirang"} }},
+		{name: "traversal include", mutate: func(request *ResticRestoreRequest) { request.Includes = []string{"/var/lib/../other"} }},
+		{name: "shell fragment include", mutate: func(request *ResticRestoreRequest) { request.Includes = []string{"/var/lib/xirang; rm -rf /"} }},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := test.request
-			if test.mutate != nil {
-				request = cloneRestoreRequest(valid)
-				test.mutate(&request)
+			request := cloneResticRestoreRequest(valid)
+			test.mutate(request)
+			if err := request.Validate(); !errors.Is(err, ErrInvalidRestoreRequest) {
+				t.Fatalf("Restic request error = %v, want ErrInvalidRestoreRequest", err)
 			}
-			port := &countingRestorePort{}
-			_, err := ExecuteRestore(context.Background(), port, request, RestoreProgress{})
-			if !errors.Is(err, ErrInvalidRestoreRequest) {
-				t.Fatalf("ExecuteRestore error = %v, want ErrInvalidRestoreRequest", err)
-			}
-			if port.executeCalls != 0 {
-				t.Fatalf("invalid request reached RestorePort.Execute %d time(s)", port.executeCalls)
+		})
+	}
+}
+
+func TestRcloneRestoreDTOValidatesClosedArmAndDigests(t *testing.T) {
+	request := validResticRestoreRequest(t)
+	source, err := NewValidatedRestoreSource(backupasset.ProviderRclone, request.Source.RepositoryID, request.Source.RecoveryPointID, request.Source.Locator)
+	if err != nil {
+		t.Fatalf("validated Rclone source: %v", err)
+	}
+	request.Provider = backupasset.ProviderRclone
+	request.Source = source
+	request.Restic = nil
+	request.Rclone = &RcloneRestoreRequest{ManifestDigest: strings.Repeat("f", 64), CommittedPrefixDigest: strings.Repeat("e", 64)}
+	if err := request.ValidateAt(time.Now().UTC()); err != nil {
+		t.Fatalf("valid Rclone restore DTO: %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*RestoreRequest)
+	}{
+		{name: "missing manifest", mutate: func(candidate *RestoreRequest) { candidate.Rclone.ManifestDigest = "" }},
+		{name: "missing committed prefix", mutate: func(candidate *RestoreRequest) { candidate.Rclone.CommittedPrefixDigest = "" }},
+		{name: "invalid manifest", mutate: func(candidate *RestoreRequest) { candidate.Rclone.ManifestDigest = "not-a-digest" }},
+		{name: "dual provider arms", mutate: func(candidate *RestoreRequest) { candidate.Restic = &ResticRestoreRequest{} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := cloneRestoreRequest(request)
+			test.mutate(&candidate)
+			if err := candidate.ValidateAt(time.Now().UTC()); !errors.Is(err, ErrInvalidRestoreRequest) {
+				t.Fatalf("invalid Rclone restore DTO: %v", err)
 			}
 		})
 	}
@@ -189,82 +152,94 @@ func TestRestoreRequestHidesPrivateLocatorAndSessionValuesFromJSON(t *testing.T)
 	}
 }
 
-func TestRestoreRequestExecutesExactTypedRequest(t *testing.T) {
-	port := &countingRestorePort{}
+func TestRestoreSourceRejectsForgedOrSubstitutedCapability(t *testing.T) {
 	request := validResticRestoreRequest(t)
-	port.result = validRestoreResult(request)
-	if _, err := ExecuteRestore(context.Background(), port, request, RestoreProgress{}); err != nil {
-		t.Fatalf("ExecuteRestore exact request: %v", err)
+	if err := request.ValidateAt(time.Now().UTC()); err != nil {
+		t.Fatalf("validated source request: %v", err)
 	}
-	if port.executeCalls != 1 {
-		t.Fatalf("exact request execute calls = %d, want 1", port.executeCalls)
+	if source, err := NewRestoreSource(request.Source.Provider, request.Source.RepositoryID, request.Source.RecoveryPointID, request.Source.Locator); !errors.Is(err, ErrInvalidRestoreRequest) || source != (RestoreSource{}) {
+		t.Fatalf("raw source constructor = %#v, %v; want invalid restore request", source, err)
 	}
-}
+	if source, err := NewValidatedRestoreSource(backupasset.ProviderRsync, request.Source.RepositoryID, request.Source.RecoveryPointID, request.Source.Locator); !errors.Is(err, ErrInvalidRestoreRequest) || source != (RestoreSource{}) {
+		t.Fatalf("generic Rsync source constructor = %#v, %v; want invalid restore request", source, err)
+	}
 
-func TestRestoreRequestRejectsDirectSourceConstructionBeforePortCall(t *testing.T) {
-	request := validResticRestoreRequest(t)
 	forged := RestoreSource{
-		Provider:        request.Source.Provider,
-		RepositoryID:    request.Source.RepositoryID,
-		RecoveryPointID: request.Source.RecoveryPointID,
-		Locator:         request.Source.Locator,
+		Provider: request.Source.Provider, RepositoryID: request.Source.RepositoryID,
+		RecoveryPointID: request.Source.RecoveryPointID, Locator: request.Source.Locator,
+		LocatorDigest: request.Source.LocatorDigest,
 	}
-	digest, err := restoreSourceLocatorDigest(forged)
-	if err != nil {
-		t.Fatalf("restoreSourceLocatorDigest: %v", err)
+	if err := forged.Validate(); !errors.Is(err, ErrInvalidRestoreRequest) {
+		t.Fatalf("unsealed source with matching digest = %v, want invalid restore request", err)
 	}
-	forged.LocatorDigest = digest
 	request.Source = forged
-	port := &countingRestorePort{result: validRestoreResult(request)}
-
-	_, err = ExecuteRestore(context.Background(), port, request, RestoreProgress{})
-	if !errors.Is(err, ErrInvalidRestoreRequest) {
-		t.Fatalf("ExecuteRestore direct source error = %v, want ErrInvalidRestoreRequest", err)
+	if err := request.ValidateAt(time.Now().UTC()); !errors.Is(err, ErrInvalidRestoreRequest) {
+		t.Fatalf("request with unsealed source = %v, want invalid restore request", err)
 	}
-	if port.executeCalls != 0 {
-		t.Fatalf("direct source reached RestorePort.Execute %d time(s)", port.executeCalls)
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*RestoreSource)
+	}{
+		{name: "provider", mutate: func(source *RestoreSource) { source.Provider = backupasset.ProviderRclone }},
+		{name: "repository", mutate: func(source *RestoreSource) { source.RepositoryID = strings.Repeat("f", 32) }},
+		{name: "recovery point", mutate: func(source *RestoreSource) { source.RecoveryPointID = strings.Repeat("f", 32) }},
+		{name: "locator", mutate: func(source *RestoreSource) { source.Locator = "FAKE_SWAPPED_SOURCE_LOCATOR_FOR_TEST_ONLY" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := validResticRestoreRequest(t).Source
+			test.mutate(&source)
+			digest, err := restoreSourceLocatorDigest(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.LocatorDigest = digest
+			if err := source.Validate(); !errors.Is(err, ErrInvalidRestoreRequest) {
+				t.Fatalf("substituted sealed source with matching digest = %v, want invalid restore request", err)
+			}
+		})
 	}
 }
 
-func TestRestoreRequestAcceptsEachExactProviderArm(t *testing.T) {
-	t.Run("rsync scalar ref", func(t *testing.T) {
-		request := validRsyncRestoreRequest(t)
-		port := &countingRestorePort{result: validRestoreResult(request)}
-		if _, err := ExecuteRestore(context.Background(), port, request, RestoreProgress{}); err != nil {
-			t.Fatalf("ExecuteRestore Rsync request: %v", err)
-		}
-		if port.executeCalls != 1 {
-			t.Fatalf("Rsync execute calls = %d, want 1", port.executeCalls)
-		}
-	})
-	t.Run("rclone", func(t *testing.T) {
-		request := cloneRestoreRequest(validResticRestoreRequest(t))
-		source, err := NewValidatedRestoreSource(backupasset.ProviderRclone, request.Source.RepositoryID, request.Source.RecoveryPointID, request.Source.Locator)
-		if err != nil {
-			t.Fatal(err)
-		}
-		request.Provider = backupasset.ProviderRclone
-		request.Source = source
-		request.Rclone = &RcloneRestoreRequest{ManifestDigest: strings.Repeat("f", 64), CommittedPrefixDigest: strings.Repeat("e", 64)}
-		request.Restic = nil
-		port := &countingRestorePort{result: validRestoreResult(request)}
-		if _, err := ExecuteRestore(context.Background(), port, request, RestoreProgress{}); err != nil {
-			t.Fatalf("ExecuteRestore Rclone request: %v", err)
-		}
-		if port.executeCalls != 1 {
-			t.Fatalf("Rclone execute calls = %d, want 1", port.executeCalls)
-		}
-	})
-}
-
-func TestExecuteRestoreRejectsProcessEvidenceAsSuccessfulCheckpoint(t *testing.T) {
+func TestRestoreObservationPermitConstructorsRejectWrongPurpose(t *testing.T) {
 	request := validResticRestoreRequest(t)
+	now := time.Now().UTC()
+	for _, test := range []struct {
+		name      string
+		purpose   RestoreTargetPurpose
+		construct func(TargetObservationPermit) error
+	}{
+		{name: "preflight", purpose: TargetPurposeVerify, construct: func(permit TargetObservationPermit) error {
+			_, err := NewTargetPreflightPermit(permit, request.Target, now)
+			return err
+		}},
+		{name: "verify", purpose: TargetPurposeReconcile, construct: func(permit TargetObservationPermit) error {
+			_, err := NewTargetVerifyPermit(permit, request.Target, now)
+			return err
+		}},
+		{name: "reconcile", purpose: TargetPurposePreflight, construct: func(permit TargetObservationPermit) error {
+			_, err := NewTargetReconcilePermit(permit, request.Target, now)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.construct(validObservationPermit(request, test.purpose, now)); !errors.Is(err, ErrInvalidRestoreRequest) {
+				t.Fatalf("wrong-purpose observation permit error = %v, want ErrInvalidRestoreRequest", err)
+			}
+		})
+	}
+}
+
+func TestNewRestoreEvidenceDoesNotExposeRawProcessOutput(t *testing.T) {
 	evidence, err := NewRestoreEvidence(RestoreProcessEvidenceInput{
 		Stdout: []byte("FAKE_PROVIDER_STDOUT_FOR_TEST_ONLY"),
 		Stderr: []byte("FAKE_PROVIDER_STDERR_FOR_TEST_ONLY"),
 	})
 	if err != nil {
 		t.Fatalf("NewRestoreEvidence: %v", err)
+	}
+	if err := evidence.Validate(); err != nil {
+		t.Fatalf("sanitized restore evidence: %v", err)
 	}
 	payload, err := json.Marshal(evidence)
 	if err != nil {
@@ -274,132 +249,6 @@ func TestExecuteRestoreRejectsProcessEvidenceAsSuccessfulCheckpoint(t *testing.T
 		if strings.Contains(string(payload), forbidden) {
 			t.Fatalf("raw process output %q leaked in %s", forbidden, payload)
 		}
-	}
-	result := validRestoreResult(request)
-	result.Checkpoint.VerifiedTargetIdentityDigest = ""
-	result.Evidence = []RestoreEvidence{evidence}
-	port := &countingRestorePort{result: result}
-
-	if _, err := ExecuteRestore(context.Background(), port, request, RestoreProgress{}); !errors.Is(err, ErrInvalidRestoreRequest) {
-		t.Fatalf("ExecuteRestore unverified checkpoint error = %v, want ErrInvalidRestoreRequest", err)
-	}
-	if port.executeCalls != 1 {
-		t.Fatalf("unverified checkpoint execute calls = %d, want 1", port.executeCalls)
-	}
-}
-
-func TestRestoreCheckpointRequiresTypedTargetVerificationEvidence(t *testing.T) {
-	request := validResticRestoreRequest(t)
-	result := validRestoreResult(request)
-	result.Checkpoint.VerifiedTargetIdentityDigest = ""
-	port := &countingRestorePort{result: result}
-
-	if _, err := ExecuteRestore(context.Background(), port, request, RestoreProgress{}); !errors.Is(err, ErrInvalidRestoreRequest) {
-		t.Fatalf("ExecuteRestore checkpoint without target evidence error = %v, want ErrInvalidRestoreRequest", err)
-	}
-}
-
-func TestRestorePhaseWrappersRejectUnvalidatedResults(t *testing.T) {
-	request := validResticRestoreRequest(t)
-	now := time.Now().UTC()
-	preflightPermit, err := NewTargetPreflightPermit(validObservationPermit(request, TargetPurposePreflight, now), request.Target, now)
-	if err != nil {
-		t.Fatalf("NewTargetPreflightPermit: %v", err)
-	}
-	verifyPermit, err := NewTargetVerifyPermit(validObservationPermit(request, TargetPurposeVerify, now), request.Target, now)
-	if err != nil {
-		t.Fatalf("NewTargetVerifyPermit: %v", err)
-	}
-	reconcilePermit, err := NewTargetReconcilePermit(validObservationPermit(request, TargetPurposeReconcile, now), request.Target, now)
-	if err != nil {
-		t.Fatalf("NewTargetReconcilePermit: %v", err)
-	}
-
-	tests := []struct {
-		name string
-		call func(*countingRestorePort) error
-	}{
-		{
-			name: "preflight",
-			call: func(port *countingRestorePort) error {
-				_, err := PreflightRestore(context.Background(), port, RestorePreflightRequest{Request: request, Permit: preflightPermit})
-				return err
-			},
-		},
-		{
-			name: "verify",
-			call: func(port *countingRestorePort) error {
-				_, err := VerifyRestore(context.Background(), port, RestoreVerifyRequest{Request: request, Permit: verifyPermit})
-				return err
-			},
-		},
-		{
-			name: "reconcile",
-			call: func(port *countingRestorePort) error {
-				_, err := ReconcileRestore(context.Background(), port, RestoreReconcileRequest{Request: request, Permit: reconcilePermit})
-				return err
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if err := test.call(&countingRestorePort{}); !errors.Is(err, ErrInvalidRestoreRequest) {
-				t.Fatalf("%s error = %v, want ErrInvalidRestoreRequest", test.name, err)
-			}
-		})
-	}
-}
-
-func TestPreflightRestoreRejectsWrongPurposePermitBeforePortCall(t *testing.T) {
-	request := validResticRestoreRequest(t)
-	now := time.Now().UTC()
-	wrongPurpose := validObservationPermit(request, TargetPurposeVerify, now)
-	if _, err := NewTargetPreflightPermit(wrongPurpose, request.Target, now); !errors.Is(err, ErrInvalidRestoreRequest) {
-		t.Fatalf("NewTargetPreflightPermit wrong purpose error = %v, want ErrInvalidRestoreRequest", err)
-	}
-	port := &countingRestorePort{}
-	if _, err := PreflightRestore(context.Background(), port, RestorePreflightRequest{Request: request}); !errors.Is(err, ErrInvalidRestoreRequest) {
-		t.Fatalf("PreflightRestore missing permit error = %v, want ErrInvalidRestoreRequest", err)
-	}
-	if port.preflightCalls != 0 {
-		t.Fatalf("invalid preflight reached RestorePort.Preflight %d time(s)", port.preflightCalls)
-	}
-}
-
-func TestRestorePhaseWrappersReturnValidatedEvidence(t *testing.T) {
-	request := validResticRestoreRequest(t)
-	now := time.Now().UTC()
-	preflightPermit, err := NewTargetPreflightPermit(validObservationPermit(request, TargetPurposePreflight, now), request.Target, now)
-	if err != nil {
-		t.Fatalf("NewTargetPreflightPermit: %v", err)
-	}
-	verifyPermit, err := NewTargetVerifyPermit(validObservationPermit(request, TargetPurposeVerify, now), request.Target, now)
-	if err != nil {
-		t.Fatalf("NewTargetVerifyPermit: %v", err)
-	}
-	reconcilePermit, err := NewTargetReconcilePermit(validObservationPermit(request, TargetPurposeReconcile, now), request.Target, now)
-	if err != nil {
-		t.Fatalf("NewTargetReconcilePermit: %v", err)
-	}
-	result := validRestoreResult(request)
-	port := &countingRestorePort{
-		preflight: RestorePreflightEvidence{TargetBindingDigest: request.Target.BindingDigest, TargetRevision: request.Target.TargetRevision, Checkpoint: request.Checkpoint},
-		verify:    RestoreVerifyResult{Checkpoint: result.Checkpoint},
-		reconcile: RestoreReconcileResult{Checkpoint: result.Checkpoint},
-	}
-
-	if _, err := PreflightRestore(context.Background(), port, RestorePreflightRequest{Request: request, Permit: preflightPermit}); err != nil {
-		t.Fatalf("PreflightRestore: %v", err)
-	}
-	if _, err := VerifyRestore(context.Background(), port, RestoreVerifyRequest{Request: request, Permit: verifyPermit}); err != nil {
-		t.Fatalf("VerifyRestore: %v", err)
-	}
-	if _, err := ReconcileRestore(context.Background(), port, RestoreReconcileRequest{Request: request, Permit: reconcilePermit}); err != nil {
-		t.Fatalf("ReconcileRestore: %v", err)
-	}
-	if port.preflightCalls != 1 || port.verifyCalls != 1 || port.reconcileCalls != 1 {
-		t.Fatalf("phase calls preflight=%d verify=%d reconcile=%d, want one each", port.preflightCalls, port.verifyCalls, port.reconcileCalls)
 	}
 }
 
@@ -526,21 +375,6 @@ func cloneRcloneRestoreRequest(request *RcloneRestoreRequest) *RcloneRestoreRequ
 	}
 	clone := *request
 	return &clone
-}
-
-func validRestoreResult(request RestoreRequest) RestoreResult {
-	return RestoreResult{
-		Checkpoint: RestoreCheckpoint{
-			ID:                           strings.Repeat("f", 32),
-			OperationDigest:              strings.Repeat("1", 64),
-			PriorTargetRevision:          request.Target.TargetRevision,
-			VerifiedTargetIdentityDigest: strings.Repeat("2", 64),
-			VerifiedTargetRevision:       "target-revision-2",
-			VerifiedBytes:                17,
-			AttemptFence:                 request.Fence.AttemptFence,
-			NodeFence:                    request.Fence.NodeFence,
-		},
-	}
 }
 
 func validObservationPermit(request RestoreRequest, purpose RestoreTargetPurpose, now time.Time) TargetObservationPermit {

@@ -907,6 +907,12 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 	if err := validateAccountRecoverySchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
+	if version < catalogCandidateSweepSchemaVersion {
+		return nil
+	}
+	if err := validateCatalogCandidateSweepSchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
 
 	return nil
 }

@@ -40,7 +40,12 @@ func recoveryExecutionPayloadDigest(size int64) string {
 
 func newRecoveryExecutionFixture(t *testing.T) *authorizationReceiptServiceFixture {
 	t.Helper()
-	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptWriteAuthorize)
+	return newRecoveryExecutionFixtureWithKinds(t, nil)
+}
+
+func newRecoveryExecutionFixtureWithKinds(t *testing.T, kinds []RecoveryOperationKind) *authorizationReceiptServiceFixture {
+	t.Helper()
+	fixture := newAuthorizationReceiptServiceFixtureConfiguredWithKinds(t, AuthorizationReceiptWriteAuthorize, false, true, kinds)
 
 	var plan model.BackupAssetRecoveryPlan
 	if err := fixture.db.Where("id = ?", fixture.request.PlanID).Take(&plan).Error; err != nil {
@@ -721,7 +726,7 @@ func TestRecoveryReviewF4PartialWorkspaceCleanupOnly(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("claim pre-arm failure job: found=%t err=%v", found, err)
 		}
-		coordinator.liveRevalidator = &authorizationReceiptLiveRevalidatorSpy{err: ErrAuthorizationDenied}
+		coordinator.liveRevalidator = newAuthorizationReceiptDriftSpy(fixture.now)
 		if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, ErrRecoverySourceChanged) {
 			t.Fatalf("pre-arm drift error=%v, want ErrRecoverySourceChanged", err)
 		}
@@ -1317,7 +1322,7 @@ func testRecoveryB1E1FreshCreateOverwriteSource(t *testing.T) {
 			if !errors.Is(executeErr, ErrRecoverySourceChanged) || errors.Is(executeErr, ErrRecoveryWorkerFenceLost) {
 				t.Fatalf("fresh %s source mismatch error=%v, want ErrRecoverySourceChanged", kind, executeErr)
 			}
-			assertRecoveryRejectedBeforeFirstWrite(t, fixture.db, before, target, source)
+			assertRecoveryFailedBeforeFirstWrite(t, fixture.db, claim, before, target, source)
 			if source.openAttempts != 0 {
 				t.Fatalf("fresh %s source mismatch reached stream open %d times", kind, source.openAttempts)
 			}
@@ -1554,7 +1559,7 @@ func TestRecoveryExecuteClaimRejectsInvalidMaterializedSourceResponsesAsSourceCh
 			if errors.Is(executeErr, ErrRecoveryWorkerFenceLost) {
 				t.Fatalf("invalid materialized source was misclassified as fence loss: %v", executeErr)
 			}
-			assertRecoveryRejectedBeforeFirstWrite(t, fixture.db, before, target, source)
+			assertRecoveryFailedBeforeFirstWrite(t, fixture.db, claim, before, target, source)
 		})
 	}
 }
@@ -1927,7 +1932,7 @@ func TestRecoveryExecuteClaimRevalidatesPinnedSourcePerOperation(t *testing.T) {
 }
 
 func TestRecoveryAdoptsLaterIsolatedOperationAfterPriorCheckpoint(t *testing.T) {
-	fixture := newRecoveryExecutionFixture(t)
+	fixture := newRecoveryExecutionFixtureWithKinds(t, []RecoveryOperationKind{RecoveryOperationCreate, RecoveryOperationCreate, RecoveryOperationSkip})
 	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatalf("execute recovery fixture: %v", err)
@@ -2225,7 +2230,7 @@ func TestRecoveryInPlaceTakeoverRequiresAdoptionBeforeFirstOperationReplay(t *te
 }
 
 func TestRecoveryAdoptedContinuationSourceDriftTerminalizesCurrentAttempt(t *testing.T) {
-	fixture := newRecoveryExecutionFixture(t)
+	fixture := newRecoveryExecutionFixtureWithKinds(t, []RecoveryOperationKind{RecoveryOperationCreate, RecoveryOperationCreate, RecoveryOperationSkip})
 	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatalf("execute recovery fixture: %v", err)
@@ -2338,7 +2343,7 @@ type recoveryAdoptedContinuationState struct {
 
 func newRecoveryAdoptedContinuationState(t *testing.T) recoveryAdoptedContinuationState {
 	t.Helper()
-	fixture := newRecoveryExecutionFixture(t)
+	fixture := newRecoveryExecutionFixtureWithKinds(t, []RecoveryOperationKind{RecoveryOperationCreate, RecoveryOperationCreate, RecoveryOperationSkip})
 	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatalf("execute adopted continuation fixture: %v", err)
@@ -2785,7 +2790,8 @@ func TestRecoveryOrdinaryExecutionLocksPlanBeforeJob(t *testing.T) {
 		t.Fatalf("load ordinary operation handoff: %v", err)
 	}
 	observedAuthority, err := coordinator.observeRecoveryAuthority(
-		context.Background(), handoff.plan, handoff.preflight,
+		context.Background(), handoff.plan, handoff.preflight, claim,
+		recoveryAuthorityTargetIntent{phase: recoveryAuthorityTargetCheckpointed, itemID: item.ID},
 	)
 	if err != nil {
 		t.Fatalf("observe ordinary execution authority: %v", err)

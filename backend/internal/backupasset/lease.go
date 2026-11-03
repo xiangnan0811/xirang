@@ -487,27 +487,29 @@ func (service *LeaseService) TakeoverTx(ctx context.Context, tx *gorm.DB, reques
 }
 
 func (service *LeaseService) resolveAcquireDeadlineTx(ctx context.Context, tx *gorm.DB, request AcquireLeaseRequest, now time.Time) (time.Time, error) {
-	// Existing callers do not coordinate stages with a point-wide deadline.
-	// Preserve their historical behavior: each zero-deadline acquisition gets
-	// a fresh deadline from the service configuration. Only explicit deadlines
-	// participate in the immutable publication-stage contract below.
+	// Zero-deadline acquisitions keep their historical independent service
+	// deadline. Explicit publication deadlines are shared across stages of the
+	// same point; other explicit deadlines are scoped to point, holder and owner.
 	if request.AbsoluteDeadline.IsZero() {
 		return now.Add(service.config.AbsoluteDeadline), nil
 	}
 
+	// Include released and expired leases: their deadlines remain part of the
+	// scope's history. AcquireTx validates the holder before reaching this query.
 	var previous model.RecoveryPointLease
-	result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("recovery_point_id = ?", request.RecoveryPointID).
-		Order("created_at DESC, id DESC").
-		Limit(1).
-		Find(&previous)
+	query := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("recovery_point_id = ? AND holder_type = ?", request.RecoveryPointID, request.HolderType)
+	if request.HolderType != LeaseHolderPointPublication {
+		query = query.Where("owner_id = ?", request.OwnerID)
+	}
+	result := query.Order("created_at DESC, id DESC").Limit(1).Find(&previous)
 	if result.Error != nil {
-		return time.Time{}, fmt.Errorf("load prior point lease deadline: %w", result.Error)
+		return time.Time{}, fmt.Errorf("load prior scoped lease deadline: %w", result.Error)
 	}
 	if result.RowsAffected == 1 {
 		deadline := previous.AbsoluteDeadline.UTC()
-		if !request.AbsoluteDeadline.IsZero() && !request.AbsoluteDeadline.UTC().Equal(deadline) {
-			return time.Time{}, fmt.Errorf("%w: fresh lease stage changed point deadline", ErrConflict)
+		if !request.AbsoluteDeadline.UTC().Equal(deadline) {
+			return time.Time{}, fmt.Errorf("%w: explicit lease deadline differs from prior scoped lease", ErrConflict)
 		}
 		if !now.Before(deadline) {
 			return time.Time{}, fmt.Errorf("%w: absolute lease deadline reached", ErrLeaseDeadlineExceeded)

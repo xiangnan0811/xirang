@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"runtime"
 	"strings"
@@ -790,6 +792,10 @@ func TestCatalogPointReadFactoryAdmitsCommittedRsyncManagedAndRollbackSafe(t *te
 			page, err := session.ListCanonical(context.Background(), provider.PageRequest{Limit: 10})
 			if err != nil || len(page.Items) != 1 || page.NextCursor != "" {
 				t.Fatalf("committed Rsync Catalog page=%+v err=%v", page, err)
+			}
+			sum := sha256.Sum256([]byte("managed Catalog payload\n"))
+			if page.Items[0].Fingerprint != hex.EncodeToString(sum[:]) || page.Items[0].FingerprintStrength != "strong" {
+				t.Fatalf("committed Rsync Catalog record=%+v, want strong payload SHA-256", page.Items[0])
 			}
 			if token.closed.Load() != 0 {
 				t.Fatalf("Rsync admission token closed during ListCanonical: %d", token.closed.Load())

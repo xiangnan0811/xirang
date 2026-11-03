@@ -160,6 +160,15 @@ func mustAuthorizationReceiptOperationSnapshotConfiguredWithDeleteCount(
 	rootLocatorDigest string,
 	executionPayloads bool,
 ) (RecoveryOperationProducts, string) {
+	return mustAuthorizationReceiptOperationSnapshotWithOrdinals(
+		t, assetRefs, nonDeleteKinds, deleteCount, targetRootID, rootLocatorDigest, executionPayloads, false,
+	)
+}
+
+func mustAuthorizationReceiptOperationSnapshotWithOrdinals(
+	t *testing.T, assetRefs []backupasset.AssetRef, nonDeleteKinds []RecoveryOperationKind, deleteCount int,
+	targetRootID, rootLocatorDigest string, executionPayloads, interleaved bool,
+) (RecoveryOperationProducts, string) {
 	t.Helper()
 	if len(nonDeleteKinds) == 0 {
 		nonDeleteKinds = make([]RecoveryOperationKind, len(assetRefs))
@@ -176,6 +185,28 @@ func mustAuthorizationReceiptOperationSnapshotConfiguredWithDeleteCount(
 	if deleteCount > 0 {
 		targetMode = TargetModeInPlace
 		conflictPolicy = ConflictExactMirror
+	}
+	// Keep the existing operation order while deriving every path digest from its
+	// real locator. Production sorts by digest, so assign each ordinal a disjoint
+	// portion of the digest space instead of inventing digest values.
+	operationCount := len(assetRefs) + deleteCount
+	targetForOrdinal := func(prefix string, ordinal int) (string, string) {
+		for attempt := range 1 << 16 {
+			locator := prefix
+			if attempt != 0 {
+				locator = fmt.Sprintf("%s-%04d", prefix, attempt)
+			}
+			digest := mustTargetPathDigest(t, targetRootID, rootLocatorDigest, locator)
+			leading, err := strconv.ParseUint(digest[:8], 16, 32)
+			if err != nil {
+				t.Fatalf("parse canonical target digest: %v", err)
+			}
+			if int(leading*uint64(operationCount)>>32) == ordinal {
+				return locator, digest
+			}
+		}
+		t.Fatalf("cannot construct ordered canonical target for ordinal %d", ordinal)
+		return "", ""
 	}
 	operations := make([]RecoveryOperation, 0, len(assetRefs)+deleteCount)
 	var estimatedBytes int64
@@ -210,7 +241,11 @@ func mustAuthorizationReceiptOperationSnapshotConfiguredWithDeleteCount(
 		estimated := int64(index + 1)
 		estimatedBytes += estimated
 		assetRefCopy := assetRef
-		targetRelativeLocator := fmt.Sprintf("items/item-%04d", index)
+		ordinal := index
+		if interleaved {
+			ordinal = []int{1, 3}[index]
+		}
+		targetRelativeLocator, targetPathDigest := targetForOrdinal(fmt.Sprintf("items/item-%04d", index), ordinal)
 		semanticTargetDigest, err := SemanticTargetDigest(
 			targetMode, targetRootID, rootLocatorDigest, targetRelativeLocator,
 		)
@@ -220,7 +255,7 @@ func mustAuthorizationReceiptOperationSnapshotConfiguredWithDeleteCount(
 		operations = append(operations, RecoveryOperation{
 			Kind: kind, TargetRelativeLocator: targetRelativeLocator,
 			SemanticTargetDigest:       semanticTargetDigest,
-			TargetPathDigest:           strings.Repeat(strconv.Itoa(index+1), sha256DigestLength),
+			TargetPathDigest:           targetPathDigest,
 			ExpectedPrior:              expectedPrior,
 			ExpectedPostIdentityDigest: expectedPostIdentityDigest,
 			ExpectedPostBytes:          expectedPostBytes,
@@ -234,14 +269,17 @@ func mustAuthorizationReceiptOperationSnapshotConfiguredWithDeleteCount(
 		})
 	}
 
-	for deleteIndex := 0; deleteIndex < deleteCount; deleteIndex++ {
-		deleteTargetRelativeLocator := "items/stale-directory"
-		deleteTargetPathDigest := strings.Repeat("4", sha256DigestLength)
+	for deleteIndex := range deleteCount {
+		ordinal := len(assetRefs) + deleteIndex
+		if interleaved {
+			ordinal = []int{0, 2}[deleteIndex]
+		}
+		deleteTargetRelativeLocator, deleteTargetPathDigest := targetForOrdinal(
+			fmt.Sprintf("items/stale-directory-%04d", deleteIndex), ordinal,
+		)
 		deletePriorDigest := framedDigest("xirang/recovery/test-delete-prior/v1", assetRefs[0].RecoveryPointID)
 		if deleteIndex > 0 {
 			ordinal := strconv.Itoa(deleteIndex)
-			deleteTargetRelativeLocator = fmt.Sprintf("items/stale-directory-%04d", deleteIndex)
-			deleteTargetPathDigest = framedDigest("xirang/recovery/test-delete-path/v1", ordinal)
 			deletePriorDigest = framedDigest(
 				"xirang/recovery/test-delete-prior/v1", assetRefs[0].RecoveryPointID, ordinal,
 			)
@@ -311,6 +349,20 @@ func newAuthorizationReceiptServiceFixtureConfigured(
 	prepareOperation bool,
 ) *authorizationReceiptServiceFixture {
 	t.Helper()
+	return newAuthorizationReceiptServiceFixtureConfiguredWithKinds(t, operation, exactMirror, prepareOperation, nil)
+}
+
+func newAuthorizationReceiptServiceFixtureConfiguredWithKinds(
+	t *testing.T,
+	operation AuthorizationReceiptOperation,
+	exactMirror bool,
+	prepareOperation bool,
+	kinds []RecoveryOperationKind,
+) *authorizationReceiptServiceFixture {
+	t.Helper()
+	if kinds == nil {
+		kinds = []RecoveryOperationKind{RecoveryOperationCreate, RecoveryOperationOverwrite, RecoveryOperationSkip}
+	}
 	base := newPlanServiceTestFixture(t, exactMirror)
 	ensureRecoveryPlanRollbackTables(t, base.db)
 	if err := base.db.AutoMigrate(&model.Node{}); err != nil {
@@ -368,11 +420,15 @@ func newAuthorizationReceiptServiceFixtureConfigured(
 	operationProducts, encodedOperationRows := operationSnapshot(
 		t,
 		base.request.Selection.AssetRefs,
-		[]RecoveryOperationKind{RecoveryOperationCreate, RecoveryOperationOverwrite, RecoveryOperationSkip},
+		kinds,
 		exactMirror,
 		base.request.Plan.Binding.Target.RootID,
 		base.request.Plan.Binding.Target.RootLocatorDigest,
 	)
+	if exactMirror {
+		base.request.Plan.Binding.Target.EncryptedRelativePath = operationProducts.Rows[0].TargetRelativeLocator
+		base.request.Plan.Binding.Target.PathDigest = operationProducts.Rows[0].TargetPathDigest
+	}
 	base.request.Plan.Binding.OperationSetDigest = operationProducts.OperationSetDigest
 	base.request.Plan.Binding.DeleteSetDigest = operationProducts.DeleteSetDigest
 	base.request.EstimatedItems = operationProducts.Impact.EstimatedItems
@@ -462,6 +518,11 @@ func newAuthorizationReceiptPostgresMigrationServiceFixtureWithDeleteCount(
 	)
 }
 
+type authorizationReceiptMigrationOptions struct {
+	interleaved bool
+	rsync       bool
+}
+
 func newAuthorizationReceiptPostgresMigrationServiceFixtureWithDeleteCountAndKinds(
 	t *testing.T,
 	operation AuthorizationReceiptOperation,
@@ -469,6 +530,15 @@ func newAuthorizationReceiptPostgresMigrationServiceFixtureWithDeleteCountAndKin
 	prepareOperation bool,
 	deleteCount int,
 	nonDeleteKinds []RecoveryOperationKind,
+) *authorizationReceiptServiceFixture {
+	return newAuthorizationReceiptPostgresMigrationFixtureWithOptions(
+		t, operation, exactMirror, prepareOperation, deleteCount, nonDeleteKinds, authorizationReceiptMigrationOptions{},
+	)
+}
+
+func newAuthorizationReceiptPostgresMigrationFixtureWithOptions(
+	t *testing.T, operation AuthorizationReceiptOperation, exactMirror, prepareOperation bool,
+	deleteCount int, nonDeleteKinds []RecoveryOperationKind, options authorizationReceiptMigrationOptions,
 ) *authorizationReceiptServiceFixture {
 	t.Helper()
 	if (!exactMirror && deleteCount != 0) || (exactMirror && deleteCount < 1) {
@@ -478,8 +548,8 @@ func newAuthorizationReceiptPostgresMigrationServiceFixtureWithDeleteCountAndKin
 	if err := database.RunMigrations(db, "postgres"); err != nil {
 		t.Fatalf("apply paired production PostgreSQL migrations through 000069: %v", err)
 	}
-	fixture := newAuthorizationReceiptServiceFixtureOnDBConfigured(
-		t, db, operation, exactMirror, prepareOperation, false, deleteCount, nonDeleteKinds,
+	fixture := newAuthorizationReceiptServiceFixtureOnDBWithOptions(
+		t, db, operation, exactMirror, prepareOperation, false, deleteCount, nonDeleteKinds, options,
 	)
 	var scheduler model.BackupAssetRecoveryEvidence
 	if err := db.Select("updated_at").Where("id = ?", recoveryClaimSchedulerRowID).Take(&scheduler).Error; err != nil {
@@ -560,6 +630,29 @@ func newAuthorizationReceiptSQLiteMigrationServiceFixtureWithDeleteCount(
 	deleteCount int,
 ) *authorizationReceiptServiceFixture {
 	t.Helper()
+	return newAuthorizationReceiptSQLiteMigrationServiceFixtureWithDeleteCountAndKinds(
+		t, operation, exactMirror, prepareOperation, deleteCount, nil,
+	)
+}
+
+func newAuthorizationReceiptSQLiteMigrationServiceFixtureWithDeleteCountAndKinds(
+	t *testing.T,
+	operation AuthorizationReceiptOperation,
+	exactMirror bool,
+	prepareOperation bool,
+	deleteCount int,
+	nonDeleteKinds []RecoveryOperationKind,
+) *authorizationReceiptServiceFixture {
+	return newAuthorizationReceiptSQLiteMigrationFixtureWithOptions(
+		t, operation, exactMirror, prepareOperation, deleteCount, nonDeleteKinds, authorizationReceiptMigrationOptions{},
+	)
+}
+
+func newAuthorizationReceiptSQLiteMigrationFixtureWithOptions(
+	t *testing.T, operation AuthorizationReceiptOperation, exactMirror, prepareOperation bool,
+	deleteCount int, nonDeleteKinds []RecoveryOperationKind, options authorizationReceiptMigrationOptions,
+) *authorizationReceiptServiceFixture {
+	t.Helper()
 	if (!exactMirror && deleteCount != 0) || (exactMirror && deleteCount < 1) {
 		t.Fatal("authorization migration fixture has invalid exact-mirror delete count")
 	}
@@ -574,8 +667,8 @@ func newAuthorizationReceiptSQLiteMigrationServiceFixtureWithDeleteCount(
 	if err := database.RunMigrations(db, "sqlite"); err != nil {
 		t.Fatalf("apply paired production SQLite migrations through 000069: %v", err)
 	}
-	return newAuthorizationReceiptServiceFixtureOnDBConfigured(
-		t, db, operation, exactMirror, prepareOperation, false, deleteCount, nil,
+	return newAuthorizationReceiptServiceFixtureOnDBWithOptions(
+		t, db, operation, exactMirror, prepareOperation, false, deleteCount, nonDeleteKinds, options,
 	)
 }
 
@@ -603,6 +696,16 @@ func newAuthorizationReceiptServiceFixtureOnDBConfigured(
 	initializeSchema bool,
 	deleteCount int,
 	nonDeleteKinds []RecoveryOperationKind,
+) *authorizationReceiptServiceFixture {
+	return newAuthorizationReceiptServiceFixtureOnDBWithOptions(
+		t, db, operation, exactMirror, prepareOperation, initializeSchema, deleteCount, nonDeleteKinds,
+		authorizationReceiptMigrationOptions{},
+	)
+}
+
+func newAuthorizationReceiptServiceFixtureOnDBWithOptions(
+	t *testing.T, db *gorm.DB, operation AuthorizationReceiptOperation, exactMirror, prepareOperation, initializeSchema bool,
+	deleteCount int, nonDeleteKinds []RecoveryOperationKind, options authorizationReceiptMigrationOptions,
 ) *authorizationReceiptServiceFixture {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
@@ -658,6 +761,11 @@ func newAuthorizationReceiptServiceFixtureOnDBConfigured(
 	pointID := strings.Repeat("b", 32)
 	repository := model.BackupRepository{ID: repositoryID, ProviderKind: "restic", DisplayName: "recovery-authorization",
 		VersionMode: "native_snapshot", Status: "online", ImmutabilityLevel: "backend_versioned", CapabilityRevision: 1}
+	if options.rsync {
+		repository.ProviderKind = string(backupasset.ProviderRsync)
+		repository.VersionMode = string(backupasset.VersionHardlinkTree)
+		repository.ImmutabilityLevel = string(backupasset.ImmutabilityXirangManaged)
+	}
 	if err := db.Create(&repository).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -666,6 +774,18 @@ func newAuthorizationReceiptServiceFixtureOnDBConfigured(
 		Semantics: "native_snapshot", State: "committed", SourceFingerprint: strings.Repeat("c", 64),
 		ManifestDigestAlgorithm: "sha256", ManifestDigest: strings.Repeat("d", 64), CapabilityRevision: 1,
 		ImmutabilityLevel: "backend_versioned", PhysicalAvailability: "online", HoldState: "none", ObservedAt: &now, CommittedAt: &now}
+	if options.rsync {
+		point.Semantics = string(backupasset.PointXirangManifest)
+		point.ImmutabilityLevel = string(backupasset.ImmutabilityXirangManaged)
+	}
+	selectedCount, logicalBytes := 1, int64(1)
+	if options.interleaved {
+		if !exactMirror || deleteCount != 2 || len(nonDeleteKinds) != 2 {
+			t.Fatal("interleaved fixture requires two selected operations and two deletes")
+		}
+		selectedCount, logicalBytes = 2, 3
+		point.EntryCount, point.LogicalBytes = int64(selectedCount), logicalBytes
+	}
 	if err := db.Create(&point).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -674,8 +794,8 @@ func newAuthorizationReceiptServiceFixtureOnDBConfigured(
 	manifest := model.RecoveryPointManifest{
 		ID: manifestID, RecoveryPointID: pointID, Revision: 1, DigestAlgorithm: "sha256",
 		Digest: point.ManifestDigest, Generator: "recovery-authorization-test",
-		GeneratorVersion: "1", Completeness: string(backupasset.ManifestComplete), EntryCount: 1,
-		LogicalBytes: 1, FidelityJSON: `{}`, IsActive: true, CreatedAt: now, UpdatedAt: now,
+		GeneratorVersion: "1", Completeness: string(backupasset.ManifestComplete), EntryCount: int64(selectedCount),
+		LogicalBytes: logicalBytes, FidelityJSON: `{}`, IsActive: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(&manifest).Error; err != nil {
 		t.Fatal(err)
@@ -683,7 +803,7 @@ func newAuthorizationReceiptServiceFixtureOnDBConfigured(
 	generation := model.CatalogGeneration{
 		ID: generationID, RecoveryPointID: pointID, ManifestID: &manifestID, Generation: 1,
 		State: string(backupasset.CatalogGenerationComplete), IsActive: true,
-		ExpectedEntryCount: 1, WrittenEntryCount: 1, ExpectedDigest: point.ManifestDigest,
+		ExpectedEntryCount: int64(selectedCount), WrittenEntryCount: int64(selectedCount), ExpectedDigest: point.ManifestDigest,
 		WrittenDigest: point.ManifestDigest, StartedAt: now, FinishedAt: timePointer(now),
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -706,13 +826,28 @@ func newAuthorizationReceiptServiceFixtureOnDBConfigured(
 	if err := db.Create(&entry).Error; err != nil {
 		t.Fatal(err)
 	}
+	selectedRefs := []backupasset.AssetRef{selectedRef}
+	entriesByID := map[string]model.CatalogEntry{selectedRef.EntryID: entry}
+	if options.interleaved {
+		second := backupasset.AssetRef{RecoveryPointID: pointID, EntryID: strings.Repeat("f", 64)}
+		secondEntry := model.CatalogEntry{
+			GenerationID: generationID, EntryID: second.EntryID, RecoveryPointID: pointID,
+			NormalizedPath: "/selected-2", Name: "selected-2", EntryType: string(backupasset.CatalogEntryFile),
+			Size: 2, CreatedAt: now,
+		}
+		if err := db.Create(&secondEntry).Error; err != nil {
+			t.Fatal(err)
+		}
+		selectedRefs = append(selectedRefs, second)
+		entriesByID[second.EntryID] = secondEntry
+	}
 	sourceValidator, err := NewSourceValidator(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	selection, err := sourceValidator.FreezeSelection(context.Background(), SourceSelectionRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID,
-		AssetRefs: []backupasset.AssetRef{selectedRef}, MaxItems: 1,
+		AssetRefs: selectedRefs, MaxItems: len(selectedRefs),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -729,10 +864,18 @@ func newAuthorizationReceiptServiceFixtureOnDBConfigured(
 	if err != nil {
 		t.Fatalf("construct migration fixture target-path digest: %v", err)
 	}
-	operationProducts, encodedOperationRows := mustAuthorizationReceiptOperationSnapshotConfiguredWithDeleteCount(
-		t, []backupasset.AssetRef{selectedRef}, nonDeleteKinds, deleteCount,
-		"recovery-root", targetRootLocatorDigest, exactMirror && !prepareOperation,
+	operationProducts, encodedOperationRows := mustAuthorizationReceiptOperationSnapshotWithOrdinals(
+		t, selection.AssetRefs, nonDeleteKinds, deleteCount,
+		"recovery-root", targetRootLocatorDigest, exactMirror && !prepareOperation, options.interleaved,
 	)
+	if exactMirror {
+		anchorOrdinal := 0
+		if options.interleaved {
+			anchorOrdinal = 3
+		}
+		targetRelativePath = operationProducts.Rows[anchorOrdinal].TargetRelativeLocator
+		targetPathDigest = operationProducts.Rows[anchorOrdinal].TargetPathDigest
+	}
 	securityDecision := "allow_clean"
 	if operation == AuthorizationReceiptSecurityOverride {
 		securityDecision = "block"
@@ -764,13 +907,16 @@ func newAuthorizationReceiptServiceFixtureOnDBConfigured(
 	if err := db.Create(&plan).Error; err != nil {
 		t.Fatal(err)
 	}
-	item := model.BackupAssetRecoveryPlanItem{ID: strings.Repeat("2", 32), PlanID: plan.ID, Ordinal: 0,
-		RecoveryPointID: pointID, CatalogGenerationID: plan.CatalogGenerationID,
-		EntryID: selectedRef.EntryID, EntryType: "file", RelativePathDigest: publication.RecoveryPlanItemPathDigest(
-			repositoryID, pointID, generationID, selectedRef.EntryID, entry.NormalizedPath,
-		), CreatedAt: now}
-	if err := db.Create(&item).Error; err != nil {
-		t.Fatal(err)
+	for ordinal, ref := range selection.AssetRefs {
+		selectedEntry := entriesByID[ref.EntryID]
+		item := model.BackupAssetRecoveryPlanItem{ID: strings.Repeat(fmt.Sprintf("%x", ordinal+2), 32), PlanID: plan.ID, Ordinal: ordinal,
+			RecoveryPointID: pointID, CatalogGenerationID: plan.CatalogGenerationID,
+			EntryID: ref.EntryID, EntryType: "file", RelativePathDigest: publication.RecoveryPlanItemPathDigest(
+				repositoryID, pointID, generationID, ref.EntryID, selectedEntry.NormalizedPath,
+			), CreatedAt: now}
+		if err := db.Create(&item).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 	candidateDigest, candidateCategories := authorizationReceiptOverrideCandidate(plan, operation)
 	preflight := model.BackupAssetRecoveryPreflight{ID: strings.Repeat("3", 32), PlanID: plan.ID,
