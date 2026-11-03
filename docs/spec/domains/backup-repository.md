@@ -46,6 +46,8 @@ Task executor 到 Provider 的映射只能在 `backupasset/repository/binding.go
 - 自动恢复点只来自最终成功 summary 的完整 snapshot ID 和精确 Task/TaskRun 两个 tag。禁止 `latest`、前缀、时间窗口、仓库 diff、legacy index 推断。检查 `original`、原生身份、时间和 capability 漂移；已经记录的 locator 不被替换。
 - TaskRun 传输成功、Provider 提交和数据库发布是独立事实。已知 exit zero 但 summary 缺失/重复/非最终/坏格式时保留传输成功，按稳定原因延迟发布；仅可从唯一有效存储 summary 恢复。
 - 有界异步 reconciler 校验完整 Manifest 和最低验证后才进入 `committed`。Manifest 激活与所有状态写入在同一事务检查当前 lease fence；点的绝对 deadline 不可延长。部分/不可用清单仅为 inactive 诊断，不可浏览，也不投影 count/digest。
+- publication/lease 交界按数据库实际表示继承绝对期限：PostgreSQL 将原 UTC 期限向下截到微秒再作精确比较，SQLite 保留纳秒。原签名 lineage/attempt/marker 不改写，既有 stored deadline 不延长，接管只旋转 fence；原 point 到期判断仍使用原签名期限。真实跨微秒漂移（SQLite 任一纳秒漂移）拒绝，不使用容差。
+- publication 的显式期限历史只比较同一恢复点的 publication holder，跨发布阶段仍不可改变；其他显式消费者按恢复点、holder 与 owner 比较自身历史，已释放的其他作业不限制新 Recovery job 的独立短期限。同一 scope 的历史期限、takeover 围栏与到期拒绝保持不变，零期限请求继续采用既有服务配置预算。
 - 共享 Restic 仓库保留 Repository 范围绑定，但执行访问必须来自当前链接 Task 的 Node/config；不得借另一个 Task 的 node、secret、locator、ID 或审计上下文。
 - 每条 Restic 命令在凭据/SSH/stream/handle 前取得 generation admission token，直到 join/close 和响应或状态投影结束才释放。切换开关须排空后持久化。
 - managed history 是永久保护：安装级或任一当前 Task 活跃 Repository link 的 tombstone 均阻止关闭模式下 `legacy_backup`。禁止无 tag fallback、`restore latest`、仓库级 anomaly selector 和无 tag `forget --prune`。回退和调和不删除 Provider snapshot。
@@ -58,6 +60,10 @@ legacy mutable 不自动升级；管理员暂停任务后显式选择 `versioned
 硬链接模式先传输保持源硬链接分组的完整 staging 树，再按内容、元数据和 inode 分组兼容性复用上一 committed 点，不能用 `--link-dest` 把旧链接关系带入新点。新建/断开硬链接关系必须准确保留；不兼容组用独立文件，前一点不能被修改。容量和流量按完整 staging 计算。
 
 迁移显式选择新完整 baseline 或从下次成功运行开始。baseline 复制旧目标到新受管树，不原地标记、移动或硬链接旧数据；后者不追认历史，首个硬链接点仍为完整种子。激活后保持暂停，传输、目录提交、发布分别取证。受管目录不是 WORM，也不是源端时间点快照。
+
+完整 commit/manifest/tree 认证成功后，Rsync 发布事务同时将点置为 `committed` 和 `online`；preparing/verifying、缺失或漂移的树不得据此发布 online，不为不可变点伪造 mutable `observed_at`。
+
+committed 本地 strict tree 的范围读取具有真实非零 offset 支持；每次 operation/binding/path/range 及关闭时的 tree 验证保持。PostgreSQL 的持久 `captured_at` 与 Catalog mtime 只在数据库表示边界按微秒核对，原 commit 摘要和文件 manifest 仍认证完整纳秒时间。内部文件 open/close 重验保留原物理 mtime，向内容 grant 返回持久 Catalog 时间；同微秒内的物理漂移及持久时间变更仍拒绝。SQLite 继续精确纳秒比较，不推广到 mutable 或其他 Provider。
 
 `task_revision` 与 `expected_task_revision` 必须是非零规范无符号十进制字符串，不能转换为 JavaScript number。preflight、activate、rollback-preparations 均使用 CAS。激活/回退准备提交后重新加载并返回持久化 summary；同一对话框后续请求使用最近响应 token，reset effect 依赖初始 prop revision，不能抹掉新 token。坏 token 或未知 mode/state/reason 禁止操作；不从 executor config、日期或旧 prop 猜测。安全 summary 不含根路径、locator、marker/manifest/fence digest、命令、输出或凭据。
 
@@ -194,6 +200,34 @@ rollback capability 独立于临时 publication state 和 expiry 投影，GET �
 
 每次 issuance 最终事务及后续 effect 事务都重验在 owner 返回后仍可变的事实。opaque source namespace observation 保留私有 closed durable snapshot 和 transaction-only revalidator，覆盖 Task source、source Node、source credential；Repository source revision 不能替代它。sealed digest 还绑定 target/policy/finding/reserve/overlap 产品，format/JSON/error 不泄露 locator/credential/revision/proof/依赖原值。
 
+Recovery 创建计划（含 caller-owned transaction 入口）在计算意图摘要前，将新签发的 preflight 期限按实际数据库表示固定：PostgreSQL 使用 UTC 微秒向下截断，SQLite 保留纳秒。合法重放使用原持久期限和完整身份，不改写历史计划或引入时间容差。preflight evaluator、生产 target 和持久服务共用注入时钟；目标及外部观察完成后重新取时，拒绝零值、回拨、未来观察和已到期 permit／证据。快照预算以开始时间冻结，提交与事务重验不能早于完成时间或越过原计划／快照期限。
+
+持久工作流期限 D 保持为新计划固定的 `PreflightExpiresAt`，plan、snapshot、job、checkpoint 的期限等值保护不变。外部观察的 `ObservationExpiresAt` 是本次决定的新鲜度 F，不是工作流期限；不能把 F 扩写为 D，也不能将整个作业及 exact-mirror 确认窗口压成观察窗口。preflight 持久化携带原 sealed authority，经 adapter 同事务重验，而不是仅核 scalar；每次新许可和成功投影重新观察，并在 effect 事务中重验同一 seal、耐久绑定及当前 F/D。观察后、事务内及返回前重新取时，等于期限或回拨均回滚；原已签发 permit 继续受 grant、lease、fence、D 和既有操作前后身份检查约束。
+
+job-bound 权威使用私有 current-target expectation，绑定当前 job、attempt/node/source fence、完整有序 checkpoint 历史及冻结 chain；source token 仅进入私有摘要。首次未 armed 的写入要求空历史与冻结目标；其后 in-place anchor 已完成时，以对应唯一 checkpoint 和 item 的精确摘要／长度验证当前文件；发布后未 checkpoint 的 anchor 仅在当前首个 pending create/overwrite 已通过真实 verification 后用于成功投影。原 preflight 身份不改写，chain 不充当 filesystem revision。内容验证必须有界完整读取并成功 Close，前后校验 canonical root、parent、安全 metadata 与文件稳定性；事务内重验不执行远端 I/O，也不保证观察之后远端从未变化。
+
+isolated 的 preflight 和后续权威只观察真实 root 的 canonical 路径、祖先、权限、filesystem、容量及 overlap；保留 selected locator 的词法绑定，但不遍历根下无关同名文件或 parent。真正目的地仍是 `jobs/<jobID>`，owned workspace、authenticated marker、foreign collision、expected absence 和发布检查继续生效。旧 path-derived 计划／快照不重写或续期；新尝试创建新计划，既有明确授权的取消与 cleanup 仍遵守自身合同。
+
+限制性 mismatch/unresolved/post-pause 记录只使用当前 durable fence、原结果分类及 CAS，不要求已经失败的目标满足成功权威，不签发新许可或推进成功 chain。完成 item 的补充 verification evidence 只能精确匹配既有 bytes、digest 和 checkpoint，不修改 terminal item。中断 adoption 在真实目标 verification 后重验当前权威及同一 durable handoff；覆盖还须核对 authenticated artifact tuple，删除须绑定原 consumed checkpoint/grant 并证明 final 与 captured 均已缺失。captured 未发布、标记矛盾、错误身份或观察失败保持 unresolved；此入口不盲重放写入、不替代清理、不新增 Runtime 自动 adoption。
+
+in_place 的执行顺序从完整 canonical operation 集合派生：先按原相对次序执行非 delete，再按原相对次序执行 delete。canonical 排序、item ordinal、operation/delete-set digest、locator envelope 和 API item 顺序不变；checkpoint sequence 记录实际时间顺序。全体 item/operation 先核绑定，再按执行位置验证 completed prefix 与当前 pending anchor；required 必须位于首个 delete 前，consumed 紧随 required，所有写入先完成。旧 consumed authority 依不可变 checkpoint、原 grant/attempt 证明，不能把历史 node fence 强行与接管后的当前 node 行等同。
+
+exact-mirror grant 的签发、pending handoff、消费及历史验证统一以 UTC RFC3339Nano 序列化同一期限。新 PostgreSQL grant 在生成绑定摘要及插入前向下截至数据库微秒精度；SQLite 保留纳秒。期限必须仍严格晚于事务当前时间且不超过原 checkpoint 上限，不重写历史期限、不引入时间容差或双摘要回退。
+
+Repository restore request 由 WorkerCoordinator 在同一短事务内按 plan→job→preflight/grant→source→node→attempt→items/history 锁序构建，复用当前 canonical 来源和历史校验。未 armed 只接受 pristine/base chain，已 armed 按完整历史认证当前 chain；锁后及返回前检查时钟、lease 和原工作流期限。构建结果只表达解析意图，不授权远端写入；resolver、materialization 与 SSH 在事务外执行，first-write 和逐项 permit 仍独立重新观察、锁定重验。
+
+仅在尚未调用 Repository 执行端口的构建失败，或已证明未 arm 的初始 source/snapshot/materialization 失败处，允许 `FailPristinePrewrite` 限制性关闭。事务须证明同一 running owner/fence、全 pending、零 checkpoint、workspace none、冻结起始 chain、无历史 armed 或接管者，并精确释放本 claim 的 source/node lease；同 owner 的过期 lease 只能关闭，不能续租或复活。先关闭 attempt，再将 job 标为 failed、分类 `pre_write_failed`；plan 保持 executed，items 保持 pending，原期限和已消费 grant 证据不变。source-drift supersession 保持原分类；已调用执行端口、可能 arm、已有历史或可能在途写入均不得走该快捷关闭。前端以“开始写入前失败”展示，未知分类继续拒绝。
+
+公开 `pre_write_failed` 产品只能是 failed、零完成项和零写入字节；后端与前端 mapper 都拒绝其他状态或矛盾进度，不能把已经写入的产品展示为开始写入前失败。
+
+enabled Runtime 从持久 isolated+succeeded/degraded+sealed 状态自动补发 ResultSet，重启不依赖内存通知。发布锁内完整重建成功 regular create/overwrite 集合与密封 locator；当前无秘密分类生产者，结果固定为 unknown/1/1，不代表扫描通过或非秘密。并发、提交确认丢失及重放须核唯一 set 和完整逐项一一对应，不重发 ID、不重置期限；缺失、多余、矛盾、active attempt 或无成功 regular item 不发布。取得锁后、CAS 前和事务返回前核原期限与回拨；不宣称 COMMIT 瞬间的墙钟保证，实际读取仍按当前交付期限拒绝。
+
+workspace 的明文期限在首次写入时固定为 24 小时，与工作流期限和观察新鲜度分别管理；结果 retention 配置不缩短或重算该原期限。sealed 到期转换与发布互斥，且只在无 active attempt、无 ResultSet、认证 workspace 和中性 cleanup tuple 下原子变为 cleanup_due。enabled/disabled 均沿原 cleanup owner 的 claim→revoke→drain→验证→fenced 删除完成；disabled 不发布新结果。capture 或原路径缺失不等于删除成功，续行仍需有效 claim、认证残留与最终 absence 证明。两个批处理各持私有 high-water cursor 和独立批预算；LIMIT 只限制返回行及处理次数，不保证数据库扫描/排序工作量上界。graph 切换和关闭必须 cancel/join publisher。
+
+workspace 与 ResultSet cleanup 的新 claim、接管及续租在计算 `now + cleanup_lease_ttl` 后按 PostgreSQL 微秒精度向下截断，同一新期限用于 node lease、job、ResultSet 和返回 claim；SQLite 保留纳秒。新 claim 的期限必须严格晚于未截断的当前时钟；续租仍须严格晚于原期限，若候选未推进则沿用原有增加一秒规则。普通阶段迁移与在途许可精确核对 claim 期限；显式 `delete_started`／`deleted` 续行沿既有规则，在 owner、cleanup fence／attempt、node identity／fence 和 phase 匹配且持久租约仍有效时，重载当前持久期限后校验与续租。marker 认证保持，不通过截断传入 claim、时间容差或改写原 workspace 24 小时期限放行。
+
+作业查询中的删除确认是可选投影，只适用于in_place+exact_mirror。其他模式返回无删除检查点；合法running、尚未armed且没有任何检查点历史的镜像attempt也返回无检查点。仍须验证镜像attempt的live claim、source/node lease与fence；未armed却有历史、已有armed历史或tuple矛盾不可作为正常“尚无确认”隐藏。普通作业进度仍走完整item/state一致性校验，查询不签发或放宽删除权限。
+
 enabled Recovery 仅当 Repository、target 和真正 ready 的 Processing malware evidence lifecycle 存在，且 metadata reconciliation 完成后才发布。Processing disabled/control-plane-only/stopped/无 installed reader 时不得发布 admission graph；非空对象指针不够。disabled Recovery 可不依赖 Processing 发布 cleanup/logical reconciliation/receipt reaping 等 maintenance，但不能 admission/effect。已发布后 reader 故障使 effect fail closed，maintenance 仍可用。
 
 `StartupWithConfig`、`TransitionSettingsWithRestore`、`TransitionCurrentWithRestore` 必须保持 graph owner。current-config mutation 仅已启动并安装 config/graph 后可用，启动前在 validate/persist/build/publish 前拒绝，zero config 不能隐式成为 disabled installation。target-root facade 仅给安全 `RecoveryTargetRootSummary`，exact encrypted row/absence rollback 用 Recovery 私有 opaque token。
@@ -201,6 +235,12 @@ enabled Recovery 仅当 Repository、target 和真正 ready 的 Processing malwa
 旧 graph shutdown/join 无法证明时 unpublish、清 graph、sticky fence，跳过 persist/build/install。root mutation 成功但 candidate install 失败时先恢复 exact encrypted row/absence 再重建旧 graph；任一恢复/join 无证明就保持 nil publication 与围栏。只有 persistence 和 graph 都精确恢复才可重新准入。
 
 回归覆盖两处漂移窗口（namespace observation 后、sealed issuance 后）× Task source/Node/credential，断言每 owner 外部观察仅一次、事务仅 durable comparison、零私有 canary；覆盖 Processing disabled/control-plane/ready/reader-failure 的生产组合、pre-start/current/disabled mutation、validate/drain/persist/construct/reconcile/install 各失败、不可 join owner、exact row/absence restore 与 sticky failure。执行 SQLite、required no-skip PostgreSQL authority selectors、normal/race 及 privacy/static 边界检查。
+
+受控恢复的精确删除在捕获目标并重验身份、marker与live permit后，通过生产SFTP的有界`ReadDir(1)`确认目录为空，删除后必须核对absence。非空、枚举错误或关闭错误不得投影删除成功；捕获已发生时保留captured目录及其子项，不将此失败描述为原路径从未改变。
+
+SFTP v3 的合法 NAME 包可以仅含 `.` 与 `..`；有界读取器最多连续跨过两个这种无实际子项的包，再要求真实子项或协议 EOF。第三个无进展包、零条目的 NAME、坏包、overflow、传输或关闭失败继续拒绝；空包不能伪造 EOF，非空目录与前后身份校验不变。
+
+取消先独立中断本次SSH transport，使目录通道打开、握手、读取或关闭不依赖同一资源锁才能退出；正常关闭仍先释放SFTP，再关闭SSH，并join在途目录初始化和tracked files。目录状态锁不跨网络初始化，同次初始化调用共享结果；关闭后拒绝新打开，晚到session/reader由取得它的调用关闭。文件目录读取与关闭状态串行，普通文件句柄可由关闭路径中断；重复关闭不重复释放，正常关闭完成前保持取消watcher有效。释放失败沿现有安全错误合同返回，不跳过后续资源清理，也不把本地join等同于远端未知写入已停止。
 
 ## 快照异常比较
 

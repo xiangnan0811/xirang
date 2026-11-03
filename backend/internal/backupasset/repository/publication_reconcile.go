@@ -158,7 +158,7 @@ func (service *PublicationService) expireAtDeadline(ctx context.Context, pointID
 		if leaseResult.Error != nil {
 			return fmt.Errorf("lock latest publication lease for deadline: %w", leaseResult.Error)
 		}
-		if leaseResult.RowsAffected == 1 && !latest.AbsoluteDeadline.IsZero() && !latest.AbsoluteDeadline.UTC().Equal(lineage.PointDeadlineAt.UTC()) {
+		if leaseResult.RowsAffected == 1 && !latest.AbsoluteDeadline.IsZero() && !latest.AbsoluteDeadline.UTC().Equal(publicationLeaseDeadline(tx, lineage.PointDeadlineAt)) {
 			return fmt.Errorf("%w: publication lease changed immutable point deadline", backupasset.ErrConflict)
 		}
 		var live int64
@@ -1139,6 +1139,16 @@ func (service *PublicationService) claimVerifyingPoint(ctx context.Context, poin
 	return claim, err
 }
 
+// publicationLeaseDeadline matches the database representation without
+// changing the signed lineage deadline or extending the persisted lease.
+func publicationLeaseDeadline(tx *gorm.DB, deadline time.Time) time.Time {
+	deadline = deadline.UTC()
+	if tx.Name() == "postgres" {
+		return deadline.Truncate(time.Microsecond)
+	}
+	return deadline
+}
+
 // acquireOrTakeoverPublicationLeaseTx keeps a reconciling stage on the
 // immutable point deadline. A live point-publication lease belongs to another
 // worker, while an expired one must rotate its fence in place rather than
@@ -1147,6 +1157,7 @@ func (service *PublicationService) acquireOrTakeoverPublicationLeaseTx(ctx conte
 	if tx == nil || backupasset.ValidateOpaqueID(pointID) != nil || deadline.IsZero() || stage == "" {
 		return backupasset.Lease{}, fmt.Errorf("%w: invalid publication lease claim", backupasset.ErrInvalidState)
 	}
+	deadline = publicationLeaseDeadline(tx, deadline)
 
 	var active model.RecoveryPointLease
 	result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -1168,7 +1179,7 @@ func (service *PublicationService) acquireOrTakeoverPublicationLeaseTx(ctx conte
 		}
 		return lease, err
 	}
-	if !active.AbsoluteDeadline.UTC().Equal(deadline.UTC()) {
+	if !active.AbsoluteDeadline.UTC().Equal(deadline) {
 		return backupasset.Lease{}, fmt.Errorf("%w: %s lease changed immutable point deadline", backupasset.ErrConflict, stage)
 	}
 	if service.now().UTC().Before(active.LeaseExpiresAt.UTC()) {

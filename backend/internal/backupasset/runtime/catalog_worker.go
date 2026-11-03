@@ -15,7 +15,7 @@ import (
 
 const (
 	catalogCandidateMinimum = 200
-	catalogCandidateMaximum = 2000
+	catalogCandidateMaximum = catalog.MaxCandidatePageSize
 	catalogAbandonedLimit   = 1000
 	// catalogStorageObservationTimeout bounds the scan-end aggregate so a large
 	// database cannot stall the worker behind its own metrics collection.
@@ -281,7 +281,8 @@ func (worker *CatalogWorker) runScan(ctx context.Context) error {
 		return err
 	}
 	if len(candidates) > limit {
-		candidates = candidates[:limit]
+		worker.metrics.ObserveScan(catalog.MetricScanFailure)
+		return fmt.Errorf("%w: Catalog candidate page exceeds limit", backupasset.ErrInvalidState)
 	}
 	if err := worker.runCandidates(ctx, candidates, config.MaxConcurrency); err != nil {
 		worker.metrics.ObserveScan(catalog.MetricScanFailure)

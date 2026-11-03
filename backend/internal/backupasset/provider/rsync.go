@@ -27,18 +27,25 @@ type RsyncRuntimeAccess struct {
 // evidence for one final managed tree. ManagedRoot and MarkerKey are private
 // process inputs; callers cannot pass a tree path, prefix, or legacy target.
 type RsyncCommittedPointReadRequest struct {
-	ManagedRoot        string                            `json:"-"`
-	MarkerKey          []byte                            `json:"-"`
-	Attempt            RsyncTreeAttemptV1                `json:"-"`
-	CommitMarkerDigest string                            `json:"-"`
-	SourceFingerprint  string                            `json:"-"`
-	ChildFenceDigest   string                            `json:"-"`
-	ManifestDigest     string                            `json:"-"`
-	ManifestEntryCount uint64                            `json:"-"`
-	LogicalBytes       uint64                            `json:"-"`
-	CapturedAt         time.Time                         `json:"-"`
-	Semantics          backupasset.PointVersionSemantics `json:"-"`
-	ManifestLimits     ManifestLimits                    `json:"-"`
+	ManagedRoot        string             `json:"-"`
+	MarkerKey          []byte             `json:"-"`
+	Attempt            RsyncTreeAttemptV1 `json:"-"`
+	CommitMarkerDigest string             `json:"-"`
+	SourceFingerprint  string             `json:"-"`
+	ChildFenceDigest   string             `json:"-"`
+	ManifestDigest     string             `json:"-"`
+	ManifestEntryCount uint64             `json:"-"`
+	LogicalBytes       uint64             `json:"-"`
+	CapturedAt         time.Time          `json:"-"`
+	// CapturedAtPrecision describes the trusted storage projection; zero requires exact nanoseconds.
+	CapturedAtPrecision time.Duration                     `json:"-"`
+	Semantics           backupasset.PointVersionSemantics `json:"-"`
+	ManifestLimits      ManifestLimits                    `json:"-"`
+}
+
+type rsyncCommittedTreeProof struct {
+	root    string
+	entries []rsyncTreeManifestEntry
 }
 
 // RsyncCommittedPointRuntimeAccess is constructed only by
@@ -46,11 +53,14 @@ type RsyncCommittedPointReadRequest struct {
 // authenticated point ID as points/<point-id>/tree and never from a caller
 // supplied path.
 type RsyncCommittedPointRuntimeAccess struct {
-	Tree           fileaccess.Tree `json:"-"`
-	Root           fileaccess.Root `json:"-"`
-	SourceRevision string          `json:"-"`
-	RangeProven    bool            `json:"-"`
-	request        RsyncCommittedPointReadRequest
+	Tree            fileaccess.Tree `json:"-"`
+	Root            fileaccess.Root `json:"-"`
+	SourceRevision  string          `json:"-"`
+	RangeProven     bool            `json:"-"`
+	request         RsyncCommittedPointReadRequest
+	manifestTree    *fileaccess.LocalTree
+	manifestRoot    string
+	manifestEntries []rsyncTreeManifestEntry
 }
 
 type RsyncCommittedPointAdapter struct {
@@ -108,13 +118,14 @@ func NewRsyncCommittedPointRuntimeAccess(ctx context.Context, request RsyncCommi
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	root, err := validateRsyncCommittedPointTree(ctx, request)
+	proof, err := validateRsyncCommittedPointTree(ctx, request)
 	if err != nil {
 		return RsyncCommittedPointRuntimeAccess{}, err
 	}
+	tree := fileaccess.NewLocalTree()
 	return RsyncCommittedPointRuntimeAccess{
-		Tree: fileaccess.NewLocalTree(), Root: fileaccess.Root{Path: root}, SourceRevision: request.SourceFingerprint,
-		request: cloneRsyncCommittedPointReadRequest(request),
+		Tree: tree, Root: fileaccess.Root{Path: proof.root}, SourceRevision: request.SourceFingerprint,
+		RangeProven: true, request: cloneRsyncCommittedPointReadRequest(request), manifestTree: tree, manifestRoot: proof.root, manifestEntries: proof.entries,
 	}, nil
 }
 
@@ -124,6 +135,10 @@ func validateRsyncCommittedPointReadRequest(request RsyncCommittedPointReadReque
 		!validRsyncTreeDigest(request.ChildFenceDigest) || !validRsyncTreeDigest(request.ManifestDigest) || request.CapturedAt.IsZero() ||
 		!validRsyncTreeManifestLimits(request.ManifestLimits) || request.ManifestLimits.MaxBytes > maxRsyncManagedTreeMetadataBytes {
 		return fmt.Errorf("%w: invalid committed Rsync point reader request", backupasset.ErrInvalidState)
+	}
+	if request.CapturedAtPrecision != 0 && (request.CapturedAtPrecision != time.Microsecond ||
+		!request.CapturedAt.Equal(request.CapturedAt.Truncate(time.Microsecond))) {
+		return fmt.Errorf("%w: invalid committed Rsync capture precision", backupasset.ErrInvalidState)
 	}
 	switch request.Semantics {
 	case backupasset.PointXirangManifest, backupasset.PointImportedBaseline:
@@ -142,68 +157,76 @@ func rsyncCommittedPointLocator(request RsyncCommittedPointReadRequest) PointLoc
 	return PointLocator{Native: "committed:" + request.Attempt.RecoveryPointID + ":" + request.CommitMarkerDigest}
 }
 
-func validateRsyncCommittedPointTree(ctx context.Context, request RsyncCommittedPointReadRequest) (string, error) {
+func validateRsyncCommittedPointTree(ctx context.Context, request RsyncCommittedPointReadRequest) (rsyncCommittedTreeProof, error) {
 	if err := validateRsyncCommittedPointReadRequest(request); err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
 	}
 	tree, err := openRsyncManagedTreeReadOnly(request.ManagedRoot)
 	if err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
 	}
 	defer func() { _ = tree.Close() }()
 	if err := validateRsyncTreeManagedRoot(tree, request.Attempt); err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
 	}
 	storedAttempt, err := tree.readFinalMetadata(request.Attempt.FinalComponent, "attempt.json")
 	if err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
 	}
 	markerAttempt, err := decodeRsyncTreeAttemptMarkerV1(storedAttempt, request.MarkerKey)
 	if err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
 	}
 	if markerAttempt != request.Attempt {
-		return "", fmt.Errorf("%w: committed Rsync attempt marker mismatch", backupasset.ErrConflict)
+		return rsyncCommittedTreeProof{}, fmt.Errorf("%w: committed Rsync attempt marker mismatch", backupasset.ErrConflict)
 	}
 	storedCommit, err := tree.readFinalMetadata(request.Attempt.FinalComponent, "commit.json")
 	if err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
 	}
 	commit, err := decodeRsyncTreeCommitMarkerV1(storedCommit, request.MarkerKey)
 	if err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
 	}
 	input := RsyncTreeReconcileInput{
 		ManagedRoot: request.ManagedRoot, MarkerKey: request.MarkerKey, SourceFingerprint: request.SourceFingerprint,
 		ChildFenceDigest: request.ChildFenceDigest, ManifestLimits: request.ManifestLimits,
 	}
 	if err := validateRsyncTreeReconcileCommit(request.Attempt, input, commit); err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
+	}
+	committedAt := commit.ProviderCommittedAt.UTC()
+	if request.CapturedAtPrecision == time.Microsecond {
+		committedAt = committedAt.Truncate(time.Microsecond)
 	}
 	if commit.CommitMarkerDigest != request.CommitMarkerDigest || commit.ManifestDigest != request.ManifestDigest ||
 		commit.ManifestEntryCount != request.ManifestEntryCount || commit.LogicalBytes != request.LogicalBytes ||
-		!commit.ProviderCommittedAt.UTC().Equal(request.CapturedAt.UTC()) {
-		return "", fmt.Errorf("%w: committed Rsync point evidence mismatch", backupasset.ErrConflict)
+		!committedAt.Equal(request.CapturedAt.UTC()) {
+		return rsyncCommittedTreeProof{}, fmt.Errorf("%w: committed Rsync point evidence mismatch", backupasset.ErrConflict)
 	}
 	finalFD, err := tree.openFinalTree(request.Attempt.FinalComponent)
 	if err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
 	}
 	manifest, manifestErr := buildRsyncTreeManifest(ctx, finalFD, request.ManifestLimits)
 	closeErr := unixClose(finalFD)
 	if manifestErr != nil {
-		return "", manifestErr
+		return rsyncCommittedTreeProof{}, manifestErr
 	}
 	if closeErr != nil {
-		return "", closeErr
+		return rsyncCommittedTreeProof{}, closeErr
 	}
 	if manifest.Digest != commit.ManifestDigest || manifest.EntryCount != commit.ManifestEntryCount || manifest.LogicalBytes != commit.LogicalBytes {
-		return "", fmt.Errorf("%w: committed Rsync point manifest changed", backupasset.ErrConflict)
+		return rsyncCommittedTreeProof{}, fmt.Errorf("%w: committed Rsync point manifest changed", backupasset.ErrConflict)
 	}
 	if err := validateRsyncTreeReconcileFidelity(ctx, tree, request.Attempt, input, manifest); err != nil {
-		return "", err
+		return rsyncCommittedTreeProof{}, err
 	}
-	return tree.finalTreePath(request.Attempt.FinalComponent)
+	root, err := tree.finalTreePath(request.Attempt.FinalComponent)
+	if err != nil {
+		return rsyncCommittedTreeProof{}, err
+	}
+	return rsyncCommittedTreeProof{root: root, entries: manifest.Entries}, nil
 }
 
 func (adapter *RsyncAdapter) Probe(ctx context.Context, binding AccessBinding, limits OperationLimits) (RepositoryObservation, error) {
@@ -742,7 +765,7 @@ func (adapter *RsyncCommittedPointAdapter) validateBinding(binding AccessBinding
 		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: invalid committed Rsync access binding", backupasset.ErrInvalidState)
 	}
 	runtimeAccess, ok := binding.AdapterData.(RsyncCommittedPointRuntimeAccess)
-	if !ok || runtimeAccess.Tree == nil || strings.TrimSpace(runtimeAccess.Root.Path) == "" ||
+	if !ok || runtimeAccess.manifestTree == nil || runtimeAccess.Tree != runtimeAccess.manifestTree || strings.TrimSpace(runtimeAccess.Root.Path) == "" ||
 		validateRsyncCommittedPointReadRequest(runtimeAccess.request) != nil || runtimeAccess.SourceRevision != runtimeAccess.request.SourceFingerprint ||
 		binding.RepositoryID != runtimeAccess.request.Attempt.RepositoryID ||
 		binding.TaskID != runtimeAccess.request.Attempt.TaskID {
@@ -759,11 +782,11 @@ func (adapter *RsyncCommittedPointAdapter) operationLimits() (OperationLimits, e
 }
 
 func (adapter *RsyncCommittedPointAdapter) verifyRuntime(ctx context.Context, runtimeAccess RsyncCommittedPointRuntimeAccess) error {
-	root, err := validateRsyncCommittedPointTree(ctx, runtimeAccess.request)
+	proof, err := validateRsyncCommittedPointTree(ctx, runtimeAccess.request)
 	if err != nil {
 		return mapRsyncCommittedPointReadError(ctx, err)
 	}
-	if filepath.Clean(root) != filepath.Clean(runtimeAccess.Root.Path) {
+	if filepath.Clean(proof.root) != filepath.Clean(runtimeAccess.Root.Path) {
 		return newCapabilityError(backupasset.CapabilityMutableSourceChanged)
 	}
 	return nil

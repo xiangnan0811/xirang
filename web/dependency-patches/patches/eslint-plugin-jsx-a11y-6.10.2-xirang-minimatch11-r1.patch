@@ -1,0 +1,93 @@
+--- package/XIRANG-MODIFICATIONS.txt
++++ package/XIRANG-MODIFICATIONS.txt
+@@ -0,0 +1,17 @@
++Xirang local dependency modification, revision 1
++Advisory: GHSA-g3hv-75wg-m249
++Upstream package: eslint-plugin-jsx-a11y@6.10.2
++Upstream URL: https://registry.npmjs.org/eslint-plugin-jsx-a11y/-/eslint-plugin-jsx-a11y-6.10.2.tgz
++Upstream integrity: sha512-scB3nz4WmG75pV8+3eRUQOHZlNSUhFNq37xnpgRkCCELU3XMvXAxLk1eqWWyE22Ki4Q01Fnsw9BA3cJHDPgn2Q==
++Upstream license: MIT (original license and notice files retained)
++Source inventory and requester list: web/dependency-patches/sources.json
++Modified or added files relative to the package root:
++  XIRANG-MODIFICATIONS.txt
++  lib/util/mayContainChildComponent.js
++  lib/util/mayHaveAccessibleLabel.js
++  package.json
++
++The declared minimatch dependency is 11.0.1. Changed imports and types use
++its public API and types; matching follows minimatch 11.0.1 semantics.
++Older minimatch APIs and matching behavior are not emulated. Compatibility
++is assessed against this repository's actual consumers and configurations.
+--- package/lib/util/mayContainChildComponent.js
++++ package/lib/util/mayContainChildComponent.js
+@@ -1,3 +1,4 @@
++/* Xirang local modification: minimatch 11.0.1 migration; see XIRANG-MODIFICATIONS.txt. */
+ "use strict";
+
+ Object.defineProperty(exports, "__esModule", {
+@@ -5,8 +6,7 @@
+ });
+ exports["default"] = mayContainChildComponent;
+ var _jsxAstUtils = require("jsx-ast-utils");
+-var _minimatch = _interopRequireDefault(require("minimatch"));
+-function _interopRequireDefault(e) { return e && e.__esModule ? e : { "default": e }; }
++var _minimatch = require("minimatch");
+ /**
+  * Returns true if it can positively determine that the element lacks an
+  * accessible label. If no determination is possible, it returns false. Treat
+@@ -35,7 +35,7 @@
+           return true;
+         }
+         // Check for components with the provided name.
+-        if (childNode.type === 'JSXElement' && childNode.openingElement && (0, _minimatch["default"])(elementType(childNode.openingElement), componentName)) {
++        if (childNode.type === 'JSXElement' && childNode.openingElement && (0, _minimatch.minimatch)(elementType(childNode.openingElement), componentName)) {
+           return true;
+         }
+         if (traverseChildren(childNode, depth + 1)) {
+--- package/lib/util/mayHaveAccessibleLabel.js
++++ package/lib/util/mayHaveAccessibleLabel.js
+@@ -1,3 +1,4 @@
++/* Xirang local modification: minimatch 11.0.1 migration; see XIRANG-MODIFICATIONS.txt. */
+ "use strict";
+
+ Object.defineProperty(exports, "__esModule", {
+@@ -6,7 +7,7 @@
+ exports["default"] = mayHaveAccessibleLabel;
+ var _arrayIncludes = _interopRequireDefault(require("array-includes"));
+ var _jsxAstUtils = require("jsx-ast-utils");
+-var _minimatch = _interopRequireDefault(require("minimatch"));
++var _minimatch = require("minimatch");
+ function _interopRequireDefault(e) { return e && e.__esModule ? e : { "default": e }; }
+ /**
+  * Returns true if a labelling element is found or if it cannot determine if
+@@ -72,7 +73,7 @@
+       var name = getElementType(node.openingElement);
+       var isReactComponent = name.length > 0 && name[0] === name[0].toUpperCase();
+       if (isReactComponent && !controlComponents.some(function (control) {
+-        return (0, _minimatch["default"])(name, control);
++        return (0, _minimatch.minimatch)(name, control);
+       })) {
+         return true;
+       }
+--- package/package.json
++++ package/package.json
+@@ -86,7 +86,7 @@
+     "hasown": "^2.0.2",
+     "jsx-ast-utils": "^3.3.5",
+     "language-tags": "^1.0.9",
+-    "minimatch": "^3.1.2",
++    "minimatch": "11.0.1",
+     "object.fromentries": "^2.0.8",
+     "safe-regex-test": "^1.0.3",
+     "string.prototype.includes": "^2.0.1"
+@@ -115,5 +115,10 @@
+       "CONTRIBUTING.md",
+       "/examples"
+     ]
++  },
++  "x-xirang-patch": {
++    "revision": 1,
++    "advisory": "GHSA-g3hv-75wg-m249",
++    "upstreamVersion": "6.10.2"
+   }
+ }

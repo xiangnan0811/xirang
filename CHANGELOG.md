@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### 真实恢复来源、目录收尾与扫描输入完整性
+
+- 修复生产 SFTP 文件适配器与目录空检查的接口不匹配：已授权精确删除通过有界 `ReadDir(1)` 检查捕获目录，并在删除后验证 absence；非空目录及其子项在 capture 后保留，读取或关闭失败不报告成功，不声称失败前原路径未改变。
+- 修复真实 OpenSSH 空目录先返回仅含 `.`／`..` 的 NAME 包时被误判为损坏连接的问题；读取有界推进至真实 EOF，仍拒绝无进展流、坏包、非空目录及关闭失败。
+- 修复目录初始化持锁阻止取消关闭 SSH 的问题；取消可独立中断 transport，正常关闭继续保持取消路径，join 在途初始化并释放晚到 session/reader 及 tracked files。目录读取与文件关闭串行，重复关闭不重复释放。SSH 使用只推进 `last_used_at`，不再误改凭据策略 revision；真实策略修改仍失效旧绑定。
+- PostgreSQL publication 在数据库微秒表示边界精确继承原租约期限；原签名 lineage/attempt/marker 和已存期限不改写、不延长，SQLite 保持纳秒严格比较。committed Rsync 的捕获时间与 Catalog mtime 同样区分数据库表示和认证物理时间，仍拒绝来源、内容、同微秒物理漂移和持久时间变更。
+- Recovery 新计划在生成意图摘要前按实际 PostgreSQL 微秒精度签定 preflight 期限，正常创建与相同请求重放保持同一身份；SQLite 保留纳秒，不改写历史计划或容忍身份漂移。preflight 共用注入时钟，在目标与外部观察完成后分别核验新鲜度，并在持久化前拒绝回拨、未来观察及到期；原计划期限和开始时预算不延长。
+- 区分恢复工作流期限与短时观察新鲜度：计划、快照和作业保留同一原期限，每次新授权、操作许可和成功投影都重新观察并同事务重验；到期、回拨或绑定漂移拒绝并回滚。in-place 可验证本作业已经改变的 anchor 后继续后续项及 exact-mirror 确认，不改写冻结计划或把历史 chain 当作文件身份。
+- isolated 只观察真实恢复根权威，不再把根下无关同名文件或父路径当成新工作区；真实 `jobs/<jobID>` 的所有权、marker 和碰撞保护保留。旧绑定不迁移或复活，需创建新计划。中断恢复核对覆盖／删除的认证操作残留，矛盾或未完成状态不得投影成功；失败记录仍能进入 needs_attention，完成 item 的补充验证证据不改写历史结果。
+- 修复新恢复作业的 source lease 错误继承同一恢复点上已释放 Processing 等其他消费者期限的问题；普通显式租约按自身 holder／owner 保持期限连续性，publication 仍保持恢复点级原期限，接管和到期保护不变。
+- 修复恢复作业查询将普通运行中作业误当成 exact-mirror 删除确认的问题；isolated／非镜像作业不投影删除检查点，镜像作业尚未 armed 且没有检查点历史时仍可查询。已有检查点、attempt／lease／fence 或历史矛盾继续拒绝，不放宽删除授权。
+- isolated 成功封存结果由 Runtime 后台自动发布，重启从持久状态补发；当前分类为 unknown，下载仍要求精确 step-up、所属身份和 attachment 交付。未发布 workspace 到原 24 小时期限后交由既有认证清理，关闭 Recovery 仍维护清理，不延长期限；capture 不代表删除完成。
+- exact-mirror 从原 canonical 集合按先写后删执行，保留原 ordinal、摘要和逐项身份；请求构建在 coordinator 事务内核当前 claim、历史和 chain，合法写入后的删除确认可以续行。结构证明尚未派发且未 armed 的失败收束为 `pre_write_failed`，保留 pending items、原期限和已消费授权证据；潜在写入仍保留既有围栏及人工处置边界。
+- exact-mirror 删除授权摘要统一使用 UTC 期限表示；新 PostgreSQL grant 在签定前使用数据库微秒精度，避免合法授权回读后被拒绝，不延长 checkpoint 上限。前后端同时拒绝带完成项、写入字节或错误状态的 `pre_write_failed` 产品。
+- Recovery 结果清理和关闭沿既有 schema 分别记录 `source_changed` 与 `shutdown` 撤销原因，避免撤销事务被数据库约束拒绝，精确 job 的读取取消和排空保护不变。新增失败分类要求 Core/web 同版切换。
+- 修复 PostgreSQL 清理 claim／续租的纳秒期限回读为微秒后被合法状态迁移拒绝、工作区持续停在 claimed 的问题。仅新签发的 cleanup 期限对齐数据库精度，workspace 与 ResultSet 共用；原 24 小时明文期限、精确所有权和 marker 校验保持，SQLite 保留纳秒。
+- 已认证 committed Rsync 普通文件发布 manifest 绑定的 strong SHA-256，支持真实本地范围读取；完整认证发布同时标记来源 online。旧 active none/weak 代次按既有 building／退避规则异步重建，失败保留旧 active，成功原子切换；旧代次引用、Processing 证据、grant 与 Recovery 身份不改写。空树或无普通文件不循环重建，可变来源及其他 Provider 不因此升级证明。
+- Catalog 改为按创建时间／ID 持久分页扫描，有限窗口跨重启和实例推进，无 eligible 或前项构建失败仍可到达后页，修复 none/weak 升级被旧前缀永久阻挡。保留原 building／退避／不可重试规则与 Build 围栏；提交后未派发项在后续完整 sweep 重访，不承诺持久投递或自动 crash replay。新增内部扫描状态及索引迁移，启动拒绝缺失或漂移，包括将十六进制边界 ID 转为数值比较的 CHECK 变更；不新增公开字段或 endpoint。
+- Worker 按实际每请求预算读取连续绝对范围，HTTP trailer 同时证明流式复制和句柄关闭成功；失败不返回部分 bytes。仅顺序源超过单次 cap 在工具启动前拒绝，不再把重复前缀拼成完整文件。strong malware 输入在 materialization 中逐字节核对原始 SHA-256 与长度，终态、短流、超量或摘要错误不产成功扫描结果。
+- Input activation 升为 v2，Core／Worker 必须同版本配套切换；旧新 activation 严格互拒，无兼容回退。malware profile 的 stat/range 合同推进 pipeline 指纹，旧扫描证据必须重新处理，不能仅依靠旧结果满足新版 Recovery。canonical malware 产物格式保持不变；重新构建对应 Worker 并重新取得匹配架构的 runtime closure／签名 bundle 证明。
+- 将旧 Provider 恢复包装的有效断言迁移到真实 Rsync 端口，保留 source、permit、sealed binding、身份隔离及必需审计边界；不声明新增 Restic/Rclone 恢复支持。受控 Runtime 恢复使用认证加密的 Processing 输入，不等于实际 scanner 认证；实际 sandboxed ClamAV、双引擎恢复、CI 和正式镜像分别验收，AWS live 及生产部署不在本轮范围。
+- 无新增运行时配置，不改写已发布迁移；本版本新增 Catalog 扫描状态迁移，其他上述恢复和 Worker 子功能不另增 schema。升级前保全数据库、匹配密钥、配置和备份副本，停止并排空旧 Core 恢复／处理及 Worker 后配套切换 Core／Worker／web。新版逻辑仅影响接管后的操作，换版不能解开旧进程已卡住的操作或撤销远端副作用。新迁移使用后可回退，仅重置可重扫进度，不删除 Catalog 代次、备份或授权证据；再次升级重建空闲种子。回退须整套匹配 Core／Worker／工具链证据，会恢复旧 Catalog 饥饿、目录、取消、时间精度及输入缺陷；既有备份／Recovery 迁移降级保护、未知写入保护和历史数据保全要求持续适用。
+
+### lint 工具链依赖修复
+
+- 将五个固定 lint 父包的真实调用迁移到官方 minimatch 11.0.1，修复 GHSA-g3hv-75wg-m249。本地 tarball 保留上游身份和许可证，来源 SRI、精确配方、可读补丁及可重复构建文件清单随仓库维护，不使用安装后修改器或 matcher 兼容层。
+- 安装后的只读完整性校验接入前端 check、CI、本地 parity 和 Docker web-builder；前端 CI 直接执行包含开发依赖的 moderate 审计。保留既有 lint、类型及可访问性规则，新增真实 ESM/CJS、声明类型与项目服务消费者回归。无新增运行时配置或数据库迁移，回退旧依赖图会恢复工具链漏洞风险。
+
 ## [0.73.8](https://github.com/xiangnan0811/xirang/compare/v0.73.7...v0.73.8) (2026-10-30)
 
 

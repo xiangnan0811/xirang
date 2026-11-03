@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit && tsc -p tsconfig.e2e.json",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "check:dependency-patches": "node scripts/check-lint-dependency-patches.mjs",
+    "check": "npm run check:dependency-patches && npm run typecheck && npm run lint && npm run test && npm run build",
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -46,6 +47,8 @@
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
+    "@eslint/config-array": "file:dependency-patches/eslint-config-array-0.21.2-xirang-minimatch11-r1.tgz",
+    "@eslint/eslintrc": "file:dependency-patches/eslint-eslintrc-3.3.7-xirang-minimatch11-r1.tgz",
     "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4.3.3",
@@ -55,11 +58,12 @@
     "@types/node": "^25.9.8",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "@typescript-eslint/typescript-estree": "file:dependency-patches/typescript-eslint-typescript-estree-8.70.1-xirang-minimatch11-r1.tgz",
     "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-v8": "^4.1.11",
     "axe-core": "^4.13.0",
-    "eslint": "^9.39.4",
-    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint": "file:dependency-patches/eslint-9.39.4-xirang-minimatch11-r1.tgz",
+    "eslint-plugin-jsx-a11y": "file:dependency-patches/eslint-plugin-jsx-a11y-6.10.2-xirang-minimatch11-r1.tgz",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
     "jsdom": "^26.1.0",
@@ -74,6 +78,9 @@
     "vitest-axe": "^0.1.0"
   },
   "overrides": {
+    "@eslint/config-array": "$@eslint/config-array",
+    "@eslint/eslintrc": "$@eslint/eslintrc",
+    "@typescript-eslint/typescript-estree": "$@typescript-eslint/typescript-estree",
     "nanoid": "3.3.18",
     "browserslist": "4.28.7",
     "jsdom": {

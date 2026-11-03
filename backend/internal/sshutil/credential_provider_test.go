@@ -27,6 +27,7 @@ func TestLocalCredentialProviderManagedSSHKeyUsesEncryptedLocalStorage(t *testin
 		AllowedPurposes: PurposeTerminal,
 		AllowedNodeIDs:  fmt.Sprintf("%d", nodeID),
 		AllowedNodeTags: "prod",
+		UpdatedAt:       time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
 	}
 	if err := db.Create(&sshKey).Error; err != nil {
 		t.Fatalf("创建测试 SSH Key 失败: %v", err)
@@ -51,6 +52,18 @@ func TestLocalCredentialProviderManagedSSHKeyUsesEncryptedLocalStorage(t *testin
 	}
 	if refreshed.LastUsedAt == nil || refreshed.LastUsedAt.Before(startedAt) {
 		t.Fatalf("托管 SSH Key 成功使用后应更新 LastUsedAt")
+	}
+	if !refreshed.UpdatedAt.Equal(sshKey.UpdatedAt) {
+		t.Fatal("credential usage changed the revision timestamp used by frozen Recovery authority")
+	}
+	if err := db.Model(&model.SSHKey{}).Where("id = ?", sshKey.ID).Update("disabled", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&refreshed, sshKey.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !refreshed.Disabled || !refreshed.UpdatedAt.After(sshKey.UpdatedAt) {
+		t.Fatal("credential policy mutation did not advance the authority revision")
 	}
 }
 

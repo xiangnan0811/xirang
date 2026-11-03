@@ -389,6 +389,59 @@ func TestCatalogIndexerProofMismatchPreservesOldActiveGeneration(t *testing.T) {
 	}
 }
 
+func TestCatalogIndexerUpgradesHistoricalFingerprintAfterRetry(t *testing.T) {
+	fixture := newCatalogIndexerFixture(t, false, 1)
+	active := seedCatalogActiveCompleteGeneration(t, fixture, 1)
+	oldEntry := seedCatalogServiceEntry(t, fixture.db, active, strings.Repeat("e", 64), nil, "file", "file", backupasset.CatalogEntryFile, 7, fixture.now)
+	if err := fixture.db.Model(&model.CatalogEntry{}).Where("generation_id = ? AND entry_id = ?", active.ID, oldEntry.EntryID).
+		Updates(map[string]any{"fingerprint": "", "fingerprint_strength": string(FingerprintNone)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	factory := fixture.factory(sealedCatalogRecordForTest(t, "file", "", "file", backupasset.CatalogEntryFile, 7))
+	factory.listErr = errors.New("FAKE_TRANSIENT_CATALOG_READ_FAILURE_FOR_TEST_ONLY")
+	indexer := fixture.newIndexer(t, factory)
+	request := BuildRequest{RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID}
+	failed, err := indexer.Build(context.Background(), request)
+	if err == nil || failed.ID == "" {
+		t.Fatalf("failed upgrade generation=%+v err=%v", failed, err)
+	}
+	assertCatalogActiveGeneration(t, fixture.db, fixture.point.ID, active.ID)
+	var storedFailure model.CatalogGeneration
+	if err := fixture.db.First(&storedFailure, "id = ?", failed.ID).Error; err != nil || storedFailure.FinishedAt == nil {
+		t.Fatalf("load failure=%+v err=%v", storedFailure, err)
+	}
+	config := catalogCandidateTestConfig()
+	candidates, err := indexer.ListCandidates(context.Background(), 20, fixture.now, config)
+	if err != nil || len(candidates) != 0 {
+		t.Fatalf("upgrade ignored failure backoff: candidates=%+v err=%v", candidates, err)
+	}
+	retryAt := storedFailure.FinishedAt.UTC().Add(RetryDelay(config, 1, fixture.point.ID, failed.ID) + time.Second)
+	candidates, err = indexer.ListCandidates(context.Background(), 20, retryAt, config)
+	if err != nil || len(candidates) != 1 || candidates[0].RecoveryPointID != fixture.point.ID {
+		t.Fatalf("upgrade not due after backoff: candidates=%+v err=%v", candidates, err)
+	}
+	factory.listErr = nil
+	replacement, err := indexer.Build(context.Background(), request)
+	if err != nil || replacement.ID == active.ID || !replacement.IsActive || replacement.State != string(GenerationComplete) {
+		t.Fatalf("replacement generation=%+v err=%v", replacement, err)
+	}
+	assertCatalogActiveGeneration(t, fixture.db, fixture.point.ID, replacement.ID)
+	var historical model.CatalogEntry
+	if err := fixture.db.First(&historical, "generation_id = ? AND entry_id = ?", active.ID, oldEntry.EntryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if historical.Fingerprint != "" || historical.FingerprintStrength != string(FingerprintNone) {
+		t.Fatalf("historical entry changed: %+v", historical)
+	}
+	var upgraded model.CatalogEntry
+	if err := fixture.db.Where("generation_id = ?", replacement.ID).First(&upgraded).Error; err != nil {
+		t.Fatal(err)
+	}
+	if upgraded.FingerprintStrength != string(FingerprintStrong) || upgraded.Fingerprint != strings.Repeat("d", 64) {
+		t.Fatalf("upgraded entry=%+v", upgraded)
+	}
+}
+
 func TestCatalogIndexerRejectsEveryFrozenProofDrift(t *testing.T) {
 	for _, test := range []struct {
 		name   string

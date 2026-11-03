@@ -763,7 +763,7 @@ func (service *Service) openManagedRsyncContentSession(
 	record exactContentRecord,
 	session *ManagedRsyncPointReadSession,
 ) (content.SourceSession, error) {
-	if session == nil {
+	if service == nil || service.db == nil || session == nil {
 		return nil, fmt.Errorf("%w: immutable Rsync content session unavailable", backupasset.ErrInvalidState)
 	}
 	keepSession := false
@@ -776,6 +776,24 @@ func (service *Service) openManagedRsyncContentSession(
 	if err != nil {
 		return nil, err
 	}
+	// Match the durable projection once, then retain the authenticated physical
+	// timestamp for exact open and close checks.
+	if record.entry.ModifiedAt != nil {
+		persisted := record.entry.ModifiedAt.UTC()
+		projected := entryStat.ModTime.UTC()
+		if precision := rsyncPersistedTimePrecision(service.db); precision != 0 {
+			if !persisted.Equal(persisted.Truncate(precision)) {
+				return nil, contentSourceChangedError(false)
+			}
+			projected = projected.Truncate(precision)
+		}
+		if !projected.Equal(persisted) {
+			return nil, contentSourceChangedError(false)
+		}
+	}
+	physicalModTime := entryStat.ModTime.UTC()
+	record.physicalModTime = &physicalModTime
+	record.exactModTime = true
 	if err := validateContentEntryStat(record, entryStat, false); err != nil {
 		return nil, err
 	}
@@ -802,17 +820,15 @@ func (service *Service) openManagedRsyncContentSession(
 		}
 		return nil, err
 	}
-	modifiedAt := contentStat.ModTime.UTC()
-	if contentStat.ModTime.IsZero() {
-		modifiedAt = time.Time{}
+	var modifiedAt *time.Time
+	if record.entry.ModifiedAt != nil {
+		utc := record.entry.ModifiedAt.UTC()
+		modifiedAt = &utc
 	}
 	stat := content.SourceStat{
-		Size: record.entry.Size, MediaType: firstNonEmpty(contentStat.MediaType, record.entry.MimeType),
+		Size: record.entry.Size, ModifiedAt: modifiedAt, MediaType: firstNonEmpty(contentStat.MediaType, record.entry.MimeType),
 		SourceFingerprint: request.ExpectedSource, EntryFingerprint: request.ExpectedEntry,
 		FingerprintStrong: record.entry.FingerprintStrength == string(catalog.FingerprintStrong),
-	}
-	if !modifiedAt.IsZero() {
-		stat.ModifiedAt = &modifiedAt
 	}
 	result := &sealedContentSourceSession{
 		stat: stat,
@@ -826,6 +842,11 @@ func (service *Service) openManagedRsyncContentSession(
 			if loadErr != nil || current.point.State != string(backupasset.RecoveryPointCommitted) && current.point.State != string(backupasset.RecoveryPointDegraded) {
 				return fmt.Errorf("%w: immutable Rsync content source changed", backupasset.ErrConflict)
 			}
+			if !sameContentPhysicalModTime(current.entry.ModifiedAt, record.entry.ModifiedAt) {
+				return contentSourceChangedError(false)
+			}
+			current.physicalModTime = record.physicalModTime
+			current.exactModTime = true
 			currentStat, statErr := session.StatEntry(validateCtx, current.locator)
 			if statErr != nil {
 				return fmt.Errorf("%w: immutable Rsync content source changed", backupasset.ErrConflict)

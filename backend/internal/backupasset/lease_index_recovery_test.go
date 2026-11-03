@@ -63,6 +63,10 @@ func TestIndexLeaseReclamationPostgres(t *testing.T) {
 	if err := db.Exec(`CREATE UNIQUE INDEX lease_active_owner ON recovery_point_leases(recovery_point_id, holder_type, owner_id) WHERE status = 'active'`).Error; err != nil {
 		t.Fatal(err)
 	}
+	t.Run("explicit_deadline_scopes", func(t *testing.T) {
+		runLeaseExplicitDeadlineScopes(t, db)
+	})
+
 	for _, holder := range []LeaseHolderType{LeaseHolderCatalogBuild, LeaseHolderSearchIndex} {
 		t.Run(string(holder), func(t *testing.T) {
 			ctx := context.Background()

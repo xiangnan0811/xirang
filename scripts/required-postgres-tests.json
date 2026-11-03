@@ -1201,7 +1201,12 @@
         {
           "name": "TestIndexLeaseReclamationPostgres",
           "required_paths": [
-            "TestIndexLeaseReclamationPostgres"
+            "TestIndexLeaseReclamationPostgres",
+            "TestIndexLeaseReclamationPostgres/explicit_deadline_scopes/released_processing_then_recovery",
+            "TestIndexLeaseReclamationPostgres/explicit_deadline_scopes/recovery_owner_continuity",
+            "TestIndexLeaseReclamationPostgres/explicit_deadline_scopes/publication_stages",
+            "TestIndexLeaseReclamationPostgres/explicit_deadline_scopes/new_scope_deadline_bounds",
+            "TestIndexLeaseReclamationPostgres/explicit_deadline_scopes/zero_deadline_uses_configuration"
           ]
         }
       ]
@@ -1211,9 +1216,61 @@
       "timeout": "20m",
       "tests": [
         {
+          "name": "TestCatalogCandidateSweepPostgres",
+          "required_paths": [
+            "TestCatalogCandidateSweepPostgres",
+            "TestCatalogCandidateSweepPostgres/starved_prefix",
+            "TestCatalogCandidateSweepPostgres/page_bounds_and_wrap",
+            "TestCatalogCandidateSweepPostgres/page_bounds_and_wrap/empty",
+            "TestCatalogCandidateSweepPostgres/page_bounds_and_wrap/maximum_and_short_page",
+            "TestCatalogCandidateSweepPostgres/page_bounds_and_wrap/full_final_page",
+            "TestCatalogCandidateSweepPostgres/page_bounds_and_wrap/same_created_at",
+            "TestCatalogCandidateSweepPostgres/empty_eligible_page",
+            "TestCatalogCandidateSweepPostgres/deleted_boundaries_and_late_arrivals",
+            "TestCatalogCandidateSweepPostgres/restart_and_two_selectors",
+            "TestCatalogCandidateSweepPostgres/retry_and_history_precedence",
+            "TestCatalogCandidateSweepPostgres/rollback_and_cancel",
+            "TestCatalogCandidateSweepPostgres/rollback_and_cancel/lock",
+            "TestCatalogCandidateSweepPostgres/rollback_and_cancel/high_water",
+            "TestCatalogCandidateSweepPostgres/rollback_and_cancel/page",
+            "TestCatalogCandidateSweepPostgres/rollback_and_cancel/history",
+            "TestCatalogCandidateSweepPostgres/rollback_and_cancel/cas",
+            "TestCatalogCandidateSweepPostgres/rollback_and_cancel/commit",
+            "TestCatalogCandidateSweepPostgres/rollback_and_cancel/cancel_before_commit",
+            "TestCatalogCandidateSweepPostgres/rollback_and_cancel/cancel_after_commit",
+            "TestCatalogCandidateSweepPostgres/revision_ceiling_and_cas",
+            "TestCatalogCandidateSweepPostgres/revision_ceiling_and_cas/revision_ceiling",
+            "TestCatalogCandidateSweepPostgres/revision_ceiling_and_cas/lost_cas",
+            "TestCatalogCandidateSweepPostgres/revision_ceiling_and_cas/missing_last_point",
+            "TestCatalogCandidateSweepPostgres/revision_ceiling_and_cas/missing_high_water",
+            "TestCatalogCandidateSweepPostgres/revision_ceiling_and_cas/missing_singleton",
+            "TestCatalogCandidateSweepPostgres/lost_commit_acknowledgement",
+            "TestCatalogCandidateSweepPostgres/committed_before_dispatch",
+            "TestCatalogCandidateSweepPostgres/query_budget",
+            "TestCatalogCandidateSweepPostgres/query_budget/empty",
+            "TestCatalogCandidateSweepPostgres/query_budget/one",
+            "TestCatalogCandidateSweepPostgres/query_budget/maximum"
+          ]
+        },
+        {
           "name": "TestCatalogBehaviorPostgres",
           "required_paths": [
-            "TestCatalogBehaviorPostgres"
+            "TestCatalogBehaviorPostgres",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/none",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/weak",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/strong",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/empty_tree",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/directory_only",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/imported_baseline",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/other_provider",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/other_generation",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/other_point",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/building",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/failed_before_retry",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/failed_after_retry",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/partial_after_retry",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/other_semantics",
+            "TestCatalogBehaviorPostgres/strong_fingerprint_upgrade_eligibility/nonretryable"
           ]
         }
       ]
@@ -1310,9 +1367,53 @@
       "timeout": "20m",
       "tests": [
         {
+          "name": "TestRecoveryAuthorityTargetDurablePostgres",
+          "required_paths": [
+            "TestRecoveryAuthorityTargetDurablePostgres",
+            "TestRecoveryAuthorityTargetDurablePostgres/fresh_and_fences/attempt",
+            "TestRecoveryAuthorityTargetDurablePostgres/fresh_and_fences/node",
+            "TestRecoveryAuthorityTargetDurablePostgres/fresh_and_fences/source",
+            "TestRecoveryAuthorityTargetDurablePostgres/fresh_and_fences/transition",
+            "TestRecoveryAuthorityTargetDurablePostgres/fresh_and_fences/wrong_anchor_item",
+            "TestRecoveryAuthorityTargetDurablePostgres/fresh_and_fences/wrong_anchor_operation",
+            "TestRecoveryAuthorityTargetDurablePostgres/fresh_and_fences/wrong_source_fence",
+            "TestRecoveryAuthorityTargetDurablePostgres/fresh_and_fences/empty_history",
+            "TestRecoveryAuthorityTargetDurablePostgres/anchor_create",
+            "TestRecoveryAuthorityTargetDurablePostgres/anchor_overwrite",
+            "TestRecoveryAuthorityTargetDurablePostgres/anchor_skip",
+            "TestRecoveryAuthorityTargetDurablePostgres/job_bound_seal/different_job",
+            "TestRecoveryAuthorityTargetDurablePostgres/job_bound_seal/different_item",
+            "TestRecoveryAuthorityTargetDurablePostgres/job_bound_seal/different_fence",
+            "TestRecoveryAuthorityTargetDurablePostgres/job_bound_seal/different_observed_digest",
+            "TestRecoveryAuthorityTargetDurablePostgres/job_bound_seal/different_observed_size",
+            "TestRecoveryAuthorityTargetDurablePostgres/verification_evidence_replay/bytes",
+            "TestRecoveryAuthorityTargetDurablePostgres/verification_evidence_replay/size",
+            "TestRecoveryAuthorityTargetDurablePostgres/verification_evidence_replay/digest",
+            "TestRecoveryAuthorityTargetDurablePostgres/verification_evidence_replay/checkpoint",
+            "TestRecoveryAuthorityTargetDurablePostgres/adoption_verified",
+            "TestRecoveryAuthorityTargetDurablePostgres/adoption_mismatch",
+            "TestRecoveryAuthorityTargetDurablePostgres/adoption_missing_overwrite",
+            "TestRecoveryAuthorityTargetDurablePostgres/adoption_checkpointed_anchor_consumed_delete",
+            "TestRecoveryAuthorityTargetDurablePostgres/history_integrity/wrong_item",
+            "TestRecoveryAuthorityTargetDurablePostgres/history_integrity/wrong_operation",
+            "TestRecoveryAuthorityTargetDurablePostgres/history_integrity/reordered",
+            "TestRecoveryAuthorityTargetDurablePostgres/history_integrity/invalid_prior_chain",
+            "TestRecoveryAuthorityTargetDurablePostgres/history_integrity/empty_next_chain",
+            "TestRecoveryAuthorityTargetDurablePostgres/history_integrity/missing_checkpoint",
+            "TestRecoveryAuthorityTargetDurablePostgres/history_integrity/empty_chain",
+            "TestRecoveryAuthorityTargetDurablePostgres/history_integrity/invalid_chain",
+            "TestRecoveryAuthorityTargetDurablePostgres/isolated_completed_history",
+            "TestRecoveryAuthorityTargetDurablePostgres/observation_time_boundaries",
+            "TestRecoveryAuthorityTargetDurablePostgres/issuance_final_clock_rollback/observation_expiry",
+            "TestRecoveryAuthorityTargetDurablePostgres/issuance_final_clock_rollback/deadline",
+            "TestRecoveryAuthorityTargetDurablePostgres/issuance_final_clock_rollback/clock_rollback"
+          ]
+        },
+        {
           "name": "TestRecoveryAuthorizationReceiptAuthorityTimeSourceRevalidationPostgres",
           "required_paths": [
-            "TestRecoveryAuthorizationReceiptAuthorityTimeSourceRevalidationPostgres"
+            "TestRecoveryAuthorizationReceiptAuthorityTimeSourceRevalidationPostgres",
+            "TestRecoveryAuthorizationReceiptAuthorityTimeSourceRevalidationPostgres/PlanExpiryPrecision"
           ]
         },
         {
@@ -1346,9 +1447,57 @@
           ]
         },
         {
+          "name": "TestRecoveryCleanupLeasePrecisionPostgres",
+          "required_paths": [
+            "TestRecoveryCleanupLeasePrecisionPostgres",
+            "TestRecoveryCleanupLeasePrecisionPostgres/workspace",
+            "TestRecoveryCleanupLeasePrecisionPostgres/workspace/clock_nanos",
+            "TestRecoveryCleanupLeasePrecisionPostgres/workspace/ttl_nanos",
+            "TestRecoveryCleanupLeasePrecisionPostgres/workspace/both_micro_carry",
+            "TestRecoveryCleanupLeasePrecisionPostgres/workspace/both_second_carry",
+            "TestRecoveryCleanupLeasePrecisionPostgres/workspace/rounded_before_now",
+            "TestRecoveryCleanupLeasePrecisionPostgres/workspace/rounded_equal_now",
+            "TestRecoveryCleanupLeasePrecisionPostgres/workspace/rounded_after_now",
+            "TestRecoveryCleanupLeasePrecisionPostgres/published",
+            "TestRecoveryCleanupLeasePrecisionPostgres/published/clock_nanos",
+            "TestRecoveryCleanupLeasePrecisionPostgres/published/ttl_nanos",
+            "TestRecoveryCleanupLeasePrecisionPostgres/published/both_micro_carry",
+            "TestRecoveryCleanupLeasePrecisionPostgres/published/both_second_carry",
+            "TestRecoveryCleanupLeasePrecisionPostgres/published/rounded_before_now",
+            "TestRecoveryCleanupLeasePrecisionPostgres/published/rounded_equal_now",
+            "TestRecoveryCleanupLeasePrecisionPostgres/published/rounded_after_now"
+          ]
+        },
+        {
           "name": "TestRecoveryEligibilityAuthorityPostgres",
           "required_paths": [
             "TestRecoveryEligibilityAuthorityPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoveryExactMirrorInterleavedExecutionPostgres",
+          "required_paths": [
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/execution_and_builder",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc/changed_expiry_instant",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc/expiry_equal_now",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc/expiry_after_checkpoint",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc/changed_attempt_fence",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc/changed_secret",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc_short_ttl",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc_short_ttl/changed_expiry_instant",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc_short_ttl/expiry_equal_now",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc_short_ttl/expiry_after_checkpoint",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc_short_ttl/changed_attempt_fence",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/grant_binding_utc_short_ttl/changed_secret",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/builder_lock_expiry",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/builder_lock_clock_rollback",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/builder_then_source_drift",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/wrong_source_declaration",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/history_and_migration_guard",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/armed_takeover_is_not_pristine",
+            "TestRecoveryExactMirrorInterleavedExecutionPostgres/takeover_consumed_authority"
           ]
         },
         {
@@ -1360,7 +1509,36 @@
         {
           "name": "TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder",
           "required_paths": [
-            "TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder"
+            "TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder",
+            "TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder/prepare_first",
+            "TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder/cancel_after_capture"
+          ]
+        },
+        {
+          "name": "TestRecoveryPristinePrewriteFailurePostgres",
+          "required_paths": [
+            "TestRecoveryPristinePrewriteFailurePostgres",
+            "TestRecoveryPristinePrewriteFailurePostgres/builder_error",
+            "TestRecoveryPristinePrewriteFailurePostgres/materialization_error",
+            "TestRecoveryPristinePrewriteFailurePostgres/wrapped_cancellation_redacted",
+            "TestRecoveryPristinePrewriteFailurePostgres/snapshot_error",
+            "TestRecoveryPristinePrewriteFailurePostgres/source_revalidation_error",
+            "TestRecoveryPristinePrewriteFailurePostgres/canceled_entry",
+            "TestRecoveryPristinePrewriteFailurePostgres/active",
+            "TestRecoveryPristinePrewriteFailurePostgres/canceled_context",
+            "TestRecoveryPristinePrewriteFailurePostgres/expired_exact_owner",
+            "TestRecoveryPristinePrewriteFailurePostgres/unconsumed_grant_revoked",
+            "TestRecoveryPristinePrewriteFailurePostgres/lease_expiry_equality",
+            "TestRecoveryPristinePrewriteFailurePostgres/concurrent_takeover",
+            "TestRecoveryPristinePrewriteFailurePostgres/stale_revision",
+            "TestRecoveryPristinePrewriteFailurePostgres/stale_source_fence",
+            "TestRecoveryPristinePrewriteFailurePostgres/revision_limit",
+            "TestRecoveryPristinePrewriteFailurePostgres/concurrent_arm",
+            "TestRecoveryPristinePrewriteFailurePostgres/armed_attempt",
+            "TestRecoveryPristinePrewriteFailurePostgres/takeover_fences_old_owner",
+            "TestRecoveryPristinePrewriteFailurePostgres/rollback",
+            "TestRecoveryPristinePrewriteFailurePostgres/lease_release_rollback",
+            "TestRecoveryPristinePrewriteFailurePostgres/clock_rollback"
           ]
         },
         {
@@ -1397,6 +1575,35 @@
           "name": "TestRecoveryReviewF5CleanupNodeLeaseRacesPostgres",
           "required_paths": [
             "TestRecoveryReviewF5CleanupNodeLeaseRacesPostgres"
+          ]
+        },
+        {
+          "name": "TestRecoverySealedPublicationLifecyclePostgres",
+          "required_paths": [
+            "TestRecoverySealedPublicationLifecyclePostgres",
+            "TestRecoverySealedPublicationLifecyclePostgres/PublishAndRestart",
+            "TestRecoverySealedPublicationLifecyclePostgres/PaginationContinuesAcrossArrivals",
+            "TestRecoverySealedPublicationLifecyclePostgres/DeadlineHistory",
+            "TestRecoverySealedPublicationLifecyclePostgres/MarkerAndCleanupShapeGuards",
+            "TestRecoverySealedPublicationLifecyclePostgres/ExpiredMarkerAuthority",
+            "TestRecoverySealedPublicationLifecyclePostgres/CleanedWorkspaceRejectsPublication",
+            "TestRecoverySealedPublicationLifecyclePostgres/CleanedResultRejectsReadback",
+            "TestRecoverySealedPublicationLifecyclePostgres/RevisionCeiling/exhausted",
+            "TestRecoverySealedPublicationLifecyclePostgres/RevisionCeiling/last_publish_revision",
+            "TestRecoverySealedPublicationLifecyclePostgres/RevisionCeiling/last_expiry_revision",
+            "TestRecoverySealedPublicationLifecyclePostgres/ConcurrentPublishers",
+            "TestRecoverySealedPublicationLifecyclePostgres/LostCommitAcknowledgement",
+            "TestRecoverySealedPublicationLifecyclePostgres/ReadbackRejectsCorruption/missing",
+            "TestRecoverySealedPublicationLifecyclePostgres/ReadbackRejectsCorruption/extra",
+            "TestRecoverySealedPublicationLifecyclePostgres/ReadbackRejectsCorruption/digest",
+            "TestRecoverySealedPublicationLifecyclePostgres/ActiveAttemptMigrationGuard",
+            "TestRecoverySealedPublicationLifecyclePostgres/CanceledCommitReadback",
+            "TestRecoverySealedPublicationLifecyclePostgres/PublishExpiryRace",
+            "TestRecoverySealedPublicationLifecyclePostgres/ExpireAtDeadline",
+            "TestRecoverySealedPublicationLifecyclePostgres/FinalClockRollbackAndExpiry/rollback",
+            "TestRecoverySealedPublicationLifecyclePostgres/FinalClockRollbackAndExpiry/equality",
+            "TestRecoverySealedPublicationLifecyclePostgres/LockWaitDeadline",
+            "TestRecoverySealedPublicationLifecyclePostgres/StaleRevision"
           ]
         },
         {
@@ -1460,6 +1667,18 @@
           ]
         },
         {
+          "name": "TestPublicationLeaseDeadlinePrecisionPostgres",
+          "required_paths": [
+            "TestPublicationLeaseDeadlinePrecisionPostgres",
+            "TestPublicationLeaseDeadlinePrecisionPostgres/fresh_stage",
+            "TestPublicationLeaseDeadlinePrecisionPostgres/active_live",
+            "TestPublicationLeaseDeadlinePrecisionPostgres/takeover",
+            "TestPublicationLeaseDeadlinePrecisionPostgres/point_expiry",
+            "TestPublicationLeaseDeadlinePrecisionPostgres/deadline_drift",
+            "TestPublicationLeaseDeadlinePrecisionPostgres/submicro_expiry_window"
+          ]
+        },
+        {
           "name": "TestRecoveryPointProducerRetentionConsumersPostgres",
           "required_paths": [
             "TestRecoveryPointProducerRetentionConsumersPostgres"
@@ -1469,6 +1688,14 @@
           "name": "TestRecoveryPointProducerRetentionPublicationPostgres",
           "required_paths": [
             "TestRecoveryPointProducerRetentionPublicationPostgres"
+          ]
+        },
+        {
+          "name": "TestRsyncCatalogStrongFingerprintUpgradePostgres",
+          "required_paths": [
+            "TestRsyncCatalogStrongFingerprintUpgradePostgres",
+            "TestRsyncCatalogStrongFingerprintUpgradePostgres/historical_upgrade",
+            "TestRsyncCatalogStrongFingerprintUpgradePostgres/historical_weak_upgrade"
           ]
         },
         {
@@ -1867,6 +2094,39 @@
       "package": "./internal/database",
       "timeout": "30m",
       "tests": [
+        {
+          "name": "TestCatalogCandidateSweepMigrationPostgres",
+          "required_paths": [
+            "TestCatalogCandidateSweepMigrationPostgres",
+            "TestCatalogCandidateSweepMigrationPostgres/upgrade_preserves_catalog",
+            "TestCatalogCandidateSweepMigrationPostgres/singleton_and_boundary_constraints",
+            "TestCatalogCandidateSweepMigrationPostgres/downgrade_and_reupgrade",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/missing_table",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/missing_seed",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/column_default",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/column_nullability",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/column_type",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/extra_column",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/wrong_primary_key",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/extra_foreign_key",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/missing_check",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/extra_check",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/loose_check",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/regrouped_check",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/uppercase_hex_check",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/missing_index",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/wrong_index_order",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/unique_index",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/partial_index",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/wrong_index_table",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/invalid_state",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/not_valid_check",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/narrowed_revision_cast",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/numeric_boundary_cast",
+            "TestCatalogCandidateSweepMigrationPostgres/startup_schema_drift/included_index_column"
+          ]
+        },
         {
           "name": "TestAccountRecoveryMigrationPostgres",
           "required_paths": [
@@ -3065,6 +3325,41 @@
   ],
   "exclusions": [
     {
+      "package": "./internal/backupasset/catalog",
+      "name": "TestCatalogCandidateSweepSQLite",
+      "reason": "candidate_sweep_test.go calls runCatalogCandidateSweep with literal false, selecting openCatalogBehaviorSQLite; the PostgreSQL sibling and every applicable leaf are registered."
+    },
+    {
+      "package": "./internal/database",
+      "name": "TestCatalogCandidateSweepMigrationSQLite",
+      "reason": "catalog_candidate_sweep_migration_test.go explicitly calls newSQLiteMigrationFixture; the separate PostgreSQL root and all migration/drift leaves are registered."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryExactMirrorInterleavedExecutionSQLite",
+      "reason": "interleaved_execution_test.go explicitly passes false to testRecoveryExactMirrorInterleavedExecution; the migration-backed shared fixture selects SQLite. Every Postgres counterpart leaf is registered."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryPristinePrewriteFailureSQLite",
+      "reason": "pristine_prewrite_failure_test.go explicitly passes false to testRecoveryPristinePrewriteFailure; newPristinePrewriteMigrationFixture selects the existing SQLite migration fixture. Every Postgres counterpart leaf is registered."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoverySealedPublicationLifecycleSQLite",
+      "reason": "sealed_publication_lifecycle_test.go explicitly passes false to testRecoverySealedPublicationLifecycle; newSealedPublicationMigrationFixture forwards that engine flag to the existing isolated migration fixture, selecting SQLite. The Postgres counterpart registers each required lifecycle leaf."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryAuthorizationObservesOutsideAndRevalidatesInsideMutationTransaction",
+      "reason": "backend/internal/backupasset/recovery/service_test.go:1909 passes false to recoveryServiceTestAuthorizationFixture; its postgres branch is not selected, including the delete-authorization fixture."
+    },
+    {
+      "package": "./internal/backupasset/recovery",
+      "name": "TestRecoveryAuthorityTargetDurableSQLite",
+      "reason": "backend/internal/backupasset/recovery/authority_target_test.go:20-21 passes false to the shared durable suite; both fixture branches select SQLite when postgres is false (lines 33-40 and 685-692). The Postgres entry registers every required durable regression leaf separately."
+    },
+    {
       "package": "./internal/backuphealth",
       "name": "TestLatestVerifiedForNodesLargeHistoryEvidence",
       "reason": "facts_test.go:179-187 requires RUN_R7_04_SCALE_TEST and performs the separately scoped 100,000-row scale evidence."
@@ -3351,6 +3646,11 @@
     },
     {
       "package": "./internal/backupasset/repository",
+      "name": "TestPublicationLeaseDeadlinePrecisionSQLite",
+      "reason": "backend/internal/backupasset/repository/publication_reconcile_test.go:996 calls runPublicationLeaseDeadlinePrecision with the literal SQLite engine; the Postgres sibling is required."
+    },
+    {
+      "package": "./internal/backupasset/repository",
       "name": "TestRecoveryPointProducerRetentionConsumersSQLite",
       "reason": "backend/internal/backupasset/repository/producer_retention_integration_test.go:31 calls runRecoveryPointProducerRetentionConsumers with the literal SQLite engine; no PostgreSQL engine is selected in this test."
     },
@@ -3363,6 +3663,11 @@
       "package": "./internal/backupasset/repository",
       "name": "TestRcloneIncompleteManifestReconciliationDoesNotPromote",
       "reason": "backend/internal/backupasset/repository/rclone_publication_reconcile_test.go:571 calls runRcloneIncompleteManifestReconciliation with literal false, selecting only SQLite; the Postgres sibling passes true and is required."
+    },
+    {
+      "package": "./internal/backupasset/repository",
+      "name": "TestRsyncCatalogStrongFingerprintUpgradeSQLite",
+      "reason": "backend/internal/backupasset/repository/query_test.go calls runRsyncCatalogStrongFingerprintUpgrade with the literal SQLite engine; the PostgreSQL sibling is required."
     },
     {
       "package": "./internal/database",

@@ -557,6 +557,74 @@ func TestCatalogWorkerCountsRebuildNotRequiredAsSkipped(t *testing.T) {
 	}
 }
 
+func TestCatalogWorkerAttemptsLaterCandidateAfterFailure(t *testing.T) {
+	backend := newCatalogWorkerBackendFake([]catalog.BuildCandidate{
+		{RepositoryID: catalogWorkerID('a'), RecoveryPointID: catalogWorkerID('1')},
+		{RepositoryID: catalogWorkerID('a'), RecoveryPointID: catalogWorkerID('2')},
+	})
+	backend.buildErr = errors.New("FAKE_CATALOG_BUILD_FAILURE_FOR_TEST_ONLY")
+	metrics := &catalogWorkerMetricsFake{
+		scans: make(chan catalog.MetricScanOutcome, 1), builds: make(chan catalog.MetricBuildOutcome, 2),
+	}
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC: newCatalogWorkerGCFake(), Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- worker.runScan(context.Background()) }()
+	first := backend.nextBuild(t)
+	if first.candidate.RecoveryPointID != catalogWorkerID('1') {
+		t.Fatalf("first candidate=%+v", first.candidate)
+	}
+	close(first.release)
+	second := backend.nextBuild(t)
+	if second.candidate.RecoveryPointID != catalogWorkerID('2') {
+		t.Fatalf("later candidate=%+v", second.candidate)
+	}
+	backend.mu.Lock()
+	backend.buildErr = nil
+	backend.mu.Unlock()
+	close(second.release)
+	if err := <-done; err != nil {
+		t.Fatalf("scan after one build failure: %v", err)
+	}
+	if got := <-metrics.builds; got != catalog.MetricBuildFailed {
+		t.Fatalf("first build outcome=%s", got)
+	}
+	if got := <-metrics.builds; got != catalog.MetricBuildComplete {
+		t.Fatalf("later build outcome=%s", got)
+	}
+	if got := <-metrics.scans; got != catalog.MetricScanSuccess {
+		t.Fatalf("scan outcome=%s", got)
+	}
+}
+
+func TestCatalogWorkerRejectsOversizedPage(t *testing.T) {
+	candidates := make([]catalog.BuildCandidate, catalog.MaxCandidatePageSize+1)
+	for index := range candidates {
+		candidates[index] = catalog.BuildCandidate{RepositoryID: catalogWorkerID('a'), RecoveryPointID: fmt.Sprintf("%032x", index+1)}
+	}
+	backend := newCatalogWorkerBackendFake(candidates)
+	metrics := &catalogWorkerMetricsFake{scans: make(chan catalog.MetricScanOutcome, 1)}
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		GC: newCatalogWorkerGCFake(), Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.runScan(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) || !strings.Contains(err.Error(), "Catalog candidate page exceeds limit") {
+		t.Fatalf("oversized page error=%v", err)
+	}
+	if backend.buildCallCount() != 0 {
+		t.Fatalf("oversized page dispatched %d builds", backend.buildCallCount())
+	}
+	if got := <-metrics.scans; got != catalog.MetricScanFailure {
+		t.Fatalf("oversized page scan outcome=%s", got)
+	}
+}
+
 // TestCatalogWorkerStorageFactsFollowBothScanOutcomes proves the scan-end
 // storage aggregate is published on a completed scan and on a disabled scan,
 // while a disabled scan still schedules no Catalog candidate or build.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"sort"
 	"strconv"
@@ -218,9 +219,10 @@ type catalogDirectory struct {
 }
 
 type catalogReadSession struct {
-	reader  EntryLister
-	prover  CatalogManifestProver
-	request CatalogReadRequest
+	reader    EntryLister
+	prover    CatalogManifestProver
+	request   CatalogReadRequest
+	committed *rsyncCommittedTreeProof
 
 	mu              sync.Mutex
 	closed          bool
@@ -240,6 +242,14 @@ type catalogReadSession struct {
 }
 
 func NewCatalogReadSession(reader EntryLister, request CatalogReadRequest) (CatalogReadSession, error) {
+	session, err := newCatalogReadSession(reader, request, nil)
+	if err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+func newCatalogReadSession(reader EntryLister, request CatalogReadRequest, committed *rsyncCommittedTreeProof) (*catalogReadSession, error) {
 	if interfaceNil(reader) {
 		return nil, fmt.Errorf("%w: Catalog entry reader unavailable", ErrCatalogProtocol)
 	}
@@ -261,7 +271,7 @@ func NewCatalogReadSession(reader EntryLister, request CatalogReadRequest) (Cata
 		return nil, err
 	}
 	return &catalogReadSession{
-		reader: reader, prover: prover, request: request, directories: []catalogDirectory{{}},
+		reader: reader, prover: prover, request: request, committed: committed, directories: []catalogDirectory{{}},
 		paths: make(map[string]struct{}), projection: projection,
 	}, nil
 }
@@ -421,6 +431,8 @@ func (session *catalogReadSession) Close() error {
 	session.directories = nil
 	session.current = nil
 	session.paths = nil
+	session.committed = nil
+	session.request.Snapshot.Access.AdapterData = nil
 	return nil
 }
 
@@ -463,6 +475,27 @@ func (session *catalogReadSession) acceptEntry(parent catalogDirectory, entry En
 		NormalizedPath: normalizedPath, ParentNormalizedPath: parent.path, Name: entry.Name,
 		Type: entry.Type, Size: entry.Size, ModifiedAt: modifiedAt,
 		Fingerprint: "", FingerprintStrength: "none", ProviderLocator: entry.Locator,
+	}
+	if session.committed != nil {
+		entries := session.committed.entries
+		index := sort.Search(len(entries), func(index int) bool { return entries[index].RelativePath >= normalizedPath })
+		if index == len(entries) || entries[index].RelativePath != normalizedPath || entry.Locator.Native != normalizedPath {
+			return CatalogRecord{}, fmt.Errorf("%w: committed Rsync Catalog path mismatch", ErrCatalogProofMismatch)
+		}
+		manifestEntry := entries[index]
+		kindMatches := (manifestEntry.Kind == rsyncTreeManifestRegular && entry.Type == backupasset.CatalogEntryFile) ||
+			(manifestEntry.Kind == rsyncTreeManifestDirectory && entry.Type == backupasset.CatalogEntryDirectory) ||
+			(manifestEntry.Kind == rsyncTreeManifestSymlink && entry.Type == backupasset.CatalogEntrySymlink)
+		if !kindMatches || !entry.ModTime.Equal(time.Unix(0, manifestEntry.ModTimeNS)) {
+			return CatalogRecord{}, fmt.Errorf("%w: committed Rsync Catalog metadata mismatch", ErrCatalogProofMismatch)
+		}
+		if manifestEntry.Kind == rsyncTreeManifestRegular {
+			if manifestEntry.Size > math.MaxInt64 || int64(manifestEntry.Size) != entry.Size || !lowerHex(manifestEntry.ContentDigest, 64) {
+				return CatalogRecord{}, fmt.Errorf("%w: committed Rsync Catalog file mismatch", ErrCatalogProofMismatch)
+			}
+			record.Fingerprint = manifestEntry.ContentDigest
+			record.FingerprintStrength = "strong"
+		}
 	}
 	session.writeRecord(record)
 	if entry.Type == backupasset.CatalogEntryDirectory {
@@ -614,24 +647,35 @@ func (adapter *RsyncAdapter) OpenCatalogRead(_ context.Context, request CatalogR
 }
 
 func (adapter *RsyncCommittedPointAdapter) OpenCatalogRead(_ context.Context, request CatalogReadRequest) (CatalogReadSession, error) {
-	if request.Provider != backupasset.ProviderRsync || request.Mode != CatalogProofPublicationManifest {
-		return nil, fmt.Errorf("%w: committed Rsync Catalog provider mismatch", ErrCatalogProtocol)
+	if err := validateCatalogReadRequest(request); err != nil {
+		return nil, err
 	}
-	return NewCatalogReadSession(adapter, request)
+	runtimeAccess, err := adapter.catalogBinding(request)
+	if err != nil {
+		return nil, err
+	}
+	if uint64(len(runtimeAccess.manifestEntries)) != uint64(request.Manifest.EntryCount) {
+		return nil, fmt.Errorf("%w: committed Rsync Catalog manifest count mismatch", ErrCatalogProofMismatch)
+	}
+	proof := &rsyncCommittedTreeProof{root: runtimeAccess.manifestRoot, entries: runtimeAccess.manifestEntries}
+	session, err := newCatalogReadSession(adapter, request, proof)
+	if err != nil {
+		return nil, err
+	}
+	return session, nil
 }
 
 func (adapter *RsyncCommittedPointAdapter) ProveCatalogManifest(ctx context.Context, request CatalogReadRequest) (CatalogManifestProof, error) {
-	if adapter == nil || request.Provider != backupasset.ProviderRsync || request.Mode != CatalogProofPublicationManifest {
-		return CatalogManifestProof{}, fmt.Errorf("%w: committed Rsync Catalog proof request", ErrCatalogProtocol)
-	}
-	runtimeAccess, ok := request.Snapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess)
-	if !ok || runtimeAccess.SourceRevision != runtimeAccess.request.SourceFingerprint ||
-		request.Snapshot.SourceRevision != runtimeAccess.SourceRevision ||
-		request.Point.Native != rsyncCommittedPointLocator(runtimeAccess.request).Native {
-		return CatalogManifestProof{}, fmt.Errorf("%w: committed Rsync Catalog runtime facts", ErrCatalogProtocol)
-	}
-	if _, err := validateRsyncCommittedPointTree(ctx, runtimeAccess.request); err != nil {
+	runtimeAccess, err := adapter.catalogBinding(request)
+	if err != nil {
 		return CatalogManifestProof{}, err
+	}
+	proof, err := validateRsyncCommittedPointTree(ctx, runtimeAccess.request)
+	if err != nil {
+		return CatalogManifestProof{}, err
+	}
+	if proof.root != runtimeAccess.manifestRoot {
+		return CatalogManifestProof{}, fmt.Errorf("%w: committed Rsync Catalog root changed", ErrCatalogProofMismatch)
 	}
 	return CatalogManifestProof{
 		ManifestID: request.Manifest.ManifestID, Revision: request.Manifest.Revision,
@@ -639,6 +683,22 @@ func (adapter *RsyncCommittedPointAdapter) ProveCatalogManifest(ctx context.Cont
 		EntryCount: int64(runtimeAccess.request.ManifestEntryCount), Completeness: backupasset.ManifestComplete,
 		SourceRevision: runtimeAccess.request.SourceFingerprint,
 	}, nil
+}
+
+func (adapter *RsyncCommittedPointAdapter) catalogBinding(request CatalogReadRequest) (RsyncCommittedPointRuntimeAccess, error) {
+	if adapter == nil || request.Provider != backupasset.ProviderRsync || request.Mode != CatalogProofPublicationManifest {
+		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: committed Rsync Catalog proof request", ErrCatalogProtocol)
+	}
+	runtimeAccess, err := adapter.validateBinding(request.Snapshot.Access)
+	if err != nil || request.Snapshot.RepositoryID != request.Snapshot.Access.RepositoryID ||
+		request.Snapshot.RepositoryID != runtimeAccess.request.Attempt.RepositoryID || request.Snapshot.CapabilityRevision <= 0 ||
+		request.RecoveryPointID != runtimeAccess.request.Attempt.RecoveryPointID ||
+		runtimeAccess.Root.Path != runtimeAccess.manifestRoot ||
+		request.Snapshot.SourceRevision != runtimeAccess.SourceRevision ||
+		request.Point.Native != rsyncCommittedPointLocator(runtimeAccess.request).Native {
+		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: committed Rsync Catalog runtime facts", ErrCatalogProtocol)
+	}
+	return runtimeAccess, nil
 }
 
 func (adapter *RcloneAdapter) OpenCatalogRead(_ context.Context, request CatalogReadRequest) (CatalogReadSession, error) {

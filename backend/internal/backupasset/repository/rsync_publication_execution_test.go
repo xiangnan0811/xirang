@@ -3,6 +3,9 @@ package repository
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +52,8 @@ func TestPrepareManagedRsyncCreatesVersionedAttemptAndChildLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	if point.State != string(backupasset.RecoveryPointPreparing) || point.Semantics != string(backupasset.PointXirangManifest) ||
-		point.ImmutabilityLevel != string(backupasset.ImmutabilityXirangManaged) || lineage.PublicationMode != string(backupasset.PublicationVersionedFullCopy) ||
+		point.ImmutabilityLevel != string(backupasset.ImmutabilityXirangManaged) || point.PhysicalAvailability != string(backupasset.PhysicalUnknown) || point.ObservedAt != nil ||
+		lineage.PublicationMode != string(backupasset.PublicationVersionedFullCopy) ||
 		point.ProducingTaskNameSnapshot != fixture.task.Name || point.ProducingNodeIDSnapshot != fixture.task.NodeID || point.ProducingNodeNameSnapshot != node.Name {
 		t.Fatalf("managed Rsync point=%+v lineage=%+v", point, lineage)
 	}
@@ -855,7 +859,8 @@ func TestProcessPointCommitsExactManagedRsyncVerifyingPoint(t *testing.T) {
 	if err := fixture.db.First(&point, "id = ?", state.attempt.RecoveryPointID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if point.State != string(backupasset.RecoveryPointCommitted) || point.CommittedAt == nil || point.ManifestDigest != commit.ManifestDigest {
+	if point.State != string(backupasset.RecoveryPointCommitted) || point.CommittedAt == nil || point.ObservedAt != nil ||
+		point.PhysicalAvailability != string(backupasset.PhysicalOnline) || point.ManifestDigest != commit.ManifestDigest {
 		t.Fatalf("managed Rsync committed point=%+v", point)
 	}
 	var manifests []model.RecoveryPointManifest
@@ -871,6 +876,169 @@ func TestProcessPointCommitsExactManagedRsyncVerifyingPoint(t *testing.T) {
 	}
 	if run.Status != "running" {
 		t.Fatalf("managed Rsync verification rewrote TaskRun transfer status=%q", run.Status)
+	}
+}
+
+func TestManagedRsyncPublicationPhysicalAvailability(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("managed Rsync publication requires Linux tree primitives")
+	}
+	ctx := context.Background()
+
+	t.Run("complete_manifest", func(t *testing.T) {
+		fixture, _, pointID := prepareRealRsyncAvailabilityFixture(t)
+		outcome, err := fixture.service.ProcessPoint(ctx, pointID)
+		if err != nil || outcome.State != backupasset.RecoveryPointCommitted || !outcome.ProviderCommitRecorded {
+			t.Fatalf("reconcile authenticated publication: outcome=%+v err=%v", outcome, err)
+		}
+		point := requireManagedRsyncAvailability(t, fixture, pointID, backupasset.RecoveryPointCommitted, backupasset.PhysicalOnline)
+		if point.CapturedAt == nil || point.CommittedAt == nil {
+			t.Fatalf("committed publication lacks timestamps: %+v", point)
+		}
+		var manifests []model.RecoveryPointManifest
+		if err := fixture.db.Where("recovery_point_id = ? AND is_active = ?", pointID, true).Find(&manifests).Error; err != nil {
+			t.Fatal(err)
+		}
+		if len(manifests) != 1 || manifests[0].Completeness != string(backupasset.ManifestComplete) || manifests[0].Digest != point.ManifestDigest {
+			t.Fatalf("committed point lacks its complete active manifest: %+v", manifests)
+		}
+	})
+
+	t.Run("changed_tree", func(t *testing.T) {
+		fixture, root, pointID := prepareRealRsyncAvailabilityFixture(t)
+		path := filepath.Join(root, "points", pointID, "tree", "payload.txt")
+		if err := os.WriteFile(path, []byte("after!"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if outcome, err := fixture.service.ProcessPoint(ctx, pointID); !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("changed tree outcome=%+v err=%v, want conflict", outcome, err)
+		}
+		requireManagedRsyncAvailability(t, fixture, pointID, backupasset.RecoveryPointVerifying, backupasset.PhysicalUnknown)
+		requireNoActiveRsyncPublicationManifest(t, fixture, pointID)
+	})
+
+	t.Run("missing_final", func(t *testing.T) {
+		fixture, root, pointID := prepareRealRsyncAvailabilityFixture(t)
+		if err := os.Rename(filepath.Join(root, "points", pointID), filepath.Join(root, "withheld-final")); err != nil {
+			t.Fatal(err)
+		}
+		outcome, err := fixture.service.ProcessPoint(ctx, pointID)
+		if err != nil || outcome.State != backupasset.RecoveryPointFailed || outcome.Code != backupasset.FailureManifestUnavailable || !outcome.ProviderCommitRecorded {
+			t.Fatalf("missing final publication outcome=%+v err=%v", outcome, err)
+		}
+		requireManagedRsyncAvailability(t, fixture, pointID, backupasset.RecoveryPointFailed, backupasset.PhysicalUnknown)
+		requireNoActiveRsyncPublicationManifest(t, fixture, pointID)
+	})
+}
+
+// prepareRealRsyncAvailabilityFixture publishes an actual local tree and stops
+// after durable provider commit, before reconciliation proves its manifest.
+func prepareRealRsyncAvailabilityFixture(t *testing.T) (*rsyncPublicationFixture, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	fixture := newRsyncPublicationFixture(t)
+	markerKey, err := fixture.service.rsyncMarkerKey(ctx, fixture.repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedRoot := filepath.Join(t.TempDir(), "managed-rsync-root")
+	bootstrap, err := provider.BootstrapRsyncManagedRoot(ctx, provider.RsyncManagedRootBootstrapRequest{
+		ManagedRoot: managedRoot, RepositoryID: fixture.repository.ID, MarkerKey: markerKey, CreatedAt: fixture.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.binding.ManagedRootLocator = managedRoot
+	fixture.binding.RootMarkerDigest = bootstrap.RepositoryMarkerDigest
+	fixture.binding.ManagedRootIdentityDigest = bootstrap.ManagedRootIdentityDigest
+	payload, err := encodeManagedRsyncBindingDocumentV2(fixture.binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := managedRsyncRepositoryIdentity(fixture.binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding model.RepositoryAccessBinding
+	if err := fixture.db.Where("repository_id = ?", fixture.repository.ID).First(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+	binding.EncryptedConfig = payload
+	binding.UpdatedAt = fixture.now
+	if err := fixture.db.Save(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.BackupRepository{}).Where("id = ?", fixture.repository.ID).Update("repository_identity", identity).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.repository.RepositoryIdentity = &identity
+
+	execution, err := fixture.service.Prepare(ctx, fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) })
+	state, ok := execution.(*rsyncPublicationExecution)
+	if !ok {
+		t.Fatalf("managed Rsync execution type=%T", execution)
+	}
+	pointID := state.attempt.RecoveryPointID
+	requireManagedRsyncAvailability(t, fixture, pointID, backupasset.RecoveryPointPreparing, backupasset.PhysicalUnknown)
+	requireNoActiveRsyncPublicationManifest(t, fixture, pointID)
+	input, err := state.RsyncTreePublicationInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "payload.txt"), []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input.Source = provider.RsyncTreeCommandSource{LocalPath: source}
+	strategy, err := provider.NewLocalRsyncTreePublicationStrategy(func() time.Time { return fixture.now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := strategy.Prepare(ctx, provider.PublicationPrepareRequest{
+		Attempt: provider.NewRsyncTreePublicationAttempt(state.attempt), RsyncTreeInput: &input,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := strategy.Execute(ctx, prepared, provider.PublicationProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := strategy.RecordCommit(ctx, prepared, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execution.RecordProviderCommit(ctx, commit); err != nil {
+		t.Fatal(err)
+	}
+	requireManagedRsyncAvailability(t, fixture, pointID, backupasset.RecoveryPointVerifying, backupasset.PhysicalUnknown)
+	requireNoActiveRsyncPublicationManifest(t, fixture, pointID)
+	fixture.strategy.reconcile = strategy.Reconcile
+	return fixture, managedRoot, pointID
+}
+
+func requireManagedRsyncAvailability(t *testing.T, fixture *rsyncPublicationFixture, pointID string, state backupasset.RecoveryPointState, availability backupasset.PhysicalAvailability) model.RecoveryPoint {
+	t.Helper()
+	var point model.RecoveryPoint
+	if err := fixture.db.First(&point, "id = ?", pointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if point.State != string(state) || point.PhysicalAvailability != string(availability) || point.ObservedAt != nil ||
+		(state != backupasset.RecoveryPointCommitted && point.CommittedAt != nil) {
+		t.Fatalf("managed Rsync state=%q availability=%q observed=%v committed=%v, want %q/%q", point.State, point.PhysicalAvailability, point.ObservedAt, point.CommittedAt, state, availability)
+	}
+	return point
+}
+
+func requireNoActiveRsyncPublicationManifest(t *testing.T, fixture *rsyncPublicationFixture, pointID string) {
+	t.Helper()
+	var count int64
+	if err := fixture.db.Model(&model.RecoveryPointManifest{}).Where("recovery_point_id = ? AND is_active = ?", pointID, true).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("unexpected active manifest count=%d err=%v", count, err)
 	}
 }
 
@@ -958,7 +1126,8 @@ func TestProcessPointFailsManagedRsyncVerifyingPointWhenExactFinalMarkerIsAbsent
 	if err != nil {
 		t.Fatal(err)
 	}
-	if point.State != string(backupasset.RecoveryPointFailed) || point.EncryptedProviderLocator == "" || consistency.Code != backupasset.FailureManifestUnavailable {
+	if point.State != string(backupasset.RecoveryPointFailed) || point.EncryptedProviderLocator == "" || consistency.Code != backupasset.FailureManifestUnavailable ||
+		point.PhysicalAvailability != string(backupasset.PhysicalUnknown) || point.ObservedAt != nil {
 		t.Fatalf("missing managed Rsync final point=%+v consistency=%+v", point, consistency)
 	}
 }

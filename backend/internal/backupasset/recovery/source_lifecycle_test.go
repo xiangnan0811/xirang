@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -2011,6 +2012,16 @@ func TestRecoveryPointSourceLifecycleRecoveryCancellationAfterPrecheckUsesBounde
 }
 
 func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(t *testing.T) {
+	t.Run("prepare_first", func(t *testing.T) {
+		testRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(t, false)
+	})
+	t.Run("cancel_after_capture", func(t *testing.T) {
+		testRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(t, true)
+	})
+}
+
+func testRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(t *testing.T, cancelAfterCapture bool) {
+	t.Helper()
 	fixture := newAuthorizationReceiptPostgresServiceFixture(t, AuthorizationReceiptExecute)
 	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
 	if err != nil {
@@ -2091,14 +2102,10 @@ func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(
 	var cancelPlanOnce sync.Once
 	var cancelPointOnce sync.Once
 	var observerMu sync.Mutex
-	lockAttempts := map[string]map[string]int{
-		prepareProbe: {},
-		cancelProbe:  {},
-	}
-	lockSequences := map[string][]string{
-		prepareProbe: nil,
-		cancelProbe:  nil,
-	}
+	lockAttempts := map[string]map[*sql.Tx]map[string]int{prepareProbe: {}, cancelProbe: {}}
+	lockSequences := map[string]map[*sql.Tx][]string{prepareProbe: {}, cancelProbe: {}}
+	var captureTx, effectTx *sql.Tx
+	var unknownTransaction bool
 	var sqlStates []string
 	var retryableQueryErrors int
 	var cancellationValidated bool
@@ -2120,13 +2127,30 @@ func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(
 		if label == "" || !locked {
 			return
 		}
-		observerMu.Lock()
-		lockAttempts[label][table]++
-		observerMu.Unlock()
 		if label == cancelProbe && table == (model.BackupAssetRecoveryPlan{}).TableName() {
 			cancelPlanOnce.Do(func() { close(cancelPlanStarted) })
 		}
-		if label == prepareProbe && table == (model.RecoveryPoint{}).TableName() {
+		transaction, ok := callbackDB.Statement.ConnPool.(*sql.Tx)
+		observerMu.Lock()
+		if !ok {
+			unknownTransaction = true
+			observerMu.Unlock()
+			return
+		}
+		if lockAttempts[label][transaction] == nil {
+			lockAttempts[label][transaction] = make(map[string]int)
+		}
+		lockAttempts[label][transaction][table]++
+		if label == prepareProbe && table == (model.BackupAssetRecoveryPlan{}).TableName() {
+			if captureTx == nil {
+				captureTx = transaction
+			} else if transaction != captureTx && effectTx == nil {
+				effectTx = transaction
+			}
+		}
+		isEffect := transaction == effectTx
+		observerMu.Unlock()
+		if !cancelAfterCapture && label == prepareProbe && isEffect && table == (model.RecoveryPoint{}).TableName() {
 			select {
 			case <-cancelPlanStarted:
 			case <-callbackDB.Statement.Context.Done():
@@ -2157,13 +2181,20 @@ func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(
 		if callbackDB.RowsAffected == 0 {
 			return
 		}
+		transaction, ok := callbackDB.Statement.ConnPool.(*sql.Tx)
 		observerMu.Lock()
-		lockSequences[label] = append(lockSequences[label], table)
+		if !ok {
+			unknownTransaction = true
+			observerMu.Unlock()
+			return
+		}
+		lockSequences[label][transaction] = append(lockSequences[label][transaction], table)
 		if label == cancelProbe && table == (model.RecoveryPointLifecycleAttempt{}).TableName() {
 			cancellationValidated = true
 		}
+		isEffect := transaction == effectTx
 		observerMu.Unlock()
-		if label == prepareProbe && table == (model.BackupAssetRecoveryPlan{}).TableName() {
+		if !cancelAfterCapture && label == prepareProbe && isEffect && table == (model.BackupAssetRecoveryPlan{}).TableName() {
 			preparePlanOnce.Do(func() {
 				close(preparePlanLocked)
 				select {
@@ -2211,6 +2242,15 @@ func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(
 
 	testCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releasePrepare) })
+	var observationBarrier *recoveryFirstWriteObservationBarrier
+	if cancelAfterCapture {
+		observationBarrier = &recoveryFirstWriteObservationBarrier{
+			arrived: make(chan RecoveryAuthorityBinding, 1), release: releasePrepare, now: fixture.now,
+		}
+		coordinator.liveRevalidator = observationBarrier
+	}
 	type prepareOutcome struct {
 		permit TargetWritePermit
 		err    error
@@ -2223,10 +2263,21 @@ func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(
 		)
 		prepares <- prepareOutcome{permit: permit, err: prepareErr}
 	}()
-	select {
-	case <-preparePlanLocked:
-	case <-testCtx.Done():
-		t.Fatalf("PostgreSQL PrepareFirstWrite did not hold the plan lock: %v", testCtx.Err())
+	if cancelAfterCapture {
+		select {
+		case binding := <-observationBarrier.arrived:
+			if binding.targetExpectation.phase != recoveryAuthorityTargetFreshFirstWrite {
+				t.Fatalf("PostgreSQL first-write authority was not captured before arming: %+v", binding.targetExpectation)
+			}
+		case <-testCtx.Done():
+			t.Fatalf("PostgreSQL first-write authority was not observed: %v", testCtx.Err())
+		}
+	} else {
+		select {
+		case <-preparePlanLocked:
+		case <-testCtx.Done():
+			t.Fatalf("PostgreSQL first-write effect did not hold the plan lock: %v", testCtx.Err())
+		}
 	}
 	go func() {
 		cancellations <- coordinator.CancelRecoveryPoint(
@@ -2241,7 +2292,15 @@ func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(
 	case <-testCtx.Done():
 		t.Fatalf("PostgreSQL cancellation reached neither plan nor exact point lock: %v", testCtx.Err())
 	}
-	close(releasePrepare)
+	var cancellationErr error
+	if cancelAfterCapture {
+		select {
+		case cancellationErr = <-cancellations:
+		case <-testCtx.Done():
+			t.Fatalf("PostgreSQL source cancellation did not finish while observation was held: %v", testCtx.Err())
+		}
+	}
+	releaseOnce.Do(func() { close(releasePrepare) })
 
 	var prepared prepareOutcome
 	select {
@@ -2249,74 +2308,93 @@ func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(
 	case <-testCtx.Done():
 		t.Fatalf("PostgreSQL PrepareFirstWrite did not complete: %v", testCtx.Err())
 	}
-	var cancellationErr error
-	select {
-	case cancellationErr = <-cancellations:
-	case <-testCtx.Done():
-		t.Fatalf("PostgreSQL source cancellation did not complete: %v", testCtx.Err())
+	if !cancelAfterCapture {
+		select {
+		case cancellationErr = <-cancellations:
+		case <-testCtx.Done():
+			t.Fatalf("PostgreSQL source cancellation did not complete: %v", testCtx.Err())
+		}
 	}
 
 	observerMu.Lock()
 	observedStates := append([]string(nil), sqlStates...)
 	retryCount := retryableQueryErrors
-	prepareSequence := append([]string(nil), lockSequences[prepareProbe]...)
-	cancelSequence := append([]string(nil), lockSequences[cancelProbe]...)
-	prepareAttempts := cloneRecoverySourceLifecycleLockAttempts(lockAttempts[prepareProbe])
-	cancelAttempts := cloneRecoverySourceLifecycleLockAttempts(lockAttempts[cancelProbe])
+	var cancelTx *sql.Tx
+	for transaction := range lockAttempts[cancelProbe] {
+		cancelTx = transaction
+	}
+	captureSequence := append([]string(nil), lockSequences[prepareProbe][captureTx]...)
+	effectSequence := append([]string(nil), lockSequences[prepareProbe][effectTx]...)
+	cancelSequence := append([]string(nil), lockSequences[cancelProbe][cancelTx]...)
+	captureAttempts := cloneRecoverySourceLifecycleLockAttempts(lockAttempts[prepareProbe][captureTx])
+	effectAttempts := cloneRecoverySourceLifecycleLockAttempts(lockAttempts[prepareProbe][effectTx])
+	cancelAttempts := cloneRecoverySourceLifecycleLockAttempts(lockAttempts[cancelProbe][cancelTx])
+	prepareTransactions, cancelTransactions := len(lockAttempts[prepareProbe]), len(lockAttempts[cancelProbe])
+	missingTransaction := unknownTransaction
 	mutatedBeforeValidation := mutationBeforeValidation
 	observerMu.Unlock()
 	for _, state := range observedStates {
 		if state == "40P01" {
-			t.Fatalf("PostgreSQL PrepareFirstWrite/source cancellation observed SQLSTATE 40P01 instead of one lock order: states=%v prepare=%v cancel=%v errors=%v/%v",
-				observedStates, prepareSequence, cancelSequence, prepared.err, cancellationErr)
+			t.Fatalf("PostgreSQL PrepareFirstWrite/source cancellation observed SQLSTATE 40P01 instead of one lock order: states=%v capture=%v effect=%v cancel=%v errors=%v/%v",
+				observedStates, captureSequence, effectSequence, cancelSequence, prepared.err, cancellationErr)
 		}
 	}
 	if retryCount != 0 || len(observedStates) != 0 {
 		t.Fatalf("PostgreSQL PrepareFirstWrite/source cancellation hid a retryable query: retries=%d states=%v", retryCount, observedStates)
 	}
-	if prepared.err != nil || cancellationErr != nil {
-		t.Fatalf("PostgreSQL PrepareFirstWrite/source cancellation errors=%v/%v, want clean serialization", prepared.err, cancellationErr)
+	if cancellationErr != nil || (prepared.err != nil && !errors.Is(prepared.err, ErrRecoveryWorkerFenceLost)) ||
+		(cancelAfterCapture && !errors.Is(prepared.err, ErrRecoveryWorkerFenceLost)) {
+		t.Fatalf("PostgreSQL PrepareFirstWrite/source cancellation errors=%v/%v, cancel_after_capture=%t", prepared.err, cancellationErr, cancelAfterCapture)
 	}
 	if mutatedBeforeValidation {
 		t.Fatal("PostgreSQL source cancellation mutated Recovery authority before exact lifecycle validation")
 	}
 
-	prepareOrder := []string{
-		(model.BackupAssetRecoveryPlan{}).TableName(),
-		(model.BackupAssetRecoveryJob{}).TableName(),
-		(model.RecoveryPoint{}).TableName(),
-		(model.BackupAssetRecoveryAttempt{}).TableName(),
+	planTable := (model.BackupAssetRecoveryPlan{}).TableName()
+	jobTable := (model.BackupAssetRecoveryJob{}).TableName()
+	pointTable := (model.RecoveryPoint{}).TableName()
+	attemptTable := (model.BackupAssetRecoveryAttempt{}).TableName()
+	if missingTransaction || captureTx == nil || effectTx == nil || captureTx == effectTx || cancelTx == nil ||
+		prepareTransactions != 2 || cancelTransactions != 1 {
+		t.Fatalf("PostgreSQL lock probes missed or repeated a transaction: capture=%p effect=%p cancel=%p prepare_count=%d cancel_count=%d unknown=%t",
+			captureTx, effectTx, cancelTx, prepareTransactions, cancelTransactions, missingTransaction)
 	}
-	cancelOrder := []string{
-		(model.BackupAssetRecoveryPlan{}).TableName(),
-		(model.BackupAssetRecoveryJob{}).TableName(),
-		(model.RecoveryPoint{}).TableName(),
-		(model.RecoveryPointLifecycleAttempt{}).TableName(),
-		(model.BackupAssetRecoveryAttempt{}).TableName(),
+	assertRecoverySourceLifecycleLockOrder(t, "PrepareFirstWrite capture", captureSequence,
+		[]string{planTable, jobTable, attemptTable})
+	effectOrder := []string{planTable, jobTable}
+	if !cancelAfterCapture {
+		effectOrder = append(effectOrder, pointTable, attemptTable)
 	}
-	assertRecoverySourceLifecycleLockOrder(t, "PrepareFirstWrite", prepareSequence, prepareOrder)
-	assertRecoverySourceLifecycleLockOrder(t, "source cancellation", cancelSequence, cancelOrder)
-	for label, attempts := range map[string]map[string]int{
-		"PrepareFirstWrite":   prepareAttempts,
-		"source cancellation": cancelAttempts,
-	} {
-		for _, table := range []string{
-			(model.BackupAssetRecoveryPlan{}).TableName(),
-			(model.BackupAssetRecoveryJob{}).TableName(),
-			(model.RecoveryPoint{}).TableName(),
-		} {
-			if attempts[table] != 1 {
-				t.Fatalf("%s PostgreSQL %s lock attempts=%d, want exactly one with no hidden retry; all=%v", label, table, attempts[table], attempts)
-			}
+	assertRecoverySourceLifecycleLockOrder(t, "PrepareFirstWrite effect", effectSequence, effectOrder)
+	assertRecoverySourceLifecycleLockOrder(t, "source cancellation", cancelSequence,
+		[]string{planTable, jobTable, pointTable, (model.RecoveryPointLifecycleAttempt{}).TableName(), attemptTable})
+	for _, table := range []string{planTable, jobTable} {
+		if captureAttempts[table] != 1 || effectAttempts[table] < 1 || effectAttempts[table] > 2 || cancelAttempts[table] != 1 {
+			t.Fatalf("PostgreSQL %s locking retried or escaped its transaction: capture=%v effect=%v cancel=%v",
+				table, captureAttempts, effectAttempts, cancelAttempts)
 		}
+	}
+	wantEffectPointAttempts := 1
+	if cancelAfterCapture {
+		wantEffectPointAttempts = 0
+	}
+	if captureAttempts[pointTable] != 0 || effectAttempts[pointTable] != wantEffectPointAttempts || cancelAttempts[pointTable] != 1 {
+		t.Fatalf("PostgreSQL exact-point locking attempts: capture=%v effect=%v cancel=%v",
+			captureAttempts, effectAttempts, cancelAttempts)
 	}
 
 	var finalJob model.BackupAssetRecoveryJob
 	if err := fixture.db.Where("id = ?", claim.JobID).Take(&finalJob).Error; err != nil {
 		t.Fatal(err)
 	}
-	if finalJob.State != string(JobStateNeedsAttention) ||
-		finalJob.FailureCategory != recoveryCancellationAfterMutationArmFailureCategory ||
+	wantState, wantFailure, wantWorkspace := string(JobStateNeedsAttention), recoveryCancellationAfterMutationArmFailureCategory, string(WorkspacePhaseCleanupDue)
+	wantArmed := true
+	wantDurableCount := int64(1)
+	if cancelAfterCapture {
+		wantState, wantFailure, wantWorkspace = string(JobStateCanceled), "", initialJob.WorkspacePhase
+		wantArmed, wantDurableCount = false, 0
+	}
+	if finalJob.State != wantState || finalJob.FailureCategory != wantFailure || finalJob.WorkspacePhase != wantWorkspace ||
 		finalJob.TransitionRevision != claim.TransitionRevision+2 ||
 		finalJob.WorkspaceCleanupPhase != initialJob.WorkspaceCleanupPhase ||
 		finalJob.WorkspaceCleanupOwner != initialJob.WorkspaceCleanupOwner ||
@@ -2332,11 +2410,58 @@ func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(
 	if err := prepared.permit.ValidateAt(fixture.now); !errorsIsTargetPermit(err) {
 		t.Fatalf("PostgreSQL cancellation retained a usable first-write permit: %v", err)
 	}
+	if finalJob.WorkspaceMarkerValidationAttemptID != "" || finalJob.WorkspaceMarkerValidationAttemptFence != 0 ||
+		finalJob.WorkspaceMarkerValidationNodeFence != 0 {
+		t.Fatalf("PostgreSQL cancellation created or validated a workspace marker: validation_attempt_present=%t attempt_fence_present=%t node_fence_present=%t",
+			finalJob.WorkspaceMarkerValidationAttemptID != "", finalJob.WorkspaceMarkerValidationAttemptFence != 0, finalJob.WorkspaceMarkerValidationNodeFence != 0)
+	}
+	var attempt model.BackupAssetRecoveryAttempt
+	if err := fixture.db.Where("id = ?", claim.AttemptID).Take(&attempt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if attempt.State != string(AttemptStateCanceled) || attempt.MutationArmed != wantArmed || attempt.Fence != claim.AttemptFence {
+		t.Fatalf("PostgreSQL cancellation attempt state=%q armed_matches=%t fence_matches=%t",
+			attempt.State, attempt.MutationArmed == wantArmed, attempt.Fence == claim.AttemptFence)
+	}
+	var nodeLease model.BackupAssetRecoveryNodeLease
+	if err := fixture.db.Where("id = ?", claim.NodeLeaseID).Take(&nodeLease).Error; err != nil {
+		t.Fatal(err)
+	}
+	if nodeLease.State != "released" || nodeLease.JobID != claim.JobID || nodeLease.AttemptID == nil ||
+		*nodeLease.AttemptID != claim.AttemptID || nodeLease.Fence != claim.NodeFence {
+		t.Fatalf("PostgreSQL cancellation node state=%q job_matches=%t attempt_matches=%t fence_matches=%t",
+			nodeLease.State, nodeLease.JobID == claim.JobID, nodeLease.AttemptID != nil && *nodeLease.AttemptID == claim.AttemptID, nodeLease.Fence == claim.NodeFence)
+	}
+	var latchCount, checkpointCount int64
+	if err := fixture.db.Model(&model.BackupAssetRecoveryEvidence{}).
+		Where("id = ?", recoverySchemaUseLatchRowID).Count(&latchCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.BackupAssetRecoveryCheckpoint{}).
+		Where("job_id = ?", claim.JobID).Count(&checkpointCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if latchCount != wantDurableCount || checkpointCount != wantDurableCount {
+		t.Fatalf("PostgreSQL cancellation left an unexpected latch or reservation: latches=%d checkpoints=%d want=%d",
+			latchCount, checkpointCount, wantDurableCount)
+	}
+	if wantArmed {
+		var checkpoint model.BackupAssetRecoveryCheckpoint
+		if err := fixture.db.Where("job_id = ?", claim.JobID).Take(&checkpoint).Error; err != nil {
+			t.Fatal(err)
+		}
+		if checkpoint.AttemptID != claim.AttemptID || checkpoint.Sequence != 0 || checkpoint.Phase != string(CheckpointPhaseWorkspaceReserved) {
+			t.Fatalf("PostgreSQL cancellation did not preserve the unique workspace reservation: %+v", checkpoint)
+		}
+	} else if prepared.permit.permit.proof != nil {
+		t.Fatal("PostgreSQL pre-arm cancellation returned a sealed write permit")
+	}
 	var sourceLease model.RecoveryPointLease
 	if err := fixture.db.Where("id = ?", claim.SourceFence.LeaseID).Take(&sourceLease).Error; err != nil {
 		t.Fatal(err)
 	}
-	if sourceLease.RecoveryPointID != request.RecoveryPointID || sourceLease.Status != string(backupasset.LeaseReleased) {
+	if sourceLease.RecoveryPointID != request.RecoveryPointID || sourceLease.Status != string(backupasset.LeaseReleased) ||
+		recoverySourceFence(sourceLease) != claim.SourceFence {
 		t.Fatalf("PostgreSQL cancellation source lease: lease_id=%q point_id=%q status=%q want_point_id=%q want_status=%q",
 			sourceLease.ID, sourceLease.RecoveryPointID, sourceLease.Status,
 			request.RecoveryPointID, backupasset.LeaseReleased)
@@ -2375,7 +2500,7 @@ func TestRecoveryPointSourceLifecycleRecoveryPrepareFirstWritePostgresLockOrder(
 			preservedResultSet.CleanupFence == resultSet.CleanupFence,
 			preservedResult.LocatorDigest == result.LocatorDigest)
 	}
-	t.Logf("PostgreSQL PrepareFirstWrite/source cancellation lock order prepare=%v cancel=%v retries=%d sqlstates=%v", prepareSequence, cancelSequence, retryCount, observedStates)
+	t.Logf("PostgreSQL PrepareFirstWrite/source cancellation lock order capture=%v effect=%v cancel=%v retries=%d sqlstates=%v", captureSequence, effectSequence, cancelSequence, retryCount, observedStates)
 }
 
 func cloneRecoverySourceLifecycleLockAttempts(source map[string]int) map[string]int {

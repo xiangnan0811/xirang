@@ -1845,6 +1845,16 @@ type authorizationReceiptLiveRevalidatorSpy struct {
 	observation        RecoveryAuthorityObservation
 }
 
+func newAuthorizationReceiptDriftSpy(now time.Time) *authorizationReceiptLiveRevalidatorSpy {
+	return &authorizationReceiptLiveRevalidatorSpy{
+		err: ErrAuthorizationDenied,
+		observation: RecoveryAuthorityObservation{
+			observedAt: now, expiresAt: now.Add(time.Minute),
+			proof: &recoveryEligibilityProof{bindingDigest: strings.Repeat("e", 64), production: true},
+		},
+	}
+}
+
 func (spy *authorizationReceiptLiveRevalidatorSpy) ObserveRecoveryAuthority(
 	_ context.Context,
 	binding RecoveryAuthorityBinding,
@@ -1896,7 +1906,7 @@ func TestRecoveryAuthorizationObservesOutsideAndRevalidatesInsideMutationTransac
 		AuthorizationReceiptDeleteAuthorize,
 	} {
 		t.Run(string(operation), func(t *testing.T) {
-			fixture := newAuthorizationReceiptServiceFixture(t, operation)
+			fixture := recoveryServiceTestAuthorizationFixture(t, operation, false)
 			spy := &authorizationReceiptLiveRevalidatorSpy{db: fixture.db, revalidateErr: ErrAuthorizationDenied}
 			fixture.dependencies.LiveRevalidator = spy
 			service, err := NewAuthorizationService(fixture.dependencies)
@@ -1998,7 +2008,10 @@ func TestRecoveryAuthorizationReplayAndProofUsedEarlyPathsDoNotObserveExternally
 
 func TestRecoveryAuthorizationRetryTakesFreshAuthorityObservationBeforeEveryMutationTransaction(t *testing.T) {
 	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptWriteAuthorize)
-	spy := &authorizationReceiptLiveRevalidatorSpy{db: fixture.db}
+	spy := &authorizationReceiptLiveRevalidatorSpy{db: fixture.db, observation: RecoveryAuthorityObservation{
+		observedAt: fixture.now, expiresAt: fixture.now.Add(time.Minute),
+		proof: &recoveryEligibilityProof{bindingDigest: strings.Repeat("e", 64), production: true},
+	}}
 	fixture.dependencies.LiveRevalidator = spy
 	service, err := NewAuthorizationService(fixture.dependencies)
 	if err != nil {
@@ -2325,6 +2338,12 @@ func TestRecoveryAuthorizationReceiptAuthorityTimeSourceRevalidationPostgres(t *
 	if err := revalidate(); err == nil {
 		t.Fatal("PostgreSQL source revalidation accepted manifest drift")
 	}
+	t.Run("PlanExpiryPrecision", func(t *testing.T) {
+		fixture := newAuthorizationReceiptPostgresMigrationServiceFixtureWithDeleteCount(
+			t, AuthorizationReceiptWriteAuthorize, false, false, 0,
+		)
+		testRecoveryPlanPreflightExpiryPrecision(t, fixture)
+	})
 }
 
 func TestSourceValidatorRevalidatePlanTxRejectsSameKeyCatalogEntrySubstitution(t *testing.T) {
@@ -4811,6 +4830,224 @@ func TestRecoveryPreflightPolicyIdempotentReplayUsesFrozenExpiryAcrossAdvancingC
 	}
 	if !durable.PreflightExpiresAt.Equal(original.PreflightExpiresAt) || durable.BindingDigest != original.BindingDigest {
 		t.Fatalf("replay changed frozen expiry/binding: before=%+v after=%+v", original, durable)
+	}
+}
+
+func TestRecoveryPlanPreflightExpiryPrecisionSQLite(t *testing.T) {
+	fixture := newAuthorizationReceiptSQLiteMigrationServiceFixture(t, AuthorizationReceiptWriteAuthorize, false, false)
+	testRecoveryPlanPreflightExpiryPrecision(t, fixture)
+}
+
+func testRecoveryPlanPreflightExpiryPrecision(t *testing.T, fixture *authorizationReceiptServiceFixture) {
+	t.Helper()
+	ctx := context.Background()
+	var sourcePlan model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", fixture.request.PlanID).Take(&sourcePlan).Error; err != nil {
+		t.Fatal(err)
+	}
+	var sourceItem model.BackupAssetRecoveryPlanItem
+	if err := fixture.db.Where("plan_id = ?", sourcePlan.ID).First(&sourceItem).Error; err != nil {
+		t.Fatal(err)
+	}
+	validator, err := NewSourceValidator(fixture.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := validator.FreezeSelection(ctx, SourceSelectionRequest{
+		RepositoryID: sourcePlan.RepositoryID, RecoveryPointID: sourcePlan.RecoveryPointID,
+		CatalogGenerationID: sourcePlan.CatalogGenerationID,
+		AssetRefs:           []backupasset.AssetRef{{RecoveryPointID: sourcePlan.RecoveryPointID, EntryID: sourceItem.EntryID}}, MaxItems: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := newRecoveryTargetRootResolverFake(t, sourcePlan.TargetNodeID, sourcePlan.TargetRootID, sourcePlan.EncryptedTargetRootLocator)
+	request := CreatePlanRequest{
+		RequesterID: sourcePlan.RequesterID, Endpoint: "recovery_plan_create",
+		IdempotencyKey: "recovery-plan-expiry-direct-0001", Selection: selection,
+		AuthorityCategory: AuthorityWrite, EstimatedItems: 1, EstimatedBytes: 1,
+		Plan: RecoveryPlan{Binding: PlanBinding{
+			SchemaVersion: 1, SelectionDigest: selection.SelectionDigest, RepositoryID: selection.RepositoryID,
+			RecoveryPointID: selection.RecoveryPointID, SourceRevisionDigest: selection.SourceRevisionDigest,
+			SourceRevision: selection.SourceRevision,
+			Target: TargetBinding{
+				Mode: TargetMode(sourcePlan.TargetMode), NodeID: sourcePlan.TargetNodeID, RootID: sourcePlan.TargetRootID,
+				EncryptedRelativePath: sourcePlan.EncryptedTargetRelativePath,
+				RootLocatorDigest:     sourcePlan.RootLocatorDigest, PathDigest: sourcePlan.PathDigest,
+				BaseNodeRevision: sourcePlan.TargetBaseRevision, CredentialScopeRevision: sourcePlan.CredentialScopeRevision,
+				RootRevision: sourcePlan.RootRevision, FilesystemRevision: sourcePlan.FilesystemRevision,
+			},
+			ConflictPolicy: ConflictPolicy(sourcePlan.ConflictPolicy), OperationSetDigest: sourcePlan.OperationSetDigest,
+			DeleteSetDigest: sourcePlan.DeleteSetDigest, CapabilityRevision: sourcePlan.CapabilityRevision,
+			SecurityDecision: SecurityDecision{
+				Kind: SecurityDecisionKind(sourcePlan.SecurityDecision), DecisionDigest: sourcePlan.SecurityDecisionDigest,
+				FindingSetDigest: sourcePlan.SecurityFindingSetDigest, PolicyRevision: sourcePlan.SecurityPolicyRevision,
+				OverrideBindingDigest: sourcePlan.SecurityOverrideBindingDigest,
+			},
+			PreflightRevision: sourcePlan.PreflightRevision,
+		}},
+	}
+	initialNow := fixture.now.UTC().Truncate(time.Second).Add(123456876 * time.Nanosecond)
+	clock := initialNow
+	service, err := NewPlanService(PlanServiceDependencies{
+		DB: fixture.db, Now: func() time.Time { return clock }, TargetRootResolver: resolver,
+		Policy:          PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: recoveryPlanMaxLogicalBytes},
+		PreflightPolicy: PreflightPolicy{TTL: time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNanoseconds := int64(123456876)
+	if fixture.db.Name() == "postgres" {
+		wantNanoseconds = 123456000
+	}
+	wantExpiry := time.Unix(initialNow.Unix()+3600, wantNanoseconds).UTC()
+	loadPlan := func(id string) model.BackupAssetRecoveryPlan {
+		t.Helper()
+		var plan model.BackupAssetRecoveryPlan
+		if err := fixture.db.Where("id = ?", id).Take(&plan).Error; err != nil {
+			t.Fatal(err)
+		}
+		return plan
+	}
+	assertExpiry := func(plan model.BackupAssetRecoveryPlan) {
+		t.Helper()
+		if !plan.PreflightExpiresAt.Equal(wantExpiry) || plan.PreflightExpiresAt.After(initialNow.Add(time.Hour)) {
+			t.Fatalf("persisted expiry=%s want=%s original limit=%s", plan.PreflightExpiresAt, wantExpiry, initialNow.Add(time.Hour))
+		}
+	}
+
+	created, err := service.CreatePlan(ctx, request)
+	if err != nil || created.Replay || !validOpaqueID(created.PlanID) {
+		t.Fatalf("create plan result=%+v err=%v", created, err)
+	}
+	original := loadPlan(created.PlanID)
+	assertExpiry(original)
+	clock = initialNow.Add(5 * time.Minute)
+	replayed, err := service.CreatePlan(ctx, request)
+	if err != nil || !replayed.Replay || replayed.PlanID != created.PlanID {
+		t.Fatalf("direct replay=%+v err=%v, want plan %s", replayed, err, created.PlanID)
+	}
+	changed := cloneCreatePlanRequest(request)
+	changed.EstimatedBytes++
+	if _, err := service.CreatePlan(ctx, changed); !errors.Is(err, ErrPlanIdempotencyConflict) {
+		t.Fatalf("changed direct intent error=%v, want idempotency conflict", err)
+	}
+	afterReplay := loadPlan(created.PlanID)
+	assertExpiry(afterReplay)
+	if afterReplay.BindingDigest != original.BindingDigest {
+		t.Fatal("direct replay changed the durable binding")
+	}
+
+	clock = initialNow
+	txRequest := cloneCreatePlanRequest(request)
+	txRequest.IdempotencyKey = "recovery-plan-expiry-transaction-0002"
+	tx := fixture.db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() { _ = tx.Rollback().Error })
+	rolledBack, err := service.CreatePlanTx(ctx, tx, txRequest)
+	if err != nil || rolledBack.Replay || !validOpaqueID(rolledBack.PlanID) {
+		t.Fatalf("create caller-owned plan result=%+v err=%v", rolledBack, err)
+	}
+	var pending model.BackupAssetRecoveryPlan
+	if err := tx.Where("id = ?", rolledBack.PlanID).Take(&pending).Error; err != nil {
+		t.Fatal(err)
+	}
+	assertExpiry(pending)
+	if err := tx.Rollback().Error; err != nil {
+		t.Fatalf("caller could not roll back plan transaction: %v", err)
+	}
+	var count int64
+	if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).Where("id = ?", rolledBack.PlanID).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("rolled-back plan count=%d err=%v", count, err)
+	}
+
+	var txCreated, txReplay CreatePlanResult
+	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+		var createErr error
+		txCreated, createErr = service.CreatePlanTx(ctx, tx, txRequest)
+		if createErr != nil {
+			return createErr
+		}
+		txReplay, createErr = service.CreatePlanTx(ctx, tx, txRequest)
+		return createErr
+	}); err != nil {
+		t.Fatalf("create and replay caller-owned transaction: %v", err)
+	}
+	if txCreated.Replay || !validOpaqueID(txCreated.PlanID) || !txReplay.Replay || txReplay.PlanID != txCreated.PlanID {
+		t.Fatalf("transactional create=%+v replay=%+v", txCreated, txReplay)
+	}
+	txOriginal := loadPlan(txCreated.PlanID)
+	assertExpiry(txOriginal)
+	clock = initialNow.Add(5 * time.Minute)
+	txReplay, err = service.CreatePlan(ctx, txRequest)
+	if err != nil || !txReplay.Replay || txReplay.PlanID != txCreated.PlanID {
+		t.Fatalf("standalone replay of caller-owned create=%+v err=%v", txReplay, err)
+	}
+	changed = cloneCreatePlanRequest(txRequest)
+	changed.EstimatedBytes++
+	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+		_, createErr := service.CreatePlanTx(ctx, tx, changed)
+		if !errors.Is(createErr, ErrPlanIdempotencyConflict) {
+			return fmt.Errorf("changed transactional intent error=%v, want idempotency conflict", createErr)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	txDurable := loadPlan(txCreated.PlanID)
+	assertExpiry(txDurable)
+	if txDurable.BindingDigest != txOriginal.BindingDigest {
+		t.Fatal("transactional replay changed the durable binding")
+	}
+
+	clock = initialNow
+	service.preflightPolicy.TTL = time.Nanosecond
+	shortRequest := cloneCreatePlanRequest(request)
+	shortRequest.IdempotencyKey = "recovery-plan-expiry-submicro-0003"
+	shortResult, shortErr := service.CreatePlan(ctx, shortRequest)
+	if fixture.db.Name() == "postgres" {
+		if !errors.Is(shortErr, ErrInvalidRecoveryPlan) {
+			t.Fatalf("PostgreSQL expiry earlier than the real clock result=%+v err=%v", shortResult, shortErr)
+		}
+	} else {
+		if shortErr != nil || shortResult.Replay {
+			t.Fatalf("SQLite nanosecond expiry result=%+v err=%v", shortResult, shortErr)
+		}
+		shortPlan := loadPlan(shortResult.PlanID)
+		if !shortPlan.PreflightExpiresAt.Equal(initialNow.Add(time.Nanosecond)) {
+			t.Fatalf("SQLite nanosecond expiry=%s want=%s", shortPlan.PreflightExpiresAt, initialNow.Add(time.Nanosecond))
+		}
+	}
+	shortRequest.IdempotencyKey = "recovery-plan-expiry-tx-submicro-0004"
+	var shortTxResult CreatePlanResult
+	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+		var createErr error
+		shortTxResult, createErr = service.CreatePlanTx(ctx, tx, shortRequest)
+		if fixture.db.Name() == "postgres" {
+			if !errors.Is(createErr, ErrInvalidRecoveryPlan) {
+				return fmt.Errorf("PostgreSQL transactional expiry earlier than the real clock: result=%+v err=%v", shortTxResult, createErr)
+			}
+			return nil
+		}
+		return createErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.db.Name() != "postgres" {
+		if shortTxResult.Replay || !validOpaqueID(shortTxResult.PlanID) {
+			t.Fatalf("SQLite transactional nanosecond expiry result=%+v", shortTxResult)
+		}
+		shortPlan := loadPlan(shortTxResult.PlanID)
+		if !shortPlan.PreflightExpiresAt.Equal(initialNow.Add(time.Nanosecond)) {
+			t.Fatalf("SQLite transactional nanosecond expiry=%s want=%s", shortPlan.PreflightExpiresAt, initialNow.Add(time.Nanosecond))
+		}
+	}
+	oldPlan := loadPlan(sourcePlan.ID)
+	if !oldPlan.PreflightExpiresAt.Equal(sourcePlan.PreflightExpiresAt) || oldPlan.BindingDigest != sourcePlan.BindingDigest {
+		t.Fatal("creating new plans changed an existing plan's expiry or binding")
 	}
 }
 

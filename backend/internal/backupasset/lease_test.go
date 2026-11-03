@@ -406,6 +406,8 @@ func TestLeaseAcquireTxUsesSuppliedPointDeadline(t *testing.T) {
 	service, clock, _ := newLeaseTestHarness(t, standardLeaseConfig())
 	deadline := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	request := standardAcquireLeaseRequest()
+	request.HolderType = LeaseHolderPointPublication
+	request.OwnerID = "publication-producer"
 	request.AbsoluteDeadline = deadline
 	first, err := service.Acquire(context.Background(), request)
 	if err != nil {
@@ -418,6 +420,7 @@ func TestLeaseAcquireTxUsesSuppliedPointDeadline(t *testing.T) {
 		t.Fatalf("release first stage: %v", err)
 	}
 	clock.Advance(time.Minute)
+	request.OwnerID = "publication-reconciler"
 	second, err := service.Acquire(context.Background(), request)
 	if err != nil {
 		t.Fatalf("acquire fresh stage: %v", err)
@@ -471,6 +474,8 @@ func TestLeaseValidateAndReleaseTxShareCallerTransaction(t *testing.T) {
 func TestLeaseFreshStageCannotMovePointDeadline(t *testing.T) {
 	service, clock, _ := newLeaseTestHarness(t, standardLeaseConfig())
 	request := standardAcquireLeaseRequest()
+	request.HolderType = LeaseHolderPointPublication
+	request.OwnerID = "publication-producer"
 	request.AbsoluteDeadline = time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	first, err := service.Acquire(context.Background(), request)
 	if err != nil {
@@ -480,10 +485,197 @@ func TestLeaseFreshStageCannotMovePointDeadline(t *testing.T) {
 		t.Fatalf("release first stage: %v", err)
 	}
 	clock.Advance(time.Minute)
+	request.OwnerID = "publication-reconciler"
 	request.AbsoluteDeadline = request.AbsoluteDeadline.Add(time.Hour)
-	if _, err := service.Acquire(context.Background(), request); err == nil {
-		t.Fatal("fresh stage moved the point-wide deadline")
+	if _, err := service.Acquire(context.Background(), request); !errors.Is(err, ErrConflict) {
+		t.Fatalf("fresh publication stage changed point deadline: %v", err)
 	}
+}
+
+func TestLeaseExplicitDeadlineScopesSQLite(t *testing.T) {
+	_, _, db := newLeaseTestHarness(t, standardLeaseConfig())
+	runLeaseExplicitDeadlineScopes(t, db)
+}
+
+func runLeaseExplicitDeadlineScopes(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	ctx := context.Background()
+	setup := func(t *testing.T, pointDigit string) (*LeaseService, *leaseTestClock, AcquireLeaseRequest) {
+		t.Helper()
+		clock := &leaseTestClock{now: time.Date(2026, 7, 13, 5, 6, 7, 0, time.UTC)}
+		service, err := NewLeaseService(db, clock.Now, standardLeaseConfig())
+		if err != nil {
+			t.Fatalf("create lease service: %v", err)
+		}
+		return service, clock, AcquireLeaseRequest{
+			RecoveryPointID: strings.Repeat(pointDigit, 32),
+			HolderType:      LeaseHolderRecoveryJob,
+			OwnerID:         "recovery-job-a",
+		}
+	}
+	acquire := func(t *testing.T, service *LeaseService, request AcquireLeaseRequest) Lease {
+		t.Helper()
+		lease, err := service.Acquire(ctx, request)
+		if err != nil {
+			t.Fatalf("acquire %s lease: %v", request.HolderType, err)
+		}
+		if !lease.AbsoluteDeadline.Equal(request.AbsoluteDeadline) {
+			t.Fatalf("lease deadline=%s, want %s", lease.AbsoluteDeadline, request.AbsoluteDeadline)
+		}
+		return lease
+	}
+	release := func(t *testing.T, service *LeaseService, lease Lease) {
+		t.Helper()
+		if err := service.Release(ctx, lease.Fence); err != nil {
+			t.Fatalf("release %s lease: %v", lease.HolderType, err)
+		}
+	}
+
+	t.Run("released_processing_then_recovery", func(t *testing.T) {
+		service, clock, request := setup(t, "b")
+		request.HolderType = LeaseHolderProcessingJob
+		request.OwnerID = "processing-job"
+		request.AbsoluteDeadline = clock.Now().Add(2 * time.Hour)
+		processing := acquire(t, service, request)
+		release(t, service, processing)
+
+		clock.Advance(time.Second)
+		request.HolderType = LeaseHolderRecoveryJob
+		request.OwnerID = "recovery-job-a"
+		request.AbsoluteDeadline = clock.Now().Add(10 * time.Minute)
+		recovery := acquire(t, service, request)
+		if err := service.ValidateFence(ctx, recovery.Fence); err != nil {
+			t.Fatalf("independent recovery fence: %v", err)
+		}
+
+		// An equal owner ID under another holder is still a different scope.
+		clock.Advance(time.Second)
+		request.OwnerID = "processing-job"
+		request.AbsoluteDeadline = clock.Now().Add(15 * time.Minute)
+		acquire(t, service, request)
+	})
+
+	t.Run("recovery_owner_continuity", func(t *testing.T) {
+		service, clock, request := setup(t, "c")
+		request.AbsoluteDeadline = clock.Now().Add(30 * time.Minute)
+		first := acquire(t, service, request)
+		release(t, service, first)
+
+		clock.Advance(time.Second)
+		other := request
+		other.OwnerID = "recovery-job-b"
+		other.AbsoluteDeadline = clock.Now().Add(50 * time.Minute)
+		otherLease := acquire(t, service, other)
+
+		clock.Advance(time.Second)
+		for _, changedDeadline := range []time.Time{request.AbsoluteDeadline.Add(-time.Second), request.AbsoluteDeadline.Add(time.Second)} {
+			changed := request
+			changed.AbsoluteDeadline = changedDeadline
+			if _, err := service.Acquire(ctx, changed); !errors.Is(err, ErrConflict) {
+				t.Fatalf("same owner changed historical deadline to %s: %v", changedDeadline, err)
+			}
+		}
+		fresh := acquire(t, service, request)
+		if err := service.ValidateFence(ctx, first.Fence); !errors.Is(err, ErrLeaseFenceLost) {
+			t.Fatalf("released recovery fence remained valid: %v", err)
+		}
+		for _, lease := range []Lease{fresh, otherLease} {
+			if err := service.ValidateFence(ctx, lease.Fence); err != nil {
+				t.Fatalf("independent recovery owner lost its fence: %v", err)
+			}
+		}
+
+		anotherPoint := request
+		anotherPoint.RecoveryPointID = strings.Repeat("1", 32)
+		anotherPoint.AbsoluteDeadline = clock.Now().Add(20 * time.Minute)
+		acquire(t, service, anotherPoint)
+	})
+
+	t.Run("publication_stages", func(t *testing.T) {
+		service, clock, request := setup(t, "d")
+		request.HolderType = LeaseHolderProcessingJob
+		request.OwnerID = "processing-job"
+		request.AbsoluteDeadline = clock.Now().Add(2 * time.Hour)
+		priorConsumer := acquire(t, service, request)
+		release(t, service, priorConsumer)
+
+		clock.Advance(time.Second)
+		request.HolderType = LeaseHolderPointPublication
+		request.OwnerID = "publication-producer"
+		request.AbsoluteDeadline = clock.Now().Add(time.Hour)
+		publicationDeadline := request.AbsoluteDeadline
+		first := acquire(t, service, request)
+		release(t, service, first)
+
+		clock.Advance(time.Second)
+		consumer := request
+		consumer.HolderType = LeaseHolderRecoveryJob
+		consumer.OwnerID = "recovery-job"
+		consumer.AbsoluteDeadline = clock.Now().Add(20 * time.Minute)
+		intervening := acquire(t, service, consumer)
+		release(t, service, intervening)
+
+		clock.Advance(time.Second)
+		request.OwnerID = "publication-reconciler"
+		for _, changedDeadline := range []time.Time{
+			consumer.AbsoluteDeadline,
+			publicationDeadline.Add(-time.Microsecond),
+			publicationDeadline.Add(time.Microsecond),
+		} {
+			changed := request
+			changed.AbsoluteDeadline = changedDeadline
+			if _, err := service.Acquire(ctx, changed); !errors.Is(err, ErrConflict) {
+				t.Fatalf("publication stage changed deadline to %s: %v", changedDeadline, err)
+			}
+		}
+		acquire(t, service, request)
+
+		anotherPoint := request
+		anotherPoint.RecoveryPointID = strings.Repeat("2", 32)
+		anotherPoint.AbsoluteDeadline = clock.Now().Add(40 * time.Minute)
+		acquire(t, service, anotherPoint)
+
+		clock.Advance(publicationDeadline.Sub(clock.Now()))
+		if _, err := service.Acquire(ctx, request); !errors.Is(err, ErrLeaseDeadlineExceeded) {
+			t.Fatalf("publication stage at its deadline: %v", err)
+		}
+	})
+
+	t.Run("new_scope_deadline_bounds", func(t *testing.T) {
+		service, clock, request := setup(t, "e")
+		prior := request
+		prior.HolderType = LeaseHolderProcessingJob
+		prior.AbsoluteDeadline = clock.Now().Add(2 * time.Hour)
+		processing := acquire(t, service, prior)
+		release(t, service, processing)
+
+		request.AbsoluteDeadline = clock.Now()
+		if _, err := service.Acquire(ctx, request); !errors.Is(err, ErrLeaseDeadlineExceeded) {
+			t.Fatalf("new scope at current time: %v", err)
+		}
+		request.AbsoluteDeadline = clock.Now().Add(7*24*time.Hour + time.Nanosecond)
+		if _, err := service.Acquire(ctx, request); !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("new scope beyond maximum deadline: %v", err)
+		}
+		request.AbsoluteDeadline = clock.Now().Add(7 * 24 * time.Hour)
+		acquire(t, service, request)
+	})
+
+	t.Run("zero_deadline_uses_configuration", func(t *testing.T) {
+		service, clock, request := setup(t, "f")
+		request.AbsoluteDeadline = clock.Now().Add(10 * time.Minute)
+		first := acquire(t, service, request)
+		release(t, service, first)
+		clock.Advance(time.Second)
+		request.AbsoluteDeadline = time.Time{}
+		lease, err := service.Acquire(ctx, request)
+		if err != nil {
+			t.Fatalf("acquire zero-deadline lease: %v", err)
+		}
+		if want := clock.Now().Add(2 * time.Hour); !lease.AbsoluteDeadline.Equal(want) {
+			t.Fatalf("zero-deadline lease deadline=%s, want %s", lease.AbsoluteDeadline, want)
+		}
+	})
 }
 
 func TestLeaseTakeoverTxRotatesFenceAndPreservesDeadline(t *testing.T) {

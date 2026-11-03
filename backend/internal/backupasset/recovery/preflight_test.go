@@ -110,6 +110,7 @@ type preflightExternalEvidenceFake struct {
 	issue        bool
 	observeCalls int
 	requests     []PreflightExternalEvidenceRequest
+	onObserve    func()
 }
 
 func (fake *preflightExternalEvidenceFake) ObservePreflightEvidence(
@@ -118,10 +119,19 @@ func (fake *preflightExternalEvidenceFake) ObservePreflightEvidence(
 ) (PreflightExternalEvidence, error) {
 	fake.observeCalls++
 	fake.requests = append(fake.requests, request)
+	if fake.onObserve != nil {
+		fake.onObserve()
+	}
 	if fake.issue {
 		return issuePreflightExternalEvidenceForTest(request, fake.evidence), nil
 	}
 	return fake.evidence, nil
+}
+
+func (*preflightExternalEvidenceFake) RevalidatePreflightEvidenceTx(
+	context.Context, *gorm.DB, PreflightExternalEvidenceRequest, PreflightExternalEvidence,
+) error {
+	return ErrRecoveryPreflightConflict
 }
 
 func issuePreflightExternalEvidenceForTest(
@@ -136,16 +146,21 @@ func issuePreflightExternalEvidenceForTest(
 }
 
 type preflightExternalEvidenceAuthorityFake struct {
-	observation PreflightExternalEvidenceObservation
-	err         error
-	calls       int
-	requests    []PreflightExternalEvidenceRequest
-	onObserve   func()
-	respond     func(PreflightExternalEvidenceRequest) (PreflightExternalEvidenceObservation, error)
+	observation     PreflightExternalEvidenceObservation
+	err             error
+	calls           int
+	requests        []PreflightExternalEvidenceRequest
+	onObserve       func()
+	afterObserve    func()
+	prepare         func(PreflightExternalEvidenceRequest)
+	delegate        RecoveryPreflightExternalEvidenceAuthority
+	onRevalidate    func()
+	afterRevalidate func()
+	revalidateCalls int
 }
 
 func (fake *preflightExternalEvidenceAuthorityFake) ObserveRecoveryPreflightEvidence(
-	_ context.Context,
+	ctx context.Context,
 	request PreflightExternalEvidenceRequest,
 ) (PreflightExternalEvidenceObservation, error) {
 	fake.calls++
@@ -153,17 +168,142 @@ func (fake *preflightExternalEvidenceAuthorityFake) ObserveRecoveryPreflightEvid
 	if fake.onObserve != nil {
 		fake.onObserve()
 	}
-	if fake.respond != nil {
-		return fake.respond(request)
+	if fake.prepare != nil {
+		fake.prepare(request)
+	}
+	if fake.delegate != nil {
+		observation, err := fake.delegate.ObserveRecoveryPreflightEvidence(ctx, request)
+		if err == nil && fake.afterObserve != nil {
+			fake.afterObserve()
+		}
+		return observation, err
 	}
 	return fake.observation, fake.err
 }
 
+func (fake *preflightExternalEvidenceAuthorityFake) RevalidateRecoveryPreflightEvidenceTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	request PreflightExternalEvidenceRequest,
+	observation RecoveryAuthorityObservation,
+) error {
+	fake.revalidateCalls++
+	if fake.onRevalidate != nil {
+		fake.onRevalidate()
+	}
+	if fake.delegate == nil {
+		return ErrTargetPreflightUnavailable
+	}
+	err := fake.delegate.RevalidateRecoveryPreflightEvidenceTx(ctx, tx, request, observation)
+	if fake.afterRevalidate != nil {
+		fake.afterRevalidate()
+	}
+	return err
+}
+
+// preparePreflightRsyncSourceFixture freezes the fixture's source after selecting
+// the managed Rsync provider required by the real eligibility authority.
+func preparePreflightRsyncSourceFixture(t *testing.T, base *planServiceTestFixture) {
+	t.Helper()
+	if err := base.db.Model(&model.BackupRepository{}).Where("id = ?", base.source.repositoryID).
+		Updates(map[string]any{"provider_kind": string(backupasset.ProviderRsync),
+			"version_mode":       string(backupasset.VersionHardlinkTree),
+			"immutability_level": string(backupasset.ImmutabilityXirangManaged)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := base.db.Model(&model.RecoveryPoint{}).Where("id = ?", base.source.recoveryPointID).
+		Updates(map[string]any{"semantics": string(backupasset.PointXirangManifest),
+			"immutability_level": string(backupasset.ImmutabilityXirangManaged)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	validator, err := NewSourceValidator(base.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := validator.FreezeSelection(context.Background(), SourceSelectionRequest{
+		RepositoryID: base.source.repositoryID, RecoveryPointID: base.source.recoveryPointID,
+		CatalogGenerationID: base.source.catalogGenerationID, AssetRefs: []backupasset.AssetRef{base.source.directoryRef},
+		MaxItems: len(base.source.fileRefs),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.request.Selection = selection
+	base.request.Plan.Binding.SelectionDigest = selection.SelectionDigest
+	base.request.Plan.Binding.SourceRevisionDigest = selection.SourceRevisionDigest
+	base.request.Plan.Binding.SourceRevision = selection.SourceRevision
+	// The existing eligibility source fixture authenticates its namespace at this time.
+	base.now = time.Date(2026, 8, 15, 8, 0, 0, 0, time.UTC)
+	base.request.Plan.PreflightExpiresAt = base.now.Add(time.Hour)
+	base.service.now = func() time.Time { return base.now }
+}
+
+func newPreflightSealedAuthorityForTest(
+	t *testing.T, db *gorm.DB, plan model.BackupAssetRecoveryPlan, now func() time.Time, targetRevision string,
+) (*preflightExternalEvidenceAuthorityFake, *recoveryEligibilityHarness) {
+	t.Helper()
+	harness := newRecoveryEligibilityHarnessOnDB(t, db)
+	request := PreflightExternalEvidenceRequest{
+		PlanID: plan.ID, PlanBindingDigest: plan.BindingDigest, PlanTransitionRevision: plan.TransitionRevision,
+		SourceRevisionDigest: plan.SourceRevisionDigest, CapabilityRevision: plan.CapabilityRevision,
+		PolicyRevision: plan.SecurityPolicyRevision, FindingSetDigest: plan.SecurityFindingSetDigest,
+		TargetRootRevision: plan.RootRevision, TargetFilesystemRevision: plan.FilesystemRevision,
+		TargetRevision: targetRevision, RequiredBytes: plan.EstimatedBytes, RequiredInodes: plan.EstimatedItems,
+	}
+	binding, err := loadRecoveryEligibilityPreflightBinding(context.Background(), db, request)
+	if err != nil {
+		t.Fatalf("load fixture authority binding: %v", err)
+	}
+	harness.binding = binding
+	harness.source.binding = binding
+	harness.source.namespaceCaptured.sourceRef = binding.SourceRef
+	harness.source.namespaceDurable.(*lateRecoverySourceNamespaceDurable).current = harness.source.namespaceCaptured
+	harness.security.current.PolicyRevision = binding.SecurityPolicyRevision
+	harness.security.current.FindingSetDigest = binding.SecurityFindingSetDigest
+	harness.security.current.Disposition = SecurityFindingDispositionBlocked
+	harness.security.current.ObservedAt = now()
+	harness.root.current.NodeID = binding.TargetNodeID
+	harness.root.current.RootID = binding.TargetRootID
+	harness.root.current.LocatorDigest = binding.RootLocatorDigest
+	harness.root.current.NodeRevision = binding.PreflightNodeRevision
+	harness.root.current.CredentialRevision = binding.CredentialScopeRevision
+	harness.target.current.NodeRevision = binding.PreflightNodeRevision
+	harness.target.current.CredentialRevision = binding.CredentialScopeRevision
+	harness.target.current.RootRevision = binding.RootRevision
+	harness.target.current.FilesystemRevision = binding.FilesystemRevision
+	harness.target.current.TargetRevision = targetRevision
+	harness.target.current.ObservedAt = now()
+	harness.target.current.ExpiresAt = plan.PreflightExpiresAt.Add(time.Minute)
+	harness.target.current.FreeBytes = binding.RequiredBytes + 1000
+	harness.target.current.FreeInodes = binding.RequiredInodes + 100
+	harness.authority.now = now
+	fake := &preflightExternalEvidenceAuthorityFake{delegate: harness.authority}
+	fake.prepare = func(request PreflightExternalEvidenceRequest) {
+		harness.target.current.TargetRevision = request.TargetRevision
+	}
+	return fake, harness
+}
+
 func TestRecoveryPreflightExternalEvidenceAdapterIssuesOnlyObservedEvidence(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	input, targetFacts, externalFacts := validTargetPreflightInput(t, now)
-	request := preflightExternalEvidenceRequestForTest(input, targetFacts)
-	observation := preflightExternalEvidenceObservationForTest(request, externalFacts)
+	harness := newRecoveryEligibilityHarness(t)
+	now := harness.now
+	sealed, err := harness.authority.ObserveRecoveryAuthority(context.Background(), harness.binding)
+	if err != nil {
+		t.Fatalf("observe fixture authority: %v", err)
+	}
+	request := PreflightExternalEvidenceRequest{
+		PlanID: harness.binding.PlanID, PlanBindingDigest: harness.binding.PlanBindingDigest,
+		PlanTransitionRevision: harness.binding.PlanTransitionRevision,
+		SourceRevisionDigest:   harness.binding.SourceRevisionDigest, CapabilityRevision: harness.binding.CapabilityRevision,
+		PolicyRevision: harness.binding.SecurityPolicyRevision, FindingSetDigest: harness.binding.SecurityFindingSetDigest,
+		TargetRootRevision: harness.binding.RootRevision, TargetFilesystemRevision: harness.binding.FilesystemRevision,
+		TargetRevision: harness.binding.PreflightTargetRevision,
+		RequiredBytes:  harness.binding.RequiredBytes, RequiredInodes: harness.binding.RequiredInodes,
+	}
+	observation, err := recoveryEligibilityPreflightProjection(request, sealed)
+	if err != nil {
+		t.Fatalf("project fixture authority: %v", err)
+	}
 
 	if _, err := NewRecoveryPreflightExternalEvidenceAdapter(nil); !errors.Is(err, ErrTargetPreflightUnavailable) {
 		t.Fatalf("nil authority error = %v, want ErrTargetPreflightUnavailable", err)
@@ -227,6 +367,24 @@ func TestRecoveryPreflightExternalEvidenceAdapterIssuesOnlyObservedEvidence(t *t
 		}},
 		{name: "required bytes", mutate: func(value *PreflightExternalEvidenceObservation) { value.RequiredBytes++ }},
 		{name: "required inodes", mutate: func(value *PreflightExternalEvidenceObservation) { value.RequiredInodes++ }},
+		{name: "observation time", mutate: func(value *PreflightExternalEvidenceObservation) {
+			value.ObservedAt = value.ObservedAt.Add(time.Second)
+		}},
+		{name: "observation expiry", mutate: func(value *PreflightExternalEvidenceObservation) {
+			value.ObservationExpiresAt = value.ObservationExpiresAt.Add(time.Second)
+		}},
+		{name: "unsealed observation", mutate: func(value *PreflightExternalEvidenceObservation) { value.authority = RecoveryAuthorityObservation{} }},
+		{name: "outer authority time rewrite", mutate: func(value *PreflightExternalEvidenceObservation) {
+			value.ObservationExpiresAt = value.ObservationExpiresAt.Add(time.Second)
+			value.authority.expiresAt = value.ObservationExpiresAt
+		}},
+		{name: "sealed target time rewrite", mutate: func(value *PreflightExternalEvidenceObservation) {
+			value.ObservationExpiresAt = value.ObservationExpiresAt.Add(time.Second)
+			value.authority.expiresAt = value.ObservationExpiresAt
+			value.authority.binding.target.ExpiresAt = value.ObservationExpiresAt
+		}},
+		{name: "scalar source access", mutate: func(value *PreflightExternalEvidenceObservation) { value.SourceAccessible = false }},
+		{name: "scalar reservation", mutate: func(value *PreflightExternalEvidenceObservation) { value.ReservedBytes++ }},
 	}
 	for _, testCase := range bindingSubstitutions {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -263,8 +421,42 @@ func TestRecoveryPreflightExternalEvidenceAdapterIssuesOnlyObservedEvidence(t *t
 			}
 		})
 	}
+	for _, mutate := range []func(*PreflightExternalEvidence){
+		func(value *PreflightExternalEvidence) {
+			value.ObservationExpiresAt = value.ObservationExpiresAt.Add(time.Second)
+		},
+		func(value *PreflightExternalEvidence) { value.ObservedAt = value.ObservedAt.Add(-time.Second) },
+	} {
+		candidate := clonePreflightExternalEvidence(evidence)
+		mutate(&candidate)
+		candidate.proof.bindingDigest = preflightExternalEvidenceProofDigest(candidate)
+		if err := candidate.ValidateFor(now, request); !errors.Is(err, ErrInvalidTargetPreflight) {
+			t.Fatalf("retimestamped and rehashed evidence error = %v", err)
+		}
+	}
+	oldProof := clonePreflightExternalEvidence(evidence)
+	oldProof.proof.bindingDigest = framedDigest(
+		"xirang/recovery/preflight-external-evidence-proof/v1",
+		oldProof.proof.requestDigest, strconv.FormatBool(oldProof.proof.production),
+		oldProof.ObservedAt.UTC().Format(time.RFC3339Nano), oldProof.ObservationExpiresAt.UTC().Format(time.RFC3339Nano),
+		oldProof.SourceRevisionDigest, oldProof.CapabilityRevision, oldProof.PolicyRevision,
+		oldProof.FindingSetDigest, string(oldProof.FindingDisposition), strconv.FormatBool(oldProof.SourceAccessible),
+		strconv.FormatBool(oldProof.OverlapsXirangRoot), strconv.FormatBool(oldProof.OverlapsSourceRoot),
+		strconv.FormatInt(oldProof.ReservedBytes, 10), strconv.FormatInt(oldProof.ReservedInodes, 10),
+	)
+	if err := oldProof.ValidateFor(now, request); !errors.Is(err, ErrInvalidTargetPreflight) {
+		t.Fatalf("v1 preflight proof error=%v, want invalid", err)
+	}
+	oldSeal := clonePreflightExternalEvidence(evidence)
+	oldAuthorityProof := *oldSeal.proof.authority.proof
+	oldAuthorityProof.bindingDigest = strings.Repeat("f", 64)
+	oldSeal.proof.authority.proof = &oldAuthorityProof
+	oldSeal.proof.bindingDigest = preflightExternalEvidenceProofDigest(oldSeal)
+	if err := oldSeal.ValidateFor(now, request); !errors.Is(err, ErrInvalidTargetPreflight) {
+		t.Fatalf("rebound obsolete authority proof error=%v, want invalid", err)
+	}
 
-	testIssued := issuePreflightExternalEvidenceForTest(request, externalFacts)
+	testIssued := issuePreflightExternalEvidenceForTest(request, evidence)
 	if testIssued.proof == nil || testIssued.proof.production {
 		t.Fatal("test evidence unexpectedly carries production authority")
 	}
@@ -278,40 +470,14 @@ func TestRecoveryPreflightExternalEvidenceAdapterIssuesOnlyObservedEvidence(t *t
 	if _, err = failingAdapter.ObservePreflightEvidence(context.Background(), request); !errors.Is(err, ErrTargetPreflightUnavailable) || strings.Contains(err.Error(), privateFailure) {
 		t.Fatalf("private authority error = %v, want sanitized unavailable", err)
 	}
-}
-
-func preflightExternalEvidenceRequestForTest(
-	input TargetPreflightInput,
-	target TargetRootProbeFacts,
-) PreflightExternalEvidenceRequest {
-	binding := input.targetPermit.proof.sessionBinding
-	return PreflightExternalEvidenceRequest{
-		PlanID: binding.planID, PlanBindingDigest: binding.planBindingDigest,
-		PlanTransitionRevision: binding.planTransitionRevision,
-		SourceRevisionDigest:   input.Frozen.SourceRevisionDigest,
-		CapabilityRevision:     input.Frozen.CapabilityRevision, PolicyRevision: input.Frozen.PolicyRevision,
-		FindingSetDigest: input.Frozen.FindingSetDigest, TargetRootRevision: target.RootRevision,
-		TargetFilesystemRevision: target.FilesystemRevision, TargetRevision: target.TargetRevision,
-		RequiredBytes: input.ProbeRequest.RequiredBytes, RequiredInodes: input.ProbeRequest.RequiredInodes,
+	conflictAdapter, err := NewRecoveryPreflightExternalEvidenceAdapter(
+		&preflightExternalEvidenceAuthorityFake{err: ErrRecoveryPreflightConflict},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func preflightExternalEvidenceObservationForTest(
-	request PreflightExternalEvidenceRequest,
-	evidence PreflightExternalEvidence,
-) PreflightExternalEvidenceObservation {
-	return PreflightExternalEvidenceObservation{
-		PlanID: request.PlanID, PlanBindingDigest: request.PlanBindingDigest,
-		PlanTransitionRevision: request.PlanTransitionRevision,
-		SourceRevisionDigest:   request.SourceRevisionDigest, CapabilityRevision: request.CapabilityRevision,
-		PolicyRevision: request.PolicyRevision, FindingSetDigest: request.FindingSetDigest,
-		TargetRootRevision:       request.TargetRootRevision,
-		TargetFilesystemRevision: request.TargetFilesystemRevision, TargetRevision: request.TargetRevision,
-		RequiredBytes: request.RequiredBytes, RequiredInodes: request.RequiredInodes,
-		ObservedAt: evidence.ObservedAt, ExpiresAt: evidence.ExpiresAt,
-		FindingDisposition: evidence.FindingDisposition, SourceAccessible: evidence.SourceAccessible,
-		OverlapsXirangRoot: evidence.OverlapsXirangRoot, OverlapsSourceRoot: evidence.OverlapsSourceRoot,
-		ReservedBytes: evidence.ReservedBytes, ReservedInodes: evidence.ReservedInodes,
+	if _, err := conflictAdapter.ObservePreflightEvidence(context.Background(), request); !errors.Is(err, ErrRecoveryPreflightConflict) {
+		t.Fatalf("authority conflict was not preserved: %v", err)
 	}
 }
 
@@ -320,8 +486,11 @@ func TestTargetPreflightEvaluatorRequiresIndependentExternalEvidence(t *testing.
 	input, targetFacts, externalFacts := validTargetPreflightInput(t, now)
 	target := &readOnlyPreflightTargetFake{facts: targetFacts}
 
-	if _, err := NewTargetPreflightEvaluator(target, nil); !errors.Is(err, ErrInvalidTargetPreflight) {
+	if _, err := NewTargetPreflightEvaluator(target, nil, func() time.Time { return now }); !errors.Is(err, ErrInvalidTargetPreflight) {
 		t.Fatalf("nil external-evidence port error = %v, want ErrInvalidTargetPreflight", err)
+	}
+	if _, err := NewTargetPreflightEvaluator(target, &preflightExternalEvidenceFake{}, nil); !errors.Is(err, ErrInvalidTargetPreflight) {
+		t.Fatalf("nil evaluator clock error = %v, want ErrInvalidTargetPreflight", err)
 	}
 	targetType := reflect.TypeOf(TargetRootProbeFacts{})
 	for _, forbidden := range []string{
@@ -335,7 +504,7 @@ func TestTargetPreflightEvaluatorRequiresIndependentExternalEvidence(t *testing.
 	}
 
 	unproved := &preflightExternalEvidenceFake{evidence: externalFacts}
-	evaluator, err := NewTargetPreflightEvaluator(target, unproved)
+	evaluator, err := NewTargetPreflightEvaluator(target, unproved, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("construct evaluator with unproved fake: %v", err)
 	}
@@ -344,7 +513,7 @@ func TestTargetPreflightEvaluatorRequiresIndependentExternalEvidence(t *testing.
 	}
 
 	external := &preflightExternalEvidenceFake{evidence: externalFacts, issue: true}
-	evaluator, err = NewTargetPreflightEvaluator(target, external)
+	evaluator, err = NewTargetPreflightEvaluator(target, external, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("construct evaluator with independent evidence: %v", err)
 	}
@@ -483,6 +652,11 @@ func TestRecoveryPreflightPolicyOwnsExpiryAndRejectsInvalidBounds(t *testing.T) 
 			t.Fatalf("policy=%+v service=%v error=%v, want unavailable", policy, service, err)
 		}
 	}
+	if service, err := NewPreflightService(PreflightServiceDependencies{
+		DB: fixture.db, Evaluator: fixture.service.evaluator, Policy: PreflightPolicy{TTL: time.Hour},
+	}); service != nil || !errors.Is(err, ErrTargetPreflightUnavailable) {
+		t.Fatalf("nil service clock service=%v error=%v", service, err)
+	}
 
 	fixture.request.Input.SnapshotTTL = time.Minute
 	result, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
@@ -503,6 +677,7 @@ func TestRecoveryPreflightPolicyUsesDurablePlanExpiryAcrossAdvancingClock(t *tes
 
 	advancedNow := fixture.now.Add(5 * time.Minute)
 	fixture.service.now = func() time.Time { return advancedNow }
+	fixture.service.evaluator.now = fixture.service.now
 	fixture.request.Input.SnapshotTTL = 24 * time.Hour
 
 	result, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
@@ -518,6 +693,184 @@ func TestRecoveryPreflightPolicyUsesDurablePlanExpiryAcrossAdvancingClock(t *tes
 	}
 }
 
+func TestRecoveryPreflightPersistsPlanDeadlineWithShortObservationFreshness(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	freshUntil := fixture.now.Add(30 * time.Second)
+	fixture.harness.target.current.ExpiresAt = freshUntil
+	result, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+	if err != nil || !result.Persisted {
+		t.Fatalf("persist short freshness result=%+v err=%v", result, err)
+	}
+	var plan model.BackupAssetRecoveryPlan
+	var preflight model.BackupAssetRecoveryPreflight
+	if err := fixture.db.Where("id = ?", fixture.planID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Where("plan_id = ?", fixture.planID).Take(&preflight).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !freshUntil.Before(preflight.ExpiresAt) || !preflight.ExpiresAt.Equal(plan.PreflightExpiresAt) ||
+		!result.Evaluation.Snapshot.ExpiresAt.Equal(plan.PreflightExpiresAt) ||
+		!result.Evaluation.Snapshot.ObservedAt.Equal(fixture.now) || !preflight.CreatedAt.Equal(fixture.now) {
+		t.Fatalf("freshness=%s snapshot=%s row=%s plan=%s created=%s", freshUntil,
+			result.Evaluation.Snapshot.ExpiresAt, preflight.ExpiresAt, plan.PreflightExpiresAt, preflight.CreatedAt)
+	}
+	if fixture.authority.revalidateCalls != 1 {
+		t.Fatalf("transaction revalidations=%d, want 1", fixture.authority.revalidateCalls)
+	}
+}
+
+func TestRecoveryPreflightAdapterRevalidatesOnlyExactSealedEvidence(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	var plan model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", fixture.planID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := PreflightExternalEvidenceRequest{
+		PlanID: plan.ID, PlanBindingDigest: plan.BindingDigest, PlanTransitionRevision: plan.TransitionRevision,
+		SourceRevisionDigest: plan.SourceRevisionDigest, CapabilityRevision: plan.CapabilityRevision,
+		PolicyRevision: plan.SecurityPolicyRevision, FindingSetDigest: plan.SecurityFindingSetDigest,
+		TargetRootRevision: plan.RootRevision, TargetFilesystemRevision: plan.FilesystemRevision,
+		TargetRevision: fixture.request.Input.Frozen.TargetRevision,
+		RequiredBytes:  plan.EstimatedBytes, RequiredInodes: plan.EstimatedItems,
+	}
+	port := fixture.service.evaluator.externalEvidence
+	evidence, err := port.ObservePreflightEvidence(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fixture.db.Transaction(func(tx *gorm.DB) error {
+		replaced := request
+		replaced.TargetRevision = "substituted-target-revision"
+		if err := port.RevalidatePreflightEvidenceTx(context.Background(), tx, replaced, evidence); !errors.Is(err, ErrRecoveryPreflightConflict) {
+			t.Fatalf("substituted request error=%v", err)
+		}
+		retimed := clonePreflightExternalEvidence(evidence)
+		retimed.ObservationExpiresAt = retimed.ObservationExpiresAt.Add(time.Second)
+		retimed.proof.bindingDigest = preflightExternalEvidenceProofDigest(retimed)
+		if err := port.RevalidatePreflightEvidenceTx(context.Background(), tx, request, retimed); !errors.Is(err, ErrRecoveryPreflightConflict) {
+			t.Fatalf("retimed proof error=%v", err)
+		}
+		if fixture.authority.revalidateCalls != 0 {
+			t.Fatalf("invalid evidence reached authority %d times", fixture.authority.revalidateCalls)
+		}
+		return port.RevalidatePreflightEvidenceTx(context.Background(), tx, request, evidence)
+	})
+	if err != nil || fixture.authority.revalidateCalls != 1 {
+		t.Fatalf("exact sealed authority revalidation err=%v calls=%d", err, fixture.authority.revalidateCalls)
+	}
+}
+
+func TestRecoveryPreflightRejectsShorterTargetLifetime(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	fixture.target.facts.ExpiresAt = fixture.now.Add(time.Minute)
+	_, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+	if !errors.Is(err, ErrRecoveryPreflightConflict) {
+		t.Fatalf("short target lifetime error=%v, want conflict", err)
+	}
+	assertPreflightPersistenceWriteSet(t, fixture, 0, PlanStateDraft, 1)
+}
+
+func TestRecoveryPreflightRejectsAuthorityDriftInsideCommitTransaction(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*recoveryEligibilityHarness)
+	}{
+		{name: "source", mutate: func(h *recoveryEligibilityHarness) { h.source.current.SourceAccessIdentity = "changed" }},
+		{name: "source namespace", mutate: func(h *recoveryEligibilityHarness) {
+			h.source.namespaceDurable.(*lateRecoverySourceNamespaceDurable).current.taskRevision = "changed"
+		}},
+		{name: "credential", mutate: func(h *recoveryEligibilityHarness) { h.root.current.CredentialRevision = "changed" }},
+		{name: "root", mutate: func(h *recoveryEligibilityHarness) { h.root.current.AuthorityRevision = "changed" }},
+		{name: "security", mutate: func(h *recoveryEligibilityHarness) { h.security.current.PolicyRevision = "changed" }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newPreflightPersistenceFixture(t)
+			fixture.authority.onRevalidate = func() { testCase.mutate(fixture.harness) }
+			_, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+			if !errors.Is(err, ErrRecoveryPreflightConflict) || fixture.authority.revalidateCalls != 1 {
+				t.Fatalf("drift error=%v revalidations=%d", err, fixture.authority.revalidateCalls)
+			}
+			assertPreflightPersistenceWriteSet(t, fixture, 0, PlanStateDraft, 1)
+		})
+	}
+}
+
+func TestRecoveryPreflightRejectsBindingReplacementAfterSealedObservation(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	fixture.authority.afterObserve = func() {
+		if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).Where("id = ?", fixture.planID).
+			UpdateColumn("security_override_binding_digest", strings.Repeat("9", 64)).Error; err != nil {
+			t.Fatalf("replace persisted authority binding: %v", err)
+		}
+	}
+	_, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+	if !errors.Is(err, ErrRecoveryPreflightConflict) || fixture.authority.revalidateCalls != 1 {
+		t.Fatalf("binding replacement error=%v revalidations=%d", err, fixture.authority.revalidateCalls)
+	}
+	assertPreflightPersistenceWriteSet(t, fixture, 0, PlanStateDraft, 1)
+	var plan model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", fixture.planID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	if plan.SecurityOverrideBindingDigest != strings.Repeat("9", 64) {
+		t.Fatalf("externally changed binding was unexpectedly reverted")
+	}
+}
+
+func TestRecoveryPreflightRejectsClockChangesAfterAuthorityAndWrites(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		stage  string
+		offset time.Duration
+	}{
+		{name: "freshness equals during authority", stage: "inside", offset: 30 * time.Second},
+		{name: "deadline equals during authority", stage: "inside", offset: time.Hour},
+		{name: "freshness equals after authority", stage: "authority", offset: 30 * time.Second},
+		{name: "deadline equals after authority", stage: "authority", offset: time.Hour},
+		{name: "clock rolls back after authority", stage: "authority", offset: -time.Nanosecond},
+		{name: "freshness equals after writes", stage: "write", offset: 30 * time.Second},
+		{name: "deadline equals after writes", stage: "write", offset: time.Hour},
+		{name: "clock rolls back after writes", stage: "write", offset: -time.Nanosecond},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newPreflightPersistenceFixture(t)
+			current := fixture.now
+			clock := func() time.Time { return current }
+			fixture.service.now = clock
+			fixture.service.evaluator.now = clock
+			fixture.harness.authority.now = clock
+			fixture.harness.target.current.ExpiresAt = fixture.now.Add(30 * time.Second)
+			if testCase.offset == time.Hour {
+				fixture.harness.target.current.ExpiresAt = fixture.now.Add(2 * time.Hour)
+			}
+			injected := false
+			advance := func() { injected = true; current = fixture.now.Add(testCase.offset) }
+			switch testCase.stage {
+			case "inside":
+				fixture.authority.onRevalidate = advance
+			case "authority":
+				fixture.authority.afterRevalidate = advance
+			default:
+				callbackName := "preflight:final-clock:" + t.Name()
+				if err := fixture.db.Callback().Update().After("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+					if tx.Statement.Table == (model.BackupAssetRecoveryPlan{}).TableName() && !injected {
+						advance()
+					}
+				}); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = fixture.db.Callback().Update().Remove(callbackName) })
+			}
+			_, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+			if !injected || !errors.Is(err, ErrRecoveryPreflightConflict) {
+				t.Fatalf("boundary injected=%t err=%v", injected, err)
+			}
+			assertPreflightPersistenceWriteSet(t, fixture, 0, PlanStateDraft, 1)
+		})
+	}
+}
+
 func TestRecoveryPreflightRejectsExpiryReachedDuringExternalObservation(t *testing.T) {
 	fixture := newPreflightPersistenceFixture(t)
 	var plan model.BackupAssetRecoveryPlan
@@ -527,6 +880,7 @@ func TestRecoveryPreflightRejectsExpiryReachedDuringExternalObservation(t *testi
 
 	current := fixture.now
 	fixture.service.now = func() time.Time { return current }
+	fixture.service.evaluator.now = fixture.service.now
 	fixture.authority.onObserve = func() {
 		current = plan.PreflightExpiresAt.UTC().Add(time.Second)
 	}
@@ -547,10 +901,11 @@ func TestRecoveryPreflightRejectsExpiryReachedWhileAcquiringCommitLock(t *testin
 
 	current := fixture.now
 	fixture.service.now = func() time.Time { return current }
+	fixture.service.evaluator.now = fixture.service.now
 	callbackName := "task8:preflight-commit-lock-clock:" + t.Name()
 	advanced := false
 	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		if _, locking := tx.Statement.Clauses["FOR"]; locking && !advanced {
+		if _, locking := tx.Statement.Clauses["FOR"]; locking && !advanced && fixture.harness.source.revalidateCalls > 0 {
 			advanced = true
 			current = plan.PreflightExpiresAt.UTC().Add(time.Second)
 		}
@@ -575,11 +930,12 @@ func TestPreflightServiceComposesIndependentEvidenceBeforeLock(t *testing.T) {
 		events := make([]string, 0, 3)
 		fixture.target.onProbe = func() { events = append(events, "target") }
 		fixture.authority.onObserve = func() { events = append(events, "external") }
+		fixture.authority.onRevalidate = func() { events = append(events, "revalidate") }
 
 		callbackName := "task7:r32-preflight-lock-order:" + t.Name()
 		lockObserved := false
 		if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-			if _, locking := tx.Statement.Clauses["FOR"]; locking && !lockObserved {
+			if _, locking := tx.Statement.Clauses["FOR"]; locking && !lockObserved && fixture.harness.source.revalidateCalls > 0 {
 				lockObserved = true
 				events = append(events, "lock")
 			}
@@ -592,8 +948,8 @@ func TestPreflightServiceComposesIndependentEvidenceBeforeLock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EvaluateAndPersist() error = %v", err)
 		}
-		if !result.Persisted || !reflect.DeepEqual(events, []string{"target", "external", "lock"}) {
-			t.Fatalf("result/events = %#v/%v, want persisted target -> external -> lock", result, events)
+		if !result.Persisted || !reflect.DeepEqual(events, []string{"target", "external", "lock", "revalidate"}) {
+			t.Fatalf("result/events = %#v/%v, want persisted observation followed by authority revalidation", result, events)
 		}
 		if fixture.authority.calls != 1 || len(fixture.authority.requests) != 1 {
 			t.Fatalf("authority calls/requests = %d/%d, want one", fixture.authority.calls, len(fixture.authority.requests))
@@ -616,7 +972,7 @@ func TestPreflightServiceComposesIndependentEvidenceBeforeLock(t *testing.T) {
 	t.Run("test issuer cannot persist", func(t *testing.T) {
 		fixture := newPreflightPersistenceFixture(t)
 		testIssuer := &preflightExternalEvidenceFake{issue: true, evidence: fixture.externalEvidence}
-		evaluator, err := NewTargetPreflightEvaluator(fixture.target, testIssuer)
+		evaluator, err := NewTargetPreflightEvaluator(fixture.target, testIssuer, fixture.service.now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -686,6 +1042,7 @@ type preflightPersistenceFixture struct {
 	service           *PreflightService
 	target            *readOnlyPreflightTargetFake
 	authority         *preflightExternalEvidenceAuthorityFake
+	harness           *recoveryEligibilityHarness
 	request           PreflightPersistenceRequest
 	planID            string
 	now               time.Time
@@ -698,6 +1055,7 @@ type preflightPersistenceFixture struct {
 func newPreflightPersistenceFixture(t *testing.T) *preflightPersistenceFixture {
 	t.Helper()
 	base := newPlanServiceTestFixture(t, false)
+	preparePreflightRsyncSourceFixture(t, &base)
 	ensureRecoveryPlanRollbackTables(t, base.db)
 
 	operations, encodedOperations := mustAuthorizationReceiptOperationSnapshot(
@@ -773,21 +1131,17 @@ func newPreflightPersistenceFixture(t *testing.T) *preflightPersistenceFixture {
 		FreeBytes: plan.EstimatedBytes + 1_000, FreeInodes: plan.EstimatedItems + 100,
 	}}
 	externalEvidence := PreflightExternalEvidence{
-		ObservedAt: base.now, ExpiresAt: plan.PreflightExpiresAt.Add(time.Minute),
+		ObservedAt: base.now, ObservationExpiresAt: plan.PreflightExpiresAt.Add(time.Minute),
 		SourceRevisionDigest: plan.SourceRevisionDigest, CapabilityRevision: plan.CapabilityRevision,
 		PolicyRevision: plan.SecurityPolicyRevision, FindingSetDigest: plan.SecurityFindingSetDigest,
 		FindingDisposition: SecurityFindingDispositionBlocked, SourceAccessible: true,
 	}
-	authority := &preflightExternalEvidenceAuthorityFake{
-		respond: func(request PreflightExternalEvidenceRequest) (PreflightExternalEvidenceObservation, error) {
-			return preflightExternalEvidenceObservationForTest(request, externalEvidence), nil
-		},
-	}
+	authority, harness := newPreflightSealedAuthorityForTest(t, base.db, plan, func() time.Time { return base.now }, plan.TargetBaseRevision)
 	external, err := NewRecoveryPreflightExternalEvidenceAdapter(authority)
 	if err != nil {
 		t.Fatal(err)
 	}
-	evaluator, err := NewTargetPreflightEvaluator(target, external)
+	evaluator, err := NewTargetPreflightEvaluator(target, external, func() time.Time { return base.now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,7 +1153,7 @@ func newPreflightPersistenceFixture(t *testing.T) *preflightPersistenceFixture {
 		t.Fatal(err)
 	}
 	return &preflightPersistenceFixture{
-		db: base.db, service: service, target: target, authority: authority,
+		db: base.db, service: service, target: target, authority: authority, harness: harness,
 		request: PreflightPersistenceRequest{
 			RequesterID: base.request.RequesterID, PlanID: created.PlanID,
 			ExpectedPlanRevision: 1, Input: input,
@@ -839,7 +1193,7 @@ func TestTargetPreflightIsReadOnlyAndUsesEligibilityPolicyA(t *testing.T) {
 	input, targetFacts, externalFacts := validTargetPreflightInput(t, now)
 	fake := &readOnlyPreflightTargetFake{facts: targetFacts}
 	external := &preflightExternalEvidenceFake{evidence: externalFacts, issue: true}
-	evaluator, err := NewTargetPreflightEvaluator(fake, external)
+	evaluator, err := NewTargetPreflightEvaluator(fake, external, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("NewTargetPreflightEvaluator() error = %v", err)
 	}
@@ -936,7 +1290,7 @@ func TestTargetPreflightRejectsTargetSubstitutionBeforeProbe(t *testing.T) {
 			testCase.mutate(&input)
 			fake := &readOnlyPreflightTargetFake{facts: targetFacts}
 			external := &preflightExternalEvidenceFake{evidence: externalFacts, issue: true}
-			evaluator, err := NewTargetPreflightEvaluator(fake, external)
+			evaluator, err := NewTargetPreflightEvaluator(fake, external, func() time.Time { return now })
 			if err != nil {
 				t.Fatalf("NewTargetPreflightEvaluator() error = %v", err)
 			}
@@ -1017,9 +1371,6 @@ func TestTargetPreflightClosedRejectionMatrix(t *testing.T) {
 		{name: "active writer", mutate: func(input *TargetPreflightInput, _ *TargetRootProbeFacts, _ *PreflightExternalEvidence) {
 			input.Node.ActiveWriter = true
 		}, want: TargetPreflightActiveWriter},
-		{name: "fail-on-conflict existing target", mutate: func(_ *TargetPreflightInput, facts *TargetRootProbeFacts, _ *PreflightExternalEvidence) {
-			facts.TargetExists = true
-		}, want: TargetPreflightTargetConflict},
 		{name: "security finding", mutate: func(input *TargetPreflightInput, _ *TargetRootProbeFacts, facts *PreflightExternalEvidence) {
 			decision, decisionErr := NewPreflightSecurityDecision(PreflightSecurityDecisionInput{
 				FindingSetDigest: input.Frozen.FindingSetDigest, PolicyRevision: input.Frozen.PolicyRevision,
@@ -1041,7 +1392,7 @@ func TestTargetPreflightClosedRejectionMatrix(t *testing.T) {
 			testCase.mutate(&input, &targetFacts, &externalFacts)
 			fake := &readOnlyPreflightTargetFake{facts: targetFacts}
 			external := &preflightExternalEvidenceFake{evidence: externalFacts, issue: true}
-			evaluator, err := NewTargetPreflightEvaluator(fake, external)
+			evaluator, err := NewTargetPreflightEvaluator(fake, external, func() time.Time { return now })
 			if err != nil {
 				t.Fatalf("constructor error = %v", err)
 			}
@@ -1059,31 +1410,44 @@ func TestTargetPreflightClosedRejectionMatrix(t *testing.T) {
 	}
 }
 
+func TestObservedPreflightConflictUsesInPlaceLeafOnly(t *testing.T) {
+	now := time.Now().UTC()
+	input, target, external := validTargetPreflightInput(t, now)
+	target.TargetExists = true
+	for _, testCase := range []struct {
+		name         string
+		mode         TargetMode
+		policy       ConflictPolicy
+		wantConflict bool
+	}{
+		{name: "isolated", mode: TargetModeIsolated, policy: ConflictFailOnConflict},
+		{name: "in place fail", mode: TargetModeInPlace, policy: ConflictFailOnConflict, wantConflict: true},
+		{name: "in place mirror", mode: TargetModeInPlace, policy: ConflictExactMirror},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			input.TargetMode, input.ConflictPolicy = testCase.mode, testCase.policy
+			got := containsTargetPreflightReason(observedPreflightReasons(input, target, external), TargetPreflightTargetConflict)
+			if got != testCase.wantConflict {
+				t.Fatalf("target conflict=%t, want %t", got, testCase.wantConflict)
+			}
+		})
+	}
+}
+
 func TestTargetPreflightCompositeEvidenceMatrix(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	baseInput, baseTarget, baseExternal := validTargetPreflightInput(t, now)
 	type matrixCase struct {
-		name              string
-		mutateInput       func(*TargetPreflightInput)
-		mutateTarget      func(*TargetRootProbeFacts)
-		mutateEvidence    func(*PreflightExternalEvidence)
-		mutateObservation func(*PreflightExternalEvidenceObservation)
-		wantReason        TargetPreflightReason
-		wantError         error
+		name           string
+		mutateInput    func(*TargetPreflightInput)
+		mutateTarget   func(*TargetRootProbeFacts)
+		mutateEvidence func(*PreflightExternalEvidence)
+		wantReason     TargetPreflightReason
 	}
 	cases := []matrixCase{
 		{name: "source inaccessible", mutateEvidence: func(value *PreflightExternalEvidence) {
 			value.SourceAccessible = false
 		}, wantReason: TargetPreflightSourceUnavailable},
-		{name: "capability drift", mutateObservation: func(value *PreflightExternalEvidenceObservation) {
-			value.CapabilityRevision = "capability-revision-drift"
-		}, wantError: ErrRecoveryPreflightConflict},
-		{name: "policy drift", mutateObservation: func(value *PreflightExternalEvidenceObservation) {
-			value.PolicyRevision = "policy-revision-drift"
-		}, wantError: ErrRecoveryPreflightConflict},
-		{name: "finding drift", mutateObservation: func(value *PreflightExternalEvidenceObservation) {
-			value.FindingSetDigest = strings.Repeat("f", sha256DigestLength)
-		}, wantError: ErrRecoveryPreflightConflict},
 		{name: "protected root overlap", mutateEvidence: func(value *PreflightExternalEvidence) {
 			value.OverlapsXirangRoot = true
 		}, wantReason: TargetPreflightXirangOverlap},
@@ -1132,30 +1496,12 @@ func TestTargetPreflightCompositeEvidenceMatrix(t *testing.T) {
 				testCase.mutateEvidence(&externalFacts)
 			}
 			target := &readOnlyPreflightTargetFake{facts: targetFacts}
-			authority := &preflightExternalEvidenceAuthorityFake{
-				respond: func(request PreflightExternalEvidenceRequest) (PreflightExternalEvidenceObservation, error) {
-					observation := preflightExternalEvidenceObservationForTest(request, externalFacts)
-					if testCase.mutateObservation != nil {
-						testCase.mutateObservation(&observation)
-					}
-					return observation, nil
-				},
-			}
-			adapter, err := NewRecoveryPreflightExternalEvidenceAdapter(authority)
-			if err != nil {
-				t.Fatal(err)
-			}
-			evaluator, err := NewTargetPreflightEvaluator(target, adapter)
+			external := &preflightExternalEvidenceFake{evidence: externalFacts, issue: true}
+			evaluator, err := NewTargetPreflightEvaluator(target, external, func() time.Time { return now })
 			if err != nil {
 				t.Fatal(err)
 			}
 			result, err := evaluator.Evaluate(context.Background(), now, input)
-			if testCase.wantError != nil {
-				if !errors.Is(err, testCase.wantError) {
-					t.Fatalf("Evaluate() error = %v, want %v", err, testCase.wantError)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("Evaluate() error = %v", err)
 			}
@@ -1172,18 +1518,10 @@ func TestTargetPreflightCompositeEvidenceMatrix(t *testing.T) {
 		targetFacts.ObservedAt = now.Add(-2 * time.Minute)
 		targetFacts.ExpiresAt = now.Add(4 * time.Minute)
 		externalFacts.ObservedAt = now.Add(-time.Minute)
-		externalFacts.ExpiresAt = now.Add(3 * time.Minute)
+		externalFacts.ObservationExpiresAt = now.Add(3 * time.Minute)
 		target := &readOnlyPreflightTargetFake{facts: targetFacts}
-		authority := &preflightExternalEvidenceAuthorityFake{
-			respond: func(request PreflightExternalEvidenceRequest) (PreflightExternalEvidenceObservation, error) {
-				return preflightExternalEvidenceObservationForTest(request, externalFacts), nil
-			},
-		}
-		adapter, err := NewRecoveryPreflightExternalEvidenceAdapter(authority)
-		if err != nil {
-			t.Fatal(err)
-		}
-		evaluator, err := NewTargetPreflightEvaluator(target, adapter)
+		external := &preflightExternalEvidenceFake{evidence: externalFacts, issue: true}
+		evaluator, err := NewTargetPreflightEvaluator(target, external, func() time.Time { return now })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1193,7 +1531,7 @@ func TestTargetPreflightCompositeEvidenceMatrix(t *testing.T) {
 		}
 		snapshot := result.Snapshot
 		if !result.Eligible || !snapshot.ObservedAt.Equal(externalFacts.ObservedAt) ||
-			!snapshot.ExpiresAt.Equal(externalFacts.ExpiresAt) ||
+			!snapshot.ExpiresAt.Equal(targetFacts.ExpiresAt) ||
 			snapshot.NodeRevision != input.Frozen.NodeRevision ||
 			snapshot.SourceRevisionDigest != input.Frozen.SourceRevisionDigest ||
 			snapshot.TargetRevision != targetFacts.TargetRevision ||
@@ -1258,7 +1596,7 @@ func TestTargetPreflightRejectsBlockedFindingsRewrittenAsRehashedClean(t *testin
 
 	fake := &readOnlyPreflightTargetFake{facts: targetFacts}
 	external := &preflightExternalEvidenceFake{evidence: externalFacts, issue: true}
-	evaluator, err := NewTargetPreflightEvaluator(fake, external)
+	evaluator, err := NewTargetPreflightEvaluator(fake, external, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("NewTargetPreflightEvaluator() error = %v", err)
 	}
@@ -1283,7 +1621,7 @@ func TestTargetPreflightExpiryAndRevisionDriftFailClosed(t *testing.T) {
 			facts.ExpiresAt = now
 		}},
 		{name: "external evidence expired at equality", mutate: func(_ *TargetPreflightInput, _ *TargetRootProbeFacts, facts *PreflightExternalEvidence) {
-			facts.ExpiresAt = now
+			facts.ObservationExpiresAt = now
 		}},
 		{name: "permit expired at equality", mutate: func(input *TargetPreflightInput, _ *TargetRootProbeFacts, _ *PreflightExternalEvidence) {
 			input.Permit.ExpiresAt = now
@@ -1316,7 +1654,7 @@ func TestTargetPreflightExpiryAndRevisionDriftFailClosed(t *testing.T) {
 			testCase.mutate(&input, &targetFacts, &externalFacts)
 			fake := &readOnlyPreflightTargetFake{facts: targetFacts}
 			external := &preflightExternalEvidenceFake{evidence: externalFacts, issue: true}
-			evaluator, err := NewTargetPreflightEvaluator(fake, external)
+			evaluator, err := NewTargetPreflightEvaluator(fake, external, func() time.Time { return now })
 			if err != nil {
 				t.Fatalf("constructor error = %v", err)
 			}
@@ -1467,7 +1805,7 @@ func validTargetPreflightInput(
 		FreeBytes: 1_000, FreeInodes: 100,
 	}
 	externalFacts := PreflightExternalEvidence{
-		ObservedAt: now, ExpiresAt: now.Add(10 * time.Minute),
+		ObservedAt: now, ObservationExpiresAt: now.Add(10 * time.Minute),
 		SourceRevisionDigest: frozen.SourceRevisionDigest, CapabilityRevision: frozen.CapabilityRevision,
 		PolicyRevision: frozen.PolicyRevision, FindingSetDigest: frozen.FindingSetDigest,
 		FindingDisposition: SecurityFindingDispositionClean, SourceAccessible: true,
@@ -1498,4 +1836,176 @@ func containsTargetPreflightReason(reasons []TargetPreflightReason, want TargetP
 		}
 	}
 	return false
+}
+
+func TestTargetPreflightClockFollowsBothObservations(t *testing.T) {
+	start := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	type clockCase struct {
+		postProbe        time.Time
+		completed        time.Time
+		targetObserved   time.Time
+		externalObserved time.Time
+		targetExpiry     time.Time
+		permitExpiry     time.Time
+		externalExpiry   time.Time
+		ttl              time.Duration
+	}
+	tests := []struct {
+		name          string
+		mutate        func(*clockCase)
+		wantErr       error
+		externalCalls int
+		wantExpiry    time.Time
+	}{
+		{name: "advancing", externalCalls: 1, wantExpiry: start.Add(5 * time.Minute)},
+		{name: "equal clock and observation", mutate: func(c *clockCase) {
+			c.postProbe, c.completed, c.targetObserved, c.externalObserved = start, start, start, start
+		}, externalCalls: 1, wantExpiry: start.Add(5 * time.Minute)},
+		{name: "observations equal advancing clocks", mutate: func(c *clockCase) {
+			c.targetObserved, c.externalObserved = c.postProbe, c.completed
+		}, externalCalls: 1, wantExpiry: start.Add(5 * time.Minute)},
+		{name: "target expiry is minimum", mutate: func(c *clockCase) { c.targetExpiry = start.Add(7 * time.Second) }, externalCalls: 1, wantExpiry: start.Add(7 * time.Second)},
+		{name: "permit expiry is minimum", mutate: func(c *clockCase) { c.permitExpiry = start.Add(7 * time.Second) }, externalCalls: 1, wantExpiry: start.Add(7 * time.Second)},
+		{name: "external freshness does not shorten snapshot", mutate: func(c *clockCase) { c.externalExpiry = start.Add(7 * time.Second) }, externalCalls: 1, wantExpiry: start.Add(5 * time.Minute)},
+		{name: "budget expiry is minimum", mutate: func(c *clockCase) { c.ttl = 7 * time.Second }, externalCalls: 1, wantExpiry: start.Add(7 * time.Second)},
+		{name: "zero post probe clock", mutate: func(c *clockCase) { c.postProbe = time.Time{} }, wantErr: ErrRecoveryPreflightConflict},
+		{name: "backward post probe clock", mutate: func(c *clockCase) { c.postProbe = start.Add(-time.Nanosecond) }, wantErr: ErrRecoveryPreflightConflict},
+		{name: "future target observation", mutate: func(c *clockCase) { c.targetObserved = c.postProbe.Add(time.Nanosecond) }, wantErr: ErrInvalidTargetPreflight},
+		{name: "zero target observation", mutate: func(c *clockCase) { c.targetObserved = time.Time{} }, wantErr: ErrInvalidTargetPreflight},
+		{name: "target expires during probe", mutate: func(c *clockCase) { c.targetExpiry = c.postProbe }, wantErr: ErrRecoveryPreflightConflict},
+		{name: "permit expires during probe", mutate: func(c *clockCase) { c.permitExpiry = c.postProbe }, wantErr: ErrRecoveryPreflightConflict},
+		{name: "budget expires during probe", mutate: func(c *clockCase) { c.ttl = c.postProbe.Sub(start) }, wantErr: ErrRecoveryPreflightConflict},
+		{name: "zero completion clock", mutate: func(c *clockCase) { c.completed = time.Time{} }, wantErr: ErrRecoveryPreflightConflict, externalCalls: 1},
+		{name: "backward completion clock", mutate: func(c *clockCase) { c.completed = c.postProbe.Add(-time.Nanosecond) }, wantErr: ErrRecoveryPreflightConflict, externalCalls: 1},
+		{name: "target expires during external observation", mutate: func(c *clockCase) { c.targetExpiry = c.completed }, wantErr: ErrRecoveryPreflightConflict, externalCalls: 1},
+		{name: "permit expires during external observation", mutate: func(c *clockCase) { c.permitExpiry = c.completed }, wantErr: ErrRecoveryPreflightConflict, externalCalls: 1},
+		{name: "budget expires during external observation", mutate: func(c *clockCase) { c.ttl = c.completed.Sub(start) }, wantErr: ErrRecoveryPreflightConflict, externalCalls: 1},
+		{name: "external evidence expires at completion", mutate: func(c *clockCase) { c.externalExpiry = c.completed }, wantErr: ErrRecoveryPreflightConflict, externalCalls: 1},
+		{name: "future external observation", mutate: func(c *clockCase) { c.externalObserved = c.completed.Add(time.Nanosecond) }, wantErr: ErrInvalidTargetPreflight, externalCalls: 1},
+		{name: "zero external observation", mutate: func(c *clockCase) { c.externalObserved = time.Time{} }, wantErr: ErrInvalidTargetPreflight, externalCalls: 1},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			c := clockCase{
+				postProbe: start.Add(2 * time.Second), completed: start.Add(4 * time.Second),
+				targetObserved: start.Add(time.Second), externalObserved: start.Add(3 * time.Second),
+				targetExpiry: start.Add(10 * time.Minute), permitExpiry: start.Add(10 * time.Minute),
+				externalExpiry: start.Add(10 * time.Minute), ttl: 5 * time.Minute,
+			}
+			if testCase.mutate != nil {
+				testCase.mutate(&c)
+			}
+			input, targetFacts, externalFacts := validTargetPreflightInput(t, start)
+			input.SnapshotTTL = c.ttl
+			input.Permit.ExpiresAt = c.permitExpiry
+			input.targetPermit = issueTargetPreflightPermit(input.Permit, input.targetPermit.proof.sessionBinding, input.ProbeRequest)
+			targetFacts.ObservedAt, targetFacts.ExpiresAt = c.targetObserved, c.targetExpiry
+			externalFacts.ObservedAt, externalFacts.ObservationExpiresAt = c.externalObserved, c.externalExpiry
+			current := start
+			target := &readOnlyPreflightTargetFake{facts: targetFacts, onProbe: func() { current = c.postProbe }}
+			external := &preflightExternalEvidenceFake{evidence: externalFacts, issue: true, onObserve: func() { current = c.completed }}
+			evaluator, err := NewTargetPreflightEvaluator(target, external, func() time.Time { return current })
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := evaluator.Evaluate(context.Background(), start, input)
+			if !errors.Is(err, testCase.wantErr) {
+				t.Fatalf("Evaluate error=%v, want %v", err, testCase.wantErr)
+			}
+			if target.probeCalls != 1 || external.observeCalls != testCase.externalCalls {
+				t.Fatalf("probe calls=%d external calls=%d, want 1/%d", target.probeCalls, external.observeCalls, testCase.externalCalls)
+			}
+			if testCase.wantErr == nil && (!result.Eligible || !result.completedAt.Equal(c.completed) ||
+				!result.Snapshot.ObservedAt.Equal(c.externalObserved) || !result.Snapshot.ExpiresAt.Equal(testCase.wantExpiry)) {
+				t.Fatalf("advancing preflight result=%+v completed=%s expiry=%s", result, result.completedAt, testCase.wantExpiry)
+			}
+		})
+	}
+}
+
+func TestPreflightServiceUsesCompletionClockAndFrozenDeadline(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	current := fixture.now
+	fixture.service.now = func() time.Time { return current }
+	fixture.service.evaluator.now = fixture.service.now
+	fixture.target.onProbe = func() {
+		current = fixture.now.Add(2 * time.Second)
+		fixture.target.facts.ObservedAt = current
+	}
+	fixture.authority.onObserve = func() {
+		current = fixture.now.Add(4 * time.Second)
+		fixture.harness.target.current.ObservedAt = current
+		fixture.harness.authority.now = func() time.Time { return current }
+	}
+	var plan model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", fixture.planID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+	if err != nil || !result.Persisted || !result.Evaluation.completedAt.Equal(current) ||
+		!result.Evaluation.Snapshot.ObservedAt.Equal(current) || !result.Evaluation.Snapshot.ExpiresAt.Equal(plan.PreflightExpiresAt) {
+		t.Fatalf("advancing observations result=%+v current=%s err=%v", result, current, err)
+	}
+	assertPreflightPersistenceWriteSet(t, fixture, 1, PlanStatePreflightReady, 2)
+}
+
+func TestPreflightServiceRejectsClockRollbackAndExpiryBeforeCommit(t *testing.T) {
+	for _, testCase := range []struct {
+		name            string
+		commitOffset    time.Duration
+		transactionStep time.Duration
+		targetExpiry    time.Duration
+		commitZero      bool
+		transactionZero bool
+		wantSuccess     bool
+	}{
+		{name: "commit equals completion", commitOffset: 4 * time.Second, transactionStep: 4 * time.Second, wantSuccess: true},
+		{name: "zero commit clock", commitZero: true},
+		{name: "zero transaction clock", commitOffset: 5 * time.Second, transactionZero: true},
+		{name: "commit rolls back after completion", commitOffset: 3 * time.Second},
+		{name: "snapshot expires at commit", commitOffset: 5 * time.Second, targetExpiry: 5 * time.Second},
+		{name: "plan expires at commit", commitOffset: time.Hour},
+		{name: "transaction rolls back after commit", commitOffset: 5 * time.Second, transactionStep: 4 * time.Second},
+		{name: "plan expires before transaction", commitOffset: 5 * time.Second, transactionStep: time.Hour},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newPreflightPersistenceFixture(t)
+			if testCase.targetExpiry > 0 {
+				fixture.target.facts.ExpiresAt = fixture.now.Add(testCase.targetExpiry)
+			}
+			samples := []time.Time{
+				fixture.now, fixture.now.Add(2 * time.Second), fixture.now.Add(4 * time.Second),
+				fixture.now.Add(testCase.commitOffset), fixture.now.Add(testCase.transactionStep),
+			}
+			if testCase.commitZero {
+				samples[3] = time.Time{}
+			}
+			if testCase.transactionZero {
+				samples[4] = time.Time{}
+			}
+			index := 0
+			clock := func() time.Time {
+				if index >= len(samples) {
+					return samples[len(samples)-1]
+				}
+				value := samples[index]
+				index++
+				return value
+			}
+			fixture.service.now = clock
+			fixture.service.evaluator.now = clock
+			result, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+			if testCase.wantSuccess {
+				if err != nil || !result.Persisted {
+					t.Fatalf("equal completion result=%+v error=%v", result, err)
+				}
+				assertPreflightPersistenceWriteSet(t, fixture, 1, PlanStatePreflightReady, 2)
+				return
+			}
+			if !errors.Is(err, ErrRecoveryPreflightConflict) {
+				t.Fatalf("commit boundary result=%+v error=%v", result, err)
+			}
+			assertPreflightPersistenceWriteSet(t, fixture, 0, PlanStateDraft, 1)
+		})
+	}
 }

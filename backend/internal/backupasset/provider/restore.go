@@ -2,7 +2,6 @@ package provider
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -835,126 +834,6 @@ func DecodeRestoreRequest(payload []byte) (RestoreRequest, error) {
 		return RestoreRequest{}, err
 	}
 	return request, nil
-}
-
-func ExecuteRestore(ctx context.Context, port RestorePort, request RestoreRequest, progress RestoreProgress) (RestoreResult, error) {
-	if interfaceNil(port) {
-		return RestoreResult{}, invalidRestoreRequest("restore port unavailable")
-	}
-	if err := validateRestoreExecutionPortRequest(request, time.Now().UTC()); err != nil {
-		return RestoreResult{}, err
-	}
-	result, err := port.Execute(ctx, request, progress)
-	if err != nil {
-		return result, err
-	}
-	if err := result.ValidateFor(request); err != nil {
-		return RestoreResult{}, err
-	}
-	return result, nil
-}
-
-func PreflightRestore(ctx context.Context, port RestorePort, request RestorePreflightRequest) (RestorePreflightEvidence, error) {
-	if interfaceNil(port) {
-		return RestorePreflightEvidence{}, invalidRestoreRequest("restore port unavailable")
-	}
-	if err := validateRestorePreflightPortRequest(request, time.Now().UTC()); err != nil {
-		return RestorePreflightEvidence{}, err
-	}
-	evidence, err := port.Preflight(ctx, request)
-	if err != nil {
-		return evidence, err
-	}
-	if err := evidence.ValidateFor(request.Request); err != nil {
-		return RestorePreflightEvidence{}, err
-	}
-	return evidence, nil
-}
-
-func VerifyRestore(ctx context.Context, port RestorePort, request RestoreVerifyRequest) (RestoreVerifyResult, error) {
-	if interfaceNil(port) {
-		return RestoreVerifyResult{}, invalidRestoreRequest("restore port unavailable")
-	}
-	if err := validateRestoreVerifyPortRequest(request, time.Now().UTC()); err != nil {
-		return RestoreVerifyResult{}, err
-	}
-	result, err := port.Verify(ctx, request)
-	if err != nil {
-		return result, err
-	}
-	if err := result.ValidateFor(request.Request); err != nil {
-		return RestoreVerifyResult{}, err
-	}
-	return result, nil
-}
-
-func ReconcileRestore(ctx context.Context, port RestorePort, request RestoreReconcileRequest) (RestoreReconcileResult, error) {
-	if interfaceNil(port) {
-		return RestoreReconcileResult{}, invalidRestoreRequest("restore port unavailable")
-	}
-	if err := validateRestoreReconcilePortRequest(request, time.Now().UTC()); err != nil {
-		return RestoreReconcileResult{}, err
-	}
-	result, err := port.Reconcile(ctx, request)
-	if err != nil {
-		return result, err
-	}
-	if err := result.ValidateFor(request.Request); err != nil {
-		return RestoreReconcileResult{}, err
-	}
-	return result, nil
-}
-
-func validateRestoreExecutionPortRequest(request RestoreRequest, now time.Time) error {
-	if request.Provider != backupasset.ProviderRsync {
-		return request.ValidateAt(now)
-	}
-	if err := request.ValidateAt(now); err == nil {
-		return nil
-	}
-	if err := request.ValidateRsyncResolutionIntent(); err != nil {
-		return err
-	}
-	return request.MutationPermit.ValidateAt(now, request.Target, request.Fence)
-}
-
-func validateRestorePreflightPortRequest(request RestorePreflightRequest, now time.Time) error {
-	if request.Request.Provider != backupasset.ProviderRsync {
-		return request.ValidateAt(now)
-	}
-	if err := request.ValidateAt(now); err == nil {
-		return nil
-	}
-	if err := request.Request.ValidateRsyncResolutionIntent(); err != nil {
-		return err
-	}
-	return request.Permit.ValidateAt(now, request.Request.Target)
-}
-
-func validateRestoreVerifyPortRequest(request RestoreVerifyRequest, now time.Time) error {
-	if request.Request.Provider != backupasset.ProviderRsync {
-		return request.ValidateAt(now)
-	}
-	if err := request.ValidateAt(now); err == nil {
-		return nil
-	}
-	if err := request.Request.ValidateRsyncResolutionIntent(); err != nil {
-		return err
-	}
-	return request.Permit.ValidateAt(now, request.Request.Target)
-}
-
-func validateRestoreReconcilePortRequest(request RestoreReconcileRequest, now time.Time) error {
-	if request.Request.Provider != backupasset.ProviderRsync {
-		return request.ValidateAt(now)
-	}
-	if err := request.ValidateAt(now); err == nil {
-		return nil
-	}
-	if err := request.Request.ValidateRsyncResolutionIntent(); err != nil {
-		return err
-	}
-	return request.Permit.ValidateAt(now, request.Request.Target)
 }
 
 func validRestoreProvider(provider backupasset.ProviderKind) bool {

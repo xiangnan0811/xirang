@@ -1181,11 +1181,15 @@ func newPreviewSourcePreparationFixture(t *testing.T, payloads ...[]byte) *previ
 		&model.BackupAssetDeliveryUsage{}, &model.RecoveryPointLease{}, &model.User{}, &model.Node{}, &model.Task{},
 		&model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{},
 		&model.RecoveryPointLifecycleAttempt{}, &model.CatalogGeneration{}, &model.CatalogEntry{}, &model.WrappedDomainKey{},
+		&model.CatalogCandidateSweep{},
 		&model.BackupAssetSearchGeneration{}, &model.BackupAssetSearchDocument{}, &model.BackupAssetAuditCheckpoint{},
 		&model.BackupAssetAuditEvent{}, &model.BackupAssetInstallation{}, &model.BackupAssetInventoryRun{},
 		&model.BackupAssetRepositoryConflict{},
 	); err != nil {
 		t.Fatalf("migrate preview preparation schema: %v", err)
+	}
+	if err := db.Create(&model.CatalogCandidateSweep{ID: 1, Revision: 1}).Error; err != nil {
+		t.Fatalf("seed Catalog candidate sweep: %v", err)
 	}
 	if err := db.Create(&model.User{ID: 1, Username: "preview-admin", PasswordHash: "unused", Role: "admin", TokenVersion: 1}).Error; err != nil {
 		t.Fatalf("seed preview user: %v", err)

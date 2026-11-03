@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // RecoveryEligibilitySourceObservation is the closed Repository scalar that
@@ -176,6 +177,9 @@ type RecoveryEligibilityTargetObservation struct {
 	Complete                  bool      `json:"-"`
 	ObservedAt                time.Time `json:"-"`
 	ExpiresAt                 time.Time `json:"-"`
+	targetContentVerified     bool
+	verifiedTargetDigest      string
+	verifiedTargetBytes       int64
 }
 
 func (RecoveryEligibilityTargetObservation) String() string {
@@ -443,6 +447,10 @@ func (authority *RecoveryEligibilityAuthority) RevalidateRecoveryAuthorityTx(
 		observation.proof.bindingDigest != recoveryEligibilityBindingDigest(observation.binding) {
 		return ErrRecoveryTargetChanged
 	}
+	if !observation.observedAt.Equal(observation.binding.target.ObservedAt) ||
+		!observation.expiresAt.Equal(observation.binding.target.ExpiresAt) {
+		return ErrRecoveryTargetChanged
+	}
 	now := authority.now().UTC()
 	if now.IsZero() || now.Before(observation.observedAt.UTC()) || !now.Before(observation.expiresAt.UTC()) ||
 		!observation.binding.sourceAccessible || observation.binding.reservedBytes <= 0 ||
@@ -472,6 +480,10 @@ func (authority *RecoveryEligibilityAuthority) RevalidateRecoveryAuthorityTx(
 		ctx, tx, binding, observation.binding.security,
 	); err != nil {
 		return recoveryEligibilityRevalidationError(ctx, err)
+	}
+	finishedAt := authority.now().UTC()
+	if finishedAt.IsZero() || finishedAt.Before(now) || !finishedAt.Before(observation.expiresAt.UTC()) {
+		return ErrRecoveryTargetChanged
 	}
 	return nil
 }
@@ -503,7 +515,8 @@ func validRecoveryEligibilityAuthorityBinding(binding RecoveryAuthorityBinding) 
 		validOpaqueID(binding.PreflightID) && binding.PreflightRevision != "" &&
 		binding.PreflightTargetRevision != "" && binding.PreflightNodeRevision != "" &&
 		binding.RequiredBytes >= 0 && binding.RequiredInodes >= 0 &&
-		(!binding.draftPreflight || binding.PreflightID == binding.PlanID)
+		(!binding.draftPreflight || binding.PreflightID == binding.PlanID) &&
+		binding.targetExpectation.valid(binding.TargetMode)
 }
 
 func validRecoveryEligibilitySecurityDecision(decision SecurityDecisionKind) bool {
@@ -621,10 +634,21 @@ func validRecoveryEligibilityTarget(
 		observation.RootRevision == binding.RootRevision &&
 		observation.RootObservationRevision == root.RootObservationRevision &&
 		observation.FilesystemRevision == binding.FilesystemRevision &&
-		observation.TargetRevision == binding.PreflightTargetRevision &&
+		validRecoveryEligibilityTargetContent(binding, observation) &&
 		!observation.ObservedAt.IsZero() && !observation.ExpiresAt.IsZero() &&
 		!observation.ObservedAt.UTC().After(now) && now.Before(observation.ExpiresAt.UTC()) &&
 		observation.FreeBytes >= 0 && observation.FreeInodes >= 0
+}
+
+func validRecoveryEligibilityTargetContent(binding RecoveryAuthorityBinding, observation RecoveryEligibilityTargetObservation) bool {
+	expectation := binding.targetExpectation
+	if expectation.verifiesContent(binding.TargetMode) {
+		return observation.TargetRevision != "" && observation.targetContentVerified &&
+			observation.verifiedTargetDigest == expectation.expectedDigest &&
+			observation.verifiedTargetBytes == expectation.expectedBytes
+	}
+	return observation.TargetRevision == binding.PreflightTargetRevision && !observation.targetContentVerified &&
+		observation.verifiedTargetDigest == "" && observation.verifiedTargetBytes == 0
 }
 
 func recoveryEligibilityCapacityAvailable(available, required, reserved int64) bool {
@@ -638,7 +662,7 @@ func recoveryEligibilityBindingDigest(binding recoveryEligibilityBinding) string
 	namespace := binding.sourceNamespace.observation
 	proof := namespace.proof
 	return framedDigest(
-		"xirang/recovery/eligibility-authority/v1",
+		"xirang/recovery/eligibility-authority/v2",
 		string(binding.authority.Operation), string(binding.authority.Provider), binding.authority.PlanID,
 		binding.authority.PlanBindingDigest, strconv.FormatUint(binding.authority.PlanTransitionRevision, 10),
 		binding.authority.RepositoryID, binding.authority.RecoveryPointID, binding.authority.CatalogGenerationID,
@@ -654,6 +678,7 @@ func recoveryEligibilityBindingDigest(binding recoveryEligibilityBinding) string
 		binding.authority.PreflightRevision, binding.authority.PreflightTargetRevision,
 		binding.authority.PreflightNodeRevision, strconv.FormatInt(binding.authority.RequiredBytes, 10),
 		strconv.FormatInt(binding.authority.RequiredInodes, 10), strconv.FormatBool(binding.authority.draftPreflight),
+		recoveryAuthorityTargetDigest(binding.authority.targetExpectation),
 		strconv.Itoa(binding.source.RepositoryCapabilityRevision), strconv.Itoa(binding.source.CapabilityRevision),
 		binding.source.SourceAccessIdentity, binding.source.SourceFingerprint, binding.source.ManagedRootIdentity,
 		binding.source.RepositoryBindingRevision, binding.source.ProvenanceRevision,
@@ -674,6 +699,8 @@ func recoveryEligibilityBindingDigest(binding recoveryEligibilityBinding) string
 		binding.target.TargetRevision, strconv.FormatInt(binding.target.FreeBytes, 10),
 		strconv.FormatInt(binding.target.FreeInodes, 10), binding.target.ObservedAt.UTC().Format(time.RFC3339Nano),
 		binding.target.ExpiresAt.UTC().Format(time.RFC3339Nano), strconv.FormatBool(binding.target.ReadOnly),
+		strconv.FormatBool(binding.target.targetContentVerified), binding.target.verifiedTargetDigest,
+		strconv.FormatInt(binding.target.verifiedTargetBytes, 10),
 		strconv.FormatBool(binding.target.Complete), strconv.FormatBool(binding.sourceAccessible),
 		strconv.FormatBool(binding.overlapsXirangRoot), strconv.FormatBool(binding.overlapsSourceRoot),
 		strconv.FormatInt(binding.reservedBytes, 10), strconv.FormatInt(binding.reservedInodes, 10),
@@ -716,7 +743,7 @@ func (authority *RecoveryEligibilityAuthority) ObserveRecoveryPreflightEvidence(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return PreflightExternalEvidenceObservation{}, ctxErr
 		}
-		return PreflightExternalEvidenceObservation{}, ErrTargetPreflightUnavailable
+		return PreflightExternalEvidenceObservation{}, sanitizePreflightExternalEvidenceError(ctx, err)
 	}
 	sealed, err := authority.ObserveRecoveryAuthority(ctx, binding)
 	if err != nil {
@@ -731,10 +758,44 @@ func (authority *RecoveryEligibilityAuthority) ObserveRecoveryPreflightEvidence(
 	return recoveryEligibilityPreflightProjection(request, sealed)
 }
 
+func (authority *RecoveryEligibilityAuthority) RevalidateRecoveryPreflightEvidenceTx(
+	ctx context.Context, tx *gorm.DB, request PreflightExternalEvidenceRequest, observation RecoveryAuthorityObservation,
+) error {
+	if authority == nil || tx == nil {
+		return ErrTargetPreflightUnavailable
+	}
+	binding, err := loadRecoveryEligibilityPreflightBindingTx(ctx, tx, request)
+	if err != nil {
+		return sanitizePreflightExternalEvidenceError(ctx, err)
+	}
+	if err := authority.RevalidateRecoveryAuthorityTx(ctx, tx, binding, observation); err != nil {
+		if errors.Is(err, ErrRecoveryTargetChanged) {
+			return ErrRecoveryPreflightConflict
+		}
+		return sanitizePreflightExternalEvidenceError(ctx, err)
+	}
+	return nil
+}
+
 func loadRecoveryEligibilityPreflightBinding(
 	ctx context.Context,
 	db *gorm.DB,
 	request PreflightExternalEvidenceRequest,
+) (RecoveryAuthorityBinding, error) {
+	if ctx == nil || db == nil {
+		return RecoveryAuthorityBinding{}, ErrTargetPreflightUnavailable
+	}
+	var binding RecoveryAuthorityBinding
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		binding, err = loadRecoveryEligibilityPreflightBindingTx(ctx, tx, request)
+		return err
+	})
+	return binding, err
+}
+
+func loadRecoveryEligibilityPreflightBindingTx(
+	ctx context.Context, db *gorm.DB, request PreflightExternalEvidenceRequest,
 ) (RecoveryAuthorityBinding, error) {
 	if ctx == nil || db == nil || !validOpaqueID(request.PlanID) || !validDigest(request.PlanBindingDigest) ||
 		request.PlanTransitionRevision == 0 || !validDigest(request.SourceRevisionDigest) ||
@@ -745,23 +806,16 @@ func loadRecoveryEligibilityPreflightBinding(
 		return RecoveryAuthorityBinding{}, ErrTargetPreflightUnavailable
 	}
 	var plan model.BackupAssetRecoveryPlan
-	var providerKind string
-	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		loaded := tx.WithContext(ctx).Where("id = ?", request.PlanID).Limit(1).Find(&plan)
-		if loaded.Error != nil || loaded.RowsAffected != 1 {
-			return ErrTargetPreflightUnavailable
-		}
-		var repository struct{ ProviderKind string }
-		loaded = tx.WithContext(ctx).Table((model.BackupRepository{}).TableName()).
-			Select("provider_kind").Where("id = ?", plan.RepositoryID).Limit(1).Find(&repository)
-		if loaded.Error != nil || loaded.RowsAffected != 1 {
-			return ErrTargetPreflightUnavailable
-		}
-		providerKind = repository.ProviderKind
-		return nil
-	})
-	if err != nil {
-		return RecoveryAuthorityBinding{}, err
+	loaded := db.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+		Where("id = ?", request.PlanID).Limit(1).Find(&plan)
+	if loaded.Error != nil || loaded.RowsAffected != 1 {
+		return RecoveryAuthorityBinding{}, ErrTargetPreflightUnavailable
+	}
+	var repository struct{ ProviderKind string }
+	loaded = db.WithContext(ctx).Table((model.BackupRepository{}).TableName()).
+		Select("provider_kind").Where("id = ?", plan.RepositoryID).Limit(1).Find(&repository)
+	if loaded.Error != nil || loaded.RowsAffected != 1 {
+		return RecoveryAuthorityBinding{}, ErrTargetPreflightUnavailable
 	}
 	if plan.BindingDigest != request.PlanBindingDigest ||
 		plan.TransitionRevision != request.PlanTransitionRevision ||
@@ -776,7 +830,7 @@ func loadRecoveryEligibilityPreflightBinding(
 		return RecoveryAuthorityBinding{}, ErrRecoveryPreflightConflict
 	}
 	binding := RecoveryAuthorityBinding{
-		Operation: AuthorizationReceiptWriteAuthorize, Provider: backupasset.ProviderKind(providerKind),
+		Operation: AuthorizationReceiptWriteAuthorize, Provider: backupasset.ProviderKind(repository.ProviderKind),
 		PlanID: plan.ID, PlanBindingDigest: plan.BindingDigest, PlanTransitionRevision: plan.TransitionRevision,
 		RepositoryID: plan.RepositoryID, RecoveryPointID: plan.RecoveryPointID,
 		CatalogGenerationID: plan.CatalogGenerationID, SelectionDigest: plan.SelectionDigest,
@@ -817,6 +871,8 @@ func recoveryEligibilityPreflightProjection(
 	sealed RecoveryAuthorityObservation,
 ) (PreflightExternalEvidenceObservation, error) {
 	if sealed.proof == nil || !sealed.proof.production ||
+		!sealed.observedAt.Equal(sealed.binding.target.ObservedAt) ||
+		!sealed.expiresAt.Equal(sealed.binding.target.ExpiresAt) ||
 		sealed.proof.bindingDigest != recoveryEligibilityBindingDigest(sealed.binding) ||
 		sealed.binding.authority.PlanID != request.PlanID ||
 		sealed.binding.authority.PlanBindingDigest != request.PlanBindingDigest ||
@@ -840,7 +896,7 @@ func recoveryEligibilityPreflightProjection(
 		TargetRootRevision:       request.TargetRootRevision,
 		TargetFilesystemRevision: request.TargetFilesystemRevision, TargetRevision: request.TargetRevision,
 		RequiredBytes: request.RequiredBytes, RequiredInodes: request.RequiredInodes,
-		ObservedAt: sealed.observedAt, ExpiresAt: sealed.expiresAt,
+		ObservedAt: sealed.observedAt, ObservationExpiresAt: sealed.expiresAt, authority: sealed,
 		FindingDisposition: sealed.binding.findingDisposition,
 		SourceAccessible:   sealed.binding.sourceAccessible,
 		OverlapsXirangRoot: sealed.binding.overlapsXirangRoot,

@@ -1227,6 +1227,17 @@ func NewPlanService(dependencies PlanServiceDependencies) (*PlanService, error) 
 	}, nil
 }
 
+// newPlanPreflightExpiry matches the new plan's persisted timestamp before it
+// is included in the immutable intent digest. The original clock remains the
+// authority for expiry validation.
+func newPlanPreflightExpiry(db *gorm.DB, now time.Time, ttl time.Duration) time.Time {
+	expiry := now.Add(ttl).UTC()
+	if db.Name() == "postgres" {
+		expiry = expiry.Truncate(time.Microsecond)
+	}
+	return expiry
+}
+
 // CreatePlan creates or replays the sole durable plan for a requester,
 // endpoint, and idempotency key. The transaction belongs to the service.
 func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRequest) (CreatePlanResult, error) {
@@ -1238,7 +1249,7 @@ func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRe
 		return CreatePlanResult{}, err
 	}
 	now := service.now().UTC()
-	request.Plan.PreflightExpiresAt = now.Add(service.preflightPolicy.TTL).UTC()
+	request.Plan.PreflightExpiresAt = newPlanPreflightExpiry(service.db, now, service.preflightPolicy.TTL)
 	normalized, err := normalizeCreatePlanRequest(request, now)
 	if err != nil {
 		return CreatePlanResult{}, err
@@ -1357,7 +1368,7 @@ func (service *PlanService) CreatePlanTx(ctx context.Context, tx *gorm.DB, reque
 		return CreatePlanResult{}, err
 	}
 	now := service.now().UTC()
-	request.Plan.PreflightExpiresAt = now.Add(service.preflightPolicy.TTL).UTC()
+	request.Plan.PreflightExpiresAt = newPlanPreflightExpiry(tx, now, service.preflightPolicy.TTL)
 	normalized, err := normalizeCreatePlanRequest(request, now)
 	if err != nil {
 		return CreatePlanResult{}, err
@@ -2902,6 +2913,7 @@ type RecoveryAuthorityBinding struct {
 	RequiredBytes                 int64
 	RequiredInodes                int64
 	draftPreflight                bool
+	targetExpectation             recoveryAuthorityTargetExpectation
 }
 
 // RecoveryAuthorityRevalidator checks the current target/node/credential,
@@ -3189,6 +3201,10 @@ func (service *AuthorizationService) authorizeOnce(
 	var result RecoveryAuthorizationResult
 	created := false
 	err = service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		startedAt := service.now().UTC()
+		if startedAt.IsZero() || startedAt.Before(authority.observedAt) {
+			return ErrAuthorizationDenied
+		}
 		if replay, found, err := loadAuthorizationReplay(ctx, tx, normalized, service.now().UTC()); found || err != nil {
 			result = replay
 			return err
@@ -3209,6 +3225,12 @@ func (service *AuthorizationService) authorizeOnce(
 				return &authorizationFaultError{cause: err}
 			}
 		}
+		finishedAt := service.now().UTC()
+		if finishedAt.IsZero() || finishedAt.Before(startedAt) ||
+			(!authority.observation.expiresAt.IsZero() && !finishedAt.Before(authority.observation.expiresAt)) ||
+			!finishedAt.Before(authority.expiresAt) {
+			return ErrAuthorizationDenied
+		}
 		created = true
 		return nil
 	})
@@ -3221,6 +3243,9 @@ func (service *AuthorizationService) authorizeOnce(
 type observedAuthorizationAuthority struct {
 	binding     RecoveryAuthorityBinding
 	observation RecoveryAuthorityObservation
+	request     RecoveryAuthorizationRequest
+	observedAt  time.Time
+	expiresAt   time.Time
 }
 
 func (service *AuthorizationService) observeAuthorizationAuthority(
@@ -3259,6 +3284,20 @@ func (service *AuthorizationService) observeAuthorizationAuthority(
 		return observedAuthorizationAuthority{}, ErrAuthorizationDenied
 	}
 	binding := recoveryAuthorityBinding(normalized.request.Operation, providerKind, intent.plan, intent.preflight)
+	if normalized.request.Operation == AuthorizationReceiptDeleteAuthorize {
+		err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			state, err := loadRecoveryDeleteAuthorityTx(ctx, tx, normalized.request, service.now().UTC())
+			if err != nil {
+				return err
+			}
+			binding.targetExpectation = state.target
+			return nil
+		})
+		if err != nil {
+			return observedAuthorizationAuthority{}, ErrAuthorizationDenied
+		}
+	}
+	startedAt := service.now().UTC()
 	observation, err := service.liveRevalidator.ObserveRecoveryAuthority(ctx, binding)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -3266,7 +3305,14 @@ func (service *AuthorizationService) observeAuthorizationAuthority(
 		}
 		return observedAuthorizationAuthority{}, ErrAuthorizationDenied
 	}
-	return observedAuthorizationAuthority{binding: binding, observation: observation}, nil
+	finishedAt := service.now().UTC()
+	if startedAt.IsZero() || finishedAt.Before(startedAt) || !finishedAt.Before(intent.plan.PreflightExpiresAt) {
+		return observedAuthorizationAuthority{}, ErrAuthorizationDenied
+	}
+	return observedAuthorizationAuthority{binding: binding, observation: observation,
+		request: RecoveryAuthorizationRequest{Operation: normalized.request.Operation, PlanID: normalized.request.PlanID,
+			JobID: normalized.request.JobID, AttemptID: normalized.request.AttemptID, CheckpointID: normalized.request.CheckpointID},
+		observedAt: finishedAt, expiresAt: intent.plan.PreflightExpiresAt}, nil
 }
 
 type authorizationFaultError struct{ cause error }
@@ -4510,9 +4556,29 @@ func (service *AuthorizationService) revalidateAuthorizationAuthorityTx(
 		return err
 	}
 	lockedBinding := recoveryAuthorityBinding(operation, providerKind, plan, preflight)
-	return service.liveRevalidator.RevalidateRecoveryAuthorityTx(
-		ctx, tx, lockedBinding, authority.observation,
-	)
+	now := service.now().UTC()
+	if now.IsZero() || now.Before(authority.observedAt) || !now.Before(plan.PreflightExpiresAt) {
+		return ErrAuthorizationDenied
+	}
+	if operation == AuthorizationReceiptDeleteAuthorize {
+		state, err := loadRecoveryDeleteAuthorityTx(ctx, tx, authority.request, now)
+		if err != nil {
+			return err
+		}
+		lockedBinding.targetExpectation = state.target
+	}
+	if lockedBinding != authority.binding {
+		return ErrAuthorizationDenied
+	}
+	if err := service.liveRevalidator.RevalidateRecoveryAuthorityTx(ctx, tx, lockedBinding, authority.observation); err != nil {
+		return err
+	}
+	finishedAt := service.now().UTC()
+	if finishedAt.IsZero() || finishedAt.Before(now) || !finishedAt.Before(plan.PreflightExpiresAt) ||
+		(!authority.observation.expiresAt.IsZero() && !finishedAt.Before(authority.observation.expiresAt)) {
+		return ErrAuthorizationDenied
+	}
+	return nil
 }
 
 func validateAuthorizationPreflightBindings(
@@ -4878,104 +4944,30 @@ func (service *AuthorizationService) persistDeleteAuthorizationTx(
 	now time.Time,
 	authority observedAuthorizationAuthority,
 ) (RecoveryAuthorizationResult, error) {
-	if PlanState(plan.State) != PlanStateExecuted || plan.TargetMode != string(TargetModeInPlace) ||
-		!validOpaqueID(normalized.request.JobID) || !validOpaqueID(normalized.request.CheckpointID) ||
-		!validOpaqueID(normalized.request.AttemptID) {
+	if PlanState(plan.State) != PlanStateExecuted || plan.TargetMode != string(TargetModeInPlace) {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
-	var job model.BackupAssetRecoveryJob
-	loaded := tx.WithContext(ctx).Where("id = ? AND plan_id = ?", normalized.request.JobID, plan.ID).
-		Limit(1).Find(&job)
-	if loaded.Error != nil {
-		return RecoveryAuthorizationResult{}, loaded.Error
-	}
-	if loaded.RowsAffected != 1 || job.State != "running" || job.TargetMode != string(TargetModeInPlace) {
-		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
-	}
-	var checkpoint model.BackupAssetRecoveryCheckpoint
-	loaded = tx.WithContext(ctx).Where("id = ? AND job_id = ? AND attempt_id = ?",
-		normalized.request.CheckpointID, job.ID, normalized.request.AttemptID).Limit(1).Find(&checkpoint)
-	if loaded.Error != nil {
-		return RecoveryAuthorizationResult{}, loaded.Error
-	}
-	if loaded.RowsAffected != 1 || checkpoint.Phase != "delete_authority_required" ||
-		checkpoint.DeleteAuthorityExpiresAt == nil || !now.Before(checkpoint.DeleteAuthorityExpiresAt.UTC()) {
-		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
-	}
-	var nodeLeases []model.BackupAssetRecoveryNodeLease
-	loaded = tx.WithContext(ctx).Where("job_id = ? AND attempt_id = ? AND state = ?",
-		job.ID, normalized.request.AttemptID, "active").Limit(2).Find(&nodeLeases)
-	if loaded.Error != nil {
-		return RecoveryAuthorizationResult{}, loaded.Error
-	}
-	if len(nodeLeases) != 1 || nodeLeases[0].Fence != checkpoint.NodeFence {
-		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
-	}
-	nodeLease := nodeLeases[0]
-	var preflight model.BackupAssetRecoveryPreflight
-	loaded = tx.WithContext(ctx).Where("id = ? AND plan_id = ?", job.PreflightID, plan.ID).
-		Limit(1).Find(&preflight)
-	if loaded.Error != nil {
-		return RecoveryAuthorizationResult{}, loaded.Error
-	}
-	if loaded.RowsAffected != 1 || validateAuthorizationPreflightBindings(*plan, preflight, now) != nil {
-		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
-	}
-	if err := service.sourceValidator.RevalidatePlanTx(ctx, tx, *plan); err != nil {
-		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
-	}
-	if err := service.revalidateAuthorizationAuthorityTx(
-		ctx, tx, normalized.request.Operation, *plan, preflight, authority,
-	); err != nil {
-		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
-	}
-	var attempt model.BackupAssetRecoveryAttempt
-	loaded = tx.WithContext(ctx).Where("id = ? AND job_id = ?", normalized.request.AttemptID, job.ID).
-		Limit(1).Find(&attempt)
-	if loaded.Error != nil {
-		return RecoveryAuthorizationResult{}, loaded.Error
-	}
-	var sourceLeases []model.RecoveryPointLease
-	loaded = tx.WithContext(ctx).Where("holder_type = ? AND owner_id = ? AND attempt_id = ? AND status = ?",
-		backupasset.LeaseHolderRecoveryJob, job.ID, attempt.ID, backupasset.LeaseActive).Limit(2).Find(&sourceLeases)
-	if loaded.Error != nil {
-		return RecoveryAuthorizationResult{}, loaded.Error
-	}
-	if attempt.ID == "" || attempt.State != string(AttemptStateRunning) || !attempt.MutationArmed ||
-		attempt.LeaseExpiresAt == nil || !attempt.LeaseExpiresAt.UTC().After(now) ||
-		nodeLease.AttemptID == nil || *nodeLease.AttemptID != attempt.ID ||
-		nodeLease.OwnerID != attempt.OwnerID || nodeLease.Fence != attempt.Fence ||
-		!nodeLease.LeaseExpiresAt.UTC().After(now) || len(sourceLeases) != 1 ||
-		!sourceLeases[0].LeaseExpiresAt.UTC().After(now) {
-		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
-	}
-	claim := RecoveryWorkerClaim{
-		JobID: job.ID, AttemptID: attempt.ID, NodeLeaseID: nodeLease.ID, WorkerID: attempt.OwnerID,
-		AttemptFence: attempt.Fence, NodeFence: nodeLease.Fence, TransitionRevision: job.TransitionRevision,
-		LeaseExpiresAt: attempt.LeaseExpiresAt.UTC(), AbsoluteDeadline: sourceLeases[0].AbsoluteDeadline.UTC(),
-		SourceFence: recoverySourceFence(sourceLeases[0]),
-	}
-	var checkpoints []model.BackupAssetRecoveryCheckpoint
-	loaded = tx.WithContext(ctx).Where("job_id = ?", job.ID).Order("sequence ASC").Find(&checkpoints)
-	if loaded.Error != nil {
-		return RecoveryAuthorizationResult{}, loaded.Error
-	}
-	operations, err := loadInPlaceOrdinaryCheckpointOperationsTx(ctx, tx, *plan, preflight, job)
+	state, err := loadRecoveryDeleteAuthorityTx(ctx, tx, normalized.request, now)
 	if err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
-	required, hasRequired, _, err := validateInPlaceOrdinaryCheckpointHistory(
-		*plan, job, claim, checkpoints, operations, now,
-	)
-	if err != nil || !hasRequired || len(checkpoints) == 0 ||
-		required.ID != checkpoint.ID || required.AttemptID != attempt.ID ||
-		required.AttemptFence != claim.AttemptFence || required.NodeFence != claim.NodeFence ||
-		checkpoints[len(checkpoints)-1].ID != required.ID {
+	job, checkpoint, claim, required := state.job, state.required, state.claim, state.required
+	if err := service.sourceValidator.RevalidatePlanTx(ctx, tx, *plan); err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
-	grantExpiresAt := normalized.grantExpiresAt
+	if err := service.revalidateAuthorizationAuthorityTx(ctx, tx, normalized.request.Operation, *plan, state.preflight, authority); err != nil {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
+	grantExpiresAt := normalized.grantExpiresAt.UTC()
 	if checkpoint.DeleteAuthorityExpiresAt.UTC().Before(grantExpiresAt) {
 		grantExpiresAt = checkpoint.DeleteAuthorityExpiresAt.UTC()
+	}
+	// Bind the same deadline that PostgreSQL can persist, without extending it.
+	if tx.Name() == "postgres" {
+		grantExpiresAt = grantExpiresAt.Truncate(time.Microsecond)
+	}
+	if !grantExpiresAt.After(now) {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
 	grantID, err := backupasset.NewOpaqueID()
 	if err != nil {
@@ -4983,7 +4975,7 @@ func (service *AuthorizationService) persistDeleteAuthorizationTx(
 	}
 	bindingDigest := framedDigest(recoveryAuthorizationGrantBindingDomain,
 		string(AuthorizationReceiptCategoryExactMirrorDelete), plan.ID, job.ID, checkpoint.ID,
-		normalized.grantSecretHash, grantExpiresAt.Format(time.RFC3339Nano))
+		normalized.grantSecretHash, grantExpiresAt.UTC().Format(time.RFC3339Nano))
 	grant := model.BackupAssetRecoveryGrant{
 		ID: grantID, PlanID: plan.ID, JobID: authorizationStringPointer(job.ID),
 		AuthorityCategory: string(AuthorityExactMirrorDelete), GrantHash: normalized.grantSecretHash,

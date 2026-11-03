@@ -4064,6 +4064,14 @@ func newRecoveryResultLifecycleFixtureFromAuthorization(
 	t *testing.T,
 	authorization *authorizationReceiptServiceFixture,
 ) *recoveryResultLifecycleFixture {
+	return newRecoveryResultLifecycleFixtureFromAuthorizationAllowEmpty(t, authorization, false)
+}
+
+func newRecoveryResultLifecycleFixtureFromAuthorizationAllowEmpty(
+	t *testing.T,
+	authorization *authorizationReceiptServiceFixture,
+	allowEmpty bool,
+) *recoveryResultLifecycleFixture {
 	t.Helper()
 	if !authorization.db.Migrator().HasTable(&model.TaskRun{}) {
 		if err := authorization.db.AutoMigrate(&model.Task{}, &model.TaskRun{}); err != nil {
@@ -4084,7 +4092,18 @@ func newRecoveryResultLifecycleFixtureFromAuthorization(
 		t.Fatalf("load recovery result fixture attempt: %v", err)
 	}
 	deadline := authorization.now.Add(recoveryResultTestDefaultTTL)
-	markerDigest := framedDigest("xirang/recovery/result-test-marker/v1", job.ID)
+	var plan model.BackupAssetRecoveryPlan
+	if err := authorization.db.Where("id = ?", job.PlanID).Take(&plan).Error; err != nil {
+		t.Fatalf("load recovery result fixture plan: %v", err)
+	}
+	keyring, ok := authorization.dependencies.LocatorKeys.(*authorizationReceiptLocatorKeys)
+	if !ok || keyring == nil {
+		t.Fatalf("unexpected recovery result fixture keyring %T", authorization.dependencies.LocatorKeys)
+	}
+	markerDigest := recoveryWorkspaceMarkerBindingDigest(
+		keyring.material, job.ID, job.TargetRootID, plan.RootRevision, job.EncryptedWorkspaceRelativeLocator,
+		RecoveryWorkerClaim{WorkerID: "result-test-worker", AttemptFence: attempt.Fence},
+	)
 	closedAt := authorization.now
 	if err := authorization.db.Model(&model.BackupAssetRecoveryAttempt{}).Where("job_id = ?", job.ID).
 		Updates(map[string]any{
@@ -4136,7 +4155,7 @@ func newRecoveryResultLifecycleFixtureFromAuthorization(
 			publishable = append(publishable, items[index])
 		}
 	}
-	if len(publishable) == 0 {
+	if len(publishable) == 0 && !allowEmpty {
 		t.Fatal("recovery result fixture has no publishable regular items")
 	}
 
@@ -4157,10 +4176,6 @@ func newRecoveryResultLifecycleFixtureFromAuthorization(
 	if err := authorization.db.Where("id = ?", job.ID).Take(&job).Error; err != nil {
 		t.Fatalf("reload sealed recovery result fixture job: %v", err)
 	}
-	var plan model.BackupAssetRecoveryPlan
-	if err := authorization.db.Where("id = ?", job.PlanID).Take(&plan).Error; err != nil {
-		t.Fatalf("load recovery result fixture plan: %v", err)
-	}
 	encryptedTargetRootLocator, err := secure.EncryptString(plan.EncryptedTargetRootLocator)
 	if err != nil {
 		t.Fatalf("seal recovery result fixture target root: %v", err)
@@ -4176,10 +4191,6 @@ func newRecoveryResultLifecycleFixtureFromAuthorization(
 		t.Fatalf("insert recovery result fixture schema-use latch: %v", err)
 	}
 
-	keyring, ok := authorization.dependencies.LocatorKeys.(*authorizationReceiptLocatorKeys)
-	if !ok || keyring == nil {
-		t.Fatalf("unexpected recovery result fixture keyring %T", authorization.dependencies.LocatorKeys)
-	}
 	fixture := &recoveryResultLifecycleFixture{
 		db: authorization.db, now: authorization.now, job: job,
 		requesterID: authorization.request.RequesterID, publishableRows: publishable,

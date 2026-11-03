@@ -65,7 +65,7 @@ func runCatalogGenerationBehavior(t *testing.T, primary, observer *gorm.DB) {
 		}
 		for caseIndex, test := range cases {
 			t.Run(test.name, func(t *testing.T) {
-				fixture := seedCatalogBehaviorFixture(t, primary, now, 100+caseIndex)
+				fixture := seedCatalogBehaviorFixture(t, primary, now, 100+caseIndex, backupasset.ProviderRsync)
 				indexer, frozen, fence, oldActive, building, proof, digest := prepareCatalogActivation(t, fixture)
 				injected := errors.New("FAKE_CATALOG_ACTIVATION_FAILURE_FOR_TEST_ONLY")
 				remove, fired := registerCatalogStatementFailure(t, primary, test.callbackKind, test.ordinal, injected)
@@ -94,7 +94,7 @@ func runCatalogGenerationBehavior(t *testing.T, primary, observer *gorm.DB) {
 	})
 
 	t.Run("separate connection never observes zero active generations", func(t *testing.T) {
-		fixture := seedCatalogBehaviorFixture(t, primary, now, 300)
+		fixture := seedCatalogBehaviorFixture(t, primary, now, 300, backupasset.ProviderRsync)
 		indexer, frozen, fence, oldActive, building, proof, digest := prepareCatalogActivation(t, fixture)
 		entered := make(chan struct{})
 		resume := make(chan struct{})
@@ -125,7 +125,7 @@ func runCatalogGenerationBehavior(t *testing.T, primary, observer *gorm.DB) {
 	})
 
 	t.Run("concurrent generation sequence is collision free", func(t *testing.T) {
-		fixture := seedCatalogBehaviorFixture(t, primary, now, 400)
+		fixture := seedCatalogBehaviorFixture(t, primary, now, 400, backupasset.ProviderRsync)
 		lease, err := fixture.lease.Acquire(context.Background(), backupasset.AcquireLeaseRequest{
 			RecoveryPointID: fixture.point.ID,
 			HolderType:      backupasset.LeaseHolderCatalogBuild,
@@ -187,7 +187,7 @@ func runCatalogGenerationBehavior(t *testing.T, primary, observer *gorm.DB) {
 	})
 
 	t.Run("reconciliation deactivates retired mutable projection", func(t *testing.T) {
-		fixture := seedCatalogBehaviorFixture(t, primary, now, 500)
+		fixture := seedCatalogBehaviorFixture(t, primary, now, 500, backupasset.ProviderRsync)
 		indexer := fixture.newIndexer(t, fixture.factory())
 		active, err := indexer.Build(context.Background(), BuildRequest{
 			RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID,
@@ -261,6 +261,130 @@ func runCatalogGenerationBehavior(t *testing.T, primary, observer *gorm.DB) {
 		if err != nil || len(diff.Items) != 1 || diff.Items[0].Kind != DiffModified ||
 			diff.Items[0].Base == nil || diff.Items[0].Compare == nil || diff.Items[0].Base.Name != "same" {
 			t.Fatalf("engine exact diff=%+v err=%v", diff, err)
+		}
+	})
+
+	t.Run("strong fingerprint upgrade eligibility", func(t *testing.T) {
+		cases := []struct {
+			name            string
+			strength        string
+			entryType       backupasset.CatalogEntryType
+			semantics       backupasset.PointVersionSemantics
+			provider        backupasset.ProviderKind
+			latest          GenerationState
+			errorCode       string
+			advance         bool
+			otherPoint      bool
+			otherGeneration bool
+			want            bool
+		}{
+			{name: "none", strength: "none", entryType: backupasset.CatalogEntryFile, want: true},
+			{name: "weak", strength: "weak", entryType: backupasset.CatalogEntryFile, want: true},
+			{name: "strong", strength: "strong", entryType: backupasset.CatalogEntryFile},
+			{name: "empty tree"},
+			{name: "directory only", strength: "none", entryType: backupasset.CatalogEntryDirectory},
+			{name: "imported baseline", strength: "none", entryType: backupasset.CatalogEntryFile, semantics: backupasset.PointImportedBaseline, want: true},
+			{name: "other provider", strength: "none", entryType: backupasset.CatalogEntryFile, provider: backupasset.ProviderRclone},
+			{name: "other semantics", strength: "none", entryType: backupasset.CatalogEntryFile, semantics: backupasset.PointNativeSnapshot},
+			{name: "other generation", strength: "none", entryType: backupasset.CatalogEntryFile, otherGeneration: true},
+			{name: "other point", strength: "none", entryType: backupasset.CatalogEntryFile, otherPoint: true},
+			{name: "building", strength: "none", entryType: backupasset.CatalogEntryFile, latest: GenerationBuilding},
+			{name: "failed before retry", strength: "none", entryType: backupasset.CatalogEntryFile, latest: GenerationFailed, errorCode: "catalog_provider_unavailable"},
+			{name: "failed after retry", strength: "none", entryType: backupasset.CatalogEntryFile, latest: GenerationFailed, errorCode: "catalog_provider_unavailable", advance: true, want: true},
+			{name: "partial after retry", strength: "weak", entryType: backupasset.CatalogEntryFile, latest: GenerationPartial, errorCode: "catalog_build_timeout", advance: true, want: true},
+			{name: "nonretryable", strength: "none", entryType: backupasset.CatalogEntryFile, latest: GenerationFailed, errorCode: "catalog_proof_mismatch", advance: true},
+		}
+		for index, test := range cases {
+			t.Run(test.name, func(t *testing.T) {
+				seed := 800 + index
+				kind := test.provider
+				if kind == "" {
+					kind = backupasset.ProviderRsync
+				}
+				fixture := seedCatalogBehaviorFixture(t, primary, now, seed, kind)
+				if test.semantics != "" {
+					fixture.point.Semantics = string(test.semantics)
+					if err := primary.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.point.ID).Update("semantics", fixture.point.Semantics).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+				if test.entryType != "" {
+					fixture.point.EntryCount = 1
+					if err := primary.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.point.ID).Update("entry_count", 1).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+				finished := now
+				active := model.CatalogGeneration{
+					ID: fmt.Sprintf("%032x", seed*10+4), RecoveryPointID: fixture.point.ID, Generation: 1,
+					State: string(GenerationComplete), IsActive: true, SourceFingerprint: fixture.point.SourceFingerprint,
+					ExpectedDigest: fixture.point.ManifestDigest, ExpectedEntryCount: fixture.point.EntryCount,
+					StartedAt: now, FinishedAt: &finished, CreatedAt: now, UpdatedAt: now,
+				}
+				if err := primary.Create(&active).Error; err != nil {
+					t.Fatal(err)
+				}
+				entryGeneration := active.ID
+				entryPoint := fixture.point.ID
+				if test.otherGeneration {
+					other := active
+					other.ID = fmt.Sprintf("%032x", seed*10+5)
+					other.Generation, other.IsActive, other.State = 2, false, string(GenerationSuperseded)
+					if err := primary.Create(&other).Error; err != nil {
+						t.Fatal(err)
+					}
+					entryGeneration = other.ID
+				}
+				if test.otherPoint {
+					other := fixture.point
+					other.ID = fmt.Sprintf("%032x", seed*10+6)
+					other.SourceFingerprint = fmt.Sprintf("%064x", seed*10+6)
+					if err := primary.Create(&other).Error; err != nil {
+						t.Fatal(err)
+					}
+					entryPoint = other.ID
+				}
+				if test.entryType != "" {
+					entry := model.CatalogEntry{
+						GenerationID: entryGeneration, RecoveryPointID: entryPoint, EntryID: fmt.Sprintf("%064x", seed),
+						NormalizedPath: "entry", Name: "entry", EntryType: string(test.entryType), FingerprintStrength: test.strength, CreatedAt: now,
+					}
+					if err := primary.Create(&entry).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+				at := now
+				config := catalogCandidateTestConfig()
+				if test.latest != "" {
+					latest := model.CatalogGeneration{
+						ID: fmt.Sprintf("%032x", seed*10+7), RecoveryPointID: fixture.point.ID, Generation: 2,
+						State: string(test.latest), SourceFingerprint: fixture.point.SourceFingerprint, ErrorCode: test.errorCode,
+						StartedAt: now, CreatedAt: now, UpdatedAt: now,
+					}
+					if test.latest != GenerationBuilding {
+						latest.FinishedAt = &finished
+					}
+					if err := primary.Create(&latest).Error; err != nil {
+						t.Fatal(err)
+					}
+					if test.advance {
+						at = now.Add(RetryDelay(config, 1, fixture.point.ID, latest.ID) + time.Second)
+					}
+				}
+				indexer := fixture.newIndexer(t, fixture.factory())
+				candidates, err := indexer.ListCandidates(context.Background(), 1000, at, config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, candidate := range candidates {
+					found = found || candidate.RecoveryPointID == fixture.point.ID
+				}
+				if found != test.want {
+					t.Fatalf("point eligible=%t, want %t; candidates=%+v", found, test.want, candidates)
+				}
+				assertCatalogActiveGeneration(t, observer, fixture.point.ID, active.ID)
+			})
 		}
 	})
 }
@@ -390,11 +514,11 @@ func assertCatalogActiveGeneration(t *testing.T, db *gorm.DB, recoveryPointID, w
 	}
 }
 
-func seedCatalogBehaviorFixture(t *testing.T, db *gorm.DB, now time.Time, seed int) catalogIndexerFixture {
+func seedCatalogBehaviorFixture(t *testing.T, db *gorm.DB, now time.Time, seed int, kind backupasset.ProviderKind) catalogIndexerFixture {
 	t.Helper()
 	id := func(offset int) string { return fmt.Sprintf("%032x", seed*10+offset) }
 	repository := model.BackupRepository{
-		ID: id(1), ProviderKind: string(backupasset.ProviderRsync), DisplayName: "catalog-behavior",
+		ID: id(1), ProviderKind: string(kind), DisplayName: "catalog-behavior",
 		VersionMode: string(backupasset.VersionFullCopyTree), Status: string(backupasset.RepositoryOnline),
 		CapabilityRevision: 3, CapabilitiesJSON: "{}", ImmutabilityLevel: string(backupasset.ImmutabilityXirangManaged),
 		CreatedAt: now, UpdatedAt: now,

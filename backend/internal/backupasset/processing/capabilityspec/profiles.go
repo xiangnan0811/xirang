@@ -286,7 +286,7 @@ func productionProfiles() []Profile {
 			}(), true, true, statRange),
 		profile(CapabilityMalwareScan, "malware.scan.v1", ProfileSignatureScanV1, "clamav.scan",
 			[]string{"application/octet-stream", "application/pdf", "image/jpeg", "image/png", "text/plain", "application/zip"},
-			[]OutputRule{{Role: "metadata", MediaTypes: []string{"application/json"}, Maximum: 1}}, common(1<<30, 64<<10, 1, 1, 1, 600_000, 1<<30, 10*time.Minute), true, true, statStream),
+			[]OutputRule{{Role: "metadata", MediaTypes: []string{"application/json"}, Maximum: 1}}, common(1<<30, 64<<10, 1, 1, 1, 600_000, 1<<30, 10*time.Minute), true, true, statRange),
 		profile(CapabilityMediaProbe, "media.probe.v1", ProfileMediaProbeV1, "ffmpeg.probe",
 			[]string{"video/mp4", "video/webm", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav"},
 			[]OutputRule{{Role: "metadata", MediaTypes: []string{"application/json"}, Maximum: 1}},

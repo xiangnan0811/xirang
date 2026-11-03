@@ -111,3 +111,20 @@ func TestCanonicalProfileAndPipelineFingerprintAreDeterministic(t *testing.T) {
 		t.Fatalf("fingerprints base=%q changed=%q", base, changed)
 	}
 }
+
+func TestMalwareProfileAddsRangeToPipelineIdentity(t *testing.T) {
+	profile, ok := Lookup(CapabilityMalwareScan, ProfileSignatureScanV1, false)
+	if !ok || !reflect.DeepEqual(profile.InputModes, []InputMode{InputStat, InputSequential, InputRange}) {
+		t.Fatalf("malware modes=%v, available=%t", profile.InputModes, ok)
+	}
+	previous := profile
+	previous.InputModes = []InputMode{InputStat, InputSequential}
+	currentFingerprint, err := profile.PipelineFingerprint("toolchain-v1", []string{strings.Repeat("a", 64)}, "policy-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousFingerprint, err := previous.PipelineFingerprint("toolchain-v1", []string{strings.Repeat("a", 64)}, "policy-v1")
+	if err != nil || currentFingerprint == previousFingerprint {
+		t.Fatalf("old and current malware identities: %q / %q, %v", previousFingerprint, currentFingerprint, err)
+	}
+}

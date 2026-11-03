@@ -552,6 +552,8 @@ docker build -f deploy/allinone/Dockerfile \
   -t docker.io/linnea7171/xirang:vX.Y.Z-local .
 ```
 
+构建上下文须保留 `web/dependency-patches/` 的完整受版本控制产物。Dockerfile 在 `npm ci` 前复制这些本地依赖，复制前端源码后运行只读完整性校验，再构建静态资源；缺失或损坏会阻断构建，不在安装时自动重新生成。需要更新产物时，先按[仓库自动化](maintainers/automation.md)核验来源并重建，再构建镜像；运行时环境变量不能替换已构建输入。
+
 多架构构建：
 
 ```bash

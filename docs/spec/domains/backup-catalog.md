@@ -11,8 +11,13 @@ Catalog 是可浏览事实的数据库投影，Provider 观察由有界后台协
 
 ## 协调、公平性与唤醒
 
-- batch 范围 `1..1000`，按持久化 `updated_at,id` 排序，候选选择至多两个 DB 查询且不随 batch 增长；每个 claimed point 至多一次 reconciliation。后端各自的身份/来源观察集固定、有界，不能 N+1、无限列表或重试。
-- lease、attempt、backoff 是跨重启/实例共享 DB 事实。低 ID backoff、持续 wake、重启及多实例不能饿死后续 due 候选；周期 timer 仅在周期 pass 后 reset，不被 wake 延期。同一调度边界 timer 到期与 scan 完成时，优先周期 pass。
+- publication 协调保持自身合同：batch 范围 `1..1000`，按持久化 `updated_at,id` 排序，候选选择至多两个 DB 查询且不随 batch 增长；每个 claimed point 至多一次 reconciliation。后端各自的身份／来源观察集固定、有界，不能 N+1、无限列表或重试。
+- Catalog 候选按数据库原始 `created_at,id` tuple 排序，由独立 singleton 保存有限 sweep 的已检查边界、高水位和 revision；只记录扫描进度，不复用 Recovery 授权或 claim 游标。每 pass 一次短事务检查 `1..1000` 个 point，返回该页全部 eligible 项；无 eligible 也推进，空页／短页／高水位末点清空边界，下一次调用才开启新窗口。worker 拒绝超出页上限的产品，不能静默截断。
+- PostgreSQL 使用 repeatable-read 并锁 singleton 实际行；SQLite 使用 immediate 事务。revision CAS 只在提交成功且 context 有效后返回候选；缺失／非法状态、revision 耗尽、锁忙、序列化、取消、查询或提交失败不返回可派发候选，不内部重试或补种子。边界时间通过 SQL 复制原值，SQLite 不规范化既有 DATETIME 文本；续页不依赖原边界 point 仍存在。
+- 启动准入核验扫描状态的完整结构、约束、索引及种子，不补建或修复漂移。约束中的类型转换必须按完整操作数及其类型核验；字符串边界 ID 的数值转换不是等价比较，即使空闲种子仍满足该约束也须拒绝启动。
+- 开窗口非空页至多五条逻辑 SQL，续页至多四条，空库两条，BEGIN／COMMIT 另计。一次按同一有界页 JOIN 并按 point 排名的 history 查询返回每点最新十二代；不逐点查询，不先过滤 generation 状态、source 或 active。该预算不代表数据库工作恒定：scalar/page 子查询、页内历史读取及排序仍有成本，须核验 `(created_at,id)` 与 point/generation 索引和实际查询计划。
+- 完整 sweep 跨重启／实例共享推进，旧前缀、backoff 或失败 Build 不能永久阻挡后方候选。晚插入到 cursor 之前、后来 eligible 或排序键被维护移动的点在下轮重新访问；不承诺无限回填或持续改变排序键时无条件公平。提交后未派发或提交确认丢失的 point 可在后续完整 sweep 重访，这不是持久投递队列或自动 crash replay。
+- eligibility 保持现有 active／来源／digest／count 优先级、building 阻挡、不可重试失败和确定性退避；只考虑最新十二代内首个 active。扫描进度不替代 Build 的 lease、fence、来源观察或激活事务。lease、attempt、backoff 仍是跨重启／实例共享 DB 事实；周期 timer 仅在周期 pass 后 reset，不被 wake 延期。同一调度边界 timer 到期与 scan 完成时，优先周期 pass。
 - `TryWake` 为 capacity-one 合并信号，send 必须 `select/default`；scan 期间 wake 留给后续 pass，Run 前 wake 由 initial pass 吸收。shutdown cancel/join 后拒绝 wake。active-build gauge 使用独立串行发布，所有 build join 后准确为 0。
 - connect 是管理员显式动作：`POST /api/v1/backup-repositories/connect` 的 Task 入口仅 `{task_id}`，不接受 locator、credential、replacement flag、display name 或 proof。服务从 Task/Node/credential 推导访问，事务外 probe，再锁定重验证后提交；不启用 versioning、不改 Provider bytes。
 - 仅 commit 成功且存在有效 observed、未 retired mutable 点时，锁外请求一次 best-effort wake。nil/typed-nil/重复 wiring 拒绝并保留原 requester；生产只注入已有生命周期 CatalogWorker。失败、rollback、nil/retired 点不 wake；满队列/停止不能逆转 connect 成功。
@@ -29,6 +34,13 @@ Catalog 是可浏览事实的数据库投影，Provider 观察由有界后台协
 - 没有 active 且 superseded/building 是 pending，不是文件不存在；只有当前 complete generation 证明缺失才 404。仅 durable lease 真正 live 才 join building；丢失/过期 lease 按 point-before-lease 锁序精确 rearm，不能偷活 lease。旧 pending 观察不能收养并失效并发产生的新 active。
 - ready 后客户端仅做一次有界物理 preparation 验证，以同一 token/ref/AbortSignal reload 精确 entry 后发一次 ticket。持续 drift 保持可重试，无 ticket；manual retry 走同路，不 Task-derived connect 或猜 replacement。目录不进入 preparation。
 - pending/timeout/失败验证期间保留同一授权 token/ref 文件 inspector 与 Retry，清空旧票据内容；token/selection 变更清旧状态。回归必须从真实物理变化开始，不能预先 Build 后宣称首次预览修复通过。
+
+## 受管 Rsync 强内容身份
+
+- 已认证 committed Rsync 的普通文件（含空文件）使用同一次完整 manifest 的 SHA-256 作为 strong fingerprint。Catalog 页逐项核对规范路径、locator、类型、文件大小与纳秒 mtime，Finalize 继续重验 commit/tree 和完整 projection；缺项、坏 digest 或漂移失败，不退回 none。目录与 symlink 不发布文件内容摘要，可变 Rsync 和其他 Provider 不由此获得新证明。
+- `xirang_manifest`／`imported_baseline` Rsync 点的 active complete 代次若含 none/weak 文件，后台候选扫描触发新 generation；查询精确约束 point 与 generation。较新 building、失败退避和不可重试失败仍能阻止构建，不能绕过现有重试门槛。已全 strong、空树和仅非文件的树不为此重复重建。
+- 新代次由现有 Build／lease fence／成功事务原子激活，失败保留旧 active。旧代次和被引用的行继续保留，Processing job、grant 与 Recovery 绑定不搬运、不改写身份。历史 none 读取兼容不代表通过 Recovery 的 strong 门禁；后台重建与新 pipeline 处理完成后才具备新的准入证据。
+
 
 ## 索引 owner 与代次回收
 

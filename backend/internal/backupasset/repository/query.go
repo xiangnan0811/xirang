@@ -1103,7 +1103,7 @@ func (service *Service) loadRsyncRestoreDurableSnapshot(
 		runtime.repository.CapabilityRevision <= 0 {
 		return rsyncRestoreDurableSnapshot{}, invalidRsyncRestoreSourceRef()
 	}
-	request, _, err := service.managedRsyncCommittedPointReadRequest(ctx, runtime, point)
+	request, _, err := service.managedRsyncCommittedPointReadRequest(ctx, tx, runtime, point)
 	if err != nil {
 		return rsyncRestoreDurableSnapshot{}, invalidRsyncRestoreSourceRef()
 	}
@@ -1914,7 +1914,7 @@ func (service *Service) beginManagedRsyncPointReadWithAdmission(
 	if backupasset.RecoveryPointState(point.State) != backupasset.RecoveryPointCommitted {
 		return nil, capabilityError(backupasset.CapabilityPointNotCommitted, "")
 	}
-	request, access, err := service.managedRsyncCommittedPointReadRequest(ctx, runtime, point)
+	request, access, err := service.managedRsyncCommittedPointReadRequest(ctx, service.db, runtime, point)
 	if err != nil {
 		return nil, err
 	}
@@ -1951,7 +1951,10 @@ func mapManagedRsyncCommittedPointReadOpenError(ctx context.Context, err error) 
 	return capabilityError(backupasset.CapabilityMutableSourceChanged, "")
 }
 
-func (service *Service) managedRsyncCommittedPointReadRequest(ctx context.Context, runtime managedRsyncPublicationRuntime, point model.RecoveryPoint) (provider.RsyncCommittedPointReadRequest, provider.AccessBinding, error) {
+func (service *Service) managedRsyncCommittedPointReadRequest(ctx context.Context, db *gorm.DB, runtime managedRsyncPublicationRuntime, point model.RecoveryPoint) (provider.RsyncCommittedPointReadRequest, provider.AccessBinding, error) {
+	if db == nil {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync database unavailable", backupasset.ErrInvalidState)
+	}
 	if point.RepositoryID != runtime.repository.ID || point.ID == "" || backupasset.ValidateOpaqueID(point.ID) != nil ||
 		point.ProducingTaskID == nil || *point.ProducingTaskID != runtime.task.ID || point.ProducingTaskRunID == nil ||
 		point.CapabilityRevision <= 0 || point.CapturedAt == nil || point.CapturedAt.IsZero() || point.EntryCount < 0 || point.LogicalBytes < 0 ||
@@ -2017,13 +2020,22 @@ func (service *Service) managedRsyncCommittedPointReadRequest(ctx context.Contex
 		CommitMarkerDigest: locator.CommitMarkerDigest, SourceFingerprint: point.SourceFingerprint,
 		ChildFenceDigest: locator.ChildFenceDigest, ManifestDigest: point.ManifestDigest,
 		ManifestEntryCount: uint64(point.EntryCount), LogicalBytes: uint64(point.LogicalBytes),
-		CapturedAt: point.CapturedAt.UTC(), Semantics: semantics, ManifestLimits: limits,
+		CapturedAt: point.CapturedAt.UTC(), CapturedAtPrecision: rsyncPersistedTimePrecision(db), Semantics: semantics, ManifestLimits: limits,
 	}
 	access := provider.AccessBinding{
 		Provider: backupasset.ProviderRsync, RepositoryID: runtime.repository.ID, TaskID: runtime.task.ID,
 		NodeID: runtime.binding.NodeID, IdentitySalt: salt,
 	}
 	return request, access, nil
+}
+
+// rsyncPersistedTimePrecision describes timestamps read through this database handle.
+// PostgreSQL stores microseconds; SQLite preserves the original nanoseconds.
+func rsyncPersistedTimePrecision(db *gorm.DB) time.Duration {
+	if db != nil && db.Name() == "postgres" {
+		return time.Microsecond
+	}
+	return 0
 }
 
 func (service *Service) rsyncCommittedPointMarkerKey(ctx context.Context, repositoryID string) ([]byte, error) {

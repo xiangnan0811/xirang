@@ -24785,6 +24785,7 @@ const docTemplate = `{
         "xirang_backend_internal_backupasset_recovery.RecoveryPublicFailureCategory": {
             "type": "string",
             "enum": [
+                "pre_write_failed",
                 "source_drift",
                 "verification_mismatch",
                 "remote_outcome_unresolved",
@@ -24792,6 +24793,7 @@ const docTemplate = `{
                 "cleanup_unavailable"
             ],
             "x-enum-varnames": [
+                "RecoveryPublicFailurePreWriteFailed",
                 "RecoveryPublicFailureSourceDrift",
                 "RecoveryPublicFailureVerificationMismatch",
                 "RecoveryPublicFailureRemoteOutcomeUnresolved",

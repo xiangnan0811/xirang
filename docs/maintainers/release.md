@@ -53,6 +53,16 @@ Recent 内容访问修复的发布验收须覆盖同 grant 首个持久成功 GE
 
 上述 Recent 修复与此前保留/删除安全回归、退役快照及未用代码清理的完整说明归档于 CHANGELOG `0.73.8` 版本节。该发行 PR 与正式 GitHub Release 正文须保留三部分全部行为、生效和升级边界，不将原 `Unreleased` 的已交付条目留在版本节之外。
 
+真实恢复修复的发行说明须同时覆盖目录 capture 后非空子项保全、枚举／关闭失败、有界目录检查、取消独立中断 transport 和晚到资源 join，以及 SSH usage 不改变策略 revision。PostgreSQL 期限与 committed Rsync 元数据只在数据库表示边界投影，原签名时间、manifest 与旧租约不改写、不延长；发布完整认证后才置 online。旧 Rsync none/weak Catalog 代次由后台按原退避重建，失败保留旧 active，旧引用不改写。
+
+同版必须配套切换 Core／Worker 的 activation v2 与 trailer 终态合同，排空旧进程；malware stat/range profile 推进 pipeline 指纹，旧证据需重新处理，并重新取得匹配 Worker 二进制的两架构 closure／签名 bundle。canonical malware 格式不变；这些 Worker 子功能无新增配置或 schema migration，不改写已发布迁移。同版本的 Catalog 扫描状态迁移须另行说明。保全数据库、密钥、配置和备份副本，回退整套匹配版本会恢复旧缺陷；换版不能撤销远端副作用或解除未知写入保护。SQLite/PostgreSQL 真恢复、真实 HTTP/SSH/持久状态、sandboxed scanner、required CI 与正式镜像证明分别闭合；受控 Processing 输入不冒称实际 scanner、其他 Provider、AWS live 或生产部署认证。
+
+该恢复补充还须说明持久工作流期限与短时观察新鲜度的区别、每次新许可／成功投影的重新观察与事务重验，以及已改变的 in-place anchor 如何依完整 checkpoint 历史继续。isolated 不再探测无关同名路径；旧 path-derived 计划／快照不重写、不续期，新尝试创建新计划。认证覆盖／删除残留矛盾保持 unresolved，限制性失败记录不要求目标仍满足成功条件；不将此修复写成新增自动 crash adoption、远端锁或副作用撤销保证。
+
+同版还须覆盖 isolated sealed 结果的后台补发与到期清理、unknown 分类及精确 step-up 下载，明确 workspace 原 24 小时期限不延长，disabled 只维护清理，不发布结果。exact-mirror 先写后删但不重写 canonical ordinal/digest；请求构建按当前锁定历史认证，明确 pre-dispatch 且未 armed 的失败显示 `pre_write_failed`，不能用于已执行、可能写入或未知远端结果。新增公开分类要求 Core/web 同版切换，不新增 schema、配置或自动 crash replay。完整到期验收使用真实期限及独立进程；运行中或仅完成 capture 的证据不能记为删除完成。
+
+本轮 Catalog 公平性修复新增独立扫描状态及创建时间／ID 索引迁移，迁移 head 只在后端 README 维护。发行说明须解释有限高水位窗口、跨重启／实例推进及晚到点下轮访问，提交后未派发可在后续 sweep 重访，不是持久投递队列。启动缺表／种子或结构／状态漂移拒绝且不修复。升级按正常停止、排空流程配套切换 Core／Worker／web；使用后回退此迁移仅丢失可重扫进度，不删除 Catalog 代次、备份或授权证据，再次升级重建空闲种子，旧 selector 会恢复饥饿缺陷。既有备份、Recovery 与稳定身份迁移的降级保护继续适用，不得把局部无 schema 变更扩大为本版本无迁移。
+
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
 
 Release Please 自动插入版本标题时可能将原有升级说明留在 `Unreleased`，生成的 PR 正文也可能只有提交摘要。此时原样移动 CHANGELOG 中已审阅的说明，并同步 PR 正文的目标版本节；两处都保留完整风险边界，再提交补充变更。

@@ -612,6 +612,8 @@ func (service *PublicationService) commitReconciledRsyncManifest(ctx context.Con
 		point.FidelityJSON = fidelityPayload
 		point.CapturedAt = &capturedAt
 		point.CommittedAt = &now
+		// Immutable points use CommittedAt; ObservedAt is reserved for mutable heads.
+		point.PhysicalAvailability = string(backupasset.PhysicalOnline)
 		point.State = string(backupasset.RecoveryPointCommitted)
 		point.UpdatedAt = now
 		if err := tx.Save(&point).Error; err != nil {

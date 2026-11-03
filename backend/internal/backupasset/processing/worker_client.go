@@ -220,15 +220,17 @@ func (client *WorkerClient) ActivateInput(ctx context.Context, request WorkerInp
 	if err := client.postJSON(ctx, "/internal/v1/asset-worker/jobs/"+request.JobID+"/input/activate", request, &result, false); err != nil {
 		return WorkerInputActivation{}, err
 	}
-	if result.SchemaVersion != 1 || !lowerHex(result.SessionID, 32) || result.TransitionRevision <= 0 || result.ExpiresAt.IsZero() {
+	if result.SchemaVersion != 2 || !lowerHex(result.SessionID, 32) || result.TransitionRevision <= 0 || result.ExpiresAt.IsZero() ||
+		result.Source.MaxBytesPerRequest <= 0 {
 		return WorkerInputActivation{}, ErrProtocolInvalid
 	}
+	result.Source.MaxBytesPerRequest = min(result.Source.MaxBytesPerRequest, client.inputMaxBytes)
 	return result, nil
 }
 
 func (client *WorkerClient) ReadInput(ctx context.Context, requestBody WorkerInputReadRequest) ([]byte, error) {
 	if client == nil || client.httpClient == nil || ctx == nil || !lowerHex(requestBody.SessionID, 32) || requestBody.Length <= 0 ||
-		requestBody.Length > client.inputMaxBytes || (requestBody.Mode != "sequential" && requestBody.Mode != "range") {
+		requestBody.Length == math.MaxInt64 || requestBody.Length > client.inputMaxBytes || (requestBody.Mode != "sequential" && requestBody.Mode != "range") {
 		return nil, ErrProtocolInvalid
 	}
 	payload, err := json.Marshal(requestBody)
@@ -244,17 +246,23 @@ func (client *WorkerClient) ReadInput(ctx context.Context, requestBody WorkerInp
 	request.Header.Set("Accept", "application/octet-stream")
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return nil, ErrWorkerTemporarilyUnavailable
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return nil, client.decodeErrorResponse(response)
-	}
-	if response.Header.Get("Content-Type") != "application/octet-stream" || response.Header.Get("Cache-Control") != "no-store" {
 		return nil, ErrProtocolInvalid
 	}
-	content, err := io.ReadAll(io.LimitReader(response.Body, requestBody.Length+1))
-	if err != nil || int64(len(content)) > requestBody.Length {
+	if response.StatusCode != http.StatusOK {
+		responseErr := client.decodeErrorResponse(response)
+		if err := response.Body.Close(); err != nil {
+			return nil, ErrProtocolInvalid
+		}
+		return nil, responseErr
+	}
+	if response.Header.Get("Content-Type") != "application/octet-stream" || response.Header.Get("Cache-Control") != "no-store" {
+		_ = response.Body.Close()
+		return nil, ErrProtocolInvalid
+	}
+	content, readErr := io.ReadAll(io.LimitReader(response.Body, requestBody.Length+1))
+	closeErr := response.Body.Close()
+	statuses := response.Trailer.Values("X-Xirang-Input-Status")
+	if readErr != nil || closeErr != nil || int64(len(content)) > requestBody.Length || len(statuses) != 1 || statuses[0] != "ok" {
 		return nil, ErrProtocolInvalid
 	}
 	return content, nil
@@ -485,8 +493,9 @@ type WorkerCapability interface {
 }
 
 type WorkerCapabilityJob struct {
-	Parameters CanonicalParametersV1
-	Input      WorkerCapabilityInput
+	Parameters       CanonicalParametersV1
+	EntryFingerprint string
+	Input            WorkerCapabilityInput
 }
 
 type WorkerCapabilityArtifact struct {
@@ -690,7 +699,14 @@ func (capability productionWorkerCapability) executeExternal(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	result, err := capability.toolRunner.RunInput(ctx, invocation, input)
+	var toolInput io.Reader = input
+	if capability.profile.Capability == capabilityspec.CapabilityMalwareScan && job.Input.Info().FingerprintStrong {
+		toolInput, err = newMalwareVerifiedInput(input, job.Input.Info().Size, job.EntryFingerprint)
+		if err != nil {
+			return nil, err
+		}
+	}
+	result, err := capability.toolRunner.RunInput(ctx, invocation, toolInput)
 	if err != nil {
 		return nil, err
 	}
@@ -848,7 +864,7 @@ func (capability productionWorkerCapability) preflightExternalInput(ctx context.
 		return nil
 	}
 	info := input.Info()
-	if !info.Range || info.Size <= 0 || info.Size > capability.profile.Limits.MaxInputBytes {
+	if !info.Range || info.Size <= 0 || info.Size > capability.profile.Limits.MaxInputBytes || info.MaxBytesPerRequest <= 0 {
 		return workerCapabilities.ErrInputLimit
 	}
 	readRange := func(offset, length int64) ([]byte, error) {
@@ -884,14 +900,14 @@ func (capability productionWorkerCapability) preflightExternalInput(ctx context.
 		_, err = workerCapabilities.PlanDocument(payload, info.MediaType)
 		return err
 	case capabilityspec.CapabilityMediaProbe:
-		prefix, err := readRange(0, min(info.Size, int64(64<<10)))
+		prefix, err := readRange(0, min(info.Size, int64(64<<10), info.MaxBytesPerRequest, int64(16<<20)))
 		if err != nil {
 			return err
 		}
 		_, err = workerCapabilities.PlanMedia(prefix, info.MediaType, workerCapabilities.MediaProbe)
 		return err
 	case capabilityspec.CapabilityMediaTranscode:
-		prefix, err := readRange(0, min(info.Size, int64(64<<10)))
+		prefix, err := readRange(0, min(info.Size, int64(64<<10), info.MaxBytesPerRequest, int64(16<<20)))
 		if err != nil {
 			return err
 		}
@@ -1274,11 +1290,13 @@ func (capability productionWorkerCapability) ocrArtifacts(
 }
 
 type productionCapabilityInputReader struct {
-	ctx     context.Context
-	input   WorkerCapabilityInput
-	info    WorkerInputSourceInfo
-	offset  int64
-	maximum int64
+	ctx      context.Context
+	input    WorkerCapabilityInput
+	info     WorkerInputSourceInfo
+	offset   int64
+	cap      int64
+	chunk    []byte
+	consumed int
 }
 
 func newProductionCapabilityInputReader(
@@ -1286,42 +1304,57 @@ func newProductionCapabilityInputReader(
 	input WorkerCapabilityInput,
 	maximum int64,
 ) (*productionCapabilityInputReader, error) {
+	if ctx == nil || input == nil {
+		return nil, ErrProtocolInvalid
+	}
 	info := input.Info()
-	if info.Size < 0 || info.Size > maximum || !info.Sequential && !info.Range {
+	if info.Size < 0 || info.Size > maximum || info.MaxBytesPerRequest <= 0 || !info.Sequential && !info.Range {
 		return nil, workerCapabilities.ErrInputLimit
 	}
-	return &productionCapabilityInputReader{ctx: ctx, input: input, info: info, maximum: maximum}, nil
+	cap := min(info.MaxBytesPerRequest, int64(16<<20))
+	if !info.Range && info.Size > cap {
+		return nil, workerCapabilities.ErrInputLimit
+	}
+	return &productionCapabilityInputReader{ctx: ctx, input: input, info: info, cap: cap}, nil
 }
 
 func (reader *productionCapabilityInputReader) Read(payload []byte) (int, error) {
+	if len(payload) == 0 {
+		return 0, nil
+	}
 	if err := reader.ctx.Err(); err != nil {
 		return 0, err
 	}
-	if reader.offset >= reader.info.Size {
-		return 0, io.EOF
+	if reader.consumed == len(reader.chunk) {
+		reader.chunk = nil
+		reader.consumed = 0
+		if reader.offset == reader.info.Size {
+			return 0, io.EOF
+		}
+		length := min(reader.info.Size-reader.offset, reader.cap)
+		var err error
+		if reader.info.Range {
+			reader.chunk, err = reader.input.ReadRange(reader.ctx, reader.offset, length)
+		} else {
+			reader.chunk, err = reader.input.ReadSequential(reader.ctx, length)
+		}
+		if err != nil {
+			reader.chunk = nil
+			return 0, err
+		}
+		if int64(len(reader.chunk)) != length {
+			reader.chunk = nil
+			return 0, io.ErrUnexpectedEOF
+		}
 	}
-	length := min(int64(len(payload)), reader.info.Size-reader.offset, int64(1<<20))
-	if length <= 0 {
-		return 0, io.ErrNoProgress
+	n := copy(payload, reader.chunk[reader.consumed:])
+	reader.consumed += n
+	reader.offset += int64(n)
+	if reader.consumed == len(reader.chunk) {
+		reader.chunk = nil
+		reader.consumed = 0
 	}
-	var (
-		chunk []byte
-		err   error
-	)
-	if reader.info.Range {
-		chunk, err = reader.input.ReadRange(reader.ctx, reader.offset, length)
-	} else {
-		chunk, err = reader.input.ReadSequential(reader.ctx, length)
-	}
-	if err != nil {
-		return 0, err
-	}
-	if len(chunk) == 0 || int64(len(chunk)) > length || reader.offset+int64(len(chunk)) > reader.maximum {
-		return 0, io.ErrUnexpectedEOF
-	}
-	copy(payload, chunk)
-	reader.offset += int64(len(chunk))
-	return len(chunk), nil
+	return n, nil
 }
 
 func (capability productionWorkerCapability) executeThumbnail(
@@ -1947,36 +1980,11 @@ func profileAllowsOutput(profile capabilityspec.Profile, role, mediaType string)
 }
 
 func readProductionCapabilityInput(ctx context.Context, input WorkerCapabilityInput, maximum int64) ([]byte, error) {
-	info := input.Info()
-	if info.Size < 0 || info.Size > maximum || !info.Sequential && !info.Range {
-		return nil, workerCapabilities.ErrInputLimit
+	reader, err := newProductionCapabilityInputReader(ctx, input, maximum)
+	if err != nil {
+		return nil, err
 	}
-	result := make([]byte, 0, min(info.Size, int64(1<<20)))
-	const chunkSize int64 = 1 << 20
-	for int64(len(result)) < info.Size {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		remaining := info.Size - int64(len(result))
-		length := min(remaining, chunkSize)
-		var (
-			chunk []byte
-			err   error
-		)
-		if info.Range {
-			chunk, err = input.ReadRange(ctx, int64(len(result)), length)
-		} else {
-			chunk, err = input.ReadSequential(ctx, length)
-		}
-		if err != nil || len(chunk) == 0 || int64(len(chunk)) > length || int64(len(result)+len(chunk)) > maximum {
-			if err != nil {
-				return nil, err
-			}
-			return nil, ErrProtocolInvalid
-		}
-		result = append(result, chunk...)
-	}
-	return result, nil
+	return io.ReadAll(reader)
 }
 
 var productionCoverageAll = []byte(`{"schema_version":1,"kind":"all"}`)
@@ -2218,7 +2226,9 @@ func (runner *WorkerRunner) runAttempt(ctx context.Context, envelope WorkerJobEn
 		client: runner.client, workerID: runner.workerID, instanceID: runner.config.InstanceID,
 		sessionID: input.SessionID, info: input.Source,
 	}
-	artifacts, err := capability.Execute(attemptCtx, WorkerCapabilityJob{Parameters: envelope.Descriptor.Parameters, Input: inputPort})
+	artifacts, err := capability.Execute(attemptCtx, WorkerCapabilityJob{
+		Parameters: envelope.Descriptor.Parameters, EntryFingerprint: envelope.Descriptor.EntryFingerprint, Input: inputPort,
+	})
 	if err != nil {
 		return runner.handleAttemptInterruption(ctx, envelope, revision, heartbeatEvents, err)
 	}

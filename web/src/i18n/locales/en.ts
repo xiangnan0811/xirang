@@ -2960,6 +2960,7 @@ const en = {
           source_drift: "Source drift", verification_mismatch: "Verification mismatch",
           remote_outcome_unresolved: "Remote outcome unresolved", partial_write: "Partial write",
           cleanup_unavailable: "Cleanup unavailable",
+          pre_write_failed: "Failed before writing",
         },
         operation: { create: "Create", overwrite: "Overwrite", skip: "Skip", delete: "Delete" },
         itemOutcome: { pending: "Pending", succeeded: "Succeeded", skipped: "Skipped", failed: "Failed" },

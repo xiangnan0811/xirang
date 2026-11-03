@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "advisory": "GHSA-g3hv-75wg-m249",
+  "matcher": {
+    "name": "minimatch",
+    "version": "11.0.1",
+    "url": "https://registry.npmjs.org/minimatch/-/minimatch-11.0.1.tgz",
+    "integrity": "sha512-t+Vn6DX4wPCxS23y03C0uhF7S1jpi1GfqPrnlEipCJaA2ykiNbMkVlDutZtmvLfRcUN6R8AYVlzTsQrT4RZoLQ=="
+  },
+  "packages": [
+    {
+      "name": "eslint",
+      "version": "9.39.4",
+      "url": "https://registry.npmjs.org/eslint/-/eslint-9.39.4.tgz",
+      "integrity": "sha512-XoMjdBOwe/esVgEvLmNsD3IRHkm7fbKIUGvrleloJXUZgDHig2IPWNniv+GwjyJXzuNqVjlr5+4yVUZjycJwfQ==",
+      "artifact": "eslint-9.39.4-xirang-minimatch11-r1.tgz",
+      "license": "MIT",
+      "requesters": [
+        {
+          "name": "@eslint-community/eslint-utils",
+          "version": "4.10.1",
+          "dependencyType": "peerDependencies",
+          "spec": "^6.0.0 || ^7.0.0 || >=8.0.0"
+        },
+        {
+          "name": "@typescript-eslint/eslint-plugin",
+          "version": "8.70.1",
+          "dependencyType": "peerDependencies",
+          "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
+        },
+        {
+          "name": "@typescript-eslint/parser",
+          "version": "8.70.1",
+          "dependencyType": "peerDependencies",
+          "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
+        },
+        {
+          "name": "@typescript-eslint/type-utils",
+          "version": "8.70.1",
+          "dependencyType": "peerDependencies",
+          "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
+        },
+        {
+          "name": "@typescript-eslint/utils",
+          "version": "8.70.1",
+          "dependencyType": "peerDependencies",
+          "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
+        },
+        {
+          "name": "eslint-plugin-jsx-a11y",
+          "version": "6.10.2",
+          "dependencyType": "peerDependencies",
+          "spec": "^3 || ^4 || ^5 || ^6 || ^7 || ^8 || ^9"
+        },
+        {
+          "name": "eslint-plugin-react-hooks",
+          "version": "7.1.1",
+          "dependencyType": "peerDependencies",
+          "spec": "^3.0.0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0-0 || ^9.0.0 || ^10.0.0"
+        },
+        {
+          "name": "eslint-plugin-react-refresh",
+          "version": "0.5.7",
+          "dependencyType": "peerDependencies",
+          "spec": "^9 || ^10"
+        },
+        {
+          "name": "typescript-eslint",
+          "version": "8.70.1",
+          "dependencyType": "peerDependencies",
+          "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
+        }
+      ]
+    },
+    {
+      "name": "@eslint/config-array",
+      "version": "0.21.2",
+      "url": "https://registry.npmjs.org/@eslint/config-array/-/config-array-0.21.2.tgz",
+      "integrity": "sha512-nJl2KGTlrf9GjLimgIru+V/mzgSK0ABCDQRvxw5BjURL7WfH5uoWmizbH7QB6MmnMBd8cIC9uceWnezL1VZWWw==",
+      "artifact": "eslint-config-array-0.21.2-xirang-minimatch11-r1.tgz",
+      "license": "Apache-2.0",
+      "requesters": [
+        {
+          "name": "eslint",
+          "version": "9.39.4",
+          "dependencyType": "dependencies",
+          "spec": "^0.21.2"
+        }
+      ]
+    },
+    {
+      "name": "@eslint/eslintrc",
+      "version": "3.3.7",
+      "url": "https://registry.npmjs.org/@eslint/eslintrc/-/eslintrc-3.3.7.tgz",
+      "integrity": "sha512-F42g89Qd5oAWtp0k0nnSrjziAKza7w8SVT4mStc18LZMaRb4J1HQAHLCalEtDCxrTuksx7NU9qsmeLwpOfPqWw==",
+      "artifact": "eslint-eslintrc-3.3.7-xirang-minimatch11-r1.tgz",
+      "license": "MIT",
+      "requesters": [
+        {
+          "name": "eslint",
+          "version": "9.39.4",
+          "dependencyType": "dependencies",
+          "spec": "^3.3.5"
+        }
+      ]
+    },
+    {
+      "name": "eslint-plugin-jsx-a11y",
+      "version": "6.10.2",
+      "url": "https://registry.npmjs.org/eslint-plugin-jsx-a11y/-/eslint-plugin-jsx-a11y-6.10.2.tgz",
+      "integrity": "sha512-scB3nz4WmG75pV8+3eRUQOHZlNSUhFNq37xnpgRkCCELU3XMvXAxLk1eqWWyE22Ki4Q01Fnsw9BA3cJHDPgn2Q==",
+      "artifact": "eslint-plugin-jsx-a11y-6.10.2-xirang-minimatch11-r1.tgz",
+      "license": "MIT",
+      "requesters": []
+    },
+    {
+      "name": "@typescript-eslint/typescript-estree",
+      "version": "8.70.1",
+      "url": "https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.70.1.tgz",
+      "integrity": "sha512-TU8PwyGN0PQJUcE96mw8eCQ44SmxGdQlJmlWakHaHQ15eIuuvye5yNtmh/i6oS88jzXVQB71xdNkbkB/fMwL0g==",
+      "artifact": "typescript-eslint-typescript-estree-8.70.1-xirang-minimatch11-r1.tgz",
+      "license": "MIT",
+      "requesters": [
+        {
+          "name": "@typescript-eslint/parser",
+          "version": "8.70.1",
+          "dependencyType": "dependencies",
+          "spec": "8.70.1"
+        },
+        {
+          "name": "@typescript-eslint/type-utils",
+          "version": "8.70.1",
+          "dependencyType": "dependencies",
+          "spec": "8.70.1"
+        },
+        {
+          "name": "@typescript-eslint/utils",
+          "version": "8.70.1",
+          "dependencyType": "dependencies",
+          "spec": "8.70.1"
+        },
+        {
+          "name": "typescript-eslint",
+          "version": "8.70.1",
+          "dependencyType": "dependencies",
+          "spec": "8.70.1"
+        }
+      ]
+    }
+  ]
+}

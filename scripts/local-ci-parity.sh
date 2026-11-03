@@ -60,11 +60,14 @@ run_in_dir "$BACKEND_DIR" go build ./...
 section "Backend: govulncheck ./..."
 run_in_dir "$BACKEND_DIR" go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
+section "Frontend: verify lint dependency patches"
+run_in_dir "$WEB_DIR" npm run check:dependency-patches
+
 section "Frontend: npm audit --audit-level=moderate"
-run_in_dir "$WEB_DIR" npm audit --audit-level=moderate
+run_in_dir "$WEB_DIR" env -u NODE_ENV npm audit --audit-level=moderate
 
 section "Frontend: npm run check"
-run_in_dir "$WEB_DIR" npm run check
+run_in_dir "$WEB_DIR" env -u NODE_ENV npm run check
 
 section "Frontend: bundle budget"
 run_in_dir "$WEB_DIR" node scripts/check-bundle-budget.mjs

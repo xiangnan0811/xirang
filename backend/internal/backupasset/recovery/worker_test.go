@@ -2756,6 +2756,34 @@ func TestWorkerPrepareFirstWriteRejectsStaleFencesWithoutCommit(t *testing.T) {
 	}
 }
 
+type recoveryFirstWriteObservationBarrier struct {
+	arrived chan RecoveryAuthorityBinding
+	release <-chan struct{}
+	now     time.Time
+}
+
+func (barrier *recoveryFirstWriteObservationBarrier) ObserveRecoveryAuthority(
+	ctx context.Context, binding RecoveryAuthorityBinding,
+) (RecoveryAuthorityObservation, error) {
+	select {
+	case barrier.arrived <- binding:
+	case <-ctx.Done():
+		return RecoveryAuthorityObservation{}, ctx.Err()
+	}
+	select {
+	case <-barrier.release:
+		return RecoveryAuthorityObservation{observedAt: barrier.now, expiresAt: barrier.now.Add(time.Minute)}, nil
+	case <-ctx.Done():
+		return RecoveryAuthorityObservation{}, ctx.Err()
+	}
+}
+
+func (*recoveryFirstWriteObservationBarrier) RevalidateRecoveryAuthorityTx(
+	context.Context, *gorm.DB, RecoveryAuthorityBinding, RecoveryAuthorityObservation,
+) error {
+	return nil
+}
+
 func TestWorkerPrepareFirstWriteConcurrentCurrentClaimConverges(t *testing.T) {
 	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
 	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
@@ -2772,6 +2800,15 @@ func TestWorkerPrepareFirstWriteConcurrentCurrentClaimConverges(t *testing.T) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	barrier := &recoveryFirstWriteObservationBarrier{
+		arrived: make(chan RecoveryAuthorityBinding, 2), release: release, now: fixture.now,
+	}
+	coordinator.liveRevalidator = barrier
 
 	type result struct {
 		permit TargetWritePermit
@@ -2785,27 +2822,50 @@ func TestWorkerPrepareFirstWriteConcurrentCurrentClaimConverges(t *testing.T) {
 		go func() {
 			defer callers.Done()
 			<-start
-			permit, err := coordinator.PrepareFirstWrite(context.Background(), claim)
+			permit, err := coordinator.PrepareFirstWrite(ctx, claim)
 			results <- result{permit: permit, err: err}
 		}()
 	}
 	close(start)
+	var captured []RecoveryAuthorityBinding
+	for range 2 {
+		select {
+		case binding := <-barrier.arrived:
+			captured = append(captured, binding)
+		case <-ctx.Done():
+			t.Fatalf("both first-write callers did not capture authority: %v", ctx.Err())
+		}
+	}
+	if captured[0] != captured[1] || captured[0].targetExpectation.phase != recoveryAuthorityTargetFreshFirstWrite ||
+		captured[0].targetExpectation.attemptID != claim.AttemptID || captured[0].targetExpectation.attemptFence != claim.AttemptFence {
+		t.Fatalf("callers did not capture the same unarmed authority: %+v", captured)
+	}
+	releaseOnce.Do(func() { close(release) })
 	callers.Wait()
 	close(results)
 
 	var permits []TargetWritePermit
+	var rejected int
 	for result := range results {
+		if errors.Is(result.err, ErrRecoveryWorkerFenceLost) {
+			rejected++
+			continue
+		}
 		if result.err != nil {
-			t.Fatalf("concurrent first-write caller error=%v", result.err)
+			t.Fatalf("unexpected concurrent first-write error=%v", result.err)
 		}
 		if err := result.permit.ValidateAt(fixture.now); err != nil {
 			t.Fatalf("concurrent first-write permit is not current: %v", err)
 		}
 		permits = append(permits, result.permit)
 	}
-	if len(permits) != 2 || permits[0].permit.TargetPathDigest != permits[1].permit.TargetPathDigest ||
-		permits[0].permit.AttemptID != permits[1].permit.AttemptID || permits[0].permit.NodeLeaseID != permits[1].permit.NodeLeaseID {
-		t.Fatalf("concurrent callers did not converge on one durable permit: %+v", permits)
+	if len(permits) != 1 || rejected != 1 {
+		t.Fatalf("concurrent captured authority produced %d permits and %d fence losses, want one each", len(permits), rejected)
+	}
+	permit := permits[0].permit
+	if permit.JobID != claim.JobID || permit.AttemptID != claim.AttemptID || permit.AttemptFence != claim.AttemptFence ||
+		permit.NodeLeaseID != claim.NodeLeaseID || permit.NodeFence != claim.NodeFence {
+		t.Fatalf("winning permit changed the current claim: permit=%+v claim=%+v", permit, claim)
 	}
 
 	var latchCount, checkpointCount int64
@@ -2819,6 +2879,27 @@ func TestWorkerPrepareFirstWriteConcurrentCurrentClaimConverges(t *testing.T) {
 	}
 	if latchCount != 1 || checkpointCount != 1 {
 		t.Fatalf("concurrent callers left partial or duplicate first-write state: latches=%d checkpoints=%d", latchCount, checkpointCount)
+	}
+	var job model.BackupAssetRecoveryJob
+	var attempt model.BackupAssetRecoveryAttempt
+	var source model.RecoveryPointLease
+	var node model.BackupAssetRecoveryNodeLease
+	if err := fixture.db.Where("id = ?", claim.JobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Where("id = ?", claim.AttemptID).Take(&attempt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Where("id = ?", claim.SourceFence.LeaseID).Take(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Where("id = ?", claim.NodeLeaseID).Take(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !attempt.MutationArmed || !matchesCurrentRecoveryAttemptFence(attempt, claim, fixture.now) ||
+		!matchesCurrentRecoverySourceFence(source, claim.SourceFence, source.RecoveryPointID, fixture.now) ||
+		!matchesCurrentRecoveryNodeFence(node, claim, job, fixture.now) {
+		t.Fatalf("concurrent first-write altered current durable fences: attempt=%+v source=%+v node=%+v", attempt, source, node)
 	}
 }
 
@@ -2987,7 +3068,7 @@ func testRecoveryReviewF3PreWriteDriftTransaction(
 	if err != nil || !found {
 		t.Fatalf("claim authority-drift job: found=%t err=%v", found, err)
 	}
-	coordinator.liveRevalidator = &authorizationReceiptLiveRevalidatorSpy{err: ErrAuthorizationDenied}
+	coordinator.liveRevalidator = newAuthorizationReceiptDriftSpy(fixture.now)
 
 	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, ErrRecoverySourceChanged) {
 		t.Fatalf("prepare first write after authority drift error=%v, want ErrRecoverySourceChanged", err)
@@ -3072,6 +3153,7 @@ type recoveryWorkerAuthorityEffectSpy struct {
 	revalidateBindings []RecoveryAuthorityBinding
 	inTransactions     []bool
 	observation        RecoveryAuthorityObservation
+	observeErr         error
 	revalidateErr      error
 }
 
@@ -3081,7 +3163,7 @@ func (spy *recoveryWorkerAuthorityEffectSpy) ObserveRecoveryAuthority(
 ) (RecoveryAuthorityObservation, error) {
 	spy.events = append(spy.events, "observe")
 	spy.observeBindings = append(spy.observeBindings, binding)
-	return spy.observation, nil
+	return spy.observation, spy.observeErr
 }
 
 func (spy *recoveryWorkerAuthorityEffectSpy) RevalidateRecoveryAuthorityTx(
@@ -3151,7 +3233,7 @@ func TestRecoveryTerminalMetricsObserveCommittedPreWriteFailureOnlyOnce(t *testi
 	if err != nil || !found {
 		t.Fatalf("claim authority-drift job: found=%t err=%v", found, err)
 	}
-	coordinator.liveRevalidator = &authorizationReceiptLiveRevalidatorSpy{err: ErrAuthorizationDenied}
+	coordinator.liveRevalidator = newAuthorizationReceiptDriftSpy(fixture.now)
 	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, ErrRecoverySourceChanged) {
 		t.Fatalf("prepare first write after authority drift error=%v, want ErrRecoverySourceChanged", err)
 	}
@@ -3381,30 +3463,29 @@ func TestWorkerProjectPendingOperationMismatchAtomicallyNeedsAttention(t *testin
 	}
 }
 
-func TestWorkerPendingProjectionAuthorityDriftRollsBackWithoutEffects(t *testing.T) {
+func TestWorkerPendingMismatchRecordsNeedsAttentionWhenPositiveAuthorityFails(t *testing.T) {
 	fixture, coordinator, claim, writeResult, observation, before :=
 		newRecoveryPendingOperationMismatchFixture(t)
 	spy := &recoveryWorkerAuthorityEffectSpy{
-		observation: RecoveryAuthorityObservation{
-			observedAt: fixture.now,
-			expiresAt:  fixture.now.Add(time.Minute),
-		},
-		revalidateErr: ErrRecoveryTargetChanged,
+		observeErr: ErrRecoveryTargetChanged, revalidateErr: ErrRecoveryTargetChanged,
 	}
 	coordinator.liveRevalidator = spy
 
-	_, err := coordinator.projectPendingOperationMismatch(
+	evidence, err := coordinator.projectPendingOperationMismatch(
 		context.Background(), claim, before.item.ID, writeResult, observation, fixture.now,
 	)
-	if !errors.Is(err, ErrRecoveryWorkerUnavailable) {
-		t.Fatalf("authority drift projection error=%v, want fail-closed worker unavailable", err)
+	if err != nil {
+		t.Fatalf("record actual mismatch after target authority drift: %v", err)
 	}
-	if got, want := strings.Join(spy.events, ","), "observe,revalidate"; got != want {
-		t.Fatalf("authority drift effect order=%q, want %q", got, want)
+	if len(spy.events) != 0 {
+		t.Fatalf("failure-only projection required positive authority: %v", spy.events)
 	}
-	after := loadRecoveryPendingOperationMismatchState(t, fixture.db, claim, before.item.ID)
-	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("authority drift left projection effects: before=%+v after=%+v", before, after)
+	if evidence.Kind != "failure" || evidence.Outcome != "needs_attention" {
+		t.Fatalf("mismatch evidence=%+v, want failure-only needs_attention", evidence)
+	}
+	assertRecoveryPostArmMismatchProjection(t, fixture.db, claim, before)
+	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
+		t.Fatalf("terminal mismatch minted another write permit: %v", err)
 	}
 }
 
@@ -3713,7 +3794,8 @@ func TestWorkerRestartAdoptsInterruptedMutationFromSequenceZero(t *testing.T) {
 }
 
 func TestWorkerRestartAdoptsSkipWithAtomicTerminalFactsAndAttemptClosure(t *testing.T) {
-	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	fixture := newAuthorizationReceiptServiceFixtureConfiguredWithKinds(t, AuthorizationReceiptExecute, false, true,
+		[]RecoveryOperationKind{RecoveryOperationSkip, RecoveryOperationCreate, RecoveryOperationCreate})
 	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
 		t.Fatalf("execute recovery fixture: %v", err)
 	}
@@ -3785,7 +3867,8 @@ func TestWorkerRestartAdoptsSkipWithAtomicTerminalFactsAndAttemptClosure(t *test
 }
 
 func TestWorkerAdoptionRollsBackProjectionWhenAttemptClosureFails(t *testing.T) {
-	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	fixture := newAuthorizationReceiptServiceFixtureConfiguredWithKinds(t, AuthorizationReceiptExecute, false, true,
+		[]RecoveryOperationKind{RecoveryOperationCreate, RecoveryOperationCreate, RecoveryOperationSkip})
 	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
 		t.Fatalf("execute recovery fixture: %v", err)
 	}
@@ -4161,6 +4244,10 @@ func TestWorkerRestartAdoptionFailsClosedOnInvalidOrUncertainTargetObservation(t
 			if err := fixture.db.Where("id = ?", item.ID).Take(&item).Error; err != nil {
 				t.Fatal(err)
 			}
+			handoff, err := coordinator.loadInterruptedOperationHandoff(context.Background(), takeover, item.ID)
+			if err != nil {
+				t.Fatalf("load target locator for adoption: %v", err)
+			}
 			observation := TargetVerifyObservation{
 				Kind: TargetPresencePresent,
 				Present: &PresentObservation{
@@ -4185,7 +4272,7 @@ func TestWorkerRestartAdoptionFailsClosedOnInvalidOrUncertainTargetObservation(t
 				RootID:                 job.TargetRootID,
 				RootLocatorDigest:      job.RootLocatorDigest,
 				TargetPathDigest:       item.TargetObjectDigest,
-				PrivateRelativeLocator: job.EncryptedWorkspaceRelativeLocator + "/items/item-0000",
+				PrivateRelativeLocator: job.EncryptedWorkspaceRelativeLocator + "/" + handoff.operation.TargetRelativeLocator,
 			}
 			if target.object != wantObject {
 				t.Fatalf("target Verify object=%+v, want exact workspace object=%+v", target.object, wantObject)
@@ -5285,7 +5372,8 @@ func TestWorkerCancelExpiredQueuedJobReleasesStaleOwnershipWithoutTargetState(t 
 }
 
 func TestWorkerClosedAdoptionAttemptRejectsStaleCancellationAndPreservesCheckpoint(t *testing.T) {
-	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	fixture := newAuthorizationReceiptServiceFixtureConfiguredWithKinds(t, AuthorizationReceiptExecute, false, true,
+		[]RecoveryOperationKind{RecoveryOperationCreate, RecoveryOperationCreate, RecoveryOperationSkip})
 	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
 		t.Fatalf("execute recovery fixture: %v", err)
 	}
@@ -5691,7 +5779,7 @@ func (coordinator *recoveryF3FenceLeaseCoordinator) ReleaseTx(
 
 func TestWorkerReconcilePermanentCleanupKeyLossClosesOnlyCurrentPostArmWorkWithoutSideEffects(t *testing.T) {
 	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptWriteAuthorize)
-	jobs := executeRecoveryWorkerJobs(t, fixture, 4)
+	jobs := executeRecoveryWorkerJobsConfigured(t, fixture, 4, true)
 	coordinator := newRecoveryWorkerCoordinator(t, fixture)
 	claims := claimRecoveryWorkerJobs(t, coordinator, len(jobs))
 
@@ -5725,18 +5813,13 @@ func TestWorkerReconcilePermanentCleanupKeyLossClosesOnlyCurrentPostArmWorkWitho
 		Update("encrypted_workspace_relative_locator", corruptWorkspaceCiphertext).Error; err != nil {
 		t.Fatalf("corrupt encrypted workspace locator: %v", err)
 	}
-	if err := fixture.db.Table((model.BackupAssetRecoveryJob{}).TableName()).
-		Where("id = ?", inPlaceClaim.JobID).
-		Updates(map[string]any{
-			"target_mode": TargetModeInPlace, "workspace_phase": WorkspacePhaseNone,
-			"encrypted_workspace_relative_locator": "", "workspace_marker_binding_digest": "",
-			"workspace_owner": "", "workspace_fence": 0, "plaintext_deadline": nil,
-		}).Error; err != nil {
-		t.Fatalf("convert armed recovery fixture to in-place mode: %v", err)
-	}
 
 	isolatedBefore := loadRecoveryCleanupKeyJobState(t, fixture.db, isolatedClaim.JobID)
 	inPlaceBefore := loadRecoveryCleanupKeyJobState(t, fixture.db, inPlaceClaim.JobID)
+	if inPlaceBefore.TargetMode != string(TargetModeInPlace) || inPlaceBefore.WorkspacePhase != string(WorkspacePhaseNone) ||
+		inPlaceBefore.EncryptedWorkspaceRelativeLocator != "" {
+		t.Fatalf("cleanup-key fixture did not arm a genuine in-place job: %+v", inPlaceBefore)
+	}
 	preArmBefore := loadRecoveryCleanupKeyAggregateState(t, fixture.db, preArmClaim.JobID)
 	terminalBefore := loadRecoveryCleanupKeyAggregateState(t, fixture.db, terminalClaim.JobID)
 	isolatedSideEffectsBefore := loadRecoveryCleanupKeySideEffects(t, fixture.db, isolatedClaim.JobID)
@@ -6018,6 +6101,16 @@ func executeRecoveryWorkerJobs(
 	count int,
 ) []RecoveryAuthorizationResult {
 	t.Helper()
+	return executeRecoveryWorkerJobsConfigured(t, fixture, count, false)
+}
+
+func executeRecoveryWorkerJobsConfigured(
+	t *testing.T,
+	fixture *authorizationReceiptServiceFixture,
+	count int,
+	lastInPlace bool,
+) []RecoveryAuthorizationResult {
+	t.Helper()
 	type target struct {
 		planID      string
 		preflightID string
@@ -6037,14 +6130,11 @@ func executeRecoveryWorkerJobs(
 			if err := fixture.db.Create(&node).Error; err != nil {
 				t.Fatalf("create recovery worker node %d: %v", index, err)
 			}
-			if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).Where("id = ?", target.planID).
-				Update("target_node_id", node.ID).Error; err != nil {
-				t.Fatalf("bind recovery worker plan %d to node: %v", index, err)
+			mode := TargetModeIsolated
+			if lastInPlace && index == len(targets)-1 {
+				mode = TargetModeInPlace
 			}
-			if err := fixture.db.Model(&model.BackupAssetRecoveryPreflight{}).Where("id = ?", target.preflightID).
-				Update("target_node_id", node.ID).Error; err != nil {
-				t.Fatalf("bind recovery worker preflight %d to node: %v", index, err)
-			}
+			rebindRecoveryWorkerClone(t, fixture.db, target.planID, target.preflightID, node.ID, mode)
 		}
 		write := fixture.request
 		write.PlanID = target.planID
@@ -6070,44 +6160,77 @@ func executeRecoveryWorkerJobs(
 		if err != nil {
 			t.Fatalf("execute recovery worker job %d: %v", index, err)
 		}
-		if index > 0 {
-			var plan model.BackupAssetRecoveryPlan
-			if err := fixture.db.Where("id = ?", target.planID).Take(&plan).Error; err != nil {
-				t.Fatalf("load cloned recovery worker plan %d: %v", index, err)
-			}
-			rootDigest, err := settings.RecoveryTargetRootLocatorDigest(
-				plan.TargetNodeID, plan.TargetRootID, plan.EncryptedTargetRootLocator,
-			)
-			if err != nil {
-				t.Fatalf("rebind cloned recovery worker target root %d: %v", index, err)
-			}
-			plan.RootLocatorDigest = rootDigest
-			if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).Where("id = ?", plan.ID).
-				UpdateColumn("root_locator_digest", rootDigest).Error; err != nil {
-				t.Fatalf("update cloned recovery worker plan root %d: %v", index, err)
-			}
-			if err := fixture.db.Model(&model.BackupAssetRecoveryPreflight{}).Where("id = ?", target.preflightID).
-				UpdateColumn("root_locator_digest", rootDigest).Error; err != nil {
-				t.Fatalf("update cloned recovery worker preflight root %d: %v", index, err)
-			}
-			var job model.BackupAssetRecoveryJob
-			if err := fixture.db.Where("id = ?", executeResult.JobID).Take(&job).Error; err != nil {
-				t.Fatalf("load cloned recovery worker job %d: %v", index, err)
-			}
-			workspaceDigest := recoveryWorkspaceBindingDigest(
-				plan, job.ID, job.EncryptedWorkspaceRelativeLocator,
-			)
-			if err := fixture.db.Model(&model.BackupAssetRecoveryJob{}).Where("id = ?", job.ID).
-				UpdateColumns(map[string]any{
-					"root_locator_digest":      rootDigest,
-					"workspace_binding_digest": workspaceDigest,
-				}).Error; err != nil {
-				t.Fatalf("update cloned recovery worker job root %d: %v", index, err)
-			}
-		}
 		results = append(results, executeResult)
 	}
 	return results
+}
+
+// Clones need a coherent target binding before authorization creates the job
+// and encrypts item locators. Rebinding only the job's root after execution
+// leaves the frozen semantic targets tied to a different node and root.
+func rebindRecoveryWorkerClone(t *testing.T, db *gorm.DB, planID, preflightID string, nodeID uint, mode TargetMode) {
+	t.Helper()
+	var plan model.BackupAssetRecoveryPlan
+	var preflight model.BackupAssetRecoveryPreflight
+	if err := db.Where("id = ?", planID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("id = ? AND plan_id = ?", preflightID, planID).Take(&preflight).Error; err != nil {
+		t.Fatal(err)
+	}
+	rootDigest, err := settings.RecoveryTargetRootLocatorDigest(nodeID, plan.TargetRootID, plan.EncryptedTargetRootLocator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations, err := decodeRecoveryOperationRows(preflight.EncryptedOperationRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range operations {
+		operation := &operations[index]
+		operation.TargetPathDigest = mustTargetPathDigest(t, plan.TargetRootID, rootDigest, operation.TargetRelativeLocator)
+		operation.SemanticTargetDigest, err = SemanticTargetDigest(mode, plan.TargetRootID, rootDigest, operation.TargetRelativeLocator)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operation.snapshotTargetMode = ""
+		operation.snapshotConflictPolicy = ""
+	}
+	policy := ConflictFailOnConflict
+	if mode == TargetModeInPlace {
+		policy = ConflictOverwriteSelected
+	}
+	products, err := NewOperationProducts(RecoveryOperationProductsInput{
+		TargetMode: mode, ConflictPolicy: policy, Operations: operations,
+		Limits: RecoveryOperationLimits{MaxRows: len(operations), MaxItems: len(operations),
+			MaxBytes: plan.EstimatedBytes, MaxImpactRows: len(operations)},
+	})
+	if err != nil {
+		t.Fatalf("rebuild cloned operation binding: %v", err)
+	}
+	encoded, err := encodeRecoveryOperationRows(products.Rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relativePath := plan.EncryptedTargetRelativePath
+	if mode == TargetModeInPlace {
+		relativePath = products.Rows[0].TargetRelativeLocator
+	}
+	pathDigest := mustTargetPathDigest(t, plan.TargetRootID, rootDigest, relativePath)
+	if err := db.Model(&model.BackupAssetRecoveryPlan{}).Where("id = ?", planID).UpdateColumns(map[string]any{
+		"target_node_id": nodeID, "target_mode": mode, "conflict_policy": policy,
+		"root_locator_digest": rootDigest, "path_digest": pathDigest, "encrypted_target_relative_path": relativePath,
+		"operation_set_digest": products.OperationSetDigest, "delete_set_digest": products.DeleteSetDigest,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetRecoveryPreflight{}).Where("id = ?", preflightID).UpdateColumns(map[string]any{
+		"target_node_id": nodeID, "root_locator_digest": rootDigest, "path_digest": pathDigest,
+		"operation_set_digest": products.OperationSetDigest, "delete_set_digest": products.DeleteSetDigest,
+		"encrypted_operation_rows": encoded,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertNoPreparedFirstWriteState(

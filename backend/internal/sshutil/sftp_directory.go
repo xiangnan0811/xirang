@@ -164,7 +164,7 @@ func decodeSFTPDirectoryNamePacket(
 		return nil, false, ErrSFTPDirectoryUnavailable
 	}
 	count, ok := reader.readUint32()
-	if !ok {
+	if !ok || count == 0 {
 		return nil, false, ErrSFTPDirectoryUnavailable
 	}
 	// Each name consumes at least three uint32 fields. Bound allocation by the
@@ -173,7 +173,7 @@ func decodeSFTPDirectoryNamePacket(
 	if uint64(count) < uint64(capacity) {
 		capacity = int(count)
 	}
-	entries := make([]os.FileInfo, 0, capacity)
+	var entries []os.FileInfo
 	truncated := false
 	for index := uint32(0); index < count; index++ {
 		name, nameOK := reader.readString()
@@ -193,6 +193,9 @@ func decodeSFTPDirectoryNamePacket(
 		if len(entries) >= maximumEntries {
 			truncated = true
 			continue
+		}
+		if entries == nil {
+			entries = make([]os.FileInfo, 0, capacity)
 		}
 		entries = append(entries, sftpDirectoryFileInfo{name: name, stat: stat})
 	}
@@ -529,47 +532,58 @@ func (directory *boundedSFTPDirectory) ReadDir(n int) ([]os.FileInfo, error) {
 		n <= 0 || n > directory.session.batchSize {
 		return nil, ErrSFTPDirectoryUnavailable
 	}
-	if len(directory.pending) > 0 {
-		count := min(n, len(directory.pending))
-		entries := append([]os.FileInfo(nil), directory.pending[:count]...)
-		directory.pending = directory.pending[count:]
-		return entries, nil
-	}
-	if directory.truncated {
-		return nil, ErrSFTPDirectoryOverflow
-	}
-	if directory.eof {
-		return nil, io.EOF
-	}
-	packetType, payload, requestID, err := directory.session.readDirectory(directory.handle)
-	if err != nil {
-		return nil, err
-	}
-	switch packetType {
-	case sftpDirectoryPacketName:
-		directory.pending, directory.truncated, err = decodeSFTPDirectoryNamePacket(
-			payload, requestID, directory.session.maximumEntries,
-		)
-		if err != nil || len(directory.pending) == 0 {
+	noProgressPackets := 0
+	for {
+		if len(directory.pending) > 0 {
+			count := min(n, len(directory.pending))
+			entries := directory.pending[:count:count]
+			directory.pending = directory.pending[count:]
+			return entries, nil
+		}
+		if directory.truncated {
+			return nil, ErrSFTPDirectoryOverflow
+		}
+		if directory.eof {
+			return nil, io.EOF
+		}
+		packetType, payload, requestID, err := directory.session.readDirectory(directory.handle)
+		if err != nil {
+			return nil, err
+		}
+		switch packetType {
+		case sftpDirectoryPacketName:
+			directory.pending, directory.truncated, err = decodeSFTPDirectoryNamePacket(
+				payload, requestID, directory.session.maximumEntries,
+			)
+			if err != nil {
+				directory.session.markWireBroken()
+				return nil, ErrSFTPDirectoryUnavailable
+			}
+			if len(directory.pending) == 0 {
+				// A server may send dot and dotdot in separate NAME packets.
+				// Bound non-progress so a malicious server cannot keep us reading.
+				noProgressPackets++
+				if noProgressPackets > 2 {
+					directory.session.markWireBroken()
+					return nil, ErrSFTPDirectoryUnavailable
+				}
+			}
+		case sftpDirectoryPacketStatus:
+			status, statusErr := decodeSFTPDirectoryStatus(payload, requestID)
+			if statusErr != nil {
+				directory.session.markWireBroken()
+				return nil, statusErr
+			}
+			if status == sftpDirectoryStatusEOF {
+				directory.eof = true
+				return nil, io.EOF
+			}
+			directory.session.markWireBroken()
+			return nil, ErrSFTPDirectoryUnavailable
+		default:
 			directory.session.markWireBroken()
 			return nil, ErrSFTPDirectoryUnavailable
 		}
-		return directory.ReadDir(n)
-	case sftpDirectoryPacketStatus:
-		status, statusErr := decodeSFTPDirectoryStatus(payload, requestID)
-		if statusErr != nil {
-			directory.session.markWireBroken()
-			return nil, statusErr
-		}
-		if status == sftpDirectoryStatusEOF {
-			directory.eof = true
-			return nil, io.EOF
-		}
-		directory.session.markWireBroken()
-		return nil, ErrSFTPDirectoryUnavailable
-	default:
-		directory.session.markWireBroken()
-		return nil, ErrSFTPDirectoryUnavailable
 	}
 }
 

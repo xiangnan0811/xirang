@@ -2960,6 +2960,7 @@ const zh = {
           source_drift: "来源漂移", verification_mismatch: "验证不匹配",
           remote_outcome_unresolved: "远端结果未确认", partial_write: "部分写入",
           cleanup_unavailable: "清理不可用",
+          pre_write_failed: "开始写入前失败",
         },
         operation: { create: "新建", overwrite: "覆盖", skip: "跳过", delete: "删除" },
         itemOutcome: { pending: "待处理", succeeded: "成功", skipped: "已跳过", failed: "失败" },

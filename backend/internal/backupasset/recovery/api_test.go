@@ -416,24 +416,283 @@ func TestRecoveryAPIServiceProjectsOwnedWholeJobAndPagedRows(t *testing.T) {
 	}
 }
 
-func TestRecoveryAPIProjectionRejectsContradictoryExactMirrorCheckpointHistory(t *testing.T) {
+func TestRecoveryAPIProjectsRunningJobsWithoutDeleteCheckpoint(t *testing.T) {
+	t.Run("isolated", func(t *testing.T) {
+		fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+		executed, err := fixture.service.Authorize(context.Background(), fixture.request)
+		if err != nil {
+			t.Fatalf("execute isolated recovery: %v", err)
+		}
+		coordinator := newRecoveryWorkerCoordinator(t, fixture)
+		claim, found, err := coordinator.ClaimNext(context.Background(), "api-isolated-projection-worker")
+		if err != nil || !found || claim.JobID != executed.JobID {
+			t.Fatalf("claim isolated recovery: claim=%+v found=%t err=%v", claim, found, err)
+		}
+		service, err := NewAPIService(APIServiceDependencies{DB: fixture.db, Now: func() time.Time { return fixture.now }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ownerID := fixture.request.RequesterID
+		assertRunningView := func() {
+			t.Helper()
+			view, err := service.GetJob(context.Background(), ownerID, claim.JobID)
+			if err != nil || view.ID != claim.JobID || view.State != JobStateRunning ||
+				view.TargetMode != TargetModeIsolated || view.DeleteCheckpoint != nil {
+				t.Fatalf("isolated running projection=%+v err=%v", view, err)
+			}
+		}
+		assertRunningView()
+		if _, err := service.GetJob(context.Background(), ownerID+1, claim.JobID); !errors.Is(err, ErrRecoveryAPIObjectNotFound) {
+			t.Fatalf("foreign isolated job error=%v, want not found", err)
+		}
+		if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); err != nil {
+			t.Fatalf("prepare isolated first write: %v", err)
+		}
+		var attempt model.BackupAssetRecoveryAttempt
+		if err := fixture.db.Where("id = ?", claim.AttemptID).Take(&attempt).Error; err != nil {
+			t.Fatal(err)
+		}
+		var checkpointCount int64
+		if err := fixture.db.Model(&model.BackupAssetRecoveryCheckpoint{}).
+			Where("job_id = ?", claim.JobID).Count(&checkpointCount).Error; err != nil {
+			t.Fatal(err)
+		}
+		if attempt.State != string(AttemptStateRunning) || !attempt.MutationArmed || checkpointCount == 0 {
+			t.Fatalf("isolated running attempt=%+v checkpoints=%d, want armed with workspace history", attempt, checkpointCount)
+		}
+		assertRunningView()
+	})
+
+	t.Run("in_place_overwrite_selected", func(t *testing.T) {
+		execution := newInPlaceOrdinaryExecutionFixtureWithKinds(t, []RecoveryOperationKind{
+			RecoveryOperationCreate, RecoveryOperationSkip, RecoveryOperationOverwrite,
+		}, false)
+		fixture := execution.serviceFixture
+		service, err := NewAPIService(APIServiceDependencies{DB: fixture.db, Now: func() time.Time { return fixture.now }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan model.BackupAssetRecoveryPlan
+		if err := fixture.db.Select("conflict_policy").Where("id = ?", fixture.request.PlanID).Take(&plan).Error; err != nil {
+			t.Fatal(err)
+		}
+		if ConflictPolicy(plan.ConflictPolicy) != ConflictOverwriteSelected {
+			t.Fatalf("in-place plan policy=%q, want overwrite_selected", plan.ConflictPolicy)
+		}
+		ownerID := fixture.request.RequesterID
+		view, err := service.GetJob(context.Background(), ownerID, execution.jobID)
+		if err != nil || view.State != JobStateRunning || view.TargetMode != TargetModeInPlace || view.DeleteCheckpoint != nil {
+			t.Fatalf("pre-arm in-place projection=%+v err=%v", view, err)
+		}
+
+		var observed RecoveryJobView
+		var observedAttempt model.BackupAssetRecoveryAttempt
+		var observedCheckpoints int64
+		var projectionErr error
+		calls := 0
+		execution.target.beforeFinalizeOverwrite = func(ctx context.Context) error {
+			calls++
+			if err := fixture.db.WithContext(ctx).Model(&model.BackupAssetRecoveryCheckpoint{}).
+				Where("job_id = ?", execution.jobID).Count(&observedCheckpoints).Error; err != nil {
+				return err
+			}
+			if err := fixture.db.WithContext(ctx).Where("id = ?", execution.claim.AttemptID).
+				Take(&observedAttempt).Error; err != nil {
+				return err
+			}
+			observed, projectionErr = service.GetJob(ctx, ownerID, execution.jobID)
+			return nil
+		}
+		source := newRecoveryRepositoryContractSource(t, fixture.db, execution.jobID)
+		if err := execution.coordinator.ExecuteClaim(context.Background(), execution.claim, source, ""); err != nil {
+			t.Fatalf("execute in-place recovery: %v", err)
+		}
+		if calls != 1 || observedAttempt.State != string(AttemptStateRunning) || !observedAttempt.MutationArmed ||
+			observedCheckpoints == 0 || projectionErr != nil || observed.ID != execution.jobID ||
+			observed.State != JobStateRunning || observed.TargetMode != TargetModeInPlace || observed.DeleteCheckpoint != nil {
+			t.Fatalf("armed in-place projection=%+v err=%v calls=%d attempt=%+v checkpoints=%d",
+				observed, projectionErr, calls, observedAttempt, observedCheckpoints)
+		}
+	})
+}
+
+func TestRecoveryAPIUnarmedExactMirrorCheckpointQueryFailure(t *testing.T) {
 	execution := newExactMirrorOrdinaryExecutionFixture(t)
-	source := newRecoveryRepositoryContractSource(t, execution.serviceFixture.db, execution.jobID)
+	fixture := execution.serviceFixture
+	service, err := NewAPIService(APIServiceDependencies{DB: fixture.db, Now: func() time.Time { return fixture.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := loadOwnedRecoveryAPIJob(fixture.db, fixture.request.RequesterID, execution.jobID)
+	if err != nil {
+		t.Fatalf("load exact-mirror job: %v", err)
+	}
+	injected := errors.New("checkpoint query failed")
+	callbackName := "test:recovery-api-unarmed-checkpoint-query"
+	queries := 0
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == (model.BackupAssetRecoveryCheckpoint{}).TableName() {
+			queries++
+			_ = tx.AddError(injected)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fixture.db.Callback().Query().Remove(callbackName) })
+	if _, err := service.projectRecoveryAPIDeleteCheckpointTx(fixture.db.WithContext(context.Background()), row); !errors.Is(err, injected) {
+		t.Fatalf("checkpoint projection error=%v, want injected query error", err)
+	}
+	if _, err := service.GetJob(context.Background(), fixture.request.RequesterID, execution.jobID); !errors.Is(err, ErrRecoveryAPIUnavailable) {
+		t.Fatalf("checkpoint query failure exposed as %v, want unavailable", err)
+	}
+	if queries != 2 {
+		t.Fatalf("checkpoint query attempts=%d, want one per call", queries)
+	}
+}
+
+func TestRecoveryAPIUnarmedExactMirrorRejectsPreviousAttemptHistory(t *testing.T) {
+	execution := newExactMirrorOrdinaryExecutionFixture(t)
+	fixture := execution.serviceFixture
+	source := newRecoveryRepositoryContractSource(t, fixture.db, execution.jobID)
 	if err := execution.coordinator.ExecuteClaim(context.Background(), execution.claim, source, ""); err != nil {
 		t.Fatalf("pause exact-mirror execution: %v", err)
 	}
+	fixture.now = execution.claim.LeaseExpiresAt.Add(time.Second)
+	takeover, found, err := execution.coordinator.TakeoverExpired(context.Background(), "api-history-takeover-worker")
+	if err != nil || !found || takeover.JobID != execution.jobID || takeover.AttemptID == execution.claim.AttemptID {
+		t.Fatalf("take over paused execution: claim=%+v found=%t err=%v", takeover, found, err)
+	}
+	var oldCount, currentCount int64
+	if err := fixture.db.Model(&model.BackupAssetRecoveryCheckpoint{}).
+		Where("job_id = ? AND attempt_id = ?", execution.jobID, execution.claim.AttemptID).Count(&oldCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.BackupAssetRecoveryCheckpoint{}).
+		Where("job_id = ? AND attempt_id = ?", execution.jobID, takeover.AttemptID).Count(&currentCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if oldCount == 0 || currentCount != 0 {
+		t.Fatalf("checkpoint history from old/current attempts=%d/%d", oldCount, currentCount)
+	}
+	updated := fixture.db.Model(&model.BackupAssetRecoveryAttempt{}).
+		Where("id = ? AND job_id = ?", takeover.AttemptID, execution.jobID).UpdateColumn("mutation_armed", false)
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		t.Fatalf("invalidate takeover armed state: rows=%d err=%v", updated.RowsAffected, updated.Error)
+	}
+	service, err := NewAPIService(APIServiceDependencies{DB: fixture.db, Now: func() time.Time { return fixture.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackName := "test:recovery-api-history-checkpoint-query"
+	checkpointQueries := 0
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == (model.BackupAssetRecoveryCheckpoint{}).TableName() {
+			checkpointQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fixture.db.Callback().Query().Remove(callbackName) })
+	if _, err := service.GetJob(context.Background(), fixture.request.RequesterID, execution.jobID); !errors.Is(err, ErrRecoveryAPIUnavailable) {
+		t.Fatalf("unarmed takeover with previous checkpoint history error=%v, want unavailable", err)
+	}
+	if checkpointQueries != 1 {
+		t.Fatalf("takeover checkpoint queries=%d, want the historical existence check", checkpointQueries)
+	}
+}
+
+func TestRecoveryAPIProjectionRejectsContradictoryExactMirrorCheckpointHistory(t *testing.T) {
+	execution := newExactMirrorOrdinaryExecutionFixture(t)
+	fixture := execution.serviceFixture
 	service, err := NewAPIService(APIServiceDependencies{
-		DB: execution.serviceFixture.db, Now: func() time.Time { return execution.serviceFixture.now },
+		DB: fixture.db, Now: func() time.Time { return fixture.now },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ownerID := execution.serviceFixture.request.RequesterID
+	ownerID := fixture.request.RequesterID
+	var attempt model.BackupAssetRecoveryAttempt
+	if err := fixture.db.Where("id = ?", execution.claim.AttemptID).Take(&attempt).Error; err != nil {
+		t.Fatal(err)
+	}
+	var checkpointCount int64
+	if err := fixture.db.Model(&model.BackupAssetRecoveryCheckpoint{}).
+		Where("job_id = ?", execution.jobID).Count(&checkpointCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if attempt.State != string(AttemptStateRunning) || attempt.MutationArmed || checkpointCount != 0 {
+		t.Fatalf("exact-mirror pre-arm attempt=%+v checkpoints=%d", attempt, checkpointCount)
+	}
 	view, err := service.GetJob(context.Background(), ownerID, execution.jobID)
+	if err != nil || view.State != JobStateRunning || view.TargetMode != TargetModeInPlace || view.DeleteCheckpoint != nil {
+		t.Fatalf("valid pre-arm projection=%+v err=%v", view, err)
+	}
+	updated := fixture.db.Model(&model.BackupAssetRecoveryAttempt{}).
+		Where("id = ? AND job_id = ?", execution.claim.AttemptID, execution.jobID).UpdateColumn("fence", uint64(0))
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		t.Fatalf("invalidate attempt fence: rows=%d err=%v", updated.RowsAffected, updated.Error)
+	}
+	if _, err := service.GetJob(context.Background(), ownerID, execution.jobID); !errors.Is(err, ErrRecoveryAPIUnavailable) {
+		t.Fatalf("unarmed attempt with invalid fence error=%v, want unavailable", err)
+	}
+	updated = fixture.db.Model(&model.BackupAssetRecoveryAttempt{}).
+		Where("id = ? AND job_id = ?", execution.claim.AttemptID, execution.jobID).
+		UpdateColumn("fence", execution.claim.AttemptFence)
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		t.Fatalf("restore attempt fence: rows=%d err=%v", updated.RowsAffected, updated.Error)
+	}
+	updated = fixture.db.Model(&model.BackupAssetRecoveryNodeLease{}).
+		Where("id = ?", execution.claim.NodeLeaseID).UpdateColumn("owner_id", "other-worker")
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		t.Fatalf("invalidate node lease owner: rows=%d err=%v", updated.RowsAffected, updated.Error)
+	}
+	if _, err := service.GetJob(context.Background(), ownerID, execution.jobID); !errors.Is(err, ErrRecoveryAPIUnavailable) {
+		t.Fatalf("unarmed attempt with mismatched node owner error=%v, want unavailable", err)
+	}
+	updated = fixture.db.Model(&model.BackupAssetRecoveryNodeLease{}).
+		Where("id = ?", execution.claim.NodeLeaseID).UpdateColumn("owner_id", execution.claim.WorkerID)
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		t.Fatalf("restore node lease owner: rows=%d err=%v", updated.RowsAffected, updated.Error)
+	}
+
+	source := newRecoveryRepositoryContractSource(t, fixture.db, execution.jobID)
+	if err := execution.coordinator.ExecuteClaim(context.Background(), execution.claim, source, ""); err != nil {
+		t.Fatalf("pause exact-mirror execution: %v", err)
+	}
+	view, err = service.GetJob(context.Background(), ownerID, execution.jobID)
 	if err != nil || view.DeleteCheckpoint == nil {
 		t.Fatalf("valid paused projection=%+v err=%v", view, err)
 	}
-	if err := execution.serviceFixture.db.Model(&model.BackupAssetRecoveryCheckpoint{}).
+	var checkpoint model.BackupAssetRecoveryCheckpoint
+	if err := fixture.db.Where("id = ?", view.DeleteCheckpoint.ID).Take(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	row, err := loadOwnedRecoveryAPIJob(fixture.db, ownerID, execution.jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.DeleteCheckpoint.AttemptID != execution.claim.AttemptID ||
+		view.DeleteCheckpoint.Status != RecoveryDeleteCheckpointAwaitingAuthorization ||
+		view.DeleteCheckpoint.ExpectedPlanRevision != strconv.FormatUint(row.PlanTransitionRevision, 10) ||
+		checkpoint.DeleteAuthorityExpiresAt == nil || !view.DeleteCheckpoint.ExpiresAt.Equal(*checkpoint.DeleteAuthorityExpiresAt) {
+		t.Fatalf("paused checkpoint projection=%+v stored=%+v", view.DeleteCheckpoint, checkpoint)
+	}
+
+	// A real checkpoint history paired with an unarmed live attempt is contradictory.
+	updated = fixture.db.Model(&model.BackupAssetRecoveryAttempt{}).
+		Where("id = ? AND job_id = ?", execution.claim.AttemptID, execution.jobID).UpdateColumn("mutation_armed", false)
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		t.Fatalf("invalidate attempt armed state: rows=%d err=%v", updated.RowsAffected, updated.Error)
+	}
+	if _, err := service.GetJob(context.Background(), ownerID, execution.jobID); !errors.Is(err, ErrRecoveryAPIUnavailable) {
+		t.Fatalf("unarmed attempt with checkpoint history error=%v, want unavailable", err)
+	}
+	updated = fixture.db.Model(&model.BackupAssetRecoveryAttempt{}).
+		Where("id = ? AND job_id = ?", execution.claim.AttemptID, execution.jobID).UpdateColumn("mutation_armed", true)
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		t.Fatalf("restore attempt armed state: rows=%d err=%v", updated.RowsAffected, updated.Error)
+	}
+	if err := fixture.db.Model(&model.BackupAssetRecoveryCheckpoint{}).
 		Where("id = ?", view.DeleteCheckpoint.ID).
 		Update("plan_binding_digest", strings.Repeat("f", 64)).Error; err != nil {
 		t.Fatal(err)
@@ -644,6 +903,22 @@ func TestRecoveryAPIJobProductRejectsStateProgressAndOutcomeContradictions(t *te
 	}
 	if _, err := validateRecoveryAPIJobProduct(failedBeforeWrite, pending); err != nil {
 		t.Fatalf("valid pre-write failed product rejected: %v", err)
+	}
+	failedBeforeWrite.FailureCategory = recoveryPreWriteFailedCategory
+	if _, err := validateRecoveryAPIJobProduct(failedBeforeWrite, pending); err != nil {
+		t.Fatalf("valid pristine prewrite failure rejected: %v", err)
+	}
+	if _, err := validateRecoveryAPIJobProduct(recoveryAPIJobRow{
+		State: string(JobStateFailed), FailureCategory: recoveryPreWriteFailedCategory,
+		EstimatedItems: 2, EstimatedBytes: 15,
+	}, complete); !errors.Is(err, ErrRecoveryAPIUnavailable) {
+		t.Fatalf("prewrite failure with completed operations accepted: %v", err)
+	}
+	if _, err := validateRecoveryAPIJobProduct(recoveryAPIJobRow{
+		State: string(JobStateNeedsAttention), FailureCategory: recoveryPreWriteFailedCategory,
+		EstimatedItems: 1, EstimatedBytes: 10,
+	}, pending); !errors.Is(err, ErrRecoveryAPIUnavailable) {
+		t.Fatalf("prewrite failure accepted in needs-attention state: %v", err)
 	}
 
 	failedItem := item("4", RecoveryOperationCreate, RecoveryJobItemFailed, 10, 10, 8)

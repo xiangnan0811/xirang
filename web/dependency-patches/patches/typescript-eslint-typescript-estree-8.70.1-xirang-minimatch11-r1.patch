@@ -1,0 +1,42 @@
+--- package/XIRANG-MODIFICATIONS.txt
++++ package/XIRANG-MODIFICATIONS.txt
+@@ -0,0 +1,15 @@
++Xirang local dependency modification, revision 1
++Advisory: GHSA-g3hv-75wg-m249
++Upstream package: @typescript-eslint/typescript-estree@8.70.1
++Upstream URL: https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.70.1.tgz
++Upstream integrity: sha512-TU8PwyGN0PQJUcE96mw8eCQ44SmxGdQlJmlWakHaHQ15eIuuvye5yNtmh/i6oS88jzXVQB71xdNkbkB/fMwL0g==
++Upstream license: MIT (original license and notice files retained)
++Source inventory and requester list: web/dependency-patches/sources.json
++Modified or added files relative to the package root:
++  XIRANG-MODIFICATIONS.txt
++  package.json
++
++The declared minimatch dependency is 11.0.1. Changed imports and types use
++its public API and types; matching follows minimatch 11.0.1 semantics.
++Older minimatch APIs and matching behavior are not emulated. Compatibility
++is assessed against this repository's actual consumers and configurations.
+--- package/package.json
++++ package/package.json
+@@ -48,7 +48,7 @@
+     "@typescript-eslint/types": "8.70.1",
+     "@typescript-eslint/visitor-keys": "8.70.1",
+     "debug": "^4.4.3",
+-    "minimatch": "^10.2.2",
++    "minimatch": "11.0.1",
+     "semver": "^7.7.3",
+     "tinyglobby": "^0.2.15",
+     "ts-api-utils": "^2.5.0"
+@@ -92,5 +92,10 @@
+     "typecheck": "pnpm -w exec nx typecheck",
+     "typecheck:tsgo": "pnpm -w exec nx typecheck:tsgo",
+     "attw-check": "pnpm -w exec nx attw-check"
++  },
++  "x-xirang-patch": {
++    "revision": 1,
++    "advisory": "GHSA-g3hv-75wg-m249",
++    "upstreamVersion": "8.70.1"
+   }
+-}
+\ No newline at end of file
++}

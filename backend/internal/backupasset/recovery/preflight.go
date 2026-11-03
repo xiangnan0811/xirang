@@ -16,7 +16,7 @@ import (
 
 const (
 	preflightExternalEvidenceRequestDomain = "xirang/recovery/preflight-external-evidence-request/v1"
-	preflightExternalEvidenceProofDomain   = "xirang/recovery/preflight-external-evidence-proof/v1"
+	preflightExternalEvidenceProofDomain   = "xirang/recovery/preflight-external-evidence-proof/v2"
 )
 
 var (
@@ -103,7 +103,7 @@ type PreflightExternalEvidenceRequest struct {
 
 type PreflightExternalEvidence struct {
 	ObservedAt           time.Time
-	ExpiresAt            time.Time
+	ObservationExpiresAt time.Time
 	SourceRevisionDigest string
 	CapabilityRevision   string
 	PolicyRevision       string
@@ -121,6 +121,7 @@ type preflightExternalEvidenceProof struct {
 	requestDigest string
 	bindingDigest string
 	production    bool
+	authority     RecoveryAuthorityObservation
 }
 
 type PreflightExternalEvidencePort interface {
@@ -128,11 +129,17 @@ type PreflightExternalEvidencePort interface {
 		context.Context,
 		PreflightExternalEvidenceRequest,
 	) (PreflightExternalEvidence, error)
+	RevalidatePreflightEvidenceTx(
+		context.Context,
+		*gorm.DB,
+		PreflightExternalEvidenceRequest,
+		PreflightExternalEvidence,
+	) error
 }
 
-// PreflightExternalEvidenceObservation is the closed scalar product returned
-// by the independently composed Provider/Repository authority. It deliberately
-// carries no locator, credential, command, or target-session material.
+// PreflightExternalEvidenceObservation exposes only the closed scalar projection.
+// Its private authority is retained for revalidation in the persistence transaction;
+// locators, credentials, commands, and target sessions are not exposed to callers.
 type PreflightExternalEvidenceObservation struct {
 	PlanID                   string
 	PlanBindingDigest        string
@@ -147,13 +154,14 @@ type PreflightExternalEvidenceObservation struct {
 	RequiredBytes            int64
 	RequiredInodes           int64
 	ObservedAt               time.Time
-	ExpiresAt                time.Time
+	ObservationExpiresAt     time.Time
 	FindingDisposition       SecurityFindingDisposition
 	SourceAccessible         bool
 	OverlapsXirangRoot       bool
 	OverlapsSourceRoot       bool
 	ReservedBytes            int64
 	ReservedInodes           int64
+	authority                RecoveryAuthorityObservation
 }
 
 // RecoveryPreflightExternalEvidenceAuthority is implemented by the runtime's
@@ -164,6 +172,12 @@ type RecoveryPreflightExternalEvidenceAuthority interface {
 		context.Context,
 		PreflightExternalEvidenceRequest,
 	) (PreflightExternalEvidenceObservation, error)
+	RevalidateRecoveryPreflightEvidenceTx(
+		context.Context,
+		*gorm.DB,
+		PreflightExternalEvidenceRequest,
+		RecoveryAuthorityObservation,
+	) error
 }
 
 // RecoveryPreflightExternalEvidenceAdapter is the only production issuer for
@@ -202,7 +216,7 @@ func (adapter *RecoveryPreflightExternalEvidenceAdapter) ObservePreflightEvidenc
 		return PreflightExternalEvidence{}, ErrRecoveryPreflightConflict
 	}
 	evidence := PreflightExternalEvidence{
-		ObservedAt: observation.ObservedAt, ExpiresAt: observation.ExpiresAt,
+		ObservedAt: observation.ObservedAt, ObservationExpiresAt: observation.ObservationExpiresAt,
 		SourceRevisionDigest: observation.SourceRevisionDigest,
 		CapabilityRevision:   observation.CapabilityRevision, PolicyRevision: observation.PolicyRevision,
 		FindingSetDigest: observation.FindingSetDigest, FindingDisposition: observation.FindingDisposition,
@@ -216,37 +230,93 @@ func (adapter *RecoveryPreflightExternalEvidenceAdapter) ObservePreflightEvidenc
 	evidence.proof = &preflightExternalEvidenceProof{
 		requestDigest: preflightExternalEvidenceRequestDigest(request),
 		production:    true,
+		authority:     observation.authority,
 	}
 	evidence.proof.bindingDigest = preflightExternalEvidenceProofDigest(evidence)
 	return evidence, nil
 }
 
+func (adapter *RecoveryPreflightExternalEvidenceAdapter) RevalidatePreflightEvidenceTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	request PreflightExternalEvidenceRequest,
+	evidence PreflightExternalEvidence,
+) error {
+	if adapter == nil || adapter.authority == nil || ctx == nil || tx == nil {
+		return ErrTargetPreflightUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if evidence.proof == nil || !evidence.proof.production ||
+		evidence.ValidateFor(evidence.ObservedAt, request) != nil {
+		return ErrRecoveryPreflightConflict
+	}
+	if err := adapter.authority.RevalidateRecoveryPreflightEvidenceTx(ctx, tx, request, evidence.proof.authority); err != nil {
+		return sanitizePreflightExternalEvidenceError(ctx, err)
+	}
+	return nil
+}
+
 func (observation PreflightExternalEvidenceObservation) matches(
 	request PreflightExternalEvidenceRequest,
 ) bool {
-	return request.valid() && observation.PlanID == request.PlanID &&
-		observation.PlanBindingDigest == request.PlanBindingDigest &&
-		observation.PlanTransitionRevision == request.PlanTransitionRevision &&
-		observation.SourceRevisionDigest == request.SourceRevisionDigest &&
-		observation.CapabilityRevision == request.CapabilityRevision &&
-		observation.PolicyRevision == request.PolicyRevision &&
-		observation.FindingSetDigest == request.FindingSetDigest &&
-		observation.TargetRootRevision == request.TargetRootRevision &&
-		observation.TargetFilesystemRevision == request.TargetFilesystemRevision &&
-		observation.TargetRevision == request.TargetRevision &&
-		observation.RequiredBytes == request.RequiredBytes &&
-		observation.RequiredInodes == request.RequiredInodes
+	projected, err := recoveryEligibilityPreflightProjection(request, observation.authority)
+	return err == nil && validPreflightAuthorityTimes(observation.authority) &&
+		observation.PlanID == projected.PlanID && observation.PlanBindingDigest == projected.PlanBindingDigest &&
+		observation.PlanTransitionRevision == projected.PlanTransitionRevision &&
+		observation.SourceRevisionDigest == projected.SourceRevisionDigest &&
+		observation.CapabilityRevision == projected.CapabilityRevision &&
+		observation.PolicyRevision == projected.PolicyRevision && observation.FindingSetDigest == projected.FindingSetDigest &&
+		observation.TargetRootRevision == projected.TargetRootRevision &&
+		observation.TargetFilesystemRevision == projected.TargetFilesystemRevision &&
+		observation.TargetRevision == projected.TargetRevision && observation.RequiredBytes == projected.RequiredBytes &&
+		observation.RequiredInodes == projected.RequiredInodes && observation.ObservedAt.Equal(projected.ObservedAt) &&
+		observation.ObservationExpiresAt.Equal(projected.ObservationExpiresAt) &&
+		observation.FindingDisposition == projected.FindingDisposition &&
+		observation.SourceAccessible == projected.SourceAccessible &&
+		observation.OverlapsXirangRoot == projected.OverlapsXirangRoot &&
+		observation.OverlapsSourceRoot == projected.OverlapsSourceRoot &&
+		observation.ReservedBytes == projected.ReservedBytes && observation.ReservedInodes == projected.ReservedInodes
+}
+
+func validPreflightAuthorityTimes(authority RecoveryAuthorityObservation) bool {
+	return authority.proof != nil && authority.proof.production &&
+		validDigest(authority.proof.bindingDigest) &&
+		!authority.observedAt.IsZero() && authority.observedAt.Before(authority.expiresAt) &&
+		authority.observedAt.Equal(authority.binding.target.ObservedAt) &&
+		authority.expiresAt.Equal(authority.binding.target.ExpiresAt)
+}
+
+func (evidence PreflightExternalEvidence) matchesAuthority(request PreflightExternalEvidenceRequest) bool {
+	if evidence.proof == nil || !validPreflightAuthorityTimes(evidence.proof.authority) {
+		return false
+	}
+	projected, err := recoveryEligibilityPreflightProjection(request, evidence.proof.authority)
+	return err == nil && evidence.ObservedAt.Equal(projected.ObservedAt) &&
+		evidence.ObservationExpiresAt.Equal(projected.ObservationExpiresAt) &&
+		evidence.SourceRevisionDigest == projected.SourceRevisionDigest &&
+		evidence.CapabilityRevision == projected.CapabilityRevision && evidence.PolicyRevision == projected.PolicyRevision &&
+		evidence.FindingSetDigest == projected.FindingSetDigest && evidence.FindingDisposition == projected.FindingDisposition &&
+		evidence.SourceAccessible == projected.SourceAccessible && evidence.OverlapsXirangRoot == projected.OverlapsXirangRoot &&
+		evidence.OverlapsSourceRoot == projected.OverlapsSourceRoot &&
+		evidence.ReservedBytes == projected.ReservedBytes && evidence.ReservedInodes == projected.ReservedInodes
 }
 
 func sanitizePreflightExternalEvidenceError(ctx context.Context, err error) error {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
+	if ctx != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 	}
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
+	}
+	if errors.Is(err, ErrRecoveryPreflightConflict) {
+		return ErrRecoveryPreflightConflict
 	}
 	return ErrTargetPreflightUnavailable
 }
@@ -279,12 +349,19 @@ func preflightExternalEvidenceProofDigest(evidence PreflightExternalEvidence) st
 	if evidence.proof == nil || !validDigest(evidence.proof.requestDigest) {
 		return ""
 	}
+	authorityDigest := ""
+	if evidence.proof.authority.proof != nil {
+		authorityDigest = evidence.proof.authority.proof.bindingDigest
+	}
 	return framedDigest(
 		preflightExternalEvidenceProofDomain,
 		evidence.proof.requestDigest,
 		strconv.FormatBool(evidence.proof.production),
+		authorityDigest,
+		evidence.proof.authority.observedAt.UTC().Format(time.RFC3339Nano),
+		evidence.proof.authority.expiresAt.UTC().Format(time.RFC3339Nano),
 		evidence.ObservedAt.UTC().Format(time.RFC3339Nano),
-		evidence.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		evidence.ObservationExpiresAt.UTC().Format(time.RFC3339Nano),
 		evidence.SourceRevisionDigest, evidence.CapabilityRevision, evidence.PolicyRevision,
 		evidence.FindingSetDigest, string(evidence.FindingDisposition),
 		strconv.FormatBool(evidence.SourceAccessible),
@@ -295,8 +372,8 @@ func preflightExternalEvidenceProofDigest(evidence PreflightExternalEvidence) st
 }
 
 func (evidence PreflightExternalEvidence) validShape() bool {
-	return !evidence.ObservedAt.IsZero() && !evidence.ExpiresAt.IsZero() &&
-		!evidence.ExpiresAt.Before(evidence.ObservedAt) && validDigest(evidence.SourceRevisionDigest) &&
+	return !evidence.ObservedAt.IsZero() && !evidence.ObservationExpiresAt.IsZero() &&
+		!evidence.ObservationExpiresAt.Before(evidence.ObservedAt) && validDigest(evidence.SourceRevisionDigest) &&
 		validOpaqueRevision(evidence.CapabilityRevision) && validOpaqueRevision(evidence.PolicyRevision) &&
 		validDigest(evidence.FindingSetDigest) && evidence.FindingDisposition.valid() &&
 		evidence.ReservedBytes >= 0 && evidence.ReservedInodes >= 0
@@ -307,9 +384,10 @@ func (evidence PreflightExternalEvidence) ValidateFor(
 	request PreflightExternalEvidenceRequest,
 ) error {
 	if now.IsZero() || !request.valid() || evidence.proof == nil ||
-		!evidence.validShape() || evidence.ObservedAt.After(now) || !evidence.ExpiresAt.After(now) ||
+		!evidence.validShape() || evidence.ObservedAt.After(now) || !evidence.ObservationExpiresAt.After(now) ||
 		evidence.proof.requestDigest != preflightExternalEvidenceRequestDigest(request) ||
-		evidence.proof.bindingDigest != preflightExternalEvidenceProofDigest(evidence) {
+		evidence.proof.bindingDigest != preflightExternalEvidenceProofDigest(evidence) ||
+		(evidence.proof.production && !evidence.matchesAuthority(request)) {
 		return ErrInvalidTargetPreflight
 	}
 	return nil
@@ -370,12 +448,13 @@ func (snapshot TargetPreflightSnapshot) ValidateAt(now time.Time) error {
 }
 
 type TargetPreflightResult struct {
-	Eligible  bool                      `json:"eligible"`
-	Preferred bool                      `json:"preferred"`
-	Reasons   []TargetPreflightReason   `json:"reasons"`
-	Snapshot  TargetPreflightSnapshot   `json:"snapshot"`
-	Security  PreflightSecurityDecision `json:"security"`
-	external  *preflightExternalEvidenceCommitBinding
+	Eligible    bool                      `json:"eligible"`
+	Preferred   bool                      `json:"preferred"`
+	Reasons     []TargetPreflightReason   `json:"reasons"`
+	Snapshot    TargetPreflightSnapshot   `json:"snapshot"`
+	Security    PreflightSecurityDecision `json:"security"`
+	external    *preflightExternalEvidenceCommitBinding
+	completedAt time.Time
 }
 
 type preflightExternalEvidenceCommitBinding struct {
@@ -386,6 +465,7 @@ type preflightExternalEvidenceCommitBinding struct {
 type TargetPreflightEvaluator struct {
 	observer         TargetObservationPort
 	externalEvidence PreflightExternalEvidencePort
+	now              func() time.Time
 }
 
 // PreflightPersistenceRequest binds one read-only target observation to the
@@ -437,11 +517,8 @@ type PreflightService struct {
 }
 
 func NewPreflightService(dependencies PreflightServiceDependencies) (*PreflightService, error) {
-	if dependencies.DB == nil || dependencies.Evaluator == nil || !dependencies.Policy.valid() {
+	if dependencies.DB == nil || dependencies.Now == nil || dependencies.Evaluator == nil || !dependencies.Policy.valid() {
 		return nil, ErrTargetPreflightUnavailable
-	}
-	if dependencies.Now == nil {
-		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
 	sourceValidator, err := NewSourceValidator(dependencies.DB)
 	if err != nil {
@@ -506,7 +583,11 @@ func (service *PreflightService) EvaluateAndPersist(
 		return PreflightPersistenceResult{}, err
 	}
 	commitNow := service.now().UTC()
-	if commitNow.IsZero() || commitNow.Before(now) || !commitNow.Before(durableExpiresAt) {
+	if commitNow.IsZero() || evaluation.completedAt.IsZero() || commitNow.Before(evaluation.completedAt) ||
+		!commitNow.Before(durableExpiresAt) ||
+		(!evaluation.Snapshot.ExpiresAt.IsZero() && !commitNow.Before(evaluation.Snapshot.ExpiresAt)) ||
+		(evaluation.external != nil && (evaluation.external.evidence.ValidateFor(commitNow, evaluation.external.request) != nil ||
+			input.targetPermit.ValidateRequestAt(commitNow, input.Permit, input.ProbeRequest) != nil)) {
 		return PreflightPersistenceResult{}, ErrRecoveryPreflightConflict
 	}
 	result := PreflightPersistenceResult{PlanID: request.PlanID, Evaluation: evaluation}
@@ -555,6 +636,20 @@ func (service *PreflightService) EvaluateAndPersist(
 			txCandidateCategories != candidateCategories {
 			return ErrRecoveryPreflightConflict
 		}
+		if err := service.evaluator.externalEvidence.RevalidatePreflightEvidenceTx(
+			ctx, tx, evaluation.external.request, evaluation.external.evidence,
+		); err != nil {
+			return err
+		}
+		revalidatedNow := service.now().UTC()
+		if revalidatedNow.IsZero() || revalidatedNow.Before(transactionNow) ||
+			validatePreflightPlanInput(lockedPlan, request.ExpectedPlanRevision, input, revalidatedNow) != nil ||
+			validateProductionPreflightExternalEvidence(lockedPlan, input, evaluation, revalidatedNow) != nil ||
+			evaluation.Snapshot.ValidateAt(revalidatedNow) != nil ||
+			input.targetPermit.ValidateRequestAt(revalidatedNow, input.Permit, input.ProbeRequest) != nil {
+			return ErrRecoveryPreflightConflict
+		}
+		transactionNow = revalidatedNow
 
 		preflight := model.BackupAssetRecoveryPreflight{
 			ID: evaluation.Snapshot.ID, PlanID: lockedPlan.ID, Revision: evaluation.Snapshot.Revision,
@@ -595,14 +690,25 @@ func (service *PreflightService) EvaluateAndPersist(
 		if updated.RowsAffected != 1 {
 			return ErrRecoveryPreflightConflict
 		}
+		finalNow := service.now().UTC()
+		if finalNow.IsZero() || finalNow.Before(transactionNow) ||
+			validatePreflightPlanInput(lockedPlan, request.ExpectedPlanRevision, input, finalNow) != nil ||
+			validateProductionPreflightExternalEvidence(lockedPlan, input, evaluation, finalNow) != nil ||
+			evaluation.Snapshot.ValidateAt(finalNow) != nil ||
+			input.targetPermit.ValidateRequestAt(finalNow, input.Permit, input.ProbeRequest) != nil {
+			return ErrRecoveryPreflightConflict
+		}
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrRecoveryPreflightConflict) {
-			return PreflightPersistenceResult{}, ErrRecoveryPreflightConflict
-		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return PreflightPersistenceResult{}, ctxErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return PreflightPersistenceResult{}, err
+		}
+		if errors.Is(err, ErrRecoveryPreflightConflict) {
+			return PreflightPersistenceResult{}, ErrRecoveryPreflightConflict
 		}
 		return PreflightPersistenceResult{}, ErrTargetPreflightUnavailable
 	}
@@ -776,7 +882,6 @@ func validateProductionPreflightExternalEvidence(
 		RequiredInodes:           plan.EstimatedItems,
 	}
 	if binding.request != expected || binding.evidence.ValidateFor(now, expected) != nil ||
-		evaluation.Snapshot.ExpiresAt.After(binding.evidence.ExpiresAt) ||
 		input.Security.ValidateBinding(
 			binding.evidence.FindingSetDigest,
 			binding.evidence.PolicyRevision,
@@ -838,11 +943,12 @@ func preflightPersistenceDatabaseError(ctx context.Context) error {
 func NewTargetPreflightEvaluator(
 	observer TargetObservationPort,
 	externalEvidence PreflightExternalEvidencePort,
+	now func() time.Time,
 ) (*TargetPreflightEvaluator, error) {
-	if observer == nil || externalEvidence == nil {
+	if observer == nil || externalEvidence == nil || now == nil {
 		return nil, ErrInvalidTargetPreflight
 	}
-	return &TargetPreflightEvaluator{observer: observer, externalEvidence: externalEvidence}, nil
+	return &TargetPreflightEvaluator{observer: observer, externalEvidence: externalEvidence, now: now}, nil
 }
 
 func (evaluator *TargetPreflightEvaluator) Evaluate(
@@ -850,7 +956,7 @@ func (evaluator *TargetPreflightEvaluator) Evaluate(
 	now time.Time,
 	input TargetPreflightInput,
 ) (TargetPreflightResult, error) {
-	if evaluator == nil || evaluator.observer == nil || evaluator.externalEvidence == nil ||
+	if evaluator == nil || evaluator.observer == nil || evaluator.externalEvidence == nil || evaluator.now == nil ||
 		now.IsZero() || input.SnapshotTTL <= 0 ||
 		!validOpaqueID(input.SnapshotID) || !validOpaqueRevision(input.SnapshotRevision) || input.Node.NodeID == 0 ||
 		!validOpaqueRevision(input.Frozen.NodeRevision) || !validDigest(input.Frozen.SourceRevisionDigest) ||
@@ -890,12 +996,14 @@ func (evaluator *TargetPreflightEvaluator) Evaluate(
 		return TargetPreflightResult{}, ErrRecoveryPreflightConflict
 	}
 	binding := input.targetPermit.proof.sessionBinding
+	budgetDeadline := now.Add(input.SnapshotTTL)
 
 	preProbeReasons := nodePreflightReasons(input.Node)
 	if len(preProbeReasons) > 0 {
 		return TargetPreflightResult{
-			Reasons:  preProbeReasons,
-			Security: clonePreflightSecurityDecision(input.Security),
+			Reasons:     preProbeReasons,
+			Security:    clonePreflightSecurityDecision(input.Security),
+			completedAt: now,
 		}, nil
 	}
 
@@ -906,10 +1014,13 @@ func (evaluator *TargetPreflightEvaluator) Evaluate(
 		}
 		return TargetPreflightResult{}, ErrTargetPreflightUnavailable
 	}
-	if !targetFacts.ExpiresAt.After(now) {
+	postProbeAt := evaluator.now().UTC()
+	if postProbeAt.IsZero() || postProbeAt.Before(now) || !budgetDeadline.After(postProbeAt) ||
+		!targetFacts.ExpiresAt.After(postProbeAt) ||
+		input.targetPermit.ValidateRequestAt(postProbeAt, input.Permit, input.ProbeRequest) != nil {
 		return TargetPreflightResult{}, ErrRecoveryPreflightConflict
 	}
-	if targetFacts.ObservedAt.IsZero() || targetFacts.ObservedAt.After(now) ||
+	if targetFacts.ObservedAt.IsZero() || targetFacts.ObservedAt.After(postProbeAt) ||
 		!validOpaqueRevision(targetFacts.RootRevision) ||
 		!validOpaqueRevision(targetFacts.FilesystemRevision) ||
 		!validOpaqueRevision(targetFacts.CredentialRevision) ||
@@ -952,10 +1063,16 @@ func (evaluator *TargetPreflightEvaluator) Evaluate(
 		}
 		return TargetPreflightResult{}, ErrTargetPreflightUnavailable
 	}
-	if !externalFacts.ExpiresAt.After(now) {
+	completedAt := evaluator.now().UTC()
+	if completedAt.IsZero() || completedAt.Before(postProbeAt) || !budgetDeadline.After(completedAt) ||
+		!targetFacts.ExpiresAt.After(completedAt) || !externalFacts.ObservationExpiresAt.After(completedAt) ||
+		input.targetPermit.ValidateRequestAt(completedAt, input.Permit, input.ProbeRequest) != nil {
 		return TargetPreflightResult{}, ErrRecoveryPreflightConflict
 	}
-	if err := externalFacts.ValidateFor(now, externalRequest); err != nil {
+	if targetFacts.ObservedAt.IsZero() || targetFacts.ObservedAt.After(completedAt) {
+		return TargetPreflightResult{}, ErrInvalidTargetPreflight
+	}
+	if err := externalFacts.ValidateFor(completedAt, externalRequest); err != nil {
 		return TargetPreflightResult{}, err
 	}
 	if externalFacts.SourceRevisionDigest != input.Frozen.SourceRevisionDigest ||
@@ -977,13 +1094,13 @@ func (evaluator *TargetPreflightEvaluator) Evaluate(
 
 	reasons := observedPreflightReasons(input, targetFacts, externalFacts)
 	eligible := len(reasons) == 0
-	expiresAt := now.Add(input.SnapshotTTL)
-	for _, candidate := range []time.Time{targetFacts.ExpiresAt, input.Permit.ExpiresAt, externalFacts.ExpiresAt} {
+	expiresAt := budgetDeadline
+	for _, candidate := range []time.Time{targetFacts.ExpiresAt, input.Permit.ExpiresAt} {
 		if candidate.Before(expiresAt) {
 			expiresAt = candidate
 		}
 	}
-	if !expiresAt.After(now) {
+	if !expiresAt.After(completedAt) {
 		return TargetPreflightResult{}, ErrRecoveryPreflightConflict
 	}
 	observedAt := targetFacts.ObservedAt
@@ -1006,7 +1123,8 @@ func (evaluator *TargetPreflightEvaluator) Evaluate(
 	return TargetPreflightResult{
 		Eligible: eligible, Preferred: eligible && input.Node.ProducingNode,
 		Reasons: append([]TargetPreflightReason(nil), reasons...), Snapshot: snapshot,
-		Security: clonePreflightSecurityDecision(input.Security),
+		Security:    clonePreflightSecurityDecision(input.Security),
+		completedAt: completedAt,
 		external: &preflightExternalEvidenceCommitBinding{
 			request: externalRequest, evidence: clonePreflightExternalEvidence(externalFacts),
 		},
@@ -1117,7 +1235,7 @@ func observedPreflightReasons(
 	if input.Node.ActiveWriter {
 		reasons = append(reasons, TargetPreflightActiveWriter)
 	}
-	if targetFacts.TargetExists && (input.TargetMode == TargetModeIsolated || input.ConflictPolicy == ConflictFailOnConflict) {
+	if targetFacts.TargetExists && input.TargetMode == TargetModeInPlace && input.ConflictPolicy == ConflictFailOnConflict {
 		reasons = append(reasons, TargetPreflightTargetConflict)
 	}
 	if input.Security.Decision.Kind != SecurityDecisionAllowClean {

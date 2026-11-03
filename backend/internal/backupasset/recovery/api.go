@@ -131,6 +131,7 @@ type RecoveryJobView struct {
 type RecoveryPublicFailureCategory string
 
 const (
+	RecoveryPublicFailurePreWriteFailed          RecoveryPublicFailureCategory = "pre_write_failed"
 	RecoveryPublicFailureSourceDrift             RecoveryPublicFailureCategory = "source_drift"
 	RecoveryPublicFailureVerificationMismatch    RecoveryPublicFailureCategory = "verification_mismatch"
 	RecoveryPublicFailureRemoteOutcomeUnresolved RecoveryPublicFailureCategory = "remote_outcome_unresolved"
@@ -932,6 +933,14 @@ func (service *APIService) projectRecoveryAPIDeleteCheckpointTx(
 	if service == nil || service.now == nil {
 		return nil, ErrRecoveryAPIUnavailable
 	}
+	mode := TargetMode(job.TargetMode)
+	policy := ConflictPolicy(job.PlanConflictPolicy)
+	if mode.Validate() != nil || policy.Validate() != nil {
+		return nil, ErrRecoveryAPIUnavailable
+	}
+	if mode != TargetModeInPlace || policy != ConflictExactMirror {
+		return nil, nil
+	}
 	var attempts []model.BackupAssetRecoveryAttempt
 	now := service.now().UTC()
 	loaded := tx.Where("job_id = ? AND state = ? AND lease_expires_at > ?", job.ID, AttemptStateRunning, now).
@@ -943,8 +952,7 @@ func (service *APIService) projectRecoveryAPIDeleteCheckpointTx(
 		return nil, nil
 	}
 	if len(attempts) != 1 || !validOpaqueID(attempts[0].ID) || attempts[0].Fence == 0 ||
-		!attempts[0].MutationArmed || attempts[0].LeaseExpiresAt == nil ||
-		!attempts[0].LeaseExpiresAt.UTC().After(now) {
+		attempts[0].LeaseExpiresAt == nil || !attempts[0].LeaseExpiresAt.UTC().After(now) {
 		return nil, ErrRecoveryAPIUnavailable
 	}
 	attempt := attempts[0]
@@ -1003,6 +1011,17 @@ func (service *APIService) projectRecoveryAPIDeleteCheckpointTx(
 	if !validRecoveryWorkerClaim(claim) || !nodeLeases[0].LeaseExpiresAt.UTC().After(now) ||
 		!sourceLeases[0].LeaseExpiresAt.UTC().After(now) {
 		return nil, ErrRecoveryAPIUnavailable
+	}
+	if !attempt.MutationArmed {
+		var checkpoint model.BackupAssetRecoveryCheckpoint
+		loaded = tx.WithContext(ctx).Select("id").Where("job_id = ?", job.ID).Limit(1).Find(&checkpoint)
+		if loaded.Error != nil {
+			return nil, loaded.Error
+		}
+		if loaded.RowsAffected != 0 {
+			return nil, ErrRecoveryAPIUnavailable
+		}
+		return nil, nil
 	}
 	var checkpoints []model.BackupAssetRecoveryCheckpoint
 	loaded = tx.WithContext(ctx).Where("job_id = ?", job.ID).Order("sequence ASC").Find(&checkpoints)
@@ -1188,7 +1207,8 @@ func validateRecoveryAPIJobProduct(
 			return RecoveryJobProgressView{}, ErrRecoveryAPIUnavailable
 		}
 	case JobStateNeedsAttention, JobStateFailed:
-		if !categoryPresent {
+		if !categoryPresent || (job.FailureCategory == recoveryPreWriteFailedCategory &&
+			(state != JobStateFailed || progress.CompletedItems != 0 || progress.BytesWritten != 0)) {
 			return RecoveryJobProgressView{}, ErrRecoveryAPIUnavailable
 		}
 	default:
@@ -1342,6 +1362,8 @@ func normalizeRecoveryAPIPage(request RecoveryPageRequest) (int, int, int, error
 
 func recoveryPublicFailureCategory(value string) (RecoveryPublicFailureCategory, bool) {
 	switch value {
+	case recoveryPreWriteFailedCategory:
+		return RecoveryPublicFailurePreWriteFailed, true
 	case recoveryPreWriteDriftFailureCategory, "source_revalidation_failed":
 		return RecoveryPublicFailureSourceDrift, true
 	case recoveryVerificationMismatchFailureCategory:

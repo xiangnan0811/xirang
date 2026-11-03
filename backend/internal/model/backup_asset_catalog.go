@@ -6,6 +6,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// CatalogCandidateSweep stores only the durable progress of a candidate scan.
+type CatalogCandidateSweep struct {
+	ID                 int        `gorm:"primaryKey;autoIncrement:false" json:"-"`
+	Revision           int64      `gorm:"not null" json:"-"`
+	AfterCreatedAt     *time.Time `json:"-"`
+	AfterPointID       *string    `gorm:"size:32" json:"-"`
+	HighWaterCreatedAt *time.Time `json:"-"`
+	HighWaterPointID   *string    `gorm:"size:32" json:"-"`
+}
+
+func (CatalogCandidateSweep) TableName() string { return "catalog_candidate_sweeps" }
+
 type CatalogGeneration struct {
 	ID                 string     `gorm:"primaryKey;size:32" json:"id"`
 	RecoveryPointID    string     `gorm:"size:32;not null" json:"recovery_point_id"`

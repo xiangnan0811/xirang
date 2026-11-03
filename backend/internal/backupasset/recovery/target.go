@@ -48,7 +48,7 @@ const (
 	recoveryWorkspaceMarkerDocumentDomain       = "xirang/recovery/workspace-marker-document/v1"
 	recoveryTargetSessionBindingDomain          = "xirang/recovery/target-session-binding/v1"
 	recoveryTargetPreflightSessionBindingDomain = "xirang/recovery/target-preflight-session-binding/v1"
-	targetVerifyPermitProofDomain               = "xirang/recovery/target-verify-permit-proof/v2"
+	targetVerifyPermitProofDomain               = "xirang/recovery/target-verify-permit-proof/v3"
 	targetResultReadPermitProofDomain           = "xirang/recovery/target-result-read-permit-proof/v1"
 	targetPreflightRequestDomain                = "xirang/recovery/target-preflight-request/v1"
 	targetPreflightPermitProofDomain            = "xirang/recovery/target-preflight-permit-proof/v1"
@@ -180,12 +180,6 @@ type recoveryTargetPreflightSessionBinding struct {
 	targetRevision         string
 	preflightRevision      string
 	bindingDigest          string
-}
-
-func newRecoveryTargetPreflightSessionBinding(
-	plan model.BackupAssetRecoveryPlan,
-) (recoveryTargetPreflightSessionBinding, error) {
-	return newRecoveryTargetPreflightSessionBindingForRevision(plan, plan.TargetBaseRevision)
 }
 
 func newRecoveryTargetPreflightSessionBindingForRevision(
@@ -475,18 +469,31 @@ type recoverySSHChannelOpener interface {
 	OpenChannel(string, []byte) (ssh.Channel, <-chan *ssh.Request, error)
 }
 
+type recoveryDirectoryInitialization struct {
+	done     chan struct{}
+	session  recoverySFTPDirectorySession
+	err      error
+	closeErr error
+}
+
 type recoverySFTPClient struct {
 	client               *sftp.Client
 	directoryMu          sync.Mutex
 	directorySession     recoverySFTPDirectorySession
+	directoryInit        *recoveryDirectoryInitialization
 	openDirectorySession recoverySFTPDirectorySessionOpener
+	closed               bool
+	closeOnce            sync.Once
+	closeErr             error
 }
 
 type recoverySFTPFile struct {
 	file          recoverySFTPFileHandle
 	path          string
 	openDirectory recoverySFTPDirectoryOpener
+	directoryMu   sync.Mutex
 	directory     recoverySFTPDirectoryReader
+	closed        bool
 	closeOnce     sync.Once
 	closeErr      error
 }
@@ -516,22 +523,38 @@ func openRecoveryBoundedSFTPDirectorySession(
 }
 
 func (file *recoverySFTPFile) Read(value []byte) (int, error) {
-	if file == nil || file.file == nil {
+	if file == nil {
 		return 0, ErrRecoveryTargetUnavailable
 	}
-	return file.file.Read(value)
+	file.directoryMu.Lock()
+	handle, closed := file.file, file.closed
+	file.directoryMu.Unlock()
+	if closed || handle == nil {
+		return 0, ErrRecoveryTargetUnavailable
+	}
+	return handle.Read(value)
 }
 
 func (file *recoverySFTPFile) Write(value []byte) (int, error) {
-	if file == nil || file.file == nil {
+	if file == nil {
 		return 0, ErrRecoveryTargetUnavailable
 	}
-	return file.file.Write(value)
+	file.directoryMu.Lock()
+	handle, closed := file.file, file.closed
+	file.directoryMu.Unlock()
+	if closed || handle == nil {
+		return 0, ErrRecoveryTargetUnavailable
+	}
+	return handle.Write(value)
 }
 
 func (file *recoverySFTPFile) ReadDir(n int) ([]os.FileInfo, error) {
-	if file == nil || file.file == nil || file.path == "" || file.openDirectory == nil ||
-		n <= 0 || n > recoveryCleanupReadBatch {
+	if file == nil || n <= 0 || n > recoveryCleanupReadBatch {
+		return nil, ErrRecoveryTargetUnavailable
+	}
+	file.directoryMu.Lock()
+	defer file.directoryMu.Unlock()
+	if file.closed || file.file == nil || file.path == "" || file.openDirectory == nil {
 		return nil, ErrRecoveryTargetUnavailable
 	}
 	if file.directory == nil {
@@ -552,17 +575,29 @@ func (file *recoverySFTPFile) ReadDir(n int) ([]os.FileInfo, error) {
 }
 
 func (file *recoverySFTPFile) Stat() (os.FileInfo, error) {
-	if file == nil || file.file == nil {
+	if file == nil {
 		return nil, ErrRecoveryTargetUnavailable
 	}
-	return file.file.Stat()
+	file.directoryMu.Lock()
+	handle, closed := file.file, file.closed
+	file.directoryMu.Unlock()
+	if closed || handle == nil {
+		return nil, ErrRecoveryTargetUnavailable
+	}
+	return handle.Stat()
 }
 
 func (file *recoverySFTPFile) Sync() error {
-	if file == nil || file.file == nil {
+	if file == nil {
 		return ErrRecoveryTargetUnavailable
 	}
-	return file.file.Sync()
+	file.directoryMu.Lock()
+	handle, closed := file.file, file.closed
+	file.directoryMu.Unlock()
+	if closed || handle == nil {
+		return ErrRecoveryTargetUnavailable
+	}
+	return handle.Sync()
 }
 
 func (file *recoverySFTPFile) Close() error {
@@ -570,22 +605,25 @@ func (file *recoverySFTPFile) Close() error {
 		return ErrRecoveryTargetUnavailable
 	}
 	file.closeOnce.Do(func() {
-		if file.directory != nil {
-			if err := file.directory.Close(); err != nil {
+		file.directoryMu.Lock()
+		file.closed = true
+		directory, handle := file.directory, file.file
+		file.directory = nil
+		file.directoryMu.Unlock()
+		if directory != nil {
+			if err := directory.Close(); err != nil {
 				file.closeErr = ErrRecoveryTargetUnavailable
 			}
-			file.directory = nil
 		}
-		if file.file == nil {
+		if handle == nil {
 			if file.closeErr == nil {
 				file.closeErr = ErrRecoveryTargetUnavailable
 			}
 			return
 		}
-		if err := file.file.Close(); err != nil && file.closeErr == nil {
+		if err := handle.Close(); err != nil && file.closeErr == nil {
 			file.closeErr = ErrRecoveryTargetUnavailable
 		}
-		file.file = nil
 	})
 	return file.closeErr
 }
@@ -621,25 +659,78 @@ func (client *recoverySFTPClient) Chmod(value string, mode os.FileMode) error {
 func (client *recoverySFTPClient) openBoundedDirectory(
 	value string,
 ) (recoverySFTPDirectoryReader, error) {
-	if client == nil || client.openDirectorySession == nil {
+	if client == nil {
 		return nil, ErrRecoveryTargetUnavailable
 	}
 	client.directoryMu.Lock()
-	if client.directorySession == nil {
-		session, err := client.openDirectorySession()
-		if err != nil || session == nil {
-			client.directoryMu.Unlock()
-			if session != nil {
-				_ = session.Close()
-			}
-			return nil, ErrRecoveryTargetUnavailable
-		}
-		client.directorySession = session
+	if client.closed {
+		client.directoryMu.Unlock()
+		return nil, ErrRecoveryTargetUnavailable
 	}
 	session := client.directorySession
+	initialization := client.directoryInit
+	owner := false
+	if session == nil && initialization == nil {
+		if client.openDirectorySession == nil {
+			client.directoryMu.Unlock()
+			return nil, ErrRecoveryTargetUnavailable
+		}
+		initialization = &recoveryDirectoryInitialization{done: make(chan struct{})}
+		client.directoryInit = initialization
+		owner = true
+	}
+	// Session setup can block in SSH; never hold the state lock across it.
 	client.directoryMu.Unlock()
+
+	if owner {
+		opened, err := client.openDirectorySession()
+		client.directoryMu.Lock()
+		if client.closed || err != nil || opened == nil {
+			initialization.err = ErrRecoveryTargetUnavailable
+		} else {
+			client.directorySession = opened
+			initialization.session = opened
+			opened = nil
+		}
+		client.directoryMu.Unlock()
+		if opened != nil {
+			if err := opened.Close(); err != nil {
+				initialization.closeErr = ErrRecoveryTargetUnavailable
+			}
+		}
+		client.directoryMu.Lock()
+		// Retain the completed record after Close so its owner can join late cleanup.
+		close(initialization.done)
+		if !client.closed {
+			client.directoryInit = nil
+		}
+		client.directoryMu.Unlock()
+	}
+	if initialization != nil {
+		<-initialization.done
+		if initialization.err != nil {
+			return nil, initialization.err
+		}
+		session = initialization.session
+	}
+	client.directoryMu.Lock()
+	closed := client.closed
+	client.directoryMu.Unlock()
+	if closed || session == nil {
+		return nil, ErrRecoveryTargetUnavailable
+	}
 	directory, err := session.OpenDirectory(value)
-	if err != nil {
+	if err != nil || directory == nil {
+		if directory != nil {
+			_ = directory.Close()
+		}
+		return nil, ErrRecoveryTargetUnavailable
+	}
+	client.directoryMu.Lock()
+	closed = client.closed
+	client.directoryMu.Unlock()
+	if closed {
+		_ = directory.Close()
 		return nil, ErrRecoveryTargetUnavailable
 	}
 	return directory, nil
@@ -674,23 +765,47 @@ func (client *recoverySFTPClient) RemoveDirectory(value string) error {
 }
 
 func (client *recoverySFTPClient) Close() error {
-	if client == nil || client.client == nil {
+	if client == nil {
+		return ErrRecoveryTargetUnavailable
+	}
+	client.closeOnce.Do(func() {
+		client.directoryMu.Lock()
+		client.closed = true
+		directorySession := client.directorySession
+		client.directorySession = nil
+		client.directoryMu.Unlock()
+		if directorySession != nil {
+			if err := directorySession.Close(); err != nil {
+				client.closeErr = ErrRecoveryTargetUnavailable
+			}
+		}
+		if client.client == nil {
+			if client.closeErr == nil {
+				client.closeErr = ErrRecoveryTargetUnavailable
+			}
+		} else if err := client.client.Close(); err != nil && client.closeErr == nil {
+			client.closeErr = err
+		}
+	})
+	return client.closeErr
+}
+
+func (client *recoverySFTPClient) joinDirectoryInitialization() error {
+	if client == nil {
 		return ErrRecoveryTargetUnavailable
 	}
 	client.directoryMu.Lock()
-	directorySession := client.directorySession
-	client.directorySession = nil
+	if !client.closed {
+		client.directoryMu.Unlock()
+		return ErrRecoveryTargetUnavailable
+	}
+	initialization := client.directoryInit
 	client.directoryMu.Unlock()
-	var closeErr error
-	if directorySession != nil {
-		if err := directorySession.Close(); err != nil {
-			closeErr = ErrRecoveryTargetUnavailable
-		}
+	if initialization == nil {
+		return nil
 	}
-	if err := client.client.Close(); err != nil && closeErr == nil {
-		closeErr = err
-	}
-	return closeErr
+	<-initialization.done
+	return initialization.closeErr
 }
 
 type recoveryTargetSFTPOpener func(*ssh.Client) (recoveryTargetSFTPClient, error)
@@ -756,6 +871,8 @@ type recoveryTargetSession struct {
 	trackedFiles  map[*recoveryResultTrackedSFTPFile]struct{}
 	closed        bool
 	resourcesOnce sync.Once
+	sshCloseOnce  sync.Once
+	sshCloseErr   error
 	stopOnce      sync.Once
 	watchStop     chan struct{}
 	watchDone     chan struct{}
@@ -899,6 +1016,8 @@ func (session *recoveryTargetSession) watch(ctx context.Context) {
 		defer close(session.watchDone)
 		select {
 		case <-ctx.Done():
+			// Interrupt first: resource cleanup may be waiting for this transport.
+			_ = session.interruptSSH() // closeResources retains the stored transport error.
 			session.closeResources()
 		case <-session.watchStop:
 		}
@@ -920,6 +1039,15 @@ func (session *recoveryTargetSession) attachSFTP(client recoveryTargetSFTPClient
 	return true
 }
 
+func (session *recoveryTargetSession) interruptSSH() error {
+	session.sshCloseOnce.Do(func() {
+		if session.closeSSH != nil {
+			session.sshCloseErr = session.closeSSH(session.sshClient)
+		}
+	})
+	return session.sshCloseErr
+}
+
 func (session *recoveryTargetSession) closeResources() {
 	session.resourcesOnce.Do(func() {
 		session.mu.Lock()
@@ -935,8 +1063,11 @@ func (session *recoveryTargetSession) closeResources() {
 				session.closeErr = err
 			}
 		}
-		if session.closeSSH != nil {
-			if err := session.closeSSH(session.sshClient); session.closeErr == nil {
+		if err := session.interruptSSH(); session.closeErr == nil {
+			session.closeErr = err
+		}
+		if joiner, ok := client.(interface{ joinDirectoryInitialization() error }); ok {
+			if err := joiner.joinDirectoryInitialization(); session.closeErr == nil {
 				session.closeErr = err
 			}
 		}
@@ -1034,8 +1165,9 @@ func (session *recoveryTargetSession) Close() error {
 	if session == nil {
 		return ErrRecoveryTargetUnavailable
 	}
-	session.stopOnce.Do(func() { close(session.watchStop) })
+	// Cancellation remains able to interrupt a normal close until cleanup joins.
 	session.closeResources()
+	session.stopOnce.Do(func() { close(session.watchStop) })
 	<-session.watchDone
 	return session.closeErr
 }
@@ -1181,6 +1313,7 @@ type targetVerifyPermitProof struct {
 	targetMode     TargetMode
 	operation      RecoveryOperationKind
 	expectedPrior  ExpectedTargetIdentity
+	adoption       *targetAdoptionVerifyProof
 	bindingDigest  string
 }
 
@@ -1221,6 +1354,7 @@ func (permit TargetObservationPermit) validateVerifyPurposeAt(now time.Time) err
 		proof.sessionBinding.NodeID != permit.NodeID || proof.sessionBinding.RootID != permit.RootID ||
 		proof.sessionBinding.RootLocatorDigest != permit.RootLocatorDigest ||
 		proof.sessionBinding.RootRevision != permit.RootRevision ||
+		(proof.adoption != nil && !validTargetAdoptionVerifyProof(permit, proof)) ||
 		proof.bindingDigest != targetVerifyPermitProofDigest(permit, proof) {
 		return ErrInvalidTargetPermit
 	}
@@ -1242,6 +1376,7 @@ func targetVerifyPermitProofDigest(
 		permit.ExpiresAt.UTC().Format(time.RFC3339Nano), proof.jobID,
 		string(proof.targetMode), string(proof.operation), string(proof.expectedPrior.Kind),
 		proof.expectedPrior.Digest, proof.sessionBinding.bindingDigest,
+		targetAdoptionVerifyProofDigest(proof.adoption),
 	)
 }
 
@@ -2344,14 +2479,6 @@ func targetDeletePermitProofDigest(
 		proof.artifacts.intentDocument,
 		proof.artifacts.verifiedDocument,
 	)
-}
-
-func (permit TargetDeletePermit) validateRequestAt(
-	now time.Time,
-	request TargetDeleteRequest,
-) error {
-	_, err := permit.authorityAt(now, request)
-	return err
 }
 
 func (permit TargetDeletePermit) authorityAt(
@@ -3825,13 +3952,14 @@ func newRecoverySFTPTarget(
 	resolver recoveryTargetNodeSessionResolver,
 	dialer *sshutil.NodeDialer,
 	marker *recoveryWorkspaceMarkerCodec,
+	now func() time.Time,
 ) (*recoverySFTPTarget, error) {
-	if resolver == nil || dialer == nil || marker == nil {
+	if resolver == nil || dialer == nil || marker == nil || now == nil {
 		return nil, ErrRecoveryTargetUnavailable
 	}
-	return newRecoverySFTPTargetForTest(
-		newRecoveryTargetSessionFactory(resolver, dialer), marker,
-	), nil
+	return &recoverySFTPTarget{
+		sessions: newRecoveryTargetSessionFactory(resolver, dialer), marker: marker, entropy: rand.Reader, now: now,
+	}, nil
 }
 
 // ProductionTargetDependencies contains only process composition authorities.
@@ -3842,12 +3970,13 @@ type ProductionTargetDependencies struct {
 	Revisions     RecoveryNodeRevisionSource
 	Dialer        *sshutil.NodeDialer
 	WorkspaceKeys RecoveryWorkspaceKeySource
+	Now           func() time.Time
 }
 
 // NewProductionTarget constructs the single Recovery-owned SSH/SFTP target.
 func NewProductionTarget(dependencies ProductionTargetDependencies) (TargetPort, error) {
 	if dependencies.DB == nil || dependencies.Revisions == nil || dependencies.Dialer == nil ||
-		dependencies.WorkspaceKeys == nil {
+		dependencies.WorkspaceKeys == nil || dependencies.Now == nil {
 		return nil, ErrRecoveryTargetUnavailable
 	}
 	resolver := &productionRecoveryTargetNodeSessionResolver{
@@ -3857,6 +3986,7 @@ func NewProductionTarget(dependencies ProductionTargetDependencies) (TargetPort,
 		resolver,
 		dependencies.Dialer,
 		newRecoveryWorkspaceMarkerCodec(dependencies.WorkspaceKeys, nil),
+		dependencies.Now,
 	)
 }
 
@@ -5048,6 +5178,10 @@ func recoveryObserveRootAndTarget(
 	if err != nil {
 		return recoveryRootProbeObservation{}, err
 	}
+	if binding.targetMode == TargetModeIsolated {
+		observed.targetRevision = observed.rootRevision
+		return observed, nil
+	}
 	target, err := recoveryObservePreflightTarget(
 		ctx, client, binding, rootVFS.Fsid, observed.rootRevision,
 	)
@@ -5460,7 +5594,7 @@ func recoveryDeleteArtifactPathsFor(
 }
 
 type recoveryTargetSFTPDirectory interface {
-	Readdir(int) ([]os.FileInfo, error)
+	ReadDir(int) ([]os.FileInfo, error)
 }
 
 func verifyRecoveryDeleteCapturedDirectoryEmpty(
@@ -5505,7 +5639,7 @@ func verifyRecoveryDeleteCapturedDirectoryEmpty(
 		}
 		return ErrRecoveryTargetChanged
 	}
-	entries, readErr := directory.Readdir(1)
+	entries, readErr := directory.ReadDir(1)
 	closeErr := file.Close()
 	if closeErr != nil {
 		return ErrRecoveryTargetUnavailable
@@ -6358,17 +6492,31 @@ func (target *recoverySFTPTarget) Verify(
 	if err != nil {
 		return TargetVerifyObservation{}, err
 	}
+	initialProof := *permit.permit.proof
+	if initialProof.adoption != nil {
+		adoption := *initialProof.adoption
+		initialProof.adoption = &adoption
+	}
+	material, err := target.adoptionMaterial(ctx, &initialProof)
+	if err != nil {
+		return TargetVerifyObservation{}, err
+	}
+	defer clear(material.Key)
 	session, err := target.sessions.Open(ctx, binding, TargetPurposeVerify, jobID)
 	if err != nil {
 		return TargetVerifyObservation{}, err
 	}
 	var observation TargetVerifyObservation
 	var operationErr error
-	if expectation.Kind == TargetPresencePresent {
+	var before recoveryAdoptionTuple
+	if initialProof.adoption != nil {
+		before, operationErr = observeRecoveryAdoptionTuple(session.client, &initialProof, material)
+	}
+	if operationErr == nil && expectation.Kind == TargetPresencePresent {
 		observation, operationErr = verifyRecoveryPresentRegularFile(
 			session.client, binding, jobID, mode, object, *expectation.Present,
 		)
-	} else {
+	} else if operationErr == nil {
 		var result TargetLstatResult
 		result, operationErr = observeRecoveryDeleteEntryTwice(
 			session.client, binding, jobID, mode, object,
@@ -6386,13 +6534,22 @@ func (target *recoverySFTPTarget) Verify(
 			}
 		}
 	}
+	if operationErr == nil && initialProof.adoption != nil {
+		after, err := observeRecoveryAdoptionTuple(session.client, &initialProof, material)
+		if err != nil {
+			operationErr = err
+		} else if before != after {
+			operationErr = ErrRecoveryTargetChanged
+		}
+	}
 	if operationErr == nil {
 		currentBinding, currentJobID, currentMode, currentErr := recoveryTargetVerifySessionAuthority(
 			permit, object, expectation, target.now().UTC(),
 		)
 		if currentErr != nil {
 			operationErr = currentErr
-		} else if currentBinding != binding || currentJobID != jobID || currentMode != mode {
+		} else if currentBinding != binding || currentJobID != jobID || currentMode != mode ||
+			permit.permit.proof.bindingDigest != initialProof.bindingDigest {
 			operationErr = ErrInvalidTargetPermit
 		}
 	}
@@ -7614,7 +7771,9 @@ func recoveryTargetVerifySessionAuthority(
 	expectation TargetVerifyExpectation,
 	now time.Time,
 ) (recoveryTargetSessionBinding, string, TargetMode, error) {
-	if expectation.Validate() != nil {
+	if expectation.Validate() != nil ||
+		(permit.permit.proof != nil && permit.permit.proof.adoption != nil &&
+			!permit.permit.proof.adoption.matchesRequest(object, expectation)) {
 		return recoveryTargetSessionBinding{}, "", "", ErrInvalidTargetPermit
 	}
 	var binding recoveryTargetSessionBinding
