@@ -501,7 +501,9 @@ func runtimeValidateExportSelectionRow(row runtimeExportSelectionRow) error {
 		row.PointCapabilityRevision <= 0 || row.PointCapabilityRevision != row.RepositoryCapabilityRevision ||
 		row.RepositoryStatus != string(backupasset.RepositoryOnline) || row.PointPhysicalAvailability != string(backupasset.PhysicalOnline) ||
 		row.PointRetiredAt != nil || !runtimeExportPointVisible(row.PointSemantics, row.PointState) ||
-		row.SecurityState != "sealed" || row.Fingerprint == "" || row.Size < 0 ||
+		row.SecurityState != "sealed" || len(row.Fingerprint) > 128 || row.Size < 0 ||
+		(row.Fingerprint == "" && (row.FingerprintStrength != string(catalog.FingerprintNone) ||
+			backupasset.CatalogEntryType(row.EntryType) == backupasset.CatalogEntryFile)) ||
 		(row.FingerprintStrength != string(catalog.FingerprintStrong) &&
 			row.FingerprintStrength != string(catalog.FingerprintWeak) &&
 			row.FingerprintStrength != string(catalog.FingerprintNone)) {
@@ -703,15 +705,6 @@ func (publication *managedExportPublication) waitIdle(ctx context.Context) error
 		case <-changed:
 		}
 	}
-}
-
-func (publication *managedExportPublication) current() *managedExportGraph {
-	if publication == nil {
-		return nil
-	}
-	publication.mu.Lock()
-	defer publication.mu.Unlock()
-	return publication.graph
 }
 
 func (publication *managedExportPublication) signalLocked() {
@@ -1206,10 +1199,6 @@ func (worker *managedExportWorker) Shutdown(ctx context.Context) error {
 	return worker.Drain(ctx)
 }
 
-func (worker *managedExportWorker) reconcile(ctx context.Context) error {
-	return worker.reconcileRestart(ctx, true)
-}
-
 func (worker *managedExportWorker) reconcileStartup(ctx context.Context) error {
 	if err := worker.delivery.ReconcileDeliveries(ctx); err != nil {
 		return err
@@ -1642,10 +1631,6 @@ func (worker *managedExportWorker) loadQueuedCandidates(
 		return nil, fmt.Errorf("load queued Export jobs: %w", err)
 	}
 	return candidates, nil
-}
-
-func (worker *managedExportWorker) executeJob(ctx context.Context, jobID string) error {
-	return worker.executeJobWithClaimNotification(ctx, jobID, nil)
 }
 
 func (worker *managedExportWorker) executeJobWithClaimNotification(
@@ -3107,71 +3092,6 @@ func (branch *contentBrokerDeliveryBranch) RevokeSession(ctx context.Context, se
 		return content.ErrInvalidBrokerRequest
 	}
 	return branch.server.RevokeSession(ctx, sessionJTI, reason)
-}
-
-type optionalTypedDeliveryBranch struct {
-	mu     sync.RWMutex
-	branch typedContentDeliveryBranch
-}
-
-func newOptionalTypedDeliveryBranch() *optionalTypedDeliveryBranch {
-	return &optionalTypedDeliveryBranch{}
-}
-
-func (branch *optionalTypedDeliveryBranch) Install(value typedContentDeliveryBranch) error {
-	if branch == nil || value == nil {
-		return content.ErrInvalidBrokerRequest
-	}
-	branch.mu.Lock()
-	defer branch.mu.Unlock()
-	branch.branch = value
-	return nil
-}
-
-func (branch *optionalTypedDeliveryBranch) Unpublish() {
-	if branch == nil {
-		return
-	}
-	branch.mu.Lock()
-	branch.branch = nil
-	branch.mu.Unlock()
-}
-
-func (branch *optionalTypedDeliveryBranch) current() typedContentDeliveryBranch {
-	if branch == nil {
-		return nil
-	}
-	branch.mu.RLock()
-	defer branch.mu.RUnlock()
-	return branch.branch
-}
-
-func (branch *optionalTypedDeliveryBranch) MatchesDelivery(ctx context.Context, deliveryID string) (bool, error) {
-	current := branch.current()
-	if current == nil {
-		return false, nil
-	}
-	return current.MatchesDelivery(ctx, deliveryID)
-}
-
-func (branch *optionalTypedDeliveryBranch) Serve(
-	ctx context.Context,
-	request content.GatewayRequest,
-	writer http.ResponseWriter,
-) error {
-	current := branch.current()
-	if current == nil {
-		return content.ErrContentNotFound
-	}
-	return current.Serve(ctx, request, writer)
-}
-
-func (branch *optionalTypedDeliveryBranch) RevokeSession(ctx context.Context, sessionJTI, reason string) error {
-	current := branch.current()
-	if current == nil {
-		return nil
-	}
-	return current.RevokeSession(ctx, sessionJTI, reason)
 }
 
 type contentDeliveryMux struct {

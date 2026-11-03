@@ -694,7 +694,11 @@ func TestBackupArchiveHandlerPrivateNetworkHTTPDeliveryTicketRequiresExactAssetD
 		auth.StepUpActionAssetExportCreate,
 		auth.StepUpActionAssetExportDownload,
 	} {
-		proof, _, err := jwtManager.GenerateStepUpToken(user, action)
+		var sessions []string
+		if auth.StepUpActionRequiresSession(action) {
+			sessions = append(sessions, strings.Repeat("f", 32))
+		}
+		proof, _, err := jwtManager.GenerateStepUpToken(user, action, sessions...)
 		if err != nil {
 			t.Fatal(err)
 		}

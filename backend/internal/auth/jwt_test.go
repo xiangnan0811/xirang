@@ -260,9 +260,11 @@ func TestJWTManagerGenerateStepUpTokenRejectsMissingOrInvalidSessionBinding(t *t
 	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	user := model.User{ID: 9, Username: "alice", Role: "admin", TokenVersion: 3}
 
-	for _, sessionID := range []string{"", "not-a-session", strings.Repeat("A", 32)} {
-		if _, _, err := manager.GenerateStepUpToken(user, StepUpActionAssetSecretReveal, sessionID); err == nil {
-			t.Fatalf("GenerateStepUpToken accepted invalid session binding %q", sessionID)
+	for _, action := range []StepUpAction{StepUpActionAssetSecretReveal, StepUpActionSSHKeyReplace, StepUpActionAssetExportCreate, StepUpActionAssetExportDownload} {
+		for _, sessions := range [][]string{nil, {""}, {"not-a-session"}, {strings.Repeat("A", 32)}, {testStepUpSessionID, testStepUpSessionID}} {
+			if _, _, err := manager.GenerateStepUpToken(user, action, sessions...); err == nil {
+				t.Fatalf("GenerateStepUpToken(%q) accepted invalid session bindings %q", action, sessions)
+			}
 		}
 	}
 }

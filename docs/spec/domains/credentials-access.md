@@ -179,7 +179,7 @@ pending token。恢复码模式允许完整粘贴并说明一次性及大小写�
 客户端现有兼容边界：HTTP 失败响应使用真实 HTTP 状态作为 `ApiError.status`，所以非 403 的失败响应即使携带上述码也不识别；但 HTTP 成功响应若携带失败信封 `code=403`，`request()` 会以该信封 code 构造 `ApiError.status`，仍识别匹配的挑战。这不是仅允许真实 HTTP 403 的保证，也不授权服务端生成这种非标准响应；本兼容行为不改变服务端 HTTP 状态与 code 一致的要求。
 
 - `asset.secret_reveal` 的签名有效期严格为 2700 秒且不滑动；其他已注册操作维持 300 秒及原有复用规则。未知/未来操作无默认 TTL，失败关闭。
-- 校验签名 purpose、精确 action、proof JTI、user ID/subject、role、token version、当前 TOTP 启用及非 reenrollment 状态、iat、exp、精确操作 TTL；`asset.secret_reveal` 和 `ssh_key.replace` 还校验签发时的主登录 session JTI 及当前撤销状态。复用不改变 iat/exp。
+- 校验签名 purpose、精确 action、proof JTI、user ID/subject、role、token version、当前 TOTP 启用及非 reenrollment 状态、iat、exp、精确操作 TTL；`asset.secret_reveal`、`ssh_key.replace`、`asset.export_create` 和 `asset.export_download` 还校验签发时的主登录 session JTI 及当前撤销状态。复用不改变 iat/exp。
 - JWT 每段使用严格 Base64URL 解码；解码字节相同但文本非规范的 token 仍非法。响应 `expires_at` 等于签名 exp，响应和审计 `proof_ttl_seconds` 来自同一策略，非法操作为零。
 - 响应、日志、审计不含 proof/session token、OTP、内容、locator、ticket 或原始错误。回归覆盖全操作和未来操作、跨 purpose、篡改、过期、身份/角色/TOTP/版本变更、会话不匹配及撤销、不滑动复用、确定性的非规范 Base64URL 同字节变体；相关修改运行重复与 race 测试。
 

@@ -32,6 +32,8 @@ clean 且等于当前内嵌迁移头，再验证适用 schema 与降级保护；
 
 不能安全表示的旧数据应在写 dirty 元数据前返回 `ErrMigrationPrecondition`；离线核对真实事实后允许重试。升级前备份数据库、密钥和备份数据，并按领域合同停止、排空旧写入者。不能猜测历史身份、补造证据或混跑不兼容的旧写入进程。
 
+Export raw fingerprint 迁移保留 Catalog 的原始值：仅列明的非文件类型且 strength 为 none 时允许空值，文件及 strong/weak 仍要求非空。SQLite 重建 items／item attempts 前核验两表索引、触发器及外部引用；额外对象在写 dirty 元数据前拒绝，不静默丢弃。双引擎启动核对该 CHECK 及降级准入的实际语义；当保留的 Export item 存在旧约束不能表示的空 fingerprint 时，元数据准入和 down SQL 均拒绝并保持原 clean 版本。旧兼容数据可在相关结构保护允许时回退本迁移，其他版本的降级保护不因此解除。
+
 ## 已使用 schema 的降级保护
 
 有效数据保护要求可以规定“只允许未使用 schema 降级”，不要求破坏性可逆。永久安全标记、幂等凭据、账本或领域证据已使用时，保留状态并前向修复。

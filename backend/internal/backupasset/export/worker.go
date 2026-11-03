@@ -1602,7 +1602,7 @@ func (worker *PersistentWorker) SpoolItem(
 			MaxBytesPerRequest: readLimit, MaxCumulativeBytes: readLimit,
 			MaxRequests: maxRequests, MaxInFlight: 1,
 		},
-		AbsoluteExpiresAt: deadline,
+		AbsoluteExpiresAt: snapshot.AbsoluteDeadline.UTC(),
 	}
 	session, info, err := worker.broker.OpenSession(ctx, binding)
 	if err != nil {
@@ -4502,6 +4502,7 @@ func (coordinator *AttemptCoordinator) ReconcileExpiredWorkerReservations(ctx co
 		Select("reservation.job_id, reservation.attempt_id, job.owner_user_id").
 		Joins("JOIN backup_asset_export_jobs AS job ON job.id = reservation.job_id").
 		Where("reservation.kind = ? AND reservation.state = ? AND reservation.lease_expires_at <= ?", "worker", "active", now).
+		Where("job.execution_state IN ?", []string{string(ExecutionRunning), string(ExecutionSealing)}).
 		Order("reservation.lease_expires_at ASC, reservation.attempt_id ASC, reservation.id ASC").Limit(limit * 2).Scan(&candidates).Error; err != nil {
 		return 0, fmt.Errorf("discover expired export worker reservations: %w", err)
 	}
@@ -4516,11 +4517,14 @@ func (coordinator *AttemptCoordinator) ReconcileExpiredWorkerReservations(ctx co
 			continue
 		}
 		seen[candidate.AttemptID] = struct{}{}
-		if err := coordinator.reconcileExpiredWorkerAttempt(ctx, candidate, now); err != nil {
+		reconciled, err := coordinator.reconcileExpiredWorkerAttempt(ctx, candidate, now)
+		if err != nil {
 			reconcileErr = errors.Join(reconcileErr, err)
 			continue
 		}
-		processed++
+		if reconciled {
+			processed++
+		}
 	}
 	return processed, reconcileErr
 }
@@ -4533,19 +4537,19 @@ func (coordinator *AttemptCoordinator) reconcileExpiredWorkerAttempt(
 		OwnerUserID uint   `gorm:"column:owner_user_id"`
 	},
 	now time.Time,
-) error {
+) (bool, error) {
 	if backupasset.ValidateOpaqueID(candidate.JobID) != nil || backupasset.ValidateOpaqueID(candidate.AttemptID) != nil || candidate.OwnerUserID == 0 {
-		return ErrAttemptFenceLost
+		return false, ErrAttemptFenceLost
 	}
-	return coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	processed := false
+	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		buckets, err := ensureAndLockQuotaBucketPairTx(tx, candidate.OwnerUserID, now)
 		if err != nil {
 			return err
 		}
 		var job model.BackupAssetExportJob
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ? AND owner_user_id = ? AND current_attempt_id = ? AND execution_state IN ?", candidate.JobID, candidate.OwnerUserID, candidate.AttemptID,
-				[]string{string(ExecutionRunning), string(ExecutionSealing)}).
+			Where("id = ? AND owner_user_id = ?", candidate.JobID, candidate.OwnerUserID).
 			Limit(1).Find(&job)
 		if result.Error != nil {
 			return fmt.Errorf("lock export job for expired worker reconciliation: %w", result.Error)
@@ -4555,8 +4559,7 @@ func (coordinator *AttemptCoordinator) reconcileExpiredWorkerAttempt(
 		}
 		var attempt model.BackupAssetExportAttempt
 		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ? AND job_id = ? AND is_current = ? AND state IN ? AND lease_expires_at <= ?", candidate.AttemptID, job.ID, true,
-				[]string{string(AttemptActive), string(AttemptSealing)}, now).
+			Where("id = ? AND job_id = ?", candidate.AttemptID, job.ID).
 			Limit(1).Find(&attempt)
 		if result.Error != nil {
 			return fmt.Errorf("lock expired export worker attempt: %w", result.Error)
@@ -4564,51 +4567,203 @@ func (coordinator *AttemptCoordinator) reconcileExpiredWorkerAttempt(
 		if result.RowsAffected != 1 {
 			return ErrAttemptFenceLost
 		}
-		if (ExecutionState(job.ExecutionState) == ExecutionRunning && AttemptState(attempt.State) != AttemptActive) ||
-			(ExecutionState(job.ExecutionState) == ExecutionSealing && AttemptState(attempt.State) != AttemptSealing) {
-			return ErrAttemptFenceLost
-		}
-		rows, err := lockAttemptWorkerReservationPairTx(tx, buckets, job, attempt)
-		if err != nil {
-			return err
-		}
-		finishedAt := now
-		result = tx.Model(&model.BackupAssetExportAttempt{}).
-			Where("id = ? AND job_id = ? AND is_current = ? AND state = ? AND lease_expires_at = ?", attempt.ID, job.ID, true, attempt.State, attempt.LeaseExpiresAt).
-			Updates(map[string]any{
-				"state": string(AttemptSuperseded), "is_current": false, "failure_category": "heartbeat_lost",
-				"finished_at": finishedAt, "updated_at": now,
-			})
-		if result.Error != nil || result.RowsAffected != 1 {
-			return ErrAttemptFenceLost
-		}
-		if err := releaseAttemptWorkerReservationPairTx(tx, rows, attempt, now); err != nil {
-			return err
-		}
-		nextState := ExecutionFailed
-		if (ExecutionState(job.ExecutionState) == ExecutionRunning || ExecutionState(job.ExecutionState) == ExecutionSealing) &&
-			attempt.AttemptNumber < job.MaxAttempts {
-			retryAt := now.Add(attemptRetryDelay(job, int64(attempt.AttemptNumber)))
-			safeWindow := time.Duration(job.LeaseTTLSeconds+job.LeaseRenewMarginSeconds) * time.Second
-			if safeWindow > 0 && job.AbsoluteDeadline.UTC().After(retryAt.Add(safeWindow)) {
-				nextState = ExecutionRetryWait
+		current := job.CurrentAttemptID != nil && *job.CurrentAttemptID == attempt.ID
+		state := ExecutionState(job.ExecutionState)
+		if current && attempt.IsCurrent && (AttemptState(attempt.State) == AttemptActive || AttemptState(attempt.State) == AttemptSealing) {
+			rows, err := lockAttemptWorkerReservationPairTx(tx, buckets, job, attempt)
+			if err != nil {
+				return err
 			}
+			if attempt.FinishedAt != nil || rows[0].ReleasedAt != nil || rows[1].ReleasedAt != nil {
+				return ErrAttemptFenceLost
+			}
+			if state == ExecutionCancelRequested || state == ExecutionFailed || state == ExecutionSourceExpired {
+				if _, _, err := persistentLifecycleAttemptOutcome(job); err != nil {
+					return err
+				}
+				return nil
+			}
+			if (state != ExecutionRunning || AttemptState(attempt.State) != AttemptActive) &&
+				(state != ExecutionSealing || AttemptState(attempt.State) != AttemptSealing) {
+				return ErrAttemptFenceLost
+			}
+			if attempt.LeaseExpiresAt.UTC().After(now) {
+				return nil
+			}
+			return reconcileOwnedExpiredWorkerAttemptTx(tx, job, attempt, rows, now, &processed)
 		}
-		if ValidateExecutionTransition(ExecutionState(job.ExecutionState), nextState) != nil {
-			return ErrInvalidTransition
+		return validateSettledExpiredWorkerCandidateTx(tx, buckets, job, attempt, current)
+	})
+	return processed && err == nil, err
+}
+
+func reconcileOwnedExpiredWorkerAttemptTx(
+	tx *gorm.DB, job model.BackupAssetExportJob, attempt model.BackupAssetExportAttempt,
+	rows []model.BackupAssetExportReservation, now time.Time, processed *bool,
+) error {
+	finishedAt := now
+	result := tx.Model(&model.BackupAssetExportAttempt{}).
+		Where("id = ? AND job_id = ? AND is_current = ? AND state = ? AND lease_expires_at = ?", attempt.ID, job.ID, true, attempt.State, attempt.LeaseExpiresAt).
+		Updates(map[string]any{
+			"state": string(AttemptSuperseded), "is_current": false, "failure_category": "heartbeat_lost",
+			"finished_at": finishedAt, "updated_at": now,
+		})
+	if result.Error != nil || result.RowsAffected != 1 {
+		return ErrAttemptFenceLost
+	}
+	if err := releaseAttemptWorkerReservationPairTx(tx, rows, attempt, now); err != nil {
+		return err
+	}
+	nextState := ExecutionFailed
+	if (ExecutionState(job.ExecutionState) == ExecutionRunning || ExecutionState(job.ExecutionState) == ExecutionSealing) &&
+		attempt.AttemptNumber < job.MaxAttempts {
+		retryAt := now.Add(attemptRetryDelay(job, int64(attempt.AttemptNumber)))
+		safeWindow := time.Duration(job.LeaseTTLSeconds+job.LeaseRenewMarginSeconds) * time.Second
+		if safeWindow > 0 && job.AbsoluteDeadline.UTC().After(retryAt.Add(safeWindow)) {
+			nextState = ExecutionRetryWait
 		}
-		result = tx.Model(&model.BackupAssetExportJob{}).
-			Where("id = ? AND current_attempt_id = ? AND transition_revision = ? AND execution_state = ?", job.ID, attempt.ID, job.TransitionRevision, job.ExecutionState).
-			Updates(map[string]any{
-				"execution_state": string(nextState), "current_attempt_id": nil,
-				"current_fence_revision": job.CurrentFenceRevision + 1, "error_category": "heartbeat_lost",
-				"transition_revision": gorm.Expr("transition_revision + 1"), "updated_at": now,
-			})
-		if result.Error != nil || result.RowsAffected != 1 {
+	}
+	if ValidateExecutionTransition(ExecutionState(job.ExecutionState), nextState) != nil {
+		return ErrInvalidTransition
+	}
+	result = tx.Model(&model.BackupAssetExportJob{}).
+		Where("id = ? AND current_attempt_id = ? AND transition_revision = ? AND execution_state = ?", job.ID, attempt.ID, job.TransitionRevision, job.ExecutionState).
+		Updates(map[string]any{
+			"execution_state": string(nextState), "current_attempt_id": nil,
+			"current_fence_revision": job.CurrentFenceRevision + 1, "error_category": "heartbeat_lost",
+			"transition_revision": gorm.Expr("transition_revision + 1"), "updated_at": now,
+		})
+	if result.Error != nil || result.RowsAffected != 1 {
+		return ErrAttemptFenceLost
+	}
+	*processed = true
+	return nil
+}
+
+// A candidate can be fenced and released after discovery. Validate both durable
+// reservation rows before treating that competing settlement as complete.
+func validateSettledExpiredWorkerCandidateTx(
+	tx *gorm.DB, buckets quotaBucketPair, job model.BackupAssetExportJob,
+	attempt model.BackupAssetExportAttempt, current bool,
+) error {
+	if attempt.IsCurrent || attempt.FinishedAt == nil {
+		return ErrAttemptFenceLost
+	}
+	state := AttemptState(attempt.State)
+	switch state {
+	case AttemptCanceled:
+		if attempt.FailureCategory != "canceled" {
 			return ErrAttemptFenceLost
 		}
-		return nil
-	})
+	case AttemptFailed:
+		if !validAttemptFailureCategory(attempt.FailureCategory) && !validLifecycleFailureCategory(attempt.FailureCategory) &&
+			attempt.FailureCategory != "source_expired" {
+			return ErrAttemptFenceLost
+		}
+	case AttemptSuperseded:
+		if attempt.FailureCategory != "" && attempt.FailureCategory != "heartbeat_lost" {
+			return ErrAttemptFenceLost
+		}
+	case AttemptSealed:
+		if attempt.FailureCategory != "" {
+			return ErrAttemptFenceLost
+		}
+	default:
+		return ErrAttemptFenceLost
+	}
+	if current && (state != AttemptSealed || (ExecutionState(job.ExecutionState) != ExecutionReady &&
+		ExecutionState(job.ExecutionState) != ExecutionExpiring && ExecutionState(job.ExecutionState) != ExecutionCancelRequested)) {
+		return ErrAttemptFenceLost
+	}
+	if job.CurrentAttemptID == nil && (ExecutionState(job.ExecutionState) == ExecutionRunning ||
+		ExecutionState(job.ExecutionState) == ExecutionSealing || ExecutionState(job.ExecutionState) == ExecutionQueued ||
+		ExecutionState(job.ExecutionState) == ExecutionReady) {
+		return ErrAttemptFenceLost
+	}
+	if !current && job.CurrentAttemptID != nil {
+		if state != AttemptFailed && state != AttemptSuperseded {
+			return ErrAttemptFenceLost
+		}
+		var successor model.BackupAssetExportAttempt
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND job_id = ?", *job.CurrentAttemptID, job.ID).Limit(1).Find(&successor)
+		if result.Error != nil {
+			return fmt.Errorf("lock successor export attempt: %w", result.Error)
+		}
+		if result.RowsAffected != 1 || successor.AttemptNumber <= attempt.AttemptNumber {
+			return ErrAttemptFenceLost
+		}
+		successorState := AttemptState(successor.State)
+		jobState := ExecutionState(job.ExecutionState)
+		if successor.IsCurrent && successor.FinishedAt == nil &&
+			((jobState == ExecutionRunning && successorState == AttemptActive) ||
+				(jobState == ExecutionSealing && successorState == AttemptSealing) ||
+				((jobState == ExecutionCancelRequested || jobState == ExecutionFailed || jobState == ExecutionSourceExpired) &&
+					(successorState == AttemptActive || successorState == AttemptSealing))) {
+			if jobState == ExecutionFailed || jobState == ExecutionSourceExpired {
+				if _, _, err := persistentLifecycleAttemptOutcome(job); err != nil {
+					return err
+				}
+			}
+			rows, err := lockAttemptWorkerReservationPairTx(tx, buckets, job, successor)
+			if err != nil {
+				return err
+			}
+			if rows[0].ReleasedAt != nil || rows[1].ReleasedAt != nil {
+				return ErrAttemptFenceLost
+			}
+		} else if !successor.IsCurrent && successorState == AttemptSealed &&
+			(jobState == ExecutionReady || jobState == ExecutionExpiring || jobState == ExecutionCancelRequested) {
+			if _, err := lockAttemptWorkerReservationPairStateTx(tx, buckets, job, successor, true); err != nil {
+				return err
+			}
+		} else {
+			return ErrAttemptFenceLost
+		}
+	}
+	var releasedAt *time.Time
+	rowState := ""
+	for _, bucket := range []model.BackupAssetExportQuotaBucket{buckets.Global, buckets.User} {
+		var rows []model.BackupAssetExportReservation
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("bucket_id = ? AND job_id = ? AND attempt_id = ? AND kind = ?", bucket.ID, job.ID, attempt.ID, "worker").
+			Limit(2).Find(&rows)
+		if result.Error != nil {
+			return fmt.Errorf("lock settled export worker reservation: %w", result.Error)
+		}
+		if len(rows) != 1 {
+			return ErrAttemptFenceLost
+		}
+		row := rows[0]
+		if rowState == "" {
+			rowState = row.State
+		}
+		if row.State != rowState || (rowState != "released" && rowState != "active") ||
+			row.LeaseOwner != attempt.ID || row.ReservedSlots != 1 || row.ReservedLogicalBytes != 0 ||
+			row.ReservedProviderBytes != 0 || row.ReservedCipherBytes != 0 || row.ReservedStoreBytes != 0 ||
+			!row.LeaseExpiresAt.UTC().Equal(attempt.LeaseExpiresAt.UTC()) {
+			return ErrAttemptFenceLost
+		}
+		if rowState == "released" {
+			if row.ReleasedAt == nil || row.ReleasedAt.Before(*attempt.FinishedAt) ||
+				(releasedAt != nil && !row.ReleasedAt.Equal(*releasedAt)) {
+				return ErrAttemptFenceLost
+			}
+			releasedAt = row.ReleasedAt
+		} else if row.ReleasedAt != nil {
+			return ErrAttemptFenceLost
+		}
+	}
+	if rowState == "active" {
+		if job.CurrentAttemptID != nil {
+			return ErrAttemptFenceLost
+		}
+		outcome, category, err := persistentLifecycleAttemptOutcome(job)
+		if err != nil || state != outcome || attempt.FailureCategory != category {
+			return ErrAttemptFenceLost
+		}
+	}
+	return nil
 }
 
 func attemptRetryDelay(job model.BackupAssetExportJob, attemptNumber int64) time.Duration {
@@ -5263,136 +5418,4 @@ type AttemptSourceBroker interface {
 type MetadataValidator interface {
 	RevalidateMetadata(context.Context, FrozenItem) error
 	RevalidateMetadataTx(context.Context, *gorm.DB, FrozenItem) error
-}
-
-type Worker struct {
-	broker   AttemptSourceBroker
-	metadata MetadataValidator
-	now      func() time.Time
-}
-
-type WorkerItem struct {
-	ItemID string
-	Frozen FrozenItem
-}
-
-type WorkerArchiveRequest struct {
-	AttemptID       string
-	SelectionDigest string
-	Deadline        time.Time
-	Format          ArchiveFormat
-	ArchiveProfile  string
-	Limits          ArchiveLimits
-	Items           []WorkerItem
-}
-
-func NewWorker(broker AttemptSourceBroker, metadata MetadataValidator, clocks ...func() time.Time) (*Worker, error) {
-	if broker == nil || metadata == nil || len(clocks) > 1 || len(clocks) == 1 && clocks[0] == nil {
-		return nil, ErrUnavailable
-	}
-	now := func() time.Time { return time.Now().UTC() }
-	if len(clocks) == 1 {
-		now = clocks[0]
-	}
-	return &Worker{broker: broker, metadata: metadata, now: now}, nil
-}
-
-func (worker *Worker) WriteArchive(
-	ctx context.Context,
-	destination io.Writer,
-	request WorkerArchiveRequest,
-) (ArchiveReport, error) {
-	if worker == nil || backupasset.ValidateOpaqueID(request.AttemptID) != nil || !lowerHex(request.SelectionDigest, 64) ||
-		!ValidArchiveProfilePair(request.Format, request.ArchiveProfile) || request.Deadline.IsZero() ||
-		!request.Deadline.After(worker.now().UTC()) || len(request.Items) == 0 {
-		return ArchiveReport{}, ErrUnavailable
-	}
-	entries := make([]ArchiveEntry, 0, len(request.Items))
-	for _, value := range request.Items {
-		if backupasset.ValidateOpaqueID(value.ItemID) != nil || ValidateFrozenItem(value.Frozen) != nil {
-			return ArchiveReport{}, ErrInvalidSelection
-		}
-		entry := ArchiveEntry{
-			ItemID: value.ItemID, Components: append([]string(nil), value.Frozen.ArchiveComponents...),
-			RecoveryPointID: value.Frozen.Ref.RecoveryPointID, EntryID: value.Frozen.Ref.EntryID,
-			SelectionRootOrdinal: value.Frozen.SelectionRootOrdinal,
-			Type:                 value.Frozen.EntryType, Size: value.Frozen.LogicalSize,
-		}
-		if value.Frozen.EntryType == backupasset.CatalogEntryFile {
-			frozen := cloneFrozenItem(value.Frozen)
-			entry.Open = func(openCtx context.Context) (io.ReadCloser, error) {
-				zeroByte := frozen.LogicalSize == 0
-				allowedModes := []content.SourceMode{content.SourceModeStat, content.SourceModeSequential}
-				readLimit := frozen.LogicalSize
-				maxRequests := int64(2)
-				if zeroByte {
-					allowedModes = []content.SourceMode{content.SourceModeStat}
-					readLimit = 1
-					maxRequests = 2
-				}
-				binding := content.AttemptSourceBinding{
-					SessionID: request.AttemptID, Ref: frozen.Ref, CatalogGenerationID: frozen.CatalogGenerationID,
-					SourceFingerprint: frozen.SourceFingerprint, EntryFingerprint: frozen.EntryFingerprint,
-					AllowedModes: allowedModes,
-					Limits: content.AttemptReadLimits{
-						MaxBytesPerRequest: readLimit, MaxCumulativeBytes: readLimit,
-						MaxRequests: maxRequests, MaxInFlight: 1,
-					},
-					AbsoluteExpiresAt: request.Deadline.UTC(),
-				}
-				session, info, err := worker.broker.OpenSession(openCtx, binding)
-				if err != nil {
-					return nil, err
-				}
-				if info.Size != frozen.LogicalSize || info.MediaType != frozen.MediaType || !zeroByte && !info.Sequential ||
-					(frozen.FingerprintStrength == "strong" && !info.FingerprintStrong) {
-					_ = session.Close()
-					return nil, content.ErrAttemptSourceChanged
-				}
-				if zeroByte {
-					revalidateErr := session.Revalidate(openCtx)
-					closeErr := session.Close()
-					if revalidateErr != nil || closeErr != nil {
-						return nil, errors.Join(revalidateErr, closeErr)
-					}
-					return io.NopCloser(bytes.NewReader(nil)), nil
-				}
-				reader, err := session.OpenSequential(openCtx, frozen.LogicalSize)
-				if err != nil {
-					_ = session.Close()
-					return nil, err
-				}
-				return &brokeredReadCloser{ctx: openCtx, reader: reader, session: session}, nil
-			}
-		} else if err := worker.metadata.RevalidateMetadata(ctx, value.Frozen); err != nil {
-			return ArchiveReport{}, err
-		}
-		entries = append(entries, entry)
-	}
-	return WriteArchive(ctx, destination, request.Format, request.ArchiveProfile, request.SelectionDigest, entries, request.Limits)
-}
-
-type brokeredReadCloser struct {
-	ctx     context.Context
-	reader  content.AttemptReadHandle
-	session content.AttemptInputSession
-	closed  bool
-}
-
-func (reader *brokeredReadCloser) Read(buffer []byte) (int, error) {
-	if reader.closed {
-		return 0, io.ErrClosedPipe
-	}
-	return reader.reader.Read(buffer)
-}
-
-func (reader *brokeredReadCloser) Close() error {
-	if reader.closed {
-		return nil
-	}
-	reader.closed = true
-	readErr := reader.reader.Close()
-	revalidateErr := reader.session.Revalidate(reader.ctx)
-	closeErr := reader.session.Close()
-	return errors.Join(readErr, revalidateErr, closeErr)
 }

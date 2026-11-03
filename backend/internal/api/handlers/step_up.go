@@ -82,7 +82,7 @@ func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTMa
 		return false
 	}
 	sessionID := ""
-	if op.ExpectedAction == auth.StepUpActionAssetSecretReveal || op.ExpectedAction == auth.StepUpActionSSHKeyReplace {
+	if auth.StepUpActionRequiresSession(op.ExpectedAction) {
 		session, ok := middleware.CurrentSessionBinding(c)
 		if !ok || session.UserID != userID || session.Role != role {
 			writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "failed")
@@ -162,7 +162,7 @@ func validateStepUpProof(
 	if claims.IssuedAt == nil || claims.ExpiresAt == nil || claims.ExpiresAt.Sub(claims.IssuedAt.Time) != auth.StepUpProofTTLForAction(expectedAction) || claims.IssuedAt.After(time.Now().UTC()) {
 		return nil, fmt.Errorf("%w: proof lifetime", ErrStepUpProofInvalid)
 	}
-	if expectedAction == auth.StepUpActionAssetSecretReveal || expectedAction == auth.StepUpActionSSHKeyReplace {
+	if auth.StepUpActionRequiresSession(expectedAction) {
 		if len(sessionIDs) != 1 || strings.TrimSpace(sessionIDs[0]) == "" || claims.SessionID != sessionIDs[0] {
 			return nil, fmt.Errorf("%w: proof session", ErrStepUpProofInvalid)
 		}

@@ -93,6 +93,14 @@ content-addressed bundle volume 是 parser/updater 唯一共享数据 mount：�
 
 Export 管理自己的持久任务、attempt/fence、加密产物、quota 和交付账本，不混入 backup_asset content grant 的资源 tuple。签发必须冻结 exact ready artifact、recorded KEK/job DEK envelope、attempt fence digest、session/cookie/action/path/subject；坏 metadata/伪造 fence 在账本副作用前拒绝。归档成员冻结 exact Derived tuple，独立 ledger 且 Range none，不能夹带 Export tuple，反之亦然。
 
+创建 Export 和签发下载票据分别要求 `asset.export_create` 和 `asset.export_download` proof，均须绑定当前请求的有效主登录会话并检查该会话未撤销；下载票据使用同一会话绑定。归档成员的 `asset.download` 合同不变。
+
+冻结选择保留 Catalog 的原始 entry fingerprint：仅 `none` 强度的 directory、symlink、hardlink、special、unknown 可为空；普通文件及 strong/weak 必须非空。原值参与 canonical digest 和后续重验，空值变为非空同样属于漂移。非文件继续按现有归档策略处理，不打开 Provider 内容读取。
+
+源的 MIME 元数据允许为空，AttemptBroker 保留原值，不据此判定 source drift；Export 仍核对冻结 MIME、大小及 source/entry fingerprint。空文件只做 stat 与重验，不进行顺序内容读取，也不把零字节 stat reservation 记作内容读取。
+
+Export 输入 session 以冻结的任务绝对期限为上限；每次读取仍在持久预算事务中核对当前 attempt、item 和未过期租约。续租后的活读取不会仅因原 reader reservation 的旧到期时间被回收；其真实关闭照常结算，失权或到期后按保守账本回收。过期 Worker 配额扫描只选择 running/sealing 任务；选取后按配额桶、任务、attempt 和配对 reservation 的锁顺序重验，合法取消及已完成或正在进行的生命周期收束交给生命周期，完整一致且已续租至扫描截止时间之后的配对不被回收，损坏或无法证明归属的配对仍报围栏错误。ready 发布已释放 Worker 配额，后续取消或清理须核对同一 attempt 的已释放配对记录，不能再次释放。
+
 HEAD 在 metadata commit 前也重验 live proof/artifact/member binding，GET 在 reserve 后及每 chunk 前重验；漂移零字节交付并保守计 reservation。单 Range/If-Range、非法 multi/overflow range、bytes/count/in-flight 与并发 finalize CAS 保持精确。authenticated ciphertext tamper 失败关闭，不把损坏 bytes 交出。
 
 撤销必须先关 grant 并 drain 活 read，再按生命周期毁 key 和 release source lease；key destruction 失败不能释放 source。unlink/purge 失败保留 store charge 并准确重试，不能把 released quota + 未删 ciphertext 当已清理。丢失密钥按 exact key version 撤销受影响任务并保留 lost 事实；可验证旧 KEK 的 ready artifact 在合法轮换后仍读取。

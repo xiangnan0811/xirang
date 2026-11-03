@@ -150,6 +150,12 @@ func TOTPBindingDigest(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// StepUpActionRequiresSession identifies proofs bound to the issuing login session.
+func StepUpActionRequiresSession(action StepUpAction) bool {
+	return action == StepUpActionAssetSecretReveal || action == StepUpActionSSHKeyReplace ||
+		action == StepUpActionAssetExportCreate || action == StepUpActionAssetExportDownload
+}
+
 func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction, sessionIDs ...string) (string, time.Time, error) {
 	if !IsValidStepUpAction(action) {
 		return "", time.Time{}, fmt.Errorf("step-up action 无效")
@@ -161,7 +167,7 @@ func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction, s
 	if len(sessionIDs) == 1 {
 		sessionID = sessionIDs[0]
 	}
-	requiresSession := action == StepUpActionAssetSecretReveal || action == StepUpActionSSHKeyReplace
+	requiresSession := StepUpActionRequiresSession(action)
 	if (requiresSession || sessionID != "") && !lowerHexID(sessionID) {
 		return "", time.Time{}, fmt.Errorf("step-up session binding 无效")
 	}

@@ -117,7 +117,12 @@ func (handler *BackupAssetExportHandler) Create(c *gin.Context) {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-	if _, proofOK := handler.exactDeliveryProof(c, proofActor, auth.StepUpActionAssetExportCreate); !proofOK {
+	session, sessionOK := backupAssetExportSession(c, proofActor)
+	if !sessionOK {
+		respondUnauthorized(c, "会话无效")
+		return
+	}
+	if _, proofOK := handler.exactDeliveryProof(c, proofActor, auth.StepUpActionAssetExportCreate, session.JTI); !proofOK {
 		return
 	}
 	idempotencyKey, ok := exactIdempotencyKey(c.Request)
@@ -294,7 +299,7 @@ func (handler *BackupAssetExportHandler) DownloadTicket(c *gin.Context) {
 		respondUnauthorized(c, "会话无效")
 		return
 	}
-	proof, proofOK := handler.exactDeliveryProof(c, actor, auth.StepUpActionAssetExportDownload)
+	proof, proofOK := handler.exactDeliveryProof(c, actor, auth.StepUpActionAssetExportDownload, session.JTI)
 	if !proofOK {
 		return
 	}
@@ -349,9 +354,10 @@ func (handler *BackupAssetExportHandler) exactDeliveryProof(
 	c *gin.Context,
 	actor content.DeliveryActor,
 	expected auth.StepUpAction,
+	sessionIDs ...string,
 ) (content.StepUpProof, bool) {
 	claims, err := validateStepUpProof(
-		handler.db, handler.jwtManager, strings.TrimSpace(c.GetHeader(StepUpHeaderName)), actor.UserID, actor.Role, expected,
+		handler.db, handler.jwtManager, strings.TrimSpace(c.GetHeader(StepUpHeaderName)), actor.UserID, actor.Role, expected, sessionIDs...,
 	)
 	if err != nil || claims == nil || claims.ExpiresAt == nil || backupasset.ValidateOpaqueID(claims.ID) != nil {
 		if errors.Is(err, ErrStepUpVerifierUnavailable) {

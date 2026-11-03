@@ -65,6 +65,10 @@ Recent 内容访问修复的发布验收须覆盖同 grant 首个持久成功 GE
 
 上述真实恢复、Catalog 扫描、Worker 输入完整性及同批 lint 工具链修复的完整说明归档于 CHANGELOG `0.73.9` 版本节；该发行 PR 与正式 GitHub Release 正文须同时保留这两组行为和升级边界，不能只保留自动生成的提交摘要或将已交付条目留在 `Unreleased`。
 
+Export 真实归档修复的发行说明须包含非文件原始空 fingerprint 与可选 MIME、创建／下载 proof 的登录 session 绑定、续租读取及过期调和所有权、ready 取消容量结算和测试专用包装退役。明确新逻辑在新版 Core 后续操作生效，换版前排空旧 Export／下载操作，并重新取得这两个 action 的 session-bound proof；不得将正常换版描述为解除旧进程的阻塞读取或延长原任务期限。
+
+该修复新增双引擎 Export fingerprint 约束迁移；SQLite 额外索引、触发器或外部外键在升级写 dirty 前拒绝，降级也受结构保护。保留行出现旧约束不接受的空 fingerprint 时，迁移元数据及 down 均拒绝；旧兼容行且结构允许时可回退本迁移，其他历史迁移限制仍独立适用。发行 PR 和正式 Release 必须保留这些边界、数据库／密钥／备份保全及回退恢复缺陷的说明；本地真实 Rsync／认证 HTTP／双引擎期限验收不等于其他 Provider、AWS live 或生产部署。
+
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
 
 Release Please 自动插入版本标题时可能将原有升级说明留在 `Unreleased`，生成的 PR 正文也可能只有提交摘要。此时原样移动 CHANGELOG 中已审阅的说明，并同步 PR 正文的目标版本节；两处都保留完整风险边界，再提交补充变更。

@@ -196,8 +196,10 @@ func (port *PersistentLifecyclePort) FenceAttempts(ctx context.Context, jobID st
 				return ErrAttemptFenceLost
 			}
 			if port.workerCapacity != nil {
-				_, pairErr := lockAttemptWorkerReservationPairTx(tx, buckets, job, attempt)
-				if pairErr != nil {
+				released := AttemptState(attempt.State) == AttemptSealed && !attempt.IsCurrent &&
+					(ExecutionState(job.ExecutionState) == ExecutionReady || ExecutionState(job.ExecutionState) == ExecutionExpiring ||
+						ExecutionState(job.ExecutionState) == ExecutionCancelRequested)
+				if _, pairErr := lockAttemptWorkerReservationPairStateTx(tx, buckets, job, attempt, released); pairErr != nil {
 					return pairErr
 				}
 			}

@@ -38,7 +38,7 @@ func testCatalogCandidateSweepMigration(t *testing.T, fixture migrationFixture) 
 			!sameMigrationIndexColumns(index.columns, []string{"created_at", "id"}) {
 			t.Fatalf("unexpected catalog candidate index: %+v, %v", index, err)
 		}
-		if err := VerifyCurrentSchema(fixture.recoveryWorkerGorm(t, db), fixture.engine); err != nil {
+		if err := validateMinimumRecoverySchema(db, fixture.engine, catalogCandidateSweepSchemaVersion); err != nil {
 			t.Fatalf("verify new schema: %v", err)
 		}
 		columns := gormColumnNames(t, model.CatalogCandidateSweep{})
@@ -99,7 +99,7 @@ func testCatalogCandidateSweepMigration(t *testing.T, fixture migrationFixture) 
 		fixture.expectExecRejected(t, db, update, now.Add(time.Hour), valid, now, laterID)
 		fixture.expectExecRejected(t, db, update, now, laterID, now, valid)
 		fixture.mustExec(t, db, update, now, valid, now, valid)
-		if err := VerifyCurrentSchema(fixture.recoveryWorkerGorm(t, db), fixture.engine); err != nil {
+		if err := validateMinimumRecoverySchema(db, fixture.engine, catalogCandidateSweepSchemaVersion); err != nil {
 			t.Fatalf("used equal boundary and maximum revision rejected: %v", err)
 		}
 		fixture.mustExec(t, db, update, nil, nil, nil, nil)
@@ -118,7 +118,7 @@ func testCatalogCandidateSweepMigration(t *testing.T, fixture migrationFixture) 
 		now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 		fixture.mustExec(t, db, `UPDATE catalog_candidate_sweeps SET revision = ?, after_created_at = ?, after_point_id = ?, high_water_created_at = ?, high_water_point_id = ?`,
 			7, now, strings.Repeat("a", 32), now.Add(time.Hour), strings.Repeat("b", 32))
-		if err := VerifyCurrentSchema(fixture.recoveryWorkerGorm(t, db), fixture.engine); err != nil {
+		if err := validateMinimumRecoverySchema(db, fixture.engine, catalogCandidateSweepSchemaVersion); err != nil {
 			t.Fatalf("verify used sweep before rollback: %v", err)
 		}
 		if err := migrator.Steps(-1); err != nil {
@@ -137,7 +137,7 @@ func testCatalogCandidateSweepMigration(t *testing.T, fixture migrationFixture) 
 		assertMigrationVersion(t, migrator, uint(catalogCandidateSweepSchemaVersion))
 		assertCatalogCandidateSweepSeed(t, db)
 		assertCatalogCandidateSweepHistory(t, db, before)
-		if err := VerifyCurrentSchema(fixture.recoveryWorkerGorm(t, db), fixture.engine); err != nil {
+		if err := validateMinimumRecoverySchema(db, fixture.engine, catalogCandidateSweepSchemaVersion); err != nil {
 			t.Fatalf("verify reapplied schema: %v", err)
 		}
 	})
@@ -245,7 +245,7 @@ func testCatalogCandidateSweepSchemaDrift(t *testing.T, fixture migrationFixture
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, uint(catalogCandidateSweepSchemaVersion))
+			migrator, db := fixture.openAt(t, latestMigrationVersion)
 			applyCatalogCandidateSweepDrift(t, fixture, db, tc.name)
 			if strings.HasPrefix(tc.name, "invalid_state") {
 				if err := validateCatalogCandidateSweepState(db, catalogCandidateSweepChecks(fixture.engine)); err == nil || err.Error() != "invalid_catalog_candidate_sweep_state" {
@@ -268,7 +268,7 @@ func testCatalogCandidateSweepSchemaDrift(t *testing.T, fixture migrationFixture
 				if after := catalogCandidateSweepDriftSnapshot(t, fixture, db); !reflect.DeepEqual(before, after) {
 					t.Fatalf("%s repaired or changed %s drift\nbefore: %#v\nafter: %#v", verify.name, tc.name, before, after)
 				}
-				assertMigrationVersion(t, migrator, uint(catalogCandidateSweepSchemaVersion))
+				assertMigrationVersion(t, migrator, latestMigrationVersion)
 			}
 		})
 	}
