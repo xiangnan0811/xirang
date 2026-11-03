@@ -30,6 +30,13 @@
 - 将五个固定 lint 父包的真实调用迁移到官方 minimatch 11.0.1，修复 GHSA-g3hv-75wg-m249。本地 tarball 保留上游身份和许可证，来源 SRI、精确配方、可读补丁及可重复构建文件清单随仓库维护，不使用安装后修改器或 matcher 兼容层。
 - 安装后的只读完整性校验接入前端 check、CI、本地 parity 和 Docker web-builder；前端 CI 直接执行包含开发依赖的 moderate 审计。保留既有 lint、类型及可访问性规则，新增真实 ESM/CJS、声明类型与项目服务消费者回归。无新增运行时配置或数据库迁移，回退旧依赖图会恢复工具链漏洞风险。
 
+## [0.73.9](https://github.com/xiangnan0811/xirang/compare/v0.73.8...v0.73.9) (2026-11-03)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复恢复生命周期、目录扫描与 Worker 输入验证 ([#669](https://github.com/xiangnan0811/xirang/issues/669)) ([4b09777](https://github.com/xiangnan0811/xirang/commit/4b097779d682fd13a649e4f4b8d717db47d34ea6))
+
 ## [0.73.8](https://github.com/xiangnan0811/xirang/compare/v0.73.7...v0.73.8) (2026-10-30)
 
 
