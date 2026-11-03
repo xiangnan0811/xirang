@@ -1,6 +1,6 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:19dd108ef4110db4d82c2ed6c811cae976c8ee4769615f05792a658c1fabc996 AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:df147a41893bb4343663dc90417d68d3a9a8ad4991da441403eee8cce067e21e AS worker-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:3dd8d87ac61124ffe546c764dcd87d2d3ee179a71a30489773d961ca60fe5aa7 AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:b81cbefac40ef0dd00170b7cfa92feb95bd9239dd85d1d453263a77c14ad4558 AS worker-runtime-inputs
 
 # Retained golang:1.27.3-alpine3.24 platform images; upstream identities are in the lock.
 FROM docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5 AS worker-builder
@@ -42,6 +42,7 @@ RUN --network=none --mount=from=worker-runtime-inputs,source=/inputs,target=/bui
       font-noto=2025.12.01-r0 \
       gzip=1.14-r3 \
       libcrypto3=3.5.9-r0 \
+      libexpat=2.10.0-r0 \
       libreoffice=25.8.1.1-r5 \
       libssl3=3.5.9-r0 \
       poppler-utils=25.12.0-r0 \

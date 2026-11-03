@@ -253,10 +253,14 @@ Core 的 `tzdata` 锁定更新仅影响 All-in-One 时区数据库；Worker 未�
 tzdata 包，不因此改变工具链 inventory。更新后须重新构建 Core，并复核受规则
 变化地区的本地调度时间；既有 UTC 时刻不做数据迁移。
 
-Core 的 Expat 直接锁定为 `libexpat=2.9.0-r0`，替代软件源已移除的
-`2.8.5-r0`；基础镜像 digest 和其他包锁定保持不变。此包不在 Worker 的显式
-包清单或生产工具链 inventory 中，不因此新增 Worker pin 或修改指纹合同。
-更新须重新构建并验证 Core 的双架构镜像与实际就绪路径；不新增配置或数据迁移。
+Core 与 Worker 的 Expat 显式锁定为 `libexpat=2.10.0-r0`，修复
+`2.9.0-r0` 的 CVE-2026-117610／CVE-2026-118370。Worker 将原有传递依赖纳入
+生产工具链 inventory；工具链及 pipeline 指纹按新 inventory 和真实 APK manifest
+派生。留存事务中的 supercronic-builder 同步更新其传递 Expat；基础镜像、其他
+安装包、安装器与可信密钥保持不变。两架构输入须验签、断网重放并通过安装后扫描，
+最终 Core／Worker 镜像继续独立验证构建、扫描、闭包、签名运行包和就绪路径。
+排空旧 Worker 在途处理后配套更新 Core／Worker 与制品；不得沿用旧闭包或证明。
+不新增配置或数据迁移，回退旧镜像及配套制品会恢复上述漏洞。
 
 Core 的 c-ares 直接锁定从软件源已不可安装的 `1.34.8-r0` 更新为 `1.34.9-r0`，
 保留基础镜像 digest 和其他包锁定。新版本包含上游 DNS 应答校验与内存安全修复；

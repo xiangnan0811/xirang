@@ -69,6 +69,8 @@ Export 真实归档修复的发行说明须包含非文件原始空 fingerprint 
 
 该修复新增双引擎 Export fingerprint 约束迁移；SQLite 额外索引、触发器或外部外键在升级写 dirty 前拒绝，降级也受结构保护。保留行出现旧约束不接受的空 fingerprint 时，迁移元数据及 down 均拒绝；旧兼容行且结构允许时可回退本迁移，其他历史迁移限制仍独立适用。发行 PR 和正式 Release 必须保留这些边界、数据库／密钥／备份保全及回退恢复缺陷的说明；本地真实 Rsync／认证 HTTP／双引擎期限验收不等于其他 Provider、AWS live 或生产部署。
 
+同批 Expat 安全更新须保留 CVE-2026-117610／CVE-2026-118370 与 `2.10.0-r0` 的修复关系、Core／Worker 显式锁定及 supercronic-builder 传递包更新。实际重新采集仅改变 Expat 包，基础镜像、其余安装包、安装器和可信密钥不变；原生双架构输入验签、断网重放与安装后扫描不能替代最终镜像验收。Worker inventory 与 APK 投影变化会推进工具链及 pipeline 指纹，须排空旧处理并配套更新 Core／Worker、最终闭包和签名运行包。此依赖修复本身无配置或 schema migration，不能覆盖同版 Export 的迁移边界；回退旧镜像恢复已知漏洞。
+
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
 
 Release Please 自动插入版本标题时可能将原有升级说明留在 `Unreleased`，生成的 PR 正文也可能只有提交摘要。此时原样移动 CHANGELOG 中已审阅的说明，并同步 PR 正文的目标版本节；两处都保留完整风险边界，再提交补充变更。
