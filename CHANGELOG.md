@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.73.10](https://github.com/xiangnan0811/xirang/compare/v0.73.9...v0.73.10) (2026-11-03)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复 Export 归档授权与生命周期 ([#672](https://github.com/xiangnan0811/xirang/issues/672)) ([9721606](https://github.com/xiangnan0811/xirang/commit/9721606424fed5f9ffc5cd66675737f8b2ef1bfa))
+* **deps:** 修复 Core 与 Worker 的 Expat 漏洞 ([#674](https://github.com/xiangnan0811/xirang/issues/674)) ([65b77fa](https://github.com/xiangnan0811/xirang/commit/65b77facc06a1c4ecf910c9d7ce97aa07e36cb72))
+
 ### Export 真实归档、授权与生命周期修复
 
 - 已认证 Catalog 中目录及 symlink 的原始空 fingerprint 可进入 Export 冻结快照；普通文件仍必须具备非空 fingerprint，strong/weak 空值仍拒绝。真实文件可在 MIME 未知时读取，source／entry 指纹、逻辑大小和重验保持严格。ZIP/TAR 沿用既有归档 profile、成员消歧和 partial report 策略，不新增 Provider 能力。
@@ -18,10 +26,12 @@
 - Worker 将原有 Expat 传递依赖纳入显式包清单及生产 inventory；真实 APK manifest 与投影随留存输入更新，工具链和 pipeline 指纹按新内容派生。升级前排空旧 Worker 在途处理，配套重建并替换 Core／Worker、两架构最终闭包和签名运行包，不得混用旧制品或沿用旧证明；重启旧镜像不能应用补丁。
 - 本次依赖更新不新增配置或数据迁移；同版 Export 迁移及既有历史数据保护仍独立适用。回退须使用配套旧镜像与制品，并会恢复上述已知漏洞。输入验签、断网重放和安装后扫描独立于最终 Core／Worker 镜像构建、扫描与运行验收，不代表生产部署。
 
-### 任务期限回归验证
+### 任务期限与交付取消回归验证
 
 - 全局与 Policy 期限测试改用标准虚拟时间，仍触发真实 `context.WithTimeout` 并验证执行器启动及失败终态，避免宿主机耗时抢占短测试预算。生产预算、优先级和截止期限保持不变。
 - CI 并发敏感包的 race 验证显式使用每包 20 分钟上限，避免 Recovery 完整集成套件累计耗时触及 Go 默认 10 分钟上限；保留全部测试和竞态检查，不改变产品运行期限。
+- Export 下载取消测试在释放阻塞 writer 前等待实际读取 context 取消，保留首个认证块字节数、取消终态及撤销等待读取退出的断言；持久 `draining` 本身不是取消已送达的屏障。此修复仅限测试，不改变生产撤销顺序或错误分类。
+
 
 ## [0.73.9](https://github.com/xiangnan0811/xirang/compare/v0.73.8...v0.73.9) (2026-11-03)
 

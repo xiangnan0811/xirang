@@ -2117,6 +2117,11 @@ func TestDeliveryGatewayServesAuthenticatedPlaintextRangeWithIndependentBudget(t
 
 	gateway.requestID = func() (string, error) { return strings.Repeat("5", 32), nil }
 	blockingWriter := newBlockingDeliveryWriter()
+	readContexts := make(chan context.Context, 1)
+	keySource.beforeReturn = func(readCtx context.Context) { readContexts <- readCtx }
+	var releaseOnce sync.Once
+	releaseWriter := func() { releaseOnce.Do(func() { close(blockingWriter.release) }) }
+	t.Cleanup(releaseWriter)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- gateway.Serve(context.Background(), content.GatewayRequest{
@@ -2129,13 +2134,29 @@ func TestDeliveryGatewayServesAuthenticatedPlaintextRangeWithIndependentBudget(t
 	case <-time.After(5 * time.Second):
 		t.Fatal("stream did not reach first authenticated chunk")
 	}
+	var readCtx context.Context
+	select {
+	case readCtx = <-readContexts:
+	case <-time.After(5 * time.Second):
+		t.Fatal("export read context was not captured")
+	}
 	revokeDone := make(chan error, 1)
 	go func() { revokeDone <- gateway.RevokeSession(context.Background(), strings.Repeat("e", 32), "logout") }()
 	waitForExportGrantState(t, db, material.GrantID, "draining")
-	close(blockingWriter.release)
+	select {
+	case <-readCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("export read context was not canceled")
+	}
+	select {
+	case err := <-revokeDone:
+		t.Fatalf("revoke returned while writer remained blocked: %v", err)
+	default:
+	}
+	releaseWriter()
 	select {
 	case err := <-serveDone:
-		if !errors.Is(err, content.ErrContentNotFound) {
+		if !errors.Is(err, content.ErrContentNotFound) || !errors.Is(err, context.Canceled) {
 			t.Fatalf("serve after mid-stream revoke error=%v", err)
 		}
 	case <-time.After(5 * time.Second):
@@ -3440,10 +3461,11 @@ type deliveryKeySourceStub struct {
 	calls                       int
 	err                         error
 	returnMaterialForAnyRequest bool
+	beforeReturn                func(context.Context)
 }
 
 func (source *deliveryKeySourceStub) ByVersion(
-	_ context.Context,
+	ctx context.Context,
 	domain backupasset.KeyDomain,
 	version int,
 ) (backupasset.DomainKeyMaterial, error) {
@@ -3454,6 +3476,9 @@ func (source *deliveryKeySourceStub) ByVersion(
 	}
 	material := source.material
 	material.Key = append([]byte(nil), material.Key...)
+	if source.beforeReturn != nil {
+		source.beforeReturn(ctx)
+	}
 	return material, source.err
 }
 
