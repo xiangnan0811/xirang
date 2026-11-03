@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.9](https://github.com/xiangnan0811/xirang/compare/v0.73.8...v0.73.9) (2026-11-03)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复恢复生命周期、目录扫描与 Worker 输入验证 ([#669](https://github.com/xiangnan0811/xirang/issues/669)) ([4b09777](https://github.com/xiangnan0811/xirang/commit/4b097779d682fd13a649e4f4b8d717db47d34ea6))
+
 ### 真实恢复来源、目录收尾与扫描输入完整性
 
 - 修复生产 SFTP 文件适配器与目录空检查的接口不匹配：已授权精确删除通过有界 `ReadDir(1)` 检查捕获目录，并在删除后验证 absence；非空目录及其子项在 capture 后保留，读取或关闭失败不报告成功，不声称失败前原路径未改变。
@@ -29,13 +36,7 @@
 
 - 将五个固定 lint 父包的真实调用迁移到官方 minimatch 11.0.1，修复 GHSA-g3hv-75wg-m249。本地 tarball 保留上游身份和许可证，来源 SRI、精确配方、可读补丁及可重复构建文件清单随仓库维护，不使用安装后修改器或 matcher 兼容层。
 - 安装后的只读完整性校验接入前端 check、CI、本地 parity 和 Docker web-builder；前端 CI 直接执行包含开发依赖的 moderate 审计。保留既有 lint、类型及可访问性规则，新增真实 ESM/CJS、声明类型与项目服务消费者回归。无新增运行时配置或数据库迁移，回退旧依赖图会恢复工具链漏洞风险。
-
-## [0.73.9](https://github.com/xiangnan0811/xirang/compare/v0.73.8...v0.73.9) (2026-11-03)
-
-
-### 🐛 Bug Fixes
-
-* **backend:** 修复恢复生命周期、目录扫描与 Worker 输入验证 ([#669](https://github.com/xiangnan0811/xirang/issues/669)) ([4b09777](https://github.com/xiangnan0811/xirang/commit/4b097779d682fd13a649e4f4b8d717db47d34ea6))
+- 旧依赖路径中的 minimatch 3.1.5／10.2.6 统一迁移到 11.0.1。更新源码后在 `web/` 按新锁文件执行 `env -u NODE_ENV npm ci` 并运行 `npm run check:dependency-patches`，重启相关开发、测试、lint 和构建进程后生效；仅拉取源码或重启旧容器不会替换已有工具依赖。这是开发／构建工具攻击面的修复，不据此声称生产静态应用曾可被利用；回退旧锁文件仍会恢复旧依赖漏洞风险。
 
 ## [0.73.8](https://github.com/xiangnan0811/xirang/compare/v0.73.7...v0.73.8) (2026-10-30)
 
