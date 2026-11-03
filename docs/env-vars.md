@@ -15,7 +15,7 @@
 - 官方镜像的 Go 工具链由 Dockerfile 构建阶段固定；容器启动时设置 `GOTOOLCHAIN` 不会替换已经编译的程序。源码开发的工具链选择与 linter 入口见[贡献指南](../CONTRIBUTING.md#开发环境)，版本同步要求见[Go 工具链升级](maintainers/automation.md#go-工具链升级)。
 - Go 1.27.3 的证书验证安全补丁须重新构建并替换 Core、Worker 与 supercronic 后生效；没有关闭证书拒绝的受支持环境变量，遇到不可信证书须修复证书链。具体漏洞与 Worker 制品重建要求见[Go 工具链升级](maintainers/automation.md#go-工具链升级)。
 - Core 的 TIFF 安全补丁通过 Dockerfile 直接锁定 `tiff=4.7.2-r0`；它替换基础镜像携带的旧库，需要重建镜像和容器，不增加运行时配置项。
-- Core 的 Expat 版本固定为 `libexpat=2.9.0-r0`，替代软件源已移除的旧锁定；同样须重建镜像和容器，不提供环境变量覆盖，也不改变 Worker 的配置或工具链 inventory。
+- Core 与 Worker 的 Expat 固定为 `libexpat=2.10.0-r0`，修复旧库漏洞；Worker 将其纳入生产 inventory，须配套重建 Core／Worker、两架构闭包及签名制品。没有环境变量覆盖，重启旧镜像不能应用该修复；不新增配置或数据迁移，详见[运行时合同](spec/backend/deployment-runtime.md)。
 - Core 的 c-ares 直接锁定为 `1.34.9-r0`，替代软件源已不可安装的 `1.34.8-r0`；须重建并替换 Core 镜像后生效，没有环境变量覆盖，不因此修改 Worker 的显式依赖或工具链 inventory。
 - Core 的 curl 锁定为 `8.23.0-r0`，由 Alpine 包依赖同步升级 libcurl，并显式锁定 `brotli-libs=1.2.1-r0` 替换基础镜像中的旧库；这些镜像内依赖更新无新增配置或环境变量覆盖，须重建并替换 Core 镜像，不改变 Worker inventory。
 - Core/Worker 的 `musl-dev=1.2.6-r3` 是 CGO 构建阶段锁定，不提供运行时环境变量覆盖；须重建配套镜像，并按新 inventory 更新闭包及签名制品，不代表运行镜像 libc 版本发生相同变化。

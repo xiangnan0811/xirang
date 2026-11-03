@@ -1,7 +1,7 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:19dd108ef4110db4d82c2ed6c811cae976c8ee4769615f05792a658c1fabc996 AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:9ad69af2963b57f42e2ce371e243739d3f4d90d64458ce4a77bd35123d7d4de4 AS supercronic-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:117ea1705452f9626d349bff0e392134502afa2c14cb03673091643ab668c099 AS core-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:3dd8d87ac61124ffe546c764dcd87d2d3ee179a71a30489773d961ca60fe5aa7 AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:9f9cf1e961da92c63a74d98be278feeb3397916780ed466cbb49c6934e6712ff AS supercronic-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:e5a5d108c8980bc218b29850e86ee5657bde041846445cee7f48df83e150192b AS core-runtime-inputs
 
 FROM docker.io/linnea7171/xirang@sha256:3e4c9ad8b3fd601ce93e5a8f7a77a639efe8d7d36846846c5179f89175f89d86 AS web-builder
 
@@ -69,7 +69,7 @@ RUN --network=none --mount=from=core-runtime-inputs,source=/inputs,target=/build
       c-ares=1.34.9-r0 \
       curl=8.23.0-r0 \
       libcrypto3=3.5.9-r0 \
-      libexpat=2.9.0-r0 \
+      libexpat=2.10.0-r0 \
       libssl3=3.5.9-r0 \
       libuuid=2.41.6-r1 \
       libxml2=2.13.9-r1 \

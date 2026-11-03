@@ -44,11 +44,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libexpat-2.9.0-r0.apk",
+      "file": "libexpat-2.10.0-r0.apk",
       "name": "libexpat",
-      "sha256": "32b127f31e0a919110a18a7f0bb3780d8fb66ba4d8d61b2d301d633f0e319d0e",
-      "size": 62175,
-      "version": "2.9.0-r0"
+      "sha256": "e7e7408ea787ed06d00159b0ff1f9b65a63cf634f36d9e0fa7512ce2c489a503",
+      "size": 63634,
+      "version": "2.10.0-r0"
     },
     {
       "arch": "x86_64",
@@ -271,7 +271,7 @@
     {
       "arch": "x86_64",
       "name": "libexpat",
-      "version": "2.9.0-r0"
+      "version": "2.10.0-r0"
     },
     {
       "arch": "x86_64",
