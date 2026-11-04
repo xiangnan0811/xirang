@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.12](https://github.com/xiangnan0811/xirang/compare/v0.73.11...v0.73.12) (2026-11-04)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 收敛 Rsync 版本化激活只读根重验与历史准备死码 ([#677](https://github.com/xiangnan0811/xirang/issues/677)) ([104da7d](https://github.com/xiangnan0811/xirang/commit/104da7d0c876554798d79dbbaf45d05f2ab3e3c2))
+
 ## [0.73.11](https://github.com/xiangnan0811/xirang/compare/v0.73.10...v0.73.11) (2026-11-04)
 
 
