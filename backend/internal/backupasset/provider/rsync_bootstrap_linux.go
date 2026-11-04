@@ -83,6 +83,71 @@ func revalidateRsyncManagedRoot(ctx context.Context, request RsyncManagedRootBoo
 	}, nil
 }
 
+func validateRsyncManagedRootBootstrapSeparation(ctx context.Context, managedRoot, otherRoot string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	parentPath := filepath.Dir(managedRoot)
+	component := filepath.Base(managedRoot)
+	if component == "." || component == string(filepath.Separator) || component == ".." || strings.ContainsRune(component, '\x00') {
+		return fmt.Errorf("%w: invalid managed Rsync root component", backupasset.ErrInvalidState)
+	}
+	otherFD, otherDev, otherIno, _, err := openTrustedRsyncManagedRoot(otherRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(otherFD) }()
+
+	parentFD, parentDev, parentIno, _, err := openTrustedRsyncManagedRoot(parentPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(parentFD) }()
+
+	if otherDev == parentDev && otherIno == parentIno {
+		return fmt.Errorf("%w: source and managed root overlap", errRsyncManagedTreeUnsafe)
+	}
+	otherIsParentAncestor, err := rsyncManagedTreeDirectoryIsAncestor(otherFD, parentFD)
+	if err != nil {
+		return err
+	}
+	if otherIsParentAncestor {
+		return fmt.Errorf("%w: source and managed root overlap", errRsyncManagedTreeUnsafe)
+	}
+
+	managedFD, err := unix.Openat2(parentFD, component, &unix.OpenHow{
+		Flags:   unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC,
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS,
+	})
+	if errors.Is(err, unix.ENOENT) {
+		return ctx.Err()
+	}
+	if err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	defer func() { _ = unix.Close(managedFD) }()
+
+	var managedStat unix.Stat_t
+	if err := unix.Fstat(managedFD, &managedStat); err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	if uint64(managedStat.Dev) == otherDev && managedStat.Ino == otherIno {
+		return fmt.Errorf("%w: source and managed root overlap", errRsyncManagedTreeUnsafe)
+	}
+	managedIsOtherAncestor, err := rsyncManagedTreeDirectoryIsAncestor(managedFD, otherFD)
+	if err != nil {
+		return err
+	}
+	otherIsManagedAncestor, err := rsyncManagedTreeDirectoryIsAncestor(otherFD, managedFD)
+	if err != nil {
+		return err
+	}
+	if managedIsOtherAncestor || otherIsManagedAncestor {
+		return fmt.Errorf("%w: source and managed root overlap", errRsyncManagedTreeUnsafe)
+	}
+	return ctx.Err()
+}
+
 func validateRsyncManagedRootSeparation(ctx context.Context, managedRoot, otherRoot string) error {
 	if err := ctx.Err(); err != nil {
 		return err

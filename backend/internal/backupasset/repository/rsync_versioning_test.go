@@ -16,6 +16,8 @@ import (
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
+	gormrepo "xirang/backend/internal/repository/gorm"
+	taskservice "xirang/backend/internal/task"
 
 	"gorm.io/gorm"
 )
@@ -807,7 +809,7 @@ func assertRsyncVersioningInvariantsUnchanged(t *testing.T, db *gorm.DB, service
 	}
 
 	// 2. Task pause state & revision
-	if !after.Task.Enabled || !after.Task.SkipNext ||
+	if after.Task.Enabled != before.Task.Enabled || after.Task.SkipNext != before.Task.SkipNext ||
 		after.Task.RsyncTarget != legacyTarget ||
 		after.Task.ExecutorConfig != "" ||
 		after.Revision != before.Revision {
@@ -1334,5 +1336,217 @@ func TestRsyncVersioningActivationRequiresTaskRevisionPreflightAndFence(t *testi
 
 	if _, err := os.Lstat(managedRoot); err != nil {
 		t.Fatalf("managedRoot should remain valid for subsequent clean preflight: %v", err)
+	}
+}
+
+func TestCreateRsyncVersioningPreflightValidatesPathSeparationBeforeBootstrapWithoutDiskOrDBSideEffects(t *testing.T) {
+	modes := []backupasset.TaskPublicationMode{
+		backupasset.PublicationVersionedFullCopy,
+		backupasset.PublicationVersionedHardlink,
+	}
+
+	setupNormalConnectedRsyncTask := func(t *testing.T, legacyTarget, configuredSource string) (*gorm.DB, *Service, model.Task, rsyncVersioningInvariantSnapshot) {
+		t.Helper()
+		db := newRepositoryTestDB(t)
+		now := time.Date(2026, 11, 4, 14, 0, 0, 0, time.UTC)
+
+		nodeRepo := gormrepo.NewNodeRepository(db)
+		localNode := model.Node{Name: "local-node-" + strconv.FormatInt(time.Now().UnixNano(), 10), Host: "", Port: 22, Username: "root"}
+		if err := nodeRepo.Create(context.Background(), &localNode); err != nil {
+			t.Fatalf("create local node: %v", err)
+		}
+
+		taskAPI := taskservice.NewTaskApiService(
+			gormrepo.NewTaskRepository(db),
+			nodeRepo,
+			gormrepo.NewPolicyRepository(db),
+			nil,
+		)
+		createdTask, err := taskAPI.CreateTask(context.Background(), taskservice.CreateTaskInput{
+			Name:         "normal-rsync-task-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			NodeID:       localNode.ID,
+			ExecutorType: "rsync",
+			RsyncSource:  configuredSource,
+			RsyncTarget:  legacyTarget,
+		})
+		if err != nil {
+			t.Fatalf("CreateTask via normal task entrypoint failed: %v", err)
+		}
+
+		service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, scopedObservationProber(backupasset.ProviderRsync))
+		service.now = func() time.Time { return now }
+		service.keyring = backupasset.NewKeyring(db, func() time.Time { return now })
+		service.admission = &rsyncVersioningTransitioner{}
+		if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: createdTask.ID}, RequestContext{}); err != nil {
+			t.Fatalf("Connect failed: %v", err)
+		}
+
+		var persistedTask model.Task
+		if err := db.First(&persistedTask, createdTask.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		before := captureRsyncVersioningInvariantSnapshot(t, db, persistedTask.ID)
+		return db, service, persistedTask, before
+	}
+
+	for _, mode := range modes {
+		t.Run("moved_overlapping_source_"+string(mode), func(t *testing.T) {
+			caseDir := filepath.Join(t.TempDir(), "case")
+			legacyTarget := filepath.Join(caseDir, "legacy")
+			configuredSource := legacyTarget + ".xirang-rsync-v1"
+			movedSource := filepath.Join(caseDir, "moved-source")
+			for _, dir := range []string{legacyTarget, configuredSource} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(legacyTarget, "legacy.txt"), []byte("legacy-bytes\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(configuredSource, "source.txt"), []byte("source-bytes\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			db, service, taskEntity, before := setupNormalConnectedRsyncTask(t, legacyTarget, configuredSource)
+			sourceBeforeMoveStat, err := os.Lstat(configuredSource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceBeforeInode := sourceBeforeMoveStat.Sys().(*syscall.Stat_t).Ino
+
+			if err := os.Rename(configuredSource, movedSource); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(configuredSource); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("configuredSource still exists after move: %v", err)
+			}
+
+			result, err := service.CreateRsyncVersioningPreflightForRequest(context.Background(), backupasset.RsyncVersioningPreflightRequest{
+				TaskID:               taskEntity.ID,
+				ExpectedTaskRevision: before.Revision,
+				RequestedMode:        mode,
+			}, RequestContext{
+				Actor:         backupasset.AuditActor{UserID: 7, Username: "operator", Role: "operator"},
+				CorrelationID: "rsync-first-preflight-moved-overlap-" + string(mode),
+			})
+			if !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("CreateRsyncVersioningPreflightForRequest error=%v, want %v (result=%+v)", err, backupasset.ErrConflict, result)
+			}
+			if result.PreflightID != "" {
+				t.Fatalf("unexpected preflight ID issued on conflict: %q", result.PreflightID)
+			}
+			service.preflights.mu.Lock()
+			ticketCount := len(service.preflights.records)
+			service.preflights.mu.Unlock()
+			if ticketCount != 0 {
+				t.Fatalf("usable preflight tickets in store=%d, want 0", ticketCount)
+			}
+
+			if _, err := os.Lstat(configuredSource); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("first preflight recreated moved source path %s: err=%v", configuredSource, err)
+			}
+			for _, control := range []string{"repository.json", "staging", "points"} {
+				if _, err := os.Lstat(filepath.Join(configuredSource, control)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("first preflight wrote control entry %s at original source path: err=%v", control, err)
+				}
+			}
+
+			movedStat, err := os.Lstat(movedSource)
+			if err != nil {
+				t.Fatalf("movedSource missing after preflight: %v", err)
+			}
+			if movedStat.Sys().(*syscall.Stat_t).Ino != sourceBeforeInode {
+				t.Fatalf("movedSource inode drifted: got %d want %d", movedStat.Sys().(*syscall.Stat_t).Ino, sourceBeforeInode)
+			}
+			legacyBytes, err := os.ReadFile(filepath.Join(legacyTarget, "legacy.txt"))
+			if err != nil || string(legacyBytes) != "legacy-bytes\n" {
+				t.Fatalf("legacy target mutated: err=%v bytes=%q", err, string(legacyBytes))
+			}
+			assertRsyncVersioningInvariantsUnchanged(t, db, service, before, legacyTarget)
+		})
+
+		t.Run("moved_descendant_source_"+string(mode), func(t *testing.T) {
+			caseDir := filepath.Join(t.TempDir(), "case")
+			legacyTarget := filepath.Join(caseDir, "legacy")
+			managedRoot := legacyTarget + ".xirang-rsync-v1"
+			configuredSource := filepath.Join(managedRoot, "sub")
+			movedRoot := filepath.Join(caseDir, "moved-root")
+			for _, dir := range []string{legacyTarget, configuredSource} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(legacyTarget, "legacy.txt"), []byte("legacy-bytes\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			db, service, taskEntity, before := setupNormalConnectedRsyncTask(t, legacyTarget, configuredSource)
+			if err := os.Rename(managedRoot, movedRoot); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := service.CreateRsyncVersioningPreflightForRequest(context.Background(), backupasset.RsyncVersioningPreflightRequest{
+				TaskID:               taskEntity.ID,
+				ExpectedTaskRevision: before.Revision,
+				RequestedMode:        mode,
+			}, RequestContext{
+				Actor:         backupasset.AuditActor{UserID: 7, Username: "operator", Role: "operator"},
+				CorrelationID: "rsync-first-preflight-descendant-" + string(mode),
+			})
+			if !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("CreateRsyncVersioningPreflightForRequest error=%v, want %v", err, backupasset.ErrConflict)
+			}
+			if _, err := os.Lstat(managedRoot); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("first preflight recreated managedRoot %s: err=%v", managedRoot, err)
+			}
+			assertRsyncVersioningInvariantsUnchanged(t, db, service, before, legacyTarget)
+		})
+
+		t.Run("positive_control_independent_source_"+string(mode), func(t *testing.T) {
+			caseDir := filepath.Join(t.TempDir(), "case")
+			legacyTarget := filepath.Join(caseDir, "legacy")
+			configuredSource := filepath.Join(caseDir, "source")
+			managedRoot := legacyTarget + ".xirang-rsync-v1"
+			for _, dir := range []string{legacyTarget, configuredSource} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(legacyTarget, "legacy.txt"), []byte("legacy-bytes\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(configuredSource, "source.txt"), []byte("source-bytes\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			db, service, taskEntity, before := setupNormalConnectedRsyncTask(t, legacyTarget, configuredSource)
+			result, err := service.CreateRsyncVersioningPreflightForRequest(context.Background(), backupasset.RsyncVersioningPreflightRequest{
+				TaskID:               taskEntity.ID,
+				ExpectedTaskRevision: before.Revision,
+				RequestedMode:        mode,
+			}, RequestContext{
+				Actor:         backupasset.AuditActor{UserID: 7, Username: "operator", Role: "operator"},
+				CorrelationID: "rsync-first-preflight-positive-" + string(mode),
+			})
+			if err != nil {
+				t.Fatalf("positive control first preflight failed: %v", err)
+			}
+			if backupasset.ValidateOpaqueID(result.PreflightID) != nil || result.Mode != mode ||
+				result.State != backupasset.RsyncVersioningReady || result.ReasonCode != backupasset.RsyncVersioningReasonReady {
+				t.Fatalf("positive control preflight result=%+v", result)
+			}
+			service.preflights.mu.Lock()
+			ticketCount := len(service.preflights.records)
+			service.preflights.mu.Unlock()
+			if ticketCount != 1 {
+				t.Fatalf("usable preflight tickets in store=%d, want 1", ticketCount)
+			}
+			for _, control := range []string{"repository.json", "staging", "points"} {
+				if _, err := os.Lstat(filepath.Join(managedRoot, control)); err != nil {
+					t.Fatalf("positive control did not create %s in %s: %v", control, managedRoot, err)
+				}
+			}
+			assertRsyncVersioningInvariantsUnchanged(t, db, service, before, legacyTarget)
+		})
 	}
 }

@@ -145,6 +145,12 @@ func (service *Service) CreateRsyncVersioningPreflight(ctx context.Context, requ
 	if err != nil {
 		return backupasset.RsyncVersioningPreflightResult{}, err
 	}
+	if err := provider.ValidateRsyncManagedRootBootstrapSeparation(ctx, plan.managedRoot, plan.link.EncryptedLegacyLocator); err != nil {
+		return backupasset.RsyncVersioningPreflightResult{}, fmt.Errorf("%w: managed Rsync legacy target overlap", backupasset.ErrConflict)
+	}
+	if err := provider.ValidateRsyncManagedRootBootstrapSeparation(ctx, plan.managedRoot, plan.task.RsyncSource); err != nil {
+		return backupasset.RsyncVersioningPreflightResult{}, fmt.Errorf("%w: managed Rsync source overlap", backupasset.ErrConflict)
+	}
 	bootstrap, err := provider.BootstrapRsyncManagedRoot(ctx, provider.RsyncManagedRootBootstrapRequest{
 		ManagedRoot: plan.managedRoot, RepositoryID: plan.repository.ID, MarkerKey: markerKey, CreatedAt: service.utcNow(),
 	})

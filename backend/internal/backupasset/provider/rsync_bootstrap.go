@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -89,6 +90,32 @@ func RevalidateRsyncManagedRoot(ctx context.Context, request RsyncManagedRootBoo
 	return revalidateRsyncManagedRoot(ctx, cloneRsyncManagedRootBootstrapRequest(request))
 }
 
+// ValidateRsyncManagedRootBootstrapSeparation proves that another local
+// directory exists as a trusted directory and does not overlap a candidate
+// managed root lexically or by VFS identity/ancestry before bootstrap creates
+// any directory or marker file on disk. Both inputs are process-local and are
+// never returned or serialized by this package.
+func ValidateRsyncManagedRootBootstrapSeparation(ctx context.Context, managedRoot, otherRoot string) error {
+	if ctx == nil || ctx.Err() != nil {
+		if ctx != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("%w: managed Rsync root separation context is required", backupasset.ErrInvalidState)
+	}
+	managedRoot, err := normalizeRsyncManagedRoot(managedRoot)
+	if err != nil {
+		return fmt.Errorf("%w: invalid managed Rsync root separation request", backupasset.ErrInvalidState)
+	}
+	otherRoot, err = normalizeRsyncManagedRoot(otherRoot)
+	if err != nil {
+		return fmt.Errorf("%w: invalid managed Rsync root separation request", backupasset.ErrInvalidState)
+	}
+	if rsyncManagedRootsLexicallyOverlap(managedRoot, otherRoot) {
+		return fmt.Errorf("%w: source and managed root overlap", errRsyncManagedTreeUnsafe)
+	}
+	return validateRsyncManagedRootBootstrapSeparation(ctx, managedRoot, otherRoot)
+}
+
 // ValidateRsyncManagedRootSeparation proves that another local directory does
 // not overlap a managed root. Both inputs are process-local and are never
 // returned or serialized by this package.
@@ -108,6 +135,14 @@ func ValidateRsyncManagedRootSeparation(ctx context.Context, managedRoot, otherR
 		return fmt.Errorf("%w: invalid managed Rsync root separation request", backupasset.ErrInvalidState)
 	}
 	return validateRsyncManagedRootSeparation(ctx, managedRoot, otherRoot)
+}
+
+func rsyncManagedRootsLexicallyOverlap(left, right string) bool {
+	if left == right {
+		return true
+	}
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(left, right+sep) || strings.HasPrefix(right, left+sep)
 }
 
 func cloneRsyncManagedRootBootstrapRequest(request RsyncManagedRootBootstrapRequest) RsyncManagedRootBootstrapRequest {
