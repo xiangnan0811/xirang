@@ -9,6 +9,13 @@
 
 * **backend:** 收敛 Rsync 版本化激活只读根重验与历史准备死码 ([#677](https://github.com/xiangnan0811/xirang/issues/677)) ([104da7d](https://github.com/xiangnan0811/xirang/commit/104da7d0c876554798d79dbbaf45d05f2ab3e3c2))
 
+### Rsync 版本化激活只读根重验与历史准备死码收敛
+
+- 保留首次合法预检（`CreateRsyncVersioningPreflightForRequest`）调用 `provider.BootstrapRsyncManagedRoot` 创建或重验专属 `<legacyTarget>.xirang-rsync-v1` 受管根（`0700`）及 `repository.json`（`0600`）、`staging/`（`0700`）、`points/`（`0700`）的行为。
+- 修复 `revalidateRsyncVersioningPreflight` 在激活阶段误调用 `BootstrapRsyncManagedRoot`、以及 `PreflightManagedRoot` 调用 `ensureRsyncManagedTreeControlDir` 导致预检成功后若受管根被移走或 `staging`/`points` 控制目录缺失时在原路径重建目录与 marker 文件的问题。新增只读重验 `provider.RevalidateRsyncManagedRoot` 并在 `PreflightManagedRoot` 统一采用 `openRsyncManagedTreeReadOnly`：受管根或控制目录缺失、移走、替换或 `repository.json` 漂移时，持原票据调用 `ActivateRsyncVersioningForRequest`（`first_new_point` 与 `imported_baseline`）均返回 `ErrConflict`（HTTP `409 Conflict`），且磁盘零新建目录／文件、持久绑定（`mutable_head`／`legacy_mutable`／`task_derived_v1`）、任务暂停状态与恢复点均保持不变。
+- 移除 `repository/connect.go` 与 `connect_test.go` 中无生产消费者的历史激活准备死码（`managedRsyncActivationRequest`、`managedRsyncActivationPlan`、`prepareManagedRsyncActivation`、`validateManagedRsyncActivationRequest` 及对应单测），保留仍在生产使用的 `managedRsyncBindingDocumentV2` 与 `managedRsyncTaskRevision`，并将 `revision`、`preflight identity`、`preflight fence`、活动 `TaskRun` 与持久 `link`／`repository` 漂移门禁统一收口至真实 `ActivateRsyncVersioningForRequest` 回归。
+- 无新增公开 API、运行时配置或数据库 schema migration，不改写已发布迁移或历史数据；既有迁移 `000064` 的受管历史、versioned link 与 active lease 降级保护继续适用。升级前保全数据库、匹配密钥、配置和备份副本，排空旧 Core 在途 Rsync 预检／激活请求后换版（进程重启会使内存预检票据失效，需在新版重新预检后激活）；新逻辑仅在新版 Core 后续 Rsync 版本化预检与激活中生效，不自动清理旧版本已产生的文件系统目录。回退旧版 Core 会恢复激活重验在缺失路径重建受管根或控制目录的缺陷。
+
 ## [0.73.11](https://github.com/xiangnan0811/xirang/compare/v0.73.10...v0.73.11) (2026-11-04)
 
 
