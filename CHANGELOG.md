@@ -2,19 +2,19 @@
 
 ## Unreleased
 
-### 备份资产启用门禁、运行时恢复围栏与测试包装收敛
-
-- 修复 `Runtime.TransitionBackupAssetSettingsContextWithRestore` 在内层 Export／Recovery 持久化回调已成功执行 `restore` 补偿后，外层仍重复执行持久化回滚的问题，并确保内层 `restore` 失败在所有设置切换分支均传播至 `ErrFeatureTransitionCompensation` 与进程内粘性 `featureTransitionFenced` 栅栏。
-- 修复补偿失败时未先将 `contentReady`／`searchReady` 置为未就绪（含 `backup_assets.enabled` 已开启时其他 Foundation 设置切换补偿失败路径）的问题，并为 GA `Readiness`、`RunInventory`、`Acknowledge` 以及 `RecoveryDowngradeReadiness`、`ReplayRecoveryDowngradeReadiness`、`RequestRecoveryDowngradeReadiness`、`PrepareApplicationDowngrade` 和 `PrepareSchemaDown` 补齐 `featureTransitionFenced` 检查（返回 `ErrInvalidState`）；补偿成功时恢复先前状态并允许在线继续切换，任一补偿失败时保持 `FeatureLive` 为 `false` 且拒绝后续切换、GA 就绪／盘点／确认与降级准备，须通过重启进程恢复。
-- 移除无生产消费者的 `ga.EnablementGate` 测试包装及 `handlers` 测试中剥离上下文切换接口的 `settingsFeatureTransitionOnly` 替身；直接设置（`PUT /api/v1/settings`）、删除覆盖值恢复环境默认（`DELETE /api/v1/settings/:key`）与配置导入（`POST /api/v1/config/import`）三个真实入口统一直连 `*runtime.Runtime` 验证同一门禁、持久配置、`FeatureLive`、受保护 Catalog 入口及补偿恢复行为。保留 `ga.EvaluateEnablement`、`DatabaseReadiness` 与 `forbiddenGAMutations` 禁止修改 Provider 数据的保护。
-- 无新增公开 API、运行时配置或数据库迁移，不改写已发布迁移或历史数据；既有备份资产启用就绪、摘要确认、迁移 `000071` 降级保护与 Core／Worker 配套要求继续适用。升级前保全数据库、匹配密钥、配置和备份副本，排空旧 Core 在途设置切换后换版；新逻辑仅在新版 Core 后续设置切换与就绪检查中生效，不能在线解除旧进程已触发的粘性围栏。回退旧版 Core 会恢复重复回滚与补偿失败后的围栏遗漏缺陷。
-
 ## [0.73.11](https://github.com/xiangnan0811/xirang/compare/v0.73.10...v0.73.11) (2026-11-04)
 
 
 ### 🐛 Bug Fixes
 
 * **backend:** 收敛备份资产启用门禁与切换恢复围栏 ([#675](https://github.com/xiangnan0811/xirang/issues/675)) ([63166b0](https://github.com/xiangnan0811/xirang/commit/63166b020f60b88cf45c00d00bbadf32c4be7eae))
+
+### 备份资产启用门禁、运行时恢复围栏与测试包装收敛
+
+- 修复 `Runtime.TransitionBackupAssetSettingsContextWithRestore` 在内层 Export／Recovery 持久化回调已成功执行 `restore` 补偿后，外层仍重复执行持久化回滚的问题，并确保内层 `restore` 失败在所有设置切换分支均传播至 `ErrFeatureTransitionCompensation` 与进程内粘性 `featureTransitionFenced` 栅栏。
+- 修复补偿失败时未先将 `contentReady`／`searchReady` 置为未就绪（含 `backup_assets.enabled` 已开启时其他 Foundation 设置切换补偿失败路径）的问题，并为 GA `Readiness`、`RunInventory`、`Acknowledge` 以及 `RecoveryDowngradeReadiness`、`ReplayRecoveryDowngradeReadiness`、`RequestRecoveryDowngradeReadiness`、`PrepareApplicationDowngrade` 和 `PrepareSchemaDown` 补齐 `featureTransitionFenced` 检查（返回 `ErrInvalidState`）；补偿成功时恢复先前状态并允许在线继续切换，任一补偿失败时保持 `FeatureLive` 为 `false` 且拒绝后续切换、GA 就绪／盘点／确认与降级准备，须通过重启进程恢复。
+- 移除无生产消费者的 `ga.EnablementGate` 测试包装及 `handlers` 测试中剥离上下文切换接口的 `settingsFeatureTransitionOnly` 替身；直接设置（`PUT /api/v1/settings`）、删除覆盖值恢复环境默认（`DELETE /api/v1/settings/:key`）与配置导入（`POST /api/v1/config/import`）三个真实入口统一直连 `*runtime.Runtime` 验证同一门禁、持久配置、`FeatureLive`、受保护 Catalog 入口及补偿恢复行为。保留 `ga.EvaluateEnablement`、`DatabaseReadiness` 与 `forbiddenGAMutations` 禁止修改 Provider 数据的保护。
+- 无新增公开 API、运行时配置或数据库迁移，不改写已发布迁移或历史数据；既有备份资产启用就绪、摘要确认、迁移 `000071` 降级保护与 Core／Worker 配套要求继续适用。升级前保全数据库、匹配密钥、配置和备份副本，排空旧 Core 在途设置切换后换版；新逻辑仅在新版 Core 后续设置切换与就绪检查中生效，不能在线解除旧进程已触发的粘性围栏。回退旧版 Core 会恢复重复回滚与补偿失败后的围栏遗漏缺陷。
 
 ## [0.73.10](https://github.com/xiangnan0811/xirang/compare/v0.73.9...v0.73.10) (2026-11-03)
 
