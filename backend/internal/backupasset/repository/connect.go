@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -50,28 +49,6 @@ type connectProbeLineage struct {
 	task                          model.Task
 	binding                       *model.RepositoryAccessBinding
 	allowRetainedOwnerUnavailable bool
-}
-
-// managedRsyncActivationRequest is an internal hand-off between the future
-// preflight/migration workflow and the repository boundary. It is deliberately
-// not an API request: no caller may synthesize a mode change through Connect.
-type managedRsyncActivationRequest struct {
-	TaskID                  uint
-	ExpectedTaskRevision    uint64
-	PreflightID             string
-	PreflightIdentityDigest string
-	PreflightFenceDigest    string
-	Binding                 managedRsyncBindingDocumentV2
-}
-
-// managedRsyncActivationPlan contains only internal records needed by the
-// later activation transaction. Preparing it is read-only so Task 3 cannot
-// create a half-configured versioned task before the preflight service exists.
-type managedRsyncActivationPlan struct {
-	Task       model.Task
-	Repository model.BackupRepository
-	Link       model.TaskRepositoryLink
-	Binding    managedRsyncBindingDocumentV2
 }
 
 func (service *Service) Connect(ctx context.Context, request ConnectRequest, requestContext RequestContext) (ConnectResult, error) {
@@ -500,81 +477,6 @@ func lockAndRevalidateConnectTaskLink(tx *gorm.DB, taskID uint, snapshot connect
 		current.PublicationMode != snapshot.active.PublicationMode || current.EncryptedLegacyLocator != snapshot.active.EncryptedLegacyLocator ||
 		!current.UpdatedAt.Equal(snapshot.active.UpdatedAt) {
 		return fmt.Errorf("%w: Task link lineage changed during Provider probe", backupasset.ErrConflict)
-	}
-	return nil
-}
-
-func (service *Service) prepareManagedRsyncActivation(ctx context.Context, request managedRsyncActivationRequest) (managedRsyncActivationPlan, error) {
-	if service == nil || service.db == nil {
-		return managedRsyncActivationPlan{}, fmt.Errorf("%w: managed Rsync activation dependencies are unavailable", backupasset.ErrInvalidState)
-	}
-	if err := validateManagedRsyncActivationRequest(request); err != nil {
-		return managedRsyncActivationPlan{}, err
-	}
-	var plan managedRsyncActivationPlan
-	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var taskEntity model.Task
-		if err := tx.Where("id = ? AND archived_at IS NULL", request.TaskID).First(&taskEntity).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("%w: activation Task", backupasset.ErrNotFound)
-			}
-			return fmt.Errorf("load managed Rsync activation Task: %w", err)
-		}
-		revision, err := managedRsyncTaskRevision(taskEntity)
-		if err != nil {
-			return err
-		}
-		if revision != request.ExpectedTaskRevision {
-			return fmt.Errorf("%w: managed Rsync Task revision changed", backupasset.ErrConflict)
-		}
-
-		var link model.TaskRepositoryLink
-		if err := tx.Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).First(&link).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("%w: managed Rsync activation link", backupasset.ErrNotFound)
-			}
-			return fmt.Errorf("load managed Rsync activation link: %w", err)
-		}
-		if link.PublicationMode != string(backupasset.PublicationLegacyMutable) || strings.TrimSpace(link.EncryptedLegacyLocator) == "" {
-			return fmt.Errorf("%w: managed Rsync activation requires an exact legacy link", backupasset.ErrConflict)
-		}
-		if link.TaskID == nil || *link.TaskID != taskEntity.ID || link.ID != request.Binding.TaskRepositoryLinkID || link.RepositoryID != request.Binding.RepositoryID {
-			return fmt.Errorf("%w: managed Rsync activation link identity changed", backupasset.ErrConflict)
-		}
-
-		var repository model.BackupRepository
-		if err := tx.First(&repository, "id = ?", link.RepositoryID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("%w: managed Rsync activation repository", backupasset.ErrNotFound)
-			}
-			return fmt.Errorf("load managed Rsync activation repository: %w", err)
-		}
-		if repository.ProviderKind != string(backupasset.ProviderRsync) || repository.VersionMode != string(backupasset.VersionMutableHead) {
-			return fmt.Errorf("%w: managed Rsync activation repository is not legacy mutable", backupasset.ErrConflict)
-		}
-		if request.Binding.TaskID != taskEntity.ID || request.Binding.NodeID != taskEntity.NodeID ||
-			filepath.Clean(request.Binding.ManagedRootLocator) == filepath.Clean(taskEntity.RsyncTarget) {
-			return fmt.Errorf("%w: managed Rsync activation Task identity changed", backupasset.ErrConflict)
-		}
-		plan = managedRsyncActivationPlan{Task: taskEntity, Repository: repository, Link: link, Binding: request.Binding}
-		return nil
-	})
-	if err != nil {
-		return managedRsyncActivationPlan{}, err
-	}
-	return plan, nil
-}
-
-func validateManagedRsyncActivationRequest(request managedRsyncActivationRequest) error {
-	if request.TaskID == 0 || request.ExpectedTaskRevision == 0 || backupasset.ValidateOpaqueID(request.PreflightID) != nil ||
-		!isLowerHex64(request.PreflightIdentityDigest) || !isLowerHex64(request.PreflightFenceDigest) {
-		return fmt.Errorf("%w: invalid managed Rsync activation proof", backupasset.ErrConflict)
-	}
-	if err := validateManagedRsyncBindingDocumentV2(request.Binding); err != nil {
-		return err
-	}
-	if request.Binding.TaskID != request.TaskID || request.Binding.RootMarkerDigest != request.PreflightIdentityDigest {
-		return fmt.Errorf("%w: managed Rsync preflight identity changed", backupasset.ErrConflict)
 	}
 	return nil
 }

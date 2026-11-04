@@ -21,7 +21,7 @@ func preflightRsyncManagedRoot(ctx context.Context, preflighter *RsyncTreePrefli
 	if err != nil {
 		return RsyncTreePreflightEvidence{}, err
 	}
-	tree, err := openRsyncManagedTreeBase(root)
+	tree, err := openRsyncManagedTreeReadOnly(root)
 	if err != nil {
 		return RsyncTreePreflightEvidence{}, err
 	}
@@ -35,11 +35,6 @@ func preflightRsyncManagedRoot(ctx context.Context, preflighter *RsyncTreePrefli
 	}
 	if rsyncTreeDigest(marker) != request.RepositoryMarkerDigest {
 		return RsyncTreePreflightEvidence{}, fmt.Errorf("%w: managed repository marker changed", errRsyncManagedTreeUnsafe)
-	}
-	for _, component := range []string{"staging", "points"} {
-		if err := ensureRsyncManagedTreeControlDir(tree, component); err != nil {
-			return RsyncTreePreflightEvidence{}, err
-		}
 	}
 	return preflighter.Preflight(ctx, tree, request)
 }

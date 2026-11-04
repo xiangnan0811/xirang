@@ -92,6 +92,83 @@ func TestBootstrapRsyncManagedRootCreatesAndRevalidatesOwnedLayout(t *testing.T)
 	}
 }
 
+func TestRevalidateRsyncManagedRootAndPreflightManagedRootDoNotCreateMissingPaths(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("managed Rsync tree revalidation is Linux-only")
+	}
+	baseDir := t.TempDir()
+	missingRoot := filepath.Join(baseDir, "missing.xirang-rsync-v1")
+	request := RsyncManagedRootBootstrapRequest{
+		ManagedRoot: missingRoot, RepositoryID: strings.Repeat("a", 32), MarkerKey: bytes.Repeat([]byte{0x42}, 32),
+		CreatedAt: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC),
+	}
+	if _, err := RevalidateRsyncManagedRoot(context.Background(), request); err == nil {
+		t.Fatal("RevalidateRsyncManagedRoot succeeded for missing root")
+	}
+	if _, err := os.Lstat(missingRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("RevalidateRsyncManagedRoot created missing root or failed unexpectedly: %v", err)
+	}
+
+	preflighter, err := NewRsyncTreePreflighter(func() time.Time { return time.Now().UTC() }, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflightRequest := RsyncTreePreflightRequest{
+		TaskID: 7, ExpectedTaskRevision: 3, Mode: backupasset.PublicationVersionedFullCopy,
+		LocalSourceRoot: t.TempDir(), RepositoryMarkerDigest: strings.Repeat("a", 64), CapabilityRevision: 1,
+	}
+	if _, err := preflighter.PreflightManagedRoot(context.Background(), missingRoot, preflightRequest); err == nil {
+		t.Fatal("PreflightManagedRoot succeeded for missing root")
+	}
+	if _, err := os.Lstat(missingRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("PreflightManagedRoot created missing root or failed unexpectedly: %v", err)
+	}
+
+	bootstrappedRoot := filepath.Join(baseDir, "bootstrapped.xirang-rsync-v1")
+	request.ManagedRoot = bootstrappedRoot
+	first, err := BootstrapRsyncManagedRoot(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revalidated, err := RevalidateRsyncManagedRoot(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revalidated.Created || revalidated.RepositoryMarkerDigest != first.RepositoryMarkerDigest || revalidated.ManagedRootIdentityDigest != first.ManagedRootIdentityDigest {
+		t.Fatalf("revalidated=%+v, want non-creating match with %+v", revalidated, first)
+	}
+
+	for _, component := range []string{"staging", "points", "repository.json"} {
+		t.Run("missing_"+component, func(t *testing.T) {
+			candidateRoot := filepath.Join(t.TempDir(), "candidate.xirang-rsync-v1")
+			candidateReq := request
+			candidateReq.ManagedRoot = candidateRoot
+			boot, err := BootstrapRsyncManagedRoot(context.Background(), candidateReq)
+			if err != nil {
+				t.Fatal(err)
+			}
+			removedPath := filepath.Join(candidateRoot, component)
+			if err := os.Remove(removedPath); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := RevalidateRsyncManagedRoot(context.Background(), candidateReq); err == nil {
+				t.Fatalf("RevalidateRsyncManagedRoot accepted missing %s", component)
+			}
+			if _, err := os.Lstat(removedPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("RevalidateRsyncManagedRoot recreated missing %s: %v", component, err)
+			}
+			probeReq := preflightRequest
+			probeReq.RepositoryMarkerDigest = boot.RepositoryMarkerDigest
+			if _, err := preflighter.PreflightManagedRoot(context.Background(), candidateRoot, probeReq); err == nil {
+				t.Fatalf("PreflightManagedRoot accepted missing %s", component)
+			}
+			if _, err := os.Lstat(removedPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("PreflightManagedRoot recreated missing %s: %v", component, err)
+			}
+		})
+	}
+}
+
 func TestValidateRsyncManagedRootSeparationRejectsLegacyOverlap(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("managed Rsync tree validation is Linux-only")
