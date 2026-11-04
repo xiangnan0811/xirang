@@ -9,6 +9,13 @@
 
 * **backend:** validate Rsync versioning path separation before managed root bootstrap ([#679](https://github.com/xiangnan0811/xirang/issues/679)) ([4f69bc0](https://github.com/xiangnan0811/xirang/commit/4f69bc08edeef5a2608f2959f1558fc814d076ff))
 
+### Rsync 版本化首次预检前置路径分离校验
+
+- 修复首次 Rsync 版本化预检（`CreateRsyncVersioningPreflight`／`CreateRsyncVersioningPreflightForRequest`）先调用 `provider.BootstrapRsyncManagedRoot` 再校验路径分离，导致任务在连接后若与 `<legacyTarget>.xirang-rsync-v1` 重叠的 `sourcePath` 被移走时，首次预检虽返回 `409 Conflict` 且不签发可用票据，却已在原路径重建受管根目录（`0700`）并写入 `repository.json`（`0600`）、`staging/`（`0700`）与 `points/`（`0700`）控制文件的问题。
+- 新增 `provider.ValidateRsyncManagedRootBootstrapSeparation`，在 `BootstrapRsyncManagedRoot` 创建任何目录或写入 `repository.json` 之前，对 `<legacyTarget>.xirang-rsync-v1` 与 `legacyTarget`、`sourcePath` 执行词法不重叠（`rsyncManagedRootsLexicallyOverlap`）及基于受信任父目录与只读 `unix.Openat2`（`O_RDONLY|O_DIRECTORY|O_CLOEXEC`，`RESOLVE_NO_SYMLINKS`）的 VFS 设备／inode 分离校验；受管根尚不存在（`ENOENT`）时仅凭词法与父目录可信性放行后续引导，重叠、非目录或 symlink 违规均以 `ErrConflict`（HTTP `409 Conflict`）拒绝，确保不签发可用预检票据、不重新创建被移走的来源原路径或写入控制文件，且旧目标目录、持久绑定（`BackupRepository`／`TaskRepositoryLink`／`RepositoryAccessBinding`）与恢复点保持不变。
+- 保留正常首次预检（`sourcePath` 与 `<legacyTarget>.xirang-rsync-v1` 独立分离）创建专属 `<legacyTarget>.xirang-rsync-v1` 受管根（`0700`）及 `repository.json`、`staging/`、`points/` 并签发预检票据的正向行为；保留引导后、激活重验（`revalidateRsyncVersioningPreflight`）及回滚准备（`PrepareRsyncTaskRollback`）中的 `provider.ValidateRsyncManagedRootSeparation` 只读树重验。
+- 无新增公开 API、运行时配置或数据库 schema migration，不改写已发布迁移或历史数据；既有迁移 `000064` 的受管历史、versioned link 与 active lease 降级保护继续适用。升级前保全数据库、匹配密钥、配置和备份副本，排空旧 Core 在途 Rsync 预检／激活请求后换版（进程重启会使内存预检票据失效，需在新版重新预检后激活）；新逻辑仅在新版 Core 后续首次预检请求中生效，不自动清理旧版本已产生的文件系统目录。回退旧版 Core 会恢复首次预检在路径分离校验前先行创建受管根及控制文件的缺陷。
+
 ## [0.73.12](https://github.com/xiangnan0811/xirang/compare/v0.73.11...v0.73.12) (2026-11-04)
 
 
