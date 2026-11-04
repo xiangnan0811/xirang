@@ -81,6 +81,8 @@ Export 下载取消回归在释放 writer 前等待读取 context 确实取消�
 
 上述备份资产启用门禁、运行时恢复围栏与测试包装收敛的完整说明归档于 CHANGELOG `0.73.11` 版本节；发行 PR 与正式 GitHub Release 正文须完整保留该节全部行为、生效与回退边界，不能只保留自动生成的提交摘要或将已交付条目留在 `Unreleased`。
 
+Rsync 版本化激活只读根重验与历史准备死码收敛的发行说明归档于 CHANGELOG `0.73.12` 版本节：须包含首次合法预检保留创建／重验专属 `<target>.xirang-rsync-v1` 受管根、激活重验改用 `RevalidateRsyncManagedRoot` 与 `openRsyncManagedTreeReadOnly` 实现移走受管根或缺失控制目录时零磁盘新建副作用 `409` 拒绝，以及退役 `prepareManagedRsyncActivation` 死码并保留 `managedRsyncBindingDocumentV2`。无新增 API、配置或 schema migration，换版前排空在途预检／激活（重启后重新预检），回退会恢复缺失路径重建目录缺陷。
+
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
 
 Release Please 自动插入版本标题时可能将原有升级说明留在 `Unreleased`，生成的 PR 正文也可能只有提交摘要。此时原样移动 CHANGELOG 中已审阅的说明，并同步 PR 正文的目标版本节；两处都保留完整风险边界，再提交补充变更。
