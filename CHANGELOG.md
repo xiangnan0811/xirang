@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.11](https://github.com/xiangnan0811/xirang/compare/v0.73.10...v0.73.11) (2026-11-04)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 收敛备份资产启用门禁与切换恢复围栏 ([#675](https://github.com/xiangnan0811/xirang/issues/675)) ([63166b0](https://github.com/xiangnan0811/xirang/commit/63166b020f60b88cf45c00d00bbadf32c4be7eae))
+
 ### 备份资产启用门禁、运行时恢复围栏与测试包装收敛
 
 - 修复 `Runtime.TransitionBackupAssetSettingsContextWithRestore` 在内层 Export／Recovery 持久化回调已成功执行 `restore` 补偿后，外层仍重复执行持久化回滚的问题，并确保内层 `restore` 失败在所有设置切换分支均传播至 `ErrFeatureTransitionCompensation` 与进程内粘性 `featureTransitionFenced` 栅栏。
