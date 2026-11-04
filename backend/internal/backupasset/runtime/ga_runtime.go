@@ -124,7 +124,7 @@ func backupAssetFoundationValues(svc *settings.Service) map[string]string {
 }
 
 func (runtime *Runtime) RunInventory(ctx context.Context) (ga.AdminReport, error) {
-	if runtime == nil || runtime.inventory == nil || runtime.enablement == nil {
+	if runtime == nil || runtime.inventory == nil || runtime.enablement == nil || runtime.featureTransitionFenced.Load() {
 		return ga.AdminReport{}, fmt.Errorf("%w: backup asset GA runtime unavailable", backupasset.ErrInvalidState)
 	}
 	document, err := runtime.inventory.DryRun(ctx)
@@ -147,7 +147,7 @@ func (runtime *Runtime) RunInventory(ctx context.Context) (ga.AdminReport, error
 }
 
 func (runtime *Runtime) Readiness(ctx context.Context) (ga.AdminReport, error) {
-	if runtime == nil || runtime.enablement == nil {
+	if runtime == nil || runtime.enablement == nil || runtime.featureTransitionFenced.Load() {
 		return ga.AdminReport{}, fmt.Errorf("%w: backup asset GA runtime unavailable", backupasset.ErrInvalidState)
 	}
 	snapshot, err := runtime.enablement.CurrentReadiness(ctx)
@@ -169,7 +169,7 @@ func (runtime *Runtime) Readiness(ctx context.Context) (ga.AdminReport, error) {
 }
 
 func (runtime *Runtime) Acknowledge(ctx context.Context, actorID uint, digest string) (ga.AdminReport, error) {
-	if runtime == nil || runtime.inventory == nil || runtime.enablement == nil {
+	if runtime == nil || runtime.inventory == nil || runtime.enablement == nil || runtime.featureTransitionFenced.Load() {
 		return ga.AdminReport{}, fmt.Errorf("%w: backup asset GA runtime unavailable", backupasset.ErrInvalidState)
 	}
 	if err := runtime.inventory.Acknowledge(ctx, actorID, digest); err != nil {
@@ -179,13 +179,17 @@ func (runtime *Runtime) Acknowledge(ctx context.Context, actorID uint, digest st
 }
 
 func EnablementRuntime(readiness ga.ReadinessSource, inner publication.FeatureTransitioner) *Runtime {
-	return &Runtime{
+	runtime := &Runtime{
 		enablement:     readiness,
 		transitioner:   inner,
 		contentManager: gaSilentContentManager{},
 		exportManager:  gaSilentExportManager{},
 		gaMetrics:      ga.NoopMetrics{},
 	}
+	if admission, ok := inner.(*AdmissionController); ok {
+		runtime.admission = admission
+	}
+	return runtime
 }
 
 // WithFoundation attaches the settings-backed foundation used by FeatureLive
@@ -193,6 +197,27 @@ func EnablementRuntime(readiness ga.ReadinessSource, inner publication.FeatureTr
 func (runtime *Runtime) WithFoundation(foundation *backupasset.FoundationService) *Runtime {
 	if runtime != nil {
 		runtime.foundation = foundation
+	}
+	return runtime
+}
+
+// WithSettings attaches the settings service and foundation used by full
+// context-aware settings transitions (including DELETE override restoration).
+func (runtime *Runtime) WithSettings(service *settings.Service) *Runtime {
+	if runtime != nil {
+		runtime.settings = service
+		if runtime.foundation == nil && service != nil {
+			runtime.foundation = backupasset.NewFoundationService(service)
+		}
+	}
+	return runtime
+}
+
+// WithInventory attaches the GA inventory service used by enablement
+// materialization and succeeded-at stamping.
+func (runtime *Runtime) WithInventory(inventory *ga.InventoryService) *Runtime {
+	if runtime != nil {
+		runtime.inventory = inventory
 	}
 	return runtime
 }
@@ -269,6 +294,18 @@ func (gaSilentExportManager) TransitionSettings(_ context.Context, _ bool, _ bac
 		return nil
 	}
 	return persist()
+}
+func (gaSilentExportManager) TransitionSettingsContextWithRestore(
+	ctx context.Context,
+	_ bool,
+	_ backupasset.ExportConfig,
+	persist func(context.Context) error,
+	_ func(context.Context) error,
+) error {
+	if persist == nil {
+		return nil
+	}
+	return persist(ctx)
 }
 func (gaSilentExportManager) Service() *managedExportServiceFacade   { return nil }
 func (gaSilentExportManager) Delivery() *managedExportDeliveryFacade { return nil }

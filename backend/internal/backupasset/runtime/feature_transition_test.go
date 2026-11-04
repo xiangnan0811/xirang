@@ -1329,3 +1329,141 @@ func TestBackupAssetSettingsRecoveryFailureRestoresExactPriorSetting(t *testing.
 		t.Fatalf("failed Recovery transition retained %s=%q, want exact prior false", key, got)
 	}
 }
+
+type featureTransitionEnableFailExportProbe struct {
+	featureTransitionContextExportProbe
+	failure error
+}
+
+func (probe *featureTransitionEnableFailExportProbe) TransitionSettingsContextWithRestore(
+	ctx context.Context,
+	globalEnabled bool,
+	_ backupasset.ExportConfig,
+	persist func(context.Context) error,
+	restore func(context.Context) error,
+) error {
+	if err := persist(ctx); err != nil {
+		return err
+	}
+	if !globalEnabled || probe.failure == nil {
+		return nil
+	}
+	cleanupCtx, cancelCleanup := newFeatureTransitionCleanupContext(ctx)
+	defer cancelCleanup()
+	return errors.Join(probe.failure, restore(cleanupCtx))
+}
+
+func TestBackupAssetSettingsInnerRestoreSuccessSkipsDuplicateOuterRestore(t *testing.T) {
+	primaryErr := errors.New("FAKE_EXPORT_POST_PERSIST_FAILURE_FOR_TEST_ONLY")
+	events := []string{}
+	export := &featureTransitionEnableFailExportProbe{failure: primaryErr}
+	runtime := &Runtime{
+		contentManager: &runtimeContentManagerFake{events: &events},
+		transitioner:   &runtimeFeatureTransitionerFake{events: &events},
+		exportManager:  export,
+		enablement:     readyGAEnablement(),
+	}
+	current := runtimeFoundationSettings(false)
+	effective := runtimeFoundationSettings(true)
+	restoreCalls := 0
+	err := runtime.TransitionBackupAssetSettingsContextWithRestore(
+		context.Background(), current, map[string]string{"backup_assets.enabled": "true"}, effective,
+		backupasset.ExportConfig{}, func(context.Context) error { return nil },
+		func(context.Context) error {
+			restoreCalls++
+			return nil
+		},
+	)
+	if !errors.Is(err, primaryErr) {
+		t.Fatalf("transition error=%v, want Export post-persist failure", err)
+	}
+	if errors.Is(err, ErrFeatureTransitionCompensation) || runtime.featureTransitionFenced.Load() {
+		t.Fatalf("successful inner restore unexpectedly fenced runtime err=%v", err)
+	}
+	if restoreCalls != 1 {
+		t.Fatalf("external restore calls=%d, want 1 (inner restore success must skip outer second restore)", restoreCalls)
+	}
+}
+
+func TestFeatureDisableCompensationFailureForcesSearchAndContentNotReadyAndFencesDowngrade(t *testing.T) {
+	primaryErr := errors.New("FAKE_DISABLE_PERSIST_PRIMARY_FAILURE_FOR_TEST_ONLY")
+	restoreContentErr := errors.New("FAKE_DISABLE_CONTENT_RESTORE_COMPENSATION_FAILURE_FOR_TEST_ONLY")
+	events := []string{}
+	searchReady := &atomic.Bool{}
+	searchReady.Store(true)
+	content := &runtimeContentManagerFake{events: &events, prepareEnableErr: restoreContentErr}
+	runtime := &Runtime{
+		contentManager:  content,
+		transitioner:    &runtimeFeatureTransitionerFake{events: &events, enabled: true},
+		recoveryManager: &featureTransitionContextRecoveryProbe{},
+		searchReady:     searchReady,
+	}
+	err := runtime.transitionFeatureWithConfigs(
+		context.Background(), testFoundationTransitionConfigs(t, true, false),
+		func() error { return primaryErr },
+	)
+	if !errors.Is(err, primaryErr) || !errors.Is(err, restoreContentErr) || !errors.Is(err, ErrFeatureTransitionCompensation) {
+		t.Fatalf("disable compensation failure err=%v, want primary + restoreContent + compensation sentinel", err)
+	}
+	if searchReady.Load() || !runtime.featureTransitionFenced.Load() {
+		t.Fatalf("compensation failure left searchReady=%t fenced=%t, want false/true", searchReady.Load(), runtime.featureTransitionFenced.Load())
+	}
+	if _, err := runtime.RecoveryDowngradeReadiness(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("RecoveryDowngradeReadiness on fenced runtime err=%v, want ErrInvalidState", err)
+	}
+	if _, err := runtime.Readiness(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("Readiness on fenced runtime err=%v, want ErrInvalidState", err)
+	}
+	if _, err := runtime.RunInventory(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("RunInventory on fenced runtime err=%v, want ErrInvalidState", err)
+	}
+	if _, err := runtime.Acknowledge(context.Background(), 1, strings.Repeat("a", 64)); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("Acknowledge on fenced runtime err=%v, want ErrInvalidState", err)
+	}
+	if err := runtime.PrepareApplicationDowngrade(context.Background(), func() error { return nil }); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("PrepareApplicationDowngrade on fenced runtime err=%v, want ErrInvalidState", err)
+	}
+	if err := runtime.PrepareSchemaDown(context.Background(), func() error { return nil }); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("PrepareSchemaDown on fenced runtime err=%v, want ErrInvalidState", err)
+	}
+}
+
+func TestNonGlobalEnabledSettingCompensationFailureMarksContentAndSearchNotReady(t *testing.T) {
+	primaryErr := errors.New("FAKE_EXPORT_CONCURRENCY_POST_PERSIST_FAILURE_FOR_TEST_ONLY")
+	restoreErr := errors.New("FAKE_EXPORT_CONCURRENCY_RESTORE_FAILURE_FOR_TEST_ONLY")
+	events := []string{}
+	contentReady := &atomic.Bool{}
+	contentReady.Store(true)
+	searchReady := &atomic.Bool{}
+	searchReady.Store(true)
+	runtime := &Runtime{
+		contentManager: &runtimeContentManagerFake{events: &events},
+		transitioner:   &runtimeFeatureTransitionerFake{events: &events, enabled: true},
+		exportManager:  &featureTransitionEnableFailExportProbe{failure: primaryErr},
+		enablement:     readyGAEnablement(),
+		contentReady:   contentReady,
+		searchReady:    searchReady,
+	}
+
+	current := runtimeFoundationSettings(true)
+	effective := runtimeFoundationSettings(true)
+	effective["backup_assets.export.worker_concurrency"] = "3"
+	err := runtime.TransitionBackupAssetSettingsContextWithRestore(
+		context.Background(),
+		current,
+		map[string]string{"backup_assets.export.worker_concurrency": "3"},
+		effective,
+		backupasset.ExportConfig{WorkerConcurrency: 3},
+		func(context.Context) error { return nil },
+		func(context.Context) error { return restoreErr },
+	)
+	if !errors.Is(err, primaryErr) || !errors.Is(err, restoreErr) || !errors.Is(err, ErrFeatureTransitionCompensation) {
+		t.Fatalf("non-global-enabled setting compensation failure err=%v, want primary + restore + compensation sentinel", err)
+	}
+	if runtime.contentReady.Load() || searchReady.Load() || !runtime.featureTransitionFenced.Load() {
+		t.Fatalf("after compensation failure contentReady=%t searchReady=%t fenced=%t, want false/false/true", runtime.contentReady.Load(), searchReady.Load(), runtime.featureTransitionFenced.Load())
+	}
+	if !strings.Contains(strings.Join(events, ","), "content-ready-false") {
+		t.Fatalf("events=%v did not record content-ready-false on non-global-enabled compensation failure", events)
+	}
+}

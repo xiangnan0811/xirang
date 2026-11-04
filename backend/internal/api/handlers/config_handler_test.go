@@ -318,14 +318,14 @@ func TestConfigImportBlockedBackupAssetsEnabledDoesNotPersist(t *testing.T) {
 	}
 	svc := settings.NewService(db)
 	spy := &settingsTransitionSpy{}
-	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(settingsFeatureTransitionOnly{FeatureTransitioner: assetruntime.EnablementRuntime(
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(assetruntime.EnablementRuntime(
 		settingsEnablementReadiness{snapshot: ga.ReadinessSnapshot{
 			Class:             ga.InstallationExisting,
 			Status:            ga.ReadinessBlocked,
 			InventoryComplete: false,
 		}},
 		spy,
-	)})
+	).WithSettings(svc))
 	router := gin.New()
 	router.POST("/config/import", handler.Import)
 

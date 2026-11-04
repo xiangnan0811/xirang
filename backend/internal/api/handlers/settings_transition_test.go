@@ -7,14 +7,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/ga"
 	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/backupasset/publication"
 	assetruntime "xirang/backend/internal/backupasset/runtime"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
@@ -92,13 +95,6 @@ func (*settingsTransitionSpy) PrepareApplicationDowngrade(context.Context, func(
 func (*settingsTransitionSpy) PrepareSchemaDown(context.Context, func() error) error { return nil }
 
 var _ publication.FeatureTransitioner = (*settingsTransitionSpy)(nil)
-
-// settingsFeatureTransitionOnly keeps readiness-only fixtures on the public
-// admission contract. Production handlers receive the fully wired Runtime,
-// whose settings transition extension is exercised separately below.
-type settingsFeatureTransitionOnly struct {
-	publication.FeatureTransitioner
-}
 
 type settingsRuntimeSettingsTransitionSpy struct {
 	settingsTransitionSpy
@@ -976,7 +972,7 @@ func setupSettingsEnablementHandler(t *testing.T, snapshot ga.ReadinessSnapshot)
 	}
 	svc := settings.NewService(db)
 	spy := &settingsTransitionSpy{}
-	transitioner := settingsFeatureTransitionOnly{FeatureTransitioner: assetruntime.EnablementRuntime(settingsEnablementReadiness{snapshot: snapshot}, spy)}
+	transitioner := assetruntime.EnablementRuntime(settingsEnablementReadiness{snapshot: snapshot}, spy).WithSettings(svc)
 	handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(transitioner)
 	router := gin.New()
 	router.PUT("/settings", handler.BatchUpdate)
@@ -1072,5 +1068,526 @@ func TestSettingsDeleteFoundationOverrideRejectsInvalidFallbackWithoutMutation(t
 	}
 	if svc.GetEffective("backup_assets.lease_duration") != "5m" {
 		t.Fatalf("invalid fallback changed effective value to %q", svc.GetEffective("backup_assets.lease_duration"))
+	}
+}
+
+type threeEntrypointEnablementHarness struct {
+	db           *gorm.DB
+	svc          *settings.Service
+	runtime      *assetruntime.Runtime
+	router       *gin.Engine
+	repositoryID string
+	now          time.Time
+}
+
+func setupThreeEntrypointEnablementHarness(t *testing.T, snapshot ga.ReadinessSnapshot) *threeEntrypointEnablementHarness {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	now := time.Date(2026, 8, 24, 18, 0, 0, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(
+		&model.SystemSetting{},
+		&model.CredentialAuditEvent{},
+		&model.Node{},
+		&model.Policy{},
+		&model.Task{},
+		&model.SSHKey{},
+		&model.BackupRepository{},
+		&model.RecoveryPoint{},
+		&model.CatalogGeneration{},
+		&model.CatalogEntry{},
+		&model.WrappedDomainKey{},
+		&model.BackupAssetInstallation{},
+		&model.BackupAssetInventoryRun{},
+		&model.BackupAssetRepositoryConflict{},
+		&model.BackupAssetManagedHistoryLatch{},
+	); err != nil {
+		t.Fatalf("migrate three-entrypoint harness: %v", err)
+	}
+	initialStatus := snapshot.Status
+	switch initialStatus {
+	case "":
+		initialStatus = ga.ReadinessBlocked
+	case ga.ReadinessReady:
+		// Seed unknown so allowed enablement must exercise MaterializeReadiness to persist ready.
+		initialStatus = ga.ReadinessUnknown
+	}
+	initialClass := snapshot.Class
+	if initialClass == "" {
+		initialClass = ga.InstallationFresh
+	}
+	if err := db.Create(&model.BackupAssetInstallation{
+		ID:              strings.Repeat("b", 32),
+		Slot:            1,
+		Class:           string(initialClass),
+		Readiness:       string(initialStatus),
+		InventoryDigest: snapshot.InventoryDigest,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}).Error; err != nil {
+		t.Fatalf("seed installation: %v", err)
+	}
+	repoID := strings.Repeat("a", 32)
+	if err := db.Create(&model.BackupRepository{
+		ID:                 repoID,
+		ProviderKind:       string(backupasset.ProviderRsync),
+		DisplayName:        "test-repo",
+		VersionMode:        "native_snapshot",
+		Status:             string(backupasset.RepositoryOnline),
+		CapabilityRevision: 1,
+		ImmutabilityLevel:  "none",
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}).Error; err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	svc := settings.NewService(db)
+	inventory := ga.NewInventoryService(ga.InventoryDependencies{DB: db, Now: func() time.Time { return now }})
+	spy := &settingsTransitionSpy{}
+	runtime := buildThreeEntrypointRuntime(t, db, svc, inventory, snapshot, spy, now)
+	router := buildThreeEntrypointRouter(db, svc, runtime)
+	return &threeEntrypointEnablementHarness{
+		db:           db,
+		svc:          svc,
+		runtime:      runtime,
+		router:       router,
+		repositoryID: repoID,
+		now:          now,
+	}
+}
+
+func buildThreeEntrypointRuntime(
+	t *testing.T,
+	db *gorm.DB,
+	svc *settings.Service,
+	inventory *ga.InventoryService,
+	snapshot ga.ReadinessSnapshot,
+	transitioner publication.FeatureTransitioner,
+	now time.Time,
+) *assetruntime.Runtime {
+	t.Helper()
+	runtime := assetruntime.EnablementRuntime(settingsEnablementReadiness{snapshot: snapshot}, transitioner).
+		WithSettings(svc).
+		WithInventory(inventory)
+	ownership, err := catalog.NewOwnership(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring := backupasset.NewKeyring(db, func() time.Time { return now })
+	catalogService, err := catalog.NewService(catalog.ServiceDependencies{
+		DB:                db,
+		Ownership:         ownership,
+		Cursor:            catalog.NewCursorCodec(keyring, func() time.Time { return now }, 15*time.Minute),
+		Now:               func() time.Time { return now },
+		ReconcileInterval: 5 * time.Minute,
+		FeatureEnabled:    func() (bool, error) { return runtime.FeatureLive() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime.WithCatalogService(catalogService)
+}
+
+func buildThreeEntrypointRouter(db *gorm.DB, svc *settings.Service, runtime *assetruntime.Runtime) *gin.Engine {
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Set(middleware.CtxUsername, "admin")
+		c.Set(middleware.CtxRole, "admin")
+		c.Next()
+	})
+	settingsHandler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(runtime)
+	configHandler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(runtime)
+	assetHandler := NewBackupAssetHandler(runtime.CatalogService(), nil)
+	router.PUT("/settings", settingsHandler.BatchUpdate)
+	router.DELETE("/settings/:key", settingsHandler.Delete)
+	router.POST("/config/import", configHandler.Import)
+	router.GET("/backup-repositories/:id/recovery-points", assetHandler.ListRecoveryPoints)
+	return router
+}
+
+func (h *threeEntrypointEnablementHarness) invokeEnableEntrypoint(t *testing.T, entrypoint string) *httptest.ResponseRecorder {
+	t.Helper()
+	var request *http.Request
+	switch entrypoint {
+	case "put_settings":
+		request = httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{"backup_assets.enabled":"true"}`))
+		request.Header.Set("Content-Type", "application/json")
+	case "delete_override":
+		request = httptest.NewRequest(http.MethodDelete, "/settings/backup_assets.enabled", nil)
+	case "config_import":
+		request = httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(`{"nodes":[{"name":"imported-node","host":"10.0.0.10","port":22,"username":"root","auth_type":"password"}],"system_settings":[{"key":"backup_assets.enabled","value":"true"}]}`))
+		request.Header.Set("Content-Type", "application/json")
+	default:
+		t.Fatalf("unknown entrypoint %q", entrypoint)
+	}
+	response := httptest.NewRecorder()
+	h.router.ServeHTTP(response, request)
+	return response
+}
+
+func (h *threeEntrypointEnablementHarness) queryProtectedCatalogStatus() int {
+	request := httptest.NewRequest(http.MethodGet, "/backup-repositories/"+h.repositoryID+"/recovery-points", nil)
+	response := httptest.NewRecorder()
+	h.router.ServeHTTP(response, request)
+	return response.Code
+}
+
+func TestBackupAssetEnablementThreeEntrypointsEnforceSameGateAndProtectedRoute(t *testing.T) {
+	entrypoints := []string{"put_settings", "delete_override", "config_import"}
+	cases := []struct {
+		name      string
+		snapshot  ga.ReadinessSnapshot
+		wantAllow bool
+	}{
+		{
+			name: "blocked",
+			snapshot: ga.ReadinessSnapshot{
+				Class:             ga.InstallationFresh,
+				Status:            ga.ReadinessBlocked,
+				InventoryComplete: false,
+			},
+			wantAllow: false,
+		},
+		{
+			name: "existing_unacked",
+			snapshot: ga.ReadinessSnapshot{
+				Class:             ga.InstallationExisting,
+				Status:            ga.ReadinessReady,
+				InventoryComplete: true,
+				InventoryDigest:   "current-digest",
+				ExportRootValid:   true,
+				KeyDomainsReady:   true,
+			},
+			wantAllow: false,
+		},
+		{
+			name: "existing_stale_ack",
+			snapshot: ga.ReadinessSnapshot{
+				Class:              ga.InstallationExisting,
+				Status:             ga.ReadinessAcknowledged,
+				InventoryComplete:  true,
+				InventoryDigest:    "current-digest",
+				AcknowledgedDigest: "old-digest",
+				ExportRootValid:    true,
+				KeyDomainsReady:    true,
+			},
+			wantAllow: false,
+		},
+		{
+			name: "fresh_ready_without_ack",
+			snapshot: ga.ReadinessSnapshot{
+				Class:             ga.InstallationFresh,
+				Status:            ga.ReadinessReady,
+				InventoryComplete: true,
+				InventoryDigest:   "fresh-digest",
+				ExportRootValid:   true,
+				KeyDomainsReady:   true,
+			},
+			wantAllow: true,
+		},
+		{
+			name: "existing_acked_current_digest",
+			snapshot: ga.ReadinessSnapshot{
+				Class:              ga.InstallationExisting,
+				Status:             ga.ReadinessAcknowledged,
+				InventoryComplete:  true,
+				InventoryDigest:    "current-digest",
+				AcknowledgedDigest: "current-digest",
+				ExportRootValid:    true,
+				KeyDomainsReady:    true,
+			},
+			wantAllow: true,
+		},
+	}
+
+	for _, entrypoint := range entrypoints {
+		for _, tc := range cases {
+			t.Run(entrypoint+"/"+tc.name, func(t *testing.T) {
+				if entrypoint == "delete_override" {
+					t.Setenv("BACKUP_ASSETS_ENABLED", "true")
+				}
+				harness := setupThreeEntrypointEnablementHarness(t, tc.snapshot)
+				if entrypoint == "delete_override" {
+					if err := harness.svc.Update("backup_assets.enabled", "false"); err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				if live, err := harness.runtime.FeatureLive(); err != nil || live {
+					t.Fatalf("pre-enable FeatureLive=%t err=%v, want false", live, err)
+				}
+				if status := harness.queryProtectedCatalogStatus(); status != http.StatusServiceUnavailable {
+					t.Fatalf("pre-enable protected Catalog status=%d, want 503", status)
+				}
+
+				response := harness.invokeEnableEntrypoint(t, entrypoint)
+				var installation model.BackupAssetInstallation
+				if err := harness.db.Where("slot = ?", 1).Take(&installation).Error; err != nil {
+					t.Fatal(err)
+				}
+
+				if !tc.wantAllow {
+					assertBackupAssetEnablementBlockedConflict(t, response)
+					if got := harness.svc.GetEffective("backup_assets.enabled"); got != "false" {
+						t.Fatalf("rejected enablement effective=%q, want false", got)
+					}
+					if entrypoint == "delete_override" {
+						var row model.SystemSetting
+						if err := harness.db.Where("key = ?", "backup_assets.enabled").Take(&row).Error; err != nil || row.Value != "false" {
+							t.Fatalf("rejected delete_override did not retain false override row=%+v err=%v", row, err)
+						}
+					}
+					if entrypoint == "config_import" {
+						var nodeCount int64
+						if err := harness.db.Model(&model.Node{}).Count(&nodeCount).Error; err != nil || nodeCount != 0 {
+							t.Fatalf("rejected config_import persisted nodes=%d err=%v", nodeCount, err)
+						}
+					}
+					if installation.EnablementSucceededAt != nil {
+						t.Fatalf("rejected enablement stamped EnablementSucceededAt=%v", installation.EnablementSucceededAt)
+					}
+					if live, err := harness.runtime.FeatureLive(); err != nil || live {
+						t.Fatalf("rejected enablement FeatureLive=%t err=%v, want false", live, err)
+					}
+					if status := harness.queryProtectedCatalogStatus(); status != http.StatusServiceUnavailable {
+						t.Fatalf("rejected enablement protected Catalog status=%d, want 503", status)
+					}
+					return
+				}
+
+				if response.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+				}
+				if got := harness.svc.GetEffective("backup_assets.enabled"); got != "true" {
+					t.Fatalf("allowed enablement effective=%q, want true", got)
+				}
+				if entrypoint == "delete_override" {
+					var count int64
+					if err := harness.db.Model(&model.SystemSetting{}).Where("key = ?", "backup_assets.enabled").Count(&count).Error; err != nil || count != 0 {
+						t.Fatalf("allowed delete_override left override row count=%d err=%v", count, err)
+					}
+				}
+				if installation.EnablementSucceededAt == nil {
+					t.Fatal("allowed enablement did not stamp EnablementSucceededAt")
+				}
+				if installation.Readiness != string(ga.ReadinessReady) && installation.Readiness != string(ga.ReadinessAcknowledged) {
+					t.Fatalf("allowed enablement did not materialize stored readiness=%q", installation.Readiness)
+				}
+				if live, err := harness.runtime.FeatureLive(); err != nil || !live {
+					t.Fatalf("allowed enablement FeatureLive=%t err=%v, want true", live, err)
+				}
+				if status := harness.queryProtectedCatalogStatus(); status != http.StatusOK {
+					t.Fatalf("allowed enablement protected Catalog status=%d, want 200", status)
+				}
+			})
+		}
+	}
+}
+
+func TestBackupAssetEnablementThreeEntrypointsPostPersistFailureCompensationSuccessVsFailure(t *testing.T) {
+	readySnapshot := ga.ReadinessSnapshot{
+		Class:             ga.InstallationFresh,
+		Status:            ga.ReadinessReady,
+		InventoryComplete: true,
+		InventoryDigest:   "fresh-digest",
+		ExportRootValid:   true,
+		KeyDomainsReady:   true,
+	}
+	entrypoints := []string{"put_settings", "delete_override", "config_import"}
+
+	for _, entrypoint := range entrypoints {
+		t.Run(entrypoint+"/compensation_succeeds_restores_prior_state_and_allows_online_retry", func(t *testing.T) {
+			if entrypoint == "delete_override" {
+				t.Setenv("BACKUP_ASSETS_ENABLED", "true")
+			}
+			harness := setupThreeEntrypointEnablementHarness(t, readySnapshot)
+			if entrypoint == "delete_override" {
+				if err := harness.svc.Update("backup_assets.enabled", "false"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			stampErr := errors.New("FAKE_POST_PERSIST_STAMP_FAILURE_FOR_TEST_ONLY")
+			failStamp := &atomic.Bool{}
+			failStamp.Store(true)
+			callbackName := "fail_stamp_once_" + entrypoint
+			if err := harness.db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+				if tx.Statement != nil && tx.Statement.Table == "backup_asset_installations" {
+					if _, setsStamp := tx.Statement.Dest.(map[string]any)["enablement_succeeded_at"]; setsStamp && failStamp.CompareAndSwap(true, false) {
+						_ = tx.AddError(stampErr)
+					}
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = harness.db.Callback().Update().Remove(callbackName) })
+
+			response := harness.invokeEnableEntrypoint(t, entrypoint)
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), stampErr.Error()) {
+				t.Fatalf("response leaked internal error: %s", response.Body.String())
+			}
+			if got := harness.svc.GetEffective("backup_assets.enabled"); got != "false" {
+				t.Fatalf("compensated effective backup_assets.enabled=%q, want false", got)
+			}
+			if entrypoint == "delete_override" {
+				var row model.SystemSetting
+				if err := harness.db.Where("key = ?", "backup_assets.enabled").Take(&row).Error; err != nil || row.Value != "false" {
+					t.Fatalf("compensated delete_override did not restore false override row=%+v err=%v", row, err)
+				}
+			}
+			if entrypoint == "config_import" {
+				var nodeCount int64
+				if err := harness.db.Model(&model.Node{}).Count(&nodeCount).Error; err != nil || nodeCount != 0 {
+					t.Fatalf("compensated config_import did not rollback imported node count=%d err=%v", nodeCount, err)
+				}
+			}
+			var installation model.BackupAssetInstallation
+			if err := harness.db.Where("slot = ?", 1).Take(&installation).Error; err != nil {
+				t.Fatal(err)
+			}
+			if installation.EnablementSucceededAt != nil {
+				t.Fatalf("compensated failure left false EnablementSucceededAt=%v", installation.EnablementSucceededAt)
+			}
+			if live, err := harness.runtime.FeatureLive(); err != nil || live {
+				t.Fatalf("compensated failure FeatureLive=%t err=%v, want false", live, err)
+			}
+			if status := harness.queryProtectedCatalogStatus(); status != http.StatusServiceUnavailable {
+				t.Fatalf("compensated failure protected Catalog status=%d, want 503", status)
+			}
+
+			// Because compensation succeeded, the runtime is not fenced and can succeed online without restart.
+			retryResponse := harness.invokeEnableEntrypoint(t, entrypoint)
+			if retryResponse.Code != http.StatusOK {
+				t.Fatalf("online retry status=%d body=%s, want 200", retryResponse.Code, retryResponse.Body.String())
+			}
+			if got := harness.svc.GetEffective("backup_assets.enabled"); got != "true" {
+				t.Fatalf("online retry effective=%q, want true", got)
+			}
+			if live, err := harness.runtime.FeatureLive(); err != nil || !live {
+				t.Fatalf("online retry FeatureLive=%t err=%v, want true", live, err)
+			}
+			if status := harness.queryProtectedCatalogStatus(); status != http.StatusOK {
+				t.Fatalf("online retry protected Catalog status=%d, want 200", status)
+			}
+		})
+
+		t.Run(entrypoint+"/compensation_fails_fences_runtime_closed_until_restart", func(t *testing.T) {
+			if entrypoint == "delete_override" {
+				t.Setenv("BACKUP_ASSETS_ENABLED", "true")
+			}
+			harness := setupThreeEntrypointEnablementHarness(t, readySnapshot)
+			if entrypoint == "delete_override" {
+				if err := harness.svc.Update("backup_assets.enabled", "false"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			stampErr := errors.New("FAKE_FENCE_PRIMARY_STAMP_FAILURE_FOR_TEST_ONLY")
+			restoreErr := errors.New("FAKE_FENCE_RESTORE_COMPENSATION_FAILURE_FOR_TEST_ONLY")
+			failStamp := &atomic.Bool{}
+			failRestore := &atomic.Bool{}
+			failStamp.Store(true)
+			updateCallback := "fail_stamp_and_restore_update_" + entrypoint
+			createCallback := "fail_restore_create_" + entrypoint
+			deleteCallback := "fail_restore_delete_" + entrypoint
+			rawCallback := "fail_restore_raw_" + entrypoint
+			if err := harness.db.Callback().Update().Before("gorm:update").Register(updateCallback, func(tx *gorm.DB) {
+				if tx.Statement == nil {
+					return
+				}
+				if tx.Statement.Table == "backup_asset_installations" {
+					if _, setsStamp := tx.Statement.Dest.(map[string]any)["enablement_succeeded_at"]; setsStamp && failStamp.CompareAndSwap(true, false) {
+						failRestore.Store(true)
+						_ = tx.AddError(stampErr)
+					}
+				}
+				if failRestore.Load() && tx.Statement.Table == "system_settings" {
+					_ = tx.AddError(restoreErr)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := harness.db.Callback().Create().Before("gorm:create").Register(createCallback, func(tx *gorm.DB) {
+				if failRestore.Load() && tx.Statement != nil && tx.Statement.Table == "system_settings" {
+					_ = tx.AddError(restoreErr)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := harness.db.Callback().Delete().Before("gorm:delete").Register(deleteCallback, func(tx *gorm.DB) {
+				if failRestore.Load() && tx.Statement != nil && tx.Statement.Table == "system_settings" {
+					_ = tx.AddError(restoreErr)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := harness.db.Callback().Raw().Before("gorm:raw").Register(rawCallback, func(tx *gorm.DB) {
+				if failRestore.Load() && tx.Statement != nil && strings.Contains(tx.Statement.SQL.String(), "system_settings") {
+					_ = tx.AddError(restoreErr)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = harness.db.Callback().Update().Remove(updateCallback)
+				_ = harness.db.Callback().Create().Remove(createCallback)
+				_ = harness.db.Callback().Delete().Remove(deleteCallback)
+				_ = harness.db.Callback().Raw().Remove(rawCallback)
+			})
+
+			response := harness.invokeEnableEntrypoint(t, entrypoint)
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), stampErr.Error()) || strings.Contains(response.Body.String(), restoreErr.Error()) {
+				t.Fatalf("response leaked internal error: %s", response.Body.String())
+			}
+
+			// Persisted setting remained true because DB compensation failed, yet FeatureLive and protected routes MUST stay closed.
+			if got := harness.svc.GetEffective("backup_assets.enabled"); got != "true" {
+				t.Fatalf("unrestored effective backup_assets.enabled=%q, want true after restore failure", got)
+			}
+			if live, err := harness.runtime.FeatureLive(); err != nil || live {
+				t.Fatalf("fenced runtime FeatureLive=%t err=%v, want false", live, err)
+			}
+			if status := harness.queryProtectedCatalogStatus(); status != http.StatusServiceUnavailable {
+				t.Fatalf("fenced runtime protected Catalog status=%d, want 503", status)
+			}
+
+			// Clear all injected DB errors: online retry on the same fenced runtime MUST still fail closed until restart.
+			failRestore.Store(false)
+			retryResponse := harness.invokeEnableEntrypoint(t, entrypoint)
+			if retryResponse.Code != http.StatusInternalServerError {
+				t.Fatalf("online retry on fenced runtime status=%d body=%s, want 500", retryResponse.Code, retryResponse.Body.String())
+			}
+			if live, err := harness.runtime.FeatureLive(); err != nil || live {
+				t.Fatalf("after online retry fenced runtime FeatureLive=%t err=%v, want false", live, err)
+			}
+			if status := harness.queryProtectedCatalogStatus(); status != http.StatusServiceUnavailable {
+				t.Fatalf("after online retry protected Catalog status=%d, want 503", status)
+			}
+
+			// Constructing a new Runtime over the same DB (simulating process restart) clears the sticky fence and recovers.
+			inventory := ga.NewInventoryService(ga.InventoryDependencies{DB: harness.db, Now: func() time.Time { return harness.now }})
+			restartedRuntime := buildThreeEntrypointRuntime(
+				t, harness.db, harness.svc, inventory, readySnapshot, &settingsTransitionSpy{}, harness.now,
+			)
+			harness.runtime = restartedRuntime
+			harness.router = buildThreeEntrypointRouter(harness.db, harness.svc, restartedRuntime)
+
+			if live, err := harness.runtime.FeatureLive(); err != nil || !live {
+				t.Fatalf("restarted runtime FeatureLive=%t err=%v, want true", live, err)
+			}
+			if status := harness.queryProtectedCatalogStatus(); status != http.StatusOK {
+				t.Fatalf("restarted runtime protected Catalog status=%d, want 200", status)
+			}
+		})
 	}
 }

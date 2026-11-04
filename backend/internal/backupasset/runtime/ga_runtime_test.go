@@ -103,6 +103,25 @@ func TestTransitionFeatureExistingInstallRequiresCurrentAck(t *testing.T) {
 	if !stringsContain(events, "admission-transition-true") {
 		t.Fatalf("acked existing events=%v", events)
 	}
+
+	events = events[:0]
+	staleAcked := EnablementRuntime(gaStaticReadiness{snapshot: ga.ReadinessSnapshot{
+		Class:              ga.InstallationExisting,
+		Status:             ga.ReadinessAcknowledged,
+		InventoryComplete:  true,
+		InventoryDigest:    "current-digest",
+		AcknowledgedDigest: "old-digest",
+		ExportRootValid:    true,
+		KeyDomainsReady:    true,
+	}}, &runtimeFeatureTransitionerFake{events: &events})
+	staleAcked.contentManager = &runtimeContentManagerFake{events: &events}
+	err = staleAcked.TransitionFeature(context.Background(), true, func() error { return nil })
+	if !errors.Is(err, ga.ErrEnablementAckRequired) {
+		t.Fatalf("stale ack error=%v, want ErrEnablementAckRequired", err)
+	}
+	if stringsContain(events, "admission-transition-true") {
+		t.Fatalf("stale ack became managed events=%v", events)
+	}
 }
 
 func TestTransitionFeatureDisablementUsesExistingDrain(t *testing.T) {
