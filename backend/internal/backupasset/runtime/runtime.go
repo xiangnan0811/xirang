@@ -1774,7 +1774,7 @@ func (runtime *Runtime) RecoveryResults() *managedRecoveryResultFacade {
 	return runtime.recoveryResults
 }
 func (runtime *Runtime) RecoveryDowngradeReadiness(ctx context.Context) (RecoveryDowngradeReadiness, error) {
-	if runtime == nil || runtime.recoveryManager == nil {
+	if runtime == nil || runtime.recoveryManager == nil || runtime.featureTransitionFenced.Load() {
 		return RecoveryDowngradeReadiness{}, fmt.Errorf("%w: Recovery downgrade readiness unavailable", backupasset.ErrInvalidState)
 	}
 	return runtime.recoveryManager.DowngradeReadiness(ctx)
@@ -1784,7 +1784,7 @@ func (runtime *Runtime) ReplayRecoveryDowngradeReadiness(
 	ctx context.Context,
 	request RecoveryDowngradeReadinessRequest,
 ) (RecoveryDowngradeReadiness, bool, error) {
-	if runtime == nil || runtime.recoveryDowngrade == nil {
+	if runtime == nil || runtime.recoveryDowngrade == nil || runtime.featureTransitionFenced.Load() {
 		return RecoveryDowngradeReadiness{}, false, backupasset.ErrInvalidState
 	}
 	return runtime.recoveryDowngrade.ReplayRecoveryDowngradeReadiness(ctx, request)
@@ -1794,7 +1794,7 @@ func (runtime *Runtime) RequestRecoveryDowngradeReadiness(
 	ctx context.Context,
 	request RecoveryDowngradeReadinessRequest,
 ) (RecoveryDowngradeReadiness, error) {
-	if runtime == nil || runtime.recoveryDowngrade == nil {
+	if runtime == nil || runtime.recoveryDowngrade == nil || runtime.featureTransitionFenced.Load() {
 		return RecoveryDowngradeReadiness{}, backupasset.ErrInvalidState
 	}
 	return runtime.recoveryDowngrade.RequestRecoveryDowngradeReadiness(ctx, request)
@@ -2300,14 +2300,27 @@ func (runtime *Runtime) transitionBackupAssetSettingsContextWithRestore(
 			return fmt.Errorf("capture prior backup asset settings: %w", err)
 		}
 	}
-	restorePersisted := restore
-	if restorePersisted == nil {
-		restorePersisted = func(restoreCtx context.Context) error {
+	rawRestorePersisted := restore
+	if rawRestorePersisted == nil {
+		rawRestorePersisted = func(restoreCtx context.Context) error {
 			if overrideSnapshot == nil {
 				return nil
 			}
 			return runtime.settings.RestoreBackupAssetOverridesContext(restoreCtx, overrideSnapshot)
 		}
+	}
+	persistedRestored := false
+	var restorePersistedErr error
+	restorePersisted := func(restoreCtx context.Context) error {
+		if persistedRestored {
+			return nil
+		}
+		if err := rawRestorePersisted(restoreCtx); err != nil {
+			restorePersistedErr = errors.Join(restorePersistedErr, err)
+			return err
+		}
+		persistedRestored = true
+		return nil
 	}
 	var priorAdmissionMode publication.AdmissionMode
 	hasPriorAdmissionMode := false
@@ -2392,25 +2405,34 @@ func (runtime *Runtime) transitionBackupAssetSettingsContextWithRestore(
 	}
 	restoreRuntimeBundle := func(cleanupCtx context.Context) error {
 		priorTarget := foundationTransitionConfigs{Prior: configs.Prospective, Prospective: configs.Prior}
+		var restoreErr error
 		if hasPriorAdmissionMode {
-			return runtime.admission.transitionAdmissionMode(cleanupCtx, priorAdmissionMode, func() error {
+			restoreErr = runtime.admission.transitionAdmissionMode(cleanupCtx, priorAdmissionMode, func() error {
+				return transitionBundle(cleanupCtx, priorTarget, restorePersisted, restorePersisted)
+			})
+		} else {
+			restoreErr = runtime.transitioner.TransitionFeature(cleanupCtx, configs.Prior.Enabled, func() error {
 				return transitionBundle(cleanupCtx, priorTarget, restorePersisted, restorePersisted)
 			})
 		}
-		return runtime.transitioner.TransitionFeature(cleanupCtx, configs.Prior.Enabled, func() error {
-			return transitionBundle(cleanupCtx, priorTarget, restorePersisted, restorePersisted)
-		})
+		return errors.Join(restoreErr, restorePersistedErr)
 	}
 	if _, changesGlobalEnabled := overlay["backup_assets.enabled"]; changesGlobalEnabled {
 		return runtime.transitionFeatureWithOperationContextAndRestore(
 			opCtx, configs, transitionExport, restoreRuntimeBundle,
 		)
 	}
-	return runtime.transitioner.TransitionFeature(opCtx, enabled, transitionExport)
+	if err := runtime.transitioner.TransitionFeature(opCtx, enabled, transitionExport); err != nil {
+		if restorePersistedErr != nil && runtime.contentManager != nil {
+			runtime.contentManager.SetReady(false)
+		}
+		return runtime.joinFeatureTransitionFailure(err, restorePersistedErr)
+	}
+	return nil
 }
 
 func (runtime *Runtime) PrepareApplicationDowngrade(ctx context.Context, callback func() error) error {
-	if runtime == nil || runtime.transitioner == nil || runtime.contentManager == nil {
+	if runtime == nil || runtime.transitioner == nil || runtime.contentManager == nil || runtime.featureTransitionFenced.Load() {
 		return fmt.Errorf("%w: backup asset application downgrade unavailable", backupasset.ErrInvalidState)
 	}
 	runtime.contentManager.SetReady(false)
@@ -2431,7 +2453,7 @@ func (runtime *Runtime) PrepareApplicationDowngrade(ctx context.Context, callbac
 }
 
 func (runtime *Runtime) PrepareSchemaDown(ctx context.Context, callback func() error) error {
-	if runtime == nil || runtime.transitioner == nil || runtime.contentManager == nil {
+	if runtime == nil || runtime.transitioner == nil || runtime.contentManager == nil || runtime.featureTransitionFenced.Load() {
 		return fmt.Errorf("%w: backup asset schema down unavailable", backupasset.ErrInvalidState)
 	}
 	runtime.contentManager.SetReady(false)

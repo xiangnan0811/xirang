@@ -77,6 +77,8 @@ Export 下载取消回归在释放 writer 前等待读取 context 确实取消�
 
 上述 Export 真实归档、Expat 安全更新和任务期限与交付取消回归验证的完整说明归档于 CHANGELOG `0.73.10` 版本节；发行 PR 与正式 GitHub Release 正文须保留三部分全部升级及回退边界。
 
+备份资产启用与切换恢复围栏修复的发行说明须包含内层持久化补偿去重、内层 `restore` 失败向 `ErrFeatureTransitionCompensation` 与 `featureTransitionFenced` 的传播、补偿失败先置 `contentReady`／`searchReady` 未就绪、受围栏态拒绝 GA 就绪／盘点／确认及降级就绪／准备，以及 `ga.EnablementGate` 与 `settingsFeatureTransitionOnly` 测试包装退役。明确直接设置、删除覆盖值恢复环境默认、配置导入三入口执行同一门禁，区分补偿成功在线恢复与补偿失败保持关闭且须重启恢复；保留 `EvaluateEnablement`、`DatabaseReadiness` 和 `forbiddenGAMutations` 保护。该修复无新增公开 API、运行时配置或 schema migration，不覆盖既有迁移降级限制；新逻辑在新版 Core 后续切换生效，回退会恢复重复回滚与围栏遗漏缺陷。
+
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
 
 Release Please 自动插入版本标题时可能将原有升级说明留在 `Unreleased`，生成的 PR 正文也可能只有提交摘要。此时原样移动 CHANGELOG 中已审阅的说明，并同步 PR 正文的目标版本节；两处都保留完整风险边界，再提交补充变更。

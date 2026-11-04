@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -129,43 +128,6 @@ func optionalReadinessProbe(ctx context.Context, probe func(context.Context) (bo
 	return probe(ctx)
 }
 
-type EnablementGateDependencies struct {
-	Readiness ReadinessSource
-	Inner     publication.FeatureTransitioner
-}
-
-type EnablementGate struct {
-	readiness ReadinessSource
-	inner     publication.FeatureTransitioner
-}
-
-func NewEnablementGate(dependencies EnablementGateDependencies) *EnablementGate {
-	return &EnablementGate{readiness: dependencies.Readiness, inner: dependencies.Inner}
-}
-
-func (gate *EnablementGate) TransitionFeature(ctx context.Context, enabled bool, persist func() error) error {
-	if gate == nil || gate.inner == nil {
-		return fmt.Errorf("enablement gate unavailable")
-	}
-	if enabled {
-		if err := gate.AuthorizeEnable(ctx); err != nil {
-			return err
-		}
-	}
-	return gate.inner.TransitionFeature(ctx, enabled, persist)
-}
-
-func (gate *EnablementGate) AuthorizeEnable(ctx context.Context) error {
-	if gate == nil || gate.readiness == nil {
-		return fmt.Errorf("%w: readiness unavailable", ErrEnablementBlocked)
-	}
-	snapshot, err := gate.readiness.CurrentReadiness(ctx)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrEnablementBlocked, err)
-	}
-	return EvaluateEnablement(snapshot)
-}
-
 func EvaluateEnablement(snapshot ReadinessSnapshot) error {
 	if !snapshot.InventoryComplete || !snapshot.ExportRootValid || !snapshot.KeyDomainsReady {
 		return ErrEnablementBlocked
@@ -191,19 +153,3 @@ func EvaluateEnablement(snapshot ReadinessSnapshot) error {
 		return ErrEnablementBlocked
 	}
 }
-
-func (gate *EnablementGate) PrepareApplicationDowngrade(ctx context.Context, downgrade func() error) error {
-	if gate == nil || gate.inner == nil {
-		return fmt.Errorf("enablement gate unavailable")
-	}
-	return gate.inner.PrepareApplicationDowngrade(ctx, downgrade)
-}
-
-func (gate *EnablementGate) PrepareSchemaDown(ctx context.Context, down func() error) error {
-	if gate == nil || gate.inner == nil {
-		return fmt.Errorf("enablement gate unavailable")
-	}
-	return gate.inner.PrepareSchemaDown(ctx, down)
-}
-
-var _ publication.FeatureTransitioner = (*EnablementGate)(nil)
