@@ -55,7 +55,7 @@ Task executor 到 Provider 的映射只能在 `backupasset/repository/binding.go
 
 ## Rsync 版本化
 
-legacy mutable 不自动升级；管理员暂停任务后显式选择 `versioned_hardlink` 或 `versioned_full_copy` 并运行预检。首次合法预检创建或重验 `<target>.xirang-rsync-v1` 受管根（`repository.json`、`staging`、`points`），并验证挂载、硬链接、原子提交、容量、inode 和路径安全；硬链接不满足时不得自动降级。激活重验只读打开既有受管根与控制目录，受管根或控制目录缺失、移走或标记漂移均返回 409 且不得重建目录或修改持久状态。
+legacy mutable 不自动升级；管理员暂停任务后显式选择 `versioned_hardlink` 或 `versioned_full_copy` 并运行预检。预检在创建或重验 `<target>.xirang-rsync-v1` 受管根（`repository.json`、`staging`、`points`）前，必须先只读校验旧目标与来源路径均存在且与候选受管根词法及 VFS 树分离；重叠或已移走的来源直接返回 409 且不得重建原路径或写入控制文件。合法分离后才创建或重验独立受管根，并验证挂载、硬链接、原子提交、容量、inode 和路径安全；硬链接不满足时不得自动降级。激活重验只读打开既有受管根与控制目录，受管根或控制目录缺失、移走或标记漂移均返回 409 且不得重建目录或修改持久状态。
 
 硬链接模式先传输保持源硬链接分组的完整 staging 树，再按内容、元数据和 inode 分组兼容性复用上一 committed 点，不能用 `--link-dest` 把旧链接关系带入新点。新建/断开硬链接关系必须准确保留；不兼容组用独立文件，前一点不能被修改。容量和流量按完整 staging 计算。
 
@@ -250,7 +250,7 @@ Restic anomaly 在成功备份后的有界异步路径执行，不改传输结�
 
 变更边界须覆盖：registry 未知/重复/缺端口；400/404/409/501/503/500 与隐私扫描；probe-first 无写入、绑定漂移、显式替换、断连/重连 revision、事务回滚与唯一性竞争；本地/SFTP traversal、symlink/race、特殊文件、root rename、Range、限额、取消和 close 错误；真实命令替身的严格 argv/schema/secret stdin 与无越权变更。
 
-发布回归覆盖 Restic 最终 summary/tag/original、stored reconstruction、fence/deadline/backoff/worker shutdown、共享仓库隔离、Repository-only latch、所有 legacy 消费者；Rsync staged 硬链接关系和无旧点修改、预检后受管根移走/控制目录缺失的零磁盘副作用 409 拒绝、迁移 CAS 超安全整数及同窗 activation→rollback；Rclone 所有合法/非法摘要组合及 safe projection。双引擎迁移、必需真实 PostgreSQL、race/重复测试不得以静态文本或 SQLite 成功替代。
+发布回归覆盖 Restic 最终 summary/tag/original、stored reconstruction、fence/deadline/backoff/worker shutdown、共享仓库隔离、Repository-only latch、所有 legacy 消费者；Rsync staged 硬链接关系和无旧点修改、首次预检前旧目标/来源路径分离及预检后受管根移走/控制目录缺失的零磁盘副作用 409 拒绝、迁移 CAS 超安全整数及同窗 activation→rollback；Rclone 所有合法/非法摘要组合及 safe projection。双引擎迁移、必需真实 PostgreSQL、race/重复测试不得以静态文本或 SQLite 成功替代。
 
 Provider 回归还须单独证明固定版本正例与旧版/新版/prerelease 否定、动态配置/并发限额变更、未知 Range 能力拒绝、可变 observed head 原位更新，以及所有 stream 的 close 错误和取消能到达最终 owner。
 

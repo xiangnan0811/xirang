@@ -194,6 +194,60 @@ func TestValidateRsyncManagedRootSeparationRejectsLegacyOverlap(t *testing.T) {
 	}
 }
 
+func TestValidateRsyncManagedRootBootstrapSeparationBeforeAndAfterBootstrap(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("managed Rsync tree validation is Linux-only")
+	}
+	parent := t.TempDir()
+	legacyTarget := filepath.Join(parent, "legacy")
+	source := filepath.Join(parent, "source")
+	managedRoot := filepath.Join(parent, "legacy.xirang-rsync-v1")
+	for _, dir := range []string{legacyTarget, source} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, overlapping := range []string{
+		managedRoot,
+		parent,
+		filepath.Join(managedRoot, "sub"),
+		filepath.Join(parent, "missing"),
+	} {
+		if err := ValidateRsyncManagedRootBootstrapSeparation(context.Background(), managedRoot, overlapping); err == nil {
+			t.Fatalf("ValidateRsyncManagedRootBootstrapSeparation accepted %q before bootstrap", overlapping)
+		}
+		if _, err := os.Lstat(managedRoot); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("ValidateRsyncManagedRootBootstrapSeparation created %q: %v", managedRoot, err)
+		}
+	}
+
+	for _, separate := range []string{legacyTarget, source} {
+		if err := ValidateRsyncManagedRootBootstrapSeparation(context.Background(), managedRoot, separate); err != nil {
+			t.Fatalf("ValidateRsyncManagedRootBootstrapSeparation rejected separate %q before bootstrap: %v", separate, err)
+		}
+		if _, err := os.Lstat(managedRoot); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("ValidateRsyncManagedRootBootstrapSeparation created %q for %q: %v", managedRoot, separate, err)
+		}
+	}
+
+	if _, err := BootstrapRsyncManagedRoot(context.Background(), RsyncManagedRootBootstrapRequest{
+		ManagedRoot: managedRoot, RepositoryID: strings.Repeat("a", 32), MarkerKey: bytes.Repeat([]byte{0x42}, 32), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, overlapping := range []string{managedRoot, parent, filepath.Join(managedRoot, "staging")} {
+		if err := ValidateRsyncManagedRootBootstrapSeparation(context.Background(), managedRoot, overlapping); err == nil {
+			t.Fatalf("ValidateRsyncManagedRootBootstrapSeparation accepted %q after bootstrap", overlapping)
+		}
+	}
+	for _, separate := range []string{legacyTarget, source} {
+		if err := ValidateRsyncManagedRootBootstrapSeparation(context.Background(), managedRoot, separate); err != nil {
+			t.Fatalf("ValidateRsyncManagedRootBootstrapSeparation rejected separate %q after bootstrap: %v", separate, err)
+		}
+	}
+}
+
 func TestRsyncTreePreflighterPreflightManagedRootUsesOnlyTrustedRootPath(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("managed Rsync tree preflight is Linux-only")
