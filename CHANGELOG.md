@@ -9,6 +9,13 @@
 - 移除无生产消费者的 `ga.EnablementGate` 测试包装及 `handlers` 测试中剥离上下文切换接口的 `settingsFeatureTransitionOnly` 替身；直接设置（`PUT /api/v1/settings`）、删除覆盖值恢复环境默认（`DELETE /api/v1/settings/:key`）与配置导入（`POST /api/v1/config/import`）三个真实入口统一直连 `*runtime.Runtime` 验证同一门禁、持久配置、`FeatureLive`、受保护 Catalog 入口及补偿恢复行为。保留 `ga.EvaluateEnablement`、`DatabaseReadiness` 与 `forbiddenGAMutations` 禁止修改 Provider 数据的保护。
 - 无新增公开 API、运行时配置或数据库迁移，不改写已发布迁移或历史数据；既有备份资产启用就绪、摘要确认、迁移 `000071` 降级保护与 Core／Worker 配套要求继续适用。升级前保全数据库、匹配密钥、配置和备份副本，排空旧 Core 在途设置切换后换版；新逻辑仅在新版 Core 后续设置切换与就绪检查中生效，不能在线解除旧进程已触发的粘性围栏。回退旧版 Core 会恢复重复回滚与补偿失败后的围栏遗漏缺陷。
 
+## [0.73.11](https://github.com/xiangnan0811/xirang/compare/v0.73.10...v0.73.11) (2026-11-04)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 收敛备份资产启用门禁与切换恢复围栏 ([#675](https://github.com/xiangnan0811/xirang/issues/675)) ([63166b0](https://github.com/xiangnan0811/xirang/commit/63166b020f60b88cf45c00d00bbadf32c4be7eae))
+
 ## [0.73.10](https://github.com/xiangnan0811/xirang/compare/v0.73.9...v0.73.10) (2026-11-03)
 
 
