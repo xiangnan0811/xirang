@@ -8,6 +8,10 @@ func bootstrapRsyncManagedRoot(context.Context, RsyncManagedRootBootstrapRequest
 	return RsyncManagedRootBootstrapEvidence{}, errRsyncManagedTreeUnsupported
 }
 
+func revalidateRsyncManagedRoot(context.Context, RsyncManagedRootBootstrapRequest) (RsyncManagedRootBootstrapEvidence, error) {
+	return RsyncManagedRootBootstrapEvidence{}, errRsyncManagedTreeUnsupported
+}
+
 func validateRsyncManagedRootSeparation(context.Context, string, string) error {
 	return errRsyncManagedTreeUnsupported
 }

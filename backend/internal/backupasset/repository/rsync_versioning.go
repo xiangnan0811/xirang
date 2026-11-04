@@ -755,10 +755,10 @@ func (service *Service) revalidateRsyncVersioningPreflight(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	bootstrap, err := provider.BootstrapRsyncManagedRoot(ctx, provider.RsyncManagedRootBootstrapRequest{
-		ManagedRoot: plan.managedRoot, RepositoryID: plan.repository.ID, MarkerKey: markerKey, CreatedAt: service.utcNow(),
+	bootstrap, err := provider.RevalidateRsyncManagedRoot(ctx, provider.RsyncManagedRootBootstrapRequest{
+		ManagedRoot: plan.managedRoot, RepositoryID: plan.repository.ID, MarkerKey: markerKey,
 	})
-	if err != nil || bootstrap.RepositoryMarkerDigest != record.evidence.RepositoryMarkerDigest ||
+	if err != nil || bootstrap.Created || bootstrap.RepositoryMarkerDigest != record.evidence.RepositoryMarkerDigest ||
 		bootstrap.ManagedRootIdentityDigest != record.evidence.ManagedRootIdentityDigest {
 		return fmt.Errorf("%w: Rsync versioning root drift", backupasset.ErrConflict)
 	}

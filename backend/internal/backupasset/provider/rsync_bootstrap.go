@@ -70,6 +70,25 @@ func BootstrapRsyncManagedRoot(ctx context.Context, request RsyncManagedRootBoot
 	return bootstrapRsyncManagedRoot(ctx, cloneRsyncManagedRootBootstrapRequest(request))
 }
 
+// RevalidateRsyncManagedRoot opens an already-bootstrapped managed root and
+// its required control directories read-only, then verifies its authenticated
+// ownership marker and descriptor identity without creating any directories or
+// marker files on disk.
+func RevalidateRsyncManagedRoot(ctx context.Context, request RsyncManagedRootBootstrapRequest) (RsyncManagedRootBootstrapEvidence, error) {
+	if ctx == nil || ctx.Err() != nil {
+		if ctx != nil {
+			return RsyncManagedRootBootstrapEvidence{}, ctx.Err()
+		}
+		return RsyncManagedRootBootstrapEvidence{}, fmt.Errorf("%w: managed Rsync root revalidation context is required", backupasset.ErrInvalidState)
+	}
+	managedRoot, err := normalizeRsyncManagedRoot(request.ManagedRoot)
+	if err != nil || backupasset.ValidateOpaqueID(request.RepositoryID) != nil || !validRsyncTreeMarkerKey(request.MarkerKey) {
+		return RsyncManagedRootBootstrapEvidence{}, fmt.Errorf("%w: invalid managed Rsync root revalidation request", backupasset.ErrInvalidState)
+	}
+	request.ManagedRoot = managedRoot
+	return revalidateRsyncManagedRoot(ctx, cloneRsyncManagedRootBootstrapRequest(request))
+}
+
 // ValidateRsyncManagedRootSeparation proves that another local directory does
 // not overlap a managed root. Both inputs are process-local and are never
 // returned or serialized by this package.

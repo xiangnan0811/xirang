@@ -57,6 +57,32 @@ func bootstrapRsyncManagedRoot(ctx context.Context, request RsyncManagedRootBoot
 	}, nil
 }
 
+func revalidateRsyncManagedRoot(ctx context.Context, request RsyncManagedRootBootstrapRequest) (RsyncManagedRootBootstrapEvidence, error) {
+	if err := ctx.Err(); err != nil {
+		return RsyncManagedRootBootstrapEvidence{}, err
+	}
+	tree, err := openRsyncManagedTreeReadOnly(request.ManagedRoot)
+	if err != nil {
+		return RsyncManagedRootBootstrapEvidence{}, err
+	}
+	defer func() { _ = tree.Close() }()
+
+	marker, err := tree.readRepositoryMarker()
+	if err != nil {
+		return RsyncManagedRootBootstrapEvidence{}, err
+	}
+	if err := decodeRsyncManagedRootMarkerV1(marker, request); err != nil {
+		return RsyncManagedRootBootstrapEvidence{}, err
+	}
+	if err := tree.VerifyRootIdentity(); err != nil {
+		return RsyncManagedRootBootstrapEvidence{}, err
+	}
+	markerDigest := rsyncTreeDigest(marker)
+	return RsyncManagedRootBootstrapEvidence{
+		Created: false, RepositoryMarkerDigest: markerDigest, ManagedRootIdentityDigest: tree.identityDigest(markerDigest),
+	}, nil
+}
+
 func validateRsyncManagedRootSeparation(ctx context.Context, managedRoot, otherRoot string) error {
 	if err := ctx.Err(); err != nil {
 		return err
