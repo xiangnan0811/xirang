@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.13](https://github.com/xiangnan0811/xirang/compare/v0.73.12...v0.73.13) (2026-11-04)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** validate Rsync versioning path separation before managed root bootstrap ([#679](https://github.com/xiangnan0811/xirang/issues/679)) ([4f69bc0](https://github.com/xiangnan0811/xirang/commit/4f69bc08edeef5a2608f2959f1558fc814d076ff))
+
 ## [0.73.12](https://github.com/xiangnan0811/xirang/compare/v0.73.11...v0.73.12) (2026-11-04)
 
 
