@@ -4453,39 +4453,6 @@ func (coordinator *WorkerCoordinator) ProjectOperationVerification(
 	return evidence, nil
 }
 
-// projectPendingOperationMismatch preserves the legacy focused projection
-// boundary while delegating to the closed unresolved-outcome product.
-func (coordinator *WorkerCoordinator) projectPendingOperationMismatch(
-	ctx context.Context,
-	claim RecoveryWorkerClaim,
-	jobItemID string,
-	writeResult TargetWriteResult,
-	observation TargetVerifyObservation,
-	verifiedAt time.Time,
-) (model.BackupAssetRecoveryEvidence, error) {
-	if coordinator == nil || coordinator.db == nil || !validRecoveryWorkerClaim(claim) ||
-		!validOpaqueID(jobItemID) || verifiedAt.IsZero() {
-		return model.BackupAssetRecoveryEvidence{}, ErrInvalidRecoveryWorker
-	}
-	handoff, err := coordinator.loadOrdinaryOperationHandoff(ctx, claim, jobItemID)
-	if err != nil {
-		return model.BackupAssetRecoveryEvidence{}, err
-	}
-	category := UnresolvedOperationVerificationMismatch
-	if writeResult.TargetRevision != observation.ObservedRevision {
-		category = UnresolvedOperationRevisionDisagreement
-	}
-	result := ordinaryOperationResult{
-		writeResult: writeResult, observation: observation,
-		writeResultReturned: true, observationReturned: true,
-		unresolvedCategory: category,
-	}
-	return coordinator.projectPendingOperationUnresolved(
-		ctx, claim, handoff, handoff.job.TargetChainRevision, result,
-		SourceRevalidationMatched, verifiedAt,
-	)
-}
-
 func (coordinator *WorkerCoordinator) projectPendingOperationUnresolved(
 	ctx context.Context,
 	claim RecoveryWorkerClaim,
