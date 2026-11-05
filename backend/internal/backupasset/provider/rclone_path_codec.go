@@ -57,29 +57,6 @@ func DecodeRcloneV1744S3Path(physical string) (string, error) {
 	return logical, nil
 }
 
-func ValidateRcloneV1744S3PathSet(logicalPaths []string) (map[string]string, error) {
-	if len(logicalPaths) == 0 {
-		return map[string]string{}, nil
-	}
-	mapping := make(map[string]string, len(logicalPaths))
-	physicalOwners := make(map[string]string, len(logicalPaths))
-	for _, logical := range logicalPaths {
-		if _, exists := mapping[logical]; exists {
-			return nil, invalidRcloneV1744Path()
-		}
-		physical, err := EncodeRcloneV1744S3Path(logical)
-		if err != nil {
-			return nil, err
-		}
-		if owner, exists := physicalOwners[physical]; exists && owner != logical {
-			return nil, invalidRcloneV1744Path()
-		}
-		mapping[logical] = physical
-		physicalOwners[physical] = logical
-	}
-	return mapping, nil
-}
-
 func encodeRcloneV1744S3PathUnchecked(logical string) (string, error) {
 	if !validRcloneV1744PathShape(logical) {
 		return "", invalidRcloneV1744Path()
