@@ -900,27 +900,36 @@ func TestRunnerTreatsOnlyClosedNonzeroExitAsSuccessfulResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := writeFakeTool(t, root, `
-printf '%s: Finding.Marker FOUND\n' "$XIRANG_INPUT_PATH"
-exit 1
+if grep -q 'FAKE_MALWARE_MARKER_FOR_TEST_ONLY' "$XIRANG_INPUT_PATH"; then
+  printf '%s: Finding.Marker FOUND\n' "$XIRANG_INPUT_PATH"
+  exit 1
+fi
+exit 2
 `)
 	runner := newRunnerForTest(RunnerConfig{
 		WorkspaceRoot: root, StdoutLimit: 16 << 10, StderrLimit: 16 << 10, GracePeriod: 100 * time.Millisecond,
 	}, func(ExecutableID) (string, error) { return tool, nil })
-	invocation := ToolInvocation{
-		ExecutableID: ExecutableClamScan, ArgProfile: ArgsClamScan, InputMode: ToolInputPath,
-		OutputSpec:       ClosedOutputSpec{MaximumFiles: 1, AllowedNames: []string{"metadata.json"}},
-		Limits:           testToolLimits(time.Second, 1024, 1024),
-		SuccessExitCodes: []int{0, 1},
+	profile, ok := capabilityspec.Lookup(capabilityspec.CapabilityMalwareScan, capabilityspec.ProfileSignatureScanV1, false)
+	if !ok {
+		t.Fatal("malware profile missing")
 	}
-	result, err := runner.RunInput(context.Background(), invocation, strings.NewReader("sample"))
+	invocation, err := BuildInvocation(profile, ToolParameters{MediaType: "application/octet-stream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := readCapabilityFixture(t, "malware-positive.txt")
+	result, err := runner.RunInput(context.Background(), invocation, bytes.NewReader(fixture))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.ExitCode != 1 || result.Stdout != "input.bin: Finding.Marker FOUND\n" {
 		t.Fatalf("closed positive result=%+v", result)
 	}
+	if _, err := runner.RunInput(context.Background(), invocation, strings.NewReader("scanner error payload")); !errors.Is(err, ErrToolFailed) {
+		t.Fatalf("scanner error exit code=%v, want ErrToolFailed", err)
+	}
 	invocation.SuccessExitCodes = []int{0}
-	if _, err := runner.RunInput(context.Background(), invocation, strings.NewReader("sample")); !errors.Is(err, ErrToolFailed) {
+	if _, err := runner.RunInput(context.Background(), invocation, bytes.NewReader(fixture)); !errors.Is(err, ErrToolFailed) {
 		t.Fatalf("unapproved nonzero exit error=%v", err)
 	}
 }
