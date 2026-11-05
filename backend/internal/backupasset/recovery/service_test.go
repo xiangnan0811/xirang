@@ -8882,3 +8882,21 @@ func (fake *recoveryReconciliationFindingSinkFake) NotifyRecoveryReconciliation(
 	fake.alerts = append(fake.alerts, alert)
 	return fake.err
 }
+
+func (result RecoveryAuthorizationResult) sameDurableEffect(other RecoveryAuthorizationResult) bool {
+	return result.ReceiptID == other.ReceiptID && result.PlanID == other.PlanID &&
+		result.GrantID == other.GrantID && result.GrantCategory == other.GrantCategory &&
+		result.GrantBindingDigest == other.GrantBindingDigest &&
+		authorizationTimesEqual(result.GrantExpiresAt, other.GrantExpiresAt) &&
+		result.GrantStatus == other.GrantStatus && result.JobID == other.JobID &&
+		result.AttemptID == other.AttemptID && result.SourceLeaseID == other.SourceLeaseID &&
+		result.NodeLeaseID == other.NodeLeaseID && result.NodeLeaseFence == other.NodeLeaseFence &&
+		result.PlanTransitionRevision == other.PlanTransitionRevision
+}
+
+func authorizationTimesEqual(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
