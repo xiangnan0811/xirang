@@ -1253,7 +1253,11 @@ func TestProductionMalwarePositiveIsSuccessfulSanitizedFinding(t *testing.T) {
 	}
 	var result capabilityspec.MalwareResult
 	if err := json.Unmarshal(metadata, &result); err != nil || result.Validate() != nil ||
-		result.Result != capabilityspec.ScanFinding || result.ProcessingOutcome() != capabilityspec.OutcomeSucceeded {
+		result.SchemaVersion != 1 || result.EngineFamily != "clamav" ||
+		result.SignatureBundleFingerprint != strings.Repeat("a", 64) ||
+		result.Result != capabilityspec.ScanFinding || result.FindingCategory != "malware" ||
+		result.ScannedBytes != int64(len(source)) || result.Completeness != capabilityspec.CoverageComplete ||
+		result.ProcessingOutcome() != capabilityspec.OutcomeSucceeded {
 		t.Fatalf("invalid malware finding=%+v err=%v", result, err)
 	}
 }
@@ -1262,6 +1266,7 @@ func TestProductionMalwareResultParserIsClosedAndFailSafe(t *testing.T) {
 	tests := []struct {
 		name      string
 		result    workerCapabilities.ToolResult
+		runErr    error
 		wantError error
 		wantState capabilityspec.ScanState
 	}{
@@ -1276,6 +1281,9 @@ func TestProductionMalwareResultParserIsClosedAndFailSafe(t *testing.T) {
 				ExitCode: 1, Stdout: "input.bin: Heuristics.Limits.Exceeded.MaxFileSize FOUND\n",
 			}, wantError: workerCapabilities.ErrInputLimit,
 		},
+		{name: "runner tool failed", runErr: workerCapabilities.ErrToolFailed, wantError: workerCapabilities.ErrToolFailed},
+		{name: "runner tool timeout", runErr: workerCapabilities.ErrToolTimeout, wantError: workerCapabilities.ErrToolTimeout},
+		{name: "runner workspace unavailable", runErr: workerCapabilities.ErrSecureWorkspaceUnavailable, wantError: workerCapabilities.ErrSecureWorkspaceUnavailable},
 		{name: "clean warning", result: workerCapabilities.ToolResult{Stdout: "WARNING: incomplete scan\n"}, wantError: workerCapabilities.ErrInvalidToolOutput},
 		{
 			name: "finding warning", result: workerCapabilities.ToolResult{
@@ -1305,7 +1313,7 @@ func TestProductionMalwareResultParserIsClosedAndFailSafe(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			capability := productionMalwareCapabilityForTest(t, &productionToolRunnerFake{result: testCase.result})
+			capability := productionMalwareCapabilityForTest(t, &productionToolRunnerFake{result: testCase.result, err: testCase.runErr})
 			source := []byte("bounded test input")
 			artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 				Parameters: validWorkDescriptor().Parameters,
@@ -1325,8 +1333,134 @@ func TestProductionMalwareResultParserIsClosedAndFailSafe(t *testing.T) {
 			}
 			payload, readErr := io.ReadAll(artifacts[0].Content)
 			var result capabilityspec.MalwareResult
-			if readErr != nil || json.Unmarshal(payload, &result) != nil || result.Validate() != nil || result.Result != testCase.wantState {
+			if readErr != nil || json.Unmarshal(payload, &result) != nil || result.Validate() != nil ||
+				result.Result != testCase.wantState || result.ProcessingOutcome() != capabilityspec.OutcomeSucceeded ||
+				(testCase.wantState == capabilityspec.ScanFinding && result.FindingCategory != "malware") {
 				t.Fatalf("canonical malware result=%+v payload=%q readErr=%v", result, payload, readErr)
+			}
+		})
+	}
+}
+
+func TestWorkerRunnerMalwareScanReportsFindingAndFailsClosedOnScannerErrors(t *testing.T) {
+	bundleFingerprint := strings.Repeat("a", 64)
+	source := []byte("FAKE_MALWARE_MARKER_FOR_TEST_ONLY\n")
+	sum := sha256.Sum256(source)
+	entryFingerprint := fmt.Sprintf("%x", sum)
+
+	newRunnerAndClient := func(t *testing.T, toolRunner ProductionToolRunner) (*WorkerRunner, *workerMalwareClientFake) {
+		t.Helper()
+		set, err := NewProductionWorkerCapabilitySetWithOptions(ProductionWorkerCapabilityOptions{
+			ToolRunner:               toolRunner,
+			MalwareBundleFingerprint: bundleFingerprint,
+			AvailableCapabilities:    map[string]bool{capabilityspec.CapabilityMalwareScan: true},
+			Now:                      func() time.Time { return time.Unix(1, 0).UTC() },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		advertisements := set.Advertisements()
+		if len(advertisements) != 1 || advertisements[0].Capability != capabilityspec.CapabilityMalwareScan {
+			t.Fatalf("unexpected malware advertisements: %+v", advertisements)
+		}
+		client := &workerMalwareClientFake{
+			workerRunnerClientFake: newWorkerRunnerClientFake(),
+			advertisement:          advertisements[0],
+			source:                 source,
+			entryFingerprint:       entryFingerprint,
+		}
+		runner, err := NewWorkerRunner(client, set, WorkerRunnerConfig{
+			InstanceID: strings.Repeat("2", 32), IdentityRevision: 1,
+			InteractiveSlots: 1, BackgroundSlots: 1,
+			HeartbeatInterval: time.Hour, PullBackoff: time.Millisecond, GracePeriod: time.Second,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.handshake(context.Background()); err != nil {
+			t.Fatalf("handshake: %v", err)
+		}
+		return runner, client
+	}
+
+	t.Run("positive finding uploads sanitized finding metadata and commits manifest", func(t *testing.T) {
+		toolRunner := &productionToolRunnerFake{result: workerCapabilities.ToolResult{
+			ExitCode: 1,
+			Stdout:   "input.bin: Test.Signature.Name FOUND\n",
+		}}
+		runner, client := newRunnerAndClient(t, toolRunner)
+		if err := runner.runOnce(context.Background()); err != nil {
+			t.Fatalf("runOnce positive finding: %v", err)
+		}
+		wantCalls := "handshake,pull,heartbeat,activate_input,transition:materializing,transition:processing,read_input,transition:uploading,activate_sink,upload_artifact,commit_manifest"
+		if got := strings.Join(client.callSnapshot(), ","); got != wantCalls {
+			t.Fatalf("positive finding lifecycle calls=%s, want %s", got, wantCalls)
+		}
+		if !bytes.Equal(toolRunner.input, source) {
+			t.Fatalf("scanner input=%q, want %q", toolRunner.input, source)
+		}
+		if client.upload.Artifact.Role != ArtifactRoleMetadata || client.upload.Artifact.MediaType != "application/json" ||
+			client.upload.Artifact.Completeness != ArtifactComplete || len(client.manifest.Artifacts) != 1 ||
+			client.manifest.Artifacts[0].Role != ArtifactRoleMetadata ||
+			client.manifest.Artifacts[0].PlaintextDigest != client.upload.Artifact.PlaintextDigest ||
+			client.manifest.Artifacts[0].PlaintextSize != int64(len(client.uploadedBytes)) {
+			t.Fatalf("unexpected upload=%+v manifest=%+v", client.upload, client.manifest)
+		}
+		lower := bytes.ToLower(client.uploadedBytes)
+		for _, forbidden := range [][]byte{[]byte("job-secret"), []byte("input.bin"), []byte("test.signature.name")} {
+			if bytes.Contains(lower, forbidden) {
+				t.Fatalf("malware metadata leaked raw tool content %q: %s", forbidden, client.uploadedBytes)
+			}
+		}
+		var result capabilityspec.MalwareResult
+		if err := json.Unmarshal(client.uploadedBytes, &result); err != nil || result.Validate() != nil ||
+			result.SchemaVersion != 1 || result.EngineFamily != "clamav" ||
+			result.SignatureBundleFingerprint != bundleFingerprint ||
+			result.Result != capabilityspec.ScanFinding || result.FindingCategory != "malware" ||
+			result.ScannedBytes != int64(len(source)) || result.Completeness != capabilityspec.CoverageComplete ||
+			result.ProcessingOutcome() != capabilityspec.OutcomeSucceeded {
+			t.Fatalf("uploaded malware finding=%+v payload=%q err=%v", result, client.uploadedBytes, err)
+		}
+	})
+
+	for _, testCase := range []struct {
+		name     string
+		result   workerCapabilities.ToolResult
+		runErr   error
+		wantCode ProcessingErrorCode
+	}{
+		{name: "scanner crash", runErr: workerCapabilities.ErrToolFailed, wantCode: ProcessingErrorWorkerCrash},
+		{name: "scanner timeout", runErr: workerCapabilities.ErrToolTimeout, wantCode: ProcessingErrorTimeout},
+		{name: "workspace unavailable", runErr: workerCapabilities.ErrSecureWorkspaceUnavailable, wantCode: ProcessingErrorMaterializationDisabled},
+		{
+			name: "heuristic input limit",
+			result: workerCapabilities.ToolResult{
+				ExitCode: 1, Stdout: "input.bin: Heuristics.Limits.Exceeded.MaxFileSize FOUND\n",
+			},
+			wantCode: ProcessingErrorInputTooLarge,
+		},
+		{
+			name:     "invalid scanner output",
+			result:   workerCapabilities.ToolResult{ExitCode: 2},
+			wantCode: ProcessingErrorInvalidOutput,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			toolRunner := &productionToolRunnerFake{result: testCase.result, err: testCase.runErr}
+			runner, client := newRunnerAndClient(t, toolRunner)
+			if err := runner.runOnce(context.Background()); err != nil {
+				t.Fatalf("runOnce(%s): %v", testCase.name, err)
+			}
+			wantCalls := "handshake,pull,heartbeat,activate_input,transition:materializing,transition:processing,read_input,transition:failed"
+			if got := strings.Join(client.callSnapshot(), ","); got != wantCalls {
+				t.Fatalf("%s lifecycle calls=%s, want %s", testCase.name, got, wantCalls)
+			}
+			if client.terminal.To != ProcessingFailed || client.terminal.ExpectedRevision != 4 ||
+				client.terminal.ErrorCode != testCase.wantCode || client.terminal.CancelReason != "" {
+				t.Fatalf("%s terminal transition=%+v, want To=%s ExpectedRevision=4 ErrorCode=%s", testCase.name, client.terminal, ProcessingFailed, testCase.wantCode)
+			}
+			if client.upload.SessionID != "" || len(client.uploadedBytes) != 0 || len(client.manifest.Artifacts) != 0 {
+				t.Fatalf("%s uploaded or committed artifacts on scanner failure: upload=%+v bytes=%q manifest=%+v", testCase.name, client.upload, client.uploadedBytes, client.manifest)
 			}
 		})
 	}
@@ -2108,3 +2242,70 @@ func (client *workerRunnerClientFake) Drain(context.Context, WorkerDrainRequest)
 }
 
 func (client *workerRunnerClientFake) CloseIdleConnections() {}
+
+type workerMalwareClientFake struct {
+	*workerRunnerClientFake
+	advertisement    CapabilityAdvertisement
+	source           []byte
+	entryFingerprint string
+	uploadedBytes    []byte
+	terminal         WorkerTransitionRequest
+}
+
+func (client *workerMalwareClientFake) Pull(context.Context, WorkerPullRequest) (WorkerJobEnvelope, error) {
+	client.record("pull")
+	descriptor := validWorkDescriptor()
+	descriptor.Capability = client.advertisement.Capability
+	descriptor.CapabilitySchema = client.advertisement.CapabilitySchema
+	descriptor.PipelineFingerprint = client.advertisement.PipelineFingerprint
+	descriptor.OutputProfile = client.advertisement.OutputProfile
+	descriptor.SecurityPolicyRevision = "policy-v1"
+	descriptor.EntryFingerprint = client.entryFingerprint
+	descriptor.Parameters.RequiresMaterialization = true
+	return WorkerJobEnvelope{
+		SchemaVersion: 1, ProtocolVersion: WorkerProtocolVersion,
+		JobID: strings.Repeat("3", 32), AttemptID: strings.Repeat("4", 32), TransitionRevision: 1,
+		Descriptor:      descriptor,
+		InputActivation: WorkerActivationMaterial{GrantID: strings.Repeat("a", 32), Secret: "input-secret"},
+		SinkActivation:  WorkerActivationMaterial{GrantID: strings.Repeat("b", 32), Secret: "sink-secret"},
+	}, nil
+}
+
+func (client *workerMalwareClientFake) ActivateInput(context.Context, WorkerInputActivateRequest) (WorkerInputActivation, error) {
+	client.record("activate_input")
+	return WorkerInputActivation{
+		SchemaVersion: 2, SessionID: strings.Repeat("5", 32), TransitionRevision: 2,
+		ExpiresAt: time.Now().Add(time.Minute),
+		Source: WorkerInputSourceInfo{
+			Size:               int64(len(client.source)),
+			MediaType:          "application/octet-stream",
+			FingerprintStrong:  true,
+			Sequential:         true,
+			Range:              true,
+			MaxBytesPerRequest: 16 << 20,
+		},
+	}, nil
+}
+
+func (client *workerMalwareClientFake) ReadInput(context.Context, WorkerInputReadRequest) ([]byte, error) {
+	client.record("read_input")
+	return append([]byte(nil), client.source...), nil
+}
+
+func (client *workerMalwareClientFake) UploadArtifact(_ context.Context, request WorkerUploadArtifactRequest, body io.Reader) (UploadedArtifact, error) {
+	client.record("upload_artifact")
+	client.upload = request
+	payload, err := io.ReadAll(body)
+	if err != nil {
+		return UploadedArtifact{}, err
+	}
+	client.uploadedBytes = payload
+	return UploadedArtifact{UploadID: strings.Repeat("7", 32), BlobID: strings.Repeat("8", 32), Ordinal: request.Artifact.Ordinal}, nil
+}
+
+func (client *workerMalwareClientFake) Transition(ctx context.Context, request WorkerTransitionRequest) (WorkerTransitionResult, error) {
+	if request.To == ProcessingFailed || request.To == ProcessingCanceled {
+		client.terminal = request
+	}
+	return client.workerRunnerClientFake.Transition(ctx, request)
+}
