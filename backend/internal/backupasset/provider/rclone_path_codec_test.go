@@ -1,7 +1,10 @@
 package provider
 
 import (
+	"bytes"
+	"context"
 	"crypto/md5" //nolint:gosec // S3 ETag compatibility in a local conformance fixture only
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,12 +12,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/model"
 )
 
 func TestRcloneV1744S3PathCodecGoldenRoundTrip(t *testing.T) {
@@ -60,14 +66,236 @@ func TestRcloneV1744S3PathCodecRejectsInvalidAndNonCanonicalPaths(t *testing.T) 
 	}
 }
 
+type rclonePathSetNativeDataPlaneFake struct {
+	observe func(context.Context, RcloneNativePublicationRequest) (RcloneManifestBundle, error)
+	sync    func(context.Context, RcloneNativePublicationRequest) error
+}
+
+func (fake *rclonePathSetNativeDataPlaneFake) ObserveSource(ctx context.Context, request RcloneNativePublicationRequest) (RcloneManifestBundle, error) {
+	return fake.observe(ctx, request)
+}
+
+func (fake *rclonePathSetNativeDataPlaneFake) Sync(ctx context.Context, request RcloneNativePublicationRequest) error {
+	return fake.sync(ctx, request)
+}
+
+func (*rclonePathSetNativeDataPlaneFake) VerifyFullBytes(_ context.Context, _ RcloneNativePublicationRequest, expected uint64) (RcloneFullByteProof, error) {
+	return RcloneFullByteProof{VerifiedBytes: expected, Complete: true}, nil
+}
+
 func TestRcloneV1744S3PathCodecSetRejectsDuplicatesAndPhysicalDrift(t *testing.T) {
-	mapping, err := ValidateRcloneV1744S3PathSet([]string{"a", "目录/文件", "．"})
-	if err != nil || mapping["．"] != "．" || len(mapping) != 3 {
-		t.Fatalf("mapping=%+v err=%v", mapping, err)
+	for _, logical := range []string{"a", "目录/文件.txt", "．"} {
+		physical, err := EncodeRcloneV1744S3Path(logical)
+		if err != nil || physical != logical {
+			t.Fatalf("EncodeRcloneV1744S3Path(%q)=%q err=%v", logical, physical, err)
+		}
+		decoded, err := DecodeRcloneV1744S3Path(physical)
+		if err != nil || decoded != logical {
+			t.Fatalf("DecodeRcloneV1744S3Path(%q)=%q err=%v", physical, decoded, err)
+		}
 	}
-	if _, err := ValidateRcloneV1744S3PathSet([]string{"same", "same"}); !errors.Is(err, backupasset.ErrInvalidState) {
-		t.Fatalf("duplicate set error=%v", err)
+
+	now := time.Date(2026, 7, 16, 1, 30, 0, 0, time.UTC)
+	profile := validRcloneNativeProfileForTest()
+	payload := []byte("unicode-positive-control")
+	payloadDigest := sha256Hex(payload)
+	b0, err := NewRcloneNativeStableGraph(RcloneNativeFullObservation{PageCount: 1}, RcloneNativeFullObservation{PageCount: 1})
+	if err != nil {
+		t.Fatal(err)
 	}
+	newRequest := func(s3 *rcloneNativePublisherS3Fake, manifest RcloneManifestBundle) RcloneNativePublicationRequest {
+		attempt := validRcloneAttemptForTest(backupasset.PublicationNativeObjectVersions)
+		attempt.Native.B0VersionGraphDigest = b0.Digest
+		session := newRcloneNativeSession(
+			"FAKE_AWS_ACCESS_KEY_ID_FOR_TEST_ONLY", "FAKE_AWS_SECRET_ACCESS_KEY_FOR_TEST_ONLY", "FAKE_AWS_SESSION_TOKEN_FOR_TEST_ONLY",
+			"123456789012", attempt.Native.RoleSessionIdentityDigest, attempt.Native.SessionExpiresAt,
+		)
+		config, err := BuildRcloneNativeRcloneConfig(profile, RcloneNativeEncryptionSelection{Profile: RcloneNativeSSES3V1}, session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempt.ConfigDigest = sha256Hex(config)
+		return RcloneNativePublicationRequest{
+			Attempt: attempt, Profile: profile, Session: session, ClientFactory: rcloneNativeClientFactoryFake{s3: s3},
+			Source: mustRclonePrivateLocatorForTest(t, "/srv/source"), RcloneConfig: config,
+			Runtime: RemoteCommandAccess{Node: model.Node{ID: 9}}, Manifest: manifest,
+			ManifestOptions:          rcloneManifestOptionsForTest(),
+			ObservationLimits:        RcloneNativeObservationLimits{PageSize: 1000, MaxPages: 4, MaxRecords: 100},
+			Encryption:               RcloneNativeEncryptionSelection{Profile: RcloneNativeSSES3V1},
+			EncryptionEvidence:       RcloneNativeEncryptionEvidence{Profile: RcloneNativeSSES3V1},
+			MarkerKey:                []byte("FAKE_NATIVE_MARKER_AUTH_KEY_32_BYTES_FOR_TEST_ONLY"),
+			CapabilityEvidenceDigest: strings.Repeat("a", 64), CostEvidenceDigest: strings.Repeat("b", 64),
+			MaxVerifyBytes: 1 << 20, ControlPayloadMaxBytes: 1 << 20, LowLevelRetries: 3,
+		}
+	}
+
+	unicodeListing := fmt.Sprintf(
+		`[{"Path":"目录/文件.txt","Name":"文件.txt","Size":%d,"ModTime":"2026-07-16T01:00:01Z","IsDir":false,"Hashes":{"sha256":"%s"},"Metadata":{"mode":"100640","uid":"1000","gid":"1000","mtime":"2026-07-16T01:00:01Z"}}]`,
+		len(payload), payloadDigest,
+	)
+	for name, listing := range map[string]string{
+		"duplicate logical path": fmt.Sprintf(
+			`[{"Path":"same","Name":"same","Size":%d,"ModTime":"2026-07-16T01:00:01Z","IsDir":false,"Hashes":{"sha256":"%s"}},{"Path":"same","Name":"same","Size":%d,"ModTime":"2026-07-16T01:00:01Z","IsDir":false,"Hashes":{"sha256":"%s"}}]`,
+			len(payload), payloadDigest, len(payload), payloadDigest,
+		),
+		"reserved rclonelink regular file": fmt.Sprintf(
+			`[{"Path":"plain.rclonelink","Name":"plain.rclonelink","Size":%d,"ModTime":"2026-07-16T01:00:01Z","IsDir":false,"Hashes":{"sha256":"%s"},"Metadata":{"mode":"100644"}}]`,
+			len(payload), payloadDigest,
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			events := make([]string, 0)
+			s3 := newRcloneNativePublisherS3Fake(profile, now, &events)
+			request := newRequest(s3, RcloneManifestBundle{})
+			dataPlane := &rclonePathSetNativeDataPlaneFake{
+				observe: func(ctx context.Context, current RcloneNativePublicationRequest) (RcloneManifestBundle, error) {
+					return BuildRcloneManifestV1(ctx, strings.NewReader(listing), current.ManifestOptions)
+				},
+				sync: func(context.Context, RcloneNativePublicationRequest) error {
+					t.Fatal("Sync must not run when source manifest preparation rejects unsafe paths")
+					return nil
+				},
+			}
+			publisher := NewRcloneNativePublisher(dataPlane, func() time.Time { return now })
+			strategy, err := NewRclonePublicationStrategy(
+				NewRclonePortablePublisher(&fakeRclonePortableRemote{}, func(time.Duration) {}, func() time.Time { return now }),
+				publisher,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = strategy.Prepare(context.Background(), PublicationPrepareRequest{
+				Attempt:     NewRclonePublicationAttempt(request.Attempt),
+				RcloneInput: &RclonePublicationInput{ManifestLimits: request.ManifestOptions.Limits, NativeRequest: &request},
+			})
+			if !errors.Is(err, ErrRcloneManifestPathUnsafe) {
+				t.Fatalf("Prepare(%s) err=%v, want %v", name, err, ErrRcloneManifestPathUnsafe)
+			}
+			fact := ClassifyRclonePublicationFailure(err)
+			if !fact.Unattempted || fact.KnownNonzero || fact.CompletionUnproven || fact.WriterQuiesced == nil || !*fact.WriterQuiesced {
+				t.Fatalf("Prepare(%s) facts=%+v", name, fact)
+			}
+			if len(s3.writes) != 0 {
+				t.Fatalf("Prepare(%s) unexpectedly wrote remote objects: %v", name, s3.writes)
+			}
+		})
+	}
+
+	t.Run("valid unicode path positive control", func(t *testing.T) {
+		events := make([]string, 0)
+		s3 := newRcloneNativePublisherS3Fake(profile, now, &events)
+		request := newRequest(s3, RcloneManifestBundle{})
+		dataPlane := &rclonePathSetNativeDataPlaneFake{
+			observe: func(ctx context.Context, current RcloneNativePublicationRequest) (RcloneManifestBundle, error) {
+				return BuildRcloneManifestV1(ctx, strings.NewReader(unicodeListing), current.ManifestOptions)
+			},
+			sync: func(_ context.Context, current RcloneNativePublicationRequest) error {
+				physical, err := EncodeRcloneV1744S3Path("目录/文件.txt")
+				if err != nil {
+					return err
+				}
+				s3.addObject(current.Profile.ManagedPrefix+"data/"+physical, "opaque-unicode-v1", payload, current.Encryption.Profile, "", false)
+				return nil
+			},
+		}
+		publisher := NewRcloneNativePublisher(dataPlane, func() time.Time { return now })
+		strategy, err := NewRclonePublicationStrategy(
+			NewRclonePortablePublisher(&fakeRclonePortableRemote{}, func(time.Duration) {}, func() time.Time { return now }),
+			publisher,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared, err := strategy.Prepare(context.Background(), PublicationPrepareRequest{
+			Attempt:     NewRclonePublicationAttempt(request.Attempt),
+			RcloneInput: &RclonePublicationInput{ManifestLimits: request.ManifestOptions.Limits, NativeRequest: &request},
+		})
+		if err != nil {
+			t.Fatalf("Prepare unicode positive control: %v", err)
+		}
+		commit, err := publisher.Publish(context.Background(), *prepared.RcloneInput.NativeRequest)
+		if err != nil {
+			t.Fatalf("Publish unicode positive control: %v", err)
+		}
+		if err := commit.Validate(); err != nil || commit.Native == nil || commit.Native.CommitVersionID == "" {
+			t.Fatalf("unicode commit=%+v err=%v", commit, err)
+		}
+		if got := path.Base(s3.writes[len(s3.writes)-1]); got != "commit.json" {
+			t.Fatalf("last write=%q writes=%v", got, s3.writes)
+		}
+		reconciled, err := publisher.Reconcile(context.Background(), *prepared.RcloneInput.NativeRequest)
+		if err != nil || !reflect.DeepEqual(reconciled, commit) {
+			t.Fatalf("reconciled=%+v err=%v want=%+v", reconciled, err, commit)
+		}
+	})
+
+	t.Run("controlled duplicate physical object key in native publish", func(t *testing.T) {
+		manifest, err := BuildRcloneManifestV1(context.Background(), strings.NewReader(unicodeListing), rcloneManifestOptionsForTest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		firstLine := bytes.TrimSpace(manifest.Chunks[0].Encoded)
+		var duplicateEntry rcloneCanonicalManifestEntry
+		if err := json.Unmarshal(firstLine, &duplicateEntry); err != nil {
+			t.Fatal(err)
+		}
+		duplicateEntry.Path = "目录/文件-alias.txt"
+		secondLine, err := json.Marshal(duplicateEntry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		injectedChunk := append(append(append([]byte(nil), firstLine...), '\n'), append(secondLine, '\n')...)
+		injectedManifest := manifest
+		injectedManifest.EntryCount = 2
+		injectedManifest.LogicalBytes = uint64(2 * len(payload))
+		injectedManifest.Chunks = []RcloneManifestChunk{{
+			Ordinal:    0,
+			Digest:     sha256Hex(injectedChunk),
+			Size:       int64(len(injectedChunk)),
+			EntryCount: 2,
+			Encoded:    injectedChunk,
+		}}
+
+		events := make([]string, 0)
+		s3 := newRcloneNativePublisherS3Fake(profile, now, &events)
+		request := newRequest(s3, injectedManifest)
+		dataPlane := &rclonePathSetNativeDataPlaneFake{
+			observe: func(context.Context, RcloneNativePublicationRequest) (RcloneManifestBundle, error) {
+				return injectedManifest, nil
+			},
+			sync: func(_ context.Context, current RcloneNativePublicationRequest) error {
+				physical, err := EncodeRcloneV1744S3Path("目录/文件.txt")
+				if err != nil {
+					return err
+				}
+				s3.addObject(current.Profile.ManagedPrefix+"data/"+physical, "opaque-dup-v1", payload, current.Encryption.Profile, "", false)
+				return nil
+			},
+		}
+		publisher := NewRcloneNativePublisher(dataPlane, func() time.Time { return now })
+		_, err = publisher.Publish(context.Background(), request)
+		if rcloneNativeReason(err) != backupasset.RcloneReasonUnexpectedVersion {
+			t.Fatalf("duplicate physical key err=%v reason=%q, want %q", err, rcloneNativeReason(err), backupasset.RcloneReasonUnexpectedVersion)
+		}
+		fact := ClassifyRclonePublicationFailure(err)
+		if fact.Unattempted || fact.KnownNonzero || !fact.CompletionUnproven || fact.WriterQuiesced == nil || !*fact.WriterQuiesced {
+			t.Fatalf("duplicate physical key facts=%+v", fact)
+		}
+		controlPrefix := rcloneNativeAttemptControlPrefix(request)
+		wantWrites := []string{controlPrefix + "start.json", controlPrefix + "end.json"}
+		if !reflect.DeepEqual(s3.writes, wantWrites) {
+			t.Fatalf("pre-commit writes=%v, want only start/end markers %v", s3.writes, wantWrites)
+		}
+		for _, written := range s3.writes {
+			base := path.Base(written)
+			if base == "commit.json" || base == "manifest-index.json" || strings.HasPrefix(base, "manifest-") {
+				t.Fatalf("unexpected formal control/commit object written on rejected publish: %q", written)
+			}
+		}
+		if _, err := publisher.Reconcile(context.Background(), request); rcloneNativeReason(err) != backupasset.RcloneReasonMarkerMismatch {
+			t.Fatalf("Reconcile after rejected publish err=%v reason=%q, want %q", err, rcloneNativeReason(err), backupasset.RcloneReasonMarkerMismatch)
+		}
+	})
 }
 
 func TestRcloneV1744PathCodecConformance(t *testing.T) {
