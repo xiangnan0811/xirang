@@ -812,45 +812,6 @@ func recoveryRsyncAuthorityError(ctx context.Context, err error) error {
 	return invalidRsyncRestoreSourceRef()
 }
 
-func observeRecoveryRsyncSourceWithResolver(
-	ctx context.Context,
-	request provider.RecoverySourceAuthorityRequest,
-	resolve func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error),
-) (provider.RsyncRestoreSource, RecoveryRsyncSourceAuthorityObservation, error) {
-	if request.Provider != backupasset.ProviderRsync || resolve == nil {
-		return nil, RecoveryRsyncSourceAuthorityObservation{}, fmt.Errorf("%w: Recovery source provider unavailable", backupasset.ErrCapabilityUnavailable)
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	source, err := resolve(ctx, request.RsyncRef)
-	if err != nil {
-		if source != nil {
-			_ = source.Close()
-		}
-		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
-			return nil, RecoveryRsyncSourceAuthorityObservation{}, contextErr
-		}
-		return nil, RecoveryRsyncSourceAuthorityObservation{}, invalidRsyncRestoreSourceRef()
-	}
-	if source == nil {
-		return nil, RecoveryRsyncSourceAuthorityObservation{}, invalidRsyncRestoreSourceRef()
-	}
-	defer func() {
-		_ = source.Close()
-	}()
-	if err := source.Revalidate(ctx); err != nil {
-		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
-			return nil, RecoveryRsyncSourceAuthorityObservation{}, contextErr
-		}
-		return nil, RecoveryRsyncSourceAuthorityObservation{}, invalidRsyncRestoreSourceRef()
-	}
-	return nil, RecoveryRsyncSourceAuthorityObservation{}, fmt.Errorf(
-		"%w: Recovery source namespace authority unavailable",
-		backupasset.ErrCapabilityUnavailable,
-	)
-}
-
 func digestPinnedRsyncRestoreEntry(ctx context.Context, tree fileaccess.PinnedStrictTree, entry fileaccess.Entry) (string, error) {
 	handle, stat, err := tree.OpenDeclaredRegular(ctx, entry)
 	if err != nil {

@@ -1397,6 +1397,9 @@ func TestRecoveryRsyncSourceAuthorityTransfersOwnershipThenRevalidates(t *testin
 			},
 			observe: func(_ context.Context, request RecoverySourceNamespaceRequest, transferred provider.RsyncRestoreSource) (provider.RsyncRestoreSource, error) {
 				phases = append(phases, "observe")
+				if pinned.revalidateCalls.Load() != 1 {
+					t.Fatalf("pinned revalidate calls before namespace transfer=%d, want 1", pinned.revalidateCalls.Load())
+				}
 				if transferred != pinned || request.SourceRef != ref || request.ProducingTaskID != snapshot.producingTaskID ||
 					request.RepositoryBindingRevision != snapshot.repositoryBindingRevision || request.ProvenanceRevision != snapshot.provenanceRevision {
 					t.Fatalf("observer request=%+v transferred=%T", request, transferred)
@@ -1415,6 +1418,9 @@ func TestRecoveryRsyncSourceAuthorityTransfersOwnershipThenRevalidates(t *testin
 	}
 	if !reflect.DeepEqual(phases, []string{"resolve", "capture", "observe", "revalidate"}) {
 		t.Fatalf("phases=%v", phases)
+	}
+	if pinned.revalidateCalls.Load() != 2 {
+		t.Fatalf("pinned revalidate calls after post-observation revalidation=%d, want 2", pinned.revalidateCalls.Load())
 	}
 	if pinned.closeCalls.Load() != 0 || closed.closeCalls.Load() != 0 {
 		t.Fatalf("success closed transferred owners early: pinned=%d closed=%d", pinned.closeCalls.Load(), closed.closeCalls.Load())
@@ -1816,7 +1822,6 @@ func TestRecoveryRsyncSourceAuthorityProductsRedactPrivateEvidence(t *testing.T)
 }
 
 func TestRecoveryRsyncSourceAuthorityRevalidatesAndClosesBeforeFailingUnavailable(t *testing.T) {
-	source := &recoveryAuthoritySourceFake{}
 	request := provider.RecoverySourceAuthorityRequest{
 		Provider: backupasset.ProviderRsync,
 		RsyncRef: provider.RsyncRestoreSourceRef{
@@ -1826,40 +1831,230 @@ func TestRecoveryRsyncSourceAuthorityRevalidatesAndClosesBeforeFailingUnavailabl
 			SourceRevisionDigest: strings.Repeat("7", 64), ManifestDigest: strings.Repeat("8", 64),
 		},
 	}
-	resolved, observation, err := observeRecoveryRsyncSourceWithResolver(
-		context.Background(), request,
-		func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error) {
-			return source, nil
-		},
-	)
-	if resolved != nil || observation != (RecoveryRsyncSourceAuthorityObservation{}) ||
-		!errors.Is(err, backupasset.ErrCapabilityUnavailable) {
-		t.Fatalf("unproved namespace source=%v observation=%+v err=%v, want capability unavailable", resolved, observation, err)
+	snapshot := recoveryRsyncAuthoritySnapshot{
+		producingTaskID:           42,
+		repositoryBindingRevision: strings.Repeat("9", 64),
+		provenanceRevision:        strings.Repeat("a", 64),
 	}
-	if source.revalidateCalls.Load() != 1 || source.closeCalls.Load() != 1 {
-		t.Fatalf("source lifecycle revalidate=%d close=%d, want exactly once", source.revalidateCalls.Load(), source.closeCalls.Load())
-	}
+
+	t.Run("namespace authority unavailable revalidates and closes source once", func(t *testing.T) {
+		source := &recoveryAuthoritySourceFake{}
+		resolved, observation, err := observeRecoveryRsyncSourceWithDependencies(
+			context.Background(),
+			request,
+			recoveryRsyncSourceAuthorityDependencies{
+				resolve: func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error) {
+					return source, nil
+				},
+				capture: func(context.Context, provider.RsyncRestoreSourceRef) (recoveryRsyncAuthoritySnapshot, error) {
+					if source.revalidateCalls.Load() != 1 || source.closeCalls.Load() != 0 {
+						t.Fatalf("before capture revalidate=%d close=%d, want 1/0", source.revalidateCalls.Load(), source.closeCalls.Load())
+					}
+					return snapshot, nil
+				},
+				observe: func(_ context.Context, _ RecoverySourceNamespaceRequest, transferred provider.RsyncRestoreSource) (provider.RsyncRestoreSource, error) {
+					if transferred != source || source.revalidateCalls.Load() != 1 || source.closeCalls.Load() != 0 {
+						t.Fatalf("before unavailable observe transferred=%T revalidate=%d close=%d, want source/1/0", transferred, source.revalidateCalls.Load(), source.closeCalls.Load())
+					}
+					_ = transferred.Close()
+					return nil, backupasset.ErrCapabilityUnavailable
+				},
+				revalidate: func(context.Context, provider.RsyncRestoreSourceRef, recoveryRsyncAuthoritySnapshot) error {
+					t.Fatal("unexpected post-observation revalidation when namespace authority is unavailable")
+					return nil
+				},
+			},
+		)
+		if resolved != nil || observation != (RecoveryRsyncSourceAuthorityObservation{}) ||
+			!errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+			t.Fatalf("unproved namespace source=%v observation=%+v err=%v, want capability unavailable", resolved, observation, err)
+		}
+		if source.revalidateCalls.Load() != 1 || source.closeCalls.Load() != 1 {
+			t.Fatalf("source lifecycle revalidate=%d close=%d, want exactly once", source.revalidateCalls.Load(), source.closeCalls.Load())
+		}
+	})
+
+	t.Run("pinned source revalidation failure closes source once and skips capture and observe", func(t *testing.T) {
+		const privateFailure = "PRIVATE_PINNED_REVALIDATE_FAILURE_CANARY"
+		source := &recoveryAuthoritySourceFake{revalidateErr: errors.New(privateFailure)}
+		resolved, observation, err := observeRecoveryRsyncSourceWithDependencies(
+			context.Background(),
+			request,
+			recoveryRsyncSourceAuthorityDependencies{
+				resolve: func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error) {
+					return source, nil
+				},
+				capture: func(context.Context, provider.RsyncRestoreSourceRef) (recoveryRsyncAuthoritySnapshot, error) {
+					t.Fatal("unexpected snapshot capture after pinned revalidation failure")
+					return recoveryRsyncAuthoritySnapshot{}, nil
+				},
+				observe: func(context.Context, RecoverySourceNamespaceRequest, provider.RsyncRestoreSource) (provider.RsyncRestoreSource, error) {
+					t.Fatal("unexpected namespace observation after pinned revalidation failure")
+					return nil, nil
+				},
+				revalidate: func(context.Context, provider.RsyncRestoreSourceRef, recoveryRsyncAuthoritySnapshot) error {
+					t.Fatal("unexpected post-observation revalidation after pinned revalidation failure")
+					return nil
+				},
+			},
+		)
+		if resolved != nil || observation != (RecoveryRsyncSourceAuthorityObservation{}) ||
+			!errors.Is(err, provider.ErrInvalidRestoreRequest) {
+			t.Fatalf("pinned revalidation failure source=%v observation=%+v err=%v, want invalid restore request", resolved, observation, err)
+		}
+		if strings.Contains(fmt.Sprint(err), privateFailure) {
+			t.Fatalf("pinned revalidation failure leaked private dependency error: %v", err)
+		}
+		if source.revalidateCalls.Load() != 1 || source.closeCalls.Load() != 1 {
+			t.Fatalf("source lifecycle revalidate=%d close=%d, want 1/1", source.revalidateCalls.Load(), source.closeCalls.Load())
+		}
+	})
 }
 
 func TestRecoveryRsyncSourceAuthoritySanitizesResolverFailureAndClosesReturnedSource(t *testing.T) {
 	const privateFailure = "PRIVATE_SOURCE_RESOLVER_FAILURE_CANARY"
-	source := &recoveryAuthoritySourceFake{}
-	resolved, observation, err := observeRecoveryRsyncSourceWithResolver(
-		context.Background(),
-		provider.RecoverySourceAuthorityRequest{Provider: backupasset.ProviderRsync},
-		func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error) {
-			return source, errors.New(privateFailure)
-		},
-	)
-	if resolved != nil || observation != (RecoveryRsyncSourceAuthorityObservation{}) ||
-		!errors.Is(err, provider.ErrInvalidRestoreRequest) {
-		t.Fatalf("resolver failure source=%v observation=%+v err=%v, want invalid restore request", resolved, observation, err)
+	snapshot := recoveryRsyncAuthoritySnapshot{
+		producingTaskID:           42,
+		repositoryBindingRevision: strings.Repeat("9", 64),
+		provenanceRevision:        strings.Repeat("a", 64),
 	}
-	if strings.Contains(fmt.Sprint(err), privateFailure) {
-		t.Fatalf("resolver failure leaked private dependency error: %v", err)
-	}
-	if source.closeCalls.Load() != 1 {
-		t.Fatalf("resolver failure close calls=%d, want exactly once", source.closeCalls.Load())
+
+	t.Run("resolver failure with returned source handle closes once and sanitizes error", func(t *testing.T) {
+		source := &recoveryAuthoritySourceFake{}
+		resolved, observation, err := observeRecoveryRsyncSourceWithDependencies(
+			context.Background(),
+			provider.RecoverySourceAuthorityRequest{Provider: backupasset.ProviderRsync},
+			recoveryRsyncSourceAuthorityDependencies{
+				resolve: func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error) {
+					return source, errors.New(privateFailure)
+				},
+				capture: func(context.Context, provider.RsyncRestoreSourceRef) (recoveryRsyncAuthoritySnapshot, error) {
+					t.Fatal("unexpected capture after resolver failure")
+					return recoveryRsyncAuthoritySnapshot{}, nil
+				},
+				observe: func(context.Context, RecoverySourceNamespaceRequest, provider.RsyncRestoreSource) (provider.RsyncRestoreSource, error) {
+					t.Fatal("unexpected observe after resolver failure")
+					return nil, nil
+				},
+				revalidate: func(context.Context, provider.RsyncRestoreSourceRef, recoveryRsyncAuthoritySnapshot) error {
+					t.Fatal("unexpected revalidate after resolver failure")
+					return nil
+				},
+			},
+		)
+		if resolved != nil || observation != (RecoveryRsyncSourceAuthorityObservation{}) ||
+			!errors.Is(err, provider.ErrInvalidRestoreRequest) {
+			t.Fatalf("resolver failure source=%v observation=%+v err=%v, want invalid restore request", resolved, observation, err)
+		}
+		if strings.Contains(fmt.Sprint(err), privateFailure) {
+			t.Fatalf("resolver failure leaked private dependency error: %v", err)
+		}
+		if source.closeCalls.Load() != 1 || source.revalidateCalls.Load() != 0 {
+			t.Fatalf("resolver failure close=%d revalidate=%d, want 1/0", source.closeCalls.Load(), source.revalidateCalls.Load())
+		}
+	})
+
+	t.Run("namespace observer failure with returned observed handle closes once and sanitizes error", func(t *testing.T) {
+		pinned := &recoveryAuthoritySourceFake{}
+		observed := &recoveryAuthorityOwnedSource{pinned: pinned}
+		resolved, observation, err := observeRecoveryRsyncSourceWithDependencies(
+			context.Background(),
+			provider.RecoverySourceAuthorityRequest{Provider: backupasset.ProviderRsync},
+			recoveryRsyncSourceAuthorityDependencies{
+				resolve: func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error) {
+					return pinned, nil
+				},
+				capture: func(context.Context, provider.RsyncRestoreSourceRef) (recoveryRsyncAuthoritySnapshot, error) {
+					return snapshot, nil
+				},
+				observe: func(context.Context, RecoverySourceNamespaceRequest, provider.RsyncRestoreSource) (provider.RsyncRestoreSource, error) {
+					return observed, errors.New(privateFailure)
+				},
+				revalidate: func(context.Context, provider.RsyncRestoreSourceRef, recoveryRsyncAuthoritySnapshot) error {
+					t.Fatal("unexpected revalidate after namespace observer failure")
+					return nil
+				},
+			},
+		)
+		if resolved != nil || observation != (RecoveryRsyncSourceAuthorityObservation{}) ||
+			!errors.Is(err, provider.ErrInvalidRestoreRequest) {
+			t.Fatalf("observer failure source=%v observation=%+v err=%v, want invalid restore request", resolved, observation, err)
+		}
+		if strings.Contains(fmt.Sprint(err), privateFailure) {
+			t.Fatalf("observer failure leaked private dependency error: %v", err)
+		}
+		if observed.closeCalls.Load() != 1 || pinned.closeCalls.Load() != 1 || pinned.revalidateCalls.Load() != 1 {
+			t.Fatalf("observer failure observedClose=%d pinnedClose=%d pinnedRevalidate=%d, want 1/1/1", observed.closeCalls.Load(), pinned.closeCalls.Load(), pinned.revalidateCalls.Load())
+		}
+	})
+
+	for _, wantErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		for _, stage := range []string{"resolve", "pinned_revalidate", "capture", "observe", "observed_revalidate", "revalidate"} {
+			t.Run(fmt.Sprintf("context_%v_at_%s", wantErr, stage), func(t *testing.T) {
+				ctx := newStageTriggeredContext(wantErr)
+				pinned := &recoveryAuthoritySourceFake{}
+				observed := &recoveryAuthorityOwnedSource{pinned: pinned}
+				if stage == "pinned_revalidate" {
+					pinned.revalidateErr = errors.New(privateFailure)
+				}
+				if stage == "observed_revalidate" {
+					observed.revalidateErr = errors.New(privateFailure)
+				}
+
+				resolved, observation, err := observeRecoveryRsyncSourceWithDependencies(
+					ctx,
+					provider.RecoverySourceAuthorityRequest{Provider: backupasset.ProviderRsync},
+					recoveryRsyncSourceAuthorityDependencies{
+						resolve: func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error) {
+							if stage == "resolve" {
+								ctx.trigger()
+								return pinned, errors.New(privateFailure)
+							}
+							if stage == "pinned_revalidate" {
+								ctx.trigger()
+							}
+							return pinned, nil
+						},
+						capture: func(context.Context, provider.RsyncRestoreSourceRef) (recoveryRsyncAuthoritySnapshot, error) {
+							if stage == "capture" {
+								ctx.trigger()
+								return recoveryRsyncAuthoritySnapshot{}, errors.New(privateFailure)
+							}
+							return snapshot, nil
+						},
+						observe: func(context.Context, RecoverySourceNamespaceRequest, provider.RsyncRestoreSource) (provider.RsyncRestoreSource, error) {
+							if stage == "observe" {
+								ctx.trigger()
+								return observed, errors.New(privateFailure)
+							}
+							if stage == "observed_revalidate" {
+								ctx.trigger()
+							}
+							return observed, nil
+						},
+						revalidate: func(context.Context, provider.RsyncRestoreSourceRef, recoveryRsyncAuthoritySnapshot) error {
+							if stage == "revalidate" {
+								ctx.trigger()
+								return errors.New(privateFailure)
+							}
+							return nil
+						},
+					},
+				)
+				if resolved != nil || observation != (RecoveryRsyncSourceAuthorityObservation{}) || !errors.Is(err, wantErr) {
+					t.Fatalf("stage %s source=%v observation=%+v err=%v, want %v", stage, resolved, observation, err, wantErr)
+				}
+				if strings.Contains(fmt.Sprint(err), privateFailure) {
+					t.Fatalf("stage %s leaked private error: %v", stage, err)
+				}
+				if pinned.closeCalls.Load() != 1 {
+					t.Fatalf("stage %s pinned close calls=%d, want exactly once", stage, pinned.closeCalls.Load())
+				}
+				if (stage == "observe" || stage == "observed_revalidate" || stage == "revalidate") && observed.closeCalls.Load() != 1 {
+					t.Fatalf("stage %s observed close calls=%d, want exactly once", stage, observed.closeCalls.Load())
+				}
+			})
+		}
 	}
 }
 
@@ -1949,12 +2144,47 @@ func TestRecoveryRsyncSourceAuthorityObservesOutsideTransactionsAndClosesEveryPa
 	}
 }
 
+type stageTriggeredContext struct {
+	context.Context
+	err       error
+	triggered atomic.Bool
+	done      chan struct{}
+	once      sync.Once
+}
+
+func newStageTriggeredContext(err error) *stageTriggeredContext {
+	return &stageTriggeredContext{
+		Context: context.Background(),
+		err:     err,
+		done:    make(chan struct{}),
+	}
+}
+
+func (ctx *stageTriggeredContext) trigger() {
+	ctx.once.Do(func() {
+		ctx.triggered.Store(true)
+		close(ctx.done)
+	})
+}
+
+func (ctx *stageTriggeredContext) Done() <-chan struct{} {
+	return ctx.done
+}
+
+func (ctx *stageTriggeredContext) Err() error {
+	if ctx.triggered.Load() {
+		return ctx.err
+	}
+	return nil
+}
+
 type recoveryAuthorityPinnedTree struct {
 	revalidateErr error
 	closeCalls    atomic.Int64
 }
 
 type recoveryAuthoritySourceFake struct {
+	revalidateErr   error
 	revalidateCalls atomic.Int64
 	closeCalls      atomic.Int64
 }
@@ -2000,7 +2230,7 @@ func (*recoveryAuthoritySourceFake) MaterializeDeclaredEntries(context.Context, 
 
 func (source *recoveryAuthoritySourceFake) Revalidate(context.Context) error {
 	source.revalidateCalls.Add(1)
-	return nil
+	return source.revalidateErr
 }
 
 func (source *recoveryAuthoritySourceFake) Close() error {

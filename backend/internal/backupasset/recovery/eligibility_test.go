@@ -443,10 +443,17 @@ func TestRecoveryEligibilityAuthorityRejectsUnsupportedProviderBeforeAccess(t *t
 }
 
 func TestRecoveryEligibilityAuthorityRejectsPartialAndSubstitutedEvidence(t *testing.T) {
+	const privateCanary = "PRIVATE_ELIGIBILITY_SOURCE_CANARY"
 	tests := []struct {
 		name   string
 		mutate func(*recoveryEligibilityHarness)
 	}{
+		{name: "source observation error with returned handle", mutate: func(h *recoveryEligibilityHarness) {
+			h.source.observeErr = errors.New(privateCanary)
+		}},
+		{name: "source capability revalidation error", mutate: func(h *recoveryEligibilityHarness) {
+			h.source.pinnedRevalidateErr = errors.New(privateCanary)
+		}},
 		{name: "nil source capability", mutate: func(h *recoveryEligibilityHarness) { h.source.nilCapability = true }},
 		{name: "wrong source capability type", mutate: func(h *recoveryEligibilityHarness) { h.source.rawCapability = true }},
 		{name: "incomplete source proof", mutate: func(h *recoveryEligibilityHarness) { h.source.omitProof = true }},
@@ -471,18 +478,49 @@ func TestRecoveryEligibilityAuthorityRejectsPartialAndSubstitutedEvidence(t *tes
 		t.Run(testCase.name, func(t *testing.T) {
 			harness := newRecoveryEligibilityHarness(t)
 			testCase.mutate(harness)
-			if _, err := harness.authority.ObserveRecoveryAuthority(context.Background(), harness.binding); !errors.Is(err, ErrRecoveryTargetUnavailable) && !errors.Is(err, ErrRecoveryTargetChanged) {
+			_, err := harness.authority.ObserveRecoveryAuthority(context.Background(), harness.binding)
+			if !errors.Is(err, ErrRecoveryTargetUnavailable) && !errors.Is(err, ErrRecoveryTargetChanged) {
 				t.Fatalf("partial/substituted evidence error=%v, want closed unavailable/conflict", err)
+			}
+			if strings.Contains(fmt.Sprint(err), privateCanary) {
+				t.Fatalf("partial/substituted evidence leaked private canary: %v", err)
 			}
 			if harness.source.lastClose != nil && harness.source.lastClose.closeCalls != 1 {
 				t.Fatalf("partial source close calls=%d, want exactly one", harness.source.lastClose.closeCalls)
 			}
-			if testCase.name == "nil source capability" || testCase.name == "wrong source capability type" ||
+			if testCase.name == "source observation error with returned handle" ||
+				testCase.name == "source capability revalidation error" ||
+				testCase.name == "nil source capability" || testCase.name == "wrong source capability type" ||
 				testCase.name == "incomplete source proof" || testCase.name == "source request echo" ||
 				testCase.name == "incomplete security" || testCase.name == "security policy substitution" {
 				if harness.target.observeCalls != 0 {
 					t.Fatalf("partial evidence reached target observer %d times", harness.target.observeCalls)
 				}
+			}
+		})
+	}
+
+	for _, stage := range []string{"source_observe", "source_revalidate"} {
+		t.Run("context_canceled_at_"+stage, func(t *testing.T) {
+			harness := newRecoveryEligibilityHarness(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			if stage == "source_observe" {
+				harness.source.afterObserve = cancel
+				harness.source.observeErr = errors.New(privateCanary)
+			} else {
+				harness.source.afterObserve = cancel
+				harness.source.pinnedRevalidateErr = errors.New(privateCanary)
+			}
+			_, err := harness.authority.ObserveRecoveryAuthority(ctx, harness.binding)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("stage %s error=%v, want context.Canceled", stage, err)
+			}
+			if strings.Contains(fmt.Sprint(err), privateCanary) {
+				t.Fatalf("stage %s leaked private canary: %v", stage, err)
+			}
+			if harness.source.lastClose == nil || harness.source.lastClose.closeCalls != 1 {
+				t.Fatalf("stage %s close calls=%v, want 1", stage, harness.source.lastClose)
 			}
 		})
 	}
@@ -794,7 +832,10 @@ func newRecoveryEligibilityHarnessOnDB(t *testing.T, db *gorm.DB) *recoveryEligi
 	return &recoveryEligibilityHarness{now: now, binding: binding, source: source, security: security, root: root, target: target, authority: authority}
 }
 
-type eligibilityPinnedCloseSpy struct{ closeCalls int }
+type eligibilityPinnedCloseSpy struct {
+	closeCalls    int
+	revalidateErr error
+}
 
 func (*eligibilityPinnedCloseSpy) OpenDeclaredRegular(context.Context, provider.RestoreEntry) (provider.RsyncRestoreSourceStream, error) {
 	return nil, provider.ErrRsyncRestoreUnavailable
@@ -802,7 +843,9 @@ func (*eligibilityPinnedCloseSpy) OpenDeclaredRegular(context.Context, provider.
 func (*eligibilityPinnedCloseSpy) MaterializeDeclaredEntries(context.Context, []provider.RestoreEntry) ([]provider.RestoreEntry, error) {
 	return nil, provider.ErrRsyncRestoreUnavailable
 }
-func (*eligibilityPinnedCloseSpy) Revalidate(context.Context) error { return nil }
+func (source *eligibilityPinnedCloseSpy) Revalidate(context.Context) error {
+	return source.revalidateErr
+}
 func (source *eligibilityPinnedCloseSpy) Close() error {
 	source.closeCalls++
 	return nil
@@ -825,6 +868,8 @@ type statefulRecoveryEligibilitySource struct {
 	authenticatedNodeIdentity string
 	canonicalPath             string
 	afterObserve              func()
+	observeErr                error
+	pinnedRevalidateErr       error
 	sourceRefOverride         provider.RsyncRestoreSourceRef
 	nilCapability             bool
 	rawCapability             bool
@@ -852,7 +897,7 @@ func (source *statefulRecoveryEligibilitySource) ObserveRecoveryEligibilitySourc
 	if source.rawCapability {
 		return &rawEligibilitySource{}, observed, nil
 	}
-	closeSpy := &eligibilityPinnedCloseSpy{}
+	closeSpy := &eligibilityPinnedCloseSpy{revalidateErr: source.pinnedRevalidateErr}
 	source.lastClose = closeSpy
 	ref := request.RsyncRef
 	if source.sourceRefOverride.PlanID != "" {
@@ -880,7 +925,7 @@ func (source *statefulRecoveryEligibilitySource) ObserveRecoveryEligibilitySourc
 		captured: source.namespaceCaptured,
 	}}
 	source.lastNamespace = namespace
-	return namespace, observed, nil
+	return namespace, observed, source.observeErr
 }
 
 func (source *statefulRecoveryEligibilitySource) RevalidateRecoveryEligibilitySourceTx(

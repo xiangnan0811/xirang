@@ -25,7 +25,7 @@ import (
 )
 
 func TestManagedRecoveryEligibilitySourceAdapterCopiesClosedRepositoryObservation(t *testing.T) {
-	source := &managedRecoveryDeclaredSourceFake{}
+	source := &managedRecoveryCloseFailureSourceFake{}
 	request := provider.RecoverySourceAuthorityRequest{
 		Provider: backupasset.ProviderRsync,
 		RsyncRef: provider.RsyncRestoreSourceRef{
@@ -56,8 +56,8 @@ func TestManagedRecoveryEligibilitySourceAdapterCopiesClosedRepositoryObservatio
 	if err != nil {
 		t.Fatalf("observe source: %v", err)
 	}
-	if gotSource != source || observer.request != request {
-		t.Fatalf("source/request were not transferred exactly")
+	if gotSource != source || observer.request != request || source.closes != 0 {
+		t.Fatalf("source/request were not transferred exactly: closes=%d", source.closes)
 	}
 	want := recovery.RecoveryEligibilitySourceObservation{
 		RepositoryCapabilityRevision: 9, CapabilityRevision: 10,
@@ -123,6 +123,106 @@ func TestManagedRecoveryEligibilitySourceAdapterFailsClosedWithoutDurableSeam(t 
 	)
 	if !errors.Is(err, backupasset.ErrCapabilityUnavailable) || strings.Contains(err.Error(), "secret-source") {
 		t.Fatalf("missing durable seam error=%v, want stable redacted unavailable", err)
+	}
+}
+
+func TestManagedRecoveryEligibilitySourceAdapterClosesReturnedSourceAndSanitizesFailures(t *testing.T) {
+	const privateCanary = "PRIVATE_ELIGIBILITY_SOURCE_ADAPTER_CANARY"
+	request := provider.RecoverySourceAuthorityRequest{
+		Provider: backupasset.ProviderRsync,
+		RsyncRef: provider.RsyncRestoreSourceRef{
+			PlanID: strings.Repeat("1", 32), PlanBindingDigest: strings.Repeat("2", 64),
+			RepositoryID: strings.Repeat("3", 32), RecoveryPointID: strings.Repeat("4", 32),
+			CatalogGenerationID: strings.Repeat("5", 32), SelectionDigest: strings.Repeat("6", 64),
+			SourceRevisionDigest: strings.Repeat("7", 64), ManifestDigest: strings.Repeat("8", 64),
+		},
+	}
+	validObservation := repository.RecoveryRsyncSourceAuthorityObservation{
+		Provider: backupasset.ProviderRsync, RepositoryID: request.RsyncRef.RepositoryID,
+		RecoveryPointID: request.RsyncRef.RecoveryPointID, CatalogGenerationID: request.RsyncRef.CatalogGenerationID,
+		SourceRevisionDigest: request.RsyncRef.SourceRevisionDigest, ManifestDigest: request.RsyncRef.ManifestDigest,
+		RepositoryCapabilityRevision: 9, CapabilityRevision: 10,
+		SourceAccessIdentity: "source-access-v1", SourceFingerprint: strings.Repeat("9", 64),
+		ManagedRootIdentity: strings.Repeat("a", 64), RepositoryBindingRevision: strings.Repeat("b", 64),
+		ProvenanceRevision: strings.Repeat("c", 64),
+	}
+
+	t.Run("observer error with returned source handle closes once and sanitizes error", func(t *testing.T) {
+		source := &managedRecoveryCloseFailureSourceFake{}
+		adapter, err := newManagedRecoveryEligibilitySourceAdapter(
+			&managedRecoveryEligibilityRepositoryObserverFake{
+				source:      source,
+				observation: validObservation,
+				err:         errors.New(privateCanary),
+			},
+			&managedRecoveryEligibilitySourceDurableFake{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotSource, gotObservation, err := adapter.ObserveRecoveryEligibilitySource(context.Background(), request)
+		if gotSource != nil || gotObservation != (recovery.RecoveryEligibilitySourceObservation{}) ||
+			!errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+			t.Fatalf("source=%v observation=%+v err=%v, want capability unavailable", gotSource, gotObservation, err)
+		}
+		if strings.Contains(fmt.Sprint(err), privateCanary) {
+			t.Fatalf("leaked private canary: %v", err)
+		}
+		if source.closes != 1 {
+			t.Fatalf("source close calls=%d, want 1", source.closes)
+		}
+	})
+
+	t.Run("invalid repository observation with returned source handle closes once and fails closed", func(t *testing.T) {
+		source := &managedRecoveryCloseFailureSourceFake{}
+		invalidObservation := validObservation
+		invalidObservation.ManifestDigest = strings.Repeat("f", 64)
+		adapter, err := newManagedRecoveryEligibilitySourceAdapter(
+			&managedRecoveryEligibilityRepositoryObserverFake{
+				source:      source,
+				observation: invalidObservation,
+			},
+			&managedRecoveryEligibilitySourceDurableFake{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotSource, gotObservation, err := adapter.ObserveRecoveryEligibilitySource(context.Background(), request)
+		if gotSource != nil || gotObservation != (recovery.RecoveryEligibilitySourceObservation{}) ||
+			!errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+			t.Fatalf("source=%v observation=%+v err=%v, want capability unavailable", gotSource, gotObservation, err)
+		}
+		if source.closes != 1 {
+			t.Fatalf("source close calls=%d, want 1", source.closes)
+		}
+	})
+
+	for _, wantErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(fmt.Sprintf("context_%v_with_returned_source_closes_once", wantErr), func(t *testing.T) {
+			source := &managedRecoveryCloseFailureSourceFake{}
+			adapter, err := newManagedRecoveryEligibilitySourceAdapter(
+				&managedRecoveryEligibilityRepositoryObserverFake{
+					source:      source,
+					observation: validObservation,
+					err:         fmt.Errorf("%s: %w", privateCanary, wantErr),
+				},
+				&managedRecoveryEligibilitySourceDurableFake{},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotSource, gotObservation, err := adapter.ObserveRecoveryEligibilitySource(context.Background(), request)
+			if gotSource != nil || gotObservation != (recovery.RecoveryEligibilitySourceObservation{}) ||
+				!errors.Is(err, wantErr) {
+				t.Fatalf("source=%v observation=%+v err=%v, want %v", gotSource, gotObservation, err, wantErr)
+			}
+			if strings.Contains(fmt.Sprint(err), privateCanary) {
+				t.Fatalf("leaked private canary on context error: %v", err)
+			}
+			if source.closes != 1 {
+				t.Fatalf("source close calls=%d, want 1", source.closes)
+			}
+		})
 	}
 }
 
