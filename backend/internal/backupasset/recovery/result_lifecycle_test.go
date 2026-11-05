@@ -4450,3 +4450,27 @@ func (fixture *recoveryResultLifecycleFixture) assertNoPublishedRows(t *testing.
 		t.Fatalf("rejected publication left result rows sets=%d results=%d", resultSets, results)
 	}
 }
+
+func sameRecoveryWorkspaceCleanupSnapshot(
+	left model.BackupAssetRecoveryJob,
+	right model.BackupAssetRecoveryJob,
+) bool {
+	return left.ID == right.ID && left.State == right.State &&
+		left.TransitionRevision == right.TransitionRevision && left.TargetMode == right.TargetMode &&
+		left.TargetNodeID == right.TargetNodeID && left.WorkspacePhase == right.WorkspacePhase &&
+		left.WorkspaceBindingDigest == right.WorkspaceBindingDigest &&
+		left.WorkspaceMarkerBindingDigest == right.WorkspaceMarkerBindingDigest &&
+		left.WorkspaceOwner == right.WorkspaceOwner && left.WorkspaceFence == right.WorkspaceFence &&
+		left.WorkspaceMarkerValidationAttemptID == right.WorkspaceMarkerValidationAttemptID &&
+		left.WorkspaceMarkerValidationAttemptFence == right.WorkspaceMarkerValidationAttemptFence &&
+		left.WorkspaceMarkerValidationNodeFence == right.WorkspaceMarkerValidationNodeFence &&
+		left.WorkspaceCleanupPhase == right.WorkspaceCleanupPhase &&
+		left.WorkspaceCleanupOwner == right.WorkspaceCleanupOwner &&
+		sameContentTime(left.WorkspaceCleanupLeaseExpiresAt, right.WorkspaceCleanupLeaseExpiresAt) &&
+		left.WorkspaceCleanupFence == right.WorkspaceCleanupFence &&
+		sameOptionalOpaqueID(left.WorkspaceCleanupNodeLeaseID, right.WorkspaceCleanupNodeLeaseID) &&
+		left.WorkspaceCleanupNodeFence == right.WorkspaceCleanupNodeFence &&
+		left.WorkspaceCleanupAttempt == right.WorkspaceCleanupAttempt &&
+		sameContentTime(left.PlaintextDeadline, right.PlaintextDeadline) &&
+		left.UpdatedAt.Equal(right.UpdatedAt)
+}
