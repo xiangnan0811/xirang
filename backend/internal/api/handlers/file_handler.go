@@ -432,34 +432,6 @@ type realPathResolver interface {
 	RealPath(p string) (string, error)
 }
 
-// validateNodePath 校验请求路径是否落在节点的允许根目录（Node.BasePath 及该节点任务的 RsyncSource）内。
-//
-// 实现要点（B-2 加固）：
-//  1. 通过 sftp.RealPath 让节点端解析输入路径与每个白名单根，获得解析符号链接后的绝对路径；
-//  2. 在解析后的字符串上做严格前缀比对，封堵 "ln -s /etc /backup/sneaky" 类逃逸；
-//  3. 返回值为节点端真实路径，可直接用于后续 SFTP 调用，避免再次解析。
-//
-// 性能影响：每次请求新增 (1 + len(roots)) 次 SFTP RTT；典型 LAN 节点 ~10ms 量级，可接受。
-// 开发旁路：FILE_BROWSER_ALLOW_ALL=true 且处于开发环境时跳过解析，仅做语法 Clean。
-func validateNodePath(ctx context.Context, resolver realPathResolver, rawPath string, node model.Node, db *gorm.DB) (string, error) {
-	if util.GetEnvOrDefault("FILE_BROWSER_ALLOW_ALL", "") == "true" {
-		if !util.IsDevelopmentEnv() {
-			return "", fmt.Errorf("FILE_BROWSER_ALLOW_ALL 仅允许在开发环境中使用")
-		}
-		return filepath.Clean(rawPath), nil
-	}
-
-	if resolver == nil {
-		return "", fmt.Errorf("路径解析失败：缺少 SFTP 会话")
-	}
-	roots, err := loadNodeFileRoots(ctx, db, node)
-	if err != nil {
-		return "", err
-	}
-	_, _, resolved, err := resolveNodeFileAccess(resolver, rawPath, roots)
-	return resolved, err
-}
-
 func loadNodeFileRoots(ctx context.Context, db *gorm.DB, node model.Node) ([]fileaccess.Root, error) {
 	if db == nil {
 		return nil, fmt.Errorf("%w: database unavailable", errFileRootQuery)
