@@ -943,12 +943,6 @@ func backupContentNativeRenderer(renderer content.Renderer) bool {
 		renderer == content.RendererNativeAudio || renderer == content.RendererNativeVideo
 }
 
-func backupContentSecureCookie(request *http.Request, allowInsecureLoopback bool) (bool, error) {
-	return (BackupContentSchemePolicy{}).SecureCookie(request, BackupContentTransportOptions{
-		AllowInsecureLoopback: allowInsecureLoopback,
-	})
-}
-
 func backupContentLocalhost(hostport string) bool {
 	host := hostport
 	if parsed, _, err := net.SplitHostPort(hostport); err == nil {
