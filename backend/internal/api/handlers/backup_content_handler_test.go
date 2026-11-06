@@ -866,30 +866,157 @@ func TestBackupContentServeBlocksQueryAuthorizationAndCrossSiteBeforeService(t *
 }
 
 func TestBackupContentSecureCookieAllowsOnlyExplicitLoopbackHTTP(t *testing.T) {
-	httpsRequest := httptest.NewRequest(http.MethodPost, "https://xirang.example/ticket", nil)
-	if secure, err := backupContentSecureCookie(httpsRequest, false); err != nil || !secure {
-		t.Fatalf("HTTPS secure=%v err=%v", secure, err)
+	gin.SetMode(gin.TestMode)
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	loopback := httptest.NewRequest(http.MethodPost, "http://localhost:10761/ticket", nil)
-	loopback.RemoteAddr = "127.0.0.1:43210"
-	if secure, err := backupContentSecureCookie(loopback, true); err != nil || secure {
-		t.Fatalf("explicit loopback HTTP secure=%v err=%v", secure, err)
+	allowLoopback := false
+	allowPrivate := false
+	fake := &backupContentServiceFake{}
+	handler := NewBackupContentHandler(fake, nil, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{
+			TicketTimeout:               5 * time.Second,
+			AllowInsecureLoopback:       allowLoopback,
+			AllowInsecurePrivateNetwork: allowPrivate,
+		}, nil
+	}).WithSchemePolicy(policy)
+	now := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	router := gin.New()
+	router.POST("/api/v1/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets", func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, uint(42))
+		c.Set(middleware.CtxUsername, "operator")
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: 42, Role: "operator", TokenVersion: 3, ExpiresAt: now,
+		})
+		c.Next()
+	}, handler.Issue)
+
+	pointID, entryID := strings.Repeat("a", 32), strings.Repeat("b", 64)
+	issuePath := "/api/v1/recovery-points/" + pointID + "/entries/" + entryID + "/delivery-tickets"
+	bodyJSON := `{"schema_version":1,"action":"preview","renderer":"safe_raster","profile":"raster_v1"}`
+	resetFake := func(secureCookie bool) {
+		fake.issueRequests = nil
+		ticket := backupContentHandlerTestTicket(t, content.DeliveryPreview, content.RendererSafeRaster, content.ProfileRasterV1)
+		ticket.Cookie.Secure = secureCookie
+		fake.ticket = ticket
 	}
+	assertIssuedCookie := func(t *testing.T, response *httptest.ResponseRecorder, wantSecure bool) {
+		t.Helper()
+		if response.Code != http.StatusOK || len(fake.issueRequests) != 1 {
+			t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
+		}
+		if fake.issueRequests[0].SecureCookie != wantSecure {
+			t.Fatalf("issue request SecureCookie=%v want %v", fake.issueRequests[0].SecureCookie, wantSecure)
+		}
+		cookies := response.Header().Values("Set-Cookie")
+		if len(cookies) != 1 {
+			t.Fatalf("Set-Cookie count=%d values=%v", len(cookies), cookies)
+		}
+		setCookie := cookies[0]
+		if !strings.Contains(setCookie, "HttpOnly") || !strings.Contains(setCookie, "SameSite=Strict") ||
+			!strings.Contains(setCookie, "Path="+fake.ticket.Cookie.Path) ||
+			strings.Contains(setCookie, "Secure") != wantSecure {
+			t.Fatalf("Set-Cookie=%q wantSecure=%v", setCookie, wantSecure)
+		}
+	}
+	assertRejectedBeforeService := func(t *testing.T, request *http.Request) {
+		t.Helper()
+		resetFake(false)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if len(fake.issueRequests) != 0 {
+			t.Fatalf("unexpected service Issue calls=%d for host=%s remote=%s headers=%v",
+				len(fake.issueRequests), request.Host, request.RemoteAddr, request.Header)
+		}
+		if cookies := response.Header().Values("Set-Cookie"); len(cookies) != 0 {
+			t.Fatalf("unexpected Set-Cookie=%v for rejected request", cookies)
+		}
+		assertSecureTransportRequiredResponse(t, response)
+	}
+
+	// 1. Direct HTTPS -> SecureCookie=true, Set-Cookie has Secure.
+	allowLoopback, allowPrivate = false, false
+	resetFake(true)
+	httpsRequest := httptest.NewRequest(http.MethodPost, "https://xirang.example"+issuePath, strings.NewReader(bodyJSON))
+	httpsRequest.RemoteAddr = "203.0.113.5:43210"
+	httpsRequest.Header.Set("Content-Type", "application/json")
+	httpsResponse := httptest.NewRecorder()
+	router.ServeHTTP(httpsResponse, httpsRequest)
+	assertIssuedCookie(t, httpsResponse, true)
+
+	// 2. Trusted proxy HTTPS -> SecureCookie=true, Set-Cookie has Secure.
+	resetFake(true)
+	proxyHTTPS := httptest.NewRequest(http.MethodPost, "http://xirang.example"+issuePath, strings.NewReader(bodyJSON))
+	proxyHTTPS.RemoteAddr = "127.0.0.1:43210"
+	proxyHTTPS.Header.Set("Content-Type", "application/json")
+	proxyHTTPS.Header.Set("X-Forwarded-Proto", "https")
+	proxyHTTPS.Header.Set("X-Forwarded-For", "198.51.100.77")
+	proxyHTTPSResponse := httptest.NewRecorder()
+	router.ServeHTTP(proxyHTTPSResponse, proxyHTTPS)
+	assertIssuedCookie(t, proxyHTTPSResponse, true)
+
+	// 3. Explicit loopback HTTP (localhost, 127.0.0.1, [::1]) -> SecureCookie=false, Set-Cookie omits Secure.
+	allowLoopback, allowPrivate = true, false
+	for _, tc := range []struct {
+		target string
+		remote string
+	}{
+		{target: "http://localhost:10761" + issuePath, remote: "127.0.0.1:43210"},
+		{target: "http://127.0.0.1:10761" + issuePath, remote: "127.0.0.1:43210"},
+		{target: "http://[::1]:10761" + issuePath, remote: "[::1]:43210"},
+	} {
+		resetFake(false)
+		loopback := httptest.NewRequest(http.MethodPost, tc.target, strings.NewReader(bodyJSON))
+		loopback.RemoteAddr = tc.remote
+		loopback.Header.Set("Content-Type", "application/json")
+		loopbackResponse := httptest.NewRecorder()
+		router.ServeHTTP(loopbackResponse, loopback)
+		assertIssuedCookie(t, loopbackResponse, false)
+	}
+
+	// 4. Explicit private-network HTTP (direct RFC1918) -> SecureCookie=false, Set-Cookie omits Secure.
+	allowLoopback, allowPrivate = false, true
+	resetFake(false)
+	privateHTTP := httptest.NewRequest(http.MethodPost, "http://xirang.example"+issuePath, strings.NewReader(bodyJSON))
+	privateHTTP.RemoteAddr = "192.168.4.5:43210"
+	privateHTTP.Header.Set("Content-Type", "application/json")
+	privateHTTPResponse := httptest.NewRecorder()
+	router.ServeHTTP(privateHTTPResponse, privateHTTP)
+	assertIssuedCookie(t, privateHTTPResponse, false)
+
+	// 5. Rejected HTTP requests on Issue: 0 service calls, 0 Set-Cookie headers, 503 secure_transport_required.
+	allowLoopback, allowPrivate = true, false
 	for _, mutate := range []func(*http.Request){
 		func(request *http.Request) { request.RemoteAddr = "192.0.2.10:43210" },
 		func(request *http.Request) { request.Host = "xirang.example" },
 		func(request *http.Request) { request.Header.Set("Forwarded", "proto=http;host=localhost") },
+		func(request *http.Request) {
+			request.Header.Set("X-Forwarded-Proto", "http")
+			request.Header.Set("X-Forwarded-For", "127.0.0.1")
+		},
 	} {
-		request := httptest.NewRequest(http.MethodPost, "http://localhost:10761/ticket", nil)
+		request := httptest.NewRequest(http.MethodPost, "http://localhost:10761"+issuePath, strings.NewReader(bodyJSON))
 		request.RemoteAddr = "127.0.0.1:43210"
+		request.Header.Set("Content-Type", "application/json")
 		mutate(request)
-		if _, err := backupContentSecureCookie(request, true); err == nil {
-			t.Fatalf("unsafe HTTP request accepted: host=%s remote=%s headers=%v", request.Host, request.RemoteAddr, request.Header)
-		}
+		assertRejectedBeforeService(t, request)
 	}
-	if _, err := backupContentSecureCookie(loopback, false); err == nil {
-		t.Fatal("loopback HTTP accepted without explicit setting")
-	}
+
+	// Loopback HTTP rejected when AllowInsecureLoopback is false.
+	allowLoopback, allowPrivate = false, false
+	disabledLoopback := httptest.NewRequest(http.MethodPost, "http://localhost:10761"+issuePath, strings.NewReader(bodyJSON))
+	disabledLoopback.RemoteAddr = "127.0.0.1:43210"
+	disabledLoopback.Header.Set("Content-Type", "application/json")
+	assertRejectedBeforeService(t, disabledLoopback)
+
+	// Public HTTP client rejected even when AllowInsecurePrivateNetwork is true.
+	allowLoopback, allowPrivate = false, true
+	publicHTTP := httptest.NewRequest(http.MethodPost, "http://xirang.example"+issuePath, strings.NewReader(bodyJSON))
+	publicHTTP.RemoteAddr = "203.0.113.5:43210"
+	publicHTTP.Header.Set("Content-Type", "application/json")
+	assertRejectedBeforeService(t, publicHTTP)
 }
 
 func TestBackupContentSchemePolicyRequiresTrustedProxyForForwardedHTTPS(t *testing.T) {
@@ -1229,6 +1356,9 @@ func assertSecureTransportRequiredResponse(t *testing.T, response *httptest.Resp
 	t.Helper()
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if cookies := response.Header().Values("Set-Cookie"); len(cookies) != 0 {
+		t.Fatalf("unexpected Set-Cookie=%v", cookies)
 	}
 	var envelope struct {
 		Code int `json:"code"`
