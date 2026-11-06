@@ -85,6 +85,8 @@ Rsync 版本化激活只读根重验与历史准备死码收敛的发行说明�
 
 Rsync 版本化首次预检前置路径分离校验的发行说明归档于 CHANGELOG `0.73.13` 版本节：须包含在 `BootstrapRsyncManagedRoot` 前调用 `ValidateRsyncManagedRootBootstrapSeparation` 对 `<target>.xirang-rsync-v1` 与 `legacyTarget`、`sourcePath` 执行词法与只读 VFS 分离校验（`ENOENT` 时不创建目录），确保重叠来源被移走后首次预检返回 `409`、不签发票据、不在来源原路径重建受管根或写入控制文件且旧目标／绑定／恢复点不变，同时保留正常独立来源首次预检创建专属 `<target>.xirang-rsync-v1` 受管根的正向行为与既有 `ValidateRsyncManagedRootSeparation` 重验。无新增公开 API、配置或 schema migration，换版前排空在途预检／激活（重启后重新预检），回退会恢复首次预检先建目录再校验分离的缺陷。
 
+Catalog 状态与证据投影及死码收敛的发行说明归档于 CHANGELOG `0.73.14` 版本节：须包含新增 `authorizedPublicPoint` 使缺少来源观测（`observed_at IS NULL`）的可变恢复点在 `catalog-status` 与 `evidence` 正常投影 `staleness.status = "unknown"`（HTTP `200 OK`）并保留 `GetRecoveryPoint`／`ListRecoveryPoints` 的 `ToRecoveryPointDTO` 校验，以及移除 `ParseCoverageStatus`、`ParseStalenessStatus`、`ParseEvidenceLayerStatus` 无生产调用解析函数并保留 `ParseFingerprintStrength` 与四类真实入口不泄露内部值的回归边界。无新增公开 API、配置或 schema migration，换版前排空在途请求，回退会恢复缺少来源观测的可变恢复点查询返回 `400` 的缺陷。
+
 发布说明的归属以目标版本标题为边界：将完整的“行为与升级说明”移到目标版本节内，并清空已交付的 `Unreleased` 条目。仅在 CHANGELOG 顶部保留警告不够；合并前和发布后都须核对目标版本及 GitHub Release 正文实际包含这些警告。
 
 Release Please 自动插入版本标题时可能将原有升级说明留在 `Unreleased`，生成的 PR 正文也可能只有提交摘要。此时原样移动 CHANGELOG 中已审阅的说明，并同步 PR 正文的目标版本节；两处都保留完整风险边界，再提交补充变更。
