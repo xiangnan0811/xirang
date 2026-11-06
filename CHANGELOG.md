@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.14](https://github.com/xiangnan0811/xirang/compare/v0.73.13...v0.73.14) (2026-11-06)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** project catalog status when mutable observation is missing and drop unused enum parsers ([#686](https://github.com/xiangnan0811/xirang/issues/686)) ([a987f75](https://github.com/xiangnan0811/xirang/commit/a987f753d6e175cb357ac05ce8f21ee99981f47d))
+
 ## [0.73.13](https://github.com/xiangnan0811/xirang/compare/v0.73.12...v0.73.13) (2026-11-04)
 
 
