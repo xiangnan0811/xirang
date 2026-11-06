@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## [0.73.14](https://github.com/xiangnan0811/xirang/compare/v0.73.13...v0.73.14) (2026-11-06)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** project catalog status when mutable observation is missing and drop unused enum parsers ([#686](https://github.com/xiangnan0811/xirang/issues/686)) ([a987f75](https://github.com/xiangnan0811/xirang/commit/a987f753d6e175cb357ac05ce8f21ee99981f47d))
+
+### Catalog 状态与证据投影及死码收敛
+
+- 修复 `(*Service).GetCatalogStatus`（`GET /api/v1/recovery-points/:id/catalog-status`）与 `(*Service).GetEvidence`（`GET /api/v1/recovery-points/:id/evidence`）在读取恢复点前调用 `GetRecoveryPoint`／`loadAuthorizedRecoveryPoint` 触发 `backupasset.ToRecoveryPointDTO` 生命周期校验，导致缺少来源观测（`observed_at IS NULL`）的可变恢复点（`mutable_head`）在进入 `projectStaleness` 前即以 `backupasset.ErrInvalidState: invalid mutable-head lifecycle`（HTTP `400 Bad Request`）失败的问题。
+- 新增 `(*Service).authorizedPublicPoint`（统一执行 `validatePointScope`、`ownership.AuthorizedPointIDs`、`loadPointAndRepository` 与 `publicCatalogPoint` 公开门禁）并由 `GetCatalogStatus`、`authorizedActivePoint` 和 `GetEvidence` 复用，使缺少来源观测的可变恢复点按 `projectStaleness` 合同返回 HTTP `200 OK` 与 `staleness.status = "unknown"`，同时消除 `GetEvidence` 对恢复点与仓储的重复查询，并保留 `GetRecoveryPoint`、`ListRecoveryPoints` 原有的 `ToRecoveryPointDTO` 生命周期校验。
+- 移除 `catalog/contracts.go` 中无生产消费者的 `ParseCoverageStatus`、`ParseStalenessStatus`、`ParseEvidenceLayerStatus` 与 `validEvidenceLayerStatuses`，保留仍在生产使用的 `ParseFingerprintStrength` 及其他契约解析器；沿 `catalog-status` 与 `evidence` 两个真实入口补齐无可用索引、缺少来源观测、来源已漂移、证据含未知枚举／字段值四类场景的服务层与 HTTP 端到端回归，验证未知枚举安全收敛为公开回退状态且不泄露内部 `error_detail`、`sandbox_path`、`restore_error` 或原始数据库未知值。
+- 无新增公开 API、运行时配置或数据库 schema migration，不改写已发布迁移或历史数据；既有 Catalog、备份资产与恢复迁移的降级限制继续适用。升级前保全数据库、匹配密钥、配置和备份副本，排空旧 Core 在途请求后换版；新逻辑仅在新版 Core 后续 `catalog-status` 与 `evidence` 查询中生效。回退旧版 Core 会恢复缺少来源观测的可变恢复点在 `catalog-status`／`evidence` 返回 `400` 的缺陷。
+
 ## [0.73.13](https://github.com/xiangnan0811/xirang/compare/v0.73.12...v0.73.13) (2026-11-04)
 
 
