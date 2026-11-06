@@ -161,15 +161,6 @@ func importedLegacyConfigReferencePresent(data map[string]interface{}, field str
 	}
 }
 
-// configImportDuplicateNameIndexes returns all indexes belonging to a
-// repeated, non-empty normalized entity name. Every member of an ambiguous
-// input group is rejected by the import phase; no first-match guessing is
-// allowed.
-func configImportDuplicateNameIndexes(records []map[string]interface{}) map[int]bool {
-	duplicates, _ := configImportDuplicateNameIndexesContext(context.Background(), records)
-	return duplicates
-}
-
 func configImportDuplicateNameIndexesContext(ctx context.Context, records []map[string]interface{}) (map[int]bool, error) {
 	groups := make(map[string][]int)
 	for index, record := range records {
