@@ -59,10 +59,6 @@ func TestConfigImportNameReferenceProtocol(t *testing.T) {
 			}
 		})
 	}
-	duplicates := configImportDuplicateNameIndexes([]map[string]interface{}{{"name": " A "}, {"name": "A"}, {"name": "a"}, {"name": ""}, {"name": ""}})
-	if len(duplicates) != 2 || !duplicates[0] || !duplicates[1] {
-		t.Fatalf("duplicate group=%v", duplicates)
-	}
 }
 
 func TestConfigImportNameWarningDeduplication(t *testing.T) {

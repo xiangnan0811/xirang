@@ -1153,8 +1153,19 @@ func runConfigNameMappingDuplicateNames(t *testing.T, engine string) {
 		},
 		"nodes": []any{
 			map[string]any{"name": "duplicate-node", "host": "10.251.0.1", "username": "root", "auth_type": "key"},
-			map[string]any{"name": "duplicate-node", "host": "10.251.0.2", "username": "root", "auth_type": "key"},
+			map[string]any{"name": " duplicate-node ", "host": "10.251.0.2", "username": "root", "auth_type": "key"},
 		},
+	}
+	previewResp := serveConfigImportPreviewHTTP(t, db, settings.NewService(db), "overwrite", mustMarshalConfigImportPreviewBody(t, body), nil)
+	if previewResp.Code != http.StatusOK {
+		t.Fatalf("duplicate name preview status=%d body=%s", previewResp.Code, previewResp.Body.String())
+	}
+	previewDTO := decodeConfigImportPreviewHTTP(t, previewResp)
+	if got := previewHTTPEntity(t, previewDTO, configImportEntityNodes); got.Input != 2 || got.Rejected != 2 || got.Created != 0 || got.Updated != 0 || got.Skipped != 0 {
+		t.Fatalf("duplicate node preview entity=%+v", got)
+	}
+	if got := previewHTTPEntity(t, previewDTO, configImportEntitySSHKeys); got.Input != 2 || got.Rejected != 2 || got.Created != 0 || got.Updated != 0 || got.Skipped != 0 {
+		t.Fatalf("duplicate ssh_keys preview entity=%+v", got)
 	}
 	response, result := serveConfigNameMappingImport(t, db, settings.NewService(db), "overwrite", body)
 	if response.Code != http.StatusOK || result.Created != 0 || result.Updated != 0 || result.Rejected != 4 || result.Imported != 0 {
@@ -1173,6 +1184,282 @@ func runConfigNameMappingDuplicateNames(t *testing.T, engine string) {
 		if count != 0 {
 			t.Fatalf("duplicate %s was partially imported count=%d", table, count)
 		}
+	}
+
+	for _, conflict := range []string{"skip", "overwrite"} {
+		t.Run("matrix_"+conflict, func(t *testing.T) {
+			matrixDB, _ := openConfigHandlerTestDBPairForEngine(t, engine)
+			migrateP1ConfigImport(t, matrixDB)
+
+			upperKeyPriv := configNameMappingPrivateKey(t, 63)
+			lowerKeyPriv := configNameMappingPrivateKey(t, 64)
+			scopeKeyPriv := configNameMappingPrivateKey(t, 65)
+			updatedLowerKeyPriv := configNameMappingPrivateKey(t, 68)
+
+			existingUpperKey := configNameMappingKey(t, matrixDB, "Dup-Key", upperKeyPriv, false)
+			existingLowerKey := configNameMappingKey(t, matrixDB, "dup-key", lowerKeyPriv, false)
+			existingScopeKey := configNameMappingKey(t, matrixDB, "existing-scope-key", scopeKeyPriv, false)
+
+			existingUpperNode := model.Node{
+				Name: "Dup-Node", Host: "10.251.0.10", Port: 22, Username: "orig-upper-node",
+				AuthType: "key", SSHKeyID: &existingUpperKey.ID, BackupDir: "dup-node-upper",
+			}
+			if err := matrixDB.Create(&existingUpperNode).Error; err != nil {
+				t.Fatalf("create existingUpperNode: %v", err)
+			}
+			existingLowerNode := model.Node{
+				Name: "dup-node", Host: "10.251.0.20", Port: 22, Username: "orig-lower-node",
+				AuthType: "key", SSHKeyID: &existingUpperKey.ID, BackupDir: "dup-node",
+			}
+			if err := matrixDB.Create(&existingLowerNode).Error; err != nil {
+				t.Fatalf("create existingLowerNode: %v", err)
+			}
+			existingBoundNode := model.Node{
+				Name: "existing-bound-node", Host: "10.251.0.30", Port: 22, Username: "orig-bound-node",
+				AuthType: "key", SSHKeyID: &existingLowerKey.ID, BackupDir: "existing-bound-node",
+			}
+			if err := matrixDB.Create(&existingBoundNode).Error; err != nil {
+				t.Fatalf("create existingBoundNode: %v", err)
+			}
+
+			wantUpperScope := strconv.FormatUint(uint64(existingUpperNode.ID), 10)
+			wantLowerScope := strconv.FormatUint(uint64(existingLowerNode.ID), 10)
+			if err := matrixDB.Model(&model.SSHKey{}).Where("id IN ?", []uint{existingUpperKey.ID, existingLowerKey.ID}).Update("allowed_node_ids", wantUpperScope).Error; err != nil {
+				t.Fatalf("seed upper/lower key scopes: %v", err)
+			}
+			if err := matrixDB.Model(&model.SSHKey{}).Where("id = ?", existingScopeKey.ID).Update("allowed_node_ids", wantLowerScope).Error; err != nil {
+				t.Fatalf("seed existingScopeKey scope: %v", err)
+			}
+
+			matrixBody := map[string]any{
+				"ssh_keys": []any{
+					map[string]any{"name": " Dup-Key ", "username": "dup-key-overwrite-1", "private_key": configNameMappingPrivateKey(t, 66), "allowed_node_names": []any{"dup-node"}},
+					map[string]any{"name": "Dup-Key", "username": "dup-key-overwrite-2", "private_key": configNameMappingPrivateKey(t, 67), "allowed_node_names": []any{"dup-node"}},
+					map[string]any{"name": "dup-key", "username": "updated-lower-key", "private_key": updatedLowerKeyPriv, "allowed_node_names": []any{" dup-node "}},
+					map[string]any{"name": "", "username": "empty-key-1", "private_key": configNameMappingPrivateKey(t, 69)},
+					map[string]any{"name": " \t\n ", "username": "empty-key-2", "private_key": configNameMappingPrivateKey(t, 70)},
+					map[string]any{"name": "existing-scope-key", "username": "scope-overwrite-attempt", "private_key": configNameMappingPrivateKey(t, 71), "allowed_node_names": []any{" Dup-Node "}},
+					map[string]any{"name": "new-ambiguous-scope-key", "username": "new-ambiguous-scope", "private_key": configNameMappingPrivateKey(t, 72), "allowed_node_names": []any{"dup-node", " Dup-Node "}},
+					map[string]any{"name": "Fresh-Key", "username": "fresh-upper-key", "private_key": configNameMappingPrivateKey(t, 73), "allowed_node_names": []any{" fresh-node "}},
+					map[string]any{"name": "fresh-key", "username": "fresh-lower-key", "private_key": configNameMappingPrivateKey(t, 74), "allowed_node_names": []any{"dup-node"}},
+				},
+				"nodes": []any{
+					map[string]any{"name": " Dup-Node ", "host": "10.251.1.1", "username": "dup-node-overwrite-1", "auth_type": "key", "ssh_key_name": "dup-key"},
+					map[string]any{"name": "Dup-Node", "host": "10.251.1.2", "username": "dup-node-overwrite-2", "auth_type": "key", "ssh_key_name": "dup-key"},
+					map[string]any{"name": "dup-node", "host": "10.251.1.3", "username": "updated-lower-node", "auth_type": "key", "ssh_key_name": " dup-key "},
+					map[string]any{"name": "", "host": "10.251.1.4", "username": "empty-node-1", "auth_type": "key"},
+					map[string]any{"name": "   ", "host": "10.251.1.5", "username": "empty-node-2", "auth_type": "key"},
+					map[string]any{"name": "existing-bound-node", "host": "10.251.1.6", "username": "bound-overwrite-attempt", "auth_type": "key", "ssh_key_name": " Dup-Key "},
+					map[string]any{"name": "new-ambiguous-key-node", "host": "10.251.1.7", "username": "new-ambiguous-node", "auth_type": "key", "ssh_key_name": " Dup-Key "},
+					map[string]any{"name": " Fresh-Node ", "host": "10.251.1.8", "username": "fresh-dup-1", "auth_type": "key", "ssh_key_name": "Fresh-Key"},
+					map[string]any{"name": "Fresh-Node", "host": "10.251.1.9", "username": "fresh-dup-2", "auth_type": "key", "ssh_key_name": "Fresh-Key"},
+					map[string]any{"name": "fresh-node", "host": "10.251.1.10", "username": "fresh-lower-node", "auth_type": "key", "ssh_key_name": " fresh-key "},
+				},
+			}
+
+			probe := &configImportPreviewSQLProbe{}
+			decision := previewConfigImportDecision(t, matrixDB, conflict, matrixBody, probe)
+			assertConfigImportPreviewReadOnly(t, probe)
+
+			wantExistingAction := configImportActionSkip
+			wantAmbiguousExistingAction := configImportActionSkip
+			if conflict == "overwrite" {
+				wantExistingAction = configImportActionUpdate
+				wantAmbiguousExistingAction = configImportActionReject
+			}
+			for idx, want := range []configImportAction{
+				configImportActionReject,
+				configImportActionReject,
+				wantExistingAction,
+				configImportActionReject,
+				configImportActionReject,
+				wantAmbiguousExistingAction,
+				configImportActionCreate,
+				configImportActionCreate,
+				configImportActionCreate,
+			} {
+				assertConfigImportPreviewItemAction(t, decision, configImportEntitySSHKeys, idx, want)
+			}
+			for idx, want := range []configImportAction{
+				configImportActionReject,
+				configImportActionReject,
+				wantExistingAction,
+				configImportActionReject,
+				configImportActionReject,
+				wantAmbiguousExistingAction,
+				configImportActionCreate,
+				configImportActionReject,
+				configImportActionReject,
+				configImportActionCreate,
+			} {
+				assertConfigImportPreviewItemAction(t, decision, configImportEntityNodes, idx, want)
+			}
+
+			httpPreviewResp := serveConfigImportPreviewHTTP(t, matrixDB, settings.NewService(matrixDB), conflict, mustMarshalConfigImportPreviewBody(t, matrixBody), nil)
+			if httpPreviewResp.Code != http.StatusOK {
+				t.Fatalf("matrix %s preview HTTP status=%d body=%s", conflict, httpPreviewResp.Code, httpPreviewResp.Body.String())
+			}
+			httpPreviewDTO := decodeConfigImportPreviewHTTP(t, httpPreviewResp)
+			nodeEntity := previewHTTPEntity(t, httpPreviewDTO, configImportEntityNodes)
+			keyEntity := previewHTTPEntity(t, httpPreviewDTO, configImportEntitySSHKeys)
+			if conflict == "skip" {
+				if nodeEntity.Input != 10 || nodeEntity.Created != 2 || nodeEntity.Updated != 0 || nodeEntity.Skipped != 2 || nodeEntity.Rejected != 6 || nodeEntity.PendingValidation != 0 {
+					t.Fatalf("matrix skip preview nodes entity=%+v", nodeEntity)
+				}
+				if keyEntity.Input != 9 || keyEntity.Created != 3 || keyEntity.Updated != 0 || keyEntity.Skipped != 2 || keyEntity.Rejected != 4 || keyEntity.PendingValidation != 0 || keyEntity.DisabledImported != 1 {
+					t.Fatalf("matrix skip preview ssh_keys entity=%+v", keyEntity)
+				}
+			} else {
+				if nodeEntity.Input != 10 || nodeEntity.Created != 2 || nodeEntity.Updated != 1 || nodeEntity.Skipped != 0 || nodeEntity.Rejected != 7 || nodeEntity.PendingValidation != 0 {
+					t.Fatalf("matrix overwrite preview nodes entity=%+v", nodeEntity)
+				}
+				if keyEntity.Input != 9 || keyEntity.Created != 3 || keyEntity.Updated != 1 || keyEntity.Skipped != 0 || keyEntity.Rejected != 5 || keyEntity.PendingValidation != 0 || keyEntity.DisabledImported != 1 {
+					t.Fatalf("matrix overwrite preview ssh_keys entity=%+v", keyEntity)
+				}
+			}
+
+			applyResp, applyResult := serveConfigNameMappingImport(t, matrixDB, settings.NewService(matrixDB), conflict, matrixBody)
+			if applyResp.Code != http.StatusOK {
+				t.Fatalf("matrix %s apply status=%d body=%s", conflict, applyResp.Code, applyResp.Body.String())
+			}
+			assertConfigNameMappingWarningCodesUnique(t, applyResult)
+			for _, expected := range []struct {
+				entity string
+				index  int
+				name   string
+				code   string
+			}{
+				{configImportEntitySSHKeys, 0, "Dup-Key", configNameMappingWarningDuplicateName},
+				{configImportEntitySSHKeys, 1, "Dup-Key", configNameMappingWarningDuplicateName},
+				{configImportEntitySSHKeys, 3, "", configImportWarningInvalidInput},
+				{configImportEntitySSHKeys, 4, "", configImportWarningInvalidInput},
+				{configImportEntitySSHKeys, 5, "existing-scope-key", configImportWarningUnresolvedNodeScope},
+				{configImportEntitySSHKeys, 6, "new-ambiguous-scope-key", configImportWarningUnresolvedNodeScope},
+				{configImportEntityNodes, 0, "Dup-Node", configNameMappingWarningDuplicateName},
+				{configImportEntityNodes, 1, "Dup-Node", configNameMappingWarningDuplicateName},
+				{configImportEntityNodes, 3, "", configImportWarningInvalidInput},
+				{configImportEntityNodes, 4, "", configImportWarningInvalidInput},
+				{configImportEntityNodes, 5, "existing-bound-node", configImportWarningUnresolvedSSHKey},
+				{configImportEntityNodes, 6, "new-ambiguous-key-node", configImportWarningUnresolvedSSHKey},
+				{configImportEntityNodes, 7, "Fresh-Node", configNameMappingWarningDuplicateName},
+				{configImportEntityNodes, 8, "Fresh-Node", configNameMappingWarningDuplicateName},
+			} {
+				requireConfigNameMappingWarning(t, applyResult, expected.entity, expected.index, expected.code)
+				foundPreview := false
+				for _, w := range httpPreviewDTO.Warnings {
+					if w.Entity == expected.entity && w.Index == expected.index && w.Code == expected.code && w.Name == expected.name {
+						foundPreview = true
+						break
+					}
+				}
+				if !foundPreview {
+					t.Fatalf("preview missing warning %+v in %+v", expected, httpPreviewDTO.Warnings)
+				}
+			}
+			for _, nonDupIdx := range []int{2, 3, 4, 7, 8} {
+				for _, code := range configNameMappingWarningsAt(applyResult, configImportEntitySSHKeys, nonDupIdx) {
+					if code == configNameMappingWarningDuplicateName {
+						t.Fatalf("ssh_keys[%d] falsely classified as duplicate_name: %+v", nonDupIdx, applyResult.Warnings)
+					}
+				}
+			}
+			for _, nonDupIdx := range []int{2, 3, 4, 9} {
+				for _, code := range configNameMappingWarningsAt(applyResult, configImportEntityNodes, nonDupIdx) {
+					if code == configNameMappingWarningDuplicateName {
+						t.Fatalf("nodes[%d] falsely classified as duplicate_name: %+v", nonDupIdx, applyResult.Warnings)
+					}
+				}
+			}
+			if conflict == "skip" {
+				if applyResult.Nodes != 2 || applyResult.SSHKeys != 3 || applyResult.Created != 5 || applyResult.Updated != 0 || applyResult.Imported != 5 || applyResult.Skipped != 4 || applyResult.Rejected != 10 || applyResult.DisabledImported != 1 {
+					t.Fatalf("matrix skip apply result=%+v", applyResult)
+				}
+			} else {
+				if applyResult.Nodes != 3 || applyResult.SSHKeys != 4 || applyResult.Created != 5 || applyResult.Updated != 2 || applyResult.Imported != 7 || applyResult.Skipped != 0 || applyResult.Rejected != 12 || applyResult.DisabledImported != 1 {
+					t.Fatalf("matrix overwrite apply result=%+v", applyResult)
+				}
+			}
+
+			for _, absent := range []configNameMappingAbsentRow{
+				{table: "nodes", column: "name", value: "Fresh-Node"},
+				{table: "nodes", column: "name", value: " Fresh-Node "},
+				{table: "nodes", column: "name", value: ""},
+				{table: "ssh_keys", column: "name", value: ""},
+			} {
+				assertConfigNameMappingRowsAbsent(t, matrixDB, []configNameMappingAbsentRow{absent})
+			}
+
+			var gotUpperKey, gotLowerKey, gotScopeKey, gotNewAmbiguousKey, gotFreshUpperKey, gotFreshLowerKey model.SSHKey
+			for name, dst := range map[string]*model.SSHKey{
+				"Dup-Key":                 &gotUpperKey,
+				"dup-key":                 &gotLowerKey,
+				"existing-scope-key":      &gotScopeKey,
+				"new-ambiguous-scope-key": &gotNewAmbiguousKey,
+				"Fresh-Key":               &gotFreshUpperKey,
+				"fresh-key":               &gotFreshLowerKey,
+			} {
+				if err := matrixDB.Where("name = ?", name).First(dst).Error; err != nil {
+					t.Fatalf("load key %q: %v", name, err)
+				}
+			}
+			var gotUpperNode, gotLowerNode, gotBoundNode, gotNewAmbiguousNode, gotFreshLowerNode model.Node
+			for name, dst := range map[string]*model.Node{
+				"Dup-Node":               &gotUpperNode,
+				"dup-node":               &gotLowerNode,
+				"existing-bound-node":    &gotBoundNode,
+				"new-ambiguous-key-node": &gotNewAmbiguousNode,
+				"fresh-node":             &gotFreshLowerNode,
+			} {
+				if err := matrixDB.Where("name = ?", name).First(dst).Error; err != nil {
+					t.Fatalf("load node %q: %v", name, err)
+				}
+			}
+
+			if gotUpperKey.ID != existingUpperKey.ID || gotUpperKey.Username != existingUpperKey.Username || gotUpperKey.PrivateKey != upperKeyPriv || gotUpperKey.AllowedNodeIDs != wantUpperScope || gotUpperKey.Disabled {
+				t.Fatalf("duplicate input overwrote existing Dup-Key in %s: %s", conflict, configNameMappingKeySummary(gotUpperKey))
+			}
+			if gotUpperNode.ID != existingUpperNode.ID || gotUpperNode.Host != "10.251.0.10" || gotUpperNode.Username != "orig-upper-node" || gotUpperNode.SSHKeyID == nil || *gotUpperNode.SSHKeyID != existingUpperKey.ID {
+				t.Fatalf("duplicate input overwrote existing Dup-Node in %s: %s", conflict, configNameMappingNodeSummary(gotUpperNode))
+			}
+			if gotScopeKey.ID != existingScopeKey.ID || gotScopeKey.Username != existingScopeKey.Username || gotScopeKey.PrivateKey != scopeKeyPriv || gotScopeKey.AllowedNodeIDs != wantLowerScope || gotScopeKey.Disabled {
+				t.Fatalf("ambiguous node scope modified existing-scope-key in %s: %s", conflict, configNameMappingKeySummary(gotScopeKey))
+			}
+			if gotBoundNode.ID != existingBoundNode.ID || gotBoundNode.Host != "10.251.0.30" || gotBoundNode.Username != "orig-bound-node" || gotBoundNode.SSHKeyID == nil || *gotBoundNode.SSHKeyID != existingLowerKey.ID {
+				t.Fatalf("ambiguous key reference modified existing-bound-node in %s: %s", conflict, configNameMappingNodeSummary(gotBoundNode))
+			}
+			if !gotNewAmbiguousKey.Disabled || gotNewAmbiguousKey.AllowedNodeIDs != "" {
+				t.Fatalf("new ambiguous-scope key was not fail-closed in %s: %s", conflict, configNameMappingKeySummary(gotNewAmbiguousKey))
+			}
+			if gotNewAmbiguousNode.SSHKeyID != nil {
+				t.Fatalf("new node with ambiguous key reference bound a key in %s: %s", conflict, configNameMappingNodeSummary(gotNewAmbiguousNode))
+			}
+			wantFreshNodeScope := strconv.FormatUint(uint64(gotFreshLowerNode.ID), 10)
+			if gotFreshUpperKey.Disabled || gotFreshUpperKey.AllowedNodeIDs != wantFreshNodeScope {
+				t.Fatalf("Fresh-Key scope mismatch in %s: %s, want %q", conflict, configNameMappingKeySummary(gotFreshUpperKey), wantFreshNodeScope)
+			}
+			if gotFreshLowerKey.Disabled || gotFreshLowerKey.AllowedNodeIDs != wantLowerScope {
+				t.Fatalf("fresh-key scope mismatch in %s: %s, want %q", conflict, configNameMappingKeySummary(gotFreshLowerKey), wantLowerScope)
+			}
+			if gotFreshLowerNode.SSHKeyID == nil || *gotFreshLowerNode.SSHKeyID != gotFreshLowerKey.ID || *gotFreshLowerNode.SSHKeyID == gotFreshUpperKey.ID {
+				t.Fatalf("fresh-node bound wrong case key in %s: node=%s wantKey=%d upperKey=%d", conflict, configNameMappingNodeSummary(gotFreshLowerNode), gotFreshLowerKey.ID, gotFreshUpperKey.ID)
+			}
+
+			if conflict == "skip" {
+				if gotLowerKey.Username != existingLowerKey.Username || gotLowerKey.PrivateKey != lowerKeyPriv || gotLowerKey.AllowedNodeIDs != wantUpperScope {
+					t.Fatalf("skip mutated dup-key: %s", configNameMappingKeySummary(gotLowerKey))
+				}
+				if gotLowerNode.Host != "10.251.0.20" || gotLowerNode.Username != "orig-lower-node" || gotLowerNode.SSHKeyID == nil || *gotLowerNode.SSHKeyID != existingUpperKey.ID {
+					t.Fatalf("skip mutated dup-node: %s", configNameMappingNodeSummary(gotLowerNode))
+				}
+			} else {
+				if gotLowerKey.ID != existingLowerKey.ID || gotLowerKey.Username != "updated-lower-key" || gotLowerKey.PrivateKey != updatedLowerKeyPriv || gotLowerKey.AllowedNodeIDs != wantLowerScope || gotLowerKey.Disabled {
+					t.Fatalf("overwrite did not update case-distinct dup-key: %s", configNameMappingKeySummary(gotLowerKey))
+				}
+				if gotLowerNode.ID != existingLowerNode.ID || gotLowerNode.Host != "10.251.1.3" || gotLowerNode.Username != "updated-lower-node" || gotLowerNode.SSHKeyID == nil || *gotLowerNode.SSHKeyID != existingLowerKey.ID || *gotLowerNode.SSHKeyID == existingUpperKey.ID {
+					t.Fatalf("overwrite did not update case-distinct dup-node or bound wrong key: %s wantKey=%d upperKey=%d", configNameMappingNodeSummary(gotLowerNode), existingLowerKey.ID, existingUpperKey.ID)
+				}
+			}
+		})
 	}
 }
 
