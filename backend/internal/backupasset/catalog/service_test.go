@@ -134,50 +134,239 @@ func TestCatalogGenerationDTORejectsUnknownErrorCodeWithoutEcho(t *testing.T) {
 }
 
 // TestCatalogServiceProjectStalenessTracksFingerprintNotClock proves the
-// Staleness contract directly: for a mutable head only a fingerprint mismatch is
-// source drift. An unchanged fingerprint stays Fresh no matter how old
-// observed_at is, so preview and Files cannot rebuild a current generation on a
-// timer.
+// Catalog status contract through GetCatalogStatus: for a mutable head only a
+// fingerprint mismatch is source drift, an unchanged fingerprint stays Fresh no
+// matter how old observed_at is, a mutable head missing source observation
+// reports Unknown staleness, and points without an active complete generation
+// project accurate non-complete coverage with Unknown staleness while failing
+// closed without echoing unknown internal state or error codes.
 func TestCatalogServiceProjectStalenessTracksFingerprintNotClock(t *testing.T) {
+	db, _ := openCatalogBehaviorSQLite(t)
 	now := time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC)
-	service := &Service{now: func() time.Time { return now }}
-	fingerprint := strings.Repeat("a", 64)
 	aged := now.Add(-30 * 24 * time.Hour)
-	mutable := model.RecoveryPoint{
-		ID: strings.Repeat("2", 32), Semantics: string(backupasset.PointMutableHead),
-		SourceFingerprint: fingerprint, ObservedAt: &aged,
-	}
-	matching := model.CatalogGeneration{SourceFingerprint: fingerprint}
+	committed := now.Add(-24 * time.Hour)
+	fixture := seedCatalogOwnershipFixture(t, db, now)
+	service := newCatalogServiceForTest(t, db, now)
+	scope := AuthorizationScope{Role: "operator", UserID: fixture.operatorID}
 
-	fresh := service.projectStaleness(mutable, matching)
-	if fresh.Status != StalenessFresh || fresh.Reason != nil {
-		t.Fatalf("aged fingerprint-matching mutable staleness=%+v", fresh)
+	var immutablePoint model.RecoveryPoint
+	if err := db.First(&immutablePoint, "id = ?", fixture.ownedPointID).Error; err != nil {
+		t.Fatal(err)
 	}
-	if fresh.ObservedAt == nil || !fresh.ObservedAt.Equal(aged.UTC()) {
-		t.Fatalf("staleness observation=%v want %v", fresh.ObservedAt, aged.UTC())
-	}
-
-	drifted := service.projectStaleness(mutable, model.CatalogGeneration{SourceFingerprint: strings.Repeat("b", 64)})
-	if drifted.Status != StalenessStale || drifted.Reason == nil ||
-		drifted.Reason.Code != backupasset.CapabilityMutableSourceChanged {
-		t.Fatalf("fingerprint-mismatch mutable staleness=%+v", drifted)
+	if err := db.Model(&model.RecoveryPoint{}).Where("id = ?", immutablePoint.ID).Updates(map[string]any{
+		"source_fingerprint": strings.Repeat("a", 64),
+		"committed_at":       committed,
+	}).Error; err != nil {
+		t.Fatal(err)
 	}
 
-	unobserved := mutable
-	unobserved.ObservedAt = nil
-	if unknown := service.projectStaleness(unobserved, matching); unknown.Status != StalenessUnknown {
-		t.Fatalf("unobserved mutable staleness=%+v", unknown)
+	mutableRepo := model.BackupRepository{
+		ID: strings.Repeat("9", 32), ProviderKind: string(backupasset.ProviderRsync), DisplayName: "mutable-status-repo",
+		VersionMode: string(backupasset.VersionMutableHead), Status: string(backupasset.RepositoryOnline), CapabilityRevision: 1,
+		CapabilitiesJSON: `{"list":true,"open_sequential":true}`, ImmutabilityLevel: string(backupasset.ImmutabilityMutable),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&mutableRepo).Error; err != nil {
+		t.Fatal(err)
+	}
+	mutableTask := seedCatalogOwnershipTask(t, db, immutablePoint.ProducingNodeIDSnapshot, "mutable-status-task", now)
+	mutableLink := seedCatalogOwnershipLink(t, db, strings.Repeat("a", 32), mutableRepo.ID, mutableTask.ID, nil, now)
+	mutableLineage, err := json.Marshal(backupasset.RecoveryPointLineageSummary{ProducingTaskID: &mutableTask.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutableFingerprint := strings.Repeat("c", 64)
+	driftedFingerprint := strings.Repeat("d", 64)
+	mutablePoint := model.RecoveryPoint{
+		ID: strings.Repeat("b", 32), RepositoryID: mutableRepo.ID, ProducingTaskID: &mutableTask.ID,
+		ProducingTaskNameSnapshot: mutableLink.TaskNameSnapshot, ProducingNodeIDSnapshot: mutableLink.NodeIDSnapshot,
+		ProducingNodeNameSnapshot: mutableLink.NodeNameSnapshot, LineageJSON: string(mutableLineage),
+		EncryptedProviderLocator: "SECRET_MUTABLE_PROVIDER_LOCATOR_CANARY",
+		Semantics:                string(backupasset.PointMutableHead), State: string(backupasset.RecoveryPointObserved),
+		ObservedAt: &aged, SourceFingerprint: mutableFingerprint,
+		ConsistencyJSON: `{"mode":"mutable"}`, FidelityJSON: `{"strength":"weak"}`,
+		CapabilityRevision: 1, CapabilitiesJSON: `{"list":true}`, ImmutabilityLevel: string(backupasset.ImmutabilityMutable),
+		PhysicalAvailability: string(backupasset.PhysicalOnline), HoldState: string(backupasset.HoldNone),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&mutablePoint).Error; err != nil {
+		t.Fatal(err)
 	}
 
-	committed := now
-	immutable := model.RecoveryPoint{
-		ID: strings.Repeat("3", 32), Semantics: string(backupasset.PointNativeSnapshot),
-		SourceFingerprint: fingerprint, CommittedAt: &committed,
+	assertStatusNoInternalLeak := func(t *testing.T, status StatusDTO, forbidden ...string) {
+		t.Helper()
+		payload, marshalErr := json.Marshal(status)
+		if marshalErr != nil {
+			t.Fatalf("marshal status: %v", marshalErr)
+		}
+		body := string(payload)
+		for _, canary := range append([]string{
+			mutableFingerprint, driftedFingerprint, "SECRET_MUTABLE_PROVIDER_LOCATOR_CANARY", "source_fingerprint",
+		}, forbidden...) {
+			if canary != "" && strings.Contains(body, canary) {
+				t.Fatalf("catalog status leaked %q: %s", canary, body)
+			}
+		}
 	}
-	immutableStatus := service.projectStaleness(immutable, model.CatalogGeneration{SourceFingerprint: strings.Repeat("b", 64)})
-	if immutableStatus.Status != StalenessFresh {
-		t.Fatalf("immutable staleness=%+v", immutableStatus)
+
+	noIndexStatus, err := service.GetCatalogStatus(context.Background(), mutablePoint.ID, scope)
+	if err != nil {
+		t.Fatalf("no-index catalog status error: %v", err)
 	}
+	if noIndexStatus.Generation != nil || noIndexStatus.LatestBuild != nil ||
+		noIndexStatus.Coverage.Status != CoverageUnavailable || noIndexStatus.Coverage.IndexedEntries != 0 ||
+		noIndexStatus.Staleness.Status != StalenessUnknown || noIndexStatus.Staleness.ObservedAt != nil ||
+		noIndexStatus.Staleness.Reason != nil {
+		t.Fatalf("no-index catalog status=%+v, want unavailable/unknown", noIndexStatus)
+	}
+	assertStatusNoInternalLeak(t, noIndexStatus)
+
+	for index, tc := range []struct {
+		state        GenerationState
+		errorCode    GenerationErrorCode
+		wantCoverage CoverageStatus
+	}{
+		{state: GenerationBuilding, errorCode: GenerationErrorNone, wantCoverage: CoverageBuilding},
+		{state: GenerationSuperseded, errorCode: GenerationErrorNone, wantCoverage: CoverageBuilding},
+		{state: GenerationPartial, errorCode: GenerationErrorBuildIncomplete, wantCoverage: CoveragePartial},
+		{state: GenerationFailed, errorCode: GenerationErrorSourceChanged, wantCoverage: CoverageFailed},
+	} {
+		if err := db.Where("recovery_point_id = ?", mutablePoint.ID).Delete(&model.CatalogGeneration{}).Error; err != nil {
+			t.Fatal(err)
+		}
+		var finished *time.Time
+		if tc.state != GenerationBuilding {
+			finishedAt := now.Add(time.Duration(index+1) * time.Minute)
+			finished = &finishedAt
+		}
+		row := model.CatalogGeneration{
+			ID: fmt.Sprintf("%032x", 900+index), RecoveryPointID: mutablePoint.ID, Generation: index + 1,
+			State: string(tc.state), IsActive: false, SourceFingerprint: mutableFingerprint,
+			ExpectedEntryCount: 5, WrittenEntryCount: 2, ExpectedDigest: strings.Repeat("e", 64),
+			WrittenDigest: strings.Repeat("f", 64), ErrorCode: string(tc.errorCode),
+			StartedAt: now, FinishedAt: finished, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+		status, statusErr := service.GetCatalogStatus(context.Background(), mutablePoint.ID, scope)
+		if statusErr != nil {
+			t.Fatalf("non-active %s catalog status error: %v", tc.state, statusErr)
+		}
+		if status.Generation != nil || status.LatestBuild == nil || status.LatestBuild.State != tc.state ||
+			status.Coverage.Status != tc.wantCoverage || status.Coverage.IndexedEntries != 2 ||
+			status.Staleness.Status != StalenessUnknown || status.Staleness.ObservedAt != nil || status.Staleness.Reason != nil {
+			t.Fatalf("non-active %s catalog status=%+v, want coverage=%s staleness=unknown", tc.state, status, tc.wantCoverage)
+		}
+		assertStatusNoInternalLeak(t, status)
+	}
+
+	for index, bad := range []struct {
+		name      string
+		active    bool
+		state     string
+		errorCode string
+		canary    string
+	}{
+		{name: "unknown_state", active: false, state: "SECRET_FUTURE_GENERATION_STATE", errorCode: "", canary: "SECRET_FUTURE_GENERATION_STATE"},
+		{name: "unknown_error_code", active: false, state: string(GenerationFailed), errorCode: "SECRET_PROVIDER_RAW_ERROR_CODE", canary: "SECRET_PROVIDER_RAW_ERROR_CODE"},
+		{name: "active_non_complete", active: true, state: string(GenerationPartial), errorCode: string(GenerationErrorBuildIncomplete)},
+	} {
+		if err := db.Where("recovery_point_id = ?", mutablePoint.ID).Delete(&model.CatalogGeneration{}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec("PRAGMA ignore_check_constraints = ON").Error; err != nil {
+			t.Fatal(err)
+		}
+		row := model.CatalogGeneration{
+			ID: fmt.Sprintf("%032x", 950+index), RecoveryPointID: mutablePoint.ID, Generation: index + 1,
+			State: bad.state, IsActive: bad.active, SourceFingerprint: mutableFingerprint,
+			ExpectedEntryCount: 1, WrittenEntryCount: 1, ExpectedDigest: strings.Repeat("e", 64),
+			WrittenDigest: strings.Repeat("f", 64), ErrorCode: bad.errorCode,
+			StartedAt: now, FinishedAt: &now, CreatedAt: now, UpdatedAt: now,
+		}
+		createErr := db.Create(&row).Error
+		_ = db.Exec("PRAGMA ignore_check_constraints = OFF").Error
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		_, statusErr := service.GetCatalogStatus(context.Background(), mutablePoint.ID, scope)
+		if !errors.Is(statusErr, ErrUnknownInternalState) {
+			t.Fatalf("%s error=%v, want ErrUnknownInternalState", bad.name, statusErr)
+		}
+		if bad.canary != "" && strings.Contains(statusErr.Error(), bad.canary) {
+			t.Fatalf("%s error echoed canary %q: %v", bad.name, bad.canary, statusErr)
+		}
+	}
+
+	if err := db.Where("recovery_point_id = ?", mutablePoint.ID).Delete(&model.CatalogGeneration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	activeMutableGen := model.CatalogGeneration{
+		ID: strings.Repeat("c", 32), RecoveryPointID: mutablePoint.ID, Generation: 10,
+		State: string(GenerationComplete), IsActive: true, SourceFingerprint: mutableFingerprint,
+		ExpectedEntryCount: 3, WrittenEntryCount: 3, ExpectedDigest: strings.Repeat("e", 64),
+		WrittenDigest: strings.Repeat("f", 64), StartedAt: now, FinishedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&activeMutableGen).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	freshStatus, err := service.GetCatalogStatus(context.Background(), mutablePoint.ID, scope)
+	if err != nil {
+		t.Fatalf("aged matching mutable catalog status error: %v", err)
+	}
+	if freshStatus.Coverage.Status != CoverageComplete || freshStatus.Staleness.Status != StalenessFresh ||
+		freshStatus.Staleness.Reason != nil || freshStatus.Staleness.ObservedAt == nil ||
+		!freshStatus.Staleness.ObservedAt.Equal(aged.UTC()) {
+		t.Fatalf("aged matching mutable status=%+v, want complete/fresh at %s", freshStatus, aged.UTC())
+	}
+	assertStatusNoInternalLeak(t, freshStatus)
+
+	if err := db.Model(&model.RecoveryPoint{}).Where("id = ?", mutablePoint.ID).
+		Update("source_fingerprint", driftedFingerprint).Error; err != nil {
+		t.Fatal(err)
+	}
+	driftedStatus, err := service.GetCatalogStatus(context.Background(), mutablePoint.ID, scope)
+	if err != nil {
+		t.Fatalf("drifted mutable catalog status error: %v", err)
+	}
+	if driftedStatus.Coverage.Status != CoverageComplete || driftedStatus.Staleness.Status != StalenessStale ||
+		driftedStatus.Staleness.Reason == nil || driftedStatus.Staleness.Reason.Code != backupasset.CapabilityMutableSourceChanged ||
+		driftedStatus.Staleness.ObservedAt == nil || !driftedStatus.Staleness.ObservedAt.Equal(aged.UTC()) {
+		t.Fatalf("drifted mutable status=%+v, want complete/stale mutable_source_changed", driftedStatus)
+	}
+	assertStatusNoInternalLeak(t, driftedStatus)
+
+	for _, missingObservedAt := range []any{nil, time.Time{}} {
+		if err := db.Model(&model.RecoveryPoint{}).Where("id = ?", mutablePoint.ID).Updates(map[string]any{
+			"source_fingerprint": mutableFingerprint,
+			"observed_at":        missingObservedAt,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+		unobservedStatus, unobservedErr := service.GetCatalogStatus(context.Background(), mutablePoint.ID, scope)
+		if unobservedErr != nil {
+			t.Fatalf("unobserved mutable (%v) catalog status error: %v", missingObservedAt, unobservedErr)
+		}
+		if unobservedStatus.Coverage.Status != CoverageComplete || unobservedStatus.Staleness.Status != StalenessUnknown ||
+			unobservedStatus.Staleness.ObservedAt != nil || unobservedStatus.Staleness.Reason != nil {
+			t.Fatalf("unobserved mutable (%v) status=%+v, want complete/unknown", missingObservedAt, unobservedStatus)
+		}
+		assertStatusNoInternalLeak(t, unobservedStatus)
+	}
+
+	seedCatalogServiceGeneration(t, db, immutablePoint.ID, 1, true, GenerationComplete, now)
+	immutableStatus, err := service.GetCatalogStatus(context.Background(), immutablePoint.ID, scope)
+	if err != nil {
+		t.Fatalf("immutable catalog status error: %v", err)
+	}
+	if immutableStatus.Coverage.Status != CoverageComplete || immutableStatus.Staleness.Status != StalenessFresh ||
+		immutableStatus.Staleness.Reason != nil || immutableStatus.Staleness.ObservedAt == nil ||
+		!immutableStatus.Staleness.ObservedAt.Equal(committed.UTC()) {
+		t.Fatalf("immutable status=%+v, want complete/fresh at %s", immutableStatus, committed.UTC())
+	}
+	assertStatusNoInternalLeak(t, immutableStatus, strings.Repeat("a", 64))
 }
 
 func TestCatalogServiceEntryCursorBindsActiveGenerationAndStableBinaryOrder(t *testing.T) {

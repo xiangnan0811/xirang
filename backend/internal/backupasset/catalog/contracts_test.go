@@ -19,10 +19,8 @@ func TestCatalogContractsClosedEnumsFailClosed(t *testing.T) {
 		parse func(string) error
 	}{
 		{"generation", "complete", func(value string) error { _, err := ParseGenerationState(value); return err }},
-		{"coverage", "complete", func(value string) error { _, err := ParseCoverageStatus(value); return err }},
-		{"staleness", "fresh", func(value string) error { _, err := ParseStalenessStatus(value); return err }},
+		{"generation_error_code", "catalog_source_changed", func(value string) error { _, err := ParseGenerationErrorCode(value); return err }},
 		{"fingerprint", "strong", func(value string) error { _, err := ParseFingerprintStrength(value); return err }},
-		{"evidence", "recorded", func(value string) error { _, err := ParseEvidenceLayerStatus(value); return err }},
 		{"diff", "type_changed", func(value string) error { _, err := ParseDiffChangeKind(value); return err }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
