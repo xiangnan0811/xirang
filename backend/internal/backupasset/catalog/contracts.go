@@ -146,34 +146,10 @@ func ParseGenerationErrorCode(value string) (GenerationErrorCode, error) {
 	return parsed, nil
 }
 
-func ParseCoverageStatus(value string) (CoverageStatus, error) {
-	parsed := CoverageStatus(value)
-	if !validCoverageStatuses[parsed] {
-		return "", fmt.Errorf("%w: coverage status", ErrUnknownInternalState)
-	}
-	return parsed, nil
-}
-
-func ParseStalenessStatus(value string) (StalenessStatus, error) {
-	parsed := StalenessStatus(value)
-	if !validStalenessStatuses[parsed] {
-		return "", fmt.Errorf("%w: staleness status", ErrUnknownInternalState)
-	}
-	return parsed, nil
-}
-
 func ParseFingerprintStrength(value string) (FingerprintStrength, error) {
 	parsed := FingerprintStrength(value)
 	if !validFingerprintStrengths[parsed] {
 		return "", fmt.Errorf("%w: fingerprint strength", ErrUnknownInternalState)
-	}
-	return parsed, nil
-}
-
-func ParseEvidenceLayerStatus(value string) (EvidenceLayerStatus, error) {
-	parsed := EvidenceLayerStatus(value)
-	if !validEvidenceLayerStatuses[parsed] {
-		return "", fmt.Errorf("%w: evidence layer status", ErrUnknownInternalState)
 	}
 	return parsed, nil
 }
@@ -457,9 +433,6 @@ var (
 	}
 	validFingerprintStrengths = map[FingerprintStrength]bool{
 		FingerprintStrong: true, FingerprintWeak: true, FingerprintNone: true,
-	}
-	validEvidenceLayerStatuses = map[EvidenceLayerStatus]bool{
-		EvidenceRecorded: true, EvidenceUnavailable: true, EvidenceNotRecorded: true, EvidenceInvalid: true,
 	}
 	validDiffChangeKinds = map[DiffChangeKind]bool{
 		DiffAdded: true, DiffRemoved: true, DiffModified: true, DiffTypeChanged: true,

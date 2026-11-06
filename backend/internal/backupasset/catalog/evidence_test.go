@@ -154,24 +154,50 @@ func TestCatalogEvidenceFailsClosedForUnknownRunAndDrillStatuses(t *testing.T) {
 		t.Fatal("owned fixture has no producing lineage")
 	}
 	if err := db.Model(&model.TaskRun{}).Where("id = ?", *point.ProducingTaskRunID).
-		Update("status", "SECRET_FUTURE_RUN_STATUS").Error; err != nil {
+		Updates(map[string]any{
+			"status":     "SECRET_FUTURE_RUN_STATUS",
+			"last_error": "SECRET_RUN_LAST_ERROR_CANARY",
+		}).Error; err != nil {
 		t.Fatal(err)
+	}
+	if err := db.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).
+		Update("consistency_json", `{"version":1,"provider":"restic","completion":"SECRET_FUTURE_COMPLETION","code":"provider_completion_unproven"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("PRAGMA ignore_check_constraints = ON").Error; err != nil {
+		t.Fatal(err)
+	}
+	manifest := model.RecoveryPointManifest{
+		ID: strings.Repeat("7", 32), RecoveryPointID: point.ID, Revision: 1, DigestAlgorithm: "sha256",
+		Digest: strings.Repeat("9", 64), Generator: "fixture", GeneratorVersion: "1",
+		Completeness: "SECRET_FUTURE_MANIFEST_COMPLETENESS", FidelityJSON: `{"secret":"SECRET_FIDELITY_CANARY"}`,
+		EncryptedCommitEvidence: "SECRET_COMMIT_EVIDENCE_CANARY", IsActive: true, CreatedAt: now, UpdatedAt: now,
+	}
+	createManifestErr := db.Create(&manifest).Error
+	_ = db.Exec("PRAGMA ignore_check_constraints = OFF").Error
+	if createManifestErr != nil {
+		t.Fatal(createManifestErr)
 	}
 	drillRun := seedCatalogOwnershipRun(t, db, *point.ProducingTaskID, now.Add(time.Minute))
 	drill := model.RestoreDrillEvidence{
 		PolicyID: 1, TaskID: *point.ProducingTaskID, TaskRunID: drillRun.ID, SourceTaskRunID: point.ProducingTaskRunID,
-		SandboxNodeID: 1, Status: "SECRET_FUTURE_DRILL_STATUS", CreatedAt: now, UpdatedAt: now,
+		SandboxNodeID: 1, SandboxPath: "SECRET_SANDBOX_PATH_CANARY", Status: "SECRET_FUTURE_DRILL_STATUS",
+		RestoreError: "SECRET_DRILL_RESTORE_ERROR_CANARY", CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(&drill).Error; err != nil {
 		t.Fatal(err)
 	}
-	evidence, err := newCatalogServiceForTest(t, db, now).GetEvidence(
-		context.Background(), point.ID, AuthorizationScope{Role: "operator", UserID: fixture.operatorID},
-	)
+	service := newCatalogServiceForTest(t, db, now)
+	scope := AuthorizationScope{Role: "operator", UserID: fixture.operatorID}
+	evidence, err := service.GetEvidence(context.Background(), point.ID, scope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evidence.Lineage.Status != EvidenceInvalid || evidence.Lineage.RunStatus != "" ||
+	if evidence.Lineage.Status != EvidenceInvalid || evidence.Lineage.Trigger != "" || evidence.Lineage.RunStatus != "" ||
+		evidence.Lineage.StartedAt != nil || evidence.Lineage.FinishedAt != nil ||
+		evidence.Manifest.Status != EvidenceInvalid || evidence.Manifest.Completeness != "" || evidence.Manifest.Digest != "" ||
+		evidence.Publication.Status != EvidenceInvalid || evidence.Publication.Provider != "" ||
+		evidence.Publication.Completion != "" || evidence.Publication.FailureCode != "" ||
 		evidence.RestoreDrills.Status != EvidenceInvalid || len(evidence.RestoreDrills.Items) != 0 {
 		t.Fatalf("unknown status evidence=%+v", evidence)
 	}
@@ -179,7 +205,47 @@ func TestCatalogEvidenceFailsClosedForUnknownRunAndDrillStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(payload), "SECRET_FUTURE") {
+	if strings.Contains(string(payload), "SECRET_") {
 		t.Fatalf("unknown evidence status echoed raw value: %s", payload)
+	}
+
+	badTriggerRun := model.TaskRun{
+		TaskID: *point.ProducingTaskID, TriggerType: "SECRET_FUTURE_TRIGGER", Status: "success",
+		LastError: "SECRET_RUN_LAST_ERROR_CANARY", StartedAt: &now, FinishedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&badTriggerRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	badTriggerLineage := catalogOwnershipLineage(t, *point.ProducingTaskID, badTriggerRun.ID, strings.Repeat("2", 32), now)
+	if err := db.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).Updates(map[string]any{
+		"producing_task_run_id": badTriggerRun.ID,
+		"lineage_json":          badTriggerLineage,
+		"consistency_json":      `{"version":1,"provider":"restic","completion":"retryable_failure","code":"SECRET_FUTURE_FAILURE_CODE"}`,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.RecoveryPointManifest{}).Where("id = ?", manifest.ID).
+		Updates(map[string]any{"completeness": string(backupasset.ManifestComplete), "digest_algorithm": "SECRET_FUTURE_ALGO"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.RestoreDrillEvidence{}).Where("id = ?", drill.ID).
+		Updates(map[string]any{"source_task_run_id": badTriggerRun.ID, "status": "failed", "failed_step": "SECRET_FUTURE_FAILED_STEP"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondEvidence, err := service.GetEvidence(context.Background(), point.ID, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondEvidence.Lineage.Status != EvidenceInvalid || secondEvidence.Manifest.Status != EvidenceInvalid ||
+		secondEvidence.Publication.Status != EvidenceInvalid || secondEvidence.RestoreDrills.Status != EvidenceInvalid ||
+		len(secondEvidence.RestoreDrills.Items) != 0 {
+		t.Fatalf("second unknown status evidence=%+v", secondEvidence)
+	}
+	secondPayload, err := json.Marshal(secondEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(secondPayload), "SECRET_") {
+		t.Fatalf("second unknown evidence status echoed raw value: %s", secondPayload)
 	}
 }

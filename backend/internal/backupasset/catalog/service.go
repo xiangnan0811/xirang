@@ -298,11 +298,11 @@ func (service *Service) GetRecoveryPoint(ctx context.Context, pointID string, sc
 }
 
 func (service *Service) GetCatalogStatus(ctx context.Context, pointID string, scope AuthorizationScope) (StatusDTO, error) {
-	view, err := service.GetRecoveryPoint(ctx, pointID, scope)
+	point, repository, err := service.authorizedPublicPoint(ctx, pointID, scope)
 	if err != nil {
 		return StatusDTO{}, err
 	}
-	return view.Catalog, nil
+	return service.projectStatus(ctx, point, repository)
 }
 
 func (service *Service) ListEntries(
@@ -489,27 +489,39 @@ func (service *Service) ListEntryVersions(ctx context.Context, pointID, entryID 
 	return EntryVersionPage{Items: items}, nil
 }
 
+func (service *Service) authorizedPublicPoint(
+	ctx context.Context,
+	pointID string,
+	scope AuthorizationScope,
+) (model.RecoveryPoint, model.BackupRepository, error) {
+	if err := service.validatePointScope(pointID, scope); err != nil {
+		return model.RecoveryPoint{}, model.BackupRepository{}, err
+	}
+	visible, err := service.ownership.AuthorizedPointIDs(ctx, scope, []string{pointID})
+	if err != nil {
+		return model.RecoveryPoint{}, model.BackupRepository{}, err
+	}
+	if len(visible) != 1 {
+		return model.RecoveryPoint{}, model.BackupRepository{}, fmt.Errorf("%w: recovery point", backupasset.ErrNotFound)
+	}
+	point, repository, err := service.loadPointAndRepository(ctx, pointID)
+	if err != nil {
+		return model.RecoveryPoint{}, model.BackupRepository{}, err
+	}
+	if !publicCatalogPoint(point) {
+		return model.RecoveryPoint{}, model.BackupRepository{}, fmt.Errorf("%w: recovery point", backupasset.ErrNotFound)
+	}
+	return point, repository, nil
+}
+
 func (service *Service) authorizedActivePoint(
 	ctx context.Context,
 	pointID string,
 	scope AuthorizationScope,
 ) (model.RecoveryPoint, model.BackupRepository, model.CatalogGeneration, error) {
-	if err := service.validatePointScope(pointID, scope); err != nil {
-		return model.RecoveryPoint{}, model.BackupRepository{}, model.CatalogGeneration{}, err
-	}
-	visible, err := service.ownership.AuthorizedPointIDs(ctx, scope, []string{pointID})
+	point, repository, err := service.authorizedPublicPoint(ctx, pointID, scope)
 	if err != nil {
 		return model.RecoveryPoint{}, model.BackupRepository{}, model.CatalogGeneration{}, err
-	}
-	if len(visible) != 1 {
-		return model.RecoveryPoint{}, model.BackupRepository{}, model.CatalogGeneration{}, fmt.Errorf("%w: recovery point", backupasset.ErrNotFound)
-	}
-	point, repository, err := service.loadPointAndRepository(ctx, pointID)
-	if err != nil {
-		return model.RecoveryPoint{}, model.BackupRepository{}, model.CatalogGeneration{}, err
-	}
-	if !publicCatalogPoint(point) {
-		return model.RecoveryPoint{}, model.BackupRepository{}, model.CatalogGeneration{}, fmt.Errorf("%w: recovery point", backupasset.ErrNotFound)
 	}
 	var generation model.CatalogGeneration
 	err = service.db.WithContext(ctx).Where("recovery_point_id = ? AND state = ? AND is_active = ?", point.ID, GenerationComplete, true).

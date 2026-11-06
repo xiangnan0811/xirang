@@ -80,13 +80,10 @@ type RestoreDrillSummaryDTO struct {
 }
 
 func (service *Service) GetEvidence(ctx context.Context, pointID string, scope AuthorizationScope) (EvidenceDTO, error) {
-	if _, err := service.GetRecoveryPoint(ctx, pointID, scope); err != nil {
-		return EvidenceDTO{}, err
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	point, _, err := service.loadPointAndRepository(ctx, pointID)
+	point, _, err := service.authorizedPublicPoint(ctx, pointID, scope)
 	if err != nil {
 		return EvidenceDTO{}, err
 	}
