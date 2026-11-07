@@ -516,15 +516,17 @@ const nodeFilePreviewVerifyScript = "" +
 	"parts = [p for p in rel.split('/') if p and p != '.']\n" +
 	"o_dir = getattr(os, 'O_DIRECTORY', 0)\n" +
 	"o_nofollow = getattr(os, 'O_NOFOLLOW', 0)\n" +
+	"o_path = getattr(os, 'O_PATH', 0)\n" +
 	"if not parts or o_dir == 0 or o_nofollow == 0:\n" +
 	"    sys.exit(2)\n" +
+	"dir_flags = (o_path if o_path != 0 else os.O_RDONLY) | o_dir | o_nofollow\n" +
 	"def open_chain():\n" +
-	"    cur = os.open('/', os.O_RDONLY | o_dir | o_nofollow)\n" +
+	"    cur = os.open('/', dir_flags)\n" +
 	"    try:\n" +
 	"        st0 = os.fstat(cur)\n" +
 	"        chain = [(st0.st_dev, st0.st_ino)]\n" +
 	"        for p in root_parts + parts[:-1]:\n" +
-	"            nxt = os.open(p, os.O_RDONLY | o_dir | o_nofollow, dir_fd=cur)\n" +
+	"            nxt = os.open(p, dir_flags, dir_fd=cur)\n" +
 	"            os.close(cur)\n" +
 	"            cur = nxt\n" +
 	"            sd = os.fstat(cur)\n" +

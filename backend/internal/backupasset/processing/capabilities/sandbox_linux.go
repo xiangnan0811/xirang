@@ -298,8 +298,8 @@ func applyLandlock(request SandboxExecution) error {
 		return ErrSecureWorkspaceUnavailable
 	}
 	handled := sandboxLandlockHandledAccess(int(abi))
-	attribute := unix.LandlockRulesetAttr{Access_fs: handled}
-	fd, _, errno := unix.Syscall6(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attribute)), unsafe.Sizeof(attribute), 0, 0, 0, 0)
+	attribute := unix.LandlockRulesetAttr{Handled_access_fs: handled}
+	fd, _, errno := unix.Syscall6(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attribute)), unsafe.Sizeof(attribute.Handled_access_fs), 0, 0, 0, 0)
 	if errno != 0 {
 		return errno
 	}

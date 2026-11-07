@@ -48,6 +48,8 @@ packed-policy-size 阈值；pgx 的 libpq URI 解析将 `+` 视为字面量，�
 Unicode 规范化输出变化须推进持久化 Search normalizer 版本，并验证旧代失效、
 调度重建和查询恢复；升级及降级边界见[搜索合同](../spec/domains/backup-search.md)。
 
+针对 Trivy 镜像扫描识别的 `golang.org/x/net` CVE-2026-78661（`golang.org/x/net/html` 构造输入拒绝服务），将 `backend/go.mod` 中的 `golang.org/x/net` 从 `v0.60.0` 更新至 `v0.62.0`（及其最小版本选择要求的 `golang.org/x/crypto v0.58.0`、`golang.org/x/sys v0.49.0`、`golang.org/x/term v0.47.0`、`golang.org/x/text v0.43.0`、`golang.org/x/sync v0.24.0`、`golang.org/x/tools v0.51.0`），并同步 `rsyncconfinement` 与 `backupasset/processing/capabilities` 中 `unix.LandlockRulesetAttr` 的 `Handled_access_fs` 字段名及 ABI v1/v3 兼容结构体大小（`unsafe.Sizeof(attr.Handled_access_fs)`）。更新后须重新构建并替换 Core 与 Worker 镜像及二进制，回退旧镜像或旧模块锁定会恢复已知漏洞风险。
+
 ## 前端依赖审计
 
 更改锁文件、升级依赖或排查本地与 CI/Docker 差异时，使用与 [CI](../../.github/workflows/ci.yml)及 [Docker web-builder](../../deploy/allinone/Dockerfile)一致的 Node 主版本，当前两者均为 Node 20。不要把 Actions 自身的 JavaScript runtime 与项目 Node 版本混为一谈。

@@ -708,6 +708,36 @@ func TestNodeFileBrowserHTTP_InRootPathsAndSafeSymlinksAllowed(t *testing.T) {
 			t.Fatalf("unexpected %s content payload: %+v", tc.path, env.Data)
 		}
 	}
+
+	// 7) 仅具执行/遍历权限（0111，无读权限）的父目录或中间目录（非 root 进程对 0111 目录 open(O_RDONLY) 会返回 EACCES，
+	//    但 O_PATH | O_DIRECTORY | O_NOFOLLOW 允许遍历）下的可读普通文件可正常预览
+	if os.Geteuid() != 0 {
+		execOnlyDir := filepath.Join(root, "exec_only_dir")
+		if err := os.MkdirAll(execOnlyDir, 0o755); err != nil {
+			t.Fatalf("mkdir exec_only_dir: %v", err)
+		}
+		execOnlyFile := filepath.Join(execOnlyDir, "readable.txt")
+		if err := os.WriteFile(execOnlyFile, []byte("exec-only-dir-ok"), 0o644); err != nil {
+			t.Fatalf("write exec_only_dir/readable.txt: %v", err)
+		}
+		if err := os.Chmod(execOnlyDir, 0o111); err != nil {
+			t.Fatalf("chmod 0111 exec_only_dir: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = os.Chmod(execOnlyDir, 0o755)
+		})
+		execResp := performNodeFileBrowserRequest(t, router, admin, "files/content", node.ID, execOnlyFile)
+		if execResp.Code != http.StatusOK {
+			t.Fatalf("preview file under 0111 execute-only directory status=%d body=%s", execResp.Code, execResp.Body.String())
+		}
+		var execEnv fileContentEnvelope
+		if err := json.Unmarshal(execResp.Body.Bytes(), &execEnv); err != nil {
+			t.Fatalf("decode exec-only dir file content: %v", err)
+		}
+		if execEnv.Data.Path != execOnlyFile || execEnv.Data.Content != "exec-only-dir-ok" {
+			t.Fatalf("unexpected exec-only dir file content payload: %+v", execEnv.Data)
+		}
+	}
 }
 
 // TestNodeFileBrowserHTTP_DirectAndNestedEscapesRejectedWithoutLeakingEntriesOrBytes 沿真实
