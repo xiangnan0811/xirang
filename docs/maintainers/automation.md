@@ -48,6 +48,8 @@ packed-policy-size 阈值；pgx 的 libpq URI 解析将 `+` 视为字面量，�
 Unicode 规范化输出变化须推进持久化 Search normalizer 版本，并验证旧代失效、
 调度重建和查询恢复；升级及降级边界见[搜索合同](../spec/domains/backup-search.md)。
 
+针对 Trivy 镜像扫描识别的 `golang.org/x/net` CVE-2026-78661（`golang.org/x/net/html` 构造输入拒绝服务），将 `backend/go.mod` 中的 `golang.org/x/net` 从 `v0.60.0` 更新至 `v0.62.0`（及其最小版本选择要求的 `golang.org/x/crypto v0.58.0`、`golang.org/x/sys v0.49.0`、`golang.org/x/term v0.47.0`、`golang.org/x/text v0.43.0`、`golang.org/x/sync v0.24.0`、`golang.org/x/tools v0.51.0`），并同步 `rsyncconfinement` 与 `backupasset/processing/capabilities` 中 `unix.LandlockRulesetAttr` 的 `Handled_access_fs` 字段名及 ABI v1/v3 兼容结构体大小（`unsafe.Sizeof(attr.Handled_access_fs)`）。更新后须重新构建并替换 Core 与 Worker 镜像及二进制，回退旧镜像或旧模块锁定会恢复已知漏洞风险。
+
 ## 前端依赖审计
 
 更改锁文件、升级依赖或排查本地与 CI/Docker 差异时，使用与 [CI](../../.github/workflows/ci.yml)及 [Docker web-builder](../../deploy/allinone/Dockerfile)一致的 Node 主版本，当前两者均为 Node 20。不要把 Actions 自身的 JavaScript runtime 与项目 Node 版本混为一谈。
@@ -400,3 +402,7 @@ Worker 输入内容变化后，Core 与启用的 Worker 均须同源重建，并
 签名 bundle 和 proof。CI 临时密钥签出的 fixture 只用于验收验证路径，不可当作生产运行包；
 实际切换仍须使用授权的签名与信任材料，先排空旧 Worker 在途处理，回退时恢复整套匹配制品。
 本补丁不新增配置或数据库迁移，回退旧 Python 仍会恢复该漏洞风险。
+
+### Alpine 构建与运行输入 musl、OpenSSH、zlib 安全更新
+
+针对 Trivy 扫描识别的 Alpine 基础镜像与运行依赖漏洞（`musl`／`musl-utils` CVE-2026-107891、`openssh-client-default`／`openssh-client-common`／`openssh-keygen` CVE-2026-119709、`zlib` CVE-2026-22184／CVE-2026-27171／CVE-2026-85091），在保持四类基础镜像固定 digest 不变的前提下，将受影响的基础镜像预装包提升为显式 root pin 并通过原生双架构采集更新构建输入锁：Alpine 3.24 构建阶段（`cgo-builder`、`supercronic-builder`）显式锁定 `musl=1.2.6-r3`、`musl-utils=1.2.6-r3`、`zlib=1.4-r0`；Alpine 3.23 运行阶段（`core-runtime`、`worker-runtime`）显式锁定 `musl=1.2.5-r24`、`musl-utils=1.2.5-r24`、`zlib=1.4-r0`，Core 显式更新 `openssh-client-default=10.2_p1-r1` 与软件源已移除旧版本的 `tzdata=2026f-r0`，Worker 显式更新软件源已移除旧版本的 `font-noto=2026.11.01-r0`（同步 `fonts` 组件 revision 为 `noto-2026.11.01+noto-cjk-20220127`）。生产工具链 inventory 按 `Runtime` 角色区分 `cgo-builder`（Alpine 3.24）与 `worker-runtime`（Alpine 3.23）中的同名显式包（`musl`、`musl-utils`、`zlib`），拒绝同一角色内的重复声明。更新推进了 Worker 工具链与 pipeline 指纹，须验证 candidate lock 的 workflow provenance attestation，排空旧在途处理后同源重建 Core／Worker 并重新生成双架构最终闭包、签名 bundle 与 proof；无新增配置或数据库迁移，回退旧镜像及配套制品会恢复上述已知漏洞风险。

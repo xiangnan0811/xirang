@@ -1,6 +1,6 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:3dd8d87ac61124ffe546c764dcd87d2d3ee179a71a30489773d961ca60fe5aa7 AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:b81cbefac40ef0dd00170b7cfa92feb95bd9239dd85d1d453263a77c14ad4558 AS worker-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:82f17fab454a20e6f04cc31de74a31fb309f7b9d4a8b25c6a72e72cac588db68 AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:bc344da41bcd9b0fdfdd5374ccfadc1705546dfe9b880d2f6c9fd72a7e6cf472 AS worker-runtime-inputs
 
 # Retained golang:1.27.3-alpine3.24 platform images; upstream identities are in the lock.
 FROM docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5 AS worker-builder
@@ -13,7 +13,10 @@ COPY backend/go.mod backend/go.sum ./
 RUN --network=none --mount=from=cgo-builder-inputs,source=/inputs,target=/build-inputs \
     sh /build-inputs/install.sh cgo-builder "$TARGETARCH" -- \
       gcc=15.2.0-r5 \
-      musl-dev=1.2.6-r3
+      musl-dev=1.2.6-r3 \
+      musl-utils=1.2.6-r3 \
+      musl=1.2.6-r3 \
+      zlib=1.4-r0
 RUN go mod download
 
 COPY backend/ ./
@@ -39,12 +42,14 @@ RUN --network=none --mount=from=worker-runtime-inputs,source=/inputs,target=/bui
       clamav=1.4.4-r0 \
       ffmpeg=8.0.1-r1 \
       font-noto-cjk=0_git20220127-r1 \
-      font-noto=2025.12.01-r0 \
+      font-noto=2026.11.01-r0 \
       gzip=1.14-r3 \
       libcrypto3=3.5.9-r0 \
       libexpat=2.10.0-r0 \
       libreoffice=25.8.1.1-r5 \
       libssl3=3.5.9-r0 \
+      musl-utils=1.2.5-r24 \
+      musl=1.2.5-r24 \
       poppler-utils=25.12.0-r0 \
       python3=3.12.16-r0 \
       tesseract-ocr-data-chi_sim=5.5.1-r0 \
@@ -52,6 +57,7 @@ RUN --network=none --mount=from=worker-runtime-inputs,source=/inputs,target=/bui
       tesseract-ocr=5.5.1-r0 \
       vips-tools=8.17.3-r1 \
       xz=5.8.4-r0 \
+      zlib=1.4-r0 \
       zstd=1.5.7-r2
 
 RUN addgroup -S -g 10000 asset-worker && \

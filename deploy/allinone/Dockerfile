@@ -1,7 +1,7 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:3dd8d87ac61124ffe546c764dcd87d2d3ee179a71a30489773d961ca60fe5aa7 AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:9f9cf1e961da92c63a74d98be278feeb3397916780ed466cbb49c6934e6712ff AS supercronic-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:e5a5d108c8980bc218b29850e86ee5657bde041846445cee7f48df83e150192b AS core-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:82f17fab454a20e6f04cc31de74a31fb309f7b9d4a8b25c6a72e72cac588db68 AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:8c4d172f8b3db8586a6339094475cac51d31cbf29de26221f181dafc09a26786 AS supercronic-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:dae54da7d8d76074ad3f4dfcb699bdb40af363b8bdf0f71a14a1a4369608b19e AS core-runtime-inputs
 
 FROM docker.io/linnea7171/xirang@sha256:3e4c9ad8b3fd601ce93e5a8f7a77a639efe8d7d36846846c5179f89175f89d86 AS web-builder
 
@@ -24,7 +24,10 @@ COPY backend/go.mod backend/go.sum ./
 RUN --network=none --mount=from=cgo-builder-inputs,source=/inputs,target=/build-inputs \
     sh /build-inputs/install.sh cgo-builder "$TARGETARCH" -- \
       gcc=15.2.0-r5 \
-      musl-dev=1.2.6-r3
+      musl-dev=1.2.6-r3 \
+      musl-utils=1.2.6-r3 \
+      musl=1.2.6-r3 \
+      zlib=1.4-r0
 
 RUN go mod download
 
@@ -46,7 +49,10 @@ ARG TARGETARCH
 ARG SUPERCRONIC_COMMIT=c14d35dd8bb0d34e984097d5613cef2eea4a675f
 RUN --network=none --mount=from=supercronic-builder-inputs,source=/inputs,target=/build-inputs \
     sh /build-inputs/install.sh supercronic-builder "$TARGETARCH" -- \
-      git=2.54.0-r0
+      git=2.54.0-r0 \
+      musl-utils=1.2.6-r3 \
+      musl=1.2.6-r3 \
+      zlib=1.4-r0
 RUN set -eux; \
     git init /src; \
     git -C /src remote add origin https://github.com/aptible/supercronic.git; \
@@ -74,15 +80,18 @@ RUN --network=none --mount=from=core-runtime-inputs,source=/inputs,target=/build
       libuuid=2.41.6-r1 \
       libxml2=2.13.9-r1 \
       mount=2.41.6-r1 \
+      musl-utils=1.2.5-r24 \
+      musl=1.2.5-r24 \
       nghttp2-libs=1.69.0-r0 \
-      openssh-client-default=10.2_p1-r0 \
+      openssh-client-default=10.2_p1-r1 \
       pcre2=10.49-r0 \
       postgresql18-client=18.6-r0 \
       rsync=3.5.0-r0 \
       sqlite=3.53.4-r0 \
       tiff=4.7.2-r0 \
-      tzdata=2026e-r0 \
-      util-linux-misc=2.41.6-r1
+      tzdata=2026f-r0 \
+      util-linux-misc=2.41.6-r1 \
+      zlib=1.4-r0
 
 COPY --from=supercronic-builder /out/supercronic /usr/local/bin/supercronic
 RUN chmod +x /usr/local/bin/supercronic

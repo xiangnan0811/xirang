@@ -581,7 +581,9 @@ func matchingToolchainInspection(inventory toolchainInventory) toolchainInspecti
 		Probes:   make(map[string]string),
 	}
 	for _, packageValue := range inventory.Packages {
-		inspection.Packages[packageValue.Name] = packageValue.Version
+		if packageValue.Runtime {
+			inspection.Packages[packageValue.Name] = packageValue.Version
+		}
 	}
 	for _, component := range inventory.Components {
 		for _, asset := range component.Assets {

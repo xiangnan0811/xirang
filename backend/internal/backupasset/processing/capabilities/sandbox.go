@@ -898,7 +898,7 @@ func productionToolchainInventory() toolchainInventory {
 			{Name: "bash", Version: "5.3.3-r1", Runtime: true},
 			{Name: "clamav", Version: "1.4.4-r0", Runtime: true},
 			{Name: "ffmpeg", Version: "8.0.1-r1", Runtime: true},
-			{Name: "font-noto", Version: "2025.12.01-r0", Runtime: true},
+			{Name: "font-noto", Version: "2026.11.01-r0", Runtime: true},
 			{Name: "font-noto-cjk", Version: "0_git20220127-r1", Runtime: true},
 			{Name: "gcc", Version: "15.2.0-r5"},
 			{Name: "gzip", Version: "1.14-r3", Runtime: true},
@@ -906,7 +906,11 @@ func productionToolchainInventory() toolchainInventory {
 			{Name: "libexpat", Version: "2.10.0-r0", Runtime: true},
 			{Name: "libreoffice", Version: "25.8.1.1-r5", Runtime: true},
 			{Name: "libssl3", Version: "3.5.9-r0", Runtime: true},
+			{Name: "musl", Version: "1.2.6-r3"},
+			{Name: "musl", Version: "1.2.5-r24", Runtime: true},
 			{Name: "musl-dev", Version: "1.2.6-r3"},
+			{Name: "musl-utils", Version: "1.2.6-r3"},
+			{Name: "musl-utils", Version: "1.2.5-r24", Runtime: true},
 			{Name: "poppler-utils", Version: "25.12.0-r0", Runtime: true},
 			{Name: "python3", Version: "3.12.16-r0", Runtime: true},
 			{Name: "tesseract-ocr", Version: "5.5.1-r0", Runtime: true},
@@ -914,6 +918,8 @@ func productionToolchainInventory() toolchainInventory {
 			{Name: "tesseract-ocr-data-eng", Version: "5.5.1-r0", Runtime: true},
 			{Name: "vips-tools", Version: "8.17.3-r1", Runtime: true},
 			{Name: "xz", Version: "5.8.4-r0", Runtime: true},
+			{Name: "zlib", Version: "1.4-r0"},
+			{Name: "zlib", Version: "1.4-r0", Runtime: true},
 			{Name: "zstd", Version: "1.5.7-r2", Runtime: true},
 		},
 		Components: []toolchainComponent{
@@ -929,7 +935,7 @@ func productionToolchainInventory() toolchainInventory {
 				{ID: "pdftotext", Path: "/usr/bin/pdftotext", Executable: true},
 			}},
 			{ID: "libreoffice", Revision: "libreoffice-25.8.1.1", Packages: []string{"libreoffice"}, Assets: []toolchainAsset{{ID: "soffice", Path: "/usr/lib/libreoffice/program/soffice.bin", Executable: true}}},
-			{ID: "fonts", Revision: "noto-2025.12.01+noto-cjk-20220127", Packages: []string{"font-noto", "font-noto-cjk"}, Assets: []toolchainAsset{
+			{ID: "fonts", Revision: "noto-2026.11.01+noto-cjk-20220127", Packages: []string{"font-noto", "font-noto-cjk"}, Assets: []toolchainAsset{
 				{ID: "noto-sans", Path: "/usr/share/fonts/noto/NotoSans-Regular.ttf"},
 				{ID: "noto-cjk", Path: "/usr/share/fonts/noto/NotoSansCJK-Regular.ttc"},
 			}},
@@ -1066,15 +1072,23 @@ func canonicalToolchainInventory(value toolchainInventory) (toolchainInventory, 
 			return toolchainInventory{}, ErrInvalidInvocation
 		}
 	}
-	sort.Slice(result.Packages, func(left, right int) bool { return result.Packages[left].Name < result.Packages[right].Name })
+	sort.Slice(result.Packages, func(left, right int) bool {
+		if result.Packages[left].Name != result.Packages[right].Name {
+			return result.Packages[left].Name < result.Packages[right].Name
+		}
+		return !result.Packages[left].Runtime && result.Packages[right].Runtime
+	})
 	for index := 1; index < len(result.Packages); index++ {
-		if result.Packages[index-1].Name == result.Packages[index].Name {
+		if result.Packages[index-1].Name == result.Packages[index].Name &&
+			result.Packages[index-1].Runtime == result.Packages[index].Runtime {
 			return toolchainInventory{}, ErrInvalidInvocation
 		}
 	}
 	packageNames := make(map[string]bool, len(result.Packages))
 	for _, packageValue := range result.Packages {
-		packageNames[packageValue.Name] = true
+		if packageValue.Runtime {
+			packageNames[packageValue.Name] = true
+		}
 	}
 	sort.Slice(result.Components, func(left, right int) bool { return result.Components[left].ID < result.Components[right].ID })
 	sort.Slice(result.Profiles, func(left, right int) bool {
@@ -1288,7 +1302,7 @@ func probeOutputContainsIdentity(output, identity string) bool {
 
 func packageVersion(inventory toolchainInventory, name string) string {
 	for _, packageValue := range inventory.Packages {
-		if packageValue.Name == name {
+		if packageValue.Runtime && packageValue.Name == name {
 			return packageValue.Version
 		}
 	}

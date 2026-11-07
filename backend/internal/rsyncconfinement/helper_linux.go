@@ -1496,8 +1496,8 @@ func installLandlock(rules []landlockRule) error {
 	if err := validateLandlockABI(abi); err != nil {
 		return err
 	}
-	attr := unix.LandlockRulesetAttr{Access_fs: landlockHandledAccess}
-	ruleset, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0)
+	attr := unix.LandlockRulesetAttr{Handled_access_fs: landlockHandledAccess}
+	ruleset, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr.Handled_access_fs), 0)
 	if errno != 0 {
 		return fmt.Errorf("%w: create Landlock ruleset: %v", ErrCapabilityUnavailable, errno)
 	}

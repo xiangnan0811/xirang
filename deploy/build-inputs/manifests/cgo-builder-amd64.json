@@ -116,6 +116,22 @@
     },
     {
       "arch": "x86_64",
+      "file": "musl-utils-1.2.6-r3.apk",
+      "name": "musl-utils",
+      "sha256": "47263d05842c5e12d01e0369e5b5bea51733323501c00ca21968a5102de137ca",
+      "size": 13598,
+      "version": "1.2.6-r3"
+    },
+    {
+      "arch": "x86_64",
+      "file": "zlib-1.4-r0.apk",
+      "name": "zlib",
+      "sha256": "7b05bc778b8b25cd880835b40114182bd4d1581717504d0129c810c0a14291cb",
+      "size": 56761,
+      "version": "1.4-r0"
+    },
+    {
+      "arch": "x86_64",
       "file": "zstd-libs-1.5.7-r2.apk",
       "name": "zstd-libs",
       "sha256": "23c6065b0049b2406441564bcf0032515a43f78e80d76fcb85535a3803ef5d4e",
@@ -345,7 +361,7 @@
     {
       "arch": "x86_64",
       "name": "musl-utils",
-      "version": "1.2.6-r2"
+      "version": "1.2.6-r3"
     },
     {
       "arch": "x86_64",
@@ -360,7 +376,7 @@
     {
       "arch": "x86_64",
       "name": "zlib",
-      "version": "1.3.2-r0"
+      "version": "1.4-r0"
     },
     {
       "arch": "x86_64",
@@ -373,7 +389,10 @@
   "role": "cgo-builder",
   "roots": [
     "gcc=15.2.0-r5",
-    "musl-dev=1.2.6-r3"
+    "musl-dev=1.2.6-r3",
+    "musl-utils=1.2.6-r3",
+    "musl=1.2.6-r3",
+    "zlib=1.4-r0"
   ],
   "schema_version": 1,
   "trusted_keys": [

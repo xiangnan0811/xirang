@@ -759,18 +759,6 @@ func directoryTreeSnapshotsEqual(left, right directoryTreeSnapshot) bool {
 	return true
 }
 
-func directoryTreesEqual(left, right string) (bool, error) {
-	leftSnapshot, err := snapshotDirectoryTree(left)
-	if err != nil {
-		return false, err
-	}
-	rightSnapshot, err := snapshotDirectoryTree(right)
-	if err != nil {
-		return false, err
-	}
-	return directoryTreeSnapshotsEqual(leftSnapshot, rightSnapshot), nil
-}
-
 func newMigrationAttemptID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {

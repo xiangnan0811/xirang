@@ -33,6 +33,8 @@ admin/operator；节点文件浏览沿用现有权限。SSH 密钥管理、测�
 admin。告警单条/批量失败投递重发使用 `/alert-deliveries/:id/retry`，仅 admin，不借用
 另一 alert-level API 放宽入口。告警投递记录、时间线和异常详情仍允许三角色读取。
 
+`GET /api/v1/nodes/:id/files` 与 `GET /api/v1/nodes/:id/files/content` 使用 `nodes:files` 与 `OwnershipNodeCheck`，仅允许本节点的 `BasePath` 及本节点 `Task.RsyncSource`（`FILE_BROWSER_ALLOW_ALL=true` 仅在开发环境允许根外路径，生产环境 403 拒绝）。合法根内路径（含 `..` 前缀合法文件名、指向根内的软链接、`BasePath` 自身为软链接，以及仅具 `0111` 遍历权限的父目录）经 `RealPath` 解析通过后访问；越界或他节点路径返回 403 且零目录项／文件字节泄露。文件预览在 SFTP 读取与 `Close()` 后复用同一 SSH 连接执行 `python3`，从 `/` 经允许根以 `(O_PATH | O_DIRECTORY | O_NOFOLLOW)` + `dir_fd` 逐级遍历至目标普通文件（`O_RDONLY | O_NOFOLLOW`），核验读取前后目录链 `(st_dev, st_ino)`、文件 `fstat` 身份、大小、读取字节数与 SHA-256 摘要；读取期间被修改或打开时软链接掉包并在打开后恢复原路径均返回 502（`"文件在读取期间发生变化"`），不返回缓冲内容，并在 `credential_audit_events` 记录 `stage="post_check"`、`outcome="failure"`。
+
 操作入口与对话框挂载同时检查权限，缺失角色不授予写能力。降权清除不再合法的写草稿、
 打开状态和写选择，恢复权限不自动恢复旧表单；合法只读导出与详情不随之关闭。
 待确认、文件读取、step-up、grant 及批量循环在每次异步边界后校验挂载状态与单调身份代次；

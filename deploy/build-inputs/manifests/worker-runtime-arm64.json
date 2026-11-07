@@ -388,11 +388,11 @@
     },
     {
       "arch": "noarch",
-      "file": "font-noto-2025.12.01-r0.apk",
+      "file": "font-noto-2026.11.01-r0.apk",
       "name": "font-noto",
-      "sha256": "3c3846c0991959a1cbc1a3c3a5c57b00c5c66d36428751bf6eedb278ce0b5558",
-      "size": 4690632,
-      "version": "2025.12.01-r0"
+      "sha256": "091faf5d2f40a9c18305d7d4a7d460f556f0dae5f628689cc0536855f833f8ba",
+      "size": 4690621,
+      "version": "2026.11.01-r0"
     },
     {
       "arch": "noarch",
@@ -404,27 +404,27 @@
     },
     {
       "arch": "noarch",
-      "file": "font-noto-common-2025.12.01-r0.apk",
+      "file": "font-noto-common-2026.11.01-r0.apk",
       "name": "font-noto-common",
-      "sha256": "6baa93e4a616b89a8fd20a3399c310f5fab67e4d36de9605c4c4dc987daf3ee4",
-      "size": 3524,
-      "version": "2025.12.01-r0"
+      "sha256": "2469a9c2d1fcdeb65893abd942038ddfc7616d1443d9f11785e7fd1bcd64050f",
+      "size": 3515,
+      "version": "2026.11.01-r0"
     },
     {
       "arch": "noarch",
-      "file": "font-noto-math-2025.12.01-r0.apk",
+      "file": "font-noto-math-2026.11.01-r0.apk",
       "name": "font-noto-math",
-      "sha256": "ae7e674613166dc3538d18870b697c834bb964e8839bdac5589a6a71aa5e718a",
-      "size": 467131,
-      "version": "2025.12.01-r0"
+      "sha256": "8b1897cc2b354e6e5bc5e775d16d0daaeb89a980106b166f66df4e10486e6c55",
+      "size": 467128,
+      "version": "2026.11.01-r0"
     },
     {
       "arch": "noarch",
-      "file": "font-noto-symbols-2025.12.01-r0.apk",
+      "file": "font-noto-symbols-2026.11.01-r0.apk",
       "name": "font-noto-symbols",
-      "sha256": "4a1809ed57226ef58a8e19a1a5a562a2aeeff8b41612b7ae9912cc100e79550c",
-      "size": 1382068,
-      "version": "2025.12.01-r0"
+      "sha256": "deca096ad0e49d58518f1546043d566e6f8867b42a14687b88c52dda2a85e5f5",
+      "size": 1382064,
+      "version": "2026.11.01-r0"
     },
     {
       "arch": "aarch64",
@@ -812,11 +812,11 @@
     },
     {
       "arch": "aarch64",
-      "file": "libarchive-3.8.10-r0.apk",
+      "file": "libarchive-3.8.11-r0.apk",
       "name": "libarchive",
-      "sha256": "ea2a40cb5a6fa1f430a14c669af81d964d3ada765d886422c2a1b391f0994302",
-      "size": 327797,
-      "version": "3.8.10-r0"
+      "sha256": "b4c164a5d5749e3b07cfaa58b947e8fefdd148c1c8cf818569f1e3103ce43888",
+      "size": 328163,
+      "version": "3.8.11-r0"
     },
     {
       "arch": "aarch64",
@@ -2148,11 +2148,27 @@
     },
     {
       "arch": "aarch64",
+      "file": "musl-1.2.5-r24.apk",
+      "name": "musl",
+      "sha256": "d7043c549029c98d438e9bc94213b006e5c88540eb58d1f5b0f0d1d56dbf9c98",
+      "size": 416083,
+      "version": "1.2.5-r24"
+    },
+    {
+      "arch": "aarch64",
       "file": "musl-fts-1.2.7-r7.apk",
       "name": "musl-fts",
       "sha256": "9d0d6a40b16b746475d6e45a65415ac542afc47a167c129a775068be803f4f96",
       "size": 7641,
       "version": "1.2.7-r7"
+    },
+    {
+      "arch": "aarch64",
+      "file": "musl-utils-1.2.5-r24.apk",
+      "name": "musl-utils",
+      "sha256": "df4a9a4bb81a76af36779d2c5ef28ac5a1778670788bb4cd152def522904df8f",
+      "size": 16888,
+      "version": "1.2.5-r24"
     },
     {
       "arch": "aarch64",
@@ -2620,11 +2636,11 @@
     },
     {
       "arch": "noarch",
-      "file": "tzdata-2026e-r0.apk",
+      "file": "tzdata-2026f-r0.apk",
       "name": "tzdata",
-      "sha256": "011514b53806fd660507958aaa28af8b896060bc10c4c4507fab1a13fff37da0",
-      "size": 190905,
-      "version": "2026e-r0"
+      "sha256": "84cd4b6c03ba2d8a06570f0c14188022cb8ebc3274b8ed1cf02ce8881ee8bfdd",
+      "size": 190865,
+      "version": "2026f-r0"
     },
     {
       "arch": "aarch64",
@@ -2873,6 +2889,14 @@
       "sha256": "d040b7604cc6e024c1902324323f8204bf9c3cb9aae69c3c338af105eef76333",
       "size": 22400,
       "version": "0.6.2-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "zlib-1.4-r0.apk",
+      "name": "zlib",
+      "sha256": "c9bc3c75104ffba5785277b38eb83bf90ea83539e3bb26c617864fb78dcb4462",
+      "size": 55052,
+      "version": "1.4-r0"
     },
     {
       "arch": "aarch64",
@@ -3266,7 +3290,7 @@
     {
       "arch": "noarch",
       "name": "font-noto",
-      "version": "2025.12.01-r0"
+      "version": "2026.11.01-r0"
     },
     {
       "arch": "noarch",
@@ -3276,17 +3300,17 @@
     {
       "arch": "noarch",
       "name": "font-noto-common",
-      "version": "2025.12.01-r0"
+      "version": "2026.11.01-r0"
     },
     {
       "arch": "noarch",
       "name": "font-noto-math",
-      "version": "2025.12.01-r0"
+      "version": "2026.11.01-r0"
     },
     {
       "arch": "noarch",
       "name": "font-noto-symbols",
-      "version": "2025.12.01-r0"
+      "version": "2026.11.01-r0"
     },
     {
       "arch": "aarch64",
@@ -3536,7 +3560,7 @@
     {
       "arch": "aarch64",
       "name": "libarchive",
-      "version": "3.8.10-r0"
+      "version": "3.8.11-r0"
     },
     {
       "arch": "aarch64",
@@ -4371,7 +4395,7 @@
     {
       "arch": "aarch64",
       "name": "musl",
-      "version": "1.2.5-r23"
+      "version": "1.2.5-r24"
     },
     {
       "arch": "aarch64",
@@ -4381,7 +4405,7 @@
     {
       "arch": "aarch64",
       "name": "musl-utils",
-      "version": "1.2.5-r23"
+      "version": "1.2.5-r24"
     },
     {
       "arch": "aarch64",
@@ -4686,7 +4710,7 @@
     {
       "arch": "noarch",
       "name": "tzdata",
-      "version": "2026e-r0"
+      "version": "2026f-r0"
     },
     {
       "arch": "aarch64",
@@ -4846,7 +4870,7 @@
     {
       "arch": "aarch64",
       "name": "zlib",
-      "version": "1.3.2-r0"
+      "version": "1.4-r0"
     },
     {
       "arch": "aarch64",
@@ -4872,12 +4896,14 @@
     "clamav=1.4.4-r0",
     "ffmpeg=8.0.1-r1",
     "font-noto-cjk=0_git20220127-r1",
-    "font-noto=2025.12.01-r0",
+    "font-noto=2026.11.01-r0",
     "gzip=1.14-r3",
     "libcrypto3=3.5.9-r0",
     "libexpat=2.10.0-r0",
     "libreoffice=25.8.1.1-r5",
     "libssl3=3.5.9-r0",
+    "musl-utils=1.2.5-r24",
+    "musl=1.2.5-r24",
     "poppler-utils=25.12.0-r0",
     "python3=3.12.16-r0",
     "tesseract-ocr-data-chi_sim=5.5.1-r0",
@@ -4885,6 +4911,7 @@
     "tesseract-ocr=5.5.1-r0",
     "vips-tools=8.17.3-r1",
     "xz=5.8.4-r0",
+    "zlib=1.4-r0",
     "zstd=1.5.7-r2"
   ],
   "schema_version": 1,
