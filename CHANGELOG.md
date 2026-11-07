@@ -10,6 +10,13 @@
 - 将后端 `golang.org/x/net` 从 `v0.60.0` 更新至 `v0.62.0`（及配套 `golang.org/x/{crypto,sys,term,text,sync,tools}` 最小要求版本，同步 `unix.LandlockRulesetAttr.Handled_access_fs` 字段与 ABI v1/v3 结构体大小），修复 Trivy 扫描识别的 CVE-2026-78661（`golang.org/x/net/html` 拒绝服务）；同时更新双架构构建输入锁（`deploy/build-inputs/lock.json`、八份平台清单与 Worker 嵌入投影 `production_apk_inputs.json`）及 Core／Worker Dockerfile 显式 roots 与生产工具链 inventory：Alpine 3.24 构建阶段（`cgo-builder`、`supercronic-builder`）显式锁定 `musl=1.2.6-r3`、`musl-utils=1.2.6-r3` 与 `zlib=1.4-r0`（修复基础镜像中 `1.2.6-r2` 的 CVE-2026-107891 与 `1.3.2-r0` 的 CVE-2026-85091），Alpine 3.23 运行阶段（`core-runtime`、`worker-runtime`）显式锁定 `musl=1.2.5-r24`、`musl-utils=1.2.5-r24`（修复 `1.2.5-r23` 的 CVE-2026-107891）、`zlib=1.4-r0`（修复 `1.3.2-r0` 的 CVE-2026-22184／CVE-2026-27171／CVE-2026-85091）、Core `openssh-client-default=10.2_p1-r1`（及同源 `openssh-client-common`、`openssh-keygen`，修复 `10.2_p1-r0` 的 CVE-2026-119709）、Core `tzdata=2026f-r0`（替换软件源已移除的 `2026e-r0`）以及 Worker `font-noto=2026.11.01-r0`（替换软件源已移除的 `2025.12.01-r0`，推进 `fonts` 组件 revision 至 `noto-2026.11.01+noto-cjk-20220127`）。
 - 无新增公开 API、运行时配置或数据库 schema migration，不改写已发布迁移或历史数据；既有备份资产、恢复与凭据迁移的降级限制继续适用。节点文件预览（`GET /api/v1/nodes/:id/files/content`）要求远端节点支持在同一 SSH 连接上执行 `python3` 以完成 `O_NOFOLLOW` 句柄级一致性核验。Worker 生产工具链 inventory 与 APK 投影更新推进了工具链及 pipeline 指纹，升级前须保全数据库、匹配密钥、配置和备份副本，排空旧 Core／Worker 在途请求与处理任务后同源重建并配套更新 Core、Worker、两架构运行时闭包、签名 bundle 和 proof；新逻辑仅在新版 Core 后续节点文件预览请求中生效。回退旧版 Core／Worker 镜像及配套制品会恢复“打开时替换为根外软链接、打开后立即恢复路径”时已打开 SFTP 句柄返回根外文件内容的问题，并恢复 CVE-2026-78661、CVE-2026-107891、CVE-2026-119709、CVE-2026-22184、CVE-2026-27171 与 CVE-2026-85091 漏洞风险。
 
+## [0.73.15](https://github.com/xiangnan0811/xirang/compare/v0.73.14...v0.73.15) (2026-11-07)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 节点文件预览打开句柄恢复重验并移除迁移目录比较死包装 ([#691](https://github.com/xiangnan0811/xirang/issues/691)) ([2e5b194](https://github.com/xiangnan0811/xirang/commit/2e5b194e641e047897cb7623450cff3267078f2b))
+
 ## [0.73.14](https://github.com/xiangnan0811/xirang/compare/v0.73.13...v0.73.14) (2026-11-06)
 
 
