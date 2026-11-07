@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.15](https://github.com/xiangnan0811/xirang/compare/v0.73.14...v0.73.15) (2026-11-07)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 节点文件预览打开句柄恢复重验并移除迁移目录比较死包装 ([#691](https://github.com/xiangnan0811/xirang/issues/691)) ([2e5b194](https://github.com/xiangnan0811/xirang/commit/2e5b194e641e047897cb7623450cff3267078f2b))
+
 ### 节点文件预览打开句柄恢复重验与节点迁移目录比较死码收敛
 
 - 修复 `(*FileHandler).GetNodeFileContent`（`GET /api/v1/nodes/:id/files/content`）在 `fileaccess.SFTPTree.OpenRegular` 打开远端路径期间，若允许根目录内的目标路径被短暂替换为指向根外同字节长度、同权限位与同秒级 `mtime` 文件的软链接并在 `Open` 获取底层句柄后立即恢复回原根内普通文件时，因标准 SFTP v3 `SSH_FXP_ATTRS`（`sftp.FileStat`）不含 `st_dev`／`st_ino` 且无句柄级 `frealpath`，已打开句柄通过 `file.Stat()` 与 `handle.Close()` `postCheck` 后返回根外文件字节（HTTP `200 OK`）并记入 `outcome = "success"` 审计的问题。
