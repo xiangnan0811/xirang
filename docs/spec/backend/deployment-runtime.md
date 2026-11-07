@@ -274,3 +274,5 @@ Core 与 Worker 的 CGO 构建阶段将 `musl-dev` 从已不可安装的 `1.2.6-
 重建 Core/Worker 并重新生成各目标架构的闭包、签名运行包及 proof，保留 CGO
 产物在实际运行镜像中的加载与就绪验收。无新增配置或 schema migration；
 切换前排空旧 Worker 在途处理，回退使用配套旧镜像及制品，不手改指纹或沿用旧证明。
+
+Core 与 Worker 的 Alpine 3.24 构建阶段（`cgo-builder`、`supercronic-builder`）显式锁定 `musl=1.2.6-r3`、`musl-utils=1.2.6-r3`、`zlib=1.4-r0`，Alpine 3.23 运行阶段（`core-runtime`、`worker-runtime`）显式锁定 `musl=1.2.5-r24`、`musl-utils=1.2.5-r24`、`zlib=1.4-r0`，Core 同步更新 `openssh-client-default=10.2_p1-r1` 与 `tzdata=2026f-r0`，Worker 同步更新 `font-noto=2026.11.01-r0`，修复基础镜像与旧归档中的 `musl`（CVE-2026-107891）、`openssh`（CVE-2026-119709）及 `zlib`（CVE-2026-22184、CVE-2026-27171、CVE-2026-85091）高危漏洞并替换软件源已移除的旧包版本。共享生产工具链 inventory 按构建与运行角色分别绑定各自显式包版本及四项 APK 输入摘要，推进工具链与 pipeline 指纹；须排空在途任务后同源重建 Core／Worker 并更新双架构闭包、签名 bundle 与 proof。无新增配置或 schema migration，回退旧镜像及配套制品会恢复上述漏洞风险。

@@ -76,6 +76,22 @@
     },
     {
       "arch": "aarch64",
+      "file": "musl-1.2.6-r3.apk",
+      "name": "musl",
+      "sha256": "2e17864102278d9049c3a56f1bceed9e8cf287065617e579325123443daed8a5",
+      "size": 417730,
+      "version": "1.2.6-r3"
+    },
+    {
+      "arch": "aarch64",
+      "file": "musl-utils-1.2.6-r3.apk",
+      "name": "musl-utils",
+      "sha256": "bb460bdc009e88989bd5adca8a7c8298c339cba99da11c6196c818e042fbaf49",
+      "size": 16883,
+      "version": "1.2.6-r3"
+    },
+    {
+      "arch": "aarch64",
       "file": "nghttp2-libs-1.70.0-r0.apk",
       "name": "nghttp2-libs",
       "sha256": "7ef451f4dcdc065aa872c2f3c78b9d9bb4348caa5bcc70dee0c9e1fcf8e4c1fd",
@@ -89,6 +105,14 @@
       "sha256": "03efd0b29f7f38deb10a9ccb54f56e19683eb7ac27eb1f347e6dbd2e59ea000d",
       "size": 320291,
       "version": "10.49-r0"
+    },
+    {
+      "arch": "aarch64",
+      "file": "zlib-1.4-r0.apk",
+      "name": "zlib",
+      "sha256": "d3e30d012a3445222b0b4a28f1d4d97ce67387f8b48561921111696da174f0de",
+      "size": 55056,
+      "version": "1.4-r0"
     },
     {
       "arch": "aarch64",
@@ -296,12 +320,12 @@
     {
       "arch": "aarch64",
       "name": "musl",
-      "version": "1.2.6-r2"
+      "version": "1.2.6-r3"
     },
     {
       "arch": "aarch64",
       "name": "musl-utils",
-      "version": "1.2.6-r2"
+      "version": "1.2.6-r3"
     },
     {
       "arch": "aarch64",
@@ -326,7 +350,7 @@
     {
       "arch": "aarch64",
       "name": "zlib",
-      "version": "1.3.2-r0"
+      "version": "1.4-r0"
     },
     {
       "arch": "aarch64",
@@ -338,7 +362,10 @@
   "platform": "linux/arm64",
   "role": "supercronic-builder",
   "roots": [
-    "git=2.54.0-r0"
+    "git=2.54.0-r0",
+    "musl-utils=1.2.6-r3",
+    "musl=1.2.6-r3",
+    "zlib=1.4-r0"
   ],
   "schema_version": 1,
   "trusted_keys": [

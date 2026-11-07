@@ -684,16 +684,23 @@ container_id=$("$DOCKER" create \
       bash=5.3.3-r1 \
       clamav=1.4.4-r0 \
       ffmpeg=8.0.1-r1 \
-      font-noto=2025.12.01-r0 \
+      font-noto=2026.11.01-r0 \
       font-noto-cjk=0_git20220127-r1 \
+      libcrypto3=3.5.9-r0 \
+      libexpat=2.10.0-r0 \
       libreoffice=25.8.1.1-r5 \
+      libssl3=3.5.9-r0 \
+      musl=1.2.5-r24 \
+      musl-utils=1.2.5-r24 \
       poppler-utils=25.12.0-r0 \
+      python3=3.12.16-r0 \
       tesseract-ocr=5.5.1-r0 \
       tesseract-ocr-data-chi_sim=5.5.1-r0 \
       tesseract-ocr-data-eng=5.5.1-r0 \
       vips-tools=8.17.3-r1 \
       gzip=1.14-r3 \
       xz=5.8.4-r0 \
+      zlib=1.4-r0 \
       zstd=1.5.7-r2; do
       apk info -e "$package" >/dev/null
     done

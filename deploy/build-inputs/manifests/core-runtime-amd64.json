@@ -164,6 +164,22 @@
     },
     {
       "arch": "x86_64",
+      "file": "musl-1.2.5-r24.apk",
+      "name": "musl",
+      "sha256": "d49d703392f1a6d2fe822db1b57e61735063077e1ad846d5f40d79fe507ec727",
+      "size": 414107,
+      "version": "1.2.5-r24"
+    },
+    {
+      "arch": "x86_64",
+      "file": "musl-utils-1.2.5-r24.apk",
+      "name": "musl-utils",
+      "sha256": "ee9a8106067ead36b8930f5ccdb3e515574871ac8e07f88cc7bab7049effc945",
+      "size": 13596,
+      "version": "1.2.5-r24"
+    },
+    {
+      "arch": "x86_64",
       "file": "nghttp2-libs-1.69.0-r0.apk",
       "name": "nghttp2-libs",
       "sha256": "e52a5325b8720449ed4f123a33202794361b6b164c127abdb4b3c057467e7a41",
@@ -172,27 +188,27 @@
     },
     {
       "arch": "x86_64",
-      "file": "openssh-client-common-10.2_p1-r0.apk",
+      "file": "openssh-client-common-10.2_p1-r1.apk",
       "name": "openssh-client-common",
-      "sha256": "aa7cbbeca8a8d92ec854a9149e3f8a12f93e152f185e22ee0abf6569d96fe4b6",
-      "size": 870943,
-      "version": "10.2_p1-r0"
+      "sha256": "12793a8702234fb835495f772d86b2c2df75f4ee0fdbac03966f4248428fb4f9",
+      "size": 870937,
+      "version": "10.2_p1-r1"
     },
     {
       "arch": "x86_64",
-      "file": "openssh-client-default-10.2_p1-r0.apk",
+      "file": "openssh-client-default-10.2_p1-r1.apk",
       "name": "openssh-client-default",
-      "sha256": "41f05d0cf07e79b87c4d2b08a093ed8b0025ee50d82e0519aa51619211a8ebfa",
-      "size": 377036,
-      "version": "10.2_p1-r0"
+      "sha256": "cda2e53e07e2ddb886e101a0fc2faa9090bc94f632f3a75661710b0f393be4a9",
+      "size": 377053,
+      "version": "10.2_p1-r1"
     },
     {
       "arch": "x86_64",
-      "file": "openssh-keygen-10.2_p1-r0.apk",
+      "file": "openssh-keygen-10.2_p1-r1.apk",
       "name": "openssh-keygen",
-      "sha256": "6b24d17c7d17125064bfd381668197bc02afd8bac0fcf8c66feb9894283f7e7e",
-      "size": 207568,
-      "version": "10.2_p1-r0"
+      "sha256": "29fd67ada00a625eb64609477ae9f635161d419dfb8ee6ecdff1062a17b5da94",
+      "size": 207566,
+      "version": "10.2_p1-r1"
     },
     {
       "arch": "x86_64",
@@ -276,11 +292,11 @@
     },
     {
       "arch": "noarch",
-      "file": "tzdata-2026e-r0.apk",
+      "file": "tzdata-2026f-r0.apk",
       "name": "tzdata",
-      "sha256": "b317a4fa0a6ce0bc9f2a62349e205ed9faf5c89cb80c817fdc9cedca53e78da1",
-      "size": 190919,
-      "version": "2026e-r0"
+      "sha256": "29b71c02c289e017ad43a96b00ff6bec39e6e07512cb67a647696320c54d0321",
+      "size": 190883,
+      "version": "2026f-r0"
     },
     {
       "arch": "x86_64",
@@ -297,6 +313,14 @@
       "sha256": "8fd3aaf2c4cafd744c844eeabaea52d6dbd2b801d568eaadf4392611f48aa65e",
       "size": 5207,
       "version": "0.1.3.1-r0"
+    },
+    {
+      "arch": "x86_64",
+      "file": "zlib-1.4-r0.apk",
+      "name": "zlib",
+      "sha256": "22ff5ae6b704ac1786d6565dcb3f5dde489e44a5038297a565382b76f656ee08",
+      "size": 56762,
+      "version": "1.4-r0"
     }
   ],
   "base_source_digest": "sha256:3bcf852aed06467cf075c6105892e4d5a6ebbbafa0ce22d35062db9e90ddef4c",
@@ -986,12 +1010,12 @@
     {
       "arch": "x86_64",
       "name": "musl",
-      "version": "1.2.5-r23"
+      "version": "1.2.5-r24"
     },
     {
       "arch": "x86_64",
       "name": "musl-utils",
-      "version": "1.2.5-r23"
+      "version": "1.2.5-r24"
     },
     {
       "arch": "x86_64",
@@ -1036,17 +1060,17 @@
     {
       "arch": "x86_64",
       "name": "openssh-client-common",
-      "version": "10.2_p1-r0"
+      "version": "10.2_p1-r1"
     },
     {
       "arch": "x86_64",
       "name": "openssh-client-default",
-      "version": "10.2_p1-r0"
+      "version": "10.2_p1-r1"
     },
     {
       "arch": "x86_64",
       "name": "openssh-keygen",
-      "version": "10.2_p1-r0"
+      "version": "10.2_p1-r1"
     },
     {
       "arch": "x86_64",
@@ -1111,7 +1135,7 @@
     {
       "arch": "noarch",
       "name": "tzdata",
-      "version": "2026e-r0"
+      "version": "2026f-r0"
     },
     {
       "arch": "x86_64",
@@ -1131,7 +1155,7 @@
     {
       "arch": "x86_64",
       "name": "zlib",
-      "version": "1.3.2-r0"
+      "version": "1.4-r0"
     },
     {
       "arch": "x86_64",
@@ -1153,15 +1177,18 @@
     "libuuid=2.41.6-r1",
     "libxml2=2.13.9-r1",
     "mount=2.41.6-r1",
+    "musl-utils=1.2.5-r24",
+    "musl=1.2.5-r24",
     "nghttp2-libs=1.69.0-r0",
-    "openssh-client-default=10.2_p1-r0",
+    "openssh-client-default=10.2_p1-r1",
     "pcre2=10.49-r0",
     "postgresql18-client=18.6-r0",
     "rsync=3.5.0-r0",
     "sqlite=3.53.4-r0",
     "tiff=4.7.2-r0",
-    "tzdata=2026e-r0",
-    "util-linux-misc=2.41.6-r1"
+    "tzdata=2026f-r0",
+    "util-linux-misc=2.41.6-r1",
+    "zlib=1.4-r0"
   ],
   "schema_version": 1,
   "trusted_keys": [
