@@ -189,72 +189,59 @@ func TestProviderProductionImportsStayBelowAPIAndExecutorBoundaries(t *testing.T
 	}
 }
 
-func TestTaggedPublicationAttemptsAreStrictAndProviderSeparated(t *testing.T) {
-	restic := ResticAttemptV1{
-		RepositoryID:         strings.Repeat("a", 32),
-		RepositoryIdentity:   NativeResticIdentityPrefix + strings.Repeat("f", 64),
-		TaskRepositoryLinkID: strings.Repeat("b", 32),
-		RecoveryPointID:      strings.Repeat("c", 32),
-		TaskID:               41,
-		TaskRunID:            42,
-		RequiredTags: [2]string{
-			"xirang.link.v1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"xirang.point.v1.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		},
-		PointDeadlineAt:    time.Date(2026, 7, 16, 4, 0, 0, 0, time.UTC),
-		CapabilityRevision: 1,
-		AdapterRevision:    "restic-v1",
-	}
-	encoded, err := EncodePublicationAttempt(NewResticPublicationAttempt(restic))
+func TestRsyncTreeAttemptDecoderRejectsValidResticAttempt(t *testing.T) {
+	encoded, err := EncodePublicationAttempt(NewResticPublicationAttempt(publicationAttemptForTest()))
 	if err != nil {
-		t.Fatalf("encode Restic tagged attempt: %v", err)
+		t.Fatalf("encode Restic attempt: %v", err)
 	}
-	decoded, err := DecodeResticAttemptV1(encoded)
-	if err != nil {
-		t.Fatalf("decode Restic tagged attempt: %v", err)
+	if _, err := DecodePublicationAttempt(encoded); err != nil {
+		t.Fatalf("valid Restic attempt rejected by tagged dispatcher: %v", err)
 	}
-	if decoded.RepositoryID != restic.RepositoryID || decoded.RecoveryPointID != restic.RecoveryPointID || decoded.RequiredTags != restic.RequiredTags {
-		t.Fatalf("Restic tagged round-trip drifted: got=%+v want=%+v", decoded, restic)
-	}
-	if _, err := DecodeRsyncTreeAttemptV1(encoded); err == nil {
-		t.Fatal("Rsync decoder accepted a Restic attempt")
-	}
-
-	for name, raw := range map[string]string{
-		"unknown provider": `{"provider":"rclone","version":1,"restic":{"repository_id":"` + strings.Repeat("a", 32) + `"}}`,
-		"unknown version":  `{"provider":"restic","version":2,"restic":{"repository_id":"` + strings.Repeat("a", 32) + `"}}`,
-		"unknown field":    strings.TrimSuffix(encoded, "}") + `,"unexpected":"value"}`,
-		"duplicate field":  strings.Replace(encoded, `"provider":"restic"`, `"provider":"restic","provider":"restic"`, 1),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := DecodePublicationAttempt(raw); err == nil {
-				t.Fatalf("unsafe tagged attempt accepted: %s", raw)
-			}
-		})
+	if _, err := DecodeRsyncTreeAttemptV1(encoded); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("Rsync decoder accepted a Restic attempt or returned the wrong error: %v", err)
 	}
 }
 
 func TestTaggedPublicationCommitRejectsMixedProviderPayloads(t *testing.T) {
-	commit := ResticCommitV1{
+	commit := validRcloneCommitForTest(backupasset.PublicationVersionedPrefix)
+	encoded, err := EncodeProviderCommit(NewRcloneProviderCommit(commit))
+	if err != nil {
+		t.Fatalf("encode Rclone commit: %v", err)
+	}
+	if _, err := DecodeRcloneCommitV1(encoded); err != nil {
+		t.Fatalf("valid Rclone commit rejected: %v", err)
+	}
+	other := NewResticProviderCommit(ResticCommitV1{
 		RepositoryIdentity: NativeResticIdentityPrefix + strings.Repeat("f", 64),
 		NativePointID:      strings.Repeat("a", 64),
 		CaptureStartedAt:   time.Date(2026, 7, 16, 3, 0, 0, 0, time.UTC),
 		CaptureFinishedAt:  time.Date(2026, 7, 16, 3, 0, 1, 0, time.UTC),
 		FilesProcessed:     7,
 		LogicalBytes:       16 << 10,
-	}
-	encoded, err := EncodeProviderCommit(NewResticProviderCommit(commit))
+	})
+	otherEncoded, err := EncodeProviderCommit(other)
 	if err != nil {
-		t.Fatalf("encode Restic commit: %v", err)
+		t.Fatalf("encode other valid provider commit: %v", err)
 	}
-	if _, err := DecodeRsyncTreeCommitV1(encoded); err == nil {
-		t.Fatal("Rsync decoder accepted a Restic provider commit")
+	_, resticBranch, ok := strings.Cut(otherEncoded, `,"restic":`)
+	if !ok {
+		t.Fatal("encoded Restic commit is missing its branch")
 	}
-	if _, err := DecodeProviderCommit(strings.TrimSuffix(encoded, "}") + `,"rsync_tree":{}}`); err == nil {
-		t.Fatal("mixed provider commit payload was accepted")
-	}
-	if _, err := DecodeProviderCommit(strings.Replace(encoded, `"provider":"restic"`, `"provider":"restic","provider":"restic"`, 1)); err == nil {
-		t.Fatal("duplicate provider commit field was accepted")
+	for name, raw := range map[string]string{
+		"mixed branches":    strings.TrimSuffix(encoded, "}") + `,"restic":` + resticBranch,
+		"duplicate field":   strings.Replace(encoded, `"provider":"rclone"`, `"provider":"rclone","provider":"rclone"`, 1),
+		"unknown provider":  strings.Replace(encoded, `"provider":"rclone"`, `"provider":"future-provider"`, 1),
+		"unknown version":   strings.Replace(encoded, `"version":1`, `"version":2`, 1),
+		"provider mismatch": strings.Replace(encoded, `"provider":"rclone"`, `"provider":"rsync"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if raw == encoded {
+				t.Fatal("mutation did not change the valid commit")
+			}
+			if _, err := DecodeProviderCommit(raw); !errors.Is(err, backupasset.ErrInvalidState) {
+				t.Fatalf("unsafe provider commit accepted or returned the wrong error: %v", err)
+			}
+		})
 	}
 }
 

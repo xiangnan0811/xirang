@@ -1,14 +1,9 @@
 package processing
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
-	"time"
-	"unicode/utf8"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/processing/capabilityspec"
@@ -26,137 +21,6 @@ const (
 	PriorityInteractive PriorityClass = "interactive"
 	PriorityBackground  PriorityClass = "background"
 )
-
-type UpdaterSourceKind string
-
-const (
-	UpdaterSourceBuiltin         UpdaterSourceKind = "builtin"
-	UpdaterSourceAdminRegistered UpdaterSourceKind = "admin_registered"
-)
-
-type UpdaterMetadataState string
-
-const (
-	UpdaterMetadataRegistered UpdaterMetadataState = "registered"
-	UpdaterMetadataVerified   UpdaterMetadataState = "verified"
-	UpdaterMetadataActive     UpdaterMetadataState = "active"
-	UpdaterMetadataSuperseded UpdaterMetadataState = "superseded"
-	UpdaterMetadataFailed     UpdaterMetadataState = "failed"
-)
-
-type UpdaterFailureCode string
-
-const (
-	UpdaterFailureInvalidSignature   UpdaterFailureCode = "invalid_signature"
-	UpdaterFailureUnsupportedVersion UpdaterFailureCode = "unsupported_version"
-	UpdaterFailurePolicyRejected     UpdaterFailureCode = "policy_rejected"
-	UpdaterFailureActivationFailed   UpdaterFailureCode = "activation_failed"
-)
-
-// UpdaterMetadataV1 is a metadata-only seam for Child 11. It deliberately has
-// no URL, credential, private key, manifest body, bundle bytes, or raw output.
-type UpdaterMetadataV1 struct {
-	SchemaVersion         int                  `json:"schema_version"`
-	SourceKind            UpdaterSourceKind    `json:"source_kind"`
-	SourceID              string               `json:"source_id"`
-	Version               string               `json:"version"`
-	ManifestDigest        string               `json:"manifest_digest"`
-	SigningKeyFingerprint string               `json:"signing_key_fingerprint"`
-	BundleFingerprint     string               `json:"bundle_fingerprint"`
-	State                 UpdaterMetadataState `json:"state"`
-	FailureCode           UpdaterFailureCode   `json:"failure_code"`
-	VerifiedAt            *time.Time           `json:"verified_at"`
-	ActivatedAt           *time.Time           `json:"activated_at"`
-}
-
-var updaterSemanticVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
-
-func DecodeUpdaterMetadataV1(payload []byte) (UpdaterMetadataV1, error) {
-	if len(payload) == 0 || len(payload) > 64*1024 || !utf8.Valid(payload) || !json.Valid(payload) {
-		return UpdaterMetadataV1{}, ErrInvalidContract
-	}
-	if err := rejectDuplicateJSONMembers(payload); err != nil {
-		return UpdaterMetadataV1{}, ErrInvalidContract
-	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var value UpdaterMetadataV1
-	if err := decoder.Decode(&value); err != nil || ensureJSONEOF(decoder) != nil {
-		return UpdaterMetadataV1{}, ErrInvalidContract
-	}
-	if err := ValidateUpdaterMetadataV1(value); err != nil {
-		return UpdaterMetadataV1{}, err
-	}
-	return value, nil
-}
-
-func ValidateUpdaterMetadataV1(value UpdaterMetadataV1) error {
-	if value.SchemaVersion != 1 || !validUpdaterSourceKind(value.SourceKind) ||
-		!validUpdaterSourceID(value.SourceID) || len(value.Version) > 64 || !updaterSemanticVersion.MatchString(value.Version) ||
-		!lowerHex(value.ManifestDigest, 64) || !lowerHex(value.SigningKeyFingerprint, 64) || !lowerHex(value.BundleFingerprint, 64) {
-		return ErrInvalidContract
-	}
-	if !utcUpdaterTime(value.VerifiedAt) || !utcUpdaterTime(value.ActivatedAt) ||
-		(value.ActivatedAt != nil && (value.VerifiedAt == nil || value.ActivatedAt.Before(*value.VerifiedAt))) {
-		return ErrInvalidContract
-	}
-	switch value.State {
-	case UpdaterMetadataRegistered:
-		if value.VerifiedAt != nil || value.ActivatedAt != nil || value.FailureCode != "" {
-			return ErrInvalidContract
-		}
-	case UpdaterMetadataVerified:
-		if value.VerifiedAt == nil || value.ActivatedAt != nil || value.FailureCode != "" {
-			return ErrInvalidContract
-		}
-	case UpdaterMetadataActive:
-		if value.VerifiedAt == nil || value.ActivatedAt == nil || value.FailureCode != "" {
-			return ErrInvalidContract
-		}
-	case UpdaterMetadataSuperseded:
-		if value.VerifiedAt == nil || value.FailureCode != "" {
-			return ErrInvalidContract
-		}
-	case UpdaterMetadataFailed:
-		if !validUpdaterFailureCode(value.FailureCode) {
-			return ErrInvalidContract
-		}
-	default:
-		return ErrInvalidContract
-	}
-	return nil
-}
-
-func validUpdaterSourceKind(value UpdaterSourceKind) bool {
-	return value == UpdaterSourceBuiltin || value == UpdaterSourceAdminRegistered
-}
-
-func validUpdaterSourceID(value string) bool {
-	if value == "" || len(value) > 128 || strings.TrimSpace(value) != value {
-		return false
-	}
-	for _, character := range value {
-		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') ||
-			character == '.' || character == '_' || character == ':' || character == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func validUpdaterFailureCode(value UpdaterFailureCode) bool {
-	switch value {
-	case UpdaterFailureInvalidSignature, UpdaterFailureUnsupportedVersion, UpdaterFailurePolicyRejected, UpdaterFailureActivationFailed:
-		return true
-	default:
-		return false
-	}
-}
-
-func utcUpdaterTime(value *time.Time) bool {
-	return value == nil || value.Location() == time.UTC
-}
 
 type CanonicalParametersV1 struct {
 	SchemaVersion           int    `json:"schema_version"`

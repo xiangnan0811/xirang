@@ -18,6 +18,8 @@ Task executor 到 Provider 的映射只能在 `backupasset/repository/binding.go
 
 包依赖和映射位置要有编译/源码边界回归：拒绝上述禁止 import，枚举 Repository 中 `Task.ExecutorType` 的分支并证明只在 `binding.go`，检查 `fileaccess` 无数据库和 `FILE_BROWSER_ALLOW_ALL` 依赖。仅接口行为测试不能替代这类边界检查。
 
+持久化的 tagged publication attempt／provider commit 由现行共享 decoder 严格分派，拒绝未知／重复字段、尾随 JSON、不支持版本、未知 Provider、Provider／分支错配及混合分支。特定 Provider 的消费者还须通过类型化 accessor 拒绝合法的其他 Provider 证据。Restic 运行时构造／重建类型化 attempt 和 commit；Rsync 持久 locator 的 attempt 解码与其认证 commit marker 是不同入口，不能用 tagged commit 的便利包装代替 marker 的摘要、HMAC 与身份验证。
+
 ## 身份、密钥与读取边界
 
 - `entry_identity`、`recovery_cleanup_ownership`、`rclone_preflight_identity`、`search_token` 是安装稳定密钥域，`Keyring.Rotate` 必须拒绝。KEK 轮换只能重新包裹，不能改变密钥材料。丢失时不得静默生成替代；Entry ID 支撑深链接与用户引用，更换需要明确兼容方案。Rclone 预检身份独立于可重建的 Search 域，用于持久 binding/历史 attempt 的私有身份摘要，不允许 rebuildable 替换或 lost 转换。Runtime 无论 Search 是否启用，均先重新包裹再初始化该域；缺表、lost、历史无 active 或解包失败拒绝启动。完全删除某域全部历史无法与首次安装区分，恢复仍要求匹配数据库与 KEK。Search、Entry、Cursor、Audit、Derived、Export 和预检身份域不复用。

@@ -1067,14 +1067,6 @@ func DecodePublicationAttempt(raw string) (TaggedPublicationAttempt, error) {
 	return value, nil
 }
 
-func DecodeResticAttemptV1(raw string) (ResticAttemptV1, error) {
-	value, err := DecodePublicationAttempt(raw)
-	if err != nil {
-		return ResticAttemptV1{}, err
-	}
-	return value.ResticAttempt()
-}
-
 func DecodeRsyncTreeAttemptV1(raw string) (RsyncTreeAttemptV1, error) {
 	value, err := DecodePublicationAttempt(raw)
 	if err != nil {
@@ -1166,14 +1158,6 @@ func DecodeProviderCommit(raw string) (ProviderCommit, error) {
 		return ProviderCommit{}, err
 	}
 	return value, nil
-}
-
-func DecodeRsyncTreeCommitV1(raw string) (RsyncTreeCommitV1, error) {
-	value, err := DecodeProviderCommit(raw)
-	if err != nil {
-		return RsyncTreeCommitV1{}, err
-	}
-	return value.RsyncTreeCommit()
 }
 
 func DecodeRcloneCommitV1(raw string) (RcloneCommitV1, error) {
