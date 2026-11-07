@@ -49,6 +49,8 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 保留策略与删除安全的入口回归迁移按 `test` 语义处理：真实 Coordinator、注册删除 adapter 与分页选择验收替换旧 helper 覆盖，不代表新增保留规则、删除权限或远端 Provider 能力。无 API、配置或 schema migration；保留既有版本的密钥、持久格式及降级限制。未生成正式 release 时，说明保留在 `Unreleased`，并核对同 SHA CI 与 Release Please；不要求为测试迁移单独生成镜像，也不将受控本地烟测记为 AWS live 或生产部署。
 
+旧 Updater metadata 和 Provider 解码便利包装的断言迁移／死码清理同样按 `test`／`refactor` 语义处理：保留当前签名包、receipt、类型化发布证据和持久格式，不把内部源码 API 清理写成新增 wire 或更新流程。没有运行行为变化时不强制发版／镜像，说明留在 `Unreleased`；仍须完成正常 hooks、同候选独审、required CI 及合并后的同 SHA CI／Release Please 核对。
+
 Recent 内容访问修复的发布验收须覆盖同 grant 首个持久成功 GET、并发 Range 去重、失败不补录、owner 隔离及 clear/replay，并实际运行 required-PostgreSQL 库存中对应的三个 content 子路径。发布说明保留有限预览/Range 不代表整文件下载完成、有界尽力漏记和必需内容审计不降级的边界；新逻辑仅在新版 Core 后续成功请求生效，不回填历史，已有成功 GET 的 grant 不重新记录。无新增 API、配置或 schema migration，保全数据库、匹配密钥与配置，正常换版前排空旧 Core 在途内容请求；回退会恢复缺触发的问题，不删除已有 Recent 或解除既有迁移/恢复限制。真实本地 HTTP、双引擎与浏览器验收不代表 AWS live、生产升级或远端恢复。
 
 上述 Recent 修复与此前保留/删除安全回归、退役快照及未用代码清理的完整说明归档于 CHANGELOG `0.73.8` 版本节。该发行 PR 与正式 GitHub Release 正文须保留三部分全部行为、生效和升级边界，不将原 `Unreleased` 的已交付条目留在版本节之外。

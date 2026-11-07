@@ -8,24 +8,7 @@ import (
 	"time"
 )
 
-func TestUpdaterProtocolAcceptsOnlyClosedSanitizedMessages(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	receipt := protocolTestReceipt(now)
-	registration := RegisterCandidateRequest{SchemaVersion: 1, Receipt: receipt}
-	payload, err := json.Marshal(registration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := DecodeRegisterCandidateRequest(payload)
-	if err != nil || decoded.Receipt.BundleFingerprint != receipt.BundleFingerprint {
-		t.Fatalf("registration decoded=%+v err=%v", decoded, err)
-	}
-	for _, forbidden := range []string{"path", "filename", "content", "signature\"", "credential", "bundle_bytes", "worker_id", "attempt_id", "fence"} {
-		if strings.Contains(strings.ToLower(string(payload)), forbidden) {
-			t.Fatalf("protocol payload leaked %q: %s", forbidden, payload)
-		}
-	}
-
+func TestUpdaterProtocolAcceptsPullAndActivationReport(t *testing.T) {
 	pullPayload := []byte(`{"schema_version":1,"active_fingerprint":"` + strings.Repeat("a", 64) + `"}`)
 	if _, err := DecodePullActivationRequest(pullPayload); err != nil {
 		t.Fatalf("decode pull: %v", err)
@@ -42,24 +25,7 @@ func TestUpdaterProtocolAcceptsOnlyClosedSanitizedMessages(t *testing.T) {
 	}
 }
 
-func TestUpdaterProtocolRejectsUnknownDuplicateMalformedAndOpenEndedFields(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	base, err := json.Marshal(RegisterCandidateRequest{SchemaVersion: 1, Receipt: protocolTestReceipt(now)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	invalid := [][]byte{
-		append([]byte(nil), base[:len(base)-1]...),
-		[]byte(`{"schema_version":1,"schema_version":1,"receipt":{}}`),
-		[]byte(`{"schema_version":1,"receipt":{},"path":"/private/inbox"}`),
-		[]byte{'{', '"', 0xff, '"', ':', '1', '}'},
-	}
-	for index, payload := range invalid {
-		if _, err := DecodeRegisterCandidateRequest(payload); !errors.Is(err, ErrProtocolInvalid) {
-			t.Fatalf("invalid registration %d error=%v payload=%q", index, err, payload)
-		}
-	}
-
+func TestUpdaterProtocolRejectsInvalidPullAndActivationReport(t *testing.T) {
 	badPulls := [][]byte{
 		[]byte(`{"schema_version":1,"active_fingerprint":"latest"}`),
 		[]byte(`{"schema_version":1,"active_fingerprint":null}`),

@@ -127,6 +127,22 @@ func validRcloneCommitForTest(mode backupasset.TaskPublicationMode) RcloneCommit
 }
 
 func TestRcloneTaggedAttemptsRoundTripAndRejectEveryCrossVariant(t *testing.T) {
+	restic, err := EncodePublicationAttempt(NewResticPublicationAttempt(publicationAttemptForTest()))
+	if err != nil {
+		t.Fatalf("encode other valid Restic attempt: %v", err)
+	}
+	_, resticBranch, ok := strings.Cut(restic, `,"restic":`)
+	if !ok {
+		t.Fatal("encoded Restic attempt is missing its branch")
+	}
+	rsync, err := EncodePublicationAttempt(NewRsyncTreePublicationAttempt(rsyncTreeAttemptForMarkerTest()))
+	if err != nil {
+		t.Fatalf("encode other valid Rsync attempt: %v", err)
+	}
+	_, rsyncBranch, ok := strings.Cut(rsync, `,"rsync_tree":`)
+	if !ok {
+		t.Fatal("encoded Rsync attempt is missing its branch")
+	}
 	for _, mode := range []backupasset.TaskPublicationMode{
 		backupasset.PublicationVersionedPrefix,
 		backupasset.PublicationNativeObjectVersions,
@@ -141,14 +157,22 @@ func TestRcloneTaggedAttemptsRoundTripAndRejectEveryCrossVariant(t *testing.T) {
 			t.Fatalf("attempt %q round trip got=%+v err=%v want=%+v", mode, got, err, want)
 		}
 		for name, raw := range map[string]string{
-			"null":          `{"provider":"rclone","version":1,"rclone":null}`,
-			"restic branch": strings.TrimSuffix(encoded, "}") + `,"restic":{}}`,
-			"rsync branch":  strings.TrimSuffix(encoded, "}") + `,"rsync_tree":{}}`,
-			"unknown":       strings.TrimSuffix(encoded, "}") + `,"future":{}}`,
-			"duplicate":     strings.Replace(encoded, `"provider":"rclone"`, `"provider":"rclone","provider":"rclone"`, 1),
-			"trailing":      encoded + ` {}`,
+			"null":              `{"provider":"rclone","version":1,"rclone":null}`,
+			"restic branch":     strings.TrimSuffix(encoded, "}") + `,"restic":` + resticBranch,
+			"rsync branch":      strings.TrimSuffix(encoded, "}") + `,"rsync_tree":` + rsyncBranch,
+			"unknown field":     strings.TrimSuffix(encoded, "}") + `,"future":{}}`,
+			"nested unknown":    strings.Replace(encoded, `"rclone":{`, `"rclone":{"future":{},`, 1),
+			"duplicate":         strings.Replace(encoded, `"provider":"rclone"`, `"provider":"rclone","provider":"rclone"`, 1),
+			"nested duplicate":  strings.Replace(encoded, `"schema_version":1`, `"schema_version":1,"schema_version":1`, 1),
+			"unknown provider":  strings.Replace(encoded, `"provider":"rclone"`, `"provider":"future-provider"`, 1),
+			"unknown version":   strings.Replace(encoded, `"version":1`, `"version":2`, 1),
+			"provider mismatch": strings.Replace(encoded, `"provider":"rclone"`, `"provider":"rsync"`, 1),
+			"trailing":          encoded + ` {}`,
 		} {
 			t.Run(string(mode)+"/"+name, func(t *testing.T) {
+				if raw == encoded {
+					t.Fatal("mutation did not change the valid attempt")
+				}
 				if _, err := DecodePublicationAttempt(raw); err == nil {
 					t.Fatalf("unsafe Rclone attempt accepted: %s", raw)
 				}
@@ -249,22 +273,6 @@ func TestRcloneManifestPrepareAndReconcileBranchesAreClosed(t *testing.T) {
 	closed.ResticObservations = []ResticSnapshotObservation{{}}
 	if _, err := closed.RcloneResult(); err == nil {
 		t.Fatal("mixed Rclone/Restic reconciliation accepted")
-	}
-}
-
-func TestAddingRcloneBranchKeepsResticWireBytesCompatible(t *testing.T) {
-	value := ResticCommitV1{
-		RepositoryIdentity: NativeResticIdentityPrefix + strings.Repeat("f", 64), NativePointID: strings.Repeat("a", 64),
-		CaptureStartedAt: time.Date(2026, 7, 16, 3, 0, 0, 0, time.UTC), CaptureFinishedAt: time.Date(2026, 7, 16, 3, 0, 1, 0, time.UTC),
-		FilesProcessed: 7, LogicalBytes: 16384,
-	}
-	got, err := EncodeProviderCommit(NewResticProviderCommit(value))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `{"provider":"restic","version":1,"restic":{"repository_identity":"restic-native:v1:` + strings.Repeat("f", 64) + `","native_point_id":"` + strings.Repeat("a", 64) + `","capture_started_at":"2026-07-16T03:00:00Z","capture_finished_at":"2026-07-16T03:00:01Z","files_processed":7,"logical_bytes":16384}}`
-	if got != want {
-		t.Fatalf("legacy Restic commit wire drifted:\n got: %s\nwant: %s", got, want)
 	}
 }
 

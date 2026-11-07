@@ -109,6 +109,20 @@ func TestRsyncTreePublicationStrategyPublishesFullCopyWithExactManifest(t *testi
 	if err != nil || result.Completion != backupasset.CompletionKnownExitZero || result.ExitCode != 0 || result.ProviderCommit == nil {
 		t.Fatalf("strategy execution result=%+v err=%v", result, err)
 	}
+	foreign := NewResticProviderCommit(ResticCommitV1{
+		RepositoryIdentity: NativeResticIdentityPrefix + strings.Repeat("f", 64),
+		NativePointID:      strings.Repeat("a", 64),
+		CaptureStartedAt:   now,
+		CaptureFinishedAt:  now.Add(time.Second),
+	})
+	if err := foreign.Validate(); err != nil {
+		t.Fatalf("other-provider commit fixture is invalid: %v", err)
+	}
+	foreignResult := result
+	foreignResult.ProviderCommit = &foreign
+	if _, err := strategy.RecordCommit(context.Background(), prepared, foreignResult); !errors.Is(err, backupasset.ErrInvalidState) || !strings.Contains(err.Error(), "Rsync provider commit required") {
+		t.Fatalf("recording other-provider commit error=%v", err)
+	}
 	commit, err := strategy.RecordCommit(context.Background(), prepared, result)
 	if err != nil {
 		t.Fatal(err)
@@ -147,6 +161,24 @@ func TestRsyncTreePublicationStrategyPublishesFullCopyWithExactManifest(t *testi
 	}
 	if typedManifest, err := manifest.RsyncTreeManifest(); err != nil || typedManifest.Digest != typedCommit.ManifestDigest || typedManifest.EntryCount != 1 {
 		t.Fatalf("manifest=%+v err=%v", typedManifest, err)
+	}
+	// Opening the managed tree recreates a missing staging directory. Its
+	// absence makes premature provider I/O observable for the foreign commit.
+	staging := filepath.Join(root, "staging")
+	if err := os.Remove(staging); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := strategy.VerifyOrBuildManifest(context.Background(), prepared, foreign, input.ManifestLimits); !errors.Is(err, backupasset.ErrInvalidState) || !strings.Contains(err.Error(), "Rsync provider commit required") {
+		t.Fatalf("verifying other-provider commit error=%v", err)
+	}
+	if _, err := os.Stat(staging); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("foreign commit reached managed tree: staging stat error=%v", err)
+	}
+	if _, err := strategy.VerifyOrBuildManifest(context.Background(), prepared, commit, input.ManifestLimits); err != nil {
+		t.Fatalf("valid Rsync commit rejected: %v", err)
+	}
+	if _, err := os.Stat(staging); err != nil {
+		t.Fatalf("valid commit did not reach managed tree: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "points", attempt.FinalComponent, "commit.json"), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)

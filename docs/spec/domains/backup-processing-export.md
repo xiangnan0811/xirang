@@ -50,6 +50,8 @@ content-addressed bundle volume 是 parser/updater 唯一共享数据 mount：�
 
 浏览器和 Core HTTP API 不接收 bundle bytes、multipart、URL、服务器路径、inbox 文件名或原始 manifest。Admin API 仅接受脱敏 candidate ID 和 expected fingerprint 的小型 JSON 控制请求。Compose updater 同样 `network_mode: none`，只支持 offline-only。Online updater 默认关闭；任何单独的 online 部署必须同时具备 exact HTTPS origin allowlist、独立 allowlist proxy/firewall、隔离网络及 updater-only credential secret。应用 allowlist 不能代替 egress firewall，parser 永远不继承 updater 网络或凭据。
 
+Updater 的注册 wire 是签名离线包经过 inbox 验证后生成的 `InboxReceipt`，由 `DecodeRegisterCandidateRequest` 严格解码；顶层与嵌套未知／重复字段、尾随 JSON、不支持的 schema 和无效身份／版本／摘要／验证时间均拒绝。注册消息不携带 URL、凭据、原始输出或 bundle 内容。metadata 的 verified／active 等生命周期由 Core 的关系表及注册／激活事务拥有，不是独立 metadata JSON 的读写入口；不得以测试便利格式替代真实签名包、receipt 或持久化合同。
+
 处理 API、日志、指标、审计与管理聚合仅记录闭合 capability/profile/state/error category、不透明资源引用和有界计数。禁止记录 Provider locator、宿主/tmp/bundle/inbox 路径、Worker UID/PID/证书、credential、grant/session/attempt/fence/activation secret、原始 argv/stdout/stderr/tool diagnostic、manifest/body 或源内容；底层 peer PID 可作私有诊断输入，不因此变成公开日志字段。
 
 ## 队列、租约与原子发布

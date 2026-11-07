@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,19 +33,131 @@ func TestInboxScansFixedNoFollowPackageAndReturnsSanitizedReceipt(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 1 || candidates[0].Receipt.ManifestDigest != SHA256Hex(manifestPayload) ||
-		candidates[0].Receipt.BundleSHA256 != SHA256Hex(bundle) || candidates[0].Receipt.Version != "1.0.0" {
+	if len(candidates) != 1 {
 		t.Fatalf("unexpected inbox candidates: %+v", candidates)
 	}
-	payload, err := json.Marshal(candidates[0].Receipt)
+	var manifest Manifest
+	if err := json.Unmarshal(manifestPayload, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := bundleFingerprint(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := InboxReceipt{
+		SchemaVersion: 1, SourceKind: manifest.SourceKind, SourceID: manifest.SourceID, Version: manifest.Version,
+		ManifestDigest: SHA256Hex(manifestPayload), SigningKeyFingerprint: SHA256Hex(publicKey),
+		BundleFingerprint: fingerprint, BundleSHA256: SHA256Hex(bundle), Capabilities: manifest.Capabilities, VerifiedAt: now,
+	}
+	registration := RegisterCandidateRequest{SchemaVersion: 1, Receipt: candidates[0].Receipt}
+	payload, err := json.Marshal(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeRegisterCandidateRequest(payload)
+	if err != nil || decoded.SchemaVersion != 1 || !reflect.DeepEqual(decoded.Receipt, want) {
+		t.Fatalf("registration decoded=%+v want=%+v err=%v", decoded, want, err)
+	}
 	lower := strings.ToLower(string(payload))
-	for _, forbidden := range []string{"candidate-one", root, "manifest.json", "bundle.tar", "path", "content", "signature"} {
+	for _, forbidden := range []string{
+		"candidate-one", root, "manifest.json", "bundle.tar", "models/model.dat", manifest.Signature,
+		"FAKE_BUNDLE_CONTENT_FOR_TEST_ONLY", `"path"`, `"content"`, `"signature"`,
+		`"url"`, `"credential"`, `"raw_output"`, `"bundle_bytes"`, `"worker_id"`, `"attempt_id"`, `"fence"`,
+	} {
 		if strings.Contains(lower, strings.ToLower(forbidden)) {
-			t.Fatalf("sanitized inbox receipt leaked %q: %s", forbidden, payload)
+			t.Fatalf("sanitized registration leaked %q: %s", forbidden, payload)
 		}
+	}
+	t.Run("builtin source kind", func(t *testing.T) {
+		builtin := registration
+		builtin.Receipt.SourceKind = "builtin"
+		builtinPayload, err := json.Marshal(builtin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeRegisterCandidateRequest(builtinPayload)
+		if err != nil || !reflect.DeepEqual(decoded, builtin) {
+			t.Fatalf("builtin registration decoded=%+v want=%+v err=%v", decoded, builtin, err)
+		}
+	})
+
+	replaceOnce := func(t *testing.T, old, replacement string) []byte {
+		t.Helper()
+		if strings.Count(string(payload), old) != 1 {
+			t.Fatalf("expected one %q in valid registration", old)
+		}
+		return []byte(strings.Replace(string(payload), old, replacement, 1))
+	}
+	verifiedJSON, err := json.Marshal(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonMutations := []struct {
+		name, old, replacement string
+	}{
+		{"unknown top-level", `"receipt":`, `"unexpected":true,"receipt":`},
+		{"unknown receipt", `"receipt":{`, `"receipt":{"unexpected":true,`},
+		{"unknown capability", `"capability":"image.ocr"`, `"unexpected":true,"capability":"image.ocr"`},
+		{"URL", `"receipt":{`, `"receipt":{"url":"https://example.invalid/bundle",`},
+		{"credential", `"receipt":{`, `"receipt":{"credential":"FAKE_TOKEN_FOR_TEST_ONLY",`},
+		{"raw output", `"receipt":{`, `"receipt":{"raw_output":"FAKE_OUTPUT_FOR_TEST_ONLY",`},
+		{"duplicate top-level", `"receipt":`, `"schema_version":1,"receipt":`},
+		{"duplicate receipt", `"receipt":{"schema_version":1,`, `"receipt":{"schema_version":1,"schema_version":1,`},
+		{"duplicate capability", `"capability":"image.ocr"`, `"capability":"image.ocr","capability":"image.ocr"`},
+		{"missing verified time", `,"verified_at":` + string(verifiedJSON), ""},
+		{"invalid UTF-8", `"source_id":"offline.default"`, "\"source_id\":\"\xff\""},
+	}
+	for _, mutation := range jsonMutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			invalid := replaceOnce(t, mutation.old, mutation.replacement)
+			if _, err := DecodeRegisterCandidateRequest(invalid); !errors.Is(err, ErrProtocolInvalid) {
+				t.Fatalf("DecodeRegisterCandidateRequest error=%v, want invalid protocol", err)
+			}
+		})
+	}
+	t.Run("trailing JSON", func(t *testing.T) {
+		invalid := append(append([]byte(nil), payload...), []byte(` {}`)...)
+		if _, err := DecodeRegisterCandidateRequest(invalid); !errors.Is(err, ErrProtocolInvalid) {
+			t.Fatalf("DecodeRegisterCandidateRequest error=%v, want invalid protocol", err)
+		}
+	})
+	t.Run("truncated JSON", func(t *testing.T) {
+		if _, err := DecodeRegisterCandidateRequest(payload[:len(payload)-1]); !errors.Is(err, ErrProtocolInvalid) {
+			t.Fatalf("DecodeRegisterCandidateRequest error=%v, want invalid protocol", err)
+		}
+	})
+
+	invalidRegistrations := []struct {
+		name   string
+		mutate func(*RegisterCandidateRequest)
+	}{
+		{"unsupported request schema", func(value *RegisterCandidateRequest) { value.SchemaVersion = 2 }},
+		{"unsupported receipt schema", func(value *RegisterCandidateRequest) { value.Receipt.SchemaVersion = 2 }},
+		{"unknown source kind", func(value *RegisterCandidateRequest) { value.Receipt.SourceKind = "https" }},
+		{"URL source ID", func(value *RegisterCandidateRequest) { value.Receipt.SourceID = "https://example.invalid/bundle" }},
+		{"oversized source ID", func(value *RegisterCandidateRequest) { value.Receipt.SourceID = strings.Repeat("a", 129) }},
+		{"non-semantic version", func(value *RegisterCandidateRequest) { value.Receipt.Version = "latest" }},
+		{"uppercase manifest digest", func(value *RegisterCandidateRequest) { value.Receipt.ManifestDigest = strings.Repeat("A", 64) }},
+		{"uppercase signing key fingerprint", func(value *RegisterCandidateRequest) { value.Receipt.SigningKeyFingerprint = strings.Repeat("B", 64) }},
+		{"uppercase bundle fingerprint", func(value *RegisterCandidateRequest) { value.Receipt.BundleFingerprint = strings.Repeat("C", 64) }},
+		{"uppercase bundle digest", func(value *RegisterCandidateRequest) { value.Receipt.BundleSHA256 = strings.Repeat("D", 64) }},
+		{"zero verified time", func(value *RegisterCandidateRequest) { value.Receipt.VerifiedAt = time.Time{} }},
+		{"non-UTC verified time", func(value *RegisterCandidateRequest) {
+			value.Receipt.VerifiedAt = now.In(time.FixedZone("non-UTC", 3600))
+		}},
+	}
+	for _, testCase := range invalidRegistrations {
+		t.Run(testCase.name, func(t *testing.T) {
+			invalid := registration
+			testCase.mutate(&invalid)
+			invalidPayload, err := json.Marshal(invalid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeRegisterCandidateRequest(invalidPayload); !errors.Is(err, ErrProtocolInvalid) {
+				t.Fatalf("DecodeRegisterCandidateRequest error=%v, want invalid protocol", err)
+			}
+		})
 	}
 }
 
@@ -402,12 +515,12 @@ func writeInboxCandidate(t *testing.T, root, name string, now time.Time) (ed2551
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle, files, err := BuildCanonicalTar([]BundleFilePayload{{Path: "models/model.dat", Mode: 0o444, Content: []byte("model")}})
+	bundle, files, err := BuildCanonicalTar([]BundleFilePayload{{Path: "models/model.dat", Mode: 0o444, Content: []byte("FAKE_BUNDLE_CONTENT_FOR_TEST_ONLY")}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manifest := Manifest{
-		SchemaVersion: 1, SourceKind: "admin_registered", SourceID: "offline.default", Version: "1.0.0",
+		SchemaVersion: 1, SourceKind: "admin_registered", SourceID: "offline.default", Version: "1.2.3-rc.1+build.7",
 		CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
 		Capabilities: []ManifestCapability{{
 			Capability: "image.ocr", Schema: "image.ocr.v1", Profiles: []string{"tesseract_text_v1"},
