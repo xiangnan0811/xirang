@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -88,13 +89,37 @@ func (r *hookableReaderAt) ReadAt(p []byte, off int64) (int, error) {
 //     触发最后一次 postCheck 前确定性模拟远端文件被篡改或替换为越界软链接。
 type controlledSFTPFSHost struct {
 	mu             sync.Mutex
+	onBeforeOpen   map[string]func()
+	onAfterOpen    map[string]func()
 	onReadComplete map[string]func()
 }
 
 func newControlledSFTPFSHost() *controlledSFTPFSHost {
 	return &controlledSFTPFSHost{
+		onBeforeOpen:   make(map[string]func()),
+		onAfterOpen:    make(map[string]func()),
 		onReadComplete: make(map[string]func()),
 	}
+}
+
+func (h *controlledSFTPFSHost) setOnBeforeOpen(targetPath string, fn func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if fn == nil {
+		delete(h.onBeforeOpen, filepath.Clean(targetPath))
+		return
+	}
+	h.onBeforeOpen[filepath.Clean(targetPath)] = fn
+}
+
+func (h *controlledSFTPFSHost) setOnAfterOpen(targetPath string, fn func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if fn == nil {
+		delete(h.onAfterOpen, filepath.Clean(targetPath))
+		return
+	}
+	h.onAfterOpen[filepath.Clean(targetPath)] = fn
 }
 
 func (h *controlledSFTPFSHost) setOnReadComplete(targetPath string, fn func()) {
@@ -147,22 +172,36 @@ func (h *controlledSFTPFSHost) Filelist(req *sftp.Request) (sftp.ListerAt, error
 }
 
 func (h *controlledSFTPFSHost) Fileread(req *sftp.Request) (io.ReaderAt, error) {
-	data, err := os.ReadFile(req.Filepath)
-	if err != nil {
-		return nil, err
-	}
 	cleanPath := filepath.Clean(req.Filepath)
 	resolvedPath := cleanPath
 	if eval, evalErr := filepath.EvalSymlinks(cleanPath); evalErr == nil {
 		resolvedPath = filepath.Clean(eval)
 	}
 	h.mu.Lock()
-	hook := h.onReadComplete[cleanPath]
-	if hook == nil {
-		hook = h.onReadComplete[resolvedPath]
+	beforeHook := h.onBeforeOpen[cleanPath]
+	if beforeHook == nil {
+		beforeHook = h.onBeforeOpen[resolvedPath]
+	}
+	afterHook := h.onAfterOpen[cleanPath]
+	if afterHook == nil {
+		afterHook = h.onAfterOpen[resolvedPath]
+	}
+	readHook := h.onReadComplete[cleanPath]
+	if readHook == nil {
+		readHook = h.onReadComplete[resolvedPath]
 	}
 	h.mu.Unlock()
-	return &hookableReaderAt{data: data, onComplete: hook}, nil
+	if beforeHook != nil {
+		beforeHook()
+	}
+	data, err := os.ReadFile(req.Filepath)
+	if err != nil {
+		return nil, err
+	}
+	if afterHook != nil {
+		afterHook()
+	}
+	return &hookableReaderAt{data: data, onComplete: readHook}, nil
 }
 
 func (h *controlledSFTPFSHost) Filewrite(*sftp.Request) (io.WriterAt, error) {
@@ -284,36 +323,66 @@ func (s *fileBrowserSSHSFTPTestServer) serveConnection(rawConn net.Conn) {
 func (s *fileBrowserSSHSFTPTestServer) serveSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer func() { _ = channel.Close() }()
 	for req := range requests {
-		if req.Type != "subsystem" {
-			if req.WantReply {
-				_ = req.Reply(false, nil)
+		switch req.Type {
+		case "subsystem":
+			var payload struct {
+				Name string
 			}
-			continue
-		}
-		var payload struct {
-			Name string
-		}
-		if err := ssh.Unmarshal(req.Payload, &payload); err != nil || payload.Name != "sftp" {
-			if req.WantReply {
-				_ = req.Reply(false, nil)
+			if err := ssh.Unmarshal(req.Payload, &payload); err != nil || payload.Name != "sftp" {
+				if req.WantReply {
+					_ = req.Reply(false, nil)
+				}
+				continue
 			}
-			continue
-		}
-		if req.WantReply {
-			if err := req.Reply(true, nil); err != nil {
+			if req.WantReply {
+				if err := req.Reply(true, nil); err != nil {
+					return
+				}
+			}
+			s.sftpSessions.Add(1)
+			requestServer := sftp.NewRequestServer(channel, sftp.Handlers{
+				FileGet:  s.fsHost,
+				FilePut:  s.fsHost,
+				FileCmd:  s.fsHost,
+				FileList: s.fsHost,
+			})
+			_ = requestServer.Serve()
+			_ = requestServer.Close()
+			return
+		case "exec":
+			var payload struct {
+				Command string
+			}
+			if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
+				if req.WantReply {
+					_ = req.Reply(false, nil)
+				}
 				return
 			}
+			if req.WantReply {
+				if err := req.Reply(true, nil); err != nil {
+					return
+				}
+			}
+			cmd := exec.Command("/bin/sh", "-c", payload.Command)
+			cmd.Stdout = channel
+			cmd.Stderr = channel.Stderr()
+			err := cmd.Run()
+			exitCode := uint32(0)
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					exitCode = uint32(exitErr.ExitCode())
+				} else {
+					exitCode = 1
+				}
+			}
+			_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: exitCode}))
+			return
+		default:
+			if req.WantReply {
+				_ = req.Reply(false, nil)
+			}
 		}
-		s.sftpSessions.Add(1)
-		requestServer := sftp.NewRequestServer(channel, sftp.Handlers{
-			FileGet:  s.fsHost,
-			FilePut:  s.fsHost,
-			FileCmd:  s.fsHost,
-			FileList: s.fsHost,
-		})
-		_ = requestServer.Serve()
-		_ = requestServer.Close()
-		return
 	}
 }
 
@@ -606,6 +675,39 @@ func TestNodeFileBrowserHTTP_InRootPathsAndSafeSymlinksAllowed(t *testing.T) {
 	if aliasContent.Data.Path != filepath.Join(realData, "x.txt") || aliasContent.Data.Content != "alias-ok" {
 		t.Fatalf("unexpected alias content payload: %+v", aliasContent.Data)
 	}
+
+	// 6) 根内以双点 ".." 开头但并非父目录遍历组件的合法文件与子目录（如 ..config、..data/key.txt）可正常预览
+	dotDotFile := filepath.Join(root, "..config")
+	if err := os.WriteFile(dotDotFile, []byte("dotdot-file-ok"), 0o644); err != nil {
+		t.Fatalf("write ..config: %v", err)
+	}
+	dotDotDir := filepath.Join(root, "..data")
+	if err := os.MkdirAll(dotDotDir, 0o755); err != nil {
+		t.Fatalf("mkdir ..data: %v", err)
+	}
+	dotDotNestedFile := filepath.Join(dotDotDir, "key.txt")
+	if err := os.WriteFile(dotDotNestedFile, []byte("dotdot-nested-ok"), 0o644); err != nil {
+		t.Fatalf("write ..data/key.txt: %v", err)
+	}
+	for _, tc := range []struct {
+		path    string
+		content string
+	}{
+		{path: dotDotFile, content: "dotdot-file-ok"},
+		{path: dotDotNestedFile, content: "dotdot-nested-ok"},
+	} {
+		resp := performNodeFileBrowserRequest(t, router, admin, "files/content", node.ID, tc.path)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("preview %s status=%d body=%s", tc.path, resp.Code, resp.Body.String())
+		}
+		var env fileContentEnvelope
+		if err := json.Unmarshal(resp.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode %s content: %v", tc.path, err)
+		}
+		if env.Data.Path != tc.path || env.Data.Content != tc.content {
+			t.Fatalf("unexpected %s content payload: %+v", tc.path, env.Data)
+		}
+	}
 }
 
 // TestNodeFileBrowserHTTP_DirectAndNestedEscapesRejectedWithoutLeakingEntriesOrBytes 沿真实
@@ -868,6 +970,36 @@ func TestNodeFileBrowserHTTP_DevAllowAllSwitchBoundary(t *testing.T) {
 		if contentEnv.Data.Path != outsideFile || contentEnv.Data.Content != "outside-dir-entry" {
 			t.Fatalf("unexpected dev allow-all content: %+v", contentEnv.Data)
 		}
+
+		// 开发模式 FILE_BROWSER_ALLOW_ALL=true 下通过文件软链接或目录软链接预览稳定目标文件同样应返回 200 OK
+		for _, tc := range []struct {
+			name        string
+			requestPath string
+			wantContent string
+		}{
+			{
+				name:        "dev_allow_all_intermediate_dir_symlink",
+				requestPath: filepath.Join(root, "escape", "outside_only_entry.txt"),
+				wantContent: "outside-dir-entry",
+			},
+			{
+				name:        "dev_allow_all_final_file_symlink",
+				requestPath: filepath.Join(root, "nest", "escape"),
+				wantContent: fileBrowserOutsideSecretBytes,
+			},
+		} {
+			symResp := performNodeFileBrowserRequest(t, router, admin, "files/content", node.ID, tc.requestPath)
+			if symResp.Code != http.StatusOK {
+				t.Fatalf("%s status=%d body=%s", tc.name, symResp.Code, symResp.Body.String())
+			}
+			var symEnv fileContentEnvelope
+			if err := json.Unmarshal(symResp.Body.Bytes(), &symEnv); err != nil {
+				t.Fatalf("decode %s: %v", tc.name, err)
+			}
+			if symEnv.Data.Path != filepath.Clean(tc.requestPath) || symEnv.Data.Content != tc.wantContent {
+				t.Fatalf("unexpected %s payload: %+v", tc.name, symEnv.Data)
+			}
+		}
 	})
 
 	t.Run("rejected_in_production", func(t *testing.T) {
@@ -982,6 +1114,175 @@ func TestNodeFileBrowserHTTP_PreviewPostReadValidationFailureDoesNotReturnBuffer
 	})
 }
 
+// TestNodeFileBrowserHTTP_OpenedHandleAfterPathRestoreProbe 沿真实 GET /api/v1/nodes/:id/files/content
+// 验证相邻调查项：“节点文件预览：路径恢复后，已打开句柄是否仍可能返回根外文件内容”，保留正常与拒绝对照。
+func TestNodeFileBrowserHTTP_OpenedHandleAfterPathRestoreProbe(t *testing.T) {
+	root, externalTarget := setupSymlinkTree(t)
+	server := startFileBrowserSSHSFTPTestServer(t)
+	db := newValidateTestDB(t)
+	router := newFileBrowserTestRouter(db)
+	admin := fileBrowserActor{userID: 1, username: "admin", role: "admin"}
+
+	node := seedFileBrowserTestNode(t, db, server, "node-opened-handle-restore", root)
+
+	t.Run("normal_in_root_control", func(t *testing.T) {
+		targetFile := filepath.Join(root, "normal_control.txt")
+		if err := os.WriteFile(targetFile, []byte("IN_ROOT_NORMAL_PAYLOAD"), 0o644); err != nil {
+			t.Fatalf("write normal_control.txt: %v", err)
+		}
+		resp := performNodeFileBrowserRequest(t, router, admin, "files/content", node.ID, targetFile)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("expected 200 on normal control, got %d body=%s", resp.Code, resp.Body.String())
+		}
+		var env fileContentEnvelope
+		if err := json.Unmarshal(resp.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode normal control: %v", err)
+		}
+		if env.Data.Content != "IN_ROOT_NORMAL_PAYLOAD" {
+			t.Fatalf("unexpected normal control content: %+v", env.Data)
+		}
+		var event model.CredentialAuditEvent
+		if err := db.Order("id desc").First(&event).Error; err != nil {
+			t.Fatalf("load audit event: %v", err)
+		}
+		if event.Action != "file_browser.preview" || event.Outcome != credentialaudit.OutcomeSuccess || !strings.Contains(event.Metadata, `"stage":"success"`) {
+			t.Fatalf("unexpected normal control audit event: %+v metadata=%s", event, event.Metadata)
+		}
+	})
+
+	t.Run("denied_outside_root_control", func(t *testing.T) {
+		outsideSecret := filepath.Join(externalTarget, "secret")
+		resp := performNodeFileBrowserRequest(t, router, admin, "files/content", node.ID, outsideSecret)
+		if resp.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 on denied control, got %d body=%s", resp.Code, resp.Body.String())
+		}
+		if strings.Contains(resp.Body.String(), fileBrowserOutsideSecretBytes) {
+			t.Fatalf("denied control leaked outside marker: %s", resp.Body.String())
+		}
+		var event model.CredentialAuditEvent
+		if err := db.Order("id desc").First(&event).Error; err != nil {
+			t.Fatalf("load audit event: %v", err)
+		}
+		if event.Action != "file_browser.preview" || event.Outcome != credentialaudit.OutcomeBlocked || !strings.Contains(event.Metadata, `"stage":"path_validate"`) {
+			t.Fatalf("unexpected denied control audit event: %+v metadata=%s", event, event.Metadata)
+		}
+	})
+
+	t.Run("opened_handle_after_path_restore_rejects_outside_bytes", func(t *testing.T) {
+		targetFile := filepath.Join(root, "swap_restore.txt")
+		stashFile := filepath.Join(root, ".swap_restore.stash")
+		outsideSecret := filepath.Join(externalTarget, "secret")
+
+		// 构造与根外 secret 具有相同字节长度和秒级 mtime 的根内合法文件，模拟 SFTP Wire FileStat 属性匹配
+		secretInfo, err := os.Stat(outsideSecret)
+		if err != nil {
+			t.Fatalf("stat outside secret: %v", err)
+		}
+		inRootContent := strings.Repeat("A", int(secretInfo.Size()))
+		if err := os.WriteFile(targetFile, []byte(inRootContent), secretInfo.Mode().Perm()); err != nil {
+			t.Fatalf("write swap_restore.txt: %v", err)
+		}
+		alignedTime := time.Unix(secretInfo.ModTime().Unix(), 0)
+		if err := os.Chtimes(outsideSecret, alignedTime, alignedTime); err != nil {
+			t.Fatalf("chtimes outside secret: %v", err)
+		}
+		if err := os.Chtimes(targetFile, alignedTime, alignedTime); err != nil {
+			t.Fatalf("chtimes targetFile: %v", err)
+		}
+
+		// 在每次 SFTP Open(candidate) 即将打开底层文件时将路径替换为指向根外 secret 的软链接，
+		// 并在底层句柄打开后立即恢复回原根内普通文件（保留原 inode/mtime/size）。
+		server.fsHost.setOnBeforeOpen(targetFile, func() {
+			_ = os.Rename(targetFile, stashFile)
+			_ = os.Symlink(outsideSecret, targetFile)
+		})
+		server.fsHost.setOnAfterOpen(targetFile, func() {
+			_ = os.Remove(targetFile)
+			_ = os.Rename(stashFile, targetFile)
+		})
+		t.Cleanup(func() {
+			server.fsHost.setOnBeforeOpen(targetFile, nil)
+			server.fsHost.setOnAfterOpen(targetFile, nil)
+		})
+
+		resp := performNodeFileBrowserRequest(t, router, admin, "files/content", node.ID, targetFile)
+		body := resp.Body.String()
+		var event model.CredentialAuditEvent
+		if err := db.Order("id desc").First(&event).Error; err != nil {
+			t.Fatalf("load audit event: %v", err)
+		}
+		t.Logf("probe observed HTTP status=%d contains_outside_marker=%v body=%s audit_outcome=%s audit_metadata=%s",
+			resp.Code, strings.Contains(body, fileBrowserOutsideSecretBytes), body, event.Outcome, event.Metadata)
+
+		if strings.Contains(body, fileBrowserOutsideSecretBytes) {
+			t.Fatalf("opened handle after path restore leaked outside test marker %q in HTTP response (status=%d): %s",
+				fileBrowserOutsideSecretBytes, resp.Code, body)
+		}
+		if resp.Code != http.StatusBadGateway || !strings.Contains(body, "文件在读取期间发生变化") {
+			t.Fatalf("expected 502 with post-check failure message when opened handle diverges from restored path, got %d body=%s", resp.Code, body)
+		}
+		if event.Action != "file_browser.preview" || event.Outcome != credentialaudit.OutcomeFailure || !strings.Contains(event.Metadata, `"stage":"post_check"`) {
+			t.Fatalf("unexpected audit event on opened-handle path restore mismatch: %+v metadata=%s", event, event.Metadata)
+		}
+		if strings.Contains(event.Metadata, fileBrowserOutsideSecretBytes) {
+			t.Fatalf("audit metadata leaked outside test marker: %s", event.Metadata)
+		}
+	})
+
+	t.Run("intermediate_dir_swap_and_restore_rejects_outside_bytes", func(t *testing.T) {
+		swapDir := filepath.Join(root, "swap_dir")
+		stashDir := filepath.Join(root, ".swap_dir.stash")
+		if err := os.MkdirAll(swapDir, 0o755); err != nil {
+			t.Fatalf("mkdir swap_dir: %v", err)
+		}
+		targetFile := filepath.Join(swapDir, "secret")
+		outsideSecret := filepath.Join(externalTarget, "secret")
+		secretInfo, err := os.Stat(outsideSecret)
+		if err != nil {
+			t.Fatalf("stat outside secret: %v", err)
+		}
+		inRootContent := strings.Repeat("B", int(secretInfo.Size()))
+		if err := os.WriteFile(targetFile, []byte(inRootContent), secretInfo.Mode().Perm()); err != nil {
+			t.Fatalf("write swap_dir/secret: %v", err)
+		}
+		alignedTime := time.Unix(secretInfo.ModTime().Unix(), 0)
+		_ = os.Chtimes(outsideSecret, alignedTime, alignedTime)
+		_ = os.Chtimes(targetFile, alignedTime, alignedTime)
+
+		// 在 SFTP Open(candidate) 打开中间目录 swap_dir 下的文件时，将整个中间目录替换为指向 externalTarget 的软链接，
+		// 并在底层句柄打开后立即将中间目录恢复回原根内目录。
+		server.fsHost.setOnBeforeOpen(targetFile, func() {
+			_ = os.Rename(swapDir, stashDir)
+			_ = os.Symlink(externalTarget, swapDir)
+		})
+		server.fsHost.setOnAfterOpen(targetFile, func() {
+			_ = os.Remove(swapDir)
+			_ = os.Rename(stashDir, swapDir)
+		})
+		t.Cleanup(func() {
+			server.fsHost.setOnBeforeOpen(targetFile, nil)
+			server.fsHost.setOnAfterOpen(targetFile, nil)
+		})
+
+		resp := performNodeFileBrowserRequest(t, router, admin, "files/content", node.ID, targetFile)
+		body := resp.Body.String()
+		var event model.CredentialAuditEvent
+		if err := db.Order("id desc").First(&event).Error; err != nil {
+			t.Fatalf("load audit event: %v", err)
+		}
+		if strings.Contains(body, fileBrowserOutsideSecretBytes) {
+			t.Fatalf("intermediate dir swap-and-restore leaked outside test marker %q in HTTP response (status=%d): %s",
+				fileBrowserOutsideSecretBytes, resp.Code, body)
+		}
+		if resp.Code != http.StatusBadGateway || !strings.Contains(body, "文件在读取期间发生变化") {
+			t.Fatalf("expected 502 on intermediate dir swap-and-restore, got %d body=%s", resp.Code, body)
+		}
+		if event.Action != "file_browser.preview" || event.Outcome != credentialaudit.OutcomeFailure || !strings.Contains(event.Metadata, `"stage":"post_check"`) {
+			t.Fatalf("unexpected audit event on intermediate dir swap-and-restore: %+v metadata=%s", event, event.Metadata)
+		}
+	})
+}
+
 // TestResolveNodeFileAccess_NilResolverAndDevBypassUnit 覆盖 resolveNodeFileAccess 的内部防御边界：
 //  1. 正常模式下 resolver == nil 返回 "缺少 SFTP 会话"；
 //  2. FILE_BROWSER_ALLOW_ALL=true + APP_ENV=development 下无需 SFTP 会话即可完成语法 Clean。
@@ -1029,6 +1330,13 @@ func TestFileHandlerUsesSharedOperationCoupledFileAccess(t *testing.T) {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("file handler retains forbidden or dead primitive %q", forbidden)
 		}
+	}
+	migrateSource, err := os.ReadFile("node_migrate_handler.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(migrateSource), "func directoryTreesEqual(") {
+		t.Fatal("node_migrate_handler.go retains dead wrapper directoryTreesEqual")
 	}
 }
 

@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 )
 
@@ -262,6 +265,11 @@ func (h *FileHandler) GetNodeFileContent(c *gin.Context) {
 		respondBadGateway(c, "文件在读取期间发生变化")
 		return
 	}
+	if verifyErr := verifyNodeFilePreviewOverSSH(c.Request.Context(), client, sftpClient, accessRoot, locator, stat, buf[:n]); verifyErr != nil {
+		h.writeFileBrowserAudit(c, node, credential, "file_browser.preview", credentialaudit.OutcomeFailure, verifyErr, map[string]any{"stage": "post_check", "path_hash": safePathHash(cleanPath)})
+		respondBadGateway(c, "文件在读取期间发生变化")
+		return
+	}
 
 	truncated := n > filePreviewMaxBytes
 	if truncated {
@@ -399,7 +407,7 @@ func (h *FileHandler) writeFileBrowserAudit(c *gin.Context, node model.Node, cre
 }
 
 // dialSFTP 建立 SSH+SFTP 会话。
-func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (interface{ Close() error }, *sftp.Client, sshutil.ResolvedCredential, error) {
+func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (*ssh.Client, *sftp.Client, sshutil.ResolvedCredential, error) {
 	auth, credential, err := sshutil.BuildSSHAuthForPurpose(node, db, sshutil.PurposeFileBrowser)
 	if err != nil {
 		return nil, nil, credential, err
@@ -492,6 +500,124 @@ func resolveNodeFileAccess(resolver realPathResolver, rawPath string, roots []fi
 		}
 	}
 	return fileaccess.Root{}, fileaccess.Locator{}, "", fmt.Errorf("路径超出允许范围，请在节点 BasePath 或任务源路径下浏览")
+}
+
+const nodeFilePreviewVerifyScript = "" +
+	"import hashlib, os, stat, sys\n" +
+	"root = os.path.normpath(sys.argv[1])\n" +
+	"cand = os.path.normpath(sys.argv[2])\n" +
+	"max_bytes = int(sys.argv[3])\n" +
+	"if not os.path.isabs(root) or not os.path.isabs(cand) or os.path.commonpath([root, cand]) != root:\n" +
+	"    sys.exit(2)\n" +
+	"rel = os.path.relpath(cand, root)\n" +
+	"if rel == '.' or rel == '..' or rel.startswith('../'):\n" +
+	"    sys.exit(2)\n" +
+	"root_parts = [p for p in root.split('/') if p and p != '.']\n" +
+	"parts = [p for p in rel.split('/') if p and p != '.']\n" +
+	"o_dir = getattr(os, 'O_DIRECTORY', 0)\n" +
+	"o_nofollow = getattr(os, 'O_NOFOLLOW', 0)\n" +
+	"if not parts or o_dir == 0 or o_nofollow == 0:\n" +
+	"    sys.exit(2)\n" +
+	"def open_chain():\n" +
+	"    cur = os.open('/', os.O_RDONLY | o_dir | o_nofollow)\n" +
+	"    try:\n" +
+	"        st0 = os.fstat(cur)\n" +
+	"        chain = [(st0.st_dev, st0.st_ino)]\n" +
+	"        for p in root_parts + parts[:-1]:\n" +
+	"            nxt = os.open(p, os.O_RDONLY | o_dir | o_nofollow, dir_fd=cur)\n" +
+	"            os.close(cur)\n" +
+	"            cur = nxt\n" +
+	"            sd = os.fstat(cur)\n" +
+	"            if not stat.S_ISDIR(sd.st_mode):\n" +
+	"                sys.exit(2)\n" +
+	"            chain.append((sd.st_dev, sd.st_ino))\n" +
+	"        f = os.open(parts[-1], os.O_RDONLY | o_nofollow, dir_fd=cur)\n" +
+	"    finally:\n" +
+	"        os.close(cur)\n" +
+	"    sf = os.fstat(f)\n" +
+	"    if not stat.S_ISREG(sf.st_mode):\n" +
+	"        os.close(f)\n" +
+	"        sys.exit(3)\n" +
+	"    chain.append((sf.st_dev, sf.st_ino))\n" +
+	"    return f, sf, chain\n" +
+	"fd, st, chain1 = open_chain()\n" +
+	"try:\n" +
+	"    h = hashlib.sha256()\n" +
+	"    rem = max_bytes\n" +
+	"    read_n = 0\n" +
+	"    while rem > 0:\n" +
+	"        chunk = os.read(fd, min(65536, rem))\n" +
+	"        if not chunk:\n" +
+	"            break\n" +
+	"        h.update(chunk)\n" +
+	"        read_n += len(chunk)\n" +
+	"        rem -= len(chunk)\n" +
+	"    st2 = os.fstat(fd)\n" +
+	"finally:\n" +
+	"    os.close(fd)\n" +
+	"fd2, st3, chain2 = open_chain()\n" +
+	"os.close(fd2)\n" +
+	"sig = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_mode)\n" +
+	"if chain1 != chain2 or sig(st) != sig(st2) or sig(st) != sig(st3):\n" +
+	"    sys.exit(4)\n" +
+	"print(f'{st.st_size}:{read_n}:{h.hexdigest()}')\n"
+
+// verifyNodeFilePreviewOverSSH 复用已建立的节点 SSH 连接在远端内核层以 O_NOFOLLOW + dir_fd
+// 逐级打开 accessRoot 下的普通文件句柄，核验其字节长度、总大小与 SHA-256 摘要是否与 SFTP 预览读取结果完全一致，
+// 阻断“SFTP Open 期间路径被替换为根外软链接、Open 后立即恢复原路径”导致的已打开句柄返回根外文件内容。
+func verifyNodeFilePreviewOverSSH(
+	ctx context.Context,
+	sshClient *ssh.Client,
+	resolver realPathResolver,
+	accessRoot fileaccess.Root,
+	locator fileaccess.Locator,
+	expectedStat fileaccess.ContentStat,
+	readBytes []byte,
+) error {
+	if sshClient == nil {
+		return fileaccess.ErrSourceChanged
+	}
+	_, candidate, err := fileaccess.Resolve(accessRoot, locator, fileaccess.LegacyPolicy)
+	if err != nil {
+		return fileaccess.ErrSourceChanged
+	}
+	if filepath.Clean(accessRoot.Path) == string(filepath.Separator) && resolver != nil {
+		resolvedCandidate, resolveErr := resolver.RealPath(filepath.Clean(candidate))
+		if resolveErr != nil {
+			return fileaccess.ErrSourceChanged
+		}
+		candidate = filepath.Clean(resolvedCandidate)
+	}
+	runner := sshutil.NewSSHCommandRunner(sshClient, 1)
+	result, err := runner.Run(ctx, sshutil.CommandSpec{
+		Binary:         "python3",
+		Args:           []string{"-c", nodeFilePreviewVerifyScript, filepath.Clean(accessRoot.Path), filepath.Clean(candidate), strconv.Itoa(filePreviewMaxBytes + 1)},
+		Timeout:        10 * time.Second,
+		MaxStdoutBytes: 256,
+		MaxStderrBytes: 256,
+		MaxRecordBytes: 256,
+	})
+	if err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fileaccess.ErrSourceChanged
+	}
+	encoded := strings.TrimSpace(string(result.Stdout))
+	parts := strings.Split(encoded, ":")
+	if len(parts) != 3 || strings.ContainsAny(encoded, " \t\r\n") {
+		return fileaccess.ErrSourceChanged
+	}
+	verifiedSize, sizeErr := strconv.ParseInt(parts[0], 10, 64)
+	verifiedReadN, readNErr := strconv.Atoi(parts[1])
+	if sizeErr != nil || readNErr != nil || verifiedSize != expectedStat.Size || verifiedReadN != len(readBytes) {
+		return fileaccess.ErrSourceChanged
+	}
+	expectedSum := sha256.Sum256(readBytes)
+	if !strings.EqualFold(parts[2], hex.EncodeToString(expectedSum[:])) {
+		return fileaccess.ErrSourceChanged
+	}
+	return nil
 }
 
 func localLegacyLocator(rawPath string) (fileaccess.Locator, error) {
