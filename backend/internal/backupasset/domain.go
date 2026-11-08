@@ -217,15 +217,6 @@ const (
 	PurgePlanInvalidated PurgePlanStatus = "invalidated"
 )
 
-type ConfigImportEntityKind string
-
-const (
-	ConfigImportRepository      ConfigImportEntityKind = "repository"
-	ConfigImportTaskLink        ConfigImportEntityKind = "task_link"
-	ConfigImportRetentionPolicy ConfigImportEntityKind = "retention_policy"
-	ConfigImportHold            ConfigImportEntityKind = "hold"
-)
-
 type ManifestCompleteness string
 
 const (
@@ -285,23 +276,6 @@ type RecoveryPointProfile struct {
 	HasEncryptedRollbackLocator bool
 }
 
-type MutableHead struct {
-	ID                string
-	RepositoryID      string
-	State             RecoveryPointState
-	SourceFingerprint string
-	ObservedAt        time.Time
-	Availability      PhysicalAvailability
-	CatalogGeneration string
-}
-
-type MutableObservation struct {
-	SourceFingerprint string
-	ObservedAt        time.Time
-	Availability      PhysicalAvailability
-	CatalogGeneration string
-}
-
 type CapabilityCode string
 
 const (
@@ -340,12 +314,6 @@ type CapabilitySet struct {
 	Diff           bool              `json:"diff"`
 	NativeHistory  bool              `json:"native_history"`
 	Reason         *CapabilityReason `json:"reason,omitempty"`
-}
-
-type TaskArtifactContract struct {
-	Provider            ProviderKind
-	PublicationMode     TaskPublicationMode
-	HasArtifactContract bool
 }
 
 const ImportedRepositoryIdentityRefPrefix = "identity_ref:v1:"
@@ -413,20 +381,6 @@ func ValidateRecoveryPointHoldType(holdType RecoveryPointHoldType) error {
 	return nil
 }
 
-func ValidateRetentionPolicyStatus(status RetentionPolicyStatus) error {
-	if !validRetentionPolicyStatuses[status] {
-		return fmt.Errorf("%w: invalid retention policy status", ErrInvalidState)
-	}
-	return nil
-}
-
-func ValidateRecoveryPointHoldRecordState(state HoldState) error {
-	if !validRecoveryPointHoldRecordStates[state] {
-		return fmt.Errorf("%w: invalid recovery point hold record state", ErrInvalidState)
-	}
-	return nil
-}
-
 func ValidateLifecycleOperation(operation LifecycleOperation) error {
 	if !validLifecycleOperations[operation] {
 		return fmt.Errorf("%w: invalid recovery point lifecycle operation", ErrInvalidState)
@@ -439,13 +393,6 @@ func ValidateSourceLifecycleRequest(request SourceLifecycleRequest) error {
 		ValidateLifecycleOperation(request.Operation) != nil ||
 		request.Stage != SourceLifecyclePrepare && request.Stage != SourceLifecycleCleanup {
 		return fmt.Errorf("%w: invalid source lifecycle request", ErrInvalidState)
-	}
-	return nil
-}
-
-func ValidateLifecyclePhase(phase LifecyclePhase) error {
-	if !validLifecyclePhases[phase] {
-		return fmt.Errorf("%w: invalid recovery point lifecycle phase", ErrInvalidState)
 	}
 	return nil
 }
@@ -467,20 +414,6 @@ func ValidateImportCandidateKind(kind ImportCandidateKind) error {
 func ValidateImportReviewState(state ImportReviewState) error {
 	if !validImportReviewStates[state] {
 		return fmt.Errorf("%w: invalid backup import review state", ErrInvalidState)
-	}
-	return nil
-}
-
-func ValidatePurgePlanStatus(status PurgePlanStatus) error {
-	if !validPurgePlanStatuses[status] {
-		return fmt.Errorf("%w: invalid backup asset purge plan status", ErrInvalidState)
-	}
-	return nil
-}
-
-func ValidateConfigImportEntityKind(kind ConfigImportEntityKind) error {
-	if !validConfigImportEntityKinds[kind] {
-		return fmt.Errorf("%w: invalid backup config import entity kind", ErrInvalidState)
 	}
 	return nil
 }
@@ -603,35 +536,6 @@ func MapPublicationMode(provider ProviderKind, mode TaskPublicationMode) (Versio
 	return version, PointXirangManifest, RecoveryPointPreparing, nil
 }
 
-func CapabilitiesForTask(contract TaskArtifactContract) CapabilitySet {
-	if contract.Provider == ProviderCommand && !contract.HasArtifactContract {
-		return CapabilitySet{Reason: &CapabilityReason{Code: CapabilityTaskArtifactContractMissing}}
-	}
-
-	capabilities := CapabilitySet{
-		List:           true,
-		SearchPath:     true,
-		OpenSequential: true,
-		Download:       true,
-		Restore:        true,
-	}
-	switch contract.Provider {
-	case ProviderRestic:
-		capabilities.Diff = true
-		capabilities.NativeHistory = true
-	case ProviderRsync:
-		capabilities.Diff = contract.PublicationMode != PublicationLegacyMutable
-	case ProviderRclone:
-		capabilities.Diff = contract.PublicationMode != PublicationLegacyMutable
-		capabilities.NativeHistory = contract.PublicationMode == PublicationNativeObjectVersions
-	case ProviderCommand:
-		capabilities.Diff = contract.PublicationMode != PublicationLegacyMutable
-	default:
-		return CapabilitySet{Reason: &CapabilityReason{Code: CapabilityProviderUnavailable}}
-	}
-	return capabilities
-}
-
 func ValidateCapabilityReason(reason CapabilityReason) error {
 	if !validCapabilityCodes[reason.Code] {
 		return fmt.Errorf("%w: unknown capability reason", ErrInvalidState)
@@ -647,23 +551,6 @@ func ValidateCapabilityReason(reason CapabilityReason) error {
 		}
 	}
 	return nil
-}
-
-func ApplyMutableObservation(current MutableHead, observation MutableObservation) (MutableHead, error) {
-	if ValidateOpaqueID(current.ID) != nil || ValidateOpaqueID(current.RepositoryID) != nil || current.State != RecoveryPointObserved {
-		return MutableHead{}, fmt.Errorf("%w: mutable head is not observable", ErrInvalidState)
-	}
-	if observation.ObservedAt.IsZero() || !validPhysicalAvailability[observation.Availability] {
-		return MutableHead{}, fmt.Errorf("%w: invalid mutable observation", ErrInvalidState)
-	}
-	if observation.CatalogGeneration != "" && ValidateOpaqueID(observation.CatalogGeneration) != nil {
-		return MutableHead{}, fmt.Errorf("%w: invalid catalog generation", ErrInvalidState)
-	}
-	current.SourceFingerprint = observation.SourceFingerprint
-	current.ObservedAt = observation.ObservedAt.UTC()
-	current.Availability = observation.Availability
-	current.CatalogGeneration = observation.CatalogGeneration
-	return current, nil
 }
 
 func isLowerHex(value string, length int) bool {
@@ -756,23 +643,17 @@ var (
 		VersionNativeSnapshot, VersionHardlinkTree, VersionFullCopyTree,
 		VersionVersionedPrefix, VersionNativeObjectVersions, VersionMutableHead,
 	)
-	validPointSemantics                = setOf(PointNativeSnapshot, PointXirangManifest, PointImportedBaseline, PointMutableHead)
-	validImmutabilityLevels            = setOf(ImmutabilityMutable, ImmutabilityXirangManaged, ImmutabilityBackendVersioned, ImmutabilityStorageWORM)
-	validPhysicalAvailability          = setOf(PhysicalOnline, PhysicalOffline, PhysicalMissing, PhysicalUnknown)
-	validHoldStates                    = setOf(HoldNone, HoldActive, HoldReleased)
-	validRetirementReasons             = setOf(RetirementCutover, RetirementWithdrawn)
-	validMutableStates                 = setOf(RecoveryPointObserved, RecoveryPointRetired, RecoveryPointExpiring, RecoveryPointExpired, RecoveryPointPurgeBlocked)
-	validImmutableStates               = setOf(RecoveryPointPreparing, RecoveryPointVerifying, RecoveryPointCommitted, RecoveryPointDegraded, RecoveryPointExpiring, RecoveryPointExpired, RecoveryPointFailed, RecoveryPointPurgeBlocked)
-	validRetentionPolicyScopeKinds     = setOf(RetentionPolicyScopeRepository, RetentionPolicyScopeTaskLink)
-	validRetentionPolicyStatuses       = setOf(RetentionPolicyActive, RetentionPolicyDeleted)
-	validRecoveryPointHoldTypes        = setOf(RecoveryPointHoldOperational, RecoveryPointHoldLegal)
-	validRecoveryPointHoldRecordStates = setOf(HoldActive, HoldReleased)
-	validLifecycleOperations           = setOf(LifecycleRetentionExpire, LifecycleExplicitPurge, LifecycleMutableRetire)
-	validLifecyclePhases               = setOf(
-		LifecyclePhaseSelected, LifecyclePhaseRevoking, LifecyclePhaseDraining, LifecyclePhaseCleaning,
-		LifecyclePhaseProviderDelete, LifecyclePhaseTombstoning, LifecyclePhaseBlocked, LifecyclePhaseComplete,
-	)
-	validImportCandidateKinds = setOf(
+	validPointSemantics            = setOf(PointNativeSnapshot, PointXirangManifest, PointImportedBaseline, PointMutableHead)
+	validImmutabilityLevels        = setOf(ImmutabilityMutable, ImmutabilityXirangManaged, ImmutabilityBackendVersioned, ImmutabilityStorageWORM)
+	validPhysicalAvailability      = setOf(PhysicalOnline, PhysicalOffline, PhysicalMissing, PhysicalUnknown)
+	validHoldStates                = setOf(HoldNone, HoldActive, HoldReleased)
+	validRetirementReasons         = setOf(RetirementCutover, RetirementWithdrawn)
+	validMutableStates             = setOf(RecoveryPointObserved, RecoveryPointRetired, RecoveryPointExpiring, RecoveryPointExpired, RecoveryPointPurgeBlocked)
+	validImmutableStates           = setOf(RecoveryPointPreparing, RecoveryPointVerifying, RecoveryPointCommitted, RecoveryPointDegraded, RecoveryPointExpiring, RecoveryPointExpired, RecoveryPointFailed, RecoveryPointPurgeBlocked)
+	validRetentionPolicyScopeKinds = setOf(RetentionPolicyScopeRepository, RetentionPolicyScopeTaskLink)
+	validRecoveryPointHoldTypes    = setOf(RecoveryPointHoldOperational, RecoveryPointHoldLegal)
+	validLifecycleOperations       = setOf(LifecycleRetentionExpire, LifecycleExplicitPurge, LifecycleMutableRetire)
+	validImportCandidateKinds      = setOf(
 		ImportCandidateNativeSnapshot, ImportCandidateXirangManifest, ImportCandidateImportedBaseline, ImportCandidateMutableHead,
 	)
 	validLifecycleBlockedReasons = setOf(
@@ -782,9 +663,7 @@ var (
 		LifecycleBlockedProviderNativeVersionReferenced,
 		LifecycleBlockedDeletionUnavailable, LifecycleBlockedFenceLost,
 	)
-	validImportReviewStates      = setOf(ImportReviewPending, ImportReviewAccepted, ImportReviewRejected)
-	validPurgePlanStatuses       = setOf(PurgePlanReady, PurgePlanBound, PurgePlanExecuting, PurgePlanConsumed, PurgePlanInvalidated)
-	validConfigImportEntityKinds = setOf(ConfigImportRepository, ConfigImportTaskLink, ConfigImportRetentionPolicy, ConfigImportHold)
+	validImportReviewStates = setOf(ImportReviewPending, ImportReviewAccepted, ImportReviewRejected)
 )
 
 var validImmutableModeSemantics = map[[2]string]bool{

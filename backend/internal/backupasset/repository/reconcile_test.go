@@ -28,13 +28,43 @@ func TestReconcileMutableKeepsSingletonAndRevisesOnlyEffectiveCapabilities(t *te
 		t.Fatalf("connected=%+v err=%v", connected, err)
 	}
 	baseProbe := prober.probe
-	observedAt := time.Date(2026, 7, 13, 11, 0, 0, 0, time.UTC)
-	service.now = func() time.Time { return observedAt }
+	observedAt := time.Date(2026, 7, 13, 16, 30, 0, 0, time.FixedZone("test-offset", 5*60*60+30*60))
+	service.now = func() time.Time { return observedAt.UTC() }
 	prober.probe = func(binding provider.AccessBinding) (provider.RepositoryObservation, error) {
 		observation, err := baseProbe(binding)
 		observation.SourceRevision = strings.Repeat("c", 64)
 		observation.ObservedAt = observedAt
 		return observation, err
+	}
+	assertProjection := func(result ConnectResult, wantObservedAt time.Time, wantFingerprint string, wantCapabilities backupasset.CapabilitySet) {
+		t.Helper()
+		var point model.RecoveryPoint
+		if err := db.First(&point, "id = ?", connected.MutablePoint.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		var repository model.BackupRepository
+		if err := db.First(&repository, "id = ?", connected.Repository.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		var pointCapabilities, repositoryCapabilities backupasset.CapabilitySet
+		if err := json.Unmarshal([]byte(point.CapabilitiesJSON), &pointCapabilities); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(repository.CapabilitiesJSON), &repositoryCapabilities); err != nil {
+			t.Fatal(err)
+		}
+		if point.SourceFingerprint != wantFingerprint || point.State != string(backupasset.RecoveryPointObserved) ||
+			point.ObservedAt == nil || !point.ObservedAt.Equal(wantObservedAt) || point.ObservedAt.Location() != time.UTC ||
+			point.PhysicalAvailability != string(backupasset.PhysicalOnline) || point.CapabilityRevision != repository.CapabilityRevision ||
+			!reflect.DeepEqual(pointCapabilities, wantCapabilities) || !reflect.DeepEqual(repositoryCapabilities, wantCapabilities) {
+			t.Fatalf("persisted point=%+v repository capabilities=%+v revision=%d", point, repositoryCapabilities, repository.CapabilityRevision)
+		}
+		if result.MutablePoint.ObservedAt == nil || !result.MutablePoint.ObservedAt.Equal(wantObservedAt) || result.MutablePoint.ObservedAt.Location() != time.UTC ||
+			result.MutablePoint.Availability != backupasset.PhysicalOnline || result.MutablePoint.CapabilityRevision != point.CapabilityRevision ||
+			result.Repository.CapabilityRevision != repository.CapabilityRevision || !reflect.DeepEqual(result.MutablePoint.Capabilities, wantCapabilities) ||
+			!reflect.DeepEqual(result.Repository.Capabilities, wantCapabilities) {
+			t.Fatalf("returned point=%+v repository=%+v", result.MutablePoint, result.Repository)
+		}
 	}
 	first, err := service.Reconcile(context.Background(), connected.Repository.ID, RequestContext{})
 	if err != nil || first.MutablePoint == nil || first.MutablePoint.ID != connected.MutablePoint.ID || first.Repository.CapabilityRevision != connected.Repository.CapabilityRevision {
@@ -47,13 +77,7 @@ func TestReconcileMutableKeepsSingletonAndRevisesOnlyEffectiveCapabilities(t *te
 	if strings.Contains(string(payload), "source_fingerprint") || strings.Contains(string(payload), strings.Repeat("c", 64)) {
 		t.Fatalf("source fingerprint leaked in DTO: %s", payload)
 	}
-	var point model.RecoveryPoint
-	if err := db.First(&point, "id = ?", connected.MutablePoint.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if point.SourceFingerprint != strings.Repeat("c", 64) || point.ObservedAt == nil || !point.ObservedAt.Equal(observedAt) || point.State != string(backupasset.RecoveryPointObserved) {
-		t.Fatalf("point after reconcile=%+v", point)
-	}
+	assertProjection(first, observedAt, strings.Repeat("c", 64), backupasset.CapabilitySet{List: true, OpenSequential: true, OpenRange: true})
 
 	prober.probe = func(binding provider.AccessBinding) (provider.RepositoryObservation, error) {
 		observation, err := baseProbe(binding)
@@ -66,6 +90,7 @@ func TestReconcileMutableKeepsSingletonAndRevisesOnlyEffectiveCapabilities(t *te
 	if err != nil || second.Repository.CapabilityRevision != connected.Repository.CapabilityRevision+1 || second.MutablePoint == nil || second.MutablePoint.ID != connected.MutablePoint.ID || second.MutablePoint.CapabilityRevision != second.Repository.CapabilityRevision {
 		t.Fatalf("second reconcile=%+v err=%v", second, err)
 	}
+	assertProjection(second, observedAt.Add(time.Minute), strings.Repeat("d", 64), backupasset.CapabilitySet{List: true, OpenSequential: true})
 	var count int64
 	if err := db.Model(&model.RecoveryPoint{}).Where("repository_id = ?", connected.Repository.ID).Count(&count).Error; err != nil || count != 1 {
 		t.Fatalf("mutable point count=%d err=%v", count, err)
