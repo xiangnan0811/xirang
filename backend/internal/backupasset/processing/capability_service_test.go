@@ -603,6 +603,151 @@ func TestCapabilityServiceStateReadsSucceededNonCurrentPublication(t *testing.T)
 	}
 }
 
+func TestCapabilityServiceExactPublicationIdentity(t *testing.T) {
+	tests := []struct {
+		name         string
+		changeAsset  func(*content.AuthorizedAsset)
+		jobField     string
+		jobValue     string
+		changeActive string
+		pollNotFound bool
+	}{
+		{name: "recovery point with matching strong fingerprints", changeAsset: func(asset *content.AuthorizedAsset) { asset.Ref.RecoveryPointID = strings.Repeat("d", 32) }, pollNotFound: true},
+		{name: "generation", changeAsset: func(asset *content.AuthorizedAsset) { asset.CatalogGenerationID = strings.Repeat("d", 32) }, pollNotFound: true},
+		{name: "entry", changeAsset: func(asset *content.AuthorizedAsset) { asset.Ref.EntryID = strings.Repeat("d", 64) }, pollNotFound: true},
+		{name: "source fingerprint", changeAsset: func(asset *content.AuthorizedAsset) { asset.SourceFingerprint = "source-fingerprint-v2" }, pollNotFound: true},
+		{name: "entry fingerprint", changeAsset: func(asset *content.AuthorizedAsset) { asset.EntryFingerprint = "entry-fingerprint-v2" }},
+		{name: "provider revision", changeAsset: func(asset *content.AuthorizedAsset) { asset.ProviderCapabilityRevision++ }},
+		{name: "capability", jobField: "capability", jobValue: "other-capability"},
+		{name: "capability schema", jobField: "capability_schema", jobValue: "other-schema"},
+		{name: "output profile", jobField: "output_profile", jobValue: "other-profile"},
+		{name: "active pipeline", changeActive: "pipeline"},
+		{name: "security policy", changeActive: "policy"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			actor := content.DeliveryActor{UserID: 107, Role: "operator"}
+			harness, service, asset, created, interest := newQueuedThumbnailPreviewForTest(t, actor)
+			setID, attemptID := strings.Repeat("1", 32), strings.Repeat("2", 32)
+			finishedAt := harness.clock.Now()
+			if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", interest.JobID).Updates(map[string]any{
+				"state": string(ProcessingSucceeded), "current_artifact_set_id": setID, "current_attempt_id": attemptID,
+				"transition_revision": 2, "is_current": false, "finished_at": &finishedAt,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			seedCapabilitySucceededAttempt(t, harness, interest.JobID, attemptID, finishedAt)
+			if err := harness.db.Create(&model.BackupAssetDerivedArtifactSet{
+				ID: setID, JobID: interest.JobID, AttemptID: attemptID, WorkKey: capabilityJobWorkKey(t, harness, interest.JobID),
+				RecoveryPointID: asset.Ref.RecoveryPointID, CatalogGenerationID: asset.CatalogGenerationID, EntryID: asset.Ref.EntryID,
+				SourceFingerprint: asset.SourceFingerprint, SecurityPolicyRevision: "security-policy-v1",
+				ManifestDigest: strings.Repeat("3", 64), State: "active", Completeness: "complete", ArtifactCount: 1,
+				CreatedAt: finishedAt, UpdatedAt: finishedAt,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			assertState := func(ref backupasset.AssetRef, want ProcessingProductState) {
+				t.Helper()
+				state, err := service.State(ctx, PreviewStateRequest{Actor: actor, Ref: ref})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, representation := range state.Representations {
+					if representation.Representation == PreviewThumbnail {
+						if representation.State != want || (want == ProcessingProductDerived && representation.Coverage != string(ArtifactComplete)) {
+							t.Fatalf("thumbnail state=%+v, want %s", representation, want)
+						}
+						return
+					}
+				}
+				t.Fatal("thumbnail representation missing")
+			}
+			request := func(ref backupasset.AssetRef, want ProcessingProductState) {
+				t.Helper()
+				result, err := service.RequestPreview(ctx, PreviewJobRequest{Actor: actor, Ref: ref, Representation: PreviewThumbnail})
+				if err != nil || result.State != want {
+					t.Fatalf("preview result=%+v err=%v, want %s", result, err, want)
+				}
+				if want == ProcessingProductDerived && (!result.Terminal || result.Coverage != string(ArtifactComplete)) {
+					t.Fatalf("completed preview=%+v", result)
+				}
+			}
+			assertState(asset.Ref, ProcessingProductDerived)
+			request(asset.Ref, ProcessingProductDerived)
+
+			var job model.BackupAssetProcessingJob
+			if err := harness.db.First(&job, "id = ?", interest.JobID).Error; err != nil {
+				t.Fatal(err)
+			}
+			originalFields := map[string]string{"capability": job.Capability, "capability_schema": job.CapabilitySchema, "output_profile": job.OutputProfile}
+			originalPipeline, originalPolicy := service.activePipeline, service.securityPolicyRevision
+			changedAsset := asset
+			if test.changeAsset != nil {
+				test.changeAsset(&changedAsset)
+			}
+			if changedAsset.Ref.RecoveryPointID != asset.Ref.RecoveryPointID {
+				if err := harness.db.Create(&model.RecoveryPoint{
+					ID: changedAsset.Ref.RecoveryPointID, RepositoryID: strings.Repeat("f", 32),
+					Semantics: string(backupasset.PointXirangManifest), State: string(backupasset.RecoveryPointCommitted),
+				}).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			service.authorize = capabilityAssetAuthorizerFake{asset: changedAsset}
+			if test.jobField != "" {
+				if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", interest.JobID).Update(test.jobField, test.jobValue).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.changeActive == "pipeline" {
+				service.activePipeline = func(context.Context, string, string) (string, error) { return strings.Repeat("f", 64), nil }
+			}
+			if test.changeActive == "policy" {
+				service.securityPolicyRevision = func(context.Context) (string, error) { return "security-policy-v2", nil }
+			}
+			wantState, wantRequest := ProcessingProductNative, ProcessingProductQueued
+			if test.changeActive == "pipeline" {
+				wantState, wantRequest = ProcessingProductNotDeployed, ProcessingProductNotDeployed
+			}
+			assertState(changedAsset.Ref, wantState)
+			request(changedAsset.Ref, wantRequest)
+			if err := harness.db.First(&interest, "id = ?", created.JobID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !interest.Active || interest.RemovedAt != nil {
+				t.Fatalf("lookup consumed original interest: %+v", interest)
+			}
+			terminal, err := service.PollPreview(ctx, PreviewJobLookup{Actor: actor, Ref: changedAsset.Ref, JobID: created.JobID})
+			if test.pollNotFound {
+				if !errors.Is(err, ErrProcessingHandleNotFound) {
+					t.Fatalf("mismatched source poll=%+v err=%v, want handle not found", terminal, err)
+				}
+			} else if err != nil || terminal.State != ProcessingProductFailed || terminal.Reason != string(ProcessingErrorInvalidOutput) || !terminal.Terminal {
+				t.Fatalf("mismatched publication poll=%+v err=%v, want terminal invalid output", terminal, err)
+			}
+
+			service.authorize = capabilityAssetAuthorizerFake{asset: asset}
+			service.activePipeline, service.securityPolicyRevision = originalPipeline, originalPolicy
+			if test.jobField != "" {
+				if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", interest.JobID).Update(test.jobField, originalFields[test.jobField]).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertState(asset.Ref, ProcessingProductDerived)
+			request(asset.Ref, ProcessingProductDerived)
+			terminal, err = service.PollPreview(ctx, PreviewJobLookup{Actor: actor, Ref: asset.Ref, JobID: created.JobID})
+			if test.pollNotFound {
+				if err != nil || terminal.State != ProcessingProductDerived || !terminal.Terminal {
+					t.Fatalf("original source poll=%+v err=%v, want derived", terminal, err)
+				}
+			} else if !errors.Is(err, ErrProcessingHandleNotFound) {
+				t.Fatalf("terminal replay=%+v err=%v, want handle not found", terminal, err)
+			}
+		})
+	}
+}
+
 func TestCapabilityServiceUsesInterestHandleAndConsumesTerminalOnce(t *testing.T) {
 	harness := newCoordinatorHarness(t)
 	asset := content.AuthorizedAsset{
@@ -923,62 +1068,6 @@ func TestCapabilityServiceTerminalConsumeRechecksPublicationInTransaction(t *tes
 		Actor: actor, Ref: asset.Ref, JobID: created.JobID,
 	}); !errors.Is(err, ErrProcessingHandleNotFound) {
 		t.Fatalf("terminal handle replay error=%v, want not found", err)
-	}
-}
-
-func TestCapabilityServiceNeverServesDerivedFromInactivePipeline(t *testing.T) {
-	harness := newCoordinatorHarness(t)
-	asset := content.AuthorizedAsset{
-		Ref: validWorkDescriptor().Source, CatalogGenerationID: validWorkDescriptor().CatalogGenerationID,
-		Provider: backupasset.ProviderRestic, ProviderCapabilityRevision: 1,
-		SourceFingerprint: validWorkDescriptor().SourceFingerprint, EntryFingerprint: validWorkDescriptor().EntryFingerprint,
-		FingerprintStrength: "strong", Size: 1024, MediaType: "image/png",
-	}
-	service := newCapabilityServiceForTest(t, harness, asset)
-	advertisement := productionCapabilityForTest(t, capabilityspec.CapabilityImageThumbnail, capabilityspec.ProfileRasterThumbnailV1)
-	registerCapabilityForTest(t, harness, advertisement)
-	actor := content.DeliveryActor{UserID: 27, Role: "operator"}
-	created, err := service.RequestPreview(context.Background(), PreviewJobRequest{
-		Actor: actor, Ref: asset.Ref, Representation: PreviewThumbnail,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var interest model.BackupAssetProcessingInterest
-	if err := harness.db.First(&interest, "id = ?", created.JobID).Error; err != nil {
-		t.Fatal(err)
-	}
-	setID := strings.Repeat("4", 32)
-	if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", interest.JobID).Updates(map[string]any{
-		"state": string(ProcessingSucceeded), "current_artifact_set_id": setID, "transition_revision": 2,
-		"pipeline_fingerprint": strings.Repeat("0", 64),
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := harness.db.Create(&model.BackupAssetDerivedArtifactSet{
-		ID: setID, JobID: interest.JobID, AttemptID: strings.Repeat("5", 32), WorkKey: capabilityJobWorkKey(t, harness, interest.JobID),
-		RecoveryPointID: asset.Ref.RecoveryPointID, CatalogGenerationID: asset.CatalogGenerationID, EntryID: asset.Ref.EntryID,
-		SourceFingerprint: asset.SourceFingerprint, SecurityPolicyRevision: "security-policy-v1",
-		ManifestDigest: strings.Repeat("2", 64), State: "active", Completeness: "complete", ArtifactCount: 1,
-		CreatedAt: harness.clock.Now(), UpdatedAt: harness.clock.Now(),
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
-	state, err := service.State(context.Background(), PreviewStateRequest{Actor: actor, Ref: asset.Ref})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, representation := range state.Representations {
-		if representation.Representation == PreviewThumbnail && representation.State == ProcessingProductDerived {
-			t.Fatalf("inactive pipeline leaked through state: %+v", representation)
-		}
-	}
-	terminal, err := service.PollPreview(context.Background(), PreviewJobLookup{Actor: actor, Ref: asset.Ref, JobID: created.JobID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if terminal.State == ProcessingProductDerived || terminal.State == ProcessingProductPartial {
-		t.Fatalf("inactive pipeline leaked through poll: %+v", terminal)
 	}
 }
 

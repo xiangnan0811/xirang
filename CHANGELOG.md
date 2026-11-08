@@ -11,6 +11,13 @@
 - 将 Content grant 激活、撤销与到期保护的有效断言迁入真实 Broker／Reconciler，将 Export item 转换、合法接管、当前投影归零与历史保留断言落实到真实 Coordinator／Worker 和双引擎持久化路径；移除没有生产消费者的三个旧转换／reset helper 及孤立依赖。
 - 保留现行状态类型、产品／资源校验、权限、期限、attempt／fence／lease、字节／配额、审计、历史模型及已发布迁移；不新增转换入口或 reset API。仅测试迁移与死码清理，无公开 API、wire、配置、schema 或运行时行为变化，不因此单独发行版本或正式镜像。
 
+### 后台队列与精确产物复用断言迁移
+
+- 移除没有生产消费者的 `ScoreBackfill`、`CanReuseDerived` 及孤立直接依赖；有效断言对齐真实 Runtime 准入、Coordinator 工作身份／独立 interest／队列消费与槽位、精确已完成产物查询及上传后的 blob 去重和来源独立引用。旧 latest／recent／history 评分和 strong fingerprint 跨点跳过处理不作为现行能力。
+- 保留活 `AdmitBackfill`、完整 `BackfillPolicy` 与 `RecentWindow`／`HistoryAgingStep` 配置及有效性校验，保留来源生命周期、Derived artifact 的身份／授权／安全策略／发布／读取和既有物理去重。文档明确 usage 每次收集累计；跨请求小时统计及 Provider／能力真实并发承诺差异仍未实现，不能因本次澄清而宣称修复。
+- 真实 SQLite／PostgreSQL 验收发现第二次上传相同输出时，Sink 命中的 blob ID 与 upload 的唯一 `staging_id` 冲突；该既存缺口继续开放，本次未修复。存储层去重与预置来源引用测试不代表真实 Sink 跨点双发布成功，不能将本次清理说明为完整复用能力交付。
+- 本次仅测试与死码清理，无运行行为、依赖、公开 API、wire、配置或 schema migration 变化，不改写历史数据或已发布迁移；说明留在 `Unreleased`，不因此单独发行版本或正式镜像。
+
 ## [0.73.16](https://github.com/xiangnan0811/xirang/compare/v0.73.15...v0.73.16) (2026-11-08)
 
 

@@ -277,7 +277,8 @@ func TestRebuildDerivedDescriptorsPagesUnprovenEntriesWithoutNewCatalog(t *testi
 	}
 }
 
-func TestExpectedDescriptorsStayUnprovenWhenBackfillAdmissionDenies(t *testing.T) {
+func rebuildAdmissionFixture(t *testing.T, backfill backupasset.ProcessingBackfillConfig) (*managedProcessingRuntime, repository.DerivedBackfillRequest, string, string) {
+	t.Helper()
 	db := openProcessingRuntimeTestDB(t)
 	if err := db.AutoMigrate(&model.BackupRepository{}, &model.CatalogGeneration{}, &model.CatalogEntry{}); err != nil {
 		t.Fatal(err)
@@ -347,18 +348,21 @@ func TestExpectedDescriptorsStayUnprovenWhenBackfillAdmissionDenies(t *testing.T
 	runtime := &managedProcessingRuntime{
 		db:          db,
 		coordinator: &processing.Coordinator{},
-		config: backupasset.ProcessingConfig{
-			Backfill: backupasset.ProcessingBackfillConfig{
-				Paused: true, BatchSize: 1, JobsPerHour: 100, BytesPerHour: 1 << 30,
-				ProviderConcurrency: 4, CapabilityConcurrency: 4,
-				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
-			},
-		},
-		now: func() time.Time { return now },
+		config:      backupasset.ProcessingConfig{Backfill: backfill},
+		now:         func() time.Time { return now },
 	}
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
+	return runtime, request, firstEntryID, secondEntryID
+}
+
+func TestExpectedDescriptorsStayUnprovenWhenBackfillAdmissionDenies(t *testing.T) {
+	runtime, request, firstEntryID, _ := rebuildAdmissionFixture(t, backupasset.ProcessingBackfillConfig{
+		Paused: true, BatchSize: 1, JobsPerHour: 100, BytesPerHour: 1 << 30,
+		ProviderConcurrency: 4, CapabilityConcurrency: 4,
+		RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
+	})
 	admitted, err := runtime.rebuildDerivedDescriptors(context.Background(), request)
 	if err != nil {
 		t.Fatalf("paused rebuildDerivedDescriptors: %v", err)
@@ -381,6 +385,77 @@ func TestExpectedDescriptorsStayUnprovenWhenBackfillAdmissionDenies(t *testing.T
 	}
 	if expected[0].EntryID != firstEntryID {
 		t.Fatalf("ExpectedDescriptors=%+v, want unproven first catalog entry %s", expected, firstEntryID)
+	}
+}
+
+func TestRebuildDerivedDescriptorsAdmissionUsageIsPerCollection(t *testing.T) {
+	tests := []struct {
+		name       string
+		jobs       int
+		bytes      int64
+		provider   int
+		capability int
+		want       int
+	}{
+		{name: "provider limit", jobs: 3, bytes: 96, provider: 1, capability: 3, want: 1},
+		{name: "capability limit", jobs: 3, bytes: 96, provider: 3, capability: 1, want: 1},
+		{name: "jobs limit", jobs: 1, bytes: 96, provider: 3, capability: 3, want: 1},
+		{name: "bytes below two entries", jobs: 3, bytes: 63, provider: 3, capability: 3, want: 1},
+		{name: "bytes exactly two entries", jobs: 3, bytes: 64, provider: 3, capability: 3, want: 2},
+		{name: "bytes below first entry", jobs: 3, bytes: 31, provider: 3, capability: 3, want: 0},
+		{name: "jobs and counters exactly two entries", jobs: 2, bytes: 96, provider: 2, capability: 2, want: 2},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime, request, firstEntryID, secondEntryID := rebuildAdmissionFixture(t, backupasset.ProcessingBackfillConfig{
+				BatchSize: 3, JobsPerHour: tc.jobs, BytesPerHour: tc.bytes,
+				ProviderConcurrency: tc.provider, CapabilityConcurrency: tc.capability,
+				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
+			})
+			var first []processing.WorkDescriptorV1
+			for call := range 2 {
+				descriptors, err := runtime.rebuildDerivedDescriptors(context.Background(), request)
+				if err != nil {
+					t.Fatalf("collection %d: %v", call+1, err)
+				}
+				if len(descriptors) != tc.want {
+					t.Fatalf("collection %d returned %d descriptors, want %d: %+v", call+1, len(descriptors), tc.want, descriptors)
+				}
+				if tc.want > 0 && descriptors[0].Source.EntryID != firstEntryID {
+					t.Fatalf("collection %d first descriptor=%+v, want entry %s", call+1, descriptors[0], firstEntryID)
+				}
+				if tc.want > 1 && descriptors[1].Source.EntryID != secondEntryID {
+					t.Fatalf("collection %d second descriptor=%+v, want entry %s", call+1, descriptors[1], secondEntryID)
+				}
+				if call == 0 {
+					first = descriptors
+				}
+			}
+			if tc.want != 1 {
+				return
+			}
+			now := runtime.now()
+			descriptor := first[0]
+			if err := runtime.db.Create(&model.BackupAssetProcessingJob{
+				ID: strings.Repeat("7", 32), WorkKey: strings.Repeat("8", 64), DescriptorSchemaVersion: 1,
+				DescriptorCanonical: []byte(`{}`), RecoveryPointID: request.RecoveryPointID, CatalogGenerationID: request.CatalogGenerationID,
+				EntryID: firstEntryID, SourceFingerprint: descriptor.SourceFingerprint, EntryFingerprint: descriptor.EntryFingerprint,
+				ProviderCapabilityRevision: descriptor.ProviderCapabilityRevision, Capability: descriptor.Capability, CapabilitySchema: descriptor.CapabilitySchema,
+				PipelineFingerprint: descriptor.PipelineFingerprint, OutputProfile: descriptor.OutputProfile,
+				SecurityPolicyRevision: descriptor.SecurityPolicyRevision, PriorityClass: string(processing.PriorityBackground),
+				EffectivePriority: 100, State: string(processing.ProcessingQueued), TransitionRevision: 1, IsCurrent: true,
+				QueuedAt: now, AbsoluteDeadline: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
+			}).Error; err != nil {
+				t.Fatalf("seed accepted descriptor job: %v", err)
+			}
+			descriptors, err := runtime.rebuildDerivedDescriptors(context.Background(), request)
+			if err != nil {
+				t.Fatalf("collection after job creation: %v", err)
+			}
+			if len(descriptors) != 1 || descriptors[0].Source.EntryID != secondEntryID {
+				t.Fatalf("collection after job creation=%+v, want remaining entry %s", descriptors, secondEntryID)
+			}
+		})
 	}
 }
 
