@@ -13,7 +13,6 @@ var (
 	ErrInvalidDeliveryResource = errors.New("invalid delivery resource")
 	ErrInvalidDeliveryProduct  = errors.New("invalid delivery product")
 	ErrSecretRevealRequired    = errors.New("secret reveal required")
-	ErrInvalidDeliveryState    = errors.New("invalid delivery state")
 	ErrInvalidDeliveryCookie   = errors.New("invalid delivery cookie")
 )
 
@@ -180,16 +179,6 @@ func ValidateDeliveryProduct(product DeliveryProduct, now time.Time) error {
 	return nil
 }
 
-func ValidateDeliveryTransition(from, to DeliveryState) error {
-	if !validDeliveryStates[from] || !validDeliveryStates[to] {
-		return ErrInvalidDeliveryState
-	}
-	if from == to || validDeliveryTransitions[[2]DeliveryState{from, to}] {
-		return nil
-	}
-	return ErrInvalidDeliveryState
-}
-
 func validRendererProduct(product DeliveryProduct) bool {
 	if product.Range != RangeNone && product.Range != RangeSingle {
 		return false
@@ -225,20 +214,4 @@ var validClassifications = map[Classification]bool{
 	ClassificationNonSecret: true,
 	ClassificationSecret:    true,
 	ClassificationUnknown:   true,
-}
-
-var validDeliveryStates = map[DeliveryState]bool{
-	DeliveryIssued: true, DeliveryActive: true, DeliveryDraining: true,
-	DeliveryRevoked: true, DeliveryExpired: true, DeliveryClosed: true,
-}
-
-var validDeliveryTransitions = map[[2]DeliveryState]bool{
-	{DeliveryIssued, DeliveryActive}:    true,
-	{DeliveryIssued, DeliveryRevoked}:   true,
-	{DeliveryActive, DeliveryDraining}:  true,
-	{DeliveryActive, DeliveryClosed}:    true,
-	{DeliveryActive, DeliveryRevoked}:   true,
-	{DeliveryActive, DeliveryExpired}:   true,
-	{DeliveryDraining, DeliveryRevoked}: true,
-	{DeliveryDraining, DeliveryExpired}: true,
 }

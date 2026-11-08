@@ -6,6 +6,11 @@
 
 - 修复 Core Compose 自测中 APK 绕过检查在 `pipefail` 下因 `grep -q` 提前退出、上游 `sed` 收到 SIGPIPE 而漏判的问题；保留原匹配规则并增加大文件 exec-form APK 回归。仅改变测试，无 API、配置、schema 或运行时变化，不因此单独发行新版本。
 
+### 孤立生命周期转换校验清理
+
+- 将 Content grant 激活、撤销与到期保护的有效断言迁入真实 Broker／Reconciler，将 Export item 转换、合法接管、当前投影归零与历史保留断言落实到真实 Coordinator／Worker 和双引擎持久化路径；移除没有生产消费者的三个旧转换／reset helper 及孤立依赖。
+- 保留现行状态类型、产品／资源校验、权限、期限、attempt／fence／lease、字节／配额、审计、历史模型及已发布迁移；不新增转换入口或 reset API。仅测试迁移与死码清理，无公开 API、wire、配置、schema 或运行时行为变化，不因此单独发行版本或正式镜像。
+
 ## [0.73.16](https://github.com/xiangnan0811/xirang/compare/v0.73.15...v0.73.16) (2026-11-08)
 
 

@@ -74,23 +74,6 @@ func ValidateCleanupTransition(from, to CleanupState) error {
 	return ErrInvalidTransition
 }
 
-func ValidateItemTransition(from, to ItemState) error {
-	if !validItemStates[from] || !validItemStates[to] {
-		return ErrInvalidTransition
-	}
-	if from == to || itemTransitions[[2]ItemState{from, to}] {
-		return nil
-	}
-	return ErrInvalidTransition
-}
-
-func ValidateItemReset(from ItemState, fenceValidated bool) error {
-	if !validItemStates[from] || !fenceValidated {
-		return ErrInvalidTransition
-	}
-	return nil
-}
-
 func ComputeExecutionDeadline(
 	createdAt time.Time,
 	maxDuration time.Duration,
@@ -185,9 +168,4 @@ var cleanupTransitions = map[[2]CleanupState]bool{
 
 var validItemStates = map[ItemState]bool{
 	ItemPending: true, ItemRead: true, ItemPacked: true, ItemSkipped: true, ItemFailed: true,
-}
-
-var itemTransitions = map[[2]ItemState]bool{
-	{ItemPending, ItemRead}: true, {ItemPending, ItemSkipped}: true, {ItemPending, ItemFailed}: true,
-	{ItemRead, ItemPacked}: true, {ItemRead, ItemSkipped}: true, {ItemRead, ItemFailed}: true,
 }

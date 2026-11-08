@@ -30,7 +30,7 @@ func TestExecutionTransitionsAreClosedAndMonotonic(t *testing.T) {
 	}
 }
 
-func TestCleanupAndItemTransitionsRemainOrthogonal(t *testing.T) {
+func TestCleanupTransitionsRemainMonotonic(t *testing.T) {
 	for _, transition := range [][2]CleanupState{
 		{CleanupNone, CleanupRevoking}, {CleanupRevoking, CleanupPurging},
 		{CleanupPurging, CleanupPurged}, {CleanupPurging, CleanupPurgeFailed},
@@ -39,15 +39,6 @@ func TestCleanupAndItemTransitionsRemainOrthogonal(t *testing.T) {
 		if err := ValidateCleanupTransition(transition[0], transition[1]); err != nil {
 			t.Fatalf("cleanup %s -> %s: %v", transition[0], transition[1], err)
 		}
-	}
-	if err := ValidateItemTransition(ItemPacked, ItemPending); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("ordinary packed reset error=%v", err)
-	}
-	if err := ValidateItemReset(ItemPacked, true); err != nil {
-		t.Fatalf("fenced byte-zero reset: %v", err)
-	}
-	if err := ValidateItemReset(ItemPacked, false); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("unfenced reset error=%v", err)
 	}
 }
 

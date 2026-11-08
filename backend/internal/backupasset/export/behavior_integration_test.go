@@ -637,6 +637,167 @@ func runExportBehaviorContract(t *testing.T, open func(*testing.T) exportBehavio
 		}
 		assertInertUnchanged("drained reconcile")
 	})
+	t.Run("ItemAttempt/PackedCheckpointAndLeaseTakeover", func(t *testing.T) {
+		isolated := open(t)
+		created, first, itemAttempt := createClaimedExportForAttemptBudget(
+			t, isolated.serviceHarness, 41, "export-behavior-item-attempt-takeover",
+		)
+		clock := isolated.service.now().UTC()
+		sourceLeases, err := backupasset.NewLeaseService(isolated.db, func() time.Time { return clock }, backupasset.LeaseConfig{
+			Duration: isolated.config.LeaseTTL, Heartbeat: isolated.config.LeaseRenewMargin, AbsoluteDeadline: 2 * time.Hour,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		coordinator, err := NewAttemptCoordinator(isolated.db, func() time.Time { return clock }, sourceLeases)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var item model.BackupAssetExportItem
+		if err := isolated.db.Where("id = ?", itemAttempt.ItemID).Take(&item).Error; err != nil {
+			t.Fatal(err)
+		}
+		// This seeded spool metadata exercises the checkpoint transaction; it does not read or pack a remote object.
+		result := isolated.db.Model(&model.BackupAssetExportItemAttempt{}).
+			Where("id = ? AND state = ?", itemAttempt.ID, ItemPending).
+			Updates(map[string]any{
+				"state": string(ItemRead), "spool_digest": strings.Repeat("a", 64), "spool_size": int64(1),
+				"spool_locator": strings.Repeat("b", 32) + ".xrs", "logical_bytes": item.LogicalSize,
+				"provider_bytes": int64(42), "read_at": clock,
+			})
+		if result.Error != nil || result.RowsAffected != 1 {
+			t.Fatalf("prepare read spool: rows=%d err=%v", result.RowsAffected, result.Error)
+		}
+		result = isolated.db.Model(&model.BackupAssetExportItem{}).
+			Where("id = ? AND current_attempt_id = ? AND state = ?", item.ID, first.AttemptID, ItemPending).
+			Updates(map[string]any{
+				"state": string(ItemRead), "logical_bytes": item.LogicalSize, "provider_bytes": int64(42), "updated_at": clock,
+			})
+		if result.Error != nil || result.RowsAffected != 1 {
+			t.Fatalf("prepare read projection: rows=%d err=%v", result.RowsAffected, result.Error)
+		}
+		packed := AttemptCheckpoint{
+			JobID: created.JobID, AttemptID: first.AttemptID, FenceToken: first.FenceToken,
+			ItemID: item.ID, State: ItemPacked, LogicalBytes: item.LogicalSize, ProviderBytes: 42,
+		}
+		if err := coordinator.Checkpoint(context.Background(), packed); err != nil {
+			t.Fatalf("pack checkpoint: %v", err)
+		}
+		type durableSnapshot struct {
+			job      model.BackupAssetExportJob
+			items    []model.BackupAssetExportItem
+			attempts []model.BackupAssetExportAttempt
+			history  []model.BackupAssetExportItemAttempt
+		}
+		load := func() durableSnapshot {
+			var snapshot durableSnapshot
+			if err := isolated.db.Where("id = ?", created.JobID).Take(&snapshot.job).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := isolated.db.Where("job_id = ?", created.JobID).Order("id ASC").Find(&snapshot.items).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := isolated.db.Where("job_id = ?", created.JobID).Order("attempt_number ASC").Find(&snapshot.attempts).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := isolated.db.Where("job_id = ?", created.JobID).Order("id ASC").Find(&snapshot.history).Error; err != nil {
+				t.Fatal(err)
+			}
+			return snapshot
+		}
+		before := load()
+		if len(before.items) != 1 || len(before.attempts) != 1 || len(before.history) != 1 ||
+			before.items[0].State != string(ItemPacked) || before.history[0].State != string(ItemPacked) ||
+			before.job.PackedCount != 1 || before.job.LogicalBytes != 42 || before.job.ProviderBytes != 42 {
+			t.Fatalf("packed fixture: %+v", before)
+		}
+		if err := coordinator.Checkpoint(context.Background(), packed); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("duplicate packed checkpoint=%v", err)
+		}
+		if after := load(); !reflect.DeepEqual(before, after) {
+			t.Fatalf("duplicate packed checkpoint changed durable state: before=%+v after=%+v", before, after)
+		}
+		backward := packed
+		backward.State = ItemPending
+		backward.LogicalBytes = 0
+		backward.ProviderBytes = 0
+		if err := coordinator.Checkpoint(context.Background(), backward); !errors.Is(err, ErrAttemptFenceLost) {
+			t.Fatalf("backward checkpoint=%v", err)
+		}
+		if after := load(); !reflect.DeepEqual(before, after) {
+			t.Fatalf("backward checkpoint changed durable state: before=%+v after=%+v", before, after)
+		}
+		if _, err := coordinator.Claim(context.Background(), AttemptClaimRequest{
+			JobID: created.JobID, WorkerOwner: "competing-live-worker",
+		}); !errors.Is(err, ErrAttemptNotClaimable) {
+			t.Fatalf("live-owner competing claim=%v", err)
+		}
+		if after := load(); !reflect.DeepEqual(before, after) {
+			t.Fatalf("live-owner competing claim changed durable state: before=%+v after=%+v", before, after)
+		}
+		sourcesBefore, _ := loadExportBehaviorSourceAuthority(t, isolated.db, created.JobID)
+		clock = first.LeaseExpiresAt.Add(time.Second)
+		if _, err := coordinator.TakeoverSourceLeases(context.Background(), SourceLeaseTakeoverRequest{JobID: created.JobID}); err != nil {
+			t.Fatalf("source authority takeover: %v", err)
+		}
+		sourcesAfter, _ := loadExportBehaviorSourceAuthority(t, isolated.db, created.JobID)
+		if len(sourcesBefore) != 1 || len(sourcesAfter) != 1 ||
+			sourcesBefore[0].LeaseAttemptID == sourcesAfter[0].LeaseAttemptID || sourcesBefore[0].FenceHash == sourcesAfter[0].FenceHash {
+			t.Fatalf("source authority did not advance: before=%+v after=%+v", sourcesBefore, sourcesAfter)
+		}
+		second, err := coordinator.Claim(context.Background(), AttemptClaimRequest{JobID: created.JobID, WorkerOwner: "takeover-worker"})
+		if err != nil {
+			t.Fatalf("expired-owner takeover: %v", err)
+		}
+		if second.AttemptNumber != 2 || second.AttemptID == first.AttemptID || second.SupersededAttemptID != first.AttemptID ||
+			bytes.Equal(second.FenceToken, first.FenceToken) || second.FenceDigest == first.FenceDigest {
+			t.Fatalf("takeover claim first=%+v second=%+v", first, second)
+		}
+		afterTakeover := load()
+		if afterTakeover.job.CurrentAttemptID == nil || *afterTakeover.job.CurrentAttemptID != second.AttemptID ||
+			afterTakeover.job.CurrentFenceRevision != before.job.CurrentFenceRevision+1 ||
+			afterTakeover.job.PackedCount != 0 || afterTakeover.job.SkippedCount != 0 || afterTakeover.job.FailedCount != 0 ||
+			afterTakeover.job.LogicalBytes != 0 || afterTakeover.job.ProviderBytes != 0 || afterTakeover.job.ArtifactBytes != 0 {
+			t.Fatalf("takeover job projection=%+v", afterTakeover.job)
+		}
+		if len(afterTakeover.items) != 1 || afterTakeover.items[0].CurrentAttemptID == nil ||
+			*afterTakeover.items[0].CurrentAttemptID != second.AttemptID || afterTakeover.items[0].State != string(ItemPending) ||
+			afterTakeover.items[0].LogicalBytes != 0 || afterTakeover.items[0].ProviderBytes != 0 || afterTakeover.items[0].ErrorCategory != "" {
+			t.Fatalf("takeover item projection=%+v", afterTakeover.items)
+		}
+		if len(afterTakeover.attempts) != 2 || afterTakeover.attempts[0].ID != first.AttemptID ||
+			afterTakeover.attempts[0].State != string(AttemptSuperseded) || afterTakeover.attempts[0].IsCurrent ||
+			afterTakeover.attempts[1].ID != second.AttemptID || !afterTakeover.attempts[1].IsCurrent ||
+			afterTakeover.attempts[1].State != string(AttemptActive) ||
+			afterTakeover.attempts[1].CheckpointItemCount != 0 || afterTakeover.attempts[1].CheckpointLogicalBytes != 0 ||
+			afterTakeover.attempts[1].CheckpointProviderBytes != 0 || len(afterTakeover.history) != 2 {
+			t.Fatalf("takeover attempts=%+v history=%+v", afterTakeover.attempts, afterTakeover.history)
+		}
+		var oldHistory, newHistory model.BackupAssetExportItemAttempt
+		for _, row := range afterTakeover.history {
+			if row.AttemptID == first.AttemptID {
+				oldHistory = row
+			} else if row.AttemptID == second.AttemptID {
+				newHistory = row
+			}
+		}
+		if !reflect.DeepEqual(oldHistory, before.history[0]) || newHistory.ID == "" || newHistory.ItemID != item.ID ||
+			newHistory.State != string(ItemPending) || newHistory.LogicalBytes != 0 || newHistory.ProviderBytes != 0 ||
+			newHistory.SpoolDigest != "" || newHistory.SpoolSize != 0 || newHistory.SpoolLocator != "" {
+			t.Fatalf("takeover history before=%+v after=%+v", before.history, afterTakeover.history)
+		}
+		if err := coordinator.Checkpoint(context.Background(), packed); !errors.Is(err, ErrAttemptFenceLost) {
+			t.Fatalf("old checkpoint after takeover=%v", err)
+		}
+		if _, err := coordinator.Heartbeat(context.Background(), AttemptHeartbeatRequest{
+			JobID: created.JobID, AttemptID: first.AttemptID, FenceToken: first.FenceToken,
+		}); !errors.Is(err, ErrAttemptFenceLost) {
+			t.Fatalf("old heartbeat after takeover=%v", err)
+		}
+		if after := load(); !reflect.DeepEqual(afterTakeover, after) {
+			t.Fatalf("old token changed durable state: before=%+v after=%+v", afterTakeover, after)
+		}
+	})
 	t.Run("LifecycleProjection/FenceAttemptsMirrorsPublicAndImmutableRows", func(t *testing.T) {
 		isolated := open(t)
 		runMigrationBackedFenceAttemptsProjection(t, isolated)

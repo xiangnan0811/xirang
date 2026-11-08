@@ -182,22 +182,3 @@ func TestDeliveryProductClosesRendererAndProofPurposes(t *testing.T) {
 		})
 	}
 }
-
-func TestDeliveryStateTransitionsAreTerminal(t *testing.T) {
-	valid := [][2]DeliveryState{
-		{DeliveryIssued, DeliveryActive}, {DeliveryIssued, DeliveryRevoked},
-		{DeliveryActive, DeliveryDraining}, {DeliveryActive, DeliveryClosed},
-		{DeliveryActive, DeliveryRevoked}, {DeliveryActive, DeliveryExpired},
-		{DeliveryDraining, DeliveryRevoked}, {DeliveryDraining, DeliveryExpired},
-	}
-	for _, pair := range valid {
-		if err := ValidateDeliveryTransition(pair[0], pair[1]); err != nil {
-			t.Fatalf("transition %s -> %s rejected: %v", pair[0], pair[1], err)
-		}
-	}
-	for _, terminal := range []DeliveryState{DeliveryRevoked, DeliveryExpired, DeliveryClosed} {
-		if err := ValidateDeliveryTransition(terminal, DeliveryActive); !errors.Is(err, ErrInvalidDeliveryState) {
-			t.Fatalf("terminal transition %s -> active error = %v", terminal, err)
-		}
-	}
-}
