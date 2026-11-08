@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.16](https://github.com/xiangnan0811/xirang/compare/v0.73.15...v0.73.16) (2026-11-08)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** patch rsync inputs and restore pinned CI lint ([#697](https://github.com/xiangnan0811/xirang/issues/697)) ([3764bc6](https://github.com/xiangnan0811/xirang/commit/3764bc67cef4e2b4c7f74f2f0d2ad3ce6d332944))
+
 ### Core Rsync 安全更新及 Worker 输入同步
 
 - 将 Core 镜像内的 `rsync` 从 `3.5.0-r0` 更新为 Alpine 3.23 的 `3.5.2-r1`，修复镜像扫描识别的高危 `CVE-2026-119741`（构造校验和触发的 delta transfer 拒绝服务；扫描修复门槛为 `3.5.2-r0`，采用软件源当前后续修订 `r1`）。构建输入须经原生双架构采集、可信 APK 验签、禁网重放和锁定采用，最终镜像继续执行同等漏洞扫描与运行验收。
@@ -26,13 +33,6 @@
 - 将旧 Updater metadata 的适用拒绝与隐私断言迁到真实签名 inbox 生成的注册 receipt，覆盖完整有效载荷上的未知／重复字段、版本及身份／摘要／时间异常；移除没有生产消费者的 `DecodeUpdaterMetadataV1`、旧 DTO／validator 与直接孤立依赖。数据库 metadata、签名离线导入、注册和原子激活流程保持。
 - 移除零生产调用的 `DecodeResticAttemptV1`、`DecodeRsyncTreeCommitV1`，将有效断言落在活 tagged 分派、Rsync attempt decoder 与实际 Rsync 发布策略；保留生产 decoder、validator、类型、认证 marker 和 Restic typed 身份／tag 保护。不为旧 Restic wire 往返或精确 JSON 字节承诺创造新生产消费者。
 - 本次仅测试迁移和死码收敛，无新增公开 API、wire 格式、运行时配置或 schema migration，不改写历史数据。按 `test`／`refactor` 语义交付，不为此单独制造正式版本或镜像；既有迁移、密钥、备份保全及降级限制保持。
-
-## [0.73.16](https://github.com/xiangnan0811/xirang/compare/v0.73.15...v0.73.16) (2026-11-08)
-
-
-### 🐛 Bug Fixes
-
-* **deploy:** patch rsync inputs and restore pinned CI lint ([#697](https://github.com/xiangnan0811/xirang/issues/697)) ([3764bc6](https://github.com/xiangnan0811/xirang/commit/3764bc67cef4e2b4c7f74f2f0d2ad3ce6d332944))
 
 ## [0.73.15](https://github.com/xiangnan0811/xirang/compare/v0.73.14...v0.73.15) (2026-11-07)
 
