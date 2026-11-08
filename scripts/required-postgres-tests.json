@@ -1285,7 +1285,9 @@
             "TestContentBehaviorPostgres",
             "TestContentBehaviorPostgres/FirstSuccessfulGETPerGrant",
             "TestContentBehaviorPostgres/ConcurrentSuccessfulGETFinalization",
-            "TestContentBehaviorPostgres/FirstSuccessfulGETRollbackDoesNotLeak"
+            "TestContentBehaviorPostgres/FirstSuccessfulGETRollbackDoesNotLeak",
+            "TestContentBehaviorPostgres/GrantLifecycleMaintenance",
+            "TestContentBehaviorPostgres/SelectedGrantChangesBeforeMaintenanceUpdate"
           ]
         }
       ]
@@ -1297,7 +1299,8 @@
         {
           "name": "TestExportBehaviorPostgres",
           "required_paths": [
-            "TestExportBehaviorPostgres"
+            "TestExportBehaviorPostgres",
+            "TestExportBehaviorPostgres/ItemAttempt/PackedCheckpointAndLeaseTakeover"
           ]
         }
       ]

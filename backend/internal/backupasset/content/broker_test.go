@@ -706,6 +706,78 @@ func TestBrokerIssueOrdersAuthorizationLeaseSourceAuditBeforeCookieActivation(t 
 	}
 }
 
+func TestBrokerIssueRejectsAuditBoundaryGrantChanges(t *testing.T) {
+	for _, resource := range []string{"asset", "recovery_result"} {
+		for _, change := range []string{"revoked", "expired", "closed", "version"} {
+			t.Run(resource+"/"+change, func(t *testing.T) {
+				var harness *brokerTestHarness
+				var request IssueRequest
+				if resource == "asset" {
+					harness = newBrokerTestHarness(t)
+					request = harness.issueRequest()
+				} else {
+					recovery := newRecoveryBrokerTestHarness(t)
+					harness = recovery.brokerTestHarness
+					request = recovery.recoveryIssueRequest()
+				}
+				changedAt := harness.now.Add(-time.Minute)
+				var competing model.BackupAssetDeliveryGrant
+				harness.broker.audit = brokerAuditBoundary{
+					BrokerAudit: harness.audit,
+					change: func(ctx context.Context) error {
+						updates := map[string]any{"version": 7, "updated_at": changedAt}
+						if change != "version" {
+							updates["state"] = change
+							if change != "closed" {
+								updates["revocation_reason"] = "logout"
+								updates["revoked_at"] = changedAt
+							}
+						}
+						result := harness.db.WithContext(ctx).Model(&model.BackupAssetDeliveryGrant{}).
+							Where("id = ? AND state = ?", harness.material.GrantID, DeliveryIssued).Updates(updates)
+						if result.Error != nil {
+							return result.Error
+						}
+						if result.RowsAffected != 1 {
+							return fmt.Errorf("expected issued grant at audit boundary, got %d", result.RowsAffected)
+						}
+						return harness.db.WithContext(ctx).First(&competing, "id = ?", harness.material.GrantID).Error
+					},
+				}
+				ticket, err := harness.broker.Issue(context.Background(), request)
+				if !errors.Is(err, ErrInvalidBrokerRequest) || ticket.Cookie != nil || ticket.Descriptor.ContentURL != "" {
+					t.Fatalf("ticket=%+v err=%v", ticket, err)
+				}
+				var got model.BackupAssetDeliveryGrant
+				if err := harness.db.First(&got, "id = ?", harness.material.GrantID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if change == "version" {
+					if got.State != string(DeliveryRevoked) || got.RevocationReason != "request_failed" || got.Version != 8 || got.RevokedAt == nil {
+						t.Fatalf("version-conflicted grant=%+v", got)
+					}
+				} else if got.State != competing.State || got.RevocationReason != competing.RevocationReason || got.Version != competing.Version ||
+					!got.CreatedAt.Equal(competing.CreatedAt) || !got.UpdatedAt.Equal(competing.UpdatedAt) ||
+					(got.RevokedAt == nil) != (competing.RevokedAt == nil) || (got.RevokedAt != nil && !got.RevokedAt.Equal(*competing.RevokedAt)) {
+					t.Fatalf("terminal grant changed: before=%+v after=%+v", competing, got)
+				}
+			})
+		}
+	}
+}
+
+type brokerAuditBoundary struct {
+	BrokerAudit
+	change func(context.Context) error
+}
+
+func (boundary brokerAuditBoundary) Write(ctx context.Context, input backupasset.AuditEventInput) error {
+	if err := boundary.BrokerAudit.Write(ctx, input); err != nil {
+		return err
+	}
+	return boundary.change(ctx)
+}
+
 func TestBrokerSafePreviewResolvesExactPlainTextBeforePersistenceAndServe(t *testing.T) {
 	harness := newBrokerTestHarness(t)
 	payload := []byte("name = \"值\"\r\nline\t<safe & readable>\n")

@@ -185,6 +185,222 @@ func runContentBehaviorContract(t *testing.T, fixture contentBehaviorFixture) {
 		clearContentBehaviorState(t, fixture)
 		testContentBehaviorFirstSuccessfulGETRollbackDoesNotLeak(t, fixture)
 	})
+	t.Run("GrantLifecycleMaintenance", func(t *testing.T) {
+		testContentBehaviorGrantLifecycle(t, fixture)
+	})
+	t.Run("SelectedGrantChangesBeforeMaintenanceUpdate", func(t *testing.T) {
+		testContentBehaviorSelectedGrantChanges(t, fixture)
+	})
+}
+
+func testContentBehaviorGrantLifecycle(t *testing.T, fixture contentBehaviorFixture) {
+	ctx := context.Background()
+	now := fixture.clock.Now()
+	service := newContentBehaviorBudgetService(t, fixture, testBudgetLimits())
+	reconciler, err := NewReconciler(ReconcilerDependencies{
+		DB: fixture.db, Budget: service, Audit: &reconcilerAuditFake{}, Lease: &reconcilerLeaseFake{},
+		Now: fixture.clock.Now, BatchSize: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []DeliveryState{DeliveryIssued, DeliveryActive, DeliveryDraining} {
+		for _, deadline := range []string{"idle", "absolute", "healthy"} {
+			clearContentBehaviorState(t, fixture)
+			grant := seedContentBehaviorGrant(t, fixture, "5", 100, 4)
+			updates := map[string]any{"state": state, "last_activity_at": now.Add(-2 * time.Minute)}
+			if state == DeliveryDraining {
+				updates["revocation_reason"] = "logout"
+				updates["revoked_at"] = now.Add(-time.Minute)
+			}
+			if deadline == "idle" {
+				updates["idle_expires_at"] = now.Add(-time.Second)
+			}
+			if deadline == "absolute" {
+				updates["absolute_expires_at"] = now.Add(-time.Second)
+				updates["idle_expires_at"] = now.Add(-time.Second)
+			}
+			if err := fixture.db.Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", grant.ID).Updates(updates).Error; err != nil {
+				t.Fatal(err)
+			}
+			var before, after model.BackupAssetDeliveryGrant
+			if err := fixture.db.First(&before, "id = ?", grant.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := reconciler.Reconcile(ctx); err != nil {
+				t.Fatalf("%s %s: %v", state, deadline, err)
+			}
+			if err := fixture.db.First(&after, "id = ?", grant.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if deadline == "healthy" {
+				assertContentBehaviorGrantMaintenanceUnchanged(t, before, after)
+			} else if after.State != string(DeliveryExpired) || after.RevocationReason != "expired" || after.Version != before.Version+1 ||
+				after.RevokedAt == nil || !after.RevokedAt.Equal(now) || !after.UpdatedAt.Equal(now) {
+				t.Fatalf("%s %s: before=%+v after=%+v", state, deadline, before, after)
+			}
+			if err := reconciler.Reconcile(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var repeated model.BackupAssetDeliveryGrant
+			if err := fixture.db.First(&repeated, "id = ?", grant.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			assertContentBehaviorGrantMaintenanceUnchanged(t, after, repeated)
+		}
+		clearContentBehaviorState(t, fixture)
+		grant := seedContentBehaviorGrant(t, fixture, "5", 100, 4)
+		updates := map[string]any{"state": state}
+		if state == DeliveryDraining {
+			updates["revocation_reason"] = "logout"
+			updates["revoked_at"] = now.Add(-time.Minute)
+		}
+		if err := fixture.db.Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", grant.ID).Updates(updates).Error; err != nil {
+			t.Fatal(err)
+		}
+		var before, after model.BackupAssetDeliveryGrant
+		if err := fixture.db.First(&before, "id = ?", grant.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := reconciler.Startup(ctx); err != nil {
+			t.Fatalf("startup %s: %v", state, err)
+		}
+		if err := fixture.db.First(&after, "id = ?", grant.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if after.State != string(DeliveryRevoked) || after.RevocationReason != "process_restarted" || after.Version != before.Version+1 ||
+			after.RevokedAt == nil || !after.RevokedAt.Equal(now) || !after.UpdatedAt.Equal(now) {
+			t.Fatalf("startup %s: before=%+v after=%+v", state, before, after)
+		}
+		if err := reconciler.Startup(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var repeated model.BackupAssetDeliveryGrant
+		if err := fixture.db.First(&repeated, "id = ?", grant.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		assertContentBehaviorGrantMaintenanceUnchanged(t, after, repeated)
+	}
+	for _, state := range []DeliveryState{DeliveryRevoked, DeliveryExpired, DeliveryClosed} {
+		clearContentBehaviorState(t, fixture)
+		grant := seedContentBehaviorGrant(t, fixture, "5", 100, 4)
+		updates := map[string]any{"state": state, "last_activity_at": now.Add(-2 * time.Minute), "idle_expires_at": now.Add(-time.Second), "version": 9}
+		if state != DeliveryClosed {
+			updates["revocation_reason"] = "logout"
+			updates["revoked_at"] = now.Add(-time.Minute)
+		}
+		if err := fixture.db.Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", grant.ID).Updates(updates).Error; err != nil {
+			t.Fatal(err)
+		}
+		var before model.BackupAssetDeliveryGrant
+		if err := fixture.db.First(&before, "id = ?", grant.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			if err := reconciler.Reconcile(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := reconciler.Startup(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var after model.BackupAssetDeliveryGrant
+			if err := fixture.db.First(&after, "id = ?", grant.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			assertContentBehaviorGrantMaintenanceUnchanged(t, before, after)
+		}
+	}
+}
+
+func assertContentBehaviorGrantMaintenanceUnchanged(t *testing.T, before, after model.BackupAssetDeliveryGrant) {
+	t.Helper()
+	if before.State != after.State || before.RevocationReason != after.RevocationReason || before.Version != after.Version ||
+		!before.CreatedAt.Equal(after.CreatedAt) || !before.UpdatedAt.Equal(after.UpdatedAt) ||
+		!before.AbsoluteExpiresAt.Equal(after.AbsoluteExpiresAt) || !before.IdleExpiresAt.Equal(after.IdleExpiresAt) || !before.LastActivityAt.Equal(after.LastActivityAt) ||
+		(before.RevokedAt == nil) != (after.RevokedAt == nil) ||
+		(before.RevokedAt != nil && !before.RevokedAt.Equal(*after.RevokedAt)) {
+		t.Fatalf("grant maintenance changed row: before=%+v after=%+v", before, after)
+	}
+}
+
+func testContentBehaviorSelectedGrantChanges(t *testing.T, fixture contentBehaviorFixture) {
+	now := fixture.clock.Now()
+	reconciler, err := NewReconciler(ReconcilerDependencies{
+		DB: fixture.db, Budget: newContentBehaviorBudgetService(t, fixture, testBudgetLimits()),
+		Audit: &reconcilerAuditFake{}, Lease: &reconcilerLeaseFake{}, Now: fixture.clock.Now, BatchSize: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []string{"terminal_before_expiry", "idle_extended", "absolute_extended", "terminal_before_startup"} {
+		clearContentBehaviorState(t, fixture)
+		grant := seedContentBehaviorGrant(t, fixture, "5", 100, 4)
+		column := "idle_expires_at"
+		if change == "absolute_extended" {
+			column = "absolute_expires_at"
+		}
+		if change != "terminal_before_startup" {
+			updates := map[string]any{column: now.Add(-time.Second), "last_activity_at": now.Add(-2 * time.Minute)}
+			if change == "absolute_extended" {
+				updates["idle_expires_at"] = now.Add(-time.Second)
+			}
+			if err := fixture.db.Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", grant.ID).Updates(updates).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		called := false
+		const callback = "test:content_selected_grant_change"
+		err := fixture.db.Callback().Update().Before("gorm:update").Register(callback, func(tx *gorm.DB) {
+			if called {
+				return
+			}
+			called = true
+			var result *gorm.DB
+			if strings.HasPrefix(change, "terminal") {
+				result = tx.Session(&gorm.Session{NewDB: true}).Exec("UPDATE backup_asset_delivery_grants SET state = ?, revocation_reason = ?, revoked_at = ?, updated_at = ?, version = ? WHERE id = ?", "revoked", "logout", now.Add(-time.Minute), now.Add(-time.Minute), 7, grant.ID)
+			} else if change == "absolute_extended" {
+				result = tx.Session(&gorm.Session{NewDB: true}).Exec("UPDATE backup_asset_delivery_grants SET absolute_expires_at = ?, idle_expires_at = ?, updated_at = ?, version = ? WHERE id = ?", now.Add(time.Minute), now.Add(time.Minute), now.Add(-time.Minute), 7, grant.ID)
+			} else {
+				result = tx.Session(&gorm.Session{NewDB: true}).Exec("UPDATE backup_asset_delivery_grants SET "+column+" = ?, updated_at = ?, version = ? WHERE id = ?", now.Add(time.Minute), now.Add(-time.Minute), 7, grant.ID)
+			}
+			if result.Error != nil {
+				_ = tx.AddError(result.Error)
+			} else if result.RowsAffected != 1 {
+				_ = tx.AddError(fmt.Errorf("competing update affected %d rows", result.RowsAffected))
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = fixture.db.Callback().Update().Remove(callback) })
+		if change == "terminal_before_startup" {
+			err = reconciler.Startup(context.Background())
+		} else {
+			err = reconciler.Reconcile(context.Background())
+		}
+		if removeErr := fixture.db.Callback().Update().Remove(callback); removeErr != nil {
+			t.Fatal(removeErr)
+		}
+		if err != nil || !called {
+			t.Fatalf("%s: callback=%v err=%v", change, called, err)
+		}
+		var after model.BackupAssetDeliveryGrant
+		if err := fixture.db.First(&after, "id = ?", grant.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if after.Version != 7 || !after.UpdatedAt.Equal(now.Add(-time.Minute)) {
+			t.Fatalf("%s overwritten: %+v", change, after)
+		}
+		if strings.HasPrefix(change, "terminal") {
+			if after.State != "revoked" || after.RevocationReason != "logout" || after.RevokedAt == nil || !after.RevokedAt.Equal(now.Add(-time.Minute)) {
+				t.Fatalf("%s overwritten: %+v", change, after)
+			}
+		} else if after.State != "active" || after.RevokedAt != nil || after.RevocationReason != "" ||
+			(change == "idle_extended" && !after.IdleExpiresAt.Equal(now.Add(time.Minute))) ||
+			(change == "absolute_extended" && !after.AbsoluteExpiresAt.Equal(now.Add(time.Minute))) {
+			t.Fatalf("%s overwritten: %+v", change, after)
+		}
+	}
 }
 
 func testContentBehaviorFirstSuccessfulGETPerGrant(t *testing.T, fixture contentBehaviorFixture) {

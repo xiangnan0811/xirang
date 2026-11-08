@@ -55,6 +55,8 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 孤立状态 validator、Task 能力便利投影与 mutable-head 内存投影的清理按 `test`／`refactor` 交付：现行服务转换、双引擎约束、Provider 准入／能力快照、真实观测持久化与公开 DTO 承担对应合同，不为旧测试新增 Command artifact 能力、Range 限制或观测流程。没有运行行为、公开 API、wire、配置或 schema migration 变化时不强制发版／镜像，说明留在 `Unreleased`；仍须完成同候选独审、正常 hooks、required CI 以及合并后同 SHA CI／Release Please 核对，不改写历史迁移或数据。
 
+Content grant 与 Export item 的孤立转换／reset helper 清理同样按 `test`／`refactor` 处理：有效断言迁入真实 Broker／Reconciler 条件更新和 Coordinator Claim／Checkpoint 事务，保留活状态、fence／lease／字节／配额及 item-attempt 历史，不新增转换入口或 reset API。受控 spool 数据库夹具只证明事务与持久投影，真实服务执行另行记录；两者都不能外推完整远端读取／归档端到端。没有实际运行行为或依赖修复时说明留 `Unreleased`，核对完整 required CI、合并后同 SHA CI 与 Release Please，不额外制造版本或正式镜像；已发布迁移和历史数据保持。
+
 Core 的 `rsync 3.5.0-r0` → `3.5.2-r1` 是实际运行依赖安全更新，修复 Trivy 报告的 `CVE-2026-119741`（修复门槛 `3.5.2-r0`，官方两架构当前后续修订为 `r1`），须按 `fix` 完成正常发行，不能套用纯清理无需版本的判断。发布说明保留原生双架构输入采集／验签／禁网重放及最终镜像扫描边界；更新须重新构建并替换 Core，先保全数据库、匹配密钥、配置和备份副本并排空旧 Core 在途任务。输入锁变更不修复已启动旧进程或外部节点，回退旧镜像恢复已知漏洞；无新增 API、配置或 schema migration，既有降级限制不变。同次完整采集实际带来 Worker 传递 `glib 2.86.3-r0` → `2.86.5-r0`，必须同步生成的完整 APK 投影并推进 toolchain／pipeline 指纹，Core／Worker 同源重建、重新取得双架构 runtime closure、attestations、签名 bundle 和 proof，先排空旧 Worker 在途处理再配套切换及回退。该传递变化不等同另一个已证实的漏洞修复；既有显式 root inventory 不新增 glib，完整输入身份由真实 manifest 投影承担。
 
 后端 lint 的 CI 安装渠道改为固定 action 的 `install-mode: goinstall`，使用当前 Go 工具链安装同一 `v2.14.0`，不依赖 GitHub Release 二进制资产；Go 模块获取渠道仍可能不可用。固定版本、配置 schema 校验、全范围 lint、缓存、注解和失败门禁保持，仍须取得新候选的完整 required CI 与合并后同 SHA CI；新候选 CI 实际执行前不宣称此前安装失败已解决。此项仅涉及 CI，无新增 API、运行时配置或 schema migration。
