@@ -775,9 +775,10 @@ func runExportBehaviorContract(t *testing.T, open func(*testing.T) exportBehavio
 		}
 		var oldHistory, newHistory model.BackupAssetExportItemAttempt
 		for _, row := range afterTakeover.history {
-			if row.AttemptID == first.AttemptID {
+			switch row.AttemptID {
+			case first.AttemptID:
 				oldHistory = row
-			} else if row.AttemptID == second.AttemptID {
+			case second.AttemptID:
 				newHistory = row
 			}
 		}

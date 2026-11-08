@@ -364,9 +364,9 @@ func testContentBehaviorSelectedGrantChanges(t *testing.T, fixture contentBehavi
 				result = tx.Session(&gorm.Session{NewDB: true}).Exec("UPDATE backup_asset_delivery_grants SET "+column+" = ?, updated_at = ?, version = ? WHERE id = ?", now.Add(time.Minute), now.Add(-time.Minute), 7, grant.ID)
 			}
 			if result.Error != nil {
-				tx.AddError(result.Error)
+				_ = tx.AddError(result.Error)
 			} else if result.RowsAffected != 1 {
-				tx.AddError(fmt.Errorf("competing update affected %d rows", result.RowsAffected))
+				_ = tx.AddError(fmt.Errorf("competing update affected %d rows", result.RowsAffected))
 			}
 		})
 		if err != nil {
