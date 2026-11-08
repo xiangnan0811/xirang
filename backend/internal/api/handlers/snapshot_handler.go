@@ -11,7 +11,6 @@ import (
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
-	"xirang/backend/internal/task/executor"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -57,9 +56,6 @@ type SnapshotHandler struct {
 // and no caller may supply a raw snapshot ID to a Provider command in exact
 // mode.
 type LegacyResticSnapshots interface {
-	ListSnapshots(context.Context, model.Task) ([]executor.ResticSnapshot, error)
-	ListSnapshotsByLinkTag(context.Context, model.Task, string) ([]executor.ResticSnapshot, error)
-	ListFiles(context.Context, model.Task, string, string) ([]executor.ResticEntry, error)
 	RestoreFiles(context.Context, model.Task, string, []string, string) error
 }
 
@@ -236,25 +232,4 @@ func resolveLineageSnapshotID(session publication.LineageSession, snapshotID str
 		return snapshotID, nil
 	}
 	return session.ResolveNativeID(strings.ToLower(snapshotID))
-}
-
-func filterCommittedResticSnapshots(snapshots []executor.ResticSnapshot, points []publication.CommittedPoint) []executor.ResticSnapshot {
-	allowed := make(map[string]struct{}, len(points))
-	for _, point := range points {
-		allowed[strings.ToLower(point.FullNativeID)] = struct{}{}
-	}
-	filtered := make([]executor.ResticSnapshot, 0, len(snapshots))
-	seen := make(map[string]struct{}, len(snapshots))
-	for _, snapshot := range snapshots {
-		fullID := strings.ToLower(strings.TrimSpace(snapshot.ID))
-		if _, ok := allowed[fullID]; !ok {
-			continue
-		}
-		if _, duplicate := seen[fullID]; duplicate {
-			continue
-		}
-		seen[fullID] = struct{}{}
-		filtered = append(filtered, snapshot)
-	}
-	return filtered
 }

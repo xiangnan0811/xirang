@@ -312,10 +312,6 @@ func (handler *BackupRecoveryHandler) WithRecoveryOperations(
 	return handler
 }
 
-func (handler *BackupRecoveryHandler) Unavailable(c *gin.Context) {
-	respondServiceUnavailable(c, "恢复服务暂不可用")
-}
-
 // CreatePlan persists or replays one owner-scoped frozen Recovery plan.
 // @Summary      创建恢复计划
 // @Tags         backup-assets-recovery

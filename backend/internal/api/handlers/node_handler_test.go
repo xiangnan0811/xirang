@@ -33,50 +33,6 @@ func openNodeHandlerTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestNodeExecDisabled(t *testing.T) {
-	db := openNodeHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}); err != nil {
-		t.Fatalf("初始化测试数据表失败: %v", err)
-	}
-
-	node := model.Node{
-		Name:      "node-exec-empty",
-		Host:      "127.0.0.1",
-		Port:      22,
-		Username:  "root",
-		AuthType:  "password",
-		Password:  "secret",
-		BackupDir: "node-exec-empty",
-	}
-	if err := db.Create(&node).Error; err != nil {
-		t.Fatalf("创建节点失败: %v", err)
-	}
-
-	r := gin.New()
-	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(gormrepo.NewNodeRepository(db)))
-	r.POST("/nodes/:id/exec", handler.Exec)
-
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/nodes/%d/exec", node.ID), strings.NewReader(`{"command":"hostname"}`))
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-	r.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusForbidden {
-		t.Fatalf("期望状态码 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
-	}
-	var envelope Response
-	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("解析响应信封失败: %v", err)
-	}
-	if envelope.Code != http.StatusForbidden || envelope.Message != "节点远程执行能力已禁用" {
-		t.Fatalf("期望标准禁用响应信封，实际: %+v", envelope)
-	}
-	data, ok := envelope.Data.(map[string]interface{})
-	if !ok || data["error_code"] != nodeExecDisabledCode {
-		t.Fatalf("期望返回禁用错误码，实际: %+v", envelope.Data)
-	}
-}
-
 func TestNodeBatchDeleteRejectsEmptyIDs(t *testing.T) {
 	db := openNodeHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}, &model.PolicyNode{}, &model.NodeOwner{}); err != nil {

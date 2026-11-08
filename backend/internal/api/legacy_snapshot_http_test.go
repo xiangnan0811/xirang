@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -46,6 +47,15 @@ func TestLegacySnapshotReadsGoneForAdminOperatorViewer(t *testing.T) {
 		tokens[role] = token
 		users[role] = user
 	}
+	nonOwner := model.User{Username: "legacy-snapshot-other-operator", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator", TOTPEnabled: true}
+	if err := db.Create(&nonOwner).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherToken, err := jwtManager.GenerateToken(nonOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens["nonowner"] = otherToken
 	node := model.Node{Name: "legacy-snapshot-node", Host: "10.0.0.8", Username: "root", AuthType: "key"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatal(err)
@@ -57,7 +67,8 @@ func TestLegacySnapshotReadsGoneForAdminOperatorViewer(t *testing.T) {
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatal(err)
 	}
-	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	commands := &legacySnapshotCommandCounter{}
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager, LegacyResticSnapshots: commands, SnapshotDiffRunner: commands})
 	sid := strings.Repeat("a", 12)
 	reads := []string{
 		fmt.Sprintf("/api/v1/tasks/%d/snapshots", taskEntity.ID),
@@ -88,6 +99,12 @@ func TestLegacySnapshotReadsGoneForAdminOperatorViewer(t *testing.T) {
 				t.Fatalf("%s %s status=%d body=%s", role, path, response.Code, response.Body.String())
 			}
 		}
+		if response := request(http.MethodGet, path, tokens["nonowner"], ""); response.Code != http.StatusForbidden {
+			t.Fatalf("nonowner %s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+	if commands.restoreCalls != 0 || commands.diffCalls != 0 {
+		t.Fatalf("retired reads reached commands restore=%d diff=%d", commands.restoreCalls, commands.diffCalls)
 	}
 	restorePath := fmt.Sprintf("/api/v1/tasks/%d/snapshots/%s/restore", taskEntity.ID, sid)
 	body := `{"includes":["/file"],"targetPath":"/tmp/recovery"}`
@@ -101,6 +118,21 @@ func TestLegacySnapshotReadsGoneForAdminOperatorViewer(t *testing.T) {
 	if adminRestore.Code != http.StatusForbidden {
 		t.Fatalf("admin restore without FeatureLive status=%d body=%s", adminRestore.Code, adminRestore.Body.String())
 	}
+}
+
+type legacySnapshotCommandCounter struct {
+	restoreCalls int
+	diffCalls    int
+}
+
+func (counter *legacySnapshotCommandCounter) RestoreFiles(context.Context, model.Task, string, []string, string) error {
+	counter.restoreCalls++
+	return nil
+}
+
+func (counter *legacySnapshotCommandCounter) RunSnapshotDiff(context.Context, model.Task, string, string) (string, error) {
+	counter.diffCalls++
+	return "", nil
 }
 
 func TestNewAssetSearchStaysAvailableWhenLegacySnapshotSearchIsGone(t *testing.T) {

@@ -469,6 +469,57 @@ func TestRecoveryTargetRootAndDowngradeHandlersDelegateSafeProducts(t *testing.T
 	}
 }
 
+func TestBackupRecoveryHandlersReturnUnavailableForMissingDependencies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewBackupRecoveryHandler(nil, nil, nil)
+	const privateMarker = "FAKE_PRIVATE_RECOVERY_INPUT_FOR_TEST_ONLY"
+	for _, testCase := range []struct {
+		name    string
+		method  string
+		path    string
+		handle  gin.HandlerFunc
+		message string
+	}{
+		{"create plan", http.MethodPost, "/api/v1/recovery-plans", handler.CreatePlan, "恢复服务暂不可用"},
+		{"preflight", http.MethodPost, "/api/v1/recovery-plans/:id/preflights", handler.Preflight, "恢复服务暂不可用"},
+		{"cancel job", http.MethodPost, "/api/v1/recovery-jobs/:id/cancel", handler.CancelJob, "恢复服务暂不可用"},
+		{"retain results", http.MethodPost, "/api/v1/recovery-jobs/:id/results/retain", handler.RetainResults, "恢复服务暂不可用"},
+		{"cleanup results", http.MethodPost, "/api/v1/recovery-jobs/:id/results/cleanup", handler.CleanupResults, "恢复服务暂不可用"},
+		{"get plan", http.MethodGet, "/api/v1/recovery-plans/:id", handler.GetPlan, "恢复服务暂不可用"},
+		{"cancel plan", http.MethodPost, "/api/v1/recovery-plans/:id/cancel", handler.CancelPlan, "恢复服务暂不可用"},
+		{"get job", http.MethodGet, "/api/v1/recovery-jobs/:id", handler.GetJob, "恢复服务暂不可用"},
+		{"get job items", http.MethodGet, "/api/v1/recovery-jobs/:id/items", handler.GetJobItems, "恢复服务暂不可用"},
+		{"get job results", http.MethodGet, "/api/v1/recovery-jobs/:id/results", handler.GetJobResults, "恢复服务暂不可用"},
+		{"register target root", http.MethodPost, "/api/v1/settings/backup-assets/recovery/target-roots", handler.RegisterTargetRoot, "恢复目标根服务暂不可用"},
+		{"rotate target root", http.MethodPut, "/api/v1/settings/backup-assets/recovery/target-roots/:nodeId/:rootId", handler.RotateTargetRoot, "恢复目标根服务暂不可用"},
+		{"delete target root", http.MethodDelete, "/api/v1/settings/backup-assets/recovery/target-roots/:nodeId/:rootId", handler.DeleteTargetRoot, "恢复目标根服务暂不可用"},
+		{"list target roots", http.MethodGet, "/api/v1/settings/backup-assets/recovery/target-roots", handler.ListTargetRoots, "恢复目标根服务暂不可用"},
+		{"downgrade readiness", http.MethodPost, "/api/v1/settings/backup-assets/recovery/downgrade-readiness", handler.DowngradeReadiness, "恢复降级检查暂不可用"},
+		{"security override", http.MethodPost, "/api/v1/recovery-plans/:id/security-overrides", handler.SecurityOverride, "恢复授权服务暂不可用"},
+		{"authorize write", http.MethodPost, "/api/v1/recovery-plans/:id/write-authorizations", handler.AuthorizeWrite, "恢复授权服务暂不可用"},
+		{"authorize exact mirror delete", http.MethodPost, "/api/v1/recovery-jobs/:id/exact-mirror-delete-authorizations", handler.AuthorizeExactMirrorDelete, "恢复授权服务暂不可用"},
+		{"execute", http.MethodPost, "/api/v1/recovery-plans/:id/execute", handler.Execute, "恢复授权服务暂不可用"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			router := gin.New()
+			router.Handle(testCase.method, testCase.path, testCase.handle)
+			path := strings.NewReplacer(":id", strings.Repeat("a", 32), ":nodeId", "1", ":rootId", "root").Replace(testCase.path)
+			request := httptest.NewRequest(testCase.method, path, strings.NewReader(`{"private":"`+privateMarker+`"}`))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			var envelope Response
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if response.Code != http.StatusServiceUnavailable || envelope.Code != http.StatusServiceUnavailable ||
+				envelope.Message != testCase.message || envelope.Data != nil || strings.Contains(response.Body.String(), privateMarker) {
+				t.Fatalf("status=%d envelope=%+v body=%s", response.Code, envelope, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestBackupRecoveryClosedLifecycleResponseMatrixSanitizesUnexpectedFailures(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, testCase := range []struct {

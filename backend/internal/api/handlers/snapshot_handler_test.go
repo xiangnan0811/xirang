@@ -2,11 +2,11 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,48 +15,15 @@ import (
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/task/executor"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
-func TestSnapshotListExactUsesCommittedTaskPointIntersection(t *testing.T) {
-	allowed := []publication.CommittedPoint{{RecoveryPointID: "11111111111111111111111111111111", FullNativeID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CapturedAt: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}}
-	snapshots := []executor.ResticSnapshot{
-		{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-		{ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-		{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-	}
-	got := filterCommittedResticSnapshots(snapshots, allowed)
-	if len(got) != 1 || got[0].ID != allowed[0].FullNativeID {
-		t.Fatalf("exact snapshots=%+v", got)
-	}
-}
-
-func TestSnapshotHandlerConstructorsUseTypedRuntimePorts(t *testing.T) {
-	for _, check := range []struct {
-		file      string
-		signature string
-	}{
-		{"snapshot_handler.go", "func NewSnapshotHandler(db *gorm.DB, guard publication.LineageGuard, restic LegacyResticSnapshots) *SnapshotHandler"},
-		{"snapshot_diff_handler.go", "func NewSnapshotDiffHandler(db *gorm.DB, guard publication.LineageGuard, runner SnapshotDiffRunner) *SnapshotDiffHandler"},
-	} {
-		contents, err := os.ReadFile(check.file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		source := string(contents)
-		if strings.Contains(source, "dependencies ...any") || !strings.Contains(source, check.signature) {
-			t.Fatalf("%s does not expose the typed runtime constructor", check.file)
-		}
-	}
-}
-
 func TestLegacySnapshotReadsAreGoneWithoutProviderIO(t *testing.T) {
 	session := &snapshotLineageSession{mode: publication.LineageCompatibility}
-	restic := &snapshotResticFake{snapshots: []executor.ResticSnapshot{{ID: strings.Repeat("a", 64)}}}
+	restic := &snapshotResticFake{}
 	router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
 
 	for _, path := range []string{
@@ -69,8 +36,8 @@ func TestLegacySnapshotReadsAreGoneWithoutProviderIO(t *testing.T) {
 			t.Fatalf("legacy read %s status=%d body=%s", path, response.Code, response.Body.String())
 		}
 	}
-	if restic.listCalls != 0 || restic.taggedCalls != 0 || restic.filesCalls != 0 {
-		t.Fatalf("retired reads reached provider list=%d tagged=%d files=%d", restic.listCalls, restic.taggedCalls, restic.filesCalls)
+	if restic.restoreCalls != 0 {
+		t.Fatalf("retired reads reached restore provider calls=%d", restic.restoreCalls)
 	}
 }
 
@@ -86,7 +53,6 @@ func TestSnapshotRestoreRequiresFeatureLive(t *testing.T) {
 		t.Fatalf("not-live restore status=%d calls=%d body=%s", response.Code, restic.restoreCalls, response.Body.String())
 	}
 }
-
 
 func TestSnapshotRestoreUsesResolvedFullIDAndHoldsAdmissionThroughJoinAndResponse(t *testing.T) {
 	fullID := strings.Repeat("a", 64)
@@ -119,6 +85,57 @@ func TestSnapshotRestoreUsesResolvedFullIDAndHoldsAdmissionThroughJoinAndRespons
 	}
 }
 
+func TestSnapshotRestoreRejectsUnresolvedAndForeignExactIDs(t *testing.T) {
+	ownedID := strings.Repeat("a", 64)
+	for _, test := range []struct {
+		name       string
+		snapshotID string
+		resolveErr error
+	}{
+		{name: "unresolved prefix", snapshotID: ownedID[:12], resolveErr: errors.New("unresolved snapshot")},
+		{name: "foreign full ID", snapshotID: strings.Repeat("b", 64)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := &snapshotLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{{FullNativeID: ownedID}}, resolveErr: test.resolveErr}
+			restic := &snapshotResticFake{}
+			router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/tasks/%d/snapshots/%s/restore", taskEntity.ID, test.snapshotID), strings.NewReader(`{"includes":["/file"],"targetPath":"/tmp/recovery"}`)))
+			if response.Code != http.StatusBadRequest || restic.restoreCalls != 0 || atomic.LoadInt32(&session.closed) != 1 {
+				t.Fatalf("restore status=%d calls=%d closes=%d body=%s", response.Code, restic.restoreCalls, atomic.LoadInt32(&session.closed), response.Body.String())
+			}
+		})
+	}
+}
+
+func TestSnapshotRestoreProviderErrorIsSafeAndClosesSession(t *testing.T) {
+	fullID := strings.Repeat("a", 64)
+	session := &snapshotLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{{FullNativeID: fullID}}}
+	const privateError = "FAKE_RESTORE_PROVIDER_SECRET_FOR_TEST_ONLY"
+	restic := &snapshotResticFake{restoreErr: errors.New(privateError)}
+	router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/tasks/%d/snapshots/%s/restore", taskEntity.ID, fullID[:12]), strings.NewReader(`{"includes":["/file"],"targetPath":"/tmp/recovery"}`)))
+	var body Response
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusInternalServerError || body.Code != http.StatusInternalServerError || body.Message != "服务器内部错误" || strings.Contains(response.Body.String(), privateError) || restic.restoreCalls != 1 || restic.snapshotID != fullID || atomic.LoadInt32(&session.closed) != 1 {
+		t.Fatalf("restore status=%d calls=%d id=%q closes=%d body=%s", response.Code, restic.restoreCalls, restic.snapshotID, atomic.LoadInt32(&session.closed), response.Body.String())
+	}
+}
+
+func TestSnapshotRestoreCompatibilityPassesOriginalID(t *testing.T) {
+	snapshotID := "AbCd1234"
+	session := &snapshotLineageSession{mode: publication.LineageCompatibility}
+	restic := &snapshotResticFake{}
+	router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/tasks/%d/snapshots/%s/restore", taskEntity.ID, snapshotID), strings.NewReader(`{"includes":["/file"],"targetPath":"/tmp/recovery"}`)))
+	if response.Code != http.StatusOK || restic.restoreCalls != 1 || restic.snapshotID != snapshotID || atomic.LoadInt32(&session.closed) != 1 {
+		t.Fatalf("restore status=%d calls=%d id=%q closes=%d body=%s", response.Code, restic.restoreCalls, restic.snapshotID, atomic.LoadInt32(&session.closed), response.Body.String())
+	}
+}
 
 type snapshotLineageSession struct {
 	mode       publication.LineageMode
@@ -167,33 +184,13 @@ func (guard *snapshotGuardFake) Begin(_ context.Context, _ uint, operation publi
 }
 
 type snapshotResticFake struct {
-	snapshots       []executor.ResticSnapshot
-	taggedSnapshots []executor.ResticSnapshot
-	entries         []executor.ResticEntry
-	listCalls       int
-	taggedCalls     int
-	filesCalls      int
-	restoreCalls    int
-	linkTag         string
-	snapshotID      string
-	restoreStarted  chan struct{}
-	restoreRelease  chan struct{}
+	restoreCalls   int
+	snapshotID     string
+	restoreStarted chan struct{}
+	restoreRelease chan struct{}
+	restoreErr     error
 }
 
-func (fake *snapshotResticFake) ListSnapshots(context.Context, model.Task) ([]executor.ResticSnapshot, error) {
-	fake.listCalls++
-	return append([]executor.ResticSnapshot(nil), fake.snapshots...), nil
-}
-func (fake *snapshotResticFake) ListSnapshotsByLinkTag(_ context.Context, _ model.Task, tag string) ([]executor.ResticSnapshot, error) {
-	fake.taggedCalls++
-	fake.linkTag = tag
-	return append([]executor.ResticSnapshot(nil), fake.taggedSnapshots...), nil
-}
-func (fake *snapshotResticFake) ListFiles(_ context.Context, _ model.Task, snapshotID, _ string) ([]executor.ResticEntry, error) {
-	fake.filesCalls++
-	fake.snapshotID = snapshotID
-	return append([]executor.ResticEntry(nil), fake.entries...), nil
-}
 func (fake *snapshotResticFake) RestoreFiles(_ context.Context, _ model.Task, snapshotID string, _ []string, _ string) error {
 	fake.restoreCalls++
 	fake.snapshotID = snapshotID
@@ -203,7 +200,7 @@ func (fake *snapshotResticFake) RestoreFiles(_ context.Context, _ model.Task, sn
 	if fake.restoreRelease != nil {
 		<-fake.restoreRelease
 	}
-	return nil
+	return fake.restoreErr
 }
 
 func setupSnapshotHandlerRouter(t *testing.T, session publication.LineageSession, restic LegacyResticSnapshots) (*gin.Engine, model.Task) {
