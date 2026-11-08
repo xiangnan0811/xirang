@@ -166,10 +166,13 @@ Chromium真实后端单独选择 `escalation-preview.spec.ts`；普通mock配置
 Firefox/WebKit下载项目不扩大。业务边界见
 [升级预演合同](../spec/domains/alerting-health.md#升级策略只读预演)。
 
-后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI action 与
-`scripts/lint-backend.sh` 同步更新。本地通过带版本的 `go run` 隔离工具依赖，
-以当前选中的 Go 工具链构建并运行，避免系统 Go 升级后继续加载由旧 Go 构建的 linter。
-该方式不改项目模块或全局安装；升级 linter 后执行配置校验、全仓库 lint 和本地完整门禁。
+后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI 固定的 action 使用
+`install-mode: goinstall`，以当前 Go 工具链从源码安装该版本；本地
+`scripts/lint-backend.sh` 通过带版本的 `go run` 以当前选中的 Go 工具链构建并运行，
+两者同步更新。本地方式隔离工具依赖，不改项目模块或全局安装，也避免系统 Go 升级后继续
+加载由旧 Go 构建的 linter。CI 继续执行配置 schema 校验、后端全范围 lint 和失败门禁，
+保留 action 的缓存与注解处理；源码安装不依赖 GitHub Release 二进制资产，但仍依赖 Go
+模块获取渠道，不能保证 Go Proxy 始终可用。升级 linter 后执行配置校验、全仓库 lint 和本地完整门禁。
 
 浏览器 CI 将 mock 三浏览器矩阵与真实后端场景分开：默认配置排除
 `real-backend-smoke.spec.ts` 和 `lifecycle-p1.spec.ts`；真实配置的 `chromium`
@@ -406,3 +409,9 @@ Worker 输入内容变化后，Core 与启用的 Worker 均须同源重建，并
 ### Alpine 构建与运行输入 musl、OpenSSH、zlib 安全更新
 
 针对 Trivy 扫描识别的 Alpine 基础镜像与运行依赖漏洞（`musl`／`musl-utils` CVE-2026-107891、`openssh-client-default`／`openssh-client-common`／`openssh-keygen` CVE-2026-119709、`zlib` CVE-2026-22184／CVE-2026-27171／CVE-2026-85091），在保持四类基础镜像固定 digest 不变的前提下，将受影响的基础镜像预装包提升为显式 root pin 并通过原生双架构采集更新构建输入锁：Alpine 3.24 构建阶段（`cgo-builder`、`supercronic-builder`）显式锁定 `musl=1.2.6-r3`、`musl-utils=1.2.6-r3`、`zlib=1.4-r0`；Alpine 3.23 运行阶段（`core-runtime`、`worker-runtime`）显式锁定 `musl=1.2.5-r24`、`musl-utils=1.2.5-r24`、`zlib=1.4-r0`，Core 显式更新 `openssh-client-default=10.2_p1-r1` 与软件源已移除旧版本的 `tzdata=2026f-r0`，Worker 显式更新软件源已移除旧版本的 `font-noto=2026.11.01-r0`（同步 `fonts` 组件 revision 为 `noto-2026.11.01+noto-cjk-20220127`）。生产工具链 inventory 按 `Runtime` 角色区分 `cgo-builder`（Alpine 3.24）与 `worker-runtime`（Alpine 3.23）中的同名显式包（`musl`、`musl-utils`、`zlib`），拒绝同一角色内的重复声明。更新推进了 Worker 工具链与 pipeline 指纹，须验证 candidate lock 的 workflow provenance attestation，排空旧在途处理后同源重建 Core／Worker 并重新生成双架构最终闭包、签名 bundle 与 proof；无新增配置或数据库迁移，回退旧镜像及配套制品会恢复上述已知漏洞风险。
+
+### Core Rsync 安全更新与 Worker 传递输入同步
+
+Core `rsync` 显式 root 从 `3.5.0-r0` 更新为 Alpine 3.23 的 `3.5.2-r1`，修复 Trivy 报告的 `CVE-2026-119741`；扫描修复门槛 `3.5.2-r0` 与当前两架构可采集的后续修订 `r1` 分别记录。采用同一成功原生采集 run 的 lock、八份 manifest 与 Worker 投影，并核对 exact source SHA／指定 workflow 的 provenance，不手填 digest。
+
+该次全事务重新解析使 Worker 两架构的传递 `glib` 从 `2.86.3-r0` 更新为 `2.86.5-r0`，其他包、基础镜像、安装器及可信密钥保持。显式 root 列表未变，glib 的完整 APK 字节和安装版本由生成的 `production_apk_inputs.json` 对应 manifest 身份覆盖；不为了复制传递版本而新增 root 或手工指纹。真实 Worker 输入变化会推进 toolchain／pipeline 指纹，须同源重建 Core／Worker、重新生成双架构最终闭包及签名配套制品，不能把 Core 起因概括成 Worker 不变。升级和回退边界见发布手册。

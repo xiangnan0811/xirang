@@ -252,11 +252,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "rsync-3.5.0-r0.apk",
+      "file": "rsync-3.5.2-r1.apk",
       "name": "rsync",
-      "sha256": "d5b56309dd68f0fa81dba3241f9055f88578ac4e057e1523cf361ca2c027068b",
-      "size": 230575,
-      "version": "3.5.0-r0"
+      "sha256": "e32684ee6c53387b3c61e10655bcc612c316528fe6bf2fc504d99be90e335d8d",
+      "size": 238241,
+      "version": "3.5.2-r1"
     },
     {
       "arch": "x86_64",
@@ -1100,7 +1100,7 @@
     {
       "arch": "x86_64",
       "name": "rsync",
-      "version": "3.5.0-r0"
+      "version": "3.5.2-r1"
     },
     {
       "arch": "x86_64",
@@ -1183,7 +1183,7 @@
     "openssh-client-default=10.2_p1-r1",
     "pcre2=10.49-r0",
     "postgresql18-client=18.6-r0",
-    "rsync=3.5.0-r0",
+    "rsync=3.5.2-r1",
     "sqlite=3.53.4-r0",
     "tiff=4.7.2-r0",
     "tzdata=2026f-r0",

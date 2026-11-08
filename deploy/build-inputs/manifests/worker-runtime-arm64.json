@@ -484,11 +484,11 @@
     },
     {
       "arch": "aarch64",
-      "file": "glib-2.86.3-r0.apk",
+      "file": "glib-2.86.5-r0.apk",
       "name": "glib",
-      "sha256": "8b6f4681bf86f870b07e5752ef3e7d5feb1c8cfe84c7a9ee329155e5e9e3a13a",
-      "size": 1987897,
-      "version": "2.86.3-r0"
+      "sha256": "39bfc3bf9da7c0030238f0bc6201d36903ea7dda55ec6be9465115e200bd9074",
+      "size": 1988386,
+      "version": "2.86.5-r0"
     },
     {
       "arch": "aarch64",
@@ -3350,7 +3350,7 @@
     {
       "arch": "aarch64",
       "name": "glib",
-      "version": "2.86.3-r0"
+      "version": "2.86.5-r0"
     },
     {
       "arch": "aarch64",
