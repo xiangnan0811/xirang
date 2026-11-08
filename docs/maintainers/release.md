@@ -51,6 +51,8 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 旧 Updater metadata 和 Provider 解码便利包装的断言迁移／死码清理同样按 `test`／`refactor` 语义处理：保留当前签名包、receipt、类型化发布证据和持久格式，不把内部源码 API 清理写成新增 wire 或更新流程。没有运行行为变化时不强制发版／镜像，说明留在 `Unreleased`；仍须完成正常 hooks、同候选独审、required CI 及合并后的同 SHA CI／Release Please 核对。
 
+孤立 Handler 与旧 snapshot 列表执行器接口清理同样不强制制造正式版本或镜像：四路遗留读取仍为 410，节点远程执行路由仍未挂载，活 Restore、恢复错误处理和任务归档合同保持。没有公开 API、wire、配置或 schema migration 变化，不处置历史数据；说明留在 `Unreleased`，仍按同候选独审、正常 hooks、required CI 以及合并后同 SHA CI／Release Please 完成交付。
+
 Recent 内容访问修复的发布验收须覆盖同 grant 首个持久成功 GET、并发 Range 去重、失败不补录、owner 隔离及 clear/replay，并实际运行 required-PostgreSQL 库存中对应的三个 content 子路径。发布说明保留有限预览/Range 不代表整文件下载完成、有界尽力漏记和必需内容审计不降级的边界；新逻辑仅在新版 Core 后续成功请求生效，不回填历史，已有成功 GET 的 grant 不重新记录。无新增 API、配置或 schema migration，保全数据库、匹配密钥与配置，正常换版前排空旧 Core 在途内容请求；回退会恢复缺触发的问题，不删除已有 Recent 或解除既有迁移/恢复限制。真实本地 HTTP、双引擎与浏览器验收不代表 AWS live、生产升级或远端恢复。
 
 上述 Recent 修复与此前保留/删除安全回归、退役快照及未用代码清理的完整说明归档于 CHANGELOG `0.73.8` 版本节。该发行 PR 与正式 GitHub Release 正文须保留三部分全部行为、生效和升级边界，不将原 `Unreleased` 的已交付条目留在版本节之外。

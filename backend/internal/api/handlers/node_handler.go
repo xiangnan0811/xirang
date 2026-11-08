@@ -73,8 +73,6 @@ type nodeBatchDeleteRequest struct {
 	IDs []uint `json:"ids"`
 }
 
-const nodeExecDisabledCode = "XR-SEC-EXEC-DISABLED"
-
 // List godoc
 // @Summary      列出节点
 // @Description  返回所有节点列表，operator 仅返回自己负责的节点
@@ -377,10 +375,6 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	}
 
 	respondMessage(c, "deleted")
-}
-
-func (h *NodeHandler) Exec(c *gin.Context) {
-	respondForbiddenData(c, "节点远程执行能力已禁用", gin.H{"error_code": nodeExecDisabledCode})
 }
 
 // TestConnection godoc

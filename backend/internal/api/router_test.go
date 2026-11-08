@@ -338,7 +338,7 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	}
 }
 
-func TestRetiredServiceMonitoringRoutesReturnNotFound(t *testing.T) {
+func TestRetiredRoutesReturnNotFound(t *testing.T) {
 	router := NewRouter(Dependencies{})
 	for _, route := range []struct {
 		method string
@@ -350,6 +350,7 @@ func TestRetiredServiceMonitoringRoutesReturnNotFound(t *testing.T) {
 		{http.MethodPut, "/api/v1/service-monitors/1"},
 		{http.MethodDelete, "/api/v1/service-monitors/1"},
 		{http.MethodGet, "/api/v1/status-page"},
+		{http.MethodPost, "/api/v1/nodes/1/exec"},
 	} {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(route.method, route.path, nil))

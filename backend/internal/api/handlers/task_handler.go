@@ -39,7 +39,6 @@ type TaskHandler struct {
 	db               *gorm.DB
 	runner           TaskRunner
 	svc              *task.TaskApiService
-	archive          *task.ArchiveService
 	jwtManager       *auth.JWTManager
 	rsyncVersioning  TaskRsyncVersioningService
 	rcloneVersioning TaskRcloneVersioningService
@@ -67,16 +66,7 @@ func (h *TaskHandler) service() *task.TaskApiService {
 	return task.NewTaskApiService(taskRepo, nodeRepo, policyRepo, h.runner).WithArchiveService(h.archiveService())
 }
 
-// WithArchiveService injects the Task archive/unlink owner used by HTTP delete.
-func (h *TaskHandler) WithArchiveService(archive *task.ArchiveService) *TaskHandler {
-	h.archive = archive
-	return h
-}
-
 func (h *TaskHandler) archiveService() *task.ArchiveService {
-	if h.archive != nil {
-		return h.archive
-	}
 	return task.NewArchiveService(task.ArchiveDependencies{
 		DB: h.db,
 		RemoveSchedule: func(taskID uint) error {

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 孤立 Handler 与旧 snapshot 列表接口清理
+
+- 移除仅旧列表测试消费的 `filterCommittedResticSnapshots`、旧 Restic 列表／文件枚举执行器方法及专属类型；四路遗留 snapshot 读取继续返回 410，认证与 ownership 保持，活 Restore 的 FeatureLive、lineage、完整 ID 和会话关闭保护保留。后台 snapshot diff 与备份资产 Provider 读取／发布不变。
+- 移除生产路由未挂载的 `NodeHandler.Exec` 及专属常量、未使用的 `BackupRecoveryHandler.Unavailable`、`TaskHandler.WithArchiveService` 及孤立注入分支；节点远程执行接口仍不可达，真实恢复入口的不可用／错误脱敏、HTTP 任务归档与不同接收者 `TaskApiService.WithArchiveService` 保留。
+- 本次为 `refactor`／`test` 清理，无新增公开 API、wire、配置或 schema migration，不改写历史数据；不单独制造正式版本或镜像，既有迁移、密钥、备份保全及降级限制保持。
+
 ### 测试迁移与未用解码包装清理
 
 - 将旧 Updater metadata 的适用拒绝与隐私断言迁到真实签名 inbox 生成的注册 receipt，覆盖完整有效载荷上的未知／重复字段、版本及身份／摘要／时间异常；移除没有生产消费者的 `DecodeUpdaterMetadataV1`、旧 DTO／validator 与直接孤立依赖。数据库 metadata、签名离线导入、注册和原子激活流程保持。
