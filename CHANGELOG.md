@@ -27,6 +27,13 @@
 - 移除零生产调用的 `DecodeResticAttemptV1`、`DecodeRsyncTreeCommitV1`，将有效断言落在活 tagged 分派、Rsync attempt decoder 与实际 Rsync 发布策略；保留生产 decoder、validator、类型、认证 marker 和 Restic typed 身份／tag 保护。不为旧 Restic wire 往返或精确 JSON 字节承诺创造新生产消费者。
 - 本次仅测试迁移和死码收敛，无新增公开 API、wire 格式、运行时配置或 schema migration，不改写历史数据。按 `test`／`refactor` 语义交付，不为此单独制造正式版本或镜像；既有迁移、密钥、备份保全及降级限制保持。
 
+## [0.73.16](https://github.com/xiangnan0811/xirang/compare/v0.73.15...v0.73.16) (2026-11-08)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** patch rsync inputs and restore pinned CI lint ([#697](https://github.com/xiangnan0811/xirang/issues/697)) ([3764bc6](https://github.com/xiangnan0811/xirang/commit/3764bc67cef4e2b4c7f74f2f0d2ad3ce6d332944))
+
 ## [0.73.15](https://github.com/xiangnan0811/xirang/compare/v0.73.14...v0.73.15) (2026-11-07)
 
 
