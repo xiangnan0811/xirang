@@ -1,10 +1,6 @@
 package processing
 
-import (
-	"time"
-
-	"xirang/backend/internal/backupasset"
-)
+import "time"
 
 type BackfillPolicy struct {
 	Paused                bool
@@ -15,48 +11,6 @@ type BackfillPolicy struct {
 	CapabilityConcurrency int
 	RecentWindow          time.Duration
 	HistoryAgingStep      time.Duration
-}
-
-type BackfillScoreInput struct {
-	Latest     bool
-	CapturedAt time.Time
-	QueuedAt   time.Time
-}
-
-func ScoreBackfill(input BackfillScoreInput, now time.Time, policy BackfillPolicy) int {
-	if now.Location() != time.UTC || input.CapturedAt.Location() != time.UTC || input.QueuedAt.Location() != time.UTC ||
-		input.CapturedAt.After(now) || input.QueuedAt.After(now) || policy.RecentWindow <= 0 || policy.HistoryAgingStep <= 0 {
-		return 0
-	}
-	captureAge := now.Sub(input.CapturedAt)
-	if input.Latest {
-		penalty := int(captureAge / (24 * time.Hour))
-		if penalty > 100 {
-			penalty = 100
-		}
-		return 1000 - penalty
-	}
-	if captureAge <= policy.RecentWindow {
-		penalty := int(captureAge * 299 / policy.RecentWindow)
-		if penalty > 299 {
-			penalty = 299
-		}
-		return 699 - penalty
-	}
-	historyAge := captureAge - policy.RecentWindow
-	penalty := int(historyAge / (24 * time.Hour))
-	if penalty > 299 {
-		penalty = 299
-	}
-	score := 300 - penalty
-	score += int(now.Sub(input.QueuedAt) / policy.HistoryAgingStep)
-	if score > 399 {
-		return 399
-	}
-	if score < 1 {
-		return 1
-	}
-	return score
 }
 
 type BackfillUsage struct {
@@ -127,49 +81,4 @@ func validBackfillPolicy(policy BackfillPolicy) bool {
 	return policy.BatchSize > 0 && policy.BatchSize <= 10000 && policy.JobsPerHour > 0 && policy.BytesPerHour > 0 &&
 		policy.ProviderConcurrency > 0 && policy.CapabilityConcurrency > 0 && policy.RecentWindow > 0 &&
 		policy.HistoryAgingStep > 0
-}
-
-type DerivedReuseIdentity struct {
-	Ref                    backupasset.AssetRef
-	CatalogGenerationID    string
-	SourceFingerprint      string
-	EntryFingerprint       string
-	FingerprintStrength    string
-	Capability             string
-	CapabilitySchema       string
-	PipelineFingerprint    string
-	OutputProfile          string
-	SecurityPolicyRevision string
-	ParametersDigest       string
-}
-
-func CanReuseDerived(existing, requested DerivedReuseIdentity) bool {
-	if !validDerivedReuseIdentity(existing) || !validDerivedReuseIdentity(requested) ||
-		existing.SourceFingerprint != requested.SourceFingerprint || existing.EntryFingerprint != requested.EntryFingerprint ||
-		existing.FingerprintStrength != requested.FingerprintStrength || existing.Capability != requested.Capability ||
-		existing.CapabilitySchema != requested.CapabilitySchema || existing.PipelineFingerprint != requested.PipelineFingerprint ||
-		existing.OutputProfile != requested.OutputProfile || existing.SecurityPolicyRevision != requested.SecurityPolicyRevision ||
-		existing.ParametersDigest != requested.ParametersDigest {
-		return false
-	}
-	if existing.FingerprintStrength == "strong" {
-		return true
-	}
-	return existing.Ref == requested.Ref && existing.CatalogGenerationID == requested.CatalogGenerationID
-}
-
-func validDerivedReuseIdentity(value DerivedReuseIdentity) bool {
-	if backupasset.ValidateAssetRef(value.Ref) != nil || backupasset.ValidateOpaqueID(value.CatalogGenerationID) != nil ||
-		(value.FingerprintStrength != "strong" && value.FingerprintStrength != "weak" && value.FingerprintStrength != "none") {
-		return false
-	}
-	for _, field := range []string{
-		value.SourceFingerprint, value.EntryFingerprint, value.Capability, value.CapabilitySchema,
-		value.PipelineFingerprint, value.OutputProfile, value.SecurityPolicyRevision, value.ParametersDigest,
-	} {
-		if field == "" || len(field) > 128 {
-			return false
-		}
-	}
-	return true
 }

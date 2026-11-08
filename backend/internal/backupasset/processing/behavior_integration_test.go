@@ -121,6 +121,18 @@ func runProcessingBehaviorContract(t *testing.T, open func(*testing.T) processin
 		}
 	})
 
+	t.Run("PersistentPrioritySelection", func(t *testing.T) {
+		processingBehaviorPrioritySelection(t, open(t))
+	})
+
+	t.Run("BackgroundCannotUseReservedSlots", func(t *testing.T) {
+		processingBehaviorBackgroundRestriction(t, open(t))
+	})
+
+	t.Run("InteractiveBorrowsBackgroundSlots", func(t *testing.T) {
+		processingBehaviorInteractiveBorrowing(t, open(t))
+	})
+
 	t.Run("DualLeaseTakeoverAndOneUseActivation", func(t *testing.T) {
 		fixture := open(t)
 		work := processingBehaviorRequestWork(t, fixture, "lease-takeover")
@@ -623,4 +635,87 @@ func (prepared *processingBehaviorPreparedRevoke) RevokeTx(_ context.Context, tx
 		return projection.onRevoke(tx, prepared.request)
 	}
 	return nil
+}
+
+func processingBehaviorQueueRequest(t *testing.T, fixture processingBehaviorFixture, quality int, owner string, class PriorityClass, priority int) WorkResult {
+	t.Helper()
+	descriptor := validWorkDescriptor()
+	descriptor.Parameters.Quality = quality
+	result, err := fixture.coordinator.RequestWork(context.Background(), WorkRequest{
+		Descriptor: descriptor,
+		Interest:   InterestRequest{OwnerKind: InterestWorkspace, OwnerKey: owner, PriorityClass: class, Priority: priority},
+	})
+	if err != nil {
+		t.Fatalf("%s RequestWork(%s): %v", fixture.engine, owner, err)
+	}
+	return result
+}
+
+func processingBehaviorPull(t *testing.T, fixture processingBehaviorFixture, jobID string, slot SlotClass) {
+	t.Helper()
+	leased, err := fixture.coordinator.PullAttempt(context.Background(), PullRequest{WorkerID: fixture.workerID}, fixture.grants)
+	if err != nil || leased.Lease.JobID != jobID || leased.Lease.SlotClass != slot {
+		t.Fatalf("%s pull: got job=%s slot=%s err=%v; want job=%s slot=%s", fixture.engine, leased.Lease.JobID, leased.Lease.SlotClass, err, jobID, slot)
+	}
+}
+
+func processingBehaviorPrioritySelection(t *testing.T, fixture processingBehaviorFixture) {
+	t.Helper()
+	high := processingBehaviorQueueRequest(t, fixture, 81, "high-background", PriorityBackground, 900)
+	tied := processingBehaviorQueueRequest(t, fixture, 82, "tied-background", PriorityBackground, 500)
+	coalesced := processingBehaviorQueueRequest(t, fixture, 83, "coalesced-background", PriorityBackground, 1000)
+	lowInteractive := processingBehaviorQueueRequest(t, fixture, 83, "interactive-low", PriorityInteractive, 300)
+	highInteractive := processingBehaviorQueueRequest(t, fixture, 83, "interactive-high", PriorityInteractive, 500)
+	if coalesced.JobID != lowInteractive.JobID || coalesced.JobID != highInteractive.JobID ||
+		coalesced.InterestID == lowInteractive.InterestID || lowInteractive.InterestID == highInteractive.InterestID || coalesced.InterestID == highInteractive.InterestID {
+		t.Fatalf("%s interests did not coalesce independently: %+v %+v %+v", fixture.engine, coalesced, lowInteractive, highInteractive)
+	}
+	var job model.BackupAssetProcessingJob
+	if err := fixture.db.First(&job, "id = ?", coalesced.JobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if job.PriorityClass != string(PriorityInteractive) || job.EffectivePriority != 500 {
+		t.Fatalf("%s persisted effective priority: class=%s priority=%d", fixture.engine, job.PriorityClass, job.EffectivePriority)
+	}
+	var interests int64
+	if err := fixture.db.Model(&model.BackupAssetProcessingInterest{}).Where("job_id = ? AND active = ?", coalesced.JobID, true).Count(&interests).Error; err != nil || interests != 3 {
+		t.Fatalf("%s active interests=%d err=%v", fixture.engine, interests, err)
+	}
+	processingBehaviorPull(t, fixture, high.JobID, SlotBackground)
+	processingBehaviorPull(t, fixture, coalesced.JobID, SlotInteractive)
+	processingBehaviorPull(t, fixture, tied.JobID, SlotBackground)
+}
+
+func processingBehaviorBackgroundRestriction(t *testing.T, fixture processingBehaviorFixture) {
+	t.Helper()
+	first := processingBehaviorQueueRequest(t, fixture, 81, "background-first", PriorityBackground, 900)
+	second := processingBehaviorQueueRequest(t, fixture, 82, "background-second", PriorityBackground, 800)
+	waiting := processingBehaviorQueueRequest(t, fixture, 83, "background-waiting", PriorityBackground, 700)
+	interactive := processingBehaviorQueueRequest(t, fixture, 84, "interactive-reserved", PriorityInteractive, 600)
+	processingBehaviorPull(t, fixture, first.JobID, SlotBackground)
+	processingBehaviorPull(t, fixture, second.JobID, SlotBackground)
+	processingBehaviorPull(t, fixture, interactive.JobID, SlotInteractive)
+	if _, err := fixture.coordinator.PullAttempt(context.Background(), PullRequest{WorkerID: fixture.workerID}, fixture.grants); !errors.Is(err, ErrNoWork) {
+		t.Fatalf("%s background used a reserved slot: err=%v", fixture.engine, err)
+	}
+	var job model.BackupAssetProcessingJob
+	if err := fixture.db.First(&job, "id = ?", waiting.JobID).Error; err != nil || job.State != string(ProcessingQueued) {
+		t.Fatalf("%s waiting background job=%+v err=%v", fixture.engine, job, err)
+	}
+}
+
+func processingBehaviorInteractiveBorrowing(t *testing.T, fixture processingBehaviorFixture) {
+	t.Helper()
+	first := processingBehaviorQueueRequest(t, fixture, 81, "interactive-first", PriorityInteractive, 900)
+	second := processingBehaviorQueueRequest(t, fixture, 82, "interactive-second", PriorityInteractive, 800)
+	third := processingBehaviorQueueRequest(t, fixture, 83, "interactive-borrow", PriorityInteractive, 700)
+	background := processingBehaviorQueueRequest(t, fixture, 84, "background-after-borrow", PriorityBackground, 600)
+	waiting := processingBehaviorQueueRequest(t, fixture, 85, "background-after-capacity", PriorityBackground, 500)
+	processingBehaviorPull(t, fixture, first.JobID, SlotInteractive)
+	processingBehaviorPull(t, fixture, second.JobID, SlotInteractive)
+	processingBehaviorPull(t, fixture, third.JobID, SlotBackgroundBorrowed)
+	processingBehaviorPull(t, fixture, background.JobID, SlotBackground)
+	if _, err := fixture.coordinator.PullAttempt(context.Background(), PullRequest{WorkerID: fixture.workerID}, fixture.grants); !errors.Is(err, ErrNoWork) {
+		t.Fatalf("%s pull beyond capacity for %s: %v", fixture.engine, waiting.JobID, err)
+	}
 }

@@ -1354,7 +1354,10 @@
         {
           "name": "TestProcessingBehaviorPostgres",
           "required_paths": [
-            "TestProcessingBehaviorPostgres"
+            "TestProcessingBehaviorPostgres",
+            "TestProcessingBehaviorPostgres/PersistentPrioritySelection",
+            "TestProcessingBehaviorPostgres/BackgroundCannotUseReservedSlots",
+            "TestProcessingBehaviorPostgres/InteractiveBorrowsBackgroundSlots"
           ]
         },
         {

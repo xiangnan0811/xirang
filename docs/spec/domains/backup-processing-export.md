@@ -57,6 +57,7 @@ Updater 的注册 wire 是签名离线包经过 inbox 验证后生成的 `InboxR
 ## 队列、租约与原子发布
 
 - 配对 `000067_backup_asset_processing` 用相同 closed `ProcessingState`，独立 transition revision、stable error、retry/cancel/supersede/expiry 产品。partial unique 保证每 canonical work_key 一个 current job、每 job 一个 current attempt、每 owner tuple 一个 active interest；并发请求由 DB 合并，不以进程 mutex 作为唯一性契约。
+- canonical work key 绑定精确 point／entry／Catalog generation、来源与条目 fingerprint、Provider revision、capability/schema、pipeline、output profile、security policy 和完整输出参数。同 key 的并发请求共用作业、各自保留 interest；已完成产物另按精确来源及当前 profile／pipeline／policy 查询，不因 strong fingerprint 相同就跨恢复点跳过处理。DerivedStore 按输出 digest、size、cipher format 和 chunk size 实现存储层 blob 去重，发布仍要求独立的来源 reference，授权、读取与撤销不能跨来源串用。当前真实 Sink 将命中的 blob ID 写入 upload 的唯一 `staging_id` 时，第二次相同输出上传会与旧 upload 冲突；SQLite／PostgreSQL 均已复现，尚未修复。存储层去重和预置引用的读取／撤销保护不能当作真实 Sink 跨点双发布成功的证明。
 - Worker pull 同时拥有短 Worker lease 和 `processing_job` RecoveryPoint lease。heartbeat 在同事务续 attempt、RP lease、live grants。takeover 建新 attempt/fence，旧 heartbeat/grant/upload/projection/manifest 永久失效。
 - activation secret 仅 hash 持久化且一次性；Input/Sink request count、bytes、in-flight reservation 双引擎事务约束。最后一个 interest 删除先 revoke 两 grants 再 cancel_requested；仍有其他 interest 保持共享 job。
 - Input activation 响应使用 schema v2，携带服务端实际准入的 `max_bytes_per_request`；Worker 要求正值并取其与本地上限的较小者。其余协议 DTO 保持 v1。严格解码拒绝新旧 activation 混用，Core/Worker 必须同次配套切换，没有旧协议回退。
@@ -87,6 +88,8 @@ Updater 的注册 wire 是签名离线包经过 inbox 验证后生成的 `InboxR
 
 ## 有界 backfill 与管理 UI
 
+- Runtime 收集按 Catalog `entry_id` keyset 遍历，每次最多 100 个 descriptor（另受配置批次及准入约束），以 system-owned background interest、数值 priority `100` 经真实 `RequestWork` 入队。共享 job 的 active interest 先选择 interactive class，再取该 class 的最大 priority；不同 job 的 pull 先按数值 priority 降序，数值相同时 interactive 优先，再按排队时间及 ID。background 只用后台槽位，interactive 先用保留交互槽位，再借后台槽位；槽位占用由该 Worker 的持久 current active attempts 计算。
+- Backfill `usage` 在每次 descriptor 收集时新建，并按本次接受的 descriptor 累计 jobs／bytes／Provider／capability 计数。它不构成跨请求或跨进程的每小时配额账本，Provider／capability 计数也不是实际 Worker 活跃并发；跨调用的进程内 walk cursor／completeness 是另一类状态。配置中的 `RecentWindow`／`HistoryAgingStep` 仍被读取并参与 policy 有效性校验，当前队列未使用 latest／recent／history 评分或 aging 调度。历史“每小时／并发”配置描述与该统计作用域存在差异，不能据字段名称宣称相应保证已实现。
 - `ExpectedDescriptors` 不应用 `AdmitBackfill`，只有 leftover walk 真实走到 Catalog end 的 empty 才算 proven。InspectedLimit 默认 200/max1000，按 generation+point 内存 keyset cursor；本页预算耗尽且 0 descriptor 仍返回 unproven marker，Queue 不 enqueue marker。
 - 未证明单位为 `(entry_id,capability)` 而非整行。walk fingerprint 包含排序 capability 名和 SecretClassify；failed/canceled revision（count、latest updated_at、id）变化清 complete。completeness 绑定 walk-start revision，不能漏掉 cursor 后方并发 cancel。
 - 管理面 scan/rebuild 每次点击最多 8 页，保存 scanCursorByRepository/rebuildCursorByRepository，以 Continue 继续；不无限 drain cursor。API/面板保持 lazy，不能进入 startup chunk 破坏既有预算。
@@ -132,3 +135,5 @@ Updater 回归覆盖双向 socket/mount 隔离、精确 UID/GID/owner/mode、跨
 Export/成员门禁覆盖实际 Worker artifact、full canonical binding drift、HEAD/GET/chunk revalidation、cross-tuple contamination、forged fence、hash/cookie/session/proof、Range/budget/CAS/tamper、审计失败/幂等/restart、真实 SIGKILL recovery、revoke/drain、key loss/rotation、purge failure 与 store charge、stop sweep 公平性。执行 `TestExportBehaviorPostgres` 时设置 `REQUIRE_POSTGRES_EXPORT_TEST=1`，与其他破坏性 DB fixture 串行。
 
 backfill 覆盖 media-inapplicable 首页、sibling capability、admission denied 仍 expected、SecretClassify/failed/canceled/中途 cancel 重开；前端第八页仍 cursor 必停并可 Continue。volume 变更执行 Compose checker/self-test、`ASSET_WORKER_STATIC_ONLY=1 scripts/test-asset-worker.sh`，Compose 行为变更加 `scripts/test-core-compose.sh`。
+
+后台队列回归应连到实际 RequestWork／interest／PullAttempt／Worker slot，并明确单次收集累计与跨请求统计的区别。复用回归分别验证同 key 并发共用、精确已完成 publication 查询、存储层 blob 去重及来源独立引用；两点共用输出 blob 不代表跨点省略处理。当前第二次相同输出的真实 Sink 上传冲突须作为未解决缺口保留，不能用预置 source-local reference 的通过结果替代。受控 source／projection 回调不外推远端 Provider 或 parser 验收。
