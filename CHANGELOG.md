@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.16](https://github.com/xiangnan0811/xirang/compare/v0.73.15...v0.73.16) (2026-11-08)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** patch rsync inputs and restore pinned CI lint ([#697](https://github.com/xiangnan0811/xirang/issues/697)) ([3764bc6](https://github.com/xiangnan0811/xirang/commit/3764bc67cef4e2b4c7f74f2f0d2ad3ce6d332944))
+
 ### Core Rsync 安全更新及 Worker 输入同步
 
 - 将 Core 镜像内的 `rsync` 从 `3.5.0-r0` 更新为 Alpine 3.23 的 `3.5.2-r1`，修复镜像扫描识别的高危 `CVE-2026-119741`（构造校验和触发的 delta transfer 拒绝服务；扫描修复门槛为 `3.5.2-r0`，采用软件源当前后续修订 `r1`）。构建输入须经原生双架构采集、可信 APK 验签、禁网重放和锁定采用，最终镜像继续执行同等漏洞扫描与运行验收。
