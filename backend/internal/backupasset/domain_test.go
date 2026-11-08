@@ -101,37 +101,6 @@ func TestImmutableRecoveryPointTransitions(t *testing.T) {
 	}
 }
 
-func TestMutableHeadLifecyclePreservesStableID(t *testing.T) {
-	now := time.Date(2026, 7, 13, 1, 2, 3, 0, time.UTC)
-	head := MutableHead{
-		ID:                strings.Repeat("a", 32),
-		RepositoryID:      strings.Repeat("b", 32),
-		State:             RecoveryPointObserved,
-		SourceFingerprint: "first",
-		ObservedAt:        now.Add(-time.Hour),
-		Availability:      PhysicalOnline,
-	}
-
-	updated, err := ApplyMutableObservation(head, MutableObservation{
-		SourceFingerprint: "second",
-		ObservedAt:        now,
-		Availability:      PhysicalOnline,
-		CatalogGeneration: strings.Repeat("c", 32),
-	})
-	if err != nil {
-		t.Fatalf("apply mutable observation: %v", err)
-	}
-	if updated.ID != head.ID {
-		t.Fatalf("mutable-head ID changed: got %q want %q", updated.ID, head.ID)
-	}
-	if updated.SourceFingerprint != "second" || !updated.ObservedAt.Equal(now) {
-		t.Fatalf("observation was not refreshed: %+v", updated)
-	}
-	if head.SourceFingerprint != "first" {
-		t.Fatal("input mutable head was mutated in place")
-	}
-}
-
 func TestMutableHeadRetirementAndPhysicalPurgeAreDistinct(t *testing.T) {
 	now := time.Date(2026, 7, 13, 1, 2, 3, 0, time.UTC)
 	base := validMutableProfile()
@@ -317,19 +286,9 @@ func TestLifecycleClosedEnumsAndValidators(t *testing.T) {
 			t.Fatalf("valid retention scope %q rejected: %v", scope, err)
 		}
 	}
-	for _, status := range []RetentionPolicyStatus{RetentionPolicyActive, RetentionPolicyDeleted} {
-		if err := ValidateRetentionPolicyStatus(status); err != nil {
-			t.Fatalf("valid retention policy status %q rejected: %v", status, err)
-		}
-	}
 	for _, holdType := range []RecoveryPointHoldType{RecoveryPointHoldOperational, RecoveryPointHoldLegal} {
 		if err := ValidateRecoveryPointHoldType(holdType); err != nil {
 			t.Fatalf("valid hold type %q rejected: %v", holdType, err)
-		}
-	}
-	for _, state := range []HoldState{HoldActive, HoldReleased} {
-		if err := ValidateRecoveryPointHoldRecordState(state); err != nil {
-			t.Fatalf("valid recovery point hold record state %q rejected: %v", state, err)
 		}
 	}
 	for _, operation := range []LifecycleOperation{LifecycleRetentionExpire, LifecycleExplicitPurge, LifecycleMutableRetire} {
@@ -348,24 +307,9 @@ func TestLifecycleClosedEnumsAndValidators(t *testing.T) {
 			t.Fatalf("valid lifecycle blocked reason %q rejected: %v", reason, err)
 		}
 	}
-	for _, phase := range []LifecyclePhase{
-		LifecyclePhaseSelected, LifecyclePhaseRevoking, LifecyclePhaseDraining, LifecyclePhaseCleaning,
-		LifecyclePhaseProviderDelete, LifecyclePhaseTombstoning, LifecyclePhaseBlocked, LifecyclePhaseComplete,
-	} {
-		if err := ValidateLifecyclePhase(phase); err != nil {
-			t.Fatalf("valid lifecycle phase %q rejected: %v", phase, err)
-		}
-	}
 	for _, state := range []ImportReviewState{ImportReviewPending, ImportReviewAccepted, ImportReviewRejected} {
 		if err := ValidateImportReviewState(state); err != nil {
 			t.Fatalf("valid import review state %q rejected: %v", state, err)
-		}
-	}
-	for _, status := range []PurgePlanStatus{
-		PurgePlanReady, PurgePlanBound, PurgePlanExecuting, PurgePlanConsumed, PurgePlanInvalidated,
-	} {
-		if err := ValidatePurgePlanStatus(status); err != nil {
-			t.Fatalf("valid purge plan status %q rejected: %v", status, err)
 		}
 	}
 	for _, kind := range []ImportCandidateKind{
@@ -375,13 +319,6 @@ func TestLifecycleClosedEnumsAndValidators(t *testing.T) {
 			t.Fatalf("valid import kind %q rejected: %v", kind, err)
 		}
 	}
-	for _, kind := range []ConfigImportEntityKind{
-		ConfigImportRepository, ConfigImportTaskLink, ConfigImportRetentionPolicy, ConfigImportHold,
-	} {
-		if err := ValidateConfigImportEntityKind(kind); err != nil {
-			t.Fatalf("valid config import kind %q rejected: %v", kind, err)
-		}
-	}
 
 	invalidCases := []struct {
 		name string
@@ -389,17 +326,11 @@ func TestLifecycleClosedEnumsAndValidators(t *testing.T) {
 	}{
 		{name: "scope", err: ValidateRetentionPolicyScope("future", strings.Repeat("a", 32))},
 		{name: "scope id", err: ValidateRetentionPolicyScope(RetentionPolicyScopeRepository, "7")},
-		{name: "policy status", err: ValidateRetentionPolicyStatus("future")},
 		{name: "hold", err: ValidateRecoveryPointHoldType("future")},
-		{name: "hold none", err: ValidateRecoveryPointHoldRecordState(HoldNone)},
-		{name: "hold state", err: ValidateRecoveryPointHoldRecordState("future")},
 		{name: "operation", err: ValidateLifecycleOperation("future")},
-		{name: "phase", err: ValidateLifecyclePhase("future")},
 		{name: "blocked reason", err: ValidateLifecycleBlockedReason("future")},
 		{name: "import", err: ValidateImportCandidateKind("future")},
 		{name: "import review", err: ValidateImportReviewState("future")},
-		{name: "purge plan", err: ValidatePurgePlanStatus("future")},
-		{name: "config", err: ValidateConfigImportEntityKind("future")},
 	}
 	for _, testCase := range invalidCases {
 		if !errors.Is(testCase.err, ErrInvalidState) {
@@ -427,36 +358,6 @@ func TestAssetRefRequiresRecoveryPointAndEntry(t *testing.T) {
 	}
 }
 
-func TestCommandCapabilityRequiresArtifactContract(t *testing.T) {
-	withoutContract := CapabilitiesForTask(TaskArtifactContract{Provider: ProviderCommand})
-	if withoutContract.List || withoutContract.Download || withoutContract.Restore {
-		t.Fatalf("command task without artifact contract gained capabilities: %+v", withoutContract)
-	}
-	if withoutContract.Reason == nil || withoutContract.Reason.Code != CapabilityTaskArtifactContractMissing {
-		t.Fatalf("missing stable capability reason: %+v", withoutContract.Reason)
-	}
-
-	withContract := CapabilitiesForTask(TaskArtifactContract{
-		Provider:            ProviderCommand,
-		HasArtifactContract: true,
-		PublicationMode:     PublicationVersionedFullCopy,
-	})
-	if !withContract.List || !withContract.OpenSequential || !withContract.Download || !withContract.Restore {
-		t.Fatalf("explicit command artifact contract was not honored: %+v", withContract)
-	}
-}
-
-func TestUnknownProviderCapabilityDoesNotEchoRawProviderValue(t *testing.T) {
-	rawProvider := ProviderKind("s3://private-bucket/customer-path")
-	capabilities := CapabilitiesForTask(TaskArtifactContract{Provider: rawProvider})
-	if capabilities.Reason == nil || capabilities.Reason.Code != CapabilityProviderUnavailable {
-		t.Fatalf("unknown provider did not fail closed: %+v", capabilities)
-	}
-	if len(capabilities.Reason.Params) != 0 {
-		t.Fatalf("unknown provider value leaked into capability params: %+v", capabilities.Reason.Params)
-	}
-}
-
 func TestProviderCapabilityReasonCodesAreValidated(t *testing.T) {
 	codes := []CapabilityCode{
 		CapabilityRepositoryIdentityUnavailable,
@@ -467,19 +368,6 @@ func TestProviderCapabilityReasonCodesAreValidated(t *testing.T) {
 	for _, code := range codes {
 		if err := ValidateCapabilityReason(CapabilityReason{Code: code}); err != nil {
 			t.Fatalf("code %q rejected: %v", code, err)
-		}
-	}
-}
-
-func TestTaskCapabilitiesDoNotClaimUnprovenRange(t *testing.T) {
-	contracts := []TaskArtifactContract{
-		{Provider: ProviderRestic},
-		{Provider: ProviderRsync, PublicationMode: PublicationLegacyMutable},
-		{Provider: ProviderRclone, PublicationMode: PublicationLegacyMutable},
-	}
-	for _, contract := range contracts {
-		if capabilities := CapabilitiesForTask(contract); capabilities.OpenRange {
-			t.Fatalf("provider %q claimed unproven range capability: %+v", contract.Provider, capabilities)
 		}
 	}
 }

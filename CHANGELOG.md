@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 孤立状态校验与能力、观测投影清理
+
+- 移除没有生产消费者的五个状态／分类 validator，以及 `CapabilitiesForTask`、`ApplyMutableObservation` 和专属类型／集合；保留活生命周期、导入、安全原因校验及真实服务、Provider 准入、能力快照与 mutable-head 观测流程。
+- 有效断言对齐现行保留／hold／purge 事务、SQLite/PostgreSQL 闭合值域、真实 Task 能力准入及 mutable-head 持久化／公开返回；不为旧 Command artifact 正向分支新增能力，也不把有证明的 Range 支持改为一律禁用。
+- 本次仅 `test`／`refactor`，无新增公开 API、wire、配置或 schema migration，不改写已发布迁移或历史数据；不单独制造正式版本或镜像，既有密钥、备份保全及降级限制保持。
+
 ### 孤立 Handler 与旧 snapshot 列表接口清理
 
 - 移除仅旧列表测试消费的 `filterCommittedResticSnapshots`、旧 Restic 列表／文件枚举执行器方法及专属类型；四路遗留 snapshot 读取继续返回 410，认证与 ownership 保持，活 Restore 的 FeatureLive、lineage、完整 ID 和会话关闭保护保留。后台 snapshot diff 与备份资产 Provider 读取／发布不变。

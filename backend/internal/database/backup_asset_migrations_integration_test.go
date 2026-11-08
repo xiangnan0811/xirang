@@ -6035,6 +6035,108 @@ func (fixture migrationFixture) assertLifecycleClosedConstraints(t *testing.T, d
 		 encrypted_evidence, review_state, reviewed_by, reviewed_at, accepted_recovery_point_id, created_at, updated_at)
 		VALUES (?, ?, 'native_snapshot', ?, 'enc:v2:locator', 'enc:v2:evidence', 'accepted', ?, ?, NULL, ?, ?)`,
 		recoveryMigrationOpaqueID(701005), seed.RepositoryID, recoveryMigrationDigest(701005), seed.UserID, seed.Now, seed.Now, seed.Now)
+	fixture.assertLifecycleValueDomains(t, db, seed)
+}
+
+func (fixture migrationFixture) assertLifecycleValueDomains(t *testing.T, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	seedLifecycleAttempt(t, fixture, db, seed)
+	seedLifecyclePurgePlan(t, fixture, db, seed)
+	seedLifecycleConfigImportRef(t, fixture, db, seed)
+
+	// Rollback controls exercise the same writes without inventing persisted transitions.
+	accept := func(query string, args ...any) {
+		t.Helper()
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("begin %s value-domain control: %v", fixture.engine, err)
+		}
+		result, execErr := tx.Exec(fixture.bind(query), args...)
+		if execErr == nil {
+			var affected int64
+			affected, execErr = result.RowsAffected()
+			if execErr == nil && affected != 1 {
+				execErr = fmt.Errorf("affected %d rows, want 1", affected)
+			}
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback %s value-domain control: %v", fixture.engine, err)
+		}
+		if execErr != nil {
+			t.Fatalf("%s valid value-domain control failed: %v", fixture.engine, execErr)
+		}
+	}
+	rejectUnchanged := func(query, selectQuery, want string, id string, args ...any) {
+		t.Helper()
+		fixture.expectExecRejected(t, db, query, args...)
+		var got string
+		if err := db.QueryRow(fixture.bind(selectQuery), id).Scan(&got); err != nil {
+			t.Fatalf("read %s value after rejected write: %v", fixture.engine, err)
+		}
+		if got != want {
+			t.Fatalf("%s rejected write changed value: got %q, want %q", fixture.engine, got, want)
+		}
+	}
+
+	policyID := recoveryMigrationOpaqueID(700001)
+	policyUpdate := `UPDATE backup_retention_policies SET status = ?, deleted_at = ? WHERE id = ?`
+	accept(policyUpdate, "active", nil, policyID)
+	accept(policyUpdate, "deleted", seed.Now, policyID)
+	rejectUnchanged(policyUpdate, `SELECT status FROM backup_retention_policies WHERE id = ?`, "active", policyID, "future", nil, policyID)
+
+	// INSERT avoids the one-way UPDATE trigger, while the valid control proves the
+	// new ID, point, user and active-hold uniqueness are usable.
+	holdID := recoveryMigrationOpaqueID(701006)
+	holdInsert := `INSERT INTO recovery_point_holds
+		(id, recovery_point_id, hold_type, state, encrypted_reason, created_by, encrypted_release_reason, created_at, updated_at)
+		VALUES (?, ?, 'operational', ?, 'enc:v2:reason', ?, '', ?, ?)`
+	accept(holdInsert, holdID, seed.PointID, "active", seed.UserID, seed.Now, seed.Now)
+	for _, state := range []string{"none", "future"} {
+		rejectUnchanged(holdInsert, `SELECT state FROM recovery_point_holds WHERE id = ?`, "released", recoveryMigrationOpaqueID(700002), holdID, seed.PointID, state, seed.UserID, seed.Now, seed.Now)
+		var count int
+		if err := db.QueryRow(fixture.bind(`SELECT COUNT(*) FROM recovery_point_holds WHERE id = ?`), holdID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("%s rejected hold %q left %d rows: %v", fixture.engine, state, count, err)
+		}
+	}
+
+	attemptID := recoveryMigrationOpaqueID(700003)
+	phaseUpdate := `UPDATE recovery_point_lifecycle_attempts SET phase = ?, blocked_reason = ?, completed_at = ? WHERE id = ?`
+	for _, phase := range []string{"selected", "revoking", "draining", "cleaning", "provider_delete", "tombstoning", "blocked", "complete"} {
+		blockedReason := ""
+		var completedAt any
+		if phase == "blocked" {
+			blockedReason = "active_hold"
+		}
+		if phase == "complete" {
+			completedAt = seed.Now
+		}
+		accept(phaseUpdate, phase, blockedReason, completedAt, attemptID)
+	}
+	rejectUnchanged(phaseUpdate, `SELECT phase FROM recovery_point_lifecycle_attempts WHERE id = ?`, "selected", attemptID, "future", "", nil, attemptID)
+
+	planID := recoveryMigrationOpaqueID(700006)
+	planUpdate := `UPDATE backup_asset_purge_plans SET status = ?, execute_actor_id = ?, execute_proof_digest = ?,
+		execute_reason_digest = ?, execute_bound_at = ?, consumed_at = ? WHERE id = ?`
+	for _, status := range []string{"ready", "bound", "executing", "consumed", "invalidated"} {
+		var actor, boundAt, consumedAt any
+		proof, reason := "", ""
+		if status == "bound" || status == "executing" || status == "consumed" {
+			actor, boundAt = seed.UserID, seed.Now
+			proof, reason = recoveryMigrationDigest(700011), recoveryMigrationDigest(700012)
+		}
+		if status == "consumed" {
+			consumedAt = seed.Now
+		}
+		accept(planUpdate, status, actor, proof, reason, boundAt, consumedAt, planID)
+	}
+	rejectUnchanged(planUpdate, `SELECT status FROM backup_asset_purge_plans WHERE id = ?`, "ready", planID, "future", nil, "", "", nil, nil, planID)
+
+	refID := recoveryMigrationOpaqueID(700008)
+	refUpdate := `UPDATE backup_asset_config_import_refs SET entity_kind = ? WHERE id = ?`
+	for _, kind := range []string{"repository", "task_link", "retention_policy", "hold"} {
+		accept(refUpdate, kind, refID)
+	}
+	rejectUnchanged(refUpdate, `SELECT entity_kind FROM backup_asset_config_import_refs WHERE id = ?`, "repository", refID, "future", refID)
 }
 
 type migrationFixture struct {

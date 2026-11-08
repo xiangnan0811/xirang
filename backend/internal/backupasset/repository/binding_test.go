@@ -47,6 +47,17 @@ func TestBindingMapsSupportedTasksAndRejectsCommand(t *testing.T) {
 	if _, _, err := bindingFromTask(model.Task{ID: 1, NodeID: 2, ExecutorType: "command"}, model.Node{ID: 2}, salt); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
 		t.Fatalf("command binding error=%v", err)
 	}
+	const privateExecutor = "private-executor-token-canary"
+	document, access, err := bindingFromTask(model.Task{ID: 1, NodeID: 2, ExecutorType: privateExecutor}, model.Node{ID: 2}, salt)
+	if !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("unknown executor binding error=%v", err)
+	}
+	if strings.Contains(err.Error(), privateExecutor) {
+		t.Fatal("unknown executor binding error leaked the executor value")
+	}
+	if !reflect.DeepEqual(document, bindingDocument{}) || !reflect.DeepEqual(access, provider.AccessBinding{}) {
+		t.Fatal("unknown executor returned a nonempty binding")
+	}
 }
 
 func TestBindingRejectsRemoteRsyncTargetAsUnsupported(t *testing.T) {
