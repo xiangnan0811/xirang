@@ -192,6 +192,12 @@ cron job 使用本地同一隔离入口，PG18与工具容器每次独占，不�
 Core双架构原生job保留静态及mutation检查，并运行locked Nginx live probe；资源清理失败
 也使job失败。各入口与证据边界见[测试约定](../spec/guides/testing.md)。
 
+Core Compose 自测的 APK 绕过检查须完整消费经注释过滤的 Dockerfile：`pipefail` 下
+`grep -q` 在命中后提前退出可能令上游 `sed` 收到 SIGPIPE，使已命中的检查误判为未命中。
+使用输出丢弃的非 quiet `grep -E` 保留匹配规则；大文件 exec-form APK mutation 以
+逐行输出的 `sed` 覆盖该场景。此项仅改变测试，无 API、配置、schema 或运行时变化，
+不因此单独发行新版本。
+
 更新工作流 action 时：
 
 - GitHub 官方和第三方 action 均固定完整 commit SHA，并保留版本 tag 旁注。

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 测试
+
+- 修复 Core Compose 自测中 APK 绕过检查在 `pipefail` 下因 `grep -q` 提前退出、上游 `sed` 收到 SIGPIPE 而漏判的问题；保留原匹配规则并增加大文件 exec-form APK 回归。仅改变测试，无 API、配置、schema 或运行时变化，不因此单独发行新版本。
+
 ## [0.73.16](https://github.com/xiangnan0811/xirang/compare/v0.73.15...v0.73.16) (2026-11-08)
 
 

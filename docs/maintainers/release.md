@@ -61,6 +61,8 @@ Core 的 `rsync 3.5.0-r0` → `3.5.2-r1` 是实际运行依赖安全更新，修
 
 上述 Core Rsync 安全更新、Worker 输入同步与 CI 安装调整，以及孤立状态／能力／观测投影、Handler／旧 snapshot 列表接口、测试迁移／未用解码包装三组清理的完整四部分审阅说明，已归档于 CHANGELOG `0.73.16` 版本节；发行 PR 与正式 GitHub Release 正文须完整保留全部四部分及其升级、排空、回退和历史数据保护边界，纯清理不单独制造版本。
 
+Core Compose 自测的 APK 检查完整消费输入、避免 `pipefail`／SIGPIPE 假阴性的修复仅属测试，说明留在 `Unreleased`，不因此单独制造运行版本。已发布 tag 保持不可变；后续测试修复提交与原发行源码的 CI／镜像证据分别记录，不能用新主线 CI 替代原发行 SHA 的完整准入，也不能将一次恢复成功写成此前从未失败。
+
 Recent 内容访问修复的发布验收须覆盖同 grant 首个持久成功 GET、并发 Range 去重、失败不补录、owner 隔离及 clear/replay，并实际运行 required-PostgreSQL 库存中对应的三个 content 子路径。发布说明保留有限预览/Range 不代表整文件下载完成、有界尽力漏记和必需内容审计不降级的边界；新逻辑仅在新版 Core 后续成功请求生效，不回填历史，已有成功 GET 的 grant 不重新记录。无新增 API、配置或 schema migration，保全数据库、匹配密钥与配置，正常换版前排空旧 Core 在途内容请求；回退会恢复缺触发的问题，不删除已有 Recent 或解除既有迁移/恢复限制。真实本地 HTTP、双引擎与浏览器验收不代表 AWS live、生产升级或远端恢复。
 
 上述 Recent 修复与此前保留/删除安全回归、退役快照及未用代码清理的完整说明归档于 CHANGELOG `0.73.8` 版本节。该发行 PR 与正式 GitHub Release 正文须保留三部分全部行为、生效和升级边界，不将原 `Unreleased` 的已交付条目留在版本节之外。

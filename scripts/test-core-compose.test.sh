@@ -88,7 +88,7 @@ awk '
   END { exit invalid || installs != 3 ? 1 : 0 }
 ' "$DOCKERFILE" || fail "Core offline APK installation does not bind the target architecture"
 if sed '/^[[:space:]]*#/d' "$DOCKERFILE" |
-  grep -Eq '(^|[^[:alnum:]_.-])apk(\.static)?([^[:alnum:]_./-]|$)'; then
+  grep -E '(^|[^[:alnum:]_.-])apk(\.static)?([^[:alnum:]_./-]|$)' >/dev/null; then
   fail "all-in-one Dockerfile bypasses its closed offline APK inputs"
 fi
 
@@ -96,9 +96,12 @@ assert_runtime_pin_mutation_rejected() {
   local fixture_name=$1
   local expression=$2
   local failure_message=$3
+  local padded=${4:-0}
   local mutation_root="$TMP_DIR/$fixture_name"
   local mutation_test="$mutation_root/scripts/test-core-compose.test.sh"
   local mutation_log="$TMP_DIR/$fixture_name.log"
+  local child_path=$PATH
+  local real_sed=""
 
   mkdir -p "$mutation_root/scripts" "$mutation_root/deploy/allinone" "$mutation_root/deploy/build-inputs"
   cp "$0" "$mutation_test"
@@ -107,8 +110,26 @@ assert_runtime_pin_mutation_rejected() {
   cp "$BUILD_INPUTS_LOCK" "$mutation_root/deploy/build-inputs/lock.json"
   sed "$expression" "$DOCKERFILE" \
     >"$mutation_root/deploy/allinone/Dockerfile"
-  if CORE_COMPOSE_RUNTIME_PIN_MUTATION_CHILD=1 bash "$mutation_test" >"$mutation_log" 2>&1; then
+  if [[ "$padded" == "1" ]]; then
+    # Keep enough valid Dockerfile whitespace after the match to fill a pipe.
+    awk 'BEGIN { for (i = 0; i < 131072; i++) printf "%80s\n", "" }' \
+      >>"$mutation_root/deploy/allinone/Dockerfile"
+    real_sed=$(command -v sed)
+    mkdir -p "$mutation_root/bin"
+    cat >"$mutation_root/bin/sed" <<'SED'
+#!/usr/bin/env bash
+exec "$CORE_COMPOSE_REAL_SED" -u "$@"
+SED
+    chmod +x "$mutation_root/bin/sed"
+    child_path="$mutation_root/bin:$PATH"
+  fi
+  if CORE_COMPOSE_RUNTIME_PIN_MUTATION_CHILD=1 CORE_COMPOSE_REAL_SED="$real_sed" \
+    PATH="$child_path" bash "$mutation_test" >"$mutation_log" 2>&1; then
     fail "$failure_message"
+  fi
+  if [[ "$padded" == "1" ]] &&
+    ! grep -Fxq -- 'core Compose smoke self-test: all-in-one Dockerfile bypasses its closed offline APK inputs' "$mutation_log"; then
+    fail "padded APK mutation failed without the bypass guard"
   fi
 }
 
@@ -160,7 +181,7 @@ if [[ "${CORE_COMPOSE_RUNTIME_PIN_MUTATION_CHILD:-0}" != "1" ]]; then
   assert_runtime_pin_mutation_rejected \
     exec-form-apk-fallback \
     '/^FROM .* AS web-builder$/a\RUN ["/sbin/apk", "--no-cache", "add", "curl"]' \
-    "runtime package guard accepted an exec-form APK command"
+    "runtime package guard accepted an exec-form APK command" 1
 fi
 
 DOCKER_LOG="$TMP_DIR/docker.log"
