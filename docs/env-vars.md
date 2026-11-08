@@ -21,6 +21,7 @@
 - Core/Worker 的 `musl-dev=1.2.6-r3` 是 CGO 构建阶段锁定，不提供运行时环境变量覆盖；须重建配套镜像，并按新 inventory 更新闭包及签名制品，不代表运行镜像 libc 版本发生相同变化。
 - Worker 工具链 v3 还绑定已归档的两架构 CGO 与 Worker runtime 内容摘要；投影编译进程序，不由配置注入。首次接入及相关输入变化须更新同源 Core/Worker、最终闭包与签名运行包；Core 专属依赖变化不改变 Worker 投影。
 - Worker 的 `python3=3.12.16-r0` 安全补丁由构建输入、Dockerfile 与生产 inventory 固定，没有 `.env` 或 Settings 覆盖项。替换四个 Python 子包的完整输入事务会改变工具链指纹，须配套重建 Core/Worker、闭包和签名制品；仅修改配置或重启旧镜像不会修补旧 Python。详见[Worker Python 依赖维护](maintainers/automation.md#worker-python-传递依赖安全更新)。
+- Core 镜像内 `rsync=3.5.2-r1` 修复 `CVE-2026-119741`，须重建并替换镜像后生效；`RSYNC_BINARY` 仍只选择可执行文件路径，不会安装安全补丁或升级外部节点。该次完整输入采集同时更新 Worker 传递 `glib=2.86.5-r0`，完整 APK 投影随程序编译并推进工具链指纹，不能由 `.env` 或 Settings 替换；须同源重建 Core／Worker 与配套闭包、签名包，详见[实际输入同步](maintainers/automation.md#core-rsync-安全更新与-worker-传递输入同步)。
 
 任务流量与执行记录的保留期限在每轮实际清理开始时按 DB → 环境变量 → 注册默认值读取一次，整轮固定 cutoff；成功清理的一小时节流不变，设置保存不打断正在运行的轮次，从下一轮生效。查询失败、非整数、负数、溢出或超出注册范围时跳过删除，不回退到更短窗口；`0` 禁用清理。Settings API 的正数范围不变；扩大窗口只保护尚未删除的数据，不恢复已删除历史。
 

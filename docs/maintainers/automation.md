@@ -406,3 +406,9 @@ Worker 输入内容变化后，Core 与启用的 Worker 均须同源重建，并
 ### Alpine 构建与运行输入 musl、OpenSSH、zlib 安全更新
 
 针对 Trivy 扫描识别的 Alpine 基础镜像与运行依赖漏洞（`musl`／`musl-utils` CVE-2026-107891、`openssh-client-default`／`openssh-client-common`／`openssh-keygen` CVE-2026-119709、`zlib` CVE-2026-22184／CVE-2026-27171／CVE-2026-85091），在保持四类基础镜像固定 digest 不变的前提下，将受影响的基础镜像预装包提升为显式 root pin 并通过原生双架构采集更新构建输入锁：Alpine 3.24 构建阶段（`cgo-builder`、`supercronic-builder`）显式锁定 `musl=1.2.6-r3`、`musl-utils=1.2.6-r3`、`zlib=1.4-r0`；Alpine 3.23 运行阶段（`core-runtime`、`worker-runtime`）显式锁定 `musl=1.2.5-r24`、`musl-utils=1.2.5-r24`、`zlib=1.4-r0`，Core 显式更新 `openssh-client-default=10.2_p1-r1` 与软件源已移除旧版本的 `tzdata=2026f-r0`，Worker 显式更新软件源已移除旧版本的 `font-noto=2026.11.01-r0`（同步 `fonts` 组件 revision 为 `noto-2026.11.01+noto-cjk-20220127`）。生产工具链 inventory 按 `Runtime` 角色区分 `cgo-builder`（Alpine 3.24）与 `worker-runtime`（Alpine 3.23）中的同名显式包（`musl`、`musl-utils`、`zlib`），拒绝同一角色内的重复声明。更新推进了 Worker 工具链与 pipeline 指纹，须验证 candidate lock 的 workflow provenance attestation，排空旧在途处理后同源重建 Core／Worker 并重新生成双架构最终闭包、签名 bundle 与 proof；无新增配置或数据库迁移，回退旧镜像及配套制品会恢复上述已知漏洞风险。
+
+### Core Rsync 安全更新与 Worker 传递输入同步
+
+Core `rsync` 显式 root 从 `3.5.0-r0` 更新为 Alpine 3.23 的 `3.5.2-r1`，修复 Trivy 报告的 `CVE-2026-119741`；扫描修复门槛 `3.5.2-r0` 与当前两架构可采集的后续修订 `r1` 分别记录。采用同一成功原生采集 run 的 lock、八份 manifest 与 Worker 投影，并核对 exact source SHA／指定 workflow 的 provenance，不手填 digest。
+
+该次全事务重新解析使 Worker 两架构的传递 `glib` 从 `2.86.3-r0` 更新为 `2.86.5-r0`，其他包、基础镜像、安装器及可信密钥保持。显式 root 列表未变，glib 的完整 APK 字节和安装版本由生成的 `production_apk_inputs.json` 对应 manifest 身份覆盖；不为了复制传递版本而新增 root 或手工指纹。真实 Worker 输入变化会推进 toolchain／pipeline 指纹，须同源重建 Core／Worker、重新生成双架构最终闭包及签名配套制品，不能把 Core 起因概括成 Worker 不变。升级和回退边界见发布手册。

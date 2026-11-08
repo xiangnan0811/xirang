@@ -55,6 +55,8 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 孤立状态 validator、Task 能力便利投影与 mutable-head 内存投影的清理按 `test`／`refactor` 交付：现行服务转换、双引擎约束、Provider 准入／能力快照、真实观测持久化与公开 DTO 承担对应合同，不为旧测试新增 Command artifact 能力、Range 限制或观测流程。没有运行行为、公开 API、wire、配置或 schema migration 变化时不强制发版／镜像，说明留在 `Unreleased`；仍须完成同候选独审、正常 hooks、required CI 以及合并后同 SHA CI／Release Please 核对，不改写历史迁移或数据。
 
+Core 的 `rsync 3.5.0-r0` → `3.5.2-r1` 是实际运行依赖安全更新，修复 Trivy 报告的 `CVE-2026-119741`（修复门槛 `3.5.2-r0`，官方两架构当前后续修订为 `r1`），须按 `fix` 完成正常发行，不能套用纯清理无需版本的判断。发布说明保留原生双架构输入采集／验签／禁网重放及最终镜像扫描边界；更新须重新构建并替换 Core，先保全数据库、匹配密钥、配置和备份副本并排空旧 Core 在途任务。输入锁变更不修复已启动旧进程或外部节点，回退旧镜像恢复已知漏洞；无新增 API、配置或 schema migration，既有降级限制不变。同次完整采集实际带来 Worker 传递 `glib 2.86.3-r0` → `2.86.5-r0`，必须同步生成的完整 APK 投影并推进 toolchain／pipeline 指纹，Core／Worker 同源重建、重新取得双架构 runtime closure、attestations、签名 bundle 和 proof，先排空旧 Worker 在途处理再配套切换及回退。该传递变化不等同另一个已证实的漏洞修复；既有显式 root inventory 不新增 glib，完整输入身份由真实 manifest 投影承担。
+
 Recent 内容访问修复的发布验收须覆盖同 grant 首个持久成功 GET、并发 Range 去重、失败不补录、owner 隔离及 clear/replay，并实际运行 required-PostgreSQL 库存中对应的三个 content 子路径。发布说明保留有限预览/Range 不代表整文件下载完成、有界尽力漏记和必需内容审计不降级的边界；新逻辑仅在新版 Core 后续成功请求生效，不回填历史，已有成功 GET 的 grant 不重新记录。无新增 API、配置或 schema migration，保全数据库、匹配密钥与配置，正常换版前排空旧 Core 在途内容请求；回退会恢复缺触发的问题，不删除已有 Recent 或解除既有迁移/恢复限制。真实本地 HTTP、双引擎与浏览器验收不代表 AWS live、生产升级或远端恢复。
 
 上述 Recent 修复与此前保留/删除安全回归、退役快照及未用代码清理的完整说明归档于 CHANGELOG `0.73.8` 版本节。该发行 PR 与正式 GitHub Release 正文须保留三部分全部行为、生效和升级边界，不将原 `Unreleased` 的已交付条目留在版本节之外。

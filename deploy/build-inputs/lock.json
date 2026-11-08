@@ -61,16 +61,16 @@
           "compressed_apk_bytes": 73012771,
           "manifest_sha256": "8905cbbeab6e5f5e55bef6dfe906962d56b746ae133cb4456b0c1f687c185b31",
           "package_count": 17,
-          "ref": "docker.io/linnea7171/xirang@sha256:f492a1c29044994a4ae0b60bf5cb4e12c556c304c72cbd0868bbe1729b560712"
+          "ref": "docker.io/linnea7171/xirang@sha256:801c71e103d81f4b9104a1cf6536a1b9f4e0ac11a25a3f71ecceccadde6e4be0"
         },
         "linux/arm64": {
           "compressed_apk_bytes": 64028299,
           "manifest_sha256": "973f4f4690cd73a3c7c498f4cd79325bf40ffdba0f2598e026dcf212fae32dbe",
           "package_count": 17,
-          "ref": "docker.io/linnea7171/xirang@sha256:f6aaf6cb254d891b630e3ddac90bf60ba9dbc5902ce6f0c27082e791b2fc4f50"
+          "ref": "docker.io/linnea7171/xirang@sha256:120220b66da51f666c1a7941c8a5d5d4b26b4bdeabd3c3b5fb0522cf17b243ea"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:82f17fab454a20e6f04cc31de74a31fb309f7b9d4a8b25c6a72e72cac588db68",
+      "ref": "docker.io/linnea7171/xirang@sha256:8c463d956e6ed08b95238549e0ab66d155ed0ba33225ee6580d6bf8fe301b620",
       "roots": [
         "gcc=15.2.0-r5",
         "musl-dev=1.2.6-r3",
@@ -83,19 +83,19 @@
       "base": "nginx",
       "platforms": {
         "linux/amd64": {
-          "compressed_apk_bytes": 11573709,
-          "manifest_sha256": "3711f07320cb5844b60440ce239f977b797a16019a150f0a8912a136b91994f2",
+          "compressed_apk_bytes": 11581375,
+          "manifest_sha256": "eaab74343b79f6ca14cf3b6bb49706607314efb8d738b81e79ea365a7512d0c5",
           "package_count": 40,
-          "ref": "docker.io/linnea7171/xirang@sha256:97058f4a21a568f19858c276aa6233452f01f6d1d6656ed376f3208485bcc56d"
+          "ref": "docker.io/linnea7171/xirang@sha256:fa541902c4bd2e6d8f9ff163d0fa3497f398cb43603d57e23b4cb6fca321d54f"
         },
         "linux/arm64": {
-          "compressed_apk_bytes": 12020585,
-          "manifest_sha256": "ea87565f7f1d46f227894672439fea5e503c072e4f6ff7184d36d9fa324086ec",
+          "compressed_apk_bytes": 12029063,
+          "manifest_sha256": "bf99ebe2f77e33ce57a3757066f30d211474a473627ed7755aefc4bc426ce604",
           "package_count": 40,
-          "ref": "docker.io/linnea7171/xirang@sha256:c5f18b473587d4e8032d78b9192a154592f468e2f31e385113bebfa23474a78d"
+          "ref": "docker.io/linnea7171/xirang@sha256:85e5c40e4ef342ed1e42b7dd0dab7f37065ce284ae7a21a10f866b4ee3ac8375"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:dae54da7d8d76074ad3f4dfcb699bdb40af363b8bdf0f71a14a1a4369608b19e",
+      "ref": "docker.io/linnea7171/xirang@sha256:b4da651fa21f99c420a495ffb481ac1bee667839d39f43811db9f2b419eb3004",
       "roots": [
         "bash=5.3.3-r1",
         "brotli-libs=1.2.1-r0",
@@ -113,7 +113,7 @@
         "openssh-client-default=10.2_p1-r1",
         "pcre2=10.49-r0",
         "postgresql18-client=18.6-r0",
-        "rsync=3.5.0-r0",
+        "rsync=3.5.2-r1",
         "sqlite=3.53.4-r0",
         "tiff=4.7.2-r0",
         "tzdata=2026f-r0",
@@ -128,16 +128,16 @@
           "compressed_apk_bytes": 6680105,
           "manifest_sha256": "8060b358823dc53dc3a1a0307be822f46932a301dd5121b2ced9a28b06c5c4b2",
           "package_count": 15,
-          "ref": "docker.io/linnea7171/xirang@sha256:0bdbdb91c5fddcc8886d89b20e9425f998ffafaaaa7321f300e921f074385a26"
+          "ref": "docker.io/linnea7171/xirang@sha256:a0f2d12542fcf3e89dc838c9f687e590879a77e29001a27aceb72d29d860c383"
         },
         "linux/arm64": {
           "compressed_apk_bytes": 6716307,
           "manifest_sha256": "add5e95080ca010d70dd9b8e33208d60d50fb1d302c22bddc0607195633d25fb",
           "package_count": 15,
-          "ref": "docker.io/linnea7171/xirang@sha256:e0279b9caed183e0dd32a7bb1630f87b9936e153cfa14ec64a3366ed23ee9ad0"
+          "ref": "docker.io/linnea7171/xirang@sha256:f8551a6c40f089d4597c294ff460e38a72b9092b16818171f3813ba8f0621c98"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:8c4d172f8b3db8586a6339094475cac51d31cbf29de26221f181dafc09a26786",
+      "ref": "docker.io/linnea7171/xirang@sha256:2b464787fb5bb9bcc1fa86a6f1f35b545715f2b125f7bee1807d3b5e8df5f997",
       "roots": [
         "git=2.54.0-r0",
         "musl-utils=1.2.6-r3",
@@ -149,19 +149,19 @@
       "base": "alpine",
       "platforms": {
         "linux/amd64": {
-          "compressed_apk_bytes": 574350966,
-          "manifest_sha256": "ada9621394c16492823541186fad7bc5543d20d18f3247b9994ff360c18f114a",
+          "compressed_apk_bytes": 574351455,
+          "manifest_sha256": "c6b4e12c5fb17946981d59e7f450d3d10cd74179f28e0d97331d3b6df37856c5",
           "package_count": 366,
-          "ref": "docker.io/linnea7171/xirang@sha256:a9e77c7521e0407b9fa2a38937ea9e3b8b16eb8fd50a6f27781d368cd3cd4469"
+          "ref": "docker.io/linnea7171/xirang@sha256:7d827dab71fd461b05483789b5da056ff643fedc2f334d3390130d8155f2bc8a"
         },
         "linux/arm64": {
-          "compressed_apk_bytes": 549070714,
-          "manifest_sha256": "20a166172f402eadff84d005f3f147c9697d06c325b7dffbb77b305d96edf6f3",
+          "compressed_apk_bytes": 549071203,
+          "manifest_sha256": "b4241bb2e0c454a3f9fc4f8ff69d7b9bfc31584780d6e175b68a06a28129c2cb",
           "package_count": 365,
-          "ref": "docker.io/linnea7171/xirang@sha256:5a5de8b775905654f455c8d1177ab02c33fc614f8083537a8511fae76e109e85"
+          "ref": "docker.io/linnea7171/xirang@sha256:b0bd01ee478a9d250c33ca1ff2530bee813e38e0d8de24739ff02b0ec7078aab"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:bc344da41bcd9b0fdfdd5374ccfadc1705546dfe9b880d2f6c9fd72a7e6cf472",
+      "ref": "docker.io/linnea7171/xirang@sha256:27474054d4f320d40af77f11105c26614a6cb6bcb34fdde717170f4607f9bba0",
       "roots": [
         "bash=5.3.3-r1",
         "clamav=1.4.4-r0",
@@ -189,5 +189,5 @@
   },
   "registry": "docker.io/linnea7171/xirang",
   "schema_version": 1,
-  "spec_sha256": "f40ed41f39c75e85d98605ecbc7d245a7943d989fadd379777e0658f49eb16f0"
+  "spec_sha256": "c6a412e4f16bf7c83d8af6eaccfa50a48d34ffe3a84ddba48cb917b4d9d0af88"
 }
