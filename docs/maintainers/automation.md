@@ -166,10 +166,13 @@ Chromium真实后端单独选择 `escalation-preview.spec.ts`；普通mock配置
 Firefox/WebKit下载项目不扩大。业务边界见
 [升级预演合同](../spec/domains/alerting-health.md#升级策略只读预演)。
 
-后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI action 与
-`scripts/lint-backend.sh` 同步更新。本地通过带版本的 `go run` 隔离工具依赖，
-以当前选中的 Go 工具链构建并运行，避免系统 Go 升级后继续加载由旧 Go 构建的 linter。
-该方式不改项目模块或全局安装；升级 linter 后执行配置校验、全仓库 lint 和本地完整门禁。
+后端 lint 固定 `golangci-lint v2.14.0`（支持 Go 1.27），CI 固定的 action 使用
+`install-mode: goinstall`，以当前 Go 工具链从源码安装该版本；本地
+`scripts/lint-backend.sh` 通过带版本的 `go run` 以当前选中的 Go 工具链构建并运行，
+两者同步更新。本地方式隔离工具依赖，不改项目模块或全局安装，也避免系统 Go 升级后继续
+加载由旧 Go 构建的 linter。CI 继续执行配置 schema 校验、后端全范围 lint 和失败门禁，
+保留 action 的缓存与注解处理；源码安装不依赖 GitHub Release 二进制资产，但仍依赖 Go
+模块获取渠道，不能保证 Go Proxy 始终可用。升级 linter 后执行配置校验、全仓库 lint 和本地完整门禁。
 
 浏览器 CI 将 mock 三浏览器矩阵与真实后端场景分开：默认配置排除
 `real-backend-smoke.spec.ts` 和 `lifecycle-p1.spec.ts`；真实配置的 `chromium`
