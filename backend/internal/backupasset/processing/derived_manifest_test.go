@@ -2231,7 +2231,11 @@ func pendingProjectionPostgresExpiry(t *testing.T, dsn string, final bool, deadl
 	}); err != nil {
 		t.Fatal(err)
 	}
-	defer f.db.Callback().Query().Remove(callback)
+	defer func() {
+		if err := f.db.Callback().Query().Remove(callback); err != nil {
+			t.Errorf("remove pending projection callback: %v", err)
+		}
+	}()
 	testCtx := context.WithValue(ctx, pendingProjectionLockContextKey{}, true)
 	done := make(chan error, 1)
 	go func() { _, err := sink.ReconcilePendingProjections(testCtx, 32); done <- err }()

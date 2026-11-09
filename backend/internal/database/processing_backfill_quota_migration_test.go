@@ -309,7 +309,7 @@ func testProcessingBackfillQuotaMigration(t *testing.T, f migrationFixture) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						defer rows.Close()
+						defer closeMigrationRows(t, rows)
 						var result []string
 						for rows.Next() {
 							var row string
@@ -568,7 +568,11 @@ func testBackfillQuotaDirectDownJobsFirst(t *testing.T, f migrationFixture) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close direct down connection: %v", err)
+		}
+	}()
 	result := make(chan error, 1)
 	go func() { _, err := conn.ExecContext(ctx, down); result <- err }()
 	quotaWaitBlocked(t, db, pid)

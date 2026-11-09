@@ -382,7 +382,11 @@ func TestDerivedReplayReinstallationPreservesInstalledInode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer oldFD.Close()
+	defer func() {
+		if err := oldFD.Close(); err != nil {
+			t.Errorf("close retained file: %v", err)
+		}
+	}()
 	retained := filepath.Join(h.root, "retained-test-link")
 	if err := os.Link(oldPath, retained); err != nil {
 		t.Fatal(err)
@@ -540,7 +544,11 @@ func TestDerivedReplayDestinationWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer oldFD.Close()
+	defer func() {
+		if err := oldFD.Close(); err != nil {
+			t.Errorf("close retained file: %v", err)
+		}
+	}()
 	before, err := os.ReadFile(link)
 	if err != nil {
 		t.Fatal(err)

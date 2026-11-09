@@ -27,6 +27,13 @@ const sharedRecoveryDatabase = "XIRANG_TEST_SHARED_RECOVERY_DATABASE"
 const sharedRecoveryEngine = "XIRANG_TEST_SHARED_RECOVERY_ENGINE"
 const sharedRecoveryRoot = "XIRANG_TEST_SHARED_RECOVERY_ROOT"
 
+func sharedRecoverySignal(t *testing.T, stage string) {
+	t.Helper()
+	if _, err := fmt.Fprintln(os.Stdout, stage); err != nil {
+		t.Fatalf("write recovery stage %s: %v", stage, err)
+	}
+}
+
 func TestProcessingSharedBlobRecoverySQLite(t *testing.T) {
 	sharedRecoveryContract(t, "sqlite", "")
 }
@@ -178,7 +185,7 @@ func sharedRecoveryChild(t *testing.T, phase, scenario string) {
 	if err != nil {
 		t.Fatal("open child database")
 	}
-	fmt.Fprintln(os.Stdout, "CHILD_OPEN")
+	sharedRecoverySignal(t, "CHILD_OPEN")
 	pool, err := db.DB()
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +224,7 @@ func sharedRecoveryChild(t *testing.T, phase, scenario string) {
 		t.Fatal(err)
 	}
 	runtime := sharedRecoveryRuntime{fixture: fixture, store: store, lifecycle: lifecycle, sink: sink}
-	fmt.Fprintln(os.Stdout, "CHILD_READY")
+	sharedRecoverySignal(t, "CHILD_READY")
 	if phase == "checkpoint" {
 		first := validWorkDescriptor()
 		second := first
@@ -225,7 +232,7 @@ func sharedRecoveryChild(t *testing.T, phase, scenario string) {
 		second.CatalogGenerationID = strings.Repeat("2", 32)
 		second.Source.EntryID = strings.Repeat("3", 64)
 		sharedRecoveryUpload(t, runtime, first, "recovery-published", true, nil)
-		fmt.Fprintln(os.Stdout, "PUBLISHED")
+		sharedRecoverySignal(t, "PUBLISHED")
 		sharedRecoveryUpload(t, runtime, second, "recovery-staged", false, nil)
 		var set model.BackupAssetDerivedArtifactSet
 		var artifact model.BackupAssetDerivedArtifact
@@ -246,7 +253,7 @@ func sharedRecoveryChild(t *testing.T, phase, scenario string) {
 		if upload.StagingID != blob.ID || blob.State != "active" || blob.RefCount != 1 {
 			t.Fatal("checkpoint lacks published and staged holders")
 		}
-		fmt.Fprintln(os.Stdout, "CHECKPOINT")
+		sharedRecoverySignal(t, "CHECKPOINT")
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		t.Fatal("checkpoint process was not killed")
 	}
@@ -254,7 +261,7 @@ func sharedRecoveryChild(t *testing.T, phase, scenario string) {
 		t.Fatal("invalid recovery phase")
 	}
 	sharedRecoveryRestart(t, runtime, scenario)
-	fmt.Fprintln(os.Stdout, "RESTART_OK")
+	sharedRecoverySignal(t, "RESTART_OK")
 }
 
 var sharedRecoveryPayload = []byte("shared-derived-output")
@@ -335,7 +342,7 @@ func sharedRecoveryRestart(t *testing.T, runtime sharedRecoveryRuntime, scenario
 		}
 	}
 	read(published, artifact)
-	fmt.Fprintln(os.Stdout, "REOPENED")
+	sharedRecoverySignal(t, "REOPENED")
 	f.clock.Advance(31 * time.Second)
 	reconciler, err := NewReconciler(f.coordinator, f.grants, f.clock.Now, ReconcilerConfig{BatchSize: 32})
 	if err != nil {
@@ -351,7 +358,7 @@ func sharedRecoveryRestart(t *testing.T, runtime sharedRecoveryRuntime, scenario
 	if err := f.db.First(&staged, "id = ?", staged.ID).Error; err != nil || staged.State != "orphaned" {
 		t.Fatal("expired upload was not orphaned")
 	}
-	fmt.Fprintln(os.Stdout, "EXPIRED")
+	sharedRecoverySignal(t, "EXPIRED")
 	f.clock.Advance(6 * time.Second)
 	if count, err := reconciler.PromoteRetries(ctx); err != nil || count != 1 {
 		t.Fatalf("promote=%d: %v", count, err)
@@ -378,7 +385,7 @@ func sharedRecoveryRestart(t *testing.T, runtime sharedRecoveryRuntime, scenario
 	}
 	read(published, artifact)
 	read(secondSet, secondArtifact)
-	fmt.Fprintln(os.Stdout, "REPUBLISHED")
+	sharedRecoverySignal(t, "REPUBLISHED")
 	var oldBlob model.BackupAssetDerivedBlob
 	if err := f.db.First(&oldBlob, "id = ?", artifact.BlobID).Error; err != nil {
 		t.Fatal(err)
@@ -407,7 +414,7 @@ func sharedRecoveryRestart(t *testing.T, runtime sharedRecoveryRuntime, scenario
 		t.Fatal("first revoke damaged surviving holder")
 	}
 	read(secondSet, secondArtifact)
-	fmt.Fprintln(os.Stdout, "FIRST_REVOKED")
+	sharedRecoverySignal(t, "FIRST_REVOKED")
 	var observed model.BackupAssetDerivedBlob
 	stagingPath := filepath.Join(runtime.store.config.Root, ".staging-"+strings.TrimSuffix(oldBlob.OpaqueLocator, ".xrd"))
 	if scenario == "StaleStagingRename" {
@@ -481,7 +488,7 @@ func sharedRecoveryRestart(t *testing.T, runtime sharedRecoveryRuntime, scenario
 	if err := f.db.First(&current, "id = ?", oldBlob.ID).Error; err != nil || current.State != "active" || current.OpaqueLocator == oldBlob.OpaqueLocator {
 		t.Fatal("reactivation failed")
 	}
-	fmt.Fprintln(os.Stdout, "GENERATION")
+	sharedRecoverySignal(t, "GENERATION")
 	derived, err := NewDerivedReconciler(runtime.store, runtime.lifecycle, 32)
 	if err != nil {
 		t.Fatal(err)

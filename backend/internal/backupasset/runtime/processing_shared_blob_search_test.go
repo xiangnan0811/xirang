@@ -322,10 +322,15 @@ func sharedSearchSamePoint(t *testing.T, f *sharedSearchFixture) {
 	f.assertSearch(t, a, true)
 	b := f.prepare(t, d2, "search-same-b")
 	fence := f.revokeFence(t, a)
-	defer f.lease.Release(context.Background(), fence.Fence)
+	defer func() {
+		if err := f.lease.Release(context.Background(), fence.Fence); err != nil &&
+			!errors.Is(err, backupasset.ErrLeaseFenceLost) && !errors.Is(err, backupasset.ErrLeaseDeadlineExceeded) {
+			t.Errorf("release revocation lease: %v", err)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if f.db.Dialector.Name() == "sqlite" {
+	if f.db.Name() == "sqlite" {
 		result, err = f.publish(ctx, b)
 		if err != nil {
 			t.Fatal(err)

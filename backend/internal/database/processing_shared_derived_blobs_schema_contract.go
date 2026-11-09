@@ -138,14 +138,12 @@ func processingSharedDerivedBlobsUniqueIndexes(db *sql.DB, dbType, table string,
 	for rows.Next() {
 		var index candidate
 		if err := rows.Scan(&index.name, &index.partial); err != nil {
-			rows.Close()
-			return false, err
+			return false, errors.Join(err, rows.Close())
 		}
 		indexes = append(indexes, index)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return false, err
+		return false, errors.Join(err, rows.Close())
 	}
 	if err := rows.Close(); err != nil {
 		return false, err

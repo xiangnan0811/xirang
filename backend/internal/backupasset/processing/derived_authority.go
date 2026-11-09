@@ -30,7 +30,7 @@ func derivedCleanupTransaction(ctx context.Context, db *gorm.DB, operation func(
 	var lastErr error
 	for attempt := range 20 {
 		var opts []*sql.TxOptions
-		if db.Dialector.Name() == "postgres" {
+		if db.Name() == "postgres" {
 			opts = append(opts, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 		}
 		err := db.WithContext(ctx).Transaction(operation, opts...)

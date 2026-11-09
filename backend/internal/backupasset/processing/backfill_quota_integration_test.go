@@ -199,7 +199,7 @@ func runProcessingBackfillQuota(t *testing.T, open func(*testing.T) processingBe
 		injectedWrite := errors.New("injected interest write failure")
 		if err := f.db.Callback().Create().Before("gorm:create").Register(callback, func(tx *gorm.DB) {
 			if tx.Statement.Table == "backup_asset_processing_interests" {
-				tx.AddError(injectedWrite)
+				_ = tx.AddError(injectedWrite)
 			}
 		}); err != nil {
 			t.Fatal(err)

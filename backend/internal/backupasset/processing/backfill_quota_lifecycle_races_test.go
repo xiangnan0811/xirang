@@ -354,7 +354,7 @@ func quotaAdmissionSetVersionRaces(t *testing.T, dsn string) {
 			}
 			var pid int
 			if err := tx.Session(&gorm.Session{NewDB: true}).Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
-				tx.AddError(err)
+				_ = tx.AddError(err)
 				return
 			}
 			var count struct {
@@ -363,18 +363,18 @@ func quotaAdmissionSetVersionRaces(t *testing.T, dsn string) {
 				Charged int64
 			}
 			if err := tx.Session(&gorm.Session{NewDB: true}).Raw("SELECT l.jobs_count AS jobs, l.bytes_count AS bytes, (SELECT count(*) FROM backup_asset_processing_jobs WHERE backfill_charged) AS charged FROM backup_asset_processing_backfill_ledger l WHERE l.id = 1").Scan(&count).Error; err != nil {
-				tx.AddError(err)
+				_ = tx.AddError(err)
 				return
 			}
 			if count.Jobs != 1 || count.Bytes != 32 || count.Charged != 1 {
-				tx.AddError(errors.New("uncommitted charge was not present at migration barrier"))
+				_ = tx.AddError(errors.New("uncommitted charge was not present at migration barrier"))
 				return
 			}
 			reached <- pid
 			select {
 			case <-release:
 			case <-tx.Statement.Context.Done():
-				tx.AddError(tx.Statement.Context.Err())
+				_ = tx.AddError(tx.Statement.Context.Err())
 			}
 		}); err != nil {
 			t.Fatal(err)
@@ -441,12 +441,24 @@ func quotaAdmissionSetVersionRaces(t *testing.T, dsn string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				t.Errorf("close downgrade barrier connection: %v", err)
+			}
+		}()
 		barrier, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer barrier.Rollback()
+		commitAttempted := false
+		defer func() {
+			if err := barrier.Rollback(); err != nil {
+				if errors.Is(err, sql.ErrTxDone) && (commitAttempted || ctx.Err() != nil) {
+					return
+				}
+				t.Errorf("rollback downgrade barrier: %v", err)
+			}
+		}()
 		var blocker int
 		if err := barrier.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&blocker); err != nil {
 			t.Fatal(err)
@@ -463,6 +475,7 @@ func quotaAdmissionSetVersionRaces(t *testing.T, dsn string) {
 			admitted <- err
 		}()
 		quotaWaitAnyPGBlocked(t, ctx, db, migrator)
+		commitAttempted = true
 		if err := barrier.Commit(); err != nil {
 			t.Fatal(err)
 		}

@@ -194,17 +194,16 @@ func validateProcessingBackfillQuotaSchema(db *sql.DB, dbType string) error {
 	if err != nil {
 		return errors.New("invalid_processing_backfill_ledger")
 	}
-	defer rows.Close()
 	for rows.Next() {
 		count++
 		if err := rows.Scan(&id, &window, &jobsCount, &bytesCount, &updated); err != nil {
-			return errors.New("invalid_processing_backfill_ledger")
+			return errors.Join(errors.New("invalid_processing_backfill_ledger"), rows.Close())
 		}
 	}
 	_, windowOffset := window.Zone()
 	_, updatedOffset := updated.Zone()
 	if rows.Err() != nil || count != 1 || id != 1 || jobsCount < 0 || bytesCount < 0 || window.IsZero() || updated.IsZero() || (dbType == "sqlite" && (windowOffset != 0 || updatedOffset != 0)) || window.UTC().Minute() != 0 || window.UTC().Second() != 0 || window.Nanosecond() != 0 {
-		return errors.New("invalid_processing_backfill_ledger")
+		return errors.Join(errors.New("invalid_processing_backfill_ledger"), rows.Close())
 	}
 	if err := rows.Close(); err != nil {
 		return errors.New("invalid_processing_backfill_ledger")

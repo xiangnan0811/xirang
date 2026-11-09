@@ -225,7 +225,7 @@ func quotaHeartbeatWorkerOrdering(t *testing.T, open func(*testing.T) processing
 		secondOnce.Do(func() {
 			var pid int
 			if err := tx.Session(&gorm.Session{NewDB: true}).Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
-				tx.AddError(err)
+				_ = tx.AddError(err)
 				return
 			}
 			secondQuery <- pid
@@ -244,14 +244,14 @@ func quotaHeartbeatWorkerOrdering(t *testing.T, open func(*testing.T) processing
 		firstOnce.Do(func() {
 			var pid int
 			if err := tx.Session(&gorm.Session{NewDB: true}).Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
-				tx.AddError(err)
+				_ = tx.AddError(err)
 				return
 			}
 			firstLocked <- pid
 			select {
 			case <-release:
 			case <-ctx.Done():
-				tx.AddError(ctx.Err())
+				_ = tx.AddError(ctx.Err())
 			}
 		})
 	}); err != nil {

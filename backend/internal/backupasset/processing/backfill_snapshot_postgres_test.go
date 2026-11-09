@@ -65,7 +65,11 @@ func TestProcessingBackfillSnapshotDirectDownPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				t.Errorf("close snapshot-first connection: %v", err)
+			}
+		}()
 		var downPID int
 		if err := conn.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&downPID); err != nil {
 			t.Fatal(err)
@@ -107,7 +111,11 @@ func TestProcessingBackfillSnapshotDirectDownPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				t.Errorf("close direct-down connection: %v", err)
+			}
+		}()
 		var downPID int
 		if err := conn.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&downPID); err != nil {
 			t.Fatal(err)
@@ -116,7 +124,15 @@ func TestProcessingBackfillSnapshotDirectDownPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer tx.Rollback()
+		commitAttempted := false
+		defer func() {
+			if err := tx.Rollback(); err != nil {
+				if errors.Is(err, sql.ErrTxDone) && (commitAttempted || ctx.Err() != nil) {
+					return
+				}
+				t.Errorf("rollback direct-down transaction: %v", err)
+			}
+		}()
 		if _, err := tx.ExecContext(ctx, "LOCK TABLE backup_asset_processing_jobs IN ACCESS EXCLUSIVE MODE"); err != nil {
 			t.Fatal(err)
 		}
@@ -126,6 +142,7 @@ func TestProcessingBackfillSnapshotDirectDownPostgres(t *testing.T) {
 		if _, err := tx.ExecContext(ctx, quotaDownBody(t)); err != nil {
 			t.Fatalf("direct down: %v", err)
 		}
+		commitAttempted = true
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +168,11 @@ func TestProcessingBackfillSnapshotDirectDownPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				t.Errorf("close used-guard connection: %v", err)
+			}
+		}()
 		if _, err := conn.ExecContext(ctx, quotaDownSQL(t)); err == nil {
 			t.Fatal("used direct down succeeded")
 		}
@@ -178,7 +199,11 @@ func TestProcessingBackfillSnapshotDirectDownPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				t.Errorf("close missing-seed connection: %v", err)
+			}
+		}()
 		if _, err := conn.ExecContext(ctx, quotaDownSQL(t)); err == nil {
 			t.Fatal("direct down accepted missing seed")
 		}
@@ -192,7 +217,14 @@ func TestProcessingBackfillSnapshotDirectDownPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer tx.Rollback()
+		defer func() {
+			if err := tx.Rollback(); err != nil {
+				if errors.Is(err, sql.ErrTxDone) && ctx.Err() != nil {
+					return
+				}
+				t.Errorf("rollback missing-seed lock check: %v", err)
+			}
+		}()
 		if _, err := tx.ExecContext(ctx, "LOCK TABLE backup_asset_processing_jobs IN ACCESS EXCLUSIVE MODE"); err != nil {
 			t.Fatalf("snapshot leaked jobs lock: %v", err)
 		}

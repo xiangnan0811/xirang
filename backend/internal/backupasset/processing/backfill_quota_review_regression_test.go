@@ -72,7 +72,7 @@ func quotaRejectedCandidate(t *testing.T, open func(*testing.T) processingBehavi
 				const callback = "test:quota-review-candidate-error"
 				if err := f.db.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
 					if tx.Statement.Context.Value(quotaReviewContextKey{}) == "db-error" && processingCallbackTable(tx) == "recovery_points" {
-						tx.AddError(injected)
+						_ = tx.AddError(injected)
 					}
 				}); err != nil {
 					t.Fatal(err)
@@ -140,14 +140,14 @@ func TestProcessingBackfillHeartbeatQuotaPostgres(t *testing.T) {
 				once.Do(func() {
 					var pid int
 					if err := tx.Session(&gorm.Session{NewDB: true}).Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
-						tx.AddError(err)
+						_ = tx.AddError(err)
 						return
 					}
 					reached <- pid
 					select {
 					case <-release:
 					case <-ctx.Done():
-						tx.AddError(ctx.Err())
+						_ = tx.AddError(ctx.Err())
 					}
 				})
 			}); err != nil {
@@ -294,29 +294,29 @@ func quotaReviewHeartbeatOrdering(t *testing.T, dsn, scenario, bucket string) {
 			barrierOnce.Do(func() {
 				var pid int
 				if err := tx.Session(&gorm.Session{NewDB: true}).Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
-					tx.AddError(err)
+					_ = tx.AddError(err)
 					return
 				}
 				if pid <= 0 {
-					tx.AddError(fmt.Errorf("invalid heartbeat backend PID: %d", pid))
+					_ = tx.AddError(fmt.Errorf("invalid heartbeat backend PID: %d", pid))
 					return
 				}
 				var renewed int64
 				proof := `SELECT count(*) FROM backup_asset_processing_attempts a JOIN recovery_point_leases l ON l.id = a.recovery_point_lease_id JOIN backup_asset_processing_grants g ON g.attempt_id = a.id WHERE a.id = ? AND g.id = ? AND a.worker_lease_expires_at > ? AND l.lease_expires_at > ? AND g.expires_at > ?`
 				if err := tx.Session(&gorm.Session{NewDB: true}).Raw(proof, oldAttempt.ID, oldGrant.ID, oldAttempt.WorkerLeaseExpiresAt, oldLease.LeaseExpiresAt, oldGrant.ExpiresAt).Scan(&renewed).Error; err != nil {
-					tx.AddError(err)
+					_ = tx.AddError(err)
 					return
 				}
 				if renewed != 1 {
-					tx.AddError(fmt.Errorf("uncommitted renewed authority count=%d", renewed))
+					_ = tx.AddError(fmt.Errorf("uncommitted renewed authority count=%d", renewed))
 					return
 				}
 				reached <- pid
 				select {
 				case <-release:
-					tx.AddError(forcedRollback)
+					_ = tx.AddError(forcedRollback)
 				case <-ctx.Done():
-					tx.AddError(ctx.Err())
+					_ = tx.AddError(ctx.Err())
 				}
 			})
 		}); err != nil {
@@ -480,7 +480,7 @@ func quotaReviewWatchLedger(t *testing.T, db *gorm.DB, label string) <-chan int 
 		once.Do(func() {
 			var pid int
 			if err := tx.Session(&gorm.Session{NewDB: true}).Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
-				tx.AddError(err)
+				_ = tx.AddError(err)
 				return
 			}
 			reached <- pid
@@ -513,22 +513,22 @@ func quotaReviewLastSlotPostgres(t *testing.T, f processingBehaviorFixture, work
 			}
 			query := `SELECT pg_backend_pid() AS pid, (SELECT count(*) FROM backup_asset_processing_attempts WHERE is_current = true) AS attempts, (SELECT count(*) FROM backup_asset_processing_grants) AS grants`
 			if err := tx.Session(&gorm.Session{NewDB: true}).Raw(query).Scan(&proof).Error; err != nil {
-				tx.AddError(err)
+				_ = tx.AddError(err)
 				return
 			}
 			if proof.PID <= 0 {
-				tx.AddError(fmt.Errorf("invalid grant barrier backend PID: %d", proof.PID))
+				_ = tx.AddError(fmt.Errorf("invalid grant barrier backend PID: %d", proof.PID))
 				return
 			}
 			if proof.Attempts != 1 || proof.Grants != 2 {
-				tx.AddError(fmt.Errorf("before commit attempts=%d grants=%d", proof.Attempts, proof.Grants))
+				_ = tx.AddError(fmt.Errorf("before commit attempts=%d grants=%d", proof.Attempts, proof.Grants))
 				return
 			}
 			reached <- proof.PID
 			select {
 			case <-release:
 			case <-ctx.Done():
-				tx.AddError(ctx.Err())
+				_ = tx.AddError(ctx.Err())
 			}
 		})
 	}); err != nil {

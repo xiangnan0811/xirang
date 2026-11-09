@@ -25,7 +25,7 @@ func (err *BackfillAdmissionError) Error() string { return ErrBackfillDenied.Err
 func (err *BackfillAdmissionError) Unwrap() error { return ErrBackfillDenied }
 
 func backfillTransaction(ctx context.Context, db *gorm.DB, operation func(*gorm.DB) error) error {
-	if db.Dialector.Name() == "postgres" {
+	if db.Name() == "postgres" {
 		return db.WithContext(ctx).Transaction(operation, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	}
 	return db.WithContext(ctx).Transaction(operation)
@@ -39,7 +39,7 @@ type backfillSchemaVersion struct {
 func readBackfillMetadata(ctx context.Context, tx *gorm.DB, lock bool) error {
 	var rows []backfillSchemaVersion
 	query := tx.WithContext(ctx).Table("schema_migrations").Select("version, dirty")
-	if lock && tx.Dialector.Name() == "postgres" {
+	if lock && tx.Name() == "postgres" {
 		query = query.Clauses(clause.Locking{Strength: "SHARE"})
 	}
 	if err := query.Find(&rows).Error; err != nil {
@@ -182,7 +182,7 @@ func (coordinator *Coordinator) BackfillSnapshot(ctx context.Context) (BackfillP
 	var usage BackfillUsage
 	err := coordinator.retryConflicts(ctx, func() error {
 		return backfillTransaction(ctx, coordinator.db, func(tx *gorm.DB) error {
-			if tx.Dialector.Name() == "postgres" {
+			if tx.Name() == "postgres" {
 				if err := tx.Exec("LOCK TABLE backup_asset_processing_jobs IN ACCESS SHARE MODE").Error; err != nil {
 					return err
 				}
