@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## [0.73.17](https://github.com/xiangnan0811/xirang/compare/v0.73.16...v0.73.17) (2026-11-09)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复派生产物共享与后台配额 ([#702](https://github.com/xiangnan0811/xirang/issues/702)) ([f2d9eb5](https://github.com/xiangnan0811/xirang/commit/f2d9eb51d692f7e204e08406e6f4c5314f4ebe66))
+
+### 行为与升级说明
+
+新逻辑仅在配套新版 Core／Worker 启动后的后续处理与准入生效，不追溯改写历史作业或产物，也不会自动终止已启动的旧进程；升级前须按下述要求暂停准入、停止并排空全部旧 owner。
+
 ### 派生产物共享与恢复围栏修复
 
 - 修复真实 Sink 中独立 job 上传相同输出时的唯一约束冲突：新增双引擎 `000098_processing_shared_derived_blobs`，允许多个 upload 指向共享 blob、多个 ArtifactSet 具有相同 manifest digest；每次上传、作业、attempt、grant、产物与来源引用仍独立，来源授权和撤销互不串用，不增加按相同输入跨恢复点跳过处理。
@@ -26,9 +37,11 @@
 ### 后台队列与精确产物复用断言迁移
 
 - 移除没有生产消费者的 `ScoreBackfill`、`CanReuseDerived` 及孤立直接依赖；有效断言对齐真实 Runtime 准入、Coordinator 工作身份／独立 interest／队列消费与槽位、精确已完成产物查询及上传后的 blob 去重和来源独立引用。旧 latest／recent／history 评分和 strong fingerprint 跨点跳过处理不作为现行能力。
-- 保留活 `AdmitBackfill`、完整 `BackfillPolicy` 与 `RecentWindow`／`HistoryAgingStep` 配置及有效性校验，保留来源生命周期、Derived artifact 的身份／授权／安全策略／发布／读取和既有物理去重。文档明确 usage 每次收集累计；跨请求小时统计及 Provider／能力真实并发承诺差异仍未实现，不能因本次澄清而宣称修复。
-- 真实 SQLite／PostgreSQL 验收发现第二次上传相同输出时，Sink 命中的 blob ID 与 upload 的唯一 `staging_id` 冲突；该既存缺口继续开放，本次未修复。存储层去重与预置来源引用测试不代表真实 Sink 跨点双发布成功，不能将本次清理说明为完整复用能力交付。
-- 本次仅测试与死码清理，无运行行为、依赖、公开 API、wire、配置或 schema migration 变化，不改写历史数据或已发布迁移；说明留在 `Unreleased`，不因此单独发行版本或正式镜像。
+- 保留活 `AdmitBackfill`、完整 `BackfillPolicy` 与 `RecentWindow`／`HistoryAgingStep` 配置及有效性校验，保留来源生命周期、Derived artifact 的身份／授权／安全策略／发布／读取和既有物理去重。第二十五轮清理当时仅澄清 usage 每次收集累计，未实现跨请求小时统计或 Provider／能力真实并发；本版由上方持久后台配额修复补齐，不将当时澄清追认为实现。
+- 真实 SQLite／PostgreSQL 验收发现第二次上传相同输出时，Sink 命中的 blob ID 与 upload 的唯一 `staging_id` 冲突；第二十五轮当时将该缺口继续开放；本版由上方真实 Sink 共享输出修复闭合，原失败记录保留。存储层去重与预置来源引用测试不代表真实 Sink 跨点双发布成功，不能将本次清理说明为完整复用能力交付。
+- 第二十五轮当时仅测试与死码清理，无运行行为、依赖、公开 API、wire、配置或 schema migration 变化，不改写历史数据或已发布迁移；当时未因此单独发行版本或正式镜像，现随本次运行修复一并纳入本版。
+
+真实本地 Sink／Search／Unix HTTP、双数据库事务及整合 race 的受控证据不等于真实 parser、全部远端 Provider、AWS live 或生产部署认证。
 
 ## [0.73.16](https://github.com/xiangnan0811/xirang/compare/v0.73.15...v0.73.16) (2026-11-08)
 
