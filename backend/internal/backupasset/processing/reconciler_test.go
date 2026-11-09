@@ -135,6 +135,63 @@ func TestReconcilerExpiresAbsoluteDeadlineWithoutRetry(t *testing.T) {
 		t.Fatalf("deadline did not produce closed expiry: %+v", job)
 	}
 }
+func TestReconcilerExpiryPropagatesAttemptLookupFailure(t *testing.T) {
+	harness := newCoordinatorHarness(t)
+	grants, err := NewGrantService(harness.db, harness.coordinator.leaseService, harness.clock.Now, GrantConfig{
+		TTL: time.Second, MaxRequests: 1, MaxBytesPerRequest: 1, MaxCumulativeBytes: 1, MaxInFlight: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler, err := NewReconciler(harness.coordinator, grants, harness.clock.Now, ReconcilerConfig{BatchSize: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("attempt lookup failure")
+	const callbackName = "test:retirement-lookup-failure"
+	if err := harness.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "backup_asset_processing_attempts" {
+			_ = tx.AddError(injected)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = harness.db.Callback().Query().Remove(callbackName) })
+	if _, _, err := reconciler.expireAttempt(context.Background(), strings.Repeat("1", 32), harness.clock.Now()); !errors.Is(err, injected) {
+		t.Fatalf("expiry lookup error=%v", err)
+	}
+}
+
+func TestReconcilerExpiryRechecksRenewedAttempt(t *testing.T) {
+	harness := newCoordinatorHarness(t)
+	workerID := harness.registerNoopWorker(t, "7")
+	_, err := harness.coordinator.RequestWork(context.Background(), WorkRequest{Descriptor: validWorkDescriptor(), Interest: InterestRequest{OwnerKind: InterestSystem, OwnerKey: "expiry-renewal", PriorityClass: PriorityBackground, Priority: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := harness.coordinator.Pull(context.Background(), PullRequest{WorkerID: workerID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants, err := NewGrantService(harness.db, harness.coordinator.leaseService, harness.clock.Now, GrantConfig{
+		TTL: time.Second, MaxRequests: 1, MaxBytesPerRequest: 1, MaxCumulativeBytes: 1, MaxInFlight: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler, err := NewReconciler(harness.coordinator, grants, harness.clock.Now, ReconcilerConfig{BatchSize: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, retrying, err := reconciler.expireAttempt(context.Background(), lease.AttemptID, harness.clock.Now())
+	if err != nil || expired || retrying {
+		t.Fatalf("unexpired attempt retired: expired=%t retrying=%t err=%v", expired, retrying, err)
+	}
+	var attempt model.BackupAssetProcessingAttempt
+	if err := harness.db.First(&attempt, "id = ?", lease.AttemptID).Error; err != nil || attempt.State != "active" || !attempt.IsCurrent {
+		t.Fatalf("unexpired attempt changed: state=%s err=%v", attempt.State, err)
+	}
+}
 
 func TestReconcilerShutdownRetiresAttemptsReleasesLeasesAndPreservesQueuedWork(t *testing.T) {
 	harness := newCoordinatorHarness(t)
@@ -210,6 +267,185 @@ func TestReconcilerShutdownRetiresAttemptsReleasesLeasesAndPreservesQueuedWork(t
 	}
 	if drained, err = reconciler.Shutdown(context.Background()); err != nil || drained != 0 {
 		t.Fatalf("idempotent Shutdown drained=%d err=%v", drained, err)
+	}
+}
+
+func TestDerivedReconcilerStaleIncarnationCannotRevokeReplacement(t *testing.T) {
+	harness := newDerivedLifecycleHarness(t)
+	ctx := context.Background()
+	payload := bytes.Repeat([]byte("replacement-incarnation"), 2000)
+	first, err := harness.store.PutBlob(ctx, derivedDeclaration(payload), bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldReference := harness.seedReference(t, first.BlobID, "4", "5")
+	var observed model.BackupAssetDerivedBlob
+	if err := harness.db.First(&observed, "id = ?", first.BlobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.lifecycle.RevokeSetFenced(ctx, oldReference.setID, DerivedRevokeRollback, derivedLifecycleFence("6", oldReference.authorization.RecoveryPointID)); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := harness.store.PutBlob(ctx, derivedDeclaration(payload), bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.BlobID != first.BlobID || replacement.OpaqueLocator == first.OpaqueLocator {
+		t.Fatal("replacement did not create a new incarnation")
+	}
+	newReference := harness.seedReference(t, replacement.BlobID, "7", "8")
+	reconciler, err := NewDerivedReconciler(harness.store, harness.lifecycle, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result DerivedReconcileResult
+	if err := reconciler.reconcileBlob(ctx, observed, &result); err != nil {
+		t.Fatal(err)
+	}
+	var got bytes.Buffer
+	if err := harness.lifecycle.ReadAuthorized(ctx, newReference.authorization, &got); err != nil || !bytes.Equal(got.Bytes(), payload) {
+		t.Fatalf("replacement lost readability: %v", err)
+	}
+	if err := harness.lifecycle.ReadAuthorized(ctx, oldReference.authorization, &bytes.Buffer{}); !errors.Is(err, ErrDerivedUnauthorized) {
+		t.Fatalf("historical authorization was restored: %v", err)
+	}
+}
+
+func TestDerivedReconcilerStaleStagedPromotionDoesNotPromoteReplacement(t *testing.T) {
+	harness := newDerivedLifecycleHarness(t)
+	ctx := context.Background()
+	payload := bytes.Repeat([]byte("staged-incarnation"), 2000)
+	first, err := harness.store.PutBlob(ctx, derivedDeclaration(payload), bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstBytes, err := os.ReadFile(filepath.Join(harness.root, first.OpaqueLocator))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed model.BackupAssetDerivedBlob
+	if err := harness.db.First(&observed, "id = ?", first.BlobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	observed.State, observed.UpdatedAt = "staged", harness.store.utcNow().Add(-time.Hour)
+	if err := harness.store.discardBlobIfUnreferencedObserved(ctx, first.BlobID, first.OpaqueLocator); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := harness.store.PutBlob(ctx, derivedDeclaration(payload), bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.OpaqueLocator == first.OpaqueLocator {
+		t.Fatal("expected a distinct locator")
+	}
+	oldStagingPath := filepath.Join(harness.root, ".staging-"+strings.TrimSuffix(first.OpaqueLocator, ".xrd"))
+	if err := os.WriteFile(oldStagingPath, firstBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", first.BlobID).Update("state", "staged").Error; err != nil {
+		t.Fatal(err)
+	}
+	reconciler, err := NewDerivedReconciler(harness.store, harness.lifecycle, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result DerivedReconcileResult
+	if err := reconciler.reconcileBlob(ctx, observed, &result); err != nil {
+		t.Fatal(err)
+	}
+	var actual model.BackupAssetDerivedBlob
+	if err := harness.db.First(&actual, "id = ?", first.BlobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if actual.State != "staged" || actual.OpaqueLocator != replacement.OpaqueLocator || result.RecoveredStaging != 0 {
+		t.Fatalf("stale promotion changed replacement: state=%s recovered=%d", actual.State, result.RecoveredStaging)
+	}
+	if _, err := os.Stat(oldStagingPath); err != nil {
+		t.Fatalf("stale staging file was changed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(harness.root, first.OpaqueLocator)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale staging file was renamed: %v", err)
+	}
+}
+
+func TestDerivedReconcilerStagedRecoveryUsesLockedState(t *testing.T) {
+	harness := newDerivedLifecycleHarness(t)
+	ctx := context.Background()
+	payload := []byte("staged recovery uses the current row")
+	blob, err := harness.store.PutBlob(ctx, derivedDeclaration(payload), bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalPath := filepath.Join(harness.root, blob.OpaqueLocator)
+	stagingPath := filepath.Join(harness.root, ".staging-"+strings.TrimSuffix(blob.OpaqueLocator, ".xrd"))
+	if err := os.Rename(finalPath, stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", blob.BlobID).
+		Updates(map[string]any{"state": "staged", "updated_at": harness.store.utcNow().Add(-time.Hour)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var observed model.BackupAssetDerivedBlob
+	if err := harness.db.First(&observed, "id = ?", blob.BlobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	observed.PhysicalSize++
+	reconciler, err := NewDerivedReconciler(harness.store, harness.lifecycle, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := reconciler.recoverStagedBlob(ctx, observed)
+	if err != nil || !recovered {
+		t.Fatalf("recover current staged blob: recovered=%t err=%v", recovered, err)
+	}
+	if err := os.Rename(finalPath, stagingPath); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err = reconciler.recoverStagedBlob(ctx, observed)
+	if err != nil || recovered {
+		t.Fatalf("active blob accepted stale staged observation: recovered=%t err=%v", recovered, err)
+	}
+	if _, err := os.Stat(stagingPath); err != nil {
+		t.Fatalf("active blob staging file was changed: %v", err)
+	}
+	if _, err := os.Stat(finalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("active blob staging file was renamed: %v", err)
+	}
+}
+
+func TestDerivedReconcilerUnreadableStagedBlobRevokesAfterRecoveryTransaction(t *testing.T) {
+	harness := newDerivedLifecycleHarness(t)
+	ctx := context.Background()
+	payload := []byte("missing staged ciphertext")
+	blob, err := harness.store.PutBlob(ctx, derivedDeclaration(payload), bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := harness.seedReference(t, blob.BlobID, "4", "5")
+	if err := os.Remove(filepath.Join(harness.root, blob.OpaqueLocator)); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", blob.BlobID).
+		Updates(map[string]any{"state": "staged", "updated_at": harness.store.utcNow().Add(-time.Hour)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var observed model.BackupAssetDerivedBlob
+	if err := harness.db.First(&observed, "id = ?", blob.BlobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	reconciler, err := NewDerivedReconciler(harness.store, harness.lifecycle, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result DerivedReconcileResult
+	if err := reconciler.reconcileBlob(ctx, observed, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.RevokedUnreadableSets != 1 || harness.projection.revocations != 1 {
+		t.Fatalf("unreadable staging did not revoke its projection: result=%+v revocations=%d", result, harness.projection.revocations)
+	}
+	if err := harness.lifecycle.ReadAuthorized(ctx, reference.authorization, &bytes.Buffer{}); !errors.Is(err, ErrDerivedUnauthorized) {
+		t.Fatalf("unreadable staging remained authorized: %v", err)
 	}
 }
 
@@ -318,12 +554,17 @@ func TestDerivedReconcilerRepairsRefcountStagingAndFileOrphans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stagingPath := filepath.Join(harness.root, ".staging-"+staged.BlobID)
+	stagingPath := filepath.Join(harness.root, ".staging-"+strings.TrimSuffix(staged.OpaqueLocator, ".xrd"))
 	if err := os.Rename(filepath.Join(harness.root, staged.OpaqueLocator), stagingPath); err != nil {
 		t.Fatal(err)
 	}
 	if err := harness.db.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", staged.BlobID).
 		Updates(map[string]any{"state": "staged", "updated_at": harness.store.utcNow().Add(-time.Hour)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	harness.seedReference(t, staged.BlobID, "3", "4")
+	if err := harness.db.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", staged.BlobID).
+		Updates(map[string]any{"ref_count": 99, "updated_at": harness.store.utcNow().Add(-time.Hour)}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -351,7 +592,7 @@ func TestDerivedReconcilerRepairsRefcountStagingAndFileOrphans(t *testing.T) {
 	if err := harness.db.First(&stagedRow, "id = ?", staged.BlobID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if referencedRow.RefCount != 1 || stagedRow.State != "active" {
+	if referencedRow.RefCount != 1 || stagedRow.State != "active" || stagedRow.RefCount != 1 {
 		t.Fatalf("Derived rows not repaired: referenced=%+v staged=%+v", referencedRow, stagedRow)
 	}
 	if _, err := os.Stat(filepath.Join(harness.root, staged.OpaqueLocator)); err != nil {

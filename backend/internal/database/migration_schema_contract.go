@@ -919,6 +919,18 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 	if err := validateExportRawFingerprintSchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
+	if version < processingSharedDerivedBlobsSchemaVersion {
+		return nil
+	}
+	if err := validateProcessingSharedDerivedBlobsSchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < processingBackfillQuotaSchemaVersion {
+		return nil
+	}
+	if err := validateProcessingBackfillQuotaSchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
 
 	return nil
 }

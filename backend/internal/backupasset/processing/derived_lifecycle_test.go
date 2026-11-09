@@ -55,6 +55,55 @@ func TestDerivedReferencesAreSourceLocalAndSharedAcrossRecoveryPoints(t *testing
 	}
 }
 
+func TestDerivedRevokeOrphansInactiveUploadsOnlyForNormalCleanup(t *testing.T) {
+	for _, observed := range []bool{false, true} {
+		name := "normal"
+		if observed {
+			name = "stale-observation"
+		}
+		t.Run(name, func(t *testing.T) {
+			harness := newDerivedLifecycleHarness(t)
+			ctx := context.Background()
+			payload := []byte("revoke staged upload authority")
+			blob, err := harness.store.PutBlob(ctx, derivedDeclaration(payload), bytes.NewReader(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			reference := harness.seedReference(t, blob.BlobID, "1", "a")
+			upload := model.BackupAssetProcessingUpload{
+				ID: strings.Repeat("2", 32), JobID: strings.Repeat("3", 32),
+				AttemptID: strings.Repeat("4", 32), GrantID: strings.Repeat("5", 32),
+				StagingID: blob.BlobID, State: "staged", CoverageCanonical: []byte(`{}`),
+			}
+			if err := harness.db.Create(&upload).Error; err != nil {
+				t.Fatal(err)
+			}
+			if observed {
+				err = harness.lifecycle.revokeSetWithManagedFenceObserved(ctx, reference.setID, DerivedRevokeKeyLoss, blob.BlobID, strings.Repeat("6", 32)+".xrd")
+			} else {
+				err = harness.lifecycle.RevokeSetFenced(ctx, reference.setID, DerivedRevokeExpired, derivedLifecycleFence("1", reference.authorization.RecoveryPointID))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := harness.db.First(&upload, "id = ?", upload.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if observed {
+				if upload.State != "staged" {
+					t.Fatalf("stale observation changed upload state: %s", upload.State)
+				}
+				var got bytes.Buffer
+				if err := harness.lifecycle.ReadAuthorized(ctx, reference.authorization, &got); err != nil || !bytes.Equal(got.Bytes(), payload) {
+					t.Fatalf("stale observation changed current reference: %v", err)
+				}
+			} else if upload.State != "orphaned" || upload.FailureCode != "lease_lost" {
+				t.Fatalf("normal revoke left inactive upload: state=%s failure=%s", upload.State, upload.FailureCode)
+			}
+		})
+	}
+}
+
 func TestDerivedReadRejectsProjectionRequiredSetUntilSearchPublicationCommits(t *testing.T) {
 	harness := newDerivedLifecycleHarness(t)
 	payload := []byte("not-visible-before-search-commit")
@@ -430,6 +479,8 @@ func newDerivedLifecycleHarness(t *testing.T) *derivedLifecycleHarness {
 	storeHarness := newDerivedStoreHarness(t)
 	if err := storeHarness.db.AutoMigrate(
 		&model.BackupAssetDerivedArtifactSet{}, &model.BackupAssetDerivedArtifact{}, &model.BackupAssetDerivedBlobReference{},
+		&model.RecoveryPoint{}, &model.RecoveryPointLease{}, &model.BackupAssetProcessingJob{},
+		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{}, &model.BackupAssetProcessingUpload{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -467,6 +518,9 @@ func (harness *derivedLifecycleHarness) seedReference(t *testing.T, blobID, suff
 		ID: referenceID, BlobID: blobID, ArtifactID: artifactID, RecoveryPointID: recoveryPointID,
 		CatalogGenerationID: catalogID, EntryID: entryID, SourceFingerprint: set.SourceFingerprint,
 		State: "active", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := harness.db.Where("id = ?", recoveryPointID).FirstOrCreate(&model.RecoveryPoint{ID: recoveryPointID, RepositoryID: strings.Repeat("f", 32)}).Error; err != nil {
+		t.Fatal(err)
 	}
 	if err := harness.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&set).Error; err != nil {

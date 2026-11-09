@@ -182,7 +182,7 @@ func TestRecoveryPointSourceLifecycleProcessingDefersDestructionUntilSearchProof
 	if err := harness.db.AutoMigrate(
 		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.RecoveryPointLease{},
 		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
-		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{},
+		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{}, &model.BackupAssetProcessingUpload{},
 	); err != nil {
 		t.Fatalf("migrate source lifecycle tables: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestRecoveryPointSourceLifecycleProcessingDefersDestructionUntilSearchProof
 	pointID := reference.authorization.RecoveryPointID
 	now := harness.store.utcNow()
 	attemptID, leaseID := strings.Repeat("6", 32), strings.Repeat("7", 32)
-	if err := harness.db.Create(&model.RecoveryPoint{ID: pointID, RepositoryID: strings.Repeat("8", 32)}).Error; err != nil {
+	if err := harness.db.Where("id = ?", pointID).FirstOrCreate(&model.RecoveryPoint{ID: pointID, RepositoryID: strings.Repeat("8", 32)}).Error; err != nil {
 		t.Fatalf("seed point: %v", err)
 	}
 	if err := harness.db.Create(&model.RecoveryPointLifecycleAttempt{ID: attemptID, RecoveryPointID: pointID, Operation: string(backupasset.LifecycleExplicitPurge), Phase: string(backupasset.LifecyclePhaseRevoking)}).Error; err != nil {
@@ -306,7 +306,7 @@ func TestRecoveryPointSourceLifecycleProcessingDeduplicatesSharedBlobCleanup(t *
 	if err := harness.db.AutoMigrate(
 		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.RecoveryPointLease{},
 		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
-		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{},
+		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{}, &model.BackupAssetProcessingUpload{},
 	); err != nil {
 		t.Fatalf("migrate shared-blob source lifecycle tables: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestRecoveryPointSourceLifecycleProcessingDeduplicatesSharedBlobCleanup(t *
 	unrelated := harness.seedReference(t, unrelatedBlob.BlobID, "8", "9")
 	pointID := target.authorization.RecoveryPointID
 	attemptID := strings.Repeat("a", 32)
-	if err := harness.db.Create(&model.RecoveryPoint{ID: pointID, RepositoryID: strings.Repeat("b", 32)}).Error; err != nil {
+	if err := harness.db.Where("id = ?", pointID).FirstOrCreate(&model.RecoveryPoint{ID: pointID, RepositoryID: strings.Repeat("b", 32)}).Error; err != nil {
 		t.Fatalf("seed shared-blob point: %v", err)
 	}
 	if err := harness.db.Create(&model.RecoveryPointLifecycleAttempt{
@@ -464,13 +464,97 @@ func TestRecoveryPointSourceLifecycleProcessingDeduplicatesSharedBlobCleanup(t *
 		t.Fatalf("shared-blob cleanup Search proof calls=%d, want 3", proof.calls)
 	}
 }
+func TestSourceCleanupIgnoresExpiredStagedAuthority(t *testing.T) {
+	for _, expired := range []string{"grant", "attempt"} {
+		t.Run(expired, func(t *testing.T) {
+			harness := newDerivedLifecycleHarness(t)
+			if err := harness.db.AutoMigrate(&model.RecoveryPointLifecycleAttempt{}); err != nil {
+				t.Fatal(err)
+			}
+			now := harness.store.utcNow()
+			ctx := context.Background()
+			payload := []byte("source cleanup staged authority")
+			blob, err := harness.store.PutBlob(ctx, derivedDeclaration(payload), bytes.NewReader(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pointID, otherPointID := strings.Repeat("1", 32), strings.Repeat("2", 32)
+			lifecycleID, sourceJobID := strings.Repeat("3", 32), strings.Repeat("4", 32)
+			jobID, attemptID, grantID, leaseID := strings.Repeat("5", 32), strings.Repeat("6", 32), strings.Repeat("7", 32), strings.Repeat("8", 32)
+			workerID, fenceToken, leaseAttemptID := strings.Repeat("9", 32), strings.Repeat("a", 64), strings.Repeat("b", 32)
+			fenceHash := hashFence(fenceToken)
+			for _, point := range []string{pointID, otherPointID} {
+				if err := harness.db.Create(&model.RecoveryPoint{ID: point, RepositoryID: strings.Repeat("c", 32)}).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := harness.db.Create(&model.RecoveryPointLifecycleAttempt{ID: lifecycleID, RecoveryPointID: pointID, Operation: string(backupasset.LifecycleExplicitPurge), Phase: string(backupasset.LifecyclePhaseCleaning)}).Error; err != nil {
+				t.Fatal(err)
+			}
+			for _, job := range []model.BackupAssetProcessingJob{
+				{ID: sourceJobID, WorkKey: strings.Repeat("d", 64), DescriptorCanonical: []byte(`{}`), RecoveryPointID: pointID, State: "canceled", AbsoluteDeadline: now.Add(time.Hour)},
+				{ID: jobID, WorkKey: strings.Repeat("e", 64), DescriptorCanonical: []byte(`{}`), RecoveryPointID: otherPointID, State: "processing", IsCurrent: true, CurrentAttemptID: &attemptID, AbsoluteDeadline: now.Add(time.Hour)},
+			} {
+				if err := harness.db.Create(&job).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			attempt := model.BackupAssetProcessingAttempt{ID: attemptID, JobID: jobID, WorkerID: workerID, State: "active", IsCurrent: true, WorkerLeaseExpiresAt: now.Add(time.Hour), AbsoluteDeadline: now.Add(time.Hour), RecoveryPointLeaseID: leaseID, RecoveryPointAttemptID: leaseAttemptID, RecoveryPointFenceHash: fenceHash}
+			grant := model.BackupAssetProcessingGrant{ID: grantID, JobID: jobID, AttemptID: attemptID, WorkerID: workerID, Kind: string(GrantSink), State: string(GrantActive), FenceHash: fenceHash, ExpiresAt: now.Add(time.Hour)}
+			lease := model.RecoveryPointLease{ID: leaseID, RecoveryPointID: otherPointID, HolderType: string(backupasset.LeaseHolderProcessingJob), OwnerID: jobID, AttemptID: leaseAttemptID, FenceToken: fenceToken, Status: string(backupasset.LeaseActive), LeaseExpiresAt: now.Add(time.Hour), AbsoluteDeadline: now.Add(time.Hour)}
+			for _, row := range []any{&attempt, &grant, &lease} {
+				if err := harness.db.Create(row).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, upload := range []model.BackupAssetProcessingUpload{
+				{ID: strings.Repeat("f", 32), JobID: sourceJobID, AttemptID: strings.Repeat("0", 32), GrantID: strings.Repeat("1", 31) + "a", StagingID: blob.BlobID, State: "orphaned", CoverageCanonical: []byte(`{}`)},
+				{ID: strings.Repeat("a", 31) + "b", JobID: jobID, AttemptID: attemptID, GrantID: grantID, StagingID: blob.BlobID, State: "staged", CoverageCanonical: []byte(`{}`)},
+			} {
+				if err := harness.db.Create(&upload).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			owner, err := NewSourceLifecycle(harness.db, harness.lifecycle, &processingSearchProofSpy{}, func() time.Time { return now }, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := backupasset.SourceLifecycleRequest{RecoveryPointID: pointID, LifecycleAttemptID: lifecycleID, Operation: backupasset.LifecycleExplicitPurge, Stage: backupasset.SourceLifecycleCleanup}
+			if err := owner.destroyDerived(ctx, request); err != nil {
+				t.Fatal(err)
+			}
+			var preserved model.BackupAssetDerivedBlob
+			if err := harness.db.First(&preserved, "id = ?", blob.BlobID).Error; err != nil || preserved.State != "active" {
+				t.Fatalf("live staged holder lost blob: state=%s err=%v", preserved.State, err)
+			}
+			if expired == "grant" {
+				err = harness.db.Model(&model.BackupAssetProcessingGrant{}).Where("id = ?", grantID).Update("expires_at", now).Error
+			} else {
+				err = harness.db.Model(&model.BackupAssetProcessingAttempt{}).Where("id = ?", attemptID).Update("worker_lease_expires_at", now).Error
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := owner.destroyDerived(ctx, request); err != nil {
+				t.Fatal(err)
+			}
+			var destroyed model.BackupAssetDerivedBlob
+			if err := harness.db.First(&destroyed, "id = ?", blob.BlobID).Error; err != nil || destroyed.State != "unavailable" || len(destroyed.WrappedDEK) != 0 {
+				t.Fatalf("expired staged holder retained blob: state=%s err=%v", destroyed.State, err)
+			}
+			if _, err := os.Stat(filepath.Join(harness.root, blob.OpaqueLocator)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("expired holder retained ciphertext: %v", err)
+			}
+		})
+	}
+}
 
 func TestRecoveryPointSourceLifecycleProcessingLocksSharedBlobBeforeReferenceProof(t *testing.T) {
 	harness := newDerivedLifecycleHarness(t)
 	if err := harness.db.AutoMigrate(
 		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.RecoveryPointLease{},
 		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
-		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{},
+		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{}, &model.BackupAssetProcessingUpload{},
 	); err != nil {
 		t.Fatalf("migrate shared-reference source lifecycle tables: %v", err)
 	}
@@ -502,7 +586,7 @@ func TestRecoveryPointSourceLifecycleProcessingLocksSharedBlobBeforeReferencePro
 
 	pointID := target.authorization.RecoveryPointID
 	attemptID := strings.Repeat("8", 32)
-	if err := harness.db.Create(&model.RecoveryPoint{ID: pointID, RepositoryID: strings.Repeat("9", 32)}).Error; err != nil {
+	if err := harness.db.Where("id = ?", pointID).FirstOrCreate(&model.RecoveryPoint{ID: pointID, RepositoryID: strings.Repeat("9", 32)}).Error; err != nil {
 		t.Fatalf("seed shared-reference point: %v", err)
 	}
 	if err := harness.db.Create(&model.RecoveryPointLifecycleAttempt{
@@ -737,7 +821,7 @@ func runProcessingSourceLifecycleNonCurrentAuthority(t *testing.T, db *gorm.DB, 
 		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.RecoveryPointLease{},
 		&model.CatalogGeneration{}, &model.CatalogEntry{},
 		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
-		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{},
+		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{}, &model.BackupAssetProcessingUpload{},
 	); err != nil {
 		t.Fatal(err)
 	}

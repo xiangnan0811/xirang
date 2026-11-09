@@ -472,7 +472,7 @@ func (service *GrantService) RevokeAttempt(ctx context.Context, attemptID, reaso
 			}).Error; err != nil {
 			return fmt.Errorf("revoke attempt grants: %w", err)
 		}
-		return nil
+		return retireAttemptUploadsTx(tx, attemptID, now, reason)
 	})
 }
 

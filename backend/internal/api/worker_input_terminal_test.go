@@ -163,6 +163,14 @@ type workerInputHTTPFixture struct {
 	source     *workerInputHTTPSource
 }
 
+func workerInputTestBackfillPolicy(context.Context, *gorm.DB) (processing.BackfillPolicy, error) {
+	return processing.BackfillPolicy{
+		BatchSize: 100, JobsPerHour: 100000, BytesPerHour: 1 << 40,
+		ProviderConcurrency: 32, CapabilityConcurrency: 32,
+		RecentWindow: 720 * time.Hour, HistoryAgingStep: 24 * time.Hour,
+	}, nil
+}
+
 func newWorkerInputHTTPFixture(t *testing.T, payload []byte, rangeProven bool, fault string, maxRequests int64) workerInputHTTPFixture {
 	t.Helper()
 	const capBytes = int64(64 << 10)
@@ -179,7 +187,18 @@ func newWorkerInputHTTPFixture(t *testing.T, payload []byte, rangeProven bool, f
 		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.RecoveryPointLease{},
 		&model.BackupAssetWorkerIdentity{}, &model.BackupAssetWorkerCapability{}, &model.BackupAssetProcessingJob{},
 		&model.BackupAssetProcessingInterest{}, &model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{}, &model.BackupAssetProcessingGrantRequest{},
+		&model.BackupRepository{}, &model.CatalogGeneration{}, &model.CatalogEntry{}, &model.BackupAssetProcessingBackfillLedger{},
 	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("CREATE TABLE schema_migrations (version bigint NOT NULL, dirty boolean NOT NULL)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("INSERT INTO schema_migrations (version, dirty) VALUES (?, ?)", 99, false).Error; err != nil {
+		t.Fatal(err)
+	}
+	epoch := time.Unix(0, 0).UTC()
+	if err := db.Create(&model.BackupAssetProcessingBackfillLedger{ID: 1, WindowStartedAt: epoch, UpdatedAt: epoch}).Error; err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
@@ -202,6 +221,9 @@ func newWorkerInputHTTPFixture(t *testing.T, payload []byte, rangeProven bool, f
 	}
 	for _, row := range []any{
 		&model.RecoveryPoint{ID: descriptor.Source.RecoveryPointID, RepositoryID: strings.Repeat("f", 32), Semantics: string(backupasset.PointXirangManifest), State: string(backupasset.RecoveryPointCommitted)},
+		&model.BackupRepository{ID: strings.Repeat("f", 32), ProviderKind: "rsync"},
+		&model.CatalogGeneration{ID: descriptor.CatalogGenerationID, RecoveryPointID: descriptor.Source.RecoveryPointID},
+		&model.CatalogEntry{GenerationID: descriptor.CatalogGenerationID, EntryID: descriptor.Source.EntryID, RecoveryPointID: descriptor.Source.RecoveryPointID, Size: int64(len(payload))},
 		&model.BackupAssetWorkerIdentity{ID: workerID, TransportKind: "local", TransportFingerprint: strings.Repeat("8", 64), InstanceID: instanceID, IdentityRevision: 1, ProtocolVersion: 1, TrustState: "active", HealthState: "ready", InteractiveSlots: 2, BackgroundSlots: 2, LastSeenAt: now, CreatedAt: now, UpdatedAt: now},
 		&model.BackupAssetWorkerCapability{ID: strings.Repeat("8", 31) + "f", WorkerID: workerID, Capability: descriptor.Capability, CapabilitySchema: descriptor.CapabilitySchema, PipelineFingerprint: descriptor.PipelineFingerprint, OutputProfile: descriptor.OutputProfile, InputModes: "stat,sequential,range", LimitsCanonical: []byte{1}, AdvertisementDigest: strings.Repeat("a", 64), HealthState: "ready", CreatedAt: now, UpdatedAt: now},
 	} {
@@ -213,7 +235,7 @@ func newWorkerInputHTTPFixture(t *testing.T, payload []byte, rangeProven bool, f
 	if err != nil {
 		t.Fatal(err)
 	}
-	coordinator, err := processing.NewCoordinator(db, lease, clock, processing.CoordinatorConfig{QueueMax: 100, InteractiveReservedSlots: 2, BackgroundSlots: 2, PullLease: 30 * time.Second, AttemptTimeout: 2 * time.Hour, RetryMax: 5})
+	coordinator, err := processing.NewCoordinator(db, lease, clock, processing.CoordinatorConfig{QueueMax: 100, InteractiveReservedSlots: 2, BackgroundSlots: 2, PullLease: 30 * time.Second, AttemptTimeout: 2 * time.Hour, RetryMax: 5, BackfillPolicySource: workerInputTestBackfillPolicy})
 	if err != nil {
 		t.Fatal(err)
 	}

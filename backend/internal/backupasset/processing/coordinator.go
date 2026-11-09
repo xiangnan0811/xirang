@@ -48,6 +48,7 @@ type CoordinatorConfig struct {
 	PullLease                time.Duration
 	AttemptTimeout           time.Duration
 	RetryMax                 int
+	BackfillPolicySource     BackfillPolicySource
 }
 
 type InterestRequest struct {
@@ -140,7 +141,7 @@ func NewCoordinator(db *gorm.DB, leaseService *backupasset.LeaseService, now fun
 	}
 	if config.QueueMax <= 0 || config.InteractiveReservedSlots < 0 || config.BackgroundSlots < 0 ||
 		config.InteractiveReservedSlots+config.BackgroundSlots <= 0 || config.PullLease <= 0 ||
-		config.AttemptTimeout < config.PullLease || config.RetryMax < 0 || config.RetryMax > 20 {
+		config.AttemptTimeout < config.PullLease || config.RetryMax < 0 || config.RetryMax > 20 || config.BackfillPolicySource == nil {
 		return nil, fmt.Errorf("%w: invalid coordinator configuration", ErrInvalidContract)
 	}
 	return &Coordinator{db: db, leaseService: leaseService, now: now, config: config}, nil
@@ -149,7 +150,7 @@ func NewCoordinator(db *gorm.DB, leaseService *backupasset.LeaseService, now fun
 func (coordinator *Coordinator) RequestWork(ctx context.Context, request WorkRequest) (WorkResult, error) {
 	var result WorkResult
 	err := coordinator.retryConflicts(ctx, func() error {
-		return coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return backfillTransaction(ctx, coordinator.db, func(tx *gorm.DB) error {
 			var requestErr error
 			result, requestErr = coordinator.requestWorkTx(ctx, tx, request)
 			return requestErr
@@ -249,6 +250,9 @@ func (coordinator *Coordinator) RemoveInterest(ctx context.Context, jobID string
 				}).Error; err != nil {
 				return fmt.Errorf("revoke processing grants: %w", err)
 			}
+			if err := retireJobUploadsTx(tx, jobID, now, "lease_lost"); err != nil {
+				return err
+			}
 			if isTerminalState(ProcessingState(job.State)) || job.State == string(ProcessingCancelRequested) {
 				return nil
 			}
@@ -283,7 +287,7 @@ func (coordinator *Coordinator) Pull(ctx context.Context, request PullRequest) (
 	}
 	var result AttemptLease
 	err := coordinator.retryConflicts(ctx, func() error {
-		return coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return backfillTransaction(ctx, coordinator.db, func(tx *gorm.DB) error {
 			var err error
 			result, err = coordinator.pullTx(ctx, tx, request)
 			return err
@@ -301,7 +305,7 @@ func (coordinator *Coordinator) PullAttempt(ctx context.Context, request PullReq
 	}
 	var result LeasedAttempt
 	err := coordinator.retryConflicts(ctx, func() error {
-		return coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return backfillTransaction(ctx, coordinator.db, func(tx *gorm.DB) error {
 			lease, err := coordinator.pullTx(ctx, tx, request)
 			if err != nil {
 				return err
@@ -416,8 +420,16 @@ func (coordinator *Coordinator) heartbeat(ctx context.Context, request Heartbeat
 	}
 	var response HeartbeatResult
 	err := coordinator.retryConflicts(ctx, func() error {
-		return coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			now := coordinator.utcNow()
+		return backfillTransaction(ctx, coordinator.db, func(tx *gorm.DB) error {
+			var worker model.BackupAssetWorkerIdentity
+			workerResult := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+				Select("id", "trust_state", "health_state").Where("id = ?", request.WorkerID).Limit(1).Find(&worker)
+			if workerResult.Error != nil {
+				return fmt.Errorf("load heartbeat Worker: %w", workerResult.Error)
+			}
+			if workerResult.RowsAffected != 1 || worker.TrustState != "active" {
+				return ErrAttemptLost
+			}
 			var job model.BackupAssetProcessingJob
 			jobResult := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 				Where("id = ? AND current_attempt_id = ? AND is_current = ?", locator.JobID, request.AttemptID, true).Limit(1).Find(&job)
@@ -427,14 +439,18 @@ func (coordinator *Coordinator) heartbeat(ctx context.Context, request Heartbeat
 			if jobResult.RowsAffected != 1 || (ProcessingState(job.State) != ProcessingCancelRequested && !isAttemptOwnedState(ProcessingState(job.State))) {
 				return ErrAttemptLost
 			}
+			if PriorityClass(job.PriorityClass) == PriorityBackground {
+				if _, err := lockBackfillSerialization(ctx, tx); err != nil {
+					return err
+				}
+			}
 			var attempt model.BackupAssetProcessingAttempt
 			attemptResult := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 				Where("id = ? AND job_id = ? AND worker_id = ?", request.AttemptID, job.ID, request.WorkerID).Limit(1).Find(&attempt)
 			if attemptResult.Error != nil {
 				return fmt.Errorf("load processing attempt: %w", attemptResult.Error)
 			}
-			if attemptResult.RowsAffected != 1 || attempt.State != "active" || !attempt.IsCurrent ||
-				!now.Before(attempt.WorkerLeaseExpiresAt.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) {
+			if attemptResult.RowsAffected != 1 || attempt.State != "active" || !attempt.IsCurrent {
 				return ErrAttemptLost
 			}
 			var leaseRow model.RecoveryPointLease
@@ -448,15 +464,22 @@ func (coordinator *Coordinator) heartbeat(ctx context.Context, request Heartbeat
 				leaseRow.AttemptID != attempt.RecoveryPointAttemptID || hashFence(leaseRow.FenceToken) != attempt.RecoveryPointFenceHash {
 				return ErrAttemptLost
 			}
+			now := coordinator.utcNow()
+			if !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.WorkerLeaseExpiresAt.UTC()) ||
+				!now.Before(attempt.AbsoluteDeadline.UTC()) || leaseRow.Status != string(backupasset.LeaseActive) ||
+				!now.Before(leaseRow.LeaseExpiresAt.UTC()) || !now.Before(leaseRow.AbsoluteDeadline.UTC()) {
+				return ErrAttemptLost
+			}
 			fence := leaseFenceFromRow(leaseRow)
 			recoveryLease, err := coordinator.leaseService.RenewTx(ctx, tx, fence)
 			if err != nil {
 				return fmt.Errorf("renew processing RecoveryPoint lease: %w", err)
 			}
-			var worker model.BackupAssetWorkerIdentity
-			workerResult := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
-				Select("id", "trust_state", "health_state").Where("id = ?", request.WorkerID).Limit(1).Find(&worker)
-			if workerResult.Error != nil || workerResult.RowsAffected != 1 || worker.TrustState != "active" {
+			// RenewTx samples before its own row lock; this transaction already
+			// holds the lease lock. Use its timestamp for the Worker renewal and
+			// reject authority that expired between the two checks.
+			now = recoveryLease.LastHeartbeatAt.UTC()
+			if !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.WorkerLeaseExpiresAt.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) {
 				return ErrAttemptLost
 			}
 			workerDeadline := now.Add(coordinator.config.PullLease)
@@ -512,6 +535,15 @@ func (coordinator *Coordinator) TransitionAttempt(ctx context.Context, request A
 	}
 	var response AttemptTransitionResult
 	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var worker model.BackupAssetWorkerIdentity
+		workerResult := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id").Where("id = ?", request.WorkerID).Limit(1).Find(&worker)
+		if workerResult.Error != nil {
+			return fmt.Errorf("load processing transition Worker: %w", workerResult.Error)
+		}
+		if workerResult.RowsAffected != 1 {
+			return ErrAttemptLost
+		}
 		var job model.BackupAssetProcessingJob
 		result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).Limit(1).Find(&job)
 		if result.Error != nil {
@@ -608,6 +640,11 @@ func (coordinator *Coordinator) TransitionAttempt(ctx context.Context, request A
 		if updated.RowsAffected != 1 {
 			return ErrRevisionConflict
 		}
+		if effective.To == ProcessingRetryWait {
+			if err := coordinator.recomputePriorityTx(ctx, tx, job.ID); err != nil {
+				return err
+			}
+		}
 		if effective.To == ProcessingFailed {
 			category, _ := effective.ErrorCode.Category()
 			if category == ContractSecurityError {
@@ -646,6 +683,38 @@ func (coordinator *Coordinator) findOrCreateJobTx(ctx context.Context, tx *gorm.
 	if queued >= int64(coordinator.config.QueueMax) {
 		return model.BackupAssetProcessingJob{}, false, ErrQueueFull
 	}
+	provider, estimated, err := sourceBackfillMetadata(ctx, tx, request.Descriptor)
+	if err != nil {
+		return model.BackupAssetProcessingJob{}, false, err
+	}
+	if request.Interest.PriorityClass == PriorityBackground {
+		policy, ledger, now, err := coordinator.lockBackfillState(ctx, tx)
+		if err != nil {
+			return model.BackupAssetProcessingJob{}, false, err
+		}
+		usage, err := backfillWindow(ledger, now)
+		if err != nil {
+			return model.BackupAssetProcessingJob{}, false, err
+		}
+		if policy.Paused {
+			return model.BackupAssetProcessingJob{}, false, &BackfillAdmissionError{Reason: BackfillAdmissionPaused}
+		}
+		if usage.Jobs >= int64(policy.JobsPerHour) {
+			return model.BackupAssetProcessingJob{}, false, &BackfillAdmissionError{Reason: BackfillAdmissionJobQuota}
+		}
+		if usage.Bytes > policy.BytesPerHour || estimated > policy.BytesPerHour-usage.Bytes {
+			return model.BackupAssetProcessingJob{}, false, &BackfillAdmissionError{Reason: BackfillAdmissionByteQuota}
+		}
+		updated := tx.WithContext(ctx).Model(&model.BackupAssetProcessingBackfillLedger{}).Where("id = ?", 1).Updates(map[string]any{
+			"window_started_at": usage.WindowStartedAt, "jobs_count": usage.Jobs + 1, "bytes_count": usage.Bytes + estimated, "updated_at": now,
+		})
+		if updated.Error != nil {
+			return model.BackupAssetProcessingJob{}, false, fmt.Errorf("charge backfill ledger: %w", updated.Error)
+		}
+		if updated.RowsAffected != 1 {
+			return model.BackupAssetProcessingJob{}, false, fmt.Errorf("%w: backfill ledger disappeared", ErrInvalidContract)
+		}
+	}
 	id, err := backupasset.NewOpaqueID()
 	if err != nil {
 		return model.BackupAssetProcessingJob{}, false, err
@@ -657,6 +726,7 @@ func (coordinator *Coordinator) findOrCreateJobTx(ctx context.Context, tx *gorm.
 		CatalogGenerationID: request.Descriptor.CatalogGenerationID, EntryID: request.Descriptor.Source.EntryID,
 		SourceFingerprint: request.Descriptor.SourceFingerprint, EntryFingerprint: request.Descriptor.EntryFingerprint,
 		ProviderCapabilityRevision: request.Descriptor.ProviderCapabilityRevision, Capability: request.Descriptor.Capability,
+		ProviderKind: provider, EstimatedInputBytes: estimated, BackfillCharged: request.Interest.PriorityClass == PriorityBackground,
 		CapabilitySchema: request.Descriptor.CapabilitySchema, PipelineFingerprint: request.Descriptor.PipelineFingerprint,
 		OutputProfile: request.Descriptor.OutputProfile, SecurityPolicyRevision: request.Descriptor.SecurityPolicyRevision,
 		PriorityClass: string(request.Interest.PriorityClass), EffectivePriority: request.Interest.Priority,
@@ -719,6 +789,21 @@ func (coordinator *Coordinator) recomputePriorityTx(ctx context.Context, tx *gor
 		}
 		if candidateClass == priorityClass && interest.Priority > priority {
 			priority = interest.Priority
+		}
+	}
+	if priorityClass == PriorityBackground {
+		var job model.BackupAssetProcessingJob
+		if err := tx.WithContext(ctx).Where("id = ?", jobID).First(&job).Error; err != nil {
+			return fmt.Errorf("load processing priority: %w", err)
+		}
+		if job.PriorityClass == string(PriorityInteractive) && job.CurrentAttemptID != nil && job.State != string(ProcessingQueued) && job.State != string(ProcessingRetryWait) {
+			var active int64
+			if err := tx.WithContext(ctx).Model(&model.BackupAssetProcessingAttempt{}).Where("id = ? AND job_id = ? AND state = ? AND is_current = ?", *job.CurrentAttemptID, job.ID, "active", true).Count(&active).Error; err != nil {
+				return err
+			}
+			if active != 0 {
+				priorityClass = PriorityInteractive
+			}
 		}
 	}
 	if err := tx.WithContext(ctx).Model(&model.BackupAssetProcessingJob{}).Where("id = ?", jobID).
@@ -792,26 +877,55 @@ func (coordinator *Coordinator) selectJobTx(ctx context.Context, tx *gorm.DB, wo
 		}
 	}
 	SortQueueCandidates(candidates)
-	for _, candidate := range candidates {
-		slot, ok := ChooseSlot(usage, candidate.PriorityClass)
-		if ok {
-			selected := byID[candidate.ID]
-			if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, selected.RecoveryPointID); err != nil {
+	var sourceErr error
+	for index, candidate := range candidates {
+		selected := byID[candidate.ID]
+		name := fmt.Sprintf("backfill_candidate_%d", index)
+		if err := tx.SavePoint(name).Error; err != nil {
+			return model.BackupAssetProcessingJob{}, "", err
+		}
+		if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, selected.RecoveryPointID); err != nil {
+			if !errors.Is(err, backupasset.ErrConflict) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return model.BackupAssetProcessingJob{}, "", err
 			}
-			var locked model.BackupAssetProcessingJob
-			loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("id = ? AND recovery_point_id = ? AND state = ? AND is_current = ?",
-					selected.ID, selected.RecoveryPointID, ProcessingQueued, true).
-				Limit(1).Find(&locked)
-			if loaded.Error != nil {
-				return model.BackupAssetProcessingJob{}, "", fmt.Errorf("lock selected processing job: %w", loaded.Error)
+			if rollbackErr := tx.RollbackTo(name).Error; rollbackErr != nil {
+				return model.BackupAssetProcessingJob{}, "", fmt.Errorf("rollback rejected processing candidate: %w", rollbackErr)
 			}
-			if loaded.RowsAffected != 1 {
-				return model.BackupAssetProcessingJob{}, "", ErrNoWork
+			if sourceErr == nil {
+				sourceErr = err
 			}
-			return locked, slot, nil
+			continue
 		}
+		var locked model.BackupAssetProcessingJob
+		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND recovery_point_id = ? AND state = ? AND is_current = ?", selected.ID, selected.RecoveryPointID, ProcessingQueued, true).
+			Limit(1).Find(&locked)
+		if loaded.Error != nil {
+			return model.BackupAssetProcessingJob{}, "", fmt.Errorf("lock selected processing job: %w", loaded.Error)
+		}
+		slot, fits := ChooseSlot(usage, PriorityClass(locked.PriorityClass))
+		if loaded.RowsAffected == 1 && fits && locked.AbsoluteDeadline.After(coordinator.utcNow()) {
+			if PriorityClass(locked.PriorityClass) == PriorityBackground {
+				policy, _, now, err := coordinator.lockBackfillState(ctx, tx)
+				if err != nil {
+					return model.BackupAssetProcessingJob{}, "", err
+				}
+				providers, capabilities, err := backfillOccupancy(ctx, tx, now, false)
+				if err != nil {
+					return model.BackupAssetProcessingJob{}, "", err
+				}
+				fits = !policy.Paused && providers[locked.ProviderKind] < policy.ProviderConcurrency && capabilities[locked.Capability] < policy.CapabilityConcurrency && locked.AbsoluteDeadline.After(now)
+			}
+			if fits {
+				return locked, slot, nil
+			}
+		}
+		if err := tx.RollbackTo(name).Error; err != nil {
+			return model.BackupAssetProcessingJob{}, "", fmt.Errorf("rollback rejected processing candidate: %w", err)
+		}
+	}
+	if sourceErr != nil {
+		return model.BackupAssetProcessingJob{}, "", sourceErr
 	}
 	return model.BackupAssetProcessingJob{}, "", ErrNoWork
 }
@@ -968,7 +1082,29 @@ func revokeAttemptGrantsTx(tx *gorm.DB, attemptID string, now time.Time, reason 
 		}).Error; err != nil {
 		return fmt.Errorf("revoke transitioned attempt grants: %w", err)
 	}
-	return nil
+	return retireAttemptUploadsTx(tx, attemptID, now, reason)
+}
+
+func retireAttemptUploadsTx(tx *gorm.DB, attemptID string, now time.Time, reason string) error {
+	return retireUploadsTx(tx, "attempt_id", attemptID, now, reason)
+}
+
+func retireJobUploadsTx(tx *gorm.DB, jobID string, now time.Time, reason string) error {
+	return retireUploadsTx(tx, "job_id", jobID, now, reason)
+}
+
+func retireUploadsTx(tx *gorm.DB, column, id string, now time.Time, reason string) error {
+	if !tx.Migrator().HasTable(&model.BackupAssetProcessingUpload{}) {
+		return nil
+	}
+	failure := "lease_lost"
+	if reason == "source_changed" {
+		failure = reason
+	}
+	if err := tx.Model(&model.BackupAssetProcessingUpload{}).Where(column+" = ? AND state IN ?", id, []string{"reserved", "streaming"}).Updates(map[string]any{"state": "rejected", "failure_code": failure, "finished_at": now, "updated_at": now}).Error; err != nil {
+		return err
+	}
+	return tx.Model(&model.BackupAssetProcessingUpload{}).Where(column+" = ? AND state = ?", id, "staged").Updates(map[string]any{"state": "orphaned", "failure_code": failure, "updated_at": now}).Error
 }
 
 func quarantineWorkerTx(tx *gorm.DB, workerID string, code ProcessingErrorCode, now time.Time) error {

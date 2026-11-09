@@ -726,6 +726,11 @@ func (service *FoundationService) ProcessingConfig() (ProcessingConfig, error) {
 	if err != nil {
 		return ProcessingConfig{}, err
 	}
+	return processingConfigFromValidatedValues(values)
+}
+
+func processingConfigFromValidatedValues(values map[string]string) (ProcessingConfig, error) {
+	var err error
 	result := ProcessingConfig{}
 	for _, field := range []struct {
 		key    string
@@ -810,6 +815,29 @@ func (service *FoundationService) ProcessingConfig() (ProcessingConfig, error) {
 	}
 	result.DerivedStore.Root = strings.TrimSpace(values["backup_assets.derived_store_root"])
 	return result, nil
+}
+
+// ProcessingBackfillConfigTx reads the complete effective settings through the caller's transaction.
+func (service *FoundationService) ProcessingBackfillConfigTx(ctx context.Context, tx *gorm.DB) (ProcessingBackfillConfig, error) {
+	if service == nil || service.settings == nil || tx == nil {
+		return ProcessingBackfillConfig{}, fmt.Errorf("%w: transactional processing settings unavailable", ErrInvalidState)
+	}
+	reader, ok := service.settings.(BackupAssetSettingsTransactionSnapshotReader)
+	if !ok {
+		return ProcessingBackfillConfig{}, fmt.Errorf("%w: transactional processing settings unavailable", ErrInvalidState)
+	}
+	values, err := reader.BackupAssetSettingsSnapshotTx(ctx, tx)
+	if err != nil {
+		return ProcessingBackfillConfig{}, err
+	}
+	if err := validateCompleteFoundationValues(values); err != nil {
+		return ProcessingBackfillConfig{}, err
+	}
+	config, err := processingConfigFromValidatedValues(values)
+	if err != nil {
+		return ProcessingBackfillConfig{}, err
+	}
+	return config.Backfill, nil
 }
 
 func (service *FoundationService) ExportConfig() (ExportConfig, error) {

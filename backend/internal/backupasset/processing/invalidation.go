@@ -89,7 +89,19 @@ func NewInvalidationController(
 	return &InvalidationController{db: db, coordinator: coordinator, lifecycle: lifecycle, now: now}, nil
 }
 
+var errInvalidationReplan = errors.New("processing invalidation plan changed")
+
 func (controller *InvalidationController) Invalidate(ctx context.Context, request InvalidationRequest) (InvalidationResult, error) {
+	for range 20 {
+		result, err := controller.invalidatePlanned(ctx, request)
+		if !errors.Is(err, errInvalidationReplan) {
+			return result, err
+		}
+	}
+	return InvalidationResult{}, fmt.Errorf("processing invalidation plan repeatedly changed: %w", errInvalidationReplan)
+}
+
+func (controller *InvalidationController) invalidatePlanned(ctx context.Context, request InvalidationRequest) (InvalidationResult, error) {
 	if controller == nil || !validInvalidationRequest(request) {
 		return InvalidationResult{}, ErrInvalidContract
 	}
@@ -158,7 +170,103 @@ func (controller *InvalidationController) Invalidate(ctx context.Context, reques
 	var result InvalidationResult
 	err = controller.coordinator.retryConflicts(ctx, func() error {
 		candidate := InvalidationResult{}
-		transactionErr := controller.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		transactionErr := backfillTransaction(ctx, controller.db, func(tx *gorm.DB) error {
+			pointSet := map[string]bool{}
+			jobSet := map[string]bool{}
+			replacements := map[string]string{}
+			for _, plan := range jobPlans {
+				pointSet[plan.job.RecoveryPointID] = true
+				jobSet[plan.job.ID] = true
+			}
+			for _, plan := range leasePlans {
+				pointSet[plan.lease.RecoveryPointID] = true
+				jobSet[plan.lease.Fence.OwnerID] = true
+			}
+			points := make([]string, 0, len(pointSet))
+			for id := range pointSet {
+				points = append(points, id)
+			}
+			sort.Strings(points)
+			for _, id := range points {
+				var point model.RecoveryPoint
+				loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", id).Find(&point)
+				if loaded.Error != nil {
+					return loaded.Error
+				}
+				if loaded.RowsAffected != 1 {
+					return errInvalidationReplan
+				}
+			}
+			orderedPlans := append([]invalidationJobPlan(nil), jobPlans...)
+			sort.Slice(orderedPlans, func(i, j int) bool {
+				if orderedPlans[i].job.RecoveryPointID != orderedPlans[j].job.RecoveryPointID {
+					return orderedPlans[i].job.RecoveryPointID < orderedPlans[j].job.RecoveryPointID
+				}
+				return orderedPlans[i].job.ID < orderedPlans[j].job.ID
+			})
+			for _, plan := range orderedPlans {
+				current, err := controller.descriptorStillCurrent(ctx, tx, plan.descriptor)
+				if err != nil {
+					return err
+				}
+				if current != plan.requeue {
+					return errInvalidationReplan
+				}
+				if !current {
+					continue
+				}
+				if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, plan.descriptor.Source.RecoveryPointID); err != nil {
+					return err
+				}
+				key, err := ComputeWorkKey(plan.descriptor)
+				if err != nil {
+					return err
+				}
+				var replacement model.BackupAssetProcessingJob
+				loaded := tx.WithContext(ctx).Where("work_key = ? AND is_current = ?", key, true).Find(&replacement)
+				if loaded.Error != nil {
+					return loaded.Error
+				}
+				if loaded.RowsAffected > 1 {
+					return fmt.Errorf("%w: multiple current replacements", ErrInvalidContract)
+				}
+				if loaded.RowsAffected == 1 {
+					jobSet[replacement.ID] = true
+					replacements[key] = replacement.ID
+				} else {
+					replacements[key] = ""
+				}
+			}
+			jobIDs := make([]string, 0, len(jobSet))
+			for id := range jobSet {
+				jobIDs = append(jobIDs, id)
+			}
+			sort.Strings(jobIDs)
+			for _, id := range jobIDs {
+				var job model.BackupAssetProcessingJob
+				loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).Find(&job)
+				if loaded.Error != nil {
+					return loaded.Error
+				}
+				if loaded.RowsAffected != 1 {
+					return errInvalidationReplan
+				}
+				for _, plan := range jobPlans {
+					if plan.job.ID == id && (job.Version != plan.job.Version || job.IsCurrent != plan.job.IsCurrent) {
+						return errInvalidationReplan
+					}
+				}
+			}
+			for key, expected := range replacements {
+				var replacement model.BackupAssetProcessingJob
+				loaded := tx.WithContext(ctx).Where("work_key = ? AND is_current = ?", key, true).Find(&replacement)
+				if loaded.Error != nil {
+					return loaded.Error
+				}
+				if loaded.RowsAffected > 1 || (loaded.RowsAffected == 0 && expected != "") || (loaded.RowsAffected == 1 && replacement.ID != expected) {
+					return errInvalidationReplan
+				}
+			}
 			for _, leasePlan := range leasePlans {
 				if err := controller.coordinator.leaseService.ValidateFenceTx(ctx, tx, leasePlan.lease.Fence); err != nil {
 					return err
@@ -192,6 +300,10 @@ func (controller *InvalidationController) Invalidate(ctx context.Context, reques
 				if !current {
 					continue
 				}
+				name := fmt.Sprintf("invalidation_replacement_%d", candidate.SupersededJobs+candidate.RequeuedJobs+candidate.NotDeployed)
+				if err := tx.SavePoint(name).Error; err != nil {
+					return err
+				}
 				_, err = controller.coordinator.requestWorkTx(ctx, tx, WorkRequest{
 					Descriptor: plan.descriptor,
 					Interest: InterestRequest{
@@ -199,8 +311,13 @@ func (controller *InvalidationController) Invalidate(ctx context.Context, reques
 						PriorityClass: PriorityBackground, Priority: request.RequeuePriority,
 					},
 				})
-				if errors.Is(err, ErrNotDeployed) {
-					candidate.NotDeployed++
+				if errors.Is(err, ErrNotDeployed) || errors.Is(err, ErrBackfillDenied) {
+					if rollbackErr := tx.RollbackTo(name).Error; rollbackErr != nil {
+						return rollbackErr
+					}
+					if errors.Is(err, ErrNotDeployed) {
+						candidate.NotDeployed++
+					}
 					continue
 				}
 				if err != nil {

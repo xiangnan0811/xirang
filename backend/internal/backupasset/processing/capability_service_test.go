@@ -605,14 +605,21 @@ func TestCapabilityServiceStateReadsSucceededNonCurrentPublication(t *testing.T)
 
 func TestCapabilityServiceExactPublicationIdentity(t *testing.T) {
 	tests := []struct {
-		name         string
-		changeAsset  func(*content.AuthorizedAsset)
-		jobField     string
-		jobValue     string
-		changeActive string
-		pollNotFound bool
+		name          string
+		changeAsset   func(*content.AuthorizedAsset)
+		jobField      string
+		jobValue      string
+		changeActive  string
+		pollNotFound  bool
+		invalidSource bool
 	}{
-		{name: "recovery point with matching strong fingerprints", changeAsset: func(asset *content.AuthorizedAsset) { asset.Ref.RecoveryPointID = strings.Repeat("d", 32) }, pollNotFound: true},
+		{name: "recovery point with matching strong fingerprints", changeAsset: func(asset *content.AuthorizedAsset) {
+			asset.Ref.RecoveryPointID = strings.Repeat("d", 32)
+			asset.CatalogGenerationID = strings.Repeat("e", 32)
+		}, pollNotFound: true},
+		{name: "recovery point with original generation", changeAsset: func(asset *content.AuthorizedAsset) {
+			asset.Ref.RecoveryPointID = strings.Repeat("d", 32)
+		}, pollNotFound: true, invalidSource: true},
 		{name: "generation", changeAsset: func(asset *content.AuthorizedAsset) { asset.CatalogGenerationID = strings.Repeat("d", 32) }, pollNotFound: true},
 		{name: "entry", changeAsset: func(asset *content.AuthorizedAsset) { asset.Ref.EntryID = strings.Repeat("d", 64) }, pollNotFound: true},
 		{name: "source fingerprint", changeAsset: func(asset *content.AuthorizedAsset) { asset.SourceFingerprint = "source-fingerprint-v2" }, pollNotFound: true},
@@ -694,6 +701,26 @@ func TestCapabilityServiceExactPublicationIdentity(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if changedAsset.CatalogGenerationID != asset.CatalogGenerationID {
+				if err := harness.db.Create(&model.CatalogGeneration{
+					ID: changedAsset.CatalogGenerationID, RecoveryPointID: changedAsset.Ref.RecoveryPointID,
+					Generation: 2, State: "complete", IsActive: changedAsset.Ref.RecoveryPointID != asset.Ref.RecoveryPointID,
+					SourceFingerprint: changedAsset.SourceFingerprint, StartedAt: finishedAt, FinishedAt: &finishedAt,
+					CreatedAt: finishedAt, UpdatedAt: finishedAt,
+				}).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !test.invalidSource && (changedAsset.Ref != asset.Ref || changedAsset.CatalogGenerationID != asset.CatalogGenerationID) {
+				if err := harness.db.Create(&model.CatalogEntry{
+					GenerationID: changedAsset.CatalogGenerationID, EntryID: changedAsset.Ref.EntryID,
+					RecoveryPointID: changedAsset.Ref.RecoveryPointID, NormalizedPath: "/changed-source", Name: "changed-source",
+					EntryType: string(backupasset.CatalogEntryFile), Size: changedAsset.Size,
+					Fingerprint: changedAsset.EntryFingerprint, FingerprintStrength: "strong", CreatedAt: finishedAt,
+				}).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
 			service.authorize = capabilityAssetAuthorizerFake{asset: changedAsset}
 			if test.jobField != "" {
 				if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", interest.JobID).Update(test.jobField, test.jobValue).Error; err != nil {
@@ -705,6 +732,36 @@ func TestCapabilityServiceExactPublicationIdentity(t *testing.T) {
 			}
 			if test.changeActive == "policy" {
 				service.securityPolicyRevision = func(context.Context) (string, error) { return "security-policy-v2", nil }
+			}
+			if test.invalidSource {
+				var jobsBefore, interestsBefore int64
+				if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Count(&jobsBefore).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := harness.db.Model(&model.BackupAssetProcessingInterest{}).Count(&interestsBefore).Error; err != nil {
+					t.Fatal(err)
+				}
+				assertState(changedAsset.Ref, ProcessingProductNative)
+				result, err := service.RequestPreview(ctx, PreviewJobRequest{Actor: actor, Ref: changedAsset.Ref, Representation: PreviewThumbnail})
+				if !errors.Is(err, ErrInvalidContract) || result.State == ProcessingProductDerived {
+					t.Fatalf("invalid source preview=%+v err=%v, want invalid contract", result, err)
+				}
+				var jobsAfter, interestsAfter int64
+				if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Count(&jobsAfter).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := harness.db.Model(&model.BackupAssetProcessingInterest{}).Count(&interestsAfter).Error; err != nil {
+					t.Fatal(err)
+				}
+				if jobsAfter != jobsBefore || interestsAfter != interestsBefore {
+					t.Fatalf("invalid source created jobs or interests: jobs %d -> %d, interests %d -> %d", jobsBefore, jobsAfter, interestsBefore, interestsAfter)
+				}
+				if _, err := service.PollPreview(ctx, PreviewJobLookup{Actor: actor, Ref: changedAsset.Ref, JobID: created.JobID}); !errors.Is(err, ErrProcessingHandleNotFound) {
+					t.Fatalf("invalid source poll err=%v, want handle not found", err)
+				}
+				service.authorize = capabilityAssetAuthorizerFake{asset: asset}
+				assertState(asset.Ref, ProcessingProductDerived)
+				return
 			}
 			wantState, wantRequest := ProcessingProductNative, ProcessingProductQueued
 			if test.changeActive == "pipeline" {

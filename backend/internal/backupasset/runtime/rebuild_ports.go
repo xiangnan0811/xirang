@@ -122,6 +122,9 @@ func (adapter derivedBackfillAdapter) QueueLowPriorityDerivedBackfill(
 				Priority:      100,
 			},
 		})
+		if errors.Is(err, processing.ErrBackfillDenied) {
+			return queued, nil
+		}
 		if errors.Is(err, processing.ErrNotDeployed) {
 			return queued, fmt.Errorf("%w: derived backfill not deployed", err)
 		}
@@ -296,25 +299,29 @@ func (runtime *managedProcessingRuntime) collectRebuildDerivedDescriptors(
 	applyAdmission bool,
 ) (derivedBackfillCollectResult, error) {
 	if runtime == nil || runtime.db == nil {
-		return derivedBackfillCollectResult{}, nil
+		return derivedBackfillCollectResult{}, fmt.Errorf("%w: derived backfill database unavailable", backupasset.ErrInvalidState)
 	}
 	ctx = nonNilRuntimeContext(ctx)
 	runtime.mu.RLock()
 	coordinator := runtime.coordinator
 	secretEnabled := runtime.config.SecretClassify
 	inspectedLimit := derivedBackfillInspectedLimit(runtime.config.Backfill.InspectedLimit)
-	policy := processing.BackfillPolicy{
-		Paused: runtime.config.Backfill.Paused, BatchSize: runtime.config.Backfill.BatchSize,
-		JobsPerHour: runtime.config.Backfill.JobsPerHour, BytesPerHour: runtime.config.Backfill.BytesPerHour,
-		ProviderConcurrency:   runtime.config.Backfill.ProviderConcurrency,
-		CapabilityConcurrency: runtime.config.Backfill.CapabilityConcurrency,
-		RecentWindow:          runtime.config.Backfill.RecentWindow,
-		HistoryAgingStep:      runtime.config.Backfill.HistoryAgingStep,
-	}
+	policy := processingBackfillPolicy(runtime.config.Backfill)
 	clock := runtime.now
 	runtime.mu.RUnlock()
 	if coordinator == nil {
-		return derivedBackfillCollectResult{}, nil
+		return derivedBackfillCollectResult{}, fmt.Errorf("%w: derived backfill coordinator unavailable", backupasset.ErrInvalidState)
+	}
+	var usage processing.BackfillUsage
+	if applyAdmission {
+		var err error
+		policy, usage, err = coordinator.BackfillSnapshot(ctx)
+		if errors.Is(err, processing.ErrBackfillDenied) {
+			return derivedBackfillCollectResult{incomplete: true}, nil
+		}
+		if err != nil {
+			return derivedBackfillCollectResult{}, err
+		}
 	}
 	batchSize := policy.BatchSize
 	if batchSize < 1 || batchSize > secretContinuationBatchSize {
@@ -389,12 +396,13 @@ func (runtime *managedProcessingRuntime) collectRebuildDerivedDescriptors(
 		clock = func() time.Time { return time.Now().UTC() }
 	}
 	now := clock().UTC()
-	usage := processing.BackfillUsage{
-		WindowStartedAt: now, ProviderActive: map[string]int{}, CapabilityActive: map[string]int{},
-	}
-	providerKind := strings.TrimSpace(repositoryRow.ProviderKind)
-	if providerKind == "" {
-		providerKind = "rebuild"
+	providerKind := strings.ToLower(strings.TrimSpace(repositoryRow.ProviderKind))
+	if applyAdmission {
+		switch providerKind {
+		case "restic", "rsync", "rclone", "command":
+		default:
+			return derivedBackfillCollectResult{}, fmt.Errorf("%w: invalid rebuild repository provider", backupasset.ErrInvalidState)
+		}
 	}
 	var descriptors []processing.WorkDescriptorV1
 	afterEntryID := walk.afterEntryID
@@ -459,7 +467,7 @@ func (runtime *managedProcessingRuntime) collectRebuildDerivedDescriptors(
 						Capability: profile.Capability, EstimatedBytes: entry.Size,
 					}, now)
 					if !admission.Allowed {
-						return derivedBackfillCollectResult{descriptors: descriptors}, nil
+						return derivedBackfillCollectResult{descriptors: descriptors, incomplete: true}, nil
 					}
 				}
 				descriptor := processing.WorkDescriptorV1{
@@ -482,10 +490,12 @@ func (runtime *managedProcessingRuntime) collectRebuildDerivedDescriptors(
 					return derivedBackfillCollectResult{}, err
 				}
 				descriptors = append(descriptors, descriptor)
-				usage.Jobs++
-				usage.Bytes += entry.Size
-				usage.ProviderActive[providerKind]++
-				usage.CapabilityActive[profile.Capability]++
+				if applyAdmission {
+					usage.Jobs++
+					usage.Bytes += entry.Size
+					usage.ProviderActive[providerKind]++
+					usage.CapabilityActive[profile.Capability]++
+				}
 				if len(descriptors) >= batchSize {
 					return derivedBackfillCollectResult{descriptors: descriptors}, nil
 				}

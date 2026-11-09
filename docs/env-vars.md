@@ -299,7 +299,7 @@ Rclone 预检在提交复验时通过调用者事务读取有效的 Foundation �
 | `BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL`<br>`backup_assets.derived_store_reconcile_interval` | duration | `15m` | 派生资产对账间隔；范围 `1m..24h` |
 | `BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE`<br>`backup_assets.derived_store_reconcile_batch_size` | int | `256` | 派生资产对账批次；范围 `1..10000` |
 
-上述 backfill 配置名保留兼容；当前 Runtime 每次收集重新建立 usage，jobs／bytes／Provider／capability 限额仅作用于本次收集累计，并非跨请求持久小时统计或实际 Worker 并发。`RecentWindow`／`HistoryAgingStep` 参与配置与 policy 有效性校验，当前不影响队列优先级或 aging；批次另受 Runtime 每次最多 100 个 descriptor 的限制。字段名和历史“每小时／并发”描述不能作为这些更强保证已实现的证据，具体队列与统计边界见[处理与导出合同](spec/domains/backup-processing-export.md#有界-backfill-与管理-ui)。
+Backfill 每小时任务／字节上限由共享数据库的持久 UTC 整点账本约束，在实际新建后台 job 时一次计入任务与 Catalog 预计输入字节，零字节也计一次任务；它不度量实际网络流量。同 job 共用／重试不重收、取消不退费，交互新建与升级前作业不补造历史费。Provider／能力并发限制约束全数据库有效后台 attempt，交互仍受既有 Worker 槽位保护。暂停与策略更新在后续事务读取最新完整数据库设置后生效，保留当窗累计；Runtime 收集快照与本机缓存不替代事务准入。`RecentWindow`／`HistoryAgingStep` 仍只参与读取与有效性校验，不引入旧评分或 aging；批次另受每轮最多 100 个 descriptor 限制。具体窗口、回拨、拒绝与占用边界见[处理与导出合同](spec/domains/backup-processing-export.md#有界-backfill-与管理-ui)。
 
 ### 受控恢复
 

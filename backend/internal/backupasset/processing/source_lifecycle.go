@@ -3,6 +3,7 @@ package processing
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"xirang/backend/internal/backupasset"
@@ -155,6 +156,9 @@ func (owner *SourceLifecycle) settleWork(ctx context.Context, request backupasse
 					Updates(map[string]any{"activation_secret_hash": "", "state": "revoked", "revoked_at": now, "revocation_reason": "expired", "updated_at": now, "version": gorm.Expr("version + 1")}).Error; err != nil {
 					return fmt.Errorf("revoke Processing source grants: %w", err)
 				}
+				if err := retireJobUploadsTx(tx, job.ID, now, "source_changed"); err != nil {
+					return err
+				}
 				if err := tx.Model(&model.BackupAssetProcessingAttempt{}).Where("job_id = ? AND state = ? AND is_current = ?", job.ID, "active", true).
 					Updates(map[string]any{"state": "canceled", "outcome_code": "", "is_current": false, "finished_at": now, "updated_at": now}).Error; err != nil {
 					return fmt.Errorf("cancel Processing source attempt: %w", err)
@@ -238,16 +242,16 @@ func (owner *SourceLifecycle) destroyDerived(ctx context.Context, request backup
 	for {
 		settled := false
 		var doomed []doomedBlob
-		err := owner.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		err := derivedCleanupTransaction(ctx, owner.db, func(tx *gorm.DB) error {
+			settled = false
+			doomed = nil
 			if err := backupasset.ValidateSourceLifecycleAttemptTx(ctx, tx, request); err != nil {
 				return err
 			}
 			if err := tx.Table("backup_asset_derived_blobs AS blob").
 				Select("blob.id AS id, blob.opaque_locator AS locator").
-				Joins("JOIN backup_asset_derived_blob_references AS reference ON reference.blob_id = blob.id").
-				Where("reference.recovery_point_id = ? AND blob.state = ?", request.RecoveryPointID, "purge_failed").
-				Group("blob.id, blob.opaque_locator").Order("blob.id ASC").Limit(owner.batchSize).
-				Scan(&doomed).Error; err != nil {
+				Where(`blob.state = ? AND (EXISTS (SELECT 1 FROM backup_asset_derived_blob_references AS reference WHERE reference.blob_id = blob.id AND reference.recovery_point_id = ?) OR EXISTS (SELECT 1 FROM backup_asset_processing_uploads AS upload JOIN backup_asset_processing_jobs AS job ON job.id = upload.job_id WHERE upload.staging_id = blob.id AND upload.state = ? AND job.recovery_point_id = ?))`, "purge_failed", request.RecoveryPointID, "orphaned", request.RecoveryPointID).
+				Order("blob.id ASC").Limit(owner.batchSize).Scan(&doomed).Error; err != nil {
 				return fmt.Errorf("load retryable Processing Derived purges: %w", err)
 			}
 			if len(doomed) != 0 {
@@ -264,64 +268,91 @@ func (owner *SourceLifecycle) destroyDerived(ctx context.Context, request backup
 				Order("id ASC").Limit(owner.batchSize).Find(&sets).Error; err != nil {
 				return fmt.Errorf("load Processing Derived sets: %w", err)
 			}
-			if len(sets) == 0 {
+			var candidates []string
+			if err := tx.Table("backup_asset_processing_uploads AS upload").Distinct("upload.staging_id").Joins("JOIN backup_asset_processing_jobs AS job ON job.id = upload.job_id").Joins("JOIN backup_asset_derived_blobs AS blob ON blob.id = upload.staging_id").Where(`job.recovery_point_id = ? AND upload.state = ? AND blob.state IN ? AND NOT EXISTS (SELECT 1 FROM backup_asset_derived_blob_references AS reference WHERE reference.blob_id = blob.id AND reference.state = ?)`, request.RecoveryPointID, "orphaned", []string{"active", "staged"}, "active").Order("upload.staging_id ASC").Pluck("upload.staging_id", &candidates).Error; err != nil {
+				return err
+			}
+			if len(sets) == 0 && len(candidates) == 0 {
 				settled = true
 				return nil
 			}
-			now := owner.now().UTC()
+			blobIDs := make(map[string]struct{})
+			for _, id := range candidates {
+				blobIDs[id] = struct{}{}
+			}
+			setArtifacts := make(map[string][]model.BackupAssetDerivedArtifact, len(sets))
 			for _, set := range sets {
 				var artifacts []model.BackupAssetDerivedArtifact
 				if err := tx.Where("artifact_set_id = ?", set.ID).Find(&artifacts).Error; err != nil {
 					return fmt.Errorf("load Processing Derived artifacts: %w", err)
 				}
-				if err := tx.Model(&model.BackupAssetDerivedBlobReference{}).
-					Where("recovery_point_id = ? AND artifact_id IN ? AND state = ?", request.RecoveryPointID, artifactIDs(artifacts), "active").
-					Updates(map[string]any{"state": "unavailable", "revoked_at": now, "updated_at": now}).Error; err != nil {
-					return fmt.Errorf("revoke Processing Derived references: %w", err)
-				}
-				processedBlobIDs := make(map[string]struct{}, len(artifacts))
+				setArtifacts[set.ID] = artifacts
 				for _, artifact := range artifacts {
-					if _, processed := processedBlobIDs[artifact.BlobID]; processed {
-						continue
+					blobIDs[artifact.BlobID] = struct{}{}
+				}
+			}
+			ordered := make([]string, 0, len(blobIDs))
+			for id := range blobIDs {
+				ordered = append(ordered, id)
+			}
+			sort.Strings(ordered)
+			jobs, err := lockDerivedHolderJobsTx(tx, ordered)
+			if err != nil {
+				return err
+			}
+			if err := orphanDerivedHoldersTx(tx, ordered, jobs, owner.now().UTC()); err != nil {
+				return err
+			}
+			blobs := make(map[string]model.BackupAssetDerivedBlob, len(ordered))
+			for _, id := range ordered {
+				var blob model.BackupAssetDerivedBlob
+				result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).Limit(1).Find(&blob)
+				if result.Error != nil || result.RowsAffected != 1 {
+					return fmt.Errorf("%w: %v", ErrDerivedBlobUnavailable, result.Error)
+				}
+				blobs[id] = blob
+			}
+			if err := checkDerivedHolderCensusTx(tx, ordered, jobs); err != nil {
+				return err
+			}
+			now := owner.now().UTC()
+			for _, set := range sets {
+				artifacts := setArtifacts[set.ID]
+				if err := tx.Model(&model.BackupAssetDerivedBlobReference{}).Where("recovery_point_id = ? AND artifact_id IN ? AND state = ?", request.RecoveryPointID, artifactIDs(artifacts), "active").Updates(map[string]any{"state": "unavailable", "revoked_at": now, "updated_at": now}).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&model.BackupAssetDerivedArtifactSet{}).Where("id = ?", set.ID).Updates(map[string]any{"state": "unavailable", "revocation_reason": DerivedRevokeExpired, "projection_published": false, "revoked_at": now, "updated_at": now}).Error; err != nil {
+					return err
+				}
+			}
+			for _, id := range ordered {
+				blob := blobs[id]
+				var references int64
+				if err := tx.Model(&model.BackupAssetDerivedBlobReference{}).Where("blob_id = ? AND state = ?", id, "active").Count(&references).Error; err != nil {
+					return err
+				}
+				uploads, err := liveStagedUploadCountTx(tx, id, now)
+				if err != nil {
+					return err
+				}
+				if references > 0 || uploads > 0 {
+					if err := tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", id).Updates(map[string]any{"ref_count": references, "updated_at": now}).Error; err != nil {
+						return err
 					}
-					processedBlobIDs[artifact.BlobID] = struct{}{}
-					var blob model.BackupAssetDerivedBlob
-					result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", artifact.BlobID).Limit(1).Find(&blob)
-					if result.Error != nil {
-						return fmt.Errorf("load Processing Derived blob: %w", result.Error)
-					}
-					if result.RowsAffected != 1 {
+					continue
+				}
+				if blob.State != "unavailable" {
+					if !safeOpaqueLocator(blob.OpaqueLocator) {
 						return ErrDerivedBlobUnavailable
 					}
-					var activeReferences int64
-					if err := tx.Model(&model.BackupAssetDerivedBlobReference{}).Where("blob_id = ? AND state = ?", artifact.BlobID, "active").Count(&activeReferences).Error; err != nil {
-						return fmt.Errorf("count Processing Derived references: %w", err)
+					if err := tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", id).Updates(map[string]any{"state": "purge_failed", "ref_count": 0, "wrapped_dek": []byte{}, "unavailable_at": now, "updated_at": now}).Error; err != nil {
+						return err
 					}
-					if activeReferences != 0 {
-						updated := tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", artifact.BlobID).Update("ref_count", activeReferences)
-						if updated.Error != nil {
-							return fmt.Errorf("reconcile Processing Derived reference count: %w", updated.Error)
-						}
-						if updated.RowsAffected != 1 {
-							return ErrDerivedBlobUnavailable
-						}
-						continue
-					}
-					if blob.State != "unavailable" {
-						if !safeOpaqueLocator(blob.OpaqueLocator) {
-							return ErrDerivedBlobUnavailable
-						}
-						if err := tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", blob.ID).
-							Updates(map[string]any{"state": "purge_failed", "ref_count": 0, "wrapped_dek": []byte{}, "unavailable_at": now, "updated_at": now}).Error; err != nil {
-							return fmt.Errorf("revoke Processing Derived blob key: %w", err)
-						}
-						doomed = append(doomed, doomedBlob{ID: blob.ID, Locator: blob.OpaqueLocator})
-					}
+					doomed = append(doomed, doomedBlob{ID: id, Locator: blob.OpaqueLocator})
 				}
-				if err := tx.Model(&model.BackupAssetDerivedArtifactSet{}).Where("id = ?", set.ID).
-					Updates(map[string]any{"state": "unavailable", "revocation_reason": DerivedRevokeExpired, "projection_published": false, "revoked_at": now, "updated_at": now}).Error; err != nil {
-					return fmt.Errorf("revoke Processing Derived set: %w", err)
-				}
+			}
+			if len(sets) == 0 && len(doomed) == 0 {
+				settled = true
 			}
 			return nil
 		})
@@ -334,10 +365,10 @@ func (owner *SourceLifecycle) destroyDerived(ctx context.Context, request backup
 			}
 			now := owner.now().UTC()
 			updated := owner.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).
-				Where("id = ? AND state = ?", blob.ID, "purge_failed").
+				Where("id = ? AND state = ? AND opaque_locator = ?", blob.ID, "purge_failed", blob.Locator).
 				Updates(map[string]any{"state": "unavailable", "unavailable_at": now, "updated_at": now})
-			if updated.Error != nil || updated.RowsAffected != 1 {
-				return ErrDerivedBlobUnavailable
+			if updated.Error != nil {
+				return updated.Error
 			}
 		}
 		if settled {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"xirang/backend/internal/backupasset"
@@ -187,7 +188,7 @@ func (lifecycle *DerivedLifecycle) ReadAuthorized(ctx context.Context, authoriza
 }
 
 func (lifecycle *DerivedLifecycle) RevokeSet(ctx context.Context, artifactSetID string, reason DerivedRevokeReason) error {
-	return lifecycle.revokeSet(ctx, artifactSetID, reason, nil)
+	return lifecycle.revokeSet(ctx, artifactSetID, reason, nil, "", "")
 }
 
 func (lifecycle *DerivedLifecycle) RevokeSetFenced(
@@ -199,14 +200,14 @@ func (lifecycle *DerivedLifecycle) RevokeSetFenced(
 	if !validDerivedFence(fence, "") {
 		return ErrDerivedFenceRequired
 	}
-	return lifecycle.revokeSet(ctx, artifactSetID, reason, &fence)
+	return lifecycle.revokeSet(ctx, artifactSetID, reason, &fence, "", "")
 }
 
 func (lifecycle *DerivedLifecycle) revokeSet(
 	ctx context.Context,
 	artifactSetID string,
 	reason DerivedRevokeReason,
-	fence *backupasset.LeaseFence,
+	fence *backupasset.LeaseFence, expectedBlobID, expectedLocator string,
 ) error {
 	if lifecycle == nil || backupasset.ValidateOpaqueID(artifactSetID) != nil || !validDerivedRevokeReason(reason) {
 		return ErrDerivedUnauthorized
@@ -248,7 +249,13 @@ func (lifecycle *DerivedLifecycle) revokeSet(
 		locator string
 	}
 	var doomed []doomedBlob
-	err := lifecycle.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := derivedCleanupTransaction(ctx, lifecycle.db, func(tx *gorm.DB) error {
+		doomed = nil
+		var point model.RecoveryPoint
+		lockedPoint := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", initial.RecoveryPointID).Limit(1).Find(&point)
+		if lockedPoint.Error != nil || lockedPoint.RowsAffected != 1 {
+			return errors.Join(ErrDerivedUnauthorized, lockedPoint.Error)
+		}
 		var set model.BackupAssetDerivedArtifactSet
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", artifactSetID).Limit(1).Find(&set)
 		if result.Error != nil || result.RowsAffected != 1 {
@@ -256,6 +263,48 @@ func (lifecycle *DerivedLifecycle) revokeSet(
 		}
 		if derivedSetUnavailable(set.State) {
 			return nil
+		}
+		if set.RecoveryPointID != initial.RecoveryPointID {
+			return ErrDerivedUnauthorized
+		}
+		var artifacts []model.BackupAssetDerivedArtifact
+		if err := tx.Where("artifact_set_id = ?", set.ID).Find(&artifacts).Error; err != nil {
+			return fmt.Errorf("load Derived artifacts for revoke: %w", err)
+		}
+		blobIDs := make(map[string]struct{}, len(artifacts))
+		for _, artifact := range artifacts {
+			blobIDs[artifact.BlobID] = struct{}{}
+		}
+		orderedBlobIDs := make([]string, 0, len(blobIDs))
+		for blobID := range blobIDs {
+			orderedBlobIDs = append(orderedBlobIDs, blobID)
+		}
+		sort.Strings(orderedBlobIDs)
+		jobs, err := lockDerivedHolderJobsTx(tx, orderedBlobIDs)
+		if err != nil {
+			return err
+		}
+		if expectedBlobID == "" {
+			if err := orphanDerivedHoldersTx(tx, orderedBlobIDs, jobs, lifecycle.utcNow()); err != nil {
+				return err
+			}
+		}
+		observed := expectedBlobID == ""
+		for _, blobID := range orderedBlobIDs {
+			var blob model.BackupAssetDerivedBlob
+			locked := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", blobID).Limit(1).Find(&blob)
+			if locked.Error != nil || locked.RowsAffected != 1 {
+				return errors.Join(ErrDerivedBlobUnavailable, locked.Error)
+			}
+			if blobID == expectedBlobID && blob.OpaqueLocator == expectedLocator {
+				observed = true
+			}
+		}
+		if !observed {
+			return nil
+		}
+		if err := checkDerivedHolderCensusTx(tx, orderedBlobIDs, jobs); err != nil {
+			return err
 		}
 		if set.ProjectionPublished {
 			if preparedRevoke == nil {
@@ -274,15 +323,9 @@ func (lifecycle *DerivedLifecycle) revokeSet(
 			}).Error; err != nil {
 			return fmt.Errorf("mark Derived artifact set unavailable: %w", err)
 		}
-		var artifacts []model.BackupAssetDerivedArtifact
-		if err := tx.Where("artifact_set_id = ?", set.ID).Find(&artifacts).Error; err != nil {
-			return fmt.Errorf("load Derived artifacts for revoke: %w", err)
-		}
 		artifactIDs := make([]string, 0, len(artifacts))
-		blobIDs := make(map[string]struct{}, len(artifacts))
 		for _, artifact := range artifacts {
 			artifactIDs = append(artifactIDs, artifact.ID)
-			blobIDs[artifact.BlobID] = struct{}{}
 		}
 		if len(artifactIDs) > 0 {
 			if err := tx.Model(&model.BackupAssetDerivedBlobReference{}).
@@ -291,22 +334,25 @@ func (lifecycle *DerivedLifecycle) revokeSet(
 				return fmt.Errorf("revoke Derived blob references: %w", err)
 			}
 		}
-		for blobID := range blobIDs {
-			var activeCount int64
-			if err := tx.Model(&model.BackupAssetDerivedBlobReference{}).
-				Where("blob_id = ? AND state = ?", blobID, "active").Count(&activeCount).Error; err != nil {
-				return fmt.Errorf("count live Derived references: %w", err)
-			}
-			if activeCount > 0 {
-				if err := tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", blobID).Update("ref_count", activeCount).Error; err != nil {
-					return fmt.Errorf("reconcile Derived reference count: %w", err)
-				}
-				continue
-			}
+		for _, blobID := range orderedBlobIDs {
 			var blob model.BackupAssetDerivedBlob
 			result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", blobID).Limit(1).Find(&blob)
 			if result.Error != nil || result.RowsAffected != 1 {
-				return ErrDerivedBlobUnavailable
+				return errors.Join(ErrDerivedBlobUnavailable, result.Error)
+			}
+			var activeCount int64
+			if err := tx.Model(&model.BackupAssetDerivedBlobReference{}).Where("blob_id = ? AND state = ?", blobID, "active").Count(&activeCount).Error; err != nil {
+				return err
+			}
+			stagedUploads, err := liveStagedUploadCountTx(tx, blobID, now)
+			if err != nil {
+				return err
+			}
+			if activeCount > 0 || stagedUploads > 0 {
+				if err := tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", blobID).Updates(map[string]any{"ref_count": activeCount, "updated_at": now}).Error; err != nil {
+					return err
+				}
+				continue
 			}
 			if blob.State == "active" || blob.State == "staged" {
 				updated := tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ? AND state IN ?", blob.ID, []string{"active", "staged"}).
@@ -327,7 +373,7 @@ func (lifecycle *DerivedLifecycle) revokeSet(
 	}
 	for _, blob := range doomed {
 		if err := lifecycle.removeCiphertext(blob.locator); err != nil {
-			_ = lifecycle.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).Where("id = ? AND state = ?", blob.id, "unavailable").
+			_ = lifecycle.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).Where("id = ? AND state = ? AND opaque_locator = ?", blob.id, "unavailable", blob.locator).
 				Update("state", "purge_failed").Error
 			return err
 		}
@@ -471,6 +517,10 @@ func (lifecycle *DerivedLifecycle) revokeSetWithManagedFence(
 	artifactSetID string,
 	reason DerivedRevokeReason,
 ) error {
+	return lifecycle.revokeSetWithManagedFenceObserved(ctx, artifactSetID, reason, "", "")
+}
+
+func (lifecycle *DerivedLifecycle) revokeSetWithManagedFenceObserved(ctx context.Context, artifactSetID string, reason DerivedRevokeReason, blobID, locator string) error {
 	var set model.BackupAssetDerivedArtifactSet
 	result := lifecycle.db.WithContext(ctx).Select("id", "job_id", "recovery_point_id", "projection_published").
 		Where("id = ?", artifactSetID).Limit(1).Find(&set)
@@ -478,7 +528,7 @@ func (lifecycle *DerivedLifecycle) revokeSetWithManagedFence(
 		return errors.Join(ErrDerivedUnauthorized, result.Error)
 	}
 	if !set.ProjectionPublished {
-		return lifecycle.RevokeSet(ctx, artifactSetID, reason)
+		return lifecycle.revokeSet(ctx, artifactSetID, reason, nil, blobID, locator)
 	}
 	if lifecycle.fenceLease == nil || backupasset.ValidateOpaqueID(set.JobID) != nil {
 		return ErrDerivedFenceRequired
@@ -489,7 +539,7 @@ func (lifecycle *DerivedLifecycle) revokeSetWithManagedFence(
 	if err != nil {
 		return errors.Join(ErrDerivedFenceRequired, err)
 	}
-	revokeErr := lifecycle.RevokeSetFenced(ctx, artifactSetID, reason, lease.Fence)
+	revokeErr := lifecycle.revokeSet(ctx, artifactSetID, reason, &lease.Fence, blobID, locator)
 	releaseErr := lifecycle.fenceLease.Release(ctx, lease.Fence)
 	return errors.Join(revokeErr, releaseErr)
 }

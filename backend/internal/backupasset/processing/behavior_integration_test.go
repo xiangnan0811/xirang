@@ -56,6 +56,7 @@ type processingBehaviorFixture struct {
 func runProcessingBehaviorContract(t *testing.T, open func(*testing.T) processingBehaviorFixture) {
 	t.Helper()
 
+	t.Run("CrossPointSharedEncryptedBlob", func(t *testing.T) { processingBehaviorCrossPointBlob(t, open(t)) })
 	t.Run("ConcurrentCoalescingAndFinalInterestCancellation", func(t *testing.T) {
 		fixture := open(t)
 		const callers = 8
@@ -498,6 +499,7 @@ func prepareProcessingBehaviorFixture(t *testing.T, db *gorm.DB, engine string) 
 	coordinator, err := NewCoordinator(db, lease, clock.Now, CoordinatorConfig{
 		QueueMax: 100, InteractiveReservedSlots: 2, BackgroundSlots: 2,
 		PullLease: 30 * time.Second, AttemptTimeout: 2 * time.Hour, RetryMax: 5,
+		BackfillPolicySource: testBackfillPolicySource,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -597,6 +599,7 @@ func processingBehaviorTransition(t *testing.T, fixture processingBehaviorFixtur
 }
 
 type processingBehaviorProjection struct {
+	mu           sync.Mutex
 	db           *gorm.DB
 	publications int
 	revocations  int
@@ -620,6 +623,8 @@ func (projection *processingBehaviorProjection) PreparePublish(_ context.Context
 func (prepared *processingBehaviorPreparedPublish) PublishTx(_ context.Context, _ *gorm.DB) (DerivedProjectionPublication, error) {
 	projection := prepared.projection
 	request := prepared.request
+	projection.mu.Lock()
+	defer projection.mu.Unlock()
 	projection.publications++
 	return DerivedProjectionPublication{ArtifactSetID: request.ArtifactSetID, Revision: int64(projection.publications)}, nil
 }
@@ -717,5 +722,260 @@ func processingBehaviorInteractiveBorrowing(t *testing.T, fixture processingBeha
 	processingBehaviorPull(t, fixture, background.JobID, SlotBackground)
 	if _, err := fixture.coordinator.PullAttempt(context.Background(), PullRequest{WorkerID: fixture.workerID}, fixture.grants); !errors.Is(err, ErrNoWork) {
 		t.Fatalf("%s pull beyond capacity for %s: %v", fixture.engine, waiting.JobID, err)
+	}
+}
+
+func processingBehaviorCrossPointBlob(t *testing.T, fixture processingBehaviorFixture) {
+	t.Helper()
+	ctx := context.Background()
+	descriptors := [2]WorkDescriptorV1{validWorkDescriptor(), validWorkDescriptor()}
+	descriptors[1].Source.RecoveryPointID = strings.Repeat("1", 32)
+	descriptors[1].CatalogGenerationID = strings.Repeat("2", 32)
+	descriptors[1].Source.EntryID = strings.Repeat("3", 64)
+	processingBehaviorSeedSecondPoint(t, fixture, descriptors[1])
+	keyring := backupasset.NewKeyring(fixture.db, fixture.clock.Now)
+	if _, err := keyring.Ensure(ctx, backupasset.KeyDomainDerivedStore); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "derived")
+	store, err := NewDerivedStore(ctx, fixture.db, keyring, DerivedStoreConfig{Root: root, ChunkSize: 64 * 1024, BlobMaxBytes: 1 << 20, GlobalMaxBytes: 8 << 20, ValidateRoot: func(context.Context, string) error { return nil }}, fixture.clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := &processingBehaviorProjection{db: fixture.db}
+	lifecycle, err := NewDerivedLifecycle(fixture.db, store, projection, fixture.clock.Now, fixture.lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, err := NewArtifactSink(fixture.db, fixture.lease, fixture.grants, store, lifecycle, &manifestSourceRevalidator{}, func(context.Context) (string, error) { return descriptors[0].SecurityPolicyRevision, nil }, func(context.Context, string, string) (string, error) { return descriptors[0].PipelineFingerprint, nil }, fixture.clock.Now, ArtifactSinkConfig{MaxArtifacts: 4, MaxArtifactBytes: 1 << 20, MaxTotalBytes: 4 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("shared-derived-output")
+	declaration := artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload)
+	type publication struct {
+		job      WorkResult
+		lease    LeasedAttempt
+		set      string
+		artifact model.BackupAssetDerivedArtifact
+		ref      model.BackupAssetDerivedBlobReference
+		auth     DerivedArtifactAuthorization
+	}
+	prepare := func(index int, owner string) publication {
+		descriptor := descriptors[index]
+		job, err := fixture.coordinator.RequestWork(ctx, WorkRequest{Descriptor: descriptor, Interest: InterestRequest{OwnerKind: InterestSystem, OwnerKey: owner, PriorityClass: PriorityInteractive, Priority: 100}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		leased, err := fixture.coordinator.PullAttempt(ctx, PullRequest{WorkerID: fixture.workerID}, fixture.grants)
+		if err != nil || leased.Lease.JobID != job.JobID {
+			t.Fatalf("pull: %+v %v", leased, err)
+		}
+		if _, err := fixture.grants.Activate(ctx, ActivateGrantRequest{GrantID: leased.Grants.Sink.GrantID, Kind: GrantSink, JobID: job.JobID, AttemptID: leased.Lease.AttemptID, WorkerID: fixture.workerID, Secret: leased.Grants.Sink.Secret}); err != nil {
+			t.Fatal(err)
+		}
+		for n, state := range []ProcessingState{ProcessingFetching, ProcessingMaterializing, ProcessingProcessing, ProcessingUploading} {
+			processingBehaviorTransition(t, fixture, job.JobID, leased.Lease.AttemptID, state, int64(n+2))
+		}
+		return publication{job: job, lease: leased}
+	}
+	upload := func(p publication) error {
+		_, err := sink.UploadArtifact(ctx, UploadArtifactRequest{JobID: p.job.JobID, AttemptID: p.lease.Lease.AttemptID, WorkerID: fixture.workerID, GrantID: p.lease.Grants.Sink.GrantID, Artifact: declaration}, bytes.NewReader(payload))
+		return err
+	}
+	commit := func(p *publication, index int) {
+		d := descriptors[index]
+		manifest, err := sink.CommitManifest(ctx, CommitManifestRequest{JobID: p.job.JobID, AttemptID: p.lease.Lease.AttemptID, WorkerID: fixture.workerID, GrantID: p.lease.Grants.Sink.GrantID, RecoveryPointFence: p.lease.Lease.RecoveryPointFence, SecurityPolicyRevision: d.SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration}})
+		if err != nil || !manifest.ProjectionRequired {
+			t.Fatalf("commit: %+v %v", manifest, err)
+		}
+		p.set = manifest.ArtifactSetID
+		if err := fixture.db.First(&p.artifact, "artifact_set_id = ?", p.set).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := fixture.db.First(&p.ref, "artifact_id = ?", p.artifact.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		p.auth = DerivedArtifactAuthorization{ArtifactID: p.artifact.ID, RecoveryPointID: d.Source.RecoveryPointID, CatalogGenerationID: d.CatalogGenerationID, EntryID: d.Source.EntryID, SourceFingerprint: d.SourceFingerprint}
+	}
+	read := func(p publication) {
+		var out bytes.Buffer
+		if err := lifecycle.ReadAuthorized(ctx, p.auth, &out); err != nil || !bytes.Equal(out.Bytes(), payload) {
+			t.Fatalf("read: %q %v", out.Bytes(), err)
+		}
+	}
+	revoke := func(p publication, index int) {
+		lease, err := fixture.lease.Acquire(ctx, backupasset.AcquireLeaseRequest{RecoveryPointID: descriptors[index].Source.RecoveryPointID, HolderType: backupasset.LeaseHolderProcessingJob, OwnerID: p.job.JobID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lifecycle.RevokeSetFenced(ctx, p.set, DerivedRevokeExpired, lease.Fence); err != nil {
+			t.Fatal(err)
+		}
+		if err := fixture.lease.Release(ctx, lease.Fence); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var points [2]publication
+	for i := range points {
+		points[i] = prepare(i, fmt.Sprintf("shared-%d", i))
+	}
+	type publishResult struct {
+		index  int
+		result CommitManifestResult
+		err    error
+	}
+	results := make(chan publishResult, 2)
+	start := make(chan struct{})
+	for i := range points {
+		go func(i int) {
+			<-start
+			p := points[i]
+			if err := upload(p); err != nil {
+				results <- publishResult{index: i, err: err}
+				return
+			}
+			result, err := sink.CommitManifest(ctx, CommitManifestRequest{JobID: p.job.JobID, AttemptID: p.lease.Lease.AttemptID, WorkerID: fixture.workerID, GrantID: p.lease.Grants.Sink.GrantID, RecoveryPointFence: p.lease.Lease.RecoveryPointFence, SecurityPolicyRevision: descriptors[i].SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration}})
+			results <- publishResult{index: i, result: result, err: err}
+		}(i)
+	}
+	close(start)
+	for range points {
+		published := <-results
+		if published.err != nil || !published.result.ProjectionRequired {
+			t.Fatalf("concurrent publish: %+v %v", published.result, published.err)
+		}
+		p := &points[published.index]
+		d := descriptors[published.index]
+		p.set = published.result.ArtifactSetID
+		if err := fixture.db.First(&p.artifact, "artifact_set_id = ?", p.set).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := fixture.db.First(&p.ref, "artifact_id = ?", p.artifact.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		p.auth = DerivedArtifactAuthorization{ArtifactID: p.artifact.ID, RecoveryPointID: d.Source.RecoveryPointID, CatalogGenerationID: d.CatalogGenerationID, EntryID: d.Source.EntryID, SourceFingerprint: d.SourceFingerprint}
+	}
+	for _, p := range points {
+		read(p)
+	}
+	if points[0].set == points[1].set || points[0].artifact.ID == points[1].artifact.ID || points[0].ref.ID == points[1].ref.ID || points[0].artifact.BlobID != points[1].artifact.BlobID {
+		t.Fatal("shared output identities are incorrect")
+	}
+	var blob model.BackupAssetDerivedBlob
+	var count int64
+	if err := fixture.db.Model(&model.BackupAssetDerivedBlob{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("blob count=%d err=%v", count, err)
+	}
+	if err := fixture.db.First(&blob, "id = ?", points[0].artifact.BlobID).Error; err != nil || blob.RefCount != 2 {
+		t.Fatalf("shared blob=%+v err=%v", blob, err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ciphertext files=%d err=%v", len(entries), err)
+	}
+	ciphertext, err := os.ReadFile(filepath.Join(root, blob.OpaqueLocator))
+	if err != nil || bytes.Contains(ciphertext, payload) {
+		t.Fatalf("ciphertext invalid: %v", err)
+	}
+	for i := range points {
+		wrong := points[1-i].auth
+		wrong.ArtifactID = points[i].artifact.ID
+		if err := lifecycle.ReadAuthorized(ctx, wrong, &bytes.Buffer{}); !errors.Is(err, ErrDerivedUnauthorized) {
+			t.Fatalf("cross source read: %v", err)
+		}
+	}
+	revoke(points[0], 0)
+	if err := lifecycle.ReadAuthorized(ctx, points[0].auth, &bytes.Buffer{}); !errors.Is(err, ErrDerivedUnauthorized) {
+		t.Fatalf("revoked read: %v", err)
+	}
+	if err := fixture.db.First(&blob, "id = ?", blob.ID).Error; err != nil || blob.RefCount != 1 {
+		t.Fatalf("surviving blob=%+v err=%v", blob, err)
+	}
+	read(points[1])
+	oldLocator := blob.OpaqueLocator
+	revoke(points[1], 1)
+	if err := fixture.db.First(&blob, "id = ?", blob.ID).Error; err != nil || blob.RefCount != 0 || blob.State != "unavailable" || len(blob.WrappedDEK) != 0 {
+		t.Fatalf("revoked blob=%+v err=%v", blob, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, oldLocator)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ciphertext remains: %v", err)
+	}
+	third := prepare(0, "shared-third")
+	if err := upload(third); err != nil {
+		t.Fatal(err)
+	}
+	commit(&third, 0)
+	read(third)
+	if third.artifact.BlobID != blob.ID {
+		t.Fatal("reactivation changed blob identity")
+	}
+	// A published reference and two live uploads coexist on the same blob.
+	lost, survivor := prepare(0, "shared-lost"), prepare(1, "shared-survivor")
+	if err := upload(lost); err != nil {
+		t.Fatal(err)
+	}
+	if err := upload(survivor); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.RevokeSetFenced(ctx, third.set, DerivedRevokeExpired, lost.lease.Lease.RecoveryPointFence); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.First(&blob, "id = ?", blob.ID).Error; err != nil || blob.State != "active" || blob.RefCount != 0 || len(blob.WrappedDEK) == 0 {
+		t.Fatalf("live uploads did not preserve blob: %+v %v", blob, err)
+	}
+	if err := fixture.db.Model(&model.BackupAssetProcessingGrant{}).Where("id = ?", lost.lease.Grants.Sink.GrantID).Update("expires_at", fixture.clock.Now().Add(-time.Second)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if live, err := liveStagedUploadCountTx(fixture.db, blob.ID, fixture.clock.Now()); err != nil || live != 1 {
+		t.Fatalf("expired unreconciled upload still pins blob: live=%d err=%v", live, err)
+	}
+	if err := store.discardBlobIfUnreferenced(ctx, blob.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.First(&blob, "id = ?", blob.ID).Error; err != nil || blob.State != "active" {
+		t.Fatalf("expiry damaged surviving upload: %+v %v", blob, err)
+	}
+	if err := fixture.grants.RevokeAttempt(ctx, lost.lease.Lease.AttemptID, "lease_lost"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.discardBlobIfUnreferenced(ctx, blob.ID); err != nil {
+		t.Fatal(err)
+	}
+	var lostUpload model.BackupAssetProcessingUpload
+	if err := fixture.db.Where("attempt_id = ?", lost.lease.Lease.AttemptID).First(&lostUpload).Error; err != nil || lostUpload.State != "orphaned" {
+		t.Fatalf("lost upload=%+v err=%v", lostUpload, err)
+	}
+	commit(&survivor, 1)
+	read(survivor)
+	canceled := prepare(1, "shared-canceled")
+	if err := upload(canceled); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.coordinator.RemoveInterest(ctx, canceled.job.JobID, InterestSystem, "shared-canceled", InterestRemovedCanceled); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.discardBlobIfUnreferenced(ctx, blob.ID); err != nil {
+		t.Fatal(err)
+	}
+	read(survivor)
+}
+
+func processingBehaviorSeedSecondPoint(t *testing.T, fixture processingBehaviorFixture, descriptor WorkDescriptorV1) {
+	t.Helper()
+	now := fixture.clock.Now()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO backup_repositories (id, provider_kind, repository_identity, display_name, description, version_mode, status, capability_revision, capabilities_json, immutability_level, created_at, updated_at) VALUES (?, 'rsync', 'processing-behavior-second-repository', 'processing-behavior-second', '', 'hardlink_tree', 'online', ?, '{}', 'xirang_managed', ?, ?)`, []any{strings.Repeat("4", 32), descriptor.ProviderCapabilityRevision, now, now}},
+		{`INSERT INTO recovery_points (id, repository_id, producing_task_name_snapshot, producing_node_id_snapshot, producing_node_name_snapshot, lineage_json, encrypted_provider_locator, encrypted_rollback_locator, semantics, state, observed_at, source_fingerprint, manifest_digest_algorithm, manifest_digest, entry_count, logical_bytes, consistency_json, fidelity_json, capability_revision, capabilities_json, immutability_level, physical_availability, hold_state, created_at, updated_at) VALUES (?, ?, '', 0, '', '{}', '', '', 'mutable_head', 'observed', ?, ?, 'sha256', '', 1, 1024, '{}', '{}', ?, '{}', 'mutable', 'online', 'none', ?, ?)`, []any{descriptor.Source.RecoveryPointID, strings.Repeat("4", 32), now, descriptor.SourceFingerprint, descriptor.ProviderCapabilityRevision, now, now}},
+		{`INSERT INTO catalog_generations (id, recovery_point_id, generation, state, is_active, source_fingerprint, expected_entry_count, written_entry_count, expected_digest, written_digest, error_code, correlation_id, started_at, finished_at, created_at, updated_at) VALUES (?, ?, 1, 'complete', ?, ?, 1, 1, '', '', '', '', ?, ?, ?, ?)`, []any{descriptor.CatalogGenerationID, descriptor.Source.RecoveryPointID, true, descriptor.SourceFingerprint, now, now, now, now}},
+		{`INSERT INTO catalog_entries (generation_id, entry_id, recovery_point_id, normalized_path, name, entry_type, size, mode, owner, mime_type, fingerprint, fingerprint_strength, encrypted_provider_locator, security_state, created_at) VALUES (?, ?, ?, '/processing/asset.bin', 'asset.bin', 'file', 1024, '', '', 'application/octet-stream', ?, 'strong', '', 'non_secret', ?)`, []any{descriptor.CatalogGenerationID, descriptor.Source.EntryID, descriptor.Source.RecoveryPointID, descriptor.EntryFingerprint, now}},
+	}
+	for _, statement := range statements {
+		if err := fixture.db.Exec(statement.query, statement.args...).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

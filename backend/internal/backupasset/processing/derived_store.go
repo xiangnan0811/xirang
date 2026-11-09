@@ -83,89 +83,128 @@ func (store *DerivedStore) PutBlob(ctx context.Context, declaration DerivedBlobD
 	if store == nil || plaintext == nil || !validDerivedBlobDeclaration(declaration, store.config.BlobMaxBytes) {
 		return DerivedBlobHandle{}, ErrDerivedInvalid
 	}
-	if existing, found, err := store.findReusableBlob(ctx, declaration); err != nil {
+	replay, err := store.newReplay(ctx, declaration, plaintext)
+	if err != nil {
 		return DerivedBlobHandle{}, err
-	} else if found {
-		return blobHandle(existing, true), nil
 	}
+	defer replay.Close()
+	return store.putReplay(ctx, declaration, replay)
+}
+
+func (store *DerivedStore) putReplay(ctx context.Context, declaration DerivedBlobDeclaration, replay *derivedReplay) (DerivedBlobHandle, error) {
 	estimate, err := derivedPhysicalSizeEstimate(declaration.PlaintextSize, store.config.ChunkSize)
 	if err != nil {
 		return DerivedBlobHandle{}, err
 	}
-	if err := store.admitQuota(ctx, estimate); err != nil {
-		return DerivedBlobHandle{}, err
-	}
-	key, err := store.keyring.Active(ctx, backupasset.KeyDomainDerivedStore)
-	if err != nil {
-		return DerivedBlobHandle{}, errors.Join(ErrDerivedStoreUnavailable, err)
-	}
-	defer zeroBytesLocal(key.Key)
-	blobID, err := backupasset.NewOpaqueID()
-	if err != nil {
-		return DerivedBlobHandle{}, err
-	}
-	locator := blobID + ".xrd"
-	stagingName := ".staging-" + blobID
-	stagingPath := filepath.Join(store.config.Root, stagingName)
-	finalPath := filepath.Join(store.config.Root, locator)
-	file, err := os.OpenFile(stagingPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return DerivedBlobHandle{}, errors.Join(ErrDerivedStoreUnavailable, err)
-	}
-	keepStaging := false
-	defer func() {
-		_ = file.Close()
-		if !keepStaging {
-			_ = os.Remove(stagingPath)
+	for attempt := range 20 {
+		if err := ctx.Err(); err != nil {
+			return DerivedBlobHandle{}, err
 		}
-	}()
-	metadata, err := store.cipher.Encrypt(file, plaintext, DerivedCryptoSpec{
-		BlobID: blobID, PlaintextDigest: declaration.PlaintextDigest, PlaintextSize: declaration.PlaintextSize,
-		ChunkSize: store.config.ChunkSize, KEKVersion: key.Version, KEK: key.Key,
-	})
-	if err != nil {
-		return DerivedBlobHandle{}, err
+		var existing model.BackupAssetDerivedBlob
+		result := store.db.WithContext(ctx).Where("plaintext_digest = ? AND plaintext_size = ? AND cipher_format_version = ? AND chunk_size = ?", declaration.PlaintextDigest, declaration.PlaintextSize, derivedCipherFormatVersion, store.config.ChunkSize).Limit(1).Find(&existing)
+		if result.Error != nil {
+			if !retryableCoordinatorConflict(result.Error) {
+				return DerivedBlobHandle{}, result.Error
+			}
+		} else if result.RowsAffected == 1 && existing.State == "active" {
+			row, found, err := store.findReusableBlob(ctx, declaration)
+			if err != nil && !errors.Is(err, ErrDerivedBlobUnavailable) && !errors.Is(err, os.ErrNotExist) {
+				return DerivedBlobHandle{}, err
+			}
+			if found {
+				return blobHandle(row, true), nil
+			}
+		} else if result.RowsAffected == 0 || existing.State == "unavailable" || existing.State == "purging" || existing.State == "purge_failed" {
+			if err := store.admitQuota(ctx, estimate); err != nil {
+				var count int64
+				check := store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).Where("plaintext_digest = ? AND plaintext_size = ? AND cipher_format_version = ? AND chunk_size = ? AND state IN ?", declaration.PlaintextDigest, declaration.PlaintextSize, derivedCipherFormatVersion, store.config.ChunkSize, []string{"active", "staged"}).Count(&count)
+				if check.Error != nil {
+					return DerivedBlobHandle{}, check.Error
+				}
+				if count == 0 {
+					return DerivedBlobHandle{}, err
+				}
+			} else {
+				row, conflict, err := store.writeDerivedBlob(ctx, declaration, replay, existing, result.RowsAffected == 1, estimate)
+				if err != nil && !conflict {
+					return DerivedBlobHandle{}, err
+				}
+				if err == nil && !conflict {
+					return blobHandle(row, false), nil
+				}
+			}
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return DerivedBlobHandle{}, ctx.Err()
+		case <-timer.C:
+		}
 	}
+	return DerivedBlobHandle{}, ErrDerivedStoreUnavailable
+}
+
+func (store *DerivedStore) writeDerivedBlob(ctx context.Context, declaration DerivedBlobDeclaration, replay *derivedReplay, existing model.BackupAssetDerivedBlob, reactivating bool, estimate int64) (model.BackupAssetDerivedBlob, bool, error) {
+	var row model.BackupAssetDerivedBlob
+	blobID := existing.ID
+	if !reactivating {
+		blobID = replay.spec.BlobID
+	}
+	if err := replay.rebind(ctx, blobID); err != nil {
+		return row, false, err
+	}
+	locator, stagingName := blobID+".xrd", ".staging-"+blobID
+	if reactivating {
+		incarnation, err := backupasset.NewOpaqueID()
+		if err != nil {
+			return row, false, err
+		}
+		locator, stagingName = blobID+"-"+incarnation+".xrd", ".staging-"+blobID+"-"+incarnation
+	}
+	stagingPath, finalPath := filepath.Join(store.config.Root, stagingName), filepath.Join(store.config.Root, locator)
+	writingPath := filepath.Join(store.config.Root, ".writing-"+strings.TrimPrefix(stagingName, ".staging-"))
+	if err := os.Link(replay.file.Name(), writingPath); err != nil {
+		return row, false, errors.Join(ErrDerivedStoreUnavailable, err)
+	}
+	replay.installed = true
+	defer func() { _ = os.Remove(writingPath) }()
+	metadata := replay.metadata
 	if metadata.PhysicalSize > store.config.GlobalMaxBytes || metadata.PhysicalSize > estimate {
-		return DerivedBlobHandle{}, ErrDerivedQuotaExceeded
-	}
-	if err := file.Sync(); err != nil {
-		return DerivedBlobHandle{}, errors.Join(ErrDerivedStoreUnavailable, err)
-	}
-	if err := file.Close(); err != nil {
-		return DerivedBlobHandle{}, errors.Join(ErrDerivedStoreUnavailable, err)
+		return row, false, ErrDerivedQuotaExceeded
 	}
 	now := store.utcNow()
-	row := model.BackupAssetDerivedBlob{
-		ID: blobID, PlaintextDigest: declaration.PlaintextDigest, PlaintextSize: declaration.PlaintextSize,
-		PhysicalSize: metadata.PhysicalSize, CipherFormatVersion: metadata.CipherFormatVersion,
-		ChunkSize: metadata.ChunkSize, ChunkCount: metadata.ChunkCount, NoncePrefix: metadata.NoncePrefix,
-		OpaqueLocator: locator, WrappedDEK: metadata.WrappedDEK, EnvelopeNonce: metadata.EnvelopeNonce,
-		DerivedKEKVersion: metadata.KEKVersion, State: "staged", RefCount: 0, CreatedAt: now, UpdatedAt: now,
-	}
-	if err := store.db.WithContext(ctx).Create(&row).Error; err != nil {
-		if existing, found, findErr := store.findReusableBlob(ctx, declaration); findErr == nil && found {
-			return blobHandle(existing, true), nil
+	row = model.BackupAssetDerivedBlob{ID: blobID, PlaintextDigest: declaration.PlaintextDigest, PlaintextSize: declaration.PlaintextSize, PhysicalSize: metadata.PhysicalSize, CipherFormatVersion: metadata.CipherFormatVersion, ChunkSize: metadata.ChunkSize, ChunkCount: metadata.ChunkCount, NoncePrefix: metadata.NoncePrefix, OpaqueLocator: locator, WrappedDEK: metadata.WrappedDEK, EnvelopeNonce: metadata.EnvelopeNonce, DerivedKEKVersion: metadata.KEKVersion, State: "staged", RefCount: 0, CreatedAt: now, UpdatedAt: now}
+	if reactivating {
+		updates := map[string]any{"physical_size": metadata.PhysicalSize, "cipher_format_version": metadata.CipherFormatVersion, "chunk_size": metadata.ChunkSize, "chunk_count": metadata.ChunkCount, "nonce_prefix": metadata.NoncePrefix, "opaque_locator": locator, "wrapped_dek": metadata.WrappedDEK, "envelope_nonce": metadata.EnvelopeNonce, "derived_kek_version": metadata.KEKVersion, "state": "staged", "ref_count": 0, "unavailable_at": nil, "updated_at": now}
+		updated := store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).Where("id = ? AND state IN ?", blobID, []string{"unavailable", "purging", "purge_failed"}).Updates(updates)
+		if updated.Error != nil || updated.RowsAffected != 1 {
+			if updated.Error == nil || retryableCoordinatorConflict(updated.Error) {
+				return row, true, updated.Error
+			}
+			return row, false, errors.Join(ErrDerivedStoreUnavailable, updated.Error)
 		}
-		return DerivedBlobHandle{}, fmt.Errorf("persist staged Derived blob: %w", err)
+	} else if err := store.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return row, retryableCoordinatorConflict(err), err
 	}
-	keepStaging = true
+	if err := os.Rename(writingPath, stagingPath); err != nil {
+		return row, false, errors.Join(ErrDerivedStoreUnavailable, err)
+	}
 	if _, err := os.Lstat(finalPath); !errors.Is(err, os.ErrNotExist) {
-		return DerivedBlobHandle{}, errors.Join(ErrDerivedStoreUnavailable, err)
+		return row, false, errors.Join(ErrDerivedStoreUnavailable, err)
 	}
 	if err := os.Rename(stagingPath, finalPath); err != nil {
-		return DerivedBlobHandle{}, errors.Join(ErrDerivedStoreUnavailable, err)
+		return row, false, errors.Join(ErrDerivedStoreUnavailable, err)
 	}
 	if err := syncDerivedDirectory(store.config.Root); err != nil {
-		return DerivedBlobHandle{}, err
+		return row, false, err
 	}
-	updated := store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).
-		Where("id = ? AND state = ?", row.ID, "staged").Updates(map[string]any{"state": "active", "updated_at": now})
+	updated := store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).Where("id = ? AND state = ? AND opaque_locator = ?", blobID, "staged", locator).Updates(map[string]any{"state": "active", "updated_at": now})
 	if updated.Error != nil || updated.RowsAffected != 1 {
-		return DerivedBlobHandle{}, errors.Join(ErrDerivedStoreUnavailable, updated.Error)
+		return row, false, errors.Join(ErrDerivedStoreUnavailable, updated.Error)
 	}
 	row.State = "active"
-	return blobHandle(row, false), nil
+	return row, false, nil
 }
 
 func (store *DerivedStore) readBlob(ctx context.Context, blobID string, destination io.Writer) error {
@@ -234,7 +273,7 @@ func (store *DerivedStore) RewrapBatch(ctx context.Context, oldVersion, newVersi
 			return count, err
 		}
 		updated := store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).
-			Where("id = ? AND derived_kek_version = ? AND state IN ?", row.ID, oldVersion, []string{"staged", "active"}).
+			Where("id = ? AND opaque_locator = ? AND wrapped_dek = ? AND envelope_nonce = ? AND derived_kek_version = ? AND state IN ?", row.ID, row.OpaqueLocator, row.WrappedDEK, row.EnvelopeNonce, oldVersion, []string{"staged", "active"}).
 			Updates(map[string]any{
 				"wrapped_dek": rewrapped.WrappedDEK, "envelope_nonce": rewrapped.EnvelopeNonce,
 				"derived_kek_version": newVersion, "updated_at": store.utcNow(),
@@ -250,29 +289,48 @@ func (store *DerivedStore) RewrapBatch(ctx context.Context, oldVersion, newVersi
 }
 
 func (store *DerivedStore) discardBlobIfUnreferenced(ctx context.Context, blobID string) error {
+	return store.discardBlobIfUnreferencedObserved(ctx, blobID, "")
+}
+
+func (store *DerivedStore) discardBlobIfUnreferencedObserved(ctx context.Context, blobID, expectedLocator string) error {
 	if store == nil || backupasset.ValidateOpaqueID(blobID) != nil {
 		return ErrDerivedBlobUnavailable
 	}
 	var locator string
-	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := derivedCleanupTransaction(ctx, store.db, func(tx *gorm.DB) error {
+		locator = ""
+		blobIDs := []string{blobID}
+		jobs, err := lockDerivedHolderJobsTx(tx, blobIDs)
+		if err != nil {
+			return err
+		}
+		if expectedLocator == "" {
+			if err := orphanDerivedHoldersTx(tx, blobIDs, jobs, store.utcNow()); err != nil {
+				return err
+			}
+		}
 		var blob model.BackupAssetDerivedBlob
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ? AND state IN ?", blobID, []string{"staged", "active"}).Limit(1).Find(&blob)
 		if result.Error != nil || result.RowsAffected != 1 {
 			return result.Error
 		}
+		if expectedLocator != "" && blob.OpaqueLocator != expectedLocator {
+			return nil
+		}
+		if err := checkDerivedHolderCensusTx(tx, blobIDs, jobs); err != nil {
+			return err
+		}
 		var references int64
 		if err := tx.Model(&model.BackupAssetDerivedBlobReference{}).Where("blob_id = ? AND state = ?", blobID, "active").Count(&references).Error; err != nil {
 			return err
 		}
-		var uploads int64
-		if tx.Migrator().HasTable(&model.BackupAssetProcessingUpload{}) {
-			if err := tx.Model(&model.BackupAssetProcessingUpload{}).Where("staging_id = ? AND state IN ?", blobID, []string{"staged", "committed"}).Count(&uploads).Error; err != nil {
-				return err
-			}
+		uploads, err := liveStagedUploadCountTx(tx, blobID, store.utcNow())
+		if err != nil {
+			return err
 		}
 		if references > 0 || uploads > 0 {
-			return nil
+			return tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", blob.ID).Update("ref_count", references).Error
 		}
 		now := store.utcNow()
 		updated := tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ? AND state IN ?", blob.ID, []string{"staged", "active"}).
@@ -290,10 +348,36 @@ func (store *DerivedStore) discardBlobIfUnreferenced(ctx context.Context, blobID
 		return ErrDerivedBlobUnavailable
 	}
 	if err := store.removeFile(filepath.Join(store.config.Root, locator)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", blobID).Update("state", "purge_failed").Error
+		_ = store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).Where("id = ? AND state = ? AND opaque_locator = ?", blobID, "unavailable", locator).Update("state", "purge_failed").Error
 		return errors.Join(ErrDerivedBlobUnavailable, err)
 	}
 	return nil
+}
+
+// The holder proof is read-only so callers can use it while holding blob locks.
+func liveStagedUploadCountTx(tx *gorm.DB, blobID string, now time.Time) (int64, error) {
+	var holders []struct {
+		FenceToken string
+		FenceHash  string
+	}
+	err := tx.Table("backup_asset_processing_uploads AS u").
+		Select("l.fence_token, a.recovery_point_fence_hash AS fence_hash").
+		Joins("JOIN backup_asset_processing_jobs AS j ON j.id = u.job_id").
+		Joins("JOIN backup_asset_processing_attempts AS a ON a.id = u.attempt_id AND a.job_id = j.id").
+		Joins("JOIN backup_asset_processing_grants AS g ON g.id = u.grant_id AND g.job_id = j.id AND g.attempt_id = a.id AND g.worker_id = a.worker_id").
+		Joins("JOIN recovery_point_leases AS l ON l.id = a.recovery_point_lease_id AND l.recovery_point_id = j.recovery_point_id AND l.owner_id = j.id AND l.attempt_id = a.recovery_point_attempt_id").
+		Where(`u.staging_id = ? AND u.state = ? AND j.is_current = ? AND j.current_attempt_id = a.id AND j.absolute_deadline > ? AND a.state = ? AND a.is_current = ? AND a.worker_lease_expires_at > ? AND a.absolute_deadline > ? AND g.kind = ? AND g.state = ? AND g.expires_at > ? AND g.fence_hash = a.recovery_point_fence_hash AND l.holder_type = ? AND l.status = ? AND l.lease_expires_at > ? AND l.absolute_deadline > ?`, blobID, "staged", true, now, "active", true, now, now, GrantSink, GrantActive, now, backupasset.LeaseHolderProcessingJob, backupasset.LeaseActive, now, now).
+		Scan(&holders).Error
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	for _, holder := range holders {
+		if hashFence(holder.FenceToken) == holder.FenceHash {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (store *DerivedStore) findReusableBlob(ctx context.Context, declaration DerivedBlobDeclaration) (model.BackupAssetDerivedBlob, bool, error) {

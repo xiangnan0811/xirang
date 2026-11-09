@@ -33,15 +33,17 @@ Worker 工具链 v3 的输入身份、保留镜像引用及 v1 签名闭包的�
 
 ## 数据库迁移版本
 
-当前迁移版本：`000097_export_raw_fingerprint`。
+当前迁移版本：`000099_processing_backfill_quota`。
 
 该迁移的 SQLite/PostgreSQL 配对文件为：
 
-- `internal/database/migrations/sqlite/000097_export_raw_fingerprint.up.sql`
-- `internal/database/migrations/sqlite/000097_export_raw_fingerprint.down.sql`
-- `internal/database/migrations/postgres/000097_export_raw_fingerprint.up.sql`
-- `internal/database/migrations/postgres/000097_export_raw_fingerprint.down.sql`
+- `internal/database/migrations/sqlite/000099_processing_backfill_quota.up.sql`
+- `internal/database/migrations/sqlite/000099_processing_backfill_quota.down.sql`
+- `internal/database/migrations/postgres/000099_processing_backfill_quota.up.sql`
+- `internal/database/migrations/postgres/000099_processing_backfill_quota.down.sql`
 
-该迁移允许 Export 保留非文件 Catalog 条目的空原始 fingerprint，仅限 `none` 强度；普通文件和 strong/weak 仍要求非空。存在使用该能力的行时降级被拒绝并保留干净版本和数据；启动验证约束和降级保护。SQLite 重建涉及的两表若有额外索引、触发器或指向它们的额外外键，升级在写 dirty 元数据前拒绝，需离线核对后处理。
+该迁移为处理作业增加真实来源 Provider、预计输入字节和后台创建收费标记，并新增 UTC 整点小时单行账本。旧作业按精确恢复点／Repository／Catalog 关联回填元数据，不补造历史收费；无效关联、未知 Provider 或未版本化的部分结构在写 dirty 前拒绝。任何已收费作业（包括零字节）或账本正计数都会阻止降级，保留干净版本及历史；未使用时才允许受保护回退。SQLite 额外依赖或结构漂移会阻止回退，PostgreSQL 元数据准入与直接 down 均和收费事务保持锁序；启动验证实际列、约束、索引、种子与保护器，不自动修复漂移。
+
+前一份 `000098_processing_shared_derived_blobs` 保留独立上传／产物集共享物理 blob 的关系、迁移与历史；出现重复 staging ID 或 manifest 摘要后，该版本的降级保护仍独立生效，不因配额迁移可回退而解除。
 
 该声明与 `internal/database/migrations/{sqlite,postgres}` 中最新的成对 up/down 文件同步，并由迁移检查脚本校验。升级前提、旧写入者排空、双引擎恢复和降级保护要求见[数据库合同](../docs/spec/backend/database-guidelines.md)、[部署指南](../docs/deployment.md#备份职责收敛升级)及[备份、恢复与快照](../docs/admin/backup-recovery.md#升级与灾难恢复)；不要通过强制修改版本或删除安全证据绕过保护。

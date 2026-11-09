@@ -15,6 +15,9 @@ type BackupAssetProcessingJob struct {
 	SourceFingerprint          string     `gorm:"size:128;not null" json:"-"`
 	EntryFingerprint           string     `gorm:"size:128;not null;default:''" json:"-"`
 	ProviderCapabilityRevision int64      `gorm:"not null" json:"-"`
+	ProviderKind               string     `gorm:"size:32;not null;default:''" json:"-"`
+	EstimatedInputBytes        int64      `gorm:"not null;default:0" json:"-"`
+	BackfillCharged            bool       `gorm:"not null;default:false" json:"-"`
 	Capability                 string     `gorm:"size:64;not null" json:"-"`
 	CapabilitySchema           string     `gorm:"size:64;not null" json:"-"`
 	PipelineFingerprint        string     `gorm:"size:128;not null" json:"-"`
@@ -43,6 +46,18 @@ type BackupAssetProcessingJob struct {
 }
 
 func (BackupAssetProcessingJob) TableName() string { return "backup_asset_processing_jobs" }
+
+type BackupAssetProcessingBackfillLedger struct {
+	ID              int       `gorm:"primaryKey" json:"-"`
+	WindowStartedAt time.Time `gorm:"not null" json:"-"`
+	JobsCount       int64     `gorm:"not null;default:0" json:"-"`
+	BytesCount      int64     `gorm:"not null;default:0" json:"-"`
+	UpdatedAt       time.Time `gorm:"not null" json:"-"`
+}
+
+func (BackupAssetProcessingBackfillLedger) TableName() string {
+	return "backup_asset_processing_backfill_ledger"
+}
 
 type BackupAssetProcessingInterest struct {
 	ID            string     `gorm:"primaryKey;size:32" json:"-"`

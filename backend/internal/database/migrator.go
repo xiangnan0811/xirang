@@ -74,6 +74,12 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 	if err := preflightExportRawFingerprintMigration(sqlDB, dbType, version); err != nil {
 		return err
 	}
+	if err := preflightProcessingSharedDerivedBlobsMigration(sqlDB, dbType, version); err != nil {
+		return err
+	}
+	if err := preflightProcessingBackfillQuotaMigration(sqlDB, dbType, version); err != nil {
+		return err
+	}
 
 	if err := preMigrationFixups(sqlDB, dbType); err != nil {
 		return fmt.Errorf("执行迁移前置修复失败: %w", err)

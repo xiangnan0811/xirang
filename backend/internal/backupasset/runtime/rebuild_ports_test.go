@@ -223,17 +223,17 @@ func TestRebuildDerivedDescriptorsPagesUnprovenEntriesWithoutNewCatalog(t *testi
 	}
 
 	runtime := &managedProcessingRuntime{
-		db:          db,
-		coordinator: &processing.Coordinator{},
+		db: db,
 		config: backupasset.ProcessingConfig{
 			Backfill: backupasset.ProcessingBackfillConfig{
 				BatchSize: 1, JobsPerHour: 100, BytesPerHour: 1 << 30,
-				ProviderConcurrency: 4, CapabilityConcurrency: 4,
+				ProviderConcurrency: 32, CapabilityConcurrency: 32,
 				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
 			},
 		},
 		now: func() time.Time { return now },
 	}
+	initializeRebuildTestCoordinator(t, runtime)
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
@@ -346,11 +346,11 @@ func rebuildAdmissionFixture(t *testing.T, backfill backupasset.ProcessingBackfi
 	}
 
 	runtime := &managedProcessingRuntime{
-		db:          db,
-		coordinator: &processing.Coordinator{},
-		config:      backupasset.ProcessingConfig{Backfill: backfill},
-		now:         func() time.Time { return now },
+		db:     db,
+		config: backupasset.ProcessingConfig{Backfill: backfill},
+		now:    func() time.Time { return now },
 	}
+	initializeRebuildTestCoordinator(t, runtime)
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
@@ -388,74 +388,24 @@ func TestExpectedDescriptorsStayUnprovenWhenBackfillAdmissionDenies(t *testing.T
 	}
 }
 
-func TestRebuildDerivedDescriptorsAdmissionUsageIsPerCollection(t *testing.T) {
-	tests := []struct {
-		name       string
-		jobs       int
-		bytes      int64
-		provider   int
-		capability int
-		want       int
-	}{
-		{name: "provider limit", jobs: 3, bytes: 96, provider: 1, capability: 3, want: 1},
-		{name: "capability limit", jobs: 3, bytes: 96, provider: 3, capability: 1, want: 1},
-		{name: "jobs limit", jobs: 1, bytes: 96, provider: 3, capability: 3, want: 1},
-		{name: "bytes below two entries", jobs: 3, bytes: 63, provider: 3, capability: 3, want: 1},
-		{name: "bytes exactly two entries", jobs: 3, bytes: 64, provider: 3, capability: 3, want: 2},
-		{name: "bytes below first entry", jobs: 3, bytes: 31, provider: 3, capability: 3, want: 0},
-		{name: "jobs and counters exactly two entries", jobs: 2, bytes: 96, provider: 2, capability: 2, want: 2},
+func TestRebuildDerivedDescriptorsAdmissionPersistsAcrossCollections(t *testing.T) {
+	runtime, request, _, secondEntryID := rebuildAdmissionFixture(t, backupasset.ProcessingBackfillConfig{
+		BatchSize: 1, JobsPerHour: 1, BytesPerHour: 64,
+		ProviderConcurrency: 4, CapabilityConcurrency: 4,
+		RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
+	})
+	adapter := newDerivedBackfillAdapter(runtime)
+	queued, err := adapter.QueueLowPriorityDerivedBackfill(context.Background(), request)
+	if err != nil || queued != 1 {
+		t.Fatalf("first collection queued=%d err=%v", queued, err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			runtime, request, firstEntryID, secondEntryID := rebuildAdmissionFixture(t, backupasset.ProcessingBackfillConfig{
-				BatchSize: 3, JobsPerHour: tc.jobs, BytesPerHour: tc.bytes,
-				ProviderConcurrency: tc.provider, CapabilityConcurrency: tc.capability,
-				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
-			})
-			var first []processing.WorkDescriptorV1
-			for call := range 2 {
-				descriptors, err := runtime.rebuildDerivedDescriptors(context.Background(), request)
-				if err != nil {
-					t.Fatalf("collection %d: %v", call+1, err)
-				}
-				if len(descriptors) != tc.want {
-					t.Fatalf("collection %d returned %d descriptors, want %d: %+v", call+1, len(descriptors), tc.want, descriptors)
-				}
-				if tc.want > 0 && descriptors[0].Source.EntryID != firstEntryID {
-					t.Fatalf("collection %d first descriptor=%+v, want entry %s", call+1, descriptors[0], firstEntryID)
-				}
-				if tc.want > 1 && descriptors[1].Source.EntryID != secondEntryID {
-					t.Fatalf("collection %d second descriptor=%+v, want entry %s", call+1, descriptors[1], secondEntryID)
-				}
-				if call == 0 {
-					first = descriptors
-				}
-			}
-			if tc.want != 1 {
-				return
-			}
-			now := runtime.now()
-			descriptor := first[0]
-			if err := runtime.db.Create(&model.BackupAssetProcessingJob{
-				ID: strings.Repeat("7", 32), WorkKey: strings.Repeat("8", 64), DescriptorSchemaVersion: 1,
-				DescriptorCanonical: []byte(`{}`), RecoveryPointID: request.RecoveryPointID, CatalogGenerationID: request.CatalogGenerationID,
-				EntryID: firstEntryID, SourceFingerprint: descriptor.SourceFingerprint, EntryFingerprint: descriptor.EntryFingerprint,
-				ProviderCapabilityRevision: descriptor.ProviderCapabilityRevision, Capability: descriptor.Capability, CapabilitySchema: descriptor.CapabilitySchema,
-				PipelineFingerprint: descriptor.PipelineFingerprint, OutputProfile: descriptor.OutputProfile,
-				SecurityPolicyRevision: descriptor.SecurityPolicyRevision, PriorityClass: string(processing.PriorityBackground),
-				EffectivePriority: 100, State: string(processing.ProcessingQueued), TransitionRevision: 1, IsCurrent: true,
-				QueuedAt: now, AbsoluteDeadline: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
-			}).Error; err != nil {
-				t.Fatalf("seed accepted descriptor job: %v", err)
-			}
-			descriptors, err := runtime.rebuildDerivedDescriptors(context.Background(), request)
-			if err != nil {
-				t.Fatalf("collection after job creation: %v", err)
-			}
-			if len(descriptors) != 1 || descriptors[0].Source.EntryID != secondEntryID {
-				t.Fatalf("collection after job creation=%+v, want remaining entry %s", descriptors, secondEntryID)
-			}
-		})
+	queued, err = adapter.QueueLowPriorityDerivedBackfill(context.Background(), request)
+	if err != nil || queued != 0 {
+		t.Fatalf("second collection queued=%d err=%v, want exhausted quota", queued, err)
+	}
+	expected, err := adapter.(repository.DerivedExpectationSource).ExpectedDescriptors(context.Background(), request)
+	if err != nil || len(expected) == 0 || expected[0].EntryID != secondEntryID {
+		t.Fatalf("remaining expected=%+v err=%v", expected, err)
 	}
 }
 
@@ -553,17 +503,17 @@ func TestRebuildDerivedDescriptorsKeepsUnprovenCapabilitiesWhenSiblingJobExists(
 	}
 
 	runtime := &managedProcessingRuntime{
-		db:          db,
-		coordinator: &processing.Coordinator{},
+		db: db,
 		config: backupasset.ProcessingConfig{
 			Backfill: backupasset.ProcessingBackfillConfig{
 				BatchSize: 4, JobsPerHour: 100, BytesPerHour: 1 << 30,
-				ProviderConcurrency: 4, CapabilityConcurrency: 4,
+				ProviderConcurrency: 32, CapabilityConcurrency: 32,
 				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
 			},
 		},
 		now: func() time.Time { return now },
 	}
+	initializeRebuildTestCoordinator(t, runtime)
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
@@ -699,17 +649,17 @@ func TestRebuildDerivedDescriptorsPagesPastInapplicableAdvertisedCapabilities(t 
 	}
 
 	runtime := &managedProcessingRuntime{
-		db:          db,
-		coordinator: &processing.Coordinator{},
+		db: db,
 		config: backupasset.ProcessingConfig{
 			Backfill: backupasset.ProcessingBackfillConfig{
 				BatchSize: 1, JobsPerHour: 100, BytesPerHour: 1 << 30,
-				ProviderConcurrency: 4, CapabilityConcurrency: 4,
+				ProviderConcurrency: 32, CapabilityConcurrency: 32,
 				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
 			},
 		},
 		now: func() time.Time { return now },
 	}
+	initializeRebuildTestCoordinator(t, runtime)
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
@@ -856,17 +806,17 @@ func TestRebuildDerivedDescriptorsInspectedLimitKeepsLeftoverWalkUnproven(t *tes
 	}
 
 	runtime := &managedProcessingRuntime{
-		db:          db,
-		coordinator: &processing.Coordinator{},
+		db: db,
 		config: backupasset.ProcessingConfig{
 			Backfill: backupasset.ProcessingBackfillConfig{
 				BatchSize: 1, InspectedLimit: 2, JobsPerHour: 100, BytesPerHour: 1 << 30,
-				ProviderConcurrency: 4, CapabilityConcurrency: 4,
+				ProviderConcurrency: 32, CapabilityConcurrency: 32,
 				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
 			},
 		},
 		now: func() time.Time { return now },
 	}
+	initializeRebuildTestCoordinator(t, runtime)
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
@@ -1078,17 +1028,17 @@ func TestRebuildDerivedDescriptorsCompleteWalkReopensWhenAdvertisementAddsUnprov
 	}
 
 	runtime := &managedProcessingRuntime{
-		db:          db,
-		coordinator: &processing.Coordinator{},
+		db: db,
 		config: backupasset.ProcessingConfig{
 			Backfill: backupasset.ProcessingBackfillConfig{
 				BatchSize: 1, InspectedLimit: 2, JobsPerHour: 100, BytesPerHour: 1 << 30,
-				ProviderConcurrency: 4, CapabilityConcurrency: 4,
+				ProviderConcurrency: 32, CapabilityConcurrency: 32,
 				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
 			},
 		},
 		now: func() time.Time { return now },
 	}
+	initializeRebuildTestCoordinator(t, runtime)
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
@@ -1282,17 +1232,17 @@ func TestRebuildDerivedDescriptorsCompleteWalkReopensWhenJobFails(t *testing.T) 
 	}
 
 	runtime := &managedProcessingRuntime{
-		db:          db,
-		coordinator: &processing.Coordinator{},
+		db: db,
 		config: backupasset.ProcessingConfig{
 			Backfill: backupasset.ProcessingBackfillConfig{
 				BatchSize: 1, InspectedLimit: 2, JobsPerHour: 100, BytesPerHour: 1 << 30,
-				ProviderConcurrency: 4, CapabilityConcurrency: 4,
+				ProviderConcurrency: 32, CapabilityConcurrency: 32,
 				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
 			},
 		},
 		now: func() time.Time { return now },
 	}
+	initializeRebuildTestCoordinator(t, runtime)
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
@@ -1569,17 +1519,17 @@ func TestRebuildDerivedDescriptorsCompleteWalkReopensWhenJobCanceledDuringIncomp
 	}
 
 	runtime := &managedProcessingRuntime{
-		db:          db,
-		coordinator: &processing.Coordinator{},
+		db: db,
 		config: backupasset.ProcessingConfig{
 			Backfill: backupasset.ProcessingBackfillConfig{
 				BatchSize: 1, InspectedLimit: 2, JobsPerHour: 100, BytesPerHour: 1 << 30,
-				ProviderConcurrency: 4, CapabilityConcurrency: 4,
+				ProviderConcurrency: 32, CapabilityConcurrency: 32,
 				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
 			},
 		},
 		now: func() time.Time { return now },
 	}
+	initializeRebuildTestCoordinator(t, runtime)
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
@@ -1760,18 +1710,18 @@ func TestRebuildDerivedDescriptorsCompleteWalkReopensWhenSecretClassifyEnabled(t
 	}
 
 	runtime := &managedProcessingRuntime{
-		db:          db,
-		coordinator: &processing.Coordinator{},
+		db: db,
 		config: backupasset.ProcessingConfig{
 			SecretClassify: false,
 			Backfill: backupasset.ProcessingBackfillConfig{
 				BatchSize: 1, InspectedLimit: 2, JobsPerHour: 100, BytesPerHour: 1 << 30,
-				ProviderConcurrency: 4, CapabilityConcurrency: 4,
+				ProviderConcurrency: 32, CapabilityConcurrency: 32,
 				RecentWindow: 24 * time.Hour, HistoryAgingStep: time.Hour,
 			},
 		},
 		now: func() time.Time { return now },
 	}
+	initializeRebuildTestCoordinator(t, runtime)
 	request := repository.DerivedBackfillRequest{
 		RepositoryID: repositoryID, RecoveryPointID: pointID, CatalogGenerationID: generationID, Priority: "low",
 	}
