@@ -5,6 +5,7 @@
 ## 控制面归档与策略
 
 - `ArchiveService.Archive(ctx,taskID)` 始终在线，不读取 feature flag。`ExistsLiveByID` 明确 `id=? AND archived_at IS NULL`；需要查看归档行的调用保留不筛选的 `ExistsByID`。
+- `DELETE /api/v1/tasks/:id` 经认证、`tasks:write` 与节点归属检查后执行软归档：禁用任务、解绑活动仓库关系并保留任务及历史引用；无历史引用的任务也不因此物理删除。数据库引用保全与 HTTP 用户归属是不同责任；归档不提供自动硬删除或 Provider 数据清扫。历史 snapshot-diff／file-index 模型、表及已发布迁移仍保留。
 - 在 archive 同一事务先用 sqlite_master/pg_tables 检查 `backup_retention_policies`，不能用另开池连接的 `Migrator.HasTable` 导致 MaxOpenConns(1) 死锁。无表跳过 settle，archive/unlink 仍成功。
 - 有表则同事务将 active Task-link policy 软删为 deleted、revision++、deleted_at，并写 `retention_policy_delete`。nil/失败 audit 回滚 Task/link/policy，不允许部分成功。
 - depends_on_task_id 的 create/update 按 Task ID 升序锁定参与 Task，并在同一事务验证 live；不能依赖归档前的读。task 不 import retention（后者已 import task），用 narrow `AuditWriter.WriteTx`/ArchiveDependencies port。

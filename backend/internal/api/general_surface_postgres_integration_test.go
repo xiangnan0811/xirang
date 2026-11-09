@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/task"
 	"xirang/backend/internal/ws"
 )
@@ -29,6 +31,8 @@ const (
 	generalSurfacePostgresRequireEnv = "REQUIRE_POSTGRES_GENERAL_TEST"
 	generalSurfacePostgresPassword   = "FAKE_GeneralPostgresPass2026!_FOR_TEST_ONLY"
 	generalSurfaceOperatorPassword   = "FAKE_GeneralOperatorPass2026!_FOR_TEST_ONLY"
+	generalSurfaceViewerUsername     = "general-viewer"
+	generalSurfaceViewerPassword     = "FAKE_GeneralViewerPass2026!_FOR_TEST_ONLY"
 	generalSurfacePostgresJWTSecret  = "FAKE_GENERAL_POSTGRES_JWT_SECRET_2026_FOR_TEST_ONLY"
 )
 
@@ -146,6 +150,9 @@ func TestGeneralSurfacePostgres(t *testing.T) {
 	}
 
 	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_GENERAL_SURFACE_DATA_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
 	t.Setenv("ADMIN_INITIAL_PASSWORD", generalSurfacePostgresPassword)
 	if err := bootstrap.SeedUsers(db); err != nil {
 		t.Fatalf("seed deterministic PostgreSQL admin: %v", err)
@@ -184,6 +191,9 @@ func TestGeneralSurfacePostgres(t *testing.T) {
 
 	if _, err := authService.CreateUser(generalSurfaceOperatorUsername, generalSurfaceOperatorPassword, "operator"); err != nil {
 		t.Fatalf("create deterministic PostgreSQL operator: %v", err)
+	}
+	if _, err := authService.CreateUser(generalSurfaceViewerUsername, generalSurfaceViewerPassword, "viewer"); err != nil {
+		t.Fatalf("create deterministic PostgreSQL viewer: %v", err)
 	}
 	hub := ws.NewHub(db, nil, false)
 	router := NewRouter(Dependencies{
@@ -282,6 +292,23 @@ func TestGeneralSurfacePostgres(t *testing.T) {
 		t.Fatalf("unexpected PostgreSQL operator login user: %+v", operatorLogin)
 	}
 
+	viewerLoginStatus, viewerLoginBody := generalSurfaceRequest(t, client, server.URL, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"username": generalSurfaceViewerUsername,
+		"password": generalSurfaceViewerPassword,
+	})
+	if viewerLoginStatus != http.StatusOK {
+		t.Fatalf("PostgreSQL viewer login status=%d body=%s", viewerLoginStatus, viewerLoginBody)
+	}
+	var viewerLogin generalSurfaceLoginResponse
+	if err := json.Unmarshal(viewerLoginBody, &viewerLogin); err != nil {
+		t.Fatalf("decode PostgreSQL viewer login response: %v; body=%s", err, viewerLoginBody)
+	}
+	if viewerLogin.Code != http.StatusOK || viewerLogin.Data.Token == "" ||
+		viewerLogin.Data.User.Username != generalSurfaceViewerUsername ||
+		viewerLogin.Data.User.Role != "viewer" || viewerLogin.Data.User.ID == 0 {
+		t.Fatalf("unexpected PostgreSQL viewer login user: %+v", viewerLogin)
+	}
+
 	rbacStatus, rbacBody := generalSurfaceRequest(t, client, server.URL, http.MethodGet, "/api/v1/settings", operatorLogin.Data.Token, nil)
 	if rbacStatus != http.StatusForbidden {
 		t.Fatalf("PostgreSQL operator admin-only settings status=%d body=%s", rbacStatus, rbacBody)
@@ -373,36 +400,214 @@ func TestGeneralSurfacePostgres(t *testing.T) {
 		t.Fatalf("unexpected PostgreSQL task after update: %+v", persisted)
 	}
 
-	deleteStatus, deleteBody := generalSurfaceRequest(t, client, server.URL, http.MethodDelete,
-		fmt.Sprintf("/api/v1/tasks/%d", created.Data.ID), login.Data.Token, nil)
-	if deleteStatus != http.StatusOK {
-		t.Fatalf("PostgreSQL task archive status=%d body=%s", deleteStatus, deleteBody)
+	// Exercise archive through the real router with linked metadata and history.
+	if err := db.Model(&model.Task{}).Where("id = ?", created.Data.ID).Update("enabled", true).Error; err != nil {
+		t.Fatalf("enable archive fixture task: %v", err)
 	}
-	var archived struct {
-		Code int `json:"code"`
-		Data struct {
-			Archived             bool `json:"archived"`
-			Unlinked             bool `json:"unlinked"`
-			ScheduleRemoved      bool `json:"schedule_removed"`
-			ProviderBytesDeleted bool `json:"provider_bytes_deleted"`
-		} `json:"data"`
+	fixtureTime := time.Date(2026, 8, 18, 15, 0, 0, 0, time.UTC)
+	repository := model.BackupRepository{
+		ID: "dddddddddddddddddddddddddddddddd", ProviderKind: "restic", DisplayName: "general-archive-repo",
+		VersionMode: "native_snapshot", Status: "online", CapabilityRevision: 1, CapabilitiesJSON: `{}`,
+		ImmutabilityLevel: "backend_versioned",
 	}
-	if err := json.Unmarshal(deleteBody, &archived); err != nil {
-		t.Fatalf("decode PostgreSQL task archive response: %v; body=%s", err, deleteBody)
+	if err := db.Create(&repository).Error; err != nil {
+		t.Fatalf("create archive repository: %v", err)
 	}
-	if archived.Code != http.StatusOK || !archived.Data.Archived || !archived.Data.ScheduleRemoved ||
-		archived.Data.Unlinked || archived.Data.ProviderBytesDeleted {
-		t.Fatalf("unexpected PostgreSQL task archive envelope: %+v", archived)
+	link := model.TaskRepositoryLink{
+		ID: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", TaskID: &created.Data.ID, RepositoryID: repository.ID,
+		TaskNameSnapshot: updatedTaskName, NodeIDSnapshot: nodeEntity.ID, NodeNameSnapshot: nodeEntity.Name,
+		PublicationMode: "native_snapshot", EncryptedLegacyLocator: "sftp:general@example.invalid:/protected/legacy",
+		LinkedAt: fixtureTime, CreatedAt: fixtureTime, UpdatedAt: fixtureTime,
 	}
-	if err := db.First(&persisted, created.Data.ID).Error; err != nil {
-		t.Fatalf("read PostgreSQL archived task: %v", err)
+	if err := db.Create(&link).Error; err != nil {
+		t.Fatalf("create archive link: %v", err)
 	}
-	if persisted.ArchivedAt == nil || persisted.Enabled {
-		t.Fatalf("PostgreSQL task archive did not persist terminal metadata: %+v", persisted)
+	policy := model.BackupRetentionPolicy{
+		ID: "12121212121212121212121212121212", ScopeKind: "task_link", ScopeID: link.ID, Revision: 1,
+		RulesJSON: `{"version":1,"age":{"keep_days":7}}`, Status: "active",
+		CreatedBy: login.Data.User.ID, UpdatedBy: login.Data.User.ID, CreatedAt: fixtureTime, UpdatedAt: fixtureTime,
 	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("create archive retention policy: %v", err)
+	}
+	run := model.TaskRun{TaskID: created.Data.ID, NodeIDSnapshot: nodeEntity.ID, TriggerType: "manual", Status: "success"}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("create archive task run: %v", err)
+	}
+	logEntry := model.TaskLog{TaskID: created.Data.ID, TaskRunID: &run.ID, Level: "info", Message: "archive route history"}
+	if err := db.Create(&logEntry).Error; err != nil {
+		t.Fatalf("create archive task log: %v", err)
+	}
+	point := model.RecoveryPoint{
+		ID: "ffffffffffffffffffffffffffffffff", RepositoryID: repository.ID, ProducingTaskID: &created.Data.ID, ProducingTaskRunID: &run.ID,
+		ProducingTaskNameSnapshot: updatedTaskName, ProducingNodeIDSnapshot: nodeEntity.ID, ProducingNodeNameSnapshot: nodeEntity.Name,
+		LineageJSON: `{"version":1}`, EncryptedProviderLocator: `{"snapshot":"keep"}`,
+		Semantics: "native_snapshot", State: "committed", CapturedAt: &fixtureTime, CommittedAt: &fixtureTime,
+		PointRevision: 1, CapabilityRevision: 1, CapabilitiesJSON: `{}`, ImmutabilityLevel: "backend_versioned",
+		PhysicalAvailability: "online", HoldState: "none",
+	}
+	if err := db.Create(&point).Error; err != nil {
+		t.Fatalf("create archive recovery point: %v", err)
+	}
+	unownedNode := model.Node{Name: "general-postgres-unowned", Host: "127.0.0.2", Port: 22, Username: "root", AuthType: "key", Status: "offline", BackupDir: "/tmp/general-postgres-unowned"}
+	if err := db.Create(&unownedNode).Error; err != nil {
+		t.Fatalf("create unowned dependency node: %v", err)
+	}
+	dependent := model.Task{Name: "general-archive-dependent", NodeID: unownedNode.ID, DependsOnTaskID: &created.Data.ID, ExecutorType: "command", Command: "true", Status: "pending", Enabled: true}
+	if err := db.Create(&dependent).Error; err != nil {
+		t.Fatalf("create live archive dependent: %v", err)
+	}
+
+	type archiveState struct {
+		Task       model.Task
+		Link       model.TaskRepositoryLink
+		Policy     model.BackupRetentionPolicy
+		Repository model.BackupRepository
+		Point      model.RecoveryPoint
+		Run        model.TaskRun
+		Log        model.TaskLog
+		Audits     int64
+	}
+	readArchiveState := func(t *testing.T) archiveState {
+		t.Helper()
+		var state archiveState
+		for _, query := range []struct {
+			value any
+			id    any
+		}{
+			{&state.Task, created.Data.ID}, {&state.Link, link.ID}, {&state.Policy, policy.ID},
+			{&state.Repository, repository.ID}, {&state.Point, point.ID}, {&state.Run, run.ID}, {&state.Log, logEntry.ID},
+		} {
+			if err := db.First(query.value, "id = ?", query.id).Error; err != nil {
+				t.Fatalf("read archive state %T: %v", query.value, err)
+			}
+		}
+		if err := db.Model(&model.BackupAssetAuditEvent{}).Where("action = ? AND repository_id = ?", "retention_policy_delete", repository.ID).Count(&state.Audits).Error; err != nil {
+			t.Fatalf("count archive policy audits: %v", err)
+		}
+		return state
+	}
+	before := readArchiveState(t)
+	if !before.Task.Enabled || before.Task.ArchivedAt != nil || before.Link.UnlinkedAt != nil || before.Policy.Status != "active" || before.Audits != 0 {
+		t.Fatalf("invalid initial archive fixture: %+v", before)
+	}
+	if before.Link.TaskID == nil || *before.Link.TaskID != created.Data.ID || before.Link.RepositoryID != repository.ID ||
+		before.Point.ProducingTaskID == nil || *before.Point.ProducingTaskID != created.Data.ID ||
+		before.Point.ProducingTaskRunID == nil || *before.Point.ProducingTaskRunID != run.ID || before.Point.RepositoryID != repository.ID ||
+		before.Run.TaskID != created.Data.ID || before.Log.TaskID != created.Data.ID || before.Log.TaskRunID == nil || *before.Log.TaskRunID != run.ID {
+		t.Fatalf("archive fixture has incorrect producer references: %+v", before)
+	}
+	assertUnchanged := func(t *testing.T) {
+		t.Helper()
+		if after := readArchiveState(t); !reflect.DeepEqual(before, after) {
+			t.Fatalf("rejected archive changed persisted state:\nbefore=%+v\nafter=%+v", before, after)
+		}
+	}
+	taskPath := fmt.Sprintf("/api/v1/tasks/%d", created.Data.ID)
+	for _, tc := range []struct {
+		name   string
+		token  string
+		status int
+	}{
+		{"unauthenticated", "", http.StatusUnauthorized},
+		{"invalid_token", "FAKE_invalid_token_FOR_TEST_ONLY", http.StatusUnauthorized},
+		{"viewer", viewerLogin.Data.Token, http.StatusForbidden},
+		{"unowned_operator", operatorLogin.Data.Token, http.StatusForbidden},
+	} {
+		t.Run("archive_"+tc.name, func(t *testing.T) {
+			status, body := generalSurfaceRequest(t, client, server.URL, http.MethodDelete, taskPath, tc.token, nil)
+			if status != tc.status {
+				t.Fatalf("archive status=%d want=%d body=%s", status, tc.status, body)
+			}
+			assertUnchanged(t)
+		})
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: nodeEntity.ID, UserID: operatorLogin.Data.User.ID}).Error; err != nil {
+		t.Fatalf("assign archive node ownership: %v", err)
+	}
+	t.Run("archive_live_dependent_conflict", func(t *testing.T) {
+		status, body := generalSurfaceRequest(t, client, server.URL, http.MethodDelete, taskPath, operatorLogin.Data.Token, nil)
+		if status != http.StatusConflict {
+			t.Fatalf("archive with live dependent status=%d body=%s", status, body)
+		}
+		assertUnchanged(t)
+		var storedDependent model.Task
+		if err := db.First(&storedDependent, dependent.ID).Error; err != nil || storedDependent.ArchivedAt != nil || !storedDependent.Enabled || storedDependent.DependsOnTaskID == nil || *storedDependent.DependsOnTaskID != created.Data.ID {
+			t.Fatalf("live dependent changed: %+v err=%v", storedDependent, err)
+		}
+	})
+	if !t.Run("archive_admin_unowned_dependent", func(t *testing.T) {
+		status, body := generalSurfaceRequest(t, client, server.URL, http.MethodDelete, fmt.Sprintf("/api/v1/tasks/%d", dependent.ID), login.Data.Token, nil)
+		if status != http.StatusOK {
+			t.Fatalf("admin archive dependent status=%d body=%s", status, body)
+		}
+		var storedDependent model.Task
+		if err := db.First(&storedDependent, dependent.ID).Error; err != nil || storedDependent.ArchivedAt == nil || storedDependent.Enabled || storedDependent.DependsOnTaskID == nil || *storedDependent.DependsOnTaskID != created.Data.ID {
+			t.Fatalf("admin archive did not retain dependent: %+v err=%v", storedDependent, err)
+		}
+		assertUnchanged(t)
+	}) {
+		return
+	}
+	t.Run("archive_owned_operator", func(t *testing.T) {
+		status, body, requestID := generalSurfaceRequestWithID(t, client, server.URL, http.MethodDelete, taskPath, operatorLogin.Data.Token, nil)
+		if status != http.StatusOK {
+			t.Fatalf("operator archive status=%d body=%s", status, body)
+		}
+		var archived struct {
+			Code int `json:"code"`
+			Data struct {
+				Archived             bool `json:"archived"`
+				Unlinked             bool `json:"unlinked"`
+				ScheduleRemoved      bool `json:"schedule_removed"`
+				ProviderBytesDeleted bool `json:"provider_bytes_deleted"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(body, &archived); err != nil {
+			t.Fatalf("decode archive response: %v; body=%s", err, body)
+		}
+		if archived.Code != http.StatusOK || !archived.Data.Archived || !archived.Data.Unlinked || !archived.Data.ScheduleRemoved || archived.Data.ProviderBytesDeleted {
+			t.Fatalf("unexpected archive envelope: %+v", archived)
+		}
+		after := readArchiveState(t)
+		if after.Task.ArchivedAt == nil || after.Task.Enabled || after.Task.ID != before.Task.ID {
+			t.Fatalf("task was not retained and archived: %+v", after.Task)
+		}
+		if after.Link.TaskID == nil || *after.Link.TaskID != created.Data.ID || after.Link.UnlinkedAt == nil ||
+			after.Link.RepositoryID != before.Link.RepositoryID || after.Link.EncryptedLegacyLocator != before.Link.EncryptedLegacyLocator ||
+			after.Link.TaskNameSnapshot != before.Link.TaskNameSnapshot || after.Link.NodeIDSnapshot != before.Link.NodeIDSnapshot || after.Link.NodeNameSnapshot != before.Link.NodeNameSnapshot {
+			t.Fatalf("native link was not retained and unlinked: %+v", after.Link)
+		}
+		if after.Policy.Status != "deleted" || after.Policy.DeletedAt == nil || after.Policy.Revision != before.Policy.Revision+1 || after.Policy.ScopeID != link.ID || after.Audits != 1 {
+			t.Fatalf("policy was not soft deleted and audited: %+v audits=%d", after.Policy, after.Audits)
+		}
+		if !reflect.DeepEqual(after.Repository, before.Repository) || !reflect.DeepEqual(after.Point, before.Point) ||
+			!reflect.DeepEqual(after.Run, before.Run) || !reflect.DeepEqual(after.Log, before.Log) {
+			t.Fatalf("archive changed repository or producer history: before=%+v after=%+v", before, after)
+		}
+		var audit model.BackupAssetAuditEvent
+		if err := db.Where("action = ? AND repository_id = ?", "retention_policy_delete", repository.ID).Take(&audit).Error; err != nil {
+			t.Fatalf("read archive policy audit: %v", err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(audit.FieldsJSON), &fields); err != nil {
+			t.Fatalf("decode archive policy audit fields: %v", err)
+		}
+		if requestID == "" || fields["correlation_id"] != requestID || fields["policy_id"] != policy.ID ||
+			audit.ActorUserID != operatorLogin.Data.User.ID || audit.ActorUsername != generalSurfaceOperatorUsername || audit.ActorRole != "operator" ||
+			audit.Outcome != "success" || audit.ItemCount != 1 {
+			t.Fatalf("unexpected archive audit: %+v fields=%v request_id=%q", audit, fields, requestID)
+		}
+	})
 }
 
 func generalSurfaceRequest(t *testing.T, client *http.Client, baseURL, method, path, token string, payload any) (int, []byte) {
+	t.Helper()
+	status, body, _ := generalSurfaceRequestWithID(t, client, baseURL, method, path, token, payload)
+	return status, body
+}
+
+func generalSurfaceRequestWithID(t *testing.T, client *http.Client, baseURL, method, path, token string, payload any) (int, []byte, string) {
 	t.Helper()
 	var body io.Reader
 	if payload != nil {
@@ -431,5 +636,5 @@ func generalSurfaceRequest(t *testing.T, client *http.Client, baseURL, method, p
 	if err != nil {
 		t.Fatalf("read %s %s response: %v", method, path, err)
 	}
-	return resp.StatusCode, responseBody
+	return resp.StatusCode, responseBody, resp.Header.Get("X-Request-ID")
 }

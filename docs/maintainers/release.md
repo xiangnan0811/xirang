@@ -53,6 +53,8 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 孤立 Handler 与旧 snapshot 列表执行器接口清理同样不强制制造正式版本或镜像：四路遗留读取仍为 410，节点远程执行路由仍未挂载，活 Restore、恢复错误处理和任务归档合同保持。没有公开 API、wire、配置或 schema migration 变化，不处置历史数据；说明留在 `Unreleased`，仍按同候选独审、正常 hooks、required CI 以及合并后同 SHA CI／Release Please 完成交付。
 
+`ArchiveService.TryHardDelete` 的零消费者清理与归档断言迁移按 `test`／`refactor` 处理：真实 `Archive` 和任务删除路由承担任务／历史保全，HTTP 身份归属与数据库引用保护分别验收；保留策略审计、依赖拒绝、事务和调度边界，不新增硬删除、自动回收或 Provider 删除能力。历史模型、表和已发布迁移保留；无实际运行行为变化时说明留 `Unreleased`，仍须正常 hooks、同候选独审、完整 required PostgreSQL／CI、合并后同 SHA CI 与 Release Please，不额外制造版本或正式镜像。
+
 孤立状态 validator、Task 能力便利投影与 mutable-head 内存投影的清理按 `test`／`refactor` 交付：现行服务转换、双引擎约束、Provider 准入／能力快照、真实观测持久化与公开 DTO 承担对应合同，不为旧测试新增 Command artifact 能力、Range 限制或观测流程。没有运行行为、公开 API、wire、配置或 schema migration 变化时不强制发版／镜像，说明留在 `Unreleased`；仍须完成同候选独审、正常 hooks、required CI 以及合并后同 SHA CI／Release Please 核对，不改写历史迁移或数据。
 
 Content grant 与 Export item 的孤立转换／reset helper 清理同样按 `test`／`refactor` 处理：有效断言迁入真实 Broker／Reconciler 条件更新和 Coordinator Claim／Checkpoint 事务，保留活状态、fence／lease／字节／配额及 item-attempt 历史，不新增转换入口或 reset API。受控 spool 数据库夹具只证明事务与持久投影，真实服务执行另行记录；两者都不能外推完整远端读取／归档端到端。没有实际运行行为或依赖修复时说明留 `Unreleased`，核对完整 required CI、合并后同 SHA CI 与 Release Please，不额外制造版本或正式镜像；已发布迁移和历史数据保持。
