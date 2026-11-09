@@ -335,6 +335,13 @@ func (runtime *managedProcessingRuntime) buildControlPlane(
 		QueueMax: config.QueueMax, InteractiveReservedSlots: config.InteractiveSlots,
 		BackgroundSlots: config.BackgroundSlots, PullLease: config.PullLease,
 		AttemptTimeout: config.AttemptTimeout, RetryMax: config.RetryMax,
+		BackfillPolicySource: func(ctx context.Context, tx *gorm.DB) (processing.BackfillPolicy, error) {
+			backfill, err := runtime.foundation.ProcessingBackfillConfigTx(ctx, tx)
+			if err != nil {
+				return processing.BackfillPolicy{}, err
+			}
+			return processingBackfillPolicy(backfill), nil
+		},
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -360,6 +367,15 @@ func (runtime *managedProcessingRuntime) buildControlPlane(
 		return nil, nil, nil, err
 	}
 	return coordinator, capabilityService, coverageService, nil
+}
+
+func processingBackfillPolicy(config backupasset.ProcessingBackfillConfig) processing.BackfillPolicy {
+	return processing.BackfillPolicy{
+		Paused: config.Paused, BatchSize: config.BatchSize,
+		JobsPerHour: config.JobsPerHour, BytesPerHour: config.BytesPerHour,
+		ProviderConcurrency: config.ProviderConcurrency, CapabilityConcurrency: config.CapabilityConcurrency,
+		RecentWindow: config.RecentWindow, HistoryAgingStep: config.HistoryAgingStep,
+	}
 }
 
 func (runtime *managedProcessingRuntime) malwareSafetyForAsset(
@@ -594,7 +610,7 @@ func (runtime *managedProcessingRuntime) requestMalwareContinuation(
 			PriorityClass: processing.PriorityBackground, Priority: 900,
 		},
 	})
-	if errors.Is(err, processing.ErrNotDeployed) {
+	if errors.Is(err, processing.ErrNotDeployed) || errors.Is(err, processing.ErrBackfillDenied) {
 		return nil
 	}
 	return err
@@ -728,7 +744,7 @@ func (runtime *managedProcessingRuntime) scheduleSecretContinuations(ctx context
 				Priority:      500,
 			},
 		})
-		if errors.Is(err, processing.ErrNotDeployed) {
+		if errors.Is(err, processing.ErrNotDeployed) || errors.Is(err, processing.ErrBackfillDenied) {
 			return scheduled, nil
 		}
 		if err != nil {
@@ -1252,7 +1268,17 @@ func (runtime *managedProcessingRuntime) UpdateProcessingBackfillPolicy(
 	if err != nil {
 		return ProcessingBackfillPolicy{}, err
 	}
-	return runtime.ProcessingBackfillPolicy()
+	config, err := runtime.ProcessingConfig()
+	if err != nil {
+		return ProcessingBackfillPolicy{}, err
+	}
+	runtime.mu.Lock()
+	runtime.config.Backfill = config.Backfill
+	runtime.mu.Unlock()
+	if !config.Enabled {
+		return ProcessingBackfillPolicy{}, processing.ErrProcessingDisabled
+	}
+	return newProcessingBackfillPolicy(config.Backfill)
 }
 
 func (runtime *managedProcessingRuntime) RequestProcessingUpdaterScan(context.Context) error {

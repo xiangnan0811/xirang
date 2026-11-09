@@ -34,6 +34,8 @@ clean 且等于当前内嵌迁移头，再验证适用 schema 与降级保护；
 
 Export raw fingerprint 迁移保留 Catalog 的原始值：仅列明的非文件类型且 strength 为 none 时允许空值，文件及 strong/weak 仍要求非空。SQLite 重建 items／item attempts 前核验两表索引、触发器及外部引用；额外对象在写 dirty 元数据前拒绝，不静默丢弃。双引擎启动核对该 CHECK 及降级准入的实际语义；当保留的 Export item 存在旧约束不能表示的空 fingerprint 时，元数据准入和 down SQL 均拒绝并保持原 clean 版本。旧兼容数据可在相关结构保护允许时回退本迁移，其他版本的降级保护不因此解除。
 
+Processing 共享输出与持久后台配额通过各自前向迁移演进；新配额元数据只从精确恢复点／Repository／Catalog 关联取得，旧作业不补造收费。对应 preflight 在 dirty 拒绝和现有最小 schema 验证后、fixups/Up 前检查无版本部分结构及非法关联，启动继续校验真实对象与种子，不自动重建。配额准入、快照和降级保护的 metadata／ledger／jobs 锁序及失权行为见[处理与导出合同](../domains/backup-processing-export.md)，不得以缺对象等同零用量。
+
 ## 已使用 schema 的降级保护
 
 有效数据保护要求可以规定“只允许未使用 schema 降级”，不要求破坏性可逆。永久安全标记、幂等凭据、账本或领域证据已使用时，保留状态并前向修复。

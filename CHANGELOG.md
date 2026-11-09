@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### 派生产物共享与恢复围栏修复
+
+- 修复真实 Sink 中独立 job 上传相同输出时的唯一约束冲突：新增双引擎 `000098_processing_shared_derived_blobs`，允许多个 upload 指向共享 blob、多个 ArtifactSet 具有相同 manifest digest；每次上传、作业、attempt、grant、产物与来源引用仍独立，来源授权和撤销互不串用，不增加按相同输入跨恢复点跳过处理。
+- 上传验证与回放保持流式认证加密，不落明文；候选已安装后的重激活保留逻辑 blob ID，以新 inode、locator、DEK 与 nonce 重建候选，失败或取消不改写旧硬链接。调和、恢复、延迟清理和 DEK rewrap 绑定观测代次与旧 envelope；暂存清理与合法续租通过同事务 holder job 锁串行，失权 upload 在 blob 锁前按身份收束，锁后新 holder 触发全事务重建，`ref_count` 只计活跃已发布引用。正常发布、pending Search 恢复和等锁后的 heartbeat 重验授权与期限，发布／撤销／退休使用一致的来源锁序。
+- 升级前暂停处理准入，停止并排空全部旧 Core／Worker 及发布、撤销、清理、对账 owner，保全一致数据库、Derived 密文、配置、备份副本及匹配密钥，再配套启动理解共享合同的新版本；禁止新旧运行时代码混跑。已存在重复 staging ID 或 manifest digest 时禁止回退 schema98；SQLite 未知依赖也会阻止回退，不能删历史 upload／artifact／reference、手改版本或改写已发布迁移绕过。回退旧运行代码会恢复共享、清理与授权缺陷，安全回退须使用升级前一致备份和匹配的旧二进制、配置及密钥。
+
+### 持久后台配额与真实执行并发修复
+
+- 新增双引擎 `000099_processing_backfill_quota`，为作业保留精确来源 Provider／Catalog 预计字节和收费标记，以共享数据库账本约束跨调用、重启与多 Runtime 的 UTC 整点小时任务／字节预算。只有实际新建后台 job 收费；同 key 独立 interest、同 job 重试不重复收费，取消不退费，零字节计一次任务，升级前作业及交互新建不补造历史费。预计输入字节不等于网络字节，Grant 读取预算独立保留。
+- 后台 Pull 在同事务按全局 Provider kind／capability 有效 attempt 准入，保留 Worker 交互保留／后台槽位；桶满跳过并释放候选锁，完成／失权／到期释放有效占用。交互提权退出后台桶且不改既有 slot，不能通过移除 interest 在活 attempt 中反复切换桶。配置更新后的各 Runtime 事务读取最新完整设置并保留当窗用量，收集被拒后不越过未入队项、不误报 ExpectedDescriptors 已证明，malware／secret continuation 维持未证明事实。
+- 升级前保全一致数据库、Derived 密文、配置、备份副本及匹配密钥，暂停新准入并停止排空全部旧 Core／Worker 和处理／发布／清理／对账 owner，禁止不理解收费／并发合同的旧运行代码混跑。旧 job 只精确回填来源元数据，非法关联或未版本化部分结构在写 dirty 前拒绝；不改写历史 descriptor、fingerprint、状态或产物。保留的 charged 作业（含零字节）或账本使用阻止回退 schema99，schema98 共享输出限制独立保留；不能删除历史或手改版本绕过。回退旧运行代码恢复缺陷，须使用一致备份及匹配二进制、配置、密钥；本次运行修复按正常流程正式发行。
+
 ### 测试
 
 - 修复 Core Compose 自测中 APK 绕过检查在 `pipefail` 下因 `grep -q` 提前退出、上游 `sed` 收到 SIGPIPE 而漏判的问题；保留原匹配规则并增加大文件 exec-form APK 回归。仅改变测试，无 API、配置、schema 或运行时变化，不因此单独发行新版本。

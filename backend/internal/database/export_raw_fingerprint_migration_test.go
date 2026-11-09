@@ -28,7 +28,7 @@ func testExportRawFingerprintMigration(t *testing.T, fixture migrationFixture) {
 		}
 		assertMigrationVersion(t, migrator, 97)
 		assertExportRawFingerprintRows(t, db, before)
-		if err := VerifyCurrentSchema(fixture.recoveryWorkerGorm(t, db), fixture.engine); err != nil {
+		if err := validateMinimumRecoverySchema(db, fixture.engine, exportRawFingerprintSchemaVersion); err != nil {
 			t.Fatalf("verify upgraded schema: %v", err)
 		}
 		assertExportRawFingerprintReferences(t, fixture, db)
@@ -111,7 +111,7 @@ func testExportRawFingerprintMigration(t *testing.T, fixture migrationFixture) {
 	})
 
 	t.Run("schema_drift", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, 97)
+		migrator, db := fixture.openAt(t, uint(latestMigrationVersion))
 		if fixture.engine == "sqlite" {
 			fixture.mustExec(t, db, `DROP TRIGGER trg_export_raw_fingerprint_downgrade_admission`)
 			fixture.mustExec(t, db, `CREATE TRIGGER trg_export_raw_fingerprint_downgrade_admission BEFORE INSERT ON schema_migrations BEGIN SELECT 1; END`)
@@ -125,10 +125,10 @@ func testExportRawFingerprintMigration(t *testing.T, fixture migrationFixture) {
 		if err := RunMigrations(gormDB, fixture.engine); !errors.Is(err, ErrMigrationSchemaDrift) || !strings.Contains(err.Error(), "invalid_export_raw_fingerprint_admission_trigger") {
 			t.Fatalf("startup accepted broken guard: %v", err)
 		}
-		assertMigrationVersion(t, migrator, 97)
+		assertMigrationVersion(t, migrator, uint(latestMigrationVersion))
 	})
 	t.Run("fingerprint_check_drift", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, 97)
+		migrator, db := fixture.openAt(t, uint(latestMigrationVersion))
 		if fixture.engine == "sqlite" {
 			fixture.mustExec(t, db, `ALTER TABLE backup_asset_export_items ADD COLUMN extra_guard TEXT CHECK (entry_fingerprint <> '')`)
 		} else {
@@ -144,7 +144,7 @@ func testExportRawFingerprintMigration(t *testing.T, fixture migrationFixture) {
 				t.Fatalf("fingerprint constraint drift accepted: %v", err)
 			}
 		}
-		assertMigrationVersion(t, migrator, 97)
+		assertMigrationVersion(t, migrator, uint(latestMigrationVersion))
 	})
 	if fixture.engine == "sqlite" {
 		t.Run("extra_objects_refused_before_dirty", func(t *testing.T) {

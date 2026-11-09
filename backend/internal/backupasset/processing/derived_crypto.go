@@ -130,7 +130,7 @@ func (derived *DerivedCipher) Encrypt(destination io.Writer, plaintext io.Reader
 		remaining -= plainSize
 	}
 	var extra [1]byte
-	if count, readErr := plaintext.Read(extra[:]); count != 0 || (readErr != nil && !errors.Is(readErr, io.EOF)) {
+	if count, readErr := plaintext.Read(extra[:]); count != 0 || readErr != io.EOF {
 		return DerivedCryptoMetadata{}, fmt.Errorf("%w: plaintext exceeds declared size", ErrDerivedInvalid)
 	}
 	if !constantDigestEqual(hasher.Sum(nil), spec.PlaintextDigest) {

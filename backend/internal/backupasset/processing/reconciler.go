@@ -37,6 +37,8 @@ type Reconciler struct {
 
 const derivedReconcileOrphanGrace = time.Minute
 
+var errStagedDerivedBlobUnreadable = errors.New("staged Derived blob unreadable")
+
 type DerivedReconcileResult struct {
 	ExaminedBlobs         int
 	RepairedRefCounts     int
@@ -152,6 +154,27 @@ func (reconciler *DerivedReconciler) reconcileBlob(ctx context.Context, row mode
 	if !safeOpaqueLocator(row.OpaqueLocator) {
 		return ErrDerivedBlobUnavailable
 	}
+	if row.State == "staged" {
+		if reconciler.store.utcNow().Sub(row.UpdatedAt.UTC()) < derivedReconcileOrphanGrace {
+			return nil
+		}
+		recovered, err := reconciler.recoverStagedBlob(ctx, row)
+		if errors.Is(err, errStagedDerivedBlobUnreadable) {
+			var references int64
+			if err := reconciler.store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlobReference{}).
+				Where("blob_id = ? AND state = ?", row.ID, "active").Count(&references).Error; err != nil {
+				return fmt.Errorf("count Derived reconciliation references: %w", err)
+			}
+			return reconciler.revokeUnreadableBlob(ctx, row.ID, row.OpaqueLocator, references, result)
+		}
+		if err != nil {
+			return err
+		}
+		if recovered {
+			result.RecoveredStaging++
+		}
+		return nil
+	}
 	var references int64
 	if err := reconciler.store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlobReference{}).
 		Where("blob_id = ? AND state = ?", row.ID, "active").Count(&references).Error; err != nil {
@@ -163,41 +186,12 @@ func (reconciler *DerivedReconciler) reconcileBlob(ctx context.Context, row mode
 		return err
 	}
 	switch row.State {
-	case "staged":
-		if reconciler.store.utcNow().Sub(row.UpdatedAt.UTC()) < derivedReconcileOrphanGrace {
-			return nil
-		}
-		if !readable {
-			stagingPath := filepath.Join(reconciler.store.config.Root, ".staging-"+row.ID)
-			staged, stagingErr := derivedReconcileRegularFile(stagingPath, row.PhysicalSize)
-			if stagingErr != nil {
-				return stagingErr
-			}
-			if !staged {
-				return reconciler.revokeUnreadableBlob(ctx, row.ID, references, result)
-			}
-			if err := os.Rename(stagingPath, finalPath); err != nil {
-				return errors.Join(ErrDerivedStoreUnavailable, err)
-			}
-			if err := syncDerivedDirectory(reconciler.store.config.Root); err != nil {
-				return err
-			}
-		}
-		updated := reconciler.store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).
-			Where("id = ? AND state = ?", row.ID, "staged").
-			Updates(map[string]any{"state": "active", "ref_count": references, "updated_at": reconciler.store.utcNow()})
-		if updated.Error != nil {
-			return fmt.Errorf("recover staged Derived blob: %w", updated.Error)
-		}
-		if updated.RowsAffected == 1 {
-			result.RecoveredStaging++
-		}
 	case "active":
 		if !readable {
-			return reconciler.revokeUnreadableBlob(ctx, row.ID, references, result)
+			return reconciler.revokeUnreadableBlob(ctx, row.ID, row.OpaqueLocator, references, result)
 		}
 		if row.RefCount != references {
-			repaired, err := reconciler.repairRefCount(ctx, row.ID, row.RefCount)
+			repaired, err := reconciler.repairRefCount(ctx, row.ID, row.OpaqueLocator, row.RefCount)
 			if err != nil {
 				return err
 			}
@@ -205,9 +199,15 @@ func (reconciler *DerivedReconciler) reconcileBlob(ctx context.Context, row mode
 				result.RepairedRefCounts++
 			}
 		}
-		if references == 0 && reconciler.store.utcNow().Sub(row.UpdatedAt.UTC()) >= derivedReconcileOrphanGrace {
+		var orphaned int64
+		if reconciler.store.db.Migrator().HasTable(&model.BackupAssetProcessingUpload{}) {
+			if err := reconciler.store.db.WithContext(ctx).Model(&model.BackupAssetProcessingUpload{}).Where("staging_id = ? AND state = ?", row.ID, "orphaned").Count(&orphaned).Error; err != nil {
+				return err
+			}
+		}
+		if references == 0 && (orphaned > 0 || reconciler.store.utcNow().Sub(row.UpdatedAt.UTC()) >= derivedReconcileOrphanGrace) {
 			before := row.State
-			if err := reconciler.store.discardBlobIfUnreferenced(ctx, row.ID); err != nil {
+			if err := reconciler.store.discardBlobIfUnreferencedObserved(ctx, row.ID, row.OpaqueLocator); err != nil {
 				return err
 			}
 			var after model.BackupAssetDerivedBlob
@@ -229,7 +229,7 @@ func (reconciler *DerivedReconciler) reconcileBlob(ctx context.Context, row mode
 		}
 		if row.State != "unavailable" {
 			updated := reconciler.store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).
-				Where("id = ? AND state = ?", row.ID, row.State).
+				Where("id = ? AND state = ? AND opaque_locator = ?", row.ID, row.State, row.OpaqueLocator).
 				Updates(map[string]any{"state": "unavailable", "updated_at": reconciler.store.utcNow()})
 			if updated.Error != nil {
 				return fmt.Errorf("finish Derived purge reconciliation: %w", updated.Error)
@@ -244,12 +244,70 @@ func (reconciler *DerivedReconciler) reconcileBlob(ctx context.Context, row mode
 	return nil
 }
 
-func (reconciler *DerivedReconciler) repairRefCount(ctx context.Context, blobID string, previous int64) (bool, error) {
+// recoverStagedBlob fences filesystem recovery with the observed incarnation.
+// Unreadable blobs are handled after the transaction releases the blob lock,
+// because revocation must acquire the source point and set locks first.
+func (reconciler *DerivedReconciler) recoverStagedBlob(ctx context.Context, observed model.BackupAssetDerivedBlob) (bool, error) {
+	if observed.State != "staged" {
+		return false, nil
+	}
+	recovered := false
+	err := reconciler.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current model.BackupAssetDerivedBlob
+		loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", observed.ID).Limit(1).Find(&current)
+		if loaded.Error != nil || loaded.RowsAffected != 1 {
+			return loaded.Error
+		}
+		if current.State != "staged" || current.OpaqueLocator != observed.OpaqueLocator {
+			return nil
+		}
+		if !safeOpaqueLocator(current.OpaqueLocator) {
+			return ErrDerivedBlobUnavailable
+		}
+		finalPath := filepath.Join(reconciler.store.config.Root, current.OpaqueLocator)
+		readable, err := derivedReconcileRegularFile(finalPath, current.PhysicalSize)
+		if err != nil {
+			return err
+		}
+		if !readable {
+			stagingPath := filepath.Join(reconciler.store.config.Root, ".staging-"+strings.TrimSuffix(current.OpaqueLocator, ".xrd"))
+			staged, err := derivedReconcileRegularFile(stagingPath, current.PhysicalSize)
+			if err != nil {
+				return err
+			}
+			if !staged {
+				return errStagedDerivedBlobUnreadable
+			}
+			if err := os.Rename(stagingPath, finalPath); err != nil {
+				return errors.Join(ErrDerivedStoreUnavailable, err)
+			}
+			if err := syncDerivedDirectory(reconciler.store.config.Root); err != nil {
+				return err
+			}
+		}
+		var references int64
+		if err := tx.Model(&model.BackupAssetDerivedBlobReference{}).
+			Where("blob_id = ? AND state = ?", current.ID, "active").Count(&references).Error; err != nil {
+			return fmt.Errorf("count staged Derived references: %w", err)
+		}
+		updated := tx.Model(&model.BackupAssetDerivedBlob{}).
+			Where("id = ? AND state = ? AND opaque_locator = ?", current.ID, "staged", current.OpaqueLocator).
+			Updates(map[string]any{"state": "active", "ref_count": references, "updated_at": reconciler.store.utcNow()})
+		if updated.Error != nil {
+			return fmt.Errorf("recover staged Derived blob: %w", updated.Error)
+		}
+		recovered = updated.RowsAffected == 1
+		return nil
+	})
+	return recovered, err
+}
+
+func (reconciler *DerivedReconciler) repairRefCount(ctx context.Context, blobID, expectedLocator string, previous int64) (bool, error) {
 	repaired := false
 	err := reconciler.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row model.BackupAssetDerivedBlob
 		loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", blobID).Limit(1).Find(&row)
-		if loaded.Error != nil || loaded.RowsAffected != 1 || row.State != "active" || row.RefCount != previous {
+		if loaded.Error != nil || loaded.RowsAffected != 1 || row.State != "active" || row.OpaqueLocator != expectedLocator || row.RefCount != previous {
 			return loaded.Error
 		}
 		var count int64
@@ -271,7 +329,7 @@ func (reconciler *DerivedReconciler) repairRefCount(ctx context.Context, blobID 
 	return repaired, err
 }
 
-func (reconciler *DerivedReconciler) revokeUnreadableBlob(ctx context.Context, blobID string, references int64, result *DerivedReconcileResult) error {
+func (reconciler *DerivedReconciler) revokeUnreadableBlob(ctx context.Context, blobID, expectedLocator string, references int64, result *DerivedReconcileResult) error {
 	if references > 0 {
 		var setIDs []string
 		if err := reconciler.store.db.WithContext(ctx).Table("backup_asset_derived_artifact_sets AS sets").
@@ -283,16 +341,16 @@ func (reconciler *DerivedReconciler) revokeUnreadableBlob(ctx context.Context, b
 			return fmt.Errorf("load Derived sets for unreadable blob: %w", err)
 		}
 		if len(setIDs) == 0 {
-			return ErrDerivedBlobUnavailable
+			return reconciler.store.discardBlobIfUnreferencedObserved(ctx, blobID, expectedLocator)
 		}
 		for _, setID := range setIDs {
-			if err := reconciler.lifecycle.revokeSetWithManagedFence(ctx, setID, DerivedRevokeKeyLoss); err != nil {
+			if err := reconciler.lifecycle.revokeSetWithManagedFenceObserved(ctx, setID, DerivedRevokeKeyLoss, blobID, expectedLocator); err != nil {
 				return err
 			}
 			result.RevokedUnreadableSets++
 		}
 	}
-	return reconciler.store.discardBlobIfUnreferenced(ctx, blobID)
+	return reconciler.store.discardBlobIfUnreferencedObserved(ctx, blobID, expectedLocator)
 }
 
 func (reconciler *DerivedReconciler) reconcileFiles(ctx context.Context, result *DerivedReconcileResult) error {
@@ -314,22 +372,30 @@ func (reconciler *DerivedReconciler) reconcileFiles(ctx context.Context, result 
 		last = name
 		var count int64
 		switch {
+		case strings.HasPrefix(name, ".writing-") || strings.HasPrefix(name, ".verify-") || strings.HasPrefix(name, ".replay-"):
+			info, err := entry.Info()
+			if err != nil {
+				return errors.Join(ErrDerivedStoreUnavailable, err)
+			}
+			if time.Since(info.ModTime()) < time.Hour {
+				continue
+			}
 		case strings.HasPrefix(name, ".staging-"):
-			blobID := strings.TrimPrefix(name, ".staging-")
-			if backupasset.ValidateOpaqueID(blobID) != nil {
+			parts := strings.Split(strings.TrimPrefix(name, ".staging-"), "-")
+			if len(parts) < 1 || len(parts) > 2 || backupasset.ValidateOpaqueID(parts[0]) != nil || (len(parts) == 2 && backupasset.ValidateOpaqueID(parts[1]) != nil) {
 				continue
 			}
 			if err := reconciler.store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).
-				Where("id = ? AND state = ?", blobID, "staged").Count(&count).Error; err != nil {
+				Where("id = ? AND state = ? AND opaque_locator = ?", parts[0], "staged", strings.TrimPrefix(name, ".staging-")+".xrd").Count(&count).Error; err != nil {
 				return err
 			}
 		case strings.HasSuffix(name, ".xrd"):
-			blobID := strings.TrimSuffix(name, ".xrd")
-			if backupasset.ValidateOpaqueID(blobID) != nil || !safeOpaqueLocator(name) {
+			parts := strings.Split(strings.TrimSuffix(name, ".xrd"), "-")
+			if len(parts) < 1 || len(parts) > 2 || backupasset.ValidateOpaqueID(parts[0]) != nil || (len(parts) == 2 && backupasset.ValidateOpaqueID(parts[1]) != nil) || !safeOpaqueLocator(name) {
 				continue
 			}
 			if err := reconciler.store.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).
-				Where("opaque_locator = ?", name).Count(&count).Error; err != nil {
+				Where("opaque_locator = ? AND state IN ?", name, []string{"staged", "active", "purging", "purge_failed"}).Count(&count).Error; err != nil {
 				return err
 			}
 		default:
@@ -391,9 +457,6 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context) (ReconcileResult, e
 	}
 	result := ReconcileResult{}
 	for _, attempt := range attempts {
-		if err := reconciler.grants.RevokeAttempt(ctx, attempt.ID, "lease_lost"); err != nil {
-			return result, err
-		}
 		expired, retrying, err := reconciler.expireAttempt(ctx, attempt.ID, now)
 		if err != nil {
 			return result, err
@@ -529,72 +592,67 @@ func (reconciler *Reconciler) Shutdown(ctx context.Context) (int, error) {
 
 func (reconciler *Reconciler) retireAttemptForShutdown(ctx context.Context, attemptID string, now time.Time) (bool, error) {
 	retired := false
-	err := reconciler.coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var attempt model.BackupAssetProcessingAttempt
-		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", attemptID).Limit(1).Find(&attempt)
-		if result.Error != nil {
-			return fmt.Errorf("load Processing shutdown attempt: %w", result.Error)
-		}
-		if result.RowsAffected != 1 || attempt.State != "active" || !attempt.IsCurrent {
-			return nil
-		}
-		var job model.BackupAssetProcessingJob
-		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", attempt.JobID).Limit(1).Find(&job)
-		if result.Error != nil {
-			return fmt.Errorf("load Processing shutdown job: %w", result.Error)
-		}
-		if result.RowsAffected != 1 || !job.IsCurrent || job.CurrentAttemptID == nil || *job.CurrentAttemptID != attempt.ID {
-			return ErrAttemptLost
-		}
-		if err := revokeAttemptGrantsTx(tx, attempt.ID, now, "shutdown"); err != nil {
-			return err
-		}
-		if err := reconciler.retireRecoveryLeaseTx(ctx, tx, attempt, now); err != nil {
-			return err
-		}
-		if err := finishAttemptTx(tx, attempt.ID, now, "canceled", ""); err != nil {
-			return err
-		}
+	err := reconciler.coordinator.retryConflicts(ctx, func() error {
+		retired = false
+		return reconciler.coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			job, attempt, found, err := lockRetiringAttemptTx(tx, attemptID)
+			if err != nil || !found {
+				return err
+			}
+			if err := revokeAttemptGrantsTx(tx, attempt.ID, now, "shutdown"); err != nil {
+				return err
+			}
+			if err := reconciler.retireRecoveryLeaseTx(ctx, tx, attempt, now); err != nil {
+				return err
+			}
+			if err := finishAttemptTx(tx, attempt.ID, now, "canceled", ""); err != nil {
+				return err
+			}
 
-		updates := map[string]any{
-			"current_attempt_id": nil, "updated_at": now, "version": gorm.Expr("version + 1"),
-		}
-		var nextRevision int64
-		var err error
-		if ProcessingState(job.State) == ProcessingCancelRequested {
-			nextRevision, err = ValidateTransition(TransitionRequest{
-				From: ProcessingCancelRequested, To: ProcessingCanceled,
-				CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
-				CancelReason: CancelReason(job.CancelReason),
-			})
-			updates["state"] = string(ProcessingCanceled)
-			updates["is_current"] = false
-			updates["finished_at"] = now
-		} else {
-			retryAt := now.Add(reconciler.retryDelay(job.RetryCount + 1))
-			nextRevision, err = ValidateTransition(TransitionRequest{
-				From: ProcessingState(job.State), To: ProcessingRetryWait,
-				CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
-				ErrorCode: ProcessingErrorWorkerUnavailable, RetryAt: &retryAt,
-			})
-			updates["state"] = string(ProcessingRetryWait)
-			updates["error_code"] = string(ProcessingErrorWorkerUnavailable)
-			updates["retry_at"] = retryAt
-		}
-		if err != nil {
-			return err
-		}
-		updates["transition_revision"] = nextRevision
-		updated := tx.Model(&model.BackupAssetProcessingJob{}).
-			Where("id = ? AND transition_revision = ?", job.ID, job.TransitionRevision).Updates(updates)
-		if updated.Error != nil {
-			return fmt.Errorf("retire Processing shutdown job: %w", updated.Error)
-		}
-		if updated.RowsAffected != 1 {
-			return ErrRevisionConflict
-		}
-		retired = true
-		return nil
+			updates := map[string]any{
+				"current_attempt_id": nil, "updated_at": now, "version": gorm.Expr("version + 1"),
+			}
+			var nextRevision int64
+			if ProcessingState(job.State) == ProcessingCancelRequested {
+				nextRevision, err = ValidateTransition(TransitionRequest{
+					From: ProcessingCancelRequested, To: ProcessingCanceled,
+					CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
+					CancelReason: CancelReason(job.CancelReason),
+				})
+				updates["state"] = string(ProcessingCanceled)
+				updates["is_current"] = false
+				updates["finished_at"] = now
+			} else {
+				retryAt := now.Add(reconciler.retryDelay(job.RetryCount + 1))
+				nextRevision, err = ValidateTransition(TransitionRequest{
+					From: ProcessingState(job.State), To: ProcessingRetryWait,
+					CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
+					ErrorCode: ProcessingErrorWorkerUnavailable, RetryAt: &retryAt,
+				})
+				updates["state"] = string(ProcessingRetryWait)
+				updates["error_code"] = string(ProcessingErrorWorkerUnavailable)
+				updates["retry_at"] = retryAt
+			}
+			if err != nil {
+				return err
+			}
+			updates["transition_revision"] = nextRevision
+			updated := tx.Model(&model.BackupAssetProcessingJob{}).
+				Where("id = ? AND transition_revision = ?", job.ID, job.TransitionRevision).Updates(updates)
+			if updated.Error != nil {
+				return fmt.Errorf("retire Processing shutdown job: %w", updated.Error)
+			}
+			if updated.RowsAffected != 1 {
+				return ErrRevisionConflict
+			}
+			if updates["state"] == string(ProcessingRetryWait) {
+				if err := reconciler.coordinator.recomputePriorityTx(ctx, tx, job.ID); err != nil {
+					return err
+				}
+			}
+			retired = true
+			return nil
+		})
 	})
 	return retired, err
 }
@@ -602,72 +660,114 @@ func (reconciler *Reconciler) retireAttemptForShutdown(ctx context.Context, atte
 func (reconciler *Reconciler) expireAttempt(ctx context.Context, attemptID string, now time.Time) (bool, bool, error) {
 	expiredJob := false
 	retryingJob := false
-	err := reconciler.coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var attempt model.BackupAssetProcessingAttempt
-		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", attemptID).Limit(1).Find(&attempt)
-		if result.Error != nil || result.RowsAffected != 1 || attempt.State != "active" || !attempt.IsCurrent {
-			return nil
-		}
-		var job model.BackupAssetProcessingJob
-		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", attempt.JobID).Limit(1).Find(&job)
-		if result.Error != nil || result.RowsAffected != 1 || !job.IsCurrent || job.CurrentAttemptID == nil || *job.CurrentAttemptID != attempt.ID {
-			return nil
-		}
-		if err := reconciler.retireRecoveryLeaseTx(ctx, tx, attempt, now); err != nil {
-			return err
-		}
-		if err := finishAttemptTx(tx, attempt.ID, now, "expired", string(ProcessingErrorLeaseLost)); err != nil {
-			return err
-		}
-		if !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) {
+	err := reconciler.coordinator.retryConflicts(ctx, func() error {
+		expiredJob, retryingJob = false, false
+		return reconciler.coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			job, attempt, found, err := lockRetiringAttemptTx(tx, attemptID)
+			if err != nil || !found {
+				return err
+			}
+			if now.Before(attempt.WorkerLeaseExpiresAt.UTC()) && now.Before(attempt.AbsoluteDeadline.UTC()) {
+				return nil
+			}
+			if err := revokeAttemptGrantsTx(tx, attempt.ID, now, "lease_lost"); err != nil {
+				return err
+			}
+			if err := reconciler.retireRecoveryLeaseTx(ctx, tx, attempt, now); err != nil {
+				return err
+			}
+			if err := finishAttemptTx(tx, attempt.ID, now, "expired", string(ProcessingErrorLeaseLost)); err != nil {
+				return err
+			}
+			if !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) {
+				revision, err := ValidateTransition(TransitionRequest{
+					From: ProcessingState(job.State), To: ProcessingExpired,
+					CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
+					ExpiryReason: ExpiryReasonDeadline,
+				})
+				if err != nil {
+					return err
+				}
+				updated := tx.Model(&model.BackupAssetProcessingJob{}).Where("id = ? AND transition_revision = ?", job.ID, job.TransitionRevision).
+					Updates(map[string]any{
+						"state": string(ProcessingExpired), "transition_revision": revision,
+						"expiry_reason": string(ExpiryReasonDeadline), "current_attempt_id": nil,
+						"is_current": false, "finished_at": now, "updated_at": now, "version": gorm.Expr("version + 1"),
+					})
+				if updated.Error != nil || updated.RowsAffected != 1 {
+					return errors.Join(ErrRevisionConflict, updated.Error)
+				}
+				expiredJob = true
+				return nil
+			}
+			retryAt := now.Add(reconciler.retryDelay(job.RetryCount + 1))
 			revision, err := ValidateTransition(TransitionRequest{
-				From: ProcessingState(job.State), To: ProcessingExpired,
+				From: ProcessingState(job.State), To: ProcessingRetryWait,
 				CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
-				ExpiryReason: ExpiryReasonDeadline,
+				ErrorCode: ProcessingErrorLeaseLost, RetryAt: &retryAt,
 			})
 			if err != nil {
 				return err
 			}
 			updated := tx.Model(&model.BackupAssetProcessingJob{}).Where("id = ? AND transition_revision = ?", job.ID, job.TransitionRevision).
 				Updates(map[string]any{
-					"state": string(ProcessingExpired), "transition_revision": revision,
-					"expiry_reason": string(ExpiryReasonDeadline), "current_attempt_id": nil,
-					"is_current": false, "finished_at": now, "updated_at": now, "version": gorm.Expr("version + 1"),
+					"state": string(ProcessingRetryWait), "transition_revision": revision,
+					"error_code": string(ProcessingErrorLeaseLost), "retry_count": job.RetryCount + 1,
+					"retry_at": retryAt, "current_attempt_id": nil, "updated_at": now, "version": gorm.Expr("version + 1"),
 				})
 			if updated.Error != nil || updated.RowsAffected != 1 {
 				return errors.Join(ErrRevisionConflict, updated.Error)
 			}
-			expiredJob = true
+			if err := reconciler.coordinator.recomputePriorityTx(ctx, tx, job.ID); err != nil {
+				return err
+			}
+			retryingJob = true
 			return nil
-		}
-		retryAt := now.Add(reconciler.retryDelay(job.RetryCount + 1))
-		revision, err := ValidateTransition(TransitionRequest{
-			From: ProcessingState(job.State), To: ProcessingRetryWait,
-			CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
-			ErrorCode: ProcessingErrorLeaseLost, RetryAt: &retryAt,
 		})
-		if err != nil {
-			return err
-		}
-		updated := tx.Model(&model.BackupAssetProcessingJob{}).Where("id = ? AND transition_revision = ?", job.ID, job.TransitionRevision).
-			Updates(map[string]any{
-				"state": string(ProcessingRetryWait), "transition_revision": revision,
-				"error_code": string(ProcessingErrorLeaseLost), "retry_count": job.RetryCount + 1,
-				"retry_at": retryAt, "current_attempt_id": nil, "updated_at": now, "version": gorm.Expr("version + 1"),
-			})
-		if updated.Error != nil || updated.RowsAffected != 1 {
-			return errors.Join(ErrRevisionConflict, updated.Error)
-		}
-		retryingJob = true
-		return nil
 	})
 	return expiredJob, retryingJob, err
+}
+
+// Discover without locks, then take the shared point, job and attempt order.
+func lockRetiringAttemptTx(tx *gorm.DB, attemptID string) (model.BackupAssetProcessingJob, model.BackupAssetProcessingAttempt, bool, error) {
+	var locator model.BackupAssetProcessingAttempt
+	var job model.BackupAssetProcessingJob
+	var attempt model.BackupAssetProcessingAttempt
+	result := tx.Select("id", "job_id").Where("id = ?", attemptID).Limit(1).Find(&locator)
+	if result.Error != nil || result.RowsAffected != 1 {
+		return job, attempt, false, result.Error
+	}
+	var initial model.BackupAssetProcessingJob
+	result = tx.Select("id", "recovery_point_id").Where("id = ?", locator.JobID).Limit(1).Find(&initial)
+	if result.Error != nil || result.RowsAffected != 1 {
+		return job, attempt, false, result.Error
+	}
+	var point model.RecoveryPoint
+	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", initial.RecoveryPointID).Limit(1).Find(&point)
+	if result.Error != nil || result.RowsAffected != 1 {
+		return job, attempt, false, result.Error
+	}
+	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", locator.JobID).Limit(1).Find(&job)
+	if result.Error != nil || result.RowsAffected != 1 {
+		return job, attempt, false, result.Error
+	}
+	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND job_id = ?", attemptID, job.ID).Limit(1).Find(&attempt)
+	if result.Error != nil || result.RowsAffected != 1 {
+		return job, attempt, false, result.Error
+	}
+	if job.RecoveryPointID != initial.RecoveryPointID || !job.IsCurrent || job.CurrentAttemptID == nil || *job.CurrentAttemptID != attempt.ID || attempt.State != "active" || !attempt.IsCurrent {
+		return job, attempt, false, nil
+	}
+	return job, attempt, true, nil
 }
 
 func (reconciler *Reconciler) retireRecoveryLeaseTx(ctx context.Context, tx *gorm.DB, attempt model.BackupAssetProcessingAttempt, now time.Time) error {
 	var lease model.RecoveryPointLease
 	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", attempt.RecoveryPointLeaseID).Limit(1).Find(&lease)
-	if result.Error != nil || result.RowsAffected != 1 {
+	if result.Error != nil {
+		return fmt.Errorf("load Processing recovery lease: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
 		return ErrAttemptLost
 	}
 	fence := leaseFenceFromRow(lease)

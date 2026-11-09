@@ -453,11 +453,16 @@ func TestProcessingRuntimeMalwareSafetyRejectsMultipleActivePublications(t *test
 
 func TestProcessingRuntimeSecretContinuationIsDefaultOffCompleteOnlyAndIdempotent(t *testing.T) {
 	db := openProcessingRuntimeTestDB(t)
+	initializeProcessingQuotaTestDB(t, db)
+	if err := db.AutoMigrate(&model.BackupRepository{}, &model.CatalogGeneration{}, &model.CatalogEntry{}); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC)
 	lease := processingRuntimeLease(t, db)
 	coordinator, err := processing.NewCoordinator(db, lease, func() time.Time { return now }, processing.CoordinatorConfig{
 		QueueMax: 100, InteractiveReservedSlots: 1, BackgroundSlots: 1,
 		PullLease: time.Minute, AttemptTimeout: 5 * time.Minute, RetryMax: 3,
+		BackfillPolicySource: processingRuntimeTestPolicy,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1017,6 +1022,10 @@ func TestProcessingRuntimeRegistersClosedCapabilitiesOnlyForActiveBundle(t *test
 
 func TestProcessingRuntimeTerminalPollDoesNotConsumeAcrossUpdaterActivation(t *testing.T) {
 	db := openProcessingRuntimeTestDB(t)
+	initializeProcessingQuotaTestDB(t, db)
+	if err := db.AutoMigrate(&model.BackupRepository{}, &model.CatalogGeneration{}, &model.CatalogEntry{}); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 7, 21, 4, 0, 0, 0, time.UTC)
 	asset := content.AuthorizedAsset{
 		Ref: backupasset.AssetRef{
@@ -1030,6 +1039,15 @@ func TestProcessingRuntimeTerminalPollDoesNotConsumeAcrossUpdaterActivation(t *t
 	}
 	oldBundle := strings.Repeat("a", 64)
 	seedProcessingRuntimeMalwareEvidence(t, db, now, asset, oldBundle)
+	for _, row := range []any{
+		&model.BackupRepository{ID: strings.Repeat("f", 32), ProviderKind: string(asset.Provider)},
+		&model.CatalogGeneration{ID: asset.CatalogGenerationID, RecoveryPointID: asset.Ref.RecoveryPointID},
+		&model.CatalogEntry{GenerationID: asset.CatalogGenerationID, EntryID: asset.Ref.EntryID, RecoveryPointID: asset.Ref.RecoveryPointID, Size: asset.Size, Fingerprint: asset.EntryFingerprint, MimeType: asset.MediaType},
+	} {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	malwarePayload, err := json.Marshal(processingRuntimeMalwareResult(
 		now, oldBundle, capabilityspec.ScanNoFinding, capabilityspec.CoverageComplete, asset.Size,
 	))
@@ -1301,6 +1319,7 @@ func TestProcessingRuntimePublishMetricsReadsSQLiteQueueAge(t *testing.T) {
 
 func TestProcessingRuntimeAtomicProjectionFailureLeavesNoPendingStateAndRetrySucceeds(t *testing.T) {
 	db := openProcessingRuntimeTestDB(t)
+	initializeProcessingQuotaTestDB(t, db)
 	now := time.Now().UTC()
 	bundleFingerprint := strings.Repeat("d", 64)
 	if err := db.Create(&model.BackupAssetUpdaterMetadata{
@@ -1343,6 +1362,7 @@ func TestProcessingRuntimeAtomicProjectionFailureLeavesNoPendingStateAndRetrySuc
 	descriptor.OutputProfile = profile.OutputProfile
 	descriptor.Parameters = processing.CanonicalProductionParameters(profile)
 	seedProcessingRuntimeWritePoint(t, db, descriptor.Source.RecoveryPointID, backupasset.PointXirangManifest, now)
+	seedProcessingRuntimeCatalogSource(t, db, descriptor)
 	if err := processing.ValidateProductionWorkDescriptorV1(descriptor, false); err != nil {
 		t.Fatalf("production work descriptor: %v", err)
 	}
@@ -1492,6 +1512,7 @@ func TestProcessingRuntimeMarksUnreadableDerivedKeyLostAndStaysUnavailable(t *te
 
 func TestProcessingRuntimeShutdownRetiresAttemptsGrantsAndRecoveryLease(t *testing.T) {
 	db := openProcessingRuntimeTestDB(t)
+	initializeProcessingQuotaTestDB(t, db)
 	root := filepath.Join(t.TempDir(), "derived")
 	runtime, err := newProcessingRuntime(processingRuntimeDependencies{
 		DB: db, Foundation: processingRuntimeFoundation(t, db, root, true, true),
@@ -1508,6 +1529,7 @@ func TestProcessingRuntimeShutdownRetiresAttemptsGrantsAndRecoveryLease(t *testi
 	descriptor := processingRuntimeWorkDescriptor()
 	now := time.Now().UTC()
 	seedProcessingRuntimeWritePoint(t, db, descriptor.Source.RecoveryPointID, backupasset.PointXirangManifest, now)
+	seedProcessingRuntimeCatalogSource(t, db, descriptor)
 	workerID := strings.Repeat("6", 32)
 	worker := model.BackupAssetWorkerIdentity{
 		ID: workerID, TransportKind: string(processing.WorkerTransportLocal), TransportFingerprint: strings.Repeat("6", 64),
@@ -2281,6 +2303,49 @@ func openProcessingRuntimeTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func processingRuntimeTestPolicy(context.Context, *gorm.DB) (processing.BackfillPolicy, error) {
+	return processing.BackfillPolicy{
+		BatchSize: 100, JobsPerHour: 100000, BytesPerHour: 1 << 40,
+		ProviderConcurrency: 32, CapabilityConcurrency: 32,
+		RecentWindow: 720 * time.Hour, HistoryAgingStep: 24 * time.Hour,
+	}, nil
+}
+
+func initializeProcessingQuotaTestDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	if err := db.AutoMigrate(&model.BackupAssetProcessingBackfillLedger{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("CREATE TABLE schema_migrations (version bigint NOT NULL, dirty boolean NOT NULL)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("INSERT INTO schema_migrations (version, dirty) VALUES (?, ?)", 99, false).Error; err != nil {
+		t.Fatal(err)
+	}
+	epoch := time.Unix(0, 0).UTC()
+	if err := db.Create(&model.BackupAssetProcessingBackfillLedger{ID: 1, WindowStartedAt: epoch, UpdatedAt: epoch}).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func initializeRebuildTestCoordinator(t *testing.T, runtime *managedProcessingRuntime) {
+	t.Helper()
+	initializeProcessingQuotaTestDB(t, runtime.db)
+	coordinator, err := processing.NewCoordinator(runtime.db, processingRuntimeLease(t, runtime.db), runtime.now, processing.CoordinatorConfig{
+		QueueMax: 100, InteractiveReservedSlots: 1, BackgroundSlots: 1,
+		PullLease: time.Minute, AttemptTimeout: time.Hour, RetryMax: 3,
+		BackfillPolicySource: func(context.Context, *gorm.DB) (processing.BackfillPolicy, error) {
+			runtime.mu.RLock()
+			defer runtime.mu.RUnlock()
+			return processingBackfillPolicy(runtime.config.Backfill), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.coordinator = coordinator
+}
+
 func seedProcessingRuntimeWritePoint(
 	t *testing.T,
 	db *gorm.DB,
@@ -2298,6 +2363,22 @@ func seedProcessingRuntimeWritePoint(
 	}
 }
 
+func seedProcessingRuntimeCatalogSource(t *testing.T, db *gorm.DB, descriptor processing.WorkDescriptorV1) {
+	t.Helper()
+	if err := db.AutoMigrate(&model.BackupRepository{}, &model.CatalogGeneration{}, &model.CatalogEntry{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []any{
+		&model.BackupRepository{ID: strings.Repeat("f", 32), ProviderKind: "rsync"},
+		&model.CatalogGeneration{ID: descriptor.CatalogGenerationID, RecoveryPointID: descriptor.Source.RecoveryPointID},
+		&model.CatalogEntry{GenerationID: descriptor.CatalogGenerationID, EntryID: descriptor.Source.EntryID, RecoveryPointID: descriptor.Source.RecoveryPointID, Size: 32},
+	} {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func seedProcessingRuntimeSecretContinuation(t *testing.T, db *gorm.DB, now time.Time) {
 	t.Helper()
 	workerID := strings.Repeat("1", 32)
@@ -2311,6 +2392,15 @@ func seedProcessingRuntimeSecretContinuation(t *testing.T, db *gorm.DB, now time
 	catalogID := strings.Repeat("9", 32)
 	entryID := strings.Repeat("a", 64)
 	seedProcessingRuntimeWritePoint(t, db, pointID, backupasset.PointXirangManifest, now)
+	for _, row := range []any{
+		&model.BackupRepository{ID: strings.Repeat("f", 32), ProviderKind: "restic"},
+		&model.CatalogGeneration{ID: catalogID, RecoveryPointID: pointID},
+		&model.CatalogEntry{GenerationID: catalogID, EntryID: entryID, RecoveryPointID: pointID, Size: 32},
+	} {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	worker := model.BackupAssetWorkerIdentity{
 		ID: workerID, TransportKind: string(processing.WorkerTransportLocal), TransportFingerprint: strings.Repeat("b", 64),
 		InstanceID: strings.Repeat("c", 32), IdentityRevision: 1, ProtocolVersion: processing.WorkerProtocolVersion,

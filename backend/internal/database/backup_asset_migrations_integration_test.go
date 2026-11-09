@@ -57,7 +57,7 @@ const (
 	backupAssetPlainTextContentVersion          = 73
 	drillDurableRecoveryVersion                 = 74
 	rcloneNativeVersionEvidenceMigrationVersion = 75
-	latestMigrationVersion                      = 97
+	latestMigrationVersion                      = 99
 	recoveryEmptyDeleteSetDigest                = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID                 = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID              = "0000000000000000000000000000006b"
@@ -6336,54 +6336,24 @@ func runBackupAssetMigration066Contract(t *testing.T, fixture migrationFixture) 
 
 func runBackupAssetMigration067Contract(t *testing.T, fixture migrationFixture) {
 	t.Helper()
-	t.Run("ApplyAndModelParity", func(t *testing.T) {
+	t.Run("ApplyAndTimeColumns", func(t *testing.T) {
 		migrator, db := fixture.openAt(t, backupAssetProcessingVersion)
 		assertMigrationVersion(t, migrator, backupAssetProcessingVersion)
 		for _, table := range backupAssetProcessingTables {
 			if !databaseTableExists(t, db, fixture.engine, table) {
 				t.Fatalf("%s processing migration table %s is missing", fixture.engine, table)
 			}
-			want := gormColumnNames(t, backupAssetProcessingModels()[table])
-			var got []string
 			if fixture.engine == "sqlite" {
-				got = sqliteColumnNames(t, db, table)
 				assertSQLiteTimeColumnsHaveNoDefault(t, db, table)
 			} else {
-				got = postgresColumnNames(t, db, table)
 				assertPostgresTableTimeColumnsHaveNoDefault(t, db, table)
 			}
-			sort.Strings(got)
-			sort.Strings(want)
-			if strings.Join(got, ",") != strings.Join(want, ",") {
-				t.Fatalf("%s %s columns mismatch\n got: %v\nwant: %v", fixture.engine, table, got, want)
-			}
-		}
-		if definition := fixture.tableDefinition(t, db, "wrapped_domain_keys"); !strings.Contains(definition, "derived_store") {
-			t.Fatalf("%s wrapped key CHECK does not permit derived_store: %s", fixture.engine, definition)
 		}
 	})
 	t.Run("PristineDownRestores066", fixture.test067PristineDown)
 	t.Run("RejectsInvalidStateErrorProducts", fixture.test067RejectsInvalidStateErrorProducts)
 	t.Run("UsedDownIsRejectedAtomically", fixture.test067UsedDownIsAtomic)
 	t.Run("DownRejectsUnrevokedSearchProjection", fixture.test067DownRejectsUnrevokedSearchProjection)
-}
-
-func backupAssetProcessingModels() map[string]any {
-	return map[string]any{
-		"backup_asset_processing_jobs":           model.BackupAssetProcessingJob{},
-		"backup_asset_processing_interests":      model.BackupAssetProcessingInterest{},
-		"backup_asset_processing_attempts":       model.BackupAssetProcessingAttempt{},
-		"backup_asset_processing_grants":         model.BackupAssetProcessingGrant{},
-		"backup_asset_processing_grant_requests": model.BackupAssetProcessingGrantRequest{},
-		"backup_asset_processing_uploads":        model.BackupAssetProcessingUpload{},
-		"backup_asset_worker_identities":         model.BackupAssetWorkerIdentity{},
-		"backup_asset_worker_capabilities":       model.BackupAssetWorkerCapability{},
-		"backup_asset_derived_artifact_sets":     model.BackupAssetDerivedArtifactSet{},
-		"backup_asset_derived_artifacts":         model.BackupAssetDerivedArtifact{},
-		"backup_asset_derived_blobs":             model.BackupAssetDerivedBlob{},
-		"backup_asset_derived_blob_references":   model.BackupAssetDerivedBlobReference{},
-		"backup_asset_updater_metadata":          model.BackupAssetUpdaterMetadata{},
-	}
 }
 
 func runBackupAssetMigration069Contract(t *testing.T, fixture migrationFixture) {

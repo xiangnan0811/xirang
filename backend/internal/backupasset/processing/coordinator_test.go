@@ -1140,13 +1140,25 @@ func newCoordinatorHarness(t *testing.T) *coordinatorHarness {
 	}
 	if err := db.AutoMigrate(
 		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{},
+		&model.BackupRepository{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
 		&model.BackupAssetWorkerIdentity{}, &model.BackupAssetWorkerCapability{},
 		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
 		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{},
+		&model.BackupAssetProcessingBackfillLedger{},
 		&model.BackupAssetProcessingGrantRequest{},
 		&model.RecoveryPointLease{},
 	); err != nil {
 		t.Fatalf("migrate coordinator harness: %v", err)
+	}
+	if err := db.Exec("CREATE TABLE schema_migrations (version bigint NOT NULL, dirty boolean NOT NULL)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("INSERT INTO schema_migrations (version, dirty) VALUES (?, ?)", 99, false).Error; err != nil {
+		t.Fatal(err)
+	}
+	epoch := time.Unix(0, 0).UTC()
+	if err := db.Create(&model.BackupAssetProcessingBackfillLedger{ID: 1, WindowStartedAt: epoch, UpdatedAt: epoch}).Error; err != nil {
+		t.Fatal(err)
 	}
 	caller, _, _, _ := runtime.Caller(1)
 	callerName := ""
@@ -1155,11 +1167,21 @@ func newCoordinatorHarness(t *testing.T) *coordinatorHarness {
 	}
 	if !strings.HasSuffix(callerName, ".newManifestHarness") {
 		descriptor := validWorkDescriptor()
+		now := time.Date(2026, 7, 19, 5, 6, 7, 0, time.UTC)
+		if err := db.Create(&model.BackupRepository{ID: strings.Repeat("f", 32), ProviderKind: "restic", DisplayName: "processing test", VersionMode: string(backupasset.VersionNativeSnapshot), Status: string(backupasset.RepositoryOnline), CapabilitiesJSON: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
 		if err := db.Create(&model.RecoveryPoint{
 			ID: descriptor.Source.RecoveryPointID, RepositoryID: strings.Repeat("f", 32),
 			Semantics: string(backupasset.PointXirangManifest), State: string(backupasset.RecoveryPointCommitted),
 		}).Error; err != nil {
 			t.Fatalf("seed coordinator recovery point: %v", err)
+		}
+		if err := db.Create(&model.CatalogGeneration{ID: descriptor.CatalogGenerationID, RecoveryPointID: descriptor.Source.RecoveryPointID, Generation: 1, State: "complete", IsActive: true, SourceFingerprint: descriptor.SourceFingerprint, StartedAt: now, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&model.CatalogEntry{GenerationID: descriptor.CatalogGenerationID, EntryID: descriptor.Source.EntryID, RecoveryPointID: descriptor.Source.RecoveryPointID, NormalizedPath: "/source", Name: "source", EntryType: string(backupasset.CatalogEntryFile), Fingerprint: descriptor.EntryFingerprint, CreatedAt: now}).Error; err != nil {
+			t.Fatal(err)
 		}
 	}
 	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_test_current_work ON backup_asset_processing_jobs(work_key) WHERE is_current = 1`).Error; err != nil {
@@ -1173,6 +1195,7 @@ func newCoordinatorHarness(t *testing.T) *coordinatorHarness {
 	coordinator, err := NewCoordinator(db, leaseService, clock.Now, CoordinatorConfig{
 		QueueMax: 100, InteractiveReservedSlots: 2, BackgroundSlots: 2,
 		PullLease: 30 * time.Second, AttemptTimeout: 2 * time.Hour, RetryMax: 5,
+		BackfillPolicySource: testBackfillPolicySource,
 	})
 	if err != nil {
 		t.Fatal(err)

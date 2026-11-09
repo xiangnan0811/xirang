@@ -59,7 +59,11 @@ Content grant 与 Export item 的孤立转换／reset helper 清理同样按 `te
 
 孤立 `ScoreBackfill`／`CanReuseDerived` 及专属身份类型的清理按 `test`／`refactor` 处理：有效断言由真实 Runtime 收集／准入、Coordinator work key／interest／pull／slot、精确已完成 publication 查询和 Derived 上传／来源独立引用承担。既有输出 blob 物理去重继续保留，不把同 key 共用或相同输出字节等同 strong fingerprint 跨点跳过处理；现行 BackfillPolicy、RecentWindow／HistoryAgingStep 配置及有效性校验保留。usage 的单次收集统计不代表跨请求小时／Provider 活跃并发保证，澄清文档不等于已修复该差异。无运行行为、依赖、API、配置或 schema migration 变化时说明留 `Unreleased`，正常 hooks、完整 required CI、合并后同 SHA CI／Release Please 仍须完成，不额外制造正式版本或镜像；历史数据及已发布迁移保持。
 
-本次调查在 SQLite／PostgreSQL 真实 Sink 第二次上传相同输出时复现 `upload.staging_id` 唯一约束冲突；这是既存缺口，尚未修复，不得将存储层 blob 去重或预置跨点引用测试写为实际跨点双发布通过。清理仅闭合具名死码与有效断言迁移，配额描述差异和该重复输出问题继续开放；未来持久化修复须另行完成数据保全、双引擎迁移与适用正常发行，不修改已发布迁移或历史数据凑验收。
+第二十五轮调查在 SQLite／PostgreSQL 真实 Sink 第二次上传相同输出时复现 `upload.staging_id` 唯一约束冲突；该轮清理只闭合具名死码与有效断言迁移，未修复配额描述差异和重复输出问题。后续持久化修复须独立完成数据保全、双引擎迁移、真实 Sink 验收与正常正式发行，不能将存储层 blob 去重或预置跨点引用测试写为实际跨点双发布通过，也不能修改已发布迁移或删除历史数据凑验收。
+
+共享输出修复的发行说明须包含 schema98 的 N:1 物理 blob 与独立上传／产物／来源授权、流式加密回放、新密钥代次与旧 inode 保全、最终事务授权及 Search 锁序。升级前暂停准入、停止并排空旧 Core／Worker 和全部发布／撤销／清理／对账 owner，保全数据库、密文、配置及匹配密钥，禁止混跑；共享后重复 staging ID／manifest digest 阻止98回退，SQLite 未知依赖也须拒绝。保留历史 upload／artifact／reference 和已发布迁移，回退旧运行代码会恢复缺陷；真实 Sink／Search／Unix HTTP、双引擎事务与受控 source／parser／Provider 的证据边界分别说明。正式 Release PR、versioned CHANGELOG 与公开 Release 正文须同时保留这些边界。
+
+持久后台配额修复的正式 Release PR、目标版本 CHANGELOG 与公开 Release 正文还须包含 schema99 的数据／密钥保全、全部旧 Core／Worker 停止排空与禁止混跑、精确来源元数据回填及无历史补收费。新额度仅从升级后新后台 job 创建开始计，预计输入字节不等于网络字节；同 job 重试不重收、取消不退费、当窗设置更新不清空累计。charged 历史（含零字节）或账本使用会阻止99回退，98共享后的降级限制仍独立保留；不得删除历史对象或已发布迁移绕过。回退旧运行代码恢复缺陷，需配套一致备份、配置和密钥。本次属于实际运行修复，按正常正式发行，不套用第二十五轮纯清理无需发行的判断；本地真实组合证据仍不外推 parser、所有 Provider、AWS live 或生产部署。
 
 Core 的 `rsync 3.5.0-r0` → `3.5.2-r1` 是实际运行依赖安全更新，修复 Trivy 报告的 `CVE-2026-119741`（修复门槛 `3.5.2-r0`，官方两架构当前后续修订为 `r1`），须按 `fix` 完成正常发行，不能套用纯清理无需版本的判断。发布说明保留原生双架构输入采集／验签／禁网重放及最终镜像扫描边界；更新须重新构建并替换 Core，先保全数据库、匹配密钥、配置和备份副本并排空旧 Core 在途任务。输入锁变更不修复已启动旧进程或外部节点，回退旧镜像恢复已知漏洞；无新增 API、配置或 schema migration，既有降级限制不变。同次完整采集实际带来 Worker 传递 `glib 2.86.3-r0` → `2.86.5-r0`，必须同步生成的完整 APK 投影并推进 toolchain／pipeline 指纹，Core／Worker 同源重建、重新取得双架构 runtime closure、attestations、签名 bundle 和 proof，先排空旧 Worker 在途处理再配套切换及回退。该传递变化不等同另一个已证实的漏洞修复；既有显式 root inventory 不新增 glib，完整输入身份由真实 manifest 投影承担。
 

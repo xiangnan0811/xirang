@@ -208,9 +208,19 @@ func (sink *ArtifactSink) UploadArtifact(ctx context.Context, request UploadArti
 		})
 		return UploadedArtifact{}, err
 	}
-	blob, err := sink.store.PutBlob(ctx, DerivedBlobDeclaration{
-		PlaintextSize: request.Artifact.PlaintextSize, PlaintextDigest: request.Artifact.PlaintextDigest,
-	}, body)
+	declaration := DerivedBlobDeclaration{PlaintextSize: request.Artifact.PlaintextSize, PlaintextDigest: request.Artifact.PlaintextDigest}
+	replay, err := sink.store.newReplay(ctx, declaration, body)
+	if err != nil {
+		finalized = true
+		sink.finalizeReservationDetached(ctx, FinalizeGrantRequest{
+			ReservationID: reservation.ReservationID, Outcome: GrantRequestFailed,
+			ProviderBytes: 0, StoredBytes: 0, EvidenceKnown: true, FailureCode: GrantFailureWriteFailed,
+		})
+		sink.rejectUploadDetached(ctx, upload.ID, "invalid_output")
+		return UploadedArtifact{}, errors.Join(ErrInvalidArtifact, err)
+	}
+	defer replay.Close()
+	blob, err := sink.store.putReplay(ctx, declaration, replay)
 	if err != nil {
 		finalized = true
 		sink.rejectUploadDetached(ctx, upload.ID, "invalid_output")
@@ -221,15 +231,89 @@ func (sink *ArtifactSink) UploadArtifact(ctx context.Context, request UploadArti
 		return UploadedArtifact{}, errors.Join(ErrInvalidArtifact, err)
 	}
 	now := sink.utcNow()
-	updated := sink.db.WithContext(ctx).Model(&model.BackupAssetProcessingUpload{}).
-		Where("id = ? AND state = ?", upload.ID, "reserved").Updates(map[string]any{
-		"actual_size": request.Artifact.PlaintextSize, "actual_digest": request.Artifact.PlaintextDigest,
-		"staging_id": blob.BlobID, "state": "staged", "finished_at": now, "updated_at": now,
-	})
-	if updated.Error != nil || updated.RowsAffected != 1 {
+	for retry := range 20 {
+		now = sink.utcNow()
+		err = sink.grants.retryConflicts(ctx, func() error {
+			return sink.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, descriptor.Source.RecoveryPointID); err != nil {
+					return errors.Join(ErrGrantDenied, err)
+				}
+				var job model.BackupAssetProcessingJob
+				result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND is_current = ? AND current_attempt_id = ?", request.JobID, true, request.AttemptID).Limit(1).Find(&job)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 || job.RecoveryPointID != descriptor.Source.RecoveryPointID || !sink.utcNow().Before(job.AbsoluteDeadline.UTC()) {
+					return ErrGrantDenied
+				}
+				var attempt model.BackupAssetProcessingAttempt
+				result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND job_id = ? AND worker_id = ?", request.AttemptID, request.JobID, request.WorkerID).Limit(1).Find(&attempt)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 || attempt.State != "active" || !attempt.IsCurrent || !sink.utcNow().Before(attempt.WorkerLeaseExpiresAt.UTC()) || !sink.utcNow().Before(attempt.AbsoluteDeadline.UTC()) {
+					return ErrGrantDenied
+				}
+				var grant model.BackupAssetProcessingGrant
+				result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND state = ?", request.GrantID, GrantActive).Limit(1).Find(&grant)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 || grant.JobID != job.ID || grant.AttemptID != attempt.ID || grant.WorkerID != request.WorkerID || grant.Kind != string(GrantSink) || !sink.utcNow().Before(grant.ExpiresAt.UTC()) {
+					return ErrGrantDenied
+				}
+				lease, err := sink.grants.loadAttemptLeaseTx(ctx, tx, attempt)
+				if err != nil || grant.FenceHash != attempt.RecoveryPointFenceHash || lease.RecoveryPointID != job.RecoveryPointID || lease.OwnerID != job.ID || lease.HolderType != string(backupasset.LeaseHolderProcessingJob) {
+					return ErrGrantDenied
+				}
+				if err := sink.leaseService.ValidateFenceTx(ctx, tx, leaseFenceFromRow(lease)); err != nil {
+					return errors.Join(ErrGrantDenied, err)
+				}
+				var current model.BackupAssetProcessingUpload
+				result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND state = ?", upload.ID, "reserved").Limit(1).Find(&current)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return ErrInvalidArtifact
+				}
+				var active model.BackupAssetDerivedBlob
+				result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND state = ?", blob.BlobID, "active").Limit(1).Find(&active)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return ErrDerivedBlobUnavailable
+				}
+				now = sink.utcNow()
+				if !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.WorkerLeaseExpiresAt.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) || !now.Before(grant.ExpiresAt.UTC()) {
+					return ErrGrantDenied
+				}
+				if err := sink.leaseService.ValidateFenceTx(ctx, tx, leaseFenceFromRow(lease)); err != nil {
+					return errors.Join(ErrGrantDenied, err)
+				}
+				updated := tx.Model(&model.BackupAssetProcessingUpload{}).Where("id = ? AND state = ?", upload.ID, "reserved").Updates(map[string]any{"actual_size": request.Artifact.PlaintextSize, "actual_digest": request.Artifact.PlaintextDigest, "staging_id": blob.BlobID, "state": "staged", "finished_at": now, "updated_at": now})
+				if updated.Error != nil || updated.RowsAffected != 1 {
+					return errors.Join(ErrInvalidArtifact, updated.Error)
+				}
+				return nil
+			})
+		})
+		if !errors.Is(err, ErrDerivedBlobUnavailable) {
+			break
+		}
+		if retry == 19 {
+			break
+		}
+		blob, err = sink.store.putReplay(ctx, declaration, replay)
+		if err != nil {
+			break
+		}
+	}
+	if err != nil {
 		sink.rejectUploadDetached(ctx, upload.ID, "invalid_output")
 		sink.discardBlobDetached(ctx, blob.BlobID)
-		return UploadedArtifact{}, errors.Join(ErrInvalidArtifact, updated.Error)
+		return UploadedArtifact{}, errors.Join(ErrInvalidArtifact, err)
 	}
 	cleanupCtx, cancelCleanup := derivedManifestCleanupContext(ctx)
 	err = sink.grants.Finalize(cleanupCtx, FinalizeGrantRequest{
@@ -426,6 +510,9 @@ func (sink *ArtifactSink) ReconcilePendingProjections(ctx context.Context, batch
 		var projectionRevision int64
 		err = sink.retryManifestConflicts(ctx, func() error {
 			return sink.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := sink.validateRecoveredProjectionTx(ctx, tx, pending); err != nil {
+					return err
+				}
 				publication, publishErr := prepared.PublishTx(ctx, tx)
 				if publishErr != nil {
 					return fmt.Errorf("reconcile Derived Search projection: %w", publishErr)
@@ -434,6 +521,9 @@ func (sink *ArtifactSink) ReconcilePendingProjections(ctx context.Context, batch
 					return ErrInvalidManifest
 				}
 				projectionRevision = publication.Revision
+				if err := sink.validateRecoveredProjectionTx(ctx, tx, pending); err != nil {
+					return err
+				}
 				return sink.completeProjectedManifestTx(ctx, tx, commitRequest, pending.set.ID, publication.Revision)
 			})
 		})
@@ -456,11 +546,27 @@ func (sink *ArtifactSink) preparePendingProjection(ctx context.Context, jobID st
 		pending = pendingProjection{}
 		ready = false
 		return sink.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var observed model.BackupAssetProcessingJob
+			located := tx.Select("id", "recovery_point_id").Where("id = ?", jobID).Limit(1).Find(&observed)
+			if located.Error != nil {
+				return fmt.Errorf("locate pending projection job: %w", located.Error)
+			}
+			if located.RowsAffected != 1 {
+				return nil
+			}
+			var point model.RecoveryPoint
+			locked := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", observed.RecoveryPointID).Limit(1).Find(&point)
+			if locked.Error != nil {
+				return fmt.Errorf("lock pending projection point: %w", locked.Error)
+			}
+			if locked.RowsAffected != 1 {
+				return ErrManifestFenceLost
+			}
 			result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", jobID).Limit(1).Find(&pending.job)
 			if result.Error != nil {
 				return fmt.Errorf("load pending projection job: %w", result.Error)
 			}
-			if result.RowsAffected != 1 || pending.job.State != string(ProcessingValidating) || !pending.job.IsCurrent ||
+			if result.RowsAffected != 1 || pending.job.RecoveryPointID != observed.RecoveryPointID || pending.job.State != string(ProcessingValidating) || !pending.job.IsCurrent ||
 				pending.job.CurrentAttemptID == nil || pending.job.CurrentArtifactSetID == nil {
 				return nil
 			}
@@ -501,7 +607,7 @@ func (sink *ArtifactSink) preparePendingProjection(ctx context.Context, jobID st
 			now := sink.utcNow()
 			if !now.Before(pending.job.AbsoluteDeadline.UTC()) || !now.Before(pending.attempt.AbsoluteDeadline.UTC()) ||
 				!now.Before(lease.AbsoluteDeadline.UTC()) {
-				return nil
+				return ErrManifestFenceLost
 			}
 			recoveryAuthority := lease.LastHeartbeatAt.UTC().After(pending.attempt.LastHeartbeatAt.UTC())
 			if lease.Status == string(backupasset.LeaseActive) && now.Before(lease.LeaseExpiresAt.UTC()) &&
@@ -512,7 +618,7 @@ func (sink *ArtifactSink) preparePendingProjection(ctx context.Context, jobID st
 			}
 			if now.Before(pending.attempt.WorkerLeaseExpiresAt.UTC()) || lease.Status != string(backupasset.LeaseActive) ||
 				now.Before(lease.LeaseExpiresAt.UTC()) {
-				return nil
+				return ErrManifestFenceLost
 			}
 			takenOver, err := sink.leaseService.TakeoverTx(ctx, tx, backupasset.TakeoverLeaseRequest{LeaseID: lease.ID, OwnerID: pending.job.ID})
 			if err != nil {
@@ -537,6 +643,59 @@ func (sink *ArtifactSink) preparePendingProjection(ctx context.Context, jobID st
 		})
 	})
 	return pending, ready, err
+}
+
+// validateRecoveredProjectionTx reacquires the authority proof in the same
+// transaction as Search publication and completion, in source-first order.
+func (sink *ArtifactSink) validateRecoveredProjectionTx(ctx context.Context, tx *gorm.DB, pending pendingProjection) error {
+	var point model.RecoveryPoint
+	result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", pending.job.RecoveryPointID).Limit(1).Find(&point)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrManifestFenceLost
+	}
+	var job model.BackupAssetProcessingJob
+	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", pending.job.ID).Limit(1).Find(&job)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 || job.RecoveryPointID != pending.job.RecoveryPointID || job.State != string(ProcessingValidating) || !job.IsCurrent || job.CurrentAttemptID == nil || *job.CurrentAttemptID != pending.attempt.ID || job.CurrentArtifactSetID == nil || *job.CurrentArtifactSetID != pending.set.ID {
+		return ErrManifestFenceLost
+	}
+	if job.WorkKey != pending.job.WorkKey || job.CatalogGenerationID != pending.job.CatalogGenerationID || job.EntryID != pending.job.EntryID || job.SourceFingerprint != pending.job.SourceFingerprint || job.SecurityPolicyRevision != pending.job.SecurityPolicyRevision || !bytes.Equal(job.DescriptorCanonical, pending.job.DescriptorCanonical) {
+		return ErrManifestFenceLost
+	}
+	var attempt model.BackupAssetProcessingAttempt
+	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND job_id = ?", pending.attempt.ID, job.ID).Limit(1).Find(&attempt)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 || attempt.WorkerID != pending.attempt.WorkerID || attempt.State != "active" || !attempt.IsCurrent || attempt.RecoveryPointLeaseID != pending.fence.LeaseID || attempt.RecoveryPointAttemptID != pending.fence.AttemptID || attempt.RecoveryPointFenceHash != hashFence(pending.fence.FenceToken) {
+		return ErrManifestFenceLost
+	}
+	var set model.BackupAssetDerivedArtifactSet
+	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND job_id = ? AND attempt_id = ?", pending.set.ID, job.ID, attempt.ID).Limit(1).Find(&set)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 || set.RecoveryPointID != job.RecoveryPointID || set.CatalogGenerationID != job.CatalogGenerationID || set.EntryID != job.EntryID || set.SourceFingerprint != job.SourceFingerprint || set.State != "active" || !set.ProjectionRequired || set.ProjectionPublished {
+		return ErrManifestFenceLost
+	}
+	if set.WorkKey != job.WorkKey || set.SecurityPolicyRevision != job.SecurityPolicyRevision || set.ManifestDigest != pending.set.ManifestDigest {
+		return ErrManifestFenceLost
+	}
+	var lease model.RecoveryPointLease
+	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", attempt.RecoveryPointLeaseID).Limit(1).Find(&lease)
+	if result.Error != nil {
+		return result.Error
+	}
+	now := sink.utcNow()
+	if result.RowsAffected != 1 || lease.RecoveryPointID != job.RecoveryPointID || lease.OwnerID != job.ID || lease.HolderType != string(backupasset.LeaseHolderProcessingJob) || lease.AttemptID != attempt.RecoveryPointAttemptID || lease.FenceToken != pending.fence.FenceToken || hashFence(lease.FenceToken) != attempt.RecoveryPointFenceHash || pending.fence.RecoveryPointID != job.RecoveryPointID || pending.fence.OwnerID != job.ID || pending.fence.HolderType != backupasset.LeaseHolderProcessingJob || lease.Status != string(backupasset.LeaseActive) || !now.Before(lease.LeaseExpiresAt.UTC()) || !now.Before(lease.AbsoluteDeadline.UTC()) || !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) || (!now.Before(attempt.WorkerLeaseExpiresAt.UTC()) && !lease.LastHeartbeatAt.UTC().After(attempt.LastHeartbeatAt.UTC())) {
+		return ErrManifestFenceLost
+	}
+	return nil
 }
 
 func (sink *ArtifactSink) finishPendingSuperseded(ctx context.Context, pending pendingProjection, reason SupersedeReason) error {
@@ -665,17 +824,20 @@ func (sink *ArtifactSink) publishManifestTx(
 	if backupasset.ValidateOpaqueID(setID) != nil || manifest.ArtifactSetID != setID || len(identities) != len(artifacts) {
 		return ErrInvalidManifest
 	}
+	if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, loadedJob.RecoveryPointID); err != nil {
+		return errors.Join(ErrManifestFenceLost, err)
+	}
 	var job model.BackupAssetProcessingJob
 	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).Limit(1).Find(&job)
 	if result.Error != nil || result.RowsAffected != 1 || job.State != string(ProcessingUploading) || !job.IsCurrent ||
-		job.TransitionRevision != loadedJob.TransitionRevision || job.CurrentAttemptID == nil || *job.CurrentAttemptID != request.AttemptID ||
+		job.TransitionRevision != loadedJob.TransitionRevision || job.RecoveryPointID != loadedJob.RecoveryPointID || job.CurrentAttemptID == nil || *job.CurrentAttemptID != request.AttemptID ||
 		job.SecurityPolicyRevision != request.SecurityPolicyRevision {
 		return ErrInvalidManifest
 	}
 	var attempt model.BackupAssetProcessingAttempt
 	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND job_id = ? AND worker_id = ?", request.AttemptID, job.ID, request.WorkerID).Limit(1).Find(&attempt)
 	if result.Error != nil || result.RowsAffected != 1 || attempt.State != "active" || !attempt.IsCurrent ||
-		attempt.RecoveryPointFenceHash != hashFence(request.RecoveryPointFence.FenceToken) {
+		attempt.RecoveryPointLeaseID != request.RecoveryPointFence.LeaseID || attempt.RecoveryPointAttemptID != request.RecoveryPointFence.AttemptID || request.RecoveryPointFence.RecoveryPointID != job.RecoveryPointID || request.RecoveryPointFence.OwnerID != job.ID || attempt.RecoveryPointFenceHash != hashFence(request.RecoveryPointFence.FenceToken) {
 		return ErrManifestFenceLost
 	}
 	var grant model.BackupAssetProcessingGrant
@@ -707,6 +869,37 @@ func (sink *ArtifactSink) publishManifestTx(
 	}
 	if err := tx.Create(&set).Error; err != nil {
 		return fmt.Errorf("create Derived artifact set: %w", err)
+	}
+	// Lock uploads before shared blobs, then acquire blob locks in stable order.
+	for _, upload := range uploads {
+		var current model.BackupAssetProcessingUpload
+		locked := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND state = ? AND staging_id = ?", upload.ID, "staged", upload.StagingID).Limit(1).Find(&current)
+		if locked.Error != nil || locked.RowsAffected != 1 {
+			return errors.Join(ErrInvalidManifest, locked.Error)
+		}
+	}
+	blobIDs := make([]string, 0, len(uploads))
+	seen := make(map[string]struct{}, len(uploads))
+	for _, upload := range uploads {
+		if _, ok := seen[upload.StagingID]; !ok {
+			seen[upload.StagingID] = struct{}{}
+			blobIDs = append(blobIDs, upload.StagingID)
+		}
+	}
+	sort.Strings(blobIDs)
+	for _, blobID := range blobIDs {
+		var blob model.BackupAssetDerivedBlob
+		locked := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND state = ?", blobID, "active").Limit(1).Find(&blob)
+		if locked.Error != nil || locked.RowsAffected != 1 {
+			return errors.Join(ErrInvalidManifest, locked.Error)
+		}
+	}
+	now = sink.utcNow()
+	if !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.WorkerLeaseExpiresAt.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) || !now.Before(grant.ExpiresAt.UTC()) {
+		return ErrManifestFenceLost
+	}
+	if err := sink.leaseService.ValidateFenceTx(ctx, tx, request.RecoveryPointFence); err != nil {
+		return errors.Join(ErrManifestFenceLost, err)
 	}
 	for index, declaration := range artifacts {
 		upload := uploads[index]
@@ -740,9 +933,9 @@ func (sink *ArtifactSink) publishManifestTx(
 			Update("ref_count", gorm.Expr("ref_count + 1")).Error; err != nil {
 			return fmt.Errorf("increment Derived blob reference count: %w", err)
 		}
-		if err := tx.Model(&model.BackupAssetProcessingUpload{}).Where("id = ? AND state = ?", upload.ID, "staged").
-			Update("state", "committed").Error; err != nil {
-			return fmt.Errorf("commit Derived upload: %w", err)
+		updated := tx.Model(&model.BackupAssetProcessingUpload{}).Where("id = ? AND state = ?", upload.ID, "staged").Updates(map[string]any{"state": "committed", "updated_at": now})
+		if updated.Error != nil || updated.RowsAffected != 1 {
+			return errors.Join(ErrInvalidManifest, updated.Error)
 		}
 	}
 	if err := tx.Model(&model.BackupAssetProcessingGrant{}).Where("id = ? AND state = ?", grant.ID, GrantActive).
@@ -815,6 +1008,27 @@ func (sink *ArtifactSink) completeProjectedManifestTx(
 		return ErrManifestFenceLost
 	}
 	now := sink.utcNow()
+	if !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) {
+		return ErrManifestFenceLost
+	}
+	if request.GrantID != "" {
+		var grant model.BackupAssetProcessingGrant
+		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.GrantID).Limit(1).Find(&grant)
+		if result.Error != nil || result.RowsAffected != 1 || grant.Kind != string(GrantSink) || grant.State != string(GrantClosed) || grant.JobID != job.ID || grant.AttemptID != attempt.ID || grant.WorkerID != attempt.WorkerID || grant.FenceHash != attempt.RecoveryPointFenceHash {
+			return ErrManifestFenceLost
+		}
+		now := sink.utcNow()
+		if !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.WorkerLeaseExpiresAt.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) || !now.Before(grant.ExpiresAt.UTC()) {
+			return ErrManifestFenceLost
+		}
+		if err := sink.leaseService.ValidateFenceTx(ctx, tx, request.RecoveryPointFence); err != nil {
+			return errors.Join(ErrManifestFenceLost, err)
+		}
+	}
+	now = sink.utcNow()
+	if !now.Before(job.AbsoluteDeadline.UTC()) || !now.Before(attempt.AbsoluteDeadline.UTC()) {
+		return ErrManifestFenceLost
+	}
 	setUpdate := tx.Model(&model.BackupAssetDerivedArtifactSet{}).Where("id = ? AND job_id = ? AND attempt_id = ? AND state = ? AND projection_required = ? AND projection_published = ?",
 		setID, job.ID, attempt.ID, "active", true, false).Updates(map[string]any{
 		"projection_published": true, "projection_revision": projectionRevision, "updated_at": now,

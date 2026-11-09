@@ -1340,9 +1340,104 @@
       "timeout": "20m",
       "tests": [
         {
+          "name": "TestProcessingBackfillHeartbeatQuotaPostgres",
+          "required_paths": [
+            "TestProcessingBackfillHeartbeatQuotaPostgres",
+            "TestProcessingBackfillHeartbeatQuotaPostgres/Provider",
+            "TestProcessingBackfillHeartbeatQuotaPostgres/Capability",
+            "TestProcessingBackfillHeartbeatQuotaPostgres/PullFirst",
+            "TestProcessingBackfillHeartbeatQuotaPostgres/PullFirst/Provider",
+            "TestProcessingBackfillHeartbeatQuotaPostgres/PullFirst/Capability",
+            "TestProcessingBackfillHeartbeatQuotaPostgres/HeartbeatRollback",
+            "TestProcessingBackfillHeartbeatQuotaPostgres/HeartbeatRollback/Provider",
+            "TestProcessingBackfillHeartbeatQuotaPostgres/HeartbeatRollback/Capability"
+          ]
+        },
+        {
+          "name": "TestProcessingBackfillHeartbeatContractPostgres",
+          "required_paths": [
+            "TestProcessingBackfillHeartbeatContractPostgres",
+            "TestProcessingBackfillHeartbeatContractPostgres/PolicyIndependent",
+            "TestProcessingBackfillHeartbeatContractPostgres/PolicyIndependent/Paused",
+            "TestProcessingBackfillHeartbeatContractPostgres/PolicyIndependent/LoweredLimit",
+            "TestProcessingBackfillHeartbeatContractPostgres/PolicyIndependent/FutureWindow",
+            "TestProcessingBackfillHeartbeatContractPostgres/PolicyIndependent/InvalidPolicy",
+            "TestProcessingBackfillHeartbeatContractPostgres/MissingSeed",
+            "TestProcessingBackfillHeartbeatContractPostgres/DirtyMetadata",
+            "TestProcessingBackfillHeartbeatContractPostgres/InteractiveBypass",
+            "TestProcessingBackfillHeartbeatContractPostgres/DrainingWorker",
+            "TestProcessingBackfillHeartbeatContractPostgres/RejectedSecurityRetry",
+            "TestProcessingBackfillHeartbeatContractPostgres/WorkerOrdering",
+            "TestProcessingBackfillHeartbeatContractPostgres/WorkerOrdering/HeartbeatBeforePull",
+            "TestProcessingBackfillHeartbeatContractPostgres/WorkerOrdering/PullBeforeHeartbeat",
+            "TestProcessingBackfillHeartbeatContractPostgres/WorkerOrdering/HeartbeatBeforeSecurityTransition",
+            "TestProcessingBackfillHeartbeatContractPostgres/WorkerOrdering/SecurityTransitionBeforeHeartbeat",
+            "TestProcessingBackfillHeartbeatContractPostgres/WorkerOrdering/TransitionBeforeQuarantine",
+            "TestProcessingBackfillHeartbeatContractPostgres/WorkerOrdering/QuarantineBeforeTransition"
+          ]
+        },
+        {
+          "name": "TestProcessingBackfillRejectedCandidatePostgres",
+          "required_paths": [
+            "TestProcessingBackfillRejectedCandidatePostgres",
+            "TestProcessingBackfillRejectedCandidatePostgres/LifecycleRejected",
+            "TestProcessingBackfillRejectedCandidatePostgres/DatabaseError",
+            "TestProcessingBackfillRejectedCandidatePostgres/ContextCanceled"
+          ]
+        },
+        {
+          "name": "TestProcessingBackfillQuotaPostgres",
+          "required_paths": [
+            "TestProcessingBackfillQuotaPostgres",
+            "TestProcessingBackfillQuotaPostgres/HourlyCreationAndCoalescing",
+            "TestProcessingBackfillQuotaPostgres/DeniedTransactionRollback",
+            "TestProcessingBackfillQuotaPostgres/RetryCancelReplacement",
+            "TestProcessingBackfillQuotaPostgres/UtcWindowAndClockRollback",
+            "TestProcessingBackfillQuotaPostgres/ProviderAndCapabilityLastSlot",
+            "TestProcessingBackfillQuotaPostgres/ProviderAndCapabilityLastSlot/Provider",
+            "TestProcessingBackfillQuotaPostgres/ProviderAndCapabilityLastSlot/Capability",
+            "TestProcessingBackfillQuotaPostgres/SkipSaturatedBucket",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/Success",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/FailureRetry",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/TerminalFailure",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/CancelRequested",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/TerminalCancellation",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/ExpiryBeforeReconcile",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/Takeover",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/Supersede",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/SourceInvalidation",
+            "TestProcessingBackfillQuotaPostgres/LifecycleRelease/Shutdown",
+            "TestProcessingBackfillQuotaPostgres/InteractivePromotionSlots",
+            "TestProcessingBackfillQuotaPostgres/InvalidationBatchAtomicity",
+            "TestProcessingBackfillQuotaPostgres/InvalidationBatchAtomicity/TwoPointPrelockAndPartialDenial",
+            "TestProcessingBackfillQuotaPostgres/SourceMetadata"
+          ]
+        },
+        {
+          "name": "TestProcessingBackfillSnapshotDirectDownPostgres",
+          "required_paths": [
+            "TestProcessingBackfillSnapshotDirectDownPostgres",
+            "TestProcessingBackfillSnapshotDirectDownPostgres/AdmissionSetVersion",
+            "TestProcessingBackfillSnapshotDirectDownPostgres/AdmissionSetVersion/AdmissionFirst",
+            "TestProcessingBackfillSnapshotDirectDownPostgres/AdmissionSetVersion/DowngradeFirst",
+            "TestProcessingBackfillSnapshotDirectDownPostgres/SnapshotFirst",
+            "TestProcessingBackfillSnapshotDirectDownPostgres/DirectDownFirst",
+            "TestProcessingBackfillSnapshotDirectDownPostgres/UsedGuardRollback",
+            "TestProcessingBackfillSnapshotDirectDownPostgres/MissingSeedRollback"
+          ]
+        },
+        {
           "name": "TestArchiveMemberBehaviorPostgres",
           "required_paths": [
             "TestArchiveMemberBehaviorPostgres"
+          ]
+        },
+        {
+          "name": "TestDerivedRewrapReincarnationPostgres",
+          "required_paths": [
+            "TestDerivedRewrapReincarnationPostgres",
+            "TestDerivedRewrapReincarnationPostgres/StaleRewrapReplacement"
           ]
         },
         {
@@ -1355,9 +1450,50 @@
           "name": "TestProcessingBehaviorPostgres",
           "required_paths": [
             "TestProcessingBehaviorPostgres",
+            "TestProcessingBehaviorPostgres/CrossPointSharedEncryptedBlob",
             "TestProcessingBehaviorPostgres/PersistentPrioritySelection",
             "TestProcessingBehaviorPostgres/BackgroundCannotUseReservedSlots",
             "TestProcessingBehaviorPostgres/InteractiveBorrowsBackgroundSlots"
+          ]
+        },
+        {
+          "name": "TestProcessingSharedBlobRenewalPostgres",
+          "required_paths": [
+            "TestProcessingSharedBlobRenewalPostgres",
+            "TestProcessingSharedBlobRenewalPostgres/DiscardWhileRenewing",
+            "TestProcessingSharedBlobRenewalPostgres/RevokeWhileRenewing",
+            "TestProcessingSharedBlobRenewalPostgres/CleanupWinsBeforeLateHeartbeat"
+          ]
+        },
+        {
+          "name": "TestProcessingRetirementStagingPostgres",
+          "required_paths": [
+            "TestProcessingRetirementStagingPostgres",
+            "TestProcessingRetirementStagingPostgres/Expiry",
+            "TestProcessingRetirementStagingPostgres/Shutdown",
+            "TestProcessingRetirementStagingPostgres/RenewalBeforeRetirementLock",
+            "TestProcessingRetirementStagingPostgres/DiscardWhileStaging"
+          ]
+        },
+        {
+          "name": "TestProcessingSharedBlobRecoveryPostgres",
+          "required_paths": [
+            "TestProcessingSharedBlobRecoveryPostgres",
+            "TestProcessingSharedBlobRecoveryPostgres/ReopenStagedAndPublished",
+            "TestProcessingSharedBlobRecoveryPostgres/StaleStagingRename",
+            "TestProcessingSharedBlobRecoveryPostgres/DelayedOldPurge"
+          ]
+        },
+        {
+          "name": "TestProjectedManifestRejectsExpiryPostgres",
+          "required_paths": [
+            "TestProjectedManifestRejectsExpiryPostgres",
+            "TestProjectedManifestRejectsExpiryPostgres/PrepareJobDeadline",
+            "TestProjectedManifestRejectsExpiryPostgres/PrepareAttemptDeadline",
+            "TestProjectedManifestRejectsExpiryPostgres/PrepareLeaseDeadline",
+            "TestProjectedManifestRejectsExpiryPostgres/PublishJobDeadline",
+            "TestProjectedManifestRejectsExpiryPostgres/PublishAttemptDeadline",
+            "TestProjectedManifestRejectsExpiryPostgres/PublishLeaseDeadline"
           ]
         },
         {
@@ -2028,9 +2164,28 @@
       "timeout": "20m",
       "tests": [
         {
+          "name": "TestRuntimeBackfillQuotaPostgres",
+          "required_paths": [
+            "TestRuntimeBackfillQuotaPostgres",
+            "TestRuntimeBackfillQuotaPostgres/RepeatedCollections",
+            "TestRuntimeBackfillQuotaPostgres/TwoInstancesPolicyFreshness",
+            "TestRuntimeBackfillQuotaPostgres/RestartPersistentWindow",
+            "TestRuntimeBackfillQuotaPostgres/ExpectedAfterDenial",
+            "TestRuntimeBackfillQuotaPostgres/ContinuationDeferral"
+          ]
+        },
+        {
           "name": "TestLifecycleSettledAuditDetailPurgePostgres",
           "required_paths": [
             "TestLifecycleSettledAuditDetailPurgePostgres"
+          ]
+        },
+        {
+          "name": "TestProcessingSharedBlobRealSearchPostgres",
+          "required_paths": [
+            "TestProcessingSharedBlobRealSearchPostgres",
+            "TestProcessingSharedBlobRealSearchPostgres/SamePointPublishRevoke",
+            "TestProcessingSharedBlobRealSearchPostgres/CrossPointReferenceIsolation"
           ]
         },
         {
@@ -2100,6 +2255,56 @@
       "package": "./internal/database",
       "timeout": "30m",
       "tests": [
+        {
+          "name": "TestProcessingBackfillQuotaMigrationPostgres",
+          "required_paths": [
+            "TestProcessingBackfillQuotaMigrationPostgres",
+            "TestProcessingBackfillQuotaMigrationPostgres/UpgradePreservesAndBackfills",
+            "TestProcessingBackfillQuotaMigrationPostgres/PreserveDerivedRows",
+            "TestProcessingBackfillQuotaMigrationPostgres/UpgradeFrom97",
+            "TestProcessingBackfillQuotaMigrationPostgres/UnusedDownAndReupgrade",
+            "TestProcessingBackfillQuotaMigrationPostgres/UsedDownRejected",
+            "TestProcessingBackfillQuotaMigrationPostgres/UsedDownRejected/JobCount",
+            "TestProcessingBackfillQuotaMigrationPostgres/UsedDownRejected/ByteCount",
+            "TestProcessingBackfillQuotaMigrationPostgres/UsedDownRejected/ZeroByteCharged",
+            "TestProcessingBackfillQuotaMigrationPostgres/FutureDownTo99",
+            "TestProcessingBackfillQuotaMigrationPostgres/DirectDownRejected",
+            "TestProcessingBackfillQuotaMigrationPostgres/SchemaDrift",
+            "TestProcessingBackfillQuotaMigrationPostgres/SchemaDrift/Seed",
+            "TestProcessingBackfillQuotaMigrationPostgres/SchemaDrift/Column",
+            "TestProcessingBackfillQuotaMigrationPostgres/SchemaDrift/Index",
+            "TestProcessingBackfillQuotaMigrationPostgres/SchemaDrift/Guard",
+            "TestProcessingBackfillQuotaMigrationPostgres/SchemaDrift/GuardBody",
+            "TestProcessingBackfillQuotaMigrationPostgres/SchemaDrift/IndexDefinition",
+            "TestProcessingBackfillQuotaMigrationPostgres/SchemaDrift/Window",
+            "TestProcessingBackfillQuotaMigrationPostgres/PartialSchemaPreflight",
+            "TestProcessingBackfillQuotaMigrationPostgres/PartialSchemaPreflight/Column",
+            "TestProcessingBackfillQuotaMigrationPostgres/PartialSchemaPreflight/Ledger",
+            "TestProcessingBackfillQuotaMigrationPostgres/PartialSchemaPreflight/Index",
+            "TestProcessingBackfillQuotaMigrationPostgres/InvalidSourcePreflight",
+            "TestProcessingBackfillQuotaMigrationPostgres/InvalidSourcePreflight/NegativeSize",
+            "TestProcessingBackfillQuotaMigrationPostgres/InvalidSourcePreflight/UnknownProvider",
+            "TestProcessingBackfillQuotaMigrationPostgres/InvalidSourcePreflight/MissingEntry",
+            "TestProcessingBackfillQuotaMigrationPostgres/InvalidSourcePreflight/AmbiguousRepository",
+            "TestProcessingBackfillQuotaMigrationPostgres/AdmissionBeforeSetVersion",
+            "TestProcessingBackfillQuotaMigrationPostgres/SetVersionBeforeAdmission",
+            "TestProcessingBackfillQuotaMigrationPostgres/DirectDownJobsFirst"
+          ]
+        },
+        {
+          "name": "TestProcessingSharedDerivedBlobsMigrationPostgres",
+          "required_paths": [
+            "TestProcessingSharedDerivedBlobsMigrationPostgres",
+            "TestProcessingSharedDerivedBlobsMigrationPostgres/upgrade_and_pristine_downgrade_preserve_rows",
+            "TestProcessingSharedDerivedBlobsMigrationPostgres/admission_and_used_downgrade",
+            "TestProcessingSharedDerivedBlobsMigrationPostgres/direct_down_guard/staging",
+            "TestProcessingSharedDerivedBlobsMigrationPostgres/direct_down_guard/manifest",
+            "TestProcessingSharedDerivedBlobsMigrationPostgres/schema_drift/trigger",
+            "TestProcessingSharedDerivedBlobsMigrationPostgres/schema_drift/index",
+            "TestProcessingSharedDerivedBlobsMigrationPostgres/schema_drift/staging_unique",
+            "TestProcessingSharedDerivedBlobsMigrationPostgres/schema_drift/manifest_unique"
+          ]
+        },
         {
           "name": "TestExportRawFingerprintMigrationPostgres",
           "required_paths": [
@@ -2201,7 +2406,8 @@
         {
           "name": "TestBackupAssetMigration067Postgres",
           "required_paths": [
-            "TestBackupAssetMigration067Postgres"
+            "TestBackupAssetMigration067Postgres",
+            "TestBackupAssetMigration067Postgres/ApplyAndTimeColumns"
           ]
         },
         {

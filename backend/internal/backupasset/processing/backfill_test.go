@@ -13,7 +13,7 @@ func TestBackfillAdmissionHonorsPauseQuotaAndInteractiveBypass(t *testing.T) {
 		RecentWindow: 30 * 24 * time.Hour, HistoryAgingStep: 24 * time.Hour,
 	}
 	usage := BackfillUsage{
-		WindowStartedAt: now.Add(-time.Minute), Jobs: 1, Bytes: 40,
+		WindowStartedAt: now, Jobs: 1, Bytes: 40,
 		ProviderActive: map[string]int{"restic": 1}, CapabilityActive: map[string]int{"image.thumbnail": 1},
 	}
 	request := BackfillAdmissionRequest{PriorityClass: PriorityBackground, Provider: "restic", Capability: "image.thumbnail", EstimatedBytes: 20}

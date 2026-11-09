@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/mattn/go-sqlite3"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func TestSinkCommitsBoundedMultiArtifactManifestAtomicallyUnderCurrentFence(t *testing.T) {
@@ -82,6 +84,20 @@ func TestSinkCommitsBoundedMultiArtifactManifestAtomicallyUnderCurrentFence(t *t
 		attempt.State != "succeeded" || attempt.IsCurrent || grant.State != string(GrantClosed) {
 		t.Fatalf("manifest did not publish atomically: set=%+v job=%+v attempt=%+v grant=%+v artifacts=%d refs=%d",
 			set, job, attempt, grant, artifacts, references)
+	}
+	var artifact model.BackupAssetDerivedArtifact
+	if err := harness.db.Where("artifact_set_id = ?", set.ID).First(&artifact).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", artifact.BlobID).Update("ref_count", 99).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.store.discardBlobIfUnreferenced(context.Background(), artifact.BlobID); err != nil {
+		t.Fatal(err)
+	}
+	var blob model.BackupAssetDerivedBlob
+	if err := harness.db.First(&blob, "id = ?", artifact.BlobID).Error; err != nil || blob.RefCount != 1 || blob.State != "active" {
+		t.Fatalf("published survivor=%+v err=%v", blob, err)
 	}
 }
 
@@ -747,6 +763,28 @@ func TestProjectedManifestPreparesBoundedTermsAndStableExcerptArtifact(t *testin
 	}
 	if artifact.ID != preparedField.ExcerptArtifactID {
 		t.Fatalf("Search excerpt=%q Derived artifact=%q", preparedField.ExcerptArtifactID, artifact.ID)
+	}
+}
+
+func TestProjectedManifestRejectsExpiryDuringSearchPublication(t *testing.T) {
+	h := newManifestHarness(t)
+	h.moveJobToUploading(t)
+	payload := []byte("search publication deadline")
+	declaration := artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload)
+	if _, err := h.sink.UploadArtifact(context.Background(), UploadArtifactRequest{JobID: h.lease.JobID, AttemptID: h.lease.AttemptID, WorkerID: h.lease.WorkerID, GrantID: h.sinkGrantID, Artifact: declaration}, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.Model(&model.BackupAssetProcessingGrant{}).Where("id = ?", h.sinkGrantID).Update("expires_at", h.clock.Now().Add(time.Second)).Error; err != nil {
+		t.Fatal(err)
+	}
+	h.projection.onPublish = func(DerivedProjectionPublish) error { h.clock.Advance(2 * time.Second); return nil }
+	_, err := h.sink.CommitManifest(context.Background(), CommitManifestRequest{JobID: h.lease.JobID, AttemptID: h.lease.AttemptID, WorkerID: h.lease.WorkerID, GrantID: h.sinkGrantID, RecoveryPointFence: h.lease.RecoveryPointFence, SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration}})
+	if !errors.Is(err, ErrManifestFenceLost) {
+		t.Fatalf("expired Search publication accepted: %v", err)
+	}
+	var count int64
+	if err := h.db.Model(&model.BackupAssetDerivedArtifactSet{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("visible sets=%d err=%v", count, err)
 	}
 }
 
@@ -1737,9 +1775,15 @@ func withArtifactCompleteness(value ArtifactDeclaration, completeness ArtifactCo
 	return value
 }
 
-type manifestSourceRevalidator struct{ err error }
+type manifestSourceRevalidator struct {
+	err          error
+	onRevalidate func()
+}
 
 func (fake *manifestSourceRevalidator) RevalidateProcessingSource(context.Context, WorkDescriptorV1) error {
+	if fake.onRevalidate != nil {
+		fake.onRevalidate()
+	}
 	return fake.err
 }
 
@@ -1751,6 +1795,7 @@ type manifestProjectionFake struct {
 	publications    int
 	revocations     int
 	onPublish       func(DerivedProjectionPublish) error
+	onPublishTx     func(*gorm.DB) error
 	onPrepareRevoke func()
 	publishRequests []DerivedProjectionPublish
 	publishRevision int64
@@ -1788,15 +1833,21 @@ func (fake *manifestProjectionFake) PreparePublish(_ context.Context, request De
 	return &manifestPreparedProjection{fake: fake, request: request}, nil
 }
 
-func (prepared *manifestPreparedProjection) PublishTx(_ context.Context, _ *gorm.DB) (DerivedProjectionPublication, error) {
+func (prepared *manifestPreparedProjection) PublishTx(_ context.Context, tx *gorm.DB) (DerivedProjectionPublication, error) {
 	fake := prepared.fake
 	request := prepared.request
 	fake.mu.Lock()
 	fake.publications++
 	fake.publishRequests = append(fake.publishRequests, request)
 	onPublish := fake.onPublish
+	onPublishTx := fake.onPublishTx
 	revision := fake.publishRevision
 	fake.mu.Unlock()
+	if onPublishTx != nil {
+		if err := onPublishTx(tx); err != nil {
+			return DerivedProjectionPublication{}, err
+		}
+	}
 	if onPublish != nil {
 		if err := onPublish(request); err != nil {
 			return DerivedProjectionPublication{}, err
@@ -1830,3 +1881,423 @@ func (prepared *manifestPreparedRevocation) RevokeTx(context.Context, *gorm.DB) 
 var _ ProcessingSourceRevalidator = (*manifestSourceRevalidator)(nil)
 var _ DerivedProjectionPort = (*manifestProjectionFake)(nil)
 var _ = gorm.ErrRecordNotFound
+
+type inspectUploadReader struct {
+	reader  *bytes.Reader
+	root    string
+	marker  []byte
+	checked bool
+}
+
+func (reader *inspectUploadReader) Read(p []byte) (int, error) {
+	if !reader.checked && int64(reader.reader.Len()) < reader.reader.Size() {
+		reader.checked = true
+		entries, err := os.ReadDir(reader.root)
+		if err != nil {
+			return 0, err
+		}
+		for _, entry := range entries {
+			data, err := os.ReadFile(filepath.Join(reader.root, entry.Name()))
+			if err != nil {
+				return 0, err
+			}
+			if bytes.Contains(data, reader.marker) {
+				return 0, errors.New("plaintext found in Derived root during upload")
+			}
+		}
+	}
+	return reader.reader.Read(p)
+}
+
+func TestSinkEncryptsReplayDuringNewAndReusedUpload(t *testing.T) {
+	for _, reuse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reuse=%v", reuse), func(t *testing.T) {
+			h := newManifestHarness(t)
+			h.moveJobToUploading(t)
+			marker := bytes.Repeat([]byte("private-upload-sentinel-"), 8)
+			payload := bytes.Repeat(marker, 800)
+			if reuse {
+				if _, err := h.store.PutBlob(context.Background(), derivedDeclaration(payload), bytes.NewReader(payload)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reader := &inspectUploadReader{reader: bytes.NewReader(payload), root: h.root, marker: marker}
+			declaration := artifactDeclaration(0, ArtifactRoleNoop, "application/octet-stream", payload)
+			_, err := h.sink.UploadArtifact(context.Background(), UploadArtifactRequest{JobID: h.lease.JobID, AttemptID: h.lease.AttemptID, WorkerID: h.lease.WorkerID, GrantID: h.sinkGrantID, Artifact: declaration}, reader)
+			if err != nil || !reader.checked {
+				t.Fatalf("upload err=%v inspected=%v", err, reader.checked)
+			}
+		})
+	}
+}
+
+func TestSinkRejectsAuthorityExpiredDuringPreparation(t *testing.T) {
+	for _, column := range []string{"grant", "attempt", "job"} {
+		t.Run(column, func(t *testing.T) {
+			h := newManifestHarness(t)
+			h.moveJobToUploading(t)
+			payload := []byte("delayed-authority")
+			declaration := artifactDeclaration(0, ArtifactRoleNoop, "application/octet-stream", payload)
+			_, err := h.sink.UploadArtifact(context.Background(), UploadArtifactRequest{JobID: h.lease.JobID, AttemptID: h.lease.AttemptID, WorkerID: h.lease.WorkerID, GrantID: h.sinkGrantID, Artifact: declaration}, bytes.NewReader(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			deadline := h.clock.Now().Add(time.Second)
+			switch column {
+			case "grant":
+				err = h.db.Model(&model.BackupAssetProcessingGrant{}).Where("id = ?", h.sinkGrantID).Update("expires_at", deadline).Error
+			case "attempt":
+				err = h.db.Model(&model.BackupAssetProcessingAttempt{}).Where("id = ?", h.lease.AttemptID).Update("worker_lease_expires_at", deadline).Error
+			case "job":
+				err = h.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", h.lease.JobID).Update("absolute_deadline", deadline).Error
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.source.onRevalidate = func() { h.clock.Advance(2 * time.Second) }
+			_, err = h.sink.CommitManifest(context.Background(), CommitManifestRequest{JobID: h.lease.JobID, AttemptID: h.lease.AttemptID, WorkerID: h.lease.WorkerID, GrantID: h.sinkGrantID, RecoveryPointFence: h.lease.RecoveryPointFence, SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration}})
+			if !errors.Is(err, ErrManifestFenceLost) {
+				t.Fatalf("expired authority accepted: %v", err)
+			}
+			var count int64
+			if err := h.db.Model(&model.BackupAssetDerivedArtifactSet{}).Count(&count).Error; err != nil || count != 0 {
+				t.Fatalf("visible sets=%d err=%v", count, err)
+			}
+		})
+	}
+}
+
+func TestDiscardRepairsStagedCountAndExpiresUnreconciledHolder(t *testing.T) {
+	h := newManifestHarness(t)
+	h.moveJobToUploading(t)
+	payload := []byte("staged-holder")
+	declaration := artifactDeclaration(0, ArtifactRoleNoop, "application/octet-stream", payload)
+	upload, err := h.sink.UploadArtifact(context.Background(), UploadArtifactRequest{JobID: h.lease.JobID, AttemptID: h.lease.AttemptID, WorkerID: h.lease.WorkerID, GrantID: h.sinkGrantID, Artifact: declaration}, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", upload.BlobID).Update("ref_count", 99).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.discardBlobIfUnreferenced(context.Background(), upload.BlobID); err != nil {
+		t.Fatal(err)
+	}
+	var blob model.BackupAssetDerivedBlob
+	if err := h.db.First(&blob, "id = ?", upload.BlobID).Error; err != nil || blob.RefCount != 0 || blob.State != "active" {
+		t.Fatalf("staged survivor=%+v err=%v", blob, err)
+	}
+	if err := h.db.Model(&model.BackupAssetProcessingGrant{}).Where("id = ?", h.sinkGrantID).Update("expires_at", h.clock.Now().Add(-time.Second)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.discardBlobIfUnreferenced(context.Background(), upload.BlobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.First(&blob, "id = ?", upload.BlobID).Error; err != nil || blob.State != "unavailable" {
+		t.Fatalf("expired holder retained blob=%+v err=%v", blob, err)
+	}
+}
+
+func TestDiscardOrphansFenceMismatch(t *testing.T) {
+	h := newManifestHarness(t)
+	h.moveJobToUploading(t)
+	payload := []byte("invalid holder fence")
+	declaration := artifactDeclaration(0, ArtifactRoleNoop, "application/octet-stream", payload)
+	upload, err := h.sink.UploadArtifact(context.Background(), UploadArtifactRequest{JobID: h.lease.JobID, AttemptID: h.lease.AttemptID, WorkerID: h.lease.WorkerID, GrantID: h.sinkGrantID, Artifact: declaration}, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.Model(&model.RecoveryPointLease{}).Where("id = ?", h.lease.RecoveryPointFence.LeaseID).Update("fence_token", strings.Repeat("a", 32)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.discardBlobIfUnreferenced(context.Background(), upload.BlobID); err != nil {
+		t.Fatal(err)
+	}
+	var row model.BackupAssetProcessingUpload
+	if err := h.db.Where("staging_id = ?", upload.BlobID).Take(&row).Error; err != nil || row.State != "orphaned" {
+		t.Fatalf("upload state=%s err=%v", row.State, err)
+	}
+}
+
+func TestRecoveredProjectionRejectsExpiredAuthority(t *testing.T) {
+	for _, scenario := range []string{"job-preparation", "attempt-preparation", "lease-preparation", "job-publication", "attempt-publication", "lease-publication", "worker-publication"} {
+		t.Run(scenario, func(t *testing.T) {
+			h := newManifestHarness(t)
+			h.moveJobToUploading(t)
+			ctx := context.Background()
+			payload := []byte("pending projection authority")
+			artifact := artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload)
+			if _, err := h.sink.UploadArtifact(ctx, UploadArtifactRequest{JobID: h.lease.JobID, AttemptID: h.lease.AttemptID, WorkerID: h.lease.WorkerID, GrantID: h.sinkGrantID, Artifact: artifact}, bytes.NewReader(payload)); err != nil {
+				t.Fatal(err)
+			}
+			request := CommitManifestRequest{JobID: h.lease.JobID, AttemptID: h.lease.AttemptID, WorkerID: h.lease.WorkerID, GrantID: h.sinkGrantID, RecoveryPointFence: h.lease.RecoveryPointFence, SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{artifact}}
+			artifacts := cloneAndSortArtifacts(request.Artifacts)
+			job, _, err := h.sink.loadManifestJob(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			uploads, err := h.sink.loadAndValidateUploads(ctx, request, artifacts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setID, err := backupasset.NewOpaqueID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			identities, err := newManifestArtifactIdentities(len(artifacts))
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := CommitManifestResult{ArtifactSetID: setID, ManifestDigest: computeManifestDigest(artifacts), ProjectionRequired: true}
+			if err := h.db.Transaction(func(tx *gorm.DB) error {
+				return h.sink.publishManifestTx(ctx, tx, request, job, artifacts, uploads, identities, manifest, setID)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.db.Exec("CREATE TABLE pending_projection_test_receipts (artifact_set_id TEXT NOT NULL)").Error; err != nil {
+				t.Fatal(err)
+			}
+			h.projection.onPublishTx = func(tx *gorm.DB) error {
+				return tx.Exec("INSERT INTO pending_projection_test_receipts (artifact_set_id) VALUES (?)", setID).Error
+			}
+			deadline := h.clock.Now().Add(time.Second)
+			switch {
+			case strings.HasPrefix(scenario, "job-"):
+				err = h.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", h.lease.JobID).Update("absolute_deadline", deadline).Error
+			case strings.HasPrefix(scenario, "attempt-"):
+				err = h.db.Model(&model.BackupAssetProcessingAttempt{}).Where("id = ?", h.lease.AttemptID).Update("absolute_deadline", deadline).Error
+			case strings.HasPrefix(scenario, "lease-"):
+				err = h.db.Model(&model.RecoveryPointLease{}).Where("id = ?", h.lease.RecoveryPointFence.LeaseID).Update("lease_expires_at", deadline).Error
+			case strings.HasPrefix(scenario, "worker-"):
+				err = h.db.Model(&model.BackupAssetProcessingAttempt{}).Where("id = ?", h.lease.AttemptID).Update("worker_lease_expires_at", deadline).Error
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasSuffix(scenario, "preparation") {
+				h.source.onRevalidate = func() { h.clock.Advance(2 * time.Second) }
+			} else {
+				h.projection.onPublish = func(DerivedProjectionPublish) error { h.clock.Advance(2 * time.Second); return nil }
+			}
+			if _, err := h.sink.ReconcilePendingProjections(ctx, 32); !errors.Is(err, ErrManifestFenceLost) {
+				t.Fatalf("expired recovery accepted: %v", err)
+			}
+			var set model.BackupAssetDerivedArtifactSet
+			if err := h.db.First(&set, "id = ?", setID).Error; err != nil || set.ProjectionPublished || set.ProjectionRevision != 0 {
+				t.Fatalf("partial projection=%+v err=%v", set, err)
+			}
+			if strings.HasSuffix(scenario, "preparation") && h.projection.publications != 0 {
+				t.Fatal("Search publication ran after authority expired")
+			}
+			var receipts int64
+			if err := h.db.Table("pending_projection_test_receipts").Count(&receipts).Error; err != nil || receipts != 0 {
+				t.Fatalf("partial Search receipt count=%d err=%v", receipts, err)
+			}
+		})
+	}
+}
+
+type pendingProjectionLockContextKey struct{}
+
+func TestProjectedManifestRejectsExpiryPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		if os.Getenv("REQUIRE_POSTGRES_PROCESSING_TEST") == "1" {
+			t.Fatal("TEST_POSTGRES_DSN is required")
+		}
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	t.Run("PrepareJobDeadline", func(t *testing.T) { pendingProjectionPostgresExpiry(t, dsn, false, "job") })
+	t.Run("PrepareAttemptDeadline", func(t *testing.T) { pendingProjectionPostgresExpiry(t, dsn, false, "attempt") })
+	t.Run("PrepareLeaseDeadline", func(t *testing.T) { pendingProjectionPostgresExpiry(t, dsn, false, "lease") })
+	t.Run("PublishJobDeadline", func(t *testing.T) { pendingProjectionPostgresExpiry(t, dsn, true, "job") })
+	t.Run("PublishAttemptDeadline", func(t *testing.T) { pendingProjectionPostgresExpiry(t, dsn, true, "attempt") })
+	t.Run("PublishLeaseDeadline", func(t *testing.T) { pendingProjectionPostgresExpiry(t, dsn, true, "lease") })
+}
+
+func pendingProjectionPostgresExpiry(t *testing.T, dsn string, final bool, deadlineKind string) {
+	t.Helper()
+	f := openProcessingBehaviorPostgres(t, dsn)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	descriptor := validWorkDescriptor()
+	keyring := backupasset.NewKeyring(f.db, f.clock.Now)
+	if _, err := keyring.Ensure(ctx, backupasset.KeyDomainDerivedStore); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewDerivedStore(ctx, f.db, keyring, DerivedStoreConfig{Root: filepath.Join(t.TempDir(), "derived"), ChunkSize: 64 << 10, BlobMaxBytes: 1 << 20, GlobalMaxBytes: 8 << 20, ValidateRoot: func(context.Context, string) error { return nil }}, f.clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := &manifestProjectionFake{}
+	lifecycle, err := NewDerivedLifecycle(f.db, store, projection, f.clock.Now, f.lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, err := NewArtifactSink(f.db, f.lease, f.grants, store, lifecycle, &manifestSourceRevalidator{}, func(context.Context) (string, error) { return descriptor.SecurityPolicyRevision, nil }, func(context.Context, string, string) (string, error) { return descriptor.PipelineFingerprint, nil }, f.clock.Now, ArtifactSinkConfig{MaxArtifacts: 4, MaxArtifactBytes: 1 << 20, MaxTotalBytes: 4 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := f.coordinator.RequestWork(ctx, WorkRequest{Descriptor: descriptor, Interest: InterestRequest{OwnerKind: InterestSystem, OwnerKey: "pending-expiry", PriorityClass: PriorityInteractive, Priority: 100}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leased, err := f.coordinator.PullAttempt(ctx, PullRequest{WorkerID: f.workerID}, f.grants)
+	if err != nil || leased.Lease.JobID != job.JobID {
+		t.Fatalf("pull pending job: %v", err)
+	}
+	if _, err := f.grants.Activate(ctx, ActivateGrantRequest{GrantID: leased.Grants.Sink.GrantID, Kind: GrantSink, JobID: job.JobID, AttemptID: leased.Lease.AttemptID, WorkerID: f.workerID, Secret: leased.Grants.Sink.Secret}); err != nil {
+		t.Fatal(err)
+	}
+	for i, state := range []ProcessingState{ProcessingFetching, ProcessingMaterializing, ProcessingProcessing, ProcessingUploading} {
+		processingBehaviorTransition(t, f, job.JobID, leased.Lease.AttemptID, state, int64(i+2))
+	}
+	payload := []byte("pending lock expiry")
+	artifact := artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload)
+	if _, err := sink.UploadArtifact(ctx, UploadArtifactRequest{JobID: job.JobID, AttemptID: leased.Lease.AttemptID, WorkerID: f.workerID, GrantID: leased.Grants.Sink.GrantID, Artifact: artifact}, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	request := CommitManifestRequest{JobID: job.JobID, AttemptID: leased.Lease.AttemptID, WorkerID: f.workerID, GrantID: leased.Grants.Sink.GrantID, RecoveryPointFence: leased.Lease.RecoveryPointFence, SecurityPolicyRevision: descriptor.SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{artifact}}
+	artifacts := cloneAndSortArtifacts(request.Artifacts)
+	loaded, _, err := sink.loadManifestJob(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploads, err := sink.loadAndValidateUploads(ctx, request, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setID, err := backupasset.NewOpaqueID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities, err := newManifestArtifactIdentities(len(artifacts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := CommitManifestResult{ArtifactSetID: setID, ManifestDigest: computeManifestDigest(artifacts), ProjectionRequired: true}
+	if err := f.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return sink.publishManifestTx(ctx, tx, request, loaded, artifacts, uploads, identities, manifest, setID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Exec("CREATE TABLE pending_projection_test_receipts (artifact_set_id TEXT NOT NULL)").Error; err != nil {
+		t.Fatal(err)
+	}
+	projection.onPublishTx = func(tx *gorm.DB) error {
+		return tx.Exec("INSERT INTO pending_projection_test_receipts (artifact_set_id) VALUES (?)", setID).Error
+	}
+	deadline := f.clock.Now().Add(time.Second)
+	switch deadlineKind {
+	case "job":
+		err = f.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", job.JobID).Update("absolute_deadline", deadline).Error
+	case "attempt":
+		err = f.db.Model(&model.BackupAssetProcessingAttempt{}).Where("id = ?", leased.Lease.AttemptID).Updates(map[string]any{"absolute_deadline": deadline, "worker_lease_expires_at": deadline}).Error
+	case "lease":
+		err = f.db.Model(&model.RecoveryPointLease{}).Where("id = ?", leased.Lease.RecoveryPointFence.LeaseID).Update("absolute_deadline", deadline).Error
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	type arrival struct {
+		pid int
+		err error
+	}
+	arrived := make(chan arrival, 1)
+	proceed := make(chan struct{})
+	target := 1
+	if final {
+		target = 2
+	}
+	seen := 0
+	const callback = "test:pending-projection-point-expiry"
+	if err := f.db.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Context.Value(pendingProjectionLockContextKey{}) != true || processingCallbackTable(tx) != "recovery_points" {
+			return
+		}
+		if _, locked := tx.Statement.Clauses["FOR"]; !locked {
+			return
+		}
+		seen++
+		if seen != target {
+			return
+		}
+		var pid int
+		err := tx.Statement.ConnPool.QueryRowContext(tx.Statement.Context, "SELECT pg_backend_pid()").Scan(&pid)
+		arrived <- arrival{pid: pid, err: err}
+		select {
+		case <-proceed:
+		case <-ctx.Done():
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := f.db.Callback().Query().Remove(callback); err != nil {
+			t.Errorf("remove pending projection callback: %v", err)
+		}
+	}()
+	testCtx := context.WithValue(ctx, pendingProjectionLockContextKey{}, true)
+	done := make(chan error, 1)
+	go func() { _, err := sink.ReconcilePendingProjections(testCtx, 32); done <- err }()
+	var waiter arrival
+	select {
+	case waiter = <-arrived:
+	case <-ctx.Done():
+		t.Fatal("pending recovery did not reach point lock")
+	}
+	if waiter.err != nil {
+		t.Fatal(waiter.err)
+	}
+	control := f.db.WithContext(ctx).Begin()
+	if control.Error != nil {
+		t.Fatal(control.Error)
+	}
+	defer control.Rollback()
+	var blockerPID int
+	if err := control.Raw("SELECT pg_backend_pid()").Scan(&blockerPID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var point model.RecoveryPoint
+	if err := control.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", descriptor.Source.RecoveryPointID).Take(&point).Error; err != nil {
+		t.Fatal(err)
+	}
+	close(proceed)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var blocked bool
+		if err := f.db.WithContext(ctx).Raw("SELECT ? = ANY(pg_blocking_pids(?))", blockerPID, waiter.pid).Scan(&blocked).Error; err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("recovery exited before lock contention: %v", err)
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatal("PostgreSQL did not report the point lock wait")
+		}
+	}
+	f.clock.Advance(2 * time.Second)
+	if err := control.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrManifestFenceLost) {
+			t.Fatalf("expired pending projection: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("pending projection did not finish")
+	}
+	var set model.BackupAssetDerivedArtifactSet
+	if err := f.db.First(&set, "id = ?", setID).Error; err != nil || set.ProjectionPublished || set.ProjectionRevision != 0 {
+		t.Fatalf("partial derived projection: %+v err=%v", set, err)
+	}
+	var receipts int64
+	if err := f.db.Table("pending_projection_test_receipts").Count(&receipts).Error; err != nil || receipts != 0 || projection.publications != 0 {
+		t.Fatalf("Search publication escaped expiry: receipts=%d publications=%d err=%v", receipts, projection.publications, err)
+	}
+}

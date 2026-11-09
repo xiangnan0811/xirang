@@ -1,15 +1,22 @@
 package processing
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"gorm.io/gorm"
 	"xirang/backend/internal/backupasset"
 )
 
 var processingTestDBSequence atomic.Uint64
+
+func testBackfillPolicySource(context.Context, *gorm.DB) (BackfillPolicy, error) {
+	return BackfillPolicy{BatchSize: 100, JobsPerHour: 100000, BytesPerHour: 1 << 40, ProviderConcurrency: 32, CapabilityConcurrency: 32, RecentWindow: 720 * time.Hour, HistoryAgingStep: 24 * time.Hour}, nil
+}
 
 func processingTestSQLiteDSN(t *testing.T) string {
 	t.Helper()

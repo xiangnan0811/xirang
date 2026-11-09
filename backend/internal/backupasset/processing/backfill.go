@@ -15,7 +15,7 @@ type BackfillPolicy struct {
 
 type BackfillUsage struct {
 	WindowStartedAt  time.Time
-	Jobs             int
+	Jobs             int64
 	Bytes            int64
 	ProviderActive   map[string]int
 	CapabilityActive map[string]int
@@ -48,7 +48,7 @@ type BackfillAdmission struct {
 
 func AdmitBackfill(policy BackfillPolicy, usage BackfillUsage, request BackfillAdmissionRequest, now time.Time) BackfillAdmission {
 	if !validBackfillPolicy(policy) || now.Location() != time.UTC || usage.WindowStartedAt.Location() != time.UTC ||
-		usage.WindowStartedAt.After(now) || request.EstimatedBytes < 0 || request.Provider == "" || request.Capability == "" ||
+		usage.WindowStartedAt.After(now.UTC().Truncate(time.Hour)) || usage.Jobs < 0 || usage.Bytes < 0 || request.EstimatedBytes < 0 || request.Provider == "" || request.Capability == "" ||
 		(request.PriorityClass != PriorityInteractive && request.PriorityClass != PriorityBackground) {
 		return BackfillAdmission{Reason: BackfillAdmissionInvalid}
 	}
@@ -68,10 +68,10 @@ func AdmitBackfill(policy BackfillPolicy, usage BackfillUsage, request BackfillA
 	if now.Sub(usage.WindowStartedAt) >= time.Hour {
 		jobs, consumedBytes = 0, 0
 	}
-	if jobs >= policy.JobsPerHour {
+	if jobs >= int64(policy.JobsPerHour) {
 		return BackfillAdmission{Reason: BackfillAdmissionJobQuota}
 	}
-	if request.EstimatedBytes > policy.BytesPerHour-consumedBytes {
+	if consumedBytes > policy.BytesPerHour || request.EstimatedBytes > policy.BytesPerHour-consumedBytes {
 		return BackfillAdmission{Reason: BackfillAdmissionByteQuota}
 	}
 	return BackfillAdmission{Allowed: true, Reason: BackfillAdmissionAllowed}
