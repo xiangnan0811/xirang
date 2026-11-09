@@ -30,6 +30,13 @@
 - 真实 SQLite／PostgreSQL 验收发现第二次上传相同输出时，Sink 命中的 blob ID 与 upload 的唯一 `staging_id` 冲突；该既存缺口继续开放，本次未修复。存储层去重与预置来源引用测试不代表真实 Sink 跨点双发布成功，不能将本次清理说明为完整复用能力交付。
 - 本次仅测试与死码清理，无运行行为、依赖、公开 API、wire、配置或 schema migration 变化，不改写历史数据或已发布迁移；说明留在 `Unreleased`，不因此单独发行版本或正式镜像。
 
+## [0.73.17](https://github.com/xiangnan0811/xirang/compare/v0.73.16...v0.73.17) (2026-11-09)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复派生产物共享与后台配额 ([#702](https://github.com/xiangnan0811/xirang/issues/702)) ([f2d9eb5](https://github.com/xiangnan0811/xirang/commit/f2d9eb51d692f7e204e08406e6f4c5314f4ebe66))
+
 ## [0.73.16](https://github.com/xiangnan0811/xirang/compare/v0.73.15...v0.73.16) (2026-11-08)
 
 
