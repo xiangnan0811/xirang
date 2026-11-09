@@ -92,7 +92,14 @@
         {
           "name": "TestGeneralSurfacePostgres",
           "required_paths": [
-            "TestGeneralSurfacePostgres"
+            "TestGeneralSurfacePostgres",
+            "TestGeneralSurfacePostgres/archive_unauthenticated",
+            "TestGeneralSurfacePostgres/archive_invalid_token",
+            "TestGeneralSurfacePostgres/archive_viewer",
+            "TestGeneralSurfacePostgres/archive_unowned_operator",
+            "TestGeneralSurfacePostgres/archive_live_dependent_conflict",
+            "TestGeneralSurfacePostgres/archive_admin_unowned_dependent",
+            "TestGeneralSurfacePostgres/archive_owned_operator"
           ]
         }
       ]
@@ -3361,6 +3368,12 @@
           "name": "TestSyncSchedulePreservesFutureCursorPostgres",
           "required_paths": [
             "TestSyncSchedulePreservesFutureCursorPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskArchiveDisablesUnlinksAndPreservesHistoryPostgres",
+          "required_paths": [
+            "TestTaskArchiveDisablesUnlinksAndPreservesHistoryPostgres"
           ]
         },
         {

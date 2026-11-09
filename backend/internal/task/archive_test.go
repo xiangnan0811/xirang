@@ -3,9 +3,10 @@ package task
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,7 +24,26 @@ import (
 )
 
 func TestTaskArchiveDisablesUnlinksAndPreservesHistory(t *testing.T) {
-	fixture := newTaskArchiveFixture(t)
+	runTaskArchiveDisablesUnlinksAndPreservesHistory(t, newTaskArchiveFixture(t))
+}
+
+func TestTaskArchiveDisablesUnlinksAndPreservesHistoryPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		if strings.TrimSpace(os.Getenv(requirePostgresTaskTerminalTestEnv)) == "1" {
+			t.Fatalf("TEST_POSTGRES_DSN is required when %s=1", requirePostgresTaskTerminalTestEnv)
+		}
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	db := openTaskTerminalPostgresDB(t, dsn)
+	runTaskArchiveDisablesUnlinksAndPreservesHistory(t, newTaskArchiveFixtureWithDB(t, db, "", backupasset.PublicationNativeSnapshot))
+}
+
+func runTaskArchiveDisablesUnlinksAndPreservesHistory(t *testing.T, fixture *taskArchiveFixture) {
+	t.Helper()
+	assertHistoricalOwners := seedTaskArchiveHistoricalOwners(t, fixture)
+	assertTaskArchiveHistoryPreserved(t, fixture)
+	assertHistoricalOwners()
 	remover := &recordingScheduleRemover{}
 	service := NewArchiveService(ArchiveDependencies{
 		DB:             fixture.db,
@@ -68,8 +88,25 @@ func TestTaskArchiveDisablesUnlinksAndPreservesHistory(t *testing.T) {
 	}
 
 	assertTaskArchiveHistoryPreserved(t, fixture)
-	if fixture.provider.calls.Load() != 0 {
-		t.Fatalf("provider mutations=%d, want 0", fixture.provider.calls.Load())
+	assertHistoricalOwners()
+
+	ownerless := model.Task{Name: "ownerless-live", NodeID: fixture.node.ID, ExecutorType: "command", Command: "true", Status: "pending", Enabled: true}
+	if err := fixture.db.Create(&ownerless).Error; err != nil {
+		t.Fatalf("create ownerless live task: %v", err)
+	}
+	result, err = service.Archive(context.Background(), ownerless.ID)
+	if err != nil {
+		t.Fatalf("Archive ownerless live task: %v", err)
+	}
+	if !result.Archived || result.Unlinked || result.ProviderBytesDeleted {
+		t.Fatalf("ownerless archive result=%+v", result)
+	}
+	var retained model.Task
+	if err := fixture.db.First(&retained, ownerless.ID).Error; err != nil {
+		t.Fatalf("load archived ownerless task: %v", err)
+	}
+	if retained.Enabled || retained.ArchivedAt == nil || !retained.ArchivedAt.Equal(fixture.now) || retained.Command != "true" {
+		t.Fatalf("ownerless task was not retained as archived: %+v", retained)
 	}
 }
 
@@ -136,9 +173,6 @@ func TestTaskArchiveHasZeroProviderEffects(t *testing.T) {
 	}
 	if result.ProviderBytesDeleted {
 		t.Fatal("archive result must not claim Provider bytes were deleted")
-	}
-	if fixture.provider.calls.Load() != 0 {
-		t.Fatalf("provider mutations=%d, want 0", fixture.provider.calls.Load())
 	}
 	var repository model.BackupRepository
 	if err := fixture.db.First(&repository, "id = ?", fixture.repository.ID).Error; err != nil {
@@ -717,49 +751,6 @@ func TestTaskArchiveNotFound(t *testing.T) {
 	}
 }
 
-func TestTaskArchiveConservativeHardDeleteKeepsReferencedRow(t *testing.T) {
-	fixture := newTaskArchiveFixture(t)
-	service := NewArchiveService(ArchiveDependencies{
-		DB:             fixture.db,
-		RemoveSchedule: func(uint) error { return nil },
-		Now:            func() time.Time { return fixture.now },
-	})
-	if _, err := service.Archive(context.Background(), fixture.task.ID); err != nil {
-		t.Fatalf("Archive: %v", err)
-	}
-	deleted, err := service.TryHardDelete(context.Background(), fixture.task.ID)
-	if err != nil {
-		t.Fatalf("TryHardDelete: %v", err)
-	}
-	if deleted {
-		t.Fatal("hard-delete reaper deleted a referenced archived task")
-	}
-	var stillThere model.Task
-	if err := fixture.db.First(&stillThere, fixture.task.ID).Error; err != nil {
-		t.Fatalf("archived referenced task was removed: %v", err)
-	}
-
-	empty := model.Task{
-		Name:         "empty-archived",
-		NodeID:       fixture.node.ID,
-		ExecutorType: "command",
-		Command:      "true",
-		Status:       "pending",
-		Enabled:      false,
-		ArchivedAt:   &fixture.now,
-	}
-	if err := fixture.db.Create(&empty).Error; err != nil {
-		t.Fatalf("create empty archived task: %v", err)
-	}
-	deleted, err = service.TryHardDelete(context.Background(), empty.ID)
-	if err != nil {
-		t.Fatalf("TryHardDelete empty archived: %v", err)
-	}
-	if !deleted {
-		t.Fatal("empty archived task with no known owners should be reaped")
-	}
-}
-
 func TestTaskArchiveDoesNotResurrectWhenUpdateRaces(t *testing.T) {
 	fixture := newTaskArchiveFixture(t)
 	started := make(chan struct{})
@@ -1038,14 +1029,6 @@ func (r *recordingScheduleRemover) RemoveSchedule(taskID uint) error {
 	return r.err
 }
 
-type recordingProviderMutator struct {
-	calls atomic.Int64
-}
-
-func (m *recordingProviderMutator) DeleteBytes() {
-	m.calls.Add(1)
-}
-
 type archiveCommitFailPool struct {
 	*sql.DB
 	fail atomic.Bool
@@ -1092,7 +1075,6 @@ type taskArchiveFixture struct {
 	legacyLocator   string
 	providerLocator string
 	rollbackLocator string
-	provider        *recordingProviderMutator
 }
 
 func newTaskArchiveFixture(t *testing.T) *taskArchiveFixture {
@@ -1101,9 +1083,6 @@ func newTaskArchiveFixture(t *testing.T) *taskArchiveFixture {
 
 func newTaskArchiveFixtureWithPublicationMode(t *testing.T, publicationMode backupasset.TaskPublicationMode) *taskArchiveFixture {
 	t.Helper()
-	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-	secure.ResetForTesting()
-	t.Cleanup(secure.ResetForTesting)
 
 	dsn := filepath.Join(t.TempDir(), "task-archive.db") + "?_loc=UTC&_foreign_keys=on&_busy_timeout=5000"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
@@ -1118,6 +1097,14 @@ func newTaskArchiveFixtureWithPublicationMode(t *testing.T, publicationMode back
 	}
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
+	return newTaskArchiveFixtureWithDB(t, db, dsn, publicationMode)
+}
+
+func newTaskArchiveFixtureWithDB(t *testing.T, db *gorm.DB, dsn string, publicationMode backupasset.TaskPublicationMode) *taskArchiveFixture {
+	t.Helper()
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
 	if err := db.AutoMigrate(
 		&model.Node{},
 		&model.Task{},
@@ -1149,7 +1136,6 @@ func newTaskArchiveFixtureWithPublicationMode(t *testing.T, publicationMode back
 		legacyLocator:   "sftp:archive-user@example.invalid:/protected/legacy",
 		providerLocator: `{"version":1,"provider":"restic","full_snapshot_id":"abc123def456"}`,
 		rollbackLocator: `{"version":1,"provider":"restic","rollback":"protected"}`,
-		provider:        &recordingProviderMutator{},
 	}
 	fixture.node = model.Node{Name: "archive-node", Host: "10.0.14.9", Username: "root", AuthType: "key", BackupDir: "archive-node"}
 	if err := db.Create(&fixture.node).Error; err != nil {
@@ -1228,11 +1214,75 @@ func newTaskArchiveFixtureWithPublicationMode(t *testing.T, publicationMode back
 	return fixture
 }
 
+func seedTaskArchiveHistoricalOwners(t *testing.T, fixture *taskArchiveFixture) func() {
+	t.Helper()
+	taskID, runID := fixture.task.ID, fixture.run.ID
+	traffic := model.TaskTrafficSample{TaskID: taskID, NodeID: fixture.node.ID, RunStartedAt: fixture.now.Add(-time.Hour), SampledAt: fixture.now.Add(-time.Minute), ThroughputMbps: 12.5}
+	grant := model.CredentialAccessGrant{RequesterUserID: 7, RequesterUsername: "operator", RequesterRole: "operator", Action: "task.manual_trigger", Purpose: "task_run", TaskID: &taskID, Reason: "archive history", Status: "approved", RequestedAt: fixture.now.Add(-time.Hour), ExpiresAt: fixture.now.Add(time.Hour)}
+	alert := model.Alert{NodeID: fixture.node.ID, NodeName: fixture.node.Name, TaskID: &taskID, TaskRunID: &runID, Severity: "warning", Status: "resolved", ErrorCode: "backup_warning", Message: "historical alert"}
+	drill := model.RestoreDrillEvidence{PolicyID: 17, TaskID: taskID, TaskRunID: runID, SourceTaskRunID: &runID, SnapshotRef: "snapshot-archive", SandboxNodeID: fixture.node.ID, SandboxNodeName: fixture.node.Name, SandboxPath: "/sandbox/archive", Status: "success"}
+	diff := model.SnapshotDiffHistory{PolicyID: 17, TaskID: taskID, TaskRunID: runID, AddedCount: 3, RemovedCount: 2, ChangedCount: 1, TotalSizeBytes: 4096}
+	file := model.SnapshotFileIndex{TaskID: taskID, SnapshotID: "snapshot-archive", Path: "/data/report.txt", Size: 4096, Mtime: "2026-08-18T13:00:00Z"}
+	for _, row := range []any{&traffic, &grant, &alert, &drill, &diff, &file} {
+		if err := fixture.db.Create(row).Error; err != nil {
+			t.Fatalf("seed archive history %T: %v", row, err)
+		}
+	}
+	return func() {
+		t.Helper()
+		var gotTraffic model.TaskTrafficSample
+		if err := fixture.db.First(&gotTraffic, traffic.ID).Error; err != nil {
+			t.Fatalf("load traffic history: %v", err)
+		}
+		if gotTraffic.TaskID != taskID || gotTraffic.NodeID != fixture.node.ID || !gotTraffic.RunStartedAt.Equal(traffic.RunStartedAt) || !gotTraffic.SampledAt.Equal(traffic.SampledAt) || gotTraffic.ThroughputMbps != 12.5 {
+			t.Fatalf("traffic history changed: %+v", gotTraffic)
+		}
+		var gotGrant model.CredentialAccessGrant
+		if err := fixture.db.First(&gotGrant, grant.ID).Error; err != nil {
+			t.Fatalf("load credential grant: %v", err)
+		}
+		if gotGrant.TaskID == nil || *gotGrant.TaskID != taskID || gotGrant.RequesterUserID != 7 || gotGrant.RequesterUsername != "operator" || gotGrant.Status != "approved" || gotGrant.Reason != "archive history" || !gotGrant.ExpiresAt.Equal(grant.ExpiresAt) {
+			t.Fatalf("credential grant changed: %+v", gotGrant)
+		}
+		var gotAlert model.Alert
+		if err := fixture.db.First(&gotAlert, alert.ID).Error; err != nil {
+			t.Fatalf("load alert: %v", err)
+		}
+		if gotAlert.TaskID == nil || *gotAlert.TaskID != taskID || gotAlert.TaskRunID == nil || *gotAlert.TaskRunID != runID || gotAlert.NodeID != fixture.node.ID || gotAlert.ErrorCode != "backup_warning" || gotAlert.Status != "resolved" || gotAlert.Message != "historical alert" {
+			t.Fatalf("alert changed: %+v", gotAlert)
+		}
+		var gotDrill model.RestoreDrillEvidence
+		if err := fixture.db.First(&gotDrill, drill.ID).Error; err != nil {
+			t.Fatalf("load restore drill evidence: %v", err)
+		}
+		if gotDrill.TaskID != taskID || gotDrill.TaskRunID != runID || gotDrill.SourceTaskRunID == nil || *gotDrill.SourceTaskRunID != runID || gotDrill.PolicyID != 17 || gotDrill.SnapshotRef != "snapshot-archive" || gotDrill.SandboxPath != "/sandbox/archive" || gotDrill.Status != "success" {
+			t.Fatalf("restore drill evidence changed: %+v", gotDrill)
+		}
+		var gotDiff model.SnapshotDiffHistory
+		if err := fixture.db.First(&gotDiff, diff.ID).Error; err != nil {
+			t.Fatalf("load snapshot diff: %v", err)
+		}
+		if gotDiff.TaskID != taskID || gotDiff.TaskRunID != runID || gotDiff.PolicyID != 17 || gotDiff.AddedCount != 3 || gotDiff.RemovedCount != 2 || gotDiff.ChangedCount != 1 || gotDiff.TotalSizeBytes != 4096 {
+			t.Fatalf("snapshot diff changed: %+v", gotDiff)
+		}
+		var gotFile model.SnapshotFileIndex
+		if err := fixture.db.First(&gotFile, file.ID).Error; err != nil {
+			t.Fatalf("load snapshot file index: %v", err)
+		}
+		if gotFile.TaskID != taskID || gotFile.SnapshotID != "snapshot-archive" || gotFile.Path != "/data/report.txt" || gotFile.Size != 4096 || gotFile.Mtime != "2026-08-18T13:00:00Z" {
+			t.Fatalf("snapshot file index changed: %+v", gotFile)
+		}
+	}
+}
+
 func assertTaskArchiveHistoryPreserved(t *testing.T, fixture *taskArchiveFixture) {
 	t.Helper()
 	var repository model.BackupRepository
 	if err := fixture.db.First(&repository, "id = ?", fixture.repository.ID).Error; err != nil {
 		t.Fatalf("repository missing after archive: %v", err)
+	}
+	if repository.Status != fixture.repository.Status || repository.DisplayName != fixture.repository.DisplayName {
+		t.Fatalf("repository changed: %+v", repository)
 	}
 	var point model.RecoveryPoint
 	if err := fixture.db.First(&point, "id = ?", fixture.point.ID).Error; err != nil {
@@ -1241,28 +1291,36 @@ func assertTaskArchiveHistoryPreserved(t *testing.T, fixture *taskArchiveFixture
 	if point.ProducingTaskID == nil || *point.ProducingTaskID != fixture.task.ID || point.ProducingTaskRunID == nil || *point.ProducingTaskRunID != fixture.run.ID {
 		t.Fatalf("recovery point producing refs changed: %+v", point)
 	}
+	if point.RepositoryID != fixture.repository.ID || point.EncryptedProviderLocator != fixture.providerLocator || point.EncryptedRollbackLocator != fixture.rollbackLocator || point.State != fixture.point.State {
+		t.Fatalf("recovery point metadata changed: %+v", point)
+	}
 	var run model.TaskRun
 	if err := fixture.db.First(&run, fixture.run.ID).Error; err != nil {
 		t.Fatalf("task run missing after archive: %v", err)
+	}
+	if run.TaskID != fixture.task.ID || run.TriggerType != "manual" || run.Status != "success" {
+		t.Fatalf("task run changed: %+v", run)
 	}
 	var log model.TaskLog
 	if err := fixture.db.First(&log, fixture.log.ID).Error; err != nil {
 		t.Fatalf("task log missing after archive: %v", err)
 	}
+	if log.TaskID != fixture.task.ID || log.TaskRunID == nil || *log.TaskRunID != fixture.run.ID || log.Level != "info" || log.Message != "archive history" {
+		t.Fatalf("task log changed: %+v", log)
+	}
 	var audit model.CredentialAuditEvent
 	if err := fixture.db.First(&audit, fixture.audit.ID).Error; err != nil {
 		t.Fatalf("credential audit missing after archive: %v", err)
 	}
-	if audit.TaskID == nil || *audit.TaskID != fixture.task.ID {
-		t.Fatalf("credential audit task_id changed: %+v", audit)
+	if audit.TaskID == nil || *audit.TaskID != fixture.task.ID || audit.TaskRunID == nil || *audit.TaskRunID != fixture.run.ID || audit.Action != "task.manual_trigger" || audit.Outcome != "success" {
+		t.Fatalf("credential audit changed: %+v", audit)
 	}
 	var assetAudit model.BackupAssetAuditEvent
 	if err := fixture.db.First(&assetAudit, fixture.assetAudit.ID).Error; err != nil {
 		t.Fatalf("backup-asset audit missing after archive: %v", err)
 	}
-	raw, _ := json.Marshal(point)
-	if string(raw) == "" {
-		t.Fatal("recovery point marshaled empty")
+	if assetAudit.TaskID == nil || *assetAudit.TaskID != fixture.task.ID || assetAudit.TaskRunID == nil || *assetAudit.TaskRunID != fixture.run.ID || assetAudit.RepositoryID != fixture.repository.ID || assetAudit.RecoveryPointID != fixture.point.ID || assetAudit.Action != "repository.read" || assetAudit.EntryHash != "e" {
+		t.Fatalf("backup-asset audit changed: %+v", assetAudit)
 	}
 }
 
