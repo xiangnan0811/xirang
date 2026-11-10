@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,16 +48,127 @@ type ciWorkflowStep struct {
 	With             map[string]string `yaml:"with"`
 }
 
-func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
-	workflowPath := filepath.Join("..", "..", "..", ".github", "workflows", "ci.yml")
-	contents, err := os.ReadFile(workflowPath)
+func loadCIWorkflow(t *testing.T) ciWorkflow {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "ci.yml"))
 	if err != nil {
 		t.Fatalf("read CI workflow: %v", err)
 	}
-
 	var workflow ciWorkflow
 	if err := yaml.Unmarshal(contents, &workflow); err != nil {
 		t.Fatalf("parse CI workflow YAML: %v", err)
+	}
+	return workflow
+}
+
+func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
+	workflow := loadCIWorkflow(t)
+	if err := validateProtectedSourceWorkflow(workflow); err != nil {
+		t.Fatal(err)
+	}
+	base := workflow
+	for _, protected := range []struct{ id, name string }{
+		{"backend", "Backend Test & Build"},
+		{"frontend", "Frontend Test & Build"},
+		{"doc-freshness", "Doc Freshness Check"},
+	} {
+		t.Run(protected.id, func(t *testing.T) {
+			checkout := slices.IndexFunc(base.Jobs[protected.id].Steps, func(step ciWorkflowStep) bool {
+				return strings.HasPrefix(step.Uses, "actions/checkout@")
+			})
+			if checkout < 0 {
+				t.Fatal("base workflow has no checkout")
+			}
+			ordinary := slices.IndexFunc(base.Jobs[protected.id].Steps, func(step ciWorkflowStep) bool {
+				return step.If == protectedStepGate
+			})
+			if ordinary < 0 {
+				t.Fatal("base workflow has no ordinary source step")
+			}
+			tests := []struct {
+				name   string
+				mutate func(*ciWorkflowJob)
+			}{
+				{"job-if-missing", func(job *ciWorkflowJob) { job.If = "" }},
+				{"job-if-false", func(job *ciWorkflowJob) { job.If = "false" }},
+				{"old-source-only-gate", func(job *ciWorkflowJob) { job.If = requiredPostgresSourceGate }},
+				{"missing-classify", func(job *ciWorkflowJob) { job.Needs = nil }},
+				{"extra-need", func(job *ciWorkflowJob) { job.Needs = []string{"classify", "other"} }},
+				{"fixed-source-name", func(job *ciWorkflowJob) { job.Name = protected.name }},
+				{"mode-only-name", func(job *ciWorkflowJob) {
+					job.Name = "${{ needs.classify.outputs.mode == 'metadata' && 'Metadata only / " + protected.name + "' || '" + protected.name + "' }}"
+				}},
+				{"empty-steps", func(job *ciWorkflowJob) { job.Steps = nil }},
+				{"step-if-missing", func(job *ciWorkflowJob) { job.Steps[ordinary].If = "" }},
+				{"step-if-false", func(job *ciWorkflowJob) { job.Steps[ordinary].If = "false" }},
+				{"step-mode-only", func(job *ciWorkflowJob) { job.Steps[ordinary].If = "${{ needs.classify.outputs.mode != 'metadata' }}" }},
+				{"step-reversed", func(job *ciWorkflowJob) {
+					job.Steps[ordinary].If = "${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' }}"
+				}},
+				{"step-unconditional-always", func(job *ciWorkflowJob) { job.Steps[ordinary].If = "${{ always() }}" }},
+				{"step-extra-always", func(job *ciWorkflowJob) { job.Steps[ordinary].If = protectedAlwaysStepGate }},
+				{"checkout-head-ref", func(job *ciWorkflowJob) {
+					job.Steps[checkout].With["ref"] = "${{ github.event.pull_request.head.sha }}"
+				}},
+				{"checkout-moving-ref", func(job *ciWorkflowJob) { job.Steps[checkout].With["ref"] = "main" }},
+				{"checkout-wrong-pin", func(job *ciWorkflowJob) { job.Steps[checkout].Uses = "actions/checkout@main" }},
+				{"checkout-missing", func(job *ciWorkflowJob) { job.Steps[checkout].Uses = "" }},
+				{"checkout-duplicate", func(job *ciWorkflowJob) { job.Steps = append(job.Steps, job.Steps[checkout]) }},
+			}
+			if protected.id == "doc-freshness" {
+				tests = append(tests, struct {
+					name   string
+					mutate func(*ciWorkflowJob)
+				}{"checkout-shallow", func(job *ciWorkflowJob) { delete(job.Steps[checkout].With, "fetch-depth") }})
+			}
+			if protected.id == "frontend" {
+				for _, stepName := range []string{"Upload browser execution evidence", "Check frontend coverage"} {
+					stepIndex := slices.IndexFunc(base.Jobs[protected.id].Steps, func(step ciWorkflowStep) bool {
+						return step.Name == stepName
+					})
+					if stepIndex < 0 {
+						t.Fatalf("frontend step %q missing from base", stepName)
+					}
+					for _, mutation := range []struct {
+						name   string
+						mutate func(*ciWorkflowJob, int)
+					}{
+						{"missing-always", func(job *ciWorkflowJob, i int) { job.Steps[i].If = protectedStepGate }},
+						{"missing-step", func(job *ciWorkflowJob, i int) { job.Steps = append(job.Steps[:i], job.Steps[i+1:]...) }},
+						{"duplicate-step", func(job *ciWorkflowJob, i int) { job.Steps = append(job.Steps, job.Steps[i]) }},
+					} {
+						tests = append(tests, struct {
+							name   string
+							mutate func(*ciWorkflowJob)
+						}{stepName + "/" + mutation.name, func(job *ciWorkflowJob) {
+							mutation.mutate(job, stepIndex)
+						}})
+					}
+				}
+			}
+			for _, tc := range tests {
+				t.Run(tc.name, func(t *testing.T) {
+					workflow := ciWorkflow{Jobs: maps.Clone(base.Jobs)}
+					job := workflow.Jobs[protected.id]
+					job.Steps = slices.Clone(job.Steps)
+					for i := range job.Steps {
+						job.Steps[i].With = maps.Clone(job.Steps[i].With)
+					}
+					tc.mutate(&job)
+					workflow.Jobs[protected.id] = job
+					if err := validateProtectedSourceWorkflow(workflow); err == nil {
+						t.Fatal("invalid protected source workflow accepted")
+					}
+				})
+			}
+			t.Run("missing-job", func(t *testing.T) {
+				workflow := ciWorkflow{Jobs: maps.Clone(base.Jobs)}
+				delete(workflow.Jobs, protected.id)
+				if err := validateProtectedSourceWorkflow(workflow); err == nil {
+					t.Fatal("missing protected job accepted")
+				}
+			})
+		})
 	}
 	backendJob, ok := workflow.Jobs["backend"]
 	if !ok {
@@ -111,6 +223,60 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 	}
 }
 
+const protectedJobGate = "${{ !cancelled() }}"
+const protectedStepGate = "${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}"
+const protectedAlwaysStepGate = "${{ always() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}"
+
+func validateProtectedSourceWorkflow(workflow ciWorkflow) error {
+	for _, protected := range []struct{ id, name string }{
+		{"backend", "Backend Test & Build"},
+		{"frontend", "Frontend Test & Build"},
+		{"doc-freshness", "Doc Freshness Check"},
+	} {
+		job, ok := workflow.Jobs[protected.id]
+		if !ok {
+			return fmt.Errorf("%s job is missing", protected.id)
+		}
+		name := "${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / " + protected.name + "' || '" + protected.name + "' }}"
+		if job.If != protectedJobGate || !slices.Equal(job.Needs, []string{"classify"}) || job.Name != name {
+			return fmt.Errorf("%s job has an invalid admission gate, dependency, or name", protected.id)
+		}
+		if len(job.Steps) == 0 {
+			return fmt.Errorf("%s job has no steps", protected.id)
+		}
+		checkouts := 0
+		alwaysSteps := map[string]int{"Upload browser execution evidence": 0, "Check frontend coverage": 0}
+		for index, step := range job.Steps {
+			gate := protectedStepGate
+			if _, isAlways := alwaysSteps[step.Name]; protected.id == "frontend" && isAlways {
+				alwaysSteps[step.Name]++
+				gate = protectedAlwaysStepGate
+			}
+			if step.If != gate {
+				return fmt.Errorf("%s step %d %q has invalid gate %q", protected.id, index, step.Name, step.If)
+			}
+			if strings.HasPrefix(step.Uses, "actions/checkout@") {
+				checkouts++
+				if step.Uses != requiredPostgresCheckout || step.With["ref"] != "${{ github.sha }}" ||
+					(protected.id == "doc-freshness" && step.With["fetch-depth"] != "0") {
+					return fmt.Errorf("%s step %d %q has invalid checkout pin, ref, or history", protected.id, index, step.Name)
+				}
+			}
+		}
+		if checkouts != 1 {
+			return fmt.Errorf("%s job requires one checkout, got %d", protected.id, checkouts)
+		}
+		if protected.id == "frontend" {
+			for name, count := range alwaysSteps {
+				if count != 1 {
+					return fmt.Errorf("%s job requires one %q step, got %d", protected.id, name, count)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 const requiredPostgresTestDSN = "postgres://postgres:FAKE_POSTGRES_PASSWORD_FOR_TEST_ONLY@127.0.0.1:5432/xirang_test?sslmode=disable"
 
 const requiredPostgresRunnerCommand = `bash ../scripts/run-required-postgres-tests.sh --evidence-dir "${{ runner.temp }}/required-postgres-evidence"`
@@ -131,14 +297,7 @@ var requiredPostgresEnvironment = []string{
 
 func loadPostgresWorkflowJob(t *testing.T) ciWorkflowJob {
 	t.Helper()
-	contents, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "ci.yml"))
-	if err != nil {
-		t.Fatalf("read CI workflow: %v", err)
-	}
-	var workflow ciWorkflow
-	if err := yaml.Unmarshal(contents, &workflow); err != nil {
-		t.Fatalf("parse CI workflow: %v", err)
-	}
+	workflow := loadCIWorkflow(t)
 	job, ok := workflow.Jobs["postgres-migration"]
 	if !ok {
 		t.Fatal("CI workflow has no postgres-migration job")

@@ -162,6 +162,12 @@ CI 的 `CI Event Classification` 记录事件、实际 checkout 和来源身份�
 `Frontend Test & Build` 或 `Doc Freshness Check` 等原源码检查；合并前须核对当前
 候选的有效 required checks，不能只凭 workflow 总体成功或跳过结果判断。
 
+三个受保护源码作业在 workflow 未取消时启动，以便求值隔离名称；只有分类成功且
+mode 为 metadata 时才跳过其全部源码步骤。其他情况执行原源码步骤，普通步骤保留
+前序失败后的默认跳过行为；前端浏览器证据上传和覆盖率检查保留 `always()`，但同样
+受 metadata 排除条件约束。其余源码作业仍在作业级排除 metadata。metadata 的实际
+步骤状态、原检查身份和有效保护状态须在 GitHub 上逐项验证，不能仅凭配置推断通过。
+
 CI 将 push 与 PR 的并发组分开：同一 PR 的 opened／synchronize／reopened 源码运行
 可替代较旧的同组源码运行，每次 edited 使用独立运行组，不取消其他源码运行或同 SHA
 的 main push。PR Metadata 使用独立的 PR 并发组，只取消其自身较旧的标题运行。

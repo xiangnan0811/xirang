@@ -47,7 +47,7 @@ jobs:
   backend:
     name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Backend Test & Build' || 'Backend Test & Build' }}
     needs: [classify]
-    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -56,11 +56,13 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
           ref: ${{ github.sha }}
 
       - name: Setup Go
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: backend/go.mod
@@ -68,12 +70,15 @@ jobs:
           cache-dependency-path: backend/go.sum
 
       - name: Install recovery integration tools
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: sudo apt-get update && sudo apt-get install -y rsync openssh-server
 
       - name: Verify local lint toolchain launcher
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: bash ../scripts/lint-backend.test.sh
 
       - name: Lint backend
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
@@ -84,18 +89,23 @@ jobs:
           only-new-issues: false
 
       - name: Download modules
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: go mod download
 
       - name: Run backend tests
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: go test -coverprofile=coverage.out ./...
 
       - name: Race concurrency-sensitive backend packages
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: go test -race -timeout=20m ./internal/sshutil ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/task/executor ./internal/task/verifier ./internal/ws ./internal/auth ./internal/bootstrap ./internal/policy ./internal/automation ./internal/alerting ./internal/escalation -count=1
 
       - name: Backup-asset coverage floor
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: bash ../scripts/check-backupasset-coverage.sh
 
       - name: Check backend coverage
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: |
           COV=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | sed 's/%//')
           if [ -z "${COV}" ]; then
@@ -109,15 +119,19 @@ jobs:
           fi
 
       - name: Build backend
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: go build ./...
 
       - name: Install govulncheck
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
       - name: Check Go vulnerabilities
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: govulncheck ./...
 
       - name: Backup-asset load contract
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         working-directory: .
         run: BACKUP_ASSET_LOAD_LOCAL=ci-bounded bash scripts/test-backup-asset-load.sh
 
@@ -225,7 +239,7 @@ jobs:
   frontend:
     name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Frontend Test & Build' || 'Frontend Test & Build' }}
     needs: [classify]
-    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -234,11 +248,13 @@ jobs:
         working-directory: web
     steps:
       - name: Checkout
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
           ref: ${{ github.sha }}
 
       - name: Setup Go
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: backend/go.mod
@@ -246,6 +262,7 @@ jobs:
           cache-dependency-path: backend/go.sum
 
       - name: Setup Node.js
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '20'
@@ -253,40 +270,51 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Test immutable release CI gate
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: node --test ../scripts/verify-release-ci.test.mjs
 
       - name: Test CI event classification
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: python3 ../scripts/classify-ci-event.test.py
 
       - name: Install dependencies
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: env -u NODE_ENV npm ci
 
       - name: Verify lint dependency patches
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: npm run check:dependency-patches
 
       - name: Check npm vulnerabilities
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: env -u NODE_ENV npm audit --audit-level=moderate
 
       - name: Run frontend check
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: env -u NODE_ENV npm run check
 
       - name: Install Playwright browsers
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: env -u NODE_ENV npx playwright install --with-deps chromium firefox webkit
 
       - name: Run backup-asset Playwright matrix
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: env -u NODE_ENV npm run e2e:evidence -- --config=playwright.config.ts --output=.tmp/agent/e2e-default
       - name: Prepare real-backend smoke build cache
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         working-directory: backend
         run: go build -o /dev/null ./cmd/server
 
       - name: Install isolated OpenSSH and sqlite3
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: sudo apt-get update && sudo apt-get install -y openssh-server sqlite3
 
       - name: Run real-backend Playwright lifecycle
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: env -u NODE_ENV npm run e2e:evidence -- --config=playwright.real-backend.config.ts --output=.tmp/agent/e2e-real-backend
 
       - name: Upload browser execution evidence
-        if: always()
+        if: ${{ always() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: browser-execution-evidence
@@ -297,11 +325,12 @@ jobs:
           if-no-files-found: error
 
       - name: Check frontend bundle budget
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         # Requires dist/ produced by 'npm run check' (which includes build)
         run: env -u NODE_ENV node scripts/check-bundle-budget.mjs
 
       - name: Check frontend coverage
-        if: always()
+        if: ${{ always() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
         # Enforce report generation; no percentage threshold exists in the repository source of truth.
         run: |
           if [ ! -s coverage/lcov.info ]; then
@@ -677,28 +706,34 @@ jobs:
   doc-freshness:
     name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Doc Freshness Check' || 'Doc Freshness Check' }}
     needs: [classify]
-    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Check doc freshness
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: bash scripts/check-doc-freshness.sh
 
       - name: Self-test doc freshness script
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: bash scripts/check-doc-freshness.test.sh
 
       - name: Check migration documentation version
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: bash scripts/check-migration-version.sh
 
       - name: Self-test migration documentation checker
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: bash scripts/check-migration-version.test.sh
 
       - name: Self-test documentation structure checker
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: python3 scripts/check-doc-structure.test.py
 
   migration-utc-safety:
