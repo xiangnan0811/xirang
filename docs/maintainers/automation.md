@@ -143,6 +143,8 @@ moderate 审计、原 lint 文件集合、ESM/CJS、类型声明、可访问性�
 
 [CI](../../.github/workflows/ci.yml)使用 `pull_request` 检查 PR，push 仅监听 `main`，避免同一 PR 提交重复运行。required checks 的设置与交付步骤见贡献指南；发布链路与凭据归[发布手册](release.md)。
 
+`ci/round29-event-fixture` 是不会合并的 Round29 事件验收分支，通过受控的后端拒绝验证失败传播；原有测试和门禁均保留，其运行结果不能作为源码通过证明。
+
 PR 打开、更新提交、重新打开及编辑均触发 CI 和独立的
 [PR Metadata](../../.github/workflows/pr-metadata.yml) 工作流。`PR Title` 在每次运行时
 通过 GitHub API 读取当前 PR 标题并复用标题校验脚本；API 失败或标题为空即失败。

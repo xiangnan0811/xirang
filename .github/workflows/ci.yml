@@ -60,6 +60,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Round29 controlled rejection
+        run: exit 29
+
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
