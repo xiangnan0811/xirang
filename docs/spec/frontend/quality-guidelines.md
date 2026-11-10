@@ -4,7 +4,7 @@
 
 ## 质量门禁与测试范围
 
-完整前端门禁是 `npm run check`（typecheck、lint、带覆盖率的测试、build），执行位置和交付流程见[贡献指南](../../../CONTRIBUTING.md)。行为变更在合并前通过完整门禁；跨模块类型或时间夹具变更也适用。依赖 audit、Node 版本、lockfile 结构比较与 jsdom selector override 见[仓库自动化](../../maintainers/automation.md)。
+完整前端门禁是 `npm run check`（依赖补丁完整性、中英文 key 对齐、typecheck、lint、带覆盖率的测试、build），执行位置和交付流程见[贡献指南](../../../CONTRIBUTING.md)。行为变更在合并前通过完整门禁；跨模块类型或时间夹具变更也适用。依赖 audit、Node 版本、lockfile 结构比较与 jsdom selector override 见[仓库自动化](../../maintainers/automation.md)。
 
 - 页面测试就近放置；API mapper、工具函数和 Hook 测试放在对应模块旁；UI 原语可使用 `components/ui/__tests__/`。
 - 按变化的行为更新测试，包含加载、成功、空、失败以及用户可见的过期/刷新状态。
@@ -73,6 +73,13 @@ axe 与 computed contrast 的完整测量要求见[可访问性](a11y-guidelines
 ## 语言资源
 
 用户可见文案使用现有 i18n。显式切换语言只能走 `setLanguage()`，启动等待 `i18nReady`，详见[可访问性语言规则](a11y-guidelines.md#语言与语义)。
+
+在 `web/` 执行 `npm run check:i18n` 可单独检查 `zh.ts` 与 `en.ts` 的叶子 key 集合；
+完整前端门禁也会在依赖补丁检查之后、typecheck 之前运行它。嵌套的非空对象按点号路径
+递归，数组和 `null` 等视为叶子，空对象没有叶子。单侧缺失时报告缺失语言及排序后的完整
+路径并以非零状态退出；语言文件缺失、读取、语法或求值错误也以非零状态退出。
+该检查只比较双语 key 是否存在，不校验翻译值、两边同时缺失的 key、代码引用、动态 key、
+复数或间接引用，也不检测未使用的 key。
 
 `i18n/index.ts` 在首次渲染前加载检测语言，另一语言按需懒加载；不要从启动模块静态导入 `i18n/locales/*`，也不要把演示数据或只在管理界面使用的 API 重新塞入启动 bundle。
 
