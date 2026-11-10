@@ -1,4 +1,5 @@
 name: CI
+# round29 synchronize fixture
 
 on:
   push:
@@ -43,6 +44,8 @@ jobs:
           name: ci-event-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-event-record/record.json
           if-no-files-found: error
+      - name: Round29 classifier rejection
+        run: exit 29
 
   backend:
     name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Backend Test & Build' || 'Backend Test & Build' }}
