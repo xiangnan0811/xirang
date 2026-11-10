@@ -147,6 +147,13 @@ PR 打开、更新提交、重新打开及编辑时都会运行 CI；编辑事�
 Conventional Commits 标题。旧运行的重跑仍使用原始事件中的标题，应以编辑后触发的
 新运行结果为准。
 
+前端 CI 和 `scripts/local-ci-parity.sh` 均通过 `npm run check` 继承中英文语言资源
+key 对齐检查；正常 pre-push 调用本地 parity，不另设检查入口。该检查在依赖补丁校验后、
+typecheck 前执行，也可在 `web/` 单独运行 `npm run check:i18n`。它只比较 `zh.ts` 与
+`en.ts` 的叶子 key 集合：单侧缺失时报告缺失语言和排序后的完整路径并非零退出；语言文件
+缺失或读取、语法、求值错误同样非零退出。它不校验翻译值、共同缺失的 key、代码引用、
+动态 key、复数、间接引用或未使用的 key。
+
 PostgreSQL job 只通过 `bash ../scripts/run-required-postgres-tests.sh --evidence-dir ...`
 执行 `scripts/required-postgres-tests.json` 的统一库存，工作目录为backend；不再维护多个
 宽regex、位置参数suite或直接Go测试旁路。独立backup/restore步骤保留。库存/原生声明/

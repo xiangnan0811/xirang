@@ -45,6 +45,12 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
 
+双语 key 对齐检查接入前端统一门禁属于 `ci`／测试／文档变更：只验证 `zh.ts` 与 `en.ts`
+的叶子 key 集合，沿正常 pre-push、本地 parity 与前端 CI 传播失败，不代表代码引用、
+共同缺失或未用 key 已检查。没有应用运行行为、依赖、API、配置或 schema 变化时，说明留在
+`Unreleased`，核对正常 hooks、完整 required CI、合并后同 SHA CI 与 Release Please，
+不为接线单独制造正式版本或镜像。
+
 退役 snapshot 消费者与旧 indexer 的清理说明须区分代码删除和数据处置：兼容读取仍返回 410，live restore 门控、历史表及已发布迁移保留，旧 `SNAPSHOT_INDEX_MAX_SECONDS` 不再有消费者；不得把清理写成新增恢复能力、历史数据销毁或撤销既有迁移限制。纯 `refactor` 按现行提交语义处理，没有正式 release 时将说明留在 `Unreleased`，待实际发行再归入目标版本。
 
 保留策略与删除安全的入口回归迁移按 `test` 语义处理：真实 Coordinator、注册删除 adapter 与分页选择验收替换旧 helper 覆盖，不代表新增保留规则、删除权限或远端 Provider 能力。无 API、配置或 schema migration；保留既有版本的密钥、持久格式及降级限制。未生成正式 release 时，说明保留在 `Unreleased`，并核对同 SHA CI 与 Release Please；不要求为测试迁移单独生成镜像，也不将受控本地烟测记为 AWS live 或生产部署。

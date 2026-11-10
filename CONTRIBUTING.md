@@ -54,7 +54,7 @@ npm run dev
 | 后端测试 | `make backend-test` |
 | 更新 OpenAPI/Swagger 生成物 | `make swag-init` |
 | 前端完整检查 | `(cd web && npm run check)` |
-| 前端逐项检查 | 在 `web/` 执行 `npm run typecheck`、`npm run lint`、`npm run test`、`npm run build` |
+| 前端逐项检查 | 在 `web/` 执行 `npm run check:dependency-patches`、`npm run check:i18n`、`npm run typecheck`、`npm run lint`、`npm run test`、`npm run build` |
 | 项目 lint、测试和构建 | `make check` |
 | 仅 lint、覆盖率 | `make lint`、`make coverage` |
 | 单架构、多架构镜像 | `make docker-build`、`make docker-buildx` |
@@ -64,9 +64,11 @@ npm run dev
 | 迁移 UTC 安全及回归 | `bash scripts/check-migration-utc-safety.sh`、`bash scripts/check-migration-utc-safety.test.sh` |
 | 推送前完整门禁 | `bash scripts/local-ci-parity.sh` |
 
-前端 `npm run check` 包括本地依赖补丁完整性校验、typecheck、lint、测试与构建；pre-push
-还执行后端 lint、测试、构建、漏洞检查、前端完整 moderate 依赖审计、bundle budget 和文档/迁移检查。
-CI 另有 PostgreSQL parity、选定 race、浏览器验收、覆盖率和 Docker 运行时检查。
+前端 `npm run check` 依次执行本地依赖补丁完整性校验、中英文语言资源 key 对齐检查、
+typecheck、lint、测试与构建。正常 pre-push 通过 `scripts/local-ci-parity.sh` 调用该入口，
+前端 CI 也调用同一入口；pre-push 还执行后端 lint、测试、构建、漏洞检查、前端完整
+moderate 依赖审计、bundle budget 和文档/迁移检查。CI 另有 PostgreSQL parity、选定 race、
+浏览器验收、覆盖率和 Docker 运行时检查。
 本地通过不能替代 CI 或真实环境验收。测试证据的选择见
 [测试约定](docs/spec/guides/testing.md)。
 
