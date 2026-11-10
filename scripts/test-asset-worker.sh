@@ -215,6 +215,10 @@ extract_workflow_job asset-worker-closure >"$CLOSURE_JOB_FILE"
 extract_workflow_job asset-worker >"$JOB_FILE"
 [[ -s "$CLOSURE_JOB_FILE" ]] || fail "CI asset-worker-closure job is missing"
 [[ -s "$JOB_FILE" ]] || fail "CI asset-worker job is missing"
+grep -Fxq -- '    needs: [classify]' "$CLOSURE_JOB_FILE" ||
+  fail "CI closure producer must depend on classification"
+grep -Fxq -- '    needs: [classify, asset-worker-closure]' "$JOB_FILE" ||
+  fail "CI Worker must depend on classification and the closure producer"
 for contract in \
   '# asset-worker-closure-no-publish' \
   'arch: amd64' \
@@ -227,7 +231,7 @@ for contract in \
 done
 for contract in \
   '# asset-worker-no-publish' \
-  'needs: asset-worker-closure' \
+  'needs: [classify, asset-worker-closure]' \
   'arch: amd64' \
   'arch: arm64' \
   'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1' \

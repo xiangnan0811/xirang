@@ -42,6 +42,9 @@ require_cmd npm "请安装 Node.js/npm，CI 使用 Node.js 20。"
 require_cmd node "请安装 Node.js，CI 使用 Node.js 20。"
 require_cmd python3 "请安装 Python 3.9+，用于文档结构检查。"
 
+section "CI event classification regression"
+python3 "$ROOT_DIR/scripts/classify-ci-event.test.py"
+
 section "Backend: lint toolchain regression"
 run_script "$ROOT_DIR/scripts/lint-backend.test.sh"
 

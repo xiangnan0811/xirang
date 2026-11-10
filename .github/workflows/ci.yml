@@ -8,28 +8,46 @@ on:
     types: [opened, synchronize, reopened, edited]
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.number || github.ref }}-${{ github.event.action == 'edited' && github.run_id || 'source' }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  pr-title:
-    name: PR Title
-    if: github.event_name == 'pull_request'
+  classify:
+    name: CI Event Classification
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      mode: ${{ steps.event.outputs.mode }}
+      reason: ${{ steps.event.outputs.reason }}
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
-
-      - name: Validate pull request title
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - name: Classify CI event
+        id: event
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: bash scripts/check-pr-title.sh "${PR_TITLE}"
+          GH_TOKEN: ${{ github.token }}
+          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: python3 scripts/classify-ci-event.py --record "$RUNNER_TEMP/ci-event-record/record.json"
+      - name: Upload CI event record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-event-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-event-record/record.json
+          if-no-files-found: error
 
   backend:
-    name: Backend Test & Build
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Backend Test & Build' || 'Backend Test & Build' }}
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -39,6 +57,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -102,7 +122,9 @@ jobs:
         run: BACKUP_ASSET_LOAD_LOCAL=ci-bounded bash scripts/test-backup-asset-load.sh
 
   postgres-migration:
-    name: PostgreSQL Migration Parity
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / PostgreSQL Migration Parity' || 'PostgreSQL Migration Parity' }}
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -139,6 +161,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -182,11 +206,15 @@ jobs:
             bash /tmp/xirang-contract/scripts/postgres-backup-restore.integration.test.sh
 
   cron-backup:
-    name: Isolated Cron Backup Roundtrip
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Isolated Cron Backup Roundtrip' || 'Isolated Cron Backup Roundtrip' }}
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Test isolated cron cleanup protocol
         run: bash scripts/cron-backup-isolated.test.sh
@@ -195,7 +223,9 @@ jobs:
         run: bash scripts/cron-backup-isolated.integration.test.sh
 
   frontend:
-    name: Frontend Test & Build
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Frontend Test & Build' || 'Frontend Test & Build' }}
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -205,6 +235,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -222,6 +254,9 @@ jobs:
 
       - name: Test immutable release CI gate
         run: node --test ../scripts/verify-release-ci.test.mjs
+
+      - name: Test CI event classification
+        run: python3 ../scripts/classify-ci-event.test.py
 
       - name: Install dependencies
         run: env -u NODE_ENV npm ci
@@ -279,7 +314,9 @@ jobs:
           echo "Frontend covered lines entries: ${COVERED}"
 
   account-recovery:
-    name: Account Recovery Browser Acceptance
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Account Recovery Browser Acceptance' || 'Account Recovery Browser Acceptance' }}
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -287,6 +324,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -326,7 +365,9 @@ jobs:
           if-no-files-found: error
 
   walkthrough:
-    name: Complete Browser Walkthrough
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Complete Browser Walkthrough' || 'Complete Browser Walkthrough' }}
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -334,6 +375,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -380,7 +423,9 @@ jobs:
           if-no-files-found: error
 
   docker-build:
-    name: Docker Build (${{ matrix.arch }})
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Docker Build' || 'Docker Build' }} (${{ matrix.arch }})
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -394,6 +439,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Test preserved build input policy
         run: python3 scripts/test-build-inputs.py
@@ -482,7 +529,9 @@ jobs:
 
   asset-worker-closure:
     # asset-worker-closure-no-publish: native builders export exact closure evidence only.
-    name: Asset Worker Runtime Closure (${{ matrix.arch }})
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Asset Worker Runtime Closure' || 'Asset Worker Runtime Closure' }} (${{ matrix.arch }})
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -495,6 +544,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Verify preserved build input contract
         run: python3 scripts/build-inputs.py verify --lock deploy/build-inputs/lock.json
@@ -533,8 +584,9 @@ jobs:
 
   asset-worker:
     # asset-worker-no-publish: this job builds, scans and smokes local images only.
-    name: Asset Worker Build & Scan (${{ matrix.arch }})
-    needs: asset-worker-closure
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Asset Worker Build & Scan' || 'Asset Worker Build & Scan' }} (${{ matrix.arch }})
+    needs: [classify, asset-worker-closure]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') && needs.asset-worker-closure.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -547,6 +599,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -621,12 +675,15 @@ jobs:
           ignore-unfixed: true
 
   doc-freshness:
-    name: Doc Freshness Check
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Doc Freshness Check' || 'Doc Freshness Check' }}
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Check doc freshness
@@ -645,11 +702,15 @@ jobs:
         run: python3 scripts/check-doc-structure.test.py
 
   migration-utc-safety:
-    name: Migration UTC Safety
+    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Migration UTC Safety' || 'Migration UTC Safety' }}
+    needs: [classify]
+    if: ${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
 
       - name: Lint migrations for UTC regression patterns
         run: bash scripts/check-migration-utc-safety.sh

@@ -107,6 +107,9 @@ git push origin <branch>
 1. 向 `main` 创建 PR，说明具体问题、最终行为、受影响合同、验证和未完成验收。
 2. 负责人持续监控全部 required checks；失败在同一工作分支修复、推送并继续监控，
    直到通过或记录真实外部阻塞。失败、pending 或缺失时不得合并。
+   `PR Title` 独立读取并校验当前标题；标题或正文编辑只有在可证明源码候选未变时才
+   使用轻量检查。轻量结果不能代替原源码检查或改变其失败、取消和 pending 状态，
+   缺少证据时仍运行完整源码检查；事件及并发规则见[仓库自动化](docs/maintainers/automation.md#actions-与-ci)。
 3. 维护者优先使用 squash merge，保留符合规范的 PR 标题；不要直接向 `main` 推送变更。
 4. 合并后按 [发布手册](docs/maintainers/release.md) 检查 Release Please、正式发布、
    Docker 镜像和相关 Docker Hub 描述同步。未触发正式发布时，明确说明未预期产生

@@ -45,6 +45,15 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
 
+PR 标题／正文编辑的轻量分类及并发隔离见[仓库自动化](automation.md#actions-与-ci)。
+正文仍是已合并 PR 的 Release Please override 输入，也是 Release PR 发行说明审阅的载体；
+编辑后应核对当前标题和有效 required checks。轻量 metadata 检查或来源记录不能证明
+源码测试通过，也不能替代发布要求的同 SHA `main` push 完整 CI。
+
+纯 `ci`／`test`／`docs` 变更没有需发行的运行行为或依赖修复时，说明保留在
+`Unreleased`，不为此单独制造正式版本或镜像；仍核对正常 hooks、required CI、
+合并后同 SHA 的完整 `main` push CI 与 Release Please 的实际结果。
+
 双语 key 对齐检查接入前端统一门禁属于 `ci`／测试／文档变更：只验证 `zh.ts` 与 `en.ts`
 的叶子 key 集合，沿正常 pre-push、本地 parity 与前端 CI 传播失败，不代表代码引用、
 共同缺失或未用 key 已检查。没有应用运行行为、依赖、API、配置或 schema 变化时，说明留在
@@ -141,7 +150,7 @@ Core curl `8.22.0-r0` → `8.23.0-r0` 同样保留不可安装旧锁定、同版
 同一版本同时包含 Core 专属包、共享构建包及前端测试工具补丁时，按各条目分别保留影响范围和生效条件，再完整归入目标版本；不得将某一项“不改变 Worker inventory”的结论扩大到整个版本。
 0.73.6 的 Worker Python 补丁须保留 `3.12.15-r0` → `3.12.16-r0`、CVE-2026-115557，以及四个 Python 子包的双架构完整输入更新。显式 root 与输入投影改变 Worker 工具链指纹，必须同源重建 Core/Worker，更新架构匹配闭包、签名 bundle 与 proof，排空在途处理后切换；CI 临时签名 fixture 不等于生产签名制品。本依赖补丁无新增配置或迁移，配套回退会恢复旧漏洞风险，且不能覆盖同版本业务迁移的降级限制。
 
-人工补齐 Release PR 时，先核对 manifest 的目标版本与 CHANGELOG 版本标题一致，再原样迁移已审阅的升级警告；不要为了移动章节改写上一发行版的保留/删除边界。编辑 PR 正文必须保留 Release Please 生成的首尾标识及分隔符，只更新中间版本说明，否则合并后可能无法识别发布。该补充提交仍走提交钩子与 PR required checks，不直接修改正式 tag。已合并 PR 的正文编辑也可能触发 CI 并取消同 ref 的运行；如需恢复，应重跑原 `push` CI 并核对同 SHA 的完整结果，不能用 PR CI 代替发布准入。
+人工补齐 Release PR 时，先核对 manifest 的目标版本与 CHANGELOG 版本标题一致，再原样迁移已审阅的升级警告；不要为了移动章节改写上一发行版的保留/删除边界。编辑 PR 正文必须保留 Release Please 生成的首尾标识及分隔符，只更新中间版本说明，否则合并后可能无法识别发布。该补充提交仍走提交钩子与 PR required checks，不直接修改正式 tag。已合并 PR 的正文编辑仍可能触发 CI；按[事件分类和并发规则](automation.md#actions-与-ci)核对运行及原 `push` CI 状态，不能用 PR CI 或 metadata 检查代替同 SHA 发布准入。历史运行重跑仍遵循其原工作流定义。
 
 已发布版本若遗漏上述说明，通过文档 PR 将已审阅条目归入对应历史版本，并同步现有 GitHub Release 正文后重新读取核对；这是发布说明勘误，不修改版本号、移动或重打 tag，也不重新发布镜像。
 

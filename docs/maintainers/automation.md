@@ -143,9 +143,29 @@ moderate 审计、原 lint 文件集合、ESM/CJS、类型声明、可访问性�
 
 [CI](../../.github/workflows/ci.yml)使用 `pull_request` 检查 PR，push 仅监听 `main`，避免同一 PR 提交重复运行。required checks 的设置与交付步骤见贡献指南；发布链路与凭据归[发布手册](release.md)。
 
-PR 打开、更新提交、重新打开及编辑时都会运行 CI；编辑事件用于重新校验修改后的
-Conventional Commits 标题。旧运行的重跑仍使用原始事件中的标题，应以编辑后触发的
-新运行结果为准。
+PR 打开、更新提交、重新打开及编辑均触发 CI 和独立的
+[PR Metadata](../../.github/workflows/pr-metadata.yml) 工作流。`PR Title` 在每次运行时
+通过 GitHub API 读取当前 PR 标题并复用标题校验脚本；API 失败或标题为空即失败。
+旧工作流定义的历史运行重跑仍使用其原始行为，应核对当前标题对应的有效检查结果。
+
+CI 的 `CI Event Classification` 记录事件、实际 checkout 和来源身份。只有 `edited`
+事件的变化明确仅含标题或正文，且权威 PR 状态、候选源码和可用来源记录均匹配，
+才归类为 metadata；未知变化、身份漂移或证据缺失／不可读取均保守运行完整源码检查。
+打开、同步、重新打开及 `main` push 始终运行完整源码检查；分类作业失败、跳过或
+输出不可用也运行完整源码检查，整个 workflow 被取消时不视为通过。
+
+对打开的 PR，分类比较当前 head、base 和 merge 候选的提交及 tree；对已合并 PR，
+比较固定 merge 提交与同仓库 `main` push 的源码记录，即使当前 main 已前进也不以
+新 checkout 代替原合并来源。记录只证明验证输入，不证明测试成功；来源运行的
+失败、取消或 pending 状态仍须保留并阻断相应门禁。metadata 作业使用
+`Metadata only / ` 前缀隔离名称，不能替代 `Backend Test & Build`、
+`Frontend Test & Build` 或 `Doc Freshness Check` 等原源码检查；合并前须核对当前
+候选的有效 required checks，不能只凭 workflow 总体成功或跳过结果判断。
+
+CI 将 push 与 PR 的并发组分开：同一 PR 的 opened／synchronize／reopened 源码运行
+可替代较旧的同组源码运行，每次 edited 使用独立运行组，不取消其他源码运行或同 SHA
+的 main push。PR Metadata 使用独立的 PR 并发组，只取消其自身较旧的标题运行。
+合并后的正文仍可用于 Release Please override 和发行说明审阅，规则见[发布手册](release.md)。
 
 前端 CI 和 `scripts/local-ci-parity.sh` 均通过 `npm run check` 继承中英文语言资源
 key 对齐检查；正常 pre-push 调用本地 parity，不另设检查入口。该检查在依赖补丁校验后、
@@ -189,7 +209,7 @@ fixture 并清理；不接受共享手工 fixture 作为自动化通过证据。
 校验与清理边界见[测试指南](../spec/guides/testing.md)。
 
 默认 mock 和真实后端均经安全事件 runner 执行，真实后端不再以 Chromium-only 选择
-遗漏已声明的 Firefox/WebKit 项目。账户恢复与完整 walkthrough 各有独立无条件 CI job；
+遗漏已声明的 Firefox/WebKit 项目。完整源码 CI 中账户恢复与完整 walkthrough 各有独立 job；
 账户恢复保持安全 reporter 和零重试，walkthrough 独占4177，失败也汇编并上传证据。
 原464场景不缩减，Docker/history新增状态由独立显式配置执行。正常 typecheck/check
 包含严格 ES2023/DOM/Node 的全部 e2e 与 Playwright 配置，不把测试加入生产 bundle。

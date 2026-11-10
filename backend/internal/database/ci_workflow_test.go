@@ -19,6 +19,8 @@ type ciWorkflow struct {
 }
 
 type ciWorkflowJob struct {
+	Name     string             `yaml:"name"`
+	Needs    []string           `yaml:"needs"`
 	Defaults ciWorkflowDefaults `yaml:"defaults"`
 	If       string             `yaml:"if"`
 	Env      map[string]string  `yaml:"env"`
@@ -113,6 +115,10 @@ const requiredPostgresTestDSN = "postgres://postgres:FAKE_POSTGRES_PASSWORD_FOR_
 
 const requiredPostgresRunnerCommand = `bash ../scripts/run-required-postgres-tests.sh --evidence-dir "${{ runner.temp }}/required-postgres-evidence"`
 
+const requiredPostgresSourceGate = "${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}"
+const requiredPostgresJobName = "${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / PostgreSQL Migration Parity' || 'PostgreSQL Migration Parity' }}"
+const requiredPostgresCheckout = "actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0"
+
 var requiredPostgresEnvironment = []string{
 	"REQUIRE_POSTGRES_MIGRATION_TEST", "REQUIRE_POSTGRES_RECOVERY_TEST",
 	"REQUIRE_POSTGRES_CATALOG_TEST", "REQUIRE_POSTGRES_SEARCH_TEST",
@@ -141,8 +147,11 @@ func loadPostgresWorkflowJob(t *testing.T) ciWorkflowJob {
 }
 
 func validateRequiredPostgresWorkflow(job ciWorkflowJob) error {
-	if job.If != "" || job.Env["TEST_POSTGRES_DSN"] != requiredPostgresTestDSN {
-		return fmt.Errorf("postgres job is conditional or has an unexpected test DSN")
+	if job.If != requiredPostgresSourceGate || !slices.Equal(job.Needs, []string{"classify"}) || job.Name != requiredPostgresJobName {
+		return fmt.Errorf("postgres job does not use the required source gate, dependency, and isolated metadata name")
+	}
+	if job.Env["TEST_POSTGRES_DSN"] != requiredPostgresTestDSN {
+		return fmt.Errorf("postgres job has an unexpected test DSN")
 	}
 	if job.Services["postgres"].Image == "" {
 		return fmt.Errorf("postgres service is missing")
@@ -153,8 +162,14 @@ func validateRequiredPostgresWorkflow(job ciWorkflowJob) error {
 		}
 	}
 	goTest := regexp.MustCompile(`\bgo[[:space:]]+test\b`)
-	runners, selftests, uploads, backups := 0, 0, 0, 0
+	runners, selftests, uploads, backups, checkouts := 0, 0, 0, 0, 0
 	for _, step := range job.Steps {
+		if strings.HasPrefix(step.Uses, "actions/checkout@") {
+			if step.Uses != requiredPostgresCheckout || step.With["ref"] != "${{ github.sha }}" || step.If != "" {
+				return fmt.Errorf("postgres checkout must use the pinned action and event SHA")
+			}
+			checkouts++
+		}
 		command := strings.TrimSpace(step.Run)
 		activeLines := make([]string, 0)
 		for _, line := range strings.Split(command, "\n") {
@@ -199,8 +214,8 @@ func validateRequiredPostgresWorkflow(job ciWorkflowJob) error {
 			uploads++
 		}
 	}
-	if runners != 1 || selftests != 1 || uploads != 1 || backups != 1 {
-		return fmt.Errorf("postgres job requires one inventory runner, protocol selftest, evidence upload, and backup/restore step; got %d/%d/%d/%d", runners, selftests, uploads, backups)
+	if runners != 1 || selftests != 1 || uploads != 1 || backups != 1 || checkouts != 1 {
+		return fmt.Errorf("postgres job requires one inventory runner, protocol selftest, evidence upload, backup/restore step, and checkout; got %d/%d/%d/%d/%d", runners, selftests, uploads, backups, checkouts)
 	}
 	return nil
 }
@@ -225,6 +240,24 @@ func TestRequiredPostgresWorkflowRejectsBypasses(t *testing.T) {
 		name   string
 		mutate func(*ciWorkflowJob)
 	}{
+		{"job-if-false", func(job *ciWorkflowJob) { job.If = "false" }},
+		{"mode-only-gate", func(job *ciWorkflowJob) { job.If = "${{ !cancelled() && needs.classify.outputs.mode != 'metadata' }}" }},
+		{"missing-classify", func(job *ciWorkflowJob) { job.Needs = nil }},
+		{"metadata-source-name", func(job *ciWorkflowJob) { job.Name = "PostgreSQL Migration Parity" }},
+		{"checkout-head-ref", func(job *ciWorkflowJob) {
+			for i := range job.Steps {
+				if strings.HasPrefix(job.Steps[i].Uses, "actions/checkout@") {
+					job.Steps[i].With["ref"] = "${{ github.event.pull_request.head.sha }}"
+				}
+			}
+		}},
+		{"checkout-moving-ref", func(job *ciWorkflowJob) {
+			for i := range job.Steps {
+				if strings.HasPrefix(job.Steps[i].Uses, "actions/checkout@") {
+					job.Steps[i].With["ref"] = "main"
+				}
+			}
+		}},
 		{"direct-go-test", func(job *ciWorkflowJob) {
 			job.Steps = append(job.Steps, ciWorkflowStep{Run: "env GOFLAGS='' go test ./internal/database"})
 		}},
@@ -267,6 +300,14 @@ func TestRequiredPostgresWorkflowRejectsBypasses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			job := base
 			job.Steps = append([]ciWorkflowStep(nil), base.Steps...)
+			for i := range job.Steps {
+				if base.Steps[i].With != nil {
+					job.Steps[i].With = make(map[string]string, len(base.Steps[i].With))
+					for key, value := range base.Steps[i].With {
+						job.Steps[i].With[key] = value
+					}
+				}
+			}
 			job.Env = make(map[string]string, len(base.Env))
 			for key, value := range base.Env {
 				job.Env[key] = value
