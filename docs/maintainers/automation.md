@@ -343,6 +343,13 @@ roots 固定具体包名和版本，不使用可由多个包满足的虚拟名�
 明确为 `openssh-client-default=10.2_p1-r0`，与迁移前实际选中的包及版本相同，
 避免 `openssh-client` 在 default 与 krb5 provider 之间重新选择。
 
+本次待原生 amd64 与 arm64 采集的配方将 Go 来源固定为
+`golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf`。
+Core 保留的 Nginx 基础镜像含旧版 libxslt，因此通过 `libxslt=1.1.43-r4` root
+执行真实升级事务；Worker 仍通过传递依赖解析，须由两架构采集证明其安装了 r4。
+成功采集同一 run 的已签名候选并完成来源和内容验证、采用及审查前，不得声称产品
+已采用这些输入；当前产品消费者仍使用 Go 1.27.3。
+
 [Preserve Build Inputs](../../.github/workflows/build-inputs.yml)在 `build-inputs/**`
 维护分支的相关文件 push 或手动执行时，分别使用原生 amd64 与 arm64 runner。
 采集保留一次真实安装事务下载的全部原始 APK、包名/版本/架构/大小/SHA-256、
