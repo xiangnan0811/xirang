@@ -112,6 +112,80 @@ function expectMismatch(result, missingLanguage, paths) {
   expect(result.stdout).not.toContain("i18n keys aligned");
 }
 
+// The real checker requires every locked patched package, matcher and requester.
+// Copy complete verified packages, but only package.json for other requesters and
+// their ancestors; their unrelated files are not inputs to the checker.
+function copyDependencyFixture(root) {
+  const sources = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, "dependency-patches/sources.json"), "utf8"));
+  const lock = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, "package-lock.json"), "utf8"));
+  const patchedNames = new Set(sources.packages.map((item) => item.name));
+  const relevantNames = new Set([...patchedNames, sources.matcher.name]);
+  const packages = new Map();
+
+  for (const [relative, entry] of Object.entries(lock.packages)) {
+    if (!relative) continue;
+    const parts = relative.split("/");
+    const lastLayer = parts.lastIndexOf("node_modules");
+    const slot = parts.slice(lastLayer + 1).join("/");
+    const relevant = relevantNames.has(slot) || relevantNames.has(entry.name);
+    const requester = ["dependencies", "optionalDependencies", "peerDependencies"].some((type) =>
+      Object.keys(entry[type] ?? {}).some((name) => patchedNames.has(name)),
+    );
+    if (!relevant && !requester) continue;
+
+    // A nested package can only be reached by the checker through its parent
+    // package's own directory and package.json.
+    for (let index = 0; index < parts.length;) {
+      if (parts[index] !== "node_modules") throw new Error(`invalid lock package path: ${relative}`);
+      index += 1;
+      const name = parts[index++];
+      if (!name || name === "." || name === "..") throw new Error(`invalid lock package path: ${relative}`);
+      if (name.startsWith("@")) {
+        const scopedName = parts[index++];
+        if (!scopedName || scopedName === "." || scopedName === "..") throw new Error(`invalid lock package path: ${relative}`);
+      }
+      const packageRoot = parts.slice(0, index).join("/");
+      packages.set(packageRoot, packages.get(packageRoot) || (index === parts.length && relevant));
+    }
+  }
+
+  fs.cpSync(path.join(WEB_ROOT, "dependency-patches"), path.join(root, "dependency-patches"), {
+    recursive: true,
+    verbatimSymlinks: true,
+    mode: fs.constants.COPYFILE_FICLONE,
+  });
+  for (const [relative, complete] of packages) {
+    let source = WEB_ROOT;
+    for (const part of relative.split("/")) {
+      source = path.join(source, part);
+      const stats = fs.lstatSync(source);
+      if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error(`invalid dependency fixture directory: ${source}`);
+    }
+    const destination = path.join(root, relative);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    if (complete) {
+      const nestedModules = path.join(source, "node_modules");
+      fs.cpSync(source, destination, {
+        recursive: true,
+        verbatimSymlinks: true,
+        mode: fs.constants.COPYFILE_FICLONE,
+        filter: (entry) => {
+          if (entry !== nestedModules) return true;
+          const stats = fs.lstatSync(entry);
+          if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error(`invalid dependency fixture directory: ${entry}`);
+          return false;
+        },
+      });
+    } else {
+      fs.mkdirSync(destination, { recursive: true });
+      const manifest = path.join(source, "package.json");
+      const stats = fs.lstatSync(manifest);
+      if (stats.isSymbolicLink() || !stats.isFile()) throw new Error(`invalid dependency fixture file: ${manifest}`);
+      fs.copyFileSync(manifest, path.join(destination, "package.json"));
+    }
+  }
+}
+
 describe("i18n key parity checker", () => {
   it("accepts aligned nested and quoted keys, treating arrays and null as leaves and empty objects as no leaves", () => {
     const root = makeFixture();
@@ -180,15 +254,7 @@ describe("i18n key parity checker", () => {
       path.join(WEB_ROOT, "scripts/check-lint-dependency-patches.mjs"),
       path.join(root, "scripts/check-lint-dependency-patches.mjs"),
     );
-    // The real dependency checker rejects symlinked package trees. Copy its inputs
-    // so it runs normally against the fixture before the intentional parity failure.
-    for (const directory of ["dependency-patches", "node_modules"]) {
-      fs.cpSync(path.join(WEB_ROOT, directory), path.join(root, directory), {
-        recursive: true,
-        verbatimSymlinks: true,
-        mode: fs.constants.COPYFILE_FICLONE,
-      });
-    }
+    copyDependencyFixture(root);
     const result = run("npm", ["run", "check"], root, 120_000);
     expect(result.stdout).toContain("lint-dependency-patches: verified");
     expectMismatch(result, "en", ["nested.only-zh"]);

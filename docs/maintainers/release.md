@@ -62,6 +62,9 @@ check ID，保留原源码检查结果；只有对应来源 job、check 与整�
 共同缺失或未用 key 已检查。没有应用运行行为、依赖、API、配置或 schema 变化时，说明留在
 `Unreleased`，核对正常 hooks、完整 required CI、合并后同 SHA CI 与 Release Please，
 不为接线单独制造正式版本或镜像。
+该 npm 门禁的失败传播夹具按现有锁文件和依赖补丁元数据复制真实所需输入，避免整个
+`node_modules` 的复制／清理使 teardown 超时；真实依赖完整性校验、npm key 不一致失败
+传播和私有目录身份保护保持。该修复仅限测试，仍留在 `Unreleased`，不单独发行版本。
 
 退役 snapshot 消费者与旧 indexer 的清理说明须区分代码删除和数据处置：兼容读取仍返回 410，live restore 门控、历史表及已发布迁移保留，旧 `SNAPSHOT_INDEX_MAX_SECONDS` 不再有消费者；不得把清理写成新增恢复能力、历史数据销毁或撤销既有迁移限制。纯 `refactor` 按现行提交语义处理，没有正式 release 时将说明留在 `Unreleased`，待实际发行再归入目标版本。
 
