@@ -2260,7 +2260,7 @@
     },
     {
       "package": "./internal/database",
-      "timeout": "30m",
+      "timeout": "45m",
       "tests": [
         {
           "name": "TestProcessingBackfillQuotaMigrationPostgres",

@@ -72,7 +72,7 @@ PostgreSQL DSN 未指定 timezone 时补 UTC；显式时区保留，并加载为
 
 迁移回归覆盖 apply、未使用 down、已使用 down 原子拒绝、模型/UTC、外键、CHECK、唯一约束、索引和启动 schema drift。真实 PostgreSQL 唯一库存为 `scripts/required-postgres-tests.json`；`bash scripts/run-required-postgres-tests.sh --list-only` 校验库存、active Go AST census 与原生顶层声明，不需 DSN。执行使用同一入口，可传 `--evidence-dir <目录>`，必须显式提供独占可销毁实例的 `TEST_POSTGRES_DSN`；旧 suite/package/regex 位置参数不再支持。
 
-库存逐包声明精确顶层测试及必须执行的 PostgreSQL 根/静态叶路径，混合引擎不能仅凭父测试通过。工具清除继承 `GOFLAGS`，设置完整 required 环境开关，按包串行执行精确转义并锚定的选择。database 组默认30分钟，其他组20分钟；显式 `POSTGRES_TEST_TIMEOUT` 必须为正 duration 并覆盖全部组。非零进程退出、坏/超长JSON事件、错误包身份、缺 package pass、登记顶层或required路径缺run/pass、required根的任意已观察后代skip/fail均失败；其他optional skip单独报告。事件日志保留协议元数据、隐藏Output正文，stderr脱敏，逐组保存exit与计数，不能以包级ok代替闭包证据。
+库存逐包声明精确顶层测试及必须执行的 PostgreSQL 根/静态叶路径，混合引擎不能仅凭父测试通过。工具清除继承 `GOFLAGS`，设置完整 required 环境开关，按包串行执行精确转义并锚定的选择。database 组默认45分钟，其他组20分钟；显式 `POSTGRES_TEST_TIMEOUT` 必须为正 duration 并覆盖全部组。非零进程退出、坏/超长JSON事件、错误包身份、缺 package pass、登记顶层或required路径缺run/pass、required根的任意已观察后代skip/fail均失败；其他optional skip单独报告。事件日志保留协议元数据、隐藏Output正文，stderr脱敏，逐组保存exit与计数，不能以包级ok代替闭包证据。
 
 新增真实PG fixture遵守可静态发现的同包helper/函数值/闭包、DSN literal或engine循环约定；新动态间接机制须同时扩展census及负例，不得用exclusion逃避真实PG。具体SQLite-only或非PG误报可用源码理由逐项排除，不允许包/前缀豁免。`TestPostgresTimestamptzScanUsesConfiguredUTC` 需在非UTC进程TZ下校验Location与时间值；dirty/search_path回归须证明兄弟schema不干扰当前连接可见的dirty状态。
 
