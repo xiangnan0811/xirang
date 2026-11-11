@@ -16,15 +16,15 @@
     "go": {
       "platforms": {
         "linux/amd64": {
-          "digest": "sha256:cd410a5c6686417875bc4815688e96ae9769f8562debc545d29fe58e73d174f0"
+          "digest": "sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586"
         },
         "linux/arm64": {
-          "digest": "sha256:866d2c31bdecdade2f3249ef6413647c3521e7f2afe40c432bb15c792cb0cb18"
+          "digest": "sha256:e8e55b7bf3a0faeba720580aa7e4acc04d516e424a5b275eee4f55e98f28dffd"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5",
-      "source": "golang:1.27.3-alpine3.24@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd",
-      "source_index": "{\"manifests\":[{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"amd64\",\"org.opencontainers.image.base.digest\":\"sha256:d56c381f961d307a21b3ca004cf1e3910f106644aefb1f43e654c8a56c4fd395\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-10-20T02:42:10Z\",\"org.opencontainers.image.revision\":\"41d9b4da70324ae7b6461ac2cc401b06719ff57d\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#41d9b4da70324ae7b6461ac2cc401b06719ff57d:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.3-alpine3.24\"},\"digest\":\"sha256:cd410a5c6686417875bc4815688e96ae9769f8562debc545d29fe58e73d174f0\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"amd64\",\"os\":\"linux\"},\"size\":1921},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"amd64\",\"vnd.docker.reference.digest\":\"sha256:cd410a5c6686417875bc4815688e96ae9769f8562debc545d29fe58e73d174f0\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:97018b306785a0ac998a75fa3e6ba7531e8a730550e2ee8c31e21864dd46bc52\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm32v6\",\"org.opencontainers.image.base.digest\":\"sha256:d3c3fda3e4d3f0fcfc86cf469c6dfbe65017143dde23feb4b11df37c373cdc76\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-10-20T02:41:23Z\",\"org.opencontainers.image.revision\":\"41d9b4da70324ae7b6461ac2cc401b06719ff57d\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#41d9b4da70324ae7b6461ac2cc401b06719ff57d:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.3-alpine3.24\"},\"digest\":\"sha256:b3cd6ccbdc57828e8e325efe71436f84d6613a46fa443b719e645d13f567b940\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"arm\",\"os\":\"linux\",\"variant\":\"v6\"},\"size\":1923},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm32v6\",\"vnd.docker.reference.digest\":\"sha256:b3cd6ccbdc57828e8e325efe71436f84d6613a46fa443b719e645d13f567b940\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:d8197be5984bbbe98682a65c648baef5346ecd522136d4fd7e140f9f24e48229\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":567},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm32v7\",\"org.opencontainers.image.base.digest\":\"sha256:0a13654ecd9b19a728f0bee49d7245ffcd9b9f31ed8d69fe8753e39a8432bda2\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-10-20T02:42:26Z\",\"org.opencontainers.image.revision\":\"41d9b4da70324ae7b6461ac2cc401b06719ff57d\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#41d9b4da70324ae7b6461ac2cc401b06719ff57d:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.3-alpine3.24\"},\"digest\":\"sha256:aa5546324e718eb153bd0331bb06e746bf54da85732381fbe7d89d4e0e237f4d\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"arm\",\"os\":\"linux\",\"variant\":\"v7\"},\"size\":1923},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm32v7\",\"vnd.docker.reference.digest\":\"sha256:aa5546324e718eb153bd0331bb06e746bf54da85732381fbe7d89d4e0e237f4d\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:f606fd8f564675de71413ecf76be999b7e7fa68b6213dfe0a276a41f84736bf6\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm64v8\",\"org.opencontainers.image.base.digest\":\"sha256:260479a1cfaf304c4c20da7f8405d3ce313513dcd534bb743257bdd2fe0f3e2d\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-10-20T02:42:12Z\",\"org.opencontainers.image.revision\":\"41d9b4da70324ae7b6461ac2cc401b06719ff57d\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#41d9b4da70324ae7b6461ac2cc401b06719ff57d:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.3-alpine3.24\"},\"digest\":\"sha256:866d2c31bdecdade2f3249ef6413647c3521e7f2afe40c432bb15c792cb0cb18\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"arm64\",\"os\":\"linux\",\"variant\":\"v8\"},\"size\":1923},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm64v8\",\"vnd.docker.reference.digest\":\"sha256:866d2c31bdecdade2f3249ef6413647c3521e7f2afe40c432bb15c792cb0cb18\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:28fde0d7d458001adf9214c446c88ed8a0e1988db74b51a1c14803d0bd44b0ac\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"i386\",\"org.opencontainers.image.base.digest\":\"sha256:c54a80678a9e7a744b39d478329d5eb8e568c2e0321defd14cab57047557e202\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-10-20T02:42:11Z\",\"org.opencontainers.image.revision\":\"41d9b4da70324ae7b6461ac2cc401b06719ff57d\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#41d9b4da70324ae7b6461ac2cc401b06719ff57d:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.3-alpine3.24\"},\"digest\":\"sha256:b0196521c16f22f9c7089b22091faef25f433543471ebfeca51d1850f009d055\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"386\",\"os\":\"linux\"},\"size\":1920},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"i386\",\"vnd.docker.reference.digest\":\"sha256:b0196521c16f22f9c7089b22091faef25f433543471ebfeca51d1850f009d055\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:44bc5d56580b8bf2d49ed2fc6536ec5cfcdd9c5d18bc85b51c9d13d50b3a2109\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"ppc64le\",\"org.opencontainers.image.base.digest\":\"sha256:f34b729ba6dc5bcd147ff99af45f81c1bc68ab619067c39cafd19327dd04b7db\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-10-20T02:42:49Z\",\"org.opencontainers.image.revision\":\"41d9b4da70324ae7b6461ac2cc401b06719ff57d\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#41d9b4da70324ae7b6461ac2cc401b06719ff57d:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.3-alpine3.24\"},\"digest\":\"sha256:e6ac4677e818e2ca8601b8bcf6fdc8d19f9eba45f8a95acf7c12b056d5f41b33\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"ppc64le\",\"os\":\"linux\"},\"size\":1923},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"ppc64le\",\"vnd.docker.reference.digest\":\"sha256:e6ac4677e818e2ca8601b8bcf6fdc8d19f9eba45f8a95acf7c12b056d5f41b33\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:b24e733ef8c3233ab197a198f10606d49b2135f56432e3ef81395fcba3d8e9cb\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"riscv64\",\"org.opencontainers.image.base.digest\":\"sha256:1320e86f94641acc6c531e0519ca4285f1882612d52c654dfa4f1bb65b48a04f\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-10-20T02:51:01Z\",\"org.opencontainers.image.revision\":\"41d9b4da70324ae7b6461ac2cc401b06719ff57d\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#41d9b4da70324ae7b6461ac2cc401b06719ff57d:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.3-alpine3.24\"},\"digest\":\"sha256:4ba4943d0a1847ca7b5b7c26c66dc0688ed8beb93a2bf86a9717a4d54380bd70\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"riscv64\",\"os\":\"linux\"},\"size\":1923},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"riscv64\",\"vnd.docker.reference.digest\":\"sha256:4ba4943d0a1847ca7b5b7c26c66dc0688ed8beb93a2bf86a9717a4d54380bd70\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:efadc30f209182ff9ae4c3cd94ef12c275f64fdefed02f27f15970d9bc50b563\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"s390x\",\"org.opencontainers.image.base.digest\":\"sha256:ce2789264b55ef57693ad3aebc95d4ee9e46288f769f43ab5f37554853502289\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-10-20T02:40:42Z\",\"org.opencontainers.image.revision\":\"41d9b4da70324ae7b6461ac2cc401b06719ff57d\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#41d9b4da70324ae7b6461ac2cc401b06719ff57d:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.3-alpine3.24\"},\"digest\":\"sha256:d7aa76ea79c1609709696adfee4c94cccbee2bfd21068c30a5b7b4119836bdb5\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"s390x\",\"os\":\"linux\"},\"size\":1921},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"s390x\",\"vnd.docker.reference.digest\":\"sha256:d7aa76ea79c1609709696adfee4c94cccbee2bfd21068c30a5b7b4119836bdb5\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:8a71fe4faeae1890eee4f84a2c915ebb89c3597814fc0c0664fec27700139a8a\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840}],\"mediaType\":\"application\\/vnd.oci.image.index.v1+json\",\"schemaVersion\":2}"
+      "ref": "docker.io/linnea7171/xirang@sha256:adf296efebd945f153f77f6fe1b7806be3f50f09c7edbc4f815deb8cb1932da4",
+      "source": "golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf",
+      "source_index": "{\"manifests\":[{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"amd64\",\"org.opencontainers.image.base.digest\":\"sha256:0f49f331d9212aff11b932863be4eb01cdf962969aa86dab7d1ee21ac6f5f52b\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-11-10T18:20:18Z\",\"org.opencontainers.image.revision\":\"6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.4-alpine3.24\"},\"digest\":\"sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"amd64\",\"os\":\"linux\"},\"size\":1921},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"amd64\",\"vnd.docker.reference.digest\":\"sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:9b34bbd30e217da3d848a9fc42baf8ecf05da35614a8fb6f578332a0ae592491\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm32v6\",\"org.opencontainers.image.base.digest\":\"sha256:24744e247e00c323a54ca655da31f3ac39761bab0247939599b711d7f7a4b0e3\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-11-10T18:18:37Z\",\"org.opencontainers.image.revision\":\"6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.4-alpine3.24\"},\"digest\":\"sha256:5f8b46174c4070eb2f4a5122aec47fc6765bf58ac8f592f00b5232524bf65e7d\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"arm\",\"os\":\"linux\",\"variant\":\"v6\"},\"size\":1923},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm32v6\",\"vnd.docker.reference.digest\":\"sha256:5f8b46174c4070eb2f4a5122aec47fc6765bf58ac8f592f00b5232524bf65e7d\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:ed290b83ab8c1536b9059fec3b009e6880acae3509c5e8dde42638a558cc168b\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":567},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm32v7\",\"org.opencontainers.image.base.digest\":\"sha256:d8d3f7634d0afcb22c20139248d0255a89cf7807c2e96a7c7ff0ab0217ef557b\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-11-10T18:19:32Z\",\"org.opencontainers.image.revision\":\"6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.4-alpine3.24\"},\"digest\":\"sha256:98c04012f4416e4057c9f1a103990ad42e8c99a548fa22c1e0a10246ea573293\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"arm\",\"os\":\"linux\",\"variant\":\"v7\"},\"size\":1923},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm32v7\",\"vnd.docker.reference.digest\":\"sha256:98c04012f4416e4057c9f1a103990ad42e8c99a548fa22c1e0a10246ea573293\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:c3bc3500b17472bc69052122a8aced7fc57aeae0dd4806aebe5d362c8ff777a5\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm64v8\",\"org.opencontainers.image.base.digest\":\"sha256:1829893486be257df5049ab3b7fc95afbd0fc09d89803cbc580bda1ba5386b29\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-11-10T18:19:14Z\",\"org.opencontainers.image.revision\":\"6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.4-alpine3.24\"},\"digest\":\"sha256:e8e55b7bf3a0faeba720580aa7e4acc04d516e424a5b275eee4f55e98f28dffd\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"arm64\",\"os\":\"linux\",\"variant\":\"v8\"},\"size\":1923},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"arm64v8\",\"vnd.docker.reference.digest\":\"sha256:e8e55b7bf3a0faeba720580aa7e4acc04d516e424a5b275eee4f55e98f28dffd\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:d98af9bfe41d0ac205f858e2558f94248c44eefdff95098e279a2686ed627ce0\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"i386\",\"org.opencontainers.image.base.digest\":\"sha256:55d68c85222dd92297b0f8885354739d89f0dc17fc2f903c49dc1d9c129c3d6a\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-11-10T18:19:25Z\",\"org.opencontainers.image.revision\":\"6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.4-alpine3.24\"},\"digest\":\"sha256:3fa3141af405cd501efee09fa14c8429514f8a3f88b36cfc183a7a60c197c879\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"386\",\"os\":\"linux\"},\"size\":1920},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"i386\",\"vnd.docker.reference.digest\":\"sha256:3fa3141af405cd501efee09fa14c8429514f8a3f88b36cfc183a7a60c197c879\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:91c09c5990d74549f871f0be95a736857a60366068deceacbb1d8d85540ec14c\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"ppc64le\",\"org.opencontainers.image.base.digest\":\"sha256:7ed963991a76f3bec91d6d651756adc85b4f15d6c3465c2abb1a5ff8f6660a92\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-11-10T18:20:00Z\",\"org.opencontainers.image.revision\":\"6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.4-alpine3.24\"},\"digest\":\"sha256:ae80c89e4dbdc28b7ab4ade2a893e45d001bbf63b219decfd697fea9b2fd4225\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"ppc64le\",\"os\":\"linux\"},\"size\":1923},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"ppc64le\",\"vnd.docker.reference.digest\":\"sha256:ae80c89e4dbdc28b7ab4ade2a893e45d001bbf63b219decfd697fea9b2fd4225\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:60ebda669fc287b53791730e0bba2df1384e58c2c51b4835ece70f5b563dd893\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"s390x\",\"org.opencontainers.image.base.digest\":\"sha256:5731f4bc195f1efc2807ea6a33a2d2bc0f5abbf5bfb799269129f67560209c22\",\"org.opencontainers.image.base.name\":\"alpine:3.24\",\"org.opencontainers.image.created\":\"2026-11-10T18:18:03Z\",\"org.opencontainers.image.revision\":\"6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a\",\"org.opencontainers.image.source\":\"https:\\/\\/github.com\\/docker-library\\/golang.git#6aa5c5f09346fb65fdefa941a23eb3cb25ba7b1a:1.27\\/alpine3.24\",\"org.opencontainers.image.url\":\"https:\\/\\/hub.docker.com\\/_\\/golang\",\"org.opencontainers.image.version\":\"1.27.4-alpine3.24\"},\"digest\":\"sha256:2b41a7875d65987e963685847562478f6a3375a354047ab41f4187493a804801\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"s390x\",\"os\":\"linux\"},\"size\":1921},{\"annotations\":{\"com.docker.official-images.bashbrew.arch\":\"s390x\",\"vnd.docker.reference.digest\":\"sha256:2b41a7875d65987e963685847562478f6a3375a354047ab41f4187493a804801\",\"vnd.docker.reference.type\":\"attestation-manifest\"},\"digest\":\"sha256:73e92af5e7185ca112cde12880e955125eb756f10111c5d35facad1eb4f0b0ef\",\"mediaType\":\"application\\/vnd.oci.image.manifest.v1+json\",\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"},\"size\":840}],\"mediaType\":\"application\\/vnd.oci.image.index.v1+json\",\"schemaVersion\":2}"
     },
     "nginx": {
       "platforms": {
@@ -58,19 +58,19 @@
       "base": "go",
       "platforms": {
         "linux/amd64": {
-          "compressed_apk_bytes": 73012771,
-          "manifest_sha256": "8905cbbeab6e5f5e55bef6dfe906962d56b746ae133cb4456b0c1f687c185b31",
-          "package_count": 17,
-          "ref": "docker.io/linnea7171/xirang@sha256:801c71e103d81f4b9104a1cf6536a1b9f4e0ac11a25a3f71ecceccadde6e4be0"
+          "compressed_apk_bytes": 72583707,
+          "manifest_sha256": "ec41d0654393a4fce2b7af58a10eef6155a8864b11e94165e986634079d9162b",
+          "package_count": 15,
+          "ref": "docker.io/linnea7171/xirang@sha256:ae2be71cb5104677a7e79bbe9af0a2ab653afa087bcacf560026f967f94a4ce7"
         },
         "linux/arm64": {
-          "compressed_apk_bytes": 64028299,
-          "manifest_sha256": "973f4f4690cd73a3c7c498f4cd79325bf40ffdba0f2598e026dcf212fae32dbe",
-          "package_count": 17,
-          "ref": "docker.io/linnea7171/xirang@sha256:120220b66da51f666c1a7941c8a5d5d4b26b4bdeabd3c3b5fb0522cf17b243ea"
+          "compressed_apk_bytes": 63593686,
+          "manifest_sha256": "a4a229090ea36299059e2011a1166d211b37e235048d8b93c1091ee367e97156",
+          "package_count": 15,
+          "ref": "docker.io/linnea7171/xirang@sha256:c4e8bd8b6760dfee17bc1f3a170f18ba322ef63c8b4431005114875852bbd228"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:8c463d956e6ed08b95238549e0ab66d155ed0ba33225ee6580d6bf8fe301b620",
+      "ref": "docker.io/linnea7171/xirang@sha256:8f64c0214de579a3c687d3aae34e8f8781575977434b3418d7d968862ca7abf6",
       "roots": [
         "gcc=15.2.0-r5",
         "musl-dev=1.2.6-r3",
@@ -83,19 +83,19 @@
       "base": "nginx",
       "platforms": {
         "linux/amd64": {
-          "compressed_apk_bytes": 11581375,
-          "manifest_sha256": "eaab74343b79f6ca14cf3b6bb49706607314efb8d738b81e79ea365a7512d0c5",
-          "package_count": 40,
-          "ref": "docker.io/linnea7171/xirang@sha256:fa541902c4bd2e6d8f9ff163d0fa3497f398cb43603d57e23b4cb6fca321d54f"
+          "compressed_apk_bytes": 11711250,
+          "manifest_sha256": "8b9d8f318e86bf51f8972a174b46961c14f6e26fa4a4642f2faadae99c2e181b",
+          "package_count": 41,
+          "ref": "docker.io/linnea7171/xirang@sha256:b4a7384e7582bda88174e86510226147d5c9e6b9561f69dcdd0b2a57349c9fb1"
         },
         "linux/arm64": {
-          "compressed_apk_bytes": 12029063,
-          "manifest_sha256": "bf99ebe2f77e33ce57a3757066f30d211474a473627ed7755aefc4bc426ce604",
-          "package_count": 40,
-          "ref": "docker.io/linnea7171/xirang@sha256:85e5c40e4ef342ed1e42b7dd0dab7f37065ce284ae7a21a10f866b4ee3ac8375"
+          "compressed_apk_bytes": 12160298,
+          "manifest_sha256": "18484d9bf29749c38b5e747044b8f402b664159c2d6b8baeb28afac2dbd939b8",
+          "package_count": 41,
+          "ref": "docker.io/linnea7171/xirang@sha256:bfb2b06437dc43c8d5cc5a2b3acdbbf5af0b9b96bb69aac172c284937a431a74"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:b4da651fa21f99c420a495ffb481ac1bee667839d39f43811db9f2b419eb3004",
+      "ref": "docker.io/linnea7171/xirang@sha256:993c5e080c1c7ecbb47d5c869ee1e37269c0118b8ba55855a9936c5080a75762",
       "roots": [
         "bash=5.3.3-r1",
         "brotli-libs=1.2.1-r0",
@@ -106,6 +106,7 @@
         "libssl3=3.5.9-r0",
         "libuuid=2.41.6-r1",
         "libxml2=2.13.9-r1",
+        "libxslt=1.1.43-r4",
         "mount=2.41.6-r1",
         "musl-utils=1.2.5-r24",
         "musl=1.2.5-r24",
@@ -125,21 +126,21 @@
       "base": "go",
       "platforms": {
         "linux/amd64": {
-          "compressed_apk_bytes": 6680105,
-          "manifest_sha256": "8060b358823dc53dc3a1a0307be822f46932a301dd5121b2ced9a28b06c5c4b2",
-          "package_count": 15,
-          "ref": "docker.io/linnea7171/xirang@sha256:a0f2d12542fcf3e89dc838c9f687e590879a77e29001a27aceb72d29d860c383"
+          "compressed_apk_bytes": 6252427,
+          "manifest_sha256": "7cfc351fda047c31e5e17c414482898ed32cc3c86d1abc84a81abe46112ad7c0",
+          "package_count": 13,
+          "ref": "docker.io/linnea7171/xirang@sha256:8b0c492c8b1335b4fc58f815887d888abe3281c082f314cf9ec8bf86767efc72"
         },
         "linux/arm64": {
-          "compressed_apk_bytes": 6716307,
-          "manifest_sha256": "add5e95080ca010d70dd9b8e33208d60d50fb1d302c22bddc0607195633d25fb",
-          "package_count": 15,
-          "ref": "docker.io/linnea7171/xirang@sha256:f8551a6c40f089d4597c294ff460e38a72b9092b16818171f3813ba8f0621c98"
+          "compressed_apk_bytes": 6283220,
+          "manifest_sha256": "f3f6d8d398874a81689b674f4f38eedbc132780bdfa989980b0ed9274d219edc",
+          "package_count": 13,
+          "ref": "docker.io/linnea7171/xirang@sha256:44b7391b1f441e4d72f627c83cddb510a967e689ee8e15b94c60a3cc362f1cc7"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:2b464787fb5bb9bcc1fa86a6f1f35b545715f2b125f7bee1807d3b5e8df5f997",
+      "ref": "docker.io/linnea7171/xirang@sha256:dee2084418d15e35aac3af1ddecc26af38a5e15224d773c4cb6dffcaf37dce8b",
       "roots": [
-        "git=2.54.0-r0",
+        "git=2.54.1-r0",
         "musl-utils=1.2.6-r3",
         "musl=1.2.6-r3",
         "zlib=1.4-r0"
@@ -149,19 +150,19 @@
       "base": "alpine",
       "platforms": {
         "linux/amd64": {
-          "compressed_apk_bytes": 574351455,
-          "manifest_sha256": "c6b4e12c5fb17946981d59e7f450d3d10cd74179f28e0d97331d3b6df37856c5",
+          "compressed_apk_bytes": 574351696,
+          "manifest_sha256": "048d6cddb25a802063b744c04c8fd98efed0d5d038d799005a69eace299d0f8c",
           "package_count": 366,
-          "ref": "docker.io/linnea7171/xirang@sha256:7d827dab71fd461b05483789b5da056ff643fedc2f334d3390130d8155f2bc8a"
+          "ref": "docker.io/linnea7171/xirang@sha256:5769d9d8722db46cc661e280564f2a720dadd1ca5f0f4977654c1709287fa362"
         },
         "linux/arm64": {
-          "compressed_apk_bytes": 549071203,
-          "manifest_sha256": "b4241bb2e0c454a3f9fc4f8ff69d7b9bfc31584780d6e175b68a06a28129c2cb",
+          "compressed_apk_bytes": 549071379,
+          "manifest_sha256": "0658018ee4833d04c6832272773670f7f7a281941900c9a67b22117db8f36979",
           "package_count": 365,
-          "ref": "docker.io/linnea7171/xirang@sha256:b0bd01ee478a9d250c33ca1ff2530bee813e38e0d8de24739ff02b0ec7078aab"
+          "ref": "docker.io/linnea7171/xirang@sha256:813e930482e9d8b6b91333ccd2500d39cce0ddacddd86b12b5913359b96d8d2a"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:27474054d4f320d40af77f11105c26614a6cb6bcb34fdde717170f4607f9bba0",
+      "ref": "docker.io/linnea7171/xirang@sha256:94b2a2c82c4f8cc2e83049109688f0dfde0ca2fcc09b888d1ee087b805c75fbd",
       "roots": [
         "bash=5.3.3-r1",
         "clamav=1.4.4-r0",
@@ -189,5 +190,5 @@
   },
   "registry": "docker.io/linnea7171/xirang",
   "schema_version": 1,
-  "spec_sha256": "c6a412e4f16bf7c83d8af6eaccfa50a48d34ffe3a84ddba48cb917b4d9d0af88"
+  "spec_sha256": "421d4dc4099eb424d8b55a82a7d35ff99fcebc6ce9e785086789410d6e94b4b2"
 }

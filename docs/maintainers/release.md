@@ -45,11 +45,49 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
 
+PR 标题／正文编辑的轻量分类及并发隔离见[仓库自动化](automation.md#actions-与-ci)。
+正文仍是已合并 PR 的 Release Please override 输入，也是 Release PR 发行说明审阅的载体；
+编辑后应核对当前标题和有效 required checks。metadata 的三个固定同名检查产生新的
+check ID，保留原源码检查结果；只有对应来源 job、check 与整个来源 workflow 均成功，
+验证者才通过，pending 等待，失败或证据不可读则阻断。metadata 验证不运行源码测试，
+也不能替代发布要求的同 SHA `main` push 完整 CI；合并后正文编辑同样须核对原 push
+运行的身份与结果。
+
+Go 1.27.4 与 libxslt 运行依赖安全修复属于实际产品输入更新，按 `fix` 正常发行，
+不适用纯 CI 免发行判断。Release PR 和正式 Release 说明须保留
+[GO-2026-6859](https://vuln.go.dev/ID/GO-2026-6859.json)、
+[CVE-2026-87636](https://security.alpinelinux.org/vuln/CVE-2026-87636) 与
+[CVE-2026-9947](https://security.alpinelinux.org/vuln/CVE-2026-9947)，以及 Core 直接
+`libxslt=1.1.43-r4` 和 Worker 实际传递 r3 → r4 的区别。Q2 的八事务还包含新 Go 基础镜像
+带来的 Alpine 3.24 补丁、证书、APK 工具及加密库变化；supercronic 构建阶段 Git 从
+不可安装的 `2.54.0-r0` 改为 `2.54.1-r0`，其上游修复见
+[Git 安全公告](https://github.blog/open-source/git/git-security-vulnerabilities-announced-7/)。
+这些输入及其来源见[构建输入](automation.md#构建输入保留与更新)，Git 不属于 Worker inventory。
+
+升级前保全数据库、配置、匹配密钥及备份副本，暂停 backfill 并排空旧 Core／Worker
+在途操作，同源重建和替换 Core、Worker 与 supercronic 二进制，配套更新共享 toolchain／
+pipeline 指纹、架构匹配的最终 closure、授权签名 bundle 和 proof。回退须恢复匹配的整套
+二进制、镜像及制品，会恢复旧 Go／libxslt 已知漏洞和旧构建工具风险；既有迁移降级
+限制继续适用。本次不新增 API、配置、schema 或迁移；Worker 仍非 GA、默认关闭。
+
+每次完整成功的 PR 源码、合并后 main、Release PR 源码及发行 main CI，都须使用各自
+amd64 profile smoke 上传的七份签名 fixture 原件／receipt，并按[测试约定](../spec/guides/testing.md#worker-profile-签名证据)
+核验双架构 closure、签名与重启后指纹。私有导出只接受独占绝对目录及匹配 checkout 的
+合法 CI 身份；环境变量不认证生产者，临时测试公钥和 receipt 不是生产 proof。输入采集、
+CI 及正式镜像发布各自取证，任何一项不能替代其他项或证明生产部署。
+
+纯 `ci`／`test`／`docs` 变更没有需发行的运行行为或依赖修复时，说明保留在
+`Unreleased`，不为此单独制造正式版本或镜像；仍核对正常 hooks、required CI、
+合并后同 SHA 的完整 `main` push CI 与 Release Please 的实际结果。
+
 双语 key 对齐检查接入前端统一门禁属于 `ci`／测试／文档变更：只验证 `zh.ts` 与 `en.ts`
 的叶子 key 集合，沿正常 pre-push、本地 parity 与前端 CI 传播失败，不代表代码引用、
 共同缺失或未用 key 已检查。没有应用运行行为、依赖、API、配置或 schema 变化时，说明留在
 `Unreleased`，核对正常 hooks、完整 required CI、合并后同 SHA CI 与 Release Please，
 不为接线单独制造正式版本或镜像。
+该 npm 门禁的失败传播夹具按现有锁文件和依赖补丁元数据复制真实所需输入，避免整个
+`node_modules` 的复制／清理使 teardown 超时；真实依赖完整性校验、npm key 不一致失败
+传播和私有目录身份保护保持。该修复仅限测试，仍留在 `Unreleased`，不单独发行版本。
 
 退役 snapshot 消费者与旧 indexer 的清理说明须区分代码删除和数据处置：兼容读取仍返回 410，live restore 门控、历史表及已发布迁移保留，旧 `SNAPSHOT_INDEX_MAX_SECONDS` 不再有消费者；不得把清理写成新增恢复能力、历史数据销毁或撤销既有迁移限制。纯 `refactor` 按现行提交语义处理，没有正式 release 时将说明留在 `Unreleased`，待实际发行再归入目标版本。
 
@@ -141,7 +179,7 @@ Core curl `8.22.0-r0` → `8.23.0-r0` 同样保留不可安装旧锁定、同版
 同一版本同时包含 Core 专属包、共享构建包及前端测试工具补丁时，按各条目分别保留影响范围和生效条件，再完整归入目标版本；不得将某一项“不改变 Worker inventory”的结论扩大到整个版本。
 0.73.6 的 Worker Python 补丁须保留 `3.12.15-r0` → `3.12.16-r0`、CVE-2026-115557，以及四个 Python 子包的双架构完整输入更新。显式 root 与输入投影改变 Worker 工具链指纹，必须同源重建 Core/Worker，更新架构匹配闭包、签名 bundle 与 proof，排空在途处理后切换；CI 临时签名 fixture 不等于生产签名制品。本依赖补丁无新增配置或迁移，配套回退会恢复旧漏洞风险，且不能覆盖同版本业务迁移的降级限制。
 
-人工补齐 Release PR 时，先核对 manifest 的目标版本与 CHANGELOG 版本标题一致，再原样迁移已审阅的升级警告；不要为了移动章节改写上一发行版的保留/删除边界。编辑 PR 正文必须保留 Release Please 生成的首尾标识及分隔符，只更新中间版本说明，否则合并后可能无法识别发布。该补充提交仍走提交钩子与 PR required checks，不直接修改正式 tag。已合并 PR 的正文编辑也可能触发 CI 并取消同 ref 的运行；如需恢复，应重跑原 `push` CI 并核对同 SHA 的完整结果，不能用 PR CI 代替发布准入。
+人工补齐 Release PR 时，先核对 manifest 的目标版本与 CHANGELOG 版本标题一致，再原样迁移已审阅的升级警告；不要为了移动章节改写上一发行版的保留/删除边界。编辑 PR 正文必须保留 Release Please 生成的首尾标识及分隔符，只更新中间版本说明，否则合并后可能无法识别发布。该补充提交仍走提交钩子与 PR required checks，不直接修改正式 tag。已合并 PR 的正文编辑仍可能触发 CI；按[事件分类和并发规则](automation.md#actions-与-ci)核对运行及原 `push` CI 状态，不能用 PR CI 或 metadata 检查代替同 SHA 发布准入。历史运行重跑仍遵循其原工作流定义。
 
 已发布版本若遗漏上述说明，通过文档 PR 将已审阅条目归入对应历史版本，并同步现有 GitHub Release 正文后重新读取核对；这是发布说明勘误，不修改版本号、移动或重打 tag，也不重新发布镜像。
 

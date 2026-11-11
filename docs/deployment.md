@@ -150,6 +150,14 @@ Python 安全补丁将 Worker 的 `pyc`、`python3`、`python3-pyc` 与
 或迁移；配套回退会恢复旧 Python 漏洞风险，且仍受同版本稳定身份密钥和 Portable V2
 的恢复限制约束。
 
+Go 1.27.4 与 libxslt 安全更新要求重建并替换 Core 和 supercronic；若使用 Worker，
+还须暂停 backfill、排空旧处理，并从同一源码配套重建并切换 Worker、Core、匹配架构的
+最终 closure 和授权签名 bundle／proof。Core 直接固定 `libxslt=1.1.43-r4`，Worker 通过
+实际传递依赖获得 r4；工具链与 pipeline 指纹随真实输入更新，不能复用旧制品或仅重启
+旧容器。先保全数据库、配置、密钥和备份，回退时恢复整套匹配版本，旧版会恢复 Go 与
+libxslt 漏洞风险。此更新无新增 API、配置或数据库迁移；既有降级限制仍适用。CI 的临时
+签名材料不是生产授权制品，输入采集成功也不代表公开发行或生产部署已完成。
+
 受管 Recovery 不属于上述无 Worker 可用承诺：当前实现启用它时要求 Processing 已就绪且具备恶意软件证据服务，本机与远程 Worker 均关闭时不满足准入。旧版普通任务恢复仍按各执行器的证据和授权要求处理，不能代替受管恢复的安全检查。部署前须按[处理与导出合同](spec/domains/backup-processing-export.md)核验实际需要的恢复路径。
 
 Profile 固定使用以下本地身份和权限合同：

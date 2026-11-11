@@ -557,10 +557,9 @@ done
 for contract in \
   'asset-worker-closure:' \
   '# asset-worker-closure-no-publish' \
-  'Asset Worker Runtime Closure (${{ matrix.arch }})' \
   'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1' \
   'name: asset-worker-runtime-closure-${{ matrix.arch }}' \
-  'needs: asset-worker-closure' \
+  'needs: [classify, asset-worker-closure]' \
   'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1' \
   'name: asset-worker-runtime-closure-amd64' \
   'name: asset-worker-runtime-closure-arm64' \
@@ -777,7 +776,9 @@ expect_mutation_failure permissive-seccomp seccomp 's/"SCMP_ACT_ERRNO"/"SCMP_ACT
 expect_mutation_failure missing-mount-denial seccomp 's/"mount", //'
 expect_mutation_failure worker-publish workflow '/# asset-worker-no-publish/a\      - run: docker push example.invalid/xirang-asset-worker:test'
 expect_mutation_failure missing-closure-producer workflow '/^  asset-worker-closure:/,/^  asset-worker:/d'
-expect_mutation_failure missing-closure-dependency workflow '/^[[:space:]]*needs: asset-worker-closure$/d'
+expect_mutation_failure missing-closure-dependency workflow 's/needs: \[classify, asset-worker-closure\]/needs: [classify]/'
+expect_mutation_failure missing-closure-classify-dependency workflow '/^  asset-worker-closure:/,/^  asset-worker:/s/needs: \[classify\]/needs: []/'
+expect_mutation_failure missing-worker-classify-dependency workflow 's/needs: \[classify, asset-worker-closure\]/needs: [asset-worker-closure]/'
 expect_mutation_failure unpinned-closure-upload workflow 's#actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a#actions/upload-artifact@main#'
 expect_mutation_failure unpinned-closure-download workflow 's#actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c#actions/download-artifact@main#'
 expect_mutation_failure swapped-amd64-artifact-path workflow 's#asset-worker-runtime-closure-amd64/runtime-closure.v1.json#asset-worker-runtime-closure-arm64/runtime-closure.v1.json#'

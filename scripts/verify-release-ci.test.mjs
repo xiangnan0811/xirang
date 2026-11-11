@@ -25,6 +25,23 @@ test('only exact repository main push CI is release evidence', () => {
   assert.equal(selectReleaseCI([...ineligible, success], repository, sha).id, 10);
 });
 
+test('newer metadata runs cannot replace or mask same-SHA main push evidence', () => {
+  const metadataRuns = [
+    { ...success, id: 12, event: 'pull_request' },
+    { ...success, id: 13, event: 'pull_request', path: '.github/workflows/pr-metadata.yml' },
+  ];
+  assert.equal(selectReleaseCI(metadataRuns, repository, sha), null);
+  assert.equal(selectReleaseCI([success, ...metadataRuns], repository, sha).id, success.id);
+  for (const conclusion of ['failure', 'cancelled']) {
+    assert.throws(() => selectReleaseCI([
+      success, { ...success, id: 11, conclusion }, ...metadataRuns,
+    ], repository, sha), /release denied/);
+  }
+  assert.equal(selectReleaseCI([
+    success, { ...success, id: 11, status: 'in_progress', conclusion: null }, ...metadataRuns,
+  ], repository, sha), null);
+});
+
 test('newer failed or unfinished CI cannot be hidden by earlier success', () => {
   assert.throws(() => selectReleaseCI([success, { ...success, id: 11, conclusion: 'failure' }], repository, sha), /release denied/);
   assert.equal(selectReleaseCI([success, { ...success, id: 11, status: 'in_progress', conclusion: null }], repository, sha), null);

@@ -1,7 +1,7 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:8c463d956e6ed08b95238549e0ab66d155ed0ba33225ee6580d6bf8fe301b620 AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:2b464787fb5bb9bcc1fa86a6f1f35b545715f2b125f7bee1807d3b5e8df5f997 AS supercronic-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:b4da651fa21f99c420a495ffb481ac1bee667839d39f43811db9f2b419eb3004 AS core-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:8f64c0214de579a3c687d3aae34e8f8781575977434b3418d7d968862ca7abf6 AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:dee2084418d15e35aac3af1ddecc26af38a5e15224d773c4cb6dffcaf37dce8b AS supercronic-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:993c5e080c1c7ecbb47d5c869ee1e37269c0118b8ba55855a9936c5080a75762 AS core-runtime-inputs
 
 FROM docker.io/linnea7171/xirang@sha256:3e4c9ad8b3fd601ce93e5a8f7a77a639efe8d7d36846846c5179f89175f89d86 AS web-builder
 
@@ -14,7 +14,7 @@ COPY web/ ./
 RUN npm run check:dependency-patches
 RUN npm run build
 
-FROM docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5 AS backend-builder
+FROM docker.io/linnea7171/xirang@sha256:adf296efebd945f153f77f6fe1b7806be3f50f09c7edbc4f815deb8cb1932da4 AS backend-builder
 
 WORKDIR /app/backend
 ARG TARGETOS
@@ -43,13 +43,13 @@ RUN set -eux; \
 
 # 自行使用与后端一致的 Go 工具链编译 supercronic，避免官方预编译二进制带入过期 stdlib 的 HIGH CVE，
 # 并支持 linux/amd64 与 linux/arm64 交叉编译。
-FROM docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5 AS supercronic-builder
+FROM docker.io/linnea7171/xirang@sha256:adf296efebd945f153f77f6fe1b7806be3f50f09c7edbc4f815deb8cb1932da4 AS supercronic-builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG SUPERCRONIC_COMMIT=c14d35dd8bb0d34e984097d5613cef2eea4a675f
 RUN --network=none --mount=from=supercronic-builder-inputs,source=/inputs,target=/build-inputs \
     sh /build-inputs/install.sh supercronic-builder "$TARGETARCH" -- \
-      git=2.54.0-r0 \
+      git=2.54.1-r0 \
       musl-utils=1.2.6-r3 \
       musl=1.2.6-r3 \
       zlib=1.4-r0
@@ -79,6 +79,7 @@ RUN --network=none --mount=from=core-runtime-inputs,source=/inputs,target=/build
       libssl3=3.5.9-r0 \
       libuuid=2.41.6-r1 \
       libxml2=2.13.9-r1 \
+      libxslt=1.1.43-r4 \
       mount=2.41.6-r1 \
       musl-utils=1.2.5-r24 \
       musl=1.2.5-r24 \
