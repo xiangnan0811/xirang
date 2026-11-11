@@ -168,7 +168,7 @@ mode 为 metadata 时才跳过其全部源码步骤。其他情况执行原源�
 受 metadata 排除条件约束。其余源码作业仍在作业级排除 metadata。metadata 的实际
 步骤状态、原检查身份和有效保护状态须在 GitHub 上逐项验证，不能仅凭配置推断通过。
 
-未合并的 Round29 fixture 使用受控失败验证 CI 门禁，不属于应用功能。
+未合并的 Round29 fixture 使用受控源码失败和分类失败验证 CI 门禁，不属于应用功能。
 
 CI 将 push 与 PR 的并发组分开：同一 PR 的 opened／synchronize／reopened 源码运行
 可替代较旧的同组源码运行，每次 edited 使用独立运行组，不取消其他源码运行或同 SHA
