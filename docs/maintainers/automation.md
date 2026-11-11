@@ -178,7 +178,7 @@ neutral 等非成功终态，或证据不可读取、身份不匹配、验证超
 其余源码作业仍在作业级排除 metadata。metadata 的实际步骤状态、来源及新 check 身份
 和有效保护状态须在 GitHub 上逐项验证，不能仅凭配置推断通过。
 
-未合并的 Round29 fixture 使用受控源码失败和等待验证 CI 门禁，不属于应用功能。
+未合并的 Round29 fixture 使用受控源码失败、等待和分类失败验证 CI 门禁，不属于应用功能。
 
 使用新版 PR Overview 时，可从页首 `Merge status` 查看 required、等待及实际结论，
 在 `Checks` 按提交、workflow 和运行查看步骤与日志；同时核对当前候选的有效合并状态。

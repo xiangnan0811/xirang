@@ -44,6 +44,8 @@ jobs:
           name: ci-event-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-event-record/record.json
           if-no-files-found: error
+      - name: Round29 classifier rejection
+        run: exit 29
 
   backend:
     name: Backend Test & Build
