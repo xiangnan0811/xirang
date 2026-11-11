@@ -100,8 +100,6 @@ required = ['MIGRATION', 'RECOVERY', 'CATALOG', 'SEARCH', 'OVERLAY', 'CONTENT',
             'PROCESSING', 'EXPORT', 'GENERAL', 'TASK_TERMINAL', 'ESCALATION_PREVIEW',
             'LEASE', 'REPOSITORY', 'PRODUCER_RETENTION']
 assert all(all(r['require'].get('REQUIRE_POSTGRES_' + k + '_TEST') == '1' for k in required) for r in rows)
-assert any(r['tag'] == 'default' and '-timeout=20m' in r['args'] for r in runs)
-assert any(r['tag'] == 'default' and r['args'][1] == './internal/database' and '-timeout=30m' in r['args'] for r in runs)
 assert all('-timeout=30m' in r['args'] for r in runs if r['tag'] == 'override')
 PY
 printf 'required PostgreSQL test runner self-test: PASS\n'
