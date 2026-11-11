@@ -2,10 +2,17 @@
 
 ## Unreleased
 
+### Go 与运行时安全输入
+
+- 将 Core／Worker／supercronic 的 Go 构建工具链从 1.27.3 更新到 1.27.4，修复 [GO-2026-6859](https://vuln.go.dev/ID/GO-2026-6859.json)。Core 在保留的 Nginx 基础镜像上直接固定 `libxslt=1.1.43-r4`，Worker 通过实际传递依赖从 r3 更新到 r4，修复 [CVE-2026-87636](https://security.alpinelinux.org/vuln/CVE-2026-87636) 和 [CVE-2026-9947](https://security.alpinelinux.org/vuln/CVE-2026-9947)。
+- 双架构真实输入来自同一次已验签原生采集 [Q2](https://github.com/xiangnan0811/xirang/actions/runs/42972630089)，绑定提交 `f2eb82e7aff90b3b00da64655e09f2d5ef755bd4`；完整八份事务还包含新 Go 基础镜像中的 Alpine 3.24 补丁、APK 工具、CA 证书和加密库变化。supercronic 构建阶段的 Git 从已不可安装的 `2.54.0-r0` 改为 `2.54.1-r0`（[上游安全公告](https://github.blog/open-source/git/git-security-vulnerabilities-announced-7/)）；Git 不加入 Worker inventory。采集、验签、禁网重放和扫描不能替代最终镜像及正式发行验收。
+- 保全数据库、匹配密钥、配置和备份副本，暂停 backfill 并排空旧 Core／Worker 在途操作，同源重建替换 Core、Worker 和 supercronic，更新共享 toolchain／pipeline 指纹、架构匹配的最终闭包及授权签名 bundle／proof 后配套切换。CI 临时签名 fixture 和 receipt 只证明隔离测试，不是生产签名。回退须恢复匹配整套制品，会恢复旧 Go／libxslt 漏洞及旧构建工具风险；既有迁移降级限制保持。Worker 仍非 GA、默认关闭；无新增 API、配置、schema 或迁移，也不代表已发行或部署。
+- 本运行依赖修复按 `fix` 正常发行；提交语义、同源码完整 CI 和正式镜像发布均须各自验收，不手动指定版本。
+
 ### PR 编辑事件与源码 CI 隔离
 
 - 标题检查独立读取当前 PR 标题；仅标题／正文编辑且可证明源码候选不变时使用轻量验证，证据不足或候选变化时继续完整源码验证。三个源码 required 名称固定，metadata 产生新的同名 check ID，只有对应来源 job、check 和整个源码 workflow 均成功才通过；pending 等待，失败、取消及证据失效均阻断，原源码 ID 与结果保留，并发组继续隔离。
-- 保留合并后正文用于 Release Please override 和发行说明审阅，以及同 SHA `main` push 完整 CI 发布准入；本次仅为 CI、测试与文档变更，不因此单独制造正式版本或镜像。
+- 保留合并后正文用于 Release Please override 和发行说明审阅，以及同 SHA `main` push 完整 CI 发布准入；该门禁本身仅为 CI、测试与文档变更，不因此单独制造正式版本或镜像。
 
 ### 中英文语言资源门禁
 

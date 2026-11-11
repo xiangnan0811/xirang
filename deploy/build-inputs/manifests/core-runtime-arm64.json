@@ -140,6 +140,14 @@
     },
     {
       "arch": "aarch64",
+      "file": "libxslt-1.1.43-r4.apk",
+      "name": "libxslt",
+      "sha256": "25bbedc83e8cc4bcfbf3b8ec7f5cea9d732f0a9c0cc193558952d44b379c07b2",
+      "size": 131235,
+      "version": "1.1.43-r4"
+    },
+    {
+      "arch": "aarch64",
       "file": "libxxhash-0.8.3-r0.apk",
       "name": "libxxhash",
       "sha256": "e386829780b1bb7a28c88de94ecae56ca261fff88f10d6f845c0a7355f795a99",
@@ -980,7 +988,7 @@
     {
       "arch": "aarch64",
       "name": "libxslt",
-      "version": "1.1.43-r3"
+      "version": "1.1.43-r4"
     },
     {
       "arch": "aarch64",
@@ -1176,6 +1184,7 @@
     "libssl3=3.5.9-r0",
     "libuuid=2.41.6-r1",
     "libxml2=2.13.9-r1",
+    "libxslt=1.1.43-r4",
     "mount=2.41.6-r1",
     "musl-utils=1.2.5-r24",
     "musl=1.2.5-r24",

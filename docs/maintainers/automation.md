@@ -9,13 +9,13 @@
 安全告警与安全修复不受常规版本更新排期约束。替换旧机器人 PR 前先记录精确 PR 编号与 head 分支，只关闭该名单；不得用动态“全部关闭”查询误伤新安全 PR。
 
 离线账户恢复工具直接使用已锁定的 `golang.org/x/term v0.46.0` 读取控制终端，
-因此在 `backend/go.mod` 声明为直接依赖；本次不升级该版本、Go 工具链或其他模块。
+因此在 `backend/go.mod` 声明为直接依赖；该账户恢复变更本身不升级此依赖、Go 工具链或其他模块。
 验证须包含真实 PTY 的无回显与重定向输入拒绝，不能以模块下载或编译成功替代。
 
 ### Go 工具链升级
 
-项目使用 Go 1.27.3；CI 从 `backend/go.mod` 读取版本。Core、Worker 和
-supercronic 的构建镜像同步固定到 Go 1.27.3 / Alpine 3.24 的多架构摘要，
+项目使用 Go 1.27.4；CI 从 `backend/go.mod` 读取版本。Core、Worker 和
+supercronic 的构建镜像同步固定到 Go 1.27.4 / Alpine 3.24 的多架构摘要，
 Worker 的 `BuilderBase` 运行环境指纹和镜像检查脚本须随之更新。
 保留 SQLite 所需的 CGO，以及与运行镜像兼容的 musl；升级 Go 不自动升级 Alpine 主线。
 
@@ -27,8 +27,8 @@ Go 升级不要求所有模块跟随更新。先核对上游兼容说明、构�
 SSH 轮换预验证候选将 `golang.org/x/net` 从 v0.59.0 定向更新到 v0.60.0，
 修复 HTTP/2 安全公告；未升级其他模块。验收继续使用固定版本 govulncheck
 及完整本地 CI 门禁，不以依赖升级代替业务验证。
-远端标准库扫描要求 Go 1.27.3 安全补丁；本地验证须显式使用
-`GOTOOLCHAIN=go1.27.3`，避免宿主工具链与 CI 不同导致错误复用证据。
+本地验证须显式使用 `GOTOOLCHAIN=go1.27.4`，避免宿主工具链与 CI 不同导致错误复用证据；
+Go 1.27.4 修复 [GO-2026-6859](https://vuln.go.dev/ID/GO-2026-6859.json)。
 
 验收包括模块完整性、完整后端测试与构建、lint、漏洞扫描、并发敏感路径的 race、
 SQLite / PostgreSQL 行为，以及目标镜像的启动和 `/readyz`。
@@ -239,6 +239,11 @@ cron job 使用本地同一隔离入口，PG18与工具容器每次独占，不�
 Core双架构原生job保留静态及mutation检查，并运行locked Nginx live probe；资源清理失败
 也使job失败。各入口与证据边界见[测试约定](../spec/guides/testing.md)。
 
+Worker 完整 Compose profile smoke 的私有签名证据导出、七份文件和校验合同见
+[测试约定](../spec/guides/testing.md#worker-profile-签名证据)。CI 只在 amd64 完整
+profile smoke 成功后上传；arm64 原生闭包及扫描仍须分别验收。每个完整成功的 PR 源码、
+合并后 main、Release PR 源码和发行 main 运行都须各用本次运行的原件验证，不能借用其他 run。
+
 Core Compose 自测的 APK 绕过检查须完整消费经注释过滤的 Dockerfile：`pipefail` 下
 `grep -q` 在命中后提前退出可能令上游 `sed` 收到 SIGPIPE，使已命中的检查误判为未命中。
 使用输出丢弃的非 quiet `grep -E` 保留匹配规则；大文件 exec-form APK mutation 以
@@ -340,19 +345,28 @@ worktree，不按工具名称维护清单；Docker 自身所需的构建控制�
 | `worker-runtime` | Alpine | Worker 解析器、语言、字体及传递依赖 |
 
 roots 固定具体包名和版本，不使用可由多个包满足的虚拟名称。Core 的 SSH 客户端
-明确为 `openssh-client-default=10.2_p1-r0`，与迁移前实际选中的包及版本相同，
-避免 `openssh-client` 在 default 与 krb5 provider 之间重新选择。
+明确选择 `openssh-client-default`，避免 `openssh-client` 在 default 与 krb5 provider
+之间重新选择；当前精确版本以输入规格和 lock 为准。
 
-本次待原生 amd64 与 arm64 采集的配方将 Go 来源固定为
-`golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf`。
-Core 保留的 Nginx 基础镜像含旧版 libxslt，因此通过 `libxslt=1.1.43-r4` root
-执行真实升级事务；Worker 仍通过传递依赖解析，须由两架构采集证明其安装了 r4。
-原生采集 Q42969169392 拒绝了旧的 `git=2.54.0-r0` 精确 root；配方改为
-`git=2.54.1-r0`，该版本已出现在官方 Alpine v3.24 main 的 x86_64 和 aarch64 索引中，
-仍须重新完成双架构签名原生采集。此 Git 仅用于 supercronic 构建阶段；后续采用时须
-同步 Core Dockerfile 中该构建阶段的显式 root，现在不修改产品消费者。
-成功采集同一 run 的已签名候选并完成来源和内容验证、采用及审查前，不得声称产品
-已采用这些输入；当前产品消费者仍使用 Go 1.27.3。
+已采用的输入来自提交 `f2eb82e7aff90b3b00da64655e09f2d5ef755bd4` 的
+[原生采集 Q2](https://github.com/xiangnan0811/xirang/actions/runs/42972630089)，
+同一次成功运行的双架构 lock、八份 manifest 和 Worker 投影经来源绑定的签名证明及内容核验后采用。
+Go 来源为 `golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf`；
+Core 保留 Nginx 基础镜像，并以 `libxslt=1.1.43-r4` 直接 root 将基础镜像内 r3 升级为 r4，
+Worker 不新增该 root，双架构实际事务以传递依赖将 r3 升为 r4，修复
+[CVE-2026-87636](https://security.alpinelinux.org/vuln/CVE-2026-87636) 和
+[CVE-2026-9947](https://security.alpinelinux.org/vuln/CVE-2026-9947)。
+先前采集 Q42969169392 因旧 `git=2.54.0-r0` 不可安装而失败；Q2 双架构实际采用
+`git=2.54.1-r0` 及同版本 `git-init-template`，Git 仅用于 supercronic 构建阶段，
+不加入 Worker inventory。[Git 上游安全公告](https://github.blog/open-source/git/git-security-vulnerabilities-announced-7/)
+列出 2.54.1 的安全修复。
+
+八份 manifest 的实际安装差异还包括新 Go 基础镜像带来的双架构共享 CGO 和
+supercronic builder 变化：Alpine release 3.24.2 → 3.24.4、apk-tools／libapk
+3.0.8 → 3.0.9、CA 证书及 bundle 20260909 → 20261020、libcrypto／libssl
+3.5.8 → 3.5.9；Alpine 主线不变。两架构 Core 和 Worker runtime 的安装差异均为
+libxslt r3 → r4。必须审阅完整八事务及其生成投影，不能只核对直接 root 或手工拼写摘要。
+输入采集成功不代表最终产品镜像、正式发行或生产部署已完成。
 
 [Preserve Build Inputs](../../.github/workflows/build-inputs.yml)在 `build-inputs/**`
 维护分支的相关文件 push 或手动执行时，分别使用原生 amd64 与 arm64 runner。

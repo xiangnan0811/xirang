@@ -79,7 +79,7 @@ CI 账户恢复使用独立无条件 job、Node20/Go/Python3/Chromium 和零重�
 ## 隔离 cron 与真实网关
 
 `bash scripts/cron-backup-isolated.integration.test.sh` 是本地和 CI 共用入口，不接受业务
-DSN。每次使用随机独占 Docker network、PG18 容器及保留的 Go1.27.3 Alpine 工具镜像；
+DSN。每次使用随机独占 Docker network、PG18 容器及保留的 Go1.27.4 Alpine 工具镜像；
 PG 数据为专用 tmpfs，不发布数据库宿主端口、不挂持久业务卷或 Docker socket。
 客户端与服务端主版本核对后运行原完整 SQLite/PG cron roundtrip，恢复已知内容并核对
 私有状态、回执与失败后的成功回执保留；源码只读，构建 scratch 私有可执行。
@@ -89,6 +89,39 @@ supercronic 时钟调度、All-in-One 非 root 启动或告警投递。
 原生 amd64/arm64 Docker CI 在静态 checker 和 mutation 自测外实际执行
 `scripts/check-asset-content-nginx-runtime.sh`，使用 retained lock。合成 upstream 只证明
 gateway 行为，不证明 Broker 授权或生产部署；清理失败不能输出成功结论。
+
+### Worker profile 签名证据
+
+`ASSET_WORKER_PROFILE_EVIDENCE_DIR` 是 `scripts/test-asset-worker.sh` 的私有测试入口，
+不是产品配置。未设置或为空时保持本地原有不导出行为；设置时必须同时启用
+`ASSET_WORKER_PROFILE_SMOKE=1`，不得选择 static-only 或仅验证 closure 模式；使用不以 `/`
+结尾的绝对路径，父目录须已存在，目标 leaf 不得存在（包括悬空 symlink）。脚本以
+`umask 077` 创建本次独占目录，不清空或覆盖已有内容；
+还须提供合法的 GitHub repository、正整数 run ID／attempt 和 40 位十六进制 SHA，
+且 checkout HEAD 等于该 SHA。以上检查在首次 Docker 调用前完成；缺失、身份不符或
+输出失败均使 smoke 失败。环境变量本身不是身份认证，下载时仍须独立核对实际 workflow
+和 artifact 生产者。导出目录独立于 smoke 清理目录；失败时可能留下不含 receipt 的部分目录，
+不得把它当作成功证据。
+
+沿用现有 fixture 的签名、验签、激活及重启重验流程，在清理前仅导出以下七份文件：
+`manifest.json`、`bundle.tar`、`trust.json`、`runtime-closure-amd64.v1.json`、
+`runtime-closure-arm64.v1.json`、`attestations.v1.json` 和 `receipt.json`。
+`trust.json` 仅含临时测试公钥；attestations 取自已验证 bundle 中唯一对应文件，
+不导出私钥、token、数据库或日志。receipt 仅在全部重启后指纹、能力及隔离断言通过后最后写入：
+schema 1、kind `worker-profile-smoke`、repository、run ID／attempt、checkout SHA、
+UTC RFC3339 观察时间、两架构 closure SHA-256，以及 bundle／pipeline 指纹和对应的
+重启后实际观察指纹；两组指纹必须分别一致。receipt 是私有测试观察，不是产品签名 proof，
+临时信任密钥和 CI 签名 fixture 也不是生产信任或授权签名制品。
+
+CI 仅在 amd64 完整 Compose smoke 成功后上传 `asset-worker-profile-signing-evidence-amd64`；
+失败不上传半成品，arm64 保留独立原生闭包及扫描，不把它说成完整 Compose smoke。
+每个完整成功的 PR 源码运行、合并后 main 运行、Release PR 源码运行及发行 main 运行，
+都须在 artifact 过期前分别取回本次唯一原件，核对 producer、run／attempt 和 source record
+中的 checkout SHA，确认恰有上述七份文件。两份 closure 摘要须匹配本次双架构原生 artifact
+及 attestations，独立 attestations 字节须与 bundle 一致；用现有 updater 按 receipt 的
+观察时间验证 manifest、bundle 和临时公钥，重算 bundle 与 pipeline 指纹并核对重启后观察值。
+缺失原件、receipt 或任一身份／摘要不一致均不算通过；测试签名证据不替代完整源码 CI、
+最终镜像扫描、正式发布证明或生产部署验收。
 
 ## 候选和环境
 

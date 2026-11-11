@@ -737,7 +737,17 @@ jobs:
           ASSET_WORKER_PROFILE_PROJECT: xirang-asset-worker-profile-ci
           ASSET_WORKER_AMD64_RUNTIME_CLOSURE: ${{ runner.temp }}/asset-worker-runtime-closure-amd64/runtime-closure.v1.json
           ASSET_WORKER_ARM64_RUNTIME_CLOSURE: ${{ runner.temp }}/asset-worker-runtime-closure-arm64/runtime-closure.v1.json
+          ASSET_WORKER_PROFILE_EVIDENCE_DIR: ${{ runner.temp }}/asset-worker-profile-signing-evidence
         run: bash scripts/test-asset-worker.sh
+
+      - name: Upload Worker profile signing evidence
+        if: matrix.arch == 'amd64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: asset-worker-profile-signing-evidence-amd64
+          path: ${{ runner.temp }}/asset-worker-profile-signing-evidence
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Scan local Worker image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

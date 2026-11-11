@@ -1988,11 +1988,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libxslt-1.1.43-r3.apk",
+      "file": "libxslt-1.1.43-r4.apk",
       "name": "libxslt",
-      "sha256": "1ed655b4ab7164d4627a0dca94a51483227a5ac737724fd5b7d2939b23ca2e8d",
-      "size": 129634,
-      "version": "1.1.43-r3"
+      "sha256": "0469e5c1ebc5f9d07c260f403b8bc7faaf65f8672a1f113fda9d34ab5b6701a0",
+      "size": 129875,
+      "version": "1.1.43-r4"
     },
     {
       "arch": "x86_64",
@@ -4303,7 +4303,7 @@
     {
       "arch": "x86_64",
       "name": "libxslt",
-      "version": "1.1.43-r3"
+      "version": "1.1.43-r4"
     },
     {
       "arch": "x86_64",

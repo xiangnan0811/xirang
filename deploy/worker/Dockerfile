@@ -1,9 +1,9 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:8c463d956e6ed08b95238549e0ab66d155ed0ba33225ee6580d6bf8fe301b620 AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:27474054d4f320d40af77f11105c26614a6cb6bcb34fdde717170f4607f9bba0 AS worker-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:8f64c0214de579a3c687d3aae34e8f8781575977434b3418d7d968862ca7abf6 AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:94b2a2c82c4f8cc2e83049109688f0dfde0ca2fcc09b888d1ee087b805c75fbd AS worker-runtime-inputs
 
-# Retained golang:1.27.3-alpine3.24 platform images; upstream identities are in the lock.
-FROM docker.io/linnea7171/xirang@sha256:cf0703df5335d4c540833cee2f8a9c42afa97a9abacf01b715fe30fe837980a5 AS worker-builder
+# Retained golang:1.27.4-alpine3.24 platform images; upstream identities are in the lock.
+FROM docker.io/linnea7171/xirang@sha256:adf296efebd945f153f77f6fe1b7806be3f50f09c7edbc4f815deb8cb1932da4 AS worker-builder
 
 WORKDIR /src/backend
 ARG TARGETOS
