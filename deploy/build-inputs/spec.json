@@ -21,7 +21,7 @@
     "supercronic-builder": {
       "base": "go",
       "roots": [
-        "git=2.54.0-r0",
+        "git=2.54.1-r0",
         "musl-utils=1.2.6-r3",
         "musl=1.2.6-r3",
         "zlib=1.4-r0"
