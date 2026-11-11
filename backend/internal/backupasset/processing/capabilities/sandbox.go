@@ -891,7 +891,7 @@ type toolchainInspection struct {
 func productionToolchainInventory() toolchainInventory {
 	return toolchainInventory{
 		SchemaVersion: productionToolchainSchemaVersion,
-		BuilderBase:   "golang:1.27.3-alpine3.24@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd",
+		BuilderBase:   "golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf",
 		RuntimeBase:   "alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
 		APKInputs:     productionAPKInputs(),
 		Packages: []toolchainPackage{

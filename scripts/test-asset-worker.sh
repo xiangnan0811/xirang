@@ -17,12 +17,36 @@ PROFILE_PROJECT=${ASSET_WORKER_PROFILE_PROJECT:-xirang-asset-worker-smoke-$$}
 AMD64_RUNTIME_CLOSURE=${ASSET_WORKER_AMD64_RUNTIME_CLOSURE:-}
 ARM64_RUNTIME_CLOSURE=${ASSET_WORKER_ARM64_RUNTIME_CLOSURE:-}
 VALIDATE_RUNTIME_CLOSURE_ONLY=${ASSET_WORKER_VALIDATE_RUNTIME_CLOSURE:-}
+PROFILE_EVIDENCE_DIR=${ASSET_WORKER_PROFILE_EVIDENCE_DIR:-}
 PROFILE_COMPOSE_FILES=()
 
 fail() {
   echo "asset Worker smoke: $*" >&2
   exit 1
 }
+if [[ -n "$PROFILE_EVIDENCE_DIR" ]]; then
+  [[ "$PROFILE_SMOKE" == "1" && "${ASSET_WORKER_STATIC_ONLY:-0}" != "1" && -z "$VALIDATE_RUNTIME_CLOSURE_ONLY" ]] ||
+    fail "profile evidence requires the complete profile smoke"
+  [[ "$PROFILE_EVIDENCE_DIR" == /* && "$PROFILE_EVIDENCE_DIR" != */ ]] ||
+    fail "profile evidence directory must be an absolute path with a new leaf"
+  evidence_parent=${PROFILE_EVIDENCE_DIR%/*}
+  evidence_leaf=${PROFILE_EVIDENCE_DIR##*/}
+  [[ -n "$evidence_parent" ]] || evidence_parent=/
+  [[ "$evidence_leaf" != "." && "$evidence_leaf" != ".." && -d "$evidence_parent" ]] ||
+    fail "profile evidence parent must exist and the leaf must be new"
+  [[ ! -e "$PROFILE_EVIDENCE_DIR" && ! -L "$PROFILE_EVIDENCE_DIR" ]] ||
+    fail "profile evidence directory already exists"
+  [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}$ &&
+    "${GITHUB_REPOSITORY##*/}" != "." && "${GITHUB_REPOSITORY##*/}" != ".." ]] ||
+    fail "invalid GitHub repository for profile evidence"
+  [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ && "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]] ||
+    fail "invalid GitHub run identity for profile evidence"
+  [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || fail "invalid GitHub checkout SHA for profile evidence"
+  evidence_checkout_sha=$(git -C "$ROOT_DIR" rev-parse --verify HEAD) || fail "cannot identify profile evidence checkout"
+  [[ "$evidence_checkout_sha" == "$GITHUB_SHA" ]] || fail "profile evidence checkout does not match GITHUB_SHA"
+  (umask 077 && mkdir -- "$PROFILE_EVIDENCE_DIR") || fail "cannot create profile evidence directory"
+fi
+
 
 profile_compose() {
   IMAGE_TAG="$PROFILE_CORE_TAG" ASSET_WORKER_IMAGE_TAG="${IMAGE#xirang-asset-worker:}" \
@@ -1077,6 +1101,22 @@ YAML
   amd64_runtime_closure_sha256=$(sha256sum "$AMD64_RUNTIME_CLOSURE" | awk '{print $1}')
   arm64_runtime_closure_sha256=$(sha256sum "$ARM64_RUNTIME_CLOSURE" | awk '{print $1}')
   generate_profile_fixture "$PROFILE_DIR" "$amd64_runtime_closure_sha256" "$arm64_runtime_closure_sha256"
+  if [[ -n "$PROFILE_EVIDENCE_DIR" ]]; then
+    cp -- "$PROFILE_DIR/profile-smoke-candidate/manifest.json" "$PROFILE_EVIDENCE_DIR/manifest.json"
+    cp -- "$PROFILE_DIR/profile-smoke-candidate/bundle.tar" "$PROFILE_EVIDENCE_DIR/bundle.tar"
+    cp -- "$PROFILE_DIR/asset-worker-updater-trust.json" "$PROFILE_EVIDENCE_DIR/trust.json"
+    cp -- "$AMD64_RUNTIME_CLOSURE" "$PROFILE_EVIDENCE_DIR/runtime-closure-amd64.v1.json"
+    cp -- "$ARM64_RUNTIME_CLOSURE" "$PROFILE_EVIDENCE_DIR/runtime-closure-arm64.v1.json"
+    [[ "$(sha256sum "$PROFILE_EVIDENCE_DIR/runtime-closure-amd64.v1.json" | awk '{print $1}')" == "$amd64_runtime_closure_sha256" &&
+      "$(sha256sum "$PROFILE_EVIDENCE_DIR/runtime-closure-arm64.v1.json" | awk '{print $1}')" == "$arm64_runtime_closure_sha256" ]] ||
+      fail "exported runtime closures differ from the signed fixture"
+    local attestation_count
+    attestation_count=$(tar -tf "$PROFILE_EVIDENCE_DIR/bundle.tar" | awk '$0 == "toolchain/attestations.v1.json" { count++ } END { print count+0 }') ||
+      fail "cannot list the verified profile bundle"
+    [[ "$attestation_count" == "1" ]] || fail "verified profile bundle must contain one attestation"
+    tar -xOf "$PROFILE_EVIDENCE_DIR/bundle.tar" toolchain/attestations.v1.json >"$PROFILE_EVIDENCE_DIR/attestations.v1.json" ||
+      fail "cannot export profile bundle attestations"
+  fi
   expected_fingerprint=$(jq -er '.bundle_fingerprint' <<<"$PROFILE_FIXTURE_JSON")
   expected_pipeline_fingerprint=$(jq -er '.pipeline_fingerprint' <<<"$PROFILE_FIXTURE_JSON")
   mkdir "$PROFILE_DIR/asset-worker-inbox"
@@ -1466,6 +1506,30 @@ ENV
     fail "post-restart parser capability fingerprint did not persist"
   [[ "$("$DOCKER" inspect --format '{{.RestartCount}}' "$updater_id")" == "0" ]] ||
     fail "updater restarted across Core restart"
+  if [[ -n "$PROFILE_EVIDENCE_DIR" ]]; then
+    [[ "$post_restart_api_fingerprint" == "$expected_fingerprint" &&
+      "$post_restart_pipeline_fingerprint" == "$expected_pipeline_fingerprint" ]] ||
+      fail "post-restart fingerprints differ from the verified fixture"
+    local evidence_observed_at evidence_receipt_tmp
+    evidence_observed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ') || fail "cannot timestamp profile evidence"
+    evidence_receipt_tmp="$PROFILE_EVIDENCE_DIR/.receipt.tmp"
+    if ! (umask 077 && jq -n \
+      --arg repository "$GITHUB_REPOSITORY" \
+      --argjson run_id "$GITHUB_RUN_ID" --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+      --arg checkout_sha "$evidence_checkout_sha" --arg observed_at "$evidence_observed_at" \
+      --arg amd64 "$amd64_runtime_closure_sha256" --arg arm64 "$arm64_runtime_closure_sha256" \
+      --arg bundle "$expected_fingerprint" --arg pipeline "$expected_pipeline_fingerprint" \
+      --arg post_bundle "$post_restart_api_fingerprint" --arg post_pipeline "$post_restart_pipeline_fingerprint" \
+      '{schema_version: 1, kind: "worker-profile-smoke", repository: $repository,
+        run_id: $run_id, run_attempt: $run_attempt, checkout_sha: $checkout_sha, observed_at: $observed_at,
+        closures: {"linux/amd64": $amd64, "linux/arm64": $arm64},
+        bundle_fingerprint: $bundle, pipeline_fingerprint: $pipeline,
+        post_restart_bundle_fingerprint: $post_bundle, post_restart_pipeline_fingerprint: $post_pipeline}' \
+      >"$evidence_receipt_tmp" && mv -- "$evidence_receipt_tmp" "$PROFILE_EVIDENCE_DIR/receipt.json"); then
+      rm -f -- "$evidence_receipt_tmp"
+      fail "cannot write profile evidence receipt"
+    fi
+  fi
 
   echo "asset Worker complete profile smoke: PASS"
 }

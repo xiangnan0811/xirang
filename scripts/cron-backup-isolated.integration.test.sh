@@ -140,10 +140,10 @@ done
 docker info >/dev/null 2>&1 || fail "Docker daemon is required"
 GO_IMAGE=$(jq -er '
   . as $lock | .bases.go |
-  select(.source | test("^golang:1\\.27\\.3-alpine[^@]*@sha256:[0-9a-f]{64}$")) |
+  select(.source | test("^golang:1\\.27\\.4-alpine[^@]*@sha256:[0-9a-f]{64}$")) |
   .ref | select(type == "string" and startswith($lock.registry + "@sha256:") and
     test("^[^[:space:]]+@sha256:[0-9a-f]{64}$"))
-' "$ROOT_DIR/deploy/build-inputs/lock.json") || fail "retained Go 1.27.3 Alpine base is missing or invalid"
+' "$ROOT_DIR/deploy/build-inputs/lock.json") || fail "retained Go 1.27.4 Alpine base is missing or invalid"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/xirang-cron-isolated.XXXXXXXXXXXX") || fail "cannot create private temporary directory"
 RUN_TOKEN=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
@@ -228,11 +228,12 @@ umask 077
 export CGO_ENABLED=1 GOTOOLCHAIN=local
 export TEST_POSTGRES_DSN='postgres://postgres:FAKE_POSTGRES_PASSWORD_FOR_TEST_ONLY@postgres:5432/xirang_cron_test?sslmode=disable'
 
-[[ "$(go env GOVERSION)" == go1.27.3 && "$(go env CGO_ENABLED)" == 1 ]] || {
+[[ "$(go env GOVERSION)" == go1.27.4 && "$(go env CGO_ENABLED)" == 1 ]] || {
   echo 'isolated cron integration: unexpected Go or CGO version' >&2
   exit 1
 }
 go version
+printf 'isolated cron integration: CGO=%s\n' "$(go env CGO_ENABLED)"
 sqlite3 --version
 for tool in psql pg_dump pg_restore; do
   version=$("$tool" --version)

@@ -11,7 +11,7 @@
 ## 开发环境
 
 后端使用 Go / Gin / GORM，前端使用 React / TypeScript / Vite / Tailwind CSS。
-版本以 `backend/go.mod`、`web/package.json` 及锁文件为准。需要 Go 1.27.3
+版本以 `backend/go.mod`、`web/package.json` 及锁文件为准。需要 Go 1.27.4
 或兼容版本、SQLite 驱动所需 C 编译工具链（CGO），以及 Node.js
 20.19+（20.x）、22.13+（22.x）或 24+ 和 npm。文档结构检查使用 Python 3.9+
 （仅标准库）。升级工具链后也须确认 linter 兼容。
@@ -108,8 +108,13 @@ git push origin <branch>
 2. 负责人持续监控全部 required checks；失败在同一工作分支修复、推送并继续监控，
    直到通过或记录真实外部阻塞。失败、pending 或缺失时不得合并。
    `PR Title` 独立读取并校验当前标题；标题或正文编辑只有在可证明源码候选未变时才
-   使用轻量检查。轻量结果不能代替原源码检查或改变其失败、取消和 pending 状态，
-   缺少证据时仍运行完整源码检查；事件及并发规则见[仓库自动化](docs/maintainers/automation.md#actions-与-ci)。
+   使用轻量验证。`Backend Test & Build`、`Frontend Test & Build` 和
+   `Doc Freshness Check` 保持固定 required 名称，metadata 运行产生新的同名 check ID，
+   原源码 check ID 和结论保留。对应来源 job、check 和整个来源 workflow 均须成功；
+   pending 会等待，失败、取消或证据不可读等情况阻断。分类时缺少证据则运行完整源码
+   检查，分类后证据失效则验证失败，不以局部源码作业替代完整检查。事件及并发规则见
+   [仓库自动化](docs/maintainers/automation.md#actions-与-ci)。新版 PR Overview 可从
+   页首 `Merge status` 查看有效合并状态，在 `Checks` 查看具体运行和日志。
 3. 维护者优先使用 squash merge，保留符合规范的 PR 标题；不要直接向 `main` 推送变更。
 4. 合并后按 [发布手册](docs/maintainers/release.md) 检查 Release Please、正式发布、
    Docker 镜像和相关 Docker Hub 描述同步。未触发正式发布时，明确说明未预期产生

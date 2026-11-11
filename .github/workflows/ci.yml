@@ -25,6 +25,7 @@ jobs:
     outputs:
       mode: ${{ steps.event.outputs.mode }}
       reason: ${{ steps.event.outputs.reason }}
+      record: ${{ steps.event.outputs.record }}
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -43,16 +44,18 @@ jobs:
           name: ci-event-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-event-record/record.json
           if-no-files-found: error
-      - name: Round29 classifier rejection
-        run: exit 29
 
   backend:
-    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Backend Test & Build' || 'Backend Test & Build' }}
+    name: Backend Test & Build
     needs: [classify]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     permissions:
       contents: read
+      actions: read
+      pull-requests: read
+      checks: read
     defaults:
       run:
         working-directory: backend
@@ -66,6 +69,24 @@ jobs:
       - name: Round29 controlled rejection
         if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
         run: exit 29
+
+      - name: Checkout metadata verifier
+        if: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' }}
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: scripts/classify-ci-event.py
+      - name: Verify source check
+        if: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' }}
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CI_METADATA_RECORD: ${{ needs.classify.outputs.record }}
+        run: python3 scripts/classify-ci-event.py --source-check 'Backend Test & Build'
 
       - name: Setup Go
         if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
@@ -243,12 +264,16 @@ jobs:
         run: bash scripts/cron-backup-isolated.integration.test.sh
 
   frontend:
-    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Frontend Test & Build' || 'Frontend Test & Build' }}
+    name: Frontend Test & Build
     needs: [classify]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     permissions:
       contents: read
+      actions: read
+      pull-requests: read
+      checks: read
     defaults:
       run:
         working-directory: web
@@ -258,6 +283,28 @@ jobs:
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
           ref: ${{ github.sha }}
+
+      - name: Round29 controlled pending
+        if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
+        run: sleep 300
+
+      - name: Checkout metadata verifier
+        if: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' }}
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: scripts/classify-ci-event.py
+      - name: Verify source check
+        if: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' }}
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CI_METADATA_RECORD: ${{ needs.classify.outputs.record }}
+        run: python3 scripts/classify-ci-event.py --source-check 'Frontend Test & Build'
 
       - name: Setup Go
         if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
@@ -698,7 +745,17 @@ jobs:
           ASSET_WORKER_PROFILE_PROJECT: xirang-asset-worker-profile-ci
           ASSET_WORKER_AMD64_RUNTIME_CLOSURE: ${{ runner.temp }}/asset-worker-runtime-closure-amd64/runtime-closure.v1.json
           ASSET_WORKER_ARM64_RUNTIME_CLOSURE: ${{ runner.temp }}/asset-worker-runtime-closure-arm64/runtime-closure.v1.json
+          ASSET_WORKER_PROFILE_EVIDENCE_DIR: ${{ runner.temp }}/asset-worker-profile-signing-evidence
         run: bash scripts/test-asset-worker.sh
+
+      - name: Upload Worker profile signing evidence
+        if: matrix.arch == 'amd64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: asset-worker-profile-signing-evidence-amd64
+          path: ${{ runner.temp }}/asset-worker-profile-signing-evidence
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Scan local Worker image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -710,10 +767,16 @@ jobs:
           ignore-unfixed: true
 
   doc-freshness:
-    name: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / Doc Freshness Check' || 'Doc Freshness Check' }}
+    name: Doc Freshness Check
     needs: [classify]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      checks: read
     steps:
       - name: Checkout
         if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
@@ -721,6 +784,24 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Checkout metadata verifier
+        if: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' }}
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: scripts/classify-ci-event.py
+      - name: Verify source check
+        if: ${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' }}
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CI_METADATA_RECORD: ${{ needs.classify.outputs.record }}
+        run: python3 scripts/classify-ci-event.py --source-check 'Doc Freshness Check'
 
       - name: Check doc freshness
         if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}

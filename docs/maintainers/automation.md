@@ -9,13 +9,13 @@
 安全告警与安全修复不受常规版本更新排期约束。替换旧机器人 PR 前先记录精确 PR 编号与 head 分支，只关闭该名单；不得用动态“全部关闭”查询误伤新安全 PR。
 
 离线账户恢复工具直接使用已锁定的 `golang.org/x/term v0.46.0` 读取控制终端，
-因此在 `backend/go.mod` 声明为直接依赖；本次不升级该版本、Go 工具链或其他模块。
+因此在 `backend/go.mod` 声明为直接依赖；该账户恢复变更本身不升级此依赖、Go 工具链或其他模块。
 验证须包含真实 PTY 的无回显与重定向输入拒绝，不能以模块下载或编译成功替代。
 
 ### Go 工具链升级
 
-项目使用 Go 1.27.3；CI 从 `backend/go.mod` 读取版本。Core、Worker 和
-supercronic 的构建镜像同步固定到 Go 1.27.3 / Alpine 3.24 的多架构摘要，
+项目使用 Go 1.27.4；CI 从 `backend/go.mod` 读取版本。Core、Worker 和
+supercronic 的构建镜像同步固定到 Go 1.27.4 / Alpine 3.24 的多架构摘要，
 Worker 的 `BuilderBase` 运行环境指纹和镜像检查脚本须随之更新。
 保留 SQLite 所需的 CGO，以及与运行镜像兼容的 musl；升级 Go 不自动升级 Alpine 主线。
 
@@ -27,8 +27,8 @@ Go 升级不要求所有模块跟随更新。先核对上游兼容说明、构�
 SSH 轮换预验证候选将 `golang.org/x/net` 从 v0.59.0 定向更新到 v0.60.0，
 修复 HTTP/2 安全公告；未升级其他模块。验收继续使用固定版本 govulncheck
 及完整本地 CI 门禁，不以依赖升级代替业务验证。
-远端标准库扫描要求 Go 1.27.3 安全补丁；本地验证须显式使用
-`GOTOOLCHAIN=go1.27.3`，避免宿主工具链与 CI 不同导致错误复用证据。
+本地验证须显式使用 `GOTOOLCHAIN=go1.27.4`，避免宿主工具链与 CI 不同导致错误复用证据；
+Go 1.27.4 修复 [GO-2026-6859](https://vuln.go.dev/ID/GO-2026-6859.json)。
 
 验收包括模块完整性、完整后端测试与构建、lint、漏洞扫描、并发敏感路径的 race、
 SQLite / PostgreSQL 行为，以及目标镜像的启动和 `/readyz`。
@@ -156,19 +156,33 @@ CI 的 `CI Event Classification` 记录事件、实际 checkout 和来源身份�
 
 对打开的 PR，分类比较当前 head、base 和 merge 候选的提交及 tree；对已合并 PR，
 比较固定 merge 提交与同仓库 `main` push 的源码记录，即使当前 main 已前进也不以
-新 checkout 代替原合并来源。记录只证明验证输入，不证明测试成功；来源运行的
-失败、取消或 pending 状态仍须保留并阻断相应门禁。metadata 作业使用
-`Metadata only / ` 前缀隔离名称，不能替代 `Backend Test & Build`、
-`Frontend Test & Build` 或 `Doc Freshness Check` 等原源码检查；合并前须核对当前
-候选的有效 required checks，不能只凭 workflow 总体成功或跳过结果判断。
+新 checkout 代替原合并来源。记录只证明验证输入，不证明测试成功。
 
-三个受保护源码作业在 workflow 未取消时启动，以便求值隔离名称；只有分类成功且
-mode 为 metadata 时才跳过其全部源码步骤。其他情况执行原源码步骤，普通步骤保留
-前序失败后的默认跳过行为；前端浏览器证据上传和覆盖率检查保留 `always()`，但同样
-受 metadata 排除条件约束。其余源码作业仍在作业级排除 metadata。metadata 的实际
-步骤状态、原检查身份和有效保护状态须在 GitHub 上逐项验证，不能仅凭配置推断通过。
+三个受保护作业始终使用固定 required 名称 `Backend Test & Build`、
+`Frontend Test & Build` 和 `Doc Freshness Check`；`PR Title` 仍是独立的 required
+检查。metadata 运行会产生新的同名 check ID，原源码运行的 check ID 和结论保持不变，
+作为不可变来源证据。每个 metadata 验证者必须确认固定来源的对应源码 job、对应 check
+以及整个来源 workflow 均已完成且成功；单个 job 成功而 workflow 仍在运行时继续等待。
+等待最多 350 分钟，每个受保护 job 的期限为 360 分钟；来源失败、取消、超时、跳过、
+neutral 等非成功终态，或证据不可读取、身份不匹配、验证超时，均阻断通过。
+验证前后重新核对候选与来源，来源 attempt 或候选变化不能沿用过期成功结果；合并前
+还须核对当前来源及有效 required checks，不能只凭 workflow 总体成功或跳过结果判断。
 
-未合并的 Round29 fixture 使用受控源码失败和分类失败验证 CI 门禁，不属于应用功能。
+三个受保护作业在 workflow 未取消时启动。只有分类成功且 mode 为 metadata 时，
+才跳过全部源码步骤，并以稀疏 checkout 获取验证脚本，执行只读来源验证，不运行源码
+测试；每次 metadata 运行最多占用三个轻量等待 runner。这些作业仅有 `contents`、
+`actions`、`pull-requests`、`checks` 的 read 权限。分类完成后若来源证据失效，验证者
+失败并阻断，不以只运行这三个局部源码作业冒充完整回退；下一事件仍由分类器决定是否
+运行完整源码检查。其他情况执行原源码步骤，普通步骤保留前序失败后的默认跳过行为；
+前端浏览器证据上传和覆盖率检查保留 `always()`，但同样受 metadata 排除条件约束。
+其余源码作业仍在作业级排除 metadata。metadata 的实际步骤状态、来源及新 check 身份
+和有效保护状态须在 GitHub 上逐项验证，不能仅凭配置推断通过。
+
+未合并的 Round29 fixture 使用受控源码失败和等待验证 CI 门禁，不属于应用功能。
+
+使用新版 PR Overview 时，可从页首 `Merge status` 查看 required、等待及实际结论，
+在 `Checks` 按提交、workflow 和运行查看步骤与日志；同时核对当前候选的有效合并状态。
+metadata 验证成功不能代替合并后同 SHA `main` push 的完整 CI 或发布证明。
 
 CI 将 push 与 PR 的并发组分开：同一 PR 的 opened／synchronize／reopened 源码运行
 可替代较旧的同组源码运行，每次 edited 使用独立运行组，不取消其他源码运行或同 SHA
@@ -226,6 +240,11 @@ fixture 并清理；不接受共享手工 fixture 作为自动化通过证据。
 cron job 使用本地同一隔离入口，PG18与工具容器每次独占，不复用 parity DSN。
 Core双架构原生job保留静态及mutation检查，并运行locked Nginx live probe；资源清理失败
 也使job失败。各入口与证据边界见[测试约定](../spec/guides/testing.md)。
+
+Worker 完整 Compose profile smoke 的私有签名证据导出、七份文件和校验合同见
+[测试约定](../spec/guides/testing.md#worker-profile-签名证据)。CI 只在 amd64 完整
+profile smoke 成功后上传；arm64 原生闭包及扫描仍须分别验收。每个完整成功的 PR 源码、
+合并后 main、Release PR 源码和发行 main 运行都须各用本次运行的原件验证，不能借用其他 run。
 
 Core Compose 自测的 APK 绕过检查须完整消费经注释过滤的 Dockerfile：`pipefail` 下
 `grep -q` 在命中后提前退出可能令上游 `sed` 收到 SIGPIPE，使已命中的检查误判为未命中。
@@ -328,8 +347,28 @@ worktree，不按工具名称维护清单；Docker 自身所需的构建控制�
 | `worker-runtime` | Alpine | Worker 解析器、语言、字体及传递依赖 |
 
 roots 固定具体包名和版本，不使用可由多个包满足的虚拟名称。Core 的 SSH 客户端
-明确为 `openssh-client-default=10.2_p1-r0`，与迁移前实际选中的包及版本相同，
-避免 `openssh-client` 在 default 与 krb5 provider 之间重新选择。
+明确选择 `openssh-client-default`，避免 `openssh-client` 在 default 与 krb5 provider
+之间重新选择；当前精确版本以输入规格和 lock 为准。
+
+已采用的输入来自提交 `f2eb82e7aff90b3b00da64655e09f2d5ef755bd4` 的
+[原生采集 Q2](https://github.com/xiangnan0811/xirang/actions/runs/42972630089)，
+同一次成功运行的双架构 lock、八份 manifest 和 Worker 投影经来源绑定的签名证明及内容核验后采用。
+Go 来源为 `golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf`；
+Core 保留 Nginx 基础镜像，并以 `libxslt=1.1.43-r4` 直接 root 将基础镜像内 r3 升级为 r4，
+Worker 不新增该 root，双架构实际事务以传递依赖将 r3 升为 r4，修复
+[CVE-2026-87636](https://security.alpinelinux.org/vuln/CVE-2026-87636) 和
+[CVE-2026-9947](https://security.alpinelinux.org/vuln/CVE-2026-9947)。
+先前采集 Q42969169392 因旧 `git=2.54.0-r0` 不可安装而失败；Q2 双架构实际采用
+`git=2.54.1-r0` 及同版本 `git-init-template`，Git 仅用于 supercronic 构建阶段，
+不加入 Worker inventory。[Git 上游安全公告](https://github.blog/open-source/git/git-security-vulnerabilities-announced-7/)
+列出 2.54.1 的安全修复。
+
+八份 manifest 的实际安装差异还包括新 Go 基础镜像带来的双架构共享 CGO 和
+supercronic builder 变化：Alpine release 3.24.2 → 3.24.4、apk-tools／libapk
+3.0.8 → 3.0.9、CA 证书及 bundle 20260909 → 20261020、libcrypto／libssl
+3.5.8 → 3.5.9；Alpine 主线不变。两架构 Core 和 Worker runtime 的安装差异均为
+libxslt r3 → r4。必须审阅完整八事务及其生成投影，不能只核对直接 root 或手工拼写摘要。
+输入采集成功不代表最终产品镜像、正式发行或生产部署已完成。
 
 [Preserve Build Inputs](../../.github/workflows/build-inputs.yml)在 `build-inputs/**`
 维护分支的相关文件 push 或手动执行时，分别使用原生 amd64 与 arm64 runner。
