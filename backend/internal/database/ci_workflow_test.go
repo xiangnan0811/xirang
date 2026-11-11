@@ -20,12 +20,15 @@ type ciWorkflow struct {
 }
 
 type ciWorkflowJob struct {
-	Name     string             `yaml:"name"`
-	Needs    []string           `yaml:"needs"`
-	Defaults ciWorkflowDefaults `yaml:"defaults"`
-	If       string             `yaml:"if"`
-	Env      map[string]string  `yaml:"env"`
-	Services map[string]struct {
+	Name           string             `yaml:"name"`
+	Needs          []string           `yaml:"needs"`
+	Defaults       ciWorkflowDefaults `yaml:"defaults"`
+	If             string             `yaml:"if"`
+	Env            map[string]string  `yaml:"env"`
+	Permissions    map[string]string  `yaml:"permissions"`
+	Outputs        map[string]string  `yaml:"outputs"`
+	TimeoutMinutes int                `yaml:"timeout-minutes"`
+	Services       map[string]struct {
 		Image string `yaml:"image"`
 	} `yaml:"services"`
 	Steps []ciWorkflowStep `yaml:"steps"`
@@ -46,6 +49,7 @@ type ciWorkflowStep struct {
 	If               string            `yaml:"if"`
 	Uses             string            `yaml:"uses"`
 	With             map[string]string `yaml:"with"`
+	Env              map[string]string `yaml:"env"`
 }
 
 func loadCIWorkflow(t *testing.T) ciWorkflow {
@@ -85,6 +89,11 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 			if ordinary < 0 {
 				t.Fatal("base workflow has no ordinary source step")
 			}
+			metadataCheckout := slices.IndexFunc(base.Jobs[protected.id].Steps, func(step ciWorkflowStep) bool { return step.Name == "Checkout metadata verifier" })
+			verifier := slices.IndexFunc(base.Jobs[protected.id].Steps, func(step ciWorkflowStep) bool { return step.Name == "Verify source check" })
+			if metadataCheckout < 0 || verifier < 0 {
+				t.Fatal("metadata verifier steps missing")
+			}
 			tests := []struct {
 				name   string
 				mutate func(*ciWorkflowJob)
@@ -94,7 +103,7 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 				{"old-source-only-gate", func(job *ciWorkflowJob) { job.If = requiredPostgresSourceGate }},
 				{"missing-classify", func(job *ciWorkflowJob) { job.Needs = nil }},
 				{"extra-need", func(job *ciWorkflowJob) { job.Needs = []string{"classify", "other"} }},
-				{"fixed-source-name", func(job *ciWorkflowJob) { job.Name = protected.name }},
+				{"wrong-source-name", func(job *ciWorkflowJob) { job.Name = "wrong" }},
 				{"mode-only-name", func(job *ciWorkflowJob) {
 					job.Name = "${{ needs.classify.outputs.mode == 'metadata' && 'Metadata only / " + protected.name + "' || '" + protected.name + "' }}"
 				}},
@@ -114,6 +123,26 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 				{"checkout-wrong-pin", func(job *ciWorkflowJob) { job.Steps[checkout].Uses = "actions/checkout@main" }},
 				{"checkout-missing", func(job *ciWorkflowJob) { job.Steps[checkout].Uses = "" }},
 				{"checkout-duplicate", func(job *ciWorkflowJob) { job.Steps = append(job.Steps, job.Steps[checkout]) }},
+				{"source-sparse", func(job *ciWorkflowJob) { job.Steps[checkout].With["sparse-checkout"] = "scripts" }},
+				{"timeout-missing", func(job *ciWorkflowJob) { job.TimeoutMinutes = 0 }},
+				{"write-permission", func(job *ciWorkflowJob) { job.Permissions["checks"] = "write" }},
+				{"missing-permission", func(job *ciWorkflowJob) { delete(job.Permissions, "actions") }},
+				{"missing-verifier", func(job *ciWorkflowJob) { job.Steps = slices.Delete(job.Steps, verifier, verifier+1) }},
+				{"duplicate-verifier", func(job *ciWorkflowJob) { job.Steps = append(job.Steps, job.Steps[verifier]) }},
+				{"verifier-gate", func(job *ciWorkflowJob) { job.Steps[verifier].If = protectedStepGate }},
+				{"verifier-mode-only", func(job *ciWorkflowJob) { job.Steps[verifier].If = "${{ needs.classify.outputs.mode == 'metadata' }}" }},
+				{"metadata-checkout-mode-only", func(job *ciWorkflowJob) {
+					job.Steps[metadataCheckout].If = "${{ needs.classify.outputs.mode == 'metadata' }}"
+				}},
+				{"verifier-directory", func(job *ciWorkflowJob) { job.Steps[verifier].WorkingDirectory = "." }},
+				{"verifier-record", func(job *ciWorkflowJob) { delete(job.Steps[verifier].Env, "CI_METADATA_RECORD") }},
+				{"verifier-token", func(job *ciWorkflowJob) { delete(job.Steps[verifier].Env, "GH_TOKEN") }},
+				{"verifier-command", func(job *ciWorkflowJob) { job.Steps[verifier].Run = "true" }},
+				{"metadata-ref", func(job *ciWorkflowJob) { job.Steps[metadataCheckout].With["ref"] = "main" }},
+				{"metadata-pin", func(job *ciWorkflowJob) { job.Steps[metadataCheckout].Uses = "actions/checkout@main" }},
+				{"metadata-sparse", func(job *ciWorkflowJob) { delete(job.Steps[metadataCheckout].With, "sparse-checkout") }},
+				{"metadata-checkout-missing", func(job *ciWorkflowJob) { job.Steps = slices.Delete(job.Steps, metadataCheckout, metadataCheckout+1) }},
+				{"metadata-checkout-duplicate", func(job *ciWorkflowJob) { job.Steps = append(job.Steps, job.Steps[metadataCheckout]) }},
 			}
 			if protected.id == "doc-freshness" {
 				tests = append(tests, struct {
@@ -151,8 +180,10 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 					workflow := ciWorkflow{Jobs: maps.Clone(base.Jobs)}
 					job := workflow.Jobs[protected.id]
 					job.Steps = slices.Clone(job.Steps)
+					job.Permissions = maps.Clone(job.Permissions)
 					for i := range job.Steps {
 						job.Steps[i].With = maps.Clone(job.Steps[i].With)
+						job.Steps[i].Env = maps.Clone(job.Steps[i].Env)
 					}
 					tc.mutate(&job)
 					workflow.Jobs[protected.id] = job
@@ -170,6 +201,16 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 			})
 		})
 	}
+	t.Run("missing-classify-record-output", func(t *testing.T) {
+		changed := ciWorkflow{Jobs: maps.Clone(base.Jobs)}
+		job := changed.Jobs["classify"]
+		job.Outputs = maps.Clone(job.Outputs)
+		delete(job.Outputs, "record")
+		changed.Jobs["classify"] = job
+		if err := validateProtectedSourceWorkflow(changed); err == nil {
+			t.Fatal("missing record output accepted")
+		}
+	})
 	backendJob, ok := workflow.Jobs["backend"]
 	if !ok {
 		t.Fatal("CI workflow has no active backend job")
@@ -226,8 +267,13 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 const protectedJobGate = "${{ !cancelled() }}"
 const protectedStepGate = "${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}"
 const protectedAlwaysStepGate = "${{ always() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}"
+const metadataStepGate = "${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' }}"
 
 func validateProtectedSourceWorkflow(workflow ciWorkflow) error {
+	classify, ok := workflow.Jobs["classify"]
+	if !ok || classify.Outputs["record"] != "${{ steps.event.outputs.record }}" {
+		return fmt.Errorf("missing classifier record output")
+	}
 	for _, protected := range []struct{ id, name string }{
 		{"backend", "Backend Test & Build"},
 		{"frontend", "Frontend Test & Build"},
@@ -237,16 +283,48 @@ func validateProtectedSourceWorkflow(workflow ciWorkflow) error {
 		if !ok {
 			return fmt.Errorf("%s job is missing", protected.id)
 		}
-		name := "${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / " + protected.name + "' || '" + protected.name + "' }}"
-		if job.If != protectedJobGate || !slices.Equal(job.Needs, []string{"classify"}) || job.Name != name {
+		if job.If != protectedJobGate || !slices.Equal(job.Needs, []string{"classify"}) || job.Name != protected.name {
 			return fmt.Errorf("%s job has an invalid admission gate, dependency, or name", protected.id)
+		}
+		if job.TimeoutMinutes != 360 || !maps.Equal(job.Permissions, map[string]string{
+			"contents": "read", "actions": "read", "pull-requests": "read", "checks": "read",
+		}) {
+			return fmt.Errorf("%s invalid timeout or permissions", protected.id)
 		}
 		if len(job.Steps) == 0 {
 			return fmt.Errorf("%s job has no steps", protected.id)
 		}
 		checkouts := 0
+		metadataCheckout, verifier := 0, 0
 		alwaysSteps := map[string]int{"Upload browser execution evidence": 0, "Check frontend coverage": 0}
 		for index, step := range job.Steps {
+			if step.Name == "Checkout metadata verifier" {
+				metadataCheckout++
+				if step.If != metadataStepGate || step.Uses != requiredPostgresCheckout ||
+					!maps.Equal(step.With, map[string]string{
+						"ref": "${{ github.sha }}", "fetch-depth": "2", "persist-credentials": "false",
+						"sparse-checkout-cone-mode": "false", "sparse-checkout": "scripts/classify-ci-event.py",
+					}) || step.Run != "" || step.WorkingDirectory != "" || len(step.Env) != 0 {
+					return fmt.Errorf("%s invalid metadata checkout", protected.id)
+				}
+				if checkouts != 1 {
+					return fmt.Errorf("%s metadata checkout position", protected.id)
+				}
+				continue
+			}
+			if step.Name == "Verify source check" {
+				verifier++
+				if step.If != metadataStepGate || step.WorkingDirectory != "${{ github.workspace }}" ||
+					step.Uses != "" || len(step.With) != 0 ||
+					step.Run != "python3 scripts/classify-ci-event.py --source-check '"+protected.name+"'" ||
+					!maps.Equal(step.Env, map[string]string{
+						"GH_TOKEN": "${{ github.token }}", "CI_WORKFLOW_SHA": "${{ github.workflow_sha }}",
+						"CI_METADATA_RECORD": "${{ needs.classify.outputs.record }}",
+					}) || index == 0 || job.Steps[index-1].Name != "Checkout metadata verifier" {
+					return fmt.Errorf("%s invalid source verifier", protected.id)
+				}
+				continue
+			}
 			gate := protectedStepGate
 			if _, isAlways := alwaysSteps[step.Name]; protected.id == "frontend" && isAlways {
 				alwaysSteps[step.Name]++
@@ -258,10 +336,14 @@ func validateProtectedSourceWorkflow(workflow ciWorkflow) error {
 			if strings.HasPrefix(step.Uses, "actions/checkout@") {
 				checkouts++
 				if step.Uses != requiredPostgresCheckout || step.With["ref"] != "${{ github.sha }}" ||
+					step.With["sparse-checkout"] != "" || step.With["sparse-checkout-cone-mode"] != "" ||
 					(protected.id == "doc-freshness" && step.With["fetch-depth"] != "0") {
 					return fmt.Errorf("%s step %d %q has invalid checkout pin, ref, or history", protected.id, index, step.Name)
 				}
 			}
+		}
+		if metadataCheckout != 1 || verifier != 1 {
+			return fmt.Errorf("%s requires one metadata checkout and verifier", protected.id)
 		}
 		if checkouts != 1 {
 			return fmt.Errorf("%s job requires one checkout, got %d", protected.id, checkouts)

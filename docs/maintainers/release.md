@@ -47,8 +47,11 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 PR 标题／正文编辑的轻量分类及并发隔离见[仓库自动化](automation.md#actions-与-ci)。
 正文仍是已合并 PR 的 Release Please override 输入，也是 Release PR 发行说明审阅的载体；
-编辑后应核对当前标题和有效 required checks。轻量 metadata 检查或来源记录不能证明
-源码测试通过，也不能替代发布要求的同 SHA `main` push 完整 CI。
+编辑后应核对当前标题和有效 required checks。metadata 的三个固定同名检查产生新的
+check ID，保留原源码检查结果；只有对应来源 job、check 与整个来源 workflow 均成功，
+验证者才通过，pending 等待，失败或证据不可读则阻断。metadata 验证不运行源码测试，
+也不能替代发布要求的同 SHA `main` push 完整 CI；合并后正文编辑同样须核对原 push
+运行的身份与结果。
 
 纯 `ci`／`test`／`docs` 变更没有需发行的运行行为或依赖修复时，说明保留在
 `Unreleased`，不为此单独制造正式版本或镜像；仍核对正常 hooks、required CI、

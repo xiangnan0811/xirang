@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import subprocess
+import time
 import sys
 import urllib.error
 import urllib.parse
@@ -21,6 +22,8 @@ REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 MAX_JSON = 8 * 1024 * 1024
 MAX_RECORD = 64 * 1024
 MAX_ZIP = 256 * 1024
+SOURCE_CHECKS = ('Backend Test & Build', 'Frontend Test & Build', 'Doc Freshness Check')
+PENDING = ('queued', 'requested', 'pending', 'waiting', 'in_progress')
 
 
 class EvidenceError(ValueError):
@@ -384,16 +387,12 @@ def classify_event(event, context, api):
         require(later == live and later_obj.get('state') == 'open' and later_obj.get('mergeable') is True
                 and merge_ref(api, context['repository'], live['number']) == candidate, "candidate changed during lookup")
         return {'mode': 'metadata', 'reason': 'unchanged-open-candidate', 'source_run': pointer}
-    except (EvidenceError, urllib.error.URLError, TimeoutError, OSError) as exc:
-        print('CI event evidence unavailable: ' + str(exc).replace('\n', ' ')[:300], file=sys.stderr)
+    except (EvidenceError, urllib.error.URLError, TimeoutError, OSError):
+        print('CI event evidence unavailable', file=sys.stderr)
         return source('evidence-unavailable')
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--record', required=True)
-    args = parser.parse_args()
-    env = os.environ
+def execution_inputs(env):
     def integer(name):
         value = env[name]
         if not re.fullmatch(r'[1-9][0-9]*', value):
@@ -417,9 +416,10 @@ def main():
         require(isinstance(event.get('action'), str) and event['action'], "missing PR action")
     else:
         require(context['event_name'] != 'push' or event.get('action') is None, "invalid push action")
-    api = GitHubAPI(env.get('GH_TOKEN', ''))
-    api.prefix = '/repos/' + context['repository']
-    result = classify_event(event, context, api)
+    return event, context
+
+
+def event_record(event, context, result):
     change_keys = sorted(event['changes']) if context['event_name'] == 'pull_request' and isinstance(event.get('changes'), dict) else None
     pr = event_snapshot(event, context) if context['event_name'] == 'pull_request' else None
     record = {'schema_version': 1, 'repository': context['repository'], 'repository_id': context['repository_id'],
@@ -428,23 +428,171 @@ def main():
               'action': event.get('action') if context['event_name'] == 'pull_request' else None,
               'event_ref': context['event_ref'], 'event_sha': context['event_sha'], 'checkout_sha': context['checkout_sha'],
               'checkout_tree': context['checkout_tree'], 'change_keys': change_keys, 'pull_request': pr, **result}
-    validate_record(record)
-    print(json.dumps({'action': record['action'], 'changes': event.get('changes'), 'pull_request': pr,
+    return validate_record(record)
+
+
+def verify_source_check(event, context, metadata_record, job_name, api, *,
+                        timeout_seconds=21000, poll_seconds=60,
+                        monotonic=time.monotonic, sleep=time.sleep):
+    require(job_name in SOURCE_CHECKS, 'invalid source check name')
+    require(timeout_seconds > 0 and poll_seconds > 0, 'invalid polling interval')
+    deadline = monotonic() + timeout_seconds
+    prefix = '/repos/' + context['repository']
+    metadata_record = validate_record(metadata_record)
+    require(metadata_record['mode'] == 'metadata', 'record is not metadata')
+    pointer = metadata_record['source_run']
+    require(pointer['run_id'] < context['run_id'], 'invalid source lineage')
+
+    def remaining():
+        value = deadline - monotonic()
+        require(value > 0, 'source verification timed out')
+        return value
+
+    def source_identity():
+        fresh = event_record(event, context, classify_event(event, context, api))
+        require(fresh == metadata_record, 'metadata classification changed')
+        run = api.get_json(prefix + '/actions/runs/%d' % pointer['run_id'])
+        run_identity(run, context['repository'], context['repository_id'])
+        require(run['id'] == pointer['run_id'] and run['run_attempt'] == pointer['run_attempt'], 'source run changed')
+        record, resolved = resolve_source(run, api, context)
+        require(record['mode'] == 'source' and resolved == pointer, 'source pointer changed')
+        pr = metadata_record['pull_request']
+        require(pr is not None, 'missing PR snapshot')
+        if pr['merged']:
+            require(run.get('event') == 'push' and run.get('head_branch') == 'main'
+                    and run['head_sha'] == pr['merge_sha'] and record['checkout_sha'] == pr['merge_sha'], 'wrong merged source')
+        else:
+            require(run.get('event') == 'pull_request', 'wrong PR source')
+        require(positive(run.get('check_suite_id')), 'invalid check suite')
+        return run
+
+    def state(obj, kind):
+        require(isinstance(obj, dict), 'invalid ' + kind)
+        status, conclusion = obj.get('status'), obj.get('conclusion')
+        require(status in PENDING or status == 'completed', 'invalid ' + kind + ' status')
+        if status == 'completed':
+            require(conclusion == 'success', kind + ' did not succeed')
+            return True
+        require(conclusion is None, 'invalid ' + kind + ' conclusion')
+        return False
+
+    def list_job(run_done):
+        data = api.get_json(prefix + '/actions/runs/%d/attempts/%d/jobs?per_page=100'
+                            % (pointer['run_id'], pointer['run_attempt']))
+        require(isinstance(data, dict) and isinstance(data.get('jobs'), list)
+                and type(data.get('total_count')) is int and data['total_count'] == len(data['jobs'])
+                and all(isinstance(j, dict) and isinstance(j.get('name'), str) for j in data['jobs']), 'ambiguous jobs listing')
+        jobs = [j for j in data['jobs'] if j['name'] == job_name]
+        require(len(jobs) <= 1 and (jobs or not run_done), 'missing or ambiguous source job')
+        return jobs[0] if jobs else None
+
+    def job_identity(job, run, fixed_id=None):
+        require(isinstance(job, dict) and positive(job.get('id')) and (fixed_id is None or job['id'] == fixed_id)
+                and job.get('run_id') == pointer['run_id'] and job.get('run_attempt') == pointer['run_attempt']
+                and job.get('name') == job_name and job.get('head_sha') == run['head_sha'], 'source job identity mismatch')
+        url = job.get('check_run_url')
+        match = re.fullmatch(re.escape('https://api.github.com' + prefix + '/check-runs/') + r'([1-9][0-9]*)', url) if isinstance(url, str) else None
+        require(match is not None, 'invalid check URL')
+        return int(match.group(1))
+
+    def check_identity(check, run, check_id):
+        require(isinstance(check, dict) and check.get('id') == check_id and check.get('name') == job_name
+                and check.get('head_sha') == run['head_sha'] and isinstance(check.get('app'), dict)
+                and check['app'].get('id') == 15368 and isinstance(check.get('check_suite'), dict)
+                and check['check_suite'].get('id') == run['check_suite_id'], 'source check identity mismatch')
+        return state(check, 'source check')
+
+    try:
+        remaining()
+        initial = source_identity()
+        fixed_run = {k: initial.get(k) for k in ('id', 'run_attempt', 'event', 'head_sha', 'head_branch', 'path', 'head_repository', 'check_suite_id')}
+        job_id = check_id = None
+        last_status = None
+        while True:
+            remaining()
+            run = api.get_json(prefix + '/actions/runs/%d' % pointer['run_id'])
+            run_identity(run, context['repository'], context['repository_id'])
+            require(all(run.get(k) == v for k, v in fixed_run.items()), 'source run changed')
+            run_done = state(run, 'source run')
+            job = list_job(run_done) if job_id is None else api.get_json(prefix + '/actions/jobs/%d' % job_id)
+            first_seen = job is not None and job_id is None
+            if job is None:
+                job_done = False
+            else:
+                current_check = job_identity(job, run, job_id)
+                if job_id is None:
+                    job_id, check_id = job['id'], current_check
+                require(check_id == current_check, 'source check changed')
+                job_done = state(job, 'source job')
+            status = (run.get('status'), job.get('status') if job else 'not registered')
+            changed = status != last_status
+            if changed:
+                print('CI source verification: run=%s job=%s' % status, file=sys.stderr)
+                last_status = status
+            check_done = False
+            if job is not None and (first_seen or changed or (job_done and run_done)):
+                check_done = check_identity(api.get_json(prefix + '/check-runs/%d' % check_id), run, check_id)
+            if job_done and run_done and check_done:
+                remaining()
+                final_run = source_identity()
+                require(all(final_run.get(k) == v for k, v in fixed_run.items()) and state(final_run, 'source run'), 'source run changed')
+                final_job = list_job(True)
+                require(job_identity(final_job, final_run, job_id) == check_id and state(final_job, 'source job'), 'source job changed')
+                require(check_identity(api.get_json(prefix + '/check-runs/%d' % check_id), final_run, check_id), 'source check changed')
+                final_run = api.get_json(prefix + '/actions/runs/%d' % pointer['run_id'])
+                run_identity(final_run, context['repository'], context['repository_id'])
+                require(all(final_run.get(k) == v for k, v in fixed_run.items()) and state(final_run, 'source run'), 'source run changed')
+                remaining()
+                return {'source_run_id': pointer['run_id'], 'source_run_attempt': pointer['run_attempt'],
+                        'source_artifact_id': pointer['artifact_id'], 'source_job_id': job_id,
+                        'source_check_id': check_id, 'source_job_name': job_name, 'source_conclusion': 'success'}
+            sleep(min(poll_seconds, remaining()))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
+        if isinstance(exc, EvidenceError):
+            raise
+        raise EvidenceError('source evidence unavailable') from exc
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--record')
+    group.add_argument('--source-check', choices=SOURCE_CHECKS)
+    args = parser.parse_args()
+    env = os.environ
+    event, context = execution_inputs(env)
+    api = GitHubAPI(env.get('GH_TOKEN', ''))
+    api.prefix = '/repos/' + context['repository']
+    if args.source_check:
+        record = validate_record(decode(env['CI_METADATA_RECORD'].encode('utf-8'), MAX_RECORD))
+        print(json.dumps(verify_source_check(event, context, record, args.source_check, api), separators=(',', ':')))
+        return 0
+    result = classify_event(event, context, api)
+    record = event_record(event, context, result)
+    print(json.dumps({'action': record['action'], 'changes': event.get('changes'), 'pull_request': record['pull_request'],
                       'event_ref': context['event_ref'], 'event_sha': context['event_sha'], 'checkout_sha': context['checkout_sha'],
                       'checkout_tree': context['checkout_tree']}, separators=(',', ':')))
     path = Path(args.record)
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = (json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')
-    require(len(encoded) <= MAX_RECORD, "record exceeds size limit")
+    require(len(encoded) <= MAX_RECORD, 'record exceeds size limit')
     path.write_bytes(encoded)
     with open(env['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-        output.write('mode=%s\nreason=%s\n' % (result['mode'], result['reason']))
+        output.write('mode=%s\nreason=%s\nrecord=%s\n' % (result['mode'], result['reason'], encoded.decode('utf-8').rstrip('\n')))
     return 0
 
 
-if __name__ == '__main__':
+def cli():
     try:
-        sys.exit(main())
+        return main()
     except (EvidenceError, KeyError, OSError, subprocess.CalledProcessError, ValueError) as exc:
-        print('CI event classification failed: ' + str(exc).replace('\n', ' ')[:300], file=sys.stderr)
-        sys.exit(1)
+        if '--source-check' in sys.argv:
+            message = str(exc) if isinstance(exc, EvidenceError) else 'invalid input or unavailable evidence'
+            print('CI source verification failed: ' + message.replace('\n', ' ')[:300], file=sys.stderr)
+        else:
+            print('CI event classification failed: ' + str(exc).replace('\n', ' ')[:300], file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(cli())

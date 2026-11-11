@@ -147,6 +147,221 @@ class FakeAPI:
         self.records[300] = record
         self.artifacts[300] = 1300
 
+class VerifyAPI(FakeAPI):
+    def __init__(self, merged=False, name=ci.SOURCE_CHECKS[0]):
+        super().__init__(merged)
+        self.run['check_suite_id'] = 900
+        self.job = {'id': 501, 'run_id': 200, 'run_attempt': 1, 'name': name,
+                    'head_sha': self.run['head_sha'], 'status': 'completed', 'conclusion': 'success',
+                    'check_run_url': 'https://api.github.com/repos/owner/project/check-runs/601'}
+        self.check = {'id': 601, 'name': name, 'head_sha': self.run['head_sha'],
+                      'app': {'id': 15368}, 'check_suite': {'id': 900},
+                      'status': 'completed', 'conclusion': 'success'}
+        self.registered = True
+        self.duplicate = False
+        self.truncated = False
+        self.calls = []
+
+    def get_json(self, path):
+        self.calls.append(path)
+        if path == PREFIX + '/actions/jobs/501':
+            return copy.deepcopy(self.job)
+        if path == PREFIX + '/check-runs/601':
+            return copy.deepcopy(self.check)
+        result = super().get_json(path)
+        if '/runs/200/attempts/1/jobs?' in path:
+            if self.registered:
+                result['jobs'].append(copy.deepcopy(self.job))
+            if self.duplicate:
+                result['jobs'].append(copy.deepcopy(self.job))
+            result['total_count'] = len(result['jobs']) + int(self.truncated)
+        return result
+
+    def metadata(self):
+        return ci.event_record(self.event, self.ctx, self.classify())
+
+
+class Clock:
+    def __init__(self, callback=None):
+        self.now = 0
+        self.sleeps = []
+        self.callback = callback
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, duration):
+        self.sleeps.append(duration)
+        self.now += duration
+        if self.callback:
+            self.callback()
+
+
+class SourceVerificationTest(unittest.TestCase):
+    def verify(self, api, record=None, clock=None, timeout=180):
+        clock = clock or Clock()
+        return ci.verify_source_check(api.event, api.ctx, record or api.metadata(), api.job['name'], api,
+                                      timeout_seconds=timeout, poll_seconds=60,
+                                      monotonic=clock.monotonic, sleep=clock.sleep)
+
+    def test_success_for_each_name_and_merged_advanced_main(self):
+        for merged in (False, True):
+            for name in ci.SOURCE_CHECKS:
+                with self.subTest(merged=merged, name=name):
+                    api = VerifyAPI(merged, name)
+                    result = self.verify(api)
+                    self.assertEqual(result, {'source_run_id': 200, 'source_run_attempt': 1,
+                                              'source_artifact_id': 1200, 'source_job_id': 501,
+                                              'source_check_id': 601, 'source_job_name': name,
+                                              'source_conclusion': 'success'})
+                    self.assertTrue(all(path.startswith(PREFIX + '/') for path in api.calls))
+
+    def test_failed_conclusions_rejected(self):
+        for target in ('run', 'job', 'check'):
+            for conclusion in ('failure', 'cancelled', 'timed_out', 'skipped', 'neutral'):
+                with self.subTest(target=target, conclusion=conclusion):
+                    api = VerifyAPI()
+                    record = api.metadata()
+                    getattr(api, target)['conclusion'] = conclusion
+                    with self.assertRaises(ci.EvidenceError):
+                        self.verify(api, record)
+
+    def test_wait_for_whole_run_and_delayed_registration(self):
+        api = VerifyAPI()
+        api.run.update(status='in_progress', conclusion=None)
+        api.registered = False
+        record = api.metadata()
+        def advance():
+            if not api.registered:
+                api.registered = True
+            else:
+                api.run.update(status='completed', conclusion='success')
+        clock = Clock(advance)
+        self.verify(api, record, clock)
+        self.assertEqual(clock.sleeps, [60, 60])
+
+    def test_successful_job_waits_for_run_with_two_requests(self):
+        api = VerifyAPI()
+        api.run.update(status='in_progress', conclusion=None)
+        record = api.metadata()
+        checkpoints = []
+        pending_calls = []
+        def advance():
+            if not checkpoints:
+                checkpoints.append(len(api.calls))
+            else:
+                pending_calls.extend(api.calls[checkpoints[0]:])
+                api.run.update(status='completed', conclusion='success')
+        clock = Clock(advance)
+        self.verify(api, record, clock)
+        self.assertEqual(clock.sleeps, [60, 60])
+        self.assertEqual(pending_calls, [PREFIX + '/actions/runs/200', PREFIX + '/actions/jobs/501'])
+
+    def test_pending_then_cancellation_and_timeout(self):
+        api = VerifyAPI()
+        api.run.update(status='in_progress', conclusion=None)
+        api.job.update(status='in_progress', conclusion=None)
+        api.check.update(status='in_progress', conclusion=None)
+        record = api.metadata()
+        clock = Clock(lambda: api.job.update(status='completed', conclusion='cancelled'))
+        with self.assertRaises(ci.EvidenceError):
+            self.verify(api, record, clock)
+        self.assertEqual(clock.sleeps, [60])
+        api = VerifyAPI()
+        api.run.update(status='in_progress', conclusion=None)
+        record = api.metadata()
+        clock = Clock()
+        with self.assertRaises(ci.EvidenceError):
+            self.verify(api, record, clock, timeout=100)
+        self.assertEqual(clock.sleeps, [60, 40])
+
+    def test_check_propagation_waits_then_succeeds(self):
+        api = VerifyAPI()
+        api.check.update(status='queued', conclusion=None)
+        record = api.metadata()
+        clock = Clock(lambda: api.check.update(status='completed', conclusion='success'))
+        self.verify(api, record, clock)
+        self.assertEqual(clock.sleeps, [60])
+
+    def test_final_job_and_attempt_drift_rejected(self):
+        for drift in ('job', 'attempt', 'artifact'):
+            api = VerifyAPI()
+            record = api.metadata()
+            original = api.get_json
+            seen = []
+            def changed(path):
+                result = original(path)
+                if path == PREFIX + '/check-runs/601':
+                    seen.append(path)
+                    if len(seen) == 1:
+                        if drift == 'job':
+                            api.job['id'] = 777
+                        elif drift == 'attempt':
+                            api.run['run_attempt'] = 2
+                        else:
+                            api.artifacts[200] = 7777
+                return result
+            api.get_json = changed
+            with self.subTest(drift=drift), self.assertRaises(ci.EvidenceError):
+                self.verify(api, record)
+
+    def test_identity_and_listing_fail_closed(self):
+        mutations = [lambda a: a.job.update(id=0), lambda a: a.job.update(run_id=999),
+                     lambda a: a.job.update(run_attempt=2), lambda a: a.job.update(head_sha=D),
+                     lambda a: a.job.update(check_run_url='https://evil.example/check-runs/601'),
+                     lambda a: a.check.update(id=602), lambda a: a.check.update(name='wrong'),
+                     lambda a: a.check.update(head_sha=D), lambda a: a.check.update(app={'id': 1}),
+                     lambda a: a.check.update(check_suite={'id': 901}),
+                     lambda a: setattr(a, 'duplicate', True), lambda a: setattr(a, 'truncated', True),
+                     lambda a: setattr(a, 'registered', False), lambda a: a.run.update(check_suite_id=0),
+                     lambda a: a.job.update(status='mystery'), lambda a: a.check.update(status='queued', conclusion='success')]
+        for mutate in mutations:
+            api = VerifyAPI()
+            record = api.metadata()
+            mutate(api)
+            with self.subTest(mutation=mutate), self.assertRaises(ci.EvidenceError):
+                self.verify(api, record)
+
+    def test_source_and_candidate_drift_rejected(self):
+        mutations = [lambda a: setattr(a, 'expired', True), lambda a: setattr(a, 'attempt_change', True),
+                     lambda a: setattr(a, 'zip_override', b'bad'), lambda a: a.pr['head'].update(sha=D),
+                     lambda a: setattr(a, 'producer_status', 'queued'),
+                     lambda a: setattr(a, 'fail', TimeoutError('secret token'))]
+        for mutate in mutations:
+            api = VerifyAPI()
+            record = api.metadata()
+            mutate(api)
+            with self.subTest(mutation=mutate), self.assertRaises(ci.EvidenceError):
+                self.verify(api, record)
+
+    def test_final_revalidation_detects_drift(self):
+        api = VerifyAPI()
+        record = api.metadata()
+        original = api.get_json
+        reads = []
+        def changed(path):
+            result = original(path)
+            if path == PREFIX + '/check-runs/601':
+                reads.append(path)
+                if len(reads) == 1:
+                    api.pr['head']['sha'] = D
+            return result
+        api.get_json = changed
+        with self.assertRaises(ci.EvidenceError):
+            self.verify(api, record)
+
+    def test_invalid_deadlines_and_record(self):
+        api = VerifyAPI()
+        record = api.metadata()
+        for timeout, poll in ((0, 1), (1, 0), (-1, 1)):
+            with self.assertRaises(ci.EvidenceError):
+                ci.verify_source_check(api.event, api.ctx, record, api.job['name'], api,
+                                       timeout_seconds=timeout, poll_seconds=poll)
+        record['change_keys'] = ['body']
+        with self.assertRaises(ci.EvidenceError):
+            self.verify(api, record)
+
+
 
 class ClassificationTest(unittest.TestCase):
     def test_open_metadata_changes(self):
@@ -418,7 +633,19 @@ class CLITest(unittest.TestCase):
         record = json.loads(self.record.read_text())
         self.assertEqual(record['checkout_sha'], self.env['GITHUB_SHA'])
         self.assertEqual(record['mode'], 'source')
-        self.assertEqual(self.output.read_text(), 'mode=source\nreason=source-event\n')
+        outputs = dict(line.split('=', 1) for line in self.output.read_text().splitlines())
+        self.assertEqual(outputs['mode'], 'source')
+        self.assertEqual(outputs['reason'], 'source-event')
+        self.assertEqual(json.loads(outputs['record']), record)
+
+    def test_cli_requires_one_supported_operation(self):
+        script = str(ROOT / 'scripts/classify-ci-event.py')
+        for args in ([], ['--record', str(self.record), '--source-check', ci.SOURCE_CHECKS[0]],
+                     ['--source-check', 'unexpected']):
+            result = subprocess.run([sys.executable, script, *args], cwd=self.directory, env=self.env,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(self.record.exists())
 
     def test_real_merge_parents_record_candidate(self):
         branch = self.git('branch', '--show-current')
@@ -449,6 +676,60 @@ class CLITest(unittest.TestCase):
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIsNone(json.loads(self.record.read_text())['pull_request'])
+
+    def test_verifier_cli_uses_real_checkout_and_stateful_api(self):
+        branch = self.git('branch', '--show-current')
+        self.git('checkout', '-qb', 'feature')
+        (self.directory / 'head').write_text('head')
+        self.git('add', 'head')
+        self.git('-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'head')
+        head = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-q', branch)
+        (self.directory / 'base').write_text('base')
+        self.git('add', 'base')
+        self.git('-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'base')
+        base = self.git('rev-parse', 'HEAD')
+        self.git('-c', 'core.hooksPath=/dev/null', 'merge', '--no-ff', '-qm', 'merge', 'feature')
+        merge = self.git('rev-parse', 'HEAD')
+        tree = self.git('rev-parse', 'HEAD^{tree}')
+        replacements = {A: base, B: head, C: merge, E: tree}
+        def translate(value):
+            if isinstance(value, dict):
+                return {k: translate(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [translate(v) for v in value]
+            return replacements.get(value, value) if isinstance(value, str) else value
+        class RealCheckoutAPI(VerifyAPI):
+            def get_json(self, path):
+                return translate(super().get_json(path.replace(merge, C)))
+            def get_artifact(self, artifact_id):
+                run_id = next(k for k, v in self.artifacts.items() if v == artifact_id)
+                return zip_record(translate(self.records[run_id]))
+        api = RealCheckoutAPI()
+        self.event.write_text(json.dumps(translate(api.event)))
+        self.env.update(GITHUB_EVENT_NAME='pull_request', GITHUB_REF='refs/pull/7/merge', GITHUB_SHA=merge)
+        self.env.pop('GITHUB_OUTPUT')
+        previous = os.getcwd()
+        try:
+            os.chdir(self.directory)
+            with mock.patch.dict(os.environ, self.env, clear=True), mock.patch.object(ci, 'GitHubAPI', return_value=api):
+                event, ctx = ci.execution_inputs(os.environ)
+                metadata = ci.event_record(event, ctx, ci.classify_event(event, ctx, api))
+                os.environ['CI_METADATA_RECORD'] = json.dumps(metadata)
+                args = ['classifier', '--source-check', ci.SOURCE_CHECKS[0]]
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with mock.patch.object(sys, 'argv', args), mock.patch('sys.stdout', stdout), mock.patch('sys.stderr', stderr):
+                    self.assertEqual(ci.cli(), 0, stderr.getvalue())
+                self.assertEqual(json.loads(stdout.getvalue())['source_check_id'], 601)
+                api.job['conclusion'] = 'failure'
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with mock.patch.object(sys, 'argv', args), mock.patch('sys.stdout', stdout), mock.patch('sys.stderr', stderr):
+                    self.assertEqual(ci.cli(), 1)
+                self.assertEqual(stdout.getvalue(), '')
+                self.assertIn('CI source verification failed:', stderr.getvalue())
+        finally:
+            os.chdir(previous)
+
 
     def test_invalid_inputs_and_write_failures(self):
         for failure in ('head', 'json', 'record', 'output'):

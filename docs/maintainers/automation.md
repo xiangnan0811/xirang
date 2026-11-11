@@ -156,17 +156,31 @@ CI 的 `CI Event Classification` 记录事件、实际 checkout 和来源身份�
 
 对打开的 PR，分类比较当前 head、base 和 merge 候选的提交及 tree；对已合并 PR，
 比较固定 merge 提交与同仓库 `main` push 的源码记录，即使当前 main 已前进也不以
-新 checkout 代替原合并来源。记录只证明验证输入，不证明测试成功；来源运行的
-失败、取消或 pending 状态仍须保留并阻断相应门禁。metadata 作业使用
-`Metadata only / ` 前缀隔离名称，不能替代 `Backend Test & Build`、
-`Frontend Test & Build` 或 `Doc Freshness Check` 等原源码检查；合并前须核对当前
-候选的有效 required checks，不能只凭 workflow 总体成功或跳过结果判断。
+新 checkout 代替原合并来源。记录只证明验证输入，不证明测试成功。
 
-三个受保护源码作业在 workflow 未取消时启动，以便求值隔离名称；只有分类成功且
-mode 为 metadata 时才跳过其全部源码步骤。其他情况执行原源码步骤，普通步骤保留
-前序失败后的默认跳过行为；前端浏览器证据上传和覆盖率检查保留 `always()`，但同样
-受 metadata 排除条件约束。其余源码作业仍在作业级排除 metadata。metadata 的实际
-步骤状态、原检查身份和有效保护状态须在 GitHub 上逐项验证，不能仅凭配置推断通过。
+三个受保护作业始终使用固定 required 名称 `Backend Test & Build`、
+`Frontend Test & Build` 和 `Doc Freshness Check`；`PR Title` 仍是独立的 required
+检查。metadata 运行会产生新的同名 check ID，原源码运行的 check ID 和结论保持不变，
+作为不可变来源证据。每个 metadata 验证者必须确认固定来源的对应源码 job、对应 check
+以及整个来源 workflow 均已完成且成功；单个 job 成功而 workflow 仍在运行时继续等待。
+等待最多 350 分钟，每个受保护 job 的期限为 360 分钟；来源失败、取消、超时、跳过、
+neutral 等非成功终态，或证据不可读取、身份不匹配、验证超时，均阻断通过。
+验证前后重新核对候选与来源，来源 attempt 或候选变化不能沿用过期成功结果；合并前
+还须核对当前来源及有效 required checks，不能只凭 workflow 总体成功或跳过结果判断。
+
+三个受保护作业在 workflow 未取消时启动。只有分类成功且 mode 为 metadata 时，
+才跳过全部源码步骤，并以稀疏 checkout 获取验证脚本，执行只读来源验证，不运行源码
+测试；每次 metadata 运行最多占用三个轻量等待 runner。这些作业仅有 `contents`、
+`actions`、`pull-requests`、`checks` 的 read 权限。分类完成后若来源证据失效，验证者
+失败并阻断，不以只运行这三个局部源码作业冒充完整回退；下一事件仍由分类器决定是否
+运行完整源码检查。其他情况执行原源码步骤，普通步骤保留前序失败后的默认跳过行为；
+前端浏览器证据上传和覆盖率检查保留 `always()`，但同样受 metadata 排除条件约束。
+其余源码作业仍在作业级排除 metadata。metadata 的实际步骤状态、来源及新 check 身份
+和有效保护状态须在 GitHub 上逐项验证，不能仅凭配置推断通过。
+
+使用新版 PR Overview 时，可从页首 `Merge status` 查看 required、等待及实际结论，
+在 `Checks` 按提交、workflow 和运行查看步骤与日志；同时核对当前候选的有效合并状态。
+metadata 验证成功不能代替合并后同 SHA `main` push 的完整 CI 或发布证明。
 
 CI 将 push 与 PR 的并发组分开：同一 PR 的 opened／synchronize／reopened 源码运行
 可替代较旧的同组源码运行，每次 edited 使用独立运行组，不取消其他源码运行或同 SHA
