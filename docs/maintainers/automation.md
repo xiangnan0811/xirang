@@ -143,8 +143,6 @@ moderate 审计、原 lint 文件集合、ESM/CJS、类型声明、可访问性�
 
 [CI](../../.github/workflows/ci.yml)使用 `pull_request` 检查 PR，push 仅监听 `main`，避免同一 PR 提交重复运行。required checks 的设置与交付步骤见贡献指南；发布链路与凭据归[发布手册](release.md)。
 
-`ci/round29-event-fixture` 是不会合并的 Round29 事件验收分支，通过受控的后端拒绝及记录上传后的分类器拒绝验证失败传播；原有测试和门禁均保留，其运行结果不能作为源码通过证明。
-
 PR 打开、更新提交、重新打开及编辑均触发 CI 和独立的
 [PR Metadata](../../.github/workflows/pr-metadata.yml) 工作流。`PR Title` 在每次运行时
 通过 GitHub API 读取当前 PR 标题并复用标题校验脚本；API 失败或标题为空即失败。
@@ -163,6 +161,14 @@ CI 的 `CI Event Classification` 记录事件、实际 checkout 和来源身份�
 `Metadata only / ` 前缀隔离名称，不能替代 `Backend Test & Build`、
 `Frontend Test & Build` 或 `Doc Freshness Check` 等原源码检查；合并前须核对当前
 候选的有效 required checks，不能只凭 workflow 总体成功或跳过结果判断。
+
+三个受保护源码作业在 workflow 未取消时启动，以便求值隔离名称；只有分类成功且
+mode 为 metadata 时才跳过其全部源码步骤。其他情况执行原源码步骤，普通步骤保留
+前序失败后的默认跳过行为；前端浏览器证据上传和覆盖率检查保留 `always()`，但同样
+受 metadata 排除条件约束。其余源码作业仍在作业级排除 metadata。metadata 的实际
+步骤状态、原检查身份和有效保护状态须在 GitHub 上逐项验证，不能仅凭配置推断通过。
+
+未合并的 Round29 fixture 使用受控失败验证 CI 门禁，不属于应用功能。
 
 CI 将 push 与 PR 的并发组分开：同一 PR 的 opened／synchronize／reopened 源码运行
 可替代较旧的同组源码运行，每次 edited 使用独立运行组，不取消其他源码运行或同 SHA
