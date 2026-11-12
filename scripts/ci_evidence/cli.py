@@ -449,15 +449,38 @@ def refresh(obj, case, summary, *, client=None):
                 if len(matches) != 1:
                     raise store.IntegrityError('required source job missing')
                 source_checks[name] = check_job(matches[0], source_run, name)
-            # Discover current required checks, then bind their IDs to actual attempt jobs.
+            # The head listing may contain the same names in several legitimate suites.
             current = listing(prefix + 'commits/' + obj['source']['head_sha'] + '/check-runs?filter=latest&per_page=100', 'check_runs')
             selected = {}
             names = snapshot.NAMES if obj['pr'] is None else (*snapshot.NAMES, 'PR Title')
-            for name in names:
-                matches = [item for item in current if item.get('name') == name and (item.get('app') or {}).get('id') == 15368]
-                if len(matches) != 1:
-                    raise store.IntegrityError('current required check missing or ambiguous')
-                selected[name] = matches[0]
+            if obj['kind'] == 'snapshot':
+                def declared_check(run, jobs, name, expected_id=None):
+                    matching_jobs = [job for job in jobs if job['name'] == name]
+                    if len(matching_jobs) != 1:
+                        raise store.IntegrityError('required job missing or ambiguous')
+                    check_id = check_job(matching_jobs[0], run, name, expected_id)
+                    matches = [item for item in current if item.get('name') == name and
+                               (item.get('check_suite') or {}).get('id') == run['check_suite_id']]
+                    if (len(matches) != 1 or matches[0].get('id') != check_id or
+                            (matches[0].get('app') or {}).get('id') != 15368 or
+                            matches[0].get('head_sha') != obj['source']['head_sha'] or
+                            matches[0].get('status') != 'completed' or matches[0].get('conclusion') != 'success'):
+                        raise store.IntegrityError('declared required check missing or ambiguous')
+                    return matches[0]
+
+                for name in snapshot.NAMES:
+                    declared_check(source_run, source_jobs, name, source_checks[name])
+                metadata_jobs = jobs_for(runs[1])
+                title_jobs = jobs_for(runs[2])
+                for name in snapshot.NAMES:
+                    selected[name] = declared_check(runs[1], metadata_jobs, name)
+                selected['PR Title'] = declared_check(runs[2], title_jobs, 'PR Title')
+            else:
+                for name in names:
+                    matches = [item for item in current if item.get('name') == name and (item.get('app') or {}).get('id') == 15368]
+                    if len(matches) != 1:
+                        raise store.IntegrityError('current required check missing or ambiguous')
+                    selected[name] = matches[0]
             if obj['pr'] is None:
                 for name in snapshot.NAMES:
                     if selected[name]['id'] != source_checks[name]:

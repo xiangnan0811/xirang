@@ -975,7 +975,8 @@ raise SystemExit(cli.main(sys.argv[2:]))
                     artifact_id = name.rsplit('-', 1)[1].removesuffix('.zip')
                     routes[prefix + 'actions/artifacts/' + artifact_id + '/zip'] = data
             latest = []
-            for run, names in ((next(item for item in runs if item['id'] == meta['run_id']), snapshot.NAMES),
+            for run, names in ((next(item for item in runs if item['id'] == src['run_id']), snapshot.NAMES),
+                               (next(item for item in runs if item['id'] == meta['run_id']), snapshot.NAMES),
                                (title, ('PR Title',))):
                 jobs = read(f"jobs-{run['id']}-{run['run_attempt']}.json")[0]['jobs']
                 checks = read(f"suite-{run['check_suite_id']}.json")[0]['check_runs']
@@ -983,6 +984,11 @@ raise SystemExit(cli.main(sys.argv[2:]))
                     job = next(item for item in jobs if item['name'] == name)
                     check_id = int(job['check_run_url'].rsplit('/', 1)[1])
                     latest.append(next(item for item in checks if item['id'] == check_id))
+            # An earlier opened-title suite remains visible beside the edited title.
+            opened_title = json.loads(json.dumps(latest[-1]))
+            opened_title['id'] = max(check['id'] for check in latest) + 1
+            opened_title['check_suite']['id'] = max(run['check_suite_id'] for run in runs) + 1
+            latest.append(opened_title)
             routes[prefix + 'commits/' + pr['head_sha'] + '/check-runs?filter=latest'] = context.canonical({
                 'total_count': len(latest), 'check_runs': latest})
             return request, routes, read('graphql.json')
@@ -1159,10 +1165,89 @@ raise SystemExit(main(sys.argv[2:]))
 import json
 from pathlib import Path
 from ci_evidence.cli import refresh
-print(json.dumps(refresh(json.loads(sys.argv[2]), Path(sys.argv[3]), {"observation": "raw/observation"})))
+print(json.dumps(refresh(json.loads(sys.argv[2]), Path(sys.argv[3]), {"observation": sys.argv[4]})))
 '''
             direct = [sys.executable, '-B', '-c', direct_wrapper, str(server.server_port),
-                      json.dumps(source_context), str(source_view)]
+                      json.dumps(source_context), str(source_view), 'raw/observation']
+            current_routes = fixtures['terminal'][1]
+            prefix = '/repos/' + source_context['repository'] + '/'
+            latest_path = prefix + 'commits/' + source_context['source']['head_sha'] + '/check-runs?filter=latest'
+            multiple_suites = current_routes[latest_path]
+            listing = json.loads(multiple_suites)
+            source_run = json.loads(current_routes[prefix + 'actions/runs/' + str(rid)])
+            meta_run_object = json.loads(current_routes[prefix + 'actions/runs/' + str(terminal_request['metadata']['run_id'])])
+            title_run_object = json.loads(current_routes[prefix + 'actions/runs/' + str(terminal_request['title']['run_id'])])
+            suite_names = [(source_run['check_suite_id'], snapshot.NAMES[0]),
+                           (meta_run_object['check_suite_id'], snapshot.NAMES[0]),
+                           (title_run_object['check_suite_id'], 'PR Title')]
+            snapshot_view = agent / 'snapshot-view'
+            shutil.copytree(stored, snapshot_view / 'raw/observation')
+            snapshot_direct = [sys.executable, '-B', '-c', direct_wrapper, str(server.server_port),
+                               json.dumps(terminal_request), str(snapshot_view), 'raw/observation']
+            accepted = subprocess.run(snapshot_direct, cwd=root, env=env, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, timeout=60, close_fds=True)
+            self.assertEqual(accepted.returncode, 0)
+            self.assertEqual(json.loads(accepted.stdout), ['eligible_at_observation', False])
+            ambiguous = subprocess.run(direct, cwd=root, env=env, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, timeout=60, close_fds=True)
+            self.assertEqual(ambiguous.returncode, 0)
+            self.assertEqual(json.loads(ambiguous.stdout), ['blocked', False])
+            protection_path = prefix + 'branches/' + terminal_request['pr']['base_ref'] + '/protection'
+            original_protection = current_routes[protection_path]
+            protection = json.loads(original_protection)
+            protection['required_status_checks']['strict'] = False
+            current_routes[protection_path] = context.canonical(protection)
+            try:
+                blocked = subprocess.run(snapshot_direct, cwd=root, env=env, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, timeout=60, close_fds=True)
+                self.assertEqual(blocked.returncode, 0)
+                self.assertEqual(json.loads(blocked.stdout), ['blocked', False])
+            finally:
+                current_routes[protection_path] = original_protection
+            for suite_id, name in suite_names:
+                for mutation in ('missing', 'duplicate', 'replacement_id', 'wrong_app'):
+                    changed = json.loads(multiple_suites)
+                    checks = changed['check_runs']
+                    index = next(i for i, item in enumerate(checks)
+                                 if item['name'] == name and item['check_suite']['id'] == suite_id)
+                    if mutation == 'missing':
+                        checks.pop(index)
+                    elif mutation == 'duplicate':
+                        duplicate = json.loads(json.dumps(checks[index]))
+                        duplicate['id'] = max(item['id'] for item in checks) + 1
+                        checks.append(duplicate)
+                    elif mutation == 'replacement_id':
+                        checks[index]['id'] = max(item['id'] for item in checks) + 1
+                    else:
+                        checks[index]['app']['id'] = 1
+                    changed['total_count'] = len(checks)
+                    current_routes[latest_path] = context.canonical(changed)
+                    try:
+                        rejected = subprocess.run(snapshot_direct, cwd=root, env=env, stdout=subprocess.PIPE,
+                                                  stderr=subprocess.PIPE, timeout=60, close_fds=True)
+                        self.assertEqual(rejected.returncode, 0)
+                        self.assertEqual(json.loads(rejected.stdout), ['blocked', False], (suite_id, name, mutation))
+                    finally:
+                        current_routes[latest_path] = multiple_suites
+            for role in ('source', 'metadata', 'title'):
+                run_path = prefix + 'actions/runs/' + str(terminal_request[role]['run_id'])
+                original_run = current_routes[run_path]
+                changed = json.loads(original_run)
+                changed['run_attempt'] += 1
+                current_routes[run_path] = context.canonical(changed)
+                try:
+                    rejected = subprocess.run(snapshot_direct, cwd=root, env=env, stdout=subprocess.PIPE,
+                                              stderr=subprocess.PIPE, timeout=60, close_fds=True)
+                    self.assertEqual(rejected.returncode, 0)
+                    self.assertEqual(json.loads(rejected.stdout), ['blocked', True], role)
+                finally:
+                    current_routes[run_path] = original_run
+            # Source contexts have no declared metadata/title identities and remain conservative.
+            selected_suites = {meta_run_object['check_suite_id'], title_run_object['check_suite_id']}
+            listing['check_runs'] = [item for item in listing['check_runs']
+                                     if item['check_suite']['id'] in selected_suites]
+            listing['total_count'] = len(listing['check_runs'])
+            current_routes[latest_path] = context.canonical(listing)
             source_live = subprocess.run(direct, cwd=root, env=env, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, timeout=60, close_fds=True)
             self.assertEqual(source_live.returncode, 0)
@@ -1189,6 +1274,15 @@ print(json.dumps(refresh(json.loads(sys.argv[2]), Path(sys.argv[3]), {"observati
                                                stderr=subprocess.PIPE, timeout=60, close_fds=True)
                 self.assertEqual(pointer_drift.returncode, 0)
                 self.assertEqual(json.loads(pointer_drift.stdout), ['blocked', True])
+                narrowed_listing = current_routes[latest_path]
+                current_routes[latest_path] = multiple_suites
+                try:
+                    snapshot_drift = subprocess.run(snapshot_direct, cwd=root, env=env, stdout=subprocess.PIPE,
+                                                    stderr=subprocess.PIPE, timeout=60, close_fds=True)
+                    self.assertEqual(snapshot_drift.returncode, 0)
+                    self.assertEqual(json.loads(snapshot_drift.stdout), ['blocked', True])
+                finally:
+                    current_routes[latest_path] = narrowed_listing
             finally:
                 current_routes[listing_path] = original_listing
                 current_routes[zip_path] = original_zip
