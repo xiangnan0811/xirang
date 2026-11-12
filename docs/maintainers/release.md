@@ -76,6 +76,16 @@ amd64 profile smoke 上传的七份签名 fixture 原件／receipt，并按[测�
 合法 CI 身份；环境变量不认证生产者，临时测试公钥和 receipt 不是生产 proof。输入采集、
 CI 及正式镜像发布各自取证，任何一项不能替代其他项或证明生产部署。
 
+本次 Go／libxslt 补丁的 Release PR 只补充版本材料和本手册，并须逐项核对执行消费者的
+blob 与已审阅的合并源码 `429b92aa1144d6d11e41717cfb7d17cc2f190b6f`（S）一致。
+[R2 源码运行](https://github.com/xiangnan0811/xirang/actions/runs/43013360818)与
+[S 的 main 验证运行](https://github.com/xiangnan0811/xirang/actions/runs/43026849570)是证据入口；
+不得仅凭链接预先计为成功。最终 head 的 PR 源码、合并后 main、Release PR 源码和
+发行源码的 main 运行各自须取得当前 attempt 的 PostgreSQL、浏览器、原生双架构及七文件
+签名 fixture／receipt 证据，核对 producer API、ZIP 摘要和产生时间窗口，并按既有
+`VerifyPackage` 重放验证及同 SHA 发行来源选择器检查。metadata、旧 head 或其他运行的证据
+均不能替代；具体取证步骤以[测试约定](../spec/guides/testing.md#worker-profile-签名证据)为准。
+
 纯 `ci`／`test`／`docs` 变更没有需发行的运行行为或依赖修复时，说明保留在
 `Unreleased`，不为此单独制造正式版本或镜像；仍核对正常 hooks、required CI、
 合并后同 SHA 的完整 `main` push CI 与 Release Please 的实际结果。
