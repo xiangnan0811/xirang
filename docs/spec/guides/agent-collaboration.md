@@ -40,6 +40,11 @@ Claude Code 的 `CLAUDE.md` 只保留 `@AGENTS.md`，通过原生导入维持单
 和配置条件。相同 HEAD 不能覆盖脏工作区；部分暂存或候选/条件变化使相关检查失效，
 未变的有效证据可复用。只读评估仅做只读索引比较，不暂存、不建临时 Git 索引、不写私有状态。
 
+CI case 的 context 以规范 Git common-directory 和 checkout 根的单向身份键绑定
+仓库及工作区；唯一 current 指针只引用显式 case，不复制任务阶段，也不恢复已完成
+任务。source／snapshot 的 complete 只覆盖该 context，整套整改的独审、远端、
+性能和原生加载验收仍须分别闭合；操作接口见[仓库自动化](../../maintainers/automation.md#可恢复-ci-取证)。
+
 获授权提交前核对范围、合同同步、独立审查、测试构建和适用验收；在范围内修复并重跑
 受影响检查。暂存或格式化后重核最终索引。证据留在会话或已有私有状态，不写仓库过程日志。
 
@@ -52,4 +57,10 @@ Claude Code 的 `CLAUDE.md` 只保留 `@AGENTS.md`，通过原生导入维持单
 
 切换 profile/worktree 不证明隔离；核对解析后的用户/配置目录、技能/扩展、私有状态、
 Git common-directory 及共享服务。静态辅助检查或单平台通过不代表其他平台原生验收。
+
+会话归属实际宿主进程。需要判断规则或扩展加载时记录该进程的 executable、runtime
+版本及本会话 discovery／selection／injection；磁盘文件变化或创建子会话不能证明
+宿主已切换。跨项目验收另核独立 Git 根和实际项目入口，不能以临时规则注入替代
+持久全局来源。恢复需绑定同一 session-dir 与实际 session ID，并保留原目标、
+已完成结果及任务代次；进度、parked 或 RPC admission 均不等同任务完成。
 临时探针置于项目外并在验收后清除，持久项目要求由本合同维护。

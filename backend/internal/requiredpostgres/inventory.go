@@ -32,7 +32,7 @@ type Exclusion struct {
 	Reason  string `json:"reason"`
 }
 
-var packageName = regexp.MustCompile(`^\./internal(?:/[A-Za-z0-9_-]+)+$`)
+var packageName = regexp.MustCompile(`^\./(?:internal|cmd)(?:/[A-Za-z0-9_-]+)+$`)
 var testName = regexp.MustCompile(`^Test[A-Za-z0-9_]+$`)
 var pathPart = regexp.MustCompile(`^[A-Za-z0-9_=.\-]+$`)
 

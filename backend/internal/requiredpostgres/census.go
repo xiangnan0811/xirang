@@ -33,11 +33,38 @@ func mixedEngineLiteral(node ast.Node) bool {
 	return sqlite && postgres
 }
 
-// Census inspects active test files only. It follows same-package function identifiers,
-// including references in closures and function values, but not dynamic dispatch.
+// Census inspects active test files in internal and declared command packages.
+// It follows same-package function identifiers, including references in closures
+// and function values, but not dynamic dispatch.
 func Census(root string, inv Inventory) error {
+	registered := map[string]bool{}
+	commandPackages := map[string]bool{}
+	commandDeclarations := map[string]bool{}
+	register := func(pkg, name string) error {
+		registered[pkg+"/"+name] = true
+		if strings.HasPrefix(pkg, "./cmd/") {
+			if !packageName.MatchString(pkg) {
+				return fmt.Errorf("invalid command package %q", pkg)
+			}
+			commandPackages[pkg] = true
+			commandDeclarations[pkg+"/"+name] = true
+		}
+		return nil
+	}
+	for _, g := range inv.Groups {
+		for _, t := range g.Tests {
+			if err := register(g.Package, t.Name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, e := range inv.Exclusions {
+		if err := register(e.Package, e.Name); err != nil {
+			return err
+		}
+	}
 	packages := map[string]map[string]*censusFunc{}
-	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, ent fs.DirEntry, walkErr error) error {
+	walk := func(path string, ent fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -193,19 +220,27 @@ func Census(root string, inv Inventory) error {
 			packages[pkg][c.name] = c
 		}
 		return nil
-	})
-	if err != nil {
+	}
+	if err := filepath.WalkDir(filepath.Join(root, "internal"), walk); err != nil {
 		return err
 	}
-	registered := map[string]bool{}
-	for _, g := range inv.Groups {
-		for _, t := range g.Tests {
-			registered[g.Package+"/"+t.Name] = true
+	commands := make([]string, 0, len(commandPackages))
+	for pkg := range commandPackages {
+		commands = append(commands, pkg)
+	}
+	sort.Strings(commands)
+	for _, pkg := range commands {
+		dir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(pkg, "./")))
+		if err := filepath.WalkDir(dir, func(path string, ent fs.DirEntry, walkErr error) error {
+			if walkErr == nil && ent.IsDir() && path != dir {
+				return filepath.SkipDir
+			}
+			return walk(path, ent, walkErr)
+		}); err != nil {
+			return err
 		}
 	}
-	for _, e := range inv.Exclusions {
-		registered[e.Package+"/"+e.Name] = true
-	}
+	seenCommands := map[string]bool{}
 	missing := []string{}
 	for scope, funcs := range packages {
 		pkg, _, _ := strings.Cut(scope, "\x00")
@@ -239,10 +274,24 @@ func Census(root string, inv Inventory) error {
 				}
 			}
 		}
-		for name, source := range sources {
-			if funcs[name].test && !registered[pkg+"/"+name] {
-				missing = append(missing, pkg+"/"+name+": "+source)
+		for name, f := range funcs {
+			if !f.test {
+				continue
 			}
+			key := pkg + "/" + name
+			if commandPackages[pkg] {
+				seenCommands[key] = true
+				if !registered[key] {
+					missing = append(missing, key+": unregistered command test ("+f.source+")")
+				}
+			} else if sources[name] != "" && !registered[key] {
+				missing = append(missing, key+": "+sources[name])
+			}
+		}
+	}
+	for key := range commandDeclarations {
+		if !seenCommands[key] {
+			missing = append(missing, key+": declared command test missing")
 		}
 	}
 	sort.Strings(missing)

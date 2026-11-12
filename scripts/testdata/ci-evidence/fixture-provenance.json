@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "purpose": "Offline and loopback-only CI snapshot verification fixtures",
+  "origin": {
+    "repository": "xiangnan0811/xirang",
+    "pull_request": 710,
+    "source_run": {"id": 43033586227, "attempt": 2},
+    "metadata_run": {"id": 43034059692, "attempt": 2},
+    "pending_title_run": {"id": 43034059762, "attempt": 1},
+    "terminal_title_run": {"id": 43139623214, "attempt": 1},
+    "workflow_head_sha": "b8f512a9364983e0711e81eade1ba8971e8afe0a",
+    "workflow_blob_sha1": "a8d8d7d6ae279d4b4edc954d84df1823d40c32e9"
+  },
+  "derivation": "The public GitHub observations were reduced to the fields exercised by the snapshot verifier. PR title, body, actors and unrelated repository metadata were removed. Original public ci-event ZIP bytes, workflow bytes, pagination links and GraphQL check observations are retained for authentication and replay; the outer fixture ZIP has deterministic timestamps. The fixture is immutable input to local tests and does not access the original historical paths or GitHub.",
+  "secret_check": "A static scan of every fixture member found no GitHub token pattern, bearer authorization header, private-key marker, or common signed-URL signature parameter. This scan is limited to those patterns."
+}

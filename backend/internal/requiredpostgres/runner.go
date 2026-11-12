@@ -417,13 +417,17 @@ func Run(inv Inventory, evidenceDir string) error {
 		cmd.Env = commandEnv()
 		cmd.Stdout = ew
 		cmd.Stderr = sw
+		started := time.Now()
 		runErr := cmd.Run()
+		fmt.Fprintf(os.Stderr, "ci-phase {\"phase\":\"group_command\",\"package\":%q,\"elapsed_ms\":%d,\"ok\":%t}\n", g.Package, time.Since(started).Milliseconds(), runErr == nil)
+		started = time.Now()
 		finishErr := ew.finish()
 		stderrFinishErr := sw.flush()
 		closeErr := out.Close()
 		stderrErr := stderr.Close()
 		f, err := os.Open(prefix + ".jsonl")
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "ci-phase {\"phase\":\"group_evidence\",\"package\":%q,\"elapsed_ms\":%d,\"ok\":false}\n", g.Package, time.Since(started).Milliseconds())
 			return err
 		}
 		result := parseEvents(f, g)
@@ -441,6 +445,7 @@ func Run(inv Inventory, evidenceDir string) error {
 		if finishErr != nil || stderrFinishErr != nil || ew.failed || sw.failed || closeErr != nil || stderrErr != nil {
 			result.Errors = append(result.Errors, "writing evidence failed")
 		}
+		fmt.Fprintf(os.Stderr, "ci-phase {\"phase\":\"group_evidence\",\"package\":%q,\"elapsed_ms\":%d,\"ok\":%t}\n", g.Package, time.Since(started).Milliseconds(), len(result.Errors) == 0)
 		b, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return err

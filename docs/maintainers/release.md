@@ -76,6 +76,12 @@ amd64 profile smoke 上传的七份签名 fixture 原件／receipt，并按[测�
 合法 CI 身份；环境变量不认证生产者，临时测试公钥和 receipt 不是生产 proof。输入采集、
 CI 及正式镜像发布各自取证，任何一项不能替代其他项或证明生产部署。
 
+完整源码取证使用受维护的 `scripts/ci-evidence.py source`，显式传入本次 request、
+case 和在项目 scratch 构建的 `verify-ci-profile`；中断后仅对相同 context 使用
+`--resume`，离线复验使用 `verify`。四个命令、current 和退出语义见
+[仓库自动化](automation.md#可恢复-ci-取证)。发布或合并准入还须重新观察实际候选
+及保护状态；历史 case 的 complete 或离线验签不替代当前远端资格。
+
 本次 Go／libxslt 补丁的 Release PR 只补充版本材料和本手册，并须逐项核对执行消费者的
 blob 与已审阅的合并源码 `429b92aa1144d6d11e41717cfb7d17cc2f190b6f`（S）一致。
 [R2 源码运行](https://github.com/xiangnan0811/xirang/actions/runs/43013360818)与
