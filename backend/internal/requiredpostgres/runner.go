@@ -287,7 +287,7 @@ func sourceLines(root, pkg string) map[string]int {
 		}
 		opened, err := f.Stat()
 		if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-			f.Close()
+			_ = f.Close() // The table is already rejected, including on close failure.
 			return nil
 		}
 		var buf [32 * 1024]byte
@@ -302,7 +302,7 @@ func sourceLines(root, pkg string) map[string]int {
 				break
 			}
 			if readErr != nil {
-				f.Close()
+				_ = f.Close() // The table is already rejected, including on close failure.
 				return nil
 			}
 		}
