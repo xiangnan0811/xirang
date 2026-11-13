@@ -225,6 +225,13 @@ stdout 始终为一个 JSON 对象，分别报告 case 的 `state`、`verificati
 坏指针非零。`status --refresh` 只执行认证 GET，网络不可达为 unknown，不修改
 case 或指针；历史成功不能代替当前候选、attempt 和保护状态的新核验。
 
+当前采用资格还要求取证工具、生产 classifier、workflow、Go module 与 verifier 的
+实际构建／嵌入输入保持洁净；相关 staged、unstaged、untracked 或 ignored 输入均
+阻断。Go `_test.go` 叶文件沿用测试排除规则，相关嵌入目录即使同名也不能排除。
+输入范围之外的 ignored 恢复 checkout 不影响资格，应保留其历史材料。
+status 正常返回 `0` 仍可能报告 stale／blocked；采用前须实际确认
+`live_eligibility=eligible_at_observation`，不能只看退出码或旧的 verification=passed。
+
 退出码依次为：0 正常完成或 status-none，2 `E_INPUT`，3 `E_TRANSPORT`，
 4 `E_INTEGRITY`，5 `E_VERIFY`，6 `E_STALE`，7 `E_BUSY`，8 `E_INCOMPLETE`，
 9 `E_REMOTE_FAILURE`。stderr 仅保留错误码与安全摘要；原始 API 响应和认证下载

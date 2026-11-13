@@ -217,6 +217,27 @@ class EvidenceTests(unittest.TestCase):
     def directory(self):
         return Path(tempfile.mkdtemp(prefix='case-', dir=self.root))
 
+    def ignored_nested_checkout(self, root):
+        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+        nested = root / 'fixture-ignored/nested'
+        nested.mkdir(parents=True)
+        with (root / '.git/info/exclude').open('a') as exclude:
+            exclude.write('\n/fixture-ignored/nested/\n')
+        subprocess.run(['git', 'init', '--quiet', str(nested)], env=env, check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        (nested / 'content').write_text('unrelated checkout\n')
+        ignored = subprocess.run(['git', 'check-ignore', '-q', '--', 'fixture-ignored/nested/'],
+                                 cwd=root, env=env, close_fds=True)
+        self.assertEqual(ignored.returncode, 0)
+        self.assertTrue((nested / '.git').is_dir())
+        _, specs = context.verifier_build_inputs(root)
+        reported = subprocess.run(['git', 'ls-files', '--others', '--ignored', '--exclude-standard', '-z',
+                                   '--', *specs], cwd=root, env=env, check=True, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, close_fds=True).stdout.split(b'\0')
+        self.assertFalse(any(path.startswith(b'fixture-ignored/') for path in reported))
+        return env
+
     def test_source_cli_download_kill_resume_and_offline_verify(self):
         profile = self.directory()
         signed_profile(profile, self.root)
@@ -437,10 +458,19 @@ raise SystemExit(cli.main(sys.argv[2:]))
                 commit_module('restore fixture tool')
             protected = '/repos/fixture/example/branches/main/protection'
             branch = '/repos/fixture/example/branches/main'
+            self.ignored_nested_checkout(root)
+            index_before = (root / '.git/index').read_bytes()
+            files_before_refresh = {path.relative_to(case).as_posix(): path.read_bytes()
+                                    for path in case.rglob('*') if path.is_file()}
             live = subprocess.run(common + ['status', '--case', str(case), '--refresh'], cwd=root, env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, close_fds=True)
             self.assertEqual(live.returncode, 0)
-            self.assertEqual(json.loads(live.stdout)['live_eligibility'], 'eligible_at_observation')
+            self.assertEqual((json.loads(live.stdout)['state'], json.loads(live.stdout)['verification'],
+                              json.loads(live.stdout)['live_eligibility']),
+                             ('complete', 'passed', 'eligible_at_observation'))
+            self.assertEqual((root / '.git/index').read_bytes(), index_before)
+            self.assertEqual({path.relative_to(case).as_posix(): path.read_bytes()
+                              for path in case.rglob('*') if path.is_file()}, files_before_refresh)
             self.assertEqual(json.loads(completed.stdout)['live_eligibility'], 'eligible_at_observation')
             original_protection = routes[protected]
             altered = json.loads(original_protection)
@@ -1479,6 +1509,80 @@ with store.open_case(root, case, request, resume=False, make_current=False):
         self.assertTrue((failed_case / 'raw' / ('a' * 32)).is_dir())
         self.assertEqual(summary_path.read_bytes(), initial_summary)
         self.assertFalse(list((failed_case / 'receipts').iterdir()))
+
+    def test_clean_adoption_ignored_go_inputs_with_unrelated_checkout(self):
+        root = self.directory()
+        prepare_checkout(root)
+        env = self.ignored_nested_checkout(root)
+        package = root / 'backend/cmd/verify-ci-profile'
+        test_file = package / 'ignored_test.go'
+        production_file = package / 'ignored_production.go'
+        with (root / '.git/info/exclude').open('a') as exclude:
+            exclude.write('\n/backend/cmd/verify-ci-profile/ignored_test.go\n'
+                          '/backend/cmd/verify-ci-profile/ignored_production.go\n')
+        test_file.write_text('package main\n')
+        production_file.write_text('package main\n')
+        for path in (test_file, production_file):
+            ignored = subprocess.run(['git', 'check-ignore', '-q', '--', path.relative_to(root).as_posix()],
+                                     cwd=root, env=env, close_fds=True)
+            self.assertEqual(ignored.returncode, 0)
+        _, specs = context.verifier_build_inputs(root)
+        reported = subprocess.run(['git', 'ls-files', '--others', '--ignored', '--exclude-standard', '-z',
+                                   '--', *specs], cwd=root, env=env, check=True, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, close_fds=True).stdout.split(b'\0')
+        self.assertIn(b'backend/cmd/verify-ci-profile/ignored_test.go', reported)
+        self.assertIn(b'backend/cmd/verify-ci-profile/ignored_production.go', reported)
+        index_before = (root / '.git/index').read_bytes()
+        with self.assertRaises(context.StaleError):
+            context.require_clean_adoption(root)
+        self.assertEqual((root / '.git/index').read_bytes(), index_before)
+        production_file.unlink()
+        context.require_clean_adoption(root)
+        self.assertEqual((root / '.git/index').read_bytes(), index_before)
+
+    def test_clean_adoption_rejects_ignored_embed_directories(self):
+        root = self.directory()
+        prepare_checkout(root)
+        env = self.ignored_nested_checkout(root)
+        package = root / 'backend/cmd/verify-ci-profile'
+        embedded = package / 'fixture-inputs'
+        embedded.mkdir()
+        (embedded / 'tracked.txt').write_text('embedded fixture\n')
+        source_file = package / 'main.go'
+        source_file.write_bytes(source_file.read_bytes() + b'\n//go:embed fixture-inputs\nvar fixtureInputs string\n')
+        git_env = dict(env, GIT_AUTHOR_NAME='Fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
+                       GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid',
+                       GIT_AUTHOR_DATE='2026-01-01T00:00:00Z', GIT_COMMITTER_DATE='2026-01-01T00:00:00Z')
+        subprocess.run(['git', 'add', '--', 'backend/cmd/verify-ci-profile'], cwd=root, env=git_env,
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        subprocess.run(['git', 'commit', '--quiet', '-m', 'fixture embedded directory'], cwd=root, env=git_env,
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        with (root / '.git/info/exclude').open('a') as exclude:
+            exclude.write('\n/backend/cmd/verify-ci-profile/fixture-inputs/opaque/\n'
+                          '/backend/cmd/verify-ci-profile/fixture-inputs/opaque_test.go/\n')
+        index_before = (root / '.git/index').read_bytes()
+        for name in ('opaque', 'opaque_test.go'):
+            with self.subTest(name=name):
+                directory = embedded / name
+                directory.mkdir()
+                subprocess.run(['git', 'init', '--quiet', str(directory)], env=env, check=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+                (directory / 'content').write_text('ignored embedded content\n')
+                relative = directory.relative_to(root).as_posix() + '/'
+                ignored = subprocess.run(['git', 'check-ignore', '-q', '--', relative],
+                                         cwd=root, env=env, close_fds=True)
+                self.assertEqual(ignored.returncode, 0)
+                _, specs = context.verifier_build_inputs(root)
+                reported = subprocess.run(['git', 'ls-files', '--others', '--ignored', '--exclude-standard', '-z',
+                                           '--', *specs], cwd=root, env=env, check=True, stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE, close_fds=True).stdout.split(b'\0')
+                self.assertIn(os.fsencode(relative), reported)
+                with self.assertRaises(context.StaleError):
+                    context.require_clean_adoption(root)
+                self.assertEqual((root / '.git/index').read_bytes(), index_before)
+                shutil.rmtree(directory)
+        context.require_clean_adoption(root)
+        self.assertEqual((root / '.git/index').read_bytes(), index_before)
 
     def test_make_current_rechecks_dirty_inputs_under_lock(self):
         root = self.directory()

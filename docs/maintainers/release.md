@@ -55,6 +55,11 @@ bundle／proof 的要求。旧进程不会自动获得补丁，旧 receipt 不�
 回退必须恢复匹配整套镜像与制品，会恢复旧 PostgreSQL 依赖漏洞，既有迁移降级限制
 继续适用。各次成功 PR、main 及自然 Release PR 仍须独立取得完整源码与签名证明。
 
+同批取证工具修复仅纠正本地采用检查对无关 ignored 恢复 checkout 的误报，仍拒绝
+实际构建与嵌入输入的本地变化；不改变生产输入或新增配置、迁移。旧恢复材料保留，
+发行准入仍须确认当前 `live_eligibility=eligible_at_observation`；正常 status 退出
+或历史 verification=passed 不能替代该门槛，操作见[可恢复 CI 取证](automation.md#可恢复-ci-取证)。
+
 已 squash 合并的 PR 若包含需要发布、但未被提交语义识别的修复，可按 [Release Please 官方说明](https://github.com/googleapis/release-please#how-can-i-fix-release-notes)，在原 PR 正文追加带日期的发布决定和 `BEGIN_COMMIT_OVERRIDE` / `END_COMMIT_OVERRIDE` 区块；保留原始变更与验证事实，在块内补齐真实的 `fix` 条目并按需添加 `Release-As:`。重新运行 Release Please 后核对实际生成的 Release PR，仍须完成下述说明审阅、检查与镜像门禁。该方式不改写 Git 提交或旧 tag；仅改已合并 PR 标题不会更新提交语义，普通 merge 不适用此 override 路径。
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。

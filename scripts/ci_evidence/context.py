@@ -271,14 +271,19 @@ def require_clean_adoption(root):
     if any(not (Path(root) / name).is_file() or (Path(root) / name).is_symlink() for name in required):
         raise StaleError('adoption input unavailable')
     specs = list(required) + [':(glob)scripts/ci_evidence/*.py', 'backend/go.mod', 'backend/go.sum'] + build_specs
-    specs += [':(exclude,glob)**/*_test.go']
     for args in (['status', '--porcelain=v1', '-z', '--untracked-files=all'],
                  ['ls-files', '--others', '--ignored', '--exclude-standard', '-z']):
+        pathspecs = specs + [':(exclude,glob)**/*_test.go'] if args[0] == 'status' else specs
         try:
-            result = subprocess.run(['git', *args, '--', *specs], cwd=root, stdout=subprocess.PIPE,
+            result = subprocess.run(['git', *args, '--', *pathspecs], cwd=root, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, check=True, close_fds=True,
                                     env=dict(os.environ, GIT_OPTIONAL_LOCKS='0'))
         except (OSError, subprocess.CalledProcessError) as exc:
             raise InputError('cannot inspect adoption inputs') from exc
-        if result.stdout:
+        if args[0] == 'status':
+            dirty = bool(result.stdout)
+        else:
+            dirty = any(path and (path.endswith(b'/') or not path.rsplit(b'/', 1)[-1].endswith(b'_test.go'))
+                        for path in result.stdout.split(b'\0'))
+        if dirty:
             raise StaleError('adoption inputs have local changes')
