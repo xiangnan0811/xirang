@@ -41,6 +41,20 @@ GitHub 设置应保护 `main`、禁止直接 push、要求 CI 通过、使用 sq
 
 普通 PR 的提交语义和合并前门禁由贡献指南规定。合并后检查 [Release Please](../../.github/workflows/release-please.yml) 是否成功创建或更新 Release PR；没有生成正式 release 时，交付说明明确记录没有预期的 GitHub Release 或 Docker Hub 发布，仍需处理自动化失败。
 
+Core PostgreSQL client／`libpq` 与 Worker 传递 `libpq` 的 `18.6-r0` → `18.7-r0`
+属于实际运行依赖安全修复，按 `fix` 正常发行，不适用纯 CI 免发行判断，也不手动
+指定版本或移动旧 tag。输入来源为配方 `02151ca90884f2a185bb9d5e1d507c7c58a0d827`
+的[原生双架构采集](https://github.com/xiangnan0811/xirang/actions/runs/43454390891)；
+八事务只有上述包变化，其他包、固定 base、安装器与可信根保持。保留输入的内容寻址
+发布及 lock attestation 不等于正式产品镜像发布或生产部署。
+
+本修复无新增配置或 schema migration，Worker 仍非 GA、默认关闭。发行说明须保留
+数据库、匹配密钥、配置与备份保全、暂停准入并排空旧 Core／Worker owner、同源
+重建替换、更新 compiled Worker toolchain／pipeline 身份及架构匹配闭包、签名
+bundle／proof 的要求。旧进程不会自动获得补丁，旧 receipt 不得改标为新身份；
+回退必须恢复匹配整套镜像与制品，会恢复旧 PostgreSQL 依赖漏洞，既有迁移降级限制
+继续适用。各次成功 PR、main 及自然 Release PR 仍须独立取得完整源码与签名证明。
+
 已 squash 合并的 PR 若包含需要发布、但未被提交语义识别的修复，可按 [Release Please 官方说明](https://github.com/googleapis/release-please#how-can-i-fix-release-notes)，在原 PR 正文追加带日期的发布决定和 `BEGIN_COMMIT_OVERRIDE` / `END_COMMIT_OVERRIDE` 区块；保留原始变更与验证事实，在块内补齐真实的 `fix` 条目并按需添加 `Release-As:`。重新运行 Release Please 后核对实际生成的 Release PR，仍须完成下述说明审阅、检查与镜像门禁。该方式不改写 Git 提交或旧 tag；仅改已合并 PR 标题不会更新提交语义，普通 merge 不适用此 override 路径。
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。

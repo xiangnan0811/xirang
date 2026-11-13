@@ -1,7 +1,7 @@
 # Retained bases and complete APK inputs are pinned by deploy/build-inputs/lock.json.
-FROM docker.io/linnea7171/xirang@sha256:8f64c0214de579a3c687d3aae34e8f8781575977434b3418d7d968862ca7abf6 AS cgo-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:dee2084418d15e35aac3af1ddecc26af38a5e15224d773c4cb6dffcaf37dce8b AS supercronic-builder-inputs
-FROM docker.io/linnea7171/xirang@sha256:993c5e080c1c7ecbb47d5c869ee1e37269c0118b8ba55855a9936c5080a75762 AS core-runtime-inputs
+FROM docker.io/linnea7171/xirang@sha256:5735759a76f2ed5e1db26c293bc38f0e4cb5af2204533fd2ecbd6c0f2fb4c66b AS cgo-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:325d574a93eddd3b88e5b79858584e89b198fa92fcd3ce56c072b333a08b3548 AS supercronic-builder-inputs
+FROM docker.io/linnea7171/xirang@sha256:ab5769fdc17941ca74f61fc4c119090f24526b5220f8ef5449279b7a0073689a AS core-runtime-inputs
 
 FROM docker.io/linnea7171/xirang@sha256:3e4c9ad8b3fd601ce93e5a8f7a77a639efe8d7d36846846c5179f89175f89d86 AS web-builder
 
@@ -86,7 +86,7 @@ RUN --network=none --mount=from=core-runtime-inputs,source=/inputs,target=/build
       nghttp2-libs=1.69.0-r0 \
       openssh-client-default=10.2_p1-r1 \
       pcre2=10.49-r0 \
-      postgresql18-client=18.6-r0 \
+      postgresql18-client=18.7-r0 \
       rsync=3.5.2-r1 \
       sqlite=3.53.4-r0 \
       tiff=4.7.2-r0 \

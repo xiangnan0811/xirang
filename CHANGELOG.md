@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### PostgreSQL 保留输入安全修复
+
+- Core 的 `postgresql18-client`／`libpq` 与 Worker 的传递 `libpq` 从 `18.6-r0` 更新为 `18.7-r0`，修复原双架构镜像扫描报告的 HIGH 漏洞；不新增 Worker 显式 root。完整八事务来自配方 `02151ca90884f2a185bb9d5e1d507c7c58a0d827` 的[原生采集 43454390891/attempt1](https://github.com/xiangnan0811/xirang/actions/runs/43454390891)：两平台验签、断网重放、八个安装后输入扫描及 lock attestation 均通过，其余事务包无增删或版本变化，固定 base、安装器与可信根保持。
+- 完整 Worker APK 投影随程序编译并推进 toolchain／pipeline 指纹，须同源重建替换 Core／Worker，重新生成架构匹配的最终闭包、attestations、授权签名 bundle 与 proof；旧 receipt 不得改标为新身份。升级前保全数据库、匹配密钥、配置和备份副本，暂停准入并排空旧 Core／Worker owner 的在途操作；旧进程及外部 PostgreSQL 服务不会自动获得补丁。
+- 本修复按 `fix` 正常发行，无新增 API、配置或 schema migration，Worker 仍非 GA、默认关闭。回退须恢复匹配整套旧镜像、二进制和制品，会恢复旧依赖漏洞；既有迁移降级限制保持。输入内容寻址发布、采集扫描与 CI 临时签名 fixture 不替代最终镜像、正式发行或生产部署验收。
+
+### 测试路径兼容
+
+- Office seccomp 回归在批准的 scratch 目录内以相对 Unix socket 文件名执行，避免长临时目录使地址在进入 bind syscall 前就因超长被拒绝。保留真实 AF_UNIX 服务端与其他 socket 操作的全部允许／拒绝断言；仅修复测试路径，不改变生产沙箱策略或运行时配置。
+
 ## [0.73.18](https://github.com/xiangnan0811/xirang/compare/v0.73.17...v0.73.18) (2026-11-11)
 
 

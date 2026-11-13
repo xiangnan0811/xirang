@@ -1420,11 +1420,11 @@
     },
     {
       "arch": "x86_64",
-      "file": "libpq-18.6-r0.apk",
+      "file": "libpq-18.7-r0.apk",
       "name": "libpq",
-      "sha256": "770d92f5134d2ee59182eeb3f3b95356c37886fa5ff796c50d8ba515a6b3c6d3",
-      "size": 160318,
-      "version": "18.6-r0"
+      "sha256": "fe00550ca409e073490e61a6d2a043781fe0220953f32d4e4fb1c9c03d4da653",
+      "size": 160327,
+      "version": "18.7-r0"
     },
     {
       "arch": "x86_64",
@@ -3948,7 +3948,7 @@
     {
       "arch": "x86_64",
       "name": "libpq",
-      "version": "18.6-r0"
+      "version": "18.7-r0"
     },
     {
       "arch": "x86_64",

@@ -1065,12 +1065,15 @@ func TestLinuxOfficeSeccompAllowsAFUNIXServerButDeniesOtherSocketOperations(t *t
 		os.Exit(0)
 	}
 
-	socketPath := filepath.Join(os.TempDir(), "xirang-office-"+strconv.Itoa(os.Getpid())+".sock")
+	socketDirectory := t.TempDir()
+	socketName := "xirang-office-" + strconv.Itoa(os.Getpid()) + ".sock"
+	socketPath := filepath.Join(socketDirectory, socketName)
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	command := exec.Command(os.Args[0], "-test.run=^TestLinuxOfficeSeccompAllowsAFUNIXServerButDeniesOtherSocketOperations$")
+	command.Dir = socketDirectory
 	command.Env = append(os.Environ(),
 		"XIRANG_OFFICE_SECCOMP_TEST=1",
-		"XIRANG_OFFICE_SECCOMP_SOCKET="+socketPath,
+		"XIRANG_OFFICE_SECCOMP_SOCKET="+socketName,
 	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("Office seccomp contract failed: %v output=%q", err, output)
