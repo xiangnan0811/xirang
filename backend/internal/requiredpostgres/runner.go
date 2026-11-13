@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -246,6 +247,94 @@ func selector(g Group) string {
 	return "^(" + strings.Join(names, "|") + ")$"
 }
 
+// sourceLines admits only regular Go files in the current module's package.
+// Any filesystem error invalidates the table instead of exposing unverified data.
+func sourceLines(root, pkg string) map[string]int {
+	if !packageName.MatchString(pkg) {
+		return nil
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Join(root, pkg))
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	lines := make(map[string]int)
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".go") || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		f, err := os.Open(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil
+		}
+		opened, err := f.Stat()
+		if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+			f.Close()
+			return nil
+		}
+		var buf [32 * 1024]byte
+		count, last := 0, byte('\n')
+		for {
+			n, readErr := f.Read(buf[:])
+			if n > 0 {
+				count += bytes.Count(buf[:n], []byte{'\n'})
+				last = buf[n-1]
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				f.Close()
+				return nil
+			}
+		}
+		if f.Close() != nil {
+			return nil
+		}
+		if last != '\n' {
+			count++
+		}
+		lines[entry.Name()] = count
+	}
+	return lines
+}
+
+var sourceLocation = regexp.MustCompile(`(?m)^[ \t]*([^/\\:\s]+\.go):([0-9]+):`)
+
+func safeLocation(output string, lines map[string]int) string {
+	for len(output) != 0 {
+		var lineText string
+		lineText, output, _ = strings.Cut(output, "\n")
+		match := sourceLocation.FindStringSubmatch(lineText)
+		if match == nil || len(match[2]) > 19 {
+			continue
+		}
+		line, err := strconv.Atoi(match[2])
+		if err == nil && line > 0 && line <= lines[match[1]] {
+			return match[1] + ":" + strconv.Itoa(line) + ": [redacted]\n"
+		}
+	}
+	return "[redacted]"
+}
+
 // eventWriter buffers at most one bounded line and sanitizes the untrusted
 // output field before persisting. Malformed lines remain malformed so the
 // protocol parser fails closed without recording their potentially secret text.
@@ -253,6 +342,7 @@ type eventWriter struct {
 	writer  io.Writer
 	pending []byte
 	secrets []string
+	lines   map[string]int
 	failed  bool
 }
 
@@ -287,7 +377,18 @@ func (w *eventWriter) Write(b []byte) (int, error) {
 					continue
 				}
 				if key == "Output" {
-					e[key] = json.RawMessage(`"[redacted]"`)
+					var output string
+					if json.Unmarshal(value, &output) == nil {
+						output = safeLocation(output, w.lines)
+						for _, secret := range w.secrets {
+							if secret != "" {
+								output = strings.ReplaceAll(output, secret, "[redacted]")
+							}
+						}
+						e[key], _ = json.Marshal(output)
+					} else {
+						e[key] = json.RawMessage(`"[redacted]"`)
+					}
 					continue
 				}
 				var text string
@@ -411,7 +512,8 @@ func Run(inv Inventory, evidenceDir string) error {
 				secrets = append(secrets, password)
 			}
 		}
-		ew := &eventWriter{writer: out, secrets: secrets}
+		root, _ := os.Getwd()
+		ew := &eventWriter{writer: out, secrets: secrets, lines: sourceLines(root, g.Package)}
 		sw := &stderrWriter{writer: stderr, secrets: secrets}
 		cmd := exec.Command("go", "test", g.Package, "-run", selector(g), "-json", "-count=1", "-timeout="+timeout)
 		cmd.Env = commandEnv()

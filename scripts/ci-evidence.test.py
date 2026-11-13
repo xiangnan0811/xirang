@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from ci_evidence import capture, cli, context, snapshot, source, store
 
 VERIFIER = None
-SCRATCH = ROOT / '.tmp/agent/round29-remediation-execution/evidence'
+SCRATCH = ROOT / '.tmp/agent'
 
 
 def zip_bytes(files):

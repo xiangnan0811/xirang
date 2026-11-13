@@ -130,7 +130,7 @@ func TestVerifyCIProfileEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := filepath.Abs(filepath.Join(working, "..", "..", "..", ".tmp", "agent", "round29-remediation-execution", "evidence"))
+	base, err := filepath.Abs(filepath.Join(working, "..", "..", "..", ".tmp", "agent"))
 	if err != nil {
 		t.Fatal(err)
 	}
