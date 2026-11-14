@@ -17,6 +17,13 @@
 - 修复本地采用检查将输入范围外的 ignored 嵌套恢复 checkout 误判为脏输入的问题；保留对真实 staged、unstaged、untracked、ignored 构建输入及嵌入目录的拒绝，Go `_test.go` 叶文件继续按既有合同排除。旧恢复材料和原 case／命令退出记录保留。
 - 本修复仅调整取证工具的本地资格判断，不改变生产沙箱、构建输入、配置或 schema。历史验证通过和 status 的正常退出仍不能替代当前 `live_eligibility`、候选及保护状态；既有 source、离线 verify 和在线 refresh 门槛保持。
 
+## [0.73.19](https://github.com/xiangnan0811/xirang/compare/v0.73.18...v0.73.19) (2026-11-14)
+
+
+### 🐛 Bug Fixes
+
+* 修复 PostgreSQL 依赖漏洞并交付可恢复 CI 取证诊断 ([#713](https://github.com/xiangnan0811/xirang/issues/713)) ([b89ae88](https://github.com/xiangnan0811/xirang/commit/b89ae888c79d3dc5e118c9a5359910f6994877e8))
+
 ## [0.73.18](https://github.com/xiangnan0811/xirang/compare/v0.73.17...v0.73.18) (2026-11-11)
 
 
