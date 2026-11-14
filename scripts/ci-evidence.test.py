@@ -1602,6 +1602,824 @@ with store.open_case(root, case, request, resume=False, make_current=False):
         record = json.loads(next((case / 'invocations').glob('*/command.json')).read_bytes())
         self.assertEqual((record['exit'], record['stderr']), (6, 'E_STALE'))
 
+    def refresh_observation_fixture(self, *, fallback=False):
+        """Expose recorded terminal runs through an in-memory read-only GitHub client."""
+        fixture = ROOT / 'scripts/testdata/ci-evidence/snapshots.zip'
+        with zipfile.ZipFile(fixture) as archive:
+            files = {info.filename.split('/', 1)[1]: archive.read(info) for info in archive.infolist()
+                     if info.filename.startswith('terminal/')}
+        def read(name):
+            return json.loads(files[name])
+        records = [json.loads(raw) for name, raw in files.items() if name.startswith('record-')]
+        src = next(item for item in records if item['mode'] == 'source')
+        meta = next(item for item in records if item['mode'] == 'metadata')
+        runs = [json.loads(raw) for name, raw in files.items() if name.startswith('run-') and not name.startswith('run-final-')]
+        source_run = next(run for run in runs if run['id'] == src['run_id'])
+        ci_run = next(run for run in runs if run['id'] == meta['run_id'])
+        title_run = next(run for run in runs if run['path'].endswith('pr-metadata.yml'))
+        pr = read('pr.json')
+        source_spec = {'run_id': src['run_id'], 'attempt': src['run_attempt'], 'event': 'pull_request',
+                       'head_sha': src['pull_request']['head_sha'], 'branch': src['pull_request']['head_ref'],
+                       'checkout_sha': src['checkout_sha'], 'checkout_tree': src['checkout_tree']}
+        workflow = files['workflow.yml']
+        blob = hashlib.sha1(b'blob ' + str(len(workflow)).encode() + b'\0' + workflow).hexdigest()
+        obj = {'kind': 'source', 'expected': 'success', 'repository': src['repository'],
+               'repository_id': src['repository_id'], 'source': source_spec, 'workflow_blob': blob,
+               'pr': {'number': pr['number'], 'head_ref': pr['head']['ref'], 'head_sha': pr['head']['sha'],
+                      'base_ref': pr['base']['ref'], 'base_sha': pr['base']['sha'], 'merge_sha': pr['merge_commit_sha']}}
+        prefix = '/repos/' + obj['repository'] + '/'
+        jobs = {run['id']: read(f"jobs-{run['id']}-{run['run_attempt']}.json")[0]['jobs'] for run in runs}
+        artifacts = {run['id']: read(f"artifacts-{run['id']}.json")[0]['artifacts'] for run in runs}
+        all_checks = {}
+        for run in runs:
+            for check in read(f"suite-{run['check_suite_id']}.json")[0]['check_runs']:
+                all_checks[check['id']] = check
+        def check_for(run, name):
+            job = next(item for item in jobs[run['id']] if item['name'] == name)
+            return all_checks[int(job['check_run_url'].rsplit('/', 1)[1])]
+        old_title = json.loads(json.dumps(title_run))
+        old_title['id'] += 10000000000
+        old_title['check_suite_id'] += 10000000000
+        old_title_jobs = json.loads(json.dumps(jobs[title_run['id']]))
+        old_title_check = json.loads(json.dumps(check_for(title_run, 'PR Title')))
+        old_title_check['id'] += 10000000000
+        old_title_check['check_suite']['id'] = old_title['check_suite_id']
+        old_title_jobs[0]['run_id'] = old_title['id']
+        old_title_jobs[0]['check_run_url'] = 'https://api.github.com' + prefix + 'check-runs/' + str(old_title_check['id'])
+        jobs[old_title['id']] = old_title_jobs
+        all_checks[old_title_check['id']] = old_title_check
+        old_source = source_run
+        old_source_checks = {name: check_for(source_run, name) for name in snapshot.NAMES}
+        if fallback:
+            old_source = json.loads(json.dumps(source_run))
+            old_source['id'] += 10000000000
+            old_source['check_suite_id'] += 10000000000
+            old_jobs = json.loads(json.dumps(jobs[source_run['id']]))
+            for job in old_jobs:
+                job['run_id'] = old_source['id']
+                if job['name'] in snapshot.NAMES:
+                    old_check = json.loads(json.dumps(old_source_checks[job['name']]))
+                    old_check['id'] += 10000000000
+                    old_check['check_suite']['id'] = old_source['check_suite_id']
+                    job['check_run_url'] = 'https://api.github.com' + prefix + 'check-runs/' + str(old_check['id'])
+                    all_checks[old_check['id']] = old_check
+                    old_source_checks[job['name']] = old_check
+            jobs[old_source['id']] = old_jobs
+        baseline = {'context': obj, 'runs': {'source': old_source, 'title': old_title},
+                    'checks': dict(old_source_checks, **{'PR Title': old_title_check})}
+        declared_ci = source_run if fallback else ci_run
+        request = {'ci': {'run_id': declared_ci['id'], 'attempt': declared_ci['run_attempt']},
+                   'title': {'run_id': title_run['id'], 'attempt': title_run['run_attempt']}}
+        relevant_runs = [old_source, old_title, declared_ci, title_run]
+        required = list(old_source_checks.values()) + [old_title_check] + [check_for(declared_ci, name) for name in snapshot.NAMES] + [check_for(title_run, 'PR Title')]
+        protection = read('protection.json')
+        case = self.directory()
+        (case / 'raw/observation').mkdir(parents=True)
+        (case / 'artifacts').mkdir()
+        for name, raw in files.items():
+            if name.startswith('candidate-'):
+                (case / 'artifacts' / (name.rsplit('-', 1)[1])).write_bytes(raw)
+        observation = case / 'raw/observation'
+        (observation / 'record.json').write_bytes(context.canonical(src))
+        (observation / 'artifacts.json').write_bytes(files[f"artifacts-{source_run['id']}.json"])
+        (observation / 'jobs.json').write_bytes(files[f"jobs-{source_run['id']}-{source_run['run_attempt']}.json"])
+
+        class Client:
+            def __init__(self):
+                self.required = required
+                self.runs = relevant_runs
+                self.pr = pr
+                self.protection = protection
+                self.jobs = jobs
+                self.graphql_error = False
+                self.graphql_duplicate = False
+                self.graphql_duplicate_surface = None
+                self.graphql_merge_rollup = None
+                self.graphql_broken_cursor = False
+                self.graphql_paginated = False
+                self.graphql_merge_state = 'CLEAN'
+                self.drift_second_checks = False
+                self.check_calls = 0
+            def change_keys(self, keys):
+                record = dict(meta, change_keys=keys)
+                raw = zip_bytes({'record.json': context.canonical(record)})
+                artifact = next(item for item in artifacts[ci_run['id']]
+                                if item['name'] == f"ci-event-{ci_run['id']}-{ci_run['run_attempt']}")
+                artifact['digest'] = 'sha256:' + hashlib.sha256(raw).hexdigest()
+                (case / 'artifacts' / (str(artifact['id']) + '.zip')).write_bytes(raw)
+
+            def mutate_meta_record(self, **updates):
+                record = dict(meta, **updates)
+                raw = zip_bytes({'record.json': context.canonical(record)})
+                artifact = next(item for item in artifacts[ci_run['id']]
+                                if item['name'] == f"ci-event-{ci_run['id']}-{ci_run['run_attempt']}")
+                artifact['digest'] = 'sha256:' + hashlib.sha256(raw).hexdigest()
+                (case / 'artifacts' / (str(artifact['id']) + '.zip')).write_bytes(raw)
+
+            def json(self, method, path, payload=None):
+                if method == 'POST':
+                    if self.graphql_error:
+                        return {'errors': [{'message': 'fixture error'}]}, None
+                    query = payload['query']
+                    surface = 'head' if 'commits(last: 1)' in query else 'merge' if 'potentialMergeCommit' in query else 'direct'
+                    nodes = [{'__typename': 'CheckRun', 'databaseId': check['id'], 'name': check['name'],
+                              'status': 'COMPLETED', 'conclusion': 'SUCCESS', 'isRequired': True,
+                              'checkSuite': {'databaseId': check['check_suite']['id'], 'app': {'databaseId': 15368}}}
+                             for check in self.required]
+                    if self.graphql_duplicate or self.graphql_duplicate_surface == surface:
+                        nodes.append(nodes[0])
+                    if self.graphql_broken_cursor:
+                        page_info = {'hasNextPage': True, 'endCursor': ''}
+                        page_nodes = nodes
+                    elif self.graphql_paginated and 'after: "cursor-1"' not in query:
+                        page_info = {'hasNextPage': True, 'endCursor': 'cursor-1'}
+                        page_nodes = nodes[:4]
+                    else:
+                        page_info = {'hasNextPage': False, 'endCursor': None}
+                        page_nodes = nodes[4:] if self.graphql_paginated else nodes
+                    rollup = {'contexts': {'nodes': page_nodes, 'pageInfo': page_info}}
+                    merge_rollup = rollup if (self.graphql_merge_rollup or self.graphql_duplicate_surface == 'merge') else None
+                    node = {'headRefOid': source_spec['head_sha'], 'baseRefOid': obj['pr']['base_sha'],
+                            'mergeable': 'MERGEABLE', 'mergeStateStatus': self.graphql_merge_state, 'state': 'OPEN',
+                            'merged': False, 'isDraft': False, 'statusCheckRollup': rollup,
+                            'commits': {'nodes': [{'commit': {'oid': source_spec['head_sha'], 'statusCheckRollup': rollup}}]},
+                            'potentialMergeCommit': {'oid': source_spec['checkout_sha'], 'statusCheckRollup': merge_rollup}}
+                    return {'data': {'repository': {'pullRequest': node}}}, None
+                if path == prefix + 'pulls/' + str(pr['number']):
+                    return self.pr, None
+                if '/protection' in path:
+                    return self.protection, None
+                if '/contents/.github/workflows/ci.yml?' in path:
+                    return {'encoding': 'base64', 'content': base64.b64encode(workflow).decode(), 'sha': blob}, None
+                if '/check-runs?filter=' in path:
+                    self.check_calls += 1
+                    items = list(self.required)
+                    if self.drift_second_checks and self.check_calls >= 3:
+                        items[0] = dict(items[0], id=items[0]['id'] + 777777)
+                    return {'total_count': len(items), 'check_runs': items}, None
+                if '/check-runs/' in path:
+                    return all_checks[int(path.rsplit('/', 1)[1])], None
+                if '/actions/runs?' in path:
+                    return {'total_count': len(self.runs), 'workflow_runs': self.runs}, None
+                if '/actions/runs/' in path:
+                    parts = path.split('/actions/runs/', 1)[1].split('/')
+                    rid = int(parts[0])
+                    if len(parts) > 2 and parts[1] == 'attempts':
+                        return {'total_count': len(jobs[rid]), 'jobs': jobs[rid]}, None
+                    if len(parts) > 1 and parts[1].startswith('artifacts'):
+                        return {'total_count': len(artifacts[rid]), 'artifacts': artifacts[rid]}, None
+                    return next(run for run in self.runs if run['id'] == rid), None
+                raise AssertionError('unexpected fixture path: ' + path)
+
+        complete_summary = {'observation': 'raw/observation', 'state': 'complete', 'verification': 'passed',
+                            'receipts': {stage: {'path': stage + '.json', 'sha256': '0' * 64} for stage in cli.STAGES}}
+        return obj, case, complete_summary, {'request': request, 'baseline': baseline}, Client()
+
+    def frozen_refresh_baseline_fixture(self, *, fallback=False, current_identities=False):
+        obj, case, _, declared, api = self.refresh_observation_fixture(fallback=fallback)
+        obj['task_id'] = 'fixture'
+        obj['workflow_head_sha'] = obj['source']['head_sha']
+        obj['metadata'] = None
+        obj['title'] = None
+        obj['predecessor'] = None
+        obj['schema_version'] = 1
+        obj['repository_key'], obj['workspace_key'] = context.workspace_identity(ROOT)
+        verifier = case / 'raw/observation/record.json'
+
+        def populate_case(target_case, target_obj, source_run_obj, title_run_obj, checks_map):
+            for name in ('raw', 'artifacts'):
+                (target_case / name).mkdir(mode=0o700, exist_ok=True)
+                (target_case / name).chmod(0o700)
+            for name in ('receipts', 'invocations'):
+                (target_case / name).mkdir(mode=0o700, exist_ok=True)
+                (target_case / name).chmod(0o700)
+            obs_dir = target_case / 'raw/observation'
+            obs_dir.mkdir(mode=0o700, exist_ok=True)
+            src_rec = context.strict_json((case / 'raw/observation/record.json').read_bytes())
+            src_rec = dict(src_rec, run_id=source_run_obj['id'], run_attempt=source_run_obj['run_attempt'])
+            (obs_dir / 'record.json').write_bytes(context.canonical(src_rec))
+            (obs_dir / 'jobs.json').write_bytes(context.canonical([{'total_count': len(api.jobs[source_run_obj['id']]),
+                                                                    'jobs': api.jobs[source_run_obj['id']]}]))
+            if not (obs_dir / 'artifacts.json').exists():
+                shutil.copy2(case / 'raw/observation/artifacts.json', obs_dir / 'artifacts.json')
+            raw_ctx = context.canonical(target_obj)
+            cid = context.digest(raw_ctx)
+            (target_case / 'context.json').write_bytes(raw_ctx)
+            auth_dir = target_case / 'raw/final'
+            auth_dir.mkdir(mode=0o700)
+            auth_path = auth_dir / 'authority-final.json'
+            adopt = cli.adoption_identity('source', verifier) if current_identities else {}
+            auth_path.write_bytes(context.canonical({'live_eligibility': 'eligible_at_observation',
+                                                     'adoption_identity': adopt}))
+            prefix = '/repos/' + target_obj['repository'] + '/'
+            head = target_obj['source']['head_sha']
+            base_runs = [source_run_obj, title_run_obj]
+            base_checks = [checks_map[name] for name in (*snapshot.NAMES, 'PR Title')]
+            log = []
+
+            def response(path, value, link=None):
+                name = 'response-' + format(len(log) + 1, '032x') + '.json'
+                (auth_dir / name).write_bytes(context.canonical(value))
+                log.append({'method': 'GET', 'path': path, 'raw': name, 'link': link})
+
+            response(prefix + 'commits/' + head + '/check-runs?filter=latest&per_page=100',
+                     {'total_count': len(base_checks), 'check_runs': base_checks})
+            response(prefix + 'actions/runs?event=pull_request&head_sha=' + head + '&per_page=100',
+                     {'total_count': len(base_runs), 'workflow_runs': base_runs})
+            response(prefix + 'pulls/' + str(target_obj['pr']['number']), api.pr)
+            response(prefix + 'git/commits/' + target_obj['source']['checkout_sha'],
+                     {'sha': target_obj['source']['checkout_sha'], 'tree': {'sha': target_obj['source']['checkout_tree']}})
+            for run in base_runs:
+                response(prefix + 'actions/runs/' + str(run['id']), run)
+                run_jobs = api.jobs[run['id']]
+                response(prefix + f"actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100",
+                         {'total_count': len(run_jobs), 'jobs': run_jobs})
+            for check in base_checks:
+                response(prefix + 'check-runs/' + str(check['id']), check)
+            (auth_dir / 'authority-requests.json').write_bytes(context.canonical(log))
+            paths = [item.relative_to(ROOT).as_posix() for item in auth_dir.iterdir()]
+            paths.append((obs_dir / 'jobs.json').relative_to(ROOT).as_posix())
+            paths.append((obs_dir / 'record.json').relative_to(ROOT).as_posix())
+            inputs = store.file_hashes(ROOT, paths)
+            dependencies, refs = {}, {}
+            for stage in cli.STAGES:
+                ver_sha = cli.identity(stage, 'source', verifier) if current_identities else 'a' * 64
+                receipt, sha = store.publish_receipt(ROOT, target_case, stage, cid, inputs, dependencies,
+                                                     ver_sha, cli.policy(stage, 'source'), {})
+                receipt_path = next(p for p in (target_case / 'receipts').glob(stage + '-*.json')
+                                    if hashlib.sha256(p.read_bytes()).hexdigest() == sha)
+                refs[stage] = {'path': receipt_path.name, 'sha256': sha}
+                dependencies[stage] = sha
+            summary = {'schema_version': 1, 'context_sha256': cid, 'state': 'complete', 'verification': 'passed',
+                       'live_eligibility': 'eligible_at_observation', 'missing_stages': [],
+                       'observed_at': receipt['observed_at'], 'observation': 'raw/observation',
+                       'authority_path': 'raw/final/authority-final.json', 'receipts': refs,
+                       'profile_verifier': verifier.relative_to(ROOT).as_posix()}
+            raw_sum = context.canonical(summary)
+            (target_case / 'summary.json').write_bytes(raw_sum)
+            return cid, raw_sum, auth_dir
+
+        baseline = declared['baseline']
+        if fallback:
+            base_case = self.directory()
+            base_obj = json.loads(json.dumps(obj))
+            base_obj['source']['run_id'] = baseline['runs']['source']['id']
+            base_obj['source']['attempt'] = baseline['runs']['source']['run_attempt']
+            base_id, base_raw_summary, authority_dir = populate_case(
+                base_case, base_obj, baseline['runs']['source'], baseline['runs']['title'], baseline['checks'])
+            current_checks = {name: next(c for c in api.required if c['name'] == name and c['id'] != baseline['checks'][name]['id'])
+                              for name in (*snapshot.NAMES, 'PR Title')}
+            current_source_run = next(r for r in api.runs if r['id'] == obj['source']['run_id'])
+            current_title_run = next(r for r in api.runs if r['id'] == declared['request']['title']['run_id'])
+            case_id, _, _ = populate_case(case, obj, current_source_run, current_title_run, current_checks)
+            frozen = base_case / 'frozen.json'
+            frozen.write_bytes(base_raw_summary)
+            request = dict(declared['request'], schema_version=1, source_context_sha256=case_id,
+                           baseline={'case': base_case.relative_to(ROOT).as_posix(), 'context_sha256': base_id,
+                                     'summary': frozen.relative_to(ROOT).as_posix(), 'sha256': context.digest(base_raw_summary)})
+            return obj, case, request, verifier, authority_dir, api, base_case
+        case_id, raw_summary, authority_dir = populate_case(
+            case, obj, baseline['runs']['source'], baseline['runs']['title'], baseline['checks'])
+        frozen = case / 'frozen.json'
+        frozen.write_bytes(raw_summary)
+        request = dict(declared['request'], schema_version=1, source_context_sha256=case_id,
+                       baseline={'case': case.relative_to(ROOT).as_posix(), 'context_sha256': case_id,
+                                 'summary': frozen.relative_to(ROOT).as_posix(), 'sha256': context.digest(raw_summary)})
+        return obj, case, request, verifier, authority_dir, api
+
+    def test_source_refresh_observation_metadata_and_readonly(self):
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest.mock import patch
+
+        obj, case, summary, declared, client = self.refresh_observation_fixture()
+        before = {path.relative_to(case): path.read_bytes() for path in case.rglob('*') if path.is_file()}
+        self.assertEqual(cli.refresh(obj, case, summary, client=client, observation=declared), ('eligible_at_observation', False))
+        self.assertEqual(cli.refresh(obj, case, summary, client=client), ('blocked', False))
+        client.required.reverse()
+        client.runs.reverse()
+        self.assertEqual(cli.refresh(obj, case, summary, client=client, observation=declared), ('eligible_at_observation', False))
+        client.graphql_paginated = True
+        self.assertEqual(cli.refresh(obj, case, summary, client=client, observation=declared), ('eligible_at_observation', False))
+        client.required.append(dict(client.required[0], id=999999999999))
+        self.assertEqual(cli.refresh(obj, case, summary, client=client, observation=declared), ('blocked', False))
+        self.assertEqual(before, {path.relative_to(case): path.read_bytes() for path in case.rglob('*') if path.is_file()})
+        for keys in (['body'], ['title'], ['body', 'title']):
+            with self.subTest(change_keys=keys):
+                item, target, saved, explicit, api = self.refresh_observation_fixture()
+                api.change_keys(keys)
+                files_before = {path.relative_to(target): path.read_bytes() for path in target.rglob('*') if path.is_file()}
+                self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('eligible_at_observation', False))
+                self.assertEqual(files_before, {path.relative_to(target): path.read_bytes() for path in target.rglob('*') if path.is_file()})
+        for failure in ('graphql_error', 'graphql_duplicate', 'graphql_broken_cursor', 'graphql_merge_state'):
+            with self.subTest(failure=failure):
+                item, target, saved, explicit, api = self.refresh_observation_fixture()
+                setattr(api, failure, 'DIRTY' if failure == 'graphql_merge_state' else True)
+                self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', False))
+        for dup_surface in ('head', 'merge', 'direct'):
+            with self.subTest(dup_surface=dup_surface):
+                item, target, saved, explicit, api = self.refresh_observation_fixture()
+                api.graphql_paginated = True
+                api.graphql_duplicate_surface = dup_surface
+                self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', False))
+        item, target, saved, explicit, api = self.refresh_observation_fixture()
+        api.drift_second_checks = True
+        self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', True))
+        for bad_meta in (
+            {'checkout_sha': 'f' * 40, 'event_sha': 'f' * 40, 'pull_request': dict(cli.classifier().snapshot(client.pr, obj['pr']['number']), merge_sha='f' * 40)},
+            {'checkout_tree': 'f' * 40},
+            {'mode': 'source', 'reason': 'source-event', 'source_run': None, 'action': 'synchronize', 'change_keys': None},
+            {'change_keys': ['base']},
+        ):
+            with self.subTest(bad_meta=list(bad_meta.keys())):
+                item, target, saved, explicit, api = self.refresh_observation_fixture()
+                api.mutate_meta_record(**bad_meta)
+                self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', True))
+        for old_role in ('ci', 'title'):
+            with self.subTest(old_as_current=old_role):
+                item, target, saved, explicit, api = self.refresh_observation_fixture()
+                base_run = explicit['baseline']['runs']['source' if old_role == 'ci' else 'title']
+                explicit['request'][old_role] = {'run_id': base_run['id'], 'attempt': base_run['run_attempt']}
+                self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', False))
+        item, target, saved, explicit, api = self.refresh_observation_fixture()
+        ci_id = explicit['request']['ci']['run_id']
+        next(run for run in api.runs if run['id'] == ci_id)['run_attempt'] += 1
+        self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', True))
+        item, target, saved, explicit, api = self.refresh_observation_fixture()
+        api.protection['required_status_checks']['strict'] = False
+        self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', False))
+        item, target, saved, explicit, api = self.refresh_observation_fixture()
+        with zipfile.ZipFile(ROOT / 'scripts/testdata/ci-evidence/snapshots.zip') as archive:
+            gate_name = snapshot.inventory(archive.read('terminal/workflow.yml'))[snapshot.NAMES[0]][0]
+        job = next(job for job in api.jobs[explicit['request']['ci']['run_id']] if job['name'] == snapshot.NAMES[0])
+        next(step for step in job['steps'] if step['name'] == gate_name)['conclusion'] = 'success'
+        self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', False))
+        for workflow in ('.github/workflows/ci.yml', '.github/workflows/pr-metadata.yml'):
+            with self.subTest(extra_workflow=workflow):
+                item, target, saved, explicit, api = self.refresh_observation_fixture()
+                extra = dict(api.runs[0], id=999999999999, path=workflow)
+                api.runs.append(extra)
+                self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', False))
+        item, target, saved, explicit, api = self.refresh_observation_fixture()
+        old_id = explicit['baseline']['runs']['title']['id']
+        index = next(index for index, run in enumerate(api.runs) if run['id'] == old_id)
+        api.runs[index] = dict(api.runs[index], run_attempt=api.runs[index]['run_attempt'] + 1)
+        self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('blocked', True))
+        item, target, saved, explicit, api = self.refresh_observation_fixture()
+        def unavailable(*args, **kwargs):
+            raise capture.TransportError('secret-canary-token https://secret.example/api')
+        api.json = unavailable
+        self.assertEqual(cli.refresh(item, target, saved, client=api, observation=explicit), ('unknown', False))
+
+        # End-to-end CLI status --refresh --observation, stale current identity, post-resume frozen baseline, and canary-free unknown
+        obj_cli, case_cli, req_cli, verifier_cli, _, api_cli = self.frozen_refresh_baseline_fixture(current_identities=True)
+        req_file = case_cli.parent / 'observation-request.json'
+        req_file.write_bytes(context.canonical(req_cli))
+        frozen_path = ROOT / req_cli['baseline']['summary']
+        frozen_before = frozen_path.read_bytes()
+        index_before = (ROOT / '.git/index').read_bytes()
+
+        def run_cli_with_api(argv, client_instance):
+            orig_refresh = cli.refresh
+            def wrapped_refresh(o, c, s, *, client=None, observation=None):
+                return orig_refresh(o, c, s, client=client_instance, observation=observation)
+            out, err = io.StringIO(), io.StringIO()
+            with patch.object(context, 'require_clean_adoption', return_value=None), \
+                 patch.object(cli, 'refresh', side_effect=wrapped_refresh), \
+                 redirect_stdout(out), redirect_stderr(err):
+                code = cli.main(argv)
+            return code, json.loads(out.getvalue()), out.getvalue(), err.getvalue()
+
+        tree_before = {p.relative_to(case_cli): p.read_bytes() for p in case_cli.rglob('*') if p.is_file()}
+        code, payload, raw_out, raw_err = run_cli_with_api(
+            ['status', '--case', str(case_cli), '--refresh', '--observation', str(req_file)], api_cli)
+        self.assertEqual((code, payload['state'], payload['verification'], payload['live_eligibility']),
+                         (0, 'complete', 'passed', 'eligible_at_observation'))
+        self.assertEqual(raw_err, '')
+        self.assertEqual(len(raw_out.splitlines()), 1)
+        code_no_obs, payload_no_obs, _, _ = run_cli_with_api(
+            ['status', '--case', str(case_cli), '--refresh'], api_cli)
+        self.assertEqual((code_no_obs, payload_no_obs['state'], payload_no_obs['live_eligibility']),
+                         (0, 'complete', 'blocked'))
+        self.assertEqual(tree_before, {p.relative_to(case_cli): p.read_bytes() for p in case_cli.rglob('*') if p.is_file()})
+        self.assertEqual(frozen_path.read_bytes(), frozen_before)
+        self.assertEqual((ROOT / '.git/index').read_bytes(), index_before)
+
+        # Simulate post-edit source --resume writing a new finalize authority & receipt with live_eligibility='blocked'
+        resumed_dir = case_cli / 'raw/final-resumed'
+        resumed_dir.mkdir(mode=0o700)
+        resumed_auth = resumed_dir / 'authority-final.json'
+        resumed_auth.write_bytes(context.canonical({
+            'live_eligibility': 'blocked',
+            'adoption_identity': cli.adoption_identity('source', verifier_cli),
+        }))
+        post_resume_summary = json.loads((case_cli / 'summary.json').read_bytes())
+        verify_sha = post_resume_summary['receipts']['verify']['sha256']
+        cap_sha = post_resume_summary['receipts']['capture']['sha256']
+        auth_sha = post_resume_summary['receipts']['authenticate']['sha256']
+        resumed_inputs = store.file_hashes(ROOT, [resumed_auth.relative_to(ROOT).as_posix()])
+        resumed_rec, resumed_fin_sha = store.publish_receipt(
+            ROOT, case_cli, 'finalize', req_cli['source_context_sha256'], resumed_inputs,
+            {'capture': cap_sha, 'authenticate': auth_sha, 'verify': verify_sha},
+            cli.identity('finalize', 'source', verifier_cli), cli.policy('finalize', 'source'), {})
+        resumed_fin_path = next(p for p in (case_cli / 'receipts').glob('finalize-*.json')
+                                if hashlib.sha256(p.read_bytes()).hexdigest() == resumed_fin_sha)
+        post_resume_summary['live_eligibility'] = 'blocked'
+        post_resume_summary['authority_path'] = 'raw/final-resumed/authority-final.json'
+        post_resume_summary['observed_at'] = resumed_rec['observed_at']
+        post_resume_summary['receipts']['finalize'] = {'path': resumed_fin_path.name, 'sha256': resumed_fin_sha}
+        (case_cli / 'summary.json').write_bytes(context.canonical(post_resume_summary))
+        code_resumed, payload_resumed, _, _ = run_cli_with_api(
+            ['status', '--case', str(case_cli), '--refresh', '--observation', str(req_file)], api_cli)
+        self.assertEqual((code_resumed, payload_resumed['state'], payload_resumed['live_eligibility']),
+                         (0, 'complete', 'eligible_at_observation'))
+        bad_req = json.loads(json.dumps(req_cli))
+        bad_req['baseline']['summary'] = (case_cli / 'summary.json').relative_to(ROOT).as_posix()
+        bad_req['baseline']['sha256'] = context.digest((case_cli / 'summary.json').read_bytes())
+        bad_req_file = case_cli.parent / 'bad-post-resume-baseline.json'
+        bad_req_file.write_bytes(context.canonical(bad_req))
+        code_bad_base, payload_bad_base, _, err_bad_base = run_cli_with_api(
+            ['status', '--case', str(case_cli), '--refresh', '--observation', str(bad_req_file)], api_cli)
+        self.assertEqual((code_bad_base, payload_bad_base['command_exit']), (4, 4))
+        self.assertTrue(err_bad_base.startswith('E_INTEGRITY: '))
+
+        # Current code identity changed while baseline chain remains intact -> state=stale, live=blocked
+        _, stale_case, stale_req, _, _, stale_api = self.frozen_refresh_baseline_fixture(current_identities=False)
+        stale_req_file = stale_case.parent / 'stale-obs.json'
+        stale_req_file.write_bytes(context.canonical(stale_req))
+        code_stale, payload_stale, _, _ = run_cli_with_api(
+            ['status', '--case', str(stale_case), '--refresh', '--observation', str(stale_req_file)], stale_api)
+        self.assertEqual((code_stale, payload_stale['state'], payload_stale['live_eligibility']),
+                         (0, 'stale', 'blocked'))
+
+        # Canary-free unknown when transport fails via CLI
+        api_cli.json = unavailable
+        code_unk, payload_unk, out_unk, err_unk = run_cli_with_api(
+            ['status', '--case', str(case_cli), '--refresh', '--observation', str(req_file)], api_cli)
+        self.assertEqual((code_unk, payload_unk['live_eligibility']), (0, 'unknown'))
+        self.assertNotIn('secret-canary-token', out_unk + err_unk)
+        self.assertNotIn('secret.example', out_unk + err_unk)
+        # R29-OBS-IMPL-002: incomplete current receipt prefix cannot report eligible_at_observation
+        saved_cli_summary = (case_cli / 'summary.json').read_bytes()
+        try:
+            inc_summary = json.loads(saved_cli_summary)
+            del inc_summary['receipts']['verify']
+            del inc_summary['receipts']['finalize']
+            inc_summary['state'] = 'incomplete'
+            inc_summary['verification'] = 'not_run'
+            inc_summary['live_eligibility'] = 'not_checked'
+            inc_summary['missing_stages'] = ['verify', 'finalize']
+            (case_cli / 'summary.json').write_bytes(context.canonical(inc_summary))
+            _, _, _, _, fresh_api = self.refresh_observation_fixture()
+            self.assertEqual(
+                cli.refresh(obj_cli, case_cli, inc_summary, client=fresh_api,
+                            observation={'request': req_cli, 'baseline': cli.load_refresh_baseline(obj_cli, case_cli, req_cli, verifier=verifier_cli)}),
+                ('blocked', False))
+            code_inc, payload_inc, _, _ = run_cli_with_api(
+                ['status', '--case', str(case_cli), '--refresh', '--observation', str(req_file)], fresh_api)
+            self.assertEqual((code_inc, payload_inc['state'], payload_inc['verification'], payload_inc['live_eligibility'], payload_inc['missing_stages']),
+                             (0, 'incomplete', 'not_run', 'blocked', ['verify', 'finalize']))
+        finally:
+            (case_cli / 'summary.json').write_bytes(saved_cli_summary)
+        # Standalone transport path over loopback HTTP in a clean checkout (without patching cli.refresh or require_clean_adoption)
+        loopback_api = self.refresh_observation_fixture()[4]
+        class LoopbackHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def send_json(self, value):
+                raw = context.canonical(value)
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            def do_GET(self):
+                value, _ = loopback_api.json('GET', self.path)
+                self.send_json(value)
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                value, _ = loopback_api.json('POST', self.path, body)
+                self.send_json(value)
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), LoopbackHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        sub_root = self.directory()
+        try:
+            prepare_checkout(sub_root)
+            sub_agent = sub_root / '.tmp/agent'
+            sub_agent.mkdir(parents=True)
+            sub_bin = sub_agent / 'bin'
+            sub_bin.mkdir()
+            sub_gh = sub_bin / 'gh'
+            sub_gh.write_text('#!/bin/sh\nprintf "fixture-token\\n"\n')
+            sub_gh.chmod(0o700)
+            sub_env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+            sub_env.update(PYTHONPATH=str(sub_root / 'scripts'), PATH=str(sub_bin) + os.pathsep + os.environ['PATH'],
+                           GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+            sub_code = '''import hashlib, http.client, json, sys
+from pathlib import Path
+port = int(sys.argv[1])
+class LocalConnection(http.client.HTTPConnection):
+    def __init__(self, host, timeout=None, **kwargs):
+        super().__init__("127.0.0.1", port, timeout=timeout)
+http.client.HTTPSConnection = LocalConnection
+from ci_evidence import cli, context, snapshot, store
+root = cli.ROOT
+obj = json.loads(sys.argv[2])
+obj["repository_key"], obj["workspace_key"] = context.workspace_identity(root)
+src_case = Path(sys.argv[3])
+dst_case = root / ".tmp/agent/live-case"
+import shutil
+shutil.copytree(src_case, dst_case)
+for rfile in (dst_case / "receipts").glob("*.json"):
+    rfile.unlink()
+raw_ctx = context.canonical(obj)
+cid = context.digest(raw_ctx)
+(dst_case / "context.json").write_bytes(raw_ctx)
+verifier = dst_case / "raw/observation/record.json"
+auth_dir = dst_case / "raw/final"
+(auth_dir / "authority-final.json").write_bytes(context.canonical({
+    "live_eligibility": "eligible_at_observation",
+    "adoption_identity": cli.adoption_identity("source", verifier),
+}))
+obs_dir = dst_case / "raw/observation"
+paths = [item.relative_to(root).as_posix() for item in auth_dir.iterdir()]
+paths.extend(((obs_dir / "jobs.json").relative_to(root).as_posix(),
+              (obs_dir / "record.json").relative_to(root).as_posix()))
+inputs = store.file_hashes(root, paths)
+deps, refs = {}, {}
+for stage in cli.STAGES:
+    rec, sha = store.publish_receipt(root, dst_case, stage, cid, inputs, deps,
+                                     cli.identity(stage, "source", verifier), cli.policy(stage, "source"), {})
+    rpath = next(p for p in (dst_case / "receipts").glob(stage + "-*.json")
+                 if hashlib.sha256(p.read_bytes()).hexdigest() == sha)
+    refs[stage] = {"path": rpath.name, "sha256": sha}
+    deps[stage] = sha
+summary = {"schema_version": 1, "context_sha256": cid, "state": "complete", "verification": "passed",
+           "live_eligibility": "eligible_at_observation", "missing_stages": [],
+           "observed_at": rec["observed_at"], "observation": "raw/observation",
+           "authority_path": "raw/final/authority-final.json", "receipts": refs,
+           "profile_verifier": verifier.relative_to(root).as_posix()}
+raw_sum = context.canonical(summary)
+(dst_case / "summary.json").write_bytes(raw_sum)
+frozen = dst_case / "frozen.json"
+frozen.write_bytes(raw_sum)
+req = json.loads(sys.argv[4])
+req["source_context_sha256"] = cid
+req["baseline"] = {"case": dst_case.relative_to(root).as_posix(), "context_sha256": cid,
+                   "summary": frozen.relative_to(root).as_posix(), "sha256": context.digest(raw_sum)}
+req_path = root / ".tmp/agent/obs-req.json"
+req_path.write_bytes(context.canonical(req))
+raise SystemExit(cli.main(["status", "--case", str(dst_case), "--refresh", "--observation", str(req_path)]))
+'''
+            proc = subprocess.run([sys.executable, '-B', '-c', sub_code, str(server.server_port),
+                                   json.dumps(obj_cli), str(case_cli), json.dumps(req_cli)],
+                                  cwd=sub_root, env=sub_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  timeout=30, close_fds=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr.decode(errors='replace'))
+            self.assertEqual(json.loads(proc.stdout)['live_eligibility'], 'eligible_at_observation')
+            self.assertFalse((sub_root / '.agent-state').exists())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=10)
+
+    def test_source_refresh_observation_full_source_fallback(self):
+        obj, case, request, verifier, _, client, base_case = self.frozen_refresh_baseline_fixture(
+            fallback=True, current_identities=True)
+        baseline = cli.load_refresh_baseline(obj, case, request, verifier=verifier)
+        summary = context.strict_json((case / 'summary.json').read_bytes())
+        self.assertEqual(
+            cli.refresh(obj, case, summary, client=client, observation={'request': request, 'baseline': baseline}),
+            ('eligible_at_observation', False))
+        # Old-as-current title or ci is rejected
+        bad_title_req = json.loads(json.dumps(request))
+        bad_title_req['title']['run_id'] = baseline['runs']['title']['id']
+        self.assertEqual(
+            cli.refresh(obj, case, summary, client=client, observation={'request': bad_title_req, 'baseline': baseline}),
+            ('blocked', False))
+        # Borrowing wrong context (mismatched head/checkout/workflow_blob or metadata borrowing distinct case) is rejected
+        for field, value in (('workflow_blob', '9' * 40), ('head_sha', '8' * 40), ('checkout_tree', '7' * 40)):
+            with self.subTest(wrong_context=field):
+                wrong_obj = json.loads(json.dumps(obj))
+                if field == 'workflow_blob':
+                    wrong_obj['workflow_blob'] = value
+                elif field == 'head_sha':
+                    wrong_obj['source']['head_sha'] = value
+                    wrong_obj['pr']['head_sha'] = value
+                else:
+                    wrong_obj['source']['checkout_tree'] = value
+                wrong_req = json.loads(json.dumps(request))
+                wrong_req['source_context_sha256'] = context.digest(context.canonical(wrong_obj))
+                with self.assertRaises(store.IntegrityError):
+                    cli.load_refresh_baseline(wrong_obj, case, wrong_req, verifier=verifier)
+        meta_borrowing_other_case = json.loads(json.dumps(request))
+        meta_borrowing_other_case['ci'] = {'run_id': 999999, 'attempt': 1}
+        with self.assertRaises(store.IntegrityError):
+            cli.load_refresh_baseline(obj, case, meta_borrowing_other_case, verifier=verifier)
+
+    def test_refresh_observation_input_and_baseline_integrity(self):
+        from contextlib import redirect_stderr, redirect_stdout
+
+        root = self.directory()
+        case = root / 'baseline'
+        case.mkdir()
+        frozen = root / 'frozen.json'
+        frozen.write_bytes(b'{}\n')
+        request = {'schema_version': 1, 'source_context_sha256': 'a' * 64,
+                   'baseline': {'case': case.relative_to(ROOT).as_posix(), 'context_sha256': 'b' * 64,
+                                'summary': frozen.relative_to(ROOT).as_posix(), 'sha256': 'c' * 64},
+                   'ci': {'run_id': 1, 'attempt': 1}, 'title': {'run_id': 2, 'attempt': 1}}
+        path = root / 'request.json'
+        path.write_bytes(context.canonical(request))
+        self.assertEqual(context.parse_refresh_observation(path, project_root=ROOT, context_sha256='a' * 64), request)
+        invalid = [dict(request, schema_version=True), dict(request, extra=None), dict(request, source_context_sha256='d' * 64),
+                   dict(request, ci={'run_id': True, 'attempt': 1}), dict(request, title={'run_id': 1, 'attempt': 1}),
+                   dict(request, baseline=dict(request['baseline'], case=str(case))),
+                   dict(request, baseline=dict(request['baseline'], summary='../outside.json'))]
+        for candidate in invalid:
+            path.write_bytes(context.canonical(candidate))
+            with self.subTest(candidate=candidate), self.assertRaises(context.InputError):
+                context.parse_refresh_observation(path, project_root=ROOT, context_sha256='a' * 64)
+        for raw in (b'{"schema_version":1,"schema_version":1}', b'{"schema_version":NaN}', b' ' * (context.MAX_REQUEST + 1)):
+            path.write_bytes(raw)
+            with self.subTest(raw=raw[:40]), self.assertRaises(context.InputError):
+                context.parse_refresh_observation(path, project_root=ROOT, context_sha256='a' * 64)
+        path.write_bytes(context.canonical(request))
+        link = root / 'link.json'
+        link.symlink_to(path)
+        with self.assertRaises(context.InputError):
+            context.parse_refresh_observation(link, project_root=ROOT, context_sha256='a' * 64)
+        link_case = root / 'link-case'
+        link_case.symlink_to(case)
+        symlink_base_req = dict(request, baseline=dict(request['baseline'], case=link_case.relative_to(ROOT).as_posix()))
+        path.write_bytes(context.canonical(symlink_base_req))
+        with self.assertRaises(context.InputError):
+            context.parse_refresh_observation(path, project_root=ROOT, context_sha256='a' * 64)
+
+        repository_key, workspace_key = context.workspace_identity(ROOT)
+        head, checkout, tree = '1' * 40, '2' * 40, '3' * 40
+        push_case = root / 'push-case'
+        snap_case = root / 'snap-case'
+        for target_case, target_obj in (
+            (push_case, {'schema_version': 1, 'kind': 'source', 'task_id': 'fixture', 'repository': 'fixture/example',
+                         'repository_id': 123, 'repository_key': repository_key, 'workspace_key': workspace_key,
+                         'workflow_head_sha': head, 'workflow_blob': '4' * 40,
+                         'source': {'run_id': 10, 'attempt': 1, 'event': 'push', 'head_sha': head,
+                                    'branch': 'main', 'checkout_sha': head, 'checkout_tree': tree},
+                         'pr': None, 'metadata': None, 'title': None, 'expected': 'success', 'predecessor': None}),
+            (snap_case, {'schema_version': 1, 'kind': 'snapshot', 'task_id': 'fixture', 'repository': 'fixture/example',
+                         'repository_id': 123, 'repository_key': repository_key, 'workspace_key': workspace_key,
+                         'workflow_head_sha': head, 'workflow_blob': '4' * 40,
+                         'source': {'run_id': 10, 'attempt': 1, 'event': 'pull_request', 'head_sha': head,
+                                    'branch': 'feature', 'checkout_sha': checkout, 'checkout_tree': tree},
+                         'pr': {'number': 1, 'head_ref': 'feature', 'head_sha': head, 'base_ref': 'main',
+                                'base_sha': '5' * 40, 'merge_sha': checkout},
+                         'metadata': {'run_id': 11, 'attempt': 1}, 'title': {'run_id': 12, 'attempt': 1},
+                         'expected': 'pending', 'predecessor': None})):
+            target_case.mkdir(mode=0o700)
+            for name in ('raw', 'artifacts', 'receipts', 'invocations'):
+                (target_case / name).mkdir(mode=0o700)
+            raw_c = context.canonical(target_obj)
+            cid = context.digest(raw_c)
+            (target_case / 'context.json').write_bytes(raw_c)
+            (target_case / 'summary.json').write_bytes(context.canonical({'context_sha256': cid}))
+
+        path.write_bytes(context.canonical(request))
+        for argv in (['status', '--observation', str(path)],
+                     ['status', '--case', str(case), '--observation', str(path)],
+                     ['status', '--refresh', '--observation', str(path)],
+                     ['verify', '--case', str(case), '--observation', str(path)],
+                     ['source', '--context', str(path), '--case', str(case), '--profile-verifier', str(path), '--observation', str(path)],
+                     ['snapshot', '--context', str(path), '--case', str(case), '--observation', str(path)],
+                     ['status', '--case', str(push_case), '--refresh', '--observation', str(path)],
+                     ['status', '--case', str(snap_case), '--refresh', '--observation', str(path)]):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with self.subTest(argv=argv), redirect_stdout(stdout), redirect_stderr(stderr):
+                self.assertEqual(cli.main(argv), 2)
+            self.assertEqual(json.loads(stdout.getvalue())['command_exit'], 2)
+            self.assertTrue(stderr.getvalue().startswith('E_INPUT: '))
+            self.assertEqual(len(stdout.getvalue().splitlines()), 1)
+
+        obj, case, request, verifier, authority_dir, _ = self.frozen_refresh_baseline_fixture()
+        baseline = cli.load_refresh_baseline(obj, case, request, verifier=verifier)
+        self.assertEqual(set(baseline['checks']), set((*snapshot.NAMES, 'PR Title')))
+        self.assertEqual(baseline['runs']['source']['id'], obj['source']['run_id'])
+        frozen = ROOT / request['baseline']['summary']
+        receipt_path = next((case / 'receipts').glob('finalize-*.json'))
+        response_path = next(authority_dir.glob('response-*.json'))
+        for target in (frozen, receipt_path, response_path):
+            original = target.read_bytes()
+            target.write_bytes(original + b' ')
+            try:
+                with self.subTest(tampered=target.name), self.assertRaises(store.IntegrityError):
+                    cli.load_refresh_baseline(obj, case, request, verifier=verifier)
+            finally:
+                target.write_bytes(original)
+
+        # Test baseline authority-requests.json corruptions: unbound response, missing page, duplicate ID, wrong total_count, conflicting repeated responses
+        def check_corrupted_baseline(mutate_fn):
+            b_obj, b_case, b_req, b_ver, b_auth_dir, _ = self.frozen_refresh_baseline_fixture()
+            log_file = b_auth_dir / 'authority-requests.json'
+            log_data = json.loads(log_file.read_bytes())
+            rebind = mutate_fn(b_obj, b_case, b_auth_dir, log_data)
+            log_file.write_bytes(context.canonical(log_data))
+            if rebind:
+                obs_dir = b_case / 'raw/observation'
+                paths = [item.relative_to(ROOT).as_posix() for item in b_auth_dir.iterdir() if item.name != 'unbound.json']
+                paths.extend(((obs_dir / 'jobs.json').relative_to(ROOT).as_posix(),
+                              (obs_dir / 'record.json').relative_to(ROOT).as_posix()))
+                inputs = store.file_hashes(ROOT, paths)
+                for rfile in (b_case / 'receipts').glob('*.json'):
+                    rfile.unlink()
+                deps, refs = {}, {}
+                cid = b_req['source_context_sha256']
+                for stage in cli.STAGES:
+                    rec, sha = store.publish_receipt(ROOT, b_case, stage, cid, inputs, deps,
+                                                     'a' * 64, cli.policy(stage, 'source'), {})
+                    rpath = next((b_case / 'receipts').glob(stage + '-*.json'))
+                    refs[stage] = {'path': rpath.name, 'sha256': sha}
+                    deps[stage] = sha
+                f_sum = json.loads((ROOT / b_req['baseline']['summary']).read_bytes())
+                f_sum['receipts'] = refs
+                f_sum['observed_at'] = rec['observed_at']
+                raw_f = context.canonical(f_sum)
+                (ROOT / b_req['baseline']['summary']).write_bytes(raw_f)
+                b_req['baseline']['sha256'] = context.digest(raw_f)
+            with self.assertRaises(store.IntegrityError):
+                cli.load_refresh_baseline(b_obj, b_case, b_req, verifier=b_ver)
+
+        def mutate_unbound(b_obj, b_case, b_auth_dir, log_data):
+            extra_name = 'response-' + ('f' * 32) + '.json'
+            (b_auth_dir / extra_name).write_bytes(b'{}\n')
+            log_data.append({'method': 'GET', 'path': '/repos/x/y', 'raw': extra_name, 'link': None})
+            # Rebind authority-requests.json but omit extra_name from finalize.inputs
+            obs_dir = b_case / 'raw/observation'
+            log_file = b_auth_dir / 'authority-requests.json'
+            log_file.write_bytes(context.canonical(log_data))
+            paths = [item.relative_to(ROOT).as_posix() for item in b_auth_dir.iterdir() if item.name != extra_name]
+            paths.extend(((obs_dir / 'jobs.json').relative_to(ROOT).as_posix(),
+                          (obs_dir / 'record.json').relative_to(ROOT).as_posix()))
+            inputs = store.file_hashes(ROOT, paths)
+            for rfile in (b_case / 'receipts').glob('*.json'):
+                rfile.unlink()
+            deps, refs = {}, {}
+            cid = context.digest((b_case / 'context.json').read_bytes())
+            for stage in cli.STAGES:
+                rec, sha = store.publish_receipt(ROOT, b_case, stage, cid, inputs, deps,
+                                                 'a' * 64, cli.policy(stage, 'source'), {})
+                rpath = next((b_case / 'receipts').glob(stage + '-*.json'))
+                refs[stage] = {'path': rpath.name, 'sha256': sha}
+                deps[stage] = sha
+            f_sum = json.loads((b_case / 'frozen.json').read_bytes())
+            f_sum['receipts'] = refs
+            f_sum['observed_at'] = rec['observed_at']
+            (b_case / 'frozen.json').write_bytes(context.canonical(f_sum))
+            return False
+
+        def mutate_missing_page(b_obj, b_case, b_auth_dir, log_data):
+            log_data[0]['link'] = f'<https://api.github.com/repos/{b_obj["repository"]}/commits/{b_obj["source"]["head_sha"]}/check-runs?filter=latest&per_page=100&page=2>; rel="next"'
+            return True
+
+        def mutate_wrong_total(b_obj, b_case, b_auth_dir, log_data):
+            resp_file = b_auth_dir / log_data[0]['raw']
+            page = json.loads(resp_file.read_bytes())
+            page['total_count'] += 1
+            resp_file.write_bytes(context.canonical(page))
+            return True
+
+        def mutate_duplicate_check_id(b_obj, b_case, b_auth_dir, log_data):
+            resp_file = b_auth_dir / log_data[0]['raw']
+            page = json.loads(resp_file.read_bytes())
+            page['check_runs'].append(page['check_runs'][0])
+            page['total_count'] = len(page['check_runs'])
+            resp_file.write_bytes(context.canonical(page))
+            return True
+
+        def mutate_conflicting_run_response(b_obj, b_case, b_auth_dir, log_data):
+            run_entry = next(e for e in log_data if e['path'].endswith('/actions/runs/' + str(b_obj['source']['run_id'])))
+            conflict_raw = 'response-' + ('e' * 32) + '.json'
+            conflict_obj = json.loads((b_auth_dir / run_entry['raw']).read_bytes())
+            conflict_obj['run_attempt'] += 1
+            (b_auth_dir / conflict_raw).write_bytes(context.canonical(conflict_obj))
+            log_data.append({'method': 'GET', 'path': run_entry['path'], 'raw': conflict_raw, 'link': None})
+            return True
+
+        def mutate_conflicting_jobs_response(b_obj, b_case, b_auth_dir, log_data):
+            jobs_entry = next(e for e in log_data if '/attempts/' in e['path'])
+            conflict_raw = 'response-' + ('d' * 32) + '.json'
+            conflict_obj = json.loads((b_auth_dir / jobs_entry['raw']).read_bytes())
+            conflict_obj['jobs'][0]['conclusion'] = 'failure'
+            (b_auth_dir / conflict_raw).write_bytes(context.canonical(conflict_obj))
+            log_data.append({'method': 'GET', 'path': jobs_entry['path'], 'raw': conflict_raw, 'link': None})
+            return True
+
+        for name, fn in (('unbound', mutate_unbound),
+                         ('missing_page', mutate_missing_page),
+                         ('wrong_total', mutate_wrong_total),
+                         ('duplicate_check_id', mutate_duplicate_check_id),
+                         ('conflicting_run', mutate_conflicting_run_response),
+                         ('conflicting_jobs', mutate_conflicting_jobs_response)):
+            with self.subTest(corruption=name):
+                check_corrupted_baseline(fn)
     def test_strict_json_rejects_duplicates_and_nonfinite(self):
         for raw in (b'{"a":1,"a":2}', b'{"a":NaN}', b'{"x":{"a":1,"a":2}}'):
             with self.subTest(raw=raw), self.assertRaises(context.InputError):

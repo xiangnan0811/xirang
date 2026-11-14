@@ -201,6 +201,7 @@ python3 -B scripts/ci-evidence.py source --context "$REQUEST" --case "$CASE" --p
 python3 -B scripts/ci-evidence.py snapshot --context "$REQUEST" --case "$CASE"
 python3 -B scripts/ci-evidence.py verify --case "$CASE" --profile-verifier "$BIN"
 python3 -B scripts/ci-evidence.py status --case "$CASE"
+python3 -B scripts/ci-evidence.py status --case "$CASE" --refresh --observation "$OBSERVATION"
 ```
 
 `source` 只完成完整成功源码 CI 的证明；`snapshot` 完成 request 声明的单次
@@ -222,8 +223,29 @@ case 的离线 verify 仍须显式传入实际 Go verifier，不访问网络、�
 stdout 始终为一个 JSON 对象，分别报告 case 的 `state`、`verification` 和
 `live_eligibility`。complete 只表示该 context 的证明完成；failure snapshot 即使
 验证通过仍为 blocked。默认 status 离线只读；无指针为 none 且不创建状态目录，
-坏指针非零。`status --refresh` 只执行认证 GET，网络不可达为 unknown，不修改
-case 或指针；历史成功不能代替当前候选、attempt 和保护状态的新核验。
+坏指针非零。无参数 `status --refresh` 只执行认证 REST GET，网络不可达为 unknown，
+不修改 case 或指针；同一 required 名称／App 15368 出现多个 check suite 时保持保守阻断，
+历史成功不能代替当前候选、attempt 和保护状态的新核验。
+
+PR 源码完成证明后若因标题或正文 `edited` 产生新一轮检查，使用
+`status --case "$CASE" --refresh --observation "$OBSERVATION"` 显式认证当前观察。
+`--observation` 仅接受显式 `--case` 与 `--refresh` 组合且目标必须为 `pull_request`
+类型的 `source` case；缺参、`push` source、`snapshot` 或其他子命令均返回 `E_INPUT`。
+请求固定为 `schema_version=1`、`source_context_sha256`、`baseline`、`ci`、`title`：
+`baseline` 指向当前 checkout `.tmp/agent/` 内同一 head 的编辑前 PR source case 及冻结
+`summary.json` 快照，离线重验其四阶段 receipt、当前 source 策略摘要，以及
+`finalize` 绑定的 `authority-requests.json` 中 `check-runs?filter=latest` 与
+`actions/runs?event=pull_request` 完整分页链和对应 attempt jobs／checks；基线损坏返回
+`E_INTEGRITY`。`ci` 为同 head 的 `edited` metadata tuple（验证一跳 `source_run`、
+`change_keys` 仅含 `body`／`title` 及 `14/17/6` 共 37 个源码步骤 skipped），或在编辑触发
+新完整源码证明时等于当前新 source case 的 tuple。该路径仍保持无写入只读，网络操作仅限认证
+REST GET（含 `filter=latest`、`filter=all` 与 `actions/runs` 完整分页及返回前二次复核）
+和固定只读 `POST /graphql` PR rollup 查询（禁止 GraphQL mutation），核对四个 required
+名称／App 15368 在两份 REST 集合中均恰为“基线旧 check + 声明当前 check”、相关工作流运行集合
+恰为基线与当前声明的并集，且四个当前 check 在 `OPEN`／`MERGEABLE`／`CLEAN` 的 PR rollup
+中均为 `COMPLETED`／`SUCCESS`／`isRequired=true`。额外运行或 check、未知 suite、将基线当当前
+或第二轮编辑观察均返回 `blocked`；声明身份、attempt、PR 或指针漂移返回 `state=stale`、
+`live_eligibility=blocked`。
 
 当前采用资格还要求取证工具、生产 classifier、workflow、Go module 与 verifier 的
 实际构建／嵌入输入保持洁净；相关 staged、unstaged、untracked 或 ignored 输入均

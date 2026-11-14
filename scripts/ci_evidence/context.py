@@ -131,6 +131,50 @@ def agent_path(project_root, candidate, *, leaf="file"):
     return raw
 
 
+def parse_refresh_observation(path, *, project_root, context_sha256):
+    """Validate an explicitly declared, workspace-bound refresh observation."""
+    try:
+        raw_path = Path(path)
+        if ".." in raw_path.parts:
+            raise InputError("parent traversal in request path")
+        root = Path(project_root).resolve(strict=True)
+        request_path = raw_path if raw_path.is_absolute() else root / raw_path
+        request_path = Path(os.path.abspath(request_path))
+        if any(item.is_symlink() for item in (request_path, *request_path.parents)) or not request_path.is_file():
+            raise InputError("expected ordinary request file")
+        with request_path.open("rb") as request:
+            data = request.read(MAX_REQUEST + 1)
+    except OSError as exc:
+        raise InputError("cannot read request") from exc
+    if len(data) > MAX_REQUEST:
+        raise InputError("request too large")
+    obj = strict_json(data)
+    try:
+        canonical(obj)
+    except (UnicodeError, ValueError, TypeError) as exc:
+        raise InputError("invalid request encoding") from exc
+    _keys(obj, ("schema_version", "source_context_sha256", "baseline", "ci", "title"))
+    if type(obj["schema_version"]) is not int or obj["schema_version"] != 1:
+        raise InputError("invalid schema version")
+    _sha(obj["source_context_sha256"], SHA256)
+    if obj["source_context_sha256"] != context_sha256:
+        raise InputError("source context mismatch")
+    baseline = obj["baseline"]
+    _keys(baseline, ("case", "context_sha256", "summary", "sha256"))
+    for name, leaf in (("case", "directory"), ("summary", "file")):
+        _text(baseline[name])
+        if Path(baseline[name]).is_absolute():
+            raise InputError("baseline path must be workspace relative")
+        agent_path(project_root, baseline[name], leaf=leaf)
+    _sha(baseline["context_sha256"], SHA256)
+    _sha(baseline["sha256"], SHA256)
+    _run(obj["ci"])
+    _run(obj["title"])
+    if obj["ci"]["run_id"] == obj["title"]["run_id"]:
+        raise InputError("duplicate run id")
+    return dict(obj)
+
+
 def parse_context(path, *, project_root, kind):
     """Validate a request and bind it to this repository and workspace."""
     try:
