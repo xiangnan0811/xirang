@@ -2,20 +2,27 @@
 
 ## Unreleased
 
+## [0.73.19](https://github.com/xiangnan0811/xirang/compare/v0.73.18...v0.73.19) (2026-11-14)
+
+
+### 🐛 Bug Fixes
+
+* 修复 PostgreSQL 依赖漏洞并交付可恢复 CI 取证诊断 ([#713](https://github.com/xiangnan0811/xirang/issues/713)) ([b89ae88](https://github.com/xiangnan0811/xirang/commit/b89ae888c79d3dc5e118c9a5359910f6994877e8))
+
 ### PostgreSQL 保留输入安全修复
 
 - Core 的 `postgresql18-client`／`libpq` 与 Worker 的传递 `libpq` 从 `18.6-r0` 更新为 `18.7-r0`，修复原双架构镜像扫描报告的 HIGH 漏洞；不新增 Worker 显式 root。完整八事务来自配方 `02151ca90884f2a185bb9d5e1d507c7c58a0d827` 的[原生采集 43454390891/attempt1](https://github.com/xiangnan0811/xirang/actions/runs/43454390891)：两平台验签、断网重放、八个安装后输入扫描及 lock attestation 均通过，其余事务包无增删或版本变化，固定 base、安装器与可信根保持。
 - 完整 Worker APK 投影随程序编译并推进 toolchain／pipeline 指纹，须同源重建替换 Core／Worker，重新生成架构匹配的最终闭包、attestations、授权签名 bundle 与 proof；旧 receipt 不得改标为新身份。升级前保全数据库、匹配密钥、配置和备份副本，暂停准入并排空旧 Core／Worker owner 的在途操作；旧进程及外部 PostgreSQL 服务不会自动获得补丁。
 - 本修复按 `fix` 正常发行，无新增 API、配置或 schema migration，Worker 仍非 GA、默认关闭。回退须恢复匹配整套旧镜像、二进制和制品，会恢复旧依赖漏洞；既有迁移降级限制保持。输入内容寻址发布、采集扫描与 CI 临时签名 fixture 不替代最终镜像、正式发行或生产部署验收。
 
-### 测试路径兼容
+### 第二十九轮复盘问题处理
 
-- Office seccomp 回归在批准的 scratch 目录内以相对 Unix socket 文件名执行，避免长临时目录使地址在进入 bind syscall 前就因超长被拒绝。保留真实 AF_UNIX 服务端与其他 socket 操作的全部允许／拒绝断言；仅修复测试路径，不改变生产沙箱策略或运行时配置。
-
-### 可恢复 CI 取证资格
-
-- 修复本地采用检查将输入范围外的 ignored 嵌套恢复 checkout 误判为脏输入的问题；保留对真实 staged、unstaged、untracked、ignored 构建输入及嵌入目录的拒绝，Go `_test.go` 叶文件继续按既有合同排除。旧恢复材料和原 case／命令退出记录保留。
-- 本修复仅调整取证工具的本地资格判断，不改变生产沙箱、构建输入、配置或 schema。历史验证通过和 status 的正常退出仍不能替代当前 `live_eligibility`、候选及保护状态；既有 source、离线 verify 和在线 refresh 门槛保持。
+- 可恢复 CI 取证：复盘发现源码 CI 的完整证明依赖只存在于忽略目录的私有脚本，且部分按名称或 latest 选择 attempt 与制品。现改为受维护的 `scripts/ci-evidence.py source/snapshot/verify/status` 及正式 Go `verify-ci-profile`：以显式 request 绑定仓库、run／attempt、checkout／tree 与 workflow blob，按当前 attempt 的 producer、上传窗口和摘要认证制品，四阶段不可变 receipt 支持同 context 续接与离线重验，七文件签名证据与双架构 closure 由真实 verifier 验证。CI 运行该工具的回归；工具不改变产品运行行为、配置或 schema。
+- 安全失败位置：复盘发现 required PostgreSQL runner 把全部测试输出写为 `[redacted]`，导致历史 SQLite 失败丢失断言位置。现每条输出最多保留一处经本组源码允许表验证的 `basename.go:line: [redacted]`；正文、秘密、路径、未知文件、symlink 和非法行号继续脱敏，失败仍写失败 summary 并非零退出，库存、超时与通过标准不变。runner 另输出各阶段耗时，required 库存可登记 `cmd` 包测试。
+- 编辑后的当前资格：标题或正文 `edited` 使同一 required 名称在 head 上出现原源码与新 metadata 两组 check，原 `status --refresh` 因此保守阻断。新增 `status --case CASE --refresh --observation FILE`，基于冻结的编辑前完整 source 基线离线重放其 receipt 绑定的认证响应，要求 latest／all 中四个 required 名称／App 的 check 集合及相关 workflow run 集合恰为“基线 + 一次声明观察”，并在 PR rollup 核验四个声明当前 check 的身份、required 标记及成功状态；额外运行、未知 suite、旧检查冒充当前或身份漂移均阻断。无参数 refresh 行为不变，该路径只读。
+- 本地采用检查不再把输入范围外的 ignored 嵌套恢复 checkout 误判为脏输入；真实 staged、unstaged、untracked、ignored 构建输入及嵌入目录仍被拒绝。历史 verification=passed 或 status 正常退出不能替代当前 `live_eligibility`。
+- Office seccomp 回归在批准的 scratch 目录内使用相对 Unix socket 文件名，避免长临时路径在 bind 前超长被拒；保留全部允许／拒绝断言，不改变生产沙箱策略。
+- 未闭合边界：历史 `TestRclonePortableManifestV2Persistence/sqlite` 失败原因仍未知（此后正常 CI 中该子测试通过）；数据库测试提速候选 A、B 已否决，C 中断未采用，本版不声称任何提速；OMP 子任务恢复问题转到独立修复项目；新增／修复后的 E0／E1 实验及完整 rerun 未执行，早期 E0 尝试和原始退出记录保留。
 
 ## [0.73.18](https://github.com/xiangnan0811/xirang/compare/v0.73.17...v0.73.18) (2026-11-11)
 
