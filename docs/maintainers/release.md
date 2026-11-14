@@ -60,6 +60,8 @@ bundle／proof 的要求。旧进程不会自动获得补丁，旧 receipt 不�
 发行准入仍须确认当前 `live_eligibility=eligible_at_observation`；正常 status 退出
 或历史 verification=passed 不能替代该门槛，操作见[可恢复 CI 取证](automation.md#可恢复-ci-取证)。
 
+上述 PostgreSQL 18.7 安全修复与第二十九轮复盘问题处理（可恢复 CI 取证、安全失败位置、编辑后显式观察资格及未闭合边界）的完整说明归档于 CHANGELOG `0.73.19` 版本节；发行 PR 与正式 GitHub Release 正文须完整保留该节，不能只保留自动生成的提交摘要或将已交付条目留在 `Unreleased`，也不得把 SQLite 历史原因、性能或 OMP 写成已解决。
+
 已 squash 合并的 PR 若包含需要发布、但未被提交语义识别的修复，可按 [Release Please 官方说明](https://github.com/googleapis/release-please#how-can-i-fix-release-notes)，在原 PR 正文追加带日期的发布决定和 `BEGIN_COMMIT_OVERRIDE` / `END_COMMIT_OVERRIDE` 区块；保留原始变更与验证事实，在块内补齐真实的 `fix` 条目并按需添加 `Release-As:`。重新运行 Release Please 后核对实际生成的 Release PR，仍须完成下述说明审阅、检查与镜像门禁。该方式不改写 Git 提交或旧 tag；仅改已合并 PR 标题不会更新提交语义，普通 merge 不适用此 override 路径。
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
