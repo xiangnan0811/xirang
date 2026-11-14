@@ -187,6 +187,85 @@ CI 将 push 与 PR 的并发组分开：同一 PR 的 opened／synchronize／reo
 的 main push。PR Metadata 使用独立的 PR 并发组，只取消其自身较旧的标题运行。
 合并后的正文仍可用于 Release Please override 和发行说明审阅，规则见[发布手册](release.md)。
 
+### 可恢复 CI 取证
+
+维护入口为 `python3 -B scripts/ci-evidence.py`，仅使用 Python 3.9+ 标准库和
+POSIX 文件锁。先准备严格 JSON request，显式声明仓库、workflow blob、源码
+run／attempt／checkout，以及 snapshot 所需的 PR、metadata、Title 和预期状态。
+case 和实际 Go verifier 二进制必须位于当前 checkout 的 `.tmp/agent/` 内；
+父目录须已存在，目标不得通过 symlink 越出工作区。七参数 profile verifier 在
+`backend/` 使用 `go build -o "$BIN" ./cmd/verify-ci-profile` 构建。
+
+```bash
+python3 -B scripts/ci-evidence.py source --context "$REQUEST" --case "$CASE" --profile-verifier "$BIN"
+python3 -B scripts/ci-evidence.py snapshot --context "$REQUEST" --case "$CASE"
+python3 -B scripts/ci-evidence.py verify --case "$CASE" --profile-verifier "$BIN"
+python3 -B scripts/ci-evidence.py status --case "$CASE"
+python3 -B scripts/ci-evidence.py status --case "$CASE" --refresh --observation "$OBSERVATION"
+```
+
+`source` 只完成完整成功源码 CI 的证明；`snapshot` 完成 request 声明的单次
+pending、success 或 failure 观察。新 case 必须不存在；`--resume` 必须指定
+已有且 request、仓库与工作区身份完全一致的 case，不自动跟随新 attempt。
+只有 source／snapshot 的 `--make-current` 才切换 `/.agent-state/` 中唯一指针；
+未指定 case 的 status 读取该指针，不扫描目录或按时间选择结果。
+
+case 按 capture、authenticate、verify、finalize 四阶段保存不可变 receipt。
+resume 复验原件及依赖，复用完整身份一致的原 receipt 和观察时间；工具、输入、
+依赖或策略变化只使相关链失效。完整认证 ZIP 可在后续失败后复用；部分下载不能采用。
+采集、认证的缓存身份与下游验证身份分开；当前采用资格还核对工具的完整字节身份，
+不能因采集 receipt 可复用就沿用旧资格。不可变发布要求不覆盖目标的原子 rename；
+平台缺少该能力时返回 `E_INPUT`，不退化为覆盖发布。
+各次调用保留独立命令退出记录，成功续接不改写旧失败。若中断发生在首份命令记录
+发布前，恢复只追加未知结果的中断记录，不补造退出码、原命令或结束时间。源码
+case 的离线 verify 仍须显式传入实际 Go verifier，不访问网络、不更新 summary 或 current。
+
+stdout 始终为一个 JSON 对象，分别报告 case 的 `state`、`verification` 和
+`live_eligibility`。complete 只表示该 context 的证明完成；failure snapshot 即使
+验证通过仍为 blocked。默认 status 离线只读；无指针为 none 且不创建状态目录，
+坏指针非零。无参数 `status --refresh` 只执行认证 REST GET，网络不可达为 unknown，
+不修改 case 或指针；同一 required 名称／App 15368 出现多个 check suite 时保持保守阻断，
+历史成功不能代替当前候选、attempt 和保护状态的新核验。
+
+PR 源码完成证明后若因标题或正文 `edited` 产生新一轮检查，使用
+`status --case "$CASE" --refresh --observation "$OBSERVATION"` 显式认证当前观察。
+`--observation` 仅接受显式 `--case` 与 `--refresh` 组合且目标必须为 `pull_request`
+类型的 `source` case；缺参、`push` source、`snapshot` 或其他子命令均返回 `E_INPUT`。
+请求固定为 `schema_version=1`、`source_context_sha256`、`baseline`、`ci`、`title`：
+`baseline` 指向当前 checkout `.tmp/agent/` 内同一 head 的编辑前 PR source case 及冻结
+`summary.json` 快照，离线重验其四阶段 receipt、当前 source 策略摘要，以及
+`finalize` 绑定的 `authority-requests.json` 中 `check-runs?filter=latest` 与
+`actions/runs?event=pull_request` 完整分页链和对应 attempt jobs／checks；基线损坏返回
+`E_INTEGRITY`。`ci` 为同 head 的 `edited` metadata tuple（验证一跳 `source_run`、
+`change_keys` 仅含 `body`／`title` 及 `14/17/6` 共 37 个源码步骤 skipped），或在编辑触发
+新完整源码证明时等于当前新 source case 的 tuple。该路径仍保持无写入只读，网络操作仅限认证
+REST GET（含 `filter=latest`、`filter=all` 与 `actions/runs` 完整分页及返回前二次复核）
+和固定只读 `POST /graphql` PR rollup 查询（禁止 GraphQL mutation），核对四个 required
+名称／App 15368 在两份 REST 集合中均恰为“基线旧 check + 声明当前 check”、相关工作流运行集合
+恰为基线与当前声明的并集，且四个当前 check 在 `OPEN`／`MERGEABLE`／`CLEAN` 的 PR rollup
+中均为 `COMPLETED`／`SUCCESS`／`isRequired=true`。额外运行或 check、未知 suite、将基线当当前
+或第二轮编辑观察均返回 `blocked`；声明身份、attempt、PR 或指针漂移返回 `state=stale`、
+`live_eligibility=blocked`。
+
+当前采用资格还要求取证工具、生产 classifier、workflow、Go module 与 verifier 的
+实际构建／嵌入输入保持洁净；相关 staged、unstaged、untracked 或 ignored 输入均
+阻断。Go `_test.go` 叶文件沿用测试排除规则，相关嵌入目录即使同名也不能排除。
+输入范围之外的 ignored 恢复 checkout 不影响资格，应保留其历史材料。
+status 正常返回 `0` 仍可能报告 stale／blocked；采用前须实际确认
+`live_eligibility=eligible_at_observation`，不能只看退出码或旧的 verification=passed。
+
+退出码依次为：0 正常完成或 status-none，2 `E_INPUT`，3 `E_TRANSPORT`，
+4 `E_INTEGRITY`，5 `E_VERIFY`，6 `E_STALE`，7 `E_BUSY`，8 `E_INCOMPLETE`，
+9 `E_REMOTE_FAILURE`。stderr 仅保留错误码与安全摘要；原始 API 响应和认证下载
+保存在私有 case，不能把 token、signed URL 或未过滤的响应复制进交付日志。
+
+性能比较使用相同 checkout、Go、环境、runner 类别及缓存条件的配对样本，明确
+记录实际 cache hit 和完整 job 路径；最多三对本地样本，不能用不同 tree 的历史
+结果补样本。`ci-phase` 只表示 Go 命令和阶段耗时，不独立声称编译或迁移 body
+耗时。候选必须先通过行为及库存等价验证，再按既定阈值决定是否采用；计时本身
+不能证明优化收益。远端 baseline 与 candidate 顺序固定时应如实标明非随机实验。
+
+
 前端 CI 和 `scripts/local-ci-parity.sh` 均通过 `npm run check` 继承中英文语言资源
 key 对齐检查；正常 pre-push 调用本地 parity，不另设检查入口。该检查在依赖补丁校验后、
 typecheck 前执行，也可在 `web/` 单独运行 `npm run check:i18n`。它只比较 `zh.ts` 与
@@ -201,6 +280,13 @@ AST候选校验、默认及覆盖timeout、14个required环境开关和逐测试
 [数据库合同](../spec/backend/database-guidelines.md#双引擎回归证据)。CI还运行隔离fake-process
 协议自测，并在成功或失败时上传逐组JSON事件、脱敏stderr及summary；fake协议通过不代表真实PG通过。
 证据文件写入、输出句柄关闭或读取句柄关闭失败也使 runner 失败；测试进程成功不能覆盖证据落盘或读取收尾错误。
+
+逐组 JSONL 的 `Output` 最多保留首处可验证的源码位置，格式为
+`basename.go:line: [redacted]\n`。位置必须来自本组当前 checkout 的普通 Go 源文件，
+行号须在该文件范围内；symlink 文件、路径、未知文件、异常行号或无法建立源码允许表时
+仍只写 `[redacted]`。正文、动态值及其余行不落盘，已知秘密在发布前继续替换。
+该位置只表示测试输出引用的代码位置，不证明错误类别；没有合法位置时仍可能无法定位断言。
+失败测试继续写失败 summary 并使命令非零退出，不因保留位置改变通过标准。
 
 库存保留批量重试的事务竞争、授权、执行证据和迁移约束，配置导入/导出的BothEngines、
 混合依赖环及HTTP静态场景，以及SSH替换/轮换的真实节点库存、锁后材料重分类、撤销、

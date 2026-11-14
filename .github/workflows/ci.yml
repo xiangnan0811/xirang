@@ -117,7 +117,16 @@ jobs:
 
       - name: Run backend tests
         if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}
-        run: go test -coverprofile=coverage.out ./...
+        run: |
+          rm -f -- coverage.out
+          go test -count=1 -coverprofile=coverage.out ./...
+          test ! -L "$GITHUB_WORKSPACE/.tmp"
+          test ! -L "$GITHUB_WORKSPACE/.tmp/agent"
+          mkdir -p "$GITHUB_WORKSPACE/.tmp/agent"
+          PROOF_WORK="$(mktemp -d "$GITHUB_WORKSPACE/.tmp/agent/ci-evidence.XXXXXXXX")"
+          trap 'rm -rf -- "$PROOF_WORK"' EXIT
+          TMPDIR="$PROOF_WORK" go build -o "$PROOF_WORK/verify-ci-profile" ./cmd/verify-ci-profile
+          TMPDIR="$PROOF_WORK" python3 -B ../scripts/ci-evidence.test.py --profile-verifier "$PROOF_WORK/verify-ci-profile"
 
       - name: Race concurrency-sensitive backend packages
         if: ${{ needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata' }}

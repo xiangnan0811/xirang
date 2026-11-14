@@ -27,6 +27,7 @@ web/.env
 # Local agent runtime data; native project adapters are tracked separately.
 .claude/settings.local.json
 .codex/*.local.toml
+/.agent-state/
 .omo/
 .opencode/
 .codegraph/

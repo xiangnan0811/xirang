@@ -100,11 +100,11 @@
     },
     {
       "arch": "aarch64",
-      "file": "libpq-18.6-r0.apk",
+      "file": "libpq-18.7-r0.apk",
       "name": "libpq",
-      "sha256": "4562deb80f6638ae7c5d10e786c39e82ebebebce5e66e19da84eb74b6c531519",
-      "size": 158065,
-      "version": "18.6-r0"
+      "sha256": "135ed81b492273e4b50ab88dd64a9cde88cff24d3437c9e8d51aeab0332147b0",
+      "size": 158080,
+      "version": "18.7-r0"
     },
     {
       "arch": "aarch64",
@@ -244,11 +244,11 @@
     },
     {
       "arch": "aarch64",
-      "file": "postgresql18-client-18.6-r0.apk",
+      "file": "postgresql18-client-18.7-r0.apk",
       "name": "postgresql18-client",
-      "sha256": "0886214f8ec4191e684f1ea37f92a911acc2d9b2ac145057b036565fe296f656",
-      "size": 1388093,
-      "version": "18.6-r0"
+      "sha256": "a656485150f59096c095fc3799e64c743b8c0fcff3f6bc2efcdfa893d18ce8e4",
+      "size": 1389612,
+      "version": "18.7-r0"
     },
     {
       "arch": "aarch64",
@@ -903,7 +903,7 @@
     {
       "arch": "aarch64",
       "name": "libpq",
-      "version": "18.6-r0"
+      "version": "18.7-r0"
     },
     {
       "arch": "aarch64",
@@ -1098,7 +1098,7 @@
     {
       "arch": "aarch64",
       "name": "postgresql18-client",
-      "version": "18.6-r0"
+      "version": "18.7-r0"
     },
     {
       "arch": "aarch64",
@@ -1191,7 +1191,7 @@
     "nghttp2-libs=1.69.0-r0",
     "openssh-client-default=10.2_p1-r1",
     "pcre2=10.49-r0",
-    "postgresql18-client=18.6-r0",
+    "postgresql18-client=18.7-r0",
     "rsync=3.5.2-r1",
     "sqlite=3.53.4-r0",
     "tiff=4.7.2-r0",

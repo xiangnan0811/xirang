@@ -13,6 +13,12 @@ func TestInventoryValidation(t *testing.T) {
 		valid      bool
 	}{
 		{"valid", `{"version":1,"groups":[{"package":"./internal/database","timeout":"30m","tests":[{"name":"TestOne","required_paths":["TestOne/postgres"]}]}],"exclusions":[]}`, true},
+		{"command exclusion", `{"version":1,"groups":[{"package":"./internal/database","timeout":"30m","tests":[{"name":"TestOne","required_paths":[]}]}],"exclusions":[{"package":"./cmd/verify-ci-profile","name":"TestEvidence","reason":"non-PG"}]}`, true},
+		{"command group", `{"version":1,"groups":[{"package":"./cmd/tool/subcommand","timeout":"30m","tests":[{"name":"TestOne","required_paths":[]}]}],"exclusions":[]}`, true},
+		{"command traversal", `{"version":1,"groups":[{"package":"./cmd/../internal/database","timeout":"30m","tests":[{"name":"TestOne","required_paths":[]}]}],"exclusions":[]}`, false},
+		{"command exclusion traversal", `{"version":1,"groups":[{"package":"./internal/database","timeout":"30m","tests":[{"name":"TestOne","required_paths":[]}]}],"exclusions":[{"package":"./cmd/tool/../../outside","name":"TestEvidence","reason":"non-PG"}]}`, false},
+		{"unrelated package", `{"version":1,"groups":[{"package":"./other/tool","timeout":"30m","tests":[{"name":"TestOne","required_paths":[]}]}],"exclusions":[]}`, false},
+		{"command root", `{"version":1,"groups":[{"package":"./cmd","timeout":"30m","tests":[{"name":"TestOne","required_paths":[]}]}],"exclusions":[]}`, false},
 		{"duplicate key", `{"version":1,"version":1,"groups":[],"exclusions":[]}`, false},
 		{"unknown field", `{"version":1,"groups":[],"exclusions":[],"extra":1}`, false},
 		{"missing required paths", `{"version":1,"groups":[{"package":"./internal/database","timeout":"30m","tests":[{"name":"TestOne"}]}],"exclusions":[]}`, false},

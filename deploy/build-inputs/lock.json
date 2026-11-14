@@ -61,16 +61,16 @@
           "compressed_apk_bytes": 72583707,
           "manifest_sha256": "ec41d0654393a4fce2b7af58a10eef6155a8864b11e94165e986634079d9162b",
           "package_count": 15,
-          "ref": "docker.io/linnea7171/xirang@sha256:ae2be71cb5104677a7e79bbe9af0a2ab653afa087bcacf560026f967f94a4ce7"
+          "ref": "docker.io/linnea7171/xirang@sha256:4545f9ab8866dca9c84e5e99475f8f2626ff34b327294c5d4a8c21fa4fab670c"
         },
         "linux/arm64": {
           "compressed_apk_bytes": 63593686,
           "manifest_sha256": "a4a229090ea36299059e2011a1166d211b37e235048d8b93c1091ee367e97156",
           "package_count": 15,
-          "ref": "docker.io/linnea7171/xirang@sha256:c4e8bd8b6760dfee17bc1f3a170f18ba322ef63c8b4431005114875852bbd228"
+          "ref": "docker.io/linnea7171/xirang@sha256:7d0308a8689a44b1701fce46a34231ae47ed6ab39fe468a2294711c591ae8822"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:8f64c0214de579a3c687d3aae34e8f8781575977434b3418d7d968862ca7abf6",
+      "ref": "docker.io/linnea7171/xirang@sha256:5735759a76f2ed5e1db26c293bc38f0e4cb5af2204533fd2ecbd6c0f2fb4c66b",
       "roots": [
         "gcc=15.2.0-r5",
         "musl-dev=1.2.6-r3",
@@ -83,19 +83,19 @@
       "base": "nginx",
       "platforms": {
         "linux/amd64": {
-          "compressed_apk_bytes": 11711250,
-          "manifest_sha256": "8b9d8f318e86bf51f8972a174b46961c14f6e26fa4a4642f2faadae99c2e181b",
+          "compressed_apk_bytes": 11712508,
+          "manifest_sha256": "9abb6bd5ce83a731ed8b6ac2ba083583c76bab92e9c9b4127d1c044bf9a2b1ed",
           "package_count": 41,
-          "ref": "docker.io/linnea7171/xirang@sha256:b4a7384e7582bda88174e86510226147d5c9e6b9561f69dcdd0b2a57349c9fb1"
+          "ref": "docker.io/linnea7171/xirang@sha256:27245dbee8a5230369b4aade7af49f79ea81bf82e9aa02fded656c02f0177774"
         },
         "linux/arm64": {
-          "compressed_apk_bytes": 12160298,
-          "manifest_sha256": "18484d9bf29749c38b5e747044b8f402b664159c2d6b8baeb28afac2dbd939b8",
+          "compressed_apk_bytes": 12161832,
+          "manifest_sha256": "748c944087c9469c6ea0747b72e5b3085922c4de8025c0f5fac7c635cfaff42d",
           "package_count": 41,
-          "ref": "docker.io/linnea7171/xirang@sha256:bfb2b06437dc43c8d5cc5a2b3acdbbf5af0b9b96bb69aac172c284937a431a74"
+          "ref": "docker.io/linnea7171/xirang@sha256:2f92709580df1e43ca6ea0cbc2493d8b07734b45b1e8699430436fc00dec52c1"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:993c5e080c1c7ecbb47d5c869ee1e37269c0118b8ba55855a9936c5080a75762",
+      "ref": "docker.io/linnea7171/xirang@sha256:ab5769fdc17941ca74f61fc4c119090f24526b5220f8ef5449279b7a0073689a",
       "roots": [
         "bash=5.3.3-r1",
         "brotli-libs=1.2.1-r0",
@@ -113,7 +113,7 @@
         "nghttp2-libs=1.69.0-r0",
         "openssh-client-default=10.2_p1-r1",
         "pcre2=10.49-r0",
-        "postgresql18-client=18.6-r0",
+        "postgresql18-client=18.7-r0",
         "rsync=3.5.2-r1",
         "sqlite=3.53.4-r0",
         "tiff=4.7.2-r0",
@@ -129,16 +129,16 @@
           "compressed_apk_bytes": 6252427,
           "manifest_sha256": "7cfc351fda047c31e5e17c414482898ed32cc3c86d1abc84a81abe46112ad7c0",
           "package_count": 13,
-          "ref": "docker.io/linnea7171/xirang@sha256:8b0c492c8b1335b4fc58f815887d888abe3281c082f314cf9ec8bf86767efc72"
+          "ref": "docker.io/linnea7171/xirang@sha256:8006bfad5b47031daba45c1141a316b538f2f77a3c14ccc2e82a241dcc13ffb0"
         },
         "linux/arm64": {
           "compressed_apk_bytes": 6283220,
           "manifest_sha256": "f3f6d8d398874a81689b674f4f38eedbc132780bdfa989980b0ed9274d219edc",
           "package_count": 13,
-          "ref": "docker.io/linnea7171/xirang@sha256:44b7391b1f441e4d72f627c83cddb510a967e689ee8e15b94c60a3cc362f1cc7"
+          "ref": "docker.io/linnea7171/xirang@sha256:185e9a097887fc48a8bc0b7e7a5b0cf0e3f0823722089d1721b6b1eeba283b3b"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:dee2084418d15e35aac3af1ddecc26af38a5e15224d773c4cb6dffcaf37dce8b",
+      "ref": "docker.io/linnea7171/xirang@sha256:325d574a93eddd3b88e5b79858584e89b198fa92fcd3ce56c072b333a08b3548",
       "roots": [
         "git=2.54.1-r0",
         "musl-utils=1.2.6-r3",
@@ -150,19 +150,19 @@
       "base": "alpine",
       "platforms": {
         "linux/amd64": {
-          "compressed_apk_bytes": 574351696,
-          "manifest_sha256": "048d6cddb25a802063b744c04c8fd98efed0d5d038d799005a69eace299d0f8c",
+          "compressed_apk_bytes": 574351705,
+          "manifest_sha256": "ac750ffdef4326cbc8b0902d08aeeb7b7cd06e6ea5be8ba5e4d85bacc8552368",
           "package_count": 366,
-          "ref": "docker.io/linnea7171/xirang@sha256:5769d9d8722db46cc661e280564f2a720dadd1ca5f0f4977654c1709287fa362"
+          "ref": "docker.io/linnea7171/xirang@sha256:503356c4969ae69741918c34674a948cb274c2baa50191e43afc29138c8cd6cc"
         },
         "linux/arm64": {
-          "compressed_apk_bytes": 549071379,
-          "manifest_sha256": "0658018ee4833d04c6832272773670f7f7a281941900c9a67b22117db8f36979",
+          "compressed_apk_bytes": 549071394,
+          "manifest_sha256": "1a8eef2b018c2c22de60e776d0426adb116a61d855840c72acaa0693d9504dc7",
           "package_count": 365,
-          "ref": "docker.io/linnea7171/xirang@sha256:813e930482e9d8b6b91333ccd2500d39cce0ddacddd86b12b5913359b96d8d2a"
+          "ref": "docker.io/linnea7171/xirang@sha256:23498c90232afb6e586785ac627762974b90a1ddc271065ce5eb7c547b8f00db"
         }
       },
-      "ref": "docker.io/linnea7171/xirang@sha256:94b2a2c82c4f8cc2e83049109688f0dfde0ca2fcc09b888d1ee087b805c75fbd",
+      "ref": "docker.io/linnea7171/xirang@sha256:dcca9d5512c908c78056134d93da72524b9b7b4b505f59367901919159a1678c",
       "roots": [
         "bash=5.3.3-r1",
         "clamav=1.4.4-r0",
@@ -190,5 +190,5 @@
   },
   "registry": "docker.io/linnea7171/xirang",
   "schema_version": 1,
-  "spec_sha256": "421d4dc4099eb424d8b55a82a7d35ff99fcebc6ce9e785086789410d6e94b4b2"
+  "spec_sha256": "e39347c0eae8f38f1d8835978c413ab303bbdecd2d0a8288d39fdcc02aaf5a98"
 }

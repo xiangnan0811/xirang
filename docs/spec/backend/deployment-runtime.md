@@ -28,6 +28,19 @@ Worker 组合启动。升级通过重建并替换整个
 Core 镜像生效，不改变探针参数、Worker inventory 或数据库；回退旧镜像恢复旧依赖，
 旧锁定源码可能无法重建，不能用修改探针或跳过扫描代替依赖修复。
 
+Core 的 PostgreSQL client／`libpq` 与 Worker 的传递 `libpq` 从 `18.6-r0` 升级到
+`18.7-r0`，修复原双架构镜像扫描报告的 HIGH 漏洞。Worker 不新增 `libpq` 显式
+root；采用同一次原生采集的完整八事务，其他包版本、固定基础镜像、安装器与可信根
+保持不变。生成的 Worker APK 投影编译进程序，自动推进 toolchain／pipeline 指纹；
+旧二进制、闭包或签名 receipt 不能作为新输入的证明。
+
+修复须同源重建并替换 Core／Worker，重新生成架构匹配的最终闭包、attestations、
+授权签名 bundle 和 proof 后配套切换。先保全数据库、匹配密钥、配置与备份副本，
+暂停新工作并排空旧 Core／Worker owner 的在途操作；输入锁不会修补已启动进程或
+外部 PostgreSQL 服务。不新增运行时配置或 schema migration，Worker 仍默认关闭。
+回退须恢复匹配整套旧镜像、二进制与制品，并会恢复上述旧漏洞；既有数据库降级限制
+继续适用。输入采集、CI 临时签名 fixture 和最终 CI 分别取证，均不表示生产部署。
+
 后端、supercronic、Nginx 任一关键子进程退出，容器退出并向其他子进程发 TERM 后等待，避免只剩 Nginx 对外提供 502。默认运行用户为 UID/GID 10000；entrypoint 可先以 root 修复 bind mount 权限再切换后端与定时器用户，挂载权限仍应在部署验证中实际检查。
 
 回归入口为 `scripts/test-core-compose.sh` 及其自测、入口脚本相关测试、`internal/api/router_test.go` 中 readyz 的健康/数据库关闭/nil DB 案例。Compose 渲染在临时环境使用示例 env，不能覆盖操作者现有 `.env`。

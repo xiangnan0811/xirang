@@ -3956,6 +3956,11 @@
       "reason": "backend/internal/requiredpostgres/runner_test.go:11-26 uses an isolated fake go process and a fake DSN only to test runner protocol; no PostgreSQL server is contacted."
     },
     {
+      "package": "./cmd/verify-ci-profile",
+      "name": "TestVerifyCIProfileEvidence",
+      "reason": "TestVerifyCIProfileEvidence verifies isolated seven-file signed profile fixtures and signature, closure, receipt and fingerprint rejection; it does not connect to PostgreSQL."
+    },
+    {
       "package": "./internal/backupasset/recovery",
       "name": "TestRecoveryAuthorizationReceiptExecuteReplayAndConflict",
       "reason": "backend/internal/backupasset/recovery/service_test.go:1498-1499 calls replay helper, which passes false at 2526-2528; the fixture chooses SQLite when postgres is false (service_test.go:1483-1495)."

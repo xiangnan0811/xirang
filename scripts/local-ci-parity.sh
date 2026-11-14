@@ -57,6 +57,18 @@ run_in_dir "$BACKEND_DIR" go mod download
 section "Backend: go test ./..."
 run_in_dir "$BACKEND_DIR" go test ./...
 
+section "Backend: recoverable CI evidence regression"
+test ! -L "$ROOT_DIR/.tmp"
+test ! -L "$ROOT_DIR/.tmp/agent"
+mkdir -p "$ROOT_DIR/.tmp/agent"
+EVIDENCE_WORK="$(mktemp -d "$ROOT_DIR/.tmp/agent/local-ci-evidence.XXXXXXXX")"
+trap 'rm -rf -- "$EVIDENCE_WORK"' EXIT
+(
+  cd "$BACKEND_DIR"
+  TMPDIR="$EVIDENCE_WORK" go build -o "$EVIDENCE_WORK/verify-ci-profile" ./cmd/verify-ci-profile
+)
+TMPDIR="$EVIDENCE_WORK" python3 -B "$ROOT_DIR/scripts/ci-evidence.test.py" --profile-verifier "$EVIDENCE_WORK/verify-ci-profile"
+
 section "Backend: go build ./..."
 run_in_dir "$BACKEND_DIR" go build ./...
 

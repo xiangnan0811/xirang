@@ -49,4 +49,56 @@ func TestNestedClosure(t *testing.T) { f := func() { func() { seed() }() }; f() 
 	if err := Census(root, inv); err != nil {
 		t.Fatal(err)
 	}
+	t.Run("declared command packages", func(t *testing.T) {
+		root := t.TempDir()
+		files := map[string]string{
+			"internal/fixture/fixture_test.go": `package fixture
+import "testing"
+func TestInternal(t *testing.T) {}`,
+			"cmd/TestTools/helper/helper_test.go": `package main
+import "testing"
+func TestEvidence(t *testing.T) {}
+func TestOther(t *testing.T) {}`,
+			"cmd/TestTools/helper/nested/nested_test.go": `package main
+import "testing"
+func TestNested(t *testing.T) {}`,
+			"cmd/unrelated/unrelated_test.go": `package main
+import "testing"
+func TestUnrelatedPostgres(t *testing.T) {}`,
+		}
+		for name, source := range files {
+			path := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cases := []struct {
+			name, inventory, want string
+		}{
+			{"exclusions", `{"version":1,"groups":[{"package":"./internal/fixture","timeout":"1m","tests":[{"name":"TestInternal","required_paths":[]}]}],"exclusions":[{"package":"./cmd/TestTools/helper","name":"TestEvidence","reason":"non-PG"},{"package":"./cmd/TestTools/helper","name":"TestOther","reason":"non-PG"}]}`, ""},
+			{"group and exclusion", `{"version":1,"groups":[{"package":"./cmd/TestTools/helper","timeout":"1m","tests":[{"name":"TestEvidence","required_paths":[]}]}],"exclusions":[{"package":"./cmd/TestTools/helper","name":"TestOther","reason":"non-PG"}]}`, ""},
+			{"missing declaration", `{"version":1,"groups":[{"package":"./internal/fixture","timeout":"1m","tests":[{"name":"TestInternal","required_paths":[]}]}],"exclusions":[{"package":"./cmd/TestTools/helper","name":"TestEvidence","reason":"non-PG"}]}`, "./cmd/TestTools/helper/TestOther: unregistered command test"},
+			{"extra declaration", `{"version":1,"groups":[{"package":"./cmd/TestTools/helper","timeout":"1m","tests":[{"name":"TestEvidence","required_paths":[]},{"name":"TestMissing","required_paths":[]}]}],"exclusions":[{"package":"./cmd/TestTools/helper","name":"TestOther","reason":"non-PG"}]}`, "./cmd/TestTools/helper/TestMissing: declared command test missing"},
+			{"missing package", `{"version":1,"groups":[{"package":"./internal/fixture","timeout":"1m","tests":[{"name":"TestInternal","required_paths":[]}]}],"exclusions":[{"package":"./cmd/missing","name":"TestEvidence","reason":"non-PG"}]}`, "cmd/missing"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "inventory.json")
+				if err := os.WriteFile(path, []byte(tc.inventory), 0600); err != nil {
+					t.Fatal(err)
+				}
+				inv, err := Load(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = Census(root, inv)
+				if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+					t.Fatalf("Census error = %v, want %q", err, tc.want)
+				}
+			})
+		}
+	})
 }

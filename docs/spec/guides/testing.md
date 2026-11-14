@@ -123,6 +123,36 @@ CI 仅在 amd64 完整 Compose smoke 成功后上传 `asset-worker-profile-signi
 缺失原件、receipt 或任一身份／摘要不一致均不算通过；测试签名证据不替代完整源码 CI、
 最终镜像扫描、正式发布证明或生产部署验收。
 
+### 取证恢复与故障边界
+
+CI 取证命令及退出协议见[仓库自动化](../../maintainers/automation.md#可恢复-ci-取证)。
+持续回归通过 `python3 -B scripts/ci-evidence.test.py --profile-verifier "$BIN"`
+运行，使用隔离夹具和真实 Go 验签；CI 不依赖历史忽略目录或个人 harness。
+历史 ZIP 派生回放另作只读验收，不能用裁决 JSON 替代新命令的实际退出状态。
+夹具在本 checkout 的 `.tmp/agent` 下独占创建临时子目录，不依赖某轮历史取证目录；
+Go profile fixture 的显式导出只接受该根的非空相对后代及已存在的空目录。
+
+恢复回归须在下载中、完整 ZIP 发布后、verifier 后、最终权威 GET 后及 current
+替换前后中断真实 CLI 进程，验证续接只采用已认证完整原件，保留各次命令结果，
+并复验 receipt 的输入、前置依赖、策略和实际 verifier 身份。两个 case 或路径别名
+争用同一 checkout 锁时第二 writer 必须失败；父进程退出释放锁，helper 不继承锁。
+kill／resume 只证明进程中断边界，不等同断电耐久性证明；fsync 或 rename 失败
+仍须非零并保留可恢复原件。离线 verify 和默认 status 的只读性须由文件状态验证。
+
+pending snapshot 仅证明观察窗口；终态须绑定其 predecessor 的相同 job／check ID，
+并另取最终权威原件。旧 fixture 缺少必需 final-run 时只能作为不完整负例，不能
+因历史特例成为 canonical complete。网络不可达、retention 过期、当前候选漂移
+及 required／App 不匹配分别验证，不把离线历史真实性写成当前采用许可。
+
+required PostgreSQL runner 的逐组 JSONL 只保留经过当前 package 普通 Go 源文件及行数
+验证的首处 `basename.go:line: [redacted]\n`，其余 `Output` 保持脱敏；位置只表明输出
+引用的代码行，不是可信错误分类。回归须通过实际写出的 JSONL 覆盖秘密跨 Write、多行、
+symlink、路径、未知文件、非法及越界行号、非字符串和坏／超长 JSON，并核验失败 summary
+及非零退出。另以真实 CLI 和隔离微型 module 验证失败、成功两条路径，不能只依靠 fake go。
+未保留位置的错误仍缺断言证据；后续通过不能解释或抹掉历史失败，不得据此削弱原断言、等待
+或持久化语义。
+
+
 ## 候选和环境
 
 记录检查针对的提交及工作区内容、命令、工具版本、必要服务、结果和跳过原因。相同 HEAD 不代表暂存、未暂存、未跟踪文件或外部依赖未变。修复后重跑失败项和受影响检查；只有候选与条件未变化时才复用已有证据。
