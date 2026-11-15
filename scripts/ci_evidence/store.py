@@ -14,7 +14,8 @@ try:
 except ImportError:
     fcntl = None
 
-from .context import InputError, StaleError, agent_path, canonical, digest, require_clean_adoption, strict_json, workspace_identity
+from .context import (InputError, StaleError, agent_path, canonical, digest, git_env, require_clean_adoption,
+                      strict_json, workspace_identity)
 
 
 class IntegrityError(ValueError):
@@ -205,8 +206,8 @@ def open_case(project_root, case_dir, context, *, resume, make_current):
     if context.get("repository_key") != repository_key or context.get("workspace_key") != workspace_key:
         raise InputError("workspace identity mismatch")
     try:
-        tracked = subprocess.run(['git', 'ls-files', '--', '.agent-state'], cwd=root,
-                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, close_fds=True).stdout
+        tracked = subprocess.run(['git', 'ls-files', '--', '.agent-state'], cwd=root, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, check=True, close_fds=True, env=git_env()).stdout
     except (OSError, subprocess.CalledProcessError) as exc:
         raise InputError('cannot inspect evidence state') from exc
     if tracked:
