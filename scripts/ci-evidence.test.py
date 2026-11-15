@@ -25,6 +25,10 @@ from ci_evidence import capture, cli, context, snapshot, source, store
 
 VERIFIER = None
 SCRATCH = ROOT / '.tmp/agent'
+# A linked worktree has a .git file, not a directory; ask git for the real index.
+ROOT_INDEX = Path(os.fsdecode(subprocess.run(
+    ['git', 'rev-parse', '--path-format=absolute', '--git-path', 'index'], cwd=ROOT, env=context.git_env(),
+    check=True, stdout=subprocess.PIPE, close_fds=True).stdout.rstrip(b'\n')))
 
 
 def zip_bytes(files):
@@ -1540,6 +1544,30 @@ with store.open_case(root, case, request, resume=False, make_current=False):
         context.require_clean_adoption(root)
         self.assertEqual((root / '.git/index').read_bytes(), index_before)
 
+    def test_git_inspection_ignores_inherited_repository_environment(self):
+        # Git hooks export GIT_DIR and friends; the tool must still inspect its own checkout.
+        root = self.directory()
+        prepare_checkout(root)
+        identity = context.workspace_identity(root)
+        foreign = self.directory()
+        clean_env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        subprocess.run(['git', 'init', '--quiet', str(foreign)], env=clean_env, check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        (foreign / 'scripts').mkdir()
+        (foreign / 'scripts/ci-evidence.py').write_text('untracked foreign change\n')
+        hook_env = {'GIT_DIR': str(foreign / '.git'), 'GIT_WORK_TREE': str(foreign),
+                    'GIT_INDEX_FILE': str(foreign / '.git/index')}
+        from unittest.mock import patch
+        with patch.dict(os.environ, hook_env):
+            redirected = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=root, check=True,
+                                        stdout=subprocess.PIPE, close_fds=True).stdout.rstrip(b'\n')
+            self.assertEqual(Path(os.fsdecode(redirected)).resolve(), foreign.resolve())
+            self.assertEqual(context.workspace_identity(root), identity)
+            context.require_clean_adoption(root)
+            (root / 'scripts/ci-evidence.py').write_text('local change\n')
+            with self.assertRaises(context.StaleError):
+                context.require_clean_adoption(root)
+
     def test_clean_adoption_rejects_ignored_embed_directories(self):
         root = self.directory()
         prepare_checkout(root)
@@ -1976,7 +2004,7 @@ with store.open_case(root, case, request, resume=False, make_current=False):
         req_file.write_bytes(context.canonical(req_cli))
         frozen_path = ROOT / req_cli['baseline']['summary']
         frozen_before = frozen_path.read_bytes()
-        index_before = (ROOT / '.git/index').read_bytes()
+        index_before = ROOT_INDEX.read_bytes()
 
         def run_cli_with_api(argv, client_instance):
             orig_refresh = cli.refresh
@@ -2002,7 +2030,7 @@ with store.open_case(root, case, request, resume=False, make_current=False):
                          (0, 'complete', 'blocked'))
         self.assertEqual(tree_before, {p.relative_to(case_cli): p.read_bytes() for p in case_cli.rglob('*') if p.is_file()})
         self.assertEqual(frozen_path.read_bytes(), frozen_before)
-        self.assertEqual((ROOT / '.git/index').read_bytes(), index_before)
+        self.assertEqual(ROOT_INDEX.read_bytes(), index_before)
 
         # Simulate post-edit source --resume writing a new finalize authority & receipt with live_eligibility='blocked'
         resumed_dir = case_cli / 'raw/final-resumed'

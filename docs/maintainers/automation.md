@@ -194,7 +194,9 @@ POSIX 文件锁。先准备严格 JSON request，显式声明仓库、workflow b
 run／attempt／checkout，以及 snapshot 所需的 PR、metadata、Title 和预期状态。
 case 和实际 Go verifier 二进制必须位于当前 checkout 的 `.tmp/agent/` 内；
 父目录须已存在，目标不得通过 symlink 越出工作区。七参数 profile verifier 在
-`backend/` 使用 `go build -o "$BIN" ./cmd/verify-ci-profile` 构建。
+`backend/` 使用 `go build -o "$BIN" ./cmd/verify-ci-profile` 构建。工具内的 git 检查只以该
+checkout 为准：执行前移除继承的 `GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE` 等仓库局部变量
+（`git rev-parse --local-env-vars`），因此在 git hook 或 linked worktree 中运行时不会检查其他仓库。
 
 ```bash
 python3 -B scripts/ci-evidence.py source --context "$REQUEST" --case "$CASE" --profile-verifier "$BIN"

@@ -5,6 +5,7 @@ import os
 import re
 import stat
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 MAX_REQUEST = 64 * 1024
@@ -27,6 +28,23 @@ def canonical(value):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+@lru_cache(maxsize=1)
+def _git_local_env_vars():
+    names = subprocess.run(["git", "rev-parse", "--local-env-vars"], stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, check=True, close_fds=True).stdout
+    return frozenset(os.fsdecode(names).split())
+
+
+def git_env(**extra):
+    """Environment for git bound to its cwd: inherited GIT_DIR, GIT_INDEX_FILE and other
+    repository-local variables (exported by git hooks) must not redirect it elsewhere.
+    Raises OSError or CalledProcessError like the git calls that use it."""
+    local = _git_local_env_vars()
+    env = {key: value for key, value in os.environ.items() if key not in local}
+    env.update(extra)
+    return env
 
 
 def _pairs(pairs):
@@ -77,7 +95,7 @@ def workspace_identity(project_root):
     try:
         process = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=root,
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                 check=True, close_fds=True)
+                                 check=True, close_fds=True, env=git_env())
         common = Path(os.fsdecode(process.stdout.rstrip(b"\n")))
         if not common.is_absolute():
             common = root / common
@@ -321,7 +339,7 @@ def require_clean_adoption(root):
         try:
             result = subprocess.run(['git', *args, '--', *pathspecs], cwd=root, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, check=True, close_fds=True,
-                                    env=dict(os.environ, GIT_OPTIONAL_LOCKS='0'))
+                                    env=git_env(GIT_OPTIONAL_LOCKS='0'))
         except (OSError, subprocess.CalledProcessError) as exc:
             raise InputError('cannot inspect adoption inputs') from exc
         if args[0] == 'status':
