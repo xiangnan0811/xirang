@@ -147,7 +147,7 @@ func testProcessingBackfillQuotaMigration(t *testing.T, f migrationFixture) {
 	})
 	t.Run("SchemaDrift", func(t *testing.T) {
 		run := func(t *testing.T, sqlite, postgres string) {
-			m, db := f.openAt(t, 99)
+			m, db := f.openStateAt(t, 99)
 			statement := sqlite
 			if f.engine == "postgres" {
 				statement = postgres

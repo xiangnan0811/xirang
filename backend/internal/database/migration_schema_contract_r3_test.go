@@ -36,7 +36,7 @@ func testRunMigrations083And084SchemaContract(t *testing.T, fixture migrationFix
 	})
 
 	t.Run("missing recovery capture column", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `DROP TRIGGER trg_task_runs_recovery_capture_downgrade_admission ON schema_migrations`)
 		} else {
@@ -47,7 +47,7 @@ func testRunMigrations083And084SchemaContract(t *testing.T, fixture migrationFix
 	})
 
 	t.Run("missing recovery capture admission guard", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `DROP TRIGGER trg_task_runs_recovery_capture_downgrade_admission ON schema_migrations`)
 		} else {
@@ -57,7 +57,7 @@ func testRunMigrations083And084SchemaContract(t *testing.T, fixture migrationFix
 	})
 
 	t.Run("no-op recovery capture admission guard", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION task_runs_recovery_capture_downgrade_admission()
 				RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
@@ -71,25 +71,25 @@ func testRunMigrations083And084SchemaContract(t *testing.T, fixture migrationFix
 	})
 
 	t.Run("missing alert delivery column", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		fixture.mustExec(t, db, `ALTER TABLE alerts DROP COLUMN delivery_reason`)
 		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "missing_alert_delivery_column")
 	})
 
 	t.Run("missing alert delivery key index", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		fixture.mustExec(t, db, `DROP INDEX idx_alert_deliveries_delivery_key`)
 		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "missing_alert_delivery_key_index")
 	})
 	t.Run("invalid alert delivery key index", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		fixture.mustExec(t, db, `DROP INDEX idx_alert_deliveries_delivery_key`)
 		fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_alert_deliveries_delivery_key ON alert_deliveries(delivery_key)`)
 		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "invalid_alert_delivery_key_index")
 	})
 
 	t.Run("missing alert delivery admission guard", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `DROP TRIGGER trg_alert_delivery_intents_downgrade_admission ON schema_migrations`)
 		} else {
@@ -99,7 +99,7 @@ func testRunMigrations083And084SchemaContract(t *testing.T, fixture migrationFix
 	})
 
 	t.Run("no-op alert delivery admission guard", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION alert_delivery_intents_downgrade_admission()
 				RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
@@ -112,7 +112,7 @@ func testRunMigrations083And084SchemaContract(t *testing.T, fixture migrationFix
 		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "invalid_alert_delivery_admission_trigger")
 	})
 	t.Run("missing alert delivery success column", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `ALTER TABLE alert_deliveries DROP COLUMN sent_at`)
 		} else {
@@ -123,13 +123,13 @@ func testRunMigrations083And084SchemaContract(t *testing.T, fixture migrationFix
 	})
 
 	t.Run("missing task run backup source index", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		fixture.mustExec(t, db, `DROP INDEX idx_task_runs_backup_source_run_id`)
 		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "missing_task_run_backup_source_run_index")
 	})
 
 	t.Run("missing alert delivery success admission guard", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `DROP TRIGGER trg_alert_delivery_success_downgrade_admission ON schema_migrations`)
 		} else {
@@ -139,7 +139,7 @@ func testRunMigrations083And084SchemaContract(t *testing.T, fixture migrationFix
 	})
 
 	t.Run("no-op alert delivery success admission guard", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION alert_delivery_success_downgrade_admission()
 				RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)

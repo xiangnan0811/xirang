@@ -475,16 +475,7 @@ func runPortableManifestV2Persistence(t *testing.T, engine string) {
 	assertPortablePersistenceContent(t, service, point, generation, entry, portablePersistenceSourceTime)
 	// Use a real wall-clock wait, not an application-clock jump, so the
 	// historical reader must replace the expired operation deadline.
-	remaining := time.Until(attempt.PointDeadlineAt) + 200*time.Millisecond
-	if remaining > 0 {
-		timer := time.NewTimer(remaining)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-t.Context().Done():
-			t.Fatal("test context ended before the original publication deadline")
-		}
-	}
+	waitWallClockPast(t, t.Context(), attempt.PointDeadlineAt, 200*time.Millisecond)
 	if !attempt.PointDeadlineAt.Before(time.Now().UTC()) {
 		t.Fatal("V2 publication deadline did not pass in real time")
 	}
