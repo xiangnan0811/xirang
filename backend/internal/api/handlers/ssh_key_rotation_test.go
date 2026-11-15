@@ -1017,8 +1017,7 @@ func runRotationExpiryCase(t *testing.T, engine string) {
 		respCh <- serveRotationJSON(t, router, http.MethodPost, fmt.Sprintf("/ssh-keys/%d/rotate", key.ID), rotationRequestBody(t, candidatePrivate, "auto", "expiring"), session.Proof)
 	}()
 	waitRotationSSHAuth(t, server, 1)
-	timer := time.NewTimer(time.Until(expiration) + 100*time.Millisecond)
-	<-timer.C
+	waitWallClockPast(t, t.Context(), expiration, 100*time.Millisecond)
 	releaseRotationSSHServer(server)
 	resp := <-respCh
 	if resp.Code != http.StatusOK {

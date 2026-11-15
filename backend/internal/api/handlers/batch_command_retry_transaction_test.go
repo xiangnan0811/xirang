@@ -787,12 +787,7 @@ func TestBatchCommandRetryLockWaitProofAndRoleInvalidationSQLitePostgres(t *test
 				retryTransactionWaitForGate(t, reached)
 				if mode == "proof_expiry" {
 					// Wait for the proof's encoded expiry boundary, not an ordering sleep.
-					wait := time.Until(proofExpiresAt.Add(100 * time.Millisecond))
-					if wait > 0 {
-						timer := time.NewTimer(wait)
-						<-timer.C
-						timer.Stop()
-					}
+					waitWallClockPast(t, t.Context(), proofExpiresAt, 100*time.Millisecond)
 				} else {
 					if err := fx.db.Model(&model.User{}).Where("id = ?", fx.admin.ID).Update("role", "viewer").Error; err != nil {
 						t.Fatal(err)

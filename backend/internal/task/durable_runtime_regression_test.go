@@ -157,7 +157,7 @@ func runLegacyRetryWithoutEffectRecovery(t *testing.T, db *gorm.DB) {
 	if effectCount != 1 {
 		t.Fatalf("legacy retry reconciliation created %d effects, want one", effectCount)
 	}
-	time.Sleep(time.Until(retryDue) + 120*time.Millisecond)
+	waitWallClockPast(t, t.Context(), retryDue, 120*time.Millisecond)
 	if err := manager.drainReadyTaskRunEffects(context.Background()); err != nil {
 		t.Fatalf("deliver reconstructed retry: %v", err)
 	}
@@ -226,7 +226,7 @@ func runRetryEffectCommittedDeadline(t *testing.T, db *gorm.DB) {
 		t.Fatalf("retry delivered before committed deadline: %d runs", retryCount)
 	}
 
-	time.Sleep(time.Until(retryDue) + 120*time.Millisecond)
+	waitWallClockPast(t, t.Context(), retryDue, 120*time.Millisecond)
 	if err := manager.drainReadyTaskRunEffects(context.Background()); err != nil {
 		t.Fatalf("deliver retry effect at committed deadline: %v", err)
 	}

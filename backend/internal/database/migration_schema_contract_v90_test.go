@@ -29,7 +29,7 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 	})
 
 	t.Run("same-name no-op admission guard", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
+		migrator, db := fixture.openStateAt(t, backupFocusRetirementMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION backup_focus_retirement_downgrade_admission()
 				RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
@@ -44,7 +44,7 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 
 	if fixture.engine == "sqlite" {
 		t.Run("additional SQLite predicate is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
+			migrator, db := fixture.openStateAt(t, backupFocusRetirementMigrationVersion)
 			fixture.mustExec(t, db, `DROP TRIGGER trg_backup_focus_retirement_downgrade_admission`)
 			fixture.mustExec(t, db, `CREATE TRIGGER trg_backup_focus_retirement_downgrade_admission
 				BEFORE INSERT ON schema_migrations
@@ -56,7 +56,7 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 		})
 
 		t.Run("same-name no-op update admission guard", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
+			migrator, db := fixture.openStateAt(t, backupFocusRetirementMigrationVersion)
 			fixture.mustExec(t, db, `DROP TRIGGER trg_backup_focus_retirement_downgrade_update_admission`)
 			fixture.mustExec(t, db, `CREATE TRIGGER trg_backup_focus_retirement_downgrade_update_admission
 				BEFORE UPDATE ON schema_migrations
@@ -67,7 +67,7 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 
 	if fixture.engine == "postgres" {
 		t.Run("early return before exception is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
+			migrator, db := fixture.openStateAt(t, backupFocusRetirementMigrationVersion)
 			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION backup_focus_retirement_downgrade_admission()
 				RETURNS trigger LANGUAGE plpgsql AS $$
 				BEGIN
@@ -81,7 +81,7 @@ func testRunMigrations090SchemaContract(t *testing.T, fixture migrationFixture) 
 		})
 
 		t.Run("statement-level trigger is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, backupFocusRetirementMigrationVersion)
+			migrator, db := fixture.openStateAt(t, backupFocusRetirementMigrationVersion)
 			fixture.mustExec(t, db, `DROP TRIGGER trg_backup_focus_retirement_downgrade_admission ON schema_migrations`)
 			fixture.mustExec(t, db, `CREATE TRIGGER trg_backup_focus_retirement_downgrade_admission
 				BEFORE INSERT OR UPDATE ON schema_migrations
