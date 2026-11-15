@@ -77,3 +77,5 @@ PostgreSQL DSN 未指定 timezone 时补 UTC；显式时区保留，并加载为
 新增真实PG fixture遵守可静态发现的同包helper/函数值/闭包、DSN literal或engine循环约定；新动态间接机制须同时扩展census及负例，不得用exclusion逃避真实PG。具体SQLite-only或非PG误报可用源码理由逐项排除，不允许包/前缀豁免。`TestPostgresTimestamptzScanUsesConfiguredUTC` 需在非UTC进程TZ下校验Location与时间值；dirty/search_path回归须证明兄弟schema不干扰当前连接可见的dirty状态。
 
 共享数据库的破坏性 PostgreSQL fixture 按包串行运行。跨引擎 fixture 绑定 Go `bool`，不用 SQLite 的 `0/1` SQL 字面量代替 PostgreSQL 布尔值。重复执行的共享内存 SQLite DSN 加每次打开的唯一序号，不能只依赖 `t.Name()`。需要行锁时锁定实际行，不能使用 PostgreSQL 不支持的 `COUNT(*) ... FOR UPDATE`。
+
+database 包的 PostgreSQL 迁移回归默认用 `openAt` 在共享库中新建 schema 并真实迁移到目标版本。只需要“全新、已真实迁移的 schema”的状态类用例（drift、约束、触发器与状态转换）可在调用处改用 `openStateAt`：每个版本先经同一嵌入迁移路径构建一次模板库，每次调用 `CREATE DATABASE … TEMPLATE` 得到独立克隆，结束时删除克隆与模板。改写 DSN 时同时移除查询中的 `dbname`／`database` 选择器。角色缺少 `CREATEDB` 或设置 `XIRANG_TEST_PG_TEMPLATE=0` 时回退 `openAt`。迁移升降级、已使用 down、dirty、逐步构造的 preflight 起点、并发会话及提交敏感用例必须保留 `openAt`。

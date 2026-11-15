@@ -480,7 +480,7 @@ func runReplacementPostgresProofExpiry(t *testing.T) {
 	candidate := buildSSHKeyPrivateKeyForHandlerTest(t)
 	// Cross a JWT second boundary while the actual key lock is held. This
 	// remains shorter than the production 1500ms lock timeout.
-	expires := replacementNextProofExpiry()
+	expires := replacementNextProofExpiry(t)
 	proof := replacementExpiringProof(t, f, expires)
 	body := replacementUpdateBody(t, "expired-proof-metadata", &candidate)
 	responses := make(chan *httptest.ResponseRecorder, 1)
@@ -489,9 +489,7 @@ func runReplacementPostgresProofExpiry(t *testing.T) {
 	if _, err := f.manager.ParseToken(proof); err != nil {
 		t.Fatal("proof fixture expired before the observed key-lock wait")
 	}
-	timer := time.NewTimer(time.Until(expires) + 10*time.Millisecond)
-	defer timer.Stop()
-	<-timer.C
+	waitWallClockPast(t, t.Context(), expires, 10*time.Millisecond)
 	if err := holder.Commit(); err != nil {
 		t.Fatalf("release expiring proof waiter: %v", err)
 	}
@@ -599,9 +597,7 @@ func runReplacementRotationProofExpiry(t *testing.T, engine string) {
 	responses := make(chan *httptest.ResponseRecorder, 1)
 	go func() { responses <- replacementRequest(f, http.MethodPost, body, proof) }()
 	waitRotationSSHAuth(t, server, 1)
-	timer := time.NewTimer(time.Until(expires) + 10*time.Millisecond)
-	defer timer.Stop()
-	<-timer.C
+	waitWallClockPast(t, t.Context(), expires, 10*time.Millisecond)
 	releaseRotationSSHServer(server)
 	response := awaitReplacementResponse(t, responses)
 	assertStepUpRequiredEnvelopeForAction(t, response, auth.StepUpActionSSHKeyReplace)
@@ -953,14 +949,12 @@ func TestSSHKeyReplacementSQLiteConcurrentOrderings(t *testing.T) {
 	}
 }
 
-func replacementNextProofExpiry() time.Time {
+func replacementNextProofExpiry(t *testing.T) time.Time {
 	expires := time.Now().UTC().Truncate(time.Second).Add(time.Second)
 	if time.Until(expires) < 750*time.Millisecond {
 		// Start near a signed JWT second boundary, so admission has enough
 		// headroom without crossing the 1500ms PostgreSQL lock timeout.
-		timer := time.NewTimer(time.Until(expires) + 5*time.Millisecond)
-		<-timer.C
-		timer.Stop()
+		waitWallClockPast(t, t.Context(), expires, 5*time.Millisecond)
 		expires = expires.Add(time.Second)
 	}
 	return expires

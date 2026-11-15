@@ -3737,7 +3737,7 @@ func (fixture migrationFixture) test077GuardSchemaDrift(t *testing.T) {
 	for _, testCase := range transitionCases {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			migrator, db := fixture.openStateAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
 			testCase.mutate(t, db)
 			err := RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine)
 			if !errors.Is(err, ErrMigrationSchemaDrift) {
@@ -3785,7 +3785,7 @@ func (fixture migrationFixture) test077RequiredUniqueIndexPredicateDrift(t *test
 	} {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			migrator, db := fixture.openStateAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
 			fixture.mustExec(t, db, `DROP INDEX `+testCase.index)
 			fixture.mustExec(t, db, `CREATE UNIQUE INDEX `+testCase.index+
 				` ON `+testCase.table+`(`+testCase.columns+`) WHERE `+testCase.predicate)
@@ -3800,7 +3800,7 @@ func (fixture migrationFixture) test077RequiredUniqueIndexPredicateDrift(t *test
 	for _, indexState := range []string{"indisvalid", "indisready", "indislive"} {
 		indexState := indexState
 		t.Run("ClaimAttemptNotUsable_"+indexState, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			migrator, db := fixture.openStateAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
 			if fixture.engine == "sqlite" {
 				fixture.mustExec(t, db, `DROP INDEX idx_recovery_point_lifecycle_effect_claims_attempt`)
 				fixture.mustExec(t, db, `CREATE INDEX idx_recovery_point_lifecycle_effect_claims_attempt
@@ -3862,7 +3862,7 @@ func (fixture migrationFixture) test077PrimaryKeyDrift(t *testing.T) {
 	} {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			migrator, db := fixture.openStateAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
 			if fixture.engine == "sqlite" {
 				fixture.rebuildSQLiteLifecycleTableWithPrimaryKey(t, db, testCase.table, testCase.replacement)
 			} else {
@@ -4024,7 +4024,7 @@ func (fixture migrationFixture) test077TableCheckDrift(t *testing.T) {
 	} {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			migrator, db := fixture.openStateAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
 			if testCase.table == lifecycleEffectClaimAuditSlotClaimsTable {
 				fixture.mustExec(t, db, `DROP TABLE `+lifecycleEffectClaimAuditSlotClaimsTable)
 				fixture.mustExec(t, db, lifecycleClaimTableDDL(fixture.engine, testCase.missing))
@@ -4070,7 +4070,7 @@ func (fixture migrationFixture) test077ForeignKeyContractDrift(t *testing.T) {
 		}
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			migrator, db := fixture.openStateAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
 			if testCase.missing == "attempt_fk_cross_schema" {
 				fixture.mustExec(t, db, `CREATE SCHEMA lifecycle_fk_cross_schema`)
 				fixture.mustExec(t, db, `CREATE TABLE lifecycle_fk_cross_schema.recovery_point_lifecycle_attempts (
@@ -4291,7 +4291,7 @@ func (fixture migrationFixture) test077TerminalIndexPredicateDrift(t *testing.T)
 	} {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			migrator, db := fixture.openStateAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
 			fixture.mustExec(t, db, `DROP INDEX idx_recovery_point_lifecycle_audit_slots_terminal`)
 			fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_recovery_point_lifecycle_audit_slots_terminal
 				ON recovery_point_lifecycle_audit_slots(attempt_id) WHERE `+testCase.predicate)
@@ -6142,6 +6142,7 @@ func (fixture migrationFixture) assertLifecycleValueDomains(t *testing.T, db *sq
 type migrationFixture struct {
 	engine string
 	open   func(*testing.T) (*migrate.Migrate, *sql.DB)
+	dsn    string
 }
 
 func newSQLiteMigrationFixture(t *testing.T) migrationFixture {
@@ -6160,6 +6161,7 @@ func newRequiredPostgresMigrationFixture(t *testing.T) migrationFixture {
 	}
 	return migrationFixture{
 		engine: "postgres",
+		dsn:    dsn,
 		open: func(test *testing.T) (*migrate.Migrate, *sql.DB) {
 			return newPostgresBackupAssetMigrator(test, dsn)
 		},
@@ -6177,6 +6179,7 @@ func newRequiredPostgresRecoveryMigrationFixture(t *testing.T) migrationFixture 
 	}
 	return migrationFixture{
 		engine: "postgres",
+		dsn:    dsn,
 		open: func(test *testing.T) (*migrate.Migrate, *sql.DB) {
 			return newPostgresBackupAssetMigrator(test, dsn)
 		},
@@ -6757,7 +6760,7 @@ func (fixture migrationFixture) test069TargetBindingCopies(t *testing.T) {
 }
 
 func (fixture migrationFixture) test069GrantTerminalTransitions(t *testing.T) {
-	_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+	_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 	now := time.Now().UTC().Truncate(time.Second)
 	consumedGrant := fixture.seedRecoveryMigrationAggregate(t, db, "a", 11, now)
 	consumedAt := now.Add(time.Minute)
@@ -6854,7 +6857,7 @@ func (fixture migrationFixture) test069GrantTerminalTransitions(t *testing.T) {
 }
 
 func (fixture migrationFixture) test069GrantTerminalTransitionBindings(t *testing.T) {
-	_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+	_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 	now := time.Now().UTC().Truncate(time.Second)
 
 	for _, terminalTransition := range []struct {
@@ -7841,7 +7844,7 @@ func (fixture migrationFixture) test069ExactMirrorDeleteGrantConsumption(t *test
 
 func (fixture migrationFixture) test069JobAndResultSetTransitionMatrix(t *testing.T) {
 	t.Run("ready cannot skip revoking", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "e", 143, now)
 		fixture.expectExecRejectedInRollback(t, db, `UPDATE backup_asset_recovery_result_sets
@@ -7852,7 +7855,7 @@ func (fixture migrationFixture) test069JobAndResultSetTransitionMatrix(t *testin
 	})
 
 	t.Run("terminal job cannot reopen without a result set", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "f", 144, now, true)
 		closedAt := now.Add(time.Minute)
@@ -7871,7 +7874,7 @@ func (fixture migrationFixture) test069JobAndResultSetTransitionMatrix(t *testin
 	})
 
 	t.Run("legal ready revoking cleaned path and no-op timestamps", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "a", 145, now)
 		fixture.mustExec(t, db, `UPDATE backup_asset_recovery_result_sets SET updated_at = ? WHERE id = ?`, now.Add(time.Second), aggregate.ResultSetID)
@@ -7916,14 +7919,14 @@ func (fixture migrationFixture) test069TerminalJobAttemptBarrier(t *testing.T) {
 	terminalStates := []string{"succeeded", "degraded", "failed", "needs_attention", "canceled"}
 	for index, terminalState := range terminalStates {
 		t.Run("active attempt blocks terminal job/"+terminalState, func(t *testing.T) {
-			_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+			_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 			now := time.Now().UTC().Truncate(time.Second)
 			aggregate := fixture.seedRecoveryMigrationAggregate(t, db, fmt.Sprintf("%x", index+1), 146+index, now, true)
 			terminalize(t, db, now, aggregate, terminalState, true)
 		})
 
 		t.Run("terminal job blocks fresh active attempts/"+terminalState, func(t *testing.T) {
-			_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+			_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 			now := time.Now().UTC().Truncate(time.Second)
 			aggregate := fixture.seedRecoveryMigrationAggregate(t, db, fmt.Sprintf("%x", index+9), 151+index, now, true)
 			closedAt := now.Add(30 * time.Second)
@@ -8930,7 +8933,7 @@ func (fixture migrationFixture) test069TerminalArmedAttemptCannotBeDeletedOrRebu
 		{name: "unarmed", mutationArmed: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+			_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 			now := time.Now().UTC().Truncate(time.Second)
 			aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "4", 149, now, true)
 			closedAt := now.Add(time.Minute)
@@ -9528,7 +9531,7 @@ func (fixture migrationFixture) test069ContentAuthorizationRequiresExactStepUp(t
 
 func (fixture migrationFixture) test069ResultSetCleanupFenceInvariant(t *testing.T) {
 	t.Run("CleanedResultSetCannotLoseAllocatedCleanupFence", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "d", 40, now)
 		cleanedAt := now.Add(time.Minute)
@@ -9549,7 +9552,7 @@ func (fixture migrationFixture) test069ResultSetCleanupFenceInvariant(t *testing
 	})
 
 	t.Run("ReadyResultSetCannotTransitionDirectlyToZeroFenceTombstone", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "e", 41, now)
 
@@ -9561,7 +9564,7 @@ func (fixture migrationFixture) test069ResultSetCleanupFenceInvariant(t *testing
 	})
 
 	t.Run("CleanedResultSetWithAllocatedFenceRemainsValid", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "f", 42, now)
 		cleanedAt := now.Add(time.Minute)
@@ -9587,7 +9590,7 @@ func (fixture migrationFixture) test069ResultSetCleanupFenceInvariant(t *testing
 	})
 
 	t.Run("CleanupFailedRetriesNeedFreshFence", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "a", 43, now)
 		fixture.mustExec(t, db, `UPDATE backup_asset_recovery_result_sets
@@ -9613,7 +9616,7 @@ func (fixture migrationFixture) test069ResultSetCleanupFenceInvariant(t *testing
 
 func (fixture migrationFixture) test069CleanedResultSetTombstonePermanence(t *testing.T) {
 	t.Run("legal ready revoking cleaned path remains available", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "8", 157, now)
 		fixture.transitionRecoveryResultSetToCleaned(t, db, aggregate, now)
@@ -9629,7 +9632,7 @@ func (fixture migrationFixture) test069CleanedResultSetTombstonePermanence(t *te
 	})
 
 	t.Run("cleaned tombstone cannot be deleted", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "9", 158, now)
 		fixture.transitionRecoveryResultSetToCleaned(t, db, aggregate, now)
@@ -9638,7 +9641,7 @@ func (fixture migrationFixture) test069CleanedResultSetTombstonePermanence(t *te
 	})
 
 	t.Run("cleaned plaintext deadline cannot be extended", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "a", 159, now)
 		fixture.transitionRecoveryResultSetToCleaned(t, db, aggregate, now)
@@ -9648,7 +9651,7 @@ func (fixture migrationFixture) test069CleanedResultSetTombstonePermanence(t *te
 	})
 
 	t.Run("cleaned hard deadline remains immutable", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "b", 160, now)
 		fixture.transitionRecoveryResultSetToCleaned(t, db, aggregate, now)
@@ -9681,7 +9684,7 @@ func (fixture migrationFixture) test069CleanedResultSetTombstonePermanence(t *te
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+			_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 			now := time.Now().UTC().Truncate(time.Second)
 			aggregate := fixture.seedRecoveryMigrationAggregate(t, db, testCase.marker, testCase.sequence, now)
 			fixture.transitionRecoveryResultSetToCleaned(t, db, aggregate, now)
@@ -9796,7 +9799,7 @@ func (fixture migrationFixture) test069AttemptMutationArmTerminalAndTakeoverInva
 		}
 		for sequence, testCase := range terminalStates {
 			t.Run(testCase.state, func(t *testing.T) {
-				_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+				_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 				now := time.Now().UTC().Truncate(time.Second)
 				aggregate := fixture.seedRecoveryMigrationAggregate(t, db, testCase.marker, 50+sequence, now, true)
 				closedAt := now.Add(time.Duration(sequence+1) * time.Minute)
@@ -9818,7 +9821,7 @@ func (fixture migrationFixture) test069AttemptMutationArmTerminalAndTakeoverInva
 	})
 
 	t.Run("ClaimedAttemptCannotArm", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "e", 60, now, true)
 		fixture.expectExecRejectedInRollback(t, db, `UPDATE backup_asset_recovery_attempts
@@ -9827,7 +9830,7 @@ func (fixture migrationFixture) test069AttemptMutationArmTerminalAndTakeoverInva
 	})
 
 	t.Run("MutationArmCannotBeCleared", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "f", 61, now, true)
 		fixture.mustExec(t, db, `UPDATE backup_asset_recovery_attempts
@@ -9837,7 +9840,7 @@ func (fixture migrationFixture) test069AttemptMutationArmTerminalAndTakeoverInva
 	})
 
 	t.Run("TerminalTakeoverCannotEraseArm", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "a", 62, now, true)
 		fixture.mustExec(t, db, `UPDATE backup_asset_recovery_attempts
@@ -9865,7 +9868,7 @@ func (fixture migrationFixture) test069AttemptMutationArmTerminalAndTakeoverInva
 	})
 
 	t.Run("ArmedTerminalAttemptStillDeniesPreWriteSupersedeAfterTakeover", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "b", 63, now, true)
 		closedAt := now.Add(time.Minute)
@@ -9909,7 +9912,7 @@ func (fixture migrationFixture) test069AttemptMutationArmTerminalAndTakeoverInva
 func (fixture migrationFixture) test069TerminalAttemptIntegrity(t *testing.T) {
 	for index, terminalState := range []string{"completed", "failed", "canceled", "superseded", "lost"} {
 		t.Run(terminalState+" identity", func(t *testing.T) {
-			_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+			_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 			now := time.Now().UTC().Truncate(time.Second)
 			aggregate := fixture.seedRecoveryMigrationAggregate(t, db, fmt.Sprintf("%x", index+1), 100+index, now, true)
 			closedAt := now.Add(time.Minute)
@@ -9926,7 +9929,7 @@ func (fixture migrationFixture) test069TerminalAttemptIntegrity(t *testing.T) {
 	}
 
 	t.Run("lost cannot resume", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "6", 106, now, true)
 		closedAt := now.Add(time.Minute)
@@ -9939,7 +9942,7 @@ func (fixture migrationFixture) test069TerminalAttemptIntegrity(t *testing.T) {
 	})
 
 	t.Run("terminal attempt cannot retroactively arm", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "7", 131, now, true)
 		closedAt := now.Add(time.Minute)
@@ -9953,7 +9956,7 @@ func (fixture migrationFixture) test069TerminalAttemptIntegrity(t *testing.T) {
 
 func (fixture migrationFixture) test069PublicationAndDeadlineIntegrity(t *testing.T) {
 	t.Run("publication marker parity", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "7", 107, now)
 
@@ -9974,7 +9977,7 @@ func (fixture migrationFixture) test069PublicationAndDeadlineIntegrity(t *testin
 	})
 
 	t.Run("active attempt blocks publication", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "8", 108, now, true)
 		fixture.mustExec(t, db, `UPDATE backup_asset_recovery_jobs
@@ -9985,7 +9988,7 @@ func (fixture migrationFixture) test069PublicationAndDeadlineIntegrity(t *testin
 	})
 
 	t.Run("published job blocks active attempt creation", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "b", 111, now)
 		fixture.expectExecRejectedInRollback(t, db, `INSERT INTO backup_asset_recovery_attempts
@@ -9997,7 +10000,7 @@ func (fixture migrationFixture) test069PublicationAndDeadlineIntegrity(t *testin
 	})
 
 	t.Run("ready result job cannot reopen", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "9", 109, now)
 		fixture.expectExecRejectedInRollback(t, db, `UPDATE backup_asset_recovery_jobs
@@ -10005,7 +10008,7 @@ func (fixture migrationFixture) test069PublicationAndDeadlineIntegrity(t *testin
 	})
 
 	t.Run("ready result job outcome and workspace are immutable", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "c", 130, now)
 		fixture.expectExecRejectedInRollback(t, db, `UPDATE backup_asset_recovery_jobs
@@ -10017,7 +10020,7 @@ func (fixture migrationFixture) test069PublicationAndDeadlineIntegrity(t *testin
 	})
 
 	t.Run("workspace and hard deadlines are immutable", func(t *testing.T) {
-		_, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		_, db := fixture.openStateAt(t, backupAssetRecoveryVersion)
 		now := time.Now().UTC().Truncate(time.Second)
 		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "a", 110, now)
 		fixture.expectExecRejectedInRollback(t, db, `UPDATE backup_asset_recovery_jobs

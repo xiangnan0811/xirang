@@ -245,7 +245,7 @@ func testCatalogCandidateSweepSchemaDrift(t *testing.T, fixture migrationFixture
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 			applyCatalogCandidateSweepDrift(t, fixture, db, tc.name)
 			if strings.HasPrefix(tc.name, "invalid_state") {
 				if err := validateCatalogCandidateSweepState(db, catalogCandidateSweepChecks(fixture.engine)); err == nil || err.Error() != "invalid_catalog_candidate_sweep_state" {

@@ -29,7 +29,7 @@ func testRunMigrations091SchemaContract(t *testing.T, fixture migrationFixture) 
 	})
 
 	t.Run("same-name no-op admission guard", func(t *testing.T) {
-		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 		if fixture.engine == "postgres" {
 			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION service_monitor_retirement_downgrade_admission()
 				RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
@@ -45,7 +45,7 @@ func testRunMigrations091SchemaContract(t *testing.T, fixture migrationFixture) 
 
 	if fixture.engine == "sqlite" {
 		t.Run("additional SQLite predicate is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 			fixture.mustExec(t, db, `DROP TRIGGER trg_service_monitor_retirement_downgrade_admission`)
 			fixture.mustExec(t, db, `CREATE TRIGGER trg_service_monitor_retirement_downgrade_admission
 				BEFORE INSERT ON schema_migrations
@@ -57,13 +57,13 @@ func testRunMigrations091SchemaContract(t *testing.T, fixture migrationFixture) 
 		})
 
 		t.Run("missing update admission guard is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 			fixture.mustExec(t, db, `DROP TRIGGER trg_service_monitor_retirement_downgrade_update_admission`)
 			assertRunMigrations091SchemaDrift(t, fixture, migrator, db, "missing_service_monitor_retirement_admission_trigger")
 		})
 	} else {
 		t.Run("early return before exception is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION service_monitor_retirement_downgrade_admission()
 				RETURNS trigger LANGUAGE plpgsql AS $$
 				BEGIN
@@ -77,7 +77,7 @@ func testRunMigrations091SchemaContract(t *testing.T, fixture migrationFixture) 
 		})
 
 		t.Run("statement-level trigger is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 			fixture.mustExec(t, db, `DROP TRIGGER trg_service_monitor_retirement_downgrade_admission ON schema_migrations`)
 			fixture.mustExec(t, db, `CREATE TRIGGER trg_service_monitor_retirement_downgrade_admission
 				BEFORE INSERT OR UPDATE ON schema_migrations
@@ -87,7 +87,7 @@ func testRunMigrations091SchemaContract(t *testing.T, fixture migrationFixture) 
 		})
 
 		t.Run("disabled trigger is rejected", func(t *testing.T) {
-			migrator, db := fixture.openAt(t, latestMigrationVersion)
+			migrator, db := fixture.openStateAt(t, latestMigrationVersion)
 			fixture.mustExec(t, db, `ALTER TABLE schema_migrations DISABLE TRIGGER trg_service_monitor_retirement_downgrade_admission`)
 			assertRunMigrations091SchemaDrift(t, fixture, migrator, db, "invalid_service_monitor_retirement_admission_trigger")
 		})

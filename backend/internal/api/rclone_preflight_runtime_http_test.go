@@ -608,13 +608,7 @@ func TestRclonePreflightRealSSHPortable(t *testing.T) {
 	fixture.readPortableHTTPContent(ctx, point, firstGeneration, firstEntry, sourceBytes, sourceTime, false)
 	fixture.assertPortableHTTPBrokerContent(ctx, contentServer, served, trace, "initial", point, firstGeneration, firstEntry, sourceBytes)
 
-	timer := time.NewTimer(time.Until(lineage.PointDeadlineAt) + time.Second)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-	case <-ctx.Done():
-		t.Fatalf("waiting for the real publication deadline: %v", ctx.Err())
-	}
+	waitWallClockPast(t, ctx, lineage.PointDeadlineAt, time.Second)
 	if !time.Now().UTC().After(lineage.PointDeadlineAt) {
 		t.Fatal("wall clock did not cross the original point deadline")
 	}
