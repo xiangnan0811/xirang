@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **开发依赖（#721）**：完成原依赖组 19 项中的 17 项，包括 TypeScript ESLint 8.72.2、Vite 7.3.8、Rollup 4.68.3 和 electron-to-chromium 1.5.486；本地 estree 安全补丁迁至 8.72.2，继续使用官方 minimatch 11.0.1。MSW 的 Inquirer CLI 传递链中，ansi 2.1.0 与 confirm 6.4.0 要求 Node 22+，为兼容现行 Node 20 暂保留旧版及其匹配依赖。开发依赖须按锁文件重新安装并重启相关进程；前端资源须重新构建并部署。
+- **SSH 命令正常收尾（#721）**：修复 SSH runner 的生命周期竞态。命令正常完成后，迟到的 setup watchdog 或执行 watcher 曾可能向已结束的会话发送 TERM 并把成功结果误判为 `command failed`，或关闭仍要顺序复用的 SSH 连接；受影响路径包括 Docker 卷 list→inspect、Rclone／Restic 兼容流式命令及 Restic 密码文件命令。现由同步决策裁定完成或取消：正常完成后迟到的取消不再发送信号或关闭连接，真实取消、超时、输出限额与 I/O 失败仍按原优先级失败，joined／graceful 模式的 join 与 TERM／grace 合同保持。#721 的 CI 失败（Docker `known-success-with-gap` 在 list 阶段返回 `command failed`）与该竞态相符，但日志未记录内部信号错误，未唯一认证其历史原因。须重新构建并替换 Core 后生效，旧进程及已开始的操作不会被补丁改写，切换前排空在途操作；无新增公开 API、运行时配置或 schema migration，回退会恢复该竞态。
+
 ## [0.73.20](https://github.com/xiangnan0811/xirang/compare/v0.73.19...v0.73.20) (2026-11-16)
 
 

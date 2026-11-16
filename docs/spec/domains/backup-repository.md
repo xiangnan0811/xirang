@@ -133,6 +133,8 @@ Runtime 在任何 admission/worker 和 disabled early return 前，以及运行�
 
 携带配置的 Run/Open/OpenExecution 统一使用专有 SSH client 的 joined execution。取消先请求 TERM，等待既有 100ms grace，再按需关闭 transport 并 join 所有本地 owner。只有尚未尝试 Start，或 Wait 已实际返回正常 exit-status/exit-signal，才允许清理；Start 结果不确定、EOF、断线、发送 TERM 成功或本地 goroutine join 都不能作为远端停止证明。prefix 主动终止仅在已观察到相应远端退出且无其他权威错误时接受，普通取消、超时、限额和已有失败仍为失败。
 
+所有 SSH runner 模式（普通、`WithTransportClose` 兼容、joined、graceful joined）的取消权都是单次同步裁定。带 transport close 的模式在 setup 期间，watchdog 只有在 Start 交接或 setup 失败撤销其权限之前认领取消，才可关闭 transport；Start 返回后先撤销 setup 权限再发布 execution，setup 失败先撤销再内部 cancel 并显式完成自身 teardown。已被取消认领的命令只能以取消或超时结束，不能宣称 transport 可复用。Execution 中，stdout 自然 EOF 且 stdin、stderr、Wait 全部结束后，正常收尾先认领完成，再关闭资源及内部 cancel；完成认领后迟到的 watcher、写入/读取失败或其他终止请求均不再 Signal 或关闭 transport，终止先认领时按原终止路径处理。认领只是锁内决策，Signal、Close 与等待均在锁外。完成认领不改变分类优先级：父取消、deadline、输出限额、I/O 与清理失败仍为失败，`RemoteExited` 仍只由 Wait 实际观察的 exit-status/exit-signal 决定。兼容模式可顺序复用同一 client，非 claimer 不等待且保留原有界返回；joined 模式在 transport 关闭后显式 join 已认领的终止及全部本地 owner；graceful 已 Start 时仍先 TERM、grace，必要时 force-close 后 join。
+
 收尾在命令和 transport join 后重建 SFTP，使用脱离 caller cancel、至多 10 秒的清理期限；许可与原 staged operand pin 保留到收尾结束。每次重验规范 home、真实目录、0700 及 owner 标记，至多读取 128 项并取得 EOF，全部验证通过才删除。仅允许 0600 普通非 symlink 的 `.owner-v1`、`rclone.conf`、`rclone.conf<十进制后缀>` 与 `rclone.conf.old<十进制后缀>`，后缀长 1..20；不比较已改写配置的原始摘要，不递归、不跟随 symlink。先删配置和临时备份，再删 marker 与空操作目录；删除中途失败保留错误，不能声称原子全清理。
 
 清理失败使 Run/Close/Join 失败，不能产生成功内容请求或可激活预检证据。退出未知、owner/root 无法重验时保留目录并返回安全失败；不按年龄或 PID 自动清扫。正常执行期间节点有短期明文配置，崩溃、强杀或失联可能遗留，不承诺崩溃后零残留或磁盘安全擦除。人工处置须先停止并确认相关远端执行已无使用者，再核对精确目录；操作边界见[部署指南](../../deployment.md#rclone-bound-config-节点前提与异常处置)。

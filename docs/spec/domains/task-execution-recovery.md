@@ -283,6 +283,8 @@ Legacy Rclone 没有 immutable snapshot，也不使用 Rsync manifest。Prepare/
 
 只有明确未启动证据能写 `no_start`：含 Prepare 失败/取消及可证明的 dial/lookup/start 前失败，也含同 owner 已 running 但未调用 Provider 的证明。不能根据 canceled 状态或错误文字回填；restore 只跳过可证 no_start，不跨越模糊历史 head。SSH 取消请求停止、必要时宽限后关闭所属 transport 并等待，但连接关闭/lease 到期不是远端 writer 已停止证明。
 
+Rclone/Restic 兼容流式命令与 Restic 密码文件命令正常收尾后保留真实退出码，迟到取消不再改写结果或关闭复用 client；真实取消仍按未知处理，不能据此判定未启动或安全重试。取消认领与各 runner 模式合同只在[备份仓库](backup-repository.md)的 SSH runner 生命周期条款维护。
+
 未决写按不可变 resource identity 划定冲突域；共享 Remote/namespace/node 证据的其他 Task 也阻断，独立资源可运行。缺可证 resource key 的历史保留节点/资源不确定 hold，不从后来配置或标签补猜；改配置或另建 Task 不能绕过。
 
 管理员 `POST /tasks/:id/reconcile-legacy-rclone` 仅记录操作员确认，不负责远端探测/停止。必须有 task-write 权限、暂停任务、精确 `task_run_id`、`remote_stopped=true` 和 1–1024 字符安全 reason，实际确认原/外部 writer 停止并保留独立副本。事务拒绝 live/unbounded owner、active sibling、不匹配或非 eligible writing/unknown；放弃的 active writing 还要求明确 expired lease。按 Task→TaskRun 锁定，fence 旧 owner，必要时结为失败，改选中代次为 dirty 并原子保存 actor/confirmation 审计。审计失败回滚，原诊断保留；不自动恢复、重试、选旧 success 或标 verified。逐条清除 hold 后显式重新运行完整备份才可建立当前恢复来源。
