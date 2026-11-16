@@ -642,9 +642,9 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 	return stream, nil
 }
 
-// setupCancellation is the setup watchdog's authority to close a transport
-// while a session is created and started. Start handoff (or a setup failure)
-// and cancellation race for one decision: active becomes either disarmed or
+// setupCancellation arbitrates a watchdog's authority to close a transport
+// during SSH handshake or command setup. Handoff (or setup failure) and
+// cancellation race for one decision: active becomes either disarmed or
 // cancellation-claimed. The lock protects only that decision; the transport
 // close always runs outside it.
 type setupCancellation struct {
@@ -672,18 +672,20 @@ func (gate *setupCancellation) cancelTransport() {
 	}
 }
 
-// disarm revokes the watchdog's authority unless cancellation already claimed
-// it. A claimed cancellation leaves runContext canceled, so the command can
-// only finish as canceled or timed out and never reports a reusable transport.
-func (gate *setupCancellation) disarm() {
+// disarm revokes the watchdog's authority and reports whether handoff won.
+// A false result means cancellation already claimed the transport and its
+// close may still be running outside the lock. A nil gate has no watchdog.
+func (gate *setupCancellation) disarm() bool {
 	if gate == nil {
-		return
+		return true
 	}
 	gate.mu.Lock()
-	if !gate.claimed {
-		gate.disarmed = true
+	defer gate.mu.Unlock()
+	if gate.claimed {
+		return false
 	}
-	gate.mu.Unlock()
+	gate.disarmed = true
+	return true
 }
 
 type commandExecution struct {

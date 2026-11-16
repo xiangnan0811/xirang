@@ -11,6 +11,8 @@
 
 时间相关用例使用受控时钟或相对稳定的测试时间，不依赖逐渐过期的固定日期。异步断言等待业务条件，不用盲目延长超时隐藏回归。测试替身只替代必要的外部边界，跨层投影使用实际生产者生成的值。
 
+Rsync 受管根预检的正向容量投影使用明确的测试容量 fixture，并精确断言字节与 inode 结果，不假设宿主文件系统报告固定的非零 inode 数；可信根、硬链接、rename 和 fsync 等其他探测仍使用真实文件系统，容量不足仍由独立拒绝用例验证。
+
 需要真实墙钟越过某个截止时间的测试，不能只等一次由 `time.Until(deadline)` 计算的定时器：定时器按单调时钟计时，墙钟回拨或慢调时会在截止时间前唤醒。等待须循环重算剩余时间、受测试 context 约束，直到 `time.Now()` 严格晚于截止时间才继续，并以可注入时钟的确定性测试覆盖“首次唤醒后墙钟仍未到期”。
 
 数据库竞争测试若要在事务外身份发现之后、事务及配额锁之前暂停，必须等待查询结果完成扫描并关闭游标；GORM 的 `Row` 回调可能在 `Scan` 关闭游标前执行。SQLite shared-cache 的活跃读游标可阻止并发写入，不能用该人工持锁窗口证明预期围栏顺序。使用测试实例专属屏障并在结束时取消、放行和等待并发调用，保留原有状态及锁序断言。
@@ -52,6 +54,8 @@ retry 和最终结果。缺事件、setup 失败、首次失败后重试成功�
 list 是库存，不能代替执行。
 
 SSH runner 取消权回归位于 `backend/internal/sshutil` 的 lifecycle gate 测试：在自然完成和内部 cancel 之后，于真实决策入口重放迟到的 setup watchdog 与 execution watcher，断言零 Signal、零 transport 关闭、重复 Join 结果稳定且同 runner/client 的第二条命令（含真实 loopback SSH 非零退出）可用；反向以真实取消先认领、Start 阻塞中取消认领及 factory 阻塞由 transport close 解阻覆盖。屏障只控制授权决策顺序，不依赖 sleep、调度统计或 `-count` 碰绿；阻塞 Signal、Close、factory 与 Start 的 owner 由测试释放并等待，保留兼容模式有界返回、joined/graceful 显式 join 的既有断言。Docker 卷 list→inspect 的真实 SSH 验收保持原断言。
+
+SSH 握手回归另覆盖成功 handoff 后迟到的取消决策、真实普通与轮换拨号结束 context 后同 client 的两条命令、取消先认领且 Close 被屏障扣住时 handoff 不等待并拒绝成功、以及握手实际进入后取消能关闭 transport 并解除阻塞。轮换验收保留严格只读 known_hosts；主机密钥冲突在认证前拒绝、信任探测零认证与 graceful blocked Signal／force-close 后 join 的原有断言均不可省略。
 
 ### 离线账户恢复
 

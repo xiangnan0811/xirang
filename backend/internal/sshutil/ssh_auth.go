@@ -378,21 +378,37 @@ func newClientConnWithContext(ctx context.Context, conn net.Conn, addr string, c
 	} else if config != nil && config.Timeout > 0 {
 		_ = conn.SetDeadline(time.Now().Add(config.Timeout))
 	}
+	gate := &setupCancellation{transportClose: func() { _ = conn.Close() }}
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = conn.Close()
+			gate.cancelTransport()
 		case <-done:
 		}
 	}()
 	sshConn, channels, requests, err := ssh.NewClientConn(conn, addr, config)
+	// Revoke the handshake watchdog before releasing the connection to its
+	// caller. A cancellation that claimed first may still be closing conn, so
+	// it must never be published as a usable client.
+	handoff := gate.disarm()
 	close(done)
+	ctxErr := ctx.Err()
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, nil, nil, ctx.Err()
+		if ctxErr != nil {
+			return nil, nil, nil, ctxErr
 		}
 		return nil, nil, nil, err
+	}
+	if !handoff {
+		if ctxErr != nil {
+			return nil, nil, nil, ctxErr
+		}
+		return nil, nil, nil, errors.New("SSH handshake cancellation claimed without context error")
+	}
+	if ctxErr != nil {
+		_ = sshConn.Close()
+		return nil, nil, nil, ctxErr
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return sshConn, channels, requests, nil
