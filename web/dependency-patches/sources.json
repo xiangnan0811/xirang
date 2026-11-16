@@ -25,25 +25,25 @@
         },
         {
           "name": "@typescript-eslint/eslint-plugin",
-          "version": "8.70.1",
+          "version": "8.72.1",
           "dependencyType": "peerDependencies",
           "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
         },
         {
           "name": "@typescript-eslint/parser",
-          "version": "8.70.1",
+          "version": "8.72.1",
           "dependencyType": "peerDependencies",
           "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
         },
         {
           "name": "@typescript-eslint/type-utils",
-          "version": "8.70.1",
+          "version": "8.72.1",
           "dependencyType": "peerDependencies",
           "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
         },
         {
           "name": "@typescript-eslint/utils",
-          "version": "8.70.1",
+          "version": "8.72.1",
           "dependencyType": "peerDependencies",
           "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
         },
@@ -67,7 +67,7 @@
         },
         {
           "name": "typescript-eslint",
-          "version": "8.70.1",
+          "version": "8.72.1",
           "dependencyType": "peerDependencies",
           "spec": "^8.57.0 || ^9.0.0 || ^10.0.0"
         }
@@ -116,35 +116,35 @@
     },
     {
       "name": "@typescript-eslint/typescript-estree",
-      "version": "8.70.1",
-      "url": "https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.70.1.tgz",
-      "integrity": "sha512-TU8PwyGN0PQJUcE96mw8eCQ44SmxGdQlJmlWakHaHQ15eIuuvye5yNtmh/i6oS88jzXVQB71xdNkbkB/fMwL0g==",
-      "artifact": "typescript-eslint-typescript-estree-8.70.1-xirang-minimatch11-r1.tgz",
+      "version": "8.72.1",
+      "url": "https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.72.1.tgz",
+      "integrity": "sha512-DAlUoUV93hIvrtIQLwCbmZQYVZwOMhiHJrOVUUIWicFZaIYjTRqlY3I/NZevfkLmSqkNHRu2qYDcq9lrn16oOQ==",
+      "artifact": "typescript-eslint-typescript-estree-8.72.1-xirang-minimatch11-r1.tgz",
       "license": "MIT",
       "requesters": [
         {
           "name": "@typescript-eslint/parser",
-          "version": "8.70.1",
+          "version": "8.72.1",
           "dependencyType": "dependencies",
-          "spec": "8.70.1"
+          "spec": "8.72.1"
         },
         {
           "name": "@typescript-eslint/type-utils",
-          "version": "8.70.1",
+          "version": "8.72.1",
           "dependencyType": "dependencies",
-          "spec": "8.70.1"
+          "spec": "8.72.1"
         },
         {
           "name": "@typescript-eslint/utils",
-          "version": "8.70.1",
+          "version": "8.72.1",
           "dependencyType": "dependencies",
-          "spec": "8.70.1"
+          "spec": "8.72.1"
         },
         {
           "name": "typescript-eslint",
-          "version": "8.70.1",
+          "version": "8.72.1",
           "dependencyType": "dependencies",
-          "spec": "8.70.1"
+          "spec": "8.72.1"
         }
       ]
     }

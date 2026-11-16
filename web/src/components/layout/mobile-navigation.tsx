@@ -144,7 +144,8 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
           ref={moreButtonRef}
           type="button"
           onClick={() => setDrawerOpen(true)}
-          aria-label={t("appShell.openQuickMenu")}
+          // 名称以可见“更多/More”开头，再说明这是全局快捷菜单，以区别页面内同名按钮
+          aria-label={t("appShell.openQuickMenu", { label: t("nav.more") })}
           aria-controls={drawerId}
           aria-expanded={drawerOpen}
           className={cn(

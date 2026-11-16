@@ -11,10 +11,12 @@ describe("LanguageSwitcher", () => {
     await i18n.changeLanguage("zh");
   });
 
-  it("默认中文时显示 EN 按钮", () => {
+  it("默认中文时显示 EN 按钮，名称以可见 EN 开头并标注英文语言", () => {
     render(<LanguageSwitcher />);
     expect(screen.getByText("EN")).toBeInTheDocument();
-    expect(screen.getByRole("button")).toHaveAttribute("aria-label", "Switch to English");
+    const button = screen.getByRole("button", { name: "EN: Switch to English" });
+    expect(button).toHaveAttribute("lang", "en");
+    expect(button).toHaveAttribute("title", "Switch to English");
   });
 
   it("点击切换到英文后显示中文按钮", async () => {
@@ -26,7 +28,8 @@ describe("LanguageSwitcher", () => {
     await waitFor(() => {
       expect(screen.getByText("中")).toBeInTheDocument();
     });
-    expect(screen.getByRole("button")).toHaveAttribute("aria-label", "切换到中文");
+    const button = screen.getByRole("button", { name: "切换到中文" });
+    expect(button).toHaveAttribute("lang", "zh-CN");
     expect(window.localStorage.getItem("xirang.language")).toBe("en");
   });
 

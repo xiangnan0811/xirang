@@ -312,10 +312,11 @@ function SilencesPanelContent() {
                               variant="outline"
                               disabled={revoking !== null}
                               onClick={() => void handleRevoke(s.id)}
-                              aria-label={`删除静默规则 ${s.name}`}
                             >
                               <Trash2 className="size-4" />
                               {revoking === s.id ? t("common.loading") : t("silences.revoke")}
+                              {/* 名称以可见文字开头，再补充目标规则，进行中同样保持可定位 */}
+                              <span className="sr-only"> {t("silences.revokeTarget", { name: s.name })}</span>
                             </Button>
                           </td>
                         </tr>

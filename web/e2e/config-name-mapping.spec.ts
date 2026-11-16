@@ -918,11 +918,11 @@ async function expectNamePanel(page: Page, spec: {
 }
 
 async function showLanguage(page: Page, language: "en" | "zh"): Promise<void> {
-  const label = language === "zh" ? "切换到中文" : "Switch to English";
+  const label = language === "zh" ? "切换到中文" : "EN: Switch to English";
   const button = page.getByRole("button", { name: label, exact: true });
   if (await button.count() === 0) return;
   await button.click();
-  const next = language === "zh" ? "Switch to English" : "切换到中文";
+  const next = language === "zh" ? "EN: Switch to English" : "切换到中文";
   await expect(page.getByRole("button", { name: next, exact: true })).toBeVisible();
 }
 

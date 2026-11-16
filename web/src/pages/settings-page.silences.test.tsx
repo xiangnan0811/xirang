@@ -75,7 +75,8 @@ vi.mock("@/context/auth-context.hooks", () => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string, options?: { window?: string; offset?: string }) => {
+    t: (key: string, options?: { window?: string; offset?: string; name?: string }) => {
+      if (options?.name) return `${key}|${options.name}`
       if (options?.offset) return `${key}|${options.offset}`
       if (options?.window) return `${key}|${options.window}`
       return key
@@ -1281,8 +1282,12 @@ describe("silence panel ownership", () => {
     view.rerender(<SilencesPanel />)
   }
 
+  // 名称以当时可见文字（立即结束或加载中）开头，再接 sr-only 的目标规则名
   function revokeButton(name: string) {
-    return screen.getByRole("button", { name: `删除静默规则 ${name}` })
+    const target = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    return screen.getByRole("button", {
+      name: new RegExp(`^(silences\\.revoke|common\\.loading) silences\\.revokeTarget\\|${target}$`),
+    })
   }
 
   it("shows no rules only after the same admin read succeeds", async () => {
@@ -1525,7 +1530,7 @@ describe("silence panel ownership", () => {
     expect(vi.mocked(apiClient.getNodes)).not.toHaveBeenCalled()
     expect(screen.queryByRole("button", { name: /silences.new/ })).not.toBeInTheDocument()
     expect(screen.queryByText("silences.empty")).not.toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: /删除静默规则/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /silences\.revokeTarget/ })).not.toBeInTheDocument()
   })
 
   it("keeps the loaded row when revoke fails", async () => {
@@ -1566,8 +1571,11 @@ describe("silence panel ownership", () => {
     expect(deleteMock()).toHaveBeenCalledWith("test-token", 1)
     expect(revokeButton("one")).toBeDisabled()
     expect(revokeButton("one")).toHaveTextContent("common.loading")
+    expect(revokeButton("one")).toHaveAccessibleName("common.loading silences.revokeTarget|one")
     expect(revokeButton("two")).toBeDisabled()
     expect(revokeButton("two")).toHaveTextContent("silences.revoke")
+    expect(revokeButton("two")).toHaveAccessibleName("silences.revoke silences.revokeTarget|two")
+    expect(revokeButton("two")).not.toHaveAttribute("aria-label")
     fireEvent.click(revokeButton("one"))
     fireEvent.click(revokeButton("two"))
     expect(deleteMock()).toHaveBeenCalledTimes(1)
@@ -1669,7 +1677,7 @@ describe("silence panel ownership", () => {
     })
     expect(toastSuccessMock).not.toHaveBeenCalled()
     expect(listMock().mock.calls.length).toBe(listsAfterDowngrade)
-    expect(screen.queryByRole("button", { name: /删除静默规则/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /silences\.revokeTarget/ })).not.toBeInTheDocument()
     expect(screen.queryByText("silences.empty")).not.toBeInTheDocument()
   })
 

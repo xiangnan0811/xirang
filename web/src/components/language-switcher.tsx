@@ -12,8 +12,9 @@ export function LanguageSwitcher({ className }: { className?: string }) {
       size="icon"
       className={className}
       onClick={() => setLanguage(isZh ? "en" : "zh")}
+      lang={isZh ? "en" : "zh-CN"}
       title={isZh ? "Switch to English" : "切换到中文"}
-      aria-label={isZh ? "Switch to English" : "切换到中文"}
+      aria-label={isZh ? "EN: Switch to English" : "切换到中文"}
     >
       <span className="text-xs font-medium">{isZh ? "EN" : "中"}</span>
     </Button>

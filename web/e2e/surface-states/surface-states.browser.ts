@@ -767,7 +767,7 @@ async function historyStateTest(page: Page, testInfo: TestInfo, scenario: Surfac
 }
 
 async function switchLanguage(page: Page, scenario: SurfaceScenario): Promise<SurfaceScenario> {
-  await page.getByRole("button", { name: copy(scenario, "Switch to English", "切换到中文"), exact: true }).click();
+  await page.getByRole("button", { name: copy(scenario, "EN: Switch to English", "切换到中文"), exact: true }).click();
   const switched: SurfaceScenario = { ...scenario, language: scenario.language === "zh" ? "en" : "zh" };
   await expect(page.locator("html")).toHaveAttribute("lang", switched.language === "zh" ? /^zh/ : /^en/);
   return switched;

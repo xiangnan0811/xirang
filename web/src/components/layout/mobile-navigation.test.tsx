@@ -36,12 +36,16 @@ describe("MobileNavigation", () => {
     expect(screen.getByRole("link", { name: "切换到节点" })).toBeInTheDocument();
   });
 
-  it("More tab renders translated nav.more label, not the raw key", async () => {
-    await setLanguage("zh");
+  it.each([
+    ["zh", "更多", "更多：打开快捷菜单"],
+    ["en", "More", "More: Open quick menu"],
+  ] as const)("More tab name starts with its visible %s label and states the quick-menu purpose", async (lng, label, name) => {
+    await setLanguage(lng);
     renderWithProviders();
 
-    const moreButton = screen.getByRole("button", { name: "打开快捷菜单" });
-    expect(moreButton).toHaveTextContent("更多");
+    const moreButton = screen.getByRole("button", { name });
+    expect(moreButton).toHaveTextContent(label);
+    expect(moreButton).toHaveAttribute("aria-controls", "mobile-quick-menu");
     expect(moreButton).not.toHaveTextContent("nav.more");
   });
 
@@ -51,7 +55,7 @@ describe("MobileNavigation", () => {
 
     renderWithProviders();
 
-    const menuButton = screen.getByRole("button", { name: "打开快捷菜单" });
+    const menuButton = screen.getByRole("button", { name: "更多：打开快捷菜单" });
     expect(menuButton).toHaveAttribute("aria-expanded", "false");
 
     await user.click(menuButton);
@@ -74,7 +78,7 @@ describe("MobileNavigation", () => {
     const user = userEvent.setup();
     renderWithProviders("/app/backups/data/");
 
-    await user.click(screen.getByRole("button", { name: "打开快捷菜单" }));
+    await user.click(screen.getByRole("button", { name: "更多：打开快捷菜单" }));
     const backups = screen.getByRole("link", { name: "备份" });
     expect(backups).toHaveAttribute("aria-current", "page");
     expect(backups).toHaveAttribute("href", "/app/backups/data");
@@ -84,13 +88,13 @@ describe("MobileNavigation", () => {
     await setLanguage("zh");
     const user = userEvent.setup();
     const overview = renderWithProviders("/app/backups/overview?foo=1");
-    await user.click(screen.getByRole("button", { name: "打开快捷菜单" }));
+    await user.click(screen.getByRole("button", { name: "更多：打开快捷菜单" }));
     expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute("href", "/app/backups/data");
     overview.unmount();
 
     renderWithProviders("/app/backups/recovery?planId=abc");
-    await user.click(screen.getByRole("button", { name: "打开快捷菜单" }));
+    await user.click(screen.getByRole("button", { name: "更多：打开快捷菜单" }));
     expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute("href", "/app/backups/data");
   });
@@ -104,7 +108,7 @@ describe("MobileNavigation", () => {
     });
     renderWithProviders(`/app/backups/data${filesSavedSearch}`);
 
-    await user.click(screen.getByRole("button", { name: "打开快捷菜单" }));
+    await user.click(screen.getByRole("button", { name: "更多：打开快捷菜单" }));
     expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute(
       "href",
       `/app/backups/data${filesSavedSearch}`,
