@@ -64,6 +64,9 @@ type AttemptBudgetService struct {
 	db  *gorm.DB
 	now func() time.Time
 
+	// afterFinalizationHint is a package-test synchronization hook.
+	afterFinalizationHint func()
+
 	readerSweepMu sync.Mutex
 }
 
@@ -287,6 +290,9 @@ func (service *AttemptBudgetService) finalizeAttemptRead(
 	hint, err := discoverAttemptBudgetFinalizationHint(service.db.WithContext(ctx), finalization.ReservationID)
 	if err != nil {
 		return err
+	}
+	if service.afterFinalizationHint != nil {
+		service.afterFinalizationHint()
 	}
 	var rejected bool
 	err = service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
