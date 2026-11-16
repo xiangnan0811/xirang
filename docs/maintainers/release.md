@@ -228,6 +228,10 @@ Core curl `8.22.0-r0` → `8.23.0-r0` 同样保留不可安装旧锁定、同版
 4. 提升 multi-arch manifest/tag 前再次验证同 SHA CI；只有全部平台任务成功才发布正式标签。
 5. 发布后生成 provenance attestation 和摘要，记录源码 SHA、CI run、平台 digest 与扫描结论。
 
+发布工作流使用 Docker Hub 凭据登录；各平台将 digest 作为短期 Actions 制品传给
+manifest 作业，制品传递成功本身不证明正式标签已发布。相关 action 固定完整 SHA，
+版本和运行时维护规则见[仓库自动化](automation.md#actions-与-ci)。
+
 当前 Trivy 设置为 `severity: HIGH,CRITICAL`、`exit-code: 1`、`ignore-unfixed: true`：扫描识别且已有修复版本的高危/严重漏洞阻断正式标签，未修复漏洞被过滤。不能将通过结果解释为不存在任何高危漏洞。基础镜像或包漏洞阻断时，更新来源并重新走 PR/release；不得降低 severity、添加临时 ignore 或绕过扫描。Actions pin 和依赖维护见[仓库自动化](automation.md)。
 
 安全包版本锁定补丁的发行说明须指出替换的旧版本、固定的新版本及镜像重建要求；回退旧镜像会同时恢复旧依赖及其已知漏洞，不能仅按应用行为判断回退风险。

@@ -309,6 +309,10 @@ DB_DSN=postgresql://user:pass@host:5432/xirang?sslmode=require
 
    > 若目标版本包含备份职责收敛迁移，不能直接执行下面的 `pull`/`up -d`；必须先完成[备份职责收敛升级](#备份职责收敛升级)的 STOP、保全、旧版隔离恢复演练、迁移和新 worker 启动顺序。
 2. 备份数据库、`.env` 及匹配的加密密钥，验证数据库产物和同名 `.sha256` 文件。容器已停止不代表没有数据，也不能跳过升级前备份。使用仓库手动部署工作流时，按[维护者发布手册](maintainers/release.md)准备当前部署目录与备份门禁。
+
+   手动部署工作流使用仓库 Docker Hub 凭据检查目标镜像，再使用部署环境的 SSH 凭据
+   执行备份和部署；登录成功不代表镜像已发布或部署完成。工作流 action 的固定版本
+   与维护规则见[仓库自动化](maintainers/automation.md#actions-与-ci)。
 3. 修改 `.env`：
 
 ```env
