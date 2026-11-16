@@ -22,6 +22,16 @@ import (
 func TestRsyncTreePreflightBuildsBoundEvidenceFromTrustedRoot(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	tree := newRsyncManagedTreeForTest(t, t.TempDir())
+	// Some filesystems report no fixed inode count; keep capacity evidence
+	// deterministic while probing the real trusted root and commit primitives.
+	const expectedFreeBytes = 33554432
+	const expectedFreeInodes = 65536
+	tree.statfs = func(_ int, stat *rsyncTreeFilesystemStats) error {
+		stat.BlockSize = 4096
+		stat.AvailableBlocks = 8192
+		stat.FreeInodes = expectedFreeInodes
+		return nil
+	}
 	request, markerDigest := rsyncTreePreflightRequestForTest(t, tree, backupasset.PublicationVersionedFullCopy)
 	request.LocalSourceRoot = t.TempDir()
 
@@ -42,8 +52,8 @@ func TestRsyncTreePreflightBuildsBoundEvidenceFromTrustedRoot(t *testing.T) {
 	if evidence.RepositoryMarkerDigest != markerDigest || len(evidence.ManagedRootIdentityDigest) != 64 || len(evidence.Digest) != 64 {
 		t.Fatalf("preflight identity evidence is incomplete: %+v", evidence)
 	}
-	if !evidence.RenameNoReplaceVerified || !evidence.DirectoryFsyncVerified || evidence.FreeBytes == 0 || evidence.FreeInodes == 0 {
-		t.Fatalf("preflight capability evidence is incomplete: %+v", evidence)
+	if !evidence.RenameNoReplaceVerified || !evidence.DirectoryFsyncVerified || evidence.FreeBytes != expectedFreeBytes || evidence.FreeInodes != expectedFreeInodes {
+		t.Fatalf("preflight capability evidence=%+v, want free bytes=%d and free inodes=%d", evidence, expectedFreeBytes, expectedFreeInodes)
 	}
 	encoded, err := json.Marshal(evidence)
 	if err != nil {
