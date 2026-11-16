@@ -1963,14 +1963,14 @@ func TestRecoveryPointSourceLifecycleSearchCancelsAndJoinsActiveBuilder(t *testi
 	}); err != nil {
 		t.Fatalf("prepare Search source with active builder: %v", err)
 	}
-	select {
-	case <-joined:
-	default:
+	// The lifecycle joins on the build's done channel, which unregisterActiveBuild closes
+	// under the same lock as the deregistration. The helper goroutine closes `joined` only
+	// after that call returns, so `joined` may lag the lifecycle return; assert the
+	// deregistration itself, then reap the helper.
+	if buildCtx.Err() == nil || indexer.activeBuildExists(pointID) {
 		t.Fatal("Search source lifecycle returned before active builder joined")
 	}
-	if buildCtx.Err() == nil || indexer.activeBuildExists(pointID) {
-		t.Fatal("Search source lifecycle left an active in-process builder")
-	}
+	<-joined
 }
 
 func TestRecoveryPointSourceLifecycleSearchRemovesSupersededGenerationPayloadOnRestart(t *testing.T) {

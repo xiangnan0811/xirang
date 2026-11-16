@@ -557,10 +557,10 @@ done
 for contract in \
   'asset-worker-closure:' \
   '# asset-worker-closure-no-publish' \
-  'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1' \
+  'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2' \
   'name: asset-worker-runtime-closure-${{ matrix.arch }}' \
   'needs: [classify, asset-worker-closure]' \
-  'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1' \
+  'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2' \
   'name: asset-worker-runtime-closure-amd64' \
   'name: asset-worker-runtime-closure-arm64' \
   'ASSET_WORKER_AMD64_RUNTIME_CLOSURE: ${{ runner.temp }}/asset-worker-runtime-closure-amd64/runtime-closure.v1.json' \
@@ -779,8 +779,8 @@ expect_mutation_failure missing-closure-producer workflow '/^  asset-worker-clos
 expect_mutation_failure missing-closure-dependency workflow 's/needs: \[classify, asset-worker-closure\]/needs: [classify]/'
 expect_mutation_failure missing-closure-classify-dependency workflow '/^  asset-worker-closure:/,/^  asset-worker:/s/needs: \[classify\]/needs: []/'
 expect_mutation_failure missing-worker-classify-dependency workflow 's/needs: \[classify, asset-worker-closure\]/needs: [asset-worker-closure]/'
-expect_mutation_failure unpinned-closure-upload workflow 's#actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a#actions/upload-artifact@main#'
-expect_mutation_failure unpinned-closure-download workflow 's#actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c#actions/download-artifact@main#'
+expect_mutation_failure unpinned-closure-upload workflow 's#actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9#actions/upload-artifact@main#'
+expect_mutation_failure unpinned-closure-download workflow 's#actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333#actions/download-artifact@main#'
 expect_mutation_failure swapped-amd64-artifact-path workflow 's#asset-worker-runtime-closure-amd64/runtime-closure.v1.json#asset-worker-runtime-closure-arm64/runtime-closure.v1.json#'
 
 echo "asset Worker smoke self-test: PASS"

@@ -702,6 +702,39 @@ describe("walkthrough evidence measurements", () => {
   });
 });
 
+// `git rev-parse --local-env-vars`: an inherited value (for example from a Git hook)
+// would redirect any fixture git init/add or captureCandidate into the host repository,
+// e.g. re-initialising it as bare. Every test in this file runs with them cleared.
+const GIT_REPOSITORY_ENV = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_CONFIG",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_GRAFT_FILE",
+  "GIT_INDEX_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_PREFIX",
+  "GIT_SHALLOW_FILE",
+  "GIT_COMMON_DIR",
+];
+
+function isolateGitEnvironment() {
+  for (const name of GIT_REPOSITORY_ENV) vi.stubEnv(name, undefined);
+}
+
+beforeEach(() => {
+  isolateGitEnvironment();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("walkthrough output containment", () => {
   it("accepts a real output directory and rejects an intermediate symlink escape", () => {
     const repositoryRoot = makeScratchDirectory("runner-fixture-");
@@ -724,38 +757,6 @@ describe("walkthrough output containment", () => {
 });
 
 describe("walkthrough candidate fingerprint", () => {
-  // `git rev-parse --local-env-vars`: an inherited value (for example from a Git hook)
-  // would redirect fixture init/add and captureCandidate into the host repository.
-  const GIT_REPOSITORY_ENV = [
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_CONFIG",
-    "GIT_CONFIG_PARAMETERS",
-    "GIT_CONFIG_COUNT",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_IMPLICIT_WORK_TREE",
-    "GIT_GRAFT_FILE",
-    "GIT_INDEX_FILE",
-    "GIT_NO_REPLACE_OBJECTS",
-    "GIT_REPLACE_REF_BASE",
-    "GIT_PREFIX",
-    "GIT_SHALLOW_FILE",
-    "GIT_COMMON_DIR",
-  ];
-
-  function isolateGitEnvironment() {
-    for (const name of GIT_REPOSITORY_ENV) vi.stubEnv(name, undefined);
-  }
-
-  beforeEach(() => {
-    isolateGitEnvironment();
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   function makeCandidateFixture() {
     const repositoryRoot = fs.realpathSync(makeScratchDirectory("candidate-fixture-"));
     execFileSync("git", ["init", "--quiet", repositoryRoot], { stdio: "ignore" });

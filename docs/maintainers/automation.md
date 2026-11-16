@@ -346,6 +346,12 @@ Core Compose 自测的 APK 绕过检查须完整消费经注释过滤的 Dockerf
 - 已归档或废弃的 action 应迁到受维护上游，再更新版本。Release Please 使用 `googleapis/release-please-action`。
 - 修改发布工作流时分别验证 amd64/arm64 构建和扫描的实际平台选择；multi-arch manifest 成功不能证明每个平台扫描正确。
 
+Worker smoke 与其自测对闭包上传和下载 action 的完整 SHA 及版本旁注进行精确断言；
+升级这两个 action 时须同步 `scripts/test-asset-worker.sh`、
+`scripts/test-asset-worker.test.sh` 中的断言及未固定 SHA mutation，保留闭包生产、
+下载、架构绑定和拒绝未固定引用的检查。自测通过不能替代原生双架构镜像、真实制品
+传输或 Docker Hub 凭据路径验收。
+
 ### Core 双架构持续构建的证据边界
 
 CI 的 `docker-build` 作业在 `ubuntu-24.04` 与 `ubuntu-24.04-arm` 上分别原生构建

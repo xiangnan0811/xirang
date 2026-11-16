@@ -249,7 +249,7 @@ for contract in \
   'arch: arm64' \
   'docker build --platform "linux/${{ matrix.arch }}"' \
   'ASSET_WORKER_VALIDATE_RUNTIME_CLOSURE' \
-  'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1' \
+  'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2' \
   'name: asset-worker-runtime-closure-${{ matrix.arch }}'; do
   grep -Fq -- "$contract" "$CLOSURE_JOB_FILE" || fail "CI closure producer contract missing: $contract"
 done
@@ -258,7 +258,7 @@ for contract in \
   'needs: [classify, asset-worker-closure]' \
   'arch: amd64' \
   'arch: arm64' \
-  'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1' \
+  'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2' \
   'name: asset-worker-runtime-closure-amd64' \
   'name: asset-worker-runtime-closure-arm64' \
   'ASSET_WORKER_AMD64_RUNTIME_CLOSURE: ${{ runner.temp }}/asset-worker-runtime-closure-amd64/runtime-closure.v1.json' \
