@@ -91,6 +91,14 @@ SSH 密钥轮换的请求、响应解码与错误类型位于 `lib/api/ssh-key-r
 只由懒加载的轮换向导及其子组件引用；`ssh-keys-api.ts` 与其他启动可达模块不得运行时导入或再导出它
 （如确需其类型只能用 `import type`）。该模块仅以 `import type` 依赖 `ssh-keys-api.ts`。
 
+只由懒加载页面使用的 API（备份资产/恢复点/仓库/保留、操作审计、凭据审计、SLO）不得出现在入口静态导入图中。
+`lib/api/client.ts` 的 `apiClient` 为它们提供按需 `import()` 的代理方法：经 `apiClient` 首次调用时加载对应模块并缓存
+工厂加载结果；若懒加载页面或其子模块已静态引用该模块（例如 SLO 页面引用 `parseSLOTags`），模块随页面 chunk 加载，
+代理只复用已加载模块。模块加载失败时该次调用以拒绝结束，由页面现有请求错误处理呈现；同一页面生命周期内
+后续经 `apiClient` 的调用复用该失败结果，刷新页面后重新加载。
+自动化规则页直接使用 `createAutomationRulesApi()`，不并入 `apiClient`。启动可达代码需要的 API（节点、任务、策略、
+告警、集成、SSH 密钥、认证/TOTP、凭据授权等）保持静态组合；新增页面专用 API 不得静态并入启动 bundle。
+
 ## 时间稳定夹具
 
 涉及 `expiresAt`、TTL、lease、setup token、preflight 或 grant 的测试，必须以测试时钟派生时间或冻结时钟。有效夹具的余量要明显长于测试耗时；过期夹具使用同一时钟之前的时间。仅作展示、无有效期判断的固定历史日期可以保留。

@@ -1,7 +1,5 @@
 import { createAlertsApi } from "./alerts-api";
-import { createAuditApi } from "./audit-api";
 import { createAuthApi } from "./auth-api";
-import { createCredentialAuditApi } from "./credential-audit-api";
 import { createCredentialAccessGrantsApi } from "./credential-access-grants-api";
 import { createBatchApi } from "./batch-api";
 import { createIntegrationsApi } from "./integrations-api";
@@ -19,12 +17,14 @@ import { createDockerApi } from "./docker-api";
 import { createStorageGuideApi } from "./storage-guide-api";
 import { createSettingsApi } from "./settings-api";
 import { createSilencesApi } from "./silences";
-import { createSLOApi } from "./slo";
 import { createAnomalyApi } from "./anomaly";
 import { createEscalationApi } from "./escalation";
 import { createAlertDeliveriesApi } from "./alert-deliveries";
 import { createAppCredentialsApi } from "./app-credentials";
-import { createAutomationRulesApi } from "./automation-rules";
+
+type AuditApi = ReturnType<typeof import("./audit-api").createAuditApi>;
+type CredentialAuditApi = ReturnType<typeof import("./credential-audit-api").createCredentialAuditApi>;
+type SLOApi = ReturnType<typeof import("./slo").createSLOApi>;
 
 export { ApiError } from "./core";
 
@@ -57,6 +57,9 @@ let backupRetentionApiPromise: Promise<BackupRetentionApi> | undefined;
 let backupRepositoriesApiPromise: Promise<BackupRepositoriesApi> | undefined;
 let backupFileSourcesApiPromise: Promise<BackupFileSourcesApi> | undefined;
 let recoveryPointsApiPromise: Promise<RecoveryPointsApi> | undefined;
+let auditApiPromise: Promise<AuditApi> | undefined;
+let credentialAuditApiPromise: Promise<CredentialAuditApi> | undefined;
+let sloApiPromise: Promise<SLOApi> | undefined;
 
 function loadBackupAssetsApi(): Promise<BackupAssetsApi> {
   backupAssetsApiPromise ??= import("./backup-assets-api").then((module) =>
@@ -111,6 +114,62 @@ function loadRecoveryPointsApi(): Promise<RecoveryPointsApi> {
   );
   return recoveryPointsApiPromise;
 }
+
+function loadAuditApi(): Promise<AuditApi> {
+  auditApiPromise ??= import("./audit-api").then((module) => module.createAuditApi());
+  return auditApiPromise;
+}
+
+function loadCredentialAuditApi(): Promise<CredentialAuditApi> {
+  credentialAuditApiPromise ??= import("./credential-audit-api").then((module) =>
+    module.createCredentialAuditApi()
+  );
+  return credentialAuditApiPromise;
+}
+
+function loadSLOApi(): Promise<SLOApi> {
+  sloApiPromise ??= import("./slo").then((module) => module.createSLOApi());
+  return sloApiPromise;
+}
+
+const lazyAuditApi: AuditApi = {
+  async getAuditLogs(...args) {
+    return (await loadAuditApi()).getAuditLogs(...args);
+  },
+  async exportAuditLogsCSV(...args) {
+    return (await loadAuditApi()).exportAuditLogsCSV(...args);
+  },
+};
+
+const lazyCredentialAuditApi: CredentialAuditApi = {
+  async getCredentialAuditEvents(...args) {
+    return (await loadCredentialAuditApi()).getCredentialAuditEvents(...args);
+  },
+  async exportCredentialAuditEventsCSV(...args) {
+    return (await loadCredentialAuditApi()).exportCredentialAuditEventsCSV(...args);
+  },
+};
+
+const lazySLOApi: SLOApi = {
+  async listSLOs(...args) {
+    return (await loadSLOApi()).listSLOs(...args);
+  },
+  async createSLO(...args) {
+    return (await loadSLOApi()).createSLO(...args);
+  },
+  async updateSLO(...args) {
+    return (await loadSLOApi()).updateSLO(...args);
+  },
+  async deleteSLO(...args) {
+    return (await loadSLOApi()).deleteSLO(...args);
+  },
+  async getSLOCompliance(...args) {
+    return (await loadSLOApi()).getSLOCompliance(...args);
+  },
+  async getSLOSummary(...args) {
+    return (await loadSLOApi()).getSLOSummary(...args);
+  },
+};
 
 const lazyBackupAssetsApi: BackupAssetsApi = {
   async listBackupAssets(...args) {
@@ -300,8 +359,8 @@ export const apiClient = {
   ...createSSHKeysApi(),
   ...createIntegrationsApi(),
   ...createAlertsApi(),
-  ...createAuditApi(),
-  ...createCredentialAuditApi(),
+  ...lazyAuditApi,
+  ...lazyCredentialAuditApi,
   ...createCredentialAccessGrantsApi(),
   ...createUsersApi(),
   ...createTOTPApi(),
@@ -311,12 +370,11 @@ export const apiClient = {
   ...createStorageGuideApi(),
   ...createSettingsApi(),
   ...createSilencesApi(),
-  ...createSLOApi(),
+  ...lazySLOApi,
   ...createAnomalyApi(),
   ...createEscalationApi(),
   ...createAlertDeliveriesApi(),
   ...createAppCredentialsApi(),
-  ...createAutomationRulesApi(),
   ...lazyRecoveryPointsApi,
   ...lazyBackupAssetsApi,
   ...lazyBackupAssetSearchApi,
