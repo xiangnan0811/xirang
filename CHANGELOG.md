@@ -2,9 +2,25 @@
 
 ## Unreleased
 
+## [0.73.21](https://github.com/xiangnan0811/xirang/compare/v0.73.20...v0.73.21) (2026-11-16)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复 SSH 命令正常收尾并更新开发依赖 ([#721](https://github.com/xiangnan0811/xirang/issues/721)) ([ca5cb6f](https://github.com/xiangnan0811/xirang/commit/ca5cb6f522d33560569fed011c8f1bd567ce9074))
+* **ssh:** 保留握手成功后的连接所有权 ([#724](https://github.com/xiangnan0811/xirang/issues/724)) ([551f160](https://github.com/xiangnan0811/xirang/commit/551f160ba53595d9de7a8fbb7467ec3b29567b11))
+
+### 行为与升级说明
+
 - **开发依赖（#721）**：完成原依赖组 19 项中的 17 项，包括 TypeScript ESLint 8.72.2、Vite 7.3.8、Rollup 4.68.3 和 electron-to-chromium 1.5.486；本地 estree 安全补丁迁至 8.72.2，继续使用官方 minimatch 11.0.1。MSW 的 Inquirer CLI 传递链中，ansi 2.1.0 与 confirm 6.4.0 要求 Node 22+，为兼容现行 Node 20 暂保留旧版及其匹配依赖。开发依赖须按锁文件重新安装并重启相关进程；前端资源须重新构建并部署。
 - **SSH 命令正常收尾（#721）**：修复 SSH runner 的生命周期竞态。命令正常完成后，迟到的 setup watchdog 或执行 watcher 曾可能向已结束的会话发送 TERM 并把成功结果误判为 `command failed`，或关闭仍要顺序复用的 SSH 连接；受影响路径包括 Docker 卷 list→inspect、Rclone／Restic 兼容流式命令及 Restic 密码文件命令。现由同步决策裁定完成或取消：正常完成后迟到的取消不再发送信号或关闭连接，真实取消、超时、输出限额与 I/O 失败仍按原优先级失败，joined／graceful 模式的 join 与 TERM／grace 合同保持。#721 的 CI 失败（Docker `known-success-with-gap` 在 list 阶段返回 `command failed`）与该竞态相符，但日志未记录内部信号错误，未唯一认证其历史原因。须重新构建并替换 Core 后生效，旧进程及已开始的操作不会被补丁改写，切换前排空在途操作；无新增公开 API、运行时配置或 schema migration，回退会恢复该竞态。
 - **SSH 握手连接交接**：修复独立于 #721 命令收尾的连接生命周期竞态。SSH 握手成功后，迟到的拨号 context watcher 曾可能关闭已交给调用方的连接，导致后续 Docker 卷、文件浏览或其他 SSH 操作断开；现在握手交接与取消关闭权同步裁定，已观察到取消或取消先认领时不返回可用 client，已成功交接的连接由调用方拥有。原有主机密钥校验、信任探测零认证和轮换只读 known_hosts 行为保持。受控 SSH 探针证明该竞态可导致 graceful Signal 测试在 Wait 缺少退出证据后提前结束，但 main CI 的具体历史因果未唯一认证。新版 Core 重建并替换后对新连接生效，切换前排空旧进程在途操作；已建立的旧连接不会被补丁改写。无新增公开 API、运行时配置或 schema migration，回退旧运行代码会恢复握手交接竞态。
+
+补充生效与回退边界：前端构建输出随 Core 镜像替换，待 Service Worker 接管并重载页面后使用；回退旧锁文件或镜像会恢复旧依赖版本。SSH setup 的 Start 交接或 setup 失败与 watchdog 取消认领同步裁定；未被取消认领时先撤销 watchdog 的权限。执行阶段在 stdout 自然 EOF 且 stdin、stderr 和 Wait 均结束后先认领完成，再关闭资源并执行内部 cancel。若真实取消先认领，仍按取消路径处理；兼容模式的非认领方保持有界返回，正常完成后可顺序复用连接；joined 模式关闭 transport 后 join 已认领的终止及本地 owner，graceful joined 模式保持 TERM、grace、必要时关闭 transport 后 join。既有迁移降级限制不变。
+
+正常完成如实保留零或非零退出码；`RemoteExited` 只取自 Wait 实际观察到的远端 exit-status／exit-signal。本地 join、关闭 transport、EOF 或断线都不能证明远端已停止；配置仅在可证尚未尝试 Start，或已观察到真实远端退出时允许清理。退出未知时保留配置目录并安全失败，清理失败仍使操作失败。
+
+握手成功交接撤销拨号 watcher 的关闭权；取消先认领或交接时已观察到取消则不发布 client，保留 context 错误。握手过程中真实取消仍关闭 transport 以解除阻塞。主机密钥校验、TOFU 和轮换信任合同不变。
 
 ## [0.73.20](https://github.com/xiangnan0811/xirang/compare/v0.73.19...v0.73.20) (2026-11-16)
 
