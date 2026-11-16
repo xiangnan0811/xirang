@@ -102,6 +102,20 @@ ESLint React Hooks 插件的开发依赖 `zod` 从 4.6.5 锁定升级至 4.6.6�
 按新锁文件重新安装后对后续 lint 进程生效。该包属于开发工具链，不据此声称
 生产应用存在可利用路径；无 API 或数据库迁移，回退旧锁文件会恢复旧依赖风险。
 
+生产依赖 minor/patch 分组（#706）按原 Dependabot 目标更新 49 项，不追到当前 latest：
+直接依赖为 8 个 Radix 组件（alert-dialog、checkbox、dropdown-menu、label、select、separator、slot、switch）、
+`@tanstack/react-virtual` 3.14.26、i18next 26.4.2 → 26.7.2 和 react-router-dom 7.18.5；
+声明范围不变的 Radix dialog 在锁文件中更新至 1.3.1，另有随之解析的 Radix 内部包、`@babel/runtime`
+和 Recharts 传递链（d3、immer、Redux Toolkit、react-redux、es-toolkit、victory-vendor）。
+`package.json` 只抬升上述直接依赖下限；锁文件经 npm 11 原生解析为 no-op 并保留 `libc` 等平台元数据，
+CI 的 npm 10.8.2 writer 会删除这些元数据，不采用其重写结果。兼容性以 Node 20 干净安装、
+含开发依赖的 moderate 审计、完整前端门禁、受影响页面的浏览器走查和 bundle budget 验证；
+新版 i18next 与 Radix 使入口 JS 从 498.82 KiB 增至 508.46 KiB，
+通过把页面专用 API 移出启动静态图恢复到 497.60 KiB，预算保持 500 KiB（见
+[前端质量合同](../spec/frontend/quality-guidelines.md#语言资源)）。该更新只改变前端静态资源，
+须重新构建并替换承载 `web/dist` 的 Core 镜像后生效；已打开的页面在新 Service Worker 接管后重载。
+无 API 或数据库迁移，回退旧镜像会恢复旧依赖版本。
+
 
 ### lint 依赖的本地可重复修补
 

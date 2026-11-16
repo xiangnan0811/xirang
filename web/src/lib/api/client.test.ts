@@ -416,6 +416,30 @@ describe("request envelope handling", () => {
     expect(init.signal).toBe(controller.signal);
     expect(JSON.parse(String(init.body))).toEqual({ schema_version: 1 });
   });
+
+  it("composes page-only audit, credential-audit and SLO APIs and forwards their requests", async () => {
+    fetchMock.mockImplementation(async () =>
+      createMockResponse(
+        200,
+        JSON.stringify({ code: 0, message: "ok", data: [], total: 0, page: 1, page_size: 20 })
+      )
+    );
+    const controller = new AbortController();
+
+    await expect(apiClient.getAuditLogs("token-audit", { username: "synthetic" })).resolves.toMatchObject({ items: [] });
+    await expect(apiClient.getCredentialAuditEvents("token-credential-audit")).resolves.toMatchObject({ items: [] });
+    await apiClient.getSLOSummary("token-slo", { signal: controller.signal });
+
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    expect(calls.map(([url]) => url)).toEqual([
+      "/api/v1/audit-logs?username=synthetic",
+      "/api/v1/credential-audit-events",
+      "/api/v1/slos/compliance-summary",
+    ]);
+    expect(calls[0][1].headers).toMatchObject({ Authorization: "Bearer token-audit" });
+    expect(calls[1][1].headers).toMatchObject({ Authorization: "Bearer token-credential-audit" });
+    expect(calls[2][1].signal).toBe(controller.signal);
+  });
 });
 
 describe("apiClient 任务请求约束", () => {
@@ -473,6 +497,13 @@ describe("apiClient 任务请求约束", () => {
     const raw = apiClient as Record<string, unknown>;
     expect(raw.execNodeCommand).toBeUndefined();
     expect("execNodeCommand" in raw).toBe(false);
+  });
+
+  it("apiClient 不暴露自动化规则页面专用的通用 CRUD 名称", () => {
+    const raw = apiClient as Record<string, unknown>;
+    for (const name of ["list", "listLogs", "create", "update", "delete"]) {
+      expect(name in raw).toBe(false);
+    }
   });
 
   it("getNodes 会禁用浏览器缓存，避免刷新拿到旧节点列表", async () => {
