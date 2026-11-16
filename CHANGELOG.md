@@ -6,6 +6,14 @@
 - **SSH 命令正常收尾（#721）**：修复 SSH runner 的生命周期竞态。命令正常完成后，迟到的 setup watchdog 或执行 watcher 曾可能向已结束的会话发送 TERM 并把成功结果误判为 `command failed`，或关闭仍要顺序复用的 SSH 连接；受影响路径包括 Docker 卷 list→inspect、Rclone／Restic 兼容流式命令及 Restic 密码文件命令。现由同步决策裁定完成或取消：正常完成后迟到的取消不再发送信号或关闭连接，真实取消、超时、输出限额与 I/O 失败仍按原优先级失败，joined／graceful 模式的 join 与 TERM／grace 合同保持。#721 的 CI 失败（Docker `known-success-with-gap` 在 list 阶段返回 `command failed`）与该竞态相符，但日志未记录内部信号错误，未唯一认证其历史原因。须重新构建并替换 Core 后生效，旧进程及已开始的操作不会被补丁改写，切换前排空在途操作；无新增公开 API、运行时配置或 schema migration，回退会恢复该竞态。
 - **SSH 握手连接交接**：修复独立于 #721 命令收尾的连接生命周期竞态。SSH 握手成功后，迟到的拨号 context watcher 曾可能关闭已交给调用方的连接，导致后续 Docker 卷、文件浏览或其他 SSH 操作断开；现在握手交接与取消关闭权同步裁定，已观察到取消或取消先认领时不返回可用 client，已成功交接的连接由调用方拥有。原有主机密钥校验、信任探测零认证和轮换只读 known_hosts 行为保持。受控 SSH 探针证明该竞态可导致 graceful Signal 测试在 Wait 缺少退出证据后提前结束，但 main CI 的具体历史因果未唯一认证。新版 Core 重建并替换后对新连接生效，切换前排空旧进程在途操作；已建立的旧连接不会被补丁改写。无新增公开 API、运行时配置或 schema migration，回退旧运行代码会恢复握手交接竞态。
 
+## [0.73.21](https://github.com/xiangnan0811/xirang/compare/v0.73.20...v0.73.21) (2026-11-16)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复 SSH 命令正常收尾并更新开发依赖 ([#721](https://github.com/xiangnan0811/xirang/issues/721)) ([ca5cb6f](https://github.com/xiangnan0811/xirang/commit/ca5cb6f522d33560569fed011c8f1bd567ce9074))
+* **ssh:** 保留握手成功后的连接所有权 ([#724](https://github.com/xiangnan0811/xirang/issues/724)) ([551f160](https://github.com/xiangnan0811/xirang/commit/551f160ba53595d9de7a8fbb7467ec3b29567b11))
+
 ## [0.73.20](https://github.com/xiangnan0811/xirang/compare/v0.73.19...v0.73.20) (2026-11-16)
 
 
