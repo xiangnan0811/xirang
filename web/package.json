@@ -59,7 +59,7 @@
     "@types/node": "^25.9.9",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@typescript-eslint/typescript-estree": "file:dependency-patches/typescript-eslint-typescript-estree-8.72.1-xirang-minimatch11-r1.tgz",
+    "@typescript-eslint/typescript-estree": "file:dependency-patches/typescript-eslint-typescript-estree-8.72.2-xirang-minimatch11-r1.tgz",
     "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-v8": "^4.1.11",
     "axe-core": "^4.14.0",

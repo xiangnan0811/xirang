@@ -116,13 +116,23 @@ CI 的 npm 10.8.2 writer 会删除这些元数据，不采用其重写结果。�
 须重新构建并替换承载 `web/dist` 的 Core 镜像后生效；已打开的页面在新 Service Worker 接管后重载。
 无 API 或数据库迁移，回退旧镜像会恢复旧依赖版本。
 
+开发依赖分组（#721）按原目标完成 17 项：`@testing-library/user-event` 14.6.10、
+TypeScript ESLint 8.72.2、Vite 7.3.8，以及 Babel、regexpp、resolve-uri、覆盖率、
+浏览器数据、brace-expansion、enhanced-resolve、graceful-fs、Rollup 4.68.3 和 ws 的
+锁定更新；electron-to-chromium 更新至 1.5.486，Rollup 的各平台包同步更新并保留平台元数据。
+MSW 的测试使用 `msw/node`；其 CLI 的 Inquirer 传递链中，新版 `@inquirer/ansi` 2.1.0
+和 `@inquirer/confirm` 6.4.0 要求 Node 22+，因此在现行 Node 20 合同下暂缓这两项，
+保留满足父依赖范围的兼容版本及对应 core、figures、type、mute-stream 锁定记录；未新增 override。
+后续重新解析依赖时须再次核对完整传递链的 engines。按锁文件重新安装并重启开发工具后生效；
+构建后的前端资源须重新部署，回退锁文件会恢复旧版本依赖。
+
 
 ### lint 依赖的本地可重复修补
 
 针对 [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)，
 五个固定父包通过根 `devDependencies` 的本地 tarball 声明使用官方 minimatch 11.0.1：
 ESLint 9.39.4、config-array 0.21.2、eslintrc 3.3.7、jsx-a11y 6.10.2 和
-typescript-estree 8.72.1。三个 scoped 父包的 override 引用同名根声明；保留真实
+typescript-estree 8.72.2。三个 scoped 父包的 override 引用同名根声明；保留真实
 上游 name/version、许可证和其他包语义，不依赖安装后修改器或 matcher 兼容层。
 
 可信输入及逐文件配方位于 [dependency-patches](../../web/dependency-patches/sources.json)
@@ -143,7 +153,7 @@ python3 scripts/build-lint-dependency-patches.py --work-dir "$PATCH_WORK/build" 
 `PATCH_WORK` 指向预先独占创建的项目 scratch 目录；已有不同产物默认拒绝覆盖，
 只有复核来源和配方后才使用 `--replace`。不运行 npm pack 或第三方生命周期代码。
 父包或其固定 requester 版本改变时必须重新核来源、配方及真实消费者，不能自动沿用旧补丁。
-typescript-estree 8.72.1 迁移时重新核对了其官方归档身份及 TypeScript ESLint 8.72.1
+typescript-estree 8.72.2 迁移时重新核对了其官方归档身份及 TypeScript ESLint 8.72.2
 的五条 ESLint peer requester 和四条 estree dependency requester；空文件配方仍只改包清单与附加说明。
 config-array 的 matcher 类型采用 v11 公开接口；匹配语义也按 v11，不模拟完整 v3 行为。
 

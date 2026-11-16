@@ -3,9 +3,9 @@
 @@ -0,0 +1,15 @@
 +Xirang local dependency modification, revision 1
 +Advisory: GHSA-g3hv-75wg-m249
-+Upstream package: @typescript-eslint/typescript-estree@8.72.1
-+Upstream URL: https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.72.1.tgz
-+Upstream integrity: sha512-DAlUoUV93hIvrtIQLwCbmZQYVZwOMhiHJrOVUUIWicFZaIYjTRqlY3I/NZevfkLmSqkNHRu2qYDcq9lrn16oOQ==
++Upstream package: @typescript-eslint/typescript-estree@8.72.2
++Upstream URL: https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.72.2.tgz
++Upstream integrity: sha512-pQEGqIK/cqEvKivVWaFLYpe7XYejFxfuAOi4mu1oAWFvIo36aRHI9esRFTUxcIy/z8N482RJyH+LpZB0ZIU7Ow==
 +Upstream license: MIT (original license and notice files retained)
 +Source inventory and requester list: web/dependency-patches/sources.json
 +Modified or added files relative to the package root:
@@ -19,8 +19,8 @@
 --- package/package.json
 +++ package/package.json
 @@ -48,7 +48,7 @@
-     "@typescript-eslint/types": "8.72.1",
-     "@typescript-eslint/visitor-keys": "8.72.1",
+     "@typescript-eslint/types": "8.72.2",
+     "@typescript-eslint/visitor-keys": "8.72.2",
      "debug": "^4.4.3",
 -    "minimatch": "^10.2.2",
 +    "minimatch": "11.0.1",
@@ -35,7 +35,7 @@
 +  "x-xirang-patch": {
 +    "revision": 1,
 +    "advisory": "GHSA-g3hv-75wg-m249",
-+    "upstreamVersion": "8.72.1"
++    "upstreamVersion": "8.72.2"
    }
 -}
 \ No newline at end of file

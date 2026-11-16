@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "revision": 1,
   "advisory": "GHSA-g3hv-75wg-m249",
-  "sourcesSha256": "51a0f65b61b7cfad6cfa9361e0136f7d1b5490ae69a8942a290dfb989b2ba0c4",
+  "sourcesSha256": "aa5789ce23b10ebc6361171eccf3b39608cbe80eab946e9df28cebd741560fa2",
   "recipesSha256": "595b4b70e125d00fcac9740d9f251557dbafd4887687861cfe63669315e109fe",
   "buildToolchain": {
     "python": "CPython 3.14.10",
@@ -522,16 +522,16 @@
     },
     {
       "name": "@typescript-eslint/typescript-estree",
-      "version": "8.72.1",
-      "artifact": "typescript-eslint-typescript-estree-8.72.1-xirang-minimatch11-r1.tgz",
+      "version": "8.72.2",
+      "artifact": "typescript-eslint-typescript-estree-8.72.2-xirang-minimatch11-r1.tgz",
       "upstream": {
-        "url": "https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.72.1.tgz",
-        "integrity": "sha512-DAlUoUV93hIvrtIQLwCbmZQYVZwOMhiHJrOVUUIWicFZaIYjTRqlY3I/NZevfkLmSqkNHRu2qYDcq9lrn16oOQ=="
+        "url": "https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.72.2.tgz",
+        "integrity": "sha512-pQEGqIK/cqEvKivVWaFLYpe7XYejFxfuAOi4mu1oAWFvIo36aRHI9esRFTUxcIy/z8N482RJyH+LpZB0ZIU7Ow=="
       },
-      "integrity": "sha512-XMStveTSnZDCBsyUp9bx6NhM/MkCX7lUN5kBBqfsRcQ4RXKrMRbtAeWYPP6/29AYGrotOI/8wPebYRmmDb+/gw==",
+      "integrity": "sha512-UzBrfPIhNrXd2abs7Z7zw8PQ3mOndfzCRUFAG9iDoIkkPbsx5K59eed8Gv1xRhxWAruM08ttCTXId2NaMzKsMQ==",
       "patch": {
-        "path": "patches/typescript-eslint-typescript-estree-8.72.1-xirang-minimatch11-r1.patch",
-        "sha256": "324857cec418cc0c59a4de523a3369696d3f97d089049a7d37528ea786e3d17f"
+        "path": "patches/typescript-eslint-typescript-estree-8.72.2-xirang-minimatch11-r1.patch",
+        "sha256": "3b9e22baa6990cb476f6f7f34d95537b5195939049c7a59e496f73a1efb02632"
       },
       "files": [
         {
@@ -546,7 +546,7 @@
         },
         {
           "path": "XIRANG-MODIFICATIONS.txt",
-          "sha256": "cbbcb63f704a0dc13427992eb0ff2a1abb7ad5df625180fbbd4b2dfcea25a7e9",
+          "sha256": "eea6ba6f24507816a48f34fb6496f2966ec16a5967b14cc845e4f8645a107053",
           "mode": "0644"
         },
         {
@@ -991,7 +991,7 @@
         },
         {
           "path": "package.json",
-          "sha256": "502469c38fe7501a8cd434ed28637dc8b8dfa42c5d0ad6d2a0b2febf165b6062",
+          "sha256": "f7bc70a160c01f819f8484778471712a59c4e575b0816af18588e4761b1a82c9",
           "mode": "0644"
         }
       ],
@@ -999,12 +999,12 @@
         {
           "path": "XIRANG-MODIFICATIONS.txt",
           "beforeSha256": null,
-          "afterSha256": "cbbcb63f704a0dc13427992eb0ff2a1abb7ad5df625180fbbd4b2dfcea25a7e9"
+          "afterSha256": "eea6ba6f24507816a48f34fb6496f2966ec16a5967b14cc845e4f8645a107053"
         },
         {
           "path": "package.json",
-          "beforeSha256": "5104e1bb99c1ae0b2d72d5112d462c17e21235fa7595f2953ce2f92b6d9c21ad",
-          "afterSha256": "502469c38fe7501a8cd434ed28637dc8b8dfa42c5d0ad6d2a0b2febf165b6062"
+          "beforeSha256": "e80c0a230f1d94751af1a91ce2431759781f40e206f8d9b67f0b7db90714c39c",
+          "afterSha256": "f7bc70a160c01f819f8484778471712a59c4e575b0816af18588e4761b1a82c9"
         }
       ]
     },

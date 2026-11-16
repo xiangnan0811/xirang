@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **开发依赖（#721）**：完成原依赖组 19 项中的 17 项，包括 TypeScript ESLint 8.72.2、Vite 7.3.8、Rollup 4.68.3 和 electron-to-chromium 1.5.486；本地 estree 安全补丁迁至 8.72.2，继续使用官方 minimatch 11.0.1。MSW 的 Inquirer CLI 传递链中，ansi 2.1.0 与 confirm 6.4.0 要求 Node 22+，为兼容现行 Node 20 暂保留旧版及其匹配依赖。开发依赖须按锁文件重新安装并重启相关进程；前端资源须重新构建并部署。
+
 ## [0.73.20](https://github.com/xiangnan0811/xirang/compare/v0.73.19...v0.73.20) (2026-11-16)
 
 
