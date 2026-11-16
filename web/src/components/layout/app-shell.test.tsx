@@ -101,9 +101,25 @@ describe("AppShell", () => {
     expect(header).toHaveClass("h-14");
 
     const sidebar = screen
-      .getByRole("button", { name: "收起侧边栏" })
+      .getByRole("button", { name: "收起面板" })
       .closest("aside");
     expect(sidebar).toHaveClass("pt-14");
+  });
+
+  it("names header and sidebar controls by their visible labels", async () => {
+    mockConsoleData.warning = null;
+    const user = userEvent.setup();
+    renderShell();
+
+    const search = screen.getByRole("button", { name: /^搜索节点、任务、日志…\s*⌘K$/ });
+    expect(search).not.toHaveAttribute("aria-label");
+    expect(search).toHaveAttribute("aria-keyshortcuts", "Meta+K Control+K");
+
+    const collapse = screen.getByRole("button", { name: "收起面板" });
+    expect(collapse).not.toHaveAttribute("aria-label");
+    await user.click(collapse);
+    // 折叠后只剩图标，仍需明确名称
+    expect(screen.getByRole("button", { name: "展开侧边栏" })).toHaveAttribute("aria-label", "展开侧边栏");
   });
 
   it("keys nested /app sections so parent layouts survive tab changes", () => {

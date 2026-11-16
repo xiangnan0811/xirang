@@ -122,7 +122,7 @@ CI 的 npm 10.8.2 writer 会删除这些元数据，不采用其重写结果。�
 针对 [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)，
 五个固定父包通过根 `devDependencies` 的本地 tarball 声明使用官方 minimatch 11.0.1：
 ESLint 9.39.4、config-array 0.21.2、eslintrc 3.3.7、jsx-a11y 6.10.2 和
-typescript-estree 8.70.1。三个 scoped 父包的 override 引用同名根声明；保留真实
+typescript-estree 8.72.1。三个 scoped 父包的 override 引用同名根声明；保留真实
 上游 name/version、许可证和其他包语义，不依赖安装后修改器或 matcher 兼容层。
 
 可信输入及逐文件配方位于 [dependency-patches](../../web/dependency-patches/sources.json)
@@ -143,6 +143,8 @@ python3 scripts/build-lint-dependency-patches.py --work-dir "$PATCH_WORK/build" 
 `PATCH_WORK` 指向预先独占创建的项目 scratch 目录；已有不同产物默认拒绝覆盖，
 只有复核来源和配方后才使用 `--replace`。不运行 npm pack 或第三方生命周期代码。
 父包或其固定 requester 版本改变时必须重新核来源、配方及真实消费者，不能自动沿用旧补丁。
+typescript-estree 8.72.1 迁移时重新核对了其官方归档身份及 TypeScript ESLint 8.72.1
+的五条 ESLint peer requester 和四条 estree dependency requester；空文件配方仍只改包清单与附加说明。
 config-array 的 matcher 类型采用 v11 公开接口；匹配语义也按 v11，不模拟完整 v3 行为。
 
 `npm run check:dependency-patches` 只读核对来源、配方、产物、锁文件、已安装完整文件集、

@@ -154,11 +154,7 @@ export function DesktopSidebar({
             isCollapsed ? "size-10" : "w-full justify-start px-3 h-10",
           )}
           onClick={onToggleCollapse}
-          aria-label={
-            isCollapsed
-              ? t("appShell.expandSidebar")
-              : t("appShell.collapseSidebar")
-          }
+          aria-label={isCollapsed ? t("appShell.expandSidebar") : undefined}
           title={
             isCollapsed
               ? t("appShell.expandSidebar")

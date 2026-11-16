@@ -39,10 +39,13 @@ export function NotificationBell({ token }: NotificationBellProps) {
     navigate("/app/notifications");
   }, [navigate]);
 
-  const countLabel = unreadCount.total > 99 ? "99+" : String(unreadCount.total);
+  // 名称把徽章上可见的数字放在括号外，便于按可见标签定位；括号内补充真实总数与严重度。
+  const badgeCapped = unreadCount.total > 99;
+  const countLabel = badgeCapped ? "99+" : String(unreadCount.total);
 
   const ariaLabel = unreadCount.total > 0
-    ? t('notificationBell.labelWithCountSeverity', {
+    ? t(badgeCapped ? 'notificationBell.labelWithCappedCountSeverity' : 'notificationBell.labelWithCountSeverity', {
+        badge: countLabel,
         count: unreadCount.total,
         critical: unreadCount.critical,
         warning: unreadCount.warning,

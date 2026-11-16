@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { setLanguage } from "@/i18n";
 import { NotificationBell } from "./notification-bell";
 
 const { navigateMock, getAlertUnreadCountMock, getRecentAlertsMock } = vi.hoisted(() => ({
@@ -59,28 +60,67 @@ describe("NotificationBell", () => {
     expect(screen.queryByText(/^[0-9]+$/)).not.toBeInTheDocument();
   });
 
-  it("有未读告警时按钮标签包含未读数量且显示徽章", async () => {
+  it("有未读告警时按钮名称在括号外包含徽章数字且显示徽章", async () => {
     getAlertUnreadCountMock.mockResolvedValue({ total: 3, critical: 1, warning: 2 });
 
     renderBell();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "通知（3 条未读，严重 1，警告 2）" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "通知，3 条未读（严重 1，警告 2）" })).toBeInTheDocument();
     });
 
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 
-  it("未读数超过 99 时徽章显示 99+", async () => {
-    getAlertUnreadCountMock.mockResolvedValue({ total: 120, critical: 100, warning: 20 });
+  it("未读数恰为 99 时徽章与名称均为真实数字", async () => {
+    getAlertUnreadCountMock.mockResolvedValue({ total: 99, critical: 90, warning: 9 });
 
     renderBell();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "通知（120 条未读，严重 100，警告 20）" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "通知，99 条未读（严重 90，警告 9）" })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("99")).toBeInTheDocument();
+  });
+
+  it.each([
+    [100, 60, 40, "通知，99+ 条未读（共 100 条，严重 60，警告 40）"],
+    [120, 100, 20, "通知，99+ 条未读（共 120 条，严重 100，警告 20）"],
+  ])("未读数 %i 超过 99 时徽章显示 99+，名称以 99+ 开头并保留真实计数", async (total, critical, warning, name) => {
+    getAlertUnreadCountMock.mockResolvedValue({ total, critical, warning });
+
+    renderBell();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
     });
 
     expect(screen.getByText("99+")).toBeInTheDocument();
+  });
+
+  it("英文名称同样把可见徽章数字放在括号外", async () => {
+    await setLanguage("en");
+    try {
+      getAlertUnreadCountMock.mockResolvedValue({ total: 150, critical: 3, warning: 147 });
+      const view = renderBell();
+      await waitFor(() => {
+        expect(screen.getByRole("button", {
+          name: "Notifications, 99+ unread (150 total, 3 critical, 147 warning)",
+        })).toBeInTheDocument();
+      });
+      view.unmount();
+
+      getAlertUnreadCountMock.mockResolvedValue({ total: 2, critical: 1, warning: 1 });
+      renderBell();
+      await waitFor(() => {
+        expect(screen.getByRole("button", {
+          name: "Notifications, 2 unread (1 critical, 1 warning)",
+        })).toBeInTheDocument();
+      });
+    } finally {
+      await setLanguage("zh");
+    }
   });
 
   it("打开下拉后调用 getRecentAlerts 并显示告警列表", async () => {
@@ -121,7 +161,7 @@ describe("NotificationBell", () => {
       expect(getAlertUnreadCountMock).toHaveBeenCalled();
     });
 
-    await user.click(screen.getByRole("button", { name: "通知（2 条未读，严重 1，警告 1）" }));
+    await user.click(screen.getByRole("button", { name: "通知，2 条未读（严重 1，警告 1）" }));
 
     await waitFor(() => {
       expect(getRecentAlertsMock).toHaveBeenCalledWith("test-token", { limit: 10 });

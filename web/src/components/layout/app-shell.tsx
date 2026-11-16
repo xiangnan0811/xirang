@@ -220,12 +220,12 @@ function AppShellInner() {
           </div>
 
           <div className="flex min-w-0 flex-1 items-center justify-between px-4 lg:px-6">
-            {/* 搜索按钮（md+ 可见），点击打开命令面板 */}
+            {/* 搜索按钮（md+ 可见），点击打开命令面板；名称取可见占位与快捷键提示 */}
             <div className="hidden min-w-0 md:flex items-center gap-3">
               <button
                 type="button"
                 onClick={cmdPalette.toggle}
-                aria-label={t('search.openLabel')}
+                aria-keyshortcuts="Meta+K Control+K"
                 className="hidden w-[280px] items-center gap-2 rounded-md border border-border bg-card/80 px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent md:flex"
               >
                 <Search className="size-3.5 shrink-0" aria-hidden />

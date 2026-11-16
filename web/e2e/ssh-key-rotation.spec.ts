@@ -584,7 +584,7 @@ async function beginAdmin(page: Page, username: string, seed: string, enrollTotp
   const toChinese = page.getByRole("button", { name: "切换到中文", exact: true });
   await expect(toChinese).toBeVisible();
   await toChinese.click();
-  await expect(page.getByRole("button", { name: "Switch to English", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "EN: Switch to English", exact: true })).toBeVisible();
   return secret;
 }
 

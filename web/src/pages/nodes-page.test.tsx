@@ -4,6 +4,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NodesPage } from "./nodes-page";
+import { MobileNavigation } from "@/components/layout/mobile-navigation";
+import { ThemeProvider } from "@/context/theme-context";
 import { beginAuthTransitionBarrier, bumpAuthSessionGeneration, clearAuthTransitionBarrier } from "@/lib/api/core";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { NewNodeInput, NodeConnectionProbeOutcome, NodeHostKeyIssueCode, TaskRecord } from "@/types/domain";
@@ -552,6 +554,47 @@ describe("NodesPage", () => {
     expect(screen.getByRole("menuitem", { name: /CSV 导入/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /下载模板/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /导出节点/ })).toBeInTheDocument();
+  });
+
+  it("小屏同页的节点「更多」与全局「更多」按名称区分且各自打开对应菜单", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ThemeProvider>
+        <MemoryRouter initialEntries={["/app/nodes"]}>
+          <NodesPage />
+          {/* `role` 是组件自定义 prop（用户角色），并非 ARIA role。 */}
+          {/* eslint-disable-next-line jsx-a11y/aria-role */}
+          <MobileNavigation username="alice" role="admin" onLogout={vi.fn()} onRefresh={vi.fn()} />
+        </MemoryRouter>
+      </ThemeProvider>
+    );
+
+    const nodeMore = screen.getByRole("button", { name: "更多" });
+    const globalMore = screen.getByRole("button", { name: "更多：打开快捷菜单" });
+    expect(nodeMore).not.toBe(globalMore);
+
+    await user.click(nodeMore);
+    expect(screen.getByRole("menuitem", { name: /CSV 导入/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /下载模板/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /导出节点/ })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /运维快捷操作/ })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("menuitem", { name: /导出节点/ })).not.toBeInTheDocument();
+    });
+    expect(nodeMore).toHaveFocus();
+
+    await user.click(globalMore);
+    const drawer = screen.getByRole("dialog", { name: /运维快捷操作/ });
+    expect(globalMore).toHaveAttribute("aria-expanded", "true");
+    expect(within(drawer).getAllByRole("link").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("menuitem", { name: /CSV 导入/ })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: /运维快捷操作/ })).not.toBeInTheDocument();
+    });
+    expect(globalMore).toHaveFocus();
   });
 
   it("未知主机密钥弹出指纹确认且不走错误提示", async () => {

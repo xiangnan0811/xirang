@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "revision": 1,
   "advisory": "GHSA-g3hv-75wg-m249",
-  "sourcesSha256": "02c69717f36ba469de5af93d8b6526942f697c6688f3fac4f58d2a22fb6b8aa0",
+  "sourcesSha256": "51a0f65b61b7cfad6cfa9361e0136f7d1b5490ae69a8942a290dfb989b2ba0c4",
   "recipesSha256": "595b4b70e125d00fcac9740d9f251557dbafd4887687861cfe63669315e109fe",
   "buildToolchain": {
-    "python": "CPython 3.14.9",
-    "zlib": "1.3.2"
+    "python": "CPython 3.14.10",
+    "zlib": "1.4"
   },
   "matcher": {
     "source": {
@@ -522,16 +522,16 @@
     },
     {
       "name": "@typescript-eslint/typescript-estree",
-      "version": "8.70.1",
-      "artifact": "typescript-eslint-typescript-estree-8.70.1-xirang-minimatch11-r1.tgz",
+      "version": "8.72.1",
+      "artifact": "typescript-eslint-typescript-estree-8.72.1-xirang-minimatch11-r1.tgz",
       "upstream": {
-        "url": "https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.70.1.tgz",
-        "integrity": "sha512-TU8PwyGN0PQJUcE96mw8eCQ44SmxGdQlJmlWakHaHQ15eIuuvye5yNtmh/i6oS88jzXVQB71xdNkbkB/fMwL0g=="
+        "url": "https://registry.npmjs.org/@typescript-eslint/typescript-estree/-/typescript-estree-8.72.1.tgz",
+        "integrity": "sha512-DAlUoUV93hIvrtIQLwCbmZQYVZwOMhiHJrOVUUIWicFZaIYjTRqlY3I/NZevfkLmSqkNHRu2qYDcq9lrn16oOQ=="
       },
-      "integrity": "sha512-xGPTbieOCUy+fKiWatTgeCPeyfif26jDphyKk2T4iyldwiSPjWFlRyUVZGxb+vQp4i2SXenCNKCcqTwTAcrJXQ==",
+      "integrity": "sha512-XMStveTSnZDCBsyUp9bx6NhM/MkCX7lUN5kBBqfsRcQ4RXKrMRbtAeWYPP6/29AYGrotOI/8wPebYRmmDb+/gw==",
       "patch": {
-        "path": "patches/typescript-eslint-typescript-estree-8.70.1-xirang-minimatch11-r1.patch",
-        "sha256": "0963737ffb2e93174e78fad4bb7c0ae6e0a073e3c5fd79c98110eace004d45b3"
+        "path": "patches/typescript-eslint-typescript-estree-8.72.1-xirang-minimatch11-r1.patch",
+        "sha256": "324857cec418cc0c59a4de523a3369696d3f97d089049a7d37528ea786e3d17f"
       },
       "files": [
         {
@@ -546,7 +546,7 @@
         },
         {
           "path": "XIRANG-MODIFICATIONS.txt",
-          "sha256": "13356babf84964abb01404a9a96a27f1c0cf61dfeb21c4337ede28a5c01dfdbd",
+          "sha256": "cbbcb63f704a0dc13427992eb0ff2a1abb7ad5df625180fbbd4b2dfcea25a7e9",
           "mode": "0644"
         },
         {
@@ -566,7 +566,7 @@
         },
         {
           "path": "dist/check-modifiers.js",
-          "sha256": "90b3efbaa1b304f1840ee045f6246ab0843d7e984c594a5f446ab538f6adb8e7",
+          "sha256": "02dea65e6a73728319b501c4acd204921cf36bb83237dd130945e377bf644518",
           "mode": "0644"
         },
         {
@@ -606,7 +606,7 @@
         },
         {
           "path": "dist/convert.js",
-          "sha256": "6e1f9453d3535ae26fe07d1ec80b3f8f2873b81862f01f1c95ef5a2db95ccef5",
+          "sha256": "b4fb5ecb49de128ea39681570b1cf3480581f5252f1849d0beb1e96dfb3ec694",
           "mode": "0644"
         },
         {
@@ -676,7 +676,7 @@
         },
         {
           "path": "dist/create-program/getScriptKind.js",
-          "sha256": "104eadbfe8a96ae3f795c750c42fed92a2e0bedb953b0e0cab49be16e147d4ae",
+          "sha256": "c7964a441df4c87755260007c268f2d9ee5b1ddfd2deccf302a0ab0ef4cb8751",
           "mode": "0644"
         },
         {
@@ -701,12 +701,12 @@
         },
         {
           "path": "dist/create-program/useProvidedPrograms.d.ts",
-          "sha256": "d924e653afba6a341ad72c3cbcc62a9c1206d5fcdf02db13fded64bfbca27e87",
+          "sha256": "8ae77fbab747247c91cddbc0f149c35bd67e593619e33f32f50a6333a54a5973",
           "mode": "0644"
         },
         {
           "path": "dist/create-program/useProvidedPrograms.js",
-          "sha256": "a30ff13961d1fd9f6fca70077a3ab199535ed29996f8e6e6564a4564890ba14b",
+          "sha256": "c4f5943b25c56420d3d4a113497e74e6534ca0553fa725403a999bd318eddc33",
           "mode": "0644"
         },
         {
@@ -806,17 +806,17 @@
         },
         {
           "path": "dist/parseSettings/createParseSettings.js",
-          "sha256": "d3589079e406dff92694805ac8f6b09b71add6cd397665b6c2eaa66b06c0ac60",
+          "sha256": "7c0bd435c35acfda449853dd49e4643e030a6466bbfb9d147cd52ec55c6c8f33",
           "mode": "0644"
         },
         {
           "path": "dist/parseSettings/getProjectConfigFiles.d.ts",
-          "sha256": "64bba50b447f76febcac924f0c133773b004bc7496ec80b5bc49ac31dd3c9ec2",
+          "sha256": "6b55683fdc798e4a3dee589268a369c5949d71b45c0b3ea7d83a8770396ab876",
           "mode": "0644"
         },
         {
           "path": "dist/parseSettings/getProjectConfigFiles.js",
-          "sha256": "72e70bafa8afe2bbb60d61a0367464e8a7a185071623f3e906987a6b6f284d4a",
+          "sha256": "c146c6a6be2b9ca7ca9823eedadd4cc5ef11cc99b9bb9e38b1d00f33bffdf462",
           "mode": "0644"
         },
         {
@@ -871,12 +871,12 @@
         },
         {
           "path": "dist/parser.d.ts",
-          "sha256": "1fdf5c750e4164249aaa3095803330eae7cc9fb2523535811800460b98f8e7ed",
+          "sha256": "af0b3386dc1d0a38bf7ab8340fd2f9f9ccefdbb800d973ab921d7375ea6474d5",
           "mode": "0644"
         },
         {
           "path": "dist/parser.js",
-          "sha256": "63c85652db5db994338bda23b802340b63d08be65514bcedb9aefdd7b3245d77",
+          "sha256": "03f47bd5581ffb1af3d20af142dd8b4466a61735454b0d24b0a56171bde51b72",
           "mode": "0644"
         },
         {
@@ -991,7 +991,7 @@
         },
         {
           "path": "package.json",
-          "sha256": "7214ae892f7f903bc0b3c9a52e66766ed52ea358c6ae6c8c31324b0bda822b67",
+          "sha256": "502469c38fe7501a8cd434ed28637dc8b8dfa42c5d0ad6d2a0b2febf165b6062",
           "mode": "0644"
         }
       ],
@@ -999,12 +999,12 @@
         {
           "path": "XIRANG-MODIFICATIONS.txt",
           "beforeSha256": null,
-          "afterSha256": "13356babf84964abb01404a9a96a27f1c0cf61dfeb21c4337ede28a5c01dfdbd"
+          "afterSha256": "cbbcb63f704a0dc13427992eb0ff2a1abb7ad5df625180fbbd4b2dfcea25a7e9"
         },
         {
           "path": "package.json",
-          "beforeSha256": "3a7232d2188445a835f6eca28394214c57c882ae92028146ee479c32a8bfb973",
-          "afterSha256": "7214ae892f7f903bc0b3c9a52e66766ed52ea358c6ae6c8c31324b0bda822b67"
+          "beforeSha256": "5104e1bb99c1ae0b2d72d5112d462c17e21235fa7595f2953ce2f92b6d9c21ad",
+          "afterSha256": "502469c38fe7501a8cd434ed28637dc8b8dfa42c5d0ad6d2a0b2febf165b6062"
         }
       ]
     },
