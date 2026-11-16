@@ -157,17 +157,12 @@ describe("NotificationBell", () => {
 
     renderBell();
 
-    await waitFor(() => {
-      expect(getAlertUnreadCountMock).toHaveBeenCalled();
-    });
+    // The mocks resolve asynchronously; wait for the rendered state, not merely for the call.
+    await user.click(await screen.findByRole("button", { name: "通知，2 条未读（严重 1，警告 1）" }));
+    expect(getAlertUnreadCountMock).toHaveBeenCalledWith("test-token");
 
-    await user.click(screen.getByRole("button", { name: "通知，2 条未读（严重 1，警告 1）" }));
-
-    await waitFor(() => {
-      expect(getRecentAlertsMock).toHaveBeenCalledWith("test-token", { limit: 10 });
-    });
-
-    expect(screen.getByText("node-prod-1")).toBeInTheDocument();
+    expect(await screen.findByText("node-prod-1")).toBeInTheDocument();
+    expect(getRecentAlertsMock).toHaveBeenCalledWith("test-token", { limit: 10 });
     expect(screen.getByText("连接超时，请检查节点网络")).toBeInTheDocument();
     expect(screen.getByText("node-dr-2")).toBeInTheDocument();
     expect(screen.getByText("磁盘空间不足")).toBeInTheDocument();
@@ -182,11 +177,8 @@ describe("NotificationBell", () => {
 
     await user.click(screen.getByRole("button", { name: "通知" }));
 
-    await waitFor(() => {
-      expect(getRecentAlertsMock).toHaveBeenCalled();
-    });
-
-    expect(screen.getByText("暂无未读告警")).toBeInTheDocument();
+    expect(await screen.findByText("暂无未读告警")).toBeInTheDocument();
+    expect(getRecentAlertsMock).toHaveBeenCalled();
   });
 
   it("点击查看全部通知跳转到 /app/notifications", async () => {
