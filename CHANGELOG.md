@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## [0.73.20](https://github.com/xiangnan0811/xirang/compare/v0.73.19...v0.73.20) (2026-11-16)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** 更新 Go 依赖并同步 Export 并发测试屏障 ([#711](https://github.com/xiangnan0811/xirang/issues/711)) ([0101ee6](https://github.com/xiangnan0811/xirang/commit/0101ee6a83a18be5cf8f5c24963afbc9423dc78e))
+* **web:** 更新开发工具链并修复可访问标签 ([#720](https://github.com/xiangnan0811/xirang/issues/720)) ([1341b11](https://github.com/xiangnan0811/xirang/commit/1341b1196f9fa2fb028c557d71e2048d25369e3a))
+* **web:** 更新生产依赖并减小启动包 ([#706](https://github.com/xiangnan0811/xirang/issues/706)) ([25cea82](https://github.com/xiangnan0811/xirang/commit/25cea825f8197246b9fd4cafbba6fc7866dd0851))
+
 ## [0.73.19](https://github.com/xiangnan0811/xirang/compare/v0.73.18...v0.73.19) (2026-11-14)
 
 
