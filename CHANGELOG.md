@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## [0.73.20](https://github.com/xiangnan0811/xirang/compare/v0.73.19...v0.73.20) (2026-11-16)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** 更新 Go 依赖并同步 Export 并发测试屏障 ([#711](https://github.com/xiangnan0811/xirang/issues/711)) ([0101ee6](https://github.com/xiangnan0811/xirang/commit/0101ee6a83a18be5cf8f5c24963afbc9423dc78e))
+* **web:** 更新开发工具链并修复可访问标签 ([#720](https://github.com/xiangnan0811/xirang/issues/720)) ([1341b11](https://github.com/xiangnan0811/xirang/commit/1341b1196f9fa2fb028c557d71e2048d25369e3a))
+* **web:** 更新生产依赖并减小启动包 ([#706](https://github.com/xiangnan0811/xirang/issues/706)) ([25cea82](https://github.com/xiangnan0811/xirang/commit/25cea825f8197246b9fd4cafbba6fc7866dd0851))
+
+### 依赖维护与可访问名称修复
+
+- **Go 模块组（#711）**：更新 43 项 Go minor/patch 依赖，包括 AWS SDK、pgx `5.12.0`、go-sqlite3 `1.14.53`、SFTP、Prometheus client 和 `x/sys 0.50.0`；STS 可选指标准入、pgx `search_path` 夹具、Search 规范化器版本 `4` 与 Landlock ABI 合同保持不变。go-sqlite3 现于查询返回前执行首步，Export 并发测试的同步点相应移到身份查询关闭游标之后、配额事务之前；生产 SQL、锁序和持久语义不变。须同源重建并替换 Core／Worker 及架构匹配的最终闭包、签名 bundle 与 proof，切换前排空旧 Worker 在途处理；回退须恢复整套匹配的旧镜像与制品，会恢复旧依赖。固定 govulncheck 报告调用路径与导入包 0 个漏洞；模块层的 `GO-2026-5932`（未导入的 `x/crypto/openpgp`）与上一版相同，不属本版新增。
+- **生产前端依赖（#706）**：更新 Radix、React Router、i18next 等生产依赖。审计、凭据审计与 SLO 的 API 实现移出启动静态图，由 `apiClient` 首次调用时加载并缓存；页面自身的静态引用（如 SLO 页的标签解析）仍随页面 chunk 加载。主 JS 由 508.46 KiB 降至预算内，既有 500 KiB 预算不变。新版 Core 承载的静态资源替换、Service Worker 接管并重载页面后生效；加载失败沿用页面原有的请求错误提示。
+- **开发工具链与可访问名称（#720，替代被 Dependabot 自动关闭的 #707）**：更新 21 项开发依赖；`@typescript-eslint/typescript-estree` 的本地可重复安全补丁随之迁至 `8.72.1`，继续使用官方 `minimatch 11.0.1` 修复 GHSA-g3hv-75wg-m249，锁文件平台元数据完整保留。axe-core 4.14 默认启用 `label-content-name-mismatch` 后，修复命令入口、通知、语言切换、侧栏、移动菜单、静默操作与自动化复制七类控件的可访问名称：名称包含实际可见标签，通知保留真实未读与严重度计数，移动全局菜单以“更多”开头并说明打开快捷菜单，与节点页“更多”区分。新版页面资源加载后生效；开发依赖需按锁文件重新安装并重启相关进程。axe 的 incomplete 结果保持未判定；mock 浏览器走查不代表真实后端或完整 WCAG 合规。
+- **CI 与测试（#665、#722，不单独构成运行行为变化）**：Actions 固定版本更新并同步 Worker smoke 断言；修复走查证据测试在 linked worktree 的 pre-push 中把宿主仓库改为 `core.bare=true` 的隔离缺陷，以及 Search 构建 join、通知铃两处测试时序误报。
+
+本版无新增 schema migration、运行时配置或公开 API。升级前保全数据库、配置、匹配密钥与备份副本；既有迁移的降级限制继续适用。本发行不包含部署操作，生产升级需另行按部署指南执行和验收。
+
 ## [0.73.19](https://github.com/xiangnan0811/xirang/compare/v0.73.18...v0.73.19) (2026-11-14)
 
 
