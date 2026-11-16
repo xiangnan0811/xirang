@@ -508,19 +508,21 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 		runContext, cancel = context.WithCancel(ctx)
 	}
 	var transportClose func()
+	var setup *setupCancellation
 	var stopTransportWatch func()
 	if runner.transportClose != nil {
 		var transportOnce sync.Once
 		transportClose = func() {
 			transportOnce.Do(runner.transportClose)
 		}
+		setup = &setupCancellation{transportClose: transportClose}
 		transportWatchDone := make(chan struct{})
 		watchExited := make(chan struct{})
 		go func() {
 			defer close(watchExited)
 			select {
 			case <-runContext.Done():
-				transportClose()
+				setup.cancelTransport()
 			case <-transportWatchDone:
 			}
 		}()
@@ -535,18 +537,27 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 		}
 		defer stopTransportWatch()
 	}
+	// Every setup exit revokes the watchdog before the internal cancel below,
+	// so that cancel can never be mistaken for a caller cancellation. A
+	// failure then performs its required transport teardown explicitly.
+	failBeforeSession := func(cause error) (CommandExecutionStream, error) {
+		setup.disarm()
+		cancel()
+		if transportClose != nil {
+			transportClose()
+		}
+		release()
+		return nil, cause
+	}
 	session, err := runner.factory(runContext)
 	if err != nil {
-		cancel()
-		release()
-		return nil, fmt.Errorf("%w: create session", ErrCommandFailed)
+		return failBeforeSession(fmt.Errorf("%w: create session", ErrCommandFailed))
 	}
 	if session == nil {
-		cancel()
-		release()
-		return nil, fmt.Errorf("%w: nil session", ErrCommandFailed)
+		return failBeforeSession(fmt.Errorf("%w: nil session", ErrCommandFailed))
 	}
 	fail := func(cause error) (CommandExecutionStream, error) {
+		setup.disarm()
 		cancel()
 		if transportClose != nil {
 			transportClose()
@@ -584,9 +595,13 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 		startErr := fmt.Errorf("%w: %w", ErrCommandStart, err)
 		return fail(fmt.Errorf("%w: %w", ErrCommandFailed, startErr))
 	}
-	// Once Start returns, the execution watcher owns cancellation. Stop and
-	// join the setup watchdog before starting that watcher so it cannot close
-	// the transport during the graceful termination interval.
+	// Once Start returns, the execution watcher owns cancellation. Revoke the
+	// setup watchdog before publishing the stream. If cancellation already
+	// claimed it, runContext is canceled and the stream cannot complete
+	// successfully, so the transport is never reported as reusable.
+	setup.disarm()
+	// Graceful mode also joins the setup watchdog so an in-progress claimed
+	// close cannot overlap the graceful termination interval.
 	if runner.gracefulJoinedTransport && stopTransportWatch != nil {
 		stopTransportWatch()
 	}
@@ -608,6 +623,8 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 		transportClose:          transportClose,
 		joinOwnedTransport:      runner.joinOwnedTransport,
 		gracefulJoinedTransport: runner.gracefulJoinedTransport,
+		setup:                   setup,
+		terminationDone:         make(chan struct{}),
 		watchDone:               make(chan struct{}),
 		stdinDone:               make(chan struct{}),
 		stderrDone:              make(chan struct{}),
@@ -623,6 +640,50 @@ func (runner *CommandRunner) openExecution(ctx context.Context, specification Co
 	}
 	stream.start()
 	return stream, nil
+}
+
+// setupCancellation is the setup watchdog's authority to close a transport
+// while a session is created and started. Start handoff (or a setup failure)
+// and cancellation race for one decision: active becomes either disarmed or
+// cancellation-claimed. The lock protects only that decision; the transport
+// close always runs outside it.
+type setupCancellation struct {
+	mu             sync.Mutex
+	transportClose func()
+	disarmed       bool
+	claimed        bool
+}
+
+// cancelTransport is the watchdog's reaction to runContext cancellation. It
+// closes the transport only when cancellation claims an armed setup, so a
+// delayed watchdog observing the internal cleanup cancel has no effect.
+func (gate *setupCancellation) cancelTransport() {
+	if gate == nil {
+		return
+	}
+	gate.mu.Lock()
+	claimed := !gate.disarmed && !gate.claimed
+	if claimed {
+		gate.claimed = true
+	}
+	gate.mu.Unlock()
+	if claimed {
+		gate.transportClose()
+	}
+}
+
+// disarm revokes the watchdog's authority unless cancellation already claimed
+// it. A claimed cancellation leaves runContext canceled, so the command can
+// only finish as canceled or timed out and never reports a reusable transport.
+func (gate *setupCancellation) disarm() {
+	if gate == nil {
+		return
+	}
+	gate.mu.Lock()
+	if !gate.claimed {
+		gate.disarmed = true
+	}
+	gate.mu.Unlock()
 }
 
 type commandExecution struct {
@@ -646,6 +707,10 @@ type commandExecution struct {
 	joinOwnedTransport      bool
 	gracefulJoinedTransport bool
 	watchDone               chan struct{}
+	// setup is the revoked setup-watchdog authority for this command.
+	setup *setupCancellation
+	// terminationDone closes when the claimed termination action returns.
+	terminationDone chan struct{}
 
 	stdinDone  chan struct{}
 	stderrDone chan struct{}
@@ -653,7 +718,6 @@ type commandExecution struct {
 	allDone    chan struct{}
 	finished   chan struct{}
 
-	terminateOnce       sync.Once
 	connectionCloseOnce sync.Once
 	transportCloseOnce  sync.Once
 	finalizeOnce        sync.Once
@@ -666,7 +730,12 @@ type commandExecution struct {
 	abandoned          bool
 	prefixRequested    bool
 	prefixInterruption bool
+	// terminationStarted and completionClaimed are the single, mutually
+	// exclusive lifecycle decision guarded by mu: either termination claims the
+	// command, or natural completion claims it and every later termination
+	// request (including a delayed watcher) becomes a no-op.
 	terminationStarted bool
+	completionClaimed  bool
 	signalSent         bool
 	waitCompleted      bool
 	remainingLimit     error
@@ -837,7 +906,12 @@ func (stream *commandExecution) finalize(cancelRequested, prefixRequested bool) 
 func (stream *commandExecution) waitForNaturalCompletion() {
 	select {
 	case <-stream.allDone:
-		return
+		if stream.claimCompletion() {
+			return
+		}
+		// Termination claimed the command first; follow its wait policy.
+		stream.terminate()
+		stream.waitAfterTermination()
 	case <-stream.runContext.Done():
 		stream.terminate()
 		stream.waitAfterTermination()
@@ -862,11 +936,40 @@ func (stream *commandExecution) waitAfterTermination() {
 	}
 }
 
+// claimCompletion records natural completion after stdout EOF and all
+// command owners finished. It fails when termination already claimed the
+// command. The decision precedes every cleanup step and internal cancel.
+func (stream *commandExecution) claimCompletion() bool {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.terminationStarted {
+		return false
+	}
+	stream.completionClaimed = true
+	return true
+}
+
+// terminate is the single termination entry. Only the first request made
+// before natural completion runs the termination action; the decision is made
+// under mu while Signal, Close and waits run outside it. Later requests return
+// immediately, except that joined owners wait for the claimed action so the
+// strict ownership contract still joins it explicitly.
 func (stream *commandExecution) terminate() {
-	stream.terminateOnce.Do(func() {
-		stream.mu.Lock()
+	stream.mu.Lock()
+	claimed := !stream.completionClaimed && !stream.terminationStarted
+	joinClaimed := !claimed && stream.terminationStarted && stream.joinOwnedTransport
+	if claimed {
 		stream.terminationStarted = true
-		stream.mu.Unlock()
+	}
+	stream.mu.Unlock()
+	if !claimed {
+		if joinClaimed {
+			<-stream.terminationDone
+		}
+		return
+	}
+	defer close(stream.terminationDone)
+	func() {
 		stream.cancel()
 		if stream.gracefulJoinedTransport {
 			stream.terminateGracefully()
@@ -907,7 +1010,7 @@ func (stream *commandExecution) terminate() {
 		case <-timer.C:
 			stream.closeConnection()
 		}
-	})
+	}()
 }
 
 func (stream *commandExecution) terminateGracefully() {

@@ -51,6 +51,8 @@ retry 和最终结果。缺事件、setup 失败、首次失败后重试成功�
 和完成信息；不输出原始错误或 annotations。每次独占 `.tmp/agent/e2e-*`，失败也保留 summary。
 list 是库存，不能代替执行。
 
+SSH runner 取消权回归位于 `backend/internal/sshutil` 的 lifecycle gate 测试：在自然完成和内部 cancel 之后，于真实决策入口重放迟到的 setup watchdog 与 execution watcher，断言零 Signal、零 transport 关闭、重复 Join 结果稳定且同 runner/client 的第二条命令（含真实 loopback SSH 非零退出）可用；反向以真实取消先认领、Start 阻塞中取消认领及 factory 阻塞由 transport close 解阻覆盖。屏障只控制授权决策顺序，不依赖 sleep、调度统计或 `-count` 碰绿；阻塞 Signal、Close、factory 与 Start 的 owner 由测试释放并等待，保留兼容模式有界返回、joined/graceful 显式 join 的既有断言。Docker 卷 list→inspect 的真实 SSH 验收保持原断言。
+
 ### 离线账户恢复
 
 账户恢复使用独立入口，不复用运行中的后端：
