@@ -64,9 +64,7 @@ bundle／proof 的要求。旧进程不会自动获得补丁，旧 receipt 不�
 
 Go 模块组、生产与开发前端依赖、typescript-estree 本地安全补丁迁移及七类公共控件可访问名称修复的完整说明归档于 CHANGELOG `0.73.20` 版本节；发行 PR 与正式 GitHub Release 正文须完整保留该节，包括 Core／Worker 同源重建与制品配套、前端资源经 Service Worker 接管后生效、无新增 schema migration、回退恢复旧依赖，以及 axe incomplete 未判定和 mock 走查不代表完整 WCAG 合规的边界。同批 CI 与测试修复不单独构成运行行为变化。
 
-后续 #721 同时包含开发依赖组的 17 项兼容更新（estree 8.72.2 本地补丁迁移，继续使用官方 minimatch 11.0.1）与 SSH 命令正常收尾的生产生命周期修复，两者均记录于 CHANGELOG `Unreleased`。Inquirer 的两项目标及对应传递链保留 Node 20 兼容版本，不能写成原 19 项全部升级；开发依赖本身仍只维护开发与构建工具，按锁文件重新安装并重启开发／测试进程后生效，构建输出随 Core 镜像替换，待 Service Worker 接管并重载页面后使用。因整批含实际运行修复，不再按纯 `chore(deps-dev)` 免发行处理，按 `fix` 正常 patch 发行，不手动指定版本。SSH 修复须重新构建并替换 Core 后生效，切换前排空旧进程在途 Docker 卷发现、Rclone／Restic 执行与密码文件操作，旧进程及已开始的操作不会被补丁改写；无新增公开 API、运行时配置或 schema migration，既有迁移降级限制不变。回退旧锁文件或镜像会恢复旧依赖版本并重新引入完成与取消竞态。发行说明须注明 #721 原 CI 失败与该竞态相符但历史原因未唯一认证。
-
-另一次 SSH 握手连接交接修复属于独立运行修复，须按 `fix` 正常发行：拨号 context 结束后迟到的握手 watchdog 不再关闭已交付的连接，取消先认领或交接检查观察到取消时不返回可用 client。须重建并替换 Core 才对新连接生效，切换前排空旧进程在途连接和操作；已建立的旧连接不会被补丁改写。没有新增 API、运行时配置或 schema migration，回退旧运行代码会恢复握手交接竞态。受控探针证明该竞态可导致 main CI 的 graceful Signal 测试出现相同症状，但该次失败的历史事件顺序未唯一认证，不能将其与 #721 原 CI 的独立失败合称为已证相同根因。
+#721 开发依赖兼容更新、SSH 命令正常收尾修复和 #724 SSH 握手连接交接修复的完整说明归档于 CHANGELOG `0.73.21` 版本节；发行 PR 与正式 GitHub Release 正文须完整保留该节，不能只保留自动提交摘要或将已交付条目留在 `Unreleased`。Inquirer 两项目标保留 Node 20 兼容版本；开发依赖按锁文件重新安装并重启相关进程，前端资源随 Core 镜像替换，Service Worker 接管并重载后生效。SSH 修复须重新构建并替换 Core，握手修复对新连接生效，切换前排空旧进程在途连接和操作；旧连接与已开始的操作不会被补丁改写。无新增公开 API、运行时配置或 schema migration，既有迁移降级限制不变。回退旧锁文件会恢复旧依赖，回退旧 Core 运行代码会恢复两类竞态；两次原 CI 失败各自的历史因果均未唯一认证，不能将其合称为已证相同根因。
 
 已 squash 合并的 PR 若包含需要发布、但未被提交语义识别的修复，可按 [Release Please 官方说明](https://github.com/googleapis/release-please#how-can-i-fix-release-notes)，在原 PR 正文追加带日期的发布决定和 `BEGIN_COMMIT_OVERRIDE` / `END_COMMIT_OVERRIDE` 区块；保留原始变更与验证事实，在块内补齐真实的 `fix` 条目并按需添加 `Release-As:`。重新运行 Release Please 后核对实际生成的 Release PR，仍须完成下述说明审阅、检查与镜像门禁。该方式不改写 Git 提交或旧 tag；仅改已合并 PR 标题不会更新提交语义，普通 merge 不适用此 override 路径。
 
