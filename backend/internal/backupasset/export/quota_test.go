@@ -965,7 +965,17 @@ func TestAttemptBudgetFinalizeAfterFenceRejectsChargeAndReleasesReaderPair(t *te
 	var allowFinalizeOnce sync.Once
 	openFinalize := func() { allowFinalizeOnce.Do(func() { close(allowFinalize) }) }
 	t.Cleanup(openFinalize)
-	var hintPaused atomic.Bool
+	budget.afterFinalizationHint = func() {
+		select {
+		case hintReached <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		select {
+		case <-allowFinalize:
+		case <-ctx.Done():
+		}
+	}
 	var globalLocked atomic.Bool
 	var userLocked atomic.Bool
 	var pairLockedBeforeTuple atomic.Bool
@@ -980,38 +990,9 @@ func TestAttemptBudgetFinalizeAfterFenceRejectsChargeAndReleasesReaderPair(t *te
 		traceMu.Unlock()
 	}
 	const (
-		rowCallback    = "test:pause_attempt_finalize_after_identity_hint"
 		queryCallback  = "test:trace_attempt_finalize_after_identity_hint"
 		updateCallback = "test:trace_attempt_finalize_release_and_charge"
 	)
-	if err := harness.db.Callback().Row().After("gorm:row").Register(rowCallback, func(tx *gorm.DB) {
-		if tx.Statement == nil {
-			return
-		}
-		if tx.Statement.Context.Value(attemptBudgetFinalizeBarrierContextKey{}) != barrierCaller {
-			return
-		}
-		querySQL := tx.Statement.SQL.String()
-		isIdentityHint := tx.Statement.Table == "item_attempt" &&
-			strings.Contains(querySQL, "JOIN backup_asset_export_jobs AS job") &&
-			strings.Contains(querySQL, "item_attempt.id AS item_attempt_id") &&
-			strings.Contains(querySQL, "job.owner_user_id")
-		if isIdentityHint && hintPaused.CompareAndSwap(false, true) {
-			hintReached <- struct{}{}
-			select {
-			case <-allowFinalize:
-			case <-ctx.Done():
-				_ = tx.AddError(ctx.Err())
-			}
-		}
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := harness.db.Callback().Row().Remove(rowCallback); err != nil {
-			t.Errorf("remove attempt finalize identity barrier row callback: %v", err)
-		}
-	})
 	if err := harness.db.Callback().Query().After("gorm:query").Register(queryCallback, func(tx *gorm.DB) {
 		if tx.Statement == nil || tx.Statement.Context.Value(attemptBudgetFinalizeBarrierContextKey{}) != barrierCaller {
 			return
@@ -1081,10 +1062,18 @@ func TestAttemptBudgetFinalizeAfterFenceRejectsChargeAndReleasesReaderPair(t *te
 			t.Errorf("remove attempt finalize release/charge update callback: %v", err)
 		}
 	})
+	var workers sync.WaitGroup
+	t.Cleanup(func() {
+		cancel()
+		openFinalize()
+		workers.Wait()
+	})
 
 	finalizeResult := make(chan error, 1)
 	finalizeCtx := context.WithValue(ctx, attemptBudgetFinalizeBarrierContextKey{}, barrierCaller)
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		finalizeResult <- budget.FinalizeAttemptRead(finalizeCtx, content.AttemptReadFinalization{
 			ReservationID: reservation.ID, ReservedBytes: reservation.ReservedBytes,
 			ProviderBytes: item.LogicalSize, EvidenceKnown: true, Succeeded: true,
@@ -1100,7 +1089,11 @@ func TestAttemptBudgetFinalizeAfterFenceRejectsChargeAndReleasesReaderPair(t *te
 		db: harness.db, now: func() time.Time { return clock }, attemptWork: NewAttemptWorkRegistry(),
 	}
 	fenceResult := make(chan error, 1)
-	go func() { fenceResult <- port.FenceAttempts(ctx, created.JobID) }()
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		fenceResult <- port.FenceAttempts(ctx, created.JobID)
+	}()
 	select {
 	case err := <-fenceResult:
 		if err != nil {
