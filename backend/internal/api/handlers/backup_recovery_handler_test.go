@@ -736,11 +736,11 @@ func TestRecoveryMutationHandlersDelegateClosedCommandsToLiveRecoveryFacade(t *t
 	router.POST("/api/v1/recovery-jobs/:id/results/retain", handler.RetainResults)
 	router.POST("/api/v1/recovery-jobs/:id/results/cleanup", handler.CleanupResults)
 
-	create := httptest.NewRequest(http.MethodPost, "/api/v1/recovery-plans", strings.NewReader(
-		`{"schema_version":1,"repository_id":"`+strings.Repeat("b", 32)+`","recovery_point_id":"`+
-			strings.Repeat("c", 32)+`","catalog_generation_id":"`+strings.Repeat("e", 32)+
-			`","entry_ids":["`+strings.Repeat("f", 64)+`"],"target_mode":"isolated","target_node_id":9,`+
-			`"target_root_id":"recovery-root","conflict_policy":"fail_on_conflict"}`))
+	createBody := `{"schema_version":1,"repository_id":"` + strings.Repeat("b", 32) + `","recovery_point_id":"` +
+		strings.Repeat("c", 32) + `","catalog_generation_id":"` + strings.Repeat("e", 32) +
+		`","entry_ids":["` + strings.Repeat("f", 64) + `"],"target_mode":"isolated","target_node_id":9,` +
+		`"target_root_id":"recovery-root","conflict_policy":"fail_on_conflict"}`
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/recovery-plans", strings.NewReader(createBody))
 	create.Header.Set("Content-Type", "application/json")
 	create.Header.Set("Idempotency-Key", "recovery-plan-create-key")
 	createResponse := httptest.NewRecorder()
@@ -758,6 +758,32 @@ func TestRecoveryMutationHandlersDelegateClosedCommandsToLiveRecoveryFacade(t *t
 	}
 	if !strings.Contains(createResponse.Body.String(), `"schema_version":1`) {
 		t.Fatalf("create response omitted schema version: %s", createResponse.Body.String())
+	}
+	for _, testCase := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "missing"},
+		{name: "short", values: []string{"short"}},
+		{name: "illegal character", values: []string{"recovery-plan-invalid/key"}},
+		{name: "duplicate", values: []string{"recovery-plan-create-key", "recovery-plan-create-key"}},
+	} {
+		t.Run("invalid idempotency header/"+testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/recovery-plans", strings.NewReader(createBody))
+			request.Header.Set("Content-Type", "application/json")
+			for _, value := range testCase.values {
+				request.Header.Add("Idempotency-Key", value)
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			var envelope Response
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if response.Code != http.StatusBadRequest || envelope.Code != http.StatusBadRequest || envelope.Data != nil || len(service.planCreates) != 1 {
+				t.Fatalf("invalid header status=%d envelope=%+v requests=%d", response.Code, envelope, len(service.planCreates))
+			}
+		})
 	}
 	maximumEntries := make([]string, 10_000)
 	for index := range maximumEntries {

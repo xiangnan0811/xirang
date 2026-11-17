@@ -69,8 +69,6 @@ vi.mock("react-i18next", () => ({
         "policyEditor.sourcePath": "Source Path",
         "policyEditor.sourcePathPlaceholder": "/data",
         "policyEditor.submitCreate": "Create",
-        "policyEditor.targetPath": "Target Path",
-        "policyEditor.targetPathPlaceholder": "/backup",
         "policyEditor.titleCreate": "Create Policy",
         "policyEditor.drill.title": "Recovery Drill",
         "policyEditor.drill.unavailableTitle": "Recovery drills are unavailable",

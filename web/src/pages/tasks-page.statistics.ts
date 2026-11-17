@@ -86,10 +86,6 @@ export function formatStatisticValue(metric: TaskStatisticMetric, value: number)
   return formatDurationMs(value);
 }
 
-export function hasStatisticPoints(result: TaskStatisticResult | null): boolean {
-  return Boolean(result?.series.some((series) => series.points.length > 0));
-}
-
 export function latestPointValue(series: TaskStatisticSeries): number | null {
   let latest: { ts: number; value: number } | null = null;
   for (const point of series.points) {

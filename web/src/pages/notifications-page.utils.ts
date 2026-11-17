@@ -26,35 +26,3 @@ export function alertStatusMeta(status: AlertRecord["status"]) {
   }
 }
 
-export function severityWeight(severity: AlertRecord["severity"]) {
-  switch (severity) {
-    case "critical":
-      return 3;
-    case "warning":
-      return 2;
-    default:
-      return 1;
-  }
-}
-
-export function statusWeight(status: AlertRecord["status"]) {
-  switch (status) {
-    case "open":
-      return 3;
-    case "acked":
-      return 2;
-    default:
-      return 1;
-  }
-}
-
-export function severityToTone(severity: AlertRecord["severity"]) {
-  if (severity === "critical") {
-    return "offline" as const;
-  }
-  if (severity === "warning") {
-    return "warning" as const;
-  }
-  return "online" as const;
-}
-

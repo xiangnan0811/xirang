@@ -149,7 +149,7 @@ function daysInMonth(year: number, month: number): number {
 }
 
 /** Epoch seconds for calendar fields; setUTCFullYear avoids Date.UTC remapping years 0-99 to 19xx. */
-export function utcEpochSeconds(year: number, month: number, day: number, hour: number, minute: number, second: number): number {
+function utcEpochSeconds(year: number, month: number, day: number, hour: number, minute: number, second: number): number {
   const date = new Date(Date.UTC(2000, month - 1, day, hour, minute, second));
   date.setUTCFullYear(year, month - 1, day);
   return date.getTime() / 1000;

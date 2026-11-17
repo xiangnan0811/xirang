@@ -149,6 +149,19 @@ function incident(overrides: Partial<HealthIncidentGroup> = {}): HealthIncidentG
   };
 }
 
+const trafficWindowCopy = {
+  zh: [
+    { window: "1h", heading: "流量与活动趋势（近 1 小时）", populated: "近 1 小时流量与活动趋势图，峰值平均总吞吐 160 Mbps，开始事件 3 次，失败事件 1 次", empty: "近 1 小时流量与活动趋势图，暂无真实样本" },
+    { window: "24h", heading: "流量与活动趋势（近 24 小时）", populated: "近 24 小时流量与活动趋势图，峰值平均总吞吐 160 Mbps，开始事件 3 次，失败事件 1 次", empty: "近 24 小时流量与活动趋势图，暂无真实样本" },
+    { window: "7d", heading: "流量与活动趋势（近 7 天）", populated: "近 7 天流量与活动趋势图，峰值平均总吞吐 160 Mbps，开始事件 3 次，失败事件 1 次", empty: "近 7 天流量与活动趋势图，暂无真实样本" },
+  ],
+  en: [
+    { window: "1h", heading: "Traffic & Activity Trend (Last 1 hour)", populated: "Last 1 hour traffic & activity trend chart, peak throughput 160 Mbps, 3 started events, 1 failed events", empty: "Last 1 hour traffic & activity trend chart, no real samples yet" },
+    { window: "24h", heading: "Traffic & Activity Trend (Last 24 hours)", populated: "Last 24 hours traffic & activity trend chart, peak throughput 160 Mbps, 3 started events, 1 failed events", empty: "Last 24 hours traffic & activity trend chart, no real samples yet" },
+    { window: "7d", heading: "Traffic & Activity Trend (Last 7 days)", populated: "Last 7 days traffic & activity trend chart, peak throughput 160 Mbps, 3 started events, 1 failed events", empty: "Last 7 days traffic & activity trend chart, no real samples yet" },
+  ],
+} as const;
+
 describe("OverviewPage", () => {
   beforeEach(() => {
     refreshNodesMock.mockReset().mockResolvedValue(undefined);
@@ -430,6 +443,36 @@ describe("OverviewPage", () => {
     await waitFor(() => {
       expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(3);
     });
+  });
+
+  it.each([
+    ["zh", true],
+    ["zh", false],
+    ["en", true],
+    ["en", false],
+  ] as const)("shows the %s traffic title and chart label for every window (real samples: %s)", async (language, hasRealSamples) => {
+    fetchOverviewTrafficMock.mockImplementation((window: string) => Promise.resolve({
+      window,
+      bucketMinutes: 5,
+      hasRealSamples,
+      generatedAt: "2026-03-08T00:00:00Z",
+      points: hasRealSamples
+        ? [
+          { timestamp: "2026-03-08T00:00:00Z", timestampMs: Date.parse("2026-03-08T00:00:00Z"), label: "00:00", throughputMbps: 120, sampleCount: 1, activeTaskCount: 1, startedCount: 2, failedCount: 1 },
+          { timestamp: "2026-03-08T00:05:00Z", timestampMs: Date.parse("2026-03-08T00:05:00Z"), label: "00:05", throughputMbps: 160, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+        ]
+        : [],
+    }));
+    await setLanguage(language);
+    setContext(0);
+    const user = userEvent.setup();
+    render(<OverviewPage />);
+
+    for (const copy of trafficWindowCopy[language]) {
+      await user.click(screen.getByRole("button", { name: copy.window }));
+      expect(await screen.findByRole("heading", { name: copy.heading })).toBeInTheDocument();
+      expect(await screen.findByRole("img", { name: hasRealSamples ? copy.populated : copy.empty })).toBeInTheDocument();
+    }
   });
 
   it("能正确渲染最近同步任务框及预计传输量", async () => {
