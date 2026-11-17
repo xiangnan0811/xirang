@@ -94,6 +94,17 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 			if metadataCheckout < 0 || verifier < 0 {
 				t.Fatal("metadata verifier steps missing")
 			}
+			t.Run("alternative-full-sha-checkouts", func(t *testing.T) {
+				workflow := ciWorkflow{Jobs: maps.Clone(base.Jobs)}
+				job := workflow.Jobs[protected.id]
+				job.Steps = slices.Clone(job.Steps)
+				job.Steps[checkout].Uses = "actions/checkout@" + strings.Repeat("a", 40)
+				job.Steps[metadataCheckout].Uses = "actions/checkout@" + strings.Repeat("b", 40)
+				workflow.Jobs[protected.id] = job
+				if err := validateProtectedSourceWorkflow(workflow); err != nil {
+					t.Fatalf("alternative full-SHA checkout references rejected: %v", err)
+				}
+			})
 			tests := []struct {
 				name   string
 				mutate func(*ciWorkflowJob)
@@ -121,6 +132,12 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 				}},
 				{"checkout-moving-ref", func(job *ciWorkflowJob) { job.Steps[checkout].With["ref"] = "main" }},
 				{"checkout-wrong-pin", func(job *ciWorkflowJob) { job.Steps[checkout].Uses = "actions/checkout@main" }},
+				{"checkout-version-tag", func(job *ciWorkflowJob) { job.Steps[checkout].Uses = "actions/checkout@v4" }},
+				{"checkout-short-sha", func(job *ciWorkflowJob) { job.Steps[checkout].Uses = "actions/checkout@" + strings.Repeat("a", 39) }},
+				{"checkout-nonhex-sha", func(job *ciWorkflowJob) {
+					job.Steps[checkout].Uses = "actions/checkout@" + strings.Repeat("a", 39) + "g"
+				}},
+				{"checkout-overlong-sha", func(job *ciWorkflowJob) { job.Steps[checkout].Uses = "actions/checkout@" + strings.Repeat("a", 41) }},
 				{"checkout-missing", func(job *ciWorkflowJob) { job.Steps[checkout].Uses = "" }},
 				{"checkout-duplicate", func(job *ciWorkflowJob) { job.Steps = append(job.Steps, job.Steps[checkout]) }},
 				{"source-sparse", func(job *ciWorkflowJob) { job.Steps[checkout].With["sparse-checkout"] = "scripts" }},
@@ -140,6 +157,16 @@ func TestBackendCIRaceGateIncludesConcurrentStatePackages(t *testing.T) {
 				{"verifier-command", func(job *ciWorkflowJob) { job.Steps[verifier].Run = "true" }},
 				{"metadata-ref", func(job *ciWorkflowJob) { job.Steps[metadataCheckout].With["ref"] = "main" }},
 				{"metadata-pin", func(job *ciWorkflowJob) { job.Steps[metadataCheckout].Uses = "actions/checkout@main" }},
+				{"metadata-version-tag", func(job *ciWorkflowJob) { job.Steps[metadataCheckout].Uses = "actions/checkout@v4" }},
+				{"metadata-short-sha", func(job *ciWorkflowJob) {
+					job.Steps[metadataCheckout].Uses = "actions/checkout@" + strings.Repeat("a", 39)
+				}},
+				{"metadata-nonhex-sha", func(job *ciWorkflowJob) {
+					job.Steps[metadataCheckout].Uses = "actions/checkout@" + strings.Repeat("a", 39) + "g"
+				}},
+				{"metadata-overlong-sha", func(job *ciWorkflowJob) {
+					job.Steps[metadataCheckout].Uses = "actions/checkout@" + strings.Repeat("a", 41)
+				}},
 				{"metadata-sparse", func(job *ciWorkflowJob) { delete(job.Steps[metadataCheckout].With, "sparse-checkout") }},
 				{"metadata-checkout-missing", func(job *ciWorkflowJob) { job.Steps = slices.Delete(job.Steps, metadataCheckout, metadataCheckout+1) }},
 				{"metadata-checkout-duplicate", func(job *ciWorkflowJob) { job.Steps = append(job.Steps, job.Steps[metadataCheckout]) }},
@@ -269,6 +296,8 @@ const protectedStepGate = "${{ needs.classify.result != 'success' || needs.class
 const protectedAlwaysStepGate = "${{ always() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}"
 const metadataStepGate = "${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' }}"
 
+var checkoutFullSHAReference = regexp.MustCompile(`^actions/checkout@[0-9a-f]{40}$`)
+
 func validateProtectedSourceWorkflow(workflow ciWorkflow) error {
 	classify, ok := workflow.Jobs["classify"]
 	if !ok || classify.Outputs["record"] != "${{ steps.event.outputs.record }}" {
@@ -300,7 +329,7 @@ func validateProtectedSourceWorkflow(workflow ciWorkflow) error {
 		for index, step := range job.Steps {
 			if step.Name == "Checkout metadata verifier" {
 				metadataCheckout++
-				if step.If != metadataStepGate || step.Uses != requiredPostgresCheckout ||
+				if step.If != metadataStepGate || !checkoutFullSHAReference.MatchString(step.Uses) ||
 					!maps.Equal(step.With, map[string]string{
 						"ref": "${{ github.sha }}", "fetch-depth": "2", "persist-credentials": "false",
 						"sparse-checkout-cone-mode": "false", "sparse-checkout": "scripts/classify-ci-event.py",
@@ -335,7 +364,7 @@ func validateProtectedSourceWorkflow(workflow ciWorkflow) error {
 			}
 			if strings.HasPrefix(step.Uses, "actions/checkout@") {
 				checkouts++
-				if step.Uses != requiredPostgresCheckout || step.With["ref"] != "${{ github.sha }}" ||
+				if !checkoutFullSHAReference.MatchString(step.Uses) || step.With["ref"] != "${{ github.sha }}" ||
 					step.With["sparse-checkout"] != "" || step.With["sparse-checkout-cone-mode"] != "" ||
 					(protected.id == "doc-freshness" && step.With["fetch-depth"] != "0") {
 					return fmt.Errorf("%s step %d %q has invalid checkout pin, ref, or history", protected.id, index, step.Name)
@@ -365,7 +394,6 @@ const requiredPostgresRunnerCommand = `bash ../scripts/run-required-postgres-tes
 
 const requiredPostgresSourceGate = "${{ !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'metadata') }}"
 const requiredPostgresJobName = "${{ needs.classify.result == 'success' && needs.classify.outputs.mode == 'metadata' && 'Metadata only / PostgreSQL Migration Parity' || 'PostgreSQL Migration Parity' }}"
-const requiredPostgresCheckout = "actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0"
 
 var requiredPostgresEnvironment = []string{
 	"REQUIRE_POSTGRES_MIGRATION_TEST", "REQUIRE_POSTGRES_RECOVERY_TEST",
@@ -406,7 +434,7 @@ func validateRequiredPostgresWorkflow(job ciWorkflowJob) error {
 	runners, selftests, uploads, backups, checkouts := 0, 0, 0, 0, 0
 	for _, step := range job.Steps {
 		if strings.HasPrefix(step.Uses, "actions/checkout@") {
-			if step.Uses != requiredPostgresCheckout || step.With["ref"] != "${{ github.sha }}" || step.If != "" {
+			if !checkoutFullSHAReference.MatchString(step.Uses) || step.With["ref"] != "${{ github.sha }}" || step.If != "" {
 				return fmt.Errorf("postgres checkout must use the pinned action and event SHA")
 			}
 			checkouts++
@@ -477,6 +505,20 @@ func TestPostgresMigrationCIHasRequiredLifecycleSlices(t *testing.T) {
 
 func TestRequiredPostgresWorkflowRejectsBypasses(t *testing.T) {
 	base := loadPostgresWorkflowJob(t)
+	t.Run("alternative-full-sha-checkout", func(t *testing.T) {
+		job := base
+		job.Steps = slices.Clone(base.Steps)
+		checkout := slices.IndexFunc(job.Steps, func(step ciWorkflowStep) bool {
+			return strings.HasPrefix(step.Uses, "actions/checkout@")
+		})
+		if checkout < 0 {
+			t.Fatal("base workflow has no checkout")
+		}
+		job.Steps[checkout].Uses = "actions/checkout@" + strings.Repeat("a", 40)
+		if err := validateRequiredPostgresWorkflow(job); err != nil {
+			t.Fatalf("alternative full-SHA checkout reference rejected: %v", err)
+		}
+	})
 	for _, tc := range []struct {
 		name   string
 		mutate func(*ciWorkflowJob)
@@ -496,6 +538,41 @@ func TestRequiredPostgresWorkflowRejectsBypasses(t *testing.T) {
 			for i := range job.Steps {
 				if strings.HasPrefix(job.Steps[i].Uses, "actions/checkout@") {
 					job.Steps[i].With["ref"] = "main"
+				}
+			}
+		}},
+		{"checkout-moving-action-ref", func(job *ciWorkflowJob) {
+			for i := range job.Steps {
+				if strings.HasPrefix(job.Steps[i].Uses, "actions/checkout@") {
+					job.Steps[i].Uses = "actions/checkout@main"
+				}
+			}
+		}},
+		{"checkout-version-tag", func(job *ciWorkflowJob) {
+			for i := range job.Steps {
+				if strings.HasPrefix(job.Steps[i].Uses, "actions/checkout@") {
+					job.Steps[i].Uses = "actions/checkout@v4"
+				}
+			}
+		}},
+		{"checkout-short-sha", func(job *ciWorkflowJob) {
+			for i := range job.Steps {
+				if strings.HasPrefix(job.Steps[i].Uses, "actions/checkout@") {
+					job.Steps[i].Uses = "actions/checkout@" + strings.Repeat("a", 39)
+				}
+			}
+		}},
+		{"checkout-nonhex-sha", func(job *ciWorkflowJob) {
+			for i := range job.Steps {
+				if strings.HasPrefix(job.Steps[i].Uses, "actions/checkout@") {
+					job.Steps[i].Uses = "actions/checkout@" + strings.Repeat("a", 39) + "g"
+				}
+			}
+		}},
+		{"checkout-overlong-sha", func(job *ciWorkflowJob) {
+			for i := range job.Steps {
+				if strings.HasPrefix(job.Steps[i].Uses, "actions/checkout@") {
+					job.Steps[i].Uses = "actions/checkout@" + strings.Repeat("a", 41)
 				}
 			}
 		}},
