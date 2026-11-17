@@ -121,6 +121,9 @@ blob 与已审阅的合并源码 `429b92aa1144d6d11e41717cfb7d17cc2f190b6f`（S�
 `Unreleased`，不为此单独制造正式版本或镜像；仍核对正常 hooks、required CI、
 合并后同 SHA 的完整 `main` push CI 与 Release Please 的实际结果。
 
+checkout v6.0.3 的同版 commit pin 修正及 Restic 重复接口断言测试清理属于上述纯 CI／测试
+范围，保留生产类型断言和行为测试，不新增运行行为、依赖版本、API、配置或 schema migration。
+
 双语 key 对齐检查接入前端统一门禁属于 `ci`／测试／文档变更：只验证 `zh.ts` 与 `en.ts`
 的叶子 key 集合，沿正常 pre-push、本地 parity 与前端 CI 传播失败，不代表代码引用、
 共同缺失或未用 key 已检查。没有应用运行行为、依赖、API、配置或 schema 变化时，说明留在

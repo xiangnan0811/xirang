@@ -57,10 +57,6 @@ func TestResticEvidenceConfigIgnoresLegacyAccessSecretsAndExtractsOnlyBoundedExc
 	}
 }
 
-func TestResticExecutorImplementsPublicationExecutor(t *testing.T) {
-	var _ PublicationExecutor = (*ResticExecutor)(nil)
-}
-
 func TestResticPublicationExecutorRejectsTaskAttemptProviderAndRunIdentityMismatch(t *testing.T) {
 	publisher := &evidencePublisher{}
 	strategy, err := provider.NewResticPublicationStrategy(publisher, evidenceManifestBuilder{})
