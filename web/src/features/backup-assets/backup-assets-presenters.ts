@@ -1,5 +1,4 @@
 import type {
-  BackupContentClassification,
   BackupRepository,
   CatalogCapabilityCode,
 } from "@/types/domain";
@@ -122,10 +121,6 @@ export function presentBackupAssetsCode(
     if (known !== undefined) return known;
   }
   return { translationKey: "backupAssets.codes.unknown", tone: "warning" };
-}
-
-export function isKnownContentClassification(value: unknown): value is BackupContentClassification {
-  return value === "non_secret" || value === "secret" || value === "unknown";
 }
 
 export function backupAssetsProviderKey(provider: BackupRepository["providerKind"]): string {

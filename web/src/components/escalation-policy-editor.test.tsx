@@ -42,7 +42,6 @@ vi.mock("react-i18next", () => ({
         "escalation.validation.firstDelayMustBeZero": "首级延迟必须为 0",
         "escalation.validation.delayMustIncrease": "延迟必须严格递增",
         "escalation.validation.integrationsRequired": "每级至少选择 1 个通道",
-        "escalation.validation.tooManyLevels": "级别最多 5 个",
         "escalation.validation.tagTooLong": "单个 tag 最长 32 字符",
         "escalation.validation.tooManyTags": "每级最多 10 个 tag",
         "escalation.errors.conflict": "升级策略名称已存在",

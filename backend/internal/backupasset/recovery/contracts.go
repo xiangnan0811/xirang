@@ -76,7 +76,6 @@ var (
 	ErrExactSelectionLimit           = errors.New("exact recovery selection limit exceeded")
 	ErrRecoverySourceUnavailable     = errors.New("recovery source is unavailable")
 	ErrRecoverySourceChanged         = errors.New("recovery source changed")
-	ErrInvalidPlanIdempotency        = errors.New("invalid recovery plan idempotency")
 	ErrPlanIdempotencyConflict       = errors.New("recovery plan idempotency conflict")
 	ErrRecoveryPlanUnavailable       = errors.New("recovery plan is unavailable")
 	ErrInvalidRecoveryOperation      = errors.New("invalid recovery operation")

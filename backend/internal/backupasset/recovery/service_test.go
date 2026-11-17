@@ -5147,6 +5147,46 @@ func TestRecoveryPlanTargetRootRotationCannotCrossBind(t *testing.T) {
 	}
 }
 
+func TestPlanCreateRejectsInvalidIdempotencyKeysWithoutWrites(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "missing", key: ""},
+		{name: "short", key: "short"},
+		{name: "illegal character", key: "recovery-plan-invalid/key"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Run("CreatePlan", func(t *testing.T) {
+				fixture := newPlanServiceTestFixture(t, false)
+				fixture.request.IdempotencyKey = testCase.key
+				if _, err := fixture.service.CreatePlan(context.Background(), fixture.request); !errors.Is(err, ErrInvalidRecoveryPlan) {
+					t.Fatalf("CreatePlan() error = %v, want ErrInvalidRecoveryPlan", err)
+				}
+				assertRecoveryPlanAndItemCounts(t, fixture.db, 0, 0)
+			})
+			t.Run("CreatePlanTx", func(t *testing.T) {
+				fixture := newPlanServiceTestFixture(t, false)
+				fixture.request.IdempotencyKey = testCase.key
+				tx := fixture.db.Begin()
+				if tx.Error != nil {
+					t.Fatal(tx.Error)
+				}
+				t.Cleanup(func() { _ = tx.Rollback().Error })
+				if _, err := fixture.service.CreatePlanTx(context.Background(), tx, fixture.request); !errors.Is(err, ErrInvalidRecoveryPlan) {
+					t.Fatalf("CreatePlanTx() error = %v, want ErrInvalidRecoveryPlan", err)
+				}
+				assertRecoveryPlanAndItemCounts(t, tx, 0, 0)
+				if err := tx.Rollback().Error; err != nil {
+					t.Fatalf("rollback caller transaction: %v", err)
+				}
+				assertRecoveryPlanAndItemCounts(t, fixture.db, 0, 0)
+			})
+		})
+	}
+}
+
 func TestPlanIdempotencyReplayAndOneFieldConflicts(t *testing.T) {
 	t.Run("same intent replays the current durable plan state", func(t *testing.T) {
 		fixture := newPlanServiceTestFixture(t, false)

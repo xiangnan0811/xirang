@@ -65,11 +65,3 @@ export function useDatetimeFormat(): [string, (v: string) => void] {
   const raw = useSyncExternalStore(datetimeFormatStore.subscribe, datetimeFormatStore.getSnapshot);
   return [raw, datetimeFormatStore.setValue];
 }
-
-/** 供 use-console-data.ts 调用，获取当前刷新间隔（毫秒），0 表示禁用 */
-export function getRefreshIntervalMs(): number {
-  const raw = getStorageValue(REFRESH_INTERVAL_KEY, "60");
-  const seconds = parseInt(raw, 10);
-  if (!seconds || seconds <= 0) return 0;
-  return seconds * 1000;
-}
