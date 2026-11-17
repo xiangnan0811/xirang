@@ -85,17 +85,12 @@ func (h *NodeHandler) RunDoctor(c *gin.Context) {
 		return
 	}
 
-	result, credential, err := h.runNodeDoctor(c.Request.Context(), node)
-	if err != nil {
-		h.writeNodeDoctorAudit(c, node, credential, credentialaudit.OutcomeFailure, "run", err, nil)
-		respondInternalError(c, err)
-		return
-	}
+	result, credential := h.runNodeDoctor(c.Request.Context(), node)
 	h.writeNodeDoctorAudit(c, node, credential, doctorAuditOutcome(result.Checks), "complete", nil, result.Checks)
 	respondOK(c, result)
 }
 
-func (h *NodeHandler) runNodeDoctor(ctx context.Context, node model.Node) (doctorResponse, sshutil.ResolvedCredential, error) {
+func (h *NodeHandler) runNodeDoctor(ctx context.Context, node model.Node) (doctorResponse, sshutil.ResolvedCredential) {
 	runner := &nodeDoctorRunner{
 		db:          h.db,
 		settingsSvc: h.settingsSvc,
@@ -127,14 +122,14 @@ type nodeDoctorRunner struct {
 	checks      []doctorCheckResult
 }
 
-func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, sshutil.ResolvedCredential, error) {
+func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, sshutil.ResolvedCredential) {
 	r.checkAuthConfig()
 	authMethods, _, credential, authErr := sshutil.BuildSSHAuthWithKeyForPurpose(r.node, r.db, sshutil.PurposeNodeTest)
 	if authErr != nil {
 		r.add("ssh", doctorStatusFail, "SSH 认证配置无效", "检查节点认证方式、密码或绑定的 SSH Key。")
 		r.add("known_hosts", doctorStatusSkip, "未建立 SSH 连接，跳过主机密钥校验", "先修复认证配置后重新运行 Doctor。")
 		r.addSSHDependentSkips()
-		return r.response(), credential, nil
+		return r.response(), credential
 	}
 
 	callback, knownHostsEvidence, knownHostsStatus, knownHostsSuggestion := resolveDoctorHostKeyCallback()
@@ -142,7 +137,7 @@ func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, sshutil.Res
 		r.add("known_hosts", knownHostsStatus, knownHostsEvidence, knownHostsSuggestion)
 		r.add("ssh", doctorStatusSkip, "known_hosts 配置不可用，未尝试 SSH 连接", "修复 known_hosts 配置后重新运行 Doctor。")
 		r.addSSHDependentSkips()
-		return r.response(), credential, nil
+		return r.response(), credential
 	}
 
 	client, latency, sshEvidence, sshStatus, sshSuggestion := r.dial(ctx, authMethods, callback)
@@ -157,7 +152,7 @@ func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, sshutil.Res
 			}
 		}
 		r.addSSHDependentSkips()
-		return r.response(), credential, nil
+		return r.response(), credential
 	}
 	defer client.Close() //nolint:errcheck // close error is not actionable after diagnostics
 
@@ -171,7 +166,7 @@ func (r *nodeDoctorRunner) run(ctx context.Context) (doctorResponse, sshutil.Res
 	r.checkBackupDirectories(ctx, client)
 	r.checkDisk(ctx, client)
 
-	return r.response(), credential, nil
+	return r.response(), credential
 }
 
 func (h *NodeHandler) writeNodeDoctorAudit(c *gin.Context, node model.Node, credential sshutil.ResolvedCredential, outcome, stage string, err error, checks []doctorCheckResult) {

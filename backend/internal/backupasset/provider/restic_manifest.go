@@ -376,10 +376,7 @@ func (state *resticManifestState) acceptNode(object map[string]json.RawMessage) 
 		}
 		return
 	}
-	if err := state.hasher.writeNode(node); err != nil {
-		state.fail(backupasset.FailureManifestPartial)
-		return
-	}
+	state.hasher.writeNode(node)
 	if node.NativeType == "file" {
 		if state.logical > math.MaxUint64-*node.Size {
 			state.fail(backupasset.FailureProviderResourceLimit)
@@ -525,7 +522,7 @@ func writeManifestPrelude(writer *backupasset.CanonicalSHA256, domain, nativePoi
 	writer.String(resticManifestTraversalProfile)
 }
 
-func (canonicalizer *manifestCanonicalizer) writeNode(node manifestNode) error {
+func (canonicalizer *manifestCanonicalizer) writeNode(node manifestNode) {
 	for _, writer := range []*backupasset.CanonicalSHA256{canonicalizer.complete, canonicalizer.partial} {
 		writer.String(node.Path)
 		writer.String(node.NativeType)
@@ -556,7 +553,6 @@ func (canonicalizer *manifestCanonicalizer) writeNode(node manifestNode) error {
 			writer.Uint64(*node.Inode)
 		}
 	}
-	return nil
 }
 
 func manifestNodeBitmap(node manifestNode) uint8 {

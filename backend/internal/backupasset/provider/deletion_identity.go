@@ -98,12 +98,6 @@ func CompareDeletionTargetAuthority(left, right DeletionTargetIdentityInput) err
 	return nil
 }
 
-// DeletionTargetAuthoritiesEqual is the non-error comparator for callers that
-// only need a fail-closed equality check.
-func DeletionTargetAuthoritiesEqual(left, right DeletionTargetIdentityInput) bool {
-	return CompareDeletionTargetAuthority(left, right) == nil
-}
-
 func canonicalDeletionTargetProjection(input DeletionTargetIdentityInput) (DeletionTargetProjection, error) {
 	if err := validateDeletionTargetIdentityInput(input); err != nil {
 		return DeletionTargetProjection{}, err

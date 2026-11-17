@@ -15,14 +15,8 @@ func TestFeishuSign(t *testing.T) {
 	ts := int64(1700000000)
 	secret := "test-feishu-secret"
 
-	sign1, err := feishuSign(secret, ts)
-	if err != nil {
-		t.Fatalf("feishuSign 失败: %v", err)
-	}
-	sign2, err := feishuSign(secret, ts)
-	if err != nil {
-		t.Fatalf("feishuSign 第二次调用失败: %v", err)
-	}
+	sign1 := feishuSign(secret, ts)
+	sign2 := feishuSign(secret, ts)
 	if sign1 != sign2 {
 		t.Errorf("相同输入应产生相同签名，got %q vs %q", sign1, sign2)
 	}
@@ -31,7 +25,7 @@ func TestFeishuSign(t *testing.T) {
 	}
 
 	// 不同时间戳应产生不同签名
-	sign3, _ := feishuSign(secret, ts+1)
+	sign3 := feishuSign(secret, ts+1)
 	if sign1 == sign3 {
 		t.Error("不同时间戳应产生不同签名")
 	}
@@ -42,14 +36,8 @@ func TestDingtalkSign(t *testing.T) {
 	ts := int64(1700000000000) // 毫秒
 	secret := "test-dingtalk-secret"
 
-	sign1, err := dingtalkSign(secret, ts)
-	if err != nil {
-		t.Fatalf("dingtalkSign 失败: %v", err)
-	}
-	sign2, err := dingtalkSign(secret, ts)
-	if err != nil {
-		t.Fatalf("dingtalkSign 第二次调用失败: %v", err)
-	}
+	sign1 := dingtalkSign(secret, ts)
+	sign2 := dingtalkSign(secret, ts)
 	if sign1 != sign2 {
 		t.Errorf("相同输入应产生相同签名，got %q vs %q", sign1, sign2)
 	}
@@ -58,7 +46,7 @@ func TestDingtalkSign(t *testing.T) {
 	}
 
 	// 飞书和钉钉签名算法不同，即使 secret 相同也应该不同
-	feishuSign1, _ := feishuSign(secret, 1700000000) // 秒级
+	feishuSign1 := feishuSign(secret, 1700000000) // 秒级
 	if sign1 == feishuSign1 {
 		t.Error("飞书和钉钉签名算法不同，不应相同")
 	}

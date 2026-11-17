@@ -82,13 +82,3 @@ func IsDevelopmentEnv() bool {
 func IsProductionEnv() bool {
 	return !IsDevelopmentEnv()
 }
-
-// IsGinDebug reports whether GIN_MODE is "debug".
-func IsGinDebug() bool {
-	return strings.ToLower(strings.TrimSpace(os.Getenv("GIN_MODE"))) == "debug"
-}
-
-// IsGinRelease reports whether GIN_MODE is "release".
-func IsGinRelease() bool {
-	return strings.ToLower(strings.TrimSpace(os.Getenv("GIN_MODE"))) == "release"
-}

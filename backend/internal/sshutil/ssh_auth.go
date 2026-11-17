@@ -28,36 +28,14 @@ import (
 
 var knownHostsWriteMu sync.Mutex
 
-// ResolveKeyContent resolves the SSH private key content for a node.
-// Returns (keyContent, keySource, error). Legacy callers should prefer
-// ResolveKeyContentForPurpose so managed SSHKey metadata is enforced.
-func ResolveKeyContent(node model.Node, db *gorm.DB) (string, string, error) {
-	content, source, _, err := ResolveKeyContentForPurpose(node, db, "")
-	return content, source, err
-}
-
 // ResolveKeyContentForPurpose resolves private key content and enforces managed
 // SSHKey least-privilege metadata when the key comes from ssh_keys.
 func ResolveKeyContentForPurpose(node model.Node, db *gorm.DB, purpose string) (string, string, ResolvedCredential, error) {
 	return DefaultCredentialProvider().ResolveKeyContentForPurpose(node, db, purpose)
 }
 
-// BuildSSHAuth builds SSH authentication methods for a node.
-// Returns (authMethods, error). For key auth, it validates and parses the private key.
-func BuildSSHAuth(node model.Node, db *gorm.DB) ([]ssh.AuthMethod, error) {
-	authMethods, _, err := BuildSSHAuthWithCredential(node, db, "")
-	return authMethods, err
-}
-
 func BuildSSHAuthForPurpose(node model.Node, db *gorm.DB, purpose string) ([]ssh.AuthMethod, ResolvedCredential, error) {
 	return BuildSSHAuthWithCredential(node, db, purpose)
-}
-
-// BuildSSHAuthWithKey builds SSH authentication methods and also returns the prepared key content.
-// This is used by handlers that need the prepared key (e.g., for updating SSHKey.LastUsedAt).
-func BuildSSHAuthWithKey(node model.Node, db *gorm.DB) ([]ssh.AuthMethod, string, error) {
-	authMethods, preparedKey, _, err := BuildSSHAuthWithKeyForPurpose(node, db, "")
-	return authMethods, preparedKey, err
 }
 
 func BuildSSHAuthWithKeyForPurpose(node model.Node, db *gorm.DB, purpose string) ([]ssh.AuthMethod, string, ResolvedCredential, error) {

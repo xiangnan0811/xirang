@@ -117,16 +117,6 @@ func ResolveTaskAlerts(db *gorm.DB, taskID uint, note string) error {
 	return ensureDispatcher(db).ResolveTaskAlerts(taskID, note)
 }
 
-// RaiseRetentionFailure emits a warning alert for backup retention failures.
-func RaiseRetentionFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
-	return ensureDispatcher(db).RaiseRetentionFailure(policyID, policyName, nodeName, nodeID, message)
-}
-
-// RaiseIntegrityCheckFailure emits a warning alert for backup integrity check failures.
-func RaiseIntegrityCheckFailure(db *gorm.DB, policyID uint, policyName string, nodeName string, nodeID uint, message string) error {
-	return ensureDispatcher(db).RaiseIntegrityCheckFailure(policyID, policyName, nodeName, nodeID, message)
-}
-
 // SendProbe sends a connectivity test message through the given integration channel.
 func SendProbe(channel model.Integration) error {
 	d := defaultDispatcher

@@ -2899,7 +2899,8 @@ func (m *Manager) ReconcilePolicySchedules(_ uint, taskIDs []uint) error {
 	if m == nil {
 		return fmt.Errorf("policy schedule reconciler unavailable")
 	}
-	return policy.RemovePolicySchedules(m.db, m, taskIDs)
+	policy.RemovePolicySchedules(m, taskIDs)
+	return nil
 }
 
 func (m *Manager) TriggerFromScheduler(taskID uint, scheduledAt time.Time) error {

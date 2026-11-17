@@ -2,7 +2,6 @@ package policy
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"xirang/backend/internal/cronutil"
@@ -12,16 +11,6 @@ import (
 	"gorm.io/gorm/clause"
 	"xirang/backend/internal/rsyncconfinement"
 )
-
-// NodeTargetPath retains the legacy backup-dir layout for read-only historical
-// inventory. New policy tasks must use PolicyNodeTargetPath so policy IDs and
-// node IDs own disjoint physical directories.
-func NodeTargetPath(basePath string, backupDir string) string {
-	if strings.ContainsAny(backupDir, "/\\") || strings.Contains(backupDir, "..") || backupDir == "" {
-		return filepath.Join(strings.TrimRight(basePath, "/"), "_invalid_node_")
-	}
-	return filepath.Join(strings.TrimRight(basePath, "/"), backupDir)
-}
 
 func localTargetOwner(task model.Task) (TargetOwner, bool) {
 	target := strings.TrimSpace(task.RsyncTarget)
@@ -458,12 +447,11 @@ func SyncPolicySchedules(db *gorm.DB, runner TaskRunner, policyID uint) error {
 	return nil
 }
 
-func RemovePolicySchedules(db *gorm.DB, runner TaskRunner, taskIDs []uint) error {
+func RemovePolicySchedules(runner TaskRunner, taskIDs []uint) {
 	if runner == nil {
-		return nil
+		return
 	}
 	for _, taskID := range taskIDs {
 		runner.RemoveSchedule(taskID)
 	}
-	return nil
 }

@@ -13,11 +13,6 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// DialSSHForNode 为节点建立 SSH 连接（节点的 SSHKey 应已通过 Preload 加载）。
-func DialSSHForNode(ctx context.Context, node model.Node) (*ssh.Client, error) {
-	return DialSSHForNodePurpose(ctx, node, "")
-}
-
 // DialSSHForNodePurpose 为节点建立 SSH 连接，并对托管 SSHKey 执行用途/节点/标签范围校验。
 func DialSSHForNodePurpose(ctx context.Context, node model.Node, purpose string) (*ssh.Client, error) {
 	resolvedNode := node
@@ -142,7 +137,7 @@ func writeRuntimeCredentialAudit(ctx context.Context, node model.Node, purpose s
 }
 
 // ResolveSSHUser 返回节点的 SSH 用户名，空值时回退到 "root" 并记录警告。
-// 用于不走 DialSSHForNode 的场景（如本地 rsync -e ssh）。
+// 用于不走 DialSSHForNodePurpose 的场景（如本地 rsync -e ssh）。
 func ResolveSSHUser(node model.Node) string {
 	user := strings.TrimSpace(node.Username)
 	if user == "" {
