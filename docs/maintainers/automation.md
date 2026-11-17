@@ -377,6 +377,14 @@ Core Compose 自测的 APK 绕过检查须完整消费经注释过滤的 Dockerf
 - 已归档或废弃的 action 应迁到受维护上游，再更新版本。Release Please 使用 `googleapis/release-please-action`。
 - 修改发布工作流时分别验证 amd64/arm64 构建和扫描的实际平台选择；multi-arch manifest 成功不能证明每个平台扫描正确。
 
+checkout v6.0.3 的附注 tag 对象 `9f698171ed81b15d1823a05fc7211befd50c8ae0`
+解析到实际 commit `df4cb1c069e1874edd31b4311f1884172cec0e10`；CI、构建输入采集／审计、
+部署和 PR metadata 工作流均固定后者并保留 `# v6.0.3`。该同版 pin 修正保留 Node 24
+runtime 和原工作流行为，既有 v6.0.2 引用的版本统一另行评估；修改部署工作流不执行部署。
+CI 静态合同测试检查 checkout 使用完整 40 位十六进制 SHA 引用，并保留事件 SHA、历史、
+metadata 分支及 required 检查的约束；不将某次 action 摘要写死为永久测试期望。
+SHA 的实际 commit 对象身份仍须按上述上游 tag 解析规则核验，格式检查不能替代对象核验。
+
 Worker smoke 与其自测对闭包上传和下载 action 的完整 SHA 及版本旁注进行精确断言；
 升级这两个 action 时须同步 `scripts/test-asset-worker.sh`、
 `scripts/test-asset-worker.test.sh` 中的断言及未固定 SHA mutation，保留闭包生产、

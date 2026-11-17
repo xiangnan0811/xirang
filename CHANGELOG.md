@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### CI 与测试维护
+
+- 将 5 个工作流共 20 处 checkout v6.0.3 引用由附注 tag 对象固定为同版实际 commit，保留版本旁注、Node 24 runtime 和工作流行为；CI 合同测试改验完整 SHA 引用格式并保留事件 SHA、metadata 与 required 门禁约束，避免写死旧 action 摘要。其他 checkout 版本的统一另行评估。
+- 删除 Restic 执行器一个与生产包级类型断言重复的测试函数，保留生产接口保障及相邻行为测试。上述改动无运行行为、依赖版本、API、配置或 schema migration 变化，不单独发行版本或镜像。
+
 ## [0.73.21](https://github.com/xiangnan0811/xirang/compare/v0.73.20...v0.73.21) (2026-11-16)
 
 

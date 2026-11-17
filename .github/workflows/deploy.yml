@@ -30,7 +30,7 @@ jobs:
       IMAGE_WAIT_INTERVAL_SECONDS: ${{ vars.IMAGE_WAIT_INTERVAL_SECONDS || 10 }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: DockerHub login
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0

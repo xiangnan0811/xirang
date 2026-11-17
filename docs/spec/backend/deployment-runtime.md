@@ -10,6 +10,10 @@
 
 Compose 必须有 `.env`；部署从 `.env.deploy` 复制并填写。生产秘密为空由配置/初始化验证拒绝，首次管理员密码只在数据库尚无 admin 时需要。具体必填值、优先级和生效条件引用环境变量主文。
 
+手动部署工作流的 checkout 引用遵循[Actions commit pin 规则](../../maintainers/automation.md#actions-与-ci)。
+同版本附注 tag 到实际 commit 的 pin 修正保留原部署行为与 Node runtime；部署仍须显式
+触发工作流，合并该维护变更不执行部署。
+
 官方镜像同时保留 `/usr/local/bin/xirang-recover-admin`，并提供独立
 `/usr/local/bin/xirang-recover-account`。前者仅在零管理员时提升现有角色，后者只在全部
 Core/worker 停止后选择重置原账户密码和/或第二因子；均不执行迁移或创建账户。
