@@ -2238,19 +2238,6 @@ func RcloneNativeFrozenDeletionVersions(
 	return owned, err
 }
 
-// RcloneNativeFrozenReferenceVersions reconstructs the complete point-view
-// reference set from the accepted native commit and manifest. Unlike
-// RcloneNativeFrozenDeletionVersions, this includes unchanged point-view
-// versions and excludes mutation-only/control records.
-func RcloneNativeFrozenReferenceVersions(
-	ctx context.Context,
-	request RcloneNativePublicationRequest,
-	commitKey, commitVersionID string,
-) ([]RcloneNativeExactVersion, error) {
-	_, references, err := reconstructRcloneNativeFrozenVersionSets(ctx, request, commitKey, commitVersionID)
-	return references, err
-}
-
 func reconstructRcloneNativeFrozenVersionSets(
 	ctx context.Context,
 	request RcloneNativePublicationRequest,

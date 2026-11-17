@@ -499,11 +499,6 @@ type StoredBundleEvidence struct {
 	ToolchainAttestationSHA256 string
 }
 
-func VerifyStoredBundleTree(root, expectedFingerprint string) error {
-	_, err := InspectStoredBundleTree(root, expectedFingerprint)
-	return err
-}
-
 func InspectStoredBundleTree(root, expectedFingerprint string) (StoredBundleEvidence, error) {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(os.PathSeparator) ||
 		!lowerHexToolchain(expectedFingerprint, 64) {

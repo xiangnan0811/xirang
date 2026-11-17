@@ -2,12 +2,10 @@ package provider
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 
@@ -26,18 +24,6 @@ type ScopedIdentityDocument struct {
 	TaskID        uint
 	NodeID        uint
 	EndpointFacts []string
-}
-
-func GenerateIdentitySalt() ([]byte, error) {
-	return generateIdentitySaltFrom(rand.Reader)
-}
-
-func generateIdentitySaltFrom(source io.Reader) ([]byte, error) {
-	salt := make([]byte, IdentitySaltBytes)
-	if _, err := io.ReadFull(source, salt); err != nil {
-		return nil, fmt.Errorf("generate repository identity salt: %w", err)
-	}
-	return salt, nil
 }
 
 func ScopedIdentityPrefix(provider backupasset.ProviderKind) string {

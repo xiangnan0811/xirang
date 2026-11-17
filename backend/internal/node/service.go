@@ -376,18 +376,3 @@ func applyOptionalFields(node *model.Node, input CreateNodeInput) {
 		node.UseSudo = *input.UseSudo
 	}
 }
-
-//nolint:unused // kept for future use
-func diffNodeIDs(source []uint, existing []uint) []uint {
-	exists := make(map[uint]struct{}, len(existing))
-	for _, id := range existing {
-		exists[id] = struct{}{}
-	}
-	diff := make([]uint, 0, len(source))
-	for _, id := range source {
-		if _, ok := exists[id]; !ok {
-			diff = append(diff, id)
-		}
-	}
-	return diff
-}

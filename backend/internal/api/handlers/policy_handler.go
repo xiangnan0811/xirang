@@ -972,10 +972,7 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 		return
 	}
 	if h.runner != nil {
-		if err := policy.RemovePolicySchedules(h.db, h.runner, orphanedTaskIDs); err != nil {
-			respondInternalError(c, err)
-			return
-		}
+		policy.RemovePolicySchedules(h.runner, orphanedTaskIDs)
 	}
 	respondMessage(c, "deleted")
 }

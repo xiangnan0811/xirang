@@ -1279,14 +1279,4 @@ func RsyncSelectionDifferences(ctx context.Context, task model.Task, isRestore b
 	return differences, nil
 }
 
-// CaptureManifestEntryCount exposes the bounded evidence entry count without
-// exposing the manifest representation itself.
-func CaptureManifestEntryCount(raw string) (int, error) {
-	manifest, err := model.DecodeRsyncCaptureManifest(raw)
-	if err != nil {
-		return 0, err
-	}
-	return len(manifest.Entries), nil
-}
-
 // ParseRsyncCaptureManifestDigest validates a stored digest field when callers

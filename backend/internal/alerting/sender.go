@@ -73,10 +73,10 @@ func (s *emailSender) Send(_ *http.Client, endpoint, _ string, body payload) err
 type feishuSender struct{}
 
 // feishuSign 计算飞书签名：HMAC-SHA256(key=timestamp+"\n"+secret, data="")
-func feishuSign(secret string, timestampSec int64) (string, error) {
+func feishuSign(secret string, timestampSec int64) string {
 	key := fmt.Sprintf("%d\n%s", timestampSec, secret)
 	mac := hmac.New(sha256.New, []byte(key))
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func (s *feishuSender) Send(client *http.Client, endpoint, secret string, body payload) error {
@@ -93,10 +93,7 @@ func (s *feishuSender) Send(client *http.Client, endpoint, secret string, body p
 
 	if secret != "" {
 		ts := time.Now().Unix()
-		sign, err := feishuSign(secret, ts)
-		if err != nil {
-			return fmt.Errorf("飞书签名计算失败: %w", err)
-		}
+		sign := feishuSign(secret, ts)
 		msg["timestamp"] = fmt.Sprintf("%d", ts)
 		msg["sign"] = sign
 	}
@@ -109,21 +106,18 @@ func (s *feishuSender) Send(client *http.Client, endpoint, secret string, body p
 type dingtalkSender struct{}
 
 // dingtalkSign 计算钉钉签名：HMAC-SHA256(key=secret, data=timestamp+"\n"+secret)，结果 base64
-func dingtalkSign(secret string, timestampMs int64) (string, error) {
+func dingtalkSign(secret string, timestampMs int64) string {
 	data := fmt.Sprintf("%d\n%s", timestampMs, secret)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(data))
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func (s *dingtalkSender) Send(client *http.Client, endpoint, secret string, body payload) error {
 	endpointURL := endpoint
 	if secret != "" {
 		ts := time.Now().UnixMilli()
-		sign, err := dingtalkSign(secret, ts)
-		if err != nil {
-			return fmt.Errorf("钉钉签名计算失败: %w", err)
-		}
+		sign := dingtalkSign(secret, ts)
 		u, err := url.Parse(endpoint)
 		if err != nil {
 			return fmt.Errorf("钉钉 endpoint URL 解析失败: %w", err)

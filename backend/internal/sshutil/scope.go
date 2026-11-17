@@ -93,14 +93,6 @@ func NormalizePurpose(purpose string) string {
 	return trimmed
 }
 
-func NormalizeCSVList(raw string) string {
-	items := normalizeList(raw)
-	if len(items) == 0 {
-		return ""
-	}
-	return strings.Join(items, ",")
-}
-
 func NormalizePurposeList(raw string) (string, error) {
 	items := normalizeList(raw)
 	if len(items) == 0 {

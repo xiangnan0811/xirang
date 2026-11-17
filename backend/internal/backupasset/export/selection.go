@@ -53,10 +53,7 @@ func FreezeSelection(items []FrozenItem, binding *SavedSearchCommitBindingV1, li
 		}
 		return ordered[i].Ref.EntryID < ordered[j].Ref.EntryID
 	})
-	digest, err := selectionDigest(ordered)
-	if err != nil {
-		return FrozenSelection{}, err
-	}
+	digest := selectionDigest(ordered)
 	result := FrozenSelection{Items: ordered, Digest: digest}
 	if binding != nil {
 		copyBinding := *binding
@@ -65,7 +62,7 @@ func FreezeSelection(items []FrozenItem, binding *SavedSearchCommitBindingV1, li
 	return result, nil
 }
 
-func selectionDigest(items []FrozenItem) (string, error) {
+func selectionDigest(items []FrozenItem) string {
 	var canonical bytes.Buffer
 	writeString(&canonical, selectionDigestDomain)
 	writeUint64(&canonical, uint64(len(items)))
@@ -94,7 +91,7 @@ func selectionDigest(items []FrozenItem) (string, error) {
 		}
 	}
 	sum := sha256.Sum256(canonical.Bytes())
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:])
 }
 
 func writeString(buffer *bytes.Buffer, value string) {
@@ -118,7 +115,7 @@ func cloneFrozenItem(item FrozenItem) FrozenItem {
 }
 
 func frozenItemsEqual(left, right FrozenItem) bool {
-	leftDigest, leftErr := selectionDigest([]FrozenItem{left})
-	rightDigest, rightErr := selectionDigest([]FrozenItem{right})
-	return leftErr == nil && rightErr == nil && leftDigest == rightDigest
+	leftDigest := selectionDigest([]FrozenItem{left})
+	rightDigest := selectionDigest([]FrozenItem{right})
+	return leftDigest == rightDigest
 }

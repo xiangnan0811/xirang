@@ -80,7 +80,8 @@ func (s *ControlService) Disable(ctx context.Context, policyID uint) error {
 	}); err != nil {
 		return err
 	}
-	return RemovePolicySchedules(s.db, s.runner, taskIDs)
+	RemovePolicySchedules(s.runner, taskIDs)
+	return nil
 }
 
 // DisableTx applies the durable policy/task control inside the caller's

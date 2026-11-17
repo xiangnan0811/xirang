@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
@@ -4451,11 +4450,11 @@ func TestMaintenanceMessagesSanitizeRuntimeEvidence(t *testing.T) {
 
 	retentionErr := sanitizeTaskLastError(`restic 保留清理失败: remove /srv/private/repo on backup.internal.example token=FAKE_RETENTION_ALERT_TOKEN_FOR_TEST_ONLY, 输出: /tmp/raw-output`)
 	m.logDispatcher.Dispatch(0, nil, "error", retentionErr, "")
-	_ = alerting.RaiseRetentionFailure(db, 7, "policy-runtime", "node-runtime", 9, retentionErr)
+	_ = m.alertDispatcher.RaiseRetentionFailure(7, "policy-runtime", "node-runtime", 9, retentionErr)
 
 	integrityErr := sanitizeTaskLastError(`rclone 完整性检查失败: compare /srv/private/source to s3:tenant/private on integrity.internal.example token=FAKE_INTEGRITY_ALERT_TOKEN_FOR_TEST_ONLY, 输出: /tmp/raw-output`)
 	m.logDispatcher.Dispatch(0, nil, "error", integrityErr, "")
-	_ = alerting.RaiseIntegrityCheckFailure(db, 8, "policy-runtime", "node-runtime", 10, integrityErr)
+	_ = m.alertDispatcher.RaiseIntegrityCheckFailure(8, "policy-runtime", "node-runtime", 10, integrityErr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

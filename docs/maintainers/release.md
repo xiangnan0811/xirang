@@ -142,6 +142,13 @@ checkout v6.0.3 的同版 commit pin 修正及 Restic 重复接口断言测试�
 Release Please，不单独制造正式版本或镜像；随下次正式发行归入目标版本时，前端资源经
 Service Worker 接管并重载后生效。
 
+后端无消费者包装、always-nil 内部 helper 签名和未用私有声明的清理同样按 `refactor` 处理。
+SSH purpose 授权、Doctor 的失败检查与审计、真实调度错误、Native 预检／删除重建和规范摘要
+编码保持；合法历史状态、wire 值、codec pin 与已发布迁移不因标识符零引用而移除。
+没有公开 API、配置、依赖或 schema migration 变化时说明留在 `Unreleased`，不单独发行版本
+或镜像；仍须在实际提交与合并流程核对正常 hooks、required CI、同 SHA main CI 与
+Release Please。本地兼容回归不替代 AWS live、双架构或生产部署证明。
+
 退役 snapshot 消费者与旧 indexer 的清理说明须区分代码删除和数据处置：兼容读取仍返回 410，live restore 门控、历史表及已发布迁移保留，旧 `SNAPSHOT_INDEX_MAX_SECONDS` 不再有消费者；不得把清理写成新增恢复能力、历史数据销毁或撤销既有迁移限制。纯 `refactor` 按现行提交语义处理，没有正式 release 时将说明留在 `Unreleased`，待实际发行再归入目标版本。
 
 保留策略与删除安全的入口回归迁移按 `test` 语义处理：真实 Coordinator、注册删除 adapter 与分页选择验收替换旧 helper 覆盖，不代表新增保留规则、删除权限或远端 Provider 能力。无 API、配置或 schema migration；保留既有版本的密钥、持久格式及降级限制。未生成正式 release 时，说明保留在 `Unreleased`，并核对同 SHA CI 与 Release Please；不要求为测试迁移单独生成镜像，也不将受控本地烟测记为 AWS live 或生产部署。

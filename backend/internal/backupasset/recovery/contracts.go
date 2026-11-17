@@ -37,7 +37,6 @@ const (
 	targetLocatorEnvelopeSchemaVersion     = 1
 	targetLocatorCipherVersion             = 1
 
-	sourceLocatorDigestDomain         = "xirang/recovery/source-locator/v1"
 	sourceRevisionDigestDomain        = "xirang.backup_asset.recovery.source_revision.v1"
 	privateSourceRevisionDomain       = "xirang.backup_asset.recovery.private_source_revision.v1"
 	exactSelectionDigestDomain        = "xirang.backup_asset.recovery.exact_selection.v1"

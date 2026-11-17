@@ -1087,14 +1087,6 @@ func validateTaskIdentityAndSchedule(req CreateTaskInput) error {
 	return nil
 }
 
-// ValidateTaskRefs validates that referenced nodes, policies, and dependency tasks exist.
-func ValidateTaskRefs(ctx context.Context, nodeRepo repository.NodeRepository, policyRepo repository.PolicyRepository, taskRepo repository.TaskRepository, req CreateTaskInput, selfID uint) error {
-	if err := validateTaskNodeAndPolicy(ctx, nodeRepo, policyRepo, req); err != nil {
-		return err
-	}
-	return validateTaskDependencyRefs(ctx, taskRepo, req, selfID)
-}
-
 func validateTaskNodeAndPolicy(ctx context.Context, nodeRepo repository.NodeRepository, policyRepo repository.PolicyRepository, req CreateTaskInput) error {
 	if req.NodeID != 0 {
 		exists, err := nodeRepo.ExistsByID(ctx, req.NodeID)

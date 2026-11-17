@@ -12,9 +12,6 @@ func TestIsDevelopmentEnvIgnoresGinMode(t *testing.T) {
 	if !IsProductionEnv() {
 		t.Fatal("expected IsProductionEnv for APP_ENV=production")
 	}
-	if !IsGinDebug() {
-		t.Fatal("expected IsGinDebug when GIN_MODE=debug")
-	}
 }
 
 func TestIsDevelopmentEnvRequiresExplicitAppEnv(t *testing.T) {
