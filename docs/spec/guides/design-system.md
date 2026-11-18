@@ -89,9 +89,13 @@
 
 终端和日志流使用独立 `--terminal-*` 变量与 `.terminal-*` 工具类，允许终端自己的渐变、发光、标签和面板。这是限定范围的例外：不要将终端颜色替换为普通状态色，也不要把终端变量传播到普通页面。
 
+内嵌和全屏日志的时间戳使用 `--terminal-muted`，任务编号使用 `--terminal-chip-foreground`。日志级别使用 `--terminal-level-info`、`--terminal-level-warning` 和 `--terminal-level-error`，错误码也使用 `--terminal-level-error`。这些级别文字色适用于两种主题中的深色终端表面。
+
 ## 页面组合
 
 基础组件统一复用 `web/src/components/ui/`，具体规则见[组件合同](../frontend/component-guidelines.md)。常用组合为 `PageHero`、`StatCardsSection`、`DataSurface` 及其 Header / Content / Toolbar / Footer。卡片、徽章、按钮、输入、选择器、开关、分页与弹窗均复用现有组件，不在页面中另造基础组件。
+
+移动底栏使用不透明的 `bg-background`，避免滚动内容经过底栏时改变文字背后的颜色。
 
 ```tsx
 <div className="animate-fade-in space-y-5">

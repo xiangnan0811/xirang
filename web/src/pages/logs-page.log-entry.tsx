@@ -22,7 +22,7 @@ export function LogEntry({
       )}
     >
       <div className="flex shrink-0 items-center gap-3 md:w-[260px]">
-        <span className="terminal-time text-mini opacity-60 md:text-[12px]">
+        <span className="terminal-time text-mini md:text-[12px]">
           {formatLogTime(log.timestamp)}
         </span>
         <span
@@ -38,7 +38,7 @@ export function LogEntry({
         <span className="terminal-node-chip mr-2 inline-flex items-center rounded px-1.5 py-0.5 text-micro md:text-mini">
           {log.nodeName ?? t("logs.system")}
           {log.taskId ? (
-            <span className="ml-1 opacity-70">
+            <span className="ml-1">
               | #{log.taskId}
             </span>
           ) : null}

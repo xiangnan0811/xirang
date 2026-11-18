@@ -80,11 +80,14 @@
     --terminal-border: 215 24% 54%;
     --terminal-foreground: 210 35% 93%;
     --terminal-muted: 215 20% 72%;
-    --terminal-subtle: 216 16% 56%;
     --terminal-panel-bg: 223 32% 16%;
     --terminal-panel-border: 216 20% 44%;
     --terminal-chip-bg: 218 19% 30%;
     --terminal-chip-foreground: 214 29% 84%;
+    /* Terminal log-level text: terminal surfaces are dark in both themes, so .dark inherits these. */
+    --terminal-level-info: 158 70% 48%;
+    --terminal-level-warning: 38 95% 60%;
+    --terminal-level-error: 0 80% 77%;
   }
 
   .dark {
@@ -146,7 +149,6 @@
     --terminal-border: 217 24% 58%;
     --terminal-foreground: 210 34% 92%;
     --terminal-muted: 214 22% 78%;
-    --terminal-subtle: 217 19% 64%;
     --terminal-panel-bg: 223 33% 14%;
     --terminal-panel-border: 217 20% 46%;
     --terminal-chip-bg: 219 22% 28%;
@@ -344,7 +346,7 @@
   }
 
   .terminal-time {
-    color: hsl(var(--terminal-subtle));
+    color: hsl(var(--terminal-muted));
   }
 
   .terminal-node-chip {
