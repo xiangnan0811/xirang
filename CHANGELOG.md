@@ -8,6 +8,13 @@
 - 为移动底栏使用不透明背景，提升深色内容滚经底栏时浅色主题导航文字的对比度。
 - 提高 SSH 密钥轮换向导步骤分隔符的对比度。
 
+## [0.73.23](https://github.com/xiangnan0811/xirang/compare/v0.73.22...v0.73.23) (2026-11-18)
+
+
+### 🐛 Bug Fixes
+
+* **web:** 提高日志和移动导航文字对比度 ([6fd0c1c](https://github.com/xiangnan0811/xirang/commit/6fd0c1c881259b1ad041488ad3fc6fe08537f572))
+
 ## [0.73.22](https://github.com/xiangnan0811/xirang/compare/v0.73.21...v0.73.22) (2026-11-18)
 
 
