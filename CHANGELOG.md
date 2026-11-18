@@ -24,6 +24,13 @@
 - 将 updater 六组扫描、顺序验包、大包内存及 journal／replay／激活中断恢复断言迁到生产授权轮询入口，删除 `ScanAndRegister` 包装及专属返回集合；保留内部签名扫描、容量上限、持锁和耐久写入顺序，补充未授权不扫描及注册重放与新扫描的区分，不改变离线 updater 或在线能力边界。
 - 将恢复 mismatch 的有效断言迁到实际 `ExecuteClaim` 和中断接管路径，删除无生产消费者的旧 mismatch 投影入口；保留已完成条目／checkpoint 不变、限制性失败投影、旧 claim 失权及写租约释放。历史 mismatch 分类继续可读，不将旧特殊补投影与普通执行的持久证据宣称为字节等价。
 
+## [0.73.22](https://github.com/xiangnan0811/xirang/compare/v0.73.21...v0.73.22) (2026-11-18)
+
+
+### 🐛 Bug Fixes
+
+* **web:** 修补 picomatch 回溯风险并收窄后端服务测试入口 ([#728](https://github.com/xiangnan0811/xirang/issues/728)) ([32b7d77](https://github.com/xiangnan0811/xirang/commit/32b7d7721513c325cc42d75f15a344648208fdcb))
+
 ## [0.73.21](https://github.com/xiangnan0811/xirang/compare/v0.73.20...v0.73.21) (2026-11-16)
 
 
