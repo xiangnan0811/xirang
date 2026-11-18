@@ -40,8 +40,7 @@ func (limits WorkerCapacityLimits) userWorkerLimit() int64 {
 	return min(limits.UserActiveJobs, limits.WorkerConcurrency)
 }
 
-type QuotaJobRequest struct {
-	UserID     uint
+type quotaJobRequest struct {
 	JobID      string
 	StoreBytes int64
 	ExpiresAt  time.Time
@@ -55,9 +54,8 @@ type QuotaReservation struct {
 }
 
 type QuotaService struct {
-	db     *gorm.DB
-	now    func() time.Time
-	limits QuotaLimits
+	db  *gorm.DB
+	now func() time.Time
 }
 
 type AttemptBudgetService struct {
@@ -772,62 +770,13 @@ func NewQuotaService(db *gorm.DB, now func() time.Time, limits QuotaLimits) (*Qu
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &QuotaService{db: db, now: now, limits: limits}, nil
+	return &QuotaService{db: db, now: now}, nil
 }
 
 func validQuotaLimits(limits QuotaLimits) bool {
 	return limits.GlobalActiveJobs > 0 && limits.UserActiveJobs > 0 &&
 		limits.UserActiveJobs <= limits.GlobalActiveJobs && limits.GlobalStoreBytes > 0 &&
 		limits.UserStoreBytes > 0 && limits.UserStoreBytes <= limits.GlobalStoreBytes
-}
-
-func (service *QuotaService) ReserveJob(ctx context.Context, request QuotaJobRequest) (QuotaReservation, error) {
-	if service == nil || request.UserID == 0 || backupasset.ValidateOpaqueID(request.JobID) != nil ||
-		request.StoreBytes <= 0 || request.ExpiresAt.IsZero() {
-		return QuotaReservation{}, ErrQuotaExceeded
-	}
-	var reservation QuotaReservation
-	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		buckets, insertions, err := ensureAndLockQuotaBucketPairForAdmissionTx(tx, request.UserID)
-		if err != nil {
-			return err
-		}
-		now := service.now().UTC()
-		if !request.ExpiresAt.After(now) {
-			return ErrQuotaExceeded
-		}
-		if err := stampNewQuotaBucketPairTx(tx, buckets, insertions, now); err != nil {
-			return err
-		}
-		if err := reserveQuotaBucket(tx, buckets.Global.ID, service.limits.GlobalActiveJobs, service.limits.GlobalStoreBytes, request.StoreBytes, now); err != nil {
-			return err
-		}
-		if err := reserveQuotaBucket(tx, buckets.User.ID, service.limits.UserActiveJobs, service.limits.UserStoreBytes, request.StoreBytes, now); err != nil {
-			return err
-		}
-		globalJobID, err := createQuotaReservation(tx, buckets.Global.ID, request, "job", now)
-		if err != nil {
-			return err
-		}
-		userJobID, err := createQuotaReservation(tx, buckets.User.ID, request, "job", now)
-		if err != nil {
-			return err
-		}
-		globalStoreID, err := createQuotaReservation(tx, buckets.Global.ID, request, "store", now)
-		if err != nil {
-			return err
-		}
-		userStoreID, err := createQuotaReservation(tx, buckets.User.ID, request, "store", now)
-		if err != nil {
-			return err
-		}
-		reservation = QuotaReservation{
-			GlobalJobID: globalJobID, UserJobID: userJobID,
-			GlobalStoreID: globalStoreID, UserStoreID: userStoreID,
-		}
-		return nil
-	})
-	return reservation, err
 }
 
 func ensureAndLockQuotaBucketPairTx(tx *gorm.DB, ownerUserID uint, now time.Time) (quotaBucketPair, error) {
@@ -1438,7 +1387,7 @@ func reserveQuotaBucket(
 	return nil
 }
 
-func createQuotaReservation(tx *gorm.DB, bucketID string, request QuotaJobRequest, kind string, now time.Time) (string, error) {
+func createQuotaReservation(tx *gorm.DB, bucketID string, request quotaJobRequest, kind string, now time.Time) (string, error) {
 	if kind != "job" && kind != "store" {
 		return "", ErrUnavailable
 	}

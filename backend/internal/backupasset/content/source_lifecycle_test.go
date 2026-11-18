@@ -794,9 +794,7 @@ func TestContentLifecycleErrorsRedactPrivatePaths(t *testing.T) {
 	t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
 	object := testCacheObject(8)
 	object.Ref.RecoveryPointID = pointID
-	if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("12345678"), object)); err != nil {
-		t.Fatalf("materialize private-path cache fixture: %v", err)
-	}
+	materializeCacheFixture(t, cache, object, []byte("12345678"))
 	privateCanary := filepath.Join(t.TempDir(), "provider-private-chunk-CANARY")
 	cache.removeChunkFile = func(string) error {
 		return &os.PathError{Op: "remove", Path: privateCanary, Err: syscall.EACCES}
@@ -1105,9 +1103,7 @@ func TestRecoveryPointSourceLifecycleContentDrainsExactBrokerStateAndEvictsExact
 		{object: diskObject, payload: "disk-object-data"},
 		{object: otherObject, payload: "stay"},
 	} {
-		if _, err := cache.Materialize(context.Background(), fixture.object, newCacheSourceFake([]byte(fixture.payload), fixture.object)); err != nil {
-			t.Fatalf("materialize cache fixture: %v", err)
-		}
+		materializeCacheFixture(t, cache, fixture.object, []byte(fixture.payload))
 	}
 
 	leaseController, err := backupasset.NewLeaseService(db, func() time.Time { return now }, backupasset.LeaseConfig{

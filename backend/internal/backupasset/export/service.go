@@ -554,8 +554,8 @@ func (service *Service) CommitCreate(ctx context.Context, request CommitCreateRe
 				return fmt.Errorf("create export source lease: %w", err)
 			}
 		}
-		quotaRequest := QuotaJobRequest{
-			UserID: request.Actor.UserID, JobID: jobID, StoreBytes: peakStoreBytes, ExpiresAt: absoluteDeadline,
+		quotaRequest := quotaJobRequest{
+			JobID: jobID, StoreBytes: peakStoreBytes, ExpiresAt: absoluteDeadline,
 		}
 		for _, reservation := range []struct {
 			bucketID string

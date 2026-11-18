@@ -1118,37 +1118,6 @@ func (service *ProtocolService) AuthenticateWorker(ctx context.Context, identity
 	return nil
 }
 
-func (service *ProtocolService) Quarantine(ctx context.Context, workerID string, code ProcessingErrorCode) error {
-	category, err := code.Category()
-	if backupasset.ValidateOpaqueID(workerID) != nil || err != nil || category != ContractSecurityError {
-		return ErrProtocolInvalid
-	}
-	now := service.utcNow()
-	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var worker model.BackupAssetWorkerIdentity
-		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", workerID).Limit(1).Find(&worker)
-		if result.Error != nil || result.RowsAffected != 1 || worker.TrustState != "active" {
-			return ErrWorkerUnauthenticated
-		}
-		if err := tx.Model(&model.BackupAssetProcessingGrant{}).Where("worker_id = ? AND state IN ?", workerID, []string{"issued", "active"}).
-			Updates(map[string]any{
-				"state": string(GrantRevoked), "activation_secret_hash": "", "revoked_at": now,
-				"revocation_reason": "quarantine", "updated_at": now, "version": gorm.Expr("version + 1"),
-			}).Error; err != nil {
-			return fmt.Errorf("revoke quarantined Worker grants: %w", err)
-		}
-		updated := tx.Model(&model.BackupAssetWorkerIdentity{}).Where("id = ? AND trust_state = ?", worker.ID, "active").
-			Updates(map[string]any{
-				"trust_state": "quarantined", "health_state": "draining", "quarantine_code": string(code),
-				"updated_at": now,
-			})
-		if updated.Error != nil || updated.RowsAffected != 1 {
-			return errors.Join(ErrWorkerUnauthenticated, updated.Error)
-		}
-		return nil
-	})
-}
-
 func (service *ProtocolService) SetDraining(ctx context.Context, workerID string) error {
 	if backupasset.ValidateOpaqueID(workerID) != nil {
 		return ErrProtocolInvalid

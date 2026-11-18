@@ -92,7 +92,3 @@ func (runtime *Runtime) joinFeatureTransitionFailure(primary error, compensation
 	}
 	return errors.Join(primary, fmt.Errorf("%w: %w", ErrFeatureTransitionCompensation, compensationErr))
 }
-
-func (runtime *Runtime) featureTransitionReady() bool {
-	return runtime != nil && !runtime.featureTransitionFenced.Load()
-}

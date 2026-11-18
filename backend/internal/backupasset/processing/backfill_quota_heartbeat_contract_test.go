@@ -75,6 +75,7 @@ func quotaHeartbeatContract(t *testing.T, open func(*testing.T) processingBehavi
 		t.Run(name, func(t *testing.T) { quotaHeartbeatBehaviorCase(t, open, name) })
 	}
 	t.Run("RejectedSecurityRetry", func(t *testing.T) { quotaHeartbeatRejectedSecurityRetry(t, open) })
+	t.Run("SecurityTransitionAtomicity", func(t *testing.T) { quotaSecurityTransitionAtomicity(t, open) })
 }
 
 func quotaHeartbeatBehaviorCase(t *testing.T, open func(*testing.T) processingBehaviorFixture, name string) {
@@ -197,13 +198,17 @@ func quotaHeartbeatWorkerOrdering(t *testing.T, open func(*testing.T) processing
 	t.Helper()
 	f, _ := quotaBehaviorFixture(t, open)
 	active := quotaHeartbeatStart(t, f, PriorityBackground)
-	if strings.Contains(name, "Pull") {
+	var securityAttempt LeasedAttempt
+	if strings.Contains(name, "Pull") || strings.Contains(name, "Quarantine") {
 		other := quotaSecondPoint(t, f)
-		quotaRequireWork(t, f, other, "ordering-second", PriorityBackground)
-	}
-	protocol, err := NewProtocolService(f.db, NewProductionCapabilityRegistry(), f.clock.Now)
-	if err != nil {
-		t.Fatal(err)
+		work := quotaRequireWork(t, f, other, "ordering-second", PriorityBackground)
+		if strings.Contains(name, "Quarantine") {
+			var err error
+			securityAttempt, err = f.coordinator.PullAttempt(context.Background(), PullRequest{WorkerID: f.workerID}, f.grants)
+			if err != nil || securityAttempt.Lease.JobID != work.JobID {
+				t.Fatalf("second PullAttempt: %+v: %v", securityAttempt, err)
+			}
+		}
 	}
 	f.clock.Advance(10 * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -277,7 +282,11 @@ func quotaHeartbeatWorkerOrdering(t *testing.T, open func(*testing.T) processing
 		return quotaHeartbeatOrderResult{transition: r, err: e}
 	}
 	quarantine := func(c context.Context) quotaHeartbeatOrderResult {
-		return quotaHeartbeatOrderResult{err: protocol.Quarantine(c, f.workerID, ProcessingErrorInvalidOutput)}
+		r, e := f.coordinator.TransitionAttempt(c, AttemptTransitionRequest{
+			JobID: securityAttempt.Lease.JobID, AttemptID: securityAttempt.Lease.AttemptID, WorkerID: f.workerID,
+			ExpectedRevision: 2, To: ProcessingFailed, ErrorCode: ProcessingErrorInvalidOutput,
+		})
+		return quotaHeartbeatOrderResult{transition: r, err: e}
 	}
 	var first, second func(context.Context) quotaHeartbeatOrderResult
 	switch name {
@@ -411,12 +420,12 @@ func quotaHeartbeatWorkerOrdering(t *testing.T, open func(*testing.T) processing
 		if b.err != nil {
 			t.Fatalf("second operation failed: %v", b.err)
 		}
-		tr := a.transition
+		tr, security := a.transition, b.transition
 		if name == "QuarantineBeforeTransition" {
-			tr = b.transition
+			tr, security = b.transition, a.transition
 		}
-		if tr.State != ProcessingFetching || tr.Revision != 3 {
-			t.Fatalf("transition after identity serialization: %+v", tr)
+		if tr.State != ProcessingFetching || tr.Revision != 3 || security.State != ProcessingFailed || security.Revision != 3 {
+			t.Fatalf("transitions after identity serialization: normal=%+v security=%+v", tr, security)
 		}
 	}
 	var worker model.BackupAssetWorkerIdentity
@@ -441,6 +450,24 @@ func quotaHeartbeatWorkerOrdering(t *testing.T, open func(*testing.T) processing
 			}
 		} else if job.State != string(ProcessingFetching) || !job.IsCurrent || stored.attempt.State != "active" || !stored.attempt.IsCurrent || stored.lease.Status != "active" {
 			t.Fatalf("quarantine changed transition eligibility: job=%+v attempt=%+v lease=%+v", job, stored.attempt, stored.lease)
+		}
+		if strings.Contains(name, "Quarantine") {
+			other := quotaHeartbeatReadAuthority(t, f, securityAttempt)
+			var securityJob model.BackupAssetProcessingJob
+			if err := f.db.First(&securityJob, "id = ?", securityAttempt.Lease.JobID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if securityJob.State != string(ProcessingFailed) || securityJob.IsCurrent || other.attempt.State != "failed" || other.attempt.IsCurrent || other.lease.Status != "released" {
+				t.Fatalf("security transition left authority live: job=%+v attempt=%+v lease=%+v", securityJob, other.attempt, other.lease)
+			}
+			for _, grant := range other.grants {
+				if grant.State != string(GrantRevoked) || grant.ActivationSecretHash != "" || grant.RevocationReason != "quarantine" {
+					t.Fatalf("security attempt grant survived: %+v", grant)
+				}
+			}
+			if _, err := f.coordinator.HeartbeatAttempt(context.Background(), HeartbeatRequest{AttemptID: active.Lease.AttemptID, WorkerID: f.workerID}, f.grants); !errors.Is(err, ErrAttemptLost) {
+				t.Fatalf("quarantined worker retained heartbeat authority: %v", err)
+			}
 		}
 		for _, grant := range stored.grants {
 			if grant.State != string(GrantRevoked) || grant.ActivationSecretHash != "" {
@@ -482,5 +509,99 @@ func quotaHeartbeatRejectedSecurityRetry(t *testing.T, open func(*testing.T) pro
 	}
 	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(jobBefore, jobAfter) || !reflect.DeepEqual(workerBefore, workerAfter) || !reflect.DeepEqual(ledgerBefore, quotaLedger(t, f, 1, 32)) {
 		t.Fatalf("rejected security retry mutated authority, job, worker or ledger")
+	}
+}
+
+func quotaSecurityTransitionAtomicity(t *testing.T, open func(*testing.T) processingBehaviorFixture) {
+	f, _ := quotaBehaviorFixture(t, open)
+	first := quotaHeartbeatStart(t, f, PriorityBackground)
+	secondDescriptor := quotaSecondPoint(t, f)
+	secondWork := quotaRequireWork(t, f, secondDescriptor, "security-other-attempt", PriorityBackground)
+	second, err := f.coordinator.PullAttempt(context.Background(), PullRequest{WorkerID: f.workerID}, f.grants)
+	if err != nil || second.Lease.JobID != secondWork.JobID {
+		t.Fatalf("second PullAttempt: %+v: %v", second, err)
+	}
+	otherWorker := (&coordinatorHarness{db: f.db, clock: f.clock, coordinator: f.coordinator}).registerNoopWorker(t, "e")
+	thirdWork := quotaRequireWork(t, f, quotaDifferentDescriptor(secondDescriptor), "security-other-worker", PriorityBackground)
+	third, err := f.coordinator.PullAttempt(context.Background(), PullRequest{WorkerID: otherWorker}, f.grants)
+	if err != nil || third.Lease.JobID != thirdWork.JobID {
+		t.Fatalf("other Worker PullAttempt: %+v: %v", third, err)
+	}
+	activation := ActivateGrantRequest{GrantID: second.Grants.Input.GrantID, Kind: GrantInput, JobID: second.Lease.JobID,
+		AttemptID: second.Lease.AttemptID, WorkerID: f.workerID, Secret: second.Grants.Input.Secret}
+	if _, err := f.grants.Activate(context.Background(), activation); err != nil {
+		t.Fatalf("activate other attempt grant: %v", err)
+	}
+	beforeFirst, beforeSecond, beforeThird := quotaHeartbeatReadAuthority(t, f, first), quotaHeartbeatReadAuthority(t, f, second), quotaHeartbeatReadAuthority(t, f, third)
+	var beforeJob, afterJob model.BackupAssetProcessingJob
+	var beforeWorker, afterWorker model.BackupAssetWorkerIdentity
+	var beforeLedger, afterLedger model.BackupAssetProcessingBackfillLedger
+	if err := f.db.First(&beforeJob, "id = ?", first.Lease.JobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.First(&beforeWorker, "id = ?", f.workerID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.First(&beforeLedger, "id = ?", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := AttemptTransitionRequest{JobID: first.Lease.JobID, AttemptID: first.Lease.AttemptID,
+		WorkerID: f.workerID, ExpectedRevision: 2, To: ProcessingFailed, ErrorCode: ProcessingErrorInvalidOutput}
+	const callback = "test:security-transition-worker-update-failure"
+	injected := errors.New("injected quarantine worker update failure")
+	if err := f.db.Callback().Update().Before("gorm:update").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "backup_asset_worker_identities" {
+			_ = tx.AddError(injected)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.db.Callback().Update().Remove(callback) })
+	if _, err := f.coordinator.TransitionAttempt(context.Background(), request); !errors.Is(err, injected) {
+		t.Fatalf("security transition with injected failure: %v", err)
+	}
+	if err := f.db.Callback().Update().Remove(callback); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.First(&afterJob, "id = ?", first.Lease.JobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.First(&afterWorker, "id = ?", f.workerID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.First(&afterLedger, "id = ?", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(beforeJob, afterJob) || !reflect.DeepEqual(beforeWorker, afterWorker) || !reflect.DeepEqual(beforeLedger, afterLedger) ||
+		!reflect.DeepEqual(beforeFirst, quotaHeartbeatReadAuthority(t, f, first)) || !reflect.DeepEqual(beforeSecond, quotaHeartbeatReadAuthority(t, f, second)) ||
+		!reflect.DeepEqual(beforeThird, quotaHeartbeatReadAuthority(t, f, third)) {
+		t.Fatal("failed security transition committed partial authority, job, worker or ledger changes")
+	}
+	result, err := f.coordinator.TransitionAttempt(context.Background(), request)
+	if err != nil || result.State != ProcessingFailed || result.Revision != 3 {
+		t.Fatalf("security transition retry: %+v: %v", result, err)
+	}
+	if _, err := f.coordinator.TransitionAttempt(context.Background(), request); !errors.Is(err, ErrAttemptLost) {
+		t.Fatalf("replayed security transition: %v", err)
+	}
+	for _, leased := range []LeasedAttempt{first, second} {
+		for _, grant := range quotaHeartbeatReadAuthority(t, f, leased).grants {
+			if grant.State != string(GrantRevoked) || grant.ActivationSecretHash != "" || grant.RevocationReason != "quarantine" {
+				t.Fatalf("quarantined Worker grant survived: %+v", grant)
+			}
+		}
+	}
+	activation = ActivateGrantRequest{GrantID: second.Grants.Sink.GrantID, Kind: GrantSink, JobID: second.Lease.JobID,
+		AttemptID: second.Lease.AttemptID, WorkerID: f.workerID, Secret: second.Grants.Sink.Secret}
+	if _, err := f.grants.Activate(context.Background(), activation); !errors.Is(err, ErrGrantDenied) {
+		t.Fatalf("quarantined Worker activated another attempt grant: %v", err)
+	}
+	if !reflect.DeepEqual(beforeThird, quotaHeartbeatReadAuthority(t, f, third)) {
+		t.Fatal("security transition changed another Worker's authority")
+	}
+	activation = ActivateGrantRequest{GrantID: third.Grants.Input.GrantID, Kind: GrantInput, JobID: third.Lease.JobID,
+		AttemptID: third.Lease.AttemptID, WorkerID: otherWorker, Secret: third.Grants.Input.Secret}
+	if _, err := f.grants.Activate(context.Background(), activation); err != nil {
+		t.Fatalf("unrelated Worker grant lost authority: %v", err)
 	}
 }

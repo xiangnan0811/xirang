@@ -36,6 +36,21 @@ import (
 	"gorm.io/gorm"
 )
 
+func (publication *managedRecoveryPublication) current() *managedRecoveryGraph {
+	if publication == nil {
+		return nil
+	}
+	publication.mu.Lock()
+	defer publication.mu.Unlock()
+	return publication.graph
+}
+
+func (graph *managedRecoveryGraph) currentReconciliationState() recovery.RecoveryReconciliationState {
+	graph.runMu.Lock()
+	defer graph.runMu.Unlock()
+	return graph.reconciliationState
+}
+
 type managedRecoveryReceiptOwnerFake struct {
 	mu      *sync.Mutex
 	events  *[]string

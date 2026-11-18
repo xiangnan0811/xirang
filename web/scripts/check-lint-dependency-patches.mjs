@@ -583,6 +583,165 @@ function verifyInstall(webRoot, lock, sources, manifest, graph) {
     requireCondition(inside(matcherRoot, entry) && manifest.matcherFiles.has(member),
       `${relative}: matcher entry does not reach the registered package`);
   }
+  return installed;
+}
+
+const PICOMATCH_SOURCE = {
+  name: "picomatch", version: "4.0.7",
+  url: "https://registry.npmjs.org/picomatch/-/picomatch-4.0.7.tgz",
+  integrity: "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
+  license: "MIT", forkName: "@xirang/picomatch", forkVersion: "4.0.7+xirang.1",
+  artifact: "picomatch-4.0.7-xirang-1.tgz",
+};
+const REGEXPP_SOURCE = {
+  name: "@eslint-community/regexpp", version: "4.12.3",
+  url: "https://registry.npmjs.org/@eslint-community/regexpp/-/regexpp-4.12.3.tgz",
+  integrity: "sha512-R76UKbvsqI68DJJVTVyqFKqU98CN4+B+acxNfEA2IFarSzP0SjtKf/3+fFiXzTyv5Fj3PxLkGHe2wnVWWMxobQ==",
+};
+const PICOMATCH_REQUESTERS = [
+  ["node_modules/tinyglobby", "tinyglobby", "0.2.17", "dependencies", "^4.0.4"],
+  ["node_modules/tinyglobby/node_modules/fdir", "fdir", "6.5.0", "peerDependencies", "^3 || ^4"],
+  ["node_modules/vite", "vite", "7.3.8", "dependencies", "^4.0.3"],
+  ["node_modules/vite/node_modules/fdir", "fdir", "6.5.0", "peerDependencies", "^3 || ^4"],
+  ["node_modules/vitest", "vitest", "4.1.12", "dependencies", "^4.0.3"],
+];
+
+function verifyPicomatch(root, rootPackage, lock, installed) {
+  const family = checkAbsolute(path.join(root, "dependency-patches/picomatch"), "directory");
+  const sourceBytes = readWithin(family, "sources.json").bytes;
+  const recipeBytes = readWithin(family, "recipes.json").bytes;
+  const guard = readWithin(family, "files/guard.cjs").bytes;
+  const source = parseJson(sourceBytes, "picomatch sources");
+  fields(source, ["schemaVersion", ...Object.keys(PICOMATCH_SOURCE), "regexpp", "requesters"], "picomatch sources");
+  requireCondition(source.schemaVersion === 1, "unsupported picomatch source schema");
+  for (const [key, value] of Object.entries(PICOMATCH_SOURCE)) {
+    requireCondition(source[key] === value, `unexpected picomatch source ${key}`);
+  }
+  sameFields(source.regexpp, REGEXPP_SOURCE, "picomatch regexpp source");
+  requireCondition(Array.isArray(source.requesters) && source.requesters.length === PICOMATCH_REQUESTERS.length,
+    "unexpected picomatch requester inventory");
+  for (const [index, values] of PICOMATCH_REQUESTERS.entries()) {
+    const [relative, name, version, type, spec] = values;
+    sameFields(source.requesters[index], { path: relative, name, version, type, spec }, "picomatch requester");
+  }
+  const recipe = parseJson(recipeBytes, "picomatch recipes");
+  fields(recipe, ["schemaVersion", "files", "addedFile"], "picomatch recipes");
+  requireCondition(recipe.schemaVersion === 1 && Array.isArray(recipe.files) && recipe.files.length === 2,
+    "invalid picomatch recipe schema");
+  sameFields(recipe.addedFile, { source: "files/guard.cjs", destination: "lib/guard.js" }, "picomatch guard mapping");
+  const counts = new Map([["lib/parse.js", 13], ["lib/picomatch.js", 4]]);
+  for (const file of recipe.files) {
+    fields(file, ["path", "replacements"], "picomatch recipe file");
+    requireCondition(counts.has(file.path) && Array.isArray(file.replacements) && file.replacements.length === counts.get(file.path),
+      "unexpected picomatch recipe file");
+    counts.delete(file.path);
+    const seen = new Set();
+    for (const replacement of file.replacements) {
+      fields(replacement, ["before", "after", "count"], "picomatch replacement");
+      requireCondition(nonempty(replacement.before) && typeof replacement.after === "string" &&
+        replacement.before !== replacement.after && replacement.count === 1 && !seen.has(replacement.before), "invalid picomatch replacement");
+      seen.add(replacement.before);
+    }
+  }
+  const manifest = parseJson(readWithin(family, "manifest.json").bytes, "picomatch manifest");
+  fields(manifest, ["schemaVersion", "sourcesSha256", "recipesSha256", "guardSha256", "buildToolchain", "name", "version", "artifact", "integrity", "patch", "files", "changedFiles"], "picomatch manifest");
+  requireCondition(manifest.schemaVersion === 1 && manifest.sourcesSha256 === hash(sourceBytes) &&
+    manifest.recipesSha256 === hash(recipeBytes) && manifest.guardSha256 === hash(guard) &&
+    manifest.name === source.forkName && manifest.version === source.forkVersion && manifest.artifact === source.artifact &&
+    SRI.test(manifest.integrity), "picomatch manifest identity or input hash mismatch");
+  fields(manifest.buildToolchain, ["python", "zlib"], "picomatch build toolchain");
+  requireCondition(nonempty(manifest.buildToolchain.python) && nonempty(manifest.buildToolchain.zlib), "invalid picomatch toolchain");
+  fields(manifest.patch, ["path", "sha256"], "picomatch patch");
+  requireCondition(manifest.patch.path === "patches/picomatch-4.0.7-xirang-1.patch" &&
+    SHA256.test(manifest.patch.sha256) && hash(readWithin(family, manifest.patch.path).bytes) === manifest.patch.sha256 &&
+    integrity(readWithin(family, source.artifact).bytes) === manifest.integrity, "picomatch patch or archive integrity mismatch");
+  const files = validateFileIndex(manifest.files, "picomatch files");
+  const changed = new Set(["package.json", "lib/parse.js", "lib/picomatch.js", "lib/guard.js", "XIRANG-MODIFICATIONS.txt"]);
+  requireCondition(Array.isArray(manifest.changedFiles) && manifest.changedFiles.length === changed.size, "invalid picomatch changed files");
+  for (const entry of manifest.changedFiles) {
+    fields(entry, ["path", "beforeSha256", "afterSha256"], "picomatch changed file");
+    requireCondition(changed.delete(entry.path) && files.get(entry.path)?.sha256 === entry.afterSha256 &&
+      (["lib/guard.js", "XIRANG-MODIFICATIONS.txt"].includes(entry.path) ? entry.beforeSha256 === null : SHA256.test(entry.beforeSha256)),
+    "unexpected picomatch changed file");
+  }
+  requireCondition(files.get("lib/guard.js")?.sha256 === hash(guard), "guard input differs from archived guard");
+  const spec = `file:dependency-patches/picomatch/${source.artifact}`;
+  requireCondition(rootPackage.devDependencies?.picomatch === spec && rootPackage.overrides?.picomatch === "$picomatch" &&
+    lock.packages[""].devDependencies?.picomatch === spec, "picomatch root declaration mismatch");
+  for (const rootEntry of [rootPackage, lock.packages[""]]) {
+    for (const type of [...DEPENDENCY_TYPES, "devDependencies"]) {
+      for (const [target, request] of Object.entries(rootEntry[type] ?? {})) {
+        requireCondition(!(typeof request === "string" && /^npm:(?:picomatch|@xirang\/picomatch)(?:@|$)/.test(request)),
+          "aliased root picomatch declaration");
+        requireCondition(target !== "picomatch" || (type === "devDependencies" && request === spec),
+          "unexpected root picomatch declaration");
+      }
+    }
+  }
+  const expected = new Map(PICOMATCH_REQUESTERS.map(([relative, name, version, type, request]) => [relative, { name, version, type, request }]));
+  let foundFork = false;
+  for (const [relative, entry] of Object.entries(lock.packages)) {
+    if (!relative) continue;
+    const slot = packageNameFromPath(relative);
+    const name = entry.name ?? slot;
+    if (slot === "picomatch" || name === "picomatch" || name === source.forkName || slot === source.forkName) {
+      requireCondition(relative === "node_modules/picomatch" && slot === "picomatch" && name === source.forkName &&
+        entry.version === source.forkVersion && entry.resolved === spec && entry.integrity === manifest.integrity &&
+        entry.dependencies?.[REGEXPP_SOURCE.name] === REGEXPP_SOURCE.version, `unexpected picomatch lock entry ${relative}`);
+      foundFork = true;
+    }
+    for (const type of DEPENDENCY_TYPES) {
+      for (const [target, request] of Object.entries(entry[type] ?? {})) {
+        requireCondition(!(typeof request === "string" && /^npm:(?:picomatch|@xirang\/picomatch)(?:@|$)/.test(request)),
+          `aliased picomatch requester ${relative}`);
+        if (target !== "picomatch") continue;
+        const approved = expected.get(relative);
+        requireCondition(approved && approved.name === name && approved.version === entry.version && approved.type === type &&
+          approved.request === request, `unexpected picomatch requester ${relative}`);
+      }
+    }
+  }
+  requireCondition(foundFork, "picomatch fork missing from lock");
+  const regexLock = lock.packages[`node_modules/${REGEXPP_SOURCE.name}`];
+  requireCondition(regexLock?.version === REGEXPP_SOURCE.version && regexLock.resolved === REGEXPP_SOURCE.url &&
+    regexLock.integrity === REGEXPP_SOURCE.integrity, "regexpp official lock identity mismatch");
+  for (const [relative, edge] of expected) {
+    const entry = lock.packages[relative];
+    requireCondition(entry && (entry.name ?? packageNameFromPath(relative)) === edge.name && entry.version === edge.version &&
+      entry[edge.type]?.picomatch === edge.request, `missing picomatch requester ${relative}`);
+  }
+  if (!installed) return;
+  for (const [relative, item] of installed) {
+    const slot = packageNameFromPath(relative);
+    if (slot === "picomatch" || item.pkg.name === "picomatch" || item.pkg.name === source.forkName || slot === source.forkName) {
+      requireCondition(relative === "node_modules/picomatch" && item.pkg.name === source.forkName &&
+        item.pkg.version === source.forkVersion && item.pkg.dependencies?.[REGEXPP_SOURCE.name] === REGEXPP_SOURCE.version,
+      `unexpected installed picomatch ${relative}`);
+      verifyInstalledFiles(item.directory, files, relative);
+    }
+    for (const type of DEPENDENCY_TYPES) {
+      if (!Object.hasOwn(item.pkg[type] ?? {}, "picomatch")) continue;
+      const edge = expected.get(relative);
+      requireCondition(edge && edge.name === item.pkg.name && edge.version === item.pkg.version && edge.type === type &&
+        edge.request === item.pkg[type].picomatch, `unexpected installed picomatch requester ${relative}`);
+    }
+  }
+  const fork = installed.get("node_modules/picomatch");
+  const regex = installed.get(`node_modules/${REGEXPP_SOURCE.name}`);
+  requireCondition(fork && regex?.pkg.name === REGEXPP_SOURCE.name && regex.pkg.version === REGEXPP_SOURCE.version,
+    "picomatch fork or regexpp missing from installation");
+  const forkEntry = path.join(fork.directory, "index.js");
+  for (const relative of ["", ...expected.keys()]) {
+    const requester = relative ? installed.get(relative)?.directory : root;
+    const item = relative ? installed.get(relative) : null;
+    const edge = relative ? expected.get(relative) : null;
+    requireCondition(requester && (!edge || (item.pkg.name === edge.name && item.pkg.version === edge.version &&
+      item.pkg[edge.type]?.picomatch === edge.request)) &&
+      createRequire(path.join(requester, "package.json")).resolve("picomatch") === forkEntry,
+    `picomatch resolution or requester mismatch for ${relative || "root"}`);
+  }
+  const regexEntry = createRequire(path.join(fork.directory, "package.json")).resolve(REGEXPP_SOURCE.name);
+  requireCondition(inside(regex.directory, regexEntry) && fs.statSync(regexEntry).isFile(), "picomatch resolves unexpected regexpp");
 }
 
 export function verifyLintDependencyPatches(webRoot, { archivesOnly = false } = {}) {
@@ -604,7 +763,8 @@ export function verifyLintDependencyPatches(webRoot, { archivesOnly = false } = 
     const archive = readWithin(patchRoot, item.artifact).bytes;
     requireCondition(integrity(archive) === item.integrity, `${item.name}: archive integrity differs from manifest and lockfile`);
   }
-  if (!archivesOnly) verifyInstall(root, lock, sources, manifest, graph);
+  const installed = archivesOnly ? null : verifyInstall(root, lock, sources, manifest, graph);
+  verifyPicomatch(root, rootPackage, lock, installed);
 }
 
 function cli(args) {

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "path": "lib/parse.js",
+      "replacements": [
+        {"before":"const utils = require('./utils');\n", "after":"const utils = require('./utils');\nconst guard = require('./guard');\n", "count":1},
+        {"before":"const analyzeRepeatedExtglob = (body, options) => {\n", "after":"const analyzeRepeatedExtglob = (body, options, hasWildcard) => {\n  if (hasWildcard) {\n    const branches = splitTopLevel(body);\n    if (!options.capture && branches.length === 1 &&\n        /^[A-Za-z0-9 ._-]*\\*[A-Za-z0-9 ._-]*$/.test(branches[0])) {\n      return { risky: false, collapse: true };\n    }\n\n    if (!options.capture && branches.length === 1 && body === branches[0]) {\n      const match = /^([A-Za-z0-9_-]+)\\*([A-Za-z0-9 ,_-]+)\\*$/.exec(body);\n      if (match) {\n        return { risky: true, twoStars: { prefix: match[1], middle: match[2] } };\n      }\n    }\n\n    if (!options.capture && body === branches.join('|')) {\n      const wildcards = branches.filter(branch => /^[A-Za-z0-9_-]+\\*$/.test(branch));\n      const literals = branches.filter(branch => /^[A-Za-z0-9_-]$/.test(branch));\n      if (wildcards.length === 1 && literals.length === branches.length - 1 && literals.length > 0) {\n        const prefix = wildcards[0].slice(0, -1);\n        const nocase = String(options.flags || (options.nocase ? 'i' : '')).includes('i');\n        const first = nocase ? prefix[0].toLowerCase() : prefix[0];\n        if (!literals.some(value => (nocase ? value.toLowerCase() : value) === first)) {\n          return { risky: true, trailingStar: { prefix, literals: [...new Set(literals)].join('') } };\n        }\n      }\n    }\n\n    return { risky: true };\n  }\n", "count":1},
+        {"before":"  let len = input.length;\n", "after":"  let len = input.length;\n  let bodyStart = 0;\n", "count":1},
+        {"before":"    const analysis = analyzeRepeatedExtglob(body, opts);\n", "after":"    // Distinguish wildcard atoms from regex quantifiers on a preceding group.\n    const hasWildcard = tokens.slice(token.tokensIndex + 2).some((item, index, bodyTokens) =>\n      (item.type === 'star' || item.type === 'globstar') && item.value !== '' &&\n      !(opts.regex === true && item.output === '*' && item.prev &&\n        (item.prev.type === 'paren' || item.prev.type === 'bracket')) &&\n      !(bodyTokens[index + 1] && bodyTokens[index + 1].type === 'paren' && bodyTokens[index + 1].value === '(' && bodyTokens[index + 1].extglob === true)\n    );\n    const analysis = analyzeRepeatedExtglob(body, opts, hasWildcard);\n\n    if (analysis.twoStars && (token.type === 'plus' || token.type === 'star')) {\n      const prefix = guard.literal(analysis.twoStars.prefix);\n      const middle = guard.literal(analysis.twoStars.middle);\n      const unit = opts.bash === true ? '.' : QMARK;\n      const tail = opts.bash === true ? '.*?' : STAR;\n      const output = `${prefix}(?:(?!${middle})${unit})*${middle}${tail}`;\n      analysis.safeOutput = token.type === 'star' ? `(?:${output})?` : output;\n    }\n\n    if (analysis.trailingStar && (token.type === 'plus' || token.type === 'star')) {\n      const head = `[${guard.literal(analysis.trailingStar.literals)}]`;\n      const tail = guard.literal(analysis.trailingStar.prefix) + (opts.bash === true ? '.*?' : STAR);\n      analysis.safeOutput = token.type === 'star'\n        ? `${head}*(?:${tail})?`\n        : `(?:${head}*${tail}|${head}+)`;\n    }\n", "count":1},
+        {"before":"      open.output = safeOutput || utils.escapeRegex(literal);", "after":"      open.output = safeOutput || (hasWildcard ? guard.literal(literal) : utils.escapeRegex(literal));", "count":1},
+        {"before":"    let output = token.close + (opts.capture ? ')' : '');\n", "after":"    if (analysis.collapse === true && (token.type === 'plus' || token.type === 'star')) {\n      token.close = token.type === 'plus' ? ')' : ')?';\n    }\n\n    let output = token.close + (opts.capture ? ')' : '');\n", "count":1},
+        {"before":"      state.output = input;\n      return state;", "after":"      state.output = input;\n      guard.finalize(state, input, '', opts);\n      return state;", "count":1},
+        {"before":"    state.output = utils.wrapOutput(output, state, options);\n    return state;", "after":"    state.output = utils.wrapOutput(output, state, options);\n    guard.finalize(state, input, '', opts, value => utils.wrapOutput(value, state, options));\n    return state;", "count":1},
+        {"before":"        state.start = state.index + 1;\n        state.consumed = '';", "after":"        state.start = state.index + 1;\n        bodyStart = state.index + 1;\n        state.consumed = '';", "count":1},
+        {"before":"        negate();\n        continue;", "after":"        negate();\n        bodyStart = state.index + 1;\n        continue;", "count":1},
+        {"before":"  return state;\n};\n\n/**\n * Fast paths", "after":"  guard.finalize(state, input.slice(bodyStart), state.backtrack ? (opts.prepend || '') : '', opts);\n  return state;\n};\n\n/**\n * Fast paths", "count":1},
+        {"before":"parse.fastpaths = (input, options) => {", "after":"parse.fastpaths = (input, options, holder) => {", "count":1},
+        {"before":"  return source;\n};\n\nmodule.exports = parse;", "after":"  if (source) {\n    const target = holder || {};\n    target.output = source;\n    source = guard.finalize(target, output, '', opts);\n  }\n  return source;\n};\n\nmodule.exports = parse;", "count":1}
+      ]
+    },
+    {
+      "path": "lib/picomatch.js",
+      "replacements": [
+        {"before":"const parse = require('./parse');\n", "after":"const parse = require('./parse');\nconst guard = require('./guard');\n", "count":1},
+        {"before":"  if (returnOutput === true) {\n    return state.output;\n  }\n\n  const opts = options || {};", "after":"  const opts = options || {};\n  const output = guard.output(state, opts, returnOutput);\n  if (returnOutput === true) {\n    return output;\n  }\n  if (guard.isNativeError(state, output)) {\n    if (opts.debug === true) throw output;\n    const regex = /$^/;\n    if (returnState === true) regex.state = state;\n    return regex;\n  }", "count":1},
+        {"before":"  let source = `${prepend}(?:${state.output})${append}`;", "after":"  let source = `${prepend}(?:${output})${append}`;", "count":1},
+        {"before":"    parsed.output = parse.fastpaths(input, options);", "after":"    parsed.output = parse.fastpaths(input, options, parsed);", "count":1}
+      ]
+    }
+  ],
+  "addedFile": { "source": "files/guard.cjs", "destination": "lib/guard.js" }
+}

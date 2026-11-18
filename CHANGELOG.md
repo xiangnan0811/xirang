@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 工具链安全修复
+
+- 以官方 Picomatch 4.0.7 为来源，使用可复现的本地 `@xirang/picomatch@4.0.7+xirang.1` 修补重复 wildcard 的正则回溯风险（GHSA-fc5q-39xc-vjpf）；Vite、Vitest、tinyglobby 和两份 fdir 仍通过 `picomatch` 安装槽解析。复用已锁定的官方 `@eslint-community/regexpp@4.12.3` 检查最终发射源码，保留原 lint 依赖补丁及其他依赖版本。
+- 本地 fork 采用受限 glob 语义：仅对已证明安全的形态归约，其他风险重复 wildcard 按字面量匹配，包括默认选项下的 `+(*a|b)` 和 `capture:true` 的 `+(*a)`；`maxExtglobRecursion:false` 不能关闭新增防护。无法安全分类或完成安全回退时明确拒绝，不承诺任意原始正则的执行时间。
+- 开发／构建／测试环境须按锁文件重新安装并重启相关进程。fork 的来源、精确配方、完整文件哈希及风险行为回归随仓库维护；registry 审计不对该本地身份独立认证。回退旧锁文件或旧工具环境会恢复漏洞风险；无公开产品 API、运行时配置或数据库迁移变化，工具链验证不代表生产已升级或部署。
+
 ### CI 与测试维护
 
 - 将 5 个工作流共 20 处 checkout v6.0.3 引用由附注 tag 对象固定为同版实际 commit，保留版本旁注、Node 24 runtime 和工作流行为；CI 合同测试改验完整 SHA 引用格式并保留事件 SHA、metadata 与 required 门禁约束，避免写死旧 action 摘要。其他 checkout 版本的统一另行评估。
@@ -13,6 +19,10 @@
 - 完成当前双语资源的全量库存与逐键裁决，每种语言共删除 237 个未用 locale 叶子；保留动态／复数／类型／资源对象及有效测试消费者、历史状态与失败闭合标签，并清理三个无效测试 mock 项。用于退役控件负向断言的 mock 名称仍保留。
 - 保持刷新关闭、未知分类拒绝、通知筛选、统计空态及 UTC 解析行为，补充双语流量时间窗和非法幂等键的行为回归。恢复计划仍以 400 拒绝非法 key、合法同意图重放、409 拒绝同键异意图；无公开 API、配置或 schema migration 变化。历史扫描计数不作为删除清单，不新增本地化产品行为。
 - 按具名消费者与兼容合同清理无调用的后端包装，将维护告警的有效脱敏断言迁到实际 Dispatcher；简化六个仅返回 nil 错误的内部 helper 及其调用，移除一处未用的私有摘要域声明。保留真实错误、SSH purpose 授权、Doctor 检查及审计结果、Native 预检与删除重建保障、规范摘要字节和持久状态／codec pin；不改公开 API、wire、配置或 schema migration，历史扫描缺失长尾不作为删除清单。
+- 将 Export 配额、Processing 隔离与 Content 缓存的有效断言迁到真实创建／生命周期、attempt transition、materialization 和按恢复点清理入口，再删除测试专用或无消费者的服务包装；保留双桶配额、事务回滚、失权、跨 Worker 隔离、源关闭及清理重试保障。旧配额包装的调用方期限输入随入口删除，实际创建仍沿用既有固定期限语义，不将两者宣称为等价。
+- 将恢复发布、reconciliation 与 feature transition 的三个同步观察方法移入同包测试，删除恒为 false 的 inventory 观察包装及其无效断言；保留实际运行时构造、发布／排空、补偿失败围栏及有效持久化行为测试。调用方事务、中断 adoption、已完成条目 verification 补证、批量收藏、keyring／Search token 协调及已有生产／跨包消费者保持。无公开 API、wire、配置或 schema migration 变化。
+- 将 updater 六组扫描、顺序验包、大包内存及 journal／replay／激活中断恢复断言迁到生产授权轮询入口，删除 `ScanAndRegister` 包装及专属返回集合；保留内部签名扫描、容量上限、持锁和耐久写入顺序，补充未授权不扫描及注册重放与新扫描的区分，不改变离线 updater 或在线能力边界。
+- 将恢复 mismatch 的有效断言迁到实际 `ExecuteClaim` 和中断接管路径，删除无生产消费者的旧 mismatch 投影入口；保留已完成条目／checkpoint 不变、限制性失败投影、旧 claim 失权及写租约释放。历史 mismatch 分类继续可读，不将旧特殊补投影与普通执行的持久证据宣称为字节等价。
 
 ## [0.73.21](https://github.com/xiangnan0811/xirang/compare/v0.73.20...v0.73.21) (2026-11-16)
 

@@ -166,6 +166,56 @@ moderate 审计、原 lint 文件集合、ESM/CJS、类型声明、可访问性�
 上游完整修复可用后，通过同样审计与消费者验收移除本地包和已无调用方的专用生成／校验逻辑。
 本修复不改变运行时配置或数据库；回退旧依赖图会恢复工具链漏洞风险。
 
+### Picomatch 的受限本地安全修补
+
+针对 [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)，
+以官方 Picomatch 4.0.7 及固定 SHA-512 SRI 为输入生成本地
+`@xirang/picomatch@4.0.7+xirang.1`。安装槽仍为 `picomatch`，由根开发依赖的
+`file:` 声明及 `$picomatch` override 统一 Vite 7.3.8、Vitest 4.1.12、
+tinyglobby 0.2.17 和两份 fdir 6.5.0 的实际解析。fork 精确依赖已锁定的官方
+`@eslint-community/regexpp@4.12.3`，支持本项目 Node 20 及更高受支持版本；
+其他包和原 lint 依赖修补产物不因该 fork 自动升级或重建。
+
+这是具有兼容限制的本地修补：对可证明安全的单段形态归约，其他风险重复 wildcard
+使用字面匹配。例如默认选项下的 `+(*a|b)` 不再匹配 `a`，`capture:true` 的
+`+(*a)` 不再匹配并捕获 `aaa`。`maxExtglobRecursion:false` 不能关闭新增 wildcard
+保护，原纯字面量递归选项的行为保留。最终发射的嵌套 wildcard 量词由 regexpp AST
+检查，覆盖否定 extglob、显式组量词、token 重建和范围展开；风险源码的字面回退也须
+重新检查完整前缀与主体。无法安全分类、无法构造合法回退或前缀仍有风险时明确拒绝。
+
+`parse()` 输出及未修改的同源状态经 `compileRe()` 更换 `u`／`v` 模式时仍须复核；
+无效 flags 沿既有编译／`debug` 错误路径处理。手工构造或修改的解析状态和显式
+`toRegex()` 是原始正则接口，不构成安全沙箱。该结构防护不保证并列量词、纯字面量
+重叠分支或任意原始正则具有统一时间界限。
+
+可信输入、配方及完整产物索引位于
+[picomatch](../../web/dependency-patches/picomatch/sources.json) 子目录；可编辑的
+`files/guard.cjs` 也是被绑定的构建输入，归档中使用 `lib/guard.js`。固定入口复用
+现有生成器的安全解包、精确替换、可读 patch、确定性打包与发布原语，不执行 npm pack
+或上游生成脚本，保留 MIT 许可证及 `XIRANG-MODIFICATIONS.txt`。
+
+```bash
+python3 -B scripts/build-picomatch-dependency-patch.py \
+  --work-dir "$PATCH_WORK/picomatch-build" \
+  --out-dir web/dependency-patches/picomatch
+```
+
+工作目录及覆盖规则沿用上节：独占、空目录、位于当前 checkout 的 `.tmp/` 内，路径
+不能含 symlink；来源和配方变化须重新审查，独立构建须在同一 Python/zlib 下逐字节
+一致，可读 patch 须以零 fuzz 还原全部修改。`npm run check:dependency-patches` 同时
+核验本 family 的输入、归档、锁与已安装完整文件集、五条请求边和 fork 对官方 regexpp
+的解析；`--archives-only` 不替代完整安装验收。既有 CI、parity 和 Docker 入口沿用。
+
+维护者须持续按原上游版本和 GHSA 跟踪继承风险。npm 审计按提交的 name/version
+关联公告，对本地 fork 没有独立的 registry 安全认证；改身份或告警消失不能替代实际
+修补、消费者回归和独审。完整开发依赖 moderate 审计继续执行且不新增 allowlist。
+官方兼容修复可用后，须以相同来源、消费者和安全门禁确认退场，再移除本地包及已无
+调用方的专用逻辑；regexpp 若仍由其他包使用则保留其正常依赖。
+
+按新锁文件重新安装并重启开发／构建／测试进程后生效。正式静态资源与镜像仍走
+发行流程，不把工具链验证表述为生产已升级、曾受攻击或已部署；回退旧锁文件或旧
+工具环境会恢复原风险。无新增产品 API、运行时配置或数据库迁移。
+
 ### jsdom 选择器兼容性
 
 [package.json](../../web/package.json)中的 jsdom 专属 override 将 `nwsapi` 固定为已验证的 2.2.25。既有回归记录表明 jsdom 26 下 2.2.26/2.2.27 的 `:modal` 匹配会递归进入原生匹配适配器，导致下拉交互超时。调整 override 前，在 CI Node 版本下同时验证独立选择器匹配、节点和通知下拉确认测试，保留完整审计及前端门禁；不得通过增加超时或修改产品交互掩盖问题。

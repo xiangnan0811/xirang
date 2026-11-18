@@ -340,11 +340,6 @@ type Service struct {
 	mu          sync.Mutex
 }
 
-type RegisteredCandidateReceipt struct {
-	CandidateID string `json:"candidate_id"`
-	InboxReceipt
-}
-
 type candidateJournal struct {
 	SchemaVersion int                     `json:"schema_version"`
 	Candidates    []candidateJournalEntry `json:"candidates"`
@@ -404,31 +399,22 @@ func NewService(inbox *Inbox, store *Store, activator *Activator, client Protoco
 	return service, nil
 }
 
-func (service *Service) ScanAndRegister(ctx context.Context, trust TrustStore, now time.Time) ([]RegisteredCandidateReceipt, error) {
-	if service == nil || service.inbox == nil || ctx == nil || now.Location() != time.UTC {
-		return nil, ErrPolicyRejected
-	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	return service.scanAndRegisterLocked(ctx, trust, now)
-}
-
 func (service *Service) scanAndRegisterLocked(
 	ctx context.Context,
 	trust TrustStore,
 	now time.Time,
-) ([]RegisteredCandidateReceipt, error) {
+) error {
 	journal, err := service.readCandidateJournal()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	replay, err := service.readCandidateReplayState()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	registered := make([]RegisteredCandidateReceipt, 0)
+	registered := 0
 	err = service.inbox.Scan(ctx, trust, now, func(packageCtx context.Context, candidate InboxCandidate) error {
-		if len(registered) >= maximumInboxCandidates {
+		if registered >= maximumInboxCandidates {
 			return ErrPolicyRejected
 		}
 		if err := packageCtx.Err(); err != nil {
@@ -458,13 +444,10 @@ func (service *Service) scanAndRegisterLocked(
 		if err := service.writeCandidateJournal(journal); err != nil {
 			return err
 		}
-		registered = append(registered, RegisteredCandidateReceipt{CandidateID: result.CandidateID, InboxReceipt: candidate.Receipt})
+		registered++
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return registered, nil
+	return err
 }
 
 func (service *Service) PollAndActivate(ctx context.Context) (int, error) {
@@ -516,7 +499,7 @@ func (service *Service) pollAndActivateLocked(
 		if !allowScan {
 			return 0, ErrPolicyRejected
 		}
-		if _, err := service.scanAndRegisterLocked(ctx, trust, now); err != nil {
+		if err := service.scanAndRegisterLocked(ctx, trust, now); err != nil {
 			return 0, err
 		}
 	}

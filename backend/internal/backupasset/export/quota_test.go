@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -12,180 +13,216 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
 )
 
-func TestQuotaServiceEnforcesGlobalAndUserCASAndKeepsLatch(t *testing.T) {
-	harness := newServiceHarness(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	quota, err := NewQuotaService(harness.db, func() time.Time { return now }, QuotaLimits{
-		GlobalActiveJobs: 2, UserActiveJobs: 1, GlobalStoreBytes: 1024, UserStoreBytes: 512,
-	})
+func quotaCreateRequest(t *testing.T, harness serviceHarness, userID uint, key string) CreateRequest {
+	t.Helper()
+	item := frozenItemFixture()
+	selection, err := FreezeSelection([]FrozenItem{item}, nil, harness.config.Selection)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := quota.ReserveJob(context.Background(), QuotaJobRequest{
-		UserID: 71, JobID: "11111111111111111111111111111111", StoreBytes: 128, ExpiresAt: now.Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := quota.ReserveJob(context.Background(), QuotaJobRequest{
-		UserID: 71, JobID: "22222222222222222222222222222222", StoreBytes: 128, ExpiresAt: now.Add(time.Hour),
-	}); !errors.Is(err, ErrQuotaExceeded) {
-		t.Fatalf("same-user overflow error=%v", err)
-	}
-	if err := quota.Release(context.Background(), first); err != nil {
-		t.Fatal(err)
-	}
-	if err := quota.Release(context.Background(), first); err != nil {
-		t.Fatalf("idempotent release: %v", err)
-	}
-	var latch model.BackupAssetExportQuotaBucket
-	if err := harness.db.Where("scope = ? AND subject = ?", "global", "global").Take(&latch).Error; err != nil {
-		t.Fatalf("permanent global latch missing: %v", err)
+	harness.resolver.explicit = selection
+	return CreateRequest{
+		Actor:          SelectionActor{UserID: userID, Role: "admin"},
+		Selection:      CreateSelectionV1{SchemaVersion: 1, Kind: SelectionExplicit, Refs: []backupasset.AssetRef{item.Ref}},
+		IdempotencyKey: key, ArchiveFormat: ArchiveZIP, ArchiveProfile: "zip_deflate_v1",
 	}
 }
 
-func TestQuotaServiceReserveJobRejectsDeadlineCrossedWhileWaitingForQuotaPairLocks(t *testing.T) {
+func quotaReservationsForJob(t *testing.T, db *gorm.DB, jobID string) (QuotaReservation, int64) {
+	t.Helper()
+	var rows []struct {
+		model.BackupAssetExportReservation
+		Scope string
+	}
+	if err := db.Table("backup_asset_export_reservations AS r").
+		Select("r.*, b.scope").Joins("JOIN backup_asset_export_quota_buckets AS b ON b.id = r.bucket_id").
+		Where("r.job_id = ?", jobID).Scan(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("job %s reservations=%d, want four", jobID, len(rows))
+	}
+	var reservation QuotaReservation
+	var storeBytes int64
+	for _, row := range rows {
+		switch row.Scope + "/" + row.Kind {
+		case "global/job":
+			reservation.GlobalJobID = row.ID
+		case "user/job":
+			reservation.UserJobID = row.ID
+		case "global/store":
+			reservation.GlobalStoreID = row.ID
+			storeBytes = row.ReservedStoreBytes
+		case "user/store":
+			reservation.UserStoreID = row.ID
+		default:
+			t.Fatalf("unexpected quota reservation: %+v", row)
+		}
+	}
+	if reservation.GlobalJobID == "" || reservation.UserJobID == "" ||
+		reservation.GlobalStoreID == "" || reservation.UserStoreID == "" || storeBytes <= 0 {
+		t.Fatalf("incomplete quota reservations: %+v store=%d", reservation, storeBytes)
+	}
+	return reservation, storeBytes
+}
+
+func TestCreateEnforcesGlobalAndUserCASAndRollsBack(t *testing.T) {
 	harness := newServiceHarness(t)
-	initial := time.Now().UTC().Truncate(time.Second)
-	expiresAt := initial.Add(time.Second)
-	clock := newQuotaAtomicClock(initial)
-	quota, err := NewQuotaService(harness.db, clock.Now, QuotaLimits{
-		GlobalActiveJobs: 2, UserActiveJobs: 2, GlobalStoreBytes: 1024, UserStoreBytes: 1024,
-	})
+	harness.service.config.Quota.GlobalActiveJobs = 2
+	harness.service.config.Quota.UserActiveJobs = 1
+	request := quotaCreateRequest(t, harness, 71, "quota-user-first")
+	first, err := harness.service.Create(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, peak := quotaReservationsForJob(t, harness.db, first.Job.ID)
 	before := captureQuotaAdmissionState(t, harness.db)
+	request.IdempotencyKey = "quota-user-overflow"
+	if _, err := harness.service.Create(context.Background(), request); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("same-user overflow error=%v", err)
+	}
+	assertQuotaAdmissionStateUnchanged(t, harness.db, before, "user quota rejection")
+	assertQuotaBucketTotals(t, harness, 1, peak)
+	request.Actor.UserID = 72
+	request.IdempotencyKey = "quota-global-second"
+	if _, err := harness.service.Create(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	before = captureQuotaAdmissionState(t, harness.db)
+	request.Actor.UserID = 73
+	request.IdempotencyKey = "quota-global-overflow"
+	if _, err := harness.service.Create(context.Background(), request); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("global overflow error=%v", err)
+	}
+	assertQuotaAdmissionStateUnchanged(t, harness.db, before, "global quota rejection")
+}
+
+func TestCreateEnforcesStoreByteLimitsAndRollsBack(t *testing.T) {
+	for _, scope := range []string{"global", "user"} {
+		t.Run(scope, func(t *testing.T) {
+			harness := newServiceHarness(t)
+			request := quotaCreateRequest(t, harness, 71, "quota-store-first")
+			created, err := harness.service.Create(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, peak := quotaReservationsForJob(t, harness.db, created.Job.ID)
+			if scope == "global" {
+				harness.service.config.Quota.GlobalStoreBytes = 2*peak - 1
+				request.Actor.UserID = 72
+			} else {
+				harness.service.config.Quota.UserStoreBytes = 2*peak - 1
+			}
+			before := captureQuotaAdmissionState(t, harness.db)
+			request.IdempotencyKey = "quota-store-overflow"
+			if _, err := harness.service.Create(context.Background(), request); !errors.Is(err, ErrQuotaExceeded) {
+				t.Fatalf("%s store overflow error=%v", scope, err)
+			}
+			assertQuotaAdmissionStateUnchanged(t, harness.db, before, scope+" store rejection")
+			for _, target := range []any{
+				&model.BackupAssetExportJob{}, &model.BackupAssetExportKey{}, &model.BackupAssetExportItem{},
+				&model.BackupAssetExportSourceLease{}, &model.BackupAssetExportIdempotency{},
+			} {
+				var count int64
+				if err := harness.db.Model(target).Count(&count).Error; err != nil || count != 1 {
+					t.Fatalf("%s store rejection %T count=%d err=%v", scope, target, count, err)
+				}
+			}
+			var leases int64
+			if err := harness.db.Model(&model.RecoveryPointLease{}).Where("holder_type = ?", "export_job").Count(&leases).Error; err != nil || leases != 1 {
+				t.Fatalf("%s store rejection leases=%d err=%v", scope, leases, err)
+			}
+		})
+	}
+}
+
+func TestCreateKeepsAdmissionDeadlineFixedAcrossQuotaLockWait(t *testing.T) {
+	harness := newServiceHarness(t)
+	initial := harness.service.now().UTC()
+	clock := newQuotaAtomicClock(initial)
+	harness.service.now = clock.Now
+	request := quotaCreateRequest(t, harness, 1, "quota-fixed-admission-deadline")
 	barrier := installQuotaPairLockBarrier(t, harness.db)
 	type result struct {
-		reservation QuotaReservation
-		err         error
+		created CreateResult
+		err     error
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		reservation, reserveErr := quota.ReserveJob(barrier.Context(context.Background()), QuotaJobRequest{
-			UserID: 1, JobID: strings.Repeat("4", 32), StoreBytes: 64, ExpiresAt: expiresAt,
-		})
-		resultCh <- result{reservation: reservation, err: reserveErr}
+		created, err := harness.service.Create(barrier.Context(context.Background()), request)
+		resultCh <- result{created: created, err: err}
 	}()
-
 	barrier.Wait(t)
-	clock.Set(expiresAt)
+	clock.Set(initial.Add(2 * time.Hour))
 	barrier.Release()
 	got := waitForQuotaResult(t, resultCh)
-	if !errors.Is(got.err, ErrQuotaExceeded) {
-		t.Errorf("ReserveJob after deadline error=%v, want ErrQuotaExceeded", got.err)
+	if got.err != nil {
+		t.Fatalf("Create after quota lock wait: %v", got.err)
 	}
-	if got.reservation != (QuotaReservation{}) {
-		t.Errorf("ReserveJob after deadline reservation=%+v, want zero", got.reservation)
+	if !got.created.Job.AbsoluteDeadline.Equal(initial.Add(harness.config.MaxDuration)) {
+		t.Fatalf("job deadline=%s, want fixed admission deadline", got.created.Job.AbsoluteDeadline)
 	}
-	assertQuotaAdmissionStateUnchanged(t, harness.db, before, "ReserveJob deadline rejection")
-}
-
-func TestQuotaServiceRejectsNonPositiveStoreBytesWithoutMutation(t *testing.T) {
-	harness := newServiceHarness(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	quota, err := NewQuotaService(harness.db, func() time.Time { return now }, QuotaLimits{
-		GlobalActiveJobs: 2, UserActiveJobs: 2, GlobalStoreBytes: 1024, UserStoreBytes: 1024,
-	})
-	if err != nil {
+	var rows []model.BackupAssetExportReservation
+	if err := harness.db.Where("job_id = ?", got.created.Job.ID).Find(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
-	before := captureQuotaAdmissionState(t, harness.db)
-	for _, testCase := range []struct {
-		name       string
-		jobID      string
-		storeBytes int64
-	}{
-		{name: "Zero", jobID: strings.Repeat("5", 32), storeBytes: 0},
-		{name: "Negative", jobID: strings.Repeat("7", 32), storeBytes: -1},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			reservation, reserveErr := quota.ReserveJob(context.Background(), QuotaJobRequest{
-				UserID: 1, JobID: testCase.jobID, StoreBytes: testCase.storeBytes, ExpiresAt: now.Add(time.Hour),
-			})
-			if !errors.Is(reserveErr, ErrQuotaExceeded) {
-				t.Errorf("StoreBytes=%d ReserveJob error=%v, want ErrQuotaExceeded", testCase.storeBytes, reserveErr)
-			}
-			if reservation != (QuotaReservation{}) {
-				t.Errorf("StoreBytes=%d ReserveJob reservation=%+v, want zero", testCase.storeBytes, reservation)
-			}
-			assertQuotaAdmissionStateUnchanged(t, harness.db, before, testCase.name+"-store rejection")
-		})
+	if len(rows) != 4 {
+		t.Fatalf("reservation count=%d want=4", len(rows))
 	}
-
-	positive, err := quota.ReserveJob(context.Background(), QuotaJobRequest{
-		UserID: 1, JobID: strings.Repeat("6", 32), StoreBytes: 64, ExpiresAt: now.Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatalf("positive-store ReserveJob: %v", err)
-	}
-	for name, id := range map[string]string{
-		"global job": positive.GlobalJobID, "user job": positive.UserJobID,
-		"global store": positive.GlobalStoreID, "user store": positive.UserStoreID,
-	} {
-		if id == "" {
-			t.Errorf("positive-store %s reservation ID is empty", name)
+	_, peak := quotaReservationsForJob(t, harness.db, got.created.Job.ID)
+	assertQuotaBucketTotals(t, harness, 1, peak)
+	for _, row := range rows {
+		if row.State != "active" || row.LeaseOwner != got.created.Job.ID ||
+			!row.LeaseExpiresAt.Equal(got.created.Job.AbsoluteDeadline) || !row.CreatedAt.Equal(initial) || !row.UpdatedAt.Equal(initial) {
+			t.Fatalf("reservation moved across lock wait: %+v", row)
+		}
+		if (row.Kind == "job" && (row.ReservedSlots != 1 || row.ReservedStoreBytes != 0)) ||
+			(row.Kind == "store" && (row.ReservedSlots != 0 || row.ReservedStoreBytes != peak)) {
+			t.Fatalf("invalid reservation accounting: %+v", row)
 		}
 	}
-	assertQuotaBucketTotals(t, harness, 1, 64)
 	var buckets []model.BackupAssetExportQuotaBucket
-	if err := harness.db.Order("scope ASC").Find(&buckets).Error; err != nil {
+	if err := harness.db.Find(&buckets).Error; err != nil {
 		t.Fatal(err)
-	}
-	if len(buckets) != 2 {
-		t.Fatalf("positive-store quota bucket count=%d want=2", len(buckets))
 	}
 	for _, bucket := range buckets {
-		if !bucket.CreatedAt.Equal(now) || !bucket.UpdatedAt.Equal(now) {
-			t.Errorf("positive-store %s bucket timestamps created=%s updated=%s want=%s",
-				bucket.Scope, bucket.CreatedAt, bucket.UpdatedAt, now)
+		wantLifecycleNext := int64(1)
+		if bucket.Scope == "global" {
+			wantLifecycleNext = 2
 		}
-		if bucket.LifecycleNextSequence != 1 || bucket.LifecycleSweepCursor != 0 ||
+		if !bucket.CreatedAt.Equal(initial) || !bucket.UpdatedAt.Equal(initial) ||
+			bucket.LifecycleNextSequence != wantLifecycleNext || bucket.LifecycleSweepCursor != 0 ||
 			bucket.LifecycleSweepHighWater != 0 || bucket.LifecycleSweepRevision != 0 ||
 			bucket.LifecycleSweepLeaseExpiresAt != nil || bucket.ReaderNextSequence != 1 ||
 			bucket.ReaderSweepCursor != 0 || bucket.ReaderSweepHighWater != 0 ||
 			bucket.ReaderSweepRevision != 0 || bucket.ReaderSweepLeaseExpiresAt != nil {
-			t.Errorf("positive-store %s bucket scheduler state changed: %+v", bucket.Scope, bucket)
+			t.Fatalf("unexpected initial quota bucket state: %+v", bucket)
 		}
 	}
 }
 
-func TestQuotaAdmissionDoesNotObserveInjectedClockBeforeQuotaPairLocks(t *testing.T) {
-	t.Run("ReserveJob", func(t *testing.T) {
-		harness := newServiceHarness(t)
-		now := time.Now().UTC().Truncate(time.Second)
-		observer := installQuotaPairLockObserver(t, harness.db)
-		var preLockCalls atomic.Int32
-		quota, err := NewQuotaService(harness.db, func() time.Time {
-			if !observer.PairLocked() {
-				preLockCalls.Add(1)
+func TestCreateRejectsNonPositiveCiphertextLimitWithoutMutation(t *testing.T) {
+	for _, limit := range []int64{0, -1} {
+		t.Run(strconv.FormatInt(limit, 10), func(t *testing.T) {
+			harness := newServiceHarness(t)
+			request := quotaCreateRequest(t, harness, 1, "quota-nonpositive-limit")
+			harness.service.config.MaxCiphertextBytes = limit
+			if _, err := harness.service.Create(context.Background(), request); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("Create with ciphertext limit %d error=%v", limit, err)
 			}
-			return now
-		}, QuotaLimits{
-			GlobalActiveJobs: 2, UserActiveJobs: 2, GlobalStoreBytes: 1024, UserStoreBytes: 1024,
+			assertNoExportCreateWrites(t, harness.db)
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := quota.ReserveJob(observer.Context(context.Background()), QuotaJobRequest{
-			UserID: 1, JobID: strings.Repeat("8", 32), StoreBytes: 64, ExpiresAt: now.Add(time.Hour),
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if !observer.PairLocked() {
-			t.Fatal("ReserveJob did not lock the global and user quota buckets")
-		}
-		if calls := preLockCalls.Load(); calls != 0 {
-			t.Fatalf("ReserveJob observed injected clock %d time(s) before quota pair locks", calls)
-		}
-	})
+	}
+}
+
+func TestQuotaAdmissionDoesNotObserveInjectedClockBeforeQuotaPairLocks(t *testing.T) {
 
 	t.Run("ReserveAttemptRead", func(t *testing.T) {
 		harness := newServiceHarness(t)
@@ -265,9 +302,11 @@ func TestPermanentUseLatchCommitsWithArchiveMemberFirstWriteAndSurvivesPurgeToEm
 	}
 }
 
-func TestQuotaServiceConcurrentGlobalLimit(t *testing.T) {
+func TestCreateConcurrentGlobalLimit(t *testing.T) {
 	harness := openExportBehaviorSQLite(t)
 	now := time.Now().UTC().Truncate(time.Second)
+	request := quotaCreateRequest(t, harness.serviceHarness, 80, "quota-concurrent")
+	selection := harness.resolver.explicit
 	for index := range 4 {
 		ownerUserID := uint(80 + index)
 		if err := harness.db.Create(&model.User{
@@ -276,27 +315,22 @@ func TestQuotaServiceConcurrentGlobalLimit(t *testing.T) {
 		}).Error; err != nil {
 			t.Fatal(err)
 		}
-		job := quotaTestJob(t, jobIDForIndex(index), ownerUserID, now)
-		createExportTestJobWithLifecycleSequence(t, harness.db, &job)
 	}
-	quota, err := NewQuotaService(harness.db, func() time.Time { return now }, QuotaLimits{
-		GlobalActiveJobs: 2, UserActiveJobs: 2, GlobalStoreBytes: 1024, UserStoreBytes: 1024,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	harness.service.config.Quota.GlobalActiveJobs = 2
 	start := make(chan struct{})
 	results := make(chan error, 4)
 	var ready sync.WaitGroup
 	ready.Add(4)
 	for index := 0; index < 4; index++ {
-		index := index
+		service := *harness.service
+		service.resolver = &selectionResolverStub{explicit: selection}
+		service.leases = harness.lease
+		workerRequest := request
+		workerRequest.Actor.UserID = uint(80 + index)
 		go func() {
 			ready.Done()
 			<-start
-			_, err := quota.ReserveJob(context.Background(), QuotaJobRequest{
-				UserID: uint(80 + index), JobID: jobIDForIndex(index), StoreBytes: 64, ExpiresAt: now.Add(time.Hour),
-			})
+			_, err := service.Create(context.Background(), workerRequest)
 			results <- err
 		}()
 	}
@@ -313,6 +347,23 @@ func TestQuotaServiceConcurrentGlobalLimit(t *testing.T) {
 	}
 	if succeeded != 2 {
 		t.Fatalf("global limit admitted %d jobs want=2", succeeded)
+	}
+	for _, target := range []any{
+		&model.BackupAssetExportJob{}, &model.BackupAssetExportKey{}, &model.BackupAssetExportItem{},
+		&model.BackupAssetExportSourceLease{}, &model.BackupAssetExportIdempotency{}, &model.RecoveryPointLease{},
+	} {
+		var count int64
+		if err := harness.db.Model(target).Count(&count).Error; err != nil || count != 2 {
+			t.Fatalf("concurrent create %T count=%d err=%v, want two winners", target, count, err)
+		}
+	}
+	var reservations int64
+	if err := harness.db.Model(&model.BackupAssetExportReservation{}).Count(&reservations).Error; err != nil || reservations != 8 {
+		t.Fatalf("concurrent create reservations=%d err=%v, want eight", reservations, err)
+	}
+	var global model.BackupAssetExportQuotaBucket
+	if err := harness.db.Where("scope = ? AND subject = ?", "global", "global").Take(&global).Error; err != nil || global.ActiveJobs != 2 {
+		t.Fatalf("concurrent global bucket=%+v err=%v", global, err)
 	}
 }
 
@@ -334,90 +385,9 @@ func quotaTestJob(t *testing.T, id string, ownerUserID uint, now time.Time) mode
 	}
 }
 
-func TestQuotaServiceLocksGlobalAndUserBeforeFirstMutationAndRollsBack(t *testing.T) {
+func TestCreateLocksGlobalAndUserBeforeFirstQuotaMutationAndRollsBack(t *testing.T) {
 	harness := newServiceHarness(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	quota, err := NewQuotaService(harness.db, func() time.Time { return now }, QuotaLimits{
-		GlobalActiveJobs: 2, UserActiveJobs: 2, GlobalStoreBytes: 1024, UserStoreBytes: 1024,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var globalLocked atomic.Bool
-	var userLocked atomic.Bool
-	var pairLockedBeforeMutation atomic.Bool
-	injectedErr := errors.New("injected quota mutation failure")
-	const queryCallback = "test:observe_export_quota_pair_locks"
-	if err := harness.db.Callback().Query().After("gorm:query").Register(queryCallback, func(tx *gorm.DB) {
-		if tx.Statement.Schema == nil || tx.Statement.Schema.Table != "backup_asset_export_quota_buckets" {
-			return
-		}
-		if _, locked := tx.Statement.Clauses["FOR"]; !locked {
-			return
-		}
-		for _, value := range tx.Statement.Vars {
-			subject, ok := value.(string)
-			if !ok {
-				continue
-			}
-			switch subject {
-			case "global":
-				globalLocked.Store(true)
-			case "1":
-				userLocked.Store(true)
-			}
-		}
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := harness.db.Callback().Query().Remove(queryCallback); err != nil {
-			t.Errorf("remove quota query callback: %v", err)
-		}
-	})
-
-	var injected atomic.Bool
-	const updateCallback = "test:fail_first_export_quota_mutation"
-	if err := harness.db.Callback().Update().Before("gorm:update").Register(updateCallback, func(tx *gorm.DB) {
-		if tx.Statement.Schema == nil || tx.Statement.Schema.Table != "backup_asset_export_quota_buckets" ||
-			!injected.CompareAndSwap(false, true) {
-			return
-		}
-		pairLockedBeforeMutation.Store(globalLocked.Load() && userLocked.Load())
-		_ = tx.AddError(injectedErr)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := harness.db.Callback().Update().Remove(updateCallback); err != nil {
-			t.Errorf("remove quota update callback: %v", err)
-		}
-	})
-
-	_, err = quota.ReserveJob(context.Background(), QuotaJobRequest{
-		UserID: 1, JobID: strings.Repeat("1", 32), StoreBytes: 64, ExpiresAt: now.Add(time.Hour),
-	})
-	if !errors.Is(err, injectedErr) {
-		t.Fatalf("reserve error=%v want injected cause", err)
-	}
-	if !pairLockedBeforeMutation.Load() {
-		t.Fatal("quota counter mutation started before global and user bucket locks")
-	}
-	for _, target := range []any{&model.BackupAssetExportQuotaBucket{}, &model.BackupAssetExportReservation{}} {
-		var count int64
-		if err := harness.db.Model(target).Count(&count).Error; err != nil || count != 0 {
-			t.Fatalf("rolled-back %T count=%d err=%v", target, count, err)
-		}
-	}
-}
-
-func TestCommitCreateLocksGlobalAndUserBeforeFirstQuotaMutationAndRollsBack(t *testing.T) {
-	harness := newServiceHarness(t)
-	selection, err := FreezeSelection([]FrozenItem{frozenItemFixture()}, nil, harness.config.Selection)
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := quotaCreateRequest(t, harness, 2, "create-quota-pair-order")
 
 	var globalLocked atomic.Bool
 	var userLocked atomic.Bool
@@ -470,10 +440,7 @@ func TestCommitCreateLocksGlobalAndUserBeforeFirstQuotaMutationAndRollsBack(t *t
 		}
 	})
 
-	_, err = harness.service.CommitCreate(context.Background(), CommitCreateRequest{
-		Actor: SelectionActor{UserID: 2, Role: "admin"}, Selection: selection,
-		IdempotencyKey: "commit-create-quota-pair-order", ArchiveFormat: ArchiveZIP, ArchiveProfile: "zip_deflate_v1",
-	})
+	_, err := harness.service.Create(context.Background(), request)
 	if !errors.Is(err, injectedErr) {
 		t.Fatalf("CommitCreate error=%v want injected cause", err)
 	}
@@ -496,56 +463,66 @@ func TestCommitCreateLocksGlobalAndUserBeforeFirstQuotaMutationAndRollsBack(t *t
 	}
 }
 
-func TestQuotaServiceSeparatesNonStoreAndStoreRelease(t *testing.T) {
+func TestLifecycleSeparatesNonStoreAndStoreRelease(t *testing.T) {
 	harness := newServiceHarness(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	quota, err := NewQuotaService(harness.db, func() time.Time { return now }, QuotaLimits{
-		GlobalActiveJobs: 2, UserActiveJobs: 2, GlobalStoreBytes: 1024, UserStoreBytes: 1024,
-	})
+	request := quotaCreateRequest(t, harness, 72, "quota-lifecycle-release")
+	created, err := harness.service.Create(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := quota.ReserveJob(context.Background(), QuotaJobRequest{
-		UserID: 72, JobID: "33333333333333333333333333333333", StoreBytes: 128, ExpiresAt: now.Add(time.Hour),
+	reservation, peak := quotaReservationsForJob(t, harness.db, created.Job.ID)
+	quota, err := NewQuotaService(harness.db, harness.service.now, harness.config.Quota)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(StoreConfig{Root: filepath.Join(t.TempDir(), "export")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	port, err := NewPersistentLifecyclePort(PersistentLifecyclePortDependencies{
+		DB: harness.db, Delivery: &persistentLifecycleDeliveryFake{}, Sources: harness.lease,
+		Quota: quota, Store: store, AttemptWork: NewAttemptWorkRegistry(), Now: harness.service.now,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := quota.ReleaseNonStore(context.Background(), reservation); err != nil {
+	if err := port.ReleaseSourcesAndNonStore(context.Background(), created.Job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := quota.ReleaseNonStore(context.Background(), reservation); err != nil {
+	if err := port.ReleaseSourcesAndNonStore(context.Background(), created.Job.ID); err != nil {
 		t.Fatalf("idempotent non-store release: %v", err)
 	}
-	assertQuotaBucketTotals(t, harness, 0, 128)
+	assertQuotaBucketTotals(t, harness, 0, peak)
 	assertQuotaReservationStates(t, harness, reservation, "released", "active")
 
-	if err := quota.ReleaseStore(context.Background(), reservation); err != nil {
+	if err := port.ReleaseStoreBytes(context.Background(), created.Job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := quota.ReleaseStore(context.Background(), reservation); err != nil {
+	if err := port.ReleaseStoreBytes(context.Background(), created.Job.ID); err != nil {
 		t.Fatalf("idempotent store release: %v", err)
 	}
 	assertQuotaBucketTotals(t, harness, 0, 0)
 	assertQuotaReservationStates(t, harness, reservation, "released", "released")
+	var latch model.BackupAssetExportQuotaBucket
+	if err := harness.db.Where("scope = ? AND subject = ?", "global", "global").Take(&latch).Error; err != nil {
+		t.Fatalf("permanent global latch missing after release: %v", err)
+	}
 }
 
 func TestQuotaReleaseCanonicalizesReversedIDsBeforeReservationLockAndRollsBack(t *testing.T) {
 	harness := newServiceHarness(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	quota, err := NewQuotaService(harness.db, func() time.Time { return now }, QuotaLimits{
-		GlobalActiveJobs: 2, UserActiveJobs: 2, GlobalStoreBytes: 1024, UserStoreBytes: 1024,
-	})
+	quota, err := NewQuotaService(harness.db, harness.service.now, harness.config.Quota)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := quota.ReserveJob(context.Background(), QuotaJobRequest{
-		UserID: 1, JobID: strings.Repeat("3", 32), StoreBytes: 64, ExpiresAt: now.Add(time.Hour),
-	})
+	request := quotaCreateRequest(t, harness, 1, "quota-release-reversed")
+	created, err := harness.service.Create(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
+	reservation, peak := quotaReservationsForJob(t, harness.db, created.Job.ID)
 
 	var globalLocked atomic.Bool
 	var userLocked atomic.Bool
@@ -609,7 +586,7 @@ func TestQuotaReleaseCanonicalizesReversedIDsBeforeReservationLockAndRollsBack(t
 	if !pairLockedBeforeReservation.Load() {
 		t.Fatal("release locked a reservation before the global and user quota buckets")
 	}
-	assertQuotaBucketTotals(t, harness, 1, 64)
+	assertQuotaBucketTotals(t, harness, 1, peak)
 	assertQuotaReservationStates(t, harness, reservation, "active", "active")
 }
 

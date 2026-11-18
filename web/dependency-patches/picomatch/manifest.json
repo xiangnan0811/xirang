@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "sourcesSha256": "501d19a2f8d61f5b783219e49a6c9170cfef66b756dd949c14a15e17c9ad05fd",
+  "recipesSha256": "c5f42455e632ce0a65fa4821d2232370d53a616177c6ef1dd2eccc3c3fd2cd46",
+  "guardSha256": "5cac0b1b8ffe72c691a38e1bb7bfbdc44722968c64558cd1d95d6205637f8f82",
+  "buildToolchain": {
+    "python": "CPython 3.14.10",
+    "zlib": "1.4"
+  },
+  "name": "@xirang/picomatch",
+  "version": "4.0.7+xirang.1",
+  "artifact": "picomatch-4.0.7-xirang-1.tgz",
+  "integrity": "sha512-DCCGZD9WYRRDVAOQhNuCJ8XVGgwzSDsIJZ5VWbZnLmgXM1oft6nTyaL0kL9+cAAKu5Hn8veShQSofZt4BI+M2w==",
+  "patch": {
+    "path": "patches/picomatch-4.0.7-xirang-1.patch",
+    "sha256": "680aa371ce2a5a6afe4fe021593cbbe16e8519901edf65d9f62c4a3568f26895"
+  },
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "d0cd141b0c322fded5dfad1d4645bb2fedfc05b7321fe1009469638190d59ef9",
+      "mode": "0644"
+    },
+    {
+      "path": "README.md",
+      "sha256": "a69b87120fe2b9cb8f9057eaef6b9f9887f803e02185ca2f431e8162f6312220",
+      "mode": "0644"
+    },
+    {
+      "path": "XIRANG-MODIFICATIONS.txt",
+      "sha256": "b68e48efb3288b000b4acc06e96ca76d4bab7cd1ded0838c7db5689ef84dbfa2",
+      "mode": "0644"
+    },
+    {
+      "path": "index.js",
+      "sha256": "02ae26406508e28f9ba0865be16cf77f0b33de6c4d4d49c212c4176df1d5625a",
+      "mode": "0644"
+    },
+    {
+      "path": "lib/constants.js",
+      "sha256": "c28f952d2758261fe5428a121add485cc25b03e0193633f649de903dc0e5e222",
+      "mode": "0644"
+    },
+    {
+      "path": "lib/guard.js",
+      "sha256": "5cac0b1b8ffe72c691a38e1bb7bfbdc44722968c64558cd1d95d6205637f8f82",
+      "mode": "0644"
+    },
+    {
+      "path": "lib/parse.js",
+      "sha256": "10926576d31e72708b146331bac30305207ef4e4adcf8d85b60226946d55fbaa",
+      "mode": "0644"
+    },
+    {
+      "path": "lib/picomatch.js",
+      "sha256": "515b62cd6c240ff8f85b61bd30a5b363eb5a4d7fcc29e8c4f817061838d63abc",
+      "mode": "0644"
+    },
+    {
+      "path": "lib/scan.js",
+      "sha256": "6457a1764e5c2e543cc3a0c00ce12ebb3764097628868198370b64d4e642aaae",
+      "mode": "0644"
+    },
+    {
+      "path": "lib/utils.js",
+      "sha256": "f04604f70cd1a3f6ace80b84766468674ff38b4bb83818d2ef1d81fc6355f935",
+      "mode": "0644"
+    },
+    {
+      "path": "package.json",
+      "sha256": "d1ea045811b4d6f2a831e48bea6ff50f4e7c419a8686f1d0aeb66fb0bcdca716",
+      "mode": "0644"
+    },
+    {
+      "path": "posix.js",
+      "sha256": "5695ff5dfcd5a338a40630bd506056f2950bcb08fe1cc068519cbbfe60add480",
+      "mode": "0644"
+    }
+  ],
+  "changedFiles": [
+    {
+      "path": "XIRANG-MODIFICATIONS.txt",
+      "beforeSha256": null,
+      "afterSha256": "b68e48efb3288b000b4acc06e96ca76d4bab7cd1ded0838c7db5689ef84dbfa2"
+    },
+    {
+      "path": "lib/guard.js",
+      "beforeSha256": null,
+      "afterSha256": "5cac0b1b8ffe72c691a38e1bb7bfbdc44722968c64558cd1d95d6205637f8f82"
+    },
+    {
+      "path": "lib/parse.js",
+      "beforeSha256": "4e1e05447668aa1e94366c5516a2bcd8f5fff800cc92b1d0cd7d77703b8618c4",
+      "afterSha256": "10926576d31e72708b146331bac30305207ef4e4adcf8d85b60226946d55fbaa"
+    },
+    {
+      "path": "lib/picomatch.js",
+      "beforeSha256": "fdd249d7ffff853f3bb1c77eafc8baa1a437bea85a94c35877b83c6a40d9ca94",
+      "afterSha256": "515b62cd6c240ff8f85b61bd30a5b363eb5a4d7fcc29e8c4f817061838d63abc"
+    },
+    {
+      "path": "package.json",
+      "beforeSha256": "479b70b87aa7b44344d62c8a459ae7e53dd2bca6c61f1396bd55e63e9de73fc6",
+      "afterSha256": "d1ea045811b4d6f2a831e48bea6ff50f4e7c419a8686f1d0aeb66fb0bcdca716"
+    }
+  ]
+}

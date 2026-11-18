@@ -2008,10 +2008,6 @@ func (runtime *Runtime) Inventory() *ga.InventoryService {
 	return runtime.inventory
 }
 
-func (runtime *Runtime) inventoryWorkerStarted() bool {
-	return false
-}
-
 func (runtime *Runtime) TransitionFeature(ctx context.Context, enabled bool, persist func() error) error {
 	configs, err := runtime.currentFeatureTransitionConfigs(enabled)
 	if err != nil {

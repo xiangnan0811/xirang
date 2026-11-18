@@ -842,12 +842,6 @@ func (graph *managedRecoveryGraph) setReconciliationState(state recovery.Recover
 	graph.runMu.Unlock()
 }
 
-func (graph *managedRecoveryGraph) currentReconciliationState() recovery.RecoveryReconciliationState {
-	graph.runMu.Lock()
-	defer graph.runMu.Unlock()
-	return graph.reconciliationState
-}
-
 type managedRecoverySealedResultPublisher interface {
 	PublishSealedBatch(context.Context, recovery.RecoverySealedResultCursor, int) (recovery.RecoverySealedResultCursor, error)
 }
@@ -1553,15 +1547,6 @@ func (publication *managedRecoveryPublication) waitIdle(ctx context.Context) err
 		case <-change:
 		}
 	}
-}
-
-func (publication *managedRecoveryPublication) current() *managedRecoveryGraph {
-	if publication == nil {
-		return nil
-	}
-	publication.mu.Lock()
-	defer publication.mu.Unlock()
-	return publication.graph
 }
 
 func (publication *managedRecoveryPublication) signalLocked() {

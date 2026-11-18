@@ -472,30 +472,6 @@ func (cache *AuthenticatedCache) Status() CacheStatus {
 	return cache.status
 }
 
-func (cache *AuthenticatedCache) Materialize(ctx context.Context, object CacheObject, source SourceSession) (CacheEntryInfo, error) {
-	if cache == nil || !validCacheObject(object) || source == nil {
-		if source != nil {
-			_ = source.Close()
-		}
-		return CacheEntryInfo{}, ErrInvalidCacheBinding
-	}
-	materialization, hit, err := cache.BeginMaterialization(object)
-	if err != nil {
-		closeErr := source.Close()
-		if closeErr != nil {
-			return CacheEntryInfo{}, ErrCacheSourceChanged
-		}
-		return CacheEntryInfo{}, err
-	}
-	if materialization == nil {
-		if closeErr := source.Close(); closeErr != nil {
-			return CacheEntryInfo{}, ErrCacheSourceChanged
-		}
-		return hit, nil
-	}
-	return materialization.Commit(ctx, source)
-}
-
 func (cache *AuthenticatedCache) BeginMaterialization(object CacheObject) (*CacheMaterialization, CacheEntryInfo, error) {
 	if cache == nil || !validCacheObject(object) {
 		return nil, CacheEntryInfo{}, ErrInvalidCacheBinding
@@ -652,29 +628,6 @@ func (cache *AuthenticatedCache) OpenRange(object CacheObject, offset, length in
 	entry.idleExpiresAt = refreshed
 	cache.mu.Unlock()
 	return &CacheLease{cache: cache, entry: entry, offset: offset, remaining: length, currentIndex: -1}, nil
-}
-
-func (cache *AuthenticatedCache) Evict(object CacheObject) error {
-	if cache == nil || !validCacheObject(object) {
-		return ErrInvalidCacheBinding
-	}
-	key, err := cache.objectKey(object)
-	if err != nil {
-		return err
-	}
-	cache.mu.Lock()
-	entry := cache.entries[key]
-	if entry == nil {
-		cache.mu.Unlock()
-		return ErrCacheMiss
-	}
-	if entry.leases > 0 {
-		cache.mu.Unlock()
-		return ErrCacheBusy
-	}
-	cache.removeEntryLocked(entry)
-	cache.mu.Unlock()
-	return cache.deleteEntryStorage(entry)
 }
 
 // EvictRecoveryPoint removes at most batchSize exact-point cache entries. A

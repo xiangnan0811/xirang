@@ -62,6 +62,12 @@ export default tseslint.config(
       globals: globals.commonjs,
     },
   },
+  {
+    files: ["dependency-patches/picomatch/files/guard.cjs"],
+    rules: {
+      "@typescript-eslint/no-require-imports": ["error", { allow: ["^@eslint-community/regexpp$"] }],
+    },
+  },
   // Service worker runs in a serviceworker global context
   {
     files: ["public/sw.js"],

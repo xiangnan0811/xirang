@@ -424,7 +424,7 @@ func TestComposeGAReadinessRejectsUnsafeExportRootAndMissingKeyDomains(t *testin
 	})
 }
 
-func TestInventoryRuntimeComposesWithoutDetachedGoroutine(t *testing.T) {
+func TestInventoryRuntimeComposesAndPersistsInventory(t *testing.T) {
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_GA_RUNTIME_INVENTORY_KEY_FOR_TEST_ONLY")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
@@ -476,9 +476,6 @@ func TestInventoryRuntimeComposesWithoutDetachedGoroutine(t *testing.T) {
 	}
 	if constructed.Inventory() == nil {
 		t.Fatal("runtime omitted the composed inventory owner")
-	}
-	if constructed.inventoryWorkerStarted() {
-		t.Fatal("runtime started a detached inventory goroutine during compose")
 	}
 	runtimeDocument, err := constructed.Inventory().DryRun(context.Background())
 	if err != nil {

@@ -69,6 +69,7 @@
     "eslint-plugin-react-refresh": "^0.5.7",
     "jsdom": "^26.1.0",
     "msw": "^2.15.0",
+    "picomatch": "file:dependency-patches/picomatch/picomatch-4.0.7-xirang-1.tgz",
     "postcss": "^8.5.32",
     "tailwindcss": "^4.3.2",
     "tailwindcss-animate": "^1.0.7",
@@ -82,6 +83,7 @@
     "@eslint/config-array": "$@eslint/config-array",
     "@eslint/eslintrc": "$@eslint/eslintrc",
     "@typescript-eslint/typescript-estree": "$@typescript-eslint/typescript-estree",
+    "picomatch": "$picomatch",
     "nanoid": "3.3.18",
     "browserslist": "4.28.7",
     "jsdom": {
