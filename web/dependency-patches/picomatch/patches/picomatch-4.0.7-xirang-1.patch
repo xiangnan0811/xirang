@@ -1,0 +1,380 @@
+--- package/XIRANG-MODIFICATIONS.txt
++++ package/XIRANG-MODIFICATIONS.txt
+@@ -0,0 +1,9 @@
++Xirang local fork of picomatch 4.0.7 (MIT).
++Upstream: https://registry.npmjs.org/picomatch/-/picomatch-4.0.7.tgz
++Integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==
++Original copyright and MIT license are retained. This is locally maintained,
++not an official patched picomatch release. Addresses GHSA-fc5q-39xc-vjpf
++with token reductions and an emitted-regex guard.
++Nested repeated wildcard structures can be treated literally, including
++capture/default extglob forms. The guard is structural, not a general
++regex complexity guarantee; raw regex and manually modified states remain raw.
+--- package/lib/guard.js
++++ package/lib/guard.js
+@@ -0,0 +1,121 @@
++'use strict';
++
++// Only parser-created states are associated with checked output. Raw sources and
++// caller-modified states retain picomatch's existing raw-regex behavior.
++const checked = new WeakMap();
++const nativeErrors = new WeakSet();
++const candidate = /\)[*+{]/;
++
++const grammar = options => {
++  const flags = options.flags || (options.nocase ? 'i' : '');
++  return { flags, unicode: flags.includes('u'), unicodeSets: flags.includes('v') };
++};
++
++const inspect = (source, mode) => {
++  const { RegExpParser, RegExpSyntaxError, visitRegExpAST } = require('@eslint-community/regexpp');
++  let depth = 0;
++  const assertions = [];
++  let risky = false;
++  const atom = () => { if (depth >= 2) risky = true; };
++  try {
++    const ast = new RegExpParser().parsePattern(source, 0, source.length, mode);
++    visitRegExpAST(ast, {
++      onQuantifierEnter(node) { if (node.max > 1) depth++; },
++      onQuantifierLeave(node) { if (node.max > 1) depth--; },
++      onAssertionEnter(node) {
++        if (node.kind === 'lookahead' || node.kind === 'lookbehind') {
++          assertions.push(depth);
++          depth = 0;
++        }
++      },
++      onAssertionLeave(node) {
++        if (node.kind === 'lookahead' || node.kind === 'lookbehind') depth = assertions.pop();
++      },
++      onCharacterSetEnter: atom,
++      onCharacterClassEnter: atom,
++      onExpressionCharacterClassEnter: atom,
++      onBackreferenceEnter: atom
++    });
++  } catch (error) {
++    if (error instanceof RegExpSyntaxError || error instanceof RangeError) {
++      throw new SyntaxError('Cannot classify generated picomatch expression', { cause: error });
++    }
++    throw error;
++  }
++  return risky;
++};
++
++const literal = input => {
++  let output = '';
++  for (let i = 0; i < input.length; i++) {
++    output += `\\u${input.charCodeAt(i).toString(16).padStart(4, '0')}`;
++  }
++  return output;
++};
++exports.literal = literal;
++
++const classify = (source, body, prefix, mode, wrap, details) => {
++  if (!candidate.test(source)) return source;
++  try {
++    // Preserve the existing toRegex/debug behavior for invalid compiler flags.
++    new RegExp('', mode.flags);
++  } catch (error) {
++    if (error instanceof SyntaxError) return '(?!)';
++    throw error;
++  }
++  let risky;
++  try {
++    risky = inspect(source, mode);
++  } catch (error) {
++    const { RegExpSyntaxError } = require('@eslint-community/regexpp');
++    if (!(error instanceof SyntaxError && error.cause instanceof RegExpSyntaxError)) throw error;
++    try {
++      new RegExp(`(?:${source})`, mode.flags);
++    } catch (nativeError) {
++      if (!(nativeError instanceof SyntaxError)) throw nativeError;
++      nativeErrors.add(nativeError);
++      details.invalid = nativeError;
++      return '(?!)';
++    }
++    throw error;
++  }
++  if (!risky) return source;
++  const fallback = wrap(prefix + literal(body));
++  // Always parse the fallback, even when the quick candidate filter misses it.
++  if (inspect(fallback, mode)) {
++    throw new SyntaxError('Unsafe picomatch fallback', { cause: new SyntaxError('Risky prepend') });
++  }
++  return fallback;
++};
++
++exports.finalize = (state, body, prefix, options, wrap = value => value) => {
++  const original = state.output;
++  if (!candidate.test(original)) return original;
++  const mode = grammar(options);
++  const details = {};
++  state.output = classify(original, body, prefix, mode, wrap, details);
++  if (state.output !== original && Array.isArray(state.tokens)) {
++    state.tokens = [{ type: 'bos', value: '', output: state.output }];
++  }
++  checked.set(state, { original, output: state.output, body, prefix, mode, wrap, invalid: details.invalid });
++  return state.output;
++};
++
++exports.output = (state, options, returnOutput = false) => {
++  const record = checked.get(state);
++  if (!record || state.output !== record.output) return state.output;
++  const mode = grammar(options);
++  let output = record.output;
++  let invalid = record.invalid;
++  if (mode.unicode !== record.mode.unicode || mode.unicodeSets !== record.mode.unicodeSets || mode.flags !== record.mode.flags) {
++    const details = {};
++    output = classify(record.original, record.body, record.prefix, mode, record.wrap, details);
++    invalid = details.invalid;
++  }
++  if (invalid && !returnOutput) return invalid;
++  return output;
++};
++exports.isNativeError = (state, value) => {
++  const record = checked.get(state);
++  return !!record && state.output === record.output && nativeErrors.has(value);
++};
+--- package/lib/parse.js
++++ package/lib/parse.js
+@@ -2,6 +2,7 @@
+
+ const constants = require('./constants');
+ const utils = require('./utils');
++const guard = require('./guard');
+
+ /**
+  * Constants
+@@ -284,7 +285,36 @@
+   return depth;
+ };
+
+-const analyzeRepeatedExtglob = (body, options) => {
++const analyzeRepeatedExtglob = (body, options, hasWildcard) => {
++  if (hasWildcard) {
++    const branches = splitTopLevel(body);
++    if (!options.capture && branches.length === 1 &&
++        /^[A-Za-z0-9 ._-]*\*[A-Za-z0-9 ._-]*$/.test(branches[0])) {
++      return { risky: false, collapse: true };
++    }
++
++    if (!options.capture && branches.length === 1 && body === branches[0]) {
++      const match = /^([A-Za-z0-9_-]+)\*([A-Za-z0-9 ,_-]+)\*$/.exec(body);
++      if (match) {
++        return { risky: true, twoStars: { prefix: match[1], middle: match[2] } };
++      }
++    }
++
++    if (!options.capture && body === branches.join('|')) {
++      const wildcards = branches.filter(branch => /^[A-Za-z0-9_-]+\*$/.test(branch));
++      const literals = branches.filter(branch => /^[A-Za-z0-9_-]$/.test(branch));
++      if (wildcards.length === 1 && literals.length === branches.length - 1 && literals.length > 0) {
++        const prefix = wildcards[0].slice(0, -1);
++        const nocase = String(options.flags || (options.nocase ? 'i' : '')).includes('i');
++        const first = nocase ? prefix[0].toLowerCase() : prefix[0];
++        if (!literals.some(value => (nocase ? value.toLowerCase() : value) === first)) {
++          return { risky: true, trailingStar: { prefix, literals: [...new Set(literals)].join('') } };
++        }
++      }
++    }
++
++    return { risky: true };
++  }
+   if (options.maxExtglobRecursion === false) {
+     return { risky: false };
+   }
+@@ -364,6 +394,7 @@
+   const max = typeof opts.maxLength === 'number' ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
+
+   let len = input.length;
++  let bodyStart = 0;
+   if (len > max) {
+     throw new SyntaxError(`Input length: ${len}, exceeds maximum allowed length: ${max}`);
+   }
+@@ -539,7 +570,31 @@
+   const extglobClose = token => {
+     const literal = input.slice(token.startIndex, state.index + 1);
+     const body = input.slice(token.startIndex + 2, state.index);
+-    const analysis = analyzeRepeatedExtglob(body, opts);
++    // Distinguish wildcard atoms from regex quantifiers on a preceding group.
++    const hasWildcard = tokens.slice(token.tokensIndex + 2).some((item, index, bodyTokens) =>
++      (item.type === 'star' || item.type === 'globstar') && item.value !== '' &&
++      !(opts.regex === true && item.output === '*' && item.prev &&
++        (item.prev.type === 'paren' || item.prev.type === 'bracket')) &&
++      !(bodyTokens[index + 1] && bodyTokens[index + 1].type === 'paren' && bodyTokens[index + 1].value === '(' && bodyTokens[index + 1].extglob === true)
++    );
++    const analysis = analyzeRepeatedExtglob(body, opts, hasWildcard);
++
++    if (analysis.twoStars && (token.type === 'plus' || token.type === 'star')) {
++      const prefix = guard.literal(analysis.twoStars.prefix);
++      const middle = guard.literal(analysis.twoStars.middle);
++      const unit = opts.bash === true ? '.' : QMARK;
++      const tail = opts.bash === true ? '.*?' : STAR;
++      const output = `${prefix}(?:(?!${middle})${unit})*${middle}${tail}`;
++      analysis.safeOutput = token.type === 'star' ? `(?:${output})?` : output;
++    }
++
++    if (analysis.trailingStar && (token.type === 'plus' || token.type === 'star')) {
++      const head = `[${guard.literal(analysis.trailingStar.literals)}]`;
++      const tail = guard.literal(analysis.trailingStar.prefix) + (opts.bash === true ? '.*?' : STAR);
++      analysis.safeOutput = token.type === 'star'
++        ? `${head}*(?:${tail})?`
++        : `(?:${head}*${tail}|${head}+)`;
++    }
+
+     if ((token.type === 'plus' || token.type === 'star') && analysis.risky) {
+       const safeOutput = analysis.safeOutput
+@@ -549,7 +604,7 @@
+
+       open.type = 'text';
+       open.value = literal;
+-      open.output = safeOutput || utils.escapeRegex(literal);
++      open.output = safeOutput || (hasWildcard ? guard.literal(literal) : utils.escapeRegex(literal));
+
+       for (let i = token.tokensIndex + 1; i < tokens.length; i++) {
+         tokens[i].value = '';
+@@ -563,6 +618,10 @@
+       push({ type: 'paren', extglob: true, value, output: '' });
+       decrement('parens');
+       return;
++    }
++
++    if (analysis.collapse === true && (token.type === 'plus' || token.type === 'star')) {
++      token.close = token.type === 'plus' ? ')' : ')?';
+     }
+
+     let output = token.close + (opts.capture ? ')' : '');
+@@ -647,10 +706,12 @@
+
+     if (output === input && opts.contains === true) {
+       state.output = input;
++      guard.finalize(state, input, '', opts);
+       return state;
+     }
+
+     state.output = utils.wrapOutput(output, state, options);
++    guard.finalize(state, input, '', opts, value => utils.wrapOutput(value, state, options));
+     return state;
+   }
+
+@@ -979,6 +1040,7 @@
+       // checking for BOS characters like "!" and "." (not "./")
+       if (prev.type === 'dot' && state.index === state.start + 1) {
+         state.start = state.index + 1;
++        bodyStart = state.index + 1;
+         state.consumed = '';
+         state.output = '';
+         tokens.pop();
+@@ -1060,6 +1122,7 @@
+
+       if (opts.nonegate !== true && state.index === 0) {
+         negate();
++        bodyStart = state.index + 1;
+         continue;
+       }
+     }
+@@ -1327,6 +1390,7 @@
+     }
+   }
+
++  guard.finalize(state, input.slice(bodyStart), state.backtrack ? (opts.prepend || '') : '', opts);
+   return state;
+ };
+
+@@ -1336,7 +1400,7 @@
+  * impact when none of the fast paths match.
+  */
+
+-parse.fastpaths = (input, options) => {
++parse.fastpaths = (input, options, holder) => {
+   const opts = { ...options };
+   const max = typeof opts.maxLength === 'number' ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
+   const len = input.length;
+@@ -1419,6 +1483,11 @@
+     source += `${SLASH_LITERAL}?`;
+   }
+
++  if (source) {
++    const target = holder || {};
++    target.output = source;
++    source = guard.finalize(target, output, '', opts);
++  }
+   return source;
+ };
+
+--- package/lib/picomatch.js
++++ package/lib/picomatch.js
+@@ -2,6 +2,7 @@
+
+ const scan = require('./scan');
+ const parse = require('./parse');
++const guard = require('./guard');
+ const utils = require('./utils');
+ const constants = require('./constants');
+ const isObject = val => val && typeof val === 'object' && !Array.isArray(val);
+@@ -262,15 +263,21 @@
+  */
+
+ picomatch.compileRe = (state, options, returnOutput = false, returnState = false) => {
++  const opts = options || {};
++  const output = guard.output(state, opts, returnOutput);
+   if (returnOutput === true) {
+-    return state.output;
+-  }
+-
+-  const opts = options || {};
++    return output;
++  }
++  if (guard.isNativeError(state, output)) {
++    if (opts.debug === true) throw output;
++    const regex = /$^/;
++    if (returnState === true) regex.state = state;
++    return regex;
++  }
+   const prepend = opts.contains ? '' : '^';
+   const append = opts.contains ? '' : '$';
+
+-  let source = `${prepend}(?:${state.output})${append}`;
++  let source = `${prepend}(?:${output})${append}`;
+   if (state && state.negated === true) {
+     source = `^(?!${source}).*$`;
+   }
+@@ -310,7 +317,7 @@
+   let parsed = { negated: false, fastpaths: true };
+
+   if (options.fastpaths !== false && (input[0] === '.' || input[0] === '*')) {
+-    parsed.output = parse.fastpaths(input, options);
++    parsed.output = parse.fastpaths(input, options, parsed);
+   }
+
+   if (!parsed.output) {
+--- package/package.json
++++ package/package.json
+@@ -1,7 +1,7 @@
+ {
+-  "name": "picomatch",
+-  "description": "Blazing fast and accurate glob matcher written in JavaScript, with no dependencies and full support for standard and extended Bash glob features, including braces, extglobs, POSIX brackets, and regular expressions.",
+-  "version": "4.0.7",
++  "name": "@xirang/picomatch",
++  "description": "Xirang local fork of picomatch with a guarded glob parser.",
++  "version": "4.0.7+xirang.1",
+   "homepage": "https://github.com/micromatch/picomatch",
+   "author": "Jon Schlinkert (https://github.com/jonschlinkert)",
+   "funding": "https://github.com/sponsors/jonschlinkert",
+@@ -18,7 +18,7 @@
+   "sideEffects": false,
+   "main": "index.js",
+   "engines": {
+-    "node": ">=12"
++    "node": ">=20"
+   },
+   "scripts": {
+     "lint": "eslint --cache --cache-location node_modules/.cache/.eslintcache --report-unused-disable-directives --ignore-path .gitignore .",
+@@ -79,5 +79,8 @@
+       "nanomatch",
+       "picomatch"
+     ]
++  },
++  "dependencies": {
++    "@eslint-community/regexpp": "4.12.3"
+   }
+ }

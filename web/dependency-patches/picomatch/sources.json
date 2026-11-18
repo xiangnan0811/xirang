@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "name": "picomatch",
+  "version": "4.0.7",
+  "url": "https://registry.npmjs.org/picomatch/-/picomatch-4.0.7.tgz",
+  "integrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
+  "license": "MIT",
+  "forkName": "@xirang/picomatch",
+  "forkVersion": "4.0.7+xirang.1",
+  "artifact": "picomatch-4.0.7-xirang-1.tgz",
+  "regexpp": {
+    "name": "@eslint-community/regexpp",
+    "version": "4.12.3",
+    "url": "https://registry.npmjs.org/@eslint-community/regexpp/-/regexpp-4.12.3.tgz",
+    "integrity": "sha512-R76UKbvsqI68DJJVTVyqFKqU98CN4+B+acxNfEA2IFarSzP0SjtKf/3+fFiXzTyv5Fj3PxLkGHe2wnVWWMxobQ=="
+  },
+  "requesters": [
+    { "path": "node_modules/tinyglobby", "name": "tinyglobby", "version": "0.2.17", "type": "dependencies", "spec": "^4.0.4" },
+    { "path": "node_modules/tinyglobby/node_modules/fdir", "name": "fdir", "version": "6.5.0", "type": "peerDependencies", "spec": "^3 || ^4" },
+    { "path": "node_modules/vite", "name": "vite", "version": "7.3.8", "type": "dependencies", "spec": "^4.0.3" },
+    { "path": "node_modules/vite/node_modules/fdir", "name": "fdir", "version": "6.5.0", "type": "peerDependencies", "spec": "^3 || ^4" },
+    { "path": "node_modules/vitest", "name": "vitest", "version": "4.1.12", "type": "dependencies", "spec": "^4.0.3" }
+  ]
+}

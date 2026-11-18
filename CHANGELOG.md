@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 工具链安全修复
+
+- 以官方 Picomatch 4.0.7 为来源，使用可复现的本地 `@xirang/picomatch@4.0.7+xirang.1` 修补重复 wildcard 的正则回溯风险（GHSA-fc5q-39xc-vjpf）；Vite、Vitest、tinyglobby 和两份 fdir 仍通过 `picomatch` 安装槽解析。复用已锁定的官方 `@eslint-community/regexpp@4.12.3` 检查最终发射源码，保留原 lint 依赖补丁及其他依赖版本。
+- 本地 fork 采用受限 glob 语义：仅对已证明安全的形态归约，其他风险重复 wildcard 按字面量匹配，包括默认选项下的 `+(*a|b)` 和 `capture:true` 的 `+(*a)`；`maxExtglobRecursion:false` 不能关闭新增防护。无法安全分类或完成安全回退时明确拒绝，不承诺任意原始正则的执行时间。
+- 开发／构建／测试环境须按锁文件重新安装并重启相关进程。fork 的来源、精确配方、完整文件哈希及风险行为回归随仓库维护；registry 审计不对该本地身份独立认证。回退旧锁文件或旧工具环境会恢复漏洞风险；无公开产品 API、运行时配置或数据库迁移变化，工具链验证不代表生产已升级或部署。
+
 ### CI 与测试维护
 
 - 将 5 个工作流共 20 处 checkout v6.0.3 引用由附注 tag 对象固定为同版实际 commit，保留版本旁注、Node 24 runtime 和工作流行为；CI 合同测试改验完整 SHA 引用格式并保留事件 SHA、metadata 与 required 门禁约束，避免写死旧 action 摘要。其他 checkout 版本的统一另行评估。

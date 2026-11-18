@@ -119,7 +119,7 @@ function copyDependencyFixture(root) {
   const sources = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, "dependency-patches/sources.json"), "utf8"));
   const lock = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, "package-lock.json"), "utf8"));
   const patchedNames = new Set(sources.packages.map((item) => item.name));
-  const relevantNames = new Set([...patchedNames, sources.matcher.name]);
+  const relevantNames = new Set([...patchedNames, sources.matcher.name, "picomatch", "@xirang/picomatch", "@eslint-community/regexpp"]);
   const packages = new Map();
 
   for (const [relative, entry] of Object.entries(lock.packages)) {
@@ -129,7 +129,7 @@ function copyDependencyFixture(root) {
     const slot = parts.slice(lastLayer + 1).join("/");
     const relevant = relevantNames.has(slot) || relevantNames.has(entry.name);
     const requester = ["dependencies", "optionalDependencies", "peerDependencies"].some((type) =>
-      Object.keys(entry[type] ?? {}).some((name) => patchedNames.has(name)),
+      Object.keys(entry[type] ?? {}).some((name) => patchedNames.has(name) || name === "picomatch"),
     );
     if (!relevant && !requester) continue;
 
