@@ -120,7 +120,7 @@ def source_fixture(profile):
         tests, events = [], []
         for local in range(24 if index < 22 else 23):
             name = f'TestFixture{local:02d}'
-            paths = [name + '/one'] + ([name + '/two'] if root_index < 368 else [])
+            paths = [name + '/one'] + ([name + '/two'] if root_index < 369 else [])
             root_index += 1
             tests.append({'name': name, 'required_paths': paths})
             pkg = 'xirang/backend/' + package[2:]
