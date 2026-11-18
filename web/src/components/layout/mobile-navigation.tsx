@@ -105,7 +105,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
     <>
       {/* 5-tab bottom bar */}
       <nav
-        className="fixed inset-x-0 bottom-0 z-40 grid h-[60px] grid-cols-5 border-t border-border/75 bg-background/88 backdrop-blur-xl md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 grid h-[60px] grid-cols-5 border-t border-border/75 bg-background md:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         aria-label={t("appShell.mobileNav")}
       >

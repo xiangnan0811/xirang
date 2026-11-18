@@ -484,7 +484,7 @@ function SSHKeyRotationSession({
             {s}
           </span>
           {s < 4 && (
-            <span className="mx-0.5 text-muted-foreground/40">&mdash;</span>
+            <span className="mx-0.5 text-muted-foreground">&mdash;</span>
           )}
         </div>
       ))}

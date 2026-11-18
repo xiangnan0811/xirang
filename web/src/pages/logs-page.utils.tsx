@@ -22,7 +22,7 @@ export function highlightErrorCode(message: string) {
     singleErrorCodeRegex.test(part) ? (
       <span
         key={`${part}-${idx}`}
-        className="rounded border border-destructive/35 bg-destructive/20 px-1 text-destructive"
+        className="rounded border border-destructive/35 bg-destructive/20 px-1 text-[hsl(var(--terminal-level-error))]"
       >
         {part}
       </span>
@@ -34,12 +34,12 @@ export function highlightErrorCode(message: string) {
 
 export function getLevelClass(level: "info" | "warn" | "error") {
   if (level === "error") {
-    return "text-destructive";
+    return "text-[hsl(var(--terminal-level-error))]";
   }
   if (level === "warn") {
-    return "text-warning";
+    return "text-[hsl(var(--terminal-level-warning))]";
   }
-  return "text-success";
+  return "text-[hsl(var(--terminal-level-info))]";
 }
 
 export function parseToMillis(log: LogEvent) {
