@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.22](https://github.com/xiangnan0811/xirang/compare/v0.73.21...v0.73.22) (2026-11-18)
+
+
+### 🐛 Bug Fixes
+
+* **web:** 修补 picomatch 回溯风险并收窄后端服务测试入口 ([#728](https://github.com/xiangnan0811/xirang/issues/728)) ([32b7d77](https://github.com/xiangnan0811/xirang/commit/32b7d7721513c325cc42d75f15a344648208fdcb))
+
 ### 工具链安全修复
 
 - 以官方 Picomatch 4.0.7 为来源，使用可复现的本地 `@xirang/picomatch@4.0.7+xirang.1` 修补重复 wildcard 的正则回溯风险（GHSA-fc5q-39xc-vjpf）；Vite、Vitest、tinyglobby 和两份 fdir 仍通过 `picomatch` 安装槽解析。复用已锁定的官方 `@eslint-community/regexpp@4.12.3` 检查最终发射源码，保留原 lint 依赖补丁及其他依赖版本。
@@ -12,6 +19,7 @@
 
 - 将 5 个工作流共 20 处 checkout v6.0.3 引用由附注 tag 对象固定为同版实际 commit，保留版本旁注、Node 24 runtime 和工作流行为；CI 合同测试改验完整 SHA 引用格式并保留事件 SHA、metadata 与 required 门禁约束，避免写死旧 action 摘要。其他 checkout 版本的统一另行评估。
 - 删除 Restic 执行器一个与生产包级类型断言重复的测试函数，保留生产接口保障及相邻行为测试。上述改动无运行行为、依赖版本、API、配置或 schema migration 变化，不单独发行版本或镜像。
+- 可恢复 CI 取证工具的 PostgreSQL required 总数随 required inventory 新增的 Processing 安全转换原子性叶同步为 896，合成 fixture 相应调整；根数、组数、严格重放与资格规则不变。本次修改的 `verify_postgres` 属于 capture／authenticate 的上游身份投影，会使修改前已有 source case 的这两阶段 receipt 失效，续接时重新采集；这是既有的保守身份行为，未在本版调整。
 
 ### 内部代码与语言资源维护
 
@@ -23,6 +31,11 @@
 - 将恢复发布、reconciliation 与 feature transition 的三个同步观察方法移入同包测试，删除恒为 false 的 inventory 观察包装及其无效断言；保留实际运行时构造、发布／排空、补偿失败围栏及有效持久化行为测试。调用方事务、中断 adoption、已完成条目 verification 补证、批量收藏、keyring／Search token 协调及已有生产／跨包消费者保持。无公开 API、wire、配置或 schema migration 变化。
 - 将 updater 六组扫描、顺序验包、大包内存及 journal／replay／激活中断恢复断言迁到生产授权轮询入口，删除 `ScanAndRegister` 包装及专属返回集合；保留内部签名扫描、容量上限、持锁和耐久写入顺序，补充未授权不扫描及注册重放与新扫描的区分，不改变离线 updater 或在线能力边界。
 - 将恢复 mismatch 的有效断言迁到实际 `ExecuteClaim` 和中断接管路径，删除无生产消费者的旧 mismatch 投影入口；保留已完成条目／checkpoint 不变、限制性失败投影、旧 claim 失权及写租约释放。历史 mismatch 分类继续可读，不将旧特殊补投影与普通执行的持久证据宣称为字节等价。
+
+### 升级与回退说明
+
+- 本版没有新增公开 API、运行时配置或 schema migration，Core 运行逻辑和持久数据语义不变；既有迁移的降级限制继续适用。后端改动仅收窄内部测试入口并把断言迁到真实路径，事务、失权、幂等、配额、重放与崩溃恢复保障保持。
+- 工具链修复在开发、构建与测试环境按新锁文件重新安装并重启 Vite、Vitest 等相关进程后生效。该工具链只在镜像的前端构建阶段使用，最终 Core 镜像仅包含构建产物；正式静态资源由新工具链重新构建，随 Core 镜像替换并在 Service Worker 接管、页面重载后使用。修复针对构建工具攻击面，不代表生产曾受攻击，也不是部署证明。用旧锁文件或旧工具环境再次开发、构建或测试会恢复 GHSA-fc5q-39xc-vjpf 风险；仅回退已构建的 Core 镜像只恢复旧版静态资源与运行代码。本地 fork 由维护者按上游版本和公告持续跟踪，官方兼容修复可用后按维护手册退场。
 
 ## [0.73.21](https://github.com/xiangnan0811/xirang/compare/v0.73.20...v0.73.21) (2026-11-16)
 

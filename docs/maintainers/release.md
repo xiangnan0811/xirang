@@ -66,6 +66,8 @@ Go 模块组、生产与开发前端依赖、typescript-estree 本地安全补�
 
 #721 开发依赖兼容更新、SSH 命令正常收尾修复和 #724 SSH 握手连接交接修复的完整说明归档于 CHANGELOG `0.73.21` 版本节；发行 PR 与正式 GitHub Release 正文须完整保留该节，不能只保留自动提交摘要或将已交付条目留在 `Unreleased`。Inquirer 两项目标保留 Node 20 兼容版本；开发依赖按锁文件重新安装并重启相关进程，前端资源随 Core 镜像替换，Service Worker 接管并重载后生效。SSH 修复须重新构建并替换 Core，握手修复对新连接生效，切换前排空旧进程在途连接和操作；旧连接与已开始的操作不会被补丁改写。无新增公开 API、运行时配置或 schema migration，既有迁移降级限制不变。回退旧锁文件会恢复旧依赖，回退旧 Core 运行代码会恢复两类竞态；两次原 CI 失败各自的历史因果均未唯一认证，不能将其合称为已证相同根因。
 
+#728 Picomatch 受限本地安全修补、后端服务测试入口收窄及块 02–04 内部清理的完整说明归档于 CHANGELOG `0.73.22` 版本节；发行 PR 与正式 GitHub Release 正文须完整保留该节，不能只保留自动提交摘要或将已交付条目留在 `Unreleased`。本地 `@xirang/picomatch@4.0.7+xirang.1` 对部分重复 wildcard 采用字面匹配，开发、构建与测试环境须按锁文件重新安装并重启相关进程；该工具链仅用于镜像的前端构建阶段，正式前端资源随 Core 镜像替换并经 Service Worker 接管后生效。无新增公开 API、运行时配置或 schema migration，既有迁移降级限制不变。用旧锁文件或旧工具环境再次开发、构建或测试会恢复 GHSA-fc5q-39xc-vjpf 风险，仅回退已构建镜像只恢复旧静态资源与运行代码；工具链修复与 CI 签名 fixture 不代表生产部署。
+
 已 squash 合并的 PR 若包含需要发布、但未被提交语义识别的修复，可按 [Release Please 官方说明](https://github.com/googleapis/release-please#how-can-i-fix-release-notes)，在原 PR 正文追加带日期的发布决定和 `BEGIN_COMMIT_OVERRIDE` / `END_COMMIT_OVERRIDE` 区块；保留原始变更与验证事实，在块内补齐真实的 `fix` 条目并按需添加 `Release-As:`。重新运行 Release Please 后核对实际生成的 Release PR，仍须完成下述说明审阅、检查与镜像门禁。该方式不改写 Git 提交或旧 tag；仅改已合并 PR 标题不会更新提交语义，普通 merge 不适用此 override 路径。
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
