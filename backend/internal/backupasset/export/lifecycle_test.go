@@ -551,19 +551,14 @@ func TestPersistentLifecyclePurgeFailureMovesStoreReservationPendingThenRetriesE
 	}
 
 	targetBeforeSeed := loadPersistentStoreQuotaPair(t, fixture.harness.db, fixture.jobID, targetJob.OwnerUserID)
-	unrelatedJobID, err := backupasset.NewOpaqueID()
-	if err != nil {
-		t.Fatal(err)
-	}
 	const unrelatedUserID uint = 777
-	const unrelatedReservedStoreBytes int64 = 4096
 	const unrelatedUsedStoreBytes int64 = 512
-	if _, err := quota.ReserveJob(context.Background(), QuotaJobRequest{
-		UserID: unrelatedUserID, JobID: unrelatedJobID, StoreBytes: unrelatedReservedStoreBytes,
-		ExpiresAt: clock.Add(time.Hour),
-	}); err != nil {
-		t.Fatalf("seed unrelated quota reservation: %v", err)
+	request := quotaCreateRequest(t, fixture.harness, unrelatedUserID, "lifecycle-unrelated-quota")
+	unrelated, err := fixture.harness.service.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("create unrelated quota reservation: %v", err)
 	}
+	unrelatedJobID := unrelated.Job.ID
 	unrelatedBeforeSeed := loadPersistentStoreQuotaPair(t, fixture.harness.db, unrelatedJobID, unrelatedUserID)
 	if unrelatedBeforeSeed.globalBucket.ID != targetBeforeSeed.globalBucket.ID {
 		t.Fatalf("unrelated reservation did not share global bucket: target=%s unrelated=%s",

@@ -1266,40 +1266,70 @@ func TestWorkerProtocolServiceActivatesSinkUploadsAndCommitsOneManifest(t *testi
 }
 
 func TestProtocolSecurityFailureQuarantinesWorkerAndRevokesGrants(t *testing.T) {
-	db, service := newProtocolServiceHarness(t)
-	registered, err := service.Handshake(context.Background(), WorkerTransportIdentity{
-		Kind: WorkerTransportLocal, Fingerprint: strings.Repeat("f", 64),
-	}, validHandshakeRequest())
+	harness := newCoordinatorHarness(t)
+	workerID := harness.registerNoopWorker(t, "1")
+	descriptor := validWorkDescriptor()
+	registry, err := NewCapabilityRegistry([]CapabilityDefinition{{
+		Capability: descriptor.Capability, CapabilitySchema: descriptor.CapabilitySchema,
+		OutputProfile: descriptor.OutputProfile, PipelineFingerprint: descriptor.PipelineFingerprint,
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 7, 19, 8, 9, 10, 0, time.UTC)
-	grant := model.BackupAssetProcessingGrant{
-		ID: strings.Repeat("1", 32), JobID: strings.Repeat("2", 32), AttemptID: strings.Repeat("3", 32), WorkerID: registered.WorkerID,
-		Kind: string(GrantInput), ActivationSecretHash: strings.Repeat("4", 64), FenceHash: strings.Repeat("5", 64),
-		State: string(GrantIssued), MaxRequests: 1, MaxBytesPerRequest: 1, MaxCumulativeBytes: 1, MaxInFlight: 1,
-		ExpiresAt: now.Add(time.Minute), CreatedAt: now, UpdatedAt: now, Version: 1,
-	}
-	if err := db.Create(&grant).Error; err != nil {
+	service, err := NewProtocolService(harness.db, registry, harness.clock.Now)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Quarantine(context.Background(), registered.WorkerID, ProcessingErrorInvalidOutput); err != nil {
-		t.Fatalf("Quarantine: %v", err)
+	identity := WorkerTransportIdentity{Kind: WorkerTransportLocal, Fingerprint: strings.Repeat("1", 64)}
+	request := validHandshakeRequest()
+	request.Capabilities[0].PipelineFingerprint = descriptor.PipelineFingerprint
+	registered, err := service.Handshake(context.Background(), identity, request)
+	if err != nil || registered.WorkerID != workerID {
+		t.Fatalf("Handshake: %+v: %v", registered, err)
+	}
+	work, err := harness.coordinator.RequestWork(context.Background(), WorkRequest{
+		Descriptor: descriptor,
+		Interest:   InterestRequest{OwnerKind: InterestSystem, OwnerKey: "protocol-quarantine", PriorityClass: PriorityInteractive, Priority: 100},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants, err := NewGrantService(harness.db, harness.coordinator.leaseService, harness.clock.Now, GrantConfig{
+		TTL: 30 * time.Second, MaxRequests: 8, MaxBytesPerRequest: 64, MaxCumulativeBytes: 256, MaxInFlight: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leased, err := harness.coordinator.PullAttempt(context.Background(), PullRequest{WorkerID: workerID}, grants)
+	if err != nil || leased.Lease.JobID != work.JobID {
+		t.Fatalf("PullAttempt: %+v: %v", leased, err)
+	}
+	if _, err := harness.coordinator.TransitionAttempt(context.Background(), AttemptTransitionRequest{
+		JobID: work.JobID, AttemptID: leased.Lease.AttemptID, WorkerID: workerID,
+		ExpectedRevision: 2, To: ProcessingFailed, ErrorCode: ProcessingErrorInvalidOutput,
+	}); err != nil {
+		t.Fatalf("security failure transition: %v", err)
 	}
 	var worker model.BackupAssetWorkerIdentity
-	if err := db.First(&worker, "id = ?", registered.WorkerID).Error; err != nil {
+	if err := harness.db.First(&worker, "id = ?", workerID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.First(&grant, "id = ?", grant.ID).Error; err != nil {
-		t.Fatal(err)
+	var stored []model.BackupAssetProcessingGrant
+	if err := harness.db.Where("attempt_id = ?", leased.Lease.AttemptID).Find(&stored).Error; err != nil || len(stored) != 2 {
+		t.Fatalf("transition grants=%+v: %v", stored, err)
 	}
-	if worker.TrustState != "quarantined" || worker.QuarantineCode != string(ProcessingErrorInvalidOutput) ||
-		grant.State != string(GrantRevoked) || grant.RevocationReason != "quarantine" || grant.ActivationSecretHash != "" {
-		t.Fatalf("quarantine product invalid: worker=%+v grant=%+v", worker, grant)
+	if worker.TrustState != "quarantined" || worker.HealthState != "draining" || worker.QuarantineCode != string(ProcessingErrorInvalidOutput) {
+		t.Fatalf("quarantine product invalid: worker=%+v", worker)
 	}
-	if _, err := service.Handshake(context.Background(), WorkerTransportIdentity{
-		Kind: WorkerTransportLocal, Fingerprint: strings.Repeat("f", 64),
-	}, validHandshakeRequest()); !errors.Is(err, ErrWorkerQuarantined) {
+	for _, grant := range stored {
+		if grant.State != string(GrantRevoked) || grant.RevocationReason != "quarantine" || grant.ActivationSecretHash != "" {
+			t.Fatalf("quarantine grant invalid: %+v", grant)
+		}
+	}
+	if err := service.AuthenticateWorker(context.Background(), identity, workerID, request.InstanceID); !errors.Is(err, ErrWorkerQuarantined) {
+		t.Fatalf("quarantined Worker authenticated: %v", err)
+	}
+	if _, err := service.Handshake(context.Background(), identity, request); !errors.Is(err, ErrWorkerQuarantined) {
 		t.Fatalf("quarantined Worker reconnected as active: %v", err)
 	}
 }

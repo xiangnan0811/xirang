@@ -19,6 +19,10 @@ import (
 	"xirang/backend/internal/settings"
 )
 
+func (runtime *Runtime) featureTransitionReady() bool {
+	return runtime != nil && !runtime.featureTransitionFenced.Load()
+}
+
 func TestFeatureTransitionContextUsesCentralCeilingAndEarlierCallerDeadline(t *testing.T) {
 	const serverWriteTimeout = 30 * time.Second
 	if featureTransitionCeiling >= serverWriteTimeout {

@@ -485,33 +485,6 @@ func (lifecycle *DerivedLifecycle) markSetStaleFencedTx(
 	return nil
 }
 
-func (lifecycle *DerivedLifecycle) MarkSetStale(ctx context.Context, artifactSetID string) error {
-	if lifecycle == nil || lifecycle.fenceLease == nil || backupasset.ValidateOpaqueID(artifactSetID) != nil {
-		return ErrDerivedFenceRequired
-	}
-	var set model.BackupAssetDerivedArtifactSet
-	result := lifecycle.db.WithContext(ctx).Select("id", "job_id", "recovery_point_id", "state").
-		Where("id = ?", artifactSetID).Limit(1).Find(&set)
-	if result.Error != nil || result.RowsAffected != 1 {
-		return errors.Join(ErrDerivedUnauthorized, result.Error)
-	}
-	if set.State == "stale" {
-		return nil
-	}
-	if set.State != "active" || backupasset.ValidateOpaqueID(set.JobID) != nil {
-		return ErrDerivedUnauthorized
-	}
-	lease, err := lifecycle.fenceLease.Acquire(ctx, backupasset.AcquireLeaseRequest{
-		RecoveryPointID: set.RecoveryPointID, HolderType: backupasset.LeaseHolderProcessingJob, OwnerID: set.JobID,
-	})
-	if err != nil {
-		return errors.Join(ErrDerivedFenceRequired, err)
-	}
-	staleErr := lifecycle.MarkSetStaleFenced(ctx, artifactSetID, lease.Fence)
-	releaseErr := lifecycle.fenceLease.Release(ctx, lease.Fence)
-	return errors.Join(staleErr, releaseErr)
-}
-
 func (lifecycle *DerivedLifecycle) revokeSetWithManagedFence(
 	ctx context.Context,
 	artifactSetID string,

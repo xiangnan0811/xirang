@@ -13,6 +13,10 @@
 - 完成当前双语资源的全量库存与逐键裁决，每种语言共删除 237 个未用 locale 叶子；保留动态／复数／类型／资源对象及有效测试消费者、历史状态与失败闭合标签，并清理三个无效测试 mock 项。用于退役控件负向断言的 mock 名称仍保留。
 - 保持刷新关闭、未知分类拒绝、通知筛选、统计空态及 UTC 解析行为，补充双语流量时间窗和非法幂等键的行为回归。恢复计划仍以 400 拒绝非法 key、合法同意图重放、409 拒绝同键异意图；无公开 API、配置或 schema migration 变化。历史扫描计数不作为删除清单，不新增本地化产品行为。
 - 按具名消费者与兼容合同清理无调用的后端包装，将维护告警的有效脱敏断言迁到实际 Dispatcher；简化六个仅返回 nil 错误的内部 helper 及其调用，移除一处未用的私有摘要域声明。保留真实错误、SSH purpose 授权、Doctor 检查及审计结果、Native 预检与删除重建保障、规范摘要字节和持久状态／codec pin；不改公开 API、wire、配置或 schema migration，历史扫描缺失长尾不作为删除清单。
+- 将 Export 配额、Processing 隔离与 Content 缓存的有效断言迁到真实创建／生命周期、attempt transition、materialization 和按恢复点清理入口，再删除测试专用或无消费者的服务包装；保留双桶配额、事务回滚、失权、跨 Worker 隔离、源关闭及清理重试保障。旧配额包装的调用方期限输入随入口删除，实际创建仍沿用既有固定期限语义，不将两者宣称为等价。
+- 将恢复发布、reconciliation 与 feature transition 的三个同步观察方法移入同包测试，删除恒为 false 的 inventory 观察包装及其无效断言；保留实际运行时构造、发布／排空、补偿失败围栏及有效持久化行为测试。调用方事务、中断 adoption、已完成条目 verification 补证、批量收藏、keyring／Search token 协调及已有生产／跨包消费者保持。无公开 API、wire、配置或 schema migration 变化。
+- 将 updater 六组扫描、顺序验包、大包内存及 journal／replay／激活中断恢复断言迁到生产授权轮询入口，删除 `ScanAndRegister` 包装及专属返回集合；保留内部签名扫描、容量上限、持锁和耐久写入顺序，补充未授权不扫描及注册重放与新扫描的区分，不改变离线 updater 或在线能力边界。
+- 将恢复 mismatch 的有效断言迁到实际 `ExecuteClaim` 和中断接管路径，删除无生产消费者的旧 mismatch 投影入口；保留已完成条目／checkpoint 不变、限制性失败投影、旧 claim 失权及写租约释放。历史 mismatch 分类继续可读，不将旧特殊补投影与普通执行的持久证据宣称为字节等价。
 
 ## [0.73.21](https://github.com/xiangnan0811/xirang/compare/v0.73.20...v0.73.21) (2026-11-16)
 

@@ -258,16 +258,21 @@ func TestServiceRegistersStoredCandidateAndCommitsActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &serviceProtocolClient{candidateID: strings.Repeat("1", 32)}
+	client := &serviceProtocolClient{candidateID: strings.Repeat("1", 32), scanRequested: true}
 	service, err := NewService(inbox, store, activator, client, filepath.Join(storeRoot, "candidate-journal.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipts, err := service.ScanAndRegister(context.Background(), TrustStore{Keys: []TrustedKey{{
+	retry, err := service.PollScanAndActivate(context.Background(), TrustStore{Keys: []TrustedKey{{
 		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 	}}}, now)
-	if err != nil || len(receipts) != 1 || receipts[0].CandidateID != client.candidateID {
-		t.Fatalf("receipts=%+v error=%v", receipts, err)
+	if err != nil || retry != 5 || len(client.registrations) != 1 {
+		t.Fatalf("scan retry=%d registrations=%+v error=%v", retry, client.registrations, err)
+	}
+	receipt := client.registrations[0].Receipt
+	journal, err := service.readCandidateJournal()
+	if err != nil || len(journal.Candidates) != 1 || journal.Candidates[0].CandidateID != client.candidateID || journal.Candidates[0].BundleFingerprint != receipt.BundleFingerprint {
+		t.Fatalf("candidate journal=%+v error=%v", journal, err)
 	}
 	journalPayload, err := os.ReadFile(filepath.Join(storeRoot, "candidate-journal.json"))
 	if err != nil {
@@ -279,16 +284,16 @@ func TestServiceRegistersStoredCandidateAndCommitsActivation(t *testing.T) {
 		}
 	}
 	client.directive = &ActivationDirective{
-		SchemaVersion: 1, CandidateID: client.candidateID, NewFingerprint: receipts[0].BundleFingerprint,
+		SchemaVersion: 1, CandidateID: client.candidateID, NewFingerprint: receipt.BundleFingerprint,
 	}
 	client.decision = ActivationReportResult{
-		SchemaVersion: 1, Decision: ActivationDecisionCommit, ActiveFingerprint: receipts[0].BundleFingerprint,
+		SchemaVersion: 1, Decision: ActivationDecisionCommit, ActiveFingerprint: receipt.BundleFingerprint,
 	}
-	retry, err := service.PollAndActivate(context.Background())
+	retry, err = service.PollAndActivate(context.Background())
 	if err != nil || retry != 5 {
 		t.Fatalf("poll retry=%d error=%v", retry, err)
 	}
-	if active, err := activator.ActiveFingerprint(); err != nil || active != receipts[0].BundleFingerprint {
+	if active, err := activator.ActiveFingerprint(); err != nil || active != receipt.BundleFingerprint {
 		t.Fatalf("active=%q error=%v", active, err)
 	}
 	journalPayload, err = os.ReadFile(filepath.Join(storeRoot, "candidate-journal.json"))
@@ -440,7 +445,7 @@ func TestServiceReplaysCandidateWhenJournalWriteWasInterrupted(t *testing.T) {
 	}
 	journalPath := filepath.Join(storeRoot, "candidate-journal.json")
 	candidateID := strings.Repeat("1", 32)
-	client := &serviceProtocolClient{candidateID: candidateID}
+	client := &serviceProtocolClient{candidateID: candidateID, scanRequested: true}
 	client.registerHook = func(call int, _ RegisterCandidateRequest) {
 		if call != 1 {
 			return
@@ -459,8 +464,11 @@ func TestServiceReplaysCandidateWhenJournalWriteWasInterrupted(t *testing.T) {
 	trust := TrustStore{Keys: []TrustedKey{{
 		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 	}}}
-	if _, err := service.ScanAndRegister(context.Background(), trust, now); !errors.Is(err, ErrActivationFailed) {
+	if _, err := service.PollScanAndActivate(context.Background(), trust, now); !errors.Is(err, ErrActivationFailed) {
 		t.Fatalf("interrupted journal write error=%v", err)
+	}
+	if len(client.registrations) != 1 {
+		t.Fatalf("interrupted registrations=%+v", client.registrations)
 	}
 	if err := os.RemoveAll(journalPath); err != nil {
 		t.Fatal(err)
@@ -514,7 +522,7 @@ func TestServiceScansInboxOnlyWhenCoreDeliversAuthorizedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &serviceProtocolClient{candidateID: strings.Repeat("1", 32), scanRequested: true}
+	client := &serviceProtocolClient{candidateID: strings.Repeat("1", 32)}
 	service, err := NewService(inbox, store, activator, client, filepath.Join(storeRoot, "candidate-journal.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -522,11 +530,33 @@ func TestServiceScansInboxOnlyWhenCoreDeliversAuthorizedRequest(t *testing.T) {
 	trust := TrustStore{Keys: []TrustedKey{{
 		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 	}}}
+	if retry, err := service.PollScanAndActivate(context.Background(), trust, now); err != nil || retry != 5 || client.registerCalls != 0 {
+		t.Fatalf("unrequested initial scan retry=%d calls=%d err=%v", retry, client.registerCalls, err)
+	}
+	client.scanRequested = true
 	if retry, err := service.PollScanAndActivate(context.Background(), trust, now); err != nil || retry != 5 || client.registerCalls != 1 {
 		t.Fatalf("authorized scan retry=%d calls=%d err=%v", retry, client.registerCalls, err)
 	}
+	// A replay must succeed even when a fresh scan of the inbox would reject the changed bundle.
+	bundlePath := filepath.Join(inboxRoot, "operator-package", "bundle.tar")
+	if err := os.Chmod(bundlePath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bundlePath, []byte("invalid bundle"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bundlePath, 0o444); err != nil {
+		t.Fatal(err)
+	}
 	if retry, err := service.PollScanAndActivate(context.Background(), trust, now); err != nil || retry != 5 || client.registerCalls != 2 {
 		t.Fatalf("non-requested scan retry=%d calls=%d err=%v", retry, client.registerCalls, err)
+	}
+	if !reflect.DeepEqual(client.registrations[0], client.registrations[1]) {
+		t.Fatalf("replay changed registration: first=%+v replay=%+v", client.registrations[0], client.registrations[1])
+	}
+	client.scanRequested = true
+	if _, err := service.PollScanAndActivate(context.Background(), trust, now); !errors.Is(err, ErrPolicyRejected) || client.registerCalls != 3 {
+		t.Fatalf("requested scan of changed bundle err=%v calls=%d", err, client.registerCalls)
 	}
 }
 
@@ -553,7 +583,7 @@ func TestServiceProcessesInboxCandidatesSequentially(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidateID := strings.Repeat("1", 32)
-	client := &serviceProtocolClient{candidateID: candidateID}
+	client := &serviceProtocolClient{candidateID: candidateID, scanRequested: true}
 	client.registerHook = func(call int, _ RegisterCandidateRequest) {
 		if call != 1 {
 			return
@@ -575,7 +605,7 @@ func TestServiceProcessesInboxCandidatesSequentially(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.ScanAndRegister(context.Background(), TrustStore{Keys: []TrustedKey{{
+	_, err = service.PollScanAndActivate(context.Background(), TrustStore{Keys: []TrustedKey{{
 		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 	}}}, now)
 	if !errors.Is(err, ErrPolicyRejected) || client.registerCalls != 1 {
@@ -612,7 +642,7 @@ func TestServiceStreams320MiBCanonicalBundleBelowHeapBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &serviceProtocolClient{candidateID: strings.Repeat("1", 32)}
+	client := &serviceProtocolClient{candidateID: strings.Repeat("1", 32), scanRequested: true}
 	service, err := NewService(inbox, store, activator, client, filepath.Join(storeRoot, "candidate-journal.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -651,7 +681,7 @@ func TestServiceStreams320MiBCanonicalBundleBelowHeapBudget(t *testing.T) {
 	trust := TrustStore{Keys: []TrustedKey{{
 		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 	}}}
-	receipts, scanErr := service.ScanAndRegister(context.Background(), trust, now)
+	_, scanErr := service.PollScanAndActivate(context.Background(), trust, now)
 	existingSeen := false
 	var existingErr error
 	if scanErr == nil {
@@ -669,9 +699,10 @@ func TestServiceStreams320MiBCanonicalBundleBelowHeapBudget(t *testing.T) {
 	}
 	close(done)
 	peak := <-peakResult
-	if scanErr != nil || existingErr != nil || !existingSeen || len(receipts) != 1 {
-		t.Fatalf("large streaming scan receipts=%+v scan_err=%v existing_err=%v existing_seen=%v", receipts, scanErr, existingErr, existingSeen)
+	if scanErr != nil || existingErr != nil || !existingSeen || len(client.registrations) != 1 {
+		t.Fatalf("large streaming scan registrations=%+v scan_err=%v existing_err=%v existing_seen=%v", client.registrations, scanErr, existingErr, existingSeen)
 	}
+	receipt := client.registrations[0].Receipt
 	peakDelta := uint64(0)
 	if peak > baseline.HeapAlloc {
 		peakDelta = peak - baseline.HeapAlloc
@@ -680,10 +711,10 @@ func TestServiceStreams320MiBCanonicalBundleBelowHeapBudget(t *testing.T) {
 	if peakDelta >= heapBudget {
 		t.Fatalf("streaming heap delta=%d bytes, budget must stay below %d", peakDelta, heapBudget)
 	}
-	if receipts[0].BundleSHA256 != bundleSHA256 {
-		t.Fatalf("bundle digest=%s, want %s", receipts[0].BundleSHA256, bundleSHA256)
+	if receipt.BundleSHA256 != bundleSHA256 {
+		t.Fatalf("bundle digest=%s, want %s", receipt.BundleSHA256, bundleSHA256)
 	}
-	storedPath := filepath.Join(storeRoot, "bundles", receipts[0].BundleFingerprint, "models", "large.dat")
+	storedPath := filepath.Join(storeRoot, "bundles", receipt.BundleFingerprint, "models", "large.dat")
 	if digest, err := streamingFileSHA256(storedPath); err != nil || digest != memberSHA256 {
 		t.Fatalf("stored member digest=%s want=%s err=%v", digest, memberSHA256, err)
 	}
@@ -783,15 +814,18 @@ func TestServiceReplaysPrivateCandidateReceiptAfterCoreRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidateID := strings.Repeat("1", 32)
-	firstClient := &serviceProtocolClient{candidateID: candidateID}
+	firstClient := &serviceProtocolClient{candidateID: candidateID, scanRequested: true}
 	service, err := NewService(inbox, store, activator, firstClient, filepath.Join(storeRoot, "candidate-journal.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ScanAndRegister(context.Background(), TrustStore{Keys: []TrustedKey{{
+	if _, err := service.PollScanAndActivate(context.Background(), TrustStore{Keys: []TrustedKey{{
 		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 	}}}, now); err != nil {
 		t.Fatal(err)
+	}
+	if len(firstClient.registrations) != 1 {
+		t.Fatalf("initial registrations=%+v", firstClient.registrations)
 	}
 
 	restartedClient := &serviceProtocolClient{candidateID: candidateID}
@@ -805,6 +839,9 @@ func TestServiceReplaysPrivateCandidateReceiptAfterCoreRestart(t *testing.T) {
 	if restartedClient.registerCalls != 1 || len(restartedClient.registrations) != 1 ||
 		len(restartedClient.registrations[0].Receipt.Capabilities) == 0 {
 		t.Fatalf("restart registrations=%+v calls=%d", restartedClient.registrations, restartedClient.registerCalls)
+	}
+	if !reflect.DeepEqual(firstClient.registrations[0], restartedClient.registrations[0]) {
+		t.Fatalf("restart changed receipt: initial=%+v replay=%+v", firstClient.registrations[0], restartedClient.registrations[0])
 	}
 	journalPayload, err := os.ReadFile(filepath.Join(storeRoot, "candidate-journal.json"))
 	if err != nil {
@@ -841,22 +878,23 @@ func TestServiceReportsCrashAfterPointerSwapBeforePullingAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidateID := strings.Repeat("1", 32)
-	client := &serviceProtocolClient{candidateID: candidateID}
+	client := &serviceProtocolClient{candidateID: candidateID, scanRequested: true}
 	service, err := NewService(inbox, store, activator, client, filepath.Join(storeRoot, "candidate-journal.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipts, err := service.ScanAndRegister(context.Background(), TrustStore{Keys: []TrustedKey{{
+	retry, err := service.PollScanAndActivate(context.Background(), TrustStore{Keys: []TrustedKey{{
 		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 	}}}, now)
-	if err != nil || len(receipts) != 1 {
-		t.Fatalf("scan receipts=%+v err=%v", receipts, err)
+	if err != nil || retry != 5 || len(client.registrations) != 1 {
+		t.Fatalf("scan retry=%d registrations=%+v err=%v", retry, client.registrations, err)
 	}
+	receipt := client.registrations[0].Receipt
 	client.directive = &ActivationDirective{
-		SchemaVersion: 1, CandidateID: candidateID, NewFingerprint: receipts[0].BundleFingerprint,
+		SchemaVersion: 1, CandidateID: candidateID, NewFingerprint: receipt.BundleFingerprint,
 	}
 	client.decision = ActivationReportResult{
-		SchemaVersion: 1, Decision: ActivationDecisionCommit, ActiveFingerprint: receipts[0].BundleFingerprint,
+		SchemaVersion: 1, Decision: ActivationDecisionCommit, ActiveFingerprint: receipt.BundleFingerprint,
 	}
 	activator.fault = func(stage activationStage) error {
 		if stage == activationAfterSwap {
@@ -882,7 +920,7 @@ func TestServiceReportsCrashAfterPointerSwapBeforePullingAgain(t *testing.T) {
 	if retry, err := restarted.PollAndActivate(context.Background()); err != nil || retry != 5 || restartedClient.reportCalls != 1 {
 		t.Fatalf("recovered poll retry=%d reports=%d err=%v", retry, restartedClient.reportCalls, err)
 	}
-	if active, err := restartedActivator.ActiveFingerprint(); err != nil || active != receipts[0].BundleFingerprint {
+	if active, err := restartedActivator.ActiveFingerprint(); err != nil || active != receipt.BundleFingerprint {
 		t.Fatalf("recovered active=%q err=%v", active, err)
 	}
 }

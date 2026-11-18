@@ -452,7 +452,11 @@ func TestCacheMaterializesBoundedMemoryAndPartitionsIdentityByOwner(t *testing.T
 	t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
 	object := testCacheObject(int64(len("0123456789abcdef")))
 	source := newCacheSourceFake([]byte("0123456789abcdef"), object)
-	info, err := cache.Materialize(context.Background(), object, source)
+	reservation, _, err := cache.BeginMaterialization(object)
+	if err != nil || reservation == nil {
+		t.Fatalf("begin memory materialization reservation=%v err=%v", reservation, err)
+	}
+	info, err := reservation.Commit(context.Background(), source)
 	if err != nil || info.Tier != CacheTierMemory || !info.RangeCapable || info.ProviderBytes != object.Size ||
 		source.readerCalls != 1 || source.closeCalls != 1 {
 		t.Fatalf("memory materialization tier=%q range=%v provider_bytes=%d reader_calls=%d close_calls=%d err=%v",
@@ -470,14 +474,10 @@ func TestCacheMaterializesBoundedMemoryAndPartitionsIdentityByOwner(t *testing.T
 		t.Fatal(err)
 	}
 
-	hitSource := newCacheSourceFake([]byte("must-not-read"), object)
-	hit, err := cache.Materialize(context.Background(), object, hitSource)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hit.ProviderBytes != 0 || hitSource.readerCalls != 0 || hitSource.closeCalls != 1 {
-		t.Fatalf("cache hit provider_bytes=%d range=%v source_reader_calls=%d source_close_calls=%d",
-			hit.ProviderBytes, hit.RangeCapable, hitSource.readerCalls, hitSource.closeCalls)
+	reservation, hit, err := cache.BeginMaterialization(object)
+	if err != nil || reservation != nil || hit.ProviderBytes != 0 || !hit.RangeCapable {
+		t.Fatalf("cache hit reservation=%v provider_bytes=%d range=%v err=%v",
+			reservation, hit.ProviderBytes, hit.RangeCapable, err)
 	}
 	otherOwner := object
 	otherOwner.OwnerUserID++
@@ -593,7 +593,11 @@ func TestCacheDiskChunksAreAuthenticatedOpaqueAndRangeReadableOnlyAfterCommit(t 
 	plaintext := []byte("0123456789abcdefghijkl")
 	object := testCacheObject(int64(len(plaintext)))
 	source := newCacheSourceFake(plaintext, object)
-	info, err := cache.Materialize(context.Background(), object, source)
+	reservation, _, err := cache.BeginMaterialization(object)
+	if err != nil || reservation == nil {
+		t.Fatalf("begin disk materialization reservation=%v err=%v", reservation, err)
+	}
+	info, err := reservation.Commit(context.Background(), source)
 	if err != nil || info.Tier != CacheTierDisk || !info.RangeCapable {
 		t.Fatalf("disk materialization tier=%q range=%v provider_bytes=%d err=%v", info.Tier, info.RangeCapable, info.ProviderBytes, err)
 	}
@@ -664,34 +668,29 @@ func TestCacheReservesQuotaBeforeSourceAndActiveLeaseBlocksEviction(t *testing.T
 	}
 	t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
 	first := testCacheObject(6)
-	if _, err := cache.Materialize(context.Background(), first, newCacheSourceFake([]byte("first!"), first)); err != nil {
-		t.Fatal(err)
-	}
+	materializeCacheFixture(t, cache, first, []byte("first!"))
 	second := first
 	second.ContentFingerprint = "content-v2"
-	blockedSource := newCacheSourceFake([]byte("second"), second)
-	if _, err := cache.Materialize(context.Background(), second, blockedSource); !errors.Is(err, ErrCacheQuota) {
-		t.Fatalf("user quota error=%v", err)
-	}
-	if blockedSource.readerCalls != 0 || blockedSource.closeCalls != 1 {
-		t.Fatalf("quota rejection source reader_calls=%d close_calls=%d", blockedSource.readerCalls, blockedSource.closeCalls)
+	if pending, _, err := cache.BeginMaterialization(second); pending != nil || !errors.Is(err, ErrCacheQuota) {
+		t.Fatalf("user quota reservation=%v error=%v", pending, err)
 	}
 	lease, err := cache.OpenRange(first, 0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Evict(first); !errors.Is(err, ErrCacheBusy) {
-		t.Fatalf("leased eviction error=%v", err)
+	if evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), first.Ref.RecoveryPointID, 1); !errors.Is(err, ErrCacheBusy) || evicted != 0 || remaining {
+		t.Fatalf("leased eviction evicted=%d remaining=%v error=%v", evicted, remaining, err)
 	}
 	if err := lease.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Evict(first); err != nil {
-		t.Fatal(err)
+	if evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), first.Ref.RecoveryPointID, 1); err != nil || evicted != 1 || remaining {
+		t.Fatalf("eviction evicted=%d remaining=%v error=%v", evicted, remaining, err)
 	}
-	if _, err := cache.Materialize(context.Background(), second, blockedSource); err != nil {
-		t.Fatalf("quota was not released after eviction: %v", err)
+	if evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), first.Ref.RecoveryPointID, 1); err != nil || evicted != 0 || remaining {
+		t.Fatalf("eviction completion evicted=%d remaining=%v error=%v", evicted, remaining, err)
 	}
+	materializeCacheFixture(t, cache, second, []byte("second"))
 }
 
 func TestCacheEvictRecoveryPointBoundedZeroProofAndBusyFailClosed(t *testing.T) {
@@ -723,9 +722,7 @@ func TestCacheEvictRecoveryPointBoundedZeroProofAndBusyFailClosed(t *testing.T) 
 		{object: diskObject, payload: "disk-object-data"},
 		{object: otherPointObject, payload: "stay"},
 	} {
-		if _, err := cache.Materialize(context.Background(), fixture.object, newCacheSourceFake([]byte(fixture.payload), fixture.object)); err != nil {
-			t.Fatal(err)
-		}
+		materializeCacheFixture(t, cache, fixture.object, []byte(fixture.payload))
 	}
 	diskEntry := cacheEntryForTest(t, cache, diskObject)
 	diskChunkNames := make([]string, 0, len(diskEntry.chunks))
@@ -752,6 +749,9 @@ func TestCacheEvictRecoveryPointBoundedZeroProofAndBusyFailClosed(t *testing.T) 
 	if evicted, remaining, err := evictor.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 1); !errors.Is(err, ErrCacheBusy) || evicted != 0 || remaining {
 		t.Fatalf("leased eviction evicted=%d remaining=%v err=%v", evicted, remaining, err)
 	}
+	if !cacheHasEntryForTest(cache, memoryObject) || !cacheHasEntryForTest(cache, diskObject) {
+		t.Fatal("leased eviction partially removed the point")
+	}
 	if err := lease.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -764,6 +764,9 @@ func TestCacheEvictRecoveryPointBoundedZeroProofAndBusyFailClosed(t *testing.T) 
 	}
 	if evicted, remaining, err := evictor.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 1); !errors.Is(err, ErrCacheBusy) || evicted != 0 || remaining {
 		t.Fatalf("pending-write eviction evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if !cacheHasEntryForTest(cache, memoryObject) || !cacheHasEntryForTest(cache, diskObject) {
+		t.Fatal("pending-write eviction partially removed the point")
 	}
 	if err := pending.Abort(); err != nil {
 		t.Fatal(err)
@@ -807,9 +810,7 @@ func TestCacheEvictRecoveryPointZeroByteCardinalityUsesBatchBoundedSelection(t *
 		for index := 0; index < entryCount; index++ {
 			object := testCacheObject(0)
 			object.Ref.EntryID = fmt.Sprintf("%064x", index+1)
-			if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake(nil, object)); err != nil {
-				t.Fatalf("materialize zero-byte cache object %d: %v", index, err)
-			}
+			materializeCacheFixture(t, cache, object, nil)
 		}
 		return cache
 	}
@@ -851,9 +852,7 @@ func TestCacheLifecycleEvictionSerializesConcurrentMaintenance(t *testing.T) {
 			{object: memoryObject, payload: "m"},
 			{object: diskObject, payload: "12345678"},
 		} {
-			if _, err := cache.Materialize(context.Background(), fixture.object, newCacheSourceFake([]byte(fixture.payload), fixture.object)); err != nil {
-				t.Fatalf("materialize serialization fixture: %v", err)
-			}
+			materializeCacheFixture(t, cache, fixture.object, []byte(fixture.payload))
 		}
 
 		originalRemove := cache.removeChunkFile
@@ -918,9 +917,7 @@ func TestCacheLifecycleEvictionSerializesConcurrentMaintenance(t *testing.T) {
 		cache := newDiskCacheForTest(t, config)
 		t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
 		object := testCacheObject(8)
-		if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("12345678"), object)); err != nil {
-			t.Fatalf("materialize reconcile serialization fixture: %v", err)
-		}
+		materializeCacheFixture(t, cache, object, []byte("12345678"))
 
 		originalRemove := cache.removeChunkFile
 		entered := make(chan struct{}, 2)
@@ -980,9 +977,7 @@ func TestCacheLifecycleEvictionSerializesConcurrentMaintenance(t *testing.T) {
 		cache := newDiskCacheForTest(t, config)
 		t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
 		object := testCacheObject(16)
-		if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("1234567890abcdef"), object)); err != nil {
-			t.Fatalf("materialize partial retry fixture: %v", err)
-		}
+		materializeCacheFixture(t, cache, object, []byte("1234567890abcdef"))
 		originalRemove := cache.removeChunkFile
 		var callsMu sync.Mutex
 		firstPassNames := make([]string, 0, 2)
@@ -1026,9 +1021,7 @@ func TestCacheLifecycleFailureFollowedByReconcileFailureRetainsRetryProof(t *tes
 	cache := newDiskCacheForTest(t, config)
 	t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
 	object := testCacheObject(16)
-	if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("1234567890abcdef"), object)); err != nil {
-		t.Fatalf("materialize lifecycle retry-proof fixture: %v", err)
-	}
+	materializeCacheFixture(t, cache, object, []byte("1234567890abcdef"))
 	originalRemove := cache.removeChunkFile
 	privateCanary := filepath.Join(t.TempDir(), "private-provider-cache-CANARY")
 	cache.removeChunkFile = func(string) error {
@@ -1092,6 +1085,9 @@ func TestCacheBeginMaterializationReservesBeforeSourceAndAbortReleasesQuota(t *t
 	if err != nil || reservation == nil || hit.RangeCapable {
 		t.Fatalf("first reservation_present=%v hit_range=%v hit_provider_bytes=%d err=%v", reservation != nil, hit.RangeCapable, hit.ProviderBytes, err)
 	}
+	if pending, _, reserveErr := cache.BeginMaterialization(first); pending != nil || !errors.Is(reserveErr, ErrCacheBusy) {
+		t.Fatalf("duplicate reservation=%v err=%v", pending, reserveErr)
+	}
 	second := first
 	second.ContentFingerprint = "content-v2"
 	if pending, _, reserveErr := cache.BeginMaterialization(second); pending != nil || !errors.Is(reserveErr, ErrCacheQuota) {
@@ -1138,8 +1134,15 @@ func TestCachePartialCancelSourceDriftAndENOSPCNeverPublishOrFallBackPlaintext(t
 			if testCase.context != nil {
 				ctx = testCase.context()
 			}
-			if _, err := cache.Materialize(ctx, object, source); err == nil {
+			reservation, _, err := cache.BeginMaterialization(object)
+			if err != nil || reservation == nil {
+				t.Fatalf("begin failed materialization reservation=%v err=%v", reservation, err)
+			}
+			if _, err := reservation.Commit(ctx, source); err == nil {
 				t.Fatal("failed materialization unexpectedly succeeded")
+			}
+			if source.closeCalls != 1 {
+				t.Fatalf("failed materialization source close calls=%d", source.closeCalls)
 			}
 			if _, err := cache.OpenRange(object, 0, 1); !errors.Is(err, ErrCacheMiss) {
 				t.Fatalf("partial object became readable: %v", err)
@@ -1176,7 +1179,11 @@ func TestCacheENOSPCAfterPartialCiphertextWriteRemovesTheIncompleteFile(t *testi
 		}
 		return syscall.ENOSPC
 	}
-	if _, err := cache.Materialize(context.Background(), object, source); !errors.Is(err, syscall.ENOSPC) {
+	reservation, _, err := cache.BeginMaterialization(object)
+	if err != nil || reservation == nil {
+		t.Fatalf("begin materialization reservation=%v err=%v", reservation, err)
+	}
+	if _, err := reservation.Commit(context.Background(), source); !errors.Is(err, syscall.ENOSPC) {
 		t.Fatalf("materialize error=%v", err)
 	}
 	entries, err := os.ReadDir(root)
@@ -1207,8 +1214,18 @@ func TestCacheDiskPublishWaitsForSourceCloseRevalidation(t *testing.T) {
 		renameCalls++
 		return cache.root.Rename(oldName, newName)
 	}
-	if _, err := cache.Materialize(context.Background(), object, source); !errors.Is(err, ErrCacheSourceChanged) {
+	reservation, _, err := cache.BeginMaterialization(object)
+	if err != nil || reservation == nil {
+		t.Fatalf("begin materialization reservation=%v err=%v", reservation, err)
+	}
+	if _, err := reservation.Commit(context.Background(), source); !errors.Is(err, ErrCacheSourceChanged) {
 		t.Fatalf("materialize error=%v", err)
+	}
+	if source.closeCalls != 1 {
+		t.Fatalf("source close calls=%d", source.closeCalls)
+	}
+	if _, err := cache.OpenRange(object, 0, 1); !errors.Is(err, ErrCacheMiss) {
+		t.Fatalf("source close failure published cache entry: %v", err)
 	}
 	if renameCalls != 0 {
 		t.Fatalf("final cache rename ran %d time(s) before source close validation", renameCalls)
@@ -1222,9 +1239,7 @@ func TestCacheDiskDisableRejectsPreviouslyCommittedEntries(t *testing.T) {
 	cache := newDiskCacheForTest(t, config)
 	t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
 	object := testCacheObject(8)
-	if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("12345678"), object)); err != nil {
-		t.Fatal(err)
-	}
+	materializeCacheFixture(t, cache, object, []byte("12345678"))
 	cache.disableDisk(CacheReasonUnsafeRoot)
 	lease, err := cache.OpenRange(object, 0, 1)
 	if lease != nil {
@@ -1282,9 +1297,7 @@ func TestCacheTTLOrphanReconciliationAndShutdownWaitForLeases(t *testing.T) {
 		t.Fatal(err)
 	}
 	object := testCacheObject(8)
-	if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("12345678"), object)); err != nil {
-		t.Fatal(err)
-	}
+	materializeCacheFixture(t, cache, object, []byte("12345678"))
 	lease, err := cache.OpenRange(object, 0, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -1320,9 +1333,7 @@ func TestCacheTTLOrphanReconciliationAndShutdownWaitForLeases(t *testing.T) {
 	}
 
 	object.ContentFingerprint = "content-v2"
-	if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("abcdefgh"), object)); err != nil {
-		t.Fatal(err)
-	}
+	materializeCacheFixture(t, cache, object, []byte("abcdefgh"))
 	lease, err = cache.OpenRange(object, 0, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -1355,6 +1366,18 @@ func (fake *cacheRootValidatorFake) ValidateContentCacheRoot(_ context.Context, 
 		return fake.validate(root)
 	}
 	return fake.err
+}
+
+// materializeCacheFixture sets up a new entry through the production reservation and commit path.
+func materializeCacheFixture(t *testing.T, cache *AuthenticatedCache, object CacheObject, payload []byte) {
+	t.Helper()
+	reservation, _, err := cache.BeginMaterialization(object)
+	if err != nil || reservation == nil {
+		t.Fatalf("begin cache fixture reservation=%v err=%v", reservation, err)
+	}
+	if _, err := reservation.Commit(context.Background(), newCacheSourceFake(payload, object)); err != nil {
+		t.Fatalf("commit cache fixture: %v", err)
+	}
 }
 
 type cacheSourceReaderFake struct {

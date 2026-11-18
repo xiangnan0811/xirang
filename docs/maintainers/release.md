@@ -149,6 +149,16 @@ SSH purpose 授权、Doctor 的失败检查与审计、真实调度错误、Nati
 或镜像；仍须在实际提交与合并流程核对正常 hooks、required CI、同 SHA main CI 与
 Release Please。本地兼容回归不替代 AWS live、双架构或生产部署证明。
 
+服务测试入口与 runtime 同步观察包装的收窄同样按 `refactor` 交付：有效断言迁到真实恢复
+执行、Export 创建／生命周期、Processing 安全转换、Content materialization／按点清理和
+Updater 授权轮询；内部扫描、耐久写入顺序、配额、失权和崩溃恢复保障保留。caller-owned
+transaction、中断 adoption、已完成项 verification 补证、批量收藏、keyring／Search token
+协调及生产／跨包消费者不因测试专用入口清理而移除。旧配额输入与特殊 mismatch 补投影退出
+不代表普通生产路径的期限判断或持久证据与其字节等价。无运行行为、公开 API、wire、配置、
+依赖或 schema migration 变化时说明留在 `Unreleased`，不单独发版或制造镜像；仍完成正常
+hooks、同候选独审、完整 required CI、PR／合并后 main 各自源码与签名取证及 Release Please
+核对，不将受控测试或 CI 签名 fixture 外推为生产部署证明。
+
 退役 snapshot 消费者与旧 indexer 的清理说明须区分代码删除和数据处置：兼容读取仍返回 410，live restore 门控、历史表及已发布迁移保留，旧 `SNAPSHOT_INDEX_MAX_SECONDS` 不再有消费者；不得把清理写成新增恢复能力、历史数据销毁或撤销既有迁移限制。纯 `refactor` 按现行提交语义处理，没有正式 release 时将说明留在 `Unreleased`，待实际发行再归入目标版本。
 
 保留策略与删除安全的入口回归迁移按 `test` 语义处理：真实 Coordinator、注册删除 adapter 与分页选择验收替换旧 helper 覆盖，不代表新增保留规则、删除权限或远端 Provider 能力。无 API、配置或 schema migration；保留既有版本的密钥、持久格式及降级限制。未生成正式 release 时，说明保留在 `Unreleased`，并核对同 SHA CI 与 Release Please；不要求为测试迁移单独生成镜像，也不将受控本地烟测记为 AWS live 或生产部署。

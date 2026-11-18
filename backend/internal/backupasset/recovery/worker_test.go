@@ -1066,20 +1066,6 @@ type recoveryOperationVerificationProjector interface {
 	) (model.BackupAssetRecoveryEvidence, error)
 }
 
-type recoveryOperationMismatchProjector interface {
-	ProjectOperationMismatch(
-		context.Context,
-		RecoveryWorkerClaim,
-		string,
-		string,
-		int64,
-		int64,
-		string,
-		time.Time,
-		int64,
-	) (model.BackupAssetRecoveryEvidence, error)
-}
-
 type recoveryWorkerCanceler interface {
 	CancelJob(context.Context, string) error
 }
@@ -3414,14 +3400,62 @@ func TestRecoveryOperationVerificationLocksPlanBeforeJob(t *testing.T) {
 }
 
 func TestRecoveryOperationMismatchLocksPlanBeforeJob(t *testing.T) {
-	fixture, coordinator, claim, item, checkpoint := newRecoveryPostTerminalProjectionLockOrderFixture(t)
-	fixture.now = fixture.now.Add(time.Second)
-	observeRecoveryProjectionPlanJobLockOrder(t, fixture.db, "mismatch", func() error {
-		_, err := coordinator.ProjectOperationMismatch(
-			context.Background(), claim, item.ID, checkpoint.ID, 7, 6, strings.Repeat("e", 64), fixture.now, 1,
-		)
-		return err
+	fixture := newRecoveryExecutionFixture(t)
+	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	target := &recoveryExecutionTargetFake{db: fixture.db, now: func() time.Time { return fixture.now }}
+	coordinator.target = target
+	claim, found, err := coordinator.ClaimNext(context.Background(), "mismatch-lock-order-worker")
+	if err != nil || !found {
+		t.Fatalf("claim recovery job: found=%t err=%v", found, err)
+	}
+	var mu sync.Mutex
+	var lockedTables []string
+	callbackName := "recovery:mismatch-execution-plan-before-job:" + t.Name()
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if len(target.verifies) == 0 || tx.Statement == nil || tx.Statement.Schema == nil {
+			return
+		}
+		if _, locked := tx.Statement.Clauses["FOR"]; !locked {
+			return
+		}
+		table := tx.Statement.Schema.Table
+		if table == (model.BackupAssetRecoveryPlan{}).TableName() || table == (model.BackupAssetRecoveryJob{}).TableName() {
+			mu.Lock()
+			lockedTables = append(lockedTables, table)
+			mu.Unlock()
+		}
+	}); err != nil {
+		t.Fatalf("register mismatch lock-order observer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := fixture.db.Callback().Query().Remove(callbackName); err != nil {
+			t.Errorf("remove mismatch lock-order observer: %v", err)
+		}
 	})
+	target.afterWrite = func(int) {
+		object := target.writes[0].request.Object
+		state := target.states[object]
+		if state.identityDigest == strings.Repeat("e", 64) {
+			state.identityDigest = strings.Repeat("d", 64)
+		} else {
+			state.identityDigest = strings.Repeat("e", 64)
+		}
+		target.states[object] = state
+	}
+	source := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	if err := coordinator.ExecuteClaim(context.Background(), claim, source, ""); !errors.Is(err, ErrInvalidTargetVerification) {
+		t.Fatalf("execute mismatching recovery claim: %v", err)
+	}
+	mu.Lock()
+	got := append([]string(nil), lockedTables...)
+	mu.Unlock()
+	want := []string{(model.BackupAssetRecoveryPlan{}).TableName(), (model.BackupAssetRecoveryJob{}).TableName()}
+	if len(got) < len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("mismatch projection plan/job lock order=%v, want prefix %v", got, want)
+	}
 }
 
 func TestWorkerProjectPendingOperationMismatchAtomicallyNeedsAttention(t *testing.T) {
@@ -4992,83 +5026,124 @@ func TestWorkerAdoptionAtomicallyProjectsVerificationAndRejectsPostTerminalRewri
 	}
 }
 
-func TestWorkerAdoptionRejectsPostTerminalMismatchRewrite(t *testing.T) {
-	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+func TestWorkerMismatchPreservesCompletedItemAndRevokesAuthority(t *testing.T) {
+	fixture := newRecoveryExecutionFixture(t)
 	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
 		t.Fatalf("execute recovery fixture: %v", err)
 	}
 	coordinator := newRecoveryWorkerCoordinator(t, fixture)
-	first, found, err := coordinator.ClaimNext(context.Background(), "recovery-worker-a")
+	target := &recoveryExecutionTargetFake{db: fixture.db, now: func() time.Time { return fixture.now }}
+	coordinator.target = target
+	claim, found, err := coordinator.ClaimNext(context.Background(), "completed-before-mismatch-worker")
 	if err != nil || !found {
 		t.Fatalf("claim recovery job: found=%t err=%v", found, err)
 	}
-	if _, err := coordinator.PrepareFirstWrite(context.Background(), first); err != nil {
-		t.Fatalf("prepare durable sequence-zero write barrier: %v", err)
-	}
-	var item model.BackupAssetRecoveryJobItem
-	if err := fixture.db.Where("job_id = ?", first.JobID).Order("ordinal ASC").Take(&item).Error; err != nil {
+	var items []model.BackupAssetRecoveryJobItem
+	if err := fixture.db.Where("job_id = ?", claim.JobID).Order("ordinal ASC").Find(&items).Error; err != nil {
 		t.Fatal(err)
 	}
-	fixture.now = first.LeaseExpiresAt.Add(time.Second)
-	takeover, takeoverFound, takeoverErr := coordinator.TakeoverExpired(context.Background(), "recovery-worker-b")
-	if takeoverErr != nil || !takeoverFound {
-		t.Fatalf("take over interrupted recovery job: found=%t err=%v", takeoverFound, takeoverErr)
+	if len(items) != 3 {
+		t.Fatalf("recovery fixture items=%d, want create, overwrite, and skip", len(items))
 	}
-	adopter, ok := any(coordinator).(recoveryInterruptedOperationAdopter)
-	if !ok {
-		t.Fatal("recovery worker does not provide interrupted-mutation verify/adopt behavior")
+	for index, kind := range []RecoveryOperationKind{RecoveryOperationCreate, RecoveryOperationOverwrite, RecoveryOperationSkip} {
+		if items[index].OperationKind != string(kind) {
+			t.Fatalf("recovery fixture item %d operation=%s, want %s", index, items[index].OperationKind, kind)
+		}
 	}
-	checkpoint, err := adopter.AdoptInterruptedOperation(context.Background(), takeover, item.ID)
+	callbackName := "recovery:interrupt-before-adoption:" + t.Name()
+	if err := fixture.db.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == (model.BackupAssetRecoveryCheckpoint{}).TableName() && len(target.writes) == 1 {
+			_ = tx.AddError(errors.New("controlled interruption before operation checkpoint"))
+		}
+	}); err != nil {
+		t.Fatalf("register operation interruption: %v", err)
+	}
+	firstSource := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	interrupted := coordinator.ExecuteClaim(context.Background(), claim, firstSource, "")
+	if err := fixture.db.Callback().Create().Remove(callbackName); err != nil {
+		t.Fatalf("remove operation interruption: %v", err)
+	}
+	if !errors.Is(interrupted, ErrRecoveryWorkerUnavailable) || len(target.writes) != 1 {
+		t.Fatalf("interrupt first operation after target write: error=%v writes=%d", interrupted, len(target.writes))
+	}
+	fixture.now = claim.LeaseExpiresAt.Add(time.Second)
+	claim, found, err = coordinator.TakeoverExpired(context.Background(), "completed-before-mismatch-takeover")
+	if err != nil || !found {
+		t.Fatalf("take over interrupted recovery job: found=%t err=%v", found, err)
+	}
+	completedCheckpoint, err := coordinator.AdoptInterruptedOperation(context.Background(), claim, items[0].ID)
 	if err != nil {
-		t.Fatalf("adopt interrupted operation: %v", err)
+		t.Fatalf("adopt interrupted first operation: %v", err)
 	}
-
-	projector, ok := any(coordinator).(recoveryOperationMismatchProjector)
-	if !ok {
-		t.Fatal("recovery worker does not project verification mismatches")
-	}
-	fixture.now = fixture.now.Add(time.Second)
-	verifiedAt := fixture.now
-	verifiedDigest := strings.Repeat("e", 64)
-	_, err = projector.ProjectOperationMismatch(
-		context.Background(), takeover, item.ID, checkpoint.ID, 7, 6, verifiedDigest, verifiedAt, 1,
-	)
-	if !errors.Is(err, ErrRecoveryWorkerFenceLost) {
-		t.Fatalf("adoption accepted a post-terminal mismatch rewrite: %v", err)
-	}
-	if err := fixture.db.Where("id = ?", item.ID).Take(&item).Error; err != nil {
+	var completed model.BackupAssetRecoveryJobItem
+	if err := fixture.db.Where("id = ?", items[0].ID).Take(&completed).Error; err != nil {
 		t.Fatal(err)
 	}
-	if item.Outcome != "succeeded" || item.BytesWritten != item.ExpectedPostBytes ||
-		item.VerifiedSize != item.ExpectedPostBytes || item.VerifiedDigest != item.ExpectedPostIdentityDigest ||
-		item.FailureCategory != "" {
-		t.Fatalf("post-terminal mismatch changed adopted item=%+v", item)
+	before := loadRecoveryPendingOperationMismatchState(t, fixture.db, claim, items[0].ID)
+	target.afterWrite = func(call int) {
+		if call != 2 {
+			return
+		}
+		if completed.Outcome != "succeeded" || completed.BytesWritten != completed.ExpectedPostBytes ||
+			completed.VerifiedSize != completed.ExpectedPostBytes || completed.VerifiedDigest != completed.ExpectedPostIdentityDigest ||
+			completed.FailureCategory != "" {
+			t.Fatalf("first item was not durably completed before second write: %+v", completed)
+		}
+		object := target.writes[1].request.Object
+		state := target.states[object]
+		state.identityDigest = strings.Repeat("e", 64)
+		if state.identityDigest == items[1].ExpectedPostIdentityDigest {
+			state.identityDigest = strings.Repeat("d", 64)
+		}
+		target.states[object] = state
 	}
-	var job model.BackupAssetRecoveryJob
-	if err := fixture.db.Where("id = ?", takeover.JobID).Take(&job).Error; err != nil {
+	source := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	if err := coordinator.ExecuteClaim(context.Background(), claim, source, ""); !errors.Is(err, ErrInvalidTargetVerification) {
+		t.Fatalf("execute second item with mismatching target: %v", err)
+	}
+	if len(target.writes) != 2 || len(target.verifies) != 3 || completedCheckpoint.ID == "" {
+		t.Fatalf("mismatch execution writes=%d verifies=%d completed checkpoint=%+v", len(target.writes), len(target.verifies), completedCheckpoint)
+	}
+	assertRecoveryUnresolvedOutcomeProjection(t, fixture.db, claim, before.job,
+		UnresolvedOperationVerificationMismatch, SourceRevalidationMatched, 1)
+	var afterItem model.BackupAssetRecoveryJobItem
+	var afterCheckpoint model.BackupAssetRecoveryCheckpoint
+	if err := fixture.db.Where("id = ?", completed.ID).Take(&afterItem).Error; err != nil {
 		t.Fatal(err)
 	}
-	if job.State != string(JobStateRunning) || job.FailureCategory != "" ||
-		job.WorkspacePhase != string(WorkspacePhaseWriting) || job.TargetChainRevision != checkpoint.NextTargetRevision {
-		t.Fatalf("post-terminal mismatch changed adopted job=%+v", job)
-	}
-	var attempt model.BackupAssetRecoveryAttempt
-	if err := fixture.db.Where("id = ?", takeover.AttemptID).Take(&attempt).Error; err != nil {
+	if err := fixture.db.Where("id = ?", completedCheckpoint.ID).Take(&afterCheckpoint).Error; err != nil {
 		t.Fatal(err)
 	}
-	if attempt.State != string(AttemptStateRunning) || attempt.ClosedAt != nil {
-		t.Fatalf("post-adoption mismatch changed continuation attempt=%+v", attempt)
+	if !reflect.DeepEqual(afterItem, completed) || !reflect.DeepEqual(afterCheckpoint, completedCheckpoint) {
+		t.Fatalf("later mismatch rewrote completed item/checkpoint: item=%+v/%+v checkpoint=%+v/%+v",
+			completed, afterItem, completedCheckpoint, afterCheckpoint)
 	}
-	if _, err := coordinator.PrepareFirstWrite(context.Background(), takeover); err != nil {
-		t.Fatalf("post-adoption mismatch blocked continuation permit: %v", err)
+	var skipped model.BackupAssetRecoveryJobItem
+	if err := fixture.db.Where("id = ?", items[2].ID).Take(&skipped).Error; err != nil {
+		t.Fatal(err)
 	}
-	var evidenceCount int64
+	if !reflect.DeepEqual(skipped, items[2]) || skipped.Outcome != "" || skipped.BytesWritten != 0 ||
+		skipped.VerifiedSize != 0 || skipped.VerifiedDigest != "" || skipped.FailureCategory != "" {
+		t.Fatalf("mismatch changed the unprocessed skip item: unchanged=%t outcome=%q bytes=%d size=%d digest_present=%t failure_present=%t",
+			reflect.DeepEqual(skipped, items[2]), skipped.Outcome, skipped.BytesWritten, skipped.VerifiedSize,
+			skipped.VerifiedDigest != "", skipped.FailureCategory != "")
+	}
+	var differenceCount int64
 	if err := fixture.db.Model(&model.BackupAssetRecoveryEvidence{}).
-		Where("job_id = ? AND kind = ?", takeover.JobID, "difference").Count(&evidenceCount).Error; err != nil {
+		Where("job_id = ? AND kind = ?", claim.JobID, "difference").Count(&differenceCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if evidenceCount != 0 {
-		t.Fatalf("post-terminal mismatch added difference evidence rows=%d, want zero", evidenceCount)
+	if differenceCount != 0 {
+		t.Fatalf("mismatch created difference evidence rows=%d, want unresolved failure evidence", differenceCount)
+	}
+	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
+		t.Fatalf("terminal mismatch retained write authority: %v", err)
+	}
+	if err := coordinator.ExecuteClaim(context.Background(), claim, source, ""); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
+		t.Fatalf("terminal mismatch replay error=%v", err)
+	}
+	if len(target.writes) != 2 || len(target.verifies) != 3 {
+		t.Fatalf("terminal mismatch replay performed target I/O: writes=%d verifies=%d", len(target.writes), len(target.verifies))
 	}
 }
 

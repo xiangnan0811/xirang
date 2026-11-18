@@ -2782,6 +2782,14 @@ func TestBrokerNoRangeProviderMaterializesAuthenticatedCacheBeforeRangeUpgrade(t
 			t.Fatalf("source request[%d]=%+v want mode=%s", index, harness.source.requests[index], want)
 		}
 	}
+	if len(harness.source.closedModes) != len(wantModes) {
+		t.Fatalf("closed source sessions=%v want=%v", harness.source.closedModes, wantModes)
+	}
+	for index, want := range wantModes {
+		if harness.source.closedModes[index] != want {
+			t.Fatalf("closed source session[%d]=%s want=%s", index, harness.source.closedModes[index], want)
+		}
+	}
 	if !harness.authorizer.onlyReauthorizedProviderRange(false) {
 		t.Fatalf("cache capability escaped as Provider Range: %+v", harness.authorizer.reauthorized)
 	}
@@ -2870,8 +2878,11 @@ func TestBrokerCacheBackedRangeMissRevokesGrantWithoutProviderSeek(t *testing.T)
 		t.Fatal(err)
 	}
 	object := cacheObjectForAsset(42, *harness.asset, RendererSafeRaster, ProfileRasterV1)
-	if err := cache.Evict(object); err != nil {
-		t.Fatal(err)
+	if evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), object.Ref.RecoveryPointID, 1); err != nil || evicted != 1 || remaining {
+		t.Fatalf("cache eviction evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), object.Ref.RecoveryPointID, 1); err != nil || evicted != 0 || remaining {
+		t.Fatalf("cache eviction completion evicted=%d remaining=%v err=%v", evicted, remaining, err)
 	}
 	openCalls := harness.source.openCalls
 	serveErr := harness.broker.Serve(context.Background(), GatewayRequest{
@@ -3471,6 +3482,7 @@ type brokerSourceResolverFake struct {
 	order                 *[]string
 	openCalls             int
 	requests              []SourceRequest
+	closedModes           []SourceMode
 	onOpen                func(SourceRequest)
 	blockReads            bool
 	readStarted           chan struct{}
@@ -3599,6 +3611,11 @@ func (fake *brokerSourceResolverFake) OpenContentSource(ctx context.Context, req
 			Provider: fake.asset.Provider, Sequential: !fake.sequentialUnavailable, Range: fake.asset.RangeProven,
 		},
 		closeErr: fake.closeErr,
+		onClose: func() {
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			fake.closedModes = append(fake.closedModes, request.Mode)
+		},
 	}
 	if fake.readErr != nil && request.Mode != SourceModeStat {
 		session.reader = &failingBrokerSourceReader{err: fake.readErr}
@@ -3625,6 +3642,7 @@ type brokerSourceSessionFake struct {
 	capabilities SourceCapabilities
 	reader       SourceReader
 	closeErr     error
+	onClose      func()
 }
 
 func (fake *brokerSourceSessionFake) Stat() SourceStat { return fake.stat }
@@ -3643,6 +3661,9 @@ func (*brokerSourceSessionFake) Revalidate(context.Context) error { return nil }
 func (fake *brokerSourceSessionFake) Close() error {
 	if fake.reader != nil {
 		_ = fake.reader.Close()
+	}
+	if fake.onClose != nil {
+		fake.onClose()
 	}
 	return fake.closeErr
 }
