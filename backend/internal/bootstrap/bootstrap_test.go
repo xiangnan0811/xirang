@@ -203,6 +203,78 @@ func TestSearchBootstrapMigrateEncryptionV1ToV2IncludesSensitiveSettingsAndOverl
 	}
 }
 
+func TestMigrateEncryptionV1ToV2PreservesTaskWithoutPersistentKey(t *testing.T) {
+	const legacyKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	const config = `{"repository_password":"FAKE_LEGACY_TASK_PASSWORD_FOR_TEST_ONLY"}`
+	const setting = "FAKE_LEGACY_SETTING_FOR_TEST_ONLY"
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "   ")
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", legacyKey)
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+
+	db := openBootstrapTestDB(t)
+	if err := db.AutoMigrate(
+		&model.Node{}, &model.SSHKey{}, &model.Integration{}, &model.Task{},
+		&model.Policy{}, &model.AppCredential{}, &model.User{}, &model.SystemSetting{},
+		&model.BackupAssetSavedSearch{}, &model.BackupAssetFavorite{},
+		&model.BackupAssetTagDefinition{}, &model.BackupAssetOverlayIdempotency{},
+	); err != nil {
+		t.Fatalf("initialize migration tables: %v", err)
+	}
+	node := model.Node{Name: "legacy-cipher-node", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key", BackupDir: "legacy-cipher-node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	legacyConfig := encryptV1ForTest(t, legacyKey, config)
+	task := model.Task{Name: "legacy-cipher-task", NodeID: node.ID, ExecutorType: "restic", ExecutorConfig: legacyConfig, Status: "pending"}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&task).Error; err != nil {
+		t.Fatalf("seed legacy task: %v", err)
+	}
+	legacySetting := encryptV1ForTest(t, legacyKey, setting)
+	if err := db.Create(&model.SystemSetting{Key: "smtp.password", Value: legacySetting}).Error; err != nil {
+		t.Fatalf("seed legacy setting: %v", err)
+	}
+	if plain, err := secure.DecryptIfNeeded(legacyConfig); err != nil || plain != config {
+		t.Fatal("legacy task configuration must be decryptable with the configured legacy key")
+	}
+	if err := MigrateEncryptionV1ToV2(db); err != nil {
+		t.Fatalf("migrate with ephemeral primary key: %v", err)
+	}
+	var raw string
+	if err := db.Raw("SELECT executor_config FROM tasks WHERE id = ?", task.ID).Row().Scan(&raw); err != nil {
+		t.Fatalf("read task configuration: %v", err)
+	}
+	if raw != legacyConfig {
+		t.Fatal("task ciphertext changed without a persistent primary key")
+	}
+	var settingRow model.SystemSetting
+	if err := db.First(&settingRow, "key = ?", "smtp.password").Error; err != nil {
+		t.Fatalf("read migrated setting: %v", err)
+	}
+	if !strings.HasPrefix(settingRow.Value, "enc:v2:") {
+		t.Fatal("non-task v1 migration did not retain its existing behavior")
+	}
+	if plain, err := secure.DecryptIfNeeded(settingRow.Value); err != nil || plain != setting {
+		t.Fatal("migrated non-task value could not be decrypted")
+	}
+
+	t.Setenv("DATA_ENCRYPTION_KEY", legacyKey)
+	secure.ResetForTesting()
+	if err := MigrateEncryptionV1ToV2(db); err != nil {
+		t.Fatalf("migrate with persistent primary key: %v", err)
+	}
+	if err := db.Raw("SELECT executor_config FROM tasks WHERE id = ?", task.ID).Row().Scan(&raw); err != nil {
+		t.Fatalf("read migrated task configuration: %v", err)
+	}
+	if !strings.HasPrefix(raw, "enc:v2:") {
+		t.Fatal("task ciphertext did not migrate with a persistent primary key")
+	}
+	if plain, err := secure.DecryptIfNeeded(raw); err != nil || plain != config {
+		t.Fatal("migrated task configuration did not decrypt to its original bytes")
+	}
+}
+
 func TestEncryptPlaintextPolicyDrillScripts(t *testing.T) {
 	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 	t.Setenv("APP_ENV", "development")

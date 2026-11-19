@@ -111,6 +111,9 @@ func main() {
 	if err := bootstrap.MigrateLegacyResticTaskConfigs(db); err != nil {
 		log.Fatal().Err(err).Msg("Restic 历史任务配置迁移失败，拒绝启动")
 	}
+	if err := bootstrap.EncryptPlaintextTaskExecutorConfigs(db); err != nil {
+		log.Fatal().Err(err).Msg("任务配置明文加密失败，拒绝启动")
+	}
 
 	hub := ws.NewHub(db, cfg.AllowedOrigins, cfg.WSAllowEmptyOrigin)
 	hubCtx, hubCancel := context.WithCancel(context.Background())

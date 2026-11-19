@@ -52,8 +52,8 @@ func SeedUsers(db *gorm.DB) error {
 	return nil
 }
 
-// MigrateEncryptionV1ToV2 将所有 enc:v1: 加密字段重新加密为 enc:v2:（argon2id KDF）。
-// 幂等操作——仅处理 v1 数据，v2 数据跳过。
+// MigrateEncryptionV1ToV2 将 enc:v1: 加密字段重新加密为 enc:v2:（argon2id KDF）。
+// 幂等操作——仅处理 v1 数据，v2 数据跳过。Task 配置仅在持久密钥已配置时迁移。
 func MigrateEncryptionV1ToV2(db *gorm.DB) error {
 	noHooks := db.Session(&gorm.Session{SkipHooks: true})
 	total := 0
@@ -88,14 +88,17 @@ func MigrateEncryptionV1ToV2(db *gorm.DB) error {
 	}
 	total += n
 
-	// Task: ExecutorConfig
-	n, err = reEncryptColumns(noHooks, "tasks", map[string]string{
-		"executor_config": "executor_config",
-	})
-	if err != nil {
-		return fmt.Errorf("tasks 迁移失败: %w", err)
+	// An ephemeral development key cannot safely replace legacy task ciphertext:
+	// the new value would become unreadable after the process restarts.
+	if requireTaskConfigEncryptionKey() == nil {
+		n, err = reEncryptColumns(noHooks, "tasks", map[string]string{
+			"executor_config": "executor_config",
+		})
+		if err != nil {
+			return fmt.Errorf("tasks 迁移失败: %w", err)
+		}
+		total += n
 	}
-	total += n
 
 	// Policy: PreHook, PostHook, drill verify scripts (may embed secrets)
 	n, err = reEncryptColumns(noHooks, "policies", map[string]string{

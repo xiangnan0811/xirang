@@ -13,6 +13,7 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/policy"
 	"xirang/backend/internal/repository"
+	"xirang/backend/internal/secure"
 )
 
 var _ repository.TaskRepository = (*TaskRepository)(nil)
@@ -67,11 +68,15 @@ func (r *TaskRepository) Create(ctx context.Context, task *model.Task) error {
 // Update saves changes to an existing unarchived task. A stale Save must not
 // clear archived_at after Archive commits.
 func (r *TaskRepository) Update(ctx context.Context, task *model.Task) error {
+	persistedTask, err := taskForPersistence(task)
+	if err != nil {
+		return err
+	}
 	result := r.db.WithContext(ctx).Model(&model.Task{}).
 		Where("id = ? AND archived_at IS NULL", task.ID).
 		Select("*").
 		Omit("ID", "CreatedAt", "ArchivedAt").
-		Updates(task)
+		Updates(persistedTask)
 	if result.Error != nil {
 		return apperr.WrapDBError(result.Error)
 	}
@@ -84,17 +89,20 @@ func (r *TaskRepository) Update(ctx context.Context, task *model.Task) error {
 // UpdateWithRevision performs the task edit compare-and-set. The timestamp
 // predicate is evaluated by the database in the same transaction as the
 // update, so two writers holding the same stale revision cannot overwrite
-// one another. GORM's update callbacks still run to encrypt ExecutorConfig
-// and advance UpdatedAt.
+// one another. The update callbacks continue to advance UpdatedAt.
 func (r *TaskRepository) UpdateWithRevision(ctx context.Context, task *model.Task, expected time.Time) error {
 	if r == nil || r.db == nil || task == nil {
 		return apperr.WrapDBError(gorm.ErrInvalidData)
+	}
+	persistedTask, err := taskForPersistence(task)
+	if err != nil {
+		return err
 	}
 	result := r.db.WithContext(ctx).Model(&model.Task{}).
 		Where("id = ? AND archived_at IS NULL AND updated_at = ?", task.ID, expected).
 		Select("*").
 		Omit("ID", "CreatedAt", "ArchivedAt").
-		Updates(task)
+		Updates(persistedTask)
 	if result.Error != nil {
 		return apperr.WrapDBError(result.Error)
 	}
@@ -102,6 +110,24 @@ func (r *TaskRepository) UpdateWithRevision(ctx context.Context, task *model.Tas
 		return repository.ErrTaskRevisionConflict
 	}
 	return nil
+}
+
+// taskForPersistence encrypts the update destination without changing the
+// caller's configuration. Already encrypted and empty values need no copy.
+func taskForPersistence(task *model.Task) (*model.Task, error) {
+	if task == nil {
+		return nil, apperr.WrapDBError(gorm.ErrInvalidData)
+	}
+	encrypted, err := secure.EncryptIfNeeded(task.ExecutorConfig)
+	if err != nil {
+		return nil, apperr.WrapDBError(errors.New("encrypt task executor configuration failed"))
+	}
+	if encrypted == task.ExecutorConfig {
+		return task, nil
+	}
+	persisted := *task
+	persisted.ExecutorConfig = encrypted
+	return &persisted, nil
 }
 
 // Delete removes a task by its primary key.

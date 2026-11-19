@@ -289,8 +289,8 @@ def verify_postgres(inventory, archive_raw):
             require(all(summary.get(key) == value for key, value in result.items()),
                     'PostgreSQL group summary mismatch')
             results.append(result)
-    require(sum(result['tests'] for result in results) == 527, 'PostgreSQL root count mismatch')
-    require(sum(result['required'] for result in results) == 896, 'PostgreSQL required count mismatch')
+    require(sum(result['tests'] for result in results) == 529, 'PostgreSQL root count mismatch')
+    require(sum(result['required'] for result in results) == 898, 'PostgreSQL required count mismatch')
     for key in ('required_missing', 'required_skipped', 'required_failed', 'optional_skips'):
         require(sum(result[key] for result in results) == 0, 'PostgreSQL evidence not complete')
     return results

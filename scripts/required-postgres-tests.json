@@ -2256,6 +2256,12 @@
           "required_paths": [
             "TestBreakGlassOnlyOneConcurrentZeroAdminPromotionPostgres"
           ]
+        },
+        {
+          "name": "TestEncryptPlaintextTaskExecutorConfigsSQLitePostgres",
+          "required_paths": [
+            "TestEncryptPlaintextTaskExecutorConfigsSQLitePostgres/postgres"
+          ]
         }
       ]
     },
@@ -3375,6 +3381,12 @@
           "name": "TestTaskArchiveDisablesUnlinksAndPreservesHistoryPostgres",
           "required_paths": [
             "TestTaskArchiveDisablesUnlinksAndPreservesHistoryPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskExecutorConfigCiphertextSQLitePostgres",
+          "required_paths": [
+            "TestTaskExecutorConfigCiphertextSQLitePostgres/postgres"
           ]
         },
         {

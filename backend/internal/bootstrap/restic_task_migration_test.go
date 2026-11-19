@@ -2,7 +2,9 @@ package bootstrap
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +108,48 @@ func TestMigrateLegacyResticTaskConfigsIsolatesMalformedRows(t *testing.T) {
 	}
 	if got := rawResticMigrationPlaintext(t, db, conflict.ID); got != `{"append_only":true,"repository_version":1}` {
 		t.Fatalf("ambiguous task changed unexpectedly: %s", got)
+	}
+}
+
+func TestMigrateLegacyResticTaskConfigsRequiresConfiguredKeyForRewrite(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RESTIC_MIGRATION_DATA_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db := openBootstrapTestDB(t)
+	if err := db.AutoMigrate(&model.Task{}); err != nil {
+		t.Fatal("migrate tasks")
+	}
+	// Populate the secure package's cached key, then remove the configuration:
+	// the startup rewrite still must reject a nonpersistent key configuration.
+	encrypted := createEncryptedResticMigrationTask(t, db, `{"repository_password":"FAKE_EXISTING_SECRET"}`, nil)
+	for _, fixture := range []model.Task{
+		{Name: "unchanged", NodeID: 1, ExecutorType: "restic", ExecutorConfig: `{"repository_password":"FAKE_UNCHANGED_SECRET"}`, Status: "pending"},
+		{Name: "malformed", NodeID: 1, ExecutorType: "restic", ExecutorConfig: `{"append_only":"invalid"}`, Status: "pending"},
+		{Name: "blank", NodeID: 1, ExecutorType: "restic", ExecutorConfig: " \t", Status: "pending"},
+	} {
+		if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&fixture).Error; err != nil {
+			t.Fatal("seed unchanged Restic fixture")
+		}
+	}
+	t.Setenv("DATA_ENCRYPTION_KEY", " \t")
+	before := taskConfigCiphertextSnapshot(t, db)
+	if err := MigrateLegacyResticTaskConfigs(db); err != nil {
+		t.Fatal("keyless non-rewriting Restic migration should succeed")
+	}
+	if !reflect.DeepEqual(before, taskConfigCiphertextSnapshot(t, db)) || encrypted.ID == 0 {
+		t.Fatal("keyless non-rewriting migration changed task rows")
+	}
+	legacy := model.Task{Name: "legacy", NodeID: 1, ExecutorType: "restic", ExecutorConfig: `{"append_only":true,"repository_password":"FAKE_LEGACY_SECRET"}`, Status: "pending"}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&legacy).Error; err != nil {
+		t.Fatal("seed legacy Restic fixture")
+	}
+	before = taskConfigCiphertextSnapshot(t, db)
+	if err := MigrateLegacyResticTaskConfigs(db); !errors.Is(err, errTaskConfigKey) {
+		t.Fatal("keyless Restic conversion must fail")
+	}
+	if !reflect.DeepEqual(before, taskConfigCiphertextSnapshot(t, db)) {
+		t.Fatal("keyless Restic conversion changed task rows")
 	}
 }
 
