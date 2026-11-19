@@ -3396,6 +3396,12 @@
           ]
         },
         {
+          "name": "TestTaskRepositoryUpdateWithRevisionSQLitePostgres",
+          "required_paths": [
+            "TestTaskRepositoryUpdateWithRevisionSQLitePostgres/postgres"
+          ]
+        },
+        {
           "name": "TestTaskRunCaptureSidecarPersistencePreservesRawBytesPostgres",
           "required_paths": [
             "TestTaskRunCaptureSidecarPersistencePreservesRawBytesPostgres"
