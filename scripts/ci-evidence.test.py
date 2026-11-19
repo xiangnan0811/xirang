@@ -118,7 +118,7 @@ def source_fixture(profile):
     for index in range(1, 23):
         package = f'./fixture/g{index:02d}'
         tests, events = [], []
-        for local in range(24 if index < 22 else 23):
+        for local in range(24 if index < 22 else 25):
             name = f'TestFixture{local:02d}'
             paths = [name + '/one'] + ([name + '/two'] if root_index < 369 else [])
             root_index += 1

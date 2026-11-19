@@ -233,6 +233,8 @@ Updater 与 parser 的身份、socket、PID namespace 和权限必须隔离。�
 
 Xirang 会加密存储 SSH 密码、SSH 私钥、TOTP 密钥、通知端点、代理地址等敏感字段。请妥善备份 `DATA_ENCRYPTION_KEY`；数据库备份没有对应密钥时无法恢复敏感字段明文。若部署仍处于密钥轮替或含历史 v1 字段/旧 v2 domain-key envelope，还必须原样保留适用的 `DATA_ENCRYPTION_LEGACY_KEY` 及其它历史 key-ring/decryption key；不能用新密钥代替旧密钥完成数据库恢复。
 
+任务执行器配置也受加密保护。升级前，请按现有升级流程保存数据库和匹配密钥，停止可写入任务的旧 Core 并等待在途写入完成，再用相同的持久 `DATA_ENCRYPTION_KEY` 启动新版 Core。启动期间会加密当前库中残留的任务配置明文，包含已归档任务。开发模式若有旧配置需要改写，也必须显式提供持久密钥。启动成功仅覆盖此次数据库中的行；历史备份、日志、WAL 或快照仍按敏感副本保护。若回退旧版后曾写入任务，恢复新版时应再次按同一顺序启动。 [任务配置合同](../spec/domains/task-execution-recovery.md#配置更新与目标归属)
+
 备份资产控制面同样依赖该密钥。仓库访问绑定、冻结原因和 wrapped domain key 只有在恢复原数据库 **并且** 使用匹配的 `DATA_ENCRYPTION_KEY` 与适用历史密钥时才可读。仅保留 Provider 仓库只能在 Admin 有效重连/导入后重建可验证的 RecoveryPoint/Catalog 事实，不能重建 overlays、审计、策略、冻结或 Task 关系。错误或缺失密钥必须失败关闭，不得静默换绑或把 rebuild 报成成功。数据库退役迁移的升级前保全、旧版隔离恢复和不可逆回退见[备份、恢复与快照](./backup-recovery.md#升级与灾难恢复)。
 
 任务中的策略摘要不返回 hook 或演练脚本；有权限的管理员从策略编辑入口管理。TOTP 初始化具有有效期，重新初始化会使上次二维码失效；已启用账户不能直接覆盖密钥。敏感字段、登录会话和临时授权的完整合同见[凭据与访问](../spec/domains/credentials-access.md)。

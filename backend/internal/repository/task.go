@@ -29,8 +29,8 @@ type TaskRepository interface {
 	Create(ctx context.Context, task *model.Task) error
 	Update(ctx context.Context, task *model.Task) error
 	// UpdateWithRevision updates one live task only when its durable
-	// UpdatedAt timestamp exactly matches expected. The implementation must
-	// preserve model hooks (including ExecutorConfig encryption).
+	// UpdatedAt timestamp exactly matches expected. Persist non-empty
+	// ExecutorConfig using the existing encryption format.
 	UpdateWithRevision(ctx context.Context, task *model.Task, expected time.Time) error
 	Delete(ctx context.Context, id uint) error
 	ExistsByID(ctx context.Context, id uint) (bool, error)

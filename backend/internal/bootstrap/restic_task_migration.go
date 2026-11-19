@@ -109,6 +109,9 @@ func migrateLegacyResticTaskConfigRow(db *gorm.DB, taskID uint) (changed, skippe
 		if !didChange {
 			return nil
 		}
+		if err := requireTaskConfigEncryptionKey(); err != nil {
+			return err
+		}
 
 		persisted := model.Task{ExecutorConfig: migratedConfig}
 		if err := persisted.BeforeSave(tx); err != nil {
