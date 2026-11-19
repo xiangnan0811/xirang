@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/repository"
 	gormrepo "xirang/backend/internal/repository/gorm"
 	taskscheduler "xirang/backend/internal/task/scheduler"
 
@@ -132,6 +133,77 @@ func TestTaskUpdatePresenceRevisionAndCronClear(t *testing.T) {
 	})
 	if !errors.Is(err, ErrTaskRevisionConflict) {
 		t.Fatalf("stale update error=%v, want ErrTaskRevisionConflict", err)
+	}
+}
+
+func TestTaskRepositoryUpdateWithRevisionSQLitePostgres(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(*testing.T) *gorm.DB
+	}{
+		{name: "sqlite", open: openMigratedBatchCommandSkipSQLiteDB},
+		{name: "postgres", open: openMigratedBatchCommandSkipPostgresDB},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC().Truncate(time.Second)
+			db := tc.open(t).Session(&gorm.Session{NowFunc: func() time.Time { return now }})
+			node := model.Node{Name: "revision-node", Port: 22, Username: "root", AuthType: "key"}
+			if err := db.Create(&node).Error; err != nil {
+				t.Fatalf("create node: %v", err)
+			}
+			taskEntity := model.Task{
+				Name: "revision-original", NodeID: node.ID, ExecutorType: "command",
+				Status: string(StatusPending), Enabled: true,
+			}
+			if err := db.Create(&taskEntity).Error; err != nil {
+				t.Fatalf("create task: %v", err)
+			}
+			repo := gormrepo.NewTaskRepository(db)
+			ctx := context.Background()
+			initial, err := repo.FindByID(ctx, taskEntity.ID)
+			if err != nil {
+				t.Fatalf("load initial task: %v", err)
+			}
+			t0 := initial.UpdatedAt
+			if !t0.Equal(now) {
+				t.Fatalf("initial revision=%v, want %v", t0, now)
+			}
+
+			winner := *initial
+			winner.Name = "revision-winner"
+			winner.CreatedAt = t0.Add(-time.Hour)
+			archivedAt := t0.Add(-time.Minute)
+			winner.ArchivedAt = &archivedAt
+			now = t0.Add(time.Second)
+			if err := repo.UpdateWithRevision(ctx, &winner, t0); err != nil {
+				t.Fatalf("update with current revision: %v", err)
+			}
+			persisted, err := repo.FindByID(ctx, taskEntity.ID)
+			if err != nil {
+				t.Fatalf("load winning task: %v", err)
+			}
+			t1 := persisted.UpdatedAt
+			if persisted.Name != "revision-winner" || !t1.Equal(now) || !t1.After(t0) {
+				t.Fatalf("winning task name=%q revision=%v, want revision-winner at %v after %v", persisted.Name, t1, now, t0)
+			}
+			if !persisted.CreatedAt.Equal(initial.CreatedAt) || persisted.ArchivedAt != nil {
+				t.Fatalf("winning update changed protected fields: created=%v archived=%v", persisted.CreatedAt, persisted.ArchivedAt)
+			}
+
+			stale := *initial
+			stale.Name = "revision-stale"
+			now = t1.Add(time.Second)
+			if err := repo.UpdateWithRevision(ctx, &stale, t0); !errors.Is(err, repository.ErrTaskRevisionConflict) {
+				t.Fatalf("update with stale revision error=%v, want ErrTaskRevisionConflict", err)
+			}
+			persisted, err = repo.FindByID(ctx, taskEntity.ID)
+			if err != nil {
+				t.Fatalf("reload task after stale update: %v", err)
+			}
+			if persisted.Name != "revision-winner" || !persisted.UpdatedAt.Equal(t1) {
+				t.Fatalf("task after stale update name=%q revision=%v, want revision-winner at %v", persisted.Name, persisted.UpdatedAt, t1)
+			}
+		})
 	}
 }
 

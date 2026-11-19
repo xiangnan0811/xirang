@@ -52,7 +52,7 @@ def policy(stage, kind):
                      producer='unique-successful-upload-window', digest='sha256')
     if stage in ('verify', 'finalize'):
         if kind == 'source':
-            rules.update(jobs=sorted(source.JOB_NAMES), postgres=(22, 529, 898),
+            rules.update(jobs=sorted(source.JOB_NAMES), postgres=(22, 531, 900),
                          artifacts=source.ARTIFACTS, profile_files=7,
                          browser_retries=0, browser_failures=0)
         else:

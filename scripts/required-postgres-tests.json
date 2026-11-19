@@ -958,6 +958,12 @@
           ]
         },
         {
+          "name": "TestNodeBatchDeleteAssociationsSQLitePostgres",
+          "required_paths": [
+            "TestNodeBatchDeleteAssociationsSQLitePostgres/postgres"
+          ]
+        },
+        {
           "name": "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases",
           "required_paths": [
             "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres",
@@ -3387,6 +3393,12 @@
           "name": "TestTaskExecutorConfigCiphertextSQLitePostgres",
           "required_paths": [
             "TestTaskExecutorConfigCiphertextSQLitePostgres/postgres"
+          ]
+        },
+        {
+          "name": "TestTaskRepositoryUpdateWithRevisionSQLitePostgres",
+          "required_paths": [
+            "TestTaskRepositoryUpdateWithRevisionSQLitePostgres/postgres"
           ]
         },
         {

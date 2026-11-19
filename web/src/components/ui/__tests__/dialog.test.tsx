@@ -39,9 +39,9 @@ describe("Dialog", () => {
         </DialogContent>
       </Dialog>
     );
-    expect(screen.getByRole("dialog")).toBeDefined();
-    expect(screen.getByText("Confirm")).toBeDefined();
-    expect(screen.getByText("Are you sure?")).toBeDefined();
-    expect(screen.getByText("Body content")).toBeDefined();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("Confirm")).toBeInTheDocument();
+    expect(screen.getByText("Are you sure?")).toBeInTheDocument();
+    expect(screen.getByText("Body content")).toBeInTheDocument();
   });
 });
