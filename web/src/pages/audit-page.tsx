@@ -5,6 +5,7 @@ import { Navigate } from "react-router-dom";
 import { AccessDeniedRedirect } from "@/components/access-denied-navigation";
 import { useAuth } from "@/context/auth-context.hooks";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { resolveTimeRange, type TimeRange } from "@/lib/time-range";
 import { getErrorMessage } from "@/lib/utils";
 import type { AuditLogRecord } from "@/types/domain";
 import { Badge } from "@/components/ui/badge";
@@ -19,8 +20,6 @@ import { toast } from "@/components/ui/toast-sonner";
 
 const pageSize = 30;
 
-type TimeRange = "all" | "1h" | "24h" | "7d" | "30d";
-
 function methodBadge(method: string) {
   const normalized = method.toUpperCase();
   if (normalized === "DELETE") {
@@ -34,30 +33,6 @@ function methodBadge(method: string) {
     return "warning" as const;
   }
   return "neutral" as const;
-}
-
-function resolveTimeRange(range: TimeRange): { from?: string; to?: string } {
-  if (range === "all") {
-    return {};
-  }
-
-  const now = new Date();
-  const from = new Date(now);
-
-  if (range === "1h") {
-    from.setHours(from.getHours() - 1);
-  } else if (range === "24h") {
-    from.setHours(from.getHours() - 24);
-  } else if (range === "7d") {
-    from.setDate(from.getDate() - 7);
-  } else if (range === "30d") {
-    from.setDate(from.getDate() - 30);
-  }
-
-  return {
-    from: from.toISOString(),
-    to: now.toISOString(),
-  };
 }
 
 export function AuditPage() {

@@ -8,6 +8,7 @@ import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { getAuthIdentitySnapshot, getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
 import type { CredentialAccessGrantListOptions } from "@/lib/api/credential-access-grants-api";
+import { resolveTimeRange, type TimeRange } from "@/lib/time-range";
 import type { CredentialAccessGrant, CredentialAccessGrantStatus } from "@/types/domain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,8 +29,6 @@ import { Pagination } from "@/components/ui/pagination";
 import { Select } from "@/components/ui/select";
 
 const pageSize = 30;
-
-type TimeRange = "all" | "1h" | "24h" | "7d" | "30d";
 
 type GrantPage = { items: CredentialAccessGrant[]; total: number; page: number; pageSize: number };
 type GrantLoadState =
@@ -69,24 +68,6 @@ const actionLabelKeys: Partial<Record<string, string>> = {
 // Filters send exact stored states; "unknown" stands for any unrecognized wire value and is never a query.
 const primaryStatusOptions: CredentialAccessGrantStatus[] = ["active", "expired"];
 const historicalStatusOptions: CredentialAccessGrantStatus[] = ["requested", "approved", "denied", "revoked"];
-
-function resolveTimeRange(range: TimeRange): { from?: string; to?: string } {
-  if (range === "all") {
-    return {};
-  }
-  const now = new Date();
-  const from = new Date(now);
-  if (range === "1h") {
-    from.setHours(from.getHours() - 1);
-  } else if (range === "24h") {
-    from.setHours(from.getHours() - 24);
-  } else if (range === "7d") {
-    from.setDate(from.getDate() - 7);
-  } else if (range === "30d") {
-    from.setDate(from.getDate() - 30);
-  }
-  return { from: from.toISOString(), to: now.toISOString() };
-}
 
 function positiveFilter(value: string): number | undefined {
   const parsed = Number(value.trim());
