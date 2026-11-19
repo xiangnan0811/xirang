@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.73.24](https://github.com/xiangnan0811/xirang/compare/v0.73.23...v0.73.24) (2026-11-19)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复任务执行器配置明文写入 ([034e5d7](https://github.com/xiangnan0811/xirang/commit/034e5d7fe32cb61cd783bbc48f34efd36542aa19))
+
 ## [0.73.23](https://github.com/xiangnan0811/xirang/compare/v0.73.22...v0.73.23) (2026-11-18)
 
 
