@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { SSHKeysPage } from "./ssh-keys-page";
@@ -646,5 +646,64 @@ describe("SSHKeysPage", () => {
 
     await editorPropsRef.current.onSave!(mockDraft, options);
     expect(toastSuccessMock).toHaveBeenCalledWith("SSH Key 已更新。");
+  });
+
+  it.each([
+    {
+      fixture: "restricted ed25519",
+      overrides: { keyType: "ed25519", disabled: false, expiresAt: undefined, broadScope: false },
+      badges: [
+        { label: "ED25519", tone: "neutral" },
+        { label: "已限制", tone: "neutral" },
+      ],
+    },
+    {
+      fixture: "uppercase RSA with every scope flag",
+      overrides: { keyType: "RSA", disabled: true, expiresAt: "2026-12-31 00:00:00", broadScope: true },
+      badges: [
+        { label: "RSA", tone: "warning" },
+        { label: "已停用", tone: "destructive" },
+        { label: "有过期时间", tone: "warning" },
+        { label: "范围过宽", tone: "warning" },
+      ],
+    },
+  ])("renders the same type and scope badges in every layout for $fixture", async ({ overrides, badges }) => {
+    const user = userEvent.setup();
+    const key = (sshKeysRef.current.sshKeys as Record<string, unknown>[])[0];
+    createContext({ sshKeys: [{ ...key, ...overrides }] });
+    render(
+      <MemoryRouter>
+        <SSHKeysPage />
+      </MemoryRouter>
+    );
+
+    // Every type badge plus every possible scope label (including the restricted fallback) is tracked per renderer,
+    // so a dropped, extra, reordered or fallback badge fails while the unrelated usage badge stays out of scope.
+    const trackedLabels = new Set([badges[0].label, "已停用", "有过期时间", "范围过宽", "已限制"]);
+    const expectBadgesPerRendering = (kinds: Array<"card" | "table">) => {
+      // Scope each renderer from its accessible per-key checkbox; cards have no semantic container, so use their bg-card surface.
+      const renderings = screen.getAllByRole("checkbox", { name: "选择密钥 生产密钥" }).map((checkbox) => {
+        const rendering = checkbox.closest("tr") ?? checkbox.closest(".bg-card");
+        if (!(rendering instanceof HTMLElement)) {
+          throw new Error("missing SSH key row or card");
+        }
+        return rendering;
+      });
+      expect(renderings.map((rendering) => (rendering instanceof HTMLTableRowElement ? "table" : "card"))).toEqual(kinds);
+      for (const rendering of renderings) {
+        // Badge renders its sr-only tone label before its own label text; matches return in document order.
+        const rendered = within(rendering)
+          .queryAllByText((content) => trackedLabels.has(content), { selector: "span" })
+          .map((badge) => ({ label: badge.lastChild?.textContent, tone: badge.querySelector(".sr-only")?.textContent }));
+        expect(rendered).toEqual(badges);
+      }
+    };
+
+    // Default table view mounts the mobile cards, the desktop cards and the table row.
+    expectBadgesPerRendering(["card", "card", "table"]);
+
+    await user.click(screen.getByRole("radio", { name: "卡片视图" }));
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expectBadgesPerRendering(["card", "card"]);
   });
 });
