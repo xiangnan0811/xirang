@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -293,6 +294,111 @@ func TestIntegrationHandlerCreateSanitizesResponse(t *testing.T) {
 	assertIntegrationResponseSanitized(t, respBody, []string{"FAKE_CREATED_TOKEN", "FAKE_CREATED_QUERY", "FAKE_CREATED_SECRET_FOR_TEST_ONLY", "proxy-user", "FAKE_PROXY_SECRET", "proxy.example.test", "FAKE_PROXY_QUERY"})
 	if !strings.Contains(respBody, `"endpoint":"https://redacted.invalid"`) || !strings.Contains(respBody, `"proxy_url":"socks5://redacted.invalid"`) {
 		t.Fatalf("期望响应返回脱敏 endpoint/proxy_url，实际: %s", respBody)
+	}
+}
+
+func assertIntegrationMaskRejected(t *testing.T, resp *httptest.ResponseRecorder, message string) {
+	t.Helper()
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("期望脱敏占位符错误 400，实际状态码: %d", resp.Code)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatal("无法解码脱敏占位符错误响应")
+	}
+	want := map[string]any{"code": float64(http.StatusBadRequest), "message": message, "data": nil}
+	if !reflect.DeepEqual(envelope, want) {
+		t.Fatal("脱敏占位符错误响应未包含预期错误码、消息和空 data")
+	}
+}
+
+func TestIntegrationHandlerCreateRejectsMaskedURLs(t *testing.T) {
+	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
+	db := openIntegrationHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Integration{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	r := gin.New()
+	r.POST("/integrations", NewIntegrationHandler(db, integration.NewIntegrationService(db)).Create)
+
+	const endpoint = "https://endpoint-user:FAKE_ENDPOINT_PASSWORD@hooks.example.test/FAKE_ENDPOINT_TOKEN?token=FAKE_ENDPOINT_QUERY"
+	const proxy = "http://proxy-user:FAKE_PROXY_PASSWORD@proxy.example.test:8080/path?token=FAKE_PROXY_QUERY"
+	for _, tc := range []struct {
+		name, endpoint, proxy, message string
+	}{
+		{"endpoint", "https://redacted.invalid", proxy, "endpoint 不能使用脱敏占位符"},
+		{"proxy", endpoint, "http://redacted.invalid", "代理地址不能使用脱敏占位符"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(integrationRequest{Type: "webhook", Name: "create-masked", Endpoint: tc.endpoint, ProxyURL: tc.proxy, Secret: "FAKE_REQUEST_SECRET", SkipEndpointHint: true})
+			if err != nil {
+				t.Fatalf("编码请求失败: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/integrations", strings.NewReader(string(body)))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			r.ServeHTTP(resp, req)
+			assertIntegrationResponseSanitized(t, resp.Body.String(), []string{"endpoint-user", "FAKE_ENDPOINT_PASSWORD", "FAKE_ENDPOINT_TOKEN", "FAKE_ENDPOINT_QUERY", "proxy-user", "FAKE_PROXY_PASSWORD", "FAKE_PROXY_QUERY", "FAKE_REQUEST_SECRET"})
+			assertIntegrationMaskRejected(t, resp, tc.message)
+			var count int64
+			if err := db.Model(&model.Integration{}).Count(&count).Error; err != nil {
+				t.Fatalf("查询通知通道数量失败: %v", err)
+			}
+			if count != 0 {
+				t.Fatalf("拒绝创建后仍有 %d 条通知通道", count)
+			}
+		})
+	}
+}
+
+func TestIntegrationHandlerUpdateRejectsMismatchedMasks(t *testing.T) {
+	t.Setenv("INTEGRATION_BLOCK_PRIVATE_ENDPOINTS", "false")
+	db := openIntegrationHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Integration{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	item := model.Integration{
+		Type: "webhook", Name: "original-webhook",
+		Endpoint: "https://endpoint-user:FAKE_ENDPOINT_PASSWORD@hooks.example.test/FAKE_ENDPOINT_TOKEN?token=FAKE_ENDPOINT_QUERY",
+		ProxyURL: "http://proxy-user:FAKE_PROXY_PASSWORD@proxy.example.test:8080/path?token=FAKE_PROXY_QUERY",
+		Secret:   "FAKE_STORED_SECRET", Enabled: true, FailThreshold: 1, CooldownMinutes: 5,
+	}
+	if err := db.Create(&item).Error; err != nil {
+		t.Fatalf("创建通知通道失败: %v", err)
+	}
+	var original model.Integration
+	if err := db.First(&original, item.ID).Error; err != nil {
+		t.Fatalf("查询原通知通道失败: %v", err)
+	}
+	r := gin.New()
+	r.PUT("/integrations/:id", NewIntegrationHandler(db, integration.NewIntegrationService(db)).Update)
+
+	for _, tc := range []struct {
+		name, channel, endpoint, proxy, message string
+	}{
+		{"different_channel", "slack", "https://redacted.invalid", "http://redacted.invalid", "endpoint 不能使用脱敏占位符"},
+		{"endpoint_scheme", "webhook", "http://redacted.invalid", "http://redacted.invalid", "endpoint 不能使用脱敏占位符"},
+		{"proxy_scheme", "webhook", "https://redacted.invalid", "https://redacted.invalid", "代理地址不能使用脱敏占位符"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(integrationRequest{Type: tc.channel, Name: "changed-webhook", Endpoint: tc.endpoint, ProxyURL: tc.proxy, Secret: "FAKE_REQUEST_SECRET", FailThreshold: 3, CooldownMinutes: 9, SkipEndpointHint: true})
+			if err != nil {
+				t.Fatalf("编码请求失败: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/integrations/%d", item.ID), strings.NewReader(string(body)))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			r.ServeHTTP(resp, req)
+			assertIntegrationResponseSanitized(t, resp.Body.String(), []string{"endpoint-user", "FAKE_ENDPOINT_PASSWORD", "FAKE_ENDPOINT_TOKEN", "FAKE_ENDPOINT_QUERY", "proxy-user", "FAKE_PROXY_PASSWORD", "FAKE_PROXY_QUERY", "FAKE_STORED_SECRET", "FAKE_REQUEST_SECRET"})
+			assertIntegrationMaskRejected(t, resp, tc.message)
+			var stored model.Integration
+			if err := db.First(&stored, item.ID).Error; err != nil {
+				t.Fatalf("查询通知通道失败: %v", err)
+			}
+			if !reflect.DeepEqual(stored, original) {
+				t.Fatal("拒绝更新后通知通道发生变化")
+			}
+		})
 	}
 }
 

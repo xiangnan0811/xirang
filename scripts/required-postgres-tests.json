@@ -958,6 +958,12 @@
           ]
         },
         {
+          "name": "TestNodeBatchDeleteAssociationsSQLitePostgres",
+          "required_paths": [
+            "TestNodeBatchDeleteAssociationsSQLitePostgres/postgres"
+          ]
+        },
+        {
           "name": "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases",
           "required_paths": [
             "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres",

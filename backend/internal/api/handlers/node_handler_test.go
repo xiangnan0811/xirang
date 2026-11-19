@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -56,85 +57,147 @@ func TestNodeBatchDeleteRejectsEmptyIDs(t *testing.T) {
 	}
 }
 
-func TestNodeBatchDeleteSuccess(t *testing.T) {
-	db := openNodeHandlerTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.Alert{}, &model.PolicyNode{}, &model.NodeOwner{}); err != nil {
-		t.Fatalf("初始化测试数据表失败: %v", err)
-	}
+func TestNodeBatchDeleteAssociationsSQLitePostgres(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+			secure.ResetForTesting()
+			t.Cleanup(secure.ResetForTesting)
+			db := openMigratedRetryTransactionDB(t, engine)
 
-	nodeA := model.Node{Name: "node-a", Host: "10.0.0.11", Port: 22, Username: "root", AuthType: "password", Password: "secret", BackupDir: "node-a"}
-	nodeB := model.Node{Name: "node-b", Host: "10.0.0.12", Port: 22, Username: "root", AuthType: "password", Password: "secret", BackupDir: "node-b"}
-	if err := db.Create(&nodeA).Error; err != nil {
-		t.Fatalf("创建节点 A 失败: %v", err)
-	}
-	if err := db.Create(&nodeB).Error; err != nil {
-		t.Fatalf("创建节点 B 失败: %v", err)
-	}
+			selected := seedBatchNodes(t, db)
+			control := model.Node{Name: "control-node", Host: "10.0.0.3", Port: 22, Username: "reader", AuthType: "key", BackupDir: "control-node"}
+			if err := db.Create(&control).Error; err != nil {
+				t.Fatalf("create control node: %v", err)
+			}
+			policy := model.Policy{Name: "shared-policy", SourcePath: "/src", TargetPath: "/dst", CronSpec: "0 * * * *"}
+			if err := db.Create(&policy).Error; err != nil {
+				t.Fatalf("create shared policy: %v", err)
+			}
 
-	task := model.Task{Name: "task-a", NodeID: nodeA.ID, Status: "failed", ExecutorType: "local"}
-	if err := db.Create(&task).Error; err != nil {
-		t.Fatalf("创建任务失败: %v", err)
-	}
+			type associationID struct {
+				ID     uint
+				NodeID uint
+			}
+			type policyLinkID struct {
+				PolicyID uint
+				NodeID   uint
+			}
+			nodeIDs := []uint{selected[0].ID, selected[1].ID, control.ID}
+			var links []policyLinkID
+			var tasks, alerts []associationID
+			for i, nodeID := range nodeIDs {
+				link := model.PolicyNode{PolicyID: policy.ID, NodeID: nodeID}
+				if err := db.Create(&link).Error; err != nil {
+					t.Fatalf("create policy link: %v", err)
+				}
+				links = append(links, policyLinkID{PolicyID: policy.ID, NodeID: nodeID})
+				task := model.Task{Name: fmt.Sprintf("delete-task-%d", i), NodeID: nodeID, PolicyID: &policy.ID, Status: "failed", ExecutorType: "local"}
+				if err := db.Create(&task).Error; err != nil {
+					t.Fatalf("create task: %v", err)
+				}
+				tasks = append(tasks, associationID{ID: task.ID, NodeID: nodeID})
+				alert := model.Alert{NodeID: nodeID, NodeName: fmt.Sprintf("delete-node-%d", i), Severity: "warning", Status: "open", ErrorCode: "XR-TEST-001", Message: "test", Retryable: true, TriggeredAt: time.Now().UTC()}
+				if err := db.Create(&alert).Error; err != nil {
+					t.Fatalf("create alert: %v", err)
+				}
+				alerts = append(alerts, associationID{ID: alert.ID, NodeID: nodeID})
+			}
 
-	alert := model.Alert{
-		NodeID:      nodeA.ID,
-		NodeName:    nodeA.Name,
-		Severity:    "warning",
-		Status:      "open",
-		ErrorCode:   "XR-TEST-001",
-		Message:     "test",
-		Retryable:   true,
-		TriggeredAt: time.Now(),
-	}
-	if err := db.Create(&alert).Error; err != nil {
-		t.Fatalf("创建告警失败: %v", err)
-	}
+			assertIdentities := func(wantNodes []uint, wantLinks []policyLinkID, wantTasks, wantAlerts []associationID) {
+				t.Helper()
+				var gotNodes []uint
+				if err := db.Model(&model.Node{}).Order("id").Pluck("id", &gotNodes).Error; err != nil {
+					t.Fatalf("read nodes: %v", err)
+				}
+				var gotLinks []policyLinkID
+				if err := db.Table("policy_nodes").Select("policy_id, node_id").Order("node_id").Scan(&gotLinks).Error; err != nil {
+					t.Fatalf("read policy links: %v", err)
+				}
+				var gotTasks, gotAlerts []associationID
+				if err := db.Table("tasks").Select("id, node_id").Order("id").Scan(&gotTasks).Error; err != nil {
+					t.Fatalf("read tasks: %v", err)
+				}
+				if err := db.Table("alerts").Select("id, node_id").Order("id").Scan(&gotAlerts).Error; err != nil {
+					t.Fatalf("read alerts: %v", err)
+				}
+				if !reflect.DeepEqual(gotNodes, wantNodes) || !reflect.DeepEqual(gotLinks, wantLinks) || !reflect.DeepEqual(gotTasks, wantTasks) || !reflect.DeepEqual(gotAlerts, wantAlerts) {
+					t.Fatalf("identities differ:\n nodes got %v want %v\n links got %v want %v\n tasks got %v want %v\n alerts got %v want %v", gotNodes, wantNodes, gotLinks, wantLinks, gotTasks, wantTasks, gotAlerts, wantAlerts)
+				}
+			}
 
-	r := gin.New()
-	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(gormrepo.NewNodeRepository(db)))
-	r.POST("/nodes/batch-delete", func(c *gin.Context) {
-		c.Set("role", "admin")
-		c.Next()
-	}, handler.BatchDelete)
+			r := gin.New()
+			handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(gormrepo.NewNodeRepository(db)))
+			r.POST("/nodes/batch-delete", func(c *gin.Context) {
+				c.Set("role", "admin")
+				c.Next()
+			}, handler.BatchDelete)
+			payload := fmt.Sprintf(`{"ids":[%d,%d,999,%d]}`, nodeIDs[0], nodeIDs[1], nodeIDs[0])
+			request := func() *httptest.ResponseRecorder {
+				req := httptest.NewRequest(http.MethodPost, "/nodes/batch-delete", strings.NewReader(payload))
+				req.Header.Set("Content-Type", "application/json")
+				resp := httptest.NewRecorder()
+				r.ServeHTTP(resp, req)
+				return resp
+			}
 
-	payload := fmt.Sprintf(`{"ids":[%d,%d,999,%d]}`, nodeA.ID, nodeB.ID, nodeA.ID)
-	req := httptest.NewRequest(http.MethodPost, "/nodes/batch-delete", strings.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-	r.ServeHTTP(resp, req)
+			const callbackName = "test_node_batch_delete_after_sql"
+			const injectedMessage = "synthetic node delete failure"
+			observedDelete := false
+			if err := db.Callback().Delete().After("gorm:delete").Register(callbackName, func(tx *gorm.DB) {
+				if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "nodes" && tx.Error == nil && tx.RowsAffected == 2 && tx.Statement.SQL.Len() > 0 {
+					observedDelete = true
+					_ = tx.AddError(fmt.Errorf("%s", injectedMessage))
+				}
+			}); err != nil {
+				t.Fatalf("register node deletion failure: %v", err)
+			}
+			callbackInstalled := true
+			t.Cleanup(func() {
+				if callbackInstalled {
+					if err := db.Callback().Delete().Remove(callbackName); err != nil {
+						t.Errorf("remove node deletion failure: %v", err)
+					}
+				}
+			})
 
-	if resp.Code != http.StatusOK {
-		t.Fatalf("期望状态码 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
-	}
-	if !strings.Contains(resp.Body.String(), `"deleted":2`) {
-		t.Fatalf("期望删除 2 个节点，实际: %s", resp.Body.String())
-	}
-	if !strings.Contains(resp.Body.String(), `"not_found_ids":[999]`) {
-		t.Fatalf("期望 not_found_ids 包含 999，实际: %s", resp.Body.String())
-	}
+			resp := request()
+			if !observedDelete {
+				t.Fatal("node delete callback did not observe successful SQL affecting two rows")
+			}
+			var failure struct {
+				Code    int             `json:"code"`
+				Message string          `json:"message"`
+				Data    json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &failure); err != nil {
+				t.Fatalf("decode failure response: %v", err)
+			}
+			if resp.Code != http.StatusInternalServerError || failure.Code != http.StatusInternalServerError || failure.Message != "服务器内部错误" || string(failure.Data) != "null" || strings.Contains(resp.Body.String(), injectedMessage) {
+				t.Fatalf("unexpected failure response: status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			assertIdentities(nodeIDs, links, tasks, alerts)
 
-	var nodeCount int64
-	if err := db.Model(&model.Node{}).Count(&nodeCount).Error; err != nil {
-		t.Fatalf("统计节点失败: %v", err)
-	}
-	if nodeCount != 0 {
-		t.Fatalf("期望节点全部删除，剩余: %d", nodeCount)
-	}
-
-	var taskCount int64
-	if err := db.Model(&model.Task{}).Count(&taskCount).Error; err != nil {
-		t.Fatalf("统计任务失败: %v", err)
-	}
-	if taskCount != 0 {
-		t.Fatalf("期望关联任务被删除，剩余: %d", taskCount)
-	}
-
-	var alertCount int64
-	if err := db.Model(&model.Alert{}).Count(&alertCount).Error; err != nil {
-		t.Fatalf("统计告警失败: %v", err)
-	}
-	if alertCount != 0 {
-		t.Fatalf("期望关联告警被删除，剩余: %d", alertCount)
+			if err := db.Callback().Delete().Remove(callbackName); err != nil {
+				t.Fatalf("remove node deletion failure: %v", err)
+			}
+			callbackInstalled = false
+			resp = request()
+			var success struct {
+				Data struct {
+					Deleted     int    `json:"deleted"`
+					NotFoundIDs []uint `json:"not_found_ids"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &success); err != nil {
+				t.Fatalf("decode success response: %v", err)
+			}
+			if resp.Code != http.StatusOK || success.Data.Deleted != 2 || !reflect.DeepEqual(success.Data.NotFoundIDs, []uint{999}) {
+				t.Fatalf("unexpected success response: status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			assertIdentities(nodeIDs[2:], links[2:], tasks[2:], alerts[2:])
+		})
 	}
 }
 
