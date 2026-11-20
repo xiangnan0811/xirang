@@ -6,6 +6,13 @@
 - 在「备份资产 → 文件」分页选择同一备份集的两个历史恢复点，支持同一任务换仓前后的版本和空恢复点。比较逐页授权并展示新增、删除及变化；仓库离线或断连时仍可比较已索引的 Catalog 元数据，界面分别显示两侧内容可用性。指纹证据不足时显示内容变化未知。
 - 比较由新增的备份集差异 API 提供。升级前按常规流程保全数据库、配置、匹配密钥及备份副本，换版前完成旧 Core 在途请求。新版页面与 Core 配套切换，浏览器在线重载并取得新版资源后即可使用。无新增运行时配置或数据库迁移，既有迁移降级限制继续适用。回退配套的旧版 Core 和页面将移除比较入口，已有恢复点和 Catalog 可继续使用。
 
+## [0.74.0](https://github.com/xiangnan0811/xirang/compare/v0.73.24...v0.74.0) (2026-11-20)
+
+
+### ✨ Features
+
+* **backup-assets:** 比较同一备份集的历史恢复点 ([#737](https://github.com/xiangnan0811/xirang/issues/737)) ([f133202](https://github.com/xiangnan0811/xirang/commit/f133202fe6c9e669a9d66be4ff3f4d1be4e68403))
+
 ## [0.73.24](https://github.com/xiangnan0811/xirang/compare/v0.73.23...v0.73.24) (2026-11-19)
 
 
