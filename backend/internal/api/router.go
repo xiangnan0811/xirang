@@ -507,6 +507,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/backup-file-sources/nodes", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupFileSourceHandler.ListNodes)
 	secured.GET("/backup-file-sources/nodes/:nodeId/sets", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupFileSourceHandler.ListBackupSets)
 	secured.GET("/backup-file-sources/sets/:backupSetId/versions", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupFileSourceHandler.ListVersions)
+	secured.POST("/backup-file-sources/sets/:backupSetId/diffs", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupFileSourceHandler.Diff)
 	secured.GET("/backup-file-sources/recovery-points/:recoveryPointId/source", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupFileSourceHandler.ResolveRecoveryPointSource)
 	secured.GET("/recovery-points/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetRecoveryPoint)
 	secured.GET("/recovery-points/:id/catalog-status", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetCatalogStatus)

@@ -73,6 +73,7 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
   useEffect(() => { onRoutePatchRef.current = onRoutePatch; }, [onRoutePatch]);
   const shared = useContext(SharedContext);
   const [listGeneration, setListGeneration] = useState(0);
+  const [versionsGeneration, setVersionsGeneration] = useState(0);
   const [autoPaginationPaused, setAutoPaginationPaused] = useState<Record<ResourceKind, boolean>>({
     nodes: false,
     sets: false,
@@ -235,7 +236,7 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
     : activeSets.items.find((item) => item.backupSetId === route.backupSetId) ?? null;
   const selectedNodeId = route.nodeId;
   const selectedSetId = selectedSet?.backupSetId ?? null;
-  const versionsKey = token && selectedSetId ? `versions:${token}:${selectedSetId}:${refreshGeneration}` : "idle";
+  const versionsKey = token && selectedSetId ? `versions:${token}:${selectedSetId}:${refreshGeneration}:${versionsGeneration}` : "idle";
   const activeVersions = versions.key === versionsKey
     ? versions
     : emptyResource<BackupFileSourceVersion>(versionsKey, token && selectedSetId ? "loading" : "idle");
@@ -460,6 +461,9 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
     sets: projection.sets,
     versions: projection.versions,
     selectedVersion: projection.selectedVersion,
+    /** Backup set whose versions are listed, including an implicit sole set. */
+    selectedBackupSetId: selectedSetId,
+    loadingVersions: activeVersions.status === "loading",
     hasMoreNodes: activeNodes.nextCursor !== null && activeNodes.pageError !== "permission_denied",
     hasMoreSets: activeSets.nextCursor !== null && activeSets.pageError !== "permission_denied",
     hasMoreVersions: activeVersions.nextCursor !== null && activeVersions.pageError !== "permission_denied",
@@ -476,6 +480,16 @@ export function useBackupFileSources({ token, route, refreshVersion, onRoutePatc
       activeVersions.pageError === "permission_denied",
     canRetry: !permissionDenied && !loading && projection.status === "blocked",
     retry: () => setListGeneration((generation) => generation + 1),
+    /** Why the selected set's version list is incomplete, for surfaces that offer their own retry. */
+    versionsFailure: versionsFailure(activeVersions),
+    /** Retries only the failed version request: the failed page, or the whole list after a failed load. */
+    retryVersions: () => {
+      const failure = versionsFailure(activeVersions);
+      if (failure === "page") void loadMoreVersions();
+      else if (failure === "refresh") setVersionsGeneration((generation) => generation + 1);
+    },
+    /** Reloads only the selected set's versions, keeping the node and set selection resolved. */
+    refreshVersions: () => setVersionsGeneration((generation) => generation + 1),
     selectNode: (nodeId: number | undefined) => onRoutePatch({ nodeId }),
     selectSet: (backupSetId: string | undefined) => onRoutePatch({ backupSetId }),
     selectVersion: (version: BackupFileSourceVersion, backupSetId: string) => {
@@ -502,6 +516,18 @@ function resourceFrom<T>(page: CatalogProjection<BackupFileSourcePage<T>>, key: 
   return page.status === "available"
     ? { key, status: "ready", items: page.value.items, nextCursor: page.value.nextCursor, pageError: null }
     : { key, status: "blocked", items: [], nextCursor: null, pageError: null };
+}
+
+/**
+ * `page` keeps the loaded versions and can retry the same cursor; `refresh` lost the list and
+ * reloads it. Permission loss is final for this list and offers no retry.
+ */
+export type BackupFileSourceVersionsFailure = "page" | "refresh" | "permission_denied";
+
+function versionsFailure(resource: SourceResource<BackupFileSourceVersion>): BackupFileSourceVersionsFailure | null {
+  if (resource.status === "permission_denied" || resource.pageError === "permission_denied") return "permission_denied";
+  if (resource.status === "error" || resource.status === "blocked") return "refresh";
+  return resource.pageError === "retryable" ? "page" : null;
 }
 
 function isAbort(error: unknown): boolean {

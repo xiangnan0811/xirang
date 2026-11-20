@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -222,7 +223,7 @@ func (service *Service) Diff(ctx context.Context, scope AuthorizationScope, requ
 		}
 		anchor = &loaded
 	}
-	rows, err := service.queryDiffRows(ctx, basePoint, comparePoint, baseGeneration, compareGeneration, basePrefix, comparePrefix, anchor, limit+1)
+	rows, err := service.queryDiffRows(ctx, basePoint, comparePoint, baseGeneration, compareGeneration, basePrefix, comparePrefix, anchor, limit+1, false, false)
 	if err != nil {
 		return DiffPage{}, err
 	}
@@ -288,13 +289,47 @@ func (service *Service) queryDiffRows(
 	basePrefix, comparePrefix string,
 	anchor *diffAnchor,
 	limit int,
+	contentSHA256 bool,
+	compatibleContent bool,
 ) ([]diffRow, error) {
+	query, args := service.diffRowsQuery(basePoint, comparePoint, baseGeneration, compareGeneration, basePrefix, comparePrefix, anchor, limit, contentSHA256, compatibleContent)
+	var rows []diffRow
+	if err := service.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query exact Catalog diff: %w", err)
+	}
+	return rows, nil
+}
+
+func (service *Service) diffRowsQuery(
+	basePoint, comparePoint model.RecoveryPoint,
+	baseGeneration, compareGeneration model.CatalogGeneration,
+	basePrefix, comparePrefix string,
+	anchor *diffAnchor,
+	limit int,
+	contentSHA256 bool,
+	compatibleContent bool,
+) (string, []any) {
 	baseSQL, baseArgs := diffSideCTE("base", baseGeneration.ID, basePoint.ID, basePrefix)
 	compareSQL, compareArgs := diffSideCTE("compare", compareGeneration.ID, comparePoint.ID, comparePrefix)
 	metadataChanged := `b.entry_type <> c.entry_type OR b.name <> c.name OR b.size <> c.size OR
 		(b.modified_at IS NULL) <> (c.modified_at IS NULL) OR b.modified_at <> c.modified_at OR
 		b.mode <> c.mode OR b.owner <> c.owner OR b.mime_type <> c.mime_type OR
 		b.fingerprint <> c.fingerprint OR b.fingerprint_strength <> c.fingerprint_strength`
+	if contentSHA256 {
+		validDigest := func(alias string) string {
+			if service.db.Name() == "postgres" {
+				return alias + `.fingerprint ~ '^[0-9a-f]{64}$'`
+			}
+			return `length(` + alias + `.fingerprint) = 64 AND ` + alias + `.fingerprint NOT GLOB '*[^0-9a-f]*'`
+		}
+		metadataChanged = `b.entry_type <> c.entry_type OR b.name <> c.name OR b.size <> c.size OR
+			(b.modified_at IS NULL) <> (c.modified_at IS NULL) OR b.modified_at <> c.modified_at OR
+			b.mode <> c.mode OR b.owner <> c.owner OR b.mime_type <> c.mime_type`
+		if compatibleContent {
+			metadataChanged += ` OR (b.entry_type = 'file' AND c.entry_type = 'file' AND b.fingerprint_strength = 'strong' AND c.fingerprint_strength = 'strong' AND ` +
+				validDigest("b") + ` AND ` + validDigest("c") + ` AND b.fingerprint <> c.fingerprint)`
+		}
+	}
 	query := fmt.Sprintf(`WITH base_entries AS (%s), compare_entries AS (%s), changes AS (
 		SELECT b.relative_path,
 			b.entry_id AS base_entry_id, b.name AS base_name, b.entry_type AS base_entry_type,
@@ -338,11 +373,7 @@ func (service *Service) queryDiffRows(
 	query += fmt.Sprintf(` ORDER BY relative_path COLLATE %s ASC, change_rank ASC,
 		COALESCE(base_entry_id, '') ASC, COALESCE(compare_entry_id, '') ASC LIMIT ?`, collation)
 	args = append(args, limit)
-	var rows []diffRow
-	if err := service.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
-		return nil, fmt.Errorf("query exact Catalog diff: %w", err)
-	}
-	return rows, nil
+	return query, args
 }
 
 func diffSideCTE(_ string, generationID, pointID, prefix string) (string, []any) {
@@ -370,6 +401,10 @@ func (service *Service) loadDiffAnchor(
 	baseGeneration, compareGeneration model.CatalogGeneration,
 	basePrefix, comparePrefix string,
 ) (diffAnchor, error) {
+	return service.loadDiffAnchorMode(ctx, claims, basePoint, comparePoint, baseGeneration, compareGeneration, basePrefix, comparePrefix, false)
+}
+
+func (service *Service) loadDiffAnchorMode(ctx context.Context, claims CursorAnchor, basePoint, comparePoint model.RecoveryPoint, baseGeneration, compareGeneration model.CatalogGeneration, basePrefix, comparePrefix string, preserveLookupError bool) (diffAnchor, error) {
 	anchor := diffAnchor{rank: diffKindRank(claims.ChangeKind), baseID: claims.BaseEntryID, compareID: claims.CompareEntryID}
 	if anchor.rank == 0 || (anchor.baseID == "" && anchor.compareID == "") {
 		return diffAnchor{}, fmt.Errorf("%w: diff cursor anchor", ErrStaleCursor)
@@ -379,6 +414,9 @@ func (service *Service) loadDiffAnchor(
 	if anchor.baseID != "" {
 		entry, err := service.loadCatalogEntry(ctx, baseGeneration.ID, basePoint.ID, anchor.baseID)
 		if err != nil {
+			if preserveLookupError && !errors.Is(err, backupasset.ErrNotFound) {
+				return diffAnchor{}, fmt.Errorf("%w: diff anchor lookup: %w", ErrCatalogUnavailable, err)
+			}
 			return diffAnchor{}, fmt.Errorf("%w: diff base cursor anchor", ErrStaleCursor)
 		}
 		baseEntry = &entry
@@ -390,6 +428,9 @@ func (service *Service) loadDiffAnchor(
 	if anchor.compareID != "" {
 		entry, err := service.loadCatalogEntry(ctx, compareGeneration.ID, comparePoint.ID, anchor.compareID)
 		if err != nil {
+			if preserveLookupError && !errors.Is(err, backupasset.ErrNotFound) {
+				return diffAnchor{}, fmt.Errorf("%w: diff anchor lookup: %w", ErrCatalogUnavailable, err)
+			}
 			return diffAnchor{}, fmt.Errorf("%w: diff compare cursor anchor", ErrStaleCursor)
 		}
 		compareEntry = &entry

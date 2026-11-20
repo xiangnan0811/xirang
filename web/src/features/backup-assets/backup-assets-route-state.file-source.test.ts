@@ -32,7 +32,7 @@ const set: BackupFileSourceSet = {
 const version: BackupFileSourceVersion = {
   recoveryPointId: pointId, repositoryId, producingTaskId: 9, capturedAt: null, committedAt: null,
   createdAt: "2026-08-27T00:00:00.000Z", lifecycleState: "committed", catalogCoverage: "complete",
-  browseState: "browsable", unavailableReason: null,
+  browseState: "browsable", unavailableReason: null, comparisonState: "eligible",
   contentAvailability: { available: false, reason: { code: "range_unavailable", params: {} } }, entryCount: 1,
   logicalBytes: 1, permissions: { list: true, preview: false, download: false },
 };

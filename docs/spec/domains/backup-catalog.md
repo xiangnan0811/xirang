@@ -65,6 +65,14 @@ Catalog 是可浏览事实的数据库投影，Provider 观察由有界后台协
 - Task preview 仅 admin 且 canonical Rsync `legacy_mutable/legacy/legacy`；missing 历史 executor 可用 Rsync 默认，未知非空 executor 或 blocked summary 不可。暂停/停用可用，running/retrying/active run 禁用。connect response 只允许一致 Go `Repository/MutablePoint` 或规范 `repository/mutable_point`，重复/混 casing/坏 present point 拒绝；absent/null 可用于 reconcile/disconnect。mutable snapshot 不是完整 Catalog DTO。
 - 客户端只 poll 返回的精确 point，ready=complete generation + complete coverage + available content + list permission，不要求 preview 或 entry_count>0。两分钟 wall-clock 上限也必须 abort 永不返回的请求；close/Task/token/unmount abort 静默并清 timer。失败显示闭合本地化指导，不 disconnect，不显示原始异常。
 
+## 同备份集恢复点比较
+
+- 文件工作区从版本选择区打开比较。管理员和有权操作员可从所选备份集的分页版本列表选择两个不同的历史恢复点。基准和对照有方向；空恢复点可以比较。任务备份集按历史生产节点和任务归组，换仓不拆分该组，迁节点按历史生产节点分组。导入延用 Files 已有归属规则。
+- `POST /api/v1/backup-file-sources/sets/:backupSetId/diffs` 只接受两个有序恢复点 ID、可选页大小和游标。每页重新按当前身份分别授权两点，并在同一数据库读取视图中核对精确备份集、保留状态和两侧 active complete Catalog。只采用已提交或降级的不可变点。可变头、验证中、索引不完整、已确认缺失或进入清理流程的点不可比较。版本页给出比较资格，区别于可浏览状态；离线或断连的保留点仍可比较已索引元数据，并分别显示两侧内容可用性。
+- 根比较按 Catalog 相对位置匹配，返回新增、删除、修改、类型变化。改名显示为一删一增。普通文件只有双方具备可比的可信字节指纹时才判断内容相同或不同，否则为未知。没有差异项时表示未发现 Catalog 差异。只读取控制面 Catalog，不接触 Provider 或文件正文。通过同代次的授权目录面包屑和 opaque entry ref 区分同名条目。极深层级保留距条目最近的 256 级祖先引用，用户可展开其余已授权的目录名称来区分位置。响应、游标和审计不携带底层路径、locator 或原始指纹；权限模式、所有者及 MIME 类型变化只返回字段名。
+- 按稳定顺序分页，默认 100 项、每页最多 200 项。签名游标绑定调用者、备份集、有序点对、两侧代次、恢复点修订和资格。跨身份、点对或代次不能续接。权限丢失或组成员不可见时通用拒绝；状态已变时提示重新比较，并清除旧结果。暂时失败保留已加载项并标示结果未完成。关闭或切换比较范围取消在途请求，迟到结果不得覆盖当前界面。比较的只读准入与数据查询受同一请求时限约束。
+- 现有 `POST /api/v1/recovery-point-diffs` 保持同仓库比较合同。退役 snapshot HTTP 和后台异常检测的边界见[启用与切换](backup-enablement.md#库存api-与-ui)及[快照异常比较](backup-repository.md#快照异常比较)。
+
 ## 回归证据
 
 覆盖所有 retained/ownership/移动/孤儿/导入矩阵与 DB-only 静态边界；cursor 全绑定/tamper；候选查询数、claim 一次、公平性/多实例/backoff/取消 join；真实 Restic tags、Rclone manifest/commit、Rsync marker 的精确证据拒绝；真实 local Rsync runtime→worker→source resolver→Broker 首次 preview，无人工 Connect/Build/retry，含同节点第二 Task 隔离、post-hook warning/cancel、unchanged root child drift。
@@ -72,5 +80,7 @@ Catalog 是可浏览事实的数据库投影，Provider 观察由有界后台协
 覆盖 aged matching fingerprint 不 rebuild、不改 observed_at，而 mismatch/superseded/due failed 能恢复；所有回收保护及实际迁移 RESTRICT、posting 归零/分批/cancel 续跑；index heartbeat recovery 的双引擎真实 Catalog/Search rebuild。前端覆盖 root/deep/empty/late/键盘、390px/桌面/200% zoom/reduced motion 的焦点和滚动、axe、连接 empty-ready/hung timeout/tooltip 边界、严格 DTO；运行相关 repeat/race 和完整门禁。
 
 独立断言 mutable refresh 后、activation 前的源漂移返回可重试 `catalog_source_changed` 并保留 backoff；completion 不改根 fingerprint 时仍构建新 active complete；无辜 aged matching Catalog 的 generation 和 observed_at 都不变。paused/disabled Task preview 与 running/retrying 禁用状态在表格/网格一致，zh/en 下首末行 tooltip 在水平 scrollport 内，键盘焦点/hover 均可读。目录 loading/stale/failed/empty 使用本地化 live status，空目录 Up/crumb 不消失，列表与网格的激活、选择和布局控件保持不同原生键盘目标。
+
+同备份集比较覆盖换仓、迁节点、共享仓库的不同任务、两点归属、离线元数据、空点、同名位置、内容证据、候选与结果续页、代次或权限变化以及取消。使用实际 SQLite 和 PostgreSQL 核对顺序、并发和查询预算；真实浏览器连接隔离后端验证文件工作区、桌面和移动端、键盘焦点和双语状态。
 
 源码入口：[Catalog](../../../backend/internal/backupasset/catalog/service.go)、[工作区](../../../web/src/features/backup-assets/backup-assets-workspace.tsx)。

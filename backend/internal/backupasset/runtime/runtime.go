@@ -533,6 +533,17 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	}
 	keyring := backupasset.NewKeyring(dependencies.DB, dependencies.Now)
 	enablement := composeGAReadiness(dependencies.DB, dependencies.Settings, keyring)
+	var result *Runtime
+	comparisonFeature := func(ctx context.Context) (bool, error) {
+		if result == nil || result.featureTransitionFenced.Load() {
+			return false, nil
+		}
+		live, err := comparisonFeatureLive(ctx, dependencies.DB, dependencies.Settings, keyring)
+		if result.featureTransitionFenced.Load() {
+			return false, err
+		}
+		return live, err
+	}
 	liveFeature := func() (bool, error) {
 		return featureLive(foundation, enablement)
 	}
@@ -548,7 +559,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	catalogService, err := catalog.NewService(catalog.ServiceDependencies{
 		DB: dependencies.DB, Ownership: catalogOwnership,
 		Cursor: catalog.NewCursorCodec(keyring, dependencies.Now, runtimeProviderCursorTTL), IdentityKeys: keyring, Now: dependencies.Now,
-		ReconcileInterval: catalogConfig.ReconcileInterval, FeatureEnabled: liveFeature,
+		ReconcileInterval: catalogConfig.ReconcileInterval, FeatureEnabled: liveFeature, ComparisonFeatureEnabled: comparisonFeature,
 	})
 	if err != nil {
 		return nil, err
@@ -1278,7 +1289,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Runtime{
+	result = &Runtime{
 		foundation: foundation, settings: dependencies.Settings,
 		repository: repositoryService, publication: publicationService,
 		rcloneWriterInventoryRequired: true,
@@ -1306,7 +1317,8 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		transitioner:         admission,
 		metrics:              metricsSink,
 		gaMetrics:            gaMetrics,
-	}, nil
+	}
+	return result, nil
 }
 
 type runtimeSearchExcerptResolver struct {

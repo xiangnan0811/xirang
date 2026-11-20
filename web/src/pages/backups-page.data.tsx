@@ -14,6 +14,7 @@ import {
   type BackupAssetsRouteState,
 } from "@/features/backup-assets/backup-assets-route-state";
 import { BackupAssetsWorkspace } from "@/features/backup-assets/backup-assets-workspace";
+import { BackupFileSourceCompare } from "@/features/backup-assets/backup-file-source-compare";
 import { BackupFileSourceControls } from "@/features/backup-assets/backup-file-source-controls";
 import { useBackupFileSources } from "@/features/backup-assets/use-backup-file-sources";
 import {
@@ -136,6 +137,22 @@ function BackupsDataWorkspace({
         paginationPermissionDenied={fileSources.paginationPermissionDenied}
         canRetry={fileSources.canRetry}
         onRetry={fileSources.retry}
+        versionAction={(
+          <BackupFileSourceCompare
+            token={token}
+            role={role}
+            backupSetId={fileSources.selectedBackupSetId}
+            versions={fileSources.versions}
+            selectedRecoveryPointId={resolvedRoute.recoveryPointId}
+            hasMoreVersions={fileSources.hasMoreVersions}
+            loadingMoreVersions={fileSources.loadingMoreVersions}
+            versionsLoading={fileSources.loadingVersions}
+            onLoadMoreVersions={fileSources.loadMoreVersions}
+            onRefreshVersions={fileSources.refreshVersions}
+            versionsFailure={fileSources.versionsFailure}
+            onRetryVersions={fileSources.retryVersions}
+          />
+        )}
       />
       {sourceWorkspaceUnavailable ? null : (
         <BackupAssetsWorkspace

@@ -187,8 +187,8 @@ type StalenessDTO struct {
 }
 
 type ContentAvailabilityDTO struct {
-	Available bool                          `json:"available"`
-	Reason    *backupasset.CapabilityReason `json:"reason"`
+	Available bool                          `json:"available" binding:"required"`
+	Reason    *backupasset.CapabilityReason `json:"reason" binding:"required" extensions:"x-nullable"`
 }
 
 type PermissionsDTO struct {

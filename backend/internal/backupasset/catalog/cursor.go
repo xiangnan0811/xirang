@@ -33,6 +33,7 @@ const (
 	CursorEndpointFileSourceNodes    CursorEndpoint = "file_source_nodes"
 	CursorEndpointFileSourceSets     CursorEndpoint = "file_source_sets"
 	CursorEndpointFileSourceVersions CursorEndpoint = "file_source_versions"
+	CursorEndpointFileSourceDiff     CursorEndpoint = "file_source_diff"
 )
 
 type CursorAnchor struct {
@@ -119,6 +120,10 @@ func NewCursorCodec(keys CursorKeySource, now func() time.Time, ttl time.Duratio
 }
 
 func (codec *CursorCodec) Encode(ctx context.Context, scope CursorScope) (string, error) {
+	return codec.encodeMode(ctx, scope, false)
+}
+
+func (codec *CursorCodec) encodeMode(ctx context.Context, scope CursorScope, preserveKeyError bool) (string, error) {
 	claims, err := cursorClaimsFromScope(scope, true)
 	if err != nil {
 		return "", err
@@ -127,6 +132,9 @@ func (codec *CursorCodec) Encode(ctx context.Context, scope CursorScope) (string
 		return "", fmt.Errorf("%w: cursor codec unavailable", ErrInvalidCursor)
 	}
 	material, err := codec.keys.Active(ctx, backupasset.KeyDomainCursorSigning)
+	if err != nil && preserveKeyError {
+		return "", fmt.Errorf("%w: cursor signing key lookup: %w", ErrCatalogUnavailable, err)
+	}
 	if err != nil || material.Version <= 0 || material.State != backupasset.DomainKeyActive || len(material.Key) < 32 {
 		return "", fmt.Errorf("%w: cursor signing key unavailable", ErrInvalidCursor)
 	}
@@ -163,6 +171,10 @@ func (codec *CursorCodec) Decode(ctx context.Context, token string, expected Cur
 }
 
 func (codec *CursorCodec) decodeAuthenticated(ctx context.Context, token string) (CursorScope, error) {
+	return codec.decodeAuthenticatedMode(ctx, token, false)
+}
+
+func (codec *CursorCodec) decodeAuthenticatedMode(ctx context.Context, token string, preserveKeyError bool) (CursorScope, error) {
 	if codec == nil || codec.keys == nil || token == "" || len(token) > maxCursorTokenBytes {
 		return CursorScope{}, fmt.Errorf("%w: cursor token unavailable", ErrInvalidCursor)
 	}
@@ -196,6 +208,9 @@ func (codec *CursorCodec) decodeAuthenticated(ctx context.Context, token string)
 	}
 	now := codec.now().UTC()
 	material, err := codec.keys.ByVersion(ctx, backupasset.KeyDomainCursorSigning, envelope.KeyVersion)
+	if err != nil && preserveKeyError && !errors.Is(err, backupasset.ErrKeyUnavailable) && !errors.Is(err, backupasset.ErrKeyLost) {
+		return CursorScope{}, fmt.Errorf("%w: cursor key lookup: %w", ErrCatalogUnavailable, err)
+	}
 	if err != nil || len(material.Key) < 32 || !cursorKeyMayVerify(material, now) ||
 		!hmac.Equal(signature, signCursor(material.Key, payload)) {
 		return CursorScope{}, fmt.Errorf("%w: cursor authentication", ErrInvalidCursor)
@@ -271,6 +286,18 @@ func (claims cursorClaims) validate(requireAnchor bool) error {
 			((claims.Anchor.BaseEntryID != "" || claims.Anchor.CompareEntryID != "") && !validDiffChangeKinds[claims.Anchor.ChangeKind]) ||
 			claims.RecoveryPointID != "" || claims.GenerationID != "" || claims.ParentEntryID != "" || claims.hasFileSourceScope() {
 			return fmt.Errorf("%w: diff cursor scope", ErrInvalidCursor)
+		}
+	case CursorEndpointFileSourceDiff:
+		if claims.Direction != CursorForward || claims.NodeID != 0 || claims.BackupSetID == "" || !lowerHexLength(claims.ProjectionDigest, 64) ||
+			claims.RepositoryID != "" || claims.RecoveryPointID != "" || claims.GenerationID != "" || claims.ParentEntryID != "" ||
+			claims.BaseParentEntryID != "" || claims.CompareParentEntryID != "" || claims.BaseRecoveryPointID == "" ||
+			claims.CompareRecoveryPointID == "" || claims.BaseRecoveryPointID == claims.CompareRecoveryPointID ||
+			claims.BaseGenerationID == "" || claims.CompareGenerationID == "" || claims.Sort != DiffSortPathAsc ||
+			claims.Anchor.RepositoryID != "" || claims.Anchor.RecoveryPointID != "" || claims.Anchor.EntryID != "" ||
+			claims.Anchor.NodeID != 0 || claims.Anchor.BackupSetID != "" ||
+			(requireAnchor && claims.Anchor.BaseEntryID == "" && claims.Anchor.CompareEntryID == "") ||
+			((claims.Anchor.BaseEntryID != "" || claims.Anchor.CompareEntryID != "") && !validDiffChangeKinds[claims.Anchor.ChangeKind]) {
+			return fmt.Errorf("%w: file-source diff cursor scope", ErrInvalidCursor)
 		}
 	case CursorEndpointFileSourceSets:
 		if claims.NodeID == 0 || claims.BackupSetID != "" || !lowerHexLength(claims.ProjectionDigest, 64) || claims.Sort != fileSourceBackupSetSort ||

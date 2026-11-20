@@ -55,7 +55,7 @@ function blocked<T>(): CatalogProjection<T> {
 }
 
 
-function entryType(value: unknown): CatalogEntryType | null {
+export function mapCatalogEntryType(value: unknown): CatalogEntryType | null {
   switch (value) {
     case "file":
     case "directory":
@@ -69,7 +69,7 @@ function entryType(value: unknown): CatalogEntryType | null {
   }
 }
 
-function fingerprintStrength(value: unknown): CatalogFingerprintStrength | null {
+export function mapCatalogFingerprintStrength(value: unknown): CatalogFingerprintStrength | null {
   switch (value) {
     case "strong":
     case "weak":
@@ -80,7 +80,7 @@ function fingerprintStrength(value: unknown): CatalogFingerprintStrength | null 
   }
 }
 
-function diffKind(value: unknown): RecoveryPointDiffKind | null {
+export function mapRecoveryPointDiffKind(value: unknown): RecoveryPointDiffKind | null {
   switch (value) {
     case "added":
     case "removed":
@@ -92,7 +92,7 @@ function diffKind(value: unknown): RecoveryPointDiffKind | null {
   }
 }
 
-function contentEquality(value: unknown): RecoveryPointDiffContentEquality | null {
+export function mapRecoveryPointDiffContentEquality(value: unknown): RecoveryPointDiffContentEquality | null {
   switch (value) {
     case "equal":
     case "different":
@@ -114,7 +114,7 @@ function providerDiffStatus(value: unknown): RecoveryPointDiffProviderStatus | n
   }
 }
 
-function changedField(value: unknown): RecoveryPointDiffChangedField | null {
+export function mapRecoveryPointDiffChangedField(value: unknown): RecoveryPointDiffChangedField | null {
   switch (value) {
     case "name":
     case "entry_type":
@@ -155,9 +155,9 @@ export function mapBackupAsset(value: unknown): CatalogProjection<BackupAsset> {
     return blocked();
   }
   const ref = mapAssetRef(value);
-  const mappedEntryType = entryType(value.entry_type);
+  const mappedEntryType = mapCatalogEntryType(value.entry_type);
   const size = finiteInteger(value.size);
-  const strength = fingerprintStrength(value.fingerprint_strength);
+  const strength = mapCatalogFingerprintStrength(value.fingerprint_strength);
   const name = mapDirectoryName(value.name);
   if (ref === null || mappedEntryType === null || size === null || strength === null ||
     name === null) {
@@ -201,9 +201,9 @@ function mapDiffSide(value: unknown): RecoveryPointDiffSide | null | undefined {
     return undefined;
   }
   const ref = mapAssetRef(value);
-  const mappedEntryType = entryType(value.entry_type);
+  const mappedEntryType = mapCatalogEntryType(value.entry_type);
   const size = finiteInteger(value.size);
-  const strength = fingerprintStrength(value.fingerprint_strength);
+  const strength = mapCatalogFingerprintStrength(value.fingerprint_strength);
   if (ref === null || mappedEntryType === null || size === null || strength === null ||
     typeof value.name !== "string" || value.name === "") {
     return undefined;
@@ -225,8 +225,8 @@ function mapDiffItem(value: unknown): RecoveryPointDiffItem | null {
   if (!isRawBackupAssetObject(value)) {
     return null;
   }
-  const kind = diffKind(value.kind);
-  const equality = contentEquality(value.content_equality);
+  const kind = mapRecoveryPointDiffKind(value.kind);
+  const equality = mapRecoveryPointDiffContentEquality(value.content_equality);
   const base = mapDiffSide(value.base);
   const compare = mapDiffSide(value.compare);
   if (kind === null || equality === null || base === undefined || compare === undefined ||
@@ -238,7 +238,7 @@ function mapDiffItem(value: unknown): RecoveryPointDiffItem | null {
   }
   const changedFields: RecoveryPointDiffChangedField[] = [];
   for (const rawField of value.changed_fields) {
-    const field = changedField(rawField);
+    const field = mapRecoveryPointDiffChangedField(rawField);
     if (field === null) {
       return null;
     }
@@ -290,7 +290,7 @@ function mapBackupAssetVersionPage(value: unknown): CatalogProjection<BackupAsse
       entry_id: rawItem.entry_id,
     });
     const size = finiteInteger(rawItem.size);
-    const mappedType = entryType(rawItem.entry_type);
+    const mappedType = mapCatalogEntryType(rawItem.entry_type);
     if (ref === null || size === null || size < 0 || mappedType === null) {
       return blockedBackupAssetProjection();
     }
@@ -312,7 +312,7 @@ function hasOwn(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-function mapDirectoryName(value: unknown): string | null {
+export function mapDirectoryName(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 && value.length <= 4096 && !value.includes("\0")
     ? value
     : null;
