@@ -483,7 +483,7 @@ func (service *Service) loadComparisonBreadcrumbs(ctx context.Context, pointID, 
 	if err != nil {
 		return nil, fmt.Errorf("load comparison ancestors: %w", err)
 	}
-	defer ancestorRows.Close()
+	defer func() { _ = ancestorRows.Close() }()
 	expectedID := make(map[string]string, len(ids))
 	expectedDepth := make(map[string]int, len(ids))
 	for _, id := range ids {

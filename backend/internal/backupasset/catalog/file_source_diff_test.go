@@ -272,7 +272,7 @@ func runFileSourceComparisonBehavior(t *testing.T, db, observer *gorm.DB) {
 	service.cursor = originalCodec
 	if err := db.Callback().Query().Before("gorm:query").Register("comparison:anchor-failure", func(tx *gorm.DB) {
 		if tx.Statement.Table == "catalog_entries" {
-			tx.AddError(transient)
+			_ = tx.AddError(transient)
 		}
 	}); err != nil {
 		t.Fatal(err)
