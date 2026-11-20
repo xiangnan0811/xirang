@@ -26,6 +26,10 @@ import (
 func TestCatalogBehaviorSQLite(t *testing.T) {
 	primary, observer := openCatalogBehaviorSQLite(t)
 	runCatalogGenerationBehavior(t, primary, observer)
+	t.Run("backup set comparison", func(t *testing.T) {
+		db, observer := openCatalogBehaviorSQLite(t)
+		runFileSourceComparisonBehavior(t, db, observer)
+	})
 }
 
 func TestCatalogBehaviorPostgres(t *testing.T) {
@@ -38,6 +42,16 @@ func TestCatalogBehaviorPostgres(t *testing.T) {
 	}
 	primary, observer := openCatalogBehaviorPostgres(t, dsn)
 	runCatalogGenerationBehavior(t, primary, observer)
+	t.Run("backup set comparison", func(t *testing.T) {
+		db, observer := openCatalogBehaviorPostgres(t, dsn)
+		runFileSourceComparisonBehavior(t, db, observer)
+	})
+	if os.Getenv("XIRANG_COMPARE_SCALE") == "1" {
+		t.Run("backup set comparison scale", func(t *testing.T) {
+			db, _ := openCatalogBehaviorPostgres(t, dsn)
+			runFileSourceComparisonScale(t, db)
+		})
+	}
 	t.Run("expired index lease restart", func(t *testing.T) {
 		db, _ := openCatalogBehaviorPostgres(t, dsn)
 		fixture := seedCatalogIndexerFixture(t, db, time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC), true, 0)

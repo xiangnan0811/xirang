@@ -94,6 +94,7 @@ type FileSourceVersionDTO struct {
 	LogicalBytes        int64                          `json:"logical_bytes"`
 	Permissions         PermissionsDTO                 `json:"permissions"`
 	BrowseState         FileSourceBrowseState          `json:"browse_state" enums:"browsable,indexing,unavailable"`
+	ComparisonState     FileSourceComparisonState      `json:"comparison_state" binding:"required" enums:"eligible,indexing,unavailable,ineligible"`
 	UnavailableReason   *backupasset.CapabilityReason  `json:"unavailable_reason,omitempty"`
 }
 
@@ -423,7 +424,7 @@ func (service *Service) loadFileSourcePoints(ctx context.Context, scope Authoriz
 		"id", "repository_id", "producing_task_id", "producing_task_run_id", "producing_task_name_snapshot",
 		"producing_node_id_snapshot", "producing_node_name_snapshot", "semantics", "state", "captured_at",
 		"committed_at", "entry_count", "logical_bytes", "physical_availability", "created_at", "lineage_json",
-		"consistency_json", "source_fingerprint", "capability_revision",
+		"consistency_json", "source_fingerprint", "capability_revision", "manifest_digest",
 	).Where("id IN ?", authorized).Order("id ASC").Find(&points).Error; err != nil {
 		return nil, fmt.Errorf("load authorized file-source points: %w", err)
 	}
@@ -450,6 +451,10 @@ func (service *Service) composeFileSourceProjection(ctx context.Context, points 
 		return fileSourceProjection{}, err
 	}
 	coverage, err := service.loadFileSourceCoverage(ctx, points)
+	if err != nil {
+		return fileSourceProjection{}, err
+	}
+	comparisonControls, err := service.loadFileSourceComparisonControls(ctx, points)
 	if err != nil {
 		return fileSourceProjection{}, err
 	}
@@ -558,7 +563,8 @@ func (service *Service) composeFileSourceProjection(ctx context.Context, points 
 				LifecycleState: backupasset.RecoveryPointState(item.point.State), CatalogCoverage: item.coverage,
 				ContentAvailability: fileSourceContentAvailability(item.point, item.repository), EntryCount: item.point.EntryCount,
 				LogicalBytes: item.point.LogicalBytes, Permissions: PermissionsDTO{List: true},
-				BrowseState: item.browseState, UnavailableReason: item.unavailableReason,
+				ComparisonState: comparisonControls[item.point.ID].state,
+				BrowseState:     item.browseState, UnavailableReason: item.unavailableReason,
 			}
 			if err := version.validate(); err != nil {
 				return fileSourceProjection{}, err

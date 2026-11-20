@@ -23,22 +23,24 @@ const (
 )
 
 type ServiceDependencies struct {
-	DB                *gorm.DB
-	Ownership         *Ownership
-	Cursor            *CursorCodec
-	IdentityKeys      IdentityKeySource
-	Now               func() time.Time
-	ReconcileInterval time.Duration
-	FeatureEnabled    func() (bool, error)
+	DB                       *gorm.DB
+	Ownership                *Ownership
+	Cursor                   *CursorCodec
+	IdentityKeys             IdentityKeySource
+	Now                      func() time.Time
+	ReconcileInterval        time.Duration
+	FeatureEnabled           func() (bool, error)
+	ComparisonFeatureEnabled func(context.Context) (bool, error)
 }
 
 type Service struct {
-	db             *gorm.DB
-	ownership      *Ownership
-	cursor         *CursorCodec
-	identityKeys   IdentityKeySource
-	now            func() time.Time
-	featureEnabled func() (bool, error)
+	db                       *gorm.DB
+	ownership                *Ownership
+	cursor                   *CursorCodec
+	identityKeys             IdentityKeySource
+	now                      func() time.Time
+	featureEnabled           func() (bool, error)
+	comparisonFeatureEnabled func(context.Context) (bool, error)
 }
 
 type RecoveryPointListRequest struct {
@@ -101,7 +103,7 @@ func NewService(dependencies ServiceDependencies) (*Service, error) {
 	}
 	return &Service{
 		db: dependencies.DB, ownership: dependencies.Ownership, cursor: dependencies.Cursor, identityKeys: dependencies.IdentityKeys,
-		now: dependencies.Now, featureEnabled: dependencies.FeatureEnabled,
+		now: dependencies.Now, featureEnabled: dependencies.FeatureEnabled, comparisonFeatureEnabled: dependencies.ComparisonFeatureEnabled,
 	}, nil
 }
 
@@ -988,6 +990,23 @@ func (service *Service) ensureFeatureEnabled() error {
 	enabled, err := service.featureEnabled()
 	if err != nil {
 		return err
+	}
+	if !enabled {
+		return ErrFeatureDisabled
+	}
+	return nil
+}
+
+func (service *Service) ensureComparisonFeatureEnabled(ctx context.Context) error {
+	if service == nil {
+		return backupasset.ErrInvalidState
+	}
+	if service.comparisonFeatureEnabled == nil {
+		return service.ensureFeatureEnabled()
+	}
+	enabled, err := service.comparisonFeatureEnabled(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: comparison readiness: %w", ErrCatalogUnavailable, err)
 	}
 	if !enabled {
 		return ErrFeatureDisabled

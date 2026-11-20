@@ -4018,6 +4018,106 @@ const docTemplate = `{
                 }
             }
         },
+        "/backup-file-sources/sets/{backupSetId}/diffs": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "使用已授权的完整 Catalog 比较元数据，不访问 Provider 或内容",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "比较同一备份集的两个历史恢复点",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "备份集 opaque ID",
+                        "name": "backupSetId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "精确恢复点比较请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceDiffRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceDiffPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/backup-file-sources/sets/{backupSetId}/versions": {
             "get": {
                 "security": [
@@ -22362,12 +22462,21 @@ const docTemplate = `{
         },
         "xirang_backend_internal_backupasset_catalog.ContentAvailabilityDTO": {
             "type": "object",
+            "required": [
+                "available",
+                "reason"
+            ],
             "properties": {
                 "available": {
                     "type": "boolean"
                 },
                 "reason": {
-                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
+                        }
+                    ],
+                    "x-nullable": true
                 }
             }
         },
@@ -22783,6 +22892,176 @@ const docTemplate = `{
                 "FileSourceBrowseStateUnavailable"
             ]
         },
+        "xirang_backend_internal_backupasset_catalog.FileSourceComparisonState": {
+            "type": "string",
+            "enum": [
+                "eligible",
+                "indexing",
+                "unavailable",
+                "ineligible"
+            ],
+            "x-enum-varnames": [
+                "FileSourceComparisonEligible",
+                "FileSourceComparisonIndexing",
+                "FileSourceComparisonUnavailable",
+                "FileSourceComparisonIneligible"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceDiffItem": {
+            "type": "object",
+            "required": [
+                "base",
+                "changed_fields",
+                "compare",
+                "content_equality",
+                "kind"
+            ],
+            "properties": {
+                "base": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceDiffSide"
+                        }
+                    ],
+                    "x-nullable": true
+                },
+                "changed_fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "compare": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceDiffSide"
+                        }
+                    ],
+                    "x-nullable": true
+                },
+                "content_equality": {
+                    "enum": [
+                        "equal",
+                        "different",
+                        "unknown"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ContentEquality"
+                        }
+                    ]
+                },
+                "kind": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.DiffChangeKind"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceDiffPage": {
+            "type": "object",
+            "required": [
+                "base_content_availability",
+                "base_recovery_point_id",
+                "compare_content_availability",
+                "compare_recovery_point_id",
+                "items"
+            ],
+            "properties": {
+                "base_content_availability": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ContentAvailabilityDTO"
+                },
+                "base_recovery_point_id": {
+                    "type": "string"
+                },
+                "compare_content_availability": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ContentAvailabilityDTO"
+                },
+                "compare_recovery_point_id": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceDiffItem"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceDiffRequest": {
+            "type": "object",
+            "required": [
+                "base_recovery_point_id",
+                "compare_recovery_point_id"
+            ],
+            "properties": {
+                "base_recovery_point_id": {
+                    "type": "string"
+                },
+                "compare_recovery_point_id": {
+                    "type": "string"
+                },
+                "cursor": {
+                    "type": "string"
+                },
+                "limit": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceDiffSide": {
+            "type": "object",
+            "required": [
+                "breadcrumb",
+                "entry_id",
+                "entry_type",
+                "fingerprint_strength",
+                "modified_at",
+                "name",
+                "recovery_point_id",
+                "size"
+            ],
+            "properties": {
+                "breadcrumb": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.BreadcrumbDTO"
+                    }
+                },
+                "breadcrumb_truncated": {
+                    "type": "boolean"
+                },
+                "entry_id": {
+                    "type": "string"
+                },
+                "entry_type": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CatalogEntryType"
+                },
+                "fingerprint_strength": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FingerprintStrength"
+                },
+                "modified_at": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "name": {
+                    "type": "string"
+                },
+                "omitted_ancestor_names": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                }
+            }
+        },
         "xirang_backend_internal_backupasset_catalog.FileSourceLineageKind": {
             "type": "string",
             "enum": [
@@ -22883,6 +23162,9 @@ const docTemplate = `{
         },
         "xirang_backend_internal_backupasset_catalog.FileSourceVersionDTO": {
             "type": "object",
+            "required": [
+                "comparison_state"
+            ],
             "properties": {
                 "browse_state": {
                     "enum": [
@@ -22904,6 +23186,19 @@ const docTemplate = `{
                 },
                 "committed_at": {
                     "type": "string"
+                },
+                "comparison_state": {
+                    "enum": [
+                        "eligible",
+                        "indexing",
+                        "unavailable",
+                        "ineligible"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceComparisonState"
+                        }
+                    ]
                 },
                 "content_availability": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ContentAvailabilityDTO"

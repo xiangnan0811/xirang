@@ -287,6 +287,7 @@ func TestCatalogRoutesRequireAssetListPermissionBeforeFeatureGate(t *testing.T) 
 		{"file-source nodes", http.MethodGet, "/api/v1/backup-file-sources/nodes", ""},
 		{"file-source sets", http.MethodGet, "/api/v1/backup-file-sources/nodes/1/sets", ""},
 		{"file-source versions", http.MethodGet, "/api/v1/backup-file-sources/sets/" + backupSetID + "/versions", ""},
+		{"file-source comparison", http.MethodPost, "/api/v1/backup-file-sources/sets/" + backupSetID + "/diffs", `{"base_recovery_point_id":"` + pointID + `","compare_recovery_point_id":"` + strings.Repeat("b", 32) + `"}`},
 		{"file-source recovery point resolver", http.MethodGet, "/api/v1/backup-file-sources/recovery-points/" + pointID + "/source", ""},
 	}
 

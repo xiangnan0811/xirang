@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,6 +110,46 @@ func composeGAReadiness(db *gorm.DB, settingsService *settings.Service, keyring 
 			return true, nil
 		},
 	})
+}
+
+// comparisonFeatureLive evaluates the same readiness policy as FeatureLive,
+// using request-bound reads and never initializing missing key domains.
+func comparisonFeatureLive(ctx context.Context, db *gorm.DB, settingsService *settings.Service, keyring *backupasset.Keyring) (bool, error) {
+	if db == nil || settingsService == nil || keyring == nil {
+		return false, backupasset.ErrInvalidState
+	}
+	values, err := settingsService.BackupAssetSettingsSnapshotTx(ctx, db)
+	if err != nil {
+		return false, err
+	}
+	enabled, err := strconv.ParseBool(strings.TrimSpace(values["backup_assets.enabled"]))
+	if err != nil {
+		return false, err
+	}
+	if !enabled {
+		return false, nil
+	}
+	for _, domain := range backupasset.RequiredKeyDomains {
+		_, err := keyring.Active(ctx, domain)
+		if errors.Is(err, backupasset.ErrKeyUnavailable) || errors.Is(err, backupasset.ErrKeyLost) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	readiness := ga.NewDatabaseReadiness(ga.DatabaseReadinessDependencies{
+		DB: db,
+		ExportValid: func(context.Context) (bool, error) {
+			return settings.ValidateBackupAssetFoundationConfig(values) == nil, nil
+		},
+		KeysReady: func(context.Context) (bool, error) { return true, nil },
+	})
+	snapshot, err := readiness.CurrentReadiness(ctx)
+	if err != nil {
+		return false, err
+	}
+	return ga.EvaluateEnablement(snapshot) == nil, nil
 }
 
 func backupAssetFoundationValues(svc *settings.Service) map[string]string {

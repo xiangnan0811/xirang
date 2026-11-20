@@ -1406,6 +1406,8 @@ export interface CatalogStatus {
 
 export type BackupFileSourceLineageKind = "task" | "imported";
 export type BackupFileSourceBrowseState = "browsable" | "indexing" | "unavailable";
+/** Pre-upgrade wire data without `comparison_state` is treated as "ineligible". */
+export type BackupFileSourceComparisonState = "eligible" | "indexing" | "unavailable" | "ineligible";
 
 export interface BackupFileSourceNode {
   nodeId: number;
@@ -1441,6 +1443,7 @@ export interface BackupFileSourceVersion {
   catalogCoverage: CatalogCoverageStatus;
   browseState: BackupFileSourceBrowseState;
   unavailableReason: CatalogCapabilityReason | null;
+  comparisonState: BackupFileSourceComparisonState;
   contentAvailability: CatalogContentAvailability;
   entryCount: number;
   logicalBytes: number;
@@ -1459,6 +1462,49 @@ export interface BackupFileSourceRecoveryPoint {
 
 export interface BackupFileSourcePage<T> {
   items: T[];
+  nextCursor: string | null;
+}
+
+export interface BackupFileSourceComparisonBreadcrumb {
+  ref: AssetRef;
+  name: string;
+}
+
+/**
+ * Scoped comparison side. Raw provider metadata (mode, owner, MIME type) is not part of the
+ * scoped response; only its changed-field labels are.
+ */
+export interface BackupFileSourceComparisonSide {
+  ref: AssetRef;
+  /** Canonical Catalog name; may be whitespace-only. */
+  name: string;
+  entryType: CatalogEntryType;
+  size: number;
+  modifiedAt: string | null;
+  fingerprintStrength: CatalogFingerprintStrength;
+  /** Authorized ancestors ordered root-first; excludes the entry itself and is empty at the root. */
+  breadcrumb: BackupFileSourceComparisonBreadcrumb[];
+  /**
+   * Canonical names of the ancestors above a truncated breadcrumb, root first. Empty when the
+   * breadcrumb reaches the root; names only, never references or provider paths.
+   */
+  omittedAncestorNames: string[];
+}
+
+export interface BackupFileSourceComparisonItem {
+  kind: RecoveryPointDiffKind;
+  base: BackupFileSourceComparisonSide | null;
+  compare: BackupFileSourceComparisonSide | null;
+  changedFields: RecoveryPointDiffChangedField[];
+  contentEquality: RecoveryPointDiffContentEquality;
+}
+
+export interface BackupFileSourceComparisonPage {
+  baseRecoveryPointId: string;
+  compareRecoveryPointId: string;
+  baseContentAvailability: CatalogContentAvailability;
+  compareContentAvailability: CatalogContentAvailability;
+  items: BackupFileSourceComparisonItem[];
   nextCursor: string | null;
 }
 

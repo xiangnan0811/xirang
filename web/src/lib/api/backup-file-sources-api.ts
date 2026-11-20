@@ -1,4 +1,9 @@
 import type {
+  BackupFileSourceComparisonBreadcrumb,
+  BackupFileSourceComparisonItem,
+  BackupFileSourceComparisonPage,
+  BackupFileSourceComparisonSide,
+  BackupFileSourceComparisonState,
   BackupFileSourceNode,
   BackupFileSourcePage,
   BackupFileSourceBrowseState,
@@ -7,10 +12,20 @@ import type {
   BackupFileSourceVersion,
   CatalogCapabilityCode,
   CatalogCapabilityReason,
+  CatalogContentAvailability,
   CatalogCoverageStatus,
   CatalogProjection,
+  RecoveryPointDiffChangedField,
 } from "@/types/domain";
 
+import {
+  mapCatalogEntryType,
+  mapCatalogFingerprintStrength,
+  mapRecoveryPointDiffChangedField,
+  mapRecoveryPointDiffContentEquality,
+  mapRecoveryPointDiffKind,
+} from "./backup-assets-api";
+import { mapAssetRef, mapUTCInstant } from "./backup-assets-boundary";
 import { request } from "./core";
 
 type RawObject = Record<string, unknown>;
@@ -24,6 +39,27 @@ export interface ListBackupFileSourcesOptions {
 export interface ResolveBackupFileSourceOptions {
   signal?: AbortSignal;
 }
+
+export interface CompareBackupFileSourceVersionsInput {
+  baseRecoveryPointId: string;
+  compareRecoveryPointId: string;
+  limit?: number;
+  cursor?: string;
+  signal?: AbortSignal;
+}
+
+export interface BackupFileSourceComparisonRequest {
+  baseRecoveryPointId: string;
+  compareRecoveryPointId: string;
+  cursor?: string;
+}
+
+export const BACKUP_FILE_SOURCE_COMPARISON_MAX_LIMIT = 200;
+/** The server sends at most this many nearest ancestors and flags a longer chain as truncated. */
+const MAX_COMPARISON_BREADCRUMB_DEPTH = 256;
+/** A canonical Catalog path, joined with `/`, is bounded at this many UTF-8 bytes; so is each component. */
+const MAX_COMPARISON_PATH_BYTES = 8192;
+const utf8 = new TextEncoder();
 
 const BLOCKED_REASON: CatalogCapabilityReason = { code: "unknown_internal_state", params: {} };
 const OPAQUE_ID = /^[0-9a-f]{32}$/;
@@ -79,13 +115,14 @@ function opaqueId(value: unknown): string | null {
   return typeof value === "string" && OPAQUE_ID.test(value) ? value : null;
 }
 
+/** The server omits an empty `params` map; a present one must still be a valid object. */
 function reason(value: unknown): CatalogCapabilityReason | null | undefined {
   if (value === null) return null;
-  if (!isObject(value) || typeof value.code !== "string" || !CAPABILITY_CODES.has(value.code as CatalogCapabilityCode) || !isObject(value.params)) {
-    return undefined;
-  }
+  if (!isObject(value) || typeof value.code !== "string" || !CAPABILITY_CODES.has(value.code as CatalogCapabilityCode)) return undefined;
+  const rawParams = value.params === undefined ? {} : value.params;
+  if (!isObject(rawParams)) return undefined;
   const params: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value.params)) {
+  for (const [key, raw] of Object.entries(rawParams)) {
     if (!CAPABILITY_PARAMS.has(key) || typeof raw !== "string" || raw.length > 128 || /[\r\n\0]/.test(raw)) return undefined;
     if (key === "retry_after_seconds" && !/^[1-9][0-9]*$/.test(raw)) return undefined;
     params[key] = raw;
@@ -95,6 +132,12 @@ function reason(value: unknown): CatalogCapabilityReason | null | undefined {
 
 function browseState(value: unknown): BackupFileSourceBrowseState | null {
   return value === "browsable" || value === "indexing" || value === "unavailable" ? value : null;
+}
+
+function comparisonState(value: unknown): BackupFileSourceComparisonState | null {
+  // Pre-upgrade version DTOs omit the field; they cannot be compared.
+  if (value === undefined) return "ineligible";
+  return value === "eligible" || value === "indexing" || value === "unavailable" || value === "ineligible" ? value : null;
 }
 
 function unavailableReason(
@@ -182,6 +225,7 @@ function mapVersion(value: unknown): BackupFileSourceVersion | null {
   const catalogCoverage = coverage(value.catalog_coverage);
   const state = browseState(value.browse_state);
   const unavailable = unavailableReason(value.unavailable_reason, state);
+  const comparison = comparisonState(value.comparison_state);
   const entryCount = integer(value.entry_count);
   const logicalBytes = integer(value.logical_bytes);
   if (!isObject(value.permissions) || value.permissions.list !== true || value.permissions.preview !== false || value.permissions.download !== false) return null;
@@ -192,12 +236,191 @@ function mapVersion(value: unknown): BackupFileSourceVersion | null {
     (state !== "unavailable" && !value.content_availability.available)) return null;
   if (recoveryPointId === null || repositoryId === null || producingTaskId === null || capturedAt === undefined ||
     committedAt === undefined || createdAt === undefined || createdAt === null || lifecycleState === null || catalogCoverage === null ||
-    state === null || unavailable === undefined || entryCount === null || logicalBytes === null) return null;
+    state === null || unavailable === undefined || comparison === null || entryCount === null || logicalBytes === null) return null;
   return {
     recoveryPointId, repositoryId, producingTaskId, capturedAt, committedAt, createdAt, lifecycleState,
     catalogCoverage, contentAvailability: { available: value.content_availability.available, reason: availabilityReason },
-    browseState: state, unavailableReason: unavailable,
+    browseState: state, unavailableReason: unavailable, comparisonState: comparison,
     entryCount, logicalBytes, permissions: { list: true, preview: false, download: false },
+  };
+}
+
+function contentAvailability(value: unknown): CatalogContentAvailability | null {
+  if (!isObject(value) || typeof value.available !== "boolean") return null;
+  const availabilityReason = reason(value.reason);
+  if (availabilityReason === undefined || value.available !== (availabilityReason === null)) return null;
+  return { available: value.available, reason: availabilityReason };
+}
+
+/**
+ * Canonical Catalog path component: nonempty, not `.`/`..`, no separator or NUL, bounded in
+ * UTF-8 bytes. Whitespace-only names are legal Catalog names and are kept verbatim.
+ */
+function comparisonName(value: unknown): string | null {
+  if (typeof value !== "string" || value === "" || value === "." || value === ".." ||
+    value.length > MAX_COMPARISON_PATH_BYTES || /[/\\\0]/.test(value)) return null;
+  return utf8.encode(value).length <= MAX_COMPARISON_PATH_BYTES ? value : null;
+}
+
+/** The whole root-first path, separators included, must fit the Catalog path bound. */
+function withinComparisonPathBound(components: readonly string[]): boolean {
+  // UTF-16 length never exceeds UTF-8 length, so this rejects oversized paths before encoding.
+  let units = components.length - 1;
+  for (const component of components) units += component.length;
+  return units <= MAX_COMPARISON_PATH_BYTES && utf8.encode(components.join("/")).length <= MAX_COMPARISON_PATH_BYTES;
+}
+
+/**
+ * Names of the ancestors above a truncated breadcrumb, root first. Present exactly when the
+ * breadcrumb is truncated, so a missing or spurious prefix rejects the side.
+ */
+function mapOmittedAncestorNames(value: unknown, truncated: boolean): string[] | null {
+  if (!truncated) return value === undefined ? [] : null;
+  // Each omitted component takes at least one byte and one separator.
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_COMPARISON_PATH_BYTES / 2) return null;
+  const names: string[] = [];
+  for (const raw of value) {
+    const name = comparisonName(raw);
+    if (name === null) return null;
+    names.push(name);
+  }
+  return names;
+}
+
+function mapComparisonBreadcrumb(
+  value: unknown,
+  truncated: boolean,
+  recoveryPointId: string,
+  entryId: string,
+): BackupFileSourceComparisonBreadcrumb[] | null {
+  // A truncated chain is exactly the bounded tail of nearest ancestors.
+  if (!Array.isArray(value) || value.length > MAX_COMPARISON_BREADCRUMB_DEPTH ||
+    (truncated && value.length !== MAX_COMPARISON_BREADCRUMB_DEPTH)) return null;
+  const seen = new Set([entryId]);
+  const breadcrumb: BackupFileSourceComparisonBreadcrumb[] = [];
+  for (const raw of value) {
+    const ref = mapAssetRef(raw);
+    const name = isObject(raw) ? comparisonName(raw.name) : null;
+    if (ref === null || name === null || ref.recoveryPointId !== recoveryPointId || seen.has(ref.entryId)) return null;
+    seen.add(ref.entryId);
+    breadcrumb.push({ ref, name });
+  }
+  return breadcrumb;
+}
+
+/**
+ * `undefined` rejects the item; `null` is an explicitly absent side. Only the scoped fields are
+ * copied; any raw provider metadata the payload might still carry is dropped here.
+ */
+function mapComparisonSide(value: unknown, recoveryPointId: string): BackupFileSourceComparisonSide | null | undefined {
+  if (value === null) return null;
+  if (!isObject(value)) return undefined;
+  const ref = mapAssetRef(value);
+  const name = comparisonName(value.name);
+  const entryType = mapCatalogEntryType(value.entry_type);
+  const size = integer(value.size);
+  const modifiedAt = value.modified_at === null ? null : mapUTCInstant(value.modified_at);
+  const fingerprintStrength = mapCatalogFingerprintStrength(value.fingerprint_strength);
+  if (value.breadcrumb_truncated !== undefined && value.breadcrumb_truncated !== true) return undefined;
+  const truncated = value.breadcrumb_truncated === true;
+  if (ref === null || ref.recoveryPointId !== recoveryPointId || name === null || entryType === null || size === null ||
+    (value.modified_at !== null && modifiedAt === null) || fingerprintStrength === null) return undefined;
+  const breadcrumb = mapComparisonBreadcrumb(value.breadcrumb, truncated, recoveryPointId, ref.entryId);
+  const omittedAncestorNames = mapOmittedAncestorNames(value.omitted_ancestor_names, truncated);
+  if (breadcrumb === null || omittedAncestorNames === null ||
+    !withinComparisonPathBound([...omittedAncestorNames, ...breadcrumb.map((crumb) => crumb.name), name])) return undefined;
+  return { ref, name, entryType, size, modifiedAt, fingerprintStrength, breadcrumb, omittedAncestorNames };
+}
+
+/**
+ * Cross-checks the labels the sides can prove. modified_at is compared by the server at storage
+ * precision and content by fingerprint evidence; mode, owner and MIME type are labels only. The
+ * scoped contract never reports fingerprint_strength: unequal strengths only leave content unknown.
+ */
+function changedFieldsMatchSides(
+  fields: ReadonlySet<RecoveryPointDiffChangedField>,
+  base: BackupFileSourceComparisonSide,
+  compare: BackupFileSourceComparisonSide,
+): boolean {
+  if (fields.has("fingerprint_strength")) return false;
+  const exact: [RecoveryPointDiffChangedField, boolean][] = [
+    ["name", base.name !== compare.name],
+    ["entry_type", base.entryType !== compare.entryType],
+    ["size", base.size !== compare.size],
+  ];
+  return exact.every(([field, differs]) => fields.has(field) === differs);
+}
+
+function mapComparisonItem(value: unknown, expected: BackupFileSourceComparisonRequest): BackupFileSourceComparisonItem | null {
+  if (!isObject(value) || !Array.isArray(value.changed_fields)) return null;
+  const kind = mapRecoveryPointDiffKind(value.kind);
+  const equality = mapRecoveryPointDiffContentEquality(value.content_equality);
+  const base = mapComparisonSide(value.base, expected.baseRecoveryPointId);
+  const compare = mapComparisonSide(value.compare, expected.compareRecoveryPointId);
+  if (kind === null || equality === null || base === undefined || compare === undefined) return null;
+  const changedFields: RecoveryPointDiffChangedField[] = [];
+  const fieldSet = new Set<RecoveryPointDiffChangedField>();
+  for (const raw of value.changed_fields) {
+    const field = mapRecoveryPointDiffChangedField(raw);
+    if (field === null || fieldSet.has(field)) return null;
+    fieldSet.add(field);
+    changedFields.push(field);
+  }
+  if (kind === "added" || kind === "removed") {
+    const shapeMatches = kind === "added" ? base === null && compare !== null : base !== null && compare === null;
+    return shapeMatches && changedFields.length === 0 && equality === "unknown"
+      ? { kind, base, compare, changedFields, contentEquality: equality }
+      : null;
+  }
+  if (base === null || compare === null || changedFields.length === 0) return null;
+  if ((kind === "type_changed") !== (base.entryType !== compare.entryType)) return null;
+  if (!changedFieldsMatchSides(fieldSet, base, compare)) return null;
+  // Content is only decided from strong plain-file evidence; anything else stays unknown.
+  if (fieldSet.has("content") !== (equality === "different")) return null;
+  const strongFiles = base.entryType === "file" && compare.entryType === "file" &&
+    base.fingerprintStrength === "strong" && compare.fingerprintStrength === "strong";
+  if (equality !== "unknown" && !strongFiles) return null;
+  return { kind, base, compare, changedFields, contentEquality: equality };
+}
+
+export function mapBackupFileSourceComparisonPage(
+  value: unknown,
+  expected: BackupFileSourceComparisonRequest,
+): CatalogProjection<BackupFileSourceComparisonPage> {
+  if (!isObject(value) || !Array.isArray(value.items) || value.items.length > BACKUP_FILE_SOURCE_COMPARISON_MAX_LIMIT) return blocked();
+  if (value.base_recovery_point_id !== expected.baseRecoveryPointId ||
+    value.compare_recovery_point_id !== expected.compareRecoveryPointId) return blocked();
+  const baseContentAvailability = contentAvailability(value.base_content_availability);
+  const compareContentAvailability = contentAvailability(value.compare_content_availability);
+  const nextCursor = cursor(value.next_cursor);
+  if (baseContentAvailability === null || compareContentAvailability === null || nextCursor === undefined) return blocked();
+  if (nextCursor !== null && (value.items.length === 0 || nextCursor === expected.cursor)) return blocked();
+  const items: BackupFileSourceComparisonItem[] = [];
+  const baseEntries = new Set<string>();
+  const compareEntries = new Set<string>();
+  for (const raw of value.items) {
+    const item = mapComparisonItem(raw, expected);
+    if (item === null) return blocked();
+    if (item.base !== null) {
+      if (baseEntries.has(item.base.ref.entryId)) return blocked();
+      baseEntries.add(item.base.ref.entryId);
+    }
+    if (item.compare !== null) {
+      if (compareEntries.has(item.compare.ref.entryId)) return blocked();
+      compareEntries.add(item.compare.ref.entryId);
+    }
+    items.push(item);
+  }
+  return {
+    status: "available",
+    value: {
+      baseRecoveryPointId: expected.baseRecoveryPointId,
+      compareRecoveryPointId: expected.compareRecoveryPointId,
+      baseContentAvailability,
+      compareContentAvailability,
+      items,
+      nextCursor,
+    },
   };
 }
 
@@ -262,6 +485,27 @@ export function createBackupFileSourcesApi() {
     async listBackupFileSourceVersions(token: string, backupSetId: string, options: ListBackupFileSourcesOptions = {}) {
       if (!OPAQUE_ID.test(backupSetId)) throw new Error("invalid backup set id");
       return mapBackupFileSourceVersionPage(await request<unknown>(queryPath(`/backup-file-sources/sets/${backupSetId}/versions`, options), { token, signal: options.signal }));
+    },
+    async compareBackupFileSourceVersions(token: string, backupSetId: string, input: CompareBackupFileSourceVersionsInput) {
+      const { baseRecoveryPointId, compareRecoveryPointId, limit, cursor: requestedCursor, signal } = input;
+      if (!OPAQUE_ID.test(backupSetId)) throw new Error("invalid backup set id");
+      if (!OPAQUE_ID.test(baseRecoveryPointId) || !OPAQUE_ID.test(compareRecoveryPointId) || baseRecoveryPointId === compareRecoveryPointId) {
+        throw new Error("invalid recovery point pair");
+      }
+      const body: Record<string, string | number> = {
+        base_recovery_point_id: baseRecoveryPointId,
+        compare_recovery_point_id: compareRecoveryPointId,
+      };
+      if (limit !== undefined) {
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > BACKUP_FILE_SOURCE_COMPARISON_MAX_LIMIT) throw new Error("invalid page limit");
+        body.limit = limit;
+      }
+      if (requestedCursor !== undefined) {
+        if (requestedCursor === "" || cursor(requestedCursor) === undefined) throw new Error("invalid cursor");
+        body.cursor = requestedCursor;
+      }
+      const raw = await request<unknown>(`/backup-file-sources/sets/${backupSetId}/diffs`, { method: "POST", token, signal, body });
+      return mapBackupFileSourceComparisonPage(raw, { baseRecoveryPointId, compareRecoveryPointId, cursor: requestedCursor });
     },
   };
 }

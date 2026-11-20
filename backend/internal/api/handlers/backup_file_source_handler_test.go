@@ -78,6 +78,54 @@ func (spy *backupFileSourceServiceSpy) ResolveFileSourceRecoveryPoint(_ context.
 	return spy.resolution, spy.err
 }
 
+func (spy *backupFileSourceServiceSpy) DiffFileSource(_ context.Context, backupSetID string, scope catalog.AuthorizationScope, request catalog.FileSourceDiffRequest) (catalog.FileSourceDiffPage, error) {
+	spy.calls++
+	spy.backupSetID, spy.scope = backupSetID, scope
+	return catalog.FileSourceDiffPage{BaseRecoveryPointID: request.BaseRecoveryPointID, CompareRecoveryPointID: request.CompareRecoveryPointID, Items: []catalog.FileSourceDiffItem{}}, spy.err
+}
+
+func TestBackupFileSourceComparisonHTTPBoundary(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &backupFileSourceServiceSpy{}
+	handler := NewBackupFileSourceHandler(service, nil)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, uint(77))
+		c.Set(middleware.CtxRole, "operator")
+	})
+	router.POST("/backup-file-sources/sets/:backupSetId/diffs", handler.Diff)
+	setID := strings.Repeat("a", 32)
+	baseID := strings.Repeat("b", 32)
+	compareID := strings.Repeat("c", 32)
+	valid := fmt.Sprintf(`{"base_recovery_point_id":%q,"compare_recovery_point_id":%q}`, baseID, compareID)
+	cases := []struct {
+		name, body, query string
+		serviceErr        error
+		status            int
+	}{
+		{"success", valid, "", nil, http.StatusOK},
+		{"same point", fmt.Sprintf(`{"base_recovery_point_id":%q,"compare_recovery_point_id":%q}`, baseID, baseID), "", nil, http.StatusBadRequest},
+		{"unknown field", fmt.Sprintf(`{"base_recovery_point_id":%q,"compare_recovery_point_id":%q,"parent":"x"}`, baseID, compareID), "", nil, http.StatusBadRequest},
+		{"duplicate field", fmt.Sprintf(`{"base_recovery_point_id":%q,"base_recovery_point_id":%q,"compare_recovery_point_id":%q}`, baseID, baseID, compareID), "", nil, http.StatusBadRequest},
+		{"null limit", fmt.Sprintf(`{"base_recovery_point_id":%q,"compare_recovery_point_id":%q,"limit":null}`, baseID, compareID), "", nil, http.StatusBadRequest},
+		{"zero limit", fmt.Sprintf(`{"base_recovery_point_id":%q,"compare_recovery_point_id":%q,"limit":0}`, baseID, compareID), "", nil, http.StatusBadRequest},
+		{"unexpected query", valid, "?cursor=x", nil, http.StatusBadRequest},
+		{"stale", valid, "", catalog.ErrStaleCursor, http.StatusConflict},
+		{"indexing", valid, "", catalog.ErrCatalogUnavailable, http.StatusServiceUnavailable},
+		{"hidden", valid, "", backupasset.ErrNotFound, http.StatusNotFound},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			service.err = test.serviceErr
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/backup-file-sources/sets/"+setID+"/diffs"+test.query, strings.NewReader(test.body)))
+			if response.Code != test.status {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestBackupFileSourceHandlerListsNodesWithStandardEnvelope(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &backupFileSourceServiceSpy{nodePage: catalog.FileSourceNodePage{Items: []catalog.FileSourceNodeDTO{{

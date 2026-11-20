@@ -262,6 +262,9 @@ const lazyBackupFileSourcesApi: BackupFileSourcesApi = {
   async listBackupFileSourceVersions(...args) {
     return (await loadBackupFileSourcesApi()).listBackupFileSourceVersions(...args);
   },
+  async compareBackupFileSourceVersions(...args) {
+    return (await loadBackupFileSourcesApi()).compareBackupFileSourceVersions(...args);
+  },
 };
 
 const lazyRecoveryPointsApi: RecoveryPointsApi = {

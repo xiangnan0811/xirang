@@ -30,6 +30,8 @@ export interface BackupFileSourceControlsProps {
   paginationPermissionDenied?: boolean;
   canRetry?: boolean;
   onRetry?: () => void;
+  /** Rendered under the version picker, e.g. the recovery point comparison entry. */
+  versionAction?: React.ReactNode;
 }
 
 export function BackupFileSourceControls({
@@ -37,7 +39,7 @@ export function BackupFileSourceControls({
   onSelectNode, onSelectSet, onSelectVersion,
   hasMoreNodes, hasMoreSets, hasMoreVersions, loadingMoreNodes, loadingMoreSets, loadingMoreVersions,
   onLoadMoreNodes, onLoadMoreSets, onLoadMoreVersions,
-  paginationError = false, paginationPermissionDenied = false, canRetry = false, onRetry,
+  paginationError = false, paginationPermissionDenied = false, canRetry = false, onRetry, versionAction,
 }: BackupFileSourceControlsProps) {
   const { t, i18n } = useTranslation();
   const selectedSet = selectedBackupSetId === undefined && !hasMoreSets && sets.length === 1
@@ -124,6 +126,7 @@ export function BackupFileSourceControls({
             loadingLabel={t("backupAssets.sources.loadingMore")}
             onLoadMore={onLoadMoreVersions}
           />
+          {versionAction}
         </SourceSelect>
       </div>
       {status === "loading" ? <p role="status" className="mt-2 text-xs text-muted-foreground">{t("backupAssets.sources.loading")}</p> : null}

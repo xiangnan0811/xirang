@@ -31,7 +31,7 @@ const set: BackupFileSourceSet = {
 const version: BackupFileSourceVersion = {
   recoveryPointId: "b".repeat(32), repositoryId: "c".repeat(32), producingTaskId: 9, capturedAt: null,
   committedAt: null, createdAt: "2026-08-27T00:00:00.000Z", lifecycleState: "committed", catalogCoverage: "complete",
-  browseState: "browsable", unavailableReason: null,
+  browseState: "browsable", unavailableReason: null, comparisonState: "eligible",
   contentAvailability: { available: false, reason: { code: "range_unavailable", params: {} } },
   entryCount: 1, logicalBytes: 1, permissions: { list: true, preview: false, download: false },
 };
@@ -640,6 +640,22 @@ describe("useBackupFileSources", () => {
     expect(mocks.nodes.mock.calls[1]?.[1]).not.toHaveProperty("cursor");
   });
 
+  it("reloads only the selected set's versions for comparison reselection, keeping the set resolved", async () => {
+    const route = { ...defaultBackupAssetsRouteState("data"), nodeId: node.nodeId };
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.versions).toEqual([version]));
+    expect(result.current.selectedBackupSetId).toBe(set.backupSetId);
+
+    act(() => { result.current.refreshVersions(); });
+    expect(result.current.selectedBackupSetId).toBe(set.backupSetId);
+    expect(result.current.loadingVersions).toBe(true);
+    await waitFor(() => expect(mocks.versions).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.loadingVersions).toBe(false));
+    expect(mocks.nodes).toHaveBeenCalledTimes(1);
+    expect(mocks.sets).toHaveBeenCalledTimes(1);
+    expect(mocks.versions.mock.calls[1]?.[2]).not.toHaveProperty("cursor");
+  });
+
   it("retries a sticky exact-point resolver failure when the global refresh generation advances", async () => {
     mocks.resolve.mockRejectedValueOnce(new ApiError(503, "temporary resolver failure", null));
     const onRoutePatch = vi.fn();
@@ -783,6 +799,70 @@ describe("useBackupFileSources", () => {
     expect(result.current.nodes).toEqual([node]);
     expect(mocks.nodes.mock.calls.every((call) => !call[1]?.cursor)).toBe(true);
     expect(mocks.nodes).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a failed version page and retries only that page with the same cursor", async () => {
+    const secondVersion = { ...version, recoveryPointId: "d".repeat(32), createdAt: "2026-08-26T00:00:00.000Z" };
+    let pageAttempts = 0;
+    mocks.versions.mockImplementation((_token: string, _setId: string, options: { cursor?: string }) => {
+      if (!options.cursor) return Promise.resolve({ status: "available", value: { items: [version], nextCursor: pageCursor } });
+      pageAttempts += 1;
+      return pageAttempts === 1
+        ? Promise.reject(new ApiError(503, "temporary page failure", null))
+        : Promise.resolve({ status: "available", value: { items: [secondVersion], nextCursor: null } });
+    });
+    const route = { ...defaultBackupAssetsRouteState("data"), nodeId: node.nodeId };
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.hasMoreVersions).toBe(true));
+    expect(result.current.versionsFailure).toBeNull();
+
+    await act(async () => { await result.current.loadMoreVersions(); });
+    expect(result.current.versionsFailure).toBe("page");
+    expect(result.current.versions).toEqual([version]);
+
+    act(() => { result.current.retryVersions(); });
+    await waitFor(() => expect(result.current.versions).toEqual([version, secondVersion]));
+    expect(result.current.versionsFailure).toBeNull();
+    expect(mocks.versions.mock.calls.filter((call) => call[2]?.cursor === pageCursor)).toHaveLength(2);
+    expect(mocks.versions.mock.calls.filter((call) => !call[2]?.cursor)).toHaveLength(1);
+    expect(mocks.nodes).toHaveBeenCalledTimes(1);
+    expect(mocks.sets).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a failed version list refresh and retries only the version list", async () => {
+    mocks.versions
+      .mockRejectedValueOnce(new ApiError(503, "temporary version failure", null))
+      .mockResolvedValue({ status: "available", value: { items: [version], nextCursor: null } });
+    const route = { ...defaultBackupAssetsRouteState("data"), nodeId: node.nodeId };
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.versionsFailure).toBe("refresh"));
+    expect(result.current.versions).toEqual([]);
+
+    act(() => { result.current.retryVersions(); });
+    await waitFor(() => expect(result.current.versions).toEqual([version]));
+    expect(result.current.versionsFailure).toBeNull();
+    expect(mocks.versions).toHaveBeenCalledTimes(2);
+    expect(mocks.nodes).toHaveBeenCalledTimes(1);
+    expect(mocks.sets).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps version page permission loss final for the targeted retry", async () => {
+    mocks.versions.mockImplementation((_token: string, _setId: string, options: { cursor?: string }) => (
+      options.cursor
+        ? Promise.reject(new ApiError(403, "raw forbidden", null))
+        : Promise.resolve({ status: "available", value: { items: [version], nextCursor: pageCursor } })
+    ));
+    const route = { ...defaultBackupAssetsRouteState("data"), nodeId: node.nodeId };
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.hasMoreVersions).toBe(true));
+
+    await act(async () => { await result.current.loadMoreVersions(); });
+    expect(result.current.versionsFailure).toBe("permission_denied");
+    expect(result.current.hasMoreVersions).toBe(false);
+
+    act(() => { result.current.retryVersions(); });
+    expect(mocks.versions.mock.calls.filter((call) => call[2]?.cursor === pageCursor)).toHaveLength(1);
+    expect(mocks.versions).toHaveBeenCalledTimes(2);
   });
 });
 

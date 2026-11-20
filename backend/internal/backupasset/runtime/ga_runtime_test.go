@@ -217,6 +217,52 @@ func TestFeatureLiveRequestedFalseStaysClosed(t *testing.T) {
 	}
 }
 
+func TestComparisonFeatureLiveReadOnlyAndContextBound(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	prepareRuntimeIdentityFixture(t, db)
+	if err := db.AutoMigrate(&model.BackupAssetInstallation{}, &model.BackupAssetInventoryRun{}); err != nil {
+		t.Fatal(err)
+	}
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	ring := backupasset.NewKeyring(db, time.Now)
+	live, err := comparisonFeatureLive(context.Background(), db, settingsService, ring)
+	if err != nil || live {
+		t.Fatalf("uninitialized domains: live=%t err=%v", live, err)
+	}
+	var count int64
+	if err := db.Model(&model.WrappedDomainKey{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("readiness wrote keys: count=%d err=%v", count, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := comparisonFeatureLive(ctx, db, settingsService, ring); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled readiness: %v", err)
+	}
+	if _, err := ring.EnsureRequiredDomains(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	digest := strings.Repeat("a", 64)
+	if err := db.Create(&model.BackupAssetInstallation{ID: "comparison-install", Slot: 1, Class: string(ga.InstallationExisting), Readiness: string(ga.ReadinessReady), InventoryDigest: digest, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.BackupAssetInventoryRun{ID: "comparison-run", Digest: digest, Status: ga.InventoryRunComplete, CountsJSON: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if live, err := comparisonFeatureLive(context.Background(), db, settingsService, ring); err != nil || live {
+		t.Fatalf("unacknowledged readiness: live=%t err=%v", live, err)
+	}
+	if err := db.Model(&model.BackupAssetInstallation{}).Where("slot = ?", 1).Update("readiness", ga.ReadinessAcknowledged).Error; err != nil {
+		t.Fatal(err)
+	}
+	if live, err := comparisonFeatureLive(context.Background(), db, settingsService, ring); err != nil || !live {
+		t.Fatalf("acknowledged readiness: live=%t err=%v", live, err)
+	}
+}
+
 func TestStartupRequestedEnablementWithoutReadinessDoesNotBecomeManaged(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	prepareRuntimeIdentityFixture(t, db)

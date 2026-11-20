@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +25,7 @@ type BackupFileSourceService interface {
 	ListFileSourceBackupSets(context.Context, uint, catalog.AuthorizationScope, catalog.FileSourcePageRequest) (catalog.FileSourceBackupSetPage, error)
 	ListFileSourceVersions(context.Context, string, catalog.AuthorizationScope, catalog.FileSourcePageRequest) (catalog.FileSourceVersionPage, error)
 	ResolveFileSourceRecoveryPoint(context.Context, string, catalog.AuthorizationScope) (catalog.FileSourceRecoveryPointDTO, error)
+	DiffFileSource(context.Context, string, catalog.AuthorizationScope, catalog.FileSourceDiffRequest) (catalog.FileSourceDiffPage, error)
 }
 
 type featureDisabledBackupFileSourceService struct{}
@@ -44,6 +48,10 @@ func (featureDisabledBackupFileSourceService) ListFileSourceVersions(context.Con
 
 func (featureDisabledBackupFileSourceService) ResolveFileSourceRecoveryPoint(context.Context, string, catalog.AuthorizationScope) (catalog.FileSourceRecoveryPointDTO, error) {
 	return catalog.FileSourceRecoveryPointDTO{}, catalog.ErrFeatureDisabled
+}
+
+func (featureDisabledBackupFileSourceService) DiffFileSource(context.Context, string, catalog.AuthorizationScope, catalog.FileSourceDiffRequest) (catalog.FileSourceDiffPage, error) {
+	return catalog.FileSourceDiffPage{}, catalog.ErrFeatureDisabled
 }
 
 type BackupFileSourceHandler struct {
@@ -196,6 +204,95 @@ func (handler *BackupFileSourceHandler) ResolveRecoveryPointSource(c *gin.Contex
 		audit.ItemCount = 1
 	}
 	handler.finish(c, audit, result, err)
+}
+
+// Diff godoc
+// @Summary      比较同一备份集的两个历史恢复点
+// @Description  使用已授权的完整 Catalog 比较元数据，不访问 Provider 或内容
+// @Tags         backup-assets
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        backupSetId  path  string  true  "备份集 opaque ID"
+// @Param        body  body  catalog.FileSourceDiffRequest  true  "精确恢复点比较请求"
+// @Success      200  {object}  handlers.Response{data=catalog.FileSourceDiffPage}
+// @Failure      400  {object}  handlers.Response
+// @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
+// @Failure      404  {object}  handlers.Response
+// @Failure      409  {object}  handlers.Response
+// @Failure      500  {object}  handlers.Response
+// @Failure      503  {object}  handlers.Response
+// @Router       /backup-file-sources/sets/{backupSetId}/diffs [post]
+func (handler *BackupFileSourceHandler) Diff(c *gin.Context) {
+	audit := backupAssetAuditInput(c, backupasset.AuditActionRecoveryPointDiff)
+	setID, ok := backupAssetOpaqueParam(c, "backupSetId")
+	if !ok {
+		handler.reject(c, audit)
+		return
+	}
+	if _, ok := backupAssetQuery(c); !ok {
+		handler.reject(c, audit)
+		return
+	}
+	var request catalog.FileSourceDiffRequest
+	if decodeFileSourceDiffJSON(c, &request) != nil ||
+		backupasset.ValidateOpaqueID(request.BaseRecoveryPointID) != nil || backupasset.ValidateOpaqueID(request.CompareRecoveryPointID) != nil ||
+		request.BaseRecoveryPointID == request.CompareRecoveryPointID || request.Limit < 0 || request.Limit > maxBackupAssetPageLimit ||
+		len(request.Cursor) > maxBackupAssetCursorBytes || request.Cursor != strings.TrimSpace(request.Cursor) {
+		handler.reject(c, audit)
+		return
+	}
+	if !handler.available(c, audit) {
+		return
+	}
+	result, err := handler.service.DiffFileSource(c.Request.Context(), setID, backupAssetAuthorizationScope(c), request)
+	audit.ItemCount = int64(len(result.Items))
+	handler.finish(c, audit, result, err)
+}
+
+func decodeFileSourceDiffJSON(c *gin.Context, request *catalog.FileSourceDiffRequest) error {
+	if c.Request == nil || c.Request.Body == nil {
+		return fmt.Errorf("missing comparison body")
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBackupAssetRequestBytes+1))
+	if err != nil || len(body) > maxBackupAssetRequestBytes {
+		return fmt.Errorf("invalid comparison body")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return fmt.Errorf("invalid comparison object")
+	}
+	seen := make(map[string]bool, 4)
+	for decoder.More() {
+		token, err = decoder.Token()
+		if err != nil {
+			return fmt.Errorf("invalid comparison field")
+		}
+		name, ok := token.(string)
+		if !ok || seen[name] || (name != "base_recovery_point_id" && name != "compare_recovery_point_id" && name != "limit" && name != "cursor") {
+			return fmt.Errorf("invalid comparison field")
+		}
+		seen[name] = true
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("invalid comparison value")
+		}
+	}
+	if token, err = decoder.Token(); err != nil || token != json.Delim('}') {
+		return fmt.Errorf("invalid comparison object")
+	}
+	if _, err = decoder.Token(); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("trailing comparison data")
+	}
+	if err := json.Unmarshal(body, request); err != nil {
+		return err
+	}
+	if seen["limit"] && request.Limit <= 0 {
+		return fmt.Errorf("invalid comparison limit")
+	}
+	return nil
 }
 
 func backupFileSourcePageRequest(c *gin.Context) (catalog.FileSourcePageRequest, bool) {

@@ -85,6 +85,7 @@ const {
   listBackupFileSourceSetsMock,
   listBackupFileSourceVersionsMock,
   resolveBackupFileSourceRecoveryPointMock,
+  compareBackupFileSourceVersionsMock,
   getRecoveryPlanMock,
   getRecoveryJobMock,
   recoveryWriteMocks,
@@ -115,6 +116,7 @@ const {
   listBackupFileSourceSetsMock: vi.fn(),
   listBackupFileSourceVersionsMock: vi.fn(),
   resolveBackupFileSourceRecoveryPointMock: vi.fn(),
+  compareBackupFileSourceVersionsMock: vi.fn(),
   getRecoveryPlanMock: vi.fn(),
   getRecoveryJobMock: vi.fn(),
   recoveryWriteMocks: {
@@ -199,6 +201,7 @@ vi.mock("@/lib/api/client", () => ({
     listBackupFileSourceSets: listBackupFileSourceSetsMock,
     listBackupFileSourceVersions: listBackupFileSourceVersionsMock,
     resolveBackupFileSourceRecoveryPoint: resolveBackupFileSourceRecoveryPointMock,
+    compareBackupFileSourceVersions: compareBackupFileSourceVersionsMock,
     verifyMount: verifyMountMock,
   },
 }));
@@ -268,6 +271,7 @@ describe("BackupsPage", () => {
     listBackupFileSourceVersionsMock.mockReset();
     listBackupFileSourceVersionsMock.mockResolvedValue({ status: "available", value: { items: [], nextCursor: null } });
     resolveBackupFileSourceRecoveryPointMock.mockReset();
+    compareBackupFileSourceVersionsMock.mockReset();
     resolveBackupFileSourceRecoveryPointMock.mockResolvedValue({
       status: "blocked",
       reason: { code: "unknown_internal_state", params: {} },
@@ -374,6 +378,65 @@ describe("BackupsPage", () => {
     expect(await screen.findByText(/The file source is currently unavailable|文件来源当前不可用/)).toBeInTheDocument();
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: /File results|文件结果/ })).not.toBeInTheDocument();
+  });
+
+  it("compares two offline recovery points from the version area while the Files workspace is absent", async () => {
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    const backupSetId = "c".repeat(32);
+    const offline = { code: "repository_offline" as const, params: {} };
+    const offlineVersion = (id: string, capturedAt: string) => ({
+      recoveryPointId: id, repositoryId: repository.id, producingTaskId: 7, capturedAt, committedAt: capturedAt,
+      createdAt: capturedAt, lifecycleState: "committed", catalogCoverage: "complete", browseState: "unavailable",
+      unavailableReason: offline, comparisonState: "eligible", contentAvailability: { available: false, reason: offline },
+      entryCount: 1, logicalBytes: 1, permissions: { list: true, preview: false, download: false },
+    });
+    const newer = offlineVersion("d".repeat(32), "2026-08-28T00:00:00.000Z");
+    const older = offlineVersion("f".repeat(32), "2026-08-27T00:00:00.000Z");
+    listBackupFileSourceNodesMock.mockResolvedValue({
+      status: "available",
+      value: {
+        items: [{ nodeId: 3, displayName: "节点", backupSetCount: 1, retainedVersionCount: 2, latestRetainedAt: null, catalogCoverage: "complete", browseState: "unavailable", unavailableReason: offline }],
+        nextCursor: null,
+      },
+    });
+    listBackupFileSourceSetsMock.mockResolvedValue({
+      status: "available",
+      value: {
+        items: [{ backupSetId, nodeId: 3, displayLabel: "每日", lineageKind: "task", versionCount: 2, latestRetainedAt: null, catalogCoverage: "complete", browseState: "unavailable", unavailableReason: offline }],
+        nextCursor: null,
+      },
+    });
+    listBackupFileSourceVersionsMock.mockResolvedValue({ status: "available", value: { items: [newer, older], nextCursor: null } });
+    compareBackupFileSourceVersionsMock.mockResolvedValue({
+      status: "available",
+      value: {
+        baseRecoveryPointId: older.recoveryPointId,
+        compareRecoveryPointId: newer.recoveryPointId,
+        baseContentAvailability: { available: false, reason: offline },
+        compareContentAvailability: { available: false, reason: offline },
+        items: [],
+        nextCursor: null,
+      },
+    });
+    const user = userEvent.setup();
+    renderBackups(`/app/backups/data?nodeId=3&backupSetId=${backupSetId}&recoveryPointId=${older.recoveryPointId}`);
+
+    const entry = await screen.findByRole("button", { name: /Compare recovery points|比较恢复点/ });
+    await waitFor(() => expect(entry).toBeEnabled());
+    await waitFor(() => expect(screen.getByLabelText(/^(Version|版本)$/)).toHaveValue(older.recoveryPointId));
+    expect(screen.queryByRole("region", { name: /File results|文件结果/ })).not.toBeInTheDocument();
+    await user.click(entry);
+    const dialog = await screen.findByRole("dialog", { name: /Compare recovery points|比较恢复点/ });
+    expect(within(dialog).getByLabelText(/Base recovery point|基准恢复点/)).toHaveValue(older.recoveryPointId);
+    await user.selectOptions(within(dialog).getByLabelText(/Comparison recovery point|对照恢复点/), newer.recoveryPointId);
+    await user.click(within(dialog).getByRole("button", { name: /Run comparison|运行比较/ }));
+
+    expect(await within(dialog).findByText(/No differences were reported|未报告差异/)).toBeInTheDocument();
+    expect(within(dialog).getAllByText(/Content offline|内容离线/).length).toBeGreaterThanOrEqual(2);
+    expect(compareBackupFileSourceVersionsMock).toHaveBeenCalledWith("test-token", backupSetId, expect.objectContaining({
+      baseRecoveryPointId: older.recoveryPointId,
+      compareRecoveryPointId: newer.recoveryPointId,
+    }));
   });
 
   it("issues one automatic safe preview when a generic-MIME file is activated", async () => {

@@ -26,7 +26,7 @@ const importedSet: BackupFileSourceSet = {
 const version = (id: string, capturedAt: string | null, createdAt: string): BackupFileSourceVersion => ({
   recoveryPointId: id.repeat(32), repositoryId: "f".repeat(32), capturedAt, committedAt: null, createdAt,
   lifecycleState: "committed", catalogCoverage: "complete",
-  browseState: "browsable", unavailableReason: null,
+  browseState: "browsable", unavailableReason: null, comparisonState: "eligible",
   contentAvailability: { available: false, reason: { code: "range_unavailable", params: {} } },
   entryCount: 1, logicalBytes: 2, permissions: { list: true, preview: false, download: false },
 });

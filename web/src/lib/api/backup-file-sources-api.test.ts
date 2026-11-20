@@ -227,6 +227,38 @@ describe("backup file source API boundary", () => {
     expect(result.status).toBe("available");
   });
 
+  it("maps a production offline version page whose empty reason params are omitted", async () => {
+    // Go omits the empty params map, so a real offline version arrives without `params`.
+    const offline = {
+      ...rawVersion,
+      recovery_point_id: "e".repeat(32),
+      browse_state: "unavailable",
+      unavailable_reason: { code: "repository_offline" },
+      comparison_state: "eligible",
+      content_availability: { available: false, reason: { code: "repository_offline" } },
+    };
+    requestMock.mockResolvedValue({ items: [offline] });
+
+    await expect(createBackupFileSourcesApi().listBackupFileSourceVersions("token", setId, { limit: 100, cursor }))
+      .resolves.toMatchObject({
+        status: "available",
+        value: {
+          items: [{
+            recoveryPointId: "e".repeat(32),
+            comparisonState: "eligible",
+            contentAvailability: { available: false, reason: { code: "repository_offline", params: {} } },
+          }],
+          nextCursor: null,
+        },
+      });
+    expect(requestMock).toHaveBeenCalledWith(
+      `/backup-file-sources/sets/${setId}/versions?limit=100&cursor=${encodeURIComponent(cursor)}`,
+      { token: "token", signal: undefined },
+    );
+    expect(mapBackupFileSourceVersionPage({ items: [{ ...offline, content_availability: { available: false, reason: { code: "repository_offline", params: [] } } }] }))
+      .toEqual({ status: "blocked", reason: { code: "unknown_internal_state", params: {} } });
+  });
+
   it("resolves one canonical recovery point through the central request wrapper and AbortSignal", async () => {
     requestMock.mockResolvedValue(rawResolution);
     const signal = new AbortController().signal;
