@@ -278,6 +278,9 @@ Core curl `8.22.0-r0` → `8.23.0-r0` 同样保留不可安装旧锁定、同版
 发布工作流使用 Docker Hub 凭据登录；各平台将 digest 作为短期 Actions 制品传给
 manifest 作业，制品传递成功本身不证明正式标签已发布。相关 action 固定完整 SHA，
 版本和运行时维护规则见[仓库自动化](automation.md#actions-与-ci)。
+镜像发布与 Docker Hub 描述同步统一使用同一 checkout 补丁版本。镜像发布分别签出
+工作流自身的 `github.workflow_sha` 和已验证的源码 SHA。manifest 作业将验证策略
+签出到 `.release-policy`，该次 checkout 不持久化凭据。
 
 当前 Trivy 设置为 `severity: HIGH,CRITICAL`、`exit-code: 1`、`ignore-unfixed: true`：扫描识别且已有修复版本的高危/严重漏洞阻断正式标签，未修复漏洞被过滤。不能将通过结果解释为不存在任何高危漏洞。基础镜像或包漏洞阻断时，更新来源并重新走 PR/release；不得降低 severity、添加临时 ignore 或绕过扫描。Actions pin 和依赖维护见[仓库自动化](automation.md)。
 
