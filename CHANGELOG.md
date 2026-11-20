@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 镜像发布与 Docker Hub 描述同步的五处 `actions/checkout` 固定到 `v6.0.3`，与其他工作流一致。保留各 checkout 的源码与策略来源、路径和凭据设置。
+
 ## [0.73.24](https://github.com/xiangnan0811/xirang/compare/v0.73.23...v0.73.24) (2026-11-19)
 
 
