@@ -55,10 +55,13 @@ OR 集合来自文件实际涉及的有限主题，并不证明具体改动语�
 | pre-commit | 缺必需同步阻断；导航不阻断 | 有暂存 SQL 时检查 index 快照并阻断 | 不执行 | 同一 SQL 条件、同一快照，失败阻断 |
 | check-doc-freshness.sh --staged | 同上 | 不执行 | 不执行 | 不执行 |
 | check-doc-freshness.sh 普通模式 | 提醒不阻断 | 工作区，失败阻断 | 工作区，失败阻断 | 不执行 |
+| check-doc-freshness.sh --candidate `<base>` | CHANGELOG 已变更但发布手册未同步时阻断 | 工作区，失败阻断 | 工作区，失败阻断 | 不执行 |
 | pre-push / local-ci-parity | 调用普通模式 | 同普通模式 | 同普通模式 | 单独运行并阻断 |
 | CI 文档 job | 调用普通模式 | 工作区/干净 checkout，失败阻断 | 同左 | 独立 migration-utc-safety job，不由文档 job 执行 |
 
 pre-commit 仅在暂存 SQL 变化（含删除）时，将 index 中后端 README 与两个引擎迁移目录导出到同一私有快照，复用普通版本和 UTC 检查器；工作区的未暂存修正或破坏不影响该候选。普通检查器仍检查工作区。主题门禁不证明语义同步，导航与 CI 提醒仍需人工核对。
+
+候选模式比较显式基线与 CHANGELOG、发布手册的实际内容，将 CRLF 和 LF 视为相同换行。比较包含已提交、未提交及未忽略的未跟踪文件。标记为 `skip-worktree` 且缺席的路径使用索引中的内容。该模式不暂存文件或执行 Git clean 过滤器。独审前的使用时点见[代理协作与验证](agent-collaboration.md#恢复与证据复用)。
 
 结构门禁使用已跟踪及未忽略的未跟踪文件；docs 根入口始终必须存在。公开目录（包括未忽略的空目录）必须有 README。匹配 Git 忽略规则且没有可见文件后代的目录及空子目录不检查 README；忽略规则下仍被跟踪的文档及其祖先继续受约束。
 结构检查验证维护文档的相对链接、Markdown 标题/显式锚点、从总入口的可达性，并检查点目录配置等当前消费者中的退役路径。Markdown 链接会校验 fragment；非 Markdown 消费者目前只扫描退役路径，不通用解析 fragment，因此移动标题必须人工核对 Go、SQL、shell 等源码引用。

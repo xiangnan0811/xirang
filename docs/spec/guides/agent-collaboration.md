@@ -40,6 +40,12 @@ Claude Code 的 `CLAUDE.md` 只保留 `@AGENTS.md`，通过原生导入维持单
 和配置条件。相同 HEAD 不能覆盖脏工作区；部分暂存或候选/条件变化使相关检查失效，
 未变的有效证据可复用。只读评估仅做只读索引比较，不暂存、不建临时 Git 索引、不写私有状态。
 
+候选修改 `CHANGELOG.md` 时，在独立审查前执行
+`bash scripts/check-doc-freshness.sh --candidate <base>`，`<base>` 使用本轮基线提交。
+检查按该基线核对 CHANGELOG 和发布手册的候选内容，无需暂存。
+required PG 库存或取证验证策略变化的审前对账和回归见
+[仓库自动化](../../maintainers/automation.md#actions-与-ci)。
+
 CI case 的 context 以规范 Git common-directory 和 checkout 根的单向身份键绑定
 仓库及工作区；唯一 current 指针只引用显式 case，不复制任务阶段，也不恢复已完成
 任务。source／snapshot 的 complete 只覆盖该 context，整套整改的独审、远端、

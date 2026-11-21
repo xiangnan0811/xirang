@@ -210,6 +210,149 @@ capture_worktree() {
     sort -z | xargs -0 sha256sum >"$snapshot"
 }
 
+assert_candidate() {
+  local label="$1" expected="$2" fragment="$3" status=0 output
+  shift 3
+  # A bogus PR base must not affect the explicit candidate baseline.
+  output="$(cd "$WORK" && GITHUB_BASE_REF=nonexistent bash scripts/check-doc-freshness.sh --candidate "$@" 2>&1)" || status=$?
+  if [[ "$expected" == pass && "$status" != 0 ]] || [[ "$expected" == reject && "$status" == 0 ]]; then
+    fail_test "$label" "expected $expected, got status=$status: $output"
+  elif [[ -n "$fragment" ]] && ! grep -Fq -- "$fragment" <<<"$output"; then
+    fail_test "$label" "expected detail '$fragment': $output"
+  else
+    echo "OK[$label]"
+  fi
+}
+
+reset_fixture
+candidate_base="$(git -C "$WORK" rev-parse HEAD)"
+assert_candidate candidate-missing-base reject 'usage:'
+assert_candidate candidate-invalid-base reject 'usage:' nonexistent-commit
+assert_candidate candidate-option-as-base reject 'usage:' --staged
+assert_candidate candidate-extra-argument reject 'usage:' "$candidate_base" extra
+
+# Untracked paths are part of the checkout, even when the index is unchanged.
+printf '# Changelog\n' >"$WORK/CHANGELOG.md"
+cp "$WORK/.git/index" "$STATE/candidate-index.before"
+capture_worktree "$STATE/candidate-worktree.before"
+assert_candidate candidate-untracked-changelog-rejected reject '发布或镜像流程已修改' "$candidate_base"
+cmp -s "$STATE/candidate-index.before" "$WORK/.git/index" || fail_test candidate-index-unchanged 'candidate changed the real index'
+capture_worktree "$STATE/candidate-worktree.after"
+cmp -s "$STATE/candidate-worktree.before" "$STATE/candidate-worktree.after" || fail_test candidate-worktree-unchanged 'candidate changed the checkout'
+
+mkdir -p "$WORK/docs/maintainers"
+printf '# 维护者\n\n[发布](release.md)\n' >"$WORK/docs/maintainers/README.md"
+printf '# 发布\n' >"$WORK/docs/maintainers/release.md"
+printf '\n[维护者](maintainers/README.md)\n' >>"$WORK/docs/README.md"
+assert_candidate candidate-untracked-manual-passes pass '' "$candidate_base"
+git -C "$WORK" add -- CHANGELOG.md
+
+# Compare --staged directly: it sees the staged trigger but not the untracked manual.
+staged_status=0
+staged_output="$(cd "$WORK" && bash scripts/check-doc-freshness.sh --staged 2>&1)" || staged_status=$?
+if [[ "$staged_status" == 0 ]] || ! grep -Fq '发布或镜像流程已修改' <<<"$staged_output"; then
+  fail_test candidate-staged-differs "expected staged warning: $staged_output"
+else
+  echo 'OK[candidate-staged-differs]'
+fi
+assert_candidate candidate-worktree-manual-passes pass '' "$candidate_base"
+
+reset_fixture
+printf '# Changelog\n' >"$WORK/CHANGELOG.md"
+git -C "$WORK" add -- CHANGELOG.md
+git -C "$WORK" -c core.hooksPath=/dev/null commit -qm 'committed release change'
+assert_candidate candidate-committed-changelog-rejected reject '发布或镜像流程已修改' "$candidate_base"
+mkdir -p "$WORK/docs/maintainers"
+printf '# 维护者\n\n[发布](release.md)\n' >"$WORK/docs/maintainers/README.md"
+printf '# 发布\n' >"$WORK/docs/maintainers/release.md"
+printf '\n[维护者](maintainers/README.md)\n' >>"$WORK/docs/README.md"
+assert_candidate candidate-committed-trigger-untracked-manual-passes pass '' "$candidate_base"
+git -C "$WORK" add -- docs
+git -C "$WORK" -c core.hooksPath=/dev/null commit -qm 'seed release manual'
+candidate_base="$(git -C "$WORK" rev-parse HEAD)"
+printf '\n更新\n' >>"$WORK/CHANGELOG.md"
+printf '\n更新\n' >>"$WORK/docs/maintainers/release.md"
+assert_candidate candidate-changed-manual-passes pass '' "$candidate_base"
+git -C "$WORK" add -- CHANGELOG.md docs/maintainers/release.md
+git -C "$WORK" show "$candidate_base:docs/maintainers/release.md" >"$WORK/docs/maintainers/release.md"
+assert_candidate candidate-reverted-manual-rejected reject '发布或镜像流程已修改' "$candidate_base"
+git -C "$WORK" reset --hard -q "$candidate_base"
+git -C "$WORK" rm --cached -- CHANGELOG.md >/dev/null
+assert_candidate candidate-restored-worktree-matches-base pass '' "$candidate_base"
+git -C "$WORK" reset --hard -q "$candidate_base"
+git -C "$WORK" update-index --assume-unchanged -- CHANGELOG.md
+printf '\n工作区更新\n' >>"$WORK/CHANGELOG.md"
+cp "$WORK/.git/index" "$STATE/candidate-flagged-index.before"
+assert_candidate candidate-assume-unchanged-worktree-rejected reject '发布或镜像流程已修改' "$candidate_base"
+cmp -s "$STATE/candidate-flagged-index.before" "$WORK/.git/index" || fail_test candidate-flagged-index-unchanged 'candidate changed the real index flags'
+git -C "$WORK" update-index --no-assume-unchanged -- CHANGELOG.md
+git -C "$WORK" reset --hard -q "$candidate_base"
+git -C "$WORK" update-index --skip-worktree -- CHANGELOG.md
+printf '\n工作区更新\n' >>"$WORK/CHANGELOG.md"
+assert_candidate candidate-skip-worktree-edit-rejected reject '发布或镜像流程已修改' "$candidate_base"
+git -C "$WORK" update-index --no-skip-worktree -- CHANGELOG.md
+
+# A skipped path that is absent is intentionally sparse, not a deletion.
+git -C "$WORK" update-index --skip-worktree -- CHANGELOG.md
+rm "$WORK/CHANGELOG.md"
+assert_candidate candidate-sparse-absence-matches-base pass '' "$candidate_base"
+git -C "$WORK" update-index --no-skip-worktree -- CHANGELOG.md
+git -C "$WORK" reset --hard -q "$candidate_base"
+printf '\n已提交更新\n' >>"$WORK/CHANGELOG.md"
+git -C "$WORK" add -- CHANGELOG.md
+git -C "$WORK" -c core.hooksPath=/dev/null commit -qm 'change sparse changelog'
+git -C "$WORK" update-index --skip-worktree -- CHANGELOG.md
+rm "$WORK/CHANGELOG.md"
+assert_candidate candidate-sparse-absence-retains-index-change reject '发布或镜像流程已修改' "$candidate_base"
+git -C "$WORK" update-index --no-skip-worktree -- CHANGELOG.md
+
+git -C "$WORK" reset --hard -q "$candidate_base"
+printf '\n更新\n' >>"$WORK/CHANGELOG.md"
+printf '# 发布\r\n' >"$WORK/docs/maintainers/release.md"
+assert_candidate candidate-crlf-manual-is-unchanged reject '发布或镜像流程已修改' "$candidate_base"
+
+git -C "$WORK" reset --hard -q "$candidate_base"
+printf '\n更新\n' >>"$WORK/CHANGELOG.md"
+git -C "$WORK" rm --cached -- docs/maintainers/release.md >/dev/null
+printf '\n仅本地副本\n' >>"$WORK/docs/maintainers/release.md"
+printf '/docs/maintainers/release.md\n' >"$WORK/.gitignore"
+assert_candidate candidate-ignored-manual-cannot-satisfy reject '发布或镜像流程已修改' "$candidate_base"
+rm -- "$WORK/docs/maintainers/release.md"
+
+# A required clean filter on unrelated tracked and untracked files must not run.
+reset_fixture
+mkdir -p "$WORK/unrelated"
+printf 'original\n' >"$WORK/unrelated/tracked.bin"
+git -C "$WORK" add -- unrelated/tracked.bin
+git -C "$WORK" -c core.hooksPath=/dev/null commit -qm 'seed unrelated file'
+filter_base="$(git -C "$WORK" rev-parse HEAD)"
+printf 'unrelated/* filter=freshness-test\n' >"$WORK/.git/info/attributes"
+printf '#!/bin/sh\nprintf invoked >"%s"\nexit 1\n' "$STATE/filter-invoked" >"$STATE/failing-filter"
+chmod +x "$STATE/failing-filter"
+git -C "$WORK" config filter.freshness-test.clean "$STATE/failing-filter"
+git -C "$WORK" config filter.freshness-test.required true
+printf 'modified\n' >"$WORK/unrelated/tracked.bin"
+printf 'untracked\n' >"$WORK/unrelated/new.bin"
+assert_candidate candidate-unrelated-required-filter-not-run pass '' "$filter_base"
+[[ ! -e "$STATE/filter-invoked" ]] || fail_test candidate-unrelated-filter-side-effect 'unrelated clean filter was invoked'
+git -C "$WORK" config --unset filter.freshness-test.clean
+git -C "$WORK" config --unset filter.freshness-test.required
+rm "$WORK/.git/info/attributes"
+
+reset_fixture
+printf 'CHANGELOG.md\n' >"$WORK/.gitignore"
+printf '# Ignored\n' >"$WORK/CHANGELOG.md"
+assert_candidate candidate-ignored-untracked-excluded pass '' origin/fixture-base
+
+reset_fixture
+create_migration_candidate
+printf '当前迁移版本：`000001_initial`。\n' >"$WORK/backend/README.md"
+assert_candidate candidate-checks-worktree-migration reject 'documents 000001_initial' origin/fixture-base
+
+reset_fixture
+printf '\n[broken](missing.md)\n' >>"$WORK/docs/README.md"
+assert_candidate candidate-checks-worktree-structure reject 'missing.md' origin/fixture-base
+
 reset_fixture
 create_migration_candidate
 git -C "$WORK" add -- backend/README.md \

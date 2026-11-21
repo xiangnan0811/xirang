@@ -101,6 +101,8 @@ git push origin <branch>
 
 独立审查、暂存与未暂存内容的证据绑定及原生加载验收见
 [代理协作与验证](docs/spec/guides/agent-collaboration.md)。
+已授权交付的 CI 原件保全与 worktree 清理前重放要求见
+[可恢复 CI 取证](docs/maintainers/automation.md#可恢复-ci-取证)。
 
 ## PR 与合并
 
@@ -115,6 +117,11 @@ git push origin <branch>
    检查，分类后证据失效则验证失败，不以局部源码作业替代完整检查。事件及并发规则见
    [仓库自动化](docs/maintainers/automation.md#actions-与-ci)。新版 PR Overview 可从
    页首 `Merge status` 查看有效合并状态，在 `Checks` 查看具体运行和日志。
+   已授权交付需要 CI 证据时，在原 PR 仍打开、候选漂移及已授权合并之前完成原次
+   PR source 取证；适用 metadata 的 pending 快照须在运行终结前采集，终态须关联
+   同一 pending 前驱。具体时机、限制与后续 main 取证见
+   [可恢复 CI 取证](docs/maintainers/automation.md#可恢复-ci-取证)。Release PR
+   同样须在合并前完成其原次 PR 取证。
 3. 维护者优先使用 squash merge，保留符合规范的 PR 标题；不要直接向 `main` 推送变更。
 4. 合并后按 [发布手册](docs/maintainers/release.md) 检查 Release Please、正式发布、
    Docker 镜像和相关 Docker Hub 描述同步。未触发正式发布时，明确说明未预期产生
