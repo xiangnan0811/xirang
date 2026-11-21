@@ -287,6 +287,41 @@ python3 -B scripts/ci-evidence.py status --case "$CASE"
 python3 -B scripts/ci-evidence.py status --case "$CASE" --refresh --observation "$OBSERVATION"
 ```
 
+已授权交付需要 CI 证据时，为每次成功的 PR、合并后 main push、Release PR 和
+发行 main 运行分别固定仓库、事件、完整 checkout SHA、实际 run 和 attempt，采集并
+完成各自的 `source` 四阶段证明。PR 和 Release PR 的原次源码 CI 成功后，必须在
+原 PR 仍打开、已授权合并之前，且 head、base、merge 候选及来源 attempt 漂移之前
+采集并完成 `finalize`；合并后的 PR 状态不能补作打开时的证明。每次 main push 的
+源码 CI 成功后及时采集并完成 `finalize`，在 main 前进之前固定该次证明。
+短期 artifact 保留期是额外期限，不能以尚未过期为由推迟这些操作；不得以另一次
+运行或较新的 checkout 补称原次证明。
+
+适用的 metadata 快照须在对应源码和 metadata workflow 均尚未终结时采集
+`expected=pending`：PR Title 已成功，至少一个 metadata 验证者正在等待整个源码
+workflow，相关 source job 和 check 已成功。当前 snapshot verifier 要求 metadata
+为同一打开 PR 的正文单独编辑（`change_keys` 为 `['body']`），并指向该源码 run；
+先按实际事件、run、attempt 和候选确认适用，不人为改造结果。pending request 的
+`predecessor` 为 `null`；等待运行自然结束后，按实际结果以 `expected=success` 或
+`failure` 新建 terminal snapshot，`predecessor` 填写已完成 pending case 的工作区
+相对路径及其 `context_sha256`。terminal 验证还要求源码与 metadata 两个 workflow
+均为所声明的同一终态，并检查对应 job、check 和步骤；不满足该合同的实际结果只记录
+可得证据和缺口。两次须绑定相同源码、PR、metadata 身份和相同 source／metadata job
+与 check ID，且都在原 PR 打开、候选未漂移时完成。若错过 pending 窗口或身份已
+变化，保留实际可得的部分证据并明确记录缺口，不能事后补造 pending 或以其他运行
+代替；失败终态也不能记为成功。
+
+私有 case 连同原始 request、各阶段 receipt、认证 ZIP、实际 Go verifier 和命令输出
+一并保留。完成后执行离线 `verify`，确认 `state=complete`、`verification=passed`；
+需要当前采用或 PR 保护结论时另核 `live_eligibility` 和有效 required checks，分别
+记录观察时间与结果。部分或未完成的 case 如实报告，不能称为完整四阶段证明。
+
+在已有权限移除证据工作区前，保留原 checkout 和规范 Git common-directory 身份，
+以及离线重放所需的工作区内容、工具与依赖（包括必要的未跟踪或忽略文件）；
+对私有归档计算校验和，读回并核对归档及内容，再以保留的实际 verifier 验证可重放性。
+linked worktree 的 Git 管理数据和 common-directory 路径也是身份的一部分，单独复制
+case 或换到另一个 checkout 不保证可重放；若无法保留或恢复原身份，记录该限制，
+不要把归档读回说成离线重放通过。原始响应等敏感材料继续留在私有位置。
+
 `source` 只完成完整成功源码 CI 的证明；`snapshot` 完成 request 声明的单次
 pending、success 或 failure 观察。新 case 必须不存在；`--resume` 必须指定
 已有且 request、仓库与工作区身份完全一致的 case，不自动跟随新 attempt。
@@ -375,6 +410,14 @@ AST候选校验、默认及覆盖timeout、14个required环境开关和逐测试
 混合依赖环及HTTP静态场景，以及SSH替换/轮换的真实节点库存、锁后材料重分类、撤销、
 proof到期、并发导入与结果未知清理。每个必需PG子路径均须实际run/pass，不能以SQLite、
 父测试通过或空选择器掩盖缺失分支；新增PG声明与场景必须同步库存并通过独立census。
+
+修改 required PG 库存或 CI 取证验证策略时，独立审查前先运行
+`bash scripts/run-required-postgres-tests.sh --list-only`，再将库存中的组、顶层测试根
+和 required 路径与 `scripts/ci_evidence/source.py` 的 `verify_postgres`、
+`scripts/ci_evidence/cli.py` 的 `policy` 及 `scripts/ci-evidence.test.py` 的 fixture
+逐项对账并同步；保留现有 attempt／receipt 身份和 PG 通过标准。`--list-only` 只校验
+库存与 census，不能单独证明取证策略一致。按[取证回归](../spec/guides/testing.md#取证恢复与故障边界)
+构建真实 Go verifier 并运行既有证据回归，记录结果后再送审。
 
 升级策略只读预演的 `TestEscalationPreviewPostgres` 仍在库存中，使用随机隔离schema
 验证真实路由权限、`REPEATABLE READ READ ONLY`、并发快照、零写入及取消清理。
