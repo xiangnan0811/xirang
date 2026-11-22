@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.74.1](https://github.com/xiangnan0811/xirang/compare/v0.74.0...v0.74.1) (2026-11-22)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复 SSH Rsync 捕获权限和传输耗时 ([#740](https://github.com/xiangnan0811/xirang/issues/740)) ([ff651d0](https://github.com/xiangnan0811/xirang/commit/ff651d05fbed4a5320c704e0039d611301feeb5f))
+
 ### 修复
 
 - 旧版 Rsync 备份通过 SSH 接收捕获副本时启用压缩。Core 接收副本时为普通文件补齐所有者读权限，为目录补齐所有者读取及遍历权限，防止成功接收后因暂存权限无法校验。源节点权限不变，恢复可能带回备份副本新增的所有者权限位。确实无法生成校验证据时，日志在重新读取源之前显示脱敏原因，最终仍记录校验异常，禁止自动恢复该次结果。
