@@ -12,11 +12,19 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	taskexec "xirang/backend/internal/task/executor"
 )
 
 type captureDiagnosticExecutor struct {
 	successExecutor
 	binary string
+}
+
+const captureFallbackExecutionLog = "capture diagnostic fixture: provider executing"
+
+func (e *captureDiagnosticExecutor) Run(ctx context.Context, task model.Task, logf taskexec.LogFunc, progressf taskexec.ProgressFunc) (int, error) {
+	logf("info", captureFallbackExecutionLog)
+	return e.successExecutor.Run(ctx, task, logf, progressf)
 }
 
 // Model a deadline or cancellation after the external command has signaled
@@ -124,6 +132,9 @@ exec sleep 60
 			}
 			messages := []string{SanitizeRuntimeEvidenceForRead(run.LastError)}
 			for _, log := range logs {
+				if strings.Contains(log.Message, "重新读取源") {
+					t.Fatalf("interrupted capture reported a fallback: %s", log.Message)
+				}
 				messages = append(messages, SanitizeRuntimeEvidenceForRead(log.Message))
 			}
 			for _, message := range messages {
@@ -241,16 +252,30 @@ exit 11
 	if run.Status != model.TaskRunStatusWarning || run.BackupGenerationState != model.TaskRunGenerationStateDirty || executor.Calls() != 1 {
 		t.Fatalf("unexpected capture outcome: status=%s generation=%s calls=%d", run.Status, run.BackupGenerationState, executor.Calls())
 	}
+	if run.BackupCaptureLayout != "" || run.BackupCaptureRoot != "" || run.BackupCaptureManifest != "" {
+		t.Fatalf("failed capture produced restore evidence: %+v", run)
+	}
 	messages := []string{run.LastError, taskEntity.LastError, SanitizeRuntimeEvidenceForRead(run.LastError)}
 	var logs []model.TaskLog
-	if err := db.Where("task_run_id = ? AND level = ?", runID, "warn").Find(&logs).Error; err != nil {
+	if err := db.Where("task_run_id = ?", runID).Order("id ASC").Find(&logs).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(logs) == 0 {
-		t.Fatal("missing warning log")
+	preFallback, provider, terminal := -1, -1, -1
+	for i, log := range logs {
+		if log.Level == "warn" && strings.Contains(log.Message, "重新读取源") {
+			preFallback = i
+			messages = append(messages, log.Message, SanitizeRuntimeEvidenceForRead(log.Message))
+		}
+		if log.Level == "info" && log.Message == captureFallbackExecutionLog {
+			provider = i
+		}
+		if log.Level == "warn" && strings.Contains(log.Message, "warning") {
+			terminal = i
+			messages = append(messages, log.Message, SanitizeRuntimeEvidenceForRead(log.Message))
+		}
 	}
-	for _, log := range logs {
-		messages = append(messages, SanitizeRuntimeEvidenceForRead(log.Message))
+	if preFallback < 0 || provider <= preFallback || terminal <= provider {
+		t.Fatalf("expected capture warning before provider and terminal warning after it: pre=%d provider=%d terminal=%d logs=%+v", preFallback, provider, terminal, logs)
 	}
 	for _, message := range messages {
 		for _, want := range []string{"rsync capture evidence copy failed", "exit status 11", "No space left on device (28)"} {

@@ -112,7 +112,12 @@ func PrepareRsyncBackupCapture(ctx context.Context, task model.Task, logf LogFun
 	}
 	// A doubled --itemize-changes lists every selected entry, including ones
 	// satisfied from the basis, so stdout stays the complete selection record.
-	args := []string{"-a", "--8-bit-output", "--itemize-changes", "--itemize-changes", "--out-format=%i %n"}
+	// Core must be able to read the captured bytes both here and after the
+	// local copy to the backup target. Only add the required owner bits.
+	args := []string{"-a", "--chmod=" + rsyncconfinement.ReadableOwnerChmod, "--8-bit-output", "--itemize-changes", "--itemize-changes", "--out-format=%i %n"}
+	if strings.TrimSpace(task.Node.Host) != "" {
+		args = append(args, "-z")
+	}
 	if basis != "" {
 		// Keeps a basis file with matching size/mtime but different bytes
 		// from entering the evidence. Delta-built files are verified by rsync
@@ -240,7 +245,7 @@ func snapshotRsyncBackupCaptureBasis(ctx context.Context, task model.Task, direc
 		logf("info", "正在从上次备份准备本地增量基准")
 	}
 	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
-	args := []string{"-a", "--", target + string(filepath.Separator), snapshot + string(filepath.Separator)}
+	args := []string{"-a", "--chmod=" + rsyncconfinement.ReadableOwnerChmod, "--", target + string(filepath.Separator), snapshot + string(filepath.Separator)}
 	if err := runRsyncCaptureCommand(ctx, task, args, target, snapshot, false, true, nil, "", io.Discard, stderr); err != nil {
 		_ = os.RemoveAll(snapshot)
 		failure := newRsyncCaptureFailure("rsync capture basis snapshot failed", err, stderr)
@@ -400,6 +405,12 @@ func populateBackupCaptureTree(ctx context.Context, tree, source, layout, root s
 		case "file":
 			file, err := bounded.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 			if err != nil {
+				if errors.Is(err, fs.ErrPermission) {
+					return &rsyncCaptureFailure{
+						cause:   err,
+						message: "rsync capture source hashing failed: permission denied opening a file in Core staging",
+					}
+				}
 				return newRsyncCaptureFailure("rsync capture source hashing failed", err)
 			}
 			hasher := sha256.New()

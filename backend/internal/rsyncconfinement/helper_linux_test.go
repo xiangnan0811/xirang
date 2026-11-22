@@ -62,6 +62,13 @@ func TestConfinedBasisArgsFollowOptionGrammar(t *testing.T) {
 	}{
 		{"matching basis", []string{"-a", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, true},
 		{"separate value", []string{"-a", "--copy-dest", basis, "--", "/s/", "/t/"}, basis, true},
+		{"readable chmod attached", []string{"-a", "--chmod=" + ReadableOwnerChmod, "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, true},
+		{"readable chmod separate", []string{"-a", "--chmod", ReadableOwnerChmod, "--copy-dest", basis, "--", "/s/", "/t/"}, basis, true},
+		{"arbitrary chmod attached", []string{"-a", "--chmod=ugo+rwx", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, false},
+		{"arbitrary chmod separate", []string{"-a", "--chmod", "ugo+rwx", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, false},
+		{"chmod consumes separator", []string{"-a", "--chmod", "--", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, false},
+		{"chmod consumes copy-dest", []string{"-a", "--chmod", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, false},
+		{"exclude value looks like chmod", []string{"-a", "--exclude", "--chmod=ugo+rwx", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, true},
 		{"exclude value looks like copy-dest", []string{"-a", "--exclude", "--copy-dest=/etc", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, true},
 		{"exclude value is separator", []string{"-a", "--exclude", "--", "--copy-dest=" + basis, "--", "/s/", "/t/"}, basis, true},
 		{"no basis and exclude value", []string{"-a", "--exclude", "--copy-dest=/etc", "--", "/s/", "/t/"}, "", true},

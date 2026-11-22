@@ -16,6 +16,9 @@ const (
 	// launcher and the deployed one-shot remote helper.
 	HelperProtocolVersion = 2
 
+	// ReadableOwnerChmod adds the owner permissions required to capture a backup.
+	ReadableOwnerChmod = "Du+rx,Fu+r"
+
 	HelperPathEnv       = "RSYNC_CONFINEMENT_HELPER"
 	RemoteHelperPathEnv = "RSYNC_CONFINEMENT_REMOTE_HELPER"
 	DefaultHelperPath   = "xirang-rsync-confined"
@@ -187,6 +190,9 @@ func scanConfinedRsyncArgs(args []string) ([]string, error) {
 				index++
 				value = args[index]
 			}
+			if option == "--chmod" && value != ReadableOwnerChmod {
+				return nil, fmt.Errorf("%w: Rsync option --chmod has a disallowed value", ErrInvalidRequest)
+			}
 			if option == "--copy-dest" {
 				copyDests = append(copyDests, value)
 			}
@@ -225,6 +231,7 @@ func scanConfinedRsyncArgs(args []string) ([]string, error) {
 var confinedLongOptions = map[string]bool{
 	"--archive":      false,
 	"--checksum":     false,
+	"--chmod":        true,
 	"--delete":       false,
 	"--exclude":      true,
 	"--hard-links":   false,
