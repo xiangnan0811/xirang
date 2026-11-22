@@ -137,7 +137,7 @@ func (service *Service) CreateRsyncVersioningPreflight(ctx context.Context, requ
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	plan, err := service.loadRsyncVersioningPreflightPlan(ctx, request)
+	plan, err := service.loadRsyncVersioningPreflightPlan(ctx, request, true)
 	if err != nil {
 		return backupasset.RsyncVersioningPreflightResult{}, err
 	}
@@ -146,22 +146,22 @@ func (service *Service) CreateRsyncVersioningPreflight(ctx context.Context, requ
 		return backupasset.RsyncVersioningPreflightResult{}, err
 	}
 	if err := provider.ValidateRsyncManagedRootBootstrapSeparation(ctx, plan.managedRoot, plan.link.EncryptedLegacyLocator); err != nil {
-		return backupasset.RsyncVersioningPreflightResult{}, fmt.Errorf("%w: managed Rsync legacy target overlap", backupasset.ErrConflict)
+		return backupasset.RsyncVersioningPreflightResult{}, rsyncVersioningFilesystemPreflightError(err)
 	}
 	if err := provider.ValidateRsyncManagedRootBootstrapSeparation(ctx, plan.managedRoot, plan.task.RsyncSource); err != nil {
-		return backupasset.RsyncVersioningPreflightResult{}, fmt.Errorf("%w: managed Rsync source overlap", backupasset.ErrConflict)
+		return backupasset.RsyncVersioningPreflightResult{}, rsyncVersioningFilesystemPreflightError(err)
 	}
 	bootstrap, err := provider.BootstrapRsyncManagedRoot(ctx, provider.RsyncManagedRootBootstrapRequest{
 		ManagedRoot: plan.managedRoot, RepositoryID: plan.repository.ID, MarkerKey: markerKey, CreatedAt: service.utcNow(),
 	})
 	if err != nil {
-		return backupasset.RsyncVersioningPreflightResult{}, fmt.Errorf("%w: managed Rsync root preflight rejected", backupasset.ErrConflict)
+		return backupasset.RsyncVersioningPreflightResult{}, rsyncVersioningFilesystemPreflightError(err)
 	}
 	if err := provider.ValidateRsyncManagedRootSeparation(ctx, plan.managedRoot, plan.link.EncryptedLegacyLocator); err != nil {
-		return backupasset.RsyncVersioningPreflightResult{}, fmt.Errorf("%w: managed Rsync legacy target overlap", backupasset.ErrConflict)
+		return backupasset.RsyncVersioningPreflightResult{}, rsyncVersioningFilesystemPreflightError(err)
 	}
 	if err := provider.ValidateRsyncManagedRootSeparation(ctx, plan.managedRoot, plan.task.RsyncSource); err != nil {
-		return backupasset.RsyncVersioningPreflightResult{}, fmt.Errorf("%w: managed Rsync source overlap", backupasset.ErrConflict)
+		return backupasset.RsyncVersioningPreflightResult{}, rsyncVersioningFilesystemPreflightError(err)
 	}
 	preflighter, err := provider.NewRsyncTreePreflighter(service.now, defaultRsyncVersioningPreflightTTL)
 	if err != nil {
@@ -173,10 +173,17 @@ func (service *Service) CreateRsyncVersioningPreflight(ctx context.Context, requ
 		CapabilityRevision: uint64(plan.repository.CapabilityRevision),
 	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return backupasset.RsyncVersioningPreflightResult{}, err
+		}
+		var reason *backupasset.RsyncVersioningPreflightError
+		if errors.As(err, &reason) && (reason.Code == backupasset.RsyncPreflightHardlinkUnavailable || reason.Code == backupasset.RsyncPreflightFilesystemFailed) {
+			return backupasset.RsyncVersioningPreflightResult{}, &backupasset.RsyncVersioningPreflightError{Code: reason.Code, Err: backupasset.ErrConflict}
+		}
 		return backupasset.RsyncVersioningPreflightResult{}, fmt.Errorf("%w: managed Rsync preflight rejected", backupasset.ErrConflict)
 	}
 	if evidence.ManagedRootIdentityDigest != bootstrap.ManagedRootIdentityDigest {
-		return backupasset.RsyncVersioningPreflightResult{}, fmt.Errorf("%w: managed Rsync preflight root drift", backupasset.ErrConflict)
+		return backupasset.RsyncVersioningPreflightResult{}, &backupasset.RsyncVersioningPreflightError{Code: backupasset.RsyncPreflightFilesystemFailed, Err: backupasset.ErrConflict}
 	}
 	if err := service.preflights.put(rsyncVersioningPreflightRecord{
 		evidence: evidence, repositoryID: plan.repository.ID, linkID: plan.link.ID, managedRoot: plan.managedRoot, binding: plan.binding,
@@ -189,6 +196,13 @@ func (service *Service) CreateRsyncVersioningPreflight(ctx context.Context, requ
 		ExpiresAt: evidence.ExpiresAt.UTC(), CapacityEstimate: rsyncVersioningCapacityBucket(evidence.FreeBytes),
 		InodeEstimate: rsyncVersioningInodeBucket(evidence.FreeInodes),
 	}, nil
+}
+
+func rsyncVersioningFilesystemPreflightError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return &backupasset.RsyncVersioningPreflightError{Code: backupasset.RsyncPreflightFilesystemFailed, Err: backupasset.ErrConflict}
 }
 
 // CreateRsyncVersioningPreflightForRequest carries the authenticated request
@@ -585,7 +599,7 @@ func (service *Service) activateRsyncVersioningWithPreflight(ctx context.Context
 	}
 	plan, err := service.loadRsyncVersioningPreflightPlan(ctx, backupasset.RsyncVersioningPreflightRequest{
 		TaskID: request.TaskID, ExpectedTaskRevision: request.ExpectedTaskRevision, RequestedMode: record.evidence.Mode,
-	})
+	}, false)
 	if err != nil {
 		return rsyncVersioningActivationState{}, err
 	}
@@ -800,7 +814,7 @@ func sameRsyncVersioningBinding(left, right bindingDocument) bool {
 		slices.Equal(left.EndpointFacts, right.EndpointFacts)
 }
 
-func (service *Service) loadRsyncVersioningPreflightPlan(ctx context.Context, request backupasset.RsyncVersioningPreflightRequest) (rsyncVersioningPreflightPlan, error) {
+func (service *Service) loadRsyncVersioningPreflightPlan(ctx context.Context, request backupasset.RsyncVersioningPreflightRequest, classifyPreflight bool) (rsyncVersioningPreflightPlan, error) {
 	var plan rsyncVersioningPreflightPlan
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var taskEntity model.Task
@@ -810,7 +824,13 @@ func (service *Service) loadRsyncVersioningPreflightPlan(ctx context.Context, re
 			}
 			return fmt.Errorf("load Rsync versioning Task: %w", err)
 		}
-		if bindingProviderForTask(taskEntity) != backupasset.ProviderRsync || strings.TrimSpace(taskEntity.Node.Host) != "" {
+		if bindingProviderForTask(taskEntity) != backupasset.ProviderRsync {
+			return fmt.Errorf("%w: Rsync versioning preflight is unavailable", backupasset.ErrCapabilityUnavailable)
+		}
+		if strings.TrimSpace(taskEntity.Node.Host) != "" {
+			if classifyPreflight {
+				return &backupasset.RsyncVersioningPreflightError{Code: backupasset.RsyncPreflightLocalSourceRequired, Err: backupasset.ErrCapabilityUnavailable}
+			}
 			return fmt.Errorf("%w: Rsync versioning preflight is unavailable", backupasset.ErrCapabilityUnavailable)
 		}
 		revision, err := managedRsyncTaskRevision(taskEntity)
@@ -820,10 +840,19 @@ func (service *Service) loadRsyncVersioningPreflightPlan(ctx context.Context, re
 		if revision != request.ExpectedTaskRevision {
 			return fmt.Errorf("%w: Rsync versioning Task revision changed", backupasset.ErrConflict)
 		}
+		if classifyPreflight && util.IsRemotePathSpec(taskEntity.RsyncSource) {
+			return &backupasset.RsyncVersioningPreflightError{Code: backupasset.RsyncPreflightLocalSourceRequired, Err: backupasset.ErrCapabilityUnavailable}
+		}
+		if classifyPreflight && util.IsRemotePathSpec(taskEntity.RsyncTarget) {
+			return &backupasset.RsyncVersioningPreflightError{Code: backupasset.RsyncPreflightLocalTargetRequired, Err: backupasset.ErrCapabilityUnavailable}
+		}
 
 		var link model.TaskRepositoryLink
 		if err := tx.Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).First(&link).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if classifyPreflight {
+					return &backupasset.RsyncVersioningPreflightError{Code: backupasset.RsyncPreflightRepositoryConnectionRequired, Err: backupasset.ErrNotFound}
+				}
 				return fmt.Errorf("%w: Rsync versioning legacy link", backupasset.ErrNotFound)
 			}
 			return fmt.Errorf("load Rsync versioning legacy link: %w", err)

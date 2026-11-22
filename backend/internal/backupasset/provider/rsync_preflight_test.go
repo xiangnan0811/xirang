@@ -299,11 +299,15 @@ func TestRsyncTreePreflightRejectsHardlinkEPERM(t *testing.T) {
 	if !errors.Is(err, errRsyncManagedTreeUnsafe) {
 		t.Fatalf("hardlink EPERM error=%v, want managed-tree safety error", err)
 	}
+	var reason *backupasset.RsyncVersioningPreflightError
+	if !errors.As(err, &reason) || string(reason.Code) != "hardlink_unavailable" {
+		t.Fatalf("hardlink reason=%+v, err=%v", reason, err)
+	}
 }
 
 func TestRsyncTreePreflightRejectsRenameEXDEV(t *testing.T) {
 	tree := newRsyncManagedTreeForTest(t, t.TempDir())
-	request, _ := rsyncTreePreflightRequestForTest(t, tree, backupasset.PublicationVersionedFullCopy)
+	request, _ := rsyncTreePreflightRequestForTest(t, tree, backupasset.PublicationVersionedHardlink)
 	request.LocalSourceRoot = t.TempDir()
 	tree.renameat2 = func(int, string, int, string, uint) error { return unix.EXDEV }
 	preflighter, err := NewRsyncTreePreflighter(func() time.Time { return time.Now().UTC() }, time.Minute)
@@ -313,6 +317,10 @@ func TestRsyncTreePreflightRejectsRenameEXDEV(t *testing.T) {
 	_, err = preflighter.Preflight(context.Background(), tree, request)
 	if !errors.Is(err, errRsyncManagedTreeUnsafe) {
 		t.Fatalf("rename EXDEV error=%v, want managed-tree safety error", err)
+	}
+	var reason *backupasset.RsyncVersioningPreflightError
+	if errors.As(err, &reason) && string(reason.Code) == "hardlink_unavailable" {
+		t.Fatalf("rename failure misclassified as hardlink failure: %v", err)
 	}
 }
 

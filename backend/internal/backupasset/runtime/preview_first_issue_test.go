@@ -59,7 +59,7 @@ func TestRuntimeRsyncCompletionRefreshesCatalogBeforeFirstColdPreview(t *testing
 		&model.BackupAssetDeliveryUsage{}, &model.RecoveryPointLease{},
 		&model.User{}, &model.Node{}, &model.Task{},
 		&model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{},
-		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{},
+		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.RecoveryPointManifest{},
 		&model.CatalogGeneration{}, &model.CatalogEntry{}, &model.WrappedDomainKey{},
 		&model.CatalogCandidateSweep{},
 		&model.BackupAssetSearchGeneration{}, &model.BackupAssetSearchDocument{},
@@ -162,7 +162,7 @@ func TestRuntimeRsyncCompletionRefreshesCatalogBeforeFirstColdPreview(t *testing
 	}
 	tasks := []model.Task{
 		{Name: "preview-first-task-a", NodeID: node.ID, ExecutorType: string(backupasset.ProviderRsync),
-			RsyncSource: sourceA, RsyncTarget: targetA, Status: "pending", Enabled: true},
+			RsyncSource: sourceA, RsyncTarget: targetA, Status: "success", Enabled: true},
 		{Name: "preview-first-task-b", NodeID: node.ID, ExecutorType: string(backupasset.ProviderRsync),
 			RsyncSource: sourceB, RsyncTarget: targetB, Status: "pending", Enabled: true},
 	}
@@ -170,6 +170,19 @@ func TestRuntimeRsyncCompletionRefreshesCatalogBeforeFirstColdPreview(t *testing
 		if err := db.Create(&tasks[index]).Error; err != nil {
 			t.Fatalf("create task %d: %v", index, err)
 		}
+	}
+
+	// The target represents an existing legacy backup; the fixture writes the
+	// bytes directly and does not exercise an SSH or Rsync transfer.
+	legacyContent, err := os.ReadFile(filepath.Join(targetA, "docker-compose.yml"))
+	if err != nil || !bytes.Equal(legacyContent, composeAInitial) {
+		t.Fatalf("read existing legacy backup content=%q err=%v", legacyContent, err)
+	}
+	scope := catalog.AuthorizationScope{Role: "admin", UserID: 1}
+	fileSourceRequest := catalog.FileSourcePageRequest{Limit: 10}
+	nodesBeforeConnect, err := runtime.CatalogService().ListFileSourceNodes(ctx, scope, fileSourceRequest)
+	if err != nil || len(nodesBeforeConnect.Items) != 0 || nodesBeforeConnect.NextCursor != "" {
+		t.Fatalf("file sources before explicit task connection=%+v err=%v", nodesBeforeConnect, err)
 	}
 
 	connected := make([]backuprepository.ConnectResult, len(tasks))
@@ -302,6 +315,18 @@ func TestRuntimeRsyncCompletionRefreshesCatalogBeforeFirstColdPreview(t *testing
 	}
 	if staleBuilder.IsActive || staleBuilder.State != string(catalog.GenerationSuperseded) {
 		t.Fatalf("stale task A Catalog builder activated after source completion: %+v", staleBuilder)
+	}
+
+	nodesAfterRefresh, err := runtime.CatalogService().ListFileSourceNodes(ctx, scope, fileSourceRequest)
+	if err != nil || len(nodesAfterRefresh.Items) != 1 || nodesAfterRefresh.NextCursor != "" {
+		t.Fatalf("file sources after connection and Catalog refresh=%+v err=%v", nodesAfterRefresh, err)
+	}
+	listedNode := nodesAfterRefresh.Items[0]
+	if listedNode.NodeID != node.ID || listedNode.DisplayName != node.Name ||
+		listedNode.BackupSetCount != 2 || listedNode.RetainedVersionCount != 2 ||
+		listedNode.CatalogCoverage != catalog.CoverageComplete || listedNode.BrowseState != catalog.FileSourceBrowseStateBrowsable ||
+		listedNode.UnavailableReason != nil {
+		t.Fatalf("connected file source node=%+v", listedNode)
 	}
 
 	entryA := loadPreviewFirstCurrentEntry(t, runtime.CatalogService(), db, connected[0].MutablePoint.ID)

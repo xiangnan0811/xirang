@@ -16,6 +16,7 @@ import { InlineAlert } from "@/components/ui/inline-alert";
 import { backupAssetsRecoveryPointHref } from "@/features/backup-assets/backup-assets-route-state";
 import { waitForRecoveryPointCatalogReady } from "@/lib/recovery-point-catalog-readiness";
 import { apiClient } from "@/lib/api/client";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import type { TaskRecord } from "@/types/domain";
 
 export interface TaskPreviewConnectDialogProps {
@@ -23,6 +24,7 @@ export interface TaskPreviewConnectDialogProps {
   onOpenChange: (open: boolean) => void;
   task: TaskRecord | null;
   token: string | null;
+  onCloseAutoFocus?: DialogCloseAutoFocus;
 }
 
 type TaskPreviewConnectDialogContentProps = Omit<TaskPreviewConnectDialogProps, "task"> & {
@@ -52,6 +54,7 @@ export function TaskPreviewConnectDialog({
   onOpenChange,
   task,
   token,
+  onCloseAutoFocus,
 }: TaskPreviewConnectDialogProps) {
   if (!task) {
     return null;
@@ -63,6 +66,7 @@ export function TaskPreviewConnectDialog({
       onOpenChange={onOpenChange}
       task={task}
       token={token}
+      onCloseAutoFocus={onCloseAutoFocus}
     />
   );
 }
@@ -72,6 +76,7 @@ function TaskPreviewConnectDialogContent({
   onOpenChange,
   task,
   token,
+  onCloseAutoFocus,
 }: TaskPreviewConnectDialogContentProps) {
   const { t } = useTranslation();
   const [phase, setPhase] = useState<PreviewPhase>("idle");
@@ -161,7 +166,7 @@ function TaskPreviewConnectDialogContent({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="md">
+      <DialogContent size="md" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FolderSearch className="size-5 text-primary" aria-hidden />
@@ -185,7 +190,7 @@ function TaskPreviewConnectDialogContent({
           </div>
         </DialogBody>
 
-        <DialogFooter>
+        <DialogFooter className="flex-wrap">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             {t("common.close")}
           </Button>
@@ -196,7 +201,7 @@ function TaskPreviewConnectDialogContent({
               </a>
             </Button>
           ) : (
-            <Button type="button" onClick={() => void connect()} disabled={busy || !token}>
+            <Button type="button" className="h-auto min-h-9 max-w-full whitespace-normal" onClick={() => void connect()} disabled={busy || !token}>
               {busy ? <Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden /> : <FolderSearch className="mr-1.5 size-4" aria-hidden />}
               {busy ? t("taskPreviewConnect.working") : t("taskPreviewConnect.confirm")}
             </Button>

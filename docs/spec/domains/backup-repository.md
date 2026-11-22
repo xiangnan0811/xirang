@@ -59,9 +59,13 @@ Task executor 到 Provider 的映射只能在 `backupasset/repository/binding.go
 
 legacy mutable 不自动升级；管理员暂停任务后显式选择 `versioned_hardlink` 或 `versioned_full_copy` 并运行预检。预检在创建或重验 `<target>.xirang-rsync-v1` 受管根（`repository.json`、`staging`、`points`）前，必须先只读校验旧目标与来源路径均存在且与候选受管根词法及 VFS 树分离；重叠或已移走的来源直接返回 409 且不得重建原路径或写入控制文件。合法分离后才创建或重验独立受管根，并验证挂载、硬链接、原子提交、容量、inode 和路径安全；硬链接不满足时不得自动降级。激活重验只读打开既有受管根与控制目录，受管根或控制目录缺失、移走或标记漂移均返回 409 且不得重建目录或修改持久状态。
 
+两种模式均要求源和目标在 Core 的本地文件系统。预检失败的可选 `data.reason.code` 按 HTTP 状态闭合。501 为 `local_source_required` 或 `local_target_required`，404 中的 `repository_connection_required` 表示任务存在但尚未关联旧仓库，409 可含 `hardlink_unavailable` 或 `filesystem_preflight_failed`。原因参数为空，不回显底层错误、路径、命令或凭据。仅明确的硬链接检查失败引导用户显式选择完整副本并重新预检。
+
 硬链接模式先传输保持源硬链接分组的完整 staging 树，再按内容、元数据和 inode 分组兼容性复用上一 committed 点，不能用 `--link-dest` 把旧链接关系带入新点。新建/断开硬链接关系必须准确保留；不兼容组用独立文件，前一点不能被修改。容量和流量按完整 staging 计算。
 
 迁移显式选择新完整 baseline 或从下次成功运行开始。baseline 复制旧目标到新受管树，不原地标记、移动或硬链接旧数据；后者不追认历史，首个硬链接点仍为完整种子。激活后保持暂停，传输、目录提交、发布分别取证。受管目录不是 WORM，也不是源端时间点快照。
+
+激活对话框按所选迁移方式提示下一步。完整基线已提交时提示等待索引，从下一次运行开始则提示恢复并运行任务。两种方式均以已发布且已索引的恢复点作为 Files 浏览入口。
 
 完整 commit/manifest/tree 认证成功后，Rsync 发布事务同时将点置为 `committed` 和 `online`；preparing/verifying、缺失或漂移的树不得据此发布 online，不为不可变点伪造 mutable `observed_at`。
 

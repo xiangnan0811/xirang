@@ -121,6 +121,9 @@ export function TasksPage() {
   const createTaskOpenerRef = useRef<HTMLElement | null>(null);
   const editTaskOpenerRef = useRef<HTMLElement | null>(null);
   const historyTaskOpenerRef = useRef<HTMLElement | null>(null);
+  // Shared by the Rsync versioning and preview-connect dialogs: they never overlap, and a versioning
+  // handoff to preview must still return focus to the control that opened versioning.
+  const versioningPreviewOpenerRef = useRef<HTMLElement | null>(null);
   const tokenRef = useRef<string | null>(null);
   const roleRef = useRef<AuthRole | null>(null);
   const mountedRef = useRef(false);
@@ -133,6 +136,9 @@ export function TasksPage() {
   };
   const restoreHistoryTaskOpener: DialogCloseAutoFocus = (event) => {
     restoreConnectedDialogOpener(event, historyTaskOpenerRef.current);
+  };
+  const restoreVersioningPreviewOpener: DialogCloseAutoFocus = (event) => {
+    restoreConnectedDialogOpener(event, versioningPreviewOpenerRef.current);
   };
   const openTaskCreateFromInventory = (open: boolean, opener?: EventTarget | null) => {
     if (open && !isTaskWriteRole(roleRef.current)) return;
@@ -353,17 +359,19 @@ export function TasksPage() {
     setHistoryTask(task);
   };
 
-  const handleConnectTaskPreview = (task: TaskRecord) => {
+  const handleConnectTaskPreview = (task: TaskRecord, opener?: EventTarget | null) => {
     if (roleRef.current !== "admin") return;
     const eligibility = taskPreviewConnectEligibility(task, canConnectTaskPreview);
     if (!eligibility.visible || eligibility.disabled) return;
+    versioningPreviewOpenerRef.current = dialogOpenerFromTarget(opener);
     setPreviewConnectTask(task);
   };
 
-  const handleManageRsyncVersioning = (task: TaskRecord) => {
+  const handleManageRsyncVersioning = (task: TaskRecord, opener?: EventTarget | null) => {
     if (roleRef.current !== "admin" || task.executorType !== "rsync" || !task.rsyncPublication) {
       return;
     }
+    versioningPreviewOpenerRef.current = dialogOpenerFromTarget(opener);
     setRsyncVersioningTask(task);
   };
 
@@ -819,10 +827,12 @@ export function TasksPage() {
         setBatchRetain={setBatchRetain}
         rsyncVersioningTask={rsyncVersioningTask}
         setRsyncVersioningTask={setRsyncVersioningTask}
+        rsyncVersioningOnCloseAutoFocus={restoreVersioningPreviewOpener}
         canManageRsyncVersioning={canManageRsyncVersioning}
         onRsyncVersioningUpdated={refreshTasks}
         previewConnectTask={previewConnectTask}
         setPreviewConnectTask={setPreviewConnectTask}
+        previewConnectOnCloseAutoFocus={restoreVersioningPreviewOpener}
         canConnectTaskPreview={canConnectTaskPreview}
         rcloneVersioningTask={rcloneVersioningTask}
         setRcloneVersioningTask={setRcloneVersioningTask}

@@ -45,6 +45,29 @@ const (
 	RsyncVersioningReasonRollbackPrepared    RsyncVersioningReasonCode = "rollback_prepared"
 )
 
+// RsyncVersioningPreflightReasonCode is a closed set of safe preflight failures.
+// It is separate from persisted versioning summary and generic capability codes.
+type RsyncVersioningPreflightReasonCode string
+
+const (
+	RsyncPreflightLocalSourceRequired          RsyncVersioningPreflightReasonCode = "local_source_required"
+	RsyncPreflightLocalTargetRequired          RsyncVersioningPreflightReasonCode = "local_target_required"
+	RsyncPreflightRepositoryConnectionRequired RsyncVersioningPreflightReasonCode = "repository_connection_required"
+	RsyncPreflightHardlinkUnavailable          RsyncVersioningPreflightReasonCode = "hardlink_unavailable"
+	RsyncPreflightFilesystemFailed             RsyncVersioningPreflightReasonCode = "filesystem_preflight_failed"
+)
+
+// RsyncVersioningPreflightError retains its cause for internal classification
+// while keeping paths and provider diagnostics out of its message.
+type RsyncVersioningPreflightError struct {
+	Code RsyncVersioningPreflightReasonCode
+	Err  error
+}
+
+func (err *RsyncVersioningPreflightError) Error() string { return "Rsync versioning preflight failed" }
+
+func (err *RsyncVersioningPreflightError) Unwrap() error { return err.Err }
+
 type RsyncVersioningEstimateBucket string
 
 const (

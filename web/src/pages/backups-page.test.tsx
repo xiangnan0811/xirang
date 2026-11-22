@@ -17,6 +17,11 @@ import { parseBackupAssetsRoute } from "@/features/backup-assets/backup-assets-r
 
 const filesSavedSearchId = "e".repeat(32);
 const filesSearch = `?view=search&savedSearchId=${filesSavedSearchId}`;
+const onboardingTitle = /No backup files to browse yet|还没有可浏览的备份文件/;
+const browsableSourceNode = {
+  nodeId: 7, displayName: "节点 A", backupSetCount: 1, retainedVersionCount: 1, latestRetainedAt: null,
+  catalogCoverage: "complete", browseState: "browsable", unavailableReason: null,
+};
 
 const backupHealth: BackupHealthData = {
   summary: {
@@ -335,11 +340,12 @@ describe("BackupsPage", () => {
     expect(await screen.findByTestId("backups-location")).toHaveTextContent(
       "/app/backups/data"
     );
-    expect(await screen.findByRole("heading", { name: /Files|文件/ })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^(Files|文件)$/ })).toBeInTheDocument();
   });
 
   it("renders one route tablist with mounted tabpanels and the active data panel", async () => {
     getBackupHealthMock.mockResolvedValue(backupHealth);
+    listBackupFileSourceNodesMock.mockResolvedValue({ status: "available", value: { items: [browsableSourceNode], nextCursor: null } });
 
     renderBackups("/app/backups/data");
 
@@ -353,7 +359,7 @@ describe("BackupsPage", () => {
     expect(screen.getByRole("tab", { name: /Recovery|恢复/ })).toHaveAttribute("aria-selected", "false");
     expect(screen.getAllByRole("tabpanel", { hidden: true })).toHaveLength(3);
     expect(screen.getByRole("tabpanel", { name: /Files|文件/ })).not.toHaveAttribute("hidden");
-    expect(screen.getByRole("heading", { name: /Files|文件/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^(Files|文件)$/ })).toBeInTheDocument();
     expect(await screen.findByRole("region", { name: /File results|文件结果/ })).toBeInTheDocument();
   });
 
@@ -378,6 +384,68 @@ describe("BackupsPage", () => {
     expect(await screen.findByText(/The file source is currently unavailable|文件来源当前不可用/)).toBeInTheDocument();
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: /File results|文件结果/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: onboardingTitle })).not.toBeInTheDocument();
+  });
+
+  it("replaces an empty ordinary Files entry with admin onboarding links", async () => {
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    const user = userEvent.setup();
+    renderBackups("/app/backups/data");
+
+    const heading = await screen.findByRole("heading", { name: onboardingTitle });
+    const onboarding = heading.parentElement as HTMLElement;
+    expect(within(onboarding).getByText(/File preview|「文件预览」/)).toBeInTheDocument();
+    expect(within(onboarding).getByRole("link", { name: /Check backup asset readiness|查看备份资产就绪状态/ }))
+      .toHaveAttribute("href", "/app/backups/overview#backup-assets-ga");
+    expect(within(onboarding).queryByRole("link", { name: /Return to overview|返回概览/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^(Node|节点)$/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /^(File source|文件来源)$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /File results|文件结果/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/No authorized nodes have retained backup versions|没有可访问且保留了备份版本的节点/)).not.toBeInTheDocument();
+
+    const tasks = within(onboarding).getByRole("link", { name: /Go to Tasks|前往任务/ });
+    expect(tasks).toHaveAttribute("href", "/app/tasks");
+    await user.click(tasks);
+    expect(screen.getByTestId("backups-location")).toHaveTextContent("/app/tasks");
+    expectNoRecoveryWrites();
+  });
+
+  it("offers operators only the overview from empty Files onboarding", async () => {
+    authRef.current = { ...authRef.current, token: "operator-token", role: "operator" };
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    renderBackups("/app/backups/data");
+
+    const heading = await screen.findByRole("heading", { name: onboardingTitle });
+    const onboarding = heading.parentElement as HTMLElement;
+    expect(within(onboarding).getByText(/administrator|管理员/)).toBeInTheDocument();
+    expect(within(onboarding).getByRole("link", { name: /Return to overview|返回概览/ }))
+      .toHaveAttribute("href", "/app/backups/overview");
+    expect(within(onboarding).getAllByRole("link")).toHaveLength(1);
+    expect(screen.queryByRole("link", { name: /Go to Tasks|前往任务/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Check backup asset readiness|查看备份资产就绪状态/ })).not.toBeInTheDocument();
+  });
+
+  it("waits for a conclusive source list before offering onboarding", async () => {
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    listBackupFileSourceNodesMock.mockReturnValue(new Promise(() => {}));
+    renderBackups("/app/backups/data");
+
+    expect(await screen.findByText(/Loading authorized file sources|正在加载可访问的文件来源/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: onboardingTitle })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["task deep link", "/app/backups/data?taskId=7"],
+    ["repository lifecycle", "/app/backups/data?view=repositories"],
+    ["search", "/app/backups/data?view=search"],
+    ["favorite filter", "/app/backups/data?favorite=true"],
+  ])("keeps the existing source controls for an empty %s", async (_label, route) => {
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    renderBackups(route);
+
+    expect(await screen.findByText(/No authorized nodes have retained backup versions|没有可访问且保留了备份版本的节点/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^(Node|节点)$/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: onboardingTitle })).not.toBeInTheDocument();
   });
 
   it("compares two offline recovery points from the version area while the Files workspace is absent", async () => {
@@ -658,6 +726,7 @@ describe("BackupsPage", () => {
 
   it("hydrates an omitted data layout from the bounded browser preference", async () => {
     getBackupHealthMock.mockResolvedValue(backupHealth);
+    listBackupFileSourceNodesMock.mockResolvedValue({ status: "available", value: { items: [browsableSourceNode], nextCursor: null } });
     window.localStorage.setItem(
       BACKUP_ASSETS_PREFERENCES_KEY,
       JSON.stringify({ version: 1, layout: "grid", contextWidth: 320, inspectorWidth: 480 })
@@ -1209,7 +1278,7 @@ describe("BackupsPage", () => {
     getStorageUsageMock.mockResolvedValue(storageUsage);
     render(<BackupAccessHarness />);
 
-    expect(await screen.findByRole("heading", { name: /Files|文件/ })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^(Files|文件)$/ })).toBeInTheDocument();
     await waitFor(() => expect(listBackupFileSourceNodesMock).toHaveBeenCalled());
     await waitFor(() => expect(listBackupRepositoriesMock).toHaveBeenCalled());
     expect(screen.getByTestId("backups-location").textContent?.startsWith("/app/backups/data")).toBe(true);
@@ -1298,6 +1367,7 @@ function renderBackups(
           <Route path="data" element={<BackupsDataPage />} />
           <Route path="recovery" element={<BackupsRecoveryPage />} />
         </Route>
+        <Route path="/app/tasks" element={null} />
       </Routes>
       <LocationProbe />
     </MemoryRouter>

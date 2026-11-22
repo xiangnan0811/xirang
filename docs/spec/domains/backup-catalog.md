@@ -59,6 +59,7 @@ Catalog 是可浏览事实的数据库投影，Provider 观察由有界后台协
 - cursor 绑定 user/role/direction/sort/repository/point/generation/requested parent 和完整 canonical directory digest。tamper 400，合法 token scope/context 漂移 409；持久 ancestry/DTO 违约为通用 500，禁止原始 path/locator/cursor。Swagger 必填 directory 与 breadcrumb 的 `recovery_point_id/entry_id/name`。
 - 前端原子验证页面：缺成员、空/坏 ref、跨点、环、>256、parent/name/crumb 矛盾、跨目录 item 均拒整页。cursor append 仅完整 context 完全相等；否则清 rows/selection/context 并 failed。额外 raw path/locator/proof/ticket 字段丢弃。
 - `/app/backups` 到 `/app/backups/data`；overview/recovery 为显式同级，repositories 是 data 内视图。page 负责组合，共用 browser/source-selector/preview/split-pane 在 `features/backup-assets`。
+- 普通 Files 浏览在确认无可访问来源时显示接入指引。管理员可前往任务列表查找带文字标签的文件预览入口，或查看概览就绪状态。操作员看到联系管理员的说明。加载、读取失败、无权限、索引中、分页与已有导航上下文各自保留原状态。
 - recovery 未选择恢复点时提供概览优先的下一步，合法任务上下文的数据链接仅向 admin/operator 展示；viewer/未知角色及身份切换期间仅给概览入口。无可信能力信息时不探测数据或恢复接口、不宣称功能可用；已有 point/plan/job 流程不被空态替代。闭合 URL 与恢复授权边界见[任务执行与恢复](task-execution-recovery.md#恢复页空态与导航)。
 - list/grid 使用复合 `assetRefKey`。非 browsable lineage 保持可见但 disabled，精确 version browsable 前清 descendants。目录定位用有标签 nav，root crumb 常驻，祖先原生按钮，只有当前 `aria-current=page`。仅一个本地化 Up，root disabled，root child 依据 nullable opaque parent 回 root，不猜路径。
 - list/grid 指针/Enter/Space 一致，Up/crumb 在空目录仍可用且最小 44×44。导航同步 abort/detach content，再清 selected/bulk descendants 和 patch route；generation 阻 late response/StrictMode。恢复态仅内存 opaque ref/index/scroll；commit 后恢复有效 origin，否则焦点 current/root crumb 或 results，禁止 late request 偷焦点。

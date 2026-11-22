@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import i18n from "@/i18n";
@@ -101,6 +101,16 @@ function legacyRsyncTask(id: number, name: string, overrides: Record<string, unk
   };
 }
 
+function previewConnectName(name: string) {
+  return `文件预览 接入或刷新任务 ${name} 的文件预览`;
+}
+
+function expectVisiblePreviewLabel(action: HTMLElement) {
+  const visibleLabel = within(action).getByText("文件预览", { exact: true });
+  expect(visibleLabel).not.toHaveClass("sr-only");
+  expect(action).toHaveAccessibleName(/^文件预览 /);
+}
+
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>(
     "react-router-dom"
@@ -174,9 +184,31 @@ vi.mock("@/components/task-create-dialog", () => ({
   },
 }));
 
+type MockDialogProps = {
+  open: boolean;
+  task: { id: number } | null;
+  onOpenChange: (open: boolean) => void;
+  onCloseAutoFocus?: (event: Event) => void;
+  onConnectPreview?: () => boolean;
+};
+
+// Closing mirrors Radix: the dialog closes, then its close-autofocus hook may redirect focus.
+function closeMockDialog({ onOpenChange, onCloseAutoFocus }: MockDialogProps) {
+  onOpenChange(false);
+  onCloseAutoFocus?.(new Event("focus", { cancelable: true }));
+}
+
 vi.mock("@/components/task-rsync-versioning-dialog", () => ({
-  TaskRsyncVersioningDialog: ({ open, task }: { open: boolean; task: { id: number } | null }) => (
-    open ? <div data-testid="rsync-versioning-dialog">{task?.id}</div> : null
+  TaskRsyncVersioningDialog: (props: MockDialogProps) => (
+    props.open ? (
+      <div data-testid="rsync-versioning-dialog">
+        {props.task?.id}
+        <button type="button" onClick={() => closeMockDialog(props)}>mock close versioning</button>
+        {props.onConnectPreview ? (
+          <button type="button" onClick={() => props.onConnectPreview?.()}>mock handoff to preview</button>
+        ) : null}
+      </div>
+    ) : null
   ),
 }));
 
@@ -187,8 +219,13 @@ vi.mock("@/components/task-rclone-versioning-dialog", () => ({
 }));
 
 vi.mock("@/components/task-preview-connect-dialog", () => ({
-  TaskPreviewConnectDialog: ({ open, task }: { open: boolean; task: { id: number } | null }) => (
-    open ? <div data-testid="task-preview-connect-dialog">{task?.id}</div> : null
+  TaskPreviewConnectDialog: (props: MockDialogProps) => (
+    props.open ? (
+      <div data-testid="task-preview-connect-dialog">
+        {props.task?.id}
+        <button type="button" onClick={() => closeMockDialog(props)}>mock close preview</button>
+      </div>
+    ) : null
   ),
 }));
 
@@ -426,19 +463,21 @@ describe("TasksPage", () => {
 
     render(<MemoryRouter><TasksPage /></MemoryRouter>);
 
-    const pausedAction = screen.getByRole("button", { name: "接入或刷新任务 暂停的旧 Rsync 的文件预览" });
+    const pausedAction = screen.getByRole("button", { name: previewConnectName("暂停的旧 Rsync") });
+    expectVisiblePreviewLabel(pausedAction);
     expect(pausedAction).toBeEnabled();
     await user.click(pausedAction);
     expect(screen.getByTestId("task-preview-connect-dialog")).toHaveTextContent("711");
 
-    const activeAction = screen.getByRole("button", { name: "接入或刷新任务 运行中的旧 Rsync 的文件预览" });
+    const activeAction = screen.getByRole("button", { name: previewConnectName("运行中的旧 Rsync") });
+    expectVisiblePreviewLabel(activeAction);
     expect(activeAction).toHaveAttribute("aria-disabled", "true");
     const tooltipId = activeAction.getAttribute("aria-describedby");
     expect(tooltipId).toBeTruthy();
     expect(document.getElementById(tooltipId!)).toHaveAttribute("role", "tooltip");
-    expect(document.getElementById(tooltipId!)).toHaveTextContent("任务正在执行，请等待当前运行结束后再接入文件预览。");
-    expect(screen.queryByRole("button", { name: "接入或刷新任务 受管 Rsync 的文件预览" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "接入或刷新任务 Rclone 任务 的文件预览" })).not.toBeInTheDocument();
+    expect(activeAction).toHaveAccessibleDescription(/当前任务运行结束.*接入文件预览/);
+    expect(screen.queryByRole("button", { name: previewConnectName("受管 Rsync") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: previewConnectName("Rclone 任务") })).not.toBeInTheDocument();
   });
 
   it("exposes the same preview-connect action in list view", async () => {
@@ -456,17 +495,48 @@ describe("TasksPage", () => {
     const table = screen.getByRole("table");
     expect(table).toBeInTheDocument();
     expect(table.parentElement).toHaveClass("overflow-x-auto");
-    const retryingAction = screen.getByRole("button", { name: "接入或刷新任务 列表重试 Rsync 的文件预览" });
+    const retryingAction = screen.getByRole("button", { name: previewConnectName("列表重试 Rsync") });
+    expectVisiblePreviewLabel(retryingAction);
     expect(retryingAction).toHaveAttribute("aria-disabled", "true");
     const tooltipId = retryingAction.getAttribute("aria-describedby");
     expect(tooltipId).toBeTruthy();
     const tooltip = document.getElementById(tooltipId!);
     expect(tooltip).toHaveAttribute("role", "tooltip");
-    expect(tooltip).toHaveTextContent("任务正在执行，请等待当前运行结束后再接入文件预览。");
-    expect(tooltip).toHaveClass("right-full", "bottom-0", "mr-2", "group-hover:opacity-100", "group-focus-visible:opacity-100");
-    expect(tooltip).not.toHaveClass("top-0", "bottom-full", "mb-2");
-    await user.click(screen.getByRole("button", { name: "接入或刷新任务 列表旧 Rsync 的文件预览" }));
+    expect(retryingAction).toHaveAccessibleDescription(/当前任务运行结束.*接入文件预览/);
+    const listAction = screen.getByRole("button", { name: previewConnectName("列表旧 Rsync") });
+    expectVisiblePreviewLabel(listAction);
+    await user.click(listAction);
     expect(screen.getByTestId("task-preview-connect-dialog")).toHaveTextContent("721");
+  });
+
+  it.each([
+    ["card", "cards"],
+    ["list", "list"],
+  ])("returns focus to the %s trigger that opened versioning or preview, including after a handoff", (_label, view) => {
+    window.localStorage.setItem("xirang.tasks.view", JSON.stringify(view));
+    createContext({ tasks: [legacyRsyncTask(741, "焦点旧 Rsync", { enabled: false })] });
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    // fireEvent.click leaves focus on <body>, like Safari pointer clicks, so only the captured trigger can restore it.
+    const versioningTrigger = screen.getByRole("button", { name: "管理任务 焦点旧 Rsync 的 Rsync 版本化恢复点" });
+    fireEvent.click(versioningTrigger);
+    expect(versioningTrigger).not.toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "mock close versioning" }));
+    expect(screen.queryByTestId("rsync-versioning-dialog")).not.toBeInTheDocument();
+    expect(versioningTrigger).toHaveFocus();
+
+    const previewTrigger = screen.getByRole("button", { name: previewConnectName("焦点旧 Rsync") });
+    fireEvent.click(previewTrigger);
+    expect(previewTrigger).not.toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "mock close preview" }));
+    expect(previewTrigger).toHaveFocus();
+
+    fireEvent.click(versioningTrigger);
+    fireEvent.click(screen.getByRole("button", { name: "mock handoff to preview" }));
+    expect(screen.queryByTestId("rsync-versioning-dialog")).not.toBeInTheDocument();
+    expect(screen.getByTestId("task-preview-connect-dialog")).toHaveTextContent("741");
+    fireEvent.click(screen.getByRole("button", { name: "mock close preview" }));
+    expect(versioningTrigger).toHaveFocus();
   });
 
   it("hides preview-connect actions from non-admin roles", () => {
@@ -480,7 +550,8 @@ describe("TasksPage", () => {
 
     render(<MemoryRouter><TasksPage /></MemoryRouter>);
 
-    expect(screen.queryByRole("button", { name: "接入或刷新任务 受限旧 Rsync 的文件预览" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: previewConnectName("受限旧 Rsync") })).not.toBeInTheDocument();
+    expect(screen.queryByText("文件预览", { exact: true })).not.toBeInTheDocument();
   });
 
   it("支持筛选到空态并可重置恢复", async () => {

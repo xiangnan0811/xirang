@@ -9,11 +9,11 @@ const liveRoute =
   `&repositoryId=${fixture.ids.onlineRepository}&taskId=71` +
   `&recoveryPointId=${fixture.ids.onlineRecoveryPoint}`;
 
-async function seedAdminSession(page: Page, language: "zh" | "en" = "zh") {
-  await page.addInitScript((selectedLanguage) => {
-    sessionStorage.setItem("xirang-auth-token", "e2e-admin-token");
-    sessionStorage.setItem("xirang-username", "admin");
-    sessionStorage.setItem("xirang-role", "admin");
+async function seedSession(page: Page, language: "zh" | "en" = "zh", role: "admin" | "operator" = "admin") {
+  await page.addInitScript(({ selectedLanguage, selectedRole }) => {
+    sessionStorage.setItem("xirang-auth-token", `e2e-${selectedRole}-token`);
+    sessionStorage.setItem("xirang-username", selectedRole);
+    sessionStorage.setItem("xirang-role", selectedRole);
     sessionStorage.setItem("xirang-user-id", "1");
     sessionStorage.setItem("xirang-totp-enabled", "true");
     localStorage.setItem("xirang.language", selectedLanguage);
@@ -21,7 +21,7 @@ async function seedAdminSession(page: Page, language: "zh" | "en" = "zh") {
       "xirang.setup-wizard",
       JSON.stringify({ completed: true, dismissed: true, currentStep: 0 })
     );
-  }, language);
+  }, { selectedLanguage: language, selectedRole: role });
 }
 
 function envelope(data: unknown, status = 200) {
@@ -339,6 +339,35 @@ async function mockTasksTooltip(page: Page) {
   });
 }
 
+async function mockEmptyFileSources(page: Page, role: "admin" | "operator") {
+  const tasks = [{ ...tooltipTask(905, "legacy-rsync"), status: "success" }];
+
+  await page.route("**/api/v1/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/me/onboarded")) {
+      await route.fulfill(envelope({ ok: true }));
+      return;
+    }
+    if (url.pathname.endsWith("/auth/me") || url.pathname.endsWith("/auth/captcha")) {
+      await route.fulfill(envelope({ id: 1, username: role, role, totp_enabled: true, onboarded: true }));
+      return;
+    }
+    if (url.pathname.endsWith("/backup-file-sources/nodes") || url.pathname.endsWith("/backup-repositories")) {
+      await route.fulfill(envelope({ items: [], next_cursor: null }));
+      return;
+    }
+    if (url.pathname === "/api/v1/tasks") {
+      await route.fulfill(paginatedEnvelope(tasks));
+      return;
+    }
+    if (url.pathname === "/api/v1/nodes" || url.pathname === "/api/v1/policies") {
+      await route.fulfill(envelope([]));
+      return;
+    }
+    await route.fulfill(envelope({}));
+  });
+}
+
 async function expectTooltipInsideScrollport(action: Locator, trigger: "focus" | "hover") {
   const tooltip = action.locator('[role="tooltip"]');
   if (trigger === "focus") {
@@ -367,12 +396,14 @@ async function expectTooltipInsideScrollport(action: Locator, trigger: "focus" |
       overflowX: window.getComputedStyle(scrollport).overflowX,
       scrollWidth: scrollport.scrollWidth,
       clientWidth: scrollport.clientWidth,
+      tooltipOverflows: node.scrollWidth > node.clientWidth,
     };
   });
 
   expect(geometry).not.toBeNull();
   expect(geometry!.overflowX).toBe("auto");
   expect(geometry!.scrollWidth).toBeGreaterThan(geometry!.clientWidth);
+  expect(geometry!.tooltipOverflows).toBe(false);
   expect(geometry!.top).toBeGreaterThanOrEqual(geometry!.clipTop - 1);
   expect(geometry!.right).toBeLessThanOrEqual(geometry!.clipRight + 1);
   expect(geometry!.bottom).toBeLessThanOrEqual(geometry!.clipBottom + 1);
@@ -380,15 +411,93 @@ async function expectTooltipInsideScrollport(action: Locator, trigger: "focus" |
 }
 
 test("closed FeatureLive does not open a searchable workspace", async ({ page }) => {
-  await seedAdminSession(page);
+  await seedSession(page);
   await mockClosedFeature(page);
   await page.goto("/app/backups/data");
   await expect(page.getByText(/文件来源当前不可用|The file source is currently unavailable/)).toBeVisible();
   await expect(page.getByRole("searchbox")).toHaveCount(0);
 });
 
+test("empty admin Files entry leads to the visible Tasks file preview action", async ({ page }) => {
+  await seedSession(page);
+  await page.addInitScript(() => {
+    localStorage.setItem("xirang.tasks.view", JSON.stringify("list"));
+  });
+  await mockEmptyFileSources(page, "admin");
+  await page.goto("/app/backups/data");
+
+  const heading = page.getByRole("heading", { name: "还没有可浏览的备份文件" });
+  await expect(heading).toBeVisible();
+  const onboarding = heading.locator("xpath=..");
+  await expect(onboarding).toContainText("「文件预览」");
+  await expect(page.getByRole("combobox", { name: "节点", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("searchbox")).toHaveCount(0);
+  await expect(onboarding.getByRole("link", { name: "查看备份资产就绪状态" }))
+    .toHaveAttribute("href", "/app/backups/overview#backup-assets-ga");
+
+  await onboarding.getByRole("link", { name: "前往任务" }).click();
+  await expect(page).toHaveURL(/\/app\/tasks$/);
+  const previewAction = page.getByRole("button", { name: "文件预览 接入或刷新任务 legacy-rsync 的文件预览", exact: true });
+  await expect(previewAction).toBeVisible();
+  await expect(previewAction).toContainText("文件预览");
+  await expect(previewAction).not.toHaveAttribute("aria-disabled", "true");
+});
+
+test("remote Rsync preflight opens a usable mobile preview dialog without connecting", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 720 });
+  await seedSession(page, "en");
+  await mockEmptyFileSources(page, "admin");
+  await page.route("**/rsync-versioning/preflights", (route) =>
+    route.fulfill(envelope({ reason: { code: "local_source_required", params: {} } }, 501)),
+  );
+  let connectionRequests = 0;
+  await page.route("**/backup-repositories/connect", (route) => {
+    connectionRequests += 1;
+    return route.fulfill(envelope({}));
+  });
+  await page.goto("/app/tasks");
+
+  const opener = page.getByRole("button", { name: "Manage Rsync versioned recovery points for legacy-rsync" });
+  await opener.press("Enter");
+  const versioning = page.getByRole("dialog", { name: /Rsync versioned recovery points/ });
+  await versioning.getByRole("button", { name: "Run preflight" }).press("Enter");
+  await expect(versioning.getByText(/This task reads from a remote source/)).toBeVisible();
+  await expect(versioning.getByRole("button", { name: "Enable versioning" })).toBeDisabled();
+  await versioning.getByRole("button", { name: "Open file preview setup" }).press("Enter");
+
+  const preview = page.getByRole("dialog", { name: /Connect file preview/ });
+  const confirm = preview.getByRole("button", { name: "Connect or refresh file preview" });
+  await expect(confirm).toBeVisible();
+  const close = confirm.locator("xpath=..").getByRole("button", { name: "Close" });
+  const dialogBounds = (await preview.boundingBox())!;
+  for (const action of [close, confirm]) {
+    const actionBounds = (await action.boundingBox())!;
+    expect(actionBounds.x).toBeGreaterThanOrEqual(dialogBounds.x);
+    expect(actionBounds.x + actionBounds.width).toBeLessThanOrEqual(dialogBounds.x + dialogBounds.width);
+  }
+  await page.keyboard.press("Escape");
+  await expect(opener).toBeFocused();
+  expect(connectionRequests).toBe(0);
+});
+
+test("empty operator Files entry offers only the overview", async ({ page }) => {
+  await seedSession(page, "zh", "operator");
+  await mockEmptyFileSources(page, "operator");
+  await page.goto("/app/backups/data");
+
+  const heading = page.getByRole("heading", { name: "还没有可浏览的备份文件" });
+  await expect(heading).toBeVisible();
+  const onboarding = heading.locator("xpath=..");
+  await expect(onboarding).toContainText("管理员");
+  await expect(onboarding.getByRole("link")).toHaveCount(1);
+  await expect(onboarding.getByRole("link", { name: "返回概览" })).toHaveAttribute("href", "/app/backups/overview");
+  await expect(page.getByRole("link", { name: "前往任务" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "查看备份资产就绪状态" })).toHaveCount(0);
+  await expect(page.locator('a[href="/app/backups/overview#backup-assets-ga"]')).toHaveCount(0);
+});
+
 test("live FeatureLive can browse, search, and preview fixtures at a usable height", async ({ page }) => {
-  await seedAdminSession(page);
+  await seedSession(page);
   await mockLiveFeature(page);
   await page.goto(liveRoute);
   await expect(page.getByText(/文件浏览功能未启用|File browsing is not enabled/)).toHaveCount(0);
@@ -437,7 +546,7 @@ test("live FeatureLive can browse, search, and preview fixtures at a usable heig
 
 test("directory Up navigation restores origin focus on mobile at 200% text zoom", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await seedAdminSession(page);
+  await seedSession(page);
   await mockLiveFeature(page);
   await page.goto(liveRoute);
   await expect(page.getByRole("list", { name: /File list|文件列表/ })).toBeVisible();
@@ -459,18 +568,18 @@ test("directory Up navigation restores origin focus on mobile at 200% text zoom"
 for (const scenario of [
   {
     language: "zh" as const,
-    firstName: "接入或刷新任务 tooltip-first 的文件预览",
-    lastName: "接入或刷新任务 tooltip-last 的文件预览",
+    firstName: "文件预览 接入或刷新任务 tooltip-first 的文件预览",
+    lastName: "文件预览 接入或刷新任务 tooltip-last 的文件预览",
   },
   {
     language: "en" as const,
-    firstName: "Connect or refresh file preview for task tooltip-first",
-    lastName: "Connect or refresh file preview for task tooltip-last",
+    firstName: "File preview Connect or refresh file preview for task tooltip-first",
+    lastName: "File preview Connect or refresh file preview for task tooltip-last",
   },
 ]) {
   test(`task table keeps first and last disabled tooltips inside the horizontal scrollport in ${scenario.language}`, async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 720 });
-    await seedAdminSession(page, scenario.language);
+    await seedSession(page, scenario.language);
     await page.addInitScript(() => {
       localStorage.setItem("xirang.tasks.view", JSON.stringify("list"));
     });
@@ -479,8 +588,8 @@ for (const scenario of [
 
     const table = page.getByRole("table");
     await expect(table).toBeVisible();
-    const firstAction = page.getByRole("button", { name: scenario.firstName });
-    const lastAction = page.getByRole("button", { name: scenario.lastName });
+    const firstAction = page.getByRole("button", { name: scenario.firstName, exact: true });
+    const lastAction = page.getByRole("button", { name: scenario.lastName, exact: true });
 
     for (const action of [firstAction, lastAction]) {
       await expect(action).toHaveAttribute("aria-disabled", "true");

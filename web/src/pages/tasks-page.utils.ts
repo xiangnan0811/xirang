@@ -83,9 +83,9 @@ export type TasksViewProps = {
   onEdit: (task: TaskRecord, opener?: EventTarget | null) => void;
   onViewHistory: (task: TaskRecord, opener?: EventTarget | null) => void;
   canConnectTaskPreview: boolean;
-  onConnectTaskPreview: (task: TaskRecord) => void;
+  onConnectTaskPreview: (task: TaskRecord, opener?: EventTarget | null) => void;
   canManageRsyncVersioning: boolean;
-  onManageRsyncVersioning: (task: TaskRecord) => void;
+  onManageRsyncVersioning: (task: TaskRecord, opener?: EventTarget | null) => void;
   canManageRcloneVersioning: boolean;
   onManageRcloneVersioning: (task: TaskRecord) => void;
   canWriteTasks: boolean;

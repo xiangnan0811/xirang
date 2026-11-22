@@ -22,6 +22,61 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestRsyncVersioningPreflightClassifiesTaskPrerequisites(t *testing.T) {
+	for _, mode := range []backupasset.TaskPublicationMode{backupasset.PublicationVersionedHardlink, backupasset.PublicationVersionedFullCopy} {
+		for _, tc := range []struct {
+			name, host, source, target, code string
+			missing                          bool
+			want                             error
+		}{
+			{"ssh_source", "example.invalid", "/source", "/local/target", "local_source_required", false, backupasset.ErrCapabilityUnavailable},
+			{"source_before_target", "example.invalid", "/source", "remote:/target", "local_source_required", false, backupasset.ErrCapabilityUnavailable},
+			{"remote_source", "", "backup@example.invalid:/source", "/local/target", "local_source_required", false, backupasset.ErrCapabilityUnavailable},
+			{"remote_source_before_target", "", "backup@example.invalid:/source", "remote:/target", "local_source_required", false, backupasset.ErrCapabilityUnavailable},
+			{"remote_target", "", "/source", "remote:/target", "local_target_required", false, backupasset.ErrCapabilityUnavailable},
+			{"unlinked_local", "", "/source", "/local/target", "repository_connection_required", false, backupasset.ErrNotFound},
+			{"missing_task", "", "/source", "/local/target", "", true, backupasset.ErrNotFound},
+		} {
+			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
+				db := newRepositoryTestDB(t)
+				task := seedTask(t, db, "rsync", tc.target, "")
+				if err := db.Model(&model.Node{}).Where("id = ?", task.NodeID).Update("host", tc.host).Error; err != nil {
+					t.Fatal(err)
+				}
+				if task.RsyncSource != tc.source {
+					if err := db.Model(&task).Update("rsync_source", tc.source).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+				service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, scopedObservationProber(backupasset.ProviderRsync))
+				service.keyring = backupasset.NewKeyring(db, nil)
+				revision, err := managedRsyncTaskRevision(task)
+				if err != nil {
+					t.Fatal(err)
+				}
+				id := task.ID
+				if tc.missing {
+					id += 100000
+				}
+				_, err = service.CreateRsyncVersioningPreflight(context.Background(), backupasset.RsyncVersioningPreflightRequest{TaskID: id, ExpectedTaskRevision: revision, RequestedMode: mode})
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("error=%v, want %v", err, tc.want)
+				}
+				var reason *backupasset.RsyncVersioningPreflightError
+				if errors.As(err, &reason) != (tc.code != "") || (reason != nil && string(reason.Code) != tc.code) {
+					t.Fatalf("error=%v, reason=%+v, want %q", err, reason, tc.code)
+				}
+				if tc.name == "remote_source" {
+					_, err := service.loadRsyncVersioningPreflightPlan(context.Background(), backupasset.RsyncVersioningPreflightRequest{TaskID: id, ExpectedTaskRevision: revision, RequestedMode: mode}, false)
+					if !errors.Is(err, backupasset.ErrNotFound) || errors.As(err, &reason) {
+						t.Fatalf("activation loader error=%v, want unclassified missing legacy link", err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestCreateRsyncVersioningPreflightKeepsLegacyBindingAndRedactsFilesystemFacts(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	root := t.TempDir()
@@ -1432,6 +1487,10 @@ func TestCreateRsyncVersioningPreflightValidatesPathSeparationBeforeBootstrapWit
 			if !errors.Is(err, backupasset.ErrConflict) {
 				t.Fatalf("CreateRsyncVersioningPreflightForRequest error=%v, want %v (result=%+v)", err, backupasset.ErrConflict, result)
 			}
+			var reason *backupasset.RsyncVersioningPreflightError
+			if !errors.As(err, &reason) || string(reason.Code) != "filesystem_preflight_failed" {
+				t.Fatalf("moved source reason=%+v, err=%v", reason, err)
+			}
 			if result.PreflightID != "" {
 				t.Fatalf("unexpected preflight ID issued on conflict: %q", result.PreflightID)
 			}
@@ -1500,6 +1559,60 @@ func TestCreateRsyncVersioningPreflightValidatesPathSeparationBeforeBootstrapWit
 				t.Fatalf("first preflight recreated managedRoot %s: err=%v", managedRoot, err)
 			}
 			assertRsyncVersioningInvariantsUnchanged(t, db, service, before, legacyTarget)
+		})
+
+		t.Run("missing_separate_source_"+string(mode), func(t *testing.T) {
+			root := t.TempDir()
+			legacyTarget := filepath.Join(root, "legacy")
+			source := filepath.Join(root, "source")
+			for _, dir := range []string{legacyTarget, source} {
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, service, task, _ := setupNormalConnectedRsyncTask(t, legacyTarget, source)
+			if err := os.Remove(source); err != nil {
+				t.Fatal(err)
+			}
+			revision, err := managedRsyncTaskRevision(task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.CreateRsyncVersioningPreflight(context.Background(), backupasset.RsyncVersioningPreflightRequest{TaskID: task.ID, ExpectedTaskRevision: revision, RequestedMode: mode})
+			var reason *backupasset.RsyncVersioningPreflightError
+			if !errors.Is(err, backupasset.ErrConflict) || !errors.As(err, &reason) || string(reason.Code) != "filesystem_preflight_failed" {
+				t.Fatalf("missing source error=%v, reason=%+v", err, reason)
+			}
+			if _, err := os.Lstat(legacyTarget + ".xirang-rsync-v1"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("missing source created managed root: %v", err)
+			}
+		})
+
+		t.Run("missing_legacy_target_"+string(mode), func(t *testing.T) {
+			root := t.TempDir()
+			legacyTarget := filepath.Join(root, "legacy")
+			source := filepath.Join(root, "source")
+			for _, dir := range []string{legacyTarget, source} {
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, service, task, _ := setupNormalConnectedRsyncTask(t, legacyTarget, source)
+			if err := os.Remove(legacyTarget); err != nil {
+				t.Fatal(err)
+			}
+			revision, err := managedRsyncTaskRevision(task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.CreateRsyncVersioningPreflight(context.Background(), backupasset.RsyncVersioningPreflightRequest{TaskID: task.ID, ExpectedTaskRevision: revision, RequestedMode: mode})
+			var reason *backupasset.RsyncVersioningPreflightError
+			if !errors.Is(err, backupasset.ErrConflict) || !errors.As(err, &reason) || string(reason.Code) != "filesystem_preflight_failed" {
+				t.Fatalf("missing target error=%v, reason=%+v", err, reason)
+			}
+			if _, err := os.Lstat(legacyTarget + ".xirang-rsync-v1"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("missing target created managed root: %v", err)
+			}
 		})
 
 		t.Run("positive_control_independent_source_"+string(mode), func(t *testing.T) {
