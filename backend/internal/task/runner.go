@@ -1025,6 +1025,9 @@ func (m *Manager) runTaskWithContext(
 		runCompleted = true
 		return
 	}
+	if captureAttempted && captureError != "" && backupCapture == nil && execCtx.Err() == nil && runCtx.Err() == nil {
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "备份捕获证据不可用，将重新读取源进行普通传输: "+captureError, taskEntity.Status)
+	}
 	providerResult := m.executeProviderWithCapture(execCtx, taskEntity, runID, reason, chainRunID, armMutableGeneration, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {

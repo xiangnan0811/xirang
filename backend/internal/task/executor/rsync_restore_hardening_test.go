@@ -324,89 +324,107 @@ func TestStageRsyncRestorePreservesArchiveMetadata(t *testing.T) {
 	if err != nil {
 		t.Skip("rsync is not installed")
 	}
+	ctx := context.Background()
 	source := t.TempDir()
-	if err := os.WriteFile(filepath.Join(source, "special"), []byte("archive metadata"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(filepath.Join(source, "special"), 0o4750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(source, "sticky"), 0o1770); err != nil {
-		t.Fatal(err)
-	}
+	special := filepath.Join(source, "special")
+	sticky := filepath.Join(source, "sticky")
 	link := filepath.Join(source, "link")
+	if err := os.WriteFile(special, []byte("archive metadata"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(special, os.ModeSetuid|0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(sticky, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sticky, os.ModeSticky|0o770); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink("special", link); err != nil {
 		t.Fatal(err)
 	}
-	backup := filepath.Join(t.TempDir(), "backup")
-	captureTask := model.Task{ExecutorType: "rsync", RsyncSource: source + string(filepath.Separator), RsyncTarget: backup, RsyncBinary: rsyncBinary}
-	raw, err := CaptureRsyncManifest(context.Background(), captureTask, RsyncCaptureSourceRole)
-	if err != nil {
-		t.Fatalf("capture metadata fixture: %v", err)
-	}
-	manifest, err := model.DecodeRsyncCaptureManifest(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code, err := (&RsyncExecutor{binary: rsyncBinary}).Run(context.Background(), captureTask, func(string, string) {}, nil); err != nil || code != 0 {
-		t.Fatalf("seed metadata fixture code=%d err=%v", code, err)
-	}
-	special := filepath.Join(backup, "special")
-	sticky := filepath.Join(backup, "sticky")
-	link = filepath.Join(backup, "link")
-	if err := os.Chmod(special, 0o4750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(sticky, 0o1770); err != nil {
-		t.Fatal(err)
-	}
-	linkTime := time.Unix(123456789, 987654321)
+	// Rsync archive mode carries whole-second symlink timestamps through both copies.
+	linkTime := time.Unix(123456789, 0)
 	if err := unix.UtimesNanoAt(unix.AT_FDCWD, link, []unix.Timespec{unix.NsecToTimespec(linkTime.UnixNano()), unix.NsecToTimespec(linkTime.UnixNano())}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		t.Fatalf("set symlink timestamp: %v", err)
 	}
-	staged, cleanup, err := stageRsyncRestoreSource(context.Background(), backup, manifest)
+	assertMetadata := func(root string, wantLinkTime time.Time) {
+		t.Helper()
+		for _, tc := range []struct {
+			name string
+			want os.FileMode
+		}{
+			{name: "special", want: os.ModeSetuid | 0o750},
+			{name: "sticky", want: os.ModeSticky | 0o770},
+		} {
+			info, err := os.Lstat(filepath.Join(root, tc.name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky); got != tc.want {
+				t.Fatalf("%s mode=%s, want %s", filepath.Join(root, tc.name), got, tc.want)
+			}
+		}
+		info, err := os.Lstat(filepath.Join(root, "link"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.ModTime().Equal(wantLinkTime) {
+			t.Fatalf("%s symlink mtime=%s, want %s", root, info.ModTime(), wantLinkTime)
+		}
+	}
+	assertMetadata(source, linkTime)
+	backup := filepath.Join(t.TempDir(), "backup")
+	captureTask := model.Task{ExecutorType: "rsync", RsyncSource: source + string(filepath.Separator), RsyncTarget: backup, RsyncBinary: rsyncBinary}
+	capture, err := PrepareRsyncBackupCapture(ctx, captureTask, nil)
+	if err != nil {
+		t.Fatalf("capture metadata fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := capture.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	manifest, err := model.DecodeRsyncCaptureManifest(capture.Manifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, err := capture.Run(ctx, captureTask, func(string, string) {}, nil); err != nil || code != 0 {
+		t.Fatalf("seed metadata fixture code=%d err=%v", code, err)
+	}
+	if err := VerifyRsyncCaptureManifestTarget(ctx, captureTask, capture.Manifest()); err != nil {
+		t.Fatalf("verify metadata backup: %v", err)
+	}
+	assertMetadata(source, linkTime)
+	assertMetadata(backup, linkTime)
+	// Archive transfer uses whole seconds. Exercise staging's independent
+	// nanosecond preservation using metadata present on the verified backup.
+	stagedLinkTime := time.Unix(123456789, 987654321)
+	backupLink := filepath.Join(backup, "link")
+	if err := unix.UtimesNanoAt(unix.AT_FDCWD, backupLink, []unix.Timespec{unix.NsecToTimespec(stagedLinkTime.UnixNano()), unix.NsecToTimespec(stagedLinkTime.UnixNano())}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		t.Fatalf("set backup symlink timestamp: %v", err)
+	}
+	staged, cleanup, err := stageRsyncRestoreSource(ctx, backup, manifest)
 	if err != nil {
 		t.Fatalf("stage metadata fixture: %v", err)
 	}
-	stagedSpecial := filepath.Join(staged, "special")
-	stagedSticky := filepath.Join(staged, "sticky")
-	stagedLink := filepath.Join(staged, "link")
 	t.Cleanup(cleanup)
-	for _, tc := range []struct {
-		name string
-		path string
-		want os.FileMode
-	}{
-		{name: "setuid file", path: stagedSpecial, want: 0o4750},
-		{name: "sticky directory", path: stagedSticky, want: 0o1770},
-	} {
-		info, statErr := os.Lstat(tc.path)
-		if statErr != nil {
-			t.Fatal(statErr)
-		}
-		if info.Mode().Perm() != tc.want&os.ModePerm || info.Mode()&os.ModeSetuid != tc.want&os.ModeSetuid || info.Mode()&os.ModeSticky != tc.want&os.ModeSticky {
-			t.Fatalf("%s mode=%#o (%s), want %#o", tc.name, info.Mode().Perm(), info.Mode(), tc.want)
-		}
-	}
+	assertMetadata(staged, stagedLinkTime)
 	sourceInfo, err := os.Lstat(special)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stagedInfo, err := os.Lstat(stagedSpecial)
-	if err != nil {
-		t.Fatal(err)
-	}
 	sourceStat := sourceInfo.Sys().(*syscall.Stat_t)
-	stagedStat := stagedInfo.Sys().(*syscall.Stat_t)
-	if sourceStat.Uid != stagedStat.Uid || sourceStat.Gid != stagedStat.Gid {
-		t.Fatalf("staged owner=%d:%d, want %d:%d", stagedStat.Uid, stagedStat.Gid, sourceStat.Uid, sourceStat.Gid)
-	}
-	stagedLinkInfo, err := os.Lstat(stagedLink)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !stagedLinkInfo.ModTime().Equal(linkTime) {
-		t.Fatalf("staged symlink mtime=%s, want %s", stagedLinkInfo.ModTime(), linkTime)
+	for _, root := range []string{backup, staged} {
+		info, err := os.Lstat(filepath.Join(root, "special"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stat := info.Sys().(*syscall.Stat_t)
+		if sourceStat.Uid != stat.Uid || sourceStat.Gid != stat.Gid {
+			t.Fatalf("%s owner=%d:%d, want %d:%d", root, stat.Uid, stat.Gid, sourceStat.Uid, sourceStat.Gid)
+		}
 	}
 	if err := os.Chmod(filepath.Clean(staged), 0o500); err != nil {
 		t.Fatal(err)
