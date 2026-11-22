@@ -154,7 +154,7 @@ UPLOAD_STEPS = {
 
 ARTIFACTS = {
     'browser-execution-evidence': ('Frontend Test & Build', {
-        'e2e-default/summary.json': ('playwright.config.ts', 39, True),
+        'e2e-default/summary.json': ('playwright.config.ts', 48, True),
         'e2e-real-backend/summary.json': ('playwright.real-backend.config.ts', 31, True),
     }),
     'account-recovery-execution-evidence': ('Account Recovery Browser Acceptance', {

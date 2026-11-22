@@ -446,6 +446,8 @@ fixture 并清理；不接受共享手工 fixture 作为自动化通过证据。
 原464场景不缩减，Docker/history新增状态由独立显式配置执行。正常 typecheck/check
 包含严格 ES2023/DOM/Node 的全部 e2e 与 Playwright 配置，不把测试加入生产 bundle。
 这些 job 均属于发布所要求的整轮 main CI；skip/list/重试后的成功不能替代首次实际通过。
+浏览器测试库存变化时，按各配置和浏览器项目的实际执行数量同步
+[`ARTIFACTS`](../../scripts/ci_evidence/source.py) 中对应的精确计数；保留选中、收集和首次通过等严格校验。
 
 cron job 使用本地同一隔离入口，PG18与工具容器每次独占，不复用 parity DSN。
 Core双架构原生job保留静态及mutation检查，并运行locked Nginx live probe；资源清理失败
