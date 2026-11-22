@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.74.1](https://github.com/xiangnan0811/xirang/compare/v0.74.0...v0.74.1) (2026-11-22)
+
+
+### 🐛 Bug Fixes
+
+* **backend:** 修复 SSH Rsync 捕获权限和传输耗时 ([#740](https://github.com/xiangnan0811/xirang/issues/740)) ([ff651d0](https://github.com/xiangnan0811/xirang/commit/ff651d05fbed4a5320c704e0039d611301feeb5f))
+
 ### 修复
 
 - 旧版 Rsync 备份通过 SSH 接收捕获副本时启用压缩。Core 接收副本时为普通文件补齐所有者读权限，为目录补齐所有者读取及遍历权限，防止成功接收后因暂存权限无法校验。源节点权限不变，恢复可能带回备份副本新增的所有者权限位。确实无法生成校验证据时，日志在重新读取源之前显示脱敏原因，最终仍记录校验异常，禁止自动恢复该次结果。
@@ -9,13 +16,6 @@
 ### 升级与回退
 
 - 保全数据库、匹配密钥、配置和备份副本，排空旧 Core 的在途任务后使用新版 Core 执行新的备份。启用 Rsync 路径隔离时，部署与 Core 配套的本地 helper。仍须给捕获副本及已有目标的私有增量基准快照预留空间，限速作用于源端传输，源文件在传输中消失等错误仍会报告。校验证据确认文件内容，活动数据库的事务一致性仍由数据库备份流程保障。此次修改无需数据库迁移。回退旧 Core 会恢复原捕获行为，已写入的备份副本权限不会随镜像回退。
-
-## [0.74.1](https://github.com/xiangnan0811/xirang/compare/v0.74.0...v0.74.1) (2026-11-22)
-
-
-### 🐛 Bug Fixes
-
-* **backend:** 修复 SSH Rsync 捕获权限和传输耗时 ([#740](https://github.com/xiangnan0811/xirang/issues/740)) ([ff651d0](https://github.com/xiangnan0811/xirang/commit/ff651d05fbed4a5320c704e0039d611301feeb5f))
 
 ## [0.74.0](https://github.com/xiangnan0811/xirang/compare/v0.73.24...v0.74.0) (2026-11-20)
 
