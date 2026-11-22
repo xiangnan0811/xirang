@@ -12,6 +12,7 @@ import {
   backupAssetsRestoreHref,
   backupAssetsSearchHref,
 } from "@/features/backup-assets/backup-assets-route-state";
+import { taskPreviewConnectEligibility } from "@/pages/tasks-page.utils";
 
 const TaskEditorDialog = React.lazy(() =>
   import("@/components/task-create-dialog").then(m => ({ default: m.TaskEditorDialog }))
@@ -62,10 +63,14 @@ export interface TasksPageDialogsProps {
   setBatchRetain: (retain: boolean) => void;
   rsyncVersioningTask: TaskRecord | null;
   setRsyncVersioningTask: (task: TaskRecord | null) => void;
+  /** Restores focus to the control that opened versioning; a preview handoff skips it. */
+  rsyncVersioningOnCloseAutoFocus?: DialogCloseAutoFocus;
   canManageRsyncVersioning: boolean;
   onRsyncVersioningUpdated: () => void | Promise<void>;
   previewConnectTask: TaskRecord | null;
   setPreviewConnectTask: (task: TaskRecord | null) => void;
+  /** Restores focus to the preview opener, or to the versioning opener after a handoff. */
+  previewConnectOnCloseAutoFocus?: DialogCloseAutoFocus;
   canConnectTaskPreview: boolean;
   rcloneVersioningTask: TaskRecord | null;
   setRcloneVersioningTask: (task: TaskRecord | null) => void;
@@ -108,10 +113,12 @@ export function TasksPageDialogs({
   setBatchRetain,
   rsyncVersioningTask,
   setRsyncVersioningTask,
+  rsyncVersioningOnCloseAutoFocus,
   canManageRsyncVersioning,
   onRsyncVersioningUpdated,
   previewConnectTask,
   setPreviewConnectTask,
+  previewConnectOnCloseAutoFocus,
   canConnectTaskPreview,
   rcloneVersioningTask,
   setRcloneVersioningTask,
@@ -130,6 +137,23 @@ export function TasksPageDialogs({
   onSkipNext,
 }: TasksPageDialogsProps) {
   const { t } = useTranslation();
+
+  // Resolve eligibility from the live task list, never the snapshot captured when the dialog opened.
+  const currentRsyncVersioningTask = rsyncVersioningTask
+    ? tasks.find((candidate) => candidate.id === rsyncVersioningTask.id) ?? null
+    : null;
+  const rsyncPreviewConnect = currentRsyncVersioningTask
+    ? taskPreviewConnectEligibility(currentRsyncVersioningTask, canConnectTaskPreview)
+    : { visible: false, disabled: false };
+
+  const handoffRsyncVersioningToPreview = (): boolean => {
+    if (!currentRsyncVersioningTask || !rsyncPreviewConnect.visible || rsyncPreviewConnect.disabled) {
+      return false;
+    }
+    setRsyncVersioningTask(null);
+    setPreviewConnectTask(currentRsyncVersioningTask);
+    return true;
+  };
 
   return (
     <>
@@ -158,6 +182,9 @@ export function TasksPageDialogs({
           task={rsyncVersioningTask}
           token={authToken}
           onUpdated={onRsyncVersioningUpdated}
+          onCloseAutoFocus={rsyncVersioningOnCloseAutoFocus}
+          onConnectPreview={rsyncPreviewConnect.visible ? handoffRsyncVersioningToPreview : undefined}
+          connectPreviewDisabled={rsyncPreviewConnect.disabled}
         />
       ) : null}
 
@@ -169,6 +196,7 @@ export function TasksPageDialogs({
           }}
           task={previewConnectTask}
           token={authToken}
+          onCloseAutoFocus={previewConnectOnCloseAutoFocus}
         />
       ) : null}
 

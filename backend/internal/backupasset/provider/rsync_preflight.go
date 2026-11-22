@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -95,7 +96,12 @@ func (preflighter *RsyncTreePreflighter) PreflightManagedRoot(ctx context.Contex
 	if preflighter == nil {
 		return RsyncTreePreflightEvidence{}, fmt.Errorf("%w: managed Rsync preflighter unavailable", backupasset.ErrInvalidState)
 	}
-	return preflightRsyncManagedRoot(ctx, preflighter, managedRoot, request)
+	evidence, err := preflightRsyncManagedRoot(ctx, preflighter, managedRoot, request)
+	var reason *backupasset.RsyncVersioningPreflightError
+	if err != nil && !errors.As(err, &reason) && (errors.Is(err, errRsyncManagedTreeUnsafe) || errors.Is(err, errRsyncManagedTreeUnsupported)) {
+		return RsyncTreePreflightEvidence{}, &backupasset.RsyncVersioningPreflightError{Code: backupasset.RsyncPreflightFilesystemFailed, Err: err}
+	}
+	return evidence, err
 }
 
 func (preflighter *RsyncTreePreflighter) Preflight(ctx context.Context, tree *rsyncManagedTree, request RsyncTreePreflightRequest) (RsyncTreePreflightEvidence, error) {
@@ -132,7 +138,7 @@ func (preflighter *RsyncTreePreflighter) Preflight(ctx context.Context, tree *rs
 		return RsyncTreePreflightEvidence{}, err
 	}
 	if request.Mode == backupasset.PublicationVersionedHardlink && !probe.HardlinkVerified {
-		return RsyncTreePreflightEvidence{}, fmt.Errorf("%w: managed tree hard links unavailable", errRsyncManagedTreeUnsafe)
+		return RsyncTreePreflightEvidence{}, &backupasset.RsyncVersioningPreflightError{Code: backupasset.RsyncPreflightHardlinkUnavailable, Err: fmt.Errorf("%w: managed tree hard links unavailable", errRsyncManagedTreeUnsafe)}
 	}
 	capacity, err := tree.capacitySnapshot()
 	if err != nil {

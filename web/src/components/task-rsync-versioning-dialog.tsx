@@ -1,7 +1,7 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/context/auth-context.hooks";
 import { useTranslation } from "react-i18next";
-import { GitBranch, Loader2, RotateCcw, ShieldCheck } from "lucide-react";
+import { Copy, FolderSearch, GitBranch, Loader2, RotateCcw, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { Select } from "@/components/ui/select";
 import { apiClient } from "@/lib/api/client";
@@ -36,9 +37,30 @@ type TaskRsyncVersioningDialogProps = {
   task: TaskRecord | null;
   token: string | null;
   onUpdated: () => void | Promise<void>;
+  /** Restores focus to the control that opened this dialog; skipped when handing off to preview. */
+  onCloseAutoFocus?: DialogCloseAutoFocus;
+  /**
+   * Hands off to the same task's file-preview connect dialog, which then owns focus restoration.
+   * Returns true only when the handoff actually opened it.
+   */
+  onConnectPreview?: () => boolean;
+  /** The current task has an active run, so the preview connection must wait. */
+  connectPreviewDisabled?: boolean;
 };
 
 type SafeNoticeCode = RsyncPublicationReasonCode | RsyncVersioningErrorCode;
+
+function noticeTone(code: SafeNoticeCode): "warning" | "critical" {
+  switch (code) {
+    case "local_source_required":
+    case "local_target_required":
+    case "repository_connection_required":
+    case "hardlink_unavailable":
+      return "warning";
+    default:
+      return "critical";
+  }
+}
 
 function stateTone(state: RsyncPublicationState): "success" | "warning" | "destructive" | "info" | "neutral" {
   switch (state) {
@@ -119,6 +141,9 @@ function TaskRsyncVersioningDialogContent({
   task,
   token,
   onUpdated,
+  onCloseAutoFocus,
+  onConnectPreview,
+  connectPreviewDisabled = false,
 }: TaskRsyncVersioningDialogProps) {
   const { t } = useTranslation();
   const { beginAttempt, roleRef, openRef } = useAdminDialogAttempt(open, token);
@@ -130,9 +155,27 @@ function TaskRsyncVersioningDialogContent({
   const [preflighting, setPreflighting] = useState(false);
   const [activating, setActivating] = useState(false);
   const [preparingRollback, setPreparingRollback] = useState(false);
+  // Set only by a successful activation in this dialog, so an already-committed task gets no next step.
+  const [activatedChoice, setActivatedChoice] = useState<RsyncVersioningMigrationChoice | null>(null);
+  const handingOffRef = useRef(false);
+  const runPreflightRef = useRef<HTMLButtonElement | null>(null);
+  const nextStepRef = useRef<HTMLDivElement | null>(null);
 
   const summary = summaryOverride ?? task?.rsyncPublication;
   const taskRevision = summary?.taskRevision ?? "";
+  // A first-new-point activation waits for the next run; an imported baseline is already committed.
+  const nextStepKey = !summary || summary.mode === "legacy_mutable"
+    ? null
+    : activatedChoice === "first_new_point" && summary.state === "ready"
+      ? "rsyncVersioning.readyNextRun"
+      : activatedChoice === "imported_baseline" && summary.state === "committed"
+        ? "rsyncVersioning.baselineNextStep"
+        : null;
+
+  // Activation retires the migration controls, so hand focus to the next-step guidance instead of the body.
+  useEffect(() => {
+    if (nextStepKey) nextStepRef.current?.focus();
+  }, [nextStepKey]);
 
   const canStartMigration = Boolean(
     task &&
@@ -215,16 +258,18 @@ function TaskRsyncVersioningDialogContent({
     }
     const { isCurrent } = beginAttempt();
     if (!isCurrent()) return;
+    const submittedChoice = migrationChoice;
     setActivating(true);
     setNotice(null);
     try {
       const result = await apiClient.activateRsyncVersioning(token, task.id, {
         expectedTaskRevision: taskRevision,
         preflightId: preflight.preflightId,
-        migrationChoice,
+        migrationChoice: submittedChoice,
       });
       if (!isCurrent()) return;
       setSummaryOverride(result.summary);
+      setActivatedChoice(submittedChoice);
       setPreflight(null);
       setMigrationChoice(null);
       await onUpdated();
@@ -263,16 +308,51 @@ function TaskRsyncVersioningDialogContent({
     }
   };
 
+  const connectPreview = () => {
+    if (roleRef.current !== "admin" || !openRef.current || busy || connectPreviewDisabled || !onConnectPreview) {
+      return;
+    }
+    handingOffRef.current = true;
+    if (!onConnectPreview()) {
+      handingOffRef.current = false;
+    }
+  };
+
+  // Full copy is a deliberate mode change only; the user still runs the next preflight explicitly.
+  const selectFullCopy = () => {
+    if (busy || !canStartMigration) return;
+    setRequestedMode("versioned_full_copy");
+    setPreflight(null);
+    setMigrationChoice(null);
+    setNotice(null);
+    runPreflightRef.current?.focus();
+  };
+
+  const offersPreviewConnect = Boolean(onConnectPreview)
+    && (notice === "local_source_required" || notice === "repository_connection_required");
+  const offersFullCopy = notice === "hardlink_unavailable" && canStartMigration && requestedMode === "versioned_hardlink";
+  const connectPreviewHintID = "rsync-versioning-connect-preview-hint-" + task.id;
+
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!busy) onOpenChange(nextOpen); }}>
-      <DialogContent size="md">
+      <DialogContent
+        size="md"
+        onCloseAutoFocus={(event) => {
+          // The preview dialog owns focus after a handoff and returns it to this dialog's opener.
+          if (handingOffRef.current) {
+            event.preventDefault();
+            return;
+          }
+          onCloseAutoFocus?.(event);
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <GitBranch className="size-5 text-primary" aria-hidden />
             {t("rsyncVersioning.dialogTitle", { name: task.name ?? task.policyName })}
           </DialogTitle>
           <DialogDescription>{t("rsyncVersioning.dialogDescription")}</DialogDescription>
-          <DialogCloseButton />
+          <DialogCloseButton aria-label={t("common.close")} />
         </DialogHeader>
 
         <DialogBody className="space-y-4">
@@ -286,6 +366,12 @@ function TaskRsyncVersioningDialogContent({
             </Badge>
           </div>
 
+          {nextStepKey ? (
+            <div ref={nextStepRef} tabIndex={-1} className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <InlineAlert tone="success">{t(nextStepKey)}</InlineAlert>
+            </div>
+          ) : null}
+
           {summary.seedFullCopyRequired ? (
             <InlineAlert tone="warning">{t("rsyncVersioning.seedFullCopyRequired")}</InlineAlert>
           ) : null}
@@ -294,10 +380,47 @@ function TaskRsyncVersioningDialogContent({
             <InlineAlert tone="critical">{t("rsyncVersioning.reason." + summary.reasonCode)}</InlineAlert>
           ) : null}
 
-          {safeNotice ? <InlineAlert tone="critical">{safeNotice}</InlineAlert> : null}
+          {safeNotice && notice ? (
+            <div className="space-y-2">
+              <InlineAlert tone={noticeTone(notice)}>{safeNotice}</InlineAlert>
+              {offersPreviewConnect ? (
+                <div className="space-y-1 pl-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="aria-disabled:opacity-50"
+                    aria-disabled={connectPreviewDisabled || undefined}
+                    aria-describedby={connectPreviewDisabled ? connectPreviewHintID : undefined}
+                    disabled={busy}
+                    onClick={connectPreview}
+                  >
+                    <FolderSearch className="mr-1.5 size-4" aria-hidden />
+                    {t("rsyncVersioning.connectPreview")}
+                  </Button>
+                  {connectPreviewDisabled ? (
+                    <p id={connectPreviewHintID} className="text-xs text-muted-foreground">
+                      {t("tasks.previewConnectDisabledActive")}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {offersFullCopy ? (
+                <div className="pl-1">
+                  <Button type="button" size="sm" variant="outline" disabled={busy} onClick={selectFullCopy}>
+                    <Copy className="mr-1.5 size-4" aria-hidden />
+                    {t("rsyncVersioning.useFullCopy")}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {canStartMigration ? (
             <section className="space-y-3">
+              <p className="rounded-md border border-dashed border-border/70 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                {t("rsyncVersioning.preflightPreparation")}
+              </p>
               <div>
                 <label htmlFor={modeSelectID} className="mb-1 block text-sm font-medium">
                   {t("rsyncVersioning.modeLabel")}
@@ -320,7 +443,7 @@ function TaskRsyncVersioningDialogContent({
                 <p className="mt-1 text-xs text-muted-foreground">{t("rsyncVersioning.modeHint")}</p>
               </div>
 
-              <Button type="button" variant="outline" onClick={() => void runPreflight()} disabled={busy}>
+              <Button ref={runPreflightRef} type="button" variant="outline" onClick={() => void runPreflight()} disabled={busy}>
                 {preflighting ? <Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden /> : <ShieldCheck className="mr-1.5 size-4" aria-hidden />}
                 {preflighting ? t("rsyncVersioning.preflighting") : t("rsyncVersioning.runPreflight")}
               </Button>

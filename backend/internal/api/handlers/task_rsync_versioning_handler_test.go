@@ -69,6 +69,81 @@ func TestTaskRsyncVersioningHandlerPreflightBindsOnlySafeTypedFields(t *testing.
 	}
 }
 
+func TestTaskRsyncVersioningPreflightSafeReasons(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		code   string
+		status int
+		cause  error
+	}{
+		{"local_source_required", http.StatusNotImplemented, backupasset.ErrCapabilityUnavailable},
+		{"local_target_required", http.StatusNotImplemented, backupasset.ErrCapabilityUnavailable},
+		{"repository_connection_required", http.StatusNotFound, backupasset.ErrNotFound},
+		{"hardlink_unavailable", http.StatusConflict, backupasset.ErrConflict},
+		{"filesystem_preflight_failed", http.StatusConflict, backupasset.ErrConflict},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			service := &taskRsyncVersioningServiceStub{preflightErr: &backupasset.RsyncVersioningPreflightError{Code: backupasset.RsyncVersioningPreflightReasonCode(tc.code), Err: errors.Join(tc.cause, errors.New("/private/secret"))}}
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Params = gin.Params{{Key: "id", Value: "42"}}
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/tasks/42/rsync-versioning/preflights", bytes.NewBufferString(`{"expected_task_revision":9,"requested_mode":"versioned_full_copy"}`))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			NewTaskRsyncVersioningHandler(service).CreatePreflight(ctx)
+			var body struct {
+				Code int `json:"code"`
+				Data struct {
+					Reason struct {
+						Code   string            `json:"code"`
+						Params map[string]string `json:"params"`
+					} `json:"reason"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != tc.status || body.Code != tc.status || body.Data.Reason.Code != tc.code || body.Data.Reason.Params == nil || len(body.Data.Reason.Params) != 0 || strings.Contains(recorder.Body.String(), "/private/secret") {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestTaskRsyncVersioningPreflightDoesNotExposeUnknownReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &taskRsyncVersioningServiceStub{preflightErr: &backupasset.RsyncVersioningPreflightError{Code: "private-provider-detail", Err: backupasset.ErrConflict}}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: "42"}}
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/tasks/42/rsync-versioning/preflights", bytes.NewBufferString(`{"expected_task_revision":9,"requested_mode":"versioned_full_copy"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	NewTaskRsyncVersioningHandler(service).CreatePreflight(ctx)
+	if recorder.Code != http.StatusConflict || strings.Contains(recorder.Body.String(), "private-provider-detail") || !strings.Contains(recorder.Body.String(), `"data":null`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestTaskRsyncVersioningPreflightMissingTaskHasBareNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &taskRsyncVersioningServiceStub{preflightErr: backupasset.ErrNotFound}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: "42"}}
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/tasks/42/rsync-versioning/preflights", bytes.NewBufferString(`{"expected_task_revision":9,"requested_mode":"versioned_full_copy"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	NewTaskRsyncVersioningHandler(service).CreatePreflight(ctx)
+	var body struct {
+		Code int             `json:"code"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusNotFound || body.Code != http.StatusNotFound || string(body.Data) != "null" {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestTaskRsyncVersioningHandlerMapsActivationConflictAndRollbackSuccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &taskRsyncVersioningServiceStub{activateErr: backupasset.ErrConflict}

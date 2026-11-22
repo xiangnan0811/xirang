@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,8 @@ export interface GaReadinessPanelProps {
   role: AuthContextValue["role"];
   api?: Partial<BackupGaApi>;
 }
+
+const TARGET_ID = "backup-assets-ga";
 
 function canEnable(snapshot: BackupGaReadiness): boolean {
   return (
@@ -43,6 +46,8 @@ export function GaReadinessPanel({ token, role, api }: GaReadinessPanelProps) {
   const [snapshot, setSnapshot] = useState<BackupGaReadiness | null>(null);
   const [busy, setBusy] = useState<"inventory" | "acknowledge" | "enable" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const loaded = snapshot !== null;
 
   useEffect(() => {
     if (role !== "admin" || !token) {
@@ -56,6 +61,12 @@ export function GaReadinessPanel({ token, role, api }: GaReadinessPanelProps) {
     });
     return () => controller.abort();
   }, [client, role, t, token]);
+
+  useEffect(() => {
+    if (!loaded || window.location.hash !== `#${TARGET_ID}`) return;
+    const frame = window.requestAnimationFrame(() => headingRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [loaded]);
 
   if (role !== "admin") {
     return null;
@@ -90,10 +101,22 @@ export function GaReadinessPanel({ token, role, api }: GaReadinessPanelProps) {
     }
   };
 
+  const unconnectedTaskIds = [
+    ...new Set(snapshot.conflicts.filter((conflict) => conflict.kind === "capability_gap").flatMap((conflict) => conflict.taskIds)),
+  ].sort((a, b) => a - b);
+  const hasUnconnected = snapshot.conflicts.some((conflict) => conflict.kind === "capability_gap");
+  const otherConflicts = snapshot.conflicts.filter((conflict) => conflict.kind !== "capability_gap");
+
   return (
-    <Card id="backup-assets-ga" role="region" aria-labelledby="backup-assets-ga-title">
+    <Card id={TARGET_ID} role="region" aria-labelledby={`${TARGET_ID}-title`}>
       <CardHeader>
-        <CardTitle id="backup-assets-ga-title" as="h2">
+        <CardTitle
+          id={`${TARGET_ID}-title`}
+          as="h2"
+          ref={headingRef}
+          tabIndex={-1}
+          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {t("backupAssets.ga.title")}
         </CardTitle>
         <CardDescription>{t("backupAssets.ga.description")}</CardDescription>
@@ -107,7 +130,6 @@ export function GaReadinessPanel({ token, role, api }: GaReadinessPanelProps) {
             {t("backupAssets.ga.statusAnnouncement", { status: t(`backupAssets.ga.status.${snapshot.status}`) })}
           </InlineAlert>
         </div>
-        <p className="text-sm text-muted-foreground">{t("backupAssets.ga.workerOptional")}</p>
         <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-muted-foreground">{t("backupAssets.ga.inventoryComplete")}</dt>
@@ -132,21 +154,46 @@ export function GaReadinessPanel({ token, role, api }: GaReadinessPanelProps) {
             </dd>
           </div>
         </dl>
-        {snapshot.conflicts.length > 0 ? (
+        {hasUnconnected ? (
+          <section
+            aria-labelledby={`${TARGET_ID}-unconnected-title`}
+            className="space-y-2 rounded-md border border-warning/35 bg-warning/10 p-3"
+          >
+            <h3 id={`${TARGET_ID}-unconnected-title`} className="text-sm font-semibold">
+              {t("backupAssets.ga.unconnectedTitle")}
+            </h3>
+            <p className="text-sm text-muted-foreground">{t("backupAssets.ga.unconnectedDescription")}</p>
+            {unconnectedTaskIds.length > 0 ? (
+              <ul className="flex flex-wrap gap-1.5" aria-labelledby={`${TARGET_ID}-unconnected-title`}>
+                {unconnectedTaskIds.map((taskId) => (
+                  <li key={taskId}>
+                    <Badge tone="neutral" dot={false} className="font-mono text-micro">
+                      {t("tasks.taskIdLabel", { id: taskId })}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <Button size="sm" variant="outline" asChild>
+              <Link to="/app/tasks">{t("backupAssets.ga.openTasks")}</Link>
+            </Button>
+          </section>
+        ) : null}
+        {otherConflicts.length > 0 ? (
           <ul className="space-y-1 text-sm" aria-label={t("backupAssets.ga.conflicts")}>
-            {snapshot.conflicts.map((conflict) => (
+            {otherConflicts.map((conflict) => (
               <li key={`${conflict.kind}-${conflict.taskIds.join(",")}-${conflict.repositoryId}`}>
-                <span>{conflict.kind}</span>
-                <span className="text-muted-foreground">
-                  {" "}
-                  {t(`backupAssets.ga.conflictKind.${conflict.kind}`)}
-                </span>
+                {t(`backupAssets.ga.conflictKind.${conflict.kind}`)}
               </li>
             ))}
           </ul>
-        ) : (
+        ) : null}
+        {snapshot.conflicts.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("backupAssets.ga.noConflicts")}</p>
-        )}
+        ) : null}
+        {snapshot.class === "existing" && snapshot.status === "acknowledged" ? (
+          <p className="text-sm text-muted-foreground">{t("backupAssets.ga.inventoryAcknowledgementHint")}</p>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"

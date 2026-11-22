@@ -119,6 +119,9 @@ func (handler *TaskRsyncVersioningHandler) CreatePreflight(c *gin.Context) {
 	}
 	result, err := handler.service.CreateRsyncVersioningPreflightForRequest(c.Request.Context(), request, backupRepositoryRequestContext(c))
 	if err != nil {
+		if respondRsyncVersioningPreflightReason(c, err) {
+			return
+		}
 		respondTaskRsyncVersioningError(c, err)
 		return
 	}
@@ -215,6 +218,40 @@ func (handler *TaskRsyncVersioningHandler) PrepareRollback(c *gin.Context) {
 		return
 	}
 	respondOK(c, result)
+}
+
+type rsyncVersioningPreflightReason struct {
+	Code   backupasset.RsyncVersioningPreflightReasonCode `json:"code"`
+	Params map[string]string                              `json:"params"`
+}
+
+type rsyncVersioningPreflightErrorData struct {
+	Reason rsyncVersioningPreflightReason `json:"reason"`
+}
+
+func respondRsyncVersioningPreflightReason(c *gin.Context, err error) bool {
+	var reason *backupasset.RsyncVersioningPreflightError
+	if !errors.As(err, &reason) || reason == nil {
+		return false
+	}
+	var status int
+	var message string
+	switch reason.Code {
+	case backupasset.RsyncPreflightLocalSourceRequired, backupasset.RsyncPreflightLocalTargetRequired:
+		status, message = http.StatusNotImplemented, "当前环境不支持 Rsync 版本化迁移"
+	case backupasset.RsyncPreflightRepositoryConnectionRequired:
+		status, message = http.StatusNotFound, "需要先连接备份仓库"
+	case backupasset.RsyncPreflightHardlinkUnavailable:
+		status, message = http.StatusConflict, "硬链接预检未通过"
+	case backupasset.RsyncPreflightFilesystemFailed:
+		status, message = http.StatusConflict, "文件系统预检未通过"
+	default:
+		return false
+	}
+	c.JSON(status, Response{Code: status, Message: message, Data: rsyncVersioningPreflightErrorData{
+		Reason: rsyncVersioningPreflightReason{Code: reason.Code, Params: map[string]string{}},
+	}})
+	return true
 }
 
 func respondTaskRsyncVersioningError(c *gin.Context, err error) {

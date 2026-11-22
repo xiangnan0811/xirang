@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTasksApi, deriveTaskProgress, mapRclonePreflightResult } from "./tasks-api";
+import { ApiError } from "./core";
+import { createTasksApi, deriveTaskProgress, getRsyncVersioningErrorCode, mapRclonePreflightResult } from "./tasks-api";
 
 function createMockResponse(status = 200, body = "") {
   return {
@@ -1018,5 +1019,34 @@ describe("task failure summary", () => {
       name: "TaskFailureSummaryPayloadError",
       message: "invalid task failure summary payload",
     });
+  });
+});
+
+describe("getRsyncVersioningErrorCode", () => {
+  function reasonError(status: number, code: string, params: unknown = {}) {
+    return new ApiError(status, "raw /private/secret", { code: status, data: { reason: { code, params } } });
+  }
+
+  it("accepts allowlisted preflight reasons only with their exact status and empty params", () => {
+    expect(getRsyncVersioningErrorCode(reasonError(501, "local_source_required"))).toBe("local_source_required");
+    expect(getRsyncVersioningErrorCode(reasonError(501, "local_target_required"))).toBe("local_target_required");
+    expect(getRsyncVersioningErrorCode(reasonError(404, "repository_connection_required"))).toBe("repository_connection_required");
+    expect(getRsyncVersioningErrorCode(reasonError(409, "hardlink_unavailable"))).toBe("hardlink_unavailable");
+    expect(getRsyncVersioningErrorCode(reasonError(409, "filesystem_preflight_failed"))).toBe("filesystem_preflight_failed");
+  });
+
+  it("falls back to the status mapping for mismatched, parameterized, or unknown reasons", () => {
+    expect(getRsyncVersioningErrorCode(reasonError(409, "local_source_required"))).toBe("conflict");
+    expect(getRsyncVersioningErrorCode(reasonError(404, "hardlink_unavailable"))).toBe("not_found");
+    expect(getRsyncVersioningErrorCode(reasonError(501, "repository_connection_required"))).toBe("unsupported");
+    expect(getRsyncVersioningErrorCode(reasonError(409, "filesystem_preflight_failed", { path: "/private" }))).toBe("conflict");
+    expect(getRsyncVersioningErrorCode(reasonError(409, "hardlink_unavailable", null))).toBe("conflict");
+    expect(getRsyncVersioningErrorCode(reasonError(409, "hardlink_unavailable", []))).toBe("conflict");
+    expect(getRsyncVersioningErrorCode(reasonError(403, "provider_private_detail"))).toBe("forbidden");
+    expect(getRsyncVersioningErrorCode(new ApiError(503, "raw"))).toBe("request_failed");
+  });
+
+  it("keeps capability codes independent of the preflight status pairing", () => {
+    expect(getRsyncVersioningErrorCode(reasonError(503, "repository_offline"))).toBe("repository_offline");
   });
 });

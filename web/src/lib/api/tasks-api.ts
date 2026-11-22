@@ -153,7 +153,15 @@ type RawRcloneVersioningRollbackResult = {
   summary?: RawRclonePublicationSummary;
 };
 
+export type RsyncVersioningPreflightReasonErrorCode =
+  | "local_source_required"
+  | "local_target_required"
+  | "repository_connection_required"
+  | "hardlink_unavailable"
+  | "filesystem_preflight_failed";
+
 export type RsyncVersioningErrorCode =
+  | RsyncVersioningPreflightReasonErrorCode
   | "feature_disabled"
   | "repository_offline"
   | "repository_disconnected"
@@ -165,6 +173,15 @@ export type RsyncVersioningErrorCode =
   | "conflict"
   | "unsupported"
   | "request_failed";
+
+// Preflight reasons are only trusted with the exact status and empty params the backend allowlist emits.
+const RSYNC_PREFLIGHT_REASON_STATUS: Record<RsyncVersioningPreflightReasonErrorCode, number> = {
+  local_source_required: 501,
+  local_target_required: 501,
+  repository_connection_required: 404,
+  hardlink_unavailable: 409,
+  filesystem_preflight_failed: 409,
+};
 
 export type RcloneVersioningErrorCode =
   | RclonePublicationReasonCode
@@ -848,6 +865,16 @@ function readRsyncVersioningErrorCode(error: unknown): RsyncVersioningErrorCode 
     case "provider_operation_timeout":
     case "provider_resource_limit":
       return code;
+    case "local_source_required":
+    case "local_target_required":
+    case "repository_connection_required":
+    case "hardlink_unavailable":
+    case "filesystem_preflight_failed": {
+      const params = "params" in reason ? reason.params : undefined;
+      const emptyParams = params !== null && typeof params === "object" && !Array.isArray(params)
+        && Object.keys(params).length === 0;
+      return emptyParams && error.status === RSYNC_PREFLIGHT_REASON_STATUS[code] ? code : undefined;
+    }
     default:
       return undefined;
   }

@@ -53,6 +53,8 @@ export const TasksGrid = React.memo(function TasksGrid({
         const isRunning = task.status === "running" || task.status === "retrying";
         const previewConnect = taskPreviewConnectEligibility(task, canConnectTaskPreview);
         const previewTooltipId = `task-preview-connect-tooltip-grid-${task.id}`;
+        const previewLabelId = `task-preview-connect-label-grid-${task.id}`;
+        const previewContextId = `task-preview-connect-context-grid-${task.id}`;
         return (
           <div
             key={task.id}
@@ -167,7 +169,7 @@ export const TasksGrid = React.memo(function TasksGrid({
               </div>
             </div>
 
-            <div className="mt-auto flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border/40 pt-3">
+            <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
               <div className="flex flex-wrap items-center gap-1">
                 {canTriggerTasks ? (
                   <Button
@@ -188,7 +190,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                     className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
                     aria-label={t("tasks.rsyncVersioningAriaLabel", { name: task.name || task.policyName })}
                     disabled={isPendingAny}
-                    onClick={() => onManageRsyncVersioning(task)}
+                    onClick={(event) => onManageRsyncVersioning(task, event.currentTarget)}
                   >
                     <GitBranch className="size-4" aria-hidden />
                   </Button>
@@ -196,22 +198,26 @@ export const TasksGrid = React.memo(function TasksGrid({
                 {previewConnect.visible ? (
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="group relative size-8 text-muted-foreground hover:bg-accent hover:text-foreground aria-disabled:opacity-50"
-                    aria-label={t("tasks.previewConnectAriaLabel", { name: task.name || task.policyName })}
+                    size="sm"
+                    className="group relative h-8 gap-1.5 px-2 text-muted-foreground hover:bg-accent hover:text-foreground aria-disabled:opacity-50"
+                    aria-labelledby={`${previewLabelId} ${previewContextId}`}
                     aria-describedby={previewConnect.disabled ? previewTooltipId : undefined}
                     aria-disabled={previewConnect.disabled || undefined}
                     disabled={isPendingAny}
-                    onClick={() => {
-                      if (!previewConnect.disabled) onConnectTaskPreview(task);
+                    onClick={(event) => {
+                      if (!previewConnect.disabled) onConnectTaskPreview(task, event.currentTarget);
                     }}
                   >
                     <FolderSearch className="size-4" aria-hidden />
+                    <span id={previewLabelId}>{t("taskPreviewConnect.action")}</span>
+                    <span id={previewContextId} className="sr-only">
+                      {t("tasks.previewConnectAriaLabel", { name: task.name || task.policyName })}
+                    </span>
                     {previewConnect.disabled ? (
                       <span
                         id={previewTooltipId}
                         role="tooltip"
-                        className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-64 rounded-md border border-border bg-popover px-2.5 py-2 text-left text-xs font-normal text-popover-foreground opacity-0 shadow-md transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                        className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-52 whitespace-normal rounded-md border border-border bg-popover px-2.5 py-2 text-left text-xs font-normal text-popover-foreground opacity-0 shadow-md transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
                       >
                         {t("tasks.previewConnectDisabledActive")}
                       </span>

@@ -17,6 +17,8 @@
 - Auth + `backup_repositories:manage` + admin 的 `/settings/backup-assets/ga/{inventory,readiness,acknowledge}` 是独立入口；不复用 recovery downgrade-readiness。
 - PUT enable、DELETE 恢复到 env true、config import 均执行同一门禁。blocked/ack-required 返回 409 `就绪检查未完成` 且不持久化 true；stale digest 为专门 409 `清单已变化，请重新核对`。其他运行时/取消/持久化/补偿故障通用 500，不返回 `err.Error()`。
 - 公共 JSON 仅 schema 1、counts、closed kinds、opaque IDs/digests，不含 locator/proof/ticket/identity key/SnapshotFileIndex。前端未知字段丢弃，未知 schema/class/status 拒绝，坏 Repository ID 变空安全值；渲染 counts/i18n，不显示 raw candidate。Viewer/Operator 无 Admin CTA。
+- 概览把 `capability_gap` 说明为上次清单时尚未关联仓库，向管理员展示受影响的任务 ID 和前往任务列表的入口。全局启用和清单确认不建立任务关联，本地目标的传统 Rsync 文件预览沿用显式接入流程。
+- 已确认的现有安装重新运行清单前，面板说明结果变化需要再次确认。摘要变化会使原确认失效，完成新确认后恢复有效启用。
 - GA 不加入通用 Settings `CATEGORY_ORDER`（security、node_monitor、retention、storage、alert、anomaly）；Admin readiness 面板单独拥有流程。Worker optional 是布尔事实，不是公共镜像承诺。
 - 已认证遗留 snapshot list/files/search/diff HTTP 始终 410，替代为 Catalog/Search；legacy restore 保留注册但要求 FeatureLive + Admin + step-up。关闭 feature 不使退役读 API 复活。
 - 任务历史不提供调用退役 snapshot list/diff 的比较入口，仍保留运行历史、备份资产工作区、Search 与恢复深链。Catalog/Search 不承诺旧比较接口的等价替代；快照异常检测的后台能力不因移除该入口而退役。
