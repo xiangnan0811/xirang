@@ -53,8 +53,6 @@ export const TasksGrid = React.memo(function TasksGrid({
         const isRunning = task.status === "running" || task.status === "retrying";
         const previewConnect = taskPreviewConnectEligibility(task, canConnectTaskPreview);
         const previewTooltipId = `task-preview-connect-tooltip-grid-${task.id}`;
-        const previewLabelId = `task-preview-connect-label-grid-${task.id}`;
-        const previewContextId = `task-preview-connect-context-grid-${task.id}`;
         return (
           <div
             key={task.id}
@@ -200,7 +198,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                     variant="ghost"
                     size="sm"
                     className="group relative h-8 gap-1.5 px-2 text-muted-foreground hover:bg-accent hover:text-foreground aria-disabled:opacity-50"
-                    aria-labelledby={`${previewLabelId} ${previewContextId}`}
+                    aria-label={`${t("taskPreviewConnect.action")} ${t("tasks.previewConnectAriaLabel", { name: task.name || task.policyName })}`}
                     aria-describedby={previewConnect.disabled ? previewTooltipId : undefined}
                     aria-disabled={previewConnect.disabled || undefined}
                     disabled={isPendingAny}
@@ -209,10 +207,7 @@ export const TasksGrid = React.memo(function TasksGrid({
                     }}
                   >
                     <FolderSearch className="size-4" aria-hidden />
-                    <span id={previewLabelId}>{t("taskPreviewConnect.action")}</span>
-                    <span id={previewContextId} className="sr-only">
-                      {t("tasks.previewConnectAriaLabel", { name: task.name || task.policyName })}
-                    </span>
+                    <span>{t("taskPreviewConnect.action")}</span>
                     {previewConnect.disabled ? (
                       <span
                         id={previewTooltipId}
