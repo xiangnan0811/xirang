@@ -117,7 +117,7 @@
 
 `BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_PRIVATE_NETWORK` 可动态调整，数据库覆盖值优先；回退到环境值需要先删除覆盖。HTTP 允许范围、可信代理链及票据失效规则见[内容交付合同](spec/domains/backup-content-delivery.md)。Worker 的网络、身份、socket 与存储隔离见[处理与导出合同](spec/domains/backup-processing-export.md)和[部署指南](deployment.md)。内部 pipeline revision 是 Core 维护的发布状态，不是环境变量或公开 Settings 键。
 
-下面每行列出对应 Settings 键，便于区分 `backup_assets.export.root` 等包含多层名称的映射。范围只是单项边界；租约、心跳、总量/单项配额、票据期限和存储根仍须满足关联校验。启用远程 Worker 时必须提供专用监听地址、服务端证书和私钥、客户端 CA 与信任域；启用 updater 在线模式时必须提供精确 HTTPS 来源白名单。
+下面每行列出对应 Settings 键，便于区分 `backup_assets.export.root` 等包含多层名称的映射。范围只是单项边界；租约、心跳、总量/单项配额、票据期限和存储根仍须满足关联校验。启用远程 Worker 时必须提供专用监听地址、服务端证书和私钥、客户端 CA 与信任域；请求 updater 在线配置时必须同时启用 updater 并提供精确 HTTPS 来源白名单，实际部署边界见[处理与导出合同](spec/domains/backup-processing-export.md#updater-身份签名与原子激活)。
 
 关联校验使用全部注册 Foundation 键的实际有效值，包括 Search／Processing 设置；缩短租约绝对截止时间时，应一并核对相关超时，不能假定未展示在同一表节的键会被忽略。Foundation legacy getter 保留上述来源优先级和缓存语义，不提供跨并发更新的原子快照；锁序及原子配置消费者的边界见[启用合同](spec/domains/backup-enablement.md#设置锁序前瞻配置与工作所有权)。本次读取完整性修复不新增环境变量，也不改变下表默认值或范围。
 
@@ -292,7 +292,7 @@ Rclone 预检在提交复验时通过调用者事务读取有效的 Foundation �
 | `BACKUP_ASSETS_WORKER_REMOTE_CLIENT_CA_FILE`<br>`backup_assets.worker_remote_client_ca_file` | string | 空 | 远程资产 Worker 客户端 CA 路径；**重启生效** |
 | `BACKUP_ASSETS_WORKER_REMOTE_TRUST_DOMAIN`<br>`backup_assets.worker_remote_trust_domain` | string | 空 | 远程资产 Worker SPIFFE 信任域；**重启生效** |
 | `BACKUP_ASSETS_WORKER_UPDATER_ENABLED`<br>`backup_assets.worker_updater_enabled` | bool | `false` | 启用独立资产 Worker updater；**重启生效** |
-| `BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED`<br>`backup_assets.worker_updater_online_enabled` | bool | `false` | 启用 updater 受限在线模式；**重启生效** |
+| `BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED`<br>`backup_assets.worker_updater_online_enabled` | bool | `false` | 请求 updater 在线配置；状态 `online_enabled` 仅反映配置，当前 updater 入口不装配在线下载；**重启生效** |
 | `BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ORIGINS`<br>`backup_assets.worker_updater_online_origins` | string | 空 | updater 精确 HTTPS origin allowlist；**重启生效** |
 | `BACKUP_ASSETS_DERIVED_STORE_ROOT`<br>`backup_assets.derived_store_root` | string | `/var/lib/xirang-asset-runtime/derived` | 加密派生资产专用根目录；**重启生效** |
 | `BACKUP_ASSETS_DERIVED_STORE_CHUNK_BYTES`<br>`backup_assets.derived_store_chunk_bytes` | int | `1048576` | 派生资产认证加密分块字节数；范围 `65536..8388608`；**重启生效** |

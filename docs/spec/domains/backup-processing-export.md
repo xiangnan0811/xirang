@@ -48,7 +48,7 @@ content-addressed bundle volume 是 parser/updater 唯一共享数据 mount：�
 
 默认更新路径是 signed offline import。固定 updater-only inbox 中候选目录要求 `10002:10002`、mode `0555`；Ed25519 trust 文件要求 `10002:10002`、mode `0440`。Updater no-follow 扫描，验证 canonical manifest、Ed25519 signature、精确 tar/file SHA-256，以及大小、时间、路径和文件类型限制；先 fsync content-addressed store，再通过 journal 和原子 pointer rename 激活，不能在校验或耐久化未完成时切换 active bundle。
 
-浏览器和 Core HTTP API 不接收 bundle bytes、multipart、URL、服务器路径、inbox 文件名或原始 manifest。Admin API 仅接受脱敏 candidate ID 和 expected fingerprint 的小型 JSON 控制请求。Compose updater 同样 `network_mode: none`，只支持 offline-only。Online updater 默认关闭；任何单独的 online 部署必须同时具备 exact HTTPS origin allowlist、独立 allowlist proxy/firewall、隔离网络及 updater-only credential secret。应用 allowlist 不能代替 egress firewall，parser 永远不继承 updater 网络或凭据。
+浏览器和 Core HTTP API 不接收 bundle bytes、multipart、URL、服务器路径、inbox 文件名或原始 manifest。Admin API 仅接受脱敏 candidate ID 和 expected fingerprint 的小型 JSON 控制请求。Compose updater 同样 `network_mode: none`，只支持 offline-only。Online updater 默认关闭；状态中的 `online_enabled` 仅反映有效配置，不表示在线功能已就绪，当前 updater 未接入在线下载。相关配置见[环境变量参考](../../env-vars.md#处理回填与-worker)。任何单独的 online 部署必须同时具备 exact HTTPS origin allowlist、独立 allowlist proxy/firewall、隔离网络及 updater-only credential secret。应用 allowlist 不能代替 egress firewall，parser 永远不继承 updater 网络或凭据。
 
 Updater 的注册 wire 是签名离线包经过 inbox 验证后生成的 `InboxReceipt`，由 `DecodeRegisterCandidateRequest` 严格解码；顶层与嵌套未知／重复字段、尾随 JSON、不支持的 schema 和无效身份／版本／摘要／验证时间均拒绝。注册消息不携带 URL、凭据、原始输出或 bundle 内容。metadata 的 verified／active 等生命周期由 Core 的关系表及注册／激活事务拥有，不是独立 metadata JSON 的读写入口；不得以测试便利格式替代真实签名包、receipt 或持久化合同。
 
