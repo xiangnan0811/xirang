@@ -163,6 +163,10 @@ scrape_configs:
       - targets: ['backend-host:8080']  # 替换为 Prometheus 可访问的后端地址
 ```
 
+`xirang_backup_asset_processing_jobs_total` 和 `xirang_backup_asset_processing_job_duration_seconds` 已定义并注册，但当前生产路径没有记录任务结果和耗时，不能据此统计任务终态。`xirang_backup_asset_processing_lease_loss_total` 统计租约或绝对期限过期的 attempt，而非 job。
+
+Export collector 尚未接入生产指标。一个 job 的重试可产生多个 attempt，幂等重放可返回同一 job，且 `ready` 后仍可能取消或过期，因此不能从 attempt 数或 `ready` 数推算精确终态 job 总数。详见[处理与导出合同](../spec/domains/backup-processing-export.md)。
+
 节点资源采集、聚合与 remote-write 已退役，旧 `METRICS_REMOTE_*` 配置不再生效。
 应用 `/metrics` 仅保留进程和业务可观测性，不替代服务器资源监控。
 节点手动测试仅验证 SSH；迁移预检与 Doctor 仍按需检查容量，不周期访问节点。
