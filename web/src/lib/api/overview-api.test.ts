@@ -435,4 +435,96 @@ describe("overview api", () => {
       }
     ]);
   });
+
+  it("getOverviewTraffic maps partial flag only when true on trailing bucket", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          window: "24h",
+          bucket_minutes: 30,
+          has_real_samples: true,
+          generated_at: "2026-03-07T12:15:00Z",
+          points: [
+            {
+              timestamp: "2026-03-07T11:30:00Z",
+              timestamp_ms: 1741347000000,
+              label: "11:30",
+              throughput_mbps: 100,
+              sample_count: 1,
+              active_task_count: 1,
+              started_count: 1,
+              failed_count: 0
+            },
+            {
+              timestamp: "2026-03-07T12:00:00Z",
+              timestamp_ms: 1741348800000,
+              label: "12:00",
+              throughput_mbps: 50,
+              sample_count: 1,
+              active_task_count: 1,
+              started_count: 1,
+              failed_count: 0,
+              partial: true
+            }
+          ]
+        }
+      }))
+    );
+
+    const result = await api.getOverviewTraffic("token-1", { window: "24h" });
+
+    expect(result.points[0]?.partial).toBeUndefined();
+    expect(result.points[1]?.partial).toBe(true);
+  });
+
+  it("getBackupHealth returns null successRate7d when trend has zero runs and maps generatedAt", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          generated_at: "2026-05-17T01:00:00Z",
+          stale_nodes: [{ id: 1, name: "node-a", last_backup_at: null }],
+          degraded_policies: [],
+          trend: [
+            { date: "2026-05-16", total: 0, success: 0 },
+            { date: "2026-05-17", total: 0, success: 0 }
+          ],
+          summary: { total_nodes: 1, total_policies: 0, healthy_nodes: 0 }
+        }
+      }))
+    );
+
+    const result = await api.getBackupHealth("token-1");
+
+    expect(result.generatedAt).toBe("2026-05-17T01:00:00Z");
+    expect(result.summary.successRate7d).toBeNull();
+    expect(result.summary.neverBackedUp).toBe(1);
+    expect(result.summary.stale48h).toBe(0);
+  });
+
+  it("getBackupHealth computes successRate7d when trend runs exist", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          generated_at: "2026-05-17T01:00:00Z",
+          stale_nodes: [],
+          degraded_policies: [],
+          trend: [
+            { date: "2026-05-16", total: 4, success: 3 },
+            { date: "2026-05-17", total: 6, success: 6 }
+          ],
+          summary: { total_nodes: 1, total_policies: 1, healthy_nodes: 1 }
+        }
+      }))
+    );
+
+    const result = await api.getBackupHealth("token-1");
+
+    expect(result.summary.successRate7d).toBe(90);
+  });
 });

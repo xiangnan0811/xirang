@@ -703,7 +703,7 @@ describe("task inventory pagination", () => {
   }
 
   function pageEnvelope(
-    items: { id: number; name: string; status: string; node_id: number; node: { id: number; name: string } }[],
+    items: Record<string, unknown>[],
     total: number,
     page: number,
     pageSize = 100,
@@ -759,6 +759,44 @@ describe("task inventory pagination", () => {
     expect(tasks).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal);
+  });
+
+  it("maps last_finished_at, last_run_at, and last_duration_ms safely and supports recent activity sorting", async () => {
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, pageEnvelope([
+        {
+          id: 11,
+          name: "finished-task",
+          status: "success",
+          node_id: 1,
+          node: { id: 1, name: "node-1" },
+          last_run_at: "2026-05-17T01:00:00Z",
+          last_finished_at: "2026-05-17T01:05:00Z",
+          last_duration_ms: 300000,
+        },
+        {
+          id: 12,
+          name: "never-run-task",
+          status: "pending",
+          node_id: 1,
+          node: { id: 1, name: "node-1" },
+          last_duration_ms: -5,
+        },
+      ], 2, 1)))
+      .mockResolvedValueOnce(createMockResponse(200, pageEnvelope([], 0, 1)));
+
+    const sortedTasks = await api.getTasks("token-tasks", { sort: "-recent_activity" });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("sort=-recent_activity");
+    expect(sortedTasks[0]?.lastFinishedAt).toBeTruthy();
+    expect(sortedTasks[0]?.lastRunAt).toBeTruthy();
+    expect(sortedTasks[0]?.lastDurationMs).toBe(300000);
+    expect(sortedTasks[1]?.lastFinishedAt).toBeUndefined();
+    expect(sortedTasks[1]?.lastRunAt).toBeUndefined();
+    expect(sortedTasks[1]?.lastDurationMs).toBeUndefined();
+
+    const recent = await api.getRecentTasks("token-tasks", { limit: 5 });
+    expect(recent).toEqual([]);
+    expect(String(fetchMock.mock.calls[1][0])).toBe("/api/v1/tasks?page=1&page_size=5&sort=-recent_activity");
   });
 });
 

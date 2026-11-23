@@ -68,6 +68,8 @@ type TaskResponse = {
     name?: string;
   };
   last_run_at?: string | null;
+  last_finished_at?: string | null;
+  last_duration_ms?: number | null;
   next_run_at?: string | null;
   created_at?: string;
   updated_at?: string;
@@ -798,6 +800,30 @@ export function deriveTaskProgress(
   return 0;
 }
 
+function optionalFormattedTime(value?: string | null): string | undefined {
+  if (typeof value !== "string" || !value.trim() || !Number.isFinite(Date.parse(value))) {
+    return undefined;
+  }
+  return formatTime(value);
+}
+
+function optionalDurationMs(value: unknown): number | undefined {
+  const num = nullableFiniteNumber(value);
+  if (num === null || num < 0) {
+    return undefined;
+  }
+  return Math.round(num);
+}
+
+function deriveLastActivityMs(lastFinishedAt?: string | null, lastRunAt?: string | null): number | undefined {
+  const finishedMs = typeof lastFinishedAt === "string" ? Date.parse(lastFinishedAt) : Number.NaN;
+  const runMs = typeof lastRunAt === "string" ? Date.parse(lastRunAt) : Number.NaN;
+  const validFinished = Number.isFinite(finishedMs) ? finishedMs : 0;
+  const validRun = Number.isFinite(runMs) ? runMs : 0;
+  const best = Math.max(validFinished, validRun);
+  return best > 0 ? best : undefined;
+}
+
 function mapTask(row: TaskResponse, index: number): TaskRecord {
   const status = mapTaskStatus(row.status);
   const retryCount = row.retry_count ?? 0;
@@ -817,6 +843,10 @@ function mapTask(row: TaskResponse, index: number): TaskRecord {
     progress: deriveTaskProgress(status, retryCount, index, row.progress),
     hasActiveRun: row.progress != null,
     startedAt: formatTime(row.last_run_at ?? row.created_at),
+    lastRunAt: optionalFormattedTime(row.last_run_at),
+    lastFinishedAt: optionalFormattedTime(row.last_finished_at),
+    lastDurationMs: optionalDurationMs(row.last_duration_ms),
+    lastActivityMs: deriveLastActivityMs(row.last_finished_at, row.last_run_at),
     nextRunAt: formatTime(row.next_run_at),
     errorCode,
     lastError: row.last_error ?? undefined,
@@ -1063,7 +1093,7 @@ function mapTaskFailureSummary(raw: unknown): TaskFailureSummary {
 
 export function createTasksApi() {
   return {
-    async getTasks(token: string, options?: { signal?: AbortSignal }): Promise<TaskRecord[]> {
+    async getTasks(token: string, options?: { signal?: AbortSignal; sort?: string }): Promise<TaskRecord[]> {
       const collected: TaskRecord[] = [];
       const seenIds = new Set<number>();
       let page = 1;
@@ -1074,6 +1104,9 @@ export function createTasksApi() {
           page: String(page),
           page_size: String(TASK_INVENTORY_PAGE_SIZE),
         });
+        if (options?.sort) {
+          params.set("sort", options.sort);
+        }
         const payload = await request<PaginatedEnvelope<TaskResponse[]>>(`/tasks?${params.toString()}`, {
           token,
           signal: options?.signal,
@@ -1110,6 +1143,26 @@ export function createTasksApi() {
       }
 
       return collected;
+    },
+
+    async getRecentTasks(
+      token: string,
+      options?: { limit?: number; signal?: AbortSignal },
+    ): Promise<TaskRecord[]> {
+      const rawLimit = options?.limit ?? 5;
+      const limit = Number.isInteger(rawLimit) && rawLimit > 0
+        ? Math.min(rawLimit, TASK_INVENTORY_PAGE_SIZE)
+        : 5;
+      const params = new URLSearchParams({
+        page: "1",
+        page_size: String(limit),
+        sort: "-recent_activity",
+      });
+      const payload = await request<PaginatedEnvelope<TaskResponse[]>>(`/tasks?${params.toString()}`, {
+        token,
+        signal: options?.signal,
+      });
+      return unwrapPaginated(payload).items.map((row, index) => mapTask(row, index));
     },
 
     async getTask(token: string, taskId: number): Promise<TaskRecord> {

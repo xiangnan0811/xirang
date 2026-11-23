@@ -165,11 +165,18 @@ function BackupHealthPanelContent() {
           },
           {
             title: t("backupHealth.successRate7d"),
-            value: Math.round(summary.successRate7d),
-            unit: "%",
+            value: summary.successRate7d === null ? "—" : Math.round(summary.successRate7d),
+            unit: summary.successRate7d === null ? undefined : "%",
             icon: <Activity className="size-4" aria-hidden />,
             tone:
-              summary.successRate7d >= 95 ? "success" : summary.successRate7d >= 80 ? "warning" : "destructive",
+              summary.successRate7d === null
+                ? undefined
+                : summary.successRate7d >= 95
+                  ? "success"
+                  : summary.successRate7d >= 80
+                    ? "warning"
+                    : "destructive",
+            description: summary.successRate7d === null ? t("backupHealth.successRateUnknown") : undefined,
           },
         ]}
       />

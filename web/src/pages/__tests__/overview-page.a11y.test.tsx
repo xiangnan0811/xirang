@@ -36,7 +36,16 @@ vi.mock("@/context/tasks-context.hooks", () => ({
   useTasksContext: () => tasksRef.current,
 }));
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ token: "test-token" }),
+  useAuth: () => ({ token: "test-token", username: "admin", role: "admin" }),
+}));
+
+const getBackupConfidenceMock = vi.fn();
+const getBackupHealthMock = vi.fn();
+vi.mock("@/lib/api/client", () => ({
+  apiClient: {
+    getBackupConfidence: (...args: unknown[]) => getBackupConfidenceMock(...args),
+    getBackupHealth: (...args: unknown[]) => getBackupHealthMock(...args),
+  },
 }));
 
 const fetchHealthIncidentTimelineMock = vi.fn();
@@ -131,6 +140,25 @@ describe("OverviewPage a11y smoke", () => {
     mockNavigate.mockReset();
     refreshNodesMock.mockReset().mockResolvedValue(undefined);
     refreshTasksMock.mockReset().mockResolvedValue(undefined);
+    getBackupConfidenceMock.mockReset().mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      summary: { healthy: 1, warning: 0, atRisk: 0, insufficient: 0, total: 1 },
+      items: [],
+    });
+    getBackupHealthMock.mockReset().mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      staleNodes: [],
+      degradedPolicies: [],
+      healthTrend: [],
+      summary: {
+        totalNodes: 1,
+        neverBackedUp: 0,
+        stale48h: 0,
+        policiesHealthy: 1,
+        policiesDegraded: 0,
+        successRate7d: null,
+      },
+    });
     fetchHealthIncidentTimelineMock.mockReset();
     fetchHealthIncidentTimelineMock.mockResolvedValue({
       generatedAt: "2026-05-17T01:00:00Z",

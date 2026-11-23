@@ -71,6 +71,7 @@ export interface OverviewTrafficPoint {
   activeTaskCount: number;
   startedCount: number;
   failedCount: number;
+  partial?: boolean;
 }
 
 export interface OverviewTrafficSeries {
@@ -536,6 +537,10 @@ export interface TaskRecord {
   progress: number;
   hasActiveRun?: boolean;
   startedAt: string;
+  lastRunAt?: string;
+  lastFinishedAt?: string;
+  lastDurationMs?: number;
+  lastActivityMs?: number;
   nextRunAt?: string;
   errorCode?: string;
   lastError?: string;
@@ -987,6 +992,7 @@ export interface HealthTrendPoint {
 }
 
 export interface BackupHealthData {
+  generatedAt?: string;
   staleNodes: StaleNode[];
   degradedPolicies: DegradedPolicy[];
   healthTrend: HealthTrendPoint[];
@@ -996,7 +1002,7 @@ export interface BackupHealthData {
     stale48h: number;
     policiesHealthy: number;
     policiesDegraded: number;
-    successRate7d: number;
+    successRate7d: number | null;
   };
 }
 

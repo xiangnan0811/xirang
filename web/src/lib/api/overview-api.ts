@@ -17,6 +17,7 @@ type OverviewTrafficPointResponse = {
   active_task_count?: number;
   started_count?: number;
   failed_count?: number;
+  partial?: boolean;
 };
 
 type OverviewTrafficSeriesResponse = {
@@ -59,12 +60,14 @@ function mapOverviewTraffic(payload?: OverviewTrafficSeriesResponse | null): Ove
           activeTaskCount: Number(point.active_task_count || 0),
           startedCount: Number(point.started_count || 0),
           failedCount: Number(point.failed_count || 0),
+          ...(point.partial === true ? { partial: true } : {}),
         }))
       : [],
   };
 }
 
 type BackupHealthRaw = {
+  generated_at?: string;
   stale_nodes?: { id: number; name: string; last_backup_at: string | null }[];
   degraded_policies?: { id: number; name: string; consecutive_failures?: number; last_failed_at?: string }[];
   trend?: { date: string; total: number; success: number }[];
@@ -135,6 +138,7 @@ function mapBackupHealth(raw: BackupHealthRaw | null | undefined): BackupHealthD
   const trendTotals = healthTrend.reduce((acc: { t: number; s: number }, p: HealthTrendPoint) => ({ t: acc.t + p.total, s: acc.s + p.success }), { t: 0, s: 0 });
 
   return {
+    ...(typeof raw?.generated_at === "string" && raw.generated_at ? { generatedAt: raw.generated_at } : {}),
     staleNodes,
     degradedPolicies,
     healthTrend,
@@ -144,7 +148,7 @@ function mapBackupHealth(raw: BackupHealthRaw | null | undefined): BackupHealthD
       stale48h: staleNodes.length - neverBackedUp,
       policiesHealthy: Math.max(0, totalPolicies - degradedPolicies.length),
       policiesDegraded: degradedPolicies.length,
-      successRate7d: trendTotals.t > 0 ? Math.round((trendTotals.s / trendTotals.t) * 1000) / 10 : 100,
+      successRate7d: trendTotals.t > 0 ? Math.round((trendTotals.s / trendTotals.t) * 1000) / 10 : null,
     },
   };
 }
