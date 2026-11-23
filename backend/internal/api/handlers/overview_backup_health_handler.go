@@ -117,8 +117,8 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		FROM task_runs tr
 		JOIN tasks t ON t.id = tr.task_id
 		JOIN policies p ON p.id = t.policy_id
-		WHERE p.enabled = ? AND ` + backuphealth.ClassifiedAttemptPredicate("tr")
-	degradedArgs := []any{true}
+		WHERE p.enabled = ? AND p.is_template = ? AND ` + backuphealth.ClassifiedAttemptPredicate("tr")
+	degradedArgs := []any{true, false}
 	if needFilter {
 		degradedSQL += ` AND tr.node_id_snapshot IN ?`
 		degradedArgs = append(degradedArgs, ownedIDs)
@@ -246,10 +246,10 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 	var policyCountErr error
 	if needFilter {
 		policyCountErr = h.db.Model(&model.Policy{}).
-			Where("enabled = ? AND id IN (SELECT policy_id FROM policy_nodes WHERE node_id IN ?)", true, ownedIDs).
+			Where("enabled = ? AND is_template = ? AND id IN (SELECT policy_id FROM policy_nodes WHERE node_id IN ?)", true, false, ownedIDs).
 			Count(&totalPolicies).Error
 	} else {
-		policyCountErr = h.db.Model(&model.Policy{}).Where("enabled = ?", true).Count(&totalPolicies).Error
+		policyCountErr = h.db.Model(&model.Policy{}).Where("enabled = ? AND is_template = ?", true, false).Count(&totalPolicies).Error
 	}
 	if policyCountErr != nil {
 		respondInternalError(c, policyCountErr)

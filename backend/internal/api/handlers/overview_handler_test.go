@@ -72,22 +72,28 @@ func parseOverview(t *testing.T, resp *httptest.ResponseRecorder) overviewBody {
 }
 
 func createOverviewPolicy(t *testing.T, db *gorm.DB, name string, enabled bool) model.Policy {
+	return createOverviewPolicyWithTemplate(t, db, name, enabled, false)
+}
+
+func createOverviewPolicyWithTemplate(t *testing.T, db *gorm.DB, name string, enabled bool, isTemplate bool) model.Policy {
 	t.Helper()
 	policy := model.Policy{
-		Name:       name,
-		SourcePath: "/src/" + name,
-		TargetPath: "/dst/" + name,
-		CronSpec:   "0 * * * *",
-		Enabled:    true,
+		Name:               name,
+		SourcePath:         "/src/" + name,
+		TargetPath:         "/dst/" + name,
+		CronSpec:           "0 * * * *",
+		RetentionMode:      "simple",
+		VerifyEnabled:      true,
+		HookTimeoutSeconds: 300,
+		MaxRetries:         2,
+		RetryBaseSeconds:   30,
+		DrillRestorePath:   "/tmp/xirang-drill",
+		DrillAutoCleanup:   true,
+		Enabled:            enabled,
+		IsTemplate:         isTemplate,
 	}
-	if err := db.Create(&policy).Error; err != nil {
+	if err := model.CreatePolicyWithExplicitValues(db, &policy, model.PolicyCreateExplicitColumns()...); err != nil {
 		t.Fatalf("create policy %q: %v", name, err)
-	}
-	if !enabled {
-		if err := db.Model(&model.Policy{}).Where("id = ?", policy.ID).Update("enabled", false).Error; err != nil {
-			t.Fatalf("disable policy %q: %v", name, err)
-		}
-		policy.Enabled = false
 	}
 	return policy
 }
@@ -148,10 +154,12 @@ func TestOverviewCountsEnabledPoliciesForAdminAndViewer(t *testing.T) {
 			createOverviewPolicy(t, db, "enabled-attached", true)
 			createOverviewPolicy(t, db, "enabled-unattached", true)
 			createOverviewPolicy(t, db, "disabled", false)
+			createOverviewPolicyWithTemplate(t, db, "template-enabled", true, true)
+			createOverviewPolicyWithTemplate(t, db, "template-disabled", false, true)
 
 			body := parseOverview(t, overviewGetAs(t, db, role, 1))
 			if body.Data.ActivePolicies != 2 {
-				t.Fatalf("%s overview should count every enabled policy, got activePolicies=%d", role, body.Data.ActivePolicies)
+				t.Fatalf("%s overview should count every enabled non-template policy, got activePolicies=%d", role, body.Data.ActivePolicies)
 			}
 		})
 	}
@@ -176,6 +184,7 @@ func TestOverviewOperatorCountsDistinctEnabledPoliciesOnOwnedNodes(t *testing.T)
 
 	ownedPolicy := createOverviewPolicy(t, db, "owned-enabled", true)
 	disabledPolicy := createOverviewPolicy(t, db, "owned-disabled", false)
+	templatePolicy := createOverviewPolicyWithTemplate(t, db, "owned-template-enabled", true, true)
 	otherPolicy := createOverviewPolicy(t, db, "other-enabled", true)
 	createOverviewPolicy(t, db, "unattached-enabled", true)
 	for _, nodeID := range []uint{ownedNodeA.ID, ownedNodeB.ID} {
@@ -186,13 +195,16 @@ func TestOverviewOperatorCountsDistinctEnabledPoliciesOnOwnedNodes(t *testing.T)
 	if err := db.Create(&model.PolicyNode{PolicyID: disabledPolicy.ID, NodeID: ownedNodeA.ID}).Error; err != nil {
 		t.Fatalf("attach disabled policy: %v", err)
 	}
+	if err := db.Create(&model.PolicyNode{PolicyID: templatePolicy.ID, NodeID: ownedNodeA.ID}).Error; err != nil {
+		t.Fatalf("attach template policy: %v", err)
+	}
 	if err := db.Create(&model.PolicyNode{PolicyID: otherPolicy.ID, NodeID: otherNode.ID}).Error; err != nil {
 		t.Fatalf("attach other policy: %v", err)
 	}
 
 	body := parseOverview(t, overviewGetAs(t, db, "operator", op.ID))
 	if body.Data.ActivePolicies != 1 {
-		t.Fatalf("operator overview should count distinct enabled policies on owned nodes, got activePolicies=%d", body.Data.ActivePolicies)
+		t.Fatalf("operator overview should count distinct enabled non-template policies on owned nodes, got activePolicies=%d", body.Data.ActivePolicies)
 	}
 }
 

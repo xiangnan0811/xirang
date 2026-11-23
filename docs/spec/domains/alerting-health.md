@@ -292,7 +292,9 @@ SLO 仅接受任务 `success_rate`，不接受 `availability`。异常仅保留 
 及其 Sigma、事件保留和通知链；不接受 EWMA/disk_forecast 查询筛选。报表保留任务结果、
 RPO/RTO，移除 DiskTrend。到期提醒和维护窗口保持原有边界。
 
-`GET /api/v1/overview` 只返回当前身份可见的 `activePolicies`。它不再嵌入节点计数、健康事件、最近任务、任务流量或备份指标；节点的 `open_alerts`/`running_tasks` 仍由独立的 `GET /api/v1/nodes/:id/summary` 提供，`/overview/backup-health`、`/overview/backup-confidence` 和 `/overview/storage-usage` 仍是独立接口。
+`GET /api/v1/overview` 只返回当前身份可见的 `activePolicies`（只统计启用且非模板的策略 `enabled=true AND is_template=false`）。它不再嵌入节点计数、健康事件、最近任务、任务流量或备份指标；节点的 `open_alerts`/`running_tasks` 仍由独立的 `GET /api/v1/nodes/:id/summary` 提供，`/overview/backup-health`、`/overview/backup-confidence` 和 `/overview/storage-usage` 仍是独立接口。`/overview/backup-health` 的 `summary.total_policies` 与 `degraded_policies`、`/overview/storage-usage` 的本地 `mount_points` 与未物化 `per_node` 候选，以及后台存储空间监控、完整性检查与保留清理均只作用于 `enabled=true AND is_template=false` 的策略；内置策略模板初始化及启动幂等修复始终保持 `enabled=false`。
+
+`GET /api/v1/overview/traffic` 要求 `tasks:read` 与节点 ownership 过滤（operator 无 owned node 时返回按同一窗口生成的全零时间桶），支持 `window=1h|24h|7d`（默认 `1h`，桶宽分别为 5m/30m/3h）。吞吐量按 `SampleWriter` 的 10 秒采样切片聚合（同切片同任务取均值后再按不重复任务求和，最后对桶内活跃切片取均值），避免单任务多样本按分钟叠加放大；当服务端时间处于当前桶内（`now > currentBucketStart`）时，响应保留末尾进行中时间桶 `[currentBucketStart, now]` 并标记 `partial: true`（已完成历史桶省略 `partial`）。
 
 
 ## 备份可信度

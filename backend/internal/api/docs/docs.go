@@ -14984,6 +14984,24 @@ const docTemplate = `{
                         "description": "关键字模糊搜索",
                         "name": "keyword",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序字段（如 -recent_activity、-last_finished_at、-last_run_at、-created_at）",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序字段",
+                        "name": "sort_by",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序方向（asc/desc）",
+                        "name": "sort_order",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -21110,7 +21128,13 @@ const docTemplate = `{
                 "id": {
                     "type": "integer"
                 },
+                "last_duration_ms": {
+                    "type": "integer"
+                },
                 "last_error": {
+                    "type": "string"
+                },
+                "last_finished_at": {
                     "type": "string"
                 },
                 "last_run_at": {

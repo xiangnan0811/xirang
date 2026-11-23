@@ -39,9 +39,9 @@ func (m *Manager) checkLocalStorageSpace() {
 		}
 	}
 
-	// 收集所有 rsync 类型策略的本地目标路径
+	// 收集所有启用且非模板策略的本地目标路径
 	var policies []model.Policy
-	if err := m.db.Where("enabled = ?", true).Find(&policies).Error; err != nil {
+	if err := m.db.Where("enabled = ? AND is_template = ?", true, false).Find(&policies).Error; err != nil {
 		log.Error().Err(err).Msg("查询策略失败（存储空间检查）")
 		return
 	}

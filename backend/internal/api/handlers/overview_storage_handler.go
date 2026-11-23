@@ -62,9 +62,9 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 		return
 	}
 
-	// 收集策略的目标路径（operator 仅关联 owned 节点的策略）
+	// 收集策略的目标路径（仅启用且非模板策略；operator 仅关联 owned 节点的策略）
 	var policies []model.Policy
-	policyQ := h.db.Select("id, name, target_path")
+	policyQ := h.db.WithContext(ctx).Select("id, name, target_path").Where("enabled = ? AND is_template = ?", true, false)
 	if needFilter {
 		policyQ = policyQ.Where("id IN (SELECT policy_id FROM policy_nodes WHERE node_id IN ?)", ownedIDs)
 	}

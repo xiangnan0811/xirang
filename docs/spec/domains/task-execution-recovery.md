@@ -61,6 +61,8 @@ p50/p99。“全部可见任务/指定任务”与任务列表当前状态筛选
 面板 CRUD、指标目录及旧 dashboard URL/API 已退役，不提供兼容转发。
 任务日志仅属于任务领域：`GET /api/v1/tasks/:id/logs`、`GET /api/v1/task-runs/:id/logs` 和 `/api/v1/ws/logs` 提供任务/运行日志，并继续使用 `tasks:read` 授权；安全审计日志由独立审计领域保留，不能用任务日志替代。
 
+`GET /api/v1/tasks` 与 `GET /api/v1/tasks/:id` 在保留原有字段的同时，从最新终态 `TaskRun`（`status IN ('success','failed','canceled','warning','skipped') AND finished_at IS NOT NULL`，按 `finished_at DESC, id DESC`）只读投影可选的 `last_finished_at`（UTC）与 `last_duration_ms`（毫秒）；从未完成运行的任务省略这两个字段，不以 `updated_at` 冒充完成时间，也不伪造未持久化的传输字节数。`GET /api/v1/tasks` 保留默认 `created_at desc, id desc` 排序，并支持 `sort` / `sort_by` 使用 `recent_activity`（取 `last_finished_at` 与 `last_run_at` 较新者）、`last_finished_at` 与 `last_run_at`；空时间戳在 SQLite 与 PostgreSQL 上均固定排在末尾。
+
 ### 任务日志读取与历史入口
 
 `/app/logs?task=<Task ID>` 是任务级历史与实时日志入口，不定位精确 Run。

@@ -242,3 +242,36 @@ func TestCheckLocalStorageSpace_DisabledPolicySkipped(t *testing.T) {
 		t.Fatalf("禁用策略不应产生新告警，调用前: %d，调用后: %d", beforeCount, afterCount)
 	}
 }
+
+func TestCheckLocalStorageSpace_TemplatePolicySkipped(t *testing.T) {
+	db := openStorageMonitorTestDB(t)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
+
+	tmpDir := t.TempDir()
+	policy := model.Policy{
+		Name:       "enabled-template-policy",
+		SourcePath: "/data/src",
+		TargetPath: tmpDir,
+		CronSpec:   "@daily",
+		Enabled:    true,
+		IsTemplate: true,
+	}
+	if err := model.CreatePolicyWithExplicitValues(db, &policy, "enabled", "is_template"); err != nil {
+		t.Fatalf("创建模板策略失败: %v", err)
+	}
+
+	t.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "0")
+	t.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "1")
+	t.Setenv("ALERT_DEDUP_WINDOW", "0")
+
+	m.checkLocalStorageSpace()
+
+	var count int64
+	if err := db.Model(&model.Alert{}).Count(&count).Error; err != nil {
+		t.Fatalf("查询告警失败: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("模板策略不应触发存储告警，实际告警数: %d", count)
+	}
+}

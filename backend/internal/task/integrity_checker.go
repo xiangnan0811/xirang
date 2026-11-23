@@ -19,7 +19,7 @@ func (m *Manager) checkIntegrity() {
 	log := logger.Module("task")
 
 	var policies []model.Policy
-	if err := m.db.Where("enabled = ?", true).Preload("Nodes").Find(&policies).Error; err != nil {
+	if err := m.db.Where("enabled = ? AND is_template = ?", true, false).Preload("Nodes").Find(&policies).Error; err != nil {
 		log.Error().Err(err).Msg("查询策略失败（完整性检查）")
 		return
 	}

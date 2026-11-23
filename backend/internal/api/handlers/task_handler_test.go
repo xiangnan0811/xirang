@@ -1803,3 +1803,257 @@ func TestTaskUpdateRejectsArchivedTask(t *testing.T) {
 		t.Fatalf("archived HTTP update mutated task: name=%q cron=%q archived_at=%v", reloaded.Name, reloaded.CronSpec, reloaded.ArchivedAt)
 	}
 }
+
+func TestTaskListAndGetIncludeLatestTerminalRunMetadata(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试表失败: %v", err)
+	}
+
+	node := model.Node{Name: "meta-node", Host: "10.0.20.1", Username: "root", AuthType: "key", BackupDir: "meta-node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	base := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	taskWithHistory := model.Task{Name: "task-with-history", NodeID: node.ID, ExecutorType: "rsync", Status: "running", CreatedAt: base.Add(-2 * time.Hour), UpdatedAt: base}
+	taskSkipped := model.Task{Name: "task-skipped", NodeID: node.ID, ExecutorType: "command", Status: "skipped", CreatedAt: base.Add(-1 * time.Hour), UpdatedAt: base}
+	taskNeverFinished := model.Task{Name: "task-never-finished", NodeID: node.ID, ExecutorType: "rsync", Status: "pending", CreatedAt: base, UpdatedAt: base}
+	for _, item := range []*model.Task{&taskWithHistory, &taskSkipped, &taskNeverFinished} {
+		if err := db.Create(item).Error; err != nil {
+			t.Fatalf("创建任务 %q 失败: %v", item.Name, err)
+		}
+	}
+
+	oldSuccessFinish := base.Add(-90 * time.Minute)
+	latestFailedFinish := base.Add(-15 * time.Minute)
+	runningStart := base.Add(-2 * time.Minute)
+	skippedFinish := base.Add(-5 * time.Minute)
+	runs := []model.TaskRun{
+		{TaskID: taskWithHistory.ID, Status: model.TaskRunStatusSuccess, TriggerType: "cron", FinishedAt: &oldSuccessFinish, DurationMs: 9000},
+		{TaskID: taskWithHistory.ID, Status: model.TaskRunStatusFailed, TriggerType: "manual", FinishedAt: &latestFailedFinish, DurationMs: 1234},
+		{TaskID: taskWithHistory.ID, Status: model.TaskRunStatusRunning, TriggerType: "manual", StartedAt: &runningStart, Progress: 50},
+		{TaskID: taskSkipped.ID, Status: model.TaskRunStatusSkipped, TriggerType: "chain", FinishedAt: &skippedFinish, DurationMs: 0},
+		{TaskID: taskNeverFinished.ID, Status: model.TaskRunStatusPending, TriggerType: "manual"},
+	}
+	for i := range runs {
+		if err := db.Create(&runs[i]).Error; err != nil {
+			t.Fatalf("创建 TaskRun[%d] 失败: %v", i, err)
+		}
+	}
+
+	r := withAdminRole(gin.New())
+	handler := NewTaskHandler(db, nil)
+	r.GET("/tasks", handler.List)
+	r.GET("/tasks/:id", handler.Get)
+
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/tasks", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("GET /tasks 期望 200，实际 %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var listPayload struct {
+		Data []struct {
+			ID             uint       `json:"id"`
+			Name           string     `json:"name"`
+			LastFinishedAt *time.Time `json:"last_finished_at"`
+			LastDurationMs *int64     `json:"last_duration_ms"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &listPayload); err != nil {
+		t.Fatalf("解析列表响应失败: %v", err)
+	}
+	byID := make(map[uint]struct {
+		LastFinishedAt *time.Time
+		LastDurationMs *int64
+	}, len(listPayload.Data))
+	for _, item := range listPayload.Data {
+		byID[item.ID] = struct {
+			LastFinishedAt *time.Time
+			LastDurationMs *int64
+		}{item.LastFinishedAt, item.LastDurationMs}
+	}
+
+	histMeta := byID[taskWithHistory.ID]
+	if histMeta.LastFinishedAt == nil || !histMeta.LastFinishedAt.Equal(latestFailedFinish) {
+		t.Fatalf("taskWithHistory last_finished_at=%v, want %v", histMeta.LastFinishedAt, latestFailedFinish)
+	}
+	if histMeta.LastDurationMs == nil || *histMeta.LastDurationMs != 1234 {
+		t.Fatalf("taskWithHistory last_duration_ms=%v, want 1234", histMeta.LastDurationMs)
+	}
+
+	skippedMeta := byID[taskSkipped.ID]
+	if skippedMeta.LastFinishedAt == nil || !skippedMeta.LastFinishedAt.Equal(skippedFinish) {
+		t.Fatalf("taskSkipped last_finished_at=%v, want %v", skippedMeta.LastFinishedAt, skippedFinish)
+	}
+	if skippedMeta.LastDurationMs == nil || *skippedMeta.LastDurationMs != 0 {
+		t.Fatalf("taskSkipped last_duration_ms=%v, want 0", skippedMeta.LastDurationMs)
+	}
+
+	neverMeta := byID[taskNeverFinished.ID]
+	if neverMeta.LastFinishedAt != nil || neverMeta.LastDurationMs != nil {
+		t.Fatalf("taskNeverFinished 不应返回完成元信息，实际: %+v", neverMeta)
+	}
+
+	// GET /tasks/:id 应返回一致的最新完成元信息。
+	getResp := httptest.NewRecorder()
+	r.ServeHTTP(getResp, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d", taskWithHistory.ID), nil))
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/:id 期望 200，实际 %d", getResp.Code)
+	}
+	var detailPayload struct {
+		Data struct {
+			LastFinishedAt *time.Time `json:"last_finished_at"`
+			LastDurationMs *int64     `json:"last_duration_ms"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(getResp.Body.Bytes(), &detailPayload); err != nil {
+		t.Fatalf("解析详情响应失败: %v", err)
+	}
+	if detailPayload.Data.LastFinishedAt == nil || !detailPayload.Data.LastFinishedAt.Equal(latestFailedFinish) ||
+		detailPayload.Data.LastDurationMs == nil || *detailPayload.Data.LastDurationMs != 1234 {
+		t.Fatalf("GET /tasks/:id 完成元信息不一致: %+v", detailPayload.Data)
+	}
+}
+
+func TestTaskListSortByRecentActivityLastFinishedAtAndLastRunAt(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试表失败: %v", err)
+	}
+
+	ownedNode := model.Node{Name: "sort-owned", Host: "10.0.21.1", Username: "root", AuthType: "key", BackupDir: "sort-owned"}
+	otherNode := model.Node{Name: "sort-other", Host: "10.0.21.2", Username: "root", AuthType: "key", BackupDir: "sort-other"}
+	if err := db.Create(&ownedNode).Error; err != nil {
+		t.Fatalf("创建 owned 节点失败: %v", err)
+	}
+	if err := db.Create(&otherNode).Error; err != nil {
+		t.Fatalf("创建 other 节点失败: %v", err)
+	}
+	op := model.User{Username: "sort-op", Role: "operator", PasswordHash: "x"}
+	if err := db.Create(&op).Error; err != nil {
+		t.Fatalf("创建 operator 失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: op.ID}).Error; err != nil {
+		t.Fatalf("创建节点归属失败: %v", err)
+	}
+
+	now := time.Date(2026, 5, 10, 15, 0, 0, 0, time.UTC)
+	runningStart := now.Add(-1 * time.Minute)
+	otherStart := now.Add(-2 * time.Minute)
+	runningPrevFinish := now.Add(-2 * time.Hour)
+	oldTaskStart := now.Add(-6 * time.Minute)
+	oldTaskFinish := now.Add(-5 * time.Minute)
+	olderTaskStart := now.Add(-35 * time.Minute)
+	olderTaskFinish := now.Add(-30 * time.Minute)
+
+	// 1. 很久以前创建但刚刚失败完成的任务
+	oldRecentlyFinished := model.Task{
+		Name: "old-recently-finished", NodeID: ownedNode.ID, ExecutorType: "rsync",
+		Status: "failed", LastRunAt: &oldTaskStart, CreatedAt: now.Add(-365 * 24 * time.Hour),
+	}
+	// 2. 刚刚开始运行、此前更早完成过一次的任务
+	currentlyRunning := model.Task{
+		Name: "currently-running", NodeID: ownedNode.ID, ExecutorType: "rsync",
+		Status: "running", LastRunAt: &runningStart, CreatedAt: now.Add(-10 * 24 * time.Hour),
+	}
+	// 3. 30 分钟前完成的任务
+	olderFinished := model.Task{
+		Name: "older-finished", NodeID: ownedNode.ID, ExecutorType: "rsync",
+		Status: "success", LastRunAt: &olderTaskStart, CreatedAt: now.Add(-5 * 24 * time.Hour),
+	}
+	// 4. 刚刚创建但从未运行过的任务
+	neverRan := model.Task{
+		Name: "newly-created-never-ran", NodeID: ownedNode.ID, ExecutorType: "rsync",
+		Status: "pending", CreatedAt: now,
+	}
+	// 5. 其他节点上的任务（operator 不可见）
+	otherNodeTask := model.Task{
+		Name: "other-node-task", NodeID: otherNode.ID, ExecutorType: "rsync",
+		Status: "success", LastRunAt: &otherStart, CreatedAt: now,
+	}
+
+	for _, item := range []*model.Task{&oldRecentlyFinished, &currentlyRunning, &olderFinished, &neverRan, &otherNodeTask} {
+		if err := db.Create(item).Error; err != nil {
+			t.Fatalf("创建任务 %q 失败: %v", item.Name, err)
+		}
+	}
+	otherFinish := now.Add(-30 * time.Second)
+	for _, run := range []model.TaskRun{
+		{TaskID: oldRecentlyFinished.ID, Status: "failed", StartedAt: &oldTaskStart, FinishedAt: &oldTaskFinish, DurationMs: 60000},
+		{TaskID: currentlyRunning.ID, Status: "success", FinishedAt: &runningPrevFinish, DurationMs: 10000},
+		{TaskID: currentlyRunning.ID, Status: "running", StartedAt: &runningStart},
+		{TaskID: olderFinished.ID, Status: "success", StartedAt: &olderTaskStart, FinishedAt: &olderTaskFinish, DurationMs: 300000},
+		{TaskID: otherNodeTask.ID, Status: "success", StartedAt: &otherStart, FinishedAt: &otherFinish, DurationMs: 30000},
+	} {
+		if err := db.Create(&run).Error; err != nil {
+			t.Fatalf("创建 TaskRun 失败: %v", err)
+		}
+	}
+
+	adminRouter := withAdminRole(gin.New())
+	handler := NewTaskHandler(db, nil)
+	adminRouter.GET("/tasks", handler.List)
+
+	fetchNames := func(r *gin.Engine, path string) []string {
+		t.Helper()
+		resp := httptest.NewRecorder()
+		r.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, path, nil))
+		if resp.Code != http.StatusOK {
+			t.Fatalf("GET %s 期望 200，实际 %d body=%s", path, resp.Code, resp.Body.String())
+		}
+		var payload struct {
+			Data []struct {
+				Name string `json:"name"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("GET %s 解析响应失败: %v", path, err)
+		}
+		names := make([]string, len(payload.Data))
+		for i, item := range payload.Data {
+			names[i] = item.Name
+		}
+		return names
+	}
+
+	assertOrder := func(got, want []string, label string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s 数量=%d, want %d: got=%v want=%v", label, len(got), len(want), got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%s 顺序错误: got=%v want=%v", label, got, want)
+			}
+		}
+	}
+
+	// sort=-recent_activity & sort_by=recent_activity&sort_order=desc
+	wantRecent := []string{"other-node-task", "currently-running", "old-recently-finished", "older-finished", "newly-created-never-ran"}
+	assertOrder(fetchNames(adminRouter, "/tasks?sort=-recent_activity"), wantRecent, "sort=-recent_activity")
+	assertOrder(fetchNames(adminRouter, "/tasks?sort_by=recent_activity&sort_order=desc"), wantRecent, "sort_by=recent_activity")
+
+	// sort=-last_finished_at: 最近完成优先，从未运行垫底
+	wantFinished := []string{"other-node-task", "old-recently-finished", "older-finished", "currently-running", "newly-created-never-ran"}
+	assertOrder(fetchNames(adminRouter, "/tasks?sort=-last_finished_at"), wantFinished, "sort=-last_finished_at")
+
+	// sort=-last_run_at: last_run_at=NULL 必须垫底
+	wantLastRun := []string{"currently-running", "other-node-task", "old-recently-finished", "older-finished", "newly-created-never-ran"}
+	assertOrder(fetchNames(adminRouter, "/tasks?sort=-last_run_at"), wantLastRun, "sort=-last_run_at")
+
+	// operator 视角：保留 ownership 过滤
+	opRouter := gin.New()
+	opRouter.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, op.ID)
+		c.Next()
+	})
+	opRouter.GET("/tasks", handler.List)
+	assertOrder(
+		fetchNames(opRouter, "/tasks?sort=-recent_activity&page_size=2&page=1"),
+		[]string{"currently-running", "old-recently-finished"},
+		"operator sort=-recent_activity page 1",
+	)
+}

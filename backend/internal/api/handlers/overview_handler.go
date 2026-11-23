@@ -37,19 +37,19 @@ func (h *OverviewHandler) Get(c *gin.Context) {
 
 	var activePolicies int64
 	if needFilter {
-		// Operators can only see enabled policies attached to their owned nodes.
+		// Operators can only see enabled non-template policies attached to their owned nodes.
 		// An empty ownership set must remain empty rather than becoming unfiltered.
 		if len(ownedIDs) > 0 {
 			if err := h.db.Model(&model.Policy{}).
-				Where("enabled = ? AND id IN (SELECT policy_id FROM policy_nodes WHERE node_id IN ?)", true, ownedIDs).
+				Where("enabled = ? AND is_template = ? AND id IN (SELECT policy_id FROM policy_nodes WHERE node_id IN ?)", true, false, ownedIDs).
 				Count(&activePolicies).Error; err != nil {
 				respondInternalError(c, err)
 				return
 			}
 		}
 	} else {
-		// Admins and viewers can see every enabled policy.
-		if err := h.db.Model(&model.Policy{}).Where("enabled = ?", true).Count(&activePolicies).Error; err != nil {
+		// Admins and viewers can see every enabled non-template policy.
+		if err := h.db.Model(&model.Policy{}).Where("enabled = ? AND is_template = ?", true, false).Count(&activePolicies).Error; err != nil {
 			respondInternalError(c, err)
 			return
 		}

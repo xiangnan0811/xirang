@@ -580,3 +580,273 @@ func TestOverviewTrafficSetsTruncatedWhenTaskRunCapHit(t *testing.T) {
 		t.Fatalf("截断后 started 合计应为 2，实际 %d", totalStarted)
 	}
 }
+
+func TestOverviewTrafficAggregates10sSlicesWithout6xInflation(t *testing.T) {
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	minuteStart := now.Add(-10 * time.Minute)
+	// 单任务按 10s 节流窗口在 1 分钟内写入 6 条 100 Mbps 样本，聚合后仍应为 ~100 Mbps（不能变成 600 Mbps）。
+	for i := 0; i < 6; i++ {
+		sampledAt := minuteStart.Add(time.Duration(i*10) * time.Second)
+		sample := model.TaskTrafficSample{
+			TaskID: 1, NodeID: 1, RunStartedAt: minuteStart, SampledAt: sampledAt, ThroughputMbps: 100,
+		}
+		if err := db.Create(&sample).Error; err != nil {
+			t.Fatalf("写入采样失败: %v", err)
+		}
+	}
+
+	// 另一桶内同一任务在同一 10s 切片出现两条样本（100 和 120），应取切片内平均 110 而非翻倍为 220。
+	otherSlice := now.Add(-20 * time.Minute)
+	for _, s := range []model.TaskTrafficSample{
+		{TaskID: 1, NodeID: 1, RunStartedAt: otherSlice, SampledAt: otherSlice.Add(2 * time.Second), ThroughputMbps: 100},
+		{TaskID: 1, NodeID: 1, RunStartedAt: otherSlice, SampledAt: otherSlice.Add(5 * time.Second), ThroughputMbps: 120},
+	} {
+		if err := db.Create(&s).Error; err != nil {
+			t.Fatalf("写入同切片重复采样失败: %v", err)
+		}
+	}
+
+	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
+	r := trafficTestRouter(handler)
+	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var result struct {
+		Data struct {
+			Points []struct {
+				TimestampMs     int64   `json:"timestamp_ms"`
+				ThroughputMbps  float64 `json:"throughput_mbps"`
+				SampleCount     int     `json:"sample_count"`
+				ActiveTaskCount int     `json:"active_task_count"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	var found6Slices, foundDedupSlice bool
+	for _, p := range result.Data.Points {
+		if p.TimestampMs == minuteStart.UnixMilli() {
+			found6Slices = true
+			if p.ThroughputMbps != 100 || p.SampleCount != 6 || p.ActiveTaskCount != 1 {
+				t.Fatalf("单任务 6 样本/分钟聚合错误: %+v (want throughput=100, sample_count=6, active_task_count=1)", p)
+			}
+		}
+		if p.TimestampMs == otherSlice.UnixMilli() {
+			foundDedupSlice = true
+			if p.ThroughputMbps != 110 || p.SampleCount != 1 || p.ActiveTaskCount != 1 {
+				t.Fatalf("同 10s 切片重复样本聚合错误: %+v (want throughput=110, sample_count=1, active_task_count=1)", p)
+			}
+		}
+	}
+	if !found6Slices || !foundDedupSlice {
+		t.Fatalf("未命中目标时间桶: found6Slices=%v foundDedupSlice=%v", found6Slices, foundDedupSlice)
+	}
+}
+
+func TestOverviewTrafficSumsConcurrentTasksAndSeparatesSequentialTasksPer10sSlice(t *testing.T) {
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	concurrentBucket := now.Add(-15 * time.Minute)
+	// 两个并发任务在同一分钟内各自按 10s 切片上报 100 Mbps -> 合计 ~200 Mbps，active_task_count=2。
+	for i := 0; i < 6; i++ {
+		ts := concurrentBucket.Add(time.Duration(i*10) * time.Second)
+		for _, taskID := range []uint{1, 2} {
+			s := model.TaskTrafficSample{
+				TaskID: taskID, NodeID: 1, RunStartedAt: concurrentBucket, SampledAt: ts, ThroughputMbps: 100,
+			}
+			if err := db.Create(&s).Error; err != nil {
+				t.Fatalf("写入并发采样失败: %v", err)
+			}
+		}
+	}
+
+	// 同分钟内串行不重叠的两个任务（任务 3 在 :00/:10/:20，任务 4 在 :30/:40/:50）-> 平均 ~100 Mbps，active_task_count=1。
+	sequentialBucket := now.Add(-30 * time.Minute)
+	for i := 0; i < 3; i++ {
+		if err := db.Create(&model.TaskTrafficSample{
+			TaskID: 3, NodeID: 1, RunStartedAt: sequentialBucket,
+			SampledAt: sequentialBucket.Add(time.Duration(i*10) * time.Second), ThroughputMbps: 100,
+		}).Error; err != nil {
+			t.Fatalf("写入串行任务 3 采样失败: %v", err)
+		}
+		if err := db.Create(&model.TaskTrafficSample{
+			TaskID: 4, NodeID: 1, RunStartedAt: sequentialBucket,
+			SampledAt: sequentialBucket.Add(time.Duration((i+3)*10) * time.Second), ThroughputMbps: 100,
+		}).Error; err != nil {
+			t.Fatalf("写入串行任务 4 采样失败: %v", err)
+		}
+	}
+
+	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
+	r := trafficTestRouter(handler)
+	req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际: %d", resp.Code)
+	}
+
+	var result struct {
+		Data struct {
+			Points []struct {
+				TimestampMs     int64   `json:"timestamp_ms"`
+				ThroughputMbps  float64 `json:"throughput_mbps"`
+				SampleCount     int     `json:"sample_count"`
+				ActiveTaskCount int     `json:"active_task_count"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	var foundConcurrent, foundSequential bool
+	for _, p := range result.Data.Points {
+		if p.TimestampMs == concurrentBucket.UnixMilli() {
+			foundConcurrent = true
+			if p.ThroughputMbps != 200 || p.SampleCount != 6 || p.ActiveTaskCount != 2 {
+				t.Fatalf("并发任务聚合错误: %+v (want throughput=200, sample_count=6, active_task_count=2)", p)
+			}
+		}
+		if p.TimestampMs == sequentialBucket.UnixMilli() {
+			foundSequential = true
+			if p.ThroughputMbps != 100 || p.SampleCount != 6 || p.ActiveTaskCount != 1 {
+				t.Fatalf("串行任务聚合错误: %+v (want throughput=100, sample_count=6, active_task_count=1)", p)
+			}
+		}
+	}
+	if !foundConcurrent || !foundSequential {
+		t.Fatalf("未命中测试桶: concurrent=%v sequential=%v", foundConcurrent, foundSequential)
+	}
+}
+
+func TestOverviewTrafficIncludesTrailingPartialBucketAcrossWindows(t *testing.T) {
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	seedOverviewTrafficTasks(t, db, 1)
+
+	now := time.Date(2026, 3, 7, 12, 17, 0, 0, time.UTC)
+	// 1h: currentBucketStart=12:15 -> 12 个完整桶 (11:15..12:10) + 1 个部分桶 (12:15) = 13 个点
+	// 24h: currentBucketStart=12:00 -> 48 个完整桶 + 1 个部分桶 (12:00) = 49 个点
+	// 7d: currentBucketStart=12:00 -> 56 个完整桶 + 1 个部分桶 (12:00) = 57 个点
+	sampleAt := time.Date(2026, 3, 7, 12, 16, 10, 0, time.UTC)
+	futureSampleAt := time.Date(2026, 3, 7, 12, 18, 0, 0, time.UTC)
+	startedAt := time.Date(2026, 3, 7, 12, 15, 30, 0, time.UTC)
+	failedAt := now // exact now inside partial bucket
+	for _, s := range []model.TaskTrafficSample{
+		{TaskID: 1, NodeID: 1, RunStartedAt: startedAt, SampledAt: sampleAt, ThroughputMbps: 75},
+		{TaskID: 1, NodeID: 1, RunStartedAt: startedAt, SampledAt: futureSampleAt, ThroughputMbps: 999},
+	} {
+		if err := db.Create(&s).Error; err != nil {
+			t.Fatalf("写入采样失败: %v", err)
+		}
+	}
+	run := model.TaskRun{TaskID: 1, Status: "failed", StartedAt: &startedAt, FinishedAt: &failedAt}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("写入 TaskRun 失败: %v", err)
+	}
+
+	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
+	r := trafficTestRouter(handler)
+
+	for _, tc := range []struct {
+		window           string
+		wantCount        int
+		wantPartialStart time.Time
+	}{
+		{window: "1h", wantCount: 13, wantPartialStart: time.Date(2026, 3, 7, 12, 15, 0, 0, time.UTC)},
+		{window: "24h", wantCount: 49, wantPartialStart: time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)},
+		{window: "7d", wantCount: 57, wantPartialStart: time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/overview/traffic?window="+tc.window, nil)
+		resp := httptest.NewRecorder()
+		r.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s 期望 200，实际: %d body=%s", tc.window, resp.Code, resp.Body.String())
+		}
+		var result struct {
+			Data struct {
+				HasRealSamples bool `json:"has_real_samples"`
+				Points         []struct {
+					TimestampMs     int64   `json:"timestamp_ms"`
+					ThroughputMbps  float64 `json:"throughput_mbps"`
+					ActiveTaskCount int     `json:"active_task_count"`
+					StartedCount    int     `json:"started_count"`
+					FailedCount     int     `json:"failed_count"`
+					Partial         bool    `json:"partial"`
+				} `json:"points"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+			t.Fatalf("%s 解析响应失败: %v", tc.window, err)
+		}
+		if !result.Data.HasRealSamples {
+			t.Fatalf("%s 存在当前桶采样时 has_real_samples 应为 true", tc.window)
+		}
+		if len(result.Data.Points) != tc.wantCount {
+			t.Fatalf("%s 期望 %d 个桶，实际: %d", tc.window, tc.wantCount, len(result.Data.Points))
+		}
+		for i, p := range result.Data.Points {
+			isLast := i == len(result.Data.Points)-1
+			if isLast {
+				if !p.Partial || p.TimestampMs != tc.wantPartialStart.UnixMilli() {
+					t.Fatalf("%s 末尾桶应标记 partial=true 且起始于 %v，实际: %+v", tc.window, tc.wantPartialStart, p)
+				}
+				if p.ThroughputMbps != 75 || p.ActiveTaskCount != 1 || p.StartedCount != 1 || p.FailedCount != 1 {
+					t.Fatalf("%s 末尾桶应包含当前进行中的数据且排除未来样本: %+v", tc.window, p)
+				}
+			} else if p.Partial {
+				t.Fatalf("%s 历史完整桶 [%d] 不应标记 partial=true", tc.window, i)
+			}
+		}
+	}
+
+	// 空拥有节点的 operator 在桶中间时间也应得到带 partial=true 的尾桶。
+	op := model.User{Username: "traffic-empty-op", Role: "operator", PasswordHash: "x"}
+	if err := db.Create(&op).Error; err != nil {
+		t.Fatalf("创建 operator 失败: %v", err)
+	}
+	opRouter := gin.New()
+	opRouter.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, op.ID)
+		c.Next()
+	})
+	opRouter.GET("/overview/traffic", handler.Get)
+	opReq := httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil)
+	opResp := httptest.NewRecorder()
+	opRouter.ServeHTTP(opResp, opReq)
+	if opResp.Code != http.StatusOK {
+		t.Fatalf("operator 空拥有节点期望 200，实际: %d", opResp.Code)
+	}
+	var opResult struct {
+		Data struct {
+			Points []struct {
+				Partial bool `json:"partial"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(opResp.Body.Bytes(), &opResult); err != nil {
+		t.Fatalf("operator 解析响应失败: %v", err)
+	}
+	if len(opResult.Data.Points) != 13 || !opResult.Data.Points[12].Partial || opResult.Data.Points[0].Partial {
+		t.Fatalf("operator 空拥有节点部分桶状态错误: %+v", opResult.Data.Points)
+	}
+}

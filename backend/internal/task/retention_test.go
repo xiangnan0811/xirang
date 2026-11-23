@@ -725,3 +725,55 @@ func TestEnforceRsyncRetentionRejectsMutableTreeWithoutVersionAge(t *testing.T) 
 		t.Fatalf("旧版可变 Rsync 保留清理未记录安全拒绝: %+v", recorder.blocks)
 	}
 }
+
+func TestEnforceRetentionSkipsTemplatePolicies(t *testing.T) {
+	db := openManagerTestDB(t)
+	node := model.Node{
+		Name: "node-retention-tmpl", Host: "127.0.0.1", Port: 22,
+		Username: "root", AuthType: "key", BackupDir: "node-retention-tmpl",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	templatePolicy := model.Policy{
+		Name: "tmpl-retention", SourcePath: "/tmp/src1", TargetPath: t.TempDir(),
+		CronSpec: "@daily", RetentionDays: 7, Enabled: true, IsTemplate: true,
+	}
+	activePolicy := model.Policy{
+		Name: "active-retention", SourcePath: "/tmp/src2", TargetPath: t.TempDir(),
+		CronSpec: "@daily", RetentionDays: 7, Enabled: true, IsTemplate: false,
+	}
+	for _, p := range []*model.Policy{&templatePolicy, &activePolicy} {
+		if err := model.CreatePolicyWithExplicitValues(db, p, "enabled", "is_template"); err != nil {
+			t.Fatalf("创建策略失败: %v", err)
+		}
+	}
+
+	tmplTask := model.Task{
+		Name: "tmpl-retention-task", NodeID: node.ID, PolicyID: &templatePolicy.ID,
+		Source: "policy", ExecutorType: "rsync", RsyncSource: "/tmp/src1", RsyncTarget: templatePolicy.TargetPath,
+		Status: string(StatusPending),
+	}
+	activeTask := model.Task{
+		Name: "active-retention-task", NodeID: node.ID, PolicyID: &activePolicy.ID,
+		Source: "policy", ExecutorType: "rsync", RsyncSource: "/tmp/src2", RsyncTarget: activePolicy.TargetPath,
+		Status: string(StatusPending),
+	}
+	for _, taskRow := range []*model.Task{&tmplTask, &activeTask} {
+		if err := db.Create(taskRow).Error; err != nil {
+			t.Fatalf("创建任务失败: %v", err)
+		}
+	}
+
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	recorder := &legacyBlockRecorderFake{}
+	manager.SetLegacyBlockRecorder(recorder)
+
+	manager.enforceRetention()
+
+	if len(recorder.blocks) != 1 || recorder.blocks[0].TaskID != activeTask.ID {
+		t.Fatalf("期望仅非模板启用策略执行保留检查，实际记录: %+v", recorder.blocks)
+	}
+}

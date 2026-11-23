@@ -258,7 +258,11 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	if req.RetentionDays == 0 {
 		req.RetentionDays = 7
 	}
-	enabled := true
+	isTemplate := false
+	if req.IsTemplate != nil {
+		isTemplate = *req.IsTemplate
+	}
+	enabled := !isTemplate
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
@@ -269,11 +273,6 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	verifySampleRate := 0
 	if req.VerifySampleRate != nil {
 		verifySampleRate = *req.VerifySampleRate
-	}
-
-	isTemplate := false
-	if req.IsTemplate != nil {
-		isTemplate = *req.IsTemplate
 	}
 
 	// 应用感知备份：app_profile 非空时渲染 hook

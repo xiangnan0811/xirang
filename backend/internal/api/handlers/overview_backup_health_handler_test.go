@@ -1009,3 +1009,75 @@ func TestBackupHealth_FullScenario(t *testing.T) {
 	}
 	t.Fatalf("趋势数据中未找到今天 (%s)", today)
 }
+
+func TestBackupHealth_ExcludesTemplatePoliciesFromTotalsAndDegraded(t *testing.T) {
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+	if err := db.AutoMigrate(&model.PolicyNode{}); err != nil {
+		t.Fatalf("迁移 policy_nodes 失败: %v", err)
+	}
+
+	ownedNode := model.Node{Name: "bh-tmpl-owned", Host: "10.0.10.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "bh-tmpl-owned"}
+	if err := db.Create(&ownedNode).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	op := model.User{Username: "bh-tmpl-op", Role: "operator", PasswordHash: "x"}
+	if err := db.Create(&op).Error; err != nil {
+		t.Fatalf("创建 operator 失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: op.ID}).Error; err != nil {
+		t.Fatalf("绑定节点归属失败: %v", err)
+	}
+
+	activePolicy := model.Policy{
+		Name: "bh-active-policy", SourcePath: "/src/active", TargetPath: "/dst/active",
+		CronSpec: "0 * * * *", RetentionMode: "simple", Enabled: true, IsTemplate: false,
+	}
+	enabledTemplate := model.Policy{
+		Name: "bh-enabled-template", SourcePath: "/src/tmpl", TargetPath: "/dst/tmpl",
+		CronSpec: "0 * * * *", RetentionMode: "simple", Enabled: true, IsTemplate: true,
+	}
+	for _, p := range []*model.Policy{&activePolicy, &enabledTemplate} {
+		if err := model.CreatePolicyWithExplicitValues(db, p, model.PolicyCreateExplicitColumns()...); err != nil {
+			t.Fatalf("创建策略失败: %v", err)
+		}
+		if err := db.Create(&model.PolicyNode{PolicyID: p.ID, NodeID: ownedNode.ID}).Error; err != nil {
+			t.Fatalf("绑定策略节点失败: %v", err)
+		}
+	}
+
+	tmplTask := model.Task{Name: "bh-tmpl-task", NodeID: ownedNode.ID, PolicyID: &enabledTemplate.ID, ExecutorType: "rsync", Status: "failed"}
+	if err := db.Create(&tmplTask).Error; err != nil {
+		t.Fatalf("创建模板关联任务失败: %v", err)
+	}
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		run := model.TaskRun{
+			TaskID: tmplTask.ID, NodeIDSnapshot: ownedNode.ID, ExecutorTypeSnapshot: "rsync",
+			Status: "failed", CreatedAt: now.Add(-time.Duration(i+1) * time.Minute),
+		}
+		if err := db.Create(&run).Error; err != nil {
+			t.Fatalf("创建 task_run 失败: %v", err)
+		}
+	}
+
+	for _, tc := range []struct {
+		role   string
+		userID uint
+	}{
+		{role: "admin", userID: 1},
+		{role: "viewer", userID: 1},
+		{role: "operator", userID: op.ID},
+	} {
+		resp, result := callBackupHealthWithRole(t, db, tc.role, tc.userID)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s 期望 200，实际 %d body=%s", tc.role, resp.Code, resp.Body.String())
+		}
+		if result.Data.Summary.TotalPolicies != 1 {
+			t.Fatalf("%s 期望 total_policies=1（排除模板），实际: %d", tc.role, result.Data.Summary.TotalPolicies)
+		}
+		if result.Data.DegradedCount != 0 || len(result.Data.DegradedPolicies) != 0 {
+			t.Fatalf("%s 期望 degraded_count=0（模板不计入降级策略），实际: %+v", tc.role, result.Data.DegradedPolicies)
+		}
+	}
+}
