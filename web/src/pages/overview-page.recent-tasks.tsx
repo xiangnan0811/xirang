@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DataSurface, DataSurfaceContent, DataSurfaceHeader } from "@/components/ui/data-surface";
+import { EmptyState } from "@/components/ui/empty-state";
 import { InventoryRetryAlert } from "@/components/ui/inventory-retry-alert";
 import { LoadingState } from "@/components/ui/loading-state";
 import { formatTime } from "@/lib/date-utils";
@@ -141,7 +142,12 @@ export function OverviewRecentTasks({
             <LoadingState className="py-4" rows={3} title={t("overview.recentTasksLoading")} />
           </div>
         ) : !error && tasks.length === 0 ? (
-          <p className="py-8 text-center text-xs text-muted-foreground">{t("overview.noTaskData")}</p>
+          <EmptyState
+            as="h3"
+            icon={<Clock className="size-5" aria-hidden />}
+            title={t("overview.noTaskData")}
+            className="rounded-none border-0 bg-transparent py-8 shadow-none dark:border-0"
+          />
         ) : tasks.length > 0 ? (
           <div
             role="region"

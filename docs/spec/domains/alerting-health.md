@@ -296,6 +296,7 @@ RPO/RTO，移除 DiskTrend。到期提醒和维护窗口保持原有边界。
 
 `GET /api/v1/overview/traffic` 要求 `tasks:read` 与节点 ownership 过滤（operator 无 owned node 时返回按同一窗口生成的全零时间桶），支持 `window=1h|24h|7d`（默认 `1h`，桶宽分别为 5m/30m/3h）。吞吐量按 `SampleWriter` 的 10 秒采样切片聚合（同切片同任务取均值后再按不重复任务求和，最后对桶内活跃切片取均值），避免单任务多样本按分钟叠加放大；当服务端时间处于当前桶内（`now > currentBucketStart`）时，响应保留末尾进行中时间桶 `[currentBucketStart, now]` 并标记 `partial: true`（已完成历史桶省略 `partial`）。
 
+前端 `overview-api.ts` 映射 `/overview/backup-health` 时，将 7 天总运行数为 0 的 `summary.successRate7d` 保留为 `null`（`BackupHealthPanel` 渲染为中性 `—`，不伪造绿色 `100%`）。`/app/overview` 路由页作为唯一认证与数据编排入口，通过 `useOverviewPosture` 并行读取 `/overview/backup-confidence` 与 `/overview/backup-health`（带 `AbortController`、请求序号守卫与 token 切换重置），以 `StatCardsSection` 扁平 4 卡片展示保护态势（无外层套壳卡片，静态卡片不带悬停抬升误导，缺少验证证据时展示中性未验证/暂无，不将完整 `BackupHealthPanel`/`BackupConfidencePanel`/`StorageUsagePanel` 复制到概览页）；流量趋势图默认展示 `24h` 窗口，纵轴事件计数使用整数刻度，无真实吞吐采样但存在开始/失败事件时仍保留活动与失败图层并标注进行中末尾桶，仅在采样、开始与失败均为 0 时渲染 `EmptyState`；页面底部展示最近同步任务（最多 8 条，按最近完成/运行时间排序，展示真实耗时、完成时间及全部 8 种 `TaskStatus`，不展示伪造的 `speedMbps` 或以 `updated_at` 冒充完成时间），当存在健康事件或加载错误时与健康事件面板（最多展示 3 条，顶部右上角统一提供前往 `/app/notifications` 的“全部告警”入口）等高并排呈现，无健康事件且无错误时隐藏健康事件面板并让最近同步任务占满全宽展示下次运行时间。
 
 ## 备份可信度
 

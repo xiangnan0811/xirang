@@ -69,7 +69,7 @@ func NewOverviewTrafficHandler(db *gorm.DB, nowFn func() time.Time) *OverviewTra
 
 // Get godoc
 // @Summary      获取流量趋势
-// @Description  返回指定时间窗口（1h/24h/7d）内的任务吞吐量趋势数据
+// @Description  返回指定时间窗口（1h/24h/7d）内的任务吞吐量与活动趋势数据，包含进行中的末尾部分桶（partial）
 // @Tags         overview
 // @Security     Bearer
 // @Produce      json
@@ -176,7 +176,7 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 
 	startedCountByBucket := make(map[time.Time]int)
 	failedCountByBucket := make(map[time.Time]int)
-	if h.db != nil && h.db.Migrator().HasTable(&model.TaskRun{}) {
+	if h.db != nil && h.db.WithContext(ctx).Migrator().HasTable(&model.TaskRun{}) {
 		// Scope task_runs via tasks.node_id for operators. Cap rows + Truncated
 		// so high-volume windows cannot unbounded-load TaskRun into memory.
 		var startedRuns []model.TaskRun

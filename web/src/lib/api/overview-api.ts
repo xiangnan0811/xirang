@@ -44,24 +44,28 @@ function mapOverviewSummary(payload?: OverviewSummaryResponse | null): OverviewS
 }
 
 function mapOverviewTraffic(payload?: OverviewTrafficSeriesResponse | null): OverviewTrafficSeries {
+  const bucketMinutes = finiteNumber(payload?.bucket_minutes);
   return {
     window: payload?.window ?? "1h",
-    bucketMinutes: Number(payload?.bucket_minutes || 5),
+    bucketMinutes: bucketMinutes > 0 ? bucketMinutes : 5,
     hasRealSamples: Boolean(payload?.has_real_samples),
     truncated: Boolean(payload?.truncated),
     generatedAt: payload?.generated_at ?? "",
     points: Array.isArray(payload?.points)
-      ? payload.points.map((point) => ({
-          timestamp: point.timestamp,
-          timestampMs: Number(point.timestamp_ms || 0),
-          label: formatOverviewTrafficLabel(Number(point.timestamp_ms || 0), point.timestamp, payload?.window ?? "1h"),
-          throughputMbps: Number(point.throughput_mbps || 0),
-          sampleCount: Number(point.sample_count || 0),
-          activeTaskCount: Number(point.active_task_count || 0),
-          startedCount: Number(point.started_count || 0),
-          failedCount: Number(point.failed_count || 0),
-          ...(point.partial === true ? { partial: true } : {}),
-        }))
+      ? payload.points.map((point) => {
+          const timestampMs = finiteNumber(point.timestamp_ms);
+          return {
+            timestamp: point.timestamp,
+            timestampMs,
+            label: formatOverviewTrafficLabel(timestampMs, point.timestamp, payload?.window ?? "1h"),
+            throughputMbps: finiteNumber(point.throughput_mbps),
+            sampleCount: finiteNumber(point.sample_count),
+            activeTaskCount: finiteNumber(point.active_task_count),
+            startedCount: finiteNumber(point.started_count),
+            failedCount: finiteNumber(point.failed_count),
+            ...(point.partial === true ? { partial: true } : {}),
+          };
+        })
       : [],
   };
 }

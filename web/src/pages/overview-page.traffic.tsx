@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { Button } from "@/components/ui/button";
 import { DataSurface, DataSurfaceContent, DataSurfaceHeader } from "@/components/ui/data-surface";
+import { EmptyState } from "@/components/ui/empty-state";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { LoadingState } from "@/components/ui/loading-state";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ import {
   computeIntegerAxisTicks,
   formatTrafficTooltipLabel,
   formatTrafficTooltipValue,
+  hasPartialFlag,
   hasTrafficOrActivityData,
   type TrafficChartData,
   type TrafficChartMetrics,
@@ -28,6 +30,8 @@ import {
 } from "@/pages/overview-page.traffic.utils";
 
 export type { TrafficChartData, TrafficChartMetrics, VisibleLayers };
+
+const TRAFFIC_WINDOWS: readonly OverviewTrafficWindow[] = ["1h", "24h", "7d"];
 
 export type OverviewTrafficChartProps = {
   trafficWindow: OverviewTrafficWindow;
@@ -109,7 +113,7 @@ export function OverviewTrafficChart({
         }
         actions={
           <div className="flex items-center gap-1" role="group" aria-label={t("overview.trafficWindowGroupAriaLabel")}>
-            {(["1h", "24h", "7d"] as OverviewTrafficWindow[]).map((window) => (
+            {TRAFFIC_WINDOWS.map((window) => (
               <Button
                 key={window}
                 type="button"
@@ -140,16 +144,16 @@ export function OverviewTrafficChart({
             </div>
           </InlineAlert>
         ) : !hasData ? (
-          <div
-            role="img"
-            aria-label={chartAriaLabel}
-            className="flex min-h-[168px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border bg-background/40 px-4 py-6 text-center"
-          >
-            <Activity className="size-5 text-muted-foreground/70" aria-hidden />
-            <p className="text-xs font-medium text-muted-foreground">
-              {t("overview.trafficEmptyTitle", { window: windowLabel })}
-            </p>
-          </div>
+          <EmptyState
+            as="h3"
+            icon={
+              <span role="img" aria-label={chartAriaLabel} className="inline-flex">
+                <Activity className="size-5" aria-hidden />
+              </span>
+            }
+            title={t("overview.trafficEmptyTitle", { window: windowLabel })}
+            className="min-h-[168px] border border-dashed border-border bg-background/40 py-6 shadow-none"
+          />
         ) : (
           <>
             {chartMetrics.truncated ? (
@@ -295,8 +299,7 @@ export function OverviewTrafficChart({
                           fill="url(#throughputGradient)"
                           fillOpacity={1}
                           dot={(dotProps) => {
-                            const payload = dotProps.payload as Partial<TrafficChartData> | undefined;
-                            if (payload?.partial && typeof dotProps.cx === "number" && typeof dotProps.cy === "number") {
+                            if (hasPartialFlag(dotProps.payload) && typeof dotProps.cx === "number" && typeof dotProps.cy === "number") {
                               return (
                                 <circle
                                   key={`partial-dot-${dotProps.index}`}

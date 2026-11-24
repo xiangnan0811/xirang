@@ -42,6 +42,8 @@ type StatCardsSectionProps = {
   className?: string;
   cardClassName?: string;
   compact?: boolean;
+  /** Container element; use "div" when already wrapped inside a named <section>. */
+  as?: "section" | "div";
 };
 
 function isInternalHref(href: string): boolean {
@@ -70,11 +72,13 @@ export function StatCardsSection({
   className,
   cardClassName,
   compact = false,
+  as = "section",
 }: StatCardsSectionProps) {
   const inRouter = useInRouterContext();
+  const Container = as === "div" ? motion.div : motion.section;
 
   return (
-    <motion.section
+    <Container
       initial="initial"
       animate="animate"
       variants={staggerContainer}
@@ -170,7 +174,7 @@ export function StatCardsSection({
           </motion.div>
         );
       })}
-    </motion.section>
+    </Container>
   );
 }
 

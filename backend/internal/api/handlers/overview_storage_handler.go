@@ -126,7 +126,7 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 		Target string
 	}
 	var taskTargets []taskTargetRef
-	taskQ := h.db.Model(&model.Task{}).Select("node_id, rsync_target").
+	taskQ := h.db.WithContext(ctx).Model(&model.Task{}).Select("node_id, rsync_target").
 		Where("rsync_target <> '' AND executor_type IN ?", []string{"rsync", "restic", "rclone"})
 	if needFilter {
 		taskQ = taskQ.Where("node_id IN ?", ownedIDs)
@@ -161,7 +161,7 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 		NodeID   uint
 		NodeName string
 	}
-	policyNodeQ := h.db.Table("policies p").
+	policyNodeQ := h.db.WithContext(ctx).Table("policies p").
 		Select("p.id AS policy_id, p.target_path AS target, n.id AS node_id, n.name AS node_name").
 		Joins("JOIN policy_nodes pn ON pn.policy_id = p.id JOIN nodes n ON n.id = pn.node_id").
 		Where("p.enabled = ? AND p.is_template = ?", true, false)

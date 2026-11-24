@@ -1145,26 +1145,6 @@ export function createTasksApi() {
       return collected;
     },
 
-    async getRecentTasks(
-      token: string,
-      options?: { limit?: number; signal?: AbortSignal },
-    ): Promise<TaskRecord[]> {
-      const rawLimit = options?.limit ?? 5;
-      const limit = Number.isInteger(rawLimit) && rawLimit > 0
-        ? Math.min(rawLimit, TASK_INVENTORY_PAGE_SIZE)
-        : 5;
-      const params = new URLSearchParams({
-        page: "1",
-        page_size: String(limit),
-        sort: "-recent_activity",
-      });
-      const payload = await request<PaginatedEnvelope<TaskResponse[]>>(`/tasks?${params.toString()}`, {
-        token,
-        signal: options?.signal,
-      });
-      return unwrapPaginated(payload).items.map((row, index) => mapTask(row, index));
-    },
-
     async getTask(token: string, taskId: number): Promise<TaskRecord> {
       const row = await request<TaskResponse>(`/tasks/${taskId}`, { token });
       return mapTask(row, 0);

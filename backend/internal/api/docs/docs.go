@@ -8161,7 +8161,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回当前身份可见的启用策略数",
+                "description": "返回当前身份可见的启用非模板策略数",
                 "produces": [
                     "application/json"
                 ],
@@ -8342,7 +8342,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回指定时间窗口（1h/24h/7d）内的任务吞吐量趋势数据",
+                "description": "返回指定时间窗口（1h/24h/7d）内的任务吞吐量与活动趋势数据，包含进行中的末尾部分桶（partial）",
                 "produces": [
                     "application/json"
                 ],

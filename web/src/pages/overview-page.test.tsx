@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { default as userEvent } from "@testing-library/user-event";
 import { OverviewPage } from "./overview-page";
 import i18n, { setLanguage } from "@/i18n";
@@ -268,6 +268,7 @@ describe("OverviewPage", () => {
   });
 
   afterEach(async () => {
+    cleanup();
     await setLanguage("zh");
   });
 
@@ -401,7 +402,7 @@ describe("OverviewPage", () => {
     await waitFor(() => {
       expect(getBackupConfidenceMock).toHaveBeenCalledTimes(2);
     });
-    expect(within(postureSection).queryByLabelText("加载保护态势...")).not.toBeInTheDocument();
+    expect(within(postureSection).queryByText("加载保护态势...")).not.toBeInTheDocument();
     expect(within(postureSection).getByText("连续失败 1")).toBeInTheDocument();
   });
 
@@ -880,6 +881,7 @@ describe("health incident actions and cause consumer boundaries", () => {
   });
 
   afterEach(async () => {
+    cleanup();
     await setLanguage("zh");
   });
 

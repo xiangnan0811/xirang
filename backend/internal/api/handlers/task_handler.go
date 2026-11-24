@@ -405,7 +405,7 @@ func (h *TaskHandler) taskResponses(ctx context.Context, tasks []model.Task, lat
 }
 
 func (h *TaskHandler) latestTerminalRunMetaByTaskID(ctx context.Context, taskIDs []uint) (map[uint]taskLatestTerminalMeta, error) {
-	if h == nil || h.db == nil || len(taskIDs) == 0 || !h.db.Migrator().HasTable(&model.TaskRun{}) {
+	if h == nil || h.db == nil || len(taskIDs) == 0 || !h.db.WithContext(ctx).Migrator().HasTable(&model.TaskRun{}) {
 		return nil, nil
 	}
 	var rows []model.TaskRun
@@ -499,7 +499,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 		"node_id": true, "policy_id": true, "last_run_at": true, "next_run_at": true,
 		"last_finished_at": true, "recent_activity": true,
 	})
-	hasTaskRunTable := h.db.Migrator().HasTable(&model.TaskRun{})
+	hasTaskRunTable := h.db.WithContext(ctx).Migrator().HasTable(&model.TaskRun{})
 	orderClause, joinLatestFinished := resolveTaskListSort(c, hasTaskRunTable)
 
 	var total int64
@@ -545,7 +545,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 			Progress int
 		}
 		var rows []taskProgress
-		if err := h.db.Raw(`
+		if err := h.db.WithContext(ctx).Raw(`
 				SELECT current_run.task_id, current_run.progress
 				FROM task_runs AS current_run
 				WHERE current_run.id IN (
@@ -575,12 +575,12 @@ func (h *TaskHandler) List(c *gin.Context) {
 			}
 		}
 	}
-	latestMetaByTask, err := h.latestTerminalRunMetaByTaskID(c.Request.Context(), taskIDs)
+	latestMetaByTask, err := h.latestTerminalRunMetaByTaskID(ctx, taskIDs)
 	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
-	respondPaginated(c, h.taskResponses(c.Request.Context(), tasks, latestMetaByTask), total, pg.Page, pg.PageSize)
+	respondPaginated(c, h.taskResponses(ctx, tasks, latestMetaByTask), total, pg.Page, pg.PageSize)
 }
 
 // Get godoc
@@ -595,20 +595,25 @@ func (h *TaskHandler) List(c *gin.Context) {
 // @Failure      404  {object}  handlers.Response
 // @Router       /tasks/{id} [get]
 func (h *TaskHandler) Get(c *gin.Context) {
+	ctx := c.Request.Context()
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
 	var taskEntity model.Task
-	if err := h.db.WithContext(c.Request.Context()).Preload("Node").Preload("Policy").First(&taskEntity, id).Error; err != nil {
-		respondNotFound(c, "任务不存在")
+	if err := h.db.WithContext(ctx).Preload("Node").Preload("Policy").First(&taskEntity, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "任务不存在")
+			return
+		}
+		respondInternalError(c, err)
 		return
 	}
 	taskEntity.Node = taskEntity.Node.Sanitized()
 	// 查询最新 running TaskRun 的进度（覆盖备份和恢复场景）
-	if h.db.Migrator().HasTable(&model.TaskRun{}) {
+	if h.db.WithContext(ctx).Migrator().HasTable(&model.TaskRun{}) {
 		var runProgress []int
-		if err := h.db.Model(&model.TaskRun{}).
+		if err := h.db.WithContext(ctx).Model(&model.TaskRun{}).
 			Where("task_id = ? AND node_id_snapshot = ? AND node_id_snapshot > ? AND status = ?",
 				taskEntity.ID, taskEntity.NodeID, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusRunning).
 			Order("id DESC").Limit(1).
@@ -619,7 +624,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 			taskEntity.Progress = &runProgress[0]
 		}
 	}
-	latestMetaByTask, err := h.latestTerminalRunMetaByTaskID(c.Request.Context(), []uint{taskEntity.ID})
+	latestMetaByTask, err := h.latestTerminalRunMetaByTaskID(ctx, []uint{taskEntity.ID})
 	if err != nil {
 		respondInternalError(c, err)
 		return
@@ -629,7 +634,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 		metaCopy := meta
 		metaPtr = &metaCopy
 	}
-	respondOK(c, h.taskResponseWithMeta(c.Request.Context(), taskEntity, metaPtr))
+	respondOK(c, h.taskResponseWithMeta(ctx, taskEntity, metaPtr))
 }
 
 // Create godoc

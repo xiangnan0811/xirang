@@ -782,8 +782,7 @@ describe("task inventory pagination", () => {
           node: { id: 1, name: "node-1" },
           last_duration_ms: -5,
         },
-      ], 2, 1)))
-      .mockResolvedValueOnce(createMockResponse(200, pageEnvelope([], 0, 1)));
+      ], 2, 1)));
 
     const sortedTasks = await api.getTasks("token-tasks", { sort: "-recent_activity" });
     expect(String(fetchMock.mock.calls[0][0])).toContain("sort=-recent_activity");
@@ -793,10 +792,6 @@ describe("task inventory pagination", () => {
     expect(sortedTasks[1]?.lastFinishedAt).toBeUndefined();
     expect(sortedTasks[1]?.lastRunAt).toBeUndefined();
     expect(sortedTasks[1]?.lastDurationMs).toBeUndefined();
-
-    const recent = await api.getRecentTasks("token-tasks", { limit: 5 });
-    expect(recent).toEqual([]);
-    expect(String(fetchMock.mock.calls[1][0])).toBe("/api/v1/tasks?page=1&page_size=5&sort=-recent_activity");
   });
 });
 

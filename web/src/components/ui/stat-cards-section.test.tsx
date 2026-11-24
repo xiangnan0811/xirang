@@ -289,6 +289,17 @@ describe("StatCardsSection", () => {
     expect(screen.getByText("通知列表页")).toBeInTheDocument();
   });
 
+  it("supports as='div' when wrapped inside an existing section landmark", () => {
+    const { container } = render(
+      <section aria-label="外层区域">
+        <StatCardsSection as="div" items={[{ title: "静态指标", value: 10 }]} />
+      </section>
+    );
+
+    expect(container.querySelectorAll("section")).toHaveLength(1);
+    expect(screen.getByText("静态指标")).toBeInTheDocument();
+  });
+
   it("静态与交互卡片组合均无 axe 可访问性违规", async () => {
     const { container } = render(
       <MemoryRouter>

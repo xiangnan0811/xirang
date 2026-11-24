@@ -52,6 +52,7 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		return
 	}
 
+	ctx := c.Request.Context()
 	// 1. 备份过期节点：只读取已验证的、分类完成事实。旧的
 	// nodes.last_backup_at 会在迁移时保留为 unverified，不能让节点变新鲜。
 	type staleNode struct {
@@ -60,7 +61,7 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		LastBackupAt *time.Time `json:"last_backup_at"`
 	}
 	var nodes []model.Node
-	nodeQ := h.db.WithContext(c.Request.Context()).Model(&model.Node{}).Select("id, name")
+	nodeQ := h.db.WithContext(ctx).Model(&model.Node{}).Select("id, name")
 	if needFilter {
 		nodeQ = nodeQ.Where("id IN ?", ownedIDs)
 	}
@@ -72,7 +73,7 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 	for _, node := range nodes {
 		nodeIDs = append(nodeIDs, node.ID)
 	}
-	latestFacts, err := backuphealth.LatestVerifiedForNodes(c.Request.Context(), h.db, nodeIDs)
+	latestFacts, err := backuphealth.LatestVerifiedForNodes(ctx, h.db, nodeIDs)
 	if err != nil {
 		respondInternalError(c, err)
 		return
@@ -125,7 +126,7 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 	}
 	degradedSQL += `
 		ORDER BY t.policy_id, tr.created_at DESC`
-	if err := h.db.Raw(degradedSQL, degradedArgs...).Scan(&runInfos).Error; err != nil {
+	if err := h.db.WithContext(ctx).Raw(degradedSQL, degradedArgs...).Scan(&runInfos).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -209,7 +210,7 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		) AS classified
 		GROUP BY classified.day, classified.status`
 	var rows []trendRow
-	if err := h.db.Raw(trendSQL, args...).Scan(&rows).Error; err != nil {
+	if err := h.db.WithContext(ctx).Raw(trendSQL, args...).Scan(&rows).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -233,7 +234,7 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 
 	// 4. 汇总统计（scoped）
 	var totalNodes int64
-	nodeCountQ := h.db.Model(&model.Node{})
+	nodeCountQ := h.db.WithContext(ctx).Model(&model.Node{})
 	if needFilter {
 		nodeCountQ = nodeCountQ.Where("id IN ?", ownedIDs)
 	}
@@ -245,11 +246,11 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 	var totalPolicies int64
 	var policyCountErr error
 	if needFilter {
-		policyCountErr = h.db.Model(&model.Policy{}).
+		policyCountErr = h.db.WithContext(ctx).Model(&model.Policy{}).
 			Where("enabled = ? AND is_template = ? AND id IN (SELECT policy_id FROM policy_nodes WHERE node_id IN ?)", true, false, ownedIDs).
 			Count(&totalPolicies).Error
 	} else {
-		policyCountErr = h.db.Model(&model.Policy{}).Where("enabled = ? AND is_template = ?", true, false).Count(&totalPolicies).Error
+		policyCountErr = h.db.WithContext(ctx).Model(&model.Policy{}).Where("enabled = ? AND is_template = ?", true, false).Count(&totalPolicies).Error
 	}
 	if policyCountErr != nil {
 		respondInternalError(c, policyCountErr)

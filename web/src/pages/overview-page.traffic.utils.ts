@@ -52,17 +52,18 @@ export function computeIntegerAxisTicks(maxCount: number): {
   };
 }
 
+export function hasPartialFlag(value: unknown): boolean {
+  return typeof value === "object" && value !== null && "partial" in value && value.partial === true;
+}
+
 export function formatTrafficTooltipLabel(
   label: unknown,
   payload: ReadonlyArray<unknown> | undefined,
   partialSuffix: string,
 ): string {
   const first = Array.isArray(payload) && payload.length > 0 ? payload[0] : undefined;
-  const point =
-    first && typeof first === "object" && "payload" in first
-      ? (first.payload as Partial<TrafficChartData> | undefined)
-      : undefined;
-  if (point?.partial) {
+  const point = first && typeof first === "object" && "payload" in first ? first.payload : undefined;
+  if (hasPartialFlag(point)) {
     return `${String(label)} (${partialSuffix})`;
   }
   return String(label);

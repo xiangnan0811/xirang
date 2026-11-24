@@ -214,4 +214,20 @@ describe("OverviewPage a11y smoke", () => {
     expect(screen.getByRole("link", { name: "查看任务日志" })).toHaveAttribute("href", "/app/logs?task=1");
     expect(await runAxe(container)).toHaveNoViolations();
   });
+
+  it("empty traffic and empty recent tasks states using EmptyState have no axe violations", async () => {
+    fetchOverviewTrafficMock.mockResolvedValue({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: false,
+      generatedAt: "2026-03-08T00:00:00Z",
+      points: [],
+    });
+    tasksRef.current = { ...tasksRef.current, tasks: [] };
+
+    const { container } = render(<OverviewPage />);
+    await screen.findByText("近 24 小时暂无数据");
+    expect(screen.getByText("暂无任务")).toBeInTheDocument();
+    expect(await runAxe(container)).toHaveNoViolations();
+  });
 });

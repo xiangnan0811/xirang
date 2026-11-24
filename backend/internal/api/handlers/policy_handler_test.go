@@ -1616,3 +1616,78 @@ func runCloneFromTemplatePreservesFieldsAndEncryptsHooks(t *testing.T, engine st
 		t.Fatalf("cloned policy node links=%d, want 1", linkCount)
 	}
 }
+
+func TestPolicyHandlerCreateTemplateDefaultEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openPolicyHandlerTestDB(t)
+	handler := NewPolicyHandler(db, nil)
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	router.POST("/policies", handler.Create)
+
+	cases := []struct {
+		name           string
+		payload        string
+		wantIsTemplate bool
+		wantEnabled    bool
+	}{
+		{
+			name:           "template with omitted enabled defaults to disabled",
+			payload:        `{"name":"tmpl-default-off","source_path":"/var/www","target_path":"/backup/tmpl-off","cron_spec":"0 2 * * *","is_template":true}`,
+			wantIsTemplate: true,
+			wantEnabled:    false,
+		},
+		{
+			name:           "regular policy with omitted enabled defaults to enabled",
+			payload:        `{"name":"regular-default-on","source_path":"/var/www","target_path":"/backup/reg-on","cron_spec":"0 2 * * *","is_template":false}`,
+			wantIsTemplate: false,
+			wantEnabled:    true,
+		},
+		{
+			name:           "template with explicit enabled true preserves explicit value",
+			payload:        `{"name":"tmpl-explicit-on","source_path":"/var/www","target_path":"/backup/tmpl-on","cron_spec":"0 2 * * *","is_template":true,"enabled":true}`,
+			wantIsTemplate: true,
+			wantEnabled:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/policies", strings.NewReader(tc.payload))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			if resp.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+			}
+
+			var envelope struct {
+				Data struct {
+					ID         uint `json:"id"`
+					Enabled    bool `json:"enabled"`
+					IsTemplate bool `json:"is_template"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if envelope.Data.ID == 0 {
+				t.Fatalf("expected non-zero policy ID, body=%s", resp.Body.String())
+			}
+			if envelope.Data.IsTemplate != tc.wantIsTemplate || envelope.Data.Enabled != tc.wantEnabled {
+				t.Fatalf("response got (is_template=%t, enabled=%t), want (%t, %t)",
+					envelope.Data.IsTemplate, envelope.Data.Enabled, tc.wantIsTemplate, tc.wantEnabled)
+			}
+
+			var stored model.Policy
+			if err := db.First(&stored, envelope.Data.ID).Error; err != nil {
+				t.Fatalf("reload policy: %v", err)
+			}
+			if stored.IsTemplate != tc.wantIsTemplate || stored.Enabled != tc.wantEnabled {
+				t.Fatalf("persisted got (is_template=%t, enabled=%t), want (%t, %t)",
+					stored.IsTemplate, stored.Enabled, tc.wantIsTemplate, tc.wantEnabled)
+			}
+		})
+	}
+}
