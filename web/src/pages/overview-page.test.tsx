@@ -290,7 +290,7 @@ describe("OverviewPage", () => {
     expect(h2s.map((h) => h.textContent)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("备份保护态势"),
-        expect.stringContaining("健康事件时间线"),
+        expect.stringContaining("健康事件"),
         expect.stringContaining("流量与活动趋势"),
         expect.stringContaining("最近同步任务"),
       ]),
@@ -304,7 +304,7 @@ describe("OverviewPage", () => {
     expect(enH1.textContent).toMatch(/^Good (morning|afternoon|evening|night), admin\.$/);
   });
 
-  it("renders Protection Posture with verified evidence, real policy link, scope, and freshness", async () => {
+  it("renders compact 4-card Protection Posture with verified evidence, real policy/backup links, scope, and freshness", async () => {
     setContext(2, true);
     render(<OverviewPage />);
 
@@ -312,8 +312,9 @@ describe("OverviewPage", () => {
     const postureSection = postureHeading.closest("section")!;
     await within(postureSection).findByText("最近已验证备份");
 
-    expect(within(postureSection).getByText("全部节点")).toBeInTheDocument();
-    expect(within(postureSection).getByRole("link", { name: /查看备份健康/ })).toHaveAttribute(
+    expect(screen.getByText("全部节点")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /备份健康/ })).toHaveAttribute("href", "/app/backups/overview");
+    expect(within(postureSection).getByRole("link", { name: /备份可信度/ })).toHaveAttribute(
       "href",
       "/app/backups/overview",
     );
@@ -321,16 +322,14 @@ describe("OverviewPage", () => {
       "href",
       "/app/policies",
     );
-    expect(within(postureSection).getByText("可信")).toBeInTheDocument();
-    expect(within(postureSection).getByText("需关注")).toBeInTheDocument();
-    expect(within(postureSection).getByText("有风险")).toBeInTheDocument();
-    expect(within(postureSection).getByText("证据不足")).toBeInTheDocument();
+    expect(within(postureSection).getByText(/\/ 3 可信/)).toBeInTheDocument();
+    expect(within(postureSection).getByText(/需关注 1/)).toBeInTheDocument();
+    expect(within(postureSection).getByText(/证据不足 1/)).toBeInTheDocument();
     expect(within(postureSection).getByText("滞后 / 未验证节点")).toBeInTheDocument();
-    expect(within(postureSection).getByText("从未备份 1 · 超 48h 0")).toBeInTheDocument();
-    expect(within(postureSection).getByText("连续失败策略")).toBeInTheDocument();
-    expect(within(postureSection).getByText("最近 3 次执行均失败")).toBeInTheDocument();
+    expect(within(postureSection).getByText("未备份 1")).toBeInTheDocument();
+    expect(within(postureSection).getByText("连续失败 1")).toBeInTheDocument();
     expect(within(postureSection).queryByText("策略覆盖")).not.toBeInTheDocument();
-    expect(within(postureSection).queryByText("暂无已验证备份")).not.toBeInTheDocument();
+    expect(within(postureSection).queryByText("暂无")).not.toBeInTheDocument();
   });
 
   it("shows honest neutral unverified posture and no verified backup when evidence is absent", async () => {
@@ -358,8 +357,8 @@ describe("OverviewPage", () => {
     render(<OverviewPage />);
 
     const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
-    expect(await within(postureSection).findByText("未验证 · 暂无已验证数据")).toBeInTheDocument();
-    expect(within(postureSection).getByText("暂无已验证备份")).toBeInTheDocument();
+    expect(await within(postureSection).findByText("未验证")).toBeInTheDocument();
+    expect(within(postureSection).getByText("暂无")).toBeInTheDocument();
     expect(within(postureSection).queryByText("100%")).not.toBeInTheDocument();
   });
 
@@ -372,8 +371,8 @@ describe("OverviewPage", () => {
     render(<OverviewPage />);
 
     const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
-    expect(within(postureSection).getByText("我的节点")).toBeInTheDocument();
-    expect(await within(postureSection).findByText("暂时无法完整加载保护态势")).toBeInTheDocument();
+    expect(screen.getByText("我的节点")).toBeInTheDocument();
+    expect(await within(postureSection).findByText("保护态势加载失败")).toBeInTheDocument();
     expect(within(postureSection).getByText(/confidence service unavailable/)).toBeInTheDocument();
 
     getBackupConfidenceMock.mockResolvedValueOnce(defaultConfidence);
@@ -382,7 +381,7 @@ describe("OverviewPage", () => {
 
     await waitFor(() => {
       expect(getBackupConfidenceMock).toHaveBeenCalledTimes(2);
-      expect(within(postureSection).queryByText("暂时无法完整加载保护态势")).not.toBeInTheDocument();
+      expect(within(postureSection).queryByText("保护态势加载失败")).not.toBeInTheDocument();
     });
   });
 
@@ -391,7 +390,7 @@ describe("OverviewPage", () => {
     const { rerender } = render(<OverviewPage />);
 
     const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
-    await within(postureSection).findByText("最近 3 次执行均失败");
+    await within(postureSection).findByText("连续失败 1");
 
     getBackupConfidenceMock.mockImplementation(() => new Promise(() => undefined));
     getBackupHealthMock.mockImplementation(() => new Promise(() => undefined));
@@ -402,9 +401,8 @@ describe("OverviewPage", () => {
     await waitFor(() => {
       expect(getBackupConfidenceMock).toHaveBeenCalledTimes(2);
     });
-    expect(within(postureSection).queryByText("正在加载备份保护态势...")).not.toBeInTheDocument();
-    expect(within(postureSection).getByText("正在更新...")).toBeInTheDocument();
-    expect(within(postureSection).getByText("最近 3 次执行均失败")).toBeInTheDocument();
+    expect(within(postureSection).queryByLabelText("加载保护态势...")).not.toBeInTheDocument();
+    expect(within(postureSection).getByText("连续失败 1")).toBeInTheDocument();
   });
 
   it("localizes system cause and action on language switch while retaining native source diagnostic text", async () => {
@@ -467,7 +465,7 @@ describe("OverviewPage", () => {
     expect(screen.queryByText("raw label")).not.toBeInTheDocument();
   });
 
-  it("renders Health Incident Timeline with 72h window, summary counts, expand toggle for >4 groups, and no dev jargon", async () => {
+  it("renders compact Health Events panel at bottom capped at 3 items with top-right All alerts link matching Recent Tasks", async () => {
     const groups = Array.from({ length: 6 }, (_, index) =>
       incident({
         id: `group-${index + 1}`,
@@ -482,50 +480,67 @@ describe("OverviewPage", () => {
       groups,
     });
     setContext(2, true);
-    const user = userEvent.setup();
     render(<OverviewPage />);
 
-    const timelineHeading = await screen.findByRole("heading", { level: 2, name: /健康事件时间线/ });
+    const timelineHeading = await screen.findByRole("heading", { level: 2, name: /健康事件/ });
     const timelineSection = timelineHeading.closest("section")!;
-    expect(within(timelineSection).getByText("近 72 小时")).toBeInTheDocument();
+    expect(within(timelineSection).getByText("72h")).toBeInTheDocument();
     expect(within(timelineSection).getByText("严重 1")).toBeInTheDocument();
     expect(within(timelineSection).getByText("警告 5")).toBeInTheDocument();
-    expect(within(timelineSection).getByText("信息 0")).toBeInTheDocument();
-    expect(within(timelineSection).getByText(/自动汇总近 72 小时/)).toBeInTheDocument();
+    expect(within(timelineSection).queryByText("信息 0")).not.toBeInTheDocument();
     expect(within(timelineSection).queryByText(/只读聚合/)).not.toBeInTheDocument();
 
-    expect(within(timelineSection).getAllByRole("listitem")).toHaveLength(4);
-    const expandButton = within(timelineSection).getByRole("button", { name: /展开全部（共 6 组）/ });
-    expect(expandButton).toHaveAttribute("aria-expanded", "false");
-    expect(within(timelineSection).getByRole("link", { name: /查看告警中心/ })).toHaveAttribute("href", "/app/notifications");
+    expect(within(timelineSection).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(timelineSection).getByRole("link", { name: /全部告警/ })).toHaveAttribute("href", "/app/notifications");
+    expect(within(timelineSection).queryByRole("button", { name: /展开全部/ })).not.toBeInTheDocument();
 
-    await user.click(expandButton);
-    expect(within(timelineSection).getAllByRole("listitem")).toHaveLength(6);
-    expect(within(timelineSection).getByRole("button", { name: "收起" })).toHaveAttribute("aria-expanded", "true");
+    // Side-by-side compact mode hides Next Run column so 5 columns fit cleanly
+    const tasksSection = screen.getByRole("heading", { level: 2, name: /最近同步任务/ }).closest("section")!;
+    expect(within(tasksSection).queryByText("下次运行")).not.toBeInTheDocument();
   });
 
-  it("renders neutral empty state with window, scope, CTAs, and refresh button", async () => {
-    const user = userEvent.setup();
+  it("hides Health Events panel completely when there are no incidents so it does not waste space", async () => {
     setContext(2, true);
-
     render(<OverviewPage />);
 
-    const emptyTitle = await screen.findByText("近期未发现健康事件");
-    const emptyAlert = emptyTitle.closest('[role="status"]')!;
-    expect(emptyAlert).toBeInTheDocument();
-    expect(emptyAlert).toHaveTextContent("近 72 小时（全部节点）");
-    expect(within(emptyAlert as HTMLElement).getByRole("link", { name: "查看备份健康" })).toHaveAttribute(
-      "href",
-      "/app/backups/overview",
-    );
-    expect(within(emptyAlert as HTMLElement).getByRole("link", { name: "查看策略" })).toHaveAttribute(
-      "href",
-      "/app/policies",
-    );
+    await waitFor(() => {
+      expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("heading", { level: 2, name: /健康事件/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: /最近同步任务/ })).toBeInTheDocument();
+  });
 
-    await user.click(screen.getByRole("button", { name: "刷新" }));
+  it("shows Health Events panel with error and refresh retry when incident request fails", async () => {
+    fetchHealthIncidentTimelineMock.mockRejectedValueOnce(new Error("timeline unavailable"));
+    const user = userEvent.setup();
+    setContext(2, true);
+    render(<OverviewPage />);
+
+    const timelineHeading = await screen.findByRole("heading", { level: 2, name: /健康事件/ });
+    const timelineSection = timelineHeading.closest("section")!;
+    expect(await within(timelineSection).findByText("暂时无法加载健康事件")).toBeInTheDocument();
+
+    let resolveRetry!: (value: unknown) => void;
+    fetchHealthIncidentTimelineMock.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRetry = resolve; }),
+    );
+    const refreshBtn = within(timelineSection).getByRole("button", { name: "刷新" });
+    await user.click(refreshBtn);
+    // Keep error panel mounted with disabled button while retry is in-flight (no layout snap/focus drop)
+    expect(screen.getByRole("heading", { level: 2, name: /健康事件/ })).toBeInTheDocument();
+    expect(refreshBtn).toBeDisabled();
+
+    await act(async () => {
+      resolveRetry({
+        generatedAt: "2026-05-17T01:00:00Z",
+        windowHours: 72,
+        summary: { total: 0, critical: 0, warning: 0, info: 0 },
+        groups: [],
+      });
+    });
     await waitFor(() => {
       expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("heading", { level: 2, name: /健康事件/ })).not.toBeInTheDocument();
     });
   });
 
@@ -555,7 +570,7 @@ describe("OverviewPage", () => {
     });
     expect(screen.getByRole("button", { name: "24h" })).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findByRole("img", { name: "近 24 小时流量与活动趋势图，暂无真实样本" })).toBeInTheDocument();
-    expect(screen.getByText("近 24 小时暂无流量采样与任务活动")).toBeInTheDocument();
+    expect(screen.getByText("近 24 小时暂无数据")).toBeInTheDocument();
   });
 
   it("keeps activity/failures chart visible and hides left throughput axis when hasRealSamples is false but failures exist", async () => {
@@ -585,10 +600,10 @@ describe("OverviewPage", () => {
       name: "近 24 小时流量与活动趋势图，峰值平均总吞吐 0 Mbps，开始事件 1 次，失败事件 2 次",
     });
     expect(chartImg).toBeInTheDocument();
-    expect(screen.getByText(/当前窗口暂无吞吐采样，左轴已隐藏/)).toBeInTheDocument();
-    expect(screen.getByText("注：最右侧时间段仍在统计中")).toBeInTheDocument();
-    expect(screen.queryByText("左轴：Mbps")).not.toBeInTheDocument();
-    expect(screen.getByText("右轴：次数")).toBeInTheDocument();
+    expect(screen.getByText("无吞吐采样")).toBeInTheDocument();
+    expect(screen.getByText("末尾时段统计中")).toBeInTheDocument();
+    expect(screen.queryByText("Mbps")).not.toBeInTheDocument();
+    expect(screen.getByText("次")).toBeInTheDocument();
   });
 
   it("renders partial trailing bucket indicator, axis units, and >=24px legend buttons with all-layers-off hint", async () => {
@@ -607,13 +622,13 @@ describe("OverviewPage", () => {
     render(<OverviewPage />);
 
     await screen.findByRole("img", { name: /峰值平均总吞吐 120 Mbps/ });
-    expect(screen.getByText("左轴：Mbps")).toBeInTheDocument();
-    expect(screen.getByText("右轴：次数")).toBeInTheDocument();
-    expect(screen.getByText("注：最右侧时间段仍在统计中")).toBeInTheDocument();
+    expect(screen.getByText("Mbps")).toBeInTheDocument();
+    expect(screen.getByText("次")).toBeInTheDocument();
+    expect(screen.getByText("末尾时段统计中")).toBeInTheDocument();
 
-    const throughputToggle = screen.getByRole("button", { name: /吞吐 \(Mbps · 左轴\)/ });
-    const activityToggle = screen.getByRole("button", { name: /活动 \(次 · 右轴\)/ });
-    const failuresToggle = screen.getByRole("button", { name: /失败 \(次 · 右轴\)/ });
+    const throughputToggle = screen.getByRole("button", { name: "吞吐 (Mbps)" });
+    const activityToggle = screen.getByRole("button", { name: "活动" });
+    const failuresToggle = screen.getByRole("button", { name: "失败" });
     expect(throughputToggle.className).toContain("min-h-6");
     expect(throughputToggle.className).toContain("min-w-6");
     expect(throughputToggle.className).toContain("focus-visible:ring-2");
@@ -622,7 +637,7 @@ describe("OverviewPage", () => {
     await user.click(activityToggle);
     await user.click(failuresToggle);
 
-    expect(screen.getByText("所有数据图层已隐藏，请点击下方图例重新开启展示。")).toBeInTheDocument();
+    expect(screen.getByText("已隐藏全部图层，点击下方图例恢复。")).toBeInTheDocument();
   });
 
   it("preserves previous traffic chart data while switching windows and aborts superseded requests", async () => {
@@ -658,7 +673,7 @@ describe("OverviewPage", () => {
       expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(2);
     });
     // Previous chart remains visible (no skeleton height collapse) while loading 1h
-    expect(screen.queryByText("加载流量趋势...")).not.toBeInTheDocument();
+    expect(screen.queryByText("加载趋势...")).not.toBeInTheDocument();
     expect(screen.getByRole("img")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "7d" }));
@@ -741,8 +756,8 @@ describe("OverviewPage", () => {
     const { rerender } = render(<OverviewPage />);
 
     const tasksSection = (await screen.findByRole("heading", { level: 2, name: /最近同步任务/ })).closest("section")!;
-    expect(within(tasksSection).getByRole("link", { name: /查看更多/ })).toHaveAttribute("href", "/app/tasks");
-    expect(within(tasksSection).getByText("执行耗时")).toBeInTheDocument();
+    expect(within(tasksSection).getByRole("link", { name: /全部任务/ })).toHaveAttribute("href", "/app/tasks");
+    expect(within(tasksSection).getByText("耗时")).toBeInTheDocument();
     expect(within(tasksSection).getByText("完成时间")).toBeInTheDocument();
     expect(within(tasksSection).getByText("下次运行")).toBeInTheDocument();
     expect(within(tasksSection).queryByText("传输数据量")).not.toBeInTheDocument();
@@ -776,6 +791,9 @@ describe("OverviewPage", () => {
         { id: 4, name: "任务4", policyName: "p4", nodeName: "Node-4", nodeId: 4, status: "success", progress: 100, startedAt: "2026-03-03", lastFinishedAt: "2026-03-08 12:00:00", speedMbps: 0, enabled: true },
         { id: 5, name: "任务5", policyName: "p5", nodeName: "Node-5", nodeId: 5, status: "success", progress: 100, startedAt: "2026-03-04", lastFinishedAt: "2026-03-07 12:00:00", speedMbps: 0, enabled: true },
         { id: 6, name: "任务6", policyName: "p6", nodeName: "Node-6", nodeId: 6, status: "success", progress: 100, startedAt: "2026-03-05", lastRunAt: "2026-03-06 12:00:00", speedMbps: 0, enabled: true },
+        { id: 7, name: "任务7", policyName: "p7", nodeName: "Node-7", nodeId: 7, status: "success", progress: 100, startedAt: "2026-03-05", lastFinishedAt: "2026-03-05 12:00:00", speedMbps: 0, enabled: true },
+        { id: 8, name: "任务8", policyName: "p8", nodeName: "Node-8", nodeId: 8, status: "success", progress: 100, startedAt: "2026-03-04", lastFinishedAt: "2026-03-04 12:00:00", speedMbps: 0, enabled: true },
+        { id: 9, name: "任务9", policyName: "p9", nodeName: "Node-9", nodeId: 9, status: "success", progress: 100, startedAt: "2026-03-03", lastFinishedAt: "2026-03-03 12:00:00", speedMbps: 0, enabled: true },
       ],
     };
 
@@ -794,14 +812,14 @@ describe("OverviewPage", () => {
     const { rerender } = render(<OverviewPage />);
     const tasksSection = (await screen.findByRole("heading", { level: 2, name: /最近同步任务/ })).closest("section")!;
     // Shared polling loading=true must NOT collapse tasks to skeleton
-    expect(within(tasksSection).queryByText("加载近期任务...")).not.toBeInTheDocument();
+    expect(within(tasksSection).queryByText("加载任务...")).not.toBeInTheDocument();
     expect(within(tasksSection).getByText("测试任务1")).toBeInTheDocument();
 
-    // Error with empty tasks must show error + Retry, never "暂无任务数据"
+    // Error with empty tasks must show error + Retry, never "暂无任务"
     tasksRef.current = { ...tasksRef.current, tasks: [], tasksLoading: false, tasksError: "tasks endpoint down" };
     rerender(<OverviewPage />);
     expect(within(tasksSection).getByText("tasks endpoint down")).toBeInTheDocument();
-    expect(within(tasksSection).queryByText("暂无任务数据")).not.toBeInTheDocument();
+    expect(within(tasksSection).queryByText("暂无任务")).not.toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(within(tasksSection).getByRole("button", { name: "重试" }));

@@ -191,7 +191,8 @@ describe("OverviewPage a11y smoke", () => {
   it("初始渲染无 axe violations（关 color-contrast）", async () => {
     const { container } = render(<OverviewPage />);
 
-    await screen.findByText("近期未发现健康事件");
+    await screen.findByText("全部可信");
+    expect(screen.queryByRole("heading", { level: 2, name: /健康事件/ })).not.toBeInTheDocument();
 
     const results = await runAxe(container);
     expect(results).toHaveNoViolations();

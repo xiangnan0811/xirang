@@ -82,6 +82,12 @@ export function OverviewTrafficChart({
     { key: "failures", label: t("overview.legendFailures"), dotClass: "size-2 rounded-full bg-destructive" },
   ];
 
+  const leftAxisCaption = showLeftAxis
+    ? t("overview.axisUnitThroughput")
+    : visibleLayers.throughput && !chartMetrics.hasRealSamples
+      ? t("overview.trafficNoThroughputSamples")
+      : "";
+
   return (
     <DataSurface className="flex flex-col w-full min-w-0">
       <DataSurfaceHeader
@@ -102,7 +108,7 @@ export function OverviewTrafficChart({
           </span>
         }
         actions={
-          <div className="flex items-center gap-1.5" role="group" aria-label={t("overview.trafficWindowGroupAriaLabel")}>
+          <div className="flex items-center gap-1" role="group" aria-label={t("overview.trafficWindowGroupAriaLabel")}>
             {(["1h", "24h", "7d"] as OverviewTrafficWindow[]).map((window) => (
               <Button
                 key={window}
@@ -124,8 +130,8 @@ export function OverviewTrafficChart({
           <LoadingState className="py-6" rows={3} title={t("overview.trafficLoading")} />
         ) : trafficError ? (
           <InlineAlert tone="warning" title={t("overview.trafficLoadFailed")}>
-            <div className="space-y-2">
-              <p>{trafficError}</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span>{trafficError}</span>
               {onRetry ? (
                 <Button type="button" size="sm" variant="outline" onClick={onRetry}>
                   {t("common.retry")}
@@ -137,14 +143,11 @@ export function OverviewTrafficChart({
           <div
             role="img"
             aria-label={chartAriaLabel}
-            className="flex min-h-[208px] flex-col items-center justify-center rounded-lg border border-dashed border-border bg-background/40 px-4 py-8 text-center"
+            className="flex min-h-[168px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border bg-background/40 px-4 py-6 text-center"
           >
-            <Activity className="mb-2 size-6 text-muted-foreground" aria-hidden />
-            <p className="text-sm font-medium text-foreground">
+            <Activity className="size-5 text-muted-foreground/70" aria-hidden />
+            <p className="text-xs font-medium text-muted-foreground">
               {t("overview.trafficEmptyTitle", { window: windowLabel })}
-            </p>
-            <p className="mt-1 max-w-md text-xs text-muted-foreground">
-              {t("overview.trafficEmptyDesc")}
             </p>
           </div>
         ) : (
@@ -155,28 +158,22 @@ export function OverviewTrafficChart({
               </InlineAlert>
             ) : null}
 
-            {visibleLayers.throughput && !chartMetrics.hasRealSamples ? (
-              <p className="mb-2 text-xs text-muted-foreground">
-                {t("overview.trafficNoThroughputSamples")}
-              </p>
-            ) : null}
-
             {!anyLayerVisible ? (
               <div
                 role="img"
                 aria-label={chartAriaLabel}
-                className="flex min-h-[208px] items-center justify-center rounded-lg border border-dashed border-border bg-background/40 px-4 text-center text-sm text-muted-foreground"
+                className="flex min-h-[200px] items-center justify-center rounded-lg border border-dashed border-border bg-background/40 px-4 text-center text-xs text-muted-foreground"
               >
                 {t("overview.trafficAllLayersHidden")}
               </div>
             ) : (
               <div>
                 <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
-                  <span>{showLeftAxis ? t("overview.axisUnitThroughput") : ""}</span>
+                  <span>{leftAxisCaption}</span>
                   <span>{showRightAxis ? t("overview.axisUnitCount") : ""}</span>
                 </div>
                 <div role="img" aria-label={chartAriaLabel}>
-                  <ResponsiveContainer width="100%" height={208}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <ComposedChart
                       data={chartMetrics.chartData}
                       margin={{ top: 6, right: 8, left: showLeftAxis ? -4 : 4, bottom: 4 }}
@@ -325,7 +322,7 @@ export function OverviewTrafficChart({
               </div>
             )}
 
-            <div className="mt-auto shrink-0 flex flex-wrap items-center gap-2 text-xs text-foreground/80 pt-3 border-t border-border">
+            <div className="mt-auto shrink-0 flex flex-wrap items-center gap-1.5 text-xs text-foreground/80 pt-2.5 border-t border-border">
               {legendItems.map((item) => (
                 <button
                   key={item.key}

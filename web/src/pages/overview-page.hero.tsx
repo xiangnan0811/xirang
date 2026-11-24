@@ -1,9 +1,17 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { useAuth } from "@/context/auth-context.hooks";
-import { getTimeOfDay } from "@/lib/date-utils";
+import { formatTime, getTimeOfDay } from "@/lib/date-utils";
 import { PageHero } from "@/components/ui/page-hero";
+import { Button } from "@/components/ui/button";
 
-export function OverviewHero() {
+export type OverviewHeroProps = {
+  scopeLabel?: string;
+  updatedAt?: string;
+};
+
+export function OverviewHero({ scopeLabel, updatedAt }: OverviewHeroProps) {
   const { t } = useTranslation();
   const { username } = useAuth();
   const timeOfDay = getTimeOfDay();
@@ -12,11 +20,34 @@ export function OverviewHero() {
   const title = firstName
     ? t("overview.greetingWithName", { greeting, name: firstName })
     : t("overview.greetingNoName", { greeting });
-  const subtitle = t("overview.heroSubtitle", "System health at a glance");
+
   return (
     <PageHero
       title={title}
-      subtitle={subtitle}
+      meta={
+        scopeLabel || updatedAt ? (
+          <>
+            {scopeLabel ? <span>{scopeLabel}</span> : null}
+            {scopeLabel && updatedAt ? <span aria-hidden>·</span> : null}
+            {updatedAt ? (
+              <span>
+                {t("overview.generatedAtLabel")}
+                <time dateTime={updatedAt} title={formatTime(updatedAt)} className="tabular-nums">
+                  {formatTime(updatedAt)}
+                </time>
+              </span>
+            ) : null}
+          </>
+        ) : undefined
+      }
+      actions={
+        <Button asChild variant="outline" size="sm">
+          <Link to="/app/backups/overview">
+            {t("overview.viewBackupHealth")}
+            <ArrowRight className="size-3.5" aria-hidden />
+          </Link>
+        </Button>
+      }
     />
   );
 }

@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ArrowRight, ChevronDown, ChevronUp, Loader2, ShieldAlert } from "lucide-react";
+import { ArrowRight, Loader2, ShieldAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { DataSurface, DataSurfaceContent, DataSurfaceHeader } from "@/components/ui/data-surface";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { Stagger, Reveal } from "@/components/ui/reveal";
 import { Button } from "@/components/ui/button";
-import { LoadingState } from "@/components/ui/loading-state";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useTasksContext } from "@/context/tasks-context.hooks";
 import { useAuth } from "@/context/auth-context.hooks";
@@ -17,7 +16,6 @@ import type {
   HealthIncidentAction,
   HealthIncidentGroup,
   HealthIncidentSeverity,
-  HealthIncidentSourceType,
   HealthIncidentTimelineData,
   OverviewTrafficSeries,
   OverviewTrafficWindow,
@@ -29,7 +27,8 @@ import { computeThroughputMax } from "@/pages/overview-page.traffic.utils";
 import { OverviewRecentTasks } from "@/pages/overview-page.recent-tasks";
 import { sortRecentTasks } from "@/pages/overview-page.recent-tasks.utils";
 
-const INCIDENT_PREVIEW_LIMIT = 4;
+const INCIDENT_PREVIEW_LIMIT = 3;
+const RECENT_TASKS_LIMIT = 8;
 
 function positiveIncidentID(value: number | undefined): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -124,17 +123,10 @@ function severityLabel(t: TFunction, severity: HealthIncidentSeverity) {
   return t(`overview.healthIncidentSeverity.${severity}`);
 }
 
-function sourceLabel(t: TFunction, source: HealthIncidentSourceType) {
-  return t(`overview.healthIncidentSource.${source}`);
-}
-
 function resourceLabel(t: TFunction, group: HealthIncidentGroup) {
   const resourceName = group.resource.name || t("common.unknown");
   const typeLabel = t(`overview.healthIncidentResource.${group.resource.type}`);
-  if (group.resource.type === "task" && group.resource.nodeName) {
-    return `${typeLabel} · ${resourceName} / ${group.resource.nodeName}`;
-  }
-  if (group.resource.type === "policy" && group.resource.nodeName) {
+  if ((group.resource.type === "task" || group.resource.type === "policy") && group.resource.nodeName) {
     return `${typeLabel} · ${resourceName} / ${group.resource.nodeName}`;
   }
   return `${typeLabel} · ${resourceName}`;
@@ -169,48 +161,45 @@ function HealthIncidentTimelinePanel({
   timeline,
   loading,
   error,
-  scopeLabel,
   onRetry,
 }: {
   timeline: HealthIncidentTimelineData | null;
   loading: boolean;
   error: string | null;
-  scopeLabel: string;
   onRetry: () => void;
 }) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
 
   const groups = timeline?.groups ?? [];
   const windowHours = timeline?.windowHours ?? 72;
-  const generatedAt = timeline?.generatedAt ?? "";
   const summary = timeline?.summary ?? { total: 0, critical: 0, warning: 0, info: 0 };
-  const isInitialLoading = loading && timeline === null && !error;
   const isRefreshing = loading && timeline !== null;
-  const visibleGroups = expanded ? groups : groups.slice(0, INCIDENT_PREVIEW_LIMIT);
+  const visibleGroups = groups.slice(0, INCIDENT_PREVIEW_LIMIT);
 
   return (
-    <DataSurface>
+    <DataSurface className="flex h-full flex-col">
       <DataSurfaceHeader
         title={
-          <span className="inline-flex flex-wrap items-center gap-2">
+          <span className="inline-flex flex-wrap items-center gap-1.5">
             <ShieldAlert className="size-4 text-primary" aria-hidden />
             <span>{t("overview.healthIncidentTitle")}</span>
             <Badge tone="neutral" dot={false}>
               {t("overview.healthIncidentWindowBadge", { hours: windowHours })}
             </Badge>
-            {timeline && !error ? (
-              <>
-                <Badge tone={summary.critical > 0 ? "destructive" : "neutral"} dot={summary.critical > 0}>
-                  {t("overview.healthIncidentSummaryCritical", { count: summary.critical })}
-                </Badge>
-                <Badge tone={summary.warning > 0 ? "warning" : "neutral"} dot={summary.warning > 0}>
-                  {t("overview.healthIncidentSummaryWarning", { count: summary.warning })}
-                </Badge>
-                <Badge tone={summary.info > 0 ? "info" : "neutral"} dot={summary.info > 0}>
-                  {t("overview.healthIncidentSummaryInfo", { count: summary.info })}
-                </Badge>
-              </>
+            {timeline && !error && summary.critical > 0 ? (
+              <Badge tone="destructive">
+                {t("overview.healthIncidentSummaryCritical", { count: summary.critical })}
+              </Badge>
+            ) : null}
+            {timeline && !error && summary.warning > 0 ? (
+              <Badge tone="warning">
+                {t("overview.healthIncidentSummaryWarning", { count: summary.warning })}
+              </Badge>
+            ) : null}
+            {timeline && !error && summary.info > 0 ? (
+              <Badge tone="info">
+                {t("overview.healthIncidentSummaryInfo", { count: summary.info })}
+              </Badge>
             ) : null}
             {isRefreshing ? (
               <span
@@ -224,149 +213,79 @@ function HealthIncidentTimelinePanel({
             ) : null}
           </span>
         }
-        description={
-          <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span>{t("overview.healthIncidentDesc", { hours: windowHours })}</span>
-            {generatedAt ? (
-              <span>
-                {t("overview.generatedAtLabel")}
-                <time dateTime={generatedAt} title={formatTime(generatedAt)}>
-                  {formatTime(generatedAt)}
-                </time>
-              </span>
-            ) : null}
-          </span>
-        }
         actions={
-          <Button variant="outline" size="sm" onClick={onRetry} disabled={loading}>
-            {t("common.refresh")}
+          <Button asChild variant="ghost" size="sm">
+            <Link to="/app/notifications">
+              {t("overview.healthIncidentViewMore")}
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
           </Button>
         }
       />
-      <DataSurfaceContent className="space-y-3">
-        {isInitialLoading ? (
-          <LoadingState
-            className="rounded-lg border border-border bg-background/60"
-            title={t("overview.healthIncidentLoading")}
-            description={t("overview.healthIncidentLoadingDesc")}
-            rows={2}
-          />
-        ) : null}
-
-        {!isInitialLoading && error ? (
-          <InlineAlert tone="warning" title={t("overview.healthIncidentErrorTitle")}>
-            <div className="space-y-2">
-              <p>{error}</p>
-              <Button type="button" size="sm" variant="outline" onClick={onRetry} disabled={loading}>
-                {t("common.retry")}
-              </Button>
-            </div>
-          </InlineAlert>
-        ) : null}
-
-        {!isInitialLoading && !error && groups.length === 0 ? (
-          <InlineAlert tone="info" title={t("overview.healthIncidentEmptyTitle")}>
-            <div className="space-y-2">
-              <p>{t("overview.healthIncidentEmptyDesc", { hours: windowHours, scope: scopeLabel })}</p>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button asChild variant="outline" size="sm">
-                  <Link to="/app/backups/overview">{t("overview.viewBackupHealth")}</Link>
-                </Button>
-                <Button asChild variant="ghost" size="sm">
-                  <Link to="/app/policies">{t("overview.healthIncidentAction.view_policies")}</Link>
+      <DataSurfaceContent className="flex-1 p-0">
+        {error ? (
+          <div className="p-4">
+            <InlineAlert tone="warning" title={t("overview.healthIncidentErrorTitle")}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>{error}</span>
+                <Button type="button" size="sm" variant="outline" onClick={onRetry} disabled={loading}>
+                  {t("common.refresh")}
                 </Button>
               </div>
-            </div>
-          </InlineAlert>
-        ) : null}
-
-        {!isInitialLoading && !error && groups.length > 0 ? (
-          <div className="space-y-3" role="list" aria-label={t("overview.healthIncidentListAriaLabel")}>
-            {visibleGroups.map((group) => {
-              const primaryAction = resolveHealthIncidentAction(group);
-              return (
-                <div
-                  key={group.id}
-                  role="listitem"
-                  className="rounded-lg border border-border bg-background/60 p-3"
-                >
-                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                    <div className="min-w-0 space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge tone={severityTone(group.severity)}>
-                          {severityLabel(t, group.severity)}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {t("overview.healthIncidentEvents", { count: group.eventCount })}
-                        </span>
-                        <time
-                          dateTime={group.lastSeenAt}
-                          className="text-xs text-muted-foreground"
-                          title={formatTime(group.lastSeenAt)}
-                        >
-                          {relativeIncidentTime(group.lastSeenAt)}
-                        </time>
-                      </div>
-                      <h3 className="text-sm font-semibold text-foreground">
-                        {resourceLabel(t, group)}
-                      </h3>
-                      <p className="text-sm leading-relaxed text-muted-foreground">
-                        {healthIncidentCauseSummary(group, t)}
-                      </p>
-                      {group.likelyCause.trim() ? (
-                        <details className="text-sm text-muted-foreground">
-                          <summary className="cursor-pointer">{t("overview.healthIncidentSourceDiagnostic")}</summary>
-                          <p className="mt-2 whitespace-pre-wrap break-words">{group.likelyCause}</p>
-                        </details>
-                      ) : null}
-                      <div className="flex flex-wrap gap-1.5">
-                        {group.sourceTypes.map((source) => (
-                          <Badge key={source} tone="neutral" dot={false} className="text-[11px]">
-                            {sourceLabel(t, source)}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                    <Button asChild variant="ghost" size="sm" className="shrink-0 justify-start">
-                      <Link to={primaryAction.href}>
-                        {healthIncidentActionLabel(primaryAction, t)}
-                        <ArrowRight className="size-3.5" aria-hidden />
-                      </Link>
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
+            </InlineAlert>
           </div>
         ) : null}
 
-        {!isInitialLoading && !error && groups.length > INCIDENT_PREVIEW_LIMIT ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              aria-expanded={expanded}
-              onClick={() => setExpanded((current) => !current)}
-            >
-              {expanded ? (
-                <>
-                  <ChevronUp className="size-3.5" aria-hidden />
-                  {t("overview.healthIncidentCollapse")}
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="size-3.5" aria-hidden />
-                  {t("overview.healthIncidentExpandAll", { count: groups.length })}
-                </>
-              )}
-            </Button>
-            <Button asChild variant="ghost" size="sm">
-              <Link to="/app/notifications">
-                {t("overview.healthIncidentAction.view_notifications")}
-                <ArrowRight className="size-3.5" aria-hidden />
-              </Link>
-            </Button>
+        {!error && groups.length > 0 ? (
+          <div className="divide-y divide-border" role="list" aria-label={t("overview.healthIncidentListAriaLabel")}>
+            {visibleGroups.map((group) => {
+              const primaryAction = resolveHealthIncidentAction(group);
+              const resourceTitle = resourceLabel(t, group);
+              return (
+                <div key={group.id} role="listitem" className="px-4 py-3 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <Badge tone={severityTone(group.severity)}>
+                        {severityLabel(t, group.severity)}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {t("overview.healthIncidentEvents", { count: group.eventCount })}
+                      </span>
+                      <time
+                        dateTime={group.lastSeenAt}
+                        className="text-xs text-muted-foreground tabular-nums"
+                        title={formatTime(group.lastSeenAt)}
+                      >
+                        {relativeIncidentTime(group.lastSeenAt)}
+                      </time>
+                    </div>
+                    <Link
+                      to={primaryAction.href}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-sm text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    >
+                      <span>{healthIncidentActionLabel(primaryAction, t)}</span>
+                      <ArrowRight className="size-3" aria-hidden />
+                    </Link>
+                  </div>
+                  <h3 className="truncate text-sm font-medium text-foreground" title={resourceTitle}>
+                    {resourceTitle}
+                  </h3>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {healthIncidentCauseSummary(group, t)}
+                  </p>
+                  {group.likelyCause.trim() ? (
+                    <details className="text-xs text-muted-foreground">
+                      <summary className="cursor-pointer hover:text-foreground">
+                        {t("overview.healthIncidentSourceDiagnostic")}
+                      </summary>
+                      <p className="mt-1.5 whitespace-pre-wrap break-words rounded bg-secondary/40 p-2 font-mono text-[11px]">
+                        {group.likelyCause}
+                      </p>
+                    </details>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         ) : null}
       </DataSurfaceContent>
@@ -384,6 +303,7 @@ export function OverviewPage() {
     void refreshTasks();
   }, [refreshTasks, refreshVersion]);
 
+  const [postureUpdatedAt, setPostureUpdatedAt] = useState("");
   const [trafficWindow, setTrafficWindow] = useState<OverviewTrafficWindow>("24h");
   const [trafficData, setTrafficData] = useState<OverviewTrafficSeries | null>(null);
   const [trafficLoading, setTrafficLoading] = useState(true);
@@ -408,12 +328,14 @@ export function OverviewPage() {
   if (trackedToken !== token) {
     setTrackedToken(token);
     setIncidentTimeline(null);
+    setIncidentError(null);
     setTrafficData(null);
+    setTrafficError(null);
+    setPostureUpdatedAt("");
   }
   if (previousIncident.scope !== incidentScope || previousIncident.fetch !== fetchHealthIncidentTimeline) {
     setPreviousIncident({ scope: incidentScope, fetch: fetchHealthIncidentTimeline });
     setIncidentLoading(true);
-    setIncidentError(null);
   }
   if (previousTraffic.scope !== trafficScope || previousTraffic.fetch !== fetchOverviewTraffic) {
     setPreviousTraffic({ scope: trafficScope, fetch: fetchOverviewTraffic });
@@ -485,7 +407,7 @@ export function OverviewPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
   }, [fetchOverviewTraffic, refreshVersion, trafficWindow, trafficReloadKey, token]);
 
-  const recentTasks = useMemo(() => sortRecentTasks(tasks, 5), [tasks]);
+  const recentTasks = useMemo(() => sortRecentTasks(tasks, RECENT_TASKS_LIMIT), [tasks]);
 
   const chartMetrics = useMemo(() => {
     const points = trafficData?.points ?? [];
@@ -528,25 +450,20 @@ export function OverviewPage() {
   }, [chartMetrics.chartData, visibleLayers]);
 
   const scopeLabel = role === "operator" ? t("overview.scopeMyNodes") : t("overview.scopeAllNodes");
+  const incidentCount = incidentTimeline?.groups.length ?? 0;
+  const showIncidentPanel = Boolean(incidentError) || incidentCount > 0;
 
   return (
     <Stagger className="space-y-5">
-      <Reveal><OverviewHero /></Reveal>
+      <Reveal>
+        <OverviewHero scopeLabel={scopeLabel} updatedAt={postureUpdatedAt} />
+      </Reveal>
 
       <Reveal>
         <OverviewPosture
           activePolicies={overview.activePolicies}
           refreshVersion={refreshVersion}
-        />
-      </Reveal>
-
-      <Reveal>
-        <HealthIncidentTimelinePanel
-          timeline={incidentTimeline}
-          loading={incidentLoading}
-          error={incidentError}
-          scopeLabel={scopeLabel}
-          onRetry={() => setIncidentReloadKey((current) => current + 1)}
+          onGeneratedAtChange={setPostureUpdatedAt}
         />
       </Reveal>
 
@@ -567,13 +484,28 @@ export function OverviewPage() {
       </Reveal>
 
       <Reveal>
-        <OverviewRecentTasks
-          tasks={tasks}
-          recentTasks={recentTasks}
-          loading={tasksLoading}
-          error={tasksError}
-          onRetry={() => { void refreshTasks(); }}
-        />
+        <div className={showIncidentPanel ? "grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-stretch" : ""}>
+          <div className={showIncidentPanel ? "flex min-w-0 flex-col xl:col-span-7" : "min-w-0"}>
+            <OverviewRecentTasks
+              tasks={tasks}
+              recentTasks={recentTasks}
+              loading={tasksLoading}
+              error={tasksError}
+              onRetry={() => { void refreshTasks(); }}
+              compact={showIncidentPanel}
+            />
+          </div>
+          {showIncidentPanel ? (
+            <div className="flex min-w-0 flex-col xl:col-span-5">
+              <HealthIncidentTimelinePanel
+                timeline={incidentTimeline}
+                loading={incidentLoading}
+                error={incidentError}
+                onRetry={() => setIncidentReloadKey((current) => current + 1)}
+              />
+            </div>
+          ) : null}
+        </div>
       </Reveal>
     </Stagger>
   );

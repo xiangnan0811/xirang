@@ -26,6 +26,8 @@ export type OverviewRecentTasksProps = {
   loading: boolean;
   error?: string | null;
   onRetry?: () => void;
+  /** Compact table columns when displayed side-by-side with Health Events. */
+  compact?: boolean;
 };
 
 type TaskStatusVisual = {
@@ -92,13 +94,14 @@ export function OverviewRecentTasks({
   loading,
   error,
   onRetry,
+  compact = false,
 }: OverviewRecentTasksProps) {
   const { t } = useTranslation();
   const isInitialLoading = loading && tasks.length === 0 && !error;
   const isRefreshing = loading && tasks.length > 0;
 
   return (
-    <DataSurface>
+    <DataSurface className="flex h-full flex-col">
       <DataSurfaceHeader
         title={
           <span className="inline-flex flex-wrap items-center gap-2">
@@ -126,15 +129,19 @@ export function OverviewRecentTasks({
         }
       />
 
-      <DataSurfaceContent className="space-y-3">
+      <DataSurfaceContent className="flex-1 p-0">
         {error ? (
-          <InventoryRetryAlert error={error} onRetry={onRetry ?? (() => undefined)} />
+          <div className="p-4">
+            <InventoryRetryAlert error={error} onRetry={onRetry ?? (() => undefined)} />
+          </div>
         ) : null}
 
         {isInitialLoading ? (
-          <LoadingState className="py-6" rows={3} title={t("overview.recentTasksLoading")} />
+          <div className="p-4">
+            <LoadingState className="py-4" rows={3} title={t("overview.recentTasksLoading")} />
+          </div>
         ) : !error && tasks.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">{t("overview.noTaskData")}</p>
+          <p className="py-8 text-center text-xs text-muted-foreground">{t("overview.noTaskData")}</p>
         ) : tasks.length > 0 ? (
           <div
             role="region"
@@ -147,12 +154,41 @@ export function OverviewRecentTasks({
             <table className="w-full text-left text-sm">
               <thead className="border-b border-border bg-secondary/40 text-mini uppercase tracking-wide text-muted-foreground">
                 <tr>
-                  <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableNodeName")}</th>
-                  <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableTaskName")}</th>
-                  <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableSyncStatus")}</th>
-                  <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableDuration")}</th>
-                  <th scope="col" className="px-4 py-2 font-medium">{t("overview.tableCompletedAt")}</th>
-                  <th scope="col" className="px-4 py-2 font-medium text-right">{t("overview.tableNextRun")}</th>
+                  <th
+                    scope="col"
+                    className={`${compact ? "px-2.5 first:pl-4" : "px-4"} py-2 font-medium whitespace-nowrap`}
+                  >
+                    {t("overview.tableNodeName")}
+                  </th>
+                  <th
+                    scope="col"
+                    className={`${compact ? "px-2.5" : "px-4"} py-2 font-medium whitespace-nowrap`}
+                  >
+                    {t("overview.tableTaskName")}
+                  </th>
+                  <th
+                    scope="col"
+                    className={`${compact ? "px-2.5" : "px-4"} py-2 font-medium whitespace-nowrap`}
+                  >
+                    {t("overview.tableSyncStatus")}
+                  </th>
+                  <th
+                    scope="col"
+                    className={`${compact ? "px-2.5" : "px-4"} py-2 font-medium whitespace-nowrap`}
+                  >
+                    {t("overview.tableDuration")}
+                  </th>
+                  <th
+                    scope="col"
+                    className={`${compact ? "px-2.5 last:pr-4 text-right" : "px-4"} py-2 font-medium whitespace-nowrap`}
+                  >
+                    {t("overview.tableCompletedAt")}
+                  </th>
+                  {!compact ? (
+                    <th scope="col" className="px-4 py-2 font-medium text-right whitespace-nowrap">
+                      {t("overview.tableNextRun")}
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -170,33 +206,44 @@ export function OverviewRecentTasks({
                       : "—";
                   const durationDisplay = formatTaskDuration(task.lastDurationMs);
                   const taskTitle = task.name || task.policyName;
+                  const cellPad = compact ? "px-2.5" : "px-4";
 
                   return (
                     <tr key={task.id} className="hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-2.5 font-medium text-foreground">{task.nodeName}</td>
-                      <td className="px-4 py-2.5">
+                      <td
+                        className={`${cellPad} ${compact ? "first:pl-4 max-w-[116px]" : ""} py-2.5 font-medium text-foreground whitespace-nowrap`}
+                        title={task.nodeName}
+                      >
+                        <span className={compact ? "block truncate" : ""}>{task.nodeName}</span>
+                      </td>
+                      <td className={`${cellPad} py-2.5 ${compact ? "max-w-[164px]" : "max-w-[240px]"}`}>
                         <Link
                           to={`/app/logs?task=${task.id}`}
-                          className="inline-flex items-center gap-1 rounded-sm font-medium text-foreground hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                          title={taskTitle}
+                          className="inline-flex max-w-full items-center gap-1 rounded-sm font-medium text-foreground hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                         >
-                          <span>{taskTitle}</span>
+                          <span className="truncate">{taskTitle}</span>
                         </Link>
                       </td>
-                      <td className="px-4 py-2.5">
-                        <span className={`inline-flex items-center gap-1.5 ${visual.iconClass}`}>
+                      <td className={`${cellPad} py-2.5 whitespace-nowrap`}>
+                        <span className={`inline-flex items-center gap-1.5 whitespace-nowrap ${visual.iconClass}`}>
                           <StatusIcon className="size-3.5 shrink-0" aria-hidden />
                           <span className={visual.textClass}>{statusLabel}</span>
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs tabular-nums text-muted-foreground">
+                      <td className={`${cellPad} py-2.5 font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap`}>
                         {durationDisplay}
                       </td>
-                      <td className="px-4 py-2.5 text-xs tabular-nums text-muted-foreground">
+                      <td
+                        className={`${cellPad} ${compact ? "last:pr-4 text-right" : ""} py-2.5 text-xs tabular-nums text-muted-foreground whitespace-nowrap`}
+                      >
                         {finishedDisplay}
                       </td>
-                      <td className="px-4 py-2.5 text-right text-xs tabular-nums text-muted-foreground">
-                        {nextRunDisplay}
-                      </td>
+                      {!compact ? (
+                        <td className="px-4 py-2.5 text-right text-xs tabular-nums text-muted-foreground whitespace-nowrap">
+                          {nextRunDisplay}
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })}

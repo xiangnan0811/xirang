@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ArrowRight, Loader2, ShieldCheck } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DataSurface, DataSurfaceContent, DataSurfaceHeader } from "@/components/ui/data-surface";
 import { InlineAlert } from "@/components/ui/inline-alert";
-import { LoadingState } from "@/components/ui/loading-state";
 import { useAuth } from "@/context/auth-context.hooks";
 import { apiClient } from "@/lib/api/client";
 import { formatRelativeTime, formatTime } from "@/lib/date-utils";
@@ -21,32 +18,24 @@ import {
 export type OverviewPostureProps = {
   activePolicies: number;
   refreshVersion: number;
+  onGeneratedAtChange?: (generatedAt: string) => void;
 };
 
-type ConfidenceTone = "success" | "warning" | "destructive" | "info" | "neutral";
-
-function ConfidenceCountPill({
-  label,
-  value,
-  tone,
-}: {
+type BreakdownDot = {
+  key: string;
   label: string;
-  value: number;
-  tone: ConfidenceTone;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background/60 px-3 py-2">
-      <Badge tone={tone} dot={false}>
-        {label}
-      </Badge>
-      <span className="text-base font-semibold tabular-nums text-foreground">{value}</span>
-    </div>
-  );
-}
+  count: number;
+  dotClass: string;
+  textClass: string;
+};
 
-export function OverviewPosture({ activePolicies, refreshVersion }: OverviewPostureProps) {
+export function OverviewPosture({
+  activePolicies,
+  refreshVersion,
+  onGeneratedAtChange,
+}: OverviewPostureProps) {
   const { t } = useTranslation();
-  const { token, role } = useAuth();
+  const { token } = useAuth();
   const demoModeEnabled = import.meta.env.VITE_ENABLE_DEMO_MODE === "true";
 
   const [confidence, setConfidence] = useState<BackupConfidenceData | null>(null);
@@ -149,235 +138,246 @@ export function OverviewPosture({ activePolicies, refreshVersion }: OverviewPost
   // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from react-i18next
   }, [token, demoModeEnabled, refreshVersion, reloadKey]);
 
-  const scopeLabel = role === "operator" ? t("overview.scopeMyNodes") : t("overview.scopeAllNodes");
+  const generatedAt = getPostureGeneratedAt(confidence, health);
+  useEffect(() => {
+    onGeneratedAtChange?.(generatedAt ?? "");
+  }, [generatedAt, onGeneratedAtChange]);
+
   const hasAnyData = Boolean(confidence || health);
   const hasError = Boolean(confidenceError || healthError);
   const allErrored = Boolean(confidenceError && healthError);
   const isInitialLoading = loading && !hasAnyData && !hasError;
   const isRefreshing = loading && hasAnyData;
 
-  const generatedAt = getPostureGeneratedAt(confidence, health);
   const latestVerifiedAt = getLatestVerifiedBackupTime(confidence, health);
   const locale = getLocale().startsWith("zh") ? "zh" : "en";
   const combinedErrors = [confidenceError, healthError].filter(Boolean).join(" · ");
 
-  const staleDescription = (() => {
-    if (!health) return t("overview.unavailable");
+  const confidenceBreakdown: BreakdownDot[] = confidence
+    ? [
+        {
+          key: "at_risk",
+          label: t("backupConfidence.status.at_risk"),
+          count: confidence.summary.atRisk,
+          dotClass: "bg-destructive",
+          textClass: "text-[hsl(var(--destructive-text))]",
+        },
+        {
+          key: "warning",
+          label: t("backupConfidence.status.warning"),
+          count: confidence.summary.warning,
+          dotClass: "bg-warning",
+          textClass: "text-[hsl(var(--warning-text))]",
+        },
+        {
+          key: "insufficient",
+          label: t("backupConfidence.status.insufficient"),
+          count: confidence.summary.insufficient,
+          dotClass: "bg-info",
+          textClass: "text-[hsl(var(--info-text))]",
+        },
+      ].filter((item) => item.count > 0)
+    : [];
+
+  const staleFooter = (() => {
+    if (!health) return "—";
     if (health.summary.totalNodes === 0) return t("overview.postureNoNodes");
     if (health.staleNodes.length === 0) return t("overview.postureAllNodesFresh");
-    return t("overview.postureStaleBreakdown", {
-      never: health.summary.neverBackedUp,
-      stale: health.summary.stale48h,
-    });
-  })();
-
-  const degradedDescription = (() => {
-    if (!health) return t("overview.unavailable");
-    if (health.summary.policiesDegraded > 0) return t("overview.postureDegradedWarning");
-    if (health.summary.policiesHealthy === 0 && activePolicies === 0) return t("overview.postureNoActivePolicies");
-    return t("overview.postureDegradedNone");
+    if (health.summary.neverBackedUp > 0 && health.summary.stale48h > 0) {
+      return t("overview.postureStaleBreakdown", {
+        never: health.summary.neverBackedUp,
+        stale: health.summary.stale48h,
+      });
+    }
+    if (health.summary.neverBackedUp > 0) {
+      return t("overview.postureStaleNeverOnly", { never: health.summary.neverBackedUp });
+    }
+    return t("overview.postureStale48hOnly", { stale: health.summary.stale48h });
   })();
 
   const handleRetry = () => {
     setReloadKey((current) => current + 1);
   };
 
+  const unverified = confidence ? isConfidenceUnverified(confidence) : false;
+
   return (
-    <DataSurface>
-      <DataSurfaceHeader
-        title={
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <ShieldCheck className="size-4 text-primary" aria-hidden />
-            <span>{t("overview.postureTitle")}</span>
-            <Badge tone="neutral" dot={false}>
-              {scopeLabel}
-            </Badge>
-            {isRefreshing ? (
-              <span
-                className="inline-flex items-center gap-1 text-xs font-normal text-muted-foreground"
-                role="status"
-                aria-live="polite"
-              >
-                <Loader2 className="size-3 animate-spin" aria-hidden />
-                {t("overview.refreshing")}
+    <section aria-label={t("overview.postureTitle")} className="space-y-3">
+      <h2 className="sr-only">{t("overview.postureTitle")}</h2>
+
+      {hasError ? (
+        <InlineAlert tone="warning" title={t("overview.postureErrorTitle")}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>{combinedErrors}</span>
+            <Button type="button" size="sm" variant="outline" onClick={handleRetry} disabled={loading}>
+              {t("common.retry")}
+            </Button>
+          </div>
+        </InlineAlert>
+      ) : null}
+
+      {isInitialLoading ? (
+        <div
+          className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"
+          role="status"
+          aria-label={t("overview.postureLoading")}
+        >
+          {[0, 1, 2, 3].map((slot) => (
+            <div
+              key={slot}
+              className="h-[104px] animate-pulse rounded-lg border border-border bg-card p-4 shadow-sm"
+            >
+              <div className="h-3 w-20 rounded bg-secondary" />
+              <div className="mt-4 h-6 w-24 rounded bg-secondary" />
+              <div className="mt-3 h-3 w-32 rounded bg-secondary/70" />
+            </div>
+          ))}
+        </div>
+      ) : !allErrored ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {/* Card 1: Backup Confidence */}
+          <Link
+            to="/app/backups/overview"
+            className="group flex flex-col justify-between rounded-lg border border-border bg-card p-4 shadow-sm transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span>{t("overview.postureConfidenceTitle")}</span>
+                {isRefreshing ? <Loader2 className="size-3 animate-spin" aria-hidden /> : null}
               </span>
-            ) : null}
-          </span>
-        }
-        description={
-          <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span>{t("overview.postureDesc")}</span>
-            {generatedAt ? (
-              <span>
-                {t("overview.generatedAtLabel")}
-                <time dateTime={generatedAt} title={formatTime(generatedAt)}>
-                  {formatTime(generatedAt)}
+              <ArrowRight
+                className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary"
+                aria-hidden
+              />
+            </div>
+
+            <div className="mt-3 flex items-baseline gap-1.5">
+              {!confidence ? (
+                <span className="text-2xl font-semibold tabular-nums leading-none text-muted-foreground">—</span>
+              ) : unverified ? (
+                <span className="text-xl font-semibold leading-none text-foreground">
+                  {t("overview.postureUnverifiedTitle")}
+                </span>
+              ) : (
+                <>
+                  <span className="text-2xl font-semibold tabular-nums leading-none text-foreground">
+                    {confidence.summary.healthy}
+                  </span>
+                  <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                    / {confidence.summary.total} {t("overview.postureConfidenceTrustedUnit")}
+                  </span>
+                </>
+              )}
+            </div>
+
+            <div className="mt-2.5 flex min-h-4 flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
+              {!confidence ? (
+                <span className="text-muted-foreground">{t("overview.unavailable")}</span>
+              ) : confidenceBreakdown.length > 0 ? (
+                confidenceBreakdown.map((item) => (
+                  <span key={item.key} className={cn("inline-flex items-center gap-1 tabular-nums", item.textClass)}>
+                    <span className={cn("size-1.5 rounded-full", item.dotClass)} aria-hidden />
+                    {item.label} {item.count}
+                  </span>
+                ))
+              ) : confidence.summary.total > 0 ? (
+                <span className="text-[hsl(var(--success-text))]">
+                  {t("overview.postureConfidenceAllTrusted")}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </div>
+          </Link>
+
+          {/* Card 2: Latest Verified Backup */}
+          <div className="flex flex-col justify-between rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="text-xs font-medium text-muted-foreground">
+              {t("overview.postureLatestVerifiedBackup")}
+            </div>
+            <div className="mt-3 text-xl font-semibold leading-none text-foreground tabular-nums">
+              {latestVerifiedAt ? formatRelativeTime(latestVerifiedAt, locale) : t("overview.postureNoVerifiedBackup")}
+            </div>
+            <div className="mt-2.5 min-h-4 text-xs tabular-nums text-muted-foreground">
+              {latestVerifiedAt ? (
+                <time dateTime={latestVerifiedAt} title={formatTime(latestVerifiedAt)}>
+                  {formatTime(latestVerifiedAt)}
                 </time>
-              </span>
-            ) : null}
-          </span>
-        }
-        actions={
-          <Button asChild variant="outline" size="sm">
-            <Link to="/app/backups/overview">
-              {t("overview.viewBackupHealth")}
-              <ArrowRight className="size-3.5" aria-hidden />
-            </Link>
-          </Button>
-        }
-      />
-
-      <DataSurfaceContent className="space-y-4">
-        {isInitialLoading ? (
-          <LoadingState
-            className="rounded-lg border border-border bg-background/60"
-            title={t("overview.postureLoading")}
-            rows={2}
-          />
-        ) : null}
-
-        {hasError ? (
-          <InlineAlert tone="warning" title={t("overview.postureErrorTitle")}>
-            <div className="space-y-2">
-              <p>{combinedErrors}</p>
-              <Button type="button" size="sm" variant="outline" onClick={handleRetry} disabled={loading}>
-                {t("common.retry")}
-              </Button>
+              ) : (
+                "—"
+              )}
             </div>
-          </InlineAlert>
-        ) : null}
+          </div>
 
-        {!isInitialLoading && !allErrored ? (
-          <>
-            {confidence ? (
-              <div className="space-y-3">
-                {isConfidenceUnverified(confidence) ? (
-                  <InlineAlert tone="info" live={false} title={t("overview.postureUnverifiedTitle")}>
-                    <span>
-                      {confidence.summary.total === 0
-                        ? t("overview.postureUnverifiedNoPolicies")
-                        : t("overview.postureUnverifiedInsufficientOnly")}
+          {/* Card 3: Stale / Unverified Nodes */}
+          <div className="flex flex-col justify-between rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="text-xs font-medium text-muted-foreground">
+              {t("overview.postureStaleNodes")}
+            </div>
+            <div className="mt-3 flex items-baseline gap-1">
+              {health ? (
+                <>
+                  <span
+                    className={cn(
+                      "text-2xl font-semibold tabular-nums leading-none",
+                      health.staleNodes.length > 0
+                        ? "text-[hsl(var(--warning-text))]"
+                        : "text-foreground",
+                    )}
+                  >
+                    {health.staleNodes.length}
+                  </span>
+                  {health.summary.totalNodes > 0 ? (
+                    <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                      / {health.summary.totalNodes}
                     </span>
-                  </InlineAlert>
-                ) : null}
-                <div
-                  className="grid grid-cols-2 gap-2 sm:grid-cols-4"
-                  aria-label={t("overview.postureConfidenceAriaLabel")}
-                >
-                  <ConfidenceCountPill
-                    label={t("backupConfidence.status.healthy")}
-                    value={confidence.summary.healthy}
-                    tone={confidence.summary.healthy > 0 ? "success" : "neutral"}
-                  />
-                  <ConfidenceCountPill
-                    label={t("backupConfidence.status.warning")}
-                    value={confidence.summary.warning}
-                    tone={confidence.summary.warning > 0 ? "warning" : "neutral"}
-                  />
-                  <ConfidenceCountPill
-                    label={t("backupConfidence.status.at_risk")}
-                    value={confidence.summary.atRisk}
-                    tone={confidence.summary.atRisk > 0 ? "destructive" : "neutral"}
-                  />
-                  <ConfidenceCountPill
-                    label={t("backupConfidence.status.insufficient")}
-                    value={confidence.summary.insufficient}
-                    tone={confidence.summary.insufficient > 0 ? "info" : "neutral"}
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Link
-                to="/app/policies"
-                className="group flex flex-col justify-between rounded-lg border border-border bg-background/60 p-3 transition-colors hover:border-primary/40 hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                <div className="flex items-center justify-between gap-2 text-mini font-medium text-muted-foreground">
-                  <span>{t("overview.postureActivePolicies")}</span>
-                  <ArrowRight
-                    className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary"
-                    aria-hidden
-                  />
-                </div>
-                <div className="mt-2 text-xl font-semibold tabular-nums leading-none text-foreground">
-                  {activePolicies}
-                </div>
-                <div className="mt-2 text-xs text-primary">{t("overview.postureActivePoliciesHint")}</div>
-              </Link>
-
-              <div className="flex flex-col justify-between rounded-lg border border-border bg-background/60 p-3">
-                <div className="text-mini font-medium text-muted-foreground">
-                  {t("overview.postureLatestVerifiedBackup")}
-                </div>
-                <div className="mt-2 text-sm font-semibold text-foreground">
-                  {latestVerifiedAt ? (
-                    <time dateTime={latestVerifiedAt} title={formatTime(latestVerifiedAt)} className="tabular-nums">
-                      {formatTime(latestVerifiedAt)}
-                    </time>
-                  ) : (
-                    <span>{t("overview.postureNoVerifiedBackup")}</span>
-                  )}
-                </div>
-                <div className="mt-2 text-xs text-muted-foreground">
-                  {latestVerifiedAt
-                    ? formatRelativeTime(latestVerifiedAt, locale)
-                    : t("overview.postureNoVerifiedBackupHint")}
-                </div>
-              </div>
-
-              <div className="flex flex-col justify-between rounded-lg border border-border bg-background/60 p-3">
-                <div className="text-mini font-medium text-muted-foreground">
-                  {t("overview.postureStaleNodes")}
-                </div>
-                <div className="mt-2 text-xl font-semibold tabular-nums leading-none text-foreground">
-                  {health ? (
-                    <>
-                      {health.staleNodes.length}
-                      {health.summary.totalNodes > 0 ? (
-                        <span className="ml-1 text-xs font-normal text-muted-foreground">
-                          / {health.summary.totalNodes}
-                        </span>
-                      ) : null}
-                    </>
-                  ) : (
-                    "—"
-                  )}
-                </div>
-                <div
-                  className={cn(
-                    "mt-2 text-xs",
-                    health && health.staleNodes.length > 0
-                      ? "text-[hsl(var(--warning-text))]"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  {staleDescription}
-                </div>
-              </div>
-
-              <div className="flex flex-col justify-between rounded-lg border border-border bg-background/60 p-3">
-                <div className="text-mini font-medium text-muted-foreground">
-                  {t("overview.postureDegradedPolicies")}
-                </div>
-                <div className="mt-2 text-xl font-semibold tabular-nums leading-none text-foreground">
-                  {health ? health.summary.policiesDegraded : "—"}
-                </div>
-                <div
-                  className={cn(
-                    "mt-2 text-xs",
-                    health && health.summary.policiesDegraded > 0
-                      ? "text-[hsl(var(--destructive-text))]"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  {degradedDescription}
-                </div>
-              </div>
+                  ) : null}
+                </>
+              ) : (
+                <span className="text-2xl font-semibold tabular-nums leading-none text-muted-foreground">—</span>
+              )}
             </div>
-          </>
-        ) : null}
-      </DataSurfaceContent>
-    </DataSurface>
+            <div
+              className={cn(
+                "mt-2.5 min-h-4 text-xs tabular-nums",
+                health && health.staleNodes.length > 0
+                  ? "text-[hsl(var(--warning-text))]"
+                  : "text-muted-foreground",
+              )}
+            >
+              {staleFooter}
+            </div>
+          </div>
+
+          {/* Card 4: Active Policies (+ degraded alert count when > 0) */}
+          <Link
+            to="/app/policies"
+            className="group flex flex-col justify-between rounded-lg border border-border bg-card p-4 shadow-sm transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
+              <span>{t("overview.postureActivePolicies")}</span>
+              <ArrowRight
+                className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary"
+                aria-hidden
+              />
+            </div>
+            <div className="mt-3 text-2xl font-semibold tabular-nums leading-none text-foreground">
+              {activePolicies}
+            </div>
+            <div className="mt-2.5 min-h-4 text-xs">
+              {health && health.summary.policiesDegraded > 0 ? (
+                <span className="font-medium text-[hsl(var(--destructive-text))] tabular-nums">
+                  {t("overview.postureDegradedCount", { count: health.summary.policiesDegraded })}
+                </span>
+              ) : (
+                <span className="text-muted-foreground group-hover:text-primary transition-colors">
+                  {t("overview.postureActivePoliciesHint")}
+                </span>
+              )}
+            </div>
+          </Link>
+        </div>
+      ) : null}
+    </section>
   );
 }
