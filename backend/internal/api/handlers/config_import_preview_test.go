@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,10 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
+	policyPkg "xirang/backend/internal/policy"
+	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 )
 
@@ -1877,5 +1882,371 @@ func runConfigImportPreviewCancellationDuringEvaluation(t *testing.T, engine str
 	after := previewHTTPCoreCounts(t, db)
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("mid-evaluation cancellation changed database: before=%v after=%v", before, after)
+	}
+}
+
+func TestConfigImportTemplatePolicyDecisions(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			setConfigHandlerTestEncryption(t)
+			db, _ := openConfigHandlerTestDBPairForEngine(t, engine)
+			migrateP1ConfigImport(t, db)
+			node := model.Node{Name: "import-template-node", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key", BackupDir: "import-template-node"}
+			if err := db.Create(&node).Error; err != nil {
+				t.Fatal(err)
+			}
+			ordinary := model.Policy{Name: "import-linked-policy", SourcePath: "/data", TargetPath: "/backup", CronSpec: "0 2 * * *", Enabled: true}
+			legacy := model.Policy{Name: "import-legacy-template", SourcePath: "/data", TargetPath: "/backup", CronSpec: "0 2 * * *", IsTemplate: true, Enabled: true}
+			for _, p := range []*model.Policy{&ordinary, &legacy} {
+				if err := model.CreatePolicyWithExplicitValues(db, p, model.PolicyCreateExplicitColumns()...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, task := range []model.Task{
+				{Name: "import-existing-ordinary", NodeID: node.ID, PolicyID: &ordinary.ID, ExecutorType: "command", Command: "true", Source: "manual"},
+				{Name: "import-existing-legacy", NodeID: node.ID, PolicyID: &legacy.ID, ExecutorType: "command", Command: "true", Source: "manual"},
+			} {
+				if err := db.Create(&task).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			body := map[string]any{
+				"policies": []any{
+					map[string]any{"name": ordinary.Name, "is_template": true},
+					map[string]any{"name": "import-new-template", "source_path": "/data", "target_path": "/backup", "cron_spec": "0 2 * * *", "is_template": true, "enabled": true},
+					map[string]any{"name": legacy.Name, "description": "routine edit"},
+				},
+				"tasks": []any{
+					map[string]any{"name": "import-new-ordinary-task", "node_name": node.Name, "policy_name": ordinary.Name, "executor_type": "command", "command": "true"},
+					map[string]any{"name": "import-new-template-task", "node_name": node.Name, "policy_name": "import-new-template", "executor_type": "command", "command": "true"},
+					map[string]any{"name": "import-existing-legacy", "node_name": node.Name, "policy_name": legacy.Name, "executor_type": "command", "command": "true"},
+				},
+			}
+			decision := previewConfigImportDecision(t, db, "overwrite", body, nil)
+			for _, check := range []struct {
+				entity string
+				want   []configImportAction
+			}{
+				{configImportEntityPolicies, []configImportAction{configImportActionReject, configImportActionCreate, configImportActionUpdate}},
+				{configImportEntityTasks, []configImportAction{configImportActionCreate, configImportActionReject, configImportActionUpdate}},
+			} {
+				items := configImportItemDecisionsFor(&decision, check.entity)
+				if len(items) != len(check.want) {
+					t.Fatalf("preview %s count=%d, want %d", check.entity, len(items), len(check.want))
+				}
+				for i, want := range check.want {
+					if items[i].Action != want {
+						t.Fatalf("preview %s[%d] action=%q, want %q", check.entity, i, items[i].Action, want)
+					}
+				}
+			}
+			response, result := serveP1ConfigImport(t, db, nil, "overwrite", body)
+			if response.Code != http.StatusOK || result.Created != 2 || result.Updated != 2 || result.Rejected != 2 {
+				t.Fatalf("apply status=%d result=%+v body=%s", response.Code, result, response.Body.String())
+			}
+			var stored model.Policy
+			if err := db.First(&stored, ordinary.ID).Error; err != nil || stored.IsTemplate || !stored.Enabled {
+				t.Fatalf("ordinary policy changed: %+v err=%v", stored, err)
+			}
+			stored = model.Policy{}
+			if err := db.Where("name = ?", "import-new-template").First(&stored).Error; err != nil || !stored.IsTemplate || !stored.Enabled {
+				t.Fatalf("new template flags: %+v err=%v", stored, err)
+			}
+			stored = model.Policy{}
+			if err := db.First(&stored, legacy.ID).Error; err != nil || !stored.IsTemplate || !stored.Enabled {
+				t.Fatalf("legacy template flags changed: %+v err=%v", stored, err)
+			}
+			var count int64
+			if err := db.Model(&model.Task{}).Where("name = ?", "import-new-template-task").Count(&count).Error; err != nil || count != 0 {
+				t.Fatalf("template task count=%d err=%v", count, err)
+			}
+		})
+	}
+}
+
+func TestConfigImportPolicyOnlyRejectsLinkedConversion(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			setConfigHandlerTestEncryption(t)
+			db, _ := openConfigHandlerTestDBPairForEngine(t, engine)
+			migrateP1ConfigImport(t, db)
+			node := model.Node{Name: "policy-only-node", Host: "127.0.0.1", BackupDir: "policy-only"}
+			if err := db.Create(&node).Error; err != nil {
+				t.Fatal(err)
+			}
+			p := model.Policy{Name: "policy-only-linked", SourcePath: "/data", TargetPath: "/backup", CronSpec: "0 2 * * *", Enabled: true}
+			if err := model.CreatePolicyWithExplicitValues(db, &p, model.PolicyCreateExplicitColumns()...); err != nil {
+				t.Fatal(err)
+			}
+			archived := time.Now().UTC()
+			task := model.Task{Name: "policy-only-archived", NodeID: node.ID, PolicyID: &p.ID, ExecutorType: "command", Command: "true", ArchivedAt: &archived}
+			if err := db.Create(&task).Error; err != nil {
+				t.Fatal(err)
+			}
+			body := map[string]any{"policies": []any{map[string]any{"name": p.Name, "is_template": true, "enabled": false}}}
+			decision := previewConfigImportDecision(t, db, "overwrite", body, nil)
+			items := configImportItemDecisionsFor(&decision, configImportEntityPolicies)
+			if len(items) != 1 || items[0].Action != configImportActionReject {
+				t.Fatalf("policy-only preview should reject the linked conversion: %+v", items)
+			}
+			response, result := serveP1ConfigImport(t, db, nil, "overwrite", body)
+			if response.Code != http.StatusOK || result.Rejected != 1 || result.Updated != 0 {
+				t.Fatalf("policy-only apply status=%d result=%+v body=%s", response.Code, result, response.Body.String())
+			}
+			if err := db.First(&p, p.ID).Error; err != nil || p.IsTemplate || !p.Enabled {
+				t.Fatalf("policy-only conversion changed policy: %+v err=%v", p, err)
+			}
+		})
+	}
+}
+
+func TestConfigImportRollbackRejectsNewTemplateLink(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			setConfigHandlerTestEncryption(t)
+			db, _ := openConfigHandlerTestDBPairForEngine(t, engine)
+			migrateP1ConfigImport(t, db)
+			node := model.Node{Name: "rollback-template-node", Host: "127.0.0.1", BackupDir: "rollback-template"}
+			if err := db.Create(&node).Error; err != nil {
+				t.Fatal(err)
+			}
+			p := model.Policy{Name: "rollback-template", SourcePath: "/data", TargetPath: "/backup", CronSpec: "0 2 * * *", IsTemplate: true}
+			if err := model.CreatePolicyWithExplicitValues(db, &p, model.PolicyCreateExplicitColumns()...); err != nil {
+				t.Fatal(err)
+			}
+			data := configImportData{Policies: []map[string]interface{}{{"name": p.Name, "is_template": false}}}
+			journal := newConfigImportRollbackJournal(db, nil)
+			var snapshot *configImportRollbackSnapshot
+			if err := db.Transaction(func(tx *gorm.DB) error {
+				var err error
+				snapshot, err = captureConfigImportRollbackSnapshot(context.Background(), tx, data, nil, configImportEnvelope{})
+				if err != nil {
+					return err
+				}
+				if err := tx.Model(&model.Policy{}).Where("id = ?", p.ID).Update("is_template", false).Error; err != nil {
+					return err
+				}
+				return snapshot.seal(context.Background(), tx)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			journal.install(snapshot)
+			task := model.Task{Name: "rollback-new-link", NodeID: node.ID, PolicyID: &p.ID, ExecutorType: "command", Command: "true"}
+			if err := db.Create(&task).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := journal.Restore(context.Background()); err == nil {
+				t.Fatal("rollback restored a template over a new link")
+			}
+			var stored model.Policy
+			if err := db.First(&stored, p.ID).Error; err != nil || stored.IsTemplate {
+				t.Fatalf("rollback changed policy: %+v err=%v", stored, err)
+			}
+		})
+	}
+}
+
+func TestConfigImportRollbackDetachedTaskPolicyState(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		for _, tc := range []struct {
+			name           string
+			legacyTemplate bool
+			wantRestored   bool
+		}{
+			{name: "ordinary_converted", wantRestored: false},
+			{name: "legacy_template", legacyTemplate: true, wantRestored: true},
+		} {
+			t.Run(engine+"/"+tc.name, func(t *testing.T) {
+				setConfigHandlerTestEncryption(t)
+				target, concurrent := openConfigHandlerTestDBPairForEngine(t, engine)
+				migrateConfigAssetGraphDB(t, target)
+				node := model.Node{Name: "detached-rollback-node", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key", BackupDir: "detached-rollback"}
+				if err := target.Create(&node).Error; err != nil {
+					t.Fatal(err)
+				}
+				p := model.Policy{Name: "detached-rollback-policy", SourcePath: "/data", TargetPath: config.BackupRoot, CronSpec: "0 2 * * *", Enabled: true, IsTemplate: tc.legacyTemplate}
+				if err := model.CreatePolicyWithExplicitValues(target, &p, model.PolicyCreateExplicitColumns()...); err != nil {
+					t.Fatal(err)
+				}
+				task := model.Task{Name: "detached-rollback-task", NodeID: node.ID, PolicyID: &p.ID, ExecutorType: "command", Command: "true", Source: "manual"}
+				if err := target.Create(&task).Error; err != nil {
+					t.Fatal(err)
+				}
+				transitioned := false
+				runtime := &configImportRollbackRuntime{failure: errors.New("FAKE_DETACHED_POLICY_ROLLBACK_FAILURE_FOR_TEST_ONLY")}
+				runtime.afterPersist = func() error {
+					var detached model.Task
+					if err := concurrent.First(&detached, task.ID).Error; err != nil {
+						return err
+					}
+					if detached.PolicyID != nil {
+						return errors.New("import did not detach the task")
+					}
+					if !tc.legacyTemplate {
+						router := gin.New()
+						router.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+						router.PUT("/policies/:id", NewPolicyHandler(concurrent, nil).Update)
+						request := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/policies/%d", p.ID), strings.NewReader(`{"name":"detached-rollback-policy","source_path":"/data","cron_spec":"0 2 * * *","is_template":true}`))
+						request.Header.Set("Content-Type", "application/json")
+						response := httptest.NewRecorder()
+						router.ServeHTTP(response, request)
+						if response.Code != http.StatusOK {
+							return fmt.Errorf("convert detached policy: status=%d body=%s", response.Code, response.Body.String())
+						}
+					}
+					transitioned = true
+					return nil
+				}
+				handler := NewConfigHandler(target, settings.NewService(target)).WithBackupAssetTransitioner(runtime)
+				router := gin.New()
+				router.POST("/config/import", handler.Import)
+				body := `{"tasks":[{"name":"detached-rollback-task","node_name":"detached-rollback-node","executor_type":"command","command":"true"}],"system_settings":[{"key":"backup_assets.content_preview_ttl","value":"3m"}]}`
+				request := httptest.NewRequest(http.MethodPost, "/config/import?conflict=overwrite", strings.NewReader(body))
+				request.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				if !transitioned || response.Code != http.StatusInternalServerError {
+					t.Fatalf("transitioned=%t status=%d body=%s", transitioned, response.Code, response.Body.String())
+				}
+				var stored model.Task
+				if err := target.First(&stored, task.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if tc.wantRestored {
+					if stored.PolicyID == nil || *stored.PolicyID != p.ID {
+						t.Fatalf("legacy link was not restored: %+v", stored)
+					}
+				} else if stored.PolicyID != nil {
+					t.Fatalf("rollback restored task into a newly converted template: %+v", stored)
+				}
+				var storedPolicy model.Policy
+				if err := target.First(&storedPolicy, p.ID).Error; err != nil || !storedPolicy.IsTemplate {
+					t.Fatalf("template state was not preserved: %+v err=%v", storedPolicy, err)
+				}
+			})
+		}
+	}
+}
+
+func TestConfigImportRollbackTemplateOwnershipContention(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			setConfigHandlerTestEncryption(t)
+			var holderDB, contenderDB *gorm.DB
+			if engine == "sqlite" {
+				holderDB, contenderDB = openConfigNameMappingSQLitePair(t, true)
+			} else {
+				holderDB, contenderDB = openConfigHandlerTestDBPairForEngine(t, engine)
+			}
+			migrateP1ConfigImport(t, holderDB)
+			node := model.Node{Name: "rollback-lock-node", Host: "127.0.0.1", BackupDir: "rollback-lock"}
+			if err := holderDB.Create(&node).Error; err != nil {
+				t.Fatal(err)
+			}
+			p := model.Policy{Name: "rollback-lock-policy", SourcePath: "/data", TargetPath: config.BackupRoot, CronSpec: "0 2 * * *", Enabled: true}
+			if err := model.CreatePolicyWithExplicitValues(holderDB, &p, model.PolicyCreateExplicitColumns()...); err != nil {
+				t.Fatal(err)
+			}
+			task := model.Task{Name: "rollback-lock-task", NodeID: node.ID, PolicyID: &p.ID, ExecutorType: "command", Command: "true"}
+			if err := holderDB.Create(&task).Error; err != nil {
+				t.Fatal(err)
+			}
+			data := configImportData{Tasks: []map[string]interface{}{{"name": task.Name}}}
+			var snapshot *configImportRollbackSnapshot
+			if err := holderDB.Transaction(func(tx *gorm.DB) error {
+				if err := policyPkg.LockTargetOwnershipSpace(tx); err != nil {
+					return err
+				}
+				var err error
+				snapshot, err = captureConfigImportRollbackSnapshot(context.Background(), tx, data, nil, configImportEnvelope{})
+				if err != nil {
+					return err
+				}
+				if err := tx.Model(&model.Task{}).Where("id = ?", task.ID).Update("policy_id", nil).Error; err != nil {
+					return err
+				}
+				return snapshot.seal(context.Background(), tx)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			holder := holderDB.Begin()
+			if holder.Error != nil {
+				t.Fatal(holder.Error)
+			}
+			t.Cleanup(func() { _ = holder.Rollback().Error })
+			var holderPID int
+			if engine == "postgres" {
+				if err := holder.Raw("SELECT pg_backend_pid()").Scan(&holderPID).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := policyPkg.LockTargetOwnershipSpace(holder); err != nil {
+				t.Fatal(err)
+			}
+			if err := holder.Model(&model.Policy{}).Where("id = ?", p.ID).Update("is_template", true).Error; err != nil {
+				t.Fatal(err)
+			}
+			var rollbackErr error
+			if engine == "sqlite" {
+				journal := newConfigImportRollbackJournal(contenderDB, nil)
+				journal.install(snapshot)
+				if err := journal.Restore(context.Background()); !configNameMappingSQLiteBusyLockedError(err) {
+					t.Fatalf("rollback did not encounter SQLite ownership lock: %v", err)
+				}
+				if err := holder.Commit().Error; err != nil {
+					t.Fatal(err)
+				}
+				rollbackErr = journal.Restore(context.Background())
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				ready := make(chan int, 1)
+				done := make(chan error, 1)
+				go func() {
+					done <- contenderDB.WithContext(ctx).Connection(func(conn *gorm.DB) error {
+						var pid int
+						if err := conn.Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
+							return err
+						}
+						ready <- pid
+						journal := newConfigImportRollbackJournal(conn, nil)
+						journal.install(snapshot)
+						return journal.Restore(ctx)
+					})
+				}()
+				var waiterPID int
+				select {
+				case waiterPID = <-ready:
+				case err := <-done:
+					t.Fatalf("rollback contender exited before lock: %v", err)
+				case <-ctx.Done():
+					t.Fatal("rollback contender did not start")
+				}
+				sqlDB, err := holderDB.DB()
+				if err != nil {
+					t.Fatal(err)
+				}
+				waitConfigNameMappingPostgresBlock(t, sqlDB, waiterPID, holderPID, "rollback ownership lock")
+				var event string
+				if err := holderDB.Raw("SELECT wait_event FROM pg_stat_activity WHERE pid = ?", waiterPID).Scan(&event).Error; err != nil || event != "advisory" {
+					t.Fatalf("rollback wait event=%q err=%v, want advisory", event, err)
+				}
+				if err := holder.Commit().Error; err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case rollbackErr = <-done:
+				case <-ctx.Done():
+					t.Fatal("rollback contender did not finish")
+				}
+			}
+			if rollbackErr == nil || !strings.Contains(rollbackErr.Error(), "task policy became a template") {
+				t.Fatalf("rollback after conversion error=%v", rollbackErr)
+			}
+			var stored model.Task
+			if err := holderDB.First(&stored, task.ID).Error; err != nil || stored.PolicyID != nil {
+				t.Fatalf("rollback changed detached task: %+v err=%v", stored, err)
+			}
+		})
 	}
 }

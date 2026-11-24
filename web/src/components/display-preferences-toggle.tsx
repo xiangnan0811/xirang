@@ -1,4 +1,4 @@
-import { Leaf, Minus, Plus, Zap } from "lucide-react";
+import { Leaf, Rows3, Rows4, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useTheme } from "@/context/theme-context.hooks";
 import { Button } from "@/components/ui/button";
@@ -11,27 +11,51 @@ type DisplayPreferencesToggleProps = {
 export function DisplayPreferencesToggle({ className }: DisplayPreferencesToggleProps) {
   const { t } = useTranslation();
   const { density, toggleDensity, powerMode, togglePowerMode } = useTheme();
+  const isCompact = density === "compact";
+  const isPowerSave = powerMode === "save";
+  const densityName = t("displayPrefs.compactDensityLabel");
+  const densityTitle = isCompact
+    ? t("displayPrefs.comfortDensity")
+    : t("displayPrefs.compactDensity");
+  const powerName = t("displayPrefs.powerSaveLabel");
+  const powerTitle = isPowerSave
+    ? t("displayPrefs.powerSaveOff")
+    : t("displayPrefs.powerSaveOn");
 
   return (
     <div className={cn("flex items-center gap-1", className)}>
       <Button
+        type="button"
         variant="ghost"
         size="icon"
         onClick={toggleDensity}
-        aria-label={density === "compact" ? t('displayPrefs.comfortDensity') : t('displayPrefs.compactDensity')}
-        title={density === "compact" ? t('displayPrefs.comfortDensity') : t('displayPrefs.compactDensity')}
+        aria-pressed={isCompact}
+        aria-label={densityName}
+        title={densityTitle}
+        className={cn(isCompact && "bg-accent text-accent-foreground")}
       >
-        {density === "compact" ? <Plus className="size-4" /> : <Minus className="size-4" />}
+        {isCompact ? (
+          <Rows4 className="size-4" aria-hidden />
+        ) : (
+          <Rows3 className="size-4" aria-hidden />
+        )}
       </Button>
 
       <Button
+        type="button"
         variant="ghost"
         size="icon"
         onClick={togglePowerMode}
-        aria-label={powerMode === "save" ? t('displayPrefs.powerSaveOff') : t('displayPrefs.powerSaveOn')}
-        title={powerMode === "save" ? t('displayPrefs.powerSaveOff') : t('displayPrefs.powerSaveOn')}
+        aria-pressed={isPowerSave}
+        aria-label={powerName}
+        title={powerTitle}
+        className={cn(isPowerSave && "bg-accent text-accent-foreground")}
       >
-        {powerMode === "save" ? <Leaf className="size-4" /> : <Zap className="size-4" />}
+        {isPowerSave ? (
+          <Leaf className="size-4" aria-hidden />
+        ) : (
+          <Sparkles className="size-4" aria-hidden />
+        )}
       </Button>
     </div>
   );

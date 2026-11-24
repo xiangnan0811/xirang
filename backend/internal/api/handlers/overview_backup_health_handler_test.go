@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mattn/go-sqlite3"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -161,6 +162,10 @@ func callBackupHealth(t *testing.T, db *gorm.DB) (*httptest.ResponseRecorder, ba
 }
 
 func callBackupHealthWithRole(t *testing.T, db *gorm.DB, role string, userID uint) (*httptest.ResponseRecorder, backupHealthResponse) {
+	return callBackupHealthAt(t, db, role, userID, nil)
+}
+
+func callBackupHealthAt(t *testing.T, db *gorm.DB, role string, userID uint, now func() time.Time) (*httptest.ResponseRecorder, backupHealthResponse) {
 	t.Helper()
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -169,6 +174,9 @@ func callBackupHealthWithRole(t *testing.T, db *gorm.DB, role string, userID uin
 		c.Next()
 	})
 	handler := NewBackupHealthHandler(db)
+	if now != nil {
+		handler.now = now
+	}
 	r.GET("/overview/backup-health", handler.Get)
 
 	req := httptest.NewRequest(http.MethodGet, "/overview/backup-health", nil)
@@ -1008,4 +1016,354 @@ func TestBackupHealth_FullScenario(t *testing.T) {
 		}
 	}
 	t.Fatalf("趋势数据中未找到今天 (%s)", today)
+}
+
+func TestBackupHealth_ExcludesTemplatePoliciesFromTotalsAndDegraded(t *testing.T) {
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+	if err := db.AutoMigrate(&model.PolicyNode{}); err != nil {
+		t.Fatalf("迁移 policy_nodes 失败: %v", err)
+	}
+
+	ownedNode := model.Node{Name: "bh-tmpl-owned", Host: "10.0.10.1", Port: 22, Username: "root", AuthType: "password", Status: "online", BackupDir: "bh-tmpl-owned"}
+	if err := db.Create(&ownedNode).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	op := model.User{Username: "bh-tmpl-op", Role: "operator", PasswordHash: "x"}
+	if err := db.Create(&op).Error; err != nil {
+		t.Fatalf("创建 operator 失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: op.ID}).Error; err != nil {
+		t.Fatalf("绑定节点归属失败: %v", err)
+	}
+
+	activePolicy := model.Policy{
+		Name: "bh-active-policy", SourcePath: "/src/active", TargetPath: "/dst/active",
+		CronSpec: "0 * * * *", RetentionMode: "simple", Enabled: true, IsTemplate: false,
+	}
+	enabledTemplate := model.Policy{
+		Name: "bh-enabled-template", SourcePath: "/src/tmpl", TargetPath: "/dst/tmpl",
+		CronSpec: "0 * * * *", RetentionMode: "simple", Enabled: true, IsTemplate: true,
+	}
+	for _, p := range []*model.Policy{&activePolicy, &enabledTemplate} {
+		if err := model.CreatePolicyWithExplicitValues(db, p, model.PolicyCreateExplicitColumns()...); err != nil {
+			t.Fatalf("创建策略失败: %v", err)
+		}
+		if err := db.Create(&model.PolicyNode{PolicyID: p.ID, NodeID: ownedNode.ID}).Error; err != nil {
+			t.Fatalf("绑定策略节点失败: %v", err)
+		}
+	}
+
+	tmplTask := model.Task{Name: "bh-tmpl-task", NodeID: ownedNode.ID, PolicyID: &enabledTemplate.ID, ExecutorType: "rsync", Status: "failed"}
+	if err := db.Create(&tmplTask).Error; err != nil {
+		t.Fatalf("创建模板关联任务失败: %v", err)
+	}
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		run := model.TaskRun{
+			TaskID: tmplTask.ID, NodeIDSnapshot: ownedNode.ID, ExecutorTypeSnapshot: "rsync",
+			Status: "failed", CreatedAt: now.Add(-time.Duration(i+1) * time.Minute),
+		}
+		if err := db.Create(&run).Error; err != nil {
+			t.Fatalf("创建 task_run 失败: %v", err)
+		}
+	}
+
+	for _, tc := range []struct {
+		role   string
+		userID uint
+	}{
+		{role: "admin", userID: 1},
+		{role: "viewer", userID: 1},
+		{role: "operator", userID: op.ID},
+	} {
+		resp, result := callBackupHealthWithRole(t, db, tc.role, tc.userID)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s 期望 200，实际 %d body=%s", tc.role, resp.Code, resp.Body.String())
+		}
+		if result.Data.Summary.TotalPolicies != 1 {
+			t.Fatalf("%s 期望 total_policies=1（排除模板），实际: %d", tc.role, result.Data.Summary.TotalPolicies)
+		}
+		if result.Data.DegradedCount != 0 || len(result.Data.DegradedPolicies) != 0 {
+			t.Fatalf("%s 期望 degraded_count=0（模板不计入降级策略），实际: %+v", tc.role, result.Data.DegradedPolicies)
+		}
+	}
+}
+
+func TestBackupHealth_ReturnsLatestVerifiedBackupAndThresholdHoursForFreshStandaloneNode(t *testing.T) {
+	t.Setenv("BACKUP_STALE_THRESHOLD_HOURS", "24")
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	freshCompletedAt := now.Add(-2 * time.Hour)
+	// 节点不关联任何启用策略，但拥有新鲜的已验证备份完成事实：
+	// stale_nodes 为空，但 latest_verified_backup_at 仍必须返回该完成时间且 stale_threshold_hours=24。
+	node := model.Node{
+		Name: "fresh-standalone-node", Host: "10.0.10.99", Port: 22, Username: "root",
+		AuthType: "key", Status: "online", BackupDir: "fresh-standalone-node",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	task := model.Task{Name: "manual-rsync", NodeID: node.ID, ExecutorType: "rsync", Status: "success"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	run := model.TaskRun{
+		TaskID: task.ID, NodeIDSnapshot: node.ID, ExecutorTypeSnapshot: "rsync",
+		TriggerType: "manual", Status: "success", FinishedAt: &freshCompletedAt, CreatedAt: freshCompletedAt,
+	}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	completion := model.BackupCompletion{
+		TaskID:         &task.ID,
+		TaskRunID:      &run.ID,
+		NodeID:         node.ID,
+		ExecutorType:   "rsync",
+		EvidenceStatus: "verified",
+		CompletedAt:    freshCompletedAt,
+	}
+	if err := db.Create(&completion).Error; err != nil {
+		t.Fatalf("create backup completion: %v", err)
+	}
+
+	resp, _ := callBackupHealth(t, db)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			StaleNodeCount         int     `json:"stale_node_count"`
+			StaleThresholdHours    int     `json:"stale_threshold_hours"`
+			LatestVerifiedBackupAt *string `json:"latest_verified_backup_at"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Data.StaleNodeCount != 0 {
+		t.Fatalf("expected stale_node_count=0, got %d", payload.Data.StaleNodeCount)
+	}
+	if payload.Data.StaleThresholdHours != 24 {
+		t.Fatalf("expected stale_threshold_hours=24, got %d", payload.Data.StaleThresholdHours)
+	}
+	if payload.Data.LatestVerifiedBackupAt == nil || *payload.Data.LatestVerifiedBackupAt != freshCompletedAt.Format(time.RFC3339) {
+		t.Fatalf("expected latest_verified_backup_at=%q, got %v", freshCompletedAt.Format(time.RFC3339), payload.Data.LatestVerifiedBackupAt)
+	}
+}
+
+func TestBackupHealth_OperatorDegradedPoliciesRequireCurrentAssociation(t *testing.T) {
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+	if err := db.AutoMigrate(&model.PolicyNode{}); err != nil {
+		t.Fatal(err)
+	}
+	owned := model.Node{Name: "health-owned", Host: "10.1.1.1", Port: 22, Username: "root", AuthType: "password", BackupDir: "health-owned"}
+	other := model.Node{Name: "health-other", Host: "10.1.1.2", Port: 22, Username: "root", AuthType: "password", BackupDir: "health-other"}
+	op := model.User{Username: "health-operator", Role: "operator", PasswordHash: "x"}
+	for _, value := range []any{&owned, &other, &op} {
+		if err := db.Create(value).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: owned.ID, UserID: op.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	policies := []model.Policy{
+		{Name: "former", SourcePath: "/src", TargetPath: "/dst", CronSpec: "0 * * * *", Enabled: true},
+		{Name: "visible", SourcePath: "/src", TargetPath: "/dst", CronSpec: "0 * * * *", Enabled: true},
+	}
+	for i := range policies {
+		if err := db.Create(&policies[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+		task := model.Task{Name: "health-" + policies[i].Name, NodeID: owned.ID, PolicyID: &policies[i].ID, ExecutorType: "rsync", Status: "failed"}
+		if err := db.Create(&task).Error; err != nil {
+			t.Fatal(err)
+		}
+		for j := range 3 {
+			run := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: owned.ID, ExecutorTypeSnapshot: "rsync", Status: "failed", CreatedAt: time.Now().UTC().Add(-time.Duration(j+1) * time.Hour)}
+			if err := db.Create(&run).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if i == 1 {
+			// A newer run from another node must not change the operator's result.
+			if err := db.Model(&task).Update("node_id", other.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			run := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: other.ID, ExecutorTypeSnapshot: "rsync", Status: "success", CreatedAt: time.Now().UTC()}
+			if err := db.Create(&run).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policies[0].ID, NodeID: other.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policies[1].ID, NodeID: owned.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	resp, result := callBackupHealthWithRole(t, db, "operator", op.ID)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.Code, resp.Body.String())
+	}
+	if result.Data.Summary.TotalPolicies != 1 || result.Data.DegradedCount != 1 || len(result.Data.DegradedPolicies) != 1 || result.Data.DegradedPolicies[0].ID != policies[1].ID {
+		t.Fatalf("expected only current visible policy: %+v", result.Data)
+	}
+}
+
+func TestBackupHealth_OperatorDegradedPoliciesWithinSQLiteVariableLimit(t *testing.T) {
+	db := openBackupHealthTestDB(t)
+	migrateBackupHealthTables(t, db)
+	if err := db.AutoMigrate(&model.PolicyNode{}); err != nil {
+		t.Fatal(err)
+	}
+	op := model.User{Username: "health-many-owner", Role: "operator", PasswordHash: "x"}
+	if err := db.Create(&op).Error; err != nil {
+		t.Fatal(err)
+	}
+	var firstNodeID uint
+	for i := range 40 {
+		node := model.Node{Name: fmt.Sprintf("health-many-%d", i), Host: "10.1.2.1", Port: 22, Username: "root", AuthType: "password", BackupDir: fmt.Sprintf("health-many-%d", i)}
+		if err := db.Create(&node).Error; err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			firstNodeID = node.ID
+		}
+		if err := db.Create(&model.NodeOwner{NodeID: node.ID, UserID: op.ID}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := model.Policy{Name: "health-many-policy", SourcePath: "/src", TargetPath: "/dst", CronSpec: "0 * * * *", Enabled: true}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: firstNodeID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	task := model.Task{Name: "health-many-task", NodeID: firstNodeID, PolicyID: &policy.ID, ExecutorType: "rsync", Status: "failed"}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		run := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: firstNodeID, ExecutorTypeSnapshot: "rsync", Status: "failed", CreatedAt: time.Now().UTC().Add(-time.Duration(i+1) * time.Minute)}
+		if err := db.Create(&run).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Forty IDs fit all other handler queries under this limit, but two copies
+	// in the degraded query would exceed it. Keep the same SQLite connection.
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	conn, err := sqlDB.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Raw(func(driverConn any) error {
+		conn, ok := driverConn.(*sqlite3.SQLiteConn)
+		if !ok {
+			return fmt.Errorf("unexpected SQLite connection type %T", driverConn)
+		}
+		conn.SetLimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 64)
+		return nil
+	}); err != nil {
+		_ = conn.Close()
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resp, result := callBackupHealthWithRole(t, db, "operator", op.ID)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.Code, resp.Body.String())
+	}
+	if result.Data.DegradedCount != 1 || len(result.Data.DegradedPolicies) != 1 || result.Data.DegradedPolicies[0].ID != policy.ID {
+		t.Fatalf("expected the owned degraded policy: %+v", result.Data.DegradedPolicies)
+	}
+}
+
+func TestBackupHealth_TrendLocalCalendarBoundaries(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, backend := range []struct {
+		name string
+		open func(*testing.T) *gorm.DB
+	}{
+		{"sqlite", openBackupHealthTestDB},
+		{"postgres", openBackupHealthPostgresTestDB},
+	} {
+		for _, tc := range []struct {
+			name string
+			day  time.Time
+		}{
+			{"spring-forward", time.Date(2025, 3, 9, 0, 0, 0, 0, loc)},
+			{"fall-back", time.Date(2025, 11, 2, 0, 0, 0, 0, loc)},
+		} {
+			t.Run(backend.name+"/"+tc.name, func(t *testing.T) {
+				db := backend.open(t)
+				migrateBackupHealthTables(t, db)
+				now := tc.day.AddDate(0, 0, 1).Add(12 * time.Hour)
+				windowStart := tc.day.AddDate(0, 0, -5)
+				windowEnd := tc.day.AddDate(0, 0, 2)
+				node := model.Node{Name: "calendar", Host: "10.1.1.1", Port: 22, Username: "root", BackupDir: "calendar"}
+				if err := db.Create(&node).Error; err != nil {
+					t.Fatal(err)
+				}
+				task := model.Task{Name: "calendar", NodeID: node.ID, ExecutorType: "rsync", Status: "failed"}
+				if err := db.Create(&task).Error; err != nil {
+					t.Fatal(err)
+				}
+				times := []time.Time{
+					windowStart.Add(-time.Second), windowStart, tc.day,
+					tc.day.AddDate(0, 0, 1).Add(-30 * time.Minute),
+					tc.day.AddDate(0, 0, 1), windowEnd, windowEnd,
+				}
+				for i, when := range times {
+					run := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: task.NodeID, ExecutorTypeSnapshot: "rsync", Status: "failed", CreatedAt: when.UTC()}
+					if err := db.Create(&run).Error; err != nil {
+						t.Fatal(err)
+					}
+					if i == 3 {
+						addBackupHealthRunFact(t, db, run)
+					}
+					if backend.name == "sqlite" && (i == 1 || i == 4 || i == 5) {
+						// The UTC migration wrote offsetless text, including exact boundaries.
+						if err := db.Exec("UPDATE task_runs SET created_at = ? WHERE id = ?", when.UTC().Format("2006-01-02 15:04:05"), run.ID).Error; err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				resp, result := callBackupHealthAt(t, db, "admin", 1, func() time.Time { return now })
+				if resp.Code != http.StatusOK {
+					t.Fatalf("status %d: %s", resp.Code, resp.Body.String())
+				}
+				if len(result.Data.Trend) != 7 {
+					t.Fatalf("expected seven days: %+v", result.Data.Trend)
+				}
+				for i, point := range result.Data.Trend {
+					date := windowStart.AddDate(0, 0, i).Format("2006-01-02")
+					wantTotal, wantSuccess := 0, 0
+					switch date {
+					case windowStart.Format("2006-01-02"), tc.day.AddDate(0, 0, 1).Format("2006-01-02"):
+						wantTotal = 1
+					case tc.day.Format("2006-01-02"):
+						wantTotal, wantSuccess = 2, 1
+					}
+					if point.Date != date || point.Total != wantTotal || point.Success != wantSuccess {
+						t.Fatalf("day %d: got %+v; want %s total=%d success=%d", i, point, date, wantTotal, wantSuccess)
+					}
+				}
+			})
+		}
+	}
 }

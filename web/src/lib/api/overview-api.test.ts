@@ -435,4 +435,175 @@ describe("overview api", () => {
       }
     ]);
   });
+
+  it("getOverviewTraffic maps partial flag only when true on trailing bucket", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          window: "24h",
+          bucket_minutes: 30,
+          has_real_samples: true,
+          generated_at: "2026-03-07T12:15:00Z",
+          points: [
+            {
+              timestamp: "2026-03-07T11:30:00Z",
+              timestamp_ms: 1741347000000,
+              label: "11:30",
+              throughput_mbps: 100,
+              sample_count: 1,
+              active_task_count: 1,
+              started_count: 1,
+              failed_count: 0
+            },
+            {
+              timestamp: "2026-03-07T12:00:00Z",
+              timestamp_ms: 1741348800000,
+              label: "12:00",
+              throughput_mbps: 50,
+              sample_count: 1,
+              active_task_count: 1,
+              started_count: 1,
+              failed_count: 0,
+              partial: true
+            }
+          ]
+        }
+      }))
+    );
+
+    const result = await api.getOverviewTraffic("token-1", { window: "24h" });
+
+    expect(result.points[0]?.partial).toBeUndefined();
+    expect(result.points[1]?.partial).toBe(true);
+  });
+
+  it("getOverviewTraffic keeps incomplete and partial flags only when strictly true", async () => {
+    const bucket = (timestamp: string, flags: Record<string, unknown>) => ({
+      timestamp,
+      timestamp_ms: Date.parse(timestamp),
+      label: timestamp.slice(11, 16),
+      throughput_mbps: 10,
+      sample_count: 1,
+      active_task_count: 1,
+      started_count: 1,
+      failed_count: 0,
+      ...flags,
+    });
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          window: "1h",
+          bucket_minutes: 5,
+          has_real_samples: true,
+          truncated: true,
+          generated_at: "2026-03-07T12:12:00Z",
+          points: [
+            bucket("2026-03-07T11:55:00Z", { incomplete: true }),
+            bucket("2026-03-07T12:00:00Z", { incomplete: "true" }),
+            bucket("2026-03-07T12:05:00Z", { incomplete: false }),
+            bucket("2026-03-07T12:10:00Z", { partial: true }),
+          ],
+        },
+      }))
+    );
+
+    const result = await api.getOverviewTraffic("token-1", { window: "1h" });
+
+    expect(result.truncated).toBe(true);
+    expect(result.points.map((point) => [point.incomplete, point.partial])).toEqual([
+      [true, undefined],
+      [undefined, undefined],
+      [undefined, undefined],
+      [undefined, true],
+    ]);
+    expect(result.points[1]).not.toHaveProperty("incomplete");
+    expect(result.points[2]).not.toHaveProperty("incomplete");
+    expect(result.points[3]).toMatchObject({ throughputMbps: 10, startedCount: 1, partial: true });
+  });
+
+  it("getBackupHealth returns null successRate7d when trend has zero runs and maps generatedAt", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          generated_at: "2026-05-17T01:00:00Z",
+          stale_nodes: [{ id: 1, name: "node-a", last_backup_at: null }],
+          degraded_policies: [],
+          trend: [
+            { date: "2026-05-16", total: 0, success: 0 },
+            { date: "2026-05-17", total: 0, success: 0 }
+          ],
+          summary: { total_nodes: 1, total_policies: 0, healthy_nodes: 0 }
+        }
+      }))
+    );
+
+    const result = await api.getBackupHealth("token-1");
+
+    expect(result.generatedAt).toBe("2026-05-17T01:00:00Z");
+    expect(result.summary.successRate7d).toBeNull();
+    expect(result.summary.neverBackedUp).toBe(1);
+    expect(result.summary.stale48h).toBe(0);
+  });
+
+  it("getBackupHealth computes successRate7d and maps latestVerifiedBackupAt and staleThresholdHours", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          generated_at: "2026-05-17T01:00:00Z",
+          stale_threshold_hours: 24,
+          latest_verified_backup_at: "2026-05-17T00:45:00Z",
+          stale_nodes: [],
+          degraded_policies: [],
+          trend: [
+            { date: "2026-05-16", total: 4, success: 3 },
+            { date: "2026-05-17", total: 6, success: 6 }
+          ],
+          summary: { total_nodes: 1, total_policies: 1, healthy_nodes: 1 }
+        }
+      }))
+    );
+
+    const result = await api.getBackupHealth("token-1");
+
+    expect(result.summary.successRate7d).toBe(90);
+    expect(result.staleThresholdHours).toBe(24);
+    expect(result.latestVerifiedBackupAt).toBe("2026-05-17T00:45:00Z");
+  });
+
+  it("getStorageUsage preserves incomplete and mountPointsIncomplete flags from timed-out scans", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          mount_points: [{ path: "/backup", used_gb: 20, total_gb: 100, pct: 20 }],
+          per_node: [
+            { node_id: 1, node_name: "node-complete", path: "/backup/n1", used_gb: 10 },
+            { node_id: 2, node_name: "node-partial", path: "/backup/n2", used_gb: 2, incomplete: true },
+            { node_id: 3, node_name: "node-unscanned", path: "/backup/n3", used_gb: 0, incomplete: true },
+          ],
+          incomplete: true,
+          mount_points_incomplete: true,
+        },
+      }))
+    );
+
+    const result = await api.getStorageUsage("token-1");
+
+    expect(result.incomplete).toBe(true);
+    expect(result.mountPointsIncomplete).toBe(true);
+    expect(result.perNode).toEqual([
+      { nodeId: 1, nodeName: "node-complete", path: "/backup/n1", usedGB: 10 },
+      { nodeId: 2, nodeName: "node-partial", path: "/backup/n2", usedGB: 2, incomplete: true },
+      { nodeId: 3, nodeName: "node-unscanned", path: "/backup/n3", usedGB: 0, incomplete: true },
+    ]);
+  });
 });

@@ -26,13 +26,14 @@ type configImportRollbackJournal struct {
 }
 
 type configImportRollbackSnapshot struct {
-	sshKeys     configImportTableSnapshot
-	nodes       configImportTableSnapshot
-	policies    configImportTableSnapshot
-	tasks       configImportTableSnapshot
-	settings    configImportTableSnapshot
-	graph       configImportGraphRollback
-	settingKeys []string
+	sshKeys            configImportTableSnapshot
+	nodes              configImportTableSnapshot
+	policies           configImportTableSnapshot
+	tasks              configImportTableSnapshot
+	settings           configImportTableSnapshot
+	graph              configImportGraphRollback
+	settingKeys        []string
+	priorTemplateLinks map[uint]map[uint]bool
 }
 
 type configImportTableSnapshot struct {
@@ -91,6 +92,56 @@ func captureConfigImportRollbackSnapshot(
 	} {
 		if err := table.capture(ctx, tx); err != nil {
 			return nil, err
+		}
+	}
+	// Record legacy links for imported policies and for policies referenced by
+	// task before-images. A task-only import can detach a task, allowing its
+	// former ordinary policy to become a template before compensation.
+	snapshot.priorTemplateLinks = make(map[uint]map[uint]bool)
+	policyIDs := make(map[uint]struct{})
+	for _, source := range []struct {
+		rows map[string]map[string]any
+		key  string
+	}{
+		{snapshot.policies.prior, "id"},
+		{snapshot.tasks.prior, "policy_id"},
+	} {
+		for _, row := range source.rows {
+			value := row[source.key]
+			if value == nil {
+				continue
+			}
+			id, ok := configImportRollbackUint(value)
+			if !ok {
+				return nil, fmt.Errorf("config import rollback policy identity is unavailable")
+			}
+			policyIDs[id] = struct{}{}
+		}
+	}
+	var templatePolicies []model.Policy
+	if len(policyIDs) > 0 {
+		ids := make([]uint, 0, len(policyIDs))
+		for id := range policyIDs {
+			ids = append(ids, id)
+		}
+		if err := tx.WithContext(ctx).Select("id").Where("id IN ? AND is_template = ?", ids, true).Find(&templatePolicies).Error; err != nil {
+			return nil, err
+		}
+	}
+	if len(templatePolicies) > 0 {
+		ids := make([]uint, 0, len(templatePolicies))
+		for _, p := range templatePolicies {
+			ids = append(ids, p.ID)
+			snapshot.priorTemplateLinks[p.ID] = make(map[uint]bool)
+		}
+		var links []model.Task
+		if err := tx.WithContext(ctx).Select("id", "policy_id").Where("policy_id IN ?", ids).Find(&links).Error; err != nil {
+			return nil, err
+		}
+		for _, link := range links {
+			if link.PolicyID != nil {
+				snapshot.priorTemplateLinks[*link.PolicyID][link.ID] = true
+			}
 		}
 	}
 	if envelope.Version == configExportVersion2 {
@@ -164,14 +215,19 @@ func (journal *configImportRollbackJournal) Restore(ctx context.Context) error {
 	}
 	snapshot := journal.snapshot
 	if err := journal.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if snapshot.hasTaskOwnershipRows() {
+		if snapshot.hasTaskOwnershipRows() || len(snapshot.policies.prior) > 0 || len(snapshot.policies.current) > 0 {
 			if err := policyPkg.LockTargetOwnershipSpace(tx); err != nil {
 				return fmt.Errorf("config import rollback target ownership lock: %w", err)
 			}
 			if err := snapshot.lockTaskRollbackPolicies(ctx, tx); err != nil {
 				return err
 			}
-			if err := snapshot.validateTaskRollbackOwnership(ctx, tx); err != nil {
+			if snapshot.hasTaskOwnershipRows() {
+				if err := snapshot.validateTaskRollbackOwnership(ctx, tx); err != nil {
+					return err
+				}
+			}
+			if err := snapshot.validateTemplateRollbackLinks(ctx, tx); err != nil {
 				return err
 			}
 		}
@@ -207,6 +263,84 @@ func (snapshot *configImportRollbackSnapshot) hasTaskOwnershipRows() bool {
 		return false
 	}
 	return len(snapshot.tasks.prior) > 0 || len(snapshot.tasks.current) > 0 || len(snapshot.tasks.created) > 0
+}
+
+func (snapshot *configImportRollbackSnapshot) validateTemplateRollbackLinks(ctx context.Context, tx *gorm.DB) error {
+	// Only policies restored to their prior template state need their existing
+	// links checked here. Other policies retain their current state and are
+	// checked against the task before-images below.
+	ids := make([]uint, 0, len(snapshot.priorTemplateLinks))
+	for id := range snapshot.priorTemplateLinks {
+		if _, restored := snapshot.policies.prior[rawConfigImportKey(id)]; restored {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return snapshot.validateRestoredTaskPolicyLinks(ctx, tx)
+	}
+	var links []model.Task
+	if err := tx.WithContext(ctx).Select("id", "policy_id").Where("policy_id IN ?", ids).Find(&links).Error; err != nil {
+		return fmt.Errorf("config import rollback template links query failed: %w", err)
+	}
+	for _, link := range links {
+		if link.PolicyID == nil || snapshot.priorTemplateLinks[*link.PolicyID][link.ID] {
+			continue
+		}
+		// Import-owned task rows will be restored or removed before policies.
+		if _, imported := snapshot.tasks.current[rawConfigImportKey(link.ID)]; !imported {
+			return fmt.Errorf("config import rollback template policy acquired a new task link")
+		}
+	}
+	return snapshot.validateRestoredTaskPolicyLinks(ctx, tx)
+}
+
+func (snapshot *configImportRollbackSnapshot) validateRestoredTaskPolicyLinks(ctx context.Context, tx *gorm.DB) error {
+	policyIDs := make(map[uint]struct{})
+	for _, row := range snapshot.tasks.prior {
+		if row["policy_id"] == nil {
+			continue
+		}
+		id, ok := configImportRollbackUint(row["policy_id"])
+		if !ok {
+			return fmt.Errorf("config import rollback policy identity is unavailable")
+		}
+		policyIDs[id] = struct{}{}
+	}
+	if len(policyIDs) == 0 {
+		return nil
+	}
+	ids := make([]uint, 0, len(policyIDs))
+	for id := range policyIDs {
+		ids = append(ids, id)
+	}
+	var policies []model.Policy
+	if err := tx.WithContext(ctx).Select("id", "is_template").Where("id IN ?", ids).Find(&policies).Error; err != nil {
+		return fmt.Errorf("config import rollback policy state query failed: %w", err)
+	}
+	if len(policies) != len(ids) {
+		return fmt.Errorf("config import rollback policy rows changed during restore")
+	}
+	projectedTemplate := make(map[uint]bool, len(policies))
+	for _, p := range policies {
+		projectedTemplate[p.ID] = p.IsTemplate
+		if _, restored := snapshot.policies.prior[rawConfigImportKey(p.ID)]; restored {
+			_, projectedTemplate[p.ID] = snapshot.priorTemplateLinks[p.ID]
+		}
+	}
+	for _, row := range snapshot.tasks.prior {
+		if row["policy_id"] == nil {
+			continue
+		}
+		policyID, _ := configImportRollbackUint(row["policy_id"])
+		taskID, ok := configImportRollbackUint(row["id"])
+		if !ok {
+			return fmt.Errorf("config import rollback task identity is unavailable")
+		}
+		if projectedTemplate[policyID] && !snapshot.priorTemplateLinks[policyID][taskID] {
+			return fmt.Errorf("config import rollback task policy became a template")
+		}
+	}
+	return nil
 }
 
 func (snapshot *configImportRollbackSnapshot) lockTaskRollbackPolicies(ctx context.Context, tx *gorm.DB) error {

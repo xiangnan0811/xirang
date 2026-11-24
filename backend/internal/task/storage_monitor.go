@@ -39,9 +39,9 @@ func (m *Manager) checkLocalStorageSpace() {
 		}
 	}
 
-	// 收集所有 rsync 类型策略的本地目标路径
+	// 收集所有启用且非模板策略的本地目标路径
 	var policies []model.Policy
-	if err := m.db.Where("enabled = ?", true).Find(&policies).Error; err != nil {
+	if err := m.db.Where("enabled = ? AND is_template = ?", true, false).Find(&policies).Error; err != nil {
 		log.Error().Err(err).Msg("查询策略失败（存储空间检查）")
 		return
 	}
@@ -61,6 +61,8 @@ func (m *Manager) checkLocalStorageSpace() {
 		localPaths = append(localPaths, path)
 	}
 
+	overThresholdCodes := make(map[string]bool)
+	healthyCodes := make(map[string]bool)
 	for _, path := range localPaths {
 		var stat syscall.Statfs_t
 		if err := syscall.Statfs(path, &stat); err != nil {
@@ -85,12 +87,21 @@ func (m *Manager) checkLocalStorageSpace() {
 			overThreshold = true
 		}
 
+		sanitizedPath := sanitizeTaskLogMessage(path)
+		errorCode := "XR-STORAGE-LOW:" + sanitizedPath
 		if overThreshold {
-			log.Warn().Str("path", sanitizeTaskLogMessage(path)).Float64("free_gb", freeGB).Float64("usage_pct", usagePct).Msg("备份存储空间不足")
-			_ = m.alertDispatcher.RaiseStorageSpaceAlert(sanitizeTaskLogMessage(path), freeGB, totalGB, usagePct)
+			overThresholdCodes[errorCode] = true
+			log.Warn().Str("path", sanitizedPath).Float64("free_gb", freeGB).Float64("usage_pct", usagePct).Msg("备份存储空间不足")
+			_ = m.alertDispatcher.RaiseStorageSpaceAlert(sanitizedPath, freeGB, totalGB, usagePct)
 		} else {
-			// 如果之前有告警，现在恢复了，按脱敏后的路径标识解除告警
-			_ = m.alertDispatcher.ResolveAlertsByErrorCode("XR-STORAGE-LOW:"+sanitizeTaskLogMessage(path), "存储空间恢复正常")
+			healthyCodes[errorCode] = true
 		}
+	}
+	for errorCode := range healthyCodes {
+		if overThresholdCodes[errorCode] {
+			continue
+		}
+		// 如果之前有告警，现在同标识路径均恢复正常，按脱敏后的路径标识解除告警
+		_ = m.alertDispatcher.ResolveAlertsByErrorCode(errorCode, "存储空间恢复正常")
 	}
 }

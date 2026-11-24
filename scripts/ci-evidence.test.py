@@ -115,10 +115,10 @@ def source_fixture(profile):
               'pull_request': None, 'mode': 'source', 'reason': 'source-event', 'source_run': None}
 
     groups, pg_files, root_index = [], {}, 0
-    for index in range(1, 23):
+    for index in range(1, 24):
         package = f'./fixture/g{index:02d}'
         tests, events = [], []
-        for local in range(24 if index < 22 else 27):
+        for local in range(24 if index < 23 else 27):
             name = f'TestFixture{local:02d}'
             paths = [name + '/one'] + ([name + '/two'] if root_index < 369 else [])
             root_index += 1
@@ -430,6 +430,49 @@ raise SystemExit(cli.main(sys.argv[2:]))
                               for path in case.rglob('*') if path.is_file()}, files_before)
             module = root / 'scripts/ci_evidence/source.py'
             original_module = module.read_bytes()
+            # Reconstruct the previous source verifier at the copied-tool boundary.
+            # Its fixed-count verifier rejects this fixture after acquisition, so a
+            # resume under the new verifier must reuse both upstream receipts.
+            current_text = original_module.decode()
+            before_helper, remainder = current_text.split('    def verify_inventory():\n', 1)
+            _, after_helper = remainder.split('    pg = verify_inventory()\n', 1)
+            previous_text = before_helper + '    pg = verify_postgres(inventory, pg_raw)\n' + after_helper
+            previous_dir = self.directory()
+            previous_module = previous_dir / 'source.py'
+            previous_module.write_text(previous_text)
+            for kind in ('source', 'snapshot'):
+                for stage in ('capture', 'authenticate'):
+                    with self.subTest(identity_kind=kind, identity_stage=stage):
+                        self.assertEqual(capture.projected_module(previous_module, stage, kind),
+                                         capture.projected_module(module, stage, kind))
+            self.assertNotEqual(hashlib.sha256(previous_text.encode()).digest(),
+                                hashlib.sha256(original_module).digest())
+            previous_case = agent / 'cases/previous-source-verifier'
+            previous_command = ['source', '--context', str(request_path), '--case', str(previous_case),
+                                '--profile-verifier', str(verifier)]
+            module.write_text(previous_text)
+            try:
+                rejected = subprocess.run(common + previous_command, cwd=root, env=env,
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, close_fds=True)
+                self.assertNotEqual(rejected.returncode, 0)
+                previous_summary = json.loads((previous_case / 'summary.json').read_bytes())
+                previous_refs = previous_summary['receipts']
+                self.assertIn('capture', previous_refs)
+                self.assertIn('authenticate', previous_refs)
+                self.assertNotIn('verify', previous_refs)
+                previous_downloads = {key: value for key, value in counts.items() if '/actions/artifacts/' in key}
+            finally:
+                module.write_bytes(original_module)
+            resumed = subprocess.run(common + previous_command + ['--resume'], cwd=root, env=env,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, close_fds=True)
+            self.assertEqual(resumed.returncode, 0, resumed.stderr.decode(errors='replace'))
+            updated_refs = json.loads((previous_case / 'summary.json').read_bytes())['receipts']
+            self.assertEqual(updated_refs['capture'], previous_refs['capture'])
+            self.assertEqual(updated_refs['authenticate'], previous_refs['authenticate'])
+            self.assertIn('verify', updated_refs)
+            self.assertEqual({key: value for key, value in counts.items() if '/actions/artifacts/' in key},
+                             previous_downloads)
+            before = dict(counts)
             original_summary = (case / 'summary.json').read_bytes()
             module.write_bytes(original_module + b'\n# fixture dirty verifier\n')
             try:
@@ -732,7 +775,8 @@ raise SystemExit(cli.main(sys.argv[2:]))
             self.assertFalse(list(first.parent.glob('interruption-*.json')))
             self.assertEqual(sorted(json.loads(path.read_bytes())['exit'] for path in
                                     (target / 'invocations').glob('*/command.json')), [0, 9])
-            cases = ('origin', 'producer', 'window', 'attempt', 'bad-zip', 'record', 'workflow', 'pagination')
+            cases = ('origin', 'producer', 'window', 'attempt', 'bad-zip', 'record', 'workflow', 'pagination',
+                     'pg-missing', 'pg-summary', 'pg-member', 'pg-empty-inventory')
             for mutation in cases:
                 with self.subTest(invalid=mutation):
                     saved = dict(routes)
@@ -747,6 +791,27 @@ raise SystemExit(cli.main(sys.argv[2:]))
                         elif mutation == 'bad-zip':
                             routes[blocked_path] = b'not a zip'
                             listing['artifacts'][1]['digest'] = 'sha256:' + hashlib.sha256(routes[blocked_path]).hexdigest()
+                        elif mutation in ('pg-missing', 'pg-summary', 'pg-member'):
+                            with zipfile.ZipFile(io.BytesIO(routes[blocked_path])) as archive:
+                                pg_files = {name: archive.read(name) for name in archive.namelist()}
+                            if mutation == 'pg-missing':
+                                pg_files['001.jsonl'] = b''.join(
+                                    line for line in pg_files['001.jsonl'].splitlines(keepends=True)
+                                    if b'TestFixture00/one' not in line)
+                            elif mutation == 'pg-summary':
+                                summary = json.loads(pg_files['001.summary.json'])
+                                summary['tests_pass'] = 0
+                                pg_files['001.summary.json'] = context.canonical(summary)
+                            else:
+                                del pg_files['001.stderr']
+                            routes[blocked_path] = zip_bytes(pg_files)
+                            listing['artifacts'][1]['digest'] = 'sha256:' + hashlib.sha256(routes[blocked_path]).hexdigest()
+                        elif mutation == 'pg-empty-inventory':
+                            inventory_route = prefix + 'contents/scripts/required-postgres-tests.json'
+                            data = context.canonical({'groups': []})
+                            routes[inventory_route] = context.canonical({
+                                'encoding': 'base64', 'content': base64.b64encode(data).decode(),
+                                'sha': hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()})
                         elif mutation == 'record':
                             with zipfile.ZipFile(io.BytesIO(routes[event_route])) as archive:
                                 record = json.loads(archive.read('record.json'))
@@ -773,6 +838,12 @@ raise SystemExit(cli.main(sys.argv[2:]))
                                                   stderr=subprocess.PIPE, timeout=90, close_fds=True)
                         self.assertNotEqual(rejected.returncode, 0)
                         self.assertNotEqual(json.loads(rejected.stdout)['command_exit'], 0)
+                        if mutation.startswith('pg-'):
+                            self.assertEqual(rejected.returncode, 5)
+                            refs = json.loads((target / 'summary.json').read_bytes())['receipts']
+                            self.assertIn('capture', refs)
+                            self.assertIn('authenticate', refs)
+                            self.assertNotIn('verify', refs)
                     finally:
                         routes.clear()
                         routes.update(saved)

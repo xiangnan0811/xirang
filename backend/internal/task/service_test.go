@@ -780,3 +780,45 @@ func runTaskUpdateCorruptRetryCronProvenance(t *testing.T, db *gorm.DB) {
 		t.Fatalf("corrupt provenance changed task state: %+v", persisted)
 	}
 }
+
+func TestTaskTemplatePolicyAttachment(t *testing.T) {
+	db := openManagerTestDB(t)
+	node := model.Node{Name: "template-attachment-node", Host: "127.0.0.1", BackupDir: "template-node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	template := model.Policy{Name: "template-attachment", SourcePath: "/data", TargetPath: "/backup", CronSpec: "0 2 * * *", IsTemplate: true, Enabled: true}
+	ordinary := model.Policy{Name: "ordinary-attachment", SourcePath: "/data", TargetPath: "/backup", CronSpec: "0 2 * * *", Enabled: true}
+	for _, p := range []*model.Policy{&template, &ordinary} {
+		if err := model.CreatePolicyWithExplicitValues(db, p, model.PolicyCreateExplicitColumns()...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo := gormrepo.NewTaskRepository(db)
+	api := NewTaskApiService(repo, gormrepo.NewNodeRepository(db), gormrepo.NewPolicyRepository(db), nil)
+	input := CreateTaskInput{Name: "new-template-task", NodeID: node.ID, PolicyID: &template.ID, ExecutorType: "command", Command: "true"}
+	if _, err := api.CreateTask(context.Background(), input); !IsTaskValidationError(err) {
+		t.Fatalf("create with template: %v", err)
+	}
+	input.PolicyID = &ordinary.ID
+	created, err := api.CreateTask(context.Background(), input)
+	if err != nil {
+		t.Fatalf("create with ordinary policy: %v", err)
+	}
+	if _, err := api.UpdateTask(context.Background(), created.ID, UpdateTaskInput{ExpectedRevision: TaskRevision(created), PolicyID: &template.ID, PolicyIDSet: true}); !IsTaskValidationError(err) {
+		t.Fatalf("change to template: %v", err)
+	}
+	legacy := model.Task{Name: "legacy-template-task", NodeID: node.ID, PolicyID: &template.ID, ExecutorType: "command", Command: "true", Source: "manual"}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.FindByID(context.Background(), legacy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "legacy-template-renamed"
+	updated, err := api.UpdateTask(context.Background(), legacy.ID, UpdateTaskInput{ExpectedRevision: TaskRevision(*current), Name: &name, PolicyID: &template.ID, PolicyIDSet: true})
+	if err != nil || updated.PolicyID == nil || *updated.PolicyID != template.ID || updated.Name != name {
+		t.Fatalf("legacy task edit: task=%+v err=%v", updated, err)
+	}
+}

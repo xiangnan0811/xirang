@@ -103,6 +103,7 @@ type configImportSnapshot struct {
 	credentials    *configImportCredentialInventory
 	policies       []model.Policy
 	policiesByID   map[uint]model.Policy
+	linkedPolicies map[uint]bool
 	policiesByName map[string][]model.Policy
 	tasks          []model.Task
 	tasksByID      map[uint]model.Task
@@ -254,11 +255,12 @@ func loadConfigImportSnapshot(ctx context.Context, db *gorm.DB, input configImpo
 	snapshot.tasksByID = make(map[uint]model.Task)
 	snapshot.tasksByKey = make(map[importTaskKey][]model.Task)
 	snapshot.settings = make(map[string]bool)
+	snapshot.linkedPolicies = make(map[uint]bool)
 
 	if len(input.envelope.Classic.Policies) > 0 || len(input.envelope.Classic.Tasks) > 0 {
 		var policies []model.Policy
 		query := db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).Model(&model.Policy{})
-		if err := query.Select("id", "name", "source_path", "target_path", "cron_spec").Order("id").Find(&policies).Error; err != nil {
+		if err := query.Select("id", "name", "source_path", "target_path", "cron_spec", "is_template").Order("id").Find(&policies).Error; err != nil {
 			return snapshot, fmt.Errorf("读取导入策略快照失败: %w", err)
 		}
 		snapshot.policies = policies
@@ -270,6 +272,23 @@ func loadConfigImportSnapshot(ctx context.Context, db *gorm.DB, input configImpo
 			name := strings.TrimSpace(policy.Name)
 			if name != "" {
 				snapshot.policiesByName[name] = append(snapshot.policiesByName[name], policy)
+			}
+		}
+	}
+	if len(input.envelope.Classic.Policies) > 0 {
+		var ids []uint
+		for _, data := range input.envelope.Classic.Policies {
+			for _, row := range snapshot.policiesByName[strings.TrimSpace(readStringField(data, "name"))] {
+				ids = append(ids, row.ID)
+			}
+		}
+		if len(ids) > 0 {
+			var linked []uint
+			if err := db.WithContext(ctx).Model(&model.Task{}).Distinct("policy_id").Where("policy_id IN ?", ids).Pluck("policy_id", &linked).Error; err != nil {
+				return snapshot, fmt.Errorf("读取导入策略关联任务失败: %w", err)
+			}
+			for _, id := range linked {
+				snapshot.linkedPolicies[id] = true
 			}
 		}
 	}
@@ -381,6 +400,7 @@ func cloneConfigImportSnapshotContext(ctx context.Context, source configImportSn
 	clone := configImportSnapshot{
 		credentials:    credentials,
 		policies:       append([]model.Policy(nil), source.policies...),
+		linkedPolicies: source.linkedPolicies,
 		tasks:          append([]model.Task(nil), source.tasks...),
 		settings:       make(map[string]bool, len(source.settings)),
 		targetClaims:   append([]policyPkg.TargetOwner(nil), source.targetClaims...),
@@ -1010,6 +1030,14 @@ func evaluateConfigImportPolicies(ctx context.Context, decision *configImportDec
 			decision.policyCandidates = append(decision.policyCandidates, candidate)
 			continue
 		}
+		if candidate.existing && !targetRows[0].IsTemplate && candidate.row.IsTemplate && decision.snapshot.linkedPolicies[candidate.row.ID] {
+			candidate.rejected = true
+			candidate.action = configImportActionReject
+			accumulator.rejected(configImportEntityPolicies, index, name, configImportWarningInvalidInput)
+			setConfigImportItemDecision(decision, configImportEntityPolicies, index, name, configImportActionReject, "", false)
+			decision.policyCandidates = append(decision.policyCandidates, candidate)
+			continue
+		}
 		if !candidate.existing {
 			provisional, err := allocator.NextContext(ctx)
 			if err != nil {
@@ -1107,6 +1135,14 @@ func evaluateConfigImportTasks(ctx context.Context, decision *configImportDecisi
 		if policyFound {
 			policy, ok := resolveConfigImportPolicyRow(policyID, policyByName, decision.snapshot.policiesByID)
 			if !ok {
+				accumulator.rejected(configImportEntityTasks, index, name, configImportWarningInvalidInput)
+				continue
+			}
+			linkedID := existingTask.PolicyID
+			if previous != nil {
+				linkedID = previous.task.PolicyID
+			}
+			if policy.IsTemplate && (linkedID == nil || *linkedID != policyID) {
 				accumulator.rejected(configImportEntityTasks, index, name, configImportWarningInvalidInput)
 				continue
 			}
@@ -1215,6 +1251,7 @@ func evaluateConfigImportTasks(ctx context.Context, decision *configImportDecisi
 			candidateTask.ExecutorType, candidateTask.ExecutorConfig, candidateTask.CronSpec = req.ExecutorType, req.ExecutorConfig, req.CronSpec
 			candidateTask.Source = readStringField(data, "source")
 		}
+		candidateTask.PolicyID = req.PolicyID
 		if hasImportedCronOverride {
 			candidateTask.CronOverride = importedCronOverride
 		}
@@ -2472,7 +2509,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 	persistImport := func(persistCtx context.Context) error {
 		var rollbackSnapshot *configImportRollbackSnapshot
 		err := h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
-			if len(input.envelope.Classic.Tasks) > 0 {
+			if len(input.envelope.Classic.Tasks) > 0 || len(input.envelope.Classic.Policies) > 0 {
 				if err := policyPkg.LockTargetOwnershipSpace(tx); err != nil {
 					return fmt.Errorf("锁定导入任务备份目标失败: %w", err)
 				}

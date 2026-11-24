@@ -273,6 +273,7 @@ def strict_checkout_logs(raw, jobs, checkout):
     return results
 
 
+# Frozen to preserve existing upstream capture and authentication receipt identities.
 def verify_postgres(inventory, archive_raw):
     groups = inventory['groups']
     require(len(groups) == 22, 'PostgreSQL group inventory mismatch')
@@ -508,7 +509,51 @@ def verify_source(context, case, observation, profile_verifier, *, closure_cache
     inventory = json.loads(verify_saved_contents(observation, repo, source['checkout_sha'],
                                                'scripts/required-postgres-tests.json', 'inventory.json'))
     pg_raw = artifact('required-postgres-evidence', 'PostgreSQL Migration Parity', 'Upload required PostgreSQL evidence')
-    pg = verify_postgres(inventory, pg_raw)
+    def verify_inventory():
+        require(isinstance(inventory, dict), 'PostgreSQL inventory is not an object')
+        groups = inventory.get('groups')
+        require(isinstance(groups, list) and groups, 'PostgreSQL group inventory is empty or invalid')
+        roots = paths = 0
+        for index, group in enumerate(groups, 1):
+            label = f'PostgreSQL group {index:03d}'
+            require(isinstance(group, dict), f'{label}: invalid group')
+            package, tests = group.get('package'), group.get('tests')
+            require(isinstance(package, str) and package.startswith('./') and len(package) > 2,
+                    f'{label}: invalid package')
+            require(isinstance(tests, list) and tests, f'{label} ({package}): empty or invalid tests')
+            for test in tests:
+                require(isinstance(test, dict), f'{label} ({package}): invalid test')
+                name, required_paths = test.get('name'), test.get('required_paths')
+                require(isinstance(name, str) and name and '/' not in name,
+                        f'{label} ({package}): invalid test name')
+                require(isinstance(required_paths, list) and all(isinstance(path, str) and
+                        (path == name or path.startswith(name + '/') and all(path.split('/')))
+                        for path in required_paths), f'{label} ({package}): invalid required paths for {name}')
+                roots += 1
+                paths += len(required_paths)
+        if (len(groups), roots, paths) == (22, 531, 900):
+            return verify_postgres(inventory, pg_raw)
+        expected = {f'{index:03d}.{suffix}' for index in range(1, len(groups) + 1)
+                    for suffix in ('jsonl', 'stderr', 'summary.json')}
+        results = []
+        with archive_members(pg_raw) as archive:
+            require(set(archive.namelist()) == expected, 'PostgreSQL archive inventory mismatch')
+            for index, group in enumerate(groups, 1):
+                result = replay(archive.read(f'{index:03d}.jsonl'), group)
+                summary = json.loads(archive.read(f'{index:03d}.summary.json'))
+                label = f"PostgreSQL group {index:03d} ({group['package']})"
+                require(summary.get('exit') == 0 and not summary.get('errors'), f'{label}: group summary failed')
+                require(not result['errors'], f"{label}: {'; '.join(result['errors'])}")
+                for key in ('required_missing', 'required_skipped', 'required_failed', 'optional_skips'):
+                    require(result[key] == 0, f'{label}: {key} is not zero')
+                require(all(summary.get(key) == value for key, value in result.items()),
+                        f'{label}: group summary mismatch')
+                results.append(result)
+        require(sum(result['tests'] for result in results) == roots, 'PostgreSQL root count mismatch')
+        require(sum(result['required'] for result in results) == paths, 'PostgreSQL required count mismatch')
+        return results
+
+    pg = verify_inventory()
     checkout_logs = strict_checkout_logs((observation / 'original-logs.zip').read_bytes(), by_name, source['checkout_sha'])
     architecture = check_architecture(by_name)
     browsers = []

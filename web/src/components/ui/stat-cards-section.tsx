@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { motion } from "framer-motion";
+import { Link, useInRouterContext } from "react-router-dom";
 import { cn } from "@/lib/utils";
+
+const MotionLink = motion.create(Link);
 
 const staggerContainer = {
   animate: { transition: { staggerChildren: 0.06 } },
@@ -28,6 +31,10 @@ type StatCardItem = {
   description?: ReactNode;
   tone?: StatCardTone;
   valueClassName?: string;
+  /** Optional destination URL; turns the card into an interactive link with hover lift. */
+  href?: string;
+  /** Optional click handler; turns the card into an interactive button with hover lift. */
+  onClick?: () => void;
 };
 
 type StatCardsSectionProps = {
@@ -35,7 +42,13 @@ type StatCardsSectionProps = {
   className?: string;
   cardClassName?: string;
   compact?: boolean;
+  /** Container element; use "div" when already wrapped inside a named <section>. */
+  as?: "section" | "div";
 };
+
+function isInternalHref(href: string): boolean {
+  return href.startsWith("/") && !href.startsWith("//");
+}
 
 function toneTextClass(tone: StatCardTone | undefined): string {
   switch (tone) {
@@ -59,62 +72,109 @@ export function StatCardsSection({
   className,
   cardClassName,
   compact = false,
+  as = "section",
 }: StatCardsSectionProps) {
+  const inRouter = useInRouterContext();
+  const Container = as === "div" ? motion.div : motion.section;
+
   return (
-    <motion.section
+    <Container
       initial="initial"
       animate="animate"
       variants={staggerContainer}
       className={cn(
         "grid gap-2 sm:grid-cols-2 xl:grid-cols-4",
-        compact ? "grid-cols-2" : "grid-cols-1",
+        compact && items.length > 1 ? "grid-cols-2" : "grid-cols-1",
         items.length >= 5 && "2xl:grid-cols-5",
         className
       )}
     >
-      {items.map((item) => (
-        <motion.div
-          key={item.id ?? item.title}
-          variants={staggerItem}
-          whileHover={{ y: -4 }}
-          data-tone={item.tone ?? "info"}
-          className={cn(
-            "rounded-lg border border-border bg-card shadow-sm transition-[border-color,box-shadow] duration-200 ease-out hover:border-primary/30 hover:shadow-[var(--shadow-panel-hover)]",
+      {items.map((item) => {
+        const href = item.href?.trim();
+        const isLink = Boolean(href);
+        const isButton = !isLink && Boolean(item.onClick);
+        const isInteractive = isLink || isButton;
+
+        const sharedMotionProps = {
+          variants: staggerItem,
+          ...(isInteractive ? { whileHover: { y: -4 } } : {}),
+          "data-tone": item.tone ?? "info",
+          className: cn(
+            "rounded-lg border border-border bg-card shadow-sm",
             compact ? "p-3" : "p-4",
+            isInteractive &&
+              "cursor-pointer transition-[border-color,box-shadow] duration-200 ease-out hover:border-primary/30 hover:shadow-[var(--shadow-panel-hover)] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/35",
+            isLink && "block",
+            isButton && "w-full text-left",
             cardClassName
-          )}
-        >
-          <div className="flex items-center justify-between">
-            <div className="text-mini font-medium text-muted-foreground">
-              {item.title}
-            </div>
-            {item.icon ? (
-              <div className="text-muted-foreground">{item.icon}</div>
-            ) : null}
-          </div>
-          <div
-            className={cn(
-              compact
-                ? "mt-2 text-xl font-semibold tabular-nums leading-none text-foreground"
-                : "mt-3 text-2xl font-semibold tabular-nums leading-none text-foreground",
-              item.valueClassName
-            )}
-          >
-            {item.value}
-            {item.unit ? (
-              <span className="ml-1 text-sm font-medium text-muted-foreground">
-                {item.unit}
+          ),
+        };
+
+        const cardBody = (
+          <>
+            <span className="flex items-center justify-between">
+              <span className="text-mini font-medium text-muted-foreground">
+                {item.title}
+              </span>
+              {item.icon ? (
+                <span className="text-muted-foreground">{item.icon}</span>
+              ) : null}
+            </span>
+            <span
+              className={cn(
+                compact
+                  ? "mt-2 block text-xl font-semibold tabular-nums leading-none text-foreground"
+                  : "mt-3 block text-2xl font-semibold tabular-nums leading-none text-foreground",
+                item.valueClassName
+              )}
+            >
+              {item.value}
+              {item.unit ? (
+                <span className="ml-1 text-sm font-medium text-muted-foreground">
+                  {item.unit}
+                </span>
+              ) : null}
+            </span>
+            {item.description ? (
+              <span className={cn("mt-2 block text-xs font-medium", toneTextClass(item.tone))}>
+                {item.description}
               </span>
             ) : null}
-          </div>
-          {item.description ? (
-            <div className={cn("mt-2 text-xs font-medium", toneTextClass(item.tone))}>
-              {item.description}
-            </div>
-          ) : null}
-        </motion.div>
-      ))}
-    </motion.section>
+          </>
+        );
+
+        const cardKey = item.id ?? item.title;
+
+        if (isLink && href) {
+          if (inRouter && isInternalHref(href)) {
+            return (
+              <MotionLink key={cardKey} to={href} onClick={item.onClick} {...sharedMotionProps}>
+                {cardBody}
+              </MotionLink>
+            );
+          }
+          return (
+            <motion.a key={cardKey} href={href} onClick={item.onClick} {...sharedMotionProps}>
+              {cardBody}
+            </motion.a>
+          );
+        }
+
+        if (isButton) {
+          return (
+            <motion.button key={cardKey} type="button" onClick={item.onClick} {...sharedMotionProps}>
+              {cardBody}
+            </motion.button>
+          );
+        }
+
+        return (
+          <motion.div key={cardKey} {...sharedMotionProps}>
+            {cardBody}
+          </motion.div>
+        );
+      })}
+    </Container>
   );
 }
 

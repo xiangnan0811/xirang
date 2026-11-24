@@ -72,6 +72,14 @@ Go 模块组、生产与开发前端依赖、typescript-estree 本地安全补�
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
 
+备份概览与策略修复的行为、换版生效时点和回退边界见 [CHANGELOG](../../CHANGELOG.md) 的「备份概览与策略」及「升级与回退」。正式发行前，将这两节归入目标版本，并同步 Release PR 与 GitHub Release 正文。
+
+`github.com/gorilla/websocket` 的 `v1.5.3` → `v1.5.4-0.20240701034025-d67f41855da4`
+修复 [GO-2026-6278](https://pkg.go.dev/vuln/GO-2026-6278)，属于运行依赖安全更新，按
+`fix` 正常发行。发行 PR 与 GitHub Release 正文须保留 CHANGELOG 中的依赖与升级说明：
+重新构建并替换 Core 后使用新模块。升级或回退前完成活跃 SSH 终端中的操作。换版后日志连接会自动重试，SSH 终端须手动重连并重新验证，建立新的会话。
+回退旧 Core 会恢复原依赖风险。本更新无新增配置或数据库迁移。
+
 #742 Rsync 备份首次使用的完整修复、升级与回退说明归档于 CHANGELOG `0.74.2` 版本节。发行 PR 与正式 GitHub Release 正文须保留该节，包括现有副本接入条件、版本化预检限制和换版后重新预检的条件。
 
 #740 普通 Rsync 捕获的完整修复与升级说明归档于 CHANGELOG `0.74.1` 版本节。发行 PR 与公开 Release 正文须保留 SSH 压缩、Core 副本权限、回退诊断、恢复权限及旧 Core 回退的边界。修复从替换 Core 后启动的新备份生效，无新增配置或数据库迁移。校验异常的历史运行须由新一轮成功备份建立可恢复代次。

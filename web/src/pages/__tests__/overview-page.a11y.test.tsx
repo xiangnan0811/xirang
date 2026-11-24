@@ -36,7 +36,16 @@ vi.mock("@/context/tasks-context.hooks", () => ({
   useTasksContext: () => tasksRef.current,
 }));
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ token: "test-token" }),
+  useAuth: () => ({ token: "test-token", username: "admin", role: "admin" }),
+}));
+
+const getBackupConfidenceMock = vi.fn();
+const getBackupHealthMock = vi.fn();
+vi.mock("@/lib/api/client", () => ({
+  apiClient: {
+    getBackupConfidence: (...args: unknown[]) => getBackupConfidenceMock(...args),
+    getBackupHealth: (...args: unknown[]) => getBackupHealthMock(...args),
+  },
 }));
 
 const fetchHealthIncidentTimelineMock = vi.fn();
@@ -131,6 +140,25 @@ describe("OverviewPage a11y smoke", () => {
     mockNavigate.mockReset();
     refreshNodesMock.mockReset().mockResolvedValue(undefined);
     refreshTasksMock.mockReset().mockResolvedValue(undefined);
+    getBackupConfidenceMock.mockReset().mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      summary: { healthy: 1, warning: 0, atRisk: 0, insufficient: 0, total: 1 },
+      items: [],
+    });
+    getBackupHealthMock.mockReset().mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      staleNodes: [],
+      degradedPolicies: [],
+      healthTrend: [],
+      summary: {
+        totalNodes: 1,
+        neverBackedUp: 0,
+        stale48h: 0,
+        policiesHealthy: 1,
+        policiesDegraded: 0,
+        successRate7d: null,
+      },
+    });
     fetchHealthIncidentTimelineMock.mockReset();
     fetchHealthIncidentTimelineMock.mockResolvedValue({
       generatedAt: "2026-05-17T01:00:00Z",
@@ -163,7 +191,8 @@ describe("OverviewPage a11y smoke", () => {
   it("初始渲染无 axe violations（关 color-contrast）", async () => {
     const { container } = render(<OverviewPage />);
 
-    await screen.findByText("近期未发现健康事件");
+    await screen.findByText("全部可信");
+    expect(screen.queryByRole("heading", { level: 2, name: /健康事件/ })).not.toBeInTheDocument();
 
     const results = await runAxe(container);
     expect(results).toHaveNoViolations();
@@ -183,6 +212,22 @@ describe("OverviewPage a11y smoke", () => {
     await screen.findByText("任务执行失败。");
     expect(screen.getByText("来源诊断").tagName).toBe("SUMMARY");
     expect(screen.getByRole("link", { name: "查看任务日志" })).toHaveAttribute("href", "/app/logs?task=1");
+    expect(await runAxe(container)).toHaveNoViolations();
+  });
+
+  it("empty traffic and empty recent tasks states using EmptyState have no axe violations", async () => {
+    fetchOverviewTrafficMock.mockResolvedValue({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: false,
+      generatedAt: "2026-03-08T00:00:00Z",
+      points: [],
+    });
+    tasksRef.current = { ...tasksRef.current, tasks: [] };
+
+    const { container } = render(<OverviewPage />);
+    await screen.findByText("近 24 小时暂无数据");
+    expect(screen.getByText("暂无任务")).toBeInTheDocument();
     expect(await runAxe(container)).toHaveNoViolations();
   });
 });

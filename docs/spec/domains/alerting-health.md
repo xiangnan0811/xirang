@@ -292,8 +292,25 @@ SLO 仅接受任务 `success_rate`，不接受 `availability`。异常仅保留 
 及其 Sigma、事件保留和通知链；不接受 EWMA/disk_forecast 查询筛选。报表保留任务结果、
 RPO/RTO，移除 DiskTrend。到期提醒和维护窗口保持原有边界。
 
-`GET /api/v1/overview` 只返回当前身份可见的 `activePolicies`。它不再嵌入节点计数、健康事件、最近任务、任务流量或备份指标；节点的 `open_alerts`/`running_tasks` 仍由独立的 `GET /api/v1/nodes/:id/summary` 提供，`/overview/backup-health`、`/overview/backup-confidence` 和 `/overview/storage-usage` 仍是独立接口。
+`GET /api/v1/overview` 只返回当前身份可见的 `activePolicies`（只统计启用且非模板的策略 `enabled=true AND is_template=false`；前端无摘要回退时仅在策略列表已加载后按非模板策略统计，未加载时保持未知 `null` 而不伪造为 `0`）。它不再嵌入节点计数、健康事件、最近任务、任务流量或备份指标；节点的 `open_alerts`/`running_tasks` 仍由独立的 `GET /api/v1/nodes/:id/summary` 提供，`/overview/backup-health`、`/overview/backup-confidence` 和 `/overview/storage-usage` 仍是独立接口。`/overview/backup-health` 的 `summary.total_policies` 与 `degraded_policies` 返回仅针对启用非模板策略的统计，并同时暴露当前可见节点范围的 `latest_verified_backup_at` 与有效阈值 `stale_threshold_hours`。
 
+operator 的降级策略必须仍关联其当前拥有的节点，评估连续失败时只读取归属其当前可见节点快照的运行。七天趋势按服务端时区的本地日历日分桶，各日使用相邻两个午夜作为半开区间。
+
+`/overview/storage-usage` 先读取数据库元数据，再在独立超时预算内执行文件系统扫描。`mount_points` 在 Linux 上通过 `STATX_MNT_ID` 关联 `/proc/self/mountinfo` 超级块 `major:minor`（旧内核按解析路径匹配，其他平台回退 `st_dev`）去重，避免同卷子目录和 Btrfs 子卷重复展示整卷容量。任务目录统计覆盖 Core 本地 Rsync 目标，包括禁用策略下保留的目标。Restic 和 Rclone 的目标由远端节点或存储解释。
+
+扫描超时或读取出错时返回 `incomplete: true`。挂载点扫描中断或出错时附加 `mount_points_incomplete: true`，未完成的 `per_node` 条目标记 `incomplete: true`。当前目标根路径返回 `ENOENT` 时，只有保留的普通 Rsync 备份运行同时匹配任务、执行节点快照和当前配置指纹，并已开始、结束且记录为 `success`/`verified` 或 `warning`/`dirty`，才把目录消失标为不完整。其他 `ENOENT` 按空目录处理，包括首次运行前取消、仅在写入前登记 `dirty`、改址后缺少当前目标证据，以及历史指纹缺失或已不匹配的情况。前端 `StorageUsagePanel` 单独提示和列出未完成目录，部分用量向下截断至两位小数作为 `≥` 下界。
+
+目录扫描遇到目标根路径为符号链接时标记该目标不完整。根目录下的符号链接不计入目录用量。
+
+后台存储空间监控、完整性检查与保留清理仅扫描 `enabled=true AND is_template=false` 的策略，存储监控按脱敏错误码汇总超阈状态后再对恢复正常的活动错误码解除告警；由于历史 `XR-STORAGE-LOW` 告警记录不保存策略来源，不在无可靠来源依据时猜测自动关闭既有告警（避免误关已删除或已禁用普通策略的告警）。内置策略模板逐条初始化为禁用状态（单个同名冲突不回滚其余模板），启动过程不猜测改写既有模板的 `enabled` 状态（不覆盖用户显式启用或配置导入的模板）。
+
+`GET /api/v1/overview/traffic` 要求 `tasks:read` 与节点 ownership 过滤（operator 吞吐样本按 `node_id`、任务开始/失败事件按不可变 `TaskRun.node_id_snapshot` 过滤，空 owned node 返回按同一窗口生成的全零时间桶），支持 `window=1h|24h|7d`（默认 `1h`，桶宽分别为 5m/30m/3h）。吞吐量按 `SampleWriter` 的 10 秒采样切片聚合（同切片同任务取均值后再按不重复任务求和，最后对桶内活跃切片取均值），同时保持 `sample_count` 为桶内活跃分钟数，避免单任务多样本按分钟叠加放大；当服务端时间处于当前桶内（`now > currentBucketStart`）时，响应保留末尾进行中时间桶 `[currentBucketStart, now]` 并标记 `partial: true`（已完成历史桶省略 `partial`）。
+
+采样、开始和失败查询分别优先保留最新记录。任一查询达到行数上限并仍有更多记录时返回 `truncated: true`，从窗口起点到最新被截去记录所在桶均标记 `incomplete: true`。该标记可以与末尾桶的 `partial: true` 同时出现。前端保留缺测桶的时间位置，对该桶留空，图表统计只覆盖可用的桶。
+
+前端 `overview-api.ts` 映射 `/overview/backup-health` 时，将 7 天总运行数为 0 的 `summary.successRate7d` 保留为 `null`（`BackupHealthPanel` 渲染为中性 `—`，不伪造绿色 `100%`），并透传 `latestVerifiedBackupAt` 与 `staleThresholdHours`。`/app/overview` 路由页作为唯一认证与数据编排入口，通过 `useOverviewPosture` 并行读取 `/overview/backup-confidence` 与 `/overview/backup-health`（带 `AbortController`、请求序号守卫与 token 切换重置），同时响应手动刷新 `refreshVersion` 与概览专属定时轮询信号 `overviewPollVersion`（后台定时刷新不推进全局 `refreshVersion`，避免重置通知中心勾选状态或备份文件分页）；以 `StatCardsSection` 扁平 4 卡片展示保护态势（无外层套壳卡片，静态卡片不带悬停抬升误导；“最近已验证备份”仅以 `/overview/backup-health` 为唯一可见范围权威，不混入策略级可信度时间戳，健康接口失败时显示 `—`/暂不可用，显式返回 `null` 时显示暂无；“已启用策略”在未知状态 `null` 时显示 `—`/暂不可用而不伪造为 `0`；滞后阈值按服务端 `staleThresholdHours` 动态呈现，不将完整 `BackupHealthPanel`/`BackupConfidencePanel`/`StorageUsagePanel` 复制到概览页）；流量趋势图默认展示 `24h` 窗口，切窗加载期间保留上一响应对应的窗口标题与读屏名称并单独提示目标窗口加载中，纵轴事件计数使用整数刻度，无真实吞吐采样但存在开始/失败事件时仍保留活动与失败图层并标注进行中末尾桶，仅在采样、开始与失败均为 0 时渲染 `EmptyState`；页面底部展示最近同步任务（最多 8 条，按最近完成/运行时间排序，展示真实耗时、完成时间及全部 8 种 `TaskStatus`，不展示伪造的 `speedMbps` 或以 `updated_at` 冒充完成时间），当存在健康事件或加载错误时与健康事件面板（最多展示 3 条，顶部右上角统一提供前往 `/app/notifications` 的“全部告警”入口）等高并排呈现，无健康事件且无错误时隐藏健康事件面板并让最近同步任务占满全宽展示下次运行时间。
+
+定时轮询跳过同范围内尚未完成的请求，手动刷新、切换范围和卸载仍可取消请求。备份可信度与健康各自准备就绪后即可显示。两项同时失败时，仍展示已知的启用策略数和策略入口。
 
 ## 备份可信度
 

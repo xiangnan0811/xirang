@@ -31,7 +31,7 @@ function LoadingState({
       className={cn("space-y-3 p-4", className)}
     >
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="size-4 animate-spin text-primary" />
+        <Loader2 className="size-4 animate-spin text-primary" aria-hidden />
         <span className="font-medium text-foreground">{resolvedTitle}</span>
       </div>
 

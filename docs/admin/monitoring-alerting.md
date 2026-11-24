@@ -8,7 +8,7 @@
 
 节点详情仅展示未解决告警与运行中任务两个业务计数，由 `GET /api/v1/nodes/:id/summary` 按节点读取权限返回。资源采样、历史指标、磁盘预测及旧 metrics/status/metric-series/disk-forecast 接口已移除。
 
-基础 `GET /api/v1/overview` 现在只返回当前身份可见的 `activePolicies`；不在该响应中嵌入节点资源、健康事件、最近任务或任务流量。节点两个业务计数由独立的 `GET /api/v1/nodes/:id/summary` 返回；`/overview/backup-health`、`/overview/backup-confidence` 和 `/overview/storage-usage` 仍是独立的备份接口，不因基础 Overview 收缩而删除。历史成功率、采样吞吐量和运行时长统一在[任务执行与恢复合同的历史任务统计](../spec/domains/task-execution-recovery.md#历史任务统计)和任务页查询。
+基础 `GET /api/v1/overview` 现在只返回当前身份可见的启用非模板策略数 `activePolicies`（`enabled=true AND is_template=false`）；不在该响应中嵌入节点资源、健康事件、最近任务或任务流量。节点两个业务计数由独立的 `GET /api/v1/nodes/:id/summary` 返回；`/overview/backup-health`、`/overview/backup-confidence` 和 `/overview/storage-usage` 仍是独立的备份接口，不因基础 Overview 收缩而删除。前端概览页（`/app/overview`）并行聚合上述只读接口呈现 4 卡片备份保护态势、默认近 24 小时的流量与活动趋势（含末尾进行中时段标记）以及最近同步任务，仅在存在健康事件或加载异常时在底部右侧并排展示最多 3 条健康事件摘要并提供前往告警中心的统一入口。历史成功率、采样吞吐量和运行时长统一在[任务执行与恢复合同的历史任务统计](../spec/domains/task-execution-recovery.md#历史任务统计)和任务页查询。
 
 ## 任务日志与历史统计
 

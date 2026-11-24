@@ -11,6 +11,7 @@
 - API 只公开白名单 `executor_settings`、`executor_secrets_configured`，不输出原始 `executor_config`。Restic 排除规则 `[]` 显式清空；密码空值保留，非空替换保留原始字节（包括空白）。仅重命名等更新保留 Rclone 带宽/并发配置。
 - 任务创建和更新均加密写入非空白 `executor_config`。Core 完成 Restic 兼容转换后、启动服务和调度前，将残留明文原样加密，包括已归档任务。存储加密只更新该列，保留 `updated_at`、任务修订和关联；已有密文沿用原格式。需要改写旧配置时必须显式配置持久 `DATA_ENCRYPTION_KEY`，开发模式的进程临时密钥也不用于改写。读写或加密失败时拒绝启动，重启会继续处理残留记录。升级操作和历史副本边界见[敏感字段保护](../../admin/security.md#敏感字段保护)。
 - policy、模板克隆和导入均保留显式 `enabled=false`；policy 还保留 `verify_enabled=false`、`max_retries=0`。模板克隆始终禁用；省略字段才使用默认，零重试不自动重跑；持久化仍执行加密 hook。
+- 策略仍被任一任务引用时，转为模板返回 409，包括任务已归档或同次请求清空策略节点关联的情况。任务创建和更新拒绝新绑定模板。既有模板关联可保留，模板可转为普通策略，已有调度仍按现有启用与暂停规则执行。
 - 新 policy Rsync 目标为 `<backup-root>/.xirang/policies/<policy-id>/nodes/<node-id>`。持久化 ID 隔离 writer，不能靠 source basename 或可改节点名称。同步/改名不改已有 target；路径变化不证明历史数据已经迁移。Core 本地准入拒绝规范路径冲突、symlink alias 和祖先/后代归属重叠。
 - 节点迁移要求相关任务禁用、无调度及无活动 durable run；只把独立归属的源复制到全新隔离目标，验证后在锁下重核归属/配置再切换 DB。共享源及已有目标拒绝合并，保留原源。导入补偿先在全局/policy/task 锁下捕获 before-image，再核对当前 claim 与导入后行；并发变化或旧目标的新 owner 均拒绝补偿覆盖，不强制恢复旧 locator。
 - Restic `repository_version` 仅选择新仓库格式（默认/1/2），不是 append-only 或删除保护。旧 `append_only=true/false` 在加密配置边界分别幂等转为 2/默认，保留其他字段，冲突或非法值隔离诊断；旧字段只允许显式导入转换，不再作为运行时配置。删除保护须在存储后端独立验证。
@@ -60,6 +61,10 @@ finished_at 非空运行，分子为 status=success，不按当前 Task 状态�
 p50/p99。“全部可见任务/指定任务”与任务列表当前状态筛选独立。可配置看板、
 面板 CRUD、指标目录及旧 dashboard URL/API 已退役，不提供兼容转发。
 任务日志仅属于任务领域：`GET /api/v1/tasks/:id/logs`、`GET /api/v1/task-runs/:id/logs` 和 `/api/v1/ws/logs` 提供任务/运行日志，并继续使用 `tasks:read` 授权；安全审计日志由独立审计领域保留，不能用任务日志替代。
+
+`GET /api/v1/tasks` 与 `GET /api/v1/tasks/:id` 从任务当前节点对应的普通终态 `TaskRun` 只读投影可选的 `last_finished_at`（UTC）与 `last_duration_ms`（毫秒）。运行必须有正数且匹配任务当前节点的 `node_id_snapshot`、非空 `finished_at`，并处于 `success`、`failed`、`canceled`、`warning` 或 `skipped`。排除恢复和演练后，按 `finished_at DESC, id DESC` 取首条。没有符合条件的运行时省略这两个字段。PostgreSQL 使用 `pg_catalog.to_regclass('task_runs')` 按 `search_path` 探测表，数据库或表探测错误返回 500。
+
+`GET /api/v1/tasks` 保留默认 `created_at desc, id desc` 和单独传入 `sort_order=asc` 时的 `created_at asc, id desc` 排序。支持显式 `sort`（优先于 `sort_order`）或 `sort_by` 使用 `recent_activity`（取 `last_finished_at` 与 `last_run_at` 较新者）、`last_finished_at` 与 `last_run_at`。排序与响应元数据使用同一条运行记录，SQLite 和 PostgreSQL 上的空时间戳均固定排在末尾。
 
 ### 任务日志读取与历史入口
 

@@ -183,6 +183,18 @@ func (r *TaskRepository) LockTaskUpdateReferences(ctx context.Context, taskID, n
 	return nil
 }
 
+func (r *TaskRepository) PolicyIsTemplate(ctx context.Context, id uint) (bool, error) {
+	var p model.Policy
+	err := r.db.WithContext(ctx).Select("id", "is_template").First(&p, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, repository.ErrTaskPolicyNotFound
+	}
+	if err != nil {
+		return false, apperr.WrapDBError(err)
+	}
+	return p.IsTemplate, nil
+}
+
 // ExistsLiveByID returns true if an unarchived task with the given id exists.
 func (r *TaskRepository) ExistsLiveByID(ctx context.Context, id uint) (bool, error) {
 	var count int64

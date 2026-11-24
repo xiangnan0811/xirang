@@ -8161,7 +8161,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回当前身份可见的启用策略数",
+                "description": "返回当前身份可见的启用非模板策略数",
                 "produces": [
                     "application/json"
                 ],
@@ -8241,7 +8241,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupHealthData"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "401": {
@@ -8323,7 +8335,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.storageUsageResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "401": {
@@ -8342,7 +8366,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回指定时间窗口（1h/24h/7d）内的任务吞吐量趋势数据",
+                "description": "返回指定时间窗口（1h/24h/7d）内的任务吞吐量与活动趋势数据；partial 表示进行中的末尾桶，incomplete 表示可能因截断而缺少数据的桶",
                 "produces": [
                     "application/json"
                 ],
@@ -8362,7 +8386,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.overviewTrafficResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -8739,6 +8775,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -14984,6 +15026,24 @@ const docTemplate = `{
                         "description": "关键字模糊搜索",
                         "name": "keyword",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序字段（如 -recent_activity、-last_finished_at、-last_run_at、-created_at）",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序字段",
+                        "name": "sort_by",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序方向（asc/desc）",
+                        "name": "sort_order",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -18520,6 +18580,102 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.backupHealthData": {
+            "type": "object",
+            "properties": {
+                "degraded_count": {
+                    "type": "integer"
+                },
+                "degraded_policies": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.backupHealthDegradedPolicy"
+                    }
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "latest_verified_backup_at": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "stale_node_count": {
+                    "type": "integer"
+                },
+                "stale_nodes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.backupHealthStaleNode"
+                    }
+                },
+                "stale_threshold_hours": {
+                    "type": "integer"
+                },
+                "summary": {
+                    "$ref": "#/definitions/internal_api_handlers.backupHealthSummary"
+                },
+                "trend": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.backupHealthTrendPoint"
+                    }
+                }
+            }
+        },
+        "internal_api_handlers.backupHealthDegradedPolicy": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.backupHealthStaleNode": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "last_backup_at": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.backupHealthSummary": {
+            "type": "object",
+            "properties": {
+                "healthy_nodes": {
+                    "type": "integer"
+                },
+                "total_nodes": {
+                    "type": "integer"
+                },
+                "total_policies": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupHealthTrendPoint": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string"
+                },
+                "success": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_api_handlers.backupPreviewSourcePayload": {
             "type": "object",
             "properties": {
@@ -20347,6 +20503,26 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.mountPointInfo": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string"
+                },
+                "pct": {
+                    "description": "Whole-volume usage percentage, truncated to two decimals.",
+                    "type": "number"
+                },
+                "total_gb": {
+                    "description": "Whole-volume total bytes divided by 2^30, truncated to two decimals.",
+                    "type": "number"
+                },
+                "used_gb": {
+                    "description": "Total volume bytes minus bytes available to unprivileged users, divided by 2^30 and truncated to two decimals.",
+                    "type": "number"
+                }
+            }
+        },
         "internal_api_handlers.nodeBatchDeleteRequest": {
             "type": "object",
             "properties": {
@@ -20438,6 +20614,91 @@ const docTemplate = `{
                 },
                 "warning": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.overviewTrafficPoint": {
+            "type": "object",
+            "properties": {
+                "active_task_count": {
+                    "type": "integer"
+                },
+                "failed_count": {
+                    "type": "integer"
+                },
+                "incomplete": {
+                    "description": "Incomplete indicates that the bucket may be missing rows due to a query cap.",
+                    "type": "boolean"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "partial": {
+                    "type": "boolean"
+                },
+                "sample_count": {
+                    "type": "integer"
+                },
+                "started_count": {
+                    "type": "integer"
+                },
+                "throughput_mbps": {
+                    "type": "number"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "timestamp_ms": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.overviewTrafficResponse": {
+            "type": "object",
+            "properties": {
+                "bucket_minutes": {
+                    "type": "integer"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "has_real_samples": {
+                    "type": "boolean"
+                },
+                "points": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.overviewTrafficPoint"
+                    }
+                },
+                "truncated": {
+                    "description": "Truncated is true when sample or task-run rows exceed the server-side cap.",
+                    "type": "boolean"
+                },
+                "window": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.perNodeUsage": {
+            "type": "object",
+            "properties": {
+                "incomplete": {
+                    "description": "Present and true when this node's scan is incomplete.",
+                    "type": "boolean"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "node_name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "used_gb": {
+                    "description": "Sum of logical sizes of non-directory entries, excluding symlinks, divided by 2^30 and truncated to two decimals; a lower bound when incomplete.",
+                    "type": "number"
                 }
             }
         },
@@ -20873,6 +21134,32 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.storageUsageResponse": {
+            "type": "object",
+            "properties": {
+                "incomplete": {
+                    "description": "Incomplete is present and true if any mount or node scan is incomplete.",
+                    "type": "boolean"
+                },
+                "mount_points": {
+                    "description": "MountPoints contains whole-volume statistics; operators receive an empty array.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.mountPointInfo"
+                    }
+                },
+                "mount_points_incomplete": {
+                    "description": "MountPointsIncomplete is present and true if a mount scan is incomplete.",
+                    "type": "boolean"
+                },
+                "per_node": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.perNodeUsage"
+                    }
+                }
+            }
+        },
         "internal_api_handlers.systemBackupDownloadCredentialGrantRequest": {
             "type": "object",
             "required": [
@@ -21110,7 +21397,13 @@ const docTemplate = `{
                 "id": {
                     "type": "integer"
                 },
+                "last_duration_ms": {
+                    "type": "integer"
+                },
                 "last_error": {
+                    "type": "string"
+                },
+                "last_finished_at": {
                     "type": "string"
                 },
                 "last_run_at": {

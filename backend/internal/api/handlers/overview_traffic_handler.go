@@ -23,8 +23,9 @@ type overviewTrafficWindowConfig struct {
 	LabelLayout string
 }
 
-type overviewTrafficBucket struct {
-	MinuteSums map[time.Time]float64
+type taskSampleAccum struct {
+	sum   float64
+	count int
 }
 
 // overviewTrafficPoint represents the average total throughput per display bucket.
@@ -37,20 +38,22 @@ type overviewTrafficPoint struct {
 	ActiveTaskCount int     `json:"active_task_count"`
 	StartedCount    int     `json:"started_count"`
 	FailedCount     int     `json:"failed_count"`
+	Partial         bool    `json:"partial,omitempty"`
+	// Incomplete indicates that the bucket may be missing rows due to a query cap.
+	Incomplete bool `json:"incomplete,omitempty"`
 }
 
 type overviewTrafficResponse struct {
 	Window         string `json:"window"`
 	BucketMinutes  int    `json:"bucket_minutes"`
 	HasRealSamples bool   `json:"has_real_samples"`
-	// Truncated is true when sample or task-run rows hit the server-side cap;
-	// clients should treat incomplete buckets as partial, not as true zeros.
+	// Truncated is true when sample or task-run rows exceed the server-side cap.
 	Truncated   bool                   `json:"truncated,omitempty"`
 	GeneratedAt string                 `json:"generated_at"`
 	Points      []overviewTrafficPoint `json:"points"`
 }
 
-// trafficSampleCap bounds samples loaded for one window. Hitting the cap sets Truncated.
+// trafficSampleCap bounds samples loaded for one window. Exceeding it sets Truncated.
 // Package-level var so tests can shrink the cap without inserting 100k+ rows.
 var trafficSampleCap = 100000
 
@@ -67,12 +70,12 @@ func NewOverviewTrafficHandler(db *gorm.DB, nowFn func() time.Time) *OverviewTra
 
 // Get godoc
 // @Summary      获取流量趋势
-// @Description  返回指定时间窗口（1h/24h/7d）内的任务吞吐量趋势数据
+// @Description  返回指定时间窗口（1h/24h/7d）内的任务吞吐量与活动趋势数据；partial 表示进行中的末尾桶，incomplete 表示可能因截断而缺少数据的桶
 // @Tags         overview
 // @Security     Bearer
 // @Produce      json
 // @Param        window  query     string  false  "时间窗口（1h/24h/7d，默认 1h）"
-// @Success      200  {object}  handlers.Response
+// @Success      200  {object}  handlers.Response{data=overviewTrafficResponse}
 // @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
 // @Router       /overview/traffic [get]
@@ -88,8 +91,15 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 
 	localNow := h.nowFn()
 	now := localNow.UTC()
-	windowEnd := now.Truncate(cfg.Bucket)
-	windowStart := windowEnd.Add(-cfg.Duration)
+	currentBucketStart := now.Truncate(cfg.Bucket)
+	windowStart := currentBucketStart.Add(-cfg.Duration)
+	hasPartial := now.After(currentBucketStart)
+	queryEnd := currentBucketStart
+	bucketLoopEnd := currentBucketStart
+	if hasPartial {
+		queryEnd = now
+		bucketLoopEnd = currentBucketStart.Add(cfg.Bucket)
+	}
 
 	ownedIDs, needFilter, ownErr := ownershipNodeFilter(c, h.db)
 	if ownErr != nil {
@@ -97,16 +107,11 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 		return
 	}
 	if needFilter && len(ownedIDs) == 0 {
-		// Empty owned set → empty series for the window.
-		points := make([]overviewTrafficPoint, 0, int(cfg.Duration/cfg.Bucket))
-		for bucketStart := windowStart; bucketStart.Before(windowEnd); bucketStart = bucketStart.Add(cfg.Bucket) {
-			localBucketStart := bucketStart.In(localNow.Location())
-			points = append(points, overviewTrafficPoint{
-				Timestamp:   localBucketStart.Format(time.RFC3339),
-				TimestampMs: bucketStart.UnixMilli(),
-				Label:       localBucketStart.Format(cfg.LabelLayout),
-			})
-		}
+		// Empty owned set → empty series for the window (including trailing partial bucket if active).
+		points := buildOverviewTrafficPoints(
+			windowStart, bucketLoopEnd, currentBucketStart, hasPartial, cfg, localNow.Location(),
+			nil, nil, nil,
+		)
 		respondOK(c, overviewTrafficResponse{
 			Window:         cfg.Window,
 			BucketMinutes:  int(cfg.Bucket / time.Minute),
@@ -117,14 +122,22 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 		return
 	}
 
-	// Load samples inside the window (SQL time bounds first). Cap + Truncated
-	// avoids pretending missing buckets are true zeros under high volume.
+	ctx := c.Request.Context()
+	// Load the newest rows in each bounded query so recent buckets remain usable.
 	samples := make([]model.TaskTrafficSample, 0)
 	truncated := false
+	var incompleteThrough time.Time
+	markTruncated := func(excludedAt time.Time) {
+		bucket := excludedAt.UTC().Truncate(cfg.Bucket)
+		if !truncated || bucket.After(incompleteThrough) {
+			incompleteThrough = bucket
+		}
+		truncated = true
+	}
 	if h.db != nil {
 		var raw []model.TaskTrafficSample
-		q := h.db.Where("sampled_at >= ? AND sampled_at < ?", windowStart, windowEnd).
-			Order("sampled_at asc").
+		q := applyTrafficTimeWindow(h.db.WithContext(ctx), "sampled_at", windowStart, queryEnd, hasPartial).
+			Order("sampled_at desc").
 			Limit(trafficSampleCap + 1)
 		if needFilter {
 			q = q.Where("node_id IN ?", ownedIDs)
@@ -134,124 +147,105 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 			return
 		}
 		if len(raw) > trafficSampleCap {
-			truncated = true
+			markTruncated(raw[trafficSampleCap].SampledAt)
 			raw = raw[:trafficSampleCap]
 		}
 		for _, sample := range raw {
 			sampledAtUTC := sample.SampledAt.UTC()
-			if sampledAtUTC.Before(windowStart) || !sampledAtUTC.Before(windowEnd) {
+			if !inTrafficTimeWindow(sampledAtUTC, windowStart, queryEnd, hasPartial) {
 				continue
 			}
 			samples = append(samples, sample)
 		}
 	}
 
-	buckets := make(map[time.Time]overviewTrafficBucket, len(samples))
-	activityBuckets := make(map[time.Time]map[time.Time]map[uint]struct{}, len(samples))
+	// Aggregate per 10-second slice (matching SampleWriter throttle window) and
+	// distinct task ID so a single task emitting 6 samples/min is not summed 6x.
+	slicesByBucket := make(map[time.Time]map[time.Time]map[uint]taskSampleAccum, len(samples))
 	for _, sample := range samples {
-		bucketStart := sample.SampledAt.UTC().Truncate(cfg.Bucket)
-		minuteStart := sample.SampledAt.UTC().Truncate(time.Minute)
-		current := buckets[bucketStart]
-		if current.MinuteSums == nil {
-			current.MinuteSums = make(map[time.Time]float64)
+		sampledAtUTC := sample.SampledAt.UTC()
+		bucketStart := sampledAtUTC.Truncate(cfg.Bucket)
+		sliceStart := sampledAtUTC.Truncate(10 * time.Second)
+		bucketSlices := slicesByBucket[bucketStart]
+		if bucketSlices == nil {
+			bucketSlices = make(map[time.Time]map[uint]taskSampleAccum)
+			slicesByBucket[bucketStart] = bucketSlices
 		}
-		current.MinuteSums[minuteStart] += sample.ThroughputMbps
-		buckets[bucketStart] = current
-
-		sliceStart := sample.SampledAt.UTC().Truncate(10 * time.Second)
-		bucketActivity := activityBuckets[bucketStart]
-		if bucketActivity == nil {
-			bucketActivity = make(map[time.Time]map[uint]struct{})
+		taskMap := bucketSlices[sliceStart]
+		if taskMap == nil {
+			taskMap = make(map[uint]taskSampleAccum)
+			bucketSlices[sliceStart] = taskMap
 		}
-		taskSet := bucketActivity[sliceStart]
-		if taskSet == nil {
-			taskSet = make(map[uint]struct{})
-		}
-		taskSet[sample.TaskID] = struct{}{}
-		bucketActivity[sliceStart] = taskSet
-		activityBuckets[bucketStart] = bucketActivity
+		acc := taskMap[sample.TaskID]
+		acc.sum += sample.ThroughputMbps
+		acc.count++
+		taskMap[sample.TaskID] = acc
 	}
 
 	startedCountByBucket := make(map[time.Time]int)
 	failedCountByBucket := make(map[time.Time]int)
-	if h.db != nil && h.db.Migrator().HasTable(&model.TaskRun{}) {
-		// Scope task_runs via tasks.node_id for operators. Cap rows + Truncated
-		// so high-volume windows cannot unbounded-load TaskRun into memory.
+	hasRuns, err := hasTaskRunTable(ctx, h.db)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if hasRuns {
+		// Scope task_runs via immutable node_id_snapshot for operators so task
+		// migrations never reassign historical events to another operator.
 		var startedRuns []model.TaskRun
-		startedQ := h.db.Model(&model.TaskRun{}).
-			Select("id", "started_at").
-			Where("started_at IS NOT NULL AND started_at >= ? AND started_at < ?", windowStart, windowEnd).
-			Order("started_at asc").
-			Limit(trafficTaskRunCap + 1)
+		startedQ := applyTrafficTimeWindow(
+			h.db.WithContext(ctx).Model(&model.TaskRun{}).Select("id", "started_at").Where("started_at IS NOT NULL"),
+			"started_at", windowStart, queryEnd, hasPartial,
+		).Order("started_at desc").Limit(trafficTaskRunCap + 1)
 		if needFilter {
-			startedQ = startedQ.Where("task_id IN (SELECT id FROM tasks WHERE node_id IN ?)", ownedIDs)
+			startedQ = startedQ.Where("node_id_snapshot IN ?", ownedIDs)
 		}
 		if err := startedQ.Find(&startedRuns).Error; err != nil {
 			respondInternalError(c, err)
 			return
 		}
 		if len(startedRuns) > trafficTaskRunCap {
-			truncated = true
+			markTruncated(*startedRuns[trafficTaskRunCap].StartedAt)
 			startedRuns = startedRuns[:trafficTaskRunCap]
 		}
 		for _, run := range startedRuns {
-			if run.StartedAt != nil {
+			if run.StartedAt != nil && inTrafficTimeWindow(run.StartedAt.UTC(), windowStart, queryEnd, hasPartial) {
 				startedCountByBucket[run.StartedAt.UTC().Truncate(cfg.Bucket)]++
 			}
 		}
+
 		var failedRuns []model.TaskRun
-		failedQ := h.db.Model(&model.TaskRun{}).
-			Select("id", "finished_at").
-			Where("status = ? AND finished_at IS NOT NULL AND finished_at >= ? AND finished_at < ?", "failed", windowStart, windowEnd).
-			Order("finished_at asc").
-			Limit(trafficTaskRunCap + 1)
+		failedQ := applyTrafficTimeWindow(
+			h.db.WithContext(ctx).Model(&model.TaskRun{}).Select("id", "finished_at").Where("status = ? AND finished_at IS NOT NULL", "failed"),
+			"finished_at", windowStart, queryEnd, hasPartial,
+		).Order("finished_at desc").Limit(trafficTaskRunCap + 1)
 		if needFilter {
-			failedQ = failedQ.Where("task_id IN (SELECT id FROM tasks WHERE node_id IN ?)", ownedIDs)
+			failedQ = failedQ.Where("node_id_snapshot IN ?", ownedIDs)
 		}
 		if err := failedQ.Find(&failedRuns).Error; err != nil {
 			respondInternalError(c, err)
 			return
 		}
 		if len(failedRuns) > trafficTaskRunCap {
-			truncated = true
+			markTruncated(*failedRuns[trafficTaskRunCap].FinishedAt)
 			failedRuns = failedRuns[:trafficTaskRunCap]
 		}
 		for _, run := range failedRuns {
-			if run.FinishedAt != nil {
+			if run.FinishedAt != nil && inTrafficTimeWindow(run.FinishedAt.UTC(), windowStart, queryEnd, hasPartial) {
 				failedCountByBucket[run.FinishedAt.UTC().Truncate(cfg.Bucket)]++
 			}
 		}
 	}
 
-	points := make([]overviewTrafficPoint, 0, int(cfg.Duration/cfg.Bucket))
-	for bucketStart := windowStart; bucketStart.Before(windowEnd); bucketStart = bucketStart.Add(cfg.Bucket) {
-		bucket := buckets[bucketStart]
-		throughput := 0.0
-		sampleCount := len(bucket.MinuteSums)
-		if sampleCount > 0 {
-			totalThroughput := 0.0
-			for _, minuteThroughput := range bucket.MinuteSums {
-				totalThroughput += minuteThroughput
-			}
-			throughput = math.Round((totalThroughput/float64(sampleCount))*10) / 10 // average of per-minute total throughput within the bucket
+	points := buildOverviewTrafficPoints(
+		windowStart, bucketLoopEnd, currentBucketStart, hasPartial, cfg, localNow.Location(),
+		slicesByBucket, startedCountByBucket, failedCountByBucket,
+	)
+	if truncated {
+		cutoffMs := incompleteThrough.UnixMilli()
+		for i := range points {
+			points[i].Incomplete = points[i].TimestampMs <= cutoffMs
 		}
-		activeTaskCount := 0
-		for _, taskSet := range activityBuckets[bucketStart] {
-			if len(taskSet) > activeTaskCount {
-				activeTaskCount = len(taskSet)
-			}
-		}
-		localBucketStart := bucketStart.In(localNow.Location())
-		points = append(points, overviewTrafficPoint{
-			Timestamp:       localBucketStart.Format(time.RFC3339),
-			TimestampMs:     bucketStart.UnixMilli(),
-			Label:           localBucketStart.Format(cfg.LabelLayout),
-			ThroughputMbps:  throughput,
-			SampleCount:     sampleCount,
-			ActiveTaskCount: activeTaskCount,
-			StartedCount:    startedCountByBucket[bucketStart],
-			FailedCount:     failedCountByBucket[bucketStart],
-		})
 	}
 
 	respondOK(c, overviewTrafficResponse{
@@ -262,6 +256,74 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 		GeneratedAt:    localNow.Format(time.RFC3339),
 		Points:         points,
 	})
+}
+
+func applyTrafficTimeWindow(q *gorm.DB, column string, start, end time.Time, inclusiveEnd bool) *gorm.DB {
+	if inclusiveEnd {
+		return q.Where(column+" >= ? AND "+column+" <= ?", start, end)
+	}
+	return q.Where(column+" >= ? AND "+column+" < ?", start, end)
+}
+
+func inTrafficTimeWindow(ts, start, end time.Time, inclusiveEnd bool) bool {
+	if ts.Before(start) {
+		return false
+	}
+	if inclusiveEnd {
+		return !ts.After(end)
+	}
+	return ts.Before(end)
+}
+
+func buildOverviewTrafficPoints(
+	windowStart, bucketLoopEnd, currentBucketStart time.Time,
+	hasPartial bool,
+	cfg overviewTrafficWindowConfig,
+	loc *time.Location,
+	slicesByBucket map[time.Time]map[time.Time]map[uint]taskSampleAccum,
+	startedCountByBucket map[time.Time]int,
+	failedCountByBucket map[time.Time]int,
+) []overviewTrafficPoint {
+	capHint := int(cfg.Duration / cfg.Bucket)
+	if hasPartial {
+		capHint++
+	}
+	points := make([]overviewTrafficPoint, 0, capHint)
+	for bucketStart := windowStart; bucketStart.Before(bucketLoopEnd); bucketStart = bucketStart.Add(cfg.Bucket) {
+		slices := slicesByBucket[bucketStart]
+		throughput := 0.0
+		sliceCount := len(slices)
+		activeMinutes := make(map[time.Time]struct{}, sliceCount)
+		activeTaskCount := 0
+		if sliceCount > 0 {
+			totalSliceThroughput := 0.0
+			for sliceStart, taskMap := range slices {
+				activeMinutes[sliceStart.Truncate(time.Minute)] = struct{}{}
+				if len(taskMap) > activeTaskCount {
+					activeTaskCount = len(taskMap)
+				}
+				sliceThroughput := 0.0
+				for _, acc := range taskMap {
+					sliceThroughput += acc.sum / float64(acc.count)
+				}
+				totalSliceThroughput += sliceThroughput
+			}
+			throughput = math.Round((totalSliceThroughput/float64(sliceCount))*10) / 10
+		}
+		localBucketStart := bucketStart.In(loc)
+		points = append(points, overviewTrafficPoint{
+			Timestamp:       localBucketStart.Format(time.RFC3339),
+			TimestampMs:     bucketStart.UnixMilli(),
+			Label:           localBucketStart.Format(cfg.LabelLayout),
+			ThroughputMbps:  throughput,
+			SampleCount:     len(activeMinutes),
+			ActiveTaskCount: activeTaskCount,
+			StartedCount:    startedCountByBucket[bucketStart],
+			FailedCount:     failedCountByBucket[bucketStart],
+			Partial:         hasPartial && bucketStart.Equal(currentBucketStart),
+		})
+	}
+	return points
 }
 
 func parseOverviewTrafficWindow(raw string) (overviewTrafficWindowConfig, bool) {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/auth"
@@ -319,25 +320,41 @@ func sanitizeTaskForResponse(taskEntity model.Task) model.Task {
 	return taskEntity
 }
 
+type taskLatestTerminalMeta struct {
+	FinishedAt *time.Time
+	DurationMs *int64
+}
+
 // taskResponse embeds the stable Task JSON shape and adds only explicit safe
-// nested Policy, executor settings/status, revision, and publication
-// projections. It never serializes the encrypted executor_config.
+// nested Policy, executor settings/status, revision, latest terminal run
+// completion metadata, and publication projections. It never serializes the
+// encrypted executor_config.
 type taskResponse struct {
 	model.Task
 	Policy                    *taskPolicyResponse                   `json:"policy,omitempty"`
 	Revision                  string                                `json:"revision"`
 	ExecutorSettings          any                                   `json:"executor_settings"`
 	ExecutorSecretsConfigured any                                   `json:"executor_secrets_configured"`
+	LastFinishedAt            *time.Time                            `json:"last_finished_at,omitempty"`
+	LastDurationMs            *int64                                `json:"last_duration_ms,omitempty"`
 	RsyncPublication          *backupasset.RsyncVersioningSummary   `json:"rsync_publication,omitempty"`
 	RclonePublication         *backupasset.RclonePublicationSummary `json:"rclone_publication,omitempty"`
 }
 
 func (h *TaskHandler) taskResponse(ctx context.Context, taskEntity model.Task) taskResponse {
+	return h.taskResponseWithMeta(ctx, taskEntity, nil)
+}
+
+func (h *TaskHandler) taskResponseWithMeta(ctx context.Context, taskEntity model.Task, meta *taskLatestTerminalMeta) taskResponse {
 	policy := taskPolicyResponseFor(taskEntity.Policy)
 	response := taskResponse{
 		Task:     sanitizeTaskForResponse(taskEntity),
 		Policy:   policy,
 		Revision: task.TaskRevision(taskEntity),
+	}
+	if meta != nil {
+		response.LastFinishedAt = meta.FinishedAt
+		response.LastDurationMs = meta.DurationMs
 	}
 	if settings, err := task.ProjectExecutorSettings(taskEntity.ExecutorType, taskEntity.ExecutorConfig); err == nil {
 		response.ExecutorSettings = settings
@@ -371,15 +388,76 @@ func (h *TaskHandler) taskResponse(ctx context.Context, taskEntity model.Task) t
 	return response
 }
 
-func (h *TaskHandler) taskResponses(ctx context.Context, tasks []model.Task) []taskResponse {
-	if len(tasks) == 0 {
-		return []taskResponse{}
+type taskReadRow struct {
+	model.Task     `gorm:"embedded"`
+	LastFinishedAt *time.Time `gorm:"column:last_finished_at"`
+	LastDurationMs *int64     `gorm:"column:last_duration_ms"`
+}
+
+func (row taskReadRow) latestTerminalMeta() *taskLatestTerminalMeta {
+	if row.LastFinishedAt == nil {
+		return nil
 	}
+	finishedUTC := row.LastFinishedAt.UTC()
+	return &taskLatestTerminalMeta{FinishedAt: &finishedUTC, DurationMs: row.LastDurationMs}
+}
+
+func (h *TaskHandler) taskResponses(ctx context.Context, tasks []taskReadRow) []taskResponse {
 	responses := make([]taskResponse, 0, len(tasks))
-	for _, taskEntity := range tasks {
-		responses = append(responses, h.taskResponse(ctx, taskEntity))
+	for _, row := range tasks {
+		responses = append(responses, h.taskResponseWithMeta(ctx, row.Task, row.latestTerminalMeta()))
 	}
 	return responses
+}
+
+func hasTaskRunTable(ctx context.Context, db *gorm.DB) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	switch db.Name() {
+	case "postgres":
+		// Resolve task_runs through PostgreSQL's search_path (same as actual queries).
+		var count int64
+		if err := db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM pg_catalog.pg_class WHERE oid = pg_catalog.to_regclass('task_runs')`).Scan(&count).Error; err != nil {
+			return false, err
+		}
+		return count > 0, nil
+	default:
+		var count int64
+		if err := db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'task_runs'`).Scan(&count).Error; err != nil {
+			return false, err
+		}
+		return count > 0, nil
+	}
+}
+
+// sqliteTaskTimeOrder normalizes legacy bare UTC and GORM UTC timestamps
+// without discarding fractional precision. PostgreSQL timestamps are typed.
+func sqliteTaskTimeOrder(column string) string {
+	fraction := fmt.Sprintf("REPLACE(REPLACE(REPLACE(SUBSTR(%s, 21), '+', '.'), '-', '.'), 'Z', '.')", column)
+	return fmt.Sprintf("(REPLACE(SUBSTR(%[1]s, 1, 19), 'T', ' ') || CASE WHEN SUBSTR(%[1]s, 20, 1) = '.' THEN SUBSTR(SUBSTR(%[2]s || '.', 1, INSTR(%[2]s || '.', '.') - 1) || '000000000', 1, 9) ELSE '000000000' END)", column, fraction)
+}
+
+func taskReadQuery(db *gorm.DB, hasRuns bool) *gorm.DB {
+	query := db.Model(&model.Task{}).Preload("Node").Preload("Policy")
+	if !hasRuns {
+		return query.Select("tasks.*")
+	}
+	finishedOrder := "candidate.finished_at"
+	if db.Name() == "sqlite" {
+		finishedOrder = sqliteTaskTimeOrder(finishedOrder)
+	}
+	return query.Select("tasks.*, latest_finished_runs.finished_at AS last_finished_at, latest_finished_runs.duration_ms AS last_duration_ms").Joins(
+		`LEFT JOIN task_runs AS latest_finished_runs ON latest_finished_runs.id = (
+			SELECT candidate.id FROM task_runs AS candidate
+			WHERE candidate.task_id = tasks.id
+			  AND candidate.node_id_snapshot = tasks.node_id
+			  AND candidate.node_id_snapshot > ?
+			  AND candidate.finished_at IS NOT NULL
+			  AND candidate.status IN ?
+			  AND LOWER(COALESCE(candidate.trigger_type, '')) NOT IN ('restore', 'drill')
+			ORDER BY `+finishedOrder+` DESC, candidate.id DESC LIMIT 1
+		)`, model.TaskRunNodeIDLegacyUnknown, model.TaskRunTerminalStatuses())
 }
 
 // List godoc
@@ -393,50 +471,57 @@ func (h *TaskHandler) taskResponses(ctx context.Context, tasks []model.Task) []t
 // @Param        status     query     string  false  "任务状态过滤"
 // @Param        node_id    query     int     false  "节点 ID 过滤"
 // @Param        policy_id  query     int     false  "策略 ID 过滤"
-// @Param        keyword    query     string  false  "关键字模糊搜索"
+// @Param        keyword     query     string  false  "关键字模糊搜索"
+// @Param        sort        query     string  false  "排序字段（如 -recent_activity、-last_finished_at、-last_run_at、-created_at）"
+// @Param        sort_by     query     string  false  "排序字段"
+// @Param        sort_order  query     string  false  "排序方向（asc/desc）"
 // @Success      200  {object}  handlers.PaginatedResponse{data=[]taskResponse}
 // @Failure      401  {object}  handlers.Response
 // @Router       /tasks [get]
 func (h *TaskHandler) List(c *gin.Context) {
-	query := h.db.Model(&model.Task{})
+	ctx := c.Request.Context()
+	query := h.db.WithContext(ctx).Model(&model.Task{})
 
 	if nodeIDs, needFilter, err := ownershipNodeFilter(c, h.db); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if needFilter {
-		query = query.Where("node_id IN ?", nodeIDs)
+		query = query.Where("tasks.node_id IN ?", nodeIDs)
 	}
 
 	status := strings.TrimSpace(c.Query("status"))
 	if status != "" {
-		query = query.Where("status = ?", status)
+		query = query.Where("tasks.status = ?", status)
 	}
 	if rawNodeID := strings.TrimSpace(c.Query("node_id")); rawNodeID != "" {
 		nodeID, err := strconv.ParseUint(rawNodeID, 10, 64)
 		if err == nil {
-			query = query.Where("node_id = ?", uint(nodeID))
+			query = query.Where("tasks.node_id = ?", uint(nodeID))
 		}
 	}
 	if rawPolicyID := strings.TrimSpace(c.Query("policy_id")); rawPolicyID != "" {
 		policyID, err := strconv.ParseUint(rawPolicyID, 10, 64)
 		if err == nil {
-			query = query.Where("policy_id = ?", uint(policyID))
+			query = query.Where("tasks.policy_id = ?", uint(policyID))
 		}
 	}
 	if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
 		escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(keyword)
 		fuzzyKeyword := "%" + escaped + "%"
-		query = query.Where("name LIKE ? ESCAPE '\\' OR command LIKE ? ESCAPE '\\' OR rsync_source LIKE ? ESCAPE '\\' OR rsync_target LIKE ? ESCAPE '\\'", fuzzyKeyword, fuzzyKeyword, fuzzyKeyword, fuzzyKeyword)
+		query = query.Where("tasks.name LIKE ? ESCAPE '\\' OR tasks.command LIKE ? ESCAPE '\\' OR tasks.rsync_source LIKE ? ESCAPE '\\' OR tasks.rsync_target LIKE ? ESCAPE '\\'", fuzzyKeyword, fuzzyKeyword, fuzzyKeyword, fuzzyKeyword)
 	}
 
 	pg := parsePagination(c, 100, "created_at", map[string]bool{
-		"id": true, "created_at": true, "status": true, "name": true, "node_id": true,
+		"id": true, "created_at": true, "updated_at": true, "status": true, "name": true,
+		"node_id": true, "policy_id": true, "last_run_at": true, "next_run_at": true,
+		"last_finished_at": true, "recent_activity": true,
 	})
-	// 向后兼容旧 sort 参数（如 sort=-id）
-	orderClause := parseTaskSort(c.Query("sort"))
-	if c.Query("sort") == "" {
-		orderClause = pg.SortBy + " " + pg.SortOrder + ", id desc"
+	hasRuns, err := hasTaskRunTable(ctx, h.db)
+	if err != nil {
+		respondInternalError(c, err)
+		return
 	}
+	orderClause := resolveTaskListSort(c, hasRuns, h.db.Name() == "sqlite")
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -445,8 +530,9 @@ func (h *TaskHandler) List(c *gin.Context) {
 	}
 
 	offset := (pg.Page - 1) * pg.PageSize
-	var tasks []model.Task
-	if err := query.Preload("Node").Preload("Policy").Order(orderClause).Offset(offset).Limit(pg.PageSize).Find(&tasks).Error; err != nil {
+	var tasks []taskReadRow
+	findQuery := taskReadQuery(query, hasRuns)
+	if err := findQuery.Order(orderClause).Offset(offset).Limit(pg.PageSize).Find(&tasks).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -458,13 +544,13 @@ func (h *TaskHandler) List(c *gin.Context) {
 	for i, t := range tasks {
 		taskIDs[i] = t.ID
 	}
-	if len(taskIDs) > 0 {
+	if len(taskIDs) > 0 && hasRuns {
 		type taskProgress struct {
 			TaskID   uint
 			Progress int
 		}
 		var rows []taskProgress
-		if err := h.db.Raw(`
+		if err := h.db.WithContext(ctx).Raw(`
 				SELECT current_run.task_id, current_run.progress
 				FROM task_runs AS current_run
 				WHERE current_run.id IN (
@@ -480,7 +566,8 @@ func (h *TaskHandler) List(c *gin.Context) {
 				)`,
 			taskIDs, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusRunning,
 		).Scan(&rows).Error; err != nil {
-			rows = nil
+			respondInternalError(c, err)
+			return
 		}
 		pm := make(map[uint]int, len(rows))
 		for _, r := range rows {
@@ -493,7 +580,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 			}
 		}
 	}
-	respondPaginated(c, h.taskResponses(c.Request.Context(), tasks), total, pg.Page, pg.PageSize)
+	respondPaginated(c, h.taskResponses(ctx, tasks), total, pg.Page, pg.PageSize)
 }
 
 // Get godoc
@@ -508,26 +595,42 @@ func (h *TaskHandler) List(c *gin.Context) {
 // @Failure      404  {object}  handlers.Response
 // @Router       /tasks/{id} [get]
 func (h *TaskHandler) Get(c *gin.Context) {
+	ctx := c.Request.Context()
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
-	var taskEntity model.Task
-	if err := h.db.Preload("Node").Preload("Policy").First(&taskEntity, id).Error; err != nil {
-		respondNotFound(c, "任务不存在")
+	hasRuns, err := hasTaskRunTable(ctx, h.db)
+	if err != nil {
+		respondInternalError(c, err)
 		return
 	}
+	var row taskReadRow
+	if err := taskReadQuery(h.db.WithContext(ctx), hasRuns).Where("tasks.id = ?", id).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "任务不存在")
+			return
+		}
+		respondInternalError(c, err)
+		return
+	}
+	taskEntity := &row.Task
 	taskEntity.Node = taskEntity.Node.Sanitized()
 	// 查询最新 running TaskRun 的进度（覆盖备份和恢复场景）
-	var runProgress []int
-	if err := h.db.Model(&model.TaskRun{}).
-		Where("task_id = ? AND node_id_snapshot = ? AND node_id_snapshot > ? AND status = ?",
-			taskEntity.ID, taskEntity.NodeID, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusRunning).
-		Order("id DESC").Limit(1).
-		Pluck("progress", &runProgress).Error; err == nil && len(runProgress) > 0 {
-		taskEntity.Progress = &runProgress[0]
+	if hasRuns {
+		var runProgress []int
+		if err := h.db.WithContext(ctx).Model(&model.TaskRun{}).
+			Where("task_id = ? AND node_id_snapshot = ? AND node_id_snapshot > ? AND status = ?",
+				taskEntity.ID, taskEntity.NodeID, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusRunning).
+			Order("id DESC").Limit(1).
+			Pluck("progress", &runProgress).Error; err != nil {
+			respondInternalError(c, err)
+			return
+		} else if len(runProgress) > 0 {
+			taskEntity.Progress = &runProgress[0]
+		}
 	}
-	respondOK(c, h.taskResponse(c.Request.Context(), taskEntity))
+	respondOK(c, h.taskResponseWithMeta(ctx, *taskEntity, row.latestTerminalMeta()))
 }
 
 // Create godoc
@@ -1204,12 +1307,35 @@ func taskCredentialAuditMetadata(triggerType string, task model.Task, ok bool) m
 	return metadata
 }
 
-func parseTaskSort(raw string) string {
-	const defaultOrder = "created_at desc, id desc"
+func resolveTaskListSort(c *gin.Context, hasTaskRunTable, sqlite bool) string {
+	if rawSort := strings.TrimSpace(c.Query("sort")); rawSort != "" {
+		field, direction, ok := parseTaskSortFieldAndDirection(rawSort)
+		if !ok {
+			return "tasks.created_at desc, tasks.id desc"
+		}
+		return buildTaskSortSQL(field, direction, hasTaskRunTable, sqlite)
+	}
+	rawSortBy := strings.ToLower(strings.TrimSpace(c.Query("sort_by")))
+	rawSortOrder := strings.TrimSpace(c.Query("sort_order"))
+	if rawSortBy != "" || rawSortOrder != "" {
+		field := rawSortBy
+		if field == "" {
+			field = "created_at"
+		}
+		direction := normalizeSortDirection(rawSortOrder, "desc")
+		orderClause := buildTaskSortSQL(field, direction, hasTaskRunTable, sqlite)
+		if orderClause == "tasks.created_at desc, tasks.id desc" && direction == "asc" {
+			return "tasks.created_at asc, tasks.id desc"
+		}
+		return orderClause
+	}
+	return "tasks.created_at desc, tasks.id desc"
+}
 
+func parseTaskSortFieldAndDirection(raw string) (string, string, bool) {
 	field := strings.ToLower(strings.TrimSpace(raw))
 	if field == "" {
-		return defaultOrder
+		return "", "", false
 	}
 
 	direction := "asc"
@@ -1239,25 +1365,54 @@ func parseTaskSort(raw string) string {
 		direction = "asc"
 	}
 
-	allowedFields := map[string]string{
-		"id":          "id",
-		"name":        "name",
-		"status":      "status",
-		"node_id":     "node_id",
-		"policy_id":   "policy_id",
-		"created_at":  "created_at",
-		"updated_at":  "updated_at",
-		"last_run_at": "last_run_at",
-		"next_run_at": "next_run_at",
-	}
-	column, ok := allowedFields[field]
-	if !ok {
-		return defaultOrder
-	}
 	if direction != "desc" {
 		direction = "asc"
 	}
-	return fmt.Sprintf("%s %s", column, direction)
+	return field, direction, true
+}
+
+func buildTaskSortSQL(field, direction string, hasTaskRunTable, sqlite bool) string {
+	const defaultOrder = "tasks.created_at desc, tasks.id desc"
+	if direction != "desc" {
+		direction = "asc"
+	}
+	switch field {
+	case "id":
+		return fmt.Sprintf("tasks.id %s", direction)
+	case "name", "status", "node_id", "policy_id", "created_at", "updated_at":
+		return fmt.Sprintf("tasks.%s %s, tasks.id desc", field, direction)
+	case "last_run_at", "next_run_at":
+		return fmt.Sprintf(
+			"CASE WHEN tasks.%s IS NULL THEN 1 ELSE 0 END ASC, tasks.%s %s, tasks.created_at DESC, tasks.id DESC",
+			field, field, direction,
+		)
+	case "last_finished_at", "recent_activity":
+		finished := "latest_finished_runs.finished_at"
+		lastRun := "tasks.last_run_at"
+		if sqlite {
+			finished = sqliteTaskTimeOrder(finished)
+			lastRun = sqliteTaskTimeOrder(lastRun)
+		}
+		if !hasTaskRunTable {
+			return fmt.Sprintf(
+				"CASE WHEN tasks.last_run_at IS NULL THEN 1 ELSE 0 END ASC, %s %s, tasks.created_at DESC, tasks.id DESC",
+				lastRun, direction,
+			)
+		}
+		if field == "last_finished_at" {
+			return fmt.Sprintf(
+				"CASE WHEN latest_finished_runs.finished_at IS NULL THEN 1 ELSE 0 END ASC, %s %s, CASE WHEN tasks.last_run_at IS NULL THEN 1 ELSE 0 END ASC, %s DESC, tasks.created_at DESC, tasks.id DESC",
+				finished, direction, lastRun,
+			)
+		}
+		activityExpr := fmt.Sprintf("CASE WHEN latest_finished_runs.finished_at IS NOT NULL AND (tasks.last_run_at IS NULL OR %s >= %s) THEN %s ELSE %s END", finished, lastRun, finished, lastRun)
+		return fmt.Sprintf(
+			"CASE WHEN latest_finished_runs.finished_at IS NULL AND tasks.last_run_at IS NULL THEN 1 ELSE 0 END ASC, (%s) %s, tasks.created_at DESC, tasks.id DESC",
+			activityExpr, direction,
+		)
+	default:
+		return defaultOrder
+	}
 }
 
 func normalizeSortDirection(raw string, fallback string) string {

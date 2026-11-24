@@ -1,22 +1,43 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { default as userEvent } from "@testing-library/user-event";
 import { OverviewPage } from "./overview-page";
 import i18n, { setLanguage } from "@/i18n";
-import type { HealthIncidentCauseCode, HealthIncidentGroup } from "@/types/domain";
+import {
+  computeIntegerAxisTicks,
+  computeThroughputMax,
+  formatTrafficTooltipLabel,
+  formatTrafficTooltipValue,
+} from "./overview-page.traffic.utils";
+import { formatTaskDuration, sortRecentTasks } from "./overview-page.recent-tasks.utils";
+import type {
+  BackupConfidenceData,
+  BackupHealthData,
+  HealthIncidentCauseCode,
+  HealthIncidentGroup,
+  TaskRecord,
+} from "@/types/domain";
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return {
     ...actual,
-    Link: ({ to, children, ...props }: Record<string, unknown>) => <a href={to as string} {...props}>{children as React.ReactNode}</a>,
+    Link: ({ to, children, ...props }: Record<string, unknown>) => (
+      <a href={to as string} {...props}>{children as React.ReactNode}</a>
+    ),
   };
 });
 
 const sharedRef: { current: Record<string, unknown> } = { current: {} };
 const nodesRef: { current: Record<string, unknown> } = { current: {} };
 const tasksRef: { current: Record<string, unknown> } = { current: {} };
+const authRef: { current: { token: string | null; username?: string | null; role?: string | null } } = {
+  current: { token: "test-token", username: "admin", role: "admin" },
+};
+
+const getBackupConfidenceMock = vi.fn();
+const getBackupHealthMock = vi.fn();
 
 vi.mock("@/context/shared-context.hooks", () => ({
   useSharedContext: () => sharedRef.current,
@@ -27,9 +48,14 @@ vi.mock("@/context/nodes-context.hooks", () => ({
 vi.mock("@/context/tasks-context.hooks", () => ({
   useTasksContext: () => tasksRef.current,
 }));
-
 vi.mock("@/context/auth-context.hooks", () => ({
-  useAuth: () => ({ token: "test-token" })
+  useAuth: () => authRef.current,
+}));
+vi.mock("@/lib/api/client", () => ({
+  apiClient: {
+    getBackupConfidence: (...args: unknown[]) => getBackupConfidenceMock(...args),
+    getBackupHealth: (...args: unknown[]) => getBackupHealthMock(...args),
+  },
 }));
 
 function createNodes(total: number) {
@@ -53,18 +79,63 @@ function createNodes(total: number) {
   });
 }
 
+const defaultConfidence: BackupConfidenceData = {
+  generatedAt: "2026-05-17T01:00:00Z",
+  summary: { healthy: 1, warning: 1, atRisk: 0, insufficient: 1, total: 3 },
+  items: [
+    {
+      id: "policy-1",
+      scope: "policy",
+      policyId: 1,
+      policyName: "daily-policy",
+      status: "healthy",
+      score: 95,
+      reasons: [],
+      evidence: [
+        {
+          type: "backup",
+          status: "verified",
+          message: "verified backup",
+          observedAt: "2026-05-17T00:30:00Z",
+          taskId: 1,
+          taskRunId: 10,
+        },
+      ],
+      nextSteps: [],
+      targets: [{ nodeId: 1, nodeName: "Node-001", lastBackupAt: "2026-05-17T00:30:00Z" }],
+    },
+  ],
+};
+
+const defaultHealth: BackupHealthData = {
+  generatedAt: "2026-05-17T01:00:00Z",
+  latestVerifiedBackupAt: "2026-05-17T00:30:00Z",
+  staleNodes: [{ nodeId: 2, nodeName: "Node-002", lastBackupAt: null, hoursSince: 0 }],
+  degradedPolicies: [{ policyId: 2, policyName: "failing-policy", consecutiveFailures: 3, lastFailedAt: "2026-05-17T00:10:00Z" }],
+  healthTrend: [{ date: "2026-05-17", total: 5, success: 4, rate: 80 }],
+  summary: {
+    totalNodes: 2,
+    neverBackedUp: 1,
+    stale48h: 0,
+    policiesHealthy: 2,
+    policiesDegraded: 1,
+    successRate7d: 80,
+  },
+};
+
 const fetchHealthIncidentTimelineMock = vi.fn();
 const fetchOverviewTrafficMock = vi.fn();
 const refreshNodesMock = vi.fn().mockResolvedValue(undefined);
 const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
 
-function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) {
+function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0, overviewPollVersion = 0) {
   const nodes = createNodes(nodeCount);
   sharedRef.current = {
     overview: {
       activePolicies: 3,
     },
     refreshVersion,
+    overviewPollVersion,
     fetchOverviewTraffic: fetchOverviewTrafficMock,
     fetchHealthIncidentTimeline: fetchHealthIncidentTimelineMock,
     loading: false,
@@ -97,10 +168,15 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
         nodeId: 1,
         status: "success",
         progress: 100,
-        startedAt: "2026-03-01",
+        startedAt: "2026-03-01 09:50:00",
+        lastRunAt: "2026-03-01 09:50:00",
+        lastFinishedAt: "2026-03-01 10:00:00",
+        lastDurationMs: 600000,
+        nextRunAt: "2026-03-02 10:00:00",
         createdAt: "2026-03-01 09:30:00",
         updatedAt: "2026-03-01 10:00:00",
-        speedMbps: 80,
+        speedMbps: 0,
+        enabled: true,
       },
       {
         id: 2,
@@ -110,10 +186,14 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
         nodeId: 2,
         status: "failed",
         progress: 50,
-        startedAt: "2026-03-01",
+        startedAt: "2026-03-01 10:00:00",
+        lastRunAt: "2026-03-01 10:00:00",
+        lastFinishedAt: "2026-03-01 10:05:00",
+        lastDurationMs: 300000,
         createdAt: "2026-03-01 09:45:00",
         updatedAt: "2026-03-01 10:05:00",
         speedMbps: 0,
+        enabled: true,
       },
     ],
     refreshTasks: refreshTasksMock,
@@ -132,6 +212,15 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
     refreshTask: vi.fn(),
     fetchTaskLogs: vi.fn(),
   };
+}
+
+// The ES2022 lib configured for web/ has no Promise.withResolvers.
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 function incident(overrides: Partial<HealthIncidentGroup> = {}): HealthIncidentGroup {
@@ -164,8 +253,11 @@ const trafficWindowCopy = {
 
 describe("OverviewPage", () => {
   beforeEach(() => {
+    authRef.current = { token: "test-token", username: "admin", role: "admin" };
     refreshNodesMock.mockReset().mockResolvedValue(undefined);
     refreshTasksMock.mockReset().mockResolvedValue(undefined);
+    getBackupConfidenceMock.mockReset().mockResolvedValue(defaultConfidence);
+    getBackupHealthMock.mockReset().mockResolvedValue(defaultHealth);
     fetchHealthIncidentTimelineMock.mockReset();
     fetchHealthIncidentTimelineMock.mockResolvedValue({
       generatedAt: "2026-05-17T01:00:00Z",
@@ -175,19 +267,350 @@ describe("OverviewPage", () => {
     });
     fetchOverviewTrafficMock.mockReset();
     fetchOverviewTrafficMock.mockResolvedValue({
-      window: "1h",
-      bucketMinutes: 5,
+      window: "24h",
+      bucketMinutes: 30,
       hasRealSamples: true,
       generatedAt: "2026-03-08T00:00:00Z",
       points: [
         { timestamp: "2026-03-08T00:00:00Z", timestampMs: Date.parse("2026-03-08T00:00:00Z"), label: "00:00", throughputMbps: 120, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
-        { timestamp: "2026-03-08T00:05:00Z", timestampMs: Date.parse("2026-03-08T00:05:00Z"), label: "00:05", throughputMbps: 160, sampleCount: 1, activeTaskCount: 2, startedCount: 0, failedCount: 0 },
-      ]
+        { timestamp: "2026-03-08T00:30:00Z", timestampMs: Date.parse("2026-03-08T00:30:00Z"), label: "00:30", throughputMbps: 160, sampleCount: 1, activeTaskCount: 2, startedCount: 0, failedCount: 0 },
+      ],
     });
   });
 
   afterEach(async () => {
+    cleanup();
     await setLanguage("zh");
+  });
+
+  it("renders natural zh/en greeting punctuation without dead Export action and valid h1->h2->h3 heading hierarchy", async () => {
+    fetchHealthIncidentTimelineMock.mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      windowHours: 72,
+      summary: { total: 1, critical: 0, warning: 1, info: 0 },
+      groups: [incident()],
+    });
+    setContext(2, true);
+    const { container } = render(<OverviewPage />);
+
+    const h1 = await screen.findByRole("heading", { level: 1 });
+    expect(h1.textContent).toMatch(/^(早上好|下午好|晚上好|夜深了)，admin$/);
+    expect(h1.textContent).not.toMatch(/\.$/);
+    expect(screen.queryByRole("button", { name: /导出|Export/ })).not.toBeInTheDocument();
+
+    const h2s = screen.getAllByRole("heading", { level: 2 });
+    expect(h2s.map((h) => h.textContent)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("备份保护态势"),
+        expect.stringContaining("健康事件"),
+        expect.stringContaining("流量与活动趋势"),
+        expect.stringContaining("最近同步任务"),
+      ]),
+    );
+    const h3 = await screen.findByRole("heading", { level: 3, name: "节点 · <节点 English>" });
+    expect(h3.tagName).toBe("H3");
+    expect(container.querySelectorAll("h1")).toHaveLength(1);
+
+    await act(async () => setLanguage("en"));
+    const enH1 = screen.getByRole("heading", { level: 1 });
+    expect(enH1.textContent).toMatch(/^Good (morning|afternoon|evening|night), admin\.$/);
+  });
+
+  it("renders compact 4-card Protection Posture with verified evidence, real policy/backup links, scope, and freshness", async () => {
+    setContext(2, true);
+    render(<OverviewPage />);
+
+    const postureHeading = await screen.findByRole("heading", { level: 2, name: /备份保护态势/ });
+    const postureSection = postureHeading.closest("section")!;
+    await within(postureSection).findByText("最近已验证备份");
+
+    expect(screen.getByText("全部节点")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /备份健康/ })).toHaveAttribute("href", "/app/backups/overview");
+    expect(within(postureSection).getByRole("link", { name: /备份可信度/ })).toHaveAttribute(
+      "href",
+      "/app/backups/overview",
+    );
+    expect(within(postureSection).getByRole("link", { name: /已启用策略/ })).toHaveAttribute(
+      "href",
+      "/app/policies",
+    );
+    expect(within(postureSection).getByText(/\/ 3 可信/)).toBeInTheDocument();
+    expect(within(postureSection).getByText(/需关注 1/)).toBeInTheDocument();
+    expect(within(postureSection).getByText(/证据不足 1/)).toBeInTheDocument();
+    expect(within(postureSection).getByText("滞后 / 未验证节点")).toBeInTheDocument();
+    expect(within(postureSection).getByText("未备份 1")).toBeInTheDocument();
+    expect(within(postureSection).getByText("连续失败 1")).toBeInTheDocument();
+    expect(within(postureSection).queryByText("策略覆盖")).not.toBeInTheDocument();
+    expect(within(postureSection).queryByText("暂无")).not.toBeInTheDocument();
+  });
+
+  it("shows honest neutral unverified posture and no verified backup when evidence is absent", async () => {
+    getBackupConfidenceMock.mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      summary: { healthy: 0, warning: 0, atRisk: 0, insufficient: 0, total: 0 },
+      items: [],
+    });
+    getBackupHealthMock.mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      staleNodes: [],
+      degradedPolicies: [],
+      healthTrend: [],
+      summary: {
+        totalNodes: 0,
+        neverBackedUp: 0,
+        stale48h: 0,
+        policiesHealthy: 0,
+        policiesDegraded: 0,
+        successRate7d: null,
+      },
+    });
+    setContext(0, false);
+    sharedRef.current = { ...sharedRef.current, overview: { activePolicies: 0 } };
+    render(<OverviewPage />);
+
+    const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(await within(postureSection).findByText("未验证")).toBeInTheDocument();
+    expect(within(postureSection).getByText("暂无")).toBeInTheDocument();
+    expect(within(postureSection).queryByText("100%")).not.toBeInTheDocument();
+  });
+
+  it("shows fresh latestVerifiedBackupAt for standalone nodes without enabled policies, respects custom staleThresholdHours, and distinguishes health error from empty", async () => {
+    getBackupConfidenceMock.mockResolvedValueOnce({
+      generatedAt: "2026-05-17T01:00:00Z",
+      summary: { healthy: 0, warning: 0, atRisk: 0, insufficient: 0, total: 0 },
+      items: [],
+    });
+    getBackupHealthMock.mockResolvedValueOnce({
+      generatedAt: "2026-05-17T01:00:00Z",
+      staleThresholdHours: 24,
+      latestVerifiedBackupAt: "2026-05-17T00:30:00Z",
+      staleNodes: [{ nodeId: 3, nodeName: "Node-003", lastBackupAt: "2026-05-15T12:00:00Z", hoursSince: 37 }],
+      degradedPolicies: [],
+      healthTrend: [],
+      summary: {
+        totalNodes: 2,
+        neverBackedUp: 0,
+        stale48h: 1,
+        policiesHealthy: 0,
+        policiesDegraded: 0,
+        successRate7d: null,
+      },
+    });
+    setContext(2, true);
+    const { unmount } = render(<OverviewPage />);
+
+    const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(await within(postureSection).findByText("超 24h 1")).toBeInTheDocument();
+    expect(within(postureSection).queryByText(/超 48h/)).not.toBeInTheDocument();
+    expect(within(postureSection).queryByText("暂无")).not.toBeInTheDocument();
+    expect(postureSection.querySelector('time[dateTime="2026-05-17T00:30:00Z"]')).not.toBeNull();
+    unmount();
+
+    // When backup-health fails even while confidence returns policy timestamps,
+    // Card 2 must show unavailable ("—" / "暂不可用") rather than letting a single policy
+    // impersonate global visible-node recency.
+    getBackupConfidenceMock.mockResolvedValueOnce(defaultConfidence);
+    getBackupHealthMock.mockRejectedValueOnce(new Error("health backend down"));
+    const { unmount: unmountErr } = render(<OverviewPage />);
+
+    const erroredPosture = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    await within(erroredPosture).findByText("保护态势加载失败");
+    // Both health-backed cards (latest verified, stale nodes) show their own unavailable state.
+    expect(within(erroredPosture).getAllByText("暂不可用")).toHaveLength(2);
+    expect(erroredPosture.querySelector('time[dateTime="2026-05-17T00:30:00Z"]')).toBeNull();
+    expect(within(erroredPosture).queryByText("暂无")).not.toBeInTheDocument();
+    unmountErr();
+
+    // When backup-health explicitly returns latestVerifiedBackupAt=null (e.g. migrated task
+    // whose old node is out of scope), health is authoritative over confidence evidence.
+    getBackupConfidenceMock.mockResolvedValueOnce(defaultConfidence);
+    getBackupHealthMock.mockResolvedValueOnce({
+      ...defaultHealth,
+      latestVerifiedBackupAt: null,
+      staleNodes: [{ nodeId: 2, nodeName: "Node-002", lastBackupAt: null, hoursSince: 0 }],
+    });
+    sharedRef.current = { ...sharedRef.current, overview: { activePolicies: null } };
+    render(<OverviewPage />);
+
+    const nullHealthPosture = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(await within(nullHealthPosture).findByText("暂无")).toBeInTheDocument();
+    expect(nullHealthPosture.querySelector('time[dateTime="2026-05-17T00:30:00Z"]')).toBeNull();
+    const policyCardLink = within(nullHealthPosture).getByRole("link", { name: /已启用策略/ });
+    expect(within(policyCardLink).getByText("—")).toBeInTheDocument();
+    expect(within(policyCardLink).queryByText("0")).not.toBeInTheDocument();
+  });
+
+  it("shows operator scope and explicit error + retry on Protection Posture failure", async () => {
+    authRef.current = { token: "test-token", username: "ops", role: "operator" };
+    getBackupConfidenceMock.mockRejectedValueOnce(new Error("confidence service unavailable"));
+    getBackupHealthMock.mockRejectedValueOnce(new Error("health service unavailable"));
+    setContext(1, true);
+    const user = userEvent.setup();
+    render(<OverviewPage />);
+
+    const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(screen.getByText("我的节点")).toBeInTheDocument();
+    expect(await within(postureSection).findByText("保护态势加载失败")).toBeInTheDocument();
+    expect(within(postureSection).getByText(/confidence service unavailable/)).toBeInTheDocument();
+
+    getBackupConfidenceMock.mockResolvedValueOnce(defaultConfidence);
+    getBackupHealthMock.mockResolvedValueOnce(defaultHealth);
+    await user.click(within(postureSection).getByRole("button", { name: "重试" }));
+
+    await waitFor(() => {
+      expect(getBackupConfidenceMock).toHaveBeenCalledTimes(2);
+      expect(within(postureSection).queryByText("保护态势加载失败")).not.toBeInTheDocument();
+    });
+  });
+
+  it("preserves previous Protection Posture data while refreshing on refreshVersion change", async () => {
+    setContext(2, true, 0);
+    const { rerender } = render(<OverviewPage />);
+
+    const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    await within(postureSection).findByText("连续失败 1");
+
+    getBackupConfidenceMock.mockImplementation(() => new Promise(() => undefined));
+    getBackupHealthMock.mockImplementation(() => new Promise(() => undefined));
+
+    setContext(2, true, 1);
+    rerender(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(getBackupConfidenceMock).toHaveBeenCalledTimes(2);
+    });
+    expect(within(postureSection).queryByText("加载保护态势...")).not.toBeInTheDocument();
+    expect(within(postureSection).getByText("连续失败 1")).toBeInTheDocument();
+  });
+
+  it("keeps policy count and entry visible with per-card unavailable state when both posture sources fail", async () => {
+    getBackupConfidenceMock.mockRejectedValueOnce(new Error("confidence down"));
+    getBackupHealthMock.mockRejectedValueOnce(new Error("health down"));
+    setContext(2, true);
+    render(<OverviewPage />);
+
+    const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(await within(postureSection).findByText("保护态势加载失败")).toBeInTheDocument();
+    const policyCardLink = within(postureSection).getByRole("link", { name: /已启用策略/ });
+    expect(policyCardLink).toHaveAttribute("href", "/app/policies");
+    expect(within(policyCardLink).getByText("3")).toBeInTheDocument();
+    expect(within(postureSection).getByRole("link", { name: /备份可信度/ })).toHaveAttribute("href", "/app/backups/overview");
+    // Confidence, latest verified and stale nodes each report unavailable; nothing is left pending.
+    expect(within(postureSection).getAllByText("暂不可用")).toHaveLength(3);
+    expect(within(postureSection).queryByText("加载中...")).not.toBeInTheDocument();
+  });
+
+  it("keeps slow overview requests alive across scheduled pulses and renders fast sections first", async () => {
+    const slowHealth = createDeferred<BackupHealthData>();
+    const slowIncidents = createDeferred<unknown>();
+    const slowTraffic = createDeferred<unknown>();
+    const signals: AbortSignal[] = [];
+    getBackupHealthMock.mockImplementation((_token: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) signals.push(options.signal);
+      return slowHealth.promise;
+    });
+    fetchHealthIncidentTimelineMock.mockImplementation((options?: { signal?: AbortSignal }) => {
+      if (options?.signal) signals.push(options.signal);
+      return slowIncidents.promise;
+    });
+    fetchOverviewTrafficMock.mockImplementation((_window: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) signals.push(options.signal);
+      return slowTraffic.promise;
+    });
+    setContext(2, true, 0, 0);
+    const { rerender } = render(<OverviewPage />);
+
+    // Fast confidence and recent tasks render while health, incidents and traffic are still pending.
+    const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(await within(postureSection).findByText(/\/ 3 可信/)).toBeInTheDocument();
+    expect(within(within(postureSection).getByRole("link", { name: /已启用策略/ })).getByText("3")).toBeInTheDocument();
+    expect(within(postureSection).getAllByText("加载中...")).toHaveLength(2);
+    const tasksSection = screen.getByRole("heading", { level: 2, name: /最近同步任务/ }).closest("section")!;
+    expect(within(tasksSection).getByText("测试任务1")).toBeInTheDocument();
+
+    for (const pollVersion of [1, 2]) {
+      setContext(2, true, 0, pollVersion);
+      rerender(<OverviewPage />);
+    }
+    expect(getBackupHealthMock).toHaveBeenCalledTimes(1);
+    expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(1);
+    expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(1);
+    expect(signals.some((signal) => signal.aborted)).toBe(false);
+    // Tasks still receive every pulse; the tasks domain coalesces in-flight refreshes itself.
+    expect(refreshTasksMock).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      slowHealth.resolve(defaultHealth);
+      slowIncidents.resolve({
+        generatedAt: "2026-05-17T01:00:00Z",
+        windowHours: 72,
+        summary: { total: 1, critical: 0, warning: 1, info: 0 },
+        groups: [incident()],
+      });
+      slowTraffic.resolve({
+        window: "24h",
+        bucketMinutes: 30,
+        hasRealSamples: false,
+        generatedAt: "2026-03-08T00:00:00Z",
+        points: [],
+      });
+    });
+    expect(await within(postureSection).findByText("连续失败 1")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: /健康事件/ })).toBeInTheDocument();
+    expect(within(postureSection).queryByText("加载中...")).not.toBeInTheDocument();
+
+    // Once settled, the next pulse refreshes every section again.
+    setContext(2, true, 0, 3);
+    rerender(<OverviewPage />);
+    await waitFor(() => {
+      expect(getBackupHealthMock).toHaveBeenCalledTimes(2);
+      expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(2);
+      expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("aborts slow pending overview requests on manual refresh, token change and unmount", async () => {
+    const healthSignals: AbortSignal[] = [];
+    const incidentSignals: AbortSignal[] = [];
+    const trafficSignals: AbortSignal[] = [];
+    getBackupHealthMock.mockImplementation((_token: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) healthSignals.push(options.signal);
+      return new Promise(() => undefined);
+    });
+    fetchHealthIncidentTimelineMock.mockImplementation((options?: { signal?: AbortSignal }) => {
+      if (options?.signal) incidentSignals.push(options.signal);
+      return new Promise(() => undefined);
+    });
+    fetchOverviewTrafficMock.mockImplementation((_window: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) trafficSignals.push(options.signal);
+      return new Promise(() => undefined);
+    });
+    setContext(2, true, 0, 0);
+    const { rerender, unmount } = render(<OverviewPage />);
+    const latest = () => [healthSignals.at(-1), incidentSignals.at(-1), trafficSignals.at(-1)];
+    expect([healthSignals, incidentSignals, trafficSignals].map((list) => list.length)).toEqual([1, 1, 1]);
+
+    // A scheduled pulse leaves the pending scope alone.
+    setContext(2, true, 0, 1);
+    rerender(<OverviewPage />);
+    expect([healthSignals, incidentSignals, trafficSignals].map((list) => list.length)).toEqual([1, 1, 1]);
+
+    // A manual refresh invalidates the scope: superseded requests abort and restart.
+    const beforeRefresh = latest();
+    setContext(2, true, 1, 1);
+    rerender(<OverviewPage />);
+    expect(beforeRefresh.every((signal) => signal?.aborted)).toBe(true);
+    expect([healthSignals, incidentSignals, trafficSignals].map((list) => list.length)).toEqual([2, 2, 2]);
+
+    const beforeTokenChange = latest();
+    authRef.current = { ...authRef.current, token: "other-token" };
+    rerender(<OverviewPage />);
+    expect(beforeTokenChange.every((signal) => signal?.aborted)).toBe(true);
+    expect([healthSignals, incidentSignals, trafficSignals].map((list) => list.length)).toEqual([3, 3, 3]);
+
+    const beforeUnmount = latest();
+    unmount();
+    expect(beforeUnmount.every((signal) => signal?.aborted)).toBe(true);
   });
 
   it("localizes system cause and action on language switch while retaining native source diagnostic text", async () => {
@@ -234,11 +657,13 @@ describe("OverviewPage", () => {
   });
 
   it("keeps old/unknown diagnostics and always offers a safe fallback without an empty disclosure", async () => {
-    fetchHealthIncidentTimelineMock.mockResolvedValue({ groups: [
-      incident({ id: "old", nextActions: [{ code: "future", label: "raw label", href: "/app/tasks" }] }),
-      { ...incident({ id: "unknown", resource: { type: "platform", name: "platform" } }), causeCode: "future_cause" },
-      incident({ id: "empty", likelyCause: "  ", resource: { type: "task", id: 4, name: "empty source" } }),
-    ] });
+    fetchHealthIncidentTimelineMock.mockResolvedValue({
+      groups: [
+        incident({ id: "old", nextActions: [{ code: "future", label: "raw label", href: "/app/tasks" }] }),
+        { ...incident({ id: "unknown", resource: { type: "platform", name: "platform" } }), causeCode: "future_cause" },
+        incident({ id: "empty", likelyCause: "  ", resource: { type: "task", id: 4, name: "empty source" } }),
+      ],
+    });
     setContext(0);
     render(<OverviewPage />);
     expect(await screen.findAllByText("健康信号需要关注。")).toHaveLength(3);
@@ -248,109 +673,269 @@ describe("OverviewPage", () => {
     expect(screen.queryByText("raw label")).not.toBeInTheDocument();
   });
 
-  it("渲染健康事件时间线并使用 camelCase 数据展示下一步入口", async () => {
+  it("renders compact Health Events panel at bottom capped at 3 items with top-right All alerts link matching Recent Tasks", async () => {
+    const groups = Array.from({ length: 6 }, (_, index) =>
+      incident({
+        id: `group-${index + 1}`,
+        severity: index === 0 ? "critical" : "warning",
+        resource: { type: "node", id: index + 1, name: `node-${index + 1}` },
+      }),
+    );
     fetchHealthIncidentTimelineMock.mockResolvedValueOnce({
       generatedAt: "2026-05-17T01:00:00Z",
       windowHours: 72,
-      summary: { total: 1, critical: 1, warning: 0, info: 0 },
-      groups: [
-        {
-          id: "task-7",
-          severity: "critical",
-          resource: {
-            type: "task",
-            id: 7,
-            name: "daily-backup",
-            nodeId: 3,
-            nodeName: "node-a",
-            policyId: 5,
-            policyName: "daily-policy",
-          },
-          lastSeenAt: new Date().toISOString(),
-          eventCount: 2,
-          likelyCause: "rsync exited with code 23",
-          sourceTypes: ["alert", "task_failure"],
-          nextActions: [{ code: "view_task_logs", label: "查看任务日志", href: "/app/logs?task=7" }],
-          signals: [],
-        }
-      ],
+      summary: { total: 6, critical: 1, warning: 5, info: 0 },
+      groups,
     });
     setContext(2, true);
-
     render(<OverviewPage />);
 
-    expect(await screen.findByText("健康事件时间线")).toBeInTheDocument();
-    expect(await screen.findByText("任务 · daily-backup / node-a")).toBeInTheDocument();
-    expect(screen.getByText("rsync exited with code 23")).toBeInTheDocument();
-    expect(screen.getByText("告警")).toBeInTheDocument();
-    expect(screen.getByText("任务失败")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /查看任务日志/ })).toHaveAttribute("href", "/app/logs?task=7");
-    expect(fetchHealthIncidentTimelineMock.mock.calls[0]?.[0]).toMatchObject({ windowHours: 72 });
+    const timelineHeading = await screen.findByRole("heading", { level: 2, name: /健康事件/ });
+    const timelineSection = timelineHeading.closest("section")!;
+    expect(within(timelineSection).getByText("72h")).toBeInTheDocument();
+    expect(within(timelineSection).getByText("严重 1")).toBeInTheDocument();
+    expect(within(timelineSection).getByText("警告 5")).toBeInTheDocument();
+    expect(within(timelineSection).queryByText("信息 0")).not.toBeInTheDocument();
+    expect(within(timelineSection).queryByText(/只读聚合/)).not.toBeInTheDocument();
+
+    expect(within(timelineSection).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(timelineSection).getByRole("link", { name: /全部告警/ })).toHaveAttribute("href", "/app/notifications");
+    expect(within(timelineSection).queryByRole("button", { name: /展开全部/ })).not.toBeInTheDocument();
+
+    // Side-by-side compact mode hides Next Run column so 5 columns fit cleanly
+    const tasksSection = screen.getByRole("heading", { level: 2, name: /最近同步任务/ }).closest("section")!;
+    expect(within(tasksSection).queryByText("下次运行")).not.toBeInTheDocument();
   });
 
-  it("健康事件时间线空状态可刷新", async () => {
-    const user = userEvent.setup();
+  it("hides Health Events panel completely when there are no incidents so it does not waste space", async () => {
     setContext(2, true);
-
     render(<OverviewPage />);
-
-    expect(await screen.findByText("近期未发现健康事件")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "刷新" }));
 
     await waitFor(() => {
+      expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("heading", { level: 2, name: /健康事件/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: /最近同步任务/ })).toBeInTheDocument();
+  });
+
+  it("shows Health Events panel with error and refresh retry when incident request fails", async () => {
+    fetchHealthIncidentTimelineMock.mockRejectedValueOnce(new Error("timeline unavailable"));
+    const user = userEvent.setup();
+    setContext(2, true);
+    render(<OverviewPage />);
+
+    const timelineHeading = await screen.findByRole("heading", { level: 2, name: /健康事件/ });
+    const timelineSection = timelineHeading.closest("section")!;
+    expect(await within(timelineSection).findByText("暂时无法加载健康事件")).toBeInTheDocument();
+
+    let resolveRetry!: (value: unknown) => void;
+    fetchHealthIncidentTimelineMock.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRetry = resolve; }),
+    );
+    const refreshBtn = within(timelineSection).getByRole("button", { name: "刷新" });
+    await user.click(refreshBtn);
+    // Keep error panel mounted with disabled button while retry is in-flight (no layout snap/focus drop)
+    expect(screen.getByRole("heading", { level: 2, name: /健康事件/ })).toBeInTheDocument();
+    expect(refreshBtn).toBeDisabled();
+
+    await act(async () => {
+      resolveRetry({
+        generatedAt: "2026-05-17T01:00:00Z",
+        windowHours: 72,
+        summary: { total: 0, critical: 0, warning: 0, info: 0 },
+        groups: [],
+      });
+    });
+    await waitFor(() => {
       expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("heading", { level: 2, name: /健康事件/ })).not.toBeInTheDocument();
     });
   });
 
-  it("无真实流量样本时输出图表可访问名称", async () => {
+  it("defaults Traffic Chart to 24h and shows empty state only when samples, starts, and failures are all zero", async () => {
     fetchOverviewTrafficMock.mockResolvedValueOnce({
-      window: "1h",
-      bucketMinutes: 5,
+      window: "24h",
+      bucketMinutes: 30,
       hasRealSamples: false,
       generatedAt: "2026-03-08T00:00:00Z",
       points: Array.from({ length: 12 }, (_, index) => ({
-        timestamp: `2026-03-08T00:${String(index * 5).padStart(2, "0")}:00Z`,
-        label: `00:${String(index * 5).padStart(2, "0")}`,
+        timestamp: `2026-03-08T0${Math.floor(index / 2)}:${index % 2 === 0 ? "00" : "30"}:00Z`,
+        timestampMs: Date.parse("2026-03-08T00:00:00Z") + index * 1800000,
+        label: `0${Math.floor(index / 2)}:${index % 2 === 0 ? "00" : "30"}`,
         throughputMbps: 0,
         sampleCount: 0,
         activeTaskCount: 0,
         startedCount: 0,
         failedCount: 0,
-      }))
+      })),
     });
     setContext(0, false);
 
     render(<OverviewPage />);
 
-    expect(await screen.findByRole("img", { name: "近 1 小时流量与活动趋势图，暂无真实样本" })).toBeInTheDocument();
-    expect(screen.getByText("策略覆盖")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock.mock.calls[0]?.[0]).toBe("24h");
+    });
+    expect(screen.getByRole("button", { name: "24h" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("img", { name: "近 24 小时流量与活动趋势图，暂无真实样本" })).toBeInTheDocument();
+    expect(screen.getByText("近 24 小时暂无数据")).toBeInTheDocument();
   });
 
-  it("常量非零吞吐曲线渲染可访问图表容器", async () => {
+  it("keeps activity/failures chart visible and hides left throughput axis when hasRealSamples is false but failures exist", async () => {
     fetchOverviewTrafficMock.mockResolvedValueOnce({
-      window: "1h",
-      bucketMinutes: 5,
-      hasRealSamples: true,
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: false,
       generatedAt: "2026-03-08T00:00:00Z",
-      points: Array.from({ length: 3 }, (_, index) => ({
-        timestamp: `2026-03-08T00:0${index}:00Z`,
-        label: `00:0${index}`,
-        throughputMbps: 120,
-        sampleCount: 1,
-        activeTaskCount: 1,
-        startedCount: 1,
-        failedCount: 0,
-      }))
+      points: [
+        {
+          timestamp: "2026-03-08T00:00:00Z",
+          timestampMs: Date.parse("2026-03-08T00:00:00Z"),
+          label: "00:00",
+          throughputMbps: 0,
+          sampleCount: 0,
+          activeTaskCount: 0,
+          startedCount: 1,
+          failedCount: 2,
+          partial: true,
+        },
+      ],
     });
-    setContext(2, true, 1);
-
+    setContext(1, true);
     render(<OverviewPage />);
 
-    const chart = await screen.findByRole("img", { name: /峰值平均总吞吐 120 Mbps/ });
-    expect(chart).toBeInTheDocument();
+    const chartImg = await screen.findByRole("img", {
+      name: "近 24 小时流量与活动趋势图，峰值平均总吞吐 0 Mbps，开始事件 1 次，失败事件 2 次",
+    });
+    expect(chartImg).toBeInTheDocument();
+    expect(screen.getByText("无吞吐采样")).toBeInTheDocument();
+    expect(screen.getByText("末尾时段统计中")).toBeInTheDocument();
+    expect(screen.queryByText("Mbps")).not.toBeInTheDocument();
+    expect(screen.getByText("次")).toBeInTheDocument();
   });
 
-  it("切换时间窗时会 abort 前一个趋势请求", async () => {
+  it("renders partial trailing bucket indicator, axis units, and >=24px legend buttons with all-layers-off hint", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      generatedAt: "2026-03-08T00:30:00Z",
+      points: [
+        { timestamp: "2026-03-08T00:00:00Z", timestampMs: Date.parse("2026-03-08T00:00:00Z"), label: "00:00", throughputMbps: 120, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+        { timestamp: "2026-03-08T00:30:00Z", timestampMs: Date.parse("2026-03-08T00:30:00Z"), label: "00:30", throughputMbps: 80, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0, partial: true },
+      ],
+    });
+    setContext(2, true, 1);
+    const user = userEvent.setup();
+    render(<OverviewPage />);
+
+    await screen.findByRole("img", { name: /峰值平均总吞吐 120 Mbps/ });
+    expect(screen.getByText("Mbps")).toBeInTheDocument();
+    expect(screen.getByText("次")).toBeInTheDocument();
+    expect(screen.getByText("末尾时段统计中")).toBeInTheDocument();
+
+    const throughputToggle = screen.getByRole("button", { name: "吞吐 (Mbps)" });
+    const activityToggle = screen.getByRole("button", { name: "活动" });
+    const failuresToggle = screen.getByRole("button", { name: "失败" });
+    expect(throughputToggle.className).toContain("min-h-6");
+    expect(throughputToggle.className).toContain("min-w-6");
+    expect(throughputToggle.className).toContain("focus-visible:ring-2");
+
+    await user.click(throughputToggle);
+    await user.click(activityToggle);
+    await user.click(failuresToggle);
+
+    expect(screen.getByText("已隐藏全部图层，点击下方图例恢复。").closest('[role="status"]')).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /流量与活动趋势图/ })).not.toBeInTheDocument();
+  });
+
+  it("limits announced traffic totals to measured buckets after truncation", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T01:01:00Z",
+      points: [
+        { label: "00:00", throughputMbps: 200, sampleCount: 4, startedCount: 9, failedCount: 5, incomplete: true },
+        { label: "00:30", throughputMbps: 120, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+        { label: "01:00", throughputMbps: 80, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0, partial: true },
+      ],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", {
+      name: /仅统计完整时段：峰值平均总吞吐 120 Mbps，开始事件 2 次，失败事件 0 次/,
+    })).toBeInTheDocument();
+    expect(screen.getByText(/未能完整统计的时段已留空/)).toBeInTheDocument();
+    expect(screen.getByText("末尾时段统计中")).toBeInTheDocument();
+  });
+
+  it("does not announce a capped throughput peak when every measured sample sits in an incomplete bucket", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T00:31:00Z",
+      points: [
+        { label: "00:00", throughputMbps: 200, sampleCount: 4, activeTaskCount: 2, startedCount: 9, failedCount: 5, incomplete: true },
+        { label: "00:30", throughputMbps: 0, sampleCount: 0, activeTaskCount: 0, startedCount: 2, failedCount: 1, partial: true },
+      ],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", {
+      name: "近 24 小时流量与活动趋势图，数据量超出上限，仅统计完整时段：无吞吐采样，开始事件 2 次，失败事件 1 次",
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /峰值平均总吞吐/ })).not.toBeInTheDocument();
+    expect(screen.getByText("无吞吐采样")).toBeInTheDocument();
+    expect(screen.queryByText("Mbps")).not.toBeInTheDocument();
+    expect(screen.getByText("次")).toBeInTheDocument();
+    expect(screen.getByText(/未能完整统计的时段已留空/)).toBeInTheDocument();
+  });
+
+  it("keeps a measured zero throughput peak in capped complete buckets", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T00:31:00Z",
+      points: [
+        { label: "00:00", throughputMbps: 200, sampleCount: 4, activeTaskCount: 2, startedCount: 9, failedCount: 5, incomplete: true },
+        { label: "00:30", throughputMbps: 0, sampleCount: 2, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+      ],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", {
+      name: "近 24 小时流量与活动趋势图，数据量超出上限，仅统计完整时段：峰值平均总吞吐 0 Mbps，开始事件 1 次，失败事件 0 次",
+    })).toBeInTheDocument();
+    expect(screen.queryByText("无吞吐采样")).not.toBeInTheDocument();
+  });
+
+  it("shows the cap warning when a legacy truncated response has unknown coverage", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T00:30:00Z",
+      points: [{ label: "00:00", throughputMbps: 200, startedCount: 9, failedCount: 5 }],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", { name: /暂无可展示的完整时段/ })).toBeInTheDocument();
+    expect(screen.getByText(/未能完整统计的时段已留空/)).toBeInTheDocument();
+    expect(screen.queryByText("近 24 小时暂无数据")).not.toBeInTheDocument();
+  });
+
+  it("preserves previous traffic chart data while switching windows and aborts superseded requests", async () => {
     const user = userEvent.setup();
     const seenSignals: AbortSignal[] = [];
     fetchOverviewTrafficMock.mockImplementation((window: string, options?: { signal?: AbortSignal }) => {
@@ -358,90 +943,79 @@ describe("OverviewPage", () => {
         seenSignals.push(options.signal);
       }
       if (window === "1h") {
-        return new Promise((_, reject) => {
+        return new Promise((_resolve, reject) => {
           options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
         });
       }
       return Promise.resolve({
-        window: "24h",
-        bucketMinutes: 30,
+        window,
+        bucketMinutes: window === "24h" ? 30 : 180,
         hasRealSamples: true,
         generatedAt: "2026-03-08T00:00:00Z",
         points: [
-          { timestamp: "2026-03-07T23:00:00Z", timestampMs: Date.parse("2026-03-07T23:00:00Z"), label: "23:00", throughputMbps: 80, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 }
-        ]
+          { timestamp: "2026-03-07T23:00:00Z", timestampMs: Date.parse("2026-03-07T23:00:00Z"), label: "23:00", throughputMbps: 80, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+        ],
       });
     });
 
     setContext(2, true, 1);
     render(<OverviewPage />);
 
-    await waitFor(() => {
-      expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(1);
-    });
+    await screen.findByRole("img", { name: /峰值平均总吞吐 80 Mbps/ });
 
-    await user.click(screen.getByRole("button", { name: "24h" }));
-
+    await user.click(screen.getByRole("button", { name: "1h" }));
     await waitFor(() => {
       expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(2);
     });
+    // Previous chart remains visible (no skeleton height collapse) while loading 1h,
+    // and keeps the previous 24h heading/aria-label while announcing 1h loading separately.
+    expect(screen.queryByText("加载趋势...")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: /流量与活动趋势（近 24 小时）/ })).toBeInTheDocument();
+    expect(screen.getByText("正在切换至近 1 小时...")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /近 24 小时流量与活动趋势图/ })).toBeInTheDocument();
 
-    expect(seenSignals[0]?.aborted).toBe(true);
-    expect(seenSignals[1]?.aborted).toBe(false);
+    await user.click(screen.getByRole("button", { name: "7d" }));
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(3);
+    });
+    expect(seenSignals[1]?.aborted).toBe(true);
+    expect(seenSignals[2]?.aborted).toBe(false);
   });
 
-  it("图例位于图表下方且可切换图层", async () => {
-    setContext(2, true, 1);
-    const { container } = render(<OverviewPage />);
-
-    const activityToggle = await screen.findByRole("button", { name: /活动/ });
-    const legendRow = activityToggle.parentElement;
-    expect(legendRow?.className).toContain("border-t");
-    expect(container.querySelector('.absolute.right-2.top-2')).toBeNull();
-  });
-
-  it("图例按钮可开启或关闭图层", async () => {
-    setContext(2, true, 1);
-    render(<OverviewPage />);
-
-    const activityToggle = await screen.findByRole("button", { name: /活动/ });
-    expect(activityToggle).toHaveAttribute("aria-pressed", "true");
-
-    await userEvent.setup().click(activityToggle);
-    expect(activityToggle).toHaveAttribute("aria-pressed", "false");
-  });
-
-  it("支持切换 1h/24h/7d 并按 refreshVersion 重新拉取趋势", async () => {
+  it("supports switching 1h/24h/7d and refreshes on refreshVersion", async () => {
     const user = userEvent.setup();
     setContext(2, true, 1);
     const { rerender } = render(<OverviewPage />);
 
     await waitFor(() => {
-      expect(fetchOverviewTrafficMock.mock.calls[0]?.[0]).toBe("1h");
+      expect(fetchOverviewTrafficMock.mock.calls[0]?.[0]).toBe("24h");
       expect(fetchOverviewTrafficMock.mock.calls[0]?.[1]?.signal).toBeTruthy();
     });
 
-    fetchOverviewTrafficMock.mockResolvedValueOnce({
-      window: "24h",
-      bucketMinutes: 60,
-      hasRealSamples: true,
-      generatedAt: "2026-03-08T00:00:00Z",
-      points: [
-        { timestamp: "2026-03-07T23:00:00Z", timestampMs: Date.parse("2026-03-07T23:00:00Z"), label: "23:00", throughputMbps: 80, sampleCount: 2, activeTaskCount: 1, startedCount: 1, failedCount: 0 }
-      ]
-    });
-    await user.click(screen.getByRole("button", { name: "24h" }));
+    await user.click(screen.getByRole("button", { name: "1h" }));
 
     await waitFor(() => {
-      expect(fetchOverviewTrafficMock.mock.calls.at(-1)?.[0]).toBe("24h");
-      expect(fetchOverviewTrafficMock.mock.calls.at(-1)?.[1]?.signal).toBeTruthy();
+      expect(fetchOverviewTrafficMock.mock.calls.at(-1)?.[0]).toBe("1h");
     });
 
-    setContext(2, true, 2);
+    setContext(2, true, 2, 0);
     rerender(<OverviewPage />);
 
     await waitFor(() => {
       expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(3);
+      expect(refreshTasksMock).toHaveBeenCalledTimes(2);
+      expect(getBackupHealthMock).toHaveBeenCalledTimes(2);
+    });
+
+    // Background overviewPollVersion advances overview panels without changing refreshVersion
+    setContext(2, true, 2, 1);
+    rerender(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(4);
+      expect(refreshTasksMock).toHaveBeenCalledTimes(3);
+      expect(getBackupHealthMock).toHaveBeenCalledTimes(3);
+      expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -475,102 +1049,148 @@ describe("OverviewPage", () => {
     }
   });
 
-  it("能正确渲染最近同步任务框及预计传输量", async () => {
+  it("renders Recent Sync Tasks with all 8 statuses, real duration/completion/nextRun, navigable links, and no fake speedMbps", async () => {
     setContext(2, true);
+    const allStatusTasks: TaskRecord[] = [
+      { id: 1, name: "task-success", policyName: "p1", nodeName: "Node-1", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01 09:00:00", lastFinishedAt: "2026-03-01 10:08:00", lastDurationMs: 125000, nextRunAt: "2026-03-02 10:00:00", speedMbps: 80, enabled: true },
+      { id: 2, name: "task-failed", policyName: "p2", nodeName: "Node-2", nodeId: 2, status: "failed", progress: 0, startedAt: "2026-03-01 09:00:00", lastFinishedAt: "2026-03-01 10:07:00", lastDurationMs: 4500, speedMbps: 0, enabled: true },
+      { id: 3, name: "task-running", policyName: "p3", nodeName: "Node-3", nodeId: 3, status: "running", progress: 40, startedAt: "2026-03-01 09:00:00", lastRunAt: "2026-03-01 10:06:00", speedMbps: 0, enabled: true },
+      { id: 4, name: "task-retrying", policyName: "p4", nodeName: "Node-4", nodeId: 4, status: "retrying", progress: 10, startedAt: "2026-03-01 09:00:00", lastRunAt: "2026-03-01 10:05:00", speedMbps: 0, enabled: true },
+      { id: 5, name: "task-pending", policyName: "p5", nodeName: "Node-5", nodeId: 5, status: "pending", progress: 0, startedAt: "2026-03-01 09:00:00", lastRunAt: "2026-03-01 10:04:00", speedMbps: 0, enabled: true },
+      { id: 6, name: "task-canceled", policyName: "p6", nodeName: "Node-6", nodeId: 6, status: "canceled", progress: 0, startedAt: "2026-03-01 09:00:00", lastRunAt: "2026-03-01 10:03:00", speedMbps: 0, enabled: true },
+      { id: 7, name: "task-warning", policyName: "p7", nodeName: "Node-7", nodeId: 7, status: "warning", progress: 100, startedAt: "2026-03-01 09:00:00", lastRunAt: "2026-03-01 10:02:00", speedMbps: 0, enabled: true },
+      { id: 8, name: "task-skipped", policyName: "p8", nodeName: "Node-8", nodeId: 8, status: "skipped", progress: 0, startedAt: "2026-03-01 09:00:00", lastRunAt: "2026-03-01 10:01:00", speedMbps: 0, enabled: true },
+    ];
 
-    render(<OverviewPage />);
+    tasksRef.current = { ...tasksRef.current, tasks: allStatusTasks.slice(0, 5) };
+    const { rerender } = render(<OverviewPage />);
 
-    await waitFor(() => {
-      expect(fetchOverviewTrafficMock).toHaveBeenCalled();
-    });
+    const tasksSection = (await screen.findByRole("heading", { level: 2, name: /最近同步任务/ })).closest("section")!;
+    expect(within(tasksSection).getByRole("link", { name: /全部任务/ })).toHaveAttribute("href", "/app/tasks");
+    expect(within(tasksSection).getByText("耗时")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("完成时间")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("下次运行")).toBeInTheDocument();
+    expect(within(tasksSection).queryByText("传输数据量")).not.toBeInTheDocument();
+    expect(within(tasksSection).queryByText(/MB\/s/)).not.toBeInTheDocument();
 
-    // Basic structure
-    expect(screen.getByText("最近同步任务")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /查看更多/ })).toBeInTheDocument();
+    expect(within(tasksSection).getByRole("link", { name: "task-success" })).toHaveAttribute("href", "/app/logs?task=1");
+    expect(within(tasksSection).getByText("2m 5s")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("2026-03-01 10:08:00")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("2026-03-02 10:00:00")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("成功")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("失败")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("同步中")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("重试中")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("队列中")).toBeInTheDocument();
 
-    // Headers
-    expect(screen.getByText("节点名称")).toBeInTheDocument();
-    expect(screen.getByText("任务名称")).toBeInTheDocument();
-    expect(screen.getByText("同步状态")).toBeInTheDocument();
-    expect(screen.getByText("传输数据量")).toBeInTheDocument();
-    expect(screen.getByText("完成时间")).toBeInTheDocument();
-
-    // Data verification
-    expect(screen.getByText("测试任务1")).toBeInTheDocument();
-    expect(screen.getByText("测试任务2")).toBeInTheDocument();
-
-    // Status text (mapped from 'success' and 'failed')
-    expect(screen.getByText("成功")).toBeInTheDocument();
-    expect(screen.getAllByText("失败").length).toBeGreaterThan(0);
-
-    // Transfer Data text (testing the Math calculation `80 Mbps / 8 = 10.0 MB/s`)
-    // and testing placeholder `-` for 0 Mbps.
-    expect(screen.getByText("≈ 10.0 MB/s")).toBeInTheDocument();
-    // Use getAllByText for "-", since there's one for Transfer Data and one for UpdatedAt (though updated at has value here, `-` might exist elsewhere in the DOM)
-    // We expect the transfer data column for task 2 (speed 0) to be "-"
-    expect(screen.getAllByText("-").length).toBeGreaterThan(0);
-
-    // Time verification
-    expect(screen.getByText("2026-03-01 10:00:00")).toBeInTheDocument();
-    expect(screen.getByText("2026-03-01 10:05:00")).toBeInTheDocument();
+    tasksRef.current = { ...tasksRef.current, tasks: allStatusTasks.slice(3, 8) };
+    rerender(<OverviewPage />);
+    expect(within(tasksSection).getByText("已取消")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("校验异常")).toBeInTheDocument();
+    expect(within(tasksSection).getByText("已跳过")).toBeInTheDocument();
   });
 
-  it("最近同步任务按创建时间倒序展示最近 5 条", async () => {
-    const nodes = createNodes(2);
-    sharedRef.current = {
-      ...sharedRef.current,
-      fetchOverviewTraffic: fetchOverviewTrafficMock,
-      fetchHealthIncidentTimeline: fetchHealthIncidentTimelineMock,
-      overview: {
-        activePolicies: 3,
-      },
-      refreshVersion: 0,
-      loading: false,
-    };
-    nodesRef.current = {
-      ...nodesRef.current,
-      nodes,
-      refreshNodes: refreshNodesMock,
-      nodesLoading: false,
-      nodesError: null,
-      nodesLoaded: true,
-    };
+  it("sorts Recent Sync Tasks by latest run/finish time rather than createdAt and places never-run tasks last", async () => {
+    setContext(2, true);
     tasksRef.current = {
       ...tasksRef.current,
       tasks: [
-        { id: 1, name: "最早任务", policyName: "最早任务", nodeName: "Node-001", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01", createdAt: "2026-03-01 09:00:00", updatedAt: "2026-03-01 09:10:00", speedMbps: 8 },
-        { id: 2, name: "第二条", policyName: "第二条", nodeName: "Node-001", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01", createdAt: "2026-03-01 09:10:00", updatedAt: "2026-03-01 09:20:00", speedMbps: 8 },
-        { id: 3, name: "第三条", policyName: "第三条", nodeName: "Node-001", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01", createdAt: "2026-03-01 09:20:00", updatedAt: "2026-03-01 09:30:00", speedMbps: 8 },
-        { id: 4, name: "第四条", policyName: "第四条", nodeName: "Node-001", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01", createdAt: "2026-03-01 09:30:00", updatedAt: "2026-03-01 09:40:00", speedMbps: 8 },
-        { id: 5, name: "第五条", policyName: "第五条", nodeName: "Node-001", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01", createdAt: "2026-03-01 09:40:00", updatedAt: "2026-03-01 09:50:00", speedMbps: 8 },
-        { id: 6, name: "最新任务", policyName: "最新任务", nodeName: "Node-002", nodeId: 2, status: "running", progress: 60, startedAt: "2026-03-01", createdAt: "2026-03-01 09:50:00", updatedAt: "2026-03-01 10:00:00", speedMbps: 16 },
+        { id: 1, name: "老配置新跑任务", policyName: "p1", nodeName: "Node-1", nodeId: 1, status: "success", progress: 100, startedAt: "2026-03-01", createdAt: "2026-01-01 00:00:00", lastFinishedAt: "2026-03-10 12:00:00", speedMbps: 0, enabled: true },
+        { id: 2, name: "未执行新任务", policyName: "p2", nodeName: "Node-2", nodeId: 2, status: "pending", progress: 0, startedAt: "2026-03-11", createdAt: "2026-03-11 00:00:00", speedMbps: 0, enabled: true },
+        { id: 3, name: "任务3", policyName: "p3", nodeName: "Node-3", nodeId: 3, status: "success", progress: 100, startedAt: "2026-03-02", lastFinishedAt: "2026-03-09 12:00:00", speedMbps: 0, enabled: true },
+        { id: 4, name: "任务4", policyName: "p4", nodeName: "Node-4", nodeId: 4, status: "success", progress: 100, startedAt: "2026-03-03", lastFinishedAt: "2026-03-08 12:00:00", speedMbps: 0, enabled: true },
+        { id: 5, name: "任务5", policyName: "p5", nodeName: "Node-5", nodeId: 5, status: "success", progress: 100, startedAt: "2026-03-04", lastFinishedAt: "2026-03-07 12:00:00", speedMbps: 0, enabled: true },
+        { id: 6, name: "任务6", policyName: "p6", nodeName: "Node-6", nodeId: 6, status: "success", progress: 100, startedAt: "2026-03-05", lastRunAt: "2026-03-06 12:00:00", speedMbps: 0, enabled: true },
+        { id: 7, name: "任务7", policyName: "p7", nodeName: "Node-7", nodeId: 7, status: "success", progress: 100, startedAt: "2026-03-05", lastFinishedAt: "2026-03-05 12:00:00", speedMbps: 0, enabled: true },
+        { id: 8, name: "任务8", policyName: "p8", nodeName: "Node-8", nodeId: 8, status: "success", progress: 100, startedAt: "2026-03-04", lastFinishedAt: "2026-03-04 12:00:00", speedMbps: 0, enabled: true },
+        { id: 9, name: "任务9", policyName: "p9", nodeName: "Node-9", nodeId: 9, status: "success", progress: 100, startedAt: "2026-03-03", lastFinishedAt: "2026-03-03 12:00:00", speedMbps: 0, enabled: true },
       ],
-      refreshTasks: refreshTasksMock,
-      tasksLoading: false,
-      tasksError: null,
-      tasksLoaded: true,
     };
 
     render(<OverviewPage />);
 
-    await waitFor(() => {
-      expect(fetchOverviewTrafficMock).toHaveBeenCalled();
-    });
+    const tasksSection = (await screen.findByRole("heading", { level: 2, name: /最近同步任务/ })).closest("section")!;
+    expect(within(tasksSection).getByText("老配置新跑任务")).toBeInTheDocument();
+    expect(within(tasksSection).queryByText("未执行新任务")).not.toBeInTheDocument();
+  });
 
-    expect(screen.getByText("最新任务")).toBeInTheDocument();
-    expect(screen.queryByText("最早任务")).not.toBeInTheDocument();
+  it("consumes tasksLoading and tasksError with Retry without flickering on shared context polling", async () => {
+    setContext(2, true);
+    sharedRef.current = { ...sharedRef.current, loading: true };
+    tasksRef.current = { ...tasksRef.current, tasksLoading: false, tasksError: null };
+
+    const { rerender } = render(<OverviewPage />);
+    const tasksSection = (await screen.findByRole("heading", { level: 2, name: /最近同步任务/ })).closest("section")!;
+    // Shared polling loading=true must NOT collapse tasks to skeleton
+    expect(within(tasksSection).queryByText("加载任务...")).not.toBeInTheDocument();
+    expect(within(tasksSection).getByText("测试任务1")).toBeInTheDocument();
+
+    // Error with empty tasks must show error + Retry, never "暂无任务"
+    tasksRef.current = { ...tasksRef.current, tasks: [], tasksLoading: false, tasksError: "tasks endpoint down" };
+    rerender(<OverviewPage />);
+    expect(within(tasksSection).getByText("tasks endpoint down")).toBeInTheDocument();
+    expect(within(tasksSection).queryByText("暂无任务")).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(tasksSection).getByRole("button", { name: "重试" }));
+    expect(refreshTasksMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("overview pure chart & task helpers", () => {
+  it("computes evenly spaced integer right-axis ticks for all counts", () => {
+    expect(computeIntegerAxisTicks(0)).toEqual({ domain: [0, 4], ticks: [0, 1, 2, 3, 4] });
+    expect(computeIntegerAxisTicks(1)).toEqual({ domain: [0, 4], ticks: [0, 1, 2, 3, 4] });
+    expect(computeIntegerAxisTicks(3)).toEqual({ domain: [0, 4], ticks: [0, 1, 2, 3, 4] });
+    expect(computeIntegerAxisTicks(4)).toEqual({ domain: [0, 8], ticks: [0, 2, 4, 6, 8] });
+    expect(computeIntegerAxisTicks(5)).toEqual({ domain: [0, 8], ticks: [0, 2, 4, 6, 8] });
+    expect(computeIntegerAxisTicks(10)).toEqual({ domain: [0, 12], ticks: [0, 3, 6, 9, 12] });
+  });
+
+  it("formats traffic tooltip labels for partial buckets and avoids duplicate Mbps units", () => {
+    expect(formatTrafficTooltipLabel("12:00", [{ payload: { partial: true } }], "进行中")).toBe("12:00 (进行中)");
+    expect(formatTrafficTooltipLabel("11:30", [{ payload: { partial: false } }], "进行中")).toBe("11:30");
+    const [throughputValue, throughputName] = formatTrafficTooltipValue(120, "吞吐", "吞吐", "次");
+    expect(throughputValue).toBe("120 Mbps");
+    expect(throughputName).toBe("吞吐");
+    expect(`${throughputName}: ${throughputValue}`.match(/Mbps/g)).toHaveLength(1);
+    expect(formatTrafficTooltipValue(3, "活动", "吞吐", "次")).toEqual(["3 次", "活动"]);
+  });
+
+  it("computes clean left-axis throughput max and formats task durations", () => {
+    expect(computeThroughputMax(0)).toBe(0);
+    expect(computeThroughputMax(12)).toBe(20);
+    expect(computeThroughputMax(120)).toBe(150);
+    expect(formatTaskDuration(undefined)).toBe("—");
+    expect(formatTaskDuration(450)).toBe("450ms");
+    expect(formatTaskDuration(12000)).toBe("12s");
+    expect(formatTaskDuration(125000)).toBe("2m 5s");
+    expect(formatTaskDuration(3660000)).toBe("1h 1m");
+    expect(
+      sortRecentTasks(
+        [
+          { id: 1, policyName: "p1", nodeName: "n1", nodeId: 1, status: "pending", progress: 0, startedAt: "", speedMbps: 0, enabled: true, createdAt: "2026-05-01 00:00:00" },
+          { id: 2, policyName: "p2", nodeName: "n2", nodeId: 2, status: "success", progress: 100, startedAt: "", speedMbps: 0, enabled: true, lastFinishedAt: "2026-04-01 00:00:00" },
+        ],
+        5,
+      ).map((t) => t.id),
+    ).toEqual([2, 1]);
   });
 });
 
 describe("health incident actions and cause consumer boundaries", () => {
   beforeEach(async () => {
     await setLanguage("zh");
+    authRef.current = { token: "test-token", username: "admin", role: "admin" };
+    getBackupConfidenceMock.mockReset().mockResolvedValue(defaultConfidence);
+    getBackupHealthMock.mockReset().mockResolvedValue(defaultHealth);
     fetchHealthIncidentTimelineMock.mockReset();
-    fetchOverviewTrafficMock.mockReset().mockResolvedValue({ window: "1h", bucketMinutes: 5, hasRealSamples: false, generatedAt: "", points: [] });
+    fetchOverviewTrafficMock.mockReset().mockResolvedValue({ window: "24h", bucketMinutes: 30, hasRealSamples: false, generatedAt: "", points: [] });
     setContext(0);
   });
 
   afterEach(async () => {
+    cleanup();
     await setLanguage("zh");
   });
 

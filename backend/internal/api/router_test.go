@@ -2100,3 +2100,194 @@ func TestSystemBackupDownloadRouterRecoveryProtectsRealAuthFailures(t *testing.T
 	}
 	assertSystemBackupRecoverySecretsAbsent(t, output.String())
 }
+
+func TestOverviewAndTaskSortRoutesThroughRealRouter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dbPath := filepath.Join(t.TempDir(), "overview-router.db")
+	db, err := gorm.Open(sqlite.Open(dbPath+"?_loc=UTC"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.Node{},
+		&model.NodeOwner{},
+		&model.Policy{},
+		&model.PolicyNode{},
+		&model.Task{},
+		&model.TaskRun{},
+		&model.BackupCompletion{},
+		&model.TaskTrafficSample{},
+		&model.AuditLog{},
+		&model.TokenRevocation{},
+	); err != nil {
+		t.Fatalf("migrate test db: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager("FAKE_OVERVIEW_ROUTER_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
+	users := map[string]*model.User{
+		"admin":    {Username: "overview-admin", PasswordHash: "hash", Role: "admin"},
+		"viewer":   {Username: "overview-viewer", PasswordHash: "hash", Role: "viewer"},
+		"operator": {Username: "overview-operator", PasswordHash: "hash", Role: "operator"},
+	}
+	tokens := make(map[string]string, len(users))
+	for role, u := range users {
+		if err := db.Create(u).Error; err != nil {
+			t.Fatalf("create %s user: %v", role, err)
+		}
+		tok, err := jwtManager.GenerateToken(*u)
+		if err != nil {
+			t.Fatalf("generate %s token: %v", role, err)
+		}
+		tokens[role] = tok
+	}
+
+	ownedNode := model.Node{Name: "owned-node", Host: "10.1.0.1", Port: 22, Username: "root", AuthType: "key", Status: "online", BackupDir: "/backup/owned-node"}
+	otherNode := model.Node{Name: "other-node", Host: "10.1.0.2", Port: 22, Username: "root", AuthType: "key", Status: "online", BackupDir: "/backup/other-node"}
+	if err := db.Create(&ownedNode).Error; err != nil {
+		t.Fatalf("create owned node: %v", err)
+	}
+	if err := db.Create(&otherNode).Error; err != nil {
+		t.Fatalf("create other node: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: users["operator"].ID}).Error; err != nil {
+		t.Fatalf("assign node owner: %v", err)
+	}
+
+	activePolicy := model.Policy{Name: "active-non-template", SourcePath: "/src", TargetPath: "/dst", CronSpec: "0 2 * * *", Enabled: true, IsTemplate: false}
+	templatePolicy := model.Policy{Name: "enabled-template", SourcePath: "/src", TargetPath: "/dst2", CronSpec: "0 2 * * *", Enabled: true, IsTemplate: true}
+	if err := model.CreatePolicyWithExplicitValues(db, &activePolicy, model.PolicyCreateExplicitColumns()...); err != nil {
+		t.Fatalf("create active policy: %v", err)
+	}
+	if err := model.CreatePolicyWithExplicitValues(db, &templatePolicy, model.PolicyCreateExplicitColumns()...); err != nil {
+		t.Fatalf("create template policy: %v", err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: activePolicy.ID, NodeID: otherNode.ID}).Error; err != nil {
+		t.Fatalf("link active policy to other node: %v", err)
+	}
+
+	oldTask := model.Task{Name: "older-config-newer-finish", NodeID: ownedNode.ID, PolicyID: &activePolicy.ID, ExecutorType: "rsync", Status: "success", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	neverRunTask := model.Task{Name: "newer-config-never-run", NodeID: ownedNode.ID, PolicyID: &activePolicy.ID, Status: "pending", CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)}
+	if err := db.Create(&oldTask).Error; err != nil {
+		t.Fatalf("create old task: %v", err)
+	}
+	if err := db.Create(&neverRunTask).Error; err != nil {
+		t.Fatalf("create never-run task: %v", err)
+	}
+	finishedAt := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	if err := db.Create(&model.TaskRun{
+		TaskID:         oldTask.ID,
+		NodeIDSnapshot: ownedNode.ID,
+		Status:         model.TaskRunStatusSuccess,
+		FinishedAt:     &finishedAt,
+		DurationMs:     42000,
+	}).Error; err != nil {
+		t.Fatalf("create task run: %v", err)
+	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		previousFinish := finishedAt.Add(-time.Duration(attempt) * time.Hour)
+		if err := db.Create(&model.TaskRun{
+			TaskID:               oldTask.ID,
+			NodeIDSnapshot:       ownedNode.ID,
+			ExecutorTypeSnapshot: "rsync",
+			Status:               model.TaskRunStatusFailed,
+			FinishedAt:           &previousFinish,
+		}).Error; err != nil {
+			t.Fatalf("create historical backup failure: %v", err)
+		}
+	}
+
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+
+	for _, path := range []string{"/api/v1/overview", "/api/v1/overview/backup-health", "/api/v1/overview/traffic?window=24h", "/api/v1/tasks?sort=-recent_activity"} {
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, path, nil))
+		if resp.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated %s status=%d, want 401", path, resp.Code)
+		}
+	}
+
+	// Admin and viewer see only the 1 non-template active policy; operator owns no node attached to it so sees 0.
+	for _, tc := range []struct {
+		role string
+		want int64
+	}{
+		{role: "admin", want: 1},
+		{role: "viewer", want: 1},
+		{role: "operator", want: 0},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/overview", nil)
+		req.Header.Set("Authorization", "Bearer "+tokens[tc.role])
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s /overview status=%d body=%s", tc.role, resp.Code, resp.Body.String())
+		}
+		var payload struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode %s /overview: %v", tc.role, err)
+		}
+		if len(payload.Data) != 1 || int64(payload.Data["activePolicies"].(float64)) != tc.want {
+			t.Fatalf("%s /overview data=%v, want strictly {activePolicies:%d}", tc.role, payload.Data, tc.want)
+		}
+
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/overview/backup-health", nil)
+		req.Header.Set("Authorization", "Bearer "+tokens[tc.role])
+		resp = httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s backup health status=%d body=%s", tc.role, resp.Code, resp.Body.String())
+		}
+		var health struct {
+			Data struct {
+				DegradedCount int64 `json:"degraded_count"`
+				Summary       struct {
+					TotalPolicies int64 `json:"total_policies"`
+				} `json:"summary"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(resp.Body.Bytes(), &health); err != nil {
+			t.Fatalf("decode %s backup health: %v", tc.role, err)
+		}
+		if health.Data.Summary.TotalPolicies != tc.want || health.Data.DegradedCount != tc.want {
+			t.Fatalf("%s backup health=%+v, want %d total and degraded policies", tc.role, health.Data, tc.want)
+		}
+	}
+
+	// Operator /tasks?sort=-recent_activity returns owned tasks ordered by latest terminal finish with NULLs last.
+	taskReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?sort=-recent_activity", nil)
+	taskReq.Header.Set("Authorization", "Bearer "+tokens["operator"])
+	taskResp := httptest.NewRecorder()
+	router.ServeHTTP(taskResp, taskReq)
+	if taskResp.Code != http.StatusOK {
+		t.Fatalf("operator /tasks status=%d body=%s", taskResp.Code, taskResp.Body.String())
+	}
+	var taskList struct {
+		Data []struct {
+			ID             uint    `json:"id"`
+			LastFinishedAt *string `json:"last_finished_at"`
+			LastDurationMs *int64  `json:"last_duration_ms"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(taskResp.Body.Bytes(), &taskList); err != nil {
+		t.Fatalf("decode /tasks: %v", err)
+	}
+	if len(taskList.Data) != 2 || taskList.Data[0].ID != oldTask.ID || taskList.Data[1].ID != neverRunTask.ID {
+		t.Fatalf("unexpected task order: %+v", taskList.Data)
+	}
+	if taskList.Data[0].LastFinishedAt == nil || taskList.Data[0].LastDurationMs == nil || *taskList.Data[0].LastDurationMs != 42000 {
+		t.Fatalf("expected finish metadata on finished task: %+v", taskList.Data[0])
+	}
+	if taskList.Data[1].LastFinishedAt != nil || taskList.Data[1].LastDurationMs != nil {
+		t.Fatalf("never-run task must omit finish metadata: %+v", taskList.Data[1])
+	}
+}

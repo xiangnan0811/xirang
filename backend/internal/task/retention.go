@@ -36,8 +36,8 @@ func (m *Manager) enforceRetention() {
 	log := logger.Module("task")
 
 	var policies []model.Policy
-	// GFS 模式策略也纳入保留清理（即使 retention_days=0）
-	if err := m.db.Where("(retention_days > 0 OR retention_mode = 'gfs') AND enabled = ?", true).Preload("Nodes").Find(&policies).Error; err != nil {
+	// GFS 模式策略也纳入保留清理（即使 retention_days=0），排除模板策略
+	if err := m.db.Where("(retention_days > 0 OR retention_mode = 'gfs') AND enabled = ? AND is_template = ?", true, false).Preload("Nodes").Find(&policies).Error; err != nil {
 		log.Error().Err(err).Msg("查询保留策略失败")
 		return
 	}

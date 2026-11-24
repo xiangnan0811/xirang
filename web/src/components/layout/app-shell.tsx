@@ -93,13 +93,14 @@ function AppShellInner() {
     warning: consoleData.warning,
     lastSyncedAt: consoleData.lastSyncedAt,
     refreshVersion: consoleData.refreshVersion,
+    overviewPollVersion: consoleData.overviewPollVersion,
     globalSearch: consoleData.globalSearch,
     setGlobalSearch: consoleData.setGlobalSearch,
     refresh: consoleData.refresh,
     overview: consoleData.overview,
     fetchOverviewTraffic: consoleData.fetchOverviewTraffic,
     fetchHealthIncidentTimeline: consoleData.fetchHealthIncidentTimeline,
-  }), [consoleData.loading, consoleData.warning, consoleData.lastSyncedAt, consoleData.refreshVersion, consoleData.globalSearch, consoleData.setGlobalSearch, consoleData.refresh, consoleData.overview, consoleData.fetchOverviewTraffic, consoleData.fetchHealthIncidentTimeline]);
+  }), [consoleData.loading, consoleData.warning, consoleData.lastSyncedAt, consoleData.refreshVersion, consoleData.overviewPollVersion, consoleData.globalSearch, consoleData.setGlobalSearch, consoleData.refresh, consoleData.overview, consoleData.fetchOverviewTraffic, consoleData.fetchHealthIncidentTimeline]);
 
   const nodesContextValue = useMemo(() => ({
     nodes: consoleData.nodes,
