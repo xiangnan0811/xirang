@@ -55,6 +55,12 @@ Go minor/patch 依赖组更新包含 `go-sqlite3 v1.14.53`。Export 围栏回归
 在 GORM `Row` 回调中等待会使 SQLite shared-cache 活跃读游标阻塞围栏写入。
 实例专属屏障及并发调用收尾要求见[测试约定](../spec/guides/testing.md)。
 
+`github.com/gorilla/websocket` 从 `v1.5.3` 定向更新至
+`v1.5.4-0.20240701034025-d67f41855da4`，修复
+[GO-2026-6278](https://pkg.go.dev/vuln/GO-2026-6278)。依赖更新须经现有 Go 漏洞扫描和
+消费者验证；重新构建并替换二进制后生效，切换时按正常流程排空 WebSocket 连接并让客户端
+重新连接。回退旧二进制会恢复旧依赖风险；本更新无新增配置或 schema migration。
+
 ## 前端依赖审计
 
 更改锁文件、升级依赖或排查本地与 CI/Docker 差异时，使用与 [CI](../../.github/workflows/ci.yml)及 [Docker web-builder](../../deploy/allinone/Dockerfile)一致的 Node 主版本，当前两者均为 Node 20。不要把 Actions 自身的 JavaScript runtime 与项目 Node 版本混为一谈。
