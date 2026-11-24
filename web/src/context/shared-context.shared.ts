@@ -11,6 +11,7 @@ export interface SharedContextValue {
   warning: string | null;
   lastSyncedAt: string;
   refreshVersion: number;
+  overviewPollVersion?: number;
   globalSearch: string;
   setGlobalSearch: (keyword: string) => void;
   refresh: () => void;

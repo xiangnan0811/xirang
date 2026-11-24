@@ -35,6 +35,7 @@ const TRAFFIC_WINDOWS: readonly OverviewTrafficWindow[] = ["1h", "24h", "7d"];
 
 export type OverviewTrafficChartProps = {
   trafficWindow: OverviewTrafficWindow;
+  displayedWindow?: OverviewTrafficWindow;
   setTrafficWindow: (window: OverviewTrafficWindow) => void;
   trafficLoading: boolean;
   trafficError: string | null;
@@ -49,6 +50,7 @@ export type OverviewTrafficChartProps = {
 
 export function OverviewTrafficChart({
   trafficWindow,
+  displayedWindow,
   setTrafficWindow,
   trafficLoading,
   trafficError,
@@ -64,21 +66,32 @@ export function OverviewTrafficChart({
 
   const isInitialLoading = trafficLoading && !hasLoadedData && !trafficError;
   const isRefreshing = trafficLoading && hasLoadedData;
+  const effectiveWindow = hasLoadedData && displayedWindow ? displayedWindow : trafficWindow;
+  const isSwitchingWindow = isRefreshing && effectiveWindow !== trafficWindow;
   const hasData = hasTrafficOrActivityData(chartMetrics);
   const showLeftAxis = visibleLayers.throughput && chartMetrics.hasRealSamples && yMaxLeft > 0;
   const showRightAxis = visibleLayers.activity || visibleLayers.failures;
   const anyLayerVisible = visibleLayers.throughput || visibleLayers.activity || visibleLayers.failures;
   const rightAxisScale = computeIntegerAxisTicks(yMaxRight);
 
-  const windowLabel = t(`overview.trafficWindow${trafficWindow}`);
-  const chartAriaLabel = hasData
-    ? t("overview.trafficAriaLabel", {
-        window: windowLabel,
-        peak: chartMetrics.peakThroughput,
-        started: chartMetrics.totalStartedCount,
-        failed: chartMetrics.totalFailedCount,
-      })
-    : t("overview.trafficAriaLabelEmpty", { window: windowLabel });
+  const windowLabel = t(`overview.trafficWindow${effectiveWindow}`);
+  const requestedWindowLabel = t(`overview.trafficWindow${trafficWindow}`);
+  const chartAriaLabel = chartMetrics.truncated && !chartMetrics.hasPlottableBuckets
+    ? t("overview.trafficAriaLabelUnavailable", { window: windowLabel })
+    : chartMetrics.truncated && !chartMetrics.hasRealSamples
+      ? t("overview.trafficAriaLabelLimitedNoThroughput", {
+          window: windowLabel,
+          started: chartMetrics.totalStartedCount,
+          failed: chartMetrics.totalFailedCount,
+        })
+      : chartMetrics.truncated || hasData
+        ? t(chartMetrics.truncated ? "overview.trafficAriaLabelLimited" : "overview.trafficAriaLabel", {
+            window: windowLabel,
+            peak: chartMetrics.peakThroughput,
+            started: chartMetrics.totalStartedCount,
+            failed: chartMetrics.totalFailedCount,
+          })
+        : t("overview.trafficAriaLabelEmpty", { window: windowLabel });
 
   const legendItems: Array<{ key: keyof VisibleLayers; label: string; dotClass: string }> = [
     { key: "throughput", label: t("overview.legendThroughput"), dotClass: "size-2 rounded-full bg-[hsl(var(--chart-ingress))]" },
@@ -106,7 +119,9 @@ export function OverviewTrafficChart({
                 aria-live="polite"
               >
                 <Loader2 className="size-3 animate-spin" aria-hidden />
-                {t("overview.refreshing")}
+                {isSwitchingWindow
+                  ? t("overview.trafficSwitchingWindow", { window: requestedWindowLabel })
+                  : t("overview.refreshing")}
               </span>
             ) : null}
           </span>
@@ -143,7 +158,7 @@ export function OverviewTrafficChart({
               ) : null}
             </div>
           </InlineAlert>
-        ) : !hasData ? (
+        ) : !hasData && !chartMetrics.truncated ? (
           <EmptyState
             as="h3"
             icon={
@@ -164,8 +179,7 @@ export function OverviewTrafficChart({
 
             {!anyLayerVisible ? (
               <div
-                role="img"
-                aria-label={chartAriaLabel}
+                role="status"
                 className="flex min-h-[200px] items-center justify-center rounded-lg border border-dashed border-border bg-background/40 px-4 text-center text-xs text-muted-foreground"
               >
                 {t("overview.trafficAllLayersHidden")}

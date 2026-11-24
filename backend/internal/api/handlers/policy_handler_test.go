@@ -1691,3 +1691,121 @@ func TestPolicyHandlerCreateTemplateDefaultEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicyTemplateConversionKeepsLinkedTasksAndSchedules(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openPolicyHandlerTestDB(t)
+	node := model.Node{Name: "template-conversion-node", Host: "127.0.0.1", BackupDir: "/node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	p := model.Policy{Name: "linked-policy", SourcePath: "/data", TargetPath: config.BackupRoot, CronSpec: "0 2 * * *", Enabled: true}
+	if err := model.CreatePolicyWithExplicitValues(db, &p, model.PolicyCreateExplicitColumns()...); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: p.ID, NodeID: node.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	next := time.Now().UTC().Truncate(time.Second).Add(time.Hour)
+	archived := time.Now().UTC().Truncate(time.Second)
+	tasks := []model.Task{
+		{Name: "policy-task", NodeID: node.ID, PolicyID: &p.ID, Source: "policy", ExecutorType: "command", Command: "true", CronSpec: p.CronSpec, Enabled: true, NextRunAt: &next},
+		{Name: "archived-manual", NodeID: node.ID, PolicyID: &p.ID, Source: "manual", ExecutorType: "command", Command: "true", ArchivedAt: &archived},
+	}
+	for i := range tasks {
+		if err := db.Create(&tasks[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &mockTaskRunner{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	router.PUT("/policies/:id", NewPolicyHandler(db, runner).Update)
+	request := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/policies/%d", p.ID), strings.NewReader(`{"name":"changed","source_path":"/data","cron_spec":"0 3 * * *","enabled":false,"is_template":true,"node_ids":[]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("conversion status=%d body=%s", response.Code, response.Body.String())
+	}
+	var stored model.Policy
+	if err := db.First(&stored, p.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.IsTemplate || !stored.Enabled || stored.Name != p.Name || stored.CronSpec != p.CronSpec {
+		t.Fatalf("policy changed after rejected conversion: %+v", stored)
+	}
+	for _, before := range tasks {
+		var after model.Task
+		if err := db.First(&after, before.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if after.PolicyID == nil || *after.PolicyID != p.ID || after.CronSpec != before.CronSpec || after.Enabled != before.Enabled || (before.NextRunAt != nil && (after.NextRunAt == nil || !after.NextRunAt.Equal(*before.NextRunAt))) || !after.UpdatedAt.Equal(before.UpdatedAt) {
+			t.Fatalf("task changed after rejected conversion: before=%+v after=%+v", before, after)
+		}
+	}
+	var count int64
+	if err := db.Model(&model.PolicyNode{}).Where("policy_id = ?", p.ID).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("policy node count=%d err=%v", count, err)
+	}
+	if len(runner.syncCalls) != 0 || len(runner.removeCalls) != 0 {
+		t.Fatalf("rejected conversion changed schedules: sync=%v remove=%v", runner.syncCalls, runner.removeCalls)
+	}
+	if err := db.Delete(&model.Task{}, tasks[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/policies/%d", p.ID), strings.NewReader(`{"name":"linked-policy","source_path":"/data","cron_spec":"0 2 * * *","is_template":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("archived-only conversion status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPolicyTemplateRoutineEditAndPromotion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openPolicyHandlerTestDB(t)
+	p := model.Policy{Name: "legacy-template", SourcePath: "/data", TargetPath: config.BackupRoot, CronSpec: "0 2 * * *", IsTemplate: true, Enabled: true}
+	if err := model.CreatePolicyWithExplicitValues(db, &p, model.PolicyCreateExplicitColumns()...); err != nil {
+		t.Fatal(err)
+	}
+	node := model.Node{Name: "legacy-template-node", Host: "127.0.0.1", BackupDir: "/node"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacyTask := model.Task{Name: "legacy-template-linked", NodeID: node.ID, PolicyID: &p.ID, ExecutorType: "command", Command: "true"}
+	if err := db.Create(&legacyTask).Error; err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	router.PUT("/policies/:id", NewPolicyHandler(db, nil).Update)
+	for index, tc := range []struct {
+		payload  string
+		template bool
+	}{
+		{`{"name":"legacy-template","source_path":"/data","cron_spec":"0 2 * * *"}`, true},
+		{`{"name":"legacy-template","source_path":"/data","cron_spec":"0 2 * * *","is_template":false}`, false},
+		{`{"name":"legacy-template","source_path":"/data","cron_spec":"0 2 * * *","is_template":true}`, true},
+	} {
+		if index == 2 {
+			if err := db.Delete(&legacyTask).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		request := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/policies/%d", p.ID), strings.NewReader(tc.payload))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("edit status=%d body=%s", response.Code, response.Body.String())
+		}
+		if err := db.First(&p, p.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if p.IsTemplate != tc.template || !p.Enabled {
+			t.Fatalf("unexpected policy flags: template=%v enabled=%v", p.IsTemplate, p.Enabled)
+		}
+	}
+}

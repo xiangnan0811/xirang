@@ -53,7 +53,7 @@ export function parseSSHKeyType(value: string): SSHKeyType {
 }
 
 export interface OverviewStats {
-  activePolicies: number;
+  activePolicies: number | null;
 }
 
 export interface OverviewSummary {
@@ -72,6 +72,8 @@ export interface OverviewTrafficPoint {
   startedCount: number;
   failedCount: number;
   partial?: boolean;
+  /** Bucket may be missing rows because a server query hit its row cap. */
+  incomplete?: boolean;
 }
 
 export interface OverviewTrafficSeries {
@@ -993,6 +995,8 @@ export interface HealthTrendPoint {
 
 export interface BackupHealthData {
   generatedAt?: string;
+  staleThresholdHours?: number;
+  latestVerifiedBackupAt?: string | null;
   staleNodes: StaleNode[];
   degradedPolicies: DegradedPolicy[];
   healthTrend: HealthTrendPoint[];
@@ -1075,11 +1079,14 @@ export interface NodeStorageInfo {
   nodeName: string;
   path: string;
   usedGB: number;
+  incomplete?: boolean;
 }
 
 export interface StorageUsageData {
   mountPoints: MountPointInfo[];
   perNode: NodeStorageInfo[];
+  incomplete?: boolean;
+  mountPointsIncomplete?: boolean;
 }
 
 /** Domain shape for app credentials (API maps wire snake_case → camelCase). */

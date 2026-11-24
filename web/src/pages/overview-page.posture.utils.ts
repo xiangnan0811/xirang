@@ -9,44 +9,31 @@ function parseValidTimestamp(value?: string | null): number | null {
 }
 
 /**
- * Picks the latest verified backup completion timestamp from backup-confidence
- * targets/verified backup evidence and backup-health stale-node facts.
- * Never fabricates a timestamp from unverified task runs or node heartbeats.
+ * Picks the latest verified backup completion timestamp solely from backup-health,
+ * which aggregates across all visible nodes. Never mixes policy-scoped confidence
+ * timestamps or fabricates a timestamp when backup-health failed or returned null.
  */
 export function getLatestVerifiedBackupTime(
-  confidence: BackupConfidenceData | null,
   health: BackupHealthData | null,
 ): string | null {
+  if (!health) {
+    return null;
+  }
+  if (health.latestVerifiedBackupAt !== undefined) {
+    return parseValidTimestamp(health.latestVerifiedBackupAt) !== null
+      ? health.latestVerifiedBackupAt
+      : null;
+  }
+
   let latestMs = -Infinity;
   let latestIso: string | null = null;
-
-  const consider = (candidate?: string | null) => {
-    const ms = parseValidTimestamp(candidate);
-    if (ms !== null && ms > latestMs && candidate) {
+  for (const staleNode of health.staleNodes) {
+    const ms = parseValidTimestamp(staleNode.lastBackupAt);
+    if (ms !== null && ms > latestMs && staleNode.lastBackupAt) {
       latestMs = ms;
-      latestIso = candidate;
-    }
-  };
-
-  if (confidence) {
-    for (const item of confidence.items) {
-      for (const target of item.targets) {
-        consider(target.lastBackupAt);
-      }
-      for (const evidence of item.evidence) {
-        if (evidence.type === "backup" && evidence.status !== "missing") {
-          consider(evidence.observedAt);
-        }
-      }
+      latestIso = staleNode.lastBackupAt;
     }
   }
-
-  if (health) {
-    for (const staleNode of health.staleNodes) {
-      consider(staleNode.lastBackupAt);
-    }
-  }
-
   return latestIso;
 }
 

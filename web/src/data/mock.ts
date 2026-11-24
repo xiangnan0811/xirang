@@ -442,12 +442,12 @@ export const mockTasks: TaskRecord[] = Array.from({ length: 18 }, (_, idx) => {
 
 const mockTrafficTotals = [308, 348, 330, 390, 430, 415, 451, 419, 473, 495, 479, 508];
 
-export const mockOverview: OverviewStats = {
-  activePolicies: mockPolicies.filter((policy) => policy.enabled).length,
+export const mockOverviewSummary: OverviewSummary = {
+  activePolicies: mockPolicies.filter((policy) => policy.enabled && !policy.isTemplate).length,
 };
 
-export const mockOverviewSummary: OverviewSummary = {
-  activePolicies: mockOverview.activePolicies,
+export const mockOverview: OverviewStats = {
+  activePolicies: mockOverviewSummary.activePolicies,
 };
 
 function generateTrafficValues(count: number, base: number, step: number) {
@@ -679,6 +679,8 @@ export function buildMockBackupConfidence(): BackupConfidenceData {
 export function buildMockBackupHealth(): BackupHealthData {
   return {
     generatedAt: new Date().toISOString(),
+    staleThresholdHours: 48,
+    latestVerifiedBackupAt: formatDate(18),
     staleNodes: [
       { nodeId: 24, nodeName: "天津网关-2", lastBackupAt: formatDate(60 * 54), hoursSince: 54 }
     ],

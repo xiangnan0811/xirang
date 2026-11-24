@@ -2,10 +2,17 @@ import type { OverviewStats, OverviewSummary, PolicyRecord } from "@/types/domai
 
 export function deriveOverview(
   policies: PolicyRecord[],
-  summary?: OverviewSummary | null
+  summary?: OverviewSummary | null,
+  policiesLoaded = true
 ): OverviewStats {
+  if (summary) {
+    return { activePolicies: summary.activePolicies };
+  }
+  if (!policiesLoaded) {
+    return { activePolicies: null };
+  }
   return {
-    activePolicies: summary?.activePolicies ?? policies.filter((policy) => policy.enabled).length,
+    activePolicies: policies.filter((policy) => policy.enabled && !policy.isTemplate).length,
   };
 }
 

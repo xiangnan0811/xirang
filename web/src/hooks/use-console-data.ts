@@ -62,6 +62,7 @@ export interface ConsoleDataState {
   warning: string | null;
   lastSyncedAt: string;
   refreshVersion: number;
+  overviewPollVersion: number;
   globalSearch: string;
   setGlobalSearch: (keyword: string) => void;
   refresh: () => void;
@@ -140,6 +141,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   const [globalSearch, setGlobalSearch] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState(() => formatTimeOnly(new Date().toISOString()));
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [overviewPollVersion, setOverviewPollVersion] = useState(0);
   const loadAbortRef = useRef<AbortController | null>(null);
   const inventoryVersionRef = useRef(0);
   const taskVersionRef = useRef(0);
@@ -320,17 +322,32 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     };
   }, [authTransitioning, loadData, seenGeneration]);
 
+  // 稳定 refresh：避免在每次渲染时新建函数，从而破坏
+  // app-shell.tsx 中 sharedContextValue 的 useMemo（其依赖项含 refresh）。
+  const refresh = useCallback(() => {
+    setRefreshVersion((current) => current + 1);
+    void loadData();
+  }, [loadData]);
+
   const [refreshIntervalSeconds] = useRefreshInterval();
 
   // 自动刷新：间隔取自响应式偏好（改设置即时重建定时器，无需重新挂载）；
+  // 仅推进 overviewPollVersion 同步刷新概览保护态势、流量、最近任务和健康事件，
+  // 避免推进全局 refreshVersion 误重置通知中心选区或备份文件列表分页；
   // 后台标签页不轮询，切回前台立即补拉一次；关闭刷新（<=0）时停止。
   useVisibilityPolling(
-    () => { void loadData(); },
+    () => {
+      setOverviewPollVersion((current) => current + 1);
+      void loadData();
+    },
     refreshIntervalSeconds > 0 ? refreshIntervalSeconds * 1000 : 0,
     { enabled: Boolean(token) && !authTransitioning, immediate: false }
   );
 
-  const overview = useMemo(() => deriveOverview(policies, overviewSummary), [overviewSummary, policies]);
+  const overview = useMemo(
+    () => deriveOverview(policies, overviewSummary, policiesDomain.policiesLoaded),
+    [overviewSummary, policies, policiesDomain.policiesLoaded]
+  );
 
   const fetchOverviewTraffic = useCallback(async (window: OverviewTrafficWindow, options?: { signal?: AbortSignal }): Promise<OverviewTrafficSeries> => {
     if (!token) {
@@ -365,13 +382,6 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     return apiClient.getHealthIncidentTimeline(token, { windowHours: options?.windowHours, signal: options?.signal });
   }, [demoModeEnabled, token]);
 
-  // 稳定 refresh：避免在每次渲染时新建函数，从而破坏
-  // app-shell.tsx 中 sharedContextValue 的 useMemo（其依赖项含 refresh）。
-  const refresh = useCallback(() => {
-    setRefreshVersion((current) => current + 1);
-    void loadData();
-  }, [loadData]);
-
   return {
     overview,
     nodes: nodesDomain.nodes,
@@ -393,6 +403,7 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     warning,
     lastSyncedAt,
     refreshVersion,
+    overviewPollVersion,
     globalSearch,
     setGlobalSearch,
     fetchOverviewTraffic,

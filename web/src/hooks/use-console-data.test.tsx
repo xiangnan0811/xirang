@@ -463,6 +463,27 @@ describe("useConsoleData", () => {
     expect(result.current.overview.activePolicies).toBe(4);
   });
 
+  it("摘要失败且策略列表未加载时 activePolicies 返回 null 而非 0，加载后回退到真实数量", async () => {
+    apiClientMock.getOverviewSummary.mockRejectedValueOnce(new Error("overview down"));
+    apiClientMock.getPolicies.mockResolvedValueOnce([]);
+
+    const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.policiesLoaded).toBe(false);
+    expect(result.current.overview.activePolicies).toBeNull();
+
+    await act(async () => {
+      await result.current.refreshPolicies();
+    });
+
+    expect(result.current.policiesLoaded).toBe(true);
+    expect(result.current.overview.activePolicies).toBe(0);
+  });
+
   it("refresh 会推进 refreshVersion", async () => {
     const { result } = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
 
@@ -941,6 +962,32 @@ describe("useConsoleData", () => {
       await changeVisibility(true);
       await changeVisibility(false);
       expect(overviewLoads()).toBe(3);
+    });
+
+    it("advances overviewPollVersion on scheduled polling ticks without bumping global refreshVersion", async () => {
+      const preference = renderHook(() => useRefreshInterval());
+      act(() => {
+        preference.result.current[1]("30");
+      });
+      const consoleHook = renderHook(() => useConsoleData("token-1"), { wrapper: ConsoleAuth });
+      await advance(0);
+
+      expect(consoleHook.result.current.refreshVersion).toBe(0);
+      expect(consoleHook.result.current.overviewPollVersion).toBe(0);
+      expect(overviewLoads()).toBe(1);
+
+      await advance(30_000);
+      expect(overviewLoads()).toBe(2);
+      expect(consoleHook.result.current.overviewPollVersion).toBe(1);
+      // Global refreshVersion must stay unchanged so non-overview pages (AlertCenter selection,
+      // backup file source pagination) are not reset by background auto-refresh.
+      expect(consoleHook.result.current.refreshVersion).toBe(0);
+
+      await act(async () => {
+        consoleHook.result.current.refresh();
+      });
+      expect(consoleHook.result.current.refreshVersion).toBe(1);
+      expect(consoleHook.result.current.overviewPollVersion).toBe(1);
     });
 
     it.each(["abc", "-30", "0abc", "0.5", "-0.5", "-0", " 0", "1e3", "2147484"])("invalid stored interval %j falls back to the 60s default", async (stored) => {

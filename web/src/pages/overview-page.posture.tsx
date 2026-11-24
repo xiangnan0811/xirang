@@ -2,7 +2,6 @@ import { useTranslation } from "react-i18next";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
-import { LoadingState } from "@/components/ui/loading-state";
 import { StatCardsSection, type StatCardItem } from "@/components/ui/stat-cards-section";
 import { formatRelativeTime, formatTime } from "@/lib/date-utils";
 import { cn, getLocale } from "@/lib/utils";
@@ -13,10 +12,11 @@ import {
 } from "@/pages/overview-page.posture.utils";
 
 export type OverviewPostureProps = {
-  activePolicies: number;
+  activePolicies: number | null;
   confidence: BackupConfidenceData | null;
   health: BackupHealthData | null;
-  loading: boolean;
+  confidenceLoading: boolean;
+  healthLoading: boolean;
   confidenceError: string | null;
   healthError: string | null;
   onRetry: () => void;
@@ -34,20 +34,28 @@ export function OverviewPosture({
   activePolicies,
   confidence,
   health,
-  loading,
+  confidenceLoading,
+  healthLoading,
   confidenceError,
   healthError,
   onRetry,
 }: OverviewPostureProps) {
   const { t } = useTranslation();
 
-  const hasAnyData = Boolean(confidence || health);
   const hasError = Boolean(confidenceError || healthError);
-  const allErrored = Boolean(confidenceError && healthError);
-  const isInitialLoading = loading && !hasAnyData && !hasError;
-  const isRefreshing = loading && hasAnyData;
+  const retrying = Boolean((confidenceError && confidenceLoading) || (healthError && healthLoading));
+  // A source still awaiting its first response renders as pending; failed sources show unavailable.
+  const confidencePending = confidenceLoading && !confidence && !confidenceError;
+  const healthPending = healthLoading && !health && !healthError;
+  const pendingDescription = (
+    <span className="inline-flex items-center gap-1.5 font-normal">
+      <Loader2 className="size-3 animate-spin" aria-hidden />
+      {t("common.loading")}
+    </span>
+  );
+  const healthMissingDescription = healthPending ? pendingDescription : t("overview.unavailable");
 
-  const latestVerifiedAt = getLatestVerifiedBackupTime(confidence, health);
+  const latestVerifiedAt = getLatestVerifiedBackupTime(health);
   const locale = getLocale().startsWith("zh") ? "zh" : "en";
   const combinedErrors = [confidenceError, healthError].filter(Boolean).join(" · ");
 
@@ -77,21 +85,28 @@ export function OverviewPosture({
       ].filter((item) => item.count > 0)
     : [];
 
+  const staleThresholdHours = health?.staleThresholdHours ?? 48;
   const staleFooter = (() => {
-    if (!health) return "—";
+    if (!health) return healthMissingDescription;
     if (health.summary.totalNodes === 0) return t("overview.postureNoNodes");
     if (health.staleNodes.length === 0) return t("overview.postureAllNodesFresh");
     if (health.summary.neverBackedUp > 0 && health.summary.stale48h > 0) {
       return t("overview.postureStaleBreakdown", {
         never: health.summary.neverBackedUp,
         stale: health.summary.stale48h,
+        hours: staleThresholdHours,
       });
     }
     if (health.summary.neverBackedUp > 0) {
       return t("overview.postureStaleNeverOnly", { never: health.summary.neverBackedUp });
     }
-    return t("overview.postureStale48hOnly", { stale: health.summary.stale48h });
+    return t("overview.postureStale48hOnly", {
+      stale: health.summary.stale48h,
+      hours: staleThresholdHours,
+    });
   })();
+
+  const latestVerifiedUnavailable = !health;
 
   const unverified = confidence ? isConfidenceUnverified(confidence) : false;
 
@@ -102,7 +117,7 @@ export function OverviewPosture({
       href: "/app/backups/overview",
       icon: (
         <span className="inline-flex items-center gap-1.5">
-          {isRefreshing ? <Loader2 className="size-3 animate-spin" aria-hidden /> : null}
+          {confidenceLoading && confidence ? <Loader2 className="size-3 animate-spin" aria-hidden /> : null}
           <ArrowRight
             className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary"
             aria-hidden
@@ -128,7 +143,7 @@ export function OverviewPosture({
           ? "success"
           : undefined,
       description: !confidence ? (
-        t("overview.unavailable")
+        confidencePending ? pendingDescription : t("overview.unavailable")
       ) : confidenceBreakdown.length > 0 ? (
         <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 font-normal">
           {confidenceBreakdown.map((item) => (
@@ -149,12 +164,16 @@ export function OverviewPosture({
       title: t("overview.postureLatestVerifiedBackup"),
       value: latestVerifiedAt
         ? formatRelativeTime(latestVerifiedAt, locale)
-        : t("overview.postureNoVerifiedBackup"),
-      valueClassName: "text-xl",
+        : latestVerifiedUnavailable
+          ? "—"
+          : t("overview.postureNoVerifiedBackup"),
+      valueClassName: latestVerifiedUnavailable ? "text-muted-foreground" : "text-xl",
       description: latestVerifiedAt ? (
         <time dateTime={latestVerifiedAt} title={formatTime(latestVerifiedAt)} className="font-normal tabular-nums">
           {formatTime(latestVerifiedAt)}
         </time>
+      ) : latestVerifiedUnavailable ? (
+        healthMissingDescription
       ) : (
         "—"
       ),
@@ -182,13 +201,16 @@ export function OverviewPosture({
           aria-hidden
         />
       ),
-      value: activePolicies,
+      value: activePolicies === null ? "—" : activePolicies,
+      valueClassName: activePolicies === null ? "text-muted-foreground" : undefined,
       tone: health && health.summary.policiesDegraded > 0 ? "destructive" : undefined,
       description:
         health && health.summary.policiesDegraded > 0 ? (
           <span className="tabular-nums">
             {t("overview.postureDegradedCount", { count: health.summary.policiesDegraded })}
           </span>
+        ) : activePolicies === null ? (
+          t("overview.unavailable")
         ) : (
           <span className="font-normal transition-colors group-hover:text-primary">
             {t("overview.postureActivePoliciesHint")}
@@ -205,27 +227,23 @@ export function OverviewPosture({
         <InlineAlert tone="warning" title={t("overview.postureErrorTitle")}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span>{combinedErrors}</span>
-            <Button type="button" size="sm" variant="outline" onClick={onRetry} disabled={loading}>
+            <Button type="button" size="sm" variant="outline" onClick={onRetry} disabled={retrying}>
               {t("common.retry")}
             </Button>
           </div>
         </InlineAlert>
       ) : null}
 
-      {isInitialLoading ? (
-        <LoadingState
-          rows={2}
-          title={t("overview.postureLoading")}
-          className="rounded-lg border border-border bg-card shadow-sm"
-        />
-      ) : !allErrored ? (
-        <StatCardsSection
-          as="div"
-          items={postureItems}
-          className="gap-3"
-          cardClassName="group flex flex-col justify-between"
-        />
-      ) : null}
+      <p role="status" className="sr-only">
+        {confidencePending || healthPending ? t("overview.postureLoading") : null}
+      </p>
+
+      <StatCardsSection
+        as="div"
+        items={postureItems}
+        className="gap-3"
+        cardClassName="group flex flex-col justify-between"
+      />
     </section>
   );
 }

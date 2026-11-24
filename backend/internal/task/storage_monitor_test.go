@@ -275,3 +275,150 @@ func TestCheckLocalStorageSpace_TemplatePolicySkipped(t *testing.T) {
 		t.Fatalf("模板策略不应触发存储告警，实际告警数: %d", count)
 	}
 }
+
+func TestCheckLocalStorageSpace_PreservesAmbiguousHistoricalAlertsWhenTemplatesExist(t *testing.T) {
+	t.Run("preserves open alert from deleted regular policy even when template shares sanitized code", func(t *testing.T) {
+		db := openStorageMonitorTestDB(t)
+		m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+		shutdownManagerOnCleanup(t, m)
+
+		// 模拟普通策略触发告警后被删除，仅剩内置模板策略存在。
+		templateDir := t.TempDir()
+		templatePolicy := model.Policy{
+			Name: "template-only-path", SourcePath: "/src/1", TargetPath: templateDir,
+			CronSpec: "@daily", Enabled: false, IsTemplate: true,
+		}
+		if err := model.CreatePolicyWithExplicitValues(db, &templatePolicy, "enabled", "is_template"); err != nil {
+			t.Fatalf("创建模板策略失败: %v", err)
+		}
+
+		const originalMsg = "已删除普通策略触发的存储空间告警"
+		deletedRegularSanitizedAlert := model.Alert{
+			Severity:  "warning",
+			Status:    "open",
+			ErrorCode: "XR-STORAGE-LOW:" + sanitizeTaskLogMessage(templateDir),
+			Message:   originalMsg,
+		}
+		deletedRegularRawAlert := model.Alert{
+			Severity:  "warning",
+			Status:    "open",
+			ErrorCode: "XR-STORAGE-LOW:" + templateDir,
+			Message:   originalMsg,
+		}
+		for _, alert := range []*model.Alert{&deletedRegularSanitizedAlert, &deletedRegularRawAlert} {
+			if err := db.Create(alert).Error; err != nil {
+				t.Fatalf("创建历史告警失败: %v", err)
+			}
+		}
+
+		t.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "999999")
+		t.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "100")
+		t.Setenv("ALERT_DEDUP_WINDOW", "0")
+
+		m.checkLocalStorageSpace()
+
+		for _, id := range []uint{deletedRegularSanitizedAlert.ID, deletedRegularRawAlert.ID} {
+			var got model.Alert
+			if err := db.First(&got, id).Error; err != nil {
+				t.Fatalf("读取历史告警失败: %v", err)
+			}
+			if got.Status != "open" || got.Message != originalMsg {
+				t.Fatalf("缺少来源依据时不得猜测关闭历史存储告警或覆盖正文: id=%d status=%s msg=%q", id, got.Status, got.Message)
+			}
+		}
+	})
+
+	t.Run("preserves disabled regular policy alert when template shares sanitized code", func(t *testing.T) {
+		db := openStorageMonitorTestDB(t)
+		m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+		shutdownManagerOnCleanup(t, m)
+
+		disabledRegularDir := t.TempDir()
+		templateDir := t.TempDir()
+		disabledRegular := model.Policy{
+			Name: "disabled-regular", SourcePath: "/src/reg", TargetPath: disabledRegularDir,
+			CronSpec: "@daily", Enabled: false, IsTemplate: false,
+		}
+		templatePolicy := model.Policy{
+			Name: "template-sibling", SourcePath: "/src/tmpl", TargetPath: templateDir,
+			CronSpec: "@daily", Enabled: false, IsTemplate: true,
+		}
+		for _, p := range []*model.Policy{&disabledRegular, &templatePolicy} {
+			if err := model.CreatePolicyWithExplicitValues(db, p, "enabled", "is_template"); err != nil {
+				t.Fatalf("创建策略失败: %v", err)
+			}
+		}
+
+		const originalMsg = "普通策略触发的存储空间告警"
+		regularAlert := model.Alert{
+			Severity:  "warning",
+			Status:    "open",
+			ErrorCode: "XR-STORAGE-LOW:" + sanitizeTaskLogMessage(disabledRegularDir),
+			Message:   originalMsg,
+		}
+		if err := db.Create(&regularAlert).Error; err != nil {
+			t.Fatalf("创建普通策略告警失败: %v", err)
+		}
+
+		t.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "999999")
+		t.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "100")
+		t.Setenv("ALERT_DEDUP_WINDOW", "0")
+
+		m.checkLocalStorageSpace()
+
+		var got model.Alert
+		if err := db.First(&got, regularAlert.ID).Error; err != nil {
+			t.Fatalf("读取告警失败: %v", err)
+		}
+		if got.Status != "open" || got.Message != originalMsg {
+			t.Fatalf("不得误关已禁用普通策略的告警或覆盖正文: status=%s msg=%q", got.Status, got.Message)
+		}
+	})
+
+	t.Run("resolves shared sanitized code once active regular local policy recovers", func(t *testing.T) {
+		db := openStorageMonitorTestDB(t)
+		m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+		shutdownManagerOnCleanup(t, m)
+
+		activeDir := t.TempDir()
+		templateDir := t.TempDir()
+		activePolicy := model.Policy{
+			Name: "active-healthy", SourcePath: "/src/a", TargetPath: activeDir,
+			CronSpec: "@daily", Enabled: true, IsTemplate: false,
+		}
+		templatePolicy := model.Policy{
+			Name: "template-sibling", SourcePath: "/src/t", TargetPath: templateDir,
+			CronSpec: "@daily", Enabled: false, IsTemplate: true,
+		}
+		for _, p := range []*model.Policy{&activePolicy, &templatePolicy} {
+			if err := model.CreatePolicyWithExplicitValues(db, p, "enabled", "is_template"); err != nil {
+				t.Fatalf("创建策略失败: %v", err)
+			}
+		}
+
+		openAlert := model.Alert{
+			Severity:  "warning",
+			Status:    "open",
+			ErrorCode: "XR-STORAGE-LOW:" + sanitizeTaskLogMessage(activeDir),
+			Message:   "旧存储空间告警",
+		}
+		if err := db.Create(&openAlert).Error; err != nil {
+			t.Fatalf("创建告警失败: %v", err)
+		}
+
+		// 活动策略空间恢复正常后，正常走恢复逻辑解除告警。
+		t.Setenv("BACKUP_STORAGE_MIN_FREE_GB", "0")
+		t.Setenv("BACKUP_STORAGE_MAX_USAGE_PCT", "100")
+		t.Setenv("ALERT_DEDUP_WINDOW", "0")
+
+		m.checkLocalStorageSpace()
+
+		var got model.Alert
+		if err := db.First(&got, openAlert.ID).Error; err != nil {
+			t.Fatalf("读取告警失败: %v", err)
+		}
+		if got.Status != "resolved" {
+			t.Fatalf("活动策略空间恢复后告警应自动 resolved，实际: %s", got.Status)
+		}
+	})
+}

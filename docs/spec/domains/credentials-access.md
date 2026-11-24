@@ -449,6 +449,7 @@ A→B→A 清除草稿，迟到结果不再请求、下载或 toast；abort 不�
 SQLite 使用同一连接上的 deferred 读事务，PostgreSQL 使用
 `REPEATABLE READ READ ONLY`；整条预览链不得写表、伪写取锁或改配置/凭据文件。
 预览与导入共享输入归一化、候选判断和完整依赖图规则，不以事务回滚模拟预览。
+策略仍被任务引用时，预览与导入都拒绝将其转为模板。新任务关联及已有任务变更关联也拒绝模板，包含同一导入中的模板。真实导入在写入锁下重新检查这些条件。导入补偿遇到提交后新增的任务关联时拒绝恢复模板状态。
 
 响应的 `basis=current_snapshot` 表明只是当前快照：`entities` 按
 `nodes/ssh_keys/policies/tasks/system_settings` 固定顺序列出输入数及预计

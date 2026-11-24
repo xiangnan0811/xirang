@@ -182,6 +182,13 @@
           ]
         },
         {
+          "name": "TestBackupHealth_TrendLocalCalendarBoundaries",
+          "required_paths": [
+            "TestBackupHealth_TrendLocalCalendarBoundaries/postgres/spring-forward",
+            "TestBackupHealth_TrendLocalCalendarBoundaries/postgres/fall-back"
+          ]
+        },
+        {
           "name": "TestBackupHealth_TrendSeparatesFactAndUnprovenSameDayRunsPostgres",
           "required_paths": [
             "TestBackupHealth_TrendSeparatesFactAndUnprovenSameDayRunsPostgres"
@@ -548,6 +555,12 @@
           "required_paths": []
         },
         {
+          "name": "TestConfigImportPolicyOnlyRejectsLinkedConversion",
+          "required_paths": [
+            "TestConfigImportPolicyOnlyRejectsLinkedConversion/postgres"
+          ]
+        },
+        {
           "name": "TestConfigImportPostPersistRuntimeFailureRestoresEntireImport",
           "required_paths": []
         },
@@ -838,9 +851,28 @@
           "required_paths": []
         },
         {
+          "name": "TestConfigImportRollbackDetachedTaskPolicyState",
+          "required_paths": [
+            "TestConfigImportRollbackDetachedTaskPolicyState/postgres/ordinary_converted",
+            "TestConfigImportRollbackDetachedTaskPolicyState/postgres/legacy_template"
+          ]
+        },
+        {
           "name": "TestConfigImportRollbackKeepsCurrentTargetClaimAcrossConnections",
           "required_paths": [
             "TestConfigImportRollbackKeepsCurrentTargetClaimAcrossConnections/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportRollbackRejectsNewTemplateLink",
+          "required_paths": [
+            "TestConfigImportRollbackRejectsNewTemplateLink/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportRollbackTemplateOwnershipContention",
+          "required_paths": [
+            "TestConfigImportRollbackTemplateOwnershipContention/postgres"
           ]
         },
         {
@@ -872,6 +904,12 @@
         {
           "name": "TestConfigImportTaskCreateFailureReturnsGenericInternalErrorAndRollsBack",
           "required_paths": []
+        },
+        {
+          "name": "TestConfigImportTemplatePolicyDecisions",
+          "required_paths": [
+            "TestConfigImportTemplatePolicyDecisions/postgres"
+          ]
         },
         {
           "name": "TestConfigImportTransitionsBackupAssetEnableBeforePersistingSettings",
@@ -964,6 +1002,23 @@
           ]
         },
         {
+          "name": "TestOverviewTrafficCapPreservesNewestBuckets",
+          "required_paths": [
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/sample/exact_limit",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/sample/usable_trailing_bucket",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/sample/same_timestamp_cutoff",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/sample/overflow_in_trailing_bucket",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/started/exact_limit",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/started/usable_trailing_bucket",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/started/same_timestamp_cutoff",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/started/overflow_in_trailing_bucket",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/failed/exact_limit",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/failed/usable_trailing_bucket",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/failed/same_timestamp_cutoff",
+            "TestOverviewTrafficCapPreservesNewestBuckets/postgres/failed/overflow_in_trailing_bucket"
+          ]
+        },
+        {
           "name": "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases",
           "required_paths": [
             "TestR306PolicyCreateValuesAndSchedulesAcrossDatabases/postgres",
@@ -998,6 +1053,12 @@
           "name": "TestTaskFailureSummaryPostgres",
           "required_paths": [
             "TestTaskFailureSummaryPostgres"
+          ]
+        },
+        {
+          "name": "TestTaskReadLatestOrdinaryRunCurrentNodeSQLitePostgres",
+          "required_paths": [
+            "TestTaskReadLatestOrdinaryRunCurrentNodeSQLitePostgres/postgres"
           ]
         },
         {

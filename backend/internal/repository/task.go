@@ -42,6 +42,10 @@ type TaskRepository interface {
 	// return ErrTaskPolicyNotFound/ErrTaskNodeNotFound.
 	LockTaskUpdateReferences(ctx context.Context, taskID, nodeID uint, policyID *uint) error
 
+	// PolicyIsTemplate reads a policy in the current transaction after the
+	// ownership lock has been acquired.
+	PolicyIsTemplate(ctx context.Context, id uint) (bool, error)
+
 	LockIDsForUpdate(ctx context.Context, ids []uint) error
 
 	// LockTargetOwnership serializes all local target ownership decisions for

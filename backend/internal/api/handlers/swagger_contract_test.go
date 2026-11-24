@@ -14,6 +14,7 @@ type generatedSwaggerContractSchema struct {
 	Required   []string                                  `json:"required"`
 	Properties map[string]generatedSwaggerContractSchema `json:"properties"`
 	AllOf      []generatedSwaggerContractSchema          `json:"allOf"`
+	Nullable   bool                                      `json:"x-nullable"`
 }
 
 type generatedSwaggerContractDocument struct {
@@ -74,6 +75,52 @@ func TestGeneratedSwaggerPublishesNodeUpdateEnvelopeAndDrillUnavailable(t *testi
 			t.Error("generated Swagger POST /policies/{id}/drill-trigger missing 503 response")
 		}
 	})
+}
+
+func TestGeneratedSwaggerPublishesOverviewResponseCoverage(t *testing.T) {
+	var document generatedSwaggerContractDocument
+	if err := json.Unmarshal([]byte(docs.SwaggerInfo.ReadDoc()), &document); err != nil {
+		t.Fatalf("decode generated Swagger: %v", err)
+	}
+	for _, test := range []struct {
+		path       string
+		definition string
+	}{
+		{"/overview/backup-health", "backupHealthData"},
+		{"/overview/storage-usage", "storageUsageResponse"},
+		{"/overview/traffic", "overviewTrafficResponse"},
+	} {
+		want := "#/definitions/internal_api_handlers." + test.definition
+		if got := generatedSwaggerDataRef(document.Paths[test.path]["get"].Responses["200"].Schema); got != want {
+			t.Errorf("GET %s schema data ref=%q, want %q", test.path, got, want)
+		}
+	}
+	property := func(definition, name, wantType string) generatedSwaggerContractSchema {
+		t.Helper()
+		item := document.Definitions["internal_api_handlers."+definition].Properties[name]
+		if item.Type != wantType {
+			t.Errorf("%s.%s type=%q, want %q", definition, name, item.Type, wantType)
+		}
+		return item
+	}
+	if !property("backupHealthData", "latest_verified_backup_at", "string").Nullable ||
+		!property("backupHealthStaleNode", "last_backup_at", "string").Nullable {
+		t.Error("backup health timestamp fields must allow null")
+	}
+	property("backupHealthData", "stale_threshold_hours", "integer")
+	property("storageUsageResponse", "mount_points", "array")
+	property("storageUsageResponse", "per_node", "array")
+	for _, field := range []struct{ definition, name string }{
+		{"storageUsageResponse", "incomplete"},
+		{"storageUsageResponse", "mount_points_incomplete"},
+		{"perNodeUsage", "incomplete"},
+		{"overviewTrafficPoint", "incomplete"},
+	} {
+		property(field.definition, field.name, "boolean")
+		if slices.Contains(document.Definitions["internal_api_handlers."+field.definition].Required, field.name) {
+			t.Errorf("%s.%s must remain optional", field.definition, field.name)
+		}
+	}
 }
 
 func generatedSwaggerDataRef(schema generatedSwaggerContractSchema) string {

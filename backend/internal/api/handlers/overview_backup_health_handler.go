@@ -9,15 +9,53 @@ import (
 	"strings"
 	"time"
 	"xirang/backend/internal/backuphealth"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 )
 
 type BackupHealthHandler struct {
-	db *gorm.DB
+	db  *gorm.DB
+	now func() time.Time
+}
+
+// backupHealthData describes the response data, including the empty fleet view.
+type backupHealthData struct {
+	StaleNodes             []backupHealthStaleNode      `json:"stale_nodes"`
+	StaleNodeCount         int                          `json:"stale_node_count"`
+	StaleThresholdHours    int                          `json:"stale_threshold_hours"`
+	LatestVerifiedBackupAt *string                      `json:"latest_verified_backup_at" extensions:"x-nullable"`
+	DegradedPolicies       []backupHealthDegradedPolicy `json:"degraded_policies"`
+	DegradedCount          int                          `json:"degraded_count"`
+	Trend                  []backupHealthTrendPoint     `json:"trend"`
+	Summary                backupHealthSummary          `json:"summary"`
+	GeneratedAt            string                       `json:"generated_at"`
+}
+
+type backupHealthStaleNode struct {
+	ID           uint       `json:"id"`
+	Name         string     `json:"name"`
+	LastBackupAt *time.Time `json:"last_backup_at" extensions:"x-nullable"`
+}
+
+type backupHealthDegradedPolicy struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+}
+
+type backupHealthTrendPoint struct {
+	Date    string `json:"date"`
+	Total   int    `json:"total"`
+	Success int    `json:"success"`
+}
+
+type backupHealthSummary struct {
+	TotalNodes    int64 `json:"total_nodes"`
+	TotalPolicies int64 `json:"total_policies"`
+	HealthyNodes  int64 `json:"healthy_nodes"`
 }
 
 func NewBackupHealthHandler(db *gorm.DB) *BackupHealthHandler {
-	return &BackupHealthHandler{db: db}
+	return &BackupHealthHandler{db: db, now: time.Now}
 }
 
 // Get godoc
@@ -26,13 +64,13 @@ func NewBackupHealthHandler(db *gorm.DB) *BackupHealthHandler {
 // @Tags         overview
 // @Security     Bearer
 // @Produce      json
-// @Success      200  {object}  handlers.Response
+// @Success      200  {object}  handlers.Response{data=backupHealthData}
 // @Failure      401  {object}  handlers.Response
 // @Router       /overview/backup-health [get]
 func (h *BackupHealthHandler) Get(c *gin.Context) {
 	c.Header("Cache-Control", "private, no-store")
 
-	now := time.Now()
+	now := h.now()
 	staleHours := 48
 	if v := os.Getenv("BACKUP_STALE_THRESHOLD_HOURS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -48,18 +86,13 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 	}
 	// Operator with zero owned nodes: empty fleet view.
 	if needFilter && len(ownedIDs) == 0 {
-		respondOK(c, emptyBackupHealth(now))
+		respondOK(c, emptyBackupHealth(now, staleHours))
 		return
 	}
 
 	ctx := c.Request.Context()
 	// 1. 备份过期节点：只读取已验证的、分类完成事实。旧的
 	// nodes.last_backup_at 会在迁移时保留为 unverified，不能让节点变新鲜。
-	type staleNode struct {
-		ID           uint       `json:"id"`
-		Name         string     `json:"name"`
-		LastBackupAt *time.Time `json:"last_backup_at"`
-	}
 	var nodes []model.Node
 	nodeQ := h.db.WithContext(ctx).Model(&model.Node{}).Select("id, name")
 	if needFilter {
@@ -78,24 +111,25 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
-	staleNodes := make([]staleNode, 0, len(nodes))
+	staleNodes := make([]backupHealthStaleNode, 0, len(nodes))
+	var latestVerifiedBackupAt *time.Time
 	for _, node := range nodes {
 		var lastBackupAt *time.Time
 		if fact, ok := latestFacts[node.ID]; ok {
 			completedAt := fact.CompletedAt.UTC()
 			lastBackupAt = &completedAt
+			if latestVerifiedBackupAt == nil || completedAt.After(*latestVerifiedBackupAt) {
+				ts := completedAt
+				latestVerifiedBackupAt = &ts
+			}
 		}
 		if lastBackupAt == nil || lastBackupAt.Before(staleThreshold) {
-			staleNodes = append(staleNodes, staleNode{ID: node.ID, Name: node.Name, LastBackupAt: lastBackupAt})
+			staleNodes = append(staleNodes, backupHealthStaleNode{ID: node.ID, Name: node.Name, LastBackupAt: lastBackupAt})
 		}
 	}
 
 	// 2. 降级策略：最近 3 次 task_run 全部失败的策略
-	// Operator: only tasks on owned nodes (union: policy visible if any owned node run).
-	type degradedPolicy struct {
-		ID   uint   `json:"id"`
-		Name string `json:"name"`
-	}
+	// Operator: require current policy ownership and owned-node run snapshots.
 	type policyRunInfo struct {
 		PolicyID   uint   `gorm:"column:policy_id"`
 		PolicyName string `gorm:"column:policy_name"`
@@ -121,8 +155,9 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		WHERE p.enabled = ? AND p.is_template = ? AND ` + backuphealth.ClassifiedAttemptPredicate("tr")
 	degradedArgs := []any{true, false}
 	if needFilter {
-		degradedSQL += ` AND tr.node_id_snapshot IN ?`
-		degradedArgs = append(degradedArgs, ownedIDs)
+		degradedSQL = `WITH owned_nodes AS (SELECT node_id FROM node_owners WHERE user_id = ?) ` + degradedSQL
+		degradedSQL += ` AND tr.node_id_snapshot IN (SELECT node_id FROM owned_nodes) AND EXISTS (SELECT 1 FROM policy_nodes pn WHERE pn.policy_id = p.id AND pn.node_id IN (SELECT node_id FROM owned_nodes))`
+		degradedArgs = append([]any{middleware.CurrentUserID(c)}, degradedArgs...)
 	}
 	degradedSQL += `
 		ORDER BY t.policy_id, tr.created_at DESC`
@@ -131,7 +166,7 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		return
 	}
 
-	var degradedPolicies []degradedPolicy
+	degradedPolicies := make([]backupHealthDegradedPolicy, 0)
 	policyRuns := make(map[uint][]string)
 	policyNames := make(map[uint]string)
 	for _, ri := range runInfos {
@@ -152,41 +187,47 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 			}
 		}
 		if allFailed {
-			degradedPolicies = append(degradedPolicies, degradedPolicy{ID: pid, Name: policyNames[pid]})
+			degradedPolicies = append(degradedPolicies, backupHealthDegradedPolicy{ID: pid, Name: policyNames[pid]})
 		}
 	}
 
 	// 3. 7 天趋势：按日期分组统计（operator 仅 owned 节点上的 task_runs）
-	type trendPoint struct {
-		Date    string `json:"date"`
-		Total   int    `json:"total"`
-		Success int    `json:"success"`
-	}
 	loc := now.Location()
 	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	trendStart := startOfToday.AddDate(0, 0, -6)
 	trendEnd := startOfToday.AddDate(0, 0, 1)
 
-	trendMap := make(map[string]*trendPoint)
-	for i := 0; i < 7; i++ {
-		d := now.AddDate(0, 0, -i).Format("2006-01-02")
-		trendMap[d] = &trendPoint{Date: d}
+	trend := make([]backupHealthTrendPoint, 7)
+	trendMap := make(map[string]*backupHealthTrendPoint, len(trend))
+	for i := range trend {
+		day := trendStart.AddDate(0, 0, i).Format("2006-01-02")
+		trend[i].Date = day
+		trendMap[day] = &trend[i]
 	}
 	type trendRow struct {
 		Day    string `gorm:"column:day"`
 		Status string `gorm:"column:status"`
 		Cnt    int    `gorm:"column:cnt"`
 	}
+	// SQLite's UTC cutover stored whole-second text without an offset, while
+	// current writes include one. A whole-second bound compares correctly to both.
+	boundary := func(t time.Time) any {
+		utc := t.UTC()
+		if h.db.Dialector.Name() == "sqlite" {
+			return utc.Format("2006-01-02 15:04:05")
+		}
+		return utc
+	}
 	caseBranches := make([]string, 0, 7)
 	args := make([]interface{}, 0, 24)
 	for i := 6; i >= 0; i-- {
 		dayStart := startOfToday.AddDate(0, 0, -i)
-		dayEnd := dayStart.Add(24 * time.Hour)
+		dayEnd := dayStart.AddDate(0, 0, 1)
 		caseBranches = append(caseBranches, "WHEN tr.created_at >= ? AND tr.created_at < ? THEN ?")
-		args = append(args, dayStart, dayEnd, dayStart.Format("2006-01-02"))
+		args = append(args, boundary(dayStart), boundary(dayEnd), dayStart.Format("2006-01-02"))
 	}
 	caseExpr := "CASE " + strings.Join(caseBranches, " ") + " END"
-	args = append(args, trendStart, trendEnd)
+	args = append(args, boundary(trendStart), boundary(trendEnd))
 	trendSQL := fmt.Sprintf(`
 		SELECT classified.day, classified.status, COUNT(*) AS cnt
 		FROM (
@@ -224,14 +265,6 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 			tp.Success += item.Cnt
 		}
 	}
-	trend := make([]trendPoint, 0, 7)
-	for i := 6; i >= 0; i-- {
-		d := now.AddDate(0, 0, -i).Format("2006-01-02")
-		if tp, ok := trendMap[d]; ok {
-			trend = append(trend, *tp)
-		}
-	}
-
 	// 4. 汇总统计（scoped）
 	var totalNodes int64
 	nodeCountQ := h.db.WithContext(ctx).Model(&model.Node{})
@@ -257,45 +290,39 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		return
 	}
 
-	if staleNodes == nil {
-		staleNodes = []staleNode{}
-	}
-	if degradedPolicies == nil {
-		degradedPolicies = []degradedPolicy{}
+	var latestVerifiedBackupStr *string
+	if latestVerifiedBackupAt != nil {
+		formatted := latestVerifiedBackupAt.UTC().Format(time.RFC3339)
+		latestVerifiedBackupStr = &formatted
 	}
 
-	respondOK(c, gin.H{
-		"stale_nodes":       staleNodes,
-		"stale_node_count":  len(staleNodes),
-		"degraded_policies": degradedPolicies,
-		"degraded_count":    len(degradedPolicies),
-		"trend":             trend,
-		"summary": gin.H{
-			"total_nodes":    totalNodes,
-			"total_policies": totalPolicies,
-			"healthy_nodes":  totalNodes - int64(len(staleNodes)),
+	respondOK(c, backupHealthData{
+		StaleNodes:             staleNodes,
+		StaleNodeCount:         len(staleNodes),
+		StaleThresholdHours:    staleHours,
+		LatestVerifiedBackupAt: latestVerifiedBackupStr,
+		DegradedPolicies:       degradedPolicies,
+		DegradedCount:          len(degradedPolicies),
+		Trend:                  trend,
+		Summary: backupHealthSummary{
+			TotalNodes:    totalNodes,
+			TotalPolicies: totalPolicies,
+			HealthyNodes:  totalNodes - int64(len(staleNodes)),
 		},
-		"generated_at": now.Format(time.RFC3339),
+		GeneratedAt: now.Format(time.RFC3339),
 	})
 }
 
-func emptyBackupHealth(now time.Time) gin.H {
-	trend := make([]gin.H, 0, 7)
+func emptyBackupHealth(now time.Time, staleHours int) backupHealthData {
+	trend := make([]backupHealthTrendPoint, 0, 7)
 	for i := 6; i >= 0; i-- {
-		d := now.AddDate(0, 0, -i).Format("2006-01-02")
-		trend = append(trend, gin.H{"date": d, "total": 0, "success": 0})
+		trend = append(trend, backupHealthTrendPoint{Date: now.AddDate(0, 0, -i).Format("2006-01-02")})
 	}
-	return gin.H{
-		"stale_nodes":       []any{},
-		"stale_node_count":  0,
-		"degraded_policies": []any{},
-		"degraded_count":    0,
-		"trend":             trend,
-		"summary": gin.H{
-			"total_nodes":    0,
-			"total_policies": 0,
-			"healthy_nodes":  0,
-		},
-		"generated_at": now.Format(time.RFC3339),
+	return backupHealthData{
+		StaleNodes:          []backupHealthStaleNode{},
+		StaleThresholdHours: staleHours,
+		DegradedPolicies:    []backupHealthDegradedPolicy{},
+		Trend:               trend,
+		GeneratedAt:         now.Format(time.RFC3339),
 	}
 }

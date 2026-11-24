@@ -19,6 +19,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var errPolicyHasLinkedTasks = errors.New("存在关联任务，无法转换为模板")
+
 // drillTriggerer 定义恢复演练触发接口，由 *task.Manager 实现。
 // 独立接口便于测试注入，避免 handler 直接依赖 task 包。
 //
@@ -535,6 +537,7 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
 // @Router       /policies/{id} [put]
 func (h *PolicyHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -851,6 +854,26 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
 			return err
 		}
+		var current model.Policy
+		if err := tx.First(&current, p.ID).Error; err != nil {
+			return err
+		}
+		previousEnabled = current.Enabled
+		if req.Enabled == nil {
+			p.Enabled = current.Enabled
+		}
+		if req.IsTemplate == nil {
+			p.IsTemplate = current.IsTemplate
+		}
+		if !current.IsTemplate && p.IsTemplate {
+			var count int64
+			if err := tx.Model(&model.Task{}).Where("policy_id = ?", p.ID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return errPolicyHasLinkedTasks
+			}
+		}
 		if err := tx.Save(&p).Error; err != nil {
 			return err
 		}
@@ -897,10 +920,14 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errPolicyHasLinkedTasks) {
+			respondConflict(c, err.Error())
+			return
+		}
 		respondBadRequest(c, err.Error())
 		return
 	}
-	if h.runner != nil && !p.IsTemplate {
+	if h.runner != nil {
 		if err := policy.SyncPolicySchedules(h.db, h.runner, p.ID); err != nil {
 			respondInternalError(c, err)
 			return
@@ -950,6 +977,9 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
+			return err
+		}
 		// 先将关联任务标记为孤立并移除调度
 		if h.runner != nil {
 			if err := policy.OrphanTasksForPolicy(tx, h.runner, id); err != nil {
@@ -1327,6 +1357,9 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
+			return err
+		}
 		for _, pid := range req.PolicyIDs {
 			var p model.Policy
 			if err := tx.First(&p, pid).Error; err != nil {
@@ -1334,7 +1367,7 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 			}
 			previousEnabled := p.Enabled
 			p.Enabled = req.Enabled
-			if err := tx.Save(&p).Error; err != nil {
+			if err := tx.Model(&model.Policy{}).Where("id = ?", pid).Update("enabled", req.Enabled).Error; err != nil {
 				return err
 			}
 			if previousEnabled && !req.Enabled {

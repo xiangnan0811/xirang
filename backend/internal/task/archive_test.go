@@ -1370,6 +1370,10 @@ func (r *archiveRaceTaskRepository) LockTaskUpdateReferences(ctx context.Context
 	return r.inner.LockTaskUpdateReferences(ctx, taskID, nodeID, policyID)
 }
 
+func (r *archiveRaceTaskRepository) PolicyIsTemplate(ctx context.Context, id uint) (bool, error) {
+	return r.inner.PolicyIsTemplate(ctx, id)
+}
+
 func (r *archiveRaceTaskRepository) ExistsLiveByID(ctx context.Context, id uint) (bool, error) {
 	return r.inner.ExistsLiveByID(ctx, id)
 }

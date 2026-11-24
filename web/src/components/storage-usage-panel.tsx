@@ -22,6 +22,16 @@ import { apiClient } from "@/lib/api/client";
 import { getErrorMessage } from "@/lib/utils";
 import type { StorageUsageData } from "@/types/domain";
 
+function formatPartialLowerBoundGB(usedGB: number): string | null {
+  if (!Number.isFinite(usedGB) || usedGB <= 0) {
+    return null;
+  }
+  // Truncate downward to 2 decimals (matching backend floor) so a `≥` lower bound
+  // can never round upward past the confirmed measured bytes (e.g. 2.09 stays 2.09, not 2.1).
+  const floored = Math.floor((usedGB + 1e-12) * 100) / 100;
+  return floored > 0 ? floored.toFixed(2) : null;
+}
+
 function pctColor(pct: number): string {
   if (pct >= 90) return "bg-destructive";
   if (pct >= 70) return "bg-warning";
@@ -121,6 +131,19 @@ function StorageUsagePanelContent() {
   }
 
   const { mountPoints, perNode } = data;
+  const completePerNode = perNode.filter((item) => !item.incomplete);
+  const incompletePerNode = perNode.filter((item) => item.incomplete);
+  const mountPointsIncomplete = Boolean(data.mountPointsIncomplete);
+  const hasIncompleteScan =
+    Boolean(data.incomplete) || mountPointsIncomplete || incompletePerNode.length > 0;
+  const incompleteMessage =
+    mountPointsIncomplete && incompletePerNode.length > 0
+      ? t("storage.scanIncompleteDesc")
+      : mountPointsIncomplete
+        ? t("storage.mountPointsIncompleteDesc")
+        : incompletePerNode.length > 0
+          ? t("storage.perNodeIncompleteDesc")
+          : t("storage.scanIncompleteDesc");
 
   return (
     <DataSurface>
@@ -133,6 +156,12 @@ function StorageUsagePanelContent() {
         }
       />
       <DataSurfaceContent className="space-y-4">
+        {hasIncompleteScan ? (
+          <InlineAlert tone="warning" title={t("storage.scanIncompleteTitle")}>
+            {incompleteMessage}
+          </InlineAlert>
+        ) : null}
+
         {/* Mount points as progress bars */}
         {mountPoints.length > 0 && (
           <div className="space-y-3">
@@ -156,14 +185,14 @@ function StorageUsagePanelContent() {
           </div>
         )}
 
-        {/* Per-node storage bar chart */}
-        {perNode.length > 0 && (
+        {/* Per-node storage bar chart (complete measurements only) */}
+        {completePerNode.length > 0 && (
           <div>
             <p className="mb-2 text-xs font-medium text-muted-foreground">{t('storage.perNodeUsage')}</p>
             <div role="img" aria-label={t('storage.perNodeChartAriaLabel')}>
-              <ResponsiveContainer width="100%" height={Math.max(120, perNode.length * 28 + 40)}>
+              <ResponsiveContainer width="100%" height={Math.max(120, completePerNode.length * 28 + 40)}>
                 <BarChart
-                  data={perNode}
+                  data={completePerNode}
                   layout="vertical"
                   margin={{ top: 4, right: 4, left: 0, bottom: 4 }}
                 >
@@ -200,7 +229,35 @@ function StorageUsagePanelContent() {
           </div>
         )}
 
-        {mountPoints.length === 0 && perNode.length === 0 && (
+        {/* Incomplete per-node directory scans listed separately so partial/unscanned bytes never appear as complete totals */}
+        {incompletePerNode.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-muted-foreground">{t("storage.perNodeIncompleteHeading")}</p>
+            <ul className="divide-y divide-border/60 rounded-md border border-warning/30 bg-warning/5">
+              {incompletePerNode.map((item) => (
+                <li
+                  key={`${item.nodeId}:${item.path}`}
+                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs"
+                >
+                  <div className="min-w-0">
+                    <span className="font-medium text-foreground">{item.nodeName || `#${item.nodeId}`}</span>
+                    <span className="ml-2 font-mono text-muted-foreground break-all">{item.path}</span>
+                  </div>
+                  <span className="shrink-0 font-medium tabular-nums text-[hsl(var(--warning-text))]">
+                    {(() => {
+                      const lowerBound = formatPartialLowerBoundGB(item.usedGB);
+                      return lowerBound
+                        ? t("storage.partialSize", { gb: lowerBound })
+                        : t("storage.scanNotCompleted");
+                    })()}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {mountPoints.length === 0 && perNode.length === 0 && !hasIncompleteScan && (
           <p className="text-sm text-muted-foreground text-center py-4">{t('common.noData')}</p>
         )}
       </DataSurfaceContent>

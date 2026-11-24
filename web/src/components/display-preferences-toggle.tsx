@@ -13,10 +13,12 @@ export function DisplayPreferencesToggle({ className }: DisplayPreferencesToggle
   const { density, toggleDensity, powerMode, togglePowerMode } = useTheme();
   const isCompact = density === "compact";
   const isPowerSave = powerMode === "save";
-  const densityLabel = isCompact
+  const densityName = t("displayPrefs.compactDensityLabel");
+  const densityTitle = isCompact
     ? t("displayPrefs.comfortDensity")
     : t("displayPrefs.compactDensity");
-  const powerLabel = isPowerSave
+  const powerName = t("displayPrefs.powerSaveLabel");
+  const powerTitle = isPowerSave
     ? t("displayPrefs.powerSaveOff")
     : t("displayPrefs.powerSaveOn");
 
@@ -28,8 +30,8 @@ export function DisplayPreferencesToggle({ className }: DisplayPreferencesToggle
         size="icon"
         onClick={toggleDensity}
         aria-pressed={isCompact}
-        aria-label={densityLabel}
-        title={densityLabel}
+        aria-label={densityName}
+        title={densityTitle}
         className={cn(isCompact && "bg-accent text-accent-foreground")}
       >
         {isCompact ? (
@@ -45,8 +47,8 @@ export function DisplayPreferencesToggle({ className }: DisplayPreferencesToggle
         size="icon"
         onClick={togglePowerMode}
         aria-pressed={isPowerSave}
-        aria-label={powerLabel}
-        title={powerLabel}
+        aria-label={powerName}
+        title={powerTitle}
         className={cn(isPowerSave && "bg-accent text-accent-foreground")}
       >
         {isPowerSave ? (

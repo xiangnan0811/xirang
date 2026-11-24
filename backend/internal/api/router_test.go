@@ -2104,11 +2104,16 @@ func TestSystemBackupDownloadRouterRecoveryProtectsRealAuthFailures(t *testing.T
 func TestOverviewAndTaskSortRoutesThroughRealRouter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	dbPath := filepath.Join(t.TempDir(), "overview-router.db")
+	db, err := gorm.Open(sqlite.Open(dbPath+"?_loc=UTC"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.Node{},
@@ -2117,6 +2122,7 @@ func TestOverviewAndTaskSortRoutesThroughRealRouter(t *testing.T) {
 		&model.PolicyNode{},
 		&model.Task{},
 		&model.TaskRun{},
+		&model.BackupCompletion{},
 		&model.TaskTrafficSample{},
 		&model.AuditLog{},
 		&model.TokenRevocation{},
@@ -2167,7 +2173,7 @@ func TestOverviewAndTaskSortRoutesThroughRealRouter(t *testing.T) {
 		t.Fatalf("link active policy to other node: %v", err)
 	}
 
-	oldTask := model.Task{Name: "older-config-newer-finish", NodeID: ownedNode.ID, PolicyID: &activePolicy.ID, Status: "success", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	oldTask := model.Task{Name: "older-config-newer-finish", NodeID: ownedNode.ID, PolicyID: &activePolicy.ID, ExecutorType: "rsync", Status: "success", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	neverRunTask := model.Task{Name: "newer-config-never-run", NodeID: ownedNode.ID, PolicyID: &activePolicy.ID, Status: "pending", CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)}
 	if err := db.Create(&oldTask).Error; err != nil {
 		t.Fatalf("create old task: %v", err)
@@ -2185,10 +2191,22 @@ func TestOverviewAndTaskSortRoutesThroughRealRouter(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create task run: %v", err)
 	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		previousFinish := finishedAt.Add(-time.Duration(attempt) * time.Hour)
+		if err := db.Create(&model.TaskRun{
+			TaskID:               oldTask.ID,
+			NodeIDSnapshot:       ownedNode.ID,
+			ExecutorTypeSnapshot: "rsync",
+			Status:               model.TaskRunStatusFailed,
+			FinishedAt:           &previousFinish,
+		}).Error; err != nil {
+			t.Fatalf("create historical backup failure: %v", err)
+		}
+	}
 
 	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
 
-	for _, path := range []string{"/api/v1/overview", "/api/v1/overview/traffic?window=24h", "/api/v1/tasks?sort=-recent_activity"} {
+	for _, path := range []string{"/api/v1/overview", "/api/v1/overview/backup-health", "/api/v1/overview/traffic?window=24h", "/api/v1/tasks?sort=-recent_activity"} {
 		resp := httptest.NewRecorder()
 		router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, path, nil))
 		if resp.Code != http.StatusUnauthorized {
@@ -2220,6 +2238,28 @@ func TestOverviewAndTaskSortRoutesThroughRealRouter(t *testing.T) {
 		}
 		if len(payload.Data) != 1 || int64(payload.Data["activePolicies"].(float64)) != tc.want {
 			t.Fatalf("%s /overview data=%v, want strictly {activePolicies:%d}", tc.role, payload.Data, tc.want)
+		}
+
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/overview/backup-health", nil)
+		req.Header.Set("Authorization", "Bearer "+tokens[tc.role])
+		resp = httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s backup health status=%d body=%s", tc.role, resp.Code, resp.Body.String())
+		}
+		var health struct {
+			Data struct {
+				DegradedCount int64 `json:"degraded_count"`
+				Summary       struct {
+					TotalPolicies int64 `json:"total_policies"`
+				} `json:"summary"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(resp.Body.Bytes(), &health); err != nil {
+			t.Fatalf("decode %s backup health: %v", tc.role, err)
+		}
+		if health.Data.Summary.TotalPolicies != tc.want || health.Data.DegradedCount != tc.want {
+			t.Fatalf("%s backup health=%+v, want %d total and degraded policies", tc.role, health.Data, tc.want)
 		}
 	}
 

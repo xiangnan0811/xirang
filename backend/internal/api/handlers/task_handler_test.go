@@ -1837,6 +1837,7 @@ func TestTaskListAndGetIncludeLatestTerminalRunMetadata(t *testing.T) {
 		{TaskID: taskNeverFinished.ID, Status: model.TaskRunStatusPending, TriggerType: "manual"},
 	}
 	for i := range runs {
+		runs[i].NodeIDSnapshot = node.ID
 		if err := db.Create(&runs[i]).Error; err != nil {
 			t.Fatalf("创建 TaskRun[%d] 失败: %v", i, err)
 		}
@@ -1987,6 +1988,11 @@ func TestTaskListSortByRecentActivityLastFinishedAtAndLastRunAt(t *testing.T) {
 		{TaskID: olderFinished.ID, Status: "success", StartedAt: &olderTaskStart, FinishedAt: &olderTaskFinish, DurationMs: 300000},
 		{TaskID: otherNodeTask.ID, Status: "success", StartedAt: &otherStart, FinishedAt: &otherFinish, DurationMs: 30000},
 	} {
+		if run.TaskID == otherNodeTask.ID {
+			run.NodeIDSnapshot = otherNode.ID
+		} else {
+			run.NodeIDSnapshot = ownedNode.ID
+		}
 		if err := db.Create(&run).Error; err != nil {
 			t.Fatalf("创建 TaskRun 失败: %v", err)
 		}
@@ -2056,4 +2062,200 @@ func TestTaskListSortByRecentActivityLastFinishedAtAndLastRunAt(t *testing.T) {
 		[]string{"currently-running", "old-recently-finished"},
 		"operator sort=-recent_activity page 1",
 	)
+
+	// 单独传入 sort_order=asc（不传 sort_by）必须按默认 created_at 升序分页，
+	// 同时间戳记录保留基线 tasks.id DESC 的稳定二级排序；显式传入 sort 时仍以 sort 优先于 sort_order。
+	wantCreatedAsc := []string{"old-recently-finished", "currently-running", "older-finished", "other-node-task", "newly-created-never-ran"}
+	assertOrder(fetchNames(adminRouter, "/tasks?sort_order=asc"), wantCreatedAsc, "standalone sort_order=asc")
+	assertOrder(fetchNames(adminRouter, "/tasks?sort_by=invalid_field&sort_order=asc"), wantCreatedAsc, "invalid sort_by with sort_order=asc")
+	assertOrder(fetchNames(adminRouter, "/tasks?sort=-recent_activity&sort_order=asc"), wantRecent, "explicit sort overrides sort_order")
+}
+
+func TestTaskListAndGetPropagateDBErrorInsteadOfSwallowingTableProbe(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.TaskRun{}, &model.NodeOwner{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("获取底层 DB 失败: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("关闭 DB 失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewTaskHandler(db, nil)
+	r.GET("/tasks", handler.List)
+	r.GET("/tasks/:id", handler.Get)
+
+	listResp := httptest.NewRecorder()
+	r.ServeHTTP(listResp, httptest.NewRequest(http.MethodGet, "/tasks?sort=-recent_activity", nil))
+	if listResp.Code != http.StatusInternalServerError {
+		t.Fatalf("DB 错误时 List 应返回 500，实际: %d body=%s", listResp.Code, listResp.Body.String())
+	}
+
+	getResp := httptest.NewRecorder()
+	r.ServeHTTP(getResp, httptest.NewRequest(http.MethodGet, "/tasks/1", nil))
+	if getResp.Code != http.StatusInternalServerError {
+		t.Fatalf("DB 错误时 Get 应返回 500（而非 404），实际: %d body=%s", getResp.Code, getResp.Body.String())
+	}
+}
+
+func TestTaskReadLatestOrdinaryRunCurrentNodeSQLitePostgres(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			var db *gorm.DB
+			if engine == "sqlite" {
+				db = openTaskHandlerTestDB(t)
+			} else {
+				t.Setenv("APP_ENV", "development")
+				db, _ = openConfigHandlerTestDBPairForEngine(t, "postgres")
+			}
+			if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}); err != nil {
+				t.Fatal(err)
+			}
+			nodes := []model.Node{
+				{Name: "current", Host: "10.1.0.1", Username: "root", AuthType: "key", BackupDir: "current"},
+				{Name: "previous", Host: "10.1.0.2", Username: "root", AuthType: "key", BackupDir: "previous"},
+			}
+			for i := range nodes {
+				if err := db.Create(&nodes[i]).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			base := time.Date(2026, 5, 10, 12, 0, 0, 123456000, time.UTC)
+			later := base.Add(time.Microsecond)
+			future := base.Add(time.Hour)
+			tasks := []model.Task{
+				{Name: "current-history", NodeID: nodes[0].ID, Status: "success"},
+				{Name: "later-history", NodeID: nodes[0].ID, Status: "success"},
+				{Name: "unknown-history", NodeID: nodes[0].ID, Status: "pending"},
+			}
+			for i := range tasks {
+				if err := db.Create(&tasks[i]).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			runs := []model.TaskRun{
+				{TaskID: tasks[0].ID, NodeIDSnapshot: nodes[0].ID, Status: "success", TriggerType: "manual", FinishedAt: &base, DurationMs: 77},
+				{TaskID: tasks[0].ID, NodeIDSnapshot: nodes[0].ID, Status: "failed", TriggerType: "cron", FinishedAt: &base, DurationMs: 0},
+				{TaskID: tasks[1].ID, NodeIDSnapshot: nodes[0].ID, Status: "success", FinishedAt: &later, DurationMs: 10},
+				{TaskID: tasks[0].ID, NodeIDSnapshot: nodes[1].ID, Status: "success", FinishedAt: &future, DurationMs: 11},
+				{TaskID: tasks[0].ID, NodeIDSnapshot: 0, Status: "success", FinishedAt: &future, DurationMs: 12},
+				{TaskID: tasks[2].ID, NodeIDSnapshot: 0, Status: "success", FinishedAt: &future, DurationMs: 13},
+				{TaskID: tasks[0].ID, NodeIDSnapshot: nodes[0].ID, Status: "success", TriggerType: "ReStOrE", FinishedAt: &future, DurationMs: 14},
+				{TaskID: tasks[0].ID, NodeIDSnapshot: nodes[0].ID, Status: "success", TriggerType: "DRILL", FinishedAt: &future, DurationMs: 15},
+			}
+			for i := range runs {
+				// Create through the normal current-node hook, then represent the
+				// historical snapshot left by a migration or later task move.
+				snapshot := runs[i].NodeIDSnapshot
+				runs[i].NodeIDSnapshot = nodes[0].ID
+				if err := db.Create(&runs[i]).Error; err != nil {
+					t.Fatal(err)
+				}
+				if snapshot != nodes[0].ID {
+					if err := db.Model(&model.TaskRun{}).Where("id = ?", runs[i].ID).UpdateColumn("node_id_snapshot", snapshot).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if engine == "sqlite" {
+				// Migrations can store bare UTC while GORM writes an offset. Equal
+				// instants must break the tie on ID, including fractional seconds.
+				if err := db.Exec("UPDATE task_runs SET finished_at = ? WHERE id = ?", "2026-05-10 12:00:00.123456", runs[0].ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				older := base.Add(-100 * time.Nanosecond)
+				if err := db.Create(&model.TaskRun{TaskID: tasks[0].ID, NodeIDSnapshot: nodes[0].ID, Status: "success", FinishedAt: &older, DurationMs: 99}).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			var taskSelects []string
+			if err := db.Callback().Query().After("gorm:query").Register("test:task_projection", func(tx *gorm.DB) {
+				sql := strings.ToLower(tx.Statement.SQL.String())
+				if tx.Statement.Table == "tasks" && strings.Contains(sql, "select") && !strings.Contains(sql, "count(") {
+					taskSelects = append(taskSelects, sql)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r := withAdminRole(gin.New())
+			handler := NewTaskHandler(db, nil)
+			r.GET("/tasks", handler.List)
+			r.GET("/tasks/:id", handler.Get)
+			type readTask struct {
+				ID             uint       `json:"id"`
+				LastFinishedAt *time.Time `json:"last_finished_at"`
+				LastDurationMs *int64     `json:"last_duration_ms"`
+			}
+			resp := httptest.NewRecorder()
+			r.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/tasks?sort=-last_finished_at&status=success", nil))
+			if resp.Code != http.StatusOK {
+				t.Fatalf("list status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			var list struct {
+				Data []readTask `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &list); err != nil {
+				t.Fatal(err)
+			}
+			if len(list.Data) != 2 || list.Data[0].ID != tasks[1].ID || list.Data[1].ID != tasks[0].ID {
+				t.Fatalf("unexpected list order: %+v", list.Data)
+			}
+			got := list.Data[1]
+			if got.LastFinishedAt == nil || !got.LastFinishedAt.Equal(base) || got.LastDurationMs == nil || *got.LastDurationMs != 0 {
+				t.Fatalf("wrong current-node run: %+v", got)
+			}
+			if len(taskSelects) != 1 || !strings.Contains(taskSelects[0], "left join task_runs as latest_finished_runs") || !strings.Contains(taskSelects[0], "last_duration_ms") {
+				t.Fatalf("list must select order and metadata in one task statement: %v", taskSelects)
+			}
+			for _, tc := range []struct {
+				id       uint
+				finished *time.Time
+				duration *int64
+			}{
+				{id: tasks[0].ID, finished: &base, duration: new(int64)},
+				{id: tasks[2].ID},
+			} {
+				resp = httptest.NewRecorder()
+				r.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d", tc.id), nil))
+				if resp.Code != http.StatusOK {
+					t.Fatalf("get status=%d body=%s", resp.Code, resp.Body.String())
+				}
+				var detail struct {
+					Data readTask `json:"data"`
+				}
+				if err := json.Unmarshal(resp.Body.Bytes(), &detail); err != nil {
+					t.Fatal(err)
+				}
+				if tc.finished == nil {
+					if detail.Data.LastFinishedAt != nil || detail.Data.LastDurationMs != nil {
+						t.Fatalf("unknown snapshot leaked: %+v", detail.Data)
+					}
+				} else if detail.Data.LastFinishedAt == nil || !detail.Data.LastFinishedAt.Equal(*tc.finished) || detail.Data.LastDurationMs == nil || *detail.Data.LastDurationMs != *tc.duration {
+					t.Fatalf("detail metadata: %+v", detail.Data)
+				}
+			}
+			if err := db.Model(&model.Task{}).Where("id = ?", tasks[0].ID).Update("node_id", nodes[1].ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			resp = httptest.NewRecorder()
+			r.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d", tasks[0].ID), nil))
+			var moved struct {
+				Data readTask `json:"data"`
+			}
+			if resp.Code != http.StatusOK {
+				t.Fatalf("moved get status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &moved); err != nil {
+				t.Fatal(err)
+			}
+			if moved.Data.LastFinishedAt == nil || !moved.Data.LastFinishedAt.Equal(future) || moved.Data.LastDurationMs == nil || *moved.Data.LastDurationMs != 11 {
+				t.Fatalf("moved task metadata: %+v", moved.Data)
+			}
+		})
+	}
 }

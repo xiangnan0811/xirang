@@ -247,6 +247,12 @@ func (s *TaskApiService) CreateTask(ctx context.Context, input CreateTaskInput) 
 		return model.Task{}, err
 	}
 	persist := func(ctx context.Context, repo repository.TaskRepository) error {
+		if err := repo.LockTargetOwnership(ctx); err != nil {
+			return fmt.Errorf("锁定任务目标归属失败: %w", err)
+		}
+		if err := validateNewTaskPolicyLink(ctx, repo, input.PolicyID); err != nil {
+			return err
+		}
 		if err := s.validateTargetOwnership(ctx, repo, input, 0); err != nil {
 			return err
 		}
@@ -328,6 +334,9 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input UpdateTa
 
 	var updated model.Task
 	err = s.taskRepo.RunInTransaction(ctx, func(ctx context.Context, txRepo repository.TaskRepository) error {
+		if err := txRepo.LockTargetOwnership(ctx); err != nil {
+			return fmt.Errorf("锁定任务目标归属失败: %w", err)
+		}
 		if err := txRepo.LockTaskUpdateReferences(ctx, id, seedNodeID, seedPolicyID); err != nil {
 			switch {
 			case errors.Is(err, repository.ErrTaskNodeNotFound):
@@ -359,6 +368,11 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input UpdateTa
 		}
 		if input.PolicyIDSet || input.PolicyID != nil {
 			candidate.PolicyID = input.PolicyID
+		}
+		if candidate.PolicyID != nil && (fresh.PolicyID == nil || *candidate.PolicyID != *fresh.PolicyID) {
+			if err := validateNewTaskPolicyLink(ctx, txRepo, candidate.PolicyID); err != nil {
+				return err
+			}
 		}
 		if input.DependsOnTaskIDSet || input.DependsOnTaskID != nil {
 			candidate.DependsOnTaskID = input.DependsOnTaskID
@@ -408,11 +422,6 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input UpdateTa
 		}
 		if err := ValidateTaskInput(candidateInput); err != nil {
 			return err
-		}
-		if policyPkg.IsCoreLocalTarget(candidateInput.ExecutorType, candidateInput.RsyncTarget) {
-			if err := txRepo.LockTargetOwnership(ctx); err != nil {
-				return err
-			}
 		}
 		if candidate.DependsOnTaskID != nil {
 			if err := txRepo.LockIDsForUpdate(ctx, []uint{*candidate.DependsOnTaskID}); err != nil {
@@ -632,9 +641,6 @@ func (s *TaskApiService) validateTargetOwnership(ctx context.Context, taskRepo r
 	canonicalTarget, err := policyPkg.CanonicalTargetPath(target)
 	if err != nil {
 		return newValidationError("备份目标路径无法安全锁定: " + err.Error())
-	}
-	if err := taskRepo.LockTargetOwnership(ctx); err != nil {
-		return fmt.Errorf("锁定任务目标归属失败: %w", err)
 	}
 	tasks, err := taskRepo.List(ctx)
 	if err != nil {
@@ -1105,6 +1111,23 @@ func validateTaskNodeAndPolicy(ctx context.Context, nodeRepo repository.NodeRepo
 		if !exists {
 			return newValidationError("所选策略不存在，请重新选择")
 		}
+	}
+	return nil
+}
+
+func validateNewTaskPolicyLink(ctx context.Context, repo repository.TaskRepository, policyID *uint) error {
+	if policyID == nil {
+		return nil
+	}
+	isTemplate, err := repo.PolicyIsTemplate(ctx, *policyID)
+	if errors.Is(err, repository.ErrTaskPolicyNotFound) {
+		return newValidationError("所选策略不存在，请重新选择")
+	}
+	if err != nil {
+		return fmt.Errorf("校验策略失败: %w", err)
+	}
+	if isTemplate {
+		return newValidationError("模板策略不能关联任务，请选择普通策略")
 	}
 	return nil
 }

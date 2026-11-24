@@ -109,6 +109,7 @@ const defaultConfidence: BackupConfidenceData = {
 
 const defaultHealth: BackupHealthData = {
   generatedAt: "2026-05-17T01:00:00Z",
+  latestVerifiedBackupAt: "2026-05-17T00:30:00Z",
   staleNodes: [{ nodeId: 2, nodeName: "Node-002", lastBackupAt: null, hoursSince: 0 }],
   degradedPolicies: [{ policyId: 2, policyName: "failing-policy", consecutiveFailures: 3, lastFailedAt: "2026-05-17T00:10:00Z" }],
   healthTrend: [{ date: "2026-05-17", total: 5, success: 4, rate: 80 }],
@@ -127,13 +128,14 @@ const fetchOverviewTrafficMock = vi.fn();
 const refreshNodesMock = vi.fn().mockResolvedValue(undefined);
 const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
 
-function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) {
+function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0, overviewPollVersion = 0) {
   const nodes = createNodes(nodeCount);
   sharedRef.current = {
     overview: {
       activePolicies: 3,
     },
     refreshVersion,
+    overviewPollVersion,
     fetchOverviewTraffic: fetchOverviewTrafficMock,
     fetchHealthIncidentTimeline: fetchHealthIncidentTimelineMock,
     loading: false,
@@ -210,6 +212,15 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
     refreshTask: vi.fn(),
     fetchTaskLogs: vi.fn(),
   };
+}
+
+// The ES2022 lib configured for web/ has no Promise.withResolvers.
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 function incident(overrides: Partial<HealthIncidentGroup> = {}): HealthIncidentGroup {
@@ -363,6 +374,72 @@ describe("OverviewPage", () => {
     expect(within(postureSection).queryByText("100%")).not.toBeInTheDocument();
   });
 
+  it("shows fresh latestVerifiedBackupAt for standalone nodes without enabled policies, respects custom staleThresholdHours, and distinguishes health error from empty", async () => {
+    getBackupConfidenceMock.mockResolvedValueOnce({
+      generatedAt: "2026-05-17T01:00:00Z",
+      summary: { healthy: 0, warning: 0, atRisk: 0, insufficient: 0, total: 0 },
+      items: [],
+    });
+    getBackupHealthMock.mockResolvedValueOnce({
+      generatedAt: "2026-05-17T01:00:00Z",
+      staleThresholdHours: 24,
+      latestVerifiedBackupAt: "2026-05-17T00:30:00Z",
+      staleNodes: [{ nodeId: 3, nodeName: "Node-003", lastBackupAt: "2026-05-15T12:00:00Z", hoursSince: 37 }],
+      degradedPolicies: [],
+      healthTrend: [],
+      summary: {
+        totalNodes: 2,
+        neverBackedUp: 0,
+        stale48h: 1,
+        policiesHealthy: 0,
+        policiesDegraded: 0,
+        successRate7d: null,
+      },
+    });
+    setContext(2, true);
+    const { unmount } = render(<OverviewPage />);
+
+    const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(await within(postureSection).findByText("超 24h 1")).toBeInTheDocument();
+    expect(within(postureSection).queryByText(/超 48h/)).not.toBeInTheDocument();
+    expect(within(postureSection).queryByText("暂无")).not.toBeInTheDocument();
+    expect(postureSection.querySelector('time[dateTime="2026-05-17T00:30:00Z"]')).not.toBeNull();
+    unmount();
+
+    // When backup-health fails even while confidence returns policy timestamps,
+    // Card 2 must show unavailable ("—" / "暂不可用") rather than letting a single policy
+    // impersonate global visible-node recency.
+    getBackupConfidenceMock.mockResolvedValueOnce(defaultConfidence);
+    getBackupHealthMock.mockRejectedValueOnce(new Error("health backend down"));
+    const { unmount: unmountErr } = render(<OverviewPage />);
+
+    const erroredPosture = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    await within(erroredPosture).findByText("保护态势加载失败");
+    // Both health-backed cards (latest verified, stale nodes) show their own unavailable state.
+    expect(within(erroredPosture).getAllByText("暂不可用")).toHaveLength(2);
+    expect(erroredPosture.querySelector('time[dateTime="2026-05-17T00:30:00Z"]')).toBeNull();
+    expect(within(erroredPosture).queryByText("暂无")).not.toBeInTheDocument();
+    unmountErr();
+
+    // When backup-health explicitly returns latestVerifiedBackupAt=null (e.g. migrated task
+    // whose old node is out of scope), health is authoritative over confidence evidence.
+    getBackupConfidenceMock.mockResolvedValueOnce(defaultConfidence);
+    getBackupHealthMock.mockResolvedValueOnce({
+      ...defaultHealth,
+      latestVerifiedBackupAt: null,
+      staleNodes: [{ nodeId: 2, nodeName: "Node-002", lastBackupAt: null, hoursSince: 0 }],
+    });
+    sharedRef.current = { ...sharedRef.current, overview: { activePolicies: null } };
+    render(<OverviewPage />);
+
+    const nullHealthPosture = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(await within(nullHealthPosture).findByText("暂无")).toBeInTheDocument();
+    expect(nullHealthPosture.querySelector('time[dateTime="2026-05-17T00:30:00Z"]')).toBeNull();
+    const policyCardLink = within(nullHealthPosture).getByRole("link", { name: /已启用策略/ });
+    expect(within(policyCardLink).getByText("—")).toBeInTheDocument();
+    expect(within(policyCardLink).queryByText("0")).not.toBeInTheDocument();
+  });
+
   it("shows operator scope and explicit error + retry on Protection Posture failure", async () => {
     authRef.current = { token: "test-token", username: "ops", role: "operator" };
     getBackupConfidenceMock.mockRejectedValueOnce(new Error("confidence service unavailable"));
@@ -404,6 +481,136 @@ describe("OverviewPage", () => {
     });
     expect(within(postureSection).queryByText("加载保护态势...")).not.toBeInTheDocument();
     expect(within(postureSection).getByText("连续失败 1")).toBeInTheDocument();
+  });
+
+  it("keeps policy count and entry visible with per-card unavailable state when both posture sources fail", async () => {
+    getBackupConfidenceMock.mockRejectedValueOnce(new Error("confidence down"));
+    getBackupHealthMock.mockRejectedValueOnce(new Error("health down"));
+    setContext(2, true);
+    render(<OverviewPage />);
+
+    const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(await within(postureSection).findByText("保护态势加载失败")).toBeInTheDocument();
+    const policyCardLink = within(postureSection).getByRole("link", { name: /已启用策略/ });
+    expect(policyCardLink).toHaveAttribute("href", "/app/policies");
+    expect(within(policyCardLink).getByText("3")).toBeInTheDocument();
+    expect(within(postureSection).getByRole("link", { name: /备份可信度/ })).toHaveAttribute("href", "/app/backups/overview");
+    // Confidence, latest verified and stale nodes each report unavailable; nothing is left pending.
+    expect(within(postureSection).getAllByText("暂不可用")).toHaveLength(3);
+    expect(within(postureSection).queryByText("加载中...")).not.toBeInTheDocument();
+  });
+
+  it("keeps slow overview requests alive across scheduled pulses and renders fast sections first", async () => {
+    const slowHealth = createDeferred<BackupHealthData>();
+    const slowIncidents = createDeferred<unknown>();
+    const slowTraffic = createDeferred<unknown>();
+    const signals: AbortSignal[] = [];
+    getBackupHealthMock.mockImplementation((_token: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) signals.push(options.signal);
+      return slowHealth.promise;
+    });
+    fetchHealthIncidentTimelineMock.mockImplementation((options?: { signal?: AbortSignal }) => {
+      if (options?.signal) signals.push(options.signal);
+      return slowIncidents.promise;
+    });
+    fetchOverviewTrafficMock.mockImplementation((_window: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) signals.push(options.signal);
+      return slowTraffic.promise;
+    });
+    setContext(2, true, 0, 0);
+    const { rerender } = render(<OverviewPage />);
+
+    // Fast confidence and recent tasks render while health, incidents and traffic are still pending.
+    const postureSection = (await screen.findByRole("heading", { level: 2, name: /备份保护态势/ })).closest("section")!;
+    expect(await within(postureSection).findByText(/\/ 3 可信/)).toBeInTheDocument();
+    expect(within(within(postureSection).getByRole("link", { name: /已启用策略/ })).getByText("3")).toBeInTheDocument();
+    expect(within(postureSection).getAllByText("加载中...")).toHaveLength(2);
+    const tasksSection = screen.getByRole("heading", { level: 2, name: /最近同步任务/ }).closest("section")!;
+    expect(within(tasksSection).getByText("测试任务1")).toBeInTheDocument();
+
+    for (const pollVersion of [1, 2]) {
+      setContext(2, true, 0, pollVersion);
+      rerender(<OverviewPage />);
+    }
+    expect(getBackupHealthMock).toHaveBeenCalledTimes(1);
+    expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(1);
+    expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(1);
+    expect(signals.some((signal) => signal.aborted)).toBe(false);
+    // Tasks still receive every pulse; the tasks domain coalesces in-flight refreshes itself.
+    expect(refreshTasksMock).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      slowHealth.resolve(defaultHealth);
+      slowIncidents.resolve({
+        generatedAt: "2026-05-17T01:00:00Z",
+        windowHours: 72,
+        summary: { total: 1, critical: 0, warning: 1, info: 0 },
+        groups: [incident()],
+      });
+      slowTraffic.resolve({
+        window: "24h",
+        bucketMinutes: 30,
+        hasRealSamples: false,
+        generatedAt: "2026-03-08T00:00:00Z",
+        points: [],
+      });
+    });
+    expect(await within(postureSection).findByText("连续失败 1")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: /健康事件/ })).toBeInTheDocument();
+    expect(within(postureSection).queryByText("加载中...")).not.toBeInTheDocument();
+
+    // Once settled, the next pulse refreshes every section again.
+    setContext(2, true, 0, 3);
+    rerender(<OverviewPage />);
+    await waitFor(() => {
+      expect(getBackupHealthMock).toHaveBeenCalledTimes(2);
+      expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(2);
+      expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("aborts slow pending overview requests on manual refresh, token change and unmount", async () => {
+    const healthSignals: AbortSignal[] = [];
+    const incidentSignals: AbortSignal[] = [];
+    const trafficSignals: AbortSignal[] = [];
+    getBackupHealthMock.mockImplementation((_token: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) healthSignals.push(options.signal);
+      return new Promise(() => undefined);
+    });
+    fetchHealthIncidentTimelineMock.mockImplementation((options?: { signal?: AbortSignal }) => {
+      if (options?.signal) incidentSignals.push(options.signal);
+      return new Promise(() => undefined);
+    });
+    fetchOverviewTrafficMock.mockImplementation((_window: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) trafficSignals.push(options.signal);
+      return new Promise(() => undefined);
+    });
+    setContext(2, true, 0, 0);
+    const { rerender, unmount } = render(<OverviewPage />);
+    const latest = () => [healthSignals.at(-1), incidentSignals.at(-1), trafficSignals.at(-1)];
+    expect([healthSignals, incidentSignals, trafficSignals].map((list) => list.length)).toEqual([1, 1, 1]);
+
+    // A scheduled pulse leaves the pending scope alone.
+    setContext(2, true, 0, 1);
+    rerender(<OverviewPage />);
+    expect([healthSignals, incidentSignals, trafficSignals].map((list) => list.length)).toEqual([1, 1, 1]);
+
+    // A manual refresh invalidates the scope: superseded requests abort and restart.
+    const beforeRefresh = latest();
+    setContext(2, true, 1, 1);
+    rerender(<OverviewPage />);
+    expect(beforeRefresh.every((signal) => signal?.aborted)).toBe(true);
+    expect([healthSignals, incidentSignals, trafficSignals].map((list) => list.length)).toEqual([2, 2, 2]);
+
+    const beforeTokenChange = latest();
+    authRef.current = { ...authRef.current, token: "other-token" };
+    rerender(<OverviewPage />);
+    expect(beforeTokenChange.every((signal) => signal?.aborted)).toBe(true);
+    expect([healthSignals, incidentSignals, trafficSignals].map((list) => list.length)).toEqual([3, 3, 3]);
+
+    const beforeUnmount = latest();
+    unmount();
+    expect(beforeUnmount.every((signal) => signal?.aborted)).toBe(true);
   });
 
   it("localizes system cause and action on language switch while retaining native source diagnostic text", async () => {
@@ -638,7 +845,94 @@ describe("OverviewPage", () => {
     await user.click(activityToggle);
     await user.click(failuresToggle);
 
-    expect(screen.getByText("已隐藏全部图层，点击下方图例恢复。")).toBeInTheDocument();
+    expect(screen.getByText("已隐藏全部图层，点击下方图例恢复。").closest('[role="status"]')).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /流量与活动趋势图/ })).not.toBeInTheDocument();
+  });
+
+  it("limits announced traffic totals to measured buckets after truncation", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T01:01:00Z",
+      points: [
+        { label: "00:00", throughputMbps: 200, sampleCount: 4, startedCount: 9, failedCount: 5, incomplete: true },
+        { label: "00:30", throughputMbps: 120, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+        { label: "01:00", throughputMbps: 80, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0, partial: true },
+      ],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", {
+      name: /仅统计完整时段：峰值平均总吞吐 120 Mbps，开始事件 2 次，失败事件 0 次/,
+    })).toBeInTheDocument();
+    expect(screen.getByText(/未能完整统计的时段已留空/)).toBeInTheDocument();
+    expect(screen.getByText("末尾时段统计中")).toBeInTheDocument();
+  });
+
+  it("does not announce a capped throughput peak when every measured sample sits in an incomplete bucket", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T00:31:00Z",
+      points: [
+        { label: "00:00", throughputMbps: 200, sampleCount: 4, activeTaskCount: 2, startedCount: 9, failedCount: 5, incomplete: true },
+        { label: "00:30", throughputMbps: 0, sampleCount: 0, activeTaskCount: 0, startedCount: 2, failedCount: 1, partial: true },
+      ],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", {
+      name: "近 24 小时流量与活动趋势图，数据量超出上限，仅统计完整时段：无吞吐采样，开始事件 2 次，失败事件 1 次",
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /峰值平均总吞吐/ })).not.toBeInTheDocument();
+    expect(screen.getByText("无吞吐采样")).toBeInTheDocument();
+    expect(screen.queryByText("Mbps")).not.toBeInTheDocument();
+    expect(screen.getByText("次")).toBeInTheDocument();
+    expect(screen.getByText(/未能完整统计的时段已留空/)).toBeInTheDocument();
+  });
+
+  it("keeps a measured zero throughput peak in capped complete buckets", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T00:31:00Z",
+      points: [
+        { label: "00:00", throughputMbps: 200, sampleCount: 4, activeTaskCount: 2, startedCount: 9, failedCount: 5, incomplete: true },
+        { label: "00:30", throughputMbps: 0, sampleCount: 2, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+      ],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", {
+      name: "近 24 小时流量与活动趋势图，数据量超出上限，仅统计完整时段：峰值平均总吞吐 0 Mbps，开始事件 1 次，失败事件 0 次",
+    })).toBeInTheDocument();
+    expect(screen.queryByText("无吞吐采样")).not.toBeInTheDocument();
+  });
+
+  it("shows the cap warning when a legacy truncated response has unknown coverage", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T00:30:00Z",
+      points: [{ label: "00:00", throughputMbps: 200, startedCount: 9, failedCount: 5 }],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", { name: /暂无可展示的完整时段/ })).toBeInTheDocument();
+    expect(screen.getByText(/未能完整统计的时段已留空/)).toBeInTheDocument();
+    expect(screen.queryByText("近 24 小时暂无数据")).not.toBeInTheDocument();
   });
 
   it("preserves previous traffic chart data while switching windows and aborts superseded requests", async () => {
@@ -673,9 +967,12 @@ describe("OverviewPage", () => {
     await waitFor(() => {
       expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(2);
     });
-    // Previous chart remains visible (no skeleton height collapse) while loading 1h
+    // Previous chart remains visible (no skeleton height collapse) while loading 1h,
+    // and keeps the previous 24h heading/aria-label while announcing 1h loading separately.
     expect(screen.queryByText("加载趋势...")).not.toBeInTheDocument();
-    expect(screen.getByRole("img")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: /流量与活动趋势（近 24 小时）/ })).toBeInTheDocument();
+    expect(screen.getByText("正在切换至近 1 小时...")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /近 24 小时流量与活动趋势图/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "7d" }));
     await waitFor(() => {
@@ -701,12 +998,24 @@ describe("OverviewPage", () => {
       expect(fetchOverviewTrafficMock.mock.calls.at(-1)?.[0]).toBe("1h");
     });
 
-    setContext(2, true, 2);
+    setContext(2, true, 2, 0);
     rerender(<OverviewPage />);
 
     await waitFor(() => {
       expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(3);
       expect(refreshTasksMock).toHaveBeenCalledTimes(2);
+      expect(getBackupHealthMock).toHaveBeenCalledTimes(2);
+    });
+
+    // Background overviewPollVersion advances overview panels without changing refreshVersion
+    setContext(2, true, 2, 1);
+    rerender(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(4);
+      expect(refreshTasksMock).toHaveBeenCalledTimes(3);
+      expect(getBackupHealthMock).toHaveBeenCalledTimes(3);
+      expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(3);
     });
   });
 

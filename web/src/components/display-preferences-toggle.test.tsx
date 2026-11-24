@@ -26,12 +26,12 @@ describe("DisplayPreferencesToggle", () => {
     await setLanguage("zh");
   });
 
-  it("renders non-colliding density and power-mode icons with aria-pressed", () => {
+  it("renders non-colliding density and power-mode icons with stable toggle names and aria-pressed", () => {
     const { container } = renderToggle("custom-toggle-group");
 
     expect(container.firstElementChild).toHaveClass("custom-toggle-group");
 
-    const densityButton = screen.getByRole("button", { name: "切换紧凑密度" });
+    const densityButton = screen.getByRole("button", { name: "紧凑密度" });
     expect(densityButton).toHaveAttribute("type", "button");
     expect(densityButton).toHaveAttribute("aria-pressed", "false");
     expect(densityButton).toHaveAttribute("title", "切换紧凑密度");
@@ -40,7 +40,7 @@ describe("DisplayPreferencesToggle", () => {
     expect(densityIcon).toHaveAttribute("aria-hidden", "true");
     expect(densityButton.querySelector(".lucide-minus, .lucide-plus")).toBeNull();
 
-    const powerButton = screen.getByRole("button", { name: "开启节能模式" });
+    const powerButton = screen.getByRole("button", { name: "节能模式" });
     expect(powerButton).toHaveAttribute("type", "button");
     expect(powerButton).toHaveAttribute("aria-pressed", "false");
     expect(powerButton).toHaveAttribute("title", "开启节能模式");
@@ -50,15 +50,15 @@ describe("DisplayPreferencesToggle", () => {
     expect(powerButton.querySelector(".lucide-zap")).toBeNull();
   });
 
-  it("toggles density between comfortable and compact with icon and aria-pressed updates", async () => {
+  it("toggles density between comfortable and compact while keeping stable aria-label", async () => {
     const user = userEvent.setup();
     renderToggle();
 
-    const densityButton = screen.getByRole("button", { name: "切换紧凑密度" });
+    const densityButton = screen.getByRole("button", { name: "紧凑密度" });
     await user.click(densityButton);
 
     expect(densityButton).toHaveAttribute("aria-pressed", "true");
-    expect(densityButton).toHaveAttribute("aria-label", "切换舒适密度");
+    expect(densityButton).toHaveAttribute("aria-label", "紧凑密度");
     expect(densityButton).toHaveAttribute("title", "切换舒适密度");
     expect(densityButton.querySelector("svg")).toHaveClass("lucide-rows-4");
     expect(document.documentElement.dataset.density).toBe("compact");
@@ -66,21 +66,21 @@ describe("DisplayPreferencesToggle", () => {
     await user.click(densityButton);
 
     expect(densityButton).toHaveAttribute("aria-pressed", "false");
-    expect(densityButton).toHaveAttribute("aria-label", "切换紧凑密度");
+    expect(densityButton).toHaveAttribute("aria-label", "紧凑密度");
     expect(densityButton).toHaveAttribute("title", "切换紧凑密度");
     expect(densityButton.querySelector("svg")).toHaveClass("lucide-rows-3");
     expect(document.documentElement.dataset.density).toBe("comfortable");
   });
 
-  it("toggles power-save mode between normal and save with icon and aria-pressed updates", async () => {
+  it("toggles power-save mode between normal and save while keeping stable aria-label", async () => {
     const user = userEvent.setup();
     renderToggle();
 
-    const powerButton = screen.getByRole("button", { name: "开启节能模式" });
+    const powerButton = screen.getByRole("button", { name: "节能模式" });
     await user.click(powerButton);
 
     expect(powerButton).toHaveAttribute("aria-pressed", "true");
-    expect(powerButton).toHaveAttribute("aria-label", "关闭节能模式");
+    expect(powerButton).toHaveAttribute("aria-label", "节能模式");
     expect(powerButton).toHaveAttribute("title", "关闭节能模式");
     expect(powerButton.querySelector("svg")).toHaveClass("lucide-leaf");
     expect(document.documentElement.dataset.power).toBe("save");
@@ -88,13 +88,13 @@ describe("DisplayPreferencesToggle", () => {
     await user.click(powerButton);
 
     expect(powerButton).toHaveAttribute("aria-pressed", "false");
-    expect(powerButton).toHaveAttribute("aria-label", "开启节能模式");
+    expect(powerButton).toHaveAttribute("aria-label", "节能模式");
     expect(powerButton).toHaveAttribute("title", "开启节能模式");
     expect(powerButton.querySelector("svg")).toHaveClass("lucide-sparkles");
     expect(document.documentElement.dataset.power).toBe("normal");
   });
 
-  it("renders translated English labels when language is en", async () => {
+  it("renders stable translated English toggle names when language is en", async () => {
     await setLanguage("en");
     window.localStorage.setItem(DENSITY_STORAGE_KEY, "compact");
     window.localStorage.setItem(POWER_MODE_STORAGE_KEY, "save");
@@ -102,12 +102,12 @@ describe("DisplayPreferencesToggle", () => {
     renderToggle();
 
     expect(i18n.language).toBe("en");
-    const densityButton = screen.getByRole("button", { name: "Switch to comfortable density" });
+    const densityButton = screen.getByRole("button", { name: "Compact density" });
     expect(densityButton).toHaveAttribute("aria-pressed", "true");
     expect(densityButton).toHaveAttribute("title", "Switch to comfortable density");
     expect(densityButton.querySelector("svg")).toHaveClass("lucide-rows-4");
 
-    const powerButton = screen.getByRole("button", { name: "Disable power-saving mode" });
+    const powerButton = screen.getByRole("button", { name: "Power-saving mode" });
     expect(powerButton).toHaveAttribute("aria-pressed", "true");
     expect(powerButton).toHaveAttribute("title", "Disable power-saving mode");
     expect(powerButton.querySelector("svg")).toHaveClass("lucide-leaf");

@@ -638,8 +638,8 @@ func TestOverviewTrafficAggregates10sSlicesWithout6xInflation(t *testing.T) {
 	for _, p := range result.Data.Points {
 		if p.TimestampMs == minuteStart.UnixMilli() {
 			found6Slices = true
-			if p.ThroughputMbps != 100 || p.SampleCount != 6 || p.ActiveTaskCount != 1 {
-				t.Fatalf("单任务 6 样本/分钟聚合错误: %+v (want throughput=100, sample_count=6, active_task_count=1)", p)
+			if p.ThroughputMbps != 100 || p.SampleCount != 1 || p.ActiveTaskCount != 1 {
+				t.Fatalf("单任务 6 样本/分钟聚合错误: %+v (want throughput=100, sample_count=1, active_task_count=1)", p)
 			}
 		}
 		if p.TimestampMs == otherSlice.UnixMilli() {
@@ -719,14 +719,14 @@ func TestOverviewTrafficSumsConcurrentTasksAndSeparatesSequentialTasksPer10sSlic
 	for _, p := range result.Data.Points {
 		if p.TimestampMs == concurrentBucket.UnixMilli() {
 			foundConcurrent = true
-			if p.ThroughputMbps != 200 || p.SampleCount != 6 || p.ActiveTaskCount != 2 {
-				t.Fatalf("并发任务聚合错误: %+v (want throughput=200, sample_count=6, active_task_count=2)", p)
+			if p.ThroughputMbps != 200 || p.SampleCount != 1 || p.ActiveTaskCount != 2 {
+				t.Fatalf("并发任务聚合错误: %+v (want throughput=200, sample_count=1, active_task_count=2)", p)
 			}
 		}
 		if p.TimestampMs == sequentialBucket.UnixMilli() {
 			foundSequential = true
-			if p.ThroughputMbps != 100 || p.SampleCount != 6 || p.ActiveTaskCount != 1 {
-				t.Fatalf("串行任务聚合错误: %+v (want throughput=100, sample_count=6, active_task_count=1)", p)
+			if p.ThroughputMbps != 100 || p.SampleCount != 1 || p.ActiveTaskCount != 1 {
+				t.Fatalf("串行任务聚合错误: %+v (want throughput=100, sample_count=1, active_task_count=1)", p)
 			}
 		}
 	}
@@ -848,5 +848,376 @@ func TestOverviewTrafficIncludesTrailingPartialBucketAcrossWindows(t *testing.T)
 	}
 	if len(opResult.Data.Points) != 13 || !opResult.Data.Points[12].Partial || opResult.Data.Points[0].Partial {
 		t.Fatalf("operator 空拥有节点部分桶状态错误: %+v", opResult.Data.Points)
+	}
+}
+
+func TestOverviewTrafficScopesEventsByTaskRunNodeSnapshotAfterMigration(t *testing.T) {
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	opA := model.User{Username: "traffic-op-a", Role: "operator", PasswordHash: "x"}
+	opB := model.User{Username: "traffic-op-b", Role: "operator", PasswordHash: "x"}
+	nodeA := model.Node{Name: "node-a", Host: "10.0.20.1", Username: "root", AuthType: "key", BackupDir: "node-a"}
+	nodeB := model.Node{Name: "node-b", Host: "10.0.20.2", Username: "root", AuthType: "key", BackupDir: "node-b"}
+	for _, rec := range []any{&opA, &opB, &nodeA, &nodeB} {
+		if err := db.Create(rec).Error; err != nil {
+			t.Fatalf("创建夹具失败: %v", err)
+		}
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: nodeA.ID, UserID: opA.ID}).Error; err != nil {
+		t.Fatalf("绑定 opA 节点失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: nodeB.ID, UserID: opB.ID}).Error; err != nil {
+		t.Fatalf("绑定 opB 节点失败: %v", err)
+	}
+
+	// 先在 nodeA 上创建任务并写入历史运行记录（node_id_snapshot = nodeA.ID），随后将任务迁移到 nodeB。
+	migratedTask := model.Task{Name: "migrated-task", NodeID: nodeA.ID, Status: "failed"}
+	if err := db.Create(&migratedTask).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	now := time.Date(2026, 3, 7, 12, 17, 0, 0, time.UTC)
+	startedAt := time.Date(2026, 3, 7, 12, 15, 30, 0, time.UTC)
+	failedAt := time.Date(2026, 3, 7, 12, 16, 0, 0, time.UTC)
+	if err := db.Create(&model.TaskRun{
+		TaskID:         migratedTask.ID,
+		NodeIDSnapshot: nodeA.ID,
+		Status:         "failed",
+		StartedAt:      &startedAt,
+		FinishedAt:     &failedAt,
+	}).Error; err != nil {
+		t.Fatalf("创建 TaskRun 失败: %v", err)
+	}
+	if err := db.Model(&migratedTask).Update("node_id", nodeB.ID).Error; err != nil {
+		t.Fatalf("迁移任务节点失败: %v", err)
+	}
+
+	handler := NewOverviewTrafficHandler(db, func() time.Time { return now })
+	queryForOp := func(userID uint) (int, int) {
+		r := gin.New()
+		r.Use(func(c *gin.Context) {
+			c.Set(middleware.CtxRole, "operator")
+			c.Set(middleware.CtxUserID, userID)
+			c.Next()
+		})
+		r.GET("/overview/traffic", handler.Get)
+		resp := httptest.NewRecorder()
+		r.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil))
+		if resp.Code != http.StatusOK {
+			t.Fatalf("期望 200，实际: %d body=%s", resp.Code, resp.Body.String())
+		}
+		var result struct {
+			Data struct {
+				Points []struct {
+					StartedCount int `json:"started_count"`
+					FailedCount  int `json:"failed_count"`
+				} `json:"points"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+			t.Fatalf("解析响应失败: %v", err)
+		}
+		var started, failed int
+		for _, p := range result.Data.Points {
+			started += p.StartedCount
+			failed += p.FailedCount
+		}
+		return started, failed
+	}
+
+	aStarted, aFailed := queryForOp(opA.ID)
+	if aStarted != 1 || aFailed != 1 {
+		t.Fatalf("nodeA 的 operator 应看到历史事件 (1,1)，实际 (%d,%d)", aStarted, aFailed)
+	}
+	bStarted, bFailed := queryForOp(opB.ID)
+	if bStarted != 0 || bFailed != 0 {
+		t.Fatalf("任务迁入 nodeB 后，nodeB 的 operator 不应看到发生在 nodeA 的事件，实际 (%d,%d)", bStarted, bFailed)
+	}
+}
+
+func TestOverviewTrafficCapPreservesNewestBuckets(t *testing.T) {
+	previousSampleCap, previousRunCap := trafficSampleCap, trafficTaskRunCap
+	trafficSampleCap, trafficTaskRunCap = 2, 2
+	t.Cleanup(func() { trafficSampleCap, trafficTaskRunCap = previousSampleCap, previousRunCap })
+
+	now := time.Date(2026, 3, 7, 12, 17, 0, 0, time.UTC)
+	currentBucket := now.Truncate(5 * time.Minute)
+	tests := []struct {
+		name      string
+		times     []time.Duration
+		retained  []time.Duration
+		truncated bool
+		cutoff    time.Duration
+	}{
+		{name: "exact limit", times: []time.Duration{-10 * time.Minute, 0}, retained: []time.Duration{-10 * time.Minute, 0}},
+		{name: "usable trailing bucket", times: []time.Duration{-20 * time.Minute, -10 * time.Minute, 0}, retained: []time.Duration{-10 * time.Minute, 0}, truncated: true, cutoff: -20 * time.Minute},
+		{name: "same timestamp cutoff", times: []time.Duration{-10 * time.Minute, -10 * time.Minute, 0}, retained: []time.Duration{-10 * time.Minute, 0}, truncated: true, cutoff: -10 * time.Minute},
+		{name: "overflow in trailing bucket", times: []time.Duration{-time.Minute, -30 * time.Second, 0}, retained: []time.Duration{-30 * time.Second, 0}, truncated: true, cutoff: -time.Minute},
+	}
+
+	for _, engine := range []string{"sqlite", "postgres"} {
+		for _, source := range []string{"sample", "started", "failed"} {
+			for _, tc := range tests {
+				t.Run(engine+"/"+source+"/"+tc.name, func(t *testing.T) {
+					var db *gorm.DB
+					if engine == "postgres" {
+						db = openBackupHealthPostgresTestDB(t)
+					} else {
+						db = openOverviewTrafficTestDB(t)
+					}
+					if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+						t.Fatalf("migrate traffic tables: %v", err)
+					}
+					node := model.Node{ID: 1, Name: "overview-traffic-node", Host: "10.1.1.1", Port: 22, Username: "root", BackupDir: "overview-traffic"}
+					if err := db.Create(&node).Error; err != nil {
+						t.Fatalf("insert traffic node: %v", err)
+					}
+					seedOverviewTrafficTasks(t, db, 1)
+					addRow := func(at time.Time) {
+						t.Helper()
+						switch source {
+						case "sample":
+							row := model.TaskTrafficSample{TaskID: 1, NodeID: 1, RunStartedAt: now.Add(-2 * time.Hour), SampledAt: at, ThroughputMbps: 75}
+							if err := db.Create(&row).Error; err != nil {
+								t.Fatalf("insert sample: %v", err)
+							}
+						case "started":
+							row := model.TaskRun{TaskID: 1, Status: "success", StartedAt: &at}
+							if err := db.Create(&row).Error; err != nil {
+								t.Fatalf("insert started run: %v", err)
+							}
+						case "failed":
+							row := model.TaskRun{TaskID: 1, Status: "failed", FinishedAt: &at}
+							if err := db.Create(&row).Error; err != nil {
+								t.Fatalf("insert failed run: %v", err)
+							}
+						}
+					}
+					for _, offset := range tc.times {
+						addRow(now.Add(offset))
+					}
+					// These rows must not consume the cap, even though the future row sorts first.
+					addRow(now.Add(time.Minute))
+					addRow(now.Add(-2 * time.Hour))
+
+					router := trafficTestRouter(NewOverviewTrafficHandler(db, func() time.Time { return now }))
+					response := httptest.NewRecorder()
+					router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil))
+					if response.Code != http.StatusOK {
+						t.Fatalf("unexpected status %d: %s", response.Code, response.Body.String())
+					}
+					var result struct {
+						Data struct {
+							Truncated *bool `json:"truncated"`
+							Points    []struct {
+								TimestampMs     int64   `json:"timestamp_ms"`
+								ThroughputMbps  float64 `json:"throughput_mbps"`
+								SampleCount     int     `json:"sample_count"`
+								ActiveTaskCount int     `json:"active_task_count"`
+								StartedCount    int     `json:"started_count"`
+								FailedCount     int     `json:"failed_count"`
+								Partial         *bool   `json:"partial"`
+								Incomplete      *bool   `json:"incomplete"`
+							} `json:"points"`
+						} `json:"data"`
+					}
+					if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+						t.Fatalf("decode response: %v", err)
+					}
+					if (result.Data.Truncated != nil) != tc.truncated || (result.Data.Truncated != nil && !*result.Data.Truncated) {
+						t.Fatalf("truncated = %v, want %v", result.Data.Truncated, tc.truncated)
+					}
+					if len(result.Data.Points) != 13 {
+						t.Fatalf("got %d points, want 13", len(result.Data.Points))
+					}
+					retained := make(map[int64]int)
+					sampleMinutes := make(map[int64]map[int64]bool)
+					for _, offset := range tc.retained {
+						at := now.Add(offset)
+						bucket := at.Truncate(5 * time.Minute).UnixMilli()
+						retained[bucket]++
+						if sampleMinutes[bucket] == nil {
+							sampleMinutes[bucket] = make(map[int64]bool)
+						}
+						sampleMinutes[bucket][at.Truncate(time.Minute).UnixMilli()] = true
+					}
+					cutoff := now.Add(tc.cutoff).Truncate(5 * time.Minute).UnixMilli()
+					for i, point := range result.Data.Points {
+						wantTime := currentBucket.Add(time.Duration(i-12) * 5 * time.Minute).UnixMilli()
+						if point.TimestampMs != wantTime {
+							t.Fatalf("point %d timestamp = %d, want %d", i, point.TimestampMs, wantTime)
+						}
+						wantIncomplete := tc.truncated && wantTime <= cutoff
+						if (point.Incomplete != nil) != wantIncomplete || (point.Incomplete != nil && !*point.Incomplete) {
+							t.Errorf("point %d incomplete = %v, want %v", i, point.Incomplete, wantIncomplete)
+						}
+						if (point.Partial != nil) != (i == 12) || (point.Partial != nil && !*point.Partial) {
+							t.Errorf("point %d partial = %v", i, point.Partial)
+						}
+						count := retained[wantTime]
+						if source == "sample" {
+							wantThroughput, wantActive := 0.0, 0
+							if count > 0 {
+								wantThroughput, wantActive = 75, 1
+							}
+							if point.ThroughputMbps != wantThroughput || point.ActiveTaskCount != wantActive || point.SampleCount != len(sampleMinutes[wantTime]) {
+								t.Errorf("point %d sample values = %+v", i, point)
+							}
+						} else if source == "started" && point.StartedCount != count {
+							t.Errorf("point %d started = %d, want %d", i, point.StartedCount, count)
+						} else if source == "failed" && point.FailedCount != count {
+							t.Errorf("point %d failed = %d, want %d", i, point.FailedCount, count)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestOverviewTrafficUsesLatestExcludedBucketAcrossQueries(t *testing.T) {
+	previousSampleCap, previousRunCap := trafficSampleCap, trafficTaskRunCap
+	trafficSampleCap, trafficTaskRunCap = 1, 1
+	t.Cleanup(func() { trafficSampleCap, trafficTaskRunCap = previousSampleCap, previousRunCap })
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("migrate traffic tables: %v", err)
+	}
+	seedOverviewTrafficTasks(t, db, 1)
+	now := time.Date(2026, 3, 7, 12, 17, 0, 0, time.UTC)
+	for _, offset := range []time.Duration{-10 * time.Minute, 0} {
+		at := now.Add(offset)
+		if err := db.Create(&model.TaskTrafficSample{TaskID: 1, NodeID: 1, RunStartedAt: now.Add(-time.Hour), SampledAt: at, ThroughputMbps: 42}).Error; err != nil {
+			t.Fatalf("insert sample: %v", err)
+		}
+	}
+	for _, offset := range []time.Duration{-20 * time.Minute, 0} {
+		at := now.Add(offset)
+		if err := db.Create(&model.TaskRun{TaskID: 1, Status: "success", StartedAt: &at}).Error; err != nil {
+			t.Fatalf("insert started run: %v", err)
+		}
+	}
+	for _, offset := range []time.Duration{-30 * time.Minute, 0} {
+		at := now.Add(offset)
+		if err := db.Create(&model.TaskRun{TaskID: 1, Status: "failed", FinishedAt: &at}).Error; err != nil {
+			t.Fatalf("insert failed run: %v", err)
+		}
+	}
+	response := httptest.NewRecorder()
+	trafficTestRouter(NewOverviewTrafficHandler(db, func() time.Time { return now })).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Data struct {
+			Truncated bool `json:"truncated"`
+			Points    []struct {
+				TimestampMs    int64   `json:"timestamp_ms"`
+				ThroughputMbps float64 `json:"throughput_mbps"`
+				StartedCount   int     `json:"started_count"`
+				FailedCount    int     `json:"failed_count"`
+				Incomplete     bool    `json:"incomplete"`
+				Partial        bool    `json:"partial"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !result.Data.Truncated || len(result.Data.Points) != 13 {
+		t.Fatalf("unexpected truncated or point count: %+v", result.Data)
+	}
+	cutoff := now.Add(-10 * time.Minute).Truncate(5 * time.Minute).UnixMilli()
+	for _, point := range result.Data.Points {
+		if point.Incomplete != (point.TimestampMs <= cutoff) {
+			t.Errorf("wrong incomplete flag at %d", point.TimestampMs)
+		}
+	}
+	last := result.Data.Points[len(result.Data.Points)-1]
+	if !last.Partial || last.Incomplete || last.ThroughputMbps != 42 || last.StartedCount != 1 || last.FailedCount != 1 {
+		t.Fatalf("latest bucket lost retained rows: %+v", last)
+	}
+}
+
+func TestOverviewTrafficCapFiltersOwnershipBeforeLimiting(t *testing.T) {
+	previousSampleCap, previousRunCap := trafficSampleCap, trafficTaskRunCap
+	trafficSampleCap, trafficTaskRunCap = 1, 1
+	t.Cleanup(func() { trafficSampleCap, trafficTaskRunCap = previousSampleCap, previousRunCap })
+	db := openOverviewTrafficTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("migrate traffic tables: %v", err)
+	}
+	op := model.User{Username: "traffic-cap-op", Role: "operator", PasswordHash: "x"}
+	ownedNode := model.Node{Name: "owned", Host: "10.0.30.1", Username: "root", AuthType: "key", BackupDir: "owned"}
+	otherNode := model.Node{Name: "other", Host: "10.0.30.2", Username: "root", AuthType: "key", BackupDir: "other"}
+	for _, row := range []any{&op, &ownedNode, &otherNode} {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatalf("insert ownership fixture: %v", err)
+		}
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: op.ID}).Error; err != nil {
+		t.Fatalf("assign node owner: %v", err)
+	}
+	now := time.Date(2026, 3, 7, 12, 17, 0, 0, time.UTC)
+	for _, node := range []model.Node{ownedNode, otherNode} {
+		task := model.Task{Name: "traffic-cap-task", NodeID: node.ID, ExecutorType: "local", Status: "success"}
+		if err := db.Create(&task).Error; err != nil {
+			t.Fatalf("insert task: %v", err)
+		}
+		at := now
+		if node.ID == ownedNode.ID {
+			at = now.Add(-10 * time.Minute)
+		}
+		if err := db.Create(&model.TaskTrafficSample{TaskID: task.ID, NodeID: node.ID, RunStartedAt: at, SampledAt: at, ThroughputMbps: 42}).Error; err != nil {
+			t.Fatalf("insert sample: %v", err)
+		}
+		if err := db.Create(&model.TaskRun{TaskID: task.ID, Status: "failed", StartedAt: &at, FinishedAt: &at}).Error; err != nil {
+			t.Fatalf("insert run: %v", err)
+		}
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, op.ID)
+		c.Next()
+	})
+	router.GET("/overview/traffic", NewOverviewTrafficHandler(db, func() time.Time { return now }).Get)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/overview/traffic?window=1h", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Data struct {
+			Truncated *bool `json:"truncated"`
+			Points    []struct {
+				TimestampMs    int64   `json:"timestamp_ms"`
+				ThroughputMbps float64 `json:"throughput_mbps"`
+				StartedCount   int     `json:"started_count"`
+				FailedCount    int     `json:"failed_count"`
+				Incomplete     *bool   `json:"incomplete"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Data.Truncated != nil {
+		t.Fatal("other owner's rows must not trigger truncation")
+	}
+	ownedBucket := now.Add(-10 * time.Minute).Truncate(5 * time.Minute).UnixMilli()
+	for _, point := range result.Data.Points {
+		if point.Incomplete != nil {
+			t.Fatal("untruncated points must omit incomplete")
+		}
+		if point.TimestampMs == ownedBucket {
+			if point.ThroughputMbps != 42 || point.StartedCount != 1 || point.FailedCount != 1 {
+				t.Fatalf("owned bucket lost its rows: %+v", point)
+			}
+		} else if point.ThroughputMbps != 0 || point.StartedCount != 0 || point.FailedCount != 0 {
+			t.Fatalf("other owner's data appeared: %+v", point)
+		}
 	}
 }
