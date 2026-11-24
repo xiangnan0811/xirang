@@ -315,6 +315,8 @@ workflow，相关 source job 和 check 已成功。当前 snapshot verifier 要�
 需要当前采用或 PR 保护结论时另核 `live_eligibility` 和有效 required checks，分别
 记录观察时间与结果。部分或未完成的 case 如实报告，不能称为完整四阶段证明。
 
+PostgreSQL 取证以该次 checkout 的已认证必跑清单为准。离线复验按清单重放每组原始测试事件，核对所需用例和归档文件齐备。
+
 在已有权限移除证据工作区前，保留原 checkout 和规范 Git common-directory 身份，
 以及离线重放所需的工作区内容、工具与依赖（包括必要的未跟踪或忽略文件）；
 对私有归档计算校验和，读回并核对归档及内容，再以保留的实际 verifier 验证可重放性。
@@ -411,13 +413,8 @@ AST候选校验、默认及覆盖timeout、14个required环境开关和逐测试
 proof到期、并发导入与结果未知清理。每个必需PG子路径均须实际run/pass，不能以SQLite、
 父测试通过或空选择器掩盖缺失分支；新增PG声明与场景必须同步库存并通过独立census。
 
-修改 required PG 库存或 CI 取证验证策略时，独立审查前先运行
-`bash scripts/run-required-postgres-tests.sh --list-only`，再将库存中的组、顶层测试根
-和 required 路径与 `scripts/ci_evidence/source.py` 的 `verify_postgres`、
-`scripts/ci_evidence/cli.py` 的 `policy` 及 `scripts/ci-evidence.test.py` 的 fixture
-逐项对账并同步；保留现有 attempt／receipt 身份和 PG 通过标准。`--list-only` 只校验
-库存与 census，不能单独证明取证策略一致。按[取证回归](../spec/guides/testing.md#取证恢复与故障边界)
-构建真实 Go verifier 并运行既有证据回归，记录结果后再送审。
+修改 required PostgreSQL 库存或 CI 取证验证策略时，运行
+`bash scripts/run-required-postgres-tests.sh --list-only`，校验库存与 census。源码取证复验使用候选 checkout 的已认证清单核对归档及每个测试结果。验证逻辑更新保留既有采集与认证回执的身份，变更后的验证与完成阶段重新计算。按[取证回归](../spec/guides/testing.md#取证恢复与故障边界)构建真实 Go verifier，并运行证据回归。
 
 升级策略只读预演的 `TestEscalationPreviewPostgres` 仍在库存中，使用随机隔离schema
 验证真实路由权限、`REPEATABLE READ READ ONLY`、并发快照、零写入及取消清理。

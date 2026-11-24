@@ -213,7 +213,7 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 	// current writes include one. A whole-second bound compares correctly to both.
 	boundary := func(t time.Time) any {
 		utc := t.UTC()
-		if h.db.Dialector.Name() == "sqlite" {
+		if h.db.Name() == "sqlite" {
 			return utc.Format("2006-01-02 15:04:05")
 		}
 		return utc
