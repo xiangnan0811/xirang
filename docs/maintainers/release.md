@@ -72,7 +72,7 @@ Go 模块组、生产与开发前端依赖、typescript-estree 本地安全补�
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
 
-备份概览与策略修复的行为、换版生效时点和回退边界见 [CHANGELOG](../../CHANGELOG.md) 的「备份概览与策略」及「升级与回退」。正式发行前，将这两节归入目标版本，并同步 Release PR 与 GitHub Release 正文。
+#745 备份概览与策略修复及 Gorilla WebSocket 安全依赖更新的完整行为、升级与回退说明归档于 CHANGELOG `0.74.3` 版本节。发行 PR 与正式 GitHub Release 正文须保留该版本节的「备份概览与策略」「Go 依赖安全更新」及「升级与回退」。
 
 `github.com/gorilla/websocket` 的 `v1.5.3` → `v1.5.4-0.20240701034025-d67f41855da4`
 修复 [GO-2026-6278](https://pkg.go.dev/vuln/GO-2026-6278)，属于运行依赖安全更新，按

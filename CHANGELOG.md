@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.74.3](https://github.com/xiangnan0811/xirang/compare/v0.74.2...v0.74.3) (2026-11-24)
+
+
+### 🐛 Bug Fixes
+
+* **overview:** 修正备份概览与任务统计 ([#745](https://github.com/xiangnan0811/xirang/issues/745)) ([c5f1638](https://github.com/xiangnan0811/xirang/commit/c5f16389633fae83c7b89595fb3eb66c53b402dc))
+
 ### 备份概览与策略
 
 - 概览页展示四项备份保护态势、默认近 24 小时的流量与活动趋势、最多 8 条最近同步任务，以及有健康事件或加载错误时的事件面板。最近已验证备份和过期阈值来自备份健康接口；没有运行记录的七天成功率显示未知，接口未就绪或失败时不把未知值伪装为零或成功。页面支持手动和定时刷新。
