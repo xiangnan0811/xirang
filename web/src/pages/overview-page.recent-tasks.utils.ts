@@ -46,24 +46,3 @@ export function sortRecentTasks(tasks: TaskRecord[], limit = 5): TaskRecord[] {
     })
     .slice(0, limit);
 }
-
-export function formatTaskDuration(durationMs?: number): string {
-  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
-    return "—";
-  }
-  if (durationMs < 1000) {
-    return `${Math.round(durationMs)}ms`;
-  }
-  const totalSeconds = Math.floor(durationMs / 1000);
-  if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  const remainSeconds = totalSeconds % 60;
-  if (minutes < 60) {
-    return `${minutes}m ${remainSeconds}s`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainMinutes = minutes % 60;
-  return `${hours}h ${remainMinutes}m`;
-}

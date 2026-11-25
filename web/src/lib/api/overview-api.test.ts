@@ -236,6 +236,55 @@ describe("overview api", () => {
     expect(result.groups[0].signals[0]).toMatchObject({ type: "task_failure", taskRunId: 11, nodeId: 3, policyId: 5 });
   });
 
+  it("getHealthIncidentTimeline keeps a literal true truncation flag with the retained groups and counts", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      data: {
+        window_hours: 72,
+        summary: { total: 1, critical: 0, warning: 1, info: 0 },
+        groups: [{ id: "retained", severity: "warning", source_types: ["alert"], event_count: 2 }],
+        truncated: true,
+      },
+    })));
+
+    const result = await api.getHealthIncidentTimeline("FAKE_OVERVIEW_TOKEN_FOR_TEST_ONLY");
+
+    expect(result.truncated).toBe(true);
+    expect(result.summary).toEqual({ total: 1, critical: 0, warning: 1, info: 0 });
+    expect(result.groups.map((group) => group.id)).toEqual(["retained"]);
+  });
+
+  it("getHealthIncidentTimeline keeps a literal true truncation flag on an empty result", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      data: { window_hours: 72, summary: { total: 0, critical: 0, warning: 0, info: 0 }, groups: [], truncated: true },
+    })));
+
+    const result = await api.getHealthIncidentTimeline("FAKE_OVERVIEW_TOKEN_FOR_TEST_ONLY");
+
+    expect(result.truncated).toBe(true);
+    expect(result.groups).toEqual([]);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["absent", {}],
+    ["false", { truncated: false }],
+    ["null", { truncated: null }],
+    ["string", { truncated: "true" }],
+    ["number", { truncated: 1 }],
+    ["object", { truncated: {} }],
+  ])("getHealthIncidentTimeline omits truncation when the flag is %s", async (_label, flag) => {
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+      code: 0,
+      data: { window_hours: 72, groups: [{ id: "kept", source_types: ["alert"] }], ...flag },
+    })));
+
+    const result = await api.getHealthIncidentTimeline("FAKE_OVERVIEW_TOKEN_FOR_TEST_ONLY");
+
+    expect(result).not.toHaveProperty("truncated");
+    expect(result.groups.map((group) => group.id)).toEqual(["kept"]);
+  });
+
   it("drops retired probe and metric timeline sources and view-node-metrics actions", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({
@@ -523,6 +572,56 @@ describe("overview api", () => {
     expect(result.points[1]).not.toHaveProperty("incomplete");
     expect(result.points[2]).not.toHaveProperty("incomplete");
     expect(result.points[3]).toMatchObject({ throughputMbps: 10, startedCount: 1, partial: true });
+  });
+
+  it("getOverviewTraffic maps per-source incomplete flags only when strictly true, independently of the aggregate", async () => {
+    const bucket = (timestamp: string, flags: Record<string, unknown>) => ({
+      timestamp,
+      timestamp_ms: Date.parse(timestamp),
+      label: timestamp.slice(11, 16),
+      throughput_mbps: 10,
+      sample_count: 1,
+      active_task_count: 1,
+      started_count: 1,
+      failed_count: 0,
+      ...flags,
+    });
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          window: "1h",
+          bucket_minutes: 5,
+          has_real_samples: true,
+          truncated: true,
+          generated_at: "2026-03-07T12:12:00Z",
+          points: [
+            bucket("2026-03-07T11:50:00Z", { incomplete: true, samples_incomplete: true, started_incomplete: true, failed_incomplete: true }),
+            bucket("2026-03-07T11:55:00Z", { incomplete: true, samples_incomplete: true }),
+            bucket("2026-03-07T12:00:00Z", { incomplete: true, started_incomplete: true }),
+            bucket("2026-03-07T12:05:00Z", { incomplete: true, failed_incomplete: true }),
+            bucket("2026-03-07T12:10:00Z", { samples_incomplete: "true", started_incomplete: 1, failed_incomplete: false }),
+          ],
+        },
+      }))
+    );
+
+    const result = await api.getOverviewTraffic("token-1", { window: "1h" });
+
+    const flagsOf = (index: number) => {
+      const { incomplete, samplesIncomplete, startedIncomplete, failedIncomplete } = result.points[index]!;
+      return { incomplete, samplesIncomplete, startedIncomplete, failedIncomplete };
+    };
+    expect(flagsOf(0)).toEqual({ incomplete: true, samplesIncomplete: true, startedIncomplete: true, failedIncomplete: true });
+    expect(flagsOf(1)).toEqual({ incomplete: true, samplesIncomplete: true, startedIncomplete: undefined, failedIncomplete: undefined });
+    expect(flagsOf(2)).toEqual({ incomplete: true, samplesIncomplete: undefined, startedIncomplete: true, failedIncomplete: undefined });
+    expect(flagsOf(3)).toEqual({ incomplete: true, samplesIncomplete: undefined, startedIncomplete: undefined, failedIncomplete: true });
+    for (const key of ["incomplete", "samplesIncomplete", "startedIncomplete", "failedIncomplete"]) {
+      expect(result.points[4]).not.toHaveProperty(key);
+    }
+    expect(result.points[1]).not.toHaveProperty("startedIncomplete");
+    expect(result.points[1]).not.toHaveProperty("failedIncomplete");
   });
 
   it("getBackupHealth returns null successRate7d when trend has zero runs and maps generatedAt", async () => {

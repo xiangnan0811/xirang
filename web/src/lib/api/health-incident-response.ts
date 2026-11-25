@@ -54,6 +54,7 @@ export type HealthIncidentTimelineRaw = {
     info?: number | string;
   };
   groups?: HealthIncidentGroupRaw[];
+  truncated?: unknown;
 };
 
 function mapHealthIncidentSeverity(raw?: string): HealthIncidentSeverity {
@@ -225,5 +226,6 @@ export function mapHealthIncidentTimeline(raw: HealthIncidentTimelineRaw | null 
     groups: Array.isArray(raw?.groups)
       ? raw.groups.map(mapHealthIncidentGroup).filter((group): group is HealthIncidentGroup => group != null)
       : [],
+    ...(raw?.truncated === true ? { truncated: true as const } : {}),
   };
 }

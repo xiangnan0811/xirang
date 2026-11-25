@@ -25,6 +25,7 @@ import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { getTaskStatusMeta } from "@/lib/status";
 import { cronTimezoneNoteKey, cronToNatural } from "@/lib/cron-utils";
 import { cn } from "@/lib/utils";
+import { TaskLatestCompletion } from "@/pages/tasks-page.timing";
 import type { TasksViewProps } from "@/pages/tasks-page.utils";
 import { buildChainParentMap, canCancel, canTrigger, rclonePublicationStateTone, taskPreviewConnectEligibility } from "@/pages/tasks-page.utils";
 
@@ -251,9 +252,10 @@ export const TasksTable = React.memo(function TasksTable({
                       </div>
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 text-xs text-muted-foreground">
+                  <td className="whitespace-nowrap px-3 py-2.5 text-xs tabular-nums text-muted-foreground">
                     <p>{t("tasks.startedAtLabel", { time: task.startedAt })}</p>
                     <p>{t("tasks.nextRunAtLabel", { time: task.nextRunAt ?? "-" })}</p>
+                    <TaskLatestCompletion lastFinishedAt={task.lastFinishedAt} lastDurationMs={task.lastDurationMs} />
                   </td>
                   <td className="px-3 py-2.5 text-xs">
                     <span

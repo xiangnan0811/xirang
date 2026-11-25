@@ -9,6 +9,7 @@ import { getTaskStatusMeta } from "@/lib/status";
 import { cronTimezoneNoteKey, cronToNatural } from "@/lib/cron-utils";
 import { cn } from "@/lib/utils";
 import { canCancel, canTrigger, rclonePublicationStateTone, taskPreviewConnectEligibility } from "@/pages/tasks-page.utils";
+import { TaskLatestCompletion } from "@/pages/tasks-page.timing";
 
 import type { TasksViewProps } from "@/pages/tasks-page.utils";
 
@@ -138,6 +139,7 @@ export const TasksGrid = React.memo(function TasksGrid({
               ) : null}
               <p>{t('tasks.startedAtLabel', { time: task.startedAt })}</p>
               {task.nextRunAt ? <p>{t('tasks.nextRunAtLabel', { time: task.nextRunAt })}</p> : null}
+              <TaskLatestCompletion lastFinishedAt={task.lastFinishedAt} lastDurationMs={task.lastDurationMs} />
               {task.lastError ? (
                 <p className="break-all text-destructive">{t('tasks.errorLabel', { error: task.lastError })}</p>
               ) : null}

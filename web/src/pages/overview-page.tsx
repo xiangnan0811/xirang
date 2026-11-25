@@ -165,7 +165,7 @@ export function OverviewPage() {
 
   const scopeLabel = role === "operator" ? t("overview.scopeMyNodes") : t("overview.scopeAllNodes");
   const incidentCount = incidentTimeline?.groups.length ?? 0;
-  const showIncidentPanel = Boolean(incidentError) || incidentCount > 0;
+  const showIncidentPanel = Boolean(incidentError) || incidentCount > 0 || incidentTimeline?.truncated === true;
 
   return (
     <Stagger className="space-y-5">

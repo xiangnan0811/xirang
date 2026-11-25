@@ -306,11 +306,19 @@ operator 的降级策略必须仍关联其当前拥有的节点，评估连续�
 
 `GET /api/v1/overview/traffic` 要求 `tasks:read` 与节点 ownership 过滤（operator 吞吐样本按 `node_id`、任务开始/失败事件按不可变 `TaskRun.node_id_snapshot` 过滤，空 owned node 返回按同一窗口生成的全零时间桶），支持 `window=1h|24h|7d`（默认 `1h`，桶宽分别为 5m/30m/3h）。吞吐量按 `SampleWriter` 的 10 秒采样切片聚合（同切片同任务取均值后再按不重复任务求和，最后对桶内活跃切片取均值），同时保持 `sample_count` 为桶内活跃分钟数，避免单任务多样本按分钟叠加放大；当服务端时间处于当前桶内（`now > currentBucketStart`）时，响应保留末尾进行中时间桶 `[currentBucketStart, now]` 并标记 `partial: true`（已完成历史桶省略 `partial`）。
 
-采样、开始和失败查询分别优先保留最新记录。任一查询达到行数上限并仍有更多记录时返回 `truncated: true`，从窗口起点到最新被截去记录所在桶均标记 `incomplete: true`。该标记可以与末尾桶的 `partial: true` 同时出现。前端保留缺测桶的时间位置，对该桶留空，图表统计只覆盖可用的桶。
+采样、开始和失败查询分别优先保留最新记录。任一来源超过行数上限时返回 `truncated: true`。从窗口起点到该来源最新被截去记录所在桶，分别标记 `samples_incomplete`、`started_incomplete` 或 `failed_incomplete`。各标记只在为真时返回。兼容字段 `incomplete` 表示至少一个来源不完整。这些标记可与末尾桶的 `partial: true` 同时出现。
 
-前端 `overview-api.ts` 映射 `/overview/backup-health` 时，将 7 天总运行数为 0 的 `summary.successRate7d` 保留为 `null`（`BackupHealthPanel` 渲染为中性 `—`，不伪造绿色 `100%`），并透传 `latestVerifiedBackupAt` 与 `staleThresholdHours`。`/app/overview` 路由页作为唯一认证与数据编排入口，通过 `useOverviewPosture` 并行读取 `/overview/backup-confidence` 与 `/overview/backup-health`（带 `AbortController`、请求序号守卫与 token 切换重置），同时响应手动刷新 `refreshVersion` 与概览专属定时轮询信号 `overviewPollVersion`（后台定时刷新不推进全局 `refreshVersion`，避免重置通知中心勾选状态或备份文件分页）；以 `StatCardsSection` 扁平 4 卡片展示保护态势（无外层套壳卡片，静态卡片不带悬停抬升误导；“最近已验证备份”仅以 `/overview/backup-health` 为唯一可见范围权威，不混入策略级可信度时间戳，健康接口失败时显示 `—`/暂不可用，显式返回 `null` 时显示暂无；“已启用策略”在未知状态 `null` 时显示 `—`/暂不可用而不伪造为 `0`；滞后阈值按服务端 `staleThresholdHours` 动态呈现，不将完整 `BackupHealthPanel`/`BackupConfidencePanel`/`StorageUsagePanel` 复制到概览页）；流量趋势图默认展示 `24h` 窗口，切窗加载期间保留上一响应对应的窗口标题与读屏名称并单独提示目标窗口加载中，纵轴事件计数使用整数刻度，无真实吞吐采样但存在开始/失败事件时仍保留活动与失败图层并标注进行中末尾桶，仅在采样、开始与失败均为 0 时渲染 `EmptyState`；页面底部展示最近同步任务（最多 8 条，按最近完成/运行时间排序，展示真实耗时、完成时间及全部 8 种 `TaskStatus`，不展示伪造的 `speedMbps` 或以 `updated_at` 冒充完成时间），当存在健康事件或加载错误时与健康事件面板（最多展示 3 条，顶部右上角统一提供前往 `/app/notifications` 的“全部告警”入口）等高并排呈现，无健康事件且无错误时隐藏健康事件面板并让最近同步任务占满全宽展示下次运行时间。
+前端保留所有桶的时间位置。吞吐只使用采样完整的桶，活动柱 `max(started_count, active_task_count)` 要求开始事件和采样均完整，失败柱仅要求失败事件完整。摘要按各自来源的完整桶汇总开始和失败计数，完全缺少可靠桶的计数显示为不可用。旧响应只有桶级 `incomplete` 时留空该桶的全部指标，仅有整窗 `truncated` 而无桶级标记时留空全部桶。
+
+采样完整的桶中，`sample_count = 0` 表示该桶未测到吞吐。前端以 `null` 表示缺测，吞吐曲线断开，提示框省略吞吐值。`sample_count > 0` 的完整采样桶保留数值吞吐，包括四舍五入后为 `0` 的值。全部为测得 `0` 时仍显示吞吐曲线和左轴单位（纵轴沿用 `0..1` 范围），两侧都是缺测桶的单个测得点以圆点标出。峰值和是否有真实样本只按采样完整且有样本的桶计算。摘要区分无吞吐采样和因截断而不可用的吞吐。
+
+前端 `overview-api.ts` 映射 `/overview/backup-health` 时，将 7 天总运行数为 0 的 `summary.successRate7d` 保留为 `null`（`BackupHealthPanel` 渲染为中性 `—`，不伪造绿色 `100%`），并透传 `latestVerifiedBackupAt` 与 `staleThresholdHours`。`/app/overview` 路由页作为唯一认证与数据编排入口，通过 `useOverviewPosture` 并行读取 `/overview/backup-confidence` 与 `/overview/backup-health`（带 `AbortController`、请求序号守卫与 token 切换重置），同时响应手动刷新 `refreshVersion` 与概览专属定时轮询信号 `overviewPollVersion`（后台定时刷新不推进全局 `refreshVersion`，避免重置通知中心勾选状态或备份文件分页）；以 `StatCardsSection` 扁平 4 卡片展示保护态势（无外层套壳卡片，静态卡片不带悬停抬升误导；“最近已验证备份”仅以 `/overview/backup-health` 为唯一可见范围权威，不混入策略级可信度时间戳，健康接口失败时显示 `—`/暂不可用，显式返回 `null` 时显示暂无；“已启用策略”在未知状态 `null` 时显示 `—`/暂不可用而不伪造为 `0`；滞后阈值按服务端 `staleThresholdHours` 动态呈现，不将完整 `BackupHealthPanel`/`BackupConfidencePanel`/`StorageUsagePanel` 复制到概览页）；流量趋势图默认展示 `24h` 窗口，切窗加载期间保留上一响应对应的窗口标题与读屏名称并单独提示目标窗口加载中，纵轴事件计数使用整数刻度，无真实吞吐采样但存在开始/失败事件时仍保留活动与失败图层并标注进行中末尾桶，仅在采样、开始与失败均为 0 时渲染 `EmptyState`。
+
+页面底部展示最近同步任务（最多 8 条，按最近完成/运行时间排序，展示真实耗时、完成时间及全部 8 种 `TaskStatus`，不展示伪造的 `speedMbps` 或以 `updated_at` 冒充完成时间）。存在健康事件、来源截断或加载错误时显示健康事件面板（最多展示 3 组，顶部右上角统一提供前往 `/app/notifications` 的“全部告警”入口）。`xl` 及以上两面板等高并排，任务表切换为紧凑五列。低于 `xl` 时事件面板位于任务表下方，任务表始终显示六列（含下次运行），超宽时在表格区域内横向滚动。成功返回空结果且未报告截断时隐藏健康事件面板，最近同步任务占满全宽并显示下次运行时间。
 
 定时轮询跳过同范围内尚未完成的请求，手动刷新、切换范围和卸载仍可取消请求。备份可信度与健康各自准备就绪后即可显示。两项同时失败时，仍展示已知的启用策略数和策略入口。
+
+趋势图已有数据且在同一时间窗口刷新时，标题图标显示更新状态并保持尺寸，读屏状态提示独立于标题。切换时间窗口时仍显示目标窗口的文字提示，标题和图表读屏名称继续对应当前显示的数据。
 
 ## 备份可信度
 
@@ -330,7 +338,13 @@ freshness 使用 verified completion，不把 command success、可变 Node 时�
 
 TaskRun 关联 Task 读取任务名字/policy，节点归属使用不可变 `node_id_snapshot`，不能以可改 Task 当前 node 替代历史身份。operator 只看 owned node；无 owned node 为空，不公开 `node_id=0` 平台告警。平台资源对 admin/viewer 按现有读取权限可见。未知角色/ownership 查询错误失败关闭，任一源查询失败不返回假部分成功。
 
+告警、任务失败、通知失败和异常事件各最多聚合 300 条，陈旧备份最多检查按 ID 升序排列的 300 个可见未归档节点。四类事件按各自查询时间倒序、同时间按 ID 倒序。这五个受限来源均在权限和业务过滤后读取最多 301 条，遇到第 301 条时只处理前 300 条，并在成功响应顶层返回可选的 `truncated: true`。`summary` 和 `event_count` 统计已聚合结果。每组最多返回 5 条信号，概览最多预览 3 组，展示上限不触发来源截断标记。
+
+`backup_degraded` 按策略独立判定：启用且非模板策略的 eligible 尝试（`ClassifiedAttemptPredicate`，operator 先按 `node_id_snapshot` 过滤 owned node）在数据库内按策略分区、`created_at DESC, id DESC` 排名，每个策略只取最新 3 次，无全局行数上限，其他策略的历史不能挤掉后续策略。同一 `created_at` 时较大 ID 视为更新。3 次均为失败（verified 完成为成功，无 verified 证据的 success 为未完成）才产生信号，信号时间、任务和节点取排名第一的尝试。该判定使用保留历史，不受 `window_hours` 限制。
+
 前端在共享 context 前全部 camelCase 映射；groups/sourceTypes/nextActions/signals 缺失为 []，非法可选 ID 为 undefined，count 为 0；未知 severity→warning、source→alert、resource→platform。过滤空 href，不用 credentials/config/raw log 扩充信息；请求失败不展示旧 groups 为当前结果。回归覆盖聚合、排序、严重度提升、TaskRun snapshot、各种来源、双端 drill 权限关联、next action、mapper 及 loading/empty/error UI。
+
+概览只认字面量 `truncated: true` 并显示覆盖范围提示，保留已读的事件和摘要。截断且无分组时仍显示面板，说明已检查的数据中未发现事件。加载失败继续显示错误及重试入口。更新后的成功响应或身份变化使旧提示失效。
 
 公开 DTO 另有可选 `cause_code/cause_params`，系统摘要与动作按客户端语言显示，
 非空 `likely_cause` 始终保留为可展开的“来源诊断”，只以普通文本呈现。用户名称和

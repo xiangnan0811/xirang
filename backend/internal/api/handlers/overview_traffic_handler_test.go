@@ -1012,14 +1012,17 @@ func TestOverviewTrafficCapPreservesNewestBuckets(t *testing.T) {
 						Data struct {
 							Truncated *bool `json:"truncated"`
 							Points    []struct {
-								TimestampMs     int64   `json:"timestamp_ms"`
-								ThroughputMbps  float64 `json:"throughput_mbps"`
-								SampleCount     int     `json:"sample_count"`
-								ActiveTaskCount int     `json:"active_task_count"`
-								StartedCount    int     `json:"started_count"`
-								FailedCount     int     `json:"failed_count"`
-								Partial         *bool   `json:"partial"`
-								Incomplete      *bool   `json:"incomplete"`
+								TimestampMs       int64   `json:"timestamp_ms"`
+								ThroughputMbps    float64 `json:"throughput_mbps"`
+								SampleCount       int     `json:"sample_count"`
+								ActiveTaskCount   int     `json:"active_task_count"`
+								StartedCount      int     `json:"started_count"`
+								FailedCount       int     `json:"failed_count"`
+								Partial           *bool   `json:"partial"`
+								Incomplete        *bool   `json:"incomplete"`
+								SamplesIncomplete *bool   `json:"samples_incomplete"`
+								StartedIncomplete *bool   `json:"started_incomplete"`
+								FailedIncomplete  *bool   `json:"failed_incomplete"`
 							} `json:"points"`
 						} `json:"data"`
 					}
@@ -1052,6 +1055,19 @@ func TestOverviewTrafficCapPreservesNewestBuckets(t *testing.T) {
 						wantIncomplete := tc.truncated && wantTime <= cutoff
 						if (point.Incomplete != nil) != wantIncomplete || (point.Incomplete != nil && !*point.Incomplete) {
 							t.Errorf("point %d incomplete = %v, want %v", i, point.Incomplete, wantIncomplete)
+						}
+						for _, flag := range []struct {
+							name string
+							got  *bool
+							want bool
+						}{
+							{"samples_incomplete", point.SamplesIncomplete, source == "sample" && wantIncomplete},
+							{"started_incomplete", point.StartedIncomplete, source == "started" && wantIncomplete},
+							{"failed_incomplete", point.FailedIncomplete, source == "failed" && wantIncomplete},
+						} {
+							if (flag.got != nil) != flag.want || (flag.got != nil && !*flag.got) {
+								t.Errorf("point %d %s = %v, want %v", i, flag.name, flag.got, flag.want)
+							}
 						}
 						if (point.Partial != nil) != (i == 12) || (point.Partial != nil && !*point.Partial) {
 							t.Errorf("point %d partial = %v", i, point.Partial)
@@ -1114,12 +1130,15 @@ func TestOverviewTrafficUsesLatestExcludedBucketAcrossQueries(t *testing.T) {
 		Data struct {
 			Truncated bool `json:"truncated"`
 			Points    []struct {
-				TimestampMs    int64   `json:"timestamp_ms"`
-				ThroughputMbps float64 `json:"throughput_mbps"`
-				StartedCount   int     `json:"started_count"`
-				FailedCount    int     `json:"failed_count"`
-				Incomplete     bool    `json:"incomplete"`
-				Partial        bool    `json:"partial"`
+				TimestampMs       int64   `json:"timestamp_ms"`
+				ThroughputMbps    float64 `json:"throughput_mbps"`
+				StartedCount      int     `json:"started_count"`
+				FailedCount       int     `json:"failed_count"`
+				Incomplete        *bool   `json:"incomplete"`
+				SamplesIncomplete *bool   `json:"samples_incomplete"`
+				StartedIncomplete *bool   `json:"started_incomplete"`
+				FailedIncomplete  *bool   `json:"failed_incomplete"`
+				Partial           bool    `json:"partial"`
 			} `json:"points"`
 		} `json:"data"`
 	}
@@ -1129,14 +1148,27 @@ func TestOverviewTrafficUsesLatestExcludedBucketAcrossQueries(t *testing.T) {
 	if !result.Data.Truncated || len(result.Data.Points) != 13 {
 		t.Fatalf("unexpected truncated or point count: %+v", result.Data)
 	}
-	cutoff := now.Add(-10 * time.Minute).Truncate(5 * time.Minute).UnixMilli()
+	samplesCutoff := now.Add(-10 * time.Minute).Truncate(5 * time.Minute).UnixMilli()
+	startedCutoff := now.Add(-20 * time.Minute).Truncate(5 * time.Minute).UnixMilli()
+	failedCutoff := now.Add(-30 * time.Minute).Truncate(5 * time.Minute).UnixMilli()
 	for _, point := range result.Data.Points {
-		if point.Incomplete != (point.TimestampMs <= cutoff) {
-			t.Errorf("wrong incomplete flag at %d", point.TimestampMs)
+		for _, flag := range []struct {
+			name string
+			got  *bool
+			want bool
+		}{
+			{"incomplete", point.Incomplete, point.TimestampMs <= samplesCutoff},
+			{"samples_incomplete", point.SamplesIncomplete, point.TimestampMs <= samplesCutoff},
+			{"started_incomplete", point.StartedIncomplete, point.TimestampMs <= startedCutoff},
+			{"failed_incomplete", point.FailedIncomplete, point.TimestampMs <= failedCutoff},
+		} {
+			if (flag.got != nil) != flag.want || (flag.got != nil && !*flag.got) {
+				t.Errorf("point %d %s = %v, want %v", point.TimestampMs, flag.name, flag.got, flag.want)
+			}
 		}
 	}
 	last := result.Data.Points[len(result.Data.Points)-1]
-	if !last.Partial || last.Incomplete || last.ThroughputMbps != 42 || last.StartedCount != 1 || last.FailedCount != 1 {
+	if !last.Partial || last.Incomplete != nil || last.ThroughputMbps != 42 || last.StartedCount != 1 || last.FailedCount != 1 {
 		t.Fatalf("latest bucket lost retained rows: %+v", last)
 	}
 }
