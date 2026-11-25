@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## [0.74.4](https://github.com/xiangnan0811/xirang/compare/v0.74.3...v0.74.4) (2026-11-25)
+
+
+### 🐛 Bug Fixes
+
+* **overview:** 修复概览截断提示与任务时间显示 ([#747](https://github.com/xiangnan0811/xirang/issues/747)) ([8f90463](https://github.com/xiangnan0811/xirang/commit/8f90463a4a4f80352987119f0fa764d9fdc4e59e))
+
+### 概览与任务时间
+
 - 概览页流量与活动趋势在同一时间窗口更新时使用等尺寸图标提示，避免轮询提示挤动下方内容。
 - 概览页在任务表和健康事件上下排列时始终保留「下次运行」列，避免事件状态变化引起任务表重排。
 - 概览页健康事件按策略分别选取最近三次运行。事件来源超出读取上限时提示结果不完整，并保留已读事件与摘要。
