@@ -753,6 +753,75 @@ describe("TasksPage", () => {
     }
   });
 
+  it.each(["cards", "list"] as const)("%s 视图展示当前节点最近完成时间与耗时，缺失元数据不借用创建/开始时间", async (view) => {
+    window.localStorage.setItem("xirang.tasks.view", JSON.stringify(view));
+    const timed = (id: number, name: string, overrides: Record<string, unknown>) => ({
+      id,
+      name,
+      policyName: name,
+      nodeId: 1,
+      nodeName: "node-prod-1",
+      status: "success" as const,
+      progress: 100,
+      startedAt: "-",
+      speedMbps: 0,
+      ...overrides,
+    });
+    createContext({
+      tasks: [
+        // 运行中：保留上一次已完成运行的时间与耗时，开始时间仍是本次运行。
+        timed(401, "运行中任务", {
+          status: "running",
+          progress: 40,
+          hasActiveRun: true,
+          startedAt: "2026-03-02 08:00:00",
+          lastRunAt: "2026-03-02 08:00:00",
+          lastFinishedAt: "2026-03-01 08:00:05",
+          lastDurationMs: 125000,
+        }),
+        timed(402, "零耗时任务", { lastFinishedAt: "2026-03-01 09:00:00", lastDurationMs: 0 }),
+        // 无完成运行：createdAt/startedAt 不能冒充完成时间，孤立耗时也没有对应运行身份。
+        timed(403, "无完成记录", {
+          status: "pending",
+          progress: 0,
+          createdAt: "2026-02-01 00:00:00",
+          startedAt: "2026-02-01 00:00:00",
+          lastDurationMs: 3000,
+        }),
+        timed(404, "缺少耗时", { lastFinishedAt: "2026-03-01 10:00:00" }),
+      ] as unknown as Record<string, unknown>[],
+    });
+
+    try {
+      await i18n.changeLanguage("zh");
+      render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+      expect(screen.getByText("开始：2026-03-02 08:00:00")).toBeInTheDocument();
+      expect(screen.getByText("最近完成：2026-03-01 08:00:05")).toBeInTheDocument();
+      expect(screen.getByText("最近耗时：2m 5s")).toBeInTheDocument();
+      expect(screen.getByText("最近完成：2026-03-01 09:00:00")).toBeInTheDocument();
+      expect(screen.getByText("最近耗时：0ms")).toBeInTheDocument();
+      expect(screen.getByText("最近完成：2026-03-01 10:00:00")).toBeInTheDocument();
+      expect(screen.getAllByText("最近完成：—")).toHaveLength(1);
+      expect(screen.getAllByText("最近耗时：—")).toHaveLength(2);
+      expect(screen.queryByText(/最近完成：2026-02-01/)).not.toBeInTheDocument();
+      expect(screen.queryByText("最近耗时：3s")).not.toBeInTheDocument();
+
+      await act(async () => {
+        await i18n.changeLanguage("en");
+      });
+      expect(screen.getByText("Last completed: 2026-03-01 08:00:05")).toBeInTheDocument();
+      expect(screen.getByText("Last duration: 2m 5s")).toBeInTheDocument();
+      expect(screen.getByText("Last duration: 0ms")).toBeInTheDocument();
+      expect(screen.getAllByText("Last completed: —")).toHaveLength(1);
+      expect(screen.getAllByText("Last duration: —")).toHaveLength(2);
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage("zh");
+      });
+    }
+  });
+
   it("点击编辑按钮打开编辑弹窗，保存成功后调用 updateTask", async () => {
     const updateTaskMock = vi.fn().mockResolvedValue(undefined);
     createContext({ updateTask: updateTaskMock });

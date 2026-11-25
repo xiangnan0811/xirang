@@ -996,6 +996,33 @@
           ]
         },
         {
+          "name": "TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy",
+          "required_paths": [
+            "TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy/postgres/control_997_low_id_runs",
+            "TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy/postgres/crowding_1000_low_id_runs",
+            "TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy/postgres/older_fourth_success_ignored",
+            "TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy/postgres/newest_success_breaks_streak",
+            "TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy/postgres/equal_time_higher_id_failed",
+            "TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy/postgres/equal_time_higher_id_success",
+            "TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy/postgres/operator_unowned_newer_run_filtered_before_rank"
+          ]
+        },
+        {
+          "name": "TestHealthIncidentTimelineNodeTruncation",
+          "required_paths": [
+            "TestHealthIncidentTimelineNodeTruncation/postgres"
+          ]
+        },
+        {
+          "name": "TestHealthIncidentTimelineSourceTruncation",
+          "required_paths": [
+            "TestHealthIncidentTimelineSourceTruncation/postgres/alert",
+            "TestHealthIncidentTimelineSourceTruncation/postgres/task_failure",
+            "TestHealthIncidentTimelineSourceTruncation/postgres/notification_failure",
+            "TestHealthIncidentTimelineSourceTruncation/postgres/anomaly"
+          ]
+        },
+        {
           "name": "TestNodeBatchDeleteAssociationsSQLitePostgres",
           "required_paths": [
             "TestNodeBatchDeleteAssociationsSQLitePostgres/postgres"

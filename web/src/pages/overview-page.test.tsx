@@ -5,17 +5,23 @@ import { default as userEvent } from "@testing-library/user-event";
 import { OverviewPage } from "./overview-page";
 import i18n, { setLanguage } from "@/i18n";
 import {
+  buildTrafficChartMetrics,
   computeIntegerAxisTicks,
   computeThroughputMax,
+  computeTrafficAxisMax,
   formatTrafficTooltipLabel,
   formatTrafficTooltipValue,
 } from "./overview-page.traffic.utils";
-import { formatTaskDuration, sortRecentTasks } from "./overview-page.recent-tasks.utils";
+import { sortRecentTasks } from "./overview-page.recent-tasks.utils";
+import { formatTaskDuration } from "@/lib/date-utils";
 import type {
   BackupConfidenceData,
   BackupHealthData,
   HealthIncidentCauseCode,
   HealthIncidentGroup,
+  OverviewTrafficPoint,
+  OverviewTrafficSeries,
+  OverviewTrafficWindow,
   TaskRecord,
 } from "@/types/domain";
 
@@ -702,9 +708,10 @@ describe("OverviewPage", () => {
     expect(within(timelineSection).getByRole("link", { name: /全部告警/ })).toHaveAttribute("href", "/app/notifications");
     expect(within(timelineSection).queryByRole("button", { name: /展开全部/ })).not.toBeInTheDocument();
 
-    // Side-by-side compact mode hides Next Run column so 5 columns fit cleanly
+    // The browser replay verifies the breakpoint-specific column visibility.
     const tasksSection = screen.getByRole("heading", { level: 2, name: /最近同步任务/ }).closest("section")!;
-    expect(within(tasksSection).queryByText("下次运行")).not.toBeInTheDocument();
+    const taskTable = within(tasksSection).getByRole("table");
+    expect(within(taskTable).getByRole("columnheader", { name: "下次运行" })).toBeInTheDocument();
   });
 
   it("hides Health Events panel completely when there are no incidents so it does not waste space", async () => {
@@ -716,6 +723,106 @@ describe("OverviewPage", () => {
     });
     expect(screen.queryByRole("heading", { level: 2, name: /健康事件/ })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 2, name: /最近同步任务/ })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["zh", /健康事件/, "健康事件结果不完整", "已检查的数据中未发现健康事件。", "下次运行"],
+    ["en", /Health Events/, "Health event results are incomplete", "No health events were found in the data that was checked.", "Next Run"],
+  ] as const)("shows the %s coverage warning for a flagged empty result without a retry", async (language, heading, title, body, nextRunHeader) => {
+    fetchHealthIncidentTimelineMock.mockResolvedValue({
+      generatedAt: "2026-05-17T01:00:00Z",
+      windowHours: 72,
+      summary: { total: 0, critical: 0, warning: 0, info: 0 },
+      groups: [],
+      truncated: true,
+    });
+    await setLanguage(language);
+    setContext(2, true);
+    render(<OverviewPage />);
+
+    const timelineSection = (await screen.findByRole("heading", { level: 2, name: heading })).closest("section")!;
+    const alert = await within(timelineSection).findByRole("alert");
+    expect(within(alert).getByText(title)).toBeInTheDocument();
+    expect(alert).toHaveTextContent(body);
+    expect(within(timelineSection).queryByRole("list")).not.toBeInTheDocument();
+    expect(within(timelineSection).queryByRole("button")).not.toBeInTheDocument();
+    expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(1);
+
+    // The flagged empty panel takes the incident column, so Recent Tasks switches to its compact desktop geometry.
+    expect(screen.getByRole("columnheader", { name: nextRunHeader })).toHaveClass("xl:hidden");
+  });
+
+  it("keeps flagged incident groups and counts with a coverage note, then clears it and hides the panel on later polls", async () => {
+    const groups = [
+      incident({ id: "group-1", severity: "critical", resource: { type: "node", id: 1, name: "node-1" } }),
+      incident({ id: "group-2", resource: { type: "node", id: 2, name: "node-2" } }),
+    ];
+    const populated = {
+      generatedAt: "2026-05-17T01:00:00Z",
+      windowHours: 72,
+      summary: { total: 2, critical: 1, warning: 1, info: 0 },
+      groups,
+    };
+    fetchHealthIncidentTimelineMock.mockResolvedValueOnce({ ...populated, truncated: true });
+    setContext(2, true);
+    const { rerender } = render(<OverviewPage />);
+
+    const timelineSection = (await screen.findByRole("heading", { level: 2, name: /健康事件/ })).closest("section")!;
+    const alert = await within(timelineSection).findByRole("alert");
+    expect(within(alert).getByText("健康事件结果不完整")).toBeInTheDocument();
+    expect(alert).toHaveTextContent("下方事件与计数仅覆盖已检查的数据。");
+    expect(alert).not.toHaveTextContent("未发现健康事件");
+    expect(within(timelineSection).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(timelineSection).getByText("严重 1")).toBeInTheDocument();
+    expect(within(timelineSection).getByText("警告 1")).toBeInTheDocument();
+    expect(within(timelineSection).getByRole("heading", { level: 3, name: /node-1/ })).toBeInTheDocument();
+    expect(within(timelineSection).queryByRole("button", { name: "刷新" })).not.toBeInTheDocument();
+
+    fetchHealthIncidentTimelineMock.mockResolvedValueOnce(populated);
+    setContext(2, true, 0, 1);
+    rerender(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(2);
+      expect(within(timelineSection).queryByText("健康事件结果不完整")).not.toBeInTheDocument();
+    });
+    expect(within(timelineSection).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(timelineSection).getByText("严重 1")).toBeInTheDocument();
+
+    // Only literal true is a coverage flag; a false flag on an empty result keeps the panel hidden.
+    fetchHealthIncidentTimelineMock.mockResolvedValueOnce({ ...populated, summary: { total: 0, critical: 0, warning: 0, info: 0 }, groups: [], truncated: false });
+    setContext(2, true, 0, 2);
+    rerender(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(fetchHealthIncidentTimelineMock).toHaveBeenCalledTimes(3);
+      expect(screen.queryByRole("heading", { level: 2, name: /健康事件/ })).not.toBeInTheDocument();
+    });
+  });
+
+  it("replaces the coverage warning with the retryable error when a later poll fails", async () => {
+    fetchHealthIncidentTimelineMock.mockResolvedValueOnce({
+      generatedAt: "2026-05-17T01:00:00Z",
+      windowHours: 72,
+      summary: { total: 0, critical: 0, warning: 0, info: 0 },
+      groups: [],
+      truncated: true,
+    });
+    setContext(2, true);
+    const { rerender } = render(<OverviewPage />);
+
+    const timelineSection = (await screen.findByRole("heading", { level: 2, name: /健康事件/ })).closest("section")!;
+    expect(await within(timelineSection).findByText("健康事件结果不完整")).toBeInTheDocument();
+
+    fetchHealthIncidentTimelineMock.mockRejectedValueOnce(new Error("timeline unavailable"));
+    setContext(2, true, 0, 1);
+    rerender(<OverviewPage />);
+
+    expect(await within(timelineSection).findByText("暂时无法加载健康事件")).toBeInTheDocument();
+    expect(within(timelineSection).queryByText("健康事件结果不完整")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(timelineSection).getByRole("button", { name: "刷新" })).toBeEnabled();
+    });
   });
 
   it("shows Health Events panel with error and refresh retry when incident request fails", async () => {
@@ -805,13 +912,35 @@ describe("OverviewPage", () => {
     render(<OverviewPage />);
 
     const chartImg = await screen.findByRole("img", {
-      name: "近 24 小时流量与活动趋势图，峰值平均总吞吐 0 Mbps，开始事件 1 次，失败事件 2 次",
+      name: "近 24 小时流量与活动趋势图，无吞吐采样，开始事件 1 次，失败事件 2 次",
     });
+    expect(screen.queryByRole("img", { name: /峰值平均总吞吐/ })).not.toBeInTheDocument();
     expect(chartImg).toBeInTheDocument();
     expect(screen.getByText("无吞吐采样")).toBeInTheDocument();
     expect(screen.getByText("末尾时段统计中")).toBeInTheDocument();
     expect(screen.queryByText("Mbps")).not.toBeInTheDocument();
     expect(screen.getByText("次")).toBeInTheDocument();
+  });
+
+  it("keeps measured all-zero throughput on the existing 0..1 axis with its unit instead of reporting missing samples", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      generatedAt: "2026-03-08T01:00:00Z",
+      points: [
+        { timestamp: "2026-03-08T00:00:00Z", timestampMs: Date.parse("2026-03-08T00:00:00Z"), label: "00:00", throughputMbps: 0, sampleCount: 2, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+        { timestamp: "2026-03-08T00:30:00Z", timestampMs: Date.parse("2026-03-08T00:30:00Z"), label: "00:30", throughputMbps: 0, sampleCount: 1, activeTaskCount: 1, startedCount: 0, failedCount: 0 },
+      ],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", {
+      name: "近 24 小时流量与活动趋势图，峰值平均总吞吐 0 Mbps，开始事件 1 次，失败事件 0 次",
+    })).toBeInTheDocument();
+    expect(screen.getByText("Mbps")).toBeInTheDocument();
+    expect(screen.queryByText("无吞吐采样")).not.toBeInTheDocument();
   });
 
   it("renders partial trailing bucket indicator, axis units, and >=24px legend buttons with all-layers-off hint", async () => {
@@ -866,9 +995,9 @@ describe("OverviewPage", () => {
     render(<OverviewPage />);
 
     expect(await screen.findByRole("img", {
-      name: /仅统计完整时段：峰值平均总吞吐 120 Mbps，开始事件 2 次，失败事件 0 次/,
+      name: /各指标仅统计自身来源完整的时段：峰值平均总吞吐 120 Mbps，开始事件 2 次，失败事件 0 次/,
     })).toBeInTheDocument();
-    expect(screen.getByText(/未能完整统计的时段已留空/)).toBeInTheDocument();
+    expect(screen.getByText(/受影响的指标已留空，其余可用数值仍保留/)).toBeInTheDocument();
     expect(screen.getByText("末尾时段统计中")).toBeInTheDocument();
   });
 
@@ -888,13 +1017,13 @@ describe("OverviewPage", () => {
     render(<OverviewPage />);
 
     expect(await screen.findByRole("img", {
-      name: "近 24 小时流量与活动趋势图，数据量超出上限，仅统计完整时段：无吞吐采样，开始事件 2 次，失败事件 1 次",
+      name: "近 24 小时流量与活动趋势图，数据量超出上限，受影响的指标已留空。各指标仅统计自身来源完整的时段：无吞吐采样，开始事件 2 次，失败事件 1 次",
     })).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: /峰值平均总吞吐/ })).not.toBeInTheDocument();
     expect(screen.getByText("无吞吐采样")).toBeInTheDocument();
     expect(screen.queryByText("Mbps")).not.toBeInTheDocument();
     expect(screen.getByText("次")).toBeInTheDocument();
-    expect(screen.getByText(/未能完整统计的时段已留空/)).toBeInTheDocument();
+    expect(screen.getByText(/受影响的指标已留空，其余可用数值仍保留/)).toBeInTheDocument();
   });
 
   it("keeps a measured zero throughput peak in capped complete buckets", async () => {
@@ -913,25 +1042,107 @@ describe("OverviewPage", () => {
     render(<OverviewPage />);
 
     expect(await screen.findByRole("img", {
-      name: "近 24 小时流量与活动趋势图，数据量超出上限，仅统计完整时段：峰值平均总吞吐 0 Mbps，开始事件 1 次，失败事件 0 次",
+      name: "近 24 小时流量与活动趋势图，数据量超出上限，受影响的指标已留空。各指标仅统计自身来源完整的时段：峰值平均总吞吐 0 Mbps，开始事件 1 次，失败事件 0 次",
     })).toBeInTheDocument();
     expect(screen.queryByText("无吞吐采样")).not.toBeInTheDocument();
   });
 
-  it("shows the cap warning when a legacy truncated response has unknown coverage", async () => {
+  it.each([{}, { incomplete: true }])("shows unavailable coverage for truncated traffic with no usable buckets (%j)", async (flags) => {
     fetchOverviewTrafficMock.mockResolvedValueOnce({
       window: "24h",
       bucketMinutes: 30,
       hasRealSamples: true,
       truncated: true,
       generatedAt: "2026-03-08T00:30:00Z",
-      points: [{ label: "00:00", throughputMbps: 200, startedCount: 9, failedCount: 5 }],
+      points: [{ label: "00:00", throughputMbps: 200, sampleCount: 4, startedCount: 9, failedCount: 5, ...flags }],
     });
     setContext(1, true);
     render(<OverviewPage />);
 
     expect(await screen.findByRole("img", { name: /暂无可展示的完整时段/ })).toBeInTheDocument();
-    expect(screen.getByText(/未能完整统计的时段已留空/)).toBeInTheDocument();
+    expect(screen.getByText(/受影响的指标已留空，其余可用数值仍保留/)).toBeInTheDocument();
+    expect(screen.queryByText("无吞吐采样")).not.toBeInTheDocument();
+    expect(screen.queryByText("近 24 小时暂无数据")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      "zh",
+      "近 24 小时流量与活动趋势图，数据量超出上限，受影响的指标已留空。各指标仅统计自身来源完整的时段：吞吐数据不可用，开始事件 5 次，失败事件 1 次",
+      "吞吐数据不可用",
+      "无吞吐采样",
+      /受影响的指标已留空，其余可用数值仍保留/,
+    ],
+    [
+      "en",
+      "Last 24 hours traffic & activity trend chart, row cap hit, affected metrics left blank. Each value uses buckets with complete data for its source: throughput unavailable, 5 started events, 1 failed events",
+      "Throughput unavailable",
+      "No throughput samples",
+      /Affected metrics are left blank where buckets could not be fully counted; available values remain/,
+    ],
+  ] as const)("announces %s throughput as unavailable, not missing, when only samples are capped", async (language, ariaName, caption, noSamplesCaption, warning) => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T00:31:00Z",
+      points: [
+        { label: "00:00", throughputMbps: 200, sampleCount: 4, activeTaskCount: 2, startedCount: 3, failedCount: 1, incomplete: true, samplesIncomplete: true },
+        { label: "00:30", throughputMbps: 90, sampleCount: 2, activeTaskCount: 1, startedCount: 2, failedCount: 0, incomplete: true, samplesIncomplete: true },
+      ],
+    });
+    await setLanguage(language);
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", { name: ariaName })).toBeInTheDocument();
+    expect(screen.getByText(caption)).toBeInTheDocument();
+    expect(screen.queryByText(noSamplesCaption)).not.toBeInTheDocument();
+    expect(screen.queryByText("Mbps")).not.toBeInTheDocument();
+    expect(screen.getByText(warning)).toBeInTheDocument();
+  });
+
+  it("announces each metric from its own complete buckets and never a fake zero for a fully capped source", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T00:31:00Z",
+      points: [
+        { label: "00:00", throughputMbps: 50, sampleCount: 2, activeTaskCount: 1, startedCount: 7, failedCount: 4, incomplete: true, startedIncomplete: true, failedIncomplete: true },
+        { label: "00:30", throughputMbps: 120, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 2, incomplete: true, failedIncomplete: true },
+      ],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", {
+      name: "近 24 小时流量与活动趋势图，数据量超出上限，受影响的指标已留空。各指标仅统计自身来源完整的时段：峰值平均总吞吐 120 Mbps，开始事件 1 次，失败事件数不可用",
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /失败事件 0 次/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Mbps")).toBeInTheDocument();
+    expect(screen.queryByText("吞吐数据不可用")).not.toBeInTheDocument();
+  });
+
+  it("shows unavailable coverage when every source is capped in every bucket", async () => {
+    fetchOverviewTrafficMock.mockResolvedValueOnce({
+      window: "24h",
+      bucketMinutes: 30,
+      hasRealSamples: true,
+      truncated: true,
+      generatedAt: "2026-03-08T00:30:00Z",
+      points: [{
+        label: "00:00", throughputMbps: 200, sampleCount: 4, activeTaskCount: 2, startedCount: 9, failedCount: 5,
+        incomplete: true, samplesIncomplete: true, startedIncomplete: true, failedIncomplete: true,
+      }],
+    });
+    setContext(1, true);
+    render(<OverviewPage />);
+
+    expect(await screen.findByRole("img", { name: "近 24 小时流量与活动趋势图，数据量超出上限，暂无可展示的完整时段" })).toBeInTheDocument();
+    expect(screen.queryByText("吞吐数据不可用")).not.toBeInTheDocument();
     expect(screen.queryByText("近 24 小时暂无数据")).not.toBeInTheDocument();
   });
 
@@ -970,8 +1181,9 @@ describe("OverviewPage", () => {
     // Previous chart remains visible (no skeleton height collapse) while loading 1h,
     // and keeps the previous 24h heading/aria-label while announcing 1h loading separately.
     expect(screen.queryByText("加载趋势...")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 2, name: /流量与活动趋势（近 24 小时）/ })).toBeInTheDocument();
-    expect(screen.getByText("正在切换至近 1 小时...")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "流量与活动趋势（近 24 小时）" })).toBeInTheDocument();
+    expect(screen.getByText("正在切换至近 1 小时...", { selector: '[aria-hidden="true"]' })).toBeInTheDocument();
+    expect(screen.getByText("正在切换至近 1 小时...", { selector: '[role="status"]' })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /近 24 小时流量与活动趋势图/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "7d" }));
@@ -980,6 +1192,55 @@ describe("OverviewPage", () => {
     });
     expect(seenSignals[1]?.aborted).toBe(true);
     expect(seenSignals[2]?.aborted).toBe(false);
+  });
+
+  it("announces same-window background refresh in a persistent status without changing the heading or hiding data", async () => {
+    setContext(2, true, 0, 0);
+    const { rerender } = render(<OverviewPage />);
+
+    await screen.findByRole("img", { name: /峰值平均总吞吐 160 Mbps/ });
+    const heading = screen.getByRole("heading", { level: 2, name: "流量与活动趋势（近 24 小时）" });
+    const trafficSection = heading.closest("section")!;
+    const status = trafficSection.querySelector<HTMLElement>(':scope > [role="status"]')!;
+    expect(status).toBeEmptyDOMElement();
+    expect(heading.querySelectorAll("svg")).toHaveLength(1);
+
+    const pendingTraffic = createDeferred<unknown>();
+    fetchOverviewTrafficMock.mockImplementationOnce(() => pendingTraffic.promise);
+    setContext(2, true, 0, 1);
+    rerender(<OverviewPage />);
+
+    await waitFor(() => {
+      expect(status).toHaveTextContent("更新中");
+    });
+    expect(fetchOverviewTrafficMock).toHaveBeenCalledTimes(2);
+    // The spinner replaces the title icon in place: no inline text joins the heading and its name is stable.
+    expect(screen.getByRole("heading", { level: 2, name: "流量与活动趋势（近 24 小时）" })).toBe(heading);
+    expect(heading.querySelectorAll("svg")).toHaveLength(1);
+    expect(within(heading).queryByText("更新中")).not.toBeInTheDocument();
+    expect(screen.queryByText("加载趋势...")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /峰值平均总吞吐 160 Mbps/ })).toBeInTheDocument();
+
+    await act(async () => {
+      pendingTraffic.resolve({
+        window: "24h",
+        bucketMinutes: 30,
+        hasRealSamples: true,
+        generatedAt: "2026-03-08T00:00:00Z",
+        points: [
+          { timestamp: "2026-03-08T00:00:00Z", timestampMs: Date.parse("2026-03-08T00:00:00Z"), label: "00:00", throughputMbps: 120, sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 0 },
+          { timestamp: "2026-03-08T00:30:00Z", timestampMs: Date.parse("2026-03-08T00:30:00Z"), label: "00:30", throughputMbps: 200, sampleCount: 1, activeTaskCount: 2, startedCount: 0, failedCount: 0 },
+        ],
+      });
+    });
+
+    expect(await screen.findByRole("img", { name: /峰值平均总吞吐 200 Mbps/ })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(status).toBeEmptyDOMElement();
+    });
+    expect(trafficSection.querySelector(':scope > [role="status"]')).toBe(status);
+    expect(screen.getByRole("heading", { level: 2, name: "流量与活动趋势（近 24 小时）" })).toBe(heading);
+    expect(heading.querySelectorAll("svg")).toHaveLength(1);
   });
 
   it("supports switching 1h/24h/7d and refreshes on refreshVersion", async () => {
@@ -1138,6 +1399,202 @@ describe("OverviewPage", () => {
 });
 
 describe("overview pure chart & task helpers", () => {
+  const trafficPoint = (label: string, fields: Partial<OverviewTrafficPoint>): OverviewTrafficPoint => ({
+    timestamp: "",
+    timestampMs: 0,
+    label,
+    throughputMbps: 0,
+    sampleCount: 0,
+    activeTaskCount: 0,
+    startedCount: 0,
+    failedCount: 0,
+    ...fields,
+  });
+  const trafficSeries = (
+    window: OverviewTrafficWindow,
+    fields: Pick<OverviewTrafficSeries, "hasRealSamples" | "points"> & { truncated?: boolean },
+  ): OverviewTrafficSeries => ({
+    window,
+    bucketMinutes: { "1h": 5, "24h": 30, "7d": 180 }[window],
+    generatedAt: "",
+    ...fields,
+  });
+
+  it.each(["1h", "24h", "7d"] as const)(
+    "keeps %s capped, unmeasured, and rounded-zero throughput buckets distinct in chart metrics",
+    (window) => {
+      const metrics = buildTrafficChartMetrics(trafficSeries(window, {
+        hasRealSamples: true,
+        truncated: true,
+        points: [
+          trafficPoint("capped", { throughputMbps: 200, sampleCount: 4, activeTaskCount: 2, startedCount: 9, failedCount: 5, incomplete: true }),
+          trafficPoint("measured", { throughputMbps: 120, sampleCount: 3, activeTaskCount: 1, startedCount: 1 }),
+          trafficPoint("unmeasured", { startedCount: 2, failedCount: 1 }),
+          trafficPoint("rounded-zero", { sampleCount: 2, activeTaskCount: 1 }),
+          trafficPoint("trailing", { partial: true }),
+        ],
+      }));
+
+      expect(metrics.chartData.map(({ throughput, activity, failed }) => ({ throughput, activity, failed }))).toEqual([
+        { throughput: null, activity: null, failed: null },
+        { throughput: 120, activity: 1, failed: 0 },
+        { throughput: null, activity: 2, failed: 1 },
+        { throughput: 0, activity: 1, failed: 0 },
+        { throughput: null, activity: 0, failed: 0 },
+      ]);
+      expect(metrics.chartData[0]).toMatchObject({ incomplete: true });
+      expect(metrics.chartData[4]).toMatchObject({ partial: true });
+      expect(metrics).toMatchObject({
+        truncated: true,
+        hasRealSamples: true,
+        hasPlottableBuckets: true,
+        hasPartialBucket: true,
+        peakThroughput: 120,
+        totalStartedCount: 3,
+        totalFailedCount: 1,
+      });
+      expect(computeTrafficAxisMax(metrics.chartData, { throughput: true, activity: true, failures: true })).toEqual({
+        yMaxLeft: 150,
+        yMaxRight: 2,
+      });
+    },
+  );
+
+  it("distinguishes all-missing throughput from measured all-zero throughput", () => {
+    const missing = buildTrafficChartMetrics(trafficSeries("24h", {
+      hasRealSamples: false,
+      points: [trafficPoint("00:00", { startedCount: 1 }), trafficPoint("00:30", { failedCount: 1 })],
+    }));
+    expect(missing.chartData.map((point) => point.throughput)).toEqual([null, null]);
+    expect(missing).toMatchObject({ hasRealSamples: false, peakThroughput: 0, totalStartedCount: 1, totalFailedCount: 1 });
+
+    const zero = buildTrafficChartMetrics(trafficSeries("24h", {
+      hasRealSamples: true,
+      points: [trafficPoint("00:00", { sampleCount: 2, activeTaskCount: 1 }), trafficPoint("00:30", { sampleCount: 1, activeTaskCount: 1 })],
+    }));
+    expect(zero.chartData.map((point) => point.throughput)).toEqual([0, 0]);
+    expect(zero).toMatchObject({ hasRealSamples: true, peakThroughput: 0 });
+    expect(computeTrafficAxisMax(zero.chartData, { throughput: true, activity: true, failures: true }).yMaxLeft).toBe(0);
+  });
+
+  it("applies independent per-source completeness at a mixed cutoff, with activity needing samples and starts", () => {
+    const metrics = buildTrafficChartMetrics(trafficSeries("24h", {
+      hasRealSamples: true,
+      truncated: true,
+      points: [
+        trafficPoint("samples+started", { throughputMbps: 300, sampleCount: 5, activeTaskCount: 3, startedCount: 4, failedCount: 2, incomplete: true, samplesIncomplete: true, startedIncomplete: true }),
+        trafficPoint("samples", { throughputMbps: 200, sampleCount: 4, activeTaskCount: 2, startedCount: 3, failedCount: 1, incomplete: true, samplesIncomplete: true }),
+        trafficPoint("started", { throughputMbps: 80, sampleCount: 2, activeTaskCount: 2, startedCount: 6, incomplete: true, startedIncomplete: true }),
+        trafficPoint("failed", { sampleCount: 1, activeTaskCount: 1, startedCount: 1, failedCount: 9, incomplete: true, failedIncomplete: true }),
+        trafficPoint("clean", { startedCount: 2, failedCount: 1, partial: true }),
+      ],
+    }));
+
+    expect(metrics.chartData.map(({ throughput, activity, failed }) => ({ throughput, activity, failed }))).toEqual([
+      { throughput: null, activity: null, failed: 2 },
+      { throughput: null, activity: null, failed: 1 },
+      { throughput: 80, activity: null, failed: 0 },
+      { throughput: 0, activity: 1, failed: null },
+      { throughput: null, activity: 2, failed: 1 },
+    ]);
+    expect(metrics.chartData.map((point) => point.incomplete === true)).toEqual([true, true, true, true, false]);
+    expect(metrics).toMatchObject({
+      truncated: true,
+      hasRealSamples: true,
+      hasSampleCoverage: true,
+      hasPlottableBuckets: true,
+      peakThroughput: 80,
+      totalStartedCount: 6,
+      totalFailedCount: 4,
+    });
+    expect(computeTrafficAxisMax(metrics.chartData, { throughput: true, activity: true, failures: true })).toEqual({
+      yMaxLeft: 100,
+      yMaxRight: 2,
+    });
+  });
+
+  it("blanks every field of a legacy incomplete bucket even when other buckets carry source flags", () => {
+    const metrics = buildTrafficChartMetrics(trafficSeries("1h", {
+      hasRealSamples: true,
+      truncated: true,
+      points: [
+        trafficPoint("legacy", { throughputMbps: 100, sampleCount: 2, activeTaskCount: 1, startedCount: 5, failedCount: 5, incomplete: true }),
+        trafficPoint("samples", { throughputMbps: 50, sampleCount: 1, activeTaskCount: 1, startedCount: 2, failedCount: 1, incomplete: true, samplesIncomplete: true }),
+        trafficPoint("clean", { throughputMbps: 40, sampleCount: 1, activeTaskCount: 1, startedCount: 1 }),
+      ],
+    }));
+
+    expect(metrics.chartData.map(({ throughput, activity, failed }) => ({ throughput, activity, failed }))).toEqual([
+      { throughput: null, activity: null, failed: null },
+      { throughput: null, activity: null, failed: 1 },
+      { throughput: 40, activity: 1, failed: 0 },
+    ]);
+    expect(metrics).toMatchObject({ peakThroughput: 40, totalStartedCount: 3, totalFailedCount: 1 });
+  });
+
+  it("keeps the conservative window-wide fallback when a truncated response carries no bucket flags", () => {
+    const metrics = buildTrafficChartMetrics(trafficSeries("24h", {
+      hasRealSamples: true,
+      truncated: true,
+      points: [
+        trafficPoint("00:00", { throughputMbps: 90, sampleCount: 3, activeTaskCount: 1, startedCount: 2, failedCount: 1 }),
+        trafficPoint("00:30", { throughputMbps: 60, sampleCount: 1, activeTaskCount: 1, startedCount: 1, partial: true }),
+      ],
+    }));
+
+    expect(metrics.chartData.map(({ throughput, activity, failed }) => ({ throughput, activity, failed }))).toEqual([
+      { throughput: null, activity: null, failed: null },
+      { throughput: null, activity: null, failed: null },
+    ]);
+    expect(metrics).toMatchObject({
+      truncated: true,
+      hasRealSamples: false,
+      hasSampleCoverage: false,
+      hasPlottableBuckets: false,
+      peakThroughput: 0,
+      totalStartedCount: null,
+      totalFailedCount: null,
+    });
+  });
+
+  it("reports a source total as unavailable when no bucket is complete for it, but keeps a measured zero", () => {
+    const countsCapped = buildTrafficChartMetrics(trafficSeries("24h", {
+      hasRealSamples: false,
+      points: [
+        trafficPoint("00:00", { startedCount: 4, failedCount: 2, incomplete: true, startedIncomplete: true, failedIncomplete: true }),
+        trafficPoint("00:30", { startedCount: 1, incomplete: true, startedIncomplete: true, failedIncomplete: true }),
+      ],
+    }));
+    expect(countsCapped.chartData.map(({ throughput, activity, failed }) => ({ throughput, activity, failed }))).toEqual([
+      { throughput: null, activity: null, failed: null },
+      { throughput: null, activity: null, failed: null },
+    ]);
+    expect(countsCapped).toMatchObject({
+      truncated: true,
+      hasRealSamples: false,
+      hasSampleCoverage: true,
+      hasPlottableBuckets: true,
+      totalStartedCount: null,
+      totalFailedCount: null,
+    });
+
+    const samplesCapped = buildTrafficChartMetrics(trafficSeries("24h", {
+      hasRealSamples: true,
+      truncated: true,
+      points: [trafficPoint("00:00", { throughputMbps: 70, sampleCount: 2, activeTaskCount: 1, incomplete: true, samplesIncomplete: true })],
+    }));
+    expect(samplesCapped.chartData.map(({ throughput, activity, failed }) => ({ throughput, activity, failed }))).toEqual([
+      { throughput: null, activity: null, failed: 0 },
+    ]);
+    expect(samplesCapped).toMatchObject({
+      hasRealSamples: false,
+      hasSampleCoverage: false,
+      peakThroughput: 0,
+      totalStartedCount: 0,
+      totalFailedCount: 0,
+    });
+  });
+
   it("computes evenly spaced integer right-axis ticks for all counts", () => {
     expect(computeIntegerAxisTicks(0)).toEqual({ domain: [0, 4], ticks: [0, 1, 2, 3, 4] });
     expect(computeIntegerAxisTicks(1)).toEqual({ domain: [0, 4], ticks: [0, 1, 2, 3, 4] });

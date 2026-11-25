@@ -33,6 +33,15 @@ export type { TrafficChartData, TrafficChartMetrics, VisibleLayers };
 
 const TRAFFIC_WINDOWS: readonly OverviewTrafficWindow[] = ["1h", "24h", "7d"];
 
+/** A measured bucket flanked by gaps is a zero-length segment Recharts cannot stroke; it needs its own dot. */
+function isIsolatedThroughputPoint(chartData: readonly TrafficChartData[], index: number): boolean {
+  return (
+    chartData[index]?.throughput != null &&
+    chartData[index - 1]?.throughput == null &&
+    chartData[index + 1]?.throughput == null
+  );
+}
+
 export type OverviewTrafficChartProps = {
   trafficWindow: OverviewTrafficWindow;
   displayedWindow?: OverviewTrafficWindow;
@@ -69,29 +78,35 @@ export function OverviewTrafficChart({
   const effectiveWindow = hasLoadedData && displayedWindow ? displayedWindow : trafficWindow;
   const isSwitchingWindow = isRefreshing && effectiveWindow !== trafficWindow;
   const hasData = hasTrafficOrActivityData(chartMetrics);
-  const showLeftAxis = visibleLayers.throughput && chartMetrics.hasRealSamples && yMaxLeft > 0;
+  const showLeftAxis = visibleLayers.throughput && chartMetrics.hasRealSamples;
   const showRightAxis = visibleLayers.activity || visibleLayers.failures;
   const anyLayerVisible = visibleLayers.throughput || visibleLayers.activity || visibleLayers.failures;
   const rightAxisScale = computeIntegerAxisTicks(yMaxRight);
 
   const windowLabel = t(`overview.trafficWindow${effectiveWindow}`);
   const requestedWindowLabel = t(`overview.trafficWindow${trafficWindow}`);
+  const switchingWindowText = t("overview.trafficSwitchingWindow", { window: requestedWindowLabel });
+  // Keep refresh announcements outside the heading and its layout.
+  const refreshStatusText = isSwitchingWindow ? switchingWindowText : isRefreshing ? t("overview.refreshing") : "";
+  // Each metric is announced from its own complete buckets; a source with none is "unavailable", never a fake zero.
   const chartAriaLabel = chartMetrics.truncated && !chartMetrics.hasPlottableBuckets
     ? t("overview.trafficAriaLabelUnavailable", { window: windowLabel })
-    : chartMetrics.truncated && !chartMetrics.hasRealSamples
-      ? t("overview.trafficAriaLabelLimitedNoThroughput", {
+    : !chartMetrics.truncated && !hasData
+      ? t("overview.trafficAriaLabelEmpty", { window: windowLabel })
+      : t(chartMetrics.truncated ? "overview.trafficAriaLabelLimited" : "overview.trafficAriaLabel", {
           window: windowLabel,
-          started: chartMetrics.totalStartedCount,
-          failed: chartMetrics.totalFailedCount,
-        })
-      : chartMetrics.truncated || hasData
-        ? t(chartMetrics.truncated ? "overview.trafficAriaLabelLimited" : "overview.trafficAriaLabel", {
-            window: windowLabel,
-            peak: chartMetrics.peakThroughput,
-            started: chartMetrics.totalStartedCount,
-            failed: chartMetrics.totalFailedCount,
-          })
-        : t("overview.trafficAriaLabelEmpty", { window: windowLabel });
+          throughput: chartMetrics.hasRealSamples
+            ? t("overview.trafficAriaPeak", { peak: chartMetrics.peakThroughput })
+            : chartMetrics.hasSampleCoverage
+              ? t("overview.trafficAriaNoThroughputSamples")
+              : t("overview.trafficAriaThroughputUnavailable"),
+          started: chartMetrics.totalStartedCount === null
+            ? t("overview.trafficAriaStartedUnavailable")
+            : t("overview.trafficAriaStarted", { started: chartMetrics.totalStartedCount }),
+          failed: chartMetrics.totalFailedCount === null
+            ? t("overview.trafficAriaFailedUnavailable")
+            : t("overview.trafficAriaFailed", { failed: chartMetrics.totalFailedCount }),
+        });
 
   const legendItems: Array<{ key: keyof VisibleLayers; label: string; dotClass: string }> = [
     { key: "throughput", label: t("overview.legendThroughput"), dotClass: "size-2 rounded-full bg-[hsl(var(--chart-ingress))]" },
@@ -101,8 +116,8 @@ export function OverviewTrafficChart({
 
   const leftAxisCaption = showLeftAxis
     ? t("overview.axisUnitThroughput")
-    : visibleLayers.throughput && !chartMetrics.hasRealSamples
-      ? t("overview.trafficNoThroughputSamples")
+    : visibleLayers.throughput && chartMetrics.hasPlottableBuckets
+      ? t(chartMetrics.hasSampleCoverage ? "overview.trafficNoThroughputSamples" : "overview.trafficThroughputUnavailable")
       : "";
 
   return (
@@ -110,18 +125,13 @@ export function OverviewTrafficChart({
       <DataSurfaceHeader
         title={
           <span className="inline-flex flex-wrap items-center gap-2">
-            <Activity className="size-4 text-primary" aria-hidden />
+            <span className="inline-flex size-4 shrink-0 items-center justify-center text-primary" aria-hidden>
+              {isRefreshing ? <Loader2 className="size-4 motion-safe:animate-spin" /> : <Activity className="size-4" />}
+            </span>
             <span>{t("overview.trafficTitle", { window: windowLabel })}</span>
-            {isRefreshing ? (
-              <span
-                className="inline-flex items-center gap-1 text-xs font-normal text-muted-foreground"
-                role="status"
-                aria-live="polite"
-              >
-                <Loader2 className="size-3 animate-spin" aria-hidden />
-                {isSwitchingWindow
-                  ? t("overview.trafficSwitchingWindow", { window: requestedWindowLabel })
-                  : t("overview.refreshing")}
+            {isSwitchingWindow ? (
+              <span className="text-xs font-normal text-muted-foreground" aria-hidden>
+                {switchingWindowText}
               </span>
             ) : null}
           </span>
@@ -143,6 +153,9 @@ export function OverviewTrafficChart({
           </div>
         }
       />
+      <span role="status" className="sr-only">
+        {refreshStatusText}
+      </span>
 
       <DataSurfaceContent className="flex-1 flex flex-col min-h-0">
         {isInitialLoading ? (
@@ -193,6 +206,7 @@ export function OverviewTrafficChart({
                 <div role="img" aria-label={chartAriaLabel}>
                   <ResponsiveContainer width="100%" height={200}>
                     <ComposedChart
+                      key={effectiveWindow}
                       data={chartMetrics.chartData}
                       margin={{ top: 6, right: 8, left: showLeftAxis ? -4 : 4, bottom: 4 }}
                     >
@@ -209,7 +223,8 @@ export function OverviewTrafficChart({
                         vertical={false}
                       />
                       <XAxis
-                        dataKey="label"
+                        // Recharts uses bucket indices when dataKey is omitted, even if clock labels repeat.
+                        tickFormatter={(index: number) => chartMetrics.chartData[index]?.label ?? ""}
                         tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
                         stroke="transparent"
                         interval="preserveStartEnd"
@@ -248,9 +263,11 @@ export function OverviewTrafficChart({
                         }}
                         labelStyle={{ color: "hsl(var(--muted-foreground))", marginBottom: 2, fontSize: 10 }}
                         itemStyle={{ padding: "1px 0" }}
-                        labelFormatter={(label, payload) =>
-                          formatTrafficTooltipLabel(label, payload, t("overview.trafficPartialBucket"))
-                        }
+                        labelFormatter={(index, payload) => formatTrafficTooltipLabel(
+                          chartMetrics.chartData[Number(index)]?.label ?? "",
+                          payload,
+                          t("overview.trafficPartialBucket"),
+                        )}
                         formatter={(value, name) =>
                           formatTrafficTooltipValue(
                             value,
@@ -313,7 +330,10 @@ export function OverviewTrafficChart({
                           fill="url(#throughputGradient)"
                           fillOpacity={1}
                           dot={(dotProps) => {
-                            if (hasPartialFlag(dotProps.payload) && typeof dotProps.cx === "number" && typeof dotProps.cy === "number") {
+                            if (typeof dotProps.cx !== "number" || typeof dotProps.cy !== "number") {
+                              return <g key={`dot-${dotProps.index}`} />;
+                            }
+                            if (hasPartialFlag(dotProps.payload)) {
                               return (
                                 <circle
                                   key={`partial-dot-${dotProps.index}`}
@@ -324,6 +344,17 @@ export function OverviewTrafficChart({
                                   stroke="hsl(var(--chart-ingress))"
                                   strokeWidth={1.5}
                                   strokeDasharray="2 1"
+                                />
+                              );
+                            }
+                            if (isIsolatedThroughputPoint(chartMetrics.chartData, dotProps.index)) {
+                              return (
+                                <circle
+                                  key={`isolated-dot-${dotProps.index}`}
+                                  cx={dotProps.cx}
+                                  cy={dotProps.cy}
+                                  r={2.5}
+                                  fill="hsl(var(--chart-ingress))"
                                 />
                               );
                             }

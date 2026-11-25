@@ -1,6 +1,11 @@
-import type { OverviewTrafficSeries } from "@/types/domain";
+import type { OverviewTrafficPoint, OverviewTrafficSeries } from "@/types/domain";
 
-/** Plotted fields are null for buckets the server could not fully count (row cap hit). */
+/**
+ * Plotted fields are null when the server could not fully count their source rows in that bucket (row cap hit):
+ * throughput needs complete samples, activity (max of starts and active tasks) needs complete samples and starts,
+ * and failures need complete failed runs. Throughput is also null for complete buckets without samples
+ * (`sampleCount === 0`), so the line breaks there instead of drawing a fake 0 Mbps; a measured 0 stays numeric.
+ */
 export type TrafficChartData = {
   label: string;
   throughput: number | null;
@@ -12,17 +17,21 @@ export type TrafficChartData = {
 
 export type TrafficChartMetrics = {
   chartData: TrafficChartData[];
-  /** Throughput was measured; when truncated, only plottable buckets with samples count. */
+  /** Throughput was measured in at least one bucket with complete samples (`sampleCount > 0`). */
   hasRealSamples: boolean;
-  /** Server hit sample/task-run row cap; counts may under-represent the window. */
+  /** At least one bucket has complete samples, so missing throughput means "no samples", not "unavailable". */
+  hasSampleCoverage: boolean;
+  /** Server hit a sample/task-run row cap; affected metrics are blank and totals may under-represent the window. */
   truncated: boolean;
-  /** At least one bucket carries complete counts that the chart can plot. */
+  /** At least one bucket has at least one complete source the chart or totals can use. */
   hasPlottableBuckets: boolean;
   hasPartialBucket: boolean;
-  /** Peak and totals cover complete buckets only. */
+  /** Peak covers measured buckets with complete samples only. */
   peakThroughput: number;
-  totalStartedCount: number;
-  totalFailedCount: number;
+  /** Sum over buckets with complete starts; null when no bucket has complete starts. */
+  totalStartedCount: number | null;
+  /** Sum over buckets with complete failures; null when no bucket has complete failures. */
+  totalFailedCount: number | null;
 };
 
 export type VisibleLayers = {
@@ -31,43 +40,68 @@ export type VisibleLayers = {
   failures: boolean;
 };
 
+type SourceCoverage = { samples: boolean; started: boolean; failed: boolean; flagged: boolean };
+
+/** Per-source completeness of one bucket as reported by the server, before the window-wide legacy fallback. */
+function sourceCoverage(point: OverviewTrafficPoint): SourceCoverage {
+  const samples = point.samplesIncomplete !== true;
+  const started = point.startedIncomplete !== true;
+  const failed = point.failedIncomplete !== true;
+  if (!samples || !started || !failed) return { samples, started, failed, flagged: true };
+  // Legacy servers mark a capped bucket without saying which source was cut off.
+  const legacyIncomplete = point.incomplete === true;
+  return { samples: !legacyIncomplete, started: !legacyIncomplete, failed: !legacyIncomplete, flagged: legacyIncomplete };
+}
+
 export function buildTrafficChartMetrics(trafficData: OverviewTrafficSeries | null): TrafficChartMetrics {
   const points = trafficData?.points ?? [];
-  const truncated = Boolean(trafficData?.truncated);
-  // Legacy servers report truncation without per-bucket flags, so no bucket can be trusted.
-  const legacyTruncated = truncated && !points.some((point) => point.incomplete === true);
+  const coverages = points.map(sourceCoverage);
+  const anyFlagged = coverages.some((coverage) => coverage.flagged);
+  const truncated = Boolean(trafficData?.truncated) || anyFlagged;
+  // Older servers report truncation without any bucket flags, so no bucket can be trusted.
+  const globalFallback = truncated && !anyFlagged;
   let peakThroughput = 0;
-  let totalStartedCount = 0;
-  let totalFailedCount = 0;
+  let totalStartedCount: number | null = null;
+  let totalFailedCount: number | null = null;
   let hasPlottableBuckets = false;
+  let hasSampleCoverage = false;
   let hasMeasuredThroughput = false;
 
-  const chartData = points.map((point): TrafficChartData => {
+  const chartData = points.map((point, index): TrafficChartData => {
+    const reported = coverages[index];
     const flags = {
       ...(point.partial ? { partial: true } : {}),
-      ...(point.incomplete ? { incomplete: true } : {}),
+      ...(reported.flagged ? { incomplete: true } : {}),
     };
-    if (legacyTruncated || point.incomplete === true) {
-      return { label: point.label, throughput: null, activity: null, failed: null, ...flags };
+    const coverage = globalFallback ? { samples: false, started: false, failed: false } : reported;
+    if (coverage.samples || coverage.started || coverage.failed) hasPlottableBuckets = true;
+
+    let throughput: number | null = null;
+    if (coverage.samples) {
+      hasSampleCoverage = true;
+      if (point.sampleCount > 0) {
+        hasMeasuredThroughput = true;
+        peakThroughput = Math.max(peakThroughput, point.throughputMbps);
+        throughput = point.throughputMbps;
+      }
     }
-    hasPlottableBuckets = true;
-    if (point.sampleCount > 0) hasMeasuredThroughput = true;
-    peakThroughput = Math.max(peakThroughput, point.throughputMbps);
-    totalStartedCount += point.startedCount;
-    totalFailedCount += point.failedCount;
+    if (coverage.started) totalStartedCount = (totalStartedCount ?? 0) + point.startedCount;
+    if (coverage.failed) totalFailedCount = (totalFailedCount ?? 0) + point.failedCount;
     return {
       label: point.label,
-      throughput: point.throughputMbps,
-      activity: Math.max(point.startedCount, point.activeTaskCount),
-      failed: point.failedCount,
+      throughput,
+      // Active-task counts come from samples, so activity needs both sources to avoid relabeling starts alone.
+      activity: coverage.samples && coverage.started ? Math.max(point.startedCount, point.activeTaskCount) : null,
+      failed: coverage.failed ? point.failedCount : null,
       ...flags,
     };
   });
 
   return {
     chartData,
-    // Capped responses: the window-wide flag may only reflect discarded buckets.
-    hasRealSamples: truncated ? hasMeasuredThroughput : Boolean(trafficData?.hasRealSamples),
+    // Derived per bucket: capped responses' window-wide flag may only reflect discarded buckets.
+    hasRealSamples: hasMeasuredThroughput,
+    hasSampleCoverage,
     truncated,
     hasPlottableBuckets,
     hasPartialBucket: points.some((point) => point.partial === true),
@@ -77,7 +111,7 @@ export function buildTrafficChartMetrics(trafficData: OverviewTrafficSeries | nu
   };
 }
 
-/** Raw axis maxima over visible layers; null (incomplete) buckets never stretch the scale. */
+/** Raw axis maxima over visible layers; null (incomplete or unmeasured) values never stretch the scale. */
 export function computeTrafficAxisMax(
   chartData: readonly TrafficChartData[],
   visibleLayers: VisibleLayers,
@@ -93,7 +127,7 @@ export function computeTrafficAxisMax(
 }
 
 export function hasTrafficOrActivityData(metrics: TrafficChartMetrics): boolean {
-  return metrics.hasRealSamples || metrics.totalStartedCount > 0 || metrics.totalFailedCount > 0;
+  return metrics.hasRealSamples || (metrics.totalStartedCount ?? 0) > 0 || (metrics.totalFailedCount ?? 0) > 0;
 }
 
 export function computeThroughputMax(maxThroughput: number): number {

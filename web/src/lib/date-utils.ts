@@ -24,6 +24,28 @@ export function formatTimeOnly(input?: string | null): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+// 任务运行时长的规范显示（无效/缺失 → "—"，合法 0ms 照常显示）。
+export function formatTaskDuration(durationMs?: number): string {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
+    return "—";
+  }
+  if (durationMs < 1000) {
+    return `${Math.round(durationMs)}ms`;
+  }
+  const totalSeconds = Math.floor(durationMs / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainSeconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return `${minutes}m ${remainSeconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainMinutes = minutes % 60;
+  return `${hours}h ${remainMinutes}m`;
+}
+
 export type TimeOfDay = "morning" | "afternoon" | "evening" | "night";
 
 export function getTimeOfDay(now: Date = new Date()): TimeOfDay {

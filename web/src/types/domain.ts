@@ -72,8 +72,14 @@ export interface OverviewTrafficPoint {
   startedCount: number;
   failedCount: number;
   partial?: boolean;
-  /** Bucket may be missing rows because a server query hit its row cap. */
+  /** Bucket may be missing rows because a server query hit its row cap; OR of the per-source flags when present. */
   incomplete?: boolean;
+  /** Present only as true: the sample query cut off inside this bucket, so throughput and active-task counts may be missing rows. */
+  samplesIncomplete?: true;
+  /** Present only as true: the started-run query cut off inside this bucket, so the started count may be low. */
+  startedIncomplete?: true;
+  /** Present only as true: the failed-run query cut off inside this bucket, so the failed count may be low. */
+  failedIncomplete?: true;
 }
 
 export interface OverviewTrafficSeries {
@@ -170,6 +176,8 @@ export interface HealthIncidentTimelineData {
   windowHours: number;
   summary: HealthIncidentTimelineSummary;
   groups: HealthIncidentGroup[];
+  /** Present only when a source cap excluded eligible inputs; summary and groups describe retained data only. */
+  truncated?: true;
 }
 
 export interface NodeRecord {

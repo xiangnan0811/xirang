@@ -17,9 +17,8 @@ import { DataSurface, DataSurfaceContent, DataSurfaceHeader } from "@/components
 import { EmptyState } from "@/components/ui/empty-state";
 import { InventoryRetryAlert } from "@/components/ui/inventory-retry-alert";
 import { LoadingState } from "@/components/ui/loading-state";
-import { formatTime } from "@/lib/date-utils";
+import { formatTaskDuration, formatTime } from "@/lib/date-utils";
 import type { TaskRecord, TaskStatus } from "@/types/domain";
-import { formatTaskDuration } from "@/pages/overview-page.recent-tasks.utils";
 
 export type OverviewRecentTasksProps = {
   tasks: TaskRecord[];
@@ -27,7 +26,11 @@ export type OverviewRecentTasksProps = {
   loading: boolean;
   error?: string | null;
   onRetry?: () => void;
-  /** Compact table columns when displayed side-by-side with Health Events. */
+  /**
+   * Side-by-side with Health Events. Compact column styling applies only from the
+   * xl breakpoint, where the overview grid places both panels in one row; below xl
+   * the stacked table keeps the full six-column layout.
+   */
   compact?: boolean;
 };
 
@@ -100,6 +103,12 @@ export function OverviewRecentTasks({
   const { t } = useTranslation();
   const isInitialLoading = loading && tasks.length === 0 && !error;
   const isRefreshing = loading && tasks.length > 0;
+  // xl-only compact geometry; must match the overview grid breakpoint.
+  const firstPad = compact ? "px-4 xl:pr-2.5" : "px-4";
+  const middlePad = compact ? "px-4 xl:px-2.5" : "px-4";
+  // The hidden Next Run cell stays in the DOM, so `last:` never matches; keep pr-4 directly.
+  const completedCell = compact ? "px-4 xl:pl-2.5 xl:pr-4 xl:text-right" : "px-4";
+  const nextRunVisibility = compact ? "xl:hidden" : "";
 
   return (
     <DataSurface className="flex h-full flex-col">
@@ -160,41 +169,27 @@ export function OverviewRecentTasks({
             <table className="w-full text-left text-sm">
               <thead className="border-b border-border bg-secondary/40 text-mini uppercase tracking-wide text-muted-foreground">
                 <tr>
-                  <th
-                    scope="col"
-                    className={`${compact ? "px-2.5 first:pl-4" : "px-4"} py-2 font-medium whitespace-nowrap`}
-                  >
+                  <th scope="col" className={`${firstPad} py-2 font-medium whitespace-nowrap`}>
                     {t("overview.tableNodeName")}
                   </th>
-                  <th
-                    scope="col"
-                    className={`${compact ? "px-2.5" : "px-4"} py-2 font-medium whitespace-nowrap`}
-                  >
+                  <th scope="col" className={`${middlePad} py-2 font-medium whitespace-nowrap`}>
                     {t("overview.tableTaskName")}
                   </th>
-                  <th
-                    scope="col"
-                    className={`${compact ? "px-2.5" : "px-4"} py-2 font-medium whitespace-nowrap`}
-                  >
+                  <th scope="col" className={`${middlePad} py-2 font-medium whitespace-nowrap`}>
                     {t("overview.tableSyncStatus")}
                   </th>
-                  <th
-                    scope="col"
-                    className={`${compact ? "px-2.5" : "px-4"} py-2 font-medium whitespace-nowrap`}
-                  >
+                  <th scope="col" className={`${middlePad} py-2 font-medium whitespace-nowrap`}>
                     {t("overview.tableDuration")}
                   </th>
-                  <th
-                    scope="col"
-                    className={`${compact ? "px-2.5 last:pr-4 text-right" : "px-4"} py-2 font-medium whitespace-nowrap`}
-                  >
+                  <th scope="col" className={`${completedCell} py-2 font-medium whitespace-nowrap`}>
                     {t("overview.tableCompletedAt")}
                   </th>
-                  {!compact ? (
-                    <th scope="col" className="px-4 py-2 font-medium text-right whitespace-nowrap">
-                      {t("overview.tableNextRun")}
-                    </th>
-                  ) : null}
+                  <th
+                    scope="col"
+                    className={`${nextRunVisibility} px-4 py-2 font-medium text-right whitespace-nowrap`}
+                  >
+                    {t("overview.tableNextRun")}
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -212,17 +207,16 @@ export function OverviewRecentTasks({
                       : "—";
                   const durationDisplay = formatTaskDuration(task.lastDurationMs);
                   const taskTitle = task.name || task.policyName;
-                  const cellPad = compact ? "px-2.5" : "px-4";
 
                   return (
                     <tr key={task.id} className="hover:bg-muted/30 transition-colors">
                       <td
-                        className={`${cellPad} ${compact ? "first:pl-4 max-w-[116px]" : ""} py-2.5 font-medium text-foreground whitespace-nowrap`}
+                        className={`${firstPad} ${compact ? "xl:max-w-[116px]" : ""} py-2.5 font-medium text-foreground whitespace-nowrap`}
                         title={task.nodeName}
                       >
-                        <span className={compact ? "block truncate" : ""}>{task.nodeName}</span>
+                        <span className={compact ? "xl:block xl:truncate" : undefined}>{task.nodeName}</span>
                       </td>
-                      <td className={`${cellPad} py-2.5 ${compact ? "max-w-[164px]" : "max-w-[240px]"}`}>
+                      <td className={`${middlePad} py-2.5 max-w-[240px] ${compact ? "xl:max-w-[164px]" : ""}`}>
                         <Link
                           to={`/app/logs?task=${task.id}`}
                           title={taskTitle}
@@ -231,25 +225,25 @@ export function OverviewRecentTasks({
                           <span className="truncate">{taskTitle}</span>
                         </Link>
                       </td>
-                      <td className={`${cellPad} py-2.5 whitespace-nowrap`}>
+                      <td className={`${middlePad} py-2.5 whitespace-nowrap`}>
                         <span className={`inline-flex items-center gap-1.5 whitespace-nowrap ${visual.iconClass}`}>
                           <StatusIcon className="size-3.5 shrink-0" aria-hidden />
                           <span className={visual.textClass}>{statusLabel}</span>
                         </span>
                       </td>
-                      <td className={`${cellPad} py-2.5 font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap`}>
+                      <td className={`${middlePad} py-2.5 font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap`}>
                         {durationDisplay}
                       </td>
                       <td
-                        className={`${cellPad} ${compact ? "last:pr-4 text-right" : ""} py-2.5 text-xs tabular-nums text-muted-foreground whitespace-nowrap`}
+                        className={`${completedCell} py-2.5 text-xs tabular-nums text-muted-foreground whitespace-nowrap`}
                       >
                         {finishedDisplay}
                       </td>
-                      {!compact ? (
-                        <td className="px-4 py-2.5 text-right text-xs tabular-nums text-muted-foreground whitespace-nowrap">
-                          {nextRunDisplay}
-                        </td>
-                      ) : null}
+                      <td
+                        className={`${nextRunVisibility} px-4 py-2.5 text-right text-xs tabular-nums text-muted-foreground whitespace-nowrap`}
+                      >
+                        {nextRunDisplay}
+                      </td>
                     </tr>
                   );
                 })}

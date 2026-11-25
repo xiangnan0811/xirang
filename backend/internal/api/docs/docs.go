@@ -8272,7 +8272,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "只读聚合近期告警、任务失败、异常事件、通知失败和备份健康降级",
+                "description": "只读聚合近期告警、任务失败、异常事件、通知失败和备份健康降级；truncated 为 true 表示部分符合条件的输入因来源上限被排除，计数基于保留的数据",
                 "produces": [
                     "application/json"
                 ],
@@ -8366,7 +8366,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回指定时间窗口（1h/24h/7d）内的任务吞吐量与活动趋势数据；partial 表示进行中的末尾桶，incomplete 表示可能因截断而缺少数据的桶",
+                "description": "返回指定时间窗口（1h/24h/7d）内的任务吞吐量与活动趋势数据；partial 表示进行中的末尾桶；samples_incomplete、started_incomplete、failed_incomplete 分别表示采样、开始、失败数据可能因截断缺失，incomplete 是三者的并集",
                 "produces": [
                     "application/json"
                 ],
@@ -20300,6 +20300,9 @@ const docTemplate = `{
                 "summary": {
                     "$ref": "#/definitions/internal_api_handlers.healthIncidentTimelineSummary"
                 },
+                "truncated": {
+                    "type": "boolean"
+                },
                 "window_hours": {
                     "type": "integer"
                 }
@@ -20626,8 +20629,11 @@ const docTemplate = `{
                 "failed_count": {
                     "type": "integer"
                 },
+                "failed_incomplete": {
+                    "type": "boolean"
+                },
                 "incomplete": {
-                    "description": "Incomplete indicates that the bucket may be missing rows due to a query cap.",
+                    "description": "Incomplete is the union of the three source-specific cutoff flags.",
                     "type": "boolean"
                 },
                 "label": {
@@ -20639,8 +20645,14 @@ const docTemplate = `{
                 "sample_count": {
                     "type": "integer"
                 },
+                "samples_incomplete": {
+                    "type": "boolean"
+                },
                 "started_count": {
                     "type": "integer"
+                },
+                "started_incomplete": {
+                    "type": "boolean"
                 },
                 "throughput_mbps": {
                     "type": "number"

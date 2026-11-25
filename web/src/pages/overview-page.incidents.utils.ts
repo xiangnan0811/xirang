@@ -146,5 +146,6 @@ export function normalizeIncidentTimeline(raw: HealthIncidentTimelineData): Heal
     windowHours,
     summary,
     groups,
+    ...(raw.truncated === true ? { truncated: true as const } : {}),
   };
 }

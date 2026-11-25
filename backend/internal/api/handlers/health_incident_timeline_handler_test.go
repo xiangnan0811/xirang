@@ -595,3 +595,471 @@ func TestHealthIncidentBackupCauseProducers(t *testing.T) {
 		t.Fatalf("three eligible failures require fixed cause without failure_count: %+v", group)
 	}
 }
+
+// TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy drives the
+// real handler on both engines. Unrelated low-ID policy history must not crowd
+// a later policy out of degradation, operator ownership applies before the
+// per-policy latest-three ranking, and equal created_at ties prefer higher IDs.
+func TestHealthIncidentTimelineDegradedPolicyRanksLatestThreePerPolicy(t *testing.T) {
+	type targetRun struct {
+		ago     time.Duration
+		failed  bool
+		unowned bool
+	}
+	failedAt := func(hours ...int) []targetRun {
+		runs := make([]targetRun, 0, len(hours))
+		for _, h := range hours {
+			runs = append(runs, targetRun{ago: time.Duration(h) * time.Hour, failed: true})
+		}
+		return runs
+	}
+	cases := []struct {
+		name         string
+		lowIDRuns    int
+		operator     bool
+		runs         []targetRun // creation order; later entries receive higher IDs
+		wantDegraded bool
+		wantAt       time.Duration
+	}{
+		{name: "control_997_low_id_runs", lowIDRuns: 997, runs: failedAt(1, 2, 3), wantDegraded: true, wantAt: time.Hour},
+		{name: "crowding_1000_low_id_runs", lowIDRuns: 1000, runs: failedAt(1, 2, 3), wantDegraded: true, wantAt: time.Hour},
+		{name: "older_fourth_success_ignored", runs: append(failedAt(1, 2, 3), targetRun{ago: 4 * time.Hour}), wantDegraded: true, wantAt: time.Hour},
+		{name: "newest_success_breaks_streak", runs: append([]targetRun{{ago: time.Hour}}, failedAt(2, 3, 4)...)},
+		{name: "equal_time_higher_id_failed", runs: append(failedAt(1, 2), targetRun{ago: 3 * time.Hour}, targetRun{ago: 3 * time.Hour, failed: true}), wantDegraded: true, wantAt: time.Hour},
+		{name: "equal_time_higher_id_success", runs: append(failedAt(1, 2, 3), targetRun{ago: 3 * time.Hour})},
+		{name: "operator_unowned_newer_run_filtered_before_rank", operator: true, runs: append([]targetRun{{ago: time.Hour, unowned: true}}, failedAt(2, 3, 4)...), wantDegraded: true, wantAt: 2 * time.Hour},
+	}
+	for _, engine := range []struct {
+		name string
+		open func(*testing.T) *gorm.DB
+	}{
+		{"sqlite", openHealthIncidentTimelineTestDB},
+		{"postgres", openBackupHealthPostgresTestDB},
+	} {
+		for _, tc := range cases {
+			t.Run(engine.name+"/"+tc.name, func(t *testing.T) {
+				db := engine.open(t)
+				migrateHealthIncidentTimelineTables(t, db)
+
+				now := time.Now().UTC().Truncate(time.Second)
+				ownedNode := model.Node{Name: "incident-node", Host: "127.0.0.1", Port: 22, Username: "fixture", AuthType: "key", BackupDir: "/fixture/incident"}
+				otherNode := model.Node{Name: "incident-other-node", Host: "127.0.0.2", Port: 22, Username: "fixture", AuthType: "key", BackupDir: "/fixture/other"}
+				for _, node := range []*model.Node{&ownedNode, &otherNode} {
+					if err := db.Create(node).Error; err != nil {
+						t.Fatalf("create node %s: %v", node.Name, err)
+					}
+				}
+				role, userID := "admin", uint(1)
+				if tc.operator {
+					if err := db.AutoMigrate(&model.User{}); err != nil {
+						t.Fatalf("migrate users: %v", err)
+					}
+					operator := model.User{Username: "incident-operator", Role: "operator", PasswordHash: "x"}
+					if err := db.Create(&operator).Error; err != nil {
+						t.Fatalf("create operator: %v", err)
+					}
+					if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: operator.ID}).Error; err != nil {
+						t.Fatalf("create node owner: %v", err)
+					}
+					role, userID = "operator", operator.ID
+				}
+				lowPolicy := model.Policy{Name: "incident-low-policy", SourcePath: "/fixture/source", TargetPath: "/fixture/target", CronSpec: "0 * * * *", Enabled: true, IsTemplate: false}
+				highPolicy := model.Policy{Name: "incident-high-policy", SourcePath: "/fixture/source", TargetPath: "/fixture/target", CronSpec: "0 * * * *", Enabled: true, IsTemplate: false}
+				for _, policy := range []*model.Policy{&lowPolicy, &highPolicy} {
+					if err := db.Create(policy).Error; err != nil {
+						t.Fatalf("create policy %s: %v", policy.Name, err)
+					}
+				}
+				if lowPolicy.ID >= highPolicy.ID {
+					t.Fatalf("fixture requires increasing policy IDs: low=%d high=%d", lowPolicy.ID, highPolicy.ID)
+				}
+				lowTask := model.Task{Name: "incident-low-task", NodeID: ownedNode.ID, PolicyID: &lowPolicy.ID, ExecutorType: "rsync", Status: "success"}
+				highTask := model.Task{Name: "incident-high-task", NodeID: ownedNode.ID, PolicyID: &highPolicy.ID, ExecutorType: "rsync", Status: "failed"}
+				otherTask := model.Task{Name: "incident-other-task", NodeID: otherNode.ID, PolicyID: &highPolicy.ID, ExecutorType: "rsync", Status: "success"}
+				for _, task := range []*model.Task{&lowTask, &highTask, &otherTask} {
+					if err := db.Create(task).Error; err != nil {
+						t.Fatalf("create task %s: %v", task.Name, err)
+					}
+				}
+
+				// Successful transfers without completion evidence classify as incomplete,
+				// and thus cannot create an unrelated low-policy degraded signal.
+				if tc.lowIDRuns > 0 {
+					old := now.Add(-10 * 24 * time.Hour)
+					lowRuns := make([]model.TaskRun, tc.lowIDRuns)
+					for i := range lowRuns {
+						lowRuns[i] = model.TaskRun{
+							TaskID: lowTask.ID, NodeIDSnapshot: ownedNode.ID, ExecutorTypeSnapshot: "rsync",
+							TriggerType: "cron", Status: "success", CreatedAt: old, UpdatedAt: old, FinishedAt: &old,
+						}
+					}
+					if err := db.CreateInBatches(&lowRuns, 100).Error; err != nil {
+						t.Fatalf("create %d low-ID runs: %v", tc.lowIDRuns, err)
+					}
+				}
+				for i, one := range tc.runs {
+					at := now.Add(-one.ago)
+					run := model.TaskRun{
+						TaskID: highTask.ID, NodeIDSnapshot: ownedNode.ID, ExecutorTypeSnapshot: "rsync",
+						TriggerType: "cron", Status: "success", CreatedAt: at, UpdatedAt: at, FinishedAt: &at,
+					}
+					if one.unowned {
+						run.TaskID, run.NodeIDSnapshot = otherTask.ID, otherNode.ID
+					}
+					if one.failed {
+						run.Status = "failed"
+					}
+					if err := db.Create(&run).Error; err != nil {
+						t.Fatalf("create target run %d: %v", i, err)
+					}
+				}
+
+				resp, result := callHealthIncidentTimeline(t, db, role, userID)
+				if resp.Code != http.StatusOK {
+					t.Fatalf("timeline status=%d, want %d; body=%s", resp.Code, http.StatusOK, resp.Body.String())
+				}
+				var degraded []healthIncidentSignal
+				var failureGroups int
+				for _, group := range result.Groups {
+					if group.Resource.Type == "policy" && group.Resource.ID == highPolicy.ID {
+						for _, signal := range group.Signals {
+							if signal.Type == "backup_degraded" {
+								degraded = append(degraded, signal)
+							}
+						}
+					}
+					if group.Resource.Type == "task" && group.Resource.ID == highTask.ID && healthIncidentHasSource(group, "task_failure") {
+						failureGroups++
+					}
+				}
+				counts := fmt.Sprintf("low-ID runs=%d, target backup_degraded signals=%d, target task_failure groups=%d, all groups=%d", tc.lowIDRuns, len(degraded), failureGroups, len(result.Groups))
+				if failureGroups != 1 {
+					t.Fatalf("expected the target task's separate task_failure group; %s", counts)
+				}
+				if !tc.wantDegraded {
+					if len(degraded) != 0 {
+						t.Fatalf("latest three ranked runs are not all failed; %s", counts)
+					}
+					return
+				}
+				if len(degraded) != 1 {
+					t.Fatalf("expected one backup_degraded signal for the target policy; %s", counts)
+				}
+				if want := now.Add(-tc.wantAt); !degraded[0].OccurredAt.Equal(want) || degraded[0].TaskID != highTask.ID || degraded[0].NodeID != ownedNode.ID {
+					t.Fatalf("backup_degraded must cite the most recent ranked run at %s on task %d node %d: %+v", want, highTask.ID, ownedNode.ID, degraded[0])
+				}
+			})
+		}
+	}
+}
+
+// TestHealthIncidentTimelineSourceTruncation exercises the real handler at the
+// cap, including equal-time ordering and filters applied before the cap.
+func TestHealthIncidentTimelineSourceTruncation(t *testing.T) {
+	for _, engine := range []struct {
+		name string
+		open func(*testing.T) *gorm.DB
+	}{
+		{"sqlite", openHealthIncidentTimelineTestDB},
+		{"postgres", openBackupHealthPostgresTestDB},
+	} {
+		for _, source := range []string{"alert", "task_failure", "notification_failure", "anomaly"} {
+			t.Run(engine.name+"/"+source, func(t *testing.T) {
+				db := engine.open(t)
+				migrateHealthIncidentTimelineTables(t, db)
+				if err := db.AutoMigrate(&model.User{}); err != nil {
+					t.Fatalf("migrate user: %v", err)
+				}
+				user := model.User{Username: "cap-operator", Role: "operator", PasswordHash: "x"}
+				if err := db.Create(&user).Error; err != nil {
+					t.Fatalf("create user: %v", err)
+				}
+				nodes := []model.Node{
+					{Name: "cap-retained", Host: "a", Username: "test", BackupDir: "cap-a", Archived: true},
+					{Name: "cap-first", Host: "b", Username: "test", BackupDir: "cap-b", Archived: true},
+					{Name: "cap-unowned", Host: "c", Username: "test", BackupDir: "cap-c", Archived: true},
+				}
+				if err := db.Create(&nodes).Error; err != nil {
+					t.Fatalf("create nodes: %v", err)
+				}
+				owners := []model.NodeOwner{{NodeID: nodes[0].ID, UserID: user.ID}, {NodeID: nodes[1].ID, UserID: user.ID}}
+				if err := db.Create(&owners).Error; err != nil {
+					t.Fatalf("create owners: %v", err)
+				}
+				tasks := []model.Task{
+					{Name: "cap-retained-task", NodeID: nodes[0].ID, ExecutorType: "rsync", Status: "failed"},
+					{Name: "cap-first-task", NodeID: nodes[1].ID, ExecutorType: "rsync", Status: "failed"},
+					{Name: "cap-unowned-task", NodeID: nodes[2].ID, ExecutorType: "rsync", Status: "failed"},
+				}
+				if err := db.Create(&tasks).Error; err != nil {
+					t.Fatalf("create tasks: %v", err)
+				}
+				at := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+				old := at.Add(-7 * 24 * time.Hour)
+				insert := func(nodeID, taskID uint, when time.Time, eligible bool, count int) {
+					t.Helper()
+					switch source {
+					case "alert":
+						rows := make([]model.Alert, count)
+						for i := range rows {
+							status := "open"
+							if !eligible {
+								status = "resolved"
+							}
+							rows[i] = model.Alert{NodeID: nodeID, NodeName: "node", Severity: "warning", Status: status, ErrorCode: "CAP", Message: "alert", TriggeredAt: when}
+						}
+						if err := db.CreateInBatches(&rows, 100).Error; err != nil {
+							t.Fatalf("create alerts: %v", err)
+						}
+					case "task_failure":
+						rows := make([]model.TaskRun, count)
+						for i := range rows {
+							status := "failed"
+							if !eligible {
+								status = "success"
+							}
+							rows[i] = model.TaskRun{TaskID: taskID, NodeIDSnapshot: nodeID, ExecutorTypeSnapshot: "rsync", Status: status, CreatedAt: when, UpdatedAt: when}
+						}
+						if err := db.CreateInBatches(&rows, 100).Error; err != nil {
+							t.Fatalf("create runs: %v", err)
+						}
+					case "notification_failure":
+						reason := "transport_failure"
+						if !eligible {
+							reason = "feature_retired"
+						}
+						alert := model.Alert{NodeID: nodeID, NodeName: "node", Severity: "warning", Status: "resolved", ErrorCode: "CAP", Message: "alert", TriggeredAt: when, DeliveryReason: reason}
+						if err := db.Create(&alert).Error; err != nil {
+							t.Fatalf("create delivery alert: %v", err)
+						}
+						rows := make([]model.AlertDelivery, count)
+						for i := range rows {
+							rows[i] = model.AlertDelivery{AlertID: alert.ID, IntegrationID: 1, Status: "failed", CreatedAt: when, UpdatedAt: when}
+						}
+						if err := db.CreateInBatches(&rows, 100).Error; err != nil {
+							t.Fatalf("create deliveries: %v", err)
+						}
+					case "anomaly":
+						rows := make([]model.AnomalyEvent, count)
+						for i := range rows {
+							rows[i] = model.AnomalyEvent{NodeID: nodeID, Detector: "fixture", Metric: "fixture", Severity: "warning", Details: "{}", FiredAt: when}
+						}
+						if err := db.CreateInBatches(&rows, 100).Error; err != nil {
+							t.Fatalf("create anomalies: %v", err)
+						}
+					}
+				}
+				insert(nodes[1].ID, tasks[1].ID, at, true, 1)
+				insert(nodes[0].ID, tasks[0].ID, at, true, maxHealthIncidentSourceRows-1)
+				// Newer excluded rows cannot consume the cap or set the flag.
+				insert(nodes[2].ID, tasks[2].ID, at.Add(time.Minute), true, maxHealthIncidentSourceRows+1)
+				insert(nodes[0].ID, tasks[0].ID, old, true, 1)
+				if source != "anomaly" {
+					insert(nodes[0].ID, tasks[0].ID, at.Add(time.Minute), false, 1)
+				}
+				if source == "notification_failure" {
+					alert := model.Alert{NodeID: nodes[0].ID, NodeName: "node", Severity: "warning", Status: "resolved", ErrorCode: "CAP", Message: "alert", TriggeredAt: at}
+					if err := db.Create(&alert).Error; err != nil {
+						t.Fatalf("create sent-delivery alert: %v", err)
+					}
+					if err := db.Create(&model.AlertDelivery{AlertID: alert.ID, IntegrationID: 1, Status: "sent", CreatedAt: at.Add(time.Minute)}).Error; err != nil {
+						t.Fatalf("create sent delivery: %v", err)
+					}
+				}
+				if source == "task_failure" {
+					// Move tasks after creating the runs so visibility must follow the historical snapshots.
+					if err := db.Model(&tasks[1]).Update("node_id", nodes[2].ID).Error; err != nil {
+						t.Fatalf("move task out of scope: %v", err)
+					}
+					if err := db.Model(&tasks[2]).Update("node_id", nodes[0].ID).Error; err != nil {
+						t.Fatalf("move task into scope: %v", err)
+					}
+				}
+				check := func(wantTruncated bool) {
+					t.Helper()
+					resp, data := callHealthIncidentTimeline(t, db, "operator", user.ID)
+					if resp.Code != http.StatusOK {
+						t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+					}
+					var envelope struct {
+						Data map[string]json.RawMessage `json:"data"`
+					}
+					if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+						t.Fatalf("decode response: %v", err)
+					}
+					value, present := envelope.Data["truncated"]
+					if data.Truncated != wantTruncated || present != wantTruncated || (present && string(value) != "true") {
+						t.Fatalf("truncation: want %t, got %t wire=%s", wantTruncated, data.Truncated, resp.Body.String())
+					}
+					firstID, retainedID := nodes[1].ID, nodes[0].ID
+					if source == "task_failure" {
+						firstID, retainedID = tasks[1].ID, tasks[0].ID
+					}
+					counts := map[uint]int{}
+					for _, group := range data.Groups {
+						if !healthIncidentHasSource(group, source) {
+							t.Fatalf("unexpected group: %+v", group)
+						}
+						if group.EventCount >= maxHealthIncidentSignalsPerGroup && len(group.Signals) != maxHealthIncidentSignalsPerGroup {
+							t.Fatalf("signal preview changed: %+v", group)
+						}
+						counts[group.Resource.ID] = group.EventCount
+						if source == "task_failure" && group.Resource.NodeID != nodes[0].ID && group.Resource.NodeID != nodes[1].ID {
+							t.Fatalf("task failure did not use historical node snapshot: %+v", group.Resource)
+						}
+					}
+					wantFirst, wantRetained := 1, maxHealthIncidentSourceRows-1
+					if wantTruncated {
+						wantFirst, wantRetained = 0, maxHealthIncidentSourceRows
+					}
+					wantGroups := 2
+					if wantTruncated {
+						wantGroups = 1
+					}
+					if counts[firstID] != wantFirst || counts[retainedID] != wantRetained || len(data.Groups) != wantGroups || data.Summary.Total != wantGroups {
+						t.Fatalf("retained counts=%v summary=%+v, want first=%d retained=%d groups=%d", counts, data.Summary, wantFirst, wantRetained, wantGroups)
+					}
+					if source == "task_failure" || source == "notification_failure" {
+						if data.Summary.Critical != wantGroups {
+							t.Fatalf("critical summary=%+v, want %d groups", data.Summary, wantGroups)
+						}
+					} else if data.Summary.Warning != wantGroups {
+						t.Fatalf("warning summary=%+v, want %d groups", data.Summary, wantGroups)
+					}
+				}
+				check(false)
+				insert(nodes[0].ID, tasks[0].ID, at, true, 1)
+				check(true)
+			})
+		}
+	}
+}
+
+func TestHealthIncidentTimelineNodeTruncation(t *testing.T) {
+	for _, engine := range []struct {
+		name string
+		open func(*testing.T) *gorm.DB
+	}{
+		{"sqlite", openHealthIncidentTimelineTestDB},
+		{"postgres", openBackupHealthPostgresTestDB},
+	} {
+		t.Run(engine.name, func(t *testing.T) {
+			db := engine.open(t)
+			migrateHealthIncidentTimelineTables(t, db)
+			if err := db.AutoMigrate(&model.User{}); err != nil {
+				t.Fatalf("migrate user: %v", err)
+			}
+			user := model.User{Username: "node-cap-operator", Role: "operator", PasswordHash: "x"}
+			if err := db.Create(&user).Error; err != nil {
+				t.Fatalf("create user: %v", err)
+			}
+			nodes := make([]model.Node, maxHealthIncidentSourceRows)
+			for i := range nodes {
+				nodes[i] = model.Node{Name: fmt.Sprintf("node-cap-%d", i), Host: "node", Username: "test", BackupDir: fmt.Sprintf("node-cap-%d", i)}
+			}
+			if err := db.CreateInBatches(&nodes, 100).Error; err != nil {
+				t.Fatalf("create nodes: %v", err)
+			}
+			owners := make([]model.NodeOwner, len(nodes))
+			for i, node := range nodes {
+				owners[i] = model.NodeOwner{NodeID: node.ID, UserID: user.ID}
+			}
+			if err := db.CreateInBatches(&owners, 100).Error; err != nil {
+				t.Fatalf("create owners: %v", err)
+			}
+			archived := model.Node{Name: "node-cap-archived", Host: "node", Username: "test", BackupDir: "node-cap-archived", Archived: true}
+			unowned := model.Node{Name: "node-cap-unowned", Host: "node", Username: "test", BackupDir: "node-cap-unowned"}
+			if err := db.Create(&archived).Error; err != nil {
+				t.Fatalf("create archived node: %v", err)
+			}
+			if err := db.Create(&model.NodeOwner{NodeID: archived.ID, UserID: user.ID}).Error; err != nil {
+				t.Fatalf("own archived node: %v", err)
+			}
+			if err := db.Create(&unowned).Error; err != nil {
+				t.Fatalf("create unowned node: %v", err)
+			}
+			check := func(wantTruncated bool, wantCount int) healthIncidentTimelineResponse {
+				t.Helper()
+				resp, data := callHealthIncidentTimeline(t, db, "operator", user.ID)
+				if resp.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+				}
+				var envelope struct {
+					Data map[string]json.RawMessage `json:"data"`
+				}
+				if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				value, present := envelope.Data["truncated"]
+				if data.Truncated != wantTruncated || present != wantTruncated || (present && string(value) != "true") || len(data.Groups) != wantCount || data.Summary.Total != wantCount || data.Summary.Warning != wantCount {
+					t.Fatalf("truncation=%t summary=%+v groups=%d body=%s", data.Truncated, data.Summary, len(data.Groups), resp.Body.String())
+				}
+				return data
+			}
+			check(false, maxHealthIncidentSourceRows)
+			extra := model.Node{Name: "node-cap-extra", Host: "node", Username: "test", BackupDir: "node-cap-extra"}
+			if err := db.Create(&extra).Error; err != nil {
+				t.Fatalf("create extra node: %v", err)
+			}
+			if err := db.Create(&model.NodeOwner{NodeID: extra.ID, UserID: user.ID}).Error; err != nil {
+				t.Fatalf("own extra node: %v", err)
+			}
+			data := check(true, maxHealthIncidentSourceRows)
+			seen := make(map[uint]bool, len(data.Groups))
+			for _, group := range data.Groups {
+				if !healthIncidentHasSource(group, "backup_stale") || group.EventCount != 1 {
+					t.Fatalf("unexpected node group: %+v", group)
+				}
+				seen[group.Resource.ID] = true
+			}
+			for _, node := range nodes {
+				if !seen[node.ID] {
+					t.Fatalf("ascending node cap omitted node %d", node.ID)
+				}
+			}
+			if seen[extra.ID] || seen[archived.ID] || seen[unowned.ID] {
+				t.Fatalf("excluded nodes present: extra=%t archived=%t unowned=%t", seen[extra.ID], seen[archived.ID], seen[unowned.ID])
+			}
+			// Overflow reports incomplete inputs even when retained candidates
+			// are all fresh and produce no backup-stale signals.
+			now := time.Now().UTC().Truncate(time.Second)
+			facts := make([]model.BackupCompletion, len(nodes))
+			for i, node := range nodes {
+				facts[i] = model.BackupCompletion{NodeID: node.ID, ExecutorType: "rsync", FactKind: model.BackupCompletionKindLegacyTransferCompleted, EvidenceStatus: model.BackupCompletionEvidenceVerified, CompletedAt: now, CreatedAt: now, UpdatedAt: now}
+			}
+			if err := db.CreateInBatches(&facts, 100).Error; err != nil {
+				t.Fatalf("create fresh facts: %v", err)
+			}
+			check(true, 0)
+		})
+	}
+}
+
+func TestHealthIncidentTimelineQueryFailureReturnsNoPartialResult(t *testing.T) {
+	db := openHealthIncidentTimelineTestDB(t)
+	migrateHealthIncidentTimelineTables(t, db)
+	at := time.Now().UTC().Add(-time.Hour)
+	alerts := make([]model.Alert, maxHealthIncidentSourceRows+1)
+	for i := range alerts {
+		alerts[i] = model.Alert{NodeID: 1, NodeName: "node", Severity: "warning", Status: "open", ErrorCode: "CAP", Message: "alert", TriggeredAt: at}
+	}
+	if err := db.CreateInBatches(&alerts, 100).Error; err != nil {
+		t.Fatalf("create alerts: %v", err)
+	}
+	if err := db.Migrator().DropTable(&model.AnomalyEvent{}); err != nil {
+		t.Fatalf("remove anomaly table: %v", err)
+	}
+	resp, _ := callHealthIncidentTimeline(t, db, "admin", 1)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500: %s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(envelope.Data) != 0 && string(envelope.Data) != "null" {
+		t.Fatalf("failure returned partial data: %s", resp.Body.String())
+	}
+}

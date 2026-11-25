@@ -28,6 +28,9 @@ type OverviewTrafficPointResponse = {
   failed_count?: number;
   partial?: boolean;
   incomplete?: boolean;
+  samples_incomplete?: boolean;
+  started_incomplete?: boolean;
+  failed_incomplete?: boolean;
 };
 
 type OverviewTrafficSeriesResponse = {
@@ -75,6 +78,9 @@ function mapOverviewTraffic(payload?: OverviewTrafficSeriesResponse | null): Ove
             failedCount: finiteNumber(point.failed_count),
             ...(point.partial === true ? { partial: true } : {}),
             ...(point.incomplete === true ? { incomplete: true } : {}),
+            ...(point.samples_incomplete === true ? { samplesIncomplete: true as const } : {}),
+            ...(point.started_incomplete === true ? { startedIncomplete: true as const } : {}),
+            ...(point.failed_incomplete === true ? { failedIncomplete: true as const } : {}),
           };
         })
       : [],

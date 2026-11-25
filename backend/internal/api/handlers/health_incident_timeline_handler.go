@@ -37,6 +37,7 @@ type healthIncidentTimelineResponse struct {
 	GeneratedAt time.Time                     `json:"generated_at"`
 	WindowHours int                           `json:"window_hours"`
 	Summary     healthIncidentTimelineSummary `json:"summary"`
+	Truncated   bool                          `json:"truncated,omitempty"`
 	Groups      []healthIncidentGroup         `json:"groups"`
 }
 
@@ -125,8 +126,9 @@ type healthIncidentGroup struct {
 }
 
 type healthIncidentAccumulator struct {
-	now    time.Time
-	groups map[string]*healthIncidentGroup
+	now       time.Time
+	groups    map[string]*healthIncidentGroup
+	truncated bool
 }
 
 type healthIncidentTaskInfo struct {
@@ -195,7 +197,7 @@ type healthIncidentPolicyRunRow struct {
 
 // Get godoc
 // @Summary      获取健康事件时间线
-// @Description  只读聚合近期告警、任务失败、异常事件、通知失败和备份健康降级
+// @Description  只读聚合近期告警、任务失败、异常事件、通知失败和备份健康降级；truncated 为 true 表示部分符合条件的输入因来源上限被排除，计数基于保留的数据
 // @Tags         overview
 // @Security     Bearer
 // @Produce      json
@@ -228,16 +230,19 @@ func (h *HealthIncidentTimelineHandler) Get(c *gin.Context) {
 		respondInternalError(c, err)
 		return
 	}
+	alerts = trimHealthIncidentSourceRows(acc, alerts)
 	failures, err := h.recentTaskFailures(db, since, ownedIDs, needOwnerFilter)
 	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
+	failures = trimHealthIncidentSourceRows(acc, failures)
 	deliveries, err := h.recentDeliveryFailures(db, since, ownedIDs, needOwnerFilter)
 	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
+	deliveries = trimHealthIncidentSourceRows(acc, deliveries)
 
 	taskIDs := map[uint]struct{}{}
 	policyNames := map[string]struct{}{}
@@ -493,8 +498,17 @@ func (a *healthIncidentAccumulator) response(windowHours int) healthIncidentTime
 		GeneratedAt: a.now,
 		WindowHours: windowHours,
 		Summary:     summary,
+		Truncated:   a.truncated,
 		Groups:      groups,
 	}
+}
+
+func trimHealthIncidentSourceRows[T any](acc *healthIncidentAccumulator, rows []T) []T {
+	if len(rows) > maxHealthIncidentSourceRows {
+		acc.truncated = true
+		return rows[:maxHealthIncidentSourceRows]
+	}
+	return rows
 }
 
 func (h *HealthIncidentTimelineHandler) recentAlerts(db *gorm.DB, since time.Time, ownedIDs []uint, needOwnerFilter bool) ([]model.Alert, error) {
@@ -505,7 +519,7 @@ func (h *HealthIncidentTimelineHandler) recentAlerts(db *gorm.DB, since time.Tim
 		query = query.Where("node_id IN ?", ownedIDs)
 	}
 	var alerts []model.Alert
-	err := query.Order("triggered_at DESC").Limit(maxHealthIncidentSourceRows).Find(&alerts).Error
+	err := query.Order("triggered_at DESC").Order("id DESC").Limit(maxHealthIncidentSourceRows + 1).Find(&alerts).Error
 	return alerts, err
 }
 
@@ -523,7 +537,7 @@ func (h *HealthIncidentTimelineHandler) recentTaskFailures(db *gorm.DB, since ti
 		query = query.Where("tr.node_id_snapshot IN ?", ownedIDs)
 	}
 	var rows []healthIncidentTaskFailureRow
-	err := query.Order("tr.created_at DESC").Limit(maxHealthIncidentSourceRows).Scan(&rows).Error
+	err := query.Order("tr.created_at DESC").Order("tr.id DESC").Limit(maxHealthIncidentSourceRows + 1).Scan(&rows).Error
 	return rows, err
 }
 
@@ -540,7 +554,7 @@ func (h *HealthIncidentTimelineHandler) recentDeliveryFailures(db *gorm.DB, sinc
 		query = query.Where("a.node_id IN ?", ownedIDs)
 	}
 	var rows []healthIncidentDeliveryRow
-	err := query.Order("ad.created_at DESC").Limit(maxHealthIncidentSourceRows).Scan(&rows).Error
+	err := query.Order("ad.created_at DESC").Order("ad.id DESC").Limit(maxHealthIncidentSourceRows + 1).Scan(&rows).Error
 	return rows, err
 }
 
@@ -608,9 +622,10 @@ func (h *HealthIncidentTimelineHandler) addAnomalySignals(db *gorm.DB, acc *heal
 		query = query.Where("ae.node_id IN ?", ownedIDs)
 	}
 	var rows []healthIncidentAnomalyRow
-	if err := query.Order("ae.fired_at DESC").Limit(maxHealthIncidentSourceRows).Scan(&rows).Error; err != nil {
+	if err := query.Order("ae.fired_at DESC").Order("ae.id DESC").Limit(maxHealthIncidentSourceRows + 1).Scan(&rows).Error; err != nil {
 		return err
 	}
+	rows = trimHealthIncidentSourceRows(acc, rows)
 	for _, row := range rows {
 		resource := nodeHealthIncidentResource(row.NodeID, row.NodeName)
 		message := fmt.Sprintf("%s/%s 异常事件：观测 %.1f，基线 %.1f", row.Detector, row.Metric, row.ObservedValue, row.BaselineValue)
@@ -666,9 +681,10 @@ func (h *HealthIncidentTimelineHandler) addBackupStaleSignals(db *gorm.DB, acc *
 		query = query.Where("id IN ?", ownedIDs)
 	}
 	var nodes []model.Node
-	if err := query.Order("id ASC").Limit(maxHealthIncidentSourceRows).Find(&nodes).Error; err != nil {
+	if err := query.Order("id ASC").Limit(maxHealthIncidentSourceRows + 1).Find(&nodes).Error; err != nil {
 		return err
 	}
+	nodes = trimHealthIncidentSourceRows(acc, nodes)
 	nodeIDs := make([]uint, 0, len(nodes))
 	for _, node := range nodes {
 		nodeIDs = append(nodeIDs, node.ID)
@@ -710,36 +726,47 @@ func (h *HealthIncidentTimelineHandler) addBackupStaleSignals(db *gorm.DB, acc *
 }
 
 func (h *HealthIncidentTimelineHandler) addDegradedPolicySignals(db *gorm.DB, acc *healthIncidentAccumulator, ownedIDs []uint, needOwnerFilter bool) error {
-	query := db.Table("task_runs AS tr").
-		Select(`policies.id AS policy_id, policies.name AS policy_name, tasks.id AS task_id, tr.node_id_snapshot AS node_id, COALESCE(nodes.name, '') AS node_name,
-			CASE
-				WHEN EXISTS (
-					SELECT 1 FROM backup_completions bc
-					WHERE bc.task_run_id = tr.id AND bc.evidence_status = 'verified'
-				) THEN 'success'
-				WHEN tr.status = 'success' THEN 'incomplete'
-				ELSE tr.status
-			END AS status,
-			tr.created_at AS created_at`).
+	// Ownership and eligibility filters apply before ranking; only each policy's
+	// latest three runs (created_at, then id, newest first) leave the database
+	// and reach the verified-completion lookup.
+	ranked := db.Table("task_runs AS tr").
+		Select(`tasks.policy_id AS policy_id, policies.name AS policy_name, tr.id AS run_id, tr.task_id AS task_id,
+			tr.node_id_snapshot AS node_id, tr.status AS status, tr.created_at AS created_at,
+			ROW_NUMBER() OVER (PARTITION BY tasks.policy_id ORDER BY tr.created_at DESC, tr.id DESC) AS run_rank`).
 		Joins("JOIN tasks ON tasks.id = tr.task_id").
 		Joins("JOIN policies ON policies.id = tasks.policy_id").
-		Joins("LEFT JOIN nodes ON nodes.id = tr.node_id_snapshot").
 		Where("policies.enabled = ? AND policies.is_template = ?", true, false).
 		Where(backuphealth.ClassifiedAttemptPredicate("tr"))
 	if needOwnerFilter {
-		query = query.Where("tr.node_id_snapshot IN ?", ownedIDs)
+		ranked = ranked.Where("tr.node_id_snapshot IN ?", ownedIDs)
 	}
 	var rows []healthIncidentPolicyRunRow
-	if err := query.Order("policies.id ASC, tr.created_at DESC").Limit(1000).Scan(&rows).Error; err != nil {
+	err := db.Table("(?) AS ranked", ranked).
+		Select(`ranked.policy_id AS policy_id, ranked.policy_name AS policy_name, ranked.task_id AS task_id,
+			ranked.node_id AS node_id, COALESCE(nodes.name, '') AS node_name,
+			CASE
+				WHEN EXISTS (
+					SELECT 1 FROM backup_completions bc
+					WHERE bc.task_run_id = ranked.run_id AND bc.evidence_status = 'verified'
+				) THEN 'success'
+				WHEN ranked.status = 'success' THEN 'incomplete'
+				ELSE ranked.status
+			END AS status,
+			ranked.created_at AS created_at`).
+		Joins("LEFT JOIN nodes ON nodes.id = ranked.node_id").
+		Where("ranked.run_rank <= ?", 3).
+		Order("ranked.policy_id ASC, ranked.run_rank ASC").
+		Scan(&rows).Error
+	if err != nil {
 		return err
 	}
-	perPolicy := map[uint][]healthIncidentPolicyRunRow{}
-	for _, row := range rows {
-		if len(perPolicy[row.PolicyID]) < 3 {
-			perPolicy[row.PolicyID] = append(perPolicy[row.PolicyID], row)
+	for start := 0; start < len(rows); {
+		end := start + 1
+		for end < len(rows) && rows[end].PolicyID == rows[start].PolicyID {
+			end++
 		}
-	}
-	for policyID, latestRows := range perPolicy {
+		latestRows := rows[start:end]
+		start = end
 		if len(latestRows) < 3 {
 			continue
 		}
@@ -754,7 +781,7 @@ func (h *HealthIncidentTimelineHandler) addDegradedPolicySignals(db *gorm.DB, ac
 			continue
 		}
 		first := latestRows[0]
-		resource := policyHealthIncidentResource(policyID, first.PolicyName, first.NodeID, first.NodeName)
+		resource := policyHealthIncidentResource(first.PolicyID, first.PolicyName, first.NodeID, first.NodeName)
 		message := "策略最近 3 次备份任务均失败，备份可信度降级"
 		acc.addSignal(resource, healthIncidentSignal{
 			Type:       "backup_degraded",
@@ -763,7 +790,7 @@ func (h *HealthIncidentTimelineHandler) addDegradedPolicySignals(db *gorm.DB, ac
 			Message:    message,
 			TaskID:     first.TaskID,
 			NodeID:     first.NodeID,
-			PolicyID:   policyID,
+			PolicyID:   first.PolicyID,
 		}, healthIncidentCause{Text: message, Code: healthIncidentCausePolicyBackupFailures}, actionsForResource(resource, 0, "backup_degraded"))
 	}
 	return nil

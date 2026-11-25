@@ -39,6 +39,7 @@ export function OverviewHealthIncidents({
   const summary = timeline?.summary ?? { total: 0, critical: 0, warning: 0, info: 0 };
   const isRefreshing = loading && timeline !== null;
   const visibleGroups = groups.slice(0, INCIDENT_PREVIEW_LIMIT);
+  const truncated = !error && timeline?.truncated === true;
 
   return (
     <DataSurface className="flex h-full flex-col">
@@ -96,6 +97,16 @@ export function OverviewHealthIncidents({
                   {t("common.refresh")}
                 </Button>
               </div>
+            </InlineAlert>
+          </div>
+        ) : null}
+
+        {truncated ? (
+          <div className={groups.length > 0 ? "px-4 pt-4" : "p-4"}>
+            <InlineAlert tone="warning" title={t("overview.healthIncidentTruncatedTitle")}>
+              {groups.length > 0
+                ? t("overview.healthIncidentTruncatedPartial")
+                : t("overview.healthIncidentTruncatedEmpty")}
             </InlineAlert>
           </div>
         ) : null}

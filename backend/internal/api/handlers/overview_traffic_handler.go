@@ -39,8 +39,11 @@ type overviewTrafficPoint struct {
 	StartedCount    int     `json:"started_count"`
 	FailedCount     int     `json:"failed_count"`
 	Partial         bool    `json:"partial,omitempty"`
-	// Incomplete indicates that the bucket may be missing rows due to a query cap.
-	Incomplete bool `json:"incomplete,omitempty"`
+	// Incomplete is the union of the three source-specific cutoff flags.
+	Incomplete        bool `json:"incomplete,omitempty"`
+	SamplesIncomplete bool `json:"samples_incomplete,omitempty"`
+	StartedIncomplete bool `json:"started_incomplete,omitempty"`
+	FailedIncomplete  bool `json:"failed_incomplete,omitempty"`
 }
 
 type overviewTrafficResponse struct {
@@ -70,7 +73,7 @@ func NewOverviewTrafficHandler(db *gorm.DB, nowFn func() time.Time) *OverviewTra
 
 // Get godoc
 // @Summary      获取流量趋势
-// @Description  返回指定时间窗口（1h/24h/7d）内的任务吞吐量与活动趋势数据；partial 表示进行中的末尾桶，incomplete 表示可能因截断而缺少数据的桶
+// @Description  返回指定时间窗口（1h/24h/7d）内的任务吞吐量与活动趋势数据；partial 表示进行中的末尾桶；samples_incomplete、started_incomplete、failed_incomplete 分别表示采样、开始、失败数据可能因截断缺失，incomplete 是三者的并集
 // @Tags         overview
 // @Security     Bearer
 // @Produce      json
@@ -125,15 +128,11 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 	ctx := c.Request.Context()
 	// Load the newest rows in each bounded query so recent buckets remain usable.
 	samples := make([]model.TaskTrafficSample, 0)
-	truncated := false
-	var incompleteThrough time.Time
-	markTruncated := func(excludedAt time.Time) {
-		bucket := excludedAt.UTC().Truncate(cfg.Bucket)
-		if !truncated || bucket.After(incompleteThrough) {
-			incompleteThrough = bucket
-		}
-		truncated = true
+	type cutoff struct {
+		bucket    time.Time
+		truncated bool
 	}
+	var samplesCutoff, startedCutoff, failedCutoff cutoff
 	if h.db != nil {
 		var raw []model.TaskTrafficSample
 		q := applyTrafficTimeWindow(h.db.WithContext(ctx), "sampled_at", windowStart, queryEnd, hasPartial).
@@ -147,7 +146,7 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 			return
 		}
 		if len(raw) > trafficSampleCap {
-			markTruncated(raw[trafficSampleCap].SampledAt)
+			samplesCutoff = cutoff{bucket: raw[trafficSampleCap].SampledAt.UTC().Truncate(cfg.Bucket), truncated: true}
 			raw = raw[:trafficSampleCap]
 		}
 		for _, sample := range raw {
@@ -205,7 +204,7 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 			return
 		}
 		if len(startedRuns) > trafficTaskRunCap {
-			markTruncated(*startedRuns[trafficTaskRunCap].StartedAt)
+			startedCutoff = cutoff{bucket: startedRuns[trafficTaskRunCap].StartedAt.UTC().Truncate(cfg.Bucket), truncated: true}
 			startedRuns = startedRuns[:trafficTaskRunCap]
 		}
 		for _, run := range startedRuns {
@@ -227,7 +226,7 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 			return
 		}
 		if len(failedRuns) > trafficTaskRunCap {
-			markTruncated(*failedRuns[trafficTaskRunCap].FinishedAt)
+			failedCutoff = cutoff{bucket: failedRuns[trafficTaskRunCap].FinishedAt.UTC().Truncate(cfg.Bucket), truncated: true}
 			failedRuns = failedRuns[:trafficTaskRunCap]
 		}
 		for _, run := range failedRuns {
@@ -241,10 +240,14 @@ func (h *OverviewTrafficHandler) Get(c *gin.Context) {
 		windowStart, bucketLoopEnd, currentBucketStart, hasPartial, cfg, localNow.Location(),
 		slicesByBucket, startedCountByBucket, failedCountByBucket,
 	)
+	truncated := samplesCutoff.truncated || startedCutoff.truncated || failedCutoff.truncated
 	if truncated {
-		cutoffMs := incompleteThrough.UnixMilli()
 		for i := range points {
-			points[i].Incomplete = points[i].TimestampMs <= cutoffMs
+			point := &points[i]
+			point.SamplesIncomplete = samplesCutoff.truncated && point.TimestampMs <= samplesCutoff.bucket.UnixMilli()
+			point.StartedIncomplete = startedCutoff.truncated && point.TimestampMs <= startedCutoff.bucket.UnixMilli()
+			point.FailedIncomplete = failedCutoff.truncated && point.TimestampMs <= failedCutoff.bucket.UnixMilli()
+			point.Incomplete = point.SamplesIncomplete || point.StartedIncomplete || point.FailedIncomplete
 		}
 	}
 
