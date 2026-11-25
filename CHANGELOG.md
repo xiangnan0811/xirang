@@ -13,6 +13,13 @@
 - 按常规流程保全数据库、配置、匹配密钥和备份，排空旧 Core 的在途操作后配套替换 Core 与前端资源。浏览器加载新版资源后生效。
 - 本次新增可选的健康事件及流量截断字段，保留流量桶 `incomplete`；无新增运行时配置或数据库迁移。回退配套旧版会恢复此前的排序、截断和任务时间显示行为。
 
+## [0.74.4](https://github.com/xiangnan0811/xirang/compare/v0.74.3...v0.74.4) (2026-11-25)
+
+
+### 🐛 Bug Fixes
+
+* **overview:** 修复概览截断提示与任务时间显示 ([#747](https://github.com/xiangnan0811/xirang/issues/747)) ([8f90463](https://github.com/xiangnan0811/xirang/commit/8f90463a4a4f80352987119f0fa764d9fdc4e59e))
+
 ## [0.74.3](https://github.com/xiangnan0811/xirang/compare/v0.74.2...v0.74.3) (2026-11-24)
 
 
