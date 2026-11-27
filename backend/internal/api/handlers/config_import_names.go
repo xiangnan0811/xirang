@@ -262,7 +262,7 @@ func loadConfigImportCredentialInventory(
 	nodeQuery := db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).Model(&model.Node{})
 	keyQuery := db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).Model(&model.SSHKey{})
 	if forUpdate && !strings.EqualFold(db.Name(), "sqlite") {
-		locking := clause.Locking{Strength: "UPDATE"}
+		locking := clause.Locking{Strength: "UPDATE", Options: "NOWAIT"}
 		nodeQuery = nodeQuery.Clauses(locking)
 		keyQuery = keyQuery.Clauses(locking)
 	}
@@ -982,6 +982,7 @@ func applyImportedSSHKeyCandidate(
 	if err := tx.Save(&candidate.row).Error; err != nil {
 		return fmt.Errorf("保存导入 SSH 密钥失败: %w", err)
 	}
+	accumulator.recordWrite(configImportEntitySSHKeys, candidate.row.ID)
 	inventory.replaceKey(candidate.row)
 	accumulator.updated(configImportEntitySSHKeys)
 	return nil
@@ -1013,7 +1014,7 @@ func createImportedSSHKey(
 	if err := tx.Create(&candidate.row).Error; err != nil {
 		return fmt.Errorf("创建导入 SSH 密钥失败: %w", err)
 	}
-	accumulator.recordCreatedID(configImportEntitySSHKeys, candidate.row.ID)
+	accumulator.recordWrite(configImportEntitySSHKeys, candidate.row.ID)
 	accumulator.created(configImportEntitySSHKeys, candidate.row.Disabled)
 	return nil
 }

@@ -109,6 +109,24 @@
       "timeout": "20m",
       "tests": [
         {
+          "name": "TestBatchRetryNodeLockWaitRechecksPostgres",
+          "required_paths": [
+            "TestBatchRetryNodeLockWaitRechecksPostgres/archived",
+            "TestBatchRetryNodeLockWaitRechecksPostgres/expired_grant"
+          ]
+        },
+        {
+          "name": "TestBatchCreateRetryRequesterKeyNodeLockOrderPostgres",
+          "required_paths": [
+            "TestBatchCreateRetryRequesterKeyNodeLockOrderPostgres/create",
+            "TestBatchCreateRetryRequesterKeyNodeLockOrderPostgres/retry"
+          ]
+        },
+        {
+          "name": "TestPolicyUpdateLocksTaskInventoryBeforeNodesPostgres",
+          "required_paths": ["TestPolicyUpdateLocksTaskInventoryBeforeNodesPostgres"]
+        },
+        {
           "name": "TestAccountRecoveryBatchRetryPrimarySessionClaimsSQLitePostgres",
           "required_paths": [
             "TestAccountRecoveryBatchRetryPrimarySessionClaimsSQLitePostgres/postgres/current_nonzero_version",
@@ -849,6 +867,155 @@
         {
           "name": "TestConfigImportRetryCronCursorModesSQLite",
           "required_paths": []
+        },
+        {
+          "name": "TestConfigImportAssetRollbackMigrated",
+          "required_paths": [
+            "TestConfigImportAssetRollbackMigrated/postgres/full",
+            "TestConfigImportAssetRollbackMigrated/postgres/reused-all",
+            "TestConfigImportAssetRollbackMigrated/postgres/reused-binding",
+            "TestConfigImportAssetRollbackMigrated/postgres/changed-image",
+            "TestConfigImportAssetRollbackMigrated/postgres/foreign-binding",
+            "TestConfigImportAssetRollbackMigrated/postgres/historical-link",
+            "TestConfigImportAssetRollbackMigrated/postgres/retention-repository",
+            "TestConfigImportAssetRollbackMigrated/postgres/retention-link",
+            "TestConfigImportAssetRollbackMigrated/postgres/foreign-mapping",
+            "TestConfigImportAssetRollbackMigrated/postgres/recovery-point",
+            "TestConfigImportAssetRollbackMigrated/postgres/recovery-lineage",
+            "TestConfigImportAssetRollbackMigrated/postgres/history-latch"
+          ]
+        },
+        {
+          "name": "TestConfigImportClassicRollbackScopedWritesMigrated",
+          "required_paths": ["TestConfigImportClassicRollbackScopedWritesMigrated/postgres"]
+        },
+        {
+          "name": "TestConfigImportClassicRollbackSkippedWriteMigrated",
+          "required_paths": ["TestConfigImportClassicRollbackSkippedWriteMigrated/postgres"]
+        },
+        {
+          "name": "TestConfigImportClassicRollbackSurvivingReferencesMigrated",
+          "required_paths": [
+            "TestConfigImportClassicRollbackSurvivingReferencesMigrated/dependent/postgres",
+            "TestConfigImportClassicRollbackSurvivingReferencesMigrated/foreign_node_key/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportClassicRollbackRestoredDependencyMigrated",
+          "required_paths": [
+            "TestConfigImportClassicRollbackRestoredDependencyMigrated/archived/postgres",
+            "TestConfigImportClassicRollbackRestoredDependencyMigrated/cycle/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportReferenceWritersRejectRemovedParents",
+          "required_paths": ["TestConfigImportReferenceWritersRejectRemovedParents/postgres"]
+        },
+        {
+          "name": "TestConfigImportReferenceCloneRefreshesTemplate",
+          "required_paths": ["TestConfigImportReferenceCloneRefreshesTemplate/postgres"]
+        },
+        {
+          "name": "TestConfigImportReferenceLegacyDisabledDrillUpdate",
+          "required_paths": ["TestConfigImportReferenceLegacyDisabledDrillUpdate/postgres"]
+        },
+        {
+          "name": "TestConfigImportRestoredReferencesAgainstDeletion",
+          "required_paths": [
+            "TestConfigImportRestoredReferencesAgainstDeletion/postgres/ssh-single",
+            "TestConfigImportRestoredReferencesAgainstDeletion/postgres/ssh-batch",
+            "TestConfigImportRestoredReferencesAgainstDeletion/postgres/credential",
+            "TestConfigImportRestoredReferencesAgainstDeletion/postgres/node-single",
+            "TestConfigImportRestoredReferencesAgainstDeletion/postgres/node-batch",
+            "TestConfigImportRestoredReferencesAgainstDeletion/postgres/drill-single",
+            "TestConfigImportRestoredReferencesAgainstDeletion/postgres/drill-batch"
+          ]
+        },
+        {
+          "name": "TestNodeDeletionTaskLockDoesNotDeadlockRetry",
+          "required_paths": [
+            "TestNodeDeletionTaskLockDoesNotDeadlockRetry/postgres/single",
+            "TestNodeDeletionTaskLockDoesNotDeadlockRetry/postgres/batch"
+          ]
+        },
+        {
+          "name": "TestNodeDeletionAllowsDisabledDrillTarget",
+          "required_paths": [
+            "TestNodeDeletionAllowsDisabledDrillTarget/postgres/single",
+            "TestNodeDeletionAllowsDisabledDrillTarget/postgres/batch"
+          ]
+        },
+        {
+          "name": "TestConfigImportRollbackLegacyDrillReferencesMigrated",
+          "required_paths": [
+            "TestConfigImportRollbackLegacyDrillReferencesMigrated/missing_unchanged/postgres",
+            "TestConfigImportRollbackLegacyDrillReferencesMigrated/missing_pointer_changed/postgres",
+            "TestConfigImportRollbackLegacyDrillReferencesMigrated/missing_enabled_after/postgres",
+            "TestConfigImportRollbackLegacyDrillReferencesMigrated/enabled_prior_missing/postgres",
+            "TestConfigImportRollbackLegacyDrillReferencesMigrated/existing_deleted_after/postgres",
+            "TestConfigImportRollbackLegacyDrillReferencesMigrated/existing_retained/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportRollbackCredentialReferencesMigrated",
+          "required_paths": [
+            "TestConfigImportRollbackCredentialReferencesMigrated/active_missing/postgres",
+            "TestConfigImportRollbackCredentialReferencesMigrated/active_present/postgres",
+            "TestConfigImportRollbackCredentialReferencesMigrated/active_deleted_after/postgres",
+            "TestConfigImportRollbackCredentialReferencesMigrated/legacy_unchanged/postgres",
+            "TestConfigImportRollbackCredentialReferencesMigrated/legacy_changed/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportRollbackProjectedAssetLinksMigrated",
+          "required_paths": [
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/compatible/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/executor/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/provider/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/publication/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/version/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/node/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/node_name/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/rclone_legacy_node_name/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/rclone_prefix_node_name/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/rclone_native_node_name/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/binding/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/owned/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/unrelated/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/history_compatible/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/history_incompatible/postgres",
+            "TestConfigImportRollbackProjectedAssetLinksMigrated/history_other_owner/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportRollbackSurvivingAssetLinkReceiptMigrated",
+          "required_paths": [
+            "TestConfigImportRollbackSurvivingAssetLinkReceiptMigrated/compatible/postgres",
+            "TestConfigImportRollbackSurvivingAssetLinkReceiptMigrated/incompatible/postgres"
+          ]
+        },
+        {
+          "name": "TestConfigImportRollbackLegacyDrillReceiptMigrated",
+          "required_paths": ["TestConfigImportRollbackLegacyDrillReceiptMigrated/postgres"]
+        },
+        {
+          "name": "TestConfigImportRollbackResticAccessReceiptMigrated",
+          "required_paths": [
+            "TestConfigImportRollbackResticAccessReceiptMigrated/later_link_and_binding_locator/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/later_link_shared_binding/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/retained_historical_owner_locator/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/retained_owner_password/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/unchanged_password_other_config/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/shared_other_owner/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/restore_prior_link_access/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/renamed_before_import/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/later_shared_link_password_changed/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/later_native_link_host_changed/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/preexisting_shared_link_password_and_host_changed/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/later_shared_link_metadata_and_options_changed/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/later_graph_link_empty_locator_changed/postgres",
+            "TestConfigImportRollbackResticAccessReceiptMigrated/later_graph_link_empty_locator_unchanged/postgres"
+          ]
         },
         {
           "name": "TestConfigImportRollbackDetachedTaskPolicyState",

@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -120,6 +121,9 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 	applyOptionalFields(&node, input)
 
 	if err := s.repo.Create(ctx, &node); err != nil {
+		if errors.Is(err, repository.ErrNodeSSHKeyNotFound) {
+			return nil, validationError("所选密钥不存在，请重新选择")
+		}
 		err = apperr.WrapDBError(err)
 		return nil, err
 	}
@@ -214,6 +218,9 @@ func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput
 	applyOptionalFields(node, input)
 
 	if err := s.repo.Update(ctx, node, updateStatus); err != nil {
+		if errors.Is(err, repository.ErrNodeSSHKeyNotFound) {
+			return nil, "", validationError("所选密钥不存在，请重新选择")
+		}
 		err = apperr.WrapDBError(err)
 		return nil, "", err
 	}

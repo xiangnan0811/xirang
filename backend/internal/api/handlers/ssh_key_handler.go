@@ -660,18 +660,33 @@ func (h *SSHKeyHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	var count int64
-	if err := h.db.Model(&model.Node{}).Where("ssh_key_id = ?", id).Count(&count).Error; err != nil {
+	var inUse bool
+	err := referenceWriteTransaction(h.db.WithContext(c.Request.Context()), func(tx *gorm.DB) error {
+		if tx.Name() == "sqlite" {
+			if err := tx.Exec("UPDATE ssh_keys SET id = id WHERE 1 = 0").Error; err != nil {
+				return err
+			}
+		}
+		var key model.SSHKey
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&key, id).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&model.Node{}).Where("ssh_key_id = ?", id).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			inUse = true
+			return nil
+		}
+		return tx.Delete(&model.SSHKey{}, id).Error
+	})
+	if err != nil {
 		respondInternalError(c, err)
 		return
 	}
-	if count > 0 {
+	if inUse {
 		respondBadRequest(c, "该 ssh key 正在被节点使用，无法删除")
-		return
-	}
-
-	if err := h.db.Delete(&model.SSHKey{}, id).Error; err != nil {
-		respondInternalError(c, err)
 		return
 	}
 	respondOK(c, gin.H{"message": "deleted", "deleted_at": time.Now()})
@@ -1080,46 +1095,59 @@ func (h *SSHKeyHandler) BatchDelete(c *gin.Context) {
 		return
 	}
 
-	// 查询哪些 key 正在被节点使用
-	var usedKeyIDs []uint
-	if err := h.db.Model(&model.Node{}).
-		Where("ssh_key_id IN ?", req.IDs).
-		Distinct("ssh_key_id").
-		Pluck("ssh_key_id", &usedKeyIDs).Error; err != nil {
+	var skippedNames []string
+	deleted := 0
+	err := referenceWriteTransaction(h.db.WithContext(c.Request.Context()), func(tx *gorm.DB) error {
+		if tx.Name() == "sqlite" {
+			if err := tx.Exec("UPDATE ssh_keys SET id = id WHERE 1 = 0").Error; err != nil {
+				return err
+			}
+		}
+		// Lock exactly the requested rows in the same numeric order as other writers.
+		keys := make([]model.SSHKey, 0, len(req.IDs))
+		for _, id := range uniqueSortedUint(req.IDs) {
+			var key model.SSHKey
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "name").First(&key, id).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			keys = append(keys, key)
+		}
+		var usedKeyIDs []uint
+		if err := tx.Model(&model.Node{}).Where("ssh_key_id IN ?", req.IDs).
+			Distinct("ssh_key_id").Pluck("ssh_key_id", &usedKeyIDs).Error; err != nil {
+			return err
+		}
+		usedSet := make(map[uint]bool, len(usedKeyIDs))
+		for _, id := range usedKeyIDs {
+			usedSet[id] = true
+		}
+		for _, key := range keys {
+			if usedSet[key.ID] {
+				skippedNames = append(skippedNames, key.Name)
+			}
+		}
+		toDelete := make([]uint, 0, len(req.IDs))
+		for _, id := range req.IDs {
+			if !usedSet[id] {
+				toDelete = append(toDelete, id)
+			}
+		}
+		if len(toDelete) > 0 {
+			result := tx.Where("id IN ?", toDelete).Delete(&model.SSHKey{})
+			if result.Error != nil {
+				return result.Error
+			}
+			deleted = int(result.RowsAffected)
+		}
+		return nil
+	})
+	if err != nil {
 		respondInternalError(c, err)
 		return
-	}
-	usedSet := make(map[uint]bool, len(usedKeyIDs))
-	for _, id := range usedKeyIDs {
-		usedSet[id] = true
-	}
-
-	// 查询被使用 key 的名称（用于返回提示）
-	var skippedNames []string
-	if len(usedKeyIDs) > 0 {
-		var usedKeys []model.SSHKey
-		h.db.Where("id IN ?", usedKeyIDs).Select("id", "name").Find(&usedKeys)
-		for _, k := range usedKeys {
-			skippedNames = append(skippedNames, k.Name)
-		}
-	}
-
-	// 筛选可删除的 ID
-	toDelete := make([]uint, 0)
-	for _, id := range req.IDs {
-		if !usedSet[id] {
-			toDelete = append(toDelete, id)
-		}
-	}
-
-	deleted := 0
-	if len(toDelete) > 0 {
-		result := h.db.Where("id IN ?", toDelete).Delete(&model.SSHKey{})
-		if result.Error != nil {
-			respondInternalError(c, result.Error)
-			return
-		}
-		deleted = int(result.RowsAffected)
 	}
 
 	respondOK(c, gin.H{

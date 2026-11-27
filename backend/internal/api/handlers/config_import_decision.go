@@ -655,6 +655,7 @@ func persistConfigImportDecision(ctx context.Context, tx *gorm.DB, decision *con
 		if err := decision.input.settingsSvc.UpdateWithTxContext(ctx, tx, setting.key, setting.value); err != nil {
 			return fmt.Errorf("保存导入系统设置失败: %w", err)
 		}
+		accumulator.recordWrite(configImportEntitySystemSettings, setting.key)
 		if decision.snapshot.settings[setting.key] {
 			accumulator.updated(configImportEntitySystemSettings)
 		} else {
@@ -1594,7 +1595,7 @@ func persistConfigImportNodes(ctx context.Context, tx *gorm.DB, decision *config
 			candidate.row = row
 			decision.snapshot.credentials.remapNodeIdentity(provisional, row)
 			decisionNodeIDMap(decision)[provisional] = row.ID
-			accumulator.recordCreatedID(configImportEntityNodes, row.ID)
+			accumulator.recordWrite(configImportEntityNodes, row.ID)
 			accumulator.created(configImportEntityNodes, false)
 		}
 	}
@@ -1729,6 +1730,7 @@ func persistConfigImportNodeRelations(tx *gorm.DB, decision *configImportDecisio
 		if err := tx.WithContext(tx.Statement.Context).Save(&node).Error; err != nil {
 			return fmt.Errorf("保存导入节点失败: %w", err)
 		}
+		accumulator.recordWrite(configImportEntityNodes, node.ID)
 		candidate.row = node
 		accumulator.updated(configImportEntityNodes)
 	}
@@ -1790,6 +1792,7 @@ func persistConfigImportPolicies(ctx context.Context, tx *gorm.DB, decision *con
 			decision.snapshot.policiesByID[row.ID] = row
 			decision.snapshot.policiesByName[candidate.name] = []model.Policy{row}
 			decisionPolicyIDMap(decision)[provisional] = row.ID
+			accumulator.recordWrite(configImportEntityPolicies, row.ID)
 			accumulator.created(configImportEntityPolicies, false)
 			continue
 		}
@@ -1818,6 +1821,7 @@ func persistConfigImportPolicies(ctx context.Context, tx *gorm.DB, decision *con
 		if err := tx.WithContext(ctx).Save(&row).Error; err != nil {
 			return fmt.Errorf("保存导入策略失败: %w", err)
 		}
+		accumulator.recordWrite(configImportEntityPolicies, row.ID)
 		if originalID != row.ID {
 			decisionPolicyIDMap(decision)[originalID] = row.ID
 		}
@@ -1961,6 +1965,7 @@ func persistConfigImportTasks(ctx context.Context, tx *gorm.DB, decision *config
 			if err := tx.WithContext(ctx).Save(&row).Error; err != nil {
 				return fmt.Errorf("保存导入任务失败: %w", err)
 			}
+			accumulator.recordWrite(configImportEntityTasks, row.ID)
 			candidate.task = row
 			decisionTaskIDMap(decision)[candidate.task.ID] = candidate.task.ID
 			accumulator.updated(configImportEntityTasks)
@@ -1986,6 +1991,7 @@ func persistConfigImportTasks(ctx context.Context, tx *gorm.DB, decision *config
 		}
 		candidate.task = row
 		decisionTaskIDMap(decision)[provisional] = row.ID
+		accumulator.recordWrite(configImportEntityTasks, row.ID)
 		accumulator.created(configImportEntityTasks, false)
 	}
 	for _, candidate := range decision.taskCandidates {
@@ -2446,7 +2452,7 @@ func lockConfigImportPolicyTaskInventory(tx *gorm.DB, input configImportInput) e
 	}
 	query := tx.Session(&gorm.Session{SkipHooks: true})
 	if !strings.EqualFold(tx.Name(), "sqlite") {
-		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+		query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "NOWAIT"})
 	}
 	if len(input.envelope.Classic.Policies) > 0 || len(input.envelope.Classic.Tasks) > 0 {
 		var policyRows []model.Policy
@@ -2508,8 +2514,8 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 	rollbackJournal := newConfigImportRollbackJournal(h.db, h.settingsSvc)
 	persistImport := func(persistCtx context.Context) error {
 		var rollbackSnapshot *configImportRollbackSnapshot
-		err := h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
-			if len(input.envelope.Classic.Tasks) > 0 || len(input.envelope.Classic.Policies) > 0 {
+		err := configImportTransaction(persistCtx, h.db, func(tx *gorm.DB) error {
+			if len(input.envelope.Classic.Tasks) > 0 || len(input.envelope.Classic.Policies) > 0 || len(input.envelope.Graph.TaskRepositoryLinks) > 0 {
 				if err := policyPkg.LockTargetOwnershipSpace(tx); err != nil {
 					return fmt.Errorf("锁定导入任务备份目标失败: %w", err)
 				}
@@ -2524,6 +2530,11 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if err := lockConfigImportPolicyTaskInventory(tx, input); err != nil {
 				return err
 			}
+			if len(input.settingsPlan) > 0 && strings.EqualFold(tx.Name(), "postgres") {
+				if err := tx.Exec("LOCK TABLE system_settings IN SHARE ROW EXCLUSIVE MODE NOWAIT").Error; err != nil {
+					return fmt.Errorf("锁定导入系统设置失败: %w", err)
+				}
+			}
 			decisionInput := input
 			decisionInput.lockedCredentials = lockedInventory
 			snapshot, err := loadConfigImportSnapshot(persistCtx, tx, decisionInput)
@@ -2534,7 +2545,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if err != nil {
 				return err
 			}
-			rollbackSnapshot, err = captureConfigImportRollbackSnapshot(persistCtx, tx, input.envelope.Classic, input.settingsPlan, input.envelope)
+			rollbackSnapshot, err = captureConfigImportRollbackSnapshot(persistCtx, tx, input.envelope.Classic, input.settingsPlan)
 			if err != nil {
 				return err
 			}
@@ -2542,13 +2553,11 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				return err
 			}
 			if input.envelope.Version == configExportVersion2 {
-				if err := h.importBackupAssetGraph(tx, input.envelope, configImportActorID(c)); err != nil {
+				if err := h.importBackupAssetGraph(tx, input.envelope, configImportActorID(c), &rollbackSnapshot.graph); err != nil {
 					return err
 				}
 			}
-			rollbackSnapshot.nodes.registerOwnedCreated(accumulator.createdNodeIDs)
-			rollbackSnapshot.sshKeys.registerOwnedCreated(accumulator.createdSSHKeyIDs)
-			return rollbackSnapshot.seal(persistCtx, tx)
+			return rollbackSnapshot.seal(persistCtx, tx, accumulator)
 		})
 		if err == nil {
 			rollbackJournal.install(rollbackSnapshot)

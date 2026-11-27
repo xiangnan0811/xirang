@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // knownAppCredentialTypes 允许的凭据类型。
@@ -467,9 +468,25 @@ func (h *AppCredentialHandler) Delete(c *gin.Context) {
 	if !ok {
 		return
 	}
-	db := h.db.WithContext(c.Request.Context())
-	var item model.AppCredential
-	if err := db.First(&item, id).Error; err != nil {
+	var refCount int64
+	err := referenceWriteTransaction(h.db.WithContext(c.Request.Context()), func(tx *gorm.DB) error {
+		if tx.Name() == "sqlite" {
+			if err := tx.Exec("UPDATE app_credentials SET id = id WHERE 1 = 0").Error; err != nil {
+				return err
+			}
+		}
+		var item model.AppCredential
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&item, id).Error; err != nil {
+			return err
+		}
+		var err error
+		refCount, err = countCredentialReferences(tx, id)
+		if err != nil || refCount > 0 {
+			return err
+		}
+		return tx.Delete(&item).Error
+	})
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondNotFound(c, "凭据不存在")
 		} else {
@@ -477,17 +494,8 @@ func (h *AppCredentialHandler) Delete(c *gin.Context) {
 		}
 		return
 	}
-	refCount, err := countCredentialReferences(db, id)
-	if err != nil {
-		respondInternalError(c, err)
-		return
-	}
 	if refCount > 0 {
 		respondConflict(c, fmt.Sprintf("该凭据被 %d 个备份策略引用，无法删除", refCount))
-		return
-	}
-	if err := db.Delete(&item).Error; err != nil {
-		respondInternalError(c, err)
 		return
 	}
 	respondMessage(c, "deleted")

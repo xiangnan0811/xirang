@@ -34,7 +34,7 @@ func TestConfigImportRollbackFencesNodeProbeSQLitePostgres(t *testing.T) {
 				return err
 			}
 			var err error
-			snapshot, err = captureConfigImportRollbackSnapshot(ctx, tx, data, nil, configImportEnvelope{})
+			snapshot, err = captureConfigImportRollbackSnapshot(ctx, tx, data, nil)
 			if err != nil {
 				return err
 			}
@@ -44,7 +44,10 @@ func TestConfigImportRollbackFencesNodeProbeSQLitePostgres(t *testing.T) {
 			if err := tx.Model(&model.SSHKey{}).Where("id = ?", key.ID).Update("disabled", true).Error; err != nil {
 				return err
 			}
-			return snapshot.seal(ctx, tx)
+			accumulator := newConfigImportAccumulator()
+			accumulator.recordWrite(configImportEntityNodes, node.ID)
+			accumulator.recordWrite(configImportEntitySSHKeys, key.ID)
+			return snapshot.seal(ctx, tx, accumulator)
 		})
 		if err != nil {
 			t.Fatal(err)

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,9 +18,50 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var errPolicyHasLinkedTasks = errors.New("存在关联任务，无法转换为模板")
+
+func referenceWriteTransaction(db *gorm.DB, body func(*gorm.DB) error) error {
+	if db.Name() == "postgres" {
+		return db.Transaction(body, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	}
+	return db.Transaction(body)
+}
+
+func lockPolicyReferences(tx *gorm.DB, nodeIDs []uint, drillTarget *uint, allowMissingDrill bool) error {
+	if len(uniqueSortedUint(nodeIDs)) != len(nodeIDs) {
+		return fmt.Errorf("部分节点不存在，请检查节点列表")
+	}
+	required := make(map[uint]bool, len(nodeIDs)+1)
+	for _, id := range nodeIDs {
+		required[id] = true
+	}
+	if drillTarget != nil && *drillTarget > 0 {
+		if _, exists := required[*drillTarget]; !exists {
+			required[*drillTarget] = !allowMissingDrill
+		}
+	}
+	ids := make([]uint, 0, len(required))
+	for id := range required {
+		ids = append(ids, id)
+	}
+	for _, id := range uniqueSortedUint(ids) {
+		var node model.Node
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&node, id).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if !required[id] {
+				continue
+			}
+			return fmt.Errorf("部分节点不存在，请检查节点列表")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // drillTriggerer 定义恢复演练触发接口，由 *task.Manager 实现。
 // 独立接口便于测试注入，避免 handler 直接依赖 task 包。
@@ -479,21 +521,17 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		p.RetryBaseSeconds = *req.RetryBaseSeconds
 	}
 
-	err := h.db.Transaction(func(tx *gorm.DB) error {
+	err := referenceWriteTransaction(h.db, func(tx *gorm.DB) error {
 		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
+			return err
+		}
+		if err := lockPolicyReferences(tx, req.NodeIDs, p.DrillTargetNodeID, false); err != nil {
 			return err
 		}
 		if err := model.CreatePolicyWithExplicitValues(tx, &p, model.PolicyCreateExplicitColumns()...); err != nil {
 			return err
 		}
 		if len(req.NodeIDs) > 0 {
-			var existCount int64
-			if err := tx.Model(&model.Node{}).Where("id IN ?", req.NodeIDs).Count(&existCount).Error; err != nil {
-				return err
-			}
-			if int(existCount) != len(req.NodeIDs) {
-				return fmt.Errorf("部分节点不存在，请检查节点列表")
-			}
 			for _, nid := range req.NodeIDs {
 				pn := model.PolicyNode{PolicyID: p.ID, NodeID: nid}
 				if err := tx.Create(&pn).Error; err != nil {
@@ -850,12 +888,12 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		p.RetryBaseSeconds = *req.RetryBaseSeconds
 	}
 
-	err := h.db.Transaction(func(tx *gorm.DB) error {
+	err := referenceWriteTransaction(h.db, func(tx *gorm.DB) error {
 		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
 			return err
 		}
 		var current model.Policy
-		if err := tx.First(&current, p.ID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, p.ID).Error; err != nil {
 			return err
 		}
 		previousEnabled = current.Enabled
@@ -874,21 +912,31 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 				return errPolicyHasLinkedTasks
 			}
 		}
+		// SyncPolicyTasks validates the targets of every task; schedule changes
+		// lock this policy's tasks. Take those rows before node references so
+		// compensation and retry writers cannot form a Task/Node lock cycle.
+		if req.NodeIDs != nil && !p.IsTemplate {
+			var tasks []model.Task
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Order("id").Find(&tasks).Error; err != nil {
+				return err
+			}
+		} else if previousEnabled != p.Enabled {
+			var tasks []model.Task
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("policy_id = ?", p.ID).Order("id").Find(&tasks).Error; err != nil {
+				return err
+			}
+		}
+		allowMissingDrill := req.DrillTargetNodeID == nil && req.DrillEnabled == nil &&
+			current.DrillTargetNodeID != nil && p.DrillTargetNodeID != nil &&
+			*current.DrillTargetNodeID == *p.DrillTargetNodeID
+		if err := lockPolicyReferences(tx, req.NodeIDs, p.DrillTargetNodeID, allowMissingDrill); err != nil {
+			return err
+		}
 		if err := tx.Save(&p).Error; err != nil {
 			return err
 		}
 		// 替换策略-节点关联
 		if req.NodeIDs != nil {
-			// 验证所有节点 ID 存在
-			if len(req.NodeIDs) > 0 {
-				var existCount int64
-				if err := tx.Model(&model.Node{}).Where("id IN ?", req.NodeIDs).Count(&existCount).Error; err != nil {
-					return err
-				}
-				if int(existCount) != len(req.NodeIDs) {
-					return fmt.Errorf("部分节点不存在，请检查节点列表")
-				}
-			}
 			if err := tx.Where("policy_id = ?", p.ID).Delete(&model.PolicyNode{}).Error; err != nil {
 				return err
 			}

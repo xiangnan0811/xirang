@@ -2,9 +2,16 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"xirang/backend/internal/model"
 )
+
+// ErrNodeSSHKeyNotFound reports a key removed before the node write acquired it.
+var ErrNodeSSHKeyNotFound = errors.New("node SSH key reference not found")
+
+// ErrNodeDrillTargetInUse reports a node targeted by an enabled drill.
+var ErrNodeDrillTargetInUse = errors.New("node is an enabled drill target")
 
 // NodeRepository defines the data access interface for Node.
 type NodeRepository interface {

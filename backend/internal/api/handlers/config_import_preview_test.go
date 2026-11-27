@@ -2019,14 +2019,16 @@ func TestConfigImportRollbackRejectsNewTemplateLink(t *testing.T) {
 			var snapshot *configImportRollbackSnapshot
 			if err := db.Transaction(func(tx *gorm.DB) error {
 				var err error
-				snapshot, err = captureConfigImportRollbackSnapshot(context.Background(), tx, data, nil, configImportEnvelope{})
+				snapshot, err = captureConfigImportRollbackSnapshot(context.Background(), tx, data, nil)
 				if err != nil {
 					return err
 				}
 				if err := tx.Model(&model.Policy{}).Where("id = ?", p.ID).Update("is_template", false).Error; err != nil {
 					return err
 				}
-				return snapshot.seal(context.Background(), tx)
+				accumulator := newConfigImportAccumulator()
+				accumulator.recordWrite(configImportEntityPolicies, p.ID)
+				return snapshot.seal(context.Background(), tx, accumulator)
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -2158,14 +2160,16 @@ func TestConfigImportRollbackTemplateOwnershipContention(t *testing.T) {
 					return err
 				}
 				var err error
-				snapshot, err = captureConfigImportRollbackSnapshot(context.Background(), tx, data, nil, configImportEnvelope{})
+				snapshot, err = captureConfigImportRollbackSnapshot(context.Background(), tx, data, nil)
 				if err != nil {
 					return err
 				}
 				if err := tx.Model(&model.Task{}).Where("id = ?", task.ID).Update("policy_id", nil).Error; err != nil {
 					return err
 				}
-				return snapshot.seal(context.Background(), tx)
+				accumulator := newConfigImportAccumulator()
+				accumulator.recordWrite(configImportEntityTasks, task.ID)
+				return snapshot.seal(context.Background(), tx, accumulator)
 			}); err != nil {
 				t.Fatal(err)
 			}

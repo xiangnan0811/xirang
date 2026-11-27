@@ -380,7 +380,7 @@ func (h *ConfigHandler) exportRepositoryBindingEnvelope(tx *gorm.DB, repositoryI
 	}, nil
 }
 
-func (h *ConfigHandler) importBackupAssetGraph(tx *gorm.DB, envelope configImportEnvelope, actorID uint) error {
+func (h *ConfigHandler) importBackupAssetGraph(tx *gorm.DB, envelope configImportEnvelope, actorID uint, graph *configImportGraphRollback) error {
 	if tx == nil {
 		return fmt.Errorf("%w: import transaction is required", errConfigAssetGraphInvalid)
 	}
@@ -390,7 +390,7 @@ func (h *ConfigHandler) importBackupAssetGraph(tx *gorm.DB, envelope configImpor
 	now := time.Now().UTC()
 	repositoryIDs := make(map[string]string, len(envelope.Graph.BackupRepositories))
 	for _, repository := range envelope.Graph.BackupRepositories {
-		localID, err := h.importConfigAssetRepository(tx, envelope.DocumentID, repository, now)
+		localID, err := h.importConfigAssetRepository(tx, envelope.DocumentID, repository, now, graph)
 		if err != nil {
 			return err
 		}
@@ -399,7 +399,7 @@ func (h *ConfigHandler) importBackupAssetGraph(tx *gorm.DB, envelope configImpor
 
 	linkIDs := make(map[string]string, len(envelope.Graph.TaskRepositoryLinks))
 	for _, link := range envelope.Graph.TaskRepositoryLinks {
-		localID, err := h.importConfigAssetLink(tx, envelope.DocumentID, link, repositoryIDs[link.RepositoryRef], now)
+		localID, err := h.importConfigAssetLink(tx, envelope.DocumentID, link, repositoryIDs[link.RepositoryRef], now, graph)
 		if err != nil {
 			return err
 		}
@@ -411,20 +411,20 @@ func (h *ConfigHandler) importBackupAssetGraph(tx *gorm.DB, envelope configImpor
 		if policy.ScopeKind == "task_link" {
 			scopeID = linkIDs[policy.LinkRef]
 		}
-		if _, err := h.importConfigAssetPolicy(tx, envelope.DocumentID, policy, scopeID, actorID, now); err != nil {
+		if _, err := h.importConfigAssetPolicy(tx, envelope.DocumentID, policy, scopeID, actorID, now, graph); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (h *ConfigHandler) importConfigAssetRepository(tx *gorm.DB, documentID string, repository configAssetRepositoryExport, now time.Time) (string, error) {
+func (h *ConfigHandler) importConfigAssetRepository(tx *gorm.DB, documentID string, repository configAssetRepositoryExport, now time.Time, graph *configImportGraphRollback) (string, error) {
 	storedIdentity := configAssetStoredIdentity(repository.IdentityRef)
 	if localID, found, err := lookupConfigImportRef(tx, documentID, repository.RepositoryRef, configAssetEntityRepository); err != nil {
 		return "", err
 	} else if found {
 		var local model.BackupRepository
-		if err := tx.Where("id = ?", localID).First(&local).Error; err != nil {
+		if err := lockConfigImportAssetQuery(tx).Where("id = ?", localID).First(&local).Error; err != nil {
 			return "", fmt.Errorf("%w: mapped repository is missing", errConfigAssetGraphConflict)
 		}
 		if !configAssetIdentityMatches(local.RepositoryIdentity, repository.IdentityRef) {
@@ -435,7 +435,7 @@ func (h *ConfigHandler) importConfigAssetRepository(tx *gorm.DB, documentID stri
 			return "", fmt.Errorf("%w: repository identity mapping changed", errConfigAssetGraphConflict)
 		}
 		if repository.AccessBinding != nil {
-			if err := importConfigAssetBinding(tx, local.ID, repository.AccessBinding, now); err != nil {
+			if err := importConfigAssetBinding(tx, local.ID, repository.AccessBinding, now, graph); err != nil {
 				return "", err
 			}
 		}
@@ -473,18 +473,19 @@ func (h *ConfigHandler) importConfigAssetRepository(tx *gorm.DB, documentID stri
 	if err := tx.Create(&record).Error; err != nil {
 		return "", err
 	}
-	if err := persistConfigImportRef(tx, documentID, repository.RepositoryRef, configAssetEntityRepository, localID, now); err != nil {
+	graph.recordRepository(localID)
+	if err := persistConfigImportRef(tx, documentID, repository.RepositoryRef, configAssetEntityRepository, localID, now, graph); err != nil {
 		return "", err
 	}
 	if repository.AccessBinding != nil {
-		if err := importConfigAssetBinding(tx, localID, repository.AccessBinding, now); err != nil {
+		if err := importConfigAssetBinding(tx, localID, repository.AccessBinding, now, graph); err != nil {
 			return "", err
 		}
 	}
 	return localID, nil
 }
 
-func (h *ConfigHandler) importConfigAssetLink(tx *gorm.DB, documentID string, link configAssetLinkExport, repositoryID string, now time.Time) (string, error) {
+func (h *ConfigHandler) importConfigAssetLink(tx *gorm.DB, documentID string, link configAssetLinkExport, repositoryID string, now time.Time, graph *configImportGraphRollback) (string, error) {
 	taskName, nodeName, taskID, nodeID, err := resolveConfigAssetLinkTask(tx, link)
 	if err != nil {
 		return "", err
@@ -493,7 +494,7 @@ func (h *ConfigHandler) importConfigAssetLink(tx *gorm.DB, documentID string, li
 		return "", err
 	} else if found {
 		var local model.TaskRepositoryLink
-		if err := tx.Where("id = ?", localID).First(&local).Error; err != nil {
+		if err := lockConfigImportAssetQuery(tx).Where("id = ?", localID).First(&local).Error; err != nil {
 			return "", fmt.Errorf("%w: mapped link is missing", errConfigAssetGraphConflict)
 		}
 		if local.RepositoryID != repositoryID || local.PublicationMode != link.PublicationMode ||
@@ -505,7 +506,7 @@ func (h *ConfigHandler) importConfigAssetLink(tx *gorm.DB, documentID string, li
 		}
 		if local.TaskID != nil {
 			var mappedTask model.Task
-			if err := tx.Where("id = ?", *local.TaskID).First(&mappedTask).Error; err != nil {
+			if err := lockConfigImportAssetQuery(tx).Where("id = ?", *local.TaskID).First(&mappedTask).Error; err != nil {
 				return "", fmt.Errorf("%w: mapped link task is missing", errConfigAssetGraphConflict)
 			}
 			if mappedTask.ArchivedAt != nil {
@@ -517,9 +518,12 @@ func (h *ConfigHandler) importConfigAssetLink(tx *gorm.DB, documentID string, li
 	if repositoryID == "" {
 		return "", fmt.Errorf("%w: link repository is missing", errConfigAssetGraphInvalid)
 	}
+	if err := lockConfigImportAssetParent(tx, "backup_repositories", repositoryID); err != nil {
+		return "", err
+	}
 	if taskID != nil {
 		var task model.Task
-		if err := tx.Where("id = ?", *taskID).First(&task).Error; err != nil {
+		if err := lockConfigImportAssetQuery(tx).Where("id = ?", *taskID).First(&task).Error; err != nil {
 			return "", fmt.Errorf("%w: link task is missing", errConfigAssetGraphInvalid)
 		}
 		if task.ArchivedAt != nil {
@@ -553,13 +557,14 @@ func (h *ConfigHandler) importConfigAssetLink(tx *gorm.DB, documentID string, li
 	if err := tx.Create(&record).Error; err != nil {
 		return "", err
 	}
-	if err := persistConfigImportRef(tx, documentID, link.LinkRef, configAssetEntityTaskLink, localID, now); err != nil {
+	graph.recordLink(localID)
+	if err := persistConfigImportRef(tx, documentID, link.LinkRef, configAssetEntityTaskLink, localID, now, graph); err != nil {
 		return "", err
 	}
 	return localID, nil
 }
 
-func (h *ConfigHandler) importConfigAssetPolicy(tx *gorm.DB, documentID string, policy configAssetPolicyExport, scopeID string, actorID uint, now time.Time) (string, error) {
+func (h *ConfigHandler) importConfigAssetPolicy(tx *gorm.DB, documentID string, policy configAssetPolicyExport, scopeID string, actorID uint, now time.Time, graph *configImportGraphRollback) (string, error) {
 	canonical, err := retention.ParsePolicyRules(policy.RulesJSON)
 	if err != nil {
 		return "", fmt.Errorf("%w: policy rules are invalid", errConfigAssetGraphInvalid)
@@ -572,7 +577,7 @@ func (h *ConfigHandler) importConfigAssetPolicy(tx *gorm.DB, documentID string, 
 		return "", err
 	} else if found {
 		var local model.BackupRetentionPolicy
-		if err := tx.Where("id = ?", localID).First(&local).Error; err != nil {
+		if err := lockConfigImportAssetQuery(tx).Where("id = ?", localID).First(&local).Error; err != nil {
 			return "", fmt.Errorf("%w: mapped policy is missing", errConfigAssetGraphConflict)
 		}
 		if local.ScopeKind != policy.ScopeKind || local.ScopeID != scopeID || local.RulesJSON != rulesJSON {
@@ -598,6 +603,13 @@ func (h *ConfigHandler) importConfigAssetPolicy(tx *gorm.DB, documentID string, 
 	}
 	if actorID == 0 {
 		return "", fmt.Errorf("%w: import actor is required", errConfigAssetGraphInvalid)
+	}
+	table := "backup_repositories"
+	if policy.ScopeKind == "task_link" {
+		table = "task_repository_links"
+	}
+	if err := lockConfigImportAssetParent(tx, table, scopeID); err != nil {
+		return "", err
 	}
 	var existing model.BackupRetentionPolicy
 	result := tx.Where("scope_kind = ? AND scope_id = ? AND status = ? AND deleted_at IS NULL", policy.ScopeKind, scopeID, "active").
@@ -633,15 +645,19 @@ func (h *ConfigHandler) importConfigAssetPolicy(tx *gorm.DB, documentID string, 
 	if err := tx.Create(&record).Error; err != nil {
 		return "", err
 	}
-	if err := persistConfigImportRef(tx, documentID, policy.PolicyRef, configAssetEntityRetentionPolicy, localID, now); err != nil {
+	graph.recordPolicy(localID)
+	if err := persistConfigImportRef(tx, documentID, policy.PolicyRef, configAssetEntityRetentionPolicy, localID, now, graph); err != nil {
 		return "", err
 	}
 	return localID, nil
 }
 
-func importConfigAssetBinding(tx *gorm.DB, repositoryID string, envelope *configAssetBindingEnvelope, now time.Time) error {
+func importConfigAssetBinding(tx *gorm.DB, repositoryID string, envelope *configAssetBindingEnvelope, now time.Time, graph *configImportGraphRollback) error {
 	plaintext, fingerprint, err := configAssetBindingPlaintextAndFingerprint(envelope)
 	if err != nil {
+		return err
+	}
+	if err := lockConfigImportAssetParent(tx, "backup_repositories", repositoryID); err != nil {
 		return err
 	}
 	var existing int64
@@ -650,7 +666,7 @@ func importConfigAssetBinding(tx *gorm.DB, repositoryID string, envelope *config
 	}
 	if existing > 0 {
 		var current model.RepositoryAccessBinding
-		if err := tx.Where("repository_id = ?", repositoryID).Order("id").First(&current).Error; err != nil {
+		if err := lockConfigImportAssetQuery(tx).Where("repository_id = ?", repositoryID).Order("id").First(&current).Error; err != nil {
 			return err
 		}
 		if current.BindingKind != envelope.BindingKind || current.ConfigFingerprint != fingerprint {
@@ -663,7 +679,7 @@ func importConfigAssetBinding(tx *gorm.DB, repositoryID string, envelope *config
 		return err
 	}
 	revokedAt := now
-	return tx.Create(&model.RepositoryAccessBinding{
+	if err := tx.Create(&model.RepositoryAccessBinding{
 		ID:                localID,
 		RepositoryID:      repositoryID,
 		BindingKind:       envelope.BindingKind,
@@ -673,7 +689,11 @@ func importConfigAssetBinding(tx *gorm.DB, repositoryID string, envelope *config
 		RevokedAt:         &revokedAt,
 		CreatedAt:         now,
 		UpdatedAt:         now,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	graph.recordBinding(localID)
+	return nil
 }
 
 func resolveConfigAssetLinkTask(tx *gorm.DB, link configAssetLinkExport) (string, string, *uint, uint, error) {
@@ -690,7 +710,7 @@ func resolveConfigAssetLinkTask(tx *gorm.DB, link configAssetLinkExport) (string
 		return taskName, nodeName, nil, 0, nil
 	}
 	var node model.Node
-	result := tx.Where("name = ?", nodeName).Limit(1).Find(&node)
+	result := lockConfigImportAssetQuery(tx).Where("name = ?", nodeName).Limit(1).Find(&node)
 	if result.Error != nil {
 		return "", "", nil, 0, result.Error
 	}
@@ -702,7 +722,7 @@ func resolveConfigAssetLinkTask(tx *gorm.DB, link configAssetLinkExport) (string
 		return taskName, nodeName, nil, nodeID, nil
 	}
 	var task model.Task
-	taskResult := tx.Where("name = ? AND node_id = ?", taskName, node.ID).Limit(1).Find(&task)
+	taskResult := lockConfigImportAssetQuery(tx).Where("name = ? AND node_id = ?", taskName, node.ID).Limit(1).Find(&task)
 	if taskResult.Error != nil {
 		return "", "", nil, 0, taskResult.Error
 	}
@@ -714,7 +734,7 @@ func resolveConfigAssetLinkTask(tx *gorm.DB, link configAssetLinkExport) (string
 
 func lookupConfigImportRef(tx *gorm.DB, documentID, sourceRef, entityKind string) (string, bool, error) {
 	var record model.BackupAssetConfigImportRef
-	result := tx.Where(
+	result := lockConfigImportAssetQuery(tx).Where(
 		"source_document_id = ? AND source_reference = ? AND entity_kind = ?",
 		documentID, sourceRef, entityKind,
 	).Limit(1).Find(&record)
@@ -727,19 +747,23 @@ func lookupConfigImportRef(tx *gorm.DB, documentID, sourceRef, entityKind string
 	return record.LocalEntityID, true, nil
 }
 
-func persistConfigImportRef(tx *gorm.DB, documentID, sourceRef, entityKind, localID string, now time.Time) error {
+func persistConfigImportRef(tx *gorm.DB, documentID, sourceRef, entityKind, localID string, now time.Time, graph *configImportGraphRollback) error {
 	id, err := backupasset.NewOpaqueID()
 	if err != nil {
 		return err
 	}
-	return tx.Create(&model.BackupAssetConfigImportRef{
+	if err := tx.Create(&model.BackupAssetConfigImportRef{
 		ID:               id,
 		SourceDocumentID: documentID,
 		SourceReference:  sourceRef,
 		EntityKind:       entityKind,
 		LocalEntityID:    localID,
 		CreatedAt:        now,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	graph.recordRef(id)
+	return nil
 }
 
 func configAssetIdentityRef(identity *string) string {

@@ -264,6 +264,13 @@ func (s *TaskApiService) CreateTask(ctx context.Context, input CreateTaskInput) 
 		if err := validateTaskDependencyRefs(ctx, repo, input, 0); err != nil {
 			return err
 		}
+		// Revalidate and pin the node after target ownership and dependency locks.
+		if err := repo.LockTaskUpdateReferences(ctx, 0, input.NodeID, nil); err != nil {
+			if errors.Is(err, repository.ErrTaskNodeNotFound) {
+				return newValidationError("所选节点不存在，请重新选择")
+			}
+			return fmt.Errorf("校验节点失败: %w", err)
+		}
 		return repo.Create(ctx, &taskEntity)
 	}
 	if err := s.taskRepo.RunInTransaction(ctx, persist); err != nil {

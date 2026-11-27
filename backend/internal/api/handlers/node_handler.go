@@ -15,6 +15,7 @@ import (
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/node"
+	"xirang/backend/internal/repository"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
@@ -269,7 +270,7 @@ func handleNodeServiceError(c *gin.Context, err error, backupDir string) {
 
 // BatchDelete godoc
 // @Summary      批量删除节点
-// @Description  批量删除多个节点及其关联的策略关联、任务、告警
+// @Description  批量删除多个节点及其策略关联、任务、告警；有启用的演练引用时拒绝整批删除。
 // @Tags         nodes
 // @Security     Bearer
 // @Accept       json
@@ -278,6 +279,7 @@ func handleNodeServiceError(c *gin.Context, err error, backupDir string) {
 // @Success      200   {object}  handlers.Response
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
 // @Router       /nodes/batch-delete [post]
 func (h *NodeHandler) BatchDelete(c *gin.Context) {
 	var req nodeBatchDeleteRequest
@@ -334,6 +336,10 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 
 	deleted, notFoundIDs, err := h.svc.BatchDelete(c.Request.Context(), nodeIDs)
 	if err != nil {
+		if errors.Is(err, repository.ErrNodeDrillTargetInUse) {
+			respondConflict(c, "节点正被已启用的恢复演练使用")
+			return
+		}
 		respondInternalError(c, err)
 		return
 	}
@@ -356,7 +362,7 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 
 // Delete godoc
 // @Summary      删除节点
-// @Description  删除指定节点及其关联的策略关联、任务、告警
+// @Description  删除指定节点及其策略关联、任务、告警；有启用的演练引用时拒绝删除。
 // @Tags         nodes
 // @Security     Bearer
 // @Produce      json
@@ -364,6 +370,7 @@ func (h *NodeHandler) BatchDelete(c *gin.Context) {
 // @Success      200  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
+// @Failure      409  {object}  handlers.Response
 // @Router       /nodes/{id} [delete]
 func (h *NodeHandler) Delete(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -374,6 +381,10 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	if err := h.svc.Delete(c.Request.Context(), id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondNotFound(c, "节点不存在")
+			return
+		}
+		if errors.Is(err, repository.ErrNodeDrillTargetInUse) {
+			respondConflict(c, "节点正被已启用的恢复演练使用")
 			return
 		}
 		respondInternalError(c, err)

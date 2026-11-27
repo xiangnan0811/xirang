@@ -133,10 +133,9 @@ type configImportWarningKey struct {
 }
 
 type configImportAccumulator struct {
-	result           configImportResult
-	warningKeys      map[configImportWarningKey]struct{}
-	createdNodeIDs   map[uint]struct{}
-	createdSSHKeyIDs map[uint]struct{}
+	result      configImportResult
+	warningKeys map[configImportWarningKey]struct{}
+	writtenIDs  map[string]map[string]any
 }
 
 func newConfigImportAccumulator() *configImportAccumulator {
@@ -144,22 +143,33 @@ func newConfigImportAccumulator() *configImportAccumulator {
 		result: configImportResult{
 			Warnings: make([]configImportWarning, 0, configImportWarningLimit),
 		},
-		warningKeys:      make(map[configImportWarningKey]struct{}),
-		createdNodeIDs:   make(map[uint]struct{}),
-		createdSSHKeyIDs: make(map[uint]struct{}),
+		warningKeys: make(map[configImportWarningKey]struct{}),
+		writtenIDs:  make(map[string]map[string]any),
 	}
 }
 
-func (a *configImportAccumulator) recordCreatedID(entity string, id uint) {
-	if a == nil || id == 0 {
+func (a *configImportAccumulator) recordWrite(entity string, id any) {
+	if a == nil || id == nil {
 		return
 	}
-	switch entity {
-	case configImportEntityNodes:
-		a.createdNodeIDs[id] = struct{}{}
-	case configImportEntitySSHKeys:
-		a.createdSSHKeyIDs[id] = struct{}{}
+	if a.writtenIDs == nil {
+		a.writtenIDs = make(map[string]map[string]any)
 	}
+	if a.writtenIDs[entity] == nil {
+		a.writtenIDs[entity] = make(map[string]any)
+	}
+	a.writtenIDs[entity][rawConfigImportKey(id)] = id
+}
+
+func (a *configImportAccumulator) rollbackIDs(entity string) []any {
+	if a == nil {
+		return nil
+	}
+	ids := make([]any, 0, len(a.writtenIDs[entity]))
+	for _, id := range a.writtenIDs[entity] {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (a *configImportAccumulator) warning(entity string, index int, name, code string) {

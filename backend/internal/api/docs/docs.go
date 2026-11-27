@@ -7114,7 +7114,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "批量删除多个节点及其关联的策略关联、任务、告警",
+                "description": "批量删除多个节点及其策略关联、任务、告警；有启用的演练引用时拒绝整批删除。",
                 "consumes": [
                     "application/json"
                 ],
@@ -7151,6 +7151,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -7295,7 +7301,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "删除指定节点及其关联的策略关联、任务、告警",
+                "description": "删除指定节点及其策略关联、任务、告警；有启用的演练引用时拒绝删除。",
                 "produces": [
                     "application/json"
                 ],
@@ -7327,6 +7333,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
