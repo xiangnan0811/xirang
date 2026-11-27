@@ -206,6 +206,8 @@ rollback capability 独立于临时 publication state 和 expiry 投影，GET �
 
 `RecoveryEligibilityAuthority.ObserveRecoveryAuthority` 与 `RecoveryAuthorityRevalidator.RevalidateRecoveryAuthorityTx` 分别拥有有界外部观察和 caller 事务内的耐久事实重验。流程为短事务 capture → 事务外 SSH/SFTP/Repository pinned-tree/Processing artifact 观察 → 短锁定事务 revalidation。外部 I/O 不得放 DB 事务内。
 
+外部观察完成后，重验事务先锁恢复计划并核对绑定摘要和转换版本，再锁目标和源权威。预检持久化也先锁计划，因此同一计划的观察收尾和预检提交可以安全等待彼此完成。
+
 同一事务读取目标根及其节点和 SSH 凭据时，先锁节点和凭据，再锁目标根设置行。计划目标枚举、准入捕获与重验、对账读取沿用登记和撤销的锁序，并在持锁期间核对根和凭据版本。变更与补偿按节点、目标根、幂等回执的顺序操作。节点已被删除时，补偿仍在同一事务内按目标根和回执的精确状态判定能否恢复。对账清单使用允许行锁的可重复读事务。
 
 每次 issuance 最终事务及后续 effect 事务都重验在 owner 返回后仍可变的事实。opaque source namespace observation 保留私有 closed durable snapshot 和 transaction-only revalidator，覆盖 Task source、source Node、source credential；Repository source revision 不能替代它。sealed digest 还绑定 target/policy/finding/reserve/overlap 产品，format/JSON/error 不泄露 locator/credential/revision/proof/依赖原值。

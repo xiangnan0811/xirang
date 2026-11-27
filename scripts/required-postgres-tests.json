@@ -1930,6 +1930,12 @@
           ]
         },
         {
+          "name": "TestRecoveryEligibilityObservePlanFirstPostgres",
+          "required_paths": [
+            "TestRecoveryEligibilityObservePlanFirstPostgres"
+          ]
+        },
+        {
           "name": "TestRecoveryExactMirrorInterleavedExecutionPostgres",
           "required_paths": [
             "TestRecoveryExactMirrorInterleavedExecutionPostgres",

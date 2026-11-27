@@ -386,6 +386,18 @@ func (authority *RecoveryEligibilityAuthority) ObserveRecoveryAuthority(
 	}
 
 	err = authority.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Match preflight persistence, which holds the plan before target authority.
+		var plan model.BackupAssetRecoveryPlan
+		loaded := tx.WithContext(ctx).Select("binding_digest", "transition_revision").
+			Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+			Where("id = ?", binding.PlanID).Limit(1).Find(&plan)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		if loaded.RowsAffected != 1 || plan.BindingDigest != binding.PlanBindingDigest ||
+			plan.TransitionRevision != binding.PlanTransitionRevision {
+			return ErrRecoveryTargetChanged
+		}
 		if revalidateErr := authority.targetRoot.RevalidateRecoveryEligibilityTargetRootTx(
 			ctx, tx, binding, targetRoot,
 		); revalidateErr != nil {
