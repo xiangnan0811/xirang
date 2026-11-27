@@ -50,6 +50,9 @@ func (facade *ManagedTaskRetentionFacade) EnforceManagedRetention(
 		return err
 	}
 	err = facade.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockRetentionRepositoryTx(ctx, tx, request.RepositoryID); err != nil {
+			return err
+		}
 		var currentTask model.Task
 		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 			Select("id", "policy_id").Where("id = ?", request.TaskID).Limit(1).Find(&currentTask)
@@ -101,9 +104,9 @@ func (facade *ManagedTaskRetentionFacade) EnforceManagedRetention(
 		if len(exactPoints) != len(pointIDs) {
 			return fmt.Errorf("%w: managed Task retention point scope", backupasset.ErrConflict)
 		}
-		selection, err := facade.policies.SelectWithTx(ctx, tx, SelectionRequest{
+		selection, err := facade.policies.selectInLockedRepositoryTx(ctx, tx, SelectionRequest{
 			PolicyID: policy.ID, ExpectedRevision: policy.Revision, EvaluatedAt: facade.now().UTC(),
-		})
+		}, request.RepositoryID)
 		if err != nil {
 			return err
 		}
@@ -115,11 +118,11 @@ func (facade *ManagedTaskRetentionFacade) EnforceManagedRetention(
 			if _, exact := allowed[selected.RecoveryPointID]; !exact {
 				continue
 			}
-			if _, err := facade.coordinator.ClaimTx(ctx, tx, ClaimRequest{
+			if _, err := facade.coordinator.claimInRepositoryTx(ctx, tx, ClaimRequest{
 				RecoveryPointID: selected.RecoveryPointID,
 				Operation:       backupasset.LifecycleRetentionExpire,
 				PolicySelection: &selection,
-			}); err != nil {
+			}, request.RepositoryID); err != nil {
 				return err
 			}
 		}

@@ -18,6 +18,8 @@
 
 - `PointDeleter` 是独立可选能力，read adapter 注册不自动授予。请求绑定 exact Repository/capability/source revision/private locator/operation ID，结果闭合 `deleted|already_absent|blocked_worm`；前两者必须有合法 receipt digest。
 - 只有经过有效 retention_expire/explicit_purge 协调准入、精确来源/绑定/身份验证、hold/WORM/能力检查、活 lease drain 和所有 owner cleanup 证明后，才能执行精确点副作用。不以 mutable current config、当前名称、空 lease 表或 Provider missing 推断授权/完成。
+- 显式清除的预览、建计划和执行先锁目标仓库，再锁该仓库内的恢复点。按 ID 预览从锁定后的恢复点读取版本。提交预览版本用于建计划或执行时，仍须精确匹配当前版本和影响范围。
+- PostgreSQL 的显式清除、保留策略选择以及保留声明在取得业务行锁之前，先取得同一仓库的事务级锁。它们可以继续按各自顺序读取或锁定恢复点，不同仓库可并行。SQLite 沿用立即事务串行化写入。
 - retained deletion 使用不可变 point/link producing snapshots。unlink 后 nullable link TaskID 可为空，但不能改变 frozen authority；当前 Task/Node 名称只是展示，不应错误阻止合法历史点删除。访问所需 Task、Node、SSHKey 逐行显式锁定，不能指望 GORM Preload 继承 FOR UPDATE。
 - 源生命周期先 revoke/drain Content、撤 Catalog、撤 Search、撤 Processing、expire Export、cancel Recovery interest，再完成各自 cleanup 与 Overlay reconcile。Overlay 有界 pass 必须证明 zero-result 完成，预算耗尽是 unproven，不是 success。Processing 删除衍生内容前调用 Search exact revocation proof。
 - 缺 owner wiring、lease live/drain unproven、owner cleanup unproven、fence lost、Provider unavailable/identity conflict/unproven delete 失败关闭并保留重试事实。rollback/reconcile 不凭清门禁而任意 delete/prune；真实 provider delete 只能由 admitted lifecycle 拥有。

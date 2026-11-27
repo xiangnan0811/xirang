@@ -2442,6 +2442,32 @@
           ]
         },
         {
+          "name": "TestPurgeFrozenRevisionsPostgresRejectStalePoint",
+          "required_paths": [
+            "TestPurgeFrozenRevisionsPostgresRejectStalePoint"
+          ]
+        },
+        {
+          "name": "TestPurgePreviewIDsPostgresDoesNotLockForeignPoint",
+          "required_paths": [
+            "TestPurgePreviewIDsPostgresDoesNotLockForeignPoint"
+          ]
+        },
+        {
+          "name": "TestPurgePreviewIDsPostgresLocksRepositoryBeforePoints",
+          "required_paths": [
+            "TestPurgePreviewIDsPostgresLocksRepositoryBeforePoints"
+          ]
+        },
+        {
+          "name": "TestRetentionRepositoryGatePostgresSerializesPreviewAndRetention",
+          "required_paths": [
+            "TestRetentionRepositoryGatePostgresSerializesPreviewAndRetention/repository_selection",
+            "TestRetentionRepositoryGatePostgresSerializesPreviewAndRetention/task-link_selection",
+            "TestRetentionRepositoryGatePostgresSerializesPreviewAndRetention/managed_handoff"
+          ]
+        },
+        {
           "name": "TestRcloneExpiredWriterCannotBeExplicitlyPurged",
           "required_paths": [
             "TestRcloneExpiredWriterCannotBeExplicitlyPurged",

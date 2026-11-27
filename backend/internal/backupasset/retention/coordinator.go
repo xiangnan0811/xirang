@@ -1679,8 +1679,32 @@ func (coordinator *Coordinator) Claim(ctx context.Context, request ClaimRequest)
 	}
 	var claimed LifecycleAttempt
 	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var repositoryID string
+		if request.Operation == backupasset.LifecycleRetentionExpire || request.Operation == backupasset.LifecycleExplicitPurge {
+			var pointReference struct {
+				RepositoryID string `gorm:"column:repository_id"`
+			}
+			loaded := tx.WithContext(ctx).Model(&model.RecoveryPoint{}).
+				Select("repository_id").Where("id = ?", request.RecoveryPointID).Limit(1).Find(&pointReference)
+			if loaded.Error != nil {
+				if request.Operation == backupasset.LifecycleExplicitPurge {
+					return fmt.Errorf("resolve lifecycle repository: %w", loaded.Error)
+				}
+				return fmt.Errorf("load lifecycle recovery point: %w", loaded.Error)
+			}
+			if loaded.RowsAffected != 1 || backupasset.ValidateOpaqueID(pointReference.RepositoryID) != nil {
+				if request.Operation == backupasset.LifecycleExplicitPurge {
+					return fmt.Errorf("%w: lifecycle recovery point", backupasset.ErrNotFound)
+				}
+				return fmt.Errorf("%w: recovery point", backupasset.ErrNotFound)
+			}
+			repositoryID = pointReference.RepositoryID
+			if err := lockRetentionRepositoryTx(ctx, tx, repositoryID); err != nil {
+				return err
+			}
+		}
 		var err error
-		claimed, err = coordinator.ClaimTx(ctx, tx, request)
+		claimed, err = coordinator.claimInRepositoryTx(ctx, tx, request, repositoryID)
 		return err
 	})
 	if err != nil {
@@ -1689,7 +1713,7 @@ func (coordinator *Coordinator) Claim(ctx context.Context, request ClaimRequest)
 	return claimed, nil
 }
 
-func (coordinator *Coordinator) ClaimTx(ctx context.Context, tx *gorm.DB, request ClaimRequest) (LifecycleAttempt, error) {
+func (coordinator *Coordinator) claimInRepositoryTx(ctx context.Context, tx *gorm.DB, request ClaimRequest, repositoryID string) (LifecycleAttempt, error) {
 	if err := validateClaimRequest(request); err != nil {
 		return LifecycleAttempt{}, err
 	}
@@ -1697,7 +1721,7 @@ func (coordinator *Coordinator) ClaimTx(ctx context.Context, tx *gorm.DB, reques
 		return LifecycleAttempt{}, fmt.Errorf("%w: lifecycle claim transaction is unavailable", backupasset.ErrInvalidState)
 	}
 	if request.Operation == backupasset.LifecycleExplicitPurge {
-		if _, err := coordinator.lockLifecycleRepositoryForPointTx(ctx, tx, request.RecoveryPointID); err != nil {
+		if _, err := coordinator.lockLifecycleRepositoryTx(ctx, tx, repositoryID); err != nil {
 			return LifecycleAttempt{}, err
 		}
 	}
@@ -1705,9 +1729,25 @@ func (coordinator *Coordinator) ClaimTx(ctx context.Context, tx *gorm.DB, reques
 	var err error
 	err = func() error {
 		var point model.RecoveryPoint
-		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
-			First(&point, "id = ?", request.RecoveryPointID).Error; err != nil {
+		pointQuery := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.RecoveryPointID)
+		if repositoryID != "" {
+			pointQuery = pointQuery.Where("repository_id = ?", repositoryID)
+		}
+		if err := pointQuery.First(&point).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if repositoryID != "" {
+					var pointReference struct {
+						RepositoryID string `gorm:"column:repository_id"`
+					}
+					loaded := tx.WithContext(ctx).Model(&model.RecoveryPoint{}).
+						Select("repository_id").Where("id = ?", request.RecoveryPointID).Limit(1).Find(&pointReference)
+					if loaded.Error != nil {
+						return fmt.Errorf("load lifecycle recovery point: %w", loaded.Error)
+					}
+					if loaded.RowsAffected == 1 && pointReference.RepositoryID != repositoryID {
+						return fmt.Errorf("%w: lifecycle recovery point repository changed", backupasset.ErrConflict)
+					}
+				}
 				return fmt.Errorf("%w: recovery point", backupasset.ErrNotFound)
 			}
 			return fmt.Errorf("load lifecycle recovery point: %w", err)
@@ -1853,9 +1893,17 @@ func (coordinator *Coordinator) lockLifecycleRepositoryForPointTx(
 	if loaded.RowsAffected != 1 || backupasset.ValidateOpaqueID(pointReference.RepositoryID) != nil {
 		return model.BackupRepository{}, fmt.Errorf("%w: lifecycle recovery point", backupasset.ErrNotFound)
 	}
+	return coordinator.lockLifecycleRepositoryTx(ctx, tx, pointReference.RepositoryID)
+}
+
+func (coordinator *Coordinator) lockLifecycleRepositoryTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	repositoryID string,
+) (model.BackupRepository, error) {
 	var repository model.BackupRepository
-	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id = ?", pointReference.RepositoryID).Limit(1).Find(&repository)
+	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", repositoryID).Limit(1).Find(&repository)
 	if loaded.Error != nil {
 		return model.BackupRepository{}, fmt.Errorf("lock lifecycle repository: %w", loaded.Error)
 	}
