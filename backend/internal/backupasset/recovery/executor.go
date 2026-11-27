@@ -345,6 +345,8 @@ func publicPristineExecutionError(err error) error {
 		return context.Canceled
 	case errors.Is(err, context.DeadlineExceeded):
 		return context.DeadlineExceeded
+	case errors.Is(err, errRecoveryAuthorityRepositoryLock):
+		return publicRecoveryAuthorityRepositoryLockError(err)
 	case errors.Is(err, ErrInvalidRecoveryWorker):
 		return ErrInvalidRecoveryWorker
 	case errors.Is(err, ErrRecoveryWorkerFenceLost):
@@ -380,6 +382,13 @@ func (coordinator *WorkerCoordinator) refreshOrdinaryMutationPermit(
 	observedAuthority, err := coordinator.observeRecoveryAuthority(ctx, handoff.plan, handoff.preflight, claim,
 		recoveryAuthorityTargetIntent{phase: recoveryAuthorityTargetCheckpointed, itemID: handoff.item.ID})
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return TargetWritePermit{}, contextErr
+		}
+		if errors.Is(err, errRecoveryAuthorityRepositoryLock) &&
+			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return TargetWritePermit{}, publicRecoveryAuthorityRepositoryLockError(err)
+		}
 		return TargetWritePermit{}, err
 	}
 
@@ -390,9 +399,11 @@ func (coordinator *WorkerCoordinator) refreshOrdinaryMutationPermit(
 		if now.IsZero() || !claim.AbsoluteDeadline.After(now) {
 			return ErrRecoveryWorkerFenceLost
 		}
-		if _, err := coordinator.lockOrdinaryExecutionTx(ctx, tx, claim, handoff, expectedRevision, now, observedAuthority); err != nil {
+		fence, err := coordinator.lockOrdinaryExecutionTx(ctx, tx, claim, handoff, expectedRevision, now, observedAuthority)
+		if err != nil {
 			return err
 		}
+		now = fence.now
 
 		var plan model.BackupAssetRecoveryPlan
 		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
@@ -474,11 +485,17 @@ func (coordinator *WorkerCoordinator) refreshOrdinaryMutationPermit(
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrRecoveryWorkerFenceLost) {
-			return TargetWritePermit{}, ErrRecoveryWorkerFenceLost
-		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			return TargetWritePermit{}, contextErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return TargetWritePermit{}, err
+		}
+		if errors.Is(err, errRecoveryAuthorityRepositoryLock) {
+			return TargetWritePermit{}, publicRecoveryAuthorityRepositoryLockError(err)
+		}
+		if errors.Is(err, ErrRecoveryWorkerFenceLost) {
+			return TargetWritePermit{}, ErrRecoveryWorkerFenceLost
 		}
 		return TargetWritePermit{}, fmt.Errorf("%w: refresh ordinary mutation permit", ErrRecoveryWorkerUnavailable)
 	}
@@ -571,6 +588,12 @@ func (coordinator *WorkerCoordinator) executeOrdinaryOperation(
 			ctx, execution.handoff, basePermit,
 		)
 		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return result, contextErr
+			}
+			if errors.Is(err, errRecoveryAuthorityRepositoryLock) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return result, err
+			}
 			if deleteAuthorityConsumed {
 				result.deleteDisposition = classifyOrdinaryDeleteDisposition(err)
 				if result.deleteDisposition == ordinaryDeleteContradictory {
@@ -589,6 +612,12 @@ func (coordinator *WorkerCoordinator) executeOrdinaryOperation(
 				ctx, claim, execution.handoff, currentRevision, deleteGrantSecret, deleteObservation,
 			)
 			if err != nil {
+				if contextErr := ctx.Err(); contextErr != nil {
+					return result, contextErr
+				}
+				if errors.Is(err, errRecoveryAuthorityRepositoryLock) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return result, err
+				}
 				result.postPauseDisposition = !errors.Is(err, ErrRecoveryWorkerFenceLost)
 				return result, err
 			}
@@ -598,6 +627,10 @@ func (coordinator *WorkerCoordinator) executeOrdinaryOperation(
 			ctx, claim, execution.handoff, currentRevision,
 		)
 		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				result.deleteDisposition = ordinaryDeleteRetryable
+				return result, contextErr
+			}
 			if deleteAuthorityConsumed {
 				result.deleteDisposition = classifyOrdinaryDeleteDisposition(err)
 				if result.deleteDisposition == ordinaryDeleteContradictory {
@@ -712,11 +745,13 @@ func classifyOrdinaryDeleteDisposition(err error) ordinaryDeleteDisposition {
 	if err == nil {
 		return ordinaryDeleteFenceLost
 	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errRecoveryAuthorityRepositoryLock) {
+		return ordinaryDeleteRetryable
+	}
 	if errors.Is(err, ErrRecoveryTargetChanged) {
 		return ordinaryDeleteContradictory
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, ErrRecoveryTargetUnavailable) ||
+	if errors.Is(err, ErrRecoveryTargetUnavailable) ||
 		errors.Is(err, backupasset.ErrKeyUnavailable) || errors.Is(err, backupasset.ErrKeyLost) ||
 		errors.Is(err, errOrdinaryDeleteObservationUnavailable) {
 		return ordinaryDeleteRetryable
@@ -1654,6 +1689,7 @@ func (coordinator *WorkerCoordinator) ordinaryDeletePermit(
 		if err != nil {
 			return err
 		}
+		now = fence.now
 		if fence.item.OperationKind != string(RecoveryOperationDelete) ||
 			fence.item.Outcome != "" || fence.item.FailureCategory != "" ||
 			fence.item.TargetLocatorKeyVersion <= 0 ||
@@ -1876,6 +1912,7 @@ func (coordinator *WorkerCoordinator) ordinaryOverwriteFinalizePermit(
 		if err != nil {
 			return err
 		}
+		now = fence.now
 		operations, err := loadInPlaceOrdinaryCheckpointOperationsTx(
 			ctx, tx, fence.plan, fence.preflight, fence.job,
 		)
@@ -1985,11 +2022,21 @@ func (coordinator *WorkerCoordinator) ordinaryOverwriteFinalizePermit(
 type ordinaryExecutionFence struct {
 	plan      model.BackupAssetRecoveryPlan
 	preflight model.BackupAssetRecoveryPreflight
+	grant     model.BackupAssetRecoveryGrant
 	job       model.BackupAssetRecoveryJob
 	item      model.BackupAssetRecoveryJobItem
 	attempt   model.BackupAssetRecoveryAttempt
 	source    model.RecoveryPointLease
 	node      model.BackupAssetRecoveryNodeLease
+	now       time.Time
+}
+
+func (fence ordinaryExecutionFence) validAt(claim RecoveryWorkerClaim, now time.Time) bool {
+	return !now.IsZero() && !now.Before(fence.now) &&
+		validRecoveryJobBinding(fence.plan, fence.job, fence.preflight, fence.grant, now, false) &&
+		matchesCurrentRecoverySourceFence(fence.source, claim.SourceFence, fence.plan.RecoveryPointID, now) &&
+		matchesCurrentRecoveryNodeFence(fence.node, claim, fence.job, now) &&
+		matchesCurrentRecoveryAttemptFence(fence.attempt, claim, now) && now.Before(claim.AbsoluteDeadline)
 }
 
 func (coordinator *WorkerCoordinator) lockOrdinaryExecutionTx(
@@ -2023,6 +2070,11 @@ func (coordinator *WorkerCoordinator) lockOrdinaryExecutionDispositionTx(
 	if err := coordinator.revalidateObservedRecoveryAuthorityTx(ctx, tx, fence.plan, fence.preflight, observedAuthority); err != nil {
 		return fence, err
 	}
+	finished := coordinator.now().UTC()
+	if !fence.validAt(claim, finished) {
+		return fence, ErrRecoveryWorkerFenceLost
+	}
+	fence.now = finished
 	return fence, nil
 }
 
@@ -2031,6 +2083,9 @@ func (coordinator *WorkerCoordinator) lockOrdinaryExecutionFenceTx(
 	expectedRevision string, now time.Time, completedOverwrite bool,
 ) (ordinaryExecutionFence, error) {
 	var fence ordinaryExecutionFence
+	if now.IsZero() {
+		return fence, ErrRecoveryWorkerFenceLost
+	}
 	var jobReference struct {
 		PlanID string `gorm:"column:plan_id"`
 	}
@@ -2071,15 +2126,17 @@ func (coordinator *WorkerCoordinator) lockOrdinaryExecutionFenceTx(
 	if loaded.Error != nil {
 		return fence, loaded.Error
 	}
-	var grant model.BackupAssetRecoveryGrant
 	loadedGrant := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
-		Where("id = ? AND plan_id = ?", fence.job.AuthorityGrantID, fence.plan.ID).Limit(1).Find(&grant)
+		Where("id = ? AND plan_id = ?", fence.job.AuthorityGrantID, fence.plan.ID).Limit(1).Find(&fence.grant)
 	if loadedGrant.Error != nil {
 		return fence, loadedGrant.Error
 	}
 	if loaded.RowsAffected != 1 || loadedGrant.RowsAffected != 1 ||
-		!validRecoveryJobBinding(fence.plan, fence.job, fence.preflight, grant, now, false) {
+		!validRecoveryJobBinding(fence.plan, fence.job, fence.preflight, fence.grant, now, false) {
 		return fence, ErrRecoveryWorkerFenceLost
+	}
+	if err := lockRecoveryAuthorityRepositoryTx(ctx, tx, fence.plan.RepositoryID); err != nil {
+		return fence, err
 	}
 	if err := coordinator.sourceValidator.RevalidatePlanTx(ctx, tx, fence.plan); err != nil {
 		return fence, err
@@ -2129,6 +2186,12 @@ func (coordinator *WorkerCoordinator) lockOrdinaryExecutionFenceTx(
 		recoveryJobItemOperationDigest(fence.item) != handoff.operationDigest {
 		return fence, ErrRecoveryWorkerFenceLost
 	}
+	fence.now = now
+	finished := coordinator.now().UTC()
+	if !fence.validAt(claim, finished) {
+		return fence, ErrRecoveryWorkerFenceLost
+	}
+	fence.now = finished
 	return fence, nil
 }
 
@@ -2241,7 +2304,9 @@ func (coordinator *WorkerCoordinator) consumeOrdinaryDeleteAuthority(
 		return consumedOrdinaryDeleteAuthority{}, err
 	}
 	var authority consumedOrdinaryDeleteAuthority
-	err = coordinator.recoveryAuthorityEffectTx(ctx, observedAuthority, func(tx *gorm.DB) error {
+	var commitFence ordinaryExecutionFence
+	var commitConsumedAt, commitGrantExpiresAt time.Time
+	err = coordinator.recoveryAuthorityEffectTxWithFinalCheck(ctx, observedAuthority, func(tx *gorm.DB) error {
 		now := coordinator.now().UTC()
 		fence, err := coordinator.lockOrdinaryExecutionTx(
 			ctx, tx, claim, handoff, expectedRevision, now, observedAuthority,
@@ -2249,6 +2314,7 @@ func (coordinator *WorkerCoordinator) consumeOrdinaryDeleteAuthority(
 		if err != nil {
 			return err
 		}
+		now = fence.now
 		var checkpoints []model.BackupAssetRecoveryCheckpoint
 		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 			Where("job_id = ?", fence.job.ID).Order("sequence ASC").Find(&checkpoints)
@@ -2276,6 +2342,11 @@ func (coordinator *WorkerCoordinator) consumeOrdinaryDeleteAuthority(
 		if loaded.Error != nil {
 			return loaded.Error
 		}
+		current := coordinator.now().UTC()
+		if !fence.validAt(claim, current) {
+			return ErrRecoveryWorkerFenceLost
+		}
+		now = current
 		bindingDigest := framedDigest(
 			recoveryAuthorizationGrantBindingDomain, string(AuthorizationReceiptCategoryExactMirrorDelete),
 			fence.plan.ID, fence.job.ID, required.ID, secretHash, grant.ExpiresAt.UTC().Format(time.RFC3339Nano),
@@ -2320,6 +2391,16 @@ func (coordinator *WorkerCoordinator) consumeOrdinaryDeleteAuthority(
 			CheckpointID: consumed.ID,
 			GrantID:      grant.ID,
 			GrantDigest:  grant.BindingDigest,
+		}
+		finished := coordinator.now().UTC()
+		if finished.Before(now) || !fence.validAt(claim, finished) || !grant.ExpiresAt.After(finished) {
+			return ErrRecoveryWorkerFenceLost
+		}
+		commitFence, commitConsumedAt, commitGrantExpiresAt = fence, finished, grant.ExpiresAt.UTC()
+		return nil
+	}, func(finished time.Time) error {
+		if finished.Before(commitConsumedAt) || !commitFence.validAt(claim, finished) || !finished.Before(commitGrantExpiresAt) {
+			return ErrRecoveryWorkerFenceLost
 		}
 		return nil
 	})
@@ -2367,6 +2448,7 @@ func (coordinator *WorkerCoordinator) pauseOrdinaryDeleteAuthority(
 		if err != nil {
 			return err
 		}
+		now = fence.now
 		if !validDeletePauseObservation(handoff, observation) {
 			return ErrRecoveryWorkerFenceLost
 		}
@@ -2554,6 +2636,7 @@ func (coordinator *WorkerCoordinator) projectOrdinaryOperation(
 		if err != nil {
 			return err
 		}
+		now = fence.now
 		observation := result.observation
 		if !result.observationReturned || observation.ValidateAgainst(handoff.expectation) != nil {
 			return ErrRecoveryWorkerFenceLost
@@ -2872,6 +2955,7 @@ func (coordinator *WorkerCoordinator) continueOrdinaryAfterOverwriteFinalize(
 		if err != nil {
 			return err
 		}
+		now = fence.now
 		var checkpoint model.BackupAssetRecoveryCheckpoint
 		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 			Where("job_id = ? AND job_item_id = ? AND phase = ?",
@@ -3197,6 +3281,7 @@ func (coordinator *WorkerCoordinator) projectOrdinaryPostPauseFailure(
 		if err != nil {
 			return err
 		}
+		now = fence.now
 
 		var checkpoints []model.BackupAssetRecoveryCheckpoint
 		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
@@ -3211,6 +3296,7 @@ func (coordinator *WorkerCoordinator) projectOrdinaryPostPauseFailure(
 			return ErrRecoveryWorkerFenceLost
 		}
 		last := checkpoints[len(checkpoints)-1]
+		var pendingGrantExpiresAt time.Time
 		deleteGrantID := ""
 		if handoff.deleteAuthorityConsumed {
 			requiredCheckpoint, consumed, found := ordinaryConsumedDeleteCheckpoints(checkpoints)
@@ -3227,10 +3313,18 @@ func (coordinator *WorkerCoordinator) projectOrdinaryPostPauseFailure(
 			if validateErr != nil {
 				return validateErr
 			}
+			pendingGrantExpiresAt = grant.ExpiresAt.UTC()
 			deleteGrantID = grant.ID
 		} else {
 			return ErrRecoveryWorkerFenceLost
 		}
+		current := coordinator.now().UTC()
+		if !fence.validAt(claim, current) || current.Before(now) ||
+			(!pendingGrantExpiresAt.IsZero() && (!current.Before(pendingGrantExpiresAt) ||
+				required.DeleteAuthorityExpiresAt == nil || !current.Before(required.DeleteAuthorityExpiresAt.UTC()))) {
+			return ErrRecoveryWorkerFenceLost
+		}
+		now = current
 
 		updated := tx.WithContext(ctx).Model(&model.BackupAssetRecoveryJobItem{}).
 			Where("id = ? AND job_id = ? AND outcome = '' AND failure_category = ''", fence.item.ID, fence.job.ID).
@@ -3311,6 +3405,12 @@ func (coordinator *WorkerCoordinator) projectOrdinaryPostPauseFailure(
 		if updated.RowsAffected != 1 {
 			return ErrRecoveryWorkerFenceLost
 		}
+		finished := coordinator.now().UTC()
+		if finished.Before(now) || !fence.validAt(claim, finished) ||
+			(!pendingGrantExpiresAt.IsZero() && (!finished.Before(pendingGrantExpiresAt) ||
+				required.DeleteAuthorityExpiresAt == nil || !finished.Before(required.DeleteAuthorityExpiresAt.UTC()))) {
+			return ErrRecoveryWorkerFenceLost
+		}
 		return nil
 	})
 	if err == nil {
@@ -3370,8 +3470,13 @@ func publicOrdinaryExecutionError(err error) error {
 	if errors.Is(err, provider.ErrRsyncRestoreSourceDrift) {
 		return ErrRecoverySourceChanged
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, ErrInvalidRecoveryWorker) || errors.Is(err, ErrRecoveryWorkerFenceLost) ||
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if errors.Is(err, errRecoveryAuthorityRepositoryLock) {
+		return publicRecoveryAuthorityRepositoryLockError(err)
+	}
+	if errors.Is(err, ErrInvalidRecoveryWorker) || errors.Is(err, ErrRecoveryWorkerFenceLost) ||
 		errors.Is(err, ErrRecoverySourceChanged) {
 		return err
 	}

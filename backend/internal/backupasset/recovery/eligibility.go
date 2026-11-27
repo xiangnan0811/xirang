@@ -386,17 +386,20 @@ func (authority *RecoveryEligibilityAuthority) ObserveRecoveryAuthority(
 	}
 
 	err = authority.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Match preflight persistence, which holds the plan before target authority.
+		// Match preflight persistence: lock the plan, repository gate, then target authority.
 		var plan model.BackupAssetRecoveryPlan
-		loaded := tx.WithContext(ctx).Select("binding_digest", "transition_revision").
+		loaded := tx.WithContext(ctx).Select("binding_digest", "transition_revision", "repository_id").
 			Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 			Where("id = ?", binding.PlanID).Limit(1).Find(&plan)
 		if loaded.Error != nil {
 			return loaded.Error
 		}
 		if loaded.RowsAffected != 1 || plan.BindingDigest != binding.PlanBindingDigest ||
-			plan.TransitionRevision != binding.PlanTransitionRevision {
+			plan.TransitionRevision != binding.PlanTransitionRevision || plan.RepositoryID != binding.RepositoryID {
 			return ErrRecoveryTargetChanged
+		}
+		if lockErr := lockRecoveryAuthorityRepositoryTx(ctx, tx, plan.RepositoryID); lockErr != nil {
+			return lockErr
 		}
 		if revalidateErr := authority.targetRoot.RevalidateRecoveryEligibilityTargetRootTx(
 			ctx, tx, binding, targetRoot,
@@ -723,6 +726,15 @@ func recoveryEligibilityBindingDigest(binding recoveryEligibilityBinding) string
 func recoveryEligibilityObservationError(ctx context.Context, err error) error {
 	if ctx != nil && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	if errors.Is(err, errRecoveryAuthorityRepositoryLock) {
+		return err
 	}
 	if errors.Is(err, ErrRecoveryTargetChanged) || errors.Is(err, backupasset.ErrConflict) {
 		return ErrRecoveryTargetChanged

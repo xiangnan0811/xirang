@@ -1936,6 +1936,38 @@
           ]
         },
         {
+          "name": "TestRecoveryEligibilityRepositoryGatePostgres",
+          "required_paths": [
+            "TestRecoveryEligibilityRepositoryGatePostgres",
+            "TestRecoveryEligibilityRepositoryGatePostgres/effect_first",
+            "TestRecoveryEligibilityRepositoryGatePostgres/observation_first"
+          ]
+        },
+        {
+          "name": "TestRecoveryEligibilityRepositoryGatePostgresAuthorizationExpiry",
+          "required_paths": [
+            "TestRecoveryEligibilityRepositoryGatePostgresAuthorizationExpiry"
+          ]
+        },
+        {
+          "name": "TestRecoveryEligibilityRepositoryGatePostgresAuthorizationStatementCancellation",
+          "required_paths": [
+            "TestRecoveryEligibilityRepositoryGatePostgresAuthorizationStatementCancellation"
+          ]
+        },
+        {
+          "name": "TestRecoveryEligibilityRepositoryGatePostgresOperationalError",
+          "required_paths": [
+            "TestRecoveryEligibilityRepositoryGatePostgresOperationalError"
+          ]
+        },
+        {
+          "name": "TestRecoveryEligibilityRepositoryGatePostgresPlanCreation",
+          "required_paths": [
+            "TestRecoveryEligibilityRepositoryGatePostgresPlanCreation"
+          ]
+        },
+        {
           "name": "TestRecoveryExactMirrorInterleavedExecutionPostgres",
           "required_paths": [
             "TestRecoveryExactMirrorInterleavedExecutionPostgres",
@@ -1959,6 +1991,32 @@
             "TestRecoveryExactMirrorInterleavedExecutionPostgres/history_and_migration_guard",
             "TestRecoveryExactMirrorInterleavedExecutionPostgres/armed_takeover_is_not_pristine",
             "TestRecoveryExactMirrorInterleavedExecutionPostgres/takeover_consumed_authority"
+          ]
+        },
+        {
+          "name": "TestRecoveryExecutorRepositoryGateCancellation",
+          "required_paths": [
+            "TestRecoveryExecutorRepositoryGateCancellation"
+          ]
+        },
+        {
+          "name": "TestRecoveryExecutorRepositoryGateGrantControl",
+          "required_paths": [
+            "TestRecoveryExecutorRepositoryGateGrantControl"
+          ]
+        },
+        {
+          "name": "TestRecoveryExecutorRepositoryGateGrantExpiry",
+          "required_paths": [
+            "TestRecoveryExecutorRepositoryGateGrantExpiry"
+          ]
+        },
+        {
+          "name": "TestRecoveryExecutorRepositoryGateProjectionLeaseExpiry",
+          "required_paths": [
+            "TestRecoveryExecutorRepositoryGateProjectionLeaseExpiry",
+            "TestRecoveryExecutorRepositoryGateProjectionLeaseExpiry/expired",
+            "TestRecoveryExecutorRepositoryGateProjectionLeaseExpiry/live_control"
           ]
         },
         {

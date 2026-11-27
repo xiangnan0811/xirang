@@ -784,24 +784,26 @@ func newRecoveryEligibilityHarnessOnDB(t *testing.T, db *gorm.DB) *recoveryEligi
 	planTable := "backup_asset_recovery_plans"
 	if !db.Migrator().HasTable(planTable) {
 		if err := db.Exec(`CREATE TABLE backup_asset_recovery_plans (
-			id TEXT PRIMARY KEY, binding_digest TEXT NOT NULL, transition_revision BIGINT NOT NULL
+			id TEXT PRIMARY KEY, repository_id TEXT NOT NULL, binding_digest TEXT NOT NULL, transition_revision BIGINT NOT NULL
 		)`).Error; err != nil {
 			t.Fatalf("create eligibility plan fixture: %v", err)
 		}
-		if err := db.Exec("INSERT INTO backup_asset_recovery_plans (id, binding_digest, transition_revision) VALUES (?, ?, ?)",
-			binding.PlanID, binding.PlanBindingDigest, binding.PlanTransitionRevision).Error; err != nil {
+		if err := db.Exec("INSERT INTO backup_asset_recovery_plans (id, repository_id, binding_digest, transition_revision) VALUES (?, ?, ?, ?)",
+			binding.PlanID, binding.RepositoryID, binding.PlanBindingDigest, binding.PlanTransitionRevision).Error; err != nil {
 			t.Fatalf("seed eligibility plan fixture: %v", err)
 		}
 	} else {
 		var plan struct {
 			ID                 string
+			RepositoryID       string
 			BindingDigest      string
 			TransitionRevision uint64
 		}
-		if err := db.Table(planTable).Select("id, binding_digest, transition_revision").Order("id").Take(&plan).Error; err != nil {
+		if err := db.Table(planTable).Select("id, repository_id, binding_digest, transition_revision").Order("id").Take(&plan).Error; err != nil {
 			t.Fatalf("load existing eligibility plan fixture: %v", err)
 		}
 		binding.PlanID = plan.ID
+		binding.RepositoryID = plan.RepositoryID
 		binding.PlanBindingDigest = plan.BindingDigest
 		binding.PlanTransitionRevision = plan.TransitionRevision
 	}

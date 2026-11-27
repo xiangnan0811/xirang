@@ -210,6 +210,10 @@ Repository 独立解析、捕获与重验 Rsync 恢复源时，每一阶段在 P
 
 外部观察完成后，重验事务先锁恢复计划并核对绑定摘要和转换版本，再锁目标和源权威。预检持久化也先锁计划，因此同一计划的观察收尾和预检提交可以安全等待彼此完成。
 
+在 PostgreSQL 上，观测收尾、预检持久化、恢复授权和工作器的恢复动作事务在锁定各自计划后、锁定共享来源或目标行前，按来源仓库取得同一事务级 advisory lock。首次创建计划在幂等查询确认需要创建后取得仓库锁，再锁定来源并插入目标节点外键。共享来源仓库的不同计划由此串行通过相关事务，事务结束时自动释放锁。独立来源快照沿用只读事务，SQLite 沿用现有的写事务串行化。
+
+仓库锁等待失败会回滚当前事务并报告操作不可用或请求取消。成功取得锁后按当前时间验证证明、会话、授权和租约。精确镜像删除 grant 的消费及限制性失败投影在提交前再次验证适用期限，超时则回滚该次写入。
+
 同一事务读取目标根及其节点和 SSH 凭据时，先锁节点和凭据，再锁目标根设置行。计划目标枚举、准入捕获与重验、对账读取沿用登记和撤销的锁序，并在持锁期间核对根和凭据版本。变更与补偿按节点、目标根、幂等回执的顺序操作。节点已被删除时，补偿仍在同一事务内按目标根和回执的精确状态判定能否恢复。对账清单使用允许行锁的可重复读事务。
 
 每次 issuance 最终事务及后续 effect 事务都重验在 owner 返回后仍可变的事实。opaque source namespace observation 保留私有 closed durable snapshot 和 transaction-only revalidator，覆盖 Task source、source Node、source credential；Repository source revision 不能替代它。sealed digest 还绑定 target/policy/finding/reserve/overlap 产品，format/JSON/error 不泄露 locator/credential/revision/proof/依赖原值。
