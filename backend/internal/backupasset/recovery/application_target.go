@@ -215,14 +215,14 @@ func (authority *recoveryPlanTargetEnumerationAuthority) captureTargetRootTx(
 	tx *gorm.DB,
 	request RecoveryPlanTargetEnumerationRequest,
 ) (RecoveryEligibilityTargetRootSnapshot, error) {
+	revisions, err := authority.revisions.ResolveRecoveryNodeRevisionsTx(ctx, tx, request.TargetNodeID, TargetPurposePreflight)
+	if err != nil {
+		return RecoveryEligibilityTargetRootSnapshot{}, ErrRecoveryTargetUnavailable
+	}
 	if err := lockRecoveryEligibilityTargetRootRowTx(ctx, tx, request.TargetNodeID, request.TargetRootID); err != nil {
 		return RecoveryEligibilityTargetRootSnapshot{}, err
 	}
 	root, err := authority.roots.ResolveRecoveryTargetRootTx(ctx, tx, request.TargetNodeID, request.TargetRootID)
-	if err != nil {
-		return RecoveryEligibilityTargetRootSnapshot{}, ErrRecoveryTargetUnavailable
-	}
-	revisions, err := authority.revisions.ResolveRecoveryNodeRevisionsTx(ctx, tx, request.TargetNodeID, TargetPurposePreflight)
 	if err != nil {
 		return RecoveryEligibilityTargetRootSnapshot{}, ErrRecoveryTargetUnavailable
 	}

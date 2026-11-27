@@ -156,6 +156,7 @@ type targetRootMutationReceipt struct {
 // exported, formatted, or serialized.
 type TargetRootMutationRollback struct {
 	owner         *TargetRootAuthorityService
+	nodeID        uint
 	key           string
 	before        targetRootPersistedMutationState
 	after         targetRootPersistedMutationState
@@ -468,7 +469,7 @@ func (service *TargetRootAuthorityService) registerMutation(
 		return result, TargetRootMutationRollback{owner: service, noOp: true}, nil
 	}
 	return result, TargetRootMutationRollback{
-		owner: service, key: key, before: before, after: after,
+		owner: service, nodeID: request.NodeID, key: key, before: before, after: after,
 		receiptKey: receiptKey, receiptBefore: receiptBefore, receiptAfter: receiptAfter,
 	}, nil
 }
@@ -539,7 +540,7 @@ func (service *TargetRootAuthorityService) DeleteMutation(
 		return TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
 	}
 	return TargetRootMutationRollback{
-		owner: service, key: key, before: before,
+		owner: service, nodeID: nodeID, key: key, before: before,
 		after: targetRootPersistedMutationState{},
 	}, nil
 }
@@ -639,7 +640,7 @@ func (service *TargetRootAuthorityService) DeleteAuthorizedMutation(
 		return result, TargetRootMutationRollback{owner: service, noOp: true}, nil
 	}
 	return result, TargetRootMutationRollback{
-		owner: service, key: key, before: before, after: after,
+		owner: service, nodeID: request.NodeID, key: key, before: before, after: after,
 		receiptKey: receiptKey, receiptBefore: receiptBefore, receiptAfter: receiptAfter,
 	}, nil
 }
@@ -656,21 +657,28 @@ func (service *TargetRootAuthorityService) RestoreMutation(
 	if rollback.noOp {
 		return nil
 	}
-	if rollback.key == "" {
+	if rollback.nodeID == 0 || rollback.key == "" {
 		return ErrRecoveryTargetUnavailable
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if rollback.receiptKey != "" {
-			if restoreErr := restoreTargetRootPersistedMutationStateTx(
-				ctx, tx, rollback.receiptKey, rollback.receiptBefore, rollback.receiptAfter,
-			); restoreErr != nil {
-				return restoreErr
-			}
+		// Lock an existing Node even when the root is absent. If the Node was
+		// deleted, the exact settings comparisons still govern restoration.
+		if lockErr := lockRecoveryTargetRootAuthorityNode(ctx, tx, rollback.nodeID); lockErr != nil &&
+			!errors.Is(lockErr, settings.ErrRecoveryTargetRootNotFound) {
+			return lockErr
 		}
-		return restoreTargetRootPersistedMutationStateTx(ctx, tx, rollback.key, rollback.before, rollback.after)
+		if restoreErr := restoreTargetRootPersistedMutationStateTx(ctx, tx, rollback.key, rollback.before, rollback.after); restoreErr != nil {
+			return restoreErr
+		}
+		if rollback.receiptKey == "" {
+			return nil
+		}
+		return restoreTargetRootPersistedMutationStateTx(
+			ctx, tx, rollback.receiptKey, rollback.receiptBefore, rollback.receiptAfter,
+		)
 	})
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -5755,7 +5763,14 @@ func (service *RecoveryReconciliationService) buildRecoveryReconciliationExpecte
 	request ReconcileRecoveryRootRequest,
 ) (recoveryReconciliationExpectedSnapshot, error) {
 	var snapshot recoveryReconciliationExpectedSnapshot
+	// Keep the inventory on one snapshot while allowing the authority row locks.
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		revisions, err := service.revisions.ResolveRecoveryReconciliationRevisionsTx(
+			ctx, tx, request.NodeID, request.RootID,
+		)
+		if err != nil || !revisions.valid() {
+			return errRecoveryReconciliationIncomplete
+		}
 		root, err := service.roots.ResolveRecoveryTargetRootTx(
 			ctx, tx, request.NodeID, request.RootID,
 		)
@@ -5764,12 +5779,6 @@ func (service *RecoveryReconciliationService) buildRecoveryReconciliationExpecte
 			return errRecoveryReconciliationIncomplete
 		}
 		snapshot.root = root
-		revisions, err := service.revisions.ResolveRecoveryReconciliationRevisionsTx(
-			ctx, tx, request.NodeID, request.RootID,
-		)
-		if err != nil || !revisions.valid() {
-			return errRecoveryReconciliationIncomplete
-		}
 		snapshot.session = recoveryTargetReconciliationSessionBinding{
 			nodeID: request.NodeID, nodeRevision: revisions.NodeRevision,
 			credentialRevision: revisions.CredentialRevision,
@@ -5875,7 +5884,7 @@ func (service *RecoveryReconciliationService) buildRecoveryReconciliationExpecte
 		}
 		snapshot.candidates = candidates
 		return nil
-	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return recoveryReconciliationExpectedSnapshot{}, err
 	}

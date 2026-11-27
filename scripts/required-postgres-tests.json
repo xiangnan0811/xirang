@@ -2068,6 +2068,24 @@
           ]
         },
         {
+          "name": "TestRecoveryTargetRootReadersPostgresConcurrentRevocation",
+          "required_paths": [
+            "TestRecoveryTargetRootReadersPostgresConcurrentRevocation/capture",
+            "TestRecoveryTargetRootReadersPostgresConcurrentRevocation/revalidate",
+            "TestRecoveryTargetRootReadersPostgresConcurrentRevocation/reconciliation",
+            "TestRecoveryTargetRootReadersPostgresConcurrentRevocation/plan_enumeration_capture",
+            "TestRecoveryTargetRootReadersPostgresConcurrentRevocation/old_order_control"
+          ]
+        },
+        {
+          "name": "TestRecoveryTargetRootRestoreMutationPostgres",
+          "required_paths": [
+            "TestRecoveryTargetRootRestoreMutationPostgres/waits_for_root_before_receipt",
+            "TestRecoveryTargetRootRestoreMutationPostgres/stale_receipt_rolls_back_root",
+            "TestRecoveryTargetRootRestoreMutationPostgres/deleted_node_restores_created_root_and_receipt_absence"
+          ]
+        },
+        {
           "name": "TestRecoveryVerifyOperationProductMatrix",
           "required_paths": [
             "TestRecoveryVerifyOperationProductMatrix/exact-mirror_multi-delete_honors_production_PostgreSQL_000069"

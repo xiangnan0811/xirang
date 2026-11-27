@@ -72,6 +72,8 @@ Go 模块组、生产与开发前端依赖、typescript-estree 本地安全补�
 
 审阅 Release PR 时，将已交付的 `Unreleased` 条目纳入目标版本，补齐迁移、备份保全、旧进程排空和降级限制，不能只保留自动生成的 PR 标题。对运行逻辑修复，还须说明新逻辑何时生效、旧进程中已开始操作的处置边界；没有 schema migration 时也明确写明，并说明回退是否会重现缺陷。required checks 全部通过后合并，确认 GitHub Release 创建。
 
+目标根事务修复随 Core 更新生效。换版前排空在途恢复和目标根变更，保留同一数据库与密钥。此次无需 schema migration。回退旧 Core 会恢复目标根锁序冲突，以及 PostgreSQL 对账事务拒绝行锁的问题。
+
 #747 概览与任务时间修复的完整行为、升级与回退说明归档于 CHANGELOG `0.74.4` 版本节。发行 PR 与正式 GitHub Release 正文须保留该版本节的「概览与任务时间」和「升级与回退」。
 
 #745 备份概览与策略修复及 Gorilla WebSocket 安全依赖更新的完整行为、升级与回退说明归档于 CHANGELOG `0.74.3` 版本节。发行 PR 与正式 GitHub Release 正文须保留该版本节的「备份概览与策略」「Go 依赖安全更新」及「升级与回退」。
