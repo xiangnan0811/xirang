@@ -33,10 +33,19 @@ admin/operator；节点文件浏览沿用现有权限。SSH 密钥管理、测�
 admin。告警单条/批量失败投递重发使用 `/alert-deliveries/:id/retry`，仅 admin，不借用
 另一 alert-level API 放宽入口。告警投递记录、时间线和异常详情仍允许三角色读取。
 
+节点 CSV 导入在创建前确认将使用的 SSH 密钥及文件浏览基础路径 `/`。引号结构损坏时整份
+文件不创建节点。格式完整的文件按行校验并独立提交有效记录，汇总按实际创建结果计数。
+节点 CSV 导出的第八列（末列）`xirang_csv_escaped_v1` 标记电子表格防护。可能被当作公式
+的值和以单引号开头的值在导出时多写一个单引号。Xirang 只在重新导入完整八列表头时解码，
+保留名称、主机、用户名和标签的空白和原始文本。外部 CSV 读取器会读到防护前缀，普通
+导入文件中的前导单引号则按原文读取。
+
 `GET /api/v1/nodes/:id/files` 与 `GET /api/v1/nodes/:id/files/content` 使用 `nodes:files` 与 `OwnershipNodeCheck`，仅允许本节点的 `BasePath` 及本节点 `Task.RsyncSource`（`FILE_BROWSER_ALLOW_ALL=true` 仅在开发环境允许根外路径，生产环境 403 拒绝）。合法根内路径（含 `..` 前缀合法文件名、指向根内的软链接、`BasePath` 自身为软链接，以及仅具 `0111` 遍历权限的父目录）经 `RealPath` 解析通过后访问；越界或他节点路径返回 403 且零目录项／文件字节泄露。文件预览在 SFTP 读取与 `Close()` 后复用同一 SSH 连接执行 `python3`，从 `/` 经允许根以 `(O_PATH | O_DIRECTORY | O_NOFOLLOW)` + `dir_fd` 逐级遍历至目标普通文件（`O_RDONLY | O_NOFOLLOW`），核验读取前后目录链 `(st_dev, st_ino)`、文件 `fstat` 身份、大小、读取字节数与 SHA-256 摘要；读取期间被修改或打开时软链接掉包并在打开后恢复原路径均返回 502（`"文件在读取期间发生变化"`），不返回缓冲内容，并在 `credential_audit_events` 记录 `stage="post_check"`、`outcome="failure"`。
 
 操作入口与对话框挂载同时检查权限，缺失角色不授予写能力。降权清除不再合法的写草稿、
 打开状态和写选择，恢复权限不自动恢复旧表单；合法只读导出与详情不随之关闭。
+节点表单在写入成功后才关闭并测试连接。保存失败保留当前草稿，供用户修正或重试。
+保存期间表单不可关闭。若新建 SSH 密钥成功但节点写入失败，草稿保留该密钥，重试时使用它。
 待确认、文件读取、step-up、grant 及批量循环在每次异步边界后校验挂载状态与单调身份代次；
 token/role 即使变更后恢复原值也使旧操作失效，不再提交后续请求、下载或迟到 toast。
 已提交的服务器操作不由前端撤销，也不自动重试不确定提交。后端 RBAC、ownership、

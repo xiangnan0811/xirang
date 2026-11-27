@@ -63,6 +63,17 @@ function hostKeyProbe(code: NodeHostKeyIssueCode): NodeConnectionProbeOutcome {
   };
 }
 
+// 卡片与列表行共用同一个节点更多菜单：诊断、终端、文件、编辑、迁移与删除都在其中。
+async function clickNodeMenuItem(
+  user: ReturnType<typeof userEvent.setup>,
+  scope: HTMLElement,
+  nodeName: string,
+  item: RegExp | string,
+) {
+  await user.click(within(scope).getByRole("button", { name: `节点 ${nodeName} 更多操作` }));
+  await user.click(await screen.findByRole("menuitem", { name: item }));
+}
+
 function createMemoryStorage() {
   const store = new Map<string, string>();
   return {
@@ -488,30 +499,41 @@ describe("NodesPage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("桌面节点卡片聚焦详情链接时标记当前节点", async () => {
+  it("节点卡片只按勾选状态标记选中，不再自动高亮首个节点", async () => {
     const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.selected", JSON.stringify(2));
 
-    const view = render(
+    render(
       <MemoryRouter>
         <NodesPage />
       </MemoryRouter>
     );
 
-    const secondCard = view.container.querySelector(
-      '[aria-label="节点卡片 node-dr-2"]'
-    ) as HTMLElement | null;
+    const firstCard = screen.getByLabelText("节点卡片 node-prod-1");
+    const secondCard = screen.getByLabelText("节点卡片 node-dr-2");
+    expect(firstCard.tagName).toBe("ARTICLE");
+    expect(firstCard).not.toHaveClass("border-primary/45");
+    expect(secondCard).not.toHaveClass("border-primary/45");
 
-    expect(secondCard).not.toBeNull();
-    if (!secondCard) {
-      throw new Error("未找到第二张节点卡片");
-    }
+    within(secondCard).getByRole("link", { name: "node-dr-2" }).focus();
+    expect(secondCard).not.toHaveClass("border-primary/45");
 
-    await user.tab();
-    const secondLink = screen.getAllByRole("link", { name: "node-dr-2" })[1];
-    secondLink.focus();
-
+    await user.click(within(secondCard).getByRole("checkbox", { name: "选择节点 node-dr-2" }));
     expect(secondCard).toHaveClass("border-primary/45");
-    expect(secondLink).toHaveFocus();
+    expect(firstCard).not.toHaveClass("border-primary/45");
+  });
+
+  it("移动端卡片以节点名称命名，桌面卡片保留节点卡片名称", () => {
+    render(
+      <MemoryRouter>
+        <NodesPage />
+      </MemoryRouter>
+    );
+
+    const articles = screen.getAllByRole("article", { name: "node-prod-1" });
+    expect(articles).toHaveLength(1);
+    expect(articles[0].closest(".md\\:hidden")).not.toBeNull();
+    expect(screen.getByRole("article", { name: "节点卡片 node-prod-1" }).closest(".md\\:hidden")).toBeNull();
   });
 
   it("持久化列表视图时移动端仍展示卡片视图", () => {
@@ -793,8 +815,7 @@ describe("NodesPage", () => {
       </MemoryRouter>
     );
 
-    const doctorButtons = screen.getAllByRole("button", { name: /运行节点 node-prod-1 Fleet Doctor|Run Fleet Doctor for node node-prod-1/ });
-    await user.click(doctorButtons[0]);
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /Fleet Doctor/);
 
     expect(runNodeDoctorMock).toHaveBeenCalledWith("test-token", 1, { signal: expect.any(AbortSignal) });
     expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
@@ -990,6 +1011,248 @@ describe("NodesPage", () => {
     await user.click(row.getByRole("button", { name: /节点 node-prod-1 更多操作/ }));
     await user.click(screen.getByRole("menuitem", { name: /编辑节点/ }));
     expect(await screen.findByRole("dialog", { name: /编辑节点 - node-prod-1/ })).toBeInTheDocument();
+  });
+
+  it("宽表包在可聚焦且具名的横向滚动区域内，行操作与卡片一致", () => {
+    window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+    createContext();
+
+    renderNodesPage();
+
+    const region = screen.getByRole("region", { name: "节点列表" });
+    expect(region).toHaveAttribute("tabindex", "0");
+    expect(within(region).getByRole("table")).toBeInTheDocument();
+    const row = within(within(region).getByRole("link", { name: "node-prod-1" }).closest("tr") as HTMLElement);
+    expect(row.getByRole("button", { name: "紧急备份" })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "手动备份" })).toBeInTheDocument();
+  });
+
+  it("从卡片更多菜单打开 Web 终端与 Doctor，关闭后回焦到该菜单触发按钮", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    renderNodesPage();
+
+    const card = screen.getByLabelText("节点卡片 node-prod-1");
+    const trigger = within(card).getByRole("button", { name: "节点 node-prod-1 更多操作" });
+
+    await clickNodeMenuItem(user, card, "node-prod-1", /Web 终端/);
+    expect(await screen.findByRole("dialog", { name: /Web 终端 — node-prod-1/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Web 终端/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+
+    await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
+    expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /SSH Fleet Doctor/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  describe("节点对话框跨响应式断点关闭回焦", () => {
+    // jsdom 无布局也未实现 checkVisibility：按断点模拟 Tailwind 隐藏类的效果。
+    // 移动端 `hidden md:*` 不显示；桌面端 `md:hidden` 不显示。
+    const atMobileBreakpoint = (element: Element) => element.closest(".hidden") === null;
+    const atDesktopBreakpoint = (element: Element) => element.closest(".md\\:hidden") === null;
+    let isVisible: (element: Element) => boolean = atDesktopBreakpoint;
+
+    beforeEach(() => {
+      isVisible = atDesktopBreakpoint;
+      Object.defineProperty(HTMLElement.prototype, "checkVisibility", {
+        configurable: true,
+        value(this: HTMLElement) {
+          return isVisible(this);
+        },
+      });
+    });
+
+    afterEach(() => {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).checkVisibility;
+    });
+
+    function mobileMoreButton(nodeName = "node-prod-1") {
+      return within(screen.getByRole("article", { name: nodeName }))
+        .getByRole("button", { name: `节点 ${nodeName} 更多操作` });
+    }
+
+    function expectInventoryRegionFocused(card: HTMLElement) {
+      const focused = document.activeElement as HTMLElement | null;
+      expect(focused?.getAttribute("tabindex")).toBe("-1");
+      expect(focused?.contains(card)).toBe(true);
+    }
+
+    it("列表行打开 Web 终端后缩到移动端，关闭时回焦同节点可见的更多按钮", async () => {
+      window.localStorage.setItem("xirang.nodes.view", JSON.stringify("list"));
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const row = within(screen.getByRole("table")).getByRole("link", { name: "node-prod-1" }).closest("tr") as HTMLElement;
+      const rowMore = within(row).getByRole("button", { name: "节点 node-prod-1 更多操作" });
+      await clickNodeMenuItem(user, row, "node-prod-1", /Web 终端/);
+      expect(await screen.findByRole("dialog", { name: /Web 终端 — node-prod-1/ })).toBeInTheDocument();
+
+      isVisible = atMobileBreakpoint;
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /Web 终端/ })).not.toBeInTheDocument());
+      await waitFor(() => expect(mobileMoreButton()).toHaveFocus());
+      expect(rowMore).not.toHaveFocus();
+    });
+
+    it("桌面卡片打开文件浏览后缩到移动端，关闭时回焦移动卡片的同节点更多按钮", async () => {
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await clickNodeMenuItem(user, card, "node-prod-1", /文件浏览/);
+      expect(await screen.findByRole("dialog", { name: /文件浏览 — node-prod-1/ })).toBeInTheDocument();
+
+      isVisible = atMobileBreakpoint;
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /文件浏览/ })).not.toBeInTheDocument());
+      await waitFor(() => expect(mobileMoreButton()).toHaveFocus());
+    });
+
+    it("同节点没有可见的更多按钮时回焦节点清单区域", async () => {
+      const user = userEvent.setup();
+      renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
+      expect(await screen.findByRole("dialog", { name: /SSH Fleet Doctor/ })).toBeInTheDocument();
+
+      isVisible = (element) => element.closest("[data-node-actions-trigger]") === null;
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /SSH Fleet Doctor/ })).not.toBeInTheDocument());
+      await waitFor(() => expectInventoryRegionFocused(card));
+    });
+
+    it("身份切换关闭对话框时不回焦旧身份记录的触发按钮", async () => {
+      const user = userEvent.setup();
+      const view = renderNodesPage();
+
+      const card = screen.getByLabelText("节点卡片 node-prod-1");
+      const trigger = within(card).getByRole("button", { name: "节点 node-prod-1 更多操作" });
+      await clickNodeMenuItem(user, card, "node-prod-1", /Web 终端/);
+      expect(await screen.findByRole("dialog", { name: /Web 终端 — node-prod-1/ })).toBeInTheDocument();
+
+      rerenderAuth(view, { role: "operator", token: "test-token" });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /Web 终端/ })).not.toBeInTheDocument());
+      await waitFor(() => expectInventoryRegionFocused(card));
+      expect(trigger).not.toHaveFocus();
+    });
+  });
+
+  it("没有生效筛选时禁用重置，输入关键词后可重置", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    renderNodesPage();
+
+    const reset = screen.getByRole("button", { name: "重置" });
+    expect(reset).toBeDisabled();
+    await user.type(screen.getByRole("textbox", { name: "节点关键词筛选" }), "dr");
+    expect(reset).toBeEnabled();
+    await user.click(reset);
+    expect(reset).toBeDisabled();
+  });
+
+  it("关键词可匹配当前语言下显示的节点状态", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    renderNodesPage();
+
+    await user.type(screen.getByRole("textbox", { name: "节点关键词筛选" }), "测试告警");
+    await waitFor(() => expect(screen.getByText("当前筛选 1 / 2 个节点")).toBeInTheDocument());
+    expect(screen.queryByLabelText("节点卡片 node-prod-1")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("节点卡片 node-dr-2")).toBeInTheDocument();
+  });
+
+  it("加载成功但没有节点时显示空库存而非筛选为空", () => {
+    createContext({ nodes: [] });
+
+    renderNodesPage();
+
+    expect(screen.getAllByText("还没有节点")).toHaveLength(2);
+    expect(screen.queryByText("当前筛选条件下暂无节点")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重置筛选" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "新增节点" }).length).toBeGreaterThan(1);
+  });
+
+  it("只读用户的空库存不提供新增入口", () => {
+    authRef.current.role = "viewer";
+    createContext({ nodes: [] });
+
+    renderNodesPage();
+
+    expect(screen.getAllByText("还没有节点")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "新增节点" })).not.toBeInTheDocument();
+  });
+
+  it("分组视图的分组全选只作用于该分组，选择卡片或列表视图即退出分组", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("xirang.nodes.groupView", JSON.stringify(true));
+    createContext();
+
+    renderNodesPage();
+
+    const groupButton = screen.getByRole("button", { name: "分组" });
+    expect(groupButton).toHaveAttribute("aria-pressed", "true");
+    const prodGroup = Array.from(document.querySelectorAll("details"))
+      .find((group) => group.querySelector("summary")?.textContent?.startsWith("prod")) as HTMLElement;
+    await user.click(within(prodGroup).getByRole("checkbox", { name: "全选当前页可见节点" }));
+    expect(screen.getAllByRole("checkbox", { name: "选择节点 node-prod-1" })[0]).toBeChecked();
+    expect(screen.getAllByRole("checkbox", { name: "选择节点 node-dr-2" })[0]).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "批量 (1)" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "节点列表视图" }));
+    expect(groupButton).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(window.localStorage.getItem("xirang.nodes.groupView")).toBe(JSON.stringify(false));
+  });
+
+  it("分组视图下没有匹配节点时仍显示筛选为空状态", () => {
+    window.localStorage.setItem("xirang.nodes.groupView", JSON.stringify(true));
+    createContext({ globalSearch: "does-not-match" });
+
+    renderNodesPage();
+
+    expect(screen.getAllByText("当前筛选条件下暂无节点")).toHaveLength(2);
+  });
+
+  it("分组视图按存储的 constructor / __proto__ 标签正常分组", () => {
+    window.localStorage.setItem("xirang.nodes.groupView", JSON.stringify(true));
+    createContext();
+    const [prod, dr] = nodesRef.current.nodes as Array<Record<string, unknown>>;
+    createContext({
+      nodes: [
+        { ...prod, tags: ["constructor"] },
+        { ...dr, tags: ["__proto__", "prod"] },
+      ],
+    });
+
+    renderNodesPage();
+
+    const groups = Array.from(document.querySelectorAll("details"));
+    const groupFor = (tag: string) => groups.find((group) => group.querySelector("summary")?.textContent?.startsWith(tag)) as HTMLElement;
+    expect(groups).toHaveLength(3);
+    expect(within(groupFor("constructor")).getByLabelText("节点卡片 node-prod-1")).toBeInTheDocument();
+    expect(within(groupFor("constructor")).queryByLabelText("节点卡片 node-dr-2")).not.toBeInTheDocument();
+    expect(within(groupFor("__proto__")).getByLabelText("节点卡片 node-dr-2")).toBeInTheDocument();
+    expect(within(groupFor("prod")).getByLabelText("节点卡片 node-dr-2")).toBeInTheDocument();
+  });
+
+  it("切换身份后清空批量选择", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    const view = renderNodesPage();
+    await user.click(screen.getAllByRole("checkbox", { name: "选择节点 node-prod-1" })[0]);
+    expect(screen.getByRole("button", { name: "批量 (1)" })).toBeInTheDocument();
+
+    rerenderAuth(view, { role: "admin", token: "next-token" });
+    expect(screen.getByRole("button", { name: "批量" })).toBeInTheDocument();
+    expect(screen.getAllByRole("checkbox", { name: "选择节点 node-prod-1" })[0]).not.toBeChecked();
   });
 
   it("紧急备份确认后用一次性 proof 按任务 ID 顺序授权，再提交一次", async () => {
@@ -1241,40 +1504,54 @@ describe("NodesPage", () => {
     return card;
   }
 
-  function expectOperateActions(scope: ReturnType<typeof within>, present: boolean) {
-    const names = [
-      /测试节点 node-prod-1 连接/,
-      /运行节点 node-prod-1 Fleet Doctor/,
-      "手动备份",
-      "紧急备份",
-      /浏览节点 node-prod-1 文件/,
-    ] as const;
-    for (const name of names) {
+  // 直出操作与更多菜单内容按角色检查；卡片与列表行共用同一菜单。
+  async function expectCardActions(
+    user: ReturnType<typeof userEvent.setup>,
+    card: HTMLElement,
+    role: "admin" | "operator" | "viewer",
+  ) {
+    const scope = within(card);
+    const operate = role !== "viewer";
+    for (const name of [/测试节点 node-prod-1 连接/, "手动备份", "紧急备份"] as const) {
       const button = scope.queryByRole("button", { name });
-      if (present) {
+      if (operate) {
         expect(button).toBeInTheDocument();
       } else {
         expect(button).not.toBeInTheDocument();
       }
     }
+    for (const name of [/运行节点 node-prod-1 Fleet Doctor/, /浏览节点 node-prod-1 文件/, /编辑节点 node-prod-1/, /删除节点 node-prod-1/, /打开节点 node-prod-1 Web 终端/, "迁移"]) {
+      expect(scope.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    const trigger = scope.queryByRole("button", { name: "节点 node-prod-1 更多操作" });
+    if (!operate) {
+      expect(trigger).not.toBeInTheDocument();
+      return;
+    }
+    expect(trigger).toBeInTheDocument();
+    await user.click(trigger as HTMLElement);
+    expect(await screen.findByRole("menuitem", { name: /Fleet Doctor/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /文件浏览/ })).toBeInTheDocument();
+    for (const name of [/Web 终端/, /编辑节点/, /迁移/, /删除节点/]) {
+      if (role === "admin") {
+        expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+      } else {
+        expect(screen.queryByRole("menuitem", { name })).not.toBeInTheDocument();
+      }
+    }
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: /Fleet Doctor/ })).not.toBeInTheDocument());
   }
 
-  function expectAdminActions(scope: ReturnType<typeof within>, present: boolean) {
-    const names = [
-      /编辑节点 node-prod-1/,
-      /删除节点 node-prod-1/,
-      /打开节点 node-prod-1 Web 终端/,
-      "迁移",
-    ] as const;
-    for (const name of names) {
-      const button = scope.queryByRole("button", { name });
-      if (present) {
-        expect(button).toBeInTheDocument();
-      } else {
-        expect(button).not.toBeInTheDocument();
-      }
-    }
-  }
+  it("管理员在桌面和移动端卡片使用同一套直出操作与更多菜单", async () => {
+    const user = userEvent.setup();
+    createContext();
+
+    renderNodesPage();
+
+    await expectCardActions(user, screen.getByLabelText("节点卡片 node-prod-1"), "admin");
+    await expectCardActions(user, mobileNodeCard("node-prod-1"), "admin");
+  });
 
   it("操作员在桌面和移动端可以测试、诊断、备份和浏览，不能管理节点", async () => {
     const user = userEvent.setup();
@@ -1287,11 +1564,8 @@ describe("NodesPage", () => {
     renderNodesPage();
 
     const desktopCard = within(screen.getByLabelText("节点卡片 node-prod-1"));
-    const mobileCard = within(mobileNodeCard("node-prod-1"));
-    expectOperateActions(desktopCard, true);
-    expectOperateActions(mobileCard, true);
-    expectAdminActions(desktopCard, false);
-    expectAdminActions(mobileCard, false);
+    await expectCardActions(user, screen.getByLabelText("节点卡片 node-prod-1"), "operator");
+    await expectCardActions(user, mobileNodeCard("node-prod-1"), "operator");
     expect(screen.queryByRole("button", { name: "新增节点" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: /查看节点 node-prod-1 日志/ }).length).toBeGreaterThan(0);
 
@@ -1314,7 +1588,7 @@ describe("NodesPage", () => {
       expect(emergencyBackupMock).toHaveBeenCalledWith("test-token", 1, EMERGENCY_PROOF);
     });
     expect(grantMock).not.toHaveBeenCalled();
-    await user.click(desktopCard.getByRole("button", { name: /浏览节点 node-prod-1 文件/ }));
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /文件浏览/);
     expect(await screen.findByRole("dialog", { name: /文件浏览 — node-prod-1/ })).toBeInTheDocument();
   });
 
@@ -1327,10 +1601,8 @@ describe("NodesPage", () => {
 
     const desktopCard = within(screen.getByLabelText("节点卡片 node-prod-1"));
     const mobileCard = within(mobileNodeCard("node-prod-1"));
-    expectOperateActions(desktopCard, false);
-    expectOperateActions(mobileCard, false);
-    expectAdminActions(desktopCard, false);
-    expectAdminActions(mobileCard, false);
+    await expectCardActions(user, screen.getByLabelText("节点卡片 node-prod-1"), "viewer");
+    await expectCardActions(user, mobileNodeCard("node-prod-1"), "viewer");
     expect(desktopCard.getByRole("link", { name: /查看节点 node-prod-1 日志/ })).toHaveAttribute("href", "/app/logs?node=node-prod-1");
     expect(mobileCard.getByRole("link", { name: /查看节点 node-prod-1 日志/ })).toHaveAttribute("href", "/app/logs?node=node-prod-1");
     expect(screen.queryByRole("button", { name: "新增节点" })).not.toBeInTheDocument();
@@ -1391,7 +1663,7 @@ describe("NodesPage", () => {
 
     const view = renderNodesPage();
     const card = screen.getByLabelText("节点卡片 node-prod-1");
-    await user.click(within(card).getByRole("button", { name: /删除节点 node-prod-1/ }));
+    await clickNodeMenuItem(user, card, "node-prod-1", /删除节点/);
     await waitFor(() => {
       expect(confirmMock).toHaveBeenCalledTimes(1);
     });
@@ -1516,7 +1788,7 @@ describe("NodesPage", () => {
     createContext({ updateNode, testNodeConnection });
 
     const view = renderNodesPage();
-    await user.click(screen.getAllByRole("button", { name: /编辑节点 node-prod-1/ })[0]);
+    await clickNodeMenuItem(user, screen.getByLabelText("节点卡片 node-prod-1"), "node-prod-1", /编辑节点/);
     await user.click(await screen.findByRole("button", { name: "保存并测试" }));
     await waitFor(() => {
       expect(updateNode).toHaveBeenCalledTimes(1);
@@ -1584,7 +1856,7 @@ describe("NodesPage", () => {
       createContext();
       const view = renderNodesPage();
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: /删除节点 node-prod-1/ }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /删除节点/);
       await waitFor(() => {
         expect(confirmMock).toHaveBeenCalled();
       });
@@ -1779,7 +2051,7 @@ describe("NodesPage", () => {
 
     async function openDoctorFromDesktopCard(user: ReturnType<typeof userEvent.setup>, nodeName: string) {
       const card = screen.getByLabelText(`节点卡片 ${nodeName}`);
-      await user.click(within(card).getByRole("button", { name: `运行节点 ${nodeName} Fleet Doctor` }));
+      await clickNodeMenuItem(user, card, nodeName, /Fleet Doctor/);
       return screen.findByRole("dialog", { name: doctorDialogName });
     }
 
@@ -1917,7 +2189,7 @@ describe("NodesPage", () => {
         });
         await waitFor(() => expect(screen.queryByRole("dialog", { name: doctorDialogName })).not.toBeInTheDocument());
         const card = screen.getByLabelText("节点卡片 node-prod-1");
-        await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+        await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
         expect(runNodeDoctorMock).toHaveBeenCalledTimes(1);
       } finally {
         act(() => {
@@ -1997,7 +2269,7 @@ describe("NodesPage", () => {
       renderNodesPage();
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
 
@@ -2017,9 +2289,9 @@ describe("NodesPage", () => {
       const user = userEvent.setup();
       renderNodesPage();
 
-      const mobileDoctor = screen.getAllByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" })[0];
-      expect(mobileDoctor.closest(".md\\:hidden")).not.toBeNull();
-      await user.click(mobileDoctor);
+      const mobileCard = screen.getByRole("article", { name: "node-prod-1" });
+      expect(mobileCard.closest(".md\\:hidden")).not.toBeNull();
+      await clickNodeMenuItem(user, mobileCard, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
 
@@ -2055,7 +2327,7 @@ describe("NodesPage", () => {
       renderNodesPage();
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       expect(within(dialog).queryByText("当前视图中无法定位连接测试，请关闭此对话框后在节点列表中查找。")).not.toBeInTheDocument();
       await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
@@ -2072,7 +2344,7 @@ describe("NodesPage", () => {
       const allNodes = nodesRef.current.nodes as Array<{ id: number }>;
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
 
       createContext({ nodes: allNodes.filter((node) => node.id !== 1) });
@@ -2089,7 +2361,7 @@ describe("NodesPage", () => {
       renderNodesPage();
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       await user.click(within(dialog).getByRole("button", { name: "前往连接测试" }));
 
@@ -2111,7 +2383,7 @@ describe("NodesPage", () => {
 
       const card = screen.getByLabelText("节点卡片 node-prod-1");
       await user.click(within(card).getByRole("button", { name: "测试节点 node-prod-1 连接" }));
-      await user.click(within(card).getByRole("button", { name: "运行节点 node-prod-1 Fleet Doctor" }));
+      await clickNodeMenuItem(user, card, "node-prod-1", /Fleet Doctor/);
       const dialog = await screen.findByRole("dialog", { name: doctorDialogName });
       expect(within(dialog).getByRole("button", { name: "前往连接测试" })).toBeDisabled();
       await act(async () => {

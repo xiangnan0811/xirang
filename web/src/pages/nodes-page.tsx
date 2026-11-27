@@ -18,7 +18,9 @@ import { SearchInput } from "@/components/ui/search-input";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
+import { focusablePeerOf, restoreDialogOpenerOrFallback } from "@/components/ui/dialog-opener";
 import { getAuthSessionGeneration, isAuthTransitionActive } from "@/lib/api/core";
+import type { NodeRecord } from "@/types/domain";
 
 type ConnectionFocusIntent = {
   nodeId: number;
@@ -53,8 +55,7 @@ export function NodesPage() {
     groupedNodes,
     selectedNodeSet,
     allVisibleSelected,
-    selectedNodeId,
-    setSelectedNodeId,
+    inventoryEmpty,
     selectedNodeIds,
     testingNodeId,
     doctorNodeId,
@@ -84,15 +85,16 @@ export function NodesPage() {
     setPageSize,
   } = useClientPagination(sortedNodes);
 
-  // 分页后的全选仅作用于当前页可见节点
-  const pagedAllVisibleSelected = pagedNodes.length > 0
-    && pagedNodes.every((node) => selectedNodeSet.has(node.id));
-  const pagedToggleSelectAllVisible = (checked: boolean) => {
+  // 卡片/表头的全选只作用于其可见节点：平铺视图为当前页，分组视图为该分组。
+  const allSelectedIn = (list: readonly NodeRecord[]) => list.length > 0
+    && list.every((node) => selectedNodeSet.has(node.id));
+  const toggleSelectionIn = (list: readonly NodeRecord[]) => (checked: boolean) => {
+    const ids = list.map((node) => node.id);
     state.setSelectedNodeIds((prev: number[]) => {
       if (checked) {
-        return Array.from(new Set([...prev, ...pagedNodes.map((node) => node.id)]));
+        return Array.from(new Set([...prev, ...ids]));
       }
-      const visibleIDs = new Set(pagedNodes.map((node) => node.id));
+      const visibleIDs = new Set(ids);
       return prev.filter((id) => !visibleIDs.has(id));
     });
   };
@@ -100,18 +102,17 @@ export function NodesPage() {
   const nodesViewProps = {
     loading,
     requestFailed,
+    inventoryEmpty,
     sortedNodes: groupView ? sortedNodes : pagedNodes,
     sshKeys,
     selectedNodeSet,
-    selectedNodeId,
     selectedNodeIds,
-    allVisibleSelected: groupView ? allVisibleSelected : pagedAllVisibleSelected,
+    allVisibleSelected: allSelectedIn(pagedNodes),
     testingNodeId,
     doctorNodeId,
     triggeringNodeId,
     toggleNodeSelection,
-    toggleSelectAllVisible: groupView ? toggleSelectAllVisible : pagedToggleSelectAllVisible,
-    setSelectedNodeId,
+    toggleSelectAllVisible: toggleSelectionIn(pagedNodes),
     handleBulkDelete,
     resetFilters,
     openCreateDialog,
@@ -134,11 +135,16 @@ export function NodesPage() {
   // 绝不点击或执行测试。按钮可能因响应式/分组出现多次，按 data 属性选首个可见可用者。
   const inventoryRef = useRef<HTMLDivElement | null>(null);
   const connectionFocusIntentRef = useRef<ConnectionFocusIntent | null>(null);
+  // 终端与 Doctor 只能从节点更多菜单打开。菜单带退出动画，弹窗挂载时焦点可能仍在
+  // 即将卸载的菜单项上，因此记录最近一次打开菜单的触发按钮，关闭弹窗时回焦到它。
+  const nodeActionsOpenerRef = useRef<HTMLElement | null>(null);
   const liveIdentityRef = useRef({ token: state.token, canOperateNodes });
   useLayoutEffect(() => {
     liveIdentityRef.current = { token: state.token, canOperateNodes };
     connectionFocusIntentRef.current = null;
-  }, [state.token, canOperateNodes]);
+    // 身份或权限变化后不再沿用旧会话记录的触发按钮，关闭时回退到当前清单。
+    nodeActionsOpenerRef.current = null;
+  }, [state.token, canOperateNodes, isAdmin, canBrowseNodeFiles]);
 
   const findConnectionTarget = (nodeId: number): HTMLButtonElement | null => {
     const root = inventoryRef.current;
@@ -184,9 +190,38 @@ export function NodesPage() {
     return true;
   };
 
+  const rememberNodeActionsOpener = (event: { target: EventTarget | null }) => {
+    if (!(event.target instanceof Element)) return;
+    const trigger = event.target.closest<HTMLElement>("[data-node-actions-trigger]");
+    if (trigger) {
+      nodeActionsOpenerRef.current = trigger;
+    }
+  };
+
+  // 节点对话框关闭回焦：记录的触发按钮可能因跨越响应式断点而隐藏（桌面卡片/表格与移动卡片
+  // 同时挂载），此时按触发按钮上的节点 ID 在当前清单内找同节点可见的“更多”按钮，再退回清单区域。
+  const restoreNodeDialogFocus = (event: Parameters<DialogCloseAutoFocus>[0], opener: HTMLElement | null) => {
+    restoreDialogOpenerOrFallback(event, opener, (staleOpener) => {
+      const inventory = inventoryRef.current;
+      return focusablePeerOf(staleOpener, "data-node-actions-trigger", inventory) ?? inventory;
+    });
+  };
+  const nodeActionsOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreNodeDialogFocus(event, nodeActionsOpenerRef.current);
+  };
+  const nodeEditorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreNodeDialogFocus(event, state.nodeEditorOpenerRef.current);
+  };
+  const fileBrowserOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
+    restoreNodeDialogFocus(event, state.fileBrowserOpenerRef.current);
+  };
+
   const doctorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
     const intent = connectionFocusIntentRef.current;
-    if (!intent) return;
+    if (!intent) {
+      nodeActionsOnCloseAutoFocus(event);
+      return;
+    }
     connectionFocusIntentRef.current = null;
     const live = liveIdentityRef.current;
     if (
@@ -268,7 +303,12 @@ export function NodesPage() {
         ]}
       />
 
-      <div ref={inventoryRef} tabIndex={-1}>
+      <div
+        ref={inventoryRef}
+        tabIndex={-1}
+        onPointerDownCapture={rememberNodeActionsOpener}
+        onKeyDownCapture={rememberNodeActionsOpener}
+      >
       <DataSurface>
         <DataSurfaceToolbar className="space-y-3">
           {/* 工具栏：左侧操作按钮 + 右侧视图/批量/重置 */}
@@ -279,14 +319,15 @@ export function NodesPage() {
             setGroupView={state.setGroupView}
             selectedNodeIds={state.selectedNodeIds}
             setSelectedNodeIds={state.setSelectedNodeIds}
-            allVisibleSelected={groupView ? state.allVisibleSelected : pagedAllVisibleSelected}
+            allVisibleSelected={allVisibleSelected}
             csvInputRef={state.csvInputRef}
-            toggleSelectAllVisible={groupView ? state.toggleSelectAllVisible : pagedToggleSelectAllVisible}
+            toggleSelectAllVisible={toggleSelectAllVisible}
             handleBulkDelete={state.handleBulkDelete}
             handleImportCSV={state.handleImportCSV}
             handleExportCSV={state.handleExportCSV}
             handleDownloadTemplate={state.handleDownloadTemplate}
             setBatchCmdOpen={state.openBatchCommand}
+            hasActiveFilters={state.hasActiveFilters}
             resetFilters={state.resetFilters}
             isAdmin={state.isAdmin}
             canOperateNodes={state.canOperateNodes}
@@ -347,13 +388,13 @@ export function NodesPage() {
           {nodesError ? (
             <InventoryRetryAlert error={nodesError} onRetry={() => { void state.refreshNodes(); }} />
           ) : null}
-          {/* 分组视图 */}
-          {groupView && groupedNodes ? (
+          {/* 分组视图；没有分组时仍交给 NodesGrid 呈现加载与空状态 */}
+          {groupView && groupedNodes && groupedNodes.length > 0 ? (
             <div className="space-y-4">
               {groupedNodes.map(([tag, tagNodes]) => (
                 <details key={tag} open className="group">
                   <summary className="flex cursor-pointer items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm font-medium hover:bg-muted/60">
-                    <Layers className="size-4 text-muted-foreground" />
+                    <Layers className="size-4 text-muted-foreground" aria-hidden />
                     {tag}
                     <span className="ml-auto text-xs text-muted-foreground">{t("nodes.groupNodeCount", { count: tagNodes.length })}</span>
                   </summary>
@@ -361,11 +402,15 @@ export function NodesPage() {
                     <NodesGrid
                       {...nodesViewProps}
                       sortedNodes={tagNodes}
+                      allVisibleSelected={allSelectedIn(tagNodes)}
+                      toggleSelectAllVisible={toggleSelectionIn(tagNodes)}
                     />
                   </div>
                 </details>
               ))}
             </div>
+          ) : groupView ? (
+            <NodesGrid {...nodesViewProps} />
           ) : (
           <>
           {/* 移动端始终显示卡片视图（viewMode 可能从桌面端持久化为 list） */}
@@ -394,14 +439,14 @@ export function NodesPage() {
         sshKeys={state.sshKeys}
         editorOpen={state.editorOpen}
         handleEditorOpenChange={state.handleEditorOpenChange}
-        nodeEditorOnCloseAutoFocus={state.nodeEditorOnCloseAutoFocus}
+        nodeEditorOnCloseAutoFocus={nodeEditorOnCloseAutoFocus}
         editingNode={state.editingNode}
         terminalNode={state.terminalNode}
         setTerminalNode={state.setTerminalNode}
         terminalKey={state.terminalKey}
         fileBrowserNode={state.fileBrowserNode}
         setFileBrowserNode={state.setFileBrowserNode}
-        fileBrowserOnCloseAutoFocus={state.fileBrowserOnCloseAutoFocus}
+        fileBrowserOnCloseAutoFocus={fileBrowserOnCloseAutoFocus}
         fileBrowserTab={state.fileBrowserTab}
         canBrowseNodeFiles={state.canBrowseNodeFiles}
         setFileBrowserTab={state.setFileBrowserTab}
@@ -427,6 +472,7 @@ export function NodesPage() {
         doctorConnectionNavigationAvailable={connectionNavigationAvailable}
         onDoctorNavigateConnection={navigateDoctorToConnection}
         doctorOnCloseAutoFocus={doctorOnCloseAutoFocus}
+        terminalOnCloseAutoFocus={nodeActionsOnCloseAutoFocus}
         isAdmin={state.isAdmin}
         canOperateNodes={state.canOperateNodes}
         hostKeyIssue={state.hostKeyIssue}

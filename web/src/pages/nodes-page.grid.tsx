@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useId } from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, ServerCog, ShieldAlert, Stethoscope, Terminal, Trash2, Wrench } from "lucide-react";
+import { ServerCog } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ExpiryCountdownBadge } from "@/components/expiry-countdown-badge";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
@@ -9,27 +9,40 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { getNodeStatusMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
+import { NodeActionsMenu } from "@/pages/nodes-page.actions-menu";
 import type { NodesViewProps } from "@/pages/nodes-page.utils";
+import type { NodeRecord } from "@/types/domain";
 
+type NodeCardProps = Omit<
+  NodesViewProps,
+  | "loading"
+  | "requestFailed"
+  | "inventoryEmpty"
+  | "sortedNodes"
+  | "selectedNodeSet"
+  | "selectedNodeIds"
+  | "allVisibleSelected"
+  | "toggleSelectAllVisible"
+  | "handleBulkDelete"
+  | "resetFilters"
+  | "openCreateDialog"
+> & {
+  node: NodeRecord;
+  checked: boolean;
+  /** 桌面卡片沿用既有可见名称；移动卡片以节点名链接命名，避免同名重复。 */
+  labelledByName: boolean;
+};
 
-export const NodesGrid = React.memo(function NodesGrid({
-  loading,
-  requestFailed,
-  sortedNodes,
+const NodeCard = React.memo(function NodeCard({
+  node,
+  checked,
+  labelledByName,
   sshKeys,
-  selectedNodeSet,
-  selectedNodeId,
-  selectedNodeIds,
-  allVisibleSelected,
   testingNodeId,
   doctorNodeId,
   triggeringNodeId,
+  emergencyNodeId,
   toggleNodeSelection,
-  toggleSelectAllVisible,
-  setSelectedNodeId,
-  handleBulkDelete,
-  resetFilters,
-  openCreateDialog,
   openEditDialog,
   onTestNode,
   onOpenDoctor,
@@ -39,29 +52,160 @@ export const NodesGrid = React.memo(function NodesGrid({
   onOpenFileBrowser,
   onEmergencyBackup,
   onMigrate,
-  emergencyNodeId,
   isAdmin,
   canOperateNodes,
   canBrowseNodeFiles,
+}: NodeCardProps) {
+  const { t } = useTranslation();
+  const nameId = useId();
+  const status = getNodeStatusMeta(node.status);
+  const keyLabel = node.keyId
+    ? sshKeys.find((key) => key.id === node.keyId)?.name || t("common.keyBound")
+    : t("common.keyUnbound");
+
+  return (
+    <article
+      aria-label={labelledByName ? undefined : t("nodes.nodeCardAriaLabel", { name: node.name })}
+      aria-labelledby={labelledByName ? nameId : undefined}
+      className={cn(
+        "rounded-lg border border-border bg-card p-3 shadow-sm transition-shadow",
+        checked && "border-primary/45 ring-1 ring-primary/40",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            aria-label={t("nodes.selectNodeAriaLabel", { name: node.name })}
+            className="size-4 accent-primary rounded-sm"
+            checked={checked}
+            onChange={(event) => toggleNodeSelection(node.id, event.target.checked)}
+          />
+          {t("nodes.selectLabel")}
+        </label>
+        <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+          <Badge tone={status.variant}>{status.label}</Badge>
+          <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
+        </div>
+      </div>
+
+      <div className="mt-2 min-w-0">
+        <Link
+          id={nameId}
+          to={`/app/nodes/${node.id}`}
+          data-testid={`nodes-list-link-${node.id}`}
+          className="break-all font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {node.name}
+        </Link>
+        <p className="text-xs text-muted-foreground">
+          <span className="break-all">{node.host}:{node.port} · {node.username}</span>
+        </p>
+      </div>
+
+      <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+        <p>
+          {t("nodes.authLabel")}
+          {node.authType === "key"
+            ? t("nodes.authKeyWithLabel", { label: keyLabel })
+            : t("nodes.authPassword")}
+        </p>
+        <p>
+          {t("nodes.lastConnectionLabel", { time: node.lastSeenAt || t("nodes.lastConnectionNever") })}
+        </p>
+        <p>
+          {t("nodes.connectionLatency", { latency: node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-" })}
+        </p>
+        <p>{t("nodes.lastBackupLabel", { time: node.lastBackupAt })}</p>
+        <p className="break-words">
+          {t("nodes.tagsLabel", { tags: node.tags.length ? node.tags.join(" / ") : "-" })}
+        </p>
+      </div>
+
+      <div className="mt-4 border-t border-border pt-3">
+        <NodeActionsMenu
+          layout="card"
+          node={node}
+          testing={testingNodeId === node.id}
+          doctorRunning={doctorNodeId === node.id}
+          triggering={triggeringNodeId === node.id}
+          emergencyRunning={emergencyNodeId === node.id}
+          isAdmin={isAdmin}
+          canOperateNodes={canOperateNodes}
+          canBrowseNodeFiles={canBrowseNodeFiles}
+          onTestNode={onTestNode}
+          onOpenDoctor={onOpenDoctor}
+          handleTriggerBackup={handleTriggerBackup}
+          onEmergencyBackup={onEmergencyBackup}
+          onOpenTerminal={onOpenTerminal}
+          onOpenFileBrowser={onOpenFileBrowser}
+          openEditDialog={openEditDialog}
+          onMigrate={onMigrate}
+          onDeleteNode={onDeleteNode}
+        />
+      </div>
+    </article>
+  );
+});
+
+export const NodesGrid = React.memo(function NodesGrid({
+  loading,
+  requestFailed,
+  inventoryEmpty,
+  sortedNodes,
+  selectedNodeSet,
+  selectedNodeIds,
+  allVisibleSelected,
+  toggleSelectAllVisible,
+  handleBulkDelete,
+  resetFilters,
+  openCreateDialog,
+  ...cardProps
 }: NodesViewProps) {
   const { t } = useTranslation();
+  const { isAdmin } = cardProps;
+
+  const renderEmpty = (className?: string) => {
+    if (loading || requestFailed || sortedNodes.length) {
+      return null;
+    }
+    return inventoryEmpty ? (
+      <FilteredEmptyState
+        className={className}
+        title={t("nodes.inventoryEmptyTitle")}
+        description={t("nodes.inventoryEmptyDesc")}
+        onCreate={isAdmin ? openCreateDialog : undefined}
+        createLabel={t("nodes.emptyCreateLabel")}
+        createIcon={ServerCog}
+      />
+    ) : (
+      <FilteredEmptyState
+        className={className}
+        title={t("nodes.emptyTitle")}
+        description={t("nodes.emptyDesc")}
+        onReset={resetFilters}
+        onCreate={isAdmin ? openCreateDialog : undefined}
+        createLabel={t("nodes.emptyCreateLabel")}
+        createIcon={ServerCog}
+      />
+    );
+  };
 
   return (
     <>
       <div className="space-y-3 p-2 md:hidden">
-        <div className="flex items-center gap-2 justify-between rounded-lg border border-border bg-secondary px-3 py-2 text-xs text-muted-foreground">
-          <div className="inline-flex items-center gap-2">
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-secondary px-3 py-2 text-xs text-muted-foreground">
+          <label className="inline-flex items-center gap-2">
             <input
               type="checkbox"
               aria-label={t("nodes.selectAllVisible")}
-              className="size-4"
+              className="size-4 accent-primary rounded-sm"
               checked={allVisibleSelected}
-              onChange={(event) =>
-                toggleSelectAllVisible(event.target.checked)
-              }
+              disabled={!sortedNodes.length}
+              onChange={(event) => toggleSelectAllVisible(event.target.checked)}
             />
             <span>{t("common.selectAll")}</span>
-          </div>
+          </label>
           {isAdmin ? (
             <Button
               size="sm"
@@ -81,192 +225,17 @@ export const NodesGrid = React.memo(function NodesGrid({
             rows={3}
           />
         ) : null}
-        {!loading && !requestFailed && !sortedNodes.length ? (
-          <FilteredEmptyState
-            title={t("nodes.emptyTitle")}
-            description={t("nodes.emptyDesc")}
-            onReset={resetFilters}
-            onCreate={isAdmin ? openCreateDialog : undefined}
-            createLabel={t("nodes.emptyCreateLabel")}
-            createIcon={ServerCog}
+        {renderEmpty()}
+
+        {sortedNodes.map((node) => (
+          <NodeCard
+            key={node.id}
+            node={node}
+            checked={selectedNodeSet.has(node.id)}
+            labelledByName
+            {...cardProps}
           />
-        ) : null}
-
-        {sortedNodes.map((node) => {
-          const status = getNodeStatusMeta(node.status);
-          const checked = selectedNodeSet.has(node.id);
-          return (
-            <div
-              key={node.id}
-              className="rounded-lg border border-border bg-card p-3 shadow-sm"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    aria-label={t("nodes.selectNodeAriaLabel", { name: node.name })}
-                    className="size-4"
-                    checked={checked}
-                    onChange={(event) =>
-                      toggleNodeSelection(node.id, event.target.checked)
-                    }
-                  />
-                  {t("nodes.selectLabel")}
-                </label>
-                <div className="inline-flex items-center gap-1.5">
-                  <Badge tone={status.variant}>{status.label}</Badge>
-                  <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
-                </div>
-              </div>
-
-              <div className="mt-2">
-                <Link
-                  to={`/app/nodes/${node.id}`}
-                  data-testid={`nodes-list-link-${node.id}`}
-                  className="font-medium hover:underline"
-                >
-                  {node.name}
-                </Link>
-                <p className="text-xs text-muted-foreground">
-                  <span className="break-all">{node.host}:{node.port} · {node.username}</span>
-                </p>
-              </div>
-
-              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                <p>
-                  {t("nodes.lastConnectionLabel", { time: node.lastSeenAt || t("nodes.lastConnectionNever") })}
-                </p>
-                <p>
-                  {t("nodes.connectionLatency", { latency: node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-" })}
-                </p>
-                <p>{t("nodes.lastBackupLabel", { time: node.lastBackupAt })}</p>
-                <p className="break-words">{t("nodes.tagsLabel", { tags: node.tags.join(" / ") || "-" })}</p>
-              </div>
-
-              <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border pt-3">
-                <div className="flex flex-wrap items-center gap-1">
-                  {canOperateNodes && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
-                      data-node-test-connection={node.id}
-                      onClick={() => void onTestNode(node)}
-                      disabled={testingNodeId === node.id}
-                    >
-                      {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
-                    </Button>
-                  )}
-                  {canOperateNodes && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
-                      onClick={() => onOpenDoctor?.(node)}
-                      disabled={doctorNodeId === node.id}
-                    >
-                      {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("nodes.viewLogsAriaLabel", { name: node.name })} title={t("nodes.viewLogs")}
-                    asChild
-                  >
-                    <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
-                      <Terminal className="size-4" aria-hidden />
-                    </Link>
-                  </Button>
-                  {isAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.webTerminalAriaLabel", { name: node.name })} title={t("nodes.webTerminal")}
-                      onClick={() => onOpenTerminal?.(node)}
-                    >
-                      <MonitorPlay className="size-4" aria-hidden />
-                    </Button>
-                  )}
-                  {canBrowseNodeFiles && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
-                      onClick={(event) => onOpenFileBrowser?.(node, event.currentTarget)}
-                    >
-                      <FolderOpen className="size-4" aria-hidden />
-                    </Button>
-                  )}
-                  {isAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
-                      onClick={(event) => openEditDialog(node, event.currentTarget)}
-                    >
-                      <Wrench className="size-4" aria-hidden />
-                    </Button>
-                  )}
-                  {isAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
-                      onClick={() => onDeleteNode(node)}
-                    >
-                      <Trash2 className="size-4" aria-hidden />
-                    </Button>
-                  )}
-                </div>
-                <div className="flex flex-wrap items-center gap-1">
-                  {canOperateNodes && (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      className="text-xs"
-                      disabled={emergencyNodeId === node.id}
-                      onClick={() => onEmergencyBackup?.(node.id, node.name)}
-                      title={t("nodes.emergencyBackup")}
-                    >
-                      {emergencyNodeId === node.id ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <ShieldAlert className="mr-1 size-3.5" aria-hidden />}
-                      {t("nodes.emergencyBackup")}
-                    </Button>
-                  )}
-                  {isAdmin && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-xs"
-                      onClick={() => onMigrate?.(node)}
-                      title={t("nodes.migrateTo")}
-                    >
-                      <ArrowRightLeft className="mr-1 size-3.5" aria-hidden />
-                      {t("nodes.migrateShort")}
-                    </Button>
-                  )}
-                  {canOperateNodes && (
-                    <Button
-                      size="sm"
-                      disabled={triggeringNodeId === node.id}
-                      onClick={() => void handleTriggerBackup(node.id, node.name)}
-                    >
-                      {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
-                      {t("nodes.manualBackup")}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        ))}
       </div>
 
       <div className="hidden gap-3 md:grid md:grid-cols-2 lg:grid-cols-3">
@@ -278,213 +247,17 @@ export const NodesGrid = React.memo(function NodesGrid({
             rows={4}
           />
         ) : null}
+        {renderEmpty("md:col-span-2 lg:col-span-3")}
 
-        {!loading && !requestFailed && !sortedNodes.length ? (
-          <FilteredEmptyState
-            title={t("nodes.emptyTitle")}
-            description={t("nodes.emptyDesc")}
-            onReset={resetFilters}
-            onCreate={isAdmin ? openCreateDialog : undefined}
-            createLabel={t("nodes.emptyCreateLabel")}
-            createIcon={ServerCog}
+        {sortedNodes.map((node) => (
+          <NodeCard
+            key={node.id}
+            node={node}
+            checked={selectedNodeSet.has(node.id)}
+            labelledByName={false}
+            {...cardProps}
           />
-        ) : null}
-
-        {sortedNodes.map((node) => {
-          const status = getNodeStatusMeta(node.status);
-          const keyLabel = node.keyId
-            ? sshKeys.find((key) => key.id === node.keyId)?.name ||
-            t("common.keyBound")
-            : t("common.keyUnbound");
-          const checked = selectedNodeSet.has(node.id);
-          const isSelected = selectedNodeId === node.id;
-
-          return (
-            <div
-              key={node.id}
-              aria-label={t("nodes.nodeCardAriaLabel", { name: node.name })}
-              className={cn(
-                "rounded-lg border border-border bg-card shadow-sm transition-shadow p-3",
-                isSelected && "border-primary/45 ring-1 ring-primary/40"
-              )}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    aria-label={t("nodes.selectNodeAriaLabel", { name: node.name })}
-                    className="size-4"
-                    checked={checked}
-                    onChange={(event) =>
-                      toggleNodeSelection(node.id, event.target.checked)
-                    }
-                  />
-                  {t("nodes.selectLabel")}
-                </label>
-                <div className="inline-flex items-center gap-1.5">
-                  <Badge tone={status.variant}>{status.label}</Badge>
-                  <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
-                </div>
-              </div>
-
-              <div className="mt-2">
-                <Link
-                  to={`/app/nodes/${node.id}`}
-                  data-testid={`nodes-list-link-${node.id}`}
-                  className="font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onFocus={() => setSelectedNodeId(node.id)}
-                >
-                  {node.name}
-                </Link>
-                <p className="text-xs text-muted-foreground">
-                  <span className="break-all">{node.host}:{node.port} · {node.username}</span>
-                </p>
-              </div>
-
-              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                <p>
-                  {t("nodes.authLabel")}
-                  {node.authType === "key"
-                    ? t("nodes.authKeyWithLabel", { label: keyLabel })
-                    : t("nodes.authPassword")}
-                </p>
-                <p>
-                  {t("nodes.lastConnectionLabel", { time: node.lastSeenAt || t("nodes.lastConnectionNever") })}
-                </p>
-                <p>
-                  {t("nodes.connectionLatency", { latency: node.connectionLatencyMs != null ? `${node.connectionLatencyMs} ms` : "-" })}
-                </p>
-                <p>{t("nodes.lastBackupLabel", { time: node.lastBackupAt })}</p>
-                <p className="break-words">
-                  {t("nodes.tagsLabel", { tags: node.tags.length ? node.tags.join(" / ") : "-" })}
-                </p>
-              </div>
-
-              <div className="mt-4 flex flex-wrap-reverse items-center justify-between gap-2 border-t border-border pt-3">
-                <div className="flex flex-wrap items-center gap-1">
-                  {canOperateNodes && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
-                      data-node-test-connection={node.id}
-                      onClick={() => void onTestNode(node)}
-                      disabled={testingNodeId === node.id}
-                    >
-                      {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
-                    </Button>
-                  )}
-                  {canOperateNodes && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.doctorAriaLabel", { name: node.name })} title={t("nodes.doctor")}
-                      onClick={() => onOpenDoctor?.(node)}
-                      disabled={doctorNodeId === node.id}
-                    >
-                      {doctorNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Stethoscope className="size-4" aria-hidden />}
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={t("nodes.viewLogsAriaLabel", { name: node.name })} title={t("nodes.viewLogs")}
-                    asChild
-                  >
-                    <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
-                      <Terminal className="size-4" aria-hidden />
-                    </Link>
-                  </Button>
-                  {isAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.webTerminalAriaLabel", { name: node.name })} title={t("nodes.webTerminal")}
-                      onClick={() => onOpenTerminal?.(node)}
-                    >
-                      <MonitorPlay className="size-4" aria-hidden />
-                    </Button>
-                  )}
-                  {canBrowseNodeFiles && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.fileBrowserAriaLabel", { name: node.name })} title={t("nodes.fileBrowser")}
-                      onClick={(event) => onOpenFileBrowser?.(node, event.currentTarget)}
-                    >
-                      <FolderOpen className="size-4" aria-hidden />
-                    </Button>
-                  )}
-                  {isAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={t("nodes.editNodeAriaLabel", { name: node.name })} title={t("nodes.editNode")}
-                      onClick={(event) => openEditDialog(node, event.currentTarget)}
-                    >
-                      <Wrench className="size-4" aria-hidden />
-                    </Button>
-                  )}
-                  {isAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={t("nodes.deleteNodeAriaLabel", { name: node.name })} title={t("nodes.deleteNode")}
-                      onClick={() => onDeleteNode(node)}
-                    >
-                      <Trash2 className="size-4" aria-hidden />
-                    </Button>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  {canOperateNodes && (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      className="text-xs"
-                      disabled={emergencyNodeId === node.id}
-                      onClick={() => onEmergencyBackup?.(node.id, node.name)}
-                      title={t("nodes.emergencyBackup")}
-                    >
-                      {emergencyNodeId === node.id ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : <ShieldAlert className="mr-1 size-3.5" aria-hidden />}
-                      {t("nodes.emergencyBackup")}
-                    </Button>
-                  )}
-                  {isAdmin && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-xs"
-                      onClick={() => onMigrate?.(node)}
-                      title={t("nodes.migrateTo")}
-                    >
-                      <ArrowRightLeft className="mr-1 size-3.5" aria-hidden />
-                      {t("nodes.migrateShort")}
-                    </Button>
-                  )}
-                  {canOperateNodes && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={triggeringNodeId === node.id}
-                      onClick={() => void handleTriggerBackup(node.id, node.name)}
-                    >
-                      {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
-                      {t("nodes.manualBackup")}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        ))}
       </div>
     </>
   );

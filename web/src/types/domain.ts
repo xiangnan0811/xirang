@@ -193,6 +193,8 @@ export interface NodeRecord {
   basePath?: string;
   status: NodeStatus;
   tags: string[];
+  /** Server `tags` string exactly as returned; the editor resends it when tags are not edited. */
+  rawTags?: string;
   /** Latest manual connection test. Empty when this node has not been tested. */
   lastSeenAt: string;
   lastBackupAt: string;

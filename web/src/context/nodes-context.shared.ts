@@ -7,8 +7,8 @@ export interface NodesContextValue {
   nodesError: string | null;
   nodesLoaded: boolean;
   refreshNodes: (options?: { limit?: number; offset?: number }) => Promise<void>;
-  createNode: (input: NewNodeInput, isCurrent?: () => boolean) => Promise<number>;
-  updateNode: (nodeId: number, input: NewNodeInput, isCurrent?: () => boolean) => Promise<void>;
+  createNode: (input: NewNodeInput, isCurrent?: () => boolean, onInlineKeyCreated?: (keyId: string) => void) => Promise<number>;
+  updateNode: (nodeId: number, input: NewNodeInput, isCurrent?: () => boolean, onInlineKeyCreated?: (keyId: string) => void) => Promise<void>;
   deleteNode: (nodeId: number, isCurrent?: () => boolean) => Promise<void>;
   deleteNodes: (nodeIds: number[], isCurrent?: () => boolean) => Promise<{ deleted: number; notFoundIds: number[] }>;
   testNodeConnection: (nodeId: number) => Promise<NodeConnectionProbeOutcome>;

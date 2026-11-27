@@ -1221,12 +1221,17 @@ async function exerciseRealTerminal(page: Page, smoke: TerminalSmoke): Promise<v
 
   await installTerminalCloseCapture(page);
   await page.goto("/app/nodes");
-  const openTerminal = page.locator(".md\\:grid").getByRole("button", { name: `Open web terminal for node ${nodeName}`, exact: true });
-  await expect(openTerminal).toBeVisible({ timeout: 15_000 });
+  // Web Terminal lives in the node's More menu; open it from the desktop card copy.
+  const nodeActions = page.locator(".md\\:grid").getByRole("button", { name: `More actions for node ${nodeName}`, exact: true });
+  await expect(nodeActions).toBeVisible({ timeout: 15_000 });
+  const openTerminal = async () => {
+    await nodeActions.click();
+    await page.getByRole("menuitem", { name: "Web Terminal", exact: true }).click();
+  };
   const marker = `P1MARKER${Date.now()}`;
 
   await test.step("open a shell with one proof and grant handoff", async () => {
-    await openTerminal.click();
+    await openTerminal();
     const dialog = terminalDialog(page, nodeName);
     await admitTerminal(page, smoke.secret, dialog, stepUps, sockets);
     await typeShell(page, dialog, `echo ${marker}`);
@@ -1293,7 +1298,7 @@ async function exerciseRealTerminal(page: Page, smoke: TerminalSmoke): Promise<v
   await test.step("reject one revoked grant during handoff", async () => {
     if (!Number.isInteger(nodeId) || nodeId < 1) throw new Error("refusing invalid terminal grant revocation");
     revokePriorTerminalGrants(smoke.dbPath, smoke.userId, nodeId);
-    await openTerminal.click();
+    await openTerminal();
     const dialog = terminalDialog(page, nodeName);
     await expect(dialog).toBeVisible();
     const admission = await terminalSocketFacts(page);
@@ -1391,7 +1396,7 @@ async function exerciseRealTerminal(page: Page, smoke: TerminalSmoke): Promise<v
   });
 
   await test.step("revoke the durable session while a shell is connected", async () => {
-    await openTerminal.click();
+    await openTerminal();
     const dialog = terminalDialog(page, nodeName);
     await admitTerminal(page, smoke.secret, dialog, stepUps, sockets);
     await pauseApiFetches(page);

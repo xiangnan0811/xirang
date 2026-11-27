@@ -125,6 +125,7 @@ function mapNode(row: NodeResponse): NodeRecord {
     basePath: row.base_path ?? "/",
     status: mapNodeStatus(row.status),
     tags: row.tags ? row.tags.split(",").map((one) => one.trim()).filter(Boolean) : [],
+    rawTags: row.tags ?? "",
     lastSeenAt: formatTime(row.last_seen_at),
     lastBackupAt: formatTime(row.last_backup_at),
     connectionLatencyMs: row.connection_latency_ms,

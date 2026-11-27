@@ -282,7 +282,8 @@ async function waitForStandardData(page: Page, scenario: WalkthroughScenario): P
 
 async function waitForEmptyState(page: Page, path: string): Promise<void> {
   const emptyText: Record<string, string> = {
-    "/app/nodes": "当前筛选条件下暂无节点",
+    // 空态夹具返回空库存，节点页显示“还没有节点”；“当前筛选条件下暂无节点”只用于有节点但都被筛掉的情况。
+    "/app/nodes": "还没有节点",
     "/app/ssh-keys": "当前还没有 SSH Key",
     "/app/policies": "暂无匹配策略",
     "/app/tasks": "当前筛选条件下没有任务",

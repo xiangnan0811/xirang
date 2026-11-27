@@ -1,0 +1,437 @@
+import "@testing-library/jest-dom/vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { runAxe } from "@/test/a11y-helpers";
+import type { NodeRecord, SSHKeyRecord } from "@/types/domain";
+import { NodeEditorDialog } from "./node-editor-dialog";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const sshKeys: SSHKeyRecord[] = [
+  {
+    id: "key-1",
+    name: "prod-ed25519",
+    username: "root",
+    keyType: "ed25519",
+    fingerprint: "SHA256:active",
+    broadScope: false,
+    createdAt: "2026-01-01 00:00:00",
+    disabled: false,
+    allowedPurposes: "",
+    allowedNodeIds: "",
+    allowedNodeTags: "",
+  },
+];
+
+function makeNode(overrides: Partial<NodeRecord> = {}): NodeRecord {
+  return {
+    id: 10,
+    name: "prod-node-1",
+    host: "10.10.0.11",
+    address: "10.10.0.11",
+    ip: "10.10.0.11",
+    port: 2222,
+    username: "deploy",
+    authType: "key",
+    keyId: "key-1",
+    basePath: "/srv/app",
+    status: "online",
+    tags: ["prod", "web"],
+    rawTags: "prod,web",
+    lastSeenAt: "2026-04-01 10:00:00",
+    lastBackupAt: "2026-04-01 09:00:00",
+    backupDir: "prod-node-1",
+    useSudo: true,
+    ...overrides,
+  };
+}
+
+type SaveFn = Parameters<typeof NodeEditorDialog>[0]["onSave"];
+
+function renderEditor(props: Partial<Parameters<typeof NodeEditorDialog>[0]> = {}) {
+  const onSave = vi.fn<SaveFn>().mockResolvedValue(undefined);
+  const onTestConnection = vi.fn<(nodeId: number) => Promise<void>>().mockResolvedValue(undefined);
+  const view = render(
+    <NodeEditorDialog
+      open
+      onOpenChange={() => {}}
+      sshKeys={sshKeys}
+      onSave={onSave}
+      onTestConnection={onTestConnection}
+      {...props}
+    />,
+  );
+  return { ...view, onSave: (props.onSave as typeof onSave | undefined) ?? onSave, onTestConnection };
+}
+
+const submitButton = () => screen.getByRole("button", { name: "保存并测试" });
+const testButton = () => screen.getByRole("button", { name: /测试连接|nodeEditor\.testingConnection|测试中/ });
+
+describe("NodeEditorDialog", () => {
+  const originalTZ = process.env.TZ;
+  afterEach(() => {
+    if (originalTZ === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = originalTZ;
+    }
+  });
+
+  it("creates with the supplied defaults and labeled fields", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor();
+
+    expect(screen.getByLabelText("基础路径")).toHaveValue("/");
+    expect(screen.getByLabelText("端口")).toHaveValue("22");
+
+    await user.type(screen.getByLabelText("节点名称"), "edge-01");
+    await user.type(screen.getByLabelText("主机地址"), "10.0.0.8");
+    await user.selectOptions(screen.getByLabelText("SSH 密钥"), "key-1");
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    const [input, nodeId] = onSave.mock.calls[0];
+    expect(nodeId).toBeUndefined();
+    expect(input).toMatchObject({
+      name: "edge-01",
+      host: "10.0.0.8",
+      port: 22,
+      username: "root",
+      authType: "key",
+      keyId: "key-1",
+      basePath: "/",
+      backupDir: "edge-01",
+      maintenanceStart: "",
+      maintenanceEnd: "",
+    });
+  });
+
+  it("preserves raw tags, blank base path and untouched maintenance on an unrelated edit", async () => {
+    process.env.TZ = "America/New_York";
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({
+      editingNode: makeNode({
+        tags: ["prod", "web"],
+        rawTags: " prod,, web ",
+        basePath: "",
+        // 01:30 EST — the second, repeated 01:30 of the 2026 fall-back night.
+        maintenanceStart: "2026-11-01T06:30:45Z",
+        maintenanceEnd: "2026-11-01T09:00:00Z",
+      }),
+    });
+
+    expect(screen.getByLabelText("标签")).toHaveValue(" prod,, web ");
+    expect(screen.getByLabelText("基础路径")).toHaveValue("");
+
+    await user.type(screen.getByLabelText("节点名称"), "-renamed");
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    const [input, nodeId] = onSave.mock.calls[0];
+    expect(nodeId).toBe(10);
+    expect(input.name).toBe("prod-node-1-renamed");
+    expect(input.tags).toBe(" prod,, web ");
+    expect(input.basePath).toBe("");
+    expect(input.port).toBe(2222);
+    expect(input.backupDir).toBe("prod-node-1");
+    expect(input.maintenanceStart).toBeUndefined();
+    expect(input.maintenanceEnd).toBeUndefined();
+    expect(input.expiryDate).toBeUndefined();
+  });
+
+  it("falls back to joined tags when the raw string no longer matches the parsed tags", () => {
+    renderEditor({ editingNode: makeNode({ tags: ["db"], rawTags: "prod,web" }) });
+    expect(screen.getByLabelText("标签")).toHaveValue("db");
+  });
+
+  it("sends empty strings when the maintenance window is cleared on purpose", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({
+      editingNode: makeNode({
+        maintenanceStart: "2026-07-01T02:00:00Z",
+        maintenanceEnd: "2026-07-01T04:00:00Z",
+      }),
+    });
+
+    fireEvent.change(screen.getByLabelText("维护窗口开始"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("维护窗口结束"), { target: { value: "" } });
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0]).toMatchObject({ maintenanceStart: "", maintenanceEnd: "" });
+  });
+
+  it("does not demand repairs to legacy fields the user did not touch", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({
+      editingNode: makeNode({
+        name: "legacy/node",
+        keyId: null,
+        maintenanceStart: "2026-07-01T02:00:00Z",
+        maintenanceEnd: undefined,
+      }),
+    });
+
+    await user.clear(screen.getByLabelText("标签"));
+    await user.type(screen.getByLabelText("标签"), "db");
+    await user.click(submitButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0]).toMatchObject({
+      name: "legacy/node",
+      keyId: null,
+      tags: "db",
+      maintenanceStart: undefined,
+      maintenanceEnd: undefined,
+    });
+  });
+
+  it("blocks invalid edits inline and focuses the first invalid field", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor();
+
+    await user.clear(screen.getByLabelText("端口"));
+    await user.type(screen.getByLabelText("端口"), "70000");
+    await user.click(submitButton());
+
+    expect(onSave).not.toHaveBeenCalled();
+    const name = screen.getByLabelText("节点名称");
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(name).toHaveFocus();
+    expect(screen.getByLabelText("主机地址")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("端口")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("SSH 密钥")).toHaveAttribute("aria-invalid", "true");
+
+    await user.type(name, "x");
+    expect(name).toHaveAttribute("aria-invalid", "false");
+  });
+
+  it("requires both ends of an edited maintenance window", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode() });
+
+    fireEvent.change(screen.getByLabelText("维护窗口开始"), { target: { value: "2026-07-01T10:00" } });
+    await user.click(submitButton());
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("维护窗口结束")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("维护窗口结束")).toHaveFocus();
+  });
+
+  it("requires a password only when switching to password auth", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderEditor({ editingNode: makeNode() });
+
+    await user.selectOptions(screen.getByLabelText("认证方式"), "password");
+    await user.click(submitButton());
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("SSH 密码")).toHaveAttribute("aria-invalid", "true");
+
+    await user.type(screen.getByLabelText("SSH 密码"), "secret");
+    await user.click(submitButton());
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0]).toMatchObject({ authType: "password", password: "secret", keyId: null });
+  });
+
+  it("locks fields and actions while saving and ignores repeat submits", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<void>();
+    const onSave = vi.fn<SaveFn>().mockReturnValue(pending.promise);
+    renderEditor({ editingNode: makeNode(), onSave });
+
+    await user.click(submitButton());
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("节点名称")).toBeDisabled();
+    expect(testButton()).toBeDisabled();
+
+    fireEvent.submit(screen.getByLabelText("节点名称").closest("form")!);
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    pending.resolve();
+    await waitFor(() => expect(screen.getByLabelText("节点名称")).not.toBeDisabled());
+  });
+
+  it("blocks saving while a connection test runs", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<void>();
+    const { onSave, onTestConnection } = renderEditor({ editingNode: makeNode() });
+    onTestConnection.mockReturnValue(pending.promise);
+
+    await user.click(testButton());
+    expect(onTestConnection).toHaveBeenCalledWith(10);
+    expect(submitButton()).toBeDisabled();
+    fireEvent.submit(screen.getByLabelText("节点名称").closest("form")!);
+    expect(onSave).not.toHaveBeenCalled();
+
+    pending.resolve();
+    await waitFor(() => expect(submitButton()).not.toBeDisabled());
+  });
+
+  it("keeps testing the saved configuration available with unsaved connection edits", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<void>();
+    const { onSave, onTestConnection } = renderEditor({ editingNode: makeNode() });
+    onTestConnection.mockReturnValue(pending.promise);
+
+    expect(testButton()).not.toHaveAttribute("aria-describedby");
+    await user.type(screen.getByLabelText("主机地址"), "9");
+
+    expect(testButton()).toBeEnabled();
+    expect(testButton()).toHaveAttribute("aria-describedby", "node-edit-test-dirty-hint");
+    expect(document.getElementById("node-edit-test-dirty-hint")).toBeInTheDocument();
+
+    await user.click(testButton());
+    expect(onTestConnection).toHaveBeenCalledWith(10);
+    expect(testButton()).toBeDisabled();
+    await user.click(testButton());
+    fireEvent.submit(screen.getByLabelText("节点名称").closest("form")!);
+    expect(onTestConnection).toHaveBeenCalledTimes(1);
+    expect(onSave).not.toHaveBeenCalled();
+
+    pending.resolve();
+    await waitFor(() => expect(testButton()).toBeEnabled());
+    expect(screen.getByLabelText("主机地址")).toHaveValue("10.10.0.119");
+  });
+
+  it("cannot be dismissed while a save is in flight and keeps focus inside", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<void>();
+    const onOpenChange = vi.fn();
+    const onSave = vi.fn<SaveFn>().mockReturnValue(pending.promise);
+    renderEditor({ editingNode: makeNode(), onSave, onOpenChange });
+
+    await user.click(submitButton());
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByRole("button", { name: /Cancel|取消/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await act(async () => {
+      pending.reject(new Error("名称已被占用"));
+      await pending.promise.catch(() => {});
+    });
+    expect(await screen.findByText("名称已被占用")).toBeInTheDocument();
+    expect(submitButton()).toHaveFocus();
+    expect(screen.getByRole("button", { name: /Cancel|取消/ })).toBeEnabled();
+
+    await user.keyboard("{Escape}");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("ignores a save from an earlier opening after the editor is closed and reopened", async () => {
+    const user = userEvent.setup();
+    const stale = deferred<void>();
+    const current = deferred<void>();
+    let staleKeyCreated: ((keyId: string) => void) | undefined;
+    const onSave = vi
+      .fn<SaveFn>()
+      .mockImplementationOnce((_input, _nodeId, onKeyCreated) => {
+        staleKeyCreated = onKeyCreated;
+        return stale.promise;
+      })
+      .mockImplementationOnce(() => current.promise);
+    const node = makeNode();
+    const shared = { onOpenChange: () => {}, sshKeys, onSave };
+    const { rerender } = render(<NodeEditorDialog open editingNode={node} {...shared} />);
+
+    await user.click(submitButton());
+    expect(screen.getByLabelText("节点名称")).toBeDisabled();
+
+    // 外部关闭（如鉴权重置）后再次打开同一节点，是一次新的会话。
+    rerender(<NodeEditorDialog open={false} editingNode={null} {...shared} />);
+    rerender(<NodeEditorDialog open editingNode={node} {...shared} />);
+    await waitFor(() => expect(screen.getByLabelText("节点名称")).toHaveValue("prod-node-1"));
+    expect(screen.getByLabelText("节点名称")).not.toBeDisabled();
+
+    await user.click(submitButton());
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText("节点名称")).toBeDisabled();
+
+    await act(async () => {
+      staleKeyCreated?.("key-stale");
+      stale.reject(new Error("旧会话保存失败"));
+      await stale.promise.catch(() => {});
+    });
+    expect(screen.queryByText("旧会话保存失败")).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /key-stale/ })).not.toBeInTheDocument();
+    // 旧会话的 finally 不得释放新会话的保存锁。
+    expect(screen.getByLabelText("节点名称")).toBeDisabled();
+    expect(screen.getByLabelText("SSH 密钥")).toHaveValue("key-1");
+
+    await act(async () => {
+      current.resolve();
+      await current.promise;
+    });
+    expect(screen.getByLabelText("节点名称")).not.toBeDisabled();
+  });
+
+  it("binds the key created by a failed save so a retry reuses it", async () => {
+    const user = userEvent.setup();
+    const onSave = vi
+      .fn<SaveFn>()
+      .mockImplementationOnce(async (_input, _nodeId, onKeyCreated) => {
+        onKeyCreated("key-new");
+        throw new Error("节点名称已存在");
+      })
+      .mockResolvedValueOnce(undefined);
+    renderEditor({ onSave });
+
+    await user.type(screen.getByLabelText("节点名称"), "edge-02");
+    await user.type(screen.getByLabelText("主机地址"), "10.0.0.9");
+    await user.type(screen.getByLabelText("标签"), "edge");
+    await user.selectOptions(screen.getByLabelText("SSH 密钥"), "__new__");
+    await user.type(screen.getByLabelText("密钥名称"), "edge-key");
+    await user.type(screen.getByLabelText("内联新密钥"), "PRIVATE KEY");
+    await user.click(submitButton());
+
+    expect(onSave.mock.calls[0][0]).toMatchObject({ keyId: null, inlineKeyName: "edge-key", inlinePrivateKey: "PRIVATE KEY" });
+    expect(await screen.findByText("节点名称已存在")).toBeInTheDocument();
+    // 新密钥尚未出现在列表中时，用已创建的名称兜底显示，并清掉内联字段。
+    expect(screen.getByLabelText("SSH 密钥")).toHaveValue("key-new");
+    expect(screen.getByRole("option", { name: "edge-key" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("内联新密钥")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("节点名称")).toHaveValue("edge-02");
+    expect(screen.getByLabelText("标签")).toHaveValue("edge");
+
+    await user.click(submitButton());
+    expect(onSave).toHaveBeenCalledTimes(2);
+    const [retryInput] = onSave.mock.calls[1];
+    expect(retryInput).toMatchObject({ name: "edge-02", host: "10.0.0.9", tags: "edge", keyId: "key-new" });
+    expect(retryInput.inlinePrivateKey).toBeUndefined();
+    expect(retryInput.inlineKeyName).toBeUndefined();
+  });
+
+  it("shows a save failure inline and keeps the draft", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn<SaveFn>().mockRejectedValue(new Error("主机地址格式不合法"));
+    renderEditor({ editingNode: makeNode(), onSave });
+
+    await user.click(submitButton());
+
+    expect(await screen.findByText("主机地址格式不合法")).toBeInTheDocument();
+    expect(screen.getByLabelText("节点名称")).toHaveValue("prod-node-1");
+    expect(screen.getByLabelText("节点名称")).not.toBeDisabled();
+  });
+
+  it("has no axe violations in create and edit modes", async () => {
+    const { unmount } = renderEditor();
+    expect(await runAxe(document.body)).toHaveNoViolations();
+    unmount();
+
+    renderEditor({ editingNode: makeNode({ basePath: "" }) });
+    expect(await runAxe(document.body)).toHaveNoViolations();
+  });
+});

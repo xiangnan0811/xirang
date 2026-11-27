@@ -186,7 +186,11 @@ export function useNodeOperations({
     return true;
   }, [demoModeEnabled, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, nodes, setSSHKeys, setWarning, token]);
 
-  const createNode = useCallback(async (input: NewNodeInput, isCurrent?: () => boolean): Promise<number> => {
+  const createNode = useCallback(async (
+    input: NewNodeInput,
+    isCurrent?: () => boolean,
+    onInlineKeyCreated?: (keyId: string) => void,
+  ): Promise<number> => {
     let keyId = input.keyId ?? null;
 
     if (input.authType === "key" && input.inlinePrivateKey?.trim()) {
@@ -211,6 +215,7 @@ export function useNodeOperations({
       if (isCurrent && !isCurrent()) {
         return -1;
       }
+      onInlineKeyCreated?.(keyId);
     }
 
     const finalInput: NewNodeInput = { ...input, keyId };
@@ -245,7 +250,12 @@ export function useNodeOperations({
     }
   }, [createSSHKey, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, nodes, setNodes, token]);
 
-  const updateNode = useCallback(async (nodeID: number, input: NewNodeInput, isCurrent?: () => boolean) => {
+  const updateNode = useCallback(async (
+    nodeID: number,
+    input: NewNodeInput,
+    isCurrent?: () => boolean,
+    onInlineKeyCreated?: (keyId: string) => void,
+  ) => {
     let keyId = input.keyId ?? null;
     if (input.authType === "key" && input.inlinePrivateKey?.trim()) {
       try {
@@ -269,6 +279,7 @@ export function useNodeOperations({
       if (isCurrent && !isCurrent()) {
         return;
       }
+      onInlineKeyCreated?.(keyId);
     }
 
     const finalInput: NewNodeInput = { ...input, keyId };
@@ -294,7 +305,8 @@ export function useNodeOperations({
                 authType: input.authType,
                 keyId,
                 basePath: input.basePath || "/",
-                tags: parseTags(input.tags)
+                tags: parseTags(input.tags),
+                rawTags: input.tags,
               }
             : node
         )
@@ -318,6 +330,7 @@ export function useNodeOperations({
         return;
       }
       handleWriteApiError(label, error);
+      throw error;
     }
   }, [createSSHKey, ensureDemoWriteAllowed, handleWriteApiError, markInventoryMutated, setNodes, setWarning, token]);
 

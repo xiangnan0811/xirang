@@ -1,23 +1,18 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, ArrowRightLeft, FolderOpen, Loader2, MonitorPlay, MoreHorizontal, ServerCog, Stethoscope, Terminal, Trash2, Wrench } from "lucide-react";
+import { ServerCog } from "lucide-react";
 import { Link } from "react-router-dom";
+import { ExpiryCountdownBadge } from "@/components/expiry-countdown-badge";
 import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { getNodeStatusMeta } from "@/lib/status";
+import { NodeActionsMenu } from "@/pages/nodes-page.actions-menu";
 import type { NodesViewProps } from "@/pages/nodes-page.utils";
 
 export const NodesTable = React.memo(function NodesTable({
   loading,
   requestFailed,
+  inventoryEmpty,
   sortedNodes,
   sshKeys,
   selectedNodeSet,
@@ -25,6 +20,7 @@ export const NodesTable = React.memo(function NodesTable({
   testingNodeId,
   doctorNodeId,
   triggeringNodeId,
+  emergencyNodeId,
   toggleNodeSelection,
   toggleSelectAllVisible,
   resetFilters,
@@ -34,6 +30,7 @@ export const NodesTable = React.memo(function NodesTable({
   onOpenDoctor,
   onDeleteNode,
   handleTriggerBackup,
+  onEmergencyBackup,
   onOpenTerminal,
   onMigrate,
   onOpenFileBrowser,
@@ -44,29 +41,35 @@ export const NodesTable = React.memo(function NodesTable({
   const { t } = useTranslation();
 
   return (
-    <div className="hidden overflow-x-auto rounded-lg border border-border bg-card md:block">
-      <table className="min-w-[1280px] text-left text-sm">
+    <div
+      role="region"
+      aria-label={t("nodes.tableAriaLabel")}
+      // Keyboard focus enables native horizontal scrolling.
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+      tabIndex={0}
+      className="hidden overflow-x-auto rounded-lg border border-border bg-card md:block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+    >
+      <table className="w-full min-w-[1280px] text-left text-sm">
         <thead>
           <tr className="border-b border-border bg-secondary text-mini uppercase tracking-wide text-muted-foreground">
-            <th scope="col" className="px-3 py-2.5">
+            <th scope="col" className="w-10 px-3 py-2.5">
               <input
                 type="checkbox"
                 aria-label={t("nodes.selectAllVisible")}
                 className="size-4 accent-primary rounded-sm"
                 checked={allVisibleSelected}
-                onChange={(event) =>
-                  toggleSelectAllVisible(event.target.checked)
-                }
+                disabled={!sortedNodes.length}
+                onChange={(event) => toggleSelectAllVisible(event.target.checked)}
               />
             </th>
-            <th scope="col" className="px-3 py-2.5">{t("nodes.colNode")}</th>
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">{t("nodes.colNode")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colAddress")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colAuth")}</th>
             <th scope="col" className="px-3 py-2.5 whitespace-nowrap">{t("nodes.colStatus")}</th>
-            <th scope="col" className="px-3 py-2.5">{t("nodes.colLastConnection")}</th>
-            <th scope="col" className="px-3 py-2.5">{t("nodes.colLastBackup")}</th>
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">{t("nodes.colLastConnection")}</th>
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">{t("nodes.colLastBackup")}</th>
             <th scope="col" className="px-3 py-2.5">{t("nodes.colTags")}</th>
-            <th scope="col" className="px-3 py-2.5 text-right">{t("nodes.colActions")}</th>
+            <th scope="col" className="px-3 py-2.5 text-right whitespace-nowrap">{t("nodes.colActions")}</th>
           </tr>
         </thead>
         <tbody>
@@ -79,15 +82,26 @@ export const NodesTable = React.memo(function NodesTable({
           ) : !requestFailed && !sortedNodes.length ? (
             <tr>
               <td colSpan={9} className="px-3 py-6">
-                <FilteredEmptyState
-                  className="py-8"
-                  title={t("nodes.emptyTitle")}
-                  description={t("nodes.emptyDesc")}
-                  onReset={resetFilters}
-                  onCreate={isAdmin ? openCreateDialog : undefined}
-                  createLabel={t("nodes.emptyCreateLabel")}
-                  createIcon={ServerCog}
-                />
+                {inventoryEmpty ? (
+                  <FilteredEmptyState
+                    className="py-8"
+                    title={t("nodes.inventoryEmptyTitle")}
+                    description={t("nodes.inventoryEmptyDesc")}
+                    onCreate={isAdmin ? openCreateDialog : undefined}
+                    createLabel={t("nodes.emptyCreateLabel")}
+                    createIcon={ServerCog}
+                  />
+                ) : (
+                  <FilteredEmptyState
+                    className="py-8"
+                    title={t("nodes.emptyTitle")}
+                    description={t("nodes.emptyDesc")}
+                    onReset={resetFilters}
+                    onCreate={isAdmin ? openCreateDialog : undefined}
+                    createLabel={t("nodes.emptyCreateLabel")}
+                    createIcon={ServerCog}
+                  />
+                )}
               </td>
             </tr>
           ) : (
@@ -96,48 +110,47 @@ export const NodesTable = React.memo(function NodesTable({
               const keyLabel = node.keyId
                 ? sshKeys.find((key) => key.id === node.keyId)?.name || t("common.keyBound")
                 : t("common.keyUnbound");
-              const editTrigger: { current: HTMLButtonElement | null } = { current: null };
+              const checked = selectedNodeSet.has(node.id);
 
               return (
-                <tr key={node.id} className="border-b border-border transition-colors duration-200 ease-out hover:bg-accent">
-                  <td className="px-3 py-2.5">
+                <tr
+                  key={node.id}
+                  data-selected={checked ? "true" : undefined}
+                  className="border-b border-border transition-colors duration-200 ease-out hover:bg-accent data-[selected=true]:bg-primary/5"
+                >
+                  <td className="w-10 px-3 py-2.5">
                     <input
                       type="checkbox"
                       aria-label={t("nodes.selectNodeAriaLabel", { name: node.name })}
                       className="size-4 accent-primary rounded-sm"
-                      checked={selectedNodeSet.has(node.id)}
-                      onChange={(event) =>
-                        toggleNodeSelection(node.id, event.target.checked)
-                      }
+                      checked={checked}
+                      onChange={(event) => toggleNodeSelection(node.id, event.target.checked)}
                     />
                   </td>
                   <td className="px-3 py-2.5">
                     <Link
                       to={`/app/nodes/${node.id}`}
                       data-testid={`nodes-list-link-${node.id}`}
-                      className="font-medium hover:underline"
+                      className="font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       {node.name}
                     </Link>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">
-                    <p>
+                    <p className="break-all">
                       {node.host}:{node.port}
                     </p>
                     <p className="text-xs">{node.username}</p>
                   </td>
                   <td className="px-3 py-2.5 text-xs text-muted-foreground">
-                    <p>
-                      {node.authType === "key" ? t("nodes.authKey") : t("nodes.authPassword")}
-                    </p>
-                    <p>
-                      {node.authType === "key" ? keyLabel : "-"}
-                    </p>
+                    <p>{node.authType === "key" ? t("nodes.authKey") : t("nodes.authPassword")}</p>
+                    <p>{node.authType === "key" ? keyLabel : "-"}</p>
                   </td>
-                  <td className="px-3 py-2.5 whitespace-nowrap">
-                    <Badge tone={status.variant}>
-                      {status.label}
-                    </Badge>
+                  <td className="px-3 py-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge tone={status.variant}>{status.label}</Badge>
+                      <ExpiryCountdownBadge expiryDate={node.expiryDate} archived={node.archived} />
+                    </div>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">
                     <p>{node.lastSeenAt || t("nodes.lastConnectionNever")}</p>
@@ -160,107 +173,26 @@ export const NodesTable = React.memo(function NodesTable({
                     </div>
                   </td>
                   <td className="px-3 py-2.5 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      {canOperateNodes && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          aria-label={t("nodes.testConnectionAriaLabel", { name: node.name })} title={t("nodes.testConnection")}
-                          data-node-test-connection={node.id}
-                          onClick={() => void onTestNode(node)}
-                          disabled={testingNodeId === node.id}
-                        >
-                          {testingNodeId === node.id ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Activity className="size-4" aria-hidden />}
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={t("nodes.viewLogsAriaLabel", { name: node.name })} title={t("nodes.viewLogs")}
-                        asChild
-                      >
-                        <Link to={`/app/logs?node=${encodeURIComponent(node.name)}`}>
-                          <Terminal className="size-4" aria-hidden />
-                        </Link>
-                      </Button>
-                      {canOperateNodes && (
-                        <Button
-                          size="sm"
-                          disabled={triggeringNodeId === node.id}
-                          onClick={() => void handleTriggerBackup(node.id, node.name)}
-                        >
-                          {triggeringNodeId === node.id && <Loader2 className="mr-1 size-4 animate-spin" aria-hidden />}
-                          {t("nodes.manualBackup")}
-                        </Button>
-                      )}
-                      {(canOperateNodes || isAdmin || canBrowseNodeFiles) && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            ref={(element) => {
-                              editTrigger.current = element;
-                            }}
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 text-muted-foreground hover:bg-accent hover:text-foreground"
-                            aria-label={t("nodes.moreActionsAriaLabel", { name: node.name })}
-                            title={t("common.more")}
-                          >
-                            <MoreHorizontal className="size-4" aria-hidden />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-48">
-                          {canOperateNodes && (
-                            <DropdownMenuItem
-                              disabled={doctorNodeId === node.id}
-                              onClick={() => onOpenDoctor?.(node)}
-                            >
-                              {doctorNodeId === node.id
-                                ? <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
-                                : <Stethoscope className="mr-2 size-4" aria-hidden />}
-                              {t("nodes.doctor")}
-                            </DropdownMenuItem>
-                          )}
-                          {isAdmin && (
-                            <DropdownMenuItem onClick={() => onOpenTerminal?.(node)}>
-                              <MonitorPlay className="mr-2 size-4" aria-hidden />
-                              {t("nodes.webTerminal")}
-                            </DropdownMenuItem>
-                          )}
-                          {canBrowseNodeFiles && (
-                            <DropdownMenuItem onClick={() => onOpenFileBrowser?.(node, editTrigger.current)}>
-                              <FolderOpen className="mr-2 size-4" aria-hidden />
-                              {t("nodes.fileBrowser")}
-                            </DropdownMenuItem>
-                          )}
-                          {isAdmin && (
-                            <DropdownMenuItem onClick={() => openEditDialog(node, editTrigger.current)}>
-                              <Wrench className="mr-2 size-4" aria-hidden />
-                              {t("nodes.editNode")}
-                            </DropdownMenuItem>
-                          )}
-                          {isAdmin && onMigrate && (
-                            <DropdownMenuItem onClick={() => onMigrate(node)}>
-                              <ArrowRightLeft className="mr-2 size-4" aria-hidden />
-                              {t("nodes.migrateShort")}
-                            </DropdownMenuItem>
-                          )}
-                          {isAdmin && <DropdownMenuSeparator />}
-                          {isAdmin && (
-                            <DropdownMenuItem
-                              className="text-destructive focus:text-destructive"
-                              onClick={() => onDeleteNode(node)}
-                            >
-                              <Trash2 className="mr-2 size-4" aria-hidden />
-                              {t("nodes.deleteNode")}
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      )}
-                    </div>
+                    <NodeActionsMenu
+                      layout="row"
+                      node={node}
+                      testing={testingNodeId === node.id}
+                      doctorRunning={doctorNodeId === node.id}
+                      triggering={triggeringNodeId === node.id}
+                      emergencyRunning={emergencyNodeId === node.id}
+                      isAdmin={isAdmin}
+                      canOperateNodes={canOperateNodes}
+                      canBrowseNodeFiles={canBrowseNodeFiles}
+                      onTestNode={onTestNode}
+                      onOpenDoctor={onOpenDoctor}
+                      handleTriggerBackup={handleTriggerBackup}
+                      onEmergencyBackup={onEmergencyBackup}
+                      onOpenTerminal={onOpenTerminal}
+                      onOpenFileBrowser={onOpenFileBrowser}
+                      openEditDialog={openEditDialog}
+                      onMigrate={onMigrate}
+                      onDeleteNode={onDeleteNode}
+                    />
                   </td>
                 </tr>
               );

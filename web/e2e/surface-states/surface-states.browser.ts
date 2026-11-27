@@ -292,17 +292,19 @@ async function assertSessionIdentity(page: Page, draft: SurfaceDraft, identity: 
   observe(draft, "authMe.role", identity.role);
 }
 
-// Nodes → file browser. Cards are the default layout on desktop and mobile.
+// Nodes → file browser. Cards and list rows share one per-node More menu that
+// holds File Browser; the menu trigger is the opener focus must return to.
 async function openFileBrowser(page: Page, scenario: SurfaceScenario, node: { name: string }, keyboard: boolean): Promise<{ dialog: Locator }> {
   if (!page.url().endsWith("/app/nodes")) {
     await page.goto("/app/nodes");
   }
   await expect(page.getByText(node.name, { exact: true }).filter({ visible: true }).first()).toBeVisible();
   const trigger = page.getByRole("button", {
-    name: copy(scenario, `浏览节点 ${node.name} 文件`, `Browse files on node ${node.name}`),
+    name: copy(scenario, `节点 ${node.name} 更多操作`, `More actions for node ${node.name}`),
     exact: true,
   }).filter({ visible: true }).first();
   await activate(page, trigger, keyboard);
+  await chooseFileBrowserItem(page, scenario, keyboard);
   const dialog = page.getByRole("dialog", {
     name: copy(scenario, `文件浏览 — ${node.name}`, `File Browser — ${node.name}`),
     exact: true,
@@ -376,19 +378,14 @@ async function selectListView(page: Page, scenario: SurfaceScenario, kind: "node
   await expect(list).toHaveAttribute("aria-checked", "true");
 }
 
-async function checkNodeListOpener(page: Page, draft: SurfaceDraft, session: SurfaceSession): Promise<void> {
-  const scenario = draft.scenario;
-  await selectListView(page, scenario, "nodes");
-  const trigger = page.getByRole("button", {
-    name: copy(scenario, `节点 ${NODE_A.name} 更多操作`, `More actions for node ${NODE_A.name}`), exact: true,
-  }).filter({ visible: true }).first();
-  await tabTo(page, trigger, 100);
-  await expect(trigger).toBeFocused();
-  expect(await focusIndicator(page)).not.toBe("none");
-  await trigger.evaluate((element) => element.setAttribute("data-surface-trigger", ""));
-  await page.keyboard.press("Enter");
+// Keyboard path walks the open menu with ArrowDown from its first enabled item.
+async function chooseFileBrowserItem(page: Page, scenario: SurfaceScenario, keyboard: boolean): Promise<void> {
   const item = page.getByRole("menuitem", { name: copy(scenario, "文件浏览", "File Browser"), exact: true });
   await expect(item).toBeVisible();
+  if (!keyboard) {
+    await item.click();
+    return;
+  }
   const menuItems = page.getByRole("menu").locator('[role="menuitem"]:not([data-disabled])');
   await expect(menuItems.first()).toBeFocused();
   const menuItemCount = await menuItems.count();
@@ -398,6 +395,34 @@ async function checkNodeListOpener(page: Page, draft: SurfaceDraft, session: Sur
   }
   await expect(item).toBeFocused();
   await page.keyboard.press("Enter");
+}
+
+async function checkNodeListOpener(page: Page, draft: SurfaceDraft, session: SurfaceSession): Promise<void> {
+  const scenario = draft.scenario;
+  await selectListView(page, scenario, "nodes");
+  await page.setViewportSize({ width: 1024, height: scenario.viewport.height });
+  try {
+    const region = page.getByRole("region", { name: copy(scenario, "节点列表", "Node list"), exact: true });
+    await tabTo(page, region, 100);
+    await expect(region).toBeFocused();
+    expect(await focusIndicator(page)).not.toBe("none");
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => region.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(() => region.evaluate((element) => element.scrollLeft)).toBe(0);
+    await expect(region).toBeFocused();
+  } finally {
+    await page.setViewportSize(scenario.viewport);
+  }
+  const trigger = page.getByRole("button", {
+    name: copy(scenario, `节点 ${NODE_A.name} 更多操作`, `More actions for node ${NODE_A.name}`), exact: true,
+  }).filter({ visible: true }).first();
+  await tabTo(page, trigger, 100);
+  await expect(trigger).toBeFocused();
+  expect(await focusIndicator(page)).not.toBe("none");
+  await trigger.evaluate((element) => element.setAttribute("data-surface-trigger", ""));
+  await page.keyboard.press("Enter");
+  await chooseFileBrowserItem(page, scenario, true);
   const dialog = page.getByRole("dialog", { name: copy(scenario, `文件浏览 — ${NODE_A.name}`, `File Browser — ${NODE_A.name}`), exact: true });
   await expect(dialog).toBeVisible();
   await openDockerTab(page, draft, dialog, true);
@@ -407,6 +432,32 @@ async function checkNodeListOpener(page: Page, draft: SurfaceDraft, session: Sur
   await expect(dialog.getByText(copy(scenario, "未检测到 Docker 数据卷", "No Docker volumes detected"), { exact: true })).toBeVisible();
   await closeWithEscape(page, draft, dialog);
   observe(draft, "nodesList.menuFocusReturned", true);
+
+  // Crossing below md hides the list row that opened the dialog (it stays in the
+  // DOM). Closing must land on the same node's visible card More button instead.
+  const moreName = copy(scenario, `节点 ${NODE_A.name} 更多操作`, `More actions for node ${NODE_A.name}`);
+  await page.getByRole("region", { name: copy(scenario, "节点列表", "Node list"), exact: true })
+    .getByRole("button", { name: moreName, exact: true })
+    .evaluate((element) => element.setAttribute("data-surface-resize-opener", ""));
+  const rowTrigger = page.locator("[data-surface-resize-opener]");
+  await rowTrigger.click();
+  await chooseFileBrowserItem(page, scenario, false);
+  await expect(dialog).toBeVisible();
+  await page.setViewportSize({ width: 390, height: scenario.viewport.height });
+  try {
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(rowTrigger).toBeAttached();
+    await expect(rowTrigger).toBeHidden();
+    const cardTrigger = page.getByRole("button", { name: moreName, exact: true }).filter({ visible: true });
+    await expect(cardTrigger).toHaveCount(1);
+    await expect(cardTrigger).toBeFocused();
+    await expect(rowTrigger).not.toBeFocused();
+    observe(draft, "nodesList.resizeFocusReturnedToVisibleCard", true);
+  } finally {
+    await page.evaluate(() => document.querySelector("[data-surface-resize-opener]")?.removeAttribute("data-surface-resize-opener"));
+    await page.setViewportSize(scenario.viewport);
+  }
 }
 
 // A named, keyboard-focusable local scroll region must keep the table and
@@ -532,9 +583,10 @@ async function dockerRoleTest(page: Page, testInfo: TestInfo, scenario: SurfaceS
   await page.goto("/app/nodes");
   await expect(page.getByText(NODE_A.name, { exact: true }).filter({ visible: true }).first()).toBeVisible();
   await assertSessionIdentity(page, draft, identity);
-  const entries = page.getByRole("button", { name: scenario.language === "zh" ? /^浏览节点 .+ 文件$/ : /^Browse files on node / }).filter({ visible: true });
+  const entries = page.getByRole("button", { name: scenario.language === "zh" ? /^节点 .+ 更多操作$/ : /^More actions for node / }).filter({ visible: true });
   if (scenario.role === "viewer") {
     await expect(entries).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: copy(scenario, "文件浏览", "File Browser"), exact: true })).toHaveCount(0);
     observe(draft, "fileBrowser.entries", 0);
     await capture(page, draft, "viewer-nodes", page.locator("#main-content"));
     expect(session.exchanges.filter((exchange) => exchange.kind === "docker")).toEqual([]);

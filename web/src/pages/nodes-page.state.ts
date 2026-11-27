@@ -5,18 +5,17 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSharedContext } from "@/context/shared-context.hooks";
 import { useNodesContext } from "@/context/nodes-context.hooks";
 import { useSSHKeysContext } from "@/context/ssh-keys-context.hooks";
+import { nodeStatusPriority, parseDateTime } from "@/pages/nodes-page.utils";
 import {
-  escapeCSVValue,
-  nodeStatusPriority,
-  parseCSVRows,
-  parseDateTime,
-} from "@/pages/nodes-page.utils";
+  buildNodesCSV,
+  CSV_IMPORT_BASE_PATH,
+  describeCSVNodeRowError,
+  importCSVNodeRows,
+  NODES_CSV_TEMPLATE,
+  parseCSVNodeRows,
+} from "@/pages/nodes-page.csv";
 import { toast } from "@/components/ui/toast-sonner";
-import {
-  dialogOpenerFromTarget,
-  restoreConnectedDialogOpener,
-} from "@/components/ui/dialog-opener";
-import type { DialogCloseAutoFocus } from "@/components/ui/form-dialog";
+import { dialogOpenerFromTarget } from "@/components/ui/dialog-opener";
 import { isAbortError } from "@/hooks/inventory-request-state";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePageFilters } from "@/hooks/use-page-filters";
@@ -37,7 +36,6 @@ const tagStorageKey = "xirang.nodes.tag";
 const sortStorageKey = "xirang.nodes.sort";
 const viewStorageKey = "xirang.nodes.view";
 const groupViewStorageKey = "xirang.nodes.groupView";
-const selectedStorageKey = "xirang.nodes.selected";
 
 type HostKeyIssueState = {
   nodeId: number;
@@ -100,6 +98,7 @@ export function useNodesPageState() {
     tag: tagFilter, setTag: setTagFilter,
     sort: sortBy, setSort: setSortBy,
     deferredKeyword,
+    isFiltered: hasActiveFilters,
     reset: resetFilters,
   } = usePageFilters({
     keyword: { key: keywordStorageKey, default: "" },
@@ -130,9 +129,6 @@ export function useNodesPageState() {
   }, [cancelPending]);
   const [editorOpen, setEditorOpen] = useState(false);
   const nodeEditorOpenerRef = useRef<HTMLElement | null>(null);
-  const nodeEditorOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
-    restoreConnectedDialogOpener(event, nodeEditorOpenerRef.current);
-  };
   const handleEditorOpenChange = (open: boolean) => {
     setEditorOpen(open);
     if (!open) {
@@ -145,9 +141,6 @@ export function useNodesPageState() {
   // The file browser has no Radix trigger, so remember the card button or the
   // list row's More menu button that opened it.
   const fileBrowserOpenerRef = useRef<HTMLElement | null>(null);
-  const fileBrowserOnCloseAutoFocus: DialogCloseAutoFocus = (event) => {
-    restoreConnectedDialogOpener(event, fileBrowserOpenerRef.current);
-  };
   const [fileBrowserTab, setFileBrowserTab] = useState<"files" | "docker">("files");
   const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
   const [testingNodeId, setTestingNodeId] = useState<number | null>(null);
@@ -169,7 +162,6 @@ export function useNodesPageState() {
   const [batchCmdOpen, setBatchCmdOpen] = useState(false);
   const [batchResultId, setBatchResultId] = useState<string | null>(null);
   const [batchRetain, setBatchRetain] = useState(false);
-  const [selectedNodeId, setSelectedNodeId] = usePersistentState<number | null>(selectedStorageKey, null);
   const [emergencyNodeId, setEmergencyNodeId] = useState<number | null>(null);
   // Non-zero while a click owns the flow, including the confirm dialog. The
   // button's disabled state is async, so a second click must be rejected here.
@@ -189,6 +181,8 @@ export function useNodesPageState() {
     setAuthIdentity({ token, role });
     setTestingNodeId(null);
     setTriggeringNodeId(null);
+    // 批量选择属于当前身份；切换账号或角色后不得沿用。
+    setSelectedNodeIds([]);
     setEditorOpen(false);
     setEditingNode(null);
     setTerminalNode(null);
@@ -298,10 +292,12 @@ export function useNodesPageState() {
       if (!searchKey) {
         return true;
       }
-      const candidate = `${node.name} ${node.host} ${node.ip} ${node.username} ${node.tags.join(" ")} ${node.status}`.toLowerCase();
+      // 搜索框提示可按连接状态筛选，因此同时匹配状态码与当前语言下显示的状态文字。
+      const statusLabel = t(`status.node.${node.status}`);
+      const candidate = `${node.name} ${node.host} ${node.ip} ${node.username} ${node.tags.join(" ")} ${node.status} ${statusLabel}`.toLowerCase();
       return candidate.includes(searchKey);
     });
-  }, [deferredKeyword, nodes, statusFilter, tagFilter]);
+  }, [deferredKeyword, nodes, statusFilter, t, tagFilter]);
 
   const sortedNodes = useMemo(() => {
     const list = [...filteredNodes];
@@ -329,30 +325,20 @@ export function useNodesPageState() {
 
   const groupedNodes = useMemo(() => {
     if (!groupView) return null;
-    const groups: Record<string, typeof sortedNodes> = {};
+    const groups = new Map<string, NodeRecord[]>();
     for (const node of sortedNodes) {
       const nodeTags = node.tags.length > 0 ? node.tags : [t("nodes.ungrouped")];
       for (const tag of nodeTags) {
-        if (!groups[tag]) {
-          groups[tag] = [];
+        const group = groups.get(tag);
+        if (group) {
+          group.push(node);
+        } else {
+          groups.set(tag, [node]);
         }
-        groups[tag].push(node);
       }
     }
-    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+    return [...groups].sort(([a], [b]) => a.localeCompare(b));
   }, [groupView, sortedNodes, t]);
-
-  useEffect(() => {
-    if (!sortedNodes.length) {
-      if (selectedNodeId !== null) {
-        setSelectedNodeId(null);
-      }
-      return;
-    }
-    if (selectedNodeId === null || !sortedNodes.some((node) => node.id === selectedNodeId)) {
-      setSelectedNodeId(sortedNodes[0].id);
-    }
-  }, [selectedNodeId, setSelectedNodeId, sortedNodes]);
 
   const selectedNodeSet = useMemo(
     () => new Set(selectedNodeIds),
@@ -413,7 +399,7 @@ export function useNodesPageState() {
     }
   };
 
-  const handleSaveNode = async (input: NewNodeInput, nodeId?: number) => {
+  const handleSaveNode = async (input: NewNodeInput, nodeId?: number, onInlineKeyCreated?: (keyId: string) => void) => {
     if (roleRef.current !== "admin") {
       return;
     }
@@ -431,53 +417,50 @@ export function useNodesPageState() {
     }
 
     const saveStillCurrent = captureAuthLifetime();
-    let savedNodeId = nodeId;
+    let savedNodeId: number;
 
     try {
       if (nodeId) {
-        await updateNode(nodeId, input, saveStillCurrent);
+        savedNodeId = nodeId;
+        await updateNode(nodeId, input, saveStillCurrent, onInlineKeyCreated);
         if (!saveStillCurrent()) {
           return;
         }
         toast.success(t("nodes.nodeUpdated", { name: input.name }));
       } else {
-        savedNodeId = await createNode(input, saveStillCurrent);
+        savedNodeId = await createNode(input, saveStillCurrent, onInlineKeyCreated);
         if (!saveStillCurrent()) {
           return;
+        }
+        if (savedNodeId <= 0) {
+          throw new Error(t("console.actionRequestFailed", { action: t("nodes.actions.createNode") }));
         }
         toast.success(t("nodes.nodeCreated", { name: input.name }));
       }
 
       setEditorOpen(false);
       setEditingNode(null);
-
-      if (!savedNodeId || !saveStillCurrent()) {
-        return;
-      }
-      setTestingNodeId(savedNodeId);
-      try {
-        const result = await testNodeConnection(savedNodeId);
-        if (!saveStillCurrent()) {
-          return;
-        }
-        presentProbeResult(savedNodeId, input.name, result, false);
-      } catch (error) {
-        if (!saveStillCurrent()) {
-          return;
-        }
-        toast.error(getErrorMessage(error));
-      } finally {
-        if (saveStillCurrent()) {
-          setTestingNodeId(null);
-        }
-      }
     } catch (error) {
-      if (!saveStillCurrent()) {
-        return;
+      if (saveStillCurrent()) {
+        throw error;
       }
-      setTestingNodeId(null);
-      toast.error(getErrorMessage(error));
+      return;
     }
+
+    setTestingNodeId(savedNodeId);
+    void testNodeConnection(savedNodeId).then((result) => {
+      if (saveStillCurrent()) {
+        presentProbeResult(savedNodeId, input.name, result, false);
+      }
+    }).catch((error: unknown) => {
+      if (saveStillCurrent()) {
+        toast.error(getErrorMessage(error));
+      }
+    }).finally(() => {
+      if (saveStillCurrent()) {
+        setTestingNodeId((current) => current === savedNodeId ? null : current);
+      }
+    });
   };
 
   const handleTestConnection = async (nodeId: number) => {
@@ -833,14 +816,15 @@ export function useNodesPageState() {
     if (!importStillCurrent()) {
       return;
     }
-    const rows = parseCSVRows(content);
+    const { rows, errors } = parseCSVNodeRows(content);
+    const diagnostics = errors.slice(0, 3).map((error) => describeCSVNodeRowError(error, t));
     if (!rows.length) {
-      toast.error(t("nodes.csvImportEmpty"));
+      toast.error(diagnostics.join(" | ") || t("nodes.csvImportEmpty"));
       return;
     }
 
-    const defaultKeyID = sshKeys[0]?.id ?? null;
-    if (!defaultKeyID) {
+    const key = sshKeys[0];
+    if (!key) {
       toast.error(t("nodes.csvImportNeedKey"), {
         action: {
           label: t("nodes.csvImportNeedKeyAction"),
@@ -852,64 +836,37 @@ export function useNodesPageState() {
       return;
     }
 
-    let successCount = 0;
-    let failedCount = 0;
-    const errors: string[] = [];
-
-    for (const row of rows) {
-      if (!importStillCurrent()) {
-        return;
-      }
-      try {
-        await createNode({
-          name: row.name,
-          host: row.host,
-          username: row.username,
-          port: row.port,
-          tags: row.tags,
-          authType: "key",
-          keyId: defaultKeyID,
-          password: undefined,
-          basePath: "/",
-        }, importStillCurrent);
-        if (!importStillCurrent()) {
-          return;
-        }
-        successCount += 1;
-      } catch (error) {
-        if (!importStillCurrent()) {
-          return;
-        }
-        failedCount += 1;
-        if (errors.length < 3) {
-          errors.push(`${row.name}: ${getErrorMessage(error)}`);
-        }
-      }
-    }
-
-    if (!importStillCurrent()) {
+    const confirmed = await confirm({
+      title: t("nodes.csvImportConfirmTitle"),
+      description: t("nodes.csvImportConfirmDesc", { key: key.name, path: CSV_IMPORT_BASE_PATH }),
+    });
+    if (!confirmed || !importStillCurrent()) {
       return;
     }
-    const summary = t("nodes.csvImportSummary", { success: successCount, failed: failedCount });
-    toast.success(errors.length ? `${summary} ${errors.join(" | ")}` : summary);
+
+    const outcome = await importCSVNodeRows(rows, key.id, createNode, importStillCurrent);
+    if (outcome.status === "cancelled" || !importStillCurrent()) {
+      return;
+    }
+
+    const failed = errors.length + outcome.failures.length;
+    for (const { name, error } of outcome.failures.slice(0, 3 - diagnostics.length)) {
+      diagnostics.push(error === null
+        ? t("nodes.csvImportRowFailed", { name })
+        : `${name}: ${getErrorMessage(error)}`);
+    }
+    const summary = t("nodes.csvImportSummary", { success: outcome.succeeded, failed });
+    if (failed === 0) {
+      toast.success(summary);
+    } else if (outcome.succeeded === 0) {
+      toast.error(`${summary} ${diagnostics.join(" | ")}`);
+    } else {
+      toast.warning(`${summary} ${diagnostics.join(" | ")}`);
+    }
   };
 
   const handleExportCSV = () => {
-    const lines = ["name,host,username,port,tags,status,last_backup_at"];
-    for (const node of sortedNodes) {
-      lines.push(
-        [
-          escapeCSVValue(node.name),
-          escapeCSVValue(node.host),
-          escapeCSVValue(node.username),
-          String(node.port),
-          escapeCSVValue(node.tags.join(",")),
-          node.status,
-          escapeCSVValue(node.lastBackupAt),
-        ].join(",")
-      );
-    }
-    const blob = new Blob([lines.join("\n")], {
+    const blob = new Blob([buildNodesCSV(sortedNodes)], {
       type: "text/csv;charset=utf-8",
     });
     const link = document.createElement("a");
@@ -1023,12 +980,7 @@ export function useNodesPageState() {
   };
 
   const handleDownloadTemplate = () => {
-    const template = [
-      "name,host,username,port,tags",
-      "prod-app-01,10.10.0.11,root,22,prod|app",
-      "prod-db-01,10.10.0.21,root,22,prod|db",
-    ].join("\n");
-    const blob = new Blob([template], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob([NODES_CSV_TEMPLATE], { type: "text/csv;charset=utf-8" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = "xirang-nodes-template.csv";
@@ -1049,6 +1001,7 @@ export function useNodesPageState() {
     sshKeys,
     loading: (nodesLoading || !nodesLoaded) && nodes.length === 0 && !nodesError,
     requestFailed: Boolean(nodesError) && nodes.length === 0,
+    inventoryEmpty: nodesLoaded && !nodesLoading && !nodesError && nodes.length === 0,
     nodesError,
     // filters
     keyword,
@@ -1060,6 +1013,7 @@ export function useNodesPageState() {
     sortBy,
     setSortBy,
     tags,
+    hasActiveFilters,
     resetFilters,
     // view
     viewMode,
@@ -1073,8 +1027,6 @@ export function useNodesPageState() {
     selectedNodeSet,
     allVisibleSelected,
     // selection
-    selectedNodeId,
-    setSelectedNodeId,
     selectedNodeIds,
     setSelectedNodeIds,
     // node ids for loading states
@@ -1085,7 +1037,7 @@ export function useNodesPageState() {
     // editor
     editorOpen,
     handleEditorOpenChange,
-    nodeEditorOnCloseAutoFocus,
+    nodeEditorOpenerRef,
     editingNode,
     // terminal
     terminalNode,
@@ -1110,7 +1062,7 @@ export function useNodesPageState() {
     fileBrowserNode,
     setFileBrowserNode,
     openFileBrowser,
-    fileBrowserOnCloseAutoFocus,
+    fileBrowserOpenerRef,
     fileBrowserTab,
     setFileBrowserTab,
     // batch

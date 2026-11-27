@@ -38,7 +38,6 @@ export type NodesPageDialogsProps = Pick<
   | "sshKeys"
   | "editorOpen"
   | "handleEditorOpenChange"
-  | "nodeEditorOnCloseAutoFocus"
   | "editingNode"
   | "terminalNode"
   | "setTerminalNode"
@@ -51,7 +50,6 @@ export type NodesPageDialogsProps = Pick<
   | "runDoctorForNode"
   | "fileBrowserNode"
   | "setFileBrowserNode"
-  | "fileBrowserOnCloseAutoFocus"
   | "fileBrowserTab"
   | "canBrowseNodeFiles"
   | "setFileBrowserTab"
@@ -79,7 +77,10 @@ export type NodesPageDialogsProps = Pick<
 > & {
   doctorConnectionNavigationAvailable: boolean;
   onDoctorNavigateConnection: () => boolean;
+  nodeEditorOnCloseAutoFocus: DialogCloseAutoFocus;
+  fileBrowserOnCloseAutoFocus: DialogCloseAutoFocus;
   doctorOnCloseAutoFocus?: DialogCloseAutoFocus;
+  terminalOnCloseAutoFocus?: DialogCloseAutoFocus;
 };
 
 export function NodesPageDialogs({
@@ -102,6 +103,7 @@ export function NodesPageDialogs({
   doctorConnectionNavigationAvailable,
   onDoctorNavigateConnection,
   doctorOnCloseAutoFocus,
+  terminalOnCloseAutoFocus,
   fileBrowserNode,
   setFileBrowserNode,
   fileBrowserOnCloseAutoFocus,
@@ -156,6 +158,7 @@ export function NodesPageDialogs({
           className="w-full max-w-[95vw] md:max-w-[90vw] h-[85vh] flex flex-col gap-0 p-0 resize overflow-hidden"
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
+          onCloseAutoFocus={terminalOnCloseAutoFocus}
         >
           <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
             <DialogTitle className="flex items-center justify-between">

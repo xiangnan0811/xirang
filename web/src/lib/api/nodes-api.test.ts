@@ -179,6 +179,55 @@ describe("nodes api", () => {
     expect(node).not.toHaveProperty("diskProbeAt");
   });
 
+  it("keeps the raw tags string and an exact blank base_path for editor round-trips", () => {
+    const node = __test__.mapNode({
+      id: 4,
+      name: "edge-2",
+      host: "10.0.0.4",
+      tags: " prod,, web ,prod",
+      base_path: "",
+    });
+
+    expect(node.tags).toEqual(["prod", "web", "prod"]);
+    expect(node.rawTags).toBe(" prod,, web ,prod");
+    expect(node.basePath).toBe("");
+    expect(__test__.mapNode({ id: 5, name: "edge-3", host: "10.0.0.5" }).rawTags).toBe("");
+  });
+
+  it("updateNode omits untouched maintenance fields and sends empty strings to clear them", async () => {
+    const nodeBody = JSON.stringify({
+      code: 0,
+      message: "ok",
+      data: { node: { id: 7, name: "db-1", host: "10.0.0.7" } },
+    });
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, nodeBody))
+      .mockResolvedValueOnce(createMockResponse(200, nodeBody));
+    const base = {
+      name: "db-1",
+      host: "10.0.0.7",
+      port: 22,
+      username: "root",
+      authType: "key" as const,
+      keyId: "key-3",
+      tags: " prod,, web ",
+      basePath: "",
+    };
+
+    await api.updateNode("token-node", 7, base);
+    await api.updateNode("token-node", 7, { ...base, maintenanceStart: "", maintenanceEnd: "" });
+
+    const untouched = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(untouched).not.toHaveProperty("maintenance_start");
+    expect(untouched).not.toHaveProperty("maintenance_end");
+    expect(untouched).not.toHaveProperty("expiry_date");
+    expect(untouched).toMatchObject({ tags: " prod,, web ", base_path: "", ssh_key_id: 3 });
+
+    const cleared = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body));
+    expect(cleared).toMatchObject({ maintenance_start: "", maintenance_end: "" });
+    expect(cleared).not.toHaveProperty("expiry_date");
+  });
+
   it("maps test-connection and emergency-backup snake_case results", async () => {
     fetchMock
       .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({

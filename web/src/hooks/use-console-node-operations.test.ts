@@ -286,6 +286,21 @@ describe("useNodeOperations inline key lifetime", () => {
     expect(setNodes).toHaveBeenCalledTimes(1);
   });
 
+  it("节点写入失败后可以用已创建的密钥重试", async () => {
+    apiClientMock.createSSHKey.mockResolvedValue(createdKey);
+    apiClientMock.createNode.mockRejectedValueOnce(new Error("node write failed")).mockResolvedValueOnce(nodeRecord);
+    const { result } = renderOperations();
+    let keyId: string | undefined;
+
+    await act(async () => {
+      await expect(result.current.createNode(inlineInput, () => true, (id) => { keyId = id; })).rejects.toThrow("node write failed");
+      await expect(result.current.createNode({ ...plainInput, keyId })).resolves.toBe(nodeRecord.id);
+    });
+
+    expect(apiClientMock.createSSHKey).toHaveBeenCalledTimes(1);
+    expect(apiClientMock.createNode).toHaveBeenLastCalledWith("token-1", expect.objectContaining({ keyId: createdKey.id }));
+  });
+
   it("内联密钥创建失败且身份仍有效时保留警告且不提交节点", async () => {
     apiClientMock.createSSHKey.mockRejectedValue(new Error("key write failed"));
     const { result, setNodes, setSSHKeys, setWarning, handleWriteApiError } = renderOperations();
